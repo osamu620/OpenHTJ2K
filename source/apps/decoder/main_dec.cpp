@@ -1,0 +1,157 @@
+// Copyright (c) 2019 - 2021, Osamu Watanabe
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+//    modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice, this
+// list of conditions and the following disclaimer.
+//
+// 2. Redistributions in binary form must reproduce the above copyright notice,
+// this list of conditions and the following disclaimer in the documentation
+// and/or other materials provided with the distribution.
+//
+// 3. Neither the name of the copyright holder nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+//    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+//    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+//    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+//    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+//    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+// open_htj2k_dec: A decoder implementation for JPEG 2000 Part 1 and 15
+// (ITU-T Rec. 814 | ISO/IEC 15444-15 and ITU-T Rec. 814 | ISO/IEC 15444-15)
+//
+// (c) 2019 - 2021 Osamu Watanabe, Takushoku University, Vrije Universiteit Brussels
+
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <vector>
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
+
+#include "decoder.hpp"
+#include "dec_utils.hpp"
+
+void print_help(char *cmd) {
+  printf("JPEG 2000 Part 1 and Part 15 decoder\n");
+  printf("USAGE: %s [options]\n\n", cmd);
+  printf("OPTIONS:\n");
+  printf("-i: Input file. .j2c and .j2k are supported.\n");
+  printf("-o: Output file. Supported formats are PPM, PGM, PGX and RAW.\n");
+  printf("-reduce n: Number of DWT resolution reduction.\n");
+}
+
+int main(int argc, char *argv[]) {
+  // parse input args
+  char *infile_name, *infile_ext_name;
+  char *outfile_name, *outfile_ext_name;
+  if (command_option_exists(argc, argv, "-h") || argc < 2) {
+    print_help(argv[0]);
+    exit(EXIT_SUCCESS);
+  }
+  if (nullptr == (infile_name = get_command_option(argc, argv, "-i"))) {
+    printf("ERROR: Input file is missing. Use -i to specify input file.\n");
+    exit(EXIT_FAILURE);
+  }
+  infile_ext_name = strrchr(infile_name, '.');
+  if (strcmp(infile_ext_name, ".j2k") != 0 && strcmp(infile_ext_name, ".j2c") != 0) {
+    printf("ERROR: Currently, only decoding is supported.\n");
+    exit(EXIT_FAILURE);
+  }
+  if (nullptr == (outfile_name = get_command_option(argc, argv, "-o"))) {
+    printf(
+        "ERROR: Output files are missing. Use -o to specify output file "
+        "names.\n");
+    exit(EXIT_FAILURE);
+  }
+  outfile_ext_name = strrchr(outfile_name, '.');
+  if (strcmp(outfile_ext_name, ".pgm") != 0 && strcmp(outfile_ext_name, ".ppm") != 0
+      && strcmp(outfile_ext_name, ".raw") != 0 && strcmp(outfile_ext_name, ".pgx") != 0) {
+    printf("ERROR: Unsupported output file type.\n");
+    exit(EXIT_FAILURE);
+  }
+  char *tmp_param;
+  uint8_t reduce_NL;
+  if (nullptr == (tmp_param = get_command_option(argc, argv, "-reduce"))) {
+    reduce_NL = 0;
+  } else {
+    reduce_NL = strtol(tmp_param, nullptr, 10);
+  }
+  int32_t num_iterations;
+  if (nullptr == (tmp_param = get_command_option(argc, argv, "-iter"))) {
+    num_iterations = 1;
+  } else {
+    num_iterations = strtol(tmp_param, nullptr, 10);
+  }
+
+  std::vector<int32_t *> buf;
+  std::vector<uint32_t> img_width;
+  std::vector<uint32_t> img_height;
+  std::vector<uint8_t> img_depth;
+  std::vector<bool> img_signed;
+  auto start = std::chrono::high_resolution_clock::now();
+  for (int i = 0; i < num_iterations; ++i) {
+    // create decoder
+    open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL);
+    buf.clear();
+    img_width.clear();
+    img_height.clear();
+    img_depth.clear();
+    img_signed.clear();
+    // invoke decoding
+    decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+  }
+  auto duration = std::chrono::high_resolution_clock::now() - start;
+
+  // write decoded components
+  bool compositable       = false;
+  uint16_t num_components = img_depth.size();
+  if (num_components == 3 && strcmp(outfile_ext_name, ".ppm") == 0) {
+    compositable = true;
+    for (uint16_t c = 0; c < num_components - 1; c++) {
+      if (img_width[c] != img_width[c + 1] || img_height[c] != img_height[c + 1]) {
+        compositable = false;
+        break;
+      }
+    }
+  }
+  if (strcmp(outfile_ext_name, ".ppm") == 0) {
+    // PPM
+    if (!compositable) {
+      printf("ERROR: the number of components of the input is not three.");
+      exit(EXIT_FAILURE);
+    }
+    write_ppm(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth, img_signed);
+
+  } else {
+    // PGM or RAW
+    write_components(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth, img_signed);
+  }
+
+  uint32_t total_samples = 0;
+  for (uint16_t c = 0; c < num_components; ++c) {
+    total_samples += img_width[c] * img_height[c];
+    delete[] buf[c];
+  }
+
+  // show stats
+  auto count  = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+  double time = count / 1000.0 / static_cast<double>(num_iterations);
+  printf("elapsed time %-15.3lf[ms]\n", time);
+  printf("throughput %lf [Msamples/s]\n",
+         total_samples * static_cast<double>(num_iterations) / (double)count);
+  printf("throughput %lf [usec/sample]\n",
+         (double)count / static_cast<double>(num_iterations) / total_samples);
+  return EXIT_SUCCESS;
+}
