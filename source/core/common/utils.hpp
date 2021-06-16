@@ -104,7 +104,7 @@ static inline void* aligned_mem_alloc(size_t size, size_t align) {
 #elif defined(_MSC_VER)
   result = _aligned_malloc(size, align);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
-  __mingw_aligned_malloc(size, align);
+  result = __mingw_aligned_malloc(size, align);
 #else
   if (posix_memalign(&result, align, size)) {
     result = nullptr;
