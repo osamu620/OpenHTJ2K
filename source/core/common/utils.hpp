@@ -38,6 +38,8 @@
 #if defined(__x86_64__) || defined(_M_X64)
   #if defined(_MSC_VER)
     #include <intrin.h>
+  #elif defined(__MINGW32__) || defined(__MINGW64__)
+    #include <cpuid.h>
   #else
     #include <x86intrin.h>
   #endif
@@ -82,6 +84,8 @@ static inline uint32_t int_log2(const uint32_t x) {
 static inline uint32_t count_leading_zeros(const uint32_t x) {
 #if defined(_MSC_VER)
   return __lzcnt(x);
+#elif defined(__MINGW32__) || defined(__MINGW64__)
+  return __builtin_clz(x);
 #elif defined(__ARM_FEATURE_CLZ)
   return __clz(x);
 #else
@@ -99,6 +103,8 @@ static inline void* aligned_mem_alloc(size_t size, size_t align) {
   result = _mm_malloc(size, align);
 #elif defined(_MSC_VER)
   result = _aligned_malloc(size, align);
+#elif defined(__MINGW32__) || defined(__MINGW64__)
+  __mingw_aligned_malloc(size, align);
 #else
   if (posix_memalign(&result, align, size)) {
     result = nullptr;
@@ -112,6 +118,8 @@ static inline void aligned_mem_free(void* ptr) {
   _mm_free(ptr);
 #elif defined(_MSC_VER)
   _aligned_free(ptr);
+#elif defined(__MINGW32__) || defined(__MINGW64__)
+  __mingw_aligned_free(ptr);
 #else
   free(ptr);
 #endif
