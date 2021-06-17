@@ -32,10 +32,10 @@
 #include <cstring>
 
 int main(int argc, char *argv[]) {
-  if (argc < 3 || argc > 4) {
-    printf("\nusage: imgcmp file1 file2 [-P]\n");
+  if (argc != 3 && argc != 5) {
+    printf("\nusage: imgcmp file1 file2 [PAE MSE]\n");
     printf("  (only accepts pnm or pgx files)\n");
-    printf("switch -P is used to show only Peak Absolute Error\n\n");
+    printf("  - PAE and MSE are threshold for conformance testing.\n\n");
     return EXIT_FAILURE;
   }
   image img0, img1;
@@ -66,14 +66,15 @@ int main(int argc, char *argv[]) {
     psnr = INFINITY;
   }
 
-  if (argc == 4) {
-    if (strcmp(argv[3], "-P") != 0) {
-      printf("unknown switch %s\n", argv[3]);
+  printf("%4llu, %12.6f, %12.6f\n", PAE, mse, psnr);
+
+  if (argc == 5) {
+    uint_fast64_t thPAE = static_cast<uint_fast64_t>(atoi(argv[3]));
+    double thMSE = atof(argv[4]);
+    if (PAE > thPAE || mse > thMSE) {
+      printf("conformance test failure.\n");
       exit(EXIT_FAILURE);
     }
-    printf("%llu\n", PAE);
-  } else {
-    printf("%4llu, %12.6f, %12.6f\n", PAE, mse, psnr);
   }
   return EXIT_SUCCESS;
 }
