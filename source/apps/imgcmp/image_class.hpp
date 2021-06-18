@@ -114,7 +114,7 @@ class image {
 
   // parsing PNM/PGX header
   int read_pnmpgx(const char *name) {
-    FILE *fp = fopen(name, "r");
+    FILE *fp = fopen(name, "rb");
     if (fp == nullptr) {
       printf("File %s is not found.\n", name);
       exit(EXIT_FAILURE);
