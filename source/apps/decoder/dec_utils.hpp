@@ -168,19 +168,16 @@ void write_components(char *outfile_name, char *outfile_ext_name, std::vector<in
       std::unique_ptr<uint8_t[]> outbuf = std::make_unique<uint8_t[]>(num_pixels);
       convert_component_buffer_class<uint8_t>(outbuf.get(), c, is_PGM, buf, width, height, depth,
                                               is_signed);
-      setvbuf(ofp, (char *)outbuf.get(), _IOFBF, num_pixels);
       fwrite(outbuf.get(), sizeof(uint8_t), num_pixels, ofp);
     } else if (ceil_int(depth[c], 8) == 2) {
       std::unique_ptr<uint16_t[]> outbuf = std::make_unique<uint16_t[]>(num_pixels);
       convert_component_buffer_class<uint16_t>(outbuf.get(), c, is_PGM, buf, width, height, depth,
                                                is_signed);
-      setvbuf(ofp, (char *)outbuf.get(), _IOFBF, num_pixels * 2);
       fwrite(outbuf.get(), sizeof(uint16_t), num_pixels, ofp);
     } else if (ceil_int(depth[c], 8) == 4) {
       std::unique_ptr<uint32_t[]> outbuf = std::make_unique<uint32_t[]>(num_pixels);
       convert_component_buffer_class<uint32_t>(outbuf.get(), c, is_PGM, buf, width, height, depth,
                                                is_signed);
-      setvbuf(ofp, (char *)outbuf.get(), _IOFBF, num_pixels * 4);
       fwrite(outbuf.get(), sizeof(uint32_t), num_pixels, ofp);
     } else {
       // error
