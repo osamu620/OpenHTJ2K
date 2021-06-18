@@ -114,6 +114,10 @@ class image {
 
   // parsing PNM/PGX header
   int read_pnmpgx(const char *name) {
+    constexpr char SP = ' ';
+    constexpr char LF = '\n';
+    constexpr char CR = 0x0d;
+
     FILE *fp = fopen(name, "rb");
     if (fp == nullptr) {
       printf("File %s is not found.\n", name);
@@ -190,7 +194,7 @@ class image {
           val *= 10;
           val += c - '0';
           c = fgetc(fp);
-        } while (c != ' ' && c != '\n');
+        } while (c != SP && c != LF && c != CR);
         bitDepth = val;
         val      = 0;
         // fpos_t pos;
@@ -212,8 +216,8 @@ class image {
     }
     while (status != DONE) {
       c = fgetc(fp);
-      // eat white/CR and comments
-      while (c == ' ' || c == '\n') {
+      // eat white/LF/CR and comments
+      while (c == SP || c == LF || c == CR) {
         c = fgetc(fp);
         if (c == '#') {
           static_cast<void>(fgets(comment, sizeof(comment), fp));
@@ -221,7 +225,7 @@ class image {
         }
       }
       // read numerical value
-      while (c != ' ' && c != '\n') {
+      while (c != SP && c != LF && c != CR) {
         val *= 10;
         val += c - '0';
         c = fgetc(fp);
@@ -252,6 +256,17 @@ class image {
           break;
       }
     }
+    // easting trailing spaces/LF/CR or comments
+    c = fgetc(fp);
+    while (c == SP || c == LF || c == CR) {
+      c = fgetc(fp);
+      if (c == '#') {
+        static_cast<void>(fgets(comment, sizeof(comment), fp));
+        c = fgetc(fp);
+      }
+    }
+    fseek(fp, -1, SEEK_CUR);
+
     const uint_fast8_t nbytes = ceil_int(bitDepth, 8);
     const size_t num_samples  = this->width * this->height * num_components;
     const size_t num_bytes    = this->width * this->height * nbytes * num_components;
