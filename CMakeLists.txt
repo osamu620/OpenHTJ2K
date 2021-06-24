@@ -235,12 +235,14 @@ add_test(NAME comp_p1_ht_02_12g COMMAND imgcmp ht_p1_02_b12_01.pgx ${CONFORMANCE
 add_test(NAME comp_p1_ht_02_12b COMMAND imgcmp ht_p1_02_b12_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_02-2.pgx 6 1.051)
 # 3
 add_test(NAME comp_p1_ht_03_11a COMMAND imgcmp ht_p1_03_b11_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-0.pgx 2 0.300)
-add_test(NAME comp_p1_ht_03_11b COMMAND imgcmp ht_p1_03_b11_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 3 0.300)#0.213
-add_test(NAME comp_p1_ht_03_11c COMMAND imgcmp ht_p1_03_b11_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 3 0.300)#0.205
+add_test(NAME comp_p1_ht_03_11b COMMAND imgcmp ht_p1_03_b11_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 3 0.24)
+add_test(NAME comp_p1_ht_03_11c COMMAND imgcmp ht_p1_03_b11_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 3 0.25)
 add_test(NAME comp_p1_ht_03_11d COMMAND imgcmp ht_p1_03_b11_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-3.pgx 2 0.001)
 add_test(NAME comp_p1_ht_03_12a COMMAND imgcmp ht_p1_03_b12_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-0.pgx 2 0.300)
-add_test(NAME comp_p1_ht_03_12b COMMAND imgcmp ht_p1_03_b12_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 2 0.300)#0.210
-add_test(NAME comp_p1_ht_03_12c COMMAND imgcmp ht_p1_03_b12_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 2 0.300)#1 0.200
+add_test(NAME comp_p1_ht_03_12b COMMAND imgcmp ht_p1_03_b12_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 2 0.210)
+set_tests_properties(comp_p1_ht_03_12b  PROPERTIES WILL_FAIL true)
+add_test(NAME comp_p1_ht_03_12c COMMAND imgcmp ht_p1_03_b12_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 1 0.200)
+set_tests_properties(comp_p1_ht_03_12c  PROPERTIES WILL_FAIL true)
 add_test(NAME comp_p1_ht_03_12d COMMAND imgcmp ht_p1_03_b12_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-3.pgx 0 0)
 # 4
 add_test(NAME comp_p1_ht_04_9 COMMAND imgcmp ht_p1_04_b9_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_04-0.pgx 624 3080)
@@ -337,8 +339,10 @@ add_test(NAME comp_p1_02_g COMMAND imgcmp p1_02_01.pgx ${CONFORMANCE_DATA_DIR}/r
 add_test(NAME comp_p1_02_b COMMAND imgcmp p1_02_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_02-2.pgx 6 1.051)
 # 3
 add_test(NAME comp_p1_03_a COMMAND imgcmp p1_03_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-0.pgx 2 0.300)
-add_test(NAME comp_p1_03_b COMMAND imgcmp p1_03_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 2 0.300)#0.210
-add_test(NAME comp_p1_03_c COMMAND imgcmp p1_03_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 2 0.300)#1 0.200
+add_test(NAME comp_p1_03_b COMMAND imgcmp p1_03_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 2 0.210)
+set_tests_properties(comp_p1_03_b PROPERTIES WILL_FAIL true)
+add_test(NAME comp_p1_03_c COMMAND imgcmp p1_03_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 1 0.200)
+set_tests_properties(comp_p1_03_c PROPERTIES WILL_FAIL true)
 add_test(NAME comp_p1_03_d COMMAND imgcmp p1_03_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-3.pgx 0 0)
 # 4
 add_test(NAME comp_p1_04 COMMAND imgcmp p1_04_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_04-0.pgx 624 3080)

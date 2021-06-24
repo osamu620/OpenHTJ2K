@@ -1250,6 +1250,7 @@ void htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
           if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
             *val <<= ROIshift;
           }
+
           // do adjustment of the position indicating 0.5
           z_n = block->get_state(Refinement_indicator, y, x);
           // z_n = p1_states->pi_[x + y * block->size.x];
@@ -1266,14 +1267,14 @@ void htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
           if (*val != 0) {
             *val |= r_val;
           }
+          // to prevent overflow, truncate to int16_t
+          *val = (*val + (1 << 15)) >> 16;
           // bring sign back
           *val |= sign;
           // convert sign-magnitude to two's complement form
           if (*val < 0) {
             *val = -(*val & INT32_MAX);
           }
-          // to prevent overflow, truncate to int16_t
-          *val = (*val + (1 << 15)) >> 16;
           // dequantization and lifting scaling (defined as step 1 and 2 in the spec)
           *val *= scale;
           // truncate to int16_t
