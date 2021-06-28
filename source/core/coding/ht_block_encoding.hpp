@@ -31,8 +31,6 @@
 
 #if defined(_MSC_VER)
   #include <intrin.h>
-#elif defined(__MINGW32__) || defined(__MINGW64__)
-  #include <cpuid.h>
 #elif defined(__x86_64__)
   #include <x86intrin.h>
 #endif
