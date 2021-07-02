@@ -48,7 +48,9 @@
 
 static inline size_t popcount32(uintmax_t num) {
   size_t precision = 0;
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(_MSC_VER)
+  precision = __popcnt(static_cast<uint32_t>(num));
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
   precision = _popcnt32(num);
 #else
   while (num != 0) {
