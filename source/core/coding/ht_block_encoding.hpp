@@ -29,10 +29,8 @@
 #pragma once
 #include <cstdint>
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW64__)
   #include <intrin.h>
-#elif defined(__MINGW32__) || defined(__MINGW64__)
-  #include <cpuid.h>
 #elif defined(__x86_64__)
   #include <x86intrin.h>
 #endif
