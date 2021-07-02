@@ -35,19 +35,15 @@
 #define round_down(x, n) ((x) & (-n))
 #define ceil_int(a, b) ((a) + ((b)-1)) / (b)
 
-#if defined(__x86_64__) || defined(_M_X64)
-  #if defined(_MSC_VER)
-    #include <intrin.h>
-  #elif defined(__MINGW32__) || defined(__MINGW64__)
-    #include <cpuid.h>
-  #else
-    #include <x86intrin.h>
-  #endif
-#elif defined(__arm64__)
+#if defined(__arm64__)
   #include <arm_acle.h>
   #if defined(__ARM_NEON__)
     #include <arm_neon.h>
   #endif
+#elif defined(_MSC_VER) || defined(__MINGW64__)
+  #include <intrin.h>
+#else
+  #include <x86intrin.h>
 #endif
 
 static inline size_t popcount32(uintmax_t num) {
