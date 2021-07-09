@@ -74,7 +74,7 @@ static inline uint32_t int_log2(const uint32_t x) {
   asm("bsr %1, %0" : "=r"(y) : "r"(x));
   #endif
 #elif (defined(__arm64__) || defined(__arm__)) && defined(__ARM_FEATURE_CLZ)
-  y = 31 - __clz(x);
+  y = 31 - __builtin_clz(x);
 #endif
   return y;
 }
@@ -88,7 +88,7 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
   // avoid undefined behaviour
   return (x == 0) ? 32 : __builtin_clz(x);
 #elif defined(__ARM_FEATURE_CLZ)
-  return __clz(x);
+  return __builtin_clz(x);
 #else
   return 31 - int_log2(x);
 #endif
