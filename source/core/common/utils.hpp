@@ -65,32 +65,30 @@ static inline size_t popcount32(uintmax_t num) {
 
 static inline uint32_t int_log2(const uint32_t x) {
   uint32_t y;
-  if (x == 0) {
-    // avoid undefined behaviour
-    return 0;
-  }
 #if defined(_MSC_VER)
   unsigned long tmp;
   _BitScanReverse(&tmp, x);
   y = tmp;
 #else
-  y = 31 - __builtin_clz(x);
+  y         = 31 - __builtin_clz(x);
 #endif
-  return y;
+  return (x == 0) ? 0 : y;
 }
 
 static inline uint32_t count_leading_zeros(const uint32_t x) {
-  if (x == 0) {
-    // avoid undefined behaviour
-    return 31;
-  }
+  uint32_t y;
 #if defined(_MSC_VER)
-  return __lzcnt(x);
+  y = __lzcnt(x);
 #elif defined(__AVX2__)
-  return _lzcnt_u32(x);
+  y         = _lzcnt_u32(x);
+#elif defined(__MINGW32__) || defined(__MINGW64__)
+  y      = __builtin_clz(x);
+#elif defined(__ARM_FEATURE_CLZ)
+  y = __builtin_clz(x);
 #else
-  return __builtin_clz(x);
+  y = 31 - int_log2(x);
 #endif
+  return (x == 0) ? 31 : y;
 }
 
 static inline void* aligned_mem_alloc(size_t size, size_t align) {
