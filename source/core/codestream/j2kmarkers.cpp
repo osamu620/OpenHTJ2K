@@ -509,10 +509,11 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   } else if (is_derived) {
     Lmar = 5;
     n    = 1;
+    Sqcd = 0b01;
   } else {
     Lmar = 5 + 6 * dwt_levels;
     n    = 3 * dwt_levels + 1;
-    Sqcd += 2;
+    Sqcd = 0b10;
   }
 
   assert(number_of_guardbits < 8 && number_of_guardbits >= 0);
@@ -630,7 +631,13 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
     if (transformation == 1) {
       SPqcd.push_back(epsilon[i] << 3);
     } else {
-      SPqcd.push_back((static_cast<uint16_t>(epsilon[i]) << 11) + mu[i]);
+      if (!is_derived) {
+        // Quantization style -> Scalar expounded (values signalled for each sub-band)
+        SPqcd.push_back((static_cast<uint16_t>(epsilon[i]) << 11) + mu[i]);
+      } else {
+        // Quantization style -> Scalar derived (values signalled for LL subband only)
+        SPqcd.push_back((static_cast<uint16_t>(epsilon[0]) << 11) + mu[0]);
+      }
     }
   }
 
