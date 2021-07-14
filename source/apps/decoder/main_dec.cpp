@@ -47,7 +47,8 @@ void print_help(char *cmd) {
   printf("JPEG 2000 Part 1 and Part 15 decoder\n");
   printf("USAGE: %s [options]\n\n", cmd);
   printf("OPTIONS:\n");
-  printf("-i: Input file. .j2c and .j2k are supported.\n");
+  printf("-i: Input file. .j2k, .j2c, .jhc, and .jphc are supported.\n");
+  printf("    .jp2 and .jph (box based file-format) are not supported.\n");
   printf("-o: Output file. Supported formats are PPM, PGM, PGX and RAW.\n");
   printf("-reduce n: Number of DWT resolution reduction.\n");
 }
@@ -65,8 +66,9 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
   infile_ext_name = strrchr(infile_name, '.');
-  if (strcmp(infile_ext_name, ".j2k") != 0 && strcmp(infile_ext_name, ".j2c") != 0) {
-    printf("ERROR: Currently, only decoding is supported.\n");
+  if (strcmp(infile_ext_name, ".j2k") != 0 && strcmp(infile_ext_name, ".j2c") != 0
+      && strcmp(infile_ext_name, ".jhc") != 0 && strcmp(infile_ext_name, ".jphc") != 0) {
+    printf("ERROR: Supported extensions are .j2k, .j2c, .jhc, and .jphc\n");
     exit(EXIT_FAILURE);
   }
   if (nullptr == (outfile_name = get_command_option(argc, argv, "-o"))) {
