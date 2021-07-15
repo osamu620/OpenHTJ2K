@@ -100,7 +100,8 @@ int main(int argc, char *argv[]) {
   auto start             = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < num_iterations; ++i) {
     // create encoder
-    open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd);
+    open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd,
+                                          args.get_qfactor());
 
     // invoke encoding
     total_size = encoder.invoke();
