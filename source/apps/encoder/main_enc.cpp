@@ -89,7 +89,7 @@ int main(int argc, char *argv[]) {
   }
 
   open_htj2k::qcd_params qcd;  // parameters related to QCD marker
-  qcd.is_derived          = false;
+  qcd.is_derived          = args.is_derived();
   qcd.number_of_guardbits = args.get_num_guard();
   qcd.base_step           = args.get_basestep_size();
   if (qcd.base_step == 0.0) {

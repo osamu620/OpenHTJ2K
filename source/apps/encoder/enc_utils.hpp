@@ -54,6 +54,7 @@ void print_help(char *cmd) {
   printf("Cuse_sop=Bool:\n  yes to use SOP (Start Of Packet) marker segment.\n");
   printf("Cuse_eph=Bool:\n  yes to use EPH (End of Packet Header) marker.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
+  printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 8 (Default is 1.)\n");
 }
 
 class element_siz_local {
@@ -108,6 +109,7 @@ class j2k_argset {
   bool use_eph;
   double base_step_size;
   uint8_t num_guard;
+  bool qderived;
 
  public:
   j2k_argset(int argc, char *argv[])
@@ -123,7 +125,8 @@ class j2k_argset {
         use_sop(false),
         use_eph(false),
         base_step_size(0.0),
-        num_guard(1) {
+        num_guard(1),
+        qderived(false) {
     args.reserve(argc);
     // skip command itself
     for (int i = 1; i < argc; ++i) {
@@ -391,6 +394,18 @@ class j2k_argset {
             }
             break;
           }
+          if (param == "derived") {
+            pos0 = arg.find_first_of('=');
+            if (pos0 == std::string::npos) {
+              printf("ERROR: Qderived needs =yes or =no\n");
+              exit(EXIT_FAILURE);
+            }
+            val = arg.substr(pos0 + 1, 3);
+            if (val == "yes") {
+              qderived = true;
+            }
+            break;
+          }
           printf("ERROR: unknown parameter Q%s\n", param.c_str());
           exit(EXIT_FAILURE);
           break;
@@ -465,4 +480,5 @@ class j2k_argset {
   bool is_use_eph() const { return use_eph; }
   double get_basestep_size() const { return base_step_size; }
   uint8_t get_num_guard() const { return num_guard; }
+  bool is_derived() const { return qderived; }
 };
