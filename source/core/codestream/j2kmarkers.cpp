@@ -749,7 +749,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
                                      0.053497514821622};  // gain is doubled(x2)
 
   // Square roots of the visual weighting factors for 4:4:4 YCbCr content
-  const double W_b_sqrt[3][16] = {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000,
+  const double W_b_sqrt[3][15] = {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000,
                                    1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000},
                                   {0.0263, 0.0863, 0.0863, 0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691,
                                    0.5444, 0.6523, 0.6523, 0.7078, 0.7797, 0.7797},
@@ -831,58 +831,58 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
     // lossy with qfactor: The detail of Qfactor feature is described in HTJ2K white paper at
     // https://htj2k.com/wp-content/uploads/white-paper.pdf
     double M_Q;
+    uint8_t t0 = 65, t1 = 97;
+    const double alpha_T0 = 0.04;
+    const double alpha_T1 = 0.10;
+    const double M_T0     = 2.0 * (1.0 - t0 / 100.0);
+    const double M_T1     = 2.0 * (1.0 - t1 / 100.0);
+    double alpha_Q        = alpha_T0;
+    double qfactor_power  = 1.0;
+
     if (qfactor < 50) {
       M_Q = 50.0 / qfactor;
     } else {
       M_Q = 2.0 * (1.0 - qfactor / 100.0);
     }
-    constexpr double M_T0 = 2.0 * (1.0 - 65.0 / 100.0);
-    constexpr double M_T1 = 2.0 * (1.0 - 97.0 / 100.0);
-    const double alpha_T0 = 0.04;
-    const double alpha_T1 = 0.10;
-    double alpha_Q        = alpha_T0;
-    // adjust the scaling factor alpha_Q
-    if (M_Q >= M_T1) {
-      alpha_Q = alpha_T1;
-    } else if (M_T0 < M_Q && M_Q < M_T1) {
-      alpha_Q = alpha_T1 * pow((alpha_T0 / alpha_T1), (log(M_T1) - log(M_Q)) / (log(M_T1) - log(M_T0)));
+    // adjust the scaling
+    if (qfactor >= t1) {
+      qfactor_power = 0.0;
+      alpha_Q       = alpha_T1;
+    } else if (qfactor > t0) {
+      qfactor_power = (log(M_T1) - log(M_Q)) / (log(M_T1) - log(M_T0));
+      alpha_Q       = alpha_T1 * pow(alpha_T0 / alpha_T1, qfactor_power);
     }
-    for (int i = 0; i < epsilon.size(); ++i) {
-      int32_t eps, m;
-      double w_b, g_c;
-      w_b = W_b_sqrt[Cqcc][i];
-      // adjust the scaling factor w_b
-      if (M_Q >= M_T1) {
-        w_b = 1.0;
-      } else if (M_T0 < M_Q && M_Q < M_T1) {
-        w_b = pow(w_b, (log(M_T1) - log(M_Q)) / (log(M_T1) - log(M_T0)));
-      }
-      if (i > 15 || i == epsilon.size() - 1) {
-        w_b = 1.0;
-      }
-      g_c = G_c_sqrt[Cqcc];
 
-      double delta_Q   = alpha_Q * M_Q + (1 / sqrt(2) / (1 << RI));
-      double delta_ref = delta_Q * G_c_sqrt[0];
-      double fval      = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * g_c);
-      for (eps = 0; fval < 1.0; eps++) {
+    const double eps0 = sqrt(0.5) / static_cast<double>(1 << RI);
+    double delta_Q    = alpha_Q * M_Q + eps0;
+    double delta_ref  = delta_Q * G_c_sqrt[0];
+    double G_c        = G_c_sqrt[Cqcc];  // gain of color transform
+
+    for (int i = 0; i < epsilon.size(); ++i) {
+      int32_t exponent, mantissa;
+      double w_b;
+      // w_b for LL band shall be 1.0
+      w_b = (i == epsilon.size() - 1) ? 1.0 : pow(W_b_sqrt[Cqcc][i], qfactor_power);
+
+      double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
+      for (exponent = 0; fval < 1.0; exponent++) {
         fval *= 2.0;
       }
-      m = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
-      if (m >= (1 << 11)) {
-        m = 0;
-        eps--;
+      mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
+      if (mantissa >= (1 << 11)) {
+        mantissa = 0;
+        exponent--;
       }
-      if (eps > 31) {
-        eps = 31;
-        m   = 0;
+      if (exponent > 31) {
+        exponent = 31;
+        mantissa = 0;
       }
-      if (eps < 0) {
-        eps = 0;
-        m   = (1 << 11) - 1;
+      if (exponent < 0) {
+        exponent = 0;
+        mantissa = (1 << 11) - 1;
       }
-      epsilon[epsilon.size() - i - 1] = eps;
-      mu[epsilon.size() - i - 1]      = m;
+      epsilon[epsilon.size() - i - 1] = exponent;
+      mu[epsilon.size() - i - 1]      = mantissa;
     }
   }
 
