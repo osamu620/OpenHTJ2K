@@ -73,8 +73,9 @@ class openhtj2k_encoder {
 
  public:
 #if defined(_MSC_VER)
-  __declspec(dllexport) openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf,
-                                          siz_params &, cod_params &, qcd_params &);
+  __declspec(dllexport)
+      openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz,
+                        cod_params &cod, qcd_params &qcd, uint8_t qfactor = 0xFF);
   __declspec(dllexport) size_t invoke();
   __declspec(dllexport) ~openhtj2k_encoder();
 #else
