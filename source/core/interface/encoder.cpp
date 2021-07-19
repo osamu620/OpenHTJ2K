@@ -85,15 +85,18 @@ size_t openhtj2k_encoder_impl::invoke() {
   }
   if (siz->Csiz != 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
-    qfactor              = NO_QFACTOR;
     printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
   }
   // force RGB->YCbCr when Qfactor feature is enabled
   if (qfactor != NO_QFACTOR) {
-    if (cod->use_color_trafo == 0) {
-      printf("WARNING: Color conversion is turned ON because Qfactor feature is enabled.\n");
+    if (siz->Csiz == 3) {
+      if (cod->use_color_trafo == 0) {
+        printf("WARNING: Color conversion is turned ON because Qfactor feature is enabled.\n");
+      }
+      cod->use_color_trafo = 1;
+    } else if (siz->Csiz != 1) {
+      printf("WARNING: Qfactor is designed for only gray-scale or RGB input.\n");
     }
-    cod->use_color_trafo = 1;
   }
 
   // create required marker segments
@@ -103,7 +106,7 @@ size_t openhtj2k_encoder_impl::invoke() {
                       cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels, cod->blkwidth,
                       cod->blkheight, cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
   QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
-                      bit_depth[0], cod->use_color_trafo, qcd->base_step);
+                      bit_depth[0], cod->use_color_trafo, qcd->base_step, qfactor);
   // parameters for CAP marker
   uint16_t bits14_15 = 0;                     // 0: HTONLY, 2: HTDECLARED, 3: MIXED
   uint16_t bit13     = 0;                     // 0: SINGLEHT, 1: MULTIHT

@@ -205,7 +205,7 @@ class QCD_marker : public j2k_marker_io_base {
  public:
   explicit QCD_marker(j2c_src_memory &in);
   QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t transformation, bool is_derived,
-             uint8_t RI, uint8_t use_ycc, double basestep = 1.0 / 256.0);
+             uint8_t RI, uint8_t use_ycc, double basestep = 1.0 / 256.0, uint8_t qfactor = 0xFF);
   int write(j2c_destination_base &dst);
   uint8_t get_quantization_style() const;
   uint8_t get_exponents(uint8_t nb);
