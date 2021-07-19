@@ -82,14 +82,14 @@ typedef void (*idwt_1d_filtr_func_fixed)(int16_t *, int32_t, int32_t, const uint
 static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
                                                           idwt_1d_filtr_rev53_fixed};
 
-static void idwt_1d_sr_fixed(int16_t *in, int16_t *out, const int32_t left, const int32_t right,
+static void idwt_1d_sr_fixed(int16_t *buf, int16_t *in, int16_t *out, const int32_t left, const int32_t right,
                              const uint32_t i0, const uint32_t i1, const uint8_t transformation) {
-  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
-  auto *buf          = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
+//  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
+//  auto *buf          = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   idwt_1d_filtr_fixed[transformation](buf, left, right, i0, i1);
   memcpy(out, buf + left, sizeof(int16_t) * (i1 - i0));
-  aligned_mem_free(buf);
+//  aligned_mem_free(buf);
 }
 
 static void idwt_hor_sr_fixed(int16_t *out, int16_t *in, const uint32_t u0, const uint32_t u1,
@@ -113,10 +113,13 @@ static void idwt_hor_sr_fixed(int16_t *out, int16_t *in, const uint32_t u0, cons
     }
   } else {
     // need to perform symmetric extension
-#pragma omp parallel for
+    const uint32_t len = round_up(u1 - u0 + left + right, SIMD_LEN_I16);
+    auto *Yext         = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
+    //#pragma omp parallel for
     for (uint32_t row = 0; row < v1 - v0; ++row) {
-      idwt_1d_sr_fixed(&in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
+      idwt_1d_sr_fixed(Yext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
     }
+    aligned_mem_free(Yext);
   }
 }
 
