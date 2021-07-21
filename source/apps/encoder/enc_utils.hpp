@@ -31,6 +31,8 @@
 #include <iterator>
 #include <string>
 
+#define NO_QFACTOR 0xFF
+
 void print_help(char *cmd) {
   printf("JPEG 2000 Part 15 encoder\n");
   printf("USAGE: %s -i inputimage(PNM format) -o output-codestream [options...]\n\n", cmd);
@@ -54,6 +56,9 @@ void print_help(char *cmd) {
   printf("Cuse_sop=Bool:\n  yes to use SOP (Start Of Packet) marker segment.\n");
   printf("Cuse_eph=Bool:\n  yes to use EPH (End of Packet Header) marker.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
+  printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 8 (Default is 1.)\n");
+  printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
+  printf("  Note: If this option is present, Qstep is ignored and Cycc is set to `yes`.\n");
 }
 
 class element_siz_local {
@@ -108,6 +113,8 @@ class j2k_argset {
   bool use_eph;
   double base_step_size;
   uint8_t num_guard;
+  bool qderived;
+  uint8_t qfactor;
 
  public:
   j2k_argset(int argc, char *argv[])
@@ -123,7 +130,9 @@ class j2k_argset {
         use_sop(false),
         use_eph(false),
         base_step_size(0.0),
-        num_guard(1) {
+        num_guard(1),
+        qderived(false),
+        qfactor(NO_QFACTOR) {
     args.reserve(argc);
     // skip command itself
     for (int i = 1; i < argc; ++i) {
@@ -235,12 +244,13 @@ class j2k_argset {
               printf("ERROR: Clevels needs =dwt_levels (0 - 32)\n");
               exit(EXIT_FAILURE);
             }
-            val        = arg.substr(pos0 + 1, 3);
-            dwt_levels = std::stoi(val);
-            if (dwt_levels < 0 || dwt_levels > 32) {
+            val     = arg.substr(pos0 + 1, 3);
+            int tmp = std::stoi(val);
+            if (tmp < 0 || tmp > 32) {
               printf("ERROR: number of DWT levels shall be in the range of [0, 32]\n");
               exit(EXIT_FAILURE);
             }
+            dwt_levels = static_cast<uint8_t>(tmp);
             break;
           }
           if (param == "blk") {
@@ -383,12 +393,40 @@ class j2k_argset {
               printf("ERROR: Qguard needs number of guard bits (0-7)\n");
               exit(EXIT_FAILURE);
             }
-            val       = arg.substr(pos0 + 1, 2);
-            num_guard = std::stoi(val);
-            if (num_guard < 0 || num_guard > 7) {
+            val     = arg.substr(pos0 + 1, 2);
+            int tmp = std::stoi(val);
+            if (tmp < 0 || tmp > 7) {
               printf("ERROR: number of guard bits shall be in the range of [0, 7]\n");
               exit(EXIT_FAILURE);
             }
+            num_guard = static_cast<uint8_t>(tmp);
+            break;
+          }
+          if (param == "derived") {
+            pos0 = arg.find_first_of('=');
+            if (pos0 == std::string::npos) {
+              printf("ERROR: Qderived needs =yes or =no\n");
+              exit(EXIT_FAILURE);
+            }
+            val = arg.substr(pos0 + 1, 3);
+            if (val == "yes") {
+              qderived = true;
+            }
+            break;
+          }
+          if (param == "factor") {
+            pos0 = arg.find_first_of('=');
+            if (pos0 == std::string::npos) {
+              printf("ERROR: Qfactor needs value of quality (0-100)\n");
+              exit(EXIT_FAILURE);
+            }
+            val     = arg.substr(pos0 + 1, 3);
+            int tmp = std::stoi(val);
+            if (tmp < 0 || tmp > 100) {
+              printf("ERROR: value of Qfactor shall be in the range of [0, 100]\n");
+              exit(EXIT_FAILURE);
+            }
+            qfactor = static_cast<uint8_t>(tmp);
             break;
           }
           printf("ERROR: unknown parameter Q%s\n", param.c_str());
@@ -465,4 +503,6 @@ class j2k_argset {
   bool is_use_eph() const { return use_eph; }
   double get_basestep_size() const { return base_step_size; }
   uint8_t get_num_guard() const { return num_guard; }
+  bool is_derived() const { return qderived; }
+  uint8_t get_qfactor() const { return qfactor; }
 };

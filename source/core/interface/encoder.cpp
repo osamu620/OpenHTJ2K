@@ -31,6 +31,7 @@
 #include "encoder.hpp"
 #include "coding_units.hpp"
 
+#define NO_QFACTOR 0xFF
 namespace open_htj2k {
 // openhtj2k_encoder_impl shall not be public
 class openhtj2k_encoder_impl {
@@ -40,18 +41,19 @@ class openhtj2k_encoder_impl {
   siz_params *siz;
   cod_params *cod;
   qcd_params *qcd;
+  uint8_t qfactor;
 
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
-                         qcd_params &);
+                         qcd_params &, uint8_t);
   ~openhtj2k_encoder_impl();
   size_t invoke();
 };
 
 openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
                                                const std::vector<int32_t *> &input_buf, siz_params &s,
-                                               cod_params &c, qcd_params &q)
-    : buf(&input_buf), siz(&s), cod(&c), qcd(&q) {
+                                               cod_params &c, qcd_params &q, uint8_t qf)
+    : buf(&input_buf), siz(&s), cod(&c), qcd(&q), qfactor(qf) {
   this->outfile = filename;
 }
 
@@ -83,7 +85,15 @@ size_t openhtj2k_encoder_impl::invoke() {
   }
   if (siz->Csiz != 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
+    qfactor              = NO_QFACTOR;
     printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
+  }
+  // force RGB->YCbCr when Qfactor feature is enabled
+  if (qfactor != NO_QFACTOR) {
+    if (cod->use_color_trafo == 0) {
+      printf("WARNING: Color conversion is turned ON because Qfactor feature is enabled.\n");
+    }
+    cod->use_color_trafo = 1;
   }
 
   // create required marker segments
@@ -115,7 +125,7 @@ size_t openhtj2k_encoder_impl::invoke() {
   main_CAP.set_Ccap(Ccap15, 15);
 
   // create main header
-  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP);
+  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor);
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
@@ -146,8 +156,14 @@ size_t openhtj2k_encoder_impl::invoke() {
 
 // public interface
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
-                                     siz_params &siz, cod_params &cod, qcd_params &qcd) {
-  this->impl = std::make_unique<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd);
+                                     siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor) {
+  if (qfactor != NO_QFACTOR) {
+    if (qfactor > 100) {
+      printf("Value of Qfactor shall be in the range [0, 100]\n");
+      exit(EXIT_FAILURE);
+    }
+  }
+  this->impl = std::make_unique<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor);
 }
 size_t openhtj2k_encoder::invoke() { return this->impl->invoke(); }
 openhtj2k_encoder::~openhtj2k_encoder() = default;

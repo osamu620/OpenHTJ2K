@@ -9,6 +9,7 @@ OpenHTJ2K provides a shared liberary and sample applications having the followin
   - fully compliant with conformance testing defined in ITU-T Rec.803 | ISO 15444-4.
 - Encoding an image into a codestream which is compliant with HTJ2K
   - currently supports only HTJ2K. The optional markers like COC, QCC, POC, etc. are not implemented.
+  - **Quality control for lossy compression with ***Qfactor*** feature** 
 
 # Requirements
 cmake (version 3.14 or later) and C++14 compliant compiler.
@@ -54,6 +55,12 @@ Only Part 15 compliant encoding is supported.
 - `Cuse_eph=Bool`
 - `Qstep=Float`
   - 0.0 < base step size <= 2.0
+- `Qguard=Int`
+  - 0 to 7 for the number of guard bits 
+- `Qderived=Bool`
+  - `yes` switches the quantyzation style to **derived** (Default is `no`)
+- `Qfactor=Int`
+  - 0 to 100 for the quality of the lossyly compressed image
 
 ## Decoder
 The both Part 1 and Part 15 compliant decoding are supported.

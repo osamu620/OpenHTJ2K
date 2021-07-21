@@ -89,7 +89,7 @@ int main(int argc, char *argv[]) {
   }
 
   open_htj2k::qcd_params qcd;  // parameters related to QCD marker
-  qcd.is_derived          = false;
+  qcd.is_derived          = args.is_derived();
   qcd.number_of_guardbits = args.get_num_guard();
   qcd.base_step           = args.get_basestep_size();
   if (qcd.base_step == 0.0) {
@@ -100,7 +100,8 @@ int main(int argc, char *argv[]) {
   auto start             = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < num_iterations; ++i) {
     // create encoder
-    open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd);
+    open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd,
+                                          args.get_qfactor());
 
     // invoke encoding
     total_size = encoder.invoke();
