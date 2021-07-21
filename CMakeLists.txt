@@ -23,9 +23,9 @@ endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|Intel")
 	if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$")
-		set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-Wall -Wformat -march=native -mtune=native -fno-omit-frame-pointer")
+		set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat -march=native -mtune=native -fno-omit-frame-pointer")
 	else()
-		set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-Wall -Wformat")
+		set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-Wall -Wformat -Wextra -Wconversion -Wsign-conversion -Wunused-parameter")
 	endif()
 endif()
 
