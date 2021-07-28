@@ -15,18 +15,21 @@ OpenHTJ2K provides a shared liberary and sample applications having the followin
 cmake (version 3.14 or later) and C++14 compliant compiler.
 
 # Building
-Type the following command. `./` is a root of cloned repository.
+Type the following command. `./` is a root of cloned repository and `${BUILD_DIR}` is a build directory (for example, `../build` or `./build` and so on)
 
-- You can also specify `-DCMAKE_BUILD_TYPE=Debug` to build with debug information.
+- You can also specify `-DCMAKE_BUILD_TYPE=Debug` or `-DCMAKE_BUILD_TYPE=RelWithDebInfo` to build with debug information.
 - You can also specify `-G "Xcode"` to create a project for Xcode.
 - You can also specify `-G "Visual Studio 16 2019"` to create a project for Visual Studio 2019.
 (see https://cmake.org/cmake/help/v3.14/manual/cmake-generators.7.html#id12)
 
 ```
-cmake -G "Unix Makefiles" -B../build -DCMAKE_BUILD_TYPE=Release 
+cd ./
+cmake -G "Unix Makefiles" -B ${BUILD_DIR} -DCMAKE_BUILD_TYPE=Release
+cd  ${BUILD_DIR}
+make
 ```
 
-Then the executable should be found in `../bin` directory.
+Then the executables should be found in `${BUILD_DIR}/bin` directory.
 
 # Usage
 ## Encoder
