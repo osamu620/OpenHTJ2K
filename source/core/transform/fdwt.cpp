@@ -87,14 +87,15 @@ static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_
                                                           fdwt_1d_filtr_rev53_fixed};
 
 // 1-dimensional FDWT
-static inline void fdwt_1d_sr_fixed(int16_t *buf, int16_t *in, int16_t *out, const int32_t left, const int32_t right,
-                                    const uint32_t i0, const uint32_t i1, const uint8_t transformation) {
-//  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
-//  auto *Xext         = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
+static inline void fdwt_1d_sr_fixed(int16_t *buf, int16_t *in, int16_t *out, const int32_t left,
+                                    const int32_t right, const uint32_t i0, const uint32_t i1,
+                                    const uint8_t transformation) {
+  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
+  //  auto *Xext         = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   fdwt_1d_filtr_fixed[transformation](buf, left, right, i0, i1);
   memcpy(out, buf + left, sizeof(int16_t) * (i1 - i0));
-//  aligned_mem_free(Xext);
+  //  aligned_mem_free(Xext);
 }
 
 // FDWT for horizontal direction

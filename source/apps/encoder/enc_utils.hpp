@@ -438,7 +438,7 @@ class j2k_argset {
     }
   }
 
-  const char *get_infile() {
+  std::vector<std::string> get_infile() {
     auto p = std::find(args.begin(), args.end(), "-i");
     if (p == args.end()) {
       printf("ERROR: input file (\"-i\") is missing!\n");
@@ -449,7 +449,24 @@ class j2k_argset {
       printf("ERROR: file name for input is missing!\n");
       exit(EXIT_FAILURE);
     }
-    return args[idx + 1].c_str();
+    const std::string buf = args[idx + 1];
+    const std::string comma(",");
+    std::string::size_type pos = 0;
+    std::string::size_type newpos;
+    std::vector<std::string> fnames;
+    std::string::size_type aa = buf.length();
+    while (true) {
+      newpos = buf.find(comma, pos + comma.length());
+      fnames.push_back(buf.substr(pos, newpos - pos));
+      pos = newpos;
+      if (pos != std::string::npos) {
+        pos += 1;
+      } else {
+        break;
+      }
+    }
+    return fnames;
+    // return args[idx + 1].c_str();
   }
 
   std::string get_outfile() {

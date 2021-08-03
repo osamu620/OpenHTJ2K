@@ -1079,14 +1079,14 @@ void j2k_subband::quantize() {
   constexpr float KK[4] = {1.0, K * K1, K1 * K, K * K};
 
   uint32_t length = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
-  // TODO: The following code works correctly, but needs to be improved for speed
-  float fscale = static_cast<float>(1 << this->R_b) / this->delta;
+  float fscale    = static_cast<float>(1 << this->R_b) / this->delta;
   // if HL or LH or HH, scaling values should be included
   fscale *= KK[this->orientation];
   fscale /= (1 << (FRACBITS));
   for (uint32_t n = 0; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
+    // TODO: fval may exceed the range of int16_t !!
     this->i_samples[n] = static_cast<int16_t>(floorf(fabs(fval)));
     if (fval < 0.0) {
       this->i_samples[n] *= -1;
@@ -1424,9 +1424,7 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
   const uint32_t num_bufsamples =
       (ceil_int(pos1.x, 1 << tile->reduce_NL) - ceil_int(pos0.x, 1 << tile->reduce_NL))
       * (ceil_int(pos1.y, 1 << tile->reduce_NL) - ceil_int(pos0.y, 1 << tile->reduce_NL));
-  // samples         = new int32_t[(pos1.x - pos0.x) * (pos1.y - pos0.y)]();
-  samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
-  // fsamples = new float[(tc1.x - tc0.x) * (tc1.y - tc0.y)]();
+  samples  = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
   fsamples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_bufsamples, 32));
 
   // create tile samples, only for encoding;
@@ -1434,17 +1432,13 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
     int32_t *const src_origin = img[this->index];
     const int32_t height      = pos1.y - pos0.y;
     const int32_t width       = pos1.x - pos0.x;
-    element_siz imgsize;
-    hdr->SIZ->get_image_size(imgsize);
-    const uint32_t stride = imgsize.x;
+    // stride may differ from width with non-zero origin
+    const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
 #pragma omp parallel for  // default(none) shared(height, width, src, stride)
     for (int i = 0; i < height; ++i) {
       int32_t *src = src_origin + (pos0.y + i) * stride + pos0.x;
       int32_t *dst = samples + i * width;
       memcpy(dst, src, sizeof(int32_t) * width);
-      //      for (int j = 0; j < width; ++j) {
-      //        *dst++ = *src++;
-      //      }
     }
   }
 }
