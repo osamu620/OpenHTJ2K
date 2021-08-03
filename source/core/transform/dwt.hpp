@@ -29,6 +29,7 @@
 #pragma once
 
 #include <cstdint>
+#include "open_htj2k_typedef.hpp"
 
 #ifdef _OPENMP
   #include <omp.h>
@@ -58,8 +59,8 @@ constexpr int32_t Cshift = 15;
 constexpr int32_t Dshift = 16;
 
 // define pointer to FDWT functions
-typedef void (*fdwt_1d_filtr_func_fixed)(int16_t *, int32_t, int32_t, const uint32_t, const uint32_t);
-typedef void (*fdwt_ver_filtr_func_fixed)(int16_t *, const uint32_t, const uint32_t, const uint32_t,
+typedef void (*fdwt_1d_filtr_func_fixed)(sprec_t *, int32_t, int32_t, const uint32_t, const uint32_t);
+typedef void (*fdwt_ver_filtr_func_fixed)(sprec_t *, const uint32_t, const uint32_t, const uint32_t,
                                           const uint32_t);
 
 static inline int32_t PSEo(const int32_t i, const int32_t i0, const int32_t i1) {
@@ -82,10 +83,10 @@ static inline void dwt_1d_extr_fixed(T *extbuf, T *buf, const int32_t left, cons
 }
 
 // FDWT
-void fdwt_2d_sr_fixed(int16_t *previousLL, int16_t *LL, int16_t *HL, int16_t *LH, int16_t *HH, uint32_t u0,
+void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, uint32_t u0,
                       uint32_t u1, uint32_t v0, uint32_t v1, uint8_t transformation);
 
 // IDWT
-void idwt_2d_sr_fixed(int16_t *nextLL, int16_t *LL, int16_t *HL, int16_t *LH, int16_t *HH, uint32_t u0,
+void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, uint32_t u0,
                       uint32_t u1, uint32_t v0, uint32_t v1, uint8_t transformation,
                       uint8_t normalizing_upshift);

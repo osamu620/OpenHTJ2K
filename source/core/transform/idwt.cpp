@@ -32,7 +32,7 @@
 #include "utils.hpp"
 
 // This is not function but lambda expression
-auto idwt_1d_filtr_rev53_fixed = [](int16_t *X, const int32_t left, const int32_t right,
+auto idwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
                                     const uint32_t u_i0, const uint32_t u_i1) {
   const auto i0 = static_cast<const int32_t>(u_i0);
   const auto i1 = static_cast<const int32_t>(u_i1);
@@ -48,7 +48,7 @@ auto idwt_1d_filtr_rev53_fixed = [](int16_t *X, const int32_t left, const int32_
 };
 
 // This is not function but lambda expression
-auto idwt_1d_filtr_irrev97_fixed = [](int16_t *X, const int32_t left, const int32_t right,
+auto idwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1) {
   const auto i0 = static_cast<const int32_t>(u_i0);
   const auto i1 = static_cast<const int32_t>(u_i1);
@@ -60,39 +60,40 @@ auto idwt_1d_filtr_irrev97_fixed = [](int16_t *X, const int32_t left, const int3
   for (int32_t n = -2, i = i0 / 2 - 1; i < i1 / 2 + 2; i++, n += 2) {
     sum = X[n - 1];
     sum += X[n + 1];
-    X[n] -= (int16_t)((Dcoeff * sum + Doffset) >> Dshift);
+    X[n] -= (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
   }
   for (int32_t n = -2, i = i0 / 2 - 1; i < i1 / 2 + 1; i++, n += 2) {
     sum = X[n];
     sum += X[n + 2];
-    X[n + 1] -= (int16_t)((Ccoeff * sum + Coffset) >> Cshift);
+    X[n + 1] -= (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
   }
   for (int32_t n = 0, i = i0 / 2; i < i1 / 2 + 1; i++, n += 2) {
     sum = X[n - 1];
     sum += X[n + 1];
-    X[n] -= (int16_t)((Bcoeff * sum + Boffset) >> Bshift);
+    X[n] -= (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
   }
   for (int32_t n = 0, i = i0 / 2; i < i1 / 2; i++, n += 2) {
     sum = X[n];
     sum += X[n + 2];
-    X[n + 1] -= (int16_t)((Acoeff * sum + Aoffset) >> Ashift);
+    X[n + 1] -= (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
   }
 };
-typedef void (*idwt_1d_filtr_func_fixed)(int16_t *, int32_t, int32_t, const uint32_t, const uint32_t);
+typedef void (*idwt_1d_filtr_func_fixed)(sprec_t *, int32_t, int32_t, const uint32_t, const uint32_t);
 static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
                                                           idwt_1d_filtr_rev53_fixed};
 
-static void idwt_1d_sr_fixed(int16_t *buf, int16_t *in, int16_t *out, const int32_t left, const int32_t right,
-                             const uint32_t i0, const uint32_t i1, const uint8_t transformation) {
-//  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
-//  auto *buf          = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
+static void idwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, sprec_t *out, const int32_t left,
+                             const int32_t right, const uint32_t i0, const uint32_t i1,
+                             const uint8_t transformation) {
+  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
+  //  auto *buf          = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   idwt_1d_filtr_fixed[transformation](buf, left, right, i0, i1);
-  memcpy(out, buf + left, sizeof(int16_t) * (i1 - i0));
-//  aligned_mem_free(buf);
+  memcpy(out, buf + left, sizeof(sprec_t) * (i1 - i0));
+  //  aligned_mem_free(buf);
 }
 
-static void idwt_hor_sr_fixed(int16_t *out, int16_t *in, const uint32_t u0, const uint32_t u1,
+static void idwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, const uint32_t u1,
                               const uint32_t v0, const uint32_t v1, const uint8_t transformation) {
   const uint32_t stride              = u1 - u0;
   constexpr int32_t num_pse_i0[2][2] = {{3, 1}, {4, 2}};
@@ -106,15 +107,15 @@ static void idwt_hor_sr_fixed(int16_t *out, int16_t *in, const uint32_t u0, cons
     const float K1 = (transformation) ? 1 : 0.8128931;  // 066115961;
     for (uint32_t row = 0; row < v1 - v0; ++row) {
       if (u0 % 2 == 0) {
-        out[row] = (transformation) ? in[row] : (int16_t)roundf(static_cast<float>(in[row]) * K1);
+        out[row] = (transformation) ? in[row] : (sprec_t)roundf(static_cast<float>(in[row]) * K1);
       } else {
-        out[row] = (transformation) ? in[row] >> 1 : (int16_t)roundf(static_cast<float>(in[row]) * 0.5 * K);
+        out[row] = (transformation) ? in[row] >> 1 : (sprec_t)roundf(static_cast<float>(in[row]) * 0.5 * K);
       }
     }
   } else {
     // need to perform symmetric extension
     const uint32_t len = round_up(u1 - u0 + left + right, SIMD_LEN_I16);
-    auto *Yext         = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
+    auto *Yext         = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
     //#pragma omp parallel for
     for (uint32_t row = 0; row < v1 - v0; ++row) {
       idwt_1d_sr_fixed(Yext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
@@ -123,7 +124,7 @@ static void idwt_hor_sr_fixed(int16_t *out, int16_t *in, const uint32_t u0, cons
   }
 }
 
-static void idwt_ver_sr_fixed(int16_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+static void idwt_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
                               const uint32_t v1, const uint8_t transformation) {
   const uint32_t stride              = u1 - u0;
   constexpr int32_t num_pse_i0[2][2] = {{3, 1}, {4, 2}};
@@ -136,25 +137,25 @@ static void idwt_ver_sr_fixed(int16_t *in, const uint32_t u0, const uint32_t u1,
     const float K1 = (transformation) ? 1 : 0.8128931;  // 066115961;
     for (uint32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2 == 0) {
-        in[col] = (transformation) ? in[col] : (int16_t)roundf(static_cast<float>(in[col]) * K1);
+        in[col] = (transformation) ? in[col] : (sprec_t)roundf(static_cast<float>(in[col]) * K1);
       } else {
-        in[col] = (transformation) ? in[col] >> 1 : (int16_t)roundf(static_cast<float>(in[col]) * 0.5 * K);
+        in[col] = (transformation) ? in[col] >> 1 : (sprec_t)roundf(static_cast<float>(in[col]) * 0.5 * K);
       }
     }
   } else {
     const uint32_t len = round_up(stride, SIMD_LEN_I16);
-    auto **buf         = new int16_t *[top + v1 - v0 + bottom];
+    auto **buf         = new sprec_t *[top + v1 - v0 + bottom];
     for (uint32_t i = 1; i <= top; ++i) {
-      buf[top - i] = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
-      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride], sizeof(int16_t) * stride);
+      buf[top - i] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
+      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride], sizeof(sprec_t) * stride);
     }
     for (uint32_t row = 0; row < v1 - v0; ++row) {
       buf[top + row] = &in[row * stride];
     }
     for (uint32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
+      buf[top + (v1 - v0) + i - 1] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
       memcpy(buf[top + (v1 - v0) + i - 1], &in[(PSEo(v1 - v0 + i - 1 + v0, v0, v1) - v0) * stride],
-             sizeof(int16_t) * stride);
+             sizeof(sprec_t) * stride);
     }
     const int32_t start  = v0 / 2;
     const int32_t stop   = v1 / 2;
@@ -179,28 +180,28 @@ static void idwt_ver_sr_fixed(int16_t *in, const uint32_t u0, const uint32_t u1,
         for (uint32_t col = 0; col < u1 - u0; ++col) {
           int32_t sum = buf[n - 1][col];
           sum += buf[n + 1][col];
-          buf[n][col] -= (int16_t)((Dcoeff * sum + Doffset) >> Dshift);
+          buf[n][col] -= (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
         }
       }
       for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
         for (uint32_t col = 0; col < u1 - u0; ++col) {
           int32_t sum = buf[n][col];
           sum += buf[n + 2][col];
-          buf[n + 1][col] -= (int16_t)((Ccoeff * sum + Coffset) >> Cshift);
+          buf[n + 1][col] -= (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
         }
       }
       for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
         for (uint32_t col = 0; col < u1 - u0; ++col) {
           int32_t sum = buf[n - 1][col];
           sum += buf[n + 1][col];
-          buf[n][col] -= (int16_t)((Bcoeff * sum + Boffset) >> Bshift);
+          buf[n][col] -= (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
         }
       }
       for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
         for (uint32_t col = 0; col < u1 - u0; ++col) {
           int32_t sum = buf[n][col];
           sum += buf[n + 2][col];
-          buf[n + 1][col] -= (int16_t)((Acoeff * sum + Aoffset) >> Ashift);
+          buf[n + 1][col] -= (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
         }
       }
     }
@@ -213,12 +214,12 @@ static void idwt_ver_sr_fixed(int16_t *in, const uint32_t u0, const uint32_t u1,
     delete[] buf;
   }
 }
-static void idwt_2d_interleave_fixed(int16_t *buf, int16_t *LL, int16_t *HL, int16_t *LH, int16_t *HH,
+static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
                                      uint32_t u0, uint32_t u1, uint32_t v0, uint32_t v1) {
   const uint32_t stride     = u1 - u0;
   const uint32_t v_offset   = v0 % 2;
   const uint32_t u_offset   = u0 % 2;
-  int16_t *sp[4]            = {LL, HL, LH, HH};
+  sprec_t *sp[4]            = {LL, HL, LH, HH};
   const uint32_t vstart[4]  = {ceil_int(v0, 2), ceil_int(v0, 2), v0 / 2, v0 / 2};
   const uint32_t vstop[4]   = {ceil_int(v1, 2), ceil_int(v1, 2), v1 / 2, v1 / 2};
   const uint32_t ustart[4]  = {ceil_int(u0, 2), u0 / 2, ceil_int(u0, 2), u0 / 2};
@@ -235,12 +236,12 @@ static void idwt_2d_interleave_fixed(int16_t *buf, int16_t *LL, int16_t *HL, int
   }
 }
 
-void idwt_2d_sr_fixed(int16_t *nextLL, int16_t *LL, int16_t *HL, int16_t *LH, int16_t *HH,
+void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
                       const uint32_t u0, const uint32_t u1, const uint32_t v0, const uint32_t v1,
                       const uint8_t transformation, uint8_t normalizing_upshift) {
   const uint32_t buf_length = (u1 - u0) * (v1 - v0);
-  int16_t *src              = nextLL;
-  auto *dst                 = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * buf_length, 32));
+  sprec_t *src              = nextLL;
+  auto *dst                 = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * buf_length, 32));
   idwt_2d_interleave_fixed(dst, LL, HL, LH, HH, u0, u1, v0, v1);
   idwt_hor_sr_fixed(src, dst, u0, u1, v0, v1, transformation);
   aligned_mem_free(dst);
@@ -248,22 +249,22 @@ void idwt_2d_sr_fixed(int16_t *nextLL, int16_t *LL, int16_t *HL, int16_t *LH, in
 
   // scaling for 16bit width fixed-point representation
   if (transformation != 1 && normalizing_upshift) {
-#if defined(__AVX2__)
-    uint32_t len = round_down(buf_length, SIMD_LEN_I16);
-    for (uint32_t n = 0; n < len; n += 16) {
-      __m256i tmp0 = _mm256_load_si256((__m256i *)(src + n));
-      __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
-      _mm256_store_si256((__m256i *)(src + n), tmp1);
-    }
-    for (uint32_t n = len; n < buf_length; ++n) {
-      // cast to unsigned to avoid undefined behavior
-      src[n] = static_cast<uint16_t>(src[n]) << normalizing_upshift;
-    }
-#else
+    //#if defined(__AVX2__)
+    //    uint32_t len = round_down(buf_length, SIMD_LEN_I16);
+    //    for (uint32_t n = 0; n < len; n += 16) {
+    //      __m256i tmp0 = _mm256_load_si256((__m256i *)(src + n));
+    //      __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
+    //      _mm256_store_si256((__m256i *)(src + n), tmp1);
+    //    }
+    //    for (uint32_t n = len; n < buf_length; ++n) {
+    //      // cast to unsigned to avoid undefined behavior
+    //      src[n] = static_cast<usprec_t>(src[n]) << normalizing_upshift;
+    //    }
+    //#else
     for (uint32_t n = 0; n < buf_length; ++n) {
       // cast to unsigned to avoid undefined behavior
-      src[n] = static_cast<uint16_t>(src[n]) << normalizing_upshift;
+      src[n] = static_cast<usprec_t>(src[n]) << normalizing_upshift;
     }
-#endif
+    //#endif
   }
 }

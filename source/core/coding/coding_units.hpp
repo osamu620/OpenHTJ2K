@@ -80,7 +80,7 @@ class j2k_codeblock : public j2k_region {
   const uint32_t band_stride;
   const uint16_t num_layers;
   std::unique_ptr<int32_t[]> sample_buf;
-  int16_t *const i_samples;
+  sprec_t *const i_samples;
   float *const f_samples;
   uint32_t length;
   uint16_t Cmodes;
@@ -97,7 +97,7 @@ class j2k_codeblock : public j2k_region {
   bool already_included;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
-                float stepsize, uint32_t band_stride, int16_t *ibuf, float *fbuf, uint32_t offset,
+                float stepsize, uint32_t band_stride, sprec_t *ibuf, float *fbuf, uint32_t offset,
                 const uint16_t &numlayers, const uint8_t &codeblock_style, const element_siz &p0,
                 const element_siz &p1, const element_siz &s);
   void modify_state(const std::function<void(uint8_t &, uint8_t)> &callback, uint8_t val, int16_t j1,
@@ -136,13 +136,13 @@ class j2k_subband : public j2k_region {
   uint8_t M_b;
   float delta;
   float nominal_range;
-  int16_t *i_samples;
+  sprec_t *i_samples;
   float *f_samples;
 
   // j2k_subband();
   j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation, uint8_t R_b,
               uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta, float nominal_range,
-              int16_t *ibuf, float *fbuf);
+              sprec_t *ibuf, float *fbuf);
   ~j2k_subband();
   void quantize();
   float get_normalized_step_size();
@@ -173,7 +173,7 @@ class j2k_precinct_subband : public j2k_region {
   uint32_t num_codeblock_x;
   uint32_t num_codeblock_y;
   j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
-                       float stepsize, int16_t *ibuf, float *fbuf, const element_siz &bp0,
+                       float stepsize, sprec_t *ibuf, float *fbuf, const element_siz &bp0,
                        const element_siz &bp1, const element_siz &p0, const element_siz &p1,
                        const uint16_t &num_layers, const element_siz &codeblock_size,
                        const uint8_t &Cmodes);
@@ -268,7 +268,7 @@ class j2k_resolution : public j2k_region {
   const bool is_empty;
   //
   uint8_t normalizing_upshift;
-  int16_t *i_samples;
+  sprec_t *i_samples;
   // int32_t *iw_samples;
   float *f_samples;
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,

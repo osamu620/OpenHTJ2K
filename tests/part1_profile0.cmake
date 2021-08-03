@@ -70,7 +70,7 @@ set_tests_properties(comp_p0_12 PROPERTIES DEPENDS dec_p0_12)
 add_test(NAME comp_p0_14_r COMMAND imgcmp p0_14_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_14-0.pgx 0 0)
 add_test(NAME comp_p0_14_g COMMAND imgcmp p0_14_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_14-1.pgx 0 0)
 add_test(NAME comp_p0_14_b COMMAND imgcmp p0_14_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_14-2.pgx 0 0)
-set_tests_properties(comp_p0_14_r comp_p0_10_g comp_p0_14_b PROPERTIES DEPENDS dec_p0_14)
+set_tests_properties(comp_p0_14_r comp_p0_14_g comp_p0_14_b PROPERTIES DEPENDS dec_p0_14)
 # 15
 add_test(NAME comp_p0_15 COMMAND imgcmp p0_15_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_15-0.pgx 0 0)
 set_tests_properties(comp_p0_15 PROPERTIES DEPENDS dec_p0_15)
