@@ -90,7 +90,7 @@ SIZ_marker::SIZ_marker(j2c_src_memory &in) : j2k_marker_io_base(_SIZ) {
 
 SIZ_marker::SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t YO, uint32_t XT,
                        uint32_t YT, uint32_t XTO, uint32_t YTO, uint16_t C, std::vector<uint8_t> &S,
-                       std::vector<uint8_t> &XR, std::vector<uint8_t> &YR, bool is_signed, bool needCAP)
+                       std::vector<uint8_t> &XR, std::vector<uint8_t> &YR, bool needCAP)
     : j2k_marker_io_base(_SIZ),
       Rsiz(R | (needCAP ? 1 << 14 : 0)),
       Xsiz(X),
@@ -104,11 +104,8 @@ SIZ_marker::SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t
       Csiz(C) {
   Lmar      = 38 + 3 * C;
   uint8_t s = 0;
-  if (is_signed) {
-    s = 0x80;
-  }
   for (unsigned long i = 0; i < Csiz; i++) {
-    Ssiz.push_back(s | S[i] - 1);
+    Ssiz.push_back(S[i]);
     XRsiz.push_back(XR[i]);
     YRsiz.push_back(YR[i]);
   }
@@ -157,6 +154,14 @@ uint8_t SIZ_marker::get_bitdepth(uint16_t c) {
 void SIZ_marker::get_image_size(element_siz &siz) const {
   siz.x = Xsiz;
   siz.y = Ysiz;
+}
+
+uint32_t SIZ_marker::get_component_stride(uint16_t c) const {
+  if (c >= Csiz) {
+    printf("ERROR: invalid component index\n");
+    exit(EXIT_FAILURE);
+  }
+  return Xsiz / XRsiz[c];
 }
 
 void SIZ_marker::get_image_origin(element_siz &siz) const {

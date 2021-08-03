@@ -36,13 +36,13 @@
 #include <chrono>
 #include <vector>
 #include "encoder.hpp"
-#include "image.hpp"
 #include "enc_utils.hpp"
 
 int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
+  std::vector<std::string> fnames = args.get_infile();
 
-  image img(args.get_infile());  // input image
+  open_htj2k::image img(fnames);  // input image
   element_siz_local image_origin = args.get_origin();
   element_siz_local image_size(img.get_width(), img.get_height());
 
@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
     input_buf.push_back(img.get_buf(c));
   }
   uint8_t img_depth;
-  img_depth                     = img.get_bpp(0);  // suppose all components have the same bit-depth
+  // img_depth                     = img.get_bpp(0);  // suppose all components have the same bit-depth
   std::string out_filename      = args.get_outfile();
   element_siz_local tile_size   = args.get_tile_size();
   element_siz_local tile_origin = args.get_tile_origin();
@@ -67,7 +67,14 @@ int main(int argc, char *argv[]) {
   siz.XTOsiz = tile_origin.x;
   siz.YTOsiz = tile_origin.y;
   siz.Csiz   = num_components;
-  siz.bpp    = img_depth;
+  for (auto c = 0; c < siz.Csiz; ++c) {
+    siz.Ssiz.push_back(img.get_Ssiz_value(c));
+    auto compw = img.get_component_width(c);
+    auto comph = img.get_component_height(c);
+    siz.XRsiz.push_back((siz.Xsiz + compw - 1) / compw);
+    siz.YRsiz.push_back((siz.Ysiz + comph - 1) / comph);
+  }
+  // siz.bpp    = img_depth;
 
   open_htj2k::cod_params cod;  // parameters related to COD marker
   element_siz_local cblk_size       = args.get_cblk_size();
@@ -93,7 +100,7 @@ int main(int argc, char *argv[]) {
   qcd.number_of_guardbits = args.get_num_guard();
   qcd.base_step           = args.get_basestep_size();
   if (qcd.base_step == 0.0) {
-    qcd.base_step = 1.0f / static_cast<float>(1 << siz.bpp);
+    qcd.base_step = 1.0f / static_cast<float>(1 << img.get_max_bpp());
   }
   size_t total_size;
   int32_t num_iterations = args.get_num_iteration();

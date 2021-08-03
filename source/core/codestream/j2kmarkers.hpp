@@ -84,11 +84,12 @@ class SIZ_marker : public j2k_marker_io_base {
   explicit SIZ_marker(j2c_src_memory &in);
   SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t YO, uint32_t XT, uint32_t YT,
              uint32_t XTO, uint32_t YTO, uint16_t C, std::vector<uint8_t> &S, std::vector<uint8_t> &XR,
-             std::vector<uint8_t> &YR, bool is_signed, bool needCAP);
+             std::vector<uint8_t> &YR, bool needCAP);
   int write(j2c_destination_base &dst);
   bool is_signed(uint16_t c);
   uint8_t get_bitdepth(uint16_t c);
   void get_image_size(element_siz &siz) const;
+  uint32_t get_component_stride(uint16_t c) const;
   void get_image_origin(element_siz &siz) const;
   void get_tile_size(element_siz &siz) const;
   void get_tile_origin(element_siz &siz) const;

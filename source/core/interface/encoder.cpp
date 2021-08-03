@@ -76,12 +76,12 @@ size_t openhtj2k_encoder_impl::invoke() {
     printf("ERROR: tile size plus tile origin shall be greater than the image origin.\n");
     exit(EXIT_FAILURE);
   }
-  std::vector<uint8_t> bit_depth;
+  std::vector<uint8_t> Ssiz;
   std::vector<uint8_t> XRsiz, YRsiz;
   for (auto c = 0; c < siz->Csiz; ++c) {
-    bit_depth.push_back(siz->bpp);
-    XRsiz.push_back(1);
-    YRsiz.push_back(1);
+    Ssiz.push_back(siz->Ssiz[c]);
+    XRsiz.push_back(siz->XRsiz[c]);
+    YRsiz.push_back(siz->YRsiz[c]);
   }
   if (siz->Csiz != 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
@@ -101,12 +101,12 @@ size_t openhtj2k_encoder_impl::invoke() {
 
   // create required marker segments
   SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
-                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, bit_depth, XRsiz, YRsiz, false, true);
+                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, true);
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
                       cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels, cod->blkwidth,
                       cod->blkheight, cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
   QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
-                      bit_depth[0], cod->use_color_trafo, qcd->base_step, qfactor);
+                      Ssiz[0], cod->use_color_trafo, qcd->base_step, qfactor);
   // parameters for CAP marker
   uint16_t bits14_15 = 0;                     // 0: HTONLY, 2: HTDECLARED, 3: MIXED
   uint16_t bit13     = 0;                     // 0: SINGLEHT, 1: MULTIHT
