@@ -36,6 +36,9 @@
 // number of fractional bits for fixed-point representation
 constexpr int32_t FRACBITS = 13;
 
+typedef int32_t sprec_t;
+typedef uint32_t usprec_t;
+
 #define SIMD_LEN_F32 8
 #define SIMD_LEN_I32 8
 

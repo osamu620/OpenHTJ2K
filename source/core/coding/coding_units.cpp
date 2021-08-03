@@ -170,7 +170,7 @@ uint8_t normalizing_upshift[32] = {0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 
  *******************************************************************************/
 
 j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b,
-                             uint8_t transformation, float stepsize, uint32_t band_stride, int16_t *ibuf,
+                             uint8_t transformation, float stepsize, uint32_t band_stride, sprec_t *ibuf,
                              float *fbuf, uint32_t offset, const uint16_t &numlayers,
                              const uint8_t &codeblock_style, const element_siz &p0, const element_siz &p1,
                              const element_siz &s)
@@ -264,7 +264,7 @@ float *j2k_codeblock::get_fsample_addr(const int16_t &j1, const int16_t &j2) con
  * j2k_precinct_subband
  *******************************************************************************/
 j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uint8_t R_b,
-                                           uint8_t transformation, float stepsize, int16_t *ibuf,
+                                           uint8_t transformation, float stepsize, sprec_t *ibuf,
                                            float *fbuf, const element_siz &bp0, const element_siz &bp1,
                                            const element_siz &p0, const element_siz &p1,
                                            const uint16_t &num_layers, const element_siz &codeblock_size,
@@ -1017,7 +1017,7 @@ j2k_precinct_subband *j2k_precinct::access_pband(uint8_t b) {
  *******************************************************************************/
 j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation,
                          uint8_t R_b, uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta,
-                         float nominal_range, int16_t *ibuf, float *fbuf)
+                         float nominal_range, sprec_t *ibuf, float *fbuf)
     : j2k_region(p0, p1),
       orientation(orientation),
       transformation(transformation),
@@ -1034,9 +1034,9 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
   if (num_samples) {
     if (orientation != BAND_LL) {
       // If not the lowest resolution, buffers for subbands shall be created.
-      i_samples = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * num_samples, 32));
+      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
       f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
-      memset(i_samples, 0, sizeof(int16_t) * num_samples);
+      memset(i_samples, 0, sizeof(sprec_t) * num_samples);
 #if defined(__AVX2__)
       __m256 mZero = _mm256_setzero_ps();
       for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_F32); n += SIMD_LEN_F32) {
@@ -1087,7 +1087,7 @@ void j2k_subband::quantize() {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
     // TODO: fval may exceed the range of int16_t !!
-    this->i_samples[n] = static_cast<int16_t>(floorf(fabs(fval)));
+    this->i_samples[n] = static_cast<sprec_t>(floorf(fabs(fval)));
     if (fval < 0.0) {
       this->i_samples[n] *= -1;
     }
@@ -1115,9 +1115,9 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
   i_samples = nullptr;
   if (!is_empty) {
     if (index == 0) {
-      i_samples = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * num_samples, 32));
+      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
       f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
-      memset(i_samples, 0, sizeof(int16_t) * num_samples);
+      memset(i_samples, 0, sizeof(sprec_t) * num_samples);
 #if defined(__AVX2__)
       __m256 mZero = _mm256_setzero_ps();
       for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_F32); n += SIMD_LEN_F32) {
@@ -1133,7 +1133,7 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
 #endif
 
     } else {
-      i_samples = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * num_samples, 32));
+      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
       f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
     }
   }
@@ -1273,10 +1273,10 @@ void j2k_resolution::scale() {
   // TODO: The following code works correctly, but needs to be improved for speed
   float fscale = KK[0];
   for (uint32_t n = 0; n < length; ++n) {
-    int16_t sign = this->i_samples[n] & 0x8000;
+    sprec_t sign = this->i_samples[n] & 0x8000;
     float fval   = fabs(static_cast<float>(this->i_samples[n]));
     fval *= fscale;
-    this->i_samples[n] = static_cast<int16_t>(fval + 0.5);
+    this->i_samples[n] = static_cast<sprec_t>(fval + 0.5);
     if (sign) {
       this->i_samples[n] *= -1;
     }
@@ -2408,7 +2408,7 @@ void j2k_tile::decode(j2k_main_header &main_header) {
       }
     }  // end of resolution loop
     j2k_resolution *cr = this->tcomp[c].access_resolution(NL - reduce_NL);
-    int16_t *sp        = cr->i_samples;
+    sprec_t *sp        = cr->i_samples;
     int32_t *dp        = this->tcomp[c].get_sample_address(0, 0);
 
     // modify coordinates of tile component considering a value defined via "-reduce" parameter
@@ -2419,21 +2419,21 @@ void j2k_tile::decode(j2k_main_header &main_header) {
 
     // copy samples in resolution buffer to that in tile component buffer
     unsigned long num_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
-#pragma omp parallel for  // default(none) shared(num_samples, sp, dp)
-#if defined(__AVX2__)
-    for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_I32); n += SIMD_LEN_I32) {
-      __m128i src = _mm_loadu_si128((__m128i *)(sp + n));
-      __m256i dst = _mm256_cvtepi16_epi32(src);
-      _mm256_store_si256((__m256i *)(dp + n), dst);
-    }
-    for (unsigned long n = round_down(num_samples, SIMD_LEN_I32); n < num_samples; ++n) {
-      dp[n] = sp[n];
-    }
-#else
+    //#pragma omp parallel for  // default(none) shared(num_samples, sp, dp)
+    //#if defined(__AVX2__)
+    //    for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_I32); n += SIMD_LEN_I32) {
+    //      __m128i src = _mm_loadu_si128((__m128i *)(sp + n));
+    //      __m256i dst = _mm256_cvtepi16_epi32(src);
+    //      _mm256_store_si256((__m256i *)(dp + n), dst);
+    //    }
+    //    for (unsigned long n = round_down(num_samples, SIMD_LEN_I32); n < num_samples; ++n) {
+    //      dp[n] = sp[n];
+    //    }
+    //#else
     for (unsigned long n = 0; n < num_samples; ++n) {
       dp[n] = sp[n];
     }
-#endif
+    //#endif
 
   }  // end of component loop
 }
@@ -2671,22 +2671,22 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     int32_t *const sp0            = this->tcomp[c].get_sample_address(0, 0);
     const uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
     // TODO: enc_init vectorize code
-#if defined(__AVX2__)
-    __m256i offsets = _mm256_set_epi32(7, 6, 3, 2, 5, 4, 1, 0);
-    for (uint32_t n = 0; n < round_down(num_tc_samples, 16); n += 16) {
-      __m256i s0a = _mm256_loadu_si256((__m256i *)(sp0 + n));
-      __m256i s0b = _mm256_loadu_si256((__m256i *)(sp0 + n + 8));
-      s0a         = _mm256_permutevar8x32_epi32(_mm256_packs_epi32(s0a, s0b), offsets);
-      _mm256_storeu_si256((__m256i *)(cr->i_samples + n), s0a);
-    }
-    for (uint32_t n = round_down(num_tc_samples, 16); n < num_tc_samples; ++n) {
-      cr->i_samples[n] = static_cast<int16_t>(sp0[n]);
-    }
-#else
+    //#if defined(__AVX2__)
+    //    __m256i offsets = _mm256_set_epi32(7, 6, 3, 2, 5, 4, 1, 0);
+    //    for (uint32_t n = 0; n < round_down(num_tc_samples, 16); n += 16) {
+    //      __m256i s0a = _mm256_loadu_si256((__m256i *)(sp0 + n));
+    //      __m256i s0b = _mm256_loadu_si256((__m256i *)(sp0 + n + 8));
+    //      s0a         = _mm256_permutevar8x32_epi32(_mm256_packs_epi32(s0a, s0b), offsets);
+    //      _mm256_storeu_si256((__m256i *)(cr->i_samples + n), s0a);
+    //    }
+    //    for (uint32_t n = round_down(num_tc_samples, 16); n < num_tc_samples; ++n) {
+    //      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
+    //    }
+    //#else
     for (uint32_t n = 0; n < num_tc_samples; ++n) {
-      cr->i_samples[n] = static_cast<int16_t>(sp0[n]);
+      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
     }
-#endif
+    //#endif
     //    // experimental floating point code
     //    if (transformation == 0) {
     //      for (uint32_t n = 0; n < (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y); ++n) {
