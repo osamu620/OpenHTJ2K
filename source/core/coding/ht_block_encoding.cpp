@@ -51,19 +51,18 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     sprec_t *const sp = this->i_samples + i * stride;
     int32_t *const dp = this->sample_buf.get() + i * width;
     for (uint16_t j = 0; j < width; ++j) {
-      int32_t tmp   = sp[j];
-      uint32_t sign = static_cast<uint32_t>(tmp) & 0x80000000;
-      if (tmp) {
+      dp[j]         = sp[j];
+      uint32_t sign = static_cast<uint32_t>(dp[j]) & 0x80000000;
+      if (dp[j]) {
         or_val |= 1;
         modify_state(sigma, 1, i, j);
         // convert sample value to MagSgn
-        tmp = (tmp < 0) ? -tmp : tmp;
-        tmp &= 0x7FFFFFFF;
-        tmp--;
-        tmp <<= 1;
-        tmp += sign >> 31;
+        dp[j] = (dp[j] < 0) ? -dp[j] : dp[j];
+        dp[j] &= 0x7FFFFFFF;
+        dp[j]--;
+        dp[j] <<= 1;
+        dp[j] += sign >> 31;
       }
-      dp[j] = tmp;
     }
   }
 }

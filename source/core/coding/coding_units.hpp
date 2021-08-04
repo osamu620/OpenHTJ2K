@@ -81,7 +81,6 @@ class j2k_codeblock : public j2k_region {
   const uint16_t num_layers;
   std::unique_ptr<int32_t[]> sample_buf;
   sprec_t *const i_samples;
-  float *const f_samples;
   uint32_t length;
   uint16_t Cmodes;
   uint8_t num_passes;
@@ -97,7 +96,7 @@ class j2k_codeblock : public j2k_region {
   bool already_included;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
-                float stepsize, uint32_t band_stride, sprec_t *ibuf, float *fbuf, uint32_t offset,
+                float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
                 const uint16_t &numlayers, const uint8_t &codeblock_style, const element_siz &p0,
                 const element_siz &p1, const element_siz &s);
   void modify_state(const std::function<void(uint8_t &, uint8_t)> &callback, uint8_t val, int16_t j1,
@@ -115,7 +114,6 @@ class j2k_codeblock : public j2k_region {
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size);
   void create_compressed_buffer(buf_chain *tile_buf, uint16_t buf_limit, const uint16_t &layer);
-  float *get_fsample_addr(const int16_t &j1, const int16_t &j2) const;
   void update_sample(const uint8_t &symbol, const uint8_t &p, const uint16_t &j1, const uint16_t &j2) const;
   void update_sign(const int8_t &val, const uint16_t &j1, const uint16_t &j2) const;
   uint8_t get_sign(const uint16_t &j1, const uint16_t &j2) const;
@@ -137,7 +135,6 @@ class j2k_subband : public j2k_region {
   float delta;
   float nominal_range;
   sprec_t *i_samples;
-  float *f_samples;
 
   // j2k_subband();
   j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation, uint8_t R_b,
@@ -146,17 +143,6 @@ class j2k_subband : public j2k_region {
   ~j2k_subband();
   void quantize();
   float get_normalized_step_size();
-  // DEBUG FUNCTION, SOON BE DELETED
-  void show() {
-    printf("---- band = %d ----\n", orientation);
-    for (int i = 0; i < pos1.y - pos0.y; ++i) {
-      for (int j = 0; j < pos1.x - pos0.x; ++j) {
-        printf("%3d ", i_samples[j + i * (pos1.x - pos0.x)]);
-      }
-      printf("\n");
-    }
-    printf("-------------------\n");
-  }
 };
 
 /********************************************************************************
@@ -173,10 +159,9 @@ class j2k_precinct_subband : public j2k_region {
   uint32_t num_codeblock_x;
   uint32_t num_codeblock_y;
   j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
-                       float stepsize, sprec_t *ibuf, float *fbuf, const element_siz &bp0,
-                       const element_siz &bp1, const element_siz &p0, const element_siz &p1,
-                       const uint16_t &num_layers, const element_siz &codeblock_size,
-                       const uint8_t &Cmodes);
+                       float stepsize, sprec_t *ibuf, const element_siz &bp0, const element_siz &bp1,
+                       const element_siz &p0, const element_siz &p1, const uint16_t &num_layers,
+                       const element_siz &codeblock_size, const uint8_t &Cmodes);
   //~j2k_precinct_subband();
   tagtree_node *get_inclusion_node(uint32_t i);
   tagtree_node *get_ZBP_node(uint32_t i);
@@ -358,8 +343,6 @@ class j2k_tile_component : public j2k_tile_base {
   uint16_t index;
   // pointer to sample buffer (integer)
   int32_t *samples;
-  // pointer to sample buffer (float)
-  float *fsamples;
   // shift value for ROI
   uint8_t ROIshift;
   // pointer to instances of resolution class
@@ -382,7 +365,6 @@ class j2k_tile_component : public j2k_tile_base {
   void init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile, uint16_t c,
             std::vector<int32_t *> img = {});
   int32_t *get_sample_address(uint32_t x, uint32_t y);
-  float *get_fsample_address(uint32_t x, uint32_t y);
   uint8_t get_dwt_levels();
   uint8_t get_transformation();
   uint8_t get_Cmodes() const;
