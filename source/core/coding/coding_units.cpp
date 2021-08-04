@@ -171,9 +171,8 @@ uint8_t normalizing_upshift[32] = {0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 
 
 j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b,
                              uint8_t transformation, float stepsize, uint32_t band_stride, sprec_t *ibuf,
-                             float *fbuf, uint32_t offset, const uint16_t &numlayers,
-                             const uint8_t &codeblock_style, const element_siz &p0, const element_siz &p1,
-                             const element_siz &s)
+                             uint32_t offset, const uint16_t &numlayers, const uint8_t &codeblock_style,
+                             const element_siz &p0, const element_siz &p1, const element_siz &s)
     : j2k_region(p0, p1),
       // public
       size(s),
@@ -192,7 +191,6 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       num_layers(numlayers),
       sample_buf(std::make_unique<int32_t[]>(size.x * size.y)),
       i_samples(ibuf + offset),
-      f_samples(fbuf + offset),
       length(0),
       Cmodes(codeblock_style),
       num_passes(0),
@@ -256,16 +254,12 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, uint16_t buf_l
   }
 }
 
-float *j2k_codeblock::get_fsample_addr(const int16_t &j1, const int16_t &j2) const {
-  return (this->f_samples + (j2 + 1) + (j1 + 1) * this->band_stride);
-}
-
 /********************************************************************************
  * j2k_precinct_subband
  *******************************************************************************/
 j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uint8_t R_b,
                                            uint8_t transformation, float stepsize, sprec_t *ibuf,
-                                           float *fbuf, const element_siz &bp0, const element_siz &bp1,
+                                           const element_siz &bp0, const element_siz &bp1,
                                            const element_siz &p0, const element_siz &p1,
                                            const uint16_t &num_layers, const element_siz &codeblock_size,
                                            const uint8_t &Cmodes)
@@ -301,9 +295,9 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
                                  std::min(pos1.y, codeblock_size.y * (y + 1 + pos0.y / codeblock_size.y)));
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
       const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
-      this->codeblocks[cb]  = std::make_unique<j2k_codeblock>(
-          cb, orientation, M_b, R_b, transformation, stepsize, band_stride, ibuf, fbuf, offset, num_layers,
-          Cmodes, cblkpos0, cblkpos1, cblksize);
+      this->codeblocks[cb] =
+          std::make_unique<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize, band_stride,
+                                          ibuf, offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
     }
   } else {
     // this->codeblocks = {};
@@ -1002,8 +996,8 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
                              ceil_int(pos1.y - yob[subband[i]->orientation], sr));
     this->pband[i] = std::make_unique<j2k_precinct_subband>(
         subband[i]->orientation, subband[i]->M_b, subband[i]->R_b, subband[i]->transformation,
-        subband[i]->delta * subband[i]->nominal_range, subband[i]->i_samples, subband[i]->f_samples,
-        subband[i]->pos0, subband[i]->pos1, pbpos0, pbpos1, num_layers, codeblock_size, Cmodes);
+        subband[i]->delta * subband[i]->nominal_range, subband[i]->i_samples, subband[i]->pos0,
+        subband[i]->pos1, pbpos0, pbpos1, num_layers, codeblock_size, Cmodes);
   }
 }
 
@@ -1027,33 +1021,16 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
       M_b(M_b),
       delta(delta),
       nominal_range(nominal_range),
-      i_samples(nullptr),
-      f_samples(nullptr) {
+      i_samples(nullptr) {
   // TODO: consider reduce_NL value
   const uint32_t num_samples = (pos1.x - pos0.x) * (pos1.y - pos0.y);
   if (num_samples) {
     if (orientation != BAND_LL) {
       // If not the lowest resolution, buffers for subbands shall be created.
       i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
-      f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
       memset(i_samples, 0, sizeof(sprec_t) * num_samples);
-#if defined(__AVX2__)
-      __m256 mZero = _mm256_setzero_ps();
-      for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_F32); n += SIMD_LEN_F32) {
-        __m256 tmp = _mm256_load_ps(f_samples + n);  //*((__m256 *)(f_samples + n));
-        _mm256_store_ps(f_samples + n, mZero);
-      }
-      for (uint32_t n = round_down(num_samples, SIMD_LEN_F32); n < num_samples; ++n) {
-        f_samples[n] = 0.0;
-      }
-#else
-      for (uint32_t n = 0; n < num_samples; ++n) {
-        f_samples[n] = 0.0;
-      }
-#endif
     } else {
       i_samples = ibuf;
-      f_samples = fbuf;
     }
   }
 }
@@ -1062,7 +1039,6 @@ j2k_subband::~j2k_subband() {
   // printf("INFO: destructor of j2k_subband %d is called\n", orientation);
   if (orientation != BAND_LL) {
     aligned_mem_free(i_samples);
-    aligned_mem_free(f_samples);
   }
 }
 
@@ -1086,7 +1062,7 @@ void j2k_subband::quantize() {
   for (uint32_t n = 0; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
-    // TODO: fval may exceed the range of int16_t !!
+    // fval may exceed when sprec_t == int16_t
     this->i_samples[n] = static_cast<sprec_t>(floorf(fabs(fval)));
     if (fval < 0.0) {
       this->i_samples[n] *= -1;
@@ -1342,14 +1318,10 @@ j2k_tile_component::j2k_tile_component() {
   num_guard_bits     = 0;
   ROIshift           = 0;
   samples            = nullptr;
-  fsamples           = nullptr;
   resolution         = nullptr;
 }
 
-j2k_tile_component::~j2k_tile_component() {
-  aligned_mem_free(samples);
-  aligned_mem_free(fsamples);
-}
+j2k_tile_component::~j2k_tile_component() { aligned_mem_free(samples); }
 
 void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile,
                               uint16_t c, std::vector<int32_t *> img) {
@@ -1424,8 +1396,7 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
   const uint32_t num_bufsamples =
       (ceil_int(pos1.x, 1 << tile->reduce_NL) - ceil_int(pos0.x, 1 << tile->reduce_NL))
       * (ceil_int(pos1.y, 1 << tile->reduce_NL) - ceil_int(pos0.y, 1 << tile->reduce_NL));
-  samples  = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
-  fsamples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_bufsamples, 32));
+  samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
 
   // create tile samples, only for encoding;
   if (!img.empty()) {
@@ -1483,10 +1454,6 @@ void j2k_tile_component::setRGNparams(RGN_marker *RGN) { this->ROIshift = RGN->g
 
 int32_t *j2k_tile_component::get_sample_address(uint32_t x, uint32_t y) {
   return this->samples + x + y * (this->pos1.x - this->pos0.x);
-}
-
-float *j2k_tile_component::get_fsample_address(uint32_t x, uint32_t y) {
-  return this->fsamples + x + y * (this->pos1.x - this->pos0.x);
 }
 
 uint8_t j2k_tile_component::get_dwt_levels() { return this->NL; }
