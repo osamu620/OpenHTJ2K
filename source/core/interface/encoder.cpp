@@ -91,11 +91,11 @@ size_t openhtj2k_encoder_impl::invoke() {
   if (qfactor != NO_QFACTOR) {
     if (siz->Csiz == 3) {
       if (cod->use_color_trafo == 0) {
-        printf("WARNING: Color conversion is turned ON because Qfactor feature is enabled.\n");
+        printf("WARNING: Color conversion is OFF while Qfactor feature is enabled.\n");
+        printf("         It is OK if the inputs are in YCbCr color space.\n");
       }
-      cod->use_color_trafo = 1;
     } else if (siz->Csiz != 1) {
-      printf("WARNING: Qfactor is designed for only gray-scale or RGB input.\n");
+      printf("WARNING: Qfactor is designed for only gray-scale or RGB or YCbCr input.\n");
     }
   }
 
