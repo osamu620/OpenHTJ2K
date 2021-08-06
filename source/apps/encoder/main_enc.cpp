@@ -51,9 +51,17 @@ int main(int argc, char *argv[]) {
   for (auto c = 0; c < num_components; ++c) {
     input_buf.push_back(img.get_buf(c));
   }
-  uint8_t img_depth;
-  // img_depth                     = img.get_bpp(0);  // suppose all components have the same bit-depth
-  std::string out_filename      = args.get_outfile();
+  bool isJPH                 = false;
+  std::string out_filename   = args.get_outfile();
+  std::string::size_type pos = out_filename.find_last_of(".");
+  std::string fext           = out_filename.substr(pos, 4);
+  if (fext.compare(".jph") == 0 || fext.compare(".JPH") == 0) {
+    isJPH = true;
+  } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc") && fext.compare(".J2C")
+             && fext.compare(".J2K") && fext.compare(".JPHC")) {
+    printf("ERROR: invalid extension for output file\n");
+    exit(EXIT_FAILURE);
+  }
   element_siz_local tile_size   = args.get_tile_size();
   element_siz_local tile_origin = args.get_tile_origin();
   open_htj2k::siz_params siz;  // information of input image
@@ -102,14 +110,15 @@ int main(int argc, char *argv[]) {
   if (qcd.base_step == 0.0) {
     qcd.base_step = 1.0f / static_cast<float>(1 << img.get_max_bpp());
   }
+  uint8_t color_space = args.get_jph_color_space();
+
   size_t total_size;
   int32_t num_iterations = args.get_num_iteration();
   auto start             = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < num_iterations; ++i) {
     // create encoder
     open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd,
-                                          args.get_qfactor());
-
+                                          args.get_qfactor(), isJPH, color_space);
     // invoke encoding
     total_size = encoder.invoke();
   }
