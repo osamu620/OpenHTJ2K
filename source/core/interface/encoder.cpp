@@ -27,11 +27,17 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <cstring>
+#include <fstream>
 #include <j2kmarkers.hpp>
 #include "encoder.hpp"
 #include "coding_units.hpp"
+#include "jph.hpp"
 
 #define NO_QFACTOR 0xFF
+
+#define sRGB 0
+#define sYCC 1
+
 namespace open_htj2k {
 // openhtj2k_encoder_impl shall not be public
 class openhtj2k_encoder_impl {
@@ -42,24 +48,30 @@ class openhtj2k_encoder_impl {
   cod_params *cod;
   qcd_params *qcd;
   uint8_t qfactor;
+  bool isJPH;
+  uint8_t color_space;
 
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
-                         qcd_params &, uint8_t);
+                         qcd_params &, uint8_t, bool, uint8_t);
   ~openhtj2k_encoder_impl();
   size_t invoke();
 };
 
 openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
                                                const std::vector<int32_t *> &input_buf, siz_params &s,
-                                               cod_params &c, qcd_params &q, uint8_t qf)
-    : buf(&input_buf), siz(&s), cod(&c), qcd(&q), qfactor(qf) {
+                                               cod_params &c, qcd_params &q, uint8_t qf, bool flag,
+                                               uint8_t cs)
+    : buf(&input_buf), siz(&s), cod(&c), qcd(&q), qfactor(qf), isJPH(flag), color_space(cs) {
   this->outfile = filename;
 }
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
 
 size_t openhtj2k_encoder_impl::invoke() {
+  std::vector<uint8_t> Ssiz;
+  std::vector<uint8_t> XRsiz, YRsiz;
+
   if ((siz->XOsiz > siz->Xsiz) || (siz->YOsiz > siz->Ysiz)) {
     printf("ERROR: image origin exceeds the size of input image.\n");
     exit(EXIT_FAILURE);
@@ -76,13 +88,21 @@ size_t openhtj2k_encoder_impl::invoke() {
     printf("ERROR: tile size plus tile origin shall be greater than the image origin.\n");
     exit(EXIT_FAILURE);
   }
-  std::vector<uint8_t> Ssiz;
-  std::vector<uint8_t> XRsiz, YRsiz;
+
   for (auto c = 0; c < siz->Csiz; ++c) {
     Ssiz.push_back(siz->Ssiz[c]);
     XRsiz.push_back(siz->XRsiz[c]);
     YRsiz.push_back(siz->YRsiz[c]);
   }
+
+  // check component size
+  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2])
+      && (YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
+    cod->use_color_trafo = 0;
+    printf("WARNING: Cycc is set to 'no' because size of each component is not identical.\n");
+  }
+
+  // check number of components
   if (siz->Csiz != 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
     printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
@@ -132,7 +152,7 @@ size_t openhtj2k_encoder_impl::invoke() {
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
-  j2c_dst_memory j2c_dst;
+  j2c_dst_memory j2c_dst, jph_dst;
   j2c_dst.put_word(_SOC);
   main_header.flush(j2c_dst);
 
@@ -153,20 +173,37 @@ size_t openhtj2k_encoder_impl::invoke() {
     tileSet[i].write_packets(j2c_dst);
   }
   j2c_dst.put_word(_EOC);
-  uint32_t codestream_size = j2c_dst.flush(this->outfile);
+  uint32_t codestream_size = j2c_dst.get_length();
+
+  // prepare jph box-based format, if necessary
+  if (isJPH) {
+    bool isSRGB = (color_space == sRGB) ? true : false;
+    jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+    size_t file_format_size = jph_info.write(jph_dst);
+    codestream_size += file_format_size - codestream_size;
+  }
+  std::ofstream dst;
+  dst.open(this->outfile, std::ios::out | std::ios::binary);
+  if (isJPH) {
+    jph_dst.flush(dst);
+  }
+  j2c_dst.flush(dst);
+  dst.close();
   return codestream_size;
 }
 
 // public interface
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
-                                     siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor) {
+                                     siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
+                                     bool isJPH, uint8_t color_space) {
   if (qfactor != NO_QFACTOR) {
     if (qfactor > 100) {
       printf("Value of Qfactor shall be in the range [0, 100]\n");
       exit(EXIT_FAILURE);
     }
   }
-  this->impl = std::make_unique<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor);
+  this->impl = std::make_unique<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor, isJPH,
+                                                        color_space);
 }
 size_t openhtj2k_encoder::invoke() { return this->impl->invoke(); }
 openhtj2k_encoder::~openhtj2k_encoder() = default;

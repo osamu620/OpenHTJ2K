@@ -59,14 +59,12 @@ int32_t j2c_dst_memory::put_N_bytes(uint8_t *src, uint32_t length) {
   return EXIT_SUCCESS;
 }
 
-uint32_t j2c_dst_memory::flush(std::string file) {
-  std::ofstream dst;
-  dst.open(file, std::ios::out | std::ios::binary);
+int32_t j2c_dst_memory::flush(std::ofstream &dst) {
   dst.write((char *)&buf[0], buf.size() * sizeof(buf[0]));
-  dst.close();
-  return buf.size();
+  return EXIT_SUCCESS;
 }
 
+size_t j2c_dst_memory::get_length() const { return buf.size(); }
 [[deprecated]] void j2c_dst_memory::print_bytes() {
   for (uint32_t i = 0; i < pos; i++) {
     if (i % 32 == 0) {

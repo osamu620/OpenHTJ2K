@@ -497,6 +497,25 @@ class j2k_argset {
     return std::stoi(args[idx + 1]);
   }
 
+  uint8_t get_jph_color_space() {
+    uint8_t val = 0;
+    auto p      = std::find(args.begin(), args.end(), "-jph_color_space");
+    if (p == args.end()) {
+      return val;
+    }
+    auto idx = std::distance(args.begin(), p);
+    if (idx + 1 > args.size() - 1) {
+      printf("ERROR: -jph_color_space requires name of color-space\n");
+      exit(EXIT_FAILURE);
+    }
+    if (args[idx + 1].compare("YCC") && args[idx + 1].compare("RGB")) {
+      printf("ERROR: invalid name for color-space\n");
+      exit(EXIT_FAILURE);
+    } else if (args[idx + 1].compare("YCC") == 0) {
+      val = 1;
+    }
+    return val;
+  }
   void get_help(int argc, char *argv[]) {
     auto p = std::find(args.begin(), args.end(), "-h");
     if (p == args.end() && argc > 1) {

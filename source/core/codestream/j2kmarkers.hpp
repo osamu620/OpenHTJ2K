@@ -95,6 +95,7 @@ class SIZ_marker : public j2k_marker_io_base {
   void get_tile_origin(element_siz &siz) const;
   void get_subsampling_factor(element_siz &siz, uint16_t c);
   uint16_t get_num_components() const;
+  uint8_t get_chroma_format() const;
 };
 
 /********************************************************************************
@@ -229,7 +230,8 @@ class QCC_marker : public j2k_marker_io_base {
 
  public:
   QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, uint8_t dwt_levels,
-             uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc, uint8_t qfactor);
+             uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc, uint8_t qfactor,
+             uint8_t chroma_format);
   QCC_marker(j2c_src_memory &in, uint16_t Csiz);
   int write(j2c_destination_base &dst);
   uint16_t get_component_index() const;

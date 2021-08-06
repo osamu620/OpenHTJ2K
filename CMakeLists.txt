@@ -59,7 +59,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 #### Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
-target_include_directories(open_htj2k PUBLIC source/core/common source/core/codestream source/core/coding source/core/transform source/core/interface)
+target_include_directories(open_htj2k PUBLIC source/core/common source/core/codestream source/core/coding source/core/transform source/core/interface source/core/jph)
 set_target_properties(open_htj2k PROPERTIES OUTPUT_NAME $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
 
 #find_package(OpenMP)
@@ -71,6 +71,7 @@ add_subdirectory(source/core/codestream)
 add_subdirectory(source/core/coding)
 add_subdirectory(source/core/transform)
 add_subdirectory(source/core/interface)
+add_subdirectory(source/core/jph)
 #find_package(OpenCV)
 #if (OpenCV_FOUND)
 #	message(STATUS "OpenCV is found.")
