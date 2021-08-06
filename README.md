@@ -7,8 +7,8 @@ OpenHTJ2K is an open source implementation of ITU-T Rec.814 | ISO/IEC 15444-15 (
 OpenHTJ2K provides a shared liberary and sample applications having the following functionalities:
 - Decoding of ITU-T Rec.800 | ISO/IEC 15444-1 (JPEG 2000 Part 1) or ITU-T Rec.814 | ISO/IEC 15444-15 (JPEG 2000 Part 15.) compliant codestreams
   - fully compliant with conformance testing defined in ITU-T Rec.803 | ISO 15444-4.
-- Encoding an image into a codestream which is compliant with HTJ2K
-  - currently supports only HTJ2K. The optional markers like COC, QCC, POC, etc. are not implemented.
+- Encoding an image into a codestream/JPH file which is compliant with HTJ2K
+  - currently supports only HTJ2K. The optional markers like COC, POC, etc. are not implemented.
   - **Quality control for lossy compression with ***Qfactor*** feature** 
 
 # Requirements
@@ -35,7 +35,7 @@ Then the executables should be found in `${BUILD_DIR}/bin` directory.
 ## Encoder
 Only Part 15 compliant encoding is supported.
 ```bash
-./open_htj2k_enc -i inputimage(PNM format) -o output-codestream [options...]
+./open_htj2k_enc -i inputimage(in PNM/PGX format) or comma separated input images for each color component(in PGM/PGX format) -o output-codestream [options...]
 ```
 ### options
 - `Stiles=Size`
@@ -64,6 +64,9 @@ Only Part 15 compliant encoding is supported.
   - `yes` switches the quantyzation style to **derived** (Default is `no`)
 - `Qfactor=Int`
   - 0 to 100 for the quality of the lossyly compressed image
+- `-jph_color_space`
+  - Color space of input components: RGB, YCC
+	- if inputs are represented in YCbCr, use YCC
 
 ## Decoder
 The both Part 1 and Part 15 compliant decoding are supported.
@@ -74,8 +77,8 @@ To see a help, use `-h` option.
 
 ## Supported file types
 ### Encoder
-- input image formats: .pgm .ppm
-- output codestreams: .j2k .j2c .jphc (Part 15)
+- input image formats: .pgm, .ppm, .pgx
+- output codestreams: .j2k, .j2c, .jphc (Part 15 codestream), .jph (Part 15 file format)
 ### Decoder
-- input codestreams : .j2k .j2c .jphc
-- output image formats: .raw .ppm .pgm .pgx
+- input codestreams : .j2k, .j2c, .jphc
+- output image formats: .raw, .ppm, .pgm, .pgx
