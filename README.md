@@ -33,10 +33,15 @@ Then the executables should be found in `${BUILD_DIR}/bin` directory.
 
 # Usage
 ## Encoder
-Only Part 15 compliant encoding is supported.
+Only Part 15 compliant encoding is supported. Both .j2c (codestream) and .jph (file format) are available. 
 ```bash
-./open_htj2k_enc -i inputimage(in PNM/PGX format) or comma separated input images for each color component(in PGM/PGX format) -o output-codestream [options...]
+./open_htj2k_enc -i inputimage(in PNM/PGX format) -o output [options...]
 ```
+The encoder can take comma-separated multiple files. For example, components in YCbCr color space can be encoded by
+```
+./open_htj2k_enc -i inputY.pgx,inputCb.pgx,inputCr.pgx -o output 
+```
+
 ### options
 - `Stiles=Size`
   - Size of tile "{height, width}"
@@ -64,9 +69,10 @@ Only Part 15 compliant encoding is supported.
   - `yes` switches the quantyzation style to **derived** (Default is `no`)
 - `Qfactor=Int`
   - 0 to 100 for the quality of the lossyly compressed image
+  - for YCbCr inputs, valid chroma subsampling formats are 4:4:4, 4:2:0, and 4:2:2
 - `-jph_color_space`
   - Color space of input components: RGB, YCC
-	- if inputs are represented in YCbCr, use YCC
+  - if inputs are represented in YCbCr, use YCC
 
 ## Decoder
 The both Part 1 and Part 15 compliant decoding are supported.
