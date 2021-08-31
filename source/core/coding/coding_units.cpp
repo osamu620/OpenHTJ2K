@@ -44,6 +44,10 @@
   #include <x86intrin.h>
 #endif
 
+#include "ThreadPool.hpp"
+ThreadPool* ThreadPool::singleton = nullptr;
+std::mutex ThreadPool::singleton_mutex;
+
 float bibo_step_gains[32][5] = {{1.00000000, 4.17226868, 1.44209458, 2.10966980, 1.69807026},
                                 {1.38034954, 4.58473765, 1.83866981, 2.13405021, 1.63956779},
                                 {1.33279329, 4.58985327, 1.75793599, 2.07403081, 1.60751898},
@@ -2327,11 +2331,9 @@ void j2k_tile::write_packets(j2c_destination_base &outbuf) {
 }
 
 void j2k_tile::decode(j2k_main_header &main_header) {
-  typedef void (*decode_func)(j2k_codeblock *, const uint8_t);
-  static decode_func block_decode_funcs[2];
-  block_decode_funcs[0] = j2k_decode;
-  block_decode_funcs[1] = htj2k_decode;
-#pragma omp parallel for  // default(none) shared(block_decode_funcs)
+  auto pool =  ThreadPool::get();
+  std::vector<std::future<int>> results;
+
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
     const uint8_t NL             = this->tcomp[c].get_dwt_levels();
@@ -2348,12 +2350,31 @@ void j2k_tile::decode(j2k_main_header &main_header) {
             j2k_codeblock *block = cpb->access_codeblock(block_index);
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
-              block_decode_funcs[(block->Cmodes & HT) >> 6](block, ROIshift);
+            	results.emplace_back(pool->enqueue([block, ROIshift] {
+                	if ((block->Cmodes & HT) >> 6)
+                		htj2k_decode(block,ROIshift);
+                	else
+                		j2k_decode(block,ROIshift);
+					return 0;
+				}));
             }
           }  // end of codeblock loop
         }    // end of subbnad loop
       }      // end of precinct loop
+    }
+  }
 
+  for(auto& result : results)
+  {
+		result.get();
+  }
+
+  for (uint16_t c = 0; c < num_components; c++) {
+    const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
+    const uint8_t NL             = this->tcomp[c].get_dwt_levels();
+    const uint8_t transformation = this->tcomp[c].get_transformation();
+    for (int8_t lev = NL; lev >= this->reduce_NL; --lev) {
+      j2k_resolution *cr           = this->tcomp[c].access_resolution(NL - lev);
       // lowest resolution level (= LL0) does not have HL, LH, HH bands.
       if (lev != NL) {
         j2k_resolution *pcr            = this->tcomp[c].access_resolution(NL - lev - 1);
@@ -2626,16 +2647,19 @@ void j2k_tile::rgb_to_ycbcr(j2k_main_header &main_header) {
 }
 
 uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
-#pragma omp parallel for  // default(none)
-  for (uint16_t c = 0; c < num_components; c++) {
-    const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
-    const uint8_t NL             = this->tcomp[c].get_dwt_levels();
-    const uint8_t transformation = this->tcomp[c].get_transformation();
-    element_siz top_left         = this->tcomp[c].get_pos0();
-    element_siz bottom_right     = this->tcomp[c].get_pos1();
-    j2k_resolution *cr           = this->tcomp[c].access_resolution(NL);
+  auto pool =  ThreadPool::get();
+  std::vector<std::future<int>> results;
 
-    int32_t *const sp0            = this->tcomp[c].get_sample_address(0, 0);
+  // Step 1 : block encode all code blocks
+  for (uint16_t c = 0; c < num_components; c++) {
+    const uint8_t ROIshift       = tcomp[c].get_ROIshift();
+    const uint8_t NL             = tcomp[c].get_dwt_levels();
+    const uint8_t transformation = tcomp[c].get_transformation();
+    element_siz top_left         = tcomp[c].get_pos0();
+    element_siz bottom_right     = tcomp[c].get_pos1();
+    j2k_resolution *cr           = tcomp[c].access_resolution(NL);
+
+    int32_t *const sp0            = tcomp[c].get_sample_address(0, 0);
     const uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
     // TODO: enc_init vectorize code
     //#if defined(__AVX2__)
@@ -2660,7 +2684,107 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     //        cr->f_samples[n] = static_cast<float>(cr->i_samples[n]);
     //      }
     //    }
-    auto t1_encode = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr,
+
+    auto t1_encode = [](j2k_resolution *cr,uint8_t ROIshift) {
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        j2k_precinct *cp      = cr->access_precinct(p);
+        packet_header_writer pckt_hdr;
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+            auto block = cpb->access_codeblock(block_index);
+            htj2k_encode(block, ROIshift);
+          }
+        }
+      }
+    };
+
+    for (int8_t r = NL; r > 0; --r) {
+      j2k_resolution *ncr = tcomp[c].access_resolution(r - 1);
+      const uint32_t u0   = top_left.x;
+      const uint32_t u1   = bottom_right.x;
+      const uint32_t v0   = top_left.y;
+      const uint32_t v1   = bottom_right.y;
+      j2k_subband *HL     = cr->access_subband(0);
+      j2k_subband *LH     = cr->access_subband(1);
+      j2k_subband *HH     = cr->access_subband(2);
+
+      // wavelet
+      if (u1 != u0 && v1 != v0) {
+        // if (transformation) {
+        fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
+                         v0, v1, transformation);
+        //        fdwt_2d_sr_float(cr->f_samples, ncr, HL, LH, HH, u0, u1, v0, v1, transformation);
+        ncr->scale();
+        HL->quantize();
+        LH->quantize();
+        HH->quantize();
+        //        HL->quantize_float();
+        //        LH->quantize_float();
+        //        HH->quantize_float();
+      }
+		results.emplace_back(pool->enqueue([t1_encode,cr,ROIshift] {
+		    // encode codeblocks in HL or LH or HH
+		    t1_encode(cr, ROIshift);
+			return 0;
+		}));
+      cr           = tcomp[c].access_resolution(r - 1);
+      top_left     = cr->get_pos0();
+      bottom_right = cr->get_pos1();
+    }
+
+    j2k_subband *LL = cr->access_subband(0);
+    LL->quantize();
+    //    LL->quantize_float();
+	results.emplace_back(pool->enqueue([t1_encode,cr,ROIshift] {
+	    // encode codeblocks in LL
+	    t1_encode(cr, ROIshift);
+		return 0;
+	}));
+  }  // end of component loop
+
+  for(auto& result : results)
+  {
+		result.get();
+  }
+
+  // Step 2: encode packets
+  for (uint16_t c = 0; c < num_components; c++) {
+    const uint8_t ROIshift       = tcomp[c].get_ROIshift();
+    const uint8_t NL             = tcomp[c].get_dwt_levels();
+    const uint8_t transformation = tcomp[c].get_transformation();
+    element_siz top_left         = tcomp[c].get_pos0();
+    element_siz bottom_right     = tcomp[c].get_pos1();
+    j2k_resolution *cr           = tcomp[c].access_resolution(NL);
+
+    int32_t *const sp0            = tcomp[c].get_sample_address(0, 0);
+    const uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
+    // TODO: enc_init vectorize code
+    //#if defined(__AVX2__)
+    //    __m256i offsets = _mm256_set_epi32(7, 6, 3, 2, 5, 4, 1, 0);
+    //    for (uint32_t n = 0; n < round_down(num_tc_samples, 16); n += 16) {
+    //      __m256i s0a = _mm256_loadu_si256((__m256i *)(sp0 + n));
+    //      __m256i s0b = _mm256_loadu_si256((__m256i *)(sp0 + n + 8));
+    //      s0a         = _mm256_permutevar8x32_epi32(_mm256_packs_epi32(s0a, s0b), offsets);
+    //      _mm256_storeu_si256((__m256i *)(cr->i_samples + n), s0a);
+    //    }
+    //    for (uint32_t n = round_down(num_tc_samples, 16); n < num_tc_samples; ++n) {
+    //      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
+    //    }
+    //#else
+    for (uint32_t n = 0; n < num_tc_samples; ++n) {
+      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
+    }
+    //#endif
+    //    // experimental floating point code
+    //    if (transformation == 0) {
+    //      for (uint32_t n = 0; n < (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y); ++n) {
+    //        cr->f_samples[n] = static_cast<float>(cr->i_samples[n]);
+    //      }
+    //    }
+
+    auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr,
                         uint8_t ROIshift) {
       int32_t length = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
@@ -2672,8 +2796,8 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           //#pragma omp parallel for reduction(+ : packet_length)
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
-            j2k_codeblock *block = cpb->access_codeblock(block_index);
-            packet_length += htj2k_encode(block, ROIshift);
+            auto block = cpb->access_codeblock(block_index);
+            packet_length += block->length;
           }
           // construct packet header
           cpb->generate_packet_header(pckt_hdr, numlayers_local - 1);
@@ -2691,46 +2815,21 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
       return length;
     };
     for (int8_t r = NL; r > 0; --r) {
-      j2k_resolution *ncr = this->tcomp[c].access_resolution(r - 1);
-      const uint32_t u0   = top_left.x;
-      const uint32_t u1   = bottom_right.x;
-      const uint32_t v0   = top_left.y;
-      const uint32_t v1   = bottom_right.y;
-      j2k_subband *HL     = cr->access_subband(0);
-      j2k_subband *LH     = cr->access_subband(1);
-      j2k_subband *HH     = cr->access_subband(2);
-
-      if (u1 != u0 && v1 != v0) {
-        // if (transformation) {
-        fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
-                         v0, v1, transformation);
-        //        fdwt_2d_sr_float(cr->f_samples, ncr, HL, LH, HH, u0, u1, v0, v1, transformation);
-        ncr->scale();
-        HL->quantize();
-        LH->quantize();
-        HH->quantize();
-        //        HL->quantize_float();
-        //        LH->quantize_float();
-        //        HH->quantize_float();
-      }
       // encode codeblocks in HL or LH or HH
-      this->length += t1_encode(this->numlayers, this->use_EPH, cr, ROIshift);
-
-      cr           = this->tcomp[c].access_resolution(r - 1);
+      length += t1_encode_packet(numlayers, use_EPH, cr, ROIshift);
+      cr           = tcomp[c].access_resolution(r - 1);
       top_left     = cr->get_pos0();
       bottom_right = cr->get_pos1();
     }
-
     // encode codeblocks in LL
-    j2k_subband *LL = cr->access_subband(0);
-    LL->quantize();
-    //    LL->quantize_float();
-    this->length += t1_encode(this->numlayers, this->use_EPH, cr, ROIshift);
+    length += t1_encode_packet(numlayers, use_EPH, cr, ROIshift);
   }  // end of component loop
-  this->tile_part[0]->set_tile_index(this->index);
-  this->tile_part[0]->set_tile_part_index(0);  // currently ony a single tile-part is supported
+
+  tile_part[0]->set_tile_index(this->index);
+  tile_part[0]->set_tile_part_index(0);  // currently ony a single tile-part is supported
   // length of tile-part will be written in j2k_tile::write_packets()
   // this->tile_part[0]->header->SOT.set_tile_part_length(this->length);
+
   return nullptr;  // fake
 }
 

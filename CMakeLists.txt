@@ -5,8 +5,10 @@ option(BUILD_SHARED_LIBS "Shared Libraries" ON)
 enable_language(CXX)
 
 #### Compiler settings
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package( Threads REQUIRED)
 
 message(STATUS "${CMAKE_HOST_SYSTEM_PROCESSOR}")
 
@@ -61,6 +63,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 add_library(open_htj2k ${SOURCES})
 target_include_directories(open_htj2k PUBLIC source/core/common source/core/codestream source/core/coding source/core/transform source/core/interface source/core/jph)
 set_target_properties(open_htj2k PROPERTIES OUTPUT_NAME $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
+target_link_libraries(open_htj2k ${CMAKE_THREAD_LIBS_INIT})
 
 #find_package(OpenMP)
 #if(OpenMP_FOUND)
