@@ -12,7 +12,7 @@ OpenHTJ2K provides a shared liberary and sample applications having the followin
   - **Quality control for lossy compression with ***Qfactor*** feature** 
 
 # Requirements
-cmake (version 3.14 or later) and C++14 compliant compiler.
+cmake (version 3.14 or later) and C++17 compliant compiler.
 
 # Building
 Type the following command. `./` is a root of cloned repository and `${BUILD_DIR}` is a build directory (for example, `../build` or `./build` and so on)
