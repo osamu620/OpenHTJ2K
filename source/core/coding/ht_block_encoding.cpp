@@ -401,6 +401,29 @@ int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
   return (MEL.pos + MAX_Scup - VLC.pos - 1);
 }
 
+#define MAKE_STORAGE()                                                                                     \
+  {                                                                                                        \
+    const int32_t x[8] = {2 * qx,       2 * qx,       2 * qx + 1,       2 * qx + 1,                        \
+                          2 * (qx + 1), 2 * (qx + 1), 2 * (qx + 1) + 1, 2 * (qx + 1) + 1};                 \
+    const int32_t y[8] = {2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1}; \
+    for (int i = 0; i < 4; ++i)                                                                            \
+      sigma_n[i] =                                                                                         \
+          (block->block_states[(y[i] + 1) * (block->size.x + 2) + (x[i] + 1)] >> SHIFT_SIGMA) & 1;         \
+    rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);                     \
+    for (int i = 4; i < 8; ++i)                                                                            \
+      sigma_n[i] =                                                                                         \
+          (block->block_states[(y[i] + 1) * (block->size.x + 2) + (x[i] + 1)] >> SHIFT_SIGMA) & 1;         \
+    rho_q[1] = sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3);                     \
+    for (int i = 0; i < 8; ++i) {                                                                          \
+      if ((x[i] >= 0 && x[i] < (block->size.x)) && (y[i] >= 0 && y[i] < (block->size.y)))                  \
+        v_n[i] = block->sample_buf[x[i] + y[i] * block->size.x];                                           \
+      else                                                                                                 \
+        v_n[i] = 0;                                                                                        \
+    }                                                                                                      \
+    for (int i = 0; i < 8; ++i)                                                                            \
+      E_n[i] = (32 - count_leading_zeros(((v_n[i] >> 1) << 1) + 1)) * sigma_n[i];                          \
+  }
+
 /********************************************************************************
  * HT cleanup encoding
  *******************************************************************************/
@@ -460,7 +483,9 @@ int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
   sp++;
   int32_t *p_sample = block->sample_buf.get();
   for (uint16_t qx = 0; qx < QW - 1; qx += 2) {
-    make_storage(block, 0, qx, QH, QW, sigma_n, v_n, E_n, rho_q);
+    const int16_t qy = 0;
+    MAKE_STORAGE()
+
     // MEL encoding for the first quad
     if (c_q[Q0] == 0) {
       MEL_encoder.encodeMEL((rho_q[Q0] != 0));
@@ -647,7 +672,9 @@ int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
       c_q[Q0] = (sp[2 * qx + 1] | sp[2 * qx + 2]) << 2;
       c_q[Q0] += (sigma_n[6] | sigma_n[7]) << 1;
       c_q[Q0] += sp[2 * qx - 1] | sp[2 * qx];
-      make_storage(block, qy, qx, QH, QW, sigma_n, v_n, E_n, rho_q);
+
+      MAKE_STORAGE()
+
       // context for 2nd quad of current quad pair
       c_q[Q1] = (sp[2 * (qx + 1) + 1] | sp[2 * (qx + 1) + 2]) << 2;
       c_q[Q1] += (sigma_n[2] | sigma_n[3]) << 1;
