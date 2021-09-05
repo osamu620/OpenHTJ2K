@@ -45,7 +45,7 @@
 #endif
 
 #include "ThreadPool.hpp"
-ThreadPool* ThreadPool::singleton = nullptr;
+ThreadPool *ThreadPool::singleton = nullptr;
 std::mutex ThreadPool::singleton_mutex;
 
 float bibo_step_gains[32][5] = {{1.00000000, 4.17226868, 1.44209458, 2.10966980, 1.69807026},
@@ -2331,7 +2331,7 @@ void j2k_tile::write_packets(j2c_destination_base &outbuf) {
 }
 
 void j2k_tile::decode(j2k_main_header &main_header) {
-  auto pool =  ThreadPool::get();
+  auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
 
   for (uint16_t c = 0; c < num_components; c++) {
@@ -2350,13 +2350,13 @@ void j2k_tile::decode(j2k_main_header &main_header) {
             j2k_codeblock *block = cpb->access_codeblock(block_index);
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
-            	results.emplace_back(pool->enqueue([block, ROIshift] {
-                	if ((block->Cmodes & HT) >> 6)
-                		htj2k_decode(block,ROIshift);
-                	else
-                		j2k_decode(block,ROIshift);
-					return 0;
-				}));
+              results.emplace_back(pool->enqueue([block, ROIshift] {
+                if ((block->Cmodes & HT) >> 6)
+                  htj2k_decode(block, ROIshift);
+                else
+                  j2k_decode(block, ROIshift);
+                return 0;
+              }));
             }
           }  // end of codeblock loop
         }    // end of subbnad loop
@@ -2364,9 +2364,8 @@ void j2k_tile::decode(j2k_main_header &main_header) {
     }
   }
 
-  for(auto& result : results)
-  {
-		result.get();
+  for (auto &result : results) {
+    result.get();
   }
 
   for (uint16_t c = 0; c < num_components; c++) {
@@ -2374,7 +2373,7 @@ void j2k_tile::decode(j2k_main_header &main_header) {
     const uint8_t NL             = this->tcomp[c].get_dwt_levels();
     const uint8_t transformation = this->tcomp[c].get_transformation();
     for (int8_t lev = NL; lev >= this->reduce_NL; --lev) {
-      j2k_resolution *cr           = this->tcomp[c].access_resolution(NL - lev);
+      j2k_resolution *cr = this->tcomp[c].access_resolution(NL - lev);
       // lowest resolution level (= LL0) does not have HL, LH, HH bands.
       if (lev != NL) {
         j2k_resolution *pcr            = this->tcomp[c].access_resolution(NL - lev - 1);
@@ -2647,7 +2646,7 @@ void j2k_tile::rgb_to_ycbcr(j2k_main_header &main_header) {
 }
 
 uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
-  auto pool =  ThreadPool::get();
+  auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
 
   // Step 1 : block encode all code blocks
@@ -2685,9 +2684,9 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     //      }
     //    }
 
-    auto t1_encode = [](j2k_resolution *cr,uint8_t ROIshift) {
+    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-        j2k_precinct *cp      = cr->access_precinct(p);
+        j2k_precinct *cp = cr->access_precinct(p);
         packet_header_writer pckt_hdr;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -2724,11 +2723,11 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
         //        LH->quantize_float();
         //        HH->quantize_float();
       }
-		results.emplace_back(pool->enqueue([t1_encode,cr,ROIshift] {
-		    // encode codeblocks in HL or LH or HH
-		    t1_encode(cr, ROIshift);
-			return 0;
-		}));
+      results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
+        // encode codeblocks in HL or LH or HH
+        t1_encode(cr, ROIshift);
+        return 0;
+      }));
       cr           = tcomp[c].access_resolution(r - 1);
       top_left     = cr->get_pos0();
       bottom_right = cr->get_pos1();
@@ -2737,16 +2736,15 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     j2k_subband *LL = cr->access_subband(0);
     LL->quantize();
     //    LL->quantize_float();
-	results.emplace_back(pool->enqueue([t1_encode,cr,ROIshift] {
-	    // encode codeblocks in LL
-	    t1_encode(cr, ROIshift);
-		return 0;
-	}));
+    results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
+      // encode codeblocks in LL
+      t1_encode(cr, ROIshift);
+      return 0;
+    }));
   }  // end of component loop
 
-  for(auto& result : results)
-  {
-		result.get();
+  for (auto &result : results) {
+    result.get();
   }
 
   // Step 2: encode packets
@@ -2785,7 +2783,7 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     //    }
 
     auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr,
-                        uint8_t ROIshift) {
+                               uint8_t ROIshift) {
       int32_t length = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         int32_t packet_length = 0;

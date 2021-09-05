@@ -290,9 +290,13 @@ class image {
           for (uint_fast32_t i_in = 0, i_out = 0; i_out < num_samples; i_in += nbytes, ++i_out) {
             if (isSigned) {
               if (isBigendian) {
-                this->data[i_out] = static_cast<int_least16_t>((static_cast<uint_least16_t>(buf[i_in]) << 8) | static_cast<uint_least16_t>(buf[i_in + 1]));
+                this->data[i_out] =
+                    static_cast<int_least16_t>((static_cast<uint_least16_t>(buf[i_in]) << 8)
+                                               | static_cast<uint_least16_t>(buf[i_in + 1]));
               } else {
-                this->data[i_out] = static_cast<int_least16_t>(static_cast<uint_least16_t>(buf[i_in]) | (static_cast<uint_least16_t>(buf[i_in + 1]) << 8));
+                this->data[i_out] =
+                    static_cast<int_least16_t>(static_cast<uint_least16_t>(buf[i_in])
+                                               | (static_cast<uint_least16_t>(buf[i_in + 1]) << 8));
               }
             } else {
               if (isBigendian) {
