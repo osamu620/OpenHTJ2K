@@ -71,9 +71,9 @@ class j2k_codeblock : public j2k_region {
   const uint8_t M_b;
   std::unique_ptr<uint8_t[]> compressed_data;
   uint8_t *current_address;
-  std::unique_ptr<uint8_t[]> block_states;
 
  public:
+  std::unique_ptr<uint8_t[]> block_states;
   const uint8_t R_b;
   const uint8_t transformation;
   const float stepsize;
