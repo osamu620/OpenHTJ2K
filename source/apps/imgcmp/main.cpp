@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
 
   if (argc == 5) {
     uint_fast64_t thPAE = static_cast<uint_fast64_t>(atoi(argv[3]));
-    double thMSE = atof(argv[4]);
+    double thMSE        = atof(argv[4]);
     if (PAE > thPAE || mse > thMSE) {
       printf("conformance test failure.\n");
       exit(EXIT_FAILURE);
