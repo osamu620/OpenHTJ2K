@@ -30,6 +30,7 @@
 #include "decoder.hpp"
 #include <sys/stat.h>
 #include "coding_units.hpp"
+#include "ThreadPool.hpp"
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -48,19 +49,21 @@ class openhtj2k_decoder_impl {
   const uint8_t reduce_NL;
 
  public:
-  openhtj2k_decoder_impl(const char *, uint8_t reduce_NL);
+  openhtj2k_decoder_impl(const char *, uint8_t reduce_NL, uint32_t num_threads);
   ~openhtj2k_decoder_impl();
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
 };
 
-openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r) : reduce_NL(r) {
+openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
+    : reduce_NL(r) {
   off_t file_size = get_file_size(filename);  // supports 32-bits file size
   struct stat st;
   if (stat(filename, &st) != 0) {
     printf("ERROR: input file %s is not found.\n", filename);
     exit(EXIT_FAILURE);
   }
+  ThreadPool::instance(num_threads);
   // open codestream and store it in memory
   FILE *fp = fopen(filename, "rb");
   in.alloc_memory(static_cast<uint32_t>(file_size));
@@ -152,8 +155,8 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
 openhtj2k_decoder_impl::~openhtj2k_decoder_impl() = default;
 
 // public interface
-openhtj2k_decoder::openhtj2k_decoder(const char *fname, const uint8_t reduce_NL) {
-  this->impl = std::make_unique<openhtj2k_decoder_impl>(fname, reduce_NL);
+openhtj2k_decoder::openhtj2k_decoder(const char *fname, const uint8_t reduce_NL, uint32_t num_threads) {
+  this->impl = std::make_unique<openhtj2k_decoder_impl>(fname, reduce_NL, num_threads);
 }
 void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,

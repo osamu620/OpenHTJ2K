@@ -73,6 +73,9 @@ The encoder can take comma-separated multiple files. For example, components in 
 - `-jph_color_space`
   - Color space of input components: RGB, YCC
   - if inputs are represented in YCbCr, use YCC
+  - `-num_threads=Int`
+  - number of threads to use in encode or decode
+  - 0, which is the default, indicates usage of all threads
 
 ## Decoder
 The both Part 1 and Part 15 compliant decoding are supported.
