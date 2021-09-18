@@ -1056,13 +1056,8 @@ void j2k_subband::quantize() {
   fscale *= KK[this->orientation];
   fscale /= (1 << (FRACBITS));
   for (uint32_t n = 0; n < length; ++n) {
-    auto fval = static_cast<float>(this->i_samples[n]);
-    fval *= fscale;
     // fval may exceed when sprec_t == int16_t
-    this->i_samples[n] = static_cast<sprec_t>(floorf(fabs(fval)));
-    if (fval < 0.0) {
-      this->i_samples[n] *= -1;
-    }
+    i_samples[n] = static_cast<sprec_t>(ohtj2k_lrintf(i_samples[n] * fscale));
   }
 }
 
@@ -1245,13 +1240,7 @@ void j2k_resolution::scale() {
   // TODO: The following code works correctly, but needs to be improved for speed
   float fscale = KK[0];
   for (uint32_t n = 0; n < length; ++n) {
-    sprec_t sign = this->i_samples[n] & 0x8000;
-    float fval   = fabs(static_cast<float>(this->i_samples[n]));
-    fval *= fscale;
-    this->i_samples[n] = static_cast<sprec_t>(fval + 0.5);
-    if (sign) {
-      this->i_samples[n] *= -1;
-    }
+    i_samples[n] = static_cast<sprec_t>(ohtj2k_lrintf((float)sign_extend(i_samples[n],16) * fscale));
   }
 }
 

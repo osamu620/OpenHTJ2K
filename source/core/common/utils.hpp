@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 
 #define round_up(x, n) (((x) + (n)-1) & (-n))
 #define round_down(x, n) ((x) & (-n))
@@ -117,4 +118,32 @@ static inline void aligned_mem_free(void* ptr) {
 #else
   free(ptr);
 #endif
+}
+
+static inline long ohtj2k_lrintf(float f)
+{
+#if defined(_MSC_VER)
+#ifdef _M_X64
+	return _mm_cvt_ss2si(_mm_load_ss(&f));
+#elif defined(_M_IX86)
+	int i;
+	_asm {
+        fld f
+        fistp i
+	}
+	;
+	return i;
+#else
+	return (long)((f > 0.0f) ? (f + 0.5f) : (f - 0.5f));
+#endif
+#else
+	return lrintf(f);
+#endif
+}
+
+static int32_t sign_extend(int32_t val, uint8_t shift){
+	val <<= shift;
+	val >>= shift;
+
+	return val;
 }

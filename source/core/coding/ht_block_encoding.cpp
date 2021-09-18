@@ -58,7 +58,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
         or_val |= 1;
         block_states[block_index] |= 1;
         // convert sample value to MagSgn
-        temp = (temp < 0) ? -temp : temp;
+        temp *= (temp >= 0) - (temp < 0);
         temp &= 0x7FFFFFFF;
         temp--;
         temp <<= 1;
