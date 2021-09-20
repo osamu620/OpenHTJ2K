@@ -35,7 +35,6 @@
 #include "dwt.hpp"
 #include "color.hpp"
 
-
 #include "ThreadPool.hpp"
 ThreadPool *ThreadPool::singleton = nullptr;
 std::mutex ThreadPool::singleton_mutex;
@@ -2331,13 +2330,20 @@ void j2k_tile::decode(j2k_main_header &main_header) {
             j2k_codeblock *block = cpb->access_codeblock(block_index);
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
-              results.emplace_back(pool->enqueue([block, ROIshift] {
+              if (pool->num_threads() > 1) {
+                results.emplace_back(pool->enqueue([block, ROIshift] {
+                  if ((block->Cmodes & HT) >> 6)
+                    htj2k_decode(block, ROIshift);
+                  else
+                    j2k_decode(block, ROIshift);
+                  return 0;
+                }));
+              } else {
                 if ((block->Cmodes & HT) >> 6)
                   htj2k_decode(block, ROIshift);
                 else
                   j2k_decode(block, ROIshift);
-                return 0;
-              }));
+              }
             }
           }  // end of codeblock loop
         }    // end of subbnad loop
@@ -2704,11 +2710,16 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
         //        LH->quantize_float();
         //        HH->quantize_float();
       }
-      results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
-        // encode codeblocks in HL or LH or HH
+      // encode codeblocks in HL or LH or HH
+      if (pool->num_threads() > 1) {
+        results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
+          // encode codeblocks in HL or LH or HH
+          t1_encode(cr, ROIshift);
+          return 0;
+        }));
+      } else {
         t1_encode(cr, ROIshift);
-        return 0;
-      }));
+      }
       cr           = tcomp[c].access_resolution(r - 1);
       top_left     = cr->get_pos0();
       bottom_right = cr->get_pos1();
@@ -2717,11 +2728,15 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     j2k_subband *LL = cr->access_subband(0);
     LL->quantize();
     //    LL->quantize_float();
-    results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
-      // encode codeblocks in LL
+    // encode codeblocks in LL
+    if (pool->num_threads() > 1) {
+      results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
+        t1_encode(cr, ROIshift);
+        return 0;
+      }));
+    } else {
       t1_encode(cr, ROIshift);
-      return 0;
-    }));
+    }
   }  // end of component loop
 
   for (auto &result : results) {

@@ -400,12 +400,14 @@ class openhtj2k_encoder {
 #if defined(_MSC_VER)
   __declspec(dllexport)
       openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz,
-                        cod_params &cod, qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space);
+                        cod_params &cod, qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space,
+                        uint32_t num_threads);
   __declspec(dllexport) size_t invoke();
   __declspec(dllexport) ~openhtj2k_encoder();
 #else
   openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz, cod_params &cod,
-                    qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space);
+                    qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space,
+                    uint32_t num_threads);
   size_t invoke();
   ~openhtj2k_encoder();
 #endif

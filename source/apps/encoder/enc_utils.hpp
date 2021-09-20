@@ -497,6 +497,21 @@ class j2k_argset {
     return std::stoi(args[idx + 1]);
   }
 
+  uint32_t get_num_threads() {
+    // zero implies all threads
+    uint32_t num_threads = 0;
+    auto p              = std::find(args.begin(), args.end(), "-num_threads");
+    if (p == args.end()) {
+      return num_threads;
+    }
+    auto idx = std::distance(args.begin(), p);
+    if (idx + 1 > args.size() - 1) {
+      printf("ERROR: -iter requires number of iteration\n");
+      exit(EXIT_FAILURE);
+    }
+    return (uint32_t)std::stoul(args[idx + 1]);
+  }
+
   uint8_t get_jph_color_space() {
     uint8_t val = 0;
     auto p      = std::find(args.begin(), args.end(), "-jph_color_space");

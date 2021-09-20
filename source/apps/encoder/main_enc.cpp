@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < num_iterations; ++i) {
     // create encoder
     open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd,
-                                          args.get_qfactor(), isJPH, color_space);
+                                          args.get_qfactor(), isJPH, color_space, args.get_num_threads());
     // invoke encoding
     total_size = encoder.invoke();
   }

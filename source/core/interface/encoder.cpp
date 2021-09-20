@@ -32,6 +32,7 @@
 #include "encoder.hpp"
 #include "coding_units.hpp"
 #include "jph.hpp"
+#include "ThreadPool.hpp"
 
 #define NO_QFACTOR 0xFF
 
@@ -195,13 +196,14 @@ size_t openhtj2k_encoder_impl::invoke() {
 // public interface
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
                                      siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
-                                     bool isJPH, uint8_t color_space) {
+                                     bool isJPH, uint8_t color_space, uint32_t num_threads) {
   if (qfactor != NO_QFACTOR) {
     if (qfactor > 100) {
       printf("Value of Qfactor shall be in the range [0, 100]\n");
       exit(EXIT_FAILURE);
     }
   }
+  ThreadPool::instance(num_threads);
   this->impl = std::make_unique<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor, isJPH,
                                                         color_space);
 }

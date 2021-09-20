@@ -97,6 +97,13 @@ int main(int argc, char *argv[]) {
     num_iterations = strtol(tmp_param, nullptr, 10);
   }
 
+  uint32_t num_threads;
+  if (nullptr == (tmp_param = get_command_option(argc, argv, "-num_threads"))) {
+    num_threads = 0;
+  } else {
+    num_threads = (uint32_t)strtoul(tmp_param, nullptr, 10);
+  }
+
   std::vector<int32_t *> buf;
   std::vector<uint32_t> img_width;
   std::vector<uint32_t> img_height;
@@ -105,7 +112,7 @@ int main(int argc, char *argv[]) {
   auto start = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < num_iterations; ++i) {
     // create decoder
-    open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL);
+    open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
     buf.clear();
     img_width.clear();
     img_height.clear();
