@@ -39,6 +39,8 @@
 ThreadPool *ThreadPool::singleton = nullptr;
 std::mutex ThreadPool::singleton_mutex;
 
+#include <hwy/highway.h>
+
 float bibo_step_gains[32][5] = {{1.00000000, 4.17226868, 1.44209458, 2.10966980, 1.69807026},
                                 {1.38034954, 4.58473765, 1.83866981, 2.13405021, 1.63956779},
                                 {1.33279329, 4.58985327, 1.75793599, 2.07403081, 1.60751898},
