@@ -2684,7 +2684,7 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     //      }
     //    }
 
-    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
+    auto t1_encode = [pool, &results](j2k_resolution *cr, uint8_t ROIshift) {
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
         packet_header_writer pckt_hdr;
@@ -2693,7 +2693,14 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
-            htj2k_encode(block, ROIshift);
+            if (pool->num_threads() > 1) {
+              results.emplace_back(pool->enqueue([block, ROIshift] {
+                htj2k_encode(block, ROIshift);
+                return 0;
+              }));
+            } else {
+                htj2k_encode(block, ROIshift);
+            }
           }
         }
       }
@@ -2724,15 +2731,7 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
         //        HH->quantize_float();
       }
       // encode codeblocks in HL or LH or HH
-      if (pool->num_threads() > 1) {
-        results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
-          // encode codeblocks in HL or LH or HH
-          t1_encode(cr, ROIshift);
-          return 0;
-        }));
-      } else {
-        t1_encode(cr, ROIshift);
-      }
+      t1_encode(cr, ROIshift);
       cr           = tcomp[c].access_resolution(r - 1);
       top_left     = cr->get_pos0();
       bottom_right = cr->get_pos1();
@@ -2742,14 +2741,7 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     LL->quantize();
     //    LL->quantize_float();
     // encode codeblocks in LL
-    if (pool->num_threads() > 1) {
-      results.emplace_back(pool->enqueue([t1_encode, cr, ROIshift] {
-        t1_encode(cr, ROIshift);
-        return 0;
-      }));
-    } else {
-      t1_encode(cr, ROIshift);
-    }
+    t1_encode(cr, ROIshift);
   }  // end of component loop
 
   for (auto &result : results) {
