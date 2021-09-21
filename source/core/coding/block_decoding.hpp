@@ -32,4 +32,4 @@
 #include "coding_units.hpp"
 
 void j2k_decode(j2k_codeblock *block, uint8_t ROIshift);
-void htj2k_decode(j2k_codeblock *block, uint8_t ROIshift);
+bool htj2k_decode(j2k_codeblock *block, uint8_t ROIshift);

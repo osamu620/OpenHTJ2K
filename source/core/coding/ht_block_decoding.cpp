@@ -1073,7 +1073,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
-void htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   // number of placeholder pass
   uint8_t P0 = 0;
   // length of HT Cleanup segment
@@ -1100,8 +1100,9 @@ void htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   }
   const uint8_t empty_passes = P0 * 3;
   if (block->num_passes < empty_passes) {
-    printf("ERROR: number of placeholde passes is too large.\n");
-    exit(EXIT_FAILURE);
+    printf("WARNING: number of passes %d exceeds number of empty passes %d", block->num_passes,
+           empty_passes);
+    return false;
   }
   // number of ht coding pass (Z_blk in the spec)
   const uint8_t num_ht_passes = block->num_passes - empty_passes;
@@ -1119,6 +1120,10 @@ void htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       }
     }
     Lcup += block->pass_length[all_segments[0]];
+    if (Lcup < 2) {
+      printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
+      return false;
+    }
     for (int i = 1; i < all_segments.size(); i++) {
       Lref += block->pass_length[all_segments[i]];
     }
@@ -1131,9 +1136,16 @@ void htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     }
     // number of (skipped) magnitude bitplanes
     const uint8_t S_blk = P0 + block->num_ZBP + S_skip;
-    assert(S_blk < 30);
+    if (S_blk >= 30) {
+      printf("WARNING: Number of skipped mag bitplanes %d is too large.\n", S_blk);
+      return false;
+    }
     // Suffix length (=MEL + VLC) of HT Cleanup pass
     const uint32_t Scup = (Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F);
+    if (Scup < 2 || Scup > Lcup || Scup > 4079) {
+      printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
+      return false;
+    }
     // modDcup (shall be done before the creation of state_VLC instance)
     Dcup[Lcup - 1] = 0xFF;
     Dcup[Lcup - 2] |= 0x0F;
@@ -1275,4 +1287,6 @@ void htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       }
     }
   }  // end
+
+  return true;
 }
