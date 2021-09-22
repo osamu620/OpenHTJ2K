@@ -83,6 +83,10 @@ int main(int argc, char *argv[]) {
     printf("ERROR: Unsupported output file type.\n");
     exit(EXIT_FAILURE);
   }
+  if (strcmp(outfile_ext_name, ".raw") ==0) {
+    printf("Warning: Decoder creates three files for luminance "
+           "and two chrominance {Y,U,V}.\n");
+  }
   char *tmp_param;
   uint8_t reduce_NL;
   if (nullptr == (tmp_param = get_command_option(argc, argv, "-reduce"))) {
