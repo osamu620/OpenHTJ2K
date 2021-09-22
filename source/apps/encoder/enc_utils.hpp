@@ -500,7 +500,7 @@ class j2k_argset {
   uint32_t get_num_threads() {
     // zero implies all threads
     uint32_t num_threads = 0;
-    auto p              = std::find(args.begin(), args.end(), "-num_threads");
+    auto p               = std::find(args.begin(), args.end(), "-num_threads");
     if (p == args.end()) {
       return num_threads;
     }
