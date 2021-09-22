@@ -2699,7 +2699,7 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
                 return 0;
               }));
             } else {
-                htj2k_encode(block, ROIshift);
+              htj2k_encode(block, ROIshift);
             }
           }
         }
