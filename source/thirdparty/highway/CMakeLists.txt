@@ -49,23 +49,6 @@ set(HWY_WARNINGS_ARE_ERRORS OFF CACHE BOOL "Add -Werror flag?")
 set(HWY_EXAMPLES_TESTS_INSTALL ON CACHE BOOL "Build examples, tests, install?")
 
 include(CheckCXXSourceCompiles)
-check_cxx_source_compiles(
-   "int main() {
-      #if !defined(__EMSCRIPTEN__)
-      static_assert(false, \"__EMSCRIPTEN__ is not defined\");
-      #endif
-      return 0;
-    }"
-  HWY_EMSCRIPTEN
-)
-
-set(HWY_CONTRIB_SOURCES
-    hwy/contrib/dot/dot-inl.h
-    hwy/contrib/image/image.cc
-    hwy/contrib/image/image.h
-    hwy/contrib/math/math-inl.h
-    hwy/contrib/sort/sort-inl.h
-)
 
 set(HWY_SOURCES
     hwy/aligned_allocator.cc
@@ -92,12 +75,6 @@ set(HWY_SOURCES
     hwy/targets.h
 )
 
-set(HWY_TEST_SOURCES
-    hwy/tests/hwy_gtest.h
-    hwy/tests/test_util-inl.h
-    hwy/tests/test_util.cc
-    hwy/tests/test_util.h
-)
 
 if (MSVC)
   # TODO(janwas): add flags
