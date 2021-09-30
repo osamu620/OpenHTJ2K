@@ -9,6 +9,8 @@ OpenHTJ2K provides a shared liberary and sample applications having the followin
   - fully compliant with conformance testing defined in ITU-T Rec.803 | ISO 15444-4.
 - Encoding an image into a codestream/JPH file which is compliant with HTJ2K
   - currently supports only HTJ2K. The optional markers like COC, POC, etc. are not implemented.
+  - encoding of HT SigProp and MagRef passes are not implemented.
+  - up to **12 bit** per component sample is currently supported. 
   - **Quality control for lossy compression with ***Qfactor*** feature** 
 
 # Requirements
