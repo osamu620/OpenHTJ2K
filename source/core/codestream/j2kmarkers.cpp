@@ -1638,7 +1638,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
         COM.push_back(std::make_unique<COM_marker>(in));
         break;
       default:
-        printf("WARNING: unkown marker %04X is found in main header\n", word);
+        printf("WARNING: unknown marker %04X is found in main header\n", word);
         break;
     }
   }
@@ -1736,7 +1736,7 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
         length_of_tilepart_markers += this->COM[this->COM.size() - 1]->get_length() + 2;
         break;
       default:
-        printf("WARNING: unkown marker %04X is found in tile-part header of tile %d and tile-part %d.\n",
+        printf("WARNING: unknown marker %04X is found in tile-part header of tile %d and tile-part %d.\n",
                word, this->SOT.get_tile_index(), this->SOT.get_tile_part_index());
         break;
     }
