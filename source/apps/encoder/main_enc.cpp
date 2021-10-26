@@ -120,7 +120,11 @@ int main(int argc, char *argv[]) {
     open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd,
                                           args.get_qfactor(), isJPH, color_space, args.get_num_threads());
     // invoke encoding
-    total_size = encoder.invoke();
+    try {
+    	total_size = encoder.invoke();
+    } catch (std::exception &exc){
+    	return EXIT_FAILURE;
+    }
   }
   auto duration = std::chrono::high_resolution_clock::now() - start;
   auto count    = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();

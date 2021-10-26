@@ -30,6 +30,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 
 mq_decoder::mq_decoder(const uint8_t *const buf)
     : A(0),
@@ -115,7 +116,7 @@ uint8_t mq_decoder::decode(uint8_t label) {
 
   if (expected_symbol > 1) {
     printf("ERROR: mq_dec error in function decode()\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
 
   A -= probability;

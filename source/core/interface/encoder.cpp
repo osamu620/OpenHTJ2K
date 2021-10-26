@@ -75,11 +75,11 @@ size_t openhtj2k_encoder_impl::invoke() {
 
   if ((siz->XOsiz > siz->Xsiz) || (siz->YOsiz > siz->Ysiz)) {
     printf("ERROR: image origin exceeds the size of input image.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   if ((siz->XTOsiz > siz->XOsiz) || (siz->YTOsiz > siz->YOsiz)) {
     printf("ERROR: tile origin shall be no greater than the image origin.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   if (siz->XTsiz * siz->YTsiz == 0) {
     siz->XTsiz = siz->Xsiz;
@@ -87,7 +87,7 @@ size_t openhtj2k_encoder_impl::invoke() {
   }
   if (((siz->XTOsiz + siz->XTsiz) <= siz->XOsiz) || ((siz->YTOsiz + siz->YTsiz) <= siz->YOsiz)) {
     printf("ERROR: tile size plus tile origin shall be greater than the image origin.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
 
   for (auto c = 0; c < siz->Csiz; ++c) {
@@ -200,7 +200,7 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
   if (qfactor != NO_QFACTOR) {
     if (qfactor > 100) {
       printf("Value of Qfactor shall be in the range [0, 100]\n");
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
   }
   ThreadPool::instance(num_threads);

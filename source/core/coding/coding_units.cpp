@@ -212,7 +212,7 @@ void j2k_codeblock::set_compressed_data(uint8_t *buf, uint16_t bufsize) {
     printf(
         "ERROR: illegal attempt to allocate codeblock's compressed data but the data is not "
         "null.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   this->compressed_data = std::make_unique<uint8_t[]>(bufsize);
   memcpy(this->compressed_data.get(), buf, bufsize);
@@ -508,7 +508,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
               block->Cmodes &= ~(HT_PHLD | HT);
             } else {
               printf("ERROR: Length information for a HT-codeblock is invalid\n");
-              exit(EXIT_FAILURE);
+              throw new std::exception;
             }
           }
         } else {
@@ -525,7 +525,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                 printf(
                     "ERROR: Length information for a HT-codeblock is "
                     "invalid\n");
-                exit(EXIT_FAILURE);
+                throw new std::exception;
               }
               next_segment_passes = 2;
               block->Cmodes &= ~(HT_PHLD);
@@ -569,7 +569,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                   printf(
                       "ERROR: Length information for a HT-codeblock is "
                       "invalid\n");
-                  exit(EXIT_FAILURE);
+                  throw new std::exception;
                 }
               }
             }
@@ -585,7 +585,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           next_segment_passes = 2;
           if (segment_bytes == 1) {
             printf("ERROR: something wrong 943.\n");
-            exit(EXIT_FAILURE);
+            throw new std::exception;
           }
         } else {
           // new pass = 1 means num_passes is HT SigProp; 2 means num_passes is
@@ -683,7 +683,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
               // This will have to be the new primary
               if (segment_bytes < 2) {
                 printf("ERROR: Something wrong 1037\n");
-                exit(EXIT_FAILURE);
+                throw new std::exception;
               }
               fast_skip_bytes += primary_bytes + secondary_bytes;
               primary_passes += 1 + secondary_passes;
@@ -703,7 +703,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             if (empty_set) {
               if (segment_bytes != 0) {
                 printf("ERROR: Something wrong 1225\n");
-                exit(EXIT_FAILURE);
+                throw new std::exception;
               }
               block->fast_skip_passes += segment_passes;
             } else {
@@ -1203,7 +1203,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
 j2k_precinct *j2k_resolution::access_precinct(uint32_t p) {
   if (p > npw * nph) {
     printf("ERROR: attempt to access precinct whose index is out of the valid range.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   return this->precincts[p].get();
 }
@@ -1279,9 +1279,11 @@ int j2k_tile_part::read(j2c_src_memory &in) {
   this->length += this->header->SOT.get_tile_part_length() - length_of_tilepart_markers;
   this->body = in.get_buf_pos();
 
-  if (in.forward_Nbytes(this->length) == EXIT_FAILURE) {
+  try {
+	  in.forward_Nbytes(this->length);
+  } catch (std::exception &exc) {
     printf("ERROR: forward_Nbytes exceeds tehe size of buffer.\n");
-    exit(EXIT_FAILURE);
+    throw;
   }
   return EXIT_SUCCESS;
 }
@@ -1772,7 +1774,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           "ERROR: Resolution level reduction exceeds the DWT level of "
           "component %d.\n",
           c);
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
     max_c_NL = std::max(c_NL, max_c_NL);
     j2k_resolution *cr;
@@ -2033,7 +2035,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
         printf(
             "ERROR: Progression order number shall be in the range from 0 "
             "to 4\n");
-        exit(EXIT_FAILURE);
+        throw new std::exception;
         // break;
     }
   }
@@ -2299,7 +2301,7 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         printf(
             "ERROR: Progression order number shall be in the range from 0 "
             "to 4\n");
-        exit(EXIT_FAILURE);
+        throw new std::exception;
     }
   }
 }
@@ -2431,12 +2433,12 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
     uint16_t word = this->tile_buf->get_word();
     if (word != _SOP) {
       printf("ERROR: Expected SOP marker but %04X is found\n", word);
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
     Lsop = this->tile_buf->get_word();
     if (Lsop != 4) {
       printf("ERROR: illegal Lsop value %d is found\n", Lsop);
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
     Nsop = this->tile_buf->get_word();
   } else {
@@ -2449,7 +2451,7 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
       uint16_t word = this->packet_header->get_word();
       if (word != _EPH) {
         printf("ERROR: Expected EPH marker but %04X is found\n", word);
-        exit(EXIT_FAILURE);
+        throw new std::exception;
       }
     }
     return;
@@ -2468,7 +2470,7 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
     uint16_t word = this->packet_header->get_word();
     if (word != _EPH) {
       printf("ERROR: Expected EPH marker but %04X is found\n", word);
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
   }
 
@@ -2551,7 +2553,7 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
 void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img) {
   if (img.empty()) {
     printf("ERROR: input image is empty.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   index          = idx;
   num_components = main_header.SIZ->get_num_components();

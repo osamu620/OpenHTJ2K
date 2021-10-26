@@ -119,7 +119,11 @@ int main(int argc, char *argv[]) {
     img_depth.clear();
     img_signed.clear();
     // invoke decoding
-    decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+    try {
+    	decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+    } catch (std::exception &exc){
+    	return EXIT_FAILURE;
+    }
   }
   auto duration = std::chrono::high_resolution_clock::now() - start;
 

@@ -50,7 +50,7 @@ class image {
     size_t num_files = filenames.size();
     if (num_files > 16384) {
       printf("ERROR: over 16384 components are not supported in the spec.\n");
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
     num_components = num_files;  // num_components may change after parsing PPM header
     uint16_t c     = 0;
@@ -329,14 +329,14 @@ class image {
   uint32_t get_component_width(uint16_t c) const {
     if (c > num_components) {
       printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
     return this->component_width[c];
   }
   uint32_t get_component_height(uint16_t c) const {
     if (c > num_components) {
       printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
     return this->component_height[c];
   }

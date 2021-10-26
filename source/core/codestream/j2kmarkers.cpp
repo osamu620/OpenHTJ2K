@@ -119,7 +119,7 @@ SIZ_marker::SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t
 int SIZ_marker::write(j2c_destination_base &dst) {
   if (!is_set) {
     printf("ERROR: illegal attempt to call write() for SIZ_marker not yet set.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   dst.put_word(code);
   dst.put_word(Lmar);
@@ -163,7 +163,7 @@ void SIZ_marker::get_image_size(element_siz &siz) const {
 uint32_t SIZ_marker::get_component_stride(uint16_t c) const {
   if (c >= Csiz) {
     printf("ERROR: invalid component index\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   return Xsiz / XRsiz[c];
 }
@@ -234,7 +234,7 @@ CAP_marker::CAP_marker(j2c_src_memory &in) : j2k_marker_io_base(_CAP), Ccap{0} {
   }
   if (n != 0) {
     printf("ERROR: Lcap and number of Ccap does not match\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   is_set = true;
 }
@@ -338,7 +338,7 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
     printf(
         "ERROR: Length of parameters to specify horizontal and vertical precinct size shall be the "
         "same.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   unsigned long PPlength = PPx.size();
   uint8_t last_PPx = '\0', last_PPy = '\0';
@@ -881,7 +881,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
         break;
       default:
         printf("ERROR: chroma format for QCC_marker is invalid.\n");
-        exit(EXIT_FAILURE);
+        throw new std::exception;
     }
   }
 
@@ -1409,7 +1409,7 @@ SOT_marker::SOT_marker(j2c_src_memory &in) : j2k_marker_io_base(_SOT) {
   Lmar = in.get_word();
   if (Lmar != 10) {
     printf("ERROR: Lsot value is invalid.\n");
-    exit(EXIT_FAILURE);
+    throw new std::exception;
   }
   this->set_buf(in.get_buf_pos());
   in.get_N_byte(this->get_buf(), Lmar - 2);
@@ -1515,7 +1515,7 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
   if (qfactor != 0xFF) {
     if (siz->get_num_components() != 3 && siz->get_num_components() != 1) {
       printf("feature Qfactor is only available for gray-scale or color images.\n");
-      exit(EXIT_FAILURE);
+      throw new std::exception;
     }
     for (uint16_t c = 1; c < siz->get_num_components(); ++c) {
       QCC.push_back(std::make_unique<QCC_marker>(
