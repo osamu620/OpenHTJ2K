@@ -47,7 +47,7 @@ file_type_box::file_type_box(uint8_t type) : box_base(16, 0x66747970), MinV(0) {
     CLi.push_back(0x6A706820);
   } else {
     printf("ERROR: unsupported type for file_type_box\n");
-    throw new std::exception;
+    throw std::exception();
   }
   for (size_t i = 0; i < CLi.size(); ++i) {
     LBox += 4;
@@ -128,7 +128,7 @@ colour_specification_box::colour_specification_box(j2k_main_header &hdr, bool is
     EnumCS = 17;
   } else {
     printf("ERROR: invalid color space specification.\n");
-    throw new std::exception;
+    throw std::exception();
   }
 }
 size_t colour_specification_box::write(j2c_dst_memory &dst) {

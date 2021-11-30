@@ -38,7 +38,7 @@ namespace open_htj2k {
 off_t get_file_size(const std::string &filename) {
   struct stat st;
   if (stat(filename.c_str(), &st) != 0) {
-    throw new std::exception;
+    throw std::exception();
   }
   return st.st_size;
 }
@@ -61,7 +61,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   struct stat st;
   if (stat(filename, &st) != 0) {
     printf("ERROR: input file %s is not found.\n", filename);
-    throw new std::exception;
+    throw std::exception();
   }
   ThreadPool::instance(num_threads);
   // open codestream and store it in memory
@@ -116,7 +116,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   while ((word = in.get_word()) != _EOC) {
     if (word != _SOT) {
       printf("ERROR: SOT marker segment expected but %04X is found\n", word);
-      throw new std::exception;
+      throw std::exception();
     }
     tmpSOT     = SOT_marker(in);
     tile_index = tmpSOT.get_tile_index();

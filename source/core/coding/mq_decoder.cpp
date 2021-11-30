@@ -116,7 +116,7 @@ uint8_t mq_decoder::decode(uint8_t label) {
 
   if (expected_symbol > 1) {
     printf("ERROR: mq_dec error in function decode()\n");
-    throw new std::exception;
+    throw std::exception();
   }
 
   A -= probability;
