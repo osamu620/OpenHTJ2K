@@ -96,13 +96,13 @@ uint8_t state_MS_dec::importMagSgnBit() {
       tmp = *(buf + pos);  // modDcup(MS->pos, Lcup);
       if ((static_cast<uint16_t>(tmp) & static_cast<uint16_t>(1 << bits)) != 0) {
         printf("ERROR: importMagSgnBit error\n");
-        throw new std::exception;
+        throw std::exception();
       }
     } else if (pos == length) {
       tmp = 0xFF;
     } else {
       printf("ERROR: importMagSgnBit error\n");
-      throw new std::exception;
+      throw std::exception();
     }
     last = tmp;
     pos++;
@@ -188,7 +188,7 @@ uint8_t state_VLC::importVLCBit() {
       tmp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
     } else {
       printf("ERROR: import VLCBits error\n");
-      throw new std::exception;
+      throw std::exception();
     }
     bits = 8;
     if (last > 0x8F && (tmp & 0x7F) == 0x7F) {
@@ -357,7 +357,7 @@ uint8_t SP_dec::importSigPropBit() {
       pos++;
       if ((tmp & (1 << bits)) != 0) {
         printf("ERROR: importSigPropBit error\n");
-        throw new std::exception;
+        throw std::exception();
       }
     } else {
       tmp = 0;
