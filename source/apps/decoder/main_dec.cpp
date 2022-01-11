@@ -83,25 +83,51 @@ int main(int argc, char *argv[]) {
     printf("ERROR: Unsupported output file type.\n");
     exit(EXIT_FAILURE);
   }
-  char *tmp_param;
+  char *tmp_param, *endptr;
+  long tmp_val;
   uint8_t reduce_NL;
   if (nullptr == (tmp_param = get_command_option(argc, argv, "-reduce"))) {
     reduce_NL = 0;
   } else {
-    reduce_NL = strtol(tmp_param, nullptr, 10);
+    tmp_val = strtol(tmp_param, &endptr, 10);
+    if (tmp_val >= 0 && tmp_val <= 32 && tmp_param != endptr) {
+      reduce_NL = static_cast<uint8_t>(tmp_val);
+    } else {
+      printf("ERROR: -reduce takes non-negative integer in the range from 0 to 32.\n");
+      exit(EXIT_FAILURE);
+    }
   }
   int32_t num_iterations;
   if (nullptr == (tmp_param = get_command_option(argc, argv, "-iter"))) {
     num_iterations = 1;
   } else {
-    num_iterations = strtol(tmp_param, nullptr, 10);
+    tmp_val = strtol(tmp_param, &endptr, 10);
+    if (tmp_param == endptr) {
+      printf("ERROR: -iter takes positive integer.\n");
+      exit(EXIT_FAILURE);
+    }
+    if (tmp_val < 1 || tmp_val > INT32_MAX) {
+      printf("ERROR: -iter takes positive integer ( < INT32_MAX).\n");
+      exit(EXIT_FAILURE);
+    }
+    num_iterations = static_cast<int32_t>(tmp_val);
   }
 
   uint32_t num_threads;
   if (nullptr == (tmp_param = get_command_option(argc, argv, "-num_threads"))) {
     num_threads = 0;
   } else {
-    num_threads = (uint32_t)strtoul(tmp_param, nullptr, 10);
+    tmp_val = strtol(tmp_param, &endptr, 10);
+    if (tmp_param == endptr) {
+      printf("ERROR: -num_threads takes non-negative integer.\n");
+      exit(EXIT_FAILURE);
+    }
+    if (tmp_val < 0 || tmp_val > UINT32_MAX) {
+      printf("ERROR: -num_threads takes non-negative integer ( < UINT32_MAX).\n");
+      exit(EXIT_FAILURE);
+    }
+    //    num_iterations = static_cast<int32_t>(tmp_val);
+    num_threads = static_cast<uint32_t>(tmp_val);  // strtoul(tmp_param, nullptr, 10);
   }
 
   std::vector<int32_t *> buf;
@@ -120,9 +146,9 @@ int main(int argc, char *argv[]) {
     img_signed.clear();
     // invoke decoding
     try {
-    	decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
-    } catch (std::exception &exc){
-    	return EXIT_FAILURE;
+      decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+    } catch (std::exception &exc) {
+      return EXIT_FAILURE;
     }
   }
   auto duration = std::chrono::high_resolution_clock::now() - start;

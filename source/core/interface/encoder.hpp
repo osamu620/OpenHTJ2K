@@ -55,7 +55,9 @@ class image {
     num_components = num_files;  // num_components may change after parsing PPM header
     uint16_t c     = 0;
     for (const auto &fname : filenames) {
-      read_pnmpgx(fname, c);
+      if (read_pnmpgx(fname, c)) {
+        throw std::exception();
+      }
       c++;
     }
   }

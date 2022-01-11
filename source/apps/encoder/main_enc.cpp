@@ -34,6 +34,7 @@
 // (c) 2021 Osamu Watanabe, Takushoku University
 
 #include <chrono>
+#include <filesystem>
 #include <vector>
 #include "encoder.hpp"
 #include "enc_utils.hpp"
@@ -41,7 +42,14 @@
 int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
   std::vector<std::string> fnames = args.get_infile();
-
+  for (const auto &fname : fnames) {
+    try {
+      std::filesystem::exists(fname);
+    } catch (std::exception &exc) {
+      printf("ERROR: File %s is not found.\n", fname.c_str());
+      return EXIT_FAILURE;
+    }
+  }
   open_htj2k::image img(fnames);  // input image
   element_siz_local image_origin = args.get_origin();
   element_siz_local image_size(img.get_width(), img.get_height());
@@ -121,9 +129,9 @@ int main(int argc, char *argv[]) {
                                           args.get_qfactor(), isJPH, color_space, args.get_num_threads());
     // invoke encoding
     try {
-    	total_size = encoder.invoke();
-    } catch (std::exception &exc){
-    	return EXIT_FAILURE;
+      total_size = encoder.invoke();
+    } catch (std::exception &exc) {
+      return EXIT_FAILURE;
     }
   }
   auto duration = std::chrono::high_resolution_clock::now() - start;
