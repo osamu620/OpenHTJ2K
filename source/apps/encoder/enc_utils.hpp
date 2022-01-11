@@ -494,7 +494,12 @@ class j2k_argset {
       printf("ERROR: -iter requires number of iteration\n");
       exit(EXIT_FAILURE);
     }
-    return std::stoi(args[idx + 1]);
+    long tmp = std::stol(args[idx + 1]);
+    if (tmp < 1 || tmp > INT32_MAX) {
+      printf("ERROR: -iter requires positive integer within int32_t range.\n");
+      exit(EXIT_FAILURE);
+    }
+    return static_cast<int32_t>(tmp);
   }
 
   uint32_t get_num_threads() {
@@ -506,10 +511,15 @@ class j2k_argset {
     }
     auto idx = std::distance(args.begin(), p);
     if (idx + 1 > args.size() - 1) {
-      printf("ERROR: -iter requires number of iteration\n");
+      printf("ERROR: -num_threads requires number of threads\n");
       exit(EXIT_FAILURE);
     }
-    return (uint32_t)std::stoul(args[idx + 1]);
+    long tmp = std::stol(args[idx + 1]);
+    if (tmp < 0 || tmp > UINT32_MAX) {
+      printf("ERROR: -num_threads requires non-negative integer within int32_t range.\n");
+      exit(EXIT_FAILURE);
+    }
+    return static_cast<uint32_t>(tmp);
   }
 
   uint8_t get_jph_color_space() {

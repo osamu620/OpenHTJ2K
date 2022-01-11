@@ -28,21 +28,13 @@
 
 #include <cstdio>
 #include "decoder.hpp"
-#include <sys/stat.h>
+#include <filesystem>
 #include "coding_units.hpp"
 #include "ThreadPool.hpp"
 #ifdef _OPENMP
   #include <omp.h>
 #endif
 namespace open_htj2k {
-off_t get_file_size(const std::string &filename) {
-  struct stat st;
-  if (stat(filename.c_str(), &st) != 0) {
-    throw std::exception();
-  }
-  return st.st_size;
-}
-
 class openhtj2k_decoder_impl {
  private:
   j2c_src_memory in;
@@ -57,18 +49,19 @@ class openhtj2k_decoder_impl {
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
     : reduce_NL(r) {
-  off_t file_size = get_file_size(filename);  // supports 32-bits file size
-  struct stat st;
-  if (stat(filename, &st) != 0) {
+  uintmax_t file_size;
+  try {
+    file_size = std::filesystem::file_size(filename);
+  } catch (std::filesystem::filesystem_error &err) {
     printf("ERROR: input file %s is not found.\n", filename);
-    throw std::exception();
+    exit(EXIT_FAILURE);
   }
   ThreadPool::instance(num_threads);
   // open codestream and store it in memory
   FILE *fp = fopen(filename, "rb");
   in.alloc_memory(static_cast<uint32_t>(file_size));
   uint8_t *p = in.get_buf_pos();
-  fread(p, sizeof(uint8_t), static_cast<uint32_t>(file_size), fp);
+  fread(p, sizeof(uint8_t), static_cast<size_t>(file_size), fp);
   fclose(fp);
 }
 
