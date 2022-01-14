@@ -133,7 +133,7 @@ int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
 /********************************************************************************
  * functions for state_MEL_unPacker and state_MEL: state classes for MEL decoding
  *******************************************************************************/
-uint8_t state_MEL_unPacker::impoertMELbit() {
+uint8_t state_MEL_unPacker::importMELbit() {
   if (bits == 0) {
     bits = (tmp == 0xFF) ? 7 : 8;
     if (pos < length) {
@@ -153,14 +153,14 @@ uint8_t state_MEL_decoder::decodeMELSym() {
   uint8_t bit;
   if (MEL_run == 0 && MEL_one == 0) {
     eval = this->MEL_E[MEL_k];
-    bit  = MEL_unPacker->impoertMELbit();
+    bit  = MEL_unPacker->importMELbit();
     if (bit == 1) {
       MEL_run = 1 << eval;
       MEL_k   = (12 < MEL_k + 1) ? 12 : MEL_k + 1;
     } else {
       MEL_run = 0;
       while (eval > 0) {
-        bit     = MEL_unPacker->impoertMELbit();
+        bit     = MEL_unPacker->importMELbit();
         MEL_run = (MEL_run << 1) + bit;
         eval--;
       }
@@ -178,7 +178,7 @@ uint8_t state_MEL_decoder::decodeMELSym() {
 }
 
 /********************************************************************************
- * functions for state_VLC: state classe for VLC decoding
+ * functions for state_VLC: state class for VLC decoding
  *******************************************************************************/
 #ifndef ADVANCED
 uint8_t state_VLC::importVLCBit() {
@@ -346,7 +346,7 @@ uint8_t state_VLC_enc::decodeUExtension(const uint8_t &u_sfx) {
   return val;
 }
 /********************************************************************************
- * functions for SP_dec: state classe for HT SigProp decoding
+ * functions for SP_dec: state class for HT SigProp decoding
  *******************************************************************************/
 uint8_t SP_dec::importSigPropBit() {
   uint8_t val;
@@ -371,7 +371,7 @@ uint8_t SP_dec::importSigPropBit() {
 }
 
 /********************************************************************************
- * MR_dec: state classe for HT MagRef decoding
+ * MR_dec: state class for HT MagRef decoding
  *******************************************************************************/
 uint8_t MR_dec::importMagRefBit() {
   uint8_t val;
@@ -679,7 +679,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
     q++;  // move to the next quad-pair
   }       // Initial line-pair end
 
-  // Non-nitial line-pair
+  // Non-initial line-pair
   uint16_t context1, context2;
   for (uint16_t row = 1; row < QH; row++) {
     while ((q - row * QW) < QW - 1 && q < QW * QH) {
