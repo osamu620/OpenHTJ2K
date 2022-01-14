@@ -78,7 +78,7 @@ class state_MEL_unPacker {
  public:
   state_MEL_unPacker(const uint8_t *Dcup, uint32_t Lcup, uint32_t Pcup)
       : pos(Pcup), bits(0), tmp(0), buf(Dcup), length(Lcup) {}
-  uint8_t impoertMELbit();
+  uint8_t importMELbit();
 };
 
 class state_MEL_decoder {
@@ -106,7 +106,7 @@ class state_MEL_decoder {
   #define getbitfunc importVLCBit()
 #endif
 /********************************************************************************
- * state_VLC: state classe for VLC decoding
+ * state_VLC: state class for VLC decoding
  *******************************************************************************/
 class state_VLC_enc {
  private:
@@ -153,7 +153,7 @@ class state_VLC_enc {
   uint8_t decodeUExtension(const uint8_t &u_sfx);
 };
 /********************************************************************************
- * SP_dec: state classe for HT SigProp decoding
+ * SP_dec: state class for HT SigProp decoding
  *******************************************************************************/
 class SP_dec {
  private:
@@ -176,7 +176,7 @@ class SP_dec {
 };
 
 /********************************************************************************
- * MR_dec: state classe for HT MagRef decoding
+ * MR_dec: state class for HT MagRef decoding
  *******************************************************************************/
 class MR_dec {
  private:

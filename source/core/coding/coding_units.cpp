@@ -1244,9 +1244,10 @@ void j2k_resolution::scale() {
   constexpr float KK[4] = {K1 * K1, K * K1, K1 * K, K * K};
   uint32_t length       = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
   // TODO: The following code works correctly, but needs to be improved for speed
-  float fscale = KK[0];
+  float fscale      = KK[0];
+  int32_t precision = 1 << (sizeof(sprec_t) * 8 - 1);
   for (uint32_t n = 0; n < length; ++n) {
-    sprec_t sign = this->i_samples[n] & 0x8000;
+    sprec_t sign = this->i_samples[n] & precision;
     float fval   = fabs(static_cast<float>(this->i_samples[n]));
     fval *= fscale;
     this->i_samples[n] = static_cast<sprec_t>(fval + 0.5);
@@ -1280,7 +1281,7 @@ int j2k_tile_part::read(j2c_src_memory &in) {
   this->body = in.get_buf_pos();
 
   try {
-	  in.forward_Nbytes(this->length);
+    in.forward_Nbytes(this->length);
   } catch (std::exception &exc) {
     printf("ERROR: forward_Nbytes exceeds tehe size of buffer.\n");
     throw;
@@ -1751,7 +1752,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     assert(ppt_header == nullptr);
     sbst_packet_header = *(main_header.get_ppm_header());
     // TODO: this implementation may not be enough because this does not
-    // consider "tile-part". MARK: find begining of the packet header for a
+    // consider "tile-part". MARK: find beginning of the packet header for a
     // tile!
     sbst_packet_header.activate(this->index);
     packet_header = &sbst_packet_header;  // main_header.get_ppm_header();
@@ -2536,7 +2537,7 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
     const uint32_t num_tc_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
 
     // downshift value for lossy path
-    int16_t downshift = (tcomp[c].transformation) ? 0 : 13 - tcomp[c].bitdepth;
+    int16_t downshift = (tcomp[c].transformation) ? 0 : FRACBITS - tcomp[c].bitdepth;
     if (downshift < 0) {
       printf("WARNING: sample precision over 13 bit/pixel is not supported.\n");
     }
