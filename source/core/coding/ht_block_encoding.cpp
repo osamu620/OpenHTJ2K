@@ -689,7 +689,7 @@ int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
       kappa     = std::max(
-          (std::max({ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]}) - 1) * gamma[Q0], 1);
+              (std::max({ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]}) - 1) * gamma[Q0], 1);
 
       ep[2 * qx] = E_n[1];
       // if (qx > 0) {
@@ -745,10 +745,10 @@ int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
       }
       gamma[Q1] = (popcount32((uint32_t)rho_q[Q1]) > 1) ? 1 : 0;
       kappa     = std::max(
-          (std::max({ep[2 * (qx + 1) - 1], ep[2 * (qx + 1)], ep[2 * (qx + 1) + 1], ep[2 * (qx + 1) + 2]})
+              (std::max({ep[2 * (qx + 1) - 1], ep[2 * (qx + 1)], ep[2 * (qx + 1) + 1], ep[2 * (qx + 1) + 2]})
            - 1)
-              * gamma[Q1],
-          1);
+                  * gamma[Q1],
+              1);
 
       ep[2 * (qx + 1) - 1] = E_n[3];
       ep[2 * (qx + 1)]     = E_n[5];
@@ -817,7 +817,7 @@ int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
       kappa     = std::max(
-          (std::max({ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]}) - 1) * gamma[Q0], 1);
+              (std::max({ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]}) - 1) * gamma[Q0], 1);
 
       ep[2 * qx] = E_n[1];
       // if (qx > 0) {
