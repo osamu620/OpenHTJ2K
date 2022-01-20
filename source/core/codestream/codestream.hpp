@@ -283,7 +283,7 @@ class packet_header_writer {
   }
 
   void put_Nbits(uint32_t cwd, uint8_t n) {
-    for (int i = n - 1; n >= 0; --n) {
+    for (int i = n - 1; i >= 0; --i) {
       put_bit((cwd >> i) & 1);
     }
   }
