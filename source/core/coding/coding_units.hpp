@@ -94,6 +94,7 @@ class j2k_codeblock : public j2k_region {
   // number of coding-passes included in a layer
   std::unique_ptr<uint8_t[]> layer_passes;
   bool already_included;
+  bool refsegment;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
                 float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
@@ -112,7 +113,7 @@ class j2k_codeblock : public j2k_region {
   uint8_t get_signLUT_index(const uint16_t &j1, const uint16_t &j2) const;
   uint8_t get_Mb() const;
   uint8_t *get_compressed_data();
-  void set_compressed_data(uint8_t *buf, uint16_t size);
+  void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   void create_compressed_buffer(buf_chain *tile_buf, uint16_t buf_limit, const uint16_t &layer);
   void update_sample(const uint8_t &symbol, const uint8_t &p, const uint16_t &j1, const uint16_t &j2) const;
   void update_sign(const int8_t &val, const uint16_t &j1, const uint16_t &j2) const;

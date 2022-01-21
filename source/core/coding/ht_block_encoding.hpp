@@ -31,6 +31,7 @@
 
 #define MAX_Lcup 16834
 #define MAX_Scup 4079
+#define MAX_Lref 2046
 
 /********************************************************************************
  * state_MS_enc: state class for MagSgn encoding
@@ -116,7 +117,7 @@ class state_MEL_enc {
       : MEL_k(0),
         MEL_run(0),
         MEL_E{0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5},
-        MEL_t(1 << MEL_E[MEL_k]),
+        MEL_t(static_cast<uint8_t>(1 << MEL_E[MEL_k])),
         pos(0),
         rem(8),
         tmp(0),
@@ -124,3 +125,95 @@ class state_MEL_enc {
   void encodeMEL(uint8_t smel);
   void termMEL();
 };
+
+class MR_enc;  // forward declaration for friend function termSPandMR()
+/********************************************************************************
+ * SP_enc: state class for HT SigProp encoding
+ *******************************************************************************/
+class SP_enc {
+ private:
+  uint32_t pos;
+  uint8_t bits;
+  uint8_t max;
+  uint8_t tmp;
+  uint8_t *const buf;
+  friend int32_t termSPandMR(SP_enc &, MR_enc &);
+
+ public:
+  explicit SP_enc(uint8_t *Dref) : pos(0), bits(0), max(8), tmp(0), buf(Dref) {}
+  void emitSPBit(uint8_t bit) {
+    tmp |= (bit << bits);
+    bits++;
+    if (bits == max) {
+      buf[pos] = tmp;
+      pos++;
+      max  = (tmp == 0xFF) ? 7 : 8;
+      tmp  = 0;
+      bits = 0;
+    }
+  }
+  void termSP() {
+    if (tmp != 0) {
+      buf[pos] = tmp;
+      pos++;
+      max = (tmp == 0xFF) ? 7 : 8;
+    }
+    if (max == 7) {
+      buf[pos] = 0x00;
+      pos++;  // this prevents the appearance of a terminal 0xFF
+    }
+  }
+  [[nodiscard]] uint32_t get_length() const { return pos; }
+};
+/********************************************************************************
+ * MR_enc: state class for HT MagRef encoding
+ *******************************************************************************/
+class MR_enc {
+ private:
+  uint32_t pos;
+  uint8_t bits;
+  uint8_t tmp;
+  uint8_t last;
+  uint8_t *const buf;
+  friend int32_t termSPandMR(SP_enc &, MR_enc &);
+
+ public:
+  explicit MR_enc(uint8_t *Dref) : pos(MAX_Lref), bits(0), tmp(0), last(255), buf(Dref) {}
+  void emitMRBit(uint8_t bit) {
+    tmp |= (bit << bits);
+    bits++;
+    if ((last > 0x8F) && (tmp == 0x7F)) {
+      bits++;  // this must leave MR_bits equal to 8
+    }
+    if (bits == 8) {
+      buf[pos] = tmp;
+      pos--;  // MR buf gorws reverse order
+      last = tmp;
+      tmp  = 0;
+      bits = 0;
+    }
+  }
+  [[nodiscard]] uint32_t get_length() const { return MAX_Lref - pos; }
+};
+
+int32_t termSPandMR(SP_enc &SP, MR_enc &MR) {
+  uint8_t SP_mask = 0xFF >> (8 - SP.bits);  // if SP_bits is 0, SP_mask = 0
+  SP_mask |= ((1 << SP.max) & 0x80);        // Auguments SP_mask to cover any stuff bit
+  uint8_t MR_mask = 0xFF >> (8 - MR.bits);  // if MR_bits is 0, MR_mask = 0
+  if ((SP_mask | MR_mask) == 0) {
+    // last SP byte cannot be 0xFF, since then SP_max would be 7
+    memmove(&SP.buf[SP.pos], &MR.buf[MR.pos + 1], MAX_Lref - MR.pos);
+    return SP.pos + MAX_Lref - MR.pos;
+  }
+  uint8_t fuse = SP.tmp | MR.tmp;
+  if ((((fuse ^ SP.tmp) & SP_mask) | ((fuse ^ MR.tmp) & MR_mask)) == 0) {
+    SP.buf[SP.pos] = fuse;  // fuse always < 0x80 here; no false marker risk
+  } else {
+    SP.buf[SP.pos] = SP.tmp;  // SP_tmp cannot be 0xFF
+    MR.buf[MR.pos] = MR.tmp;
+    MR.pos--;  // MR buf gorws reverse order
+  }
+  SP.pos++;
+  memmove(&SP.buf[SP.pos], &MR.buf[MR.pos + 1], MAX_Lref - MR.pos);
+  return SP.pos + MAX_Lref - MR.pos;
+}

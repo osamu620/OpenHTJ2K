@@ -194,7 +194,8 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       num_ZBP(0),
       fast_skip_passes(0),
       Lblock(0),
-      already_included(false) {
+      already_included(false),
+      refsegment(false) {
   memset(sample_buf.get(), 0, sizeof(int32_t) * size.x * size.y);
   memset(block_states.get(), 0, (size.x + 2) * (size.y + 2));
   this->layer_start  = std::make_unique<uint8_t[]>(num_layers);
@@ -207,14 +208,20 @@ uint8_t j2k_codeblock::get_Mb() const { return this->M_b; }
 
 uint8_t *j2k_codeblock::get_compressed_data() { return this->compressed_data.get(); }
 
-void j2k_codeblock::set_compressed_data(uint8_t *buf, uint16_t bufsize) {
+void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsize, const uint16_t Lref) {
   if (this->compressed_data != nullptr) {
-    printf(
-        "ERROR: illegal attempt to allocate codeblock's compressed data but the data is not "
-        "null.\n");
-    throw std::exception();
+    if (!refsegment) {
+      printf(
+          "ERROR: illegal attempt to allocate codeblock's compressed data but the data is not "
+          "null.\n");
+      throw std::exception();
+    } else {
+      // if we are here, this function has been called to copy Dref[]
+      memcpy(this->current_address + this->pass_length[0], buf, bufsize);
+      return;
+    }
   }
-  this->compressed_data = std::make_unique<uint8_t[]>(bufsize);
+  this->compressed_data = std::make_unique<uint8_t[]>(bufsize + Lref * (refsegment));
   memcpy(this->compressed_data.get(), buf, bufsize);
   this->current_address = this->compressed_data.get();
 }

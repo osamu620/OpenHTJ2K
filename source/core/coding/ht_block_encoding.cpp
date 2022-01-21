@@ -41,6 +41,7 @@
 #define Q1 1
 
 //#define HTSIMD
+//#define ENABLE_SP_MR
 
 void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   const uint32_t height = this->size.y;
@@ -54,12 +55,17 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+      block_states[block_index] |= (temp & 1) << 5;
+      block_states[block_index] |= (sign >> 31) << 6;
+      temp = (temp < 0) ? -temp : temp;
+      temp &= 0x7FFFFFFF;
+      temp >>= (refsegment);
       if (temp) {
         or_val |= 1;
         block_states[block_index] |= 1;
         // convert sample value to MagSgn
-        temp = (temp < 0) ? -temp : temp;
-        temp &= 0x7FFFFFFF;
+        //        temp = (temp < 0) ? -temp : temp;
+        //        temp &= 0x7FFFFFFF;
         temp--;
         temp <<= 1;
         temp += sign >> 31;
@@ -430,7 +436,7 @@ int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
 /********************************************************************************
  * HT cleanup encoding
  *******************************************************************************/
-int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcept {
+int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcept {
   // length of HT cleanup pass
   int32_t Lcup;
   // length of MagSgn buffer
@@ -887,7 +893,7 @@ int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
   // printf("Lcup %d\n", Lcup);
 
   // transfer Dcup[] to block->compressed_data
-  block->set_compressed_data(fwd_buf.get(), Lcup);
+  block->set_compressed_data(fwd_buf.get(), Lcup, MAX_Lref);
   // set length of compressed data
   block->length         = Lcup;
   block->pass_length[0] = Lcup;
@@ -898,4 +904,164 @@ int32_t htj2k_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
   // set number of zero-bit planes (=Zblk)
   block->num_ZBP = block->get_Mb() - 1;
   return block->length;
+}
+/********************************************************************************
+ * HT sigprop encoding
+ *******************************************************************************/
+auto process_stripes_block = [](SP_enc &SigProp, j2k_codeblock *block, const uint16_t i_start,
+                                const uint16_t j_start, const uint16_t width, const uint16_t height) {
+  uint8_t *sp;
+  uint8_t causal_cond = 0;
+  uint8_t bit;
+  uint8_t mbr;
+  uint32_t mbr_info;  // NOT USED
+
+  for (int16_t j = j_start; j < j_start + width; j++) {
+    mbr_info = 0;
+    for (int16_t i = i_start; i < i_start + height; i++) {
+      sp          = &block->block_states[(j + 1) + (i + 1) * (block->size.x + 2)];
+      causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != i_start + height - 1));
+      mbr         = 0;
+      if (block->get_state(Sigma, i, j) == 0) {
+        block->calc_mbr(mbr, i, j, mbr_info & 0x1EF, causal_cond);
+      }
+      mbr_info >>= 3;
+      if (mbr != 0) {
+        bit = (*sp >> 5) & 1;
+        SigProp.emitSPBit(bit);
+        block->modify_state(refinement_indicator, 1, i, j);
+        block->modify_state(refinement_value, bit, i, j);
+      }
+      block->modify_state(scan, 1, i, j);
+    }
+  }
+  for (uint16_t j = j_start; j < j_start + width; j++) {
+    for (uint16_t i = i_start; i < i_start + height; i++) {
+      sp = &block->block_states[(j + 1) + (i + 1) * (block->size.x + 2)];
+      // encode sign
+      if (block->get_state(Refinement_value, i, j)) {
+        bit = (*sp >> 6) & 1;
+        SigProp.emitSPBit(bit);
+      }
+    }
+  }
+};
+
+void ht_sigprop_encode(j2k_codeblock *block, SP_enc &SigProp) {
+  const uint16_t num_v_stripe = block->size.y / 4;
+  const uint16_t num_h_stripe = block->size.x / 4;
+  uint16_t i_start            = 0, j_start;
+  uint16_t width              = 4;
+  uint16_t width_last;
+  uint16_t height = 4;
+
+  // encode full-height (=4) stripes
+  for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
+    j_start = 0;
+    for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
+      process_stripes_block(SigProp, block, i_start, j_start, width, height);
+      j_start += 4;
+    }
+    width_last = block->size.x % 4;
+    if (width_last) {
+      process_stripes_block(SigProp, block, i_start, j_start, width_last, height);
+    }
+    i_start += 4;
+  }
+  // encode remaining height stripes
+  height  = block->size.y % 4;
+  j_start = 0;
+  for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
+    process_stripes_block(SigProp, block, i_start, j_start, width, height);
+    j_start += 4;
+  }
+  width_last = block->size.x % 4;
+  if (width_last) {
+    process_stripes_block(SigProp, block, i_start, j_start, width_last, height);
+  }
+}
+/********************************************************************************
+ * HT magref encoding
+ *******************************************************************************/
+void ht_magref_encode(j2k_codeblock *block, MR_enc &MagRef) {
+  const uint16_t blk_height   = block->size.y;
+  const uint16_t blk_width    = block->size.x;
+  const uint16_t num_v_stripe = block->size.y / 4;
+  uint16_t i_start            = 0;
+  uint16_t height             = 4;
+  uint8_t *sp;
+  uint8_t bit;
+
+  for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
+    for (uint16_t j = 0; j < blk_width; j++) {
+      for (uint16_t i = i_start; i < i_start + height; i++) {
+        sp = &block->block_states[(j + 1) + (i + 1) * (block->size.x + 2)];
+        if (block->get_state(Sigma, i, j) != 0) {
+          bit = (sp[0] >> 5) & 1;
+          MagRef.emitMRBit(bit);
+          block->modify_state(refinement_indicator, 1, i, j);
+        }
+      }
+    }
+    i_start += 4;
+  }
+  height = blk_height % 4;
+  for (uint16_t j = 0; j < blk_width; j++) {
+    for (uint16_t i = i_start; i < i_start + height; i++) {
+      sp = &block->block_states[(j + 1) + (i + 1) * (block->size.x + 2)];
+      if (block->get_state(Sigma, i, j) != 0) {
+        bit = (sp[0] >> 5) & 1;
+        MagRef.emitMRBit(bit);
+        block->modify_state(refinement_indicator, 1, i, j);
+      }
+    }
+  }
+}
+
+/********************************************************************************
+ * HT encoding
+ *******************************************************************************/
+int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept {
+#ifdef ENABLE_SP_MR
+  block->refsegment = true;
+#endif
+  int32_t Lcup = htj2k_cleanup_encode(block, ROIshift);
+  if (Lcup && block->refsegment) {
+    uint8_t Dref[2047] = {0};
+    SP_enc SigProp(Dref);
+    MR_enc MagRef(Dref);
+    int32_t HTMagRefLength = 0;
+    // SigProp encoding
+    ht_sigprop_encode(block, SigProp);
+    // MagRef encoding
+    ht_magref_encode(block, MagRef);
+    if (MagRef.get_length()) {
+      HTMagRefLength = termSPandMR(SigProp, MagRef);
+      block->num_passes += 2;
+      block->layer_passes[0] += 2;
+      block->pass_length.push_back(SigProp.get_length());
+      block->pass_length.push_back(MagRef.get_length());
+    } else {
+      SigProp.termSP();
+      HTMagRefLength = SigProp.get_length();
+      block->num_passes += 1;
+      block->layer_passes[0] += 1;
+      block->pass_length.push_back(SigProp.get_length());
+    }
+    if (HTMagRefLength) {
+      block->length += HTMagRefLength;
+      block->num_ZBP -= (block->refsegment);
+      block->set_compressed_data(Dref, HTMagRefLength);
+    }
+
+    //    // debugging
+    //    printf("SP length = %d\n", SigProp.get_length());
+    //    printf("MR length = %d\n", MagRef.get_length());
+    //    printf("HT MAgRef length = %d\n", HTMagRefLength);
+    //    for (int i = 0; i < HTMagRefLength; ++i) {
+    //      printf("%02X ", Dref[i]);
+    //    }
+    //    printf("\n");
+    return EXIT_SUCCESS;
+  }
 }
