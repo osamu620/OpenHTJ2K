@@ -76,7 +76,7 @@ class state_MS_enc {
 
 class state_MEL_enc;  // forward declaration for friend function "termMELandVLC()"
 /********************************************************************************
- * state_VLC_enc: state classe for VLC encoding
+ * state_VLC_enc: state class for VLC encoding
  *******************************************************************************/
 class state_VLC_enc {
  private:
