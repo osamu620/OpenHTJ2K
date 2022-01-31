@@ -908,7 +908,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 /********************************************************************************
  * HT sigprop encoding
  *******************************************************************************/
-auto process_stripes_block = [](SP_enc &SigProp, j2k_codeblock *block, const uint16_t i_start,
+auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const uint16_t i_start,
                                 const uint16_t j_start, const uint16_t width, const uint16_t height) {
   uint8_t *sp;
   uint8_t causal_cond = 0;
@@ -959,12 +959,12 @@ void ht_sigprop_encode(j2k_codeblock *block, SP_enc &SigProp) {
   for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
     j_start = 0;
     for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-      process_stripes_block(SigProp, block, i_start, j_start, width, height);
+      process_stripes_block_enc(SigProp, block, i_start, j_start, width, height);
       j_start += 4;
     }
     width_last = block->size.x % 4;
     if (width_last) {
-      process_stripes_block(SigProp, block, i_start, j_start, width_last, height);
+      process_stripes_block_enc(SigProp, block, i_start, j_start, width_last, height);
     }
     i_start += 4;
   }
@@ -972,12 +972,12 @@ void ht_sigprop_encode(j2k_codeblock *block, SP_enc &SigProp) {
   height  = block->size.y % 4;
   j_start = 0;
   for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-    process_stripes_block(SigProp, block, i_start, j_start, width, height);
+    process_stripes_block_enc(SigProp, block, i_start, j_start, width, height);
     j_start += 4;
   }
   width_last = block->size.x % 4;
   if (width_last) {
-    process_stripes_block(SigProp, block, i_start, j_start, width_last, height);
+    process_stripes_block_enc(SigProp, block, i_start, j_start, width_last, height);
   }
 }
 /********************************************************************************
