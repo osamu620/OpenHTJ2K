@@ -5,4 +5,5 @@ target_sources(open_htj2k
     fdwt.cpp
     color.cpp
     color_avx2.cpp
+    color_neon.cpp
 )
