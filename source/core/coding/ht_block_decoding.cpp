@@ -954,7 +954,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
   }
 }
 
-auto process_stripes_block = [](SP_dec &SigProp, j2k_codeblock *block, const uint16_t i_start,
+auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const uint16_t i_start,
                                 const uint16_t j_start, const uint16_t width, const uint16_t height,
                                 const uint16_t dum_stride, const uint8_t &pLSB) {
   int32_t *sp;
@@ -1017,12 +1017,12 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
   for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
     j_start = 0;
     for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-      process_stripes_block(SigProp, block, i_start, j_start, width, height, dum_stride, pLSB);
+      process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, dum_stride, pLSB);
       j_start += 4;
     }
     width_last = block->size.x % 4;
     if (width_last) {
-      process_stripes_block(SigProp, block, i_start, j_start, width_last, height, dum_stride, pLSB);
+      process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, dum_stride, pLSB);
     }
     i_start += 4;
   }
@@ -1030,12 +1030,12 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
   height  = block->size.y % 4;
   j_start = 0;
   for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-    process_stripes_block(SigProp, block, i_start, j_start, width, height, dum_stride, pLSB);
+    process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, dum_stride, pLSB);
     j_start += 4;
   }
   width_last = block->size.x % 4;
   if (width_last) {
-    process_stripes_block(SigProp, block, i_start, j_start, width_last, height, dum_stride, pLSB);
+    process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, dum_stride, pLSB);
   }
 }
 
