@@ -47,6 +47,8 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   const uint32_t height = this->size.y;
   const uint32_t width  = this->size.x;
   const uint32_t stride = this->band_stride;
+  const int32_t pshift  = 1;
+  const int32_t pLSB    = (1 << (pshift - 1));
 
   for (uint16_t i = 0; i < height; ++i) {
     sprec_t *const sp  = this->i_samples + i * stride;
@@ -55,11 +57,11 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-      block_states[block_index] |= (temp & 1) << 5;
-      block_states[block_index] |= (sign >> 31) << 6;
+      block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
+      block_states[block_index] |= (sign >> 31) << SHIFT_SSGN;
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
-      temp >>= (refsegment);
+      temp >>= (refsegment)*pshift;
       if (temp) {
         or_val |= 1;
         block_states[block_index] |= 1;
@@ -890,8 +892,6 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   fwd_buf[Lcup - 1] = Scup >> 4;
   fwd_buf[Lcup - 2] = (fwd_buf[Lcup - 2] & 0xF0) | (Scup & 0x0f);
 
-  // printf("Lcup %d\n", Lcup);
-
   // transfer Dcup[] to block->compressed_data
   block->set_compressed_data(fwd_buf.get(), Lcup, MAX_Lref);
   // set length of compressed data
@@ -927,7 +927,7 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
       }
       mbr_info >>= 3;
       if (mbr != 0) {
-        bit = (*sp >> 5) & 1;
+        bit = (*sp >> SHIFT_SMAG) & 1;
         SigProp.emitSPBit(bit);
         block->modify_state(refinement_indicator, 1, i, j);
         block->modify_state(refinement_value, bit, i, j);
@@ -940,7 +940,7 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
       sp = &block->block_states[(j + 1) + (i + 1) * (block->size.x + 2)];
       // encode sign
       if (block->get_state(Refinement_value, i, j)) {
-        bit = (*sp >> 6) & 1;
+        bit = (*sp >> SHIFT_SSGN) & 1;
         SigProp.emitSPBit(bit);
       }
     }
@@ -997,7 +997,7 @@ void ht_magref_encode(j2k_codeblock *block, MR_enc &MagRef) {
       for (uint16_t i = i_start; i < i_start + height; i++) {
         sp = &block->block_states[(j + 1) + (i + 1) * (block->size.x + 2)];
         if (block->get_state(Sigma, i, j) != 0) {
-          bit = (sp[0] >> 5) & 1;
+          bit = (sp[0] >> SHIFT_SMAG) & 1;
           MagRef.emitMRBit(bit);
           block->modify_state(refinement_indicator, 1, i, j);
         }
@@ -1010,7 +1010,7 @@ void ht_magref_encode(j2k_codeblock *block, MR_enc &MagRef) {
     for (uint16_t i = i_start; i < i_start + height; i++) {
       sp = &block->block_states[(j + 1) + (i + 1) * (block->size.x + 2)];
       if (block->get_state(Sigma, i, j) != 0) {
-        bit = (sp[0] >> 5) & 1;
+        bit = (sp[0] >> SHIFT_SMAG) & 1;
         MagRef.emitMRBit(bit);
         block->modify_state(refinement_indicator, 1, i, j);
       }
