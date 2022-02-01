@@ -34,6 +34,8 @@
 #define SHIFT_REF 3     // HTJ2K only
 #define SHIFT_SCAN 4    // HTJ2K only
 #define SHIFT_P 3       // J2K only
+#define SHIFT_SMAG 5    // HTJ2K enc only; used for HT SigProp and MagRef
+#define SHIFT_SSGN 6    // HTJ2K enc only; used for HT SigProp
 
 // getters
 inline uint8_t Sigma(uint8_t &data) { return (data >> SHIFT_SIGMA) & 1; }

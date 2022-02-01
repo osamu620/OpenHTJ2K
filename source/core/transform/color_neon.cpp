@@ -46,17 +46,14 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     float32x4_t a1 = vdupq_n_f32(ALPHA_G);
     float32x4_t a2 = vdupq_n_f32(ALPHA_B);
 
-    float32x4_t f32x4_Y = f32x4_R * a0 + f32x4_G * a1 + f32x4_B * a2;
-
-    a0                   = vdupq_n_f32(1.0 / CB_FACT_B);
-    float32x4_t f32x4_Cb = vmulq_f32(a0, vsubq_f32(f32x4_B, f32x4_Y));
-    a1                   = vdupq_n_f32(1.0 / CR_FACT_R);
-    float32x4_t f32x4_Cr = vmulq_f32(a1, vsubq_f32(f32x4_R, f32x4_Y));
+    float32x4_t f32x4_Y  = f32x4_R * a0 + f32x4_G * a1 + f32x4_B * a2;
+    float32x4_t f32x4_Cb = vmulq_n_f32(vsubq_f32(f32x4_B, f32x4_Y), 1.0 / CB_FACT_B);
+    float32x4_t f32x4_Cr = vmulq_n_f32(vsubq_f32(f32x4_R, f32x4_Y), 1.0 / CR_FACT_R);
 
     // TODO: need to consider precision and setting FPSCR register value
-    vst1q_s32(sp0, vcvtq_s32_f32(f32x4_Y));
-    vst1q_s32(sp1, vcvtq_s32_f32(f32x4_Cb));
-    vst1q_s32(sp2, vcvtq_s32_f32(f32x4_Cr));
+    vst1q_s32(sp0, vcvtnq_s32_f32(f32x4_Y));
+    vst1q_s32(sp1, vcvtnq_s32_f32(f32x4_Cb));
+    vst1q_s32(sp2, vcvtnq_s32_f32(f32x4_Cr));
     sp0 += 4;
     sp1 += 4;
     sp2 += 4;
@@ -88,16 +85,11 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     float32x4_t f32x4_Cb = vcvtq_f32_s32(s32x4_Cb);
     float32x4_t f32x4_Cr = vcvtq_f32_s32(s32x4_Cr);
 
-    float32x4_t a0 = vdupq_n_f32(CR_FACT_R);
-    float32x4_t a1 = vdupq_n_f32(CB_FACT_B);
-    float32x4_t a2 = vdupq_n_f32(CR_FACT_G);
-    float32x4_t a3 = vdupq_n_f32(CB_FACT_G);
-
     // TODO: need to consider precision and setting FPSCR register value
-    vst1q_s32(sp0, vcvtq_s32_f32(vaddq_f32(f32x4_Y, vmulq_f32(a0, f32x4_Cr))));
-    vst1q_s32(sp2, vcvtq_s32_f32(vaddq_f32(f32x4_Y, vmulq_f32(a1, f32x4_Cb))));
-    vst1q_s32(sp1, vcvtq_s32_f32(
-                       vsubq_f32(f32x4_Y, vaddq_f32(vmulq_f32(a2, f32x4_Cr), vmulq_f32(a3, f32x4_Cb)))));
+    vst1q_s32(sp0, vcvtnq_s32_f32(vaddq_f32(f32x4_Y, vmulq_n_f32(f32x4_Cr, CR_FACT_R))));
+    vst1q_s32(sp2, vcvtnq_s32_f32(vaddq_f32(f32x4_Y, vmulq_n_f32(f32x4_Cb, CB_FACT_B))));
+    vst1q_s32(sp1, vcvtnq_s32_f32(vsubq_f32(f32x4_Y, vaddq_f32(vmulq_n_f32(f32x4_Cr, CR_FACT_G),
+                                                               vmulq_n_f32(f32x4_Cb, CB_FACT_G)))));
     sp0 += 4;
     sp1 += 4;
     sp2 += 4;
