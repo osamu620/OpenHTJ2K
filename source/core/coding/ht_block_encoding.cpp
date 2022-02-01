@@ -909,7 +909,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
  * HT sigprop encoding
  *******************************************************************************/
 auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const uint16_t i_start,
-                                const uint16_t j_start, const uint16_t width, const uint16_t height) {
+                                    const uint16_t j_start, const uint16_t width, const uint16_t height) {
   uint8_t *sp;
   uint8_t causal_cond = 0;
   uint8_t bit;
@@ -1053,7 +1053,6 @@ int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept {
       block->num_ZBP -= (block->refsegment);
       block->set_compressed_data(Dref, HTMagRefLength);
     }
-
     //    // debugging
     //    printf("SP length = %d\n", SigProp.get_length());
     //    printf("MR length = %d\n", MagRef.get_length());
@@ -1062,6 +1061,6 @@ int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept {
     //      printf("%02X ", Dref[i]);
     //    }
     //    printf("\n");
-    return EXIT_SUCCESS;
   }
+  return EXIT_SUCCESS;
 }

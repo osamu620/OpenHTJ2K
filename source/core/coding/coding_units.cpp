@@ -2548,12 +2548,23 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
     if (downshift < 0) {
       printf("WARNING: sample precision over 13 bit/pixel is not supported.\n");
     }
-    int16_t offset = (1 << downshift) >> 1;
-    for (uint32_t n = 0; n < num_tc_samples; ++n) {
-      sp[n] = (sp[n] + offset) >> downshift;
-      sp[n] += DC_OFFSET;
-      sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-      sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+    // tentative workaround for negative downshift value
+    // TODO: fix this
+    int16_t offset = (downshift < 0) ? (1 << -downshift) >> 1 : (1 << downshift) >> 1;
+    if (downshift < 0) {
+      for (uint32_t n = 0; n < num_tc_samples; ++n) {
+        sp[n] = (sp[n] + offset) << -downshift;
+        sp[n] += DC_OFFSET;
+        sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
+        sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+      }
+    } else {
+      for (uint32_t n = 0; n < num_tc_samples; ++n) {
+        sp[n] = (sp[n] + offset) >> downshift;
+        sp[n] += DC_OFFSET;
+        sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
+        sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+      }
     }
   }
 }
