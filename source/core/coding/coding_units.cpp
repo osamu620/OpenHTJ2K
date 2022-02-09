@@ -81,8 +81,8 @@ static void find_child_ranges(float *child_ranges, uint8_t &normalizing_upshift,
   }
   // constants
   constexpr float K         = 1.230174104914001;
-  constexpr float low_gain  = 1.0 / K;
-  constexpr float high_gain = K / 2;
+  constexpr float low_gain  = 1.0f / K;
+  constexpr float high_gain = K / 2.0f;
 
   // initialization
   const bool unit_width  = (u0 == u1 - 1);
@@ -127,40 +127,16 @@ static void find_child_ranges(float *child_ranges, uint8_t &normalizing_upshift,
     }
   }
 
-  float overflow_limit = 1.0 * (1 << (16 - 13));
-  while (bibo_max > 0.95 * overflow_limit) {
+  float overflow_limit = 1.0f * (1 << (16 - FRACBITS));
+  while (bibo_max > 0.95f * overflow_limit) {
     normalizing_upshift++;
     for (uint8_t b = 0; b < 4; ++b) {
-      child_ranges[b] *= 0.5;
+      child_ranges[b] *= 0.5f;
     }
-    bibo_max *= 0.5;
+    bibo_max *= 0.5f;
   }
   normalization = child_ranges[BAND_LL];
 }
-
-float band_nominal_ranges[32][4] = {
-    {0.756664, 1.000000, 1.000000, 1.321590}, {1.145081, 1.513328, 1.513328, 2.000000},
-    {0.866442, 1.145081, 1.145081, 1.513328}, {0.655606, 0.866442, 0.866442, 1.145081},
-    {0.992147, 1.311211, 1.311211, 1.732884}, {0.750722, 0.992147, 0.992147, 1.311211},
-    {1.136088, 1.501443, 1.501443, 1.984293}, {0.859637, 1.136088, 1.136088, 1.501443},
-    {0.650457, 0.859637, 0.859637, 1.136088}, {0.984355, 1.300914, 1.300914, 1.719275},
-    {0.744826, 0.984355, 0.984355, 1.300914}, {1.127166, 1.489652, 1.489652, 1.968710},
-    {0.852886, 1.127166, 1.127166, 1.489652}, {1.290697, 1.705773, 1.705773, 2.254332},
-    {0.976624, 1.290697, 1.290697, 1.705773}, {0.738977, 0.976624, 0.976624, 1.290697},
-    {1.118314, 1.477953, 1.477953, 1.953248}, {0.846188, 1.118314, 1.118314, 1.477953},
-    {1.280561, 1.692376, 1.692376, 2.236628}, {0.968954, 1.280561, 1.280561, 1.692376},
-    {0.733173, 0.968954, 0.968954, 1.280561}, {1.109531, 1.466346, 1.466346, 1.937909},
-    {0.839543, 1.109531, 1.109531, 1.466346}, {1.270504, 1.679085, 1.679085, 2.219063},
-    {0.961345, 1.270504, 1.270504, 1.679085}, {0.727415, 0.961345, 0.961345, 1.270504},
-    {1.100818, 1.454830, 1.454830, 1.922689}, {0.832949, 1.100818, 1.100818, 1.454830},
-    {1.260526, 1.665899, 1.665899, 2.201636}, {0.953795, 1.260526, 1.260526, 1.665899},
-    {0.721702, 0.953795, 0.953795, 1.260526}, {1.092173, 1.443405, 1.443405, 1.907590}};
-
-uint8_t band_normalizing_upshift[32] = {1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 1,
-                                        0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0};
-
-uint8_t normalizing_upshift[32] = {0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1,
-                                   1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1};
 
 /********************************************************************************
  * j2k_codeblock
@@ -1000,8 +976,8 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
                              ceil_int(pos1.y - yob[subband[i]->orientation], sr));
     this->pband[i] = std::make_unique<j2k_precinct_subband>(
         subband[i]->orientation, subband[i]->M_b, subband[i]->R_b, subband[i]->transformation,
-        subband[i]->delta * subband[i]->nominal_range, subband[i]->i_samples, subband[i]->pos0,
-        subband[i]->pos1, pbpos0, pbpos1, num_layers, codeblock_size, Cmodes);
+        subband[i]->delta, subband[i]->i_samples, subband[i]->pos0, subband[i]->pos1, pbpos0, pbpos1,
+        num_layers, codeblock_size, Cmodes);
   }
 }
 
@@ -1051,17 +1027,11 @@ void j2k_subband::quantize() {
   if (this->transformation) {
     return;
   }
-  // Define scaling values for lossy transformation.
-  // The value for LL should be 1.0 because LL bands should not be quantized except for the lowest LL.
-  // Those LL bands which are not quantized are scaled in j2k_resolution::scale() in j2k_tile::encode()
-  constexpr float K     = 1.2301741 / 2;
-  constexpr float K1    = 0.8128931;
-  constexpr float KK[4] = {1.0, K * K1, K1 * K, K * K};
-
   uint32_t length = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
-  float fscale    = static_cast<float>(1 << this->R_b) / this->delta;
-  // if HL or LH or HH, scaling values should be included
-  fscale *= KK[this->orientation];
+  // The last two steps of the lifting version of 9x7 DWT filter are included as nominal_range.
+  // The delta is obtained by a step-size * nominal_range.
+  // Thus, the following fscale is taking the nominal range into account.
+  float fscale = 1.0f / this->delta;
   fscale /= (1 << (FRACBITS));
   for (uint32_t n = 0; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
@@ -1098,20 +1068,9 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
       i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
       f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
       memset(i_samples, 0, sizeof(sprec_t) * num_samples);
-#if defined(__AVX2__)
-      __m256 mZero = _mm256_setzero_ps();
-      for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_F32); n += SIMD_LEN_F32) {
-        _mm256_store_ps(f_samples + n, mZero);
-      }
-      for (uint32_t n = round_down(num_samples, SIMD_LEN_F32); n < num_samples; ++n) {
-        f_samples[n] = 0.0;
-      }
-#else
       for (uint32_t n = 0; n < num_samples; ++n) {
         f_samples[n] = 0.0;
       }
-#endif
-
     } else {
       i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
       f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
@@ -1148,9 +1107,7 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
                            ceil_int(p1.y - (1 << (nb_1)) * yob[b], 1 << nb));
 
     // nominal range does not have any effect to lossless path and LL(lowest) in lossy path
-#ifndef BIBO
-    nominal_range = 1.0;
-#endif
+    nominal_range = this->child_ranges[b];
     if (transformation == 1) {
       // lossless
       epsilon_b = exponents[3 * (NL - nb) + b];
@@ -1171,11 +1128,10 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       }
       M_b   = epsilon_b + num_guard_bits - 1;
       R_b   = bitdepth + gain_b[b];
-      delta = (static_cast<float>(1 << (((int32_t)R_b))) / (static_cast<float>(1 << epsilon_b)))
+      delta = (1.0f / (static_cast<float>(1 << epsilon_b)))
               * (1.0f + (static_cast<float>(mantissa_b)) / (static_cast<float>(1 << 11)));
-#ifndef BIBO
-      nominal_range = band_nominal_ranges[nb_1][b];
-#endif
+      // delta, which is quantization step-size, is scaled by nominal-range of this band
+      delta *= nominal_range;
     }
     subbands[i] = std::make_unique<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b,
                                                 M_b, delta, nominal_range, i_samples, f_samples);
@@ -1246,21 +1202,10 @@ void j2k_resolution::scale() {
   if (this->subbands[0]->transformation) {
     return;
   }
-  constexpr float K     = 1.2301741 / 2;
-  constexpr float K1    = 0.8128931;
-  constexpr float KK[4] = {K1 * K1, K * K1, K1 * K, K * K};
-  uint32_t length       = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
+  uint32_t length = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
   // TODO: The following code works correctly, but needs to be improved for speed
-  float fscale      = KK[0];
-  int32_t precision = 1 << (sizeof(sprec_t) * 8 - 1);
   for (uint32_t n = 0; n < length; ++n) {
-    sprec_t sign = this->i_samples[n] & precision;
-    float fval   = fabs(static_cast<float>(this->i_samples[n]));
-    fval *= fscale;
-    this->i_samples[n] = static_cast<sprec_t>(fval + 0.5);
-    if (sign) {
-      this->i_samples[n] *= -1;
-    }
+    this->i_samples[n] >>= this->normalizing_downshift;
   }
 }
 
@@ -1335,6 +1280,7 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
   index = c;
   // copy both coding and quantization styles from COD or tile-part COD
   NL                 = tile->NL;
+  reduce_NL          = tile->reduce_NL;
   codeblock_size     = tile->codeblock_size;
   Cmodes             = tile->Cmodes;
   transformation     = tile->transformation;
@@ -1480,32 +1426,31 @@ uint8_t j2k_tile_component::get_ROIshift() const { return this->ROIshift; }
 j2k_resolution *j2k_tile_component::access_resolution(uint8_t r) { return this->resolution[r].get(); }
 
 void j2k_tile_component::create_resolutions(uint16_t numlayers) {
-  resolution =
-      std::make_unique<std::unique_ptr<j2k_resolution>[]>(NL + 1);  // new j2k_resolution *[NL + 1];
+  resolution = std::make_unique<std::unique_ptr<j2k_resolution>[]>(NL + 1);
 
-  // float tmp_ranges[4] = {1.0, 1.0, 1.0, 1.0};
-  // float child_ranges[32][4];
-  // float normalization       = 1.0;
-  // uint8_t normalizing_shift = 0;
-  // uint8_t nb;
-  // uint8_t nshift[32];
+  float tmp_ranges[4]       = {1.0, 1.0, 1.0, 1.0};
+  float child_ranges[32][4] = {0};
+  float normalization       = 1.0;
+  uint8_t normalizing_shift = 0;
+  uint8_t nb;
+  uint8_t nshift[32] = {0};
 
-  // for (uint8_t r = 1; r <= NL; r++) {
-  //   uint64_t d = 1 << (NL - r);
-  //   const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
-  //                             static_cast<uint32_t>(ceil_int(pos0.y, d)));
-  //   const element_siz respos1(static_cast<uint32_t>(ceil_int(pos1.x, d)),
-  //                             static_cast<uint32_t>(ceil_int(pos1.y, d)));
-  //   nb = NL - r + 1;
-  //   find_child_ranges(tmp_ranges, normalizing_shift, normalization, nb, respos0.x, respos1.x,
-  //                     respos0.y, respos1.y);
-  //   for (uint8_t b = 0; b < 4; ++b) {
-  //     child_ranges[nb][b] = tmp_ranges[b];
-  //   }
-  // }
-  // for (uint8_t b = 0; b < 4; ++b) {
-  //   child_ranges[0][b] = tmp_ranges[b];
-  // }
+  for (uint8_t r = NL - reduce_NL; r > 0; --r) {
+    uint64_t d = 1 << (NL - r);
+    const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
+                              static_cast<uint32_t>(ceil_int(pos0.y, d)));
+    const element_siz respos1(static_cast<uint32_t>(ceil_int(pos1.x, d)),
+                              static_cast<uint32_t>(ceil_int(pos1.y, d)));
+    nb = NL - r + 1;
+    find_child_ranges(tmp_ranges, normalizing_shift, normalization, nb, respos0.x, respos1.x, respos0.y,
+                      respos1.y);
+    nshift[r] = normalizing_shift;
+    for (uint8_t b = 0; b < 4; ++b) {
+      child_ranges[r][b] = tmp_ranges[b];
+    }
+  }
+  nshift[0]          = 0;
+  child_ranges[0][0] = tmp_ranges[0];
 
   for (uint8_t r = 0; r <= NL; r++) {
     uint64_t d = 1 << (NL - r);
@@ -1519,56 +1464,14 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
     const uint32_t nph = (respos1.y > respos0.y) ? ceil_int(respos1.y, PP.y) - respos0.y / PP.y : 0;
 
     resolution[r] = std::make_unique<j2k_resolution>(r, respos0, respos1, npw, nph);
-    // resolution[r]->set_nominal_ranges(child_ranges[r]);
-    resolution[r]->normalizing_upshift = normalizing_upshift[NL - r];
+    resolution[r]->set_nominal_ranges(child_ranges[r]);
+    resolution[r]->normalizing_downshift = nshift[r];
+    resolution[r]->normalizing_upshift   = nshift[r + 1];
     resolution[r]->create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
                                    this->mantissas, this->num_guard_bits, this->quantization_style,
                                    this->bitdepth);
     resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
   }
-
-#ifdef BIBO
-  j2k_subband *cb;
-  element_siz p0, p1;
-  float child_ranges[4];
-  uint8_t normalizing_upshift;
-  float normalization = 1.0;
-  // uint8_t r, lev;
-  for (uint8_t r = NL, lev = 0; r > 0; --r, ++lev) {
-    p0 = resolution[r]->get_pos0();
-    p1 = resolution[r]->get_pos1();
-    // if (p0.x == p1.x || p0.y == p1.y) {
-    //   continue;
-    // }
-    // printf("u0 = %d, u1 = %d, v0 = %d, v1 = %d\n", p0.x, p1.x, p0.y, p1.y);
-    find_child_ranges(child_ranges, normalizing_upshift, normalization, lev, this->NL, p0.x, p1.x, p0.y,
-                      p1.y);
-    // printf("r = %d, lut = %dm calc = %d\n", r, resolution[r]->normalizing_upshift,
-    //        normalizing_upshift);
-    // printf("r = %d\n", resolution[r]->get_index());
-    for (uint8_t i = 0; i < resolution[r]->num_bands; ++i) {
-      cb        = resolution[r]->access_subband(i);
-      cb->range = child_ranges[cb->orientation];
-      // printf("[%d] = %f\n", i, cb->range);
-    }
-    // printf("\n");
-  }
-
-  for (uint8_t i = 0; i < resolution[0]->num_bands; ++i) {
-    cb        = resolution[0]->access_subband(i);
-    cb->range = child_ranges[cb->orientation];
-
-    // resolution[0]->normalizing_upshift = 0;  // normalizing_upshift;
-    // printf("r = %d, lut = %dm calc = %d\n", 0, resolution[0]->normalizing_upshift,
-    //        normalizing_upshift);
-    // printf("[%d] = %f\n", i, cb->range);
-  }
-  // printf("\n");
-
-  for (uint8_t r = 0; r <= NL; ++r) {
-    resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
-  }
-#endif
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
@@ -2698,12 +2601,6 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
       cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
     }
     //#endif
-    //    // experimental floating point code
-    //    if (transformation == 0) {
-    //      for (uint32_t n = 0; n < (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y); ++n) {
-    //        cr->f_samples[n] = static_cast<float>(cr->i_samples[n]);
-    //      }
-    //    }
 
     auto t1_encode = [pool, &results](j2k_resolution *cr, uint8_t ROIshift) {
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
@@ -2739,17 +2636,12 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
 
       // wavelet
       if (u1 != u0 && v1 != v0) {
-        // if (transformation) {
+        cr->scale();
         fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
                          v0, v1, transformation);
-        //        fdwt_2d_sr_float(cr->f_samples, ncr, HL, LH, HH, u0, u1, v0, v1, transformation);
-        ncr->scale();
         HL->quantize();
         LH->quantize();
         HH->quantize();
-        //        HL->quantize_float();
-        //        LH->quantize_float();
-        //        HH->quantize_float();
       }
       // encode codeblocks in HL or LH or HH
       t1_encode(cr, ROIshift);
@@ -2760,7 +2652,6 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
 
     j2k_subband *LL = cr->access_subband(0);
     LL->quantize();
-    //    LL->quantize_float();
     // encode codeblocks in LL
     t1_encode(cr, ROIshift);
   }  // end of component loop
@@ -2777,32 +2668,6 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     element_siz top_left         = tcomp[c].get_pos0();
     element_siz bottom_right     = tcomp[c].get_pos1();
     j2k_resolution *cr           = tcomp[c].access_resolution(NL);
-
-    int32_t *const sp0            = tcomp[c].get_sample_address(0, 0);
-    const uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
-    // TODO: enc_init vectorize code
-    //#if defined(__AVX2__)
-    //    __m256i offsets = _mm256_set_epi32(7, 6, 3, 2, 5, 4, 1, 0);
-    //    for (uint32_t n = 0; n < round_down(num_tc_samples, 16); n += 16) {
-    //      __m256i s0a = _mm256_loadu_si256((__m256i *)(sp0 + n));
-    //      __m256i s0b = _mm256_loadu_si256((__m256i *)(sp0 + n + 8));
-    //      s0a         = _mm256_permutevar8x32_epi32(_mm256_packs_epi32(s0a, s0b), offsets);
-    //      _mm256_storeu_si256((__m256i *)(cr->i_samples + n), s0a);
-    //    }
-    //    for (uint32_t n = round_down(num_tc_samples, 16); n < num_tc_samples; ++n) {
-    //      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
-    //    }
-    //#else
-    for (uint32_t n = 0; n < num_tc_samples; ++n) {
-      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
-    }
-    //#endif
-    //    // experimental floating point code
-    //    if (transformation == 0) {
-    //      for (uint32_t n = 0; n < (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y); ++n) {
-    //        cr->f_samples[n] = static_cast<float>(cr->i_samples[n]);
-    //      }
-    //    }
 
     auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr,
                                uint8_t ROIshift) {
@@ -2846,9 +2711,8 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
   }  // end of component loop
 
   tile_part[0]->set_tile_index(this->index);
-  tile_part[0]->set_tile_part_index(0);  // currently ony a single tile-part is supported
-  // length of tile-part will be written in j2k_tile::write_packets()
-  // this->tile_part[0]->header->SOT.set_tile_part_length(this->length);
+  tile_part[0]->set_tile_part_index(0);  // currently, only a single tile-part is supported
+  // Length of tile-part will be written in j2k_tile::write_packets()
 
   return nullptr;  // fake
 }
