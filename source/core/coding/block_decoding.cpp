@@ -469,7 +469,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   sprec_t *dst = nullptr;
   int32_t sign;
   int16_t QF15;
-  float fscale = block->stepsize / (1 << block->R_b);
+  float fscale = block->stepsize;
   fscale *= (1 << FRACBITS);
   if (M_b <= 31) {
     fscale /= (1 << (31 - M_b));

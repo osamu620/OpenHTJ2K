@@ -33,8 +33,10 @@ endif()
 
 if (APPLE)
 	if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^arm64")
-		message(STATUS "add -mcpu=apple-m1")
-		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=apple-m1 -mtune=native")
+		if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+			message(STATUS "add -mcpu=apple-m1")
+			set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=apple-m1 -mtune=native")
+		endif()
 	endif()
 endif()
 

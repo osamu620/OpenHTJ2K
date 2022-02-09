@@ -103,13 +103,10 @@ static void idwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, cons
 
   if (u0 == u1 - 1) {
     // one sample case
-    const float K  = (transformation) ? 1 : 1.2301741;  // 04914001;
-    const float K1 = (transformation) ? 1 : 0.8128931;  // 066115961;
     for (uint32_t row = 0; row < v1 - v0; ++row) {
-      if (u0 % 2 == 0) {
-        out[row] = (transformation) ? in[row] : (sprec_t)roundf(static_cast<float>(in[row]) * K1);
-      } else {
-        out[row] = (transformation) ? in[row] >> 1 : (sprec_t)roundf(static_cast<float>(in[row]) * 0.5 * K);
+      out[row] = in[row];
+      if (u0 % 2 != 0) {
+        out[row] >>= (transformation) ? 1 : 0;
       }
     }
   } else {
@@ -133,13 +130,9 @@ static void idwt_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1,
   const int32_t bottom               = num_pse_i1[v1 % 2][transformation];
   if (v0 == v1 - 1) {
     // one sample case
-    const float K  = (transformation) ? 1 : 1.2301741;  // 04914001;
-    const float K1 = (transformation) ? 1 : 0.8128931;  // 066115961;
-    for (uint32_t col = 0; col < u1 - u0; ++col) {
-      if (v0 % 2 == 0) {
-        in[col] = (transformation) ? in[col] : (sprec_t)roundf(static_cast<float>(in[col]) * K1);
-      } else {
-        in[col] = (transformation) ? in[col] >> 1 : (sprec_t)roundf(static_cast<float>(in[col]) * 0.5 * K);
+    if (transformation) {
+      for (uint32_t col = 0; col < u1 - u0; ++col) {
+        in[col] >>= (v0 % 2 == 0) ? 0 : 1;
       }
     }
   } else {

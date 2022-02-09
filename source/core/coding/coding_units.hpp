@@ -240,7 +240,7 @@ class j2k_resolution : public j2k_region {
   std::unique_ptr<std::unique_ptr<j2k_precinct>[]> precincts;
   // unique pointer to subbands
   std::unique_ptr<std::unique_ptr<j2k_subband>[]> subbands;
-  // subband nominal ranges
+  // nominal ranges of subbands
   float child_ranges[4];
 
  public:
@@ -252,10 +252,11 @@ class j2k_resolution : public j2k_region {
   const uint32_t nph;
   // a resolution is empty if it has no precincts
   const bool is_empty;
-  //
+  // post-shift value for inverse DWT
   uint8_t normalizing_upshift;
+  // pre-shift value for forward DWT
+  uint8_t normalizing_downshift;
   sprec_t *i_samples;
-  // int32_t *iw_samples;
   float *f_samples;
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
                  const uint32_t &nph);

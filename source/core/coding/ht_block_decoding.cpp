@@ -955,8 +955,8 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
 }
 
 auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const uint16_t i_start,
-                                const uint16_t j_start, const uint16_t width, const uint16_t height,
-                                const uint16_t dum_stride, const uint8_t &pLSB) {
+                                    const uint16_t j_start, const uint16_t width, const uint16_t height,
+                                    const uint16_t dum_stride, const uint8_t &pLSB) {
   int32_t *sp;
   uint8_t causal_cond = 0;
   uint8_t bit;
@@ -1182,7 +1182,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     sprec_t *dst = nullptr;
     int32_t sign;
     int16_t QF15;
-    float fscale = block->stepsize / (1 << block->R_b);
+    float fscale = block->stepsize;
     fscale *= (1 << FRACBITS);
     if (M_b <= 31) {
       fscale /= (1 << (31 - M_b));
