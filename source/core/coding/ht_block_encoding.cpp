@@ -47,7 +47,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   const uint32_t height = this->size.y;
   const uint32_t width  = this->size.x;
   const uint32_t stride = this->band_stride;
-  const int32_t pshift  = 1;
+  const int32_t pshift  = (refsegment) ? 1 : 0;
   const int32_t pLSB    = (1 << (pshift - 1));
 
   for (uint16_t i = 0; i < height; ++i) {
@@ -61,7 +61,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       block_states[block_index] |= (sign >> 31) << SHIFT_SSGN;
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
-      temp >>= (refsegment)*pshift;
+      temp >>= pshift;
       if (temp) {
         or_val |= 1;
         block_states[block_index] |= 1;
