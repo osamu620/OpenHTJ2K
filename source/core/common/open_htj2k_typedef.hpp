@@ -37,8 +37,8 @@
 constexpr int32_t FRACBITS = 13;
 
 // for 12 bit or higher sample precision, sprec_t == int16_t will lead overflow at quantization
-typedef int32_t sprec_t;
-typedef uint32_t usprec_t;
+typedef int16_t sprec_t;
+typedef uint16_t usprec_t;
 
 #define SIMD_LEN_F32 8
 #define SIMD_LEN_I32 8
