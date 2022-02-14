@@ -47,6 +47,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 	endif()
 	set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} -O2 -g")
+	add_compile_options (-fdiagnostics-color=always)
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -56,6 +57,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 	endif()
 	set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} -O2 -g")
+	add_compile_options (-fcolor-diagnostics)
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
@@ -70,17 +72,17 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway EXCLUDE_F
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-
-include_directories( source/core/common
-					 source/core/codestream
-					 source/core/coding
-					 source/core/transform
-					 source/core/interface
-					 source/core/jph
-					 ${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway)
-
 #### Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
+target_include_directories(open_htj2k
+		PRIVATE
+		source/core/common
+		source/core/codestream
+		source/core/coding
+		source/core/transform
+		source/core/interface
+		source/core/jph
+		${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway)
 set_target_properties(open_htj2k PROPERTIES OUTPUT_NAME $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
 target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
 
