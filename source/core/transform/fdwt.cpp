@@ -32,8 +32,9 @@
 #include "utils.hpp"
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-auto fdwt_1d_filtr_irrev97_fixed_neon = [](sprec_t *X, const int32_t left, const int32_t right,
-                                           const uint32_t u_i0, const uint32_t u_i1) {
+// vectorized irreversible FDWT for ARM NEON
+auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
+                                      const uint32_t u_i0, const uint32_t u_i1) {
   const auto i0       = static_cast<const int32_t>(u_i0);
   const auto i1       = static_cast<const int32_t>(u_i1);
   const int32_t start = ceil_int(i0, 2);
@@ -137,7 +138,58 @@ auto fdwt_1d_filtr_irrev97_fixed_neon = [](sprec_t *X, const int32_t left, const
     X[n] += (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
   }
 };
-#endif
+
+// reversible FDWT
+auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
+                                    const uint32_t u_i0, const uint32_t u_i1) {
+  const auto i0       = static_cast<const int32_t>(u_i0);
+  const auto i1       = static_cast<const int32_t>(u_i1);
+  const int32_t start = ceil_int(i0, 2);
+  const int32_t stop  = ceil_int(i1, 2);
+
+  const int32_t offset = left + i0 % 2;
+  int32_t simdlen      = stop - (start - 1);
+  for (int32_t n = -2 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+    auto xl0   = vld2q_s16(X + n);
+    auto xl1   = vld2q_s16(X + n + 2);
+    auto x0    = vreinterpretq_s32_s16(xl0.val[0]);
+    auto x0l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x0)));
+    auto x0h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x0)));
+    auto x2    = vreinterpretq_s32_s16(xl1.val[0]);
+    auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x2)));
+    auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x2)));
+    auto xoutl = (x0l + x2l) >> 1;
+    auto xouth = (x0h + x2h) >> 1;
+    xl0.val[1] -= vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+    vst2q_s16(X + n, xl0);
+  }
+  for (int32_t n = -2 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; ++i, n += 2) {
+    int32_t sum = X[n];
+    sum += X[n + 2];
+    X[n + 1] -= (sum >> 1);
+  }
+  simdlen = stop - start;
+  for (int32_t n = 0 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+    auto xl0   = vld2q_s16(X + n - 1);
+    auto xl1   = vld2q_s16(X + n + 1);
+    auto x0    = vreinterpretq_s32_s16(xl0.val[0]);
+    auto x0l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x0)));
+    auto x0h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x0)));
+    auto x2    = vreinterpretq_s32_s16(xl1.val[0]);
+    auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x2)));
+    auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x2)));
+    auto xoutl = (x0l + x2l + 2) >> 2;
+    auto xouth = (x0h + x2h + 2) >> 2;
+    xl0.val[1] += vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+    vst2q_s16(X + n - 1, xl0);
+  }
+  for (int32_t n = 0 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; ++i, n += 2) {
+    int32_t sum = X[n - 1];
+    sum += X[n + 1];
+    X[n] += ((sum + 2) >> 2);
+  }
+};
+#else
 // irreversible FDWT
 auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1) {
@@ -189,13 +241,10 @@ auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_
     X[n] += ((sum + 2) >> 2);
   }
 };
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
-                                                          fdwt_1d_filtr_rev53_fixed};
-#else
+#endif
+
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed,
                                                           fdwt_1d_filtr_rev53_fixed};
-#endif
 
 // 1-dimensional FDWT
 static inline void fdwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, sprec_t *out, const int32_t left,
