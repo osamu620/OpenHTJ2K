@@ -54,6 +54,54 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     sprec_t *const sp  = this->i_samples + i * stride;
     int32_t *const dp  = this->sample_buf.get() + i * width;
     size_t block_index = (i + 1) * (size.x + 2) + 1;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    // vetorized for ARM NEON
+    uint16x8_t vpLSB = vdupq_n_u16((uint16_t)pLSB);
+    int16x8_t vone   = vdupq_n_s16(1);
+    // simd
+    for (uint16_t j = 0; j < width - width % 8; j += 8) {
+      int16x8_t coeff16   = vld1q_s16(sp + j);
+      uint8x8_t vblkstate = vget_low_u8(vld1q_u8(block_states.get() + block_index));
+      uint16x8_t vsign    = vcltzq_s16(coeff16) >> 15;
+      uint8x8_t vsmag     = vmovn_u16(vandq_s16(coeff16, vpLSB));
+      uint8x8_t vssgn     = vmovn_u16(vsign);
+      vblkstate |= vsmag << SHIFT_SMAG;
+      vblkstate |= vssgn << SHIFT_SSGN;
+      int16x8_t vabsmag = (vabsq_s16(coeff16) & 0x7FFF) >> pshift;
+      or_val |= vaddvq_s16(vabsmag);
+      int16x8_t vmasked_one = (vceqzq_s16(vabsmag) ^ 0xFFFF) & vone;
+      vblkstate |= vmovn_u16(vmasked_one);
+      vst1_u8(block_states.get() + block_index, vblkstate);
+      vabsmag -= vmasked_one;
+      vabsmag <<= vmasked_one;
+      vabsmag += vsign;
+      int32x4_t coeff32     = vreinterpretq_s32_s16(vabsmag);
+      int32x4_t coeff32low  = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(coeff32)));
+      int32x4_t coeff32high = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(coeff32)));
+      vst1q_s32(dp + j, coeff32low);
+      vst1q_s32(dp + j + 4, coeff32high);
+      block_index += 8;
+    }
+    // remaining
+    for (uint16_t j = width - width % 8; j < width; ++j) {
+      int32_t temp  = sp[j];
+      uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+      block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
+      block_states[block_index] |= (sign >> 31) << SHIFT_SSGN;
+      temp = (temp < 0) ? -temp : temp;
+      temp &= 0x7FFFFFFF;
+      temp >>= pshift;
+      if (temp) {
+        or_val |= 1;
+        block_states[block_index] |= 1;
+        temp--;
+        temp <<= 1;
+        temp += sign >> 31;
+        dp[j] = temp;
+      }
+      block_index++;
+    }
+#else
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
@@ -75,6 +123,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       }
       block_index++;
     }
+#endif
   }
 }
 
