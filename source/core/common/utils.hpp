@@ -35,12 +35,9 @@
 #define round_down(x, n) ((x) & (-n))
 #define ceil_int(a, b) ((a) + ((b)-1)) / (b)
 
-#if defined(__arm64__) || defined(__arm__) || defined(__aarch64__)
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_acle.h>
-  #if defined(__ARM_NEON__) || defined(__ARM_NEON)
-    #define OPENHTJ2K_ENABLE_ARM_NEON
-    #include <arm_neon.h>
-  #endif
+  #include <arm_neon.h>
 #elif defined(_MSC_VER) || defined(__MINGW64__)
   #include <intrin.h>
 #else
@@ -53,6 +50,10 @@ static inline size_t popcount32(uintmax_t num) {
   precision = __popcnt(static_cast<uint32_t>(num));
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
   precision = _popcnt32(num);
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  uint32x2_t val = vld1_dup_u32(&num);
+  uint8_t a      = vaddv_u8(vcnt_u8(vreinterpret_u8_u32(val)));
+  precision      = a >> 1;
 #else
   while (num != 0) {
     if (1 == (num & 1)) {
@@ -83,8 +84,8 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
 #elif defined(__AVX2__)
   y         = _lzcnt_u32(x);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
-  y      = __builtin_clz(x);
-#elif defined(__ARM_FEATURE_CLZ)
+  y              = __builtin_clz(x);
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   y = __builtin_clz(x);
 #else
   y = 31 - int_log2(x);
@@ -99,7 +100,7 @@ static inline void* aligned_mem_alloc(size_t size, size_t align) {
 #elif defined(_MSC_VER)
   result    = _aligned_malloc(size, align);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
-  result = __mingw_aligned_malloc(size, align);
+  result         = __mingw_aligned_malloc(size, align);
 #else
   if (posix_memalign(&result, align, size)) {
     result = nullptr;
