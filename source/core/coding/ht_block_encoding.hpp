@@ -195,25 +195,3 @@ class MR_enc {
   }
   [[nodiscard]] uint32_t get_length() const { return MAX_Lref - pos; }
 };
-
-int32_t termSPandMR(SP_enc &SP, MR_enc &MR) {
-  uint8_t SP_mask = 0xFF >> (8 - SP.bits);  // if SP_bits is 0, SP_mask = 0
-  SP_mask |= ((1 << SP.max) & 0x80);        // Auguments SP_mask to cover any stuff bit
-  uint8_t MR_mask = 0xFF >> (8 - MR.bits);  // if MR_bits is 0, MR_mask = 0
-  if ((SP_mask | MR_mask) == 0) {
-    // last SP byte cannot be 0xFF, since then SP_max would be 7
-    memmove(&SP.buf[SP.pos], &MR.buf[MR.pos + 1], MAX_Lref - MR.pos);
-    return SP.pos + MAX_Lref - MR.pos;
-  }
-  uint8_t fuse = SP.tmp | MR.tmp;
-  if ((((fuse ^ SP.tmp) & SP_mask) | ((fuse ^ MR.tmp) & MR_mask)) == 0) {
-    SP.buf[SP.pos] = fuse;  // fuse always < 0x80 here; no false marker risk
-  } else {
-    SP.buf[SP.pos] = SP.tmp;  // SP_tmp cannot be 0xFF
-    MR.buf[MR.pos] = MR.tmp;
-    MR.pos--;  // MR buf gorws reverse order
-  }
-  SP.pos++;
-  memmove(&SP.buf[SP.pos], &MR.buf[MR.pos + 1], MAX_Lref - MR.pos);
-  return SP.pos + MAX_Lref - MR.pos;
-}
