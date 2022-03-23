@@ -31,11 +31,9 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|Intel")
 	endif()
 endif()
 
-
 if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^arm64|^aarch64")
 	option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics " ON)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOPENHTJ2K_ENABLE_ARM_NEON")
-	message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
+	#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOPENHTJ2K_ENABLE_ARM_NEON")
 	if (APPLE)
 		if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 			message(STATUS "Added -mcpu=apple-m1")
@@ -84,7 +82,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 #### Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
-
+if (ENABLE_ARM_NEON)
+	message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
+	target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
+endif()
 target_include_directories(open_htj2k
 		PRIVATE
 		source/core/common
