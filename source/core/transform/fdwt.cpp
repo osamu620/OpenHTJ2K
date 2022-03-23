@@ -150,18 +150,21 @@ auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_
   const int32_t offset = left + i0 % 2;
   int32_t simdlen      = stop - (start - 1);
   for (int32_t n = -2 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
-    auto xl0   = vld2q_s16(X + n);
-    auto xl1   = vld2q_s16(X + n + 2);
-    auto x0    = vreinterpretq_s32_s16(xl0.val[0]);
-    auto x0l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x0)));
-    auto x0h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x0)));
-    auto x2    = vreinterpretq_s32_s16(xl1.val[0]);
-    auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x2)));
-    auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x2)));
-    auto xoutl = (x0l + x2l) >> 1;
-    auto xouth = (x0h + x2h) >> 1;
-    xl0.val[1] -= vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+    auto xl0  = vld2q_s16(X + n);
+    auto xl1  = vld2q_s16(X + n + 2);
+    auto xout = vhaddq_s16(xl0.val[0], xl1.val[0]);
+    xl0.val[1] -= xout;
     vst2q_s16(X + n, xl0);
+    //    auto x0    = vreinterpretq_s32_s16(xl0.val[0]);
+    //    auto x0l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x0)));
+    //    auto x0h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x0)));
+    //    auto x2    = vreinterpretq_s32_s16(xl1.val[0]);
+    //    auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x2)));
+    //    auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x2)));
+    //    auto xoutl = (x0l + x2l) >> 1;
+    //    auto xouth = (x0h + x2h) >> 1;
+    //    xl0.val[1] -= vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+    //    vst2q_s16(X + n, xl0);
   }
   for (int32_t n = -2 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; ++i, n += 2) {
     int32_t sum = X[n];
@@ -170,18 +173,21 @@ auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_
   }
   simdlen = stop - start;
   for (int32_t n = 0 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
-    auto xl0   = vld2q_s16(X + n - 1);
-    auto xl1   = vld2q_s16(X + n + 1);
-    auto x0    = vreinterpretq_s32_s16(xl0.val[0]);
-    auto x0l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x0)));
-    auto x0h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x0)));
-    auto x2    = vreinterpretq_s32_s16(xl1.val[0]);
-    auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x2)));
-    auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x2)));
-    auto xoutl = (x0l + x2l + 2) >> 2;
-    auto xouth = (x0h + x2h + 2) >> 2;
-    xl0.val[1] += vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+    auto xl0  = vld2q_s16(X + n - 1);
+    auto xl1  = vld2q_s16(X + n + 1);
+    auto xout = (xl0.val[0] + xl1.val[0] + 2) >> 2;
+    xl0.val[1] += xout;
     vst2q_s16(X + n - 1, xl0);
+    //    auto x0    = vreinterpretq_s32_s16(xl0.val[0]);
+    //    auto x0l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x0)));
+    //    auto x0h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x0)));
+    //    auto x2    = vreinterpretq_s32_s16(xl1.val[0]);
+    //    auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x2)));
+    //    auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x2)));
+    //    auto xoutl = (x0l + x2l + 2) >> 2;
+    //    auto xouth = (x0h + x2h + 2) >> 2;
+    //    xl0.val[1] += vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+    //    vst2q_s16(X + n - 1, xl0);
   }
   for (int32_t n = 0 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; ++i, n += 2) {
     int32_t sum = X[n - 1];
