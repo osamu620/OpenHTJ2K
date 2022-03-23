@@ -1037,6 +1037,33 @@ void j2k_subband::quantize() {
   // Thus, the following fscale is taking the nominal range into account.
   float fscale = 1.0f / this->delta;
   fscale /= (1 << (FRACBITS));
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  for (uint32_t n = 0; n < length - length % 8; n += 8) {
+    auto isrc    = vld1q_s16(this->i_samples + n);
+    auto isgn    = vcltzq_s16(isrc) | 0x01;
+    auto isrc32  = vreinterpretq_s32_s16(isrc);
+    auto isrc32l = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(isrc32)));
+    auto isrc32h = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(isrc32)));
+    auto fsrcl   = vcvtq_f32_s32(isrc32l);
+    auto fsrch   = vcvtq_f32_s32(isrc32h);
+    fsrcl *= vld1q_dup_f32(&fscale);
+    fsrch *= vld1q_dup_f32(&fscale);
+    auto fsgnl = vcltzq_f32(fsrcl) | 0x01;
+    auto fsgnh = vcltzq_f32(fsrch) | 0x01;
+    auto imag  = vcombine_s16(vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrcl))),
+                              vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrch))));
+    vst1q_s16(this->i_samples + n, imag * isgn);
+  }
+  for (uint32_t n = length - length % 8; n < length; ++n) {
+    auto fval = static_cast<float>(this->i_samples[n]);
+    fval *= fscale;
+    // fval may exceed when sprec_t == int16_t
+    this->i_samples[n] = static_cast<sprec_t>(floorf(fabs(fval)));
+    if (fval < 0.0) {
+      this->i_samples[n] *= -1;
+    }
+  }
+#else
   for (uint32_t n = 0; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
@@ -1046,6 +1073,7 @@ void j2k_subband::quantize() {
       this->i_samples[n] *= -1;
     }
   }
+#endif
 }
 
 /********************************************************************************
@@ -1208,9 +1236,19 @@ void j2k_resolution::scale() {
   }
   uint32_t length = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
   // TODO: The following code works correctly, but needs to be improved for speed
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  for (uint32_t n = 0; n < length - length % 8; n += 8) {
+    auto isrc = vld1q_s16(this->i_samples + n);
+    vst1q_s16(this->i_samples + n, isrc >> this->normalizing_downshift);
+  }
+  for (uint32_t n = length - length % 8; n < length; ++n) {
+    this->i_samples[n] >>= this->normalizing_downshift;
+  }
+#else
   for (uint32_t n = 0; n < length; ++n) {
     this->i_samples[n] >>= this->normalizing_downshift;
   }
+#endif
 }
 
 /********************************************************************************
