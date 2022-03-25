@@ -366,6 +366,18 @@ void state_VLC_enc::emitVLCBits(uint16_t cwd, uint8_t len) {
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
+// the following two functions are taken from https://primenumber.hatenadiary.jp/entry/2016/12/13/011832
+inline __m256i bsr_256_32_cvtfloat_impl(__m256i x, int32_t sub) {
+  __m256i cvt_fl  = _mm256_castps_si256(_mm256_cvtepi32_ps(x));
+  __m256i shifted = _mm256_srli_epi32(cvt_fl, 23);
+  return _mm256_sub_epi32(shifted, _mm256_set1_epi32(sub));
+}
+inline __m256i bsr_256_32_cvtfloat(__m256i x) {
+  x              = _mm256_andnot_si256(_mm256_srli_epi32(x, 1), x);
+  __m256i result = bsr_256_32_cvtfloat_impl(x, 127);
+  result         = _mm256_or_si256(result, _mm256_srai_epi32(x, 31));
+  return _mm256_and_si256(result, _mm256_set1_epi32(0x0000001F));
+}
 auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
                        uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
                        uint8_t *const rho_q) {
@@ -395,6 +407,35 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   auto vsig1 = vmovl_u16(vget_high_u16(vmovl_u8(v_u8_out)));
   vst1q_s32(E_n, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[0], 1), 1) + 1)) * vsig0);
   vst1q_s32(E_n + 4, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[1], 1), 1) + 1)) * vsig1);
+#elif defined(__AVX2__)
+  const uint32_t QWx2 = block->size.x + block->size.x % 2;
+  const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
+  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1;
+  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1;
+  auto v_u8_0 = *((__m64 *)sp0);
+  auto v_u8_1 = *((__m64 *)sp1);
+  auto v_u8_zip = _mm_unpacklo_pi8(v_u8_0, v_u8_1);
+  auto vmask = _mm_set1_pi8(1);
+  auto v_u8_out = _mm_and_si64(v_u8_zip, vmask);
+  *((__m64 *)sigma_n) = v_u8_out;
+
+  rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);
+  rho_q[1] = sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3);
+
+  alignas(32) uint32_t sig32[8];
+  _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(_mm_cvtsi64_si128(_m_to_int64(v_u8_out))));
+  auto v_s32_0 = *((__m128i *)(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2));
+  auto v_s32_1 = *((__m128i *)(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2));
+  *((__m128i *)(v_n)) = _mm_unpacklo_epi32(v_s32_0, v_s32_1);
+  *((__m128i *)(v_n + 4)) = _mm_unpackhi_epi32(v_s32_0, v_s32_1);
+
+  auto vv_n = _mm256_load_si256((__m256i *)v_n);
+  auto vsig = _mm256_load_si256((__m256i *)sig32);
+  auto vone = _mm256_set1_epi32(1);
+  auto v32 = _mm256_set1_epi32(32);
+  auto vvv = bsr_256_32_cvtfloat(_mm256_add_epi32(_mm256_slli_epi32(_mm256_srai_epi32(vv_n, 1), 1), vone));
+  auto vtmp = _mm256_mullo_epi32(_mm256_add_epi32(vvv, vone), vsig);
+  _mm256_store_si256((__m256i *)E_n, vtmp);
 #else
   const int32_t x[8] = {2 * qx,       2 * qx,       2 * qx + 1,       2 * qx + 1,
                         2 * (qx + 1), 2 * (qx + 1), 2 * (qx + 1) + 1, 2 * (qx + 1) + 1};
