@@ -366,6 +366,7 @@ void state_VLC_enc::emitVLCBits(uint16_t cwd, uint8_t len) {
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
+#if defined(__AVX2__)
 // the following two functions are taken from https://primenumber.hatenadiary.jp/entry/2016/12/13/011832
 inline __m256i bsr_256_32_cvtfloat_impl(__m256i x, int32_t sub) {
   __m256i cvt_fl  = _mm256_castps_si256(_mm256_cvtepi32_ps(x));
@@ -378,6 +379,7 @@ inline __m256i bsr_256_32_cvtfloat(__m256i x) {
   result         = _mm256_or_si256(result, _mm256_srai_epi32(x, 31));
   return _mm256_and_si256(result, _mm256_set1_epi32(0x0000001F));
 }
+#endif
 auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
                        uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
                        uint8_t *const rho_q) {
@@ -545,28 +547,59 @@ int32_t termSPandMR(SP_enc &SP, MR_enc &MR) {
   return SP.pos + MAX_Lref - MR.pos;
 }
 
-#define MAKE_STORAGE()                                                                                     \
-  {                                                                                                        \
-    const int32_t x[8] = {2 * qx,       2 * qx,       2 * qx + 1,       2 * qx + 1,                        \
-                          2 * (qx + 1), 2 * (qx + 1), 2 * (qx + 1) + 1, 2 * (qx + 1) + 1};                 \
-    const int32_t y[8] = {2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1}; \
-    for (int i = 0; i < 4; ++i)                                                                            \
-      sigma_n[i] =                                                                                         \
-          (block->block_states[(y[i] + 1) * (block->size.x + 2) + (x[i] + 1)] >> SHIFT_SIGMA) & 1;         \
-    rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);                     \
-    for (int i = 4; i < 8; ++i)                                                                            \
-      sigma_n[i] =                                                                                         \
-          (block->block_states[(y[i] + 1) * (block->size.x + 2) + (x[i] + 1)] >> SHIFT_SIGMA) & 1;         \
-    rho_q[1] = sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3);                     \
-    for (int i = 0; i < 8; ++i) {                                                                          \
-      if ((x[i] >= 0 && x[i] < (block->size.x)) && (y[i] >= 0 && y[i] < (block->size.y)))                  \
-        v_n[i] = block->sample_buf[x[i] + y[i] * block->size.x];                                           \
-      else                                                                                                 \
-        v_n[i] = 0;                                                                                        \
-    }                                                                                                      \
-    for (int i = 0; i < 8; ++i)                                                                            \
-      E_n[i] = (32 - count_leading_zeros(((v_n[i] >> 1) << 1) + 1)) * sigma_n[i];                          \
-  }
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #define MAKE_STORAGE()                                                                                    \
+    {                                                                                                       \
+      const uint32_t QWx2    = block->size.x + block->size.x % 2;                                           \
+      const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};                                                    \
+      uint8_t *const sp0     = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1; \
+      uint8_t *const sp1     = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1; \
+      auto v_u8_0            = vld1_u8(sp0);                                                                \
+      auto v_u8_1            = vld1_u8(sp1);                                                                \
+      auto v_u8_zip          = vzip1_u8(v_u8_0, v_u8_1);                                                    \
+      auto vmask             = vdup_n_u8(1);                                                                \
+      auto v_u8_out          = vand_u8(v_u8_zip, vmask);                                                    \
+      vst1_u8(sigma_n, v_u8_out);                                                                           \
+      auto v_u8_shift = vld1_s8(nshift);                                                                    \
+      auto vtmp       = vpadd_u8(vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)),    \
+                                 vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)));   \
+      rho_q[0]        = vdupb_lane_u8(vtmp, 0);                                                             \
+      rho_q[1]        = vdupb_lane_u8(vtmp, 1);                                                             \
+      auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2);                        \
+      auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2);                  \
+      auto v_s32_out  = vzipq_s32(v_s32_0, v_s32_1);                                                        \
+      vst1q_u32(v_n, v_s32_out.val[0]);                                                                     \
+      vst1q_u32(v_n + 4, v_s32_out.val[1]);                                                                 \
+      auto vsig0 = vmovl_u16(vget_low_u16(vmovl_u8(v_u8_out)));                                             \
+      auto vsig1 = vmovl_u16(vget_high_u16(vmovl_u8(v_u8_out)));                                            \
+      vst1q_s32(E_n, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[0], 1), 1) + 1)) * vsig0);       \
+      vst1q_s32(E_n + 4, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[1], 1), 1) + 1)) * vsig1);   \
+    }
+#else
+  #define MAKE_STORAGE()                                                                             \
+    {                                                                                                \
+      const int32_t x[8] = {2 * qx,       2 * qx,       2 * qx + 1,       2 * qx + 1,                \
+                            2 * (qx + 1), 2 * (qx + 1), 2 * (qx + 1) + 1, 2 * (qx + 1) + 1};         \
+      const int32_t y[8] = {                                                                         \
+          2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1};           \
+      for (int i = 0; i < 4; ++i)                                                                    \
+        sigma_n[i] =                                                                                 \
+            (block->block_states[(y[i] + 1) * (block->size.x + 2) + (x[i] + 1)] >> SHIFT_SIGMA) & 1; \
+      rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);             \
+      for (int i = 4; i < 8; ++i)                                                                    \
+        sigma_n[i] =                                                                                 \
+            (block->block_states[(y[i] + 1) * (block->size.x + 2) + (x[i] + 1)] >> SHIFT_SIGMA) & 1; \
+      rho_q[1] = sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3);             \
+      for (int i = 0; i < 8; ++i) {                                                                  \
+        if ((x[i] >= 0 && x[i] < (block->size.x)) && (y[i] >= 0 && y[i] < (block->size.y)))          \
+          v_n[i] = block->sample_buf[x[i] + y[i] * block->size.x];                                   \
+        else                                                                                         \
+          v_n[i] = 0;                                                                                \
+      }                                                                                              \
+      for (int i = 0; i < 8; ++i)                                                                    \
+        E_n[i] = (32 - count_leading_zeros(((v_n[i] >> 1) << 1) + 1)) * sigma_n[i];                  \
+    }
+#endif
 
 /********************************************************************************
  * HT cleanup encoding
