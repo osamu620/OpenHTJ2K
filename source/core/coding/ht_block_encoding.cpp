@@ -74,7 +74,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       vst1_u8(block_states.get() + block_index, vblkstate);
       vabsmag -= vmasked_one;
       vabsmag <<= vmasked_one;
-      vabsmag += vsign;
+      vabsmag += vsign * vmasked_one;
       int32x4_t coeff32     = vreinterpretq_s32_s16(vabsmag);
       int32x4_t coeff32low  = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(coeff32)));
       int32x4_t coeff32high = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(coeff32)));
@@ -100,6 +100,13 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
         dp[j] = temp;
       }
       block_index++;
+    }
+#elif defined(__AVX2__)
+    auto vpLSB = _mm256_set1_epi16((uint16_t)pLSB);
+    auto vone  = _mm256_set1_epi16((uint16_t)1);
+    // simd
+    for (uint16_t j = 0; j < width - width % 16; j += 16) {
+      auto coeff16 = _mm256_loadu_epi16(sp + j);
     }
 #else
     for (uint16_t j = 0; j < width; ++j) {
