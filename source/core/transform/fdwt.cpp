@@ -195,6 +195,156 @@ auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_
     X[n] += ((sum + 2) >> 2);
   }
 };
+#elif defined(__AVX2__)
+// irreversible FDWT
+auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
+                                      const uint32_t u_i0, const uint32_t u_i1) {
+  const auto i0       = static_cast<const int32_t>(u_i0);
+  const auto i1       = static_cast<const int32_t>(u_i1);
+  const int32_t start = ceil_int(i0, 2);
+  const int32_t stop  = ceil_int(i1, 2);
+
+  const int32_t offset = left + i0 % 2;
+  int32_t simdlen      = stop + 1 - (start - 2);
+  // step 1: simd
+  for (int32_t n = -4 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+    auto xl    = _mm256_loadu_si256((__m256i *)(X + n));
+    auto xh    = _mm256_loadu_si256((__m256i *)(X + n + 2));
+    auto xltmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xl, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x00   = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 0));
+    auto x1    = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 1));
+    auto xhtmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xh, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x01     = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xhtmp, 0));
+    auto vsum    = _mm256_add_epi32(x00, x01);
+    auto vcoeff  = _mm256_set1_epi32(Acoeff);
+    auto voffset = _mm256_set1_epi32(Aoffset);
+    auto vout    = _mm256_add_epi32(
+           _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Ashift), x1);
+    auto vvv  = _mm256_shuffle_epi32(_mm256_packs_epi32(x00, vout), 0b11011000);
+    auto vvv2 = _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(vvv, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n), vvv2);
+  }
+  // step 1: remaining
+  for (int32_t n = -4 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
+    int32_t sum = X[n];
+    sum += X[n + 2];
+    X[n + 1] += (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
+  }
+
+  // step 2: simd
+  simdlen = stop + 1 - (start - 1);
+  for (int32_t n = -2 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+    auto xl    = _mm256_loadu_si256((__m256i *)(X + n - 1));
+    auto xh    = _mm256_loadu_si256((__m256i *)(X + n + 1));
+    auto xltmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xl, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x00   = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 0));
+    auto x1    = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 1));
+    auto xhtmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xh, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x01     = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xhtmp, 0));
+    auto vsum    = _mm256_add_epi32(x00, x01);
+    auto vcoeff  = _mm256_set1_epi32(Bcoeff);
+    auto voffset = _mm256_set1_epi32(Boffset);
+    auto vout    = _mm256_add_epi32(
+           _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Bshift), x1);
+    auto vvv  = _mm256_shuffle_epi32(_mm256_packs_epi32(x00, vout), 0b11011000);
+    auto vvv2 = _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(vvv, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n - 1), vvv2);
+  }
+  // step 2: remaining
+  for (int32_t n = -2 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
+    int32_t sum = X[n - 1];
+    sum += X[n + 1];
+    X[n] += (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
+  }
+
+  simdlen = stop - (start - 1);
+  // step 3: simd
+  for (int32_t n = -2 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+    auto xl    = _mm256_loadu_si256((__m256i *)(X + n));
+    auto xh    = _mm256_loadu_si256((__m256i *)(X + n + 2));
+    auto xltmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xl, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x00   = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 0));
+    auto x1    = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 1));
+    auto xhtmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xh, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x01     = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xhtmp, 0));
+    auto vsum    = _mm256_add_epi32(x00, x01);
+    auto vcoeff  = _mm256_set1_epi32(Ccoeff);
+    auto voffset = _mm256_set1_epi32(Coffset);
+    auto vout    = _mm256_add_epi32(
+           _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Cshift), x1);
+    auto vvv  = _mm256_shuffle_epi32(_mm256_packs_epi32(x00, vout), 0b11011000);
+    auto vvv2 = _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(vvv, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n), vvv2);
+  }
+  // step 3: remaining
+  for (int32_t n = -2 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
+    int32_t sum = X[n];
+    sum += X[n + 2];
+    X[n + 1] += (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
+  }
+
+  // step 4: simd
+  simdlen = stop - start;
+  for (int32_t n = 0 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+    auto xl    = _mm256_loadu_si256((__m256i *)(X + n - 1));
+    auto xh    = _mm256_loadu_si256((__m256i *)(X + n + 1));
+    auto xltmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xl, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x00   = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 0));
+    auto x1    = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xltmp, 1));
+    auto xhtmp = _mm256_permutevar8x32_epi32(
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xh, 0b11011000), 0b11011000),
+        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    auto x01     = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xhtmp, 0));
+    auto vsum    = _mm256_add_epi32(x00, x01);
+    auto vcoeff  = _mm256_set1_epi32(Dcoeff);
+    auto voffset = _mm256_set1_epi32(Doffset);
+    auto vout    = _mm256_add_epi32(
+           _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Dshift), x1);
+    auto vvv  = _mm256_shuffle_epi32(_mm256_packs_epi32(x00, vout), 0b11011000);
+    auto vvv2 = _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(vvv, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n - 1), vvv2);
+  }
+  // step 4: remaining
+  for (int32_t n = 0 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
+    int32_t sum = X[n - 1];
+    sum += X[n + 1];
+    X[n] += (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
+  }
+};
+// reversible FDWT
+auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
+                                    const uint32_t u_i0, const uint32_t u_i1) {
+  const auto i0       = static_cast<const int32_t>(u_i0);
+  const auto i1       = static_cast<const int32_t>(u_i1);
+  const int32_t start = ceil_int(i0, 2);
+  const int32_t stop  = ceil_int(i1, 2);
+  // X += left - i0 % 2;
+  const int32_t offset = left + i0 % 2;
+  for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
+    int32_t sum = X[n];
+    sum += X[n + 2];
+    X[n + 1] -= (sum >> 1);
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+    int32_t sum = X[n - 1];
+    sum += X[n + 1];
+    X[n] += ((sum + 2) >> 2);
+  }
+};
 #else
 // irreversible FDWT
 auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
