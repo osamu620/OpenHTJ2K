@@ -160,7 +160,6 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       }
       block_index++;
     }
-    printf("%d ", or_val);
 #else
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
