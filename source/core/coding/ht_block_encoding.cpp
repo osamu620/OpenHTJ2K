@@ -54,6 +54,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     sprec_t *const sp  = this->i_samples + i * stride;
     int32_t *const dp  = this->sample_buf.get() + i * width;
     size_t block_index = (i + 1) * (size.x + 2) + 1;
+    uint8_t *dstblk    = block_states.get();
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     // vetorized for ARM NEON
     uint16x8_t vpLSB = vdupq_n_u16((uint16_t)pLSB);
@@ -101,13 +102,65 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       }
       block_index++;
     }
+
 #elif defined(__AVX2__)
-    auto vpLSB = _mm256_set1_epi16((uint16_t)pLSB);
-    auto vone  = _mm256_set1_epi16((uint16_t)1);
+    auto vpLSB     = _mm256_set1_epi16((uint16_t)pLSB);
+    auto vone      = _mm256_set1_epi16((uint16_t)1);
+    auto vtwo      = _mm256_set1_epi16((uint16_t)2);
+    auto vsignmask = _mm256_set1_epi16((uint16_t)0x8000);
+    auto vabsmask  = _mm256_set1_epi16((uint16_t)0x7FFF);
     // simd
     for (uint16_t j = 0; j < width - width % 16; j += 16) {
-      auto coeff16 = _mm256_loadu_epi16(sp + j);
+      auto coeff16 = _mm256_loadu_si256((__m256i *)(sp + j));
+      // auto vsmag   = _mm256_and_si256(coeff16, vpLSB);
+      auto vsign = _mm256_srli_epi16(_mm256_and_si256(coeff16, vsignmask), 15);
+      auto vsmag = _mm256_slli_epi16(_mm256_and_si256(coeff16, vpLSB), SHIFT_SMAG);
+
+      auto vabsmag = _mm256_srli_epi16(_mm256_and_si256(_mm256_abs_epi16(coeff16), vabsmask), pshift);
+
+      auto vmasked_one =
+          _mm256_and_si256(_mm256_xor_si256(_mm256_cmpeq_epi16(vabsmag, _mm256_setzero_si256()),
+                                            _mm256_set1_epi16((uint16_t)0xFFFF)),
+                           vone);
+      or_val |= !_mm256_testz_si256(vabsmag, vabsmask);
+      auto vmasked_two = _mm256_mullo_epi16(vmasked_one, vtwo);
+      auto vblkstate =
+          _mm256_or_si256(vmasked_one, _mm256_or_si256(vsmag, _mm256_slli_epi16(vsign, SHIFT_SSGN)));
+      auto vblkstate_low  = _mm256_extracti128_si256(vblkstate, 0);
+      auto vblkstate_high = _mm256_extracti128_si256(vblkstate, 1);
+      auto vblkstate_u8   = _mm_packs_epi16(vblkstate_low, vblkstate_high);
+      _mm_storeu_si128((__m128i *)(dstblk + block_index), vblkstate_u8);
+      //*((__m128i *)(dstblk + block_index)) = vblkstate_u8;
+      auto vcoeff      = _mm256_add_epi16(_mm256_mullo_epi16(_mm256_subs_epu16(vabsmag, vone), vmasked_two),
+                                          _mm256_mullo_epi16(vsign, vmasked_one));
+      auto vcoeff_low  = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(vcoeff, 0));
+      auto vcoeff_high = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(vcoeff, 1));
+      _mm256_storeu_si256((__m256i *)(dp + j), vcoeff_low);
+      _mm256_storeu_si256((__m256i *)(dp + j + 8), vcoeff_high);
+      // *((__m256i *)(dp + j))     = vcoeff_low;
+      // *((__m256i *)(dp + j + 8)) = vcoeff_high;
+      block_index += 16;
     }
+    // remaining
+    for (uint16_t j = width - width % 16; j < width; ++j) {
+      int32_t temp  = sp[j];
+      uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+      block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
+      block_states[block_index] |= (sign >> 31) << SHIFT_SSGN;
+      temp = (temp < 0) ? -temp : temp;
+      temp &= 0x7FFFFFFF;
+      temp >>= pshift;
+      if (temp) {
+        or_val |= 1;
+        block_states[block_index] |= 1;
+        temp--;
+        temp <<= 1;
+        temp += sign >> 31;
+        dp[j] = temp;
+      }
+      block_index++;
+    }
+    printf("%d ", or_val);
 #else
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
