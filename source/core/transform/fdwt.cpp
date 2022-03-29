@@ -207,7 +207,7 @@ auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int3
   const int32_t offset = left + i0 % 2;
   int32_t simdlen      = stop + 1 - (start - 2);
   // step 1: simd
-  for (int32_t n = -4 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+  for (int32_t n = -4 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 2));
     auto xin02 = _mm256_permutevar8x32_epi32(
@@ -229,16 +229,10 @@ auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int3
         _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
     _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
   }
-  // step 1: remaining
-  for (int32_t n = -4 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
-    int32_t sum = X[n];
-    sum += X[n + 2];
-    X[n + 1] += (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
-  }
 
   // step 2: simd
   simdlen = stop + 1 - (start - 1);
-  for (int32_t n = -2 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+  for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n - 1));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 1));
     auto xin02 = _mm256_permutevar8x32_epi32(
@@ -260,16 +254,10 @@ auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int3
         _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
     _mm256_storeu_si256((__m256i *)(X + n - 1), xout_interleaved);
   }
-  // step 2: remaining
-  for (int32_t n = -2 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
-    int32_t sum = X[n - 1];
-    sum += X[n + 1];
-    X[n] += (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
-  }
 
   simdlen = stop - (start - 1);
   // step 3: simd
-  for (int32_t n = -2 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+  for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 2));
     auto xin02 = _mm256_permutevar8x32_epi32(
@@ -291,16 +279,10 @@ auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int3
         _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
     _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
   }
-  // step 3: remaining
-  for (int32_t n = -2 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
-    int32_t sum = X[n];
-    sum += X[n + 2];
-    X[n + 1] += (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
-  }
 
   // step 4: simd
   simdlen = stop - start;
-  for (int32_t n = 0 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+  for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n - 1));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 1));
     auto xin02 = _mm256_permutevar8x32_epi32(
@@ -322,13 +304,8 @@ auto fdwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int3
         _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
     _mm256_storeu_si256((__m256i *)(X + n - 1), xout_interleaved);
   }
-  // step 4: remaining
-  for (int32_t n = 0 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; i++, n += 2) {
-    int32_t sum = X[n - 1];
-    sum += X[n + 1];
-    X[n] += (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
-  }
 };
+
 // reversible FDWT
 auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
                                     const uint32_t u_i0, const uint32_t u_i1) {
@@ -341,7 +318,7 @@ auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_
 
   // step 1: simd
   int32_t simdlen = stop - (start - 1);
-  for (int32_t n = -2 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+  for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 2));
     auto xin02 = _mm256_permutevar8x32_epi32(
@@ -360,16 +337,10 @@ auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_
         _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
     _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
   }
-  // step 1: remaining
-  for (int32_t n = -2 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; ++i, n += 2) {
-    int32_t sum = X[n];
-    sum += X[n + 2];
-    X[n + 1] -= (sum >> 1);
-  }
 
   // step 2: simd
   simdlen = stop - start;
-  for (int32_t n = 0 + offset, i = 0; i < simdlen - simdlen % 16; i += 8, n += 16) {
+  for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n - 1));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 1));
     auto xin02 = _mm256_permutevar8x32_epi32(
@@ -388,12 +359,6 @@ auto fdwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_
     auto xout_interleaved =
         _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
     _mm256_storeu_si256((__m256i *)(X + n - 1), xout_interleaved);
-  }
-  // step 2: remaining
-  for (int32_t n = 0 + offset + (simdlen - simdlen % 16) * 2, i = 0; i < simdlen % 16; ++i, n += 2) {
-    int32_t sum = X[n - 1];
-    sum += X[n + 1];
-    X[n] += ((sum + 2) >> 2);
   }
 };
 #else
@@ -457,7 +422,7 @@ static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_
 static inline void fdwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, sprec_t *out, const int32_t left,
                                     const int32_t right, const uint32_t i0, const uint32_t i1,
                                     const uint8_t transformation) {
-  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
+  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_PADDING);
   //  auto *Xext         = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   fdwt_1d_filtr_fixed[transformation](buf, left, right, i0, i1);
@@ -487,8 +452,9 @@ static void fdwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, cons
     }
   } else {
     // need to perform symmetric extension
-    const uint32_t len = round_up(u1 - u0 + left + right, SIMD_LEN_I32);
-    auto *Xext         = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
+    const uint32_t len = u1 - u0 + left + right;
+    auto *Xext         = static_cast<sprec_t *>(
+        aligned_mem_alloc(sizeof(sprec_t) * round_up(len + SIMD_PADDING, SIMD_PADDING), 32));
     //#pragma omp parallel for
     for (uint32_t row = 0; row < v1 - v0; ++row) {
       fdwt_1d_sr_fixed(Xext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
@@ -593,7 +559,7 @@ auto fdwt_rev_ver_sr_fixed = [](sprec_t *in, const uint32_t u0, const uint32_t u
       }
     }
   } else {
-    const uint32_t len = round_up(stride, SIMD_LEN_I16);
+    const uint32_t len = round_up(stride, SIMD_PADDING);
     auto **buf         = new sprec_t *[top + v1 - v0 + bottom];
     for (uint32_t i = 1; i <= top; ++i) {
       buf[top - i] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));

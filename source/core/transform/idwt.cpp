@@ -85,7 +85,7 @@ static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_
 static void idwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, sprec_t *out, const int32_t left,
                              const int32_t right, const uint32_t i0, const uint32_t i1,
                              const uint8_t transformation) {
-  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_LEN_I16);
+  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_PADDING);
   //  auto *buf          = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   idwt_1d_filtr_fixed[transformation](buf, left, right, i0, i1);
@@ -111,7 +111,7 @@ static void idwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, cons
     }
   } else {
     // need to perform symmetric extension
-    const uint32_t len = round_up(u1 - u0 + left + right, SIMD_LEN_I16);
+    const uint32_t len = round_up(u1 - u0 + left + right, SIMD_PADDING);
     auto *Yext         = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
     //#pragma omp parallel for
     for (uint32_t row = 0; row < v1 - v0; ++row) {
@@ -136,7 +136,7 @@ static void idwt_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1,
       }
     }
   } else {
-    const uint32_t len = round_up(stride, SIMD_LEN_I16);
+    const uint32_t len = round_up(stride, SIMD_PADDING);
     auto **buf         = new sprec_t *[top + v1 - v0 + bottom];
     for (uint32_t i = 1; i <= top; ++i) {
       buf[top - i] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
@@ -243,7 +243,7 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
   // scaling for 16bit width fixed-point representation
   if (transformation != 1 && normalizing_upshift) {
     //#if defined(__AVX2__)
-    //    uint32_t len = round_down(buf_length, SIMD_LEN_I16);
+    //    uint32_t len = round_down(buf_length, SIMD_PADDING);
     //    for (uint32_t n = 0; n < len; n += 16) {
     //      __m256i tmp0 = _mm256_load_si256((__m256i *)(src + n));
     //      __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));

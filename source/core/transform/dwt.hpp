@@ -31,7 +31,7 @@
 #include <cstdint>
 #include "open_htj2k_typedef.hpp"
 
-#define SIMD_LEN_I16 16
+#define SIMD_PADDING 32
 
 constexpr int32_t Acoeff = -25987;
 constexpr int32_t Bcoeff = -3472;
