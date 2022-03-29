@@ -27,60 +27,57 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <cstring>
-#include <cmath>
 #include "dwt.hpp"
 #include "utils.hpp"
 
-// This is not function but lambda expression
-auto idwt_1d_filtr_rev53_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
-                                    const uint32_t u_i0, const uint32_t u_i1) {
-  const auto i0 = static_cast<const int32_t>(u_i0);
-  const auto i1 = static_cast<const int32_t>(u_i1);
-
-  X += left - i0 % 2;
-  for (int32_t n = 0, i = i0 / 2; i < i1 / 2 + 1; ++i, n += 2) {
-    X[n] -= ((X[n - 1] + X[n + 1] + 2) >> 2);
-  }
-
-  for (int32_t n = 0, i = i0 / 2; i < i1 / 2; ++i, n += 2) {
-    X[n + 1] += ((X[n] + X[n + 2]) >> 1);
-  }
-};
-
-// This is not function but lambda expression
-auto idwt_1d_filtr_irrev97_fixed = [](sprec_t *X, const int32_t left, const int32_t right,
-                                      const uint32_t u_i0, const uint32_t u_i1) {
-  const auto i0 = static_cast<const int32_t>(u_i0);
-  const auto i1 = static_cast<const int32_t>(u_i1);
-
-  X += left - i0 % 2;
+void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t right, const uint32_t u_i0,
+                                 const uint32_t u_i1) {
+  const auto i0        = static_cast<const int32_t>(u_i0);
+  const auto i1        = static_cast<const int32_t>(u_i1);
+  const int32_t start  = i0 / 2;
+  const int32_t stop   = i1 / 2;
+  const int32_t offset = left - i0 % 2;
 
   int32_t sum;
   /* K and 1/K have been already done by dequantization */
-  for (int32_t n = -2, i = i0 / 2 - 1; i < i1 / 2 + 2; i++, n += 2) {
+  for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
     sum = X[n - 1];
     sum += X[n + 1];
     X[n] -= (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
   }
-  for (int32_t n = -2, i = i0 / 2 - 1; i < i1 / 2 + 1; i++, n += 2) {
+  for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
     sum = X[n];
     sum += X[n + 2];
     X[n + 1] -= (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
   }
-  for (int32_t n = 0, i = i0 / 2; i < i1 / 2 + 1; i++, n += 2) {
+  for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
     sum = X[n - 1];
     sum += X[n + 1];
     X[n] -= (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
   }
-  for (int32_t n = 0, i = i0 / 2; i < i1 / 2; i++, n += 2) {
+  for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
     sum = X[n];
     sum += X[n + 2];
     X[n + 1] -= (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
   }
-};
-typedef void (*idwt_1d_filtr_func_fixed)(sprec_t *, int32_t, int32_t, const uint32_t, const uint32_t);
-static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
-                                                          idwt_1d_filtr_rev53_fixed};
+}
+
+void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t right, const uint32_t u_i0,
+                               const uint32_t u_i1) {
+  const auto i0        = static_cast<const int32_t>(u_i0);
+  const auto i1        = static_cast<const int32_t>(u_i1);
+  const int32_t start  = i0 / 2;
+  const int32_t stop   = i1 / 2;
+  const int32_t offset = left - i0 % 2;
+
+  for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
+    X[n] -= ((X[n - 1] + X[n + 1] + 2) >> 2);
+  }
+
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+    X[n + 1] += ((X[n] + X[n + 2]) >> 1);
+  }
+}
 
 static void idwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, sprec_t *out, const int32_t left,
                              const int32_t right, const uint32_t i0, const uint32_t i1,
@@ -111,8 +108,9 @@ static void idwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, cons
     }
   } else {
     // need to perform symmetric extension
-    const uint32_t len = round_up(u1 - u0 + left + right, SIMD_PADDING);
-    auto *Yext         = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
+    const uint32_t len = u1 - u0 + left + right;
+    auto *Yext         = static_cast<sprec_t *>(
+        aligned_mem_alloc(sizeof(sprec_t) * round_up(len + SIMD_PADDING, SIMD_PADDING), 32));
     //#pragma omp parallel for
     for (uint32_t row = 0; row < v1 - v0; ++row) {
       idwt_1d_sr_fixed(Yext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);

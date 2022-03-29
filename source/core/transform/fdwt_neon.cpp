@@ -26,10 +26,10 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "dwt.hpp"
-#include "utils.hpp"
-
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #include "dwt.hpp"
+  #include "utils.hpp"
+
 // vectorized irreversible FDWT for ARM NEON
 void fdwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1) {

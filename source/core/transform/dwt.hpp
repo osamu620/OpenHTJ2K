@@ -52,6 +52,8 @@ constexpr int32_t Dshift = 16;
 typedef void (*fdwt_1d_filtr_func_fixed)(sprec_t *, int32_t, int32_t, const uint32_t, const uint32_t);
 typedef void (*fdwt_ver_filtr_func_fixed)(sprec_t *, const uint32_t, const uint32_t, const uint32_t,
                                           const uint32_t);
+// define pointer to IDWT functions
+typedef void (*idwt_1d_filtr_func_fixed)(sprec_t *, int32_t, int32_t, const uint32_t, const uint32_t);
 
 static inline int32_t PSEo(const int32_t i, const int32_t i0, const int32_t i1) {
   const int32_t tmp0    = 2 * (i1 - i0 - 1);
@@ -100,6 +102,28 @@ void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH
                       uint32_t u1, uint32_t v0, uint32_t v1, uint8_t transformation);
 
 // IDWT
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_t right,
+                                    const uint32_t u_i0, const uint32_t u_i1);
+void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int32_t right,
+                                      const uint32_t u_i0, const uint32_t u_i1);
+static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
+                                                          idwt_1d_filtr_rev53_fixed_neon};
+#elif defined(__AVX2__)
+void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
+                                    const uint32_t u_i0, const uint32_t u_i1);
+void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
+                                      const uint32_t u_i0, const uint32_t u_i1);
+static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
+                                                          idwt_1d_filtr_rev53_fixed_avx2};
+#else
+void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t right, const uint32_t u_i0,
+                               const uint32_t u_i1);
+void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t right, const uint32_t u_i0,
+                                 const uint32_t u_i1);
+static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
+                                                          idwt_1d_filtr_rev53_fixed};
+#endif
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, uint32_t u0,
                       uint32_t u1, uint32_t v0, uint32_t v1, uint8_t transformation,
                       uint8_t normalizing_upshift);
