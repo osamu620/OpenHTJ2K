@@ -45,6 +45,8 @@ void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t r
     sum += X[n + 1];
     X[n] -= (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
   }
+  int16_t a[16];
+  memcpy(a, X - 2 + offset, sizeof(int16_t) * 16);
   for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
     sum = X[n];
     sum += X[n + 2];

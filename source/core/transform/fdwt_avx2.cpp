@@ -39,8 +39,9 @@ void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int3
   const int32_t stop  = ceil_int(i1, 2);
 
   const int32_t offset = left + i0 % 2;
-  int32_t simdlen      = stop + 1 - (start - 2);
-  // step 1: simd
+
+  // step 1
+  int32_t simdlen = stop + 1 - (start - 2);
   for (int32_t n = -4 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 2));
@@ -58,13 +59,13 @@ void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int3
     auto voffset = _mm256_set1_epi32(Aoffset);
     auto xout    = _mm256_add_epi32(
            _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Ashift), xodd0);
-    auto xout_even_odd = _mm256_shuffle_epi32(_mm256_packs_epi32(xeven0, xout), 0b11011000);
+    auto xout_odd_even = _mm256_shuffle_epi32(_mm256_packs_epi32(xout, xeven1), 0b11011000);
     auto xout_interleaved =
-        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
-    _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n + 1), xout_interleaved);
   }
 
-  // step 2: simd
+  // step 2
   simdlen = stop + 1 - (start - 1);
   for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n - 1));
@@ -83,14 +84,14 @@ void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int3
     auto voffset = _mm256_set1_epi32(Boffset);
     auto xout    = _mm256_add_epi32(
            _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Bshift), xeven0);
-    auto xout_odd_even = _mm256_shuffle_epi32(_mm256_packs_epi32(xodd0, xout), 0b11011000);
+    auto xout_even_odd = _mm256_shuffle_epi32(_mm256_packs_epi32(xout, xodd1), 0b11011000);
     auto xout_interleaved =
-        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
-    _mm256_storeu_si256((__m256i *)(X + n - 1), xout_interleaved);
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
   }
 
+  // step 3
   simdlen = stop - (start - 1);
-  // step 3: simd
   for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n));
     auto xin2  = _mm256_loadu_si256((__m256i *)(X + n + 2));
@@ -108,13 +109,13 @@ void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int3
     auto voffset = _mm256_set1_epi32(Coffset);
     auto xout    = _mm256_add_epi32(
            _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Cshift), xodd0);
-    auto xout_even_odd = _mm256_shuffle_epi32(_mm256_packs_epi32(xeven0, xout), 0b11011000);
+    auto xout_odd_even = _mm256_shuffle_epi32(_mm256_packs_epi32(xout, xeven1), 0b11011000);
     auto xout_interleaved =
-        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
-    _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n + 1), xout_interleaved);
   }
 
-  // step 4: simd
+  // step 4
   simdlen = stop - start;
   for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n - 1));
@@ -133,10 +134,10 @@ void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int3
     auto voffset = _mm256_set1_epi32(Doffset);
     auto xout    = _mm256_add_epi32(
            _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), Dshift), xeven0);
-    auto xout_odd_even = _mm256_shuffle_epi32(_mm256_packs_epi32(xodd0, xout), 0b11011000);
+    auto xout_even_odd = _mm256_shuffle_epi32(_mm256_packs_epi32(xout, xodd1), 0b11011000);
     auto xout_interleaved =
-        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
-    _mm256_storeu_si256((__m256i *)(X + n - 1), xout_interleaved);
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
   }
 }
 
@@ -150,7 +151,7 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
   // X += left - i0 % 2;
   const int32_t offset = left + i0 % 2;
 
-  // step 1: simd
+  // step 1
   int32_t simdlen = stop - (start - 1);
   for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n));
@@ -166,13 +167,13 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
     auto xeven1        = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin22, 0));
     auto vsum          = _mm256_add_epi32(xeven0, xeven1);
     auto xout          = _mm256_sub_epi32(xodd0, _mm256_srai_epi32(vsum, 1));
-    auto xout_even_odd = _mm256_shuffle_epi32(_mm256_packs_epi32(xeven0, xout), 0b11011000);
+    auto xout_odd_even = _mm256_shuffle_epi32(_mm256_packs_epi32(xout, xeven1), 0b11011000);
     auto xout_interleaved =
-        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
-    _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n + 1), xout_interleaved);
   }
 
-  // step 2: simd
+  // step 2
   simdlen = stop - start;
   for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0  = _mm256_loadu_si256((__m256i *)(X + n - 1));
@@ -189,10 +190,10 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
     auto vsum  = _mm256_add_epi32(xodd0, xodd1);
     auto xout =
         _mm256_add_epi32(xeven0, _mm256_srai_epi32(_mm256_add_epi32(vsum, _mm256_set1_epi32(2)), 2));
-    auto xout_odd_even = _mm256_shuffle_epi32(_mm256_packs_epi32(xodd0, xout), 0b11011000);
+    auto xout_even_odd = _mm256_shuffle_epi32(_mm256_packs_epi32(xout, xodd1), 0b11011000);
     auto xout_interleaved =
-        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_odd_even, 0b11011000), 0b11011000);
-    _mm256_storeu_si256((__m256i *)(X + n - 1), xout_interleaved);
+        _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(X + n), xout_interleaved);
   }
 }
 #endif
