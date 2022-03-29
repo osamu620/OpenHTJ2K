@@ -3,6 +3,8 @@ target_sources(open_htj2k
     PRIVATE
     idwt.cpp
     fdwt.cpp
+    fdwt_avx2.cpp
+    fdwt_neon.cpp
     color.cpp
     color_avx2.cpp
     color_neon.cpp
