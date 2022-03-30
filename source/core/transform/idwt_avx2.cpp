@@ -27,7 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "utils.hpp"
-#if defined(OPENHTJ2K_ENABLE_AVX2)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #include "dwt.hpp"
 
 void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
