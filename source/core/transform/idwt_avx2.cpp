@@ -26,9 +26,9 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_AVX2)
   #include "dwt.hpp"
-  #include "utils.hpp"
 
 void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1) {

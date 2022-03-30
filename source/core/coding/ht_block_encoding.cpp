@@ -473,18 +473,18 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
   uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1;
   uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1;
-  auto v_u8_0 = *((__m64 *)sp0);
-  auto v_u8_1 = *((__m64 *)sp1);
-  auto v_u8_zip = _mm_unpacklo_pi8(v_u8_0, v_u8_1);
-  auto vmask = _mm_set1_pi8(1);
-  auto v_u8_out = _mm_and_si64(v_u8_zip, vmask);
-  *((__m64 *)sigma_n) = v_u8_out;
+  auto v_u8_0 = _MM_SET1_64(*((__m64 *)sp0));
+  auto v_u8_1 =  _MM_SET1_64(*((__m64 *)sp1));
+  auto v_u8_zip = _mm_unpacklo_epi8(v_u8_0, v_u8_1);
+  auto vmask = _mm_set1_epi8(1);
+  auto v_u8_out = _mm_and_si128(v_u8_zip, vmask);
+  *((int64_t *)sigma_n) = _mm_cvtsi128_si64(v_u8_out);
 
   rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);
   rho_q[1] = sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3);
 
   alignas(32) uint32_t sig32[8];
-  _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(_mm_cvtsi64_si128(_m_to_int64(v_u8_out))));
+  _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(v_u8_out));
   auto v_s32_0 = *((__m128i *)(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2));
   auto v_s32_1 = *((__m128i *)(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2));
   *((__m128i *)(v_n)) = _mm_unpacklo_epi32(v_s32_0, v_s32_1);
