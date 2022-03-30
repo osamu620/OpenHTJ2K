@@ -103,7 +103,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       block_index++;
     }
 
-#elif defined(OPENHTJ2K_ENABLE_AVX2)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     auto vpLSB     = _mm256_set1_epi16((uint16_t)pLSB);
     auto vone      = _mm256_set1_epi16((uint16_t)1);
     auto vtwo      = _mm256_set1_epi16((uint16_t)2);
@@ -425,7 +425,7 @@ void state_VLC_enc::emitVLCBits(uint16_t cwd, uint8_t len) {
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
-#if defined(OPENHTJ2K_ENABLE_AVX2)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 // the following two functions are taken from https://primenumber.hatenadiary.jp/entry/2016/12/13/011832
 inline __m256i bsr_256_32_cvtfloat_impl(__m256i x, int32_t sub) {
   __m256i cvt_fl  = _mm256_castps_si256(_mm256_cvtepi32_ps(x));
@@ -468,7 +468,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   auto vsig1 = vmovl_u16(vget_high_u16(vmovl_u8(v_u8_out)));
   vst1q_s32(E_n, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[0], 1), 1) + 1)) * vsig0);
   vst1q_s32(E_n + 4, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[1], 1), 1) + 1)) * vsig1);
-#elif defined(OPENHTJ2K_ENABLE_AVX2)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const uint32_t QWx2 = block->size.x + block->size.x % 2;
   const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
   uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1;

@@ -44,10 +44,6 @@
   #include <x86intrin.h>
 #endif
 
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  #define OPENHTJ2K_ENABLE_AVX2 1
-#endif
-
 static inline size_t popcount32(uintmax_t num) {
   size_t precision = 0;
 #if defined(_MSC_VER)
@@ -85,7 +81,7 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
   uint32_t y;
 #if defined(_MSC_VER)
   y = __lzcnt(x);
-#elif defined(OPENHTJ2K_ENABLE_AVX2)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   y         = _lzcnt_u32(x);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   y              = __builtin_clz(x);

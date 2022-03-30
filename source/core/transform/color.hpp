@@ -41,7 +41,7 @@
 #define CB_FACT_G (2 * ALPHA_B * (1 - ALPHA_B) / ALPHA_G)
 
 typedef void (*cvt_color_func)(int32_t *, int32_t *, int32_t *, uint32_t);
-#if defined(OPENHTJ2K_ENABLE_AVX2)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples);
 void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples);
 void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples);

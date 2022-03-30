@@ -1522,7 +1522,7 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
   const uint8_t shiftup   = (transformation) ? 0 : FRACBITS - this->bitdepth;
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
   const uint32_t length   = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
-#if defined(OPENHTJ2K_ENABLE_AVX2)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   __m256i doff = _mm256_set1_epi32(DC_OFFSET);
   for (uint32_t i = 0; i < round_down(length, SIMD_LEN_I32); i += SIMD_LEN_I32) {
     __m256i sp                  = *((__m256i *)(samples + i));
@@ -2364,7 +2364,7 @@ void j2k_tile::decode(j2k_main_header &main_header) {
     // copy samples in resolution buffer to that in tile component buffer
     unsigned long num_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
     //#pragma omp parallel for  // default(none) shared(num_samples, sp, dp)
-    //#if defined(OPENHTJ2K_ENABLE_AVX2)
+    //#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     //    for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_I32); n += SIMD_LEN_I32) {
     //      __m128i src = _mm_loadu_si128((__m128i *)(sp + n));
     //      __m256i dst = _mm256_cvtepi16_epi32(src);
@@ -2629,7 +2629,7 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
     int32_t *const sp0            = tcomp[c].get_sample_address(0, 0);
     const uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
     // TODO: enc_init vectorize code
-    //#if defined(OPENHTJ2K_ENABLE_AVX2)
+    //#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     //    __m256i offsets = _mm256_set_epi32(7, 6, 3, 2, 5, 4, 1, 0);
     //    for (uint32_t n = 0; n < round_down(num_tc_samples, 16); n += 16) {
     //      __m256i s0a = _mm256_loadu_si256((__m256i *)(sp0 + n));

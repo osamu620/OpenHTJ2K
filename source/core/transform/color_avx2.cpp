@@ -27,7 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "utils.hpp"
-#if defined(OPENHTJ2K_ENABLE_AVX2)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #include "color.hpp"
 
 static constexpr uint32_t NUM_I32_VECTOR_AVX2 = 8;
