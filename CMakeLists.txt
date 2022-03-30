@@ -80,7 +80,7 @@ if (ENABLE_ARM_NEON)
 	target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
 elseif(ENABLE_AVX2)
 	message(STATUS "OPENHTJ2K_ENABLE_AVX2 is set")
-	target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_AVX2")
+	target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TRY_AVX2")
 endif()
 target_include_directories(open_htj2k
 		PRIVATE
