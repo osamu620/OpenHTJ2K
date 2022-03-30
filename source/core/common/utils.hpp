@@ -81,7 +81,7 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
   uint32_t y;
 #if defined(_MSC_VER)
   y = __lzcnt(x);
-#elif defined(__AVX2__)
+#elif defined(OPENHTJ2K_ENABLE_AVX2)
   y         = _lzcnt_u32(x);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   y              = __builtin_clz(x);

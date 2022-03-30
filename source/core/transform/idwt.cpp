@@ -242,7 +242,7 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
 
   // scaling for 16bit width fixed-point representation
   if (transformation != 1 && normalizing_upshift) {
-    //#if defined(__AVX2__)
+    //#if defined(OPENHTJ2K_ENABLE_AVX2)
     //    uint32_t len = round_down(buf_length, SIMD_PADDING);
     //    for (uint32_t n = 0; n < len; n += 16) {
     //      __m256i tmp0 = _mm256_load_si256((__m256i *)(src + n));

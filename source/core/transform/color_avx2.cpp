@@ -26,7 +26,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if defined(__AVX2__)
+#if defined(OPENHTJ2K_ENABLE_AVX2)
   #include "utils.hpp"
   #include "color.hpp"
 
@@ -69,7 +69,7 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     __m256 mG  = _mm256_cvtepi32_ps(*((__m256i *)(sp1 + n)));
     __m256 mB  = _mm256_cvtepi32_ps(*((__m256i *)(sp2 + n)));
     __m256 mY  = _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(mR, mALPHA_R), _mm256_mul_ps(mG, mALPHA_G)),
-                              _mm256_mul_ps(mB, mALPHA_B));
+                               _mm256_mul_ps(mB, mALPHA_B));
     __m256 mCb = _mm256_mul_ps(mCB_FACT, _mm256_sub_ps(mB, mY));
     __m256 mCr = _mm256_mul_ps(mCR_FACT, _mm256_sub_ps(mR, mY));
     *((__m256i *)(sp0 + n)) = _mm256_cvtps_epi32(_mm256_round_ps(mY, 0));
