@@ -40,10 +40,8 @@
   #include <arm_neon.h>
 #elif defined(_MSC_VER) || defined(__MINGW64__)
   #include <intrin.h>
-  #define _MM_SET1_64 _mm_set1_epi64x
 #else
   #include <x86intrin.h>
-  #define _MM_SET1_64 _mm_set1_epi64
 #endif
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
