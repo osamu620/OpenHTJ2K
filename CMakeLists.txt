@@ -12,7 +12,7 @@ find_package(Threads REQUIRED)
 
 message(STATUS "${CMAKE_HOST_SYSTEM_PROCESSOR}")
 
-if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$")
+if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$")
 	if (NOT MINGW)
 		option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
 	endif()
@@ -35,7 +35,7 @@ if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$")
 	endif()
 endif()
 
-if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^arm64|^aarch64")
+if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]64$")
 	option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics" ON)
 	if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")

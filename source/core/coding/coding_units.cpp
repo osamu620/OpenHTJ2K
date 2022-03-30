@@ -1065,6 +1065,26 @@ void j2k_subband::quantize() {
       this->i_samples[n] *= -1;
     }
   }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  for (uint32_t n = 0; n < length - length % 16; n += 16) {
+    auto isrc    = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
+    auto fsrc32l = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 0)));
+    auto fsrc32h = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 1)));
+    auto vfscale = _mm256_set1_ps(fscale);
+    auto isrc32l = _mm256_cvttps_epi32(_mm256_mul_ps(fsrc32l, vfscale));
+    auto isrc32h = _mm256_cvttps_epi32(_mm256_mul_ps(fsrc32h, vfscale));
+    auto tmp0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(isrc32l, isrc32h), 0b11011000);
+    _mm256_storeu_si256((__m256i *)(this->i_samples + n), tmp0);
+  }
+  for (uint32_t n = length - length % 16; n < length; ++n) {
+    auto fval = static_cast<float>(this->i_samples[n]);
+    fval *= fscale;
+    // fval may exceed when sprec_t == int16_t
+    this->i_samples[n] = static_cast<sprec_t>(floorf(fabs(fval)));
+    if (fval < 0.0) {
+      this->i_samples[n] *= -1;
+    }
+  }
 #else
   for (uint32_t n = 0; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
@@ -1075,6 +1095,7 @@ void j2k_subband::quantize() {
       this->i_samples[n] *= -1;
     }
   }
+  int a = 1;
 #endif
 }
 
@@ -1244,6 +1265,15 @@ void j2k_resolution::scale() {
     vst1q_s16(this->i_samples + n, isrc >> this->normalizing_downshift);
   }
   for (uint32_t n = length - length % 8; n < length; ++n) {
+    this->i_samples[n] >>= this->normalizing_downshift;
+  }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  for (uint32_t n = 0; n < length - length % 16; n += 16) {
+    auto isrc = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
+    _mm256_storeu_si256((__m256i *)(this->i_samples + n),
+                        _mm256_srai_epi16(isrc, this->normalizing_downshift));
+  }
+  for (uint32_t n = length - length % 16; n < length; ++n) {
     this->i_samples[n] >>= this->normalizing_downshift;
   }
 #else
