@@ -26,8 +26,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_AVX2)
-  #include "utils.hpp"
   #include "color.hpp"
 
 static constexpr uint32_t NUM_I32_VECTOR_AVX2 = 8;

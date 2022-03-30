@@ -45,7 +45,7 @@
 #endif
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  #define OPENHTJ2K_ENABLE_AVX2
+  #define OPENHTJ2K_ENABLE_AVX2 1
 #endif
 
 static inline size_t popcount32(uintmax_t num) {
