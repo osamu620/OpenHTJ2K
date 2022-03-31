@@ -53,8 +53,11 @@ typedef void (*fdwt_1d_filtr_func_fixed)(sprec_t *, int32_t, int32_t, const uint
 typedef void (*fdwt_ver_filtr_func_fixed)(sprec_t *, const uint32_t, const uint32_t, const uint32_t,
                                           const uint32_t);
 // define pointer to IDWT functions
-typedef void (*idwt_1d_filtr_func_fixed)(sprec_t *, int32_t, int32_t, const uint32_t, const uint32_t);
+typedef void (*idwt_1d_filtd_func_fixed)(sprec_t *, int32_t, int32_t, const uint32_t, const uint32_t);
+typedef void (*idwt_ver_filtd_func_fixed)(sprec_t *, const uint32_t, const uint32_t, const uint32_t,
+                                          const uint32_t);
 
+// symmetric extension
 static inline int32_t PSEo(const int32_t i, const int32_t i0, const int32_t i1) {
   const int32_t tmp0    = 2 * (i1 - i0 - 1);
   const int32_t tmp1    = ((i - i0) < 0) ? i0 - i : i - i0;
@@ -66,10 +69,10 @@ template <class T>
 static inline void dwt_1d_extr_fixed(T *extbuf, T *buf, const int32_t left, const int32_t right,
                                      const uint32_t i0, const uint32_t i1) {
   memcpy(extbuf + left, buf, sizeof(T) * (i1 - i0));
-  for (uint32_t i = 1; i <= left; i++) {
+  for (int32_t i = 1; i <= left; ++i) {
     extbuf[left - i] = buf[PSEo(i0 - i, i0, i1) - i0];
   }
-  for (uint32_t i = 1; i <= right; i++) {
+  for (int32_t i = 1; i <= right; ++i) {
     extbuf[left + (i1 - i0) + i - 1] = buf[PSEo(i1 - i0 + i - 1 + i0, i0, i1) - i0];
   }
 }
@@ -123,22 +126,38 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
                                     const uint32_t u_i0, const uint32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1);
-static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
+void idwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                             const uint32_t v1);
+void idwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                           const uint32_t v1);
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2] = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
                                     const uint32_t u_i0, const uint32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1);
-static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
                                                           idwt_1d_filtr_rev53_fixed_avx2};
+void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                  const uint32_t v1);
+void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                const uint32_t v1);
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2] = {idwt_irrev_ver_sr_fixed_avx2,
+                                                         idwt_rev_ver_sr_fixed_avx2};
 #else
 void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t right, const uint32_t u_i0,
                                const uint32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t right, const uint32_t u_i0,
                                  const uint32_t u_i1);
-static idwt_1d_filtr_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
                                                           idwt_1d_filtr_rev53_fixed};
+void idwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                             const uint32_t v1);
+void idwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                           const uint32_t v1);
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2] = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
 #endif
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, uint32_t u0,
                       uint32_t u1, uint32_t v0, uint32_t v1, uint8_t transformation,

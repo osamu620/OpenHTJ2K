@@ -121,19 +121,17 @@ static void idwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, cons
   }
 }
 
-static void idwt_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                              const uint32_t v1, const uint8_t transformation) {
-  const uint32_t stride              = u1 - u0;
-  constexpr int32_t num_pse_i0[2][2] = {{3, 1}, {4, 2}};
-  constexpr int32_t num_pse_i1[2][2] = {{4, 2}, {3, 1}};
-  const int32_t top                  = num_pse_i0[v0 % 2][transformation];
-  const int32_t bottom               = num_pse_i1[v1 % 2][transformation];
+void idwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                             const uint32_t v1) {
+  const uint32_t stride           = u1 - u0;
+  constexpr int32_t num_pse_i0[2] = {3, 4};
+  constexpr int32_t num_pse_i1[2] = {4, 3};
+  const int32_t top               = num_pse_i0[v0 % 2];
+  const int32_t bottom            = num_pse_i1[v1 % 2];
   if (v0 == v1 - 1) {
     // one sample case
-    if (transformation) {
-      for (uint32_t col = 0; col < u1 - u0; ++col) {
-        in[col] >>= (v0 % 2 == 0) ? 0 : 1;
-      }
+    for (uint32_t col = 0; col < u1 - u0; ++col) {
+      in[col] >>= (v0 % 2 == 0) ? 0 : 1;
     }
   } else {
     const uint32_t len = round_up(stride, SIMD_PADDING);
@@ -153,51 +151,36 @@ static void idwt_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1,
     const int32_t start  = v0 / 2;
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
-    if (transformation) {
-      for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-        for (uint32_t col = 0; col < u1 - u0; ++col) {
-          int32_t sum = buf[n - 1][col];
-          sum += buf[n + 1][col];
-          buf[n][col] -= ((sum + 2) >> 2);
-        }
-      }
-      for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-        for (uint32_t col = 0; col < u1 - u0; ++col) {
-          int32_t sum = buf[n][col];
-          sum += buf[n + 2][col];
-          buf[n + 1][col] += (sum >> 1);
-        }
-      }
-    } else {
-      for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
-        for (uint32_t col = 0; col < u1 - u0; ++col) {
-          int32_t sum = buf[n - 1][col];
-          sum += buf[n + 1][col];
-          buf[n][col] -= (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
-        }
-      }
-      for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-        for (uint32_t col = 0; col < u1 - u0; ++col) {
-          int32_t sum = buf[n][col];
-          sum += buf[n + 2][col];
-          buf[n + 1][col] -= (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
-        }
-      }
-      for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
-        for (uint32_t col = 0; col < u1 - u0; ++col) {
-          int32_t sum = buf[n - 1][col];
-          sum += buf[n + 1][col];
-          buf[n][col] -= (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
-        }
-      }
-      for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-        for (uint32_t col = 0; col < u1 - u0; ++col) {
-          int32_t sum = buf[n][col];
-          sum += buf[n + 2][col];
-          buf[n + 1][col] -= (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
-        }
+
+    for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
+      for (uint32_t col = 0; col < u1 - u0; ++col) {
+        int32_t sum = buf[n - 1][col];
+        sum += buf[n + 1][col];
+        buf[n][col] -= (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
       }
     }
+    for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+      for (uint32_t col = 0; col < u1 - u0; ++col) {
+        int32_t sum = buf[n][col];
+        sum += buf[n + 2][col];
+        buf[n + 1][col] -= (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
+      }
+    }
+    for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
+      for (uint32_t col = 0; col < u1 - u0; ++col) {
+        int32_t sum = buf[n - 1][col];
+        sum += buf[n + 1][col];
+        buf[n][col] -= (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
+      }
+    }
+    for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+      for (uint32_t col = 0; col < u1 - u0; ++col) {
+        int32_t sum = buf[n][col];
+        sum += buf[n + 2][col];
+        buf[n + 1][col] -= (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
+      }
+    }
+
     for (uint32_t i = 1; i <= top; ++i) {
       aligned_mem_free(buf[top - i]);
     }
@@ -207,6 +190,63 @@ static void idwt_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1,
     delete[] buf;
   }
 }
+
+void idwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                           const uint32_t v1) {
+  const uint32_t stride           = u1 - u0;
+  constexpr int32_t num_pse_i0[2] = {1, 2};
+  constexpr int32_t num_pse_i1[2] = {2, 1};
+  const int32_t top               = num_pse_i0[v0 % 2];
+  const int32_t bottom            = num_pse_i1[v1 % 2];
+  if (v0 == v1 - 1) {
+    // one sample case
+    for (uint32_t col = 0; col < u1 - u0; ++col) {
+      in[col] >>= (v0 % 2 == 0) ? 0 : 1;
+    }
+  } else {
+    const uint32_t len = round_up(stride, SIMD_PADDING);
+    auto **buf         = new sprec_t *[top + v1 - v0 + bottom];
+    for (uint32_t i = 1; i <= top; ++i) {
+      buf[top - i] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
+      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride], sizeof(sprec_t) * stride);
+    }
+    for (uint32_t row = 0; row < v1 - v0; ++row) {
+      buf[top + row] = &in[row * stride];
+    }
+    for (uint32_t i = 1; i <= bottom; i++) {
+      buf[top + (v1 - v0) + i - 1] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
+      memcpy(buf[top + (v1 - v0) + i - 1], &in[(PSEo(v1 - v0 + i - 1 + v0, v0, v1) - v0) * stride],
+             sizeof(sprec_t) * stride);
+    }
+    const int32_t start  = v0 / 2;
+    const int32_t stop   = v1 / 2;
+    const int32_t offset = top - v0 % 2;
+
+    for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
+      for (uint32_t col = 0; col < u1 - u0; ++col) {
+        int32_t sum = buf[n - 1][col];
+        sum += buf[n + 1][col];
+        buf[n][col] -= ((sum + 2) >> 2);
+      }
+    }
+    for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+      for (uint32_t col = 0; col < u1 - u0; ++col) {
+        int32_t sum = buf[n][col];
+        sum += buf[n + 2][col];
+        buf[n + 1][col] += (sum >> 1);
+      }
+    }
+
+    for (uint32_t i = 1; i <= top; ++i) {
+      aligned_mem_free(buf[top - i]);
+    }
+    for (uint32_t i = 1; i <= bottom; i++) {
+      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
+    }
+    delete[] buf;
+  }
+}
+
 static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
                                      uint32_t u0, uint32_t u1, uint32_t v0, uint32_t v1) {
   const uint32_t stride     = u1 - u0;
@@ -238,7 +278,7 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
   idwt_2d_interleave_fixed(dst, LL, HL, LH, HH, u0, u1, v0, v1);
   idwt_hor_sr_fixed(src, dst, u0, u1, v0, v1, transformation);
   aligned_mem_free(dst);
-  idwt_ver_sr_fixed(src, u0, u1, v0, v1, transformation);
+  idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1);
 
   // scaling for 16bit width fixed-point representation
   if (transformation != 1 && normalizing_upshift) {
