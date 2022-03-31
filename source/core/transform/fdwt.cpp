@@ -128,8 +128,8 @@ static void fdwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, cons
   }
 }
 
-auto fdwt_irrev_ver_sr_fixed = [](sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                                  const uint32_t v1) {
+void fdwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                             const uint32_t v1) {
   const uint32_t stride           = u1 - u0;
   constexpr int32_t num_pse_i0[2] = {4, 3};
   constexpr int32_t num_pse_i1[2] = {3, 4};
@@ -204,10 +204,10 @@ auto fdwt_irrev_ver_sr_fixed = [](sprec_t *in, const uint32_t u0, const uint32_t
     }
     delete[] buf;
   }
-};
+}
 
-auto fdwt_rev_ver_sr_fixed = [](sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                                const uint32_t v1) {
+void fdwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                           const uint32_t v1) {
   const uint32_t stride           = u1 - u0;
   constexpr int32_t num_pse_i0[2] = {2, 1};
   constexpr int32_t num_pse_i1[2] = {1, 2};
@@ -266,9 +266,7 @@ auto fdwt_rev_ver_sr_fixed = [](sprec_t *in, const uint32_t u0, const uint32_t u
     }
     delete[] buf;
   }
-};
-
-static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2] = {fdwt_irrev_ver_sr_fixed, fdwt_rev_ver_sr_fixed};
+}
 
 // Deinterleaving to devide coefficients into subbands
 static void fdwt_2d_deinterleave_fixed(const sprec_t *buf, sprec_t *const LL, sprec_t *const HL,

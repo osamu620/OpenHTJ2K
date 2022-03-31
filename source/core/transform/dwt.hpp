@@ -82,6 +82,11 @@ void fdwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
                                     const uint32_t u_i0, const uint32_t u_i1);
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
                                                           fdwt_1d_filtr_rev53_fixed_neon};
+void fdwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                             const uint32_t v1);
+void fdwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                           const uint32_t v1);
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2] = {fdwt_irrev_ver_sr_fixed, fdwt_rev_ver_sr_fixed};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1);
@@ -89,6 +94,12 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
                                     const uint32_t u_i0, const uint32_t u_i1);
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
+void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                  const uint32_t v1);
+void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                const uint32_t v1);
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2] = {fdwt_irrev_ver_sr_fixed_avx2,
+                                                         fdwt_rev_ver_sr_fixed_avx2};
 #else
 void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t right, const uint32_t u_i0,
                                  const uint32_t u_i1);
@@ -96,6 +107,11 @@ void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t rig
                                const uint32_t u_i1);
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed,
                                                           fdwt_1d_filtr_rev53_fixed};
+void fdwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                             const uint32_t v1);
+void fdwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                           const uint32_t v1);
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2] = {fdwt_irrev_ver_sr_fixed, fdwt_rev_ver_sr_fixed};
 #endif
 
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, uint32_t u0,
