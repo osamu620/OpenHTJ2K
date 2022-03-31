@@ -30,6 +30,10 @@
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #include "dwt.hpp"
   #include <cstring>
+
+/********************************************************************************
+ * horizontal transforms
+ *******************************************************************************/
 // irreversible FDWT
 auto fdwt_irrev97_fixed_avx2_hor_step = [](int32_t init_pos, int32_t simdlen, int16_t *X, int32_t n0,
                                            int32_t n1, int32_t coeff, int32_t offset, int32_t shift) {
@@ -54,36 +58,6 @@ auto fdwt_irrev97_fixed_avx2_hor_step = [](int32_t init_pos, int32_t simdlen, in
     auto xout_interleaved =
         _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0b11011000), 0b11011000);
     _mm256_storeu_si256((__m256i *)(X + n + n0), xout_interleaved);
-  }
-};
-
-auto fdwt_irrev97_fixed_avx2_ver_step = [](int32_t simdlen, int16_t *Xin0, int16_t *Xin1, int16_t *Xout,
-                                           int32_t coeff, int32_t offset, int32_t shift) {
-  auto vcoeff  = _mm256_set1_epi32(coeff);
-  auto voffset = _mm256_set1_epi32(offset);
-  for (int32_t n = 0; n < simdlen; n += 16) {
-    auto xin0_16 = _mm256_loadu_si256((__m256i *)(Xin0 + n));
-    auto xin2_16 = _mm256_loadu_si256((__m256i *)(Xin1 + n));
-    auto xout16  = _mm256_loadu_si256((__m256i *)(Xout + n));
-    // low
-    auto xin0_32 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin0_16, 0));
-    auto xin2_32 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin2_16, 0));
-    auto xout32  = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xout16, 0));
-    auto vsum32  = _mm256_add_epi32(xin0_32, xin2_32);
-    auto xout32l = _mm256_add_epi32(
-        _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum32, vcoeff), voffset), shift), xout32);
-
-    // high
-    xin0_32      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin0_16, 1));
-    xin2_32      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin2_16, 1));
-    xout32       = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xout16, 1));
-    vsum32       = _mm256_add_epi32(xin0_32, xin2_32);
-    auto xout32h = _mm256_add_epi32(
-        _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum32, vcoeff), voffset), shift), xout32);
-
-    // pack and store
-    _mm256_storeu_si256((__m256i *)(Xout + n),
-                        _mm256_permute4x64_epi64(_mm256_packs_epi32(xout32l, xout32h), 0b11011000));
   }
 };
 
@@ -168,7 +142,40 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
   }
 }
 
-// vertical transforms
+/********************************************************************************
+ * vertical transforms
+ *******************************************************************************/
+// irreversible FDWT
+auto fdwt_irrev97_fixed_avx2_ver_step = [](int32_t simdlen, int16_t *Xin0, int16_t *Xin1, int16_t *Xout,
+                                           int32_t coeff, int32_t offset, int32_t shift) {
+  auto vcoeff  = _mm256_set1_epi32(coeff);
+  auto voffset = _mm256_set1_epi32(offset);
+  for (int32_t n = 0; n < simdlen; n += 16) {
+    auto xin0_16 = _mm256_loadu_si256((__m256i *)(Xin0 + n));
+    auto xin2_16 = _mm256_loadu_si256((__m256i *)(Xin1 + n));
+    auto xout16  = _mm256_loadu_si256((__m256i *)(Xout + n));
+    // low
+    auto xin0_32 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin0_16, 0));
+    auto xin2_32 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin2_16, 0));
+    auto xout32  = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xout16, 0));
+    auto vsum32  = _mm256_add_epi32(xin0_32, xin2_32);
+    auto xout32l = _mm256_add_epi32(
+        _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum32, vcoeff), voffset), shift), xout32);
+
+    // high
+    xin0_32      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin0_16, 1));
+    xin2_32      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin2_16, 1));
+    xout32       = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xout16, 1));
+    vsum32       = _mm256_add_epi32(xin0_32, xin2_32);
+    auto xout32h = _mm256_add_epi32(
+        _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum32, vcoeff), voffset), shift), xout32);
+
+    // pack and store
+    _mm256_storeu_si256((__m256i *)(Xout + n),
+                        _mm256_permute4x64_epi64(_mm256_packs_epi32(xout32l, xout32h), 0b11011000));
+  }
+};
+
 void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
                                   const uint32_t v1) {
   const uint32_t stride           = u1 - u0;
@@ -250,6 +257,7 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t
   }
 }
 
+// reversible FDWT
 void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
                                 const uint32_t v1) {
   const uint32_t stride           = u1 - u0;
