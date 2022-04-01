@@ -216,7 +216,7 @@ void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], Ccoeff, Coffset, Cshift);
+      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], Ccoeff, Coffset, Cshift);
       for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
@@ -232,7 +232,7 @@ void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], Acoeff, Aoffset, Ashift);
+      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], Acoeff, Aoffset, Ashift);
       for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
