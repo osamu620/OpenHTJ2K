@@ -145,7 +145,7 @@ void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t
   if (v0 == v1 - 1) {
     // one sample case
     for (uint32_t col = 0; col < u1 - u0; ++col) {
-      in[col] >>= (v0 % 2 == 0) ? 0 : 1;
+      in[col] >>= (v0 % 2 == 0) ? 0 : 0;
     }
   } else {
     const uint32_t len = round_up(stride, SIMD_PADDING);

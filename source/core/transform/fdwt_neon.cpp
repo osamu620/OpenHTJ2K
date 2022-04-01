@@ -149,7 +149,7 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t
     constexpr float K1 = 0.8128931;      // 066115961;
     for (uint32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
-        in[col] <<= 1;
+        in[col] <<= 0;
       }
     }
   } else {
