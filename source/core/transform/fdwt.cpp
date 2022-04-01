@@ -141,10 +141,8 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, 
     constexpr float K  = 1.2301741 / 2;  // 04914001;
     constexpr float K1 = 0.8128931;      // 066115961;
     for (uint32_t col = 0; col < u1 - u0; ++col) {
-      if (v0 % 2 == 0) {
-        in[col] = (sprec_t)roundf(static_cast<float>(in[col]) * K1);
-      } else {
-        in[col] = (sprec_t)roundf(static_cast<float>(in[col]) * 2 * K);
+      if (v0 % 2) {
+        in[col] <<= 0;
       }
     }
   } else {
@@ -217,9 +215,7 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, co
   if (v0 == v1 - 1) {
     // one sample case
     for (uint32_t col = 0; col < u1 - u0; ++col) {
-      if (v0 % 2 == 0) {
-        in[col] = in[col];
-      } else {
+      if (v0 % 2) {
         in[col] = in[col] << 1;
       }
     }
