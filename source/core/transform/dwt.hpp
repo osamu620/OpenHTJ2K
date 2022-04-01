@@ -85,11 +85,12 @@ void fdwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
                                     const uint32_t u_i0, const uint32_t u_i1);
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
                                                           fdwt_1d_filtr_rev53_fixed_neon};
-void fdwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                             const uint32_t v1);
-void fdwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                           const uint32_t v1);
-static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2] = {fdwt_irrev_ver_sr_fixed, fdwt_rev_ver_sr_fixed};
+void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                  const uint32_t v1);
+void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                const uint32_t v1);
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2] = {fdwt_irrev_ver_sr_fixed_neon,
+                                                         fdwt_rev_ver_sr_fixed_neon};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
                                       const uint32_t u_i0, const uint32_t u_i1);
@@ -128,11 +129,12 @@ void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int3
                                       const uint32_t u_i0, const uint32_t u_i1);
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
-void idwt_irrev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                             const uint32_t v1);
-void idwt_rev_ver_sr_fixed(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                           const uint32_t v1);
-static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2] = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
+void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                  const uint32_t v1);
+void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
+                                const uint32_t v1);
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2] = {idwt_irrev_ver_sr_fixed_neon,
+                                                         idwt_rev_ver_sr_fixed_neon};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
                                     const uint32_t u_i0, const uint32_t u_i1);
