@@ -34,8 +34,9 @@
  * horizontal transforms
  *******************************************************************************/
 // irreversible IDWT
-auto idwt_irrev97_fixed_avx2_hor_step = [](int32_t init_pos, int32_t simdlen, int16_t *X, int32_t n0,
-                                           int32_t n1, int32_t coeff, int32_t offset, int32_t shift) {
+auto idwt_irrev97_fixed_avx2_hor_step = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+                                           const int32_t n0, const int32_t n1, const int32_t coeff,
+                                           const int32_t offset, const int32_t shift) {
   auto vcoeff  = _mm256_set1_epi32(coeff);
   auto voffset = _mm256_set1_epi32(offset);
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
@@ -143,8 +144,9 @@ void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
  * vertical transform
  *******************************************************************************/
 // irreversible IDWT
-auto idwt_irrev97_fixed_avx2_ver_step = [](int32_t simdlen, int16_t *Xin0, int16_t *Xin1, int16_t *Xout,
-                                           int32_t coeff, int32_t offset, int32_t shift) {
+auto idwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
+                                           int16_t *const Xout, const int32_t coeff, const int32_t offset,
+                                           const int32_t shift) {
   auto vcoeff  = _mm256_set1_epi32(coeff);
   auto voffset = _mm256_set1_epi32(offset);
   for (int32_t n = 0; n < simdlen; n += 16) {
