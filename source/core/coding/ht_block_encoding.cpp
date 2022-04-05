@@ -45,7 +45,7 @@
 
 void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   const uint32_t height = this->size.y;
-  const uint32_t width  = this->size.x;
+  const uint32_t width  = this->size.x + (this->size.x % 2);
   const uint32_t stride = this->band_stride;
   const int32_t pshift  = (refsegment) ? 1 : 0;
   const int32_t pLSB    = (1 << (pshift - 1));
@@ -533,7 +533,7 @@ static inline void make_storage_one(const j2k_codeblock *const block, const uint
 
   for (int i = 0; i < 4; ++i) {
     if ((x[i] >= 0 && x[i] < (block->size.x)) && (y[i] >= 0 && y[i] < (block->size.y))) {
-      v_n[i] = block->sample_buf[x[i] + y[i] * block->size.x];
+      v_n[i] = block->sample_buf[x[i] + y[i] * (block->size.x + block->size.x % 2)];
     } else {
       v_n[i] = 0;
     }
