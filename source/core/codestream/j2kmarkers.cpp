@@ -165,7 +165,7 @@ uint32_t SIZ_marker::get_component_stride(uint16_t c) const {
     printf("ERROR: invalid component index\n");
     throw std::exception();
   }
-  return Xsiz / XRsiz[c];
+  return Xsiz / XRsiz[c] - XOsiz;
 }
 
 void SIZ_marker::get_image_origin(element_siz &siz) const {
@@ -556,13 +556,13 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   const std::vector<double> CDF53L = {-0.125, 0.25, 0.75, 0.25, -0.125};
   const std::vector<double> CDF53H = {-0.5, 1, -0.5};  // gain is doubled(x2)
   const std::vector<double> D97SL  = {-0.091271763114250, -0.057543526228500, 0.591271763114250,
-                                     1.115087052457000,  0.5912717631142500, -0.05754352622850,
-                                     -0.091271763114250};
+                                      1.115087052457000,  0.5912717631142500, -0.05754352622850,
+                                      -0.091271763114250};
   const std::vector<double> D97SH  = {0.053497514821622,  0.033728236885750,
-                                     -0.156446533057980, -0.533728236885750,
-                                     1.205898036472720,  -0.533728236885750,
-                                     -0.156446533057980, 0.033728236885750,
-                                     0.053497514821622};  // gain is doubled(x2)
+                                      -0.156446533057980, -0.533728236885750,
+                                      1.205898036472720,  -0.533728236885750,
+                                      -0.156446533057980, 0.033728236885750,
+                                      0.053497514821622};  // gain is doubled(x2)
 
   // Square roots of the visual weighting factors for Y content
   const double W_b_Y[15] = {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
@@ -838,13 +838,13 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   const std::vector<double> CDF53L = {-0.125, 0.25, 0.75, 0.25, -0.125};
   const std::vector<double> CDF53H = {-0.5, 1, -0.5};  // gain is doubled(x2)
   const std::vector<double> D97SL  = {-0.091271763114250, -0.057543526228500, 0.591271763114250,
-                                     1.115087052457000,  0.5912717631142500, -0.05754352622850,
-                                     -0.091271763114250};
+                                      1.115087052457000,  0.5912717631142500, -0.05754352622850,
+                                      -0.091271763114250};
   const std::vector<double> D97SH  = {0.053497514821622,  0.033728236885750,
-                                     -0.156446533057980, -0.533728236885750,
-                                     1.205898036472720,  -0.533728236885750,
-                                     -0.156446533057980, 0.033728236885750,
-                                     0.053497514821622};  // gain is doubled(x2)
+                                      -0.156446533057980, -0.533728236885750,
+                                      1.205898036472720,  -0.533728236885750,
+                                      -0.156446533057980, 0.033728236885750,
+                                      0.053497514821622};  // gain is doubled(x2)
 
   // Square roots of the visual weighting factors for 4:4:4 YCbCr content
   const double W_b_444[3][15] = {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000,
