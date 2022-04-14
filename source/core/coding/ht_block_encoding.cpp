@@ -111,7 +111,8 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     auto vsignmask = _mm256_set1_epi16((uint16_t)0x8000);
     auto vabsmask  = _mm256_set1_epi16((uint16_t)0x7FFF);
     // simd
-    for (uint16_t j = 0; j < width - width % 16; j += 16) {
+    uint16_t simdlen = round_down(this->size.x, 16);
+    for (uint16_t j = 0; j < simdlen; j += 16) {
       auto coeff16 = _mm256_loadu_si256((__m256i *)(sp + j));
       // auto vsmag   = _mm256_and_si256(coeff16, vpLSB);
       auto vsign = _mm256_srli_epi16(_mm256_and_si256(coeff16, vsignmask), 15);
@@ -143,7 +144,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       block_index += 16;
     }
     // remaining
-    for (uint16_t j = width - width % 16; j < width; ++j) {
+    for (uint16_t j = simdlen; j < this->size.x; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
       block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
