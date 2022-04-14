@@ -1068,7 +1068,7 @@ void j2k_subband::quantize() {
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const uint32_t simdlen = round_down(length, 16);
-  for (uint32_t n = 0; n < length - length % 16; n += 16) {
+  for (uint32_t n = 0; n < simdlen; n += 16) {
     auto isrc    = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
     auto fsrc32l = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 0)));
     auto fsrc32h = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 1)));

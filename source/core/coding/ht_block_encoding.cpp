@@ -480,8 +480,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 
   alignas(32) uint32_t sig32[8];
   _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(v_u8_out));
-  auto v_s32_0 = *((__m128i *)(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2));
-  auto v_s32_1 = *((__m128i *)(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2));
+  auto v_s32_0 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2));
+  auto v_s32_1 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2));
   *((__m128i *)(v_n)) = _mm_unpacklo_epi32(v_s32_0, v_s32_1);
   *((__m128i *)(v_n + 4)) = _mm_unpackhi_epi32(v_s32_0, v_s32_1);
 
