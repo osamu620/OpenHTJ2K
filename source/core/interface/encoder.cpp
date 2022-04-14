@@ -82,8 +82,8 @@ size_t openhtj2k_encoder_impl::invoke() {
     throw std::exception();
   }
   if (siz->XTsiz * siz->YTsiz == 0) {
-    siz->XTsiz = siz->Xsiz;
-    siz->YTsiz = siz->Ysiz;
+    siz->XTsiz = siz->Xsiz - siz->XOsiz;
+    siz->YTsiz = siz->Ysiz - siz->YOsiz;
   }
   if (((siz->XTOsiz + siz->XTsiz) <= siz->XOsiz) || ((siz->YTOsiz + siz->YTsiz) <= siz->YOsiz)) {
     printf("ERROR: tile size plus tile origin shall be greater than the image origin.\n");

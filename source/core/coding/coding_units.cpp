@@ -1040,7 +1040,8 @@ void j2k_subband::quantize() {
   float fscale = 1.0f / this->delta;
   fscale /= (1 << (FRACBITS));
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  for (uint32_t n = 0; n < length - length % 8; n += 8) {
+  const uint32_t simdlen = round_down(length, 8);
+  for (uint32_t n = 0; n < simdlen; n += 8) {
     auto isrc    = vld1q_s16(this->i_samples + n);
     auto isgn    = vcltzq_s16(isrc) | 0x01;
     auto isrc32  = vreinterpretq_s32_s16(isrc);
@@ -1056,7 +1057,7 @@ void j2k_subband::quantize() {
                               vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrch))));
     vst1q_s16(this->i_samples + n, imag * isgn);
   }
-  for (uint32_t n = length - length % 8; n < length; ++n) {
+  for (uint32_t n = simdlen; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
     // fval may exceed when sprec_t == int16_t
@@ -1066,6 +1067,7 @@ void j2k_subband::quantize() {
     }
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  const uint32_t simdlen = round_down(length, 16);
   for (uint32_t n = 0; n < length - length % 16; n += 16) {
     auto isrc    = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
     auto fsrc32l = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 0)));
@@ -1076,7 +1078,7 @@ void j2k_subband::quantize() {
     auto tmp0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(isrc32l, isrc32h), 0b11011000);
     _mm256_storeu_si256((__m256i *)(this->i_samples + n), tmp0);
   }
-  for (uint32_t n = length - length % 16; n < length; ++n) {
+  for (uint32_t n = simdlen; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
     // fval may exceed when sprec_t == int16_t
@@ -1434,7 +1436,7 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
     const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
 #pragma omp parallel for  // default(none) shared(height, width, src, stride)
     for (int i = 0; i < height; ++i) {
-      int32_t *src = src_origin + (pos0.y + i) * stride + pos0.x;
+      int32_t *src = src_origin + i * stride;
       int32_t *dst = samples + i * width;
       memcpy(dst, src, sizeof(int32_t) * width);
     }

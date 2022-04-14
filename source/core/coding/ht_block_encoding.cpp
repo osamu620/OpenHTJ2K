@@ -60,7 +60,8 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     uint16x8_t vpLSB = vdupq_n_u16((uint16_t)pLSB);
     int16x8_t vone   = vdupq_n_s16(1);
     // simd
-    for (uint16_t j = 0; j < width - width % 8; j += 8) {
+    uint16_t simdlen = round_down(this->size.x, 8);
+    for (uint16_t j = 0; j < simdlen; j += 8) {
       int16x8_t coeff16   = vld1q_s16(sp + j);
       uint8x8_t vblkstate = vget_low_u8(vld1q_u8(block_states.get() + block_index));
       uint16x8_t vsign    = vcltzq_s16(coeff16) >> 15;
@@ -84,7 +85,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       block_index += 8;
     }
     // remaining
-    for (uint16_t j = width - width % 8; j < width; ++j) {
+    for (uint16_t j = simdlen; j < this->size.x; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
       block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
@@ -187,34 +188,28 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
 }
 
 void print_block(const j2k_codeblock *const block) {
-  const uint16_t QW = ceil_int(block->size.x, 2);
-  const uint16_t QH = ceil_int(block->size.y, 2);
-  auto *buf         = new int16_t[4 * QW * QH]();
-  int y, x;
-  int idx = 0;
-  for (int i = 0; i < QH; ++i) {
-    for (int j = 0; j < QW; ++j) {
-      x            = j * 2;
-      y            = i * 2;
-      buf[4 * idx] = block->sample_buf[x + y * block->size.x];
-      if (y + 1 < block->size.y) {
-        buf[4 * idx + 1] = block->sample_buf[x + (y + 1) * block->size.x];
-      }
-      if (x + 1 < block->size.x) {
-        buf[4 * idx + 2] = block->sample_buf[x + 1 + y * block->size.x];
-      }
-      if ((x + 1 < block->size.x) && (y + 1 < block->size.y)) {
-        buf[4 * idx + 3] = block->sample_buf[x + 1 + (y + 1) * block->size.x];
-      }
-      idx++;
+  int16_t *sp    = block->i_samples;
+  int32_t stride = block->band_stride;
+  for (int i = 0; i < block->size.y; ++i) {
+    for (int j = 0; j < block->size.x; ++j) {
+      printf("%d ", sp[i * stride + j]);
     }
-  }
-  printf("-- block --\n");
-  for (int i = 0; i < 4 * QW * QH; ++i) {
-    printf("%3d ", buf[i]);
+    printf("\n");
   }
   printf("\n");
-  delete[] buf;
+}
+
+void print_mags_block(const j2k_codeblock *const block) {
+  int32_t *sp    = block->sample_buf.get();
+  int32_t stride = round_up(block->size.x, 2);
+  for (int i = 0; i < block->size.y; ++i) {
+    for (int j = 0; j < block->size.x; ++j) {
+      int32_t val = sp[i * stride + j];
+      printf("%d ", val);
+    }
+    printf("\n");
+  }
+  printf("\n");
 }
 
 /********************************************************************************
@@ -527,7 +522,11 @@ static inline void make_storage_one(const j2k_codeblock *const block, const uint
   const int32_t y[4] = {2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1};
 
   for (int i = 0; i < 4; ++i) {
-    sigma_n[i] = block->get_state(Sigma, y[i], x[i]);
+    if ((x[i] >= 0 && x[i] < (block->size.x)) && (y[i] >= 0 && y[i] < (block->size.y))) {
+      sigma_n[i] = block->get_state(Sigma, y[i], x[i]);
+    } else {
+      sigma_n[i] = 0;
+    }
   }
   rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);
 
