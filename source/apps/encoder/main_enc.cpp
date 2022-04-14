@@ -72,10 +72,16 @@ int main(int argc, char *argv[]) {
   }
   element_siz_local tile_size   = args.get_tile_size();
   element_siz_local tile_origin = args.get_tile_origin();
+  if (image_origin.x != 0 && tile_origin.x == 0) {
+    tile_origin.x = image_origin.x;
+  }
+  if (image_origin.y != 0 && tile_origin.y == 0) {
+    tile_origin.y = image_origin.y;
+  }
   open_htj2k::siz_params siz;  // information of input image
   siz.Rsiz   = 0;
-  siz.Xsiz   = image_size.x;
-  siz.Ysiz   = image_size.y;
+  siz.Xsiz   = image_size.x + image_origin.x;
+  siz.Ysiz   = image_size.y + image_origin.y;
   siz.XOsiz  = image_origin.x;
   siz.YOsiz  = image_origin.y;
   siz.XTsiz  = tile_size.x;
@@ -87,8 +93,8 @@ int main(int argc, char *argv[]) {
     siz.Ssiz.push_back(img.get_Ssiz_value(c));
     auto compw = img.get_component_width(c);
     auto comph = img.get_component_height(c);
-    siz.XRsiz.push_back((siz.Xsiz + compw - 1) / compw);
-    siz.YRsiz.push_back((siz.Ysiz + comph - 1) / comph);
+    siz.XRsiz.push_back(((siz.Xsiz - siz.XOsiz) + compw - 1) / compw);
+    siz.YRsiz.push_back(((siz.Ysiz - siz.YOsiz) + comph - 1) / comph);
   }
   // siz.bpp    = img_depth;
 
