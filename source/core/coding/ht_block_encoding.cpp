@@ -733,6 +733,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     int32_t vs[4] = {1, 2, 4, 8};
     auto vshift   = vld1q_s32(vs);
     emb[Q0]       = vaddvq_s32(vmulq_s32(vuoff_q, vshift) & vmask);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    auto vE_n = _mm_load_si128((__m128i *)E_n);
+    auto vEmax_q = _mm_set1_epi32(Emax_q[Q0]);
+    auto vuoff_q = _mm_set1_epi32(uoff_q[Q0]);
+    auto vmask = _mm_cmpeq_epi32(vE_n,vEmax_q);
+    auto vshift = _mm_setr_epi32(0,1,2,3);
+    auto vtmp = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift),vmask);
+    emb[Q0]  = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp,vtmp),_mm_hadd_epi32(vtmp,vtmp)));
 #else
     emb[Q0] = (E_n[0] == Emax_q[Q0]) ? uoff_q[Q0] : 0;
     emb[Q0] += (E_n[1] == Emax_q[Q0]) ? uoff_q[Q0] << 1 : 0;
@@ -800,6 +808,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     vuoff_q = vdupq_n_s32(uoff_q[Q1]);
     vmask   = vceqq_s32(vE_n, vEmax_q);
     emb[Q1] = vaddvq_s32(vmulq_s32(vuoff_q, vshift) & vmask);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    vE_n = _mm_load_si128((__m128i *)(E_n + 4));
+    vEmax_q = _mm_set1_epi32(Emax_q[Q1]);
+    vuoff_q = _mm_set1_epi32(uoff_q[Q1]);
+    vmask = _mm_cmpeq_epi32(vE_n,vEmax_q);
+    vtmp = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift),vmask);
+    emb[Q1]  = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp,vtmp),_mm_hadd_epi32(vtmp,vtmp)));
 #else
     emb[Q1] = (E_n[4] == Emax_q[Q1]) ? uoff_q[Q1] : 0;
     emb[Q1] += (E_n[5] == Emax_q[Q1]) ? uoff_q[Q1] << 1 : 0;
@@ -852,6 +867,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     int32_t vs[4] = {1, 2, 4, 8};
     auto vshift   = vld1q_s32(vs);
     emb[Q0]       = vaddvq_s32(vmulq_s32(vuoff_q, vshift) & vmask);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    auto vE_n = _mm_load_si128((__m128i *)E_n);
+    auto vEmax_q = _mm_set1_epi32(Emax_q[Q0]);
+    auto vuoff_q = _mm_set1_epi32(uoff_q[Q0]);
+    auto vmask = _mm_cmpeq_epi32(vE_n,vEmax_q);
+    auto vshift = _mm_setr_epi32(0,1,2,3);
+    auto vtmp = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift),vmask);
+    emb[Q0]  = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp,vtmp),_mm_hadd_epi32(vtmp,vtmp)));
 #else
     emb[Q0] = (E_n[0] == Emax_q[Q0]) ? uoff_q[Q0] : 0;
     emb[Q0] += (E_n[1] == Emax_q[Q0]) ? uoff_q[Q0] << 1 : 0;
@@ -942,6 +965,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       int32_t vs[4] = {1, 2, 4, 8};
       auto vshift   = vld1q_s32(vs);
       emb[Q0]       = vaddvq_s32(vmulq_s32(vuoff_q, vshift) & vmask);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      auto vE_n = _mm_load_si128((__m128i *)E_n);
+      auto vEmax_q = _mm_set1_epi32(Emax_q[Q0]);
+      auto vuoff_q = _mm_set1_epi32(uoff_q[Q0]);
+      auto vmask = _mm_cmpeq_epi32(vE_n,vEmax_q);
+      auto vshift = _mm_setr_epi32(0,1,2,3);
+      auto vtmp = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift),vmask);
+      emb[Q0]  = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp,vtmp),_mm_hadd_epi32(vtmp,vtmp)));
 #else
       emb[Q0] = (E_n[0] == Emax_q[Q0]) ? uoff_q[Q0] : 0;
       emb[Q0] += (E_n[1] == Emax_q[Q0]) ? uoff_q[Q0] << 1 : 0;
@@ -1000,6 +1031,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       vuoff_q = vdupq_n_s32(uoff_q[Q1]);
       vmask   = vceqq_s32(vE_n, vEmax_q);
       emb[Q1] = vaddvq_s32(vmulq_s32(vuoff_q, vshift) & vmask);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      vE_n = _mm_load_si128((__m128i *)(E_n + 4));
+      vEmax_q = _mm_set1_epi32(Emax_q[Q1]);
+      vuoff_q = _mm_set1_epi32(uoff_q[Q1]);
+      vmask = _mm_cmpeq_epi32(vE_n,vEmax_q);
+      vtmp = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift),vmask);
+      emb[Q1]  = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp,vtmp),_mm_hadd_epi32(vtmp,vtmp)));
 #else
       emb[Q1] = (E_n[4] == Emax_q[Q1]) ? uoff_q[Q1] : 0;
       emb[Q1] += (E_n[5] == Emax_q[Q1]) ? uoff_q[Q1] << 1 : 0;
@@ -1073,6 +1111,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       int32_t vs[4] = {1, 2, 4, 8};
       auto vshift   = vld1q_s32(vs);
       emb[Q0]       = vaddvq_s32(vmulq_s32(vuoff_q, vshift) & vmask);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      auto vE_n = _mm_load_si128((__m128i *)E_n);
+      auto vEmax_q = _mm_set1_epi32(Emax_q[Q0]);
+      auto vuoff_q = _mm_set1_epi32(uoff_q[Q0]);
+      auto vmask = _mm_cmpeq_epi32(vE_n,vEmax_q);
+      auto vshift = _mm_setr_epi32(0,1,2,3);
+      auto vtmp = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift),vmask);
+      emb[Q0]  = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp,vtmp),_mm_hadd_epi32(vtmp,vtmp)));
 #else
       emb[Q0] = (E_n[0] == Emax_q[Q0]) ? uoff_q[Q0] : 0;
       emb[Q0] += (E_n[1] == Emax_q[Q0]) ? uoff_q[Q0] << 1 : 0;
