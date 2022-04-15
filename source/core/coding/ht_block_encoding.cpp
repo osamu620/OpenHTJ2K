@@ -54,7 +54,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     sprec_t *const sp  = this->i_samples + i * stride;
     int32_t *const dp  = this->sample_buf.get() + i * width;
     size_t block_index = (i + 1) * (size.x + 2) + 1;
-    uint8_t *dstblk    = block_states.get();
+    uint8_t *dstblk    = block_states.get() + block_index;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     // vetorized for ARM NEON
     uint16x8_t vpLSB = vdupq_n_u16((uint16_t)pLSB);
@@ -63,7 +63,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     uint16_t simdlen = round_down(this->size.x, 8);
     for (uint16_t j = 0; j < simdlen; j += 8) {
       int16x8_t coeff16   = vld1q_s16(sp + j);
-      uint8x8_t vblkstate = vget_low_u8(vld1q_u8(block_states.get() + block_index));
+      uint8x8_t vblkstate = vget_low_u8(vld1q_u8(dstblk + j));
       uint16x8_t vsign    = vcltzq_s16(coeff16) >> 15;
       uint8x8_t vsmag     = vmovn_u16(vandq_s16(coeff16, vpLSB));
       uint8x8_t vssgn     = vmovn_u16(vsign);
@@ -73,7 +73,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       or_val |= vaddvq_s16(vabsmag);
       int16x8_t vmasked_one = (vceqzq_s16(vabsmag) ^ 0xFFFF) & vone;
       vblkstate |= vmovn_u16(vmasked_one);
-      vst1_u8(block_states.get() + block_index, vblkstate);
+      vst1_u8(dstblk + j, vblkstate);
       vabsmag -= vmasked_one;
       vabsmag <<= vmasked_one;
       vabsmag += vsign * vmasked_one;
@@ -82,26 +82,24 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       int32x4_t coeff32high = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(coeff32)));
       vst1q_s32(dp + j, coeff32low);
       vst1q_s32(dp + j + 4, coeff32high);
-      block_index += 8;
     }
     // remaining
     for (uint16_t j = simdlen; j < this->size.x; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-      block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
-      block_states[block_index] |= (sign >> 31) << SHIFT_SSGN;
+      dstblk[j] |= (temp & pLSB) << SHIFT_SMAG;
+      dstblk[j] |= (sign >> 31) << SHIFT_SSGN;
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
       if (temp) {
         or_val |= 1;
-        block_states[block_index] |= 1;
+        dstblk[j] |= 1;
         temp--;
         temp <<= 1;
         temp += sign >> 31;
         dp[j] = temp;
       }
-      block_index++;
     }
 
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
@@ -131,30 +129,26 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       auto vblkstate_low  = _mm256_extracti128_si256(vblkstate, 0);
       auto vblkstate_high = _mm256_extracti128_si256(vblkstate, 1);
       auto vblkstate_u8   = _mm_packs_epi16(vblkstate_low, vblkstate_high);
-      _mm_storeu_si128((__m128i *)(dstblk + block_index), vblkstate_u8);
-      //*((__m128i *)(dstblk + block_index)) = vblkstate_u8;
+      _mm_storeu_si128((__m128i *)(dstblk + j), vblkstate_u8);
       auto vcoeff      = _mm256_add_epi16(_mm256_mullo_epi16(_mm256_subs_epu16(vabsmag, vone), vmasked_two),
                                           _mm256_mullo_epi16(vsign, vmasked_one));
       auto vcoeff_low  = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(vcoeff, 0));
       auto vcoeff_high = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(vcoeff, 1));
       _mm256_storeu_si256((__m256i *)(dp + j), vcoeff_low);
       _mm256_storeu_si256((__m256i *)(dp + j + 8), vcoeff_high);
-      // *((__m256i *)(dp + j))     = vcoeff_low;
-      // *((__m256i *)(dp + j + 8)) = vcoeff_high;
-      block_index += 16;
     }
     // remaining
     for (uint16_t j = simdlen; j < this->size.x; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-      block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
-      block_states[block_index] |= (sign >> 31) << SHIFT_SSGN;
+      dstblk[j] |= (temp & pLSB) << SHIFT_SMAG;
+      dstblk[j] |= (sign >> 31) << SHIFT_SSGN;
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
       if (temp) {
         or_val |= 1;
-        block_states[block_index] |= 1;
+        dstblk[j] |= 1;
         temp--;
         temp <<= 1;
         temp += sign >> 31;
@@ -166,14 +160,14 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-      block_states[block_index] |= (temp & pLSB) << SHIFT_SMAG;
-      block_states[block_index] |= (sign >> 31) << SHIFT_SSGN;
+      dstblk[j] |= (temp & pLSB) << SHIFT_SMAG;
+      dstblk[j] |= (sign >> 31) << SHIFT_SSGN;
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
       if (temp) {
         or_val |= 1;
-        block_states[block_index] |= 1;
+        dstblk[j] |= 1;
         // convert sample value to MagSgn
         //        temp = (temp < 0) ? -temp : temp;
         //        temp &= 0x7FFFFFFF;
