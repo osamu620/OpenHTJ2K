@@ -50,7 +50,14 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
   }
+  auto fstart = std::chrono::high_resolution_clock::now();
   open_htj2k::image img(fnames);  // input image
+  auto fduration = std::chrono::high_resolution_clock::now() - fstart;
+  auto fcount    = std::chrono::duration_cast<std::chrono::microseconds>(fduration).count();
+  double ftime   = fcount / 1000.0;
+  printf("elapsed time for reading inputs %-15.3lf[ms]\n", ftime);
+  auto fbytes = img.get_width() * img.get_height() * img.get_num_components() * 2;
+  printf("%f [MB/s]\n", (double)fbytes / ftime / 1000);
   element_siz_local image_origin = args.get_origin();
   element_siz_local image_size(img.get_width(), img.get_height());
 
