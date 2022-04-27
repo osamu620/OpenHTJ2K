@@ -1528,6 +1528,8 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
   nshift[0]          = 0;
   child_ranges[0][0] = tmp_ranges[0];
 
+  auto pool = ThreadPool::get();
+  std::vector<std::future<int>> results;
   for (uint8_t r = 0; r <= NL; r++) {
     uint64_t d = 1 << (NL - r);
     const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
@@ -1546,7 +1548,17 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
     resolution[r]->create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
                                    this->mantissas, this->num_guard_bits, this->quantization_style,
                                    this->bitdepth);
-    resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+    if (pool->num_threads() > 1) {
+      results.emplace_back(pool->enqueue([r, numlayers, this] {
+        resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+        return 0;
+      }));
+    } else {
+      resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+    }
+  }
+  for (auto &result : results) {
+    result.get();
   }
 }
 

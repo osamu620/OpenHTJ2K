@@ -41,6 +41,12 @@ auto fdwt_irrev97_fixed_neon_hor_step = [](const int32_t init_pos, const int32_t
   auto vcoeff  = vdupq_n_s32(coeff);
   auto voffset = vdupq_n_s32(offset);
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
+    //    auto xl0  = vld2_s16(X + n + n0);
+    //    auto xl1  = vld2_s16(X + n + n1);
+    //    auto xsum = vaddl_s16(xl0.val[0], xl1.val[0]);
+    //    auto xout = (xsum * vcoeff + voffset) >> shift;
+    //    xl0.val[1] += vmovn_s32(xout);
+    //    vst2_s16(X + n + n0, xl0);
     auto xl0 = vld2q_s16(X + n + n0);
     auto xl1 = vld2q_s16(X + n + n1);
 
