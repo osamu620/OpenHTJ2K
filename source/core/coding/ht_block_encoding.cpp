@@ -70,7 +70,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       vblkstate |= vsmag << SHIFT_SMAG;
       vblkstate |= vssgn << SHIFT_SSGN;
       int16x8_t vabsmag = (vabsq_s16(coeff16) & 0x7FFF) >> pshift;
-      or_val |= vaddvq_s16(vabsmag);
+      or_val |= vmaxvq_s16(vabsmag);
       int16x8_t vmasked_one = (vceqzq_s16(vabsmag) ^ 0xFFFF) & vone;
       vblkstate |= vmovn_u16(vmasked_one);
       vst1_u8(dstblk + j, vblkstate);
@@ -434,15 +434,15 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                        uint8_t *const rho_q) {
 // This function shall be called on the assumption that there are two quads
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  const uint32_t QWx2    = block->size.x + block->size.x % 2;
-  const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0     = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1;
-  uint8_t *const sp1     = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1;
-  auto v_u8_0            = vld1_u8(sp0);
-  auto v_u8_1            = vld1_u8(sp1);
-  auto v_u8_zip          = vzip1_u8(v_u8_0, v_u8_1);
-  auto vmask             = vdup_n_u8(1);
-  auto v_u8_out          = vand_u8(v_u8_zip, vmask);
+  const uint32_t QWx2                = block->size.x + block->size.x % 2;
+  alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
+  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1;
+  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1;
+  auto v_u8_0        = vld1_u8(sp0);
+  auto v_u8_1        = vld1_u8(sp1);
+  auto v_u8_zip      = vzip1_u8(v_u8_0, v_u8_1);
+  auto vmask         = vdup_n_u8(1);
+  auto v_u8_out      = vand_u8(v_u8_zip, vmask);
   vst1_u8(sigma_n, v_u8_out);
   auto v_u8_shift = vld1_s8(nshift);
   auto vtmp       = vpadd_u8(vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)),
