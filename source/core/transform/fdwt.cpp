@@ -110,9 +110,9 @@ static void fdwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const uint32_t u0, cons
     const float K1 = (transformation) ? 1 : 0.8128931;      // 066115961;
     for (uint32_t row = 0; row < v1 - v0; ++row) {
       if (u0 % 2 == 0) {
-        out[row] = (transformation) ? in[row] : (sprec_t)roundf(static_cast<float>(in[row]) * K1);
+        out[row] = (transformation) ? in[row] : in[row];
       } else {
-        out[row] = (transformation) ? in[row] << 1 : (sprec_t)roundf(static_cast<float>(in[row]) * 2 * K);
+        out[row] = (transformation) ? in[row] << 1 : in[row];
       }
     }
   } else {
