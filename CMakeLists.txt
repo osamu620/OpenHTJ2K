@@ -94,6 +94,7 @@ target_include_directories(open_htj2k
 		)
 set_target_properties(open_htj2k PROPERTIES OUTPUT_NAME $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
 #target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
+target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
 
 #find_package(OpenMP)
 #if(OpenMP_FOUND)
