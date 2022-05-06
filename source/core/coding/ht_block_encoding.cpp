@@ -59,6 +59,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     // vetorized for ARM NEON
     uint16x8_t vpLSB = vdupq_n_u16((uint16_t)pLSB);
     int16x8_t vone   = vdupq_n_s16(1);
+    auto vzero       = vdupq_n_s16(0);
     // simd
     uint16_t simdlen = round_down(this->size.x, 8);
     for (uint16_t j = 0; j < simdlen; j += 8) {
@@ -69,8 +70,8 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       uint8x8_t vssgn     = vmovn_u16(vsign);
       vblkstate |= vsmag << SHIFT_SMAG;
       vblkstate |= vssgn << SHIFT_SSGN;
-      int16x8_t vabsmag = (vabsq_s16(coeff16) & 0x7FFF) >> pshift;
-      or_val |= vmaxvq_s16(vabsmag);
+      int16x8_t vabsmag     = (vabsq_s16(coeff16) & 0x7FFF) >> pshift;
+      vzero                 = vorrq_s16(vzero, vabsmag);
       int16x8_t vmasked_one = (vceqzq_s16(vabsmag) ^ 0xFFFF) & vone;
       vblkstate |= vmovn_u16(vmasked_one);
       vst1_u8(dstblk + j, vblkstate);
@@ -83,6 +84,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       vst1q_s32(dp + j, coeff32low);
       vst1q_s32(dp + j + 4, coeff32high);
     }
+    or_val |= vmaxvq_s16(vzero);
     // remaining
     for (uint16_t j = simdlen; j < this->size.x; ++j) {
       int32_t temp  = sp[j];
@@ -108,6 +110,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     auto vtwo      = _mm256_set1_epi16((uint16_t)2);
     auto vsignmask = _mm256_set1_epi16((uint16_t)0x8000);
     auto vabsmask  = _mm256_set1_epi16((uint16_t)0x7FFF);
+    auto vzero     = _mm256_setzero_si256();
     // simd
     uint16_t simdlen = round_down(this->size.x, 16);
     for (uint16_t j = 0; j < simdlen; j += 16) {
@@ -122,7 +125,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
           _mm256_and_si256(_mm256_xor_si256(_mm256_cmpeq_epi16(vabsmag, _mm256_setzero_si256()),
                                             _mm256_set1_epi16((uint16_t)0xFFFF)),
                            vone);
-      or_val |= !_mm256_testz_si256(vabsmag, vabsmask);
+      vzero            = _mm256_or_si256(vzero, vabsmag);
       auto vmasked_two = _mm256_mullo_epi16(vmasked_one, vtwo);
       auto vblkstate =
           _mm256_or_si256(vmasked_one, _mm256_or_si256(vsmag, _mm256_slli_epi16(vsign, SHIFT_SSGN)));
@@ -137,6 +140,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       _mm256_storeu_si256((__m256i *)(dp + j), vcoeff_low);
       _mm256_storeu_si256((__m256i *)(dp + j + 8), vcoeff_high);
     }
+    or_val |= !_mm256_testz_si256(vzero, vabsmask);
     // remaining
     for (uint16_t j = simdlen; j < this->size.x; ++j) {
       int32_t temp  = sp[j];
