@@ -1163,7 +1163,7 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
     const element_siz pos1(ceil_int(p1.x - (1 << (nb_1)) * xob[b], 1 << nb),
                            ceil_int(p1.y - (1 << (nb_1)) * yob[b], 1 << nb));
 
-    // nominal range does not have any effect to lossless path and LL(lowest) in lossy path
+    // nominal range does not have any effect to lossless path
     nominal_range = this->child_ranges[b];
     if (transformation == 1) {
       // lossless
@@ -1427,13 +1427,15 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
       * (ceil_int(pos1.y, 1 << tile->reduce_NL) - ceil_int(pos0.y, 1 << tile->reduce_NL));
   samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
 
+  element_siz Osiz;
+  hdr->SIZ->get_image_origin(Osiz);
   // create tile samples, only for encoding;
   if (!img.empty()) {
-    int32_t *const src_origin = img[this->index];
-    const int32_t height      = pos1.y - pos0.y;
-    const int32_t width       = pos1.x - pos0.x;
+    const int32_t height = pos1.y - pos0.y;
+    const int32_t width  = pos1.x - pos0.x;
     // stride may differ from width with non-zero origin
-    const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
+    const uint32_t stride     = hdr->SIZ->get_component_stride(this->index);
+    int32_t *const src_origin = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
 #pragma omp parallel for  // default(none) shared(height, width, src, stride)
     for (int i = 0; i < height; ++i) {
       int32_t *src = src_origin + i * stride;
