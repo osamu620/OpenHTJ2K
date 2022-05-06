@@ -68,7 +68,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcolor-diagnostics")
 endif()
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway EXCLUDE_FROM_ALL)
+#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway EXCLUDE_FROM_ALL)
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -90,9 +90,10 @@ target_include_directories(open_htj2k
 		source/core/transform
 		source/core/interface
 		source/core/jph
-		${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway)
+		#${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
+		)
 set_target_properties(open_htj2k PROPERTIES OUTPUT_NAME $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
-target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
+#target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
 
 #find_package(OpenMP)
 #if(OpenMP_FOUND)
