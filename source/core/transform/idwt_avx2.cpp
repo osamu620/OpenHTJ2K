@@ -282,15 +282,32 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
+    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 16;
     for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-      for (uint32_t col = 0; col < u1 - u0; ++col) {
+      for (int32_t col = 0; col < simdlen; col += 16) {
+        __m256i v0 = _mm256_load_si256((__m256i *)(buf[n - 1] + col));
+        __m256i v2 = _mm256_load_si256((__m256i *)(buf[n + 1] + col));
+        auto v1    = _mm256_load_si256((__m256i *)(buf[n] + col));
+        auto vout  = _mm256_add_epi16(_mm256_set1_epi16(1), _mm256_srai_epi16(_mm256_add_epi16(v0, v2), 1));
+        vout       = _mm256_srai_epi16(vout, 1);
+        v1         = _mm256_sub_epi16(v1, vout);
+        _mm256_store_si256((__m256i *)(buf[n] + col), v1);
+      }
+      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
         buf[n][col] -= ((sum + 2) >> 2);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      for (uint32_t col = 0; col < u1 - u0; ++col) {
+      for (int32_t col = 0; col < simdlen; col += 16) {
+        __m256i v0 = _mm256_load_si256((__m256i *)(buf[n] + col));
+        __m256i v2 = _mm256_load_si256((__m256i *)(buf[n + 2] + col));
+        auto v1    = _mm256_load_si256((__m256i *)(buf[n + 1] + col));
+        v1         = _mm256_add_epi16(v1, _mm256_srai_epi16(_mm256_add_epi16(v0, v2), 1));
+        _mm256_store_si256((__m256i *)(buf[n + 1] + col), v1);
+      }
+      for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
         buf[n + 1][col] += (sum >> 1);

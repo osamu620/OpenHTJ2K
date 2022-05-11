@@ -310,13 +310,12 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u
         buf[n + 1][col] -= (sum >> 1);
       }
     }
-    __m256i vone = _mm256_set1_epi16(1);
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < simdlen; col += 16) {
         __m256i v0 = _mm256_load_si256((__m256i *)(buf[n - 1] + col));
         __m256i v2 = _mm256_load_si256((__m256i *)(buf[n + 1] + col));
         auto v1    = _mm256_load_si256((__m256i *)(buf[n] + col));
-        auto vout  = _mm256_add_epi16(vone, _mm256_srai_epi16(_mm256_add_epi16(v0, v2), 1));
+        auto vout  = _mm256_add_epi16(_mm256_set1_epi16(1), _mm256_srai_epi16(_mm256_add_epi16(v0, v2), 1));
         vout       = _mm256_srai_epi16(vout, 1);
         v1         = _mm256_add_epi16(v1, vout);
         _mm256_store_si256((__m256i *)(buf[n] + col), v1);
