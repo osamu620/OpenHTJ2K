@@ -100,19 +100,18 @@ void fdwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   const int32_t offset = left + i0 % 2;
   int32_t simdlen      = stop - (start - 1);
   for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 8, n += 16) {
-    auto xl0  = vld2q_s16(X + n);
-    auto xl1  = vld2q_s16(X + n + 2);
-    auto xout = vhaddq_s16(xl0.val[0], xl1.val[0]);
-    xl0.val[1] -= xout;
+    auto xl0 = vld2q_s16(X + n);
+    auto xl1 = vld2q_s16(X + n + 2);
+    xl0.val[1] -= vhaddq_s16(xl0.val[0], xl1.val[0]);
     vst2q_s16(X + n, xl0);
   }
 
   simdlen = stop - start;
   for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
-    auto xl0  = vld2q_s16(X + n - 1);
-    auto xl1  = vld2q_s16(X + n + 1);
-    auto xout = (xl0.val[0] + xl1.val[0] + 2) >> 2;
-    xl0.val[1] += xout;
+    auto xl0 = vld2q_s16(X + n - 1);
+    auto xl1 = vld2q_s16(X + n + 1);
+    // (xl0.val[0] + xl1.val[0] + 2) >> 2;
+    xl0.val[1] += vrshrq_n_s16(vhaddq_s16(xl0.val[0], xl1.val[0]), 1);
     vst2q_s16(X + n - 1, xl0);
   }
 }
@@ -258,15 +257,30 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t u
     const int32_t stop   = ceil_int(v1, 2);
     const int32_t offset = top + v0 % 2;
 
+    int32_t simdlen = (u1 - u0) - (u1 - u0) % 8;
     for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
-      for (uint32_t col = 0; col < u1 - u0; ++col) {
+      for (uint32_t col = 0; col < simdlen; col += 8) {
+        auto X0 = vld1q_s16(&buf[n][col]);
+        auto X2 = vld1q_s16(&buf[n + 2][col]);
+        auto X1 = vld1q_s16(&buf[n + 1][col]);
+        X1 -= vhaddq_s16(X0, X2);
+        vst1q_s16(&buf[n + 1][col], X1);
+      }
+      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
         buf[n + 1][col] -= (sum >> 1);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      for (uint32_t col = 0; col < u1 - u0; ++col) {
+      for (uint32_t col = 0; col < simdlen; col += 8) {
+        auto X0 = vld1q_s16(&buf[n - 1][col]);
+        auto X2 = vld1q_s16(&buf[n + 1][col]);
+        auto X1 = vld1q_s16(&buf[n][col]);
+        X1 += vrshrq_n_s16(vhaddq_s16(X0, X2), 1);
+        vst1q_s16(&buf[n][col], X1);
+      }
+      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
         buf[n][col] += ((sum + 2) >> 2);
