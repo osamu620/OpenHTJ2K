@@ -35,6 +35,63 @@
  * horizontal transforms
  *******************************************************************************/
 // irreversible IDWT
+auto idwt_irrev97_fixed_neon_hor_step0 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+                                            const int32_t n0, const int32_t n1, const int32_t coeff,
+                                            const int32_t offset, const int32_t shift) {
+  auto vvv = vdupq_n_s16((int16_t)14533);
+  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
+    auto x0  = vld2q_s16(X + n + n0);
+    auto x1  = vld2q_s16(X + n + n1);
+    auto tmp = (x0.val[0] + x1.val[0]);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    x0.val[1] -= tmp;
+    vst2q_s16(X + n + n0, x0);
+  }
+};
+
+auto idwt_irrev97_fixed_neon_hor_step1 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+                                            const int32_t n0, const int32_t n1, const int32_t coeff,
+                                            const int32_t offset, const int32_t shift) {
+  auto vvv = vdupq_n_s16((int16_t)28931);
+  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
+    auto x0  = vld2q_s16(X + n + n0);
+    auto x1  = vld2q_s16(X + n + n1);
+    auto tmp = (x0.val[0] + x1.val[0]);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    x0.val[1] -= tmp;
+    vst2q_s16(X + n + n0, x0);
+  }
+};
+
+auto idwt_irrev97_fixed_neon_hor_step2 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+                                            const int32_t n0, const int32_t n1, const int32_t coeff,
+                                            const int32_t offset, const int32_t shift) {
+  auto vvv = vdupq_n_s16((int16_t)-3472);
+  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
+    auto x0  = vld2q_s16(X + n + n0);
+    auto x1  = vld2q_s16(X + n + n1);
+    auto tmp = vhaddq_s16(x0.val[0], x1.val[0]);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    x0.val[1] -= tmp;
+    vst2q_s16(X + n + n0, x0);
+  }
+};
+
+auto idwt_irrev97_fixed_neon_hor_step3 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+                                            const int32_t n0, const int32_t n1, const int32_t coeff,
+                                            const int32_t offset, const int32_t shift) {
+  auto vvv = vdupq_n_s16((int16_t)-19206);
+  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
+    auto x0  = vld2q_s16(X + n + n0);
+    auto x1  = vld2q_s16(X + n + n1);
+    auto tmp = (x0.val[0] + x1.val[0]);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    tmp -= (x0.val[0] + x1.val[0]);
+    x0.val[1] -= tmp;
+    vst2q_s16(X + n + n0, x0);
+  }
+};
+
 auto idwt_irrev97_fixed_neon_hor_step = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
                                            const int32_t n0, const int32_t n1, const int32_t coeff,
                                            const int32_t offset, const int32_t shift) {
@@ -66,19 +123,19 @@ void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int3
 
   // step 1
   int32_t simdlen = stop + 2 - (start - 1);
-  idwt_irrev97_fixed_neon_hor_step(offset - 2, simdlen, X, -1, 1, Dcoeff, Doffset, Dshift);
+  idwt_irrev97_fixed_neon_hor_step0(offset - 2, simdlen, X, -1, 1, Dcoeff, Doffset, Dshift);
 
   // step 2
   simdlen = stop + 1 - (start - 1);
-  idwt_irrev97_fixed_neon_hor_step(offset - 2, simdlen, X, 0, 2, Ccoeff, Coffset, Cshift);
+  idwt_irrev97_fixed_neon_hor_step1(offset - 2, simdlen, X, 0, 2, Ccoeff, Coffset, Cshift);
 
   // step 3
   simdlen = stop + 1 - start;
-  idwt_irrev97_fixed_neon_hor_step(offset, simdlen, X, -1, 1, Bcoeff, Boffset, Bshift);
+  idwt_irrev97_fixed_neon_hor_step2(offset, simdlen, X, -1, 1, Bcoeff, Boffset, Bshift);
 
   // step 4
   simdlen = stop - start;
-  idwt_irrev97_fixed_neon_hor_step(offset, simdlen, X, 0, 2, Acoeff, Aoffset, Ashift);
+  idwt_irrev97_fixed_neon_hor_step3(offset, simdlen, X, 0, 2, Acoeff, Aoffset, Ashift);
 }
 
 // reversible IDWT
