@@ -33,6 +33,12 @@
 
 #define SIMD_PADDING 32
 
+constexpr int16_t Acoeff_simd      = -19206;  // need to -1
+constexpr int16_t Bcoeff_simd      = -3472;   // need to >> 1
+constexpr int16_t Bcoeff_simd_avx2 = -13888;  // need to (out+4) >> 3
+constexpr int16_t Ccoeff_simd      = 28931;
+constexpr int16_t Dcoeff_simd      = 14533;
+
 constexpr int32_t Acoeff = -25987;
 constexpr int32_t Bcoeff = -3472;
 constexpr int32_t Ccoeff = 28931;
