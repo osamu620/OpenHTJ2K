@@ -38,7 +38,7 @@
 auto idwt_irrev97_fixed_neon_hor_step0 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
-  auto vvv = vdupq_n_s16((int16_t)14533);
+  auto vvv = vdupq_n_s16(Dcoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
     auto x0  = vld2q_s16(X + n + n0);
     auto x1  = vld2q_s16(X + n + n1);
@@ -52,7 +52,7 @@ auto idwt_irrev97_fixed_neon_hor_step0 = [](const int32_t init_pos, const int32_
 auto idwt_irrev97_fixed_neon_hor_step1 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
-  auto vvv = vdupq_n_s16((int16_t)28931);
+  auto vvv = vdupq_n_s16(Ccoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
     auto x0  = vld2q_s16(X + n + n0);
     auto x1  = vld2q_s16(X + n + n1);
@@ -66,7 +66,7 @@ auto idwt_irrev97_fixed_neon_hor_step1 = [](const int32_t init_pos, const int32_
 auto idwt_irrev97_fixed_neon_hor_step2 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
-  auto vvv = vdupq_n_s16((int16_t)-3472);
+  auto vvv = vdupq_n_s16(Bcoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
     auto x0  = vld2q_s16(X + n + n0);
     auto x1  = vld2q_s16(X + n + n1);
@@ -80,7 +80,7 @@ auto idwt_irrev97_fixed_neon_hor_step2 = [](const int32_t init_pos, const int32_
 auto idwt_irrev97_fixed_neon_hor_step3 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
-  auto vvv = vdupq_n_s16((int16_t)-19206);
+  auto vvv = vdupq_n_s16(Acoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
     auto x0  = vld2q_s16(X + n + n0);
     auto x1  = vld2q_s16(X + n + n1);
