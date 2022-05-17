@@ -31,9 +31,9 @@ add_test(NAME comp_p0_04_g COMMAND imgcmp p0_04_01.pgx ${CONFORMANCE_DATA_DIR}/r
 add_test(NAME comp_p0_04_b COMMAND imgcmp p0_04_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_04-2.pgx 6 1.070)
 set_tests_properties(comp_p0_04_r comp_p0_04_g comp_p0_04_b PROPERTIES DEPENDS dec_p0_04)
 # 5
-add_test(NAME comp_p0_05_a COMMAND imgcmp p0_05_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_05-0.pgx 2 0.302)
-add_test(NAME comp_p0_05_b COMMAND imgcmp p0_05_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_05-1.pgx 2 0.307)
-add_test(NAME comp_p0_05_c COMMAND imgcmp p0_05_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_05-2.pgx 2 0.269)
+add_test(NAME comp_p0_05_a COMMAND imgcmp p0_05_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_05-0.pgx 2 0.319) # 0.302 in old spec
+add_test(NAME comp_p0_05_b COMMAND imgcmp p0_05_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_05-1.pgx 2 0.323) # 0.307 in old spec
+add_test(NAME comp_p0_05_c COMMAND imgcmp p0_05_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_05-2.pgx 2 0.317) # 0.269 in old spec
 add_test(NAME comp_p0_05_d COMMAND imgcmp p0_05_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_05-3.pgx 0 0)
 set_tests_properties(comp_p0_05_a comp_p0_05_b comp_p0_05_c comp_p0_05_d PROPERTIES DEPENDS dec_p0_05)
 # 6
