@@ -23,7 +23,7 @@ add_test(NAME comp_p1_03_c COMMAND imgcmp p1_03_02.pgx ${CONFORMANCE_DATA_DIR}/r
 add_test(NAME comp_p1_03_d COMMAND imgcmp p1_03_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-3.pgx 0 0)
 set_tests_properties(comp_p1_03_a comp_p1_03_b comp_p1_03_c comp_p1_03_d PROPERTIES DEPENDS dec_p1_03)
 set_tests_properties(comp_p1_03_b PROPERTIES WILL_FAIL true)
-set_tests_properties(comp_p1_03_c PROPERTIES WILL_FAIL true)
+set_tests_properties(comp_p1_03_c PROPERTIES WILL_FAIL false)
 # 4
 add_test(NAME comp_p1_04 COMMAND imgcmp p1_04_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_04-0.pgx 624 3080)
 set_tests_properties(comp_p1_04 PROPERTIES DEPENDS dec_p1_04)

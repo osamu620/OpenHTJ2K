@@ -37,7 +37,7 @@ add_test(NAME comp_p1_ht_03_12d COMMAND imgcmp ht_p1_03_b12_03.pgx ${CONFORMANCE
 set_tests_properties(comp_p1_ht_03_11a comp_p1_ht_03_11b comp_p1_ht_03_11c comp_p1_ht_03_11d PROPERTIES DEPENDS dec_p1_ht_03_11)
 set_tests_properties(comp_p1_ht_03_12a comp_p1_ht_03_12b comp_p1_ht_03_12c comp_p1_ht_03_12d PROPERTIES DEPENDS dec_p1_ht_03_12)
 set_tests_properties(comp_p1_ht_03_12b  PROPERTIES WILL_FAIL true)
-set_tests_properties(comp_p1_ht_03_12c  PROPERTIES WILL_FAIL true)
+set_tests_properties(comp_p1_ht_03_12c  PROPERTIES WILL_FAIL false)
 # 4
 add_test(NAME comp_p1_ht_04_9 COMMAND imgcmp ht_p1_04_b9_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_04-0.pgx 624 3080)
 set_tests_properties(comp_p1_ht_04_9 PROPERTIES DEPENDS dec_p1_ht_04_9)
