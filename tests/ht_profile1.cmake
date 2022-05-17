@@ -26,17 +26,17 @@ add_test(NAME comp_p1_ht_02_12b COMMAND imgcmp ht_p1_02_b12_02.pgx ${CONFORMANCE
 set_tests_properties(comp_p1_ht_02_11r comp_p1_ht_02_11g comp_p1_ht_02_11b PROPERTIES DEPENDS dec_p1_ht_02_11)
 set_tests_properties(comp_p1_ht_02_12r comp_p1_ht_02_12g comp_p1_ht_02_12b PROPERTIES DEPENDS dec_p1_ht_02_12)
 # 3
-add_test(NAME comp_p1_ht_03_11a COMMAND imgcmp ht_p1_03_b11_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-0.pgx 2 0.300)
-add_test(NAME comp_p1_ht_03_11b COMMAND imgcmp ht_p1_03_b11_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 3 0.24)
-add_test(NAME comp_p1_ht_03_11c COMMAND imgcmp ht_p1_03_b11_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 3 0.25)
-add_test(NAME comp_p1_ht_03_11d COMMAND imgcmp ht_p1_03_b11_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-3.pgx 2 0.001)
-add_test(NAME comp_p1_ht_03_12a COMMAND imgcmp ht_p1_03_b12_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-0.pgx 2 0.300)
-add_test(NAME comp_p1_ht_03_12b COMMAND imgcmp ht_p1_03_b12_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 2 0.210)
-add_test(NAME comp_p1_ht_03_12c COMMAND imgcmp ht_p1_03_b12_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 1 0.200)
+add_test(NAME comp_p1_ht_03_11a COMMAND imgcmp ht_p1_03_b11_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-0.pgx 2 0.311) # plus 0
+add_test(NAME comp_p1_ht_03_11b COMMAND imgcmp ht_p1_03_b11_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 3 0.310) # plus 0.03
+add_test(NAME comp_p1_ht_03_11c COMMAND imgcmp ht_p1_03_b11_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 3 0.317) # plus 0.05
+add_test(NAME comp_p1_ht_03_11d COMMAND imgcmp ht_p1_03_b11_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-3.pgx 2 0.001) # plus 0.001
+add_test(NAME comp_p1_ht_03_12a COMMAND imgcmp ht_p1_03_b12_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-0.pgx 2 0.311) # 0.300 in old spec
+add_test(NAME comp_p1_ht_03_12b COMMAND imgcmp ht_p1_03_b12_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-1.pgx 2 0.280) # 0.210 in old spec
+add_test(NAME comp_p1_ht_03_12c COMMAND imgcmp ht_p1_03_b12_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-2.pgx 1 0.267) # 0.200 in old spec
 add_test(NAME comp_p1_ht_03_12d COMMAND imgcmp ht_p1_03_b12_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_03-3.pgx 0 0)
 set_tests_properties(comp_p1_ht_03_11a comp_p1_ht_03_11b comp_p1_ht_03_11c comp_p1_ht_03_11d PROPERTIES DEPENDS dec_p1_ht_03_11)
 set_tests_properties(comp_p1_ht_03_12a comp_p1_ht_03_12b comp_p1_ht_03_12c comp_p1_ht_03_12d PROPERTIES DEPENDS dec_p1_ht_03_12)
-set_tests_properties(comp_p1_ht_03_12b  PROPERTIES WILL_FAIL true)
+set_tests_properties(comp_p1_ht_03_12b  PROPERTIES WILL_FAIL false)
 set_tests_properties(comp_p1_ht_03_12c  PROPERTIES WILL_FAIL false)
 # 4
 add_test(NAME comp_p1_ht_04_9 COMMAND imgcmp ht_p1_04_b9_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_04-0.pgx 624 3080)
