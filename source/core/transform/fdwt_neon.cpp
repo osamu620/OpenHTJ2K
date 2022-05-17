@@ -57,7 +57,7 @@ auto fdwt_irrev97_fixed_neon_hor_step1 = [](const int32_t init_pos, const int32_
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
     auto x0  = vld2q_s16(X + n + n0);
     auto x1  = vld2q_s16(X + n + n1);
-    auto tmp = vhaddq_s16(x0.val[0], x1.val[0]);
+    auto tmp = vrhaddq_s16(x0.val[0], x1.val[0]);
     tmp      = vqrdmulhq_s16(tmp, vvv);
     x0.val[1] += tmp;
     vst2q_s16(X + n + n0, x0);
@@ -177,6 +177,67 @@ void fdwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
  * vertical transforms
  *******************************************************************************/
 // irreversible FDWT
+auto fdwt_irrev97_fixed_neon_ver_step0 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
+                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
+                                            const int32_t shift) {
+  auto vvv = vdupq_n_s16(Acoeff_simd);
+  for (int32_t n = 0; n < simdlen; n += 8) {
+    auto x0  = vld1q_s16(Xin0 + n);
+    auto x2  = vld1q_s16(Xin1 + n);
+    auto x1  = vld1q_s16(Xout + n);
+    auto tmp = x0 + x2;
+    x1 -= tmp;
+    tmp = vqrdmulhq_s16(tmp, vvv);
+    x1 += tmp;
+    vst1q_s16(Xout + n, x1);
+  }
+};
+
+auto fdwt_irrev97_fixed_neon_ver_step1 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
+                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
+                                            const int32_t shift) {
+  auto vvv = vdupq_n_s16(Bcoeff_simd);
+  for (int32_t n = 0; n < simdlen; n += 8) {
+    auto x0  = vld1q_s16(Xin0 + n);
+    auto x2  = vld1q_s16(Xin1 + n);
+    auto x1  = vld1q_s16(Xout + n);
+    auto tmp = vrhaddq_s16(x0, x2);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    x1 += tmp;
+    vst1q_s16(Xout + n, x1);
+  }
+};
+
+auto fdwt_irrev97_fixed_neon_ver_step2 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
+                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
+                                            const int32_t shift) {
+  auto vvv = vdupq_n_s16(Ccoeff_simd);
+  for (int32_t n = 0; n < simdlen; n += 8) {
+    auto x0  = vld1q_s16(Xin0 + n);
+    auto x2  = vld1q_s16(Xin1 + n);
+    auto x1  = vld1q_s16(Xout + n);
+    auto tmp = (x0 + x2);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    x1 += tmp;
+    vst1q_s16(Xout + n, x1);
+  }
+};
+
+auto fdwt_irrev97_fixed_neon_ver_step3 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
+                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
+                                            const int32_t shift) {
+  auto vvv = vdupq_n_s16(Dcoeff_simd);
+  for (int32_t n = 0; n < simdlen; n += 8) {
+    auto x0  = vld1q_s16(Xin0 + n);
+    auto x2  = vld1q_s16(Xin1 + n);
+    auto x1  = vld1q_s16(Xout + n);
+    auto tmp = (x0 + x2);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    x1 += tmp;
+    vst1q_s16(Xout + n, x1);
+  }
+};
+
 auto fdwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
                                            const int32_t shift) {
@@ -236,7 +297,7 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t
 
     const int32_t simdlen = (u1 - u0) - (u1 - u0) % 16;
     for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], Acoeff, Aoffset, Ashift);
+      fdwt_irrev97_fixed_neon_ver_step0(simdlen, buf[n], buf[n + 2], buf[n + 1], Acoeff, Aoffset, Ashift);
       for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
@@ -244,7 +305,7 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], Bcoeff, Boffset, Bshift);
+      fdwt_irrev97_fixed_neon_ver_step1(simdlen, buf[n - 1], buf[n + 1], buf[n], Bcoeff, Boffset, Bshift);
       for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
@@ -252,7 +313,7 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], Ccoeff, Coffset, Cshift);
+      fdwt_irrev97_fixed_neon_ver_step2(simdlen, buf[n], buf[n + 2], buf[n + 1], Ccoeff, Coffset, Cshift);
       for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
@@ -260,7 +321,7 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const uint32_t u0, const uint32_t
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], Dcoeff, Doffset, Dshift);
+      fdwt_irrev97_fixed_neon_ver_step3(simdlen, buf[n - 1], buf[n + 1], buf[n], Dcoeff, Doffset, Dshift);
       for (uint32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
