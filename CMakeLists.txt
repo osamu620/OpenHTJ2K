@@ -61,11 +61,11 @@ if (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]6
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fdiagnostics-color=always")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fdiagnostics-color=always -fno-omit-frame-pointer")
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcolor-diagnostics")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcolor-diagnostics -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer")
 endif()
 
 #add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway EXCLUDE_FROM_ALL)
