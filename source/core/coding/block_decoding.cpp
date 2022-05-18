@@ -476,7 +476,8 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   } else {
     fscale *= (1 << (M_b - 31));
   }
-  fscale *= (float)(1 << 16) * (float)(1 << 16);
+  constexpr int32_t downshift = 15;
+  fscale *= (float)(1 << 16) * (float)(1 << downshift);
   const auto scale = (const int32_t)(fscale + 0.5);
 
   if (block->transformation) {
@@ -545,17 +546,14 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
         }
         // to prevent overflow, truncate to int16_t
         *val = (*val + (1 << 15)) >> 16;
-        // bring sign back
-        *val |= sign;
-        // convert sign-magnitude to two's complement form
-        if (*val < 0) {
-          *val = -(*val & INT32_MAX);
-        }
-        // dequantization and lifting scaling (defined as step 1 and 2 in the spec)
+        // dequantization
         *val *= scale;
-        // truncate to int16_t
-        QF15 = (int16_t)((*val + (1 << 15)) >> 16);
-
+        // downshift
+        QF15 = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        // convert sign-magnitude to two's complement form
+        if (sign) {
+          QF15 = -QF15;
+        }
         *dst = QF15;
       }
     }
