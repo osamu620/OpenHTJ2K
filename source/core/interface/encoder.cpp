@@ -45,6 +45,7 @@ class openhtj2k_encoder_impl {
  private:
   std::string outfile;
   const std::vector<int32_t *> *buf;
+  std::vector<uint8_t> *outbuf;
   siz_params *siz;
   cod_params *cod;
   qcd_params *qcd;
@@ -55,6 +56,7 @@ class openhtj2k_encoder_impl {
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
                          qcd_params &, uint8_t, bool, uint8_t);
+  void set_output_buffer(std::vector<uint8_t> &);
   ~openhtj2k_encoder_impl();
   size_t invoke();
 };
@@ -65,6 +67,11 @@ openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
                                                uint8_t cs)
     : buf(&input_buf), siz(&s), cod(&c), qcd(&q), qfactor(qf), isJPH(flag), color_space(cs) {
   this->outfile = filename;
+  this->outbuf  = nullptr;
+}
+
+void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf) {
+  this->outbuf = &output_buf;
 }
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
@@ -183,13 +190,26 @@ size_t openhtj2k_encoder_impl::invoke() {
     size_t file_format_size = jph_info.write(jph_dst);
     codestream_size += file_format_size - codestream_size;
   }
-  std::ofstream dst;
-  dst.open(this->outfile, std::ios::out | std::ios::binary);
-  if (isJPH) {
-    jph_dst.flush(dst);
+  if (outbuf != nullptr) {
+    if (isJPH) {
+      if (jph_dst.flush(outbuf)) {
+        printf("illegal attempt to flush empty buffer.\n");
+        throw std::exception();
+      }
+    }
+    if (j2c_dst.flush(outbuf)) {
+      printf("illegal attempt to flush empty buffer.\n");
+      throw std::exception();
+    }
+  } else {
+    std::ofstream dst;
+    dst.open(this->outfile, std::ios::out | std::ios::binary);
+    if (isJPH) {
+      jph_dst.flush(dst);
+    }
+    j2c_dst.flush(dst);
+    dst.close();
   }
-  j2c_dst.flush(dst);
-  dst.close();
   return codestream_size;
 }
 
@@ -207,6 +227,11 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
   this->impl = std::make_unique<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor, isJPH,
                                                         color_space);
 }
+
+void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
+  this->impl->set_output_buffer(output_buf);
+}
+
 size_t openhtj2k_encoder::invoke() { return this->impl->invoke(); }
 openhtj2k_encoder::~openhtj2k_encoder() = default;
 }  // namespace open_htj2k

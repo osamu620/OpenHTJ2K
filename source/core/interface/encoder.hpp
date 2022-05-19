@@ -410,6 +410,7 @@ class openhtj2k_encoder {
   openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz, cod_params &cod,
                     qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space,
                     uint32_t num_threads);
+  void set_output_buffer(std::vector<uint8_t> &output_buf);
   size_t invoke();
   ~openhtj2k_encoder();
 #endif
