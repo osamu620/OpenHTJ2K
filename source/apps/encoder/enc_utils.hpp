@@ -37,7 +37,8 @@ void print_help(char *cmd) {
   printf("%s: JPEG 2000 Part 15 encoder\n", cmd);
   printf("USAGE: %s -i inputimage(PNM format) -o output-codestream [options...]\n\n", cmd);
   printf("-i: Input file\n  PGM and PPM are supported.\n");
-  printf("-o: Output codestream\n  `.jhc` or `.j2c` are recommended as the extension.\n\n");
+  printf("-o: Output codestream\n  `.jhc` or `.j2c` are recommended as the extension.\n");
+  printf("  Note: If this option is unspecified, encoding result is placed on a memory buffer.\n\n");
   printf("OPTIONS:\n");
   printf(
       "Stiles=Size:\n  Size of tile. `Size` should be in the format "
@@ -61,12 +62,12 @@ void print_help(char *cmd) {
   printf("  Note: If this option is present, Qstep is ignored and Cycc is set to `yes`.\n");
   printf(
       "-jph_color_space\n"
-      "Color space of input components: Valid entry is one of RGB, YCC.\nIf inputs are represented in "
+      "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
       "YCbCr, use YCC.\n");
   printf(
       "-num_threads=Int\n"
-      "number of threads to use in encode or decode\n"
-      "0, which is the default, indicates usage of all threads.\n");
+      "  number of threads to use in encode or decode\n"
+      "  0, which is the default, indicates usage of all threads.\n");
 }
 
 class element_siz_local {
@@ -480,8 +481,8 @@ class j2k_argset {
   std::string get_outfile() {
     auto p = std::find(args.begin(), args.end(), "-o");
     if (p == args.end()) {
-      printf("ERROR: output file (\"-o\") is missing!\n");
-      exit(EXIT_FAILURE);
+      printf("INFO: no output file is specified. Compressed output is placed on a memory buffer.\n");
+      return "";
     }
     auto idx = std::distance(args.begin(), p);
     if (idx + 1 > args.size() - 1) {

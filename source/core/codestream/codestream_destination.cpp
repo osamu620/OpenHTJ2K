@@ -64,6 +64,18 @@ int32_t j2c_dst_memory::flush(std::ofstream &dst) {
   return EXIT_SUCCESS;
 }
 
+int32_t j2c_dst_memory::flush(std::vector<uint8_t> *obuf) {
+  if (is_flushed) {
+    return EXIT_FAILURE;
+  }
+  obuf->resize(buf.size());
+  for (size_t i = 0; i < buf.size(); ++i) {
+    *(obuf->data() + i) = buf[i];
+  }
+  is_flushed = true;
+  return EXIT_SUCCESS;
+}
+
 size_t j2c_dst_memory::get_length() const { return buf.size(); }
 [[deprecated]] void j2c_dst_memory::print_bytes() {
   for (uint32_t i = 0; i < pos; i++) {

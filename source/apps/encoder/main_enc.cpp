@@ -66,16 +66,21 @@ int main(int argc, char *argv[]) {
   for (auto c = 0; c < num_components; ++c) {
     input_buf.push_back(img.get_buf(c));
   }
-  bool isJPH                 = false;
-  std::string out_filename   = args.get_outfile();
-  std::string::size_type pos = out_filename.find_last_of(".");
-  std::string fext           = out_filename.substr(pos, 4);
-  if (fext.compare(".jph") == 0 || fext.compare(".JPH") == 0) {
-    isJPH = true;
-  } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc") && fext.compare(".J2C")
-             && fext.compare(".J2K") && fext.compare(".JPHC")) {
-    printf("ERROR: invalid extension for output file\n");
-    exit(EXIT_FAILURE);
+  bool isJPH               = false;
+  std::string out_filename = args.get_outfile();
+  bool toFile              = true;
+  if (out_filename.empty()) {
+    toFile = false;
+  } else {
+    std::string::size_type pos = out_filename.find_last_of(".");
+    std::string fext           = out_filename.substr(pos, 4);
+    if (fext.compare(".jph") == 0 || fext.compare(".JPH") == 0) {
+      isJPH = true;
+    } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc") && fext.compare(".J2C")
+               && fext.compare(".J2K") && fext.compare(".JPHC")) {
+      printf("ERROR: invalid extension for output file\n");
+      exit(EXIT_FAILURE);
+    }
   }
   element_siz_local tile_size   = args.get_tile_size();
   element_siz_local tile_origin = args.get_tile_origin();
@@ -135,17 +140,29 @@ int main(int argc, char *argv[]) {
 
   size_t total_size;
   int32_t num_iterations = args.get_num_iteration();
-  auto start             = std::chrono::high_resolution_clock::now();
+  // memory buffer for output codestream/file
+  std::vector<uint8_t> outbuf;
+  auto start = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < num_iterations; ++i) {
     // create encoder
-    open_htj2k::openhtj2k_encoder encoder(args.get_outfile().c_str(), input_buf, siz, cod, qcd,
+    open_htj2k::openhtj2k_encoder encoder(out_filename.c_str(), input_buf, siz, cod, qcd,
                                           args.get_qfactor(), isJPH, color_space, args.get_num_threads());
+    if (!toFile) {
+      encoder.set_output_buffer(outbuf);
+    }
     // invoke encoding
     try {
       total_size = encoder.invoke();
     } catch (std::exception &exc) {
       return EXIT_FAILURE;
     }
+  }
+  if (!toFile) {
+    printf("-------- last 64 byte of codestream\n");
+    for (int i = total_size - 64; i < total_size; ++i) {
+      printf("%02X ", outbuf[i]);
+    }
+    printf("\n--------\n");
   }
   auto duration = std::chrono::high_resolution_clock::now() - start;
   auto count    = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();

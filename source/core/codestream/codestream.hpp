@@ -80,15 +80,17 @@ class j2c_dst_memory : public j2c_destination_base {
  private:
   std::vector<uint8_t> buf;
   uint32_t pos;
+  bool is_flushed;
 
  public:
-  j2c_dst_memory() { pos = 0; }
+  j2c_dst_memory() : pos(0), is_flushed(false) {}
   ~j2c_dst_memory() override = default;
   int32_t put_byte(uint8_t byte) override;
   int32_t put_word(uint16_t word) override;
   int32_t put_dword(uint32_t dword) override;
   int32_t put_N_bytes(uint8_t *src, uint32_t length) override;
   int32_t flush(std::ofstream &dst) override;
+  int32_t flush(std::vector<uint8_t> *obuf);
   size_t get_length() const;
   void print_bytes();
 };
