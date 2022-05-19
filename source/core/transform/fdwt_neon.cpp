@@ -35,60 +35,68 @@
  * horizontal transforms
  *******************************************************************************/
 // irreversible FDWT
-auto fdwt_irrev97_fixed_neon_hor_step0 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+auto fdwt_irrev97_fixed_neon_hor_step0 = [](const int32_t init_pos, const int32_t simdlen, int16_t *X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
   auto vvv = vdupq_n_s16(Acoeff_simd);
-  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
+  X += init_pos;
+  for (int32_t i = simdlen; i > 0; i -= 8) {
+    auto x0  = vld2q_s16(X + n0);
+    auto x1  = vld2q_s16(X + n1);
     auto tmp = (x0.val[0] + x1.val[0]);
     x0.val[1] -= tmp;
     tmp = vqrdmulhq_s16(tmp, vvv);
     x0.val[1] += tmp;
-    vst2q_s16(X + n + n0, x0);
+    vst2q_s16(X + n0, x0);
+    X += 16;
   }
 };
 
-auto fdwt_irrev97_fixed_neon_hor_step1 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+auto fdwt_irrev97_fixed_neon_hor_step1 = [](const int32_t init_pos, const int32_t simdlen, int16_t *X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
   auto vvv = vdupq_n_s16(Bcoeff_simd);
-  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
+  X += init_pos;
+  for (int32_t i = simdlen; i > 0; i -= 8) {
+    auto x0  = vld2q_s16(X + n0);
+    auto x1  = vld2q_s16(X + n1);
     auto tmp = vrhaddq_s16(x0.val[0], x1.val[0]);
     tmp      = vqrdmulhq_s16(tmp, vvv);
     x0.val[1] += tmp;
-    vst2q_s16(X + n + n0, x0);
+    vst2q_s16(X + n0, x0);
+    X += 16;
   }
 };
 
-auto fdwt_irrev97_fixed_neon_hor_step2 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+auto fdwt_irrev97_fixed_neon_hor_step2 = [](const int32_t init_pos, const int32_t simdlen, int16_t *X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
   auto vvv = vdupq_n_s16(Ccoeff_simd);
-  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
+  X += init_pos;
+  for (int32_t i = simdlen; i > 0; i -= 8) {
+    auto x0  = vld2q_s16(X + n0);
+    auto x1  = vld2q_s16(X + n1);
     auto tmp = (x0.val[0] + x1.val[0]);
     tmp      = vqrdmulhq_s16(tmp, vvv);
     x0.val[1] += tmp;
-    vst2q_s16(X + n + n0, x0);
+    vst2q_s16(X + n0, x0);
+    X += 16;
   }
 };
 
-auto fdwt_irrev97_fixed_neon_hor_step3 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
+auto fdwt_irrev97_fixed_neon_hor_step3 = [](const int32_t init_pos, const int32_t simdlen, int16_t *X,
                                             const int32_t n0, const int32_t n1, const int32_t coeff,
                                             const int32_t offset, const int32_t shift) {
   auto vvv = vdupq_n_s16(Dcoeff_simd);
-  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
+  X += init_pos;
+  for (int32_t i = simdlen; i > 0; i -= 8) {
+    auto x0  = vld2q_s16(X + n0);
+    auto x1  = vld2q_s16(X + n1);
     auto tmp = (x0.val[0] + x1.val[0]);
     tmp      = vqrdmulhq_s16(tmp, vvv);
     x0.val[1] += tmp;
-    vst2q_s16(X + n + n0, x0);
+    vst2q_s16(X + n0, x0);
+    X += 16;
   }
 };
 
