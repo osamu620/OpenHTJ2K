@@ -399,7 +399,7 @@ class openhtj2k_encoder {
   std::unique_ptr<class openhtj2k_encoder_impl> impl;
 
  public:
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   __declspec(dllexport)
       openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz,
                         cod_params &cod, qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space,
