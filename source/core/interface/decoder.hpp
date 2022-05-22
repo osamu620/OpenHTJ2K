@@ -37,7 +37,7 @@ class openhtj2k_decoder {
   std::unique_ptr<class openhtj2k_decoder_impl> impl;
 
  public:
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   __declspec(dllexport) openhtj2k_decoder(const char *, const uint8_t reduce_NL, uint32_t num_threads);
   __declspec(dllexport)
       openhtj2k_decoder(const uint8_t *, size_t, const uint8_t reduce_NL, uint32_t num_threads);
