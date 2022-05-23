@@ -39,11 +39,14 @@ class openhtj2k_decoder {
  public:
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   __declspec(dllexport) openhtj2k_decoder(const char *, const uint8_t reduce_NL, uint32_t num_threads);
+  __declspec(dllexport)
+      openhtj2k_decoder(const uint8_t *, size_t, const uint8_t reduce_NL, uint32_t num_threads);
   __declspec(dllexport) void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &,
                                     std::vector<uint32_t> &, std::vector<uint8_t> &, std::vector<bool> &);
   __declspec(dllexport) ~openhtj2k_decoder();
 #else
   openhtj2k_decoder(const char *, uint8_t reduce_NL, uint32_t num_threads);
+  openhtj2k_decoder(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
   ~openhtj2k_decoder();
