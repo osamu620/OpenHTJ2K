@@ -88,13 +88,29 @@ target_include_directories(open_htj2k
 		source/core/codestream
 		source/core/coding
 		source/core/transform
-		source/core/interface
+		#source/core/interface
 		source/core/jph
 		#${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
 		)
+target_include_directories(open_htj2k
+		INTERFACE
+		source/core/interface)
 set_target_properties(open_htj2k PROPERTIES OUTPUT_NAME $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
 #target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
 target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+
+#INSTALL(TARGETS open_htj2k
+#		EXPORT open_htj2k
+#		INCLUDES DESTINATION include
+#		LIBRARY DESTINATION lib)
+#
+#INSTALL (DIRECTORY src/core/interface/
+#		DESTINATION include/open_htj2k
+#		FILES_MATCHING
+#		PATTERN "*.h")
+#
+#INSTALL(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
+#		DESTINATION lib/pkgconfig)
 
 #find_package(OpenMP)
 #if(OpenMP_FOUND)
@@ -135,4 +151,4 @@ add_subdirectory(source/apps/imgcmp)
 target_include_directories(imgcmp PUBLIC source/apps/imgcmp/)
 
 ### conformance testing
-include(${CMAKE_SOURCE_DIR}/tests/decoder_conformance.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
