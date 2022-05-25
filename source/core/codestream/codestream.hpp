@@ -388,7 +388,7 @@ class tagtree {
       }
     }
     // create tagtree nodes
-    node = std::make_unique<tagtree_node[]>(num_nodes);
+    node = MAKE_UNIQUE<tagtree_node[]>(num_nodes);
 
     // build tagtree structure
     uint32_t node_index = 0, parent_num = 0, depth = level - 1;
@@ -452,7 +452,7 @@ class tagtree {
   //   num_nodes  = bc.num_nodes;
   //   num_cblk_x = bc.num_cblk_x;
   //   num_cblk_y = bc.num_cblk_y;
-  //   node       = std::make_unique<tagtree_node[]>(num_nodes);
+  //   node       = MAKE_UNIQUE<tagtree_node[]>(num_nodes);
   //   for (unsigned long i = 0; i < num_nodes; ++i) {
   //     node[i] = bc.node[i];
   //   }

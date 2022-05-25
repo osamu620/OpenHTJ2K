@@ -120,6 +120,11 @@ static inline void aligned_mem_free(void* ptr) {
   free(ptr);
 #endif
 }
+#if ((defined(_MSVC_LANG) && _MSVC_LANG > 201103L) || __cplusplus > 201103L)
+  #define MAKE_UNIQUE std::make_unique
+#else
+  #define MAKE_UNIQUE open_htj2k::make_unique
+#endif
 
 #if ((defined(_MSVC_LANG) && _MSVC_LANG <= 201103L) || __cplusplus <= 201103L)
   #include <cstddef>

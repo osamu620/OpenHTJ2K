@@ -176,12 +176,12 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   //  memset(block_states, 0, (size.x + 2) * (size.y + 2));
   const uint32_t QWx2 = size.x + size.x % 2;
   const uint32_t QHx2 = size.y + size.y % 2;
-  block_states        = std::make_unique<uint8_t[]>((size.x + 2) * (size.y + 2));
+  block_states        = MAKE_UNIQUE<uint8_t[]>((size.x + 2) * (size.y + 2));
   memset(block_states.get(), 0, (size.x + 2) * (size.y + 2));
-  sample_buf = std::make_unique<int32_t[]>(QWx2 * QHx2);
+  sample_buf = MAKE_UNIQUE<int32_t[]>(QWx2 * QHx2);
   memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
-  this->layer_start  = std::make_unique<uint8_t[]>(num_layers);
-  this->layer_passes = std::make_unique<uint8_t[]>(num_layers);
+  this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
+  this->layer_passes = MAKE_UNIQUE<uint8_t[]>(num_layers);
   this->pass_length.reserve(109);
   this->pass_length = std::vector<uint32_t>(num_layers, 0);  // critical section
 }
@@ -203,7 +203,7 @@ void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsi
       return;
     }
   }
-  this->compressed_data = std::make_unique<uint8_t[]>(bufsize + Lref * (refsegment));
+  this->compressed_data = MAKE_UNIQUE<uint8_t[]>(bufsize + Lref * (refsegment));
   memcpy(this->compressed_data.get(), buf, bufsize);
   this->current_address = this->compressed_data.get();
 }
@@ -220,7 +220,7 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, uint16_t buf_l
     }
     // allocate buffer one once for the first contributing layer
     if (this->compressed_data == nullptr) {
-      this->compressed_data = std::make_unique<uint8_t[]>(buf_limit);
+      this->compressed_data = MAKE_UNIQUE<uint8_t[]>(buf_limit);
       this->current_address = this->compressed_data.get();
     }
     if (layer_length != 0) {
@@ -228,7 +228,7 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, uint16_t buf_l
         // extend buffer size, if necessary
         uint8_t *old_buf = this->compressed_data.release();
         buf_limit += 8192;
-        this->compressed_data = std::make_unique<uint8_t[]>(buf_limit);
+        this->compressed_data = MAKE_UNIQUE<uint8_t[]>(buf_limit);
         memcpy(this->compressed_data.get(), old_buf, sizeof(uint8_t) * (buf_limit));
         this->current_address = this->compressed_data.get() + (this->length);
         delete[] old_buf;
@@ -267,10 +267,10 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
   const uint32_t band_stride    = bp1.x - bp0.x;
   if (num_codeblocks != 0) {
     inclusion_info =
-        std::make_unique<tagtree>(this->num_codeblock_x, this->num_codeblock_y);         // critical section
-    ZBP_info = std::make_unique<tagtree>(this->num_codeblock_x, this->num_codeblock_y);  // critical section
+        MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);         // critical section
+    ZBP_info = MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);  // critical section
     this->codeblocks =
-        std::make_unique<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);  // critical section
+        MAKE_UNIQUE<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);  // critical section
     for (uint32_t cb = 0; cb < num_codeblocks; cb++) {
       const uint32_t x = cb % this->num_codeblock_x;
       const uint32_t y = cb / this->num_codeblock_x;
@@ -282,7 +282,7 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
       const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
       this->codeblocks[cb] =
-          std::make_unique<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize, band_stride,
+          MAKE_UNIQUE<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize, band_stride,
                                           ibuf, offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
     }
   } else {
@@ -971,7 +971,7 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
       packet_header_length(0) {
   length = 0;  // for encoder only
 
-  this->pband          = std::make_unique<std::unique_ptr<j2k_precinct_subband>[]>(num_bands);
+  this->pband          = MAKE_UNIQUE<std::unique_ptr<j2k_precinct_subband>[]>(num_bands);
   const uint8_t xob[4] = {0, 1, 0, 1};
   const uint8_t yob[4] = {0, 0, 1, 1};
   for (unsigned long i = 0; i < num_bands; ++i) {
@@ -980,7 +980,7 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
                              ceil_int(pos0.y - yob[subband[i]->orientation], sr));
     const element_siz pbpos1(ceil_int(pos1.x - xob[subband[i]->orientation], sr),
                              ceil_int(pos1.y - yob[subband[i]->orientation], sr));
-    this->pband[i] = std::make_unique<j2k_precinct_subband>(
+    this->pband[i] = MAKE_UNIQUE<j2k_precinct_subband>(
         subband[i]->orientation, subband[i]->M_b, subband[i]->R_b, subband[i]->transformation,
         subband[i]->delta, subband[i]->i_samples, subband[i]->pos0, subband[i]->pos1, pbpos0, pbpos1,
         num_layers, codeblock_size, Cmodes);
@@ -1143,7 +1143,7 @@ j2k_resolution::~j2k_resolution() {
 void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                                      std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
                                      uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth) {
-  subbands = std::make_unique<std::unique_ptr<j2k_subband>[]>(num_bands);
+  subbands = MAKE_UNIQUE<std::unique_ptr<j2k_subband>[]>(num_bands);
   uint8_t i;
   uint8_t b;
   uint8_t xob[4]    = {0, 1, 0, 1};
@@ -1190,7 +1190,7 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       // delta, which is quantization step-size, is scaled by nominal-range of this band
       delta *= nominal_range;
     }
-    subbands[i] = std::make_unique<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b,
+    subbands[i] = MAKE_UNIQUE<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b,
                                                 M_b, delta, nominal_range, i_samples, f_samples);
   }
 }
@@ -1205,7 +1205,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
   const uint32_t idxoff_y = (pos0.y - 0) / PP.y;
 
   if (!is_empty) {
-    precincts = std::make_unique<std::unique_ptr<j2k_precinct>[]>(npw * nph);
+    precincts = MAKE_UNIQUE<std::unique_ptr<j2k_precinct>[]>(npw * nph);
     for (uint32_t i = 0; i < npw * nph; i++) {
       uint32_t x, y;
       x = i % npw;
@@ -1214,7 +1214,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
                                 std::max(pos0.y, 0 + PP.y * (y + idxoff_y)));
       const element_siz prcpos1(std::min(pos1.x, 0 + PP.x * (x + 1 + idxoff_x)),
                                 std::min(pos1.y, 0 + PP.y * (y + 1 + idxoff_y)));
-      precincts[i] = std::make_unique<j2k_precinct>(index, i, prcpos0, prcpos1, subbands, numlayers,
+      precincts[i] = MAKE_UNIQUE<j2k_precinct>(index, i, prcpos0, prcpos1, subbands, numlayers,
                                                     codeblock_size, Cmodes);
     }
   }
@@ -1234,7 +1234,7 @@ j2c_packet::j2c_packet(const uint16_t l, const uint8_t r, const uint16_t c, cons
   // get length of the corresponding precinct
   length = cp->get_length();
   // create buffer to accommodate packet header and body
-  buf        = std::make_unique<uint8_t[]>(length);
+  buf        = MAKE_UNIQUE<uint8_t[]>(length);
   size_t pos = cp->packet_header_length;
   // copy packet header to packet buffer
   for (int i = 0; i < pos; ++i) {
@@ -1293,7 +1293,7 @@ j2k_tile_part::j2k_tile_part(uint16_t num_components) {
   tile_part_index = 0;
   body            = nullptr;
   length          = 0;
-  header          = std::make_unique<j2k_tilepart_header>(num_components);
+  header          = MAKE_UNIQUE<j2k_tilepart_header>(num_components);
 }
 
 void j2k_tile_part::set_SOT(SOT_marker &tmpSOT) {
@@ -1504,7 +1504,7 @@ uint8_t j2k_tile_component::get_ROIshift() const { return this->ROIshift; }
 j2k_resolution *j2k_tile_component::access_resolution(uint8_t r) { return this->resolution[r].get(); }
 
 void j2k_tile_component::create_resolutions(uint16_t numlayers) {
-  resolution = std::make_unique<std::unique_ptr<j2k_resolution>[]>(NL + 1);
+  resolution = MAKE_UNIQUE<std::unique_ptr<j2k_resolution>[]>(NL + 1);
 
   float tmp_ranges[4]       = {1.0, 1.0, 1.0, 1.0};
   float child_ranges[32][4] = {0};
@@ -1543,7 +1543,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
     const uint32_t npw = (respos1.x > respos0.x) ? ceil_int(respos1.x, PP.x) - respos0.x / PP.x : 0;
     const uint32_t nph = (respos1.y > respos0.y) ? ceil_int(respos1.y, PP.y) - respos0.y / PP.y : 0;
 
-    resolution[r] = std::make_unique<j2k_resolution>(r, respos0, respos1, npw, nph);
+    resolution[r] = MAKE_UNIQUE<j2k_resolution>(r, respos0, respos1, npw, nph);
     resolution[r]->set_nominal_ranges(child_ranges[r]);
     resolution[r]->normalizing_downshift = nshift[r];
     resolution[r]->normalizing_upshift   = nshift[r + 1];
@@ -1667,7 +1667,7 @@ void j2k_tile::dec_init(uint16_t idx, j2k_main_header &main_header, uint8_t redu
 void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_header &main_header) {
   this->length += tmpSOT.get_tile_part_length();
   // this->tile_part.push_back(move(make_unique<j2k_tile_part>(num_components)));
-  this->tile_part.push_back(std::make_unique<j2k_tile_part>(num_components));
+  this->tile_part.push_back(MAKE_UNIQUE<j2k_tile_part>(num_components));
   this->num_tile_part++;
   this->current_tile_part_pos++;
   this->tile_part[current_tile_part_pos]->set_SOT(tmpSOT);
@@ -1702,7 +1702,7 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
     }
 
     // create tile components
-    this->tcomp = std::make_unique<j2k_tile_component[]>(num_components);
+    this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
     for (uint16_t c = 0; c < num_components; c++) {
       this->tcomp[c].init(&main_header, tphdr, this, c);
     }
@@ -1725,7 +1725,7 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
 void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   uint8_t t = 0;
   // concatenate tile-parts into a tile
-  this->tile_buf = std::make_unique<buf_chain>(num_tile_part);
+  this->tile_buf = MAKE_UNIQUE<buf_chain>(num_tile_part);
   for (unsigned long i = 0; i < num_tile_part; i++) {
     // If a length of a tile-part is 0, buf number 't' should not be
     // incremented!!
@@ -1737,7 +1737,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   this->tile_buf->activate();
   // If PPT exits, create PPT buf chain
   if (!this->tile_part[0]->header->PPT.empty()) {
-    ppt_header = std::make_unique<buf_chain>();
+    ppt_header = MAKE_UNIQUE<buf_chain>();
     for (unsigned long i = 0; i < num_tile_part; i++) {
       for (auto &ppt : this->tile_part[i]->header->PPT) {
         ppt_header->add_buf_node(ppt->pptbuf, ppt->pptlen);
@@ -1787,7 +1787,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   }
   num_packets *= numlayers;
   // TODO: create packets with progression order
-  this->packet = std::make_unique<j2c_packet[]>(num_packets);
+  this->packet = MAKE_UNIQUE<j2c_packet[]>(num_packets);
   // need to construct a POC marker from progression order value in COD marker
   porder_info.add(0, 0, this->numlayers, max_c_NL + 1, this->num_components, this->progression_order);
   uint8_t PO, RS, RE, r, local_RE;
@@ -2060,7 +2060,7 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
     }
   }
   num_packets *= this->numlayers;
-  this->packet = std::make_unique<j2c_packet[]>(num_packets);
+  this->packet = MAKE_UNIQUE<j2c_packet[]>(num_packets);
 
   // need to construct a POC marker from progression order value in COD marker
   porder_info.add(0, 0, this->numlayers, max_c_NL + 1, this->num_components, this->progression_order);
@@ -2576,7 +2576,7 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   // set Ccap15(HTJ2K only or mixed)
   Ccap15 = (main_header.CAP != nullptr) ? main_header.CAP->get_Ccap(15) : 0;
   // create tile-part(s)
-  this->tile_part.push_back(std::make_unique<j2k_tile_part>(num_components));
+  this->tile_part.push_back(MAKE_UNIQUE<j2k_tile_part>(num_components));
   this->num_tile_part++;
   this->current_tile_part_pos++;
   SOT_marker tmpSOT;
@@ -2609,7 +2609,7 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   }
 
   // create tile components
-  this->tcomp = std::make_unique<j2k_tile_component[]>(num_components);
+  this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
 #pragma omp parallel for  // default(none) shared(img, tphdr, main_header)
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img);
@@ -2780,7 +2780,7 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
         // emit_dword packet header
         pckt_hdr.flush(use_EPH_local);
         cp->packet_header_length = pckt_hdr.get_length();
-        cp->packet_header        = std::make_unique<uint8_t[]>(cp->packet_header_length);
+        cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
 
         pckt_hdr.copy_buf(cp->packet_header.get());
         packet_length += pckt_hdr.get_length();

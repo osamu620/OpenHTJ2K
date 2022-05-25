@@ -691,8 +691,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   }
 
   // buffers shall be zeroed.
-  std::unique_ptr<uint8_t[]> fwd_buf = std::make_unique<uint8_t[]>(MAX_Lcup);
-  std::unique_ptr<uint8_t[]> rev_buf = std::make_unique<uint8_t[]>(MAX_Scup);
+  std::unique_ptr<uint8_t[]> fwd_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Lcup);
+  std::unique_ptr<uint8_t[]> rev_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Scup);
   memset(fwd_buf.get(), 0, sizeof(uint8_t) * (MAX_Lcup));
   memset(rev_buf.get(), 0, sizeof(uint8_t) * MAX_Scup);
 
@@ -701,9 +701,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   state_VLC_enc VLC_encoder(rev_buf.get());
 
   alignas(32) uint32_t v_n[8];
-  std::unique_ptr<int32_t[]> Eadj = std::make_unique<int32_t[]>(round_up(block->size.x, 2) + 2);
+  std::unique_ptr<int32_t[]> Eadj = MAKE_UNIQUE<int32_t[]>(round_up(block->size.x, 2) + 2);
   memset(Eadj.get(), 0, round_up(block->size.x, 2) + 2);
-  std::unique_ptr<uint8_t[]> sigma_adj = std::make_unique<uint8_t[]>(round_up(block->size.x, 2) + 2);
+  std::unique_ptr<uint8_t[]> sigma_adj = MAKE_UNIQUE<uint8_t[]>(round_up(block->size.x, 2) + 2);
   memset(sigma_adj.get(), 0, round_up(block->size.x, 2) + 2);
   alignas(32) uint8_t sigma_n[8] = {0}, rho_q[2] = {0}, gamma[2] = {0}, emb_k, emb_1, lw, m_n[8] = {0};
   alignas(32) uint16_t c_q[2] = {0, 0}, n_q[2] = {0}, CxtVLC[2] = {0}, cwd;

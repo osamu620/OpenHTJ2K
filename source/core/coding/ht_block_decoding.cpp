@@ -439,9 +439,9 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
   const uint16_t QH = ceil_int(block->size.y, 2);
 
   // buffers shall be zeroed.
-  std::unique_ptr<uint8_t[]> sigma_n = std::make_unique<uint8_t[]>(4 * QW * QH);
-  std::unique_ptr<uint8_t[]> E       = std::make_unique<uint8_t[]>(4 * QW * QH);
-  std::unique_ptr<uint32_t[]> mu_n   = std::make_unique<uint32_t[]>(4 * QW * QH);
+  std::unique_ptr<uint8_t[]> sigma_n = MAKE_UNIQUE<uint8_t[]>(4 * QW * QH);
+  std::unique_ptr<uint8_t[]> E       = MAKE_UNIQUE<uint8_t[]>(4 * QW * QH);
+  std::unique_ptr<uint32_t[]> mu_n   = MAKE_UNIQUE<uint32_t[]>(4 * QW * QH);
   memset(sigma_n.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
   memset(E.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
   memset(mu_n.get(), 0, sizeof(uint32_t) * 4 * QW * QH);

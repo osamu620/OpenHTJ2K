@@ -1508,9 +1508,9 @@ j2k_main_header::j2k_main_header() {
 
 j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *qcd, CAP_marker *cap,
                                  uint8_t qfactor, CPF_marker *cpf, POC_marker *poc, CRG_marker *crg) {
-  SIZ = std::make_unique<SIZ_marker>(*siz);
-  COD = std::make_unique<COD_marker>(*cod);
-  QCD = std::make_unique<QCD_marker>(*qcd);
+  SIZ = MAKE_UNIQUE<SIZ_marker>(*siz);
+  COD = MAKE_UNIQUE<COD_marker>(*cod);
+  QCD = MAKE_UNIQUE<QCD_marker>(*qcd);
   // Qfactor, if any
   if (qfactor != 0xFF) {
     if (siz->get_num_components() != 3 && siz->get_num_components() != 1) {
@@ -1518,7 +1518,7 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
       throw std::exception();
     }
     for (uint16_t c = 1; c < siz->get_num_components(); ++c) {
-      QCC.push_back(std::make_unique<QCC_marker>(
+      QCC.push_back(MAKE_UNIQUE<QCC_marker>(
           siz->get_num_components(), c, qcd->get_number_of_guardbits(), cod->get_dwt_levels(),
           cod->get_transformation(), false, siz->get_bitdepth(c), cod->use_color_trafo(), qfactor,
           SIZ->get_chroma_format()));
@@ -1526,21 +1526,21 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
   }
 
   if (cap != nullptr) {
-    CAP = std::make_unique<CAP_marker>(*cap);
+    CAP = MAKE_UNIQUE<CAP_marker>(*cap);
   }
   if (cpf != nullptr) {
-    CPF = std::make_unique<CPF_marker>(*cpf);
+    CPF = MAKE_UNIQUE<CPF_marker>(*cpf);
   }
   if (poc != nullptr) {
-    POC = std::make_unique<POC_marker>(*poc);
+    POC = MAKE_UNIQUE<POC_marker>(*poc);
   }
   if (crg != nullptr) {
-    CRG = std::make_unique<CRG_marker>(*crg);
+    CRG = MAKE_UNIQUE<CRG_marker>(*crg);
   }
 }
 
 void j2k_main_header::add_COM_marker(const COM_marker &com) {
-  COM.push_back(std::make_unique<COM_marker>(com));
+  COM.push_back(MAKE_UNIQUE<COM_marker>(com));
 }
 
 void j2k_main_header::flush(j2c_dst_memory &buf) {
@@ -1596,46 +1596,46 @@ int j2k_main_header::read(j2c_src_memory &in) {
   while ((word = in.get_word()) != _SOT) {
     switch (word) {
       case _SIZ:
-        SIZ = std::make_unique<SIZ_marker>(in);
+        SIZ = MAKE_UNIQUE<SIZ_marker>(in);
         break;
       case _CAP:
-        CAP = std::make_unique<CAP_marker>(in);
+        CAP = MAKE_UNIQUE<CAP_marker>(in);
         break;
       case _COD:
-        COD = std::make_unique<COD_marker>(in);
+        COD = MAKE_UNIQUE<COD_marker>(in);
         break;
       case _COC:
-        COC.push_back(std::make_unique<COC_marker>(in, SIZ->get_num_components()));
+        COC.push_back(MAKE_UNIQUE<COC_marker>(in, SIZ->get_num_components()));
         break;
       case _TLM:
-        TLM.push_back(std::make_unique<TLM_marker>(in));
+        TLM.push_back(MAKE_UNIQUE<TLM_marker>(in));
         break;
       case _PLM:
-        PLM.push_back(std::make_unique<PLM_marker>(in));
+        PLM.push_back(MAKE_UNIQUE<PLM_marker>(in));
         break;
       case _CPF:
-        CPF = std::make_unique<CPF_marker>(in);
+        CPF = MAKE_UNIQUE<CPF_marker>(in);
         break;
       case _QCD:
-        QCD = std::make_unique<QCD_marker>(in);
+        QCD = MAKE_UNIQUE<QCD_marker>(in);
         break;
       case _QCC:
-        QCC.push_back(std::make_unique<QCC_marker>(in, SIZ->get_num_components()));
+        QCC.push_back(MAKE_UNIQUE<QCC_marker>(in, SIZ->get_num_components()));
         break;
       case _RGN:
-        RGN.push_back(std::make_unique<RGN_marker>(in, SIZ->get_num_components()));
+        RGN.push_back(MAKE_UNIQUE<RGN_marker>(in, SIZ->get_num_components()));
         break;
       case _POC:
-        POC = std::make_unique<POC_marker>(in, SIZ->get_num_components());
+        POC = MAKE_UNIQUE<POC_marker>(in, SIZ->get_num_components());
         break;
       case _PPM:
-        PPM.push_back(std::make_unique<PPM_marker>(in));
+        PPM.push_back(MAKE_UNIQUE<PPM_marker>(in));
         break;
       case _CRG:
-        CRG = std::make_unique<CRG_marker>(in);
+        CRG = MAKE_UNIQUE<CRG_marker>(in);
         break;
       case _COM:
-        COM.push_back(std::make_unique<COM_marker>(in));
+        COM.push_back(MAKE_UNIQUE<COM_marker>(in));
         break;
       default:
         printf("WARNING: unknown marker %04X is found in main header\n", word);
@@ -1647,7 +1647,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
     for (auto &i : PPM) {
       len += i->ppmlen;
     }
-    ppm_buf    = std::make_unique<uint8_t[]>(len);
+    ppm_buf    = MAKE_UNIQUE<uint8_t[]>(len);
     uint8_t *p = ppm_buf.get();
     for (auto &i : PPM) {
       for (int j = 0; j < i->ppmlen; j++) {
@@ -1656,7 +1656,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
     }
     p             = ppm_buf.get();
     uint32_t Nppm = 0;
-    ppm_header    = std::make_unique<buf_chain>();
+    ppm_header    = MAKE_UNIQUE<buf_chain>();
     while (len > 0) {
       for (int i = 0; i < 4; i++, len--) {
         Nppm <<= 8;
@@ -1700,39 +1700,39 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
   while ((word = in.get_word()) != _SOD) {
     switch (word) {
       case _COD:
-        this->COD = std::make_unique<COD_marker>(in);
+        this->COD = MAKE_UNIQUE<COD_marker>(in);
         length_of_tilepart_markers += this->COD->get_length() + 2;
         break;
       case _COC:
-        this->COC.push_back(std::make_unique<COC_marker>(in, num_components));
+        this->COC.push_back(MAKE_UNIQUE<COC_marker>(in, num_components));
         length_of_tilepart_markers += this->COC[this->COC.size() - 1]->get_length() + 2;
         break;
       case _PLT:
-        this->PLT.push_back(std::make_unique<PLT_marker>(in));
+        this->PLT.push_back(MAKE_UNIQUE<PLT_marker>(in));
         length_of_tilepart_markers += this->PLT[this->PLT.size() - 1]->get_length() + 2;
         break;
       case _QCD:
-        this->QCD = std::make_unique<QCD_marker>(in);
+        this->QCD = MAKE_UNIQUE<QCD_marker>(in);
         length_of_tilepart_markers += this->QCD->get_length() + 2;
         break;
       case _QCC:
-        this->QCC.push_back(std::make_unique<QCC_marker>(in, num_components));
+        this->QCC.push_back(MAKE_UNIQUE<QCC_marker>(in, num_components));
         length_of_tilepart_markers += this->QCC[this->QCC.size() - 1]->get_length() + 2;
         break;
       case _RGN:
-        this->RGN.push_back(std::make_unique<RGN_marker>(in, num_components));
+        this->RGN.push_back(MAKE_UNIQUE<RGN_marker>(in, num_components));
         length_of_tilepart_markers += this->RGN[this->RGN.size() - 1]->get_length() + 2;
         break;
       case _POC:
-        this->POC = std::make_unique<POC_marker>(in, num_components);
+        this->POC = MAKE_UNIQUE<POC_marker>(in, num_components);
         length_of_tilepart_markers += this->POC->get_length() + 2;
         break;
       case _PPT:
-        this->PPT.push_back(std::make_unique<PPT_marker>(in));
+        this->PPT.push_back(MAKE_UNIQUE<PPT_marker>(in));
         length_of_tilepart_markers += this->PPT[this->PPT.size() - 1]->get_length() + 2;
         break;
       case _COM:
-        this->COM.push_back(std::make_unique<COM_marker>(in));
+        this->COM.push_back(MAKE_UNIQUE<COM_marker>(in));
         length_of_tilepart_markers += this->COM[this->COM.size() - 1]->get_length() + 2;
         break;
       default:

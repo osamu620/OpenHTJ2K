@@ -82,7 +82,11 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   FILE *ofp = fopen(fname, "wb");
   fprintf(ofp, "P6 %d %d %d\n", width[0], height[0], MAXVAL);
   const uint32_t num_pixels = width[0] * height[0];
-  auto ppm_out              = std::make_unique<uint8_t[]>(num_pixels * bytes_per_pixel * 3);
+#if ((defined(_MSVC_LANG) && _MSVC_LANG < 201402L) || __cplusplus < 201402L)
+  std::unique_ptr<uint8_t[]> ppm_out(new uint8_t[num_pixels * bytes_per_pixel * 3]);
+#else
+  auto ppm_out = std::make_unique<uint8_t[]>(num_pixels * bytes_per_pixel * 3);
+#endif
   setvbuf(ofp, (char *)ppm_out.get(), _IOFBF, num_pixels);
   int32_t val0, val1, val2;
 
@@ -165,17 +169,29 @@ void write_components(char *outfile_name, char *outfile_ext_name, std::vector<in
       fprintf(ofp, "PG LM %c %d %d %d\n", sign, depth[c], width[c], height[c]);
     }
     if (ceil_int(depth[c], 8) == 1) {
-      std::unique_ptr<uint8_t[]> outbuf = std::make_unique<uint8_t[]>(num_pixels);
+#if ((defined(_MSVC_LANG) && _MSVC_LANG < 201402L) || __cplusplus < 201402L)
+      std::unique_ptr<uint8_t[]> outbuf(new uint8_t[num_pixels]);
+#else
+      std::unique_ptr<uint8_t[]> outbuf  = std::make_unique<uint8_t[]>(num_pixels);
+#endif
       convert_component_buffer_class<uint8_t>(outbuf.get(), c, is_PGM, buf, width, height, depth,
                                               is_signed);
       fwrite(outbuf.get(), sizeof(uint8_t), num_pixels, ofp);
     } else if (ceil_int(depth[c], 8) == 2) {
+#if ((defined(_MSVC_LANG) && _MSVC_LANG < 201402L) || __cplusplus < 201402L)
+      std::unique_ptr<uint16_t[]> outbuf(new uint16_t[num_pixels]);
+#else
       std::unique_ptr<uint16_t[]> outbuf = std::make_unique<uint16_t[]>(num_pixels);
+#endif
       convert_component_buffer_class<uint16_t>(outbuf.get(), c, is_PGM, buf, width, height, depth,
                                                is_signed);
       fwrite(outbuf.get(), sizeof(uint16_t), num_pixels, ofp);
     } else if (ceil_int(depth[c], 8) == 4) {
+#if ((defined(_MSVC_LANG) && _MSVC_LANG < 201402L) || __cplusplus < 201402L)
+      std::unique_ptr<uint32_t[]> outbuf(new uint32_t[num_pixels]);
+#else
       std::unique_ptr<uint32_t[]> outbuf = std::make_unique<uint32_t[]>(num_pixels);
+#endif
       convert_component_buffer_class<uint32_t>(outbuf.get(), c, is_PGM, buf, width, height, depth,
                                                is_signed);
       fwrite(outbuf.get(), sizeof(uint32_t), num_pixels, ofp);

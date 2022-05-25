@@ -123,7 +123,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }
 
-  auto tileSet = std::make_unique<j2k_tile[]>(numTiles.x * numTiles.y);
+  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(numTiles.x * numTiles.y);
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
     tileSet[i].dec_init(i, main_header, reduce_NL);
   }
@@ -175,12 +175,12 @@ openhtj2k_decoder_impl::~openhtj2k_decoder_impl() = default;
 
 // public interface
 openhtj2k_decoder::openhtj2k_decoder(const char *fname, const uint8_t reduce_NL, uint32_t num_threads) {
-  this->impl = std::make_unique<openhtj2k_decoder_impl>(fname, reduce_NL, num_threads);
+  this->impl = MAKE_UNIQUE<openhtj2k_decoder_impl>(fname, reduce_NL, num_threads);
 }
 // on memory decoding
 openhtj2k_decoder::openhtj2k_decoder(const uint8_t *buf, size_t length, const uint8_t reduce_NL,
                                      uint32_t num_threads) {
-  this->impl = std::make_unique<openhtj2k_decoder_impl>(buf, length, reduce_NL, num_threads);
+  this->impl = MAKE_UNIQUE<openhtj2k_decoder_impl>(buf, length, reduce_NL, num_threads);
 }
 void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,

@@ -271,11 +271,15 @@ class image {
     const size_t num_samples  = this->width * this->height * num_components;
     const size_t num_bytes    = this->width * this->height * nbytes * num_components;
 
-    // this->data = std::make_unique<int_fast32_t[]>(this->width * this->height);
+    // this->data = MAKE_UNIQUE<int_fast32_t[]>(this->width * this->height);
     this->data = new int_fast32_t[num_samples];
 
     if (!isASCII) {
+#if ((defined(_MSVC_LANG) && _MSVC_LANG < 201402L) || __cplusplus < 201402L)
+      std::unique_ptr<uint8_t[]> buf(new uint_fast8_t[num_bytes]);
+#else
       auto buf = std::make_unique<uint_fast8_t[]>(num_bytes);
+#endif
       if (fread(buf.get(), sizeof(uint8_t), num_bytes, fp) < num_bytes) {
         printf("ERROR: not enough samples in the given pnm file.\n");
         exit(EXIT_FAILURE);
