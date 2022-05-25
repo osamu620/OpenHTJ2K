@@ -28,7 +28,11 @@
 
 #include <cstdio>
 #include "decoder.hpp"
-#include <filesystem>
+#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+  #include <filesystem>
+#else
+  #include <sys/stat.h>
+#endif
 #include "coding_units.hpp"
 #include "ThreadPool.hpp"
 #ifdef _OPENMP
@@ -51,12 +55,21 @@ class openhtj2k_decoder_impl {
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
     : reduce_NL(r) {
   uintmax_t file_size;
+#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   try {
     file_size = std::filesystem::file_size(filename);
   } catch (std::filesystem::filesystem_error &err) {
     printf("ERROR: input file %s is not found.\n", filename);
     exit(EXIT_FAILURE);
   }
+#else
+  struct stat st;
+  if (stat(filename, &st) != 0) {
+    printf("ERROR: input file %s is not found.\n", filename);
+    exit(EXIT_FAILURE);
+  }
+  file_size = static_cast<uintmax_t>(st.st_size);
+#endif
   ThreadPool::instance(num_threads);
   // open codestream and store it in memory
   FILE *fp = fopen(filename, "rb");
