@@ -391,7 +391,7 @@ size_t openhtj2k_encoder_impl::invoke() {
   }
 
   // check number of components
-  if (siz->Csiz != 3 && cod->use_color_trafo == 1) {
+  if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
     printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
   }
@@ -414,7 +414,7 @@ size_t openhtj2k_encoder_impl::invoke() {
                       cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels, cod->blkwidth,
                       cod->blkheight, cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
   QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
-                      Ssiz[0], cod->use_color_trafo, qcd->base_step, qfactor);
+                      Ssiz[0] + 1, cod->use_color_trafo, qcd->base_step, qfactor);
   // parameters for CAP marker
   uint16_t bits14_15 = 0;                     // 0: HTONLY, 2: HTDECLARED, 3: MIXED
   uint16_t bit13     = 0;                     // 0: SINGLEHT, 1: MULTIHT

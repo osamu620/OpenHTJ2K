@@ -267,10 +267,9 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
   const uint32_t band_stride    = bp1.x - bp0.x;
   if (num_codeblocks != 0) {
     inclusion_info =
-        MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);         // critical section
-    ZBP_info = MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);  // critical section
-    this->codeblocks =
-        MAKE_UNIQUE<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);  // critical section
+        MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);            // critical section
+    ZBP_info = MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);     // critical section
+    this->codeblocks = MAKE_UNIQUE<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);  // critical section
     for (uint32_t cb = 0; cb < num_codeblocks; cb++) {
       const uint32_t x = cb % this->num_codeblock_x;
       const uint32_t y = cb / this->num_codeblock_x;
@@ -282,8 +281,8 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
       const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
       this->codeblocks[cb] =
-          MAKE_UNIQUE<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize, band_stride,
-                                          ibuf, offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
+          MAKE_UNIQUE<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize, band_stride, ibuf,
+                                     offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
     }
   } else {
     // this->codeblocks = {};
@@ -1190,8 +1189,8 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       // delta, which is quantization step-size, is scaled by nominal-range of this band
       delta *= nominal_range;
     }
-    subbands[i] = MAKE_UNIQUE<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b,
-                                                M_b, delta, nominal_range, i_samples, f_samples);
+    subbands[i] = MAKE_UNIQUE<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b, M_b,
+                                           delta, nominal_range, i_samples, f_samples);
   }
 }
 
@@ -1215,7 +1214,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
       const element_siz prcpos1(std::min(pos1.x, 0 + PP.x * (x + 1 + idxoff_x)),
                                 std::min(pos1.y, 0 + PP.y * (y + 1 + idxoff_y)));
       precincts[i] = MAKE_UNIQUE<j2k_precinct>(index, i, prcpos0, prcpos1, subbands, numlayers,
-                                                    codeblock_size, Cmodes);
+                                               codeblock_size, Cmodes);
     }
   }
 }
@@ -2504,7 +2503,7 @@ void j2k_tile::find_gcd_of_precinct_size(element_siz &out) {
 }
 
 void j2k_tile::ycbcr_to_rgb(j2k_main_header &main_header) {
-  if (num_components != 3) {
+  if (num_components < 3) {
     return;
   }
   uint8_t transformation;
@@ -2640,7 +2639,7 @@ int j2k_tile::perform_dc_offset(j2k_main_header &hdr) {
 }
 
 void j2k_tile::rgb_to_ycbcr(j2k_main_header &main_header) {
-  if (num_components != 3) {
+  if (num_components < 3) {
     return;
   }
   const uint8_t transformation = this->tcomp[0].get_transformation();
