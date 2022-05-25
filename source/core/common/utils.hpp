@@ -35,6 +35,10 @@
 #define round_down(x, n) ((x) & (-n))
 #define ceil_int(a, b) ((a) + ((b)-1)) / (b)
 
+#if defined(__INTEL_LLVM_COMPILER)
+  #define __INTEL_COMPILER
+#endif
+
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_acle.h>
   #include <arm_neon.h>
