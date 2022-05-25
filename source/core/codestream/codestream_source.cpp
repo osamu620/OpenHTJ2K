@@ -30,7 +30,7 @@
 
 // MARK: j2c_src_memory -
 void j2c_src_memory::alloc_memory(uint32_t length) {
-  buf = std::make_unique<uint8_t[]>(length);
+  buf = MAKE_UNIQUE<uint8_t[]>(length);
   pos = 0;
   len = length;
 }
