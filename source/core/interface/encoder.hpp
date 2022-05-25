@@ -46,9 +46,13 @@ class image {
   std::vector<bool> is_signed;
 
  public:
+#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
+  __declspec(dllexport) explicit image(const std::vector<std::string> &filenames);
+  __declspec(dllexport) int read_pnmpgx(const std::string &filename, const uint16_t nc);
+#else
   explicit image(const std::vector<std::string> &filenames);
-
   int read_pnmpgx(const std::string &filename, const uint16_t nc);
+#endif
 
   uint32_t get_width() const { return this->width; }
   uint32_t get_height() const { return this->height; }
