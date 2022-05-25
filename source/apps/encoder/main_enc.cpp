@@ -34,7 +34,11 @@
 // (c) 2021 Osamu Watanabe, Takushoku University
 
 #include <chrono>
-#include <filesystem>
+#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+  #include <filesystem>
+#else
+  #include <sys/stat.h>
+#endif
 #include <vector>
 #include "encoder.hpp"
 #include "enc_utils.hpp"
@@ -43,9 +47,17 @@ int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
   std::vector<std::string> fnames = args.get_infile();
   for (const auto &fname : fnames) {
+#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
     try {
       std::filesystem::exists(fname);
-    } catch (std::exception &exc) {
+    }
+#else
+    try {
+      struct stat st;
+      stat(fname.c_str(), &st);
+    }
+#endif
+    catch (std::exception &exc) {
       printf("ERROR: File %s is not found.\n", fname.c_str());
       return EXIT_FAILURE;
     }

@@ -45,7 +45,11 @@ class ThreadPool {
  public:
   ThreadPool(size_t);
   template <class F, class... Args>
+#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
+#else
+  auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type>;
+#endif
   ~ThreadPool();
   int thread_number(std::thread::id id) {
     if (id_map.find(id) != id_map.end()) return (int)id_map[id];
@@ -106,11 +110,16 @@ inline ThreadPool::ThreadPool(size_t threads) : stop(false), m_num_threads(threa
   }
 }
 template <class F, class... Args>
+#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
 auto ThreadPool::enqueue(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
   assert(m_num_threads > 1);
   using return_type = typename std::invoke_result<F, Args...>::type;
-
+#else
+auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
+  assert(m_num_threads > 1);
+  using return_type = typename std::result_of<F(Args...)>::type;
+#endif
   auto task = std::make_shared<std::packaged_task<return_type()>>(
       std::bind(std::forward<F>(f), std::forward<Args>(args)...));
 
