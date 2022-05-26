@@ -49,13 +49,13 @@ void print_help(char *cmd) {
   printf(
       "Clevels=Int:\n  Number of DWT decomposition.\n  Valid range for number of DWT levels is from 0 to "
       "32 (Default is 5.)\n");
-  printf("Creversible=Bool:\n  yes for lossless mode, no for lossy mode.\n");
+  printf("Creversible=yes or no:\n  yes for lossless mode, no for lossy mode.\n");
   printf("Cblk=Size:\n  Code-block size.\n");
   printf("Cprecincts=Size:\n  Precinct size. Shall be power of two.\n");
-  printf("Cycc=Bool:\n  yes to use RGB->YCbCr color space conversion.\n");
+  printf("Cycc=yes or no:\n  yes to use RGB->YCbCr color space conversion.\n");
   printf("Corder:\n  Progression order. Valid entry is one of LRCP, RLCP, RPCL, PCRL, CPRL.\n");
-  printf("Cuse_sop=Bool:\n  yes to use SOP (Start Of Packet) marker segment.\n");
-  printf("Cuse_eph=Bool:\n  yes to use EPH (End of Packet Header) marker.\n");
+  printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n");
+  printf("Cuse_eph=yes or no:\n  yes to use EPH (End of Packet Header) marker.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
   printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 8 (Default is 1.)\n");
   printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
