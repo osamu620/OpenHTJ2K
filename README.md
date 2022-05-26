@@ -14,15 +14,15 @@ OpenHTJ2K provides a shared liberary and sample applications having the followin
   - **Quality control for lossy compression with ***Qfactor*** feature** 
 
 # Requirements
-cmake (version 3.14 or later) and C++17 compliant compiler.
+cmake (version 3.14 or later) and C++11 compliant compiler.
 
 # Building
 Type the following command. `./` is a root of cloned repository and `${BUILD_DIR}` is a build directory (for example, `../build` or `./build` and so on)
 
 - You can also specify `-DCMAKE_BUILD_TYPE=Debug` or `-DCMAKE_BUILD_TYPE=RelWithDebInfo` to build with debug information.
 - You can also specify `-G "Xcode"` to create a project for Xcode.
-- You can also specify `-G "Visual Studio 16 2019"` to create a project for Visual Studio 2019.
-(see https://cmake.org/cmake/help/v3.14/manual/cmake-generators.7.html#id12)
+- You can also specify `-G "Visual Studio 17 2022"` to create a project for Visual Studio 2022. For the older versions,
+see https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html#visual-studio-generators
 
 ```
 cd ./
@@ -51,23 +51,23 @@ The encoder can take comma-separated multiple files. For example, components in 
 - `Stile_origin=Size`
 - `Clevels=Int`
   - Valid range for number of DWT levels is from 0 to 32 (Default is 5)
-- `Creversible=Bool`
+- `Creversible=yes or no`
   - `yes` for lossless mode, `no` for lossy mode
 - `Cblk=Size`
   - Code-block size
 - `Cprecincts=Size`
   - Precinct size
-- `Cycc=Bool`
+- `Cycc=yes or no`
   - `yes` to use RGB->YCbCr
 - `Corder`
   - Progression order: LRCP, RLCP, RPCL, PCRL, CPRL
-- `Cuse_sop=Bool`
-- `Cuse_eph=Bool`
+- `Cuse_sop=yes or no`
+- `Cuse_eph=yes or no`
 - `Qstep=Float`
   - 0.0 < base step size <= 2.0
 - `Qguard=Int`
   - 0 to 7 for the number of guard bits 
-- `Qderived=Bool`
+- `Qderived=yes or no`
   - `yes` switches the quantyzation style to **derived** (Default is `no`)
 - `Qfactor=Int`
   - 0 to 100 for the quality of the lossyly compressed image
