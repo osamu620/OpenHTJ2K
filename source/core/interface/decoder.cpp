@@ -100,9 +100,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   in.rewind_2bytes();
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
-#ifndef NDEBUG
-  printf("Tile num x = %d, y = %d\n", numTiles.x, numTiles.y);
-#endif
+  // printf("Tile num x = %d, y = %d\n", numTiles.x, numTiles.y);
 
   // create output buffer
   uint16_t num_components = main_header.SIZ->get_num_components();
