@@ -68,6 +68,6 @@ inline int32_t round_d(double val) {
   if (fabs(val) < DBL_EPSILON) {
     return 0;
   } else {
-    return val + ((val > 0) ? 0.5 : -0.5);
+    return static_cast<int32_t>(val + ((val > 0) ? 0.5 : -0.5));
   }
 }

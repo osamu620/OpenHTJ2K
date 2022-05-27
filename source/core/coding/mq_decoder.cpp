@@ -29,7 +29,6 @@
 #include "mq_decoder.hpp"
 
 #include <cstdio>
-#include <cstdlib>
 #include <stdexcept>
 
 mq_decoder::mq_decoder(const uint8_t *const buf)
@@ -102,7 +101,7 @@ void mq_decoder::fill_LSBs() {
     }
     T = byte_buffer[L];
     L++;
-    C += (T << (8 - t));
+    C += (static_cast<uint32_t>(T << (8 - t)));
   }
 }
 
@@ -127,11 +126,12 @@ uint8_t mq_decoder::decode(uint8_t label) {
 
   // Compare active region of C
   if (((C & C_active_mask) >> 8) < probability) {
-    symbol = 1 - expected_symbol;
+    symbol = static_cast<uint8_t>(1 - expected_symbol);
     A      = probability;
   } else {
-    symbol = expected_symbol;
-    Temp   = ((C & C_active_mask) >> min_C_active) - static_cast<uint32_t>(probability);
+    symbol = static_cast<uint8_t>(expected_symbol);
+    Temp =
+        static_cast<uint16_t>(((C & C_active_mask) >> min_C_active) - static_cast<uint32_t>(probability));
     C &= ~C_active_mask;
     C += static_cast<uint32_t>((Temp << min_C_active)) & C_active_mask;
   }

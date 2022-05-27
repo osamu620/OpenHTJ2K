@@ -76,7 +76,7 @@ static inline uint32_t int_log2(const uint32_t x) {
   _BitScanReverse(&tmp, x);
   y = tmp;
 #else
-  y         = 31 - __builtin_clz(x);
+  y         = static_cast<uint32_t>(31 - __builtin_clz(x));
 #endif
   return (x == 0) ? 0 : y;
 }
@@ -90,7 +90,7 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   y              = __builtin_clz(x);
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  y = __builtin_clz(x);
+  y = static_cast<uint32_t>(__builtin_clz(x));
 #else
   y = 31 - int_log2(x);
 #endif

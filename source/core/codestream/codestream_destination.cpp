@@ -60,7 +60,7 @@ int32_t j2c_dst_memory::put_N_bytes(uint8_t *src, uint32_t length) {
 }
 
 int32_t j2c_dst_memory::flush(std::ofstream &dst) {
-  dst.write((char *)&buf[0], buf.size() * sizeof(buf[0]));
+  dst.write((char *)&buf[0], static_cast<long>(buf.size() * sizeof(buf[0])));
   return EXIT_SUCCESS;
 }
 
@@ -77,7 +77,8 @@ int32_t j2c_dst_memory::flush(std::vector<uint8_t> *obuf) {
 }
 
 size_t j2c_dst_memory::get_length() const { return buf.size(); }
-[[deprecated]] void j2c_dst_memory::print_bytes() {
+
+[[maybe_unused]] [[deprecated]] void j2c_dst_memory::print_bytes() {
   for (uint32_t i = 0; i < pos; i++) {
     if (i % 32 == 0) {
       printf("\n");

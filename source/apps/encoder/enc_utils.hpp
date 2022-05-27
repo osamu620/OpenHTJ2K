@@ -176,7 +176,7 @@ class j2k_argset {
     }
   }
 
-  void get_bool(const std::string &param_name, std::string &arg, bool &val) {
+  static void get_bool(const std::string &param_name, std::string &arg, bool &val) {
     size_t pos0;
     std::string param, subparam;
     pos0  = arg.find_first_of('=');
@@ -222,8 +222,8 @@ class j2k_argset {
     return static_cast<T>(tmp);
   }
 
-  double get_numerical_param(const char &c, const std::string &param_name, std::string &arg, double minval,
-                             double maxval) {
+  static double get_numerical_param(const char &c, const std::string &param_name, std::string &arg,
+                                    double minval, double maxval) {
     size_t pos0;
     std::string param, subparam;
     pos0 = arg.find_first_of('=');

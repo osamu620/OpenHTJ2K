@@ -53,7 +53,8 @@ class j2k_marker_io_base {
   explicit j2k_marker_io_base(uint16_t mar) : code(mar), buf(nullptr), pos(0), is_set(false) {}
   ~j2k_marker_io_base() = default;
   void set_buf(uint8_t *p);
-  uint16_t get_marker() const;
+
+  [[maybe_unused]] uint16_t get_marker() const;
   uint16_t get_length() const;
   uint8_t *get_buf();
   uint8_t get_byte();
@@ -111,7 +112,8 @@ class CAP_marker : public j2k_marker_io_base {
   CAP_marker();
   explicit CAP_marker(j2c_src_memory &in);
   void set_Ccap(uint16_t val, uint8_t Ccap);
-  uint32_t get_Pcap() const;
+
+  [[maybe_unused]] uint32_t get_Pcap() const;
   uint16_t get_Ccap(uint8_t n);
   int write(j2c_destination_base &dst);
 };
@@ -202,7 +204,7 @@ class QCD_marker : public j2k_marker_io_base {
  private:
   uint8_t Sqcd;
   std::vector<uint16_t> SPqcd;
-  bool is_reversible;
+  bool is_reversible{};
 
  public:
   explicit QCD_marker(j2c_src_memory &in);
@@ -258,7 +260,8 @@ class POC_marker : public j2k_marker_io_base {
   POC_marker(uint8_t RS, uint16_t CS, uint16_t LYE, uint8_t RE, uint16_t CE, uint8_t P);
   POC_marker(j2c_src_memory &in, uint16_t Csiz);
   void add(uint8_t RS, uint16_t CS, uint16_t LYE, uint8_t RE, uint16_t CE, uint8_t P);
-  unsigned long get_num_poc() const;
+
+  [[maybe_unused]] unsigned long get_num_poc() const;
 };
 
 /********************************************************************************
@@ -350,7 +353,8 @@ class SOT_marker : public j2k_marker_io_base {
   uint16_t get_tile_index() const;
   uint32_t get_tile_part_length() const;
   uint8_t get_tile_part_index() const;
-  uint8_t get_number_of_tile_parts() const;
+
+  [[maybe_unused]] uint8_t get_number_of_tile_parts() const;
 };
 
 /********************************************************************************

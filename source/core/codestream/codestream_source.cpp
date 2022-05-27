@@ -57,7 +57,7 @@ uint16_t j2c_src_memory::get_word() {
     printf("Codestream is shorter than the expected length\n");
     throw std::exception();
   }
-  uint16_t out = (static_cast<uint16_t>(get_byte()) << 8) + static_cast<uint16_t>(get_byte());
+  auto out = static_cast<uint16_t>((get_byte() << 8) + get_byte());
   return out;
 }
 
