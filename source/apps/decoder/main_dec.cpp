@@ -154,8 +154,8 @@ int main(int argc, char *argv[]) {
   auto duration = std::chrono::high_resolution_clock::now() - start;
 
   // write decoded components
-  bool compositable       = false;
-  uint16_t num_components = img_depth.size();
+  bool compositable   = false;
+  auto num_components = static_cast<uint16_t>(img_depth.size());
   if (num_components == 3 && strcmp(outfile_ext_name, ".ppm") == 0) {
     compositable = true;
     for (uint16_t c = 0; c < num_components - 1; c++) {
@@ -186,7 +186,7 @@ int main(int argc, char *argv[]) {
 
   // show stats
   auto count  = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-  double time = count / 1000.0 / static_cast<double>(num_iterations);
+  double time = static_cast<double>(count) / 1000.0 / static_cast<double>(num_iterations);
   printf("elapsed time %-15.3lf[ms]\n", time);
   printf("throughput %lf [Msamples/s]\n",
          total_samples * static_cast<double>(num_iterations) / (double)count);
