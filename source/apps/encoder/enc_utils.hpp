@@ -65,7 +65,7 @@ void print_help(char *cmd) {
       "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
       "YCbCr, use YCC.\n");
   printf(
-      "-num_threads=Int\n"
+      "-num_threads Int\n"
       "  number of threads to use in encode or decode\n"
       "  0, which is the default, indicates usage of all threads.\n");
 }
@@ -125,326 +125,125 @@ class j2k_argset {
   bool qderived;
   uint8_t qfactor;
 
- public:
-  j2k_argset(int argc, char *argv[])
-      : origin(0, 0),
-        tile_origin(0, 0),
-        transformation(0),
-        use_ycc(1),
-        dwt_levels(5),
-        cblksize(4, 4),
-        max_precincts(true),
-        tilesize(0, 0),
-        Porder(0),
-        use_sop(false),
-        use_eph(false),
-        base_step_size(0.0),
-        num_guard(1),
-        qderived(false),
-        qfactor(NO_QFACTOR) {
-    args.reserve(argc);
-    // skip command itself
-    for (int i = 1; i < argc; ++i) {
-      args.emplace_back(argv[i]);
-    }
-    get_help(argc, argv);
+  static void get_coordinate(const std::string &param_name, std::string &arg, element_siz_local &dims) {
+    size_t pos0, pos1;
+    std::string param, val;
+    std::string subparam;
 
-    for (auto &arg : args) {
-      char &c = arg.front();
-      int pos0, pos1;
-      std::string param, val;
-      std::string subparam;
-      element_siz_local tmpsiz;
-      switch (c) {
-        case 'S':
-          pos0  = arg.find_first_of('=');
-          param = arg.substr(1, pos0 - 1);
-          if (param == "tiles") {
-            pos0 = arg.find_first_of('=');
-            if (args[pos0] != "{") {
-            }
-            pos0++;
-            pos1       = arg.find_first_of('}');
-            subparam   = arg.substr(pos0 + 1, pos1 - pos0 - 1);
-            pos0       = subparam.find_first_of(',');
-            tilesize.y = std::stoi(subparam.substr(0, pos0));
-            tilesize.x = std::stoi(subparam.substr(pos0 + 1, 4));
-            break;
-          }
-          if (param == "origin") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Sorigin needs a coordinate for the origin {y,x}\n");
-              exit(EXIT_FAILURE);
-            }
-            pos0 = arg.find_first_of('{');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Sorigin needs a coordinate for the origin {y,x}\n");
-              exit(EXIT_FAILURE);
-            }
-            pos1 = arg.find_first_of('}');
-            if (pos1 == std::string::npos) {
-              printf("ERROR: Sorigin needs a coordinate for the origin {y,x}\n");
-              exit(EXIT_FAILURE);
-            }
-            subparam = arg.substr(pos0 + 1, pos1 - pos0 - 1);
-            pos0     = subparam.find_first_of(',');
-            origin.y = std::stoi(subparam.substr(0, pos0));
-            origin.x = std::stoi(subparam.substr(pos0 + 1, subparam.length()));
-            break;
-          }
-          if (param == "tile_origin") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Stile_origin needs a coordinate for the origin {y,x}\n");
-              exit(EXIT_FAILURE);
-            }
-            pos0 = arg.find_first_of('{');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Stile_origin needs a coordinate for the origin {y,x}\n");
-              exit(EXIT_FAILURE);
-            }
-            pos1 = arg.find_first_of('}');
-            if (pos1 == std::string::npos) {
-              printf("ERROR: Stile_origin needs a coordinate for the origin {y,x}\n");
-              exit(EXIT_FAILURE);
-            }
-            subparam      = arg.substr(pos0 + 1, pos1 - pos0 - 1);
-            pos0          = subparam.find_first_of(',');
-            tile_origin.y = std::stoi(subparam.substr(0, pos0));
-            tile_origin.x = std::stoi(subparam.substr(pos0 + 1, subparam.length()));
-            break;
-          }
-          printf("ERROR: unknown parameter S%s\n", param.c_str());
-          exit(EXIT_FAILURE);
-          break;
-        case 'C':
-          pos0  = arg.find_first_of('=');
-          param = arg.substr(1, pos0 - 1);
-          if (param == "reversible") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Creversible needs =yes or =no\n");
-              exit(EXIT_FAILURE);
-            }
-            val = arg.substr(pos0 + 1, 3);
-            if (val == "yes") {
-              transformation = 1;
-            }
-            break;
-          }
-          if (param == "ycc") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Cycc needs =yes or =no\n");
-              exit(EXIT_FAILURE);
-            }
-            val = arg.substr(pos0 + 1, 3);
-            if (val == "yes") {
-              use_ycc = 1;
-            } else {
-              use_ycc = 0;
-            }
-            break;
-          }
-          if (param == "levels") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Clevels needs =dwt_levels (0 - 32)\n");
-              exit(EXIT_FAILURE);
-            }
-            val     = arg.substr(pos0 + 1, 3);
-            int tmp = std::stoi(val);
-            if (tmp < 0 || tmp > 32) {
-              printf("ERROR: number of DWT levels shall be in the range of [0, 32]\n");
-              exit(EXIT_FAILURE);
-            }
-            dwt_levels = static_cast<uint8_t>(tmp);
-            break;
-          }
-          if (param == "blk") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Cblk needs a size of codeblock {height,width}\n");
-              exit(EXIT_FAILURE);
-            }
-            pos0 = arg.find_first_of('{');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Cblk needs a size of codeblock {height,width}\n");
-              exit(EXIT_FAILURE);
-            }
-            pos1 = arg.find_first_of('}');
-            if (pos1 == std::string::npos) {
-              printf("ERROR: Cblk needs a size of codeblock {height,width}\n");
-              exit(EXIT_FAILURE);
-            }
-            subparam = arg.substr(pos0 + 1, pos1 - pos0 - 1);
-            pos0     = subparam.find_first_of(',');
-            tmpsiz.y = std::stoi(subparam.substr(0, pos0));
-            tmpsiz.x = std::stoi(subparam.substr(pos0 + 1, 4));
-            if ((popcount_local(tmpsiz.y) > 1) || (popcount_local(tmpsiz.x) > 1)) {
-              printf("ERROR: code block size must be power of two.\n");
-              exit(EXIT_FAILURE);
-            }
-            if (tmpsiz.x < 4 || tmpsiz.y < 4) {
-              printf("ERROR: code block size must be greater than four\n");
-              exit(EXIT_FAILURE);
-            }
-            if (tmpsiz.x * tmpsiz.y > 4096) {
-              printf("ERROR: code block area must be less than or equal to 4096.\n");
-              exit(EXIT_FAILURE);
-            }
-            cblksize.x = log2i32(tmpsiz.x) - 2;
-            cblksize.y = log2i32(tmpsiz.y) - 2;
-            break;
-          }
-          if (param == "precincts") {
-            max_precincts = false;
-            pos0          = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Cprecincts needs at least one precinct size {height,width}\n");
-              exit(EXIT_FAILURE);
-            }
-            pos0 = arg.find_first_of('{');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Cprecincts needs at least one precinct size {height,width}\n");
-              exit(EXIT_FAILURE);
-            }
-            while (pos0 != std::string::npos) {
-              pos1 = arg.find(std::string("}"), pos0);
-              if (pos1 == std::string::npos) {
-                printf("ERROR: Cprecincts needs at least one precinct size {height,width}\n");
-                exit(EXIT_FAILURE);
-              }
-              subparam = arg.substr(pos0 + 1, pos1 - pos0 - 1);
-              pos0     = subparam.find_first_of(',');
-              tmpsiz.y = std::stoi(subparam.substr(0, pos0));
-              tmpsiz.x = std::stoi(subparam.substr(pos0 + 1, 5));
-              if ((popcount_local(tmpsiz.y) > 1) || (popcount_local(tmpsiz.x) > 1)) {
-                printf("ERROR: precinct size must be power of two.\n");
-                exit(EXIT_FAILURE);
-              }
-              prctsize.emplace_back(log2i32(tmpsiz.x), log2i32(tmpsiz.y));
-              pos0 = arg.find(std::string("{"), pos1);
-            }
-            break;
-          }
-          if (param == "order") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Corder needs progression order =(LRCP, RLCP, RPCL, PCRL, CPRL)\n");
-              exit(EXIT_FAILURE);
-            }
-            val = arg.substr(pos0 + 1, 4);
-            if (val == "LRCP") {
-              Porder = 0;
-            } else if (val == "RLCP") {
-              Porder = 1;
-            } else if (val == "RPCL") {
-              Porder = 2;
-            } else if (val == "PCRL") {
-              Porder = 3;
-            } else if (val == "CPRL") {
-              Porder = 4;
-            } else {
-              printf("ERROR: unknown progression order %s\n", val.c_str());
-              exit(EXIT_FAILURE);
-            }
-            break;
-          }
-          if (param == "use_sop") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Cuse_sop needs =yes or =no\n");
-              exit(EXIT_FAILURE);
-            }
-            val = arg.substr(pos0 + 1, 3);
-            if (val == "yes") {
-              use_sop = true;
-            }
-            break;
-          }
-          if (param == "use_eph") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Cuse_eph needs =yes or =no\n");
-              exit(EXIT_FAILURE);
-            }
-            val = arg.substr(pos0 + 1, 3);
-            if (val == "yes") {
-              use_eph = true;
-            }
-            break;
-          }
-          printf("ERROR: unknown parameter C%s\n", param.c_str());
-          exit(EXIT_FAILURE);
-          break;
-        case 'Q':
-          pos0  = arg.find_first_of('=');
-          param = arg.substr(1, pos0 - 1);
-          if (param == "step") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Qstep needs base step size in float (0.0 < step <= 2.0)\n");
-              exit(EXIT_FAILURE);
-            }
-            val            = arg.substr(pos0 + 1, 50);
-            base_step_size = std::stod(val);
-            if (base_step_size <= 0.0 || base_step_size > 2.0) {
-              printf("ERROR: base step size shall be in the range of (0.0, 2.0]\n");
-              exit(EXIT_FAILURE);
-            }
-            break;
-          }
-          if (param == "guard") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Qguard needs number of guard bits (0-7)\n");
-              exit(EXIT_FAILURE);
-            }
-            val     = arg.substr(pos0 + 1, 2);
-            int tmp = std::stoi(val);
-            if (tmp < 0 || tmp > 7) {
-              printf("ERROR: number of guard bits shall be in the range of [0, 7]\n");
-              exit(EXIT_FAILURE);
-            }
-            num_guard = static_cast<uint8_t>(tmp);
-            break;
-          }
-          if (param == "derived") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Qderived needs =yes or =no\n");
-              exit(EXIT_FAILURE);
-            }
-            val = arg.substr(pos0 + 1, 3);
-            if (val == "yes") {
-              qderived = true;
-            }
-            break;
-          }
-          if (param == "factor") {
-            pos0 = arg.find_first_of('=');
-            if (pos0 == std::string::npos) {
-              printf("ERROR: Qfactor needs value of quality (0-100)\n");
-              exit(EXIT_FAILURE);
-            }
-            val     = arg.substr(pos0 + 1, 3);
-            int tmp = std::stoi(val);
-            if (tmp < 0 || tmp > 100) {
-              printf("ERROR: value of Qfactor shall be in the range of [0, 100]\n");
-              exit(EXIT_FAILURE);
-            }
-            qfactor = static_cast<uint8_t>(tmp);
-            break;
-          }
-          printf("ERROR: unknown parameter Q%s\n", param.c_str());
-          exit(EXIT_FAILURE);
-          break;
-        default:
-          break;
+    pos0 = arg.find_first_of('=');
+
+    if (pos0 == std::string::npos) {
+      printf("ERROR: S%s needs a coordinate for the %s {y,x}\n", param_name.c_str(), param_name.c_str());
+      exit(EXIT_FAILURE);
+    }
+    pos0 = arg.find_first_of('{');
+    if (pos0 == std::string::npos) {
+      printf("ERROR: S%s needs a coordinate for the %s {y,x}\n", param_name.c_str(), param_name.c_str());
+      exit(EXIT_FAILURE);
+    }
+    pos1 = arg.find_first_of('}');
+    if (pos1 == std::string::npos) {
+      printf("ERROR: S%s needs a coordinate for the %s {y,x}\n", param_name.c_str(), param_name.c_str());
+      exit(EXIT_FAILURE);
+    }
+    subparam = arg.substr(pos0 + 1, pos1 - pos0 - 1);
+    pos0     = subparam.find_first_of(',');
+    dims.y   = static_cast<uint32_t>(std::stoi(subparam.substr(0, pos0)));
+    dims.x   = static_cast<uint32_t>(std::stoi(subparam.substr(pos0 + 1, subparam.length())));
+  };
+
+  template <class T>
+  void get_yn(const std::string &param_name, std::string &arg, T &val) {
+    size_t pos0;
+    std::string param, subparam;
+    pos0  = arg.find_first_of('=');
+    param = arg.substr(1, pos0 - 1);
+    if (param == param_name) {
+      pos0 = arg.find_first_of('=');
+      if (pos0 == std::string::npos) {
+        printf("ERROR: C%s needs =yes or =no\n", param_name.c_str());
+        exit(EXIT_FAILURE);
+      }
+      subparam = arg.substr(pos0 + 1);
+      if (subparam == "yes") {
+        val = 1;
+      } else if (subparam == "no") {
+        val = 0;
+      } else {
+        printf("ERROR: C%s needs =yes or =no\n", param_name.c_str());
+        exit(EXIT_FAILURE);
       }
     }
+  }
+
+  template <>
+  void get_yn(const std::string &param_name, std::string &arg, bool &val) {
+    size_t pos0;
+    std::string param, subparam;
+    pos0  = arg.find_first_of('=');
+    param = arg.substr(1, pos0 - 1);
+    if (param == param_name) {
+      pos0 = arg.find_first_of('=');
+      if (pos0 == std::string::npos) {
+        printf("ERROR: C%s needs =yes or =no\n", param_name.c_str());
+        exit(EXIT_FAILURE);
+      }
+      subparam = arg.substr(pos0 + 1);
+      if (subparam == "yes") {
+        val = true;
+      } else if (subparam == "no") {
+        val = false;
+      } else {
+        printf("ERROR: C%s needs =yes or =no\n", param_name.c_str());
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
+
+  template <class T>
+  T get_numerical_param(const char &c, const std::string &param_name, std::string &arg, T minval,
+                        T maxval) {
+    size_t pos0;
+    std::string param, subparam;
+    pos0 = arg.find_first_of('=');
+    if (pos0 == std::string::npos) {
+      printf("ERROR: %c%s needs =Int\n", c, param_name.c_str());
+      exit(EXIT_FAILURE);
+    }
+    subparam = arg.substr(pos0 + 1);
+    if (subparam.empty()) {
+      printf("ERROR: %c%s needs =Int\n", c, param_name.c_str());
+      exit(EXIT_FAILURE);
+    }
+    int tmp = std::stoi(subparam);
+    if (tmp < minval || tmp > maxval) {
+      printf("ERROR: %c%s shall be in the range of [%d, %d]\n", c, param_name.c_str(), minval, maxval);
+      exit(EXIT_FAILURE);
+    }
+    return static_cast<T>(tmp);
+  }
+
+  template <>
+  double get_numerical_param(const char &c, const std::string &param_name, std::string &arg, double minval,
+                             double maxval) {
+    size_t pos0;
+    std::string param, subparam;
+    pos0 = arg.find_first_of('=');
+    if (pos0 == std::string::npos) {
+      printf("ERROR: %c%s needs =Int\n", c, param_name.c_str());
+      exit(EXIT_FAILURE);
+    }
+    subparam = arg.substr(pos0 + 1);
+    if (subparam.empty()) {
+      printf("ERROR: %c%s needs =Int\n", c, param_name.c_str());
+      exit(EXIT_FAILURE);
+    }
+    double tmp = std::stod(subparam);
+    if (tmp <= minval || tmp > maxval) {
+      printf("ERROR: %c%s shall be in the range of (%f, %f]\n", c, param_name.c_str(), minval, maxval);
+      exit(EXIT_FAILURE);
+    }
+    return static_cast<double>(tmp);
   }
 
   std::vector<std::string> get_infile() {
@@ -453,7 +252,7 @@ class j2k_argset {
       printf("ERROR: input file (\"-i\") is missing!\n");
       exit(EXIT_FAILURE);
     }
-    auto idx = std::distance(args.begin(), p);
+    auto idx = static_cast<size_t>(std::distance(args.begin(), p));
     if (idx + 1 > args.size() - 1) {
       printf("ERROR: file name for input is missing!\n");
       exit(EXIT_FAILURE);
@@ -463,7 +262,7 @@ class j2k_argset {
     std::string::size_type pos = 0;
     std::string::size_type newpos;
     std::vector<std::string> fnames;
-    std::string::size_type aa = buf.length();
+
     while (true) {
       newpos = buf.find(comma, pos + comma.length());
       fnames.push_back(buf.substr(pos, newpos - pos));
@@ -484,7 +283,7 @@ class j2k_argset {
       printf("INFO: no output file is specified. Compressed output is placed on a memory buffer.\n");
       return "";
     }
-    auto idx = std::distance(args.begin(), p);
+    auto idx = static_cast<size_t>(std::distance(args.begin(), p));
     if (idx + 1 > args.size() - 1) {
       printf("ERROR: file name for output is missing!\n");
       exit(EXIT_FAILURE);
@@ -493,12 +292,11 @@ class j2k_argset {
   }
 
   int32_t get_num_iteration() {
-    int32_t num_iteration = 1;
-    auto p                = std::find(args.begin(), args.end(), "-iter");
+    auto p = std::find(args.begin(), args.end(), "-iter");
     if (p == args.end()) {
-      return num_iteration;
+      return 1;
     }
-    auto idx = std::distance(args.begin(), p);
+    auto idx = static_cast<size_t>(std::distance(args.begin(), p));
     if (idx + 1 > args.size() - 1) {
       printf("ERROR: -iter requires number of iteration\n");
       exit(EXIT_FAILURE);
@@ -513,12 +311,11 @@ class j2k_argset {
 
   uint32_t get_num_threads() {
     // zero implies all threads
-    uint32_t num_threads = 0;
-    auto p               = std::find(args.begin(), args.end(), "-num_threads");
+    auto p = std::find(args.begin(), args.end(), "-num_threads");
     if (p == args.end()) {
-      return num_threads;
+      return 0;
     }
-    auto idx = std::distance(args.begin(), p);
+    auto idx = static_cast<size_t>(std::distance(args.begin(), p));
     if (idx + 1 > args.size() - 1) {
       printf("ERROR: -num_threads requires number of threads\n");
       exit(EXIT_FAILURE);
@@ -537,19 +334,190 @@ class j2k_argset {
     if (p == args.end()) {
       return val;
     }
-    auto idx = std::distance(args.begin(), p);
+    auto idx = static_cast<size_t>(std::distance(args.begin(), p));
     if (idx + 1 > args.size() - 1) {
       printf("ERROR: -jph_color_space requires name of color-space\n");
       exit(EXIT_FAILURE);
     }
-    if (args[idx + 1].compare("YCC") && args[idx + 1].compare("RGB")) {
+    if (args[idx + 1] != "YCC" || args[idx + 1] != "RGB") {
       printf("ERROR: invalid name for color-space\n");
       exit(EXIT_FAILURE);
-    } else if (args[idx + 1].compare("YCC") == 0) {
+    } else if (args[idx + 1] == "YCC") {
       val = 1;
     }
     return val;
   }
+
+ public:
+  std::vector<std::string> ifnames;
+  std::string ofname;
+  int32_t num_iteration;
+  uint32_t num_threads;
+  uint8_t jph_color_space;
+
+  j2k_argset(int argc, char *argv[])
+      : origin(0, 0),
+        tile_origin(0, 0),
+        transformation(0),
+        use_ycc(1),
+        dwt_levels(5),
+        cblksize(4, 4),
+        max_precincts(true),
+        tilesize(0, 0),
+        Porder(0),
+        use_sop(false),
+        use_eph(false),
+        base_step_size(0.0),
+        num_guard(1),
+        qderived(false),
+        qfactor(NO_QFACTOR),
+        ifnames{},
+        num_iteration(1),
+        num_threads(0),
+        jph_color_space(0) {
+    args.reserve(static_cast<unsigned long>(argc));
+    // skip command itself
+    for (int i = 1; i < argc; ++i) {
+      args.emplace_back(argv[i]);
+    }
+    get_help(argc, argv);
+    ifnames         = get_infile();
+    ofname          = get_outfile();
+    num_threads     = get_num_threads();
+    num_iteration   = get_num_iteration();
+    jph_color_space = get_jph_color_space();
+
+    for (auto &arg : args) {
+      char &c = arg.front();
+      if (c == '-') {
+        std::string optname = arg.substr(1);
+        if (optname != "i" && optname != "o" && optname != "num_threads" && optname != "jph_color_space"
+            && optname != "iter") {
+          printf("ERROR: unknown option %s\n", arg.c_str());
+          exit(EXIT_FAILURE);
+        }
+      }
+      size_t pos0, pos1;
+      std::string param, val;
+      std::string subparam;
+      element_siz_local tmpsiz;
+      if (c == 'S') {
+        pos0  = arg.find_first_of('=');
+        param = arg.substr(1, pos0 - 1);
+        if (param == "tiles") {
+          get_coordinate(param, arg, tilesize);
+        } else if (param == "origin") {
+          get_coordinate(param, arg, origin);
+        } else if (param == "tile_origin") {
+          get_coordinate(param, arg, tile_origin);
+        } else {
+          printf("ERROR: unknown parameter S%s\n", param.c_str());
+          exit(EXIT_FAILURE);
+        }
+      } else if (c == 'C') {
+        pos0  = arg.find_first_of('=');
+        param = arg.substr(1, pos0 - 1);
+        if (param == "reversible") {
+          get_yn(param, arg, transformation);
+        } else if (param == "ycc") {
+          get_yn(param, arg, use_ycc);
+        } else if (param == "levels") {
+          dwt_levels = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 32));
+        } else if (param == "blk") {
+          get_coordinate(param, arg, cblksize);
+          if ((popcount_local(cblksize.y) > 1) || (popcount_local(cblksize.x) > 1)) {
+            printf("ERROR: code block size must be power of two.\n");
+            exit(EXIT_FAILURE);
+          }
+          if (cblksize.x < 4 || cblksize.y < 4) {
+            printf("ERROR: code block size must be greater than four\n");
+            exit(EXIT_FAILURE);
+          }
+          if (cblksize.x * cblksize.y > 4096) {
+            printf("ERROR: code block area must be less than or equal to 4096.\n");
+            exit(EXIT_FAILURE);
+          }
+          cblksize.x = static_cast<uint32_t>(log2i32(static_cast<int32_t>(cblksize.x)) - 2);
+          cblksize.y = static_cast<uint32_t>(log2i32(static_cast<int32_t>(cblksize.y)) - 2);
+        } else if (param == "precincts") {
+          max_precincts = false;
+          pos0          = arg.find_first_of('=');
+          if (pos0 == std::string::npos) {
+            printf("ERROR: Cprecincts needs at least one precinct size {height,width}\n");
+            exit(EXIT_FAILURE);
+          }
+          pos0 = arg.find_first_of('{');
+          if (pos0 == std::string::npos) {
+            printf("ERROR: Cprecincts needs at least one precinct size {height,width}\n");
+            exit(EXIT_FAILURE);
+          }
+          while (pos0 != std::string::npos) {
+            pos1 = arg.find(std::string("}"), pos0);
+            if (pos1 == std::string::npos) {
+              printf("ERROR: Cprecincts needs at least one precinct size {height,width}\n");
+              exit(EXIT_FAILURE);
+            }
+            subparam = arg.substr(pos0 + 1, pos1 - pos0 - 1);
+            pos0     = subparam.find_first_of(',');
+            tmpsiz.y = static_cast<uint32_t>(std::stoi(subparam.substr(0, pos0)));
+            tmpsiz.x = static_cast<uint32_t>(std::stoi(subparam.substr(pos0 + 1, 5)));
+            if ((popcount_local(tmpsiz.y) > 1) || (popcount_local(tmpsiz.x) > 1)) {
+              printf("ERROR: precinct size must be power of two.\n");
+              exit(EXIT_FAILURE);
+            }
+            prctsize.emplace_back(log2i32(static_cast<int32_t>(tmpsiz.x)),
+                                  log2i32(static_cast<int32_t>(tmpsiz.y)));
+            pos0 = arg.find(std::string("{"), pos1);
+          }
+        } else if (param == "order") {
+          pos0 = arg.find_first_of('=');
+          if (pos0 == std::string::npos) {
+            printf("ERROR: Corder needs progression order =(LRCP, RLCP, RPCL, PCRL, CPRL)\n");
+            exit(EXIT_FAILURE);
+          }
+          val = arg.substr(pos0 + 1, 4);
+          if (val == "LRCP") {
+            Porder = 0;
+          } else if (val == "RLCP") {
+            Porder = 1;
+          } else if (val == "RPCL") {
+            Porder = 2;
+          } else if (val == "PCRL") {
+            Porder = 3;
+          } else if (val == "CPRL") {
+            Porder = 4;
+          } else {
+            printf("ERROR: unknown progression order %s\n", val.c_str());
+            exit(EXIT_FAILURE);
+          }
+        } else if (param == "use_sop") {
+          get_yn(param, arg, use_sop);
+        } else if (param == "use_eph") {
+          get_yn(param, arg, use_eph);
+        } else {
+          printf("ERROR: unknown parameter C%s\n", param.c_str());
+          exit(EXIT_FAILURE);
+        }
+      } else if (c == 'Q') {
+        pos0  = arg.find_first_of('=');
+        param = arg.substr(1, pos0 - 1);
+        if (param == "step") {
+          base_step_size = get_numerical_param(c, param, arg, 0.0, 2.0);
+        } else if (param == "guard") {
+          num_guard = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 7));
+        } else if (param == "derived") {
+          get_yn(param, arg, qderived);
+        } else if (param == "factor") {
+          qfactor = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 100));
+        } else {
+          printf("ERROR: unknown parameter Q%s\n", param.c_str());
+          exit(EXIT_FAILURE);
+        }
+      } else {
+      }
+    }
+  }
+
   void get_help(int argc, char *argv[]) {
     auto p = std::find(args.begin(), args.end(), "-h");
     if (p == args.end() && argc > 1) {
@@ -559,20 +527,20 @@ class j2k_argset {
     exit(EXIT_SUCCESS);
   }
 
-  element_siz_local get_origin() const { return origin; }
-  element_siz_local get_tile_origin() const { return tile_origin; }
-  uint8_t get_transformation() const { return transformation; }
-  uint8_t get_ycc() const { return use_ycc; }
-  uint8_t get_dwt_levels() const { return dwt_levels; }
+  [[nodiscard]] element_siz_local get_origin() const { return origin; }
+  [[nodiscard]] element_siz_local get_tile_origin() const { return tile_origin; }
+  [[nodiscard]] uint8_t get_transformation() const { return transformation; }
+  [[nodiscard]] uint8_t get_ycc() const { return use_ycc; }
+  [[nodiscard]] uint8_t get_dwt_levels() const { return dwt_levels; }
   element_siz_local get_cblk_size() { return cblksize; }
-  bool is_max_precincts() const { return max_precincts; }
+  [[nodiscard]] bool is_max_precincts() const { return max_precincts; }
   std::vector<element_siz_local> get_prct_size() { return prctsize; }
   element_siz_local get_tile_size() { return tilesize; }
-  uint8_t get_progression() const { return Porder; }
-  bool is_use_sop() const { return use_sop; }
-  bool is_use_eph() const { return use_eph; }
-  double get_basestep_size() const { return base_step_size; }
-  uint8_t get_num_guard() const { return num_guard; }
-  bool is_derived() const { return qderived; }
-  uint8_t get_qfactor() const { return qfactor; }
+  [[nodiscard]] uint8_t get_progression() const { return Porder; }
+  [[nodiscard]] bool is_use_sop() const { return use_sop; }
+  [[nodiscard]] bool is_use_eph() const { return use_eph; }
+  [[nodiscard]] double get_basestep_size() const { return base_step_size; }
+  [[nodiscard]] uint8_t get_num_guard() const { return num_guard; }
+  [[nodiscard]] bool is_derived() const { return qderived; }
+  [[nodiscard]] uint8_t get_qfactor() const { return qfactor; }
 };
