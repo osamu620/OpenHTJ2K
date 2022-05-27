@@ -176,8 +176,7 @@ class j2k_argset {
     }
   }
 
-  template <>
-  void get_yn(const std::string &param_name, std::string &arg, bool &val) {
+  void get_bool(const std::string &param_name, std::string &arg, bool &val) {
     size_t pos0;
     std::string param, subparam;
     pos0  = arg.find_first_of('=');
@@ -223,7 +222,6 @@ class j2k_argset {
     return static_cast<T>(tmp);
   }
 
-  template <>
   double get_numerical_param(const char &c, const std::string &param_name, std::string &arg, double minval,
                              double maxval) {
     size_t pos0;
@@ -491,9 +489,9 @@ class j2k_argset {
             exit(EXIT_FAILURE);
           }
         } else if (param == "use_sop") {
-          get_yn(param, arg, use_sop);
+          get_bool(param, arg, use_sop);
         } else if (param == "use_eph") {
-          get_yn(param, arg, use_eph);
+          get_bool(param, arg, use_eph);
         } else {
           printf("ERROR: unknown parameter C%s\n", param.c_str());
           exit(EXIT_FAILURE);
@@ -506,7 +504,7 @@ class j2k_argset {
         } else if (param == "guard") {
           num_guard = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 7));
         } else if (param == "derived") {
-          get_yn(param, arg, qderived);
+          get_bool(param, arg, qderived);
         } else if (param == "factor") {
           qfactor = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 100));
         } else {
