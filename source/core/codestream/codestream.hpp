@@ -91,8 +91,8 @@ class j2c_dst_memory : public j2c_destination_base {
   int32_t put_N_bytes(uint8_t *src, uint32_t length) override;
   int32_t flush(std::ofstream &dst) override;
   int32_t flush(std::vector<uint8_t> *obuf);
-  size_t get_length() const;
-  void print_bytes();
+  [[nodiscard]] size_t get_length() const;
+  [[maybe_unused]] void print_bytes();
 };
 
 class buf_chain {
@@ -101,8 +101,8 @@ class buf_chain {
   uint32_t num_nodes;
   std::vector<uint8_t *> node_buf;
   std::vector<uint32_t> node_length;
-  uint32_t node_pos;
-  uint32_t pos;
+  size_t node_pos;
+  size_t pos;
   uint8_t *current_buf;
   uint32_t current_length;
   uint8_t tmp_byte;
@@ -173,7 +173,7 @@ class buf_chain {
     current_buf    = node_buf[0];
     current_length = node_length[0];
   }
-  void activate(int n) {
+  void activate(size_t n) {
     assert(n < this->node_buf.size());
     pos            = 0;
     node_pos       = n;
@@ -186,8 +186,9 @@ class buf_chain {
       this->get_bit();
     }
   }
-  uint32_t get_total_length() const { return total_length; }
-  uint8_t get_specific_byte(uint32_t bufpos) { return *(current_buf + bufpos); }
+  [[nodiscard]] uint32_t get_total_length() const { return total_length; }
+
+  [[maybe_unused]] uint8_t get_specific_byte(uint32_t bufpos) { return *(current_buf + bufpos); }
   uint8_t get_byte() {
     if (pos > current_length - 1) {
       node_pos++;
@@ -198,7 +199,8 @@ class buf_chain {
     }
     return *(current_buf + pos++);
   }
-  uint8_t *get_current_address() {
+
+  [[maybe_unused]] uint8_t *get_current_address() {
     if (pos > current_length - 1) {
       node_pos++;
       assert(node_pos <= num_nodes);
@@ -208,6 +210,7 @@ class buf_chain {
     }
     return (current_buf + pos++);
   }
+
   void copy_N_bytes(uint8_t *&buf, uint32_t N) {
     // The first input argument is a reference of pointer.
     // The reason of this is the address of 'buf' shall be increased by N.
@@ -262,7 +265,7 @@ class packet_header_writer {
     put_bit(1);
   };
 
-  int32_t get_length() const { return pos; }
+  [[nodiscard]] int32_t get_length() const { return pos; }
 
   size_t copy_buf(uint8_t *p) {
     for (size_t i = 0; i < buf.size(); ++i) {
@@ -332,26 +335,30 @@ class tagtree_node {
     value         = 0;
     set_flag      = false;
   }
-  void set_node(uint32_t l, uint32_t i, uint32_t pi) {
-    level        = l;
+  void set_node(uint32_t l, int32_t i, int32_t pi) {
+    if (l > 255) {
+      printf("ERROR: Specified level for tagtree node is too large.\n");
+      throw std::exception();
+    }
+    level        = static_cast<uint8_t>(l);
     index        = i;
     parent_index = pi;
   }
   void add_child(int32_t val = 0) { child_index.push_back(val); }
-  uint8_t get_level() const { return level; }
-  int32_t get_index() const { return index; }
-  int32_t get_parent_index() const { return parent_index; }
+  [[nodiscard]] uint8_t get_level() const { return level; }
+  [[nodiscard]] int32_t get_index() const { return index; }
+  [[nodiscard]] int32_t get_parent_index() const { return parent_index; }
   std::vector<int32_t> get_child_index() { return child_index; }
-  uint8_t get_state() const { return state; }
+  [[nodiscard]] uint8_t get_state() const { return state; }
   void set_state(uint8_t s) { state = s; }
-  uint16_t get_current_value() const { return current_value; }
+  [[nodiscard]] uint16_t get_current_value() const { return current_value; }
   void set_current_value(uint16_t cv) { current_value = cv; }
-  uint16_t get_value() const { return value; }
+  [[nodiscard]] uint16_t get_value() const { return value; }
   void set_value(uint16_t v) {
     value    = v;
     set_flag = true;
   }
-  bool is_set() const { return set_flag; }
+  [[nodiscard]] bool is_set() const { return set_flag; }
 };
 
 class tagtree {
@@ -371,14 +378,14 @@ class tagtree {
   //   num_cblk_y = 0;
   // }
   tagtree(const uint32_t nx, const uint32_t ny) : level(1), num_nodes(0), num_cblk_x(nx), num_cblk_y(ny) {
-    uint32_t num_nodes_current_level, width_current_level, height_current_level;
-    width_current_level  = num_cblk_x;
-    height_current_level = num_cblk_y;
+    int32_t num_nodes_current_level, width_current_level, height_current_level;
+    width_current_level  = (int32_t)num_cblk_x;
+    height_current_level = (int32_t)num_cblk_y;
 
     // calculate number of nodes
     while (true) {
       num_nodes_current_level = width_current_level * height_current_level;
-      num_nodes += num_nodes_current_level;
+      num_nodes += static_cast<uint32_t>(num_nodes_current_level);
       width_current_level  = ceil_int(width_current_level, 2);
       height_current_level = ceil_int(height_current_level, 2);
       if (num_nodes_current_level <= 1) {
@@ -391,12 +398,12 @@ class tagtree {
     node = MAKE_UNIQUE<tagtree_node[]>(num_nodes);
 
     // build tagtree structure
-    uint32_t node_index = 0, parent_num = 0, depth = level - 1;
-    uint32_t parent_index, row_parent_index;
-    width_current_level  = num_cblk_x;
-    height_current_level = num_cblk_y;
+    int32_t node_index = 0, parent_index, row_parent_index, parent_num = 0;
+    uint32_t depth       = level - 1;
+    width_current_level  = (int32_t)num_cblk_x;
+    height_current_level = (int32_t)num_cblk_y;
     tagtree_node *current_node, *parent_node;
-    current_node = &node[node_index];
+    current_node = &node[static_cast<size_t>(node_index)];
     while (true) {
       num_nodes_current_level = width_current_level * height_current_level;
       if (num_nodes_current_level <= 1) {
@@ -404,14 +411,14 @@ class tagtree {
       }
       parent_num += num_nodes_current_level;
       row_parent_index = parent_num;
-      for (uint32_t i = 0; i < height_current_level; i++) {
+      for (int32_t i = 0; i < height_current_level; i++) {
         parent_index = row_parent_index;
-        for (uint32_t j = 0; j < width_current_level; j++) {
+        for (int32_t j = 0; j < width_current_level; j++) {
           current_node->set_node(depth, node_index, parent_index);
-          parent_node = &node[parent_index];
+          parent_node = &node[static_cast<size_t>(parent_index)];
           parent_node->add_child(node_index);
           node_index++;
-          current_node = &node[node_index];
+          current_node = &node[static_cast<size_t>(node_index)];
 
           if (j % 2 == 1 && j != width_current_level - 1) {
             parent_index++;  // move to next parent in horizontal
@@ -438,9 +445,9 @@ class tagtree {
       current->set_state(0);
       if (!current->is_set()) {
         std::vector<int32_t> children = current->get_child_index();
-        uint16_t val                  = this->node[children[0]].get_value();
+        uint16_t val                  = this->node[static_cast<size_t>(children[0])].get_value();
         for (int &j : children) {
-          uint16_t tmp = this->node[j].get_value();
+          uint16_t tmp = this->node[static_cast<size_t>(j)].get_value();
           val          = (val > tmp) ? tmp : val;
         }
         current->set_value(val);

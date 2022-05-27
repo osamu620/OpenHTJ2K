@@ -29,7 +29,7 @@
 #include "image_class.hpp"
 #include <cmath>
 #include <cfloat>
-#include <cstring>
+#include <string>
 
 int main(int argc, char *argv[]) {
   if (argc != 3 && argc != 5) {
@@ -55,9 +55,9 @@ int main(int argc, char *argv[]) {
   const uint32_t length = w * h * img0.get_num_components();
   for (uint_fast32_t i = 0; i < length; ++i) {
     d   = (int_fast64_t)sp0[i] - (int_fast64_t)sp1[i];
-    tmp = (d < 0) ? -d : d;
+    tmp = (d < 0) ? static_cast<uint_fast64_t>(-d) : static_cast<uint_fast64_t>(d);
     PAE = (tmp > PAE) ? tmp : PAE;
-    sum += d * d;
+    sum += static_cast<uint_fast64_t>(d * d);
   }
   auto mse    = static_cast<double>(sum) / static_cast<double>(length);
   auto maxval = static_cast<double>(img0.get_maxval());
@@ -69,8 +69,8 @@ int main(int argc, char *argv[]) {
   printf("%4llu, %12.6f, %12.6f\n", PAE, mse, psnr);
 
   if (argc == 5) {
-    uint_fast64_t thPAE = static_cast<uint_fast64_t>(atoi(argv[3]));
-    double thMSE        = atof(argv[4]);
+    uint_fast64_t thPAE = static_cast<uint_fast64_t>(std::stoi(argv[3]));
+    double thMSE        = std::stof(argv[4]);
     if (PAE > thPAE || mse > thMSE) {
       printf("conformance test failure.\n");
       exit(EXIT_FAILURE);

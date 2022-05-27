@@ -51,26 +51,26 @@ class image {
   __declspec(dllexport) int read_pnmpgx(const std::string &filename, const uint16_t nc);
 #else
   explicit image(const std::vector<std::string> &filenames);
-  int read_pnmpgx(const std::string &filename, const uint16_t nc);
+  int read_pnmpgx(const std::string &filename, uint16_t nc);
 #endif
 
-  uint32_t get_width() const { return this->width; }
-  uint32_t get_height() const { return this->height; }
-  uint32_t get_component_width(uint16_t c) const {
+  [[nodiscard]] uint32_t get_width() const { return this->width; }
+  [[nodiscard]] uint32_t get_height() const { return this->height; }
+  [[nodiscard]] uint32_t get_component_width(uint16_t c) const {
     if (c > num_components) {
       printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
       throw std::exception();
     }
     return this->component_width[c];
   }
-  uint32_t get_component_height(uint16_t c) const {
+  [[nodiscard]] uint32_t get_component_height(uint16_t c) const {
     if (c > num_components) {
       printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
       throw std::exception();
     }
     return this->component_height[c];
   }
-  uint16_t get_num_components() const { return this->num_components; }
+  [[nodiscard]] uint16_t get_num_components() const { return this->num_components; }
   uint8_t get_Ssiz_value(uint16_t c) {
     return (this->is_signed[c]) ? (this->bits_per_pixel[c] - 1) | 0x80 : this->bits_per_pixel[c] - 1;
   }

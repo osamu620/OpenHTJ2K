@@ -42,9 +42,9 @@ class j2k_region {
   // bottom-right coordinate (exclusive) of a region in the reference grid
   element_siz pos1;
   // return top-left coordinate (inclusive)
-  element_siz get_pos0() const { return pos0; }
+  [[nodiscard]] element_siz get_pos0() const { return pos0; }
   // return bottom-right coordinate (exclusive)
-  element_siz get_pos1() const { return pos1; }
+  [[nodiscard]] element_siz get_pos1() const { return pos1; }
   // get size of a region
   void get_size(element_siz &out) const {
     out.x = pos1.x - pos0.x;
@@ -66,7 +66,7 @@ class j2k_codeblock : public j2k_region {
   const element_siz size;
 
  private:
-  const uint32_t index;
+  [[maybe_unused]] const uint32_t index;
   const uint8_t band;
   const uint8_t M_b;
   std::unique_ptr<uint8_t[]> compressed_data;
@@ -74,7 +74,7 @@ class j2k_codeblock : public j2k_region {
 
  public:
   std::unique_ptr<uint8_t[]> block_states;
-  const uint8_t R_b;
+  [[maybe_unused]] const uint8_t R_b;
   const uint8_t transformation;
   const float stepsize;
   const uint32_t band_stride;
@@ -102,22 +102,25 @@ class j2k_codeblock : public j2k_region {
                 const element_siz &p1, const element_siz &s);
   void modify_state(const std::function<void(uint8_t &, uint8_t)> &callback, uint8_t val, int16_t j1,
                     int16_t j2) {
-    callback(block_states[(j1 + 1) * (size.x + 2) + (j2 + 1)], val);
+    callback(block_states[static_cast<uint32_t>(j1 + 1) * (size.x + 2) + static_cast<uint32_t>(j2 + 1)],
+             val);
   }
   uint8_t get_state(const std::function<uint8_t(uint8_t &)> &callback, int16_t j1, int16_t j2) const {
-    return callback(block_states[(j1 + 1) * (size.x + 2) + (j2 + 1)]);
+    return callback(
+        block_states[static_cast<uint32_t>(j1 + 1) * (size.x + 2) + static_cast<uint32_t>(j2 + 1)]);
   }
   // DEBUG FUNCTION, SOON BE DELETED
-  uint8_t get_orientation() const { return band; }
-  uint8_t get_context_label_sig(const uint16_t &j1, const uint16_t &j2) const;
-  uint8_t get_signLUT_index(const uint16_t &j1, const uint16_t &j2) const;
-  uint8_t get_Mb() const;
+  [[maybe_unused]] [[nodiscard]] uint8_t get_orientation() const { return band; }
+
+  [[nodiscard]] uint8_t get_context_label_sig(const uint16_t &j1, const uint16_t &j2) const;
+  [[nodiscard]] uint8_t get_signLUT_index(const uint16_t &j1, const uint16_t &j2) const;
+  [[nodiscard]] uint8_t get_Mb() const;
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   void create_compressed_buffer(buf_chain *tile_buf, uint16_t buf_limit, const uint16_t &layer);
   void update_sample(const uint8_t &symbol, const uint8_t &p, const uint16_t &j1, const uint16_t &j2) const;
   void update_sign(const int8_t &val, const uint16_t &j1, const uint16_t &j2) const;
-  uint8_t get_sign(const uint16_t &j1, const uint16_t &j2) const;
+  [[nodiscard]] uint8_t get_sign(const uint16_t &j1, const uint16_t &j2) const;
   void set_MagSgn_and_sigma(uint32_t &or_val);
   void calc_mbr(uint8_t &mbr, uint16_t i, uint16_t j, uint32_t mbr_info, uint8_t causal_cond) const;
 };
@@ -130,11 +133,11 @@ class j2k_subband : public j2k_region {
   uint8_t orientation;
   uint8_t transformation;
   uint8_t R_b;
-  uint8_t epsilon_b;
-  uint16_t mantissa_b;
+  [[maybe_unused]] uint8_t epsilon_b;
+  [[maybe_unused]] uint16_t mantissa_b;
   uint8_t M_b;
   float delta;
-  float nominal_range;
+  [[maybe_unused]] float nominal_range;
   sprec_t *i_samples;
 
   // j2k_subband();
@@ -143,7 +146,6 @@ class j2k_subband : public j2k_region {
               sprec_t *ibuf, float *fbuf);
   ~j2k_subband();
   void quantize();
-  float get_normalized_step_size();
 };
 
 /********************************************************************************
@@ -151,7 +153,7 @@ class j2k_subband : public j2k_region {
  *******************************************************************************/
 class j2k_precinct_subband : public j2k_region {
  private:
-  const uint8_t orientation;
+  [[maybe_unused]] const uint8_t orientation;
   std::unique_ptr<tagtree> inclusion_info;
   std::unique_ptr<tagtree> ZBP_info;
   std::unique_ptr<std::unique_ptr<j2k_codeblock>[]> codeblocks;
@@ -177,7 +179,7 @@ class j2k_precinct_subband : public j2k_region {
 class j2k_precinct : public j2k_region {
  private:
   // index of this precinct
-  const uint32_t index;
+  [[maybe_unused]] const uint32_t index;
   // index of resolution level to which this precinct belongs
   const uint8_t resolution;
   // number of subbands in this precinct
@@ -201,7 +203,7 @@ class j2k_precinct : public j2k_region {
 
   j2k_precinct_subband *access_pband(uint8_t b);
   void set_length(int32_t len) { length = len; }
-  int32_t get_length() const { return length; }
+  [[nodiscard]] int32_t get_length() const { return length; }
 };
 
 /********************************************************************************
@@ -209,12 +211,12 @@ class j2k_precinct : public j2k_region {
  *******************************************************************************/
 class j2c_packet {
  public:
-  uint16_t layer;
-  uint8_t resolution;
-  uint16_t component;
-  uint32_t precinct;
-  buf_chain *header;
-  buf_chain *body;
+  [[maybe_unused]] uint16_t layer;
+  [[maybe_unused]] uint8_t resolution;
+  [[maybe_unused]] uint16_t component;
+  [[maybe_unused]] uint32_t precinct;
+  [[maybe_unused]] buf_chain *header;
+  [[maybe_unused]] buf_chain *body;
   // only for encoder
   std::unique_ptr<uint8_t[]> buf;
   int32_t length;
@@ -261,7 +263,7 @@ class j2k_resolution : public j2k_region {
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
                  const uint32_t &nph);
   ~j2k_resolution();
-  uint8_t get_index() const { return index; }
+  [[maybe_unused]] uint8_t get_index() const { return index; }
   void create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                        std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
                        uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth);
@@ -299,13 +301,12 @@ class j2k_tile_part {
   explicit j2k_tile_part(uint16_t num_components);
   void set_SOT(SOT_marker &tmpSOT);
   int read(j2c_src_memory &);
-  uint16_t get_tile_index() const;
-  uint8_t get_tile_part_index() const;
-  uint32_t get_length() const;
+  [[maybe_unused]] [[nodiscard]] uint16_t get_tile_index() const;
+  [[maybe_unused]] [[nodiscard]] uint8_t get_tile_part_index() const;
+  [[nodiscard]] uint32_t get_length() const;
   uint8_t *get_buf();
   void set_tile_index(uint16_t t);
   void set_tile_part_index(uint8_t tp);
-  void create_buffer(int32_t len);
 };
 
 /********************************************************************************
@@ -369,24 +370,15 @@ class j2k_tile_component : public j2k_tile_base {
   int32_t *get_sample_address(uint32_t x, uint32_t y);
   uint8_t get_dwt_levels();
   uint8_t get_transformation();
-  uint8_t get_Cmodes() const;
-  uint8_t get_bitdepth() const;
+  [[maybe_unused]] [[nodiscard]] uint8_t get_Cmodes() const;
+  [[maybe_unused]] [[nodiscard]] uint8_t get_bitdepth() const;
   element_siz get_precinct_size(uint8_t r);
-  element_siz get_codeblock_size();
-  uint8_t get_ROIshift() const;
+  [[maybe_unused]] element_siz get_codeblock_size();
+  [[maybe_unused]] [[nodiscard]] uint8_t get_ROIshift() const;
   j2k_resolution *access_resolution(uint8_t r);
   void create_resolutions(uint16_t numlayers);
 
   void perform_dc_offset(uint8_t transformation, bool is_signed);
-
-  void show_samples() {
-    for (int i = 0; i < pos1.y - pos0.y; ++i) {
-      for (int j = 0; j < pos1.x - pos0.x; ++j) {
-        printf("%3d ", this->samples[i * (pos1.x - pos0.x) + j]);
-      }
-      printf("\n");
-    }
-  }
 };
 
 /********************************************************************************
@@ -436,9 +428,9 @@ class j2k_tile : public j2k_tile_base {
   // progression order information for both COD and POC
   POC_marker porder_info;
   // return SOP is used or not
-  bool is_use_SOP() const { return this->use_SOP; }
+  [[nodiscard]] bool is_use_SOP() const { return this->use_SOP; }
   // return EPH is used or not
-  bool is_use_EPH() const { return this->use_EPH; }
+  [[maybe_unused]] [[nodiscard]] bool is_use_EPH() const { return this->use_EPH; }
   // set members related to COD marker
   void setCODparams(COD_marker *COD);
   // set members related to QCD marker
@@ -479,12 +471,13 @@ class j2k_tile : public j2k_tile_base {
   void write_packets(j2c_destination_base &outbuf);
 
   // getters
-  uint16_t get_numlayers() const { return this->numlayers; }
+  [[maybe_unused]] [[nodiscard]] uint16_t get_numlayers() const { return this->numlayers; }
   j2k_tile_component *get_tile_component(uint16_t c);
-  uint8_t get_byte_from_tile_buf();
-  uint8_t get_bit_from_tile_buf();
-  uint32_t get_length() const;
-  uint32_t get_buf_length();
+
+  [[maybe_unused]] [[maybe_unused]] uint8_t get_byte_from_tile_buf();
+  [[maybe_unused]] uint8_t get_bit_from_tile_buf();
+  [[nodiscard]] uint32_t get_length() const;
+  [[maybe_unused]] uint32_t get_buf_length();
 };
 
 int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;

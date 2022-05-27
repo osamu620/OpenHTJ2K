@@ -41,7 +41,7 @@ constexpr uint8_t YCC422 = 2;
  *******************************************************************************/
 void j2k_marker_io_base::set_buf(uint8_t *p) { buf = p; }
 
-uint16_t j2k_marker_io_base::get_marker() const { return this->code; }
+[[maybe_unused]] uint16_t j2k_marker_io_base::get_marker() const { return this->code; }
 
 uint16_t j2k_marker_io_base::get_length() const { return this->Lmar; }
 
@@ -56,7 +56,7 @@ uint8_t j2k_marker_io_base::get_byte() {
 
 uint16_t j2k_marker_io_base::get_word() {
   assert(pos < Lmar - 1);
-  uint16_t out = (static_cast<uint16_t>(get_byte()) << 8) + static_cast<uint16_t>(get_byte());
+  auto out = static_cast<uint16_t>((get_byte() << 8) + get_byte());
   return out;
 }
 
@@ -239,7 +239,7 @@ CAP_marker::CAP_marker(j2c_src_memory &in) : j2k_marker_io_base(_CAP), Ccap{0} {
   is_set = true;
 }
 
-uint32_t CAP_marker::get_Pcap() const { return Pcap; }
+[[maybe_unused]] uint32_t CAP_marker::get_Pcap() const { return Pcap; }
 
 uint16_t CAP_marker::get_Ccap(uint8_t n) {
   assert(n < 32);
@@ -349,9 +349,9 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
         last_PPx = PPx[i];
         last_PPy = PPy[i];
       }
-      tmpPP.push_back(last_PPx + (last_PPy << 4));
+      tmpPP.push_back(static_cast<unsigned char>(last_PPx + (last_PPy << 4)));
     }
-    for (int i = 0; i <= dwt_levels; ++i) {
+    for (size_t i = 0; i <= dwt_levels; ++i) {
       SPcod.push_back(tmpPP[dwt_levels - i]);
     }
   }
@@ -370,11 +370,11 @@ int COD_marker::write(j2c_destination_base &dst) {
   return EXIT_SUCCESS;
 }
 
-bool COD_marker::is_maximum_precincts() const { return (Scod & 1) ? false : true; }
+bool COD_marker::is_maximum_precincts() const { return (Scod & 1) == 0; }
 
-bool COD_marker::is_use_SOP() const { return (Scod & 2) ? true : false; }
+bool COD_marker::is_use_SOP() const { return (Scod & 2) != 0; }
 
-bool COD_marker::is_use_EPH() const { return (Scod & 4) ? true : false; }
+bool COD_marker::is_use_EPH() const { return (Scod & 4) != 0; }
 
 uint8_t COD_marker::get_progression_order() const { return static_cast<uint8_t>(SGcod >> 24); }
 
@@ -439,7 +439,7 @@ COC_marker::COC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
 
 uint16_t COC_marker::get_component_index() const { return Ccoc; }
 
-bool COC_marker::is_maximum_precincts() const { return (Scoc & 1) ? false : true; }
+bool COC_marker::is_maximum_precincts() const { return (Scoc & 1) == 0; }
 
 uint8_t COC_marker::get_dwt_levels() { return SPcoc[0]; }
 
@@ -610,14 +610,14 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
         H2.push_back(0.0);
       }
       std::vector<double> tmpL(L.size() + L2.size() - 1, 0.0);
-      for (int i = 0; i < L.size(); ++i) {
-        for (int j = 0; j < L2.size(); ++j) {
+      for (size_t i = 0; i < L.size(); ++i) {
+        for (size_t j = 0; j < L2.size(); ++j) {
           tmpL[i + j] += L[i] * L2[j];
         }
       }
       std::vector<double> tmpH(L.size() + H2.size() - 1, 0.0);
-      for (int i = 0; i < L.size(); ++i) {
-        for (int j = 0; j < H2.size(); ++j) {
+      for (size_t i = 0; i < L.size(); ++i) {
+        for (size_t j = 0; j < H2.size(); ++j) {
           tmpH[i + j] += L[i] * H2[j];
         }
       }
@@ -632,7 +632,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   std::vector<uint16_t> mu(3 * dwt_levels + 1, 0);
   if (is_reversible) {
     // lossless
-    for (int i = 0; i < epsilon.size(); ++i) {
+    for (size_t i = 0; i < epsilon.size(); ++i) {
       epsilon[epsilon.size() - i - 1] = RI - number_of_guardbits + use_ycc;
       while (wmse_or_BIBO[i] > 0.9) {
         epsilon[epsilon.size() - i - 1]++;
@@ -642,7 +642,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   } else {
     // lossy
     if (qfactor == 0xFF) {
-      for (int i = 0; i < epsilon.size(); ++i) {
+      for (size_t i = 0; i < epsilon.size(); ++i) {
         int32_t exponent, mantissa;
         double fval = basestep / sqrt(wmse_or_BIBO[i]);
         for (exponent = 0; fval < 1.0; exponent++) {
@@ -661,8 +661,8 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
           exponent = 0;
           mantissa = (1 << 11) - 1;
         }
-        epsilon[epsilon.size() - i - 1] = exponent;
-        mu[epsilon.size() - i - 1]      = mantissa;
+        epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
+        mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
       }
     } else {
       // lossy with qfactor: The detail of Qfactor feature is described in HTJ2K white paper at
@@ -694,7 +694,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
       double delta_Q    = alpha_Q * M_Q + eps0;
       double delta_ref  = delta_Q * G_c_sqrt[0];
       double G_c        = G_c_sqrt[0];  // gain of color transform
-      for (int i = 0; i < epsilon.size(); ++i) {
+      for (size_t i = 0; i < epsilon.size(); ++i) {
         int32_t exponent, mantissa;
         double w_b;
         // w_b for LL band shall be 1.0
@@ -718,23 +718,23 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
           exponent = 0;
           mantissa = (1 << 11) - 1;
         }
-        epsilon[epsilon.size() - i - 1] = exponent;
-        mu[epsilon.size() - i - 1]      = mantissa;
+        epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
+        mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
       }
     }
   }
 
   // set SPqcd from epsilon and mu
-  for (unsigned long i = 0; i < n; i++) {
+  for (size_t i = 0; i < n; i++) {
     if (is_reversible) {
-      SPqcd.push_back(epsilon[i] << 3);
+      SPqcd.push_back(static_cast<uint16_t>(epsilon[i] << 3));
     } else {
       if (!is_derived) {
         // Quantization style -> Scalar expounded (values signalled for each sub-band)
-        SPqcd.push_back((static_cast<uint16_t>(epsilon[i]) << 11) + mu[i]);
+        SPqcd.push_back(static_cast<uint16_t>((epsilon[i] << 11) + mu[i]));
       } else {
         // Quantization style -> Scalar derived (values signalled for LL subband only)
-        SPqcd.push_back((static_cast<uint16_t>(epsilon[0]) << 11) + mu[0]);
+        SPqcd.push_back(static_cast<uint16_t>((epsilon[0] << 11) + mu[0]));
       }
     }
   }
@@ -766,7 +766,7 @@ uint8_t QCD_marker::get_exponents(uint8_t nb) {
   uint8_t qstyle = get_quantization_style();
   if (qstyle == 0) {
     // lossless
-    return (SPqcd[nb] >> 3);
+    return (static_cast<uint8_t>(SPqcd[nb] >> 3));
   } else if (qstyle == 1) {
     // lossy derived
     return (SPqcd[0] >> 11);
@@ -796,7 +796,7 @@ uint8_t QCD_marker::get_MAGB() {
   uint8_t tmp    = (qstyle > 0) ? 0xFF : 0;
   for (unsigned short &val : SPqcd) {
     if (qstyle == 0) {
-      tmp = (tmp < (val >> 3)) ? val >> 3 : tmp;
+      tmp = (tmp < (val >> 3)) ? static_cast<uint8_t>(val >> 3) : tmp;
     } else {
       tmp = (tmp > (val >> 11)) ? val >> 11 : tmp;
     }
@@ -927,14 +927,14 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
         H2.push_back(0.0);
       }
       std::vector<double> tmpL(L.size() + L2.size() - 1, 0.0);
-      for (int i = 0; i < L.size(); ++i) {
-        for (int j = 0; j < L2.size(); ++j) {
+      for (size_t i = 0; i < L.size(); ++i) {
+        for (size_t j = 0; j < L2.size(); ++j) {
           tmpL[i + j] += L[i] * L2[j];
         }
       }
       std::vector<double> tmpH(L.size() + H2.size() - 1, 0.0);
-      for (int i = 0; i < L.size(); ++i) {
-        for (int j = 0; j < H2.size(); ++j) {
+      for (size_t i = 0; i < L.size(); ++i) {
+        for (size_t j = 0; j < H2.size(); ++j) {
           tmpH[i + j] += L[i] * H2[j];
         }
       }
@@ -949,7 +949,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   std::vector<uint16_t> mu(3 * dwt_levels + 1, 0);
   if (is_reversible) {
     // lossless
-    for (int i = 0; i < epsilon.size(); ++i) {
+    for (size_t i = 0; i < epsilon.size(); ++i) {
       epsilon[epsilon.size() - i - 1] = RI - number_of_guardbits + use_ycc;
       while (wmse_or_BIBO[i] > 0.9) {
         epsilon[epsilon.size() - i - 1]++;
@@ -987,7 +987,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
     double delta_ref  = delta_Q * G_c_sqrt[0];
     double G_c        = G_c_sqrt[Cqcc];  // gain of color transform
 
-    for (int i = 0; i < epsilon.size(); ++i) {
+    for (size_t i = 0; i < epsilon.size(); ++i) {
       int32_t exponent, mantissa;
       double w_b;
       // w_b for LL band shall be 1.0
@@ -1010,22 +1010,22 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
         exponent = 0;
         mantissa = (1 << 11) - 1;
       }
-      epsilon[epsilon.size() - i - 1] = exponent;
-      mu[epsilon.size() - i - 1]      = mantissa;
+      epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
+      mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
     }
   }
 
   // set SPqcd from epsilon and mu
   for (unsigned long i = 0; i < n; i++) {
     if (is_reversible) {
-      SPqcc.push_back(epsilon[i] << 3);
+      SPqcc.push_back(static_cast<unsigned short>(epsilon[i] << 3));
     } else {
       if (!is_derived) {
         // Quantization style -> Scalar expounded (values signalled for each sub-band)
-        SPqcc.push_back((static_cast<uint16_t>(epsilon[i]) << 11) + mu[i]);
+        SPqcc.push_back(static_cast<unsigned short>((epsilon[i] << 11) + mu[i]));
       } else {
         // Quantization style -> Scalar derived (values signalled for LL subband only)
-        SPqcc.push_back((static_cast<uint16_t>(epsilon[0]) << 11) + mu[0]);
+        SPqcc.push_back(static_cast<unsigned short>((epsilon[0] << 11) + mu[0]));
       }
     }
   }
@@ -1100,7 +1100,7 @@ uint8_t QCC_marker::get_exponents(uint8_t nb) {
   uint8_t qstyle = get_quantization_style();
   if (qstyle == 0) {
     // lossless
-    return (SPqcc[nb] >> 3);
+    return (static_cast<uint8_t>(SPqcc[nb] >> 3));
   } else if (qstyle == 1) {
     // lossy derived
     return (SPqcc[0] >> 11);
@@ -1214,7 +1214,7 @@ void POC_marker::add(uint8_t RS, uint16_t CS, uint16_t LYE, uint8_t RE, uint16_t
   nPOC++;
 }
 
-unsigned long POC_marker::get_num_poc() const { return nPOC; }
+[[maybe_unused]] unsigned long POC_marker::get_num_poc() const { return nPOC; }
 
 /********************************************************************************
  * TLM_marker
@@ -1370,15 +1370,15 @@ COM_marker::COM_marker(j2c_src_memory &in) : j2k_marker_io_base(_COM), Rcom(0) {
 }
 
 COM_marker::COM_marker(std::string com, bool is_text) : j2k_marker_io_base(_COM), Rcom(0) {
-  Lmar = 4 + com.size();
+  Lmar = static_cast<uint16_t>(4 + com.size());
   if (is_text) {
     Rcom = 1;
   }
   for (unsigned long i = 0; i < com.size(); i++) {
     if (i < Ccom.size()) {
-      Ccom[i] = com[i];
+      Ccom[i] = static_cast<uint8_t>(com[i]);
     } else {
-      Ccom.push_back(com[i]);
+      Ccom.push_back(static_cast<uint8_t>(com[i]));
     }
   }
   is_set = true;
@@ -1456,7 +1456,7 @@ uint32_t SOT_marker::get_tile_part_length() const { return Psot; }
 
 uint8_t SOT_marker::get_tile_part_index() const { return TPsot; }
 
-uint8_t SOT_marker::get_number_of_tile_parts() const { return TNsot; }
+[[maybe_unused]] uint8_t SOT_marker::get_number_of_tile_parts() const { return TNsot; }
 
 /********************************************************************************
  * PLT_marker
@@ -1518,10 +1518,10 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
       throw std::exception();
     }
     for (uint16_t c = 1; c < siz->get_num_components(); ++c) {
-      QCC.push_back(MAKE_UNIQUE<QCC_marker>(
-          siz->get_num_components(), c, qcd->get_number_of_guardbits(), cod->get_dwt_levels(),
-          cod->get_transformation(), false, siz->get_bitdepth(c), cod->use_color_trafo(), qfactor,
-          SIZ->get_chroma_format()));
+      QCC.push_back(MAKE_UNIQUE<QCC_marker>(siz->get_num_components(), c, qcd->get_number_of_guardbits(),
+                                            cod->get_dwt_levels(), cod->get_transformation(), false,
+                                            siz->get_bitdepth(c), cod->use_color_trafo(), qfactor,
+                                            SIZ->get_chroma_format()));
     }
   }
 
@@ -1539,9 +1539,7 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
   }
 }
 
-void j2k_main_header::add_COM_marker(const COM_marker &com) {
-  COM.push_back(MAKE_UNIQUE<COM_marker>(com));
-}
+void j2k_main_header::add_COM_marker(const COM_marker &com) { COM.push_back(MAKE_UNIQUE<COM_marker>(com)); }
 
 void j2k_main_header::flush(j2c_dst_memory &buf) {
   SIZ->write(buf);
@@ -1550,34 +1548,34 @@ void j2k_main_header::flush(j2c_dst_memory &buf) {
   }
   COD->write(buf);
   if (!COC.empty()) {
-    for (int i = 0; i < COC.size(); ++i) {
+    for (size_t i = 0; i < COC.size(); ++i) {
       // COC[i]->write(buf);
     }
   }
   QCD->write(buf);
   if (!QCC.empty()) {
-    for (int i = 0; i < QCC.size(); ++i) {
+    for (size_t i = 0; i < QCC.size(); ++i) {
       QCC[i]->write(buf);
     }
   }
   if (!RGN.empty()) {
-    for (int i = 0; i < RGN.size(); ++i) {
+    for (size_t i = 0; i < RGN.size(); ++i) {
       // RGN[i]->write(buf);
     }
   }
   // POC->write(buf);
   if (!PPM.empty()) {
-    for (int i = 0; i < PPM.size(); ++i) {
+    for (size_t i = 0; i < PPM.size(); ++i) {
       // PPM[i]->write(buf);
     }
   }
   if (!TLM.empty()) {
-    for (int i = 0; i < TLM.size(); ++i) {
+    for (size_t i = 0; i < TLM.size(); ++i) {
       // TLM[i]->write(buf);
     }
   }
   if (!PLM.empty()) {
-    for (int i = 0; i < PLM.size(); ++i) {
+    for (size_t i = 0; i < PLM.size(); ++i) {
       // PLM[i]->write(buf);
     }
   }

@@ -41,8 +41,6 @@
 
 #define ceil_int(a, b) ((a) + ((b)-1)) / (b)
 
-#define MEMALIGN 32
-
 class image {
  private:
   // number of components
@@ -78,19 +76,19 @@ class image {
   // // destructor
   ~image() { delete[] data; }
 
-  uint_fast32_t get_width() const { return width; }
+  [[nodiscard]] uint_fast32_t get_width() const { return width; }
 
-  uint_fast32_t get_height() const { return height; }
+  [[nodiscard]] uint_fast32_t get_height() const { return height; }
 
-  uint_fast32_t get_maxval() const { return (1 << bitDepth) - 1; }
+  [[nodiscard]] uint_fast32_t get_maxval() const { return (1 << bitDepth) - 1; }
 
-  uint8_t get_bpp() const { return bitDepth; }
+  [[maybe_unused]] [[nodiscard]] uint8_t get_bpp() const { return bitDepth; }
 
-  uint_fast16_t get_num_components() const { return num_components; }
+  [[nodiscard]] uint_fast16_t get_num_components() const { return num_components; }
 
   int_fast32_t *access_pixels() { return data; }
 
-  void cvt_to_planner() {
+  [[maybe_unused]] void cvt_to_planner() {
     auto *tmp = new int_fast32_t[this->width * this->height * num_components];
     for (uint_fast16_t c = 0; c < num_components; ++c) {
       for (uint_fast32_t i = 0; i < height; ++i) {
@@ -104,7 +102,7 @@ class image {
     this->data = tmp;
   }
 
-  int_fast32_t *access_components(uint_fast16_t c) {
+  [[maybe_unused]] int_fast32_t *access_components(uint_fast16_t c) {
     if (c > num_components) {
       printf("ERROR: input argument c exceeds the number of components of the image.\n");
       exit(EXIT_FAILURE);
@@ -195,7 +193,7 @@ class image {
           val += c - '0';
           c = fgetc(fp);
         } while (c != SP && c != LF && c != CR);
-        bitDepth = val;
+        bitDepth = static_cast<uint_fast8_t>(val);
         val      = 0;
         // fpos_t pos;
         // fgetpos(fp, &pos);
@@ -233,12 +231,12 @@ class image {
       // update status
       switch (status) {
         case READ_WIDTH:
-          this->width = val;
+          this->width = static_cast<uint_fast32_t>(val);
           val         = 0;
           status      = READ_HEIGHT;
           break;
         case READ_HEIGHT:
-          this->height = val;
+          this->height = static_cast<uint_fast32_t>(val);
           val          = 0;
           if (isPGX) {
             status = DONE;
@@ -247,7 +245,7 @@ class image {
           }
           break;
         case READ_MAXVAL:
-          maxval   = val;
+          maxval   = static_cast<uint_fast32_t>(val);
           bitDepth = (uint_fast8_t)ceil(log2((double)maxval));
           val      = 0;
           status   = DONE;
@@ -332,7 +330,7 @@ class image {
     return EXIT_SUCCESS;
   }
   // show info
-  int show() {
+  [[maybe_unused]] int show() {
     if (this->data == nullptr) {
       return EXIT_FAILURE;
     }

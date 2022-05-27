@@ -122,9 +122,13 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     depth.push_back(main_header.SIZ->get_bitdepth(c) - 0);
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
 
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(numTiles.x * numTiles.y);
-  for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
     tileSet[i].dec_init(i, main_header, reduce_NL);
   }
 
