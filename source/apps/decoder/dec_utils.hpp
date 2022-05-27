@@ -51,32 +51,15 @@ char *get_command_option(int argc, char *argv[], const char *option) {
   return nullptr;
 }
 
-inline uint16_t swap16(uint16_t value) {
-  uint16_t ret;
-  ret = value << 8;
-  ret |= value >> 8;
-  return ret;
-}
-
-inline uint32_t swap32(uint32_t value) {
-  uint32_t ret;
-  ret = value << 24;
-  ret |= (value & 0x0000FF00) << 8;
-  ret |= (value & 0x00FF0000) >> 8;
-  ret |= value >> 24;
-  return ret;
-}
-
 void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *> buf,
                std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                std::vector<bool> &is_signed) {
   // ppm does not allow negative value
   int32_t PNM_OFFSET      = (is_signed[0]) ? 1 << (depth[0] - 1) : 0;
-  int32_t MAXVAL          = 0;
   uint8_t bytes_per_pixel = ceil_int(depth[0], 8);
-  MAXVAL                  = (1 << depth[0]) - 1;
+  int32_t MAXVAL          = (1 << depth[0]) - 1;
   char fname[256], tmpname[256];
-  memcpy(tmpname, outfile_name, outfile_ext_name - outfile_name);
+  memcpy(tmpname, outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name));
   tmpname[outfile_ext_name - outfile_name] = '\0';
   sprintf(fname, "%s%s", tmpname, outfile_ext_name);
   FILE *ofp = fopen(fname, "wb");
@@ -153,9 +136,9 @@ void write_components(char *outfile_name, char *outfile_ext_name, std::vector<in
                       std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   bool is_PGM = (strcmp(outfile_ext_name, ".pgm") == 0);
   bool is_PGX = (strcmp(outfile_ext_name, ".pgx") == 0);
-  for (uint16_t c = 0; c < depth.size(); c++) {
+  for (uint16_t c = 0; c < static_cast<uint16_t>(depth.size()); c++) {
     char fname[256], tmpname[256];
-    memcpy(tmpname, outfile_name, outfile_ext_name - outfile_name);
+    memcpy(tmpname, outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name));
     tmpname[outfile_ext_name - outfile_name] = '\0';
     sprintf(fname, "%s_%02d%s", tmpname, c, outfile_ext_name);
 
