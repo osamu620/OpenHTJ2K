@@ -36,8 +36,7 @@
 
 #define NO_QFACTOR 0xFF
 
-#define sRGB 0
-#define sYCC 1
+enum class COLORSPACE : uint8_t { sRGB, sYCC };
 
 namespace open_htj2k {
 image::image(const std::vector<std::string> &filenames) : width(0), height(0), buf(nullptr) {
@@ -46,7 +45,7 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
     printf("ERROR: over 16384 components are not supported in the spec.\n");
     throw std::exception();
   }
-  num_components = num_files;  // num_components may change after parsing PPM header
+  num_components = static_cast<uint16_t>(num_files);  // num_components may change after parsing PPM header
   uint16_t c     = 0;
   for (const auto &fname : filenames) {
     if (read_pnmpgx(fname, c)) {
@@ -145,10 +144,10 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       }
       do {
         val *= 10;
-        val += d - '0';
+        val += static_cast<unsigned int>(d - '0');
         d = fgetc(fp);
       } while (d != SP && d != LF && d != CR);
-      bitDepth = val;
+      bitDepth = static_cast<uint8_t>(val);
       val      = 0;
       break;
       // PBM (not supported)
@@ -178,7 +177,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     // read numerical value
     while (d != SP && d != LF && d != CR) {
       val *= 10;
-      val += d - '0';
+      val += static_cast<unsigned int>(d - '0');
       d = fgetc(fp);
     }
     // update status
@@ -309,10 +308,10 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
         d   = fgetc(fp);
         while (d != SP && d != CR && d != LF && d != EOF) {
           val *= 10;
-          val += d - '0';
+          val += static_cast<unsigned int>(d - '0');
           d = fgetc(fp);
         }
-        this->buf[c][i] = val;
+        this->buf[c][i] = static_cast<int>(val);
       }
     }
   }
@@ -377,7 +376,7 @@ size_t openhtj2k_encoder_impl::invoke() {
     throw std::exception();
   }
 
-  for (auto c = 0; c < siz->Csiz; ++c) {
+  for (size_t c = 0; c < siz->Csiz; ++c) {
     Ssiz.push_back(siz->Ssiz[c]);
     XRsiz.push_back(siz->XRsiz[c]);
     YRsiz.push_back(siz->YRsiz[c]);
@@ -411,8 +410,9 @@ size_t openhtj2k_encoder_impl::invoke() {
   SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
                       siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, true);
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
-                      cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels, cod->blkwidth,
-                      cod->blkheight, cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
+                      cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels,
+                      static_cast<uint8_t>(cod->blkwidth), static_cast<uint8_t>(cod->blkheight),
+                      cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
   QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
                       Ssiz[0] + 1, cod->use_color_trafo, qcd->base_step, qfactor);
   // parameters for CAP marker
@@ -430,8 +430,8 @@ size_t openhtj2k_encoder_impl::invoke() {
   } else {
     bits0_4 = 31;
   }
-  uint16_t Ccap15 =
-      (bits14_15 << 14) + (bit13 << 13) + (bit12 << 12) + (bit11 << 11) + (bit5 << 5) + bits0_4;
+  auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12) + (bit11 << 11)
+                                      + (bit5 << 5) + bits0_4);
   CAP_marker main_CAP;
   main_CAP.set_Ccap(Ccap15, 15);
 
@@ -446,9 +446,13 @@ size_t openhtj2k_encoder_impl::invoke() {
 
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles of the input exceeds the allowable maximum (= 65535).\n");
+    throw std::exception();
+  }
 
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(numTiles.x * numTiles.y);
-  for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
     tileSet[i].enc_init(i, main_header, *buf);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
@@ -461,11 +465,11 @@ size_t openhtj2k_encoder_impl::invoke() {
     tileSet[i].write_packets(j2c_dst);
   }
   j2c_dst.put_word(_EOC);
-  uint32_t codestream_size = j2c_dst.get_length();
+  size_t codestream_size = j2c_dst.get_length();
 
   // prepare jph box-based format, if necessary
   if (isJPH) {
-    bool isSRGB = (color_space == sRGB) ? true : false;
+    bool isSRGB = (color_space == static_cast<uint8_t>(COLORSPACE::sRGB));
     jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
     size_t file_format_size = jph_info.write(jph_dst);
     codestream_size += file_format_size - codestream_size;
