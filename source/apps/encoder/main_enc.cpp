@@ -45,7 +45,7 @@
 
 int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
-  std::vector<std::string> fnames = args.get_infile();
+  std::vector<std::string> fnames = args.ifnames;
   for (const auto &fname : fnames) {
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
     try {
@@ -66,27 +66,27 @@ int main(int argc, char *argv[]) {
   open_htj2k::image img(fnames);  // input image
   auto fduration = std::chrono::high_resolution_clock::now() - fstart;
   auto fcount    = std::chrono::duration_cast<std::chrono::microseconds>(fduration).count();
-  double ftime   = fcount / 1000.0;
+  double ftime   = static_cast<double>(fcount) / 1000.0;
   printf("elapsed time for reading inputs %-15.3lf[ms]\n", ftime);
   auto fbytes = img.get_width() * img.get_height() * img.get_num_components() * 2;
   printf("%f [MB/s]\n", (double)fbytes / ftime / 1000);
   element_siz_local image_origin = args.get_origin();
   element_siz_local image_size(img.get_width(), img.get_height());
 
-  uint32_t num_components = img.get_num_components();
+  uint16_t num_components = img.get_num_components();
   std::vector<int32_t *> input_buf;
-  for (auto c = 0; c < num_components; ++c) {
+  for (uint16_t c = 0; c < num_components; ++c) {
     input_buf.push_back(img.get_buf(c));
   }
   bool isJPH               = false;
-  std::string out_filename = args.get_outfile();
+  std::string out_filename = args.ofname;
   bool toFile              = true;
   if (out_filename.empty()) {
     toFile = false;
   } else {
-    std::string::size_type pos = out_filename.find_last_of(".");
+    std::string::size_type pos = out_filename.find_last_of('.');
     std::string fext           = out_filename.substr(pos, 4);
-    if (fext.compare(".jph") == 0 || fext.compare(".JPH") == 0) {
+    if (fext == ".jph" || fext == ".JPH") {
       isJPH = true;
     } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc") && fext.compare(".J2C")
                && fext.compare(".J2K") && fext.compare(".JPHC")) {
@@ -113,19 +113,19 @@ int main(int argc, char *argv[]) {
   siz.XTOsiz = tile_origin.x;
   siz.YTOsiz = tile_origin.y;
   siz.Csiz   = num_components;
-  for (auto c = 0; c < siz.Csiz; ++c) {
+  for (uint16_t c = 0; c < siz.Csiz; ++c) {
     siz.Ssiz.push_back(img.get_Ssiz_value(c));
     auto compw = img.get_component_width(c);
     auto comph = img.get_component_height(c);
-    siz.XRsiz.push_back(((siz.Xsiz - siz.XOsiz) + compw - 1) / compw);
-    siz.YRsiz.push_back(((siz.Ysiz - siz.YOsiz) + comph - 1) / comph);
+    siz.XRsiz.push_back(static_cast<unsigned char>(((siz.Xsiz - siz.XOsiz) + compw - 1) / compw));
+    siz.YRsiz.push_back(static_cast<unsigned char>(((siz.Ysiz - siz.YOsiz) + comph - 1) / comph));
   }
   // siz.bpp    = img_depth;
 
   open_htj2k::cod_params cod;  // parameters related to COD marker
   element_siz_local cblk_size       = args.get_cblk_size();
-  cod.blkwidth                      = cblk_size.x;
-  cod.blkheight                     = cblk_size.y;
+  cod.blkwidth                      = static_cast<uint16_t>(cblk_size.x);
+  cod.blkheight                     = static_cast<uint16_t>(cblk_size.y);
   cod.is_max_precincts              = args.is_max_precincts();
   cod.use_SOP                       = args.is_use_sop();
   cod.use_EPH                       = args.is_use_eph();
@@ -137,28 +137,28 @@ int main(int argc, char *argv[]) {
   cod.transformation                = args.get_transformation();
   std::vector<element_siz_local> PP = args.get_prct_size();
   for (auto &i : PP) {
-    cod.PPx.push_back(i.x);
-    cod.PPy.push_back(i.y);
+    cod.PPx.push_back(static_cast<unsigned char>(i.x));
+    cod.PPy.push_back(static_cast<unsigned char>(i.y));
   }
 
-  open_htj2k::qcd_params qcd;  // parameters related to QCD marker
+  open_htj2k::qcd_params qcd{};  // parameters related to QCD marker
   qcd.is_derived          = args.is_derived();
   qcd.number_of_guardbits = args.get_num_guard();
   qcd.base_step           = args.get_basestep_size();
   if (qcd.base_step == 0.0) {
     qcd.base_step = 1.0f / static_cast<float>(1 << img.get_max_bpp());
   }
-  uint8_t color_space = args.get_jph_color_space();
+  uint8_t color_space = args.jph_color_space;
 
   size_t total_size;
-  int32_t num_iterations = args.get_num_iteration();
+  int32_t num_iterations = args.num_iteration;
   // memory buffer for output codestream/file
   std::vector<uint8_t> outbuf;
   auto start = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < num_iterations; ++i) {
     // create encoder
     open_htj2k::openhtj2k_encoder encoder(out_filename.c_str(), input_buf, siz, cod, qcd,
-                                          args.get_qfactor(), isJPH, color_space, args.get_num_threads());
+                                          args.get_qfactor(), isJPH, color_space, args.num_threads);
     if (!toFile) {
       encoder.set_output_buffer(outbuf);
     }
@@ -169,20 +169,14 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
   }
-  if (!toFile) {
-    printf("-------- last 64 byte of codestream\n");
-    for (int i = total_size - 64; i < total_size; ++i) {
-      printf("%02X ", outbuf[i]);
-    }
-    printf("\n--------\n");
-  }
+
   auto duration = std::chrono::high_resolution_clock::now() - start;
   auto count    = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-  double time   = count / 1000.0 / static_cast<double>(num_iterations);
+  double time   = static_cast<double>(count) / 1000.0 / static_cast<double>(num_iterations);
   double bpp    = (double)total_size * 8 / (img.get_width() * img.get_height());
 
   // show stats
-  printf("Codestream bytes  = %d = %f [bits/pixel]\n", total_size, bpp);
+  printf("Codestream bytes  = %zu = %f [bits/pixel]\n", total_size, bpp);
   printf("elapsed time %-15.3lf[ms]\n", time);
   return EXIT_SUCCESS;
 }
