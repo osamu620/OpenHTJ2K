@@ -58,11 +58,11 @@ void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
 }
 
 void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
-  __m256 mALPHA_R = _mm256_set1_ps(ALPHA_R);
-  __m256 mALPHA_G = _mm256_set1_ps(ALPHA_G);
-  __m256 mALPHA_B = _mm256_set1_ps(ALPHA_B);
-  __m256 mCB_FACT = _mm256_set1_ps(1.0 / CB_FACT_B);
-  __m256 mCR_FACT = _mm256_set1_ps(1.0 / CR_FACT_R);
+  __m256 mALPHA_R = _mm256_set1_ps(static_cast<float>(ALPHA_R));
+  __m256 mALPHA_G = _mm256_set1_ps(static_cast<float>(ALPHA_G));
+  __m256 mALPHA_B = _mm256_set1_ps(static_cast<float>(ALPHA_B));
+  __m256 mCB_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CB_FACT_B));
+  __m256 mCR_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CR_FACT_R));
   for (uint32_t n = 0; n < round_down(num_tc_samples, NUM_I32_VECTOR_AVX2); n += NUM_I32_VECTOR_AVX2) {
     // lossy:ICT
     __m256 mR  = _mm256_cvtepi32_ps(*((__m256i *)(sp0 + n)));
@@ -120,10 +120,10 @@ void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
 }
 
 void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
-  __m256 mCR_FACT_R = _mm256_set1_ps(CR_FACT_R);
-  __m256 mCR_FACT_G = _mm256_set1_ps(CR_FACT_G);
-  __m256 mCB_FACT_B = _mm256_set1_ps(CB_FACT_B);
-  __m256 mCB_FACT_G = _mm256_set1_ps(CB_FACT_G);
+  __m256 mCR_FACT_R = _mm256_set1_ps(static_cast<float>(CR_FACT_R));
+  __m256 mCR_FACT_G = _mm256_set1_ps(static_cast<float>(CR_FACT_G));
+  __m256 mCB_FACT_B = _mm256_set1_ps(static_cast<float>(CB_FACT_B));
+  __m256 mCB_FACT_G = _mm256_set1_ps(static_cast<float>(CB_FACT_G));
   for (uint32_t n = 0; n < round_down(num_tc_samples, NUM_I32_VECTOR_AVX2); n += NUM_I32_VECTOR_AVX2) {
     __m256 mY  = _mm256_cvtepi32_ps(*((__m256i *)(sp0 + n)));
     __m256 mCb = _mm256_cvtepi32_ps(*((__m256i *)(sp1 + n)));
@@ -138,12 +138,13 @@ void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   int32_t R, G, B;
   double fY, fCb, fCr;
   for (uint32_t n = round_down(num_tc_samples, NUM_I32_VECTOR_AVX2); n < num_tc_samples; n++) {
-    fY     = static_cast<double>(sp0[n]);
-    fCb    = static_cast<double>(sp1[n]);
-    fCr    = static_cast<double>(sp2[n]);
-    R      = static_cast<int32_t>(round_d(fY + CR_FACT_R * fCr));
-    B      = static_cast<int32_t>(round_d(fY + CB_FACT_B * fCb));
-    G      = static_cast<int32_t>(round_d(fY - CR_FACT_G * fCr - CB_FACT_G * fCb));
+    fY  = static_cast<double>(sp0[n]);
+    fCb = static_cast<double>(sp1[n]);
+    fCr = static_cast<double>(sp2[n]);
+    R   = static_cast<int32_t>(round_d(fY + static_cast<float>(CR_FACT_R) * fCr));
+    B   = static_cast<int32_t>(round_d(fY + static_cast<float>(CB_FACT_B) * fCb));
+    G   = static_cast<int32_t>(
+        round_d(fY - static_cast<float>(CR_FACT_G) * fCr - static_cast<float>(CB_FACT_G) * fCb));
     sp0[n] = R;
     sp1[n] = G;
     sp2[n] = B;
