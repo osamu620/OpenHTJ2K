@@ -53,7 +53,7 @@ static inline size_t popcount32(uintmax_t num) {
 #if defined(_MSC_VER)
   precision = __popcnt(static_cast<uint32_t>(num));
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-  precision = _popcnt32(num);
+  precision = static_cast<size_t>(_popcnt32(num));
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   uint32x2_t val = vld1_dup_u32(&num);
   uint8_t a      = vaddv_u8(vcnt_u8(vreinterpret_u8_u32(val)));

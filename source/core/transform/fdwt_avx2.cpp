@@ -36,8 +36,7 @@
  *******************************************************************************/
 // irreversible FDWT
 auto fdwt_irrev97_fixed_avx2_hor_step0 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
-                                            const int32_t n0, const int32_t n1, const int32_t coeff,
-                                            const int32_t offset, const int32_t shift) {
+                                            const int32_t n0, const int32_t n1) {
   auto vcoeff = _mm256_set1_epi16(Acoeff_simd);
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0 = _mm256_loadu_si256((__m256i *)(X + n + n0));
@@ -52,8 +51,7 @@ auto fdwt_irrev97_fixed_avx2_hor_step0 = [](const int32_t init_pos, const int32_
   }
 };
 auto fdwt_irrev97_fixed_avx2_hor_step1 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
-                                            const int32_t n0, const int32_t n1, const int32_t coeff,
-                                            const int32_t offset, const int32_t shift) {
+                                            const int32_t n0, const int32_t n1) {
   auto vcoeff = _mm256_set1_epi16((int16_t)-13888);
   auto vfour  = _mm256_set1_epi16(4);
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
@@ -71,8 +69,7 @@ auto fdwt_irrev97_fixed_avx2_hor_step1 = [](const int32_t init_pos, const int32_
   }
 };
 auto fdwt_irrev97_fixed_avx2_hor_step2 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
-                                            const int32_t n0, const int32_t n1, const int32_t coeff,
-                                            const int32_t offset, const int32_t shift) {
+                                            const int32_t n0, const int32_t n1) {
   auto vcoeff = _mm256_set1_epi16(Ccoeff_simd);
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0 = _mm256_loadu_si256((__m256i *)(X + n + n0));
@@ -87,8 +84,7 @@ auto fdwt_irrev97_fixed_avx2_hor_step2 = [](const int32_t init_pos, const int32_
 };
 
 auto fdwt_irrev97_fixed_avx2_hor_step3 = [](const int32_t init_pos, const int32_t simdlen, int16_t *const X,
-                                            const int32_t n0, const int32_t n1, const int32_t coeff,
-                                            const int32_t offset, const int32_t shift) {
+                                            const int32_t n0, const int32_t n1) {
   auto vcoeff = _mm256_set1_epi16(Dcoeff_simd);
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
     auto xin0 = _mm256_loadu_si256((__m256i *)(X + n + n0));
@@ -129,8 +125,8 @@ auto fdwt_irrev97_fixed_avx2_hor_step_32MAC =
       }
     };
 
-void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
-                                      const uint32_t u_i0, const uint32_t u_i1) {
+void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                      const int32_t u_i1) {
   const auto i0       = static_cast<const int32_t>(u_i0);
   const auto i1       = static_cast<const int32_t>(u_i1);
   const int32_t start = ceil_int(i0, 2);
@@ -140,24 +136,24 @@ void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int3
 
   // step 1
   int32_t simdlen = stop + 1 - (start - 2);
-  fdwt_irrev97_fixed_avx2_hor_step0(offset - 4, simdlen, X, 0, 2, Acoeff, Aoffset, Ashift);
+  fdwt_irrev97_fixed_avx2_hor_step0(offset - 4, simdlen, X, 0, 2);
 
   // step 2
   simdlen = stop + 1 - (start - 1);
-  fdwt_irrev97_fixed_avx2_hor_step1(offset - 2, simdlen, X, -1, 1, Bcoeff, Boffset, Bshift);
+  fdwt_irrev97_fixed_avx2_hor_step1(offset - 2, simdlen, X, -1, 1);
 
   // step 3
   simdlen = stop - (start - 1);
-  fdwt_irrev97_fixed_avx2_hor_step2(offset - 2, simdlen, X, 0, 2, Ccoeff, Coffset, Cshift);
+  fdwt_irrev97_fixed_avx2_hor_step2(offset - 2, simdlen, X, 0, 2);
 
   // step 4
   simdlen = stop - start;
-  fdwt_irrev97_fixed_avx2_hor_step3(offset, simdlen, X, -1, 1, Dcoeff, Doffset, Dshift);
+  fdwt_irrev97_fixed_avx2_hor_step3(offset, simdlen, X, -1, 1);
 }
 
 // reversible FDWT
-void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t right,
-                                    const uint32_t u_i0, const uint32_t u_i1) {
+void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                    const int32_t u_i1) {
   const auto i0        = static_cast<const int32_t>(u_i0);
   const auto i1        = static_cast<const int32_t>(u_i1);
   const int32_t start  = ceil_int(i0, 2);
@@ -193,8 +189,8 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
   }
 }
 
-void fdwt_1d_filtr_rev53_fixed_avx2_32MAC(sprec_t *X, const int32_t left, const int32_t right,
-                                          const uint32_t u_i0, const uint32_t u_i1) {
+void fdwt_1d_filtr_rev53_fixed_avx2_32MAC(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                          const int32_t u_i1) {
   const auto i0        = static_cast<const int32_t>(u_i0);
   const auto i1        = static_cast<const int32_t>(u_i1);
   const int32_t start  = ceil_int(i0, 2);
@@ -252,8 +248,7 @@ void fdwt_1d_filtr_rev53_fixed_avx2_32MAC(sprec_t *X, const int32_t left, const 
  *******************************************************************************/
 // irreversible FDWT
 auto fdwt_irrev97_fixed_avx2_ver_step0 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
-                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
-                                            const int32_t shift) {
+                                            int16_t *const Xout) {
   auto vcoeff = _mm256_set1_epi16(Acoeff_simd);
   for (int32_t n = 0; n < simdlen; n += 16) {
     auto xin0 = _mm256_loadu_si256((__m256i *)(Xin0 + n));
@@ -268,8 +263,7 @@ auto fdwt_irrev97_fixed_avx2_ver_step0 = [](const int32_t simdlen, int16_t *cons
 };
 
 auto fdwt_irrev97_fixed_avx2_ver_step1 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
-                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
-                                            const int32_t shift) {
+                                            int16_t *const Xout) {
   auto vcoeff = _mm256_set1_epi16(Bcoeff_simd_avx2);
   auto vfour  = _mm256_set1_epi16(4);
   for (int32_t n = 0; n < simdlen; n += 16) {
@@ -287,8 +281,7 @@ auto fdwt_irrev97_fixed_avx2_ver_step1 = [](const int32_t simdlen, int16_t *cons
 };
 
 auto fdwt_irrev97_fixed_avx2_ver_step2 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
-                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
-                                            const int32_t shift) {
+                                            int16_t *const Xout) {
   auto vcoeff = _mm256_set1_epi16(Ccoeff_simd);
   for (int32_t n = 0; n < simdlen; n += 16) {
     auto xin0 = _mm256_loadu_si256((__m256i *)(Xin0 + n));
@@ -302,8 +295,7 @@ auto fdwt_irrev97_fixed_avx2_ver_step2 = [](const int32_t simdlen, int16_t *cons
 };
 
 auto fdwt_irrev97_fixed_avx2_ver_step3 = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
-                                            int16_t *const Xout, const int32_t coeff, const int32_t offset,
-                                            const int32_t shift) {
+                                            int16_t *const Xout) {
   auto vcoeff = _mm256_set1_epi16(Dcoeff_simd);
   for (int32_t n = 0; n < simdlen; n += 16) {
     auto xin0 = _mm256_loadu_si256((__m256i *)(Xin0 + n));
@@ -347,9 +339,9 @@ auto fdwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, int16_t *const
   }
 };
 
-void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                                  const uint32_t v1) {
-  const uint32_t stride           = u1 - u0;
+void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
+                                  const int32_t v1) {
+  const int32_t stride            = u1 - u0;
   constexpr int32_t num_pse_i0[2] = {4, 3};
   constexpr int32_t num_pse_i1[2] = {3, 4};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -357,28 +349,29 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t
 
   if (v0 == v1 - 1) {
     // one sample case
-    constexpr float K  = 1.2301741 / 2;  // 04914001;
-    constexpr float K1 = 0.8128931;      // 066115961;
-    for (uint32_t col = 0; col < u1 - u0; ++col) {
+    for (int32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
         in[col] <<= 0;
       }
     }
   } else {
-    const uint32_t len = round_up(stride, SIMD_LEN_I32);
-    auto **buf         = new sprec_t *[top + v1 - v0 + bottom];
-    for (uint32_t i = 1; i <= top; ++i) {
-      buf[top - i] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
-      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride], sizeof(sprec_t) * stride);
+    const int32_t len = round_up(stride, SIMD_LEN_I32);
+    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    for (int32_t i = 1; i <= top; ++i) {
+      buf[top - i] =
+          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride],
+             sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
     }
-    for (uint32_t row = 0; row < v1 - v0; ++row) {
+    for (int32_t row = 0; row < v1 - v0; ++row) {
       buf[top + row] = &in[row * stride];
     }
-    for (uint32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
+    for (int32_t i = 1; i <= bottom; i++) {
+      buf[top + (v1 - v0) + i - 1] =
+          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
       memcpy(buf[top + (v1 - v0) + i - 1], &in[(PSEo(v1 - v0 + i - 1 + v0, v0, v1) - v0) * stride],
-             sizeof(sprec_t) * stride);
+             sizeof(sprec_t) * static_cast<size_t>(stride));
     }
     const int32_t start  = ceil_int(v0, 2);
     const int32_t stop   = ceil_int(v1, 2);
@@ -386,42 +379,42 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t
 
     const int32_t simdlen = (u1 - u0) - (u1 - u0) % 16;
     for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
-      fdwt_irrev97_fixed_avx2_ver_step0(simdlen, buf[n], buf[n + 2], buf[n + 1], Acoeff, Aoffset, Ashift);
-      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
+      fdwt_irrev97_fixed_avx2_ver_step0(simdlen, buf[n], buf[n + 2], buf[n + 1]);
+      for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
         buf[n + 1][col] += (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      fdwt_irrev97_fixed_avx2_ver_step1(simdlen, buf[n - 1], buf[n + 1], buf[n], Bcoeff, Boffset, Bshift);
-      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
+      fdwt_irrev97_fixed_avx2_ver_step1(simdlen, buf[n - 1], buf[n + 1], buf[n]);
+      for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
         buf[n][col] += (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
-      fdwt_irrev97_fixed_avx2_ver_step2(simdlen, buf[n], buf[n + 2], buf[n + 1], Ccoeff, Coffset, Cshift);
-      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
+      fdwt_irrev97_fixed_avx2_ver_step2(simdlen, buf[n], buf[n + 2], buf[n + 1]);
+      for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
         buf[n + 1][col] += (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      fdwt_irrev97_fixed_avx2_ver_step3(simdlen, buf[n - 1], buf[n + 1], buf[n], Dcoeff, Doffset, Dshift);
-      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
+      fdwt_irrev97_fixed_avx2_ver_step3(simdlen, buf[n - 1], buf[n + 1], buf[n]);
+      for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
         buf[n][col] += (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
       }
     }
 
-    for (uint32_t i = 1; i <= top; ++i) {
+    for (int32_t i = 1; i <= top; ++i) {
       aligned_mem_free(buf[top - i]);
     }
-    for (uint32_t i = 1; i <= bottom; i++) {
+    for (int32_t i = 1; i <= bottom; i++) {
       aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
     }
     delete[] buf;
@@ -429,9 +422,9 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t
 }
 
 // reversible FDWT
-void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u1, const uint32_t v0,
-                                const uint32_t v1) {
-  const uint32_t stride           = u1 - u0;
+void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
+                                const int32_t v1) {
+  const int32_t stride            = u1 - u0;
   constexpr int32_t num_pse_i0[2] = {2, 1};
   constexpr int32_t num_pse_i1[2] = {1, 2};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -439,26 +432,29 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u
 
   if (v0 == v1 - 1) {
     // one sample case
-    for (uint32_t col = 0; col < u1 - u0; ++col) {
+    for (int32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
         in[col] <<= 1;
       }
     }
   } else {
-    const uint32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf         = new sprec_t *[top + v1 - v0 + bottom];
-    for (uint32_t i = 1; i <= top; ++i) {
-      buf[top - i] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
-      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride], sizeof(sprec_t) * stride);
+    const int32_t len = round_up(stride, SIMD_PADDING);
+    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    for (int32_t i = 1; i <= top; ++i) {
+      buf[top - i] =
+          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride],
+             sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
     }
-    for (uint32_t row = 0; row < v1 - v0; ++row) {
+    for (int32_t row = 0; row < v1 - v0; ++row) {
       buf[top + row] = &in[row * stride];
     }
-    for (uint32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
+    for (int32_t i = 1; i <= bottom; i++) {
+      buf[top + (v1 - v0) + i - 1] =
+          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
       memcpy(buf[top + (v1 - v0) + i - 1], &in[(PSEo(v1 - v0 + i - 1 + v0, v0, v1) - v0) * stride],
-             sizeof(sprec_t) * stride);
+             sizeof(sprec_t) * static_cast<size_t>(stride));
     }
     const int32_t start  = ceil_int(v0, 2);
     const int32_t stop   = ceil_int(v1, 2);
@@ -490,7 +486,7 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u
         x1   = _mm256_add_epi16(x1, vout);
         _mm256_storeu_si256((__m256i *)(buf[n] + col), x1);
       }
-      for (uint32_t col = simdlen; col < u1 - u0; ++col) {
+      for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
         sum >>= 1;
@@ -501,10 +497,10 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const uint32_t u0, const uint32_t u
       }
     }
 
-    for (uint32_t i = 1; i <= top; ++i) {
+    for (int32_t i = 1; i <= top; ++i) {
       aligned_mem_free(buf[top - i]);
     }
-    for (uint32_t i = 1; i <= bottom; i++) {
+    for (int32_t i = 1; i <= bottom; i++) {
       aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
     }
     delete[] buf;
