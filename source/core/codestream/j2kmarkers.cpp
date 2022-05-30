@@ -106,8 +106,7 @@ SIZ_marker::SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t
       XTOsiz(XTO),
       YTOsiz(YTO),
       Csiz(C) {
-  Lmar      = 38 + 3 * C;
-  uint8_t s = 0;
+  Lmar = 38 + 3 * C;
   for (unsigned long i = 0; i < Csiz; i++) {
     Ssiz.push_back(S[i]);
     XRsiz.push_back(XR[i]);

@@ -156,7 +156,8 @@ size_t header_box::write(j2c_dst_memory &dst) {
   return LBox;
 }
 
-contiguous_codestream_box::contiguous_codestream_box(size_t len) : box_base(len + 8, 0x6A703263){};
+contiguous_codestream_box::contiguous_codestream_box(size_t len)
+    : box_base(static_cast<uint32_t>(len) + 8, 0x6A703263){};
 
 size_t contiguous_codestream_box::write(j2c_dst_memory &dst) {
   // LBox = 0;

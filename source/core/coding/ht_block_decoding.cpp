@@ -43,7 +43,7 @@
 //  sample_buf[j2 + j1 * size.x] = static_cast<int32_t>(symbol);
 //}
 
-void j2k_codeblock::calc_mbr(uint8_t &mbr, const uint16_t i, const uint16_t j, const uint32_t mbr_info,
+void j2k_codeblock::calc_mbr(uint8_t &mbr, const int16_t i, const int16_t j,
                              const uint8_t causal_cond) const {
   // mbr |= (mbr_info != 0);
   mbr |= get_state(Sigma, i - 1, j - 1);
@@ -117,7 +117,7 @@ int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
   int32_t val = 0;
   // uint8_t bit;
   if (m_n > 0) {
-    val = bitmask32[m_n] & Creg;
+    val = static_cast<int32_t>((uint64_t)bitmask32[m_n] & Creg);
     //      for (int i = 0; i < m_n; i++) {
     //        bit = MS->importMagSgnBit();
     //        val += (bit << i);
@@ -155,13 +155,13 @@ uint8_t state_MEL_decoder::decodeMELSym() {
     eval = this->MEL_E[MEL_k];
     bit  = MEL_unPacker->importMELbit();
     if (bit == 1) {
-      MEL_run = 1 << eval;
+      MEL_run = static_cast<uint8_t>(1 << eval);
       MEL_k   = (12 < MEL_k + 1) ? 12 : MEL_k + 1;
     } else {
       MEL_run = 0;
       while (eval > 0) {
         bit     = MEL_unPacker->importMELbit();
-        MEL_run = (MEL_run << 1) + bit;
+        MEL_run = static_cast<uint8_t>((MEL_run << 1) + bit);
         eval--;
       }
       MEL_k   = (0 > MEL_k - 1) ? 0 : MEL_k - 1;
@@ -279,7 +279,7 @@ void state_VLC_enc::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], u
 #else
   uint8_t cwd = Creg & 0x7f;
 #endif
-  uint16_t idx           = cwd + (context << 7);
+  uint16_t idx           = static_cast<uint16_t>(cwd + (context << 7));
   uint16_t value         = dec_CxtVLC_table[idx];
   u_off[first_or_second] = value & 1;
   // value >>= 1;
@@ -431,12 +431,10 @@ inline void get_sample_position_from_quad(uint16_t q, uint16_t QW, uint16_t Wblk
   }
 }
 
-void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t &Lcup,
-                       const uint8_t &ROIshift, const uint8_t &pLSB, state_MS_dec &MS,
-                       state_MEL_unPacker &MEL_unpacker, state_MEL_decoder &MEL_decoder,
-                       state_VLC_enc &VLC) {
-  const uint16_t QW = ceil_int(block->size.x, 2);
-  const uint16_t QH = ceil_int(block->size.y, 2);
+void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &MS,
+                       state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC) {
+  const uint16_t QW = ceil_int(static_cast<const uint16_t>(block->size.x), 2);
+  const uint16_t QH = ceil_int(static_cast<const uint16_t>(block->size.y), 2);
 
   // buffers shall be zeroed.
   std::unique_ptr<uint8_t[]> sigma_n = MAKE_UNIQUE<uint8_t[]>(4 * QW * QH);
@@ -468,7 +466,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
   dec_table0 = dec_CxtVLC_table0_fast_16;
   dec_table1 = dec_CxtVLC_table1_fast_16;
 
-  uint16_t q1, q2;
+  uint32_t q1, q2;
   uint8_t E_n[2], E_ne[2], E_nw[2], E_nf[2], max_E[2];
   int32_t m_n[2], known_1[2];
 
@@ -482,7 +480,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
     if (u_off[FIRST_QUAD] == 0) {
       assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
     }
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
     }
     // calculate context for the next quad
@@ -503,7 +501,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
     if (u_off[FIRST_QUAD] == 0) {
       assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
     }
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
     }
 
@@ -512,7 +510,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
     if (u_off[SECOND_QUAD] == 0) {
       assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
     }
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
     }
     // calculate context for the next quad
@@ -533,7 +531,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
     if (u_off[SECOND_QUAD] == 0) {
       assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
     }
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
     }
 
@@ -583,40 +581,40 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
     U[FIRST_QUAD]  = kappa[FIRST_QUAD] + u[FIRST_QUAD];
     U[SECOND_QUAD] = kappa[SECOND_QUAD] + u[SECOND_QUAD];
 
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       m[FIRST_QUAD][i]  = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
       m[SECOND_QUAD][i] = sigma_n[4 * q2 + i] * U[SECOND_QUAD] - ((emb_k[SECOND_QUAD] >> i) & 1);
     }
 
     // recoverMagSgnValue
-    int32_t n;
+    uint32_t n;
 
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       n                   = 4 * q1 + i;
       m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
       known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
       v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
       if (m_n[FIRST_QUAD] != 0) {
-        E[n]    = 32 - count_leading_zeros(v[FIRST_QUAD][i]);
-        mu_n[n] = (v[FIRST_QUAD][i] >> 1) + 1;
+        E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
+        mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
-        mu_n[n] |= (v[FIRST_QUAD][i] & 1) << 31;  // sign bit
+        mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
       } else {
         // mu_n[n] = 0;
         // E[n]  = 0;
       }
     }
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       n                    = 4 * q2 + i;
       m_n[SECOND_QUAD]     = m[SECOND_QUAD][i];
       known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
       v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
       if (m_n[SECOND_QUAD] != 0) {
-        E[n]    = 32 - count_leading_zeros(v[SECOND_QUAD][i]);
-        mu_n[n] = (v[SECOND_QUAD][i] >> 1) + 1;
+        E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][i])));
+        mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
-        mu_n[n] |= (v[SECOND_QUAD][i] & 1) << 31;  // sign bit
+        mu_n[n] |= static_cast<uint32_t>((v[SECOND_QUAD][i] & 1) << 31);  // sign bit
       } else {
         // mu_n[n] = 0;
         // E[n]  = 0;
@@ -641,7 +639,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
     if (u_off[FIRST_QUAD] == 0) {
       assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
     }
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
     }
     if (u_off[FIRST_QUAD] == 1) {
@@ -655,22 +653,22 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
 
     U[FIRST_QUAD] = kappa[FIRST_QUAD] + u[FIRST_QUAD];
 
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       m[FIRST_QUAD][i] = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
     }
     // recoverMagSgnValue
-    int32_t n;
-    for (int i = 0; i < 4; i++) {
+    uint32_t n;
+    for (uint32_t i = 0; i < 4; i++) {
       n                   = 4 * q1 + i;
       m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
       known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
       v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
       if (m_n[FIRST_QUAD] != 0) {
-        E[n]    = 32 - count_leading_zeros(v[FIRST_QUAD][i]);
-        mu_n[n] = (v[FIRST_QUAD][i] >> 1) + 1;
+        E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
+        mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
-        mu_n[n] |= (v[FIRST_QUAD][i] & 1) << 31;  // sign bit
+        mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
       } else {
         // mu_n[n] = 0;
         // E[n]  = 0;
@@ -700,7 +698,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
       if (u_off[FIRST_QUAD] == 0) {
         assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
       }
-      for (int i = 0; i < 4; i++) {
+      for (uint32_t i = 0; i < 4; i++) {
         sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
       }
 
@@ -718,7 +716,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
       if (u_off[SECOND_QUAD] == 0) {
         assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
       }
-      for (int i = 0; i < 4; i++) {
+      for (uint32_t i = 0; i < 4; i++) {
         sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
       }
 
@@ -797,38 +795,38 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
       U[FIRST_QUAD]      = kappa[FIRST_QUAD] + u[FIRST_QUAD];
       U[SECOND_QUAD]     = kappa[SECOND_QUAD] + u[SECOND_QUAD];
 
-      for (int i = 0; i < 4; i++) {
+      for (uint32_t i = 0; i < 4; i++) {
         m[FIRST_QUAD][i]  = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
         m[SECOND_QUAD][i] = sigma_n[4 * q2 + i] * U[SECOND_QUAD] - ((emb_k[SECOND_QUAD] >> i) & 1);
       }
       // recoverMagSgnValue
-      int32_t n;
-      for (int i = 0; i < 4; i++) {
+      uint32_t n;
+      for (uint32_t i = 0; i < 4; i++) {
         n                   = 4 * q1 + i;
         m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
         known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
         v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
         if (m_n[FIRST_QUAD] != 0) {
-          E[n]    = 32 - count_leading_zeros(v[FIRST_QUAD][i]);
-          mu_n[n] = (v[FIRST_QUAD][i] >> 1) + 1;
+          E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
+          mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
-          mu_n[n] |= (v[FIRST_QUAD][i] & 1) << 31;  // sign bit
+          mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
         } else {
           // mu_n[n] = 0;
           // E[n]  = 0;
         }
       }
-      for (int i = 0; i < 4; i++) {
+      for (uint32_t i = 0; i < 4; i++) {
         n                    = 4 * q2 + i;
         m_n[SECOND_QUAD]     = m[SECOND_QUAD][i];
         known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
         v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
         if (m_n[SECOND_QUAD] != 0) {
-          E[n]    = 32 - count_leading_zeros(v[SECOND_QUAD][i]);
-          mu_n[n] = (v[SECOND_QUAD][i] >> 1) + 1;
+          E[n] = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][i])));
+          mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
-          mu_n[n] |= (v[SECOND_QUAD][i] & 1) << 31;  // sign bit
+          mu_n[n] |= static_cast<uint32_t>((v[SECOND_QUAD][i] & 1) << 31);  // sign bit
         } else {
           // mu_n[n] = 0;
           // E[n]  = 0;
@@ -853,7 +851,7 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
       if (u_off[FIRST_QUAD] == 0) {
         assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
       }
-      for (int i = 0; i < 4; i++) {
+      for (uint32_t i = 0; i < 4; i++) {
         sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
       }
 
@@ -893,22 +891,22 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
 
       U[FIRST_QUAD] = kappa[FIRST_QUAD] + u[FIRST_QUAD];
 
-      for (int i = 0; i < 4; i++) {
+      for (uint32_t i = 0; i < 4; i++) {
         m[FIRST_QUAD][i] = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
       }
       // recoverMagSgnValue
-      int32_t n;
-      for (int i = 0; i < 4; i++) {
+      uint32_t n;
+      for (uint32_t i = 0; i < 4; i++) {
         n                   = 4 * q1 + i;
         m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
         known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
         v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
         if (m_n[FIRST_QUAD] != 0) {
-          E[n]    = 32 - count_leading_zeros(v[FIRST_QUAD][i]);
-          mu_n[n] = (v[FIRST_QUAD][i] >> 1) + 1;
+          E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
+          mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
-          mu_n[n] |= (v[FIRST_QUAD][i] & 1) << 31;
+          mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);
         } else {
           // mu_n[n] = 0;
           // E[n]  = 0;
@@ -926,27 +924,28 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
   auto set_sample            = [block](const uint32_t &symbol, const uint16_t &j1, const uint16_t &j2) {
     block->sample_buf[j2 + j1 * block->size.x] = static_cast<int32_t>(symbol);
   };
-  for (int16_t y = 0; y < QH; y++) {
-    for (int16_t x = 0; x < QW; x++) {
+  for (uint16_t y = 0; y < QH; y++) {
+    for (uint16_t x = 0; x < QW; x++) {
       set_sample(*p_mu, 2 * y, 2 * x);
-      block->modify_state(sigma, *p_sigma, 2 * y, 2 * x);
+      block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x));
       p_mu++;
       p_sigma++;
       if (y != QH - 1 || is_border_y == 0) {
         set_sample(*p_mu, 2 * y + 1, 2 * x);
-        block->modify_state(sigma, *p_sigma, 2 * y + 1, 2 * x);
+        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1), static_cast<int16_t>(2 * x));
       }
       p_mu++;
       p_sigma++;
       if (x != QW - 1 || is_border_x == 0) {
         set_sample(*p_mu, 2 * y, 2 * x + 1);
-        block->modify_state(sigma, *p_sigma, 2 * y, 2 * x + 1);
+        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x + 1));
       }
       p_mu++;
       p_sigma++;
       if ((y != QH - 1 || is_border_y == 0) && (x != QW - 1 || is_border_x == 0)) {
         set_sample(*p_mu, 2 * y + 1, 2 * x + 1);
-        block->modify_state(sigma, *p_sigma, 2 * y + 1, 2 * x + 1);
+        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1),
+                            static_cast<int16_t>(2 * x + 1));
       }
       p_mu++;
       p_sigma++;
@@ -956,14 +955,14 @@ void ht_cleanup_decode(j2k_codeblock *block, uint8_t *const Dcup, const uint32_t
 
 auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const uint16_t i_start,
                                     const uint16_t j_start, const uint16_t width, const uint16_t height,
-                                    const uint16_t dum_stride, const uint8_t &pLSB) {
+                                    const uint8_t &pLSB) {
   int32_t *sp;
   uint8_t causal_cond = 0;
   uint8_t bit;
   uint8_t mbr;
   uint32_t mbr_info;
 
-  for (int16_t j = j_start; j < j_start + width; j++) {
+  for (int16_t j = (int16_t)j_start; j < j_start + width; j++) {
     mbr_info = 0;
     //    for (int16_t i = height; i > -2; --i) {
     //      causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != height));
@@ -972,12 +971,12 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
     //                   + (block->get_sigma(i_start + i, j + 1) << 2))
     //                  * causal_cond;
     //    }
-    for (int16_t i = i_start; i < i_start + height; i++) {
-      sp          = &block->sample_buf[j + i * block->size.x];
+    for (int16_t i = (int16_t)i_start; i < i_start + height; i++) {
+      sp          = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != i_start + height - 1));
       mbr         = 0;
       if (block->get_state(Sigma, i, j) == 0) {
-        block->calc_mbr(mbr, i, j, mbr_info & 0x1EF, causal_cond);
+        block->calc_mbr(mbr, i, j, causal_cond);
       }
       mbr_info >>= 3;
       if (mbr != 0) {
@@ -1005,24 +1004,23 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
 void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
                        const uint8_t &pLSB) {
   SP_dec SigProp(HT_magref_segment, magref_length);
-  const uint16_t num_v_stripe = block->size.y / 4;
-  const uint16_t num_h_stripe = block->size.x / 4;
+  const uint16_t num_v_stripe = static_cast<const uint16_t>(block->size.y / 4);
+  const uint16_t num_h_stripe = static_cast<const uint16_t>(block->size.x / 4);
   uint16_t i_start            = 0, j_start;
   uint16_t width              = 4;
   uint16_t width_last;
-  uint16_t height           = 4;
-  const uint16_t dum_stride = block->size.x + 2;
+  uint16_t height = 4;
 
   // decode full-height (=4) stripes
   for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
     j_start = 0;
     for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-      process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, dum_stride, pLSB);
+      process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, pLSB);
       j_start += 4;
     }
     width_last = block->size.x % 4;
     if (width_last) {
-      process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, dum_stride, pLSB);
+      process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, pLSB);
     }
     i_start += 4;
   }
@@ -1030,29 +1028,29 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
   height  = block->size.y % 4;
   j_start = 0;
   for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-    process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, dum_stride, pLSB);
+    process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, pLSB);
     j_start += 4;
   }
   width_last = block->size.x % 4;
   if (width_last) {
-    process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, dum_stride, pLSB);
+    process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, pLSB);
   }
 }
 
 void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
                       const uint8_t &pLSB) {
   MR_dec MagRef(HT_magref_segment, magref_length);
-  const uint16_t blk_height   = block->size.y;
-  const uint16_t blk_width    = block->size.x;
-  const uint16_t num_v_stripe = block->size.y / 4;
-  uint16_t i_start            = 0;
-  uint16_t height             = 4;
+  const uint16_t blk_height   = static_cast<const uint16_t>(block->size.y);
+  const uint16_t blk_width    = static_cast<const uint16_t>(block->size.x);
+  const uint16_t num_v_stripe = static_cast<const uint16_t>(block->size.y / 4);
+  int16_t i_start             = 0;
+  int16_t height              = 4;
   int32_t *sp;
 
-  for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
-    for (uint16_t j = 0; j < blk_width; j++) {
-      for (uint16_t i = i_start; i < i_start + height; i++) {
-        sp = &block->sample_buf[j + i * block->size.x];
+  for (int16_t n1 = 0; n1 < num_v_stripe; n1++) {
+    for (int16_t j = 0; j < blk_width; j++) {
+      for (int16_t i = i_start; i < i_start + height; i++) {
+        sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
         if (block->get_state(Sigma, i, j) != 0) {
           block->modify_state(refinement_indicator, 1, i, j);
           sp[0] |= MagRef.importMagRefBit() << pLSB;
@@ -1061,10 +1059,10 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
     }
     i_start += 4;
   }
-  height = blk_height % 4;
-  for (uint16_t j = 0; j < blk_width; j++) {
-    for (uint16_t i = i_start; i < i_start + height; i++) {
-      sp = &block->sample_buf[j + i * block->size.x];
+  height = static_cast<int16_t>(blk_height % 4);
+  for (int16_t j = 0; j < blk_width; j++) {
+    for (int16_t i = i_start; i < i_start + height; i++) {
+      sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
       if (block->get_state(Sigma, i, j) != 0) {
         block->modify_state(refinement_indicator, 1, i, j);
         sp[0] |= MagRef.importMagRefBit() << pLSB;
@@ -1086,7 +1084,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   const int32_t M_b = static_cast<int32_t>(block->get_Mb());
 
   if (block->num_passes > 3) {
-    for (int i = 0; i < block->pass_length.size(); i++) {
+    for (uint32_t i = 0; i < block->pass_length.size(); i++) {
       if (block->pass_length[i] != 0) {
         break;
       }
@@ -1114,9 +1112,9 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   if (num_ht_passes > 0) {
     std::vector<uint8_t> all_segments;
     all_segments.reserve(3);
-    for (int i = 0; i < block->pass_length.size(); i++) {
+    for (uint32_t i = 0; i < block->pass_length.size(); i++) {
       if (block->pass_length[i] != 0) {
-        all_segments.push_back(i);
+        all_segments.push_back(static_cast<uint8_t>(i));
       }
     }
     Lcup += block->pass_length[all_segments[0]];
@@ -1124,7 +1122,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
       return false;
     }
-    for (int i = 1; i < all_segments.size(); i++) {
+    for (uint32_t i = 1; i < all_segments.size(); i++) {
       Lref += block->pass_length[all_segments[i]];
     }
     Dcup = block->get_compressed_data();
@@ -1141,7 +1139,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       return false;
     }
     // Suffix length (=MEL + VLC) of HT Cleanup pass
-    const uint32_t Scup = (Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F);
+    const uint32_t Scup = static_cast<const uint32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
     if (Scup < 2 || Scup > Lcup || Scup > 4079) {
       printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
       return false;
@@ -1155,7 +1153,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
     state_VLC_enc VLC               = state_VLC_enc(Dcup, Lcup, Pcup);
 
-    ht_cleanup_decode(block, Dcup, Lcup, ROIshift, 30 - S_blk, MS, MEL_unPacker, MEL_decoder, VLC);
+    ht_cleanup_decode(block, 30 - S_blk, MS, MEL_decoder, VLC);
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, 30 - (S_blk + 1));
     }
@@ -1185,26 +1183,26 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     float fscale = block->stepsize;
     fscale *= (1 << FRACBITS);
     if (M_b <= 31) {
-      fscale /= (1 << (31 - M_b));
+      fscale /= (static_cast<float>(1 << (31 - M_b)));
     } else {
-      fscale *= (1 << (M_b - 31));
+      fscale *= (static_cast<float>(1 << (M_b - 31)));
     }
     constexpr int32_t downshift = 15;
     fscale *= (float)(1 << 16) * (float)(1 << downshift);
     const auto scale   = (const int32_t)(fscale + 0.5);
-    const uint16_t yyy = block->size.y;
-    const uint16_t xxx = block->size.x;
+    const uint16_t yyy = static_cast<const uint16_t>(block->size.y);
+    const uint16_t xxx = static_cast<const uint16_t>(block->size.x);
     if (block->transformation) {
 // reversible path
 #ifdef __INTEL_COMPILER
   #pragma ivdep
 #endif
-      for (uint16_t y = 0; y < yyy; y++) {
-        for (uint16_t x = 0; x < xxx; x++) {
-          const uint32_t n = x + y * block->band_stride;
-          val              = &block->sample_buf[x + y * block->size.x];
-          dst              = block->i_samples + n;
-          sign             = *val & INT32_MIN;
+      for (int16_t y = 0; y < yyy; y++) {
+        for (int16_t x = 0; x < xxx; x++) {
+          const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
+          val  = &block->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->size.x];
+          dst  = block->i_samples + n;
+          sign = *val & INT32_MIN;
           *val &= INT32_MAX;
           // detect background region and upshift it
           if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
@@ -1234,7 +1232,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
           }
 
           assert(pLSB >= 0);  // assure downshift is not negative
-          QF15 = *val >> pLSB;
+          QF15 = static_cast<int16_t>(*val >> pLSB);
           *dst = QF15;
         }
       }
@@ -1243,12 +1241,12 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 #ifdef __INTEL_COMPILER
   #pragma ivdep
 #endif
-      for (uint16_t y = 0; y < yyy; y++) {
-        for (uint16_t x = 0; x < xxx; x++) {
-          const uint32_t n = x + y * block->band_stride;
-          val              = &block->sample_buf[x + y * block->size.x];
-          dst              = block->i_samples + n;
-          sign             = *val & INT32_MIN;
+      for (int16_t y = 0; y < yyy; y++) {
+        for (int16_t x = 0; x < xxx; x++) {
+          const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
+          val  = &block->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->size.x];
+          dst  = block->i_samples + n;
+          sign = *val & INT32_MIN;
           *val &= INT32_MAX;
           // detect background region and upshift it
           if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
