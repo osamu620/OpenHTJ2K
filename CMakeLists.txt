@@ -161,3 +161,4 @@ target_include_directories(imgcmp PUBLIC source/apps/imgcmp/)
 
 ### conformance testing
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
