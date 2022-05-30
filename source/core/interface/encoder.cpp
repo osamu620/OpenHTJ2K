@@ -458,8 +458,8 @@ size_t openhtj2k_encoder_impl::invoke() {
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
     tileSet[i].perform_dc_offset(main_header);
-    tileSet[i].rgb_to_ycbcr(main_header);
-    tileSet[i].encode(main_header);
+    tileSet[i].rgb_to_ycbcr();
+    tileSet[i].encode();
     tileSet[i].construct_packets(main_header);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {

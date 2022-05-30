@@ -881,7 +881,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       for (size_t i = 0; i < l0 + l1; ++i) {
         buf_end += blk->pass_length[i];
       }
-      uint32_t number_of_bytes = buf_end - buf_start;
+      // uint32_t number_of_bytes = buf_end - buf_start;
 
       // length coding: currently only for HT Cleanup pass
       int new_passes         = static_cast<int32_t>(num_passes);
@@ -1000,7 +1000,7 @@ j2k_precinct_subband *j2k_precinct::access_pband(uint8_t b) {
  *******************************************************************************/
 j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation,
                          uint8_t R_b, uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta,
-                         float nominal_range, sprec_t *ibuf, float *fbuf)
+                         float nominal_range, sprec_t *ibuf)
     : j2k_region(p0, p1),
       orientation(orientation),
       transformation(transformation),
@@ -1054,10 +1054,8 @@ void j2k_subband::quantize() {
     auto fsrch   = vcvtq_f32_s32(isrc32h);
     fsrcl *= vld1q_dup_f32(&fscale);
     fsrch *= vld1q_dup_f32(&fscale);
-    auto fsgnl = vcltzq_f32(fsrcl) | 0x01;
-    auto fsgnh = vcltzq_f32(fsrch) | 0x01;
-    auto imag  = vcombine_s16(vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrcl))),
-                              vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrch))));
+    auto imag = vcombine_s16(vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrcl))),
+                             vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrch))));
     vst1q_s16(this->i_samples + n, imag * isgn);
   }
   for (int32_t n = simdlen; n < length; ++n) {
@@ -1194,7 +1192,7 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       delta *= nominal_range;
     }
     subbands[i] = MAKE_UNIQUE<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b, M_b,
-                                           delta, nominal_range, i_samples, f_samples);
+                                           delta, nominal_range, i_samples);
   }
 }
 
@@ -2318,7 +2316,7 @@ void j2k_tile::write_packets(j2c_destination_base &outbuf) {
         this->length + static_cast<uint32_t>(6 * this->num_packets * this->is_use_SOP()));
     tp->header->SOT.write(outbuf);
     // write packets
-    for (size_t n = 0; n < this->num_packets; ++n) {
+    for (size_t n = 0; n < static_cast<size_t>(this->num_packets); ++n) {
       if (this->is_use_SOP()) {
         outbuf.put_word(_SOP);
         outbuf.put_word(0x0004);
@@ -2329,14 +2327,14 @@ void j2k_tile::write_packets(j2c_destination_base &outbuf) {
   }
 }
 
-void j2k_tile::decode(j2k_main_header &main_header) {
+void j2k_tile::decode() {
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
 
   for (uint16_t c = 0; c < num_components; c++) {
-    const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
-    const uint8_t NL             = this->tcomp[c].get_dwt_levels();
-    const uint8_t transformation = this->tcomp[c].get_transformation();
+    const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
+    const uint8_t NL       = this->tcomp[c].get_dwt_levels();
+    // const uint8_t transformation = this->tcomp[c].get_transformation();
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
@@ -2375,7 +2373,7 @@ void j2k_tile::decode(j2k_main_header &main_header) {
   }
 
   for (uint16_t c = 0; c < num_components; c++) {
-    const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
+    // const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
     const uint8_t NL             = this->tcomp[c].get_dwt_levels();
     const uint8_t transformation = this->tcomp[c].get_transformation();
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
@@ -2506,7 +2504,7 @@ void j2k_tile::find_gcd_of_precinct_size(element_siz &out) {
   out.y = PPy;
 }
 
-void j2k_tile::ycbcr_to_rgb(j2k_main_header &main_header) {
+void j2k_tile::ycbcr_to_rgb() {
   if (num_components < 3) {
     return;
   }
@@ -2643,7 +2641,7 @@ int j2k_tile::perform_dc_offset(j2k_main_header &hdr) {
   return done;
 }
 
-void j2k_tile::rgb_to_ycbcr(j2k_main_header &main_header) {
+void j2k_tile::rgb_to_ycbcr() {
   if (num_components < 3) {
     return;
   }
@@ -2663,7 +2661,7 @@ void j2k_tile::rgb_to_ycbcr(j2k_main_header &main_header) {
   }
 }
 
-uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
+uint8_t *j2k_tile::encode() {
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
 
@@ -2756,12 +2754,12 @@ uint8_t *j2k_tile::encode(j2k_main_header &main_header) {
 
   // Step 2: encode packets
   for (uint16_t c = 0; c < num_components; c++) {
-    const uint8_t ROIshift       = tcomp[c].get_ROIshift();
-    const uint8_t NL             = tcomp[c].get_dwt_levels();
-    const uint8_t transformation = tcomp[c].get_transformation();
-    element_siz top_left         = tcomp[c].get_pos0();
-    element_siz bottom_right     = tcomp[c].get_pos1();
-    j2k_resolution *cr           = tcomp[c].access_resolution(NL);
+    const uint8_t ROIshift = tcomp[c].get_ROIshift();
+    const uint8_t NL       = tcomp[c].get_dwt_levels();
+    // const uint8_t transformation = tcomp[c].get_transformation();
+    element_siz top_left     = tcomp[c].get_pos0();
+    element_siz bottom_right = tcomp[c].get_pos1();
+    j2k_resolution *cr       = tcomp[c].access_resolution(NL);
 
     auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr,
                                uint8_t ROIshift) {

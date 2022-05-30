@@ -31,20 +31,22 @@
 #include "coding_local.hpp"
 #include "EBCOTtables.hpp"
 
-void j2k_codeblock::update_sample(const uint8_t &symbol, const uint8_t &p, const uint16_t &j1,
-                                  const uint16_t &j2) const {
-  sample_buf[j2 + j1 * size.x] |= static_cast<int32_t>(symbol) << p;
+void j2k_codeblock::update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1,
+                                  const int16_t &j2) const {
+  sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * size.x] |= static_cast<int32_t>(symbol)
+                                                                                << p;
 }
 
-void j2k_codeblock::update_sign(const int8_t &val, const uint16_t &j1, const uint16_t &j2) const {
-  sample_buf[j2 + j1 * size.x] |= val << 31;
+void j2k_codeblock::update_sign(const int8_t &val, const int16_t &j1, const int16_t &j2) const {
+  sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * size.x] |= val << 31;
 }
 
-uint8_t j2k_codeblock::get_sign(const uint16_t &j1, const uint16_t &j2) const {
-  return ((uint32_t)(sample_buf[j2 + j1 * size.x] | 0x8000)) >> 31;
+uint8_t j2k_codeblock::get_sign(const int16_t &j1, const int16_t &j2) const {
+  return ((uint32_t)(sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * size.x] | 0x8000))
+         >> 31;
 }
 
-uint8_t j2k_codeblock::get_context_label_sig(const uint16_t &j1, const uint16_t &j2) const {
+uint8_t j2k_codeblock::get_context_label_sig(const int16_t &j1, const int16_t &j2) const {
   uint8_t idx = 0;
   // one line above left, center, right
   idx += get_state(Sigma, j1 - 1, j2 - 1);
@@ -63,24 +65,24 @@ uint8_t j2k_codeblock::get_context_label_sig(const uint16_t &j1, const uint16_t 
   }
   return sig_LUT[this->band][idx];
 }
-uint8_t j2k_codeblock::get_signLUT_index(const uint16_t &j1, const uint16_t &j2) const {
+uint8_t j2k_codeblock::get_signLUT_index(const int16_t &j1, const int16_t &j2) const {
   uint8_t idx = 0;
-  idx += get_state(Sigma, j1 - 1, j2);                       // top
-  idx += (j1 > 0) ? get_sign(j1 - 1, j2) << 4 : 0;           // top
-  idx += get_state(Sigma, j1, j2 - 1) << 2;                  // left
-  idx += (j2 > 0) ? get_sign(j1, j2 - 1) << 6 : 0;           // left
-  idx += get_state(Sigma, j1, j2 + 1) << 3;                  // right
-  idx += (j2 < size.x - 1) ? get_sign(j1, j2 + 1) << 7 : 0;  // right
-  idx += get_state(Sigma, j1 + 1, j2) << 1;                  // bottom
-  idx += (j1 < size.y - 1) ? get_sign(j1 + 1, j2) << 5 : 0;  // bottom
+  idx += get_state(Sigma, j1 - 1, j2);                                             // top
+  idx += (j1 > 0) ? get_sign(j1 - 1, j2) << 4 : 0;                                 // top
+  idx += get_state(Sigma, j1, j2 - 1) << 2;                                        // left
+  idx += (j2 > 0) ? get_sign(j1, j2 - 1) << 6 : 0;                                 // left
+  idx += get_state(Sigma, j1, j2 + 1) << 3;                                        // right
+  idx += (j2 < static_cast<int16_t>(size.x) - 1) ? get_sign(j1, j2 + 1) << 7 : 0;  // right
+  idx += get_state(Sigma, j1 + 1, j2) << 1;                                        // bottom
+  idx += (j1 < static_cast<int16_t>(size.y) - 1) ? get_sign(j1 + 1, j2) << 5 : 0;  // bottom
   return idx;
 }
 
-void decode_j2k_sign_raw(j2k_codeblock *block, mq_decoder &mq_dec, const uint16_t &j1, const uint16_t &j2) {
+void decode_j2k_sign_raw(j2k_codeblock *block, mq_decoder &mq_dec, const int16_t &j1, const int16_t &j2) {
   uint8_t symbol = mq_dec.get_raw_symbol();
-  block->update_sign(symbol, j1, j2);
+  block->update_sign(static_cast<const int8_t>(symbol), j1, j2);
 }
-void decode_j2k_sign(j2k_codeblock *block, mq_decoder &mq_dec, const uint16_t &j1, const uint16_t &j2) {
+void decode_j2k_sign(j2k_codeblock *block, mq_decoder &mq_dec, const int16_t &j1, const int16_t &j2) {
   uint8_t idx = block->get_signLUT_index(j1, j2);
   if ((block->Cmodes & CAUSAL) && j1 % 4 == 3) {
     idx &= 0xDD;
@@ -91,12 +93,12 @@ void decode_j2k_sign(j2k_codeblock *block, mq_decoder &mq_dec, const uint16_t &j
 }
 
 void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = block->size.y / 4;
+  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   int16_t j1, j2, j1_start = 0;
   uint8_t label_sig;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
         label_sig = block->get_context_label_sig(j1, j2);
         if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
@@ -117,8 +119,8 @@ void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder 
   }
 
   if (block->size.y % 4) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
         label_sig = block->get_context_label_sig(j1, j2);
         if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
           block->modify_state(decoded_bitplane_index, p, j1, j2);
@@ -138,12 +140,12 @@ void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder 
 }
 
 void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = block->size.y / 4;
+  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   int16_t j1, j2, j1_start = 0;
   uint8_t label_sig;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
         label_sig = block->get_context_label_sig(j1, j2);
         if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
@@ -164,8 +166,8 @@ void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
   }
 
   if (block->size.y % 4) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
         label_sig = block->get_context_label_sig(j1, j2);
         if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
           block->modify_state(decoded_bitplane_index, p, j1, j2);
@@ -185,11 +187,11 @@ void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
 }
 
 void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = block->size.y / 4;
+  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   int16_t j1, j2, j1_start = 0;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
         if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
           block->modify_state(decoded_bitplane_index, p, j1, j2);
@@ -203,8 +205,8 @@ void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &
   }
 
   if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
         if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
           block->modify_state(decoded_bitplane_index, p, j1, j2);
           symbol = mq_dec.get_raw_symbol();
@@ -217,12 +219,12 @@ void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &
 }
 
 void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = block->size.y / 4;
+  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   int16_t j1, j2, j1_start = 0;
   uint8_t label_sig, label_mag = 0;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
         if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
           block->modify_state(decoded_bitplane_index, p, j1, j2);
@@ -244,8 +246,8 @@ void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_d
   }
 
   if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
         if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
           block->modify_state(decoded_bitplane_index, p, j1, j2);
           label_sig = block->get_context_label_sig(j1, j2);
@@ -266,7 +268,7 @@ void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_d
 }
 
 void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = block->size.y / 4;
+  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   int16_t j1, j2, j1_start = 0;
   uint8_t label_sig;
   const uint8_t label_run = 17;
@@ -275,22 +277,22 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
   int8_t k;
   int8_t r = 0;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
       k = 4;
       while (k > 0) {
         j1 = j1_start + 4 - k;
         r  = -1;
-        if (j1 % 4 == 0 && j1 <= block->size.y - 4) {
+        if (j1 % 4 == 0 && j1 <= static_cast<int16_t>(block->size.y) - 4) {
           label_sig = 0;
           for (int i = 0; i < 4; i++) {
-            label_sig |= block->get_context_label_sig(j1 + i, j2);
+            label_sig |= block->get_context_label_sig(static_cast<const int16_t>(j1 + i), j2);
           }
           if (label_sig == 0) {
             symbol = mq_dec.decode(label_run);
             if (symbol == 0) {
               r = 4;
             } else {
-              r = mq_dec.decode(label_uni);
+              r = static_cast<int8_t>(mq_dec.decode(label_uni));
               r <<= 1;
               r += mq_dec.decode(label_uni);
               block->update_sample(1, p, j1 + r, j2);
@@ -310,7 +312,8 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
             symbol    = mq_dec.decode(label_sig);
             block->update_sample(symbol, p, j1, j2);
           }
-          if (block->sample_buf[j2 + j1 * block->size.x] == static_cast<uint32_t>(1) << p) {
+          if (block->sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * block->size.x]
+              == static_cast<int32_t>(1) << p) {
             block->modify_state(sigma, 1, j1, j2);
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
@@ -322,8 +325,8 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
   }
 
   if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
         if (block->get_state(Sigma, j1, j2) == 0 && block->get_state(Pi_, j1, j2) == 0) {
           block->modify_state(decoded_bitplane_index, p, j1, j2);
           label_sig = block->get_context_label_sig(j1, j2);
@@ -373,7 +376,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     }
     if (current_segment_pass == 0) {
       // segment_start = z;
-      current_segment_pass = max_passes;
+      current_segment_pass = (uint8_t)max_passes;
 
       // BYPASS mode
       if (bypass_threshold > 0) {
@@ -472,9 +475,9 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   float fscale = block->stepsize;
   fscale *= (1 << FRACBITS);
   if (M_b <= 31) {
-    fscale /= (1 << (31 - M_b));
+    fscale /= (static_cast<float>(1 << (31 - M_b)));
   } else {
-    fscale *= (1 << (M_b - 31));
+    fscale *= (static_cast<float>(1 << (M_b - 31)));
   }
   constexpr int32_t downshift = 15;
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
@@ -482,12 +485,12 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 
   if (block->transformation) {
     // reversible path
-    for (uint16_t y = 0; y < block->size.y; y++) {
-      for (uint16_t x = 0; x < block->size.x; x++) {
-        const uint32_t n = x + y * block->band_stride;
-        val              = &block->sample_buf[x + y * block->size.x];
-        dst              = block->i_samples + n;
-        sign             = *val & INT32_MIN;
+    for (int16_t y = 0; y < static_cast<int16_t>(block->size.y); y++) {
+      for (int16_t x = 0; x < static_cast<int16_t>(block->size.x); x++) {
+        const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
+        val  = &block->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->size.x];
+        dst  = block->i_samples + n;
+        sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
@@ -514,19 +517,19 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
         }
 
         assert(pLSB >= 0);  // assure downshift is not negative
-        QF15 = *val >> pLSB;
+        QF15 = static_cast<int16_t>(*val >> pLSB);
         *dst = QF15;
       }
     }
   } else {
     // irreversible path
-    for (uint16_t y = 0; y < block->size.y; y++) {
-      for (uint16_t x = 0; x < block->size.x; x++) {
-        const uint32_t n = x + y * block->band_stride;
-        val              = &block->sample_buf[x + y * block->size.x];
-        dst              = block->i_samples + n;
-        sign             = *val & INT32_MIN;  // extract sign bit
-        *val &= INT32_MAX;                    // delete sign bit temporally
+    for (int16_t y = 0; y < static_cast<int16_t>(block->size.y); y++) {
+      for (int16_t x = 0; x < static_cast<int16_t>(block->size.x); x++) {
+        const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
+        val  = &block->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->size.x];
+        dst  = block->i_samples + n;
+        sign = *val & INT32_MIN;  // extract sign bit
+        *val &= INT32_MAX;        // delete sign bit temporally
         // detect background region and upshift it
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
           *val <<= ROIshift;

@@ -150,8 +150,8 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   //#pragma omp parallel for
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     tileSet[i].create_tile_buf(main_header);
-    tileSet[i].decode(main_header);
-    tileSet[i].ycbcr_to_rgb(main_header);
+    tileSet[i].decode();
+    tileSet[i].ycbcr_to_rgb();
     tileSet[i].finalize(main_header);
   }
 

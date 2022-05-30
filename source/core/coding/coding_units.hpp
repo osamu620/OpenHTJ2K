@@ -112,17 +112,17 @@ class j2k_codeblock : public j2k_region {
   // DEBUG FUNCTION, SOON BE DELETED
   [[maybe_unused]] [[nodiscard]] uint8_t get_orientation() const { return band; }
 
-  [[nodiscard]] uint8_t get_context_label_sig(const uint16_t &j1, const uint16_t &j2) const;
-  [[nodiscard]] uint8_t get_signLUT_index(const uint16_t &j1, const uint16_t &j2) const;
+  [[nodiscard]] uint8_t get_context_label_sig(const int16_t &j1, const int16_t &j2) const;
+  [[nodiscard]] uint8_t get_signLUT_index(const int16_t &j1, const int16_t &j2) const;
   [[nodiscard]] uint8_t get_Mb() const;
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   void create_compressed_buffer(buf_chain *tile_buf, uint16_t buf_limit, const uint16_t &layer);
-  void update_sample(const uint8_t &symbol, const uint8_t &p, const uint16_t &j1, const uint16_t &j2) const;
-  void update_sign(const int8_t &val, const uint16_t &j1, const uint16_t &j2) const;
-  [[nodiscard]] uint8_t get_sign(const uint16_t &j1, const uint16_t &j2) const;
+  void update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1, const int16_t &j2) const;
+  void update_sign(const int8_t &val, const int16_t &j1, const int16_t &j2) const;
+  [[nodiscard]] uint8_t get_sign(const int16_t &j1, const int16_t &j2) const;
   void set_MagSgn_and_sigma(uint32_t &or_val);
-  void calc_mbr(uint8_t &mbr, uint16_t i, uint16_t j, uint32_t mbr_info, uint8_t causal_cond) const;
+  void calc_mbr(uint8_t &mbr, int16_t i, int16_t j, uint8_t causal_cond) const;
 };
 
 /********************************************************************************
@@ -143,7 +143,7 @@ class j2k_subband : public j2k_region {
   // j2k_subband();
   j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation, uint8_t R_b,
               uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta, float nominal_range,
-              sprec_t *ibuf, float *fbuf);
+              sprec_t *ibuf);
   ~j2k_subband();
   void quantize();
 };
@@ -450,9 +450,9 @@ class j2k_tile : public j2k_tile_base {
   // create buffer to store compressed data for decoding
   void create_tile_buf(j2k_main_header &main_header);
   // decoding (does block decoding and IDWT) function for a tile
-  void decode(j2k_main_header &main_header);
+  void decode();
   // inverse color transform
-  void ycbcr_to_rgb(j2k_main_header &main_header);
+  void ycbcr_to_rgb();
   // inverse DC offset and clipping
   void finalize(j2k_main_header &main_header);
 
@@ -462,9 +462,9 @@ class j2k_tile : public j2k_tile_base {
   // DC offsetting
   int perform_dc_offset(j2k_main_header &main_header);
   // forward color transform
-  void rgb_to_ycbcr(j2k_main_header &main_header);
+  void rgb_to_ycbcr();
   // encoding (does block encoding and FDWT) function for a tile
-  uint8_t *encode(j2k_main_header &numlayers_local);
+  uint8_t *encode();
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination

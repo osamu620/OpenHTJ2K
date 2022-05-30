@@ -41,7 +41,7 @@ class mq_decoder {
   // position in byte-stream
   uint32_t L;
   // start position in byte-stream
-  uint32_t L_start;
+  [[maybe_unused]] uint32_t L_start;
   // position of current codeword segment boundary
   uint32_t Lmax;
   // Byte-stream buffer

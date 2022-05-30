@@ -134,7 +134,7 @@ class state_VLC_enc {
   }
   uint8_t importVLCBit();
 #else
-      : pos(Lcup - 2 - Pcup), ctreg(0), Creg(0), bits(0), buf(Dcup + Pcup) {
+      : pos(static_cast<int32_t>(Lcup - 2 - Pcup)), ctreg(0), Creg(0), bits(0), buf(Dcup + Pcup) {
     load_bytes();
     ctreg -= 4;
     Creg >>= 4;
@@ -193,7 +193,7 @@ class MR_dec {
         bits(0),
         last(0xFF),
         tmp(0),
-        pos((Lref == 0) ? -1 : magref_length - 1),
+        pos((Lref == 0) ? -1 : static_cast<int32_t>(magref_length - 1)),
         Dref((Lref == 0) ? nullptr : HT_magref_segment) {}
   uint8_t importMagRefBit();
 };

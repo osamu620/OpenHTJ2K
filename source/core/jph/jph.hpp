@@ -101,12 +101,12 @@ class colour_specification_box : public box_base {
   uint8_t PREC;
   uint8_t APPROX;
   uint32_t EnumCS;
-  uint8_t PROFILE;
-  uint16_t COLPRIMS;
-  uint16_t TRANSFC;
-  uint16_t MATCOEFFS;
-  bool VIDFRNG;
-  uint8_t VIDFRNG_RSVD;
+  [[maybe_unused]] uint8_t PROFILE;
+  [[maybe_unused]] uint16_t COLPRIMS;
+  [[maybe_unused]] uint16_t TRANSFC;
+  [[maybe_unused]] uint16_t MATCOEFFS;
+  [[maybe_unused]] bool VIDFRNG;
+  [[maybe_unused]] uint8_t VIDFRNG_RSVD;
 
  public:
   colour_specification_box(j2k_main_header &hdr, bool isSRGB);
