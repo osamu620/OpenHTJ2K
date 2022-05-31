@@ -51,18 +51,21 @@ void j2k_codeblock::calc_mbr(uint8_t &mbr, const int16_t i, const int16_t j,
   mbr |= get_state(Sigma, i - 1, j + 1);
   mbr |= get_state(Sigma, i, j - 1);
   mbr |= get_state(Sigma, i, j + 1);
-  mbr |= get_state(Sigma, i + 1, j - 1) * causal_cond;
-  mbr |= get_state(Sigma, i + 1, j) * causal_cond;
-  mbr |= get_state(Sigma, i + 1, j + 1) * causal_cond;
+  mbr |= static_cast<uint8_t>(get_state(Sigma, i + 1, j - 1) * causal_cond);
+  mbr |= static_cast<uint8_t>(get_state(Sigma, i + 1, j) * causal_cond);
+  mbr |= static_cast<uint8_t>(get_state(Sigma, i + 1, j + 1) * causal_cond);
 
-  mbr |= get_state(Refinement_value, i - 1, j - 1) * get_state(Scan, i - 1, j - 1);
-  mbr |= get_state(Refinement_value, i - 1, j) * get_state(Scan, i - 1, j);
-  mbr |= get_state(Refinement_value, i - 1, j + 1) * get_state(Scan, i - 1, j + 1);
-  mbr |= get_state(Refinement_value, i, j - 1) * get_state(Scan, i, j - 1);
-  mbr |= get_state(Refinement_value, i, j + 1) * get_state(Scan, i, j + 1);
-  mbr |= get_state(Refinement_value, i + 1, j - 1) * get_state(Scan, i + 1, j - 1) * causal_cond;
-  mbr |= get_state(Refinement_value, i + 1, j) * get_state(Scan, i + 1, j) * causal_cond;
-  mbr |= get_state(Refinement_value, i + 1, j + 1) * get_state(Scan, i + 1, j + 1) * causal_cond;
+  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i - 1, j - 1) * get_state(Scan, i - 1, j - 1));
+  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i - 1, j) * get_state(Scan, i - 1, j));
+  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i - 1, j + 1) * get_state(Scan, i - 1, j + 1));
+  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i, j - 1) * get_state(Scan, i, j - 1));
+  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i, j + 1) * get_state(Scan, i, j + 1));
+  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i + 1, j - 1) * get_state(Scan, i + 1, j - 1)
+                              * causal_cond);
+  mbr |=
+      static_cast<uint8_t>(get_state(Refinement_value, i + 1, j) * get_state(Scan, i + 1, j) * causal_cond);
+  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i + 1, j + 1) * get_state(Scan, i + 1, j + 1)
+                              * causal_cond);
 }
 
 /********************************************************************************
@@ -82,7 +85,7 @@ void state_MS_dec::loadByte() {
 }
 void state_MS_dec::close(int32_t num_bits) {
   Creg >>= num_bits;
-  ctreg -= num_bits;
+  ctreg -= static_cast<uint8_t>(num_bits);
   while (ctreg < 32) {
     loadByte();
   }
@@ -290,10 +293,10 @@ void state_VLC_enc::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], u
   // emb_k[first_or_second] = value & 0x0F;
   // value >>= 4;
   // emb_1[first_or_second] = value & 0x0F;
-  uint8_t len            = (value & 0x000F) >> 1;
-  rho[first_or_second]   = (value & 0x00F0) >> 4;
-  emb_k[first_or_second] = (value & 0x0F00) >> 8;
-  emb_1[first_or_second] = (value & 0xF000) >> 12;
+  uint8_t len            = static_cast<uint8_t>((value & 0x000F) >> 1);
+  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
 
 #ifndef ADVANCED
   for (int i = 0; i < len; i++) {
@@ -329,7 +332,7 @@ uint8_t state_VLC_enc::decodeUSuffix(const uint8_t &u_pfx) {
   }
   for (int i = 1; i < 5; i++) {
     bit = getbitfunc;
-    val += (bit << i);
+    val += static_cast<uint8_t>(bit << i);
   }
   return val;
 }
@@ -341,7 +344,7 @@ uint8_t state_VLC_enc::decodeUExtension(const uint8_t &u_sfx) {
   val = getbitfunc;
   for (int i = 1; i < 4; i++) {
     bit = getbitfunc;
-    val += (bit << i);
+    val += static_cast<uint8_t>(bit << i);
   }
   return val;
 }
@@ -408,38 +411,15 @@ auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC, const
   VLC.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
 };
 
-inline void get_sample_position_from_quad(uint16_t q, uint16_t QW, uint16_t Wblk, uint16_t Hblk,
-                                          uint16_t &sample_0, uint16_t &sample_1, uint16_t &sample_2,
-                                          uint16_t &sample_3) {
-  uint16_t qx, qy;
-  qx       = q % QW;
-  qy       = q / QW;
-  sample_0 = 2 * qx + qy * Wblk;
-  sample_1 = 2 * qx + (qy + 1) * Wblk;
-  if (sample_0 % Hblk != Hblk) {
-    sample_3 = sample_1 + 1;
-  } else {
-    sample_1 = 0xFFFF;
-    sample_3 = 0xFFFF;
-  }
-
-  if (sample_0 % Wblk != Wblk) {
-    sample_2 = sample_0 + 1;
-  } else {
-    sample_2 = 0xFFFF;
-    sample_3 = 0xFFFF;
-  }
-}
-
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &MS,
                        state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC) {
-  const uint16_t QW = ceil_int(static_cast<const uint16_t>(block->size.x), 2);
-  const uint16_t QH = ceil_int(static_cast<const uint16_t>(block->size.y), 2);
+  const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
+  const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
   // buffers shall be zeroed.
-  std::unique_ptr<uint8_t[]> sigma_n = MAKE_UNIQUE<uint8_t[]>(4 * QW * QH);
-  std::unique_ptr<uint8_t[]> E       = MAKE_UNIQUE<uint8_t[]>(4 * QW * QH);
-  std::unique_ptr<uint32_t[]> mu_n   = MAKE_UNIQUE<uint32_t[]>(4 * QW * QH);
+  std::unique_ptr<uint8_t[]> sigma_n = MAKE_UNIQUE<uint8_t[]>(4U * QW * QH);
+  std::unique_ptr<uint8_t[]> E       = MAKE_UNIQUE<uint8_t[]>(4U * QW * QH);
+  std::unique_ptr<uint32_t[]> mu_n   = MAKE_UNIQUE<uint32_t[]>(4U * QW * QH);
   memset(sigma_n.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
   memset(E.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
   memset(mu_n.get(), 0, sizeof(uint32_t) * 4 * QW * QH);
@@ -484,10 +464,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
     }
     // calculate context for the next quad
-    context = sigma_n[4 * q1];            // f
-    context |= sigma_n[4 * q1 + 1];       // sf
-    context += sigma_n[4 * q1 + 2] << 1;  // w << 1
-    context += sigma_n[4 * q1 + 3] << 2;  // sw << 2
+    context = sigma_n[4 * q1];                                   // f
+    context |= sigma_n[4 * q1 + 1];                              // sf
+    context += static_cast<uint16_t>(sigma_n[4 * q1 + 2] << 1);  // w << 1
+    context += static_cast<uint16_t>(sigma_n[4 * q1 + 3] << 2);  // sw << 2
 #else
     // calculate context for the current quad
     if (q1 > 0) {
@@ -514,10 +494,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
     }
     // calculate context for the next quad
-    context = sigma_n[4 * q2];            // f
-    context |= sigma_n[4 * q2 + 1];       // sf
-    context += sigma_n[4 * q2 + 2] << 1;  // w << 1
-    context += sigma_n[4 * q2 + 3] << 2;  // sw << 2
+    context = sigma_n[4 * q2];                                   // f
+    context |= sigma_n[4 * q2 + 1];                              // sf
+    context += static_cast<uint16_t>(sigma_n[4 * q2 + 2] << 1);  // w << 1
+    context += static_cast<uint16_t>(sigma_n[4 * q2 + 3] << 2);  // sw << 2
 #else
     // calculate context for the current quad
     if (q2 > 0) {
@@ -685,14 +665,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       q2 = q + 1;
 
       // calculate context for the current quad
-      context1 = sigma_n[4 * (q1 - QW) + 1];          // n
-      context1 += (sigma_n[4 * (q1 - QW) + 3] << 2);  // ne
+      context1 = sigma_n[4 * (q1 - QW) + 1];                               // n
+      context1 += static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 3] << 2);  // ne
       if (q1 % QW) {
-        context1 |= sigma_n[4 * (q1 - QW) - 1];                        // nw
-        context1 += (sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1;  // (sw | w) << 1
+        context1 |= sigma_n[4 * (q1 - QW) - 1];  // nw
+        context1 +=
+            static_cast<uint16_t>((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1);  // (sw | w) << 1
       }
-      if ((q1 + 1) % QW) {
-        context1 |= sigma_n[4 * (q1 - QW) + 5] << 2;  // nf << 2
+      if ((q1 + 1U) % QW) {
+        context1 |= static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 5] << 2);  // nf << 2
       }
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
       if (u_off[FIRST_QUAD] == 0) {
@@ -703,14 +684,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       }
 
       // calculate context for the current quad
-      context2 = sigma_n[4 * (q2 - QW) + 1];          // n
-      context2 += (sigma_n[4 * (q2 - QW) + 3] << 2);  // ne
+      context2 = sigma_n[4 * (q2 - QW) + 1];                               // n
+      context2 += static_cast<uint16_t>(sigma_n[4 * (q2 - QW) + 3] << 2);  // ne
       if (q2 % QW) {
-        context2 |= sigma_n[4 * (q2 - QW) - 1];                        // nw
-        context2 += (sigma_n[4 * q2 - 1] | sigma_n[4 * q2 - 2]) << 1;  // (sw | w) << 1
+        context2 |= sigma_n[4 * (q2 - QW) - 1];  // nw
+        context2 +=
+            static_cast<uint16_t>((sigma_n[4 * q2 - 1] | sigma_n[4 * q2 - 2]) << 1);  // (sw | w) << 1
       }
       if ((q2 + 1) % QW) {
-        context2 |= sigma_n[4 * (q2 - QW) + 5] << 2;  // nf << 2
+        context2 |= static_cast<uint16_t>(sigma_n[4 * (q2 - QW) + 5] << 2);  // nf << 2
       }
       decodeSigEMB(MEL_decoder, VLC, context2, u_off, rho, emb_k, emb_1, SECOND_QUAD, dec_table1);
       if (u_off[SECOND_QUAD] == 0) {
@@ -787,11 +769,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
           std::max({E_nw[SECOND_QUAD], E_n[SECOND_QUAD], E_ne[SECOND_QUAD], E_nf[SECOND_QUAD]});
 
       kappa[FIRST_QUAD]  = (1 > gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1))
-                               ? 1
-                               : gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1);
+                               ? 1U
+                               : static_cast<uint8_t>(gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1));
       kappa[SECOND_QUAD] = (1 > gamma[SECOND_QUAD] * (max_E[SECOND_QUAD] - 1))
-                               ? 1
-                               : gamma[SECOND_QUAD] * (max_E[SECOND_QUAD] - 1);
+                               ? 1U
+                               : static_cast<uint8_t>(gamma[SECOND_QUAD] * (max_E[SECOND_QUAD] - 1));
       U[FIRST_QUAD]      = kappa[FIRST_QUAD] + u[FIRST_QUAD];
       U[SECOND_QUAD]     = kappa[SECOND_QUAD] + u[SECOND_QUAD];
 
@@ -838,14 +820,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     if (QW % 2 == 1) {
       q1 = q;
       // calculate context for the current quad
-      context1 = sigma_n[4 * (q1 - QW) + 1];          // n
-      context1 += (sigma_n[4 * (q1 - QW) + 3] << 2);  // ne
+      context1 = sigma_n[4 * (q1 - QW) + 1];                               // n
+      context1 += static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 3] << 2);  // ne
       if (q1 % QW) {
-        context1 |= sigma_n[4 * (q1 - QW) - 1];                        // nw
-        context1 += (sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1;  // (sw | w) << 1
+        context1 |= sigma_n[4 * (q1 - QW) - 1];  // nw
+        context1 +=
+            static_cast<uint16_t>((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1);  // (sw | w) << 1
       }
       if ((q1 + 1) % QW) {
-        context1 |= sigma_n[4 * (q1 - QW) + 5] << 2;  // nf << 2
+        context1 |= static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 5] << 2);  // nf << 2
       }
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
       if (u_off[FIRST_QUAD] == 0) {
@@ -886,8 +869,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       max_E[FIRST_QUAD] = std::max({E_nw[FIRST_QUAD], E_n[FIRST_QUAD], E_ne[FIRST_QUAD], E_nf[FIRST_QUAD]});
 
       kappa[FIRST_QUAD] = (1 > gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1))
-                              ? 1
-                              : gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1);
+                              ? 1U
+                              : static_cast<uint8_t>(gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1));
 
       U[FIRST_QUAD] = kappa[FIRST_QUAD] + u[FIRST_QUAD];
 
@@ -917,33 +900,38 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   }
 
   // convert mu_n and sigma_n into raster-scan by putting buffers defined in codeblock class
-  uint32_t *p_mu             = mu_n.get();
-  uint8_t *p_sigma           = sigma_n.get();
-  const uint16_t is_border_x = block->size.x % 2;
-  const uint16_t is_border_y = block->size.y % 2;
-  auto set_sample            = [block](const uint32_t &symbol, const uint16_t &j1, const uint16_t &j2) {
-    block->sample_buf[j2 + j1 * block->size.x] = static_cast<int32_t>(symbol);
+  uint32_t *p_mu            = mu_n.get();
+  uint8_t *p_sigma          = sigma_n.get();
+  const int16_t is_border_x = block->size.x % 2;
+  const int16_t is_border_y = block->size.y % 2;
+  auto set_sample           = [block](const uint32_t &symbol, const int16_t &j1, const int16_t &j2) {
+    block->sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * block->size.x] =
+        static_cast<int32_t>(symbol);
   };
-  for (uint16_t y = 0; y < QH; y++) {
-    for (uint16_t x = 0; x < QW; x++) {
-      set_sample(*p_mu, 2 * y, 2 * x);
+  for (int16_t y = 0; y < QH; y++) {
+    for (int16_t x = 0; x < QW; x++) {
+      const int16_t y2 = static_cast<int16_t>(y << 1);
+      const int16_t x2 = static_cast<int16_t>(x << 1);
+      const auto y2p1  = static_cast<int16_t>(y2 + 1);
+      const auto x2p1  = static_cast<int16_t>(x2 + 1);
+      set_sample(*p_mu, y2, x2);
       block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x));
       p_mu++;
       p_sigma++;
       if (y != QH - 1 || is_border_y == 0) {
-        set_sample(*p_mu, 2 * y + 1, 2 * x);
+        set_sample(*p_mu, y2p1, x2);
         block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1), static_cast<int16_t>(2 * x));
       }
       p_mu++;
       p_sigma++;
       if (x != QW - 1 || is_border_x == 0) {
-        set_sample(*p_mu, 2 * y, 2 * x + 1);
+        set_sample(*p_mu, y2, x2p1);
         block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x + 1));
       }
       p_mu++;
       p_sigma++;
       if ((y != QH - 1 || is_border_y == 0) && (x != QW - 1 || is_border_x == 0)) {
-        set_sample(*p_mu, 2 * y + 1, 2 * x + 1);
+        set_sample(*p_mu, y2p1, x2p1);
         block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1),
                             static_cast<int16_t>(2 * x + 1));
       }
@@ -1004,8 +992,8 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
 void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
                        const uint8_t &pLSB) {
   SP_dec SigProp(HT_magref_segment, magref_length);
-  const uint16_t num_v_stripe = static_cast<const uint16_t>(block->size.y / 4);
-  const uint16_t num_h_stripe = static_cast<const uint16_t>(block->size.x / 4);
+  const uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
+  const uint16_t num_h_stripe = static_cast<uint16_t>(block->size.x / 4);
   uint16_t i_start            = 0, j_start;
   uint16_t width              = 4;
   uint16_t width_last;
@@ -1040,9 +1028,9 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
 void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
                       const uint8_t &pLSB) {
   MR_dec MagRef(HT_magref_segment, magref_length);
-  const uint16_t blk_height   = static_cast<const uint16_t>(block->size.y);
-  const uint16_t blk_width    = static_cast<const uint16_t>(block->size.x);
-  const uint16_t num_v_stripe = static_cast<const uint16_t>(block->size.y / 4);
+  const uint16_t blk_height   = static_cast<uint16_t>(block->size.y);
+  const uint16_t blk_width    = static_cast<uint16_t>(block->size.x);
+  const uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   int16_t i_start             = 0;
   int16_t height              = 4;
   int32_t *sp;
@@ -1139,7 +1127,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       return false;
     }
     // Suffix length (=MEL + VLC) of HT Cleanup pass
-    const uint32_t Scup = static_cast<const uint32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
+    const uint32_t Scup = static_cast<uint32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
     if (Scup < 2 || Scup > Lcup || Scup > 4079) {
       printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
       return false;
@@ -1189,9 +1177,9 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     }
     constexpr int32_t downshift = 15;
     fscale *= (float)(1 << 16) * (float)(1 << downshift);
-    const auto scale   = (const int32_t)(fscale + 0.5);
-    const uint16_t yyy = static_cast<const uint16_t>(block->size.y);
-    const uint16_t xxx = static_cast<const uint16_t>(block->size.x);
+    const auto scale   = (int32_t)(fscale + 0.5);
+    const uint16_t yyy = static_cast<uint16_t>(block->size.y);
+    const uint16_t xxx = static_cast<uint16_t>(block->size.x);
     if (block->transformation) {
 // reversible path
 #ifdef __INTEL_COMPILER

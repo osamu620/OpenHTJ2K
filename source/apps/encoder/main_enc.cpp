@@ -150,7 +150,7 @@ int main(int argc, char *argv[]) {
   }
   uint8_t color_space = args.jph_color_space;
 
-  size_t total_size;
+  size_t total_size      = 0;
   int32_t num_iterations = args.num_iteration;
   // memory buffer for output codestream/file
   std::vector<uint8_t> outbuf;

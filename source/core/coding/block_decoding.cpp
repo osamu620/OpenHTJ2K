@@ -42,23 +42,24 @@ void j2k_codeblock::update_sign(const int8_t &val, const int16_t &j1, const int1
 }
 
 uint8_t j2k_codeblock::get_sign(const int16_t &j1, const int16_t &j2) const {
-  return ((uint32_t)(sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * size.x] | 0x8000))
-         >> 31;
+  return static_cast<uint8_t>(
+      ((uint32_t)(sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * size.x] | 0x8000))
+      >> 31);
 }
 
 uint8_t j2k_codeblock::get_context_label_sig(const int16_t &j1, const int16_t &j2) const {
   uint8_t idx = 0;
   // one line above left, center, right
   idx += get_state(Sigma, j1 - 1, j2 - 1);
-  idx += get_state(Sigma, j1 - 1, j2) << 4;
-  idx += get_state(Sigma, j1 - 1, j2 + 1) << 1;
+  idx += static_cast<uint8_t>(get_state(Sigma, j1 - 1, j2) << 4);
+  idx += static_cast<uint8_t>(get_state(Sigma, j1 - 1, j2 + 1) << 1);
   // current line left, right
-  idx += get_state(Sigma, j1, j2 - 1) << 6;
-  idx += get_state(Sigma, j1, j2 + 1) << 7;
+  idx += static_cast<uint8_t>(get_state(Sigma, j1, j2 - 1) << 6);
+  idx += static_cast<uint8_t>(get_state(Sigma, j1, j2 + 1) << 7);
   // one line below left, center, right
-  idx += get_state(Sigma, j1 + 1, j2 - 1) << 2;
-  idx += get_state(Sigma, j1 + 1, j2) << 5;
-  idx += get_state(Sigma, j1 + 1, j2 + 1) << 3;
+  idx += static_cast<uint8_t>(get_state(Sigma, j1 + 1, j2 - 1) << 2);
+  idx += static_cast<uint8_t>(get_state(Sigma, j1 + 1, j2) << 5);
+  idx += static_cast<uint8_t>(get_state(Sigma, j1 + 1, j2 + 1) << 3);
 
   if ((this->Cmodes & CAUSAL) && j1 % 4 == 3) {
     idx &= 0xD3;
@@ -67,20 +68,22 @@ uint8_t j2k_codeblock::get_context_label_sig(const int16_t &j1, const int16_t &j
 }
 uint8_t j2k_codeblock::get_signLUT_index(const int16_t &j1, const int16_t &j2) const {
   uint8_t idx = 0;
-  idx += get_state(Sigma, j1 - 1, j2);                                             // top
-  idx += (j1 > 0) ? get_sign(j1 - 1, j2) << 4 : 0;                                 // top
-  idx += get_state(Sigma, j1, j2 - 1) << 2;                                        // left
-  idx += (j2 > 0) ? get_sign(j1, j2 - 1) << 6 : 0;                                 // left
-  idx += get_state(Sigma, j1, j2 + 1) << 3;                                        // right
-  idx += (j2 < static_cast<int16_t>(size.x) - 1) ? get_sign(j1, j2 + 1) << 7 : 0;  // right
-  idx += get_state(Sigma, j1 + 1, j2) << 1;                                        // bottom
-  idx += (j1 < static_cast<int16_t>(size.y) - 1) ? get_sign(j1 + 1, j2) << 5 : 0;  // bottom
+  idx += get_state(Sigma, j1 - 1, j2);                                                          // top
+  idx += (j1 > 0) ? static_cast<uint8_t>(get_sign(j1 - 1, j2) << 4) : static_cast<uint8_t>(0);  // top
+  idx += static_cast<uint8_t>(get_state(Sigma, j1, j2 - 1) << 2);                               // left
+  idx += (j2 > 0) ? static_cast<uint8_t>(get_sign(j1, j2 - 1) << 6) : static_cast<uint8_t>(0);  // left
+  idx += static_cast<uint8_t>(get_state(Sigma, j1, j2 + 1) << 3);                               // right
+  idx += (j2 < static_cast<int16_t>(size.x) - 1) ? static_cast<uint8_t>(get_sign(j1, j2 + 1) << 7)
+                                                 : static_cast<uint8_t>(0);  // right
+  idx += static_cast<uint8_t>(get_state(Sigma, j1 + 1, j2) << 1);            // bottom
+  idx += (j1 < static_cast<int16_t>(size.y) - 1) ? static_cast<uint8_t>(get_sign(j1 + 1, j2) << 5)
+                                                 : static_cast<uint8_t>(0);  // bottom
   return idx;
 }
 
 void decode_j2k_sign_raw(j2k_codeblock *block, mq_decoder &mq_dec, const int16_t &j1, const int16_t &j2) {
   uint8_t symbol = mq_dec.get_raw_symbol();
-  block->update_sign(static_cast<const int8_t>(symbol), j1, j2);
+  block->update_sign(static_cast<int8_t>(symbol), j1, j2);
 }
 void decode_j2k_sign(j2k_codeblock *block, mq_decoder &mq_dec, const int16_t &j1, const int16_t &j2) {
   uint8_t idx = block->get_signLUT_index(j1, j2);
@@ -280,12 +283,12 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
     for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
       k = 4;
       while (k > 0) {
-        j1 = j1_start + 4 - k;
+        j1 = j1_start + static_cast<int8_t>(4 - k);
         r  = -1;
         if (j1 % 4 == 0 && j1 <= static_cast<int16_t>(block->size.y) - 4) {
           label_sig = 0;
           for (int i = 0; i < 4; i++) {
-            label_sig |= block->get_context_label_sig(static_cast<const int16_t>(j1 + i), j2);
+            label_sig |= block->get_context_label_sig(static_cast<int16_t>(j1 + i), j2);
           }
           if (label_sig == 0) {
             symbol = mq_dec.decode(label_run);
@@ -294,13 +297,13 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
             } else {
               r = static_cast<int8_t>(mq_dec.decode(label_uni));
               r <<= 1;
-              r += mq_dec.decode(label_uni);
-              block->update_sample(1, p, j1 + r, j2);
+              r += static_cast<int8_t>(mq_dec.decode(label_uni));
+              block->update_sample(1, p, j1 + static_cast<int16_t>(r), j2);
             }
             k -= r;
           }
           if (k != 0) {
-            j1 = j1_start + 4 - k;
+            j1 = j1_start + static_cast<int16_t>(4 - k);
           }
         }
         if (block->get_state(Sigma, j1, j2) == 0 && block->get_state(Pi_, j1, j2) == 0) {
@@ -481,7 +484,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   }
   constexpr int32_t downshift = 15;
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
-  const auto scale = (const int32_t)(fscale + 0.5);
+  const auto scale = (int32_t)(fscale + 0.5);
 
   if (block->transformation) {
     // reversible path

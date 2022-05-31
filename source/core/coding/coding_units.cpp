@@ -203,7 +203,7 @@ void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsi
       return;
     }
   }
-  this->compressed_data = MAKE_UNIQUE<uint8_t[]>(bufsize + Lref * (refsegment));
+  this->compressed_data = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(bufsize + Lref * (refsegment)));
   memcpy(this->compressed_data.get(), buf, bufsize);
   this->current_address = this->compressed_data.get();
 }
@@ -494,7 +494,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           segment_bytes = packet_header->get_N_bits(bits_to_read);
           if (segment_bytes) {
             if (block->Cmodes & HT_MIXED) {
-              block->Cmodes &= ~(HT_PHLD | HT);
+              block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT));
             } else {
               printf("ERROR: Length information for a HT-codeblock is invalid\n");
               throw std::exception();
@@ -517,15 +517,15 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                 throw std::exception();
               }
               next_segment_passes = 2;
-              block->Cmodes &= ~(HT_PHLD);
+              block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD));
             } else if (block->Lblock > 3 && segment_bytes > 1
                        && (segment_bytes >> (bits_to_read - 1)) == 0) {
               // Must be the first HT Cleanup pass, since length MSB is 0
               next_segment_passes = 2;
-              block->Cmodes &= ~(HT_PHLD);
+              block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD));
             } else {
               // Must have an original (non-HT) block coding pass
-              block->Cmodes &= ~(HT_PHLD | HT);
+              block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT));
               segment_passes = new_passes;
               while (pass_bound <= segment_passes) {
                 bits_to_read++;
@@ -553,7 +553,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
               }
               if (segment_bytes) {
                 if (block->Cmodes & HT_MIXED) {
-                  block->Cmodes &= ~(HT_PHLD | HT);
+                  block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT));
                 } else {
                   printf(
                       "ERROR: Length information for a HT-codeblock is "
@@ -634,7 +634,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         segment_bytes = packet_header->get_N_bits(bits_to_read);
       }
 
-      block->num_passes += segment_passes;
+      block->num_passes += static_cast<uint8_t>(segment_passes);
       while (block->pass_length.size() < block->num_passes) {
         block->pass_length.push_back(0);
       }
@@ -645,7 +645,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
       uint32_t primary_bytes, secondary_bytes, fast_skip_bytes = 0;
       bool empty_set;
       if ((block->Cmodes & (HT | HT_PHLD)) == HT) {
-        new_passes -= segment_passes;
+        new_passes -= static_cast<uint8_t>(segment_passes);
         primary_passes          = static_cast<uint8_t>(segment_passes + block->fast_skip_passes);
         block->fast_skip_passes = 0;
         primary_bytes           = segment_bytes;
@@ -665,7 +665,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           bits_to_read =
               static_cast<uint8_t>(block->Lblock + static_cast<unsigned int>(segment_passes) - 1);
           segment_bytes = packet_header->get_N_bits(bits_to_read);
-          new_passes -= segment_passes;
+          new_passes -= static_cast<uint8_t>(segment_passes);
           if (next_segment_passes == 2) {
             // This is a FAST Cleanup pass
             assert(segment_passes == 1);
@@ -676,7 +676,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                 throw std::exception();
               }
               fast_skip_bytes += primary_bytes + secondary_bytes;
-              primary_passes += 1 + secondary_passes;
+              primary_passes++;
+              primary_passes += secondary_passes;
               primary_bytes    = segment_bytes;
               secondary_bytes  = 0;
               secondary_passes = 0;
@@ -695,14 +696,14 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                 printf("ERROR: Something wrong 1225\n");
                 throw std::exception();
               }
-              block->fast_skip_passes += segment_passes;
+              block->fast_skip_passes += static_cast<uint8_t>(segment_passes);
             } else {
               secondary_passes = static_cast<uint8_t>(segment_passes);
               secondary_bytes  = segment_bytes;
             }
           }
 
-          block->num_passes += segment_passes;
+          block->num_passes += static_cast<uint8_t>(segment_passes);
           while (block->pass_length.size() < block->num_passes) {
             block->pass_length.push_back(0);
           }
@@ -710,7 +711,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           number_of_bytes += segment_bytes;
         }
       } else {
-        new_passes -= segment_passes;
+        new_passes -= static_cast<uint8_t>(segment_passes);
         block->pass_length[block->num_passes - 1] = segment_bytes;
         while (new_passes > 0) {
           if (bypass_term_threshold != 0) {
@@ -728,8 +729,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             bits_to_read   = static_cast<uint8_t>(block->Lblock);
           }
           segment_bytes = packet_header->get_N_bits(bits_to_read);
-          new_passes -= segment_passes;
-          block->num_passes += segment_passes;
+          new_passes -= static_cast<uint8_t>(segment_passes);
+          block->num_passes += static_cast<uint8_t>(segment_passes);
           while (block->pass_length.size() < block->num_passes) {
             block->pass_length.push_back(0);
           }
@@ -884,8 +885,8 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       // uint32_t number_of_bytes = buf_end - buf_start;
 
       // length coding: currently only for HT Cleanup pass
-      int new_passes         = static_cast<int32_t>(num_passes);
-      uint8_t bits_to_write  = 0;
+      int new_passes = static_cast<int32_t>(num_passes);
+      // uint8_t bits_to_write  = 0;
       uint8_t pass_idx       = l0;
       uint32_t segment_bytes = 0;
       uint8_t segment_passes = 0;
@@ -910,7 +911,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
           val--;
         }
 
-        while (segment_bytes >= (1 << length_bits)) {
+        while (segment_bytes >= static_cast<uint32_t>(1 << length_bits)) {
           header.put_bit(1);
           length_bits++;
           blk->Lblock++;
@@ -921,7 +922,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       }
       header.put_bit(0);
 
-      bits_to_write  = 0;
+      // bits_to_write  = 0;
       pass_idx       = l0;
       segment_bytes  = 0;
       segment_passes = 0;
@@ -1062,7 +1063,7 @@ void j2k_subband::quantize() {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
     // fval may exceed when sprec_t == int16_t
-    this->i_samples[n] = static_cast<sprec_t>(floorf(fabs(fval)));
+    this->i_samples[n] = static_cast<sprec_t>(floorf(fabsf(fval)));
     if (fval < 0.0) {
       this->i_samples[n] *= -1;
     }
@@ -1076,7 +1077,7 @@ void j2k_subband::quantize() {
     auto vfscale = _mm256_set1_ps(fscale);
     auto isrc32l = _mm256_cvttps_epi32(_mm256_mul_ps(fsrc32l, vfscale));
     auto isrc32h = _mm256_cvttps_epi32(_mm256_mul_ps(fsrc32h, vfscale));
-    auto tmp0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(isrc32l, isrc32h), 0b11011000);
+    auto tmp0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(isrc32l, isrc32h), 0xD8);
     _mm256_storeu_si256((__m256i *)(this->i_samples + n), tmp0);
   }
   for (uint32_t n = simdlen; n < length; ++n) {
@@ -1153,38 +1154,38 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
   uint8_t bstart    = (index == 0) ? 0 : 1;
   uint8_t bstop     = (index == 0) ? 0 : 3;
   uint8_t nb        = (index == 0) ? NL - index : NL - index + 1;
-  uint8_t nb_1 = nb_1 = (nb > 0) ? (nb - 1) : 0;
-  uint8_t epsilon_b, R_b, M_b;
-  uint16_t mantissa_b;
+  uint8_t nb_1      = (nb > 0) ? (nb - 1) : 0;
+  uint8_t epsilon_b, R_b = 0, M_b = 0;
+  uint16_t mantissa_b = 0;
   float delta, nominal_range;
 
   for (i = 0, b = bstart; b <= bstop; b++, i++) {
-    const element_siz pos0(ceil_int(p0.x - (1 << (nb_1)) * xob[b], 1 << nb),
-                           ceil_int(p0.y - (1 << (nb_1)) * yob[b], 1 << nb));
-    const element_siz pos1(ceil_int(p1.x - (1 << (nb_1)) * xob[b], 1 << nb),
-                           ceil_int(p1.y - (1 << (nb_1)) * yob[b], 1 << nb));
+    const element_siz pos0(ceil_int(p0.x - (1 << (nb_1)) * xob[b], 1U << nb),
+                           ceil_int(p0.y - (1 << (nb_1)) * yob[b], 1U << nb));
+    const element_siz pos1(ceil_int(p1.x - (1 << (nb_1)) * xob[b], 1U << nb),
+                           ceil_int(p1.y - (1 << (nb_1)) * yob[b], 1U << nb));
 
     // nominal range does not have any effect to lossless path
     nominal_range = this->child_ranges[b];
     if (transformation == 1) {
       // lossless
-      epsilon_b = exponents[3 * (NL - nb) + b];
-      M_b       = epsilon_b + num_guard_bits - 1;
+      epsilon_b = exponents[3U * (NL - nb) + b];
+      M_b       = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       delta     = 1.0;
     } else {
       assert(transformation == 0);
       // lossy compression
       if (qstyle == 1) {
         // dervied
-        epsilon_b  = exponents[0] - NL + nb;
+        epsilon_b  = static_cast<uint8_t>(exponents[0] - NL + nb);
         mantissa_b = mantissas[0];
       } else {
         // expounded
         assert(qstyle == 2);
-        epsilon_b  = exponents[3 * (NL - nb) + b];
-        mantissa_b = mantissas[3 * (NL - nb) + b];
+        epsilon_b  = exponents[3U * (NL - nb) + b];
+        mantissa_b = mantissas[3U * (NL - nb) + b];
       }
-      M_b   = epsilon_b + num_guard_bits - 1;
+      M_b   = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       R_b   = bitdepth + gain_b[b];
       delta = (1.0f / (static_cast<float>(1 << epsilon_b)))
               * (1.0f + (static_cast<float>(mantissa_b)) / (static_cast<float>(1 << 11)));
@@ -1424,20 +1425,20 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
 
   // We consider "-reduce" parameter value to determine necessary buffer size.
   const uint32_t num_bufsamples =
-      (ceil_int(pos1.x, 1 << tile->reduce_NL) - ceil_int(pos0.x, 1 << tile->reduce_NL))
-      * (ceil_int(pos1.y, 1 << tile->reduce_NL) - ceil_int(pos0.y, 1 << tile->reduce_NL));
+      (ceil_int(pos1.x, 1U << tile->reduce_NL) - ceil_int(pos0.x, 1U << tile->reduce_NL))
+      * (ceil_int(pos1.y, 1U << tile->reduce_NL) - ceil_int(pos0.y, 1U << tile->reduce_NL));
   samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
 
   element_siz Osiz;
   hdr->SIZ->get_image_origin(Osiz);
   // create tile samples, only for encoding;
   if (!img.empty()) {
-    const auto height = static_cast<const uint32_t>(pos1.y - pos0.y);
-    const auto width  = static_cast<const uint32_t>(pos1.x - pos0.x);
+    const auto height = static_cast<uint32_t>(pos1.y - pos0.y);
+    const auto width  = static_cast<uint32_t>(pos1.x - pos0.x);
     // stride may differ from width with non-zero origin
     const uint32_t stride     = hdr->SIZ->get_component_stride(this->index);
     int32_t *const src_origin = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
-#pragma omp parallel for  // default(none) shared(height, width, src, stride)
+
     for (uint32_t i = 0; i < height; ++i) {
       int32_t *src = src_origin + i * stride;
       int32_t *dst = samples + i * width;
@@ -1520,7 +1521,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
                               static_cast<uint32_t>(ceil_int(pos0.y, d)));
     const element_siz respos1(static_cast<uint32_t>(ceil_int(pos1.x, d)),
                               static_cast<uint32_t>(ceil_int(pos1.y, d)));
-    nb = NL - r + 1;
+    nb = static_cast<uint8_t>(NL - r + 1);
     find_child_ranges(tmp_ranges, normalizing_shift, normalization, nb, respos0.x, respos1.x, respos0.y,
                       respos1.y);
     nshift[r] = normalizing_shift;
@@ -1681,8 +1682,8 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
     element_siz numTiles;
     element_siz Siz, Osiz, Tsiz, TOsiz;
     main_header.get_number_of_tiles(numTiles.x, numTiles.y);
-    uint16_t p = this->index % numTiles.x;
-    uint16_t q = this->index / numTiles.x;
+    uint16_t p = static_cast<uint16_t>(this->index % numTiles.x);
+    uint16_t q = static_cast<uint16_t>(this->index / numTiles.x);
     main_header.SIZ->get_image_size(Siz);
     main_header.SIZ->get_image_origin(Osiz);
     main_header.SIZ->get_tile_size(Tsiz);
@@ -1938,7 +1939,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           for (uint32_t x : x_examin) {
             for (c = CS; c < CE; c++) {
               c_NL     = this->tcomp[c].NL;
-              local_RE = ((c_NL + 1) < RE) ? (c_NL + 1) : RE;
+              local_RE = ((c_NL + 1) < RE) ? (c_NL + 1U) : RE;
               for (r = RS; r < local_RE; r++) {
                 cPP = this->tcomp[c].get_precinct_size(r);
                 cr  = this->tcomp[c].access_resolution(r);
@@ -1992,7 +1993,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
         }
         for (c = CS; c < CE; c++) {
           c_NL     = this->tcomp[c].NL;
-          local_RE = ((c_NL + 1) < RE) ? (c_NL + 1) : RE;
+          local_RE = ((c_NL + 1) < RE) ? (c_NL + 1U) : RE;
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
               for (r = RS; r < local_RE; r++) {
@@ -2209,7 +2210,7 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
           for (uint32_t x : x_examin) {
             for (c = CS; c < CE; c++) {
               c_NL     = this->tcomp[c].NL;
-              local_RE = ((c_NL + 1) < RE) ? (c_NL + 1) : RE;
+              local_RE = ((c_NL + 1) < RE) ? (c_NL + 1U) : RE;
               for (r = RS; r < local_RE; r++) {
                 cPP = this->tcomp[c].get_precinct_size(r);
                 cr  = this->tcomp[c].access_resolution(r);
@@ -2261,7 +2262,7 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         }
         for (c = CS; c < CE; c++) {
           c_NL     = this->tcomp[c].NL;
-          local_RE = ((c_NL + 1) < RE) ? (c_NL + 1) : RE;
+          local_RE = ((c_NL + 1) < RE) ? (c_NL + 1U) : RE;
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
               for (r = RS; r < local_RE; r++) {
@@ -2383,10 +2384,10 @@ void j2k_tile::decode() {
         j2k_resolution *pcr        = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev - 1));
         const element_siz top_left = cr->get_pos0();
         const element_siz bottom_right = cr->get_pos1();
-        const int32_t u0               = static_cast<const int32_t>(top_left.x);
-        const int32_t u1               = static_cast<const int32_t>(bottom_right.x);
-        const int32_t v0               = static_cast<const int32_t>(top_left.y);
-        const int32_t v1               = static_cast<const int32_t>(bottom_right.y);
+        const int32_t u0               = static_cast<int32_t>(top_left.x);
+        const int32_t u1               = static_cast<int32_t>(bottom_right.x);
+        const int32_t v0               = static_cast<int32_t>(top_left.y);
+        const int32_t v1               = static_cast<int32_t>(bottom_right.y);
 
         j2k_subband *HL = cr->access_subband(0);
         j2k_subband *LH = cr->access_subband(1);
@@ -2429,7 +2430,7 @@ void j2k_tile::decode() {
   }  // end of component loop
 }
 void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band) {
-  uint16_t Nsop;
+  uint16_t Nsop = 0;
   uint16_t Lsop;
   if (use_SOP) {
     uint16_t word = this->tile_buf->get_word();
@@ -2443,9 +2444,8 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
       throw std::exception();
     }
     Nsop = this->tile_buf->get_word();
-  } else {
-    Nsop = 0;
   }
+
   uint8_t bit = this->packet_header->get_bit();
   if (bit == 0) {                       // empty packet
     this->packet_header->flush_bits();  // emit_dword packet header
@@ -2589,8 +2589,8 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   element_siz numTiles;
   element_siz Siz, Osiz, Tsiz, TOsiz;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
-  uint16_t p = this->index % numTiles.x;
-  uint16_t q = this->index / numTiles.x;
+  uint16_t p = static_cast<uint16_t>(this->index % numTiles.x);
+  uint16_t q = static_cast<uint16_t>(this->index / numTiles.x);
   main_header.SIZ->get_image_size(Siz);
   main_header.SIZ->get_image_origin(Osiz);
   main_header.SIZ->get_tile_size(Tsiz);
@@ -2612,7 +2612,7 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
 
   // create tile components
   this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
-#pragma omp parallel for  // default(none) shared(img, tphdr, main_header)
+
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img);
     this->tcomp[c].create_resolutions(1);  // number of layers = 1
@@ -2718,10 +2718,10 @@ uint8_t *j2k_tile::encode() {
 
     for (uint8_t r = NL; r > 0; --r) {
       j2k_resolution *ncr = tcomp[c].access_resolution(r - 1);
-      const int32_t u0    = static_cast<const int32_t>(top_left.x);
-      const int32_t u1    = static_cast<const int32_t>(bottom_right.x);
-      const int32_t v0    = static_cast<const int32_t>(top_left.y);
-      const int32_t v1    = static_cast<const int32_t>(bottom_right.y);
+      const int32_t u0    = static_cast<int32_t>(top_left.x);
+      const int32_t u1    = static_cast<int32_t>(bottom_right.x);
+      const int32_t v0    = static_cast<int32_t>(top_left.y);
+      const int32_t v1    = static_cast<int32_t>(bottom_right.y);
       j2k_subband *HL     = cr->access_subband(0);
       j2k_subband *LH     = cr->access_subband(1);
       j2k_subband *HH     = cr->access_subband(2);
@@ -2763,10 +2763,10 @@ uint8_t *j2k_tile::encode() {
 
     auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr,
                                uint8_t ROIshift) {
-      int32_t length = 0;
+      uint32_t length = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-        int32_t packet_length = 0;
-        j2k_precinct *cp      = cr->access_precinct(p);
+        uint32_t packet_length = 0;
+        j2k_precinct *cp       = cr->access_precinct(p);
         packet_header_writer pckt_hdr;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);

@@ -40,7 +40,7 @@
 #endif
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  #include <arm_acle.h>
+  //#include <arm_acle.h>
   #include <arm_neon.h>
 #elif defined(_MSC_VER) || defined(__MINGW64__)
   #include <intrin.h>
@@ -48,14 +48,14 @@
   #include <x86intrin.h>
 #endif
 
-static inline size_t popcount32(uintmax_t num) {
+static inline size_t popcount32(uint32_t num) {
   size_t precision = 0;
 #if defined(_MSC_VER)
   precision = __popcnt(static_cast<uint32_t>(num));
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
   precision = static_cast<size_t>(_popcnt32(num));
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  uint32x2_t val = vld1_dup_u32(&num);
+  uint32x2_t val = vld1_dup_u32(static_cast<const uint32_t*>(&num));
   uint8_t a      = vaddv_u8(vcnt_u8(vreinterpret_u8_u32(val)));
   precision      = a >> 1;
 #else

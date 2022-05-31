@@ -86,7 +86,7 @@ class j2k_codeblock : public j2k_region {
   uint8_t num_passes;
   uint8_t num_ZBP;
   uint8_t fast_skip_passes;
-  uint32_t Lblock;
+  uint8_t Lblock;
   // length of a coding pass in byte
   std::vector<uint32_t> pass_length;
   // index of the coding-pass from which layer starts
@@ -185,7 +185,7 @@ class j2k_precinct : public j2k_region {
   // number of subbands in this precinct
   const uint8_t num_bands;
   // length which includes packet header and body, used only for encoder
-  int32_t length;
+  uint32_t length;
   // container for a subband within this precinct which includes codeblocks
   std::unique_ptr<std::unique_ptr<j2k_precinct_subband>[]> pband;
 
@@ -202,8 +202,8 @@ class j2k_precinct : public j2k_region {
   //~j2k_precinct();
 
   j2k_precinct_subband *access_pband(uint8_t b);
-  void set_length(int32_t len) { length = len; }
-  [[nodiscard]] int32_t get_length() const { return length; }
+  void set_length(uint32_t len) { length = len; }
+  [[nodiscard]] uint32_t get_length() const { return length; }
 };
 
 /********************************************************************************
@@ -219,7 +219,7 @@ class j2c_packet {
   [[maybe_unused]] buf_chain *body;
   // only for encoder
   std::unique_ptr<uint8_t[]> buf;
-  int32_t length;
+  uint32_t length;
 
   j2c_packet()
       : layer(0), resolution(0), component(0), precinct(0), header(nullptr), body(nullptr), length(0){};
@@ -420,7 +420,7 @@ class j2k_tile : public j2k_tile_base {
   // pointer to packet header in PPT marker segments
   std::unique_ptr<buf_chain> ppt_header;
   // number_of_packets (for encoder only)
-  int32_t num_packets;
+  uint32_t num_packets;
   // unique pointer to packets
   std::unique_ptr<j2c_packet[]> packet;
   // value of Ccap15 parameter in CAP marker segment

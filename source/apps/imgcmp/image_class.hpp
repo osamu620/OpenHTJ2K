@@ -39,8 +39,6 @@
 #define READ_MAXVAL 2
 #define DONE 3
 
-#define ceil_int(a, b) ((a) + ((b)-1)) / (b)
-
 class image {
  private:
   // number of components
@@ -80,7 +78,7 @@ class image {
 
   [[nodiscard]] uint_fast32_t get_height() const { return height; }
 
-  [[nodiscard]] uint_fast32_t get_maxval() const { return (1 << bitDepth) - 1; }
+  [[nodiscard]] uint_fast32_t get_maxval() const { return static_cast<uint_fast32_t>((1 << bitDepth) - 1); }
 
   [[maybe_unused]] [[nodiscard]] uint8_t get_bpp() const { return bitDepth; }
 
@@ -139,6 +137,7 @@ class image {
       // PGM
       case '2':
         isASCII = true;
+        /* FALLTHRU */
       case '5':
         num_components = 1;
         isBigendian    = true;
@@ -146,6 +145,7 @@ class image {
       // PPM
       case '3':
         isASCII = true;
+        /* FALLTHRU */
       case '6':
         num_components = 3;
         isBigendian    = true;
@@ -265,7 +265,7 @@ class image {
     }
     fseek(fp, -1, SEEK_CUR);
 
-    const uint_fast8_t nbytes = ceil_int(bitDepth, 8);
+    const uint_fast8_t nbytes = static_cast<uint_fast8_t>((bitDepth + 7) / 8);  // ceil bitDepth to byte
     const size_t num_samples  = this->width * this->height * num_components;
     const size_t num_bytes    = this->width * this->height * nbytes * num_components;
 
