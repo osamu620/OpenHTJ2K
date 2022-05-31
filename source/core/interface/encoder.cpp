@@ -173,8 +173,8 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     while (d == SP || d == LF || d == CR) {
       d = fgetc(fp);
       if (d == '#') {
-        static_cast<void>(fgets(comment, sizeof(comment), fp));
-        d = fgetc(fp);
+        char *nouse = fgets(comment, sizeof(comment), fp);
+        d           = fgetc(fp);
       }
     }
     // read numerical value
@@ -227,8 +227,8 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   while (d == SP || d == LF || d == CR) {
     d = fgetc(fp);
     if (d == '#') {
-      static_cast<void>(fgets(comment, sizeof(comment), fp));
-      d = fgetc(fp);
+      char *nouse = fgets(comment, sizeof(comment), fp);
+      d           = fgetc(fp);
     }
   }
   fseek(fp, -1, SEEK_CUR);

@@ -73,7 +73,7 @@ uint32_t j2k_marker_io_base::get_dword() {
 SIZ_marker::SIZ_marker(j2c_src_memory &in) : j2k_marker_io_base(_SIZ) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   Rsiz   = get_word();
   Xsiz   = get_dword();
   Ysiz   = get_dword();
@@ -96,7 +96,7 @@ SIZ_marker::SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t
                        uint32_t YT, uint32_t XTO, uint32_t YTO, uint16_t C, std::vector<uint8_t> &S,
                        std::vector<uint8_t> &XR, std::vector<uint8_t> &YR, bool needCAP)
     : j2k_marker_io_base(_SIZ),
-      Rsiz(R | (needCAP ? 1 << 14 : 0)),
+      Rsiz(R | static_cast<uint16_t>(needCAP ? 1 << 14 : 0)),
       Xsiz(X),
       Ysiz(Y),
       XOsiz(XO),
@@ -151,7 +151,7 @@ bool SIZ_marker::is_signed(uint16_t c) {
 
 uint8_t SIZ_marker::get_bitdepth(uint16_t c) {
   assert(c < Csiz);
-  return (Ssiz[c] & 0x7F) + 1;
+  return static_cast<uint8_t>((Ssiz[c] & 0x7F) + 1);
 }
 
 void SIZ_marker::get_image_size(element_siz &siz) const {
@@ -215,8 +215,8 @@ CAP_marker::CAP_marker() : j2k_marker_io_base(_CAP), Pcap(0), Ccap{0} { Lmar = 6
 CAP_marker::CAP_marker(j2c_src_memory &in) : j2k_marker_io_base(_CAP), Ccap{0} {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
-  unsigned long n = (Lmar - 6) / 2U;
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
+  unsigned long n = (Lmar - 6U) / 2U;
   Pcap            = get_dword();
 
   for (int i = 0; i < 32; ++i) {
@@ -252,8 +252,9 @@ void CAP_marker::set_Ccap(uint16_t val, uint8_t part) {
 }
 void CAP_marker::set_Pcap(uint8_t part) {
   // implemented only for Part 15
-  Pcap |= 1 << (32 - part);
-  Lmar += 2;
+  Pcap |= static_cast<uint32_t>(1 << (32 - part));
+  Lmar++;
+  Lmar++;
   is_set = true;
 }
 
@@ -263,7 +264,7 @@ int CAP_marker::write(j2c_destination_base &dst) {
   dst.put_word(Lmar);
   dst.put_dword(Pcap);
   for (uint8_t n = 0; n < 32; ++n) {
-    if (Pcap & (1 << static_cast<uint32_t>(32 - n - 1))) {
+    if (Pcap & static_cast<uint32_t>(1 << (32 - n - 1))) {
       dst.put_word(Ccap[n]);
     }
   }
@@ -278,10 +279,10 @@ CPF_marker::CPF_marker() : j2k_marker_io_base(_CPF) { Pcpf = {0}; }
 CPF_marker::CPF_marker(j2c_src_memory &in) : j2k_marker_io_base(_CPF) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
-  uint16_t len    = 2;  // Lcpf
-  unsigned long n = (Lmar - len) / 2U;
-  for (unsigned long i = 0; i < n; ++i) {
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
+  uint16_t len = 2;  // Lcpf
+  size_t n     = static_cast<size_t>(Lmar - len) / 2U;
+  for (size_t i = 0; i < n; ++i) {
     if (i < Pcpf.size()) {
       Pcpf[i] = get_word();
     } else {
@@ -298,12 +299,12 @@ COD_marker::COD_marker(j2c_src_memory &in)
     : j2k_marker_io_base(_COD), Scod(0), SGcod(0), SPcod({0, 0, 0, 0, 0}) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lcod
   Scod         = get_byte();
-  len += 1;
+  len++;
   SGcod = get_dword();
-  len += 4;
+  len   = static_cast<uint16_t>(len + 4);
   for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
     if (i < SPcod.size()) {
       SPcod[i] = get_byte();
@@ -319,7 +320,7 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
                        uint8_t cblksizx_log2, uint8_t cblksizy_log2, uint8_t codeblock_style,
                        uint8_t reversible_flag, std::vector<uint8_t> PPx, std::vector<uint8_t> PPy)
     : j2k_marker_io_base(_COD), Scod(0), SGcod(0), SPcod({0, 0, 0, 0, 0}) {
-  Lmar = (is_max_precincts) ? 12 : 13 + dwt_levels;
+  Lmar = static_cast<uint16_t>((is_max_precincts) ? 12 : 13 + dwt_levels);
   if (!is_max_precincts) {
     Scod |= 0x01;
   }
@@ -393,8 +394,8 @@ uint8_t COD_marker::use_color_trafo() const { return static_cast<uint8_t>(SGcod 
 uint8_t COD_marker::get_dwt_levels() { return SPcod[0]; }
 
 void COD_marker::get_codeblock_size(element_siz &out) {
-  out.x = 1 << (SPcod[1] + 2);
-  out.y = 1 << (SPcod[2] + 2);
+  out.x = static_cast<uint32_t>(1 << (SPcod[1] + 2));
+  out.y = static_cast<uint32_t>(1 << (SPcod[2] + 2));
 }
 
 void COD_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
@@ -402,8 +403,8 @@ void COD_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
     out.x = 15;
     out.y = 15;
   } else {
-    out.x = (SPcod[5 + resolution] & 0x0F);
-    out.y = (SPcod[5 + resolution] & 0xF0) >> 4;
+    out.x = (SPcod[5U + resolution] & 0x0F);
+    out.y = (SPcod[5U + resolution] & 0xF0) >> 4;
   }
 }
 
@@ -423,17 +424,18 @@ COC_marker::COC_marker() : j2k_marker_io_base(_COC) {
 COC_marker::COC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_COC) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lcoc
   if (Csiz < 257) {
     Ccoc = get_byte();
-    len += 1;
+    len++;
   } else {
     Ccoc = get_word();
-    len += 2;
+    len++;
+    len++;
   }
   Scoc = get_byte();
-  len += 1;
+  len++;
 
   for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
     if (i < SPcoc.size()) {
@@ -452,8 +454,8 @@ bool COC_marker::is_maximum_precincts() const { return (Scoc & 1) == 0; }
 uint8_t COC_marker::get_dwt_levels() { return SPcoc[0]; }
 
 void COC_marker::get_codeblock_size(element_siz &out) {
-  out.x = 1 << (SPcoc[1] + 2);
-  out.y = 1 << (SPcoc[2] + 2);
+  out.x = static_cast<uint32_t>(1 << (SPcoc[1] + 2));
+  out.y = static_cast<uint32_t>(1 << (SPcoc[2] + 2));
 }
 
 void COC_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
@@ -461,8 +463,8 @@ void COC_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
     out.x = 15;
     out.y = 15;
   } else {
-    out.x = (SPcoc[5 + resolution] & 0x0F);
-    out.y = (SPcoc[5 + resolution] & 0xF0) >> 4;
+    out.x = (SPcoc[5U + resolution] & 0x0F);
+    out.y = (SPcoc[5U + resolution] & 0xF0) >> 4;
   }
 }
 
@@ -482,14 +484,15 @@ RGN_marker::RGN_marker() : j2k_marker_io_base(_RGN) {
 RGN_marker::RGN_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_RGN) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lrgn
   if (Csiz < 257) {
     Crgn = get_byte();
-    len += 1;
+    len++;
   } else {
     Crgn = get_word();
-    len += 2;
+    len++;
+    len++;
   }
   Srgn = get_byte();
   assert(Srgn == 0);
@@ -507,10 +510,10 @@ uint8_t RGN_marker::get_ROIshift() const { return SPrgn; }
 QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lqcd
   Sqcd         = get_byte();
-  len += 1;
+  len++;
   if ((Sqcd & 0x1F) == 0) {
     // reversible transform
     for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
@@ -558,7 +561,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   }
 
   assert(number_of_guardbits < 8 && number_of_guardbits >= 0);
-  Sqcd += static_cast<uint8_t>(number_of_guardbits << 5);
+  Sqcd = static_cast<uint8_t>(Sqcd + (number_of_guardbits << 5U));
 
   const std::vector<double> CDF53L = {-0.125, 0.25, 0.75, 0.25, -0.125};
   const std::vector<double> CDF53H = {-0.5, 1, -0.5};  // gain is doubled(x2)
@@ -798,7 +801,7 @@ uint16_t QCD_marker::get_mantissas(uint8_t nb) {
   }
 }
 
-uint8_t QCD_marker::get_number_of_guardbits() const { return Sqcd >> 5; }
+uint8_t QCD_marker::get_number_of_guardbits() const { return static_cast<uint8_t>(Sqcd >> 5); }
 
 uint8_t QCD_marker::get_MAGB() {
   uint8_t qstyle = get_quantization_style();
@@ -844,7 +847,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   }
 
   assert(number_of_guardbits < 8 && number_of_guardbits >= 0);
-  Sqcc += static_cast<uint8_t>(number_of_guardbits << 5);
+  Sqcc = static_cast<uint8_t>(Sqcc + (number_of_guardbits << 5));
 
   const std::vector<double> CDF53L = {-0.125, 0.25, 0.75, 0.25, -0.125};
   const std::vector<double> CDF53H = {-0.5, 1, -0.5};  // gain is doubled(x2)
@@ -1049,17 +1052,18 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
 QCC_marker::QCC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_QCC), max_components(Csiz) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lqcc
   if (max_components < 257) {
     Cqcc = get_byte();
-    len += 1;
+    len++;
   } else {
     Cqcc = get_word();
-    len += 2;
+    len++;
+    len++;
   }
   Sqcc = get_byte();
-  len += 1;
+  len++;
   if ((Sqcc & 0x1F) == 0) {
     // reversible transform
     for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
@@ -1072,7 +1076,7 @@ QCC_marker::QCC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   } else {
     // irreversible transformation
     assert((Lmar - len) % 2 == 0);
-    for (unsigned long i = 0; i < (Lmar - len) / 2U; ++i) {
+    for (size_t i = 0; i < static_cast<size_t>((Lmar - len) / 2); ++i) {
       if (i < SPqcc.size()) {
         SPqcc[i] = get_word();
       } else {
@@ -1136,7 +1140,7 @@ uint16_t QCC_marker::get_mantissas(uint8_t nb) {
   }
 }
 
-uint8_t QCC_marker::get_number_of_guardbits() const { return Sqcc >> 5; }
+uint8_t QCC_marker::get_number_of_guardbits() const { return static_cast<uint8_t>(Sqcc >> 5); }
 
 /********************************************************************************
  * POC_marker
@@ -1158,12 +1162,12 @@ POC_marker::POC_marker(uint8_t RS, uint16_t CS, uint16_t LYE, uint8_t RE, uint16
 POC_marker::POC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_POC) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lpoc
   if (Csiz < 257) {
-    nPOC = (Lmar - len) / 7U;
+    nPOC = static_cast<unsigned long>((Lmar - len) / 7);
   } else {
-    nPOC = (Lmar - len) / 9U;
+    nPOC = static_cast<unsigned long>((Lmar - len) / 9);
   }
 
   for (unsigned long i = 0; i < nPOC; ++i) {
@@ -1242,32 +1246,32 @@ TLM_marker::TLM_marker() : j2k_marker_io_base(_TLM) {
 TLM_marker::TLM_marker(j2c_src_memory &in) : j2k_marker_io_base(_TLM) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   // Ltlm = length;
   // uint16_t len = 2;  // Ltlm
   Ztlm = get_byte();
   Stlm = get_byte();
   uint8_t ST, SP;
-  unsigned long n;
+  size_t n;
   ST = ((Stlm >> 4) & 0x03);
   SP = ((Stlm >> 4) & 0x0C) >> 2;
   if (ST == 0) {
     if (SP == 0) {
-      n = (Lmar - 4) / 2U;
+      n = static_cast<size_t>((Lmar - 4) / 2);
     } else {
-      n = (Lmar - 4) / 4U;
+      n = static_cast<size_t>((Lmar - 4) / 4);
     }
   } else if (ST == 1) {
     if (SP == 0) {
-      n = (Lmar - 4) / 3U;
+      n = static_cast<size_t>((Lmar - 4) / 3);
     } else {
-      n = (Lmar - 4) / 5U;
+      n = static_cast<size_t>((Lmar - 4) / 5);
     }
   } else {
     if (SP == 0) {
-      n = (Lmar - 4) / 4U;
+      n = static_cast<size_t>((Lmar - 4) / 4);
     } else {
-      n = (Lmar - 4) / 6U;
+      n = static_cast<size_t>((Lmar - 4) / 6);
     }
   }
   for (unsigned long i = 0; i < n; ++i) {
@@ -1309,12 +1313,12 @@ PLM_marker::PLM_marker() : j2k_marker_io_base(_PLM), Zplm(0), plmbuf(nullptr), p
 PLM_marker::PLM_marker(j2c_src_memory &in) : j2k_marker_io_base(_PLM) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   // Lplm         = length;
   uint16_t len = 2;  // tmp length including Ltlm
   Zplm         = get_byte();
-  len += 1;
-  plmlen = Lmar - len;
+  len++;
+  plmlen = static_cast<uint16_t>(Lmar - len);
   plmbuf = get_buf();
   is_set = true;
 }
@@ -1327,11 +1331,11 @@ PPM_marker::PPM_marker() : j2k_marker_io_base(_PPM), Zppm(0), ppmbuf(nullptr), p
 PPM_marker::PPM_marker(j2c_src_memory &in) : j2k_marker_io_base(_PPM) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lppm
   Zppm         = get_byte();
-  len += 1;
-  ppmlen = Lmar - len;
+  len++;
+  ppmlen = static_cast<uint16_t>(Lmar - len);
   ppmbuf = get_buf();
   is_set = true;
 }
@@ -1347,10 +1351,10 @@ CRG_marker::CRG_marker() : j2k_marker_io_base(_CRG) {
 CRG_marker::CRG_marker(j2c_src_memory &in) : j2k_marker_io_base(_CRG) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
-  uint16_t len    = 2;  // tmp length including Lcrg
-  unsigned long n = (Lmar - len) / 4U;
-  for (unsigned long i = 0; i < n; ++i) {
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
+  uint16_t len = 2;  // tmp length including Lcrg
+  size_t n     = static_cast<size_t>((Lmar - len) / 4);
+  for (size_t i = 0; i < n; ++i) {
     if (i < Xcrg.size()) {
       Xcrg[i] = get_word();
       Ycrg[i] = get_word();
@@ -1368,10 +1372,11 @@ CRG_marker::CRG_marker(j2c_src_memory &in) : j2k_marker_io_base(_CRG) {
 COM_marker::COM_marker(j2c_src_memory &in) : j2k_marker_io_base(_COM), Rcom(0) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lcom
   Rcom         = get_word();
-  len += 2;
+  len++;
+  len++;
   for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
     if (i < Ccom.size()) {
       Ccom[i] = get_byte();
@@ -1425,7 +1430,7 @@ SOT_marker::SOT_marker(j2c_src_memory &in) : j2k_marker_io_base(_SOT) {
     throw std::exception();
   }
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   Isot   = this->get_word();
   Psot   = this->get_dword();
   TPsot  = this->get_byte();
@@ -1479,11 +1484,11 @@ PLT_marker::PLT_marker() : j2k_marker_io_base(_PLT), Zplt(0), pltbuf(nullptr), p
 PLT_marker::PLT_marker(j2c_src_memory &in) : j2k_marker_io_base(_PLT) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lplt
   Zplt         = get_byte();
-  len += 1;
-  pltlen = Lmar - len;
+  len++;
+  pltlen = static_cast<uint16_t>(Lmar - len);
   pltbuf = get_buf();
   is_set = true;
 }
@@ -1496,11 +1501,11 @@ PPT_marker::PPT_marker() : j2k_marker_io_base(_PPT), Zppt(0), pptbuf(nullptr), p
 PPT_marker::PPT_marker(j2c_src_memory &in) : j2k_marker_io_base(_PPT) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2);
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lppt
   Zppt         = get_byte();
-  len += 1;
-  pptlen = Lmar - len;
+  len++;
+  pptlen = static_cast<uint16_t>(Lmar - len);
   pptbuf = get_buf();
 }
 
@@ -1707,7 +1712,7 @@ j2k_tilepart_header::j2k_tilepart_header(uint16_t nc) {
 
 uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
   uint16_t word;
-  uint32_t length_of_tilepart_markers = 2 + this->SOT.get_length() + 2;  // SOT + Lsot + SOD;
+  uint32_t length_of_tilepart_markers = 2U + this->SOT.get_length() + 2U;  // SOT + Lsot + SOD;
   while ((word = in.get_word()) != _SOD) {
     switch (word) {
       case _COD:

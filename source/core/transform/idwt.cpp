@@ -42,24 +42,24 @@ void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u
   for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
     sum = X[n - 1];
     sum += X[n + 1];
-    X[n] -= static_cast<sprec_t>((Dcoeff * sum + Doffset) >> Dshift);
+    X[n] = static_cast<sprec_t>(X[n] - ((Dcoeff * sum + Doffset) >> Dshift));
   }
   int16_t a[16];
   memcpy(a, X - 2 + offset, sizeof(int16_t) * 16);
   for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
     sum = X[n];
     sum += X[n + 2];
-    X[n + 1] -= static_cast<sprec_t>((Ccoeff * sum + Coffset) >> Cshift);
+    X[n + 1] = static_cast<sprec_t>(X[n + 1] - ((Ccoeff * sum + Coffset) >> Cshift));
   }
   for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
     sum = X[n - 1];
     sum += X[n + 1];
-    X[n] -= static_cast<sprec_t>((Bcoeff * sum + Boffset) >> Bshift);
+    X[n] = static_cast<sprec_t>(X[n] - ((Bcoeff * sum + Boffset) >> Bshift));
   }
   for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
     sum = X[n];
     sum += X[n + 2];
-    X[n + 1] -= static_cast<sprec_t>((Acoeff * sum + Aoffset) >> Ashift);
+    X[n + 1] = static_cast<sprec_t>(X[n + 1] - ((Acoeff * sum + Aoffset) >> Ashift));
   }
 }
 
@@ -71,11 +71,11 @@ void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
   const int32_t offset = left - i0 % 2;
 
   for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-    X[n] -= static_cast<sprec_t>((X[n - 1] + X[n + 1] + 2) >> 2);
+    X[n] = static_cast<sprec_t>(X[n] - ((X[n - 1] + X[n + 1] + 2) >> 2));
   }
 
   for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-    X[n + 1] += static_cast<sprec_t>((X[n] + X[n + 2]) >> 1);
+    X[n + 1] = static_cast<sprec_t>(X[n + 1] + ((X[n] + X[n + 2]) >> 1));
   }
 }
 
@@ -102,8 +102,8 @@ static void idwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const int32_t u0, const
     // one sample case
     for (int32_t row = 0; row < v1 - v0; ++row) {
       out[row] = in[row];
-      if (u0 % 2 != 0) {
-        out[row] >>= (transformation) ? 1 : 0;
+      if (u0 % 2 != 0 && transformation) {
+        out[row] = static_cast<sprec_t>(out[row] >> 1);
       }
     }
   } else {
@@ -157,28 +157,28 @@ void idwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
-        buf[n][col] -= (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
+        buf[n][col] = static_cast<sprec_t>(buf[n][col] - ((Dcoeff * sum + Doffset) >> Dshift));
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
-        buf[n + 1][col] -= (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
+        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] - ((Ccoeff * sum + Coffset) >> Cshift));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
-        buf[n][col] -= (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
+        buf[n][col] = static_cast<sprec_t>(buf[n][col] - ((Bcoeff * sum + Boffset) >> Bshift));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
-        buf[n + 1][col] -= (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
+        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] - ((Acoeff * sum + Aoffset) >> Ashift));
       }
     }
 
@@ -199,10 +199,10 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
   constexpr int32_t num_pse_i1[2] = {2, 1};
   const int32_t top               = num_pse_i0[v0 % 2];
   const int32_t bottom            = num_pse_i1[v1 % 2];
-  if (v0 == v1 - 1) {
+  if (v0 == v1 - 1 && (v0 % 2)) {
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
-      in[col] >>= (v0 % 2 == 0) ? 0 : 1;
+      in[col] = static_cast<sprec_t>(in[col] >> 1);
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
@@ -230,14 +230,14 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
-        buf[n][col] -= static_cast<int16_t>((sum + 2) >> 2);
+        buf[n][col] = static_cast<sprec_t>(buf[n][col] - ((sum + 2) >> 2));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
-        buf[n + 1][col] += static_cast<int16_t>(sum >> 1);
+        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + (sum >> 1));
       }
     }
 

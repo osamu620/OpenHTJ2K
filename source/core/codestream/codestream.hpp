@@ -219,10 +219,13 @@ class buf_chain {
     pos += N;
     buf += N;
   }
+
   uint16_t get_word() {
     uint16_t word = get_byte();
-    word <<= 8;
-    word += get_byte();
+    // word <<= 8;
+    // word += get_byte();
+    word = static_cast<uint16_t>(word << 8);
+    word = static_cast<uint16_t>(word + get_byte());
     return word;
   }
   uint8_t get_bit() {
@@ -284,7 +287,7 @@ class packet_header_writer {
       tmp = 0;
     }
     bits--;
-    tmp += static_cast<uint8_t>(b << bits);
+    tmp = static_cast<uint8_t>(tmp + (b << bits));
   }
 
   void put_Nbits(uint32_t cwd, uint8_t n) {
@@ -399,7 +402,7 @@ class tagtree {
 
     // build tagtree structure
     int32_t node_index = 0, parent_index, row_parent_index, parent_num = 0;
-    uint32_t depth       = level - 1;
+    uint32_t depth       = static_cast<uint32_t>(level - 1);
     width_current_level  = (int32_t)num_cblk_x;
     height_current_level = (int32_t)num_cblk_y;
     tagtree_node *current_node, *parent_node;

@@ -638,7 +638,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
       while (block->pass_length.size() < block->num_passes) {
         block->pass_length.push_back(0);
       }
-      block->pass_length[block->num_passes - 1] = segment_bytes;
+      block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
       number_of_bytes += segment_bytes;
 
       uint8_t primary_passes, secondary_passes;
@@ -707,12 +707,12 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           while (block->pass_length.size() < block->num_passes) {
             block->pass_length.push_back(0);
           }
-          block->pass_length[block->num_passes - 1] = segment_bytes;
+          block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
           number_of_bytes += segment_bytes;
         }
       } else {
         new_passes -= static_cast<uint8_t>(segment_passes);
-        block->pass_length[block->num_passes - 1] = segment_bytes;
+        block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
         while (new_passes > 0) {
           if (bypass_term_threshold != 0) {
             if (new_passes > 1) {
@@ -734,7 +734,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           while (block->pass_length.size() < block->num_passes) {
             block->pass_length.push_back(0);
           }
-          block->pass_length[block->num_passes - 1] = segment_bytes;
+          block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
           number_of_bytes += segment_bytes;
         }
       }
@@ -858,13 +858,13 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
           header.put_Nbits(0x2, 2);
         } else if (num_passes < 6) {
           header.put_Nbits(0x3, 2);
-          header.put_Nbits(num_passes - 3, 2);
+          header.put_Nbits(num_passes - 3U, 2U);
         } else if (num_passes < 37) {
           header.put_Nbits(0xF, 4);
-          header.put_Nbits(num_passes - 6, 5);
+          header.put_Nbits(num_passes - 6U, 5U);
         } else {
           header.put_Nbits(0x1FF, 9);
-          header.put_Nbits(num_passes - 37, 7);
+          header.put_Nbits(num_passes - 37U, 7U);
         }
       }
 
@@ -948,7 +948,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
         }
 
         for (int i = length_bits - 1; i >= 0; --i) {
-          header.put_bit(static_cast<uint8_t>((segment_bytes & (1 << i)) >> i));
+          header.put_bit(static_cast<uint8_t>((segment_bytes & static_cast<uint32_t>(1 << i)) >> i));
         }
         new_passes -= segment_passes;
         pass_idx += segment_passes;
@@ -979,7 +979,7 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
   const uint8_t xob[4] = {0, 1, 0, 1};
   const uint8_t yob[4] = {0, 0, 1, 1};
   for (unsigned long i = 0; i < num_bands; ++i) {
-    const uint8_t sr = (subband[i]->orientation == BAND_LL) ? 1 << 0 : 1 << 1;
+    const uint32_t sr = (subband[i]->orientation == BAND_LL) ? 1 << 0 : 1 << 1;
     const element_siz pbpos0(ceil_int(pos0.x - xob[subband[i]->orientation], sr),
                              ceil_int(pos0.y - yob[subband[i]->orientation], sr));
     const element_siz pbpos1(ceil_int(pos1.x - xob[subband[i]->orientation], sr),
@@ -1069,8 +1069,8 @@ void j2k_subband::quantize() {
     }
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  const uint32_t simdlen = round_down(length, 16);
-  for (uint32_t n = 0; n < simdlen; n += 16) {
+  const int32_t simdlen = round_down(length, 16);
+  for (int32_t n = 0; n < simdlen; n += 16) {
     auto isrc    = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
     auto fsrc32l = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 0)));
     auto fsrc32h = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 1)));
@@ -1080,7 +1080,7 @@ void j2k_subband::quantize() {
     auto tmp0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(isrc32l, isrc32h), 0xD8);
     _mm256_storeu_si256((__m256i *)(this->i_samples + n), tmp0);
   }
-  for (uint32_t n = simdlen; n < length; ++n) {
+  for (int32_t n = simdlen; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
     // fval may exceed when sprec_t == int16_t
@@ -1160,16 +1160,16 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
   float delta, nominal_range;
 
   for (i = 0, b = bstart; b <= bstop; b++, i++) {
-    const element_siz pos0(ceil_int(p0.x - (1 << (nb_1)) * xob[b], 1U << nb),
-                           ceil_int(p0.y - (1 << (nb_1)) * yob[b], 1U << nb));
-    const element_siz pos1(ceil_int(p1.x - (1 << (nb_1)) * xob[b], 1U << nb),
-                           ceil_int(p1.y - (1 << (nb_1)) * yob[b], 1U << nb));
+    const element_siz pos0(ceil_int(p0.x - (1U << (nb_1)) * xob[b], 1U << nb),
+                           ceil_int(p0.y - (1U << (nb_1)) * yob[b], 1U << nb));
+    const element_siz pos1(ceil_int(p1.x - (1U << (nb_1)) * xob[b], 1U << nb),
+                           ceil_int(p1.y - (1U << (nb_1)) * yob[b], 1U << nb));
 
     // nominal range does not have any effect to lossless path
     nominal_range = this->child_ranges[b];
     if (transformation == 1) {
       // lossless
-      epsilon_b = exponents[3U * (NL - nb) + b];
+      epsilon_b = exponents[static_cast<size_t>(3 * (NL - nb) + b)];
       M_b       = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       delta     = 1.0;
     } else {
@@ -1182,8 +1182,8 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       } else {
         // expounded
         assert(qstyle == 2);
-        epsilon_b  = exponents[3U * (NL - nb) + b];
-        mantissa_b = mantissas[3U * (NL - nb) + b];
+        epsilon_b  = exponents[static_cast<size_t>(3 * (NL - nb) + b)];
+        mantissa_b = mantissas[static_cast<size_t>(3 * (NL - nb) + b)];
       }
       M_b   = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       R_b   = bitdepth + gain_b[b];
@@ -1200,7 +1200,7 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
 void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, element_siz codeblock_size,
                                       uint8_t Cmodes) {
   // precinct size signalled in header
-  const element_siz PP(1 << log2PP.x, 1 << log2PP.y);
+  const element_siz PP(1U << log2PP.x, 1U << log2PP.y);
   // offset of horizontal precinct index
   const uint32_t idxoff_x = (pos0.x - 0) / PP.x;
   // offset of vertical precinct index
@@ -1454,7 +1454,7 @@ void j2k_tile_component::setCOCparams(COC_marker *COC) {
   Cmodes         = COC->get_Cmodes();
   transformation = COC->get_transformation();
   precinct_size.clear();
-  precinct_size.reserve(NL + 1);
+  precinct_size.reserve(NL + 1U);
   element_siz tmp;
   for (uint8_t r = 0; r <= NL; r++) {
     COC->get_precinct_size(tmp, r);
@@ -1506,7 +1506,7 @@ uint8_t j2k_tile_component::get_ROIshift() const { return this->ROIshift; }
 j2k_resolution *j2k_tile_component::access_resolution(uint8_t r) { return this->resolution[r].get(); }
 
 void j2k_tile_component::create_resolutions(uint16_t numlayers) {
-  resolution = MAKE_UNIQUE<std::unique_ptr<j2k_resolution>[]>(NL + 1);
+  resolution = MAKE_UNIQUE<std::unique_ptr<j2k_resolution>[]>(NL + 1U);
 
   float tmp_ranges[4]       = {1.0, 1.0, 1.0, 1.0};
   float child_ranges[32][4] = {{0}};
@@ -1516,7 +1516,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
   uint8_t nshift[32] = {0};
 
   for (uint8_t r = NL - reduce_NL; r > 0; --r) {
-    uint64_t d = 1 << (NL - r);
+    uint64_t d = static_cast<uint64_t>(1 << (NL - r));
     const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
                               static_cast<uint32_t>(ceil_int(pos0.y, d)));
     const element_siz respos1(static_cast<uint32_t>(ceil_int(pos1.x, d)),
@@ -1535,13 +1535,13 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
   for (uint8_t r = 0; r <= NL; r++) {
-    uint64_t d = 1 << (NL - r);
+    uint64_t d = static_cast<uint64_t>(1 << (NL - r));
     const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
                               static_cast<uint32_t>(ceil_int(pos0.y, d)));
     const element_siz respos1(static_cast<uint32_t>(ceil_int(pos1.x, d)),
                               static_cast<uint32_t>(ceil_int(pos1.y, d)));
     const element_siz log2PP = get_precinct_size(r);
-    const element_siz PP(1 << log2PP.x, 1 << log2PP.y);
+    const element_siz PP(1U << log2PP.x, 1U << log2PP.y);
     const uint32_t npw = (respos1.x > respos0.x) ? ceil_int(respos1.x, PP.x) - respos0.x / PP.x : 0;
     const uint32_t nph = (respos1.y > respos0.y) ? ceil_int(respos1.y, PP.y) - respos0.y / PP.y : 0;
 
@@ -1569,14 +1569,15 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
   const uint8_t shiftup   = (transformation) ? 0 : FRACBITS - this->bitdepth;
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
-  const uint32_t length   = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
+  const int32_t length =
+      static_cast<int32_t>((this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y));
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   __m256i doff = _mm256_set1_epi32(DC_OFFSET);
-  for (uint32_t i = 0; i < round_down(length, SIMD_LEN_I32); i += SIMD_LEN_I32) {
+  for (int32_t i = 0; i < round_down(length, SIMD_LEN_I32); i += SIMD_LEN_I32) {
     __m256i sp                  = *((__m256i *)(samples + i));
     *((__m256i *)(samples + i)) = _mm256_sub_epi32(_mm256_slli_epi32(sp, shiftup), doff);
   }
-  for (uint32_t i = round_down(length, SIMD_LEN_I32); i < length; ++i) {
+  for (int32_t i = round_down(length, SIMD_LEN_I32); i < length; ++i) {
     samples[i] <<= shiftup;
     samples[i] -= DC_OFFSET;
   }
@@ -1624,7 +1625,7 @@ void j2k_tile::setCODparams(COD_marker *COD) {
   Cmodes         = COD->get_Cmodes();
   transformation = COD->get_transformation();
   precinct_size.clear();
-  precinct_size.reserve(NL + 1);
+  precinct_size.reserve(NL + 1U);
   element_siz tmp;
   for (uint8_t r = 0; r <= NL; r++) {
     COD->get_precinct_size(tmp, r);
@@ -1691,8 +1692,8 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
 
     this->pos0.x = std::max(TOsiz.x + p * Tsiz.x, Osiz.x);
     this->pos0.y = std::max(TOsiz.y + q * Tsiz.y, Osiz.y);
-    this->pos1.x = std::min(TOsiz.x + (p + 1) * Tsiz.x, Siz.x);
-    this->pos1.y = std::min(TOsiz.y + (q + 1) * Tsiz.y, Siz.y);
+    this->pos1.x = std::min(TOsiz.x + (p + 1U) * Tsiz.x, Siz.x);
+    this->pos1.y = std::min(TOsiz.y + (q + 1U) * Tsiz.y, Siz.y);
 
     // set coding style related properties from tile-part header
     if (tphdr->COD != nullptr) {
@@ -1798,8 +1799,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   bool x_cond, y_cond;
   std::vector<std::vector<std::vector<std::vector<bool>>>> is_packet_read(
       numlayers, std::vector<std::vector<std::vector<bool>>>(
-                     max_c_NL + 1, std::vector<std::vector<bool>>(
-                                       num_components, std::vector<bool>(max_res_precincts, false))));
+                     max_c_NL + 1U, std::vector<std::vector<bool>>(
+                                        num_components, std::vector<bool>(max_res_precincts, false))));
   j2k_resolution *cr  = nullptr;
   j2k_precinct *cp    = nullptr;
   size_t packet_count = 0;
@@ -1867,13 +1868,13 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       case 2:  // RPCL
         this->find_gcd_of_precinct_size(PP);
         x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1 << PP.x)) {
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
           if (x > pos0.x) {
             x_examin.push_back(x);
           }
         }
         y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1 << PP.y)) {
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
           if (y > pos0.y) {
             y_examin.push_back(y);
           }
@@ -1891,12 +1892,12 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                     x_cond          = false;
                     y_cond          = false;
                     main_header.SIZ->get_subsampling_factor(csub, c);
-                    x_cond = (x % (csub.x * (1 << (cPP.x + c_NL - r))) == 0)
+                    x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
                              || ((x == pos0.x)
-                                 && ((tr0.x * (1 << (c_NL - r))) % (1 << (cPP.x + c_NL - r)) != 0));
-                    y_cond = (y % (csub.y * (1 << (cPP.y + c_NL - r))) == 0)
+                                 && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
+                    y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
                              || ((y == pos0.y)
-                                 && ((tr0.y * (1 << (c_NL - r))) % (1 << (cPP.y + c_NL - r)) != 0));
+                                 && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
                       cp = cr->access_precinct(p);
@@ -1924,13 +1925,13 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       case 3:  // PCRL
         this->find_gcd_of_precinct_size(PP);
         x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1 << PP.x)) {
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
           if (x > pos0.x) {
             x_examin.push_back(x);
           }
         }
         y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1 << PP.y)) {
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
           if (y > pos0.y) {
             y_examin.push_back(y);
           }
@@ -1948,12 +1949,12 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond =
-                      (x % (csub.x * (1 << (cPP.x + c_NL - r))) == 0)
-                      || ((x == pos0.x) && ((tr0.x * (1 << (c_NL - r))) % (1 << (cPP.x + c_NL - r)) != 0));
-                  y_cond =
-                      (y % (csub.y * (1 << (cPP.y + c_NL - r))) == 0)
-                      || ((y == pos0.y) && ((tr0.y * (1 << (c_NL - r))) % (1 << (cPP.y + c_NL - r)) != 0));
+                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
+                           || ((x == pos0.x)
+                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
+                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
+                           || ((y == pos0.y)
+                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -1980,13 +1981,13 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       case 4:  // CPRL
         this->find_gcd_of_precinct_size(PP);
         x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1 << PP.x)) {
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
           if (x > pos0.x) {
             x_examin.push_back(x);
           }
         }
         y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1 << PP.y)) {
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
           if (y > pos0.y) {
             y_examin.push_back(y);
           }
@@ -2004,12 +2005,12 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond =
-                      (x % (csub.x * (1 << (cPP.x + c_NL - r))) == 0)
-                      || ((x == pos0.x) && ((tr0.x * (1 << (c_NL - r))) % (1 << (cPP.x + c_NL - r)) != 0));
-                  y_cond =
-                      (y % (csub.y * (1 << (cPP.y + c_NL - r))) == 0)
-                      || ((y == pos0.y) && ((tr0.y * (1 << (c_NL - r))) % (1 << (cPP.y + c_NL - r)) != 0));
+                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
+                           || ((x == pos0.x)
+                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
+                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
+                           || ((y == pos0.y)
+                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -2072,8 +2073,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
   bool x_cond, y_cond;
   std::vector<std::vector<std::vector<std::vector<bool>>>> is_packet_created(
       numlayers, std::vector<std::vector<std::vector<bool>>>(
-                     max_c_NL + 1, std::vector<std::vector<bool>>(
-                                       num_components, std::vector<bool>(max_res_precincts, false))));
+                     max_c_NL + 1U, std::vector<std::vector<bool>>(
+                                        num_components, std::vector<bool>(max_res_precincts, false))));
 
   j2k_resolution *cr  = nullptr;
   j2k_precinct *cp    = nullptr;
@@ -2140,13 +2141,13 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
       case 2:  // RPCL
         this->find_gcd_of_precinct_size(PP);
         x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1 << PP.x)) {
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
           if (x > pos0.x) {
             x_examin.push_back(x);
           }
         }
         y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1 << PP.y)) {
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
           if (y > pos0.y) {
             y_examin.push_back(y);
           }
@@ -2164,12 +2165,12 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                     x_cond          = false;
                     y_cond          = false;
                     main_header.SIZ->get_subsampling_factor(csub, c);
-                    x_cond = (x % (csub.x * (1 << (cPP.x + c_NL - r))) == 0)
+                    x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
                              || ((x == pos0.x)
-                                 && ((tr0.x * (1 << (c_NL - r))) % (1 << (cPP.x + c_NL - r)) != 0));
-                    y_cond = (y % (csub.y * (1 << (cPP.y + c_NL - r))) == 0)
+                                 && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
+                    y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
                              || ((y == pos0.y)
-                                 && ((tr0.y * (1 << (c_NL - r))) % (1 << (cPP.y + c_NL - r)) != 0));
+                                 && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
                       cp = cr->access_precinct(p);
@@ -2195,13 +2196,13 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
       case 3:  // PCRL
         this->find_gcd_of_precinct_size(PP);
         x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1 << PP.x)) {
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
           if (x > pos0.x) {
             x_examin.push_back(x);
           }
         }
         y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1 << PP.y)) {
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
           if (y > pos0.y) {
             y_examin.push_back(y);
           }
@@ -2219,12 +2220,12 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond =
-                      (x % (csub.x * (1 << (cPP.x + c_NL - r))) == 0)
-                      || ((x == pos0.x) && ((tr0.x * (1 << (c_NL - r))) % (1 << (cPP.x + c_NL - r)) != 0));
-                  y_cond =
-                      (y % (csub.y * (1 << (cPP.y + c_NL - r))) == 0)
-                      || ((y == pos0.y) && ((tr0.y * (1 << (c_NL - r))) % (1 << (cPP.y + c_NL - r)) != 0));
+                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
+                           || ((x == pos0.x)
+                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
+                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
+                           || ((y == pos0.y)
+                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -2249,13 +2250,13 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
       case 4:  // CPRL
         this->find_gcd_of_precinct_size(PP);
         x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1 << PP.x)) {
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
           if (x > pos0.x) {
             x_examin.push_back(x);
           }
         }
         y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1 << PP.y)) {
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
           if (y > pos0.y) {
             y_examin.push_back(y);
           }
@@ -2273,12 +2274,12 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond =
-                      (x % (csub.x * (1 << (cPP.x + c_NL - r))) == 0)
-                      || ((x == pos0.x) && ((tr0.x * (1 << (c_NL - r))) % (1 << (cPP.x + c_NL - r)) != 0));
-                  y_cond =
-                      (y % (csub.y * (1 << (cPP.y + c_NL - r))) == 0)
-                      || ((y == pos0.y) && ((tr0.y * (1 << (c_NL - r))) % (1 << (cPP.y + c_NL - r)) != 0));
+                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
+                           || ((x == pos0.x)
+                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
+                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
+                           || ((y == pos0.y)
+                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -2598,8 +2599,8 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
 
   this->pos0.x = std::max(TOsiz.x + p * Tsiz.x, Osiz.x);
   this->pos0.y = std::max(TOsiz.y + q * Tsiz.y, Osiz.y);
-  this->pos1.x = std::min(TOsiz.x + (p + 1) * Tsiz.x, Siz.x);
-  this->pos1.y = std::min(TOsiz.y + (q + 1) * Tsiz.y, Siz.y);
+  this->pos1.x = std::min(TOsiz.x + (p + 1U) * Tsiz.x, Siz.x);
+  this->pos1.y = std::min(TOsiz.y + (q + 1U) * Tsiz.y, Siz.y);
 
   // set coding style related properties from tile-part header
   if (tphdr->COD != nullptr) {
@@ -2761,8 +2762,7 @@ uint8_t *j2k_tile::encode() {
     element_siz bottom_right = tcomp[c].get_pos1();
     j2k_resolution *cr       = tcomp[c].access_resolution(NL);
 
-    auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr,
-                               uint8_t ROIshift) {
+    auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
       uint32_t length = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         uint32_t packet_length = 0;
@@ -2793,13 +2793,13 @@ uint8_t *j2k_tile::encode() {
     };
     for (uint8_t r = NL; r > 0; --r) {
       // encode codeblocks in HL or LH or HH
-      length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr, ROIshift));
+      length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
       cr           = tcomp[c].access_resolution(r - 1);
       top_left     = cr->get_pos0();
       bottom_right = cr->get_pos1();
     }
     // encode codeblocks in LL
-    length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr, ROIshift));
+    length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
   }  // end of component loop
 
   tile_part[0]->set_tile_index(this->index);

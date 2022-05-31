@@ -129,7 +129,7 @@ void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v
 void idwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1);
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2] = {idwt_irrev_ver_sr_fixed_neon,
                                                          idwt_rev_ver_sr_fixed_neon};
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX22) && defined(__AVX2__)
 void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,

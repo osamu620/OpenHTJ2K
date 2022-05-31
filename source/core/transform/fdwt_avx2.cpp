@@ -126,8 +126,8 @@ auto fdwt_irrev97_fixed_avx2_hor_step_32MAC = [](const int32_t init_pos, const i
 
 void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
                                       const int32_t u_i1) {
-  const auto i0       = static_cast<const int32_t>(u_i0);
-  const auto i1       = static_cast<const int32_t>(u_i1);
+  const auto i0       = static_cast<int32_t>(u_i0);
+  const auto i1       = static_cast<int32_t>(u_i1);
   const int32_t start = ceil_int(i0, 2);
   const int32_t stop  = ceil_int(i1, 2);
 
@@ -153,8 +153,8 @@ void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int3
 // reversible FDWT
 void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
                                     const int32_t u_i1) {
-  const auto i0        = static_cast<const int32_t>(u_i0);
-  const auto i1        = static_cast<const int32_t>(u_i1);
+  const auto i0        = static_cast<int32_t>(u_i0);
+  const auto i1        = static_cast<int32_t>(u_i1);
   const int32_t start  = ceil_int(i0, 2);
   const int32_t stop   = ceil_int(i1, 2);
   const int32_t offset = left + i0 % 2;
@@ -190,8 +190,8 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
 
 void fdwt_1d_filtr_rev53_fixed_avx2_32MAC(sprec_t *X, const int32_t left, const int32_t u_i0,
                                           const int32_t u_i1) {
-  const auto i0        = static_cast<const int32_t>(u_i0);
-  const auto i1        = static_cast<const int32_t>(u_i1);
+  const auto i0        = static_cast<int32_t>(u_i0);
+  const auto i1        = static_cast<int32_t>(u_i1);
   const int32_t start  = ceil_int(i0, 2);
   const int32_t stop   = ceil_int(i1, 2);
   const int32_t offset = left + i0 % 2;
