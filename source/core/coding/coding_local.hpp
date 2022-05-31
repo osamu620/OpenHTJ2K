@@ -51,21 +51,21 @@ inline void sigma(uint8_t &data, const uint8_t &val) { data |= val; }
 inline void sigma_(uint8_t &data, const uint8_t &val) { data |= val << SHIFT_SIGMA_; }
 inline void pi_(uint8_t &data, const uint8_t &val) {
   if (val) {
-    data |= 1 << SHIFT_PI_;
+    data |= static_cast<uint8_t>(1 << SHIFT_PI_);
   } else {
-    data &= ~(1 << SHIFT_PI_);
+    data &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
   }
 }
 inline void scan(uint8_t &data, const uint8_t &val) { data |= val << SHIFT_SCAN; }
 inline void refinement_value(uint8_t &data, const uint8_t &val) { data |= val << SHIFT_REF; }
 inline void refinement_indicator(uint8_t &data, const uint8_t &val) {
   if (val) {
-    data |= 1 << SHIFT_PI_;
+    data |= static_cast<uint8_t>(1 << SHIFT_PI_);
   } else {
-    data &= ~(1 << SHIFT_PI_);
+    data &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
   }
 }
 inline void decoded_bitplane_index(uint8_t &data, const uint8_t &val) {
   data &= 0x07;
-  data |= val << SHIFT_P;
+  data |= static_cast<uint8_t>(val << SHIFT_P);
 }

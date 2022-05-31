@@ -116,8 +116,8 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     x1[c] = ceil_int(siz.x, Rsiz.x);
     y0[c] = ceil_int(Osiz.y, Rsiz.y);
     y1[c] = ceil_int(siz.y, Rsiz.y);
-    width.push_back(ceil_int(x1[c] - x0[c], (1 << reduce_NL)));
-    height.push_back(ceil_int(y1[c] - y0[c], (1 << reduce_NL)));
+    width.push_back(ceil_int(x1[c] - x0[c], (1U << reduce_NL)));
+    height.push_back(ceil_int(y1[c] - y0[c], (1U << reduce_NL)));
     buf.emplace_back(new int32_t[width[c] * height[c]]);
     depth.push_back(main_header.SIZ->get_bitdepth(c) - 0);
     is_signed.push_back(main_header.SIZ->is_signed(c));
@@ -147,7 +147,6 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   }
 
   // read codestream and decode
-  //#pragma omp parallel for
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     tileSet[i].create_tile_buf(main_header);
     tileSet[i].decode();
@@ -156,7 +155,6 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   }
 
   // prepare output buffer
-#pragma omp parallel for
   for (uint16_t c = 0; c < num_components; c++) {
     for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
       j2k_tile_component *tile_component = tileSet[i].get_tile_component(c);
@@ -165,8 +163,8 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
       tile_component->get_size(component_size);
       uint32_t component_width  = component_size.x;
       uint32_t component_height = component_size.y;
-      uint32_t x_offset         = component_pos.x - ceil_int(x0[c], (1 << reduce_NL));
-      uint32_t y_offset         = component_pos.y - ceil_int(y0[c], (1 << reduce_NL));
+      uint32_t x_offset         = component_pos.x - ceil_int(x0[c], (1U << reduce_NL));
+      uint32_t y_offset         = component_pos.y - ceil_int(y0[c], (1U << reduce_NL));
       for (uint32_t y = 0; y < component_height; y++) {
         int32_t *sp = tile_component->get_sample_address(0, y);
         memcpy(&buf[c][(0 + x_offset) + (y + y_offset) * width[c]], sp, sizeof(int32_t) * component_width);

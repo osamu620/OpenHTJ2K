@@ -95,10 +95,9 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0,
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2] = {fdwt_irrev_ver_sr_fixed_neon,
                                                          fdwt_rev_ver_sr_fixed_neon};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left,
-                                      const int32_t u_i0, const int32_t u_i1);
-void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left,
-                                    const int32_t u_i0, const int32_t u_i1);
+void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                      const int32_t u_i1);
+void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1);
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
 void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
@@ -131,9 +130,8 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0,
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2] = {idwt_irrev_ver_sr_fixed_neon,
                                                          idwt_rev_ver_sr_fixed_neon};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, int32_t left,  int32_t u_i0, int32_t u_i1);
-void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0,
-                                      int32_t u_i1);
+void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
                                                           idwt_1d_filtr_rev53_fixed_avx2};
 void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1);

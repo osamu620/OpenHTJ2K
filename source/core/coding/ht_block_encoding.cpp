@@ -61,8 +61,8 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     int16x8_t vone   = vdupq_n_s16(1);
     auto vzero       = vdupq_n_s16(0);
     // simd
-    uint16_t simdlen = round_down(static_cast<uint16_t>(this->size.x), 8);
-    for (uint16_t j = 0; j < simdlen; j += 8) {
+    int16_t simdlen = round_down(static_cast<int16_t>(this->size.x), 8);
+    for (int16_t j = 0; j < simdlen; j += 8) {
       int16x8_t coeff16   = vld1q_s16(sp + j);
       uint8x8_t vblkstate = vget_low_u8(vld1q_u8(dstblk + j));
       uint16x8_t vsign    = vcltzq_s16(coeff16) >> 15;
@@ -86,11 +86,11 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     }
     or_val |= static_cast<unsigned int>(vmaxvq_s16(vzero));
     // remaining
-    for (uint16_t j = simdlen; j < this->size.x; ++j) {
+    for (int16_t j = simdlen; j < static_cast<int16_t>(this->size.x); ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-      dstblk[j] |= (temp & pLSB) << SHIFT_SMAG;
-      dstblk[j] |= (sign >> 31) << SHIFT_SSGN;
+      dstblk[j] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
+      dstblk[j] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
@@ -99,7 +99,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
         dstblk[j] |= 1;
         temp--;
         temp <<= 1;
-        temp += sign >> 31;
+        temp += static_cast<uint8_t>(sign >> 31);
         dp[j] = temp;
       }
     }
@@ -351,13 +351,14 @@ void state_MEL_enc::termMEL() {
  * state_VLC_enc: member functions
  *******************************************************************************/
 void state_VLC_enc::emitVLCBits(uint16_t cwd, uint8_t len) {
-  for (; len > 0;) {
+  int32_t len32 = len;
+  for (; len32 > 0;) {
     int32_t available_bits = 8 - (last > 0x8F) - bits;
-    int32_t t              = std::min(available_bits, (int32_t)len);
-    tmp |= (cwd & (1 << t) - 1) << bits;
-    bits += t;
+    int32_t t              = std::min(available_bits, len32);
+    tmp |= static_cast<uint8_t>((cwd & ((1 << t) - 1)) << bits);
+    bits += static_cast<uint8_t>(t);
     available_bits -= t;
-    len -= t;
+    len32 -= t;
     cwd >>= t;
     if (available_bits == 0) {
       if ((last > 0x8f) && tmp != 0x7F) {
@@ -415,8 +416,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   const uint32_t QWx2                = block->size.x + block->size.x % 2;
   alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1;
-  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1;
+  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1U) * (block->size.x + 2) + 2 * qx + 1;
+  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2U) * (block->size.x + 2) + 2 * qx + 1;
   auto v_u8_0        = vld1_u8(sp0);
   auto v_u8_1        = vld1_u8(sp1);
   auto v_u8_zip      = vzip1_u8(v_u8_0, v_u8_1);
@@ -429,7 +430,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   rho_q[0]        = vdupb_lane_u8(vtmp, 0);
   rho_q[1]        = vdupb_lane_u8(vtmp, 1);
   auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2);
-  auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2);
+  auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1U) * QWx2);
   auto v_s32_out  = vzipq_s32(v_s32_0, v_s32_1);
   vst1q_u32(v_n, v_s32_out.val[0]);
   vst1q_u32(v_n + 4, v_s32_out.val[1]);
@@ -526,7 +527,7 @@ static inline void make_storage_one(const j2k_codeblock *const block, const uint
 auto encode_UVLC0 = [](uint16_t &cwd, uint8_t &lw, int32_t u1, int32_t u2 = 0) {
   int32_t tmp;
   tmp = (int32_t)enc_UVLC_table0[u1 + (u2 << 5)];
-  lw  = (tmp & 0xFF);
+  lw  = static_cast<uint8_t>(tmp & 0xFF);
   cwd = static_cast<uint16_t>(tmp >> 8);
 };
 
@@ -534,7 +535,7 @@ auto encode_UVLC0 = [](uint16_t &cwd, uint8_t &lw, int32_t u1, int32_t u2 = 0) {
 auto encode_UVLC1 = [](uint16_t &cwd, uint8_t &lw, int32_t u1, int32_t u2 = 0) {
   int32_t tmp;
   tmp = (int32_t)enc_UVLC_table1[u1 + (u2 << 5)];
-  lw  = (tmp & 0xFF);
+  lw  = static_cast<uint8_t>(tmp & 0xFF);
   cwd = static_cast<uint16_t>(tmp >> 8);
 };
 
@@ -651,8 +652,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   // used as a flag to invoke HT Cleanup encoding
   uint32_t or_val = 0;
 
-  const uint16_t QW = ceil_int(static_cast<const uint16_t>(block->size.x), 2);
-  const uint16_t QH = ceil_int(static_cast<const uint16_t>(block->size.y), 2);
+  const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
+  const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
   block->set_MagSgn_and_sigma(or_val);
 
@@ -907,16 +908,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       uint8_t sigma7 = sigma_n[7];
       // context for 1st quad of current quad pair
       c_q[Q0] = static_cast<uint16_t>((sp[2 * qx + 1] | sp[2 * qx + 2]) << 2);
-      c_q[Q0] += (sigma_n[6] | sigma_n[7]) << 1;
-      c_q[Q0] += sp[2 * qx - 1] | sp[2 * qx];
+      c_q[Q0] += static_cast<uint16_t>((sigma_n[6] | sigma_n[7]) << 1);
+      c_q[Q0] += static_cast<uint16_t>(sp[2 * qx - 1] | sp[2 * qx]);
 
       // MAKE_STORAGE()
       make_storage(block, qy, qx, sigma_n, v_n, E_n, rho_q);
 
       // context for 2nd quad of current quad pair
       c_q[Q1] = static_cast<uint16_t>((sp[2 * (qx + 1) + 1] | sp[2 * (qx + 1) + 2]) << 2);
-      c_q[Q1] += (sigma_n[2] | sigma_n[3]) << 1;
-      c_q[Q1] += sp[2 * (qx + 1) - 1] | sp[2 * (qx + 1)];
+      c_q[Q1] += static_cast<uint16_t>((sigma_n[2] | sigma_n[3]) << 1);
+      c_q[Q1] += static_cast<uint16_t>(sp[2 * (qx + 1) - 1] | sp[2 * (qx + 1)]);
       // MEL encoding of the first quad
       if (c_q[Q0] == 0) {
         MEL_encoder.encodeMEL((rho_q[Q0] != 0));
@@ -1056,8 +1057,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       uint8_t sigma7 = sigma_n[7];
       // context for current quad
       c_q[Q0] = static_cast<uint16_t>((sp[2 * qx + 1] | sp[2 * qx + 2]) << 2);
-      c_q[Q0] += (sigma_n[6] | sigma_n[7]) << 1;
-      c_q[Q0] += sp[2 * qx - 1] | sp[2 * qx];
+      c_q[Q0] += static_cast<uint16_t>((sigma_n[6] | sigma_n[7]) << 1);
+      c_q[Q0] += static_cast<uint16_t>(sp[2 * qx - 1] | sp[2 * qx]);
       make_storage_one(block, qy, qx, sigma_n, v_n, E_n, rho_q);
       // MEL encoding of the first quad
       if (c_q[Q0] == 0) {
@@ -1199,8 +1200,8 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
 };
 
 void ht_sigprop_encode(j2k_codeblock *block, SP_enc &SigProp) {
-  const uint16_t num_v_stripe = static_cast<const uint16_t>(block->size.y / 4);
-  const uint16_t num_h_stripe = static_cast<const uint16_t>(block->size.x / 4);
+  const uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
+  const uint16_t num_h_stripe = static_cast<uint16_t>(block->size.x / 4);
   uint16_t i_start            = 0, j_start;
   uint16_t width              = 4;
   uint16_t width_last;
@@ -1235,9 +1236,9 @@ void ht_sigprop_encode(j2k_codeblock *block, SP_enc &SigProp) {
  * HT magref encoding
  *******************************************************************************/
 void ht_magref_encode(j2k_codeblock *block, MR_enc &MagRef) {
-  const uint16_t blk_height   = static_cast<const uint16_t>(block->size.y);
-  const uint16_t blk_width    = static_cast<const uint16_t>(block->size.x);
-  const uint16_t num_v_stripe = static_cast<const uint16_t>(block->size.y / 4);
+  const uint16_t blk_height   = static_cast<uint16_t>(block->size.y);
+  const uint16_t blk_width    = static_cast<uint16_t>(block->size.x);
+  const uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   uint16_t i_start            = 0;
   uint16_t height             = 4;
   uint8_t *sp;

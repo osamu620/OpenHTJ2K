@@ -256,7 +256,7 @@ class packet_header_writer {
   uint8_t tmp;
   uint8_t last;
   uint8_t bits;
-  int32_t pos;
+  uint32_t pos;
 
  public:
   packet_header_writer() : tmp(0), last(0), bits(8), pos(0) {
@@ -265,7 +265,7 @@ class packet_header_writer {
     put_bit(1);
   };
 
-  [[nodiscard]] int32_t get_length() const { return pos; }
+  [[nodiscard]] uint32_t get_length() const { return pos; }
 
   size_t copy_buf(uint8_t *p) {
     for (size_t i = 0; i < buf.size(); ++i) {
@@ -284,7 +284,7 @@ class packet_header_writer {
       tmp = 0;
     }
     bits--;
-    tmp += b << bits;
+    tmp += static_cast<uint8_t>(b << bits);
   }
 
   void put_Nbits(uint32_t cwd, uint8_t n) {

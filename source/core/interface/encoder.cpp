@@ -94,12 +94,14 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     // PGM
     case '2':
       isASCII = true;
+      /* FALLTHRU */
     case '5':
       isBigendian = true;
       break;
       // PPM
     case '3':
       isASCII = true;
+      /* FALLTHRU */
     case '6':
       isPPM = true;
       // number of components shall be three here
@@ -231,7 +233,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   }
   fseek(fp, -1, SEEK_CUR);
 
-  const uint32_t byte_per_sample      = (bitDepth + 8 - 1) / 8;
+  const uint32_t byte_per_sample      = (bitDepth + 8U - 1U) / 8U;
   const uint32_t component_gap        = num_iterations * byte_per_sample;
   const uint32_t line_width           = component_gap * compw;
   std::unique_ptr<uint8_t[]> line_buf = MAKE_UNIQUE<uint8_t[]>(line_width);
@@ -255,7 +257,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
         fclose(fp);
         return EXIT_FAILURE;
       }
-#pragma omp parallel for
+
       for (size_t c = 0; c < num_iterations; ++c) {
         uint8_t *src;
         int32_t *dst;
@@ -427,7 +429,7 @@ size_t openhtj2k_encoder_impl::invoke() {
   if (MAGB < 27) {
     bits0_4 = (MAGB > 8) ? MAGB - 8 : 0;
   } else if (MAGB <= 71) {
-    bits0_4 = (MAGB - 27) / 4 + 19;
+    bits0_4 = static_cast<uint16_t>((MAGB - 27) / 4 + 19);
   } else {
     bits0_4 = 31;
   }

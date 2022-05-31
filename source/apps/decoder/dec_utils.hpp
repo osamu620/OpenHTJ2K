@@ -56,7 +56,7 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
                std::vector<bool> &is_signed) {
   // ppm does not allow negative value
   int32_t PNM_OFFSET      = (is_signed[0]) ? 1 << (depth[0] - 1) : 0;
-  uint8_t bytes_per_pixel = ceil_int(depth[0], 8);
+  uint8_t bytes_per_pixel = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(depth[0]), 8));
   int32_t MAXVAL          = (1 << depth[0]) - 1;
   char fname[256], tmpname[256];
   memcpy(tmpname, outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name));
@@ -105,7 +105,7 @@ void convert_component_buffer_class(T *outbuf, uint16_t c, bool is_PGM, std::vec
   const uint32_t num_pixels = width[c] * height[c];
   // pgm does not allow negative value
   int32_t PNM_OFFSET            = 0;
-  const uint8_t bytes_per_pixel = ceil_int(depth[c], 8);
+  const uint8_t bytes_per_pixel = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(depth[c]), 8));
 
   if (is_PGM) {
     PNM_OFFSET = (is_signed[c]) ? 1 << (depth[c] - 1) : 0;

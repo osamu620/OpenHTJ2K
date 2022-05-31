@@ -32,8 +32,8 @@
 
 // irreversible FDWT
 void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
-  const auto i0       = static_cast<const int32_t>(u_i0);
-  const auto i1       = static_cast<const int32_t>(u_i1);
+  const auto i0       = static_cast<int32_t>(u_i0);
+  const auto i1       = static_cast<int32_t>(u_i1);
   const int32_t start = ceil_int(i0, 2);
   const int32_t stop  = ceil_int(i1, 2);
 
@@ -62,8 +62,8 @@ void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u
 
 // reversible FDWT
 void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
-  const auto i0       = static_cast<const int32_t>(u_i0);
-  const auto i1       = static_cast<const int32_t>(u_i1);
+  const auto i0       = static_cast<int32_t>(u_i0);
+  const auto i1       = static_cast<int32_t>(u_i1);
   const int32_t start = ceil_int(i0, 2);
   const int32_t stop  = ceil_int(i1, 2);
   // X += left - i0 % 2;
@@ -71,12 +71,12 @@ void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
   for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
     int32_t sum = X[n];
     sum += X[n + 2];
-    X[n + 1] -= (sum >> 1);
+    X[n + 1] -= static_cast<int16_t>(sum >> 1);
   }
   for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
     int32_t sum = X[n - 1];
     sum += X[n + 1];
-    X[n] += ((sum + 2) >> 2);
+    X[n] += static_cast<int16_t>((sum + 2) >> 2);
   }
 };
 
@@ -242,14 +242,14 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
-        buf[n + 1][col] -= (sum >> 1);
+        buf[n + 1][col] -= static_cast<int16_t>(sum >> 1);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
-        buf[n][col] += ((sum + 2) >> 2);
+        buf[n][col] += static_cast<int16_t>((sum + 2) >> 2);
       }
     }
 
@@ -291,7 +291,7 @@ static void fdwt_2d_deinterleave_fixed(const sprec_t *buf, sprec_t *const LL, sp
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
                       const int32_t u0, const int32_t u1, const int32_t v0, const int32_t v1,
                       const uint8_t transformation) {
-  const auto buf_length = static_cast<const uint32_t>((u1 - u0) * (v1 - v0));
+  const auto buf_length = static_cast<uint32_t>((u1 - u0) * (v1 - v0));
   sprec_t *src          = previousLL;
   auto *dst             = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * buf_length, 32));
   fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1);
