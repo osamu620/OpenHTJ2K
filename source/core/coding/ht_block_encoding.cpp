@@ -53,7 +53,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   for (uint16_t i = 0; i < height; ++i) {
     sprec_t *const sp  = this->i_samples + i * stride;
     int32_t *const dp  = this->sample_buf.get() + i * width;
-    size_t block_index = (i + 1) * (size.x + 2) + 1;
+    size_t block_index = (i + 1U) * (size.x + 2U) + 1U;
     uint8_t *dstblk    = block_states.get() + block_index;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     // vetorized for ARM NEON
@@ -105,14 +105,14 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     }
 
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    auto vpLSB     = _mm256_set1_epi16((uint16_t)pLSB);
-    auto vone      = _mm256_set1_epi16((uint16_t)1);
-    auto vtwo      = _mm256_set1_epi16((uint16_t)2);
-    auto vsignmask = _mm256_set1_epi16((uint16_t)0x8000);
-    auto vabsmask  = _mm256_set1_epi16((uint16_t)0x7FFF);
+    auto vpLSB     = _mm256_set1_epi16((int16_t)pLSB);
+    auto vone      = _mm256_set1_epi16((int16_t)1);
+    auto vtwo      = _mm256_set1_epi16((int16_t)2);
+    auto vsignmask = _mm256_set1_epi16((int16_t)0x8000);
+    auto vabsmask  = _mm256_set1_epi16((int16_t)0x7FFF);
     auto vzero     = _mm256_setzero_si256();
     // simd
-    uint16_t simdlen = round_down(this->size.x, 16);
+    uint16_t simdlen = round_down(this->size.x, 16U);
     for (uint16_t j = 0; j < simdlen; j += 16) {
       auto coeff16 = _mm256_loadu_si256((__m256i *)(sp + j));
       // auto vsmag   = _mm256_and_si256(coeff16, vpLSB);
@@ -123,7 +123,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
 
       auto vmasked_one =
           _mm256_and_si256(_mm256_xor_si256(_mm256_cmpeq_epi16(vabsmag, _mm256_setzero_si256()),
-                                            _mm256_set1_epi16((uint16_t)0xFFFF)),
+                                            _mm256_set1_epi16((int16_t)0xFFFF)),
                            vone);
       vzero            = _mm256_or_si256(vzero, vabsmag);
       auto vmasked_two = _mm256_mullo_epi16(vmasked_one, vtwo);
@@ -144,9 +144,9 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     // remaining
     for (uint16_t j = simdlen; j < this->size.x; ++j) {
       int32_t temp  = sp[j];
-      uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+      uint32_t sign = (static_cast<uint32_t>(temp) & 0x80000000) >> 31;
       dstblk[j] |= (temp & pLSB) << SHIFT_SMAG;
-      dstblk[j] |= (sign >> 31) << SHIFT_SSGN;
+      dstblk[j] |= (sign) << SHIFT_SSGN;
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
@@ -155,7 +155,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
         dstblk[j] |= 1;
         temp--;
         temp <<= 1;
-        temp += sign >> 31;
+        temp  = temp + static_cast<int32_t>(sign);
         dp[j] = temp;
       }
       block_index++;
@@ -441,8 +441,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const uint32_t QWx2 = block->size.x + block->size.x % 2;
   const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1;
-  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1;
+  uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * (block->size.x + 2U) + 2U * qx + 1U;
+  uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * (block->size.x + 2U) + 2U * qx + 1U;
   auto v_u8_0 = _mm_set1_epi64x(*((int64_t *)sp0));
   auto v_u8_1 = _mm_set1_epi64x(*((int64_t *)sp1));
   auto v_u8_zip = _mm_unpacklo_epi8(v_u8_0, v_u8_1);
@@ -455,8 +455,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 
   alignas(32) uint32_t sig32[8];
   _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(v_u8_out));
-  auto v_s32_0 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2));
-  auto v_s32_1 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2));
+  auto v_s32_0 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2U * qx + 2U * qy * QWx2));
+  auto v_s32_1 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * QWx2));
   *((__m128i *)(v_n)) = _mm_unpacklo_epi32(v_s32_0, v_s32_1);
   *((__m128i *)(v_n + 4)) = _mm_unpackhi_epi32(v_s32_0, v_s32_1);
 
@@ -651,6 +651,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t Scup;
   // used as a flag to invoke HT Cleanup encoding
   uint32_t or_val = 0;
+  if (ROIshift) {
+    printf("WARNING: Encoding with ROI is not supported.\n");
+  }
 
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
@@ -1174,7 +1177,7 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != i_start + height - 1));
       mbr         = 0;
       if (block->get_state(Sigma, i, j) == 0) {
-        block->calc_mbr(mbr, i, j, causal_cond);
+        mbr = block->calc_mbr(i, j, causal_cond);
       }
       mbr_info >>= 3;
       if (mbr != 0) {

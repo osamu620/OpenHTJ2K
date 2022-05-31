@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
 
   uint_fast64_t PAE = 0, tmp, sum = 0;
   int_fast64_t d;
-  const uint32_t length = w * h * img0.get_num_components();
+  const uint_fast32_t length = w * h * img0.get_num_components();
   for (uint_fast32_t i = 0; i < length; ++i) {
     d   = (int_fast64_t)sp0[i] - (int_fast64_t)sp1[i];
     tmp = (d < 0) ? static_cast<uint_fast64_t>(-d) : static_cast<uint_fast64_t>(d);

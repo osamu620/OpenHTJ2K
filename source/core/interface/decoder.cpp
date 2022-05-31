@@ -74,8 +74,12 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   // open codestream and store it in memory
   FILE *fp = fopen(filename, "rb");
   in.alloc_memory(static_cast<uint32_t>(file_size));
-  uint8_t *p = in.get_buf_pos();
-  fread(p, sizeof(uint8_t), static_cast<size_t>(file_size), fp);
+  uint8_t *p        = in.get_buf_pos();
+  size_t bytes_read = fread(p, sizeof(uint8_t), static_cast<size_t>(file_size), fp);
+  if (bytes_read < file_size) {
+    printf("ERROR: %s seems to have not enough data.\n", filename);
+    throw std::exception();
+  }
   fclose(fp);
 }
 

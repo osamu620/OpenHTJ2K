@@ -43,29 +43,34 @@
 //  sample_buf[j2 + j1 * size.x] = static_cast<int32_t>(symbol);
 //}
 
-void j2k_codeblock::calc_mbr(uint8_t &mbr, const int16_t i, const int16_t j,
-                             const uint8_t causal_cond) const {
-  // mbr |= (mbr_info != 0);
-  mbr |= get_state(Sigma, i - 1, j - 1);
-  mbr |= get_state(Sigma, i - 1, j);
-  mbr |= get_state(Sigma, i - 1, j + 1);
-  mbr |= get_state(Sigma, i, j - 1);
-  mbr |= get_state(Sigma, i, j + 1);
-  mbr |= static_cast<uint8_t>(get_state(Sigma, i + 1, j - 1) * causal_cond);
-  mbr |= static_cast<uint8_t>(get_state(Sigma, i + 1, j) * causal_cond);
-  mbr |= static_cast<uint8_t>(get_state(Sigma, i + 1, j + 1) * causal_cond);
+uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
+  const int16_t im1 = static_cast<int16_t>(i - 1);
+  const int16_t jm1 = static_cast<int16_t>(j - 1);
+  const int16_t ip1 = static_cast<int16_t>(i + 1);
+  const int16_t jp1 = static_cast<int16_t>(j + 1);
+  uint8_t mbr       = get_state(Sigma, im1, jm1);
+  mbr               = mbr | get_state(Sigma, im1, j);
+  mbr               = mbr | get_state(Sigma, im1, jp1);
+  mbr               = mbr | get_state(Sigma, i, jm1);
+  mbr               = mbr | get_state(Sigma, i, jp1);
+  mbr               = mbr | static_cast<uint8_t>(get_state(Sigma, ip1, jm1) * causal_cond);
+  mbr               = mbr | static_cast<uint8_t>(get_state(Sigma, ip1, j) * causal_cond);
+  mbr               = mbr | static_cast<uint8_t>(get_state(Sigma, ip1, jp1) * causal_cond);
 
-  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i - 1, j - 1) * get_state(Scan, i - 1, j - 1));
-  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i - 1, j) * get_state(Scan, i - 1, j));
-  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i - 1, j + 1) * get_state(Scan, i - 1, j + 1));
-  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i, j - 1) * get_state(Scan, i, j - 1));
-  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i, j + 1) * get_state(Scan, i, j + 1));
-  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i + 1, j - 1) * get_state(Scan, i + 1, j - 1)
-                              * causal_cond);
-  mbr |=
-      static_cast<uint8_t>(get_state(Refinement_value, i + 1, j) * get_state(Scan, i + 1, j) * causal_cond);
-  mbr |= static_cast<uint8_t>(get_state(Refinement_value, i + 1, j + 1) * get_state(Scan, i + 1, j + 1)
-                              * causal_cond);
+  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, im1, jm1) * get_state(Scan, im1, jm1));
+  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, im1, j) * get_state(Scan, im1, j));
+  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, im1, jp1) * get_state(Scan, im1, jp1));
+  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, i, jm1) * get_state(Scan, i, jm1));
+  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, i, jp1) * get_state(Scan, i, jp1));
+  mbr = mbr
+        | static_cast<uint8_t>(get_state(Refinement_value, ip1, jm1) * get_state(Scan, ip1, jm1)
+                               * causal_cond);
+  mbr = mbr
+        | static_cast<uint8_t>(get_state(Refinement_value, ip1, j) * get_state(Scan, ip1, j) * causal_cond);
+  mbr = mbr
+        | static_cast<uint8_t>(get_state(Refinement_value, ip1, jp1) * get_state(Scan, ip1, jp1)
+                               * causal_cond);
+  return mbr;
 }
 
 /********************************************************************************
@@ -81,11 +86,11 @@ void state_MS_dec::loadByte() {
   }
 
   Creg |= static_cast<uint64_t>(tmp) << ctreg;
-  ctreg += bits;
+  ctreg = static_cast<uint8_t>(ctreg + bits);
 }
 void state_MS_dec::close(int32_t num_bits) {
   Creg >>= num_bits;
-  ctreg -= static_cast<uint8_t>(num_bits);
+  ctreg = static_cast<uint8_t>(ctreg - static_cast<uint8_t>(num_bits));
   while (ctreg < 32) {
     loadByte();
   }
@@ -111,7 +116,7 @@ uint8_t state_MS_dec::importMagSgnBit() {
     pos++;
   }
   val = tmp & 1;
-  tmp >>= 1;
+  tmp = static_cast<uint8_t>(tmp >> 1);
   --bits;
   return val;
 }
@@ -159,7 +164,7 @@ uint8_t state_MEL_decoder::decodeMELSym() {
     bit  = MEL_unPacker->importMELbit();
     if (bit == 1) {
       MEL_run = static_cast<uint8_t>(1 << eval);
-      MEL_k   = (12 < MEL_k + 1) ? 12 : MEL_k + 1;
+      MEL_k   = static_cast<uint8_t>((12 < MEL_k + 1) ? 12 : MEL_k + 1);
     } else {
       MEL_run = 0;
       while (eval > 0) {
@@ -167,7 +172,7 @@ uint8_t state_MEL_decoder::decodeMELSym() {
         MEL_run = static_cast<uint8_t>((MEL_run << 1) + bit);
         eval--;
       }
-      MEL_k   = (0 > MEL_k - 1) ? 0 : MEL_k - 1;
+      MEL_k   = static_cast<uint8_t>((0 > MEL_k - 1) ? 0 : MEL_k - 1);
       MEL_one = 1;
     }
   }
@@ -332,7 +337,7 @@ uint8_t state_VLC_enc::decodeUSuffix(const uint8_t &u_pfx) {
   }
   for (int i = 1; i < 5; i++) {
     bit = getbitfunc;
-    val += static_cast<uint8_t>(bit << i);
+    val = static_cast<uint8_t>(val + (bit << i));
   }
   return val;
 }
@@ -344,7 +349,7 @@ uint8_t state_VLC_enc::decodeUExtension(const uint8_t &u_sfx) {
   val = getbitfunc;
   for (int i = 1; i < 4; i++) {
     bit = getbitfunc;
-    val += static_cast<uint8_t>(bit << i);
+    val = static_cast<uint8_t>(val + (bit << i));
   }
   return val;
 }
@@ -454,7 +459,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   // Initial line-pair
   for (; q < QW - 1;) {
     q1 = q;
-    q2 = q + 1;
+    q2 = q + 1U;
 #ifdef ADVANCED
     decodeSigEMB(MEL_decoder, VLC, context, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table0);
     if (u_off[FIRST_QUAD] == 0) {
@@ -662,7 +667,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   for (uint16_t row = 1; row < QH; row++) {
     while ((q - row * QW) < QW - 1 && q < QW * QH) {
       q1 = q;
-      q2 = q + 1;
+      q2 = q + 1U;
 
       // calculate context for the current quad
       context1 = sigma_n[4 * (q1 - QW) + 1];                               // n
@@ -964,7 +969,7 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != i_start + height - 1));
       mbr         = 0;
       if (block->get_state(Sigma, i, j) == 0) {
-        block->calc_mbr(mbr, i, j, causal_cond);
+        mbr = block->calc_mbr(i, j, causal_cond);
       }
       mbr_info >>= 3;
       if (mbr != 0) {

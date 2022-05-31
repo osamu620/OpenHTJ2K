@@ -67,7 +67,7 @@ void mq_decoder::init(uint32_t buf_pos, uint32_t segment_length, bool is_bypass)
     C <<= t;
     fill_LSBs();
     C <<= 7;
-    t -= 7;
+    t = static_cast<uint8_t>(t - 7);
   }
 }
 
@@ -85,7 +85,7 @@ void mq_decoder::renormalize_once() {
   if (t == 0) {
     fill_LSBs();
   }
-  A <<= 1;
+  A = static_cast<uint16_t>(A << 1);
   C <<= 1;
   t--;
 }
@@ -118,10 +118,10 @@ uint8_t mq_decoder::decode(uint8_t label) {
     throw std::exception();
   }
 
-  A -= probability;
+  A = static_cast<uint16_t>(A - probability);
   if (A < probability) {
     // Conditional exchange of MPS and LPS
-    expected_symbol = 1 - expected_symbol;
+    expected_symbol = static_cast<uint16_t>(1 - expected_symbol);
   }
 
   // Compare active region of C

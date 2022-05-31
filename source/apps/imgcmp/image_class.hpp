@@ -218,8 +218,8 @@ class image {
       while (c == SP || c == LF || c == CR) {
         c = fgetc(fp);
         if (c == '#') {
-          static_cast<void>(fgets(comment, sizeof(comment), fp));
-          c = fgetc(fp);
+          char *nouse = fgets(comment, sizeof(comment), fp);
+          c           = fgetc(fp);
         }
       }
       // read numerical value
@@ -259,8 +259,8 @@ class image {
     while (c == SP || c == LF || c == CR) {
       c = fgetc(fp);
       if (c == '#') {
-        static_cast<void>(fgets(comment, sizeof(comment), fp));
-        c = fgetc(fp);
+        char *nouse = fgets(comment, sizeof(comment), fp);
+        c           = fgetc(fp);
       }
     }
     fseek(fp, -1, SEEK_CUR);

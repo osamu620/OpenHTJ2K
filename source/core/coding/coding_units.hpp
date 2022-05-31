@@ -106,7 +106,7 @@ class j2k_codeblock : public j2k_region {
              val);
   }
   uint8_t get_state(const std::function<uint8_t(uint8_t &)> &callback, int16_t j1, int16_t j2) const {
-    return callback(
+    return (uint8_t)callback(
         block_states[static_cast<uint32_t>(j1 + 1) * (size.x + 2) + static_cast<uint32_t>(j2 + 1)]);
   }
   // DEBUG FUNCTION, SOON BE DELETED
@@ -122,7 +122,7 @@ class j2k_codeblock : public j2k_region {
   void update_sign(const int8_t &val, const int16_t &j1, const int16_t &j2) const;
   [[nodiscard]] uint8_t get_sign(const int16_t &j1, const int16_t &j2) const;
   void set_MagSgn_and_sigma(uint32_t &or_val);
-  void calc_mbr(uint8_t &mbr, int16_t i, int16_t j, uint8_t causal_cond) const;
+  uint8_t calc_mbr(int16_t i, int16_t j, uint8_t causal_cond) const;
 };
 
 /********************************************************************************

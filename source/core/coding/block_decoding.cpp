@@ -48,18 +48,22 @@ uint8_t j2k_codeblock::get_sign(const int16_t &j1, const int16_t &j2) const {
 }
 
 uint8_t j2k_codeblock::get_context_label_sig(const int16_t &j1, const int16_t &j2) const {
-  uint8_t idx = 0;
+  uint8_t idx        = 0;
+  const int16_t j1m1 = static_cast<int16_t>(j1 - 1);
+  const int16_t j1p1 = static_cast<int16_t>(j1 + 1);
+  const int16_t j2m1 = static_cast<int16_t>(j2 - 1);
+  const int16_t j2p1 = static_cast<int16_t>(j2 + 1);
   // one line above left, center, right
-  idx += get_state(Sigma, j1 - 1, j2 - 1);
-  idx += static_cast<uint8_t>(get_state(Sigma, j1 - 1, j2) << 4);
-  idx += static_cast<uint8_t>(get_state(Sigma, j1 - 1, j2 + 1) << 1);
+  idx = get_state(Sigma, j1m1, j2m1);
+  idx = static_cast<uint8_t>(idx + static_cast<uint8_t>(get_state(Sigma, j1m1, j2) << 4));
+  idx = static_cast<uint8_t>(idx + static_cast<uint8_t>(get_state(Sigma, j1m1, j2p1) << 1));
   // current line left, right
-  idx += static_cast<uint8_t>(get_state(Sigma, j1, j2 - 1) << 6);
-  idx += static_cast<uint8_t>(get_state(Sigma, j1, j2 + 1) << 7);
+  idx = static_cast<uint8_t>(idx + static_cast<uint8_t>(get_state(Sigma, j1, j2m1) << 6));
+  idx = static_cast<uint8_t>(idx + static_cast<uint8_t>(get_state(Sigma, j1, j2p1) << 7));
   // one line below left, center, right
-  idx += static_cast<uint8_t>(get_state(Sigma, j1 + 1, j2 - 1) << 2);
-  idx += static_cast<uint8_t>(get_state(Sigma, j1 + 1, j2) << 5);
-  idx += static_cast<uint8_t>(get_state(Sigma, j1 + 1, j2 + 1) << 3);
+  idx = static_cast<uint8_t>(idx + static_cast<uint8_t>(get_state(Sigma, j1p1, j2m1) << 2));
+  idx = static_cast<uint8_t>(idx + static_cast<uint8_t>(get_state(Sigma, j1p1, j2) << 5));
+  idx = static_cast<uint8_t>(idx + static_cast<uint8_t>(get_state(Sigma, j1p1, j2p1) << 3));
 
   if ((this->Cmodes & CAUSAL) && j1 % 4 == 3) {
     idx &= 0xD3;
@@ -408,7 +412,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 
       segment_bytes = 0;
       for (uint8_t n = 0; n < current_segment_pass; n++) {
-        segment_bytes += block->pass_length[z + n];
+        segment_bytes += block->pass_length[static_cast<size_t>(z + n)];
       }
       mq_dec.init(segment_pos, segment_bytes, is_bypass);
       segment_pos += segment_bytes;

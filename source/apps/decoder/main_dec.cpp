@@ -159,7 +159,7 @@ int main(int argc, char *argv[]) {
   if (num_components == 3 && strcmp(outfile_ext_name, ".ppm") == 0) {
     compositable = true;
     for (uint16_t c = 0; c < num_components - 1; c++) {
-      if (img_width[c] != img_width[c + 1] || img_height[c] != img_height[c + 1]) {
+      if (img_width[c] != img_width[c + 1U] || img_height[c] != img_height[c + 1U]) {
         compositable = false;
         break;
       }
