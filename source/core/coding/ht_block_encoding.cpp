@@ -112,7 +112,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     auto vabsmask  = _mm256_set1_epi16((int16_t)0x7FFF);
     auto vzero     = _mm256_setzero_si256();
     // simd
-    int32_t simdlen = round_down(this->size.x, 16);
+    int32_t simdlen = round_down(static_cast<int32_t>(this->size.x), 16);
     for (int32_t j = 0; j < simdlen; j += 16) {
       auto coeff16 = _mm256_loadu_si256((__m256i *)(sp + j));
       // auto vsmag   = _mm256_and_si256(coeff16, vpLSB);
@@ -356,10 +356,10 @@ void state_VLC_enc::emitVLCBits(uint16_t cwd, uint8_t len) {
     int32_t available_bits = 8 - (last > 0x8F) - bits;
     int32_t t              = std::min(available_bits, len32);
     tmp |= static_cast<uint8_t>((cwd & ((1 << t) - 1)) << bits);
-    bits += static_cast<uint8_t>(t);
+    bits = static_cast<uint8_t>(bits + t);
     available_bits -= t;
     len32 -= t;
-    cwd >>= t;
+    cwd = static_cast<uint16_t>(cwd >> t);
     if (available_bits == 0) {
       if ((last > 0x8f) && tmp != 0x7F) {
         last = 0x00;
@@ -440,7 +440,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   vst1q_s32(E_n + 4, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[1], 1), 1) + 1)) * vsig1);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const uint32_t QWx2 = block->size.x + block->size.x % 2;
-  const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
+  // const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
   uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * (block->size.x + 2U) + 2U * qx + 1U;
   uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * (block->size.x + 2U) + 2U * qx + 1U;
   auto v_u8_0 = _mm_set1_epi64x(*((int64_t *)sp0));
@@ -450,8 +450,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   auto v_u8_out = _mm_and_si128(v_u8_zip, vmask);
   *((int64_t *)sigma_n) = _mm_cvtsi128_si64(v_u8_out);
 
-  rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);
-  rho_q[1] = sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3);
+  rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
+  rho_q[1] = static_cast<uint8_t>(sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3));
 
   alignas(32) uint32_t sig32[8];
   _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(v_u8_out));
@@ -463,7 +463,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   auto vv_n = _mm256_load_si256((__m256i *)v_n);
   auto vsig = _mm256_load_si256((__m256i *)sig32);
   auto vone = _mm256_set1_epi32(1);
-  auto v32 = _mm256_set1_epi32(32);
+  // auto v32 = _mm256_set1_epi32(32);
   auto vvv = bsr_256_32_cvtfloat(_mm256_add_epi32(_mm256_slli_epi32(_mm256_srai_epi32(vv_n, 1), 1), vone));
   auto vtmp = _mm256_mullo_epi32(_mm256_add_epi32(vvv, vone), vsig);
   _mm256_store_si256((__m256i *)E_n, vtmp);
@@ -542,9 +542,9 @@ auto encode_UVLC1 = [](uint16_t &cwd, uint8_t &lw, int32_t u1, int32_t u2 = 0) {
 // joint termination of MEL and VLC
 int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
   uint8_t MEL_mask, VLC_mask, fuse;
-  MEL.tmp <<= MEL.rem;
-  MEL_mask = (0xFF << MEL.rem) & 0xFF;
-  VLC_mask = 0xFF >> (8 - VLC.bits);
+  MEL.tmp  = static_cast<uint8_t>(MEL.tmp << MEL.rem);
+  MEL_mask = static_cast<uint8_t>((0xFF << MEL.rem) & 0xFF);
+  VLC_mask = static_cast<uint8_t>(0xFF >> (8 - VLC.bits));
   if ((MEL_mask | VLC_mask) != 0) {
     fuse = MEL.tmp | VLC.tmp;
     if (((((fuse ^ MEL.tmp) & MEL_mask) | ((fuse ^ VLC.tmp) & VLC_mask)) == 0) && (fuse != 0xFF)) {
@@ -564,9 +564,10 @@ int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
 
 // joint termination of SP and MR
 int32_t termSPandMR(SP_enc &SP, MR_enc &MR) {
-  uint8_t SP_mask = 0xFF >> (8 - SP.bits);  // if SP_bits is 0, SP_mask = 0
-  SP_mask |= ((1 << SP.max) & 0x80);        // Auguments SP_mask to cover any stuff bit
-  uint8_t MR_mask = 0xFF >> (8 - MR.bits);  // if MR_bits is 0, MR_mask = 0
+  uint8_t SP_mask = static_cast<uint8_t>(0xFF >> (8 - SP.bits));  // if SP_bits is 0, SP_mask = 0
+  SP_mask =
+      static_cast<uint8_t>(SP_mask | ((1 << SP.max) & 0x80));  // Auguments SP_mask to cover any stuff bit
+  uint8_t MR_mask = static_cast<uint8_t>(0xFF >> (8 - MR.bits));  // if MR_bits is 0, MR_mask = 0
   if ((SP_mask | MR_mask) == 0) {
     // last SP byte cannot be 0xFF, since then SP_max would be 7
     memmove(&SP.buf[SP.pos], &MR.buf[MR.pos + 1], MAX_Lref - MR.pos);
@@ -670,7 +671,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     block->layer_passes[0] = 0;
     block->layer_start[0]  = 0;
     // set number of zero-bitplanes (=Zblk)
-    block->num_ZBP = block->get_Mb() - 1;
+    block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1);
     return static_cast<int32_t>(block->length);
   }
 
@@ -699,7 +700,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   ep++;
   uint8_t *sp = sigma_adj.get();
   sp++;
-  for (uint16_t qx = 0; qx < QW - 1; qx += 2) {
+  for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2U)) {
     const int16_t qy = 0;
     // MAKE_STORAGE()
     make_storage(block, qy, qx, sigma_n, v_n, E_n, rho_q);
@@ -738,7 +739,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     n_q[Q0]    = static_cast<uint16_t>(emb[Q0] + (rho_q[Q0] << 4) + (c_q[Q0] << 8));
     CxtVLC[Q0] = enc_CxtVLC_table0[n_q[Q0]];
     emb_k      = CxtVLC[Q0] & 0xF;
-    emb_1      = n_q[Q0] % 16 & emb_k;
+    emb_1      = static_cast<uint8_t>(n_q[Q0] % 16 & emb_k);
 
     for (int i = 0; i < 4; ++i) {
       m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((emb_k >> i) & 1));
@@ -749,10 +750,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 #endif
     }
 
-    CxtVLC[Q0] >>= 4;
-    lw = CxtVLC[Q0] & 0x07;
-    CxtVLC[Q0] >>= 3;
-    cwd = CxtVLC[Q0];
+    CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 4);
+    lw         = CxtVLC[Q0] & 0x07;
+    CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 3);
+    cwd        = CxtVLC[Q0];
 
     ep[2 * qx]     = E_n[1];
     ep[2 * qx + 1] = E_n[3];
@@ -811,7 +812,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     n_q[Q1]    = static_cast<uint16_t>(emb[Q1] + (rho_q[Q1] << 4) + (c_q[Q1] << 8));
     CxtVLC[Q1] = enc_CxtVLC_table0[n_q[Q1]];
     emb_k      = CxtVLC[Q1] & 0xF;
-    emb_1      = n_q[Q1] % 16 & emb_k;
+    emb_1      = static_cast<uint8_t>(n_q[Q1] % 16 & emb_k);
     for (int i = 0; i < 4; ++i) {
       m_n[4 + i] = static_cast<uint8_t>(sigma_n[4 + i] * U_q[Q1] - ((emb_k >> i) & 1));
 #ifdef MSNAIVE
@@ -821,10 +822,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 #endif
     }
 
-    CxtVLC[Q1] >>= 4;
-    lw = CxtVLC[Q1] & 0x07;
-    CxtVLC[Q1] >>= 3;
-    cwd = CxtVLC[Q1];
+    CxtVLC[Q1] = static_cast<uint16_t>(CxtVLC[Q1] >> 4);
+    lw         = CxtVLC[Q1] & 0x07;
+    CxtVLC[Q1] = static_cast<uint16_t>(CxtVLC[Q1] >> 3);
+    cwd        = CxtVLC[Q1];
 
     VLC_encoder.emitVLCBits(cwd, lw);
     encode_UVLC0(cwd, lw, u_q[Q0], u_q[Q1]);
@@ -836,7 +837,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     sp[2 * (qx + 1) + 1] = sigma_n[7];
   }
   if (QW & 1) {
-    uint16_t qx = QW - 1;
+    uint16_t qx = static_cast<uint16_t>(QW - 1);
     make_storage_one(block, 0, qx, sigma_n, v_n, E_n, rho_q);
     // MEL encoding for the first quad
     if (c_q[Q0] == 0) {
@@ -871,7 +872,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     n_q[Q0]    = static_cast<uint16_t>(emb[Q0] + (rho_q[Q0] << 4) + (c_q[Q0] << 8));
     CxtVLC[Q0] = enc_CxtVLC_table0[n_q[Q0]];
     emb_k      = CxtVLC[Q0] & 0xF;
-    emb_1      = n_q[Q0] % 16 & emb_k;
+    emb_1      = static_cast<uint8_t>(n_q[Q0] % 16 & emb_k);
     for (int i = 0; i < 4; ++i) {
       m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((emb_k >> i) & 1));
 #ifdef MSNAIVE
@@ -881,10 +882,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 #endif
     }
 
-    CxtVLC[Q0] >>= 4;
-    lw = CxtVLC[Q0] & 0x07;
-    CxtVLC[Q0] >>= 3;
-    cwd = CxtVLC[Q0];
+    CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 4);
+    lw         = CxtVLC[Q0] & 0x07;
+    CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 3);
+    cwd        = CxtVLC[Q0];
 
     ep[2 * qx]     = E_n[1];
     ep[2 * qx + 1] = E_n[3];
@@ -905,22 +906,22 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     sp++;
     E_n[7]     = 0;
     sigma_n[6] = sigma_n[7] = 0;
-    for (uint16_t qx = 0; qx < QW - 1; qx += 2) {
+    for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2)) {
       // E_n[7] shall be saved because ep[2*qx-1] can't be changed before kappa calculation
       int32_t E7     = E_n[7];
       uint8_t sigma7 = sigma_n[7];
       // context for 1st quad of current quad pair
       c_q[Q0] = static_cast<uint16_t>((sp[2 * qx + 1] | sp[2 * qx + 2]) << 2);
-      c_q[Q0] += static_cast<uint16_t>((sigma_n[6] | sigma_n[7]) << 1);
-      c_q[Q0] += static_cast<uint16_t>(sp[2 * qx - 1] | sp[2 * qx]);
+      c_q[Q0] = static_cast<uint16_t>(c_q[Q0] + ((sigma_n[6] | sigma_n[7]) << 1));
+      c_q[Q0] = static_cast<uint16_t>(c_q[Q0] + (sp[2 * qx - 1] | sp[2 * qx]));
 
       // MAKE_STORAGE()
       make_storage(block, qy, qx, sigma_n, v_n, E_n, rho_q);
 
       // context for 2nd quad of current quad pair
       c_q[Q1] = static_cast<uint16_t>((sp[2 * (qx + 1) + 1] | sp[2 * (qx + 1) + 2]) << 2);
-      c_q[Q1] += static_cast<uint16_t>((sigma_n[2] | sigma_n[3]) << 1);
-      c_q[Q1] += static_cast<uint16_t>(sp[2 * (qx + 1) - 1] | sp[2 * (qx + 1)]);
+      c_q[Q1] = static_cast<uint16_t>(c_q[Q1] + ((sigma_n[2] | sigma_n[3]) << 1));
+      c_q[Q1] = static_cast<uint16_t>(c_q[Q1] + (sp[2 * (qx + 1) - 1] | sp[2 * (qx + 1)]));
       // MEL encoding of the first quad
       if (c_q[Q0] == 0) {
         MEL_encoder.encodeMEL((rho_q[Q0] != 0));
@@ -969,7 +970,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       n_q[Q0]    = static_cast<uint16_t>(emb[Q0] + (rho_q[Q0] << 4) + (c_q[Q0] << 8));
       CxtVLC[Q0] = enc_CxtVLC_table1[n_q[Q0]];
       emb_k      = CxtVLC[Q0] & 0xF;
-      emb_1      = n_q[Q0] % 16 & emb_k;
+      emb_1      = static_cast<uint8_t>(n_q[Q0] % 16 & emb_k);
       for (int i = 0; i < 4; ++i) {
         m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((emb_k >> i) & 1));
 #ifdef MSNAIVE
@@ -979,10 +980,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 #endif
       }
 
-      CxtVLC[Q0] >>= 4;
-      lw = CxtVLC[Q0] & 0x07;
-      CxtVLC[Q0] >>= 3;
-      cwd = CxtVLC[Q0];
+      CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 4);
+      lw         = CxtVLC[Q0] & 0x07;
+      CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 3);
+      cwd        = CxtVLC[Q0];
 
       VLC_encoder.emitVLCBits(cwd, lw);
 
@@ -1034,7 +1035,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       n_q[Q1]    = static_cast<uint16_t>(emb[Q1] + (rho_q[Q1] << 4) + (c_q[Q1] << 8));
       CxtVLC[Q1] = enc_CxtVLC_table1[n_q[Q1]];
       emb_k      = CxtVLC[Q1] & 0xF;
-      emb_1      = n_q[Q1] % 16 & emb_k;
+      emb_1      = static_cast<uint8_t>(n_q[Q1] % 16 & emb_k);
       for (int i = 0; i < 4; ++i) {
         m_n[4 + i] = static_cast<uint8_t>(sigma_n[4 + i] * U_q[Q1] - ((emb_k >> i) & 1));
 #ifdef MSNAIVE
@@ -1044,24 +1045,24 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 #endif
       }
 
-      CxtVLC[Q1] >>= 4;
-      lw = CxtVLC[Q1] & 0x07;
-      CxtVLC[Q1] >>= 3;
-      cwd = CxtVLC[Q1];
+      CxtVLC[Q1] = static_cast<uint16_t>(CxtVLC[Q1] >> 4);
+      lw         = CxtVLC[Q1] & 0x07;
+      CxtVLC[Q1] = static_cast<uint16_t>(CxtVLC[Q1] >> 3);
+      cwd        = CxtVLC[Q1];
 
       VLC_encoder.emitVLCBits(cwd, lw);
       encode_UVLC1(cwd, lw, u_q[Q0], u_q[Q1]);
       VLC_encoder.emitVLCBits(cwd, lw);
     }
     if (QW & 1) {
-      uint16_t qx = QW - 1;
+      uint16_t qx = static_cast<uint16_t>(QW - 1);
       // E_n[7] shall be saved because ep[2*qx-1] can't be changed before kappa calculation
       int32_t E7     = E_n[7];
       uint8_t sigma7 = sigma_n[7];
       // context for current quad
       c_q[Q0] = static_cast<uint16_t>((sp[2 * qx + 1] | sp[2 * qx + 2]) << 2);
-      c_q[Q0] += static_cast<uint16_t>((sigma_n[6] | sigma_n[7]) << 1);
-      c_q[Q0] += static_cast<uint16_t>(sp[2 * qx - 1] | sp[2 * qx]);
+      c_q[Q0] = static_cast<uint16_t>(c_q[Q0] + ((sigma_n[6] | sigma_n[7]) << 1));
+      c_q[Q0] = static_cast<uint16_t>(c_q[Q0] + (sp[2 * qx - 1] | sp[2 * qx]));
       make_storage_one(block, qy, qx, sigma_n, v_n, E_n, rho_q);
       // MEL encoding of the first quad
       if (c_q[Q0] == 0) {
@@ -1115,7 +1116,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       n_q[Q0]    = static_cast<uint16_t>(emb[Q0] + (rho_q[Q0] << 4) + (c_q[Q0] << 8));
       CxtVLC[Q0] = enc_CxtVLC_table1[n_q[Q0]];
       emb_k      = CxtVLC[Q0] & 0xF;
-      emb_1      = n_q[Q0] % 16 & emb_k;
+      emb_1      = static_cast<uint8_t>(n_q[Q0] % 16 & emb_k);
       for (int i = 0; i < 4; ++i) {
         m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((emb_k >> i) & 1));
 #ifdef MSNAIVE
@@ -1125,10 +1126,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 #endif
       }
 
-      CxtVLC[Q0] >>= 4;
-      lw = CxtVLC[Q0] & 0x07;
-      CxtVLC[Q0] >>= 3;
-      cwd = CxtVLC[Q0];
+      CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 4);
+      lw         = CxtVLC[Q0] & 0x07;
+      CxtVLC[Q0] = static_cast<uint16_t>(CxtVLC[Q0] >> 3);
+      cwd        = CxtVLC[Q0];
 
       VLC_encoder.emitVLCBits(cwd, lw);
       encode_UVLC1(cwd, lw, u_q[Q0]);
@@ -1142,8 +1143,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   memcpy(&fwd_buf[static_cast<size_t>(Pcup)], &rev_buf[0], static_cast<size_t>(Scup));
   Lcup = Pcup + Scup;
 
-  fwd_buf[static_cast<size_t>(Lcup - 1)] = static_cast<unsigned char>(Scup >> 4);
-  fwd_buf[static_cast<size_t>(Lcup - 2)] = (fwd_buf[static_cast<size_t>(Lcup - 2)] & 0xF0) | (Scup & 0x0f);
+  fwd_buf[static_cast<size_t>(Lcup - 1)] = static_cast<uint8_t>(Scup >> 4);
+  fwd_buf[static_cast<size_t>(Lcup - 2)] =
+      (fwd_buf[static_cast<size_t>(Lcup - 2)] & 0xF0) | static_cast<uint8_t>(Scup & 0x0f);
 
   // transfer Dcup[] to block->compressed_data
   block->set_compressed_data(fwd_buf.get(), static_cast<uint16_t>(Lcup), MAX_Lref);
@@ -1155,7 +1157,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   block->layer_passes[0] = 1;
   block->layer_start[0]  = 0;
   // set number of zero-bit planes (=Zblk)
-  block->num_ZBP = block->get_Mb() - 1;
+  block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1);
   return static_cast<int32_t>(block->length);
 }
 /********************************************************************************
@@ -1215,20 +1217,20 @@ void ht_sigprop_encode(j2k_codeblock *block, SP_enc &SigProp) {
     j_start = 0;
     for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
       process_stripes_block_enc(SigProp, block, i_start, j_start, width, height);
-      j_start += 4;
+      j_start = static_cast<uint16_t>(j_start + 4);
     }
     width_last = block->size.x % 4;
     if (width_last) {
       process_stripes_block_enc(SigProp, block, i_start, j_start, width_last, height);
     }
-    i_start += 4;
+    i_start = static_cast<uint16_t>(i_start + 4);
   }
   // encode remaining height stripes
   height  = block->size.y % 4;
   j_start = 0;
   for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
     process_stripes_block_enc(SigProp, block, i_start, j_start, width, height);
-    j_start += 4;
+    j_start = static_cast<uint16_t>(j_start + 4);
   }
   width_last = block->size.x % 4;
   if (width_last) {
@@ -1259,7 +1261,7 @@ void ht_magref_encode(j2k_codeblock *block, MR_enc &MagRef) {
         }
       }
     }
-    i_start += 4;
+    i_start = static_cast<uint16_t>(i_start + 4);
   }
   height = blk_height % 4;
   for (int16_t j = 0; j < blk_width; j++) {
@@ -1293,21 +1295,21 @@ int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept {
     // MagRef encoding
     ht_magref_encode(block, MagRef);
     if (MagRef.get_length()) {
-      HTMagRefLength = termSPandMR(SigProp, MagRef);
-      block->num_passes += 2;
-      block->layer_passes[0] += 2;
+      HTMagRefLength         = termSPandMR(SigProp, MagRef);
+      block->num_passes      = static_cast<uint8_t>(block->num_passes + 2);
+      block->layer_passes[0] = static_cast<uint8_t>(block->layer_passes[0] + 2);
       block->pass_length.push_back(SigProp.get_length());
       block->pass_length.push_back(MagRef.get_length());
     } else {
       SigProp.termSP();
-      HTMagRefLength = static_cast<int32_t>(SigProp.get_length());
-      block->num_passes += 1;
-      block->layer_passes[0] += 1;
+      HTMagRefLength         = static_cast<int32_t>(SigProp.get_length());
+      block->num_passes      = static_cast<uint8_t>(block->num_passes + 1);
+      block->layer_passes[0] = static_cast<uint8_t>(block->layer_passes[0] + 1);
       block->pass_length.push_back(SigProp.get_length());
     }
     if (HTMagRefLength) {
       block->length += static_cast<unsigned int>(HTMagRefLength);
-      block->num_ZBP -= (block->refsegment);
+      block->num_ZBP = static_cast<uint8_t>(block->num_ZBP - (block->refsegment));
       block->set_compressed_data(Dref, static_cast<uint16_t>(HTMagRefLength));
     }
     //    // debugging
