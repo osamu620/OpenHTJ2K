@@ -54,7 +54,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang") # Clang
 else() # maybe GCC
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fdiagnostics-color=always"
+      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fdiagnostics-color=always -Wformat-overflow=0"
   )
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
@@ -70,7 +70,7 @@ if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
         "${CMAKE_CXX_FLAGS} /arch:AVX2 /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     # make slightly silent
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mtune=native -Wformat-overflow=0")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mtune=native")
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "Intel")
     message(STATUS "Intel compiler")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mtune=native")
