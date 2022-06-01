@@ -29,6 +29,21 @@
 #include <cstring>
 #include "dwt.hpp"
 #include "utils.hpp"
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
+                                                          idwt_1d_filtr_rev53_fixed_neon};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
+                                                         idwt_rev_ver_sr_fixed_neon};
+#elif defined(OPENHTJ2K_ENABLE_AVX2)
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
+                                                          idwt_1d_filtr_rev53_fixed_avx2};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_avx2,
+                                                         idwt_rev_ver_sr_fixed_avx2};
+#else
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
+                                                          idwt_1d_filtr_rev53_fixed};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
+#endif
 
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
   const auto i0        = static_cast<int32_t>(u_i0);

@@ -373,7 +373,7 @@ uint8_t SP_dec::importSigPropBit() {
     last = tmp;
   }
   val = tmp & 1;
-  tmp >>= 1;
+  tmp = static_cast<uint8_t>(tmp >> 1);
   bits--;
   return val;
 }
@@ -397,7 +397,7 @@ uint8_t MR_dec::importMagRefBit() {
     last = tmp;
   }
   val = tmp & 1;
-  tmp >>= 1;
+  tmp = static_cast<uint8_t>(tmp >> 1);
   bits--;
   return val;
 }
@@ -469,10 +469,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
     }
     // calculate context for the next quad
-    context = sigma_n[4 * q1];                                   // f
-    context |= sigma_n[4 * q1 + 1];                              // sf
-    context += static_cast<uint16_t>(sigma_n[4 * q1 + 2] << 1);  // w << 1
-    context += static_cast<uint16_t>(sigma_n[4 * q1 + 3] << 2);  // sw << 2
+    context = static_cast<uint16_t>((sigma_n[4 * q1] | sigma_n[4 * q1 + 1]) + (sigma_n[4 * q1 + 2] << 1)
+                                    + (sigma_n[4 * q1 + 3] << 2));
+    // context = sigma_n[4 * q1];                                   // f
+    // context |= sigma_n[4 * q1 + 1];                              // sf
+    // context += static_cast<uint16_t>(sigma_n[4 * q1 + 2] << 1);  // w << 1
+    // context += static_cast<uint16_t>(sigma_n[4 * q1 + 3] << 2);  // sw << 2
 #else
     // calculate context for the current quad
     if (q1 > 0) {
@@ -499,10 +501,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
     }
     // calculate context for the next quad
-    context = sigma_n[4 * q2];                                   // f
-    context |= sigma_n[4 * q2 + 1];                              // sf
-    context += static_cast<uint16_t>(sigma_n[4 * q2 + 2] << 1);  // w << 1
-    context += static_cast<uint16_t>(sigma_n[4 * q2 + 3] << 2);  // sw << 2
+    context = static_cast<uint16_t>((sigma_n[4 * q2] | sigma_n[4 * q2 + 1]) + (sigma_n[4 * q2 + 2] << 1)
+                                    + (sigma_n[4 * q2 + 3] << 2));
+    // context = sigma_n[4 * q2];                                   // f
+    // context |= sigma_n[4 * q2 + 1];                              // sf
+    // context += static_cast<uint16_t>(sigma_n[4 * q2 + 2] << 1);  // w << 1
+    // context += static_cast<uint16_t>(sigma_n[4 * q2 + 3] << 2);  // sw << 2
 #else
     // calculate context for the current quad
     if (q2 > 0) {
@@ -605,7 +609,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         // E[n]  = 0;
       }
     }
-    q += 2;  // move to the next quad-pair
+    q = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
   }
   // if QW is odd number ..
   if (QW % 2 == 1) {
@@ -670,15 +674,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       q2 = q + 1U;
 
       // calculate context for the current quad
-      context1 = sigma_n[4 * (q1 - QW) + 1];                               // n
-      context1 += static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 3] << 2);  // ne
+      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
+      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
       if (q1 % QW) {
-        context1 |= sigma_n[4 * (q1 - QW) - 1];  // nw
-        context1 +=
-            static_cast<uint16_t>((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1);  // (sw | w) << 1
+        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
+        context1 = static_cast<uint16_t>(
+            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
       }
       if ((q1 + 1U) % QW) {
-        context1 |= static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 5] << 2);  // nf << 2
+        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf << 2
       }
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
       if (u_off[FIRST_QUAD] == 0) {
@@ -689,15 +693,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       }
 
       // calculate context for the current quad
-      context2 = sigma_n[4 * (q2 - QW) + 1];                               // n
-      context2 += static_cast<uint16_t>(sigma_n[4 * (q2 - QW) + 3] << 2);  // ne
+      context2 = sigma_n[4 * (q2 - QW) + 1];                                           // n
+      context2 = static_cast<uint16_t>(context2 + (sigma_n[4 * (q2 - QW) + 3] << 2));  // ne
       if (q2 % QW) {
-        context2 |= sigma_n[4 * (q2 - QW) - 1];  // nw
-        context2 +=
-            static_cast<uint16_t>((sigma_n[4 * q2 - 1] | sigma_n[4 * q2 - 2]) << 1);  // (sw | w) << 1
+        context2 = static_cast<uint16_t>(context2 | sigma_n[4 * (q2 - QW) - 1]);  // nw
+        context2 = static_cast<uint16_t>(
+            context2 + ((sigma_n[4 * q2 - 1] | sigma_n[4 * q2 - 2]) << 1));  // (sw | w) << 1
       }
-      if ((q2 + 1) % QW) {
-        context2 |= static_cast<uint16_t>(sigma_n[4 * (q2 - QW) + 5] << 2);  // nf << 2
+      if ((q2 + 1U) % QW) {
+        context2 = static_cast<uint16_t>(context2 | (sigma_n[4 * (q2 - QW) + 5] << 2));  // nf << 2
       }
       decodeSigEMB(MEL_decoder, VLC, context2, u_off, rho, emb_k, emb_1, SECOND_QUAD, dec_table1);
       if (u_off[SECOND_QUAD] == 0) {
@@ -819,21 +823,21 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
           // E[n]  = 0;
         }
       }
-      q += 2;  // move to the next quad-pair
+      q = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
     }
     // if QW is odd number ..
     if (QW % 2 == 1) {
       q1 = q;
       // calculate context for the current quad
-      context1 = sigma_n[4 * (q1 - QW) + 1];                               // n
-      context1 += static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 3] << 2);  // ne
+      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
+      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
       if (q1 % QW) {
-        context1 |= sigma_n[4 * (q1 - QW) - 1];  // nw
-        context1 +=
-            static_cast<uint16_t>((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1);  // (sw | w) << 1
+        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
+        context1 = static_cast<uint16_t>(
+            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
       }
-      if ((q1 + 1) % QW) {
-        context1 |= static_cast<uint16_t>(sigma_n[4 * (q1 - QW) + 5] << 2);  // nf << 2
+      if ((q1 + 1U) % QW) {
+        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf << 2
       }
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
       if (u_off[FIRST_QUAD] == 0) {
@@ -946,8 +950,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   }
 }
 
-auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const uint16_t i_start,
-                                    const uint16_t j_start, const uint16_t width, const uint16_t height,
+auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const int32_t i_start,
+                                    const int32_t j_start, const uint16_t width, const uint16_t height,
                                     const uint8_t &pLSB) {
   int32_t *sp;
   uint8_t causal_cond = 0;
@@ -983,9 +987,9 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
       // block->update_scan_state(1, i, j);
     }
   }
-  for (uint16_t j = j_start; j < j_start + width; j++) {
-    for (uint16_t i = i_start; i < i_start + height; i++) {
-      sp = &block->sample_buf[j + i * block->size.x];
+  for (int16_t j = (int16_t)j_start; j < j_start + width; j++) {
+    for (int16_t i = (int16_t)i_start; i < i_start + height; i++) {
+      sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
       // decode sign
       if ((*sp & (1 << pLSB)) != 0) {
         *sp = (*sp & 0x7FFFFFFF) | (SigProp.importSigPropBit() << 31);
@@ -999,7 +1003,7 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
   SP_dec SigProp(HT_magref_segment, magref_length);
   const uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
   const uint16_t num_h_stripe = static_cast<uint16_t>(block->size.x / 4);
-  uint16_t i_start            = 0, j_start;
+  int32_t i_start             = 0, j_start;
   uint16_t width              = 4;
   uint16_t width_last;
   uint16_t height = 4;
@@ -1050,7 +1054,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
         }
       }
     }
-    i_start += 4;
+    i_start = static_cast<int16_t>(i_start + 4);
   }
   height = static_cast<int16_t>(blk_height % 4);
   for (int16_t j = 0; j < blk_width; j++) {
@@ -1089,14 +1093,14 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   } else {
     P0 = 0;
   }
-  const uint8_t empty_passes = P0 * 3;
+  const uint8_t empty_passes = static_cast<uint8_t>(P0 * 3);
   if (block->num_passes < empty_passes) {
     printf("WARNING: number of passes %d exceeds number of empty passes %d", block->num_passes,
            empty_passes);
     return false;
   }
   // number of ht coding pass (Z_blk in the spec)
-  const uint8_t num_ht_passes = block->num_passes - empty_passes;
+  const uint8_t num_ht_passes = static_cast<uint8_t>(block->num_passes - empty_passes);
   // pointer to buffer for HT Cleanup segment
   uint8_t *Dcup;
   // pointer to buffer for HT Refinement segment
@@ -1126,7 +1130,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       Dref = nullptr;
     }
     // number of (skipped) magnitude bitplanes
-    const uint8_t S_blk = P0 + block->num_ZBP + S_skip;
+    const uint8_t S_blk = static_cast<uint8_t>(P0 + block->num_ZBP + S_skip);
     if (S_blk >= 30) {
       printf("WARNING: Number of skipped mag bitplanes %d is too large.\n", S_blk);
       return false;
@@ -1146,12 +1150,12 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
     state_VLC_enc VLC               = state_VLC_enc(Dcup, Lcup, Pcup);
 
-    ht_cleanup_decode(block, 30 - S_blk, MS, MEL_decoder, VLC);
+    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MS, MEL_decoder, VLC);
     if (num_ht_passes > 1) {
-      ht_sigprop_decode(block, Dref, Lref, 30 - (S_blk + 1));
+      ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
     if (num_ht_passes > 2) {
-      ht_magref_decode(block, Dref, Lref, 30 - (S_blk + 1));
+      ht_magref_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
 
     /* ready for ROI adjustment and dequantization */
@@ -1270,7 +1274,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
           QF15 = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
           // convert sign-magnitude to two's complement form
           if (sign) {
-            QF15 = -QF15;
+            QF15 = static_cast<int16_t>(-QF15);
           }
           *dst = QF15;
         }

@@ -219,7 +219,11 @@ class image {
         c = fgetc(fp);
         if (c == '#') {
           char *nouse = fgets(comment, sizeof(comment), fp);
-          c           = fgetc(fp);
+          if (nouse == nullptr) {
+            printf("comment read error\n");
+            exit(EXIT_FAILURE);
+          }
+          c = fgetc(fp);
         }
       }
       // read numerical value
@@ -260,7 +264,11 @@ class image {
       c = fgetc(fp);
       if (c == '#') {
         char *nouse = fgets(comment, sizeof(comment), fp);
-        c           = fgetc(fp);
+        if (nouse == nullptr) {
+          printf("comment read error\n");
+          exit(EXIT_FAILURE);
+        }
+        c = fgetc(fp);
       }
     }
     fseek(fp, -1, SEEK_CUR);

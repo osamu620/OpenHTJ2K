@@ -174,7 +174,11 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       d = fgetc(fp);
       if (d == '#') {
         char *nouse = fgets(comment, sizeof(comment), fp);
-        d           = fgetc(fp);
+        if (nouse == nullptr) {
+          printf("comment read error\n");
+          exit(EXIT_FAILURE);
+        }
+        d = fgetc(fp);
       }
     }
     // read numerical value
@@ -228,7 +232,11 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     d = fgetc(fp);
     if (d == '#') {
       char *nouse = fgets(comment, sizeof(comment), fp);
-      d           = fgetc(fp);
+      if (nouse == nullptr) {
+        printf("comment read error\n");
+        exit(EXIT_FAILURE);
+      }
+      d = fgetc(fp);
     }
   }
   fseek(fp, -1, SEEK_CUR);
@@ -417,7 +425,7 @@ size_t openhtj2k_encoder_impl::invoke() {
                       static_cast<uint8_t>(cod->blkwidth), static_cast<uint8_t>(cod->blkheight),
                       cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
   QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
-                      Ssiz[0] + 1, cod->use_color_trafo, qcd->base_step, qfactor);
+                      static_cast<uint8_t>(Ssiz[0] + 1U), cod->use_color_trafo, qcd->base_step, qfactor);
   // parameters for CAP marker
   uint16_t bits14_15 = 0;                     // 0: HTONLY, 2: HTDECLARED, 3: MIXED
   uint16_t bit13     = 0;                     // 0: SINGLEHT, 1: MULTIHT
@@ -427,7 +435,7 @@ size_t openhtj2k_encoder_impl::invoke() {
   uint16_t bits0_4;
   uint8_t MAGB = main_QCD.get_MAGB();
   if (MAGB < 27) {
-    bits0_4 = (MAGB > 8) ? MAGB - 8 : 0;
+    bits0_4 = static_cast<uint16_t>((MAGB > 8) ? MAGB - 8 : 0);
   } else if (MAGB <= 71) {
     bits0_4 = static_cast<uint16_t>((MAGB - 27) / 4 + 19);
   } else {

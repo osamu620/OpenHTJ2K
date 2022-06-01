@@ -142,7 +142,7 @@ class SP_enc {
  public:
   explicit SP_enc(uint8_t *Dref) : pos(0), bits(0), max(8), tmp(0), buf(Dref) {}
   void emitSPBit(uint8_t bit) {
-    tmp |= (bit << bits);
+    tmp |= static_cast<uint8_t>(bit << bits);
     bits++;
     if (bits == max) {
       buf[pos] = tmp;
@@ -180,7 +180,7 @@ class MR_enc {
  public:
   explicit MR_enc(uint8_t *Dref) : pos(MAX_Lref), bits(0), tmp(0), last(255), buf(Dref) {}
   void emitMRBit(uint8_t bit) {
-    tmp |= (bit << bits);
+    tmp |= static_cast<uint8_t>(bit << bits);
     bits++;
     if ((last > 0x8F) && (tmp == 0x7F)) {
       bits++;  // this must leave MR_bits equal to 8
