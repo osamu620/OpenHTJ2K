@@ -323,7 +323,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
     for (uint32_t i = 0; i < block->num_layers; ++i) {
       cumsum_layers = static_cast<uint8_t>(cumsum_layers + block->layer_passes[i]);
     }
-    uint32_t number_of_bytes      = 0;  // initialize to zero in case of `not included`.
+    // uint32_t number_of_bytes      = 0;  // initialize to zero in case of `not included`.
     block->layer_start[layer_idx] = cumsum_layers;
 
     tagtree_node *current_node, *parent_node;
@@ -654,10 +654,11 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         block->pass_length.push_back(0);
       }
       block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
-      number_of_bytes += segment_bytes;
+      // number_of_bytes += segment_bytes;
 
       uint8_t primary_passes, secondary_passes;
-      uint32_t primary_bytes, secondary_bytes, fast_skip_bytes = 0;
+      uint32_t primary_bytes, secondary_bytes;
+      [[maybe_unused]] uint32_t fast_skip_bytes = 0;
       bool empty_set;
       if ((block->Cmodes & (HT | HT_PHLD)) == HT) {
         new_passes -= static_cast<uint8_t>(segment_passes);
@@ -723,7 +724,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             block->pass_length.push_back(0);
           }
           block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
-          number_of_bytes += segment_bytes;
+          // number_of_bytes += segment_bytes;
         }
       } else {
         new_passes -= static_cast<uint8_t>(segment_passes);
@@ -750,7 +751,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             block->pass_length.push_back(0);
           }
           block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
-          number_of_bytes += segment_bytes;
+          // number_of_bytes += segment_bytes;
         }
       }
     } else {
@@ -889,7 +890,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       uint8_t l0 = blk->layer_start[layer_idx];
       uint8_t l1 = blk->layer_passes[layer_idx];
 
-      uint32_t buf_start = 0, buf_end = 0;
+      [[maybe_unused]] uint32_t buf_start = 0, buf_end = 0;
       // NOTE: the following code to derive number_of_bytes shall be improved
       if (l0) {
         for (size_t i = 0; i < l0; ++i) {
@@ -904,11 +905,11 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       // length coding: currently only for HT Cleanup pass
       int new_passes = static_cast<int32_t>(num_passes);
       // uint8_t bits_to_write  = 0;
-      uint8_t pass_idx       = l0;
-      uint32_t segment_bytes = 0;
-      uint8_t segment_passes = 0;
-      uint32_t total_bytes   = 0;
-      uint8_t length_bits    = 0;
+      uint8_t pass_idx                      = l0;
+      uint32_t segment_bytes                = 0;
+      uint8_t segment_passes                = 0;
+      [[maybe_unused]] uint32_t total_bytes = 0;
+      uint8_t length_bits                   = 0;
 
       while (new_passes > 0) {
         assert(blk->Cmodes & HT);

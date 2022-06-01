@@ -349,11 +349,11 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
         "same.\n");
     throw std::exception();
   }
-  unsigned long PPlength = PPx.size();
+  size_t PPlength  = PPx.size();
   uint8_t last_PPx = '\0', last_PPy = '\0';
   if (!is_max_precincts) {
     std::vector<uint8_t> tmpPP;
-    for (uint32_t i = 0; i <= dwt_levels; ++i) {
+    for (size_t i = 0; i <= dwt_levels; ++i) {
       if (i < PPlength) {
         last_PPx = PPx[i];
         last_PPy = PPy[i];

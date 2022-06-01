@@ -446,7 +446,10 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
           r <<= 1;
           r += mq_dec.decode(label_uni);
         }
-        assert(r == 10);
+        if (r != 10) {
+          printf("ERROR: SEGMARK test failed.\n");
+          throw std::exception();
+        }
       }
     }
     current_segment_pass--;
