@@ -98,31 +98,31 @@ auto fdwt_irrev97_fixed_avx2_hor_step3 = [](const int32_t init_pos, const int32_
   }
 };
 
-auto fdwt_irrev97_fixed_avx2_hor_step_32MAC = [](const int32_t init_pos, const int32_t simdlen,
-                                                 int16_t *const X, const int32_t n0, const int32_t n1,
-                                                 const int32_t coeff, const int32_t offset,
-                                                 const int32_t shift) {
-  auto vcoeff  = _mm256_set1_epi32(coeff);
-  auto voffset = _mm256_set1_epi32(offset);
-  for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
-    auto xin0 = _mm256_loadu_si256((__m256i *)(X + n + n0));
-    auto xin2 = _mm256_loadu_si256((__m256i *)(X + n + n1));
-    auto xin_tmp =
-        _mm256_permutevar8x32_epi32(_mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xin0, 0xD8), 0xD8),
-                                    _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-    auto xin00 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin_tmp, 0));
-    auto xin01 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin_tmp, 1));
-    xin_tmp = _mm256_permutevar8x32_epi32(_mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xin2, 0xD8), 0xD8),
-                                          _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-    auto xin20 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin_tmp, 0));
-    auto vsum  = _mm256_add_epi32(xin00, xin20);
-    xin01      = _mm256_add_epi32(
-             _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), shift), xin01);
-    auto xout_even_odd    = _mm256_shuffle_epi32(_mm256_packs_epi32(xin00, xin01), 0xD8);
-    auto xout_interleaved = _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0xD8), 0xD8);
-    _mm256_storeu_si256((__m256i *)(X + n + n0), xout_interleaved);
-  }
-};
+[[maybe_unused]] auto fdwt_irrev97_fixed_avx2_hor_step_32MAC =
+    [](const int32_t init_pos, const int32_t simdlen, int16_t *const X, const int32_t n0, const int32_t n1,
+       const int32_t coeff, const int32_t offset, const int32_t shift) {
+      auto vcoeff  = _mm256_set1_epi32(coeff);
+      auto voffset = _mm256_set1_epi32(offset);
+      for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
+        auto xin0 = _mm256_loadu_si256((__m256i *)(X + n + n0));
+        auto xin2 = _mm256_loadu_si256((__m256i *)(X + n + n1));
+        auto xin_tmp =
+            _mm256_permutevar8x32_epi32(_mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xin0, 0xD8), 0xD8),
+                                        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+        auto xin00 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin_tmp, 0));
+        auto xin01 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin_tmp, 1));
+        xin_tmp =
+            _mm256_permutevar8x32_epi32(_mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xin2, 0xD8), 0xD8),
+                                        _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+        auto xin20 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin_tmp, 0));
+        auto vsum  = _mm256_add_epi32(xin00, xin20);
+        xin01      = _mm256_add_epi32(
+                 _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), shift), xin01);
+        auto xout_even_odd    = _mm256_shuffle_epi32(_mm256_packs_epi32(xin00, xin01), 0xD8);
+        auto xout_interleaved = _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0xD8), 0xD8);
+        _mm256_storeu_si256((__m256i *)(X + n + n0), xout_interleaved);
+      }
+    };
 
 void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
                                       const int32_t u_i1) {
@@ -305,9 +305,10 @@ auto fdwt_irrev97_fixed_avx2_ver_step3 = [](const int32_t simdlen, int16_t *cons
   }
 };
 
-auto fdwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, int16_t *const Xin0, int16_t *const Xin1,
-                                           int16_t *const Xout, const int32_t coeff, const int32_t offset,
-                                           const int32_t shift) {
+[[maybe_unused]] auto fdwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, int16_t *const Xin0,
+                                                            int16_t *const Xin1, int16_t *const Xout,
+                                                            const int32_t coeff, const int32_t offset,
+                                                            const int32_t shift) {
   auto vcoeff  = _mm256_set1_epi32(coeff);
   auto voffset = _mm256_set1_epi32(offset);
   for (int32_t n = 0; n < simdlen; n += 16) {

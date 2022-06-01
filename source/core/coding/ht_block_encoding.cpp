@@ -1169,10 +1169,10 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
   uint8_t causal_cond = 0;
   uint8_t bit;
   uint8_t mbr;
-  uint32_t mbr_info;  // NOT USED
+  // uint32_t mbr_info;  // NOT USED
 
   for (int16_t j = (int16_t)j_start; j < j_start + width; j++) {
-    mbr_info = 0;
+    // mbr_info = 0;
     for (int16_t i = (int16_t)i_start; i < i_start + height; i++) {
       sp          = &block->block_states[(static_cast<uint32_t>(j + 1))
                                 + (static_cast<uint32_t>(i + 1)) * (block->size.x + 2)];
@@ -1181,7 +1181,7 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
       if (block->get_state(Sigma, i, j) == 0) {
         mbr = block->calc_mbr(i, j, causal_cond);
       }
-      mbr_info >>= 3;
+      // mbr_info >>= 3;
       if (mbr != 0) {
         bit = (*sp >> SHIFT_SMAG) & 1;
         SigProp.emitSPBit(bit);
