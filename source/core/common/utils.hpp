@@ -32,7 +32,8 @@
 #include <cstdlib>
 
 #define round_up(x, n) (((x) + (n)-1) & (-n))
-#define round_down(x, n) ((x) & (-n))
+//#define round_down(x, n) ((x) & (-n))
+#define round_down(x, n) ((x) - ((x) % (n)))
 #define ceil_int(a, b) ((a) + ((b)-1)) / (b)
 
 #if defined(__INTEL_LLVM_COMPILER)
