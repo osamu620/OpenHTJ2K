@@ -101,8 +101,8 @@ size_t image_header_box::write(j2c_dst_memory &dst) {
 
 bits_per_component_box::bits_per_component_box(j2k_main_header &hdr) : box_base(8, 0x62706363) {
   for (uint16_t c = 0; c < hdr.SIZ->get_num_components(); ++c) {
-    uint8_t val = hdr.SIZ->get_bitdepth(c) - 1;
-    val |= static_cast<uint8_t>((hdr.SIZ->is_signed(c)) ? 0x80 : 0);
+    uint8_t val = static_cast<uint8_t>(hdr.SIZ->get_bitdepth(c) - 1);
+    val         = val | static_cast<uint8_t>((hdr.SIZ->is_signed(c)) ? 0x80 : 0);
     BPC.push_back(val);
     LBox++;
   }

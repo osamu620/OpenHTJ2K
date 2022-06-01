@@ -380,7 +380,7 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
-        buf[n + 1][col] += (sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
+        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + ((Acoeff * sum + Aoffset) >> Ashift));
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
@@ -388,7 +388,7 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
-        buf[n][col] += (sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
+        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((Bcoeff * sum + Boffset) >> Bshift));
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
@@ -396,7 +396,7 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
-        buf[n + 1][col] += (sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
+        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + ((Ccoeff * sum + Coffset) >> Cshift));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
@@ -404,7 +404,7 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n - 1][col];
         sum += buf[n + 1][col];
-        buf[n][col] += (sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
+        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((Dcoeff * sum + Doffset) >> Dshift));
       }
     }
 
@@ -431,7 +431,7 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
-        in[col] <<= 1;
+        in[col] = static_cast<sprec_t>(in[col] << 1);
       }
     }
   } else {
@@ -469,7 +469,7 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = buf[n][col];
         sum += buf[n + 2][col];
-        buf[n + 1][col] -= (sum >> 1);
+        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] - (sum >> 1));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
@@ -489,7 +489,7 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         sum >>= 1;
         sum += 1;
         sum >>= 1;
-        buf[n][col] += sum;
+        buf[n][col] = static_cast<sprec_t>(buf[n][col] + sum);
         // buf[n][col] += ((sum >> 1) + 1) >> 1;  //((sum + 2) >> 2);
       }
     }

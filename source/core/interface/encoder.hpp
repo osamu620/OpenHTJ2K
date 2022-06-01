@@ -72,7 +72,11 @@ class image {
   }
   [[nodiscard]] uint16_t get_num_components() const { return this->num_components; }
   uint8_t get_Ssiz_value(uint16_t c) {
-    return (this->is_signed[c]) ? (this->bits_per_pixel[c] - 1) | 0x80 : this->bits_per_pixel[c] - 1;
+    uint8_t val = static_cast<uint8_t>(this->bits_per_pixel[c] - 1);
+    if (this->is_signed[c]) {
+      val = val | 0x80;
+    }
+    return val;
   }
   uint8_t get_max_bpp() {
     uint8_t max = 0;

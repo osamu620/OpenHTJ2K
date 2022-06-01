@@ -26,7 +26,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "color.hpp"
+#if not defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #include "color.hpp"
 
 void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   int32_t R, G, B;
@@ -91,3 +92,4 @@ void cvt_ycbcr_to_rgb_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t n
     sp2[n] = B;
   }
 }
+#endif
