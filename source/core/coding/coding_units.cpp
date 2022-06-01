@@ -1108,7 +1108,7 @@ void j2k_subband::quantize() {
     }
   }
 #else
-  for (uint32_t n = 0; n < length; ++n) {
+  for (int32_t n = 0; n < length; ++n) {
     auto fval = static_cast<float>(this->i_samples[n]);
     fval *= fscale;
     // fval may exceed when sprec_t == int16_t
@@ -1117,7 +1117,6 @@ void j2k_subband::quantize() {
       this->i_samples[n] = static_cast<sprec_t>(-this->i_samples[n]);
     }
   }
-  int a = 1;
 #endif
 }
 
