@@ -473,19 +473,19 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   const int32_t y[8] = {2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1, 2 * qy, 2 * qy + 1};
   // First quad
   for (int i = 0; i < 4; ++i) {
-    sigma_n[i] = block->get_state(Sigma, y[i], x[i]);
+    sigma_n[i] = block->get_state(Sigma, (int16_t)y[i], (int16_t)x[i]);
   }
   // Second quad
   for (int i = 4; i < 8; ++i) {
-    sigma_n[i] = block->get_state(Sigma, y[i], x[i]);
+    sigma_n[i] = block->get_state(Sigma, (int16_t)y[i], (int16_t)x[i]);
   }
-  rho_q[0] = sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3);
-  rho_q[1] = sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3);
+  rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
+  rho_q[1] = static_cast<uint8_t>(sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3));
   for (int i = 0; i < 8; ++i) {
-    v_n[i] = block->sample_buf[x[i] + y[i] * block->size.x];
+    v_n[i] = static_cast<uint32_t>(block->sample_buf[(uint32_t)x[i] + (uint32_t)y[i] * block->size.x]);
   }
   for (int i = 0; i < 8; ++i) {
-    E_n[i] = (32 - count_leading_zeros(((v_n[i] >> 1) << 1) + 1)) * sigma_n[i];
+    E_n[i] = static_cast<int32_t>((32 - count_leading_zeros(((v_n[i] >> 1) << 1) + 1)) * sigma_n[i]);
   }
 #endif
 };
