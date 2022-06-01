@@ -1606,7 +1606,7 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
     samples[i] -= DC_OFFSET;
   }
 #else
-  for (uint32_t i = 0; i < length; ++i) {
+  for (int32_t i = 0; i < length; ++i) {
     samples[i] <<= shiftup;
     samples[i] -= DC_OFFSET;
   }
