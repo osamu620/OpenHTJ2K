@@ -1170,10 +1170,11 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
   uint8_t bit;
   uint8_t mbr;
   // uint32_t mbr_info;  // NOT USED
-
-  for (int16_t j = (int16_t)j_start; j < j_start + width; j++) {
+  const auto block_width  = static_cast<const uint16_t>(j_start + width);
+  const auto block_height = static_cast<const uint16_t>(i_start + height);
+  for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     // mbr_info = 0;
-    for (int16_t i = (int16_t)i_start; i < i_start + height; i++) {
+    for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp          = &block->block_states[(static_cast<uint32_t>(j + 1))
                                 + (static_cast<uint32_t>(i + 1)) * (block->size.x + 2)];
       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != i_start + height - 1));
@@ -1191,8 +1192,8 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
       block->modify_state(scan, 1, i, j);
     }
   }
-  for (int16_t j = (int16_t)j_start; j < j_start + width; j++) {
-    for (int16_t i = (int16_t)i_start; i < i_start + height; i++) {
+  for (int16_t j = (int16_t)j_start; j < block_width; j++) {
+    for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp = &block->block_states[(static_cast<uint32_t>(j + 1))
                                 + (static_cast<uint32_t>(i + 1)) * (block->size.x + 2)];
       // encode sign
