@@ -185,8 +185,8 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   //  sample_buf   = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * size.x * size.y, 32));
   //  memset(sample_buf, 0, sizeof(int32_t) * size.x * size.y);
   //  memset(block_states, 0, (size.x + 2) * (size.y + 2));
-  const uint32_t QWx2 = size.x + size.x % 2;
-  const uint32_t QHx2 = size.y + size.y % 2;
+  const uint32_t QWx2 = round_up(size.x, 8U);  // size.x + size.x % 2;
+  const uint32_t QHx2 = round_up(size.y, 8U);  // size.y + size.y % 2;
   block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(size.x + 2) * (size.y + 2));
   memset(block_states.get(), 0, static_cast<size_t>(size.x + 2) * (size.y + 2));
   sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));

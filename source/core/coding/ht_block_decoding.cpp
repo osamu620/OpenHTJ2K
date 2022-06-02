@@ -917,35 +917,74 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     block->sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * block->size.x] =
         static_cast<int32_t>(symbol);
   };
-  for (int16_t y = 0; y < QH; y++) {
-    for (int16_t x = 0; x < QW; x++) {
-      const int16_t y2 = static_cast<int16_t>(y << 1);
-      const int16_t x2 = static_cast<int16_t>(x << 1);
-      const auto y2p1  = static_cast<int16_t>(y2 + 1);
-      const auto x2p1  = static_cast<int16_t>(x2 + 1);
-      set_sample(*p_mu, y2, x2);
-      block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x));
-      p_mu++;
-      p_sigma++;
-      if (y != QH - 1 || is_border_y == 0) {
-        set_sample(*p_mu, y2p1, x2);
-        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1), static_cast<int16_t>(2 * x));
-      }
-      p_mu++;
-      p_sigma++;
-      if (x != QW - 1 || is_border_x == 0) {
-        set_sample(*p_mu, y2, x2p1);
-        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x + 1));
-      }
-      p_mu++;
-      p_sigma++;
-      if ((y != QH - 1 || is_border_y == 0) && (x != QW - 1 || is_border_x == 0)) {
-        set_sample(*p_mu, y2p1, x2p1);
-        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1),
-                            static_cast<int16_t>(2 * x + 1));
-      }
-      p_mu++;
-      p_sigma++;
+  //  for (int16_t y = 0; y < QH; y++) {
+  //    for (int16_t x = 0; x < QW; x++) {
+  //      const int16_t y2 = static_cast<int16_t>(y << 1);
+  //      const int16_t x2 = static_cast<int16_t>(x << 1);
+  //      const auto y2p1  = static_cast<int16_t>(y2 + 1);
+  //      const auto x2p1  = static_cast<int16_t>(x2 + 1);
+  //      set_sample(*p_mu, y2, x2);
+  //      block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x));
+  //      p_mu++;
+  //      p_sigma++;
+  //      if (y != QH - 1 || is_border_y == 0) {
+  //        set_sample(*p_mu, y2p1, x2);
+  //        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1), static_cast<int16_t>(2 *
+  //        x));
+  //      }
+  //      p_mu++;
+  //      p_sigma++;
+  //      if (x != QW - 1 || is_border_x == 0) {
+  //        set_sample(*p_mu, y2, x2p1);
+  //        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x +
+  //        1));
+  //      }
+  //      p_mu++;
+  //      p_sigma++;
+  //      if ((y != QH - 1 || is_border_y == 0) && (x != QW - 1 || is_border_x == 0)) {
+  //        set_sample(*p_mu, y2p1, x2p1);
+  //        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1),
+  //                            static_cast<int16_t>(2 * x + 1));
+  //      }
+  //      p_mu++;
+  //      p_sigma++;
+  //    }
+  //  }
+#include <arm_neon.h>
+  uint32_t *p   = p_mu;
+  uint8_t *sigp = p_sigma;
+  for (size_t i = 0; i < 2 * QH - 1; i += 2) {
+    int32_t *dp0  = block->sample_buf.get() + i * round_up(block->size.x, 8U);
+    int32_t *dp1  = block->sample_buf.get() + (i + 1) * round_up(block->size.x, 8U);
+    uint8_t *ddp0 = block->block_states.get() + i * (block->size.x + 2);
+    uint8_t *ddp1 = block->block_states.get() + (i + 1) * (block->size.x + 2);
+    for (size_t j = 0; j < round_up(block->size.x, 8U); j += 4) {
+      auto v0 = vld1q_u32(p);
+      p += 4;
+      auto v1 = vld1q_u32(p);
+      p += 4;
+      auto vout0 = vzipq_u32(v0, v1);
+      auto vout1 = vzipq_u32(vout0.val[0], vout0.val[1]);
+      vst1q_s32(dp0, vout1.val[0]);
+      dp0 += 4;
+      vst1q_s32(dp1, vout1.val[1]);
+      dp1 += 4;
+
+      auto vu8    = vld1_u8(sigp);
+      auto vu16   = vmovl_u8(vu8);
+      auto vlow   = vmovl_u16(vget_low_u16(vu16));
+      auto vhigh  = vmovl_u16(vget_high_u16(vu16));
+      vout0       = vzipq_u32(vlow, vhigh);
+      vout1       = vzipq_u32(vout0.val[0], vout0.val[1]);
+      auto vline0 = vmovn_u32(vout1.val[0]);
+      auto vline1 = vmovn_u32(vout1.val[1]);
+      auto vvv    = vmovn_u16(vcombine_u16(vline0, vline1));
+      uint8_t aaa[8];
+      vst1_u8(aaa, vvv);
+      memcpy(ddp0, aaa, 4);
+      memcpy(ddp1, aaa + 4, 4);
+      ddp0 += 4;
+      ddp1 += 4;
     }
   }
 }
