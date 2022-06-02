@@ -422,9 +422,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
   // buffers shall be zeroed.
-  std::unique_ptr<uint8_t[]> sigma_n = MAKE_UNIQUE<uint8_t[]>(4U * QW * QH);
-  std::unique_ptr<uint8_t[]> E       = MAKE_UNIQUE<uint8_t[]>(4U * QW * QH);
-  std::unique_ptr<uint32_t[]> mu_n   = MAKE_UNIQUE<uint32_t[]>(4U * QW * QH);
+  std::unique_ptr<uint8_t[]> sigma_n = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(4U) * QW * QH);
+  std::unique_ptr<uint8_t[]> E       = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(4U) * QW * QH);
+  std::unique_ptr<uint32_t[]> mu_n   = MAKE_UNIQUE<uint32_t[]>(static_cast<size_t>(4U) * QW * QH);
   memset(sigma_n.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
   memset(E.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
   memset(mu_n.get(), 0, sizeof(uint32_t) * 4 * QW * QH);
@@ -669,7 +669,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   // Non-initial line-pair
   uint16_t context1, context2;
   for (uint16_t row = 1; row < QH; row++) {
-    while ((q - row * QW) < QW - 1 && q < QW * QH) {
+    while ((q - row * QW) < QW - 1 && q < static_cast<uint16_t>(QW * QH)) {
       q1 = q;
       q2 = q + 1U;
 

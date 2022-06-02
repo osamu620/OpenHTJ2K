@@ -187,9 +187,9 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   //  memset(block_states, 0, (size.x + 2) * (size.y + 2));
   const uint32_t QWx2 = size.x + size.x % 2;
   const uint32_t QHx2 = size.y + size.y % 2;
-  block_states        = MAKE_UNIQUE<uint8_t[]>((size.x + 2) * (size.y + 2));
-  memset(block_states.get(), 0, (size.x + 2) * (size.y + 2));
-  sample_buf = MAKE_UNIQUE<int32_t[]>(QWx2 * QHx2);
+  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(size.x + 2) * (size.y + 2));
+  memset(block_states.get(), 0, static_cast<size_t>(size.x + 2) * (size.y + 2));
+  sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
   memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
   this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
   this->layer_passes = MAKE_UNIQUE<uint8_t[]>(num_layers);
@@ -1230,7 +1230,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
   const uint32_t idxoff_y = (pos0.y - 0) / PP.y;
 
   if (!is_empty) {
-    precincts = MAKE_UNIQUE<std::unique_ptr<j2k_precinct>[]>(npw * nph);
+    precincts = MAKE_UNIQUE<std::unique_ptr<j2k_precinct>[]>(static_cast<size_t>(npw) * nph);
     for (uint32_t i = 0; i < npw * nph; i++) {
       uint32_t x, y;
       x = i % npw;
@@ -1491,7 +1491,7 @@ void j2k_tile_component::setQCCparams(QCC_marker *QCC) {
   mantissas.clear();
   if (quantization_style != 1) {
     // lossless or lossy expounded
-    for (uint8_t nb = 0; nb < 3 * NL + 1; nb++) {
+    for (uint8_t nb = 0; nb < static_cast<uint8_t>(3 * NL + 1); nb++) {
       exponents.push_back(QCC->get_exponents(nb));
       if (quantization_style == 2) {
         // lossy expounded
@@ -1662,7 +1662,7 @@ void j2k_tile::setQCDparams(QCD_marker *QCD) {
   mantissas.clear();
   if (quantization_style != 1) {
     // lossless or lossy expounded
-    for (uint8_t nb = 0; nb < 3 * NL + 1; nb++) {
+    for (uint8_t nb = 0; nb < static_cast<uint8_t>(3 * NL + 1); nb++) {
       exponents.push_back(QCD->get_exponents(nb));
       if (quantization_style == 2) {
         // lossy expounded
@@ -2436,7 +2436,7 @@ void j2k_tile::decode() {
     element_siz tc1 = this->tcomp[c].get_pos1();
 
     // copy samples in resolution buffer to that in tile component buffer
-    unsigned long num_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
+    unsigned long num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
     //#pragma omp parallel for  // default(none) shared(num_samples, sp, dp)
     //#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     //    for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_I32); n += SIMD_LEN_I32) {

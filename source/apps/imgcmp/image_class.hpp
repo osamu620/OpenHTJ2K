@@ -342,8 +342,9 @@ class image {
     if (this->data == nullptr) {
       return EXIT_FAILURE;
     }
-    printf("number of components = %hu\n", num_components);
-    printf("width = %u, height = %u\n", this->width, this->height);
+    printf("number of components = %hu\n", static_cast<uint16_t>(num_components));
+    printf("width = %u, height = %u\n", static_cast<uint32_t>(this->width),
+           static_cast<uint32_t>(this->height));
     // printf("max value = %d\n", this->maxval);
     printf("bit-depth = %d\n", bitDepth);
     if (isBigendian) {
@@ -354,7 +355,7 @@ class image {
     }
     for (uint_fast32_t i = 0; i < this->height; ++i) {
       for (uint_fast32_t j = 0; j < this->width; ++j) {
-        printf("%3d ", this->data[i * this->width + j]);
+        printf("%3d ", static_cast<int32_t>(this->data[i * this->width + j]));
       }
       printf("\n");
     }
