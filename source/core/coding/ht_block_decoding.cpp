@@ -958,8 +958,10 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
   uint8_t bit;
   uint8_t mbr;
   // uint32_t mbr_info;
+  const auto block_width  = static_cast<uint16_t>(j_start + width);
+  const auto block_height = static_cast<uint16_t>(i_start + height);
 
-  for (int16_t j = (int16_t)j_start; j < j_start + width; j++) {
+  for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     // mbr_info = 0;
     //     for (int16_t i = height; i > -2; --i) {
     //       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != height));
@@ -968,9 +970,9 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
     //                    + (block->get_sigma(i_start + i, j + 1) << 2))
     //                   * causal_cond;
     //     }
-    for (int16_t i = (int16_t)i_start; i < i_start + height; i++) {
+    for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp          = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
-      causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != i_start + height - 1));
+      causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != block_height - 1));
       mbr         = 0;
       if (block->get_state(Sigma, i, j) == 0) {
         mbr = block->calc_mbr(i, j, causal_cond);
@@ -987,8 +989,8 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
       // block->update_scan_state(1, i, j);
     }
   }
-  for (int16_t j = (int16_t)j_start; j < j_start + width; j++) {
-    for (int16_t i = (int16_t)i_start; i < i_start + height; i++) {
+  for (int16_t j = (int16_t)j_start; j < block_width; j++) {
+    for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
       // decode sign
       if ((*sp & (1 << pLSB)) != 0) {

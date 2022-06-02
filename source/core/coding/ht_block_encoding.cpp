@@ -1170,8 +1170,8 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
   uint8_t bit;
   uint8_t mbr;
   // uint32_t mbr_info;  // NOT USED
-  const auto block_width  = static_cast<const uint16_t>(j_start + width);
-  const auto block_height = static_cast<const uint16_t>(i_start + height);
+  const auto block_width  = static_cast<uint16_t>(j_start + width);
+  const auto block_height = static_cast<uint16_t>(i_start + height);
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     // mbr_info = 0;
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
