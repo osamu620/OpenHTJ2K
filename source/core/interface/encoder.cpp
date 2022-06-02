@@ -252,10 +252,10 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   }
   if (isPPM) {
     for (size_t i = 0; i < this->num_components; ++i) {
-      this->buf[i] = MAKE_UNIQUE<int32_t[]>(compw * comph);
+      this->buf[i] = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(compw) * comph);
     }
   } else {
-    this->buf[nc] = MAKE_UNIQUE<int32_t[]>(compw * comph);
+    this->buf[nc] = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(compw) * comph);
   }
 
   if (!isASCII) {
@@ -313,7 +313,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       }
     }
   } else {
-    for (size_t i = 0; i < compw * comph; ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(compw) * comph; ++i) {
       for (size_t c = 0; c < num_iterations; ++c) {
         val = 0;
         d   = fgetc(fp);
@@ -462,7 +462,7 @@ size_t openhtj2k_encoder_impl::invoke() {
     throw std::exception();
   }
 
-  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(numTiles.x * numTiles.y);
+  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
   for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
     tileSet[i].enc_init(i, main_header, *buf);
   }

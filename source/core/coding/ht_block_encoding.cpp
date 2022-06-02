@@ -50,7 +50,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   const int32_t pshift  = (refsegment) ? 1 : 0;
   const int32_t pLSB    = (1 << (pshift - 1));
 
-  for (uint16_t i = 0; i < height; ++i) {
+  for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *const sp  = this->i_samples + i * stride;
     int32_t *const dp  = this->sample_buf.get() + i * width;
     size_t block_index = (i + 1U) * (size.x + 2U) + 1U;
