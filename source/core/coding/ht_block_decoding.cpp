@@ -1156,61 +1156,51 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
     size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
     auto vmask     = vdupq_n_s32(~mask);
     for (size_t j = 0; j < simdlen; j += 8) {
-      auto vsrc0    = vld1q_s32(val + j);
-      auto vsrc1    = vld1q_s32(val + j + 4);
-      auto vsign0   = vcltzq_s32(vsrc0) >> 31;
-      auto vsign1   = vcltzq_s32(vsrc1) >> 31;
-      vsrc0         = vsrc0 & INT32_MAX;
-      vsrc1         = vsrc1 & INT32_MAX;
-      auto vROImask = vandq_s32(vsrc0, vmask);  // ^ 0xFFFFFFFF;
+      auto vsrc0  = vld1q_s32(val);
+      auto vsrc1  = vld1q_s32(val + 4);
+      auto vsign0 = vcltzq_s32(vsrc0) >> 31;
+      auto vsign1 = vcltzq_s32(vsrc1) >> 31;
+      vsrc0       = vsrc0 & INT32_MAX;
+      vsrc1       = vsrc1 & INT32_MAX;
+      // upshift background region, if necessary
+      auto vROImask = vandq_s32(vsrc0, vmask);
       vROImask      = vceqzq_s32(vROImask);
       vROImask &= vdupq_n_s32(ROIshift);
-      vsrc0 = vshlq_s32(vsrc0, vROImask);
-
+      vsrc0    = vshlq_s32(vsrc0, vROImask);
       vROImask = vandq_s32(vsrc1, vmask);
       vROImask = vceqzq_s32(vROImask);
       vROImask &= vdupq_n_s32(ROIshift);
       vsrc1 = vshlq_s32(vsrc1, vROImask);
 
-      auto vstate = vld1_u8(blkstate + j);
+      // retrieve number of decoded magnitude bit-planes
+      auto vstate = vld1_u8(blkstate);
       vstate >>= 2;
       vstate &= 1;
-      auto vupshift0 = 1 << (31 - vdupq_n_s32(S_blk + 1) + vmovl_s16(vget_low_s16(vmovl_s8(vstate))) - 1);
-      auto vupshift1 = 1 << (31 - vdupq_n_s32(S_blk + 1) + vmovl_s16(vget_high_s16(vmovl_s8(vstate))) - 1);
+      auto vNb0 = vdupq_n_s32(S_blk + 1) + vmovl_s16(vget_low_s16(vmovl_s8(vstate)));
+      auto vNb1 = vdupq_n_s32(S_blk + 1) + vmovl_s16(vget_high_s16(vmovl_s8(vstate)));
 
+      // add reconstruction value, if necessary (it will happen for a truncated codestream)
+      auto vMb           = vdupq_n_s32(M_b);
+      auto v_recval_mask = vcgtq_s32(vMb, vNb0);
+      v_recval_mask &= vcgtzq_s32(vsrc0);
+      auto vrecval0 = (1 << (31 - vNb0 - 1)) & v_recval_mask;
+      v_recval_mask = vcgtq_s32(vMb, vNb1);
+      v_recval_mask &= vcgtzq_s32(vsrc1);
+      auto vrecval1 = (1 << (31 - vNb1 - 1)) & v_recval_mask;
+      vsrc0 |= vrecval0;
+      vsrc1 |= vrecval1;
+
+      // convert vlues from sign-magnitude form to two's complement one
       auto vnegmask = vcltzq_s32(vsrc0 | (vsign0 << 31));
       auto vposmask = ~vnegmask;
       auto vdst0    = (vnegq_s32(vsrc0) & vnegmask) + (vsrc0 & vposmask);
       vnegmask      = vcltzq_s32(vsrc1 | (vsign1 << 31));
       vposmask      = ~vnegmask;
       auto vdst1    = (vnegq_s32(vsrc1) & vnegmask) + (vsrc1 & vposmask);
-      vst1q_s16(dst + j, vcombine_s16(vmovn_s32(vdst0 >> pLSB), vmovn_s32(vdst1 >> pLSB)));
-      //      int32_t sign = *val & INT32_MIN;
-      //      *val &= INT32_MAX;
-      //      // detect background region and upshift it
-      //      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-      //        *val <<= ROIshift;
-      //      }
-      //      // do adjustment of the position indicating 0.5
-      //      int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
-      //      if (ROIshift) {
-      //        N_b = M_b;
-      //      }
-      //      if (N_b < M_b && *val) {
-      //        *val |= 1 << (31 - N_b - 1);
-      //      }
-      //      // bring sign back
-      //      *val |= sign;
-      //      // convert sign-magnitude to two's complement form
-      //      if (*val < 0) {
-      //        *val = -(*val & INT32_MAX);
-      //      }
-      //
-      //      assert(pLSB >= 0);  // assure downshift is not negative
-      //      *dst = static_cast<int16_t>(*val >> pLSB);
-      //      val += 8;
-      //      dst += 8;
-      //      blkstate += 8;
+      vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0 >> pLSB), vmovn_s32(vdst1 >> pLSB)));
+      val += 8;
+      dst += 8;
+      blkstate += 8;
     }
     for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
          j < static_cast<size_t>(this->size.x); j++) {
