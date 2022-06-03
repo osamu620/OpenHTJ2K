@@ -187,8 +187,12 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   //  memset(block_states, 0, (size.x + 2) * (size.y + 2));
   const uint32_t QWx2 = round_up(size.x, 8U);  // size.x + size.x % 2;
   const uint32_t QHx2 = round_up(size.y, 8U);  // size.y + size.y % 2;
-  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(size.x + 2) * (size.y + 2));
-  memset(block_states.get(), 0, static_cast<size_t>(size.x + 2) * (size.y + 2));
+  //  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(size.x + 2) * (size.y + 2));
+  //  memset(block_states.get(), 0, static_cast<size_t>(size.x + 2) * (size.y + 2));
+  blksampl_stride = QWx2;
+  blkstate_stride = QWx2 + 2;
+  block_states    = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
+  memset(block_states.get(), 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
   sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
   memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
   this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);

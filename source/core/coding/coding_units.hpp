@@ -95,6 +95,8 @@ class j2k_codeblock : public j2k_region {
   std::unique_ptr<uint8_t[]> layer_passes;
   bool already_included;
   bool refsegment;
+  size_t blkstate_stride;
+  size_t blksampl_stride;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
                 float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
@@ -102,12 +104,13 @@ class j2k_codeblock : public j2k_region {
                 const element_siz &p1, const element_siz &s);
   void modify_state(const std::function<void(uint8_t &, uint8_t)> &callback, uint8_t val, int16_t j1,
                     int16_t j2) {
-    callback(block_states[static_cast<uint32_t>(j1 + 1) * (size.x + 2) + static_cast<uint32_t>(j2 + 1)],
-             val);
+    callback(
+        block_states[static_cast<uint32_t>(j1 + 1) * (blkstate_stride) + static_cast<uint32_t>(j2 + 1)],
+        val);
   }
   uint8_t get_state(const std::function<uint8_t(uint8_t &)> &callback, int16_t j1, int16_t j2) const {
     return (uint8_t)callback(
-        block_states[static_cast<uint32_t>(j1 + 1) * (size.x + 2) + static_cast<uint32_t>(j2 + 1)]);
+        block_states[static_cast<uint32_t>(j1 + 1) * (blkstate_stride) + static_cast<uint32_t>(j2 + 1)]);
   }
   // DEBUG FUNCTION, SOON BE DELETED
   [[maybe_unused]] [[nodiscard]] uint8_t get_orientation() const { return band; }

@@ -909,84 +909,100 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   }
 
   // convert mu_n and sigma_n into raster-scan by putting buffers defined in codeblock class
-  uint32_t *p_mu            = mu_n.get();
-  uint8_t *p_sigma          = sigma_n.get();
-  const int16_t is_border_x = block->size.x % 2;
-  const int16_t is_border_y = block->size.y % 2;
-  auto set_sample           = [block](const uint32_t &symbol, const int16_t &j1, const int16_t &j2) {
-    block->sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * block->size.x] =
-        static_cast<int32_t>(symbol);
-  };
-  //  for (int16_t y = 0; y < QH; y++) {
-  //    for (int16_t x = 0; x < QW; x++) {
-  //      const int16_t y2 = static_cast<int16_t>(y << 1);
-  //      const int16_t x2 = static_cast<int16_t>(x << 1);
-  //      const auto y2p1  = static_cast<int16_t>(y2 + 1);
-  //      const auto x2p1  = static_cast<int16_t>(x2 + 1);
-  //      set_sample(*p_mu, y2, x2);
-  //      block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x));
-  //      p_mu++;
-  //      p_sigma++;
-  //      if (y != QH - 1 || is_border_y == 0) {
-  //        set_sample(*p_mu, y2p1, x2);
-  //        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1), static_cast<int16_t>(2 *
-  //        x));
-  //      }
-  //      p_mu++;
-  //      p_sigma++;
-  //      if (x != QW - 1 || is_border_x == 0) {
-  //        set_sample(*p_mu, y2, x2p1);
-  //        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y), static_cast<int16_t>(2 * x +
-  //        1));
-  //      }
-  //      p_mu++;
-  //      p_sigma++;
-  //      if ((y != QH - 1 || is_border_y == 0) && (x != QW - 1 || is_border_x == 0)) {
-  //        set_sample(*p_mu, y2p1, x2p1);
-  //        block->modify_state(sigma, *p_sigma, static_cast<int16_t>(2 * y + 1),
-  //                            static_cast<int16_t>(2 * x + 1));
-  //      }
-  //      p_mu++;
-  //      p_sigma++;
-  //    }
-  //  }
-#include <arm_neon.h>
-  uint32_t *p   = p_mu;
-  uint8_t *sigp = p_sigma;
+  uint32_t *p_mu   = mu_n.get();
+  uint8_t *p_sigma = sigma_n.get();
   for (size_t i = 0; i < 2 * QH - 1; i += 2) {
-    int32_t *dp0  = block->sample_buf.get() + i * round_up(block->size.x, 8U);
-    int32_t *dp1  = block->sample_buf.get() + (i + 1) * round_up(block->size.x, 8U);
-    uint8_t *ddp0 = block->block_states.get() + i * (block->size.x + 2);
-    uint8_t *ddp1 = block->block_states.get() + (i + 1) * (block->size.x + 2);
-    for (size_t j = 0; j < round_up(block->size.x, 8U); j += 4) {
-      auto v0 = vld1q_u32(p);
-      p += 4;
-      auto v1 = vld1q_u32(p);
-      p += 4;
-      auto vout0 = vzipq_u32(v0, v1);
-      auto vout1 = vzipq_u32(vout0.val[0], vout0.val[1]);
-      vst1q_s32(dp0, vout1.val[0]);
-      dp0 += 4;
-      vst1q_s32(dp1, vout1.val[1]);
-      dp1 += 4;
-
-      auto vu8    = vld1_u8(sigp);
-      auto vu16   = vmovl_u8(vu8);
-      auto vlow   = vmovl_u16(vget_low_u16(vu16));
-      auto vhigh  = vmovl_u16(vget_high_u16(vu16));
-      vout0       = vzipq_u32(vlow, vhigh);
-      vout1       = vzipq_u32(vout0.val[0], vout0.val[1]);
-      auto vline0 = vmovn_u32(vout1.val[0]);
-      auto vline1 = vmovn_u32(vout1.val[1]);
-      auto vvv    = vmovn_u16(vcombine_u16(vline0, vline1));
-      uint8_t aaa[8];
-      vst1_u8(aaa, vvv);
-      memcpy(ddp0, aaa, 4);
-      memcpy(ddp1, aaa + 4, 4);
-      ddp0 += 4;
-      ddp1 += 4;
+    int32_t *dp0  = block->sample_buf.get() + i * block->blksampl_stride;
+    int32_t *dp1  = block->sample_buf.get() + (i + 1) * block->blksampl_stride;
+    uint8_t *ddp0 = 1 + block->block_states.get() + (i + 1) * (block->blkstate_stride);
+    uint8_t *ddp1 = 1 + block->block_states.get() + (i + 2) * (block->blkstate_stride);
+    for (size_t j = 0; j < block->size.x; j += 2) {
+      *dp0++  = *p_mu;
+      *ddp0++ = *p_sigma;
+      p_mu++;
+      p_sigma++;
+      if (i + 1 < block->size.y) {
+        *dp1++  = *p_mu;
+        *ddp1++ = *p_sigma;
+      }
+      p_mu++;
+      p_sigma++;
+      if (j + 1 < block->size.x) {
+        *dp0++  = *p_mu;
+        *ddp0++ = *p_sigma;
+      }
+      p_mu++;
+      p_sigma++;
+      if (i + 1 < block->size.y && j + 1 < block->size.x) {
+        *dp1++  = *p_mu;
+        *ddp1++ = *p_sigma;
+      }
+      p_mu++;
+      p_sigma++;
     }
   }
+  //#include <arm_neon.h>
+  //  uint32_t *p   = p_mu;
+  //  uint8_t *sigp = p_sigma;
+  //  for (size_t i = 0; i < 2 * QH - 1; i += 2) {
+  //    int32_t *dp0  = block->sample_buf.get() + i * block->blksampl_stride;
+  //    int32_t *dp1  = block->sample_buf.get() + (i + 1) * block->blksampl_stride;
+  //    uint8_t *ddp0 = 1 + block->block_states.get() + (i + 1) * (block->blkstate_stride);
+  //    uint8_t *ddp1 = 1 + block->block_states.get() + (i + 2) * (block->blkstate_stride);
+  //    for (size_t j = 0; j < 2 * QW - (2 * QW % 4); j += 4) {
+  //      auto v0 = vld1q_u32(p);
+  //      p += 4;
+  //      auto v1 = vld1q_u32(p);
+  //      p += 4;
+  //      auto vout0 = vzipq_u32(v0, v1);
+  //      auto vout1 = vzipq_u32(vout0.val[0], vout0.val[1]);
+  //      vst1q_s32(dp0, vout1.val[0]);
+  //      dp0 += 4;
+  //      vst1q_s32(dp1, vout1.val[1]);
+  //      dp1 += 4;
+  //
+  //      auto vu8    = vld1_u8(sigp);
+  //      auto vu16   = vmovl_u8(vu8);
+  //      auto vlow   = vmovl_u16(vget_low_u16(vu16));
+  //      auto vhigh  = vmovl_u16(vget_high_u16(vu16));
+  //      vout0       = vzipq_u32(vlow, vhigh);
+  //      vout1       = vzipq_u32(vout0.val[0], vout0.val[1]);
+  //      auto vline0 = vmovn_u32(vout1.val[0]);
+  //      auto vline1 = vmovn_u32(vout1.val[1]);
+  //      auto vvv    = vmovn_u16(vcombine_u16(vline0, vline1));
+  //      uint8_t aaa[8];
+  //      vst1_u8(aaa, vvv);
+  //      memcpy(ddp0, aaa, 4);
+  //      memcpy(ddp1, aaa + 4, 4);
+  //      ddp0 += 4;
+  //      ddp1 += 4;
+  //      sigp += 8;
+  //    }
+  //    for (size_t j = 2 * QW - (2 * QW % 4); j < block->size.x; j += 2) {
+  //      *dp0++  = *p;
+  //      *ddp0++ = *sigp;
+  //      p++;
+  //      sigp++;
+  //      if (i + 1 < block->size.y) {
+  //        *dp1++  = *p;
+  //        *ddp1++ = *sigp;
+  //      }
+  //      p++;
+  //      sigp++;
+  //      if (j + 1 < block->size.x) {
+  //        *dp0++  = *p;
+  //        *ddp0++ = *sigp;
+  //      }
+  //      p++;
+  //      sigp++;
+  //      if (i + 1 < block->size.y && j + 1 < block->size.x) {
+  //        *dp1++  = *p;
+  //        *ddp1++ = *sigp;
+  //      }
+  //      p++;
+  //      sigp++;
+  //    }
+  //}
 }
 
 auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const int32_t i_start,
@@ -1010,7 +1026,7 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
     //                   * causal_cond;
     //     }
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
-      sp          = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
+      sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->blksampl_stride];
       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != block_height - 1));
       mbr         = 0;
       if (block->get_state(Sigma, i, j) == 0) {
@@ -1030,7 +1046,7 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
   }
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
-      sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
+      sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->blksampl_stride];
       // decode sign
       if ((*sp & (1 << pLSB)) != 0) {
         *sp = (*sp & 0x7FFFFFFF) | (SigProp.importSigPropBit() << 31);
@@ -1088,7 +1104,9 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   for (int16_t n1 = 0; n1 < num_v_stripe; n1++) {
     for (int16_t j = 0; j < blk_width; j++) {
       for (int16_t i = i_start; i < i_start + height; i++) {
-        sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
+        sp =
+            &block
+                 ->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->blksampl_stride];
         if (block->get_state(Sigma, i, j) != 0) {
           block->modify_state(refinement_indicator, 1, i, j);
           sp[0] |= MagRef.importMagRefBit() << pLSB;
@@ -1100,7 +1118,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   height = static_cast<int16_t>(blk_height % 4);
   for (int16_t j = 0; j < blk_width; j++) {
     for (int16_t i = i_start; i < i_start + height; i++) {
-      sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->size.x];
+      sp = &block->sample_buf[static_cast<uint32_t>(j) + static_cast<uint32_t>(i) * block->blksampl_stride];
       if (block->get_state(Sigma, i, j) != 0) {
         block->modify_state(refinement_indicator, 1, i, j);
         sp[0] |= MagRef.importMagRefBit() << pLSB;
@@ -1238,9 +1256,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       for (int16_t y = 0; y < yyy; y++) {
         for (int16_t x = 0; x < xxx; x++) {
           const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
-          val  = &block->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->size.x];
-          dst  = block->i_samples + n;
-          sign = *val & INT32_MIN;
+          val              = &block->sample_buf[static_cast<uint32_t>(x)
+                                   + static_cast<uint32_t>(y) * block->blksampl_stride];
+          dst              = block->i_samples + n;
+          sign             = *val & INT32_MIN;
           *val &= INT32_MAX;
           // detect background region and upshift it
           if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
@@ -1282,9 +1301,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       for (int16_t y = 0; y < yyy; y++) {
         for (int16_t x = 0; x < xxx; x++) {
           const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
-          val  = &block->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->size.x];
-          dst  = block->i_samples + n;
-          sign = *val & INT32_MIN;
+          val              = &block->sample_buf[static_cast<uint32_t>(x)
+                                   + static_cast<uint32_t>(y) * block->blksampl_stride];
+          dst              = block->i_samples + n;
+          sign             = *val & INT32_MIN;
           *val &= INT32_MAX;
           // detect background region and upshift it
           if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {

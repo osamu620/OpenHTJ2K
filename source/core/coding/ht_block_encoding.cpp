@@ -52,8 +52,8 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
 
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *const sp  = this->i_samples + i * stride;
-    int32_t *const dp  = this->sample_buf.get() + i * width;
-    size_t block_index = (i + 1U) * (size.x + 2U) + 1U;
+    int32_t *const dp  = this->sample_buf.get() + i * blksampl_stride;
+    size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states.get() + block_index;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     // vetorized for ARM NEON
@@ -416,8 +416,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   const uint32_t QWx2                = block->size.x + block->size.x % 2;
   alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1U) * (block->size.x + 2) + 2 * qx + 1;
-  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2U) * (block->size.x + 2) + 2 * qx + 1;
+  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1U) * (block->blkstate_stride) + 2 * qx + 1;
+  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2U) * (block->blkstate_stride) + 2 * qx + 1;
   auto v_u8_0        = vld1_u8(sp0);
   auto v_u8_1        = vld1_u8(sp1);
   auto v_u8_zip      = vzip1_u8(v_u8_0, v_u8_1);
@@ -429,8 +429,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                              vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)));
   rho_q[0]        = vdupb_lane_u8(vtmp, 0);
   rho_q[1]        = vdupb_lane_u8(vtmp, 1);
-  auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2);
-  auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1U) * QWx2);
+  auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * block->blksampl_stride);
+  auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1U) * block->blksampl_stride);
   auto v_s32_out  = vzipq_s32(v_s32_0, v_s32_1);
   vst1q_u32(v_n, v_s32_out.val[0]);
   vst1q_u32(v_n + 4, v_s32_out.val[1]);
@@ -512,7 +512,7 @@ static inline void make_storage_one(const j2k_codeblock *const block, const uint
     if ((x[i] >= 0 && x[i] < static_cast<int16_t>(block->size.x))
         && (y[i] >= 0 && y[i] < static_cast<int16_t>(block->size.y))) {
       v_n[i] = static_cast<uint32_t>(
-          block->sample_buf[(uint32_t)x[i] + (uint32_t)y[i] * (block->size.x + block->size.x % 2)]);
+          block->sample_buf[(uint32_t)x[i] + (uint32_t)y[i] * (block->blksampl_stride)]);
     } else {
       v_n[i] = 0;
     }
