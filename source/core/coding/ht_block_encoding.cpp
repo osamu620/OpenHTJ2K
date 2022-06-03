@@ -441,8 +441,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const uint32_t QWx2 = block->size.x + block->size.x % 2;
   // const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * (block->size.x + 2U) + 2U * qx + 1U;
-  uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * (block->size.x + 2U) + 2U * qx + 1U;
+  uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * (block->blkstate_stride) + 2U * qx + 1U;
   auto v_u8_0 = _mm_set1_epi64x(*((int64_t *)sp0));
   auto v_u8_1 = _mm_set1_epi64x(*((int64_t *)sp1));
   auto v_u8_zip = _mm_unpacklo_epi8(v_u8_0, v_u8_1);
@@ -455,8 +455,10 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 
   alignas(32) uint32_t sig32[8];
   _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(v_u8_out));
-  auto v_s32_0 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2U * qx + 2U * qy * QWx2));
-  auto v_s32_1 = _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * QWx2));
+  auto v_s32_0 =
+      _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2U * qx + 2U * qy * block->blksampl_stride));
+  auto v_s32_1 = _mm_loadu_si128(
+      (__m128i *)(block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * block->blksampl_stride));
   *((__m128i *)(v_n)) = _mm_unpacklo_epi32(v_s32_0, v_s32_1);
   *((__m128i *)(v_n + 4)) = _mm_unpackhi_epi32(v_s32_0, v_s32_1);
 
