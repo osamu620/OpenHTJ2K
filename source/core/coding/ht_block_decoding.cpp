@@ -1127,6 +1127,153 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
+void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
+  /* ready for ROI adjustment and dequantization */
+
+  // number of decoded magnitude bit‐planes
+  const int32_t pLSB = 31 - M_b;  // indicates binary point;
+
+  // bit mask for ROI detection
+  const uint32_t mask = UINT32_MAX >> (M_b + 1);
+  // reconstruction parameter defined in E.1.1.2 of the spec
+
+  float fscale = this->stepsize;
+  fscale *= (1 << FRACBITS);
+  if (M_b <= 31) {
+    fscale /= (static_cast<float>(1 << (31 - M_b)));
+  } else {
+    fscale *= (static_cast<float>(1 << (M_b - 31)));
+  }
+  constexpr int32_t downshift = 15;
+  fscale *= (float)(1 << 16) * (float)(1 << downshift);
+  const auto scale = (int32_t)(fscale + 0.5);
+
+  for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+    int32_t *val      = this->sample_buf.get() + i * this->blksampl_stride;
+    sprec_t *dst      = this->i_samples + i * this->band_stride;
+    uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
+    auto vmask     = vdupq_n_s32(~mask);
+    for (size_t j = 0; j < simdlen; j += 8) {
+      auto vsrc0    = vld1q_s32(val + j);
+      auto vsrc1    = vld1q_s32(val + j + 4);
+      auto vsign0   = vcltzq_s32(vsrc0) >> 31;
+      auto vsign1   = vcltzq_s32(vsrc1) >> 31;
+      vsrc0         = vsrc0 & INT32_MAX;
+      vsrc1         = vsrc1 & INT32_MAX;
+      auto vROImask = vandq_s32(vsrc0, vmask);  // ^ 0xFFFFFFFF;
+      vROImask      = vceqzq_s32(vROImask);
+      vROImask &= vdupq_n_s32(ROIshift);
+      vsrc0 = vshlq_s32(vsrc0, vROImask);
+
+      vROImask = vandq_s32(vsrc1, vmask);
+      vROImask = vceqzq_s32(vROImask);
+      vROImask &= vdupq_n_s32(ROIshift);
+      vsrc1 = vshlq_s32(vsrc1, vROImask);
+
+      auto vstate = vld1_u8(blkstate + j);
+      vstate >>= 2;
+      vstate &= 1;
+      auto vupshift0 = 1 << (31 - vdupq_n_s32(S_blk + 1) + vmovl_s16(vget_low_s16(vmovl_s8(vstate))) - 1);
+      auto vupshift1 = 1 << (31 - vdupq_n_s32(S_blk + 1) + vmovl_s16(vget_high_s16(vmovl_s8(vstate))) - 1);
+
+      auto vnegmask = vcltzq_s32(vsrc0 | (vsign0 << 31));
+      auto vposmask = ~vnegmask;
+      auto vdst0    = (vnegq_s32(vsrc0) & vnegmask) + (vsrc0 & vposmask);
+      vnegmask      = vcltzq_s32(vsrc1 | (vsign1 << 31));
+      vposmask      = ~vnegmask;
+      auto vdst1    = (vnegq_s32(vsrc1) & vnegmask) + (vsrc1 & vposmask);
+      vst1q_s16(dst + j, vcombine_s16(vmovn_s32(vdst0 >> pLSB), vmovn_s32(vdst1 >> pLSB)));
+      //      int32_t sign = *val & INT32_MIN;
+      //      *val &= INT32_MAX;
+      //      // detect background region and upshift it
+      //      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+      //        *val <<= ROIshift;
+      //      }
+      //      // do adjustment of the position indicating 0.5
+      //      int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
+      //      if (ROIshift) {
+      //        N_b = M_b;
+      //      }
+      //      if (N_b < M_b && *val) {
+      //        *val |= 1 << (31 - N_b - 1);
+      //      }
+      //      // bring sign back
+      //      *val |= sign;
+      //      // convert sign-magnitude to two's complement form
+      //      if (*val < 0) {
+      //        *val = -(*val & INT32_MAX);
+      //      }
+      //
+      //      assert(pLSB >= 0);  // assure downshift is not negative
+      //      *dst = static_cast<int16_t>(*val >> pLSB);
+      //      val += 8;
+      //      dst += 8;
+      //      blkstate += 8;
+    }
+    for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
+         j < static_cast<size_t>(this->size.x); j++) {
+      int32_t sign = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      // detect background region and upshift it
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      // do adjustment of the position indicating 0.5
+      int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
+      if (ROIshift) {
+        N_b = M_b;
+      }
+      if (N_b < M_b && *val) {
+        *val |= 1 << (31 - N_b - 1);
+      }
+      // bring sign back
+      *val |= sign;
+      // convert sign-magnitude to two's complement form
+      if (*val < 0) {
+        *val = -(*val & INT32_MAX);
+      }
+
+      assert(pLSB >= 0);  // assure downshift is not negative
+      *dst = static_cast<int16_t>(*val >> pLSB);
+      val++;
+      dst++;
+      blkstate++;
+    }
+#else
+    for (size_t j = 0; j < static_cast<size_t>(this->size.x); j++) {
+      int32_t sign = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      // detect background region and upshift it
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      // do adjustment of the position indicating 0.5
+      int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
+      if (ROIshift) {
+        N_b = M_b;
+      }
+      if (N_b < M_b && *val) {
+        *val |= 1 << (31 - N_b - 1);
+      }
+      // bring sign back
+      *val |= sign;
+      // convert sign-magnitude to two's complement form
+      if (*val < 0) {
+        *val = -(*val & INT32_MAX);
+      }
+
+      assert(pLSB >= 0);  // assure downshift is not negative
+      *dst = static_cast<int16_t>(*val >> pLSB);
+      val++;
+      dst++;
+      blkstate++;
+    }
+#endif
+  }
+}
+
 bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   // number of placeholder pass
   uint8_t P0 = 0;
@@ -1253,46 +1400,47 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 #ifdef __INTEL_COMPILER
   #pragma ivdep
 #endif
-      for (int16_t y = 0; y < yyy; y++) {
-        for (int16_t x = 0; x < xxx; x++) {
-          const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
-          val              = &block->sample_buf[static_cast<uint32_t>(x)
-                                   + static_cast<uint32_t>(y) * block->blksampl_stride];
-          dst              = block->i_samples + n;
-          sign             = *val & INT32_MIN;
-          *val &= INT32_MAX;
-          // detect background region and upshift it
-          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-            *val <<= ROIshift;
-          }
-          // do adjustment of the position indicating 0.5
-          z_n = block->get_state(Refinement_indicator, y, x);
-          // z_n = p1_states->pi_[x + y * block->size.x];
-          // z_n = (p1_states->block_states[x + y * block->size.x] & S_PI_) >> SHIFT_PI_;
-          if (ROIshift) {
-            N_b = M_b;
-          } else {
-            N_b = S_blk + 1 + z_n;
-          }
-          // construct reconstruction value (=0.5)
-          offset = (M_b > N_b) ? M_b - N_b : 0;
-          r_val  = 1 << (pLSB - 1 + offset);
-          // add 0.5 and bring sign back, if necessary
-          if (*val != 0 && N_b < M_b) {
-            *val |= r_val;
-          }
-          // bring sign back
-          *val |= sign;
-          // convert sign-magnitude to two's complement form
-          if (*val < 0) {
-            *val = -(*val & INT32_MAX);
-          }
-
-          assert(pLSB >= 0);  // assure downshift is not negative
-          QF15 = static_cast<int16_t>(*val >> pLSB);
-          *dst = QF15;
-        }
-      }
+      block->dequantize(S_blk, ROIshift);
+      //      for (int16_t y = 0; y < yyy; y++) {
+      //        for (int16_t x = 0; x < xxx; x++) {
+      //          const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) *
+      //          block->band_stride; val              = &block->sample_buf[static_cast<uint32_t>(x)
+      //                                   + static_cast<uint32_t>(y) * block->blksampl_stride];
+      //          dst              = block->i_samples + n;
+      //          sign             = *val & INT32_MIN;
+      //          *val &= INT32_MAX;
+      //          // detect background region and upshift it
+      //          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+      //            *val <<= ROIshift;
+      //          }
+      //          // do adjustment of the position indicating 0.5
+      //          z_n = block->get_state(Refinement_indicator, y, x);
+      //          // z_n = p1_states->pi_[x + y * block->size.x];
+      //          // z_n = (p1_states->block_states[x + y * block->size.x] & S_PI_) >> SHIFT_PI_;
+      //          if (ROIshift) {
+      //            N_b = M_b;
+      //          } else {
+      //            N_b = S_blk + 1 + z_n;
+      //          }
+      //          // construct reconstruction value (=0.5)
+      //          offset = (M_b > N_b) ? M_b - N_b : 0;
+      //          r_val  = 1 << (pLSB - 1 + offset);
+      //          // add 0.5 and bring sign back, if necessary
+      //          if (*val != 0 && N_b < M_b) {
+      //            *val |= r_val;
+      //          }
+      //          // bring sign back
+      //          *val |= sign;
+      //          // convert sign-magnitude to two's complement form
+      //          if (*val < 0) {
+      //            *val = -(*val & INT32_MAX);
+      //          }
+      //
+      //          assert(pLSB >= 0);  // assure downshift is not negative
+      //          QF15 = static_cast<int16_t>(*val >> pLSB);
+      //          *dst = QF15;
+      //        }
+      //      }
     } else {
 // irreversible path
 #ifdef __INTEL_COMPILER
