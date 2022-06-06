@@ -465,7 +465,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   uint8_t E_n[2], E_ne[2], E_nw[2], E_nf[2], max_E[2];
   int32_t m_n[2], known_1[2];
 
-  context = 0;
+  auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 2);
+  memset(rholine.get(), 0, sizeof(int32_t) * (QW + 2));
+  auto rho_p = rholine.get() + 1;
+  context    = 0;
   // Initial line-pair
   for (; q < QW - 1;) {
     q1 = q;
@@ -478,7 +481,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
     }
-
+    *rho_p++ = rho[FIRST_QUAD];
     // calculate context for the next quad
     context = (rho[FIRST_QUAD] >> 1) | (rho[FIRST_QUAD] & 1);
     // context = sigma_n[4 * q1];                                   // f
@@ -500,6 +503,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
     }
+    *rho_p++ = rho[SECOND_QUAD];
     // calculate context for the next quad
     context = (rho[SECOND_QUAD] >> 1) | (rho[SECOND_QUAD] & 1);
     // context = sigma_n[4 * q2];                                   // f
@@ -606,7 +610,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     q1 = q;
 
     decodeSigEMB(MEL_decoder, VLC, context, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table0);
-
+    *rho_p++ = rho[FIRST_QUAD];
     if (u_off[FIRST_QUAD] == 0) {
       assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
     }
@@ -651,22 +655,31 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   // Non-initial line-pair
   uint16_t context1, context2;
   for (uint16_t row = 1; row < QH; row++) {
+    rho_p      = rholine.get() + 1;
+    int32_t qx = 0;
     while ((q - row * QW) < QW - 1 && q < static_cast<uint16_t>(QW * QH)) {
       q1 = q;
       q2 = q + 1U;
 
+      context1 = (rho_p[qx - 1] >> 3)
+                 | ((rho_p[qx] >> 1) & 1) + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2);
+      if (qx > 0) {
+        context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
+      }
       // calculate context for the current quad
-      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
-      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
-      if (q1 % QW) {
-        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
-        context1 = static_cast<uint16_t>(
-            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
-      }
-      if ((q1 + 1U) % QW) {
-        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf << 2
-      }
+      //      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
+      //      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
+      //      if (q1 % QW) {
+      //        //        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
+      //        context1 = static_cast<uint16_t>(
+      //            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
+      //      }
+      //      if ((q1 + 1U) % QW) {
+      //        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf <<2
+      //      }
+      //      printf("%d ", context1);
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
+      if (qx > 0) rho_p[qx - 1] = rho[SECOND_QUAD];
       if (u_off[FIRST_QUAD] == 0) {
         assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
       }
@@ -674,18 +687,27 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
       }
 
+      context2 = (rho_p[qx] >> 3)
+                 | ((rho_p[qx + 1] >> 1) & 1) + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2);
+      context2 |= (((rho[FIRST_QUAD] >> 2) & 1) | ((rho[FIRST_QUAD] >> 3) & 1)) << 1;
+
       // calculate context for the current quad
-      context2 = sigma_n[4 * (q2 - QW) + 1];                                           // n
-      context2 = static_cast<uint16_t>(context2 + (sigma_n[4 * (q2 - QW) + 3] << 2));  // ne
-      if (q2 % QW) {
-        context2 = static_cast<uint16_t>(context2 | sigma_n[4 * (q2 - QW) - 1]);  // nw
-        context2 = static_cast<uint16_t>(
-            context2 + ((sigma_n[4 * q2 - 1] | sigma_n[4 * q2 - 2]) << 1));  // (sw | w) << 1
-      }
-      if ((q2 + 1U) % QW) {
-        context2 = static_cast<uint16_t>(context2 | (sigma_n[4 * (q2 - QW) + 5] << 2));  // nf << 2
-      }
+      //      context2 = sigma_n[4 * (q2 - QW) + 1];                                           // n
+      //      context2 = static_cast<uint16_t>(context2 + (sigma_n[4 * (q2 - QW) + 3] << 2));  // ne
+      //      if (q2 % QW) {
+      //        //        context2 = static_cast<uint16_t>(context2 | sigma_n[4 * (q2 - QW) - 1]);  // nw
+      //        context2 = static_cast<uint16_t>(
+      //            context2 + ((sigma_n[4 * q2 - 1] | sigma_n[4 * q2 - 2]) << 1));  // (sw | w) << 1
+      //      }
+      //      if ((q2 + 1U) % QW) {
+      //        context2 = static_cast<uint16_t>(context2 | (sigma_n[4 * (q2 - QW) + 5] << 2));  // nf << 2
+      //      }
+      //      printf("%d ", context2);
       decodeSigEMB(MEL_decoder, VLC, context2, u_off, rho, emb_k, emb_1, SECOND_QUAD, dec_table1);
+      rho_p[qx] = rho[FIRST_QUAD];
+      if (qx + 1 == QW - 1) {
+        rho_p[qx + 1] = rho[SECOND_QUAD];
+      }
       if (u_off[SECOND_QUAD] == 0) {
         assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
       }
@@ -811,22 +833,30 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         }
       }
       q = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
+      qx += 2;
     }
     // if QW is odd number ..
     if (QW % 2 == 1) {
-      q1 = q;
-      // calculate context for the current quad
-      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
-      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
-      if (q1 % QW) {
-        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
-        context1 = static_cast<uint16_t>(
-            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
+      q1       = q;
+      context1 = (rho_p[qx - 1] >> 3)
+                 | ((rho_p[qx] >> 1) & 1) + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2);
+      if (qx > 0) {
+        context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
       }
-      if ((q1 + 1U) % QW) {
-        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf << 2
-      }
+      //      // calculate context for the current quad
+      //      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
+      //      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
+      //      if (q1 % QW) {
+      //        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
+      //        context1 = static_cast<uint16_t>(
+      //            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
+      //      }
+      //      if ((q1 + 1U) % QW) {
+      //        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf << 2
+      //      }
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
+      if (qx > 0) rho_p[qx - 1] = rho[SECOND_QUAD];
+      rho_p[qx] = rho[FIRST_QUAD];
       if (u_off[FIRST_QUAD] == 0) {
         assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
       }
@@ -843,12 +873,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         u[FIRST_QUAD] = 0;
       }
 
-      if (rho[FIRST_QUAD] == 0 || rho[FIRST_QUAD] == 1 || rho[FIRST_QUAD] == 2 || rho[FIRST_QUAD] == 4
-          || rho[FIRST_QUAD] == 8) {
-        gamma[FIRST_QUAD] = 0;
-      } else {
-        gamma[FIRST_QUAD] = 1;
-      }
+      gamma[FIRST_QUAD] = (popcount32(rho[FIRST_QUAD]) < 2) ? 0 : 1;
+      //      if (rho[FIRST_QUAD] == 0 || rho[FIRST_QUAD] == 1 || rho[FIRST_QUAD] == 2 || rho[FIRST_QUAD] ==
+      //      4
+      //          || rho[FIRST_QUAD] == 8) {
+      //        gamma[FIRST_QUAD] = 0;
+      //      } else {
+      //        gamma[FIRST_QUAD] = 1;
+      //      }
 
       E_n[FIRST_QUAD]  = E[4 * (q1 - QW) + 1];
       E_ne[FIRST_QUAD] = E[4 * (q1 - QW) + 3];
