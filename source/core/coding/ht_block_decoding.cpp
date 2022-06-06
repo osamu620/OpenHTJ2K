@@ -36,6 +36,12 @@
   #include <omp.h>
 #endif
 
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #include <arm_neon.h>
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  #include <x86intrin.h>
+#endif
+
 #define FIRST_QUAD 0
 #define SECOND_QUAD 1
 
@@ -917,24 +923,24 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     uint8_t *ddp0 = 1 + block->block_states.get() + (i + 1) * (block->blkstate_stride);
     uint8_t *ddp1 = 1 + block->block_states.get() + (i + 2) * (block->blkstate_stride);
     for (size_t j = 0; j < block->size.x; j += 2) {
-      *dp0++  = *p_mu;
+      *dp0++  = static_cast<int32_t>(*p_mu);
       *ddp0++ = *p_sigma;
       p_mu++;
       p_sigma++;
       if (i + 1 < block->size.y) {
-        *dp1++  = *p_mu;
+        *dp1++  = static_cast<int32_t>(*p_mu);
         *ddp1++ = *p_sigma;
       }
       p_mu++;
       p_sigma++;
       if (j + 1 < block->size.x) {
-        *dp0++  = *p_mu;
+        *dp0++  = static_cast<int32_t>(*p_mu);
         *ddp0++ = *p_sigma;
       }
       p_mu++;
       p_sigma++;
       if (i + 1 < block->size.y && j + 1 < block->size.x) {
-        *dp1++  = *p_mu;
+        *dp1++  = static_cast<int32_t>(*p_mu);
         *ddp1++ = *p_sigma;
       }
       p_mu++;
@@ -1203,6 +1209,88 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
       blkstate += 8;
     }
     for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
+         j < static_cast<size_t>(this->size.x); j++) {
+      int32_t sign = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      // detect background region and upshift it
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      // do adjustment of the position indicating 0.5
+      int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
+      if (ROIshift) {
+        N_b = M_b;
+      }
+      if (N_b < M_b && *val) {
+        *val |= 1 << (31 - N_b - 1);
+      }
+      // bring sign back
+      *val |= sign;
+      // convert sign-magnitude to two's complement form
+      if (*val < 0) {
+        *val = -(*val & INT32_MAX);
+      }
+
+      assert(pLSB >= 0);  // assure downshift is not negative
+      *dst = static_cast<int16_t>(*val >> pLSB);
+      val++;
+      dst++;
+      blkstate++;
+    }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
+    for (size_t j = 0; j < simdlen; j += 16) {
+      auto vsrc0 = _mm256_loadu_si256((__m256i *)val);
+      auto vsrc1 = _mm256_loadu_si256((__m256i *)(val + 8));
+      auto vsign0 =
+          _mm256_or_si256(_mm256_and_si256(vsrc0, _mm256_set1_epi32(INT32_MIN)), _mm256_set1_epi32(1));
+      auto vsign1 =
+          _mm256_or_si256(_mm256_and_si256(vsrc1, _mm256_set1_epi32(INT32_MIN)), _mm256_set1_epi32(1));
+      vsrc0 = _mm256_and_si256(vsrc0, _mm256_set1_epi32(0x7FFFFFFF));
+      vsrc1 = _mm256_and_si256(vsrc1, _mm256_set1_epi32(0x7FFFFFFF));
+      // upshift background region, if necessary
+      auto vROImask = _mm256_and_si256(vsrc0, _mm256_set1_epi32(static_cast<int32_t>(~mask)));
+      vROImask      = _mm256_cmpeq_epi32(vROImask, _mm256_setzero_si256());
+      vROImask      = _mm256_and_si256(vROImask, _mm256_set1_epi32(ROIshift));
+      vsrc0         = _mm256_sllv_epi32(vsrc0, vROImask);
+      vROImask      = _mm256_and_si256(vsrc1, _mm256_set1_epi32(static_cast<int32_t>(~mask)));
+      vROImask      = _mm256_cmpeq_epi32(vROImask, _mm256_setzero_si256());
+      vROImask      = _mm256_and_si256(vROImask, _mm256_set1_epi32(ROIshift));
+      vsrc1         = _mm256_sllv_epi32(vsrc1, vROImask);
+
+      // retrieve number of decoded magnitude bit-planes
+      auto vstate      = _mm_loadu_si128((__m128i *)blkstate);
+      auto vstate_low  = _mm256_cvtepi8_epi32(vstate);
+      auto vstate_high = _mm256_cvtepi8_epi32(_mm_srli_si128(vstate, 8));
+      vstate_low       = _mm256_and_si256(_mm256_srai_epi32(vstate_low, 2), _mm256_set1_epi32(1));
+      vstate_high      = _mm256_and_si256(_mm256_srai_epi32(vstate_high, 2), _mm256_set1_epi32(1));
+      auto vNb0        = _mm256_add_epi32(_mm256_set1_epi32(S_blk + 1), vstate_low);
+      auto vNb1        = _mm256_add_epi32(_mm256_set1_epi32(S_blk + 1), vstate_high);
+
+      // add reconstruction value, if necessary (it will happen for a truncated codestream)
+      auto vMb           = _mm256_set1_epi32(M_b);
+      auto v_recval_mask = _mm256_cmpgt_epi32(vMb, vNb0);
+      v_recval_mask = _mm256_and_si256(v_recval_mask, _mm256_cmpgt_epi32(vsrc0, _mm256_setzero_si256()));
+      auto vrecval0 = _mm256_and_si256(
+          _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_sub_epi32(_mm256_set1_epi32(30), vNb0)),
+          v_recval_mask);
+      v_recval_mask = _mm256_cmpgt_epi32(vMb, vNb1);
+      v_recval_mask = _mm256_and_si256(v_recval_mask, _mm256_cmpgt_epi32(vsrc1, _mm256_setzero_si256()));
+      auto vrecval1 = _mm256_and_si256(
+          _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_sub_epi32(_mm256_set1_epi32(30), vNb1)),
+          v_recval_mask);
+      vsrc0 = _mm256_or_si256(vsrc0, vrecval0);
+      vsrc1 = _mm256_or_si256(vsrc1, vrecval1);
+
+      // convert vlues from sign-magnitude form to two's complement one
+      auto vdst0 = _mm256_srai_epi32(_mm256_sign_epi32(vsrc0, vsign0), pLSB);
+      auto vdst1 = _mm256_srai_epi32(_mm256_sign_epi32(vsrc1, vsign1), pLSB);
+      _mm256_storeu_si256((__m256i *)dst, _mm256_permute4x64_epi64(_mm256_packs_epi32(vdst0, vdst1), 0xD8));
+      val += 16;
+      dst += 16;
+      blkstate += 16;
+    }
+    for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
          j < static_cast<size_t>(this->size.x); j++) {
       int32_t sign = *val & INT32_MIN;
       *val &= INT32_MAX;
