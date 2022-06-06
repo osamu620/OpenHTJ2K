@@ -1478,10 +1478,8 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     const uint16_t yyy = static_cast<uint16_t>(block->size.y);
     const uint16_t xxx = static_cast<uint16_t>(block->size.x);
     if (block->transformation) {
-// reversible path
-#ifdef __INTEL_COMPILER
-  #pragma ivdep
-#endif
+      // reversible path
+
       block->dequantize(S_blk, ROIshift);
       //      for (int16_t y = 0; y < yyy; y++) {
       //        for (int16_t x = 0; x < xxx; x++) {
