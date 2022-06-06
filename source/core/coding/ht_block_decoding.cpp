@@ -39,7 +39,11 @@
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  #include <x86intrin.h>
+  #if defined(_MSC_VER) || defined(__MINGW64__)
+    #include <intrin.h>
+  #else
+    #include <x86intrin.h>
+  #endif
 #endif
 
 #define FIRST_QUAD 0
@@ -131,7 +135,7 @@ int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
   int32_t val = 0;
   // uint8_t bit;
   if (m_n > 0) {
-    val = static_cast<int32_t>((uint64_t)bitmask32[m_n] & Creg);
+    val = static_cast<int32_t>(bitmask32[m_n] & (int32_t)Creg);
     //      for (int i = 0; i < m_n; i++) {
     //        bit = MS->importMagSgnBit();
     //        val += (bit << i);
