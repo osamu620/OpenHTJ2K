@@ -1214,7 +1214,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
         vsrc0 = _mm256_or_si256(vsrc0, vrecval0);
         vsrc1 = _mm256_or_si256(vsrc1, vrecval1);
 
-        // convert vlues from sign-magnitude form to two's complement one
+        // convert values from sign-magnitude form to two's complement one
         auto vdst0 = _mm256_srai_epi32(_mm256_sign_epi32(vsrc0, vsign0), pLSB);
         auto vdst1 = _mm256_srai_epi32(_mm256_sign_epi32(vsrc1, vsign1), pLSB);
         _mm256_storeu_si256((__m256i *)dst,
@@ -1289,7 +1289,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
     if (ROIshift) {
       ROImask = 0xFFFFFFFF;
     }
-    auto vROIshift = vdupq_n_s32(ROImask);
+    //    auto vROIshift = vdupq_n_s32(ROImask);
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val      = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst      = this->i_samples + i * this->band_stride;
@@ -1416,27 +1416,43 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
         vstate_high      = _mm256_and_si256(_mm256_srai_epi32(vstate_high, 2), _mm256_set1_epi32(1));
         auto vNb0        = _mm256_add_epi32(_mm256_set1_epi32(S_blk + 1), vstate_low);
         auto vNb1        = _mm256_add_epi32(_mm256_set1_epi32(S_blk + 1), vstate_high);
+        if (ROIshift) {
+          vNb0 = _mm256_set1_epi32(M_b);
+          vNb1 = _mm256_set1_epi32(M_b);
+        }
 
         // add reconstruction value, if necessary (it will happen for a truncated codestream)
-        auto vMb           = _mm256_set1_epi32(M_b);
-        auto v_recval_mask = _mm256_cmpgt_epi32(vMb, vNb0);
-        v_recval_mask = _mm256_and_si256(v_recval_mask, _mm256_cmpgt_epi32(vsrc0, _mm256_setzero_si256()));
-        auto vrecval0 = _mm256_and_si256(
-            _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_sub_epi32(_mm256_set1_epi32(30), vNb0)),
-            v_recval_mask);
-        v_recval_mask = _mm256_cmpgt_epi32(vMb, vNb1);
-        v_recval_mask = _mm256_and_si256(v_recval_mask, _mm256_cmpgt_epi32(vsrc1, _mm256_setzero_si256()));
+        auto v_recval_mask = _mm256_cmpgt_epi32(vsrc0, _mm256_setzero_si256());
+        auto vrecval0      = _mm256_and_si256(
+                 _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_sub_epi32(_mm256_set1_epi32(30), vNb0)),
+                 v_recval_mask);
+        v_recval_mask = _mm256_cmpgt_epi32(vsrc1, _mm256_setzero_si256());
         auto vrecval1 = _mm256_and_si256(
             _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_sub_epi32(_mm256_set1_epi32(30), vNb1)),
             v_recval_mask);
         vsrc0 = _mm256_or_si256(vsrc0, vrecval0);
         vsrc1 = _mm256_or_si256(vsrc1, vrecval1);
 
-        // convert vlues from sign-magnitude form to two's complement one
-        auto vdst0 = _mm256_srai_epi32(_mm256_sign_epi32(vsrc0, vsign0), pLSB);
-        auto vdst1 = _mm256_srai_epi32(_mm256_sign_epi32(vsrc1, vsign1), pLSB);
+        // to prevent overflow, truncate to int16_t range
+        vsrc0 = _mm256_srai_epi32(_mm256_add_epi32(vsrc0, _mm256_set1_epi32(1 << 15)), 16);
+        vsrc1 = _mm256_srai_epi32(_mm256_add_epi32(vsrc1, _mm256_set1_epi32(1 << 15)), 16);
+
+        // dequantization
+        vsrc0 = _mm256_mullo_epi32(vsrc0, _mm256_set1_epi32(scale));
+        vsrc1 = _mm256_mullo_epi32(vsrc1, _mm256_set1_epi32(scale));
+
+        // downshift and convert values from sign-magnitude form to two's complement one
+        vsrc0 =
+            _mm256_srai_epi32(_mm256_add_epi32(vsrc0, _mm256_set1_epi32(1 << (downshift - 1))), downshift);
+        vsrc1 =
+            _mm256_srai_epi32(_mm256_add_epi32(vsrc1, _mm256_set1_epi32(1 << (downshift - 1))), downshift);
+
+        vsrc0 = _mm256_sign_epi32(vsrc0, vsign0);
+        vsrc1 = _mm256_sign_epi32(vsrc1, vsign1);
+
         _mm256_storeu_si256((__m256i *)dst,
-                            _mm256_permute4x64_epi64(_mm256_packs_epi32(vdst0, vdst1), 0xD8));
+                            _mm256_permute4x64_epi64(_mm256_packs_epi32(vsrc0, vsrc1), 0xD8));
+
         val += 16;
         dst += 16;
         blkstate += 16;
@@ -1454,18 +1470,20 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
         if (ROIshift) {
           N_b = M_b;
         }
-        if (N_b < M_b && *val) {
+        if (*val) {
           *val |= 1 << (31 - N_b - 1);
         }
-        // bring sign back
-        *val |= sign;
-        // convert sign-magnitude to two's complement form
-        if (*val < 0) {
-          *val = -(*val & INT32_MAX);
-        }
 
-        assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<int16_t>(*val >> pLSB);
+        // to prevent overflow, truncate to int16_t
+        *val = (*val + (1 << 15)) >> 16;
+        //  dequantization
+        *val *= scale;
+        // downshift
+        *dst = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        // convert sign-magnitude to two's complement form
+        if (sign) {
+          *dst = static_cast<int16_t>(-(*dst));
+        }
         val++;
         dst++;
         blkstate++;
