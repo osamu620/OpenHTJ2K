@@ -9,9 +9,15 @@ enable_language(CXX)
 
 #
 include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-std=c++11" COMPILER_SUPPORTS_CXX11)
-check_cxx_compiler_flag("-std=c++14" COMPILER_SUPPORTS_CXX14)
-check_cxx_compiler_flag("-std=c++17" COMPILER_SUPPORTS_CXX17)
+if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+  check_cxx_compiler_flag("/std:c++11" COMPILER_SUPPORTS_CXX11)
+  check_cxx_compiler_flag("/std:c++14" COMPILER_SUPPORTS_CXX14)
+  check_cxx_compiler_flag("/std:c++17" COMPILER_SUPPORTS_CXX17)
+else()
+  check_cxx_compiler_flag("-std=c++11" COMPILER_SUPPORTS_CXX11)
+  check_cxx_compiler_flag("-std=c++14" COMPILER_SUPPORTS_CXX14)
+  check_cxx_compiler_flag("-std=c++17" COMPILER_SUPPORTS_CXX17)
+endif()
 
 # Compiler settings
 if(COMPILER_SUPPORTS_CXX17)
