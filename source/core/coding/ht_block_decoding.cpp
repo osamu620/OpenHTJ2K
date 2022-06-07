@@ -49,10 +49,6 @@
 #define FIRST_QUAD 0
 #define SECOND_QUAD 1
 
-// void j2k_codeblock::set_sample(const uint32_t &symbol, const uint16_t &j1, const uint16_t &j2) {
-//  sample_buf[j2 + j1 * size.x] = static_cast<int32_t>(symbol);
-//}
-
 uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
   const int16_t im1 = static_cast<int16_t>(i - 1);
   const int16_t jm1 = static_cast<int16_t>(j - 1);
