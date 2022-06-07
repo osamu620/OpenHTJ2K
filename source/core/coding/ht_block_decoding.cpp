@@ -433,10 +433,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
 
   // buffers shall be zeroed.
   std::unique_ptr<uint8_t[]> sigma_n = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(4U) * QW * QH);
-  std::unique_ptr<uint8_t[]> E       = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(4U) * QW * QH);
   std::unique_ptr<uint32_t[]> mu_n   = MAKE_UNIQUE<uint32_t[]>(static_cast<size_t>(4U) * QW * QH);
   memset(sigma_n.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
-  memset(E.get(), 0, sizeof(uint8_t) * 4 * QW * QH);
   memset(mu_n.get(), 0, sizeof(uint32_t) * 4 * QW * QH);
 
   uint16_t q = 0;
@@ -462,13 +460,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   dec_table1 = dec_CxtVLC_table1_fast_16;
 
   uint32_t q1, q2;
-  uint8_t E_n[2], E_ne[2], E_nw[2], E_nf[2], max_E[2];
+  // uint8_t E_n[2], E_ne[2], E_nw[2], E_nf[2], max_E[2];
   int32_t m_n[2], known_1[2];
 
   auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 2);
   memset(rholine.get(), 0, sizeof(int32_t) * (QW + 2));
   auto rho_p = rholine.get() + 1;
-  context    = 0;
+  auto Eline = MAKE_UNIQUE<int32_t[]>(2 * QW + 2);
+  memset(Eline.get(), 0, sizeof(int32_t) * (2 * QW + 2));
+  auto E_p = Eline.get() + 1;
+
+  context = 0;
   // Initial line-pair
   for (; q < QW - 1;) {
     q1 = q;
@@ -579,13 +581,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
       if (m_n[FIRST_QUAD] != 0) {
-        E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
         mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
         mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
-      } else {
-        // mu_n[n] = 0;
-        // E[n]  = 0;
       }
     }
     for (uint32_t i = 0; i < 4; i++) {
@@ -593,17 +591,18 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       m_n[SECOND_QUAD]     = m[SECOND_QUAD][i];
       known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
       v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
+
       if (m_n[SECOND_QUAD] != 0) {
-        E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][i])));
         mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
         mu_n[n] |= static_cast<uint32_t>((v[SECOND_QUAD][i] & 1) << 31);  // sign bit
-      } else {
-        // mu_n[n] = 0;
-        // E[n]  = 0;
       }
     }
-    q = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][1])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
+    q      = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
   }
   // if QW is odd number ..
   if (QW % 2 == 1) {
@@ -640,15 +639,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
       if (m_n[FIRST_QUAD] != 0) {
-        E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
         mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
         mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
-      } else {
-        // mu_n[n] = 0;
-        // E[n]  = 0;
       }
     }
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
     q++;  // move to the next quad-pair
   }       // Initial line-pair end
 
@@ -656,58 +653,35 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   uint16_t context1, context2;
   for (uint16_t row = 1; row < QH; row++) {
     rho_p      = rholine.get() + 1;
+    E_p        = Eline.get() + 1;
     int32_t qx = 0;
     while ((q - row * QW) < QW - 1 && q < static_cast<uint16_t>(QW * QH)) {
       q1 = q;
       q2 = q + 1U;
-
+      // calculate context for the current quad
       context1 = (rho_p[qx - 1] >> 3)
                  | ((rho_p[qx] >> 1) & 1) + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2);
       if (qx > 0) {
         context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
       }
-      // calculate context for the current quad
-      //      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
-      //      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
-      //      if (q1 % QW) {
-      //        //        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
-      //        context1 = static_cast<uint16_t>(
-      //            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
-      //      }
-      //      if ((q1 + 1U) % QW) {
-      //        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf <<2
-      //      }
-      //      printf("%d ", context1);
+
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
-      if (qx > 0) rho_p[qx - 1] = rho[SECOND_QUAD];
+      if (qx > 0) {
+        rho_p[qx - 1] = rho[SECOND_QUAD];
+      }
       if (u_off[FIRST_QUAD] == 0) {
         assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
       }
       for (uint32_t i = 0; i < 4; i++) {
         sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
       }
-
+      // calculate context for the current quad
       context2 = (rho_p[qx] >> 3)
                  | ((rho_p[qx + 1] >> 1) & 1) + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2);
       context2 |= (((rho[FIRST_QUAD] >> 2) & 1) | ((rho[FIRST_QUAD] >> 3) & 1)) << 1;
 
-      // calculate context for the current quad
-      //      context2 = sigma_n[4 * (q2 - QW) + 1];                                           // n
-      //      context2 = static_cast<uint16_t>(context2 + (sigma_n[4 * (q2 - QW) + 3] << 2));  // ne
-      //      if (q2 % QW) {
-      //        //        context2 = static_cast<uint16_t>(context2 | sigma_n[4 * (q2 - QW) - 1]);  // nw
-      //        context2 = static_cast<uint16_t>(
-      //            context2 + ((sigma_n[4 * q2 - 1] | sigma_n[4 * q2 - 2]) << 1));  // (sw | w) << 1
-      //      }
-      //      if ((q2 + 1U) % QW) {
-      //        context2 = static_cast<uint16_t>(context2 | (sigma_n[4 * (q2 - QW) + 5] << 2));  // nf << 2
-      //      }
-      //      printf("%d ", context2);
       decodeSigEMB(MEL_decoder, VLC, context2, u_off, rho, emb_k, emb_1, SECOND_QUAD, dec_table1);
-      rho_p[qx] = rho[FIRST_QUAD];
-      if (qx + 1 == QW - 1) {
-        rho_p[qx + 1] = rho[SECOND_QUAD];
-      }
+
       if (u_off[SECOND_QUAD] == 0) {
         assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
       }
@@ -743,55 +717,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
 
       gamma[FIRST_QUAD]  = (popcount32(rho[FIRST_QUAD]) < 2) ? 0 : 1;
       gamma[SECOND_QUAD] = (popcount32(rho[SECOND_QUAD]) < 2) ? 0 : 1;
-      //      if (rho[FIRST_QUAD] == 0 || rho[FIRST_QUAD] == 1 || rho[FIRST_QUAD] == 2 || rho[FIRST_QUAD] ==
-      //      4
-      //          || rho[FIRST_QUAD] == 8) {
-      //        gamma[FIRST_QUAD] = 0;
-      //      } else {
-      //        gamma[FIRST_QUAD] = 1;
-      //      }
-      //      if (rho[SECOND_QUAD] == 0 || rho[SECOND_QUAD] == 1 || rho[SECOND_QUAD] == 2 ||
-      //      rho[SECOND_QUAD] == 4
-      //          || rho[SECOND_QUAD] == 8) {
-      //        gamma[SECOND_QUAD] = 0;
-      //      } else {
-      //        gamma[SECOND_QUAD] = 1;
-      //      }
 
-      E_n[FIRST_QUAD]   = E[4 * (q1 - QW) + 1];
-      E_n[SECOND_QUAD]  = E[4 * (q2 - QW) + 1];
-      E_ne[FIRST_QUAD]  = E[4 * (q1 - QW) + 3];
-      E_ne[SECOND_QUAD] = E[4 * (q2 - QW) + 3];
-      if (q1 % QW) {
-        E_nw[FIRST_QUAD] = E[4 * (q1 - QW) - 1];
-      } else {
-        E_nw[FIRST_QUAD] = 0;
+      int32_t Emax0 = std::max({E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]});
+      int32_t Emax1 = std::max(
+          {E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]});
+      if (qx > 0) {
+        E_p[2 * qx - 1] =
+            static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
       }
-      if (q2 % QW) {
-        E_nw[SECOND_QUAD] = E[4 * (q2 - QW) - 1];
-      } else {
-        E_nw[SECOND_QUAD] = 0;
-      }
-      if ((q1 + 1) % QW) {
-        E_nf[FIRST_QUAD] = E[4 * (q1 - QW) + 5];
-      } else {
-        E_nf[FIRST_QUAD] = 0;
-      }
-      if ((q2 + 1) % QW) {
-        E_nf[SECOND_QUAD] = E[4 * (q2 - QW) + 5];
-      } else {
-        E_nf[SECOND_QUAD] = 0;
-      }
-      max_E[FIRST_QUAD] = std::max({E_nw[FIRST_QUAD], E_n[FIRST_QUAD], E_ne[FIRST_QUAD], E_nf[FIRST_QUAD]});
-      max_E[SECOND_QUAD] =
-          std::max({E_nw[SECOND_QUAD], E_n[SECOND_QUAD], E_ne[SECOND_QUAD], E_nf[SECOND_QUAD]});
-
-      kappa[FIRST_QUAD]  = (1 > gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1))
+      kappa[FIRST_QUAD]  = (1 > gamma[FIRST_QUAD] * (Emax0 - 1))
                                ? 1U
-                               : static_cast<uint8_t>(gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1));
-      kappa[SECOND_QUAD] = (1 > gamma[SECOND_QUAD] * (max_E[SECOND_QUAD] - 1))
+                               : static_cast<uint8_t>(gamma[FIRST_QUAD] * (Emax0 - 1));
+      kappa[SECOND_QUAD] = (1 > gamma[SECOND_QUAD] * (Emax1 - 1))
                                ? 1U
-                               : static_cast<uint8_t>(gamma[SECOND_QUAD] * (max_E[SECOND_QUAD] - 1));
+                               : static_cast<uint8_t>(gamma[SECOND_QUAD] * (Emax1 - 1));
       U[FIRST_QUAD]      = kappa[FIRST_QUAD] + u[FIRST_QUAD];
       U[SECOND_QUAD]     = kappa[SECOND_QUAD] + u[SECOND_QUAD];
 
@@ -808,13 +747,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
         if (m_n[FIRST_QUAD] != 0) {
-          E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
           mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
           mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
-        } else {
-          // mu_n[n] = 0;
-          // E[n]  = 0;
         }
       }
       for (uint32_t i = 0; i < 4; i++) {
@@ -823,40 +758,38 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
         v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
         if (m_n[SECOND_QUAD] != 0) {
-          E[n] = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][i])));
           mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
           mu_n[n] |= static_cast<uint32_t>((v[SECOND_QUAD][i] & 1) << 31);  // sign bit
-        } else {
-          // mu_n[n] = 0;
-          // E[n]  = 0;
         }
+      }
+      rho_p[qx]   = rho[FIRST_QUAD];
+      E_p[2 * qx] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
+      E_p[2 * qx + 1] =
+          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
+      E_p[2 * qx + 2] =
+          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][1])));
+      if (qx + 1 == QW - 1) {
+        rho_p[qx + 1] = rho[SECOND_QUAD];
+        E_p[2 * qx + 3] =
+            static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
       }
       q = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
       qx += 2;
     }
     // if QW is odd number ..
     if (QW % 2 == 1) {
-      q1       = q;
+      q1 = q;
+      // calculate context for the current quad
       context1 = (rho_p[qx - 1] >> 3)
                  | ((rho_p[qx] >> 1) & 1) + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2);
       if (qx > 0) {
         context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
       }
-      //      // calculate context for the current quad
-      //      context1 = sigma_n[4 * (q1 - QW) + 1];                                           // n
-      //      context1 = static_cast<uint16_t>(context1 + (sigma_n[4 * (q1 - QW) + 3] << 2));  // ne
-      //      if (q1 % QW) {
-      //        context1 = static_cast<uint16_t>(context1 | sigma_n[4 * (q1 - QW) - 1]);  // nw
-      //        context1 = static_cast<uint16_t>(
-      //            context1 + ((sigma_n[4 * q1 - 1] | sigma_n[4 * q1 - 2]) << 1));  // (sw | w) << 1
-      //      }
-      //      if ((q1 + 1U) % QW) {
-      //        context1 = static_cast<uint16_t>(context1 | (sigma_n[4 * (q1 - QW) + 5] << 2));  // nf << 2
-      //      }
       decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
-      if (qx > 0) rho_p[qx - 1] = rho[SECOND_QUAD];
-      rho_p[qx] = rho[FIRST_QUAD];
+      if (qx > 0) {
+        rho_p[qx - 1] = rho[SECOND_QUAD];
+      }
       if (u_off[FIRST_QUAD] == 0) {
         assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
       }
@@ -874,31 +807,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       }
 
       gamma[FIRST_QUAD] = (popcount32(rho[FIRST_QUAD]) < 2) ? 0 : 1;
-      //      if (rho[FIRST_QUAD] == 0 || rho[FIRST_QUAD] == 1 || rho[FIRST_QUAD] == 2 || rho[FIRST_QUAD] ==
-      //      4
-      //          || rho[FIRST_QUAD] == 8) {
-      //        gamma[FIRST_QUAD] = 0;
-      //      } else {
-      //        gamma[FIRST_QUAD] = 1;
-      //      }
 
-      E_n[FIRST_QUAD]  = E[4 * (q1 - QW) + 1];
-      E_ne[FIRST_QUAD] = E[4 * (q1 - QW) + 3];
-      if (q1 % QW) {
-        E_nw[FIRST_QUAD] = E[4 * (q1 - QW) - 1];
-      } else {
-        E_nw[FIRST_QUAD] = 0;
-      }
-      if ((q1 + 1) % QW) {
-        E_nf[FIRST_QUAD] = E[4 * (q1 - QW) + 5];
-      } else {
-        E_nf[FIRST_QUAD] = 0;
-      }
-      max_E[FIRST_QUAD] = std::max({E_nw[FIRST_QUAD], E_n[FIRST_QUAD], E_ne[FIRST_QUAD], E_nf[FIRST_QUAD]});
+      int32_t Emax0 = std::max({E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]});
 
-      kappa[FIRST_QUAD] = (1 > gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1))
+      kappa[FIRST_QUAD] = (1 > gamma[FIRST_QUAD] * (Emax0 - 1))
                               ? 1U
-                              : static_cast<uint8_t>(gamma[FIRST_QUAD] * (max_E[FIRST_QUAD] - 1));
+                              : static_cast<uint8_t>(gamma[FIRST_QUAD] * (Emax0 - 1));
 
       U[FIRST_QUAD] = kappa[FIRST_QUAD] + u[FIRST_QUAD];
 
@@ -914,15 +828,19 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
 
         if (m_n[FIRST_QUAD] != 0) {
-          E[n]    = static_cast<uint8_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][i])));
           mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
           mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);
-        } else {
-          // mu_n[n] = 0;
-          // E[n]  = 0;
         }
       }
+      rho_p[qx] = rho[FIRST_QUAD];
+      if (qx > 0) {
+        E_p[2 * qx - 1] =
+            static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
+      }
+      E_p[2 * qx] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
+      E_p[2 * qx + 1] =
+          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
       q++;  // move to the next quad-pair
     }       // Non-Initial line-pair end
   }

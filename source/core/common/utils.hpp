@@ -95,7 +95,7 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
 #else
   y = 31 - int_log2(x);
 #endif
-  return (x == 0) ? 31 : y;
+  return (x == 0) ? 32 : y;
 }
 
 static inline void* aligned_mem_alloc(size_t size, size_t align) {
