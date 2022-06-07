@@ -659,8 +659,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       q1 = q;
       q2 = q + 1U;
       // calculate context for the current quad
-      context1 = (rho_p[qx - 1] >> 3)
-                 | ((rho_p[qx] >> 1) & 1) + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2);
+      context1 = static_cast<uint16_t>((rho_p[qx - 1] >> 3)
+                                       | ((rho_p[qx] >> 1) & 1)
+                                             + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
       if (qx > 0) {
         context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
       }
@@ -676,8 +677,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
       }
       // calculate context for the current quad
-      context2 = (rho_p[qx] >> 3)
-                 | ((rho_p[qx + 1] >> 1) & 1) + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2);
+      context2 = static_cast<uint16_t>((rho_p[qx] >> 3)
+                                       | ((rho_p[qx + 1] >> 1) & 1)
+                                             + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2));
       context2 |= (((rho[FIRST_QUAD] >> 2) & 1) | ((rho[FIRST_QUAD] >> 3) & 1)) << 1;
 
       decodeSigEMB(MEL_decoder, VLC, context2, u_off, rho, emb_k, emb_1, SECOND_QUAD, dec_table1);
@@ -781,8 +783,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     if (QW % 2 == 1) {
       q1 = q;
       // calculate context for the current quad
-      context1 = (rho_p[qx - 1] >> 3)
-                 | ((rho_p[qx] >> 1) & 1) + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2);
+      context1 = static_cast<uint16_t>((rho_p[qx - 1] >> 3)
+                                       | ((rho_p[qx] >> 1) & 1)
+                                             + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
       if (qx > 0) {
         context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
       }
@@ -848,6 +851,67 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   // convert mu_n and sigma_n into raster-scan by putting buffers defined in codeblock class
   uint32_t *p_mu   = mu_n.get();
   uint8_t *p_sigma = sigma_n.get();
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  for (size_t i = 0; i < 2 * QH - 1; i += 2) {
+    int32_t *dp0  = block->sample_buf.get() + i * block->blksampl_stride;
+    int32_t *dp1  = block->sample_buf.get() + (i + 1) * block->blksampl_stride;
+    uint8_t *ddp0 = 1 + block->block_states.get() + (i + 1) * (block->blkstate_stride);
+    uint8_t *ddp1 = 1 + block->block_states.get() + (i + 2) * (block->blkstate_stride);
+    for (size_t j = 0; j < 2 * QW - (2 * QW % 4); j += 4) {
+      auto v0 = vld1q_u32(p_mu);
+      p_mu += 4;
+      auto v1 = vld1q_u32(p_mu);
+      p_mu += 4;
+      auto vout0 = vzipq_u32(v0, v1);
+      auto vout1 = vzipq_u32(vout0.val[0], vout0.val[1]);
+      vst1q_s32(dp0, vout1.val[0]);
+      dp0 += 4;
+      vst1q_s32(dp1, vout1.val[1]);
+      dp1 += 4;
+
+      auto vu8    = vld1_u8(p_sigma);
+      auto vu16   = vmovl_u8(vu8);
+      auto vlow   = vmovl_u16(vget_low_u16(vu16));
+      auto vhigh  = vmovl_u16(vget_high_u16(vu16));
+      vout0       = vzipq_u32(vlow, vhigh);
+      vout1       = vzipq_u32(vout0.val[0], vout0.val[1]);
+      auto vline0 = vmovn_u32(vout1.val[0]);
+      auto vline1 = vmovn_u32(vout1.val[1]);
+      auto vvv    = vmovn_u16(vcombine_u16(vline0, vline1));
+      uint8_t aaa[8];
+      vst1_u8(aaa, vvv);
+      memcpy(ddp0, aaa, 4);
+      memcpy(ddp1, aaa + 4, 4);
+      ddp0 += 4;
+      ddp1 += 4;
+      p_sigma += 8;
+    }
+    for (size_t j = 2 * QW - (2 * QW % 4); j < block->size.x; j += 2) {
+      *dp0++  = *p_mu;
+      *ddp0++ = *p_sigma;
+      p_mu++;
+      p_sigma++;
+      if (i + 1 < block->size.y) {
+        *dp1++  = *p_mu;
+        *ddp1++ = *p_sigma;
+      }
+      p_mu++;
+      p_sigma++;
+      if (j + 1 < block->size.x) {
+        *dp0++  = *p_mu;
+        *ddp0++ = *p_sigma;
+      }
+      p_mu++;
+      p_sigma++;
+      if (i + 1 < block->size.y && j + 1 < block->size.x) {
+        *dp1++  = *p_mu;
+        *ddp1++ = *p_sigma;
+      }
+      p_mu++;
+      p_sigma++;
+    }
+  }
+#else
   for (size_t i = 0; i < 2 * QH - 1; i += 2) {
     int32_t *dp0  = block->sample_buf.get() + i * block->blksampl_stride;
     int32_t *dp1  = block->sample_buf.get() + (i + 1) * block->blksampl_stride;
@@ -878,68 +942,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       p_sigma++;
     }
   }
-  //#include <arm_neon.h>
-  //  uint32_t *p   = p_mu;
-  //  uint8_t *sigp = p_sigma;
-  //  for (size_t i = 0; i < 2 * QH - 1; i += 2) {
-  //    int32_t *dp0  = block->sample_buf.get() + i * block->blksampl_stride;
-  //    int32_t *dp1  = block->sample_buf.get() + (i + 1) * block->blksampl_stride;
-  //    uint8_t *ddp0 = 1 + block->block_states.get() + (i + 1) * (block->blkstate_stride);
-  //    uint8_t *ddp1 = 1 + block->block_states.get() + (i + 2) * (block->blkstate_stride);
-  //    for (size_t j = 0; j < 2 * QW - (2 * QW % 4); j += 4) {
-  //      auto v0 = vld1q_u32(p);
-  //      p += 4;
-  //      auto v1 = vld1q_u32(p);
-  //      p += 4;
-  //      auto vout0 = vzipq_u32(v0, v1);
-  //      auto vout1 = vzipq_u32(vout0.val[0], vout0.val[1]);
-  //      vst1q_s32(dp0, vout1.val[0]);
-  //      dp0 += 4;
-  //      vst1q_s32(dp1, vout1.val[1]);
-  //      dp1 += 4;
-  //
-  //      auto vu8    = vld1_u8(sigp);
-  //      auto vu16   = vmovl_u8(vu8);
-  //      auto vlow   = vmovl_u16(vget_low_u16(vu16));
-  //      auto vhigh  = vmovl_u16(vget_high_u16(vu16));
-  //      vout0       = vzipq_u32(vlow, vhigh);
-  //      vout1       = vzipq_u32(vout0.val[0], vout0.val[1]);
-  //      auto vline0 = vmovn_u32(vout1.val[0]);
-  //      auto vline1 = vmovn_u32(vout1.val[1]);
-  //      auto vvv    = vmovn_u16(vcombine_u16(vline0, vline1));
-  //      uint8_t aaa[8];
-  //      vst1_u8(aaa, vvv);
-  //      memcpy(ddp0, aaa, 4);
-  //      memcpy(ddp1, aaa + 4, 4);
-  //      ddp0 += 4;
-  //      ddp1 += 4;
-  //      sigp += 8;
-  //    }
-  //    for (size_t j = 2 * QW - (2 * QW % 4); j < block->size.x; j += 2) {
-  //      *dp0++  = *p;
-  //      *ddp0++ = *sigp;
-  //      p++;
-  //      sigp++;
-  //      if (i + 1 < block->size.y) {
-  //        *dp1++  = *p;
-  //        *ddp1++ = *sigp;
-  //      }
-  //      p++;
-  //      sigp++;
-  //      if (j + 1 < block->size.x) {
-  //        *dp0++  = *p;
-  //        *ddp0++ = *sigp;
-  //      }
-  //      p++;
-  //      sigp++;
-  //      if (i + 1 < block->size.y && j + 1 < block->size.x) {
-  //        *dp1++  = *p;
-  //        *ddp1++ = *sigp;
-  //      }
-  //      p++;
-  //      sigp++;
-  //    }
-  //}
+#endif
 }
 
 auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const int32_t i_start,
@@ -1092,7 +1095,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
-      auto vmask     = vdupq_n_s32(~mask);
+      auto vmask     = vdupq_n_s32(static_cast<int32_t>(~mask));
       for (size_t j = 0; j < simdlen; j += 8) {
         auto vsrc0  = vld1q_s32(val);
         auto vsrc1  = vld1q_s32(val + 4);
@@ -1287,7 +1290,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
     // lossy path
     int32_t ROImask = 0;
     if (ROIshift) {
-      ROImask = 0xFFFFFFFF;
+      ROImask = static_cast<int32_t>(0xFFFFFFFF);
     }
     //    auto vROIshift = vdupq_n_s32(ROImask);
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
@@ -1296,7 +1299,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
-      auto vmask     = vdupq_n_s32(~mask);
+      auto vmask     = vdupq_n_s32(static_cast<int32_t>(~mask));
       for (size_t j = 0; j < simdlen; j += 8) {
         auto vsrc0  = vld1q_s32(val);
         auto vsrc1  = vld1q_s32(val + 4);
@@ -1325,13 +1328,10 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
           vNb1 = vdupq_n_s32(M_b);
         }
         // add reconstruction value, if necessary (it will happen for a truncated codestream)
-        //        auto vMb           = vdupq_n_s32(M_b);
-        //        auto v_recval_mask = vcgtq_s32(vMb, vNb0);
         auto v_recval_mask = vcgtzq_s32(vsrc0);
         auto vrecval0      = (1 << (31 - vNb0 - 1)) & v_recval_mask;
-        //        v_recval_mask = vcgtq_s32(vMb, vNb1);
-        v_recval_mask = vcgtzq_s32(vsrc1);
-        auto vrecval1 = (1 << (31 - vNb1 - 1)) & v_recval_mask;
+        v_recval_mask      = vcgtzq_s32(vsrc1);
+        auto vrecval1      = (1 << (31 - vNb1 - 1)) & v_recval_mask;
         vsrc0 |= vrecval0;
         vsrc1 |= vrecval1;
 
