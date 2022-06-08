@@ -38,6 +38,108 @@ const int32_t bitmask32[32] = {
     0x00FFFFFF, 0x01FFFFFF, 0x03FFFFFF, 0x07FFFFFF, 0x0FFFFFFF, 0x1FFFFFFF, 0x3FFFFFFF, 0x7FFFFFFF};
 
 /********************************************************************************
+ * fwd_buf:
+ *******************************************************************************/
+class fwd_buf {
+ private:
+  uint32_t pos;
+  uint32_t bits;
+  uint64_t Creg;
+  uint32_t unstuff;
+  const uint8_t *buf;
+  int32_t length;
+  const int32_t X;
+
+ public:
+  fwd_buf(const uint8_t *Dcup, int32_t Pcup, int inX)
+      : pos(0), bits(0), Creg(0), unstuff(0), buf(Dcup), length(Pcup), X(inX) {
+    // for alignment
+    auto p = reinterpret_cast<intptr_t>(buf);
+    p &= 0x03;
+    auto num = 4 - p;
+    for (auto i = 0; i < num; ++i) {
+      uint64_t d;
+      if (length-- > 0) {
+        d = *buf++;
+        pos++;
+      } else {
+        d = X;
+      }
+      Creg |= (d << bits);
+      bits += 8 - unstuff;
+      unstuff = ((d & 0xFF) == 0xFF);  // bit-unstuffing for next byte
+    }
+    read();
+  }
+
+  inline void read() {
+    if (bits > 32) {
+      printf("ERROR: ");
+      throw std::exception();
+    }
+
+    uint32_t val = 0;
+    if (length > 3) {
+      val = *(uint32_t *)(buf);
+      buf += 4;
+      pos += 4;
+      length -= 4;
+    } else if (length > 0) {
+      int i = 0;
+      val   = (X != 0) ? 0xFFFFFFFFU : 0;
+      while (length > 0) {
+        uint32_t v = *buf++;
+        pos++;
+        uint32_t m = ~(0xFFU << i);
+        val        = (val & m) | (v << i);  // put one byte in its correct location
+        --length;
+        i += 8;
+      }
+    } else {
+      val = (X != 0) ? 0xFFFFFFFFU : 0;
+    }
+
+    // we accumulate in t and keep a count of the number of bits_local in bits_local
+    uint32_t bits_local = 8 - unstuff;
+    uint32_t t          = val & 0xFF;
+    bool unstuff_flag   = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
+
+    t |= ((val >> 8) & 0xFF) << bits_local;
+    bits_local += 8 - unstuff_flag;
+    unstuff_flag = (((val >> 8) & 0xFF) == 0xFF);
+
+    t |= ((val >> 16) & 0xFF) << bits_local;
+    bits_local += 8 - unstuff_flag;
+    unstuff_flag = (((val >> 16) & 0xFF) == 0xFF);
+
+    t |= ((val >> 24) & 0xFF) << bits_local;
+    bits_local += 8 - unstuff_flag;
+    unstuff = (((val >> 24) & 0xFF) == 0xFF);  // for next byte
+
+    Creg |= ((uint64_t)t) << bits;  // move data to msp->tmp
+    bits += bits_local;
+  }
+
+  inline void advance(uint32_t n) {
+    if (n > bits) {
+      printf("ERROR:");
+      throw std::exception();
+    }
+    Creg >>= n;  // consume n bits
+    bits -= n;
+  }
+
+  inline uint32_t fetch() {
+    if (bits < 32) {
+      read();
+      if (bits < 32)  // need to test
+        read();
+    }
+    return (uint32_t)Creg;
+  }
+};
+
+/********************************************************************************
  * state_MS: state class for MagSgn decoding
  *******************************************************************************/
 class state_MS_dec {
