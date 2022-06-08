@@ -711,7 +711,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       MEL_encoder.encodeMEL((rho_q[Q0] != 0));
     }
 
-    Emax_q[Q0] = std::max({E_n[0], E_n[1], E_n[2], E_n[3]});
+    Emax_q[Q0] = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
     U_q[Q0]    = std::max((int32_t)Emax_q[Q0], kappa);
     u_q[Q0]    = U_q[Q0] - kappa;
     uoff_q[Q0] = (u_q[Q0]) ? 1 : 0;
@@ -770,7 +770,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     // context for 2nd quad of current quad pair
     c_q[Q1] = static_cast<uint16_t>((sigma_n[0] | sigma_n[1]) + (sigma_n[2] << 1) + (sigma_n[3] << 2));
 
-    Emax_q[Q1] = std::max({E_n[4], E_n[5], E_n[6], E_n[7]});
+    Emax_q[Q1] = find_max(E_n[4], E_n[5], E_n[6], E_n[7]);
     U_q[Q1]    = std::max((int32_t)Emax_q[Q1], kappa);
     u_q[Q1]    = U_q[Q1] - kappa;
     uoff_q[Q1] = (u_q[Q1]) ? 1 : 0;
@@ -845,7 +845,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     if (c_q[Q0] == 0) {
       MEL_encoder.encodeMEL((rho_q[Q0] != 0));
     }
-    Emax_q[Q0] = std::max({E_n[0], E_n[1], E_n[2], E_n[3]});
+    Emax_q[Q0] = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
     U_q[Q0]    = std::max((int32_t)Emax_q[Q0], kappa);
     u_q[Q0]    = U_q[Q0] - kappa;
     uoff_q[Q0] = (u_q[Q0]) ? 1 : 0;
@@ -931,7 +931,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
       kappa     = std::max(
-              (std::max({ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]}) - 1) * gamma[Q0], 1);
+              (find_max(ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
 
       ep[2 * qx] = E_n[1];
       // if (qx > 0) {
@@ -943,7 +943,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       sp[2 * qx - 1] = sigma7;  // put back saved E_n
       //}
 
-      Emax_q[Q0] = std::max({E_n[0], E_n[1], E_n[2], E_n[3]});
+      Emax_q[Q0] = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
       U_q[Q0]    = std::max((int32_t)Emax_q[Q0], kappa);
       u_q[Q0]    = U_q[Q0] - kappa;
       uoff_q[Q0] = (u_q[Q0]) ? 1 : 0;
@@ -995,8 +995,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
       gamma[Q1] = (popcount32((uint32_t)rho_q[Q1]) > 1) ? 1 : 0;
       kappa     = std::max(
-              (std::max({ep[2 * (qx + 1) - 1], ep[2 * (qx + 1)], ep[2 * (qx + 1) + 1], ep[2 * (qx + 1) + 2]})
-           - 1)
+              (find_max(ep[2 * (qx + 1) - 1], ep[2 * (qx + 1)], ep[2 * (qx + 1) + 1], ep[2 * (qx + 1) + 2]) - 1)
                   * gamma[Q1],
               1);
 
@@ -1011,7 +1010,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         sp[2 * (qx + 1) + 1] = sigma_n[7];
       }
 
-      Emax_q[Q1] = std::max({E_n[4], E_n[5], E_n[6], E_n[7]});
+      Emax_q[Q1] = find_max(E_n[4], E_n[5], E_n[6], E_n[7]);
       U_q[Q1]    = std::max((int32_t)Emax_q[Q1], kappa);
       u_q[Q1]    = U_q[Q1] - kappa;
       uoff_q[Q1] = (u_q[Q1]) ? 1 : 0;
@@ -1073,7 +1072,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
       kappa     = std::max(
-              (std::max({ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]}) - 1) * gamma[Q0], 1);
+              (find_max(ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
 
       ep[2 * qx] = E_n[1];
       // if (qx > 0) {
@@ -1089,7 +1088,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       // this quad (first) is the end of the line-pair
       sp[2 * qx + 1] = sigma_n[3];
 
-      Emax_q[Q0] = std::max({E_n[0], E_n[1], E_n[2], E_n[3]});
+      Emax_q[Q0] = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
       U_q[Q0]    = std::max((int32_t)Emax_q[Q0], kappa);
       u_q[Q0]    = U_q[Q0] - kappa;
       uoff_q[Q0] = (u_q[Q0]) ? 1 : 0;

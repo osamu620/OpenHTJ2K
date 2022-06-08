@@ -716,9 +716,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       gamma[FIRST_QUAD]  = (popcount32(rho[FIRST_QUAD]) < 2) ? 0 : 1;
       gamma[SECOND_QUAD] = (popcount32(rho[SECOND_QUAD]) < 2) ? 0 : 1;
 
-      int32_t Emax0 = std::max({E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]});
-      int32_t Emax1 = std::max(
-          {E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]});
+      int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
+      int32_t Emax1 =
+          find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
       if (qx > 0) {
         E_p[2 * qx - 1] =
             static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
@@ -807,7 +807,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
 
       gamma[FIRST_QUAD] = (popcount32(rho[FIRST_QUAD]) < 2) ? 0 : 1;
 
-      int32_t Emax0 = std::max({E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]});
+      int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
 
       kappa[FIRST_QUAD] = (1 > gamma[FIRST_QUAD] * (Emax0 - 1))
                               ? 1U
