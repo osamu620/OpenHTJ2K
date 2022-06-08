@@ -49,6 +49,13 @@
   #include <x86intrin.h>
 #endif
 
+template <class T>
+static inline T find_max(T x0, T x1, T x2, T x3) {
+  T v0 = ((x0 > x1) ? x0 : x1);
+  T v1 = ((x2 > x3) ? x2 : x3);
+  return (v0 > v1) ? v0 : v1;
+}
+
 static inline size_t popcount32(uint32_t num) {
   size_t precision = 0;
 #if defined(_MSC_VER)
