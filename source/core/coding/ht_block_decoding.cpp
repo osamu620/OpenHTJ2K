@@ -437,19 +437,19 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSg
 
   uint16_t context;
 
-  uint8_t rho[2];
-  uint8_t u_off[2];
-  uint8_t emb_k[2];
-  uint8_t emb_1[2];
-  uint32_t u[2];
-  uint32_t u_pfx[2];
-  uint32_t u_sfx[2];
-  uint32_t u_ext[2];
-  uint32_t U[2];
-  uint32_t m[2][4];
-  uint32_t v[2][4];
-  uint8_t gamma[2];
-  uint32_t kappa[2] = {1, 1};  // kappa is always 1 for initial line-pair
+  alignas(32) uint8_t rho[2];
+  alignas(32) uint8_t u_off[2];
+  alignas(32) uint8_t emb_k[2];
+  alignas(32) uint8_t emb_1[2];
+  alignas(32) uint32_t u[2];
+  alignas(32) uint32_t u_pfx[2];
+  alignas(32) uint32_t u_sfx[2];
+  alignas(32) uint32_t u_ext[2];
+  alignas(32) uint32_t U[2];
+  alignas(32) uint32_t m[2][4];
+  alignas(32) uint32_t v[2][4];
+  alignas(32) uint8_t gamma[2];
+  alignas(32) uint32_t kappa[2] = {1, 1};  // kappa is always 1 for initial line-pair
 
   const uint16_t *dec_table0, *dec_table1;
   dec_table0 = dec_CxtVLC_table0_fast_16;
@@ -457,12 +457,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSg
 
   uint32_t q1, q2;
   // uint8_t E_n[2], E_ne[2], E_nw[2], E_nf[2], max_E[2];
-  uint32_t m_n[2], known_1[2];
+  alignas(32) uint32_t m_n[2], known_1[2];
 
-  auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 2);
+  alignas(32) auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 2);
   memset(rholine.get(), 0, sizeof(int32_t) * (QW + 2));
-  auto rho_p = rholine.get() + 1;
-  auto Eline = MAKE_UNIQUE<int32_t[]>(2 * QW + 2);
+  auto rho_p             = rholine.get() + 1;
+  alignas(32) auto Eline = MAKE_UNIQUE<int32_t[]>(2 * QW + 2);
   memset(Eline.get(), 0, sizeof(int32_t) * (2 * QW + 2));
   auto E_p = Eline.get() + 1;
 
