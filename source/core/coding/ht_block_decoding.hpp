@@ -63,7 +63,7 @@ class fwd_buf {
         d = *buf++;
         pos++;
       } else {
-        d = X;
+        d = (uint64_t)X;
       }
       Creg |= (d << bits);
       bits += 8 - unstuff;
@@ -171,14 +171,14 @@ class state_MS_dec {
  *******************************************************************************/
 class state_MEL_unPacker {
  private:
-  uint32_t pos;
+  int32_t pos;
   int8_t bits;
   uint8_t tmp;
   const uint8_t *buf;
   uint32_t length;
 
  public:
-  state_MEL_unPacker(const uint8_t *Dcup, uint32_t Lcup, uint32_t Pcup)
+  state_MEL_unPacker(const uint8_t *Dcup, uint32_t Lcup, int32_t Pcup)
       : pos(Pcup), bits(0), tmp(0), buf(Dcup), length(Lcup) {}
   uint8_t importMELbit();
 };
@@ -225,7 +225,7 @@ class state_VLC_enc {
   uint8_t *buf;
 
  public:
-  state_VLC_enc(uint8_t *Dcup, uint32_t Lcup, uint32_t Pcup)
+  state_VLC_enc(uint8_t *Dcup, uint32_t Lcup, int32_t Pcup)
 #ifndef ADVANCED
       : pos((Lcup > 2) ? Lcup - 3 : 0),
         last(*(Dcup + Lcup - 2)),
@@ -236,7 +236,7 @@ class state_VLC_enc {
   }
   uint8_t importVLCBit();
 #else
-      : pos(static_cast<int32_t>(Lcup - 2 - Pcup)), ctreg(0), Creg(0), bits(0), buf(Dcup + Pcup) {
+      : pos(static_cast<int32_t>(Lcup) - 2 - Pcup), ctreg(0), Creg(0), bits(0), buf(Dcup + Pcup) {
     load_bytes();
     ctreg -= 4;
     Creg >>= 4;
@@ -251,8 +251,8 @@ class state_VLC_enc {
   void decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2], uint8_t (&emb_k)[2],
                     uint8_t (&emb_1)[2], const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table);
   uint8_t decodeUPrefix();
-  uint8_t decodeUSuffix(const uint8_t &u_pfx);
-  uint8_t decodeUExtension(const uint8_t &u_sfx);
+  uint8_t decodeUSuffix(const uint32_t &u_pfx);
+  uint8_t decodeUExtension(const uint32_t &u_sfx);
 };
 /********************************************************************************
  * SP_dec: state class for HT SigProp decoding

@@ -332,7 +332,7 @@ uint8_t state_VLC_enc::decodeUPrefix() {
   }
 }
 
-uint8_t state_VLC_enc::decodeUSuffix(const uint8_t &u_pfx) {
+uint8_t state_VLC_enc::decodeUSuffix(const uint32_t &u_pfx) {
   uint8_t bit, val;
   if (u_pfx < 3) {
     return 0;
@@ -347,7 +347,7 @@ uint8_t state_VLC_enc::decodeUSuffix(const uint8_t &u_pfx) {
   }
   return val;
 }
-uint8_t state_VLC_enc::decodeUExtension(const uint8_t &u_sfx) {
+uint8_t state_VLC_enc::decodeUExtension(const uint32_t &u_sfx) {
   uint8_t bit, val;
   if (u_sfx < 28) {
     return 0;
@@ -422,7 +422,7 @@ auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC, const
   VLC.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
 };
 
-void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &MS, fwd_buf &MSDEC,
+void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSgn,
                        state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC) {
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
@@ -441,15 +441,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
   uint8_t u_off[2];
   uint8_t emb_k[2];
   uint8_t emb_1[2];
-  int32_t u[2];
-  uint8_t u_pfx[2];
-  uint8_t u_sfx[2];
-  uint8_t u_ext[2];
-  int32_t U[2];
-  int32_t m[2][4];
-  int32_t v[2][4];
+  uint32_t u[2];
+  uint32_t u_pfx[2];
+  uint32_t u_sfx[2];
+  uint32_t u_ext[2];
+  uint32_t U[2];
+  uint32_t m[2][4];
+  uint32_t v[2][4];
   uint8_t gamma[2];
-  uint8_t kappa[2] = {1, 1};  // kappa is always 1 for initial line-pair
+  uint32_t kappa[2] = {1, 1};  // kappa is always 1 for initial line-pair
 
   const uint16_t *dec_table0, *dec_table1;
   dec_table0 = dec_CxtVLC_table0_fast_16;
@@ -457,7 +457,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
 
   uint32_t q1, q2;
   // uint8_t E_n[2], E_ne[2], E_nw[2], E_nf[2], max_E[2];
-  int32_t m_n[2], known_1[2];
+  uint32_t m_n[2], known_1[2];
 
   auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 2);
   memset(rholine.get(), 0, sizeof(int32_t) * (QW + 2));
@@ -571,15 +571,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     uint32_t n;
 
     for (uint32_t i = 0; i < 4; i++) {
-      uint32_t msval = MSDEC.fetch();
-      uint32_t vvv;
+      uint32_t msval = MagSgn.fetch();
+
       n                   = 4 * q1 + i;
       m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
       known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
       // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
       v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
       v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-      MSDEC.advance(m_n[FIRST_QUAD]);
+      MagSgn.advance(m_n[FIRST_QUAD]);
 
       if (m_n[FIRST_QUAD] != 0) {
         mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
@@ -588,15 +588,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       }
     }
     for (uint32_t i = 0; i < 4; i++) {
-      uint32_t msval = MSDEC.fetch();
-      uint32_t vvv;
+      uint32_t msval = MagSgn.fetch();
+
       n                    = 4 * q2 + i;
       m_n[SECOND_QUAD]     = m[SECOND_QUAD][i];
       known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
       // v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
       v[SECOND_QUAD][i] = msval & ((1 << m_n[SECOND_QUAD]) - 1);
       v[SECOND_QUAD][i] |= known_1[SECOND_QUAD] << m_n[SECOND_QUAD];
-      MSDEC.advance(m_n[SECOND_QUAD]);
+      MagSgn.advance(m_n[SECOND_QUAD]);
 
       if (m_n[SECOND_QUAD] != 0) {
         mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
@@ -639,15 +639,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
     // recoverMagSgnValue
     uint32_t n;
     for (uint32_t i = 0; i < 4; i++) {
-      uint32_t msval = MSDEC.fetch();
-      uint32_t vvv;
+      uint32_t msval = MagSgn.fetch();
+
       n                   = 4 * q1 + i;
       m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
       known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
       // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
       v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
       v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-      MSDEC.advance(m_n[FIRST_QUAD]);
+      MagSgn.advance(m_n[FIRST_QUAD]);
 
       if (m_n[FIRST_QUAD] != 0) {
         mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
@@ -754,15 +754,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       // recoverMagSgnValue
       uint32_t n;
       for (uint32_t i = 0; i < 4; i++) {
-        uint32_t msval = MSDEC.fetch();
-        uint32_t vvv;
+        uint32_t msval = MagSgn.fetch();
+
         n                   = 4 * q1 + i;
         m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
         known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
         // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
         v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
         v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-        MSDEC.advance(m_n[FIRST_QUAD]);
+        MagSgn.advance(m_n[FIRST_QUAD]);
 
         if (m_n[FIRST_QUAD] != 0) {
           mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
@@ -771,15 +771,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
         }
       }
       for (uint32_t i = 0; i < 4; i++) {
-        uint32_t msval = MSDEC.fetch();
-        uint32_t vvv;
+        uint32_t msval = MagSgn.fetch();
+
         n                    = 4 * q2 + i;
         m_n[SECOND_QUAD]     = m[SECOND_QUAD][i];
         known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
         // v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
         v[SECOND_QUAD][i] = msval & ((1 << m_n[SECOND_QUAD]) - 1);
         v[SECOND_QUAD][i] |= known_1[SECOND_QUAD] << m_n[SECOND_QUAD];
-        MSDEC.advance(m_n[SECOND_QUAD]);
+        MagSgn.advance(m_n[SECOND_QUAD]);
         if (m_n[SECOND_QUAD] != 0) {
           mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
@@ -846,15 +846,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       // recoverMagSgnValue
       uint32_t n;
       for (uint32_t i = 0; i < 4; i++) {
-        uint32_t msval = MSDEC.fetch();
-        uint32_t vvv;
+        uint32_t msval = MagSgn.fetch();
+
         n                   = 4 * q1 + i;
         m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
         known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
         // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
         v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
         v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-        MSDEC.advance(m_n[FIRST_QUAD]);
+        MagSgn.advance(m_n[FIRST_QUAD]);
 
         if (m_n[FIRST_QUAD] != 0) {
           mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
@@ -913,24 +913,24 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, state_MS_dec &
       p_sigma += 8;
     }
     for (size_t j = 2 * QW - (2 * QW % 4); j < block->size.x; j += 2) {
-      *dp0++  = *p_mu;
+      *dp0++  = static_cast<int32_t>(*p_mu);
       *ddp0++ = *p_sigma;
       p_mu++;
       p_sigma++;
       if (i + 1 < block->size.y) {
-        *dp1++  = *p_mu;
+        *dp1++  = static_cast<int32_t>(*p_mu);
         *ddp1++ = *p_sigma;
       }
       p_mu++;
       p_sigma++;
       if (j + 1 < block->size.x) {
-        *dp0++  = *p_mu;
+        *dp0++  = static_cast<int32_t>(*p_mu);
         *ddp0++ = *p_sigma;
       }
       p_mu++;
       p_sigma++;
       if (i + 1 < block->size.y && j + 1 < block->size.x) {
-        *dp1++  = *p_mu;
+        *dp1++  = static_cast<int32_t>(*p_mu);
         *ddp1++ = *p_sigma;
       }
       p_mu++;
@@ -1624,14 +1624,14 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // modDcup (shall be done before the creation of state_VLC instance)
     Dcup[Lcup - 1] = 0xFF;
     Dcup[Lcup - 2] |= 0x0F;
-    const uint32_t Pcup = Lcup - Scup;
-    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
-    fwd_buf MSDEC(Dcup, Pcup, 0xFF);
+    const int32_t Pcup = static_cast<const int32_t>(Lcup - Scup);
+    //    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
+    fwd_buf MagSgn(Dcup, Pcup, 0xFF);
     state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
     state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
     state_VLC_enc VLC               = state_VLC_enc(Dcup, Lcup, Pcup);
 
-    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MS, MSDEC, MEL_decoder, VLC);
+    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MagSgn, MEL_decoder, VLC);
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
