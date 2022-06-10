@@ -419,15 +419,15 @@ auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec, const u
       return;
     }
   }
-  //  uint32_t vlcval        = VLC_dec.fetch();
-  //  uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
-  //  u_off[first_or_second] = value & 1;
-  //  uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
-  //  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
-  //  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
-  //  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
-  //  VLC_dec.advance(len);
-  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
+  uint32_t vlcval        = VLC_dec.fetch();
+  uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
+  u_off[first_or_second] = value & 1;
+  uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
+  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+  VLC_dec.advance(len);
+  //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
 };
 
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> &MagSgn,
