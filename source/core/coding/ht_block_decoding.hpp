@@ -141,21 +141,6 @@ class rev_buf {
     return static_cast<uint32_t>(Creg);
   }
 
-  inline void decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
-                           uint8_t (&emb_k)[2], uint8_t (&emb_1)[2], const uint8_t &first_or_second,
-                           const uint16_t *dec_CxtVLC_table) {
-    fetch();
-    uint8_t cwd            = Creg & 0x7f;
-    uint16_t idx           = static_cast<uint16_t>(cwd + (context << 7));
-    uint16_t value         = dec_CxtVLC_table[idx];
-    u_off[first_or_second] = value & 1;
-    uint8_t len            = static_cast<uint8_t>((value & 0x000F) >> 1);
-    rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
-    emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
-    emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
-    advance(len);
-  }
-
   inline uint8_t importVLCBit() {
     uint32_t cwd = fetch();
     advance(1);
@@ -197,7 +182,6 @@ class rev_buf {
     uint32_t cwd = fetch();
     advance(3);
     val += (cwd & 0x07) << 1;
-    return val;
     return val;
   }
 };
