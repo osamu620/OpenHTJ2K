@@ -154,47 +154,48 @@ class rev_buf {
     // x10 2
     // 100 3
     // 000 5
-    // 000 5,3
-    // 001 1,1
-    // 010 2,2
-    // 011 1,1
-    // 100 3,3
-    // 101 1,1
-    // 110 2,2
-    // 111 1,1
-    const uint8_t t[8] = {5, 1, 2, 1, 3, 1, 2, 1};
-    const uint8_t l[8] = {3, 1, 2, 1, 3, 1, 2, 1};
-    advance(l[val]);
-    return t[val];
+    // 000 5,3,5
+    // 001 1,1,0
+    // 010 2,2,0
+    // 011 1,1,0
+    // 100 3,3,1
+    // 101 1,1,0
+    // 110 2,2,0
+    // 111 1,1,0
+    // const uint8_t t[8] = {5, 1, 2, 1, 3, 1, 2, 1};
+    const uint8_t t[8] = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
+                          3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
+    advance(t[val] & 0x3);
+    return t[val] >> 2;
   }
 
   inline uint8_t decodeUSuffix(const uint32_t &u_pfx) {
-    uint8_t val;
-    if (u_pfx < 3) return 0;
-    val = importVLCBit();
-    if (u_pfx == 3) return val;
-    //    for (int i = 1; i < 5; ++i) {
-    //      uint8_t bit = importVLCBit();
-    //      val += bit << i;
-    //    }
-    uint32_t cwd = fetch();
-    advance(4);
-    val += (cwd & 0x0F) << 1;
-    return val;
+    const uint8_t ts[6] = {0, 0, 0, 1, 5, 5};
+    uint8_t mask        = static_cast<uint8_t>((1 << ts[u_pfx]) - 1);
+    uint32_t cwd        = fetch();
+    uint8_t val         = cwd & mask;
+    advance(ts[u_pfx]);
+    return (u_pfx < 3) ? 0 : val;
+
+    //    uint8_t val;
+    //    if (u_pfx < 3) return 0;
+    //    val = importVLCBit();
+    //    if (u_pfx == 3) return val;
+    //    //    for (int i = 1; i < 5; ++i) {
+    //    //      uint8_t bit = importVLCBit();
+    //    //      val += bit << i;
+    //    //    }
+    //    uint32_t cwd = fetch();
+    //    advance(4);
+    //    val += (cwd & 0x0F) << 1;
+    //    return val;
   }
 
   inline uint8_t decodeUExtension(const uint32_t &u_sfx) {
-    uint8_t val;
     if (u_sfx < 28) return 0;
-    val = importVLCBit();
-    //    for (int i = 1; i < 4; ++i) {
-    //      uint8_t bit = importVLCBit();
-    //      val += bit << i;
-    //    }
     uint32_t cwd = fetch();
-    advance(3);
-    val += (cwd & 0x07) << 1;
-    return val;
+    advance(4);
+    return (cwd & 0x0F);
   }
 };
 
