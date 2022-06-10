@@ -148,12 +148,24 @@ class rev_buf {
   }
 
   inline uint8_t decodeUPrefix() {
-    uint8_t bit = importVLCBit();
-    if (bit == 1) return 1;
-    bit = importVLCBit();
-    if (bit == 1) return 2;
-    bit = importVLCBit();
-    return (bit == 1) ? 3 : 5;
+    uint32_t cwd = fetch();
+    uint8_t val  = cwd & 0x7;
+    // xx1 1
+    // x10 2
+    // 100 3
+    // 000 5
+    // 000 5,3
+    // 001 1,1
+    // 010 2,2
+    // 011 1,1
+    // 100 3,3
+    // 101 1,1
+    // 110 2,2
+    // 111 1,1
+    const uint8_t t[8] = {5, 1, 2, 1, 3, 1, 2, 1};
+    const uint8_t l[8] = {3, 1, 2, 1, 3, 1, 2, 1};
+    advance(l[val]);
+    return t[val];
   }
 
   inline uint8_t decodeUSuffix(const uint32_t &u_pfx) {
