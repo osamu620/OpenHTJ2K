@@ -36,10 +36,176 @@ const int32_t bitmask32[32] = {
     0x000000FF, 0x000001FF, 0x000003FF, 0x000007FF, 0x00000FFF, 0x00001FFF, 0x00003FFF, 0x00007FFF,
     0x0000FFFF, 0x0001FFFF, 0x0003FFFF, 0x0007FFFF, 0x000FFFFF, 0x001FFFFF, 0x003FFFFF, 0x007FFFFF,
     0x00FFFFFF, 0x01FFFFFF, 0x03FFFFFF, 0x07FFFFFF, 0x0FFFFFFF, 0x1FFFFFFF, 0x3FFFFFFF, 0x7FFFFFFF};
+/********************************************************************************
+ * rev_buf:
+ *******************************************************************************/
+class rev_buf {
+ private:
+  int32_t pos;
+  uint32_t bits;
+  uint64_t Creg;
+  uint32_t unstuff;
+  uint8_t *buf;
+  int32_t length;
+
+ public:
+  rev_buf(uint8_t *Dcup, uint32_t Lcup, int32_t Scup)
+      : pos(Scup - 2), bits(0), Creg(0), unstuff(0), buf(Dcup + Lcup - 2), length(Scup - 2) {
+    uint32_t d = *buf--;  // read a byte (only use it's half byte)
+    Creg       = d >> 4;
+    bits       = 4 - ((Creg & 0x07) == 0x07);
+    unstuff    = (d | 0x0F) > 0x8f;
+
+    auto p = reinterpret_cast<intptr_t>(buf);
+    p &= 0x03;
+    auto num  = 1 + p;
+    auto tnum = (num < length) ? num : length;
+    for (auto i = 0; i < tnum; ++i) {
+      uint64_t d;
+      d               = *buf--;
+      uint32_t d_bits = 8 - ((unstuff && ((d & 0x7F) == 0x7F)) ? 1 : 0);
+      Creg |= d << bits;
+      bits += d_bits;
+      unstuff = d > 0x8F;
+    }
+    length -= tnum;
+    read();
+  }
+
+  inline void read() {
+    // process 4 bytes at a time
+    if (bits > 32) {
+      // if there are already more than 32 bits, do nothing to prevent overflow of Creg
+      return;
+    }
+    uint32_t val = 0;
+    if (length > 3) {  // Common case; we have at least 4 bytes available
+      val = *reinterpret_cast<uint32_t *>(buf - 3);
+      buf -= 4;
+      length -= 4;
+    } else if (length > 0) {  // we have less than 4 bytes
+      int i = 24;
+      while (length > 0) {
+        uint32_t v = *buf--;
+        val |= (v << i);
+        --length;
+        i -= 8;
+      }
+    } else {
+      // error
+    }
+
+    // accumulate in tmp, number of bits in tmp are stored in bits
+    uint32_t tmp = val >> 24;  // start with the MSB byte
+    uint32_t bits_local;
+
+    // test unstuff (previous byte is >0x8F), and this byte is 0x7F
+    bits_local        = 8 - ((unstuff && (((val >> 24) & 0x7F) == 0x7F)) ? 1 : 0);
+    bool unstuff_flag = (val >> 24) > 0x8F;  // this is for the next byte
+
+    tmp |= ((val >> 16) & 0xFF) << bits_local;  // process the next byte
+    bits_local += 8 - ((unstuff_flag && (((val >> 16) & 0x7F) == 0x7F)) ? 1 : 0);
+    unstuff_flag = ((val >> 16) & 0xFF) > 0x8F;
+
+    tmp |= ((val >> 8) & 0xFF) << bits_local;
+    bits_local += 8 - ((unstuff_flag && (((val >> 8) & 0x7F) == 0x7F)) ? 1 : 0);
+    unstuff_flag = ((val >> 8) & 0xFF) > 0x8F;
+
+    tmp |= (val & 0xFF) << bits_local;
+    bits_local += 8 - ((unstuff_flag && ((val & 0x7F) == 0x7F)) ? 1 : 0);
+    unstuff_flag = (val & 0xFF) > 0x8F;
+
+    // now move the read and unstuffed bits into this->Creg
+    Creg |= static_cast<uint64_t>(tmp) << bits;
+    bits += bits_local;
+    unstuff = unstuff_flag;  // this for the next read
+  }
+
+  inline uint32_t fetch() {
+    if (bits < 32) {
+      read();
+      if (bits < 32) {
+        read();
+      }
+    }
+    return static_cast<uint32_t>(Creg);
+  }
+
+  inline uint32_t advance(uint32_t num_bits) {
+    if (num_bits > bits) {
+      printf("ERROR:VLC require %d bits but %d bits left", num_bits, bits);
+      throw std::exception();
+    }
+    Creg >>= num_bits;
+    bits -= num_bits;
+    return static_cast<uint32_t>(Creg);
+  }
+
+  inline void decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
+                           uint8_t (&emb_k)[2], uint8_t (&emb_1)[2], const uint8_t &first_or_second,
+                           const uint16_t *dec_CxtVLC_table) {
+    fetch();
+    uint8_t cwd            = Creg & 0x7f;
+    uint16_t idx           = static_cast<uint16_t>(cwd + (context << 7));
+    uint16_t value         = dec_CxtVLC_table[idx];
+    u_off[first_or_second] = value & 1;
+    uint8_t len            = static_cast<uint8_t>((value & 0x000F) >> 1);
+    rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+    emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+    emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+    advance(len);
+  }
+
+  inline uint8_t importVLCBit() {
+    uint32_t cwd = fetch();
+    advance(1);
+    return (cwd & 1);
+  }
+
+  inline uint8_t decodeUPrefix() {
+    uint8_t bit = importVLCBit();
+    if (bit == 1) return 1;
+    bit = importVLCBit();
+    if (bit == 1) return 2;
+    bit = importVLCBit();
+    return (bit == 1) ? 3 : 5;
+  }
+
+  inline uint8_t decodeUSuffix(const uint32_t &u_pfx) {
+    uint8_t val;
+    if (u_pfx < 3) return 0;
+    val = importVLCBit();
+    if (u_pfx == 3) return val;
+    //    for (int i = 1; i < 5; ++i) {
+    //      uint8_t bit = importVLCBit();
+    //      val += bit << i;
+    //    }
+    uint32_t cwd = fetch();
+    advance(4);
+    val += (cwd & 0x0F) << 1;
+    return val;
+  }
+
+  inline uint8_t decodeUExtension(const uint32_t &u_sfx) {
+    uint8_t val;
+    if (u_sfx < 28) return 0;
+    val = importVLCBit();
+    //    for (int i = 1; i < 4; ++i) {
+    //      uint8_t bit = importVLCBit();
+    //      val += bit << i;
+    //    }
+    uint32_t cwd = fetch();
+    advance(3);
+    val += (cwd & 0x07) << 1;
+    return val;
+    return val;
+  }
+};
 
 /********************************************************************************
  * fwd_buf:
  *******************************************************************************/
+template <int X>
 class fwd_buf {
  private:
   uint32_t pos;
@@ -48,11 +214,10 @@ class fwd_buf {
   uint32_t unstuff;
   const uint8_t *buf;
   int32_t length;
-  const int32_t X;
 
  public:
-  fwd_buf(const uint8_t *Dcup, int32_t Pcup, int inX)
-      : pos(0), bits(0), Creg(0), unstuff(0), buf(Dcup), length(Pcup), X(inX) {
+  fwd_buf(const uint8_t *Dcup, int32_t Pcup)
+      : pos(0), bits(0), Creg(0), unstuff(0), buf(Dcup), length(Pcup) {
     // for alignment
     auto p = reinterpret_cast<intptr_t>(buf);
     p &= 0x03;
@@ -210,7 +375,7 @@ class state_MEL_decoder {
 /********************************************************************************
  * state_VLC: state class for VLC decoding
  *******************************************************************************/
-class state_VLC_enc {
+class state_VLC_dec {
  private:
   int32_t pos;
   uint8_t last;
@@ -225,7 +390,7 @@ class state_VLC_enc {
   uint8_t *buf;
 
  public:
-  state_VLC_enc(uint8_t *Dcup, uint32_t Lcup, int32_t Pcup)
+  state_VLC_dec(uint8_t *Dcup, uint32_t Lcup, int32_t Pcup)
 #ifndef ADVANCED
       : pos((Lcup > 2) ? Lcup - 3 : 0),
         last(*(Dcup + Lcup - 2)),

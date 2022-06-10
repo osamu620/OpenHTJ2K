@@ -46,8 +46,8 @@
   #endif
 #endif
 
-#define FIRST_QUAD 0
-#define SECOND_QUAD 1
+#define Q0 0
+#define Q1 1
 
 uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
   const int16_t im1 = static_cast<int16_t>(i - 1);
@@ -220,7 +220,7 @@ uint8_t state_VLC::importVLCBit() {
   return val;
 }
 #else
-void state_VLC_enc::load_bytes() {
+void state_VLC_dec::load_bytes() {
   uint64_t load_val = 0;
   int32_t new_bits  = 32;
   last              = buf[pos + 1];
@@ -266,14 +266,14 @@ void state_VLC_enc::load_bytes() {
   ctreg += new_bits;
 }
 
-uint8_t state_VLC_enc::getVLCbit() {
+uint8_t state_VLC_dec::getVLCbit() {
   // "bits" is not actually bits, but a bit
   bits = (uint8_t)(Creg & 0x01);
   close32(1);
   return bits;
 }
 
-void state_VLC_enc::close32(int32_t num_bits) {
+void state_VLC_dec::close32(int32_t num_bits) {
   Creg >>= num_bits;
   ctreg -= num_bits;
   while (ctreg < 32) {
@@ -282,7 +282,7 @@ void state_VLC_enc::close32(int32_t num_bits) {
 }
 #endif
 
-void state_VLC_enc::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
+void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
                                  uint8_t (&emb_k)[2], uint8_t (&emb_1)[2], const uint8_t &first_or_second,
                                  const uint16_t *dec_CxtVLC_table) {
 #ifndef ADVANCED
@@ -318,7 +318,7 @@ void state_VLC_enc::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], u
 #endif
 }
 
-uint8_t state_VLC_enc::decodeUPrefix() {
+uint8_t state_VLC_dec::decodeUPrefix() {
   if (getbitfunc == 1) {
     return 1;
   }
@@ -332,7 +332,7 @@ uint8_t state_VLC_enc::decodeUPrefix() {
   }
 }
 
-uint8_t state_VLC_enc::decodeUSuffix(const uint32_t &u_pfx) {
+uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
   uint8_t bit, val;
   if (u_pfx < 3) {
     return 0;
@@ -347,7 +347,7 @@ uint8_t state_VLC_enc::decodeUSuffix(const uint32_t &u_pfx) {
   }
   return val;
 }
-uint8_t state_VLC_enc::decodeUExtension(const uint32_t &u_sfx) {
+uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
   uint8_t bit, val;
   if (u_sfx < 28) {
     return 0;
@@ -408,7 +408,7 @@ uint8_t MR_dec::importMagRefBit() {
   return val;
 }
 
-auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC, const uint16_t &context,
+auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec, const uint16_t &context,
                        uint8_t (&u_off)[2], uint8_t (&rho)[2], uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
                        const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table) {
   uint8_t sym;
@@ -419,11 +419,19 @@ auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC, const
       return;
     }
   }
-  VLC.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
+  //  uint32_t vlcval        = VLC_dec.fetch();
+  //  uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
+  //  u_off[first_or_second] = value & 1;
+  //  uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
+  //  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+  //  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+  //  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+  //  VLC_dec.advance(len);
+  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
 };
 
-void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSgn,
-                       state_MEL_decoder &MEL_decoder, state_VLC_enc &VLC) {
+void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> &MagSgn,
+                       state_MEL_decoder &MEL_decoder, /* state_VLC_dec &VLC,*/ rev_buf &VLC_dec) {
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
@@ -472,99 +480,99 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSg
     q1 = q;
     q2 = q + 1U;
 
-    decodeSigEMB(MEL_decoder, VLC, context, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table0);
-    if (u_off[FIRST_QUAD] == 0) {
-      assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
+    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q0, dec_table0);
+    if (u_off[Q0] == 0) {
+      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
     }
     for (uint32_t i = 0; i < 4; i++) {
-      sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
+      sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
     }
-    *rho_p++ = rho[FIRST_QUAD];
+    *rho_p++ = rho[Q0];
     // calculate context for the next quad
-    context = (rho[FIRST_QUAD] >> 1) | (rho[FIRST_QUAD] & 1);
+    context = (rho[Q0] >> 1) | (rho[Q0] & 1);
     // context = sigma_n[4 * q1];                                   // f
     // context |= sigma_n[4 * q1 + 1];                              // sf
     // context += static_cast<uint16_t>(sigma_n[4 * q1 + 2] << 1);  // w << 1
     // context += static_cast<uint16_t>(sigma_n[4 * q1 + 3] << 2);  // sw << 2
 
-    if (u_off[FIRST_QUAD] == 0) {
-      assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
+    if (u_off[Q0] == 0) {
+      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
     }
     for (uint32_t i = 0; i < 4; i++) {
-      sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
+      sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
     }
 
-    decodeSigEMB(MEL_decoder, VLC, context, u_off, rho, emb_k, emb_1, SECOND_QUAD, dec_table0);
-    if (u_off[SECOND_QUAD] == 0) {
-      assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
+    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q1, dec_table0);
+    if (u_off[Q1] == 0) {
+      assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
     }
     for (uint32_t i = 0; i < 4; i++) {
-      sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
+      sigma_n[4 * q2 + i] = (rho[Q1] >> i) & 1;
     }
-    *rho_p++ = rho[SECOND_QUAD];
+    *rho_p++ = rho[Q1];
     // calculate context for the next quad
-    context = (rho[SECOND_QUAD] >> 1) | (rho[SECOND_QUAD] & 1);
+    context = (rho[Q1] >> 1) | (rho[Q1] & 1);
     // context = sigma_n[4 * q2];                                   // f
     // context |= sigma_n[4 * q2 + 1];                              // sf
     // context += static_cast<uint16_t>(sigma_n[4 * q2 + 2] << 1);  // w << 1
     // context += static_cast<uint16_t>(sigma_n[4 * q2 + 3] << 2);  // sw << 2
 
-    if (u_off[SECOND_QUAD] == 0) {
-      assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
+    if (u_off[Q1] == 0) {
+      assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
     }
     for (uint32_t i = 0; i < 4; i++) {
-      sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
+      sigma_n[4 * q2 + i] = (rho[Q1] >> i) & 1;
     }
 
-    if (u_off[FIRST_QUAD] == 1 && u_off[SECOND_QUAD] == 1) {
+    if (u_off[Q0] == 1 && u_off[Q1] == 1) {
       if (MEL_decoder.decodeMELSym() == 1) {
-        u_pfx[FIRST_QUAD]  = VLC.decodeUPrefix();
-        u_pfx[SECOND_QUAD] = VLC.decodeUPrefix();
-        u_sfx[FIRST_QUAD]  = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-        u_sfx[SECOND_QUAD] = VLC.decodeUSuffix(u_pfx[SECOND_QUAD]);
-        u_ext[FIRST_QUAD]  = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
-        u_ext[SECOND_QUAD] = VLC.decodeUExtension(u_sfx[SECOND_QUAD]);
-        u[FIRST_QUAD]      = 2 + u_pfx[FIRST_QUAD] + u_sfx[FIRST_QUAD] + (u_ext[FIRST_QUAD] << 2);
-        u[SECOND_QUAD]     = 2 + u_pfx[SECOND_QUAD] + u_sfx[SECOND_QUAD] + (u_ext[SECOND_QUAD] << 2);
+        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+        u[Q0]     = 2 + u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        u[Q1]     = 2 + u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
       } else {
-        u_pfx[FIRST_QUAD] = VLC.decodeUPrefix();
-        if (u_pfx[FIRST_QUAD] > 2) {
-          u[SECOND_QUAD]    = VLC.getbitfunc + 1;  // block->VLC->importVLCBit() + 1;
-          u_sfx[FIRST_QUAD] = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-          u_ext[FIRST_QUAD] = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
+        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        if (u_pfx[Q0] > 2) {
+          u[Q1]     = VLC_dec.importVLCBit() + 1;  // block->VLC->importVLCBit() + 1;
+          u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+          u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
         } else {
-          u_pfx[SECOND_QUAD] = VLC.decodeUPrefix();
-          u_sfx[FIRST_QUAD]  = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-          u_sfx[SECOND_QUAD] = VLC.decodeUSuffix(u_pfx[SECOND_QUAD]);
-          u_ext[FIRST_QUAD]  = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
-          u_ext[SECOND_QUAD] = VLC.decodeUExtension(u_sfx[SECOND_QUAD]);
-          u[SECOND_QUAD]     = u_pfx[SECOND_QUAD] + u_sfx[SECOND_QUAD] + (u_ext[SECOND_QUAD] << 2);
+          u_pfx[Q1] = VLC_dec.decodeUPrefix();
+          u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+          u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+          u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+          u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+          u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
         }
-        u[FIRST_QUAD] = u_pfx[FIRST_QUAD] + u_sfx[FIRST_QUAD] + (u_ext[FIRST_QUAD] << 2);
+        u[Q0] = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
       }
-    } else if (u_off[FIRST_QUAD] == 1 && u_off[SECOND_QUAD] == 0) {
-      u_pfx[FIRST_QUAD] = VLC.decodeUPrefix();
-      u_sfx[FIRST_QUAD] = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-      u_ext[FIRST_QUAD] = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
-      u[FIRST_QUAD]     = u_pfx[FIRST_QUAD] + u_sfx[FIRST_QUAD] + (u_ext[FIRST_QUAD] << 2);
-      u[SECOND_QUAD]    = 0;
-    } else if (u_off[FIRST_QUAD] == 0 && u_off[SECOND_QUAD] == 1) {
-      u_pfx[SECOND_QUAD] = VLC.decodeUPrefix();
-      u_sfx[SECOND_QUAD] = VLC.decodeUSuffix(u_pfx[SECOND_QUAD]);
-      u_ext[SECOND_QUAD] = VLC.decodeUExtension(u_sfx[SECOND_QUAD]);
-      u[FIRST_QUAD]      = 0;
-      u[SECOND_QUAD]     = u_pfx[SECOND_QUAD] + u_sfx[SECOND_QUAD] + (u_ext[SECOND_QUAD] << 2);
+    } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
+      u_pfx[Q0] = VLC_dec.decodeUPrefix();
+      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+      u[Q1]     = 0;
+    } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
+      u_pfx[Q1] = VLC_dec.decodeUPrefix();
+      u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+      u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+      u[Q0]     = 0;
+      u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
     } else {
-      u[FIRST_QUAD]  = 0;
-      u[SECOND_QUAD] = 0;
+      u[Q0] = 0;
+      u[Q1] = 0;
     }
 
-    U[FIRST_QUAD]  = kappa[FIRST_QUAD] + u[FIRST_QUAD];
-    U[SECOND_QUAD] = kappa[SECOND_QUAD] + u[SECOND_QUAD];
+    U[Q0] = kappa[Q0] + u[Q0];
+    U[Q1] = kappa[Q1] + u[Q1];
 
     for (uint32_t i = 0; i < 4; i++) {
-      m[FIRST_QUAD][i]  = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
-      m[SECOND_QUAD][i] = sigma_n[4 * q2 + i] * U[SECOND_QUAD] - ((emb_k[SECOND_QUAD] >> i) & 1);
+      m[Q0][i] = sigma_n[4 * q1 + i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
+      m[Q1][i] = sigma_n[4 * q2 + i] * U[Q1] - ((emb_k[Q1] >> i) & 1);
     }
 
     // recoverMagSgnValue
@@ -572,91 +580,90 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSg
 
     for (uint32_t i = 0; i < 4; i++) {
       uint32_t msval = MagSgn.fetch();
+      n              = 4 * q1 + i;
+      m_n[Q0]        = m[Q0][i];
+      known_1[Q0]    = (emb_1[Q0] >> i) & 1;
+      // v[Q0][i]    = MS.decodeMagSgnValue(m_n[Q0], known_1[Q0]);
+      v[Q0][i] = msval & ((1 << m_n[Q0]) - 1);
+      v[Q0][i] |= known_1[Q0] << m_n[Q0];
+      MagSgn.advance(m_n[Q0]);
 
-      n                   = 4 * q1 + i;
-      m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
-      known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
-      // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
-      v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
-      v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-      MagSgn.advance(m_n[FIRST_QUAD]);
-
-      if (m_n[FIRST_QUAD] != 0) {
-        mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
+      if (m_n[Q0] != 0) {
+        mu_n[n] = static_cast<uint32_t>((v[Q0][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
-        mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
+        mu_n[n] |= static_cast<uint32_t>((v[Q0][i] & 1) << 31);  // sign bit
       }
     }
     for (uint32_t i = 0; i < 4; i++) {
       uint32_t msval = MagSgn.fetch();
 
-      n                    = 4 * q2 + i;
-      m_n[SECOND_QUAD]     = m[SECOND_QUAD][i];
-      known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
-      // v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
-      v[SECOND_QUAD][i] = msval & ((1 << m_n[SECOND_QUAD]) - 1);
-      v[SECOND_QUAD][i] |= known_1[SECOND_QUAD] << m_n[SECOND_QUAD];
-      MagSgn.advance(m_n[SECOND_QUAD]);
+      n           = 4 * q2 + i;
+      m_n[Q1]     = m[Q1][i];
+      known_1[Q1] = (emb_1[Q1] >> i) & 1;
+      // v[Q1][i]    = MS.decodeMagSgnValue(m_n[Q1], known_1[Q1]);
+      v[Q1][i] = msval & ((1 << m_n[Q1]) - 1);
+      v[Q1][i] |= known_1[Q1] << m_n[Q1];
+      MagSgn.advance(m_n[Q1]);
 
-      if (m_n[SECOND_QUAD] != 0) {
-        mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
+      if (m_n[Q1] != 0) {
+        mu_n[n] = static_cast<uint32_t>((v[Q1][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
-        mu_n[n] |= static_cast<uint32_t>((v[SECOND_QUAD][i] & 1) << 31);  // sign bit
+        mu_n[n] |= static_cast<uint32_t>((v[Q1][i] & 1) << 31);  // sign bit
       }
     }
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][1])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][1])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][3])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q1][1])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q1][3])));
     q      = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
   }
   // if QW is odd number ..
   if (QW % 2 == 1) {
     q1 = q;
 
-    decodeSigEMB(MEL_decoder, VLC, context, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table0);
-    *rho_p++ = rho[FIRST_QUAD];
-    if (u_off[FIRST_QUAD] == 0) {
-      assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
+    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q0, dec_table0);
+    *rho_p++ = rho[Q0];
+    if (u_off[Q0] == 0) {
+      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
     }
     for (uint32_t i = 0; i < 4; i++) {
-      sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
+      sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
     }
-    if (u_off[FIRST_QUAD] == 1) {
-      u_pfx[FIRST_QUAD] = VLC.decodeUPrefix();
-      u_sfx[FIRST_QUAD] = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-      u_ext[FIRST_QUAD] = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
-      u[FIRST_QUAD]     = u_pfx[FIRST_QUAD] + u_sfx[FIRST_QUAD] + (u_ext[FIRST_QUAD] << 2);
+    if (u_off[Q0] == 1) {
+      u_pfx[Q0] = VLC_dec.decodeUPrefix();
+      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
     } else {
-      u[FIRST_QUAD] = 0;
+      u[Q0] = 0;
     }
 
-    U[FIRST_QUAD] = kappa[FIRST_QUAD] + u[FIRST_QUAD];
+    U[Q0] = kappa[Q0] + u[Q0];
 
     for (uint32_t i = 0; i < 4; i++) {
-      m[FIRST_QUAD][i] = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
+      m[Q0][i] = sigma_n[4 * q1 + i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
     }
     // recoverMagSgnValue
     uint32_t n;
     for (uint32_t i = 0; i < 4; i++) {
       uint32_t msval = MagSgn.fetch();
 
-      n                   = 4 * q1 + i;
-      m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
-      known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
-      // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
-      v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
-      v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-      MagSgn.advance(m_n[FIRST_QUAD]);
+      n           = 4 * q1 + i;
+      m_n[Q0]     = m[Q0][i];
+      known_1[Q0] = (emb_1[Q0] >> i) & 1;
+      // v[Q0][i]    = MS.decodeMagSgnValue(m_n[Q0], known_1[Q0]);
+      v[Q0][i] = msval & ((1 << m_n[Q0]) - 1);
+      v[Q0][i] |= known_1[Q0] << m_n[Q0];
+      MagSgn.advance(m_n[Q0]);
 
-      if (m_n[FIRST_QUAD] != 0) {
-        mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
+      if (m_n[Q0] != 0) {
+        mu_n[n] = static_cast<uint32_t>((v[Q0][i] >> 1) + 1);
         mu_n[n] <<= pLSB;
-        mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
+        mu_n[n] |= static_cast<uint32_t>((v[Q0][i] & 1) << 31);  // sign bit
       }
     }
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][1])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][3])));
     q++;  // move to the next quad-pair
   }       // Initial line-pair end
 
@@ -674,128 +681,120 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSg
                                        | ((rho_p[qx] >> 1) & 1)
                                              + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
       if (qx > 0) {
-        context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
+        context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
       }
 
-      decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
+      decodeSigEMB(MEL_decoder, VLC_dec, context1, u_off, rho, emb_k, emb_1, Q0, dec_table1);
       if (qx > 0) {
-        rho_p[qx - 1] = rho[SECOND_QUAD];
+        rho_p[qx - 1] = rho[Q1];
       }
-      if (u_off[FIRST_QUAD] == 0) {
-        assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
+      if (u_off[Q0] == 0) {
+        assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
       }
       for (uint32_t i = 0; i < 4; i++) {
-        sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
+        sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
       }
       // calculate context for the current quad
       context2 = static_cast<uint16_t>((rho_p[qx] >> 3)
                                        | ((rho_p[qx + 1] >> 1) & 1)
                                              + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2));
-      context2 |= (((rho[FIRST_QUAD] >> 2) & 1) | ((rho[FIRST_QUAD] >> 3) & 1)) << 1;
+      context2 |= (((rho[Q0] >> 2) & 1) | ((rho[Q0] >> 3) & 1)) << 1;
 
-      decodeSigEMB(MEL_decoder, VLC, context2, u_off, rho, emb_k, emb_1, SECOND_QUAD, dec_table1);
+      decodeSigEMB(MEL_decoder, VLC_dec, context2, u_off, rho, emb_k, emb_1, Q1, dec_table1);
 
-      if (u_off[SECOND_QUAD] == 0) {
-        assert(emb_k[SECOND_QUAD] == 0 && emb_1[SECOND_QUAD] == 0);
+      if (u_off[Q1] == 0) {
+        assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
       }
       for (uint32_t i = 0; i < 4; i++) {
-        sigma_n[4 * q2 + i] = (rho[SECOND_QUAD] >> i) & 1;
+        sigma_n[4 * q2 + i] = (rho[Q1] >> i) & 1;
       }
 
-      if (u_off[FIRST_QUAD] == 1 && u_off[SECOND_QUAD] == 1) {
-        u_pfx[FIRST_QUAD]  = VLC.decodeUPrefix();
-        u_pfx[SECOND_QUAD] = VLC.decodeUPrefix();
-        u_sfx[FIRST_QUAD]  = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-        u_sfx[SECOND_QUAD] = VLC.decodeUSuffix(u_pfx[SECOND_QUAD]);
-        u_ext[FIRST_QUAD]  = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
-        u_ext[SECOND_QUAD] = VLC.decodeUExtension(u_sfx[SECOND_QUAD]);
-        u[FIRST_QUAD]      = u_pfx[FIRST_QUAD] + u_sfx[FIRST_QUAD] + (u_ext[FIRST_QUAD] << 2);
-        u[SECOND_QUAD]     = u_pfx[SECOND_QUAD] + u_sfx[SECOND_QUAD] + (u_ext[SECOND_QUAD] << 2);
-      } else if (u_off[FIRST_QUAD] == 1 && u_off[SECOND_QUAD] == 0) {
-        u_pfx[FIRST_QUAD] = VLC.decodeUPrefix();
-        u_sfx[FIRST_QUAD] = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-        u_ext[FIRST_QUAD] = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
-        u[FIRST_QUAD]     = u_pfx[FIRST_QUAD] + u_sfx[FIRST_QUAD] + (u_ext[FIRST_QUAD] << 2);
-        u[SECOND_QUAD]    = 0;
-      } else if (u_off[FIRST_QUAD] == 0 && u_off[SECOND_QUAD] == 1) {
-        u_pfx[SECOND_QUAD] = VLC.decodeUPrefix();
-        u_sfx[SECOND_QUAD] = VLC.decodeUSuffix(u_pfx[SECOND_QUAD]);
-        u_ext[SECOND_QUAD] = VLC.decodeUExtension(u_sfx[SECOND_QUAD]);
-        u[FIRST_QUAD]      = 0;
-        u[SECOND_QUAD]     = u_pfx[SECOND_QUAD] + u_sfx[SECOND_QUAD] + (u_ext[SECOND_QUAD] << 2);
+      if (u_off[Q0] == 1 && u_off[Q1] == 1) {
+        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+      } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
+        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        u[Q1]     = 0;
+      } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
+        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+        u[Q0]     = 0;
+        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
       } else {
-        u[FIRST_QUAD]  = 0;
-        u[SECOND_QUAD] = 0;
+        u[Q0] = 0;
+        u[Q1] = 0;
       }
 
-      gamma[FIRST_QUAD]  = (popcount32(rho[FIRST_QUAD]) < 2) ? 0 : 1;
-      gamma[SECOND_QUAD] = (popcount32(rho[SECOND_QUAD]) < 2) ? 0 : 1;
+      gamma[Q0] = (popcount32(rho[Q0]) < 2) ? 0 : 1;
+      gamma[Q1] = (popcount32(rho[Q1]) < 2) ? 0 : 1;
 
       int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
       int32_t Emax1 =
           find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
       if (qx > 0) {
-        E_p[2 * qx - 1] =
-            static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
+        E_p[2 * qx - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q1][3])));
       }
-      kappa[FIRST_QUAD]  = (1 > gamma[FIRST_QUAD] * (Emax0 - 1))
-                               ? 1U
-                               : static_cast<uint8_t>(gamma[FIRST_QUAD] * (Emax0 - 1));
-      kappa[SECOND_QUAD] = (1 > gamma[SECOND_QUAD] * (Emax1 - 1))
-                               ? 1U
-                               : static_cast<uint8_t>(gamma[SECOND_QUAD] * (Emax1 - 1));
-      U[FIRST_QUAD]      = kappa[FIRST_QUAD] + u[FIRST_QUAD];
-      U[SECOND_QUAD]     = kappa[SECOND_QUAD] + u[SECOND_QUAD];
+      kappa[Q0] = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
+      kappa[Q1] = (1 > gamma[Q1] * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q1] * (Emax1 - 1));
+      U[Q0]     = kappa[Q0] + u[Q0];
+      U[Q1]     = kappa[Q1] + u[Q1];
 
       for (uint32_t i = 0; i < 4; i++) {
-        m[FIRST_QUAD][i]  = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
-        m[SECOND_QUAD][i] = sigma_n[4 * q2 + i] * U[SECOND_QUAD] - ((emb_k[SECOND_QUAD] >> i) & 1);
+        m[Q0][i] = sigma_n[4 * q1 + i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
+        m[Q1][i] = sigma_n[4 * q2 + i] * U[Q1] - ((emb_k[Q1] >> i) & 1);
       }
       // recoverMagSgnValue
       uint32_t n;
       for (uint32_t i = 0; i < 4; i++) {
         uint32_t msval = MagSgn.fetch();
 
-        n                   = 4 * q1 + i;
-        m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
-        known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
-        // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
-        v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
-        v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-        MagSgn.advance(m_n[FIRST_QUAD]);
+        n           = 4 * q1 + i;
+        m_n[Q0]     = m[Q0][i];
+        known_1[Q0] = (emb_1[Q0] >> i) & 1;
+        // v[Q0][i]    = MS.decodeMagSgnValue(m_n[Q0], known_1[Q0]);
+        v[Q0][i] = msval & ((1 << m_n[Q0]) - 1);
+        v[Q0][i] |= known_1[Q0] << m_n[Q0];
+        MagSgn.advance(m_n[Q0]);
 
-        if (m_n[FIRST_QUAD] != 0) {
-          mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
+        if (m_n[Q0] != 0) {
+          mu_n[n] = static_cast<uint32_t>((v[Q0][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
-          mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);  // sign bit
+          mu_n[n] |= static_cast<uint32_t>((v[Q0][i] & 1) << 31);  // sign bit
         }
       }
       for (uint32_t i = 0; i < 4; i++) {
         uint32_t msval = MagSgn.fetch();
 
-        n                    = 4 * q2 + i;
-        m_n[SECOND_QUAD]     = m[SECOND_QUAD][i];
-        known_1[SECOND_QUAD] = (emb_1[SECOND_QUAD] >> i) & 1;
-        // v[SECOND_QUAD][i]    = MS.decodeMagSgnValue(m_n[SECOND_QUAD], known_1[SECOND_QUAD]);
-        v[SECOND_QUAD][i] = msval & ((1 << m_n[SECOND_QUAD]) - 1);
-        v[SECOND_QUAD][i] |= known_1[SECOND_QUAD] << m_n[SECOND_QUAD];
-        MagSgn.advance(m_n[SECOND_QUAD]);
-        if (m_n[SECOND_QUAD] != 0) {
-          mu_n[n] = static_cast<uint32_t>((v[SECOND_QUAD][i] >> 1) + 1);
+        n           = 4 * q2 + i;
+        m_n[Q1]     = m[Q1][i];
+        known_1[Q1] = (emb_1[Q1] >> i) & 1;
+        // v[Q1][i]    = MS.decodeMagSgnValue(m_n[Q1], known_1[Q1]);
+        v[Q1][i] = msval & ((1 << m_n[Q1]) - 1);
+        v[Q1][i] |= known_1[Q1] << m_n[Q1];
+        MagSgn.advance(m_n[Q1]);
+        if (m_n[Q1] != 0) {
+          mu_n[n] = static_cast<uint32_t>((v[Q1][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
-          mu_n[n] |= static_cast<uint32_t>((v[SECOND_QUAD][i] & 1) << 31);  // sign bit
+          mu_n[n] |= static_cast<uint32_t>((v[Q1][i] & 1) << 31);  // sign bit
         }
       }
-      rho_p[qx]   = rho[FIRST_QUAD];
-      E_p[2 * qx] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
-      E_p[2 * qx + 1] =
-          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
-      E_p[2 * qx + 2] =
-          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][1])));
+      rho_p[qx]       = rho[Q0];
+      E_p[2 * qx]     = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][1])));
+      E_p[2 * qx + 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][3])));
+      E_p[2 * qx + 2] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q1][1])));
       if (qx + 1 == QW - 1) {
-        rho_p[qx + 1] = rho[SECOND_QUAD];
-        E_p[2 * qx + 3] =
-            static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
+        rho_p[qx + 1]   = rho[Q1];
+        E_p[2 * qx + 3] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q1][3])));
       }
       q = static_cast<uint16_t>(q + 2);  // move to the next quad-pair
       qx += 2;
@@ -808,68 +807,64 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf &MagSg
                                        | ((rho_p[qx] >> 1) & 1)
                                              + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
       if (qx > 0) {
-        context1 |= (((rho[SECOND_QUAD] >> 2) & 1) | ((rho[SECOND_QUAD] >> 3) & 1)) << 1;
+        context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
       }
-      decodeSigEMB(MEL_decoder, VLC, context1, u_off, rho, emb_k, emb_1, FIRST_QUAD, dec_table1);
+      decodeSigEMB(MEL_decoder, VLC_dec, context1, u_off, rho, emb_k, emb_1, Q0, dec_table1);
       if (qx > 0) {
-        rho_p[qx - 1] = rho[SECOND_QUAD];
+        rho_p[qx - 1] = rho[Q1];
       }
-      if (u_off[FIRST_QUAD] == 0) {
-        assert(emb_k[FIRST_QUAD] == 0 && emb_1[FIRST_QUAD] == 0);
+      if (u_off[Q0] == 0) {
+        assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
       }
       for (uint32_t i = 0; i < 4; i++) {
-        sigma_n[4 * q1 + i] = (rho[FIRST_QUAD] >> i) & 1;
+        sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
       }
 
-      if (u_off[FIRST_QUAD] == 1) {
-        u_pfx[FIRST_QUAD] = VLC.decodeUPrefix();
-        u_sfx[FIRST_QUAD] = VLC.decodeUSuffix(u_pfx[FIRST_QUAD]);
-        u_ext[FIRST_QUAD] = VLC.decodeUExtension(u_sfx[FIRST_QUAD]);
-        u[FIRST_QUAD]     = u_pfx[FIRST_QUAD] + u_sfx[FIRST_QUAD] + (u_ext[FIRST_QUAD] << 2);
+      if (u_off[Q0] == 1) {
+        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
       } else {
-        u[FIRST_QUAD] = 0;
+        u[Q0] = 0;
       }
 
-      gamma[FIRST_QUAD] = (popcount32(rho[FIRST_QUAD]) < 2) ? 0 : 1;
+      gamma[Q0] = (popcount32(rho[Q0]) < 2) ? 0 : 1;
 
       int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
 
-      kappa[FIRST_QUAD] = (1 > gamma[FIRST_QUAD] * (Emax0 - 1))
-                              ? 1U
-                              : static_cast<uint8_t>(gamma[FIRST_QUAD] * (Emax0 - 1));
+      kappa[Q0] = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
 
-      U[FIRST_QUAD] = kappa[FIRST_QUAD] + u[FIRST_QUAD];
+      U[Q0] = kappa[Q0] + u[Q0];
 
       for (uint32_t i = 0; i < 4; i++) {
-        m[FIRST_QUAD][i] = sigma_n[4 * q1 + i] * U[FIRST_QUAD] - ((emb_k[FIRST_QUAD] >> i) & 1);
+        m[Q0][i] = sigma_n[4 * q1 + i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
       }
       // recoverMagSgnValue
       uint32_t n;
       for (uint32_t i = 0; i < 4; i++) {
         uint32_t msval = MagSgn.fetch();
 
-        n                   = 4 * q1 + i;
-        m_n[FIRST_QUAD]     = m[FIRST_QUAD][i];
-        known_1[FIRST_QUAD] = (emb_1[FIRST_QUAD] >> i) & 1;
-        // v[FIRST_QUAD][i]    = MS.decodeMagSgnValue(m_n[FIRST_QUAD], known_1[FIRST_QUAD]);
-        v[FIRST_QUAD][i] = msval & ((1 << m_n[FIRST_QUAD]) - 1);
-        v[FIRST_QUAD][i] |= known_1[FIRST_QUAD] << m_n[FIRST_QUAD];
-        MagSgn.advance(m_n[FIRST_QUAD]);
+        n           = 4 * q1 + i;
+        m_n[Q0]     = m[Q0][i];
+        known_1[Q0] = (emb_1[Q0] >> i) & 1;
+        // v[Q0][i]    = MS.decodeMagSgnValue(m_n[Q0], known_1[Q0]);
+        v[Q0][i] = msval & ((1 << m_n[Q0]) - 1);
+        v[Q0][i] |= known_1[Q0] << m_n[Q0];
+        MagSgn.advance(m_n[Q0]);
 
-        if (m_n[FIRST_QUAD] != 0) {
-          mu_n[n] = static_cast<uint32_t>((v[FIRST_QUAD][i] >> 1) + 1);
+        if (m_n[Q0] != 0) {
+          mu_n[n] = static_cast<uint32_t>((v[Q0][i] >> 1) + 1);
           mu_n[n] <<= pLSB;
-          mu_n[n] |= static_cast<uint32_t>((v[FIRST_QUAD][i] & 1) << 31);
+          mu_n[n] |= static_cast<uint32_t>((v[Q0][i] & 1) << 31);
         }
       }
-      rho_p[qx] = rho[FIRST_QUAD];
+      rho_p[qx] = rho[Q0];
       if (qx > 0) {
-        E_p[2 * qx - 1] =
-            static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[SECOND_QUAD][3])));
+        E_p[2 * qx - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q1][3])));
       }
-      E_p[2 * qx] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][1])));
-      E_p[2 * qx + 1] =
-          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[FIRST_QUAD][3])));
+      E_p[2 * qx]     = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][1])));
+      E_p[2 * qx + 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v[Q0][3])));
       q++;  // move to the next quad-pair
     }       // Non-Initial line-pair end
   }
@@ -1626,12 +1621,12 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     Dcup[Lcup - 2] |= 0x0F;
     const int32_t Pcup = static_cast<const int32_t>(Lcup - Scup);
     //    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
-    fwd_buf MagSgn(Dcup, Pcup, 0xFF);
+    fwd_buf<0xFF> MagSgn(Dcup, Pcup);
     state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
     state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
-    state_VLC_enc VLC               = state_VLC_enc(Dcup, Lcup, Pcup);
-
-    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MagSgn, MEL_decoder, VLC);
+    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
+    rev_buf VLCdec(Dcup, Lcup, Scup);
+    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MagSgn, MEL_decoder, VLCdec);
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
