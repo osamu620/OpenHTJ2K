@@ -1115,6 +1115,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
       sprec_t *dst      = this->i_samples + i * this->band_stride;
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      // TODO: test will fail with gcc
       size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
       auto vmask     = vdupq_n_s32(static_cast<int32_t>(~mask));
       for (size_t j = 0; j < simdlen; j += 8) {
