@@ -575,9 +575,8 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
                                       0.053497514821622};  // gain is doubled(x2)
 
   // Square roots of the visual weighting factors for Y content
-  const double W_b_Y[15] = {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
-                            1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000};
-
+  const std::vector<double> W_b_Y = {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
+                                     1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000};
   // The squared Euclidean norm of the multi-component synthesis operator that represents the contribution
   // of component 𝑐 (e.g., Y, Cb or Cr) to reconstructed image samples (usually R, G and B)
   const double G_c_sqrt[3] = {1.7321, 1.8051, 1.5734};
@@ -706,7 +705,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
         int32_t exponent, mantissa;
         double w_b;
         // w_b for LL band shall be 1.0
-        w_b = (i == epsilon.size() - 1) ? 1.0 : pow(W_b_Y[i], qfactor_power);
+        w_b = (i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
 
         double fval = (qfactor != 0xFF) ? delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c)
                                         : basestep / sqrt(wmse_or_BIBO[i]);
@@ -861,42 +860,50 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
                                       0.053497514821622};  // gain is doubled(x2)
 
   // Square roots of the visual weighting factors for 4:4:4 YCbCr content
-  const double W_b_444[3][15] = {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000,
-                                  1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000},
-                                 {0.0263, 0.0863, 0.0863, 0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691,
-                                  0.5444, 0.6523, 0.6523, 0.7078, 0.7797, 0.7797},
-                                 {0.0773, 0.1835, 0.1835, 0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464,
-                                  0.7220, 0.8254, 0.8254, 0.8769, 0.9424, 0.9424}};
+  const std::vector<std::vector<double>> W_b_444 = {
+      {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+       1.0000, 1.0000, 1.0000},
+      {0.0263, 0.0863, 0.0863, 0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691, 0.5444, 0.6523, 0.6523,
+       0.7078, 0.7797, 0.7797},
+      {0.0773, 0.1835, 0.1835, 0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464, 0.7220, 0.8254, 0.8254,
+       0.8769, 0.9424, 0.9424}};
   // Square roots of the visual weighting factors for 4:2:0 YCbCr content
-  const double W_b_420[3][15] = {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000,
-                                  1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000},
-                                 {0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691, 0.5444, 0.6523, 0.6523,
-                                  0.7078, 0.7797, 0.7797, 1.0000, 1.0000, 1.0000},
-                                 {0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464, 0.7220, 0.8254, 0.8254,
-                                  0.8769, 0.9424, 0.9424, 1.0000, 1.0000, 1.0000}};
+  const std::vector<std::vector<double>> W_b_420 = {
+      {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+       1.0000, 1.0000, 1.0000},
+      {0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691, 0.5444, 0.6523, 0.6523, 0.7078, 0.7797, 0.7797,
+       1.0000, 1.0000, 1.0000},
+      {0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464, 0.7220, 0.8254, 0.8254, 0.8769, 0.9424, 0.9424,
+       1.0000, 1.0000, 1.0000}};
   // Square roots of the visual weighting factors for 4:2:2 YCbCr content
-  const double W_b_422[3][15] = {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000,
-                                  1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000},
-                                 {0.0863, 0.0863, 0.2564, 0.2564, 0.2564, 0.4691, 0.4691, 0.4691, 0.6523,
-                                  0.6523, 0.6523, 0.7797, 0.7797, 0.7797, 1.0000},
-                                 {0.1835, 0.1835, 0.4130, 0.4130, 0.4130, 0.6464, 0.6464, 0.6464, 0.8254,
-                                  0.8254, 0.8254, 0.9424, 0.9424, 0.9424, 1.0000}};
-  double *W_b_sqrt[3];
-  for (size_t i = 0; i < 3; ++i) {
-    switch (chroma_format) {
-      case YCC444:
-        W_b_sqrt[i] = const_cast<double *>(W_b_444[i]);
-        break;
-      case YCC420:
-        W_b_sqrt[i] = const_cast<double *>(W_b_420[i]);
-        break;
-      case YCC422:
-        W_b_sqrt[i] = const_cast<double *>(W_b_422[i]);
-        break;
-      default:
-        printf("ERROR: chroma format for QCC_marker is invalid.\n");
-        throw std::exception();
-    }
+  const std::vector<std::vector<double>> W_b_422 = {
+      {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+       1.0000, 1.0000, 1.0000},
+      {0.0863, 0.0863, 0.2564, 0.2564, 0.2564, 0.4691, 0.4691, 0.4691, 0.6523, 0.6523, 0.6523, 0.7797,
+       0.7797, 0.7797, 1.0000},
+      {0.1835, 0.1835, 0.4130, 0.4130, 0.4130, 0.6464, 0.6464, 0.6464, 0.8254, 0.8254, 0.8254, 0.9424,
+       0.9424, 0.9424, 1.0000}};
+  std::vector<std::vector<double>> W_b_sqrt;
+
+  switch (chroma_format) {
+    case YCC444:
+      W_b_sqrt.emplace_back(W_b_444[0]);
+      W_b_sqrt.emplace_back(W_b_444[1]);
+      W_b_sqrt.emplace_back(W_b_444[2]);
+      break;
+    case YCC420:
+      W_b_sqrt.emplace_back(W_b_420[0]);
+      W_b_sqrt.emplace_back(W_b_420[1]);
+      W_b_sqrt.emplace_back(W_b_420[2]);
+      break;
+    case YCC422:
+      W_b_sqrt.emplace_back(W_b_422[0]);
+      W_b_sqrt.emplace_back(W_b_422[1]);
+      W_b_sqrt.emplace_back(W_b_422[2]);
+      break;
+    default:
+      printf("ERROR: chroma format for QCC_marker is invalid.\n");
+      throw std::exception();
   }
 
   // The squared Euclidean norm of the multi-component synthesis operator that represents the
@@ -1003,7 +1010,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
       int32_t exponent, mantissa;
       double w_b;
       // w_b for LL band shall be 1.0
-      w_b = (i == epsilon.size() - 1) ? 1.0 : pow(W_b_sqrt[Cqcc][i], qfactor_power);
+      w_b = (i >= W_b_sqrt[Cqcc].size()) ? 1.0 : pow(W_b_sqrt[Cqcc][i], qfactor_power);
 
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
       for (exponent = 0; fval < 1.0; exponent++) {
