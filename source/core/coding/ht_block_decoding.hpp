@@ -171,11 +171,12 @@ class rev_buf {
 
   inline uint8_t decodeUSuffix(const uint32_t &u_pfx) {
     const uint8_t ts[6] = {0, 0, 0, 1, 5, 5};
-    uint8_t mask        = static_cast<uint8_t>((1 << ts[u_pfx]) - 1);
+    uint32_t mask       = static_cast<uint32_t>((1 << ts[u_pfx]) - 1);
     uint32_t cwd        = fetch();
-    uint8_t val         = cwd & mask;
+    uint8_t val         = static_cast<uint8_t>(cwd & mask);
     advance(ts[u_pfx]);
-    return (u_pfx < 3) ? 0 : val;
+    return val;
+    //    return (u_pfx < 3) ? 0 : val;
 
     //    uint8_t val;
     //    if (u_pfx < 3) return 0;
@@ -192,10 +193,12 @@ class rev_buf {
   }
 
   inline uint8_t decodeUExtension(const uint32_t &u_sfx) {
-    if (u_sfx < 28) return 0;
-    uint32_t cwd = fetch();
-    advance(4);
-    return (cwd & 0x0F);
+    //    if (u_sfx < 28) return 0;
+    const uint8_t tu[32] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,
+                            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF};
+    uint32_t cwd         = fetch();
+    advance(4 & tu[u_sfx]);
+    return (cwd & tu[u_sfx]);
   }
 };
 
