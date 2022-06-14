@@ -476,15 +476,31 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   auto E_p = Eline.get() + 1;
 
   context = 0;
+  uint32_t vlcval;
+  int32_t mel_run = MEL.get_run();
+
   // Initial line-pair
   for (; q < QW - 1;) {
     q1 = q;
     q2 = q + 1U;
 
-    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q0, dec_table0);
-    if (u_off[Q0] == 0) {
-      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
+    vlcval       = VLC_dec.fetch();
+    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (context << 7)];
+    if (context == 0) {
+      mel_run -= 2;
+      tv0 = (mel_run == -1) ? tv0 : 0;
+      if (mel_run < 0) {
+        mel_run = MEL.get_run();
+      }
     }
+    rho[0]   = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
+    emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+    emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+
+    //    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q0, dec_table0);
+    //    if (u_off[Q0] == 0) {
+    //      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
+    //    }
     for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
     }
@@ -496,17 +512,23 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     // context += static_cast<uint16_t>(sigma_n[4 * q1 + 2] << 1);  // w << 1
     // context += static_cast<uint16_t>(sigma_n[4 * q1 + 3] << 2);  // sw << 2
 
-    if (u_off[Q0] == 0) {
-      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
-    }
-    for (uint32_t i = 0; i < 4; i++) {
-      sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
-    }
+    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
 
-    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q1, dec_table0);
-    if (u_off[Q1] == 0) {
-      assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
+    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + (context << 7)];
+    if (context == 0) {
+      mel_run -= 2;
+      tv1 = (mel_run == -1) ? tv1 : 0;
+      if (mel_run < 0) {
+        mel_run = MEL.get_run();
+      }
     }
+    rho[1]   = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
+    emb_k[1] = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
+    emb_1[1] = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+    //    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q1, dec_table0);
+    //    if (u_off[Q1] == 0) {
+    //      assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
+    //    }
     for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q2 + i] = (rho[Q1] >> i) & 1;
     }
@@ -518,15 +540,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     // context += static_cast<uint16_t>(sigma_n[4 * q2 + 2] << 1);  // w << 1
     // context += static_cast<uint16_t>(sigma_n[4 * q2 + 3] << 2);  // sw << 2
 
-    if (u_off[Q1] == 0) {
-      assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
-    }
-    for (uint32_t i = 0; i < 4; i++) {
-      sigma_n[4 * q2 + i] = (rho[Q1] >> i) & 1;
-    }
+    vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+    u_off[0] = tv0 & 1;
+    u_off[1] = tv1 & 1;
 
     if (u_off[Q0] == 1 && u_off[Q1] == 1) {
-      if (MEL_decoder.decodeMELSym() == 1) {
+      mel_run -= 2;
+      bool mel_cond = (mel_run == -1);
+      if (mel_run < 0) {
+        mel_run = MEL.get_run();
+      }
+      if (mel_cond) {
         u_pfx[Q0] = VLC_dec.decodeUPrefix();
         u_pfx[Q1] = VLC_dec.decodeUPrefix();
         u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
@@ -622,14 +646,30 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   if (QW % 2 == 1) {
     q1 = q;
 
-    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q0, dec_table0);
-    *rho_p++ = rho[Q0];
-    if (u_off[Q0] == 0) {
-      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
+    vlcval       = VLC_dec.fetch();
+    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (context << 7)];
+    if (context == 0) {
+      mel_run -= 2;
+      tv0 = (mel_run == -1) ? tv0 : 0;
+      if (mel_run < 0) {
+        mel_run = MEL.get_run();
+      }
     }
+    rho[0]   = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
+    emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+    emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+    //    decodeSigEMB(MEL_decoder, VLC_dec, context, u_off, rho, emb_k, emb_1, Q0, dec_table0);
+    *rho_p++ = rho[Q0];
+    //    if (u_off[Q0] == 0) {
+    //      assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
+    //    }
     for (uint32_t i = 0; i < 4; i++) {
       sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
     }
+    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+
+    u_off[0] = tv0 & 1;
+
     if (u_off[Q0] == 1) {
       u_pfx[Q0] = VLC_dec.decodeUPrefix();
       u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
@@ -684,14 +724,26 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       if (qx > 0) {
         context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
       }
-
-      decodeSigEMB(MEL_decoder, VLC_dec, context1, u_off, rho, emb_k, emb_1, Q0, dec_table1);
+      vlcval       = VLC_dec.fetch();
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (context1 << 7)];
+      if (context1 == 0) {
+        mel_run -= 2;
+        tv0 = (mel_run == -1) ? tv0 : 0;
+        if (mel_run < 0) {
+          mel_run = MEL.get_run();
+        }
+      }
+      rho[0]   = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
+      emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+      emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+      //      decodeSigEMB(MEL_decoder, VLC_dec, context1, u_off, rho, emb_k, emb_1, Q0, dec_table1);
       if (qx > 0) {
         rho_p[qx - 1] = rho[Q1];
       }
-      if (u_off[Q0] == 0) {
-        assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
-      }
+      //      if (u_off[Q0] == 0) {
+      //        assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
+      //      }
       for (uint32_t i = 0; i < 4; i++) {
         sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
       }
@@ -701,14 +753,30 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
                                              + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2));
       context2 |= (((rho[Q0] >> 2) & 1) | ((rho[Q0] >> 3) & 1)) << 1;
 
-      decodeSigEMB(MEL_decoder, VLC_dec, context2, u_off, rho, emb_k, emb_1, Q1, dec_table1);
+      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (context2 << 7)];
 
-      if (u_off[Q1] == 0) {
-        assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
+      if (context2 == 0) {
+        mel_run -= 2;
+        tv1 = (mel_run == -1) ? tv1 : 0;
+        if (mel_run < 0) {
+          mel_run = MEL.get_run();
+        }
       }
+      rho[1]   = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
+      emb_k[1] = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
+      emb_1[1] = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+      vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+      //      decodeSigEMB(MEL_decoder, VLC_dec, context2, u_off, rho, emb_k, emb_1, Q1, dec_table1);
+
+      //      if (u_off[Q1] == 0) {
+      //        assert(emb_k[Q1] == 0 && emb_1[Q1] == 0);
+      //      }
       for (uint32_t i = 0; i < 4; i++) {
         sigma_n[4 * q2 + i] = (rho[Q1] >> i) & 1;
       }
+
+      u_off[0] = tv0 & 1;
+      u_off[1] = tv1 & 1;
 
       if (u_off[Q0] == 1 && u_off[Q1] == 1) {
         u_pfx[Q0] = VLC_dec.decodeUPrefix();
@@ -810,16 +878,30 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       if (qx > 0) {
         context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
       }
-      decodeSigEMB(MEL_decoder, VLC_dec, context1, u_off, rho, emb_k, emb_1, Q0, dec_table1);
+      vlcval       = VLC_dec.fetch();
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (context1 << 7)];
+      if (context1 == 0) {
+        mel_run -= 2;
+        tv0 = (mel_run == -1) ? tv0 : 0;
+        if (mel_run < 0) {
+          mel_run = MEL.get_run();
+        }
+      }
+      rho[0]   = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
+      emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+      emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      //      decodeSigEMB(MEL_decoder, VLC_dec, context1, u_off, rho, emb_k, emb_1, Q0, dec_table1);
       if (qx > 0) {
         rho_p[qx - 1] = rho[Q1];
       }
-      if (u_off[Q0] == 0) {
-        assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
-      }
+      //      if (u_off[Q0] == 0) {
+      //        assert(emb_k[Q0] == 0 && emb_1[Q0] == 0);
+      //      }
       for (uint32_t i = 0; i < 4; i++) {
         sigma_n[4 * q1 + i] = (rho[Q0] >> i) & 1;
       }
+      vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+      u_off[0] = tv0 & 1;
 
       if (u_off[Q0] == 1) {
         u_pfx[Q0] = VLC_dec.decodeUPrefix();

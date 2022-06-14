@@ -114,21 +114,21 @@ class MEL_dec {
     // bits_local has the number of bits in t
     uint32_t t        = val & 0xFF;
     bool unstuff_flag = ((val & 0xFF) == 0xFF);
-    bits -= unstuff_flag;
+    bits_local -= unstuff_flag;
     t = t << (8 - unstuff_flag);
 
     t |= (val >> 8) & 0xFF;
     unstuff_flag = (((val >> 8) & 0xFF) == 0xFF);
-    bits -= unstuff_flag;
+    bits_local -= unstuff_flag;
     t = t << (8 - unstuff_flag);
 
     t |= (val >> 16) & 0xFF;
     unstuff_flag = (((val >> 16) & 0xFF) == 0xFF);
-    bits -= unstuff_flag;
+    bits_local -= unstuff_flag;
     t = t << (8 - unstuff_flag);
 
     t |= (val >> 24) & 0xFF;
-    unstuff_flag = (((val >> 24) & 0xFF) == 0xFF);
+    unstuff = (((val >> 24) & 0xFF) == 0xFF);
 
     // move to tmp, and push the result all the way up, so we read from the MSB
     tmp |= (static_cast<uint64_t>(t)) << (64 - bits_local - bits);
@@ -384,7 +384,7 @@ class fwd_buf {
 
   inline void read() {
     if (bits > 32) {
-      printf("ERROR: ");
+      printf("ERROR: MagSgn reading");
       throw std::exception();
     }
 
@@ -432,7 +432,7 @@ class fwd_buf {
 
   inline void advance(uint32_t n) {
     if (n > bits) {
-      printf("ERROR:");
+      printf("ERROR: MagSgn advance");
       throw std::exception();
     }
     Creg >>= n;  // consume n bits
