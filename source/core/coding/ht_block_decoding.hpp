@@ -39,6 +39,7 @@ const int32_t bitmask32[32] = {
 /********************************************************************************
  * MEL_dec:
  *******************************************************************************/
+// this class implementation is borrowed from OpenJPH
 class MEL_dec {
  private:
   int bits;
@@ -184,6 +185,7 @@ class MEL_dec {
 /********************************************************************************
  * rev_buf:
  *******************************************************************************/
+// this class implementation is borrowed from OpenJPH
 class rev_buf {
  private:
   int32_t pos;
@@ -350,6 +352,7 @@ class rev_buf {
 /********************************************************************************
  * fwd_buf:
  *******************************************************************************/
+// this class implementation is borrowed from OpenJPH
 template <int X>
 class fwd_buf {
  private:

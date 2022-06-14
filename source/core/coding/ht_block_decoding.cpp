@@ -430,9 +430,8 @@ auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec, const u
   //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
 };
 
-void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> &MagSgn,
-                       state_MEL_decoder &MEL_decoder, MEL_dec &MEL,
-                       /* state_VLC_dec &VLC,*/ rev_buf &VLC_dec) {
+void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> &MagSgn, MEL_dec &MEL,
+                       rev_buf &VLC_dec) {
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
@@ -1706,12 +1705,12 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     const int32_t Pcup = static_cast<const int32_t>(Lcup - Scup);
     //    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
     fwd_buf<0xFF> MagSgn(Dcup, Pcup);
-    state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
-    state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
-    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
+    //    state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
+    //    state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
+    //    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
     MEL_dec MEL(Dcup, Lcup, Scup);
     rev_buf VLCdec(Dcup, Lcup, Scup);
-    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MagSgn, MEL_decoder, MEL, VLCdec);
+    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MagSgn, MEL, VLCdec);
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
