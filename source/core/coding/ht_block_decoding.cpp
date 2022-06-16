@@ -495,9 +495,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto vone       = vdupq_n_s32(1);
     vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
 #elif defined(__AVX2__)
-    for (uint32_t i = 0; i < 4; i++) {
-      sigma_quads[i] = (rho[Q0] >> i) & 1;
-    }
+    // do nothing
 #else
     for (uint32_t i = 0; i < 4; i++) {
       sigma_quads[i] = (rho[Q0] >> i) & 1;
@@ -528,9 +526,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto v1 = vdupq_n_s32(rho[Q1]);
     vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
 #elif defined(__AVX2__)
-    for (uint32_t i = 0; i < 4; i++) {
-      sigma_quads[i + 4] = (rho[Q1] >> i) & 1;
-    }
+    auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
+    auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                   _mm256_set1_epi32(1));
+    _mm256_storeu_si256((__m256i *)sigma_quads, vsigma);
 #else
     for (uint32_t i = 0; i < 4; i++) {
       sigma_quads[i + 4] = (rho[Q1] >> i) & 1;
@@ -607,10 +606,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     vsigma = vld1q_s32(sigma_quads + 4);
     vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q1])), v0));
 #elif defined(__AVX2__)
-    for (uint32_t i = 0; i < 4; i++) {
-      m_quads[i]     = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
-      m_quads[i + 4] = sigma_quads[i + 4] * U[Q1] - ((emb_k[Q1] >> i) & 1);
-    }
+    auto vemb_k =
+        _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_k[0], emb_k[0], emb_k[0], emb_k[0],
+                                                             emb_k[1], emb_k[1], emb_k[1], emb_k[1]),
+                                           _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                         _mm256_set1_epi32(1));
+    auto vU = _mm256_setr_epi32(U[0], U[0], U[0], U[0], U[1], U[1], U[1], U[1]);
+    _mm256_storeu_si256((__m256i *)m_quads, _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, vU), vemb_k));
 #else
     for (uint32_t i = 0; i < 4; i++) {
       m_quads[i]     = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
@@ -799,9 +801,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vone       = vdupq_n_s32(1);
       vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
 #elif defined(__AVX2__)
-      for (uint32_t i = 0; i < 4; i++) {
-        sigma_quads[i] = (rho[Q0] >> i) & 1;
-      }
+      // do nothing
 #else
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i] = (rho[Q0] >> i) & 1;
@@ -834,9 +834,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto v1 = vdupq_n_s32(rho[Q1]);
       vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
 #elif defined(__AVX2__)
-      for (uint32_t i = 0; i < 4; i++) {
-        sigma_quads[i + 4] = (rho[Q1] >> i) & 1;
-      }
+      auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
+      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                     _mm256_set1_epi32(1));
+      _mm256_storeu_si256((__m256i *)sigma_quads, vsigma);
 #else
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i + 4] = (rho[Q1] >> i) & 1;
@@ -897,10 +898,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       vsigma = vld1q_s32(sigma_quads + 4);
       vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q1])), v0));
 #elif defined(__AVX2__)
-      for (uint32_t i = 0; i < 4; i++) {
-        m_quads[i]     = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
-        m_quads[i + 4] = sigma_quads[i + 4] * U[Q1] - ((emb_k[Q1] >> i) & 1);
-      }
+      auto vemb_k =
+          _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_k[0], emb_k[0], emb_k[0], emb_k[0],
+                                                               emb_k[1], emb_k[1], emb_k[1], emb_k[1]),
+                                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                           _mm256_set1_epi32(1));
+      auto vU = _mm256_setr_epi32(U[0], U[0], U[0], U[0], U[1], U[1], U[1], U[1]);
+      _mm256_storeu_si256((__m256i *)m_quads, _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, vU), vemb_k));
 #else
       for (uint32_t i = 0; i < 4; i++) {
         m_quads[i]     = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
