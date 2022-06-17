@@ -161,6 +161,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       block_index++;
     }
 #else
+    const uint32_t width = this->size.x + (this->size.x % 2);
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
