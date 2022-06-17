@@ -1346,7 +1346,6 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       sprec_t *dst      = this->i_samples + i * this->band_stride;
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-      // TODO: test will fail with gcc
       size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
       auto vmask     = vdupq_n_s32(static_cast<int32_t>(~mask));
       for (size_t j = 0; j < simdlen; j += 8) {
@@ -1387,10 +1386,12 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         // convert vlues from sign-magnitude form to two's complement one
         auto vnegmask = vcltzq_s32(vsrc0 | (vsign0 << 31));
         auto vposmask = ~vnegmask;
-        auto vdst0    = (vnegq_s32(vsrc0) & vnegmask) + (vsrc0 & vposmask);
-        vnegmask      = vcltzq_s32(vsrc1 | (vsign1 << 31));
-        vposmask      = ~vnegmask;
-        auto vdst1    = (vnegq_s32(vsrc1) & vnegmask) + (vsrc1 & vposmask);
+        // this cannot be auto for gcc
+        int32x4_t vdst0 = (vnegq_s32(vsrc0) & vnegmask) + (vsrc0 & vposmask);
+        vnegmask        = vcltzq_s32(vsrc1 | (vsign1 << 31));
+        vposmask        = ~vnegmask;
+        // this cannot be auto for gcc
+        int32x4_t vdst1 = (vnegq_s32(vsrc1) & vnegmask) + (vsrc1 & vposmask);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0 >> pLSB), vmovn_s32(vdst1 >> pLSB)));
         val += 8;
         dst += 8;
