@@ -79,286 +79,287 @@ uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t 
   return mbr;
 }
 
-/********************************************************************************
- * functions for state_MS: state class for MagSgn decoding
- *******************************************************************************/
-void state_MS_dec::loadByte() {
-  tmp  = 0xFF;
-  bits = (last == 0xFF) ? 7 : 8;
-  if (pos < length) {
-    tmp = buf[pos];
-    pos++;
-    last = tmp;
-  }
-
-  Creg |= static_cast<uint64_t>(tmp) << ctreg;
-  ctreg = static_cast<uint8_t>(ctreg + bits);
-}
-void state_MS_dec::close(int32_t num_bits) {
-  Creg >>= num_bits;
-  ctreg = static_cast<uint8_t>(ctreg - static_cast<uint8_t>(num_bits));
-  while (ctreg < 32) {
-    loadByte();
-  }
-}
-
-uint8_t state_MS_dec::importMagSgnBit() {
-  uint8_t val;
-  if (bits == 0) {
-    bits = (last == 0xFF) ? 7 : 8;
-    if (pos < length) {
-      tmp = *(buf + pos);  // modDcup(MS->pos, Lcup);
-      if ((static_cast<uint16_t>(tmp) & static_cast<uint16_t>(1 << bits)) != 0) {
-        printf("ERROR: importMagSgnBit error\n");
-        throw std::exception();
-      }
-    } else if (pos == length) {
-      tmp = 0xFF;
-    } else {
-      printf("ERROR: importMagSgnBit error\n");
-      throw std::exception();
-    }
-    last = tmp;
-    pos++;
-  }
-  val = tmp & 1;
-  tmp = static_cast<uint8_t>(tmp >> 1);
-  --bits;
-  return val;
-}
-
-int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
-  int32_t val = 0;
-  // uint8_t bit;
-  if (m_n > 0) {
-    val = static_cast<int32_t>(bitmask32[m_n] & (int32_t)Creg);
-    //      for (int i = 0; i < m_n; i++) {
-    //        bit = MS->importMagSgnBit();
-    //        val += (bit << i);
-    //      }
-    val += (i_n << m_n);
-    close(m_n);
-  } else {
-    val = 0;
-  }
-  return val;
-}
-
-/********************************************************************************
- * functions for state_MEL_unPacker and state_MEL: state classes for MEL decoding
- *******************************************************************************/
-uint8_t state_MEL_unPacker::importMELbit() {
-  if (bits == 0) {
-    bits = (tmp == 0xFF) ? 7 : 8;
-    if (pos < length) {
-      tmp = *(buf + pos);  //+ modDcup(MEL_unPacker->pos, Lcup);
-      //        MEL_unPacker->tmp = modDcup()
-      pos++;
-    } else {
-      tmp = 0xFF;
-    }
-  }
-  bits--;
-  return (tmp >> bits) & 1;
-}
-
-uint8_t state_MEL_decoder::decodeMELSym() {
-  uint8_t eval;
-  uint8_t bit;
-  if (MEL_run == 0 && MEL_one == 0) {
-    eval = this->MEL_E[MEL_k];
-    bit  = MEL_unPacker->importMELbit();
-    if (bit == 1) {
-      MEL_run = static_cast<uint8_t>(1 << eval);
-      MEL_k   = static_cast<uint8_t>((12 < MEL_k + 1) ? 12 : MEL_k + 1);
-    } else {
-      MEL_run = 0;
-      while (eval > 0) {
-        bit     = MEL_unPacker->importMELbit();
-        MEL_run = static_cast<uint8_t>((MEL_run << 1) + bit);
-        eval--;
-      }
-      MEL_k   = static_cast<uint8_t>((0 > MEL_k - 1) ? 0 : MEL_k - 1);
-      MEL_one = 1;
-    }
-  }
-  if (MEL_run > 0) {
-    MEL_run--;
-    return 0;
-  } else {
-    MEL_one = 0;
-    return 1;
-  }
-}
-
-/********************************************************************************
- * functions for state_VLC: state class for VLC decoding
- *******************************************************************************/
-#ifndef ADVANCED
-uint8_t state_VLC::importVLCBit() {
-  uint8_t val;
-  if (bits == 0) {
-    if (pos >= rev_length) {
-      tmp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
-    } else {
-      printf("ERROR: import VLCBits error\n");
-      throw std::exception();
-    }
-    bits = 8;
-    if (last > 0x8F && (tmp & 0x7F) == 0x7F) {
-      bits = 7;  // bit-un-stuffing
-    }
-    last = tmp;
-    // To prevent overflow of pos
-    if (pos > 0) {
-      pos--;
-    }
-  }
-  val = tmp & 1;
-  tmp >>= 1;
-  bits--;
-  return val;
-}
-#else
-void state_VLC_dec::load_bytes() {
-  uint64_t load_val = 0;
-  int32_t new_bits  = 32;
-  last              = buf[pos + 1];
-  if (pos >= 3) {  // Common case; we have at least 4 bytes available
-    load_val = buf[pos - 3];
-    load_val = (load_val << 8) | buf[pos - 2];
-    load_val = (load_val << 8) | buf[pos - 1];
-    load_val = (load_val << 8) | buf[pos];
-    load_val = (load_val << 8) | last;  // For stuffing bit detection
-    pos -= 4;
-  } else {
-    if (pos >= 2) {
-      load_val = buf[pos - 2];
-    }
-    if (pos >= 1) {
-      load_val = (load_val << 8) | buf[pos - 1];
-    }
-    if (pos >= 0) {
-      load_val = (load_val << 8) | buf[pos];
-    }
-    pos      = 0;
-    load_val = (load_val << 8) | last;  // For stuffing bit detection
-  }
-  // Now remove any stuffing bits, shifting things down as we go
-  if ((load_val & 0x7FFF000000) > 0x7F8F000000) {
-    load_val &= 0x7FFFFFFFFF;
-    new_bits--;
-  }
-  if ((load_val & 0x007FFF0000) > 0x007F8F0000) {
-    load_val = (load_val & 0x007FFFFFFF) + ((load_val & 0xFF00000000) >> 1);
-    new_bits--;
-  }
-  if ((load_val & 0x00007FFF00) > 0x00007F8F00) {
-    load_val = (load_val & 0x00007FFFFF) + ((load_val & 0xFFFF000000) >> 1);
-    new_bits--;
-  }
-  if ((load_val & 0x0000007FFF) > 0x0000007F8F) {
-    load_val = (load_val & 0x0000007FFF) + ((load_val & 0xFFFFFF0000) >> 1);
-    new_bits--;
-  }
-  load_val >>= 8;  // Shifts away the extra byte we imported
-  Creg |= (load_val << ctreg);
-  ctreg += new_bits;
-}
-
-uint8_t state_VLC_dec::getVLCbit() {
-  // "bits" is not actually bits, but a bit
-  bits = (uint8_t)(Creg & 0x01);
-  close32(1);
-  return bits;
-}
-
-void state_VLC_dec::close32(int32_t num_bits) {
-  Creg >>= num_bits;
-  ctreg -= num_bits;
-  while (ctreg < 32) {
-    load_bytes();
-  }
-}
-#endif
-
-void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
-                                 uint8_t (&emb_k)[2], uint8_t (&emb_1)[2], const uint8_t &first_or_second,
-                                 const uint16_t *dec_CxtVLC_table) {
-#ifndef ADVANCED
-  uint8_t b_low = tmp;
-  uint8_t b_upp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
-  uint16_t word = (b_upp << bits) + b_low;
-  uint8_t cwd   = word & 0x7F;
-#else
-  uint8_t cwd = Creg & 0x7f;
-#endif
-  uint16_t idx           = static_cast<uint16_t>(cwd + (context << 7));
-  uint16_t value         = dec_CxtVLC_table[idx];
-  u_off[first_or_second] = value & 1;
-  // value >>= 1;
-  // uint8_t len = value & 0x07;
-  // value >>= 3;
-  // rho[first_or_second] = value & 0x0F;
-  // value >>= 4;
-  // emb_k[first_or_second] = value & 0x0F;
-  // value >>= 4;
-  // emb_1[first_or_second] = value & 0x0F;
-  uint8_t len            = static_cast<uint8_t>((value & 0x000F) >> 1);
-  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
-  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
-  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
-
-#ifndef ADVANCED
-  for (int i = 0; i < len; i++) {
-    importVLCBit();
-  }
-#else
-  close32(len);
-#endif
-}
-
-uint8_t state_VLC_dec::decodeUPrefix() {
-  if (getbitfunc == 1) {
-    return 1;
-  }
-  if (getbitfunc == 1) {
-    return 2;
-  }
-  if (getbitfunc == 1) {
-    return 3;
-  } else {
-    return 5;
-  }
-}
-
-uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
-  uint8_t bit, val;
-  if (u_pfx < 3) {
-    return 0;
-  }
-  val = getbitfunc;
-  if (u_pfx == 3) {
-    return val;
-  }
-  for (int i = 1; i < 5; i++) {
-    bit = getbitfunc;
-    val = static_cast<uint8_t>(val + (bit << i));
-  }
-  return val;
-}
-uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
-  uint8_t bit, val;
-  if (u_sfx < 28) {
-    return 0;
-  }
-  val = getbitfunc;
-  for (int i = 1; i < 4; i++) {
-    bit = getbitfunc;
-    val = static_cast<uint8_t>(val + (bit << i));
-  }
-  return val;
-}
+///********************************************************************************
+// * functions for state_MS: state class for MagSgn decoding
+// *******************************************************************************/
+// void state_MS_dec::loadByte() {
+//  tmp  = 0xFF;
+//  bits = (last == 0xFF) ? 7 : 8;
+//  if (pos < length) {
+//    tmp = buf[pos];
+//    pos++;
+//    last = tmp;
+//  }
+//
+//  Creg |= static_cast<uint64_t>(tmp) << ctreg;
+//  ctreg = static_cast<uint8_t>(ctreg + bits);
+//}
+// void state_MS_dec::close(int32_t num_bits) {
+//  Creg >>= num_bits;
+//  ctreg = static_cast<uint8_t>(ctreg - static_cast<uint8_t>(num_bits));
+//  while (ctreg < 32) {
+//    loadByte();
+//  }
+//}
+//
+//[[maybe_unused]] uint8_t state_MS_dec::importMagSgnBit() {
+//  uint8_t val;
+//  if (bits == 0) {
+//    bits = (last == 0xFF) ? 7 : 8;
+//    if (pos < length) {
+//      tmp = *(buf + pos);  // modDcup(MS->pos, Lcup);
+//      if ((static_cast<uint16_t>(tmp) & static_cast<uint16_t>(1 << bits)) != 0) {
+//        printf("ERROR: importMagSgnBit error\n");
+//        throw std::exception();
+//      }
+//    } else if (pos == length) {
+//      tmp = 0xFF;
+//    } else {
+//      printf("ERROR: importMagSgnBit error\n");
+//      throw std::exception();
+//    }
+//    last = tmp;
+//    pos++;
+//  }
+//  val = tmp & 1;
+//  tmp = static_cast<uint8_t>(tmp >> 1);
+//  --bits;
+//  return val;
+//}
+//
+//[[maybe_unused]] int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
+//  int32_t val = 0;
+//  // uint8_t bit;
+//  if (m_n > 0) {
+//    val = static_cast<int32_t>(bitmask32[m_n] & (int32_t)Creg);
+//    //      for (int i = 0; i < m_n; i++) {
+//    //        bit = MS->importMagSgnBit();
+//    //        val += (bit << i);
+//    //      }
+//    val += (i_n << m_n);
+//    close(m_n);
+//  } else {
+//    val = 0;
+//  }
+//  return val;
+//}
+//
+///********************************************************************************
+// * functions for state_MEL_unPacker and state_MEL: state classes for MEL decoding
+// *******************************************************************************/
+// uint8_t state_MEL_unPacker::importMELbit() {
+//  if (bits == 0) {
+//    bits = (tmp == 0xFF) ? 7 : 8;
+//    if (pos < length) {
+//      tmp = *(buf + pos);  //+ modDcup(MEL_unPacker->pos, Lcup);
+//      //        MEL_unPacker->tmp = modDcup()
+//      pos++;
+//    } else {
+//      tmp = 0xFF;
+//    }
+//  }
+//  bits--;
+//  return (tmp >> bits) & 1;
+//}
+//
+// uint8_t state_MEL_decoder::decodeMELSym() {
+//  uint8_t eval;
+//  uint8_t bit;
+//  if (MEL_run == 0 && MEL_one == 0) {
+//    eval = this->MEL_E[MEL_k];
+//    bit  = MEL_unPacker->importMELbit();
+//    if (bit == 1) {
+//      MEL_run = static_cast<uint8_t>(1 << eval);
+//      MEL_k   = static_cast<uint8_t>((12 < MEL_k + 1) ? 12 : MEL_k + 1);
+//    } else {
+//      MEL_run = 0;
+//      while (eval > 0) {
+//        bit     = MEL_unPacker->importMELbit();
+//        MEL_run = static_cast<uint8_t>((MEL_run << 1) + bit);
+//        eval--;
+//      }
+//      MEL_k   = static_cast<uint8_t>((0 > MEL_k - 1) ? 0 : MEL_k - 1);
+//      MEL_one = 1;
+//    }
+//  }
+//  if (MEL_run > 0) {
+//    MEL_run--;
+//    return 0;
+//  } else {
+//    MEL_one = 0;
+//    return 1;
+//  }
+//}
+//
+///********************************************************************************
+// * functions for state_VLC: state class for VLC decoding
+// *******************************************************************************/
+//#ifndef ADVANCED
+// uint8_t state_VLC::importVLCBit() {
+//  uint8_t val;
+//  if (bits == 0) {
+//    if (pos >= rev_length) {
+//      tmp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
+//    } else {
+//      printf("ERROR: import VLCBits error\n");
+//      throw std::exception();
+//    }
+//    bits = 8;
+//    if (last > 0x8F && (tmp & 0x7F) == 0x7F) {
+//      bits = 7;  // bit-un-stuffing
+//    }
+//    last = tmp;
+//    // To prevent overflow of pos
+//    if (pos > 0) {
+//      pos--;
+//    }
+//  }
+//  val = tmp & 1;
+//  tmp >>= 1;
+//  bits--;
+//  return val;
+//}
+//#else
+// void state_VLC_dec::load_bytes() {
+//  uint64_t load_val = 0;
+//  int32_t new_bits  = 32;
+//  last              = buf[pos + 1];
+//  if (pos >= 3) {  // Common case; we have at least 4 bytes available
+//    load_val = buf[pos - 3];
+//    load_val = (load_val << 8) | buf[pos - 2];
+//    load_val = (load_val << 8) | buf[pos - 1];
+//    load_val = (load_val << 8) | buf[pos];
+//    load_val = (load_val << 8) | last;  // For stuffing bit detection
+//    pos -= 4;
+//  } else {
+//    if (pos >= 2) {
+//      load_val = buf[pos - 2];
+//    }
+//    if (pos >= 1) {
+//      load_val = (load_val << 8) | buf[pos - 1];
+//    }
+//    if (pos >= 0) {
+//      load_val = (load_val << 8) | buf[pos];
+//    }
+//    pos      = 0;
+//    load_val = (load_val << 8) | last;  // For stuffing bit detection
+//  }
+//  // Now remove any stuffing bits, shifting things down as we go
+//  if ((load_val & 0x7FFF000000) > 0x7F8F000000) {
+//    load_val &= 0x7FFFFFFFFF;
+//    new_bits--;
+//  }
+//  if ((load_val & 0x007FFF0000) > 0x007F8F0000) {
+//    load_val = (load_val & 0x007FFFFFFF) + ((load_val & 0xFF00000000) >> 1);
+//    new_bits--;
+//  }
+//  if ((load_val & 0x00007FFF00) > 0x00007F8F00) {
+//    load_val = (load_val & 0x00007FFFFF) + ((load_val & 0xFFFF000000) >> 1);
+//    new_bits--;
+//  }
+//  if ((load_val & 0x0000007FFF) > 0x0000007F8F) {
+//    load_val = (load_val & 0x0000007FFF) + ((load_val & 0xFFFFFF0000) >> 1);
+//    new_bits--;
+//  }
+//  load_val >>= 8;  // Shifts away the extra byte we imported
+//  Creg |= (load_val << ctreg);
+//  ctreg += new_bits;
+//}
+//
+// uint8_t state_VLC_dec::getVLCbit() {
+//  // "bits" is not actually bits, but a bit
+//  bits = (uint8_t)(Creg & 0x01);
+//  close32(1);
+//  return bits;
+//}
+//
+// void state_VLC_dec::close32(int32_t num_bits) {
+//  Creg >>= num_bits;
+//  ctreg -= num_bits;
+//  while (ctreg < 32) {
+//    load_bytes();
+//  }
+//}
+//#endif
+//
+//[[maybe_unused]] void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2],
+//                                                  uint8_t (&rho)[2], uint8_t (&emb_k)[2],
+//                                                  uint8_t (&emb_1)[2], const uint8_t &first_or_second,
+//                                                  const uint16_t *dec_CxtVLC_table) {
+//#ifndef ADVANCED
+//  uint8_t b_low = tmp;
+//  uint8_t b_upp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
+//  uint16_t word = (b_upp << bits) + b_low;
+//  uint8_t cwd   = word & 0x7F;
+//#else
+//  uint8_t cwd = Creg & 0x7f;
+//#endif
+//  uint16_t idx           = static_cast<uint16_t>(cwd + (context << 7));
+//  uint16_t value         = dec_CxtVLC_table[idx];
+//  u_off[first_or_second] = value & 1;
+//  // value >>= 1;
+//  // uint8_t len = value & 0x07;
+//  // value >>= 3;
+//  // rho[first_or_second] = value & 0x0F;
+//  // value >>= 4;
+//  // emb_k[first_or_second] = value & 0x0F;
+//  // value >>= 4;
+//  // emb_1[first_or_second] = value & 0x0F;
+//  uint8_t len            = static_cast<uint8_t>((value & 0x000F) >> 1);
+//  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+//  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+//  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+//
+//#ifndef ADVANCED
+//  for (int i = 0; i < len; i++) {
+//    importVLCBit();
+//  }
+//#else
+//  close32(len);
+//#endif
+//}
+//
+//[[maybe_unused]] uint8_t state_VLC_dec::decodeUPrefix() {
+//  if (getbitfunc == 1) {
+//    return 1;
+//  }
+//  if (getbitfunc == 1) {
+//    return 2;
+//  }
+//  if (getbitfunc == 1) {
+//    return 3;
+//  } else {
+//    return 5;
+//  }
+//}
+//
+//[[maybe_unused]] uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
+//  uint8_t bit, val;
+//  if (u_pfx < 3) {
+//    return 0;
+//  }
+//  val = getbitfunc;
+//  if (u_pfx == 3) {
+//    return val;
+//  }
+//  for (int i = 1; i < 5; i++) {
+//    bit = getbitfunc;
+//    val = static_cast<uint8_t>(val + (bit << i));
+//  }
+//  return val;
+//}
+//[[maybe_unused]] uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
+//  uint8_t bit, val;
+//  if (u_sfx < 28) {
+//    return 0;
+//  }
+//  val = getbitfunc;
+//  for (int i = 1; i < 4; i++) {
+//    bit = getbitfunc;
+//    val = static_cast<uint8_t>(val + (bit << i));
+//  }
+//  return val;
+//}
 /********************************************************************************
  * functions for SP_dec: state class for HT SigProp decoding
  *******************************************************************************/
@@ -408,27 +409,29 @@ uint8_t MR_dec::importMagRefBit() {
   return val;
 }
 
-auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec, const uint16_t &context,
-                       uint8_t (&u_off)[2], uint8_t (&rho)[2], uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
-                       const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table) {
-  uint8_t sym;
-  if (context == 0) {
-    sym = MEL_decoder.decodeMELSym();
-    if (sym == 0) {
-      rho[first_or_second] = u_off[first_or_second] = emb_k[first_or_second] = emb_1[first_or_second] = 0;
-      return;
-    }
-  }
-  uint32_t vlcval        = VLC_dec.fetch();
-  uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
-  u_off[first_or_second] = value & 1;
-  uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
-  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
-  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
-  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
-  VLC_dec.advance(len);
-  //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
-};
+//[[maybe_unused]] auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec,
+//                                        const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
+//                                        uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
+//                                        const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table)
+//                                        {
+//  uint8_t sym;
+//  if (context == 0) {
+//    sym = MEL_decoder.decodeMELSym();
+//    if (sym == 0) {
+//      rho[first_or_second] = u_off[first_or_second] = emb_k[first_or_second] = emb_1[first_or_second] = 0;
+//      return;
+//    }
+//  }
+//  uint32_t vlcval        = VLC_dec.fetch();
+//  uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
+//  u_off[first_or_second] = value & 1;
+//  uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
+//  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+//  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+//  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+//  VLC_dec.advance(len);
+//  //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
+//};
 
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> &MagSgn, MEL_dec &MEL,
                        rev_buf &VLC_dec) {
@@ -477,7 +480,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   for (int32_t q = 0; q < QW - 1; q += 2) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (context << 7)];
+    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
     if (context == 0) {
       mel_run -= 2;
       tv0 = (mel_run == -1) ? tv0 : 0;
@@ -494,7 +497,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto vm         = vld1q_s32(mask);
     auto vone       = vdupq_n_s32(1);
     vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
-#elif defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     // do nothing
 #else
     for (uint32_t i = 0; i < 4; i++) {
@@ -503,11 +506,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
     *rho_p++ = rho[Q0];
     // calculate context for the next quad
-    context = (rho[Q0] >> 1) | (rho[Q0] & 1);
+    context = static_cast<uint16_t>((rho[Q0] >> 1) | (rho[Q0] & 1));
 
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + (context << 7)];
+    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
     if (context == 0) {
       mel_run -= 2;
       tv1 = (mel_run == -1) ? tv1 : 0;
@@ -521,7 +524,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     auto v1 = vdupq_n_s32(rho[Q1]);
     vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
-#elif defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
     auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                    _mm256_set1_epi32(1));
@@ -533,7 +536,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
     *rho_p++ = rho[Q1];
     // calculate context for the next quad
-    context = (rho[Q1] >> 1) | (rho[Q1] & 1);
+    context = static_cast<uint16_t>((rho[Q1] >> 1) | (rho[Q1] & 1));
 
     vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
     u_off[0] = tv0 & 1;
@@ -592,11 +595,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     v0          = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k[Q0]), vm), vone);
     auto vsigma = vld1q_s32(sigma_quads);
-    vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q0])), v0));
+    vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q0])), v0));
     v0     = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k[Q1]), vm), vone);
     vsigma = vld1q_s32(sigma_quads + 4);
-    vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q1])), v0));
-#elif defined(__AVX2__)
+    vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q1])), v0));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     auto vemb_k =
         _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_k[0], emb_k[0], emb_k[0], emb_k[0],
                                                              emb_k[1], emb_k[1], emb_k[1], emb_k[1]),
@@ -617,7 +620,40 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       msval[i] = MagSgn.fetch();
       MagSgn.advance(m_quads[i]);
     }
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[0]), vm), vone);
+    auto v_m_quads = vld1q_u32(m_quads);
+    auto vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+    auto v_v_quads = vandq_u32(vld1q_u32(msval), vmask);
+    v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
+    vmask          = vmvnq_u32(vceqzq_u32(v_m_quads));
+    auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
+    v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+    v_mu           = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
+    v_mu           = vandq_u32(v_mu, vmask);
+    vst1q_u32(mu_quads, v_mu);
+    vst1q_u32(v_quads, v_v_quads);
+    vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
+    v_m_quads = vld1q_u32(m_quads + 4);
+    vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+    v_v_quads = vandq_u32(vld1q_u32(msval + 4), vmask);
+    v_v_quads = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
+    vmask     = vmvnq_u32(vceqzq_u32(v_m_quads));
+    v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
+    v_mu      = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+    v_mu      = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
+    v_mu      = vandq_u32(v_mu, vmask);
+    vst1q_u32(mu_quads + 4, v_mu);
+    vst1q_u32(v_quads + 4, v_v_quads);
+    *mp0++ = static_cast<int>(mu_quads[0]);
+    *mp0++ = static_cast<int>(mu_quads[2]);
+    *mp0++ = static_cast<int>(mu_quads[0 + 4]);
+    *mp0++ = static_cast<int>(mu_quads[2 + 4]);
+    *mp1++ = static_cast<int>(mu_quads[1]);
+    *mp1++ = static_cast<int>(mu_quads[3]);
+    *mp1++ = static_cast<int>(mu_quads[1 + 4]);
+    *mp1++ = static_cast<int>(mu_quads[3 + 4]);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     auto vknown_1 =
         _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_1[0], emb_1[0], emb_1[0], emb_1[0],
                                                              emb_1[1], emb_1[1], emb_1[1], emb_1[1]),
@@ -692,7 +728,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   if (QW % 2 == 1) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (context << 7)];
+    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
     if (context == 0) {
       mel_run -= 2;
       tv0 = (mel_run == -1) ? tv0 : 0;
@@ -711,7 +747,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto vm         = vld1q_s32(mask);
     auto vone       = vdupq_n_s32(1);
     vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
-#elif defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     for (uint32_t i = 0; i < 4; i++) {
       sigma_quads[i] = (rho[Q0] >> i) & 1;
     }
@@ -738,8 +774,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     v0          = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k[Q0]), vm), vone);
     auto vsigma = vld1q_s32(sigma_quads);
-    vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q0])), v0));
-#elif defined(__AVX2__)
+    vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q0])), v0));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     for (uint32_t i = 0; i < 4; i++) {
       m_quads[i] = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
     }
@@ -799,7 +835,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (context1 << 7)];
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context1 << 7))];
       if (context1 == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -821,7 +857,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vm         = vld1q_s32(mask);
       auto vone       = vdupq_n_s32(1);
       vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
-#elif defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       // do nothing
 #else
       for (uint32_t i = 0; i < 4; i++) {
@@ -836,7 +872,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       context2 |= (((rho[Q0] >> 2) & 1) | ((rho[Q0] >> 3) & 1)) << 1;
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
-      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (context2 << 7)];
+      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context2 << 7))];
       if (context2 == 0) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
@@ -851,7 +887,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       auto v1 = vdupq_n_s32(rho[Q1]);
       vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
-#elif defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
       auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                      _mm256_set1_epi32(1));
@@ -891,11 +927,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         u[Q1] = 0;
       }
 
-      gamma[Q0]     = (popcount32(rho[Q0]) < 2) ? 0 : 1;
-      gamma[Q1]     = (popcount32(rho[Q1]) < 2) ? 0 : 1;
+      gamma[Q0] = (popcount32(static_cast<uint32_t>(rho[Q0])) < 2) ? 0 : 1;
+      gamma[Q1] = (popcount32(static_cast<uint32_t>(rho[Q1])) < 2) ? 0 : 1;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      int32_t Emax0 = vmaxvq_s32(vld1q_s32(E_p + 2 * qx - 1));
+      int32_t Emax1 = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 1) - 1));
+#else
       int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
       int32_t Emax1 =
           find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
+#endif
       if (qx > 0) {
         E_p[2 * qx - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
       }
@@ -907,11 +948,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       v0          = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k[Q0]), vm), vone);
       auto vsigma = vld1q_s32(sigma_quads);
-      vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q0])), v0));
+      vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q0])), v0));
       v0     = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k[Q1]), vm), vone);
       vsigma = vld1q_s32(sigma_quads + 4);
-      vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q1])), v0));
-#elif defined(__AVX2__)
+      vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q1])), v0));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       auto vemb_k =
           _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_k[0], emb_k[0], emb_k[0], emb_k[0],
                                                                emb_k[1], emb_k[1], emb_k[1], emb_k[1]),
@@ -932,7 +973,40 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         msval[i] = MagSgn.fetch();
         MagSgn.advance(m_quads[i]);
       }
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[0]), vm), vone);
+      auto v_m_quads = vld1q_u32(m_quads);
+      auto vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+      auto v_v_quads = vandq_u32(vld1q_u32(msval), vmask);
+      v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
+      vmask          = vmvnq_u32(vceqzq_u32(v_m_quads));
+      auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
+      v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+      v_mu           = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
+      v_mu           = vandq_u32(v_mu, vmask);
+      vst1q_u32(mu_quads, v_mu);
+      vst1q_u32(v_quads, v_v_quads);
+      vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
+      v_m_quads = vld1q_u32(m_quads + 4);
+      vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+      v_v_quads = vandq_u32(vld1q_u32(msval + 4), vmask);
+      v_v_quads = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
+      vmask     = vmvnq_u32(vceqzq_u32(v_m_quads));
+      v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
+      v_mu      = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+      v_mu      = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
+      v_mu      = vandq_u32(v_mu, vmask);
+      vst1q_u32(mu_quads + 4, v_mu);
+      vst1q_u32(v_quads + 4, v_v_quads);
+      *mp0++ = static_cast<int>(mu_quads[0]);
+      *mp0++ = static_cast<int>(mu_quads[2]);
+      *mp0++ = static_cast<int>(mu_quads[0 + 4]);
+      *mp0++ = static_cast<int>(mu_quads[2 + 4]);
+      *mp1++ = static_cast<int>(mu_quads[1]);
+      *mp1++ = static_cast<int>(mu_quads[3]);
+      *mp1++ = static_cast<int>(mu_quads[1 + 4]);
+      *mp1++ = static_cast<int>(mu_quads[3 + 4]);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       auto vknown_1 =
           _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_1[0], emb_1[0], emb_1[0], emb_1[0],
                                                                emb_1[1], emb_1[1], emb_1[1], emb_1[1]),
@@ -1022,7 +1096,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (context1 << 7)];
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context1 << 7))];
       if (context1 == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -1044,7 +1118,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vm         = vld1q_s32(mask);
       auto vone       = vdupq_n_s32(1);
       vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
-#elif defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i] = (rho[Q0] >> i) & 1;
       }
@@ -1065,16 +1139,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         u[Q0] = 0;
       }
 
-      gamma[Q0]     = (popcount32(rho[Q0]) < 2) ? 0 : 1;
+      gamma[Q0] = (popcount32(static_cast<uint32_t>(rho[Q0])) < 2) ? 0 : 1;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      int32_t Emax0 = vmaxvq_s32(vld1q_s32(E_p + 2 * qx - 1));
+#else
       int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
-      kappa[Q0]     = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
-      U[Q0]         = kappa[Q0] + u[Q0];
+#endif
+      kappa[Q0] = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
+      U[Q0]     = kappa[Q0] + u[Q0];
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       v0          = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k[Q0]), vm), vone);
       auto vsigma = vld1q_s32(sigma_quads);
-      vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_s32(U[Q0])), v0));
-#elif defined(__AVX2__)
+      vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q0])), v0));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       for (uint32_t i = 0; i < 4; i++) {
         m_quads[i] = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
       }
@@ -1241,7 +1319,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
-void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) {
+void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
   /* ready for ROI adjustment and dequantization */
 
   // number of decoded magnitude bit‐planes
@@ -1703,7 +1781,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   // number of placeholder pass
   uint8_t P0 = 0;
   // length of HT Cleanup segment
-  uint32_t Lcup = 0;
+  int32_t Lcup = 0;
   // length of HT Refinement segment
   uint32_t Lref = 0;
   // number of HT Sets preceding the given(this) HT Set
@@ -1743,7 +1821,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
         all_segments.push_back(static_cast<uint8_t>(i));
       }
     }
-    Lcup += block->pass_length[all_segments[0]];
+    Lcup += static_cast<int32_t>(block->pass_length[all_segments[0]]);
     if (Lcup < 2) {
       printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
       return false;
@@ -1765,7 +1843,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       return false;
     }
     // Suffix length (=MEL + VLC) of HT Cleanup pass
-    const uint32_t Scup = static_cast<uint32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
+    const int32_t Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
     if (Scup < 2 || Scup > Lcup || Scup > 4079) {
       printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
       return false;

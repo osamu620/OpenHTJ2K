@@ -45,7 +45,7 @@
 
 void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   const uint32_t height = this->size.y;
-  const uint32_t width  = this->size.x + (this->size.x % 2);
+  //  const uint32_t width  = this->size.x + (this->size.x % 2);
   const uint32_t stride = this->band_stride;
   const int32_t pshift  = (refsegment) ? 1 : 0;
   const int32_t pLSB    = (1 << (pshift - 1));
@@ -414,7 +414,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                        uint8_t *const rho_q) {
 // This function shall be called on the assumption that there are two quads
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  const uint32_t QWx2                = block->size.x + block->size.x % 2;
+  //  const uint32_t QWx2                = block->size.x + block->size.x % 2;
   alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
   uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1U) * (block->blkstate_stride) + 2 * qx + 1;
   uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2U) * (block->blkstate_stride) + 2 * qx + 1;
