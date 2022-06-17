@@ -612,37 +612,34 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
 
     // recoverMagSgnValue
-#if defined(OPENHTJ2K_TRY_AVX222) && defined(__AVX2__)
     alignas(32) uint32_t msval[8];
     for (uint32_t i = 0; i < 8; i++) {
       msval[i] = MagSgn.fetch();
       MagSgn.advance(m_quads[i]);
     }
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     auto vknown_1 =
         _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_1[0], emb_1[0], emb_1[0], emb_1[0],
                                                              emb_1[1], emb_1[1], emb_1[1], emb_1[1]),
                                            _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                          _mm256_set1_epi32(1));
-    auto v_mquads = _mm256_load_si256((__m256i *)m_quads);
-    auto vm_mask =
-        _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_mquads), _mm256_set1_epi32(1));
-    auto vvq  = _mm256_and_si256(_mm256_load_si256((__m256i *)msval), vm_mask);
-    vvq       = _mm256_or_si256(vvq, _mm256_sllv_epi32(vknown_1, v_mquads));
-    vm_mask   = _mm256_xor_si256(_mm256_cmpeq_epi32(v_mquads, _mm256_setzero_si256()),
-                                 _mm256_set1_epi32(0xFFFFFFFF));
-    auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(vvq, 1), _mm256_set1_epi32(1));
-    v_mu      = _mm256_slli_epi32(v_mu, pLSB);
-    v_mu      = _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(vvq, _mm256_set1_epi32(1)), 31));
-    v_mu      = _mm256_and_si256(v_mu, vm_mask);
+    auto v_m_quads = _mm256_load_si256((__m256i *)m_quads);
+    auto vmask = _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
+    auto v_v_quads = _mm256_and_si256(_mm256_load_si256((__m256i *)msval), vmask);
+    v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
+    vmask          = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()),
+                                      _mm256_set1_epi32(0xFFFFFFFF));
+    auto v_mu      = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
+    v_mu           = _mm256_slli_epi32(v_mu, pLSB);
+    v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
+    v_mu = _mm256_and_si256(v_mu, vmask);
     _mm256_store_si256((__m256i *)mu_quads, v_mu);
+    _mm256_store_si256((__m256i *)v_quads, v_v_quads);
 #else
     for (uint32_t i = 0; i < 4; i++) {
-      uint32_t msval = MagSgn.fetch();
-      known_1[Q0]    = (emb_1[Q0] >> i) & 1;
-      v_quads[i]     = msval & ((1 << m_quads[i]) - 1);
+      known_1[Q0] = (emb_1[Q0] >> i) & 1;
+      v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
       v_quads[i] |= known_1[Q0] << m_quads[i];
-      MagSgn.advance(m_quads[i]);
-
       if (m_quads[i] != 0) {
         mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
         mu_quads[i] <<= pLSB;
@@ -652,12 +649,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       }
     }
     for (uint32_t i = 0; i < 4; i++) {
-      uint32_t msval = MagSgn.fetch();
       known_1[Q1]    = (emb_1[Q1] >> i) & 1;
-      v_quads[i + 4] = msval & ((1 << m_quads[i + 4]) - 1);
+      v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1);
       v_quads[i + 4] |= known_1[Q1] << m_quads[i + 4];
-      MagSgn.advance(m_quads[i + 4]);
-
       if (m_quads[i + 4] != 0) {
         mu_quads[i + 4] = static_cast<uint32_t>((v_quads[i + 4] >> 1) + 1);
         mu_quads[i + 4] <<= pLSB;
@@ -667,6 +661,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       }
     }
 #endif
+
     *sp0++ = (rho[Q0] >> 0) & 1;
     *sp0++ = (rho[Q0] >> 2) & 1;
     *sp0++ = (rho[Q1] >> 0) & 1;
@@ -938,13 +933,36 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
 
       // recoverMagSgnValue
-      for (uint32_t i = 0; i < 4; i++) {
-        uint32_t msval = MagSgn.fetch();
-        known_1[Q0]    = (emb_1[Q0] >> i) & 1;
-        v_quads[i]     = msval & ((1 << m_quads[i]) - 1);
-        v_quads[i] |= known_1[Q0] << m_quads[i];
+      alignas(32) uint32_t msval[8];
+      for (uint32_t i = 0; i < 8; i++) {
+        msval[i] = MagSgn.fetch();
         MagSgn.advance(m_quads[i]);
-
+      }
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      auto vknown_1 =
+          _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_1[0], emb_1[0], emb_1[0], emb_1[0],
+                                                               emb_1[1], emb_1[1], emb_1[1], emb_1[1]),
+                                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                           _mm256_set1_epi32(1));
+      auto v_m_quads = _mm256_load_si256((__m256i *)m_quads);
+      auto vmask =
+          _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
+      auto v_v_quads = _mm256_and_si256(_mm256_load_si256((__m256i *)msval), vmask);
+      v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
+      vmask          = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()),
+                                        _mm256_set1_epi32(0xFFFFFFFF));
+      auto v_mu      = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
+      v_mu           = _mm256_slli_epi32(v_mu, pLSB);
+      v_mu =
+          _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
+      v_mu = _mm256_and_si256(v_mu, vmask);
+      _mm256_store_si256((__m256i *)mu_quads, v_mu);
+      _mm256_store_si256((__m256i *)v_quads, v_v_quads);
+#else
+      for (uint32_t i = 0; i < 4; i++) {
+        known_1[Q0] = (emb_1[Q0] >> i) & 1;
+        v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
+        v_quads[i] |= known_1[Q0] << m_quads[i];
         if (m_quads[i] != 0) {
           mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
           mu_quads[i] <<= pLSB;
@@ -954,11 +972,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         }
       }
       for (uint32_t i = 0; i < 4; i++) {
-        uint32_t msval = MagSgn.fetch();
         known_1[Q1]    = (emb_1[Q1] >> i) & 1;
-        v_quads[i + 4] = msval & ((1 << m_quads[i + 4]) - 1);
+        v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1);
         v_quads[i + 4] |= known_1[Q1] << m_quads[i + 4];
-        MagSgn.advance(m_quads[i + 4]);
         if (m_quads[i + 4] != 0) {
           mu_quads[i + 4] = static_cast<uint32_t>((v_quads[i + 4] >> 1) + 1);
           mu_quads[i + 4] <<= pLSB;
@@ -967,6 +983,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
           mu_quads[i + 4] = 0;
         }
       }
+#endif
 
       *sp0++ = (rho[Q0] >> 0) & 1;
       *sp0++ = (rho[Q0] >> 2) & 1;
