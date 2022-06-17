@@ -633,8 +633,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     v_mu           = _mm256_slli_epi32(v_mu, pLSB);
     v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
     v_mu = _mm256_and_si256(v_mu, vmask);
-    _mm256_store_si256((__m256i *)mu_quads, v_mu);
+    //    _mm256_store_si256((__m256i *)mu_quads, v_mu);
     _mm256_store_si256((__m256i *)v_quads, v_v_quads);
+    // 0, 2, 4, 6, 1, 3, 5, 7
+    v_mu = _mm256_permutevar8x32_epi32(v_mu, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+    _mm_store_si128((__m128i *)mp0, _mm256_extracti128_si256(v_mu, 0));
+    _mm_store_si128((__m128i *)mp1, _mm256_extracti128_si256(v_mu, 1));
+    mp0 += 4;
+    mp1 += 4;
 #else
     for (uint32_t i = 0; i < 4; i++) {
       known_1[Q0] = (emb_1[Q0] >> i) & 1;
@@ -660,26 +666,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         mu_quads[i + 4] = 0;
       }
     }
-#endif
-
-    *sp0++ = (rho[Q0] >> 0) & 1;
-    *sp0++ = (rho[Q0] >> 2) & 1;
-    *sp0++ = (rho[Q1] >> 0) & 1;
-    *sp0++ = (rho[Q1] >> 2) & 1;
-    *sp1++ = (rho[Q0] >> 1) & 1;
-    *sp1++ = (rho[Q0] >> 3) & 1;
-    *sp1++ = (rho[Q1] >> 1) & 1;
-    *sp1++ = (rho[Q1] >> 3) & 1;
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    // 0, 1, 2, 3, 4, 5, 6, 7
-    auto vm = _mm256_loadu_si256((__m256i *)mu_quads);
-    // 0, 2, 4, 6, 1, 3, 5, 7
-    vm = _mm256_permutevar8x32_epi32(vm, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-    _mm_store_si128((__m128i *)mp0, _mm256_extracti128_si256(vm, 0));
-    _mm_store_si128((__m128i *)mp1, _mm256_extracti128_si256(vm, 1));
-    mp0 += 4;
-    mp1 += 4;
-#else
     *mp0++ = static_cast<int>(mu_quads[0]);
     *mp0++ = static_cast<int>(mu_quads[2]);
     *mp0++ = static_cast<int>(mu_quads[0 + 4]);
@@ -689,6 +675,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     *mp1++ = static_cast<int>(mu_quads[1 + 4]);
     *mp1++ = static_cast<int>(mu_quads[3 + 4]);
 #endif
+    *sp0++ = (rho[Q0] >> 0) & 1;
+    *sp0++ = (rho[Q0] >> 2) & 1;
+    *sp0++ = (rho[Q1] >> 0) & 1;
+    *sp0++ = (rho[Q1] >> 2) & 1;
+    *sp1++ = (rho[Q0] >> 1) & 1;
+    *sp1++ = (rho[Q0] >> 3) & 1;
+    *sp1++ = (rho[Q1] >> 1) & 1;
+    *sp1++ = (rho[Q1] >> 3) & 1;
     *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
     *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
     *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
@@ -956,8 +950,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       v_mu =
           _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
       v_mu = _mm256_and_si256(v_mu, vmask);
-      _mm256_store_si256((__m256i *)mu_quads, v_mu);
+      //      _mm256_store_si256((__m256i *)mu_quads, v_mu);
       _mm256_store_si256((__m256i *)v_quads, v_v_quads);
+      // 0, 2, 4, 6, 1, 3, 5, 7
+      v_mu = _mm256_permutevar8x32_epi32(v_mu, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
+      _mm_store_si128((__m128i *)mp0, _mm256_extracti128_si256(v_mu, 0));
+      _mm_store_si128((__m128i *)mp1, _mm256_extracti128_si256(v_mu, 1));
+      mp0 += 4;
+      mp1 += 4;
 #else
       for (uint32_t i = 0; i < 4; i++) {
         known_1[Q0] = (emb_1[Q0] >> i) & 1;
@@ -983,26 +983,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
           mu_quads[i + 4] = 0;
         }
       }
-#endif
-
-      *sp0++ = (rho[Q0] >> 0) & 1;
-      *sp0++ = (rho[Q0] >> 2) & 1;
-      *sp0++ = (rho[Q1] >> 0) & 1;
-      *sp0++ = (rho[Q1] >> 2) & 1;
-      *sp1++ = (rho[Q0] >> 1) & 1;
-      *sp1++ = (rho[Q0] >> 3) & 1;
-      *sp1++ = (rho[Q1] >> 1) & 1;
-      *sp1++ = (rho[Q1] >> 3) & 1;
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      // 0, 1, 2, 3, 4, 5, 6, 7
-      auto vm = _mm256_loadu_si256((__m256i *)mu_quads);
-      // 0, 2, 4, 6, 1, 3, 5, 7
-      vm = _mm256_permutevar8x32_epi32(vm, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-      _mm_store_si128((__m128i *)mp0, _mm256_extracti128_si256(vm, 0));
-      _mm_store_si128((__m128i *)mp1, _mm256_extracti128_si256(vm, 1));
-      mp0 += 4;
-      mp1 += 4;
-#else
       *mp0++ = static_cast<int>(mu_quads[0]);
       *mp0++ = static_cast<int>(mu_quads[2]);
       *mp0++ = static_cast<int>(mu_quads[0 + 4]);
@@ -1012,6 +992,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       *mp1++ = static_cast<int>(mu_quads[1 + 4]);
       *mp1++ = static_cast<int>(mu_quads[3 + 4]);
 #endif
+      *sp0++ = (rho[Q0] >> 0) & 1;
+      *sp0++ = (rho[Q0] >> 2) & 1;
+      *sp0++ = (rho[Q1] >> 0) & 1;
+      *sp0++ = (rho[Q1] >> 2) & 1;
+      *sp1++ = (rho[Q0] >> 1) & 1;
+      *sp1++ = (rho[Q0] >> 3) & 1;
+      *sp1++ = (rho[Q1] >> 1) & 1;
+      *sp1++ = (rho[Q1] >> 3) & 1;
+
       rho_p[qx]       = rho[Q0];
       E_p[2 * qx]     = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
       E_p[2 * qx + 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
