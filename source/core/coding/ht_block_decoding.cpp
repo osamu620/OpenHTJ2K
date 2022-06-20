@@ -905,37 +905,53 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       }
 #endif
 
-      u_off[0] = tv0 & 1;
-      u_off[1] = tv1 & 1;
+      u_off[0]     = tv0 & 1;
+      u_off[1]     = tv1 & 1;
+      uint32_t idx = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6) + (u_off[1] << 7);
 
-      if (u_off[Q0] == 1 && u_off[Q1] == 1) {
-        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
-        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-        //        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
-        VLC_dec.decodeUVLC(u[0], u[1]);
-      } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
-        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-        VLC_dec.decodeUVLC1(u[0]);
-        u[Q1] = 0;
-      } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
-        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
-        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-        //        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
-        VLC_dec.decodeUVLC1(u[1]);
-        u[Q0] = 0;
-      } else {
-        u[Q0] = 0;
-        u[Q1] = 0;
-      }
+      uint16_t uvlc_result = uvlc_dec_1[idx];
+      // remove total prefix length
+      vlcval = VLC_dec.advance(uvlc_result & 0x7);
+      uvlc_result >>= 3;
+      // extract suffixes for quad 0 and 1
+      uint32_t len = uvlc_result & 0xF;          // suffix length for 2 quads (up to 10 = 5 + 5)
+      uint32_t tmp = vlcval & ((1 << len) - 1);  // suffix value for 2 quads
+      vlcval       = VLC_dec.advance(len);
+      uvlc_result >>= 4;
+      // quad 0 length
+      len = uvlc_result & 0x7;  // quad 0 suffix length
+      uvlc_result >>= 3;
+      u[0] = (uint16_t)((uvlc_result & 7) + (tmp & ~(0xFU << len)));
+      u[1] = (uint16_t)((uvlc_result >> 3) + (tmp >> len));
+
+      //      if (u_off[Q0] == 1 && u_off[Q1] == 1) {
+      //        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+      //        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+      //        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+      //        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+      //        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+      //        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+      //        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+      //        //        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+      //        VLC_dec.decodeUVLC(u[0], u[1]);
+      //      } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
+      //        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+      //        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+      //        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+      //        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+      //        VLC_dec.decodeUVLC1(u[0]);
+      //        u[Q1] = 0;
+      //      } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
+      //        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+      //        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+      //        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+      //        //        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+      //        VLC_dec.decodeUVLC1(u[1]);
+      //        u[Q0] = 0;
+      //      } else {
+      //        u[Q0] = 0;
+      //        u[Q1] = 0;
+      //      }
 
       gamma[Q0] = (popcount32(static_cast<uint32_t>(rho[Q0])) < 2) ? 0 : 1;
       gamma[Q1] = (popcount32(static_cast<uint32_t>(rho[Q1])) < 2) ? 0 : 1;
