@@ -542,59 +542,83 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     u_off[0] = tv0 & 1;
     u_off[1] = tv1 & 1;
 
+    uint32_t mel_offset = 0;
     if (u_off[Q0] == 1 && u_off[Q1] == 1) {
       mel_run -= 2;
-      bool mel_cond = (mel_run == -1);
+      mel_offset = (mel_run == -1) ? 0x40 : 0;
       if (mel_run < 0) {
         mel_run = MEL.get_run();
       }
-      if (mel_cond) {
-        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
-        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-        //        u[Q0]     = 2 + u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-        //        u[Q1]     = 2 + u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
-        VLC_dec.decodeUVLC(u[0], u[1]);
-        u[0] += 2;
-        u[1] += 2;
-      } else {
-        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        if (u_pfx[Q0] > 2) {
-          u[Q1]     = VLC_dec.importVLCBit() + 1;  // block->VLC->importVLCBit() + 1;
-          u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-          u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        } else {
-          u_pfx[Q1] = VLC_dec.decodeUPrefix();
-          u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-          u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-          u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-          u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-          u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
-        }
-        u[Q0] = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-      }
-    } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
-      //      u_pfx[Q0] = VLC_dec.decodeUPrefix();
-      //      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-      //      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-      //      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-      VLC_dec.decodeUVLC1(u[0]);
-      u[Q1] = 0;
-    } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
-      //      u_pfx[Q1] = VLC_dec.decodeUPrefix();
-      //      u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-      //      u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-      //      u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
-      VLC_dec.decodeUVLC1(u[1]);
-      u[Q0] = 0;
-
-    } else {
-      u[Q0] = 0;
-      u[Q1] = 0;
     }
+    uint32_t idx         = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6) + (u_off[1] << 7) + mel_offset;
+    uint16_t uvlc_result = uvlc_dec_0[idx];
+    // remove total prefix length
+    vlcval = VLC_dec.advance(uvlc_result & 0x7);
+    uvlc_result >>= 3;
+    // extract suffixes for quad 0 and 1
+    uint32_t len = uvlc_result & 0xF;          // suffix length for 2 quads (up to 10 = 5 + 5)
+    uint32_t tmp = vlcval & ((1 << len) - 1);  // suffix value for 2 quads
+    vlcval       = VLC_dec.advance(len);
+    uvlc_result >>= 4;
+    // quad 0 length
+    len = uvlc_result & 0x7;  // quad 0 suffix length
+    uvlc_result >>= 3;
+    u[0] = (uint16_t)((uvlc_result & 7) + (tmp & ~(0xFFU << len)));
+    u[1] = (uint16_t)((uvlc_result >> 3) + (tmp >> len));
+
+    //    if (u_off[Q0] == 1 && u_off[Q1] == 1) {
+    //      mel_run -= 2;
+    //      bool mel_cond = (mel_run == -1);
+    //      if (mel_run < 0) {
+    //        mel_run = MEL.get_run();
+    //      }
+    //      if (mel_cond) {
+    //        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+    //        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+    //        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+    //        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+    //        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+    //        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+    //        //        u[Q0]     = 2 + u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+    //        //        u[Q1]     = 2 + u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+    //        VLC_dec.decodeUVLC(u[0], u[1]);
+    //        u[0] += 2;
+    //        u[1] += 2;
+    //      } else {
+    //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+    //        if (u_pfx[Q0] > 2) {
+    //          u[Q1]     = VLC_dec.importVLCBit() + 1;  // block->VLC->importVLCBit() + 1;
+    //          u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+    //          u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+    //        } else {
+    //          u_pfx[Q1] = VLC_dec.decodeUPrefix();
+    //          u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+    //          u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+    //          u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+    //          u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+    //          u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+    //        }
+    //        u[Q0] = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+    //      }
+    //    } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
+    //      //      u_pfx[Q0] = VLC_dec.decodeUPrefix();
+    //      //      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+    //      //      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+    //      //      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+    //      VLC_dec.decodeUVLC1(u[0]);
+    //      u[Q1] = 0;
+    //    } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
+    //      //      u_pfx[Q1] = VLC_dec.decodeUPrefix();
+    //      //      u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+    //      //      u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+    //      //      u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+    //      VLC_dec.decodeUVLC1(u[1]);
+    //      u[Q0] = 0;
+    //
+    //    } else {
+    //      u[Q0] = 0;
+    //      u[Q1] = 0;
+    //    }
 
     U[Q0] = kappa[Q0] + u[Q0];
     U[Q1] = kappa[Q1] + u[Q1];
