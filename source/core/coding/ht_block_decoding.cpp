@@ -549,14 +549,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         mel_run = MEL.get_run();
       }
       if (mel_cond) {
-        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        u_pfx[Q1] = VLC_dec.decodeUPrefix();
-        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-        u[Q0]     = 2 + u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-        u[Q1]     = 2 + u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+        //        u[Q0]     = 2 + u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        //        u[Q1]     = 2 + u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+        VLC_dec.decodeUVLC(u[0], u[1]);
+        u[0] += 2;
+        u[1] += 2;
       } else {
         u_pfx[Q0] = VLC_dec.decodeUPrefix();
         if (u_pfx[Q0] > 2) {
@@ -574,17 +577,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         u[Q0] = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
       }
     } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
-      u_pfx[Q0] = VLC_dec.decodeUPrefix();
-      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-      u[Q1]     = 0;
+      //      u_pfx[Q0] = VLC_dec.decodeUPrefix();
+      //      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+      //      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+      //      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+      VLC_dec.decodeUVLC1(u[0]);
+      u[Q1] = 0;
     } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
-      u_pfx[Q1] = VLC_dec.decodeUPrefix();
-      u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-      u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-      u[Q0]     = 0;
-      u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+      //      u_pfx[Q1] = VLC_dec.decodeUPrefix();
+      //      u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+      //      u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+      //      u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+      VLC_dec.decodeUVLC1(u[1]);
+      u[Q0] = 0;
+
     } else {
       u[Q0] = 0;
       u[Q1] = 0;
@@ -761,10 +767,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     u_off[0] = tv0 & 1;
 
     if (u_off[Q0] == 1) {
-      u_pfx[Q0] = VLC_dec.decodeUPrefix();
-      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+      //      u_pfx[Q0] = VLC_dec.decodeUPrefix();
+      //      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+      //      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+      //      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+      VLC_dec.decodeUVLC1(u[0]);
     } else {
       u[Q0] = 0;
     }
@@ -902,26 +909,29 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       u_off[1] = tv1 & 1;
 
       if (u_off[Q0] == 1 && u_off[Q1] == 1) {
-        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        u_pfx[Q1] = VLC_dec.decodeUPrefix();
-        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        //        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+        VLC_dec.decodeUVLC(u[0], u[1]);
       } else if (u_off[Q0] == 1 && u_off[Q1] == 0) {
-        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-        u[Q1]     = 0;
+        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        VLC_dec.decodeUVLC1(u[0]);
+        u[Q1] = 0;
       } else if (u_off[Q0] == 0 && u_off[Q1] == 1) {
-        u_pfx[Q1] = VLC_dec.decodeUPrefix();
-        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
-        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
-        u[Q0]     = 0;
-        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+        //        u_pfx[Q1] = VLC_dec.decodeUPrefix();
+        //        u_sfx[Q1] = VLC_dec.decodeUSuffix(u_pfx[Q1]);
+        //        u_ext[Q1] = VLC_dec.decodeUExtension(u_sfx[Q1]);
+        //        u[Q1]     = u_pfx[Q1] + u_sfx[Q1] + (u_ext[Q1] << 2);
+        VLC_dec.decodeUVLC1(u[1]);
+        u[Q0] = 0;
       } else {
         u[Q0] = 0;
         u[Q1] = 0;
@@ -1131,10 +1141,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       u_off[0] = tv0 & 1;
 
       if (u_off[Q0] == 1) {
-        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
+        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
+        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
+        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
+        VLC_dec.decodeUVLC1(u[0]);
       } else {
         u[Q0] = 0;
       }
