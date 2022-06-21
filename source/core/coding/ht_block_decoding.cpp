@@ -488,9 +488,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         mel_run = MEL.get_run();
       }
     }
+
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    rho[0]   = _pext_u32(tv0, 0x00F0);
+    emb_k[0] = _pext_u32(tv0, 0x0F00);
+    emb_1[0] = _pext_u32(tv0, 0xF000);
+#else
     rho[0]   = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
     emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
     emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+#endif
+
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     int32_t mask[4] = {1, 2, 4, 8};
     auto v0         = vdupq_n_s32(rho[Q0]);
@@ -518,9 +526,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         mel_run = MEL.get_run();
       }
     }
-    rho[1]   = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
-    emb_k[1] = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
-    emb_1[1] = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    rho[1]   = _pext_u32(tv1, 0x00F0);
+    emb_k[1] = _pext_u32(tv1, 0x0F00);
+    emb_1[1] = _pext_u32(tv1, 0xF000);
+#else
+    rho[1]    = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
+    emb_k[1]  = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
+    emb_1[1]  = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+#endif
+
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     auto v1 = vdupq_n_s32(rho[Q1]);
     vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
@@ -903,10 +919,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
           mel_run = MEL.get_run();
         }
       }
-      rho[0]   = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      rho[0]   = _pext_u32(tv0, 0x00F0);
+      emb_k[0] = _pext_u32(tv0, 0x0F00);
+      emb_1[0] = _pext_u32(tv0, 0xF000);
+#else
+      rho[0] = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
       emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
       emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
-      vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+#endif
+      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
       // if (qx > 0) {
       rho_p[qx - 1] = rho[Q1];
       // }
@@ -940,10 +962,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
           mel_run = MEL.get_run();
         }
       }
-      rho[1]   = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      rho[1]   = _pext_u32(tv1, 0x00F0);
+      emb_k[1] = _pext_u32(tv1, 0x0F00);
+      emb_1[1] = _pext_u32(tv1, 0xF000);
+#else
+      rho[1] = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
       emb_k[1] = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
       emb_1[1] = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
-      vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+#endif
+      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       auto v1 = vdupq_n_s32(rho[Q1]);
       vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
