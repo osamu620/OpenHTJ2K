@@ -49,7 +49,7 @@
   #include <x86intrin.h>
 #endif
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && (__GNUC__ < 10)
 static inline void _mm256_storeu2_m128i(__m128i_u* __addr_hi, __m128i_u* __addr_lo, __m256i __a) {
   __m128i __v128;
 
@@ -58,8 +58,8 @@ static inline void _mm256_storeu2_m128i(__m128i_u* __addr_hi, __m128i_u* __addr_
   __v128 = _mm256_extractf128_si256(__a, 1);
   _mm_storeu_si128(__addr_hi, __v128);
 }
-
 #endif
+
 template <class T>
 static inline T find_max(T x0, T x1, T x2, T x3) {
   T v0 = ((x0 > x1) ? x0 : x1);
