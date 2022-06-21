@@ -738,14 +738,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     *mp1++ = static_cast<int>(mu_quads[1 + 4]);
     *mp1++ = static_cast<int>(mu_quads[3 + 4]);
 #endif
-    *sp0++    = (rho[Q0] >> 0) & 1;
-    *sp0++    = (rho[Q0] >> 2) & 1;
-    *sp0++    = (rho[Q1] >> 0) & 1;
-    *sp0++    = (rho[Q1] >> 2) & 1;
-    *sp1++    = (rho[Q0] >> 1) & 1;
-    *sp1++    = (rho[Q0] >> 3) & 1;
-    *sp1++    = (rho[Q1] >> 1) & 1;
-    *sp1++    = (rho[Q1] >> 3) & 1;
+    *sp0++ = (rho[Q0] >> 0) & 1;
+    *sp0++ = (rho[Q0] >> 2) & 1;
+    *sp0++ = (rho[Q1] >> 0) & 1;
+    *sp0++ = (rho[Q1] >> 2) & 1;
+    *sp1++ = (rho[Q0] >> 1) & 1;
+    *sp1++ = (rho[Q0] >> 3) & 1;
+    *sp1++ = (rho[Q1] >> 1) & 1;
+    *sp1++ = (rho[Q1] >> 3) & 1;
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     v_v_quads = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt2_epi32(v_v_quads));
     v_v_quads = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
     _mm256_zeroupper();
@@ -759,10 +760,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     //     printf("!");
     //   }
     // }
-    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
-    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
-    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
-    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+#else
+    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
+    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
+    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
+    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+#endif
   }
   // if QW is odd number ..
   if (QW % 2 == 1) {

@@ -365,10 +365,10 @@ class rev_buf {
 
   inline uint8_t decodeUVLC(uint32_t &u0, uint32_t &u1) {
     constexpr uint8_t tp[8]        = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
-                               3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
+                                      3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
     constexpr uint8_t ts[6]        = {0, 0, 0, 1, 5, 5};
     constexpr uint8_t te[32]       = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
-                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
+                                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
     uint32_t total_bits_to_advance = 0, b0, b1, c0, c1, mask;
     uint32_t cwd                   = fetch();
     uint32_t u_pfx0, u_pfx1, u_sfx0, u_sfx1, u_ext0, u_ext1;
