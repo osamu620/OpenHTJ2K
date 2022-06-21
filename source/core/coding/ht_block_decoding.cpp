@@ -448,13 +448,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   auto sp1 = block->block_states.get() + 1 + 2 * block->blkstate_stride;
 
   alignas(32) int32_t rho[2];
-  alignas(32) uint8_t u_off[2];
-  alignas(32) uint8_t emb_k[2];
-  alignas(32) uint8_t emb_1[2];
+  alignas(32) uint32_t u_off[2];
+  alignas(32) uint32_t emb_k[2];
+  alignas(32) uint32_t emb_1[2];
   alignas(32) uint32_t u[2];
-  alignas(32) uint32_t u_pfx[2];
-  alignas(32) uint32_t u_sfx[2];
-  alignas(32) uint32_t u_ext[2];
+  // alignas(32) uint32_t u_pfx[2];
+  // alignas(32) uint32_t u_sfx[2];
+  // alignas(32) uint32_t u_ext[2];
   alignas(32) uint32_t U[2];
   alignas(32) uint8_t gamma[2];
   alignas(32) uint32_t kappa[2] = {1, 1};  // kappa is always 1 for initial line-pair
@@ -525,7 +525,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto v1 = vdupq_n_s32(rho[Q1]);
     vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
+    auto vrho = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_set1_epi32(rho[1]), 1);
+    // auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
     auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                    _mm256_set1_epi32(1));
     _mm256_store_si256((__m256i *)sigma_quads, vsigma);
@@ -550,7 +551,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         mel_run = MEL.get_run();
       }
     }
-    uint32_t idx         = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6) + (u_off[1] << 7) + mel_offset;
+    uint32_t idx         = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6U) + (u_off[1] << 7U) + mel_offset;
     uint16_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
@@ -630,13 +631,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     vsigma = vld1q_s32(sigma_quads + 4);
     vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q1])), v0));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    auto vemb_k =
-        _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_k[0], emb_k[0], emb_k[0], emb_k[0],
-                                                             emb_k[1], emb_k[1], emb_k[1], emb_k[1]),
-                                           _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                         _mm256_set1_epi32(1));
-    auto vU = _mm256_setr_epi32(U[0], U[0], U[0], U[0], U[1], U[1], U[1], U[1]);
-    _mm256_store_si256((__m256i *)m_quads, _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, vU), vemb_k));
+    auto vtmp      = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k[0]), _mm_set1_epi32(emb_k[1]), 1);
+    auto vemb_k    = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                      _mm256_set1_epi32(1));
+    auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(U[0]), _mm_set1_epi32(U[1]), 1);
+    v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
+    _mm256_store_si256((__m256i *)m_quads, v_m_quads);
 #else
     for (uint32_t i = 0; i < 4; i++) {
       m_quads[i]     = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
@@ -684,27 +684,24 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     *mp1++ = static_cast<int>(mu_quads[1 + 4]);
     *mp1++ = static_cast<int>(mu_quads[3 + 4]);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    auto vknown_1 =
-        _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_1[0], emb_1[0], emb_1[0], emb_1[0],
-                                                             emb_1[1], emb_1[1], emb_1[1], emb_1[1]),
-                                           _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                         _mm256_set1_epi32(1));
-    auto v_m_quads = _mm256_load_si256((__m256i *)m_quads);
+    auto vknown_1 = _mm256_and_si256(
+        _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(emb_1[0]), _mm_set1_epi32(emb_1[1]), 1),
+                          _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+        _mm256_set1_epi32(1));
+    // auto v_m_quads = _mm256_load_si256((__m256i *)m_quads);
     auto vmask = _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
     auto v_v_quads = _mm256_and_si256(_mm256_load_si256((__m256i *)msval), vmask);
     v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
-    vmask          = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()),
-                                      _mm256_set1_epi32(0xFFFFFFFF));
-    auto v_mu      = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
-    v_mu           = _mm256_slli_epi32(v_mu, pLSB);
+    vmask = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
+    auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
+    v_mu      = _mm256_slli_epi32(v_mu, pLSB);
     v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
     v_mu = _mm256_and_si256(v_mu, vmask);
     //    _mm256_store_si256((__m256i *)mu_quads, v_mu);
     _mm256_store_si256((__m256i *)v_quads, v_v_quads);
     // 0, 2, 4, 6, 1, 3, 5, 7
     v_mu = _mm256_permutevar8x32_epi32(v_mu, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-    _mm_store_si128((__m128i *)mp0, _mm256_extracti128_si256(v_mu, 0));
-    _mm_store_si128((__m128i *)mp1, _mm256_extracti128_si256(v_mu, 1));
+    _mm256_storeu2_m128i((__m128i *)mp1, (__m128i *)mp0, v_mu);
     mp0 += 4;
     mp1 += 4;
 #else
@@ -778,9 +775,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto vone       = vdupq_n_s32(1);
     vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    for (uint32_t i = 0; i < 4; i++) {
-      sigma_quads[i] = (rho[Q0] >> i) & 1;
-    }
+    auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
+    auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                   _mm256_set1_epi32(1));
+    _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
     for (uint32_t i = 0; i < 4; i++) {
       sigma_quads[i] = (rho[Q0] >> i) & 1;
@@ -807,9 +805,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto vsigma = vld1q_s32(sigma_quads);
     vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q0])), v0));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    for (uint32_t i = 0; i < 4; i++) {
-      m_quads[i] = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
-    }
+    auto vtmp      = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k[0]), _mm_setzero_si128(), 1);
+    auto vemb_k    = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                      _mm256_set1_epi32(1));
+    auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(U[0]), _mm_set1_epi32(U[1]), 1);
+    v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
+    _mm256_store_si256((__m256i *)m_quads, v_m_quads);
 #else
     for (uint32_t i = 0; i < 4; i++) {
       m_quads[i] = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
@@ -919,7 +920,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto v1 = vdupq_n_s32(rho[Q1]);
       vst1q_s32(sigma_quads + 4, vandq_s32(vtstq_s32(v1, vm), vone));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
+      auto vrho = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_set1_epi32(rho[1]), 1);
+      // auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
       auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                      _mm256_set1_epi32(1));
       _mm256_store_si256((__m256i *)sigma_quads, vsigma);
@@ -931,7 +933,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
       u_off[0]     = tv0 & 1;
       u_off[1]     = tv1 & 1;
-      uint32_t idx = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6) + (u_off[1] << 7);
+      uint32_t idx = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6U) + (u_off[1] << 7U);
 
       uint16_t uvlc_result = uvlc_dec_1[idx];
       // remove total prefix length
@@ -1003,13 +1005,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       vsigma = vld1q_s32(sigma_quads + 4);
       vst1q_u32(m_quads + 4, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q1])), v0));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      auto vemb_k =
-          _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_k[0], emb_k[0], emb_k[0], emb_k[0],
-                                                               emb_k[1], emb_k[1], emb_k[1], emb_k[1]),
-                                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                           _mm256_set1_epi32(1));
-      auto vU = _mm256_setr_epi32(U[0], U[0], U[0], U[0], U[1], U[1], U[1], U[1]);
-      _mm256_store_si256((__m256i *)m_quads, _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, vU), vemb_k));
+      auto vtmp      = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k[0]), _mm_set1_epi32(emb_k[1]), 1);
+      auto vemb_k    = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                        _mm256_set1_epi32(1));
+      auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(U[0]), _mm_set1_epi32(U[1]), 1);
+      v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
+      _mm256_store_si256((__m256i *)m_quads, v_m_quads);
 #else
       for (uint32_t i = 0; i < 4; i++) {
         m_quads[i]     = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
@@ -1057,20 +1058,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       *mp1++ = static_cast<int>(mu_quads[1 + 4]);
       *mp1++ = static_cast<int>(mu_quads[3 + 4]);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      auto vknown_1 =
-          _mm256_and_si256(_mm256_srav_epi32(_mm256_setr_epi32(emb_1[0], emb_1[0], emb_1[0], emb_1[0],
-                                                               emb_1[1], emb_1[1], emb_1[1], emb_1[1]),
-                                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                           _mm256_set1_epi32(1));
-      auto v_m_quads = _mm256_load_si256((__m256i *)m_quads);
+      auto vknown_1 = _mm256_and_si256(
+          _mm256_srav_epi32(
+              _mm256_inserti128_si256(_mm256_set1_epi32(emb_1[0]), _mm_set1_epi32(emb_1[1]), 1),
+              _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+          _mm256_set1_epi32(1));
+      // auto v_m_quads = _mm256_load_si256((__m256i *)m_quads);
       auto vmask =
           _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
       auto v_v_quads = _mm256_and_si256(_mm256_load_si256((__m256i *)msval), vmask);
       v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
-      vmask          = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()),
-                                        _mm256_set1_epi32(0xFFFFFFFF));
-      auto v_mu      = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
-      v_mu           = _mm256_slli_epi32(v_mu, pLSB);
+      vmask =
+          _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
+      auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
+      v_mu      = _mm256_slli_epi32(v_mu, pLSB);
       v_mu =
           _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
       v_mu = _mm256_and_si256(v_mu, vmask);
@@ -1078,8 +1079,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       _mm256_store_si256((__m256i *)v_quads, v_v_quads);
       // 0, 2, 4, 6, 1, 3, 5, 7
       v_mu = _mm256_permutevar8x32_epi32(v_mu, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-      _mm_store_si128((__m128i *)mp0, _mm256_extracti128_si256(v_mu, 0));
-      _mm_store_si128((__m128i *)mp1, _mm256_extracti128_si256(v_mu, 1));
+      _mm256_storeu2_m128i((__m128i *)mp1, (__m128i *)mp0, v_mu);
       mp0 += 4;
       mp1 += 4;
 #else
@@ -1169,9 +1169,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vone       = vdupq_n_s32(1);
       vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      for (uint32_t i = 0; i < 4; i++) {
-        sigma_quads[i] = (rho[Q0] >> i) & 1;
-      }
+      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
+      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                     _mm256_set1_epi32(1));
+      _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i] = (rho[Q0] >> i) & 1;
@@ -1204,9 +1205,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vsigma = vld1q_s32(sigma_quads);
       vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q0])), v0));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      for (uint32_t i = 0; i < 4; i++) {
-        m_quads[i] = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
-      }
+      auto vtmp     = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k[0]), _mm_setzero_si128(), 1);
+      auto vemb_k   = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                       _mm256_set1_epi32(1));
+      vtmp          = _mm256_inserti128_si256(_mm256_set1_epi32(U[0]), _mm_setzero_si128(), 1);
+      _mm256_store_si256((__m256i *)m_quads, _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, vtmp), vemb_k));
 #else
       for (uint32_t i = 0; i < 4; i++) {
         m_quads[i] = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
