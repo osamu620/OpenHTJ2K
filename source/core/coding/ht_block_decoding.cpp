@@ -551,7 +551,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         mel_run = MEL.get_run();
       }
     }
-    uint32_t idx         = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6U) + (u_off[1] << 7U) + mel_offset;
+    uint32_t idx         = (vlcval & 0x3F) + (u_off[0] << 6U) + (u_off[1] << 7U) + mel_offset;
     uint16_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
@@ -651,30 +651,30 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       MagSgn.advance(m_quads[i]);
     }
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[0]), vm), vone);
-    auto v_m_quads = vld1q_u32(m_quads);
-    auto vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
-    auto v_v_quads = vandq_u32(vld1q_u32(msval), vmask);
-    v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
-    vmask          = vmvnq_u32(vceqzq_u32(v_m_quads));
-    auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
-    v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
-    v_mu           = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
-    v_mu           = vandq_u32(v_mu, vmask);
+    auto vknown_1   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[0]), vm), vone);
+    auto v_m_quads  = vld1q_u32(m_quads);
+    auto vmask      = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+    auto v_v_quads0 = vandq_u32(vld1q_u32(msval), vmask);
+    v_v_quads0      = vorrq_u32(v_v_quads0, vshlq_u32(vknown_1, v_m_quads));
+    vmask           = vmvnq_u32(vceqzq_u32(v_m_quads));
+    auto v_mu       = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vdupq_n_u32(1));
+    v_mu            = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+    v_mu            = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads0, vdupq_n_u32(1)), vdupq_n_u32(31)));
+    v_mu            = vandq_u32(v_mu, vmask);
     vst1q_u32(mu_quads, v_mu);
-    vst1q_u32(v_quads, v_v_quads);
-    vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
-    v_m_quads = vld1q_u32(m_quads + 4);
-    vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
-    v_v_quads = vandq_u32(vld1q_u32(msval + 4), vmask);
-    v_v_quads = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
-    vmask     = vmvnq_u32(vceqzq_u32(v_m_quads));
-    v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
-    v_mu      = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
-    v_mu      = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
-    v_mu      = vandq_u32(v_mu, vmask);
+    vst1q_u32(v_quads, v_v_quads0);
+    vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
+    v_m_quads       = vld1q_u32(m_quads + 4);
+    vmask           = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+    auto v_v_quads1 = vandq_u32(vld1q_u32(msval + 4), vmask);
+    v_v_quads1      = vorrq_u32(v_v_quads1, vshlq_u32(vknown_1, v_m_quads));
+    vmask           = vmvnq_u32(vceqzq_u32(v_m_quads));
+    v_mu            = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vdupq_n_u32(1));
+    v_mu            = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+    v_mu            = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads1, vdupq_n_u32(1)), vdupq_n_u32(31)));
+    v_mu            = vandq_u32(v_mu, vmask);
     vst1q_u32(mu_quads + 4, v_mu);
-    vst1q_u32(v_quads + 4, v_v_quads);
+    vst1q_u32(v_quads + 4, v_v_quads1);
     *mp0++ = static_cast<int>(mu_quads[0]);
     *mp0++ = static_cast<int>(mu_quads[2]);
     *mp0++ = static_cast<int>(mu_quads[0 + 4]);
@@ -746,7 +746,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     *sp1++ = (rho[Q0] >> 3) & 1;
     *sp1++ = (rho[Q1] >> 1) & 1;
     *sp1++ = (rho[Q1] >> 3) & 1;
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    auto v_v_quads = vzipq_s32(v_v_quads0, v_v_quads1);
+    auto vtmp      = 32 - vclzq_s32(vzip2q_s32(v_v_quads.val[0], v_v_quads.val[1]));
+    vst1q_s32(E_p, vtmp);
+    E_p += 4;
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     v_v_quads = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt2_epi32(v_v_quads));
     v_v_quads = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
     _mm256_zeroupper();
@@ -761,10 +766,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     //   }
     // }
 #else
-    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
-    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
-    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
-    *E_p++      = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
 #endif
   }
   // if QW is odd number ..
@@ -864,6 +869,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
   // Non-initial line-pair
   uint16_t context1, context2;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  int32x4_t vtmp;
+#endif
   for (uint16_t row = 1; row < QH; row++) {
     rho_p      = rholine.get() + 1;
     E_p        = Eline.get() + 1;
@@ -951,7 +959,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
       u_off[0]     = tv0 & 1;
       u_off[1]     = tv1 & 1;
-      uint32_t idx = (VLC_dec.fetch() & 0x3F) + (u_off[0] << 6U) + (u_off[1] << 7U);
+      uint32_t idx = (vlcval & 0x3F) + (u_off[0] << 6U) + (u_off[1] << 7U);
 
       uint16_t uvlc_result = uvlc_dec_1[idx];
       // remove total prefix length
@@ -1043,30 +1051,30 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         MagSgn.advance(m_quads[i]);
       }
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-      auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[0]), vm), vone);
-      auto v_m_quads = vld1q_u32(m_quads);
-      auto vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
-      auto v_v_quads = vandq_u32(vld1q_u32(msval), vmask);
-      v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
-      vmask          = vmvnq_u32(vceqzq_u32(v_m_quads));
-      auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
-      v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
-      v_mu           = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
-      v_mu           = vandq_u32(v_mu, vmask);
+      auto vknown_1   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[0]), vm), vone);
+      auto v_m_quads  = vld1q_u32(m_quads);
+      auto vmask      = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+      auto v_v_quads0 = vandq_u32(vld1q_u32(msval), vmask);
+      v_v_quads0      = vorrq_u32(v_v_quads0, vshlq_u32(vknown_1, v_m_quads));
+      vmask           = vmvnq_u32(vceqzq_u32(v_m_quads));
+      auto v_mu       = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vdupq_n_u32(1));
+      v_mu            = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+      v_mu            = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads0, vdupq_n_u32(1)), vdupq_n_u32(31)));
+      v_mu            = vandq_u32(v_mu, vmask);
       vst1q_u32(mu_quads, v_mu);
-      vst1q_u32(v_quads, v_v_quads);
-      vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
-      v_m_quads = vld1q_u32(m_quads + 4);
-      vmask     = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
-      v_v_quads = vandq_u32(vld1q_u32(msval + 4), vmask);
-      v_v_quads = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads));
-      vmask     = vmvnq_u32(vceqzq_u32(v_m_quads));
-      v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
-      v_mu      = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
-      v_mu      = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
-      v_mu      = vandq_u32(v_mu, vmask);
+      vst1q_u32(v_quads, v_v_quads0);
+      vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
+      v_m_quads       = vld1q_u32(m_quads + 4);
+      vmask           = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
+      auto v_v_quads1 = vandq_u32(vld1q_u32(msval + 4), vmask);
+      v_v_quads1      = vorrq_u32(v_v_quads1, vshlq_u32(vknown_1, v_m_quads));
+      vmask           = vmvnq_u32(vceqzq_u32(v_m_quads));
+      v_mu            = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vdupq_n_u32(1));
+      v_mu            = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
+      v_mu            = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads1, vdupq_n_u32(1)), vdupq_n_u32(31)));
+      v_mu            = vandq_u32(v_mu, vmask);
       vst1q_u32(mu_quads + 4, v_mu);
-      vst1q_u32(v_quads + 4, v_v_quads);
+      vst1q_u32(v_quads + 4, v_v_quads1);
       *mp0++ = static_cast<int>(mu_quads[0]);
       *mp0++ = static_cast<int>(mu_quads[2]);
       *mp0++ = static_cast<int>(mu_quads[0 + 4]);
@@ -1143,11 +1151,18 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       *sp1++ = (rho[Q1] >> 1) & 1;
       *sp1++ = (rho[Q1] >> 3) & 1;
 
-      rho_p[qx]       = rho[Q0];
+      rho_p[qx] = rho[Q0];
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      auto v_v_quads  = vzipq_s32(v_v_quads0, v_v_quads1);
+      vtmp            = 32 - vclzq_s32(vzip2q_s32(v_v_quads.val[0], v_v_quads.val[1]));
+      E_p[2 * qx]     = vgetq_lane_s32(vtmp, 0);
+      E_p[2 * qx + 1] = vgetq_lane_s32(vtmp, 1);
+      E_p[2 * qx + 2] = vgetq_lane_s32(vtmp, 2);
+#else
       E_p[2 * qx]     = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
       E_p[2 * qx + 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
       E_p[2 * qx + 2] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
-
+#endif
       // v_v_quads  = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt2_epi32(v_v_quads));
       // v_v_quads  = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
       // __m128i vE = _mm256_extracti128_si256(v_v_quads, 0);
@@ -1162,8 +1177,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       // }
     }
     if (QW % 2 == 0) {
-      rho_p[QW - 1]   = rho[Q1];
+      rho_p[QW - 1] = rho[Q1];
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      E_p[2 * QW - 1] = vgetq_lane_s32(vtmp, 3);
+#else
       E_p[2 * QW - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+#endif
     }
     // if QW is odd number ..
     if (QW % 2 == 1) {
@@ -1200,9 +1219,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vone       = vdupq_n_s32(1);
       vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
-      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                     _mm256_set1_epi32(1));
+      auto vrho       = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
+      auto vsigma     = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                         _mm256_set1_epi32(1));
       _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
       for (uint32_t i = 0; i < 4; i++) {
