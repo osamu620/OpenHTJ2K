@@ -47,10 +47,36 @@
   #include <intrin.h>
 #else
   #include <x86intrin.h>
+// Credit: YumiYumiYumi
+// https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
+static inline __m256i avx2_lzcnt2_epi32(__m256i v) {
+  const __m256i lut_lo = _mm256_set_epi8(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 32, 4, 4, 4, 4, 4, 4,
+                                         4, 4, 5, 5, 5, 5, 6, 6, 7, 32);
+  const __m256i lut_hi = _mm256_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 32, 0, 0, 0, 0, 0, 0,
+                                         0, 0, 1, 1, 1, 1, 2, 2, 3, 32);
+  const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
+  const __m256i byte_offset = _mm256_set1_epi32(0x00081018);
+  __m256i t;
+
+  /* find lzcnt for each byte */
+  t = _mm256_and_si256(nibble_mask, v);
+  v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
+  t = _mm256_shuffle_epi8(lut_lo, t);
+  v = _mm256_shuffle_epi8(lut_hi, v);
+  v = _mm256_min_epu8(v, t);
+
+  /* find lzcnt for each dword */
+  v = _mm256_or_si256(v, byte_offset);
+  v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
+  v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
+
+  return v;
+}
 #endif
 
 #ifndef __clang__
-  #if defined(__GNUC__) && (__GNUC__ < 10)
+  #ifndef __INTEL_COMPILER
+    #if defined(__GNUC__) && (__GNUC__ < 10)
 static inline void _mm256_storeu2_m128i(__m128i_u* __addr_hi, __m128i_u* __addr_lo, __m256i __a) {
   __m128i __v128;
 
@@ -59,6 +85,7 @@ static inline void _mm256_storeu2_m128i(__m128i_u* __addr_hi, __m128i_u* __addr_
   __v128 = _mm256_extractf128_si256(__a, 1);
   _mm_storeu_si128(__addr_hi, __v128);
 }
+    #endif
   #endif
 #endif
 

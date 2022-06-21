@@ -738,18 +738,31 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     *mp1++ = static_cast<int>(mu_quads[1 + 4]);
     *mp1++ = static_cast<int>(mu_quads[3 + 4]);
 #endif
-    *sp0++ = (rho[Q0] >> 0) & 1;
-    *sp0++ = (rho[Q0] >> 2) & 1;
-    *sp0++ = (rho[Q1] >> 0) & 1;
-    *sp0++ = (rho[Q1] >> 2) & 1;
-    *sp1++ = (rho[Q0] >> 1) & 1;
-    *sp1++ = (rho[Q0] >> 3) & 1;
-    *sp1++ = (rho[Q1] >> 1) & 1;
-    *sp1++ = (rho[Q1] >> 3) & 1;
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+    *sp0++    = (rho[Q0] >> 0) & 1;
+    *sp0++    = (rho[Q0] >> 2) & 1;
+    *sp0++    = (rho[Q1] >> 0) & 1;
+    *sp0++    = (rho[Q1] >> 2) & 1;
+    *sp1++    = (rho[Q0] >> 1) & 1;
+    *sp1++    = (rho[Q0] >> 3) & 1;
+    *sp1++    = (rho[Q1] >> 1) & 1;
+    *sp1++    = (rho[Q1] >> 3) & 1;
+    v_v_quads = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt2_epi32(v_v_quads));
+    v_v_quads = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
+    _mm256_zeroupper();
+    _mm_storeu_si128((__m128i *)E_p, _mm256_extracti128_si256(v_v_quads, 0));
+    E_p += 4;
+    // int32_t aaa[8];
+    // _mm256_storeu_si256((__m256i *)aaa, v_v_quads);
+    // for (int i = 0; i < 8; ++i) {
+    //   if (static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[i])))
+    //       != 32 - aaa[i]) {
+    //     printf("!");
+    //   }
+    // }
+    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
+    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
+    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
+    // *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
   }
   // if QW is odd number ..
   if (QW % 2 == 1) {
@@ -856,14 +869,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     sp0        = block->block_states.get() + (row * 2 + 1) * block->blkstate_stride + 1;
     sp1        = block->block_states.get() + (row * 2 + 2) * block->blkstate_stride + 1;
     int32_t qx = 0;
+    rho[Q1]    = 0;
+    v_quads[7] = 0;
     for (qx = 0; qx < QW - 1; qx += 2) {
       // calculate context for the current quad
       context1 = static_cast<uint16_t>((rho_p[qx - 1] >> 3)
                                        | ((rho_p[qx] >> 1) & 1)
                                              + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
-      if (qx > 0) {
-        context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
-      }
+      // if (qx > 0) {
+      context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
+      // }
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
@@ -879,9 +894,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
       emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
       vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-      if (qx > 0) {
-        rho_p[qx - 1] = rho[Q1];
-      }
+      // if (qx > 0) {
+      rho_p[qx - 1] = rho[Q1];
+      // }
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       int32_t mask[4] = {1, 2, 4, 8};
@@ -989,9 +1004,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       int32_t Emax1 =
           find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
 #endif
-      if (qx > 0) {
-        E_p[2 * qx - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
-      }
+      // if (qx > 0) {
+      E_p[2 * qx - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+      // }
       kappa[Q0] = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
       kappa[Q1] = (1 > gamma[Q1] * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q1] * (Emax1 - 1));
       U[Q0]     = kappa[Q0] + u[Q0];
@@ -1129,10 +1144,23 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       E_p[2 * qx]     = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
       E_p[2 * qx + 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
       E_p[2 * qx + 2] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
-      if (qx + 1 == QW - 1) {
-        rho_p[qx + 1]   = rho[Q1];
-        E_p[2 * qx + 3] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
-      }
+
+      // v_v_quads  = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt2_epi32(v_v_quads));
+      // v_v_quads  = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
+      // __m128i vE = _mm256_extracti128_si256(v_v_quads, 0);
+      // _mm_insert_epi32(vE, E_p[2 * qx + 3], 3);
+      // // _mm256_zeroupper();
+      // _mm_storeu_si128((__m128i *)(E_p + 2 * qx), vE);
+
+      // if (qx + 1 == QW - 1) {
+      //   rho_p[qx + 1]   = rho[Q1];
+      //   E_p[2 * qx + 3] = static_cast<int32_t>(32 -
+      //   count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+      // }
+    }
+    if (QW % 2 == 0) {
+      rho_p[QW - 1]   = rho[Q1];
+      E_p[2 * QW - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
     }
     // if QW is odd number ..
     if (QW % 2 == 1) {
