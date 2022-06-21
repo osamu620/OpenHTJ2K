@@ -2440,9 +2440,19 @@ void j2k_tile::decode() {
     element_siz tc1 = this->tcomp[c].get_pos1();
 
     // copy samples in resolution buffer to that in tile component buffer
-    unsigned long num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
-
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    size_t num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    for (size_t n = num_samples; n >= 8; n -= 8) {
+      auto vsrc = vld1q_s16(sp);
+      vst1q_s32(dp, vmovl_s16(vget_low_s16(vsrc)));
+      vst1q_s32(dp + 4, vmovl_s16(vget_high_s16(vsrc)));
+      sp += 8;
+      dp += 8;
+    }
+    for (size_t n = num_samples % 8; n > 0; --n) {
+      *dp++ = *sp++;
+    }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     for (size_t n = num_samples; n >= 16; n -= 16) {
       // for (size_t n = 0; n < num_samples - num_samples % 16; n += 16) {
       auto vsrc = _mm256_loadu_si256((__m256i *)sp);
