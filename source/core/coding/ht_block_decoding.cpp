@@ -962,6 +962,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
           mel_run = MEL.get_run();
         }
       }
+
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       rho[1]   = _pext_u32(tv1, 0x00F0);
       emb_k[1] = _pext_u32(tv1, 0x0F00);
@@ -971,6 +972,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       emb_k[1] = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
       emb_1[1] = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
 #endif
+
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       auto v1 = vdupq_n_s32(rho[Q1]);

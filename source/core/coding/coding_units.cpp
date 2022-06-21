@@ -2441,21 +2441,24 @@ void j2k_tile::decode() {
 
     // copy samples in resolution buffer to that in tile component buffer
     unsigned long num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
-    //#pragma omp parallel for  // default(none) shared(num_samples, sp, dp)
-    //#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    //    for (uint32_t n = 0; n < round_down(num_samples, SIMD_LEN_I32); n += SIMD_LEN_I32) {
-    //      __m128i src = _mm_loadu_si128((__m128i *)(sp + n));
-    //      __m256i dst = _mm256_cvtepi16_epi32(src);
-    //      _mm256_store_si256((__m256i *)(dp + n), dst);
-    //    }
-    //    for (unsigned long n = round_down(num_samples, SIMD_LEN_I32); n < num_samples; ++n) {
-    //      dp[n] = sp[n];
-    //    }
-    //#else
-    for (unsigned long n = 0; n < num_samples; ++n) {
-      dp[n] = sp[n];
+
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    for (size_t n = num_samples; n >= 16; n -= 16) {
+      // for (size_t n = 0; n < num_samples - num_samples % 16; n += 16) {
+      auto vsrc = _mm256_loadu_si256((__m256i *)sp);
+      _mm256_storeu_si256((__m256i *)dp, _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 0)));
+      _mm256_storeu_si256((__m256i *)(dp + 8), _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 1)));
+      sp += 16;
+      dp += 16;
     }
-    //#endif
+    for (size_t n = num_samples % 16; n > 0; --n) {
+      *dp++ = *sp++;
+    }
+#else
+    for (size_t n = 0; n < num_samples; ++n) {
+      *dp++ = *sp++;
+    }
+#endif
 
   }  // end of component loop
 }
