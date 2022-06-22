@@ -45,8 +45,11 @@
   #include <arm_neon.h>
 #elif defined(_MSC_VER) || defined(__MINGW64__)
   #include <intrin.h>
-#else
+#elif defined(__AVX2__)
   #include <x86intrin.h>
+#endif
+
+#if defined(__AVX2__)
 // Credit: YumiYumiYumi
 // https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
 static inline __m256i avx2_lzcnt2_epi32(__m256i v) {
