@@ -274,8 +274,8 @@ class rev_buf {
 
     auto p = reinterpret_cast<intptr_t>(buf);
     p &= 0x03;
-    auto num  = 1 + p;
-    auto tnum = (num < length) ? num : length;
+    int32_t num = 1 + static_cast<int32_t>(p);
+    auto tnum   = (num < length) ? num : length;
     for (auto i = 0; i < tnum; ++i) {
       uint64_t d;
       d               = *buf--;
@@ -565,9 +565,9 @@ class fwd_buf {
     }
 
     // we accumulate in t and keep a count of the number of bits_local in bits_local
-    uint32_t bits_local = 8 - unstuff;
-    uint32_t t          = val & 0xFF;
-    bool unstuff_flag   = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
+    uint32_t bits_local   = 8 - unstuff;
+    uint32_t t            = val & 0xFF;
+    uint32_t unstuff_flag = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
 
     t |= ((val >> 8) & 0xFF) << bits_local;
     bits_local += 8 - unstuff_flag;
