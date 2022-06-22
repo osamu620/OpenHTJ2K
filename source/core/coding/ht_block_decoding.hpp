@@ -589,7 +589,7 @@ class fwd_buf {
     if (n > bits) {
       printf("ERROR: illegal attempt to advance %d bits but there are %d bits left in MagSgn advance\n", n,
              bits);
-      throw std::exception();
+      // throw std::exception();
     }
     Creg >>= n;  // consume n bits
     bits -= n;
