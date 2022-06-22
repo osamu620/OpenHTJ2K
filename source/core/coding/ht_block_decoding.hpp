@@ -208,7 +208,7 @@ class MEL_dec {
 
   inline void decode() {
     constexpr int32_t MEL_E[13] = {0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5};
-    if (bits < 6) {  // if there are less then 6 bits in tmp then read from the MEL bitstream 6 bits that is
+    if (bits < 6) {  // if there are less than 6 bits in tmp then read from the MEL bitstream 6 bits that is
                      // the largest decodable MEL codeword.
       read();
     }
