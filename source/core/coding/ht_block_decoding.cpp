@@ -629,7 +629,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vdupq_n_u32(1)), vdupq_n_u32(31)));
     v_mu0           = vandq_u32(v_mu0, vmask);
     //    vst1q_u32(mu_quads, v_mu0);
-    vst1q_u32(v_quads, v_v_quads0);
+    //    vst1q_u32(v_quads, v_v_quads0);
     vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
     v_m_quads       = vld1q_u32(m_quads + 4);
     vmask           = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
@@ -641,8 +641,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     v_mu1           = vorrq_u32(v_mu1, vshlq_u32(vandq_u32(v_v_quads1, vdupq_n_u32(1)), vdupq_n_u32(31)));
     v_mu1           = vandq_u32(v_mu1, vmask);
     //    vst1q_u32(mu_quads + 4, v_mu1);
-    vst1q_u32(v_quads + 4, v_v_quads1);
-    vst1q_u32(v_quads + 4, v_v_quads1);
+    //    vst1q_u32(v_quads + 4, v_v_quads1);
     auto vvv = vzipq_s32(v_mu0, v_mu1);
     vst1q_s32(mp0, vzip1q_s32(vvv.val[0], vvv.val[1]));
     vst1q_s32(mp1, vzip2q_s32(vvv.val[0], vvv.val[1]));
@@ -818,7 +817,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     vst1_s32(mp1, vzip2_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
     mp0 += 2;
     mp1 += 2;
-    vst1q_u32(v_quads, v_v_quads);
+    //    vst1q_u32(v_quads, v_v_quads);
     vst1_s32(E_p, 32 - vclz_s32(vzip2_s32(vget_low_s32(v_v_quads), vget_high_s32(v_v_quads))));
     E_p += 2;
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
@@ -888,9 +887,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     int32_t Emax0, Emax1;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     vsetq_lane_s32(0, vExp, 3);
-    v_quads[7] = 0;
-    Emax0      = vmaxvq_s32(vld1q_s32(E_p + 2 * qx - 1));
-    Emax1      = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 1) - 1));
+    //    v_quads[7] = 0;
+    Emax0 = vmaxvq_s32(vld1q_s32(E_p + 2 * qx - 1));
+    Emax1 = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 1) - 1));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
     Emax1 =
@@ -1055,7 +1054,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vdupq_n_u32(1)), vdupq_n_u32(31)));
       v_mu0           = vandq_u32(v_mu0, vmask);
       //      vst1q_u32(mu_quads, v_mu0);
-      vst1q_u32(v_quads, v_v_quads0);
+      //      vst1q_u32(v_quads, v_v_quads0);
       vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1[1]), vm), vone);
       v_m_quads       = vld1q_u32(m_quads + 4);
       vmask           = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads), vdupq_n_u32(1));
@@ -1067,7 +1066,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       v_mu1           = vorrq_u32(v_mu1, vshlq_u32(vandq_u32(v_v_quads1, vdupq_n_u32(1)), vdupq_n_u32(31)));
       v_mu1           = vandq_u32(v_mu1, vmask);
       //      vst1q_u32(mu_quads + 4, v_mu1);
-      vst1q_u32(v_quads + 4, v_v_quads1);
+      //      vst1q_u32(v_quads + 4, v_v_quads1);
       auto vvv = vzipq_s32(v_mu0, v_mu1);
       vst1q_s32(mp0, vzip1q_s32(vvv.val[0], vvv.val[1]));
       vst1q_s32(mp1, vzip2q_s32(vvv.val[0], vvv.val[1]));
@@ -1284,7 +1283,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       vst1_s32(mp1, vzip2_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
       mp0 += 2;
       mp1 += 2;
-      vst1q_u32(v_quads, v_v_quads);
+      //      vst1q_u32(v_quads, v_v_quads);
       if (qx > 0) {
         E_p[2 * qx - 1] = vgetq_lane_s32(vExp, 3);
       }
