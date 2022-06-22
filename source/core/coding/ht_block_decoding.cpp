@@ -870,6 +870,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     Emax1      = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 1) - 1));
 #else
     v_quads[7] = 0;
+    Emax0      = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
+    Emax1 =
+        find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
 #endif
     for (qx = 0; qx < QW - 1; qx += 2) {
       // calculate context for the current quad
@@ -981,17 +984,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
       gamma[Q0] = (popcount32(static_cast<uint32_t>(rho[Q0])) < 2) ? 0 : 1;
       gamma[Q1] = (popcount32(static_cast<uint32_t>(rho[Q1])) < 2) ? 0 : 1;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-//      int32_t Emax0 = vmaxvq_s32(vld1q_s32(E_p + 2 * qx - 1));
-//      int32_t Emax1 = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 1) - 1));
-#else
-      int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
-      int32_t Emax1 =
-          find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
-#endif
-      //      if (qx > 0) {
-      E_p[2 * qx - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
-      //      }
       kappa[Q0] = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
       kappa[Q1] = (1 > gamma[Q1] * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q1] * (Emax1 - 1));
       U[Q0]     = kappa[Q0] + u[Q0];
@@ -1132,36 +1124,38 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       E_p[2 * qx]     = vgetq_lane_s32(vExp, 0);
       E_p[2 * qx + 1] = vgetq_lane_s32(vExp, 1);
       E_p[2 * qx + 2] = vgetq_lane_s32(vExp, 2);
-//      E_p[2 * qx + 3] = vgetq_lane_s32(vExp, 3);
+      E_p[2 * qx + 3] = vgetq_lane_s32(vExp, 3);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
+      Emax0 =
+          find_max(E_p[2 * (qx + 2) - 1], E_p[2 * (qx + 2)], E_p[2 * (qx + 2) + 1], E_p[2 * (qx + 2) + 2]);
       Emax1 =
-          find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
+          find_max(E_p[2 * (qx + 3) - 1], E_p[2 * (qx + 3)], E_p[2 * (qx + 3) + 1], E_p[2 * (qx + 3) + 2]);
       v_v_quads = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt2_epi32(v_v_quads));
       v_v_quads = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
       vExp      = _mm256_extracti128_si256(v_v_quads, 0);
       _mm256_zeroupper();
-      E_p[2 * qx]     = _mm_extract_epi32(vExp, 0);
-      E_p[2 * qx + 1] = _mm_extract_epi32(vExp, 1);
-      E_p[2 * qx + 2] = _mm_extract_epi32(vExp, 2);
+      _mm_storeu_si128((__m128i *)(E_p + 2 * qx), vExp);
 #else
-      Emax0  = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
+      Emax0 =
+          find_max(E_p[2 * (qx + 2) - 1], E_p[2 * (qx + 2)], E_p[2 * (qx + 2) + 1], E_p[2 * (qx + 2) + 2]);
       Emax1 =
-          find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
+          find_max(E_p[2 * (qx + 3) - 1], E_p[2 * (qx + 3)], E_p[2 * (qx + 3) + 1], E_p[2 * (qx + 3) + 2]);
       E_p[2 * qx]     = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
       E_p[2 * qx + 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
       E_p[2 * qx + 2] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
+      E_p[2 * qx + 3] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
 #endif
     }
     if (QW % 2 == 0) {
       rho_p[QW - 1] = rho[Q1];
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-      E_p[2 * QW - 1] = vgetq_lane_s32(vExp, 3);
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      E_p[2 * QW - 1] = _mm_extract_epi32(vExp, 3);
-#else
-      E_p[2 * QW - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
-#endif
+      // #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      //       // E_p[2 * QW - 1] = vgetq_lane_s32(vExp, 3);
+      // #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      //       // E_p[2 * QW - 1] = _mm_extract_epi32(vExp, 3);
+      // #else
+      //       // E_p[2 * QW - 1] = static_cast<int32_t>(32 -
+      //       count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+      // #endif
     }
     // if QW is odd number ..
     if (QW % 2 == 1) {
@@ -1198,9 +1192,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vone       = vdupq_n_s32(1);
       vst1q_s32(sigma_quads, vandq_s32(vtstq_s32(v0, vm), vone));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      auto vrho       = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
-      auto vsigma     = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                         _mm256_set1_epi32(1));
+      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
+      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                     _mm256_set1_epi32(1));
       _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
       for (uint32_t i = 0; i < 4; i++) {
@@ -1221,11 +1215,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       }
 
       gamma[Q0] = (popcount32(static_cast<uint32_t>(rho[Q0])) < 2) ? 0 : 1;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-      int32_t Emax0 = vmaxvq_s32(vld1q_s32(E_p + 2 * qx - 1));
-#else
-      int32_t Emax0 = find_max(E_p[2 * qx - 1], E_p[2 * qx], E_p[2 * qx + 1], E_p[2 * qx + 2]);
-#endif
       kappa[Q0] = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
       U[Q0]     = kappa[Q0] + u[Q0];
 
@@ -1234,11 +1223,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vsigma = vld1q_s32(sigma_quads);
       vst1q_u32(m_quads, vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U[Q0])), v0));
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      auto vtmp     = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k[0]), _mm_setzero_si128(), 1);
-      auto vemb_k   = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                       _mm256_set1_epi32(1));
-      vtmp          = _mm256_inserti128_si256(_mm256_set1_epi32(U[0]), _mm_setzero_si128(), 1);
-      _mm256_store_si256((__m256i *)m_quads, _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, vtmp), vemb_k));
+      auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k[0]), _mm_setzero_si128(), 1);
+      vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                     _mm256_set1_epi32(1));
+      auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(U[0]), _mm_setzero_si128(), 1);
+      v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
+      _mm256_store_si256((__m256i *)m_quads, v_m_quads);
 #else
       for (uint32_t i = 0; i < 4; i++) {
         m_quads[i] = sigma_quads[i] * U[Q0] - ((emb_k[Q0] >> i) & 1);
@@ -1272,6 +1262,34 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         E_p[2 * qx - 1] = vgetq_lane_s32(vExp, 3);
       }
       vst1_s32(E_p + 2 * qx, 32 - vclz_s32(vzip2_s32(vget_low_s32(v_v_quads), vget_high_s32(v_v_quads))));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      auto vknown_1 = _mm256_and_si256(
+          _mm256_srav_epi32(
+              _mm256_inserti128_si256(_mm256_set1_epi32(emb_1[0]), _mm_set1_epi32(emb_1[1]), 1),
+              _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+          _mm256_set1_epi32(1));
+      // auto v_m_quads = _mm256_load_si256((__m256i *)m_quads);
+      auto vmask =
+          _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
+      auto v_v_quads = _mm256_and_si256(_mm256_load_si256((__m256i *)msval), vmask);
+      v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
+      vmask =
+          _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
+      auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
+      v_mu      = _mm256_slli_epi32(v_mu, pLSB);
+      v_mu =
+          _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
+      v_mu = _mm256_and_si256(v_mu, vmask);
+      //      _mm256_store_si256((__m256i *)mu_quads, v_mu);
+      _mm256_store_si256((__m256i *)v_quads, v_v_quads);
+      *mp0++      = _mm256_extract_epi32(v_mu, 0);
+      *mp0++      = _mm256_extract_epi32(v_mu, 2);
+      *mp1++      = _mm256_extract_epi32(v_mu, 1);
+      *mp1++      = _mm256_extract_epi32(v_mu, 3);
+      E_p[2 * qx] = static_cast<int32_t>(
+          32 - count_leading_zeros(static_cast<uint32_t>(_mm256_extract_epi32(v_v_quads, 1))));
+      E_p[2 * qx + 1] = static_cast<int32_t>(
+          32 - count_leading_zeros(static_cast<uint32_t>(_mm256_extract_epi32(v_v_quads, 3))));
 #else
       for (uint32_t i = 0; i < 4; i++) {
         known_1[Q0] = (emb_1[Q0] >> i) & 1;
@@ -1285,13 +1303,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
           mu_quads[i] = 0;
         }
       }
-      *mp0++ = static_cast<int>(mu_quads[0]);
-      *mp0++ = static_cast<int>(mu_quads[2]);
-      *mp1++ = static_cast<int>(mu_quads[1]);
-      *mp1++ = static_cast<int>(mu_quads[3]);
-      if (qx > 0) {
-        E_p[2 * qx - 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
-      }
+      *mp0++          = static_cast<int>(mu_quads[0]);
+      *mp0++          = static_cast<int>(mu_quads[2]);
+      *mp1++          = static_cast<int>(mu_quads[1]);
+      *mp1++          = static_cast<int>(mu_quads[3]);
       E_p[2 * qx]     = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
       E_p[2 * qx + 1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
 #endif
@@ -1536,7 +1551,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         blkstate++;
       }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      size_t simdlen  = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
+      size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
       for (size_t j = 0; j < simdlen; j += 16) {
         auto vsrc0 = _mm256_loadu_si256((__m256i *)val);
         auto vsrc1 = _mm256_loadu_si256((__m256i *)(val + 8));
