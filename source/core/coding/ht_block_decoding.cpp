@@ -874,7 +874,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   /*******************************************************************************************************************/
   // Non-initial line-pair
   /*******************************************************************************************************************/
-  uint16_t context1, context2;
+
   for (uint16_t row = 1; row < QH; row++) {
     rho_p      = rholine.get() + 1;
     E_p        = Eline.get() + 1;
@@ -900,19 +900,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     Emax1 =
         find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
 #endif
-    for (qx = 0; qx < QW - 1; qx += 2) {
-      // calculate context for the current quad
-      context1 = static_cast<uint16_t>((rho_p[qx - 1] >> 3)
-                                       | ((rho_p[qx] >> 1) & 1)
-                                             + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
-      // if (qx > 0) {
-      context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
-      // }
+    // calculate context for the next quad
+    context = static_cast<uint16_t>((rho_p[qx - 1] >> 3)
+                                    | ((rho_p[qx] >> 1) & 1)
+                                          + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
+    context |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
 
+    for (qx = 0; qx < QW - 1; qx += 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context1 << 7))];
-      if (context1 == 0) {
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+      if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
         if (mel_run < 0) {
@@ -928,10 +926,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
       emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
 #endif
+
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-      // if (qx > 0) {
-      rho_p[qx - 1] = rho[Q1];
-      // }
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       int32_t mask[4] = {1, 2, 4, 8};
@@ -947,15 +943,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       }
 #endif
 
-      // calculate context for the current quad
-      context2 = static_cast<uint16_t>((rho_p[qx] >> 3)
-                                       | ((rho_p[qx + 1] >> 1) & 1)
-                                             + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2));
-      context2 |= (((rho[Q0] >> 2) & 1) | ((rho[Q0] >> 3) & 1)) << 1;
+      // calculate context for the next quad
+      context = static_cast<uint16_t>((rho_p[qx] >> 3)
+                                      | ((rho_p[qx + 1] >> 1) & 1)
+                                            + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2));
+      context |= (((rho[Q0] >> 2) & 1) | ((rho[Q0] >> 3) & 1)) << 1;
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
-      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context2 << 7))];
-      if (context2 == 0) {
+      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+      if (context == 0) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
         if (mel_run < 0) {
@@ -972,6 +968,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       emb_k[1]  = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
       emb_1[1]  = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
 #endif
+      // calculate context for the next quad
+      context = static_cast<uint16_t>((rho_p[qx + 1] >> 3)
+                                      | ((rho_p[qx + 2] >> 1) & 1)
+                                            + (((rho_p[qx + 2] >> 3) | ((rho_p[qx + 3] >> 1) & 1)) << 2));
+      context |= (((rho[1] >> 2) & 1) | ((rho[1] >> 3) & 1)) << 1;
 
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -1140,7 +1141,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       *sp1++ = (rho[Q1] >> 1) & 1;
       *sp1++ = (rho[Q1] >> 3) & 1;
 
-      rho_p[qx] = rho[Q0];
+      rho_p[qx]     = rho[0];
+      rho_p[qx + 1] = rho[1];
+
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       Emax0 = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 2) - 1));
       Emax1 = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 3) - 1));
@@ -1173,7 +1176,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
     }
     if (QW % 2 == 0) {
-      rho_p[QW - 1] = rho[Q1];
+      //      rho_p[QW - 1] = rho[Q1];
       // #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       //       // E_p[2 * QW - 1] = vgetq_lane_s32(vExp, 3);
       // #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
@@ -1185,18 +1188,19 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     }
     // if QW is odd number ..
     if (QW % 2 == 1) {
-      // calculate context for the current quad
-      context1 = static_cast<uint16_t>((rho_p[qx - 1] >> 3)
-                                       | ((rho_p[qx] >> 1) & 1)
-                                             + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
-      if (qx > 0) {
-        context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
-      }
+      //      // calculate context for the current quad
+      //      context1 = static_cast<uint16_t>((rho_p[qx - 1] >> 3)
+      //                                       | ((rho_p[qx] >> 1) & 1)
+      //                                             + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) <<
+      //                                             2));
+      //      if (qx > 0) {
+      //        context1 |= (((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1;
+      //      }
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context1 << 7))];
-      if (context1 == 0) {
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+      if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
         if (mel_run < 0) {
@@ -1207,9 +1211,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       emb_k[0] = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
       emb_1[0] = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
 
-      if (qx > 0) {
-        rho_p[qx - 1] = rho[Q1];
-      }
+      //      if (qx > 0) {
+      //        rho_p[qx - 1] = rho[Q1];
+      //      }
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
       int32_t mask[4] = {1, 2, 4, 8};
