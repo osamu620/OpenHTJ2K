@@ -505,9 +505,9 @@ class fwd_buf {
     }
 
     // we accumulate in t and keep a count of the number of bits_local in bits_local
-    uint32_t bits_local = 8 - unstuff;
-    uint32_t t          = val & 0xFF;
-    bool unstuff_flag   = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
+    uint32_t bits_local   = 8 - unstuff;
+    uint32_t t            = val & 0xFF;
+    uint32_t unstuff_flag = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
 
     t |= ((val >> 8) & 0xFF) << bits_local;
     bits_local += 8 - unstuff_flag;
