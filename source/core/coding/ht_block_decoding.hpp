@@ -31,33 +31,29 @@
 #include <cstdint>
 #include <algorithm>  // for max{a,b,c,d}
 
-const int32_t bitmask32[32] = {
-    0x00000000, 0x00000001, 0x00000003, 0x00000007, 0x0000000F, 0x0000001F, 0x0000003F, 0x0000007F,
-    0x000000FF, 0x000001FF, 0x000003FF, 0x000007FF, 0x00000FFF, 0x00001FFF, 0x00003FFF, 0x00007FFF,
-    0x0000FFFF, 0x0001FFFF, 0x0003FFFF, 0x0007FFFF, 0x000FFFFF, 0x001FFFFF, 0x003FFFFF, 0x007FFFFF,
-    0x00FFFFFF, 0x01FFFFFF, 0x03FFFFFF, 0x07FFFFFF, 0x0FFFFFFF, 0x1FFFFFFF, 0x3FFFFFFF, 0x7FFFFFFF};
-
-constexpr uint32_t uvlcnew[256] = {
-    0x002F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0037, 0x0008, 0x0011, 0x0008, 0x0023,
-    0x0008, 0x0011, 0x0008, 0x003F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0047, 0x0008,
-    0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x004F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011,
-    0x0008, 0x0057, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x005F, 0x0008, 0x0011, 0x0008,
-    0x001B, 0x0008, 0x0011, 0x0008, 0x0067, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x006F,
-    0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0077, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008,
-    0x0011, 0x0008, 0x007F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0087, 0x0008, 0x0011,
-    0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x008F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
-    0x0097, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x009F, 0x0008, 0x0011, 0x0008, 0x001B,
-    0x0008, 0x0011, 0x0008, 0x00A7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x00AF, 0x0008,
-    0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00B7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011,
-    0x0008, 0x00BF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00C7, 0x0008, 0x0011, 0x0008,
-    0x0023, 0x0008, 0x0011, 0x0008, 0x00CF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00D7,
-    0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x00DF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008,
-    0x0011, 0x0008, 0x00E7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x00EF, 0x0008, 0x0011,
-    0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00F7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
-    0x00FF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0107, 0x0008, 0x0011, 0x0008, 0x0023,
-    0x0008, 0x0011, 0x0008, 0x010F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0117, 0x0008,
-    0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x011F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011,
-    0x0008, 0x0127, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008};
+// constexpr uint32_t uvlcnew[256] = {
+//     0x002F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0037, 0x0008, 0x0011, 0x0008,
+//     0x0023, 0x0008, 0x0011, 0x0008, 0x003F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
+//     0x0047, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x004F, 0x0008, 0x0011, 0x0008,
+//     0x001B, 0x0008, 0x0011, 0x0008, 0x0057, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
+//     0x005F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0067, 0x0008, 0x0011, 0x0008,
+//     0x0023, 0x0008, 0x0011, 0x0008, 0x006F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
+//     0x0077, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x007F, 0x0008, 0x0011, 0x0008,
+//     0x001B, 0x0008, 0x0011, 0x0008, 0x0087, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
+//     0x008F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0097, 0x0008, 0x0011, 0x0008,
+//     0x0023, 0x0008, 0x0011, 0x0008, 0x009F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
+//     0x00A7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x00AF, 0x0008, 0x0011, 0x0008,
+//     0x001B, 0x0008, 0x0011, 0x0008, 0x00B7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
+//     0x00BF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00C7, 0x0008, 0x0011, 0x0008,
+//     0x0023, 0x0008, 0x0011, 0x0008, 0x00CF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
+//     0x00D7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x00DF, 0x0008, 0x0011, 0x0008,
+//     0x001B, 0x0008, 0x0011, 0x0008, 0x00E7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
+//     0x00EF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00F7, 0x0008, 0x0011, 0x0008,
+//     0x0023, 0x0008, 0x0011, 0x0008, 0x00FF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
+//     0x0107, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x010F, 0x0008, 0x0011, 0x0008,
+//     0x001B, 0x0008, 0x0011, 0x0008, 0x0117, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
+//     0x011F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0127, 0x0008, 0x0011, 0x0008,
+//     0x0023, 0x0008, 0x0011, 0x0008};
 
 constexpr uint16_t uvlc_dec_0[256 + 64] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -245,8 +241,8 @@ class MEL_dec {
     if (num_runs == 0) {  // if no runs, decode more bit from MEL segment
       decode();
     }
-    int32_t t = runs & 0x7F;  // retrieve one run
-    runs >>= 7;               // remove the retrieved run
+    int32_t t = static_cast<int32_t>(runs & 0x7F);  // retrieve one run
+    runs >>= 7;                                     // remove the retrieved run
     num_runs--;
     return t;  // return run
   }
@@ -272,17 +268,17 @@ class rev_buf {
     bits       = 4 - ((Creg & 0x07) == 0x07);
     unstuff    = (d | 0x0F) > 0x8f;
 
-    auto p = reinterpret_cast<intptr_t>(buf);
-    p &= 0x03;
-    auto num  = 1 + p;
-    auto tnum = (num < length) ? num : length;
+    int32_t p = static_cast<int32_t>(reinterpret_cast<intptr_t>(buf) & 0x03);
+    //    p &= 0x03;
+    int32_t num  = 1 + p;
+    int32_t tnum = (num < length) ? num : length;
     for (auto i = 0; i < tnum; ++i) {
-      uint64_t d;
-      d               = *buf--;
-      uint32_t d_bits = 8 - ((unstuff && ((d & 0x7F) == 0x7F)) ? 1 : 0);
-      Creg |= d << bits;
+      uint64_t d64;
+      d64             = *buf--;
+      uint32_t d_bits = 8 - ((unstuff && ((d64 & 0x7F) == 0x7F)) ? 1 : 0);
+      Creg |= d64 << bits;
       bits += d_bits;
-      unstuff = d > 0x8F;
+      unstuff = d64 > 0x8F;
     }
     length -= tnum;
     read();
@@ -357,148 +353,92 @@ class rev_buf {
     return static_cast<uint32_t>(Creg);
   }
 
-  inline uint8_t importVLCBit() {
-    uint32_t cwd = fetch();
-    advance(1);
-    return (cwd & 1);
-  }
+  //  inline uint8_t importVLCBit() {
+  //    uint32_t cwd = fetch();
+  //    advance(1);
+  //    return (cwd & 1);
+  //  }
 
-  inline uint8_t decodeUVLC(uint32_t &u0, uint32_t &u1) {
-    constexpr uint8_t tp[8]        = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
-                                      3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
-    constexpr uint8_t ts[6]        = {0, 0, 0, 1, 5, 5};
-    constexpr uint8_t te[32]       = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
-                                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
-    uint32_t total_bits_to_advance = 0, b0, b1, c0, c1, mask;
-    uint32_t cwd                   = fetch();
-    uint32_t u_pfx0, u_pfx1, u_sfx0, u_sfx1, u_ext0, u_ext1;
-    // Prefix
-    c0 = cwd & 0x7;
-    b0 = tp[c0] & 0x3;
-    total_bits_to_advance += b0;
-    u_pfx0 = tp[c0] >> 2;
-    cwd >>= b0;  // consume bits
-    c1 = cwd & 0x7;
-    b1 = tp[c1] & 0x3;
-    total_bits_to_advance += b1;
-    u_pfx1 = tp[c1] >> 2;
-    cwd >>= b1;  // consume bits
+  //  inline uint8_t decodeUVLC(uint32_t &u0, uint32_t &u1) {
+  //    constexpr uint8_t tp[8]        = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
+  //                                      3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
+  //    constexpr uint8_t ts[6]        = {0, 0, 0, 1, 5, 5};
+  //    constexpr uint8_t te[32]       = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
+  //                                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
+  //    uint32_t total_bits_to_advance = 0, b0, b1, c0, c1, mask;
+  //    uint32_t cwd                   = fetch();
+  //    uint32_t u_pfx0, u_pfx1, u_sfx0, u_sfx1, u_ext0, u_ext1;
+  //    // Prefix
+  //    c0 = cwd & 0x7;
+  //    b0 = tp[c0] & 0x3;
+  //    total_bits_to_advance += b0;
+  //    u_pfx0 = tp[c0] >> 2;
+  //    cwd >>= b0;  // consume bits
+  //    c1 = cwd & 0x7;
+  //    b1 = tp[c1] & 0x3;
+  //    total_bits_to_advance += b1;
+  //    u_pfx1 = tp[c1] >> 2;
+  //    cwd >>= b1;  // consume bits
+  //
+  //    // Suffix
+  //    b0 = ts[u_pfx0];
+  //    total_bits_to_advance += b0;
+  //    mask   = (1 << b0) - 1;
+  //    u_sfx0 = cwd & mask;
+  //    cwd >>= b0;  // consume bits
+  //    b1 = ts[u_pfx1];
+  //    total_bits_to_advance += b1;
+  //    mask   = (1 << b1) - 1;
+  //    u_sfx1 = cwd & mask;
+  //    cwd >>= b1;  // consume bits
+  //
+  //    // Extension
+  //    b0 = 4 & te[u_sfx0];
+  //    total_bits_to_advance += b0;
+  //    u_ext0 = cwd & te[u_sfx0];
+  //    cwd >>= b0;  // consume bits
+  //    b1 = 4 & te[u_sfx1];
+  //    total_bits_to_advance += b1;
+  //    u_ext1 = cwd & te[u_sfx1];
+  //    advance(total_bits_to_advance);
+  //    u0 = u_pfx0 + u_sfx0 + (u_ext0 << 2);
+  //    u1 = u_pfx1 + u_sfx1 + (u_ext1 << 2);
+  //    return 0;
+  //  }
 
-    // Suffix
-    b0 = ts[u_pfx0];
-    total_bits_to_advance += b0;
-    mask   = (1 << b0) - 1;
-    u_sfx0 = cwd & mask;
-    cwd >>= b0;  // consume bits
-    b1 = ts[u_pfx1];
-    total_bits_to_advance += b1;
-    mask   = (1 << b1) - 1;
-    u_sfx1 = cwd & mask;
-    cwd >>= b1;  // consume bits
-
-    // Extension
-    b0 = 4 & te[u_sfx0];
-    total_bits_to_advance += b0;
-    u_ext0 = cwd & te[u_sfx0];
-    cwd >>= b0;  // consume bits
-    b1 = 4 & te[u_sfx1];
-    total_bits_to_advance += b1;
-    u_ext1 = cwd & te[u_sfx1];
-    advance(total_bits_to_advance);
-    u0 = u_pfx0 + u_sfx0 + (u_ext0 << 2);
-    u1 = u_pfx1 + u_sfx1 + (u_ext1 << 2);
-    return 0;
-  }
-
-  inline uint8_t decodeUVLC1(uint32_t &u) {
-    //    constexpr uint8_t tp[8]        = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
-    //                                      3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
-    //    constexpr uint8_t ts[6]        = {0, 0, 0, 1, 5, 5};
-    //    constexpr uint8_t te[32]       = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
-    //                                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
-    //    uint32_t total_bits_to_advance = 0, b, c, mask;
-    uint32_t cwd = fetch();
-    advance((uvlcnew[cwd & 0xFF] & 0x7) + 1);
-    u = uvlcnew[cwd & 0xFF] >> 3;
-    //    uint32_t u_pfx0, u_sfx0, u_ext0;
-    //    // Prefix
-    //    c = cwd & 0x7;
-    //    b = tp[c] & 0x3;
-    //    total_bits_to_advance += b;
-    //    u_pfx0 = tp[c] >> 2;
-    //    cwd >>= b;  // consume bits
-    //
-    //    // Suffix
-    //    b = ts[u_pfx0];
-    //    total_bits_to_advance += b;
-    //    mask   = (1 << b) - 1;
-    //    u_sfx0 = cwd & mask;
-    //    cwd >>= b;  // consume bits
-    //
-    //    // Extension
-    //    b = 4 & te[u_sfx0];
-    //    total_bits_to_advance += b;
-    //    u_ext0 = cwd & te[u_sfx0];
-    //
-    //    advance(total_bits_to_advance);
-    //    u = u_pfx0 + u_sfx0 + (u_ext0 << 2);
-
-    return 0;
-  }
-
-  inline uint8_t decodeUPrefix() {
-    uint32_t cwd = fetch();
-    uint8_t val  = cwd & 0x7;
-    // xx1 1
-    // x10 2
-    // 100 3
-    // 000 5
-    // 000 5,3,5
-    // 001 1,1,0
-    // 010 2,2,0
-    // 011 1,1,0
-    // 100 3,3,1
-    // 101 1,1,0
-    // 110 2,2,0
-    // 111 1,1,0
-    // const uint8_t t[8] = {5, 1, 2, 1, 3, 1, 2, 1};
-    constexpr uint8_t t[8] = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
-                              3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
-    advance(t[val] & 0x3);
-    return t[val] >> 2;
-  }
-
-  inline uint8_t decodeUSuffix(const uint32_t &u_pfx) {
-    constexpr uint8_t ts[6] = {0, 0, 0, 1, 5, 5};
-    uint32_t mask           = static_cast<uint32_t>((1 << ts[u_pfx]) - 1);
-    uint32_t cwd            = fetch();
-    uint8_t val             = static_cast<uint8_t>(cwd & mask);
-    advance(ts[u_pfx]);
-    return val;
-    //    return (u_pfx < 3) ? 0 : val;
-
-    //    uint8_t val;
-    //    if (u_pfx < 3) return 0;
-    //    val = importVLCBit();
-    //    if (u_pfx == 3) return val;
-    //    //    for (int i = 1; i < 5; ++i) {
-    //    //      uint8_t bit = importVLCBit();
-    //    //      val += bit << i;
-    //    //    }
-    //    uint32_t cwd = fetch();
-    //    advance(4);
-    //    val += (cwd & 0x0F) << 1;
-    //    return val;
-  }
-
-  inline uint8_t decodeUExtension(const uint32_t &u_sfx) {
-    //    if (u_sfx < 28) return 0;
-    constexpr uint8_t tu[32] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
-                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
-    uint32_t cwd             = fetch();
-    advance(4 & tu[u_sfx]);
-    return (cwd & tu[u_sfx]);
-  }
+  //  inline uint8_t decodeUVLC1(uint32_t &u) {
+  //    uint32_t cwd = fetch();
+  //    advance((uvlcnew[cwd & 0xFF] & 0x7) + 1);
+  //    u = uvlcnew[cwd & 0xFF] >> 3;
+  //    return 0;
+  //  }
+  //
+  //  inline uint8_t decodeUPrefix() {
+  //    uint32_t cwd = fetch();
+  //    uint8_t val  = cwd & 0x7;
+  //    constexpr uint8_t t[8] = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
+  //                              3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
+  //    advance(t[val] & 0x3);
+  //    return t[val] >> 2;
+  //  }
+  //
+  //  inline uint8_t decodeUSuffix(const uint32_t &u_pfx) {
+  //    constexpr uint8_t ts[6] = {0, 0, 0, 1, 5, 5};
+  //    uint32_t mask           = static_cast<uint32_t>((1 << ts[u_pfx]) - 1);
+  //    uint32_t cwd            = fetch();
+  //    uint8_t val             = static_cast<uint8_t>(cwd & mask);
+  //    advance(ts[u_pfx]);
+  //    return val;
+  //  }
+  //
+  //  inline uint8_t decodeUExtension(const uint32_t &u_sfx) {
+  //    //    if (u_sfx < 28) return 0;
+  //    constexpr uint8_t tu[32] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
+  //                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
+  //    uint32_t cwd             = fetch();
+  //    advance(4 & tu[u_sfx]);
+  //    return (cwd & tu[u_sfx]);
+  //  }
 };
 
 /********************************************************************************
@@ -565,9 +505,9 @@ class fwd_buf {
     }
 
     // we accumulate in t and keep a count of the number of bits_local in bits_local
-    uint32_t bits_local = 8 - unstuff;
-    uint32_t t          = val & 0xFF;
-    bool unstuff_flag   = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
+    uint32_t bits_local   = 8 - unstuff;
+    uint32_t t            = val & 0xFF;
+    uint32_t unstuff_flag = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
 
     t |= ((val >> 8) & 0xFF) << bits_local;
     bits_local += 8 - unstuff_flag;

@@ -440,7 +440,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   vst1q_s32(E_n, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[0], 1), 1) + 1)) * vsig0);
   vst1q_s32(E_n + 4, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[1], 1), 1) + 1)) * vsig1);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  const uint32_t QWx2 = block->size.x + block->size.x % 2;
+  // const uint32_t QWx2 = block->size.x + block->size.x % 2;
   // const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
   uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
   uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * (block->blkstate_stride) + 2U * qx + 1U;
@@ -514,8 +514,8 @@ static inline void make_storage_one(const j2k_codeblock *const block, const uint
   for (int i = 0; i < 4; ++i) {
     if ((x[i] >= 0 && x[i] < static_cast<int16_t>(block->size.x))
         && (y[i] >= 0 && y[i] < static_cast<int16_t>(block->size.y))) {
-      v_n[i] = static_cast<uint32_t>(
-          block->sample_buf[(uint32_t)x[i] + (uint32_t)y[i] * (block->blksampl_stride)]);
+      v_n[i] =
+          static_cast<uint32_t>(block->sample_buf[(size_t)x[i] + (size_t)y[i] * (block->blksampl_stride)]);
     } else {
       v_n[i] = 0;
     }

@@ -33,18 +33,17 @@
 
 void j2k_codeblock::update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1,
                                   const int16_t &j2) const {
-  sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * blksampl_stride] |=
+  sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * blksampl_stride] |=
       static_cast<int32_t>(symbol) << p;
 }
 
 void j2k_codeblock::update_sign(const int8_t &val, const int16_t &j1, const int16_t &j2) const {
-  sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * blksampl_stride] |= val << 31;
+  sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * blksampl_stride] |= val << 31;
 }
 
 uint8_t j2k_codeblock::get_sign(const int16_t &j1, const int16_t &j2) const {
   return static_cast<uint8_t>(
-      ((uint32_t)(sample_buf[static_cast<uint32_t>(j2) + static_cast<uint32_t>(j1) * blksampl_stride]
-                  | 0x8000))
+      ((uint32_t)(sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * blksampl_stride] | 0x8000))
       >> 31);
 }
 
@@ -324,8 +323,7 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
             symbol    = mq_dec.decode(label_sig);
             block->update_sample(symbol, p, j1, j2);
           }
-          if (block->sample_buf[static_cast<uint32_t>(j2)
-                                + static_cast<uint32_t>(j1) * block->blksampl_stride]
+          if (block->sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * block->blksampl_stride]
               == static_cast<int32_t>(1) << p) {
             block->modify_state(sigma, 1, j1, j2);
             decode_j2k_sign(block, mq_dec, j1, j2);
@@ -504,9 +502,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     for (int16_t y = 0; y < static_cast<int16_t>(block->size.y); y++) {
       for (int16_t x = 0; x < static_cast<int16_t>(block->size.x); x++) {
         const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
-        val =
-            &block
-                 ->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->blksampl_stride];
+        val  = &block->sample_buf[static_cast<size_t>(x) + static_cast<size_t>(y) * block->blksampl_stride];
         dst  = block->i_samples + n;
         sign = *val & INT32_MIN;
         *val &= INT32_MAX;
@@ -544,9 +540,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     for (int16_t y = 0; y < static_cast<int16_t>(block->size.y); y++) {
       for (int16_t x = 0; x < static_cast<int16_t>(block->size.x); x++) {
         const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
-        val =
-            &block
-                 ->sample_buf[static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->blksampl_stride];
+        val  = &block->sample_buf[static_cast<size_t>(x) + static_cast<size_t>(y) * block->blksampl_stride];
         dst  = block->i_samples + n;
         sign = *val & INT32_MIN;  // extract sign bit
         *val &= INT32_MAX;        // delete sign bit temporally
