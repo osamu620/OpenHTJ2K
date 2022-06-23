@@ -459,8 +459,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
   alignas(32) int32_t rho[2];
   alignas(32) uint32_t u_off[2];
-  alignas(32) uint32_t emb_k[2];
-  alignas(32) uint32_t emb_1[2];
+  alignas(32) int32_t emb_k[2];
+  alignas(32) int32_t emb_1[2];
   alignas(32) uint32_t u[2];
   alignas(32) uint32_t U[2];
   alignas(32) uint8_t gamma[2];
@@ -755,15 +755,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
     u_off[0] = tv0 & 1;
 
-    if (u_off[Q0] == 1) {
-      //      u_pfx[Q0] = VLC_dec.decodeUPrefix();
-      //      u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-      //      u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-      //      u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-      VLC_dec.decodeUVLC1(u[0]);
-    } else {
-      u[Q0] = 0;
-    }
+    uint32_t idx         = (vlcval & 0x3F) + (u_off[0] << 6U);
+    uint16_t uvlc_result = uvlc_dec_0[idx];
+    // remove total prefix length
+    vlcval = VLC_dec.advance(uvlc_result & 0x7);
+    uvlc_result >>= 3;
+    // extract suffixes for quad 0 and 1
+    uint32_t len = uvlc_result & 0xF;          // suffix length for 2 quads (up to 10 = 5 + 5)
+    uint32_t tmp = vlcval & ((1 << len) - 1);  // suffix value for 2 quads
+    vlcval       = VLC_dec.advance(len);
+    uvlc_result >>= 4;
+    // quad 0 length
+    len = uvlc_result & 0x7;  // quad 0 suffix length
+    uvlc_result >>= 3;
+    u[0] = (uint16_t)((uvlc_result & 7) + (tmp & ~(0xFFU << len)));
 
     U[Q0] = kappa[Q0] + u[Q0];
 
@@ -1184,15 +1189,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       vlcval   = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
       u_off[0] = tv0 & 1;
 
-      if (u_off[Q0] == 1) {
-        //        u_pfx[Q0] = VLC_dec.decodeUPrefix();
-        //        u_sfx[Q0] = VLC_dec.decodeUSuffix(u_pfx[Q0]);
-        //        u_ext[Q0] = VLC_dec.decodeUExtension(u_sfx[Q0]);
-        //        u[Q0]     = u_pfx[Q0] + u_sfx[Q0] + (u_ext[Q0] << 2);
-        VLC_dec.decodeUVLC1(u[0]);
-      } else {
-        u[Q0] = 0;
-      }
+      uint32_t idx         = (vlcval & 0x3F) + (u_off[0] << 6U);
+      uint16_t uvlc_result = uvlc_dec_0[idx];
+      // remove total prefix length
+      vlcval = VLC_dec.advance(uvlc_result & 0x7);
+      uvlc_result >>= 3;
+      // extract suffixes for quad 0 and 1
+      uint32_t len = uvlc_result & 0xF;          // suffix length for 2 quads (up to 10 = 5 + 5)
+      uint32_t tmp = vlcval & ((1 << len) - 1);  // suffix value for 2 quads
+      vlcval       = VLC_dec.advance(len);
+      uvlc_result >>= 4;
+      // quad 0 length
+      len = uvlc_result & 0x7;  // quad 0 suffix length
+      uvlc_result >>= 3;
+      u[0] = (uint16_t)((uvlc_result & 7) + (tmp & ~(0xFFU << len)));
 
       gamma[Q0] = (popcount32(static_cast<uint32_t>(rho[Q0])) < 2) ? 0 : 1;
       kappa[Q0] = (1 > gamma[Q0] * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma[Q0] * (Emax0 - 1));
@@ -1642,7 +1652,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
     }
   } else {
     // lossy path
-    int32_t ROImask = 0;
+    [[maybe_unused]] int32_t ROImask = 0;
     if (ROIshift) {
       ROImask = static_cast<int32_t>(0xFFFFFFFF);
     }
