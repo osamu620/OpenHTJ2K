@@ -503,7 +503,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     emb_k[0]  = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
     emb_1[0]  = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
 #endif
-
     *rho_p++ = rho[Q0];
     // calculate context for the next quad
     context = static_cast<uint16_t>((rho[Q0] >> 1) | (rho[Q0] & 1));
@@ -528,7 +527,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     emb_k[1]  = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
     emb_1[1]  = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
 #endif
-
+    *rho_p++ = rho[Q1];
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     auto vsigma0 = vdupq_n_s32(rho[Q0]);
     auto vm      = vld1q_s32(mask);
@@ -550,7 +549,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       sigma_quads[i + 4] = (rho[Q1] >> i) & 1;
     }
 #endif
-    *rho_p++ = rho[Q1];
     // calculate context for the next quad
     context = static_cast<uint16_t>((rho[Q1] >> 1) | (rho[Q1] & 1));
 
@@ -894,14 +892,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         find_max(E_p[2 * (qx + 1) - 1], E_p[2 * (qx + 1)], E_p[2 * (qx + 1) + 1], E_p[2 * (qx + 1) + 2]);
 #endif
     // calculate context for the next quad
-    context = static_cast<uint16_t>(((rho_p[qx - 1] >> 3) | ((rho_p[qx] >> 1) & 1))
-                                    + (((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1)) << 2));
-    context |= ((((rho[Q1] >> 2) & 1) | ((rho[Q1] >> 3) & 1)) << 1);
+    context = ((rho[Q1] & 0x4) << 6) | ((rho[Q1] & 0x8) << 5);           // (w | sw) << 8
+    context |= ((rho_p[qx - 1] & 0x8) << 4) | ((rho_p[qx] & 0x2) << 6);  // (nw | n) << 7
+    context |= ((rho_p[qx] & 0x8) << 6) | ((rho_p[qx + 1] & 0x2) << 8);  // (ne | nf) << 9
 
     for (qx = 0; qx < QW - 1; qx += 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -922,12 +920,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
 
       // calculate context for the next quad
-      context = static_cast<uint16_t>(((rho_p[qx] >> 3) | ((rho_p[qx + 1] >> 1) & 1))
-                                      + (((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1)) << 2));
-      context |= ((((rho[Q0] >> 2) & 1) | ((rho[Q0] >> 3) & 1)) << 1);
+      context = ((rho[Q0] & 0x4) << 6) | ((rho[Q0] & 0x8) << 5);               // (w | sw) << 8
+      context |= ((rho_p[qx] & 0x8) << 4) | ((rho_p[qx + 1] & 0x2) << 6);      // (nw | n) << 7
+      context |= ((rho_p[qx + 1] & 0x8) << 6) | ((rho_p[qx + 2] & 0x2) << 8);  // (ne | nf) << 9
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
-      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
       if (context == 0) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
@@ -946,9 +944,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       emb_1[1]  = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
 #endif
       // calculate context for the next quad
-      context = static_cast<uint16_t>(((rho_p[qx + 1] >> 3) | ((rho_p[qx + 2] >> 1) & 1))
-                                      + (((rho_p[qx + 2] >> 3) | ((rho_p[qx + 3] >> 1) & 1)) << 2));
-      context |= ((((rho[1] >> 2) & 1) | ((rho[1] >> 3) & 1)) << 1);
+      context = ((rho[Q1] & 0x4) << 6) | ((rho[Q1] & 0x8) << 5);               // (w | sw) << 8
+      context |= ((rho_p[qx + 1] & 0x8) << 4) | ((rho_p[qx + 2] & 0x2) << 6);  // (nw | n) << 7
+      context |= ((rho_p[qx + 2] & 0x8) << 6) | ((rho_p[qx + 3] & 0x2) << 8);  // (ne | nf) << 9
 
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -1128,12 +1126,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       Emax0 = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 2) - 1));
       Emax1 = vmaxvq_s32(vld1q_s32(E_p + 2 * (qx + 3) - 1));
 
-      auto v_v_quads  = vzipq_s32(v_v_quads0, v_v_quads1);
-      vExp            = 32 - vclzq_s32(vzip2q_s32(v_v_quads.val[0], v_v_quads.val[1]));
-      E_p[2 * qx]     = vgetq_lane_s32(vExp, 0);
-      E_p[2 * qx + 1] = vgetq_lane_s32(vExp, 1);
-      E_p[2 * qx + 2] = vgetq_lane_s32(vExp, 2);
-      E_p[2 * qx + 3] = vgetq_lane_s32(vExp, 3);
+      auto v_v_quads = vzipq_s32(v_v_quads0, v_v_quads1);
+      vExp           = 32 - vclzq_s32(vzip2q_s32(v_v_quads.val[0], v_v_quads.val[1]));
+      vst1q_s32(E_p + 2 * qx, vExp);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       Emax0 =
           find_max(E_p[2 * (qx + 2) - 1], E_p[2 * (qx + 2)], E_p[2 * (qx + 2) + 1], E_p[2 * (qx + 2) + 2]);
@@ -1159,7 +1154,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     if (QW % 2 == 1) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval      = VLC_dec.fetch();
-      int32_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+      int32_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
