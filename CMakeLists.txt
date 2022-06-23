@@ -46,7 +46,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC") # MSVC
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd5051")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} /Od /DDEBUG /ZI")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /Ox")
-  set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} /O2 /ZI")
+  set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} /O3 /ZI")
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang") # Clang
   if(NOT COMPILER_SUPPORTS_CXX17)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
@@ -55,8 +55,8 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang") # Clang
       "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fcolor-diagnostics"
   )
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O2 -DNDEBUG") # -O3 might generate slow executable
-  set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} -O2 -g -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG") # -O3 might generate slow executable
+  set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
 else() # maybe GCC
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
   set(CMAKE_CXX_FLAGS
@@ -64,7 +64,7 @@ else() # maybe GCC
   )
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
-  set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} -O2 -g -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RelWithDebInfo "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
 endif()
 
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
