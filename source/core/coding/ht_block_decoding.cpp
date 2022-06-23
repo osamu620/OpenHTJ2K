@@ -439,7 +439,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
   alignas(32) uint32_t m_quads[8];
-
+  alignas(32) uint32_t msval[8];
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   int32x4_t vExp;
   const int32_t mask[4] = {1, 2, 4, 8};
@@ -603,7 +603,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
 
     // recoverMagSgnValue
-    alignas(32) uint32_t msval[8];
+    //    alignas(32) uint32_t msval[8];
     for (uint32_t i = 0; i < 8; i++) {
       msval[i] = MagSgn.fetch();
       MagSgn.advance(m_quads[i]);
@@ -789,7 +789,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
 
     // recoverMagSgnValue
-    alignas(32) uint32_t msval[4];
+    //    alignas(32) uint32_t msval[4];
     for (uint32_t i = 0; i < 4; i++) {
       msval[i] = MagSgn.fetch();
       MagSgn.advance(m_quads[i]);
@@ -1018,7 +1018,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
 
       // recoverMagSgnValue
-      alignas(32) uint32_t msval[8];
+      //      alignas(32) uint32_t msval[8];
       for (uint32_t i = 0; i < 8; i++) {
         msval[i] = MagSgn.fetch();
         MagSgn.advance(m_quads[i]);
@@ -1221,7 +1221,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 #endif
 
       // recoverMagSgnValue
-      alignas(32) uint32_t msval[4];
+      //      alignas(32) uint32_t msval[4];
       for (uint32_t i = 0; i < 4; i++) {
         msval[i] = MagSgn.fetch();
         MagSgn.advance(m_quads[i]);
