@@ -541,7 +541,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     // auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
     auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                    _mm256_set1_epi32(1));
-    _mm256_store_si256((__m256i *)sigma_quads, vsigma);
+    // _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
     for (uint32_t i = 0; i < 4; i++) {
       sigma_quads[i] = (rho[Q0] >> i) & 1;
@@ -745,7 +745,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
     auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                    _mm256_set1_epi32(1));
-    _mm256_store_si256((__m256i *)sigma_quads, vsigma);
+    // _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
     for (uint32_t i = 0; i < 4; i++) {
       sigma_quads[i] = (rho[Q0] >> i) & 1;
@@ -871,10 +871,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   for (uint16_t row = 1; row < QH; row++) {
     rho_p      = rholine.get() + 1;
     E_p        = Eline.get() + 1;
-    mp0        = block->sample_buf.get() + (row * 2) * block->blksampl_stride;
-    mp1        = block->sample_buf.get() + (row * 2 + 1) * block->blksampl_stride;
-    sp0        = block->block_states.get() + (row * 2 + 1) * block->blkstate_stride + 1;
-    sp1        = block->block_states.get() + (row * 2 + 2) * block->blkstate_stride + 1;
+    mp0        = block->sample_buf.get() + (row * 2U) * block->blksampl_stride;
+    mp1        = block->sample_buf.get() + (row * 2U + 1U) * block->blksampl_stride;
+    sp0        = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
+    sp1        = block->block_states.get() + (row * 2U + 2U) * block->blkstate_stride + 1U;
     int32_t qx = 0;
     rho[Q1]    = 0;
     int32_t Emax0, Emax1;
@@ -964,7 +964,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       // auto vrho   = _mm256_setr_epi32(rho[0], rho[0], rho[0], rho[0], rho[1], rho[1], rho[1], rho[1]);
       auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                      _mm256_set1_epi32(1));
-      _mm256_store_si256((__m256i *)sigma_quads, vsigma);
+      // _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i] = (rho[Q0] >> i) & 1;
@@ -1180,7 +1180,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho[0]), _mm_setzero_si128(), 1);
       auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                      _mm256_set1_epi32(1));
-      _mm256_store_si256((__m256i *)sigma_quads, vsigma);
+      // _mm256_store_si256((__m256i *)sigma_quads, vsigma);
 #else
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i] = (rho[Q0] >> i) & 1;
