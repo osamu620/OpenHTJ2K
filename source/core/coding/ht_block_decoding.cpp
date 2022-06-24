@@ -953,19 +953,10 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
   uint8_t causal_cond = 0;
   uint8_t bit;
   uint8_t mbr;
-  // uint32_t mbr_info;
   const auto block_width  = static_cast<uint16_t>(j_start + width);
   const auto block_height = static_cast<uint16_t>(i_start + height);
 
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
-    // mbr_info = 0;
-    //     for (int16_t i = height; i > -2; --i) {
-    //       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != height));
-    //       mbr_info <<= 3;
-    //       mbr_info |= (block->get_sigma(i_start + i, j - 1) + (block->get_sigma(i_start + i, j) << 1)
-    //                    + (block->get_sigma(i_start + i, j + 1) << 2))
-    //                   * causal_cond;
-    //     }
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
       causal_cond = (((block->Cmodes & CAUSAL) == 0) || (i != block_height - 1));
@@ -973,16 +964,13 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
       if (block->get_state(Sigma, i, j) == 0) {
         mbr = block->calc_mbr(i, j, causal_cond);
       }
-      // mbr_info >>= 3;
       if (mbr != 0) {
         block->modify_state(refinement_indicator, 1, i, j);
         bit = SigProp.importSigPropBit();
         block->modify_state(refinement_value, bit, i, j);
-        // block->set_refinement_value(bit, i, j);
         *sp |= bit << pLSB;
       }
       block->modify_state(scan, 1, i, j);
-      // block->update_scan_state(1, i, j);
     }
   }
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
