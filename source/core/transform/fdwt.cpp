@@ -389,15 +389,25 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
        sprec_t *sp = buf + (2 * v + voffset[0]) * stride;
        size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
        for (; len >= 8; len -= 8) {
-         auto vline = _mm256_loadu_si256((__m256i *)sp);
-         vline      = _mm256_shuffle_epi8(vline, vshmask);
-         vline      = _mm256_permute4x64_epi64(vline, 0xD8);
-         _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
-         first += 8;
-         second += 8;
-         sp += 16;
+         //  auto vline0 = _mm_loadu_si128((__m128i *)sp);
+        //  auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
+        //  vline0 =
+        //      _mm_shuffle_epi8(vline0, _mm_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1,
+        //      0));
+        //  vline1 =
+        //      _mm_shuffle_epi8(vline1, _mm_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1,
+        //      0));
+        //  _mm_storeu_si128((__m128i *)first, _mm_unpacklo_epi64(vline0, vline1));
+        //  _mm_storeu_si128((__m128i *)second, _mm_unpackhi_epi64(vline0, vline1));
+        auto vline = _mm256_loadu_si256((__m256i *)sp);
+        vline      = _mm256_shuffle_epi8(vline, vshmask);
+        vline      = _mm256_permute4x64_epi64(vline, 0xD8);
+        _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
+        first += 8;
+        second += 8;
+        sp += 16;
       }
-       for (; len > 0; --len) {
+      for (; len > 0; --len) {
          *first++  = *sp++;
          *second++ = *sp++;
       }
@@ -426,15 +436,25 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
        sprec_t *sp = buf + (2 * v + voffset[2]) * stride;
        size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
        for (; len >= 8; len -= 8) {
-         auto vline = _mm256_loadu_si256((__m256i *)sp);
-         vline      = _mm256_shuffle_epi8(vline, vshmask);
-         vline      = _mm256_permute4x64_epi64(vline, 0xD8);
-         _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
-         first += 8;
-         second += 8;
-         sp += 16;
+         //  auto vline0 = _mm_loadu_si128((__m128i *)sp);
+        //  auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
+        //  vline0 =
+        //      _mm_shuffle_epi8(vline0, _mm_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1,
+        //      0));
+        //  vline1 =
+        //      _mm_shuffle_epi8(vline1, _mm_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1,
+        //      0));
+        //  _mm_storeu_si128((__m128i *)first, _mm_unpacklo_epi64(vline0, vline1));
+        //  _mm_storeu_si128((__m128i *)second, _mm_unpackhi_epi64(vline0, vline1));
+        auto vline = _mm256_loadu_si256((__m256i *)sp);
+        vline      = _mm256_shuffle_epi8(vline, vshmask);
+        vline      = _mm256_permute4x64_epi64(vline, 0xD8);
+        _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
+        first += 8;
+        second += 8;
+        sp += 16;
       }
-       for (; len > 0; --len) {
+      for (; len > 0; --len) {
          *first++  = *sp++;
          *second++ = *sp++;
       }
