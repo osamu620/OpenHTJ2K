@@ -29,32 +29,16 @@
 #pragma once
 
 #include <cstdint>
-#include <algorithm>  // for max{a,b,c,d}
 
-// constexpr uint32_t uvlcnew[256] = {
-//     0x002F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0037, 0x0008, 0x0011, 0x0008,
-//     0x0023, 0x0008, 0x0011, 0x0008, 0x003F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
-//     0x0047, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x004F, 0x0008, 0x0011, 0x0008,
-//     0x001B, 0x0008, 0x0011, 0x0008, 0x0057, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
-//     0x005F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0067, 0x0008, 0x0011, 0x0008,
-//     0x0023, 0x0008, 0x0011, 0x0008, 0x006F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
-//     0x0077, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x007F, 0x0008, 0x0011, 0x0008,
-//     0x001B, 0x0008, 0x0011, 0x0008, 0x0087, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
-//     0x008F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0097, 0x0008, 0x0011, 0x0008,
-//     0x0023, 0x0008, 0x0011, 0x0008, 0x009F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
-//     0x00A7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x00AF, 0x0008, 0x0011, 0x0008,
-//     0x001B, 0x0008, 0x0011, 0x0008, 0x00B7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
-//     0x00BF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00C7, 0x0008, 0x0011, 0x0008,
-//     0x0023, 0x0008, 0x0011, 0x0008, 0x00CF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
-//     0x00D7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x00DF, 0x0008, 0x0011, 0x0008,
-//     0x001B, 0x0008, 0x0011, 0x0008, 0x00E7, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
-//     0x00EF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x00F7, 0x0008, 0x0011, 0x0008,
-//     0x0023, 0x0008, 0x0011, 0x0008, 0x00FF, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008,
-//     0x0107, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008, 0x010F, 0x0008, 0x0011, 0x0008,
-//     0x001B, 0x0008, 0x0011, 0x0008, 0x0117, 0x0008, 0x0011, 0x0008, 0x0023, 0x0008, 0x0011, 0x0008,
-//     0x011F, 0x0008, 0x0011, 0x0008, 0x001B, 0x0008, 0x0011, 0x0008, 0x0127, 0x0008, 0x0011, 0x0008,
-//     0x0023, 0x0008, 0x0011, 0x0008};
-
+// LUT for UVLC decoding in initial line-pair
+//   index (8bits) : [bit   7] u_off_1 (1bit)
+//                   [bit   6] u_off_0 (1bit)
+//                   [bit 5-0] LSB bits from VLC codeword
+//   the index is incremented by 64 when both u_off_0 and u_off_1 are 0
+//
+//   output        : [bit 0-2] length of prefix (l_p) for quads 0 and 1
+//                 : [bit 3-6] length of suffix (l_s) for quads 0 and 1
+//                 : [bit 7-9] ength of suffix (l_s) for quads 0
 constexpr uint16_t uvlc_dec_0[256 + 64] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -81,6 +65,15 @@ constexpr uint16_t uvlc_dec_0[256 + 64] = {
     0x7003, 0x6c02, 0xbeb6, 0xec2c, 0xf02d, 0x6c02, 0xb496, 0x8c03, 0x7003, 0x6c02, 0x7eac, 0xac0c, 0x9004,
     0x6c02, 0x748c, 0x8c03, 0x7003, 0x6c02, 0x9ead, 0xec2c, 0xb00d, 0x6c02, 0x948d, 0x8c03, 0x7003, 0x6c02,
     0x7eac, 0xac0c, 0x9004, 0x6c02, 0x748c, 0x8c03, 0x7003, 0x6c02};
+
+// LUT for UVLC decoding in non-initial line-pair
+//   index (8bits) : [bit   7] u_off_1 (1bit)
+//                   [bit   6] u_off_0 (1bit)
+//                   [bit 5-0] LSB bits from VLC codeword
+//
+//   output        : [bit 0-2] length of prefix (l_p) for quads 0 and 1
+//                 : [bit 3-6] length of suffix (l_s) for quads 0 and 1
+//                 : [bit 7-9] ength of suffix (l_s) for quads 0
 constexpr uint16_t uvlc_dec_1[256] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -102,6 +95,7 @@ constexpr uint16_t uvlc_dec_1[256] = {
     0x4403, 0x2803, 0x2402, 0x76b6, 0xa42c, 0xa82d, 0x2402, 0x6c96, 0x4403, 0x2803, 0x2402, 0x36ac, 0x640c,
     0x4804, 0x2402, 0x2c8c, 0x4403, 0x2803, 0x2402, 0x56ad, 0xa42c, 0x680d, 0x2402, 0x4c8d, 0x4403, 0x2803,
     0x2402, 0x36ac, 0x640c, 0x4804, 0x2402, 0x2c8c, 0x4403, 0x2803, 0x2402};
+
 /********************************************************************************
  * MEL_dec:
  *******************************************************************************/
@@ -352,93 +346,6 @@ class rev_buf {
     bits -= num_bits;
     return static_cast<uint32_t>(Creg);
   }
-
-  //  inline uint8_t importVLCBit() {
-  //    uint32_t cwd = fetch();
-  //    advance(1);
-  //    return (cwd & 1);
-  //  }
-
-  //  inline uint8_t decodeUVLC(uint32_t &u0, uint32_t &u1) {
-  //    constexpr uint8_t tp[8]        = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
-  //                                      3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
-  //    constexpr uint8_t ts[6]        = {0, 0, 0, 1, 5, 5};
-  //    constexpr uint8_t te[32]       = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
-  //                                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
-  //    uint32_t total_bits_to_advance = 0, b0, b1, c0, c1, mask;
-  //    uint32_t cwd                   = fetch();
-  //    uint32_t u_pfx0, u_pfx1, u_sfx0, u_sfx1, u_ext0, u_ext1;
-  //    // Prefix
-  //    c0 = cwd & 0x7;
-  //    b0 = tp[c0] & 0x3;
-  //    total_bits_to_advance += b0;
-  //    u_pfx0 = tp[c0] >> 2;
-  //    cwd >>= b0;  // consume bits
-  //    c1 = cwd & 0x7;
-  //    b1 = tp[c1] & 0x3;
-  //    total_bits_to_advance += b1;
-  //    u_pfx1 = tp[c1] >> 2;
-  //    cwd >>= b1;  // consume bits
-  //
-  //    // Suffix
-  //    b0 = ts[u_pfx0];
-  //    total_bits_to_advance += b0;
-  //    mask   = (1 << b0) - 1;
-  //    u_sfx0 = cwd & mask;
-  //    cwd >>= b0;  // consume bits
-  //    b1 = ts[u_pfx1];
-  //    total_bits_to_advance += b1;
-  //    mask   = (1 << b1) - 1;
-  //    u_sfx1 = cwd & mask;
-  //    cwd >>= b1;  // consume bits
-  //
-  //    // Extension
-  //    b0 = 4 & te[u_sfx0];
-  //    total_bits_to_advance += b0;
-  //    u_ext0 = cwd & te[u_sfx0];
-  //    cwd >>= b0;  // consume bits
-  //    b1 = 4 & te[u_sfx1];
-  //    total_bits_to_advance += b1;
-  //    u_ext1 = cwd & te[u_sfx1];
-  //    advance(total_bits_to_advance);
-  //    u0 = u_pfx0 + u_sfx0 + (u_ext0 << 2);
-  //    u1 = u_pfx1 + u_sfx1 + (u_ext1 << 2);
-  //    return 0;
-  //  }
-
-  //  inline uint8_t decodeUVLC1(uint32_t &u) {
-  //    uint32_t cwd = fetch();
-  //    advance((uvlcnew[cwd & 0xFF] & 0x7) + 1);
-  //    u = uvlcnew[cwd & 0xFF] >> 3;
-  //    return 0;
-  //  }
-  //
-  //  inline uint8_t decodeUPrefix() {
-  //    uint32_t cwd = fetch();
-  //    uint8_t val  = cwd & 0x7;
-  //    constexpr uint8_t t[8] = {3 | (5 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2),
-  //                              3 | (3 << 2), 1 | (1 << 2), 2 | (2 << 2), 1 | (1 << 2)};
-  //    advance(t[val] & 0x3);
-  //    return t[val] >> 2;
-  //  }
-  //
-  //  inline uint8_t decodeUSuffix(const uint32_t &u_pfx) {
-  //    constexpr uint8_t ts[6] = {0, 0, 0, 1, 5, 5};
-  //    uint32_t mask           = static_cast<uint32_t>((1 << ts[u_pfx]) - 1);
-  //    uint32_t cwd            = fetch();
-  //    uint8_t val             = static_cast<uint8_t>(cwd & mask);
-  //    advance(ts[u_pfx]);
-  //    return val;
-  //  }
-  //
-  //  inline uint8_t decodeUExtension(const uint32_t &u_sfx) {
-  //    //    if (u_sfx < 28) return 0;
-  //    constexpr uint8_t tu[32] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0,   0,   0,
-  //                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xF, 0xF, 0xF, 0xF};
-  //    uint32_t cwd             = fetch();
-  //    advance(4 & tu[u_sfx]);
-  //    return (cwd & tu[u_sfx]);
-  //  }
 };
 
 /********************************************************************************
@@ -709,3 +616,357 @@ class MR_dec {
         Dref((Lref == 0) ? nullptr : HT_magref_segment) {}
   uint8_t importMagRefBit();
 };
+
+///********************************************************************************
+// * functions for state_MS: state class for MagSgn decoding
+// *******************************************************************************/
+// void state_MS_dec::loadByte() {
+//  tmp  = 0xFF;
+//  bits = (last == 0xFF) ? 7 : 8;
+//  if (pos < length) {
+//    tmp = buf[pos];
+//    pos++;
+//    last = tmp;
+//  }
+//
+//  Creg |= static_cast<uint64_t>(tmp) << ctreg;
+//  ctreg = static_cast<uint8_t>(ctreg + bits);
+//}
+// void state_MS_dec::close(int32_t num_bits) {
+//  Creg >>= num_bits;
+//  ctreg = static_cast<uint8_t>(ctreg - static_cast<uint8_t>(num_bits));
+//  while (ctreg < 32) {
+//    loadByte();
+//  }
+//}
+//
+//[[maybe_unused]] uint8_t state_MS_dec::importMagSgnBit() {
+//  uint8_t val;
+//  if (bits == 0) {
+//    bits = (last == 0xFF) ? 7 : 8;
+//    if (pos < length) {
+//      tmp = *(buf + pos);  // modDcup(MS->pos, Lcup);
+//      if ((static_cast<uint16_t>(tmp) & static_cast<uint16_t>(1 << bits)) != 0) {
+//        printf("ERROR: importMagSgnBit error\n");
+//        throw std::exception();
+//      }
+//    } else if (pos == length) {
+//      tmp = 0xFF;
+//    } else {
+//      printf("ERROR: importMagSgnBit error\n");
+//      throw std::exception();
+//    }
+//    last = tmp;
+//    pos++;
+//  }
+//  val = tmp & 1;
+//  tmp = static_cast<uint8_t>(tmp >> 1);
+//  --bits;
+//  return val;
+//}
+//
+//[[maybe_unused]] int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
+//  int32_t val = 0;
+//  // uint8_t bit;
+//  if (m_n > 0) {
+//    val = static_cast<int32_t>(bitmask32[m_n] & (int32_t)Creg);
+//    //      for (int i = 0; i < m_n; i++) {
+//    //        bit = MS->importMagSgnBit();
+//    //        val += (bit << i);
+//    //      }
+//    val += (i_n << m_n);
+//    close(m_n);
+//  } else {
+//    val = 0;
+//  }
+//  return val;
+//}
+//
+///********************************************************************************
+// * functions for state_MEL_unPacker and state_MEL: state classes for MEL decoding
+// *******************************************************************************/
+// uint8_t state_MEL_unPacker::importMELbit() {
+//  if (bits == 0) {
+//    bits = (tmp == 0xFF) ? 7 : 8;
+//    if (pos < length) {
+//      tmp = *(buf + pos);  //+ modDcup(MEL_unPacker->pos, Lcup);
+//      //        MEL_unPacker->tmp = modDcup()
+//      pos++;
+//    } else {
+//      tmp = 0xFF;
+//    }
+//  }
+//  bits--;
+//  return (tmp >> bits) & 1;
+//}
+//
+// uint8_t state_MEL_decoder::decodeMELSym() {
+//  uint8_t eval;
+//  uint8_t bit;
+//  if (MEL_run == 0 && MEL_one == 0) {
+//    eval = this->MEL_E[MEL_k];
+//    bit  = MEL_unPacker->importMELbit();
+//    if (bit == 1) {
+//      MEL_run = static_cast<uint8_t>(1 << eval);
+//      MEL_k   = static_cast<uint8_t>((12 < MEL_k + 1) ? 12 : MEL_k + 1);
+//    } else {
+//      MEL_run = 0;
+//      while (eval > 0) {
+//        bit     = MEL_unPacker->importMELbit();
+//        MEL_run = static_cast<uint8_t>((MEL_run << 1) + bit);
+//        eval--;
+//      }
+//      MEL_k   = static_cast<uint8_t>((0 > MEL_k - 1) ? 0 : MEL_k - 1);
+//      MEL_one = 1;
+//    }
+//  }
+//  if (MEL_run > 0) {
+//    MEL_run--;
+//    return 0;
+//  } else {
+//    MEL_one = 0;
+//    return 1;
+//  }
+//}
+//
+///********************************************************************************
+// * functions for state_VLC: state class for VLC decoding
+// *******************************************************************************/
+//#ifndef ADVANCED
+// uint8_t state_VLC::importVLCBit() {
+//  uint8_t val;
+//  if (bits == 0) {
+//    if (pos >= rev_length) {
+//      tmp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
+//    } else {
+//      printf("ERROR: import VLCBits error\n");
+//      throw std::exception();
+//    }
+//    bits = 8;
+//    if (last > 0x8F && (tmp & 0x7F) == 0x7F) {
+//      bits = 7;  // bit-un-stuffing
+//    }
+//    last = tmp;
+//    // To prevent overflow of pos
+//    if (pos > 0) {
+//      pos--;
+//    }
+//  }
+//  val = tmp & 1;
+//  tmp >>= 1;
+//  bits--;
+//  return val;
+//}
+//#else
+// void state_VLC_dec::load_bytes() {
+//  uint64_t load_val = 0;
+//  int32_t new_bits  = 32;
+//  last              = buf[pos + 1];
+//  if (pos >= 3) {  // Common case; we have at least 4 bytes available
+//    load_val = buf[pos - 3];
+//    load_val = (load_val << 8) | buf[pos - 2];
+//    load_val = (load_val << 8) | buf[pos - 1];
+//    load_val = (load_val << 8) | buf[pos];
+//    load_val = (load_val << 8) | last;  // For stuffing bit detection
+//    pos -= 4;
+//  } else {
+//    if (pos >= 2) {
+//      load_val = buf[pos - 2];
+//    }
+//    if (pos >= 1) {
+//      load_val = (load_val << 8) | buf[pos - 1];
+//    }
+//    if (pos >= 0) {
+//      load_val = (load_val << 8) | buf[pos];
+//    }
+//    pos      = 0;
+//    load_val = (load_val << 8) | last;  // For stuffing bit detection
+//  }
+//  // Now remove any stuffing bits, shifting things down as we go
+//  if ((load_val & 0x7FFF000000) > 0x7F8F000000) {
+//    load_val &= 0x7FFFFFFFFF;
+//    new_bits--;
+//  }
+//  if ((load_val & 0x007FFF0000) > 0x007F8F0000) {
+//    load_val = (load_val & 0x007FFFFFFF) + ((load_val & 0xFF00000000) >> 1);
+//    new_bits--;
+//  }
+//  if ((load_val & 0x00007FFF00) > 0x00007F8F00) {
+//    load_val = (load_val & 0x00007FFFFF) + ((load_val & 0xFFFF000000) >> 1);
+//    new_bits--;
+//  }
+//  if ((load_val & 0x0000007FFF) > 0x0000007F8F) {
+//    load_val = (load_val & 0x0000007FFF) + ((load_val & 0xFFFFFF0000) >> 1);
+//    new_bits--;
+//  }
+//  load_val >>= 8;  // Shifts away the extra byte we imported
+//  Creg |= (load_val << ctreg);
+//  ctreg += new_bits;
+//}
+//
+// uint8_t state_VLC_dec::getVLCbit() {
+//  // "bits" is not actually bits, but a bit
+//  bits = (uint8_t)(Creg & 0x01);
+//  close32(1);
+//  return bits;
+//}
+//
+// void state_VLC_dec::close32(int32_t num_bits) {
+//  Creg >>= num_bits;
+//  ctreg -= num_bits;
+//  while (ctreg < 32) {
+//    load_bytes();
+//  }
+//}
+//#endif
+//
+//[[maybe_unused]] void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2],
+//                                                  uint8_t (&rho)[2], uint8_t (&emb_k)[2],
+//                                                  uint8_t (&emb_1)[2], const uint8_t &first_or_second,
+//                                                  const uint16_t *dec_CxtVLC_table) {
+//#ifndef ADVANCED
+//  uint8_t b_low = tmp;
+//  uint8_t b_upp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
+//  uint16_t word = (b_upp << bits) + b_low;
+//  uint8_t cwd   = word & 0x7F;
+//#else
+//  uint8_t cwd = Creg & 0x7f;
+//#endif
+//  uint16_t idx           = static_cast<uint16_t>(cwd + (context << 7));
+//  uint16_t value         = dec_CxtVLC_table[idx];
+//  u_off[first_or_second] = value & 1;
+//  // value >>= 1;
+//  // uint8_t len = value & 0x07;
+//  // value >>= 3;
+//  // rho[first_or_second] = value & 0x0F;
+//  // value >>= 4;
+//  // emb_k[first_or_second] = value & 0x0F;
+//  // value >>= 4;
+//  // emb_1[first_or_second] = value & 0x0F;
+//  uint8_t len            = static_cast<uint8_t>((value & 0x000F) >> 1);
+//  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+//  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+//  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+//
+//#ifndef ADVANCED
+//  for (int i = 0; i < len; i++) {
+//    importVLCBit();
+//  }
+//#else
+//  close32(len);
+//#endif
+//}
+//
+//[[maybe_unused]] uint8_t state_VLC_dec::decodeUPrefix() {
+//  if (getbitfunc == 1) {
+//    return 1;
+//  }
+//  if (getbitfunc == 1) {
+//    return 2;
+//  }
+//  if (getbitfunc == 1) {
+//    return 3;
+//  } else {
+//    return 5;
+//  }
+//}
+//
+//[[maybe_unused]] uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
+//  uint8_t bit, val;
+//  if (u_pfx < 3) {
+//    return 0;
+//  }
+//  val = getbitfunc;
+//  if (u_pfx == 3) {
+//    return val;
+//  }
+//  for (int i = 1; i < 5; i++) {
+//    bit = getbitfunc;
+//    val = static_cast<uint8_t>(val + (bit << i));
+//  }
+//  return val;
+//}
+//[[maybe_unused]] uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
+//  uint8_t bit, val;
+//  if (u_sfx < 28) {
+//    return 0;
+//  }
+//  val = getbitfunc;
+//  for (int i = 1; i < 4; i++) {
+//    bit = getbitfunc;
+//    val = static_cast<uint8_t>(val + (bit << i));
+//  }
+//  return val;
+//}
+/********************************************************************************
+ * functions for SP_dec: state class for HT SigProp decoding
+ *******************************************************************************/
+uint8_t SP_dec::importSigPropBit() {
+  uint8_t val;
+  if (bits == 0) {
+    bits = (last == 0xFF) ? 7 : 8;
+    if (pos < Lref) {
+      tmp = *(Dref + pos);
+      pos++;
+      if ((tmp & (1 << bits)) != 0) {
+        printf("ERROR: importSigPropBit error\n");
+        throw std::exception();
+      }
+    } else {
+      tmp = 0;
+    }
+    last = tmp;
+  }
+  val = tmp & 1;
+  tmp = static_cast<uint8_t>(tmp >> 1);
+  bits--;
+  return val;
+}
+
+/********************************************************************************
+ * MR_dec: state class for HT MagRef decoding
+ *******************************************************************************/
+uint8_t MR_dec::importMagRefBit() {
+  uint8_t val;
+  if (bits == 0) {
+    if (pos >= 0) {
+      tmp = *(Dref + pos);
+      pos--;
+    } else {
+      tmp = 0;
+    }
+    bits = 8;
+    if (last > 0x8F && (tmp & 0x7F) == 0x7F) {
+      bits = 7;
+    }
+    last = tmp;
+  }
+  val = tmp & 1;
+  tmp = static_cast<uint8_t>(tmp >> 1);
+  bits--;
+  return val;
+}
+
+//[[maybe_unused]] auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec,
+//                                        const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
+//                                        uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
+//                                        const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table)
+//                                        {
+//  uint8_t sym;
+//  if (context == 0) {
+//    sym = MEL_decoder.decodeMELSym();
+//    if (sym == 0) {
+//      rho[first_or_second] = u_off[first_or_second] = emb_k[first_or_second] = emb_1[first_or_second] = 0;
+//      return;
+//    }
+//  }
+//  uint32_t vlcval        = VLC_dec.fetch();
+//  uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
+//  u_off[first_or_second] = value & 1;
+//  uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
+//  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+//  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+//  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+//  VLC_dec.advance(len);
+//  //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
+//};
