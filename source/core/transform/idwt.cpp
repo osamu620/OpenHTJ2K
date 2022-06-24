@@ -300,6 +300,9 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       sprec_t *dp = buf + (2 * v + voffset[0]) * stride;
       size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
       for (; len >= 8; len -= 8) {
+        __builtin_prefetch(first, 0);
+        __builtin_prefetch(second, 0);
+        __builtin_prefetch(dp, 1);
         auto vfirst  = vld1q_s16(first);
         auto vsecond = vld1q_s16(second);
         int16x8x2_t vsrc;
@@ -337,6 +340,9 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       sprec_t *dp = buf + (2 * v + voffset[2]) * stride;
       size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
       for (; len >= 8; len -= 8) {
+        __builtin_prefetch(first, 0);
+        __builtin_prefetch(second, 0);
+        __builtin_prefetch(dp, 1);
         auto vfirst  = vld1q_s16(first);
         auto vsecond = vld1q_s16(second);
         int16x8x2_t vsrc;
