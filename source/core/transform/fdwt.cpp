@@ -366,6 +366,80 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       }
     }
   }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  if ((ustop[0] - ustart[0]) != (ustop[1] - ustart[1])) {
+     for (uint8_t b = 0; b < 2; ++b) {
+       for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+         for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+           *(dp[b]++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
+        }
+      }
+    }
+  } else {
+     sprec_t *first, *second;
+     first  = LL;
+     second = HL;
+     if (uoffset[0] > uoffset[1]) {
+       first  = HL;
+       second = LL;
+    }
+     __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14, 11, 10,
+                                       7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
+     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
+       sprec_t *sp = buf + (2 * v + voffset[0]) * stride;
+       size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
+       for (; len >= 8; len -= 8) {
+         auto vline = _mm256_loadu_si256((__m256i *)sp);
+         vline      = _mm256_shuffle_epi8(vline, vshmask);
+         vline      = _mm256_permute4x64_epi64(vline, 0xD8);
+         _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
+         first += 8;
+         second += 8;
+         sp += 16;
+      }
+       for (; len > 0; --len) {
+         *first++  = *sp++;
+         *second++ = *sp++;
+      }
+    }
+  }
+
+  if ((ustop[2] - ustart[2]) != (ustop[3] - ustart[3])) {
+     for (uint8_t b = 2; b < 4; ++b) {
+       for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+         for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+           *(dp[b]++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
+        }
+      }
+    }
+  } else {
+     sprec_t *first, *second;
+     first  = LH;
+     second = HH;
+     if (uoffset[2] > uoffset[3]) {
+       first  = HH;
+       second = LH;
+    }
+     __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14, 11, 10,
+                                       7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
+     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
+       sprec_t *sp = buf + (2 * v + voffset[2]) * stride;
+       size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
+       for (; len >= 8; len -= 8) {
+         auto vline = _mm256_loadu_si256((__m256i *)sp);
+         vline      = _mm256_shuffle_epi8(vline, vshmask);
+         vline      = _mm256_permute4x64_epi64(vline, 0xD8);
+         _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
+         first += 8;
+         second += 8;
+         sp += 16;
+      }
+       for (; len > 0; --len) {
+         *first++  = *sp++;
+         *second++ = *sp++;
+      }
+    }
+  }
 #else
   for (uint8_t b = 0; b < 4; ++b) {
      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
