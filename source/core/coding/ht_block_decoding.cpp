@@ -782,7 +782,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       v_v_quads = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
       vExp      = _mm256_extracti128_si256(v_v_quads, 0);
       _mm256_zeroupper();
-      _mm_storeu_si128((__m128i *)(E_p + 2 * qx), vExp);
+      _mm_storeu_si128((__m128i *)E_p, vExp);
 #else
       Emax0  = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1  = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
