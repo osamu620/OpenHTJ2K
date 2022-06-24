@@ -279,13 +279,89 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
   const int32_t voffset[4] = {v_offset, v_offset, 1 - v_offset, 1 - v_offset};
   const int32_t uoffset[4] = {u_offset, 1 - u_offset, u_offset, 1 - u_offset};
 
-  for (uint8_t b = 0; b < 4; ++b) {
-    for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-      for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-        buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  if ((ustop[0] - ustart[0]) != (ustop[1] - ustart[1])) {
+    for (uint8_t b = 0; b < 2; ++b) {
+      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+          buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
+        }
+      }
+    }
+  } else {
+    sprec_t *first, *second;
+    first  = LL;
+    second = HL;
+    if (uoffset[0] > uoffset[1]) {
+      first  = HL;
+      second = LL;
+    }
+    for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
+      sprec_t *dp = buf + (2 * v + voffset[0]) * stride;
+      size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
+      for (; len >= 8; len -= 8) {
+        auto vfirst  = vld1q_s16(first);
+        auto vsecond = vld1q_s16(second);
+        int16x8x2_t vsrc;
+        vsrc.val[0] = vfirst;
+        vsrc.val[1] = vsecond;
+        vst2q_s16(dp, vsrc);
+        first += 8;
+        second += 8;
+        dp += 16;
+      }
+      for (; len > 0; --len) {
+        *dp++ = *first++;
+        *dp++ = *second++;
       }
     }
   }
+
+  if ((ustop[2] - ustart[2]) != (ustop[3] - ustart[3])) {
+    for (uint8_t b = 2; b < 4; ++b) {
+      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+          buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
+        }
+      }
+    }
+  } else {
+    sprec_t *first, *second;
+    first  = LH;
+    second = HH;
+    if (uoffset[2] > uoffset[3]) {
+      first  = HH;
+      second = LH;
+    }
+    for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
+      sprec_t *dp = buf + (2 * v + voffset[2]) * stride;
+      size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
+      for (; len >= 8; len -= 8) {
+        auto vfirst  = vld1q_s16(first);
+        auto vsecond = vld1q_s16(second);
+        int16x8x2_t vsrc;
+        vsrc.val[0] = vfirst;
+        vsrc.val[1] = vsecond;
+        vst2q_s16(dp, vsrc);
+        first += 8;
+        second += 8;
+        dp += 16;
+      }
+      for (; len > 0; --len) {
+        *dp++ = *first++;
+        *dp++ = *second++;
+      }
+    }
+  }
+#else
+  for (uint8_t b = 0; b < 4; ++b) {
+     for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+       for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+         buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
+      }
+    }
+  }
+#endif
 }
 
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, const int32_t u0,
@@ -302,22 +378,35 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
 
   // scaling for 16bit width fixed-point representation
   if (transformation != 1 && normalizing_upshift) {
-    //#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    //    uint32_t len = round_down(buf_length, SIMD_PADDING);
-    //    for (uint32_t n = 0; n < len; n += 16) {
-    //      __m256i tmp0 = _mm256_load_si256((__m256i *)(src + n));
-    //      __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
-    //      _mm256_store_si256((__m256i *)(src + n), tmp1);
-    //    }
-    //    for (uint32_t n = len; n < buf_length; ++n) {
-    //      // cast to unsigned to avoid undefined behavior
-    //      src[n] = static_cast<usprec_t>(src[n]) << normalizing_upshift;
-    //    }
-    //#else
-    for (int32_t n = 0; n < buf_length; ++n) {
-      // cast to unsigned to avoid undefined behavior
-      src[n] = static_cast<sprec_t>(static_cast<usprec_t>(src[n]) << normalizing_upshift);
+    int32_t len = buf_length;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    auto vshift = vdupq_n_s16(normalizing_upshift);
+    for (; len >= 8; len -= 8) {
+      vst1q_s16(src, vshlq_s16(vld1q_s16(src), vshift));
+      src += 8;
     }
-    //#endif
+    for (; len > 0; --len) {
+      *src = static_cast<sprec_t>(*src << normalizing_upshift);
+      src++;
+    }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    for (; len >= 16; len -= 16) {
+       __m256i tmp0 = _mm256_load_si256((__m256i *)src);
+       __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
+       _mm256_store_si256((__m256i *)src, tmp1);
+       src += 16;
+    }
+    for (; len > 0; --len) {
+       // cast to unsigned to avoid undefined behavior
+      *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
+      src++;
+    }
+#else
+    for (; len > 0; --len) {
+       // cast to unsigned to avoid undefined behavior
+      *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
+      src++;
+    }
+#endif
   }
 }
