@@ -33,27 +33,30 @@
 void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
-  for (uint32_t n = 0; n < num_tc_samples - num_tc_samples % 4; n += 4) {
-    auto vR  = vld1q_s32(sp0 + n);
-    auto vG  = vld1q_s32(sp1 + n);
-    auto vB  = vld1q_s32(sp2 + n);
+  for (; num_tc_samples > 4; num_tc_samples -= 4) {
+    auto vR  = vld1q_s32(sp0);
+    auto vG  = vld1q_s32(sp1);
+    auto vB  = vld1q_s32(sp2);
     auto vY  = (vR + 2 * vG + vB) >> 2;
     auto vCb = vB - vG;
     auto vCr = vR - vG;
-    vst1q_s32(sp0 + n, vY);
-    vst1q_s32(sp1 + n, vCb);
-    vst1q_s32(sp2 + n, vCr);
+    vst1q_s32(sp0, vY);
+    vst1q_s32(sp1, vCb);
+    vst1q_s32(sp2, vCr);
+    sp0 += 4;
+    sp1 += 4;
+    sp2 += 4;
   }
-  for (uint32_t n = num_tc_samples - num_tc_samples % 4; n < num_tc_samples; ++n) {
-    R      = sp0[n];
-    G      = sp1[n];
-    B      = sp2[n];
+  for (; num_tc_samples > 0; --num_tc_samples) {
+    R      = *sp0;
+    G      = *sp1;
+    B      = *sp2;
     Y      = (R + 2 * G + B) >> 2;
     Cb     = B - G;
     Cr     = R - G;
-    sp0[n] = Y;
-    sp1[n] = Cb;
-    sp2[n] = Cr;
+    *sp0++ = Y;
+    *sp1++ = Cb;
+    *sp2++ = Cr;
   }
 }
 
@@ -65,8 +68,7 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   float32x4_t a0 = vdupq_n_f32(static_cast<float32_t>(ALPHA_R));
   float32x4_t a1 = vdupq_n_f32(static_cast<float32_t>(ALPHA_G));
   float32x4_t a2 = vdupq_n_f32(static_cast<float32_t>(ALPHA_B));
-  // for (uint32_t n = 0; n < num_tc_samples - num_tc_samples % 4; n += 4) {
-  for (; num_tc_samples > 4; num_tc_samples -= 4) {
+  for (; num_tc_samples >= 4; num_tc_samples -= 4) {
     R  = vld1q_s32(sp0);
     G  = vld1q_s32(sp1);
     B  = vld1q_s32(sp2);
@@ -89,7 +91,7 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     sp2 += 4;
   }
 
-  for (; num_tc_samples > 0; num_tc_samples--) {
+  for (; num_tc_samples > 0; --num_tc_samples) {
     fRed   = static_cast<double>(sp0[0]);
     fGrn   = static_cast<double>(sp1[0]);
     fBlu   = static_cast<double>(sp2[0]);
@@ -108,60 +110,62 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
 void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
-  for (uint32_t n = 0; n < num_tc_samples - num_tc_samples % 4; n += 4) {
-    auto vY  = vld1q_s32(sp0 + n);
-    auto vCb = vld1q_s32(sp1 + n);
-    auto vCr = vld1q_s32(sp2 + n);
-    auto vG  = vY - ((vCb + vCr) >> 2);
-    auto vR  = vCr + vG;
-    auto vB  = vCb + vG;
-    vst1q_s32(sp0 + n, vR);
-    vst1q_s32(sp1 + n, vG);
-    vst1q_s32(sp2 + n, vB);
+  for (; num_tc_samples >= 4; num_tc_samples -= 4) {
+    auto vY  = vld1q_s32(sp0);
+    auto vCb = vld1q_s32(sp1);
+    auto vCr = vld1q_s32(sp2);
+    //    auto vG  = vY - ((vCb + vCr) >> 2);
+    auto vG = vsubq_s32(vY, (vhaddq_s32(vCb, vCr) >> 1));
+    auto vR = vaddq_s32(vCr, vG);
+    auto vB = vaddq_s32(vCb, vG);
+    vst1q_s32(sp0, vR);
+    vst1q_s32(sp1, vG);
+    vst1q_s32(sp2, vB);
+    sp0 += 4;
+    sp1 += 4;
+    sp2 += 4;
   }
-  for (uint32_t n = num_tc_samples - num_tc_samples % 4; n < num_tc_samples; ++n) {
-    Y      = sp0[n];
-    Cb     = sp1[n];
-    Cr     = sp2[n];
+  for (; num_tc_samples > 0; --num_tc_samples) {
+    Y      = *sp0;
+    Cb     = *sp1;
+    Cr     = *sp2;
     G      = Y - ((Cb + Cr) >> 2);
     R      = Cr + G;
     B      = Cb + G;
-    sp0[n] = R;
-    sp1[n] = G;
-    sp2[n] = B;
+    *sp0++ = R;
+    *sp1++ = G;
+    *sp2++ = B;
   }
 }
 
 void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   int32_t R, G, B;
   double fY, fCb, fCr;
-  for (uint32_t n = 0; n < num_tc_samples - num_tc_samples % 4; n += 4) {
-    int32x4_t s32x4_Y    = vld1q_s32(sp0 + n);
-    int32x4_t s32x4_Cb   = vld1q_s32(sp1 + n);
-    int32x4_t s32x4_Cr   = vld1q_s32(sp2 + n);
-    float32x4_t f32x4_Y  = vcvtq_f32_s32(s32x4_Y);
-    float32x4_t f32x4_Cb = vcvtq_f32_s32(s32x4_Cb);
-    float32x4_t f32x4_Cr = vcvtq_f32_s32(s32x4_Cr);
+  for (; num_tc_samples >= 4; num_tc_samples -= 4) {
+    auto vY  = vcvtq_f32_s32(vld1q_s32(sp0));
+    auto vCb = vcvtq_f32_s32(vld1q_s32(sp1));
+    auto vCr = vcvtq_f32_s32(vld1q_s32(sp2));
 
     // TODO: need to consider precision and setting FPSCR register value
-    vst1q_s32(sp0 + n,
-              vcvtnq_s32_f32(vaddq_f32(f32x4_Y, vmulq_n_f32(f32x4_Cr, static_cast<float32_t>(CR_FACT_R)))));
-    vst1q_s32(sp2 + n,
-              vcvtnq_s32_f32(vaddq_f32(f32x4_Y, vmulq_n_f32(f32x4_Cb, static_cast<float32_t>(CB_FACT_B)))));
-    vst1q_s32(sp1 + n, vcvtnq_s32_f32(vsubq_f32(
-                           f32x4_Y, vaddq_f32(vmulq_n_f32(f32x4_Cr, static_cast<float32_t>(CR_FACT_G)),
-                                              vmulq_n_f32(f32x4_Cb, static_cast<float32_t>(CB_FACT_G))))));
+    vst1q_s32(sp0, vcvtnq_s32_f32(vaddq_f32(vY, vmulq_n_f32(vCr, static_cast<float32_t>(CR_FACT_R)))));
+    vst1q_s32(sp2, vcvtnq_s32_f32(vaddq_f32(vY, vmulq_n_f32(vCb, static_cast<float32_t>(CB_FACT_B)))));
+    vst1q_s32(
+        sp1, vcvtnq_s32_f32(vsubq_f32(vY, vaddq_f32(vmulq_n_f32(vCr, static_cast<float32_t>(CR_FACT_G)),
+                                                    vmulq_n_f32(vCb, static_cast<float32_t>(CB_FACT_G))))));
+    sp0 += 4;
+    sp1 += 4;
+    sp2 += 4;
   }
-  for (uint32_t n = num_tc_samples - num_tc_samples % 4; n < num_tc_samples; ++n) {
-    fY     = static_cast<double>(sp0[n]);
-    fCb    = static_cast<double>(sp1[n]);
-    fCr    = static_cast<double>(sp2[n]);
+  for (; num_tc_samples > 0; --num_tc_samples) {
+    fY     = static_cast<double>(*sp0);
+    fCb    = static_cast<double>(*sp1);
+    fCr    = static_cast<double>(*sp2);
     R      = static_cast<int32_t>(round_d(fY + CR_FACT_R * fCr));
     B      = static_cast<int32_t>(round_d(fY + CB_FACT_B * fCb));
     G      = static_cast<int32_t>(round_d(fY - CR_FACT_G * fCr - CB_FACT_G * fCb));
-    sp0[n] = R;
-    sp1[n] = G;
-    sp2[n] = B;
+    *sp0++ = R;
+    *sp1++ = G;
+    *sp2++ = B;
   }
 }
 #endif
