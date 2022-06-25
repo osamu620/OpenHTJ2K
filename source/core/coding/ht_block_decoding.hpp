@@ -572,29 +572,6 @@ class fwd_buf {
 //  uint8_t decodeUExtension(const uint32_t &u_sfx);
 //};
 /********************************************************************************
- * SP_dec: state class for HT SigProp decoding
- *******************************************************************************/
-class SP_dec {
- private:
-  const uint32_t Lref;
-  uint8_t bits;
-  uint8_t tmp;
-  uint8_t last;
-  uint32_t pos;
-  const uint8_t *Dref;
-
- public:
-  SP_dec(const uint8_t *HT_magref_segment, uint32_t magref_length)
-      : Lref(magref_length),
-        bits(0),
-        tmp(0),
-        last(0),
-        pos(0),
-        Dref((Lref == 0) ? nullptr : HT_magref_segment) {}
-  uint8_t importSigPropBit();
-};
-
-/********************************************************************************
  * MR_dec: state class for HT MagRef decoding
  *******************************************************************************/
 class MR_dec {
@@ -898,55 +875,7 @@ class MR_dec {
 //  }
 //  return val;
 //}
-/********************************************************************************
- * functions for SP_dec: state class for HT SigProp decoding
- *******************************************************************************/
-uint8_t SP_dec::importSigPropBit() {
-  uint8_t val;
-  if (bits == 0) {
-    bits = (last == 0xFF) ? 7 : 8;
-    if (pos < Lref) {
-      tmp = *(Dref + pos);
-      pos++;
-      if ((tmp & (1 << bits)) != 0) {
-        printf("ERROR: importSigPropBit error\n");
-        throw std::exception();
-      }
-    } else {
-      tmp = 0;
-    }
-    last = tmp;
-  }
-  val = tmp & 1;
-  tmp = static_cast<uint8_t>(tmp >> 1);
-  bits--;
-  return val;
-}
-
-/********************************************************************************
- * MR_dec: state class for HT MagRef decoding
- *******************************************************************************/
-uint8_t MR_dec::importMagRefBit() {
-  uint8_t val;
-  if (bits == 0) {
-    if (pos >= 0) {
-      tmp = *(Dref + pos);
-      pos--;
-    } else {
-      tmp = 0;
-    }
-    bits = 8;
-    if (last > 0x8F && (tmp & 0x7F) == 0x7F) {
-      bits = 7;
-    }
-    last = tmp;
-  }
-  val = tmp & 1;
-  tmp = static_cast<uint8_t>(tmp >> 1);
-  bits--;
-  return val;
-}
-
+//
 //[[maybe_unused]] auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec,
 //                                        const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
 //                                        uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
