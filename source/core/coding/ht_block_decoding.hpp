@@ -571,29 +571,7 @@ class fwd_buf {
 //  uint8_t decodeUSuffix(const uint32_t &u_pfx);
 //  uint8_t decodeUExtension(const uint32_t &u_sfx);
 //};
-/********************************************************************************
- * MR_dec: state class for HT MagRef decoding
- *******************************************************************************/
-class MR_dec {
- private:
-  const uint32_t Lref;
-  uint8_t bits;
-  uint8_t last;
-  uint8_t tmp;
-  int32_t pos;
-  const uint8_t *Dref;
-
- public:
-  MR_dec(const uint8_t *HT_magref_segment, uint32_t magref_length)
-      : Lref(magref_length),
-        bits(0),
-        last(0xFF),
-        tmp(0),
-        pos((Lref == 0) ? -1 : static_cast<int32_t>(magref_length - 1)),
-        Dref((Lref == 0) ? nullptr : HT_magref_segment) {}
-  uint8_t importMagRefBit();
-};
-
+//
 ///********************************************************************************
 // * functions for state_MS: state class for MagSgn decoding
 // *******************************************************************************/
