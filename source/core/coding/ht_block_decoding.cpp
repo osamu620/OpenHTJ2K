@@ -49,6 +49,100 @@
 #define Q0 0
 #define Q1 1
 
+/********************************************************************************
+ * SP_dec: state class for HT SigProp decoding
+ *******************************************************************************/
+class SP_dec {
+ private:
+  const uint32_t Lref;
+  uint8_t bits;
+  uint8_t tmp;
+  uint8_t last;
+  uint32_t pos;
+  const uint8_t *Dref;
+
+ public:
+  SP_dec(const uint8_t *HT_magref_segment, uint32_t magref_length)
+      : Lref(magref_length),
+        bits(0),
+        tmp(0),
+        last(0),
+        pos(0),
+        Dref((Lref == 0) ? nullptr : HT_magref_segment) {}
+  uint8_t importSigPropBit();
+};
+
+/********************************************************************************
+ * MR_dec: state class for HT MagRef decoding
+ *******************************************************************************/
+class MR_dec {
+ private:
+  const uint32_t Lref;
+  uint8_t bits;
+  uint8_t last;
+  uint8_t tmp;
+  int32_t pos;
+  const uint8_t *Dref;
+
+ public:
+  MR_dec(const uint8_t *HT_magref_segment, uint32_t magref_length)
+      : Lref(magref_length),
+        bits(0),
+        last(0xFF),
+        tmp(0),
+        pos((Lref == 0) ? -1 : static_cast<int32_t>(magref_length - 1)),
+        Dref((Lref == 0) ? nullptr : HT_magref_segment) {}
+  uint8_t importMagRefBit();
+};
+
+/********************************************************************************
+ * functions for SP_dec: state class for HT SigProp decoding
+ *******************************************************************************/
+uint8_t SP_dec::importSigPropBit() {
+  uint8_t val;
+  if (bits == 0) {
+    bits = (last == 0xFF) ? 7 : 8;
+    if (pos < Lref) {
+      tmp = *(Dref + pos);
+      pos++;
+      if ((tmp & (1 << bits)) != 0) {
+        printf("ERROR: importSigPropBit error\n");
+      }
+    } else {
+      tmp = 0;
+    }
+    last = tmp;
+  }
+  val = tmp & 1;
+  tmp = static_cast<uint8_t>(tmp >> 1);
+  bits--;
+  return val;
+}
+
+/********************************************************************************
+ * MR_dec: state class for HT MagRef decoding
+ *******************************************************************************/
+uint8_t MR_dec::importMagRefBit() {
+  uint8_t val;
+  if (bits == 0) {
+    if (pos >= 0) {
+      tmp = *(Dref + pos);
+      pos--;
+    } else {
+      tmp = 0;
+    }
+    bits = 8;
+    if (last > 0x8F && (tmp & 0x7F) == 0x7F) {
+      bits = 7;
+    }
+    last = tmp;
+  }
+  val = tmp & 1;
+  tmp = static_cast<uint8_t>(tmp >> 1);
+  bits--;
+  return val;
+}
+
 uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
   const int16_t im1 = static_cast<int16_t>(i - 1);
   const int16_t jm1 = static_cast<int16_t>(j - 1);
