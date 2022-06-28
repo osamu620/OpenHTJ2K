@@ -351,7 +351,318 @@ class rev_buf {
 /********************************************************************************
  * fwd_buf:
  *******************************************************************************/
-// this class implementation is borrowed from OpenJPH
+// this class implementation is borrowed from OpenJPH and modified for ARM NEON
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+// NEON does not provide a version of this function, here is an article about
+// some ways to repro the results.
+// http://stackoverflow.com/questions/11870910/sse-mm-movemask-epi8-equivalent-method-for-arm-neon
+// Creates a 16-bit mask from the most significant bits of the 16 signed or
+// unsigned 8-bit integers in a and zero extends the upper bits.
+// https://msdn.microsoft.com/en-us/library/vstudio/s090c8fk(v=vs.100).aspx
+inline int aarch64_movemask_epi8(int32x4_t _a) {
+  uint8x16_t input                                       = vreinterpretq_u8_s32(_a);
+  static const int8_t __attribute__((aligned(16))) xr[8] = {-7, -6, -5, -4, -3, -2, -1, 0};
+  uint8x8_t mask_and                                     = vdup_n_u8(0x80);
+  int8x8_t mask_shift                                    = vld1_s8(xr);
+
+  uint8x8_t lo = vget_low_u8(input);
+  uint8x8_t hi = vget_high_u8(input);
+
+  lo = vand_u8(lo, mask_and);
+  lo = vshl_u8(lo, mask_shift);
+
+  hi = vand_u8(hi, mask_and);
+  hi = vshl_u8(hi, mask_shift);
+
+  lo = vpadd_u8(lo, lo);
+  lo = vpadd_u8(lo, lo);
+  lo = vpadd_u8(lo, lo);
+
+  hi = vpadd_u8(hi, hi);
+  hi = vpadd_u8(hi, hi);
+  hi = vpadd_u8(hi, hi);
+
+  return ((hi[0] << 8) | (lo[0] & 0xFF));
+}
+
+  #define aarch64_srli_epi64(a, imm)                                               \
+    ({                                                                             \
+      int32x4_t ret;                                                               \
+      if ((imm) <= 0) {                                                            \
+        ret = a;                                                                   \
+      } else if ((imm) > 63) {                                                     \
+        ret = vdupq_n_s32(0);                                                      \
+      } else {                                                                     \
+        ret = vreinterpretq_s32_u64(vshrq_n_u64(vreinterpretq_u64_s32(a), (imm))); \
+      }                                                                            \
+      ret;                                                                         \
+    })
+
+  // Shifts the 128 - bit value in a right by imm bytes while shifting in
+  // zeros.imm must be an immediate.
+  // https://msdn.microsoft.com/en-us/library/305w28yz(v=vs.100).aspx
+  // FORCE_INLINE aarch64_srli_si128(__m128i a, __constrange(0,255) int imm)
+  #define aarch64_srli_si128(a, imm)                                                         \
+    ({                                                                                       \
+      int32x4_t ret;                                                                         \
+      if ((imm) <= 0) {                                                                      \
+        ret = a;                                                                             \
+      } else if ((imm) > 15) {                                                               \
+        ret = vdupq_n_s32(0);                                                                \
+      } else {                                                                               \
+        ret = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(a), vdupq_n_s8(0), (imm))); \
+      }                                                                                      \
+      ret;                                                                                   \
+    })
+
+  #define aarch64_slli_epi64(a, imm)                                               \
+    ({                                                                             \
+      int32x4_t ret;                                                               \
+      if ((imm) <= 0) {                                                            \
+        ret = a;                                                                   \
+      } else if ((imm) > 64) {                                                     \
+        ret = vdupq_n_s32(0);                                                      \
+      } else {                                                                     \
+        ret = vreinterpretq_s32_s64(vshlq_n_s64(vreinterpretq_s64_s32(a), (imm))); \
+      }                                                                            \
+      ret;                                                                         \
+    })
+
+inline int32x4_t aarch64_sll_epi64(int32x4_t a, int32x4_t b) {
+  return vreinterpretq_s32_s64(vshlq_s64(vreinterpretq_s64_s32(a), vreinterpretq_s64_s32(b)));
+}
+
+inline int32x4_t aarch64_srl_epi64(int32x4_t a, uint8_t b) {
+  // following 5 lines are problematic with clang!!!
+  //  uint64_t tmp[2];
+  //  vst1q_u64(tmp, a);
+  //  auto vtmp = vld1q_u64(tmp);
+  //  vtmp >>= b;
+  //  return vtmp;
+  return vreinterpretq_s32_s64(vshlq_u64(vreinterpretq_s64_s32(a), vreinterpretq_s64_s32(vdupq_n_s32(-b))));
+}
+
+  // Shifts the 128-bit value in a left by imm bytes while shifting in zeros. imm
+  // must be an immediate.
+  // https://msdn.microsoft.com/en-us/library/34d3k2kt(v=vs.100).aspx
+  // FORCE_INLINE __m128i aarch64_slli_si128(__m128i a, __constrange(0,255) int imm)
+  #define aarch64_slli_si128(a, imm)                                                              \
+    ({                                                                                            \
+      int32x4_t ret;                                                                              \
+      if ((imm) <= 0) {                                                                           \
+        ret = a;                                                                                  \
+      } else if ((imm) > 15) {                                                                    \
+        ret = vdupq_n_s32(0);                                                                     \
+      } else {                                                                                    \
+        ret = vreinterpretq_s32_s8(vextq_s8(vdupq_n_s8(0), vreinterpretq_s8_s32(a), 16 - (imm))); \
+      }                                                                                           \
+      ret;                                                                                        \
+    })
+
+  // Extracts the selected signed or unsigned 16-bit integer from a and zero
+  // extends.  https://msdn.microsoft.com/en-us/library/6dceta0c(v=vs.100).aspx
+  // FORCE_INLINE int aarch64_extract_epi16(__m128i a, __constrange(0,8) int imm)
+  #define aarch64_extract_epi16(a, imm)                               \
+    ({                                                                \
+      (vgetq_lane_s16(vreinterpretq_s16_s32(a), (imm)) & 0x0000ffff); \
+    })  // modified from 0x0000ffffUL to suppress compiler warnings
+
+//************************************************************************/
+/** @brief State structure for reading and unstuffing of forward-growing
+ *         bitstreams; these are: MagSgn and SPP bitstreams
+ */
+template <int X>
+class fwd_buf {
+ private:
+  const uint8_t *data;  //!< pointer to bitstream
+  uint8_t tmp[48];      //!< temporary buffer of read data + 16 extra
+  uint32_t bits;        //!< number of bits stored in tmp
+  uint32_t unstuff;     //!< 1 if a bit needs to be unstuffed from next byte
+  int size;             //!< size of data
+ public:
+  fwd_buf(const uint8_t *data, int size) : data(data), bits(0), unstuff(0), size(size) {
+    //    this->data = data;
+    vst1q_u8(this->tmp, vdupq_n_u8(0));
+    vst1q_u8(this->tmp + 16, vdupq_n_u8(0));
+    vst1q_u8(this->tmp + 32, vdupq_n_u8(0));
+
+    //    this->bits    = 0;
+    //    this->unstuff = 0;
+    //    this->size    = size;
+
+    read();  // read 128 bits more
+  }
+
+  //************************************************************************/
+  /** @brief Read and unstuffs 16 bytes from forward-growing bitstream
+   *
+   *  A template is used to accommodate a different requirement for
+   *  MagSgn and SPP bitstreams; in particular, when MagSgn bitstream is
+   *  consumed, 0xFF's are fed, while when SPP is exhausted 0's are fed in.
+   *  X controls this value.
+   *
+   *  Unstuffing prevent sequences that are more than 0xFF7F from appearing
+   *  in the conpressed sequence.  So whenever a value of 0xFF is coded, the
+   *  MSB of the next byte is set 0 and must be ignored during decoding.
+   *
+   *  Reading can go beyond the end of buffer by up to 16 bytes.
+   *
+   *
+   */
+
+  inline void read() {
+    assert(this->bits <= 128);
+
+    uint8x16_t offset, val, validity, all_xff;
+    val       = vld1q_u8(this->data);
+    int bytes = this->size >= 16 ? 16 : this->size;
+    validity  = vdupq_n_s8((char)bytes);
+    this->data += bytes;
+    this->size -= bytes;
+    uint32_t bits_local = 128;
+    // offset = _mm_set_epi64x(0x0F0E0D0C0B0A0908, 0x0706050403020100);
+    int64_t local_tmp[2] = {0x0706050403020100, 0x0F0E0D0C0B0A0908};
+    offset               = vreinterpretq_u8_s64(vld1q_s64(local_tmp));
+    validity             = vcgtq_s8(validity, offset);
+    all_xff              = vdupq_n_s8(-1);
+    if (X == 0xFF)  // the compiler should remove this if statement
+    {
+      auto t = veorq_u8(validity, all_xff);  // complement
+      val    = vorrq_u8(t, val);             // fill with 0xFF
+    } else if (X == 0)
+      val = vandq_u8(validity, val);  // fill with zeros
+    else
+      assert(0);
+
+    uint8x16_t ff_bytes;
+    ff_bytes       = vceqq_s8(val, all_xff);
+    ff_bytes       = vandq_u8(ff_bytes, validity);
+    uint32_t flags = (uint32_t)aarch64_movemask_epi8(ff_bytes);
+
+    flags <<= 1;  // unstuff following byte
+    uint32_t next_unstuff = flags >> 16;
+    flags |= this->unstuff;
+    flags &= 0xFFFF;
+    while (flags) {  // bit unstuffing occurs on average once every 256 bytes
+      // therefore it is not an issue if it is a bit slow
+      // here we process 16 bytes
+      --bits_local;  // consuming one stuffing bit
+
+      uint32_t loc = static_cast<uint32_t>(31 - __builtin_clz(flags));
+      flags ^= 1 << loc;
+
+      uint8x16_t m, t, c;
+      t = vdupq_n_s8((char)loc);
+      m = vcgtq_s8(offset, t);
+
+      t = vandq_u8(m, val);           // keep bits_local at locations larger than loc
+      c = aarch64_srli_epi64(t, 1);   // 1 bits_local left
+      t = aarch64_srli_si128(t, 8);   // 8 bytes left
+      t = aarch64_slli_epi64(t, 63);  // keep the MSB only
+      t = vorrq_u8(t, c);             // combine the above 3 steps
+
+      val = vorrq_u8(t, vbicq_s8(val, m));
+    }
+
+    // combine with earlier data
+    assert(this->bits >= 0 && this->bits <= 128);
+    uint32_t cur_bytes = this->bits >> 3;
+    uint32_t cur_bits  = this->bits & 7;
+    uint8x16_t b1, b2;
+    b1 = aarch64_sll_epi64(val, vdupq_n_s64(cur_bits));
+
+    b2 = aarch64_slli_si128(val, 8);  // 8 bytes right
+    b2 = aarch64_srl_epi64(b2, static_cast<uint8_t>(64 - cur_bits));
+    b1 = vorrq_u8(b1, b2);
+    b2 = vld1q_u8(tmp + cur_bytes);
+    b2 = vorrq_u8(b1, b2);
+    vst1q_u8(tmp + cur_bytes, b2);
+
+    uint32_t consumed_bits = bits_local < 128 - cur_bits ? bits_local : 128 - cur_bits;
+    cur_bytes              = (this->bits + (uint32_t)consumed_bits + 7) >> 3;  // round up
+    int upper              = aarch64_extract_epi16(val, 7);
+
+    upper >>= consumed_bits - 128 + 16;
+    this->tmp[cur_bytes] = (uint8_t)upper;  // copy byte
+
+    this->bits += (uint32_t)bits_local;
+    this->unstuff = next_unstuff;  // next unstuff
+    assert(this->unstuff == 0 || this->unstuff == 1);
+  }
+
+  //************************************************************************/
+  /** @brief Consume num_bits bits from the bitstream of fwd_buf
+   *
+   *  @param [in]  num_bits is the number of bit to consume
+   */
+  inline void advance(uint32_t num_bits) {
+    if (!num_bits) return;
+    assert(num_bits > 0 && num_bits <= this->bits && num_bits < 128);
+    this->bits -= num_bits;
+
+    auto *p = (this->tmp + ((num_bits >> 3) & 0x18));
+    num_bits &= 63;
+
+    uint16x8_t v0, v1, c0, c1, t;
+    v0 = vld1q_u8(p);
+    v1 = vld1q_u8(p + 16);
+
+    // shift right by num_bits
+    c0 = aarch64_srl_epi64(v0, static_cast<uint8_t>(num_bits));
+    t  = aarch64_srli_si128(v0, 8);
+    t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
+    c0 = vorrq_u8(c0, t);
+    t  = aarch64_slli_si128(v1, 8);
+    t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
+    c0 = vorrq_u8(c0, t);
+
+    vst1q_u8(this->tmp, c0);
+
+    c1 = aarch64_srl_epi64(v1, static_cast<uint8_t>(num_bits));
+    t  = aarch64_srli_si128(v1, 8);
+    t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
+    c1 = vorrq_u8(c1, t);
+
+    vst1q_u8(this->tmp + 16, c1);
+  }
+
+  //************************************************************************/
+  /** @brief Fetches 32 bits from the fwd_buf bitstream
+   *
+   *  @param [in]  m is a reference to a vector of m_n bits
+   */
+  inline int32x4_t fetch(const int32x4_t &m) {
+    if (this->bits <= 128) {
+      read();
+      if (this->bits <= 128)  // need to test
+        read();
+    }
+    auto t = vld1q_u8(this->tmp);
+
+    __uint128_t v128i = (__uint128_t)t;
+
+    //    uint32_t vtmp[4];
+    //    vtmp[0] = v128i & 0xFFFFFFFFU;
+    //    v128i >>= m[0];
+    //    vtmp[1] = v128i & 0xFFFFFFFFU;
+    //    v128i >>= m[1];
+    //    vtmp[2] = v128i & 0xFFFFFFFFU;
+    //    v128i >>= m[2];
+    //    vtmp[3] = v128i & 0xFFFFFFFFU;
+    //    return vld1q_u32(vtmp);
+
+    int32x4_t vtmp;
+    vtmp[0] = v128i & 0xFFFFFFFFU;
+    v128i >>= m[0];
+    vtmp[1] = v128i & 0xFFFFFFFFU;
+    v128i >>= m[1];
+    vtmp[2] = v128i & 0xFFFFFFFFU;
+    v128i >>= m[2];
+    vtmp[3] = v128i & 0xFFFFFFFFU;
+    return vtmp;
+  }
+};
+#else
 template <int X>
 class fwd_buf {
  private:
@@ -428,7 +739,7 @@ class fwd_buf {
     bits_local += 8 - unstuff_flag;
     unstuff = (((val >> 24) & 0xFF) == 0xFF);  // for next byte
 
-    Creg |= ((uint64_t)t) << bits;  // move data to msp->tmp
+    Creg |= ((uint64_t)t) << bits;  // move data to this->tmp
     bits += bits_local;
   }
 
@@ -436,10 +747,10 @@ class fwd_buf {
     if (n > bits) {
       printf("ERROR: illegal attempt to advance %d bits but there are %d bits left in MagSgn advance\n", n,
              bits);
-#if defined(__clang__)
+  #if defined(__clang__)
       // the following code might be problem with GCC, TODO: to be investigated
       throw std::exception();
-#endif
+  #endif
     }
     Creg >>= n;  // consume n bits
     bits -= n;
@@ -454,6 +765,7 @@ class fwd_buf {
     return (uint32_t)Creg;
   }
 };
+#endif
 
 /********************************************************************************
  * state_MS: state class for MagSgn decoding
