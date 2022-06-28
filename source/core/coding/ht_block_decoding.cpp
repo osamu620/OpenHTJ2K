@@ -262,6 +262,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto msval1 = MagSgn.fetch(v_m_quads1);
     //    vst1q_u32(msval + 4, msval1);
     MagSgn.advance(vaddvq_u32(v_m_quads1));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    auto mmm = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 0));
+    _mm_storeu_si128((__m128i *)msval, mmm);
+    MagSgn.advance(m_quads[0] + m_quads[1] + m_quads[2] + m_quads[3]);
+    mmm = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 1));
+    _mm_storeu_si128((__m128i *)(msval + 4), mmm);
+    MagSgn.advance(m_quads[4] + m_quads[5] + m_quads[6] + m_quads[7]);
 #else
     for (uint32_t i = 0; i < 8; i++) {
       msval[i] = MagSgn.fetch();
@@ -454,6 +461,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     auto msval0 = MagSgn.fetch(v_m_quads0);
     //    vst1q_u32(msval, msval0);
     MagSgn.advance(vaddvq_u32(v_m_quads0));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    auto mmm = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 0));
+    _mm_storeu_si128((__m128i *)msval, mmm);
+    MagSgn.advance(m_quads[0] + m_quads[1] + m_quads[2] + m_quads[3]);
 #else
     for (uint32_t i = 0; i < 4; i++) {
       msval[i] = MagSgn.fetch();
@@ -692,6 +703,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto msval1 = MagSgn.fetch(v_m_quads1);
       //      vst1q_u32(msval + 4, msval1);
       MagSgn.advance(vaddvq_u32(v_m_quads1));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      auto mmm = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 0));
+      _mm_storeu_si128((__m128i *)msval, mmm);
+      MagSgn.advance(m_quads[0] + m_quads[1] + m_quads[2] + m_quads[3]);
+      mmm = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 1));
+      _mm_storeu_si128((__m128i *)(msval + 4), mmm);
+      MagSgn.advance(m_quads[4] + m_quads[5] + m_quads[6] + m_quads[7]);
 #else
       for (uint32_t i = 0; i < 8; i++) {
         msval[i] = MagSgn.fetch();
@@ -898,6 +916,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto msval0 = MagSgn.fetch(v_m_quads0);
       //      vst1q_u32(msval, msval0);
       MagSgn.advance(vaddvq_u32(v_m_quads0));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      auto mmm = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 0));
+      _mm_storeu_si128((__m128i *)msval, mmm);
+      MagSgn.advance(m_quads[0] + m_quads[1] + m_quads[2] + m_quads[3]);
 #else
       for (uint32_t i = 0; i < 4; i++) {
         msval[i] = MagSgn.fetch();

@@ -351,7 +351,6 @@ class rev_buf {
 /********************************************************************************
  * fwd_buf:
  *******************************************************************************/
-// this class implementation is borrowed from OpenJPH and modified for ARM NEON
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
 // NEON does not provide a version of this function, here is an article about
 // some ways to repro the results.
@@ -471,6 +470,7 @@ inline int32x4_t aarch64_srl_epi64(int32x4_t a, uint8_t b) {
 /** @brief State structure for reading and unstuffing of forward-growing
  *         bitstreams; these are: MagSgn and SPP bitstreams
  */
+// this class implementation is borrowed from OpenJPH and modified for ARM NEON
 template <int X>
 class fwd_buf {
  private:
@@ -660,6 +660,194 @@ class fwd_buf {
     v128i >>= m[2];
     vtmp[3] = v128i & 0xFFFFFFFFU;
     return vtmp;
+  }
+};
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+// this class implementation is borrowed from OpenJPH and modified
+//************************************************************************/
+/** @brief State structure for reading and unstuffing of forward-growing
+ *         bitstreams; these are: MagSgn and SPP bitstreams
+ */
+template <int X>
+class fwd_buf {
+ private:
+  const uint8_t *data;  //!< pointer to bitstream
+  uint8_t tmp[48];      //!< temporary buffer of read data + 16 extra
+  uint32_t bits;        //!< number of bits stored in tmp
+  uint32_t unstuff;     //!< 1 if a bit needs to be unstuffed from next byte
+  int size;             //!< size of data
+ public:
+  //************************************************************************/
+  /** @brief Initialize frwd_struct struct and reads some bytes
+   *
+   *  @tparam      X is the value fed in when the bitstream is exhausted.
+   *               See frwd_read regarding the template
+   *  @param [in]  data is a pointer to the start of data
+   *  @param [in]  size is the number of byte in the bitstream
+   */
+  fwd_buf(const uint8_t *data, int size) : data(data), bits(0), unstuff(0), size(size) {
+    _mm_storeu_si128((__m128i *)this->tmp, _mm_setzero_si128());
+    _mm_storeu_si128((__m128i *)this->tmp + 1, _mm_setzero_si128());
+    _mm_storeu_si128((__m128i *)this->tmp + 2, _mm_setzero_si128());
+
+    read();  // read 128 bits more
+  }
+
+  //************************************************************************/
+  /** @brief Read and unstuffs 16 bytes from forward-growing bitstream
+   *
+   *  A template is used to accommodate a different requirement for
+   *  MagSgn and SPP bitstreams; in particular, when MagSgn bitstream is
+   *  consumed, 0xFF's are fed, while when SPP is exhausted 0's are fed in.
+   *  X controls this value.
+   *
+   *  Unstuffing prevent sequences that are more than 0xFF7F from appearing
+   *  in the conpressed sequence.  So whenever a value of 0xFF is coded, the
+   *  MSB of the next byte is set 0 and must be ignored during decoding.
+   *
+   *  Reading can go beyond the end of buffer by up to 16 bytes.
+   *
+   *  @tparam       X is the value fed in when the bitstream is exhausted
+   *  @param  [in]  msp is a pointer to frwd_struct structure
+   *
+   */
+
+  inline void read() {
+    assert(this->bits <= 128);
+
+    __m128i offset, val, validity, all_xff;
+    val       = _mm_loadu_si128((__m128i *)this->data);
+    int bytes = this->size >= 16 ? 16 : this->size;
+    validity  = _mm_set1_epi8((char)bytes);
+    this->data += bytes;
+    this->size -= bytes;
+    int bits = 128;
+    offset   = _mm_set_epi64x(0x0F0E0D0C0B0A0908, 0x0706050403020100);
+    validity = _mm_cmpgt_epi8(validity, offset);
+    all_xff  = _mm_set1_epi8(-1);
+    if (X == 0xFF)  // the compiler should remove this if statement
+    {
+      __m128i t = _mm_xor_si128(validity, all_xff);  // complement
+      val       = _mm_or_si128(t, val);              // fill with 0xFF
+    } else if (X == 0)
+      val = _mm_and_si128(validity, val);  // fill with zeros
+    else
+      assert(0);
+
+    __m128i ff_bytes;
+    ff_bytes       = _mm_cmpeq_epi8(val, all_xff);
+    ff_bytes       = _mm_and_si128(ff_bytes, validity);
+    uint32_t flags = (uint32_t)_mm_movemask_epi8(ff_bytes);
+    flags <<= 1;  // unstuff following byte
+    uint32_t next_unstuff = flags >> 16;
+    flags |= this->unstuff;
+    flags &= 0xFFFF;
+    while (flags) {  // bit unstuffing occurs on average once every 256 bytes
+      // therefore it is not an issue if it is a bit slow
+      // here we process 16 bytes
+      --bits;  // consuming one stuffing bit
+
+      uint32_t loc = 31 - count_leading_zeros(flags);
+      flags ^= 1 << loc;
+
+      __m128i m, t, c;
+      t = _mm_set1_epi8((char)loc);
+      m = _mm_cmpgt_epi8(offset, t);
+
+      t = _mm_and_si128(m, val);  // keep bits at locations larger than loc
+      c = _mm_srli_epi64(t, 1);   // 1 bits left
+      t = _mm_srli_si128(t, 8);   // 8 bytes left
+      t = _mm_slli_epi64(t, 63);  // keep the MSB only
+      t = _mm_or_si128(t, c);     // combine the above 3 steps
+
+      val = _mm_or_si128(t, _mm_andnot_si128(m, val));
+    }
+
+    // combine with earlier data
+    assert(this->bits >= 0 && this->bits <= 128);
+    int cur_bytes = this->bits >> 3;
+    int cur_bits  = this->bits & 7;
+    __m128i b1, b2;
+    b1 = _mm_sll_epi64(val, _mm_set1_epi64x(cur_bits));
+    b2 = _mm_slli_si128(val, 8);  // 8 bytes right
+    b2 = _mm_srl_epi64(b2, _mm_set1_epi64x(64 - cur_bits));
+    b1 = _mm_or_si128(b1, b2);
+    b2 = _mm_loadu_si128((__m128i *)(this->tmp + cur_bytes));
+    b2 = _mm_or_si128(b1, b2);
+    _mm_storeu_si128((__m128i *)(this->tmp + cur_bytes), b2);
+
+    int consumed_bits = bits < 128 - cur_bits ? bits : 128 - cur_bits;
+    cur_bytes         = (this->bits + (uint32_t)consumed_bits + 7) >> 3;  // round up
+    int upper         = _mm_extract_epi16(val, 7);
+    upper >>= consumed_bits - 128 + 16;
+    this->tmp[cur_bytes] = (uint8_t)upper;  // copy byte
+
+    this->bits += (uint32_t)bits;
+    this->unstuff = next_unstuff;  // next unstuff
+    assert(this->unstuff == 0 || this->unstuff == 1);
+  }
+
+  //************************************************************************/
+  /** @brief Consume num_bits bits from the bitstream of frwd_struct
+   *
+   *  @param [in]  num_bits is the number of bit to consume
+   */
+  inline void advance(uint32_t num_bits) {
+    if (!num_bits) return;
+    assert(num_bits > 0 && num_bits <= this->bits && num_bits < 128);
+    this->bits -= num_bits;
+
+    __m128i *p = (__m128i *)(this->tmp + ((num_bits >> 3) & 0x18));
+    num_bits &= 63;
+
+    __m128i v0, v1, c0, c1, t;
+    v0 = _mm_loadu_si128(p);
+    v1 = _mm_loadu_si128(p + 1);
+
+    // shift right by num_bits
+    c0 = _mm_srl_epi64(v0, _mm_set1_epi64x(num_bits));
+    t  = _mm_srli_si128(v0, 8);
+    t  = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+    c0 = _mm_or_si128(c0, t);
+    t  = _mm_slli_si128(v1, 8);
+    t  = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+    c0 = _mm_or_si128(c0, t);
+
+    _mm_storeu_si128((__m128i *)this->tmp, c0);
+
+    c1 = _mm_srl_epi64(v1, _mm_set1_epi64x(num_bits));
+    t  = _mm_srli_si128(v1, 8);
+    t  = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+    c1 = _mm_or_si128(c1, t);
+
+    _mm_storeu_si128((__m128i *)this->tmp + 1, c1);
+  }
+
+  //************************************************************************/
+  /** @brief Fetches 32 bits from the frwd_struct bitstream
+   *
+   *  @tparam      X is the value fed in when the bitstream is exhausted.
+   *               See frwd_read regarding the template
+   */
+  inline __m128i fetch(__m128i m) {
+    if (this->bits <= 128) {
+      read();
+      if (this->bits <= 128)  // need to test
+        read();
+    }
+    __m128i t = _mm_loadu_si128((__m128i *)this->tmp);
+
+    __uint128_t v128i = (__uint128_t)t;
+    uint32_t vtmp[4];
+    vtmp[0] = v128i & 0xFFFFFFFFU;
+    v128i >>= _mm_extract_epi32(m, 0);
+    vtmp[1] = v128i & 0xFFFFFFFFU;
+    v128i >>= _mm_extract_epi32(m, 1);
+    vtmp[2] = v128i & 0xFFFFFFFFU;
+    v128i >>= _mm_extract_epi32(m, 2);
+    vtmp[3] = v128i & 0xFFFFFFFFU;
+
+    return _mm_loadu_si128((__m128i *)vtmp);
   }
 };
 #else
