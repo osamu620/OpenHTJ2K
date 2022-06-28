@@ -89,6 +89,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
   const int32_t mask[4] = {1, 2, 4, 8};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   __m128i vExp;
+  alignas(32) uint32_t m_quads[8];
+  alignas(32) uint32_t msval[8];
 #else
   alignas(32) uint32_t m_quads[8];
   alignas(32) uint32_t msval[8];
