@@ -663,6 +663,14 @@ class fwd_buf {
   }
 };
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+__m128i mm_bitshift_right(__m128i x, unsigned count) {
+  __m128i hi = _mm_srli_si128(x, 8);  // shifted by 8 byte right, take hi 64 bit
+  if (count >= 64) return _mm_srli_epi64(hi, count - 64);
+  hi = _mm_slli_epi64(hi, 64 - count);
+
+  x = _mm_srli_epi64(x, count);
+  return _mm_or_si128(x, hi);
+}
 // this class implementation is borrowed from OpenJPH and modified
 //************************************************************************/
 /** @brief State structure for reading and unstuffing of forward-growing
@@ -842,17 +850,22 @@ class fwd_buf {
     }
     const __m128i t = _mm_loadu_si128((__m128i *)this->tmp);
 
-    const __uint128_t v128i = (__uint128_t)t;
+    const uint32_t m0 = static_cast<uint32_t>(_mm_extract_epi32(m, 0));
+    const uint32_t m1 = static_cast<uint32_t>(_mm_extract_epi32(m, 1));
+    const uint32_t m2 = static_cast<uint32_t>(_mm_extract_epi32(m, 2));
 
     uint32_t vtmp[4];
+    vtmp[0] = _mm_extract_epi32(t, 0);
+    vtmp[1] = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
+    vtmp[2] = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1), 0);
+    vtmp[3] = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1 + m2), 0);
 
-    const uint32_t m0 = _mm_extract_epi32(m, 0);
-    const uint32_t m1 = _mm_extract_epi32(m, 1);
-    const uint32_t m2 = _mm_extract_epi32(m, 2);
-    vtmp[0]           = v128i & 0xFFFFFFFFU;
-    vtmp[1]           = (v128i >> (m0)) & 0xFFFFFFFFU;
-    vtmp[2]           = (v128i >> (m0 + m1)) & 0xFFFFFFFFU;
-    vtmp[3]           = (v128i >> (m0 + m1 + m2)) & 0xFFFFFFFFU;
+    // const __uint128_t v128i = (__uint128_t)t;
+
+    // vtmp[0]           = v128i & 0xFFFFFFFFU;
+    // vtmp[1]           = (v128i >> (m0)) & 0xFFFFFFFFU;
+    // vtmp[2]           = (v128i >> (m0 + m1)) & 0xFFFFFFFFU;
+    // vtmp[3]           = (v128i >> (m0 + m1 + m2)) & 0xFFFFFFFFU;
 
     auto ret = _mm_loadu_si128((__m128i *)vtmp);
     return ret;
