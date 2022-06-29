@@ -663,6 +663,7 @@ class fwd_buf {
   }
 };
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  #if defined(_MSC_VER)
 __m128i mm_bitshift_right(__m128i x, unsigned count) {
   __m128i hi = _mm_srli_si128(x, 8);  // shifted by 8 byte right, take hi 64 bit
   if (count >= 64) return _mm_srli_epi64(hi, count - 64);
@@ -671,6 +672,7 @@ __m128i mm_bitshift_right(__m128i x, unsigned count) {
   x = _mm_srli_epi64(x, count);
   return _mm_or_si128(x, hi);
 }
+  #endif
 // this class implementation is borrowed from OpenJPH and modified
 //************************************************************************/
 /** @brief State structure for reading and unstuffing of forward-growing
@@ -801,10 +803,8 @@ class fwd_buf {
    *  @param [in]  num_bits is the number of bit to consume
    */
   inline void advance(uint32_t num_bits) {
-    // printf("%d\n", num_bits);
-    if (!num_bits) return;
-    // assert(num_bits > 0 && num_bits <= this->bits && num_bits < 128);
-    if (!(num_bits > 0 && num_bits <= this->bits && num_bits < 128)) {
+    // if (!num_bits) return;
+    if (!(num_bits >= 0 && num_bits <= this->bits && num_bits < 128)) {
       printf("Value of numbits = %d is out of range.\n", num_bits);
       // throw std::exception();
     }
@@ -855,18 +855,19 @@ class fwd_buf {
     const uint32_t m2 = static_cast<uint32_t>(_mm_extract_epi32(m, 2));
 
     uint32_t vtmp[4];
-    vtmp[0] = _mm_extract_epi32(t, 0);
-    vtmp[1] = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
-    vtmp[2] = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1), 0);
-    vtmp[3] = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1 + m2), 0);
+  #if defined(_MSC_VER)
+    vtmp[0]  = _mm_extract_epi32(t, 0);
+    vtmp[1]  = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
+    vtmp[2]  = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1), 0);
+    vtmp[3]  = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1 + m2), 0);
+  #else
+    const __uint128_t v128i = (__uint128_t)t;
 
-    // const __uint128_t v128i = (__uint128_t)t;
-
-    // vtmp[0]           = v128i & 0xFFFFFFFFU;
-    // vtmp[1]           = (v128i >> (m0)) & 0xFFFFFFFFU;
-    // vtmp[2]           = (v128i >> (m0 + m1)) & 0xFFFFFFFFU;
-    // vtmp[3]           = (v128i >> (m0 + m1 + m2)) & 0xFFFFFFFFU;
-
+    vtmp[0] = v128i & 0xFFFFFFFFU;
+    vtmp[1] = (v128i >> (m0)) & 0xFFFFFFFFU;
+    vtmp[2] = (v128i >> (m0 + m1)) & 0xFFFFFFFFU;
+    vtmp[3] = (v128i >> (m0 + m1 + m2)) & 0xFFFFFFFFU;
+  #endif
     auto ret = _mm_loadu_si128((__m128i *)vtmp);
     return ret;
   }
