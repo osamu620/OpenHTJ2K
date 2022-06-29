@@ -793,8 +793,13 @@ class fwd_buf {
    *  @param [in]  num_bits is the number of bit to consume
    */
   inline void advance(uint32_t num_bits) {
+    // printf("%d\n", num_bits);
     if (!num_bits) return;
-    assert(num_bits > 0 && num_bits <= this->bits && num_bits < 128);
+    // assert(num_bits > 0 && num_bits <= this->bits && num_bits < 128);
+    if (!(num_bits > 0 && num_bits <= this->bits && num_bits < 128)) {
+      printf("Value of numbits = %d is out of range.\n", num_bits);
+      // throw std::exception();
+    }
     this->bits -= num_bits;
 
     __m128i *p = (__m128i *)(this->tmp + ((num_bits >> 3) & 0x18));
@@ -805,19 +810,19 @@ class fwd_buf {
     v1 = _mm_loadu_si128(p + 1);
 
     // shift right by num_bits
-    c0 = _mm_srl_epi64(v0, _mm_set1_epi64x(num_bits));
+    c0 = _mm_srli_epi64(v0, num_bits);
     t  = _mm_srli_si128(v0, 8);
-    t  = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+    t  = _mm_slli_epi64(t, 64 - num_bits);
     c0 = _mm_or_si128(c0, t);
     t  = _mm_slli_si128(v1, 8);
-    t  = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+    t  = _mm_slli_epi64(t, 64 - num_bits);
     c0 = _mm_or_si128(c0, t);
 
     _mm_storeu_si128((__m128i *)this->tmp, c0);
 
-    c1 = _mm_srl_epi64(v1, _mm_set1_epi64x(num_bits));
+    c1 = _mm_srli_epi64(v1, num_bits);
     t  = _mm_srli_si128(v1, 8);
-    t  = _mm_sll_epi64(t, _mm_set1_epi64x(64 - num_bits));
+    t  = _mm_slli_epi64(t, 64 - num_bits);
     c1 = _mm_or_si128(c1, t);
 
     _mm_storeu_si128((__m128i *)this->tmp + 1, c1);
@@ -829,25 +834,28 @@ class fwd_buf {
    *  @tparam      X is the value fed in when the bitstream is exhausted.
    *               See frwd_read regarding the template
    */
-  inline __m128i fetch(__m128i m) {
+  inline __m128i fetch(const __m128i m) {
     if (this->bits <= 128) {
       read();
       if (this->bits <= 128)  // need to test
         read();
     }
-    __m128i t = _mm_loadu_si128((__m128i *)this->tmp);
+    const __m128i t = _mm_loadu_si128((__m128i *)this->tmp);
 
-    __uint128_t v128i = (__uint128_t)t;
+    const __uint128_t v128i = (__uint128_t)t;
+
     uint32_t vtmp[4];
-    vtmp[0] = v128i & 0xFFFFFFFFU;
-    v128i >>= _mm_extract_epi32(m, 0);
-    vtmp[1] = v128i & 0xFFFFFFFFU;
-    v128i >>= _mm_extract_epi32(m, 1);
-    vtmp[2] = v128i & 0xFFFFFFFFU;
-    v128i >>= _mm_extract_epi32(m, 2);
-    vtmp[3] = v128i & 0xFFFFFFFFU;
 
-    return _mm_loadu_si128((__m128i *)vtmp);
+    const uint32_t m0 = _mm_extract_epi32(m, 0);
+    const uint32_t m1 = _mm_extract_epi32(m, 1);
+    const uint32_t m2 = _mm_extract_epi32(m, 2);
+    vtmp[0]           = v128i & 0xFFFFFFFFU;
+    vtmp[1]           = (v128i >> (m0)) & 0xFFFFFFFFU;
+    vtmp[2]           = (v128i >> (m0 + m1)) & 0xFFFFFFFFU;
+    vtmp[3]           = (v128i >> (m0 + m1 + m2)) & 0xFFFFFFFFU;
+
+    auto ret = _mm_loadu_si128((__m128i *)vtmp);
+    return ret;
   }
 };
 #else
