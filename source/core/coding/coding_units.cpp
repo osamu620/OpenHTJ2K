@@ -1138,29 +1138,28 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
       npw(w),
       nph(h),
       is_empty((npw * nph == 0)),
-      i_samples(nullptr),
-      f_samples(nullptr) {
+      i_samples(nullptr) {
   const uint32_t num_samples = (pos1.x - pos0.x) * (pos1.y - pos0.y);
   // create buffer of LL band
   i_samples = nullptr;
   if (!is_empty) {
     if (index == 0) {
       i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
-      f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
+      //      f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
       memset(i_samples, 0, sizeof(sprec_t) * num_samples);
-      for (uint32_t n = 0; n < num_samples; ++n) {
-        f_samples[n] = 0.0;
-      }
+      //      for (uint32_t n = 0; n < num_samples; ++n) {
+      //        f_samples[n] = 0.0;
+      //      }
     } else {
       i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
-      f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
+      //      f_samples = static_cast<float *>(aligned_mem_alloc(sizeof(float) * num_samples, 32));
     }
   }
 }
 
 j2k_resolution::~j2k_resolution() {
   aligned_mem_free(i_samples);
-  aligned_mem_free(f_samples);
+  //  aligned_mem_free(f_samples);
 }
 
 void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
