@@ -335,7 +335,7 @@ class rev_buf {
     unstuff = unstuff_flag;  // this for the next read
   }
 
-  inline uint32_t fetch() {
+  FORCE_INLINE uint32_t fetch() {
     if (bits < 32) {
       read();
       if (bits < 32) {
@@ -639,7 +639,7 @@ class fwd_buf {
    *
    *  @param [in]  m is a reference to a vector of m_n bits
    */
-  inline int32x4_t fetch(const int32x4_t &m) {
+  FORCE_INLINE int32x4_t fetch(const int32x4_t &m) {
     if (this->bits <= 128) {
       read();
       if (this->bits <= 128)  // need to test

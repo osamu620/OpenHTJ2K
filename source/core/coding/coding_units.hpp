@@ -263,7 +263,7 @@ class j2k_resolution : public j2k_region {
   // pre-shift value for forward DWT
   uint8_t normalizing_downshift;
   sprec_t *i_samples;
-  float *f_samples;
+  //  float *f_samples;
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
                  const uint32_t &nph);
   ~j2k_resolution();
