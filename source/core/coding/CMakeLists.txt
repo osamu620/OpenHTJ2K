@@ -3,6 +3,8 @@ target_sources(open_htj2k
     PRIVATE
     coding_units.cpp
     ht_block_decoding.cpp
+    ht_block_decoding_neon.cpp
+    ht_block_decoding_avx2.cpp
     ht_block_encoding.cpp
     block_decoding.cpp
     mq_decoder.cpp
