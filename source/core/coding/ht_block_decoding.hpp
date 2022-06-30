@@ -663,6 +663,17 @@ class fwd_buf {
   }
 };
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+// https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
+int32_t hsum_epi32_sse2(__m128i x) {
+  __m128i hi64 =
+      _mm_unpackhi_epi64(x, x);  // 3-operand non-destructive AVX lets us save a byte without needing a mov
+  __m128i sum64 = _mm_add_epi32(hi64, x);
+  __m128i hi32  = _mm_shufflelo_epi16(sum64, _MM_SHUFFLE(1, 0, 3, 2));  // Swap the low two elements
+  __m128i sum32 = _mm_add_epi32(sum64, hi32);
+  return _mm_cvtsi128_si32(sum32);  // SSE2 movd
+  // return _mm_extract_epi32(hl, 0);     // SSE4, even though it compiles to movd instead of a literal
+  // pextrd r32,xmm,0
+}
   #if defined(_MSC_VER)
 __m128i mm_bitshift_right(__m128i x, unsigned count) {
   __m128i hi = _mm_srli_si128(x, 8);  // shifted by 8 byte right, take hi 64 bit
@@ -722,7 +733,7 @@ class fwd_buf {
    *
    */
 
-  inline void read() {
+  inline __attribute__((always_inline)) void read() {
     assert(this->bits <= 128);
 
     __m128i offset, val, validity, all_xff;
@@ -802,7 +813,7 @@ class fwd_buf {
    *
    *  @param [in]  num_bits is the number of bit to consume
    */
-  inline void advance(uint32_t num_bits) {
+  inline __attribute__((always_inline)) void advance(uint32_t num_bits) {
     // if (!num_bits) return;
     if (!(num_bits >= 0 && num_bits <= this->bits && num_bits < 128)) {
       printf("Value of numbits = %d is out of range.\n", num_bits);
@@ -842,7 +853,7 @@ class fwd_buf {
    *  @tparam      X is the value fed in when the bitstream is exhausted.
    *               See frwd_read regarding the template
    */
-  inline __m128i fetch(const __m128i m) {
+  inline __attribute__((always_inline)) __m128i fetch(const __m128i m) {
     if (this->bits <= 128) {
       read();
       if (this->bits <= 128)  // need to test
@@ -856,10 +867,10 @@ class fwd_buf {
 
     uint32_t vtmp[4];
   #if defined(_MSC_VER)
-    vtmp[0]  = _mm_extract_epi32(t, 0);
-    vtmp[1]  = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
-    vtmp[2]  = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1), 0);
-    vtmp[3]  = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1 + m2), 0);
+    vtmp[0] = _mm_extract_epi32(t, 0);
+    vtmp[1] = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
+    vtmp[2] = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1), 0);
+    vtmp[3] = _mm_extract_epi32(mm_bitshift_right(t, m0 + m1 + m2), 0);
   #else
     const __uint128_t v128i = (__uint128_t)t;
 
@@ -868,8 +879,8 @@ class fwd_buf {
     vtmp[2] = (v128i >> (m0 + m1)) & 0xFFFFFFFFU;
     vtmp[3] = (v128i >> (m0 + m1 + m2)) & 0xFFFFFFFFU;
   #endif
-    auto ret = _mm_loadu_si128((__m128i *)vtmp);
-    return ret;
+    // auto ret = _mm_loadu_si128((__m128i *)vtmp);
+    return *(__m128i *)vtmp;
   }
 };
 #else
