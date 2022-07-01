@@ -26,30 +26,31 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#pragma once
+#ifdef OPENHTJ2K_THREAD
+  #pragma once
 
-#include <vector>
-#include <queue>
-#include <memory>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <future>
-#include <functional>
-#include <stdexcept>
-#include <map>
-#include <type_traits>
-#include <iostream>
+  #include <vector>
+  #include <queue>
+  #include <memory>
+  #include <thread>
+  #include <mutex>
+  #include <condition_variable>
+  #include <future>
+  #include <functional>
+  #include <stdexcept>
+  #include <map>
+  #include <type_traits>
+  #include <iostream>
 
 class ThreadPool {
  public:
   ThreadPool(size_t);
   template <class F, class... Args>
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+  #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
-#else
+  #else
   auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type>;
-#endif
+  #endif
   ~ThreadPool();
   int thread_number(std::thread::id id) {
     if (id_map.find(id) != id_map.end()) return (int)id_map[id];
@@ -110,16 +111,16 @@ inline ThreadPool::ThreadPool(size_t threads) : stop(false), m_num_threads(threa
   }
 }
 template <class F, class... Args>
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+  #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
 auto ThreadPool::enqueue(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
   assert(m_num_threads > 1);
   using return_type = typename std::invoke_result<F, Args...>::type;
-#else
+  #else
 auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
   assert(m_num_threads > 1);
   using return_type = typename std::result_of<F(Args...)>::type;
-#endif
+  #endif
   auto task = std::make_shared<std::packaged_task<return_type()>>(
       std::bind(std::forward<F>(f), std::forward<Args>(args)...));
 
@@ -143,3 +144,4 @@ inline ThreadPool::~ThreadPool() {
   condition.notify_all();
   for (std::thread& worker : workers) worker.join();
 }
+#endif

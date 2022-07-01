@@ -518,7 +518,9 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
       throw std::exception();
     }
   }
+#ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
+#endif
   this->impl =
       MAKE_UNIQUE<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor, isJPH, color_space);
 }
