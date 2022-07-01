@@ -706,9 +706,9 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       int32_t *val      = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst      = this->i_samples + i * this->band_stride;
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
-      size_t simdlen    = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
+      size_t len        = this->size.x;
       auto vmask        = vdupq_n_s32(static_cast<int32_t>(~mask));
-      for (size_t j = 0; j < simdlen; j += 8) {
+      for (; len >= 8; len -= 8) {
         auto vsrc0  = vld1q_s32(val);
         auto vsrc1  = vld1q_s32(val + 4);
         auto vsign0 = vcltzq_s32(vsrc0) >> 31;
@@ -747,18 +747,17 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         auto vnegmask = vcltzq_s32(vsrc0 | (vsign0 << 31));
         auto vposmask = ~vnegmask;
         // this cannot be auto for gcc
-        int32x4_t vdst0 = (vnegq_s32(vsrc0) & vnegmask) + (vsrc0 & vposmask);
+        int32x4_t vdst0 = (vnegq_s32(vsrc0) & vnegmask) | (vsrc0 & vposmask);
         vnegmask        = vcltzq_s32(vsrc1 | (vsign1 << 31));
         vposmask        = ~vnegmask;
         // this cannot be auto for gcc
-        int32x4_t vdst1 = (vnegq_s32(vsrc1) & vnegmask) + (vsrc1 & vposmask);
+        int32x4_t vdst1 = (vnegq_s32(vsrc1) & vnegmask) | (vsrc1 & vposmask);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0 >> pLSB), vmovn_s32(vdst1 >> pLSB)));
         val += 8;
         dst += 8;
         blkstate += 8;
       }
-      for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
-           j < static_cast<size_t>(this->size.x); j++) {
+      for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
@@ -798,9 +797,9 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       int32_t *val      = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst      = this->i_samples + i * this->band_stride;
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
-      size_t simdlen    = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
+      size_t len        = this->size.x;
       auto vmask        = vdupq_n_s32(static_cast<int32_t>(~mask));
-      for (size_t j = 0; j < simdlen; j += 8) {
+      for (; len >= 8; len -= 8) {
         auto vsrc0  = vld1q_s32(val);
         auto vsrc1  = vld1q_s32(val + 4);
         auto vsign0 = vcltzq_s32(vsrc0) >> 31;
@@ -849,15 +848,14 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         auto vsign    = vcombine_s16(vmovn_s32(vsign0), vmovn_s32(vsign1));
         auto vnegmask = vcltzq_s16(vdst | (vsign << 15));
         auto vposmask = ~vnegmask;
-        vdst          = (vnegq_s16(vdst) & vnegmask) + (vdst & vposmask);
+        vdst          = (vnegq_s16(vdst) & vnegmask) | (vdst & vposmask);
         vst1q_s16(dst, vdst);
 
         val += 8;
         dst += 8;
         blkstate += 8;
       }
-      for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 8;
-           j < static_cast<size_t>(this->size.x); j++) {
+      for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
