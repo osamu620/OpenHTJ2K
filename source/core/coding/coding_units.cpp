@@ -2786,8 +2786,7 @@ uint8_t *j2k_tile::encode() {
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
 
-              htj2k_encode(block, ROIshift);
-
+            htj2k_encode(block, ROIshift);
           }
         }
       }
