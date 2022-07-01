@@ -7,7 +7,7 @@ project(
 option(BUILD_SHARED_LIBS "Shared Libraries" ON)
 enable_language(CXX)
 
-#
+# Check C++ version supported by compiler
 include(CheckCXXCompilerFlag)
 if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
   check_cxx_compiler_flag("/std:c++11" COMPILER_SUPPORTS_CXX11)
@@ -18,6 +18,9 @@ else()
   check_cxx_compiler_flag("-std=c++14" COMPILER_SUPPORTS_CXX14)
   check_cxx_compiler_flag("-std=c++17" COMPILER_SUPPORTS_CXX17)
 endif()
+
+# Cehck Thread support
+find_package(Threads)
 
 # Compiler settings
 if(COMPILER_SUPPORTS_CXX17)
@@ -115,7 +118,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
-#target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+if (Threads_FOUND)
+  message(STATUS "Thread library found")
+  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+endif()
+
 if(ENABLE_ARM_NEON)
   message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
