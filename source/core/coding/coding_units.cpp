@@ -197,7 +197,7 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
   this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
   this->layer_passes = MAKE_UNIQUE<uint8_t[]>(num_layers);
-  this->pass_length.reserve(109);
+  if ((Cmodes & 0x40) == 0) this->pass_length.reserve(109);
   this->pass_length = std::vector<uint32_t>(num_layers, 0);  // critical section
 }
 
