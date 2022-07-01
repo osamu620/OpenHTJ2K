@@ -45,14 +45,14 @@
 
 void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   const uint32_t height = this->size.y;
-  //  const uint32_t width  = this->size.x + (this->size.x % 2);
+  // const uint32_t width  = this->size.x + (this->size.x % 2);
   const uint32_t stride = this->band_stride;
   const int32_t pshift  = (refsegment) ? 1 : 0;
   const int32_t pLSB    = (1 << (pshift - 1));
 
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *const sp  = this->i_samples + i * stride;
-    int32_t *const dp  = this->sample_buf.get() + i * blksampl_stride;
+    int32_t *const dp  = this->sample_buf.get() + i * this->size.x;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states.get() + block_index;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -161,7 +161,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       block_index++;
     }
 #else
-    const uint32_t width = this->size.x + (this->size.x % 2);
+    const uint32_t width = this->size.x;
     for (uint16_t j = 0; j < width; ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
@@ -415,10 +415,10 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                        uint8_t *const rho_q) {
 // This function shall be called on the assumption that there are two quads
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  //  const uint32_t QWx2                = block->size.x + block->size.x % 2;
+  // const uint32_t QWx2                = block->size.x + block->size.x % 2;
   alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1U) * (block->blkstate_stride) + 2 * qx + 1;
-  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2U) * (block->blkstate_stride) + 2 * qx + 1;
+  uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * block->blkstate_stride + 2U * qx + 1U;
+  uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * block->blkstate_stride + 2U * qx + 1U;
   auto v_u8_0        = vld1_u8(sp0);
   auto v_u8_1        = vld1_u8(sp1);
   auto v_u8_zip      = vzip1_u8(v_u8_0, v_u8_1);
@@ -430,8 +430,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                              vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)));
   rho_q[0]        = vdupb_lane_u8(vtmp, 0);
   rho_q[1]        = vdupb_lane_u8(vtmp, 1);
-  auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * block->blksampl_stride);
-  auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1U) * block->blksampl_stride);
+  auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2U * qx + 2U * qy * block->blksampl_stride);
+  auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * block->blksampl_stride);
   auto v_s32_out  = vzipq_s32(v_s32_0, v_s32_1);
   vst1q_u32(v_n, v_s32_out.val[0]);
   vst1q_u32(v_n + 4, v_s32_out.val[1]);
@@ -442,8 +442,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   // const uint32_t QWx2 = block->size.x + block->size.x % 2;
   // const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * block->blkstate_stride + 2U * qx + 1U;
+  uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * block->blkstate_stride + 2U * qx + 1U;
   auto v_u8_0 = _mm_set1_epi64x(*((int64_t *)sp0));
   auto v_u8_1 = _mm_set1_epi64x(*((int64_t *)sp1));
   auto v_u8_zip = _mm_unpacklo_epi8(v_u8_0, v_u8_1);
@@ -456,10 +456,10 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 
   alignas(32) uint32_t sig32[8];
   _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(v_u8_out));
-  auto v_s32_0 =
-      _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2U * qx + 2U * qy * block->blksampl_stride));
-  auto v_s32_1 = _mm_loadu_si128(
-      (__m128i *)(block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * block->blksampl_stride));
+  auto v_s32_0 = _mm_loadu_si128((__m128i *)
+                 (block->sample_buf.get() + 2U * qx + 2U * qy * block->blksampl_stride));
+  auto v_s32_1 = _mm_loadu_si128((__m128i *)
+                 (block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * block->blksampl_stride));
   *((__m128i *)(v_n)) = _mm_unpacklo_epi32(v_s32_0, v_s32_1);
   *((__m128i *)(v_n + 4)) = _mm_unpackhi_epi32(v_s32_0, v_s32_1);
 
@@ -514,8 +514,8 @@ static inline void make_storage_one(const j2k_codeblock *const block, const uint
   for (int i = 0; i < 4; ++i) {
     if ((x[i] >= 0 && x[i] < static_cast<int16_t>(block->size.x))
         && (y[i] >= 0 && y[i] < static_cast<int16_t>(block->size.y))) {
-      v_n[i] =
-          static_cast<uint32_t>(block->sample_buf[(size_t)x[i] + (size_t)y[i] * (block->blksampl_stride)]);
+      v_n[i] = static_cast<uint32_t>(block->sample_buf[(size_t)x[i] +
+                                     (size_t)y[i] * block->size.x]);
     } else {
       v_n[i] = 0;
     }
@@ -594,8 +594,10 @@ int32_t termSPandMR(SP_enc &SP, MR_enc &MR) {
     {                                                                                                       \
       const uint32_t QWx2    = block->size.x + block->size.x % 2;                                           \
       const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};                                                    \
-      uint8_t *const sp0     = block->block_states.get() + (2 * qy + 1) * (block->size.x + 2) + 2 * qx + 1; \
-      uint8_t *const sp1     = block->block_states.get() + (2 * qy + 2) * (block->size.x + 2) + 2 * qx + 1; \
+      uint8_t *const sp0     = block->block_states.get() +                                                  \
+                               (2U * qy + 1U) * (block->size.x + 2U) + 2U * qx + 1U;                        \
+      uint8_t *const sp1     = block->block_states.get() +                                                  \
+                               (2U * qy + 2U) * (block->size.x + 2U) + 2U * qx + 1U;                        \
       auto v_u8_0            = vld1_u8(sp0);                                                                \
       auto v_u8_1            = vld1_u8(sp1);                                                                \
       auto v_u8_zip          = vzip1_u8(v_u8_0, v_u8_1);                                                    \
@@ -607,8 +609,8 @@ int32_t termSPandMR(SP_enc &SP, MR_enc &MR) {
                                  vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)));   \
       rho_q[0]        = vdupb_lane_u8(vtmp, 0);                                                             \
       rho_q[1]        = vdupb_lane_u8(vtmp, 1);                                                             \
-      auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * QWx2);                        \
-      auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1) * QWx2);                  \
+      auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2U * qx + 2U * qy * QWx2);                      \
+      auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * QWx2);               \
       auto v_s32_out  = vzipq_s32(v_s32_0, v_s32_1);                                                        \
       vst1q_u32(v_n, v_s32_out.val[0]);                                                                     \
       vst1q_u32(v_n + 4, v_s32_out.val[1]);                                                                 \
@@ -931,8 +933,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
-      kappa     = std::max(
-              (find_max(ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
+      kappa     = std::max((find_max(ep[2 * qx - 1],
+                                     ep[2 * qx],
+                                     ep[2 * qx + 1],
+                                     ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
 
       ep[2 * qx] = E_n[1];
       // if (qx > 0) {
@@ -995,10 +999,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         MEL_encoder.encodeMEL((rho_q[Q1] != 0));
       }
       gamma[Q1] = (popcount32((uint32_t)rho_q[Q1]) > 1) ? 1 : 0;
-      kappa     = std::max(
-              (find_max(ep[2 * (qx + 1) - 1], ep[2 * (qx + 1)], ep[2 * (qx + 1) + 1], ep[2 * (qx + 1) + 2]) - 1)
-                  * gamma[Q1],
-              1);
+      kappa     = std::max((find_max(ep[2 * (qx + 1) - 1],
+                                     ep[2 * (qx + 1)],
+                                     ep[2 * (qx + 1) + 1],
+                                     ep[2 * (qx + 1) + 2]) - 1) * gamma[Q1], 1);
 
       ep[2 * (qx + 1) - 1] = E_n[3];
       ep[2 * (qx + 1)]     = E_n[5];
@@ -1072,8 +1076,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
-      kappa     = std::max(
-              (find_max(ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
+      kappa     = std::max((find_max(ep[2 * qx - 1],
+                                     ep[2 * qx],
+                                     ep[2 * qx + 1],
+                                     ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
 
       ep[2 * qx] = E_n[1];
       // if (qx > 0) {
