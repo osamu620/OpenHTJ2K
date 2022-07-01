@@ -70,7 +70,9 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   }
   file_size = static_cast<uintmax_t>(st.st_size);
 #endif
+#ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
+#endif
   // open codestream and store it in memory
   FILE *fp = fopen(filename, "rb");
   in.alloc_memory(static_cast<uint32_t>(file_size));
@@ -88,7 +90,9 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
     : reduce_NL(r) {
   if (buf == nullptr) {
   }
+#ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
+#endif
   // open codestream and store it in memory
   in.alloc_memory(static_cast<uint32_t>(length));
   uint8_t *p = in.get_buf_pos();
