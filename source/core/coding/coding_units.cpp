@@ -162,18 +162,18 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       // public
       size(s),
       // private
-      index(idx),
-      band(orientation),
-      M_b(M_b),
       compressed_data(nullptr),
       current_address(nullptr),
+      band(orientation),
+      M_b(M_b),
+      index(idx),
       //  public
+      i_samples(ibuf + offset),
+      band_stride(band_stride),
       R_b(R_b),
       transformation(transformation),
       stepsize(stepsize),
-      band_stride(band_stride),
       num_layers(numlayers),
-      i_samples(ibuf + offset),
       length(0),
       Cmodes(codeblock_style),
       num_passes(0),
