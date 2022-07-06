@@ -204,8 +204,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vmask           = vmvnq_u32(vceqzq_u32(v_m_quads0));
     auto v_mu0      = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vdupq_n_u32(1));
     v_mu0           = vshlq_u32(v_mu0, vdupq_n_s32(pLSB));
-    v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vdupq_n_u32(1)), vdupq_n_u32(31)));
-    v_mu0           = vandq_u32(v_mu0, vmask);
+    //    v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vdupq_n_u32(1)),
+    //    vdupq_n_u32(31)));
+    v_mu0 = vorrq_u32(v_mu0, vshlq_u32(v_v_quads0, vdupq_n_u32(31)));
+    v_mu0 = vandq_u32(v_mu0, vmask);
 
     vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vm), vone);
     vmask           = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads1), vdupq_n_u32(1));
@@ -214,8 +216,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vmask           = vmvnq_u32(vceqzq_u32(v_m_quads1));
     auto v_mu1      = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vdupq_n_u32(1));
     v_mu1           = vshlq_u32(v_mu1, vdupq_n_s32(pLSB));
-    v_mu1           = vorrq_u32(v_mu1, vshlq_u32(vandq_u32(v_v_quads1, vdupq_n_u32(1)), vdupq_n_u32(31)));
-    v_mu1           = vandq_u32(v_mu1, vmask);
+    //    v_mu1           = vorrq_u32(v_mu1, vshlq_u32(vandq_u32(v_v_quads1, vdupq_n_u32(1)),
+    //    vdupq_n_u32(31)));
+    v_mu1 = vorrq_u32(v_mu1, vshlq_u32(v_v_quads1, vdupq_n_u32(31)));
+    v_mu1 = vandq_u32(v_mu1, vmask);
 
     // store mu
     auto vvv = vzipq_s32(v_mu0, v_mu1);
@@ -300,8 +304,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vmask          = vmvnq_u32(vceqzq_u32(v_m_quads0));
     auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
     v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
-    v_mu           = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
-    v_mu           = vandq_u32(v_mu, vmask);
+    v_mu           = vorrq_u32(v_mu, vshlq_u32(v_v_quads, vdupq_n_u32(31)));
+    //    v_mu = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
+    v_mu = vandq_u32(v_mu, vmask);
 
     // store mu
     vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
@@ -453,10 +458,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       auto v_v_quads0 = vandq_u32(vmsval, vmask1);
       v_v_quads0      = vorrq_u32(v_v_quads0, vshlq_u32(vtmp, v_m_quads0));
       vmask1          = vmvnq_u32(vceqzq_u32(v_m_quads0));
-      auto v_mu0      = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vone);
-      v_mu0           = vshlq_u32(v_mu0, vdupq_n_s32(pLSB));
-      v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vone), vdupq_n_u32(31)));
-      v_mu0           = vandq_u32(v_mu0, vmask1);
+      //      auto v_mu0a     = vaddq_u32(v_v_quads0, vone * 2);
+      //      v_mu0a          = vshlq_u32(v_mu0a, vdupq_n_s32(pLSB - 1));
+      auto v_mu0 = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vone);
+      v_mu0      = vshlq_u32(v_mu0, vdupq_n_s32(pLSB));
+      //      v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vone), vdupq_n_u32(31)));
+      v_mu0 = vorrq_u32(v_mu0, vshlq_u32(v_v_quads0, vdupq_n_u32(31)));
+      v_mu0 = vandq_u32(v_mu0, vmask1);
 
       // i_n in the spec can be derived from emb_^{-1}
       vtmp   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vmask0), vone);
@@ -469,7 +477,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       vmask1          = vmvnq_u32(vceqzq_u32(v_m_quads1));
       auto v_mu1      = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vone);
       v_mu1           = vshlq_u32(v_mu1, vdupq_n_s32(pLSB));
-      v_mu1           = vorrq_u32(v_mu1, vshlq_u32(vandq_u32(v_v_quads1, vone), vdupq_n_u32(31)));
+      v_mu1           = vorrq_u32(v_mu1, vshlq_u32(v_v_quads1, vdupq_n_u32(31)));  // bring sign back
       v_mu1           = vandq_u32(v_mu1, vmask1);
 
       // store mu
@@ -548,9 +556,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads0));
       vmask          = vmvnq_u32(vceqzq_u32(v_m_quads0));
       auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vdupq_n_u32(1));
-      v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
-      v_mu           = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)), vdupq_n_u32(31)));
-      v_mu           = vandq_u32(v_mu, vmask);
+      v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));  // shift up
+      //      v_mu           = vorrq_u32(v_mu, vshlq_u32(vandq_u32(v_v_quads, vdupq_n_u32(1)),
+      //      vdupq_n_u32(31)));
+      v_mu = vorrq_u32(v_mu, vshlq_u32(v_v_quads, vdupq_n_u32(31)));  // bring sign back
+      v_mu = vandq_u32(v_mu, vmask);
 
       // store mu
       vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
