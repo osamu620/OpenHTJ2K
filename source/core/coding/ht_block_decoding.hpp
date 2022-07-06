@@ -110,9 +110,9 @@ constexpr uint16_t uvlc_dec_1[256] = {
 // this class implementation is borrowed from OpenJPH
 class MEL_dec {
  private:
-  int bits;
-  uint64_t tmp;
   const uint8_t *buf;
+  uint64_t tmp;
+  int bits;
   int32_t length;
   bool unstuff;
   int MEL_k;
@@ -122,9 +122,9 @@ class MEL_dec {
 
  public:
   MEL_dec(const uint8_t *Dcup, int32_t Lcup, int32_t Scup)
-      : bits(0),
+      : buf(Dcup + Lcup - Scup),
         tmp(0),
-        buf(Dcup + Lcup - Scup),
+        bits(0),
         length(Scup - 1),  // length is the length of MEL+VLC-1
         unstuff(false),
         MEL_k(0),
@@ -256,15 +256,15 @@ class MEL_dec {
 // this class implementation is borrowed from OpenJPH
 class rev_buf {
  private:
-  uint32_t bits;
-  uint64_t Creg;
-  uint32_t unstuff;
   uint8_t *buf;
+  uint64_t Creg;
+  uint32_t bits;
   int32_t length;
+  uint32_t unstuff;
 
  public:
   rev_buf(uint8_t *Dcup, int32_t Lcup, int32_t Scup)
-      : bits(0), Creg(0), unstuff(0), buf(Dcup + Lcup - 2), length(Scup - 2) {
+      : buf(Dcup + Lcup - 2), Creg(0), bits(0), length(Scup - 2), unstuff(0) {
     uint32_t d = *buf--;  // read a byte (only use it's half byte)
     Creg       = d >> 4;
     bits       = 4 - ((Creg & 0x07) == 0x07);
@@ -366,7 +366,7 @@ class rev_buf {
 // Creates a 16-bit mask from the most significant bits of the 16 signed or
 // unsigned 8-bit integers in a and zero extends the upper bits.
 // https://msdn.microsoft.com/en-us/library/vstudio/s090c8fk(v=vs.100).aspx
-inline int aarch64_movemask_epi8(int32x4_t _a) {
+FORCE_INLINE int aarch64_movemask_epi8(int32x4_t _a) {
   uint8x16_t input                                       = vreinterpretq_u8_s32(_a);
   static const int8_t __attribute__((aligned(16))) xr[8] = {-7, -6, -5, -4, -3, -2, -1, 0};
   uint8x8_t mask_and                                     = vdup_n_u8(0x80);
@@ -435,11 +435,11 @@ inline int aarch64_movemask_epi8(int32x4_t _a) {
       ret;                                                                         \
     })
 
-inline int32x4_t aarch64_sll_epi64(int32x4_t a, int32x4_t b) {
+FORCE_INLINE int32x4_t aarch64_sll_epi64(int32x4_t a, int32x4_t b) {
   return vreinterpretq_s32_s64(vshlq_s64(vreinterpretq_s64_s32(a), vreinterpretq_s64_s32(b)));
 }
 
-inline int32x4_t aarch64_srl_epi64(int32x4_t a, uint8_t b) {
+FORCE_INLINE int32x4_t aarch64_srl_epi64(int32x4_t a, uint8_t b) {
   // following 5 lines are problematic with clang!!!
   //  uint64_t tmp[2];
   //  vst1q_u64(tmp, a);
@@ -895,16 +895,16 @@ class fwd_buf {
 template <int X>
 class fwd_buf {
  private:
-  uint32_t pos;
-  uint32_t bits;
-  uint64_t Creg;
-  uint32_t unstuff;
   const uint8_t *buf;
+  uint64_t Creg;
+  uint32_t bits;
+  uint32_t unstuff;
+  uint32_t pos;
   int32_t length;
 
  public:
   fwd_buf(const uint8_t *Dcup, int32_t Pcup)
-      : pos(0), bits(0), Creg(0), unstuff(0), buf(Dcup), length(Pcup) {
+      : buf(Dcup), Creg(0), bits(0), unstuff(0), pos(0), length(Pcup) {
     // for alignment
     auto p = reinterpret_cast<intptr_t>(buf);
     p &= 0x03;
