@@ -194,8 +194,8 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   blkstate_stride = QWx2 + 2;
   block_states    = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
   memset(block_states.get(), 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
-  sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
-  memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
+  //  sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+  //  memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
   this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
   this->layer_passes = MAKE_UNIQUE<uint8_t[]>(num_layers);
   if ((Cmodes & 0x40) == 0) this->pass_length.reserve(109);
@@ -2384,11 +2384,15 @@ void j2k_tile::decode() {
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             j2k_codeblock *block = cpb->access_codeblock(block_index);
+            const uint32_t QWx2  = round_up(block->size.x, 8U);
+            const uint32_t QHx2  = round_up(block->size.y, 8U);
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
 #ifdef OPENHTJ2K_THREAD
               if (pool->num_threads() > 1) {
-                results.emplace_back(pool->enqueue([block, ROIshift] {
+                results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
+                  block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+                  // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
                   if ((block->Cmodes & HT) >> 6)
                     htj2k_decode(block, ROIshift);
                   else
@@ -2396,6 +2400,8 @@ void j2k_tile::decode() {
                   return 0;
                 }));
               } else {
+                block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+                // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
                 if ((block->Cmodes & HT) >> 6)
                   htj2k_decode(block, ROIshift);
                 else
@@ -2734,8 +2740,8 @@ uint8_t *j2k_tile::encode() {
     element_siz bottom_right     = tcomp[c].get_pos1();
     j2k_resolution *cr           = tcomp[c].access_resolution(NL);
 
-    int32_t *const sp0            = tcomp[c].get_sample_address(0, 0);
-    const uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
+    int32_t *sp0            = tcomp[c].get_sample_address(0, 0);
+    uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
     // TODO: enc_init vectorize code
     //#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     //    __m256i offsets = _mm256_set_epi32(7, 6, 3, 2, 5, 4, 1, 0);
@@ -2749,10 +2755,24 @@ uint8_t *j2k_tile::encode() {
     //      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
     //    }
     //#else
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    sprec_t *dp = cr->i_samples;
+    for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+      auto vsrc0 = vld1q_s32(sp0);
+      auto vsrc1 = vld1q_s32(sp0 + 4);
+      vst1q_s16(dp, vcombine_s16(vmovn_s32(vsrc0), vmovn_s32(vsrc1)));
+      sp0 += 8;
+      dp += 8;
+    }
+    for (; num_tc_samples > 0; --num_tc_samples) {
+      *dp++ = static_cast<sprec_t>(*sp0++);
+    }
+#else
     for (uint32_t n = 0; n < num_tc_samples; ++n) {
       cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
     }
-    //#endif
+#endif
+
 #ifdef OPENHTJ2K_THREAD
     auto t1_encode = [pool, &results](j2k_resolution *cr, uint8_t ROIshift) {
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
@@ -2762,13 +2782,19 @@ uint8_t *j2k_tile::encode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
-            auto block = cpb->access_codeblock(block_index);
+            auto block          = cpb->access_codeblock(block_index);
+            const uint32_t QWx2 = round_up(block->size.x, 8U);
+            const uint32_t QHx2 = round_up(block->size.y, 8U);
             if (pool->num_threads() > 1) {
-              results.emplace_back(pool->enqueue([block, ROIshift] {
+              results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
+                block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+                // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
                 htj2k_encode(block, ROIshift);
                 return 0;
               }));
             } else {
+              block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+              // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
               htj2k_encode(block, ROIshift);
             }
           }

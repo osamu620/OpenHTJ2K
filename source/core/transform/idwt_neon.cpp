@@ -135,32 +135,35 @@ void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int3
 }
 
 // reversible IDWT
-void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_t u_i0,
-                                    const int32_t u_i1) {
-  const auto i0        = static_cast<int32_t>(u_i0);
-  const auto i1        = static_cast<int32_t>(u_i1);
+void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_t i0, const int32_t i1) {
+  //  const auto i0        = static_cast<int32_t>(u_i0);
+  //  const auto i1        = static_cast<int32_t>(u_i1);
   const int32_t start  = i0 / 2;
   const int32_t stop   = i1 / 2;
   const int32_t offset = left - i0 % 2;
 
   // step 1
+  sprec_t *sp     = X + offset;
   int32_t simdlen = stop + 1 - start;
-  for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
-    auto xl0 = vld2q_s16(X + n - 1);
-    auto xl1 = vld2q_s16(X + n + 1);
+  for (; simdlen > 0; simdlen -= 8) {
+    auto xl0 = vld2q_s16(sp - 1);
+    auto xl1 = vld2q_s16(sp + 1);
     // (xl0.val[0] + xl1.val[0] + 2) >> 2;
     xl0.val[1] -= vrshrq_n_s16(vhaddq_s16(xl0.val[0], xl1.val[0]), 1);
-    vst2q_s16(X + n - 1, xl0);
+    vst2q_s16(sp - 1, xl0);
+    sp += 16;
   }
 
   // step 2
+  sp      = X + offset;
   simdlen = stop - start;
-  for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
-    auto xl0  = vld2q_s16(X + n);
-    auto xl1  = vld2q_s16(X + n + 2);
+  for (; simdlen > 0; simdlen -= 8) {
+    auto xl0  = vld2q_s16(sp);
+    auto xl1  = vld2q_s16(sp + 2);
     auto xout = vhaddq_s16(xl0.val[0], xl1.val[0]);
     xl0.val[1] += xout;
-    vst2q_s16(X + n, xl0);
+    vst2q_s16(sp, xl0);
+    sp += 16;
   }
 }
 
