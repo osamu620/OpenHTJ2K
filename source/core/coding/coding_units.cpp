@@ -2411,6 +2411,8 @@ void j2k_tile::decode() {
                   j2k_decode(block, ROIshift);
               }
 #else
+              block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+              // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
               if ((block->Cmodes & HT) >> 6)
                 htj2k_decode(block, ROIshift);
               else
@@ -2775,9 +2777,11 @@ uint8_t *j2k_tile::encode() {
       cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
     }
 #endif
-
 #ifdef OPENHTJ2K_THREAD
     auto t1_encode = [pool, &results](j2k_resolution *cr, uint8_t ROIshift) {
+#else
+    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
+#endif
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
         packet_header_writer pckt_hdr;
@@ -2788,6 +2792,7 @@ uint8_t *j2k_tile::encode() {
             auto block          = cpb->access_codeblock(block_index);
             const uint32_t QWx2 = round_up(block->size.x, 8U);
             const uint32_t QHx2 = round_up(block->size.y, 8U);
+#ifdef OPENHTJ2K_THREAD
             if (pool->num_threads() > 1) {
               results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
                 block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
@@ -2800,27 +2805,15 @@ uint8_t *j2k_tile::encode() {
               // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
               htj2k_encode(block, ROIshift);
             }
-          }
-        }
-      }
-    };
 #else
-    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
-      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-        j2k_precinct *cp = cr->access_precinct(p);
-        packet_header_writer pckt_hdr;
-        for (uint8_t b = 0; b < cr->num_bands; ++b) {
-          j2k_precinct_subband *cpb = cp->access_pband(b);
-          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
-          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
-            auto block = cpb->access_codeblock(block_index);
-
+            block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+            // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
             htj2k_encode(block, ROIshift);
+#endif
           }
         }
       }
     };
-#endif
 
     for (uint8_t r = NL; r > 0; --r) {
       j2k_resolution *ncr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
