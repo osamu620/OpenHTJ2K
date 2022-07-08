@@ -560,8 +560,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // store mu
       vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
       vst1_s32(mp1, vzip2_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
-      mp0 += 2;
-      mp1 += 2;
+      //      mp0 += 2;
+      //      mp1 += 2;
 
       // store sigma
       *sp0++ = (rho0 >> 0) & 1;
@@ -571,8 +571,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       // Update Exponent
       vst1_s32(E_p, 32 - vclz_s32(vzip2_s32(vget_low_s32(v_v_quads), vget_high_s32(v_v_quads))));
-      *rho_p++ = rho0;
-      E_p += 2;
+      *rho_p = rho0;
+      //      E_p += 2;
     }
   }  // Non-Initial line-pair end
 }  // Cleanup decoding end
@@ -713,11 +713,12 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
       size_t len        = this->size.x;
       auto vmask        = vdupq_n_s32(static_cast<int32_t>(~mask));
+      auto vsgnbitmask  = vdupq_n_s32(static_cast<int32_t>(0x80000000));
       for (; len >= 8; len -= 8) {
         auto vsrc0  = vld1q_s32(val);
         auto vsrc1  = vld1q_s32(val + 4);
-        auto vsign0 = vcltzq_s32(vsrc0) >> 31;
-        auto vsign1 = vcltzq_s32(vsrc1) >> 31;
+        auto vsign0 = vandq_s32(vsrc0, vsgnbitmask);
+        auto vsign1 = vandq_s32(vsrc1, vsgnbitmask);
         vsrc0       = vsrc0 & INT32_MAX;
         vsrc1       = vsrc1 & INT32_MAX;
         // upshift background region, if necessary
@@ -749,11 +750,11 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         vsrc1 |= vrecval1;
 
         // convert vlues from sign-magnitude form to two's complement one
-        auto vnegmask = vcltzq_s32(vsrc0 | (vsign0 << 31));
+        auto vnegmask = vcltzq_s32(vsrc0 | vsign0);
         auto vposmask = ~vnegmask;
         // this cannot be auto for gcc
         int32x4_t vdst0 = (vnegq_s32(vsrc0) & vnegmask) | (vsrc0 & vposmask);
-        vnegmask        = vcltzq_s32(vsrc1 | (vsign1 << 31));
+        vnegmask        = vcltzq_s32(vsrc1 | vsign1);
         vposmask        = ~vnegmask;
         // this cannot be auto for gcc
         int32x4_t vdst1 = (vnegq_s32(vsrc1) & vnegmask) | (vsrc1 & vposmask);
@@ -804,11 +805,12 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
       size_t len        = this->size.x;
       auto vmask        = vdupq_n_s32(static_cast<int32_t>(~mask));
+      auto vsgnbitmask  = vdupq_n_s32(static_cast<int32_t>(0x80000000));
       for (; len >= 8; len -= 8) {
         auto vsrc0  = vld1q_s32(val);
         auto vsrc1  = vld1q_s32(val + 4);
-        auto vsign0 = vcltzq_s32(vsrc0) >> 31;
-        auto vsign1 = vcltzq_s32(vsrc1) >> 31;
+        auto vsign0 = vandq_s32(vsrc0, vsgnbitmask) >> 16;
+        auto vsign1 = vandq_s32(vsrc1, vsgnbitmask) >> 16;
         vsrc0       = vsrc0 & INT32_MAX;
         vsrc1       = vsrc1 & INT32_MAX;
         // upshift background region, if necessary
@@ -851,7 +853,7 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         auto vdst     = vcombine_s16(vmovn_s32((vsrc0 + (1 << (downshift - 1))) >> downshift),
                                      vmovn_s32((vsrc1 + (1 << (downshift - 1))) >> downshift));
         auto vsign    = vcombine_s16(vmovn_s32(vsign0), vmovn_s32(vsign1));
-        auto vnegmask = vcltzq_s16(vdst | (vsign << 15));
+        auto vnegmask = vcltzq_s16(vdst | vsign);
         auto vposmask = ~vnegmask;
         vdst          = (vnegq_s16(vdst) & vnegmask) | (vdst & vposmask);
         vst1q_s16(dst, vdst);
