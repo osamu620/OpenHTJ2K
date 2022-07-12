@@ -38,7 +38,6 @@
  *******************************************************************************/
 class state_MS_enc {
  private:
-  int32_t pos;         // current position in the buffer
   uint8_t *const buf;  // buffer for MagSgn
 #ifdef MSNAIVE
   uint8_t bits;
@@ -48,21 +47,22 @@ class state_MS_enc {
   uint64_t Creg;      // temporal buffer to store up to 4 codewords
   uint32_t ctreg;     // number of used bits in Creg
   uint8_t last;       // last byte in the buffer
+  int32_t pos;        // current position in the buffer
   void emit_dword();  // internal function to emit 4 code words
 #endif
 
  public:
   explicit state_MS_enc(uint8_t *p)
-      : pos(0),
-        buf(p),
+      : buf(p),
+        Creg(0),
 #ifdef MSNAIVE
         bits(0),
         max(8),
         tmp(0)
 #else
-        Creg(0),
         ctreg(0),
-        last(0)
+        last(0),
+        pos(0)
 #endif
   {
   }
@@ -80,16 +80,16 @@ class state_MEL_enc;  // forward declaration for friend function "termMELandVLC(
  *******************************************************************************/
 class state_VLC_enc {
  private:
-  int32_t pos;
-  uint8_t bits;
+  uint8_t *const buf;
   uint8_t tmp;
   uint8_t last;
-  uint8_t *const buf;
+  uint8_t bits;
+  int32_t pos;
 
   friend int32_t termMELandVLC(state_VLC_enc &, state_MEL_enc &);
 
  public:
-  explicit state_VLC_enc(uint8_t *p) : pos(MAX_Scup - 2), bits(4), tmp(0xF), last(0xFF), buf(p) {
+  explicit state_VLC_enc(uint8_t *p) : buf(p), tmp(0xF), last(0xFF), bits(4), pos(MAX_Scup - 2) {
     buf[pos + 1] = 0xFF;
   }
   void emitVLCBits(uint16_t cwd, uint8_t len);
