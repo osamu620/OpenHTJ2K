@@ -46,9 +46,11 @@ uint8_t j2c_src_memory::get_byte() {
 }
 
 int j2c_src_memory::get_N_byte(uint8_t *out, uint32_t length) {
-  for (unsigned long i = 0; i < length; i++) {
-    out[i] = get_byte();
-  }
+  memcpy(out, buf.get() + pos, length);
+  pos += length;
+  //  for (unsigned long i = 0; i < length; i++) {
+  //    out[i] = get_byte();
+  //  }
   return EXIT_SUCCESS;
 }
 
