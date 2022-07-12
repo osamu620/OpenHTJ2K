@@ -69,9 +69,10 @@ int32_t j2c_dst_memory::flush(std::vector<uint8_t> *obuf) {
     return EXIT_FAILURE;
   }
   obuf->resize(buf.size());
-  for (size_t i = 0; i < buf.size(); ++i) {
-    *(obuf->data() + i) = buf[i];
-  }
+  memcpy(obuf->data(), buf.data(), buf.size());
+  //  for (size_t i = 0; i < buf.size(); ++i) {
+  //    *(obuf->data() + i) = buf[i];
+  //  }
   is_flushed = true;
   return EXIT_SUCCESS;
 }
