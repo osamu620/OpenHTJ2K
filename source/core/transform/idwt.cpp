@@ -128,7 +128,10 @@ static void idwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const int32_t u0, const
                sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
     //#pragma omp parallel for
     for (int32_t row = 0; row < v1 - v0; ++row) {
-      idwt_1d_sr_fixed(Yext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
+      // idwt_1d_sr_fixed(Yext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
+      idwt_1d_sr_fixed(Yext, in, out, left, right, u0, u1, transformation);
+      in += stride;
+      out += stride;
     }
     aligned_mem_free(Yext);
   }
