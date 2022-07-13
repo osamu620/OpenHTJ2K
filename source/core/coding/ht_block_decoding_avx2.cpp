@@ -39,6 +39,26 @@
     #include <x86intrin.h>
   #endif
 
+// from my earlier answer, with tuning for non-AVX CPUs removed
+// static inline
+FORCE_INLINE uint32_t hsum_epi32_avx(__m128i x) {
+  __m128i hi64 = _mm_unpackhi_epi64(
+      x, x);  // 3-operand non-destructive AVX lets us save a byte without needing a movdqa
+  __m128i sum64 = _mm_add_epi32(hi64, x);
+  __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));  // Swap the low two elements
+  __m128i sum32 = _mm_add_epi32(sum64, hi32);
+  return _mm_cvtsi128_si32(sum32);  // movd
+}
+
+// only needs AVX2
+uint32_t hsum_8x32(__m256i v) {
+  __m128i sum128 =
+      _mm_add_epi32(_mm256_castsi256_si128(v),
+                    _mm256_extracti128_si256(
+                        v, 1));  // silly GCC uses a longer AXV512VL instruction if AVX512 is enabled :/
+  return hsum_epi32_avx(sum128);
+}
+
 uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
   const int16_t im1 = static_cast<int16_t>(i - 1);
   const int16_t jm1 = static_cast<int16_t>(j - 1);
@@ -458,7 +478,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
                                4));
 
       // recoverMagSgnValue
-      auto mmm0 = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 0));
+      auto mmm0 = MagSgn.fetch(_mm256_castsi256_si128(v_m_quads));
       MagSgn.advance(mmqq0);
       auto mmm1 = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 1));
       MagSgn.advance(mmqq1);
