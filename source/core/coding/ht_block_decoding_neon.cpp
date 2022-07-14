@@ -203,8 +203,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     v_v_quads0      = vorrq_u32(v_v_quads0, vshlq_u32(vknown_1, v_m_quads0));
     auto v_mu0      = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vone);
     v_mu0           = vshlq_u32(v_mu0, vdupq_n_s32(pLSB));
-    v_mu0           = vorrq_u32(v_mu0, vshlq_n_u32(v_v_quads0, 31));
-    v_mu0           = vandq_u32(v_mu0, vsigma0);
+    v_mu0 |= 1 << (pLSB - 1);
+    v_mu0 = vorrq_u32(v_mu0, vshlq_n_u32(v_v_quads0, 31));
+    v_mu0 = vandq_u32(v_mu0, vsigma0);
 
     vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vm), vone);
     vmask           = vsubq_u32(vshlq_u32(vone, v_m_quads1), vone);
@@ -212,8 +213,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     v_v_quads1      = vorrq_u32(v_v_quads1, vshlq_u32(vknown_1, v_m_quads1));
     auto v_mu1      = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vone);
     v_mu1           = vshlq_u32(v_mu1, vdupq_n_s32(pLSB));
-    v_mu1           = vorrq_u32(v_mu1, vshlq_n_u32(v_v_quads1, 31));
-    v_mu1           = vandq_u32(v_mu1, vsigma1);
+    v_mu1 |= 1 << (pLSB - 1);
+    v_mu1 = vorrq_u32(v_mu1, vshlq_n_u32(v_v_quads1, 31));
+    v_mu1 = vandq_u32(v_mu1, vsigma1);
 
     // store mu
     auto vvv = vzipq_s32(v_mu0, v_mu1);
@@ -295,8 +297,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vmask          = vcgtzq_s32(v_m_quads0);
     auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vone);
     v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));
-    v_mu           = vorrq_u32(v_mu, vshlq_n_u32(v_v_quads, 31));
-    v_mu           = vandq_u32(v_mu, vmask);
+    v_mu |= 1 << (pLSB - 1);
+    v_mu = vorrq_u32(v_mu, vshlq_n_u32(v_v_quads, 31));
+    v_mu = vandq_u32(v_mu, vmask);
 
     // store mu
     vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
@@ -447,8 +450,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_v_quads0 = vorrq_u32(v_v_quads0, vshlq_u32(vtmp, v_m_quads0));
       auto v_mu0 = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vone);
       v_mu0      = vshlq_u32(v_mu0, vdupq_n_s32(pLSB));
-      v_mu0      = vorrq_u32(v_mu0, vshlq_n_u32(v_v_quads0, 31));
-      v_mu0      = vandq_u32(v_mu0, vsigma0);
+      v_mu0 |= 1 << (pLSB - 1);
+      v_mu0 = vorrq_u32(v_mu0, vshlq_n_u32(v_v_quads0, 31));
+      v_mu0 = vandq_u32(v_mu0, vsigma0);
 
       vmask1 = vsubq_u32(vshlq_u32(vone, v_m_quads1), vone);
       // retrieve MagSgn codewords
@@ -460,8 +464,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_v_quads1 = vorrq_u32(v_v_quads1, vshlq_u32(vtmp, v_m_quads1));
       auto v_mu1 = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vone);
       v_mu1      = vshlq_u32(v_mu1, vdupq_n_s32(pLSB));
-      v_mu1      = vorrq_u32(v_mu1, vshlq_n_u32(v_v_quads1, 31));  // bring sign back
-      v_mu1      = vandq_u32(v_mu1, vsigma1);
+      v_mu1 |= 1 << (pLSB - 1);
+      v_mu1 = vorrq_u32(v_mu1, vshlq_n_u32(v_v_quads1, 31));  // bring sign back
+      v_mu1 = vandq_u32(v_mu1, vsigma1);
 
       // store mu
       auto vvv = vzipq_s32(v_mu0, v_mu1);
@@ -537,9 +542,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads0));
       vmask          = vcgtzq_s32(v_m_quads0);
       auto v_mu      = vaddq_u32(vshrq_n_u32(v_v_quads, 1), vone);
-      v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));           // shift up
-      v_mu           = vorrq_u32(v_mu, vshlq_n_u32(v_v_quads, 31));  // bring sign back
-      v_mu           = vandq_u32(v_mu, vmask);
+      v_mu           = vshlq_u32(v_mu, vdupq_n_s32(pLSB));  // shift up
+      v_mu |= 1 << (pLSB - 1);
+      v_mu = vorrq_u32(v_mu, vshlq_n_u32(v_v_quads, 31));  // bring sign back
+      v_mu = vandq_u32(v_mu, vmask);
 
       // store mu
       vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
@@ -568,6 +574,7 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
   const auto block_width  = static_cast<uint16_t>(j_start + width);
   const auto block_height = static_cast<uint16_t>(i_start + height);
 
+  // Decode magnitude
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
@@ -581,16 +588,18 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
         bit = SigProp.importSigPropBit();
         block->modify_state(refinement_value, bit, i, j);
         *sp |= bit << pLSB;
+        *sp |= bit << (pLSB - 1);  // new bin center ( = 0.5)
       }
       block->modify_state(scan, 1, i, j);
     }
   }
+  // Decode sign
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
-      // decode sign
-      if ((*sp & (1 << pLSB)) != 0) {
-        *sp = (*sp & 0x7FFFFFFF) | (SigProp.importSigPropBit() << 31);
+      //      if ((*sp & (1 << pLSB)) != 0) {
+      if (block->get_state(Refinement_value, i, j)) {
+        *sp |= static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
       }
     }
   }
@@ -641,14 +650,19 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   int16_t i_start             = 0;
   int16_t height              = 4;
   int32_t *sp;
-
+  int32_t bit;
+  int32_t tmp;
   for (int16_t n1 = 0; n1 < num_v_stripe; n1++) {
     for (int16_t j = 0; j < blk_width; j++) {
       for (int16_t i = i_start; i < i_start + height; i++) {
         sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
         if (block->get_state(Sigma, i, j) != 0) {
           block->modify_state(refinement_indicator, 1, i, j);
-          sp[0] |= MagRef.importMagRefBit() << pLSB;
+          bit = MagRef.importMagRefBit();
+          tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
+          tmp <<= pLSB;
+          sp[0] &= tmp;
+          sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
         }
       }
     }
@@ -660,7 +674,11 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
       sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
       if (block->get_state(Sigma, i, j) != 0) {
         block->modify_state(refinement_indicator, 1, i, j);
-        sp[0] |= MagRef.importMagRefBit() << pLSB;
+        bit = MagRef.importMagRefBit();
+        tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
+        tmp <<= pLSB;
+        sp[0] &= tmp;
+        sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
       }
     }
   }
@@ -711,24 +729,24 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         vROImask &= vROIshift;
         vsrc0 = vshlq_s32(vsrc0, vROImask);
 
-        // retrieve number of decoded magnitude bit-planes
-        auto vstate = vld1_u8(blkstate);
-        vstate >>= 2;
-        vstate &= 1;
-        auto vNb0 = vSblk1 + vmovl_s16(vget_low_s16(vmovl_s8(vstate)));
-
-        // add reconstruction value, if necessary (it will happen for a truncated codestream)
-        auto v_recval_mask = vcgtq_s32(vMb, vNb0);
-        v_recval_mask &= vcgtzq_s32(vsrc0);
-        auto vrecval0 = (1 << (31 - vNb0 - 1)) & v_recval_mask;
-        vsrc0 |= vrecval0;
+        //        // retrieve number of decoded magnitude bit-planes
+        //        auto vstate = vld1_u8(blkstate);
+        //        vstate >>= 2;
+        //        vstate &= 1;
+        //        auto vNb0 = vSblk1 + vmovl_s16(vget_low_s16(vmovl_s8(vstate)));
+        //
+        //        // add reconstruction value, if necessary (it will happen for a truncated codestream)
+        //        auto v_recval_mask = vcgtq_s32(vMb, vNb0);
+        //        v_recval_mask &= vcgtzq_s32(vsrc0);
+        //        auto vrecval0 = (1 << (31 - vNb0 - 1)) & v_recval_mask;
+        //        vsrc0 |= vrecval0;
 
         // convert values from sign-magnitude form to two's complement one
         auto vnegmask = vcltzq_s32(vsrc0 | vsign0);
         auto vposmask = ~vnegmask;
         // this cannot be auto for gcc
-        int32x4_t vdst0 = (vnegq_s32(vsrc0) & vnegmask) | (vsrc0 & vposmask);
-        vst1_s16(dst, vmovn_s32(vdst0 >> pLSB));
+        int32x4_t vdst0 = (vnegq_s32(vsrc0 >> pLSB) & vnegmask) | ((vsrc0 >> pLSB) & vposmask);
+        vst1_s16(dst, vmovn_s32(vdst0));
         val += 4;
         dst += 4;
         blkstate += 4;
@@ -740,23 +758,24 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
           *val <<= ROIshift;
         }
-        // do adjustment of the position indicating 0.5
-        int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
-        if (ROIshift) {
-          N_b = M_b;
-        }
-        if (N_b < M_b && *val) {
-          *val |= 1 << (31 - N_b - 1);
-        }
+        //        // do adjustment of the position indicating 0.5
+        //        int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
+        //        if (ROIshift) {
+        //          N_b = M_b;
+        //        }
+        //        if (N_b < M_b && *val) {
+        //          *val |= 1 << (31 - N_b - 1);
+        //        }
         // bring sign back
-        *val |= sign;
+        //*val |= sign;
+        *val >>= pLSB;
         // convert sign-magnitude to two's complement form
-        if (*val < 0) {
+        if (sign) {
           *val = -(*val & INT32_MAX);
         }
 
         assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<int16_t>(*val >> pLSB);
+        *dst = static_cast<int16_t>(*val);
         val++;
         dst++;
         blkstate++;
@@ -784,20 +803,20 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         vROImask &= vROIshift;
         vsrc0 = vshlq_s32(vsrc0, vROImask);
 
-        // retrieve number of decoded magnitude bit-planes
-        auto vstate = vld1_u8(blkstate);
-        vstate >>= 2;
-        vstate &= 1;
-        auto vNb0 = vSblk1 + vmovl_s16(vget_low_s16(vmovl_s8(vstate)));
-        //        vNb0 = vbslq_s32(vROIflag, vMb, vNb0);
-        if (ROIshift) {
-          vNb0 = vMb;
-        }
-
-        // add reconstruction value, if necessary (it will happen for a truncated codestream)
-        auto v_recval_mask = vcgtzq_s32(vsrc0);
-        auto vrecval0      = (1 << (31 - vNb0 - 1)) & v_recval_mask;
-        vsrc0 |= vrecval0;
+        //        // retrieve number of decoded magnitude bit-planes
+        //        auto vstate = vld1_u8(blkstate);
+        //        vstate >>= 2;
+        //        vstate &= 1;
+        //        auto vNb0 = vSblk1 + vmovl_s16(vget_low_s16(vmovl_s8(vstate)));
+        //        //        vNb0 = vbslq_s32(vROIflag, vMb, vNb0);
+        //        if (ROIshift) {
+        //          vNb0 = vMb;
+        //        }
+        //
+        //        // add reconstruction value, if necessary (it will happen for a truncated codestream)
+        //        auto v_recval_mask = vcgtzq_s32(vsrc0);
+        //        auto vrecval0      = (1 << (31 - vNb0 - 1)) & v_recval_mask;
+        //        vsrc0 |= vrecval0;
 
         // to prevent overflow, truncate to int16_t range
         vsrc0 = vrshrq_n_s32(vsrc0, 16);  // (vsrc0 + (1 << 15)) >> 16;
@@ -823,25 +842,26 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
           *val <<= ROIshift;
         }
-        // do adjustment of the position indicating 0.5
-        int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
-        if (ROIshift) {
-          N_b = M_b;
-        }
-        if (*val) {
-          *val |= 1 << (31 - N_b - 1);
-        }
+        //        // do adjustment of the position indicating 0.5
+        //        int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
+        //        if (ROIshift) {
+        //          N_b = M_b;
+        //        }
+        //        if (*val) {
+        //          *val |= 1 << (31 - N_b - 1);
+        //        }
 
         // to prevent overflow, truncate to int16_t
         *val = (*val + (1 << 15)) >> 16;
         //  dequantization
         *val *= scale;
         // downshift
-        *dst = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        *val = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
         // convert sign-magnitude to two's complement form
         if (sign) {
-          *dst = static_cast<int16_t>(-(*dst));
+          *val = -(*val & INT32_MAX);
         }
+        *dst = static_cast<int16_t>(*val);
         val++;
         dst++;
         blkstate++;
