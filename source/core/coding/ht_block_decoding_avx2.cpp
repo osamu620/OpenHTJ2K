@@ -833,8 +833,8 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
   const __m256i magmask  = _mm256_set1_epi32(0x7FFFFFFF);
   const __m256i vmask    = _mm256_set1_epi32(static_cast<int32_t>(~mask));
   const __m256i one      = _mm256_set1_epi32(1);
-  const __m256 zero      = _mm256_setzero_si256();
-  const __m256 shift     = _mm256_set1_epi32(ROIshift);
+  const __m256i zero     = _mm256_setzero_si256();
+  const __m256i shift    = _mm256_set1_epi32(ROIshift);
   __m256i v0, v1, s0, s1, vdst0, vdst1, vROImask;
   if (this->transformation) {
     // lossless path
