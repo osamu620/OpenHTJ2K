@@ -253,8 +253,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
     // extract suffixes for quad 0 and 1
-    uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-    uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
+    uint32_t len = uvlc_result & 0xF;                    // suffix length for 2 quads (up to 10 = 5 + 5)
+    uint32_t tmp = vlcval & _bzhi_u32(UINT32_MAX, len);  //  = ((1U << len) - 1U) suffix value for 2 quads
     vlcval       = VLC_dec.advance(len);
     uvlc_result >>= 4;
     // quad 0 length
@@ -359,8 +359,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
     // extract suffixes for quad 0 and 1
-    uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-    uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
+    uint32_t len = uvlc_result & 0xF;                    // suffix length for 2 quads (up to 10 = 5 + 5)
+    uint32_t tmp = vlcval & _bzhi_u32(UINT32_MAX, len);  // suffix value for 2 quads
     vlcval       = VLC_dec.advance(len);
     uvlc_result >>= 4;
     // quad 0 length
@@ -499,8 +499,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
       // extract suffixes for quad 0 and 1
-      uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-      uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
+      uint32_t len = uvlc_result & 0xF;                    // suffix length for 2 quads (up to 10 = 5 + 5)
+      uint32_t tmp = vlcval & _bzhi_u32(UINT32_MAX, len);  // suffix value for 2 quads
       vlcval       = VLC_dec.advance(len);
       uvlc_result >>= 4;
       // quad 0 length
@@ -618,8 +618,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
       // extract suffixes for quad 0 and 1
-      uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-      uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
+      uint32_t len = uvlc_result & 0xF;                    // suffix length for 2 quads (up to 10 = 5 + 5)
+      uint32_t tmp = vlcval & _bzhi_u32(UINT32_MAX, len);  // suffix value for 2 quads
       vlcval       = VLC_dec.advance(len);
       uvlc_result >>= 4;
       // quad 0 length
@@ -845,8 +845,8 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       for (size_t j = 0; j < simdlen; j += 16) {
         v0 = _mm256_loadu_si256((__m256i *)val);
         v1 = _mm256_loadu_si256((__m256i *)(val + 8));
-        s0 = _mm256_or_si256(_mm256_and_si256(v0, signmask), one);
-        s1 = _mm256_or_si256(_mm256_and_si256(v1, signmask), one);
+        s0 = v0;  //_mm256_or_si256(_mm256_and_si256(v0, signmask), one);
+        s1 = v1;  //_mm256_or_si256(_mm256_and_si256(v1, signmask), one);
         v0 = _mm256_and_si256(v0, magmask);
         v1 = _mm256_and_si256(v1, magmask);
         // upshift background region, if necessary
@@ -896,8 +896,8 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       for (; len >= 16; len -= 16) {
         v0 = _mm256_loadu_si256((__m256i *)val);
         v1 = _mm256_loadu_si256((__m256i *)(val + 8));
-        s0 = _mm256_or_si256(_mm256_and_si256(v0, signmask), one);
-        s1 = _mm256_or_si256(_mm256_and_si256(v1, signmask), one);
+        s0 = v0;  //_mm256_or_si256(_mm256_and_si256(v0, signmask), one);
+        s1 = v1;  //_mm256_or_si256(_mm256_and_si256(v1, signmask), one);
         v0 = _mm256_and_si256(v0, _mm256_set1_epi32(0x7FFFFFFF));
         v1 = _mm256_and_si256(v1, _mm256_set1_epi32(0x7FFFFFFF));
         // upshift background region, if necessary
