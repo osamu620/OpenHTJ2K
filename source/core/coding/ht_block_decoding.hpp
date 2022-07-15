@@ -861,7 +861,7 @@ class fwd_buf {
    *  @tparam      X is the value fed in when the bitstream is exhausted.
    *               See frwd_read regarding the template
    */
-  FORCE_INLINE __m128i fetch(const __m128i m) {
+  FORCE_INLINE __m128i fetch(const __m128i &m) {
     if (this->bits <= 128) {
       read();
       if (this->bits <= 128)  // need to test
