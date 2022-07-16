@@ -29,9 +29,7 @@
 #pragma once
 #include <cstring>
 #include <memory>
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  #include <arm_neon.h>
-#endif
+
 #define ceil_int(a, b) ((a) + ((b)-1)) / (b)
 
 bool command_option_exists(int argc, char *argv[], const char *option) {
@@ -75,71 +73,6 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   setvbuf(ofp, (char *)ppm_out.get(), _IOFBF, num_pixels);
   int32_t val0, val1, val2;
 
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  uint32_t len = num_pixels;
-  int32_t *R, *G, *B;
-  uint8_t *out = ppm_out.get();
-  R            = buf[0];
-  G            = buf[1];
-  B            = buf[2];
-  if (bytes_per_pixel == 1) {
-    for (; len >= 8; len -= 8) {
-      uint8x8x3_t vout;
-      vout.val[0] = vmovn_u16(
-          vcombine_u16(vmovn_s32(vld1q_s32(R) + PNM_OFFSET), vmovn_s32(vld1q_s32(R + 4) + PNM_OFFSET)));
-      vout.val[1] = vmovn_u16(
-          vcombine_u16(vmovn_s32(vld1q_s32(G) + PNM_OFFSET), vmovn_s32(vld1q_s32(G + 4) + PNM_OFFSET)));
-      vout.val[2] = vmovn_u16(
-          vcombine_u16(vmovn_s32(vld1q_s32(B) + PNM_OFFSET), vmovn_s32(vld1q_s32(B + 4) + PNM_OFFSET)));
-      vst3_u8(out, vout);
-      R += 8;
-      G += 8;
-      B += 8;
-      out += 24;
-    }
-    for (; len > 0; --len) {
-      *out++ = static_cast<uint8_t>(*R++ + PNM_OFFSET);
-      *out++ = static_cast<uint8_t>(*G++ + PNM_OFFSET);
-      *out++ = static_cast<uint8_t>(*B++ + PNM_OFFSET);
-    }
-  } else {
-    if (bytes_per_pixel != 2) {
-      printf("ERROR: write PPM with Over 16bpp is not supported\n");
-      throw std::exception();
-    }
-    for (; len >= 8; len -= 8) {
-      uint16x8x3_t vout;
-      vout.val[0] =
-          vcombine_u16(vmovn_s32(vld1q_s32(R) + PNM_OFFSET), vmovn_s32(vld1q_s32(R + 4) + PNM_OFFSET));
-      vout.val[1] =
-          vcombine_u16(vmovn_s32(vld1q_s32(G) + PNM_OFFSET), vmovn_s32(vld1q_s32(G + 4) + PNM_OFFSET));
-      vout.val[2] =
-          vcombine_u16(vmovn_s32(vld1q_s32(B) + PNM_OFFSET), vmovn_s32(vld1q_s32(B + 4) + PNM_OFFSET));
-      vout.val[0] = vrev16q_u8(vout.val[0]);
-      vout.val[1] = vrev16q_u8(vout.val[1]);
-      vout.val[2] = vrev16q_u8(vout.val[2]);
-      vst3q_u16((uint16_t *)out, vout);
-      R += 8;
-      G += 8;
-      B += 8;
-      out += 48;
-    }
-    for (; len > 0; --len) {
-      val0   = *R + PNM_OFFSET;
-      val1   = *G + PNM_OFFSET;
-      val2   = *B + PNM_OFFSET;
-      *out++ = static_cast<uint8_t>(val0 >> 8);
-      *out++ = static_cast<uint8_t>(val0);
-      *out++ = static_cast<uint8_t>(val1 >> 8);
-      *out++ = static_cast<uint8_t>(val1);
-      *out++ = static_cast<uint8_t>(val2 >> 8);
-      *out++ = static_cast<uint8_t>(val2);
-      R++;
-      G++;
-      B++;
-    }
-  }
-#else
   for (uint32_t i = 0; i < num_pixels; ++i) {
     val0 = (buf[0][i] + PNM_OFFSET);
     val1 = (buf[1][i] + PNM_OFFSET);
@@ -161,7 +94,6 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
         break;
     }
   }
-#endif
   fwrite(ppm_out.get(), sizeof(uint8_t), num_pixels * bytes_per_pixel * 3, ofp);
   fclose(ofp);
 }
