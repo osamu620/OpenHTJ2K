@@ -65,12 +65,8 @@ uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t 
   return mbr;
 }
 
-void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
-                       const int32_t Scup) {
-  fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
-  MEL_dec MEL(block->get_compressed_data(), Lcup, Scup);
-  rev_buf VLC_dec(block->get_compressed_data(), Lcup, Scup);
-
+void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> &MagSgn, MEL_dec &MEL,
+                       rev_buf &VLC_dec) {
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
@@ -275,8 +271,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // extract suffixes for quad 0 and 1
     uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
     uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-    VLC_dec.advance(len);
-
+    vlcval       = VLC_dec.advance(len);
     uvlc_result >>= 4;
     // quad 0 length
     len = uvlc_result & 0x7;  // quad 0 suffix length
@@ -306,8 +301,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // store mu
     vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
     vst1_s32(mp1, vzip2_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
-    //    mp0 += 2;
-    //    mp1 += 2;
+    mp0 += 2;
+    mp1 += 2;
 
     // store sigma
     *sp0++ = (rho0 >> 0) & 1;
@@ -317,7 +312,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     // update Exponent
     vst1_s32(E_p, 32 - vclz_s32(vzip2_s32(vget_low_s32(v_v_quads), vget_high_s32(v_v_quads))));
-    //    E_p += 2;
+    E_p += 2;
   }  // Initial line-pair end
 
   /*******************************************************************************************************************/
@@ -384,20 +379,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0x2) << 6);  // (nw | n) << 7
       context |= ((rho_p[2] & 0x8) << 6) | ((rho_p[3] & 0x2) << 8);  // (ne | nf) << 9
 
-      // store sigma
-      *sp0++ = (rho0 >> 0) & 1;
-      *sp0++ = (rho0 >> 2) & 1;
-      *sp0++ = (rho1 >> 0) & 1;
-      *sp0++ = (rho1 >> 2) & 1;
-      *sp1++ = (rho0 >> 1) & 1;
-      *sp1++ = (rho0 >> 3) & 1;
-      *sp1++ = (rho1 >> 1) & 1;
-      *sp1++ = (rho1 >> 3) & 1;
-      // Update rho_p
-      *rho_p++ = rho0;
-      *rho_p++ = rho1;
-
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+
+      auto vsigma0 = vdupq_n_s32(rho0);
+      auto vm      = vld1q_s32(mask);
+      auto vone    = vdupq_n_s32(1);
+      vsigma0      = vandq_s32(vtstq_s32(vsigma0, vm), vone);
+      auto vsigma1 = vdupq_n_s32(rho1);
+      vsigma1      = vandq_s32(vtstq_s32(vsigma1, vm), vone);
 
       // UVLC decoding
       u_off0       = tv0 & 1;
@@ -411,8 +400,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // extract suffixes for quad 0 and 1
       uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
       uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-      VLC_dec.advance(len);
-
+      vlcval       = VLC_dec.advance(len);
       uvlc_result >>= 4;
       // quad 0 length
       len = uvlc_result & 0x7;  // quad 0 suffix length
@@ -427,50 +415,36 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
-      // NEON section
-      int32x4_t vmask0, vmask1, vone, vsigma, vtmp, v_m_quads0, v_m_quads1, vmsval;
-      vmask0 = vld1q_s32(mask);
-      vone   = vdupq_n_s32(1);
+      auto v0         = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_0), vm), vone);
+      auto v_m_quads0 = vsubq_s32(vmulq_s32(vsigma0, vdupq_n_u32(U0)), v0);
+      v0              = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_1), vm), vone);
+      auto v_m_quads1 = vsubq_s32(vmulq_s32(vsigma1, vdupq_n_u32(U1)), v0);
 
-      vsigma = vdupq_n_s32(rho0);
-      vsigma = vandq_s32(vtstq_s32(vsigma, vmask0), vone);
-      // k_n in the spec can be derived from emb_k
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_0), vmask0), vone);
-      v_m_quads0 = vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U0)), vtmp);
-      vsigma     = vdupq_n_s32(rho1);
-      vsigma     = vandq_s32(vtstq_s32(vsigma, vmask0), vone);
-      // k_n in the spec can be derived from emb_k
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_1), vmask0), vone);
-      v_m_quads1 = vsubq_s32(vmulq_s32(vsigma, vdupq_n_u32(U1)), vtmp);
-
-      /******************************** RecoverMagSgnValue step ****************************************/
-      // i_n in the spec can be derived from emb_^{-1}
-      vtmp   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vmask0), vone);
-      vmask1 = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
-      // retrieve MagSgn codewords
-      vmsval = MagSgn.fetch(v_m_quads0);
+      // recoverMagSgnValue
+      auto msval0 = MagSgn.fetch(v_m_quads0);
       MagSgn.advance(vaddvq_u32(v_m_quads0));
-      auto v_v_quads0 = vandq_u32(vmsval, vmask1);
-      v_v_quads0      = vorrq_u32(v_v_quads0, vshlq_u32(vtmp, v_m_quads0));
-      vmask1          = vmvnq_u32(vceqzq_u32(v_m_quads0));
-      auto v_mu0      = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vone);
-      v_mu0           = vshlq_u32(v_mu0, vdupq_n_s32(pLSB));
-      v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vone), vdupq_n_u32(31)));
-      v_mu0           = vandq_u32(v_mu0, vmask1);
-
-      // i_n in the spec can be derived from emb_^{-1}
-      vtmp   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vmask0), vone);
-      vmask1 = vsubq_u32(vshlq_u32(vone, v_m_quads1), vone);
-      // retrieve MagSgn codewords
-      vmsval = MagSgn.fetch(v_m_quads1);
+      auto msval1 = MagSgn.fetch(v_m_quads1);
       MagSgn.advance(vaddvq_u32(v_m_quads1));
-      auto v_v_quads1 = vandq_u32(vmsval, vmask1);
-      v_v_quads1      = vorrq_u32(v_v_quads1, vshlq_u32(vtmp, v_m_quads1));
-      vmask1          = vmvnq_u32(vceqzq_u32(v_m_quads1));
-      auto v_mu1      = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vone);
+
+      auto vknown_1   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
+      auto vmask      = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads0), vdupq_n_u32(1));
+      auto v_v_quads0 = vandq_u32(msval0, vmask);
+      v_v_quads0      = vorrq_u32(v_v_quads0, vshlq_u32(vknown_1, v_m_quads0));
+      vmask           = vmvnq_u32(vceqzq_u32(v_m_quads0));
+      auto v_mu0      = vaddq_u32(vshrq_n_u32(v_v_quads0, 1), vdupq_n_u32(1));
+      v_mu0           = vshlq_u32(v_mu0, vdupq_n_s32(pLSB));
+      v_mu0           = vorrq_u32(v_mu0, vshlq_u32(vandq_u32(v_v_quads0, vdupq_n_u32(1)), vdupq_n_u32(31)));
+      v_mu0           = vandq_u32(v_mu0, vmask);
+
+      vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vm), vone);
+      vmask           = vsubq_u32(vshlq_u32(vdupq_n_u32(1), v_m_quads1), vdupq_n_u32(1));
+      auto v_v_quads1 = vandq_u32(msval1, vmask);
+      v_v_quads1      = vorrq_u32(v_v_quads1, vshlq_u32(vknown_1, v_m_quads1));
+      vmask           = vmvnq_u32(vceqzq_u32(v_m_quads1));
+      auto v_mu1      = vaddq_u32(vshrq_n_u32(v_v_quads1, 1), vdupq_n_u32(1));
       v_mu1           = vshlq_u32(v_mu1, vdupq_n_s32(pLSB));
-      v_mu1           = vorrq_u32(v_mu1, vshlq_u32(vandq_u32(v_v_quads1, vone), vdupq_n_u32(31)));
-      v_mu1           = vandq_u32(v_mu1, vmask1);
+      v_mu1           = vorrq_u32(v_mu1, vshlq_u32(vandq_u32(v_v_quads1, vdupq_n_u32(1)), vdupq_n_u32(31)));
+      v_mu1           = vandq_u32(v_mu1, vmask);
 
       // store mu
       auto vvv = vzipq_s32(v_mu0, v_mu1);
@@ -478,6 +452,19 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       vst1q_s32(mp1, vzip2q_s32(vvv.val[0], vvv.val[1]));
       mp0 += 4;
       mp1 += 4;
+
+      // store sigma
+      *sp0++ = (rho0 >> 0) & 1;
+      *sp0++ = (rho0 >> 2) & 1;
+      *sp0++ = (rho1 >> 0) & 1;
+      *sp0++ = (rho1 >> 2) & 1;
+      *sp1++ = (rho0 >> 1) & 1;
+      *sp1++ = (rho0 >> 3) & 1;
+      *sp1++ = (rho1 >> 1) & 1;
+      *sp1++ = (rho1 >> 3) & 1;
+
+      *rho_p++ = rho0;
+      *rho_p++ = rho1;
 
       // calculate Emax for the next two quads
       Emax0 = vmaxvq_s32(vld1q_s32(E_p + 3));
@@ -967,11 +954,13 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     Dcup[Lcup - 2] |= 0x0F;
     const int32_t Pcup = static_cast<int32_t>(Lcup - Scup);
     //    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
+    fwd_buf<0xFF> MagSgn(Dcup, Pcup);
     //    state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
     //    state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
     //    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
-
-    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    MEL_dec MEL(Dcup, Lcup, Scup);
+    rev_buf VLCdec(Dcup, Lcup, Scup);
+    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), MagSgn, MEL, VLCdec);
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
