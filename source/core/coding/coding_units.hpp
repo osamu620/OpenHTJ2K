@@ -66,25 +66,21 @@ class j2k_codeblock : public j2k_region {
   const element_siz size;
 
  private:
-  std::unique_ptr<uint8_t[]> compressed_data;
-  uint8_t *current_address;
+  [[maybe_unused]] const uint32_t index;
   const uint8_t band;
   const uint8_t M_b;
-  [[maybe_unused]] const uint32_t index;
+  std::unique_ptr<uint8_t[]> compressed_data;
+  uint8_t *current_address;
 
  public:
-  std::unique_ptr<int32_t[]> sample_buf;
-  size_t blksampl_stride;
   std::unique_ptr<uint8_t[]> block_states;
-  size_t blkstate_stride;
-  sprec_t *const i_samples;
-  const uint32_t band_stride;
   [[maybe_unused]] const uint8_t R_b;
   const uint8_t transformation;
   const float stepsize;
-
+  const uint32_t band_stride;
   const uint16_t num_layers;
-
+  std::unique_ptr<int32_t[]> sample_buf;
+  sprec_t *const i_samples;
   uint32_t length;
   uint16_t Cmodes;
   uint8_t num_passes;
@@ -99,6 +95,8 @@ class j2k_codeblock : public j2k_region {
   std::unique_ptr<uint8_t[]> layer_passes;
   bool already_included;
   bool refsegment;
+  size_t blkstate_stride;
+  size_t blksampl_stride;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
                 float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
