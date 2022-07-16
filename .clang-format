@@ -2,9 +2,9 @@ BasedOnStyle: Google
 UseTab: Never
 IndentWidth: 2
 AccessModifierOffset: -1
-AlignConsecutiveAssignments: true
+AlignConsecutiveAssignments: Consecutive
 AlignTrailingComments: true
 ColumnLimit: 108
-SortIncludes: false
+SortIncludes: Never
 BreakBeforeBinaryOperators: NonAssignment
 IndentPPDirectives: BeforeHash
