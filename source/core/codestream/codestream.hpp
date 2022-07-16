@@ -97,45 +97,46 @@ class j2c_dst_memory : public j2c_destination_base {
 
 class buf_chain {
  private:
+  uint32_t total_length;
+  uint32_t num_nodes;
+  std::vector<uint8_t *> node_buf;
+  std::vector<uint32_t> node_length;
   size_t node_pos;
   size_t pos;
-  uint32_t total_length;
-  uint32_t current_length;
-  uint32_t num_nodes;
-  std::vector<uint32_t> node_length;
   uint8_t *current_buf;
+  uint32_t current_length;
   uint8_t tmp_byte;
   uint8_t last_byte;
   uint8_t bits;
-  std::vector<uint8_t *> node_buf;
 
  public:
-  buf_chain()
-      : node_pos(0),
-        pos(0),
-        total_length(0),
-        current_length(0),
-        num_nodes(0),
-        node_length({}),
-        current_buf(nullptr),
-        tmp_byte(0),
-        last_byte(0),
-        bits(0),
-        node_buf({}) {}
-  explicit buf_chain(uint32_t num)
-      : node_pos(0),
-        pos(0),
-        total_length(0),
-        current_length(0),
-        num_nodes(num),
-        current_buf(nullptr),
-        tmp_byte(0),
-        last_byte(0),
-        bits(0) {
+  buf_chain() {
+    total_length   = 0;
+    num_nodes      = 0;
+    node_buf       = {};
+    node_length    = {};
+    node_pos       = 0;
+    pos            = 0;
+    current_buf    = nullptr;
+    current_length = 0;
+    tmp_byte       = 0;
+    last_byte      = 0;
+    bits           = 0;
+  }
+  explicit buf_chain(uint32_t num) {
+    total_length = 0;
+    num_nodes    = num;
     for (uint32_t i = 0; i < num; ++i) {
       node_buf.push_back(nullptr);
       node_length.push_back(0);
     }
+    node_pos       = 0;
+    pos            = 0;
+    current_buf    = nullptr;
+    current_length = 0;
+    tmp_byte       = 0;
+    last_byte      = 0;
+    bits           = 0;
   }
   buf_chain &operator=(const buf_chain &bc) {
     if (this != &bc) {
