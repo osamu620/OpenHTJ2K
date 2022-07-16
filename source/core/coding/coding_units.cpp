@@ -1463,16 +1463,13 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
     const auto height = static_cast<uint32_t>(pos1.y - pos0.y);
     const auto width  = static_cast<uint32_t>(pos1.x - pos0.x);
     // stride may differ from width with non-zero origin
-    const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
-    int32_t *src          = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
+    const uint32_t stride     = hdr->SIZ->get_component_stride(this->index);
+    int32_t *const src_origin = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
 
-    int32_t *dst = samples;
     for (uint32_t i = 0; i < height; ++i) {
-      //      int32_t *src = src_origin + i * stride;
-      //      int32_t *dst = samples + i * width;
+      int32_t *src = src_origin + i * stride;
+      int32_t *dst = samples + i * width;
       memcpy(dst, src, sizeof(int32_t) * width);
-      src += stride;
-      dst += width;
     }
   }
 }
