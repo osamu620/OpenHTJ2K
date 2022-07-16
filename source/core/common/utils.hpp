@@ -113,7 +113,7 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && defined(__MINGW32__)
   y              = __builtin_ia32_lzcnt_u32(x);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
-  y              = __builtin_clz(x);
+  y = __builtin_clz(x);
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   y = static_cast<uint32_t>(__builtin_clz(x));
 #else
