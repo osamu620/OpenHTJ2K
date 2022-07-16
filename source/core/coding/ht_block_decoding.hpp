@@ -672,7 +672,7 @@ class fwd_buf {
 };
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
-FORCE_INLINE int32_t hsum_epi32_sse2(__m128i x) {
+int32_t hsum_epi32_sse2(__m128i x) {
   __m128i hi64 =
       _mm_unpackhi_epi64(x, x);  // 3-operand non-destructive AVX lets us save a byte without needing a mov
   __m128i sum64 = _mm_add_epi32(hi64, x);
@@ -683,7 +683,7 @@ FORCE_INLINE int32_t hsum_epi32_sse2(__m128i x) {
   // pextrd r32,xmm,0
 }
   #if defined(_MSC_VER)
-FORCE_INLINE __m128i mm_bitshift_right(__m128i x, unsigned count) {
+__m128i mm_bitshift_right(__m128i x, unsigned count) {
   __m128i hi = _mm_srli_si128(x, 8);  // shifted by 8 byte right, take hi 64 bit
   if (count >= 64) return _mm_srli_epi64(hi, count - 64);
   hi = _mm_slli_epi64(hi, 64 - count);
@@ -899,12 +899,12 @@ class fwd_buf {
   uint64_t Creg;
   uint32_t bits;
   uint32_t unstuff;
-  int32_t length;
   uint32_t pos;
+  int32_t length;
 
  public:
   fwd_buf(const uint8_t *Dcup, int32_t Pcup)
-      : buf(Dcup), Creg(0), bits(0), unstuff(0), length(Pcup), pos(0) {
+      : buf(Dcup), Creg(0), bits(0), unstuff(0), pos(0), length(Pcup) {
     // for alignment
     auto p = reinterpret_cast<intptr_t>(buf);
     p &= 0x03;
