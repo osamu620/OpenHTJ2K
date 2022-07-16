@@ -78,11 +78,8 @@ uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t 
   return mbr;
 }
 
-void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
-                       const int32_t Scup) {
-  fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
-  MEL_dec MEL(block->get_compressed_data(), Lcup, Scup);
-  rev_buf VLC_dec(block->get_compressed_data(), Lcup, Scup);
+void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> &MagSgn, MEL_dec &MEL,
+                       rev_buf &VLC_dec) {
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
