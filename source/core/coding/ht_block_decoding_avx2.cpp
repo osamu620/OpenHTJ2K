@@ -142,6 +142,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
     *rho_p++ = rho1;
 
+    auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
+    auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                   _mm256_set1_epi32(1));
+
     // calculate context for the next quad
     context = static_cast<uint16_t>((rho1 >> 1) | (rho1 & 1));
 
@@ -178,9 +182,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
-    auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                      _mm256_set1_epi32(1));
     auto vtmp      = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_set1_epi32(emb_k_1), 1);
     auto vemb_k    = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                       _mm256_set1_epi32(1));
@@ -253,11 +254,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
         mel_run = MEL.get_run();
       }
     }
-    rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
-
+    rho0     = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
+    emb_k_0  = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+    emb_1_0  = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
     *rho_p++ = rho0;
+
+    auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
+    auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                   _mm256_set1_epi32(1));
 
     // UVLC decoding
     vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
@@ -283,9 +287,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
     auto vtmp   = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_setzero_si128(), 1U);
     auto vemb_k = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                   _mm256_set1_epi32(1));
-    auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
-    auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                    _mm256_set1_epi32(1));
     auto v_m_quads =
         _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1U);
@@ -398,6 +399,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
 
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
 
+      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
+      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                     _mm256_set1_epi32(1));
+
       // UVLC decoding
       u_off0       = tv0 & 1;
       u_off1       = tv1 & 1;
@@ -430,9 +435,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
                                      _mm256_set1_epi32(1));
       auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
                                                _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
-      auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
-      auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                        _mm256_set1_epi32(1));
       v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
       uint32_t mmqq0 = static_cast<uint32_t>(
           _mm256_extract_epi32(_mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads),
@@ -513,6 +515,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
       emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
 
+      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
+      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                     _mm256_set1_epi32(1));
+
       // UVLC decoding
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
       u_off0 = tv0 & 1;
@@ -539,10 +545,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, fwd_buf<0xFF> 
       auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_setzero_si128(), 1);
       vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                      _mm256_set1_epi32(1));
-      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
-      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                     _mm256_set1_epi32(1));
-
       auto v_m_quads =
           _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1);
       v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
@@ -823,8 +825,8 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
       int32_t *val      = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst      = this->i_samples + i * this->band_stride;
       uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
-      size_t len        = this->size.x;
-      for (; len >= 16; len -= 16) {
+      size_t simdlen    = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
+      for (size_t j = 0; j < simdlen; j += 16) {
         auto vsrc0 = _mm256_loadu_si256((__m256i *)val);
         auto vsrc1 = _mm256_loadu_si256((__m256i *)(val + 8));
         auto vsign0 =
@@ -892,7 +894,8 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         dst += 16;
         blkstate += 16;
       }
-      for (; len > 0; --len) {
+      for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
+           j < static_cast<size_t>(this->size.x); j++) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
