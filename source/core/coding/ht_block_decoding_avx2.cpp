@@ -181,18 +181,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    auto vemb_k    = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_set1_epi32(emb_k_1), 1);
-    vemb_k         = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+    auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
+    auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                      _mm256_set1_epi32(1));
+    auto vtmp      = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_set1_epi32(emb_k_1), 1);
+    auto vemb_k    = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                       _mm256_set1_epi32(1));
     auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
                                              _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
-    auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
-    // auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-    //                                   _mm256_set1_epi32(1));
-    // v_m_quads = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
-    auto vsigma    = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                        _mm256_setzero_si256());
-    v_m_quads      = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
+    v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
+
     uint32_t mmqq0 = static_cast<uint32_t>(_mm256_extract_epi32(
         _mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads), _mm256_hadd_epi32(v_m_quads, v_m_quads)),
         0));
@@ -214,12 +212,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     auto vmask = _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
     auto v_v_quads = _mm256_and_si256(vmsval, vmask);
     v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
-    // vmask = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()),
-    // _mm256_set1_epi32(-1));
+    vmask = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
     auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
     v_mu      = _mm256_slli_epi32(v_mu, pLSB);
     v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
-    v_mu = _mm256_andnot_si256(vsigma, v_mu);
+    v_mu = _mm256_and_si256(v_mu, vmask);
 
     // store mu
     // 0, 2, 4, 6, 1, 3, 5, 7
@@ -287,18 +284,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     U0 = kappa0 + u0;
 
-    auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_setzero_si128(), 1U);
-    vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+    auto vtmp   = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_setzero_si128(), 1U);
+    auto vemb_k = _mm256_and_si256(_mm256_srav_epi32(vtmp, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                   _mm256_set1_epi32(1));
+    auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
+    auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                    _mm256_set1_epi32(1));
     auto v_m_quads =
         _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1U);
-    auto vrho = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
-    // auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-    //                                _mm256_set1_epi32(1));
-    // v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
-    auto vsigma    = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                        _mm256_setzero_si256());
-    v_m_quads      = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
+    v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
     uint32_t mmqq0 = static_cast<uint32_t>(_mm256_extract_epi32(
         _mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads), _mm256_hadd_epi32(v_m_quads, v_m_quads)),
         0));
@@ -315,12 +309,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     auto vmask = _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
     auto v_v_quads = _mm256_and_si256(vmsval, vmask);
     v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
-    // vmask = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()),
-    // _mm256_set1_epi32(-1));
+    vmask = _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
     auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
     v_mu      = _mm256_slli_epi32(v_mu, pLSB);
     v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
-    v_mu = _mm256_andnot_si256(vsigma, v_mu);
+    v_mu = _mm256_and_si256(v_mu, vmask);
 
     // store mu
     *mp0++ = _mm256_extract_epi32(v_mu, 0);
@@ -441,13 +434,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
                                                _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
       auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
-      // auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2,
-      // 3)),
-      //                                   _mm256_set1_epi32(1));
-      // v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
-      auto vsigma    = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                          _mm256_setzero_si256());
-      v_m_quads      = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
+      auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                        _mm256_set1_epi32(1));
+      v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
       uint32_t mmqq0 = static_cast<uint32_t>(
           _mm256_extract_epi32(_mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads),
                                                  _mm256_hadd_epi32(v_m_quads, v_m_quads)),
@@ -472,13 +461,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
       auto v_v_quads = _mm256_and_si256(vmsval, vmask);
       v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
-      // vmask =
-      //     _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
+      vmask =
+          _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
       auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
       v_mu      = _mm256_slli_epi32(v_mu, pLSB);
       v_mu =
           _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
-      v_mu = _mm256_andnot_si256(vsigma, v_mu);
+      v_mu = _mm256_and_si256(v_mu, vmask);
 
       // store mu
       // 0, 2, 4, 6, 1, 3, 5, 7
@@ -553,15 +542,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_setzero_si128(), 1);
       vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                      _mm256_set1_epi32(1));
+      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
+      auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                     _mm256_set1_epi32(1));
+
       auto v_m_quads =
           _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1);
-      auto vrho = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
-      // auto vsigma = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-      //                                _mm256_set1_epi32(1));
-      // v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
-      auto vsigma    = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                          _mm256_setzero_si256());
-      v_m_quads      = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
+      v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
       uint32_t mmqq0 = static_cast<uint32_t>(
           _mm256_extract_epi32(_mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads),
                                                  _mm256_hadd_epi32(v_m_quads, v_m_quads)),
@@ -580,13 +567,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
       auto v_v_quads = _mm256_and_si256(vmsval, vmask);
       v_v_quads      = _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));
-      // vmask =
-      //     _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
+      vmask =
+          _mm256_xor_si256(_mm256_cmpeq_epi32(v_m_quads, _mm256_setzero_si256()), _mm256_set1_epi32(-1));
       auto v_mu = _mm256_add_epi32(_mm256_srai_epi32(v_v_quads, 1), _mm256_set1_epi32(1));
       v_mu      = _mm256_slli_epi32(v_mu, pLSB);
       v_mu =
           _mm256_or_si256(v_mu, _mm256_slli_epi32(_mm256_and_si256(v_v_quads, _mm256_set1_epi32(1)), 31));
-      v_mu = _mm256_andnot_si256(vsigma, v_mu);
+      v_mu = _mm256_and_si256(v_mu, vmask);
 
       // store mu
       *mp0++ = _mm256_extract_epi32(v_mu, 0);
