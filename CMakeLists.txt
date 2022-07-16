@@ -115,7 +115,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
-#target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
 if(ENABLE_ARM_NEON)
   message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
