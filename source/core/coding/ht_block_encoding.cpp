@@ -228,9 +228,6 @@ void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len) {
 void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
   int32_t temp = emb_1 << len;
   cwd -= static_cast<uint32_t>(temp);
-  //  auto v0 = vld1_u64(&Creg);
-  //  v0 = vorr_u64(v0, vdup_n_u64(cwd) << ctreg);
-  //  vst1_u64(&Creg, v0);
   Creg |= static_cast<uint64_t>(cwd) << ctreg;
   ctreg += len;
   while (ctreg >= 32) {
