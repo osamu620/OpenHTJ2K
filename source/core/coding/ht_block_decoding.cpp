@@ -877,7 +877,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     //    state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
     //    state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
     //    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
-    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup;
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
