@@ -49,6 +49,60 @@
   #include <x86intrin.h>
 #endif
 
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+// Credit: YumiYumiYumi
+// https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
+static inline __m256i avx2_lzcnt2_epi32(__m256i v) {
+  const __m256i lut_lo = _mm256_set_epi8(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 32, 4, 4, 4, 4, 4, 4,
+                                         4, 4, 5, 5, 5, 5, 6, 6, 7, 32);
+  const __m256i lut_hi = _mm256_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 32, 0, 0, 0, 0, 0, 0,
+                                         0, 0, 1, 1, 1, 1, 2, 2, 3, 32);
+  const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
+  const __m256i byte_offset = _mm256_set1_epi32(0x00081018);
+  __m256i t;
+
+  /* find lzcnt for each byte */
+  t = _mm256_and_si256(nibble_mask, v);
+  v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
+  t = _mm256_shuffle_epi8(lut_lo, t);
+  v = _mm256_shuffle_epi8(lut_hi, v);
+  v = _mm256_min_epu8(v, t);
+
+  /* find lzcnt for each dword */
+  v = _mm256_or_si256(v, byte_offset);
+  v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
+  v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
+
+  return v;
+}
+
+// Credit: YumiYumiYumi
+// https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
+static inline __m256i avx2_tzcnt_epi32(__m256i v) {
+  const __m256i lut_lo = _mm256_set_epi8(0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 32, 0, 1, 0, 2, 0, 1,
+                                         0, 3, 0, 1, 0, 2, 0, 1, 0, 32);
+  const __m256i lut_hi = _mm256_set_epi8(4, 5, 4, 6, 4, 5, 4, 7, 4, 5, 4, 6, 4, 5, 4, 32, 4, 5, 4, 6, 4, 5,
+                                         4, 7, 4, 5, 4, 6, 4, 5, 4, 32);
+  const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
+  const __m256i byte_offset = _mm256_set1_epi32(0x18100800);
+  __m256i t;
+
+  /* find tzcnt for each byte */
+  t = _mm256_and_si256(nibble_mask, v);
+  v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
+  t = _mm256_shuffle_epi8(lut_lo, t);
+  v = _mm256_shuffle_epi8(lut_hi, v);
+  v = _mm256_min_epu8(v, t);
+
+  /* find tzcnt for each dword */
+  v = _mm256_or_si256(v, byte_offset);
+  v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
+  v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
+
+  return v;
+}
+#endif
+
 #ifndef __clang__
   #ifndef __INTEL_COMPILER
     #if defined(__GNUC__) && (__GNUC__ < 10)
