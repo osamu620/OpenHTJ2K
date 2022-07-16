@@ -46,11 +46,10 @@ static cvt_color_func cvt_ycbcr_to_rgb[2] = {cvt_ycbcr_to_rgb_irrev, cvt_ycbcr_t
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
 #endif
 
-#ifdef OPENHTJ2K_THREAD
-  #include "ThreadPool.hpp"
+#include "ThreadPool.hpp"
 ThreadPool *ThreadPool::singleton = nullptr;
 std::mutex ThreadPool::singleton_mutex;
-#endif
+
 //#include <hwy/highway.h>
 
 float bibo_step_gains[32][5] = {{1.00000000F, 4.17226868F, 1.44209458F, 2.10966980F, 1.69807026F},
@@ -1559,10 +1558,8 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
   nshift[0]          = 0;
   child_ranges[0][0] = tmp_ranges[0];
 
-#ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
-#endif
   for (uint8_t r = 0; r <= NL; r++) {
     uint64_t d = static_cast<uint64_t>(1 << (NL - r));
     const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
@@ -1581,7 +1578,6 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
     resolution[r]->create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
                                    this->mantissas, this->num_guard_bits, this->quantization_style,
                                    this->bitdepth);
-#ifdef OPENHTJ2K_THREAD
     if (pool->num_threads() > 1) {
       results.emplace_back(pool->enqueue([r, numlayers, this] {
         resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
@@ -1594,10 +1590,6 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
   for (auto &result : results) {
     result.get();
   }
-#else
-    resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
-  }
-#endif
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
@@ -2366,10 +2358,9 @@ void j2k_tile::write_packets(j2c_destination_base &outbuf) {
 }
 
 void j2k_tile::decode() {
-#ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
-#endif
+
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
     const uint8_t NL       = this->tcomp[c].get_dwt_levels();
@@ -2386,7 +2377,6 @@ void j2k_tile::decode() {
             j2k_codeblock *block = cpb->access_codeblock(block_index);
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
-#ifdef OPENHTJ2K_THREAD
               if (pool->num_threads() > 1) {
                 results.emplace_back(pool->enqueue([block, ROIshift] {
                   if ((block->Cmodes & HT) >> 6)
@@ -2401,23 +2391,16 @@ void j2k_tile::decode() {
                 else
                   j2k_decode(block, ROIshift);
               }
-#else
-              if ((block->Cmodes & HT) >> 6)
-                htj2k_decode(block, ROIshift);
-              else
-                j2k_decode(block, ROIshift);
-#endif
             }
           }  // end of codeblock loop
         }    // end of subbnad loop
       }      // end of precinct loop
     }
   }
-#ifdef OPENHTJ2K_THREAD
+
   for (auto &result : results) {
     result.get();
   }
-#endif
 
   for (uint16_t c = 0; c < num_components; c++) {
     // const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
@@ -2481,9 +2464,9 @@ void j2k_tile::decode() {
       *dp++ = *sp++;
     }
 #else
-      for (size_t n = 0; n < num_samples; ++n) {
-        *dp++ = *sp++;
-      }
+    for (size_t n = 0; n < num_samples; ++n) {
+      *dp++ = *sp++;
+    }
 #endif
 
   }  // end of component loop
@@ -2721,10 +2704,9 @@ void j2k_tile::rgb_to_ycbcr() {
 }
 
 uint8_t *j2k_tile::encode() {
-#ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
-#endif
+
   // Step 1 : block encode all code blocks
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift       = tcomp[c].get_ROIshift();
@@ -2753,7 +2735,7 @@ uint8_t *j2k_tile::encode() {
       cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
     }
     //#endif
-#ifdef OPENHTJ2K_THREAD
+
     auto t1_encode = [pool, &results](j2k_resolution *cr, uint8_t ROIshift) {
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
@@ -2775,24 +2757,6 @@ uint8_t *j2k_tile::encode() {
         }
       }
     };
-#else
-    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
-      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-        j2k_precinct *cp = cr->access_precinct(p);
-        packet_header_writer pckt_hdr;
-        for (uint8_t b = 0; b < cr->num_bands; ++b) {
-          j2k_precinct_subband *cpb = cp->access_pband(b);
-          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
-          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
-            auto block = cpb->access_codeblock(block_index);
-
-              htj2k_encode(block, ROIshift);
-
-          }
-        }
-      }
-    };
-#endif
 
     for (uint8_t r = NL; r > 0; --r) {
       j2k_resolution *ncr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
@@ -2826,11 +2790,9 @@ uint8_t *j2k_tile::encode() {
     t1_encode(cr, ROIshift);
   }  // end of component loop
 
-#ifdef OPENHTJ2K_THREAD
   for (auto &result : results) {
     result.get();
   }
-#endif
 
   // Step 2: encode packets
   for (uint16_t c = 0; c < num_components; c++) {
