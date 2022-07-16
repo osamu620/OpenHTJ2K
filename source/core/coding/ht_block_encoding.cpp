@@ -416,7 +416,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 // This function shall be called on the assumption that there are two quads
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   //  const uint32_t QWx2                = block->size.x + block->size.x % 2;
-  alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+  alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
   uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1U) * (block->blkstate_stride) + 2 * qx + 1;
   uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2U) * (block->blkstate_stride) + 2 * qx + 1;
   auto v_u8_0        = vld1_u8(sp0);
@@ -426,9 +426,10 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   auto v_u8_out      = vand_u8(v_u8_zip, vmask);
   vst1_u8(sigma_n, v_u8_out);
   auto v_u8_shift = vld1_s8(nshift);
-  auto vtmp       = vshl_u8(v_u8_out, v_u8_shift);
-  rho_q[0]        = vaddv_u8(vtmp) & 0xF;
-  rho_q[1]        = vaddv_u8(vtmp) >> 4;
+  auto vtmp       = vpadd_u8(vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)),
+                             vpadd_u8(vshl_u8(v_u8_out, v_u8_shift), vshl_u8(v_u8_out, v_u8_shift)));
+  rho_q[0]        = vdupb_lane_u8(vtmp, 0);
+  rho_q[1]        = vdupb_lane_u8(vtmp, 1);
   auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * block->blksampl_stride);
   auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1U) * block->blksampl_stride);
   auto v_s32_out  = vzipq_s32(v_s32_0, v_s32_1);
@@ -901,17 +902,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   }
 
   // Non-initial line pair
-  int32_t Emax0, Emax1;
   for (uint16_t qy = 1; qy < QH; qy++) {
     ep = Eadj.get();
     ep++;
     sp = sigma_adj.get();
     sp++;
-    //    E_n[7]     = 0;
+    E_n[7]     = 0;
     sigma_n[6] = sigma_n[7] = 0;
-    Emax0                   = find_max(ep[-1], ep[0], ep[1], ep[2]);
-    Emax1                   = find_max(ep[1], ep[2], ep[3], ep[4]);
     for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2)) {
+      // E_n[7] shall be saved because ep[2*qx-1] can't be changed before kappa calculation
+      int32_t E7     = E_n[7];
       uint8_t sigma7 = sigma_n[7];
       // context for 1st quad of current quad pair
       c_q[Q0] = static_cast<uint16_t>((sp[2 * qx + 1] | sp[2 * qx + 2]) << 2);
@@ -931,7 +931,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
-      kappa     = std::max((Emax0 - 1) * gamma[Q0], 1);
+      kappa     = std::max(
+              (find_max(ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
+
+      ep[2 * qx] = E_n[1];
+      // if (qx > 0) {
+      ep[2 * qx - 1] = E7;  // put back saved E_n
+      //}
 
       sp[2 * qx] = sigma_n[1];
       // if (qx > 0) {
@@ -989,16 +995,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         MEL_encoder.encodeMEL((rho_q[Q1] != 0));
       }
       gamma[Q1] = (popcount32((uint32_t)rho_q[Q1]) > 1) ? 1 : 0;
-      kappa     = std::max((Emax1 - 1) * gamma[Q1], 1);
+      kappa     = std::max(
+              (find_max(ep[2 * (qx + 1) - 1], ep[2 * (qx + 1)], ep[2 * (qx + 1) + 1], ep[2 * (qx + 1) + 2]) - 1)
+                  * gamma[Q1],
+              1);
 
-      Emax0 = find_max(ep[2 * (qx + 2) - 1], ep[2 * (qx + 2)], ep[2 * (qx + 2) + 1], ep[2 * (qx + 2) + 2]);
-      Emax1 = find_max(ep[2 * (qx + 3) - 1], ep[2 * (qx + 3)], ep[2 * (qx + 3) + 1], ep[2 * (qx + 3) + 2]);
-
-      ep[2 * qx]     = E_n[1];
-      ep[2 * qx + 1] = E_n[3];
-      ep[2 * qx + 2] = E_n[5];
-      ep[2 * qx + 3] = E_n[7];
-
+      ep[2 * (qx + 1) - 1] = E_n[3];
+      ep[2 * (qx + 1)]     = E_n[5];
+      if (qx + 1 == QW - 1) {  // if this quad (2nd quad) is the end of the line-pair
+        ep[2 * (qx + 1) + 1] = E_n[7];
+      }
       sp[2 * (qx + 1) - 1] = sigma_n[3];
       sp[2 * (qx + 1)]     = sigma_n[5];
       if (qx + 1 == QW - 1) {  // if this quad (2nd quad) is the end of the line-pair
@@ -1051,7 +1057,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       VLC_encoder.emitVLCBits(cwd, lw);
     }
     if (QW & 1) {
-      uint16_t qx    = static_cast<uint16_t>(QW - 1);
+      uint16_t qx = static_cast<uint16_t>(QW - 1);
+      // E_n[7] shall be saved because ep[2*qx-1] can't be changed before kappa calculation
+      int32_t E7     = E_n[7];
       uint8_t sigma7 = sigma_n[7];
       // context for current quad
       c_q[Q0] = static_cast<uint16_t>((sp[2 * qx + 1] | sp[2 * qx + 2]) << 2);
@@ -1064,9 +1072,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
 
       gamma[Q0] = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
-      kappa     = std::max((Emax0 - 1) * gamma[Q0], 1);
+      kappa     = std::max(
+              (find_max(ep[2 * qx - 1], ep[2 * qx], ep[2 * qx + 1], ep[2 * qx + 2]) - 1) * gamma[Q0], 1);
 
-      ep[2 * qx]     = E_n[1];
+      ep[2 * qx] = E_n[1];
+      // if (qx > 0) {
+      ep[2 * qx - 1] = E7;  // put back saved E_n
+      //}
+      // this quad (first) is the end of the line-pair
       ep[2 * qx + 1] = E_n[3];
 
       sp[2 * qx] = sigma_n[1];
