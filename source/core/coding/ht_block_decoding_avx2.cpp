@@ -809,40 +809,24 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
-void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
-  /* ready for ROI adjustment and dequantization */
-
+void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   // number of decoded magnitude bit‐planes
   const int32_t pLSB = 31 - M_b;  // indicates binary point;
-
   // bit mask for ROI detection
   const uint32_t mask = UINT32_MAX >> (M_b + 1);
-  // reconstruction parameter defined in E.1.1.2 of the spec
 
-  float fscale = this->stepsize;
-  fscale *= (1 << FRACBITS);
-  if (M_b <= 31) {
-    fscale /= (static_cast<float>(1 << (31 - M_b)));
-  } else {
-    fscale *= (static_cast<float>(1 << (M_b - 31)));
-  }
-  constexpr int32_t downshift = 15;
-  fscale *= (float)(1 << 16) * (float)(1 << downshift);
-  const auto scale       = (int32_t)(fscale + 0.5);
-  const __m256i signmask = _mm256_set1_epi32(INT32_MIN);
-  const __m256i magmask  = _mm256_set1_epi32(0x7FFFFFFF);
-  const __m256i vmask    = _mm256_set1_epi32(static_cast<int32_t>(~mask));
-  const __m256i one      = _mm256_set1_epi32(1);
-  const __m256i zero     = _mm256_setzero_si256();
-  const __m256i shift    = _mm256_set1_epi32(ROIshift);
+  const __m256i magmask = _mm256_set1_epi32(0x7FFFFFFF);
+  const __m256i vmask   = _mm256_set1_epi32(static_cast<int32_t>(~mask));
+  const __m256i zero    = _mm256_setzero_si256();
+  const __m256i shift   = _mm256_set1_epi32(ROIshift);
   __m256i v0, v1, s0, s1, vdst0, vdst1, vROImask;
   if (this->transformation) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val   = this->sample_buf.get() + i * this->blksampl_stride;
-      sprec_t *dst   = this->i_samples + i * this->band_stride;
-      size_t simdlen = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
-      for (size_t j = 0; j < simdlen; j += 16) {
+      int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
+      sprec_t *dst = this->i_samples + i * this->band_stride;
+      size_t len   = this->size.x;
+      for (; len >= 16; len -= 16) {
         v0 = _mm256_loadu_si256((__m256i *)val);
         v1 = _mm256_loadu_si256((__m256i *)(val + 8));
         s0 = v0;  //_mm256_or_si256(_mm256_and_si256(v0, signmask), one);
@@ -862,13 +846,12 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
         // convert values from sign-magnitude form to two's complement one
         vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
         vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
-        _mm256_storeu_si256((__m256i *)dst,
-                            _mm256_permute4x64_epi64(_mm256_packs_epi32(vdst0, vdst1), 0xD8));
+        v0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(vdst0, vdst1), 0xD8);
+        _mm256_storeu_si256((__m256i *)dst, v0);
         val += 16;
         dst += 16;
       }
-      for (size_t j = static_cast<size_t>(this->size.x) - static_cast<size_t>(this->size.x) % 16;
-           j < static_cast<size_t>(this->size.x); j++) {
+      for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
@@ -889,6 +872,16 @@ void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
     }
   } else {
     // lossy path
+    float fscale = this->stepsize;
+    fscale *= (1 << FRACBITS);
+    if (M_b <= 31) {
+      fscale /= (static_cast<float>(1 << (31 - M_b)));
+    } else {
+      fscale *= (static_cast<float>(1 << (M_b - 31)));
+    }
+    constexpr int32_t downshift = 15;
+    fscale *= (float)(1 << 16) * (float)(1 << downshift);
+    const auto scale = (int32_t)(fscale + 0.5);
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
@@ -1043,7 +1036,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     }
 
     // dequantization
-    block->dequantize(S_blk, ROIshift);
+    block->dequantize(ROIshift);
 
   }  // end
 
