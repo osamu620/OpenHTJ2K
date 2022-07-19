@@ -26,7 +26,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && !defined(__AVX2__)
+#if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2))
   #include "coding_units.hpp"
   #include "dec_CxtVLC_tables.hpp"
   #include "ht_block_decoding.hpp"
@@ -35,14 +35,6 @@
 
   #ifdef _OPENMP
     #include <omp.h>
-  #endif
-
-  #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    #if defined(_MSC_VER) || defined(__MINGW64__)
-      #include <intrin.h>
-    #else
-      #include <x86intrin.h>
-    #endif
   #endif
 
   #define Q0 0
@@ -221,8 +213,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
       v_quads[i] |= known_1[Q0] << m_quads[i];
       if (m_quads[i] != 0) {
-        mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
-        mu_quads[i] <<= pLSB;
+        // mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
+        mu_quads[i] = v_quads[i] + 2;
+        mu_quads[i] |= 1;
+        mu_quads[i] <<= pLSB - 1;
         mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
       } else {
         mu_quads[i] = 0;
@@ -233,8 +227,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1);
       v_quads[i + 4] |= known_1[Q1] << m_quads[i + 4];
       if (m_quads[i + 4] != 0) {
-        mu_quads[i + 4] = static_cast<uint32_t>((v_quads[i + 4] >> 1) + 1);
-        mu_quads[i + 4] <<= pLSB;
+        mu_quads[i + 4] = v_quads[i + 4] + 2;
+        mu_quads[i + 4] |= 1;
+        mu_quads[i + 4] <<= pLSB - 1;
         mu_quads[i + 4] |= static_cast<uint32_t>((v_quads[i + 4] & 1) << 31);  // sign bit
       } else {
         mu_quads[i + 4] = 0;
@@ -320,8 +315,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
       v_quads[i] |= known_1[Q0] << m_quads[i];
       if (m_quads[i] != 0) {
-        mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
-        mu_quads[i] <<= pLSB;
+        mu_quads[i] = v_quads[i] + 2;
+        mu_quads[i] |= 1;
+        mu_quads[i] <<= pLSB - 1;
         mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
       } else {
         mu_quads[i] = 0;
@@ -458,8 +454,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
         v_quads[i] |= known_1[Q0] << m_quads[i];
         if (m_quads[i] != 0) {
-          mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
-          mu_quads[i] <<= pLSB;
+          mu_quads[i] = v_quads[i] + 2;
+          mu_quads[i] |= 1;
+          mu_quads[i] <<= pLSB - 1;
           mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
         } else {
           mu_quads[i] = 0;
@@ -470,8 +467,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1);
         v_quads[i + 4] |= known_1[Q1] << m_quads[i + 4];
         if (m_quads[i + 4] != 0) {
-          mu_quads[i + 4] = static_cast<uint32_t>((v_quads[i + 4] >> 1) + 1);
-          mu_quads[i + 4] <<= pLSB;
+          mu_quads[i + 4] = v_quads[i + 4] + 2;
+          mu_quads[i + 4] |= 1;
+          mu_quads[i + 4] <<= pLSB - 1;
           mu_quads[i + 4] |= static_cast<uint32_t>((v_quads[i + 4] & 1) << 31);  // sign bit
         } else {
           mu_quads[i + 4] = 0;
@@ -563,8 +561,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
         v_quads[i] |= known_1[Q0] << m_quads[i];
         if (m_quads[i] != 0) {
-          mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
-          mu_quads[i] <<= pLSB;
+          mu_quads[i] = v_quads[i] + 2;
+          mu_quads[i] |= 1;
+          mu_quads[i] <<= pLSB - 1;
           mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
         } else {
           mu_quads[i] = 0;
@@ -598,6 +597,7 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
   const auto block_width  = static_cast<uint16_t>(j_start + width);
   const auto block_height = static_cast<uint16_t>(i_start + height);
 
+  // Decode magnitude
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
@@ -611,16 +611,18 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
         bit = SigProp.importSigPropBit();
         block->modify_state(refinement_value, bit, i, j);
         *sp |= bit << pLSB;
+        *sp |= bit << (pLSB - 1);  // new bin center ( = 0.5)
       }
       block->modify_state(scan, 1, i, j);
     }
   }
+  // Decode sign
   for (int16_t j = (int16_t)j_start; j < block_width; j++) {
     for (int16_t i = (int16_t)i_start; i < block_height; i++) {
       sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
-      // decode sign
-      if ((*sp & (1 << pLSB)) != 0) {
-        *sp = (*sp & 0x7FFFFFFF) | (SigProp.importSigPropBit() << 31);
+      //      if ((*sp & (1 << pLSB)) != 0) {
+      if (block->get_state(Refinement_value, i, j)) {
+        *sp |= static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
       }
     }
   }
@@ -671,14 +673,19 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   int16_t i_start             = 0;
   int16_t height              = 4;
   int32_t *sp;
-
+  int32_t bit;
+  int32_t tmp;
   for (int16_t n1 = 0; n1 < num_v_stripe; n1++) {
     for (int16_t j = 0; j < blk_width; j++) {
       for (int16_t i = i_start; i < i_start + height; i++) {
         sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
         if (block->get_state(Sigma, i, j) != 0) {
           block->modify_state(refinement_indicator, 1, i, j);
-          sp[0] |= MagRef.importMagRefBit() << pLSB;
+          bit = MagRef.importMagRefBit();
+          tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
+          tmp <<= pLSB;
+          sp[0] &= tmp;
+          sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
         }
       }
     }
@@ -690,7 +697,11 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
       sp = &block->sample_buf[static_cast<size_t>(j) + static_cast<size_t>(i) * block->blksampl_stride];
       if (block->get_state(Sigma, i, j) != 0) {
         block->modify_state(refinement_indicator, 1, i, j);
-        sp[0] |= MagRef.importMagRefBit() << pLSB;
+        bit = MagRef.importMagRefBit();
+        tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
+        tmp <<= pLSB;
+        sp[0] &= tmp;
+        sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
       }
     }
   }
@@ -719,37 +730,26 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   if (this->transformation) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val      = this->sample_buf.get() + i * this->blksampl_stride;
-      sprec_t *dst      = this->i_samples + i * this->band_stride;
-      uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
-
-      for (size_t j = 0; j < static_cast<size_t>(this->size.x); j++) {
+      int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
+      sprec_t *dst = this->i_samples + i * this->band_stride;
+      size_t len   = this->size.x;
+      for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
           *val <<= ROIshift;
         }
-        // do adjustment of the position indicating 0.5
-        int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
-        if (ROIshift) {
-          N_b = M_b;
-        }
-        if (N_b < M_b && *val) {
-          *val |= 1 << (31 - N_b - 1);
-        }
-        // bring sign back
-        *val |= sign;
+        *val >>= pLSB;
         // convert sign-magnitude to two's complement form
-        if (*val < 0) {
+        if (sign) {
           *val = -(*val & INT32_MAX);
         }
 
         assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<int16_t>(*val >> pLSB);
+        *dst = static_cast<int16_t>(*val);
         val++;
         dst++;
-        blkstate++;
       }
     }
   } else {
@@ -760,39 +760,30 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     }
     //    auto vROIshift = vdupq_n_s32(ROImask);
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val      = this->sample_buf.get() + i * this->blksampl_stride;
-      sprec_t *dst      = this->i_samples + i * this->band_stride;
-      uint8_t *blkstate = this->block_states.get() + (i + 1) * this->blkstate_stride + 1;
+      int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
+      sprec_t *dst = this->i_samples + i * this->band_stride;
+      size_t len   = this->size.x;
 
-      for (size_t j = 0; j < static_cast<size_t>(this->size.x); j++) {
+      for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
           *val <<= ROIshift;
         }
-        // do adjustment of the position indicating 0.5
-        int32_t N_b = S_blk + 1 + ((*blkstate >> 2) & 1);
-        if (ROIshift) {
-          N_b = M_b;
-        }
-        if (*val) {
-          *val |= 1 << (31 - N_b - 1);
-        }
-
         // to prevent overflow, truncate to int16_t
         *val = (*val + (1 << 15)) >> 16;
         //  dequantization
         *val *= scale;
         // downshift
-        *dst = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        *val = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
         // convert sign-magnitude to two's complement form
         if (sign) {
-          *dst = static_cast<int16_t>(-(*dst));
+          *val = -(*val & INT32_MAX);
         }
+        *dst = static_cast<int16_t>(*val);
         val++;
         dst++;
-        blkstate++;
       }
     }
   }
