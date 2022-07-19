@@ -79,7 +79,7 @@ endif()
 
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
   if(NOT MINGW)
-    option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" OFF)
+    option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
   endif()
   if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     set(CMAKE_CXX_FLAGS
