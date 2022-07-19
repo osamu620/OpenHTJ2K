@@ -696,7 +696,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
-void j2k_codeblock::dequantize(uint8_t S_blk, uint8_t ROIshift) const {
+void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   /* ready for ROI adjustment and dequantization */
 
   // number of decoded magnitude bit‐planes
@@ -886,7 +886,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     }
 
     // dequantization
-    block->dequantize(S_blk, ROIshift);
+    block->dequantize(ROIshift);
 
   }  // end
 
