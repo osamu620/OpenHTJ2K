@@ -195,9 +195,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     // recoverMagSgnValue
     auto msval0 = MagSgn.fetch(v_m_quads0);
-    MagSgn.advance(vaddvq_u32(v_m_quads0));
+    //    MagSgn.advance(vaddvq_u32(v_m_quads0));
     auto msval1 = MagSgn.fetch(v_m_quads1);
-    MagSgn.advance(vaddvq_u32(v_m_quads1));
+    //    MagSgn.advance(vaddvq_u32(v_m_quads1));
 
     auto vknown_1   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
     auto vmask      = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
@@ -292,7 +292,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     // recoverMagSgnValue
     auto msval0 = MagSgn.fetch(v_m_quads0);
-    MagSgn.advance(vaddvq_u32(v_m_quads0));
+    //    MagSgn.advance(vaddvq_u32(v_m_quads0));
 
     auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
     auto vmask     = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
@@ -445,7 +445,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       vmask1 = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
       // retrieve MagSgn codewords
       vmsval = MagSgn.fetch(v_m_quads0);
-      MagSgn.advance(vaddvq_u32(v_m_quads0));
+      //      MagSgn.advance(vaddvq_u32(v_m_quads0));
       auto v_v_quads0 = vandq_u32(vmsval, vmask1);
       // i_n in the spec can be derived from emb_^{-1}
       vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
@@ -460,7 +460,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       vmask1 = vsubq_u32(vshlq_u32(vone, v_m_quads1), vone);
       // retrieve MagSgn codewords
       vmsval = MagSgn.fetch(v_m_quads1);
-      MagSgn.advance(vaddvq_u32(v_m_quads1));
+      //      MagSgn.advance(vaddvq_u32(v_m_quads1));
       auto v_v_quads1 = vandq_u32(vmsval, vmask1);
       // i_n in the spec can be derived from emb_^{-1}
       vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vm), vone);
@@ -538,7 +538,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       // recoverMagSgnValue
       auto msval0 = MagSgn.fetch(v_m_quads0);
-      MagSgn.advance(vaddvq_u32(v_m_quads0));
+      //      MagSgn.advance(vaddvq_u32(v_m_quads0));
 
       auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
       auto vmask     = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
