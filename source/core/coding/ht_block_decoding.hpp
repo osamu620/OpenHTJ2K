@@ -875,6 +875,8 @@ class fwd_buf {
     const uint32_t m1 = m0 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 4)));
     //_mm_extract_epi32(m, 2)
     const uint32_t m2 = m1 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 8)));
+    //_mm_extract_epi32(m, 3)
+    const uint32_t m3 = m2 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 12)));
 
     uint32_t vtmp[4];
   #if defined(_MSC_VER)
@@ -890,6 +892,7 @@ class fwd_buf {
     vtmp[2] = (v128i >> m1) & 0xFFFFFFFFU;
     vtmp[3] = (v128i >> m2) & 0xFFFFFFFFU;
   #endif
+    advance(m3);
     return *(__m128i *)vtmp;
   }
 };
