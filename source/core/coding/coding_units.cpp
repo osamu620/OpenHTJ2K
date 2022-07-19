@@ -2602,10 +2602,10 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
     const int32_t DC_OFFSET = (hdr.SIZ->is_signed(c)) ? 0 : 1 << (tcomp[c].bitdepth - 1);
     const int32_t MAXVAL =
         (hdr.SIZ->is_signed(c)) ? (1 << (tcomp[c].bitdepth - 1)) - 1 : (1 << tcomp[c].bitdepth) - 1;
-    const int32_t MINVAL          = (hdr.SIZ->is_signed(c)) ? -(1 << (tcomp[c].bitdepth - 1)) : 0;
-    const element_siz tc0         = this->tcomp[c].get_pos0();
-    const element_siz tc1         = this->tcomp[c].get_pos1();
-    const uint32_t num_tc_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
+    const int32_t MINVAL    = (hdr.SIZ->is_signed(c)) ? -(1 << (tcomp[c].bitdepth - 1)) : 0;
+    const element_siz tc0   = this->tcomp[c].get_pos0();
+    const element_siz tc1   = this->tcomp[c].get_pos1();
+    uint32_t num_tc_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
 
     // downshift value for lossy path
     int16_t downshift = (tcomp[c].transformation) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
@@ -2616,6 +2616,59 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
     // TODO: fix this
     int16_t offset = (downshift < 0) ? static_cast<int16_t>((1 << -downshift) >> 1)
                                      : static_cast<int16_t>((1 << downshift) >> 1);
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    if (downshift < 0) {
+      // for (uint32_t n = 0; n < num_tc_samples; ++n) {
+      //   sp[n] = (sp[n] + offset) << -downshift;
+      //   sp[n] += DC_OFFSET;
+      //   sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
+      //   sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+      // }
+      __m256i v, o, dco, vmax, vmin;
+      o    = _mm256_set1_epi32(offset);
+      dco  = _mm256_set1_epi32(DC_OFFSET);
+      vmax = _mm256_set1_epi32(MAXVAL);
+      vmin = _mm256_set1_epi32(MINVAL);
+      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+        v = _mm256_load_si256((__m256i *)sp);
+        v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
+        v = _mm256_add_epi32(v, dco);
+        v = _mm256_min_epi32(v, vmax);
+        v = _mm256_max_epi32(v, vmin);
+        _mm256_store_si256((__m256i *)sp, v);
+        sp += 8;
+      }
+      for (; num_tc_samples > 0; --num_tc_samples) {
+        sp[0] = (sp[0] + offset) >> downshift;
+        sp[0] += DC_OFFSET;
+        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+        sp++;
+      }
+    } else {
+      __m256i v, o, dco, vmax, vmin;
+      o    = _mm256_set1_epi32(offset);
+      dco  = _mm256_set1_epi32(DC_OFFSET);
+      vmax = _mm256_set1_epi32(MAXVAL);
+      vmin = _mm256_set1_epi32(MINVAL);
+      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+        v = _mm256_load_si256((__m256i *)sp);
+        v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
+        v = _mm256_add_epi32(v, dco);
+        v = _mm256_min_epi32(v, vmax);
+        v = _mm256_max_epi32(v, vmin);
+        _mm256_store_si256((__m256i *)sp, v);
+        sp += 8;
+      }
+      for (; num_tc_samples > 0; --num_tc_samples) {
+        sp[0] = (sp[0] + offset) >> downshift;
+        sp[0] += DC_OFFSET;
+        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+        sp++;
+      }
+    }
+#else
     if (downshift < 0) {
       for (uint32_t n = 0; n < num_tc_samples; ++n) {
         sp[n] = (sp[n] + offset) << -downshift;
@@ -2631,6 +2684,7 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
         sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
       }
     }
+#endif
   }
 }
 
