@@ -2469,14 +2469,18 @@ void j2k_tile::decode() {
     // copy samples in resolution buffer to that in tile component buffer
     size_t num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    for (size_t n = num_samples; n >= 8; n -= 8) {
-      auto vsrc = vld1q_s16(sp);
-      vst1q_s32(dp, vmovl_s16(vget_low_s16(vsrc)));
-      vst1q_s32(dp + 4, vmovl_s16(vget_high_s16(vsrc)));
-      sp += 8;
-      dp += 8;
+    int16x8_t v0, v1;
+    for (size_t n = num_samples; n >= 16; n -= 16) {
+      v0 = vld1q_s16(sp);
+      v1 = vld1q_s16(sp + 8);
+      vst1q_s32(dp, vmovl_s16(vget_low_s16(v0)));
+      vst1q_s32(dp + 4, vmovl_s16(vget_high_s16(v0)));
+      vst1q_s32(dp + 8, vmovl_s16(vget_low_s16(v1)));
+      vst1q_s32(dp + 12, vmovl_s16(vget_high_s16(v1)));
+      sp += 16;
+      dp += 16;
     }
-    for (size_t n = num_samples % 8; n > 0; --n) {
+    for (size_t n = num_samples % 16; n > 0; --n) {
       *dp++ = *sp++;
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
@@ -2616,7 +2620,61 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
     // TODO: fix this
     int16_t offset = (downshift < 0) ? static_cast<int16_t>((1 << -downshift) >> 1)
                                      : static_cast<int16_t>((1 << downshift) >> 1);
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    int32x4_t v0, v1, o, dco, vmax, vmin, vshift;
+    o      = vdupq_n_s32(offset);
+    dco    = vdupq_n_s32(DC_OFFSET);
+    vmax   = vdupq_n_s32(MAXVAL);
+    vmin   = vdupq_n_s32(MINVAL);
+    vshift = vdupq_n_s32(-downshift);
+    if (downshift < 0) {
+      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+        v0 = vld1q_s32(sp);
+        v1 = vld1q_s32(sp + 4);
+        v0 = vshlq_s32(vaddq_s32(v0, o), -vshift);
+        v1 = vshlq_s32(vaddq_s32(v1, o), -vshift);
+        v0 = vaddq_s32(v0, dco);
+        v1 = vaddq_s32(v1, dco);
+        v0 = vminq_s32(v0, vmax);
+        v1 = vminq_s32(v1, vmax);
+        v0 = vmaxq_s32(v0, vmin);
+        v1 = vmaxq_s32(v1, vmin);
+        vst1q_s32(sp, v0);
+        vst1q_s32(sp + 4, v1);
+        sp += 8;
+      }
+      for (; num_tc_samples > 0; --num_tc_samples) {
+        sp[0] = (sp[0] + offset) << -downshift;
+        sp[0] += DC_OFFSET;
+        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+        sp++;
+      }
+    } else {
+      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+        v0 = vld1q_s32(sp);
+        v1 = vld1q_s32(sp + 4);
+        v0 = vshlq_s32(vaddq_s32(v0, o), vshift);
+        v1 = vshlq_s32(vaddq_s32(v1, o), vshift);
+        v0 = vaddq_s32(v0, dco);
+        v1 = vaddq_s32(v1, dco);
+        v0 = vminq_s32(v0, vmax);
+        v1 = vminq_s32(v1, vmax);
+        v0 = vmaxq_s32(v0, vmin);
+        v1 = vmaxq_s32(v1, vmin);
+        vst1q_s32(sp, v0);
+        vst1q_s32(sp + 4, v1);
+        sp += 8;
+      }
+      for (; num_tc_samples > 0; --num_tc_samples) {
+        sp[0] = (sp[0] + offset) >> downshift;
+        sp[0] += DC_OFFSET;
+        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+        sp++;
+      }
+    }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     if (downshift < 0) {
       // for (uint32_t n = 0; n < num_tc_samples; ++n) {
       //   sp[n] = (sp[n] + offset) << -downshift;
@@ -2639,7 +2697,7 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
         sp += 8;
       }
       for (; num_tc_samples > 0; --num_tc_samples) {
-        sp[0] = (sp[0] + offset) >> downshift;
+        sp[0] = (sp[0] + offset) << -downshift;
         sp[0] += DC_OFFSET;
         sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
         sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
@@ -2669,21 +2727,21 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
       }
     }
 #else
-    if (downshift < 0) {
-      for (uint32_t n = 0; n < num_tc_samples; ++n) {
-        sp[n] = (sp[n] + offset) << -downshift;
-        sp[n] += DC_OFFSET;
-        sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-        sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+      if (downshift < 0) {
+        for (uint32_t n = 0; n < num_tc_samples; ++n) {
+          sp[n] = (sp[n] + offset) << -downshift;
+          sp[n] += DC_OFFSET;
+          sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
+          sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+        }
+      } else {
+        for (uint32_t n = 0; n < num_tc_samples; ++n) {
+          sp[n] = (sp[n] + offset) >> downshift;
+          sp[n] += DC_OFFSET;
+          sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
+          sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+        }
       }
-    } else {
-      for (uint32_t n = 0; n < num_tc_samples; ++n) {
-        sp[n] = (sp[n] + offset) >> downshift;
-        sp[n] += DC_OFFSET;
-        sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-        sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
-      }
-    }
 #endif
   }
 }
