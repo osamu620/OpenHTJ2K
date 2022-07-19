@@ -646,7 +646,7 @@ class fwd_buf {
         read();
     }
     auto t = vld1q_u8(this->tmp);
-
+    advance(vaddvq_u32(m));
     __uint128_t v128i = (__uint128_t)t;
 
     //    uint32_t vtmp[4];
@@ -660,13 +660,14 @@ class fwd_buf {
     //    return vld1q_u32(vtmp);
 
     int32x4_t vtmp;
-    vtmp[0] = v128i & 0xFFFFFFFFU;
+    vtmp[0] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
     v128i >>= m[0];
-    vtmp[1] = v128i & 0xFFFFFFFFU;
+    vtmp[1] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
     v128i >>= m[1];
-    vtmp[2] = v128i & 0xFFFFFFFFU;
+    vtmp[2] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
     v128i >>= m[2];
-    vtmp[3] = v128i & 0xFFFFFFFFU;
+    vtmp[3] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
+
     return vtmp;
   }
 };
