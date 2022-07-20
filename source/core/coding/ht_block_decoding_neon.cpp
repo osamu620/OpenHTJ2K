@@ -239,8 +239,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     *sp1++ = (rho1 >> 3) & 1;
 
     // update Exponent
-    auto v_v_quads = vzipq_s32(v_v_quads0, v_v_quads1);
-    vExp           = 32 - vclzq_s32(vzip2q_s32(v_v_quads.val[0], v_v_quads.val[1]));
+    vvv  = vzipq_s32(v_v_quads0, v_v_quads1);
+    vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(vvv.val[0], vvv.val[1])));
     vst1q_s32(E_p, vExp);
     E_p += 4;
   }
@@ -484,8 +484,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
 
       // Update Exponent
-      auto v_v_quads = vzipq_s32(v_v_quads0, v_v_quads1);
-      vExp           = 32 - vclzq_s32(vzip2q_s32(v_v_quads.val[0], v_v_quads.val[1]));
+      vvv  = vzipq_s32(v_v_quads0, v_v_quads1);
+      vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(vvv.val[0], vvv.val[1])));
       vst1q_s32(E_p, vExp);
       E_p += 4;
     }
@@ -689,31 +689,16 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
 }
 
 void j2k_codeblock::dequantize(uint8_t ROIshift) const {
-  /* ready for ROI adjustment and dequantization */
-
   // number of decoded magnitude bit‐planes
   const int32_t pLSB = 31 - M_b;  // indicates binary point;
 
   // bit mask for ROI detection
-  const uint32_t mask = UINT32_MAX >> (M_b + 1);
-  // reconstruction parameter defined in E.1.1.2 of the spec
+  const uint32_t mask  = UINT32_MAX >> (M_b + 1);
+  const auto vmask     = vdupq_n_s32(static_cast<int32_t>(~mask));
+  const auto vROIshift = vdupq_n_s32(ROIshift);
 
-  float fscale = this->stepsize;
-  fscale *= (1 << FRACBITS);
-  if (M_b <= 31) {
-    fscale /= (static_cast<float>(1 << (31 - M_b)));
-  } else {
-    fscale *= (static_cast<float>(1 << (M_b - 31)));
-  }
-  constexpr int32_t downshift = 15;
-  fscale *= (float)(1 << 16) * (float)(1 << downshift);
-  const auto scale = (int32_t)(fscale + 0.5);
-
-  const auto vmask       = vdupq_n_s32(static_cast<int32_t>(~mask));
-  const auto vsgnbitmask = vdupq_n_s32(static_cast<int32_t>(0x80000000));
-  const auto vROIshift   = vdupq_n_s32(ROIshift);
-
-  int32x4_t v0, v1, s0, s1, vROImask, vnegmask, vposmask, vdst0, vdst1;
+  // vdst0, vdst1 cannot be auto for gcc
+  int32x4_t v0, v1, s0, s1, vROImask, vnegmask, vdst0, vdst1;
   if (this->transformation) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
@@ -723,8 +708,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       for (; len >= 8; len -= 8) {
         v0 = vld1q_s32(val);
         v1 = vld1q_s32(val + 4);
-        s0 = vandq_s32(v0, vsgnbitmask);
-        s1 = vandq_s32(v1, vsgnbitmask);
+        s0 = v0;
+        s1 = v1;
         v0 = v0 & INT32_MAX;
         v1 = v1 & INT32_MAX;
         // upshift background region, if necessary
@@ -738,13 +723,13 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         v1 = vshlq_s32(v1, vROImask - pLSB);
         // convert values from sign-magnitude form to two's complement one
         vnegmask = vcltzq_s32(s0);
-        vposmask = ~vnegmask;
-        // this cannot be auto for gcc
-        vdst0    = (vnegq_s32(v0) & vnegmask) | (v0 & vposmask);
+        //        vposmask = ~vnegmask;
+        //        vdst0    = (vnegq_s32(v0) & vnegmask) | (v0 & vposmask);
+        vdst0    = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v0), v0);
         vnegmask = vcltzq_s32(s1);
-        vposmask = ~vnegmask;
-        // this cannot be auto for gcc
-        vdst1 = (vnegq_s32(v1) & vnegmask) | (v1 & vposmask);
+        //        vposmask = ~vnegmask;
+        //        vdst1 = (vnegq_s32(v1) & vnegmask) | (v1 & vposmask);
+        vdst1 = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v1), v1);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
         val += 8;
         dst += 8;
@@ -752,7 +737,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
-        // detect background region and upshift it
+        // upshift background region, if necessary
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
           *val <<= ROIshift;
         }
@@ -769,6 +754,17 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     }
   } else {
     // lossy path
+    float fscale = this->stepsize;
+    fscale *= (1 << FRACBITS);
+    if (M_b <= 31) {
+      fscale /= (static_cast<float>(1 << (31 - M_b)));
+    } else {
+      fscale *= (static_cast<float>(1 << (M_b - 31)));
+    }
+    constexpr int32_t downshift = 15;
+    fscale *= (float)(1 << 16) * (float)(1 << downshift);
+    const auto scale = (int32_t)(fscale + 0.5);
+
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
@@ -776,8 +772,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       for (; len >= 8; len -= 8) {
         v0 = vld1q_s32(val);
         v1 = vld1q_s32(val + 4);
-        s0 = vandq_s32(v0, vsgnbitmask);
-        s1 = vandq_s32(v1, vsgnbitmask);
+        s0 = v0;
+        s1 = v1;
         v0 = v0 & INT32_MAX;
         v1 = v1 & INT32_MAX;
         // upshift background region, if necessary
@@ -796,14 +792,16 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         v0 = vmulq_s32(v0, vdupq_n_s32(scale));
         v1 = vmulq_s32(v1, vdupq_n_s32(scale));
         // downshift and convert values from sign-magnitude form to two's complement one
-        vdst0    = (v0 + (1 << (downshift - 1))) >> downshift;
-        vdst1    = (v1 + (1 << (downshift - 1))) >> downshift;
+        v0       = (v0 + (1 << (downshift - 1))) >> downshift;
+        v1       = (v1 + (1 << (downshift - 1))) >> downshift;
         vnegmask = vcltzq_s32(s0);
-        vposmask = ~vnegmask;
-        vdst0    = (vnegq_s32(vdst0) & vnegmask) | (vdst0 & vposmask);
+        //        vposmask = ~vnegmask;
+        //        vdst0    = (vnegq_s32(v0) & vnegmask) | (v0 & vposmask);
+        vdst0    = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v0), v0);
         vnegmask = vcltzq_s32(s1);
-        vposmask = ~vnegmask;
-        vdst1    = (vnegq_s32(vdst1) & vnegmask) | (vdst1 & vposmask);
+        //        vposmask = ~vnegmask;
+        //        vdst1    = (vnegq_s32(v1) & vnegmask) | (v1 & vposmask);
+        vdst1 = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v1), v1);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
         val += 8;
         dst += 8;
@@ -811,7 +809,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
-        // detect background region and upshift it
+        // upshift background region, if necessary
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
           *val <<= ROIshift;
         }
@@ -856,14 +854,21 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   } else {
     P0 = 0;
   }
-  const uint8_t empty_passes = static_cast<uint8_t>(P0 * 3);
+  // number of (skipped) magnitude bitplanes
+  const auto S_blk = static_cast<uint8_t>(P0 + block->num_ZBP + S_skip);
+  if (S_blk >= 30) {
+    printf("WARNING: Number of skipped mag bitplanes %d is too large.\n", S_blk);
+    return false;
+  }
+
+  const auto empty_passes = static_cast<uint8_t>(P0 * 3);
   if (block->num_passes < empty_passes) {
     printf("WARNING: number of passes %d exceeds number of empty passes %d", block->num_passes,
            empty_passes);
     return false;
   }
   // number of ht coding pass (Z_blk in the spec)
-  const uint8_t num_ht_passes = static_cast<uint8_t>(block->num_passes - empty_passes);
+  const auto num_ht_passes = static_cast<uint8_t>(block->num_passes - empty_passes);
   // pointer to buffer for HT Cleanup segment
   uint8_t *Dcup;
   // pointer to buffer for HT Refinement segment
@@ -882,36 +887,28 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
       return false;
     }
+    Dcup = block->get_compressed_data();
+    // Suffix length (=MEL + VLC) of HT Cleanup pass
+    const auto Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
+    // modDcup (shall be done before the creation of state_VLC instance)
+    Dcup[Lcup - 1] = 0xFF;
+    Dcup[Lcup - 2] |= 0x0F;
+
+    if (Scup < 2 || Scup > Lcup || Scup > 4079) {
+      printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
+      return false;
+    }
+    // Prefix length (=MagSgn) of HT Cleanup pass
+    const auto Pcup = static_cast<int32_t>(Lcup - Scup);
+
     for (uint32_t i = 1; i < all_segments.size(); i++) {
       Lref += block->pass_length[all_segments[i]];
     }
-    Dcup = block->get_compressed_data();
-
     if (block->num_passes > 1 && all_segments.size() > 1) {
       Dref = block->get_compressed_data() + Lcup;
     } else {
       Dref = nullptr;
     }
-    // number of (skipped) magnitude bitplanes
-    const uint8_t S_blk = static_cast<uint8_t>(P0 + block->num_ZBP + S_skip);
-    if (S_blk >= 30) {
-      printf("WARNING: Number of skipped mag bitplanes %d is too large.\n", S_blk);
-      return false;
-    }
-    // Suffix length (=MEL + VLC) of HT Cleanup pass
-    const int32_t Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
-    if (Scup < 2 || Scup > Lcup || Scup > 4079) {
-      printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
-      return false;
-    }
-    // modDcup (shall be done before the creation of state_VLC instance)
-    Dcup[Lcup - 1] = 0xFF;
-    Dcup[Lcup - 2] |= 0x0F;
-    const int32_t Pcup = static_cast<int32_t>(Lcup - Scup);
-    //    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
-    //    state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
-    //    state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
-    //    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
 
     ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
     if (num_ht_passes > 1) {
