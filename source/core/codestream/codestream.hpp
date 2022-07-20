@@ -100,35 +100,37 @@ class buf_chain {
   size_t node_pos;
   size_t pos;
   uint32_t total_length;
-  uint32_t current_length;
-  uint32_t num_nodes;
+
+  std::vector<uint8_t *> node_buf;
   std::vector<uint32_t> node_length;
+  uint32_t num_nodes;
+
   uint8_t *current_buf;
+  uint32_t current_length;
   uint8_t tmp_byte;
   uint8_t last_byte;
   uint8_t bits;
-  std::vector<uint8_t *> node_buf;
 
  public:
   buf_chain()
       : node_pos(0),
         pos(0),
         total_length(0),
-        current_length(0),
-        num_nodes(0),
+        node_buf({}),
         node_length({}),
+        num_nodes(0),
         current_buf(nullptr),
+        current_length(0),
         tmp_byte(0),
         last_byte(0),
-        bits(0),
-        node_buf({}) {}
+        bits(0) {}
   explicit buf_chain(uint32_t num)
       : node_pos(0),
         pos(0),
         total_length(0),
-        current_length(0),
         num_nodes(num),
         current_buf(nullptr),
+        current_length(0),
         tmp_byte(0),
         last_byte(0),
         bits(0) {
