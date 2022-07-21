@@ -456,7 +456,7 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   *((int64_t *)sigma_n) =
       (int64_t)_mm_extract_epi32(v_u8_out, 0) + ((int64_t)(_mm_extract_epi32(v_u8_out, 1)) << 32);
   #else
-  _mm_cvtsi128_si64x(v_u8_out);
+  *((int64_t *)sigma_n) = _mm_cvtsi128_si64x(v_u8_out);
   #endif
   rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
   rho_q[1] = static_cast<uint8_t>(sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3));
