@@ -30,7 +30,7 @@
 
 // MARK: j2c_src_memory -
 void j2c_src_memory::alloc_memory(uint32_t length) {
-  buf = MAKE_UNIQUE<uint8_t[]>(length);
+  buf = static_cast<uint8_t *>(malloc(sizeof(uint8_t) * length));  // MAKE_UNIQUE<uint8_t[]>(length);
   pos = 0;
   len = length;
 }
@@ -46,7 +46,7 @@ uint8_t j2c_src_memory::get_byte() {
 }
 
 int j2c_src_memory::get_N_byte(uint8_t *out, uint32_t length) {
-  memcpy(out, buf.get() + pos, length);
+  memcpy(out, buf + pos, length);
   pos += length;
   //  for (unsigned long i = 0; i < length; i++) {
   //    out[i] = get_byte();

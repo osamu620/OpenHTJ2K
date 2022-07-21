@@ -47,7 +47,8 @@ class j2c_source_base {
 
 class j2c_src_memory : public j2c_source_base {
  private:
-  std::unique_ptr<uint8_t[]> buf;
+  //  std::unique_ptr<uint8_t[]> buf;
+  uint8_t *buf;
   uint32_t pos;
   uint32_t len;
 
@@ -57,11 +58,14 @@ class j2c_src_memory : public j2c_source_base {
     pos = 0;
     len = 0;
   }
+  ~j2c_src_memory() {
+    if (buf != nullptr) free(buf);
+  }
   void alloc_memory(uint32_t length);
   uint8_t get_byte() override;
   int get_N_byte(uint8_t *buf, uint32_t length) override;
   uint16_t get_word() override;
-  uint8_t *get_buf_pos() { return (buf.get() + pos); }
+  uint8_t *get_buf_pos() { return (buf + pos); }
   int rewind_2bytes();
   int forward_Nbytes(uint32_t N);
 };
