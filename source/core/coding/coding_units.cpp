@@ -1542,20 +1542,21 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
   float child_ranges[32][4] = {{0}};
   float normalization       = 1.0;
   uint8_t normalizing_shift = 0;
-  uint8_t nb;
+  uint8_t nb, r, b;
   uint8_t nshift[32] = {0};
-
-  for (uint8_t r = static_cast<uint8_t>(NL - reduce_NL); r > 0; --r) {
-    uint64_t d = static_cast<uint64_t>(1 << (NL - r));
-    const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
-                              static_cast<uint32_t>(ceil_int(pos0.y, d)));
-    const element_siz respos1(static_cast<uint32_t>(ceil_int(pos1.x, d)),
-                              static_cast<uint32_t>(ceil_int(pos1.y, d)));
-    nb = static_cast<uint8_t>(NL - r + 1);
+  uint32_t d;
+  element_siz log2PP, PP, respos0, respos1;
+  for (r = static_cast<uint8_t>(NL - reduce_NL); r > 0; --r) {
+    d         = static_cast<uint32_t>(1 << (NL - r));
+    respos0.x = static_cast<uint32_t>(ceil_int(pos0.x, d));
+    respos0.y = static_cast<uint32_t>(ceil_int(pos0.y, d));
+    respos1.x = static_cast<uint32_t>(ceil_int(pos1.x, d));
+    respos1.y = static_cast<uint32_t>(ceil_int(pos1.y, d));
+    nb        = static_cast<uint8_t>(NL - r + 1);
     find_child_ranges(tmp_ranges, normalizing_shift, normalization, nb, respos0.x, respos1.x, respos0.y,
                       respos1.y);
     nshift[r] = normalizing_shift;
-    for (uint8_t b = 0; b < 4; ++b) {
+    for (b = 0; b < 4; ++b) {
       child_ranges[r][b] = tmp_ranges[b];
     }
   }
@@ -1566,14 +1567,15 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
 #endif
-  for (uint8_t r = 0; r <= NL; r++) {
-    uint64_t d = static_cast<uint64_t>(1 << (NL - r));
-    const element_siz respos0(static_cast<uint32_t>(ceil_int(pos0.x, d)),
-                              static_cast<uint32_t>(ceil_int(pos0.y, d)));
-    const element_siz respos1(static_cast<uint32_t>(ceil_int(pos1.x, d)),
-                              static_cast<uint32_t>(ceil_int(pos1.y, d)));
-    const element_siz log2PP = get_precinct_size(r);
-    const element_siz PP(1U << log2PP.x, 1U << log2PP.y);
+  for (r = 0; r <= NL; r++) {
+    d                  = static_cast<uint32_t>(1 << (NL - r));
+    respos0.x          = static_cast<uint32_t>(ceil_int(pos0.x, d));
+    respos0.y          = static_cast<uint32_t>(ceil_int(pos0.y, d));
+    respos1.x          = static_cast<uint32_t>(ceil_int(pos1.x, d));
+    respos1.y          = static_cast<uint32_t>(ceil_int(pos1.y, d));
+    log2PP             = get_precinct_size(r);
+    PP.x               = 1U << log2PP.x;
+    PP.y               = 1U << log2PP.y;
     const uint32_t npw = (respos1.x > respos0.x) ? ceil_int(respos1.x, PP.x) - respos0.x / PP.x : 0;
     const uint32_t nph = (respos1.y > respos0.y) ? ceil_int(respos1.y, PP.y) - respos0.y / PP.y : 0;
 
