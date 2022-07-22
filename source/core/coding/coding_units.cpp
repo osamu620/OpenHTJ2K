@@ -182,18 +182,13 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       Lblock(0),
       already_included(false),
       refsegment(false) {
-  //  block_states = static_cast<uint8_t *>(aligned_mem_alloc((size.x + 2) * (size.y + 2), 32));
-  //  sample_buf   = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * size.x * size.y, 32));
-  //  memset(sample_buf, 0, sizeof(int32_t) * size.x * size.y);
-  //  memset(block_states, 0, (size.x + 2) * (size.y + 2));
-  const uint32_t QWx2 = round_up(size.x, 8U);  // size.x + size.x % 2;
-  const uint32_t QHx2 = round_up(size.y, 8U);  // size.y + size.y % 2;
-  //  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(size.x + 2) * (size.y + 2));
-  //  memset(block_states.get(), 0, static_cast<size_t>(size.x + 2) * (size.y + 2));
-  blksampl_stride = QWx2;
-  blkstate_stride = QWx2 + 2;
-  block_states    = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
-  memset(block_states.get(), 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
+  const uint32_t QWx2 = round_up(size.x, 8U);  // TODO: needs padding?
+  const uint32_t QHx2 = round_up(size.y, 8U);  // TODO: needs padding?
+  blksampl_stride     = QWx2;
+  blkstate_stride     = QWx2 + 2;
+  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
+  //  memset(block_states.get(), 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
+
   //  sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
   //  memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
   this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
@@ -1790,14 +1785,15 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
 
   // determine the location of the packet header
   this->packet_header = nullptr;
+  buf_chain *ppp;
   if (main_header.get_ppm_header() != nullptr) {
     assert(ppt_header == nullptr);
-    sbst_packet_header = *(main_header.get_ppm_header());
+    ppp = main_header.get_ppm_header();
     // TODO: this implementation may not be enough because this does not
     // consider "tile-part". MARK: find beginning of the packet header for a
     // tile!
-    sbst_packet_header.activate(this->index);
-    packet_header = &sbst_packet_header;  // main_header.get_ppm_header();
+    ppp->activate(this->index);
+    packet_header = ppp;  // main_header.get_ppm_header();
   } else if (ppt_header != nullptr) {
     assert(main_header.get_ppm_header() == nullptr);
     packet_header = ppt_header.get();

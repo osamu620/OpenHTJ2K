@@ -116,18 +116,18 @@ class buf_chain {
   uint8_t bits;
 
  public:
-  buf_chain()
-      : node_pos(0),
-        pos(0),
-        total_length(0),
-        node_buf({}),
-        node_length({}),
-        num_nodes(0),
-        current_buf(nullptr),
-        current_length(0),
-        tmp_byte(0),
-        last_byte(0),
-        bits(0) {}
+  buf_chain() = default;
+  //      : node_pos(0),
+  //        pos(0),
+  //        total_length(0),
+  //        node_buf({}),
+  //        node_length({}),
+  //        num_nodes(0),
+  //        current_buf(nullptr),
+  //        current_length(0),
+  //        tmp_byte(0),
+  //        last_byte(0),
+  //        bits(0) {}
   explicit buf_chain(uint32_t num)
       : node_pos(0),
         pos(0),
@@ -143,6 +143,8 @@ class buf_chain {
       node_length.push_back(0);
     }
   }
+  buf_chain operator=(buf_chain) = delete;
+  buf_chain(buf_chain &&)        = default;
   buf_chain &operator=(const buf_chain &bc) {
     if (this != &bc) {
       this->total_length   = bc.total_length;
