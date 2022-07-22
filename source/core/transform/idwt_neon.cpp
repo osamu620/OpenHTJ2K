@@ -367,10 +367,10 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       for (int32_t col = 0; col < simdlen; col += 16) {
         vin00 = vld1q_s16(&buf[n - 1][col]);
         vin01 = vld1q_s16(&buf[n - 1][col + 8]);
-        vin10 = vld1q_s16(&buf[n + 1][col]);
-        vin11 = vld1q_s16(&buf[n + 1][col + 8]);
         vout0 = vld1q_s16(&buf[n][col]);
         vout1 = vld1q_s16(&buf[n][col + 8]);
+        vin10 = vld1q_s16(&buf[n + 1][col]);
+        vin11 = vld1q_s16(&buf[n + 1][col + 8]);
         vout0 -= vrshrq_n_s16(vhaddq_s16(vin00, vin10), 1);
         vout1 -= vrshrq_n_s16(vhaddq_s16(vin01, vin11), 1);
         vst1q_s16(&buf[n][col], vout0);
@@ -386,10 +386,10 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       for (int32_t col = 0; col < simdlen; col += 16) {
         vin00 = vld1q_s16(&buf[n][col]);
         vin01 = vld1q_s16(&buf[n][col + 8]);
-        vin10 = vld1q_s16(&buf[n + 2][col]);
-        vin11 = vld1q_s16(&buf[n + 2][col + 8]);
         vout0 = vld1q_s16(&buf[n + 1][col]);
         vout1 = vld1q_s16(&buf[n + 1][col + 8]);
+        vin10 = vld1q_s16(&buf[n + 2][col]);
+        vin11 = vld1q_s16(&buf[n + 2][col + 8]);
         vout0 += vhaddq_s16(vin00, vin10);
         vout1 += vhaddq_s16(vin01, vin11);
         vst1q_s16(&buf[n + 1][col], vout0);

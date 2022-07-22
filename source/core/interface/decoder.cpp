@@ -137,7 +137,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
 
   //  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
   std::vector<j2k_tile> tileSet;
-  tileSet.resize(numTiles.x * numTiles.y);
+  tileSet.resize(static_cast<size_t>(numTiles.x) * numTiles.y);
   for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
     tileSet[i].dec_init(i, main_header, reduce_NL);
   }
