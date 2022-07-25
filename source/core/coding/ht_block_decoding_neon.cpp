@@ -698,20 +698,21 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const auto vROIshift = vdupq_n_s32(ROIshift);
 
   // vdst0, vdst1 cannot be auto for gcc
-  int32x4_t v0, v1, s0, s1, vROImask, vnegmask, vdst0, vdst1;
+  int32x4_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1;
+  vmagmask = vdupq_n_s32(INT32_MAX);
   if (this->transformation) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
-      for (; len >= 8; len -= 8) {
+      for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
         v0 = vld1q_s32(val);
         v1 = vld1q_s32(val + 4);
-        s0 = v0;
-        s1 = v1;
-        v0 = v0 & INT32_MAX;
-        v1 = v1 & INT32_MAX;
+        s0 = vshrq_n_s32(v0, 31);  // generate a mask for negative values
+        s1 = vshrq_n_s32(v1, 31);  // generate a mask for negative values
+        v0 = vandq_s32(v0, vmagmask);
+        v1 = vandq_s32(v1, vmagmask);
         // upshift background region, if necessary
         vROImask = vandq_s32(v0, vmask);
         vROImask = vceqzq_s32(vROImask);
@@ -722,14 +723,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         vROImask &= vROIshift;
         v1 = vshlq_s32(v1, vROImask - pLSB);
         // convert values from sign-magnitude form to two's complement one
-        vnegmask = vcltzq_s32(s0);
-        //        vposmask = ~vnegmask;
-        //        vdst0    = (vnegq_s32(v0) & vnegmask) | (v0 & vposmask);
-        vdst0    = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v0), v0);
-        vnegmask = vcltzq_s32(s1);
-        //        vposmask = ~vnegmask;
-        //        vdst1 = (vnegq_s32(v1) & vnegmask) | (v1 & vposmask);
-        vdst1 = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v1), v1);
+        vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
+        vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
         val += 8;
         dst += 8;
@@ -769,13 +764,13 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
-      for (; len >= 8; len -= 8) {
+      for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
         v0 = vld1q_s32(val);
         v1 = vld1q_s32(val + 4);
-        s0 = v0;
-        s1 = v1;
-        v0 = v0 & INT32_MAX;
-        v1 = v1 & INT32_MAX;
+        s0 = vshrq_n_s32(v0, 31);  // generate a mask for negative values
+        s1 = vshrq_n_s32(v1, 31);  // generate a mask for negative values
+        v0 = vandq_s32(v0, vmagmask);
+        v1 = vandq_s32(v1, vmagmask);
         // upshift background region, if necessary
         vROImask = vandq_s32(v0, vmask);
         vROImask = vceqzq_s32(vROImask);
@@ -792,16 +787,10 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         v0 = vmulq_s32(v0, vdupq_n_s32(scale));
         v1 = vmulq_s32(v1, vdupq_n_s32(scale));
         // downshift and convert values from sign-magnitude form to two's complement one
-        v0       = (v0 + (1 << (downshift - 1))) >> downshift;
-        v1       = (v1 + (1 << (downshift - 1))) >> downshift;
-        vnegmask = vcltzq_s32(s0);
-        //        vposmask = ~vnegmask;
-        //        vdst0    = (vnegq_s32(v0) & vnegmask) | (v0 & vposmask);
-        vdst0    = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v0), v0);
-        vnegmask = vcltzq_s32(s1);
-        //        vposmask = ~vnegmask;
-        //        vdst1    = (vnegq_s32(v1) & vnegmask) | (v1 & vposmask);
-        vdst1 = vbslq_s32(vreinterpretq_u32_s32(vnegmask), vnegq_s32(v1), v1);
+        v0    = (v0 + (1 << (downshift - 1))) >> downshift;
+        v1    = (v1 + (1 << (downshift - 1))) >> downshift;
+        vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
+        vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
         val += 8;
         dst += 8;
