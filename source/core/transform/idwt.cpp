@@ -96,12 +96,9 @@ void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
 
 static void idwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, const int32_t left, const int32_t right,
                              const int32_t i0, const int32_t i1, const uint8_t transformation) {
-  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_PADDING);
-  //  auto *buf          = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   idwt_1d_filtr_fixed[transformation](buf, left, i0, i1);
   memcpy(in, buf + left, sizeof(sprec_t) * (static_cast<size_t>(i1 - i0)));
-  //  aligned_mem_free(buf);
 }
 
 static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
@@ -125,12 +122,9 @@ static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
     const int32_t len = u1 - u0 + left + right;
     auto *Yext        = static_cast<sprec_t *>(aligned_mem_alloc(
                sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
-    //#pragma omp parallel for
     for (int32_t row = 0; row < v1 - v0; ++row) {
-      // idwt_1d_sr_fixed(Yext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
       idwt_1d_sr_fixed(Yext, in, left, right, u0, u1, transformation);
       in += stride;
-      //      out += stride;
     }
     aligned_mem_free(Yext);
   }
@@ -476,11 +470,8 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
                       uint8_t normalizing_upshift) {
   const int32_t buf_length = (u1 - u0) * (v1 - v0);
   sprec_t *src             = nextLL;
-  //  auto *dst =
-  //      static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(buf_length), 32));
   idwt_2d_interleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1);
   idwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation);
-  //  aligned_mem_free(dst);
   idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1);
 
   // scaling for 16bit width fixed-point representation
