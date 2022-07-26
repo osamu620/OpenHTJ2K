@@ -2347,7 +2347,7 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
   }
 }
 
-void j2k_tile::write_packets(j2c_destination_base &outbuf) {
+void j2k_tile::write_packets(j2c_dst_memory &outbuf) {
   for (size_t i = 0; i < this->num_tile_part; ++i) {
     j2k_tile_part *tp = this->tile_part[i].get();
     // set tile-part length

@@ -115,7 +115,7 @@ SIZ_marker::SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t
   is_set = true;
 }
 
-int SIZ_marker::write(j2c_destination_base &dst) {
+int SIZ_marker::write(j2c_dst_memory &dst) {
   if (!is_set) {
     printf("ERROR: illegal attempt to call write() for SIZ_marker not yet set.\n");
     throw std::exception();
@@ -258,7 +258,7 @@ void CAP_marker::set_Pcap(uint8_t part) {
   is_set = true;
 }
 
-int CAP_marker::write(j2c_destination_base &dst) {
+int CAP_marker::write(j2c_dst_memory &dst) {
   assert(is_set == true);
   dst.put_word(code);
   dst.put_word(Lmar);
@@ -367,7 +367,7 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
   is_set = true;
 }
 
-int COD_marker::write(j2c_destination_base &dst) {
+int COD_marker::write(j2c_dst_memory &dst) {
   assert(is_set == true);
   dst.put_word(code);
   dst.put_word(Lmar);
@@ -753,7 +753,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   is_set = true;
 }
 
-int QCD_marker::write(j2c_destination_base &dst) {
+int QCD_marker::write(j2c_dst_memory &dst) {
   assert(is_set == true);
   dst.put_word(code);
   dst.put_word(Lmar);
@@ -1094,7 +1094,7 @@ QCC_marker::QCC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   is_set = true;
 }
 
-int QCC_marker::write(j2c_destination_base &dst) {
+int QCC_marker::write(j2c_dst_memory &dst) {
   assert(is_set == true);
   dst.put_word(code);
   dst.put_word(Lmar);
@@ -1409,7 +1409,7 @@ COM_marker::COM_marker(std::string com, bool is_text) : j2k_marker_io_base(_COM)
   is_set = true;
 }
 
-int COM_marker::write(j2c_destination_base &dst) {
+int COM_marker::write(j2c_dst_memory &dst) {
   assert(is_set == true);
   dst.put_word(code);
   dst.put_word(Lmar);
@@ -1463,7 +1463,7 @@ int SOT_marker::set_tile_part_length(uint32_t length) {
   return EXIT_SUCCESS;
 }
 
-int SOT_marker::write(j2c_destination_base &dst) {
+int SOT_marker::write(j2c_dst_memory &dst) {
   assert(is_set == true);
   dst.put_word(code);
   dst.put_word(Lmar);
