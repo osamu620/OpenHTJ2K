@@ -474,7 +474,7 @@ class j2k_tile : public j2k_tile_base {
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination
-  void write_packets(j2c_destination_base &outbuf);
+  void write_packets(j2c_dst_memory &outbuf);
 
   // getters
   [[maybe_unused]] [[nodiscard]] uint16_t get_numlayers() const { return this->numlayers; }

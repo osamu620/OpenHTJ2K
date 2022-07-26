@@ -86,7 +86,7 @@ class SIZ_marker : public j2k_marker_io_base {
   SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t YO, uint32_t XT, uint32_t YT,
              uint32_t XTO, uint32_t YTO, uint16_t C, std::vector<uint8_t> &S, std::vector<uint8_t> &XR,
              std::vector<uint8_t> &YR, bool needCAP);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
   bool is_signed(uint16_t c);
   uint8_t get_bitdepth(uint16_t c);
   void get_image_size(element_siz &siz) const;
@@ -115,7 +115,7 @@ class CAP_marker : public j2k_marker_io_base {
 
   [[maybe_unused]] uint32_t get_Pcap() const;
   uint16_t get_Ccap(uint8_t n);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
 };
 
 /********************************************************************************
@@ -128,7 +128,7 @@ class CPF_marker : public j2k_marker_io_base {
  public:
   CPF_marker();
   explicit CPF_marker(j2c_src_memory &in);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
 };
 
 /********************************************************************************
@@ -146,7 +146,7 @@ class COD_marker : public j2k_marker_io_base {
              uint16_t number_of_layers, uint8_t use_color_trafo, uint8_t dwt_levels, uint8_t log2cblksizex,
              uint8_t log2cblksizey, uint8_t codeblock_style, uint8_t reversible_flag,
              std::vector<uint8_t> log2PPx, std::vector<uint8_t> log2PPy);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
   bool is_maximum_precincts() const;
   bool is_use_SOP() const;
   bool is_use_EPH() const;
@@ -210,7 +210,7 @@ class QCD_marker : public j2k_marker_io_base {
   explicit QCD_marker(j2c_src_memory &in);
   QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t transformation, bool is_derived,
              uint8_t RI, uint8_t use_ycc, double basestep = 1.0 / 256.0, uint8_t qfactor = 0xFF);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
   uint8_t get_quantization_style() const;
   uint8_t get_exponents(uint8_t nb);
   uint16_t get_mantissas(uint8_t nb);
@@ -235,7 +235,7 @@ class QCC_marker : public j2k_marker_io_base {
              uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc, uint8_t qfactor,
              uint8_t chroma_format);
   QCC_marker(j2c_src_memory &in, uint16_t Csiz);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
   uint16_t get_component_index() const;
   uint8_t get_quantization_style() const;
   uint8_t get_exponents(uint8_t nb);
@@ -331,7 +331,7 @@ class COM_marker : public j2k_marker_io_base {
  public:
   explicit COM_marker(j2c_src_memory &in);
   COM_marker(std::string com, bool is_text);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
 };
 
 /********************************************************************************
@@ -349,7 +349,7 @@ class SOT_marker : public j2k_marker_io_base {
   explicit SOT_marker(j2c_src_memory &in);
   int set_SOT_marker(uint16_t tile_index, uint8_t tile_part_index, uint8_t num_tile_parts);
   int set_tile_part_length(uint32_t length);
-  int write(j2c_destination_base &dst);
+  int write(j2c_dst_memory &dst);
   uint16_t get_tile_index() const;
   uint32_t get_tile_part_length() const;
   uint8_t get_tile_part_index() const;

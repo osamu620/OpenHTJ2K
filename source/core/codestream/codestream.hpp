@@ -36,16 +36,7 @@
 #include <memory>
 #include "utils.hpp"
 
-class j2c_source_base {
- public:
-  virtual ~j2c_source_base()                            = default;
-  virtual uint8_t get_byte()                            = 0;
-  virtual int get_N_byte(uint8_t *buf, uint32_t length) = 0;
-  virtual uint16_t get_word()                           = 0;
-  //	virtual uint32_t get_dword()   = 0;
-};
-
-class j2c_src_memory : public j2c_source_base {
+class j2c_src_memory {
  private:
   //  std::unique_ptr<uint8_t[]> buf;
   uint8_t *buf;
@@ -62,25 +53,25 @@ class j2c_src_memory : public j2c_source_base {
     if (buf != nullptr) free(buf);
   }
   void alloc_memory(uint32_t length);
-  uint8_t get_byte() override;
-  int get_N_byte(uint8_t *buf, uint32_t length) override;
-  uint16_t get_word() override;
+  uint8_t get_byte();
+  int get_N_byte(uint8_t *buf, uint32_t length);
+  uint16_t get_word();
   uint8_t *get_buf_pos() { return (buf + pos); }
   int rewind_2bytes();
   int forward_Nbytes(uint32_t N);
 };
 
-class j2c_destination_base {
- public:
-  virtual ~j2c_destination_base()                            = default;
-  virtual int32_t put_byte(uint8_t byte)                     = 0;
-  virtual int32_t put_word(uint16_t word)                    = 0;
-  virtual int32_t put_dword(uint32_t put_dword)              = 0;
-  virtual int32_t put_N_bytes(uint8_t *src, uint32_t length) = 0;
-  virtual int32_t flush(std::ofstream &dst)                  = 0;
-};
+// class j2c_destination_base {
+//  public:
+//   virtual ~j2c_destination_base()                            = default;
+//   virtual int32_t put_byte(uint8_t byte)                     = 0;
+//   virtual int32_t put_word(uint16_t word)                    = 0;
+//   virtual int32_t put_dword(uint32_t put_dword)              = 0;
+//   virtual int32_t put_N_bytes(uint8_t *src, uint32_t length) = 0;
+//   virtual int32_t flush(std::ofstream &dst)                  = 0;
+// };
 
-class j2c_dst_memory : public j2c_destination_base {
+class j2c_dst_memory {
  private:
   std::vector<uint8_t> buf;
   uint32_t pos;
@@ -88,12 +79,12 @@ class j2c_dst_memory : public j2c_destination_base {
 
  public:
   j2c_dst_memory() : pos(0), is_flushed(false) {}
-  ~j2c_dst_memory() override = default;
-  int32_t put_byte(uint8_t byte) override;
-  int32_t put_word(uint16_t word) override;
-  int32_t put_dword(uint32_t dword) override;
-  int32_t put_N_bytes(uint8_t *src, uint32_t length) override;
-  int32_t flush(std::ofstream &dst) override;
+  ~j2c_dst_memory() = default;
+  int32_t put_byte(uint8_t byte);
+  int32_t put_word(uint16_t word);
+  int32_t put_dword(uint32_t dword);
+  int32_t put_N_bytes(uint8_t *src, uint32_t length);
+  int32_t flush(std::ofstream &dst);
   int32_t flush(std::vector<uint8_t> *obuf);
   [[nodiscard]] size_t get_length() const;
   [[maybe_unused]] void print_bytes();
