@@ -54,12 +54,12 @@ int32_t j2c_dst_memory::put_dword(uint32_t dword) {
 
 int32_t j2c_dst_memory::put_N_bytes(uint8_t *src, uint32_t length) {
   //// below is not efficient on Linux
-  //  size_t cur_size = buf.size();
-  //  buf.resize(cur_size + length);
-  //  memcpy(buf.data() + cur_size, src, length);
-  for (unsigned long i = 0; i < length; i++) {
-    buf.push_back(src[i]);
-  }
+  size_t cur_size = buf.size();
+  buf.resize(cur_size + length);
+  memcpy(buf.data() + cur_size, src, length);
+  //  for (unsigned long i = 0; i < length; i++) {
+  //    buf.push_back(src[i]);
+  //  }
   return EXIT_SUCCESS;
 }
 
