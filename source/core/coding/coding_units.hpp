@@ -249,7 +249,7 @@ class j2k_resolution : public j2k_region {
   // unique pointer to subbands
   std::unique_ptr<std::unique_ptr<j2k_subband>[]> subbands;
   // nominal ranges of subbands
-  float child_ranges[4];
+  float child_ranges[4]{};
 
  public:
   // number of subbands

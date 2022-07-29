@@ -53,6 +53,7 @@ int32_t j2c_dst_memory::put_dword(uint32_t dword) {
 }
 
 int32_t j2c_dst_memory::put_N_bytes(uint8_t *src, uint32_t length) {
+  // TODO: investigate why memcpy is not efficient for non APPLE m1 platforms
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON) && defined(__APPLE__)
   buf.resize(pos + length);
   memcpy(buf.data() + pos, src, length);
