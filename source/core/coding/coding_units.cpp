@@ -2935,9 +2935,9 @@ uint8_t *j2k_tile::encode() {
         cr->scale();
         fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
                          v0, v1, transformation);
-        HL->quantize();
-        LH->quantize();
-        HH->quantize();
+        //        HL->quantize();
+        //        LH->quantize();
+        //        HH->quantize();
       }
       // encode codeblocks in HL or LH or HH
       t1_encode(cr, ROIshift);
@@ -2947,7 +2947,7 @@ uint8_t *j2k_tile::encode() {
     }
 
     j2k_subband *LL = cr->access_subband(0);
-    LL->quantize();
+    //    LL->quantize();
     // encode codeblocks in LL
     t1_encode(cr, ROIshift);
   }  // end of component loop
