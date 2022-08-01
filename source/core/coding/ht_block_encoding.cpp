@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <cmath>
 #include "coding_units.hpp"
 #include "ht_block_encoding.hpp"
 #include "coding_local.hpp"
@@ -44,64 +45,111 @@
 //#define ENABLE_SP_MR
 
 void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
+  float fscale = 1.0f / this->stepsize;
+  fscale /= (1 << (FRACBITS));
+  // Set fscale = 1.0 in lossless coding instead of skipping quantization to avoid if-branch in SIMD
+  // processing
+  if (transformation) fscale = 1.0f;
+  float32x4_t vscale    = vdupq_n_f32(fscale);
   const uint32_t height = this->size.y;
-  //  const uint32_t width  = this->size.x + (this->size.x % 2);
   const uint32_t stride = this->band_stride;
   const int32_t pshift  = (refsegment) ? 1 : 0;
-  const int32_t pLSB    = (1 << (pshift - 1));
+  const int32_t pLSB    = (refsegment) ? 2 : 1;
 
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
-    sprec_t *const sp  = this->i_samples + i * stride;
-    int32_t *const dp  = this->sample_buf.get() + i * blksampl_stride;
+    sprec_t *sp        = this->i_samples + i * stride;
+    int32_t *dp        = this->sample_buf.get() + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states.get() + block_index;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     // vetorized for ARM NEON
-    uint16x8_t vpLSB = vdupq_n_u16((uint16_t)pLSB);
-    int16x8_t vone   = vdupq_n_s16(1);
-    auto vzero       = vdupq_n_s16(0);
+    auto vzero      = vdupq_n_s32(0);
+    int32x4_t vpLSB = vdupq_n_s32(pLSB);
+    int32x4_t vone  = vdupq_n_s32(1);
+
     // simd
-    int16_t simdlen = round_down(static_cast<int16_t>(this->size.x), 8);
-    for (int16_t j = 0; j < simdlen; j += 8) {
-      int16x8_t coeff16   = vld1q_s16(sp + j);
-      uint8x8_t vblkstate = vget_low_u8(vld1q_u8(dstblk + j));
-      uint16x8_t vsign    = vcltzq_s16(coeff16) >> 15;
-      uint8x8_t vsmag     = vmovn_u16(vandq_s16(coeff16, vpLSB));
-      uint8x8_t vssgn     = vmovn_u16(vsign);
-      vblkstate |= vsmag << SHIFT_SMAG;
-      vblkstate |= vssgn << SHIFT_SSGN;
-      int16x8_t vabsmag     = (vabsq_s16(coeff16) & 0x7FFF) >> pshift;
-      vzero                 = vorrq_s16(vzero, vabsmag);
-      int16x8_t vmasked_one = (vceqzq_s16(vabsmag) ^ 0xFFFF) & vone;
-      vblkstate |= vmovn_u16(vmasked_one);
-      vst1_u8(dstblk + j, vblkstate);
-      vabsmag -= vmasked_one;
-      vabsmag <<= vmasked_one;
-      vabsmag += vsign * vmasked_one;
-      int32x4_t coeff32     = vreinterpretq_s32_s16(vabsmag);
-      int32x4_t coeff32low  = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(coeff32)));
-      int32x4_t coeff32high = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(coeff32)));
-      vst1q_s32(dp + j, coeff32low);
-      vst1q_s32(dp + j + 4, coeff32high);
+    int16_t len = static_cast<int16_t>(this->size.x);
+    for (; len >= 8; len -= 8) {
+      int16x8_t coeff16 = vld1q_s16(sp);
+      int32x4_t v0      = vmovl_s16(vget_low_s16(coeff16));
+      int32x4_t v1      = vmovl_high_s16(coeff16);
+      // Quantization
+      v0 = vcvtq_s32_f32(vmulq_f32(vcvtq_f32_s32(v0), vscale));
+      v1 = vcvtq_s32_f32(vmulq_f32(vcvtq_f32_s32(v1), vscale));
+      // Take sign bit
+      int32x4_t s0 = vandq_s32(vshrq_n_s32(v0, 31), vone);
+      int32x4_t s1 = vandq_s32(vshrq_n_s32(v1, 31), vone);
+      // Absolute value
+      v0           = vabsq_s32(v0);
+      v1           = vabsq_s32(v1);
+      int32x4_t z0 = vandq_s32(v0, vpLSB);  // only for SigProp and MagRef
+      int32x4_t z1 = vandq_s32(v1, vpLSB);  // only for SigProp and MagRef
+
+      v0              = v0 >> pshift;
+      v1              = v1 >> pshift;
+      int32x4_t mask0 = vcgtzq_s32(v0);
+      int32x4_t mask1 = vcgtzq_s32(v1);
+      vzero           = vorrq_s32(vzero, v0);
+      vzero           = vorrq_s32(vzero, v1);
+
+      // Convert two's compliment to MagSgn form
+      int32x4_t vone0 = vandq_s32(mask0, vone);
+      int32x4_t vone1 = vandq_s32(mask1, vone);
+      v0              = vsubq_u32(v0, vone0);
+      v1              = vsubq_u32(v1, vone1);
+      v0              = vshlq_n_s32(v0, 1);
+      v1              = vshlq_n_s32(v1, 1);
+      v0              = vaddq_s32(v0, vandq_s32(s0, mask0));
+      v1              = vaddq_s32(v1, vandq_s32(s1, mask1));
+      // Store
+      vst1q_s32(dp, v0);
+      vst1q_s32(dp + 4, v1);
+      sp += 8;
+      dp += 8;
+      uint8x8_t vblkstate = vdup_n_u8(0);
+      vblkstate |= vmovn_s16(vandq_s16(vcombine_s16(vmovn_s32(mask0), vmovn_s32(mask1)), vdupq_n_s16(1)));
+      // bits in lowest bitplane, only for SigProp and MagRef TODO: test this line
+      vblkstate |= vmovn_s16(
+          vshlq_n_s16(vandq_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), vdupq_n_s16(1)), SHIFT_SMAG));
+      // sign-bits, only for SigProp and MagRef  TODO: test this line
+      vblkstate |= vmovn_s16(
+          vshlq_n_s16(vandq_s16(vcombine_s16(vmovn_s32(s0), vmovn_s32(s1)), vdupq_n_s16(1)), SHIFT_SSGN));
+      //      uint8x8_t vblkstate = vget_low_u8(vld1q_u8(dstblk + j));
+      //      uint16x8_t vsign = vcltzq_s16(coeff16) >> 15;
+      //      uint8x8_t vsmag  = vmovn_u16(vandq_s16(coeff16, vpLSB));
+      //      uint8x8_t vssgn  = vmovn_u16(vsign);
+      //      vblkstate |= vsmag << SHIFT_SMAG;
+      //      vblkstate |= vssgn << SHIFT_SSGN;
+      //      int16x8_t vabsmag     = (vabsq_s16(coeff16) & 0x7FFF) >> pshift;
+      //      vzero                 = vorrq_s16(vzero, vabsmag);
+      //      int16x8_t vmasked_one = (vceqzq_s16(vabsmag) ^ 0xFFFF) & vone;
+      //      vblkstate |= vmovn_u16(vmasked_one);
+
+      vst1_u8(dstblk, vblkstate);
+      dstblk += 8;
     }
     or_val |= static_cast<unsigned int>(vmaxvq_s16(vzero));
     // remaining
-    for (int16_t j = simdlen; j < static_cast<int16_t>(this->size.x); ++j) {
-      int32_t temp  = sp[j];
+    for (; len > 0; --len) {
+      int32_t temp;
+      temp          = static_cast<int32_t>(round(static_cast<float>(sp[0]) * fscale));
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-      dstblk[j] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
-      dstblk[j] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
+      dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
+      dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
       if (temp) {
         or_val |= 1;
-        dstblk[j] |= 1;
+        dstblk[0] |= 1;
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        dp[j] = temp;
+        dp[0] = temp;
       }
+      ++sp;
+      ++dp;
+      ++dstblk;
     }
 
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
@@ -112,8 +160,8 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     auto vabsmask  = _mm256_set1_epi16((int16_t)0x7FFF);
     auto vzero     = _mm256_setzero_si256();
     // simd
-    int32_t simdlen = round_down(static_cast<int32_t>(this->size.x), 16);
-    for (int32_t j = 0; j < simdlen; j += 16) {
+    int32_t len = round_down(static_cast<int32_t>(this->size.x), 16);
+    for (int32_t j = 0; j < len; j += 16) {
       auto coeff16 = _mm256_loadu_si256((__m256i *)(sp + j));
       // auto vsmag   = _mm256_and_si256(coeff16, vpLSB);
       auto vsign = _mm256_srli_epi16(_mm256_and_si256(coeff16, vsignmask), 15);
@@ -142,7 +190,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     }
     or_val |= !_mm256_testz_si256(vzero, vabsmask);
     // remaining
-    for (int32_t j = simdlen; j < static_cast<int32_t>(this->size.x); ++j) {
+    for (int32_t j = len; j < static_cast<int32_t>(this->size.x); ++j) {
       int32_t temp  = sp[j];
       uint32_t sign = (static_cast<uint32_t>(temp) & 0x80000000) >> 31;
       dstblk[j] |= static_cast<uint8_t>((temp & pLSB) << SHIFT_SMAG);
@@ -161,27 +209,27 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       block_index++;
     }
 #else
-    const uint32_t width = this->size.x + (this->size.x % 2);
-    for (uint16_t j = 0; j < width; ++j) {
-      int32_t temp  = sp[j];
+    int16_t len = static_cast<int16_t>(this->size.x);
+    for (; len > 0; --len) {
+      int32_t temp;
+      temp          = static_cast<int32_t>(round(static_cast<float>(sp[0]) * fscale));
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-      dstblk[j] |= (temp & pLSB) << SHIFT_SMAG;
-      dstblk[j] |= (sign >> 31) << SHIFT_SSGN;
+      dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
+      dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
       if (temp) {
         or_val |= 1;
-        dstblk[j] |= 1;
-        // convert sample value to MagSgn
-        //        temp = (temp < 0) ? -temp : temp;
-        //        temp &= 0x7FFFFFFF;
+        dstblk[0] |= 1;
         temp--;
         temp <<= 1;
-        temp += sign >> 31;
-        dp[j] = temp;
+        temp += static_cast<uint8_t>(sign >> 31);
+        dp[0] = temp;
       }
-      block_index++;
+      ++sp;
+      ++dp;
+      ++dstblk;
     }
 #endif
   }
