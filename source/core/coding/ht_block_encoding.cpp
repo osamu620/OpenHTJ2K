@@ -44,7 +44,9 @@
 //#define HTSIMD
 //#define ENABLE_SP_MR
 
-void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
+// Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
+void j2k_codeblock::quantize(uint32_t &or_val) {
+  // TODO: check the way to quantize in terms of precision and reconstruction quality
   float fscale = 1.0f / this->stepsize;
   fscale /= (1 << (FRACBITS));
   // Set fscale = 1.0 in lossless coding instead of skipping quantization
@@ -750,7 +752,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
-  block->set_MagSgn_and_sigma(or_val);
+  block->quantize(or_val);
 
   if (!or_val) {
     // nothing to do here because this codeblock is empty

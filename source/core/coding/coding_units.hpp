@@ -126,7 +126,7 @@ class j2k_codeblock : public j2k_region {
   void update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1, const int16_t &j2) const;
   void update_sign(const int8_t &val, const int16_t &j1, const int16_t &j2) const;
   [[nodiscard]] uint8_t get_sign(const int16_t &j1, const int16_t &j2) const;
-  void set_MagSgn_and_sigma(uint32_t &or_val);
+  void quantize(uint32_t &or_val);
   uint8_t calc_mbr(int16_t i, int16_t j, uint8_t causal_cond) const;
   void dequantize(uint8_t ROIshift) const;
 };
@@ -151,7 +151,6 @@ class j2k_subband : public j2k_region {
               uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta, float nominal_range,
               sprec_t *ibuf);
   ~j2k_subband();
-  void quantize();
 };
 
 /********************************************************************************

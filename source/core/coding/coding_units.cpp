@@ -1050,77 +1050,6 @@ j2k_subband::~j2k_subband() {
   }
 }
 
-// TODO: consider avoiding possible overflow with a very small Qstep value
-void j2k_subband::quantize() {
-  // if lossless, no quantization
-  if (this->transformation) {
-    return;
-  }
-  auto length = static_cast<int32_t>((this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y));
-  // The last two steps of the lifting version of 9x7 DWT filter are included as nominal_range.
-  // The delta is obtained by a step-size * nominal_range.
-  // Thus, the following fscale is taking the nominal range into account.
-  float fscale = 1.0f / this->delta;
-  fscale /= (1 << (FRACBITS));
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  const int32_t simdlen = round_down(length, 8);
-  for (int32_t n = 0; n < simdlen; n += 8) {
-    auto isrc    = vld1q_s16(this->i_samples + n);
-    auto isgn    = vcltzq_s16(isrc) | 0x01;
-    auto isrc32  = vreinterpretq_s32_s16(isrc);
-    auto isrc32l = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(isrc32)));
-    auto isrc32h = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(isrc32)));
-    auto fsrcl   = vcvtq_f32_s32(isrc32l);
-    auto fsrch   = vcvtq_f32_s32(isrc32h);
-    fsrcl *= vld1q_dup_f32(&fscale);
-    fsrch *= vld1q_dup_f32(&fscale);
-    auto imag = vcombine_s16(vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrcl))),
-                             vmovn_s32(vcvtq_s32_f32(vabsq_f32(fsrch))));
-    vst1q_s16(this->i_samples + n, imag * isgn);
-  }
-  for (int32_t n = simdlen; n < length; ++n) {
-    auto fval = static_cast<float>(this->i_samples[n]);
-    fval *= fscale;
-    // fval may exceed when sprec_t == int16_t
-    this->i_samples[n] = static_cast<sprec_t>(floorf(fabsf(fval)));
-    if (fval < 0.0) {
-      this->i_samples[n] *= -1;
-    }
-  }
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  const int32_t simdlen = round_down(length, 16);
-  for (int32_t n = 0; n < simdlen; n += 16) {
-    auto isrc    = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
-    auto fsrc32l = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 0)));
-    auto fsrc32h = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(isrc, 1)));
-    auto vfscale = _mm256_set1_ps(fscale);
-    auto isrc32l = _mm256_cvttps_epi32(_mm256_mul_ps(fsrc32l, vfscale));
-    auto isrc32h = _mm256_cvttps_epi32(_mm256_mul_ps(fsrc32h, vfscale));
-    auto tmp0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(isrc32l, isrc32h), 0xD8);
-    _mm256_storeu_si256((__m256i *)(this->i_samples + n), tmp0);
-  }
-  for (int32_t n = simdlen; n < length; ++n) {
-    auto fval = static_cast<float>(this->i_samples[n]);
-    fval *= fscale;
-    // fval may exceed when sprec_t == int16_t
-    this->i_samples[n] = static_cast<sprec_t>(floorf(fabsf(fval)));
-    if (fval < 0.0) {
-      this->i_samples[n] = static_cast<sprec_t>(-this->i_samples[n]);
-    }
-  }
-#else
-  for (int32_t n = 0; n < length; ++n) {
-    auto fval = static_cast<float>(this->i_samples[n]);
-    fval *= fscale;
-    // fval may exceed when sprec_t == int16_t
-    this->i_samples[n] = static_cast<sprec_t>(floorf(fabsf(fval)));
-    if (fval < 0.0) {
-      this->i_samples[n] = static_cast<sprec_t>(-this->i_samples[n]);
-    }
-  }
-#endif
-}
-
 /********************************************************************************
  * j2k_resolution
  *******************************************************************************/
@@ -2935,9 +2864,6 @@ uint8_t *j2k_tile::encode() {
         cr->scale();
         fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
                          v0, v1, transformation);
-        //        HL->quantize();
-        //        LH->quantize();
-        //        HH->quantize();
       }
       // encode codeblocks in HL or LH or HH
       t1_encode(cr, ROIshift);
@@ -2947,7 +2873,6 @@ uint8_t *j2k_tile::encode() {
     }
 
     j2k_subband *LL = cr->access_subband(0);
-    //    LL->quantize();
     // encode codeblocks in LL
     t1_encode(cr, ROIshift);
   }  // end of component loop
