@@ -215,7 +215,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       v0        = _mm256_packs_epi16(v0, v0);  // re-use vone0
       v0        = _mm256_permute4x64_epi64(v0, 0xD8);
       __m128i v = _mm256_extracti128_si256(v0, 0);
-      _mm256_zeroupper();
+      // _mm256_zeroupper(); // does not work on GCC, TODO: find a solution with __m128i v
       _mm_storeu_si128((__m128i *)dstblk, v);
       dstblk += 16;
     }
