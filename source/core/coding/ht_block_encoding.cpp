@@ -495,6 +495,19 @@ inline __m256i bsr_256_32_cvtfloat(__m256i x) {
   result         = _mm256_or_si256(result, _mm256_srai_epi32(x, 31));
   return _mm256_and_si256(result, _mm256_set1_epi32(0x0000001F));
 }
+
+// https://stackoverflow.com/a/58827596
+inline __m256i avx2_lzcnt_epi32(__m256i v) {
+  // prevent value from being rounded up to the next power of two
+  v = _mm256_andnot_si256(_mm256_srli_epi32(v, 8), v);  // keep 8 MSB
+
+  v = _mm256_castps_si256(_mm256_cvtepi32_ps(v));    // convert an integer to float
+  v = _mm256_srli_epi32(v, 23);                      // shift down the exponent
+  v = _mm256_subs_epu16(_mm256_set1_epi32(158), v);  // undo bias
+  v = _mm256_min_epi16(v, _mm256_set1_epi32(32));    // clamp at 32
+
+  return v;
+}
 #endif
 auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
                        uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
@@ -527,10 +540,14 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   // const uint32_t QWx2 = block->size.x + block->size.x % 2;
   // const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
-  uint8_t *const sp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const sp1 = block->block_states.get() + (2U * qy + 2U) * (block->blkstate_stride) + 2U * qx + 1U;
-  auto v_u8_0 = _mm_set1_epi64x(*((int64_t *)sp0));
-  auto v_u8_1 = _mm_set1_epi64x(*((int64_t *)sp1));
+  uint8_t *const ssp0 =
+      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
+  // block->block_states.get() + (2U * qy + 2U) * (block->blkstate_stride) + 2U * qx + 1U;
+  int32_t *sp0 = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp1 = sp0 + block->blksampl_stride;
+  auto v_u8_0 = _mm_set1_epi64x(*((int64_t *)ssp0));
+  auto v_u8_1 = _mm_set1_epi64x(*((int64_t *)ssp1));
   auto v_u8_zip = _mm_unpacklo_epi8(v_u8_0, v_u8_1);
   auto vmask = _mm_set1_epi8(1);
   auto v_u8_out = _mm_and_si128(v_u8_zip, vmask);
@@ -544,22 +561,20 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
   rho_q[1] = static_cast<uint8_t>(sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3));
 
-  alignas(32) uint32_t sig32[8];
-  _mm256_store_si256(((__m256i *)sig32), _mm256_cvtepu8_epi32(v_u8_out));
-  auto v_s32_0 =
-      _mm_loadu_si128((__m128i *)(block->sample_buf.get() + 2U * qx + 2U * qy * block->blksampl_stride));
-  auto v_s32_1 = _mm_loadu_si128(
-      (__m128i *)(block->sample_buf.get() + 2U * qx + (2U * qy + 1U) * block->blksampl_stride));
-  *((__m128i *)(v_n)) = _mm_unpacklo_epi32(v_s32_0, v_s32_1);
-  *((__m128i *)(v_n + 4)) = _mm_unpackhi_epi32(v_s32_0, v_s32_1);
+  __m256i vsig = _mm256_cvtepu8_epi32(v_u8_out);
+  auto v0 = _mm_loadu_si128((__m128i *)sp0);
+  auto v1 = _mm_loadu_si128((__m128i *)sp1);
+  __m256i v = _mm256_broadcastsi128_si256(_mm_unpacklo_epi32(v0, v1));
+  v = _mm256_inserti128_si256(v, _mm_unpackhi_epi32(v0, v1), 1);
+  _mm256_storeu_si256((__m256i *)v_n, v);
 
-  auto vv_n = _mm256_load_si256((__m256i *)v_n);
-  auto vsig = _mm256_load_si256((__m256i *)sig32);
   auto vone = _mm256_set1_epi32(1);
-  // auto v32 = _mm256_set1_epi32(32);
-  auto vvv = bsr_256_32_cvtfloat(_mm256_add_epi32(_mm256_slli_epi32(_mm256_srai_epi32(vv_n, 1), 1), vone));
-  auto vtmp = _mm256_mullo_epi32(_mm256_add_epi32(vvv, vone), vsig);
-  _mm256_store_si256((__m256i *)E_n, vtmp);
+  v = _mm256_srai_epi32(v, 1);    // take s_n out from v_n (MagSgn); v <- (mu_n -1)
+  v = _mm256_slli_epi32(v, 1);    // v <- 2*(mu_n -1)
+  v = _mm256_add_epi32(v, vone);  // v <- 2*mu_n - 1
+  v = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt_epi32(v));
+  v = _mm256_mullo_epi32(v, vsig);
+  _mm256_store_si256((__m256i *)E_n, v);
 #else
   const int32_t x[8] = {2 * qx,       2 * qx,       2 * qx + 1,       2 * qx + 1,
                         2 * (qx + 1), 2 * (qx + 1), 2 * (qx + 1) + 1, 2 * (qx + 1) + 1};
