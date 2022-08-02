@@ -156,7 +156,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       ++dstblk;
     }
 
-#elif defined(OPENHTJ2K_TRY_AVX22) && defined(__AVX2__)
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     const __m256i vpLSB    = _mm256_set1_epi32(pLSB);
     const __m256i vone     = _mm256_set1_epi32(1);
     const __m256i vabsmask = _mm256_set1_epi32(0x7FFFFFFF);
