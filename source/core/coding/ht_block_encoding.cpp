@@ -47,10 +47,10 @@
 void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
   float fscale = 1.0f / this->stepsize;
   fscale /= (1 << (FRACBITS));
-  // Set fscale = 1.0 in lossless coding instead of skipping quantization to avoid if-branch in SIMD
-  // processing
+  // Set fscale = 1.0 in lossless coding instead of skipping quantization
+  // to avoid if-branch in the following SIMD processing
   if (transformation) fscale = 1.0f;
-  float32x4_t vscale    = vdupq_n_f32(fscale);
+
   const uint32_t height = this->size.y;
   const uint32_t stride = this->band_stride;
   const int32_t pshift  = (refsegment) ? 1 : 0;
@@ -62,12 +62,11 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states.get() + block_index;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    // vetorized for ARM NEON
-    auto vzero      = vdupq_n_s32(0);
-    int32x4_t vpLSB = vdupq_n_s32(pLSB);
-    int32x4_t vone  = vdupq_n_s32(1);
+    float32x4_t vscale = vdupq_n_f32(fscale);
+    auto vorval        = vdupq_n_s32(0);
+    int32x4_t vpLSB    = vdupq_n_s32(pLSB);
+    int32x4_t vone     = vdupq_n_s32(1);
 
-    // simd
     int16_t len = static_cast<int16_t>(this->size.x);
     for (; len >= 8; len -= 8) {
       int16x8_t coeff16 = vld1q_s16(sp);
@@ -84,14 +83,15 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       v1           = vabsq_s32(v1);
       int32x4_t z0 = vandq_s32(v0, vpLSB);  // only for SigProp and MagRef
       int32x4_t z1 = vandq_s32(v1, vpLSB);  // only for SigProp and MagRef
-
-      v0              = v0 >> pshift;
-      v1              = v1 >> pshift;
+      // Down-shift if other than HT Cleanup pass exists
+      v0 = v0 >> pshift;
+      v1 = v1 >> pshift;
+      // Generate masks for sigma
       int32x4_t mask0 = vcgtzq_s32(v0);
       int32x4_t mask1 = vcgtzq_s32(v1);
-      vzero           = vorrq_s32(vzero, v0);
-      vzero           = vorrq_s32(vzero, v1);
-
+      // Check emptiness of a block
+      vorval = vorrq_s32(vorval, v0);
+      vorval = vorrq_s32(vorval, v1);
       // Convert two's compliment to MagSgn form
       int32x4_t vone0 = vandq_s32(mask0, vone);
       int32x4_t vone1 = vandq_s32(mask1, vone);
@@ -106,6 +106,7 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       vst1q_s32(dp + 4, v1);
       sp += 8;
       dp += 8;
+      // for Block states
       uint8x8_t vblkstate = vdup_n_u8(0);
       vblkstate |= vmovn_s16(vandq_s16(vcombine_s16(vmovn_s32(mask0), vmovn_s32(mask1)), vdupq_n_s16(1)));
       // bits in lowest bitplane, only for SigProp and MagRef TODO: test this line
@@ -128,11 +129,12 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       vst1_u8(dstblk, vblkstate);
       dstblk += 8;
     }
-    or_val |= static_cast<unsigned int>(vmaxvq_s16(vzero));
-    // remaining
+    // Check emptiness of a block
+    or_val |= static_cast<unsigned int>(vmaxvq_s16(vorval));
+    // process leftover
     for (; len > 0; --len) {
       int32_t temp;
-      temp          = static_cast<int32_t>(round(static_cast<float>(sp[0]) * fscale));
+      temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
       dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
@@ -152,67 +154,98 @@ void j2k_codeblock::set_MagSgn_and_sigma(uint32_t &or_val) {
       ++dstblk;
     }
 
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    auto vpLSB     = _mm256_set1_epi16((int16_t)pLSB);
-    auto vone      = _mm256_set1_epi16((int16_t)1);
-    auto vtwo      = _mm256_set1_epi16((int16_t)2);
-    auto vsignmask = _mm256_set1_epi16((int16_t)0x8000);
-    auto vabsmask  = _mm256_set1_epi16((int16_t)0x7FFF);
-    auto vzero     = _mm256_setzero_si256();
+#elif defined(OPENHTJ2K_TRY_AVX22) && defined(__AVX2__)
+    const __m256i vpLSB    = _mm256_set1_epi32(pLSB);
+    const __m256i vone     = _mm256_set1_epi32(1);
+    const __m256i vabsmask = _mm256_set1_epi32(0x7FFFFFFF);
+    __m256i vorval         = _mm256_setzero_si256();
+    const __m256 vscale    = _mm256_set1_ps(fscale);
     // simd
-    int32_t len = round_down(static_cast<int32_t>(this->size.x), 16);
-    for (int32_t j = 0; j < len; j += 16) {
-      auto coeff16 = _mm256_loadu_si256((__m256i *)(sp + j));
-      // auto vsmag   = _mm256_and_si256(coeff16, vpLSB);
-      auto vsign = _mm256_srli_epi16(_mm256_and_si256(coeff16, vsignmask), 15);
-      auto vsmag = _mm256_slli_epi16(_mm256_and_si256(coeff16, vpLSB), SHIFT_SMAG);
-
-      auto vabsmag = _mm256_srli_epi16(_mm256_and_si256(_mm256_abs_epi16(coeff16), vabsmask), pshift);
-
-      auto vmasked_one =
-          _mm256_and_si256(_mm256_xor_si256(_mm256_cmpeq_epi16(vabsmag, _mm256_setzero_si256()),
-                                            _mm256_set1_epi16((int16_t)0xFFFF)),
-                           vone);
-      vzero            = _mm256_or_si256(vzero, vabsmag);
-      auto vmasked_two = _mm256_mullo_epi16(vmasked_one, vtwo);
-      auto vblkstate =
-          _mm256_or_si256(vmasked_one, _mm256_or_si256(vsmag, _mm256_slli_epi16(vsign, SHIFT_SSGN)));
-      auto vblkstate_low  = _mm256_extracti128_si256(vblkstate, 0);
-      auto vblkstate_high = _mm256_extracti128_si256(vblkstate, 1);
-      auto vblkstate_u8   = _mm_packs_epi16(vblkstate_low, vblkstate_high);
-      _mm_storeu_si128((__m128i *)(dstblk + j), vblkstate_u8);
-      auto vcoeff      = _mm256_add_epi16(_mm256_mullo_epi16(_mm256_subs_epu16(vabsmag, vone), vmasked_two),
-                                          _mm256_mullo_epi16(vsign, vmasked_one));
-      auto vcoeff_low  = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(vcoeff, 0));
-      auto vcoeff_high = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(vcoeff, 1));
-      _mm256_storeu_si256((__m256i *)(dp + j), vcoeff_low);
-      _mm256_storeu_si256((__m256i *)(dp + j + 8), vcoeff_high);
+    int32_t len = static_cast<int32_t>(this->size.x);
+    for (; len >= 16; len -= 16) {
+      __m256i coeff16 = _mm256_loadu_si256((__m256i *)sp);
+      __m256i v0      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 0));
+      __m256i v1      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 1));
+      // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
+      v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), vscale));
+      v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
+      // Take sign bit
+      __m256i s0 = _mm256_and_si256(_mm256_srai_epi32(v0, 31), vone);
+      __m256i s1 = _mm256_and_si256(_mm256_srai_epi32(v1, 31), vone);
+      // Absolute value
+      v0         = _mm256_abs_epi32(v0);
+      v1         = _mm256_abs_epi32(v1);
+      __m256i z0 = _mm256_and_si256(v0, vpLSB);  // only for SigProp and MagRef
+      __m256i z1 = _mm256_and_si256(v1, vpLSB);  // only for SigProp and MagRef
+                                                 // Down-shift if other than HT Cleanup pass exists
+      v0 = _mm256_srai_epi32(v0, pshift);
+      v1 = _mm256_srai_epi32(v1, pshift);
+      // Generate masks for sigma
+      __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
+      __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
+      // Check emptiness of a block
+      vorval = _mm256_or_si256(vorval, v0);
+      vorval = _mm256_or_si256(vorval, v1);
+      // Convert two's compliment to MagSgn form
+      __m256i vone0 = _mm256_and_si256(mask0, vone);
+      __m256i vone1 = _mm256_and_si256(mask1, vone);
+      v0            = _mm256_sub_epi32(v0, vone0);
+      v1            = _mm256_sub_epi32(v1, vone1);
+      v0            = _mm256_slli_epi32(v0, 1);
+      v1            = _mm256_slli_epi32(v1, 1);
+      v0            = _mm256_add_epi32(v0, _mm256_and_si256(s0, mask0));
+      v1            = _mm256_add_epi32(v1, _mm256_and_si256(s1, mask1));
+      // Store
+      _mm256_storeu_si256((__m256i *)dp, v0);
+      _mm256_storeu_si256((__m256i *)(dp + 8), v1);
+      sp += 16;
+      dp += 16;
+      // for Block states
+      v0        = _mm256_packs_epi32(vone0, vone1);  // re-use v0 as sigma
+      v0        = _mm256_permute4x64_epi64(v0, 0xD8);
+      vone0     = _mm256_packs_epi32(z0, z1);  // re-use vone0 as z
+      vone0     = _mm256_permute4x64_epi64(vone0, 0xD8);
+      vone1     = _mm256_packs_epi32(_mm256_and_si256(s0, mask0),
+                                     _mm256_and_si256(s1, mask1));  // re-use vone1 as sign
+      vone1     = _mm256_permute4x64_epi64(vone1, 0xD8);
+      v0        = _mm256_or_si256(v0, _mm256_slli_epi16(vone0, SHIFT_SMAG));
+      v0        = _mm256_or_si256(v0, _mm256_slli_epi16(vone1, SHIFT_SSGN));
+      v0        = _mm256_packs_epi16(v0, v0);  // re-use vone0
+      v0        = _mm256_permute4x64_epi64(v0, 0xD8);
+      __m128i v = _mm256_extracti128_si256(v0, 0);
+      _mm256_zeroupper();
+      _mm_storeu_si128((__m128i *)dstblk, v);
+      dstblk += 16;
     }
-    or_val |= !_mm256_testz_si256(vzero, vabsmask);
-    // remaining
-    for (int32_t j = len; j < static_cast<int32_t>(this->size.x); ++j) {
-      int32_t temp  = sp[j];
-      uint32_t sign = (static_cast<uint32_t>(temp) & 0x80000000) >> 31;
-      dstblk[j] |= static_cast<uint8_t>((temp & pLSB) << SHIFT_SMAG);
-      dstblk[j] |= static_cast<uint8_t>((sign) << SHIFT_SSGN);
+    // Check emptiness of a block
+    or_val |= !_mm256_testz_si256(vorval, vabsmask);
+    // process leftover
+    for (; len > 0; --len) {
+      int32_t temp;
+      temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
+      uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+      dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
+      dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       temp >>= pshift;
       if (temp) {
         or_val |= 1;
-        dstblk[j] |= 1;
+        dstblk[0] |= 1;
         temp--;
         temp <<= 1;
-        temp  = temp + static_cast<int32_t>(sign);
-        dp[j] = temp;
+        temp += static_cast<uint8_t>(sign >> 31);
+        dp[0] = temp;
       }
-      block_index++;
+      ++sp;
+      ++dp;
+      ++dstblk;
     }
 #else
     int16_t len = static_cast<int16_t>(this->size.x);
     for (; len > 0; --len) {
       int32_t temp;
-      temp          = static_cast<int32_t>(round(static_cast<float>(sp[0]) * fscale));
+      temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
       dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
