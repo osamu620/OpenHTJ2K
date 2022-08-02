@@ -2865,14 +2865,12 @@ uint8_t *j2k_tile::encode() {
         fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
                          v0, v1, transformation);
       }
-      // encode codeblocks in HL or LH or HH
+      // encode codeblocks in HL, LH, and HH
       t1_encode(cr, ROIshift);
       cr           = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
       top_left     = cr->get_pos0();
       bottom_right = cr->get_pos1();
     }
-
-    j2k_subband *LL = cr->access_subband(0);
     // encode codeblocks in LL
     t1_encode(cr, ROIshift);
   }  // end of component loop
