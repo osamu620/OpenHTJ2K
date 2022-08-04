@@ -95,20 +95,19 @@ void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
 };
 
 // 1-dimensional FDWT
-static inline void fdwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, sprec_t *out, const int32_t left,
-                                    const int32_t right, const int32_t i0, const int32_t i1,
-                                    const uint8_t transformation) {
+static inline void fdwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, const int32_t left, const int32_t right,
+                                    const int32_t i0, const int32_t i1, const uint8_t transformation) {
   //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_PADDING);
   //  auto *Xext         = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   fdwt_1d_filtr_fixed[transformation](buf, left, i0, i1);
-  memcpy(out, buf + left, sizeof(sprec_t) * (static_cast<size_t>(i1 - i0)));
+  memcpy(in, buf + left, sizeof(sprec_t) * (static_cast<size_t>(i1 - i0)));
   //  aligned_mem_free(Xext);
 }
 
 // FDWT for horizontal direction
-static void fdwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const int32_t u0, const int32_t u1,
-                              const int32_t v0, const int32_t v1, const uint8_t transformation) {
+static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
+                              const int32_t v1, const uint8_t transformation) {
   const int32_t stride               = u1 - u0;
   constexpr int32_t num_pse_i0[2][2] = {{4, 2}, {3, 1}};
   constexpr int32_t num_pse_i1[2][2] = {{3, 1}, {4, 2}};
@@ -119,9 +118,9 @@ static void fdwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const int32_t u0, const
     // one sample case
     for (int32_t row = 0; row < v1 - v0; ++row) {
       if (u0 % 2 == 0) {
-        out[row] = (transformation) ? in[row] : in[row];
+        in[row] = (transformation) ? in[row] : in[row];
       } else {
-        out[row] = (transformation) ? static_cast<sprec_t>(in[row] << 1) : in[row];
+        in[row] = (transformation) ? static_cast<sprec_t>(in[row] << 1) : in[row];
       }
     }
   } else {
@@ -131,7 +130,7 @@ static void fdwt_hor_sr_fixed(sprec_t *out, sprec_t *in, const int32_t u0, const
                sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
     //#pragma omp parallel for
     for (int32_t row = 0; row < v1 - v0; ++row) {
-      fdwt_1d_sr_fixed(Xext, &in[row * stride], &out[row * stride], left, right, u0, u1, transformation);
+      fdwt_1d_sr_fixed(Xext, &in[row * stride], left, right, u0, u1, transformation);
     }
     aligned_mem_free(Xext);
   }
@@ -474,11 +473,8 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
                       const int32_t u0, const int32_t u1, const int32_t v0, const int32_t v1,
                       const uint8_t transformation) {
-  const auto buf_length = static_cast<uint32_t>((u1 - u0) * (v1 - v0));
-  sprec_t *src          = previousLL;
-  auto *dst             = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * buf_length, 32));
+  sprec_t *src = previousLL;
   fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1);
-  fdwt_hor_sr_fixed(dst, src, u0, u1, v0, v1, transformation);
-  fdwt_2d_deinterleave_fixed(dst, LL, HL, LH, HH, u0, u1, v0, v1);
-  aligned_mem_free(dst);
+  fdwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation);
+  fdwt_2d_deinterleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1);
 }
