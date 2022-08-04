@@ -514,29 +514,31 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                        uint8_t *const rho_q) {
 // This function shall be called on the assumption that there are two quads
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  //  const uint32_t QWx2                = block->size.x + block->size.x % 2;
   alignas(32) const int8_t nshift[8] = {0, 1, 2, 3, 4, 5, 6, 7};
-  uint8_t *const sp0 = block->block_states.get() + (2 * qy + 1U) * (block->blkstate_stride) + 2 * qx + 1;
-  uint8_t *const sp1 = block->block_states.get() + (2 * qy + 2U) * (block->blkstate_stride) + 2 * qx + 1;
-  auto v_u8_0        = vld1_u8(sp0);
-  auto v_u8_1        = vld1_u8(sp1);
-  auto v_u8_zip      = vzip1_u8(v_u8_0, v_u8_1);
-  auto vmask         = vdup_n_u8(1);
-  auto v_u8_out      = vand_u8(v_u8_zip, vmask);
+  uint8_t *const ssp0 =
+      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
+  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp1        = sp0 + block->blksampl_stride;
+  auto v_u8_zip       = vzip1_u8(vld1_u8(ssp0), vld1_u8(ssp1));
+  auto vmask          = vdup_n_u8(1);
+  auto v_u8_out       = vand_u8(v_u8_zip, vmask);
   vst1_u8(sigma_n, v_u8_out);
   auto v_u8_shift = vld1_s8(nshift);
   auto vtmp       = vshl_u8(v_u8_out, v_u8_shift);
   rho_q[0]        = vaddv_u8(vtmp) & 0xF;
   rho_q[1]        = vaddv_u8(vtmp) >> 4;
-  auto v_s32_0    = vld1q_s32(block->sample_buf.get() + 2 * qx + 2 * qy * block->blksampl_stride);
-  auto v_s32_1    = vld1q_s32(block->sample_buf.get() + 2 * qx + (2 * qy + 1U) * block->blksampl_stride);
-  auto v_s32_out  = vzipq_s32(v_s32_0, v_s32_1);
-  vst1q_u32(v_n, v_s32_out.val[0]);
-  vst1q_u32(v_n + 4, v_s32_out.val[1]);
+  auto v0         = vld1q_s32(sp0);
+  auto v1         = vld1q_s32(sp1);
+  auto v          = vzipq_s32(v0, v1);
+  vst1q_u32(v_n, v.val[0]);
+  vst1q_u32(v_n + 4, v.val[1]);
   auto vsig0 = vmovl_u16(vget_low_u16(vmovl_u8(v_u8_out)));
   auto vsig1 = vmovl_u16(vget_high_u16(vmovl_u8(v_u8_out)));
-  vst1q_s32(E_n, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[0], 1), 1) + 1)) * vsig0);
-  vst1q_s32(E_n + 4, (32 - vclzq_u32(vshlq_n_s32(vshrq_n_s32(v_s32_out.val[1], 1), 1) + 1)) * vsig1);
+  v.val[0]   = vaddq_s32(vshlq_n_s32(vshrq_n_s32(v.val[0], 1), 1), vdupq_n_s32(1));
+  vst1q_s32(E_n, (vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[0]))) * vsig0);
+  v.val[1] = vaddq_s32(vshlq_n_s32(vshrq_n_s32(v.val[1], 1), 1), vdupq_n_s32(1));
+  vst1q_s32(E_n + 4, (vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[1]))) * vsig1);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   // const uint32_t QWx2 = block->size.x + block->size.x % 2;
   // const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
