@@ -13,3 +13,9 @@ add_test(NAME dec_lossy COMMAND open_htj2k_dec -i kodim23lossy.j2c -o kodim23los
 set_tests_properties(dec_lossy PROPERTIES DEPENDS enc_lossy)
 add_test(NAME comp_lossy COMMAND imgcmp kodim23lossy.ppm ${CONFORMANCE_DATA_DIR}/kodim23.ppm 23 6)
 set_tests_properties(comp_lossy PROPERTIES DEPENDS dec_lossy)
+
+add_test(NAME enc_lossless_odd COMMAND open_htj2k_enc -i ${CONFORMANCE_DATA_DIR}/kodim23odd.ppm -o kodim23odd_lossless.j2c Creversible=yes)
+add_test(NAME dec_lossless_odd COMMAND open_htj2k_dec -i kodim23odd_lossless.j2c -o kodim23odd_lossless.ppm)
+set_tests_properties(dec_lossless_odd PROPERTIES DEPENDS enc_lossless_odd)
+add_test(NAME comp_lossless_odd COMMAND imgcmp kodim23odd_lossless.ppm ${CONFORMANCE_DATA_DIR}/kodim23odd.ppm 0 0)
+set_tests_properties(comp_lossless_odd PROPERTIES DEPENDS dec_lossless_odd)
