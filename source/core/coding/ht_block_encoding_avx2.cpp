@@ -196,9 +196,6 @@ void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len) {
 void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
   int32_t temp = emb_1 << len;
   cwd -= static_cast<uint32_t>(temp);
-  //  auto v0 = vld1_u64(&Creg);
-  //  v0 = vorr_u64(v0, vdup_n_u64(cwd) << ctreg);
-  //  vst1_u64(&Creg, v0);
   Creg |= static_cast<uint64_t>(cwd) << ctreg;
   ctreg += len;
   while (ctreg >= 32) {
@@ -206,6 +203,9 @@ void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
   }
 }
 void state_MS_enc::emit_dword() {
+  uint32_t t          = 0;
+  uint32_t bits_local = 24;
+  uint8_t *p          = buf + pos;
   for (int i = 0; i < 4; ++i) {
     if (last == 0xFF) {
       last = static_cast<uint8_t>(Creg & 0x7F);
@@ -216,8 +216,14 @@ void state_MS_enc::emit_dword() {
       Creg >>= 8;
       ctreg -= 8;
     }
-    buf[pos++] = last;
+    t |= static_cast<uint32_t>(last) << bits_local;
+    bits_local -= 8;
   }
+  p[0] = (t >> 24) & 0xFF;
+  p[1] = (t >> 16) & 0xFF;
+  p[2] = (t >> 8) & 0xFF;
+  p[3] = (t)&0xFF;
+  pos += 4;
 }
   #endif
 
