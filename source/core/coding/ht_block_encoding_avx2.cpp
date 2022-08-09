@@ -34,8 +34,11 @@
   #include "coding_local.hpp"
   #include "enc_CxtVLC_tables.hpp"
   #include "utils.hpp"
-
-  #include <x86intrin.h>
+  #if defined(_MSC_VER) || defined(__MINGW64__)
+    #include <intrin.h>
+  #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #include <x86intrin.h>
+  #endif
 
   #define Q0 0
   #define Q1 1
