@@ -54,7 +54,6 @@ class state_MS_enc {
 
   FORCE_INLINE void emit_dword() {  // internal function to emit 4 code words
     uint32_t bits_local = 0;
-    uint32_t *p         = (uint32_t *)(buf + pos);
     uint32_t val        = Creg & 0xFFFFFFFF;
     uint32_t stuff      = (last == 0xFF);
     uint32_t tmp;
@@ -96,8 +95,7 @@ class state_MS_enc {
 
     Creg >>= bits_local;
     ctreg -= bits_local;
-
-    *p = t;
+    *reinterpret_cast<uint32_t *>(buf + pos) = t;
     pos += 4;
   }
 
@@ -178,7 +176,30 @@ class state_VLC_enc {
   explicit state_VLC_enc(uint8_t *p) : buf(p), tmp(0xF), last(0xFF), bits(4), pos(MAX_Scup - 2) {
     buf[pos + 1] = 0xFF;
   }
-  void emitVLCBits(uint16_t cwd, uint8_t len);
+
+  FORCE_INLINE void emitVLCBits(uint16_t cwd, uint8_t len) {
+    int32_t len32 = len;
+    for (; len32 > 0;) {
+      int32_t available_bits = 8 - (last > 0x8F) - bits;
+      int32_t t              = std::min(available_bits, len32);
+      tmp |= static_cast<uint8_t>((cwd & ((1 << t) - 1)) << bits);
+      bits = static_cast<uint8_t>(bits + t);
+      available_bits -= t;
+      len32 -= t;
+      cwd = static_cast<uint16_t>(cwd >> t);
+      if (available_bits == 0) {
+        if ((last > 0x8f) && tmp != 0x7F) {
+          last = 0x00;
+          continue;
+        }
+        buf[pos] = tmp;
+        pos--;  // reverse order
+        last = tmp;
+        tmp  = 0;
+        bits = 0;
+      }
+    }
+  }
 };
 
 /********************************************************************************
