@@ -236,38 +236,25 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   E1 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[1])), sig1);
 };
 
-static inline void make_storage_one(const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
-                                    uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
-                                    uint8_t *const rho_q) {
-  const int16_t x[4] = {static_cast<int16_t>(2 * qx), static_cast<int16_t>(2 * qx),
-                        static_cast<int16_t>(2 * qx + 1), static_cast<int16_t>(2 * qx + 1)};
-  const int16_t y[4] = {static_cast<int16_t>(2 * qy), static_cast<int16_t>(2 * qy + 1),
-                        static_cast<int16_t>(2 * qy), static_cast<int16_t>(2 * qy + 1)};
+auto make_storage_one = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
+                           int32x4_t &sig0, int32x4_t &v0, int32x4_t &E0, uint8_t *const rho_q) {
+  // This function shall be called on the assumption that there are two quads
+  uint8_t *const ssp0 =
+      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
+  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp1        = sp0 + block->blksampl_stride;
 
-  for (int i = 0; i < 4; ++i) {
-    if ((x[i] >= 0 && x[i] < static_cast<int16_t>(block->size.x))
-        && (y[i] >= 0 && y[i] < static_cast<int16_t>(block->size.y))) {
-      sigma_n[i] = block->get_state(Sigma, y[i], x[i]);
-    } else {
-      sigma_n[i] = 0;
-    }
-  }
-  rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
+  int32x4_t sig   = {ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1};
+  int32x4_t shift = {0, 1, 2, 3};
+  uint32x4_t vtmp = vshlq_s32(sig, shift);
+  rho_q[0]        = vaddvq_u32(vtmp) & 0xF;
+  sig0            = vcgtzq_s32(sig);
 
-  for (int i = 0; i < 4; ++i) {
-    if ((x[i] >= 0 && x[i] < static_cast<int16_t>(block->size.x))
-        && (y[i] >= 0 && y[i] < static_cast<int16_t>(block->size.y))) {
-      v_n[i] =
-          static_cast<uint32_t>(block->sample_buf[(size_t)x[i] + (size_t)y[i] * (block->blksampl_stride)]);
-    } else {
-      v_n[i] = 0;
-    }
-  }
+  v0 = {sp0[0], sp1[0], sp0[1], sp1[1]};
 
-  for (int i = 0; i < 4; ++i) {
-    E_n[i] = static_cast<int32_t>((32 - count_leading_zeros(((v_n[i] >> 1) << 1) + 1)) * sigma_n[i]);
-  }
-}
+  E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v0)), sig0);
+};
 
 // joint termination of MEL and VLC
 int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
@@ -361,9 +348,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   state_MEL_enc MEL_encoder(rev_buf.get());
   state_VLC_enc VLC_encoder(rev_buf.get());
 
-  alignas(32) uint32_t v_n[8];
-  alignas(32) uint8_t sigma_n[8] = {0}, rho_q[2] = {0}, m_n[8] = {0};
-  alignas(32) int32_t E_n[8] = {0}, U_q[2] = {0};
+  alignas(32) uint8_t rho_q[2] = {0};
+  alignas(32) int32_t U_q[2]   = {0};
 
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]                 = 0;
@@ -484,10 +470,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   }
   if (QW & 1) {
     uint16_t qx = static_cast<uint16_t>(QW - 1);
-    make_storage_one(block, 0, qx, sigma_n, v_n, E_n, rho_q);
-    E0     = vld1q_s32(E_n);
-    *E_p++ = E_n[1];
-    *E_p++ = E_n[3];
+    make_storage_one(block, 0, qx, sig0, v0, E0, rho_q);
+    *E_p++ = E0[1];
+    *E_p++ = E0[3];
 
     // MEL encoding
     if (context == 0) {
@@ -518,10 +503,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     cwd         = static_cast<uint16_t>(tmp >> 8);
     VLC_encoder.emitVLCBits(cwd, lw);
 
-    for (int i = 0; i < 4; ++i) {
-      m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((embk_0 >> i) & 1));
-      MagSgn_encoder.emitMagSgnBits(v_n[i], m_n[i], (emb1_0 >> i) & 1);
-    }
+    // MagSgn encoding
+    m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U_q[0])),
+                         vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
+    known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
+    MagSgn_encoder.emitBits(v0, m0, known1_0);
+
     // update rho_line
     *rho_p++ = rho_q[0];
   }
@@ -626,11 +613,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     }
     if (QW & 1) {
       uint16_t qx = static_cast<uint16_t>(QW - 1);
-
-      make_storage_one(block, qy, qx, sigma_n, v_n, E_n, rho_q);
-      E0     = vld1q_s32(E_n);
-      *E_p++ = E_n[1];
-      *E_p++ = E_n[3];
+      make_storage_one(block, qy, qx, sig0, v0, E0, rho_q);
+      *E_p++ = E0[1];
+      *E_p++ = E0[3];
 
       // MEL encoding of the first quad
       if (context == 0) {
@@ -639,7 +624,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       gamma    = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
       kappa    = std::max((Emax0 - 1) * gamma, 1);
-      Emax_q   = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
+      Emax_q   = find_max(E0[0], E0[1], E0[2], E0[3]);
       U_q[Q0]  = std::max(Emax_q, kappa);
       u_q      = U_q[Q0] - kappa;
       uvlc_idx = u_q;
@@ -663,10 +648,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       cwd         = static_cast<uint16_t>(tmp >> 8);
       VLC_encoder.emitVLCBits(cwd, lw);
 
-      for (int i = 0; i < 4; ++i) {
-        m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((embk_0 >> i) & 1));
-        MagSgn_encoder.emitMagSgnBits(v_n[i], m_n[i], (emb1_0 >> i) & 1);
-      }
+      // MagSgn encoding
+      m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U_q[0])),
+                           vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
+      known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
+      MagSgn_encoder.emitBits(v0, m0, known1_0);
+
       // update rho_line
       *rho_p++ = rho_q[0];
     }

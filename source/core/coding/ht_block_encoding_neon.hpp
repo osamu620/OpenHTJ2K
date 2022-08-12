@@ -101,18 +101,15 @@ class state_MS_enc {
 
  public:
   explicit state_MS_enc(uint8_t *p) : Creg(0), ctreg(0), pos(0), last(0), buf(p) {}
-  FORCE_INLINE void emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
-    int32_t temp = emb_1 << len;
-    cwd -= static_cast<uint32_t>(temp);
-    //  auto v0 = vld1_u64(&Creg);
-    //  v0 = vorr_u64(v0, vdup_n_u64(cwd) << ctreg);
-    //  vst1_u64(&Creg, v0);
-    Creg |= static_cast<uint64_t>(cwd) << ctreg;
-    ctreg += len;
-    while (ctreg >= 32) {
-      emit_dword();
-    }
-  }
+  //  FORCE_INLINE void emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
+  //    int32_t temp = emb_1 << len;
+  //    cwd -= static_cast<uint32_t>(temp);
+  //    Creg |= static_cast<uint64_t>(cwd) << ctreg;
+  //    ctreg += len;
+  //    while (ctreg >= 32) {
+  //      emit_dword();
+  //    }
+  //  }
   FORCE_INLINE void emitBits(int32x4_t &v, int32x4_t &m, int32x4_t &emb1) {
     int32x4_t tmp = vshlq_s32(emb1, m);
     v             = vsubq_s32(v, tmp);
