@@ -238,7 +238,6 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 
 auto make_storage_one = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
                            int32x4_t &sig0, int32x4_t &v0, int32x4_t &E0, uint8_t *const rho_q) {
-  // This function shall be called on the assumption that there are two quads
   uint8_t *const ssp0 =
       block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
   uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
