@@ -391,13 +391,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
     emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
     n_q         = static_cast<uint16_t>(emb_pattern + (rho_q[Q0] << 4) + (context << 8));
-    // VLC encoding
+    // prepare VLC encoding of quad 0
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_0 = CxtVLC & 0xF;
     emb1_0 = emb_pattern & embk_0;
     lw     = (CxtVLC >> 4) & 0x07;
     cwd    = static_cast<uint16_t>(CxtVLC >> 7);
-    VLC_encoder.emitVLCBits(cwd, lw);
 
     // context for the next quad
     context = (rho_q[Q0] >> 1) | (rho_q[Q0] & 0x1);
@@ -416,7 +415,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     vtmp        = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
     emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
     n_q         = static_cast<uint16_t>(emb_pattern + (rho_q[Q1] << 4) + (context << 8));
-    // VLC encoding
+    // VLC encoding of quads 0 and 1
+    VLC_encoder.emitVLCBits(cwd, lw);
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_1 = CxtVLC & 0xF;
     emb1_1 = emb_pattern & embk_1;
@@ -554,13 +554,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       emb_pattern =
           _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
       n_q = static_cast<uint16_t>(emb_pattern + (rho_q[Q0] << 4) + (context << 0));
-      // VLC encoding
+      // prepare VLC encoding of quad 0
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_0 = CxtVLC & 0xF;
       emb1_0 = emb_pattern & embk_0;
       lw     = (CxtVLC >> 4) & 0x07;
       cwd    = static_cast<uint16_t>(CxtVLC >> 7);
-      VLC_encoder.emitVLCBits(cwd, lw);
 
       // calculate context for the next quad
       context = static_cast<uint16_t>(((rho_q[0] & 0x4) << 7) | ((rho_q[0] & 0x8) << 6));  // (w | sw) << 9
@@ -577,8 +576,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       U_q[Q1] = std::max((int32_t)Emax_q, kappa);
       u_q     = U_q[Q1] - kappa;
       uvlc_idx += u_q << 5;
-      uoff = (u_q) ? 1 : 0;
-      // vE_n    = _mm_load_si128((__m128i *)(E_n + 4));
+      uoff    = (u_q) ? 1 : 0;
       vEmax_q = _mm_set1_epi32(Emax_q);
       vuoff_q = _mm_set1_epi32(uoff);
       vmask   = _mm_cmpeq_epi32(E1, vEmax_q);
@@ -586,7 +584,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       emb_pattern =
           _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
       n_q = static_cast<uint16_t>(emb_pattern + (rho_q[Q1] << 4) + (context << 0));
-      // VLC encoding
+      // VLC encoding of quads 0 and 1
+      VLC_encoder.emitVLCBits(cwd, lw);
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_1 = CxtVLC & 0xF;
       emb1_1 = emb_pattern & embk_1;
@@ -618,8 +617,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       *E_p++ = _mm_extract_epi32(E1, 3);
 
       // calculate context for the next quad
-      context = ((rho_q[1] & 0x4) << 7) | ((rho_q[1] & 0x8) << 6);   // (w | sw) << 9
-      context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0x2) << 7);  // (nw | n) << 8
+      context = static_cast<uint16_t>(((rho_q[1] & 0x4) << 7) | ((rho_q[1] & 0x8) << 6));  // (w | sw) << 9
+      context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0x2) << 7);                        // (nw | n) << 8
       context |= ((rho_p[2] & 0x8) << 7) | ((rho_p[3] & 0x2) << 9);  // (ne | nf) << 10
 
       *rho_p++ = rho_q[0];
