@@ -30,7 +30,7 @@
   #include <algorithm>
   #include <cmath>
   #include "coding_units.hpp"
-  #include "ht_block_encoding.hpp"
+  #include "ht_block_encoding_avx2.hpp"
   #include "coding_local.hpp"
   #include "enc_CxtVLC_tables.hpp"
   #include "utils.hpp"
@@ -155,221 +155,6 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   }
 }
 
-  /********************************************************************************
-   * state_MS_enc: member functions
-   *******************************************************************************/
-  #ifdef MSNAIVE
-void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len) {
-  /* naive implementation */
-  uint8_t b;
-  for (; len > 0;) {
-    b = cwd & 1;
-    cwd >>= 1;
-    --len;
-    tmp |= b << bits;
-    bits++;
-    if (bits == max) {
-      buf[pos] = tmp;
-      pos++;
-      max  = (tmp == 0xFF) ? 7 : 8;
-      tmp  = 0;
-      bits = 0;
-    }
-  }
-  /* slightly faster implementation */
-  //  for (; len > 0;) {
-  //    int32_t t = std::min(max - bits, (int32_t)len);
-  //    tmp |= (cwd & ((1 << t) - 1)) << bits;
-  //    bits += t;
-  //    cwd >>= t;
-  //    len -= t;
-  //    if (bits >= max) {
-  //      buf[pos] = tmp;
-  //      pos++;
-  //      max  = (tmp == 0xFF) ? 7 : 8;
-  //      tmp  = 0;
-  //      bits = 0;
-  //    }
-  //  }
-}
-  #else
-void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
-  int32_t temp = emb_1 << len;
-  cwd -= static_cast<uint32_t>(temp);
-  Creg |= static_cast<uint64_t>(cwd) << ctreg;
-  ctreg += len;
-  while (ctreg >= 32) {
-    emit_dword();
-  }
-}
-void state_MS_enc::emit_dword() {
-  uint32_t t          = 0;
-  uint32_t bits_local = 24;
-  uint8_t *p          = buf + pos;
-  for (int i = 0; i < 4; ++i) {
-    if (last == 0xFF) {
-      last = static_cast<uint8_t>(Creg & 0x7F);
-      Creg >>= 7;
-      ctreg -= 7;
-    } else {
-      last = static_cast<uint8_t>(Creg & 0xFF);
-      Creg >>= 8;
-      ctreg -= 8;
-    }
-    t |= static_cast<uint32_t>(last) << bits_local;
-    bits_local -= 8;
-  }
-  p[0] = (t >> 24) & 0xFF;
-  p[1] = (t >> 16) & 0xFF;
-  p[2] = (t >> 8) & 0xFF;
-  p[3] = (t)&0xFF;
-  pos += 4;
-}
-  #endif
-
-int32_t state_MS_enc::termMS() {
-  #ifdef MSNAIVE
-  /* naive implementation */
-  if (bits > 0) {
-    for (; bits < max; bits++) {
-      tmp |= 1 << bits;
-    }
-    if (tmp != 0xFF) {
-      buf[pos] = tmp;
-      pos++;
-    }
-  } else if (max == 7) {
-    pos--;
-  }
-  #else
-  while (true) {
-    if (last == 0xFF) {
-      if (ctreg < 7) break;
-      last = static_cast<uint8_t>(Creg & 0x7F);
-      Creg >>= 7;
-      ctreg -= 7;
-    } else {
-      if (ctreg < 8) break;
-      last = static_cast<uint8_t>(Creg & 0xFF);
-      Creg >>= 8;
-      ctreg -= 8;
-    }
-    buf[pos++] = last;
-  }
-  bool last_was_FF = (last == 0xFF);
-  uint8_t fill_mask, cwd;
-  if (ctreg > 0) {
-    fill_mask = static_cast<uint8_t>(0xFF << ctreg);
-    if (last_was_FF) {
-      fill_mask &= 0x7F;
-    }
-    cwd = static_cast<uint8_t>(Creg |= fill_mask);
-    if (cwd != 0xFF) {
-      buf[pos++] = cwd;
-    }
-  } else if (last_was_FF) {
-    pos--;
-    buf[pos] = 0x00;  // may be not necessary
-  }
-  #endif
-  return pos;  // return current position as Pcup
-}
-
-/********************************************************************************
- * state_MEL_enc: member functions
- *******************************************************************************/
-void state_MEL_enc::emitMELbit(uint8_t bit) {
-  tmp = static_cast<uint8_t>((tmp << 1) + bit);
-  rem--;
-  if (rem == 0) {
-    buf[pos] = tmp;
-    pos++;
-    rem = (tmp == 0xFF) ? 7 : 8;
-    tmp = 0;
-  }
-}
-
-void state_MEL_enc::encodeMEL(uint8_t smel) {
-  uint8_t eval;
-  switch (smel) {
-    case 0:
-      MEL_run++;
-      if (MEL_run >= MEL_t) {
-        emitMELbit(1);
-        MEL_run = 0;
-        MEL_k   = (int8_t)std::min(12, MEL_k + 1);
-        eval    = MEL_E[MEL_k];
-        MEL_t   = static_cast<uint8_t>(1 << eval);
-      }
-      break;
-
-    default:
-      emitMELbit(0);
-      eval = MEL_E[MEL_k];
-      while (eval > 0) {
-        eval--;
-        // (MEL_run >> eval) & 1 = msb
-        emitMELbit((MEL_run >> eval) & 1);
-      }
-      MEL_run = 0;
-      MEL_k   = (int8_t)std::max(0, MEL_k - 1);
-      eval    = MEL_E[MEL_k];
-      MEL_t   = static_cast<uint8_t>(1 << eval);
-      break;
-  }
-}
-
-void state_MEL_enc::termMEL() {
-  if (MEL_run > 0) {
-    emitMELbit(1);
-  }
-}
-
-/********************************************************************************
- * state_VLC_enc: member functions
- *******************************************************************************/
-void state_VLC_enc::emitVLCBits(uint16_t cwd, uint8_t len) {
-  int32_t len32 = len;
-  for (; len32 > 0;) {
-    int32_t available_bits = 8 - (last > 0x8F) - bits;
-    int32_t t              = std::min(available_bits, len32);
-    tmp |= static_cast<uint8_t>((cwd & ((1 << t) - 1)) << bits);
-    bits = static_cast<uint8_t>(bits + t);
-    available_bits -= t;
-    len32 -= t;
-    cwd = static_cast<uint16_t>(cwd >> t);
-    if (available_bits == 0) {
-      if ((last > 0x8f) && tmp != 0x7F) {
-        last = 0x00;
-        continue;
-      }
-      buf[pos] = tmp;
-      pos--;  // reverse order
-      last = tmp;
-      tmp  = 0;
-      bits = 0;
-    }
-  }
-  //  uint8_t b;
-  //  for (; len > 0;) {
-  //    b = cwd & 1;
-  //    cwd >>= 1;
-  //    len--;
-  //    tmp |= b << bits;
-  //    bits++;
-  //    if ((last > 0x8F) && (tmp == 0x7F)) {
-  //      bits++;
-  //    }
-  //    if (bits == 8) {
-  //      buf[pos] = tmp;
-  //      pos--;  // reverse order
-  //      last = tmp;
-  //      tmp  = 0;
-  //      bits = 0;
-  //    }
-  //  }
-}
-
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
@@ -399,82 +184,76 @@ inline __m256i avx2_lzcnt_epi32(__m256i v) {
   return v;
 }
 
+// https://stackoverflow.com/a/58827596
+inline __m128i sse3_lzcnt_epi32(__m128i v) {
+  // prevent value from being rounded up to the next power of two
+  v = _mm_andnot_si128(_mm_srli_epi32(v, 8), v);  // keep 8 MSB
+
+  v = _mm_castps_si128(_mm_cvtepi32_ps(v));    // convert an integer to float
+  v = _mm_srli_epi32(v, 23);                   // shift down the exponent
+  v = _mm_subs_epu16(_mm_set1_epi32(158), v);  // undo bias
+  v = _mm_min_epi16(v, _mm_set1_epi32(32));    // clamp at 32
+
+  return v;
+}
+
 auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
-                       uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
+                       __m128i &sig0, __m128i &sig1, __m128i &v0, __m128i &v1, __m128i &E0, __m128i &E1,
                        uint8_t *const rho_q) {
   // This function shall be called on the assumption that there are two quads
-
-  // const uint32_t QWx2 = block->size.x + block->size.x % 2;
-  // const int8_t nshift[8] = {0, 1, 2, 3, 0, 1, 2, 3};
   uint8_t *const ssp0 =
       block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
   uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  // block->block_states.get() + (2U * qy + 2U) * (block->blkstate_stride) + 2U * qx + 1U;
-  int32_t *sp0  = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
-  int32_t *sp1  = sp0 + block->blksampl_stride;
-  auto v_u8_0   = _mm_set1_epi64x(*((int64_t *)ssp0));
-  auto v_u8_1   = _mm_set1_epi64x(*((int64_t *)ssp1));
-  auto v_u8_zip = _mm_unpacklo_epi8(v_u8_0, v_u8_1);
-  auto vmask    = _mm_set1_epi8(1);
-  auto v_u8_out = _mm_and_si128(v_u8_zip, vmask);
-  #if defined(_MSC_VER) && _MSC_VER < 1920
-  // _mm_cvtsi128_si64x() is not found in Visual Studio 2017
-  *((int64_t *)sigma_n) =
-      (int64_t)_mm_extract_epi32(v_u8_out, 0) + ((int64_t)(_mm_extract_epi32(v_u8_out, 1)) << 32);
-  #else
-  *((int64_t *)sigma_n) = _mm_cvtsi128_si64(v_u8_out);
-  #endif
-  rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
-  rho_q[1] = static_cast<uint8_t>(sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3));
+  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp1        = sp0 + block->blksampl_stride;
+  __m128i t0          = _mm_set1_epi64x(*((int64_t *)ssp0));
+  __m128i t1          = _mm_set1_epi64x(*((int64_t *)ssp1));
+  __m128i t           = _mm_unpacklo_epi8(t0, t1);
+  __m128i v_u8_out    = _mm_and_si128(t, _mm_set1_epi8(1));
+  sig0                = _mm_cvtepu8_epi32(v_u8_out);
+  sig1                = _mm_cvtepu8_epi32(_mm_srli_si128(v_u8_out, 4));
+  __m128i shift       = _mm_setr_epi32(0, 1, 2, 3);
+  t0                  = _mm_sllv_epi32(sig0, shift);
+  t1                  = _mm_hadd_epi32(t0, t0);
+  t0                  = _mm_hadd_epi32(t1, t1);
+  rho_q[0]            = _mm_extract_epi32(t0, 0);
+  t0                  = _mm_sllv_epi32(sig1, shift);
+  t1                  = _mm_hadd_epi32(t0, t0);
+  t0                  = _mm_hadd_epi32(t1, t1);
+  rho_q[1]            = _mm_extract_epi32(t0, 0);
 
-  __m256i vsig = _mm256_cvtepu8_epi32(v_u8_out);
-  auto v0      = _mm_loadu_si128((__m128i *)sp0);
-  auto v1      = _mm_loadu_si128((__m128i *)sp1);
-  __m256i v    = _mm256_broadcastsi128_si256(_mm_unpacklo_epi32(v0, v1));
-  v            = _mm256_inserti128_si256(v, _mm_unpackhi_epi32(v0, v1), 1);
-  _mm256_storeu_si256((__m256i *)v_n, v);
+  t0 = _mm_loadu_si128((__m128i *)sp0);
+  t1 = _mm_loadu_si128((__m128i *)sp1);
+  v0 = _mm_unpacklo_epi32(t0, t1);
+  v1 = _mm_unpackhi_epi32(t0, t1);
 
-  auto vone = _mm256_set1_epi32(1);
-  v         = _mm256_srai_epi32(v, 1);    // take s_n out from v_n (MagSgn); v <- (mu_n -1)
-  v         = _mm256_slli_epi32(v, 1);    // v <- 2*(mu_n -1)
-  v         = _mm256_add_epi32(v, vone);  // v <- 2*mu_n - 1
-  v         = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt_epi32(v));
-  v         = _mm256_mullo_epi32(v, vsig);
-  _mm256_store_si256((__m256i *)E_n, v);
+  t0 = _mm_sub_epi32(_mm_set1_epi32(32), sse3_lzcnt_epi32(v0));
+  E0 = _mm_mullo_epi32(t0, sig0);
+  t1 = _mm_sub_epi32(_mm_set1_epi32(32), sse3_lzcnt_epi32(v1));
+  E1 = _mm_mullo_epi32(t1, sig1);
 };
 
-static inline void make_storage_one(const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
-                                    uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
-                                    uint8_t *const rho_q) {
-  const int16_t x[4] = {static_cast<int16_t>(2 * qx), static_cast<int16_t>(2 * qx),
-                        static_cast<int16_t>(2 * qx + 1), static_cast<int16_t>(2 * qx + 1)};
-  const int16_t y[4] = {static_cast<int16_t>(2 * qy), static_cast<int16_t>(2 * qy + 1),
-                        static_cast<int16_t>(2 * qy), static_cast<int16_t>(2 * qy + 1)};
+auto make_storage_one = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
+                           __m128i &sig0, __m128i &v0, __m128i &E0, uint8_t *const rho_q) {
+  // This function shall be called on the assumption that there are two quads
+  uint8_t *const ssp0 =
+      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
+  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp1        = sp0 + block->blksampl_stride;
 
-  for (int i = 0; i < 4; ++i) {
-    if ((x[i] >= 0 && x[i] < static_cast<int16_t>(block->size.x))
-        && (y[i] >= 0 && y[i] < static_cast<int16_t>(block->size.y))) {
-      sigma_n[i] = block->get_state(Sigma, y[i], x[i]);
-    } else {
-      sigma_n[i] = 0;
-    }
-  }
-  rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
+  sig0          = _mm_setr_epi32(ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1);
+  __m128i shift = _mm_setr_epi32(0, 1, 2, 3);
+  __m128i t0    = _mm_sllv_epi32(sig0, shift);
+  __m128i t1    = _mm_hadd_epi32(t0, t0);
+  t0            = _mm_hadd_epi32(t1, t1);
+  rho_q[0]      = _mm_extract_epi32(t0, 0);
 
-  for (int i = 0; i < 4; ++i) {
-    if ((x[i] >= 0 && x[i] < static_cast<int16_t>(block->size.x))
-        && (y[i] >= 0 && y[i] < static_cast<int16_t>(block->size.y))) {
-      v_n[i] =
-          static_cast<uint32_t>(block->sample_buf[(size_t)x[i] + (size_t)y[i] * (block->blksampl_stride)]);
-    } else {
-      v_n[i] = 0;
-    }
-  }
+  v0 = _mm_setr_epi32(sp0[0], sp1[0], sp0[1], sp1[1]);
 
-  for (int i = 0; i < 4; ++i) {
-    E_n[i] = static_cast<int32_t>((32 - count_leading_zeros(((v_n[i] >> 1) << 1) + 1)) * sigma_n[i]);
-  }
-}
+  t0 = _mm_sub_epi32(_mm_set1_epi32(32), sse3_lzcnt_epi32(v0));
+  E0 = _mm_mullo_epi32(t0, sig0);
+};
 
 // joint termination of MEL and VLC
 int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
@@ -568,11 +347,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   state_MEL_enc MEL_encoder(rev_buf.get());
   state_VLC_enc VLC_encoder(rev_buf.get());
 
-  alignas(32) uint32_t v_n[8];
-  alignas(32) uint8_t sigma_n[8] = {0}, rho_q[2] = {0}, m_n[8] = {0};
-  alignas(32) int32_t E_n[8] = {0}, U_q[2] = {0};
+  alignas(32) uint8_t rho_q[2] = {0};
+  alignas(32) int32_t U_q[2]   = {0};
 
-  // Initial line pair
+  /*******************************************************************************************************************/
+  // Initial line-pair
+  /*******************************************************************************************************************/
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]                 = 0;
   auto E_p                 = Eline.get() + 1;
@@ -584,28 +364,30 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   uint16_t context = 0, n_q, CxtVLC, cwd;
   int32_t Emax_q;
   int32_t u_q, uoff, u_min, uvlc_idx, kappa = 1;
+  __m128i vshift = _mm_setr_epi32(0, 1, 2, 3);
+  __m128i vone   = _mm_set1_epi32(1);
   int32_t emb_pattern, embk_0, embk_1, emb1_0, emb1_1;
+  __m128i sig0, sig1, v0, v1, E0, E1, m0, m1, known1_0, known1_1;
   for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2U)) {
     const int16_t qy = 0;
     bool uoff_flag   = true;
-    make_storage(block, qy, qx, sigma_n, v_n, E_n, rho_q);
+    make_storage(block, qy, qx, sig0, sig1, v0, v1, E0, E1, rho_q);
     // MEL encoding for the first quad
     if (context == 0) {
       MEL_encoder.encodeMEL((rho_q[Q0] != 0));
     }
 
-    Emax_q   = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
+    Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
+                        _mm_extract_epi32(E0, 3));
     U_q[Q0]  = std::max((int32_t)Emax_q, kappa);
     u_q      = U_q[Q0] - kappa;
     u_min    = u_q;
     uvlc_idx = u_q;
     uoff     = (u_q) ? 1 : 0;
     uoff_flag &= uoff;
-    auto vE_n    = _mm_load_si128((__m128i *)E_n);
     auto vEmax_q = _mm_set1_epi32(Emax_q);
     auto vuoff_q = _mm_set1_epi32(uoff);
-    auto vmask   = _mm_cmpeq_epi32(vE_n, vEmax_q);
-    auto vshift  = _mm_setr_epi32(0, 1, 2, 3);
+    auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
     auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
     emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
     n_q         = static_cast<uint16_t>(emb_pattern + (rho_q[Q0] << 4) + (context << 8));
@@ -620,17 +402,17 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     // context for the next quad
     context = (rho_q[Q0] >> 1) | (rho_q[Q0] & 0x1);
 
-    Emax_q  = find_max(E_n[4], E_n[5], E_n[6], E_n[7]);
+    Emax_q  = find_max(_mm_extract_epi32(E1, 0), _mm_extract_epi32(E1, 1), _mm_extract_epi32(E1, 2),
+                       _mm_extract_epi32(E1, 3));
     U_q[Q1] = std::max((int32_t)Emax_q, kappa);
     u_q     = U_q[Q1] - kappa;
     u_min   = (u_min < u_q) ? u_min : u_q;
     uvlc_idx += u_q << 5;
     uoff = (u_q) ? 1 : 0;
     uoff_flag &= uoff;
-    vE_n        = _mm_load_si128((__m128i *)(E_n + 4));
     vEmax_q     = _mm_set1_epi32(Emax_q);
     vuoff_q     = _mm_set1_epi32(uoff);
-    vmask       = _mm_cmpeq_epi32(vE_n, vEmax_q);
+    vmask       = _mm_cmpeq_epi32(E1, vEmax_q);
     vtmp        = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
     emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
     n_q         = static_cast<uint16_t>(emb_pattern + (rho_q[Q1] << 4) + (context << 8));
@@ -667,43 +449,44 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
     }
 
-    for (int i = 0; i < 4; ++i) {
-      m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((embk_0 >> i) & 1));
-      MagSgn_encoder.emitMagSgnBits(v_n[i], m_n[i], (emb1_0 >> i) & 1);
-    }
-    for (int i = 0; i < 4; ++i) {
-      m_n[4 + i] = static_cast<uint8_t>(sigma_n[4 + i] * U_q[Q1] - ((embk_1 >> i) & 1));
-      MagSgn_encoder.emitMagSgnBits(v_n[4 + i], m_n[4 + i], (emb1_1 >> i) & 1);
-    }
+    // MagSgn encoding
+    m0       = _mm_sub_epi32(_mm_mullo_epi32(sig0, _mm_set1_epi32(U_q[0])),
+                             _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
+    m1       = _mm_sub_epi32(_mm_mullo_epi32(sig1, _mm_set1_epi32(U_q[1])),
+                             _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_1), vshift), vone));
+    known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
+    known1_1 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_1), vshift), vone);
+    MagSgn_encoder.emitBits(v0, m0, known1_0);
+    MagSgn_encoder.emitBits(v1, m1, known1_1);
 
     // context for the next quad
     context = (rho_q[Q1] >> 1) | (rho_q[Q1] & 0x1);
     // update rho_line
     *rho_p++ = rho_q[0];
     *rho_p++ = rho_q[1];
-    *E_p++   = E_n[1];
-    *E_p++   = E_n[3];
-    *E_p++   = E_n[5];
-    *E_p++   = E_n[7];
+    *E_p++   = _mm_extract_epi32(E0, 1);
+    *E_p++   = _mm_extract_epi32(E0, 3);
+    *E_p++   = _mm_extract_epi32(E1, 1);
+    *E_p++   = _mm_extract_epi32(E1, 3);
   }
   if (QW & 1) {
     uint16_t qx = static_cast<uint16_t>(QW - 1);
-    make_storage_one(block, 0, qx, sigma_n, v_n, E_n, rho_q);
+    make_storage_one(block, 0, qx, sig0, v0, E0, rho_q);
     // MEL encoding for the first quad
     if (context == 0) {
       MEL_encoder.encodeMEL((rho_q[Q0] != 0));
     }
-    Emax_q   = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
+    Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
+                        _mm_extract_epi32(E0, 3));
     U_q[Q0]  = std::max((int32_t)Emax_q, kappa);
     u_q      = U_q[Q0] - kappa;
     uvlc_idx = u_q;
     uoff     = (u_q) ? 1 : 0;
 
-    auto vE_n    = _mm_load_si128((__m128i *)E_n);
+    // auto vE_n    = _mm_load_si128((__m128i *)E_n);
     auto vEmax_q = _mm_set1_epi32(Emax_q);
     auto vuoff_q = _mm_set1_epi32(uoff);
-    auto vmask   = _mm_cmpeq_epi32(vE_n, vEmax_q);
-    auto vshift  = _mm_setr_epi32(0, 1, 2, 3);
+    auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
     auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
     emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
     n_q         = static_cast<uint16_t>(emb_pattern + (rho_q[Q0] << 4) + (context << 8));
@@ -720,13 +503,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     cwd         = static_cast<uint16_t>(tmp >> 8);
     VLC_encoder.emitVLCBits(cwd, lw);
 
-    for (int i = 0; i < 4; ++i) {
-      m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((embk_0 >> i) & 1));
-      MagSgn_encoder.emitMagSgnBits(v_n[i], m_n[i], (emb1_0 >> i) & 1);
-    }
+    // MagSgn encoding
+    m0       = _mm_sub_epi32(_mm_mullo_epi32(sig0, _mm_set1_epi32(U_q[0])),
+                             _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
+    known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
+    MagSgn_encoder.emitBits(v0, m0, known1_0);
 
-    *E_p++ = E_n[1];
-    *E_p++ = E_n[3];
+    *E_p++ = _mm_extract_epi32(E0, 1);
+    *E_p++ = _mm_extract_epi32(E0, 3);
     // update rho_line
     *rho_p++ = rho_q[0];
   }
@@ -748,24 +532,24 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);                       // (nw | n) << 8
     context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);                        // (ne | nf) << 10
     for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2)) {
-      make_storage(block, qy, qx, sigma_n, v_n, E_n, rho_q);
+      make_storage(block, qy, qx, sig0, sig1, v0, v1, E0, E1, rho_q);
       // MEL encoding of the first quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho_q[Q0] != 0));
       }
 
-      gamma        = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
-      kappa        = std::max((Emax0 - 1) * gamma, 1);
-      Emax_q       = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
-      U_q[Q0]      = std::max((int32_t)Emax_q, kappa);
-      u_q          = U_q[Q0] - kappa;
-      uvlc_idx     = u_q;
-      uoff         = (u_q) ? 1 : 0;
-      auto vE_n    = _mm_load_si128((__m128i *)E_n);
+      gamma    = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
+      kappa    = std::max((Emax0 - 1) * gamma, 1);
+      Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
+                          _mm_extract_epi32(E0, 3));
+      U_q[Q0]  = std::max((int32_t)Emax_q, kappa);
+      u_q      = U_q[Q0] - kappa;
+      uvlc_idx = u_q;
+      uoff     = (u_q) ? 1 : 0;
+      // auto vE_n    = _mm_load_si128((__m128i *)E_n);
       auto vEmax_q = _mm_set1_epi32(Emax_q);
       auto vuoff_q = _mm_set1_epi32(uoff);
-      auto vmask   = _mm_cmpeq_epi32(vE_n, vEmax_q);
-      auto vshift  = _mm_setr_epi32(0, 1, 2, 3);
+      auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
       auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
       emb_pattern =
           _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
@@ -788,15 +572,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
       gamma   = (popcount32((uint32_t)rho_q[Q1]) > 1) ? 1 : 0;
       kappa   = std::max((Emax1 - 1) * gamma, 1);
-      Emax_q  = find_max(E_n[4], E_n[5], E_n[6], E_n[7]);
+      Emax_q  = find_max(_mm_extract_epi32(E1, 0), _mm_extract_epi32(E1, 1), _mm_extract_epi32(E1, 2),
+                         _mm_extract_epi32(E1, 3));
       U_q[Q1] = std::max((int32_t)Emax_q, kappa);
       u_q     = U_q[Q1] - kappa;
       uvlc_idx += u_q << 5;
-      uoff    = (u_q) ? 1 : 0;
-      vE_n    = _mm_load_si128((__m128i *)(E_n + 4));
+      uoff = (u_q) ? 1 : 0;
+      // vE_n    = _mm_load_si128((__m128i *)(E_n + 4));
       vEmax_q = _mm_set1_epi32(Emax_q);
       vuoff_q = _mm_set1_epi32(uoff);
-      vmask   = _mm_cmpeq_epi32(vE_n, vEmax_q);
+      vmask   = _mm_cmpeq_epi32(E1, vEmax_q);
       vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
       emb_pattern =
           _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
@@ -814,22 +599,23 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       cwd         = static_cast<uint16_t>(tmp >> 8);
       VLC_encoder.emitVLCBits(cwd, lw);
 
-      for (int i = 0; i < 4; ++i) {
-        m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((embk_0 >> i) & 1));
-        MagSgn_encoder.emitMagSgnBits(v_n[i], m_n[i], (emb1_0 >> i) & 1);
-      }
-      for (int i = 0; i < 4; ++i) {
-        m_n[4 + i] = static_cast<uint8_t>(sigma_n[4 + i] * U_q[Q1] - ((embk_1 >> i) & 1));
-        MagSgn_encoder.emitMagSgnBits(v_n[4 + i], m_n[4 + i], (emb1_1 >> i) & 1);
-      }
+      // MagSgn encoding
+      m0       = _mm_sub_epi32(_mm_mullo_epi32(sig0, _mm_set1_epi32(U_q[0])),
+                               _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
+      m1       = _mm_sub_epi32(_mm_mullo_epi32(sig1, _mm_set1_epi32(U_q[1])),
+                               _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_1), vshift), vone));
+      known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
+      known1_1 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_1), vshift), vone);
+      MagSgn_encoder.emitBits(v0, m0, known1_0);
+      MagSgn_encoder.emitBits(v1, m1, known1_1);
 
       Emax0 = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1 = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
 
-      *E_p++ = E_n[1];
-      *E_p++ = E_n[3];
-      *E_p++ = E_n[5];
-      *E_p++ = E_n[7];
+      *E_p++ = _mm_extract_epi32(E0, 1);
+      *E_p++ = _mm_extract_epi32(E0, 3);
+      *E_p++ = _mm_extract_epi32(E1, 1);
+      *E_p++ = _mm_extract_epi32(E1, 3);
 
       // calculate context for the next quad
       context = ((rho_q[1] & 0x4) << 7) | ((rho_q[1] & 0x8) << 6);   // (w | sw) << 9
@@ -841,11 +627,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     }
     if (QW & 1) {
       uint16_t qx = static_cast<uint16_t>(QW - 1);
-
-      make_storage_one(block, qy, qx, sigma_n, v_n, E_n, rho_q);
-      *E_p++ = E_n[1];
-      *E_p++ = E_n[3];
-
+      make_storage_one(block, qy, qx, sig0, v0, E0, rho_q);
       // MEL encoding of the first quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho_q[Q0] != 0));
@@ -853,17 +635,17 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       gamma    = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
       kappa    = std::max((Emax0 - 1) * gamma, 1);
-      Emax_q   = find_max(E_n[0], E_n[1], E_n[2], E_n[3]);
+      Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
+                          _mm_extract_epi32(E0, 3));
       U_q[Q0]  = std::max((int32_t)Emax_q, kappa);
       u_q      = U_q[Q0] - kappa;
       uvlc_idx = u_q;
       uoff     = (u_q) ? 1 : 0;
 
-      auto vE_n    = _mm_load_si128((__m128i *)E_n);
+      // auto vE_n    = _mm_load_si128((__m128i *)E_n);
       auto vEmax_q = _mm_set1_epi32(Emax_q);
       auto vuoff_q = _mm_set1_epi32(uoff);
-      auto vmask   = _mm_cmpeq_epi32(vE_n, vEmax_q);
-      auto vshift  = _mm_setr_epi32(0, 1, 2, 3);
+      auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
       auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
       emb_pattern =
           _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
@@ -881,10 +663,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       cwd         = static_cast<uint16_t>(tmp >> 8);
       VLC_encoder.emitVLCBits(cwd, lw);
 
-      for (int i = 0; i < 4; ++i) {
-        m_n[i] = static_cast<uint8_t>(sigma_n[i] * U_q[Q0] - ((embk_0 >> i) & 1));
-        MagSgn_encoder.emitMagSgnBits(v_n[i], m_n[i], (emb1_0 >> i) & 1);
-      }
+      // MagSgn encoding
+      m0       = _mm_sub_epi32(_mm_mullo_epi32(sig0, _mm_set1_epi32(U_q[0])),
+                               _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
+      known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
+      MagSgn_encoder.emitBits(v0, m0, known1_0);
+
+      *E_p++ = _mm_extract_epi32(E0, 1);
+      *E_p++ = _mm_extract_epi32(E0, 3);
       // update rho_line
       *rho_p++ = rho_q[0];
     }
