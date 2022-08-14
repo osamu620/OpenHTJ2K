@@ -94,9 +94,6 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       // Generate masks for sigma
       __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
       __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
-      // Check emptiness of a block
-      vorval = _mm256_or_si256(vorval, v0);
-      vorval = _mm256_or_si256(vorval, v1);
       // Convert two's compliment to MagSgn form
       __m256i vone0 = _mm256_and_si256(mask0, vone);
       __m256i vone1 = _mm256_and_si256(mask1, vone);
@@ -126,11 +123,11 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       __m128i v = _mm256_extracti128_si256(v0, 0);
       // _mm256_zeroupper(); // does not work on GCC, TODO: find a solution with __m128i v
       _mm_storeu_si128((__m128i *)dstblk, v);
+      // Check emptiness of a block
+      or_val |= *(uint32_t *)dstblk;
+      or_val |= *(uint32_t *)(dstblk + 4);
       dstblk += 16;
     }
-    // Check emptiness of a block
-    or_val |=
-        static_cast<uint32_t>(_mm256_movemask_epi8(vabsmask));  // !_mm256_testz_si256(vorval, vabsmask);
     // process leftover
     for (; len > 0; --len) {
       int32_t temp;
