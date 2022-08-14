@@ -402,7 +402,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     cwd    = CxtVLC >> 7;
 
     // context for the next quad
-    context = static_cast<uint16_t>((rho0 >> 1) | (rho0 & 0x1));
+    context = (rho0 >> 1) | (rho0 & 0x1);
 
     Emax_q = find_max(_mm_extract_epi32(E1, 0), _mm_extract_epi32(E1, 1), _mm_extract_epi32(E1, 2),
                       _mm_extract_epi32(E1, 3));
@@ -463,7 +463,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     MagSgn_encoder.emitBits(v1, m1, known1_1);
 
     // context for the next quad
-    context = static_cast<uint16_t>((rho1 >> 1) | (rho1 & 0x1));
+    context = (rho1 >> 1) | (rho1 & 0x1);
     // update rho_line
     *rho_p++ = rho0;
     *rho_p++ = rho1;
@@ -530,9 +530,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
 
     // calculate context for the next quad
-    context = static_cast<uint16_t>(((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6));  // (w | sw) << 9
-    context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);               // (nw | n) << 8
-    context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);                // (ne | nf) << 10
+    context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);            // (w | sw) << 9
+    context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);  // (nw | n) << 8
+    context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);   // (ne | nf) << 10
     for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2)) {
       make_storage(block, qy, qx, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
       // MEL encoding of the first quad
@@ -564,9 +564,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       cwd = CxtVLC >> 7;
 
       // calculate context for the next quad
-      context = static_cast<uint16_t>(((rho0 & 0x4) << 7) | ((rho0 & 0x8) << 6));  // (w | sw) << 9
-      context |= ((rho_p[0] & 0x8) << 5) | ((rho_p[1] & 0x2) << 7);                // (nw | n) << 8
-      context |= ((rho_p[1] & 0x8) << 7) | ((rho_p[2] & 0x2) << 9);                // (ne | nf) << 10
+      context = ((rho0 & 0x4) << 7) | ((rho0 & 0x8) << 6);           // (w | sw) << 9
+      context |= ((rho_p[0] & 0x8) << 5) | ((rho_p[1] & 0x2) << 7);  // (nw | n) << 8
+      context |= ((rho_p[1] & 0x8) << 7) | ((rho_p[2] & 0x2) << 9);  // (ne | nf) << 10
       // MEL encoding of the second quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho1 != 0));
@@ -620,9 +620,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       *E_p++ = _mm_extract_epi32(E1, 3);
 
       // calculate context for the next quad
-      context = static_cast<uint16_t>(((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6));  // (w | sw) << 9
-      context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0x2) << 7);                // (nw | n) << 8
-      context |= ((rho_p[2] & 0x8) << 7) | ((rho_p[3] & 0x2) << 9);                // (ne | nf) << 10
+      context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);           // (w | sw) << 9
+      context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0x2) << 7);  // (nw | n) << 8
+      context |= ((rho_p[2] & 0x8) << 7) | ((rho_p[3] & 0x2) << 9);  // (ne | nf) << 10
 
       *rho_p++ = rho0;
       *rho_p++ = rho1;
