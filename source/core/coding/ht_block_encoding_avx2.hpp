@@ -183,7 +183,7 @@ class state_VLC_enc {
   explicit state_VLC_enc(uint8_t *p) : buf(p), tmp(0xF), last(0xFF), bits(4), pos(MAX_Scup - 2) {
     buf[pos + 1] = 0xFF;
   }
-  void emitVLCBits(uint16_t cwd, uint8_t len) {
+  void emitVLCBits(uint32_t cwd, uint32_t len) {
     int32_t len32 = len;
     for (; len32 > 0;) {
       int32_t available_bits = 8 - (last > 0x8F) - bits;
