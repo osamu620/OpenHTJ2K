@@ -210,17 +210,15 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   __m128i t1          = _mm_set1_epi64x(*((int64_t *)ssp1));
   __m128i t           = _mm_unpacklo_epi8(t0, t1);
   __m128i v_u8_out    = _mm_and_si128(t, _mm_set1_epi8(1));
+  v_u8_out            = _mm_cmpgt_epi8(v_u8_out, _mm_setzero_si128());
   sig0                = _mm_cvtepu8_epi32(v_u8_out);
   sig1                = _mm_cvtepu8_epi32(_mm_srli_si128(v_u8_out, 4));
-  __m128i shift       = _mm_setr_epi32(0, 1, 2, 3);
-  t0                  = _mm_sllv_epi32(sig0, shift);
-  t1                  = _mm_hadd_epi32(t0, t0);
-  t0                  = _mm_hadd_epi32(t1, t1);
-  rho0                = _mm_extract_epi32(t0, 0);
-  t0                  = _mm_sllv_epi32(sig1, shift);
-  t1                  = _mm_hadd_epi32(t0, t0);
-  t0                  = _mm_hadd_epi32(t1, t1);
-  rho1                = _mm_extract_epi32(t0, 0);
+  rho0 =
+      _mm_movemask_epi8(_mm_packus_epi16(_mm_packus_epi32(sig0, _mm_setzero_si128()), _mm_setzero_si128()));
+  rho1 =
+      _mm_movemask_epi8(_mm_packus_epi16(_mm_packus_epi32(sig1, _mm_setzero_si128()), _mm_setzero_si128()));
+  sig0 = _mm_srli_epi32(sig0, 7);
+  sig1 = _mm_srli_epi32(sig1, 7);
 
   t0 = _mm_loadu_si128((__m128i *)sp0);
   t1 = _mm_loadu_si128((__m128i *)sp1);
@@ -369,6 +367,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   __m128i vone   = _mm_set1_epi32(1);
   int32_t emb_pattern, embk_0, embk_1, emb1_0, emb1_1;
   __m128i sig0, sig1, v0, v1, E0, E1, m0, m1, known1_0, known1_1;
+  __m128i Etmp, vuoff, mask, vtmp;
   for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2U)) {
     const int16_t qy = 0;
     bool uoff_flag   = true;
@@ -386,12 +385,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     uvlc_idx = u_q;
     uoff     = (u_q) ? 1 : 0;
     uoff_flag &= uoff;
-    auto vEmax_q = _mm_set1_epi32(Emax_q);
-    auto vuoff_q = _mm_set1_epi32(uoff);
-    auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
-    auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
-    emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
-    n_q         = static_cast<uint16_t>(emb_pattern + (rho0 << 4) + (context << 8));
+    Etmp        = _mm_set1_epi32(Emax_q);
+    vuoff       = _mm_set1_epi32(uoff << 7);
+    mask        = _mm_cmpeq_epi32(E0, Etmp);
+    vtmp        = _mm_and_si128(vuoff, mask);
+    emb_pattern = _mm_movemask_epi8(
+        _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
+    n_q = static_cast<uint16_t>(emb_pattern + (rho0 << 4) + (context << 8));
     // prepare VLC encoding of quad 0
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_0 = CxtVLC & 0xF;
@@ -410,12 +410,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     uvlc_idx += u_q << 5;
     uoff = (u_q) ? 1 : 0;
     uoff_flag &= uoff;
-    vEmax_q     = _mm_set1_epi32(Emax_q);
-    vuoff_q     = _mm_set1_epi32(uoff);
-    vmask       = _mm_cmpeq_epi32(E1, vEmax_q);
-    vtmp        = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
-    emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
-    n_q         = static_cast<uint16_t>(emb_pattern + (rho1 << 4) + (context << 8));
+    Etmp        = _mm_set1_epi32(Emax_q);
+    vuoff       = _mm_set1_epi32(uoff << 7);
+    mask        = _mm_cmpeq_epi32(E1, Etmp);
+    vtmp        = _mm_and_si128(vuoff, mask);
+    emb_pattern = _mm_movemask_epi8(
+        _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
+    n_q = static_cast<uint16_t>(emb_pattern + (rho1 << 4) + (context << 8));
     // VLC encoding of quads 0 and 1
     VLC_encoder.emitVLCBits(cwd, lw);
     CxtVLC = enc_CxtVLC_table0[n_q];
@@ -485,12 +486,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     uoff     = (u_q) ? 1 : 0;
 
     // auto vE_n    = _mm_load_si128((__m128i *)E_n);
-    auto vEmax_q = _mm_set1_epi32(Emax_q);
-    auto vuoff_q = _mm_set1_epi32(uoff);
-    auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
-    auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
-    emb_pattern = _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
-    n_q         = static_cast<uint16_t>(emb_pattern + (rho0 << 4) + (context << 8));
+    Etmp        = _mm_set1_epi32(Emax_q);
+    vuoff       = _mm_set1_epi32(uoff << 7);
+    mask        = _mm_cmpeq_epi32(E0, Etmp);
+    vtmp        = _mm_and_si128(vuoff, mask);
+    emb_pattern = _mm_movemask_epi8(
+        _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
+    n_q = static_cast<uint16_t>(emb_pattern + (rho0 << 4) + (context << 8));
     // VLC encoding
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_0 = CxtVLC & 0xF;
@@ -539,21 +541,20 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         MEL_encoder.encodeMEL((rho0 != 0));
       }
 
-      gamma    = (popcount32((uint32_t)rho0) > 1) ? 1 : 0;
-      kappa    = std::max((Emax0 - 1) * gamma, 1);
-      Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
-                          _mm_extract_epi32(E0, 3));
-      U0       = std::max((int32_t)Emax_q, kappa);
-      u_q      = U0 - kappa;
-      uvlc_idx = u_q;
-      uoff     = (u_q) ? 1 : 0;
-      // auto vE_n    = _mm_load_si128((__m128i *)E_n);
-      auto vEmax_q = _mm_set1_epi32(Emax_q);
-      auto vuoff_q = _mm_set1_epi32(uoff);
-      auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
-      auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
-      emb_pattern =
-          _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
+      gamma       = (popcount32((uint32_t)rho0) > 1) ? 1 : 0;
+      kappa       = std::max((Emax0 - 1) * gamma, 1);
+      Emax_q      = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
+                             _mm_extract_epi32(E0, 3));
+      U0          = std::max((int32_t)Emax_q, kappa);
+      u_q         = U0 - kappa;
+      uvlc_idx    = u_q;
+      uoff        = (u_q) ? 1 : 0;
+      Etmp        = _mm_set1_epi32(Emax_q);
+      vuoff       = _mm_set1_epi32(uoff << 7);
+      mask        = _mm_cmpeq_epi32(E0, Etmp);
+      vtmp        = _mm_and_si128(vuoff, mask);
+      emb_pattern = _mm_movemask_epi8(
+          _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
       n_q = static_cast<uint16_t>(emb_pattern + (rho0 << 4) + (context << 0));
       // prepare VLC encoding of quad 0
       CxtVLC = enc_CxtVLC_table1[n_q];
@@ -577,13 +578,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       U1     = std::max((int32_t)Emax_q, kappa);
       u_q    = U1 - kappa;
       uvlc_idx += u_q << 5;
-      uoff    = (u_q) ? 1 : 0;
-      vEmax_q = _mm_set1_epi32(Emax_q);
-      vuoff_q = _mm_set1_epi32(uoff);
-      vmask   = _mm_cmpeq_epi32(E1, vEmax_q);
-      vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
-      emb_pattern =
-          _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
+      uoff        = (u_q) ? 1 : 0;
+      Etmp        = _mm_set1_epi32(Emax_q);
+      vuoff       = _mm_set1_epi32(uoff << 7);
+      mask        = _mm_cmpeq_epi32(E1, Etmp);
+      vtmp        = _mm_and_si128(vuoff, mask);
+      emb_pattern = _mm_movemask_epi8(
+          _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
       n_q = static_cast<uint16_t>(emb_pattern + (rho1 << 4) + (context << 0));
       // VLC encoding of quads 0 and 1
       VLC_encoder.emitVLCBits(cwd, lw);
@@ -642,13 +643,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       uvlc_idx = u_q;
       uoff     = (u_q) ? 1 : 0;
 
-      // auto vE_n    = _mm_load_si128((__m128i *)E_n);
-      auto vEmax_q = _mm_set1_epi32(Emax_q);
-      auto vuoff_q = _mm_set1_epi32(uoff);
-      auto vmask   = _mm_cmpeq_epi32(E0, vEmax_q);
-      auto vtmp    = _mm_and_si128(_mm_sllv_epi32(vuoff_q, vshift), vmask);
-      emb_pattern =
-          _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(vtmp, vtmp), _mm_hadd_epi32(vtmp, vtmp)));
+      Etmp        = _mm_set1_epi32(Emax_q);
+      vuoff       = _mm_set1_epi32(uoff << 7);
+      mask        = _mm_cmpeq_epi32(E0, Etmp);
+      vtmp        = _mm_and_si128(vuoff, mask);
+      emb_pattern = _mm_movemask_epi8(
+          _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
       n_q = static_cast<uint16_t>(emb_pattern + (rho0 << 4) + (context << 0));
       // VLC encoding
       CxtVLC = enc_CxtVLC_table1[n_q];
