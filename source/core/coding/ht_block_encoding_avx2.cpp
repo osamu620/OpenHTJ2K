@@ -129,7 +129,8 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       dstblk += 16;
     }
     // Check emptiness of a block
-    or_val |= !_mm256_testz_si256(vorval, vabsmask);
+    or_val |=
+        static_cast<uint32_t>(_mm256_movemask_epi8(vabsmask));  // !_mm256_testz_si256(vorval, vabsmask);
     // process leftover
     for (; len > 0; --len) {
       int32_t temp;
