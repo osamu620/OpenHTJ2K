@@ -52,47 +52,46 @@ class state_MS_enc {
   uint8_t last;        // last byte in the buffer
   uint8_t *const buf;  // buffer for MagSgn
 
-  FORCE_INLINE void emit_dword()  // internal function to emit 4 code words
-  {
+  FORCE_INLINE void emit_dword() {  // internal function to emit 4 code words
+    // The algorithm of bit-stuffing is:
+    /*  for (int i = 0; i < 4; ++i) {
+          if (last == 0xFF) {
+            last = static_cast<uint8_t>(Creg & 0x7F);
+            Creg >>= 7;
+            ctreg -= 7;
+          } else {
+            last = static_cast<uint8_t>(Creg & 0xFF);
+            Creg >>= 8;
+            ctreg -= 8;
+          }
+          t |= static_cast<uint32_t>(last) << bits_local;
+          bits_local += 8;
+       } */
     uint32_t bits_local = 0;
     uint32_t val        = Creg & 0xFFFFFFFF;
     uint32_t stuff      = (last == 0xFF);
     uint32_t tmp;
-
     uint32_t t = 0;
-    tmp        = val & ((1 << (8 - stuff)) - 1);
+
+    tmp = val & _bzhi_u32(UINT32_MAX, 8 - stuff);  // _bzhi_u32(UINT32_MAX, len) = ((1U << len) - 1U)
     t |= tmp;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+    tmp = (val >> (bits_local)) & _bzhi_u32(UINT32_MAX, 8 - stuff);
     t |= tmp << 8;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+    tmp = (val >> (bits_local)) & _bzhi_u32(UINT32_MAX, 8 - stuff);
     t |= tmp << 16;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+    tmp = (val >> (bits_local)) & _bzhi_u32(UINT32_MAX, 8 - stuff);
     t |= tmp << 24;
     bits_local += 8 - stuff;
     last = tmp & 0xFF;
-
-    //  for (int i = 0; i < 4; ++i) {
-    //    if (last == 0xFF) {
-    //      last = static_cast<uint8_t>(Creg & 0x7F);
-    //      Creg >>= 7;
-    //      ctreg -= 7;
-    //    } else {
-    //      last = static_cast<uint8_t>(Creg & 0xFF);
-    //      Creg >>= 8;
-    //      ctreg -= 8;
-    //    }
-    //    t |= static_cast<uint32_t>(last) << bits_local;
-    //    bits_local += 8;
-    //  }
 
     Creg >>= bits_local;
     ctreg -= bits_local;
