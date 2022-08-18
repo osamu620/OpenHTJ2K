@@ -174,16 +174,15 @@ class state_VLC_enc {
     buf[pos + 1] = 0xFF;
   }
 
-  FORCE_INLINE void emitVLCBits(uint16_t cwd, uint8_t len) {
-    int32_t len32 = len;
-    for (; len32 > 0;) {
+  FORCE_INLINE void emitVLCBits(uint32_t cwd, uint32_t len) {
+    for (; len > 0;) {
       int32_t available_bits = 8 - (last > 0x8F) - bits;
-      int32_t t              = std::min(available_bits, len32);
+      int32_t t              = std::min(available_bits, (int32_t)len);
       tmp |= static_cast<uint8_t>((cwd & ((1 << t) - 1)) << bits);
       bits = static_cast<uint8_t>(bits + t);
       available_bits -= t;
-      len32 -= t;
-      cwd = static_cast<uint16_t>(cwd >> t);
+      len -= t;
+      cwd >>= t;
       if (available_bits == 0) {
         if ((last > 0x8f) && tmp != 0x7F) {
           last = 0x00;
