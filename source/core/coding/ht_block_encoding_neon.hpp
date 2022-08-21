@@ -46,81 +46,48 @@
  *******************************************************************************/
 class state_MS_enc {
  private:
-  uint64_t Creg;       // temporal buffer to store up to 4 codewords
+  __uint128_t Creg;    // temporal buffer for codewords
   uint32_t ctreg;      // number of used bits in Creg
   int32_t pos;         // current position in the buffer
   uint8_t last;        // last byte in the buffer
   uint8_t *const buf;  // buffer for MagSgn
 
-  FORCE_INLINE void emit_dword() {  // internal function to emit 4 code words
+  FORCE_INLINE void emit_qword() {  // internal function to emit 4 code words
     uint32_t bits_local = 0;
-    uint32_t val        = Creg & 0xFFFFFFFF;
+    uint64_t val        = Creg & 0xFFFFFFFF'FFFFFFFF;
     uint32_t stuff      = (last == 0xFF);
-    uint32_t tmp;
+    uint64_t tmp;
 
-    uint32_t t = 0;
-    tmp        = val & ((1 << (8 - stuff)) - 1);
-    t |= tmp;
-    bits_local += 8 - stuff;
-    stuff = (tmp == 0xFF);
-
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
-    t |= tmp << 8;
-    bits_local += 8 - stuff;
-    stuff = (tmp == 0xFF);
-
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
-    t |= tmp << 16;
-    bits_local += 8 - stuff;
-    stuff = (tmp == 0xFF);
-
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
-    t |= tmp << 24;
-    bits_local += 8 - stuff;
+    uint64_t t = 0;
+    for (int i = 0; i < 8; ++i) {
+      tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+      t |= tmp << (8 * i);
+      bits_local += 8 - stuff;
+      stuff = (tmp == 0xFF);
+    }
     last = tmp & 0xFF;
-
-    //  for (int i = 0; i < 4; ++i) {
-    //    if (last == 0xFF) {
-    //      last = static_cast<uint8_t>(Creg & 0x7F);
-    //      Creg >>= 7;
-    //      ctreg -= 7;
-    //    } else {
-    //      last = static_cast<uint8_t>(Creg & 0xFF);
-    //      Creg >>= 8;
-    //      ctreg -= 8;
-    //    }
-    //    t |= static_cast<uint32_t>(last) << bits_local;
-    //    bits_local += 8;
-    //  }
 
     Creg >>= bits_local;
     ctreg -= bits_local;
-    *reinterpret_cast<uint32_t *>(buf + pos) = t;
-    pos += 4;
+    *reinterpret_cast<uint64_t *>(buf + pos) = t;
+    pos += 8;
   }
 
  public:
   explicit state_MS_enc(uint8_t *p) : Creg(0), ctreg(0), pos(0), last(0), buf(p) {}
-  //  FORCE_INLINE void emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
-  //    int32_t temp = emb_1 << len;
-  //    cwd -= static_cast<uint32_t>(temp);
-  //    Creg |= static_cast<uint64_t>(cwd) << ctreg;
-  //    ctreg += len;
-  //    while (ctreg >= 32) {
-  //      emit_dword();
-  //    }
-  //  }
+
   FORCE_INLINE void emitBits(int32x4_t &v, int32x4_t &m, int32x4_t &emb1) {
     int32x4_t tmp = vshlq_s32(emb1, m);
     v             = vsubq_s32(v, tmp);
     for (int i = 0; i < 4; ++i) {
-      Creg |= static_cast<uint64_t>(v[i]) << ctreg;
+      Creg |= static_cast<__uint128_t>(v[i]) << ctreg;
       ctreg += static_cast<unsigned int>(m[i]);
-      while (ctreg >= 32) {
-        emit_dword();
-      }
+    }
+    while (ctreg >= 64) {
+      emit_qword();
     }
   }
+
   FORCE_INLINE int32_t termMS() {
     while (true) {
       if (last == 0xFF) {

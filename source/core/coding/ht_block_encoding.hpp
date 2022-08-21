@@ -26,12 +26,13 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#pragma once
-#include <cstdint>
+#if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2))
+  #pragma once
+  #include <cstdint>
 
-#define MAX_Lcup 16834
-#define MAX_Scup 4079
-#define MAX_Lref 2046
+  #define MAX_Lcup 16834
+  #define MAX_Scup 4079
+  #define MAX_Lref 2046
 
 /********************************************************************************
  * state_MS_enc: state class for MagSgn encoding
@@ -39,38 +40,38 @@
 class state_MS_enc {
  private:
   uint8_t *const buf;  // buffer for MagSgn
-#ifdef MSNAIVE
+  #ifdef MSNAIVE
   uint8_t bits;
   uint8_t max;
   uint8_t tmp;
-#else
+  #else
   uint64_t Creg;      // temporal buffer to store up to 4 codewords
   uint32_t ctreg;     // number of used bits in Creg
   uint8_t last;       // last byte in the buffer
   int32_t pos;        // current position in the buffer
   void emit_dword();  // internal function to emit 4 code words
-#endif
+  #endif
 
  public:
   explicit state_MS_enc(uint8_t *p)
       : buf(p),
         Creg(0),
-#ifdef MSNAIVE
+  #ifdef MSNAIVE
         bits(0),
         max(8),
         tmp(0)
-#else
+  #else
         ctreg(0),
         last(0),
         pos(0)
-#endif
+  #endif
   {
   }
-#ifdef MSNAIVE
+  #ifdef MSNAIVE
   void emitMagSgnBits(uint32_t cwd, uint8_t m_n);
-#else
+  #else
   void emitMagSgnBits(uint32_t cwd, uint8_t m_n, uint8_t emb_1);
-#endif
+  #endif
   int32_t termMS();
 };
 
@@ -195,3 +196,4 @@ class MR_enc {
   }
   [[nodiscard]] uint32_t get_length() const { return MAX_Lref - pos; }
 };
+#endif

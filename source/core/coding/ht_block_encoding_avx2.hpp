@@ -52,7 +52,7 @@ class state_MS_enc {
   uint8_t last;        // last byte in the buffer
   uint8_t *const buf;  // buffer for MagSgn
 
-  FORCE_INLINE void emit_dword() {  // internal function to emit 4 code words
+  FORCE_INLINE void emit_qword() {  // internal function to emit 4 code words
     // The algorithm of bit-stuffing is:
     /*  for (int i = 0; i < 4; ++i) {
           if (last == 0xFF) {
