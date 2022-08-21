@@ -457,10 +457,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     // update rho_line
     *rho_p++ = rho0;
     *rho_p++ = rho1;
-    *E_p++   = _mm_extract_epi32(E0, 1);
-    *E_p++   = _mm_extract_epi32(E0, 3);
-    *E_p++   = _mm_extract_epi32(E1, 1);
-    *E_p++   = _mm_extract_epi32(E1, 3);
+    // update Eline
+    E0 = _mm_shuffle_epi32(E0, 0xD8);
+    E1 = _mm_shuffle_epi32(E1, 0xD8);
+    _mm_storeu_si128((__m128i *)E_p, _mm_unpackhi_epi32(E0, E1));
+    E_p += 4;
     // update pointer to line buffer
     ssp0 += 4;
     ssp1 += 4;
@@ -613,10 +614,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       Emax0 = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1 = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
 
-      *E_p++ = _mm_extract_epi32(E0, 1);
-      *E_p++ = _mm_extract_epi32(E0, 3);
-      *E_p++ = _mm_extract_epi32(E1, 1);
-      *E_p++ = _mm_extract_epi32(E1, 3);
+      // update Eline
+      E0 = _mm_shuffle_epi32(E0, 0xD8);
+      E1 = _mm_shuffle_epi32(E1, 0xD8);
+      _mm_storeu_si128((__m128i *)E_p, _mm_unpackhi_epi32(E0, E1));
+      E_p += 4;
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);           // (w | sw) << 9
