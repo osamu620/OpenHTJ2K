@@ -64,7 +64,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     uint8_t *dstblk    = block_states.get() + block_index;
 
     float32x4_t vscale = vdupq_n_f32(fscale);
-    auto vorval        = vdupq_n_s32(0);
+    int32x4_t vorval   = vdupq_n_s32(0);
     int32x4_t vpLSB    = vdupq_n_s32(pLSB);
     int32x4_t vone     = vdupq_n_s32(1);
 
@@ -131,7 +131,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       dstblk += 8;
     }
     // Check emptiness of a block
-    or_val |= static_cast<unsigned int>(vmaxvq_s16(vorval));
+    or_val |= static_cast<unsigned int>(vmaxvq_s32(vorval));
     // process leftover
     for (; len > 0; --len) {
       int32_t temp;
@@ -210,47 +210,35 @@ void state_MEL_enc::termMEL() {
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
-auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
-                       int32x4_t &sig0, int32x4_t &sig1, int32x4_t &v0, int32x4_t &v1, int32x4_t &E0,
-                       int32x4_t &E1, uint8_t *const rho_q) {
+auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
+                       int32x4_t &sig1, int32x4_t &v0, int32x4_t &v1, int32x4_t &E0, int32x4_t &E1,
+                       uint8_t *const rho_q) {
   // This function shall be called on the assumption that there are two quads
-  uint8_t *const ssp0 =
-      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
-  int32_t *sp1        = sp0 + block->blksampl_stride;
+  int32x4x2_t v = vzipq_s32(vld1q_s32(sp0), vld1q_s32(sp1));
+  v0            = v.val[0];
+  v1            = v.val[1];
 
   uint8x8_t sig01 = vand_u8(vzip1_u8(vld1_u8(ssp0), vld1_u8(ssp1)), vdup_n_u8(1));
   sig0            = vcgtzq_s32(vmovl_u16(vget_low_u16(vmovl_u8(sig01))));
   sig1            = vcgtzq_s32(vmovl_u16(vget_high_u16(vmovl_u8(sig01))));
   int8x8_t shift  = {0, 1, 2, 3, 4, 5, 6, 7};
-  uint8x8_t vtmp  = vshl_u8(sig01, shift);
-  rho_q[0]        = vaddv_u8(vtmp) & 0xF;
-  rho_q[1]        = vaddv_u8(vtmp) >> 4;
-  int32x4x2_t v   = vzipq_s32(vld1q_s32(sp0), vld1q_s32(sp1));
-  v0              = v.val[0];
-  v1              = v.val[1];
-  // v.val[0]        = vaddq_s32(vshlq_n_s32(vshrq_n_s32(v.val[0], 1), 1), vdupq_n_s32(1));
+  uint8_t rho01   = vaddv_u8(vshl_u8(sig01, shift));
+  rho_q[0]        = rho01 & 0xF;
+  rho_q[1]        = rho01 >> 4;
+
   E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[0])), sig0);
-  // v.val[1]        = vaddq_s32(vshlq_n_s32(vshrq_n_s32(v.val[1], 1), 1), vdupq_n_s32(1));
   E1 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[1])), sig1);
 };
 
-auto make_storage_one = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
-                           int32x4_t &sig0, int32x4_t &v0, int32x4_t &E0, uint8_t *const rho_q) {
-  uint8_t *const ssp0 =
-      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
-  int32_t *sp1        = sp0 + block->blksampl_stride;
+auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
+                           int32x4_t &v0, int32x4_t &E0, uint8_t *const rho_q) {
+  v0 = {sp0[0], sp1[0], sp0[1], sp1[1]};
 
   int32x4_t sig   = {ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1};
   int32x4_t shift = {0, 1, 2, 3};
   uint32x4_t vtmp = vshlq_s32(sig, shift);
   rho_q[0]        = vaddvq_u32(vtmp) & 0xF;
   sig0            = vcgtzq_s32(sig);
-
-  v0 = {sp0[0], sp1[0], sp0[1], sp1[1]};
 
   E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v0)), sig0);
 };
@@ -318,8 +306,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     printf("WARNING: Encoding with ROI is not supported.\n");
   }
 
-  const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
-  const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
+  const uint32_t QW = ceil_int(block->size.x, 2U);
+  const uint32_t QH = ceil_int(block->size.y, 2U);
 
   block->quantize(or_val);
 
@@ -372,11 +360,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   // Initial line-pair
   /*******************************************************************************************************************/
-  for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2U)) {
+  uint8_t *ssp0 = block->block_states.get() + 1U * (block->blkstate_stride) + 1U;
+  uint8_t *ssp1 = ssp0 + block->blkstate_stride;
+  int32_t *sp0  = block->sample_buf.get();
+  int32_t *sp1  = sp0 + block->blksampl_stride;
+  for (uint32_t qx = 0; qx < QW - 1; qx += 2) {
     bool uoff_flag = true;
 
     // MAKE_STORAGE()
-    make_storage(block, 0, qx, sig0, sig1, v0, v1, E0, E1, rho_q);
+    make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho_q);
     // update Eline
     vst1q_s32(E_p, vuzp2q_s32(E0, E1));  // vzip2q_s32(vzip1q_s32(E0, E1), vzip2q_s32(E0, E1)));
     E_p += 4;
@@ -467,10 +459,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     // update rho_line
     *rho_p++ = rho_q[0];
     *rho_p++ = rho_q[1];
+    // update pointer to line buffer
+    ssp0 += 4;
+    ssp1 += 4;
+    sp0 += 4;
+    sp1 += 4;
   }
   if (QW & 1) {
-    uint16_t qx = static_cast<uint16_t>(QW - 1);
-    make_storage_one(block, 0, qx, sig0, v0, E0, rho_q);
+    make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho_q);
     *E_p++ = E0[1];
     *E_p++ = E0[3];
 
@@ -517,7 +513,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   // Non-initial line-pair
   /*******************************************************************************************************************/
   int32_t Emax0, Emax1;
-  for (uint16_t qy = 1; qy < QH; qy++) {
+  for (uint32_t qy = 1; qy < QH; ++qy) {
     E_p      = Eline.get() + 1;
     rho_p    = rholine.get() + 1;
     rho_q[1] = 0;
@@ -529,8 +525,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     context = ((rho_q[1] & 0x4) << 7) | ((rho_q[1] & 0x8) << 6);    // (w | sw) << 9
     context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);  // (nw | n) << 8
     context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);   // (ne | nf) << 10
-    for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2)) {
-      make_storage(block, qy, qx, sig0, sig1, v0, v1, E0, E1, rho_q);
+
+    ssp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
+    ssp1 = ssp0 + block->blkstate_stride;
+    sp0  = block->sample_buf.get() + 2U * (qy * block->blksampl_stride);
+    sp1  = sp0 + block->blksampl_stride;
+    for (uint32_t qx = 0; qx < QW - 1; qx += 2) {
+      make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho_q);
       // MEL encoding of the first quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho_q[Q0] != 0));
@@ -608,12 +609,17 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0x2) << 7);  // (nw | n) << 8
       context |= ((rho_p[2] & 0x8) << 7) | ((rho_p[3] & 0x2) << 9);  // (ne | nf) << 10
 
+      // update rho_line
       *rho_p++ = rho_q[0];
       *rho_p++ = rho_q[1];
+      // update pointer to line buffer
+      ssp0 += 4;
+      ssp1 += 4;
+      sp0 += 4;
+      sp1 += 4;
     }
     if (QW & 1) {
-      uint16_t qx = static_cast<uint16_t>(QW - 1);
-      make_storage_one(block, qy, qx, sig0, v0, E0, rho_q);
+      make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho_q);
       *E_p++ = E0[1];
       *E_p++ = E0[3];
 

@@ -2443,8 +2443,8 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   }
 
   uint8_t bit = this->packet_header->get_bit();
-  if (bit == 0) {                       // empty packet
-    this->packet_header->flush_bits();  // emit_dword packet header
+  if (bit == 0) {                       // if 0, empty packet
+    this->packet_header->flush_bits();  // flushing remaining bits of packet header
     if (use_EPH) {
       uint16_t word = this->packet_header->get_word();
       if (word != _EPH) {
@@ -2907,7 +2907,7 @@ uint8_t *j2k_tile::encode() {
           // construct packet header
           cpb->generate_packet_header(pckt_hdr, static_cast<uint16_t>(numlayers_local - 1));
         }
-        // emit_dword packet header
+        // emit_qword packet header
         pckt_hdr.flush(use_EPH_local);
         cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
         cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
