@@ -66,11 +66,11 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states.get() + block_index;
 
-    const __m256i vpLSB    = _mm256_set1_epi32(pLSB);
-    const __m256i vone     = _mm256_set1_epi32(1);
-    const __m256i vabsmask = _mm256_set1_epi32(0x7FFFFFFF);
-    __m256i vorval         = _mm256_setzero_si256();
-    const __m256 vscale    = _mm256_set1_ps(fscale);
+    const __m256i vpLSB = _mm256_set1_epi32(pLSB);
+    const __m256i vone  = _mm256_set1_epi32(1);
+    // const __m256i vabsmask = _mm256_set1_epi32(0x7FFFFFFF);
+    // __m256i vorval         = _mm256_setzero_si256();
+    const __m256 vscale = _mm256_set1_ps(fscale);
     // simd
     int32_t len = static_cast<int32_t>(this->size.x);
     for (; len >= 16; len -= 16) {
@@ -195,25 +195,20 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
   return v;
 }
 
-auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
-                       __m128i &sig0, __m128i &sig1, __m128i &v0, __m128i &v1, __m128i &E0, __m128i &E1,
-                       int32_t &rho0, int32_t &rho1) {
+auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, __m128i &sig0,
+                       __m128i &sig1, __m128i &v0, __m128i &v1, __m128i &E0, __m128i &E1, int32_t &rho0,
+                       int32_t &rho1) {
   // This function shall be called on the assumption that there are two quads
-  uint8_t *const ssp0 =
-      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
-  int32_t *sp1        = sp0 + block->blksampl_stride;
-  const __m128i zero  = _mm_setzero_si128();
-  __m128i t0          = _mm_set1_epi64x(*((int64_t *)ssp0));
-  __m128i t1          = _mm_set1_epi64x(*((int64_t *)ssp1));
-  __m128i t           = _mm_unpacklo_epi8(t0, t1);
-  __m128i v_u8_out    = _mm_and_si128(t, _mm_set1_epi8(1));
-  v_u8_out            = _mm_cmpgt_epi8(v_u8_out, zero);
-  sig0                = _mm_cvtepu8_epi32(v_u8_out);
-  sig1                = _mm_cvtepu8_epi32(_mm_srli_si128(v_u8_out, 4));
-  rho0                = _mm_movemask_epi8(_mm_packus_epi16(_mm_packus_epi32(sig0, zero), zero));
-  rho1                = _mm_movemask_epi8(_mm_packus_epi16(_mm_packus_epi32(sig1, zero), zero));
+  const __m128i zero = _mm_setzero_si128();
+  __m128i t0         = _mm_set1_epi64x(*((int64_t *)ssp0));
+  __m128i t1         = _mm_set1_epi64x(*((int64_t *)ssp1));
+  __m128i t          = _mm_unpacklo_epi8(t0, t1);
+  __m128i v_u8_out   = _mm_and_si128(t, _mm_set1_epi8(1));
+  v_u8_out           = _mm_cmpgt_epi8(v_u8_out, zero);
+  sig0               = _mm_cvtepu8_epi32(v_u8_out);
+  sig1               = _mm_cvtepu8_epi32(_mm_srli_si128(v_u8_out, 4));
+  rho0               = _mm_movemask_epi8(_mm_packus_epi16(_mm_packus_epi32(sig0, zero), zero));
+  rho1               = _mm_movemask_epi8(_mm_packus_epi16(_mm_packus_epi32(sig1, zero), zero));
 
   sig0 = _mm_cmpgt_epi32(sig0, zero);
   sig1 = _mm_cmpgt_epi32(sig1, zero);
@@ -229,15 +224,8 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
   E1 = _mm_and_si128(t1, sig1);
 };
 
-auto make_storage_one = [](const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
-                           __m128i &sig0, __m128i &v0, __m128i &E0, int32_t &rho0) {
-  // This function shall be called on the assumption that there are two quads
-  uint8_t *const ssp0 =
-      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
-  int32_t *sp1        = sp0 + block->blksampl_stride;
-
+auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, __m128i &sig0,
+                           __m128i &v0, __m128i &E0, int32_t &rho0) {
   sig0 = _mm_setr_epi32(ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1);
 
   __m128i shift = _mm_setr_epi32(7, 7, 7, 7);
@@ -351,6 +339,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   // Initial line-pair
   /*******************************************************************************************************************/
+  uint8_t *ssp0 = block->block_states.get() + 1U * (block->blkstate_stride) + 1U;
+  uint8_t *ssp1 = ssp0 + block->blkstate_stride;
+  int32_t *sp0  = block->sample_buf.get();
+  int32_t *sp1  = sp0 + block->blksampl_stride;
+
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]                 = 0;
   auto E_p                 = Eline.get() + 1;
@@ -369,9 +362,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   __m128i sig0, sig1, v0, v1, E0, E1, m0, m1, known1_0, known1_1;
   __m128i Etmp, vuoff, mask, vtmp;
   for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2U)) {
-    const int16_t qy = 0;
-    bool uoff_flag   = true;
-    make_storage(block, qy, qx, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
+    bool uoff_flag = true;
+    make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
     // MEL encoding for the first quad
     if (context == 0) {
       MEL_encoder.encodeMEL((rho0 != 0));
@@ -469,10 +461,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     *E_p++   = _mm_extract_epi32(E0, 3);
     *E_p++   = _mm_extract_epi32(E1, 1);
     *E_p++   = _mm_extract_epi32(E1, 3);
+    // update pointer to line buffer
+    ssp0 += 4;
+    ssp1 += 4;
+    sp0 += 4;
+    sp1 += 4;
   }
   if (QW & 1) {
-    uint16_t qx = static_cast<uint16_t>(QW - 1);
-    make_storage_one(block, 0, qx, sig0, v0, E0, rho0);
+    make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
     // MEL encoding for the first quad
     if (context == 0) {
       MEL_encoder.encodeMEL((rho0 != 0));
@@ -531,8 +527,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);            // (w | sw) << 9
     context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);  // (nw | n) << 8
     context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);   // (ne | nf) << 10
+
+    ssp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
+    ssp1 = ssp0 + block->blkstate_stride;
+    sp0  = block->sample_buf.get() + 2U * (qy * block->blksampl_stride);
+    sp1  = sp0 + block->blksampl_stride;
     for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2)) {
-      make_storage(block, qy, qx, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
+      make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
       // MEL encoding of the first quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho0 != 0));
@@ -624,10 +625,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       *rho_p++ = rho0;
       *rho_p++ = rho1;
+
+      // update pointer to line buffer
+      ssp0 += 4;
+      ssp1 += 4;
+      sp0 += 4;
+      sp1 += 4;
     }
     if (QW & 1) {
-      uint16_t qx = static_cast<uint16_t>(QW - 1);
-      make_storage_one(block, qy, qx, sig0, v0, E0, rho0);
+      make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
       // MEL encoding of the first quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho0 != 0));
