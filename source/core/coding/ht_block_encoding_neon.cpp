@@ -27,8 +27,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  #include <algorithm>
-  #include <cmath>
   #include "coding_units.hpp"
   #include "ht_block_encoding_neon.hpp"
   #include "coding_local.hpp"
@@ -36,9 +34,6 @@
   #include "utils.hpp"
 
   #include <arm_neon.h>
-
-  #define Q0 0
-  #define Q1 1
 
 //#define HTSIMD
 //#define ENABLE_SP_MR
@@ -212,7 +207,7 @@ void state_MEL_enc::termMEL() {
  *******************************************************************************/
 auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
                        int32x4_t &sig1, int32x4_t &v0, int32x4_t &v1, int32x4_t &E0, int32x4_t &E1,
-                       uint8_t *const rho_q) {
+                       int32_t &rho0, int32_t &rho1) {
   // This function shall be called on the assumption that there are two quads
   int32x4x2_t v = vzipq_s32(vld1q_s32(sp0), vld1q_s32(sp1));
   v0            = v.val[0];
@@ -223,21 +218,25 @@ auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1,
   sig1            = vcgtzq_s32(vmovl_u16(vget_high_u16(vmovl_u8(sig01))));
   int8x8_t shift  = {0, 1, 2, 3, 4, 5, 6, 7};
   uint8_t rho01   = vaddv_u8(vshl_u8(sig01, shift));
-  rho_q[0]        = rho01 & 0xF;
-  rho_q[1]        = rho01 >> 4;
+  rho0            = rho01 & 0xF;
+  rho1            = rho01 >> 4;
 
   E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[0])), sig0);
   E1 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[1])), sig1);
 };
 
 auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
-                           int32x4_t &v0, int32x4_t &E0, uint8_t *const rho_q) {
-  v0 = {sp0[0], sp1[0], sp0[1], sp1[1]};
+                           int32x4_t &v0, int32x4_t &E0, int32_t &rho0) {
+  //  v0 = {sp0[0], sp1[0], sp0[1], sp1[1]};
+  v0 = vsetq_lane_s32(sp0[0], v0, 0);
+  v0 = vsetq_lane_s32(sp1[0], v0, 1);
+  v0 = vsetq_lane_s32(sp0[1], v0, 2);
+  v0 = vsetq_lane_s32(sp1[1], v0, 3);
 
   int32x4_t sig   = {ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1};
   int32x4_t shift = {0, 1, 2, 3};
   uint32x4_t vtmp = vshlq_s32(sig, shift);
-  rho_q[0]        = vaddvq_u32(vtmp) & 0xF;
+  rho0            = vaddvq_u32(vtmp) & 0xF;
   sig0            = vcgtzq_s32(sig);
 
   E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v0)), sig0);
@@ -335,9 +334,6 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   state_MEL_enc MEL_encoder(rev_buf.get());
   state_VLC_enc VLC_encoder(rev_buf.get());
 
-  alignas(32) uint8_t rho_q[2] = {0};
-  alignas(32) int32_t U_q[2]   = {0};
-
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]                 = 0;
   auto E_p                 = Eline.get() + 1;
@@ -349,6 +345,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t context = 0, n_q;
   uint32_t CxtVLC, lw, cwd;
   int32_t Emax_q;
+  int32_t rho0, rho1, U0, U1;
   int32_t u_q, uoff, u_min, uvlc_idx, kappa = 1;
   int32_t emb_pattern, embk_0, embk_1, emb1_0, emb1_1;
 
@@ -368,18 +365,18 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     bool uoff_flag = true;
 
     // MAKE_STORAGE()
-    make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho_q);
+    make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
     // update Eline
     vst1q_s32(E_p, vuzp2q_s32(E0, E1));  // vzip2q_s32(vzip1q_s32(E0, E1), vzip2q_s32(E0, E1)));
     E_p += 4;
     // MEL encoding for the first quad
     if (context == 0) {
-      MEL_encoder.encodeMEL((rho_q[Q0] != 0));
+      MEL_encoder.encodeMEL((rho0 != 0));
     }
     // calculate u_off values
     Emax_q   = vmaxvq_s32(E0);
-    U_q[Q0]  = std::max(Emax_q, kappa);
-    u_q      = U_q[Q0] - kappa;
+    U0       = std::max(Emax_q, kappa);
+    u_q      = U0 - kappa;
     u_min    = u_q;
     uvlc_idx = u_q;
     uoff     = (u_q) ? 1 : 0;
@@ -388,7 +385,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E0, Etmp);
     emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
-    n_q         = emb_pattern + (rho_q[Q0] << 4) + (context << 8);
+    n_q         = emb_pattern + (rho0 << 4) + (context << 8);
     // prepare VLC encoding of quad 0
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_0 = CxtVLC & 0xF;
@@ -397,12 +394,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     cwd    = CxtVLC >> 7;
 
     // context for the next quad
-    context = (rho_q[Q0] >> 1) | (rho_q[Q0] & 0x1);
+    context = (rho0 >> 1) | (rho0 & 0x1);
 
-    Emax_q  = vmaxvq_s32(E1);
-    U_q[Q1] = std::max(Emax_q, kappa);
-    u_q     = U_q[Q1] - kappa;
-    u_min   = (u_min < u_q) ? u_min : u_q;
+    Emax_q = vmaxvq_s32(E1);
+    U1     = std::max(Emax_q, kappa);
+    u_q    = U1 - kappa;
+    u_min  = (u_min < u_q) ? u_min : u_q;
     uvlc_idx += u_q << 5;
     uoff = (u_q) ? 1 : 0;
     uoff_flag &= uoff;
@@ -410,7 +407,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E1, Etmp);
     emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
-    n_q         = emb_pattern + (rho_q[Q1] << 4) + (context << 8);
+    n_q         = emb_pattern + (rho1 << 4) + (context << 8);
     // VLC encoding of quads 0 and 1
     VLC_encoder.emitVLCBits(cwd, lw);  // quad 0
     CxtVLC = enc_CxtVLC_table0[n_q];
@@ -427,7 +424,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
     // MEL encoding of the second quad
     if (context == 0) {
-      if (rho_q[Q1] != 0) {
+      if (rho1 != 0) {
         MEL_encoder.encodeMEL(1);
       } else {
         if (u_min > 2) {
@@ -445,9 +442,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     }
 
     // MagSgn encoding
-    m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U_q[0])),
+    m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                          vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
-    m1       = vsubq_s32(vandq_s32(sig1, vdupq_n_s32(U_q[1])),
+    m1       = vsubq_s32(vandq_s32(sig1, vdupq_n_s32(U1)),
                          vandq_s32(vshlq_s32(vdupq_n_s32(embk_1), rshift), vone));
     known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
     known1_1 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_1), rshift), vone);
@@ -455,10 +452,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     MagSgn_encoder.emitBits(v1, m1, known1_1);
 
     // context for the next quad
-    context = (rho_q[Q1] >> 1) | (rho_q[Q1] & 0x1);
+    context = (rho1 >> 1) | (rho1 & 0x1);
     // update rho_line
-    *rho_p++ = rho_q[0];
-    *rho_p++ = rho_q[1];
+    *rho_p++ = rho0;
+    *rho_p++ = rho1;
     // update pointer to line buffer
     ssp0 += 4;
     ssp1 += 4;
@@ -466,18 +463,18 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     sp1 += 4;
   }
   if (QW & 1) {
-    make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho_q);
+    make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
     *E_p++ = E0[1];
     *E_p++ = E0[3];
 
     // MEL encoding
     if (context == 0) {
-      MEL_encoder.encodeMEL((rho_q[Q0] != 0));
+      MEL_encoder.encodeMEL((rho0 != 0));
     }
 
     Emax_q   = vmaxvq_s32(E0);
-    U_q[Q0]  = std::max(Emax_q, kappa);
-    u_q      = U_q[Q0] - kappa;
+    U0       = std::max(Emax_q, kappa);
+    u_q      = U0 - kappa;
     uvlc_idx = u_q;
     uoff     = (u_q) ? 1 : 0;
 
@@ -485,7 +482,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E0, Etmp);
     emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
-    n_q         = emb_pattern + (rho_q[Q0] << 4) + (context << 8);
+    n_q         = emb_pattern + (rho0 << 4) + (context << 8);
     // VLC encoding
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_0 = CxtVLC & 0xF;
@@ -500,13 +497,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     VLC_encoder.emitVLCBits(cwd, lw);
 
     // MagSgn encoding
-    m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U_q[0])),
+    m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                          vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
     known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
     MagSgn_encoder.emitBits(v0, m0, known1_0);
 
     // update rho_line
-    *rho_p++ = rho_q[0];
+    *rho_p++ = rho0;
   }
 
   /*******************************************************************************************************************/
@@ -514,15 +511,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   int32_t Emax0, Emax1;
   for (uint32_t qy = 1; qy < QH; ++qy) {
-    E_p      = Eline.get() + 1;
-    rho_p    = rholine.get() + 1;
-    rho_q[1] = 0;
+    E_p   = Eline.get() + 1;
+    rho_p = rholine.get() + 1;
+    rho1  = 0;
 
     Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
     Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
 
     // calculate context for the next quad
-    context = ((rho_q[1] & 0x4) << 7) | ((rho_q[1] & 0x8) << 6);    // (w | sw) << 9
+    context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);            // (w | sw) << 9
     context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);  // (nw | n) << 8
     context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);   // (ne | nf) << 10
 
@@ -531,23 +528,23 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     sp0  = block->sample_buf.get() + 2U * (qy * block->blksampl_stride);
     sp1  = sp0 + block->blksampl_stride;
     for (uint32_t qx = 0; qx < QW - 1; qx += 2) {
-      make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho_q);
+      make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
       // MEL encoding of the first quad
       if (context == 0) {
-        MEL_encoder.encodeMEL((rho_q[Q0] != 0));
+        MEL_encoder.encodeMEL((rho0 != 0));
       }
-      gamma       = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
+      gamma       = (popcount32((uint32_t)rho0) > 1) ? 1 : 0;
       kappa       = std::max((Emax0 - 1) * gamma, 1);
       Emax_q      = vmaxvq_s32(E0);
-      U_q[Q0]     = std::max(Emax_q, kappa);
-      u_q         = U_q[Q0] - kappa;
+      U0          = std::max(Emax_q, kappa);
+      u_q         = U0 - kappa;
       uvlc_idx    = u_q;
       uoff        = (u_q) ? 1 : 0;
       Etmp        = vdupq_n_s32(Emax_q);
       vuoff       = vdupq_n_s32(uoff);
       mask        = vceqq_s32(E0, Etmp);
       emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
-      n_q         = emb_pattern + (rho_q[Q0] << 4) + (context << 0);
+      n_q         = emb_pattern + (rho0 << 4) + (context << 0);
       // prepare VLC encoding of quad 0
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_0 = CxtVLC & 0xF;
@@ -556,25 +553,25 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       cwd    = CxtVLC >> 7;
 
       // calculate context for the next quad
-      context = ((rho_q[0] & 0x4) << 7) | ((rho_q[0] & 0x8) << 6);   // (w | sw) << 9
+      context = ((rho0 & 0x4) << 7) | ((rho0 & 0x8) << 6);           // (w | sw) << 9
       context |= ((rho_p[0] & 0x8) << 5) | ((rho_p[1] & 0x2) << 7);  // (nw | n) << 8
       context |= ((rho_p[1] & 0x8) << 7) | ((rho_p[2] & 0x2) << 9);  // (ne | nf) << 10
       // MEL encoding of the second quad
       if (context == 0) {
-        MEL_encoder.encodeMEL((rho_q[Q1] != 0));
+        MEL_encoder.encodeMEL((rho1 != 0));
       }
-      gamma   = (popcount32((uint32_t)rho_q[Q1]) > 1) ? 1 : 0;
-      kappa   = std::max((Emax1 - 1) * gamma, 1);
-      Emax_q  = vmaxvq_s32(E1);
-      U_q[Q1] = std::max(Emax_q, kappa);
-      u_q     = U_q[Q1] - kappa;
+      gamma  = (popcount32((uint32_t)rho1) > 1) ? 1 : 0;
+      kappa  = std::max((Emax1 - 1) * gamma, 1);
+      Emax_q = vmaxvq_s32(E1);
+      U1     = std::max(Emax_q, kappa);
+      u_q    = U1 - kappa;
       uvlc_idx += u_q << 5;
       uoff        = (u_q) ? 1 : 0;
       Etmp        = vdupq_n_s32(Emax_q);
       vuoff       = vdupq_n_s32(uoff);
       mask        = vceqq_s32(E1, Etmp);
       emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
-      n_q         = emb_pattern + (rho_q[Q1] << 4) + (context << 0);
+      n_q         = emb_pattern + (rho1 << 4) + (context << 0);
       // VLC encoding of quands 0 and 1
       VLC_encoder.emitVLCBits(cwd, lw);  // quad 0
       CxtVLC = enc_CxtVLC_table1[n_q];
@@ -590,9 +587,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       VLC_encoder.emitVLCBits(cwd, lw);
 
       // MagSgn encoding
-      m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U_q[0])),
+      m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                            vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
-      m1       = vsubq_s32(vandq_s32(sig1, vdupq_n_s32(U_q[1])),
+      m1       = vsubq_s32(vandq_s32(sig1, vdupq_n_s32(U1)),
                            vandq_s32(vshlq_s32(vdupq_n_s32(embk_1), rshift), vone));
       known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
       known1_1 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_1), rshift), vone);
@@ -605,13 +602,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       E_p += 4;
 
       // calculate context for the next quad
-      context = ((rho_q[1] & 0x4) << 7) | ((rho_q[1] & 0x8) << 6);   // (w | sw) << 9
+      context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);           // (w | sw) << 9
       context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0x2) << 7);  // (nw | n) << 8
       context |= ((rho_p[2] & 0x8) << 7) | ((rho_p[3] & 0x2) << 9);  // (ne | nf) << 10
 
       // update rho_line
-      *rho_p++ = rho_q[0];
-      *rho_p++ = rho_q[1];
+      *rho_p++ = rho0;
+      *rho_p++ = rho1;
       // update pointer to line buffer
       ssp0 += 4;
       ssp1 += 4;
@@ -619,20 +616,20 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       sp1 += 4;
     }
     if (QW & 1) {
-      make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho_q);
+      make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
       *E_p++ = E0[1];
       *E_p++ = E0[3];
 
       // MEL encoding of the first quad
       if (context == 0) {
-        MEL_encoder.encodeMEL((rho_q[Q0] != 0));
+        MEL_encoder.encodeMEL((rho0 != 0));
       }
 
-      gamma    = (popcount32((uint32_t)rho_q[Q0]) > 1) ? 1 : 0;
+      gamma    = (popcount32((uint32_t)rho0) > 1) ? 1 : 0;
       kappa    = std::max((Emax0 - 1) * gamma, 1);
       Emax_q   = vmaxvq_s32(E0);
-      U_q[Q0]  = std::max(Emax_q, kappa);
-      u_q      = U_q[Q0] - kappa;
+      U0       = std::max(Emax_q, kappa);
+      u_q      = U0 - kappa;
       uvlc_idx = u_q;
       uoff     = (u_q) ? 1 : 0;
 
@@ -640,7 +637,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       vuoff       = vdupq_n_s32(uoff);
       mask        = vceqq_s32(E0, Etmp);
       emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
-      n_q         = emb_pattern + (rho_q[Q0] << 4) + (context << 0);
+      n_q         = emb_pattern + (rho0 << 4) + (context << 0);
       // VLC encoding
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_0 = CxtVLC & 0xF;
@@ -655,13 +652,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       VLC_encoder.emitVLCBits(cwd, lw);
 
       // MagSgn encoding
-      m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U_q[0])),
+      m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                            vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
       known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
       MagSgn_encoder.emitBits(v0, m0, known1_0);
 
       // update rho_line
-      *rho_p++ = rho_q[0];
+      *rho_p++ = rho0;
     }
   }
 
