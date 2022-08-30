@@ -130,7 +130,8 @@ static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
                sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
     //#pragma omp parallel for
     for (int32_t row = 0; row < v1 - v0; ++row) {
-      fdwt_1d_sr_fixed(Xext, &in[row * stride], left, right, u0, u1, transformation);
+      fdwt_1d_sr_fixed(Xext, in, left, right, u0, u1, transformation);
+      in += stride;
     }
     aligned_mem_free(Xext);
   }
