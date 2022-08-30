@@ -49,7 +49,7 @@ int main(int argc, char *argv[]) {
   for (const auto &fname : fnames) {
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
     try {
-      std::filesystem::exists(fname);
+      (void)std::filesystem::exists(fname);  // casting to void suppresses compiler warnings
     }
 #else
     try {
