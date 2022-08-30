@@ -104,7 +104,7 @@ class state_MS_enc {
     pos += 4;
   }
 #else
-  FORCE_INLINE void emit_qword() {  // internal function to emit 4 code words
+  FORCE_INLINE void emit_qword() {  // internal function to emit 8 code words
     uint32_t bits_local = 0;
     uint64_t val        = Creg & 0xFFFFFFFF'FFFFFFFF;
     uint32_t stuff      = (last == 0xFF);
@@ -157,13 +157,11 @@ class state_MS_enc {
       emit_dword();
     }
 #else
-    alignas(16) int32_t vtmp[4];
-    alignas(16) int32_t mtmp[4];
-    _mm_store_si128((__m128i *)vtmp, v);
-    _mm_store_si128((__m128i *)mtmp, m);
     for (int i = 0; i < 4; ++i) {
-      Creg |= static_cast<__uint128_t>(vtmp[i]) << ctreg;
-      ctreg += static_cast<unsigned int>(mtmp[i]);
+      Creg |= static_cast<__uint128_t>(_mm_cvtsi128_si32(v)) << ctreg;
+      ctreg += static_cast<uint32_t>(_mm_cvtsi128_si32(m));
+      v = _mm_srli_si128(v, 4);
+      m = _mm_srli_si128(m, 4);
     }
     while (ctreg >= 64) {
       emit_qword();
