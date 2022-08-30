@@ -168,10 +168,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   auto sp0 = block->block_states.get() + 1 + block->blkstate_stride;
   auto sp1 = block->block_states.get() + 1 + 2 * block->blkstate_stride;
 
-  int32_t rho0, rho1;
+  uint32_t rho0, rho1;
   uint32_t u_off0, u_off1;
-  int32_t emb_k_0, emb_k_1;
-  int32_t emb_1_0, emb_1_1;
+  uint32_t emb_k_0, emb_k_1;
+  uint32_t emb_1_0, emb_1_1;
   uint32_t u0, u1;
   uint32_t U0, U1;
   uint8_t gamma0, gamma1;
@@ -181,14 +181,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   dec_table0 = dec_CxtVLC_table0_fast_16;
   dec_table1 = dec_CxtVLC_table1_fast_16;
 
-  alignas(32) auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 3U);
+  alignas(32) auto rholine = MAKE_UNIQUE<uint32_t[]>(QW + 3U);
   rholine[0]               = 0;
   auto rho_p               = rholine.get() + 1;
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]                 = 0;
   auto E_p                 = Eline.get() + 1;
 
-  int32_t context = 0;
+  uint32_t context = 0;
   uint32_t vlcval;
   int32_t mel_run = MEL.get_run();
 
@@ -205,17 +205,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
     }
 
-    rho0    = static_cast<uint8_t>(_pext_u32(tv0, 0x00F0U));
-    emb_k_0 = static_cast<uint8_t>(_pext_u32(tv0, 0x0F00U));
-    emb_1_0 = static_cast<uint8_t>(_pext_u32(tv0, 0xF000U));
+    rho0    = _pext_u32(tv0, 0x00F0U);
+    emb_k_0 = _pext_u32(tv0, 0x0F00U);
+    emb_1_0 = _pext_u32(tv0, 0xF000U);
 
     *rho_p++ = rho0;
     // calculate context for the next quad
-    context = static_cast<uint16_t>((rho0 >> 1) | (rho0 & 1));
+    context = (rho0 >> 1) | (rho0 & 1);
 
     // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+    vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
+    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + (context << 7)];
     if (context == 0) {
       mel_run -= 2;
       tv1 = (mel_run == -1) ? tv1 : 0;
@@ -224,16 +224,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
     }
 
-    rho1    = static_cast<uint8_t>(_pext_u32(tv1, 0x00F0U));
-    emb_k_1 = static_cast<uint8_t>(_pext_u32(tv1, 0x0F00U));
-    emb_1_1 = static_cast<uint8_t>(_pext_u32(tv1, 0xF000U));
+    rho1    = _pext_u32(tv1, 0x00F0U);
+    emb_k_1 = _pext_u32(tv1, 0x0F00U);
+    emb_1_1 = _pext_u32(tv1, 0xF000U);
 
     *rho_p++ = rho1;
 
     // calculate context for the next quad
-    context = static_cast<uint16_t>((rho1 >> 1) | (rho1 & 1));
+    context = (rho1 >> 1) | (rho1 & 1);
 
-    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+    vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
     u_off0 = tv0 & 1;
     u_off1 = tv1 & 1;
 
@@ -247,8 +247,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     // UVLC decoding
-    uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
-    int32_t uvlc_result = uvlc_dec_0[idx];
+    uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
+    uint32_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
@@ -261,17 +261,19 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     len = uvlc_result & 0x7;  // quad 0 suffix length
     uvlc_result >>= 3;
     u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-    u1 = static_cast<uint32_t>(uvlc_result >> 3) + (tmp >> len);
+    u1 = (uvlc_result >> 3) + (tmp >> len);
 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    auto vemb_k    = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_set1_epi32(emb_k_1), 1);
+    auto vemb_k    = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)),
+                                             _mm_set1_epi32(static_cast<int32_t>(emb_k_1)), 1);
     vemb_k         = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                       _mm256_set1_epi32(1));
     auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
                                              _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
-    auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
+    auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)),
+                                             _mm_set1_epi32(static_cast<int32_t>(rho1)), 1);
     auto vsigma    = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
                                         _mm256_setzero_si256());
     v_m_quads      = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
@@ -289,7 +291,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // MagSgn.advance(mmqq1);
 
     auto vknown_1 = _mm256_and_si256(
-        _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(emb_1_0), _mm_set1_epi32(emb_1_1), 1),
+        _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
+                                                  _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                           _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
         _mm256_set1_epi32(1));
     auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
@@ -331,10 +334,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   }
 
   // process the last block (left over)
-  if (QW % 2) {
+  if (QW & 1) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (context << 7)];
     if (context == 0) {
       mel_run -= 2;
       tv0 = (mel_run == -1) ? tv0 : 0;
@@ -342,19 +345,19 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
-    rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+    rho0    = (tv0 & 0x00F0) >> 4;
+    emb_k_0 = (tv0 & 0x0F00) >> 8;
+    emb_1_0 = (tv0 & 0xF000) >> 12;
 
     *rho_p++ = rho0;
 
     // UVLC decoding
-    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+    vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
     u_off0 = tv0 & 1;
 
-    uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U);
-    int32_t uvlc_result = uvlc_dec_0[idx];
+    uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U);
+    uint32_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
@@ -370,12 +373,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     U0 = kappa0 + u0;
 
-    auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_setzero_si128(), 1U);
-    vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                   _mm256_set1_epi32(1));
+    auto vemb_k =
+        _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)), _mm_setzero_si128(), 1U);
+    vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                              _mm256_set1_epi32(1));
     auto v_m_quads =
         _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1U);
-    auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
+    auto vrho =
+        _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)), _mm_setzero_si128(), 1);
     auto vsigma = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
                                      _mm256_setzero_si256());
     v_m_quads   = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
@@ -388,7 +393,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // MagSgn.advance(mmqq0);
 
     auto vknown_1 = _mm256_and_si256(
-        _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(emb_1_0), _mm_set1_epi32(emb_1_1), 1),
+        _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
+                                                  _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                           _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
         _mm256_set1_epi32(1));
     auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
@@ -449,7 +455,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     for (qx = 0; qx < QW - 1; qx += 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -457,11 +463,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mel_run = MEL.get_run();
         }
       }
-      rho0    = static_cast<uint8_t>(_pext_u32(tv0, 0x00F0U));
-      emb_k_0 = static_cast<uint8_t>(_pext_u32(tv0, 0x0F00U));
-      emb_1_0 = static_cast<uint8_t>(_pext_u32(tv0, 0xF000U));
+      rho0    = _pext_u32(tv0, 0x00F0U);
+      emb_k_0 = _pext_u32(tv0, 0x0F00U);
+      emb_1_0 = _pext_u32(tv0, 0xF000U);
 
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
       // calculate context for the next quad
       context = ((rho0 & 0x4) << 6) | ((rho0 & 0x8) << 5);           // (w | sw) << 8
@@ -469,7 +475,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= ((rho_p[1] & 0x8) << 6) | ((rho_p[2] & 0x2) << 8);  // (ne | nf) << 9
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
-      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
+      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
@@ -478,23 +484,23 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         }
       }
 
-      rho1    = static_cast<uint8_t>(_pext_u32(tv1, 0x00F0U));
-      emb_k_1 = static_cast<uint8_t>(_pext_u32(tv1, 0x0F00U));
-      emb_1_1 = static_cast<uint8_t>(_pext_u32(tv1, 0xF000U));
+      rho1    = _pext_u32(tv1, 0x00F0U);
+      emb_k_1 = _pext_u32(tv1, 0x0F00U);
+      emb_1_1 = _pext_u32(tv1, 0xF000U);
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);           // (w | sw) << 8
       context |= ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0x2) << 6);  // (nw | n) << 7
       context |= ((rho_p[2] & 0x8) << 6) | ((rho_p[3] & 0x2) << 8);  // (ne | nf) << 9
 
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
 
       // UVLC decoding
       u_off0       = tv0 & 1;
       u_off1       = tv1 & 1;
       uint32_t idx = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U);
 
-      int32_t uvlc_result = uvlc_dec_1[idx];
+      uint32_t uvlc_result = uvlc_dec_1[idx];
       // remove total prefix length
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
@@ -507,21 +513,23 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       len = uvlc_result & 0x7;  // quad 0 suffix length
       uvlc_result >>= 3;
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-      u1 = static_cast<uint32_t>(uvlc_result >> 3) + (tmp >> len);
+      u1 = (uvlc_result >> 3) + (tmp >> len);
 
-      gamma0 = (popcount32(static_cast<uint32_t>(rho0)) < 2) ? 0 : 1;
-      gamma1 = (popcount32(static_cast<uint32_t>(rho1)) < 2) ? 0 : 1;
+      gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
+      gamma1 = (popcount32(rho1) < 2) ? 0 : 1;
       kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
       kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma1 * (Emax1 - 1));
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
-      auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_set1_epi32(emb_k_1), 1);
+      auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)),
+                                            _mm_set1_epi32(static_cast<int32_t>(emb_k_1)), 1);
       vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
                                      _mm256_set1_epi32(1));
       auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
                                                _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
-      auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_set1_epi32(rho1), 1);
+      auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)),
+                                               _mm_set1_epi32(static_cast<int32_t>(rho1)), 1);
       // auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2,
       // 3)),
       //                                   _mm256_set1_epi32(1));
@@ -545,7 +553,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // MagSgn.advance(mmqq1);
 
       auto vknown_1 = _mm256_and_si256(
-          _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(emb_1_0), _mm_set1_epi32(emb_1_1), 1),
+          _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
+                                                    _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
           _mm256_set1_epi32(1));
       auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
@@ -593,10 +602,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     // process the last block (left over)
-    if (QW % 2) {
+    if (QW & 1) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval      = VLC_dec.fetch();
-      int32_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
+      int32_t tv0 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -604,16 +613,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mel_run = MEL.get_run();
         }
       }
-      rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-      emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-      emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      rho0    = (tv0 & 0x00F0) >> 4;
+      emb_k_0 = (tv0 & 0x0F00) >> 8;
+      emb_1_0 = (tv0 & 0xF000) >> 12;
 
       // UVLC decoding
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
       u_off0 = tv0 & 1;
 
-      uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U);
-      int32_t uvlc_result = uvlc_dec_0[idx];
+      uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U);
+      uint32_t uvlc_result = uvlc_dec_0[idx];
       // remove total prefix length
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
@@ -627,16 +636,18 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       uvlc_result >>= 3;
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
 
-      gamma0 = (popcount32(static_cast<uint32_t>(rho0)) < 2) ? 0 : 1;
+      gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
       kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
       U0     = kappa0 + u0;
 
-      auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(emb_k_0), _mm_setzero_si128(), 1);
-      vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                     _mm256_set1_epi32(1));
+      auto vemb_k =
+          _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)), _mm_setzero_si128(), 1);
+      vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
+                                _mm256_set1_epi32(1));
       auto v_m_quads =
           _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1);
-      auto vrho   = _mm256_inserti128_si256(_mm256_set1_epi32(rho0), _mm_setzero_si128(), 1);
+      auto vrho =
+          _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)), _mm_setzero_si128(), 1);
       auto vsigma = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
                                        _mm256_setzero_si256());
       v_m_quads   = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
@@ -650,7 +661,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // MagSgn.advance(mmqq0);
 
       auto vknown_1 = _mm256_and_si256(
-          _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(emb_1_0), _mm_set1_epi32(emb_1_1), 1),
+          _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
+                                                    _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
           _mm256_set1_epi32(1));
       auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
