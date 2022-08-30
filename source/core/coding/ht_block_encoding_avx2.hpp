@@ -46,12 +46,17 @@
  *******************************************************************************/
 class state_MS_enc {
  private:
-  uint64_t Creg;       // temporal buffer to store up to 4 codewords
+#if defined(_MSC_VER)
+  uint64_t Creg;  // temporal buffer to store up to 4 codewords
+#else
+  __uint128_t Creg;                 // temporal buffer for codewords
+#endif
   uint32_t ctreg;      // number of used bits in Creg
   int32_t pos;         // current position in the buffer
   uint8_t last;        // last byte in the buffer
   uint8_t *const buf;  // buffer for MagSgn
 
+#if defined(_MSC_VER)
   FORCE_INLINE void emit_dword() {  // internal function to emit 4 code words
     // The algorithm of bit-stuffing is:
     /*  for (int i = 0; i < 4; ++i) {
@@ -98,6 +103,28 @@ class state_MS_enc {
     *reinterpret_cast<uint32_t *>(buf + pos) = t;
     pos += 4;
   }
+#else
+  FORCE_INLINE void emit_qword() {  // internal function to emit 4 code words
+    uint32_t bits_local = 0;
+    uint64_t val        = Creg & 0xFFFFFFFF'FFFFFFFF;
+    uint32_t stuff      = (last == 0xFF);
+    uint64_t tmp;
+
+    uint64_t t = 0;
+    for (int i = 0; i < 8; ++i) {
+      tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+      t |= tmp << (8 * i);
+      bits_local += 8 - stuff;
+      stuff = (tmp == 0xFF);
+    }
+    last = tmp & 0xFF;
+
+    Creg >>= bits_local;
+    ctreg -= bits_local;
+    *reinterpret_cast<uint64_t *>(buf + pos) = t;
+    pos += 8;
+  }
+#endif
 
  public:
   explicit state_MS_enc(uint8_t *p) : Creg(0), ctreg(0), pos(0), last(0), buf(p) {}
@@ -105,7 +132,7 @@ class state_MS_enc {
   FORCE_INLINE void emitBits(__m128i &v, __m128i &m, __m128i &emb1) {
     __m128i tmp = _mm_sllv_epi32(emb1, m);
     v           = _mm_sub_epi32(v, tmp);
-
+#if defined(_MSC_VER)
     Creg |= static_cast<uint64_t>(_mm_extract_epi32(v, 0)) << ctreg;
     ctreg += static_cast<unsigned int>(_mm_extract_epi32(m, 0));
     while (ctreg >= 32) {
@@ -129,6 +156,19 @@ class state_MS_enc {
     while (ctreg >= 32) {
       emit_dword();
     }
+#else
+    alignas(16) int32_t vtmp[4];
+    alignas(16) int32_t mtmp[4];
+    _mm_store_si128((__m128i *)vtmp, v);
+    _mm_store_si128((__m128i *)mtmp, m);
+    for (int i = 0; i < 4; ++i) {
+      Creg |= static_cast<__uint128_t>(vtmp[i]) << ctreg;
+      ctreg += static_cast<unsigned int>(mtmp[i]);
+    }
+    while (ctreg >= 64) {
+      emit_qword();
+    }
+#endif
   }
 
   int32_t termMS() {
