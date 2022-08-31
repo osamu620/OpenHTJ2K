@@ -209,6 +209,8 @@ class state_MEL_enc;  // forward declaration for friend function "termMELandVLC(
  *******************************************************************************/
 class state_VLC_enc {
  private:
+  uint64_t Creg;
+  uint32_t ctreg;
   uint8_t *const buf;
   uint8_t tmp;
   uint8_t last;
@@ -219,48 +221,76 @@ class state_VLC_enc {
 
  public:
   explicit state_VLC_enc(uint8_t *p) : buf(p), tmp(0xF), last(0xFF), bits(4), pos(MAX_Scup - 2) {
+    Creg         = 0xF;
+    ctreg        = 4;
     buf[pos + 1] = 0xFF;
   }
-  void emitVLCBits(uint32_t cwd, uint32_t len) {
-    int32_t len32 = len;
-    for (; len32 > 0;) {
-      int32_t available_bits = 8 - (last > 0x8F) - bits;
-      int32_t t              = std::min(available_bits, len32);
-      tmp |= static_cast<uint8_t>((cwd & ((1 << t) - 1)) << bits);
-      bits = static_cast<uint8_t>(bits + t);
-      available_bits -= t;
-      len32 -= t;
-      cwd = static_cast<uint16_t>(cwd >> t);
-      if (available_bits == 0) {
-        if ((last > 0x8f) && tmp != 0x7F) {
-          last = 0x00;
-          continue;
-        }
-        buf[pos] = tmp;
-        pos--;  // reverse order
-        last = tmp;
-        tmp  = 0;
-        bits = 0;
-      }
+
+  FORCE_INLINE void emitVLCBits(uint32_t cwd, uint32_t len) {
+    Creg |= static_cast<uint64_t>(cwd) << ctreg;
+    ctreg += len;
+    while (ctreg >= 32) {
+      emit_dword();
     }
-    //  uint8_t b;
-    //  for (; len > 0;) {
-    //    b = cwd & 1;
-    //    cwd >>= 1;
-    //    len--;
-    //    tmp |= b << bits;
-    //    bits++;
-    //    if ((last > 0x8F) && (tmp == 0x7F)) {
-    //      bits++;
-    //    }
-    //    if (bits == 8) {
-    //      buf[pos] = tmp;
-    //      pos--;  // reverse order
-    //      last = tmp;
-    //      tmp  = 0;
-    //      bits = 0;
-    //    }
-    //  }
+  }
+
+  FORCE_INLINE void emit_dword() {
+    uint32_t bits_local = 0;
+    uint32_t val        = Creg & 0xFFFFFFFF;
+    uint32_t temp, t = 0;
+    uint32_t stuff;
+    uint32_t last_byte;
+
+    temp      = (val >> bits_local) & 0xFF;
+    stuff     = (last > 0x8F) && ((temp & 0x7F) == 0x7F);
+    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    t |= last_byte << 24;
+    bits_local += 8 - stuff;
+
+    temp      = (val >> bits_local) & 0xFF;
+    stuff     = (last_byte > 0x8F) && ((temp & 0x7F) == 0x7F);
+    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    t |= last_byte << 16;
+    bits_local += 8 - stuff;
+
+    temp      = (val >> bits_local) & 0xFF;
+    stuff     = (last_byte > 0x8F) && ((temp & 0x7F) == 0x7F);
+    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    t |= last_byte << 8;
+    bits_local += 8 - stuff;
+
+    temp      = (val >> bits_local) & 0xFF;
+    stuff     = (last_byte > 0x8F) && ((temp & 0x7F) == 0x7F);
+    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    t |= last_byte << 0;
+    bits_local += 8 - stuff;
+
+    last = static_cast<uint8_t>(last_byte);
+    Creg >>= bits_local;
+    ctreg -= bits_local;
+
+    *reinterpret_cast<uint32_t *>(buf + pos - 3) = t;
+    pos -= 4;
+  }
+
+  FORCE_INLINE void termVLC() {
+    while (true) {
+      uint8_t t = Creg & 0x7F;
+      if ((last > 0x8F) && (t == 0x7F)) {
+        if (ctreg < 7) break;
+        last = static_cast<uint8_t>(Creg & 0x7F);
+        Creg >>= 7;
+        ctreg -= 7;
+      } else {
+        if (ctreg < 8) break;
+        last = static_cast<uint8_t>(Creg & 0xFF);
+        Creg >>= 8;
+        ctreg -= 8;
+      }
+      buf[pos--] = last;
+    }
+    bits = ctreg;
+    tmp  = Creg & 0xFF;
   }
 };
 
