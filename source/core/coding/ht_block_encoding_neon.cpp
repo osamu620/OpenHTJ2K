@@ -244,6 +244,7 @@ auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *
 
 // joint termination of MEL and VLC
 int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
+  VLC.termVLC();
   uint8_t MEL_mask, VLC_mask, fuse;
   MEL.tmp  = static_cast<uint8_t>(MEL.tmp << MEL.rem);
   MEL_mask = static_cast<uint8_t>((0xFF << MEL.rem) & 0xFF);
