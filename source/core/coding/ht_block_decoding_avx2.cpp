@@ -190,8 +190,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
   uint32_t context = 0;
   uint32_t vlcval;
-  int32_t mel_run = MEL.get_run();
-
+  int32_t mel_run    = MEL.get_run();
+  const __m256i vone = _mm256_set1_epi32(1);
   // Initial line-pair
   for (int32_t q = 0; q < QW - 1; q += 2) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
@@ -266,10 +266,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    auto vemb_k    = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)),
-                                             _mm_set1_epi32(static_cast<int32_t>(emb_k_1)), 1);
-    vemb_k         = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                      _mm256_set1_epi32(1));
+    auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)),
+                                          _mm_set1_epi32(static_cast<int32_t>(emb_k_1)), 1);
+    vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
     auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
                                              _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
     auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)),
@@ -294,15 +293,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
                                                   _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                           _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-        _mm256_set1_epi32(1));
-    auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
-    auto vmask = _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
+        vone);
+    auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
+    auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
     auto v_v_quads = _mm256_and_si256(vmsval, vmask);
     v_v_quads =
         _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
     auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
     // Add center bin (would be used for lossy and truncated lossless codestreams)
-    v_mu = _mm256_or_si256(v_mu, _mm256_set1_epi32(1));  // This cancels the effect of a sign bit in LSB
+    v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
     v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
     v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
     v_mu = _mm256_andnot_si256(vsigma, v_mu);
@@ -375,8 +374,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     auto vemb_k =
         _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)), _mm_setzero_si128(), 1U);
-    vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                              _mm256_set1_epi32(1));
+    vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
     auto v_m_quads =
         _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1U);
     auto vrho =
@@ -396,15 +394,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
                                                   _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                           _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-        _mm256_set1_epi32(1));
-    auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
-    auto vmask = _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
+        vone);
+    auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
+    auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
     auto v_v_quads = _mm256_and_si256(vmsval, vmask);
     v_v_quads =
         _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
     auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
     // Add center bin (would be used for lossy and truncated lossless codestreams)
-    v_mu = _mm256_or_si256(v_mu, _mm256_set1_epi32(1));  // This cancels the effect of a sign bit in LSB
+    v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
     v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
     v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
     v_mu = _mm256_andnot_si256(vsigma, v_mu);
@@ -436,9 +434,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     rho_p      = rholine.get() + 1;
     E_p        = Eline.get() + 1;
     mp0        = block->sample_buf.get() + (row * 2U) * block->blksampl_stride;
-    mp1        = block->sample_buf.get() + (row * 2U + 1U) * block->blksampl_stride;
+    mp1        = mp0 + block->blksampl_stride;
     sp0        = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
-    sp1        = block->block_states.get() + (row * 2U + 2U) * block->blkstate_stride + 1U;
+    sp1        = sp0 + block->blkstate_stride;
     int32_t qx = 0;
     rho1       = 0;
 
@@ -524,15 +522,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)),
                                             _mm_set1_epi32(static_cast<int32_t>(emb_k_1)), 1);
-      vemb_k      = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                     _mm256_set1_epi32(1));
+      vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
       auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
                                                _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
       auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)),
                                                _mm_set1_epi32(static_cast<int32_t>(rho1)), 1);
       // auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2,
       // 3)),
-      //                                   _mm256_set1_epi32(1));
+      //                                   vone);
       // v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
       auto vsigma = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
                                        _mm256_setzero_si256());
@@ -556,16 +553,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
                                                     _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-          _mm256_set1_epi32(1));
-      auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
-      auto vmask =
-          _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
+          vone);
+      auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
+      auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
       auto v_v_quads = _mm256_and_si256(vmsval, vmask);
       v_v_quads      = _mm256_or_si256(v_v_quads,
                                        _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
       auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
       // Add center bin (would be used for lossy and truncated lossless codestreams)
-      v_mu = _mm256_or_si256(v_mu, _mm256_set1_epi32(1));  // This cancels the effect of a sign bit in LSB
+      v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
       v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
       v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
       v_mu = _mm256_andnot_si256(vsigma, v_mu);
@@ -642,8 +638,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       auto vemb_k =
           _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)), _mm_setzero_si128(), 1);
-      vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-                                _mm256_set1_epi32(1));
+      vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
       auto v_m_quads =
           _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1);
       auto vrho =
@@ -664,16 +659,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
                                                     _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
                             _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-          _mm256_set1_epi32(1));
-      auto vmsval = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
-      auto vmask =
-          _mm256_sub_epi32(_mm256_sllv_epi32(_mm256_set1_epi32(1), v_m_quads), _mm256_set1_epi32(1));
+          vone);
+      auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
+      auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
       auto v_v_quads = _mm256_and_si256(vmsval, vmask);
       v_v_quads      = _mm256_or_si256(v_v_quads,
                                        _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
       auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
       // Add center bin (would be used for lossy and truncated lossless codestreams)
-      v_mu = _mm256_or_si256(v_mu, _mm256_set1_epi32(1));  // This cancels the effect of a sign bit in LSB
+      v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
       v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
       v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
       v_mu = _mm256_andnot_si256(vsigma, v_mu);

@@ -2406,17 +2406,30 @@ void j2k_tile::decode() {
       *dp++ = *sp++;
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    for (size_t n = num_samples; n >= 16; n -= 16) {
-      // for (size_t n = 0; n < num_samples - num_samples % 16; n += 16) {
-      auto vsrc = _mm256_loadu_si256((__m256i *)sp);
-      _mm256_storeu_si256((__m256i *)dp, _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 0)));
-      _mm256_storeu_si256((__m256i *)(dp + 8), _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 1)));
-      sp += 16;
-      dp += 16;
+    const __m128i izero = _mm_setzero_si128();
+    for (size_t n = num_samples; n >= 8; n -= 8) {
+      __m128i v0        = _mm_loadu_si128((__m128i *)sp);
+      __m128i words8hi  = _mm_cmpgt_epi16(izero, v0);
+      __m128i dwords4lo = _mm_unpacklo_epi16(v0, words8hi);
+      __m128i dwords4hi = _mm_unpackhi_epi16(v0, words8hi);
+      _mm_storeu_si128((__m128i *)dp, dwords4lo);
+      _mm_storeu_si128((__m128i *)(dp + 4), dwords4hi);
+      sp += 8;
+      dp += 8;
     }
-    for (size_t n = num_samples % 16; n > 0; --n) {
+    for (size_t n = num_samples % 8; n > 0; --n) {
       *dp++ = *sp++;
     }
+    // for (size_t n = num_samples; n >= 16; n -= 16) {
+    //   __m256i vsrc = _mm256_loadu_si256((__m256i *)sp);
+    //   _mm256_storeu_si256((__m256i *)dp, _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 0)));
+    //   _mm256_storeu_si256((__m256i *)(dp + 8), _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 1)));
+    //   sp += 16;
+    //   dp += 16;
+    // }
+    // for (size_t n = num_samples % 16; n > 0; --n) {
+    //   *dp++ = *sp++;
+    // }
 #else
       for (size_t n = 0; n < num_samples; ++n) {
         *dp++ = *sp++;
