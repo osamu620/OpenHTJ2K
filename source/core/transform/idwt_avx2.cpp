@@ -161,16 +161,18 @@ void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
 
   // step 1
   int32_t simdlen = stop + 1 - start;
-  for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
-    auto xin0 = _mm256_loadu_si256((__m256i *)(X + n - 1));
-    auto xin2 = _mm256_loadu_si256((__m256i *)(X + n + 1));
+  sprec_t *sp     = X + offset;
+  for (; simdlen > 0; simdlen -= 8) {
+    auto xin0 = _mm256_loadu_si256((__m256i *)(sp - 1));
+    auto xin2 = _mm256_loadu_si256((__m256i *)(sp + 1));
     auto xsum = _mm256_add_epi16(xin0, xin2);
     xsum      = _mm256_add_epi16(xsum, _mm256_set1_epi16(2));
     xsum      = _mm256_srai_epi16(xsum, 2);
     xsum      = _mm256_blend_epi16(xsum, _mm256_setzero_si256(), 0xAA);
     xsum      = _mm256_slli_si256(xsum, 2);
     xin0      = _mm256_sub_epi16(xin0, xsum);
-    _mm256_storeu_si256((__m256i *)(X + n - 1), xin0);
+    _mm256_storeu_si256((__m256i *)(sp - 1), xin0);
+    sp += 16;
 
     // auto xin02 =
     //     _mm256_permutevar8x32_epi32(_mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xin0, 0xD8), 0xD8),
@@ -191,15 +193,17 @@ void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
 
   // step 2
   simdlen = stop - start;
-  for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 8, n += 16) {
-    auto xin0 = _mm256_loadu_si256((__m256i *)(X + n));
-    auto xin2 = _mm256_loadu_si256((__m256i *)(X + n + 2));
+  sp      = X + offset;
+  for (; simdlen > 0; simdlen -= 8) {
+    auto xin0 = _mm256_loadu_si256((__m256i *)sp);
+    auto xin2 = _mm256_loadu_si256((__m256i *)(sp + 2));
     auto xsum = _mm256_add_epi16(xin0, xin2);
     xsum      = _mm256_srai_epi16(xsum, 1);
     xsum      = _mm256_blend_epi16(xsum, _mm256_setzero_si256(), 0xAA);
     xsum      = _mm256_slli_si256(xsum, 2);
     xin0      = _mm256_add_epi16(xin0, xsum);
-    _mm256_storeu_si256((__m256i *)(X + n), xin0);
+    _mm256_storeu_si256((__m256i *)sp, xin0);
+    sp += 16;
 
     // auto xin02 =
     //     _mm256_permutevar8x32_epi32(_mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xin0, 0xD8), 0xD8),
@@ -367,15 +371,15 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
     const int32_t offset = top - v0 % 2;
 
     const int32_t simdlen = (u1 - u0) - (u1 - u0) % 16;
+    const __m256i vone    = _mm256_set1_epi16(1);
     for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
       for (int32_t col = 0; col < simdlen; col += 16) {
-        __m256i x0 = _mm256_loadu_si256((__m256i *)(buf[n - 1] + col));
-        __m256i x2 = _mm256_loadu_si256((__m256i *)(buf[n + 1] + col));
-        __m256i x1 = _mm256_loadu_si256((__m256i *)(buf[n] + col));
-        __m256i vout =
-            _mm256_add_epi16(_mm256_set1_epi16(1), _mm256_srai_epi16(_mm256_add_epi16(x0, x2), 1));
-        vout = _mm256_srai_epi16(vout, 1);
-        x1   = _mm256_sub_epi16(x1, vout);
+        __m256i x0   = _mm256_loadu_si256((__m256i *)(buf[n - 1] + col));
+        __m256i x2   = _mm256_loadu_si256((__m256i *)(buf[n + 1] + col));
+        __m256i x1   = _mm256_loadu_si256((__m256i *)(buf[n] + col));
+        __m256i vout = _mm256_add_epi16(vone, _mm256_srai_epi16(_mm256_add_epi16(x0, x2), 1));
+        vout         = _mm256_srai_epi16(vout, 1);
+        x1           = _mm256_sub_epi16(x1, vout);
         _mm256_storeu_si256((__m256i *)(buf[n] + col), x1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
