@@ -447,8 +447,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     // calculate context for the next quad
     context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);            // (w | sw) << 8
-    context |= ((rho_p[-1] & 0x8) << 4) | ((rho_p[0] & 0x2) << 6);  // (nw | n) << 7
-    context |= ((rho_p[0] & 0x8) << 6) | ((rho_p[1] & 0x2) << 8);   // (ne | nf) << 9
+    context |= ((rho_p[-1] & 0x8) << 4) | ((rho_p[0] & 0xa) << 6);  // ((nw | n) << 7) | (ne << 9)
+    context |= ((rho_p[1] & 0x2) << 8);                             // (nf) << 9
 
     for (qx = 0; qx < QW - 1; qx += 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
@@ -469,8 +469,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       // calculate context for the next quad
       context = ((rho0 & 0x4) << 6) | ((rho0 & 0x8) << 5);           // (w | sw) << 8
-      context |= ((rho_p[0] & 0x8) << 4) | ((rho_p[1] & 0x2) << 6);  // (nw | n) << 7
-      context |= ((rho_p[1] & 0x8) << 6) | ((rho_p[2] & 0x2) << 8);  // (ne | nf) << 9
+      context |= ((rho_p[0] & 0x8) << 4) | ((rho_p[1] & 0xa) << 6);  // ((nw | n) << 7) | (ne << 9)
+      context |= ((rho_p[2] & 0x2) << 8);                            // ( nf) << 9
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
       uint16_t tv1 = dec_table1[(vlcval & 0x7F) + context];
@@ -488,8 +488,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);           // (w | sw) << 8
-      context |= ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0x2) << 6);  // (nw | n) << 7
-      context |= ((rho_p[2] & 0x8) << 6) | ((rho_p[3] & 0x2) << 8);  // (ne | nf) << 9
+      context |= ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0xa) << 6);  // ((nw | n) << 7) | (ne << 9)
+      context |= ((rho_p[3] & 0x2) << 8);                            // (nf) << 9
 
       vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
 
