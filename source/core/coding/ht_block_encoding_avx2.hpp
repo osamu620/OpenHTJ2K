@@ -289,7 +289,7 @@ class state_VLC_enc {
       }
       buf[pos--] = last;
     }
-    bits = ctreg;
+    bits = static_cast<uint8_t>(ctreg & 0xFF);
     tmp  = Creg & 0xFF;
   }
 };

@@ -192,8 +192,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   uint32_t vlcval;
   int32_t mel_run    = MEL.get_run();
   const __m256i vone = _mm256_set1_epi32(1);
+
+  int32_t qx;
   // Initial line-pair
-  for (int32_t q = 0; q < QW - 1; q += 2) {
+  for (qx = QW; qx >= 2; qx -= 2) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
     uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
@@ -333,7 +335,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   }
 
   // process the last block (left over)
-  if (QW & 1) {
+  if (qx) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
     uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (context << 7)];
@@ -431,15 +433,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   /*******************************************************************************************************************/
 
   for (uint16_t row = 1; row < QH; row++) {
-    rho_p      = rholine.get() + 1;
-    E_p        = Eline.get() + 1;
-    mp0        = block->sample_buf.get() + (row * 2U) * block->blksampl_stride;
-    mp1        = mp0 + block->blksampl_stride;
-    sp0        = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
-    sp1        = sp0 + block->blkstate_stride;
-    int32_t qx = 0;
-    rho1       = 0;
-
+    rho_p = rholine.get() + 1;
+    E_p   = Eline.get() + 1;
+    mp0   = block->sample_buf.get() + (row * 2U) * block->blksampl_stride;
+    mp1   = mp0 + block->blksampl_stride;
+    sp0   = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
+    sp1   = sp0 + block->blkstate_stride;
+    rho1  = 0;
     // Calculate Emax for the next two quads
     int32_t Emax0, Emax1;
     Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
@@ -450,7 +450,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     context |= ((rho_p[-1] & 0x8) << 4) | ((rho_p[0] & 0xa) << 6);  // ((nw | n) << 7) | (ne << 9)
     context |= ((rho_p[1] & 0x2) << 8);                             // (nf) << 9
 
-    for (qx = 0; qx < QW - 1; qx += 2) {
+    for (qx = QW; qx >= 2; qx -= 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
       uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
@@ -598,7 +598,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     // process the last block (left over)
-    if (QW & 1) {
+    if (qx) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval      = VLC_dec.fetch();
       int32_t tv0 = dec_table1[(vlcval & 0x7F) + context];
