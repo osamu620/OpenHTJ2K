@@ -86,10 +86,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   auto sp0 = block->block_states.get() + 1 + block->blkstate_stride;
   auto sp1 = block->block_states.get() + 1 + 2 * block->blkstate_stride;
 
-  int32_t rho0, rho1;
+  uint32_t rho0, rho1;
   uint32_t u_off0, u_off1;
-  int32_t emb_k_0, emb_k_1;
-  int32_t emb_1_0, emb_1_1;
+  uint32_t emb_k_0, emb_k_1;
+  uint32_t emb_1_0, emb_1_1;
   uint32_t u0, u1;
   uint32_t U0, U1;
   uint8_t gamma0, gamma1;
@@ -99,19 +99,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   dec_table0 = dec_CxtVLC_table0_fast_16;
   dec_table1 = dec_CxtVLC_table1_fast_16;
 
-  alignas(32) auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 3U);
+  alignas(32) auto rholine = MAKE_UNIQUE<uint32_t[]>(QW + 3U);
   rholine[0]               = 0;
   auto rho_p               = rholine.get() + 1;
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]                 = 0;
   auto E_p                 = Eline.get() + 1;
 
-  int32_t context = 0;
+  uint32_t context = 0;
   uint32_t vlcval;
   int32_t mel_run = MEL.get_run();
 
+  int32_t qx;
   // Initial line-pair
-  for (int32_t q = 0; q < QW - 1; q += 2) {
+  for (qx = QW; qx >= 2; qx -= 2) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
     uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
@@ -123,13 +124,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
     }
 
-    rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+    rho0    = (tv0 & 0x00F0) >> 4;
+    emb_k_0 = (tv0 & 0x0F00) >> 8;
+    emb_1_0 = (tv0 & 0xF000) >> 12;
 
     *rho_p++ = rho0;
     // calculate context for the next quad
-    context = static_cast<uint16_t>((rho0 >> 1) | (rho0 & 1));
+    context = (rho0 >> 1) | (rho0 & 1);
 
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
@@ -142,22 +143,22 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
     }
 
-    rho1    = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
-    emb_k_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
-    emb_1_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+    rho1    = (tv1 & 0x00F0) >> 4;
+    emb_k_1 = (tv1 & 0x0F00) >> 8;
+    emb_1_1 = (tv1 & 0xF000) >> 12;
 
     *rho_p++ = rho1;
 
-    auto vsigma0 = vdupq_n_s32(rho0);
+    auto vsigma0 = vdupq_n_u32(rho0);
     vsigma0      = vtstq_s32(vsigma0, vm);
-    auto vsigma1 = vdupq_n_s32(rho1);
+    auto vsigma1 = vdupq_n_u32(rho1);
     vsigma1      = vtstq_s32(vsigma1, vm);
 
     // calculate context for the next quad
     context = static_cast<uint16_t>((rho1 >> 1) | (rho1 & 1));
 
     // UVLC decoding
-    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+    vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
     u_off0 = tv0 & 1;
     u_off1 = tv1 & 1;
 
@@ -169,8 +170,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
-    uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
-    int32_t uvlc_result = uvlc_dec_0[idx];
+    uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
+    uint32_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
@@ -183,14 +184,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     len = uvlc_result & 0x7;  // quad 0 suffix length
     uvlc_result >>= 3;
     u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-    u1 = static_cast<uint32_t>(uvlc_result >> 3) + (tmp >> len);
+    u1 = (uvlc_result >> 3) + (tmp >> len);
 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_0), vm), vone);
+    auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
     v_m_quads0      = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), v_m_quads0);
-    auto v_m_quads1 = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_1), vm), vone);
+    auto v_m_quads1 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
     v_m_quads1      = vsubq_s32(vandq_s32(vsigma1, vdupq_n_u32(U1)), v_m_quads1);
 
     // recoverMagSgnValue
@@ -199,7 +200,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     auto msval1 = MagSgn.fetch(v_m_quads1);
     //    MagSgn.advance(vaddvq_u32(v_m_quads1));
 
-    auto vknown_1   = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
+    auto vknown_1   = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
     auto vmask      = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
     auto v_v_quads0 = vandq_u32(msval0, vmask);
     v_v_quads0 = vorrq_u32(v_v_quads0, vshlq_u32(vknown_1, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)
@@ -210,7 +211,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     v_mu0 = vorrq_u32(v_mu0, vshlq_n_u32(v_v_quads0, 31));
     v_mu0 = vandq_u32(v_mu0, vsigma0);
 
-    vknown_1        = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vm), vone);
+    vknown_1        = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
     vmask           = vsubq_u32(vshlq_u32(vone, v_m_quads1), vone);
     auto v_v_quads1 = vandq_u32(msval1, vmask);
     v_v_quads1 = vorrq_u32(v_v_quads1, vshlq_u32(vknown_1, v_m_quads1));  // v = 2(mu-1) + sign (0 or 1)
@@ -246,7 +247,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   }
 
   // process the last block (left over)
-  if (QW % 2) {
+  if (qx) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
     uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
@@ -257,20 +258,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
-    rho0     = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_k_0  = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_1_0  = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+    rho0     = (tv0 & 0x00F0) >> 4;
+    emb_k_0  = (tv0 & 0x0F00) >> 8;
+    emb_1_0  = (tv0 & 0xF000) >> 12;
     *rho_p++ = rho0;
 
-    auto vsigma0 = vdupq_n_s32(rho0);
+    auto vsigma0 = vdupq_n_u32(rho0);
     vsigma0      = vtstq_s32(vsigma0, vm);
 
-    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+    vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
     u_off0 = tv0 & 1;
 
     // UVLC decoding
-    uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U);
-    int32_t uvlc_result = uvlc_dec_0[idx];
+    uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U);
+    uint32_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
@@ -287,14 +288,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     U0 = kappa0 + u0;
 
-    auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_0), vm), vone);
+    auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
     v_m_quads0      = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), v_m_quads0);
 
     // recoverMagSgnValue
     auto msval0 = MagSgn.fetch(v_m_quads0);
     //    MagSgn.advance(vaddvq_u32(v_m_quads0));
 
-    auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
+    auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
     auto vmask     = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
     auto v_v_quads = vandq_u32(msval0, vmask);
     v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)
@@ -329,8 +330,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     mp1   = block->sample_buf.get() + (row * 2U + 1U) * block->blksampl_stride;
     sp0   = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
     sp1   = block->block_states.get() + (row * 2U + 2U) * block->blkstate_stride + 1U;
-    int32_t qx;
-    rho1 = 0;
+    rho1  = 0;
+
     int32_t Emax0, Emax1;
     // calculate Emax for the next two quads
     Emax0 = vmaxvq_s32(vld1q_s32(E_p - 1));
@@ -341,10 +342,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     context |= ((rho_p[-1] & 0x8) << 4) | ((rho_p[0] & 0x2) << 6);  // (nw | n) << 7
     context |= ((rho_p[0] & 0x8) << 6) | ((rho_p[1] & 0x2) << 8);   // (ne | nf) << 9
 
-    for (qx = 0; qx < QW - 1; qx += 2) {
+    for (qx = QW; qx >= 2; qx -= 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -353,11 +354,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         }
       }
 
-      rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-      emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-      emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      rho0    = (tv0 & 0x00F0) >> 4;
+      emb_k_0 = (tv0 & 0x0F00) >> 8;
+      emb_1_0 = (tv0 & 0xF000) >> 12;
 
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
       // calculate context for the next quad
       context = ((rho0 & 0x4) << 6) | ((rho0 & 0x8) << 5);           // (w | sw) << 8
@@ -365,7 +366,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= ((rho_p[1] & 0x8) << 6) | ((rho_p[2] & 0x2) << 8);  // (ne | nf) << 9
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
-      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
+      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
@@ -374,9 +375,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         }
       }
 
-      rho1    = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
-      emb_k_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
-      emb_1_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+      rho1    = (tv1 & 0x00F0) >> 4;
+      emb_k_1 = (tv1 & 0x0F00) >> 8;
+      emb_1_1 = (tv1 & 0xF000) >> 12;
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);           // (w | sw) << 8
@@ -396,14 +397,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       *rho_p++ = rho0;
       *rho_p++ = rho1;
 
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
 
       // UVLC decoding
       u_off0       = tv0 & 1;
       u_off1       = tv1 & 1;
       uint32_t idx = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U);
 
-      int32_t uvlc_result = uvlc_dec_1[idx];
+      uint32_t uvlc_result = uvlc_dec_1[idx];
       // remove total prefix length
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
@@ -417,10 +418,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       len = uvlc_result & 0x7;  // quad 0 suffix length
       uvlc_result >>= 3;
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-      u1 = static_cast<uint32_t>(uvlc_result >> 3) + (tmp >> len);
+      u1 = (uvlc_result >> 3) + (tmp >> len);
 
-      gamma0 = (popcount32(static_cast<uint32_t>(rho0)) < 2) ? 0 : 1;
-      gamma1 = (popcount32(static_cast<uint32_t>(rho1)) < 2) ? 0 : 1;
+      gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
+      gamma1 = (popcount32(rho1) < 2) ? 0 : 1;
       kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(Emax0 - 1);
       kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(Emax1 - 1);
       U0     = kappa0 + u0;
@@ -429,15 +430,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // NEON section
       int32x4_t vmask1, vsigma0, vsigma1, vtmp, v_m_quads0, v_m_quads1, vmsval;
 
-      vsigma0 = vdupq_n_s32(rho0);
+      vsigma0 = vdupq_n_u32(rho0);
       vsigma0 = vtstq_s32(vsigma0, vm);
       // k_n in the spec can be derived from emb_k
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_0), vm), vone);
+      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
       v_m_quads0 = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), vtmp);
-      vsigma1    = vdupq_n_s32(rho1);
+      vsigma1    = vdupq_n_u32(rho1);
       vsigma1    = vtstq_s32(vsigma1, vm);
       // k_n in the spec can be derived from emb_k
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_1), vm), vone);
+      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
       v_m_quads1 = vsubq_s32(vandq_s32(vsigma1, vdupq_n_u32(U1)), vtmp);
 
       /******************************** RecoverMagSgnValue step ****************************************/
@@ -448,7 +449,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       //      MagSgn.advance(vaddvq_u32(v_m_quads0));
       auto v_v_quads0 = vandq_u32(vmsval, vmask1);
       // i_n in the spec can be derived from emb_^{-1}
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
+      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
       v_v_quads0 = vorrq_u32(v_v_quads0, vshlq_u32(vtmp, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)
       auto v_mu0 = vaddq_u32(v_v_quads0, vtwo);                         // 2(mu-1) + sign + 2 = 2mu + sign
       // Add center bin (would be used for lossy and truncated lossless codestreams)
@@ -463,7 +464,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       //      MagSgn.advance(vaddvq_u32(v_m_quads1));
       auto v_v_quads1 = vandq_u32(vmsval, vmask1);
       // i_n in the spec can be derived from emb_^{-1}
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_1), vm), vone);
+      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
       v_v_quads1 = vorrq_u32(v_v_quads1, vshlq_u32(vtmp, v_m_quads1));  // v = 2(mu-1) + sign (0 or 1)
       auto v_mu1 = vaddq_u32(v_v_quads1, vtwo);                         // 2(mu-1) + sign + 2 = 2mu + sign
       // Add center bin (would be used for lossy and truncated lossless codestreams)
@@ -491,10 +492,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     // process the last block (left over)
-    if (QW % 2) {
+    if (qx) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval      = VLC_dec.fetch();
-      int32_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
+      int32_t tv0 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -502,20 +503,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mel_run = MEL.get_run();
         }
       }
-      rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-      emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-      emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      rho0    = (tv0 & 0x00F0) >> 4;
+      emb_k_0 = (tv0 & 0x0F00) >> 8;
+      emb_1_0 = (tv0 & 0xF000) >> 12;
 
-      auto vsigma0 = vdupq_n_s32(rho0);
+      auto vsigma0 = vdupq_n_u32(rho0);
       vsigma0      = vtstq_s32(vsigma0, vm);
 
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
       // UVLC decoding
       u_off0 = tv0 & 1;
 
-      uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U);
-      int32_t uvlc_result = uvlc_dec_0[idx];
+      uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U);
+      uint32_t uvlc_result = uvlc_dec_0[idx];
       // remove total prefix length
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
@@ -529,18 +530,18 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       uvlc_result >>= 3;
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
 
-      gamma0 = (popcount32(static_cast<uint32_t>(rho0)) < 2) ? 0 : 1;
+      gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
       kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(Emax0 - 1);
       U0     = kappa0 + u0;
 
-      auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_s32(emb_k_0), vm), vone);
+      auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
       v_m_quads0      = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), v_m_quads0);
 
       // recoverMagSgnValue
       auto msval0 = MagSgn.fetch(v_m_quads0);
       //      MagSgn.advance(vaddvq_u32(v_m_quads0));
 
-      auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_s32(emb_1_0), vm), vone);
+      auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
       auto vmask     = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
       auto v_v_quads = vandq_u32(msval0, vmask);
       v_v_quads = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)

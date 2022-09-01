@@ -144,6 +144,7 @@ class state_VLC_enc {
     ctreg        = 4;
     buf[pos + 1] = 0xFF;
   }
+
   FORCE_INLINE void emitVLCBits(uint32_t cwd, uint32_t len) {
     Creg |= static_cast<uint64_t>(cwd) << ctreg;
     ctreg += len;
@@ -151,6 +152,7 @@ class state_VLC_enc {
       emit_dword();
     }
   }
+
   FORCE_INLINE void emit_dword() {
     uint32_t bits_local = 0;
     uint32_t val        = Creg & 0xFFFFFFFF;
@@ -206,31 +208,8 @@ class state_VLC_enc {
       }
       buf[pos--] = last;
     }
-    bits = ctreg;
+    bits = static_cast<uint8_t>(ctreg & 0xFF);
     tmp  = Creg & 0xFF;
-  }
-
-  FORCE_INLINE void emitVLCBits2(uint32_t cwd, uint32_t len) {
-    for (; len > 0;) {
-      int32_t available_bits = 8 - (last > 0x8F) - bits;
-      int32_t t              = std::min(available_bits, (int32_t)len);
-      tmp |= static_cast<uint8_t>((cwd & ((1 << t) - 1)) << bits);
-      bits = static_cast<uint8_t>(bits + t);
-      available_bits -= t;
-      len -= t;
-      cwd >>= t;
-      if (available_bits == 0) {
-        if ((last > 0x8f) && tmp != 0x7F) {
-          last = 0x00;
-          continue;
-        }
-        buf[pos] = tmp;
-        pos--;  // reverse order
-        last = tmp;
-        tmp  = 0;
-        bits = 0;
-      }
-    }
   }
 };
 
