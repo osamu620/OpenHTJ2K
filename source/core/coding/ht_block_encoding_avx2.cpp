@@ -77,6 +77,8 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       __m256i coeff16 = _mm256_loadu_si256((__m256i *)sp);
       __m256i v0      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 0));
       __m256i v1      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 1));
+      // __m256i v0 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)sp));
+      // __m256i v1 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)sp + 1));
       // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
       v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), vscale));
       v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
@@ -94,6 +96,10 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       // Generate masks for sigma
       __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
       __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
+      // Check emptiness of a block
+      or_val |= static_cast<uint32_t>(_mm256_movemask_epi8(mask0));
+      or_val |= static_cast<uint32_t>(_mm256_movemask_epi8(mask1));
+
       // Convert two's compliment to MagSgn form
       __m256i vone0 = _mm256_and_si256(mask0, vone);
       __m256i vone1 = _mm256_and_si256(mask1, vone);
@@ -123,9 +129,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       __m128i v = _mm256_extracti128_si256(v0, 0);
       // _mm256_zeroupper(); // does not work on GCC, TODO: find a solution with __m128i v
       _mm_storeu_si128((__m128i *)dstblk, v);
-      // Check emptiness of a block
-      or_val |= *(uint32_t *)dstblk;
-      or_val |= *(uint32_t *)(dstblk + 4);
+      // // Check emptiness of a block
+      // or_val |= *(uint32_t *)dstblk;
+      // or_val |= *(uint32_t *)(dstblk + 4);
       dstblk += 16;
     }
     // process leftover
@@ -357,12 +363,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   uint32_t CxtVLC, lw, cwd;
   int32_t Emax_q;
   int32_t u_q, uoff, u_min, uvlc_idx, kappa = 1;
-  __m128i vshift = _mm_setr_epi32(0, 1, 2, 3);
-  __m128i vone   = _mm_set1_epi32(1);
+  const __m128i vshift = _mm_setr_epi32(0, 1, 2, 3);
+  const __m128i vone   = _mm_set1_epi32(1);
   int32_t emb_pattern, embk_0, embk_1, emb1_0, emb1_1;
   __m128i sig0, sig1, v0, v1, E0, E1, m0, m1, known1_0, known1_1;
   __m128i Etmp, vuoff, mask, vtmp;
-  for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2U)) {
+
+  int32_t qx = QW;
+  for (; qx >= 2; qx -= 2) {
     bool uoff_flag = true;
     make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
     // MEL encoding for the first quad
@@ -469,7 +477,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     sp0 += 4;
     sp1 += 4;
   }
-  if (QW & 1) {
+  if (qx) {
     make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
     // MEL encoding for the first quad
     if (context == 0) {
@@ -527,14 +535,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
     // calculate context for the next quad
     context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);            // (w | sw) << 9
-    context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);  // (nw | n) << 8
-    context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);   // (ne | nf) << 10
+    context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0xa) << 7);  // ((nw | n) << 8) | (ne << 10)
+    context |= (rho_p[1] & 0x2) << 9;                               // (nf) << 10
 
     ssp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
     ssp1 = ssp0 + block->blkstate_stride;
     sp0  = block->sample_buf.get() + 2U * (qy * block->blksampl_stride);
     sp1  = sp0 + block->blksampl_stride;
-    for (uint16_t qx = 0; qx < QW - 1; qx = static_cast<uint16_t>(qx + 2)) {
+
+    qx = QW;
+    for (; qx >= 2; qx -= 2) {
       make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
       // MEL encoding of the first quad
       if (context == 0) {
@@ -566,8 +576,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       // calculate context for the next quad
       context = ((rho0 & 0x4) << 7) | ((rho0 & 0x8) << 6);           // (w | sw) << 9
-      context |= ((rho_p[0] & 0x8) << 5) | ((rho_p[1] & 0x2) << 7);  // (nw | n) << 8
-      context |= ((rho_p[1] & 0x8) << 7) | ((rho_p[2] & 0x2) << 9);  // (ne | nf) << 10
+      context |= ((rho_p[0] & 0x8) << 5) | ((rho_p[1] & 0xa) << 7);  // ((nw | n) << 8) | (ne << 10)
+      context |= (rho_p[2] & 0x2) << 9;                              // (nf) << 10
       // MEL encoding of the second quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho1 != 0));
@@ -623,8 +633,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 7) | ((rho1 & 0x8) << 6);           // (w | sw) << 9
-      context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0x2) << 7);  // (nw | n) << 8
-      context |= ((rho_p[2] & 0x8) << 7) | ((rho_p[3] & 0x2) << 9);  // (ne | nf) << 10
+      context |= ((rho_p[1] & 0x8) << 5) | ((rho_p[2] & 0xa) << 7);  // ((nw | n) << 8) | (ne << 10)
+      context |= (rho_p[3] & 0x2) << 9;                              // (nf) << 10
 
       *rho_p++ = rho0;
       *rho_p++ = rho1;
@@ -635,7 +645,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       sp0 += 4;
       sp1 += 4;
     }
-    if (QW & 1) {
+    if (qx) {
       make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
       // MEL encoding of the first quad
       if (context == 0) {
