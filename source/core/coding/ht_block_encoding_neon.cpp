@@ -362,7 +362,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   uint8_t *ssp1 = ssp0 + block->blkstate_stride;
   int32_t *sp0  = block->sample_buf.get();
   int32_t *sp1  = sp0 + block->blksampl_stride;
-  for (uint32_t qx = 0; qx < QW - 1; qx += 2) {
+  uint32_t qx;
+  for (qx = QW; qx >= 2; qx -= 2) {
     bool uoff_flag = true;
 
     // MAKE_STORAGE()
@@ -463,7 +464,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     sp0 += 4;
     sp1 += 4;
   }
-  if (QW & 1) {
+  if (qx) {
     make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
     *E_p++ = E0[1];
     *E_p++ = E0[3];
@@ -528,7 +529,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     ssp1 = ssp0 + block->blkstate_stride;
     sp0  = block->sample_buf.get() + 2U * (qy * block->blksampl_stride);
     sp1  = sp0 + block->blksampl_stride;
-    for (uint32_t qx = 0; qx < QW - 1; qx += 2) {
+    for (qx = QW; qx >= 2; qx -= 2) {
       make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
       // MEL encoding of the first quad
       if (context == 0) {
@@ -616,7 +617,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       sp0 += 4;
       sp1 += 4;
     }
-    if (QW & 1) {
+    if (qx) {
       make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
       *E_p++ = E0[1];
       *E_p++ = E0[3];
