@@ -39,90 +39,94 @@
     #include <x86intrin.h>
   #endif
 
-// https://stackoverflow.com/a/58827596
-FORCE_INLINE __m256i avx2_lzcnt_epi32(__m256i v) {
-  // prevent value from being rounded up to the next power of two
-  v = _mm256_andnot_si256(_mm256_srli_epi32(v, 8), v);  // keep 8 MSB
+// // https://stackoverflow.com/a/58827596
+// FORCE_INLINE __m256i avx2_lzcnt_epi32(__m256i v) {
+//   // prevent value from being rounded up to the next power of two
+//   v = _mm256_andnot_si256(_mm256_srli_epi32(v, 8), v);  // keep 8 MSB
 
-  v = _mm256_castps_si256(_mm256_cvtepi32_ps(v));    // convert an integer to float
-  v = _mm256_srli_epi32(v, 23);                      // shift down the exponent
-  v = _mm256_subs_epu16(_mm256_set1_epi32(158), v);  // undo bias
-  v = _mm256_min_epi16(v, _mm256_set1_epi32(32));    // clamp at 32
+//   v = _mm256_castps_si256(_mm256_cvtepi32_ps(v));    // convert an integer to float
+//   v = _mm256_srli_epi32(v, 23);                      // shift down the exponent
+//   v = _mm256_subs_epu16(_mm256_set1_epi32(158), v);  // undo bias
+//   v = _mm256_min_epi16(v, _mm256_set1_epi32(32));    // clamp at 32
 
-  return v;
-}
+//   return v;
+// }
 
-// Credit: YumiYumiYumi
-// https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
-FORCE_INLINE __m256i avx2_lzcnt2_epi32(__m256i v) {
-  const __m256i lut_lo = _mm256_set_epi8(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 32, 4, 4, 4, 4, 4, 4,
-                                         4, 4, 5, 5, 5, 5, 6, 6, 7, 32);
-  const __m256i lut_hi = _mm256_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 32, 0, 0, 0, 0, 0, 0,
-                                         0, 0, 1, 1, 1, 1, 2, 2, 3, 32);
-  const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
-  const __m256i byte_offset = _mm256_set1_epi32(0x00081018);
-  __m256i t;
+// // Credit: YumiYumiYumi
+// // https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
+// FORCE_INLINE __m256i avx2_lzcnt2_epi32(__m256i v) {
+//   const __m256i lut_lo = _mm256_set_epi8(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 32, 4, 4, 4, 4, 4,
+//   4,
+//                                          4, 4, 5, 5, 5, 5, 6, 6, 7, 32);
+//   const __m256i lut_hi = _mm256_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 32, 0, 0, 0, 0, 0,
+//   0,
+//                                          0, 0, 1, 1, 1, 1, 2, 2, 3, 32);
+//   const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
+//   const __m256i byte_offset = _mm256_set1_epi32(0x00081018);
+//   __m256i t;
 
-  /* find lzcnt for each byte */
-  t = _mm256_and_si256(nibble_mask, v);
-  v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
-  t = _mm256_shuffle_epi8(lut_lo, t);
-  v = _mm256_shuffle_epi8(lut_hi, v);
-  v = _mm256_min_epu8(v, t);
+//   /* find lzcnt for each byte */
+//   t = _mm256_and_si256(nibble_mask, v);
+//   v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
+//   t = _mm256_shuffle_epi8(lut_lo, t);
+//   v = _mm256_shuffle_epi8(lut_hi, v);
+//   v = _mm256_min_epu8(v, t);
 
-  /* find lzcnt for each dword */
-  v = _mm256_or_si256(v, byte_offset);
-  v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
-  v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
+//   /* find lzcnt for each dword */
+//   v = _mm256_or_si256(v, byte_offset);
+//   v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
+//   v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
 
-  return v;
-}
+//   return v;
+// }
 
-// Credit: YumiYumiYumi
-// https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
-FORCE_INLINE __m256i avx2_tzcnt_epi32(__m256i v) {
-  const __m256i lut_lo = _mm256_set_epi8(0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 32, 0, 1, 0, 2, 0, 1,
-                                         0, 3, 0, 1, 0, 2, 0, 1, 0, 32);
-  const __m256i lut_hi = _mm256_set_epi8(4, 5, 4, 6, 4, 5, 4, 7, 4, 5, 4, 6, 4, 5, 4, 32, 4, 5, 4, 6, 4, 5,
-                                         4, 7, 4, 5, 4, 6, 4, 5, 4, 32);
-  const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
-  const __m256i byte_offset = _mm256_set1_epi32(0x18100800);
-  __m256i t;
+// // Credit: YumiYumiYumi
+// // https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
+// FORCE_INLINE __m256i avx2_tzcnt_epi32(__m256i v) {
+//   const __m256i lut_lo = _mm256_set_epi8(0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 32, 0, 1, 0, 2, 0,
+//   1,
+//                                          0, 3, 0, 1, 0, 2, 0, 1, 0, 32);
+//   const __m256i lut_hi = _mm256_set_epi8(4, 5, 4, 6, 4, 5, 4, 7, 4, 5, 4, 6, 4, 5, 4, 32, 4, 5, 4, 6, 4,
+//   5,
+//                                          4, 7, 4, 5, 4, 6, 4, 5, 4, 32);
+//   const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
+//   const __m256i byte_offset = _mm256_set1_epi32(0x18100800);
+//   __m256i t;
 
-  /* find tzcnt for each byte */
-  t = _mm256_and_si256(nibble_mask, v);
-  v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
-  t = _mm256_shuffle_epi8(lut_lo, t);
-  v = _mm256_shuffle_epi8(lut_hi, v);
-  v = _mm256_min_epu8(v, t);
+//   /* find tzcnt for each byte */
+//   t = _mm256_and_si256(nibble_mask, v);
+//   v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
+//   t = _mm256_shuffle_epi8(lut_lo, t);
+//   v = _mm256_shuffle_epi8(lut_hi, v);
+//   v = _mm256_min_epu8(v, t);
 
-  /* find tzcnt for each dword */
-  v = _mm256_or_si256(v, byte_offset);
-  v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
-  v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
+//   /* find tzcnt for each dword */
+//   v = _mm256_or_si256(v, byte_offset);
+//   v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
+//   v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
 
-  return v;
-}
+//   return v;
+// }
 
-// from my earlier answer, with tuning for non-AVX CPUs removed
-// static inline
-FORCE_INLINE uint32_t hsum_epi32_avx(__m128i x) {
-  __m128i hi64 = _mm_unpackhi_epi64(
-      x, x);  // 3-operand non-destructive AVX lets us save a byte without needing a movdqa
-  __m128i sum64 = _mm_add_epi32(hi64, x);
-  __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));  // Swap the low two elements
-  __m128i sum32 = _mm_add_epi32(sum64, hi32);
-  return static_cast<uint32_t>(_mm_cvtsi128_si32(sum32));  // movd
-}
+// // from my earlier answer, with tuning for non-AVX CPUs removed
+// // static inline
+// FORCE_INLINE uint32_t hsum_epi32_avx(__m128i x) {
+//   __m128i hi64 = _mm_unpackhi_epi64(
+//       x, x);  // 3-operand non-destructive AVX lets us save a byte without needing a movdqa
+//   __m128i sum64 = _mm_add_epi32(hi64, x);
+//   __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));  // Swap the low two elements
+//   __m128i sum32 = _mm_add_epi32(sum64, hi32);
+//   return static_cast<uint32_t>(_mm_cvtsi128_si32(sum32));  // movd
+// }
 
-// only needs AVX2
-uint32_t hsum_8x32(__m256i v) {
-  __m128i sum128 =
-      _mm_add_epi32(_mm256_castsi256_si128(v),
-                    _mm256_extracti128_si256(
-                        v, 1));  // silly GCC uses a longer AXV512VL instruction if AVX512 is enabled :/
-  return hsum_epi32_avx(sum128);
-}
+// // only needs AVX2
+// uint32_t hsum_8x32(__m256i v) {
+//   __m128i sum128 =
+//       _mm_add_epi32(_mm256_castsi256_si128(v),
+//                     _mm256_extracti128_si256(
+//                         v, 1));  // silly GCC uses a longer AXV512VL instruction if AVX512 is enabled :/
+//   return hsum_epi32_avx(sum128);
+// }
 
 uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
   const int16_t im1 = static_cast<int16_t>(i - 1);
@@ -154,6 +158,46 @@ uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t 
   return mbr;
 }
 
+// https://stackoverflow.com/a/58827596
+inline __m128i sse_lzcnt_epi32(__m128i v) {
+  // prevent value from being rounded up to the next power of two
+  v = _mm_andnot_si128(_mm_srli_epi32(v, 8), v);  // keep 8 MSB
+
+  v = _mm_castps_si128(_mm_cvtepi32_ps(v));    // convert an integer to float
+  v = _mm_srli_epi32(v, 23);                   // shift down the exponent
+  v = _mm_subs_epu16(_mm_set1_epi32(158), v);  // undo bias
+  v = _mm_min_epi16(v, _mm_set1_epi32(32));    // clamp at 32
+
+  return v;
+}
+
+template <int N>
+FORCE_INLINE __m128i decode_onq_quad(uint16_t *sp, uint8_t pLSB, fwd_buf<0xFF> &MagSgn,
+                                     __m128i &v_v_quads0) {
+  const __m128i vone = _mm_set1_epi32(1);
+  __m128i qinf       = _mm_loadu_si128((__m128i *)sp);
+  __m128i U_q        = _mm_shuffle_epi32(_mm_srli_epi32(qinf, 16), _MM_SHUFFLE(N, N, N, N));
+  __m128i w0         = _mm_shuffle_epi32(qinf, _MM_SHUFFLE(N, N, N, N));
+  __m128i flags      = _mm_and_si128(w0, _mm_set_epi32(0x8880, 0x4440, 0x2220, 0x1110));
+  __m128i insig      = _mm_cmpeq_epi32(flags, _mm_setzero_si128());
+  flags              = _mm_mullo_epi16(flags, _mm_set_epi16(1, 1, 2, 2, 4, 4, 8, 8));
+  w0 = _mm_and_si128(_mm_srli_epi32(flags, 11), vone);  // flags, _mm_set1_epi32(0x800)), 11);  // e_k
+  __m128i m_n    = _mm_sub_epi32(U_q, w0);
+  m_n            = _mm_andnot_si128(insig, m_n);
+  w0             = _mm_srli_epi32(flags, 15);  // e_1
+  __m128i vmask  = _mm_sub_epi32(_mm_sllv_epi32(vone, m_n), vone);
+  __m128i ms_vec = MagSgn.fetch(m_n);
+  v_v_quads0     = _mm_and_si128(ms_vec, vmask);
+  v_v_quads0     = _mm_or_si128(v_v_quads0, _mm_sllv_epi32(w0, m_n));  // v = 2(mu-1) + sign (0 or 1)
+  __m128i v_mu0  = _mm_add_epi32(v_v_quads0, _mm_set1_epi32(2));       // 2(mu-1) + sign + 2 = 2mu + sign
+  // Add center bin (would be used for lossy and truncated lossless codestreams)
+  v_mu0 = _mm_or_si128(v_mu0, vone);  // This cancels the effect of a sign bit in LSB
+  v_mu0 = _mm_slli_epi32(v_mu0, pLSB - 1);
+  v_mu0 = _mm_or_si128(v_mu0, _mm_slli_epi32(v_v_quads0, 31));
+  v_mu0 = _mm_andnot_si128(insig, v_mu0);
+  return v_mu0;
+}
+
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
@@ -170,8 +214,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
   uint32_t rho0, rho1;
   uint32_t u_off0, u_off1;
-  uint32_t emb_k_0, emb_k_1;
-  uint32_t emb_1_0, emb_1_1;
+  // uint32_t emb_k_0, emb_k_1;
+  // uint32_t emb_1_0, emb_1_1;
   uint32_t u0, u1;
   uint32_t U0, U1;
   uint8_t gamma0, gamma1;
@@ -187,15 +231,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]                 = 0;
   auto E_p                 = Eline.get() + 1;
+  uint16_t scratch[1024];
+  uint16_t *sp;
 
   uint32_t context = 0;
   uint32_t vlcval;
-  int32_t mel_run    = MEL.get_run();
-  const __m256i vone = _mm256_set1_epi32(1);
+  int32_t mel_run = MEL.get_run();
 
   int32_t qx;
   // Initial line-pair
-  for (qx = QW; qx >= 2; qx -= 2) {
+  sp = scratch;
+  for (qx = QW; qx >= 2; qx -= 2, sp += 4) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
     uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
@@ -206,12 +252,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
+    sp[0] = tv0;
+    rho0  = _pext_u32(tv0, 0x00F0U);
+    // emb_k_0 = _pext_u32(tv0, 0x0F00U);
+    // emb_1_0 = _pext_u32(tv0, 0xF000U);
 
-    rho0    = _pext_u32(tv0, 0x00F0U);
-    emb_k_0 = _pext_u32(tv0, 0x0F00U);
-    emb_1_0 = _pext_u32(tv0, 0xF000U);
-
-    *rho_p++ = rho0;
     // calculate context for the next quad
     context = (rho0 >> 1) | (rho0 & 1);
 
@@ -225,11 +270,21 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
+    sp[2] = tv1;
+    rho1  = _pext_u32(tv1, 0x00F0U);
+    // emb_k_1 = _pext_u32(tv1, 0x0F00U);
+    // emb_1_1 = _pext_u32(tv1, 0xF000U);
 
-    rho1    = _pext_u32(tv1, 0x00F0U);
-    emb_k_1 = _pext_u32(tv1, 0x0F00U);
-    emb_1_1 = _pext_u32(tv1, 0xF000U);
-
+    // store sigma
+    *sp0++   = (rho0 >> 0) & 1;
+    *sp0++   = (rho0 >> 2) & 1;
+    *sp0++   = (rho1 >> 0) & 1;
+    *sp0++   = (rho1 >> 2) & 1;
+    *sp1++   = (rho0 >> 1) & 1;
+    *sp1++   = (rho0 >> 3) & 1;
+    *sp1++   = (rho1 >> 1) & 1;
+    *sp1++   = (rho1 >> 3) & 1;
+    *rho_p++ = rho0;
     *rho_p++ = rho1;
 
     // calculate context for the next quad
@@ -265,71 +320,32 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
     u1 = (uvlc_result >> 3) + (tmp >> len);
 
-    U0 = kappa0 + u0;
-    U1 = kappa1 + u1;
+    U0    = kappa0 + u0;
+    U1    = kappa1 + u1;
+    sp[1] = U0;
+    sp[3] = U1;
 
-    auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)),
-                                          _mm_set1_epi32(static_cast<int32_t>(emb_k_1)), 1);
-    vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
-    auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
-                                             _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
-    auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)),
-                                             _mm_set1_epi32(static_cast<int32_t>(rho1)), 1);
-    auto vsigma    = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                        _mm256_setzero_si256());
-    v_m_quads      = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
-    // uint32_t mmqq0 = static_cast<uint32_t>(_mm256_extract_epi32(
-    //     _mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads), _mm256_hadd_epi32(v_m_quads,
-    //     v_m_quads)), 0));
-    // uint32_t mmqq1 = static_cast<uint32_t>(_mm256_extract_epi32(
-    //     _mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads), _mm256_hadd_epi32(v_m_quads,
-    //     v_m_quads)), 4));
-
-    // recoverMagSgnValue
-    auto mmm0 = MagSgn.fetch(_mm256_castsi256_si128(v_m_quads));
-    // MagSgn.advance(mmqq0);
-    auto mmm1 = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 1));
-    // MagSgn.advance(mmqq1);
-
-    auto vknown_1 = _mm256_and_si256(
-        _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
-                                                  _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
-                          _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-        vone);
-    auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
-    auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
-    auto v_v_quads = _mm256_and_si256(vmsval, vmask);
-    v_v_quads =
-        _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
-    auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
-    // Add center bin (would be used for lossy and truncated lossless codestreams)
-    v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
-    v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
-    v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
-    v_mu = _mm256_andnot_si256(vsigma, v_mu);
+    __m128i v_v_quads0, v_v_quads1;
+    __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
+    __m128i v_mu1 = decode_onq_quad<1>(sp, pLSB, MagSgn, v_v_quads1);
 
     // store mu
     // 0, 2, 4, 6, 1, 3, 5, 7
-    v_mu = _mm256_permutevar8x32_epi32(v_mu, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-    _mm256_storeu2_m128i((__m128i *)mp1, (__m128i *)mp0, v_mu);
+    auto t0 = _mm_unpacklo_epi32(v_mu0, v_mu1);
+    auto t1 = _mm_unpackhi_epi32(v_mu0, v_mu1);
+    v_mu0   = _mm_unpacklo_epi32(t0, t1);
+    v_mu1   = _mm_unpackhi_epi32(t0, t1);
+    _mm_storeu_si128((__m128i *)mp0, v_mu0);
+    _mm_storeu_si128((__m128i *)mp1, v_mu1);
     mp0 += 4;
     mp1 += 4;
 
-    // store sigma
-    *sp0++ = (rho0 >> 0) & 1;
-    *sp0++ = (rho0 >> 2) & 1;
-    *sp0++ = (rho1 >> 0) & 1;
-    *sp0++ = (rho1 >> 2) & 1;
-    *sp1++ = (rho0 >> 1) & 1;
-    *sp1++ = (rho0 >> 3) & 1;
-    *sp1++ = (rho1 >> 1) & 1;
-    *sp1++ = (rho1 >> 3) & 1;
-
     // Update Exponent
-    v_v_quads = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt_epi32(v_v_quads));
-    v_v_quads = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
-    vExp      = _mm256_castsi256_si128(v_v_quads);
-    _mm256_zeroupper();
+    t0   = _mm_unpacklo_epi32(v_v_quads0, v_v_quads1);
+    t1   = _mm_unpackhi_epi32(v_v_quads0, v_v_quads1);
+    vExp = _mm_unpackhi_epi32(t0, t1);
+    vExp = sse_lzcnt_epi32(vExp);
+    vExp = _mm_sub_epi32(_mm_set1_epi32(32), vExp);
     _mm_storeu_si128((__m128i *)E_p, vExp);
     E_p += 4;
   }
@@ -346,10 +362,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
-    rho0    = (tv0 & 0x00F0) >> 4;
-    emb_k_0 = (tv0 & 0x0F00) >> 8;
-    emb_1_0 = (tv0 & 0xF000) >> 12;
+    sp[0] = tv0;
+    rho0  = (tv0 & 0x00F0) >> 4;
+    // emb_k_0 = (tv0 & 0x0F00) >> 8;
+    // emb_1_0 = (tv0 & 0xF000) >> 12;
 
+    // store sigma
+    *sp0++   = (rho0 >> 0) & 1;
+    *sp0++   = (rho0 >> 2) & 1;
+    *sp1++   = (rho0 >> 1) & 1;
+    *sp1++   = (rho0 >> 3) & 1;
     *rho_p++ = rho0;
 
     // UVLC decoding
@@ -372,66 +394,28 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     uvlc_result >>= 3;
     u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
 
-    U0 = kappa0 + u0;
+    U0    = kappa0 + u0;
+    sp[1] = U0;
 
-    auto vemb_k =
-        _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)), _mm_setzero_si128(), 1U);
-    vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
-    auto v_m_quads =
-        _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1U);
-    auto vrho =
-        _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)), _mm_setzero_si128(), 1);
-    auto vsigma = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                     _mm256_setzero_si256());
-    v_m_quads   = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
-    // uint32_t mmqq0 = static_cast<uint32_t>(_mm256_extract_epi32(
-    //     _mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads), _mm256_hadd_epi32(v_m_quads,
-    //     v_m_quads)), 0));
-
-    // recoverMagSgnValue
-    auto mmm = MagSgn.fetch(_mm256_castsi256_si128(v_m_quads));
-    // MagSgn.advance(mmqq0);
-
-    auto vknown_1 = _mm256_and_si256(
-        _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
-                                                  _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
-                          _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-        vone);
-    auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
-    auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
-    auto v_v_quads = _mm256_and_si256(vmsval, vmask);
-    v_v_quads =
-        _mm256_or_si256(v_v_quads, _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
-    auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
-    // Add center bin (would be used for lossy and truncated lossless codestreams)
-    v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
-    v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
-    v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
-    v_mu = _mm256_andnot_si256(vsigma, v_mu);
+    __m128i v_v_quads0;
+    __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
 
     // store mu
-    *mp0++ = _mm256_extract_epi32(v_mu, 0);
-    *mp0++ = _mm256_extract_epi32(v_mu, 2);
-    *mp1++ = _mm256_extract_epi32(v_mu, 1);
-    *mp1++ = _mm256_extract_epi32(v_mu, 3);
-
-    // store sigma
-    *sp0++ = (rho0 >> 0) & 1;
-    *sp0++ = (rho0 >> 2) & 1;
-    *sp1++ = (rho0 >> 1) & 1;
-    *sp1++ = (rho0 >> 3) & 1;
+    *mp0++ = _mm_extract_epi32(v_mu0, 0);
+    *mp0++ = _mm_extract_epi32(v_mu0, 2);
+    *mp1++ = _mm_extract_epi32(v_mu0, 1);
+    *mp1++ = _mm_extract_epi32(v_mu0, 3);
 
     // Update Exponent
     *E_p++ = static_cast<int32_t>(
-        32 - count_leading_zeros(static_cast<uint32_t>(_mm256_extract_epi32(v_v_quads, 1))));
+        32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 1))));
     *E_p++ = static_cast<int32_t>(
-        32 - count_leading_zeros(static_cast<uint32_t>(_mm256_extract_epi32(v_v_quads, 3))));
+        32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 3))));
   }  // Initial line-pair end
 
   /*******************************************************************************************************************/
   // Non-initial line-pair
   /*******************************************************************************************************************/
-
   for (uint16_t row = 1; row < QH; row++) {
     rho_p = rholine.get() + 1;
     E_p   = Eline.get() + 1;
@@ -450,7 +434,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     context |= ((rho_p[-1] & 0x8) << 4) | ((rho_p[0] & 0xa) << 6);  // ((nw | n) << 7) | (ne << 9)
     context |= ((rho_p[1] & 0x2) << 8);                             // (nf) << 9
 
-    for (qx = QW; qx >= 2; qx -= 2) {
+    sp = scratch;
+    for (qx = QW; qx >= 2; qx -= 2, sp += 4) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
       uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
@@ -461,9 +446,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mel_run = MEL.get_run();
         }
       }
-      rho0    = _pext_u32(tv0, 0x00F0U);
-      emb_k_0 = _pext_u32(tv0, 0x0F00U);
-      emb_1_0 = _pext_u32(tv0, 0xF000U);
+      sp[0] = tv0;
+      rho0  = _pext_u32(tv0, 0x00F0U);
+      // emb_k_0 = _pext_u32(tv0, 0x0F00U);
+      // emb_1_0 = _pext_u32(tv0, 0xF000U);
 
       vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
@@ -481,15 +467,28 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mel_run = MEL.get_run();
         }
       }
-
-      rho1    = _pext_u32(tv1, 0x00F0U);
-      emb_k_1 = _pext_u32(tv1, 0x0F00U);
-      emb_1_1 = _pext_u32(tv1, 0xF000U);
+      sp[2] = tv1;
+      rho1  = _pext_u32(tv1, 0x00F0U);
+      // emb_k_1 = _pext_u32(tv1, 0x0F00U);
+      // emb_1_1 = _pext_u32(tv1, 0xF000U);
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);           // (w | sw) << 8
       context |= ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0xa) << 6);  // ((nw | n) << 7) | (ne << 9)
       context |= ((rho_p[3] & 0x2) << 8);                            // (nf) << 9
+
+      // store sigma
+      *sp0++ = (rho0 >> 0) & 1;
+      *sp0++ = (rho0 >> 2) & 1;
+      *sp0++ = (rho1 >> 0) & 1;
+      *sp0++ = (rho1 >> 2) & 1;
+      *sp1++ = (rho0 >> 1) & 1;
+      *sp1++ = (rho0 >> 3) & 1;
+      *sp1++ = (rho1 >> 1) & 1;
+      *sp1++ = (rho1 >> 3) & 1;
+
+      *rho_p++ = rho0;
+      *rho_p++ = rho1;
 
       vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
 
@@ -519,80 +518,32 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma1 * (Emax1 - 1));
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
+      sp[1]  = U0;
+      sp[3]  = U1;
 
-      auto vemb_k = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)),
-                                            _mm_set1_epi32(static_cast<int32_t>(emb_k_1)), 1);
-      vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
-      auto v_m_quads = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)),
-                                               _mm_set1_epi32(static_cast<int32_t>(U1)), 1);
-      auto vrho      = _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)),
-                                               _mm_set1_epi32(static_cast<int32_t>(rho1)), 1);
-      // auto vsigma    = _mm256_and_si256(_mm256_srav_epi32(vrho, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2,
-      // 3)),
-      //                                   vone);
-      // v_m_quads      = _mm256_sub_epi32(_mm256_mullo_epi32(vsigma, v_m_quads), vemb_k);
-      auto vsigma = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                       _mm256_setzero_si256());
-      v_m_quads   = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
-      // uint32_t mmqq0 = static_cast<uint32_t>(
-      //     _mm256_extract_epi32(_mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads),
-      //                                            _mm256_hadd_epi32(v_m_quads, v_m_quads)),
-      //                          0));
-      // uint32_t mmqq1 = static_cast<uint32_t>(
-      //     _mm256_extract_epi32(_mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads),
-      //                                            _mm256_hadd_epi32(v_m_quads, v_m_quads)),
-      //                          4));
-
-      // recoverMagSgnValue
-      auto mmm0 = MagSgn.fetch(_mm256_castsi256_si128(v_m_quads));
-      // MagSgn.advance(mmqq0);
-      auto mmm1 = MagSgn.fetch(_mm256_extracti128_si256(v_m_quads, 1));
-      // MagSgn.advance(mmqq1);
-
-      auto vknown_1 = _mm256_and_si256(
-          _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
-                                                    _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
-                            _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-          vone);
-      auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm0), mmm1, 1);
-      auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
-      auto v_v_quads = _mm256_and_si256(vmsval, vmask);
-      v_v_quads      = _mm256_or_si256(v_v_quads,
-                                       _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
-      auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
-      // Add center bin (would be used for lossy and truncated lossless codestreams)
-      v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
-      v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
-      v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
-      v_mu = _mm256_andnot_si256(vsigma, v_mu);
+      __m128i v_v_quads0, v_v_quads1;
+      __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
+      __m128i v_mu1 = decode_onq_quad<1>(sp, pLSB, MagSgn, v_v_quads1);
 
       // store mu
       // 0, 2, 4, 6, 1, 3, 5, 7
-      v_mu = _mm256_permutevar8x32_epi32(v_mu, _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7));
-      _mm256_storeu2_m128i((__m128i *)mp1, (__m128i *)mp0, v_mu);
+      auto t0 = _mm_unpacklo_epi32(v_mu0, v_mu1);
+      auto t1 = _mm_unpackhi_epi32(v_mu0, v_mu1);
+      v_mu0   = _mm_unpacklo_epi32(t0, t1);
+      v_mu1   = _mm_unpackhi_epi32(t0, t1);
+      _mm_storeu_si128((__m128i *)mp0, v_mu0);
+      _mm_storeu_si128((__m128i *)mp1, v_mu1);
       mp0 += 4;
       mp1 += 4;
 
-      // store sigma
-      *sp0++ = (rho0 >> 0) & 1;
-      *sp0++ = (rho0 >> 2) & 1;
-      *sp0++ = (rho1 >> 0) & 1;
-      *sp0++ = (rho1 >> 2) & 1;
-      *sp1++ = (rho0 >> 1) & 1;
-      *sp1++ = (rho0 >> 3) & 1;
-      *sp1++ = (rho1 >> 1) & 1;
-      *sp1++ = (rho1 >> 3) & 1;
-
-      *rho_p++ = rho0;
-      *rho_p++ = rho1;
-
       // Update Exponent
-      Emax0     = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
-      Emax1     = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
-      v_v_quads = _mm256_sub_epi32(_mm256_set1_epi32(32), avx2_lzcnt_epi32(v_v_quads));
-      v_v_quads = _mm256_permutevar8x32_epi32(v_v_quads, _mm256_setr_epi32(1, 3, 5, 7, 0, 2, 4, 6));
-      vExp      = _mm256_castsi256_si128(v_v_quads);
-      _mm256_zeroupper();
+      Emax0 = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
+      Emax1 = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
+      t0    = _mm_unpacklo_epi32(v_v_quads0, v_v_quads1);
+      t1    = _mm_unpackhi_epi32(v_v_quads0, v_v_quads1);
+      vExp  = _mm_unpackhi_epi32(t0, t1);
+      vExp  = sse_lzcnt_epi32(vExp);
+      vExp  = _mm_sub_epi32(_mm_set1_epi32(32), vExp);
       _mm_storeu_si128((__m128i *)E_p, vExp);
       E_p += 4;
     }
@@ -600,8 +551,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // process the last block (left over)
     if (qx) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
-      vlcval      = VLC_dec.fetch();
-      int32_t tv0 = dec_table1[(vlcval & 0x7F) + context];
+      vlcval       = VLC_dec.fetch();
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -609,9 +560,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mel_run = MEL.get_run();
         }
       }
-      rho0    = (tv0 & 0x00F0) >> 4;
-      emb_k_0 = (tv0 & 0x0F00) >> 8;
-      emb_1_0 = (tv0 & 0xF000) >> 12;
+      sp[0] = tv0;
+      rho0  = (tv0 & 0x00F0) >> 4;
+      // emb_k_0 = (tv0 & 0x0F00) >> 8;
+      // emb_1_0 = (tv0 & 0xF000) >> 12;
+
+      // store sigma
+      *sp0++   = (rho0 >> 0) & 1;
+      *sp0++   = (rho0 >> 2) & 1;
+      *sp1++   = (rho0 >> 1) & 1;
+      *sp1++   = (rho0 >> 3) & 1;
+      *rho_p++ = rho0;
 
       // UVLC decoding
       vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
@@ -635,62 +594,22 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
       kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
       U0     = kappa0 + u0;
+      sp[1]  = U0;
 
-      auto vemb_k =
-          _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_k_0)), _mm_setzero_si128(), 1);
-      vemb_k = _mm256_and_si256(_mm256_srav_epi32(vemb_k, _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)), vone);
-      auto v_m_quads =
-          _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(U0)), _mm_setzero_si128(), 1);
-      auto vrho =
-          _mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(rho0)), _mm_setzero_si128(), 1);
-      auto vsigma = _mm256_cmpeq_epi32(_mm256_and_si256(vrho, _mm256_setr_epi32(1, 2, 4, 8, 1, 2, 4, 8)),
-                                       _mm256_setzero_si256());
-      v_m_quads   = _mm256_sub_epi32(_mm256_andnot_si256(vsigma, v_m_quads), vemb_k);
-      // uint32_t mmqq0 = static_cast<uint32_t>(
-      //     _mm256_extract_epi32(_mm256_hadd_epi32(_mm256_hadd_epi32(v_m_quads, v_m_quads),
-      //                                            _mm256_hadd_epi32(v_m_quads, v_m_quads)),
-      //                          0));
-
-      // recoverMagSgnValue
-      auto mmm = MagSgn.fetch(_mm256_castsi256_si128(v_m_quads));
-      // MagSgn.advance(mmqq0);
-
-      auto vknown_1 = _mm256_and_si256(
-          _mm256_srav_epi32(_mm256_inserti128_si256(_mm256_set1_epi32(static_cast<int32_t>(emb_1_0)),
-                                                    _mm_set1_epi32(static_cast<int32_t>(emb_1_1)), 1),
-                            _mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3)),
-          vone);
-      auto vmsval    = _mm256_inserti128_si256(_mm256_broadcastsi128_si256(mmm), _mm_setzero_si128(), 1);
-      auto vmask     = _mm256_sub_epi32(_mm256_sllv_epi32(vone, v_m_quads), vone);
-      auto v_v_quads = _mm256_and_si256(vmsval, vmask);
-      v_v_quads      = _mm256_or_si256(v_v_quads,
-                                       _mm256_sllv_epi32(vknown_1, v_m_quads));  // v = 2(mu-1) + sign (0 or 1)
-      auto v_mu = _mm256_add_epi32(v_v_quads, _mm256_set1_epi32(2));  // 2(mu-1) + sign + 2 = 2mu + sign
-      // Add center bin (would be used for lossy and truncated lossless codestreams)
-      v_mu = _mm256_or_si256(v_mu, vone);  // This cancels the effect of a sign bit in LSB
-      v_mu = _mm256_slli_epi32(v_mu, pLSB - 1);
-      v_mu = _mm256_or_si256(v_mu, _mm256_slli_epi32(v_v_quads, 31));
-      v_mu = _mm256_andnot_si256(vsigma, v_mu);
+      __m128i v_v_quads0;
+      __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
 
       // store mu
-      *mp0++ = _mm256_extract_epi32(v_mu, 0);
-      *mp0++ = _mm256_extract_epi32(v_mu, 2);
-      *mp1++ = _mm256_extract_epi32(v_mu, 1);
-      *mp1++ = _mm256_extract_epi32(v_mu, 3);
-
-      // store sigma
-      *sp0++ = (rho0 >> 0) & 1;
-      *sp0++ = (rho0 >> 2) & 1;
-      *sp1++ = (rho0 >> 1) & 1;
-      *sp1++ = (rho0 >> 3) & 1;
+      *mp0++ = _mm_extract_epi32(v_mu0, 0);
+      *mp0++ = _mm_extract_epi32(v_mu0, 2);
+      *mp1++ = _mm_extract_epi32(v_mu0, 1);
+      *mp1++ = _mm_extract_epi32(v_mu0, 3);
 
       // Update Exponent
-      E_p[0] = static_cast<int32_t>(
-          32 - count_leading_zeros(static_cast<uint32_t>(_mm256_extract_epi32(v_v_quads, 1))));
-      E_p[1] = static_cast<int32_t>(
-          32 - count_leading_zeros(static_cast<uint32_t>(_mm256_extract_epi32(v_v_quads, 3))));
-      *rho_p++ = rho0;
-      E_p += 2;
+      *E_p++ = static_cast<int32_t>(
+          32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 1))));
+      *E_p++ = static_cast<int32_t>(
+          32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 3))));
     }
   }  // Non-Initial line-pair end
 }
