@@ -367,29 +367,34 @@ class rev_buf {
 // unsigned 8-bit integers in a and zero extends the upper bits.
 // https://msdn.microsoft.com/en-us/library/vstudio/s090c8fk(v=vs.100).aspx
 FORCE_INLINE int aarch64_movemask_epi8(int32x4_t _a) {
-  uint8x16_t input                                       = vreinterpretq_u8_s32(_a);
-  static const int8_t __attribute__((aligned(16))) xr[8] = {-7, -6, -5, -4, -3, -2, -1, 0};
-  uint8x8_t mask_and                                     = vdup_n_u8(0x80);
-  int8x8_t mask_shift                                    = vld1_s8(xr);
-
-  uint8x8_t lo = vget_low_u8(input);
-  uint8x8_t hi = vget_high_u8(input);
-
-  lo = vand_u8(lo, mask_and);
-  lo = vshl_u8(lo, mask_shift);
-
-  hi = vand_u8(hi, mask_and);
-  hi = vshl_u8(hi, mask_shift);
-
-  lo = vpadd_u8(lo, lo);
-  lo = vpadd_u8(lo, lo);
-  lo = vpadd_u8(lo, lo);
-
-  hi = vpadd_u8(hi, hi);
-  hi = vpadd_u8(hi, hi);
-  hi = vpadd_u8(hi, hi);
-
-  return ((hi[0] << 8) | (lo[0] & 0xFF));
+  uint8x16_t input     = vreinterpretq_u8_s32(_a);
+  uint16x8_t high_bits = vreinterpretq_u16_u8(vshrq_n_u8(input, 7));
+  uint32x4_t paired16  = vreinterpretq_u32_u16(vsraq_n_u16(high_bits, high_bits, 7));
+  uint64x2_t paired32  = vreinterpretq_u64_u32(vsraq_n_u32(paired16, paired16, 14));
+  uint8x16_t paired64  = vreinterpretq_u8_u64(vsraq_n_u64(paired32, paired32, 28));
+  return vgetq_lane_u8(paired64, 0) | ((int)vgetq_lane_u8(paired64, 8) << 8);
+  //  static const int8_t __attribute__((aligned(16))) xr[8] = {-7, -6, -5, -4, -3, -2, -1, 0};
+  //  uint8x8_t mask_and                                     = vdup_n_u8(0x80);
+  //  int8x8_t mask_shift                                    = vld1_s8(xr);
+  //
+  //  uint8x8_t lo = vget_low_u8(input);
+  //  uint8x8_t hi = vget_high_u8(input);
+  //
+  //  lo = vand_u8(lo, mask_and);
+  //  lo = vshl_u8(lo, mask_shift);
+  //
+  //  hi = vand_u8(hi, mask_and);
+  //  hi = vshl_u8(hi, mask_shift);
+  //
+  //  lo = vpadd_u8(lo, lo);
+  //  lo = vpadd_u8(lo, lo);
+  //  lo = vpadd_u8(lo, lo);
+  //
+  //  hi = vpadd_u8(hi, hi);
+  //  hi = vpadd_u8(hi, hi);
+  //  hi = vpadd_u8(hi, hi);
+  //
+  //  return ((hi[0] << 8) | (lo[0] & 0xFF));
 }
 
   #define aarch64_srli_epi64(a, imm)                                               \

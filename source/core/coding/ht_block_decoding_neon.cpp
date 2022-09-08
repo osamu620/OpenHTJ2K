@@ -420,10 +420,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
       u1 = (uvlc_result >> 3) + (tmp >> len);
 
-      gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
-      gamma1 = (popcount32(rho1) < 2) ? 0 : 1;
-      kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(Emax0 - 1);
-      kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(Emax1 - 1);
+      gamma0 = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;  // (popcount32(rho0) < 2) ? 0 : 1;
+      gamma1 = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;  //(popcount32(rho1) < 2) ? 0 : 1;
+      kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint32_t>(Emax0 - 1);
+      kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint32_t>(Emax1 - 1);
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
@@ -530,9 +530,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       uvlc_result >>= 3;
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
 
-      gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
-      kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(Emax0 - 1);
-      U0     = kappa0 + u0;
+      gamma0 = gamma0 = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;  //(popcount32(rho0) < 2) ? 0 : 1;
+      kappa0          = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint32_t>(Emax0 - 1);
+      U0              = kappa0 + u0;
 
       auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
       v_m_quads0      = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), v_m_quads0);
