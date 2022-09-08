@@ -125,8 +125,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     rho0    = (tv0 & 0x00F0) >> 4;
-    emb_k_0 = (tv0 & 0x0F00) >> 8;
-    emb_1_0 = (tv0 & 0xF000) >> 12;
+    emb_k_0 = (tv0 & 0xF000) >> 12;
+    emb_1_0 = (tv0 & 0x0F00) >> 8;
 
     *rho_p++ = rho0;
     // calculate context for the next quad
@@ -144,8 +144,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     rho1    = (tv1 & 0x00F0) >> 4;
-    emb_k_1 = (tv1 & 0x0F00) >> 8;
-    emb_1_1 = (tv1 & 0xF000) >> 12;
+    emb_k_1 = (tv1 & 0xF000) >> 12;
+    emb_1_1 = (tv1 & 0x0F00) >> 8;
 
     *rho_p++ = rho1;
 
@@ -259,8 +259,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
     }
     rho0     = (tv0 & 0x00F0) >> 4;
-    emb_k_0  = (tv0 & 0x0F00) >> 8;
-    emb_1_0  = (tv0 & 0xF000) >> 12;
+    emb_k_0  = (tv0 & 0xF000) >> 12;
+    emb_1_0  = (tv0 & 0x0F00) >> 8;
     *rho_p++ = rho0;
 
     auto vsigma0 = vdupq_n_u32(rho0);
@@ -355,8 +355,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
 
       rho0    = (tv0 & 0x00F0) >> 4;
-      emb_k_0 = (tv0 & 0x0F00) >> 8;
-      emb_1_0 = (tv0 & 0xF000) >> 12;
+      emb_k_0 = (tv0 & 0xF000) >> 12;
+      emb_1_0 = (tv0 & 0x0F00) >> 8;
 
       vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
@@ -376,8 +376,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
 
       rho1    = (tv1 & 0x00F0) >> 4;
-      emb_k_1 = (tv1 & 0x0F00) >> 8;
-      emb_1_1 = (tv1 & 0xF000) >> 12;
+      emb_k_1 = (tv1 & 0xF000) >> 12;
+      emb_1_1 = (tv1 & 0x0F00) >> 8;
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);           // (w | sw) << 8
@@ -504,8 +504,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         }
       }
       rho0    = (tv0 & 0x00F0) >> 4;
-      emb_k_0 = (tv0 & 0x0F00) >> 8;
-      emb_1_0 = (tv0 & 0xF000) >> 12;
+      emb_k_0 = (tv0 & 0xF000) >> 12;
+      emb_1_0 = (tv0 & 0x0F00) >> 8;
 
       auto vsigma0 = vdupq_n_u32(rho0);
       vsigma0      = vtstq_s32(vsigma0, vm);
