@@ -132,8 +132,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+    emb_1_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+    emb_k_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
 
     *rho_p++ = rho0;
     // calculate context for the next quad
@@ -151,8 +151,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     rho1    = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
-    emb_k_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
-    emb_1_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+    emb_1_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
+    emb_k_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
 
     *rho_p++ = rho1;
 
@@ -271,8 +271,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
     }
     rho0     = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_k_0  = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_1_0  = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+    emb_1_0  = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+    emb_k_0  = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
     *rho_p++ = rho0;
 
     for (uint32_t i = 0; i < 4; i++) {
@@ -374,8 +374,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
 
       rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-      emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-      emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      emb_1_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+      emb_k_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
 
       vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
 
@@ -395,8 +395,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
 
       rho1    = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
-      emb_k_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
-      emb_1_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+      emb_1_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
+      emb_k_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);           // (w | sw) << 8
@@ -517,8 +517,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         }
       }
       rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-      emb_k_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-      emb_1_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      emb_1_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
+      emb_k_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
 
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i] = (rho0 >> i) & 1;
