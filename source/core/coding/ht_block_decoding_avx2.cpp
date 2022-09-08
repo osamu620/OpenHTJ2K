@@ -168,33 +168,59 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
   v = _mm_subs_epu16(_mm_set1_epi32(158), v);  // undo bias
   v = _mm_min_epi16(v, _mm_set1_epi32(32));    // clamp at 32
 
+  // __m128i t;
+  // const __m128i lut_lo        = _mm_set_epi8(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 31);
+  // const __m128i lut_hi        = _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 31);
+  // const __m128i nibble_mask   = _mm_set1_epi8(0x0F);
+  // const __m128i byte_offset8  = _mm_set1_epi16(8);
+  // const __m128i byte_offset16 = _mm_set1_epi16(16);
+  // t                           = _mm_and_si128(nibble_mask, v);
+  // v                           = _mm_and_si128(_mm_srli_epi16(v, 4), nibble_mask);
+  // t                           = _mm_shuffle_epi8(lut_lo, t);
+  // v                           = _mm_shuffle_epi8(lut_hi, v);
+  // v                           = _mm_min_epu8(v, t);
+
+  // t = _mm_srli_epi16(v, 8);
+  // v = _mm_or_si128(v, byte_offset8);
+  // v = _mm_min_epu8(v, t);
+
+  // t = _mm_srli_epi32(v, 16);
+  // v = _mm_or_si128(v, byte_offset16);
+  // v = _mm_min_epu8(v, t);
   return v;
 }
 
 template <int N>
-FORCE_INLINE __m128i decode_onq_quad(uint16_t *sp, uint8_t pLSB, fwd_buf<0xFF> &MagSgn,
-                                     __m128i &v_v_quads0) {
+FORCE_INLINE __m128i decode_onq_quad(__m128i qinf, __m128i U_q, uint8_t pLSB, fwd_buf<0xFF> &MagSgn,
+                                     __m128i &v_n) {
   const __m128i vone = _mm_set1_epi32(1);
-  __m128i qinf       = _mm_loadu_si128((__m128i *)sp);
-  __m128i U_q        = _mm_shuffle_epi32(_mm_srli_epi32(qinf, 16), _MM_SHUFFLE(N, N, N, N));
   __m128i w0         = _mm_shuffle_epi32(qinf, _MM_SHUFFLE(N, N, N, N));
   __m128i flags      = _mm_and_si128(w0, _mm_set_epi32(0x8880, 0x4440, 0x2220, 0x1110));
   __m128i insig      = _mm_cmpeq_epi32(flags, _mm_setzero_si128());
   flags              = _mm_mullo_epi16(flags, _mm_set_epi16(1, 1, 2, 2, 4, 4, 8, 8));
-  w0 = _mm_and_si128(_mm_srli_epi32(flags, 11), vone);  // flags, _mm_set1_epi32(0x800)), 11);  // e_k
-  __m128i m_n    = _mm_sub_epi32(U_q, w0);
-  m_n            = _mm_andnot_si128(insig, m_n);
-  w0             = _mm_srli_epi32(flags, 15);  // e_1
-  __m128i vmask  = _mm_sub_epi32(_mm_sllv_epi32(vone, m_n), vone);
-  __m128i ms_vec = MagSgn.fetch(m_n);
-  v_v_quads0     = _mm_and_si128(ms_vec, vmask);
-  v_v_quads0     = _mm_or_si128(v_v_quads0, _mm_sllv_epi32(w0, m_n));  // v = 2(mu-1) + sign (0 or 1)
-  __m128i v_mu0  = _mm_add_epi32(v_v_quads0, _mm_set1_epi32(2));       // 2(mu-1) + sign + 2 = 2mu + sign
+  w0                 = _mm_srli_epi32(flags, 15);  // e_k
+  U_q                = _mm_shuffle_epi32(U_q, _MM_SHUFFLE(N, N, N, N));
+  __m128i m_n        = _mm_sub_epi32(U_q, w0);
+  m_n                = _mm_andnot_si128(insig, m_n);
+  w0                 = _mm_and_si128(_mm_srli_epi32(flags, 11), vone);  // e_1
+  __m128i vmask      = _mm_sub_epi32(_mm_sllv_epi32(vone, m_n), vone);
+  __m128i ms_vec     = MagSgn.fetch(m_n);
+  ms_vec             = _mm_and_si128(ms_vec, vmask);
+  ms_vec             = _mm_or_si128(ms_vec, _mm_sllv_epi32(w0, m_n));  // v = 2(mu-1) + sign (0 or 1)
+  __m128i v_mu0      = _mm_add_epi32(ms_vec, _mm_set1_epi32(2));       // 2(mu-1) + sign + 2 = 2mu + sign
   // Add center bin (would be used for lossy and truncated lossless codestreams)
   v_mu0 = _mm_or_si128(v_mu0, vone);  // This cancels the effect of a sign bit in LSB
   v_mu0 = _mm_slli_epi32(v_mu0, pLSB - 1);
-  v_mu0 = _mm_or_si128(v_mu0, _mm_slli_epi32(v_v_quads0, 31));
+  v_mu0 = _mm_or_si128(v_mu0, _mm_slli_epi32(ms_vec, 31));
   v_mu0 = _mm_andnot_si128(insig, v_mu0);
+
+  w0 = ms_vec;
+  if (N == 0) {
+    w0 = _mm_shuffle_epi8(w0, _mm_set_epi32(-1, -1, 0x0F0E0D0C, 0x07060504));
+  } else if (N == 1) {
+    w0 = _mm_shuffle_epi8(w0, _mm_set_epi32(0x0F0E0D0C, 0x07060504, -1, -1));
+  }
+  v_n = _mm_or_si128(v_n, w0);
   return v_mu0;
 }
 
@@ -317,17 +343,20 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // quad 0 length
     len = uvlc_result & 0x7;  // quad 0 suffix length
     uvlc_result >>= 3;
-    u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-    u1 = (uvlc_result >> 3) + (tmp >> len);
+    // U = 1+ u
+    u0 = 1 + (uvlc_result & 7) + (tmp & ~(0xFFU << len));  // always kappa = 1 in initial line pair
+    u1 = 1 + (uvlc_result >> 3) + (tmp >> len);            // always kappa = 1 in initial line pair
 
-    U0    = kappa0 + u0;
-    U1    = kappa1 + u1;
-    sp[1] = U0;
-    sp[3] = U1;
-
-    __m128i v_v_quads0, v_v_quads1;
-    __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
-    __m128i v_mu1 = decode_onq_quad<1>(sp, pLSB, MagSgn, v_v_quads1);
+    sp[1] = static_cast<uint16_t>(u0);
+    sp[3] = static_cast<uint16_t>(u1);
+  }
+  sp = scratch;
+  for (qx = QW; qx >= 2; qx -= 2, sp += 4) {
+    __m128i v_n   = _mm_setzero_si128();
+    __m128i qinf  = _mm_loadu_si128((__m128i *)sp);
+    __m128i U_q   = _mm_srli_epi32(qinf, 16);
+    __m128i v_mu0 = decode_onq_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
+    __m128i v_mu1 = decode_onq_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
 
     // store mu
     // 0, 2, 4, 6, 1, 3, 5, 7
@@ -341,10 +370,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     mp1 += 4;
 
     // Update Exponent
-    t0   = _mm_unpacklo_epi32(v_v_quads0, v_v_quads1);
-    t1   = _mm_unpackhi_epi32(v_v_quads0, v_v_quads1);
-    vExp = _mm_unpackhi_epi32(t0, t1);
-    vExp = sse_lzcnt_epi32(vExp);
+    // t0   = _mm_unpacklo_epi32(v_v_quads0, v_v_quads1);
+    // t1   = _mm_unpackhi_epi32(v_v_quads0, v_v_quads1);
+    // vExp = _mm_unpackhi_epi32(t0, t1);
+    vExp = sse_lzcnt_epi32(v_n);
     vExp = _mm_sub_epi32(_mm_set1_epi32(32), vExp);
     _mm_storeu_si128((__m128i *)E_p, vExp);
     E_p += 4;
@@ -392,13 +421,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // quad 0 length
     len = uvlc_result & 0x7;  // quad 0 suffix length
     uvlc_result >>= 3;
-    u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
+    u0 = 1 + (uvlc_result & 7) + (tmp & ~(0xFFU << len));  // kappa = 1
+    // U0    = kappa0 + u0;
+    sp[1] = u0;
 
-    U0    = kappa0 + u0;
-    sp[1] = U0;
-
-    __m128i v_v_quads0;
-    __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
+    __m128i v_n   = _mm_setzero_si128();
+    __m128i qinf  = _mm_loadu_si128((__m128i *)sp);
+    __m128i U_q   = _mm_srli_epi32(qinf, 16);
+    __m128i v_mu0 = decode_onq_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
 
     // store mu
     *mp0++ = _mm_extract_epi32(v_mu0, 0);
@@ -407,10 +437,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     *mp1++ = _mm_extract_epi32(v_mu0, 3);
 
     // Update Exponent
-    *E_p++ = static_cast<int32_t>(
-        32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 1))));
-    *E_p++ = static_cast<int32_t>(
-        32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 3))));
+    *E_p++ =
+        static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_n, 0))));
+    *E_p++ =
+        static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_n, 1))));
   }  // Initial line-pair end
 
   /*******************************************************************************************************************/
@@ -424,10 +454,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     sp0   = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
     sp1   = sp0 + block->blkstate_stride;
     rho1  = 0;
-    // Calculate Emax for the next two quads
-    int32_t Emax0, Emax1;
-    Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
-    Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
 
     // calculate context for the next quad
     context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);            // (w | sw) << 8
@@ -512,18 +538,46 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
       u1 = (uvlc_result >> 3) + (tmp >> len);
 
-      gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
-      gamma1 = (popcount32(rho1) < 2) ? 0 : 1;
-      kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
-      kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma1 * (Emax1 - 1));
-      U0     = kappa0 + u0;
-      U1     = kappa1 + u1;
-      sp[1]  = U0;
-      sp[3]  = U1;
+      sp[1] = static_cast<uint16_t>(u0);
+      sp[3] = static_cast<uint16_t>(u1);
+    }
 
-      __m128i v_v_quads0, v_v_quads1;
-      __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
-      __m128i v_mu1 = decode_onq_quad<1>(sp, pLSB, MagSgn, v_v_quads1);
+    // Calculate Emax for the next two quads
+    int32_t Emax0, Emax1;
+    Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
+    Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
+    sp    = scratch;
+    for (qx = QW; qx >= 2; qx -= 2, sp += 4) {
+      __m128i v_n = _mm_setzero_si128();
+      __m128i U_q;
+      __m128i qinf = _mm_loadu_si128((__m128i *)sp);
+      {
+        // Compute gamma, kappa, U_q with Emax
+        // The SIMD code below does the following
+        //
+        // gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
+        // gamma1 = (popcount32(rho1) < 2) ? 0 : 1;
+        // kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
+        // kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma1 * (Emax1 - 1));
+        // U0     = kappa0 + u0;
+        // U1     = kappa1 + u1;
+
+        __m128i gamma, emax, kappa, u_q, w0;  // needed locally
+        gamma = _mm_and_si128(qinf, _mm_set1_epi32(0xF0));
+        w0    = _mm_sub_epi32(gamma, _mm_set1_epi32(1));
+        gamma = _mm_and_si128(gamma, w0);
+        gamma = _mm_cmpeq_epi32(gamma, _mm_setzero_si128());
+
+        emax  = _mm_set_epi32(0, 0, Emax1 - 1, Emax0 - 1);
+        emax  = _mm_andnot_si128(gamma, emax);
+        kappa = _mm_set1_epi32(1);
+        kappa = _mm_max_epi16(emax, kappa);  // no max_epi32 in ssse3
+
+        u_q = _mm_srli_epi32(qinf, 16);
+        U_q = _mm_add_epi32(u_q, kappa);
+      }
+      __m128i v_mu0 = decode_onq_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
+      __m128i v_mu1 = decode_onq_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
 
       // store mu
       // 0, 2, 4, 6, 1, 3, 5, 7
@@ -539,10 +593,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // Update Exponent
       Emax0 = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1 = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
-      t0    = _mm_unpacklo_epi32(v_v_quads0, v_v_quads1);
-      t1    = _mm_unpackhi_epi32(v_v_quads0, v_v_quads1);
-      vExp  = _mm_unpackhi_epi32(t0, t1);
-      vExp  = sse_lzcnt_epi32(vExp);
+      vExp  = sse_lzcnt_epi32(v_n);
       vExp  = _mm_sub_epi32(_mm_set1_epi32(32), vExp);
       _mm_storeu_si128((__m128i *)E_p, vExp);
       E_p += 4;
@@ -596,8 +647,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       U0     = kappa0 + u0;
       sp[1]  = U0;
 
-      __m128i v_v_quads0;
-      __m128i v_mu0 = decode_onq_quad<0>(sp, pLSB, MagSgn, v_v_quads0);
+      __m128i v_n   = _mm_setzero_si128();
+      __m128i qinf  = _mm_loadu_si128((__m128i *)sp);
+      __m128i U_q   = _mm_srli_epi32(qinf, 16);
+      __m128i v_mu0 = decode_onq_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
 
       // store mu
       *mp0++ = _mm_extract_epi32(v_mu0, 0);
@@ -605,11 +658,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       *mp1++ = _mm_extract_epi32(v_mu0, 1);
       *mp1++ = _mm_extract_epi32(v_mu0, 3);
 
-      // Update Exponent
-      *E_p++ = static_cast<int32_t>(
-          32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 1))));
-      *E_p++ = static_cast<int32_t>(
-          32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_v_quads0, 3))));
+      *E_p++ =
+          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_n, 0))));
+      *E_p++ =
+          static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(_mm_extract_epi32(v_n, 1))));
     }
   }  // Non-Initial line-pair end
 }
