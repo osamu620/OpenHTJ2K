@@ -120,10 +120,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   dec_table0 = dec_CxtVLC_table0_fast_16;
   dec_table1 = dec_CxtVLC_table1_fast_16;
 
-  alignas(32) auto Eline = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
-  Eline[0]               = 0;
-  auto E_p               = Eline.get() + 1;
-
   alignas(32) uint16_t scratch[8 * 513] = {0};
   int32_t sstr = static_cast<int32_t>(((block->size.x + 2) + 7u) & ~7u);  // multiples of 8
   uint16_t *sp;
@@ -161,7 +157,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     context = ((tv0 & 0xE0U) << 2) | ((tv0 & 0x10U) << 3);  // = context << 7
 
     // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+    vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
     uint16_t tv1 = dec_table0[(vlcval & 0x7F) + context];
     if (context == 0 && qx > 1) {
       mel_run -= 2;
@@ -207,7 +203,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // extract suffixes for quad 0 and 1
     uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
     uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-    vlcval       = VLC_dec.advance(len);
+    VLC_dec.advance(len);
     uvlc_result >>= 4;
     // quad 0 length
     len = uvlc_result & 0x7;  // quad 0 suffix length
@@ -306,8 +302,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   // MagSgn decoding
   /*******************************************************************************************************************/
   fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
-  auto mp0 = block->sample_buf.get();
-  auto mp1 = block->sample_buf.get() + block->blksampl_stride;
+  auto mp0               = block->sample_buf.get();
+  auto mp1               = block->sample_buf.get() + block->blksampl_stride;
+  alignas(32) auto Eline = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
+  Eline[0]               = 0;
+  auto E_p               = Eline.get() + 1;
   int32x4_t v_n, qinf, U_q, mu0_n, mu1_n;
   const int32x4_t zeros = vdupq_n_s32(0);
   const int32x4_t ones  = vdupq_n_s32(1);
@@ -320,13 +319,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     mu1_n = decode_one_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
 
     // store mu
-    auto vvv = vzipq_s32(mu0_n, mu1_n);
-    vst1q_s32(mp0, vzip1q_s32(vvv.val[0], vvv.val[1]));
-    vst1q_s32(mp1, vzip2q_s32(vvv.val[0], vvv.val[1]));
+    int32x4x2_t t = vzipq_s32(mu0_n, mu1_n);
+    vst1q_s32(mp0, vzip1q_s32(t.val[0], t.val[1]));
+    vst1q_s32(mp1, vzip2q_s32(t.val[0], t.val[1]));
     mp0 += 4;
     mp1 += 4;
 
-    // update Exponent
+    // Update Exponent
     v_n = vsubq_s32(vdupq_n_s32(32), vclzq_s32(v_n));
     vst1q_s32(E_p, v_n);
     E_p += 4;
@@ -353,11 +352,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         w0    = vsubq_s32(gamma, ones);
         gamma = vandq_s32(gamma, w0);
         gamma = vceqzq_s32(gamma);
+        gamma = vmvnq_s32(gamma);
 
         emax = {Emax0 - 1, Emax1 - 1, 0, 0};
         //        emax  = vsetq_lane_s32(Emax0 - 1, emax, 0);
         //        emax  = vsetq_lane_s32(Emax1 - 1, emax, 1);
-        emax  = vbicq_s32(emax, gamma);
+        //        emax  = vbicq_s32(emax, gamma);
+        emax  = vandq_s32(emax, gamma);
         kappa = vmaxq_s32(emax, ones);
 
         u_q = vshrq_n_s32(qinf, 16);
@@ -367,9 +368,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu1_n = decode_one_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
 
       // store mu
-      auto vvv = vzipq_s32(mu0_n, mu1_n);
-      vst1q_s32(mp0, vzip1q_s32(vvv.val[0], vvv.val[1]));
-      vst1q_s32(mp1, vzip2q_s32(vvv.val[0], vvv.val[1]));
+      int32x4x2_t t = vzipq_s32(mu0_n, mu1_n);
+      vst1q_s32(mp0, vzip1q_s32(t.val[0], t.val[1]));
+      vst1q_s32(mp1, vzip2q_s32(t.val[0], t.val[1]));
       mp0 += 4;
       mp1 += 4;
 
