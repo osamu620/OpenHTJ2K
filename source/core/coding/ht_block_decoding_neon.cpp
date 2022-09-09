@@ -138,7 +138,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   uint32_t vlcval;
 
   // Initial line-pair
-  sp              = scratch;
+  sp = scratch;
+  uint16x4_t vsp;
   int32_t mel_run = MEL.get_run();
   for (qx = QW; qx > 0; qx -= 2, sp += 4) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
@@ -151,7 +152,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
-    sp[0] = tv0;
+    vsp[0] = tv0;
 
     // calculate context for the next quad, Eq. (1) in the spec
     context = ((tv0 & 0xE0U) << 2) | ((tv0 & 0x10U) << 3);  // = context << 7
@@ -166,8 +167,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
-    tv1   = (qx > 1) ? tv1 : 0;
-    sp[2] = tv1;
+    tv1    = (qx > 1) ? tv1 : 0;
+    vsp[2] = tv1;
 
     // store sigma
     *sp0++ = ((tv0 >> 4) >> 0) & 1;
@@ -211,8 +212,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     u0 = 1 + (uvlc_result & 7) + (tmp & ~(0xFFU << len));  // always kappa = 1 in initial line pair
     u1 = 1 + (uvlc_result >> 3) + (tmp >> len);            // always kappa = 1 in initial line pair
 
-    sp[1] = static_cast<uint16_t>(u0);
-    sp[3] = static_cast<uint16_t>(u1);
+    vsp[1] = static_cast<uint16_t>(u0);
+    vsp[3] = static_cast<uint16_t>(u1);
+    vst1_u16(sp, vsp);
   }
 
   // Non-initial line-pair
@@ -240,7 +242,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= (sp[0 - sstr] & 0x80U) | ((sp[2 - sstr] & 0xA0U) << 2);  // ((nw | n) << 7) | (ne << 9)
       context |= (sp[4 - sstr] & 0x20U) << 4;                             // ( nf) << 9
 
-      sp[0] = tv0;
+      vsp[0] = tv0;
 
       vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
@@ -259,7 +261,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= (sp[2 - sstr] & 0x80U) | ((sp[4 - sstr] & 0xA0U) << 2);  // ((nw | n) << 7) | (ne << 9)
       context |= (sp[6 - sstr] & 0x20U) << 4;                             // ( nf) << 9
 
-      sp[2] = tv1;
+      vsp[2] = tv1;
 
       // store sigma
       *sp0++ = ((tv0 >> 4) >> 0) & 1;
@@ -291,10 +293,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // quad 0 length
       len = uvlc_result & 0x7;  // quad 0 suffix length
       uvlc_result >>= 3;
-      u0    = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-      u1    = (uvlc_result >> 3) + (tmp >> len);
-      sp[1] = static_cast<uint16_t>(u0);
-      sp[3] = static_cast<uint16_t>(u1);
+      u0     = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
+      u1     = (uvlc_result >> 3) + (tmp >> len);
+      vsp[1] = static_cast<uint16_t>(u0);
+      vsp[3] = static_cast<uint16_t>(u1);
+      vst1_u16(sp, vsp);
     }
   }
 
