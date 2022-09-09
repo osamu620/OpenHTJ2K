@@ -191,7 +191,7 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
 }
 
 template <int N>
-FORCE_INLINE __m128i decode_onq_quad(__m128i qinf, __m128i U_q, uint8_t pLSB, fwd_buf<0xFF> &MagSgn,
+FORCE_INLINE __m128i decode_one_quad(__m128i qinf, __m128i U_q, uint8_t pLSB, fwd_buf<0xFF> &MagSgn,
                                      __m128i &v_n) {
   const __m128i vone = _mm_set1_epi32(1);
   __m128i mu_n;  //      = _mm_setzero_si128();
@@ -273,7 +273,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
     uint16_t tv1 = dec_table[(vlcval & 0x7F) + context];
-    if (context == 0 & qx > 1) {
+    if (context == 0 && qx > 1) {
       mel_run -= 2;
       tv1 = (mel_run == -1) ? tv1 : 0;
       if (mel_run < 0) {
@@ -363,7 +363,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
       uint16_t tv1 = dec_table[(vlcval & 0x7F) + context];
-      if (context == 0 & qx > 1) {
+      if (context == 0 && qx > 1) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
         if (mel_run < 0) {
@@ -426,7 +426,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   Eline[0]               = 0;
   int32_t *E_p           = Eline.get() + 1;
 
-  __m128i v_n, qinf, U_q, v_mu0, v_mu1;
+  __m128i v_n, qinf, U_q, mu0_n, mu1_n;
   fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
 
   // Initial line-pair
@@ -435,17 +435,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     v_n   = _mm_setzero_si128();
     qinf  = _mm_loadu_si128((__m128i *)sp);
     U_q   = _mm_srli_epi32(qinf, 16);
-    v_mu0 = decode_onq_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
-    v_mu1 = decode_onq_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
+    mu0_n = decode_one_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
+    mu1_n = decode_one_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
 
     // store mu
     // 0, 2, 4, 6, 1, 3, 5, 7
-    auto t0 = _mm_unpacklo_epi32(v_mu0, v_mu1);
-    auto t1 = _mm_unpackhi_epi32(v_mu0, v_mu1);
-    v_mu0   = _mm_unpacklo_epi32(t0, t1);
-    v_mu1   = _mm_unpackhi_epi32(t0, t1);
-    _mm_storeu_si128((__m128i *)mp0, v_mu0);
-    _mm_storeu_si128((__m128i *)mp1, v_mu1);
+    auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);
+    auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
+    mu0_n   = _mm_unpacklo_epi32(t0, t1);
+    mu1_n   = _mm_unpackhi_epi32(t0, t1);
+    _mm_storeu_si128((__m128i *)mp0, mu0_n);
+    _mm_storeu_si128((__m128i *)mp1, mu1_n);
     mp0 += 4;
     mp1 += 4;
 
@@ -496,17 +496,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         u_q = _mm_srli_epi32(qinf, 16);
         U_q = _mm_add_epi32(u_q, kappa);
       }
-      v_mu0 = decode_onq_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
-      v_mu1 = decode_onq_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
+      mu0_n = decode_one_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
+      mu1_n = decode_one_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
 
       // store mu
       // 0, 2, 4, 6, 1, 3, 5, 7
-      auto t0 = _mm_unpacklo_epi32(v_mu0, v_mu1);
-      auto t1 = _mm_unpackhi_epi32(v_mu0, v_mu1);
-      v_mu0   = _mm_unpacklo_epi32(t0, t1);
-      v_mu1   = _mm_unpackhi_epi32(t0, t1);
-      _mm_storeu_si128((__m128i *)mp0, v_mu0);
-      _mm_storeu_si128((__m128i *)mp1, v_mu1);
+      auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);
+      auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
+      mu0_n   = _mm_unpacklo_epi32(t0, t1);
+      mu1_n   = _mm_unpackhi_epi32(t0, t1);
+      _mm_storeu_si128((__m128i *)mp0, mu0_n);
+      _mm_storeu_si128((__m128i *)mp1, mu1_n);
       mp0 += 4;
       mp1 += 4;
 
@@ -855,10 +855,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     Dcup[Lcup - 1] = 0xFF;
     Dcup[Lcup - 2] |= 0x0F;
     const int32_t Pcup = static_cast<int32_t>(Lcup - Scup);
-    //    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
-    //    state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
-    //    state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
-    //    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
+
     ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
