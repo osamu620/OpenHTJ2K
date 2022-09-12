@@ -61,7 +61,6 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     float32x4_t vscale = vdupq_n_f32(fscale);
     int32x4_t vorval   = vdupq_n_s32(0);
     int32x4_t vpLSB    = vdupq_n_s32(pLSB);
-    int32x4_t vone     = vdupq_n_s32(1);
 
     int16_t len = static_cast<int16_t>(this->size.x);
     for (; len >= 8; len -= 8) {
@@ -72,8 +71,8 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       v0 = vcvtq_s32_f32(vmulq_f32(vcvtq_f32_s32(v0), vscale));
       v1 = vcvtq_s32_f32(vmulq_f32(vcvtq_f32_s32(v1), vscale));
       // Take sign bit
-      int32x4_t s0 = vandq_s32(vshrq_n_s32(v0, 31), vone);
-      int32x4_t s1 = vandq_s32(vshrq_n_s32(v1, 31), vone);
+      int32x4_t s0 = vshrq_n_u32(v0, 31);
+      int32x4_t s1 = vshrq_n_u32(v1, 31);
       // Absolute value
       v0           = vabsq_s32(v0);
       v1           = vabsq_s32(v1);
@@ -89,14 +88,12 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       vorval = vorrq_s32(vorval, v0);
       vorval = vorrq_s32(vorval, v1);
       // Convert two's compliment to MagSgn form
-      int32x4_t vone0 = vandq_s32(mask0, vone);
-      int32x4_t vone1 = vandq_s32(mask1, vone);
-      v0              = vsubq_u32(v0, vone0);
-      v1              = vsubq_u32(v1, vone1);
-      v0              = vshlq_n_s32(v0, 1);
-      v1              = vshlq_n_s32(v1, 1);
-      v0              = vaddq_s32(v0, vandq_s32(s0, mask0));
-      v1              = vaddq_s32(v1, vandq_s32(s1, mask1));
+      v0 = vqsubq_u32(v0, vdupq_n_u32(1));
+      v1 = vqsubq_u32(v1, vdupq_n_u32(1));
+      v0 = vshlq_n_s32(v0, 1);
+      v1 = vshlq_n_s32(v1, 1);
+      v0 = vaddq_s32(v0, s0);
+      v1 = vaddq_s32(v1, s1);
       // Store
       vst1q_s32(dp, v0);
       vst1q_s32(dp + 4, v1);
