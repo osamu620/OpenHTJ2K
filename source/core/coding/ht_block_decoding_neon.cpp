@@ -112,10 +112,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
   int32_t qx;
   // Initial line-pair
-  for (qx = QW; qx >= 2; qx -= 2) {
+  for (qx = QW; qx > 0; qx -= 2) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + context];
     if (context == 0) {
       mel_run -= 2;
       tv0 = (mel_run == -1) ? tv0 : 0;
@@ -128,34 +128,38 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     emb_k_0 = (tv0 & 0xF000) >> 12;
     emb_1_0 = (tv0 & 0x0F00) >> 8;
 
-    *rho_p++ = rho0;
     // calculate context for the next quad
-    context = (rho0 >> 1) | (rho0 & 1);
+    context = ((tv0 & 0xE0U) << 2) | ((tv0 & 0x10U) << 3);
 
     // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
-    if (context == 0) {
+    vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
+    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + context];
+    if (context == 0 && qx > 1) {
       mel_run -= 2;
       tv1 = (mel_run == -1) ? tv1 : 0;
       if (mel_run < 0) {
         mel_run = MEL.get_run();
       }
     }
-
+    tv1     = (qx > 1) ? tv1 : 0;
     rho1    = (tv1 & 0x00F0) >> 4;
     emb_k_1 = (tv1 & 0xF000) >> 12;
     emb_1_1 = (tv1 & 0x0F00) >> 8;
 
+    // store sigma
+    *sp0++   = (rho0 >> 0) & 1;
+    *sp0++   = (rho0 >> 2) & 1;
+    *sp0++   = (rho1 >> 0) & 1;
+    *sp0++   = (rho1 >> 2) & 1;
+    *sp1++   = (rho0 >> 1) & 1;
+    *sp1++   = (rho0 >> 3) & 1;
+    *sp1++   = (rho1 >> 1) & 1;
+    *sp1++   = (rho1 >> 3) & 1;
+    *rho_p++ = rho0;
     *rho_p++ = rho1;
 
-    auto vsigma0 = vdupq_n_u32(rho0);
-    vsigma0      = vtstq_s32(vsigma0, vm);
-    auto vsigma1 = vdupq_n_u32(rho1);
-    vsigma1      = vtstq_s32(vsigma1, vm);
-
     // calculate context for the next quad
-    context = static_cast<uint16_t>((rho1 >> 1) | (rho1 & 1));
+    context = ((tv1 & 0xE0U) << 2) | ((tv1 & 0x10U) << 3);
 
     // UVLC decoding
     vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
@@ -178,7 +182,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // extract suffixes for quad 0 and 1
     uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
     uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-    vlcval       = VLC_dec.advance(len);
+    VLC_dec.advance(len);
     uvlc_result >>= 4;
     // quad 0 length
     len = uvlc_result & 0x7;  // quad 0 suffix length
@@ -189,136 +193,67 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
-    v_m_quads0      = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), v_m_quads0);
-    auto v_m_quads1 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
-    v_m_quads1      = vsubq_s32(vandq_s32(vsigma1, vdupq_n_u32(U1)), v_m_quads1);
+    // NEON section
+    int32x4_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
 
-    // recoverMagSgnValue
-    auto msval0 = MagSgn.fetch(v_m_quads0);
-    //    MagSgn.advance(vaddvq_u32(v_m_quads0));
-    auto msval1 = MagSgn.fetch(v_m_quads1);
-    //    MagSgn.advance(vaddvq_u32(v_m_quads1));
+    sig0 = vdupq_n_u32(rho0);
+    sig0 = vtstq_s32(sig0, vm);
+    // k_n in the spec can be derived from emb_k
+    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
+    m_n_0 = vsubq_s32(vandq_s32(sig0, vdupq_n_u32(U0)), vtmp);
+    sig1  = vdupq_n_u32(rho1);
+    sig1  = vtstq_s32(sig1, vm);
+    // k_n in the spec can be derived from emb_k
+    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
+    m_n_1 = vsubq_s32(vandq_s32(sig1, vdupq_n_u32(U1)), vtmp);
 
-    auto vknown_1   = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
-    auto vmask      = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
-    auto v_v_quads0 = vandq_u32(msval0, vmask);
-    v_v_quads0 = vorrq_u32(v_v_quads0, vshlq_u32(vknown_1, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)
-    auto v_mu0 = vaddq_u32(v_v_quads0, vtwo);                             // 2(mu-1) + sign + 2 = 2mu + sign
+    /******************************** RecoverMagSgnValue step ****************************************/
+
+    vmask1 = vsubq_u32(vshlq_u32(vone, m_n_0), vone);
+    // retrieve MagSgn codewords
+    msvec = MagSgn.fetch(m_n_0);
+    //      MagSgn.advance(vaddvq_u32(m_n_0));
+    v_n_0 = vandq_u32(msvec, vmask1);
+    // i_n in the spec can be derived from emb_^{-1}
+    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
+    v_n_0 = vorrq_u32(v_n_0, vshlq_u32(vtmp, m_n_0));  // v = 2(mu-1) + sign (0 or 1)
+    mu0   = vaddq_u32(v_n_0, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
     // Add center bin (would be used for lossy and truncated lossless codestreams)
-    v_mu0 = vorrq_s32(v_mu0, vone);  // This cancels the effect of a sign bit in LSB
-    v_mu0 = vshlq_u32(v_mu0, vshift);
-    v_mu0 = vorrq_u32(v_mu0, vshlq_n_u32(v_v_quads0, 31));
-    v_mu0 = vandq_u32(v_mu0, vsigma0);
+    mu0 = vorrq_s32(mu0, vone);  // This cancels the effect of a sign bit in LSB
+    mu0 = vshlq_u32(mu0, vshift);
+    mu0 = vorrq_u32(mu0, vshlq_n_u32(v_n_0, 31));
+    mu0 = vandq_u32(mu0, sig0);
 
-    vknown_1        = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
-    vmask           = vsubq_u32(vshlq_u32(vone, v_m_quads1), vone);
-    auto v_v_quads1 = vandq_u32(msval1, vmask);
-    v_v_quads1 = vorrq_u32(v_v_quads1, vshlq_u32(vknown_1, v_m_quads1));  // v = 2(mu-1) + sign (0 or 1)
-    auto v_mu1 = vaddq_u32(v_v_quads1, vtwo);                             // 2(mu-1) + sign + 2 = 2mu + sign
+    vmask1 = vsubq_u32(vshlq_u32(vone, m_n_1), vone);
+    // retrieve MagSgn codewords
+    msvec = MagSgn.fetch(m_n_1);
+    //      MagSgn.advance(vaddvq_u32(m_n_1));
+    v_n_1 = vandq_u32(msvec, vmask1);
+    // i_n in the spec can be derived from emb_^{-1}
+    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
+    v_n_1 = vorrq_u32(v_n_1, vshlq_u32(vtmp, m_n_1));  // v = 2(mu-1) + sign (0 or 1)
+    mu1   = vaddq_u32(v_n_1, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
     // Add center bin (would be used for lossy and truncated lossless codestreams)
-    v_mu1 = vorrq_s32(v_mu1, vone);  // This cancels the effect of a sign bit in LSB
-    v_mu1 = vshlq_u32(v_mu1, vshift);
-    v_mu1 = vorrq_u32(v_mu1, vshlq_n_u32(v_v_quads1, 31));
-    v_mu1 = vandq_u32(v_mu1, vsigma1);
+    mu1 = vorrq_s32(mu1, vone);  // This cancels the effect of a sign bit in LSB
+    mu1 = vshlq_u32(mu1, vshift);
+    mu1 = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
+    mu1 = vandq_u32(mu1, sig1);
 
     // store mu
-    auto vvv = vzipq_s32(v_mu0, v_mu1);
-    vst1q_s32(mp0, vzip1q_s32(vvv.val[0], vvv.val[1]));
-    vst1q_s32(mp1, vzip2q_s32(vvv.val[0], vvv.val[1]));
+    int32x4x2_t t = vzipq_s32(mu0, mu1);
+    vst1q_s32(mp0, vzip1q_s32(t.val[0], t.val[1]));
+    vst1q_s32(mp1, vzip2q_s32(t.val[0], t.val[1]));
     mp0 += 4;
     mp1 += 4;
 
-    // store sigma
-    *sp0++ = (rho0 >> 0) & 1;
-    *sp0++ = (rho0 >> 2) & 1;
-    *sp0++ = (rho1 >> 0) & 1;
-    *sp0++ = (rho1 >> 2) & 1;
-    *sp1++ = (rho0 >> 1) & 1;
-    *sp1++ = (rho0 >> 3) & 1;
-    *sp1++ = (rho1 >> 1) & 1;
-    *sp1++ = (rho1 >> 3) & 1;
-
     // update Exponent
-    vvv  = vzipq_s32(v_v_quads0, v_v_quads1);
-    vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(vvv.val[0], vvv.val[1])));
+    t    = vzipq_s32(v_n_0, v_n_1);
+    vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(t.val[0], t.val[1])));
     vst1q_s32(E_p, vExp);
     E_p += 4;
   }
 
-  // process the last block (left over)
-  if (qx) {
-    // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
-    if (context == 0) {
-      mel_run -= 2;
-      tv0 = (mel_run == -1) ? tv0 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
-    }
-    rho0     = (tv0 & 0x00F0) >> 4;
-    emb_k_0  = (tv0 & 0xF000) >> 12;
-    emb_1_0  = (tv0 & 0x0F00) >> 8;
-    *rho_p++ = rho0;
-
-    auto vsigma0 = vdupq_n_u32(rho0);
-    vsigma0      = vtstq_s32(vsigma0, vm);
-
-    vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
-    u_off0 = tv0 & 1;
-
-    // UVLC decoding
-    uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U);
-    uint32_t uvlc_result = uvlc_dec_0[idx];
-    // remove total prefix length
-    vlcval = VLC_dec.advance(uvlc_result & 0x7);
-    uvlc_result >>= 3;
-    // extract suffixes for quad 0 and 1
-    uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-    uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-    VLC_dec.advance(len);
-
-    uvlc_result >>= 4;
-    // quad 0 length
-    len = uvlc_result & 0x7;  // quad 0 suffix length
-    uvlc_result >>= 3;
-    u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-
-    U0 = kappa0 + u0;
-
-    auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
-    v_m_quads0      = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), v_m_quads0);
-
-    // recoverMagSgnValue
-    auto msval0 = MagSgn.fetch(v_m_quads0);
-    //    MagSgn.advance(vaddvq_u32(v_m_quads0));
-
-    auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
-    auto vmask     = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
-    auto v_v_quads = vandq_u32(msval0, vmask);
-    v_v_quads      = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)
-    auto v_mu      = vaddq_u32(v_v_quads, vtwo);  // 2(mu-1) + sign + 2 = 2mu + sign
-    // Add center bin (would be used for lossy and truncated lossless codestreams)
-    v_mu = vorrq_s32(v_mu, vone);  // This cancels the effect of a sign bit in LSB
-    v_mu = vshlq_u32(v_mu, vshift);
-    v_mu = vorrq_u32(v_mu, vshlq_n_u32(v_v_quads, 31));
-    v_mu = vandq_u32(v_mu, vsigma0);
-
-    // store mu
-    vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
-    vst1_s32(mp1, vzip2_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
-
-    // store sigma
-    *sp0++ = (rho0 >> 0) & 1;
-    *sp0++ = (rho0 >> 2) & 1;
-    *sp1++ = (rho0 >> 1) & 1;
-    *sp1++ = (rho0 >> 3) & 1;
-
-    // update Exponent
-    vst1_s32(E_p, 32 - vclz_s32(vzip2_s32(vget_low_s32(v_v_quads), vget_high_s32(v_v_quads))));
-  }  // Initial line-pair end
+  // Initial line-pair end
 
   /*******************************************************************************************************************/
   // Non-initial line-pair
@@ -342,7 +277,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     context |= ((rho_p[-1] & 0x8) << 4) | ((rho_p[0] & 0x2) << 6);  // (nw | n) << 7
     context |= ((rho_p[0] & 0x8) << 6) | ((rho_p[1] & 0x2) << 8);   // (ne | nf) << 9
 
-    for (qx = QW; qx >= 2; qx -= 2) {
+    for (qx = QW; qx > 0; qx -= 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
       uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
@@ -367,14 +302,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
       uint16_t tv1 = dec_table1[(vlcval & 0x7F) + context];
-      if (context == 0) {
+      if (context == 0 && qx > 1) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
         if (mel_run < 0) {
           mel_run = MEL.get_run();
         }
       }
-
+      tv1     = (qx > 1) ? tv1 : 0;
       rho1    = (tv1 & 0x00F0) >> 4;
       emb_k_1 = (tv1 & 0xF000) >> 12;
       emb_1_1 = (tv1 & 0x0F00) >> 8;
@@ -421,62 +356,62 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       u1 = (uvlc_result >> 3) + (tmp >> len);
 
       gamma0 = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;  // (popcount32(rho0) < 2) ? 0 : 1;
-      gamma1 = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;  //(popcount32(rho1) < 2) ? 0 : 1;
+      gamma1 = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;  // (popcount32(rho1) < 2) ? 0 : 1;
       kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint32_t>(Emax0 - 1);
       kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint32_t>(Emax1 - 1);
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
       // NEON section
-      int32x4_t vmask1, vsigma0, vsigma1, vtmp, v_m_quads0, v_m_quads1, vmsval;
+      int32x4_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
 
-      vsigma0 = vdupq_n_u32(rho0);
-      vsigma0 = vtstq_s32(vsigma0, vm);
+      sig0 = vdupq_n_u32(rho0);
+      sig0 = vtstq_s32(sig0, vm);
       // k_n in the spec can be derived from emb_k
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
-      v_m_quads0 = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), vtmp);
-      vsigma1    = vdupq_n_u32(rho1);
-      vsigma1    = vtstq_s32(vsigma1, vm);
+      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
+      m_n_0 = vsubq_s32(vandq_s32(sig0, vdupq_n_u32(U0)), vtmp);
+      sig1  = vdupq_n_u32(rho1);
+      sig1  = vtstq_s32(sig1, vm);
       // k_n in the spec can be derived from emb_k
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
-      v_m_quads1 = vsubq_s32(vandq_s32(vsigma1, vdupq_n_u32(U1)), vtmp);
+      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
+      m_n_1 = vsubq_s32(vandq_s32(sig1, vdupq_n_u32(U1)), vtmp);
 
       /******************************** RecoverMagSgnValue step ****************************************/
 
-      vmask1 = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
+      vmask1 = vsubq_u32(vshlq_u32(vone, m_n_0), vone);
       // retrieve MagSgn codewords
-      vmsval = MagSgn.fetch(v_m_quads0);
-      //      MagSgn.advance(vaddvq_u32(v_m_quads0));
-      auto v_v_quads0 = vandq_u32(vmsval, vmask1);
+      msvec = MagSgn.fetch(m_n_0);
+      //      MagSgn.advance(vaddvq_u32(m_n_0));
+      v_n_0 = vandq_u32(msvec, vmask1);
       // i_n in the spec can be derived from emb_^{-1}
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
-      v_v_quads0 = vorrq_u32(v_v_quads0, vshlq_u32(vtmp, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)
-      auto v_mu0 = vaddq_u32(v_v_quads0, vtwo);                         // 2(mu-1) + sign + 2 = 2mu + sign
+      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
+      v_n_0 = vorrq_u32(v_n_0, vshlq_u32(vtmp, m_n_0));  // v = 2(mu-1) + sign (0 or 1)
+      mu0   = vaddq_u32(v_n_0, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
       // Add center bin (would be used for lossy and truncated lossless codestreams)
-      v_mu0 = vorrq_s32(v_mu0, vone);  // This cancels the effect of a sign bit in LSB
-      v_mu0 = vshlq_u32(v_mu0, vshift);
-      v_mu0 = vorrq_u32(v_mu0, vshlq_n_u32(v_v_quads0, 31));
-      v_mu0 = vandq_u32(v_mu0, vsigma0);
+      mu0 = vorrq_s32(mu0, vone);  // This cancels the effect of a sign bit in LSB
+      mu0 = vshlq_u32(mu0, vshift);
+      mu0 = vorrq_u32(mu0, vshlq_n_u32(v_n_0, 31));
+      mu0 = vandq_u32(mu0, sig0);
 
-      vmask1 = vsubq_u32(vshlq_u32(vone, v_m_quads1), vone);
+      vmask1 = vsubq_u32(vshlq_u32(vone, m_n_1), vone);
       // retrieve MagSgn codewords
-      vmsval = MagSgn.fetch(v_m_quads1);
-      //      MagSgn.advance(vaddvq_u32(v_m_quads1));
-      auto v_v_quads1 = vandq_u32(vmsval, vmask1);
+      msvec = MagSgn.fetch(m_n_1);
+      //      MagSgn.advance(vaddvq_u32(m_n_1));
+      v_n_1 = vandq_u32(msvec, vmask1);
       // i_n in the spec can be derived from emb_^{-1}
-      vtmp       = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
-      v_v_quads1 = vorrq_u32(v_v_quads1, vshlq_u32(vtmp, v_m_quads1));  // v = 2(mu-1) + sign (0 or 1)
-      auto v_mu1 = vaddq_u32(v_v_quads1, vtwo);                         // 2(mu-1) + sign + 2 = 2mu + sign
+      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
+      v_n_1 = vorrq_u32(v_n_1, vshlq_u32(vtmp, m_n_1));  // v = 2(mu-1) + sign (0 or 1)
+      mu1   = vaddq_u32(v_n_1, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
       // Add center bin (would be used for lossy and truncated lossless codestreams)
-      v_mu1 = vorrq_s32(v_mu1, vone);  // This cancels the effect of a sign bit in LSB
-      v_mu1 = vshlq_u32(v_mu1, vshift);
-      v_mu1 = vorrq_u32(v_mu1, vshlq_n_u32(v_v_quads1, 31));
-      v_mu1 = vandq_u32(v_mu1, vsigma1);
+      mu1 = vorrq_s32(mu1, vone);  // This cancels the effect of a sign bit in LSB
+      mu1 = vshlq_u32(mu1, vshift);
+      mu1 = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
+      mu1 = vandq_u32(mu1, sig1);
 
       // store mu
-      auto vvv = vzipq_s32(v_mu0, v_mu1);
-      vst1q_s32(mp0, vzip1q_s32(vvv.val[0], vvv.val[1]));
-      vst1q_s32(mp1, vzip2q_s32(vvv.val[0], vvv.val[1]));
+      int32x4x2_t t = vzipq_s32(mu0, mu1);
+      vst1q_s32(mp0, vzip1q_s32(t.val[0], t.val[1]));
+      vst1q_s32(mp1, vzip2q_s32(t.val[0], t.val[1]));
       mp0 += 4;
       mp1 += 4;
 
@@ -485,86 +420,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
 
       // Update Exponent
-      vvv  = vzipq_s32(v_v_quads0, v_v_quads1);
-      vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(vvv.val[0], vvv.val[1])));
+      t    = vzipq_s32(v_n_0, v_n_1);
+      vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(t.val[0], t.val[1])));
       vst1q_s32(E_p, vExp);
       E_p += 4;
-    }
-
-    // process the last block (left over)
-    if (qx) {
-      // Decoding of significance and EMB patterns and unsigned residual offsets
-      vlcval      = VLC_dec.fetch();
-      int32_t tv0 = dec_table1[(vlcval & 0x7F) + context];
-      if (context == 0) {
-        mel_run -= 2;
-        tv0 = (mel_run == -1) ? tv0 : 0;
-        if (mel_run < 0) {
-          mel_run = MEL.get_run();
-        }
-      }
-      rho0    = (tv0 & 0x00F0) >> 4;
-      emb_k_0 = (tv0 & 0xF000) >> 12;
-      emb_1_0 = (tv0 & 0x0F00) >> 8;
-
-      auto vsigma0 = vdupq_n_u32(rho0);
-      vsigma0      = vtstq_s32(vsigma0, vm);
-
-      vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
-
-      // UVLC decoding
-      u_off0 = tv0 & 1;
-
-      uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U);
-      uint32_t uvlc_result = uvlc_dec_0[idx];
-      // remove total prefix length
-      vlcval = VLC_dec.advance(uvlc_result & 0x7);
-      uvlc_result >>= 3;
-      // extract suffixes for quad 0 and 1
-      uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-      uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-      vlcval       = VLC_dec.advance(len);
-      uvlc_result >>= 4;
-      // quad 0 length
-      len = uvlc_result & 0x7;  // quad 0 suffix length
-      uvlc_result >>= 3;
-      u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-
-      gamma0 = gamma0 = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;  //(popcount32(rho0) < 2) ? 0 : 1;
-      kappa0          = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint32_t>(Emax0 - 1);
-      U0              = kappa0 + u0;
-
-      auto v_m_quads0 = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
-      v_m_quads0      = vsubq_s32(vandq_s32(vsigma0, vdupq_n_u32(U0)), v_m_quads0);
-
-      // recoverMagSgnValue
-      auto msval0 = MagSgn.fetch(v_m_quads0);
-      //      MagSgn.advance(vaddvq_u32(v_m_quads0));
-
-      auto vknown_1  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
-      auto vmask     = vsubq_u32(vshlq_u32(vone, v_m_quads0), vone);
-      auto v_v_quads = vandq_u32(msval0, vmask);
-      v_v_quads = vorrq_u32(v_v_quads, vshlq_u32(vknown_1, v_m_quads0));  // v = 2(mu-1) + sign (0 or 1)
-      auto v_mu = vaddq_u32(v_v_quads, vtwo);                             // 2(mu-1) + sign + 2 = 2mu + sign
-      // Add center bin (would be used for lossy and truncated lossless codestreams)
-      v_mu = vorrq_s32(v_mu, vone);  // This cancels the effect of a sign bit in LSB
-      v_mu = vshlq_u32(v_mu, vshift);
-      v_mu = vorrq_u32(v_mu, vshlq_n_u32(v_v_quads, 31));
-      v_mu = vandq_u32(v_mu, vsigma0);
-
-      // store mu
-      vst1_s32(mp0, vzip1_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
-      vst1_s32(mp1, vzip2_s32(vget_low_s32(v_mu), vget_high_s32(v_mu)));
-
-      // store sigma
-      *sp0++ = (rho0 >> 0) & 1;
-      *sp0++ = (rho0 >> 2) & 1;
-      *sp1++ = (rho0 >> 1) & 1;
-      *sp1++ = (rho0 >> 3) & 1;
-
-      // Update Exponent
-      vst1_s32(E_p, 32 - vclz_s32(vzip2_s32(vget_low_s32(v_v_quads), vget_high_s32(v_v_quads))));
-      *rho_p = rho0;
     }
   }  // Non-Initial line-pair end
 }  // Cleanup decoding end
