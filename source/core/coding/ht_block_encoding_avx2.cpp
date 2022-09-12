@@ -83,9 +83,8 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), vscale));
       v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
       // Take sign bit
-      __m256i s0 = _mm256_and_si256(_mm256_srai_epi32(v0, 31), vone);
-      __m256i s1 = _mm256_and_si256(_mm256_srai_epi32(v1, 31), vone);
-      // Absolute value
+      __m256i s0 = _mm256_srli_epi32(v0, 31);
+      __m256i s1 = _mm256_srli_epi32(v1, 31);
       v0         = _mm256_abs_epi32(v0);
       v1         = _mm256_abs_epi32(v1);
       __m256i z0 = _mm256_and_si256(v0, vpLSB);  // only for SigProp and MagRef
