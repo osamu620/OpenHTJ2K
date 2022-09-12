@@ -190,48 +190,11 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
   return v;
 }
 
-template <int N>
-FORCE_INLINE __m128i decode_one_quad(__m128i qinf, __m128i U_q, uint8_t pLSB, fwd_buf<0xFF> &MagSgn,
-                                     __m128i &v_n) {
-  const __m128i vone = _mm_set1_epi32(1);
-  __m128i mu_n;  //      = _mm_setzero_si128();
-  __m128i w0    = _mm_shuffle_epi32(qinf, _MM_SHUFFLE(N, N, N, N));
-  __m128i flags = _mm_and_si128(w0, _mm_set_epi32(0x8880, 0x4440, 0x2220, 0x1110));
-  __m128i insig = _mm_cmpeq_epi32(flags, _mm_setzero_si128());
-  // if (_mm_movemask_epi8(insig) != 0xFFFF)  // are all insignificant?
-  // {
-  flags          = _mm_mullo_epi16(flags, _mm_set_epi16(1, 1, 2, 2, 4, 4, 8, 8));
-  w0             = _mm_srli_epi32(flags, 15);  // emb_k
-  U_q            = _mm_shuffle_epi32(U_q, _MM_SHUFFLE(N, N, N, N));
-  __m128i m_n    = _mm_sub_epi32(U_q, w0);
-  m_n            = _mm_andnot_si128(insig, m_n);
-  w0             = _mm_and_si128(_mm_srli_epi32(flags, 11), vone);  // emb_1
-  __m128i mask   = _mm_sub_epi32(_mm_sllv_epi32(vone, m_n), vone);
-  __m128i ms_vec = MagSgn.fetch(m_n);
-  ms_vec         = _mm_and_si128(ms_vec, mask);
-  ms_vec         = _mm_or_si128(ms_vec, _mm_sllv_epi32(w0, m_n));  // v = 2(mu-1) + sign (0 or 1)
-  mu_n           = _mm_add_epi32(ms_vec, _mm_set1_epi32(2));       // 2(mu-1) + sign + 2 = 2mu + sign
-  // Add center bin (would be used for lossy and truncated lossless codestreams)
-  mu_n = _mm_or_si128(mu_n, vone);  // This cancels the effect of a sign bit in LSB
-  mu_n = _mm_slli_epi32(mu_n, pLSB - 1);
-  mu_n = _mm_or_si128(mu_n, _mm_slli_epi32(ms_vec, 31));
-  mu_n = _mm_andnot_si128(insig, mu_n);
-
-  w0 = ms_vec;
-  if (N == 0) {
-    w0 = _mm_shuffle_epi8(w0, _mm_set_epi32(-1, -1, 0x0F0E0D0C, 0x07060504));
-  } else if (N == 1) {
-    w0 = _mm_shuffle_epi8(w0, _mm_set_epi32(0x0F0E0D0C, 0x07060504, -1, -1));
-  }
-  v_n = _mm_or_si128(v_n, w0);
-  // }
-  return mu_n;
-}
-
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
-  const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
-  const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
+  uint8_t *compressed_data = block->get_compressed_data();
+  const uint16_t QW        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
+  const uint16_t QH        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
   uint16_t scratch[8 * 513] = {0};
   int32_t sstr              = static_cast<int32_t>(((block->size.x + 2) + 7u) & ~7u);  // multiples of 8
@@ -240,8 +203,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   /*******************************************************************************************************************/
   // VLC, UVLC and MEL decoding
   /*******************************************************************************************************************/
-  MEL_dec MEL(block->get_compressed_data(), Lcup, Scup);
-  rev_buf VLC_dec(block->get_compressed_data(), Lcup, Scup);
+  MEL_dec MEL(compressed_data, Lcup, Scup);
+  rev_buf VLC_dec(compressed_data, Lcup, Scup);
   auto sp0 = block->block_states.get() + 1 + block->blkstate_stride;
   auto sp1 = block->block_states.get() + 1 + 2 * block->blkstate_stride;
   uint32_t u_off0, u_off1;
@@ -419,15 +382,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   /*******************************************************************************************************************/
   // MagSgn decoding
   /*******************************************************************************************************************/
-  int32_t *mp0 = block->sample_buf.get();
-  int32_t *mp1 = block->sample_buf.get() + block->blksampl_stride;
+  int32_t *const sample_buf = block->sample_buf.get();
+  int32_t *mp0              = sample_buf;
+  int32_t *mp1              = sample_buf + block->blksampl_stride;
 
   alignas(32) auto Eline = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
   Eline[0]               = 0;
   int32_t *E_p           = Eline.get() + 1;
 
   __m128i v_n, qinf, U_q, mu0_n, mu1_n;
-  fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
+  fwd_buf<0xFF> MagSgn(compressed_data, Pcup);
 
   // Initial line-pair
   sp = scratch;
@@ -435,8 +399,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     v_n   = _mm_setzero_si128();
     qinf  = _mm_loadu_si128((__m128i *)sp);
     U_q   = _mm_srli_epi32(qinf, 16);
-    mu0_n = decode_one_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
-    mu1_n = decode_one_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
+    mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);
+    mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);
 
     // store mu
     // 0, 2, 4, 6, 1, 3, 5, 7
@@ -458,7 +422,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   // Non-initial line-pair
   for (uint16_t row = 1; row < QH; row++) {
     E_p = Eline.get() + 1;
-    mp0 = block->sample_buf.get() + (row * 2U) * block->blksampl_stride;
+    mp0 = sample_buf + (row * 2U) * block->blksampl_stride;
     mp1 = mp0 + block->blksampl_stride;
 
     sp = scratch + row * sstr;
@@ -496,8 +460,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         u_q = _mm_srli_epi32(qinf, 16);
         U_q = _mm_add_epi32(u_q, kappa);
       }
-      mu0_n = decode_one_quad<0>(qinf, U_q, pLSB, MagSgn, v_n);
-      mu1_n = decode_one_quad<1>(qinf, U_q, pLSB, MagSgn, v_n);
+      mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);
+      mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);
 
       // store mu
       // 0, 2, 4, 6, 1, 3, 5, 7

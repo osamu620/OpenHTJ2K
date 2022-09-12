@@ -867,7 +867,7 @@ class fwd_buf {
    *  @tparam      X is the value fed in when the bitstream is exhausted.
    *               See frwd_read regarding the template
    */
-  FORCE_INLINE __m128i fetch(const __m128i &m) {
+  FORCE_INLINE __m128i fetch() {
     if (this->bits <= 128) {
       read();
       if (this->bits <= 128)  // need to test
@@ -875,31 +875,103 @@ class fwd_buf {
     }
     const __m128i t = _mm_loadu_si128((__m128i *)this->tmp);
 
-    //_mm_extract_epi32(m, 0)
-    const uint32_t m0 = static_cast<uint32_t>(_mm_cvtsi128_si32(m));
-    //_mm_extract_epi32(m, 1)
-    const uint32_t m1 = m0 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 4)));
-    //_mm_extract_epi32(m, 2)
-    const uint32_t m2 = m1 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 8)));
-    //_mm_extract_epi32(m, 3)
-    const uint32_t m3 = m2 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 12)));
+    return t;
+    //   //_mm_extract_epi32(m, 0)
+    //   const uint32_t m0 = static_cast<uint32_t>(_mm_cvtsi128_si32(m));
+    //   //_mm_extract_epi32(m, 1)
+    //   const uint32_t m1 = m0 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 4)));
+    //   //_mm_extract_epi32(m, 2)
+    //   const uint32_t m2 = m1 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 8)));
+    //   //_mm_extract_epi32(m, 3)
+    //   const uint32_t m3 = m2 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 12)));
 
-    uint32_t vtmp[4];
-  #if defined(_MSC_VER)
-    vtmp[0] = _mm_extract_epi32(t, 0);
-    vtmp[1] = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
-    vtmp[2] = _mm_extract_epi32(mm_bitshift_right(t, m1), 0);
-    vtmp[3] = _mm_extract_epi32(mm_bitshift_right(t, m2), 0);
-  #else
-    const __uint128_t v128i = (__uint128_t)t;
+    //   uint32_t vtmp[4];
+    // #if defined(_MSC_VER)
+    //   vtmp[0] = _mm_extract_epi32(t, 0);
+    //   vtmp[1] = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
+    //   vtmp[2] = _mm_extract_epi32(mm_bitshift_right(t, m1), 0);
+    //   vtmp[3] = _mm_extract_epi32(mm_bitshift_right(t, m2), 0);
+    // #else
+    //   const __uint128_t v128i = (__uint128_t)t;
 
-    vtmp[0] = v128i & 0xFFFFFFFFU;
-    vtmp[1] = (v128i >> m0) & 0xFFFFFFFFU;
-    vtmp[2] = (v128i >> m1) & 0xFFFFFFFFU;
-    vtmp[3] = (v128i >> m2) & 0xFFFFFFFFU;
-  #endif
-    advance(m3);
-    return *(__m128i *)vtmp;
+    //   vtmp[0] = v128i & 0xFFFFFFFFU;
+    //   vtmp[1] = (v128i >> m0) & 0xFFFFFFFFU;
+    //   vtmp[2] = (v128i >> m1) & 0xFFFFFFFFU;
+    //   vtmp[3] = (v128i >> m2) & 0xFFFFFFFFU;
+    // #endif
+    //   advance(m3);
+    //   return *(__m128i *)vtmp;
+  }
+
+  template <int N>
+  FORCE_INLINE __m128i decode_one_quad(__m128i qinf, __m128i U_q, uint8_t pLSB, __m128i &v_n) {
+    const __m128i vone = _mm_set1_epi32(1);
+    __m128i mu_n       = _mm_setzero_si128();
+    __m128i w0         = _mm_shuffle_epi32(qinf, _MM_SHUFFLE(N, N, N, N));
+    __m128i flags      = _mm_and_si128(w0, _mm_set_epi32(0x8880, 0x4440, 0x2220, 0x1110));
+    __m128i insig      = _mm_cmpeq_epi32(flags, _mm_setzero_si128());
+    if (_mm_movemask_epi8(insig) != 0xFFFF)  // are all insignificant?
+    {
+      flags          = _mm_mullo_epi16(flags, _mm_set_epi16(1, 1, 2, 2, 4, 4, 8, 8));
+      w0             = _mm_srli_epi32(flags, 15);  // emb_k
+      U_q            = _mm_shuffle_epi32(U_q, _MM_SHUFFLE(N, N, N, N));
+      __m128i m_n    = _mm_sub_epi32(U_q, w0);
+      m_n            = _mm_andnot_si128(insig, m_n);
+      w0             = _mm_and_si128(_mm_srli_epi32(flags, 11), vone);  // emb_1
+      __m128i mask   = _mm_sub_epi32(_mm_sllv_epi32(vone, m_n), vone);
+      __m128i ms_vec = this->fetch();
+
+      /* */
+      // find cumulative sums to find at which bit in ms_vec the sample starts
+      __m128i inc_sum = m_n;  // inclusive scan
+      inc_sum         = _mm_add_epi32(inc_sum, _mm_bslli_si128(inc_sum, 4));
+      inc_sum         = _mm_add_epi32(inc_sum, _mm_bslli_si128(inc_sum, 8));
+      int total_mn    = _mm_extract_epi16(inc_sum, 6);
+      __m128i ex_sum  = _mm_bslli_si128(inc_sum, 4);  // exclusive scan
+
+      // find the starting byte and starting bit
+      __m128i byte_idx = _mm_srli_epi32(ex_sum, 3);
+      __m128i bit_idx  = _mm_and_si128(ex_sum, _mm_set1_epi32(7));
+      byte_idx = _mm_shuffle_epi8(byte_idx, _mm_set_epi32(0x0C0C0C0C, 0x08080808, 0x04040404, 0x00000000));
+      byte_idx = _mm_add_epi32(byte_idx, _mm_set1_epi32(0x03020100));
+      __m128i d0 = _mm_shuffle_epi8(ms_vec, byte_idx);
+      byte_idx   = _mm_add_epi32(byte_idx, _mm_set1_epi32(0x01010101));
+      __m128i d1 = _mm_shuffle_epi8(ms_vec, byte_idx);
+
+      // shift samples values to correct location
+      bit_idx           = _mm_or_si128(bit_idx, _mm_slli_epi32(bit_idx, 16));
+      __m128i bit_shift = _mm_shuffle_epi8(
+          _mm_set_epi8(1, 3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1), bit_idx);
+      bit_shift = _mm_add_epi16(bit_shift, _mm_set1_epi16(0x0101));
+      d0        = _mm_mullo_epi16(d0, bit_shift);
+      d0        = _mm_srli_epi16(d0, 8);  // we should have 8 bits in the LSB
+      d1        = _mm_mullo_epi16(d1, bit_shift);
+      d1        = _mm_and_si128(d1, _mm_set1_epi32((int32_t)0xFF00FF00));  // 8 in MSB
+      ms_vec    = _mm_or_si128(d0, d1);
+      /* */
+
+      ms_vec = _mm_and_si128(ms_vec, mask);
+      ms_vec = _mm_or_si128(ms_vec, _mm_sllv_epi32(w0, m_n));  // v = 2(mu-1) + sign (0 or 1)
+      mu_n   = _mm_add_epi32(ms_vec, _mm_set1_epi32(2));       // 2(mu-1) + sign + 2 = 2mu + sign
+      // Add center bin (would be used for lossy and truncated lossless codestreams)
+      mu_n = _mm_or_si128(mu_n, vone);  // This cancels the effect of a sign bit in LSB
+      mu_n = _mm_slli_epi32(mu_n, pLSB - 1);
+      mu_n = _mm_or_si128(mu_n, _mm_slli_epi32(ms_vec, 31));
+      mu_n = _mm_andnot_si128(insig, mu_n);
+
+      w0 = ms_vec;
+      if (N == 0) {
+        w0 = _mm_shuffle_epi8(w0, _mm_set_epi32(-1, -1, 0x0F0E0D0C, 0x07060504));
+      } else if (N == 1) {
+        w0 = _mm_shuffle_epi8(w0, _mm_set_epi32(0x0F0E0D0C, 0x07060504, -1, -1));
+      }
+      v_n = _mm_or_si128(v_n, w0);
+
+      if (total_mn) {
+        this->advance(static_cast<uint32_t>(total_mn));
+      }
+    }
+    return mu_n;
   }
 };
 #else
