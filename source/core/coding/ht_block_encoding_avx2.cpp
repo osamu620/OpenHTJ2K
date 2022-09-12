@@ -551,7 +551,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         MEL_encoder.encodeMEL((rho0 != 0));
       }
 
-      gamma       = (popcount32((uint32_t)rho0) > 1) ? 1 : 0;
+      gamma       = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;
       kappa       = std::max((Emax0 - 1) * gamma, 1);
       Emax_q      = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
                              _mm_extract_epi32(E0, 3));
@@ -582,7 +582,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       if (context == 0) {
         MEL_encoder.encodeMEL((rho1 != 0));
       }
-      gamma  = (popcount32((uint32_t)rho1) > 1) ? 1 : 0;
+      gamma  = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;
       kappa  = std::max((Emax1 - 1) * gamma, 1);
       Emax_q = find_max(_mm_extract_epi32(E1, 0), _mm_extract_epi32(E1, 1), _mm_extract_epi32(E1, 2),
                         _mm_extract_epi32(E1, 3));
