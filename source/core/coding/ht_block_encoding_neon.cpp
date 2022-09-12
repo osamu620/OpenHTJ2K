@@ -209,9 +209,13 @@ auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1,
                        int32x4_t &sig1, int32x4_t &v0, int32x4_t &v1, int32x4_t &E0, int32x4_t &E1,
                        int32_t &rho0, int32_t &rho1) {
   // This function shall be called on the assumption that there are two quads
-  int32x4x2_t v = vzipq_s32(vld1q_s32(sp0), vld1q_s32(sp1));
-  v0            = v.val[0];
-  v1            = v.val[1];
+  int32x4_t t0 = vld1q_s32(sp0);
+  int32x4_t t1 = vld1q_s32(sp1);
+  v0           = vzip1q_s32(t0, t1);
+  v1           = vzip2q_s32(t0, t1);
+  //  int32x4x2_t v = vzipq_s32(vld1q_s32(sp0), vld1q_s32(sp1));
+  //  v0            = v.val[0];
+  //  v1            = v.val[1];
 
   uint8x8_t sig01 = vand_u8(vzip1_u8(vld1_u8(ssp0), vld1_u8(ssp1)), vdup_n_u8(1));
   sig0            = vcgtzq_s32(vmovl_u16(vget_low_u16(vmovl_u8(sig01))));
@@ -221,8 +225,8 @@ auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1,
   rho0            = rho01 & 0xF;
   rho1            = rho01 >> 4;
 
-  E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[0])), sig0);
-  E1 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v.val[1])), sig1);
+  E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v0)), sig0);
+  E1 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v1)), sig1);
 };
 
 auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
@@ -535,7 +539,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       if (context == 0) {
         MEL_encoder.encodeMEL((rho0 != 0));
       }
-      gamma       = (popcount32((uint32_t)rho0) > 1) ? 1 : 0;
+      gamma       = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;
       kappa       = std::max((Emax0 - 1) * gamma, 1);
       Emax_q      = vmaxvq_s32(E0);
       U0          = std::max(Emax_q, kappa);
@@ -562,7 +566,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       if (context == 0) {
         MEL_encoder.encodeMEL((rho1 != 0));
       }
-      gamma  = (popcount32((uint32_t)rho1) > 1) ? 1 : 0;
+      gamma  = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;
       kappa  = std::max((Emax1 - 1) * gamma, 1);
       Emax_q = vmaxvq_s32(E1);
       U1     = std::max(Emax_q, kappa);
