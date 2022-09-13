@@ -2406,30 +2406,35 @@ void j2k_tile::decode() {
       *dp++ = *sp++;
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    const __m128i izero = _mm_setzero_si128();
-    for (size_t n = num_samples; n >= 8; n -= 8) {
-      __m128i v0        = _mm_loadu_si128((__m128i *)sp);
-      __m128i words8hi  = _mm_cmpgt_epi16(izero, v0);
-      __m128i dwords4lo = _mm_unpacklo_epi16(v0, words8hi);
-      __m128i dwords4hi = _mm_unpackhi_epi16(v0, words8hi);
-      _mm_storeu_si128((__m128i *)dp, dwords4lo);
-      _mm_storeu_si128((__m128i *)(dp + 4), dwords4hi);
-      sp += 8;
-      dp += 8;
-    }
-    for (size_t n = num_samples % 8; n > 0; --n) {
-      *dp++ = *sp++;
-    }
-    // for (size_t n = num_samples; n >= 16; n -= 16) {
-    //   __m256i vsrc = _mm256_loadu_si256((__m256i *)sp);
-    //   _mm256_storeu_si256((__m256i *)dp, _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 0)));
-    //   _mm256_storeu_si256((__m256i *)(dp + 8), _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vsrc, 1)));
-    //   sp += 16;
-    //   dp += 16;
+    // SSE version
+    // const __m128i izero = _mm_setzero_si128();
+    // for (size_t n = num_samples; n >= 8; n -= 8) {
+    //   __m128i v0        = _mm_loadu_si128((__m128i *)sp);
+    //   __m128i words8hi  = _mm_cmpgt_epi16(izero, v0);
+    //   __m128i dwords4lo = _mm_unpacklo_epi16(v0, words8hi);
+    //   __m128i dwords4hi = _mm_unpackhi_epi16(v0, words8hi);
+    //   _mm_storeu_si128((__m128i *)dp, dwords4lo);
+    //   _mm_storeu_si128((__m128i *)(dp + 4), dwords4hi);
+    //   sp += 8;
+    //   dp += 8;
     // }
-    // for (size_t n = num_samples % 16; n > 0; --n) {
+    // for (size_t n = num_samples % 8; n > 0; --n) {
     //   *dp++ = *sp++;
     // }
+    const __m256i zero = _mm256_setzero_si256();
+    for (size_t n = num_samples; n >= 16; n -= 16) {
+      __m256i v  = _mm256_loadu_si256((__m256i *)sp);  // word
+      __m256i s  = _mm256_cmpgt_epi16(zero, v);        // extended-sign
+      __m256i lo = _mm256_unpacklo_epi16(v, s);        // dword
+      __m256i hi = _mm256_unpackhi_epi16(v, s);        // dword
+      _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(lo, hi, 0x20));
+      _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(lo, hi, 0x31));
+      sp += 16;
+      dp += 16;
+    }
+    for (size_t n = num_samples % 16; n > 0; --n) {
+      *dp++ = *sp++;
+    }
 #else
       for (size_t n = 0; n < num_samples; ++n) {
         *dp++ = *sp++;
@@ -2783,7 +2788,7 @@ uint8_t *j2k_tile::encode() {
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
 #endif
-  // Step 1 : block encode all code blocks
+  // Copy pixel data (dword) to the root resolution buffer (word)
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift       = tcomp[c].get_ROIshift();
     const uint8_t NL             = tcomp[c].get_dwt_levels();
@@ -2793,22 +2798,21 @@ uint8_t *j2k_tile::encode() {
     j2k_resolution *cr           = tcomp[c].access_resolution(NL);
 
     int32_t *sp0            = tcomp[c].get_sample_address(0, 0);
+    sprec_t *dp             = cr->i_samples;
     uint32_t num_tc_samples = (bottom_right.x - top_left.x) * (bottom_right.y - top_left.y);
-    // TODO: enc_init vectorize code
-    //#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    //    __m256i offsets = _mm256_set_epi32(7, 6, 3, 2, 5, 4, 1, 0);
-    //    for (uint32_t n = 0; n < round_down(num_tc_samples, 16); n += 16) {
-    //      __m256i s0a = _mm256_loadu_si256((__m256i *)(sp0 + n));
-    //      __m256i s0b = _mm256_loadu_si256((__m256i *)(sp0 + n + 8));
-    //      s0a         = _mm256_permutevar8x32_epi32(_mm256_packs_epi32(s0a, s0b), offsets);
-    //      _mm256_storeu_si256((__m256i *)(cr->i_samples + n), s0a);
-    //    }
-    //    for (uint32_t n = round_down(num_tc_samples, 16); n < num_tc_samples; ++n) {
-    //      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
-    //    }
-    //#else
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    sprec_t *dp = cr->i_samples;
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+    for (; num_tc_samples >= 16; num_tc_samples -= 16) {
+      __m256i v0 = _mm256_loadu_si256((__m256i *)sp0);
+      __m256i v1 = _mm256_loadu_si256((__m256i *)sp0 + 1);
+      __m256i t0 = _mm256_packs_epi32(v0, v1);
+      _mm256_storeu_si256((__m256i *)dp, _mm256_permute4x64_epi64(t0, 0xD8));
+      sp0 += 16;
+      dp += 16;
+    }
+    for (; num_tc_samples > 0; --num_tc_samples) {
+      *dp++ = static_cast<sprec_t>(*sp0++);
+    }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
     for (; num_tc_samples >= 8; num_tc_samples -= 8) {
       auto vsrc0 = vld1q_s32(sp0);
       auto vsrc1 = vld1q_s32(sp0 + 4);
@@ -2820,15 +2824,14 @@ uint8_t *j2k_tile::encode() {
       *dp++ = static_cast<sprec_t>(*sp0++);
     }
 #else
-    for (uint32_t n = 0; n < num_tc_samples; ++n) {
-      cr->i_samples[n] = static_cast<sprec_t>(sp0[n]);
-    }
+      for (; num_tc_samples > 0; --num_tc_samples) {
+        *dp++ = static_cast<sprec_t>(*sp0++);
+      }
 #endif
+
+// Lambda function of block-endocing
 #ifdef OPENHTJ2K_THREAD
     auto t1_encode = [pool, &results](j2k_resolution *cr, uint8_t ROIshift) {
-#else
-    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
-#endif
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
         packet_header_writer pckt_hdr;
@@ -2839,7 +2842,6 @@ uint8_t *j2k_tile::encode() {
             auto block          = cpb->access_codeblock(block_index);
             const uint32_t QWx2 = round_up(block->size.x, 8U);
             const uint32_t QHx2 = round_up(block->size.y, 8U);
-#ifdef OPENHTJ2K_THREAD
             if (pool->num_threads() > 1) {
               results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
                 block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
@@ -2852,16 +2854,31 @@ uint8_t *j2k_tile::encode() {
               // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
               htj2k_encode(block, ROIshift);
             }
-#else
-            block->sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
-            // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
-            htj2k_encode(block, ROIshift);
-#endif
           }
         }
       }
     };
-
+#else
+    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        packet_header_writer pckt_hdr;
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+            auto block          = cpb->access_codeblock(block_index);
+            const uint32_t QWx2 = round_up(block->size.x, 8U);
+            const uint32_t QHx2 = round_up(block->size.y, 8U);
+            block->sample_buf   = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
+            // memset(block->sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
+            htj2k_encode(block, ROIshift);
+          }
+        }
+      }
+    };
+#endif
+    // Forward DWT
     for (uint8_t r = NL; r > 0; --r) {
       j2k_resolution *ncr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
       const int32_t u0    = static_cast<int32_t>(top_left.x);
@@ -2894,7 +2911,7 @@ uint8_t *j2k_tile::encode() {
   }
 #endif
 
-  // Step 2: encode packets
+  // Encode packets
   for (uint16_t c = 0; c < num_components; c++) {
     [[maybe_unused]] const uint8_t ROIshift = tcomp[c].get_ROIshift();
     const uint8_t NL                        = tcomp[c].get_dwt_levels();
