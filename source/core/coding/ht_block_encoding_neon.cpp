@@ -81,9 +81,13 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       // Down-shift if other than HT Cleanup pass exists
       v0 = v0 >> pshift;
       v1 = v1 >> pshift;
-      // Generate masks for sigma
-      int32x4_t mask0 = vcgtzq_s32(v0);
-      int32x4_t mask1 = vcgtzq_s32(v1);
+      //      // Generate masks for sigma
+      //      int32x4_t mask0 = vcgtzq_s32(v0);
+      //      int32x4_t mask1 = vcgtzq_s32(v1);
+      // for Block states
+      uint8x8_t vblkstate = vdup_n_u8(0);
+      vblkstate |=
+          vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vmovn_s32(v0), vmovn_s32(v1))), vdupq_n_s16(1)));
       // Check emptiness of a block
       vorval = vorrq_s32(vorval, v0);
       vorval = vorrq_s32(vorval, v1);
@@ -99,15 +103,11 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       vst1q_s32(dp + 4, v1);
       sp += 8;
       dp += 8;
-      // for Block states
-      uint8x8_t vblkstate = vdup_n_u8(0);
-      vblkstate |= vmovn_s16(vandq_s16(vcombine_s16(vmovn_s32(mask0), vmovn_s32(mask1)), vdupq_n_s16(1)));
+
       // bits in lowest bitplane, only for SigProp and MagRef TODO: test this line
-      vblkstate |= vmovn_s16(
-          vshlq_n_s16(vandq_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), vdupq_n_s16(1)), SHIFT_SMAG));
+      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), SHIFT_SMAG));
       // sign-bits, only for SigProp and MagRef  TODO: test this line
-      vblkstate |= vmovn_s16(
-          vshlq_n_s16(vandq_s16(vcombine_s16(vmovn_s32(s0), vmovn_s32(s1)), vdupq_n_s16(1)), SHIFT_SSGN));
+      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(s0), vmovn_s32(s1)), SHIFT_SSGN));
       //      uint8x8_t vblkstate = vget_low_u8(vld1q_u8(dstblk + j));
       //      uint16x8_t vsign = vcltzq_s16(coeff16) >> 15;
       //      uint8x8_t vsmag  = vmovn_u16(vandq_s16(coeff16, vpLSB));
