@@ -161,31 +161,6 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
-// the following two functions are taken from https://primenumber.hatenadiary.jp/entry/2016/12/13/011832
-inline __m256i bsr_256_32_cvtfloat_impl(__m256i x, int32_t sub) {
-  __m256i cvt_fl  = _mm256_castps_si256(_mm256_cvtepi32_ps(x));
-  __m256i shifted = _mm256_srli_epi32(cvt_fl, 23);
-  return _mm256_sub_epi32(shifted, _mm256_set1_epi32(sub));
-}
-inline __m256i bsr_256_32_cvtfloat(__m256i x) {
-  x              = _mm256_andnot_si256(_mm256_srli_epi32(x, 1), x);
-  __m256i result = bsr_256_32_cvtfloat_impl(x, 127);
-  result         = _mm256_or_si256(result, _mm256_srai_epi32(x, 31));
-  return _mm256_and_si256(result, _mm256_set1_epi32(0x0000001F));
-}
-
-// https://stackoverflow.com/a/58827596
-inline __m256i avx2_lzcnt_epi32(__m256i v) {
-  // prevent value from being rounded up to the next power of two
-  v = _mm256_andnot_si256(_mm256_srli_epi32(v, 8), v);  // keep 8 MSB
-
-  v = _mm256_castps_si256(_mm256_cvtepi32_ps(v));    // convert an integer to float
-  v = _mm256_srli_epi32(v, 23);                      // shift down the exponent
-  v = _mm256_subs_epu16(_mm256_set1_epi32(158), v);  // undo bias
-  v = _mm256_min_epi16(v, _mm256_set1_epi32(32));    // clamp at 32
-
-  return v;
-}
 
 // https://stackoverflow.com/a/58827596
 inline __m128i sse_lzcnt_epi32(__m128i v) {
@@ -328,18 +303,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     return static_cast<int32_t>(block->length);
   }
 
-  // buffers shall be zeroed.
+  // buffers shall be zeroed. unique_pre shoul be initialized by 0
   std::unique_ptr<uint8_t[]> fwd_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Lcup);
   std::unique_ptr<uint8_t[]> rev_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Scup);
-  memset(fwd_buf.get(), 0, sizeof(uint8_t) * (MAX_Lcup));
-  memset(rev_buf.get(), 0, sizeof(uint8_t) * MAX_Scup);
+  // memset(fwd_buf.get(), 0, sizeof(uint8_t) * (MAX_Lcup));
+  // memset(rev_buf.get(), 0, sizeof(uint8_t) * MAX_Scup);
 
   state_MS_enc MagSgn_encoder(fwd_buf.get());
   state_MEL_enc MEL_encoder(rev_buf.get());
   state_VLC_enc VLC_encoder(rev_buf.get());
 
-  // alignas(32) uint8_t rho_q[2] = {0};
-  // alignas(32) int32_t U_q[2]   = {0};
   int32_t rho0, rho1, U0, U1;
 
   /*******************************************************************************************************************/
