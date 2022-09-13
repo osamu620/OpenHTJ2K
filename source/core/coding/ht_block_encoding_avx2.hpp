@@ -79,7 +79,8 @@ class state_MS_enc {
     uint32_t t = 0;
 
     // _bzhi_u32(UINT32_MAX, len) = ((1U << len) - 1U)
-    tmp = val & ((1 << (8 - stuff)) - 1) t |= tmp;
+    tmp = val & ((1 << (8 - stuff)) - 1);
+    t |= tmp;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
