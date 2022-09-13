@@ -1525,12 +1525,25 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
-  const uint8_t shiftup   = (transformation) ? 0U : static_cast<uint8_t>(FRACBITS - this->bitdepth);
+  const int32_t shiftup   = (transformation) ? 0U : FRACBITS - this->bitdepth;
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
   const int32_t length =
       static_cast<int32_t>((this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y));
   int32_t *sp = this->samples;
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  const int32x4_t doff     = vdupq_n_s32(DC_OFFSET);
+  const int32x4_t vshiftup = vdupq_n_s32(shiftup);
+  for (int32_t i = 0; i < round_down(length, 8); i += 8) {
+    int32x4_t v0 = vld1q_s32(sp + i);
+    int32x4_t v1 = vld1q_s32(sp + i + 4);
+    vst1q_s32(sp + i, vsubq_s32(vshlq_s32(v0, vshiftup), doff));
+    vst1q_s32(sp + i + 4, vsubq_s32(vshlq_s32(v1, vshiftup), doff));
+  }
+  for (int32_t i = round_down(length, 8); i < length; ++i) {
+    sp[i] <<= shiftup;
+    sp[i] -= DC_OFFSET;
+  }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
   for (int32_t i = 0; i < round_down(length, 8); i += 8) {
     __m256i v            = *(__m256i *)(sp + i);
@@ -1541,10 +1554,10 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
     sp[i] -= DC_OFFSET;
   }
 #else
-  for (int32_t i = 0; i < length; ++i) {
-    samples[i] <<= shiftup;
-    samples[i] -= DC_OFFSET;
-  }
+    for (int32_t i = 0; i < length; ++i) {
+      sp[i] <<= shiftup;
+      sp[i] -= DC_OFFSET;
+    }
 #endif
 }
 
