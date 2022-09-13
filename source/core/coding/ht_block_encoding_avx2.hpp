@@ -78,22 +78,22 @@ class state_MS_enc {
     uint32_t tmp;
     uint32_t t = 0;
 
-    tmp = val & _bzhi_u32(UINT32_MAX, 8 - stuff);  // _bzhi_u32(UINT32_MAX, len) = ((1U << len) - 1U)
-    t |= tmp;
+    // _bzhi_u32(UINT32_MAX, len) = ((1U << len) - 1U)
+    tmp = val & ((1 << (8 - stuff)) - 1) t |= tmp;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & _bzhi_u32(UINT32_MAX, 8 - stuff);
+    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
     t |= tmp << 8;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & _bzhi_u32(UINT32_MAX, 8 - stuff);
+    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
     t |= tmp << 16;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & _bzhi_u32(UINT32_MAX, 8 - stuff);
+    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
     t |= tmp << 24;
     bits_local += 8 - stuff;
     last = tmp & 0xFF;

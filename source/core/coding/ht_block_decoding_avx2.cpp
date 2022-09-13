@@ -279,8 +279,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
     // extract suffixes for quad 0 and 1
-    uint32_t len = uvlc_result & 0xF;                    // suffix length for 2 quads (up to 10 = 5 + 5)
-    uint32_t tmp = vlcval & _bzhi_u32(UINT32_MAX, len);  //  = ((1U << len) - 1U) suffix value for 2 quads
+    uint32_t len = uvlc_result & 0xF;  // suffix length for 2 quads (up to 10 = 5 + 5)
+    //  ((1U << len) - 1U) can be replaced with _bzhi_u32(UINT32_MAX, len); not fast
+    uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
     vlcval       = VLC_dec.advance(len);
     uvlc_result >>= 4;
     // quad 0 length
@@ -363,8 +364,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
       // extract suffixes for quad 0 and 1
-      uint32_t len = uvlc_result & 0xF;                    // suffix length for 2 quads (up to 10 = 5 + 5)
-      uint32_t tmp = vlcval & _bzhi_u32(UINT32_MAX, len);  // suffix value for 2 quads
+      uint32_t len = uvlc_result & 0xF;  // suffix length for 2 quads (up to 10 = 5 + 5)
+      //  ((1U << len) - 1U) can be replaced with _bzhi_u32(UINT32_MAX, len); not fast
+      uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
       vlcval       = VLC_dec.advance(len);
       uvlc_result >>= 4;
       // quad 0 length
