@@ -387,16 +387,31 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
      for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
        sprec_t *dp = buf + (2 * v + voffset[0]) * stride;
        size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
-       for (; len >= 8; len -= 8) {
-         auto vfirst  = _mm_loadu_si128((__m128i *)first);
-         auto vsecond = _mm_loadu_si128((__m128i *)second);
-         auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
-         auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
-         _mm_storeu_si128((__m128i *)dp, vtmp0);
-         _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
-         first += 8;
-         second += 8;
-         dp += 16;
+       // SSE version
+       //  for (; len >= 8; len -= 8) {
+       //    auto vfirst  = _mm_loadu_si128((__m128i *)first);
+       //    auto vsecond = _mm_loadu_si128((__m128i *)second);
+       //    auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
+       //    auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
+       //    _mm_storeu_si128((__m128i *)dp, vtmp0);
+       //    _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
+       //    first += 8;
+       //    second += 8;
+       //    dp += 16;
+       // }
+
+       // AVX2 version
+       for (; len >= 16; len -= 16) {
+         auto vfirst  = _mm256_loadu_si256((__m256i *)first);
+         auto vsecond = _mm256_loadu_si256((__m256i *)second);
+         auto vtmp0   = _mm256_unpacklo_epi16(vfirst, vsecond);
+         auto vtmp1   = _mm256_unpackhi_epi16(vfirst, vsecond);
+
+         _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
+         _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
+         first += 16;
+         second += 16;
+         dp += 32;
       }
        for (; len > 0; --len) {
          *dp++ = *first++;
@@ -424,30 +439,32 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
      for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
        sprec_t *dp = buf + (2 * v + voffset[2]) * stride;
        size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
-       for (; len >= 8; len -= 8) {
-         auto vfirst  = _mm_loadu_si128((__m128i *)first);
-         auto vsecond = _mm_loadu_si128((__m128i *)second);
-         auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
-         auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
-         _mm_storeu_si128((__m128i *)dp, vtmp0);
-         _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
-         first += 8;
-         second += 8;
-         dp += 16;
-      }
-       // AVX2 version is slower than SSE3 version due to the cost of permutation
-       //  for (; len >= 16; len -= 16) {
-       //    auto vfirst  = _mm256_loadu_si256((__m256i *)first);
-       //    auto vsecond = _mm256_loadu_si256((__m256i *)second);
-       //    auto vtmp0   = _mm256_unpacklo_epi16(vfirst, vsecond);
-       //    auto vtmp1   = _mm256_unpackhi_epi16(vfirst, vsecond);
-
-       //    _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
-       //    _mm256_storeu_si256((__m256i *)(dp + 16), _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
-       //    first += 16;
-       //    second += 16;
-       //    dp += 32;
+       // SSE version
+       //  for (; len >= 8; len -= 8) {
+       //    auto vfirst  = _mm_loadu_si128((__m128i *)first);
+       //    auto vsecond = _mm_loadu_si128((__m128i *)second);
+       //    auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
+       //    auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
+       //    _mm_storeu_si128((__m128i *)dp, vtmp0);
+       //    _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
+       //    first += 8;
+       //    second += 8;
+       //    dp += 16;
        // }
+
+       // AVX2 version
+       for (; len >= 16; len -= 16) {
+         auto vfirst  = _mm256_loadu_si256((__m256i *)first);
+         auto vsecond = _mm256_loadu_si256((__m256i *)second);
+         auto vtmp0   = _mm256_unpacklo_epi16(vfirst, vsecond);
+         auto vtmp1   = _mm256_unpackhi_epi16(vfirst, vsecond);
+
+         _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
+         _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
+         first += 16;
+         second += 16;
+         dp += 32;
+      }
        for (; len > 0; --len) {
          *dp++ = *first++;
          *dp++ = *second++;
