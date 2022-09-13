@@ -383,28 +383,33 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
        first  = HL;
        second = LL;
     }
-     //  const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15,
-     //  14,
-     //                                          11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
+     const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
+                                             11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
      for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
        sprec_t *sp = buf + (2 * v + voffset[0]) * stride;
        size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
        for (; len >= 8; len -= 8) {
-         auto vline0 = _mm_loadu_si128((__m128i *)sp);
-         auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
-         vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-         vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-         vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-         vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-         vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
-         vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
-         _mm_storeu_si128((__m128i *)first, _mm_unpacklo_epi64(vline0, vline1));
-         _mm_storeu_si128((__m128i *)second, _mm_unpackhi_epi64(vline0, vline1));
-         first += 8;
-         second += 8;
-         sp += 16;
+         // SSE version
+        // auto vline0 = _mm_loadu_si128((__m128i *)sp);
+        // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
+        // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
+        // vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
+        // _mm_storeu_si128((__m128i *)first, _mm_unpacklo_epi64(vline0, vline1));
+        // _mm_storeu_si128((__m128i *)second, _mm_unpackhi_epi64(vline0, vline1));
+
+        __m256i vline = _mm256_loadu_si256((__m256i *)sp);
+        vline         = _mm256_shuffle_epi8(vline, vshmask);
+        vline         = _mm256_permute4x64_epi64(vline, 0xD8);
+        _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
+        first += 8;
+        second += 8;
+        sp += 16;
       }
-       for (; len > 0; --len) {
+      for (; len > 0; --len) {
          *first++  = *sp++;
          *second++ = *sp++;
       }
@@ -427,33 +432,33 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
        first  = HH;
        second = LH;
     }
-     //  const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15,
-     //  14,
-     //                                          11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
+     const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
+                                             11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
      for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
        sprec_t *sp = buf + (2 * v + voffset[2]) * stride;
        size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
        for (; len >= 8; len -= 8) {
-         auto vline0 = _mm_loadu_si128((__m128i *)sp);
-         auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
-         vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-         vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-         vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-         vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-         vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
-         vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
-         _mm_storeu_si128((__m128i *)first, _mm_unpacklo_epi64(vline0, vline1));
-         _mm_storeu_si128((__m128i *)second, _mm_unpackhi_epi64(vline0, vline1));
+         // SSE version
+        // auto vline0 = _mm_loadu_si128((__m128i *)sp);
+        // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
+        // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
+        // vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
+        // vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
+        // _mm_storeu_si128((__m128i *)first, _mm_unpacklo_epi64(vline0, vline1));
+        // _mm_storeu_si128((__m128i *)second, _mm_unpackhi_epi64(vline0, vline1));
 
-         // auto vline = _mm256_loadu_si256((__m256i *)sp);
-         // vline      = _mm256_shuffle_epi8(vline, vshmask);
-         // vline      = _mm256_permute4x64_epi64(vline, 0xD8);
-         // _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
-         first += 8;
-         second += 8;
-         sp += 16;
+        __m256i vline = _mm256_loadu_si256((__m256i *)sp);
+        vline         = _mm256_shuffle_epi8(vline, vshmask);
+        vline         = _mm256_permute4x64_epi64(vline, 0xD8);
+        _mm256_storeu2_m128i((__m128i *)second, (__m128i *)first, vline);
+        first += 8;
+        second += 8;
+        sp += 16;
       }
-       for (; len > 0; --len) {
+      for (; len > 0; --len) {
          *first++  = *sp++;
          *second++ = *sp++;
       }

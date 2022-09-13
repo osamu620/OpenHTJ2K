@@ -1529,15 +1529,16 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
   const int32_t length =
       static_cast<int32_t>((this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y));
+  int32_t *sp = this->samples;
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  __m256i doff = _mm256_set1_epi32(DC_OFFSET);
-  for (int32_t i = 0; i < round_down(length, SIMD_LEN_I32); i += SIMD_LEN_I32) {
-    __m256i sp                  = *((__m256i *)(samples + i));
-    *((__m256i *)(samples + i)) = _mm256_sub_epi32(_mm256_slli_epi32(sp, shiftup), doff);
+  const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
+  for (int32_t i = 0; i < round_down(length, 8); i += 8) {
+    __m256i v            = *(__m256i *)(sp + i);
+    *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_slli_epi32(v, shiftup), doff);
   }
-  for (int32_t i = round_down(length, SIMD_LEN_I32); i < length; ++i) {
-    samples[i] <<= shiftup;
-    samples[i] -= DC_OFFSET;
+  for (int32_t i = round_down(length, 8); i < length; ++i) {
+    sp[i] <<= shiftup;
+    sp[i] -= DC_OFFSET;
   }
 #else
   for (int32_t i = 0; i < length; ++i) {
@@ -2421,20 +2422,36 @@ void j2k_tile::decode() {
     // for (size_t n = num_samples % 8; n > 0; --n) {
     //   *dp++ = *sp++;
     // }
+
+    // AVX2 unaligned version
+    // for (size_t n = num_samples; n >= 16; n -= 16) {
+    //   __m256i v  = _mm256_loadu_si256((__m256i *)sp);  // word
+    //   __m256i s  = _mm256_cmpgt_epi16(zero, v);        // extended-sign
+    //   __m256i lo = _mm256_unpacklo_epi16(v, s);        // dword
+    //   __m256i hi = _mm256_unpackhi_epi16(v, s);        // dword
+    //   _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(lo, hi, 0x20));
+    //   _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(lo, hi, 0x31));
+    //   sp += 16;
+    //   dp += 16;
+    // }
+    // for (size_t n = num_samples % 16; n > 0; --n) {
+    //   *dp++ = *sp++;
+    // }
+
+    // AVX2 aligned version
     const __m256i zero = _mm256_setzero_si256();
-    for (size_t n = num_samples; n >= 16; n -= 16) {
-      __m256i v  = _mm256_loadu_si256((__m256i *)sp);  // word
-      __m256i s  = _mm256_cmpgt_epi16(zero, v);        // extended-sign
-      __m256i lo = _mm256_unpacklo_epi16(v, s);        // dword
-      __m256i hi = _mm256_unpackhi_epi16(v, s);        // dword
-      _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(lo, hi, 0x20));
-      _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(lo, hi, 0x31));
-      sp += 16;
-      dp += 16;
+    for (size_t i = 0; i < round_down(num_samples, 16); i += 16) {
+      __m256i v                = *(__m256i *)(sp + i);
+      __m256i s                = _mm256_cmpgt_epi16(zero, v);  // extended-sign
+      __m256i lo               = _mm256_unpacklo_epi16(v, s);  // dword
+      __m256i hi               = _mm256_unpackhi_epi16(v, s);  // dword
+      *(__m256i *)(dp + i)     = _mm256_permute2x128_si256(lo, hi, 0x20);
+      *(__m256i *)(dp + i + 8) = _mm256_permute2x128_si256(lo, hi, 0x31);
     }
-    for (size_t n = num_samples % 16; n > 0; --n) {
-      *dp++ = *sp++;
+    for (size_t i = round_down(num_samples, 16); i < num_samples; ++i) {
+      dp[i] = sp[i];
     }
+
 #else
       for (size_t n = 0; n < num_samples; ++n) {
         *dp++ = *sp++;
