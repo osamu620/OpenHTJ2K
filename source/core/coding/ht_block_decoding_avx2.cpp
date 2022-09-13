@@ -39,95 +39,6 @@
     #include <x86intrin.h>
   #endif
 
-// // https://stackoverflow.com/a/58827596
-// FORCE_INLINE __m256i avx2_lzcnt_epi32(__m256i v) {
-//   // prevent value from being rounded up to the next power of two
-//   v = _mm256_andnot_si256(_mm256_srli_epi32(v, 8), v);  // keep 8 MSB
-
-//   v = _mm256_castps_si256(_mm256_cvtepi32_ps(v));    // convert an integer to float
-//   v = _mm256_srli_epi32(v, 23);                      // shift down the exponent
-//   v = _mm256_subs_epu16(_mm256_set1_epi32(158), v);  // undo bias
-//   v = _mm256_min_epi16(v, _mm256_set1_epi32(32));    // clamp at 32
-
-//   return v;
-// }
-
-// // Credit: YumiYumiYumi
-// // https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
-// FORCE_INLINE __m256i avx2_lzcnt2_epi32(__m256i v) {
-//   const __m256i lut_lo = _mm256_set_epi8(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 32, 4, 4, 4, 4, 4,
-//   4,
-//                                          4, 4, 5, 5, 5, 5, 6, 6, 7, 32);
-//   const __m256i lut_hi = _mm256_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 32, 0, 0, 0, 0, 0,
-//   0,
-//                                          0, 0, 1, 1, 1, 1, 2, 2, 3, 32);
-//   const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
-//   const __m256i byte_offset = _mm256_set1_epi32(0x00081018);
-//   __m256i t;
-
-//   /* find lzcnt for each byte */
-//   t = _mm256_and_si256(nibble_mask, v);
-//   v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
-//   t = _mm256_shuffle_epi8(lut_lo, t);
-//   v = _mm256_shuffle_epi8(lut_hi, v);
-//   v = _mm256_min_epu8(v, t);
-
-//   /* find lzcnt for each dword */
-//   v = _mm256_or_si256(v, byte_offset);
-//   v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
-//   v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
-
-//   return v;
-// }
-
-// // Credit: YumiYumiYumi
-// // https://old.reddit.com/r/simd/comments/b3k1oa/looking_for_sseavx_bitscan_discussions/
-// FORCE_INLINE __m256i avx2_tzcnt_epi32(__m256i v) {
-//   const __m256i lut_lo = _mm256_set_epi8(0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 32, 0, 1, 0, 2, 0,
-//   1,
-//                                          0, 3, 0, 1, 0, 2, 0, 1, 0, 32);
-//   const __m256i lut_hi = _mm256_set_epi8(4, 5, 4, 6, 4, 5, 4, 7, 4, 5, 4, 6, 4, 5, 4, 32, 4, 5, 4, 6, 4,
-//   5,
-//                                          4, 7, 4, 5, 4, 6, 4, 5, 4, 32);
-//   const __m256i nibble_mask = _mm256_set1_epi8(0x0F);
-//   const __m256i byte_offset = _mm256_set1_epi32(0x18100800);
-//   __m256i t;
-
-//   /* find tzcnt for each byte */
-//   t = _mm256_and_si256(nibble_mask, v);
-//   v = _mm256_and_si256(_mm256_srli_epi16(v, 4), nibble_mask);
-//   t = _mm256_shuffle_epi8(lut_lo, t);
-//   v = _mm256_shuffle_epi8(lut_hi, v);
-//   v = _mm256_min_epu8(v, t);
-
-//   /* find tzcnt for each dword */
-//   v = _mm256_or_si256(v, byte_offset);
-//   v = _mm256_min_epu8(v, _mm256_srli_epi16(v, 8));
-//   v = _mm256_min_epu8(v, _mm256_srli_epi32(v, 16));
-
-//   return v;
-// }
-
-// // from my earlier answer, with tuning for non-AVX CPUs removed
-// // static inline
-// FORCE_INLINE uint32_t hsum_epi32_avx(__m128i x) {
-//   __m128i hi64 = _mm_unpackhi_epi64(
-//       x, x);  // 3-operand non-destructive AVX lets us save a byte without needing a movdqa
-//   __m128i sum64 = _mm_add_epi32(hi64, x);
-//   __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));  // Swap the low two elements
-//   __m128i sum32 = _mm_add_epi32(sum64, hi32);
-//   return static_cast<uint32_t>(_mm_cvtsi128_si32(sum32));  // movd
-// }
-
-// // only needs AVX2
-// uint32_t hsum_8x32(__m256i v) {
-//   __m128i sum128 =
-//       _mm_add_epi32(_mm256_castsi256_si128(v),
-//                     _mm256_extracti128_si256(
-//                         v, 1));  // silly GCC uses a longer AXV512VL instruction if AVX512 is enabled :/
-//   return hsum_epi32_avx(sum128);
-// }
-
 uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
   const int16_t im1 = static_cast<int16_t>(i - 1);
   const int16_t jm1 = static_cast<int16_t>(j - 1);
@@ -401,15 +312,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     v_n   = _mm_setzero_si128();
     qinf  = _mm_loadu_si128((__m128i *)sp);
     U_q   = _mm_srli_epi32(qinf, 16);
-    mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);
-    mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);
+    mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);  // 0, 1, 2, 3
+    mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);  // 4, 5, 6, 7
 
     // store mu
-    // 0, 2, 4, 6, 1, 3, 5, 7
-    auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);
-    auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
-    mu0_n   = _mm_unpacklo_epi32(t0, t1);
-    mu1_n   = _mm_unpackhi_epi32(t0, t1);
+    auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);  // 0, 4, 1, 5
+    auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);  // 2, 6, 3, 7
+    mu0_n   = _mm_unpacklo_epi32(t0, t1);        // 0, 2, 4, 6
+    mu1_n   = _mm_unpackhi_epi32(t0, t1);        // 1, 3, 5, 7
     _mm_storeu_si128((__m128i *)mp0, mu0_n);
     _mm_storeu_si128((__m128i *)mp1, mu1_n);
     mp0 += 4;
@@ -433,7 +343,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     int32_t Emax0, Emax1;
     Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
     Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
-
+    // Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p - 1)));
+    // Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 1)));
     for (qx = QW; qx > 0; qx -= 2, sp += 4) {
       v_n  = _mm_setzero_si128();
       qinf = _mm_loadu_si128((__m128i *)sp);
@@ -462,15 +373,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         u_q = _mm_srli_epi32(qinf, 16);
         U_q = _mm_add_epi32(u_q, kappa);
       }
-      mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);
-      mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);
+      mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);  // 0, 1, 2, 3
+      mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);  // 4, 5, 6, 7
 
       // store mu
-      // 0, 2, 4, 6, 1, 3, 5, 7
-      auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);
-      auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
-      mu0_n   = _mm_unpacklo_epi32(t0, t1);
-      mu1_n   = _mm_unpackhi_epi32(t0, t1);
+      auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);  // 0, 4, 1, 5
+      auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);  // 2, 6, 3, 7
+      mu0_n   = _mm_unpacklo_epi32(t0, t1);        // 0, 2, 4, 6
+      mu1_n   = _mm_unpackhi_epi32(t0, t1);        // 1, 3, 5, 7
       _mm_storeu_si128((__m128i *)mp0, mu0_n);
       _mm_storeu_si128((__m128i *)mp1, mu1_n);
       mp0 += 4;
@@ -479,8 +389,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // Update Exponent
       Emax0 = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1 = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
-      v_n   = sse_lzcnt_epi32(v_n);
-      v_n   = _mm_sub_epi32(_mm_set1_epi32(32), v_n);
+      // Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p + 3)));
+      // Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 5)));
+      v_n = sse_lzcnt_epi32(v_n);
+      v_n = _mm_sub_epi32(_mm_set1_epi32(32), v_n);
       _mm_storeu_si128((__m128i *)E_p, v_n);
       E_p += 4;
     }
