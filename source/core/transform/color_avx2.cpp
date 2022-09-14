@@ -30,15 +30,18 @@
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #include "color.hpp"
 
+// lossless: forward RCT
 void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   for (; num_tc_samples >= 8; num_tc_samples -= 8) {
     __m256i mR        = *((__m256i *)sp0);
     __m256i mG        = *((__m256i *)sp1);
     __m256i mB        = *((__m256i *)sp2);
-    __m256i tmp       = _mm256_slli_epi32(mG, 1);
+    __m256i mY        = _mm256_add_epi32(mR, mB);
+    mY                = _mm256_add_epi32(mG, mY);
+    mY                = _mm256_add_epi32(mG, mY);  // Y = R + 2 * G + B;
     *((__m256i *)sp1) = _mm256_sub_epi32(mB, mG);
     *((__m256i *)sp2) = _mm256_sub_epi32(mR, mG);
-    *((__m256i *)sp0) = _mm256_srai_epi32(_mm256_add_epi32(_mm256_add_epi32(mR, mB), tmp), 2);
+    *((__m256i *)sp0) = _mm256_srai_epi32(mY, 2);  // Y = (R + 2 * G + B) >> 2;
     sp0 += 8;
     sp1 += 8;
     sp2 += 8;
@@ -58,6 +61,7 @@ void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
   }
 }
 
+// lossy: forward ICT
 void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   const __m256 mALPHA_R = _mm256_set1_ps(static_cast<float>(ALPHA_R));
   const __m256 mALPHA_G = _mm256_set1_ps(static_cast<float>(ALPHA_G));
@@ -65,14 +69,14 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   const __m256 mCB_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CB_FACT_B));
   const __m256 mCR_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CR_FACT_R));
   for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-    // lossy:ICT
-    __m256 mR  = _mm256_cvtepi32_ps(*((__m256i *)sp0));
-    __m256 mG  = _mm256_cvtepi32_ps(*((__m256i *)sp1));
-    __m256 mB  = _mm256_cvtepi32_ps(*((__m256i *)sp2));
-    __m256 mY  = _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(mR, mALPHA_R), _mm256_mul_ps(mG, mALPHA_G)),
-                               _mm256_mul_ps(mB, mALPHA_B));
-    __m256 mCb = _mm256_mul_ps(mCB_FACT, _mm256_sub_ps(mB, mY));
-    __m256 mCr = _mm256_mul_ps(mCR_FACT, _mm256_sub_ps(mR, mY));
+    __m256 mR         = _mm256_cvtepi32_ps(*((__m256i *)sp0));
+    __m256 mG         = _mm256_cvtepi32_ps(*((__m256i *)sp1));
+    __m256 mB         = _mm256_cvtepi32_ps(*((__m256i *)sp2));
+    __m256 mY         = _mm256_mul_ps(mG, mALPHA_G);
+    mY                = _mm256_fmadd_ps(mR, mALPHA_R, mY);
+    mY                = _mm256_fmadd_ps(mB, mALPHA_B, mY);
+    __m256 mCb        = _mm256_mul_ps(mCB_FACT, _mm256_sub_ps(mB, mY));
+    __m256 mCr        = _mm256_mul_ps(mCR_FACT, _mm256_sub_ps(mR, mY));
     *((__m256i *)sp0) = _mm256_cvtps_epi32(_mm256_round_ps(mY, 0));
     *((__m256i *)sp1) = _mm256_cvtps_epi32(_mm256_round_ps(mCb, 0));
     *((__m256i *)sp2) = _mm256_cvtps_epi32(_mm256_round_ps(mCr, 0));
@@ -83,7 +87,6 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   double fR, fG, fB;
   double fY, fCb, fCr;
   for (; num_tc_samples > 0; --num_tc_samples) {
-    // lossy:ICT
     fR     = static_cast<double>(*sp0);
     fG     = static_cast<double>(*sp1);
     fB     = static_cast<double>(*sp2);
@@ -96,6 +99,7 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   }
 }
 
+// lossless: inverse RCT
 void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   for (; num_tc_samples >= 8; num_tc_samples -= 8) {
     __m256i mCb       = *((__m256i *)sp1);
@@ -126,18 +130,20 @@ void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
   }
 }
 
+// lossy: inverse ICT
 void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   __m256 mCR_FACT_R = _mm256_set1_ps(static_cast<float>(CR_FACT_R));
   __m256 mCR_FACT_G = _mm256_set1_ps(static_cast<float>(CR_FACT_G));
   __m256 mCB_FACT_B = _mm256_set1_ps(static_cast<float>(CB_FACT_B));
   __m256 mCB_FACT_G = _mm256_set1_ps(static_cast<float>(CB_FACT_G));
   for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-    __m256 mY  = _mm256_cvtepi32_ps(*((__m256i *)sp0));
-    __m256 mCb = _mm256_cvtepi32_ps(*((__m256i *)sp1));
-    __m256 mCr = _mm256_cvtepi32_ps(*((__m256i *)sp2));
-    __m256 mR  = _mm256_fmadd_ps(mCr, mCR_FACT_R, mY);
-    __m256 mB  = _mm256_fmadd_ps(mCb, mCB_FACT_B, mY);
-    __m256 mG  = _mm256_sub_ps(_mm256_fnmadd_ps(mCr, mCR_FACT_G, mY), _mm256_mul_ps(mCb, mCB_FACT_G));
+    __m256 mY         = _mm256_cvtepi32_ps(*((__m256i *)sp0));
+    __m256 mCb        = _mm256_cvtepi32_ps(*((__m256i *)sp1));
+    __m256 mCr        = _mm256_cvtepi32_ps(*((__m256i *)sp2));
+    __m256 mR         = _mm256_fmadd_ps(mCr, mCR_FACT_R, mY);
+    __m256 mB         = _mm256_fmadd_ps(mCb, mCB_FACT_B, mY);
+    __m256 mG         = _mm256_fnmadd_ps(mCr, mCR_FACT_G, mY);
+    mG                = _mm256_fnmadd_ps(mCb, mCB_FACT_G, mG);
     *((__m256i *)sp0) = _mm256_cvtps_epi32(_mm256_round_ps(mR, 0));
     *((__m256i *)sp1) = _mm256_cvtps_epi32(_mm256_round_ps(mG, 0));
     *((__m256i *)sp2) = _mm256_cvtps_epi32(_mm256_round_ps(mB, 0));

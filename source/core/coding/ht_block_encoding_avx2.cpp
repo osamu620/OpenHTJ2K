@@ -175,9 +175,9 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
   return v;
 }
 
-auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, __m128i &sig0,
-                       __m128i &sig1, __m128i &v0, __m128i &v1, __m128i &E0, __m128i &E1, int32_t &rho0,
-                       int32_t &rho1) {
+auto make_storage = [](const uint8_t *ssp0, const uint8_t *ssp1, const int32_t *sp0, const int32_t *sp1,
+                       __m128i &sig0, __m128i &sig1, __m128i &v0, __m128i &v1, __m128i &E0, __m128i &E1,
+                       int32_t &rho0, int32_t &rho1) {
   // This function shall be called on the assumption that there are two quads
   const __m128i zero = _mm_setzero_si128();
   __m128i t0         = _mm_set1_epi64x(*((int64_t *)ssp0));
@@ -204,8 +204,8 @@ auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1,
   E1 = _mm_and_si128(t1, sig1);
 };
 
-auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, __m128i &sig0,
-                           __m128i &v0, __m128i &E0, int32_t &rho0) {
+auto make_storage_one = [](const uint8_t *ssp0, const uint8_t *ssp1, const int32_t *sp0, const int32_t *sp1,
+                           __m128i &sig0, __m128i &v0, __m128i &E0, int32_t &rho0) {
   sig0 = _mm_setr_epi32(ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1);
 
   __m128i shift = _mm_setr_epi32(7, 7, 7, 7);
@@ -523,8 +523,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         MEL_encoder.encodeMEL((rho0 != 0));
       }
 
-      gamma       = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;
-      kappa       = std::max((Emax0 - 1) * gamma, 1);
+      gamma       = ((rho0 & (rho0 - 1)) == 0) ? 0 : (int32_t)0xFFFFFFFF;
+      kappa       = std::max((Emax0 - 1) & gamma, 1);
       Emax_q      = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
                              _mm_extract_epi32(E0, 3));
       U0          = std::max((int32_t)Emax_q, kappa);
@@ -542,8 +542,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_0 = CxtVLC & 0xF;
       emb1_0 = emb_pattern & embk_0;
-      // lw     = (CxtVLC >> 4) & 0x07;
-      lw  = _pext_u32(CxtVLC, 0x70);
+      lw     = (CxtVLC >> 4) & 0x07;
+      // lw  = _pext_u32(CxtVLC, 0x70);
       cwd = CxtVLC >> 7;
 
       // calculate context for the next quad
@@ -574,8 +574,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_1 = CxtVLC & 0xF;
       emb1_1 = emb_pattern & embk_1;
-      // lw     = (CxtVLC >> 4) & 0x07;
-      lw  = _pext_u32(CxtVLC, 0x70);
+      lw     = (CxtVLC >> 4) & 0x07;
+      // lw  = _pext_u32(CxtVLC, 0x70);
       cwd = CxtVLC >> 7;
       VLC_encoder.emitVLCBits(cwd, lw);
       // UVLC encoding
@@ -623,9 +623,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       if (context == 0) {
         MEL_encoder.encodeMEL((rho0 != 0));
       }
-
-      gamma    = (popcount32((uint32_t)rho0) > 1) ? 1 : 0;
-      kappa    = std::max((Emax0 - 1) * gamma, 1);
+      //(popcount32((uint32_t)rho0) > 1) ? 0xFFFFFFFF : 0;
+      gamma    = ((rho0 & (rho0 - 1)) == 0) ? 0 : (int32_t)0xFFFFFFFF;
+      kappa    = std::max((Emax0 - 1) & gamma, 1);
       Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
                           _mm_extract_epi32(E0, 3));
       U0       = std::max((int32_t)Emax_q, kappa);
