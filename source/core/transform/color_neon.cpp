@@ -26,10 +26,11 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #include <arm_neon.h>
   #include "color.hpp"
 
+// lossless: forward RCT
 void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
@@ -69,14 +70,17 @@ void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
   }
 }
 
+// lossy: forward ICT
 void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   double fRed, fGrn, fBlu;
   double fY, fCb, fCr;
   int32x4_t R0, G0, B0, R1, G1, B1;
   float32x4_t Y0, Cb0, Cr0, fR0, fG0, fB0, Y1, Cb1, Cr1, fR1, fG1, fB1;
-  float32x4_t a0 = vdupq_n_f32(static_cast<float32_t>(ALPHA_R));
-  float32x4_t a1 = vdupq_n_f32(static_cast<float32_t>(ALPHA_G));
-  float32x4_t a2 = vdupq_n_f32(static_cast<float32_t>(ALPHA_B));
+  const float32x4_t a0 = vdupq_n_f32(static_cast<float32_t>(ALPHA_R));
+  const float32x4_t a1 = vdupq_n_f32(static_cast<float32_t>(ALPHA_G));
+  const float32x4_t a2 = vdupq_n_f32(static_cast<float32_t>(ALPHA_B));
+  const float32x4_t a3 = vdupq_n_f32(static_cast<float32_t>(1.0 / CB_FACT_B));
+  const float32x4_t a4 = vdupq_n_f32(static_cast<float32_t>(1.0 / CR_FACT_R));
   for (; num_tc_samples >= 8; num_tc_samples -= 8) {
     R0  = vld1q_s32(sp0);
     R1  = vld1q_s32(sp0 + 4);
@@ -97,10 +101,10 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     Y1  = vfmaq_f32(Y1, fG1, a1);
     Y1  = vfmaq_f32(Y1, fB1, a2);
     // Y0  = fR0 * a0 + fG0 * a1 + fB0 * a2;
-    Cb0 = vmulq_n_f32(vsubq_f32(fB0, Y0), static_cast<float32_t>(1.0 / CB_FACT_B));
-    Cb1 = vmulq_n_f32(vsubq_f32(fB1, Y1), static_cast<float32_t>(1.0 / CB_FACT_B));
-    Cr0 = vmulq_n_f32(vsubq_f32(fR0, Y0), static_cast<float32_t>(1.0 / CR_FACT_R));
-    Cr1 = vmulq_n_f32(vsubq_f32(fR1, Y1), static_cast<float32_t>(1.0 / CR_FACT_R));
+    Cb0 = vmulq_f32(vsubq_f32(fB0, Y0), a3);
+    Cb1 = vmulq_f32(vsubq_f32(fB1, Y1), a3);
+    Cr0 = vmulq_f32(vsubq_f32(fR0, Y0), a4);
+    Cr1 = vmulq_f32(vsubq_f32(fR1, Y1), a4);
 
     // TODO: need to consider precision and setting FPSCR register value
     vst1q_s32(sp0, vcvtnq_s32_f32(Y0));
@@ -113,7 +117,6 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     sp1 += 8;
     sp2 += 8;
   }
-
   for (; num_tc_samples > 0; --num_tc_samples) {
     fRed   = static_cast<double>(sp0[0]);
     fGrn   = static_cast<double>(sp1[0]);
@@ -130,6 +133,7 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   }
 }
 
+// lossless: inverse RCT
 void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
@@ -177,6 +181,7 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
   }
 }
 
+// lossy: inverse ICT
 void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
   int32_t R, G, B;
   double fY, fCb, fCr;
@@ -197,10 +202,10 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     vst1q_s32(sp0 + 4, vcvtnq_s32_f32(vfmaq_f32(Y1, Cr1, fCR_FACT_R)));
     vst1q_s32(sp2, vcvtnq_s32_f32(vfmaq_f32(Y0, Cb0, fCB_FACT_B)));
     vst1q_s32(sp2 + 4, vcvtnq_s32_f32(vfmaq_f32(Y1, Cb1, fCB_FACT_B)));
-    vst1q_s32(sp1, vcvtnq_s32_f32(
-                       vsubq_f32(Y0, vaddq_f32(vmulq_f32(Cr0, fCR_FACT_G), vmulq_f32(Cb0, fCB_FACT_G)))));
-    vst1q_s32(sp1 + 4, vcvtnq_s32_f32(vsubq_f32(
-                           Y1, vaddq_f32(vmulq_f32(Cr1, fCR_FACT_G), vmulq_f32(Cb1, fCB_FACT_G)))));
+    Y0 = vfmsq_f32(Y0, Cr0, fCR_FACT_G);
+    vst1q_s32(sp1, vcvtnq_s32_f32(vfmsq_f32(Y0, Cb0, fCB_FACT_G)));
+    Y1 = vfmsq_f32(Y1, Cr1, fCR_FACT_G);
+    vst1q_s32(sp1 + 4, vcvtnq_s32_f32(vfmsq_f32(Y1, Cb1, fCB_FACT_G)));
     sp0 += 8;
     sp1 += 8;
     sp2 += 8;
