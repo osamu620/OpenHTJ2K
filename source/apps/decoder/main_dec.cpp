@@ -139,6 +139,9 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < num_iterations; ++i) {
     // create decoder
     open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
+    for (auto &j : buf) {
+      delete[] j;
+    }
     buf.clear();
     img_width.clear();
     img_height.clear();
