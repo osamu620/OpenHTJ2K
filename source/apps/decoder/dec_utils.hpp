@@ -67,30 +67,29 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   FILE *ofp = fopen(fname, "wb");
   fprintf(ofp, "P6 %d %d %d\n", width[0], height[0], MAXVAL);
   const uint32_t num_pixels = width[0] * height[0];
-#if ((defined(_MSVC_LANG) && _MSVC_LANG < 201402L) || __cplusplus < 201402L)
-  std::unique_ptr<uint8_t[]> ppm_out(new uint8_t[num_pixels * bytes_per_pixel * 3]);
-#else
-  auto ppm_out = std::make_unique<uint8_t[]>(num_pixels * bytes_per_pixel * 3);
-#endif
-  setvbuf(ofp, (char *)ppm_out.get(), _IOFBF, num_pixels);
+
+  // ppm_out buffer is allocated by malloc because it does not need value-initialization
+  uint8_t *ppm_out = static_cast<uint8_t *>(malloc(num_pixels * bytes_per_pixel * 3));
+  setvbuf(ofp, (char *)ppm_out, _IOFBF, num_pixels);
   int32_t val0, val1, val2;
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   uint32_t len = num_pixels;
   int32_t *R, *G, *B;
-  uint8_t *out = ppm_out.get();
-  R            = buf[0];
-  G            = buf[1];
-  B            = buf[2];
+  uint8_t *out      = ppm_out;
+  int32x4_t voffset = vdupq_n_s32(PNM_OFFSET);
+  R                 = buf[0];
+  G                 = buf[1];
+  B                 = buf[2];
   if (bytes_per_pixel == 1) {
     for (; len >= 8; len -= 8) {
       uint8x8x3_t vout;
-      vout.val[0] = vmovn_u16(
-          vcombine_u16(vmovn_s32(vld1q_s32(R) + PNM_OFFSET), vmovn_s32(vld1q_s32(R + 4) + PNM_OFFSET)));
-      vout.val[1] = vmovn_u16(
-          vcombine_u16(vmovn_s32(vld1q_s32(G) + PNM_OFFSET), vmovn_s32(vld1q_s32(G + 4) + PNM_OFFSET)));
-      vout.val[2] = vmovn_u16(
-          vcombine_u16(vmovn_s32(vld1q_s32(B) + PNM_OFFSET), vmovn_s32(vld1q_s32(B + 4) + PNM_OFFSET)));
+      vout.val[0] = vmovn_u16(vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(R), voffset)),
+                                           vmovn_s32(vaddq_s32(vld1q_s32(R + 4), voffset))));
+      vout.val[1] = vmovn_u16(vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(G), voffset)),
+                                           vmovn_s32(vaddq_s32(vld1q_s32(G + 4), voffset))));
+      vout.val[2] = vmovn_u16(vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(B), voffset)),
+                                           vmovn_s32(vaddq_s32(vld1q_s32(B + 4), voffset))));
       vst3_u8(out, vout);
       R += 8;
       G += 8;
@@ -109,12 +108,12 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
     }
     for (; len >= 8; len -= 8) {
       uint16x8x3_t vout;
-      vout.val[0] =
-          vcombine_u16(vmovn_s32(vld1q_s32(R) + PNM_OFFSET), vmovn_s32(vld1q_s32(R + 4) + PNM_OFFSET));
-      vout.val[1] =
-          vcombine_u16(vmovn_s32(vld1q_s32(G) + PNM_OFFSET), vmovn_s32(vld1q_s32(G + 4) + PNM_OFFSET));
-      vout.val[2] =
-          vcombine_u16(vmovn_s32(vld1q_s32(B) + PNM_OFFSET), vmovn_s32(vld1q_s32(B + 4) + PNM_OFFSET));
+      vout.val[0] = vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(R), voffset)),
+                                 vmovn_s32(vaddq_s32(vld1q_s32(R + 4), voffset)));
+      vout.val[1] = vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(G), voffset)),
+                                 vmovn_s32(vaddq_s32(vld1q_s32(G + 4), voffset)));
+      vout.val[2] = vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(B), voffset)),
+                                 vmovn_s32(vaddq_s32(vld1q_s32(B + 4), voffset)));
       vout.val[0] = vrev16q_u8(vout.val[0]);
       vout.val[1] = vrev16q_u8(vout.val[1]);
       vout.val[2] = vrev16q_u8(vout.val[2]);
@@ -162,8 +161,9 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
     }
   }
 #endif
-  fwrite(ppm_out.get(), sizeof(uint8_t), num_pixels * bytes_per_pixel * 3, ofp);
+  fwrite(ppm_out, sizeof(uint8_t), num_pixels * bytes_per_pixel * 3, ofp);
   fclose(ofp);
+  free(ppm_out);
 }
 
 template <class T>
