@@ -37,7 +37,7 @@
   #define FORCE_INLINE inline
 #endif
 
-#define MAX_Lcup 16834
+#define MAX_Lcup 16384
 #define MAX_Scup 4079
 #define MAX_Lref 2046
 
