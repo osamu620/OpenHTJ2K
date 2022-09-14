@@ -214,7 +214,9 @@ void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsi
       return;
     }
   }
-  this->compressed_data = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(bufsize + Lref * (refsegment)));
+  // MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(bufsize + Lref * (refsegment)));
+  this->compressed_data =
+      std::unique_ptr<uint8_t[]>(new uint8_t[static_cast<size_t>(bufsize + Lref * (refsegment))]);
   memcpy(this->compressed_data.get(), buf, bufsize);
   this->current_address = this->compressed_data.get();
 }
@@ -231,7 +233,8 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
     }
     // allocate buffer one once for the first contributing layer
     if (this->compressed_data == nullptr) {
-      this->compressed_data = MAKE_UNIQUE<uint8_t[]>(static_cast<uint32_t>(buf_limit));
+      this->compressed_data = std::unique_ptr<uint8_t[]>(new uint8_t[static_cast<uint32_t>(
+          buf_limit)]);  // MAKE_UNIQUE<uint8_t[]>(static_cast<uint32_t>(buf_limit));
       this->current_address = this->compressed_data.get();
     }
     if (layer_length != 0) {
@@ -239,7 +242,8 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
         // extend buffer size, if necessary
         uint8_t *old_buf = this->compressed_data.release();
         buf_limit += 8192;
-        this->compressed_data = MAKE_UNIQUE<uint8_t[]>(static_cast<uint32_t>(buf_limit));
+        this->compressed_data = std::unique_ptr<uint8_t[]>(new uint8_t[static_cast<uint32_t>(
+            buf_limit)]);  // MAKE_UNIQUE<uint8_t[]>(static_cast<uint32_t>(buf_limit));
         memcpy(this->compressed_data.get(), old_buf, sizeof(uint8_t) * static_cast<uint32_t>(buf_limit));
         this->current_address = this->compressed_data.get() + (this->length);
         delete[] old_buf;
