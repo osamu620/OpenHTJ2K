@@ -281,9 +281,13 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
   const uint32_t num_codeblocks = this->num_codeblock_x * this->num_codeblock_y;
   const uint32_t band_stride    = bp1.x - bp0.x;
   if (num_codeblocks != 0) {
-    inclusion_info =
-        MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);            // critical section
-    ZBP_info = MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);     // critical section
+    inclusion_info = std::unique_ptr<tagtree>(new tagtree(this->num_codeblock_x, this->num_codeblock_y));
+    ZBP_info       = std::unique_ptr<tagtree>(new tagtree(this->num_codeblock_x, this->num_codeblock_y));
+    //    inclusion_info =
+    //        MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);            // critical
+    //        section
+    //    ZBP_info = MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);     // critical
+    //    section
     this->codeblocks = MAKE_UNIQUE<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);  // critical section
     for (uint32_t cb = 0; cb < num_codeblocks; cb++) {
       const uint32_t x = cb % this->num_codeblock_x;
@@ -295,9 +299,13 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
                                  std::min(pos1.y, codeblock_size.y * (y + 1 + pos0.y / codeblock_size.y)));
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
       const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
-      this->codeblocks[cb] =
-          MAKE_UNIQUE<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize, band_stride, ibuf,
-                                     offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
+      this->codeblocks[cb]  = std::unique_ptr<j2k_codeblock>(
+          new j2k_codeblock(cb, orientation, M_b, R_b, transformation, stepsize, band_stride, ibuf, offset,
+                             num_layers, Cmodes, cblkpos0, cblkpos1, cblksize));
+      //      this->codeblocks[cb] =
+      //          MAKE_UNIQUE<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize,
+      //          band_stride, ibuf,
+      //                                     offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
     }
   } else {
     // this->codeblocks = {};
