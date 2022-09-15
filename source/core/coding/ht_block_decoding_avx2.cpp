@@ -116,8 +116,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   /*******************************************************************************************************************/
   MEL_dec MEL(compressed_data, Lcup, Scup);
   rev_buf VLC_dec(compressed_data, Lcup, Scup);
-  auto sp0 = block->block_states.get() + 1 + block->blkstate_stride;
-  auto sp1 = block->block_states.get() + 1 + 2 * block->blkstate_stride;
+  auto sp0 = block->block_states + 1 + block->blkstate_stride;
+  auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
   uint32_t u_off0, u_off1;
   uint32_t u0, u1;
   uint32_t context = 0;
@@ -210,7 +210,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   // Non-initial line-pair
   dec_table = dec_CxtVLC_table1_fast_16;
   for (uint16_t row = 1; row < QH; row++) {
-    sp0 = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
+    sp0 = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
     sp1 = sp0 + block->blkstate_stride;
 
     sp = scratch + row * sstr;
