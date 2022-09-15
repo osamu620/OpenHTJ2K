@@ -62,7 +62,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp        = this->i_samples + i * stride;
-    int32_t *dp        = this->sample_buf.get() + i * blksampl_stride;
+    int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states.get() + block_index;
 
@@ -320,7 +320,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   uint8_t *ssp0 = block->block_states.get() + 1U * (block->blkstate_stride) + 1U;
   uint8_t *ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0  = block->sample_buf.get();
+  int32_t *sp0  = block->sample_buf;
   int32_t *sp1  = sp0 + block->blksampl_stride;
 
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
@@ -512,7 +512,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
     ssp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
     ssp1 = ssp0 + block->blkstate_stride;
-    sp0  = block->sample_buf.get() + 2U * (qy * block->blksampl_stride);
+    sp0  = block->sample_buf + 2U * (qy * block->blksampl_stride);
     sp1  = sp0 + block->blksampl_stride;
 
     qx = QW;
