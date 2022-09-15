@@ -83,7 +83,9 @@ class ThreadPool {
             typename R = typename std::result_of<std::decay_t<F>(std::decay_t<Args>...)>::type>
   #endif
   std::future<R> enqueue(F&& func, Args&&... args) {
-    auto task   = std::make_shared<std::packaged_task<R()>>([func, args...]() { return func(args...); });
+    // auto task   = std::make_shared<std::packaged_task<R()>>([func, args...]() { return func(args...); });
+    auto task = std::make_shared<std::packaged_task<R()>>(
+        std::bind(std::forward<F>(func), std::forward<Args>(args)...));
     auto future = task->get_future();
 
     push_task([task]() { (*task)(); });
