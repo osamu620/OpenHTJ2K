@@ -29,169 +29,119 @@
 #ifdef OPENHTJ2K_THREAD
   #pragma once
 
-  #include <cstdint>
-  #include <functional>
-  #include <future>
-  #include <memory>
-  #include <mutex>
+  #include <vector>
   #include <queue>
+  #include <memory>
   #include <thread>
+  #include <mutex>
+  #include <condition_variable>
+  #include <future>
+  #include <functional>
+  #include <stdexcept>
+  #include <map>
   #include <type_traits>
+  #include <iostream>
 
 class ThreadPool {
  public:
-  inline explicit ThreadPool(size_t thread_count) : stop(false), thread_count_(thread_count) {
-    if (thread_count == 1) return;
-
-    threads = std::make_unique<std::thread[]>(thread_count_);
-
-    for (size_t i = 0; i < thread_count_; ++i) {
-      threads[i] = std::thread(&ThreadPool::worker, this);
-    }
-  }
-
-  /**
-   * @brief Destruct the thread pool. Waits for all tasks to complete, then destroys all threads.
-   *
-   */
-  inline ~ThreadPool() {
-    {
-      // Lock task queue to prevent adding a new task.
-      std::lock_guard<std::mutex> lock(tasks_mutex);
-      stop = true;
-    }
-
-    // Wake up all threads so that they may exist
-    condition.notify_all();
-
-    for (size_t i = 0; i < thread_count_; ++i) {
-      threads[i].join();
-    }
-  }
-
-  size_t num_threads() const { return thread_count_; }
-
+  ThreadPool(size_t);
+  template <class F, class... Args>
   #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
-  /**
-   * @brief Enqueue a function with zero or more arguments and a return value into the task queue,
-   * and get a future for its eventual returned value.
-   */
-  template <typename F, typename... Args,
-            typename R = std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>>
+  auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
   #else
-  template <typename F, typename... Args,
-            typename R = typename std::result_of<std::decay_t<F>(std::decay_t<Args>...)>::type>
+  auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type>;
   #endif
-  std::future<R> enqueue(F&& func, Args&&... args) {
-    // auto task   = std::make_shared<std::packaged_task<R()>>([func, args...]() { return func(args...); });
-    auto task = std::make_shared<std::packaged_task<R()>>(
-        std::bind(std::forward<F>(func), std::forward<Args>(args)...));
-    auto future = task->get_future();
-
-    push_task([task]() { (*task)(); });
-    return future;
+  ~ThreadPool();
+  int thread_number(std::thread::id id) {
+    if (id_map.find(id) != id_map.end()) return (int)id_map[id];
+    return -1;
   }
+  size_t num_threads() { return m_num_threads; }
 
   static ThreadPool* get() { return instance(0); }
-
-  static ThreadPool* instance(size_t numthreads) {
+  static ThreadPool* instance(uint32_t numthreads) {
     std::unique_lock<std::mutex> lock(singleton_mutex);
-    if (!singleton) {
-      singleton = new ThreadPool(numthreads ? numthreads : std::thread::hardware_concurrency());
-    }
+    if (!singleton) singleton = new ThreadPool(numthreads ? numthreads : hardware_concurrency());
     return singleton;
   }
-
   static void release() {
     std::unique_lock<std::mutex> lock(singleton_mutex);
     delete singleton;
     singleton = nullptr;
   }
+  static uint32_t hardware_concurrency() { return std::thread::hardware_concurrency(); }
 
  private:
-  template <typename F>
-  inline void push_task(const F& task) {
-    {
-      const std::lock_guard<std::mutex> lock(tasks_mutex);
-
-      if (stop) {
-        throw std::runtime_error("Cannot schedule new task after shutdown.");
-      }
-
-      tasks.push(std::function<void()>(task));
-    }
-
-    condition.notify_one();
-  }
-
-  /**
-   * @brief A worker function to be assigned to each thread in the pool.
-   *
-   *  Continuously pops tasks out of the queue and executes them, as long as the atomic variable running is
-   * set to true.
-   */
-  void worker() {
-    for (;;) {
-      std::function<void()> task;
-
-      {
-        std::unique_lock<std::mutex> lock(tasks_mutex);
-        condition.wait(lock, [&] { return !tasks.empty() || stop; });
-
-        if (stop && tasks.empty()) {
-          return;
-        }
-
-        task = std::move(tasks.front());
-        tasks.pop();
-      }
-
-      task();
-    }
-  }
-
- private:
-  /**
-   * @brief A mutex to synchronize access to the task queue by different threads.
-   */
-  mutable std::mutex tasks_mutex{};
-
-  /**
-   * @brief An atomic variable indicating to the workers to keep running.
-   *
-   * When set to false, the workers permanently stop working.
-   */
+  std::vector<std::thread> workers;
+  std::queue<std::function<void()>> tasks;
+  std::mutex queue_mutex;
+  std::condition_variable condition;
   bool stop;
 
-  /**
-   * @brief A queue of tasks to be executed by the threads.
-   */
-  std::queue<std::function<void()>> tasks;
+  std::map<std::thread::id, size_t> id_map;
+  size_t m_num_threads;
 
-  /**
-   * @brief The number of threads in the pool.
-   */
-  size_t thread_count_;
-
-  /**
-   * @brief A smart pointer to manage the memory allocated for the threads.
-   */
-  std::unique_ptr<std::thread[]> threads;
-
-  /**
-   * @brief A condition variable used to notify worker threads of state changes.
-   */
-  std::condition_variable condition;
-
-  /**
-   * @brief A singleton for the instance.
-   */
   static ThreadPool* singleton;
-
-  /**
-   * @brief A mutex to synchronize access to the instance.
-   */
   static std::mutex singleton_mutex;
 };
 
+inline ThreadPool::ThreadPool(size_t threads) : stop(false), m_num_threads(threads) {
+  if (threads == 1) return;
+
+  for (size_t i = 0; i < threads; ++i)
+    workers.emplace_back([this] {
+      for (;;) {
+        std::function<void()> task;
+
+        {
+          std::unique_lock<std::mutex> lock(this->queue_mutex);
+          this->condition.wait(lock, [this] { return this->stop || !this->tasks.empty(); });
+          if (this->stop && this->tasks.empty()) return;
+          task = std::move(this->tasks.front());
+          this->tasks.pop();
+        }
+
+        task();
+      }
+    });
+  size_t thread_count = 0;
+  for (std::thread& worker : workers) {
+    id_map[worker.get_id()] = thread_count;
+    thread_count++;
+  }
+}
+template <class F, class... Args>
+  #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+auto ThreadPool::enqueue(F&& f, Args&&... args)
+    -> std::future<typename std::invoke_result<F, Args...>::type> {
+  assert(m_num_threads > 1);
+  using return_type = typename std::invoke_result<F, Args...>::type;
+  #else
+auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
+  assert(m_num_threads > 1);
+  using return_type = typename std::result_of<F(Args...)>::type;
+  #endif
+  auto task = std::make_shared<std::packaged_task<return_type()>>(
+      std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+
+  std::future<return_type> res = task->get_future();
+  {
+    std::unique_lock<std::mutex> lock(queue_mutex);
+
+    // don't allow enqueueing after stopping the pool
+    if (stop) throw std::runtime_error("enqueue on stopped ThreadPool");
+
+    tasks.emplace([task]() { (*task)(); });
+  }
+  condition.notify_one();
+  return res;
+}
+inline ThreadPool::~ThreadPool() {
+  {
+    std::unique_lock<std::mutex> lock(queue_mutex);
+    stop = true;
+  }
+  condition.notify_all();
+  for (std::thread& worker : workers) worker.join();
+}
 #endif
