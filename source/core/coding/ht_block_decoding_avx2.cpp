@@ -295,7 +295,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   /*******************************************************************************************************************/
   // MagSgn decoding
   /*******************************************************************************************************************/
-  int32_t *const sample_buf = block->sample_buf.get();
+  int32_t *const sample_buf = block->sample_buf;
   int32_t *mp0              = sample_buf;
   int32_t *mp1              = sample_buf + block->blksampl_stride;
 
@@ -533,7 +533,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   if (this->transformation) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
+      int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
       for (; len >= 16; len -= 16) {
@@ -593,7 +593,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     fscale *= (float)(1 << 16) * (float)(1 << downshift);
     const auto scale = (int32_t)(fscale + 0.5);
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
+      int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
       for (; len >= 16; len -= 16) {

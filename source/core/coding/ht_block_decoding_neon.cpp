@@ -81,8 +81,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const int32x4_t vtwo   = vdupq_n_s32(2);
   const int32x4_t vshift = vdupq_n_s32(pLSB - 1);
 
-  auto mp0 = block->sample_buf.get();
-  auto mp1 = block->sample_buf.get() + block->blksampl_stride;
+  auto mp0 = block->sample_buf;
+  auto mp1 = block->sample_buf + block->blksampl_stride;
   auto sp0 = block->block_states.get() + 1 + block->blkstate_stride;
   auto sp1 = block->block_states.get() + 1 + 2 * block->blkstate_stride;
 
@@ -261,8 +261,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   for (uint16_t row = 1; row < QH; row++) {
     rho_p = rholine.get() + 1;
     E_p   = Eline.get() + 1;
-    mp0   = block->sample_buf.get() + (row * 2U) * block->blksampl_stride;
-    mp1   = block->sample_buf.get() + (row * 2U + 1U) * block->blksampl_stride;
+    mp0   = block->sample_buf + (row * 2U) * block->blksampl_stride;
+    mp1   = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
     sp0   = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
     sp1   = block->block_states.get() + (row * 2U + 2U) * block->blkstate_stride + 1U;
     rho1  = 0;
@@ -563,7 +563,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   if (this->transformation) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
+      int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
       for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
@@ -621,7 +621,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     const auto scale = (int32_t)(fscale + 0.5);
 
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf.get() + i * this->blksampl_stride;
+      int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
       for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
