@@ -56,7 +56,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
-    uint8_t *dstblk    = block_states.get() + block_index;
+    uint8_t *dstblk    = block_states + block_index;
 
     float32x4_t vscale = vdupq_n_f32(fscale);
     int32x4_t vorval   = vdupq_n_s32(0);
@@ -359,7 +359,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   // Initial line-pair
   /*******************************************************************************************************************/
-  uint8_t *ssp0 = block->block_states.get() + 1U * (block->blkstate_stride) + 1U;
+  uint8_t *ssp0 = block->block_states + 1U * (block->blkstate_stride) + 1U;
   uint8_t *ssp1 = ssp0 + block->blkstate_stride;
   int32_t *sp0  = block->sample_buf;
   int32_t *sp1  = sp0 + block->blksampl_stride;
@@ -526,7 +526,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);  // (nw | n) << 8
     context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);   // (ne | nf) << 10
 
-    ssp0 = block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
+    ssp0 = block->block_states + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
     ssp1 = ssp0 + block->blkstate_stride;
     sp0  = block->sample_buf + 2U * (qy * block->blksampl_stride);
     sp1  = sp0 + block->blksampl_stride;

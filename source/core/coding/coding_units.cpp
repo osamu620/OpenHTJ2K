@@ -186,7 +186,7 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   const uint32_t QHx2 = round_up(size.y, 8U);  // TODO: needs padding?
   blksampl_stride     = QWx2;
   blkstate_stride     = QWx2 + 2;
-  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
+  //  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
   //  memset(block_states.get(), 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
 
   //  sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
@@ -2337,8 +2337,10 @@ void j2k_tile::decode() {
         }
         // auto gbuf     = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(total_cblks * 4096));
         // int32_t *pbuf = gbuf.get();
-        int32_t *gbuf = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
-        int32_t *pbuf = gbuf;
+        int32_t *gbuf  = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
+        int32_t *pbuf  = gbuf;
+        uint8_t *sgbuf = static_cast<uint8_t *>(malloc(sizeof(uint8_t) * total_cblks * 6156));
+        uint8_t *spbuf = sgbuf;
 #ifdef OPENHTJ2K_THREAD
         // auto pool = ThreadPool::get();
         std::vector<std::future<int>> results;
@@ -2352,12 +2354,15 @@ void j2k_tile::decode() {
             const uint32_t QHx2  = round_up(block->size.y, 8U);
             block->sample_buf    = pbuf;
             pbuf += QWx2 * QHx2;
+            block->block_states = spbuf;
+            spbuf += (QWx2 + 2) * (QHx2 + 2);
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
 #ifdef OPENHTJ2K_THREAD
               if (pool->num_threads() > 1) {
                 results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
                   memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
+                  memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
                   if ((block->Cmodes & HT) >> 6)
                     htj2k_decode(block, ROIshift);
                   else
@@ -2366,6 +2371,7 @@ void j2k_tile::decode() {
                 }));
               } else {
                 memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
+                memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
                 if ((block->Cmodes & HT) >> 6)
                   htj2k_decode(block, ROIshift);
                 else
@@ -2373,6 +2379,7 @@ void j2k_tile::decode() {
               }
 #else
               memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
+              memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
               if ((block->Cmodes & HT) >> 6)
                 htj2k_decode(block, ROIshift);
               else
@@ -2387,6 +2394,7 @@ void j2k_tile::decode() {
         }
 #endif
         free(gbuf);
+        free(sgbuf);
       }  // end of precinct loop
     }
   }
@@ -2900,8 +2908,10 @@ uint8_t *j2k_tile::encode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        int32_t *gbuf = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
-        int32_t *pbuf = gbuf;
+        int32_t *gbuf  = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
+        int32_t *pbuf  = gbuf;
+        uint8_t *sgbuf = static_cast<uint8_t *>(malloc(sizeof(uint8_t) * total_cblks * 6156));
+        uint8_t *spbuf = sgbuf;
         packet_header_writer pckt_hdr;
         std::vector<std::future<int>> results;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -2913,12 +2923,15 @@ uint8_t *j2k_tile::encode() {
             const uint32_t QHx2 = round_up(block->size.y, 8U);
             block->sample_buf   = pbuf;
             pbuf += QWx2 * QHx2;
+            block->block_states = spbuf;
+            spbuf += (QWx2 + 2) * (QHx2 + 2);
             if (pool->num_threads() > 1) {
               results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
                 // block->sample_buf =
                 //     new int32_t[QWx2 * QHx2];  // MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 *
                 //     QHx2));
                 memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
+                memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
                 htj2k_encode(block, ROIshift);
                 return 0;
               }));
@@ -2926,6 +2939,7 @@ uint8_t *j2k_tile::encode() {
               // block->sample_buf =
               //     new int32_t[QWx2 * QHx2];  // MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
               memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
+              memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
               htj2k_encode(block, ROIshift);
             }
           }
@@ -2934,6 +2948,7 @@ uint8_t *j2k_tile::encode() {
           result.get();
         }
         free(gbuf);
+        free(sgbuf);
       }
     };
 #else
@@ -2958,6 +2973,7 @@ uint8_t *j2k_tile::encode() {
             // block->sample_buf =
             //     new int32_t[QWx2 * QHx2];  // MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
             memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
+            memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
             block->sample_buf = pbuf + QWx2 * QHx2;
             htj2k_encode(block, ROIshift);
           }

@@ -83,8 +83,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
   auto mp0 = block->sample_buf;
   auto mp1 = block->sample_buf + block->blksampl_stride;
-  auto sp0 = block->block_states.get() + 1 + block->blkstate_stride;
-  auto sp1 = block->block_states.get() + 1 + 2 * block->blkstate_stride;
+  auto sp0 = block->block_states + 1 + block->blkstate_stride;
+  auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
 
   uint32_t rho0, rho1;
   uint32_t u_off0, u_off1;
@@ -263,8 +263,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     E_p   = Eline.get() + 1;
     mp0   = block->sample_buf + (row * 2U) * block->blksampl_stride;
     mp1   = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
-    sp0   = block->block_states.get() + (row * 2U + 1U) * block->blkstate_stride + 1U;
-    sp1   = block->block_states.get() + (row * 2U + 2U) * block->blkstate_stride + 1U;
+    sp0   = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
+    sp1   = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
     rho1  = 0;
 
     int32_t Emax0, Emax1;
