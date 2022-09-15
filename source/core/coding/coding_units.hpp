@@ -75,7 +75,7 @@ class j2k_codeblock : public j2k_region {
  public:
   int32_t *sample_buf;
   size_t blksampl_stride;
-  std::unique_ptr<uint8_t[]> block_states;
+  uint8_t *block_states;
   size_t blkstate_stride;
   sprec_t *const i_samples;
   const uint32_t band_stride;
