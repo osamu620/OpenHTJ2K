@@ -29,7 +29,6 @@
 #ifdef OPENHTJ2K_THREAD
   #pragma once
 
-  #include <atomic>
   #include <cstdint>
   #include <functional>
   #include <future>
@@ -160,7 +159,7 @@ class ThreadPool {
    *
    * When set to false, the workers permanently stop working.
    */
-  std::atomic<bool> stop;
+  bool stop;
 
   /**
    * @brief A queue of tasks to be executed by the threads.
