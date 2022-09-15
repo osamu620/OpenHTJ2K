@@ -41,7 +41,7 @@
 
 class ThreadPool {
  public:
-  explicit ThreadPool(size_t thread_count) : stop(false), thread_count_(thread_count) {
+  inline explicit ThreadPool(size_t thread_count) : stop(false), thread_count_(thread_count) {
     if (thread_count == 1) return;
 
     threads = std::make_unique<std::thread[]>(thread_count_);
@@ -55,7 +55,7 @@ class ThreadPool {
    * @brief Destruct the thread pool. Waits for all tasks to complete, then destroys all threads.
    *
    */
-  ~ThreadPool() {
+  inline ~ThreadPool() {
     {
       // Lock task queue to prevent adding a new task.
       std::lock_guard<std::mutex> lock(tasks_mutex);
@@ -109,7 +109,7 @@ class ThreadPool {
 
  private:
   template <typename F>
-  void push_task(const F& task) {
+  inline void push_task(const F& task) {
     {
       const std::lock_guard<std::mutex> lock(tasks_mutex);
 
