@@ -264,7 +264,11 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
                                            const element_siz &p0, const element_siz &p1,
                                            const uint16_t &num_layers, const element_siz &codeblock_size,
                                            const uint8_t &Cmodes)
-    : j2k_region(p0, p1), orientation(orientation), inclusion_info(nullptr), ZBP_info(nullptr) {
+    : j2k_region(p0, p1),
+      orientation(orientation),
+      inclusion_info(nullptr),
+      ZBP_info(nullptr),
+      codeblocks(nullptr) {
   if (this->pos1.x > this->pos0.x) {
     this->num_codeblock_x =
         ceil_int(this->pos1.x - 0, codeblock_size.x) - (this->pos0.x - 0) / codeblock_size.x;
@@ -281,14 +285,16 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
   const uint32_t num_codeblocks = this->num_codeblock_x * this->num_codeblock_y;
   const uint32_t band_stride    = bp1.x - bp0.x;
   if (num_codeblocks != 0) {
-    inclusion_info = std::unique_ptr<tagtree>(new tagtree(this->num_codeblock_x, this->num_codeblock_y));
-    ZBP_info       = std::unique_ptr<tagtree>(new tagtree(this->num_codeblock_x, this->num_codeblock_y));
+    inclusion_info = new tagtree(this->num_codeblock_x, this->num_codeblock_y);
+    ZBP_info       = new tagtree(this->num_codeblock_x, this->num_codeblock_y);
     //    inclusion_info =
     //        MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);            // critical
     //        section
     //    ZBP_info = MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);     // critical
     //    section
-    this->codeblocks = MAKE_UNIQUE<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);  // critical section
+    this->codeblocks = new j2k_codeblock
+        *[num_codeblocks];  // MAKE_UNIQUE<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);
+                            // // critical section
     for (uint32_t cb = 0; cb < num_codeblocks; cb++) {
       const uint32_t x = cb % this->num_codeblock_x;
       const uint32_t y = cb / this->num_codeblock_x;
@@ -299,9 +305,9 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
                                  std::min(pos1.y, codeblock_size.y * (y + 1 + pos0.y / codeblock_size.y)));
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
       const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
-      this->codeblocks[cb]  = std::unique_ptr<j2k_codeblock>(
+      this->codeblocks[cb] =
           new j2k_codeblock(cb, orientation, M_b, R_b, transformation, stepsize, band_stride, ibuf, offset,
-                             num_layers, Cmodes, cblkpos0, cblkpos1, cblksize));
+                            num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
       //      this->codeblocks[cb] =
       //          MAKE_UNIQUE<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize,
       //          band_stride, ibuf,
@@ -317,7 +323,7 @@ tagtree_node *j2k_precinct_subband::get_inclusion_node(uint32_t i) {
 }
 tagtree_node *j2k_precinct_subband::get_ZBP_node(uint32_t i) { return &this->ZBP_info->node[i]; }
 
-j2k_codeblock *j2k_precinct_subband::access_codeblock(uint32_t i) { return this->codeblocks[i].get(); }
+j2k_codeblock *j2k_precinct_subband::access_codeblock(uint32_t i) { return this->codeblocks[i]; }
 
 void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_t layer_idx,
                                                uint16_t Ccap15) {
