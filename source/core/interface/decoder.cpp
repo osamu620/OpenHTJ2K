@@ -102,7 +102,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
 void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                     std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                     std::vector<bool> &is_signed) {
-  // read main header
+  // Read main header
   j2k_main_header main_header;
   main_header.read(in);
   in.rewind_2bytes();
@@ -110,7 +110,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   // printf("Tile num x = %d, y = %d\n", numTiles.x, numTiles.y);
 
-  // create output buffer
+  // Create output buffer
   uint16_t num_components = main_header.SIZ->get_num_components();
   std::vector<uint32_t> x0(num_components), x1(num_components), y0(num_components), y1(num_components);
   element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
@@ -145,7 +145,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   uint16_t word;
   SOT_marker tmpSOT;
   uint16_t tile_index;
-  // read all tile parts
+  // Read all tile parts
   while ((word = in.get_word()) != _EOC) {
     if (word != _SOT) {
       printf("ERROR: SOT marker segment expected but %04X is found\n", word);
@@ -156,30 +156,27 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
 
-  // read codestream and decode
+  // Read codestream and decode it
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     tileSet[i].create_tile_buf(main_header);
     tileSet[i].decode();
     tileSet[i].ycbcr_to_rgb();
     tileSet[i].finalize(main_header);
-  }
-
-  // prepare output buffer
-  for (uint16_t c = 0; c < num_components; c++) {
-    int32_t *dp = buf[c];
-    for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
-      j2k_tile_component *tile_component = tileSet[i].get_tile_component(c);
-      int32_t *sp                        = tile_component->get_sample_address(0, 0);
-      element_siz component_pos          = tile_component->get_pos0();
-      element_siz component_size;
-      tile_component->get_size(component_size);
-      uint32_t component_width  = component_size.x;
-      uint32_t component_height = component_size.y;
-      uint32_t x_offset         = component_pos.x - ceil_int(x0[c], (1U << reduce_NL));
-      uint32_t y_offset         = component_pos.y - ceil_int(y0[c], (1U << reduce_NL));
-      for (uint32_t y = y_offset; y < component_height + y_offset; y++) {
-        memcpy(dp + x_offset + y * width[c], sp, sizeof(int32_t) * component_width);
-        sp += component_width;
+    // Copy reconstructed image to output buffer
+    for (uint16_t c = 0; c < num_components; c++) {
+      int32_t *dp               = buf[c];
+      j2k_tile_component *tcomp = tileSet[i].get_tile_component(c);
+      int32_t *sp               = tcomp->get_sample_address(0, 0);
+      element_siz cpos          = tcomp->get_pos0();
+      element_siz csize;
+      tcomp->get_size(csize);
+      uint32_t cwidth   = csize.x;
+      uint32_t cheight  = csize.y;
+      uint32_t x_offset = cpos.x - ceil_int(x0[c], (1U << reduce_NL));
+      uint32_t y_offset = cpos.y - ceil_int(y0[c], (1U << reduce_NL));
+      for (uint32_t y = y_offset; y < cheight + y_offset; y++) {
+        memcpy(dp + x_offset + y * width[c], sp, sizeof(int32_t) * cwidth);
+        sp += cwidth;
       }
     }
   }
