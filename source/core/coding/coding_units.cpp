@@ -2339,7 +2339,8 @@ void j2k_tile::decode() {
         // int32_t *pbuf = gbuf.get();
         int32_t *gbuf  = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
         int32_t *pbuf  = gbuf;
-        uint8_t *sgbuf = static_cast<uint8_t *>(malloc(sizeof(uint8_t) * total_cblks * 6156));
+        uint8_t *sgbuf = static_cast<uint8_t *>(
+            malloc(sizeof(uint8_t) * total_cblks * 6156));  // 6156 = (1024+2) * (4 +2), worst case
         uint8_t *spbuf = sgbuf;
 #ifdef OPENHTJ2K_THREAD
         // auto pool = ThreadPool::get();
