@@ -66,7 +66,7 @@ class j2k_codeblock : public j2k_region {
   const element_siz size;
 
  private:
-  std::unique_ptr<uint8_t[]> compressed_data;
+  uint8_t *compressed_data;
   uint8_t *current_address;
   const uint8_t band;
   const uint8_t M_b;
@@ -104,6 +104,11 @@ class j2k_codeblock : public j2k_region {
                 float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
                 const uint16_t &numlayers, const uint8_t &codeblock_style, const element_siz &p0,
                 const element_siz &p1, const element_siz &s);
+  ~j2k_codeblock() {
+    if (compressed_data != nullptr) {
+      free(compressed_data);
+    }
+  }
   void modify_state(const std::function<void(uint8_t &, uint8_t)> &callback, uint8_t val, int16_t j1,
                     int16_t j2) {
     callback(
