@@ -31,6 +31,8 @@
 #include <memory>
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  #include <x86intrin.h>
 #endif
 #define ceil_int(a, b) (((a) + ((b)-1)) / (b))
 
@@ -148,6 +150,134 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       B++;
     }
   }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  uint32_t len = num_pixels;
+  int32_t *R, *G, *B;
+  uint8_t *out    = ppm_out;
+  R               = buf[0];
+  G               = buf[1];
+  B               = buf[2];
+  __m128i voffset = _mm_set1_epi32(PNM_OFFSET);
+  if (bytes_per_pixel == 1) {
+    __m128i mask0    = _mm_setr_epi8(0, 1, -1, 2, 3, -1, 4, 5, -1, 6, 7, -1, 8, 9, -1, 10);
+    __m128i mask1    = _mm_setr_epi8(0, -1, 1, 2, -1, 3, 4, -1, 5, 6, -1, 7, 8, -1, 9, 10);
+    __m128i mask2    = _mm_setr_epi8(-1, 6, 7, -1, 8, 9, -1, 10, 11, -1, 12, 13, -1, 14, 15, -1);
+    __m128i mask2lo  = _mm_setr_epi8(-1, -1, 0, -1, -1, 1, -1, -1, 2, -1, -1, 3, -1, -1, 4, -1);
+    __m128i mask2med = _mm_setr_epi8(-1, 5, -1, -1, 6, -1, -1, 7, -1, -1, 8, -1, -1, 9, -1, -1);
+    __m128i mask2hi  = _mm_setr_epi8(10, -1, -1, 11, -1, -1, 12, -1, -1, 13, -1, -1, 14, -1, -1, 15);
+    __m128i v0, v1, v2, cff, blkmask;
+    __m128i vval0, vval1, vval2;
+    for (; len >= 16; len -= 16) {
+      __m128i val0 =
+          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset)),
+                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 8)), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 12)), voffset)));
+      __m128i val1 =
+          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset)),
+                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 8)), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 12)), voffset)));
+      __m128i val2 =
+          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset)),
+                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 8)), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 12)), voffset)));
+
+      v0 = _mm_unpacklo_epi8(val0, val1);
+      v2 = _mm_unpackhi_epi8(val0, val1);
+      v1 = _mm_alignr_epi8(v2, v0, 11);
+
+      vval0   = _mm_shuffle_epi8(v0, mask0);
+      vval2   = _mm_shuffle_epi8(val2, mask2lo);
+      cff     = _mm_cmpeq_epi8(v0, v0);
+      blkmask = _mm_cmpeq_epi8(mask0, cff);
+      vval0   = _mm_blendv_epi8(vval0, vval2, blkmask);
+      _mm_storeu_si128((__m128i *)out, vval0);
+
+      vval0   = _mm_shuffle_epi8(v1, mask1);
+      vval2   = _mm_shuffle_epi8(val2, mask2med);
+      blkmask = _mm_cmpeq_epi8(mask1, cff);
+      vval1   = _mm_blendv_epi8(vval0, vval2, blkmask);
+      _mm_storeu_si128((__m128i *)(out + 16), vval1);
+
+      vval0   = _mm_shuffle_epi8(v2, mask2);
+      vval2   = _mm_shuffle_epi8(val2, mask2hi);
+      blkmask = _mm_cmpeq_epi8(mask2, cff);
+      vval2   = _mm_blendv_epi8(vval0, vval2, blkmask);
+      _mm_storeu_si128((__m128i *)(out + 32), vval2);
+
+      R += 16;
+      G += 16;
+      B += 16;
+      out += 48;
+    }
+    for (; len > 0; --len) {
+      *out++ = static_cast<uint8_t>(*R++ + PNM_OFFSET);
+      *out++ = static_cast<uint8_t>(*G++ + PNM_OFFSET);
+      *out++ = static_cast<uint8_t>(*B++ + PNM_OFFSET);
+    }
+  } else {
+    __m128i mask0    = _mm_setr_epi8(1, 0, 3, 2, -1, -1, 5, 4, 7, 6, -1, -1, 9, 8, 11, 10);
+    __m128i mask1    = _mm_setr_epi8(-1, -1, 1, 0, 3, 2, -1, -1, 5, 4, 7, 6, -1, -1, 9, 8);
+    __m128i mask2    = _mm_setr_epi8(7, 6, -1, -1, 9, 8, 11, 10, -1, -1, 13, 12, 15, 14, -1, -1);
+    __m128i mask2lo  = _mm_setr_epi8(-1, -1, -1, -1, 1, 0, -1, -1, -1, -1, 3, 2, -1, -1, -1, -1);
+    __m128i mask2med = _mm_setr_epi8(5, 4, -1, -1, -1, -1, 7, 6, -1, -1, -1, -1, 9, 8, -1, -1);
+    __m128i mask2hi  = _mm_setr_epi8(-1, -1, 11, 10, -1, -1, -1, -1, 13, 12, -1, -1, -1, -1, 15, 14);
+    __m128i v0, v1, v2, cff, blkmask;
+    __m128i vval0, vval1, vval2;
+    for (; len >= 8; len -= 8) {
+      __m128i val0 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
+                                      _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset));
+      __m128i val1 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
+                                      _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset));
+      __m128i val2 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
+                                      _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset));
+
+      v0 = _mm_unpacklo_epi16(val0, val1);
+      v2 = _mm_unpackhi_epi16(val0, val1);
+      v1 = _mm_alignr_epi8(v2, v0, 12);
+
+      vval0   = _mm_shuffle_epi8(v0, mask0);
+      vval2   = _mm_shuffle_epi8(val2, mask2lo);
+      cff     = _mm_cmpeq_epi16(v0, v0);
+      blkmask = _mm_cmpeq_epi16(mask0, cff);
+      vval0   = _mm_blendv_epi8(vval0, vval2, blkmask);
+      _mm_storeu_si128((__m128i *)out, vval0);
+
+      vval0   = _mm_shuffle_epi8(v1, mask1);
+      vval2   = _mm_shuffle_epi8(val2, mask2med);
+      blkmask = _mm_cmpeq_epi16(mask1, cff);
+      vval1   = _mm_blendv_epi8(vval0, vval2, blkmask);
+      _mm_storeu_si128((__m128i *)(out + 16), vval1);
+
+      vval0   = _mm_shuffle_epi8(v2, mask2);
+      vval2   = _mm_shuffle_epi8(val2, mask2hi);
+      blkmask = _mm_cmpeq_epi16(mask2, cff);
+      vval2   = _mm_blendv_epi8(vval0, vval2, blkmask);
+      _mm_storeu_si128((__m128i *)(out + 32), vval2);
+
+      R += 8;
+      G += 8;
+      B += 8;
+      out += 48;
+    }
+    for (; len > 0; --len) {
+      val0   = *R + PNM_OFFSET;
+      val1   = *G + PNM_OFFSET;
+      val2   = *B + PNM_OFFSET;
+      *out++ = static_cast<uint8_t>(val0 >> 8);
+      *out++ = static_cast<uint8_t>(val0);
+      *out++ = static_cast<uint8_t>(val1 >> 8);
+      *out++ = static_cast<uint8_t>(val1);
+      *out++ = static_cast<uint8_t>(val2 >> 8);
+      *out++ = static_cast<uint8_t>(val2);
+      R++;
+      G++;
+      B++;
+    }
+  }
+
 #else
   for (uint32_t i = 0; i < num_pixels; ++i) {
     val0 = (buf[0][i] + PNM_OFFSET);
