@@ -159,9 +159,12 @@ class j2k_subband : public j2k_region {
 class j2k_precinct_subband : public j2k_region {
  private:
   [[maybe_unused]] const uint8_t orientation;
-  std::unique_ptr<tagtree> inclusion_info;
-  std::unique_ptr<tagtree> ZBP_info;
-  std::unique_ptr<std::unique_ptr<j2k_codeblock>[]> codeblocks;
+  //  std::unique_ptr<tagtree> inclusion_info;
+  //  std::unique_ptr<tagtree> ZBP_info;
+  //  std::unique_ptr<std::unique_ptr<j2k_codeblock>[]> codeblocks;
+  tagtree *inclusion_info;
+  tagtree *ZBP_info;
+  j2k_codeblock **codeblocks;
 
  public:
   uint32_t num_codeblock_x;
@@ -170,7 +173,20 @@ class j2k_precinct_subband : public j2k_region {
                        float stepsize, sprec_t *ibuf, const element_siz &bp0, const element_siz &bp1,
                        const element_siz &p0, const element_siz &p1, const uint16_t &num_layers,
                        const element_siz &codeblock_size, const uint8_t &Cmodes);
-  //~j2k_precinct_subband();
+  ~j2k_precinct_subband() {
+    delete inclusion_info;
+    delete ZBP_info;
+    for (uint32_t i = 0; i < num_codeblock_x * num_codeblock_y; ++i) {
+      delete codeblocks[i];
+    }
+    delete[] codeblocks;
+  }
+  //  void destroy_codeblocks() {
+  //    for (uint32_t i = 0; i < num_codeblock_x * num_codeblock_y; ++i) {
+  //      delete codeblocks[i];
+  //    }
+  //    delete[] codeblocks;
+  //  }
   tagtree_node *get_inclusion_node(uint32_t i);
   tagtree_node *get_ZBP_node(uint32_t i);
   j2k_codeblock *access_codeblock(uint32_t i);
@@ -204,7 +220,11 @@ class j2k_precinct : public j2k_region {
   j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_siz &p0, const element_siz &p1,
                const std::unique_ptr<std::unique_ptr<j2k_subband>[]> &subband, const uint16_t &num_layers,
                const element_siz &codeblock_size, const uint8_t &Cmodes);
-  //~j2k_precinct();
+  //  ~j2k_precinct() {
+  //    for (size_t i = 0; i < num_bands; ++i) {
+  //      pband[i]->destroy_codeblocks();
+  //    }
+  //  }
 
   j2k_precinct_subband *access_pband(uint8_t b);
   void set_length(uint32_t len) { length = len; }
