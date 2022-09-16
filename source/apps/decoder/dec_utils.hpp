@@ -32,7 +32,7 @@
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
 #endif
-#define ceil_int(a, b) ((a) + ((b)-1)) / (b)
+#define ceil_int(a, b) (((a) + ((b)-1)) / (b))
 
 bool command_option_exists(int argc, char *argv[], const char *option) {
   bool result = false;
@@ -76,20 +76,25 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   uint32_t len = num_pixels;
   int32_t *R, *G, *B;
-  uint8_t *out      = ppm_out;
-  int32x4_t voffset = vdupq_n_s32(PNM_OFFSET);
-  R                 = buf[0];
-  G                 = buf[1];
-  B                 = buf[2];
+  uint8_t *out = ppm_out;
+  R            = buf[0];
+  G            = buf[1];
+  B            = buf[2];
+  int32x4_t R0, R1, G0, G1, B0, B1;
   if (bytes_per_pixel == 1) {
+    uint8x8_t voffset = vdup_n_u8(static_cast<uint8_t>(PNM_OFFSET));
     for (; len >= 8; len -= 8) {
       uint8x8x3_t vout;
-      vout.val[0] = vmovn_u16(vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(R), voffset)),
-                                           vmovn_s32(vaddq_s32(vld1q_s32(R + 4), voffset))));
-      vout.val[1] = vmovn_u16(vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(G), voffset)),
-                                           vmovn_s32(vaddq_s32(vld1q_s32(G + 4), voffset))));
-      vout.val[2] = vmovn_u16(vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(B), voffset)),
-                                           vmovn_s32(vaddq_s32(vld1q_s32(B + 4), voffset))));
+      R0          = vld1q_s32(R);
+      R1          = vld1q_s32(R + 4);
+      G0          = vld1q_s32(G);
+      G1          = vld1q_s32(G + 4);
+      B0          = vld1q_s32(B);
+      B1          = vld1q_s32(B + 4);
+      vout.val[0] = vadd_u8(vmovn_u16(vcombine_u16(vmovn_s32(R0), vmovn_s32(R1))), voffset);
+      vout.val[1] = vadd_u8(vmovn_u16(vcombine_u16(vmovn_s32(G0), vmovn_s32(G1))), voffset);
+      vout.val[2] = vadd_u8(vmovn_u16(vcombine_u16(vmovn_s32(B0), vmovn_s32(B1))), voffset);
+
       vst3_u8(out, vout);
       R += 8;
       G += 8;
@@ -106,17 +111,22 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       printf("ERROR: write PPM with Over 16bpp is not supported\n");
       throw std::exception();
     }
+    uint16x8_t voffset = vdupq_n_u16(static_cast<uint16_t>(PNM_OFFSET));
     for (; len >= 8; len -= 8) {
       uint16x8x3_t vout;
-      vout.val[0] = vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(R), voffset)),
-                                 vmovn_s32(vaddq_s32(vld1q_s32(R + 4), voffset)));
-      vout.val[1] = vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(G), voffset)),
-                                 vmovn_s32(vaddq_s32(vld1q_s32(G + 4), voffset)));
-      vout.val[2] = vcombine_u16(vmovn_s32(vaddq_s32(vld1q_s32(B), voffset)),
-                                 vmovn_s32(vaddq_s32(vld1q_s32(B + 4), voffset)));
-      vout.val[0] = vrev16q_u8(vout.val[0]);
-      vout.val[1] = vrev16q_u8(vout.val[1]);
-      vout.val[2] = vrev16q_u8(vout.val[2]);
+      R0          = vld1q_s32(R);
+      R1          = vld1q_s32(R + 4);
+      G0          = vld1q_s32(G);
+      G1          = vld1q_s32(G + 4);
+      B0          = vld1q_s32(B);
+      B1          = vld1q_s32(B + 4);
+      vout.val[0] = vcombine_u16(vmovn_s32(R0), vmovn_s32(R1));
+      vout.val[1] = vcombine_u16(vmovn_s32(G0), vmovn_s32(G1));
+      vout.val[2] = vcombine_u16(vmovn_s32(B0), vmovn_s32(B1));
+
+      vout.val[0] = vrev16q_u8(vaddq_u16(vout.val[0], voffset));
+      vout.val[1] = vrev16q_u8(vaddq_u16(vout.val[1], voffset));
+      vout.val[2] = vrev16q_u8(vaddq_u16(vout.val[2], voffset));
       vst3q_u16((uint16_t *)out, vout);
       R += 8;
       G += 8;
