@@ -183,12 +183,10 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
 }
 
 openhtj2k_decoder_impl::~openhtj2k_decoder_impl() {
-#ifdef OPENHTJ2K_THREAD
-  auto pool = ThreadPool::get();
-  if (pool->num_threads() > 1) {
-    ThreadPool::release();
-  }
-#endif
+  //#ifdef OPENHTJ2K_THREAD
+  //  auto pool = ThreadPool::get();
+  //  pool->release();
+  //#endif
 }
 
 // public interface
