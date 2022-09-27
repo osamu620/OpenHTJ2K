@@ -530,5 +530,10 @@ void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
 }
 
 size_t openhtj2k_encoder::invoke() { return this->impl->invoke(); }
-openhtj2k_encoder::~openhtj2k_encoder() = default;
+
+openhtj2k_encoder::~openhtj2k_encoder() {
+#ifdef OPENHTJ2K_THREAD
+  ThreadPool::release();
+#endif
+}
 }  // namespace open_htj2k

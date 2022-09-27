@@ -44,7 +44,7 @@
 class ThreadPool {
  public:
   inline explicit ThreadPool(size_t thread_count) : stop(false), thread_count_(thread_count) {
-    if (thread_count == 1) return;
+    // if (thread_count == 1) return;
 
     threads = std::make_unique<std::thread[]>(thread_count_);
 
@@ -75,7 +75,6 @@ class ThreadPool {
     for (size_t i = 0; i < thread_count_; ++i) {
       threads[i].join();
     }
-    release();
   }
 
   int thread_number(std::thread::id id) {
