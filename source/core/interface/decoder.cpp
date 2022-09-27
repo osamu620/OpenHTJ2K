@@ -182,7 +182,11 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   }
 }
 
-openhtj2k_decoder_impl::~openhtj2k_decoder_impl() = default;
+openhtj2k_decoder_impl::~openhtj2k_decoder_impl() {
+#ifdef OPENHTJ2K_THREAD
+  ThreadPool::release();
+#endif
+}
 
 // public interface
 openhtj2k_decoder::openhtj2k_decoder(const char *fname, const uint8_t reduce_NL, uint32_t num_threads) {
