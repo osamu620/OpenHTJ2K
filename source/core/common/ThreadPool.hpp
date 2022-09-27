@@ -75,6 +75,7 @@ class ThreadPool {
     for (size_t i = 0; i < thread_count_; ++i) {
       threads[i].join();
     }
+    release();
   }
 
   int thread_number(std::thread::id id) {
