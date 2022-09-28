@@ -368,21 +368,24 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       int16_t *x1 = buf[n];
       int16_t *x2 = buf[n + 1];
       for (int32_t col = 0; col < simdlen; col += 16) {
-        vin00 = vld1q_s16(x0 + col);
-        vin01 = vld1q_s16(x0 + col + 8);
-        vout0 = vld1q_s16(x1 + col);
-        vout1 = vld1q_s16(x1 + col + 8);
-        vin10 = vld1q_s16(x2 + col);
-        vin11 = vld1q_s16(x2 + col + 8);
+        vin00 = vld1q_s16(x0);
+        vin01 = vld1q_s16(x0 + 8);
+        vout0 = vld1q_s16(x1);
+        vout1 = vld1q_s16(x1 + 8);
+        vin10 = vld1q_s16(x2);
+        vin11 = vld1q_s16(x2 + 8);
         vout0 -= vrshrq_n_s16(vhaddq_s16(vin00, vin10), 1);
         vout1 -= vrshrq_n_s16(vhaddq_s16(vin01, vin11), 1);
-        vst1q_s16(x1 + col, vout0);
-        vst1q_s16(x1 + col + 8, vout1);
+        vst1q_s16(x1, vout0);
+        vst1q_s16(x1 + 8, vout1);
+        x0 += 16;
+        x1 += 16;
+        x2 += 16;
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = x0[col];
-        sum += x2[col];
-        x1[col] -= static_cast<int16_t>((sum + 2) >> 2);
+        int32_t sum = *x0++;
+        sum += *x2++;
+        *x1++ -= static_cast<int16_t>((sum + 2) >> 2);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
@@ -390,21 +393,24 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       int16_t *x1 = buf[n + 1];
       int16_t *x2 = buf[n + 2];
       for (int32_t col = 0; col < simdlen; col += 16) {
-        vin00 = vld1q_s16(x0 + col);
-        vin01 = vld1q_s16(x0 + col + 8);
-        vout0 = vld1q_s16(x1 + col);
-        vout1 = vld1q_s16(x1 + col + 8);
-        vin10 = vld1q_s16(x2 + col);
-        vin11 = vld1q_s16(x2 + col + 8);
+        vin00 = vld1q_s16(x0);
+        vin01 = vld1q_s16(x0 + 8);
+        vout0 = vld1q_s16(x1);
+        vout1 = vld1q_s16(x1 + 8);
+        vin10 = vld1q_s16(x2);
+        vin11 = vld1q_s16(x2 + 8);
         vout0 += vhaddq_s16(vin00, vin10);
         vout1 += vhaddq_s16(vin01, vin11);
-        vst1q_s16(x1 + col, vout0);
-        vst1q_s16(x1 + col + 8, vout1);
+        vst1q_s16(x1, vout0);
+        vst1q_s16(x1 + 8, vout1);
+        x0 += 16;
+        x1 += 16;
+        x2 += 16;
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = x0[col];
-        sum += x2[col];
-        x1[col] += static_cast<int16_t>(sum >> 1);
+        int32_t sum = *x0++;
+        sum += *x2++;
+        *x1++ += static_cast<int16_t>(sum >> 1);
       }
     }
 
