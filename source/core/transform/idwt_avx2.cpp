@@ -377,18 +377,22 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
       int16_t *xp1 = buf[n];
       int16_t *xp2 = buf[n + 1];
       for (int32_t col = 0; col < simdlen; col += 16) {
-        __m256i x0   = _mm256_loadu_si256((__m256i *)(xp0 + col));
-        __m256i x2   = _mm256_loadu_si256((__m256i *)(xp2 + col));
-        __m256i x1   = _mm256_loadu_si256((__m256i *)(xp1 + col));
+        __m256i x0   = _mm256_loadu_si256((__m256i *)xp0);
+        __m256i x2   = _mm256_loadu_si256((__m256i *)xp2);
+        __m256i x1   = _mm256_loadu_si256((__m256i *)xp1);
         __m256i vout = _mm256_add_epi16(vone, _mm256_srai_epi16(_mm256_add_epi16(x0, x2), 1));
         vout         = _mm256_srai_epi16(vout, 1);
         x1           = _mm256_sub_epi16(x1, vout);
-        _mm256_storeu_si256((__m256i *)(xp1 + col), x1);
+        _mm256_storeu_si256((__m256i *)xp1, x1);
+        xp0 += 16;
+        xp1 += 16;
+        xp2 += 16;
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = xp0[col];
-        sum += xp2[col];
-        xp1[col] = static_cast<sprec_t>(xp1[col] - ((sum + 2) >> 2));
+        int32_t sum = *xp0++;
+        sum += *xp2++;
+        *xp1 = static_cast<sprec_t>(*xp1 - ((sum + 2) >> 2));
+        xp1++;
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
@@ -396,16 +400,20 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
       int16_t *xp1 = buf[n + 1];
       int16_t *xp2 = buf[n + 2];
       for (int32_t col = 0; col < simdlen; col += 16) {
-        __m256i x0 = _mm256_loadu_si256((__m256i *)(xp0 + col));
-        __m256i x2 = _mm256_loadu_si256((__m256i *)(xp2 + col));
-        __m256i x1 = _mm256_loadu_si256((__m256i *)(xp1 + col));
+        __m256i x0 = _mm256_loadu_si256((__m256i *)xp0);
+        __m256i x2 = _mm256_loadu_si256((__m256i *)xp2);
+        __m256i x1 = _mm256_loadu_si256((__m256i *)xp1);
         x1         = _mm256_add_epi16(x1, _mm256_srai_epi16(_mm256_add_epi16(x0, x2), 1));
-        _mm256_storeu_si256((__m256i *)(xp1 + col), x1);
+        _mm256_storeu_si256((__m256i *)xp1, x1);
+        xp0 += 16;
+        xp1 += 16;
+        xp2 += 16;
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = xp0[col];
-        sum += xp2[col];
-        xp1[col] = static_cast<sprec_t>(xp1[col] + (sum >> 1));
+        int32_t sum = *xp0++;
+        sum += *xp2++;
+        *xp1 = static_cast<sprec_t>(*xp1 + (sum >> 1));
+        xp1++;
       }
     }
 
