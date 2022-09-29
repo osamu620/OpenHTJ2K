@@ -601,8 +601,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         v1 = _mm256_loadu_si256((__m256i *)(val + 8));
         s0 = v0;  //_mm256_or_si256(_mm256_and_si256(v0, signmask), one);
         s1 = v1;  //_mm256_or_si256(_mm256_and_si256(v1, signmask), one);
-        v0 = _mm256_and_si256(v0, _mm256_set1_epi32(0x7FFFFFFF));
-        v1 = _mm256_and_si256(v1, _mm256_set1_epi32(0x7FFFFFFF));
+        v0 = _mm256_and_si256(v0, magmask);
+        v1 = _mm256_and_si256(v1, magmask);
         // upshift background region, if necessary
         vROImask = _mm256_and_si256(v0, vmask);
         vROImask = _mm256_cmpeq_epi32(vROImask, zero);
