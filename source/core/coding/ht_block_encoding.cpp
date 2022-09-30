@@ -57,9 +57,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp        = this->i_samples + i * stride;
-    int32_t *dp        = this->sample_buf.get() + i * blksampl_stride;
+    int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
-    uint8_t *dstblk    = block_states.get() + block_index;
+    uint8_t *dstblk    = block_states + block_index;
 
     int16_t len = static_cast<int16_t>(this->size.x);
     for (; len > 0; --len) {
@@ -303,10 +303,9 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                        uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
                        uint8_t *const rho_q) {
   // This function shall be called on the assumption that there are two quads
-  uint8_t *const ssp0 =
-      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const ssp0 = block->block_states + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
   uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp0        = block->sample_buf + 2U * (qx + qy * block->blksampl_stride);
   int32_t *sp1        = sp0 + block->blksampl_stride;
 
   sigma_n[0] = ssp0[0] & 1;
@@ -338,10 +337,9 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
 static inline void make_storage_one(const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
                                     uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
                                     uint8_t *const rho_q) {
-  uint8_t *const ssp0 =
-      block->block_states.get() + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
+  uint8_t *const ssp0 = block->block_states + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
   uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf.get() + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp0        = block->sample_buf + 2U * (qx + qy * block->blksampl_stride);
   int32_t *sp1        = sp0 + block->blksampl_stride;
 
   sigma_n[0] = ssp0[0] & 1;
