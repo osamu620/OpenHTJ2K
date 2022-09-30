@@ -158,7 +158,7 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
     for (int32_t i = 1; i <= top; ++i) {
       buf[top - i] =
           static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride],
+      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
     }
@@ -168,7 +168,7 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
     for (int32_t i = 1; i <= bottom; i++) {
       buf[top + (v1 - v0) + i - 1] =
           static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top + (v1 - v0) + i - 1], &in[(PSEo(v1 - v0 + i - 1 + v0, v0, v1) - v0) * stride],
+      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
     const int32_t start  = ceil_int(v0, 2);
@@ -235,7 +235,7 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
     for (int32_t i = 1; i <= top; ++i) {
       buf[top - i] =
           static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top - i], &in[(PSEo(v0 - i, v0, v1) - v0) * stride],
+      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
     }
@@ -245,7 +245,7 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
     for (int32_t i = 1; i <= bottom; i++) {
       buf[top + (v1 - v0) + i - 1] =
           static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top + (v1 - v0) + i - 1], &in[(PSEo(v1 - v0 + i - 1 + v0, v0, v1) - v0) * stride],
+      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
     const int32_t start  = ceil_int(v0, 2);

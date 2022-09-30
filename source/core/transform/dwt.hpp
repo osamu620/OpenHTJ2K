@@ -72,17 +72,17 @@ static inline int32_t PSEo(const int32_t i, const int32_t i0, const int32_t i1) 
   const int32_t tmp1    = ((i - i0) < 0) ? i0 - i : i - i0;
   const int32_t mod_val = tmp1 % tmp0;
   const int32_t min_val = mod_val < tmp0 - mod_val ? mod_val : tmp0 - mod_val;
-  return i0 + min_val;
+  return min_val;
 }
 template <class T>
 static inline void dwt_1d_extr_fixed(T *extbuf, T *buf, const int32_t left, const int32_t right,
                                      const int32_t i0, const int32_t i1) {
   memcpy(extbuf + left, buf, sizeof(T) * static_cast<size_t>((i1 - i0)));
   for (int32_t i = 1; i <= left; ++i) {
-    extbuf[left - i] = buf[PSEo(i0 - i, i0, i1) - i0];
+    extbuf[left - i] = buf[PSEo(i0 - i, i0, i1)];
   }
   for (int32_t i = 1; i <= right; ++i) {
-    extbuf[left + (i1 - i0) + i - 1] = buf[PSEo(i1 - i0 + i - 1 + i0, i0, i1) - i0];
+    extbuf[left + (i1 - i0) + i - 1] = buf[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
   }
 }
 
