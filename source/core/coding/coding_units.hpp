@@ -484,7 +484,7 @@ class j2k_tile : public j2k_tile_base {
   // inverse color transform
   void ycbcr_to_rgb();
   // inverse DC offset and clipping
-  void finalize(j2k_main_header &main_header);
+  void finalize(j2k_main_header &main_header, uint8_t reduce_NL, std::vector<int32_t *> &dst);
 
   // Encoding
   // Initialization with tile-index
