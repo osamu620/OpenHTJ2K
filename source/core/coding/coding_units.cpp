@@ -2622,32 +2622,27 @@ void j2k_tile::ycbcr_to_rgb() {
 }
 
 void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int32_t *> &dst) {
-  //#pragma omp parallel for
   for (uint16_t c = 0; c < this->num_components; ++c) {
-    int32_t *sp             = tcomp[c].get_sample_address(0, 0);
     const int32_t DC_OFFSET = (hdr.SIZ->is_signed(c)) ? 0 : 1 << (tcomp[c].bitdepth - 1);
     const int32_t MAXVAL =
         (hdr.SIZ->is_signed(c)) ? (1 << (tcomp[c].bitdepth - 1)) - 1 : (1 << tcomp[c].bitdepth) - 1;
-    const int32_t MINVAL  = (hdr.SIZ->is_signed(c)) ? -(1 << (tcomp[c].bitdepth - 1)) : 0;
-    const element_siz tc0 = this->tcomp[c].get_pos0();
-    const element_siz tc1 = this->tcomp[c].get_pos1();
+    const int32_t MINVAL = (hdr.SIZ->is_signed(c)) ? -(1 << (tcomp[c].bitdepth - 1)) : 0;
 
-    element_siz siz, Osiz, Rsiz, cpos, csize;
+    element_siz siz, Osiz, Rsiz, csize;
     hdr.SIZ->get_image_size(siz);
     hdr.SIZ->get_image_origin(Osiz);
     hdr.SIZ->get_subsampling_factor(Rsiz, c);
     const uint32_t x0     = ceil_int(Osiz.x, Rsiz.x);
     const uint32_t y0     = ceil_int(Osiz.y, Rsiz.y);
     const uint32_t x1     = ceil_int(siz.x, Rsiz.x);
-    const uint32_t owidth = ceil_int(x1 - x0, (1U << reduce_NL));
-    //    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
-    cpos = tcomp[c].get_pos0();
+    const element_siz tc0 = tcomp[c].get_pos0();
     tcomp[c].get_size(csize);
-    uint32_t cwidth       = csize.x;
-    const uint32_t stride = cwidth;  //(tc1.x - tc0.x);
-    uint32_t cheight      = csize.y;
-    uint32_t x_offset     = cpos.x - ceil_int(x0, (1U << reduce_NL));
-    uint32_t y_offset     = cpos.y - ceil_int(y0, (1U << reduce_NL));
+    const uint32_t in_stride = csize.x;
+    const uint32_t in_height = csize.y;
+    const uint32_t x_offset  = tc0.x - ceil_int(x0, (1U << reduce_NL));
+    const uint32_t y_offset  = tc0.y - ceil_int(y0, (1U << reduce_NL));
+
+    const uint32_t out_stride = ceil_int(x1 - x0, (1U << reduce_NL));
 
     // downshift value for lossy path
     int16_t downshift = (tcomp[c].transformation) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
@@ -2656,8 +2651,11 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     }
     // tentative workaround for negative downshift value
     // TODO: fix this
-    int16_t offset = (downshift < 0) ? static_cast<int16_t>((1 << -downshift) >> 1)
-                                     : static_cast<int16_t>((1 << downshift) >> 1);
+    int16_t offset      = (downshift < 0) ? static_cast<int16_t>((1 << -downshift) >> 1)
+                                          : static_cast<int16_t>((1 << downshift) >> 1);
+    int32_t *const src  = tcomp[c].get_sample_address(0, 0);
+    int32_t *const cdst = dst[c];
+    int32_t *sp, *dp;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     int32x4_t v0, v1, o, dco, vmax, vmin, vshift;
     o      = vdupq_n_s32(offset);
@@ -2666,10 +2664,10 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     vmin   = vdupq_n_s32(MINVAL);
     vshift = vdupq_n_s32(-downshift);
     if (downshift < 0) {
-      for (uint32_t y = 0; y < cheight; ++y) {
-        uint32_t len = stride;
-        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
-        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+      for (uint32_t y = 0; y < in_height; ++y) {
+        uint32_t len = in_stride;
+        sp           = src + y * in_stride;
+        dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
           v0 = vld1q_s32(sp);
           v1 = vld1q_s32(sp + 4);
@@ -2697,10 +2695,10 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         }
       }
     } else {
-      for (uint32_t y = 0; y < cheight; ++y) {
-        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
-        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
-        uint32_t len = stride;
+      for (uint32_t y = 0; y < in_height; ++y) {
+        uint32_t len = in_stride;
+        sp           = src + y * in_stride;
+        dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
           v0 = vld1q_s32(sp);
           v1 = vld1q_s32(sp + 4);
@@ -2730,21 +2728,15 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     if (downshift < 0) {
-      // for (uint32_t n = 0; n < num_tc_samples; ++n) {
-      //   sp[n] = (sp[n] + offset) << -downshift;
-      //   sp[n] += DC_OFFSET;
-      //   sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-      //   sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
-      // }
       __m256i v, o, dco, vmax, vmin;
       o    = _mm256_set1_epi32(offset);
       dco  = _mm256_set1_epi32(DC_OFFSET);
       vmax = _mm256_set1_epi32(MAXVAL);
       vmin = _mm256_set1_epi32(MINVAL);
-      for (uint32_t y = 0; y < cheight; ++y) {
-        uint32_t len = stride;
-        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
-        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+      for (uint32_t y = 0; y < in_height; ++y) {
+        uint32_t len = in_stride;
+        sp           = src + y * in_stride;
+        dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
           v = _mm256_load_si256((__m256i *)sp);
           v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
@@ -2771,10 +2763,10 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
       dco  = _mm256_set1_epi32(DC_OFFSET);
       vmax = _mm256_set1_epi32(MAXVAL);
       vmin = _mm256_set1_epi32(MINVAL);
-      for (uint32_t y = 0; y < cheight; ++y) {
-        uint32_t len = stride;
-        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
-        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+      for (uint32_t y = 0; y < in_height; ++y) {
+        uint32_t len = in_stride;
+        sp           = src + y * in_stride;
+        dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
           v = _mm256_load_si256((__m256i *)sp);
           v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
@@ -2798,10 +2790,10 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     }
 #else
       if (downshift < 0) {
-        for (uint32_t y = 0; y < cheight; ++y) {
-          uint32_t len = stride;
-          sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
-          int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+        for (uint32_t y = 0; y < in_height; ++y) {
+          uint32_t len = in_stride;
+          sp           = src + y * in_stride;
+          dp           = cdst + x_offset + (y + y_offset) * out_stride;
           for (uint32_t n = 0; n < len; ++n) {
             sp[n] = (sp[n] + offset) << -downshift;
             sp[n] += DC_OFFSET;
@@ -2811,10 +2803,10 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           }
         }
       } else {
-        for (uint32_t y = 0; y < cheight; ++y) {
-          uint32_t len = stride;
-          sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
-          int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+        for (uint32_t y = 0; y < in_height; ++y) {
+          uint32_t len = in_stride;
+          sp           = src + y * in_stride;
+          dp           = cdst + x_offset + (y + y_offset) * out_stride;
           for (uint32_t n = 0; n < len; ++n) {
             sp[n] = (sp[n] + offset) >> downshift;
             sp[n] += DC_OFFSET;
