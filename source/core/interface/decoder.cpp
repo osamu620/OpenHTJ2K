@@ -161,24 +161,24 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     tileSet[i].create_tile_buf(main_header);
     tileSet[i].decode();
     tileSet[i].ycbcr_to_rgb();
-    tileSet[i].finalize(main_header);
-    // Copy reconstructed image to output buffer
-    for (uint16_t c = 0; c < num_components; c++) {
-      int32_t *dp               = buf[c];
-      j2k_tile_component *tcomp = tileSet[i].get_tile_component(c);
-      int32_t *sp               = tcomp->get_sample_address(0, 0);
-      element_siz cpos          = tcomp->get_pos0();
-      element_siz csize;
-      tcomp->get_size(csize);
-      uint32_t cwidth   = csize.x;
-      uint32_t cheight  = csize.y;
-      uint32_t x_offset = cpos.x - ceil_int(x0[c], (1U << reduce_NL));
-      uint32_t y_offset = cpos.y - ceil_int(y0[c], (1U << reduce_NL));
-      for (uint32_t y = y_offset; y < cheight + y_offset; y++) {
-        memcpy(dp + x_offset + y * width[c], sp, sizeof(int32_t) * cwidth);
-        sp += cwidth;
-      }
-    }
+    tileSet[i].finalize(main_header, reduce_NL, buf);
+    //    // Copy reconstructed image to output buffer
+    //    for (uint16_t c = 0; c < num_components; c++) {
+    //      int32_t *dp               = buf[c];
+    //      j2k_tile_component *tcomp = tileSet[i].get_tile_component(c);
+    //      int32_t *sp               = tcomp->get_sample_address(0, 0);
+    //      element_siz cpos          = tcomp->get_pos0();
+    //      element_siz csize;
+    //      tcomp->get_size(csize);
+    //      uint32_t cwidth   = csize.x;
+    //      uint32_t cheight  = csize.y;
+    //      uint32_t x_offset = cpos.x - ceil_int(x0[c], (1U << reduce_NL));
+    //      uint32_t y_offset = cpos.y - ceil_int(y0[c], (1U << reduce_NL));
+    //      for (uint32_t y = 0; y < cheight; y++) {
+    //        memcpy(dp + x_offset + (y + y_offset) * width[c], sp, sizeof(int32_t) * cwidth);
+    //        sp += cwidth;
+    //      }
+    //  }
   }
 }
 

@@ -2621,17 +2621,33 @@ void j2k_tile::ycbcr_to_rgb() {
   }
 }
 
-void j2k_tile::finalize(j2k_main_header &hdr) {
+void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int32_t *> &dst) {
   //#pragma omp parallel for
   for (uint16_t c = 0; c < this->num_components; ++c) {
     int32_t *sp             = tcomp[c].get_sample_address(0, 0);
     const int32_t DC_OFFSET = (hdr.SIZ->is_signed(c)) ? 0 : 1 << (tcomp[c].bitdepth - 1);
     const int32_t MAXVAL =
         (hdr.SIZ->is_signed(c)) ? (1 << (tcomp[c].bitdepth - 1)) - 1 : (1 << tcomp[c].bitdepth) - 1;
-    const int32_t MINVAL    = (hdr.SIZ->is_signed(c)) ? -(1 << (tcomp[c].bitdepth - 1)) : 0;
-    const element_siz tc0   = this->tcomp[c].get_pos0();
-    const element_siz tc1   = this->tcomp[c].get_pos1();
-    uint32_t num_tc_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
+    const int32_t MINVAL  = (hdr.SIZ->is_signed(c)) ? -(1 << (tcomp[c].bitdepth - 1)) : 0;
+    const element_siz tc0 = this->tcomp[c].get_pos0();
+    const element_siz tc1 = this->tcomp[c].get_pos1();
+
+    element_siz siz, Osiz, Rsiz, cpos, csize;
+    hdr.SIZ->get_image_size(siz);
+    hdr.SIZ->get_image_origin(Osiz);
+    hdr.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0     = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t y0     = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t x1     = ceil_int(siz.x, Rsiz.x);
+    const uint32_t owidth = ceil_int(x1 - x0, (1U << reduce_NL));
+    //    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    cpos = tcomp[c].get_pos0();
+    tcomp[c].get_size(csize);
+    uint32_t cwidth       = csize.x;
+    const uint32_t stride = cwidth;  //(tc1.x - tc0.x);
+    uint32_t cheight      = csize.y;
+    uint32_t x_offset     = cpos.x - ceil_int(x0, (1U << reduce_NL));
+    uint32_t y_offset     = cpos.y - ceil_int(y0, (1U << reduce_NL));
 
     // downshift value for lossy path
     int16_t downshift = (tcomp[c].transformation) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
@@ -2650,50 +2666,66 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
     vmin   = vdupq_n_s32(MINVAL);
     vshift = vdupq_n_s32(-downshift);
     if (downshift < 0) {
-      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-        v0 = vld1q_s32(sp);
-        v1 = vld1q_s32(sp + 4);
-        v0 = vshlq_s32(vaddq_s32(v0, o), -vshift);
-        v1 = vshlq_s32(vaddq_s32(v1, o), -vshift);
-        v0 = vaddq_s32(v0, dco);
-        v1 = vaddq_s32(v1, dco);
-        v0 = vminq_s32(v0, vmax);
-        v1 = vminq_s32(v1, vmax);
-        v0 = vmaxq_s32(v0, vmin);
-        v1 = vmaxq_s32(v1, vmin);
-        vst1q_s32(sp, v0);
-        vst1q_s32(sp + 4, v1);
-        sp += 8;
-      }
-      for (; num_tc_samples > 0; --num_tc_samples) {
-        sp[0] = (sp[0] + offset) << -downshift;
-        sp[0] += DC_OFFSET;
-        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-        sp++;
+      for (uint32_t y = 0; y < cheight; ++y) {
+        uint32_t len = stride;
+        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
+        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+        for (; len >= 8; len -= 8) {
+          v0 = vld1q_s32(sp);
+          v1 = vld1q_s32(sp + 4);
+          v0 = vshlq_s32(vaddq_s32(v0, o), -vshift);
+          v1 = vshlq_s32(vaddq_s32(v1, o), -vshift);
+          v0 = vaddq_s32(v0, dco);
+          v1 = vaddq_s32(v1, dco);
+          v0 = vminq_s32(v0, vmax);
+          v1 = vminq_s32(v1, vmax);
+          v0 = vmaxq_s32(v0, vmin);
+          v1 = vmaxq_s32(v1, vmin);
+          vst1q_s32(dp, v0);
+          vst1q_s32(dp + 4, v1);
+          sp += 8;
+          dp += 8;
+        }
+        for (; len > 0; --len) {
+          sp[0] = (sp[0] + offset) << -downshift;
+          sp[0] += DC_OFFSET;
+          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+          dp[0] = sp[0];
+          sp++;
+          dp++;
+        }
       }
     } else {
-      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-        v0 = vld1q_s32(sp);
-        v1 = vld1q_s32(sp + 4);
-        v0 = vshlq_s32(vaddq_s32(v0, o), vshift);
-        v1 = vshlq_s32(vaddq_s32(v1, o), vshift);
-        v0 = vaddq_s32(v0, dco);
-        v1 = vaddq_s32(v1, dco);
-        v0 = vminq_s32(v0, vmax);
-        v1 = vminq_s32(v1, vmax);
-        v0 = vmaxq_s32(v0, vmin);
-        v1 = vmaxq_s32(v1, vmin);
-        vst1q_s32(sp, v0);
-        vst1q_s32(sp + 4, v1);
-        sp += 8;
-      }
-      for (; num_tc_samples > 0; --num_tc_samples) {
-        sp[0] = (sp[0] + offset) >> downshift;
-        sp[0] += DC_OFFSET;
-        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-        sp++;
+      for (uint32_t y = 0; y < cheight; ++y) {
+        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
+        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+        uint32_t len = stride;
+        for (; len >= 8; len -= 8) {
+          v0 = vld1q_s32(sp);
+          v1 = vld1q_s32(sp + 4);
+          v0 = vshlq_s32(vaddq_s32(v0, o), vshift);
+          v1 = vshlq_s32(vaddq_s32(v1, o), vshift);
+          v0 = vaddq_s32(v0, dco);
+          v1 = vaddq_s32(v1, dco);
+          v0 = vminq_s32(v0, vmax);
+          v1 = vminq_s32(v1, vmax);
+          v0 = vmaxq_s32(v0, vmin);
+          v1 = vmaxq_s32(v1, vmin);
+          vst1q_s32(dp, v0);
+          vst1q_s32(dp + 4, v1);
+          sp += 8;
+          dp += 8;
+        }
+        for (; len > 0; --len) {
+          sp[0] = (sp[0] + offset) >> downshift;
+          sp[0] += DC_OFFSET;
+          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+          dp[0] = sp[0];
+          sp++;
+          dp++;
+        }
       }
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
@@ -2709,21 +2741,29 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
       dco  = _mm256_set1_epi32(DC_OFFSET);
       vmax = _mm256_set1_epi32(MAXVAL);
       vmin = _mm256_set1_epi32(MINVAL);
-      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-        v = _mm256_load_si256((__m256i *)sp);
-        v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
-        v = _mm256_add_epi32(v, dco);
-        v = _mm256_min_epi32(v, vmax);
-        v = _mm256_max_epi32(v, vmin);
-        _mm256_store_si256((__m256i *)sp, v);
-        sp += 8;
-      }
-      for (; num_tc_samples > 0; --num_tc_samples) {
-        sp[0] = (sp[0] + offset) << -downshift;
-        sp[0] += DC_OFFSET;
-        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-        sp++;
+      for (uint32_t y = 0; y < cheight; ++y) {
+        uint32_t len = stride;
+        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
+        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+        for (; len >= 8; len -= 8) {
+          v = _mm256_load_si256((__m256i *)sp);
+          v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
+          v = _mm256_add_epi32(v, dco);
+          v = _mm256_min_epi32(v, vmax);
+          v = _mm256_max_epi32(v, vmin);
+          _mm256_store_si256((__m256i *)dp, v);
+          sp += 8;
+          dp += 8;
+        }
+        for (; len > 0; --len) {
+          sp[0] = (sp[0] + offset) << -downshift;
+          sp[0] += DC_OFFSET;
+          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+          dp[0] = sp[0];
+          sp++;
+          dp++;
+        }
       }
     } else {
       __m256i v, o, dco, vmax, vmin;
@@ -2731,37 +2771,57 @@ void j2k_tile::finalize(j2k_main_header &hdr) {
       dco  = _mm256_set1_epi32(DC_OFFSET);
       vmax = _mm256_set1_epi32(MAXVAL);
       vmin = _mm256_set1_epi32(MINVAL);
-      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-        v = _mm256_load_si256((__m256i *)sp);
-        v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
-        v = _mm256_add_epi32(v, dco);
-        v = _mm256_min_epi32(v, vmax);
-        v = _mm256_max_epi32(v, vmin);
-        _mm256_store_si256((__m256i *)sp, v);
-        sp += 8;
-      }
-      for (; num_tc_samples > 0; --num_tc_samples) {
-        sp[0] = (sp[0] + offset) >> downshift;
-        sp[0] += DC_OFFSET;
-        sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-        sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-        sp++;
+      for (uint32_t y = 0; y < cheight; ++y) {
+        uint32_t len = stride;
+        sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
+        int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+        for (; len >= 8; len -= 8) {
+          v = _mm256_load_si256((__m256i *)sp);
+          v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
+          v = _mm256_add_epi32(v, dco);
+          v = _mm256_min_epi32(v, vmax);
+          v = _mm256_max_epi32(v, vmin);
+          _mm256_store_si256((__m256i *)dp, v);
+          sp += 8;
+          dp += 8;
+        }
+        for (; len > 0; --len) {
+          sp[0] = (sp[0] + offset) >> downshift;
+          sp[0] += DC_OFFSET;
+          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
+          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
+          dp[0] = sp[0];
+          sp++;
+          dp++;
+        }
       }
     }
 #else
       if (downshift < 0) {
-        for (uint32_t n = 0; n < num_tc_samples; ++n) {
-          sp[n] = (sp[n] + offset) << -downshift;
-          sp[n] += DC_OFFSET;
-          sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-          sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+        for (uint32_t y = 0; y < cheight; ++y) {
+          uint32_t len = stride;
+          sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
+          int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+          for (uint32_t n = 0; n < len; ++n) {
+            sp[n] = (sp[n] + offset) << -downshift;
+            sp[n] += DC_OFFSET;
+            sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
+            sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+            dp[n] = sp[n];
+          }
         }
       } else {
-        for (uint32_t n = 0; n < num_tc_samples; ++n) {
-          sp[n] = (sp[n] + offset) >> downshift;
-          sp[n] += DC_OFFSET;
-          sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-          sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+        for (uint32_t y = 0; y < cheight; ++y) {
+          uint32_t len = stride;
+          sp           = tcomp[c].get_sample_address(0, 0) + y * stride;
+          int32_t *dp  = dst[c] + x_offset + (y + y_offset) * owidth;
+          for (uint32_t n = 0; n < len; ++n) {
+            sp[n] = (sp[n] + offset) >> downshift;
+            sp[n] += DC_OFFSET;
+            sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
+            sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
+            dp[n] = sp[n];
+          }
         }
       }
 #endif
