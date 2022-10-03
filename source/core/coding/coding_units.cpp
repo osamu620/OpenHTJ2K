@@ -2751,7 +2751,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
           v = _mm256_max_epi32(v, vmin);
-          _mm256_store_si256((__m256i *)dp, v);
+          _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
         }
@@ -2781,7 +2781,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
           v = _mm256_max_epi32(v, vmin);
-          _mm256_store_si256((__m256i *)dp, v);
+          _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
         }
