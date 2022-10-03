@@ -207,7 +207,7 @@ class MEL_dec {
   inline void decode() {
     constexpr int32_t MEL_E[13] = {0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5};
     if (bits < 6) {  // if there are less than 6 bits in tmp then read from the MEL bitstream 6 bits that is
-                     // the largest decodable MEL codeword.
+      // the largest decodable MEL codeword.
       read();
     }
     // repeat so long that there is enough decodable bits in tmp, and the runs store is not full
@@ -547,25 +547,28 @@ class fwd_buf {
     else
       assert(0);
 
-    uint8x16_t ff_bytes;
-    ff_bytes       = vceqq_s8(val, all_xff);
-    ff_bytes       = vandq_u8(ff_bytes, validity);
-    uint32_t flags = (uint32_t)aarch64_movemask_epi8(ff_bytes);
+    uint16x8_t ff_bytes = vceqq_u8(val, all_xff);
 
-    flags <<= 1;  // unstuff following byte
-    uint32_t next_unstuff = flags >> 16;
-    flags |= this->unstuff;
-    flags &= 0xFFFF;
-    while (flags) {  // bit unstuffing occurs on average once every 256 bytes
+    // movemask: SEE BELOW
+    // https://community.arm.com/arm-community-blogs/b/infrastructure-solutions-blog/posts/porting-x86-vector-bitmask-optimizations-to-arm-neon
+    uint64_t flags_arm =
+        vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(ff_bytes), 4)), 0);  // movemask
+    uint32_t next_unstuff_arm = flags_arm >> 63;
+    flags_arm <<= 4;  // unstuff following byte
+    flags_arm |= this->unstuff << 3;
+    flags_arm |= this->unstuff << 2;
+    flags_arm |= this->unstuff << 1;
+    flags_arm |= this->unstuff;
+
+    while (flags_arm) {  // bit unstuffing occurs on average once every 256 bytes
       // therefore it is not an issue if it is a bit slow
       // here we process 16 bytes
       --bits_local;  // consuming one stuffing bit
 
-      uint32_t loc = static_cast<uint32_t>(31 - __builtin_clz(flags));
-      flags ^= 1 << loc;
-
+      uint64_t loc_arm = static_cast<uint64_t>(15 - (__builtin_clzll(flags_arm) >> 2));
+      flags_arm ^= (uint64_t)0xF << (loc_arm << 2);
       uint8x16_t m, t, c;
-      t = vdupq_n_s8((char)loc);
+      t = vdupq_n_s8((char)loc_arm);
       m = vcgtq_s8(offset, t);
 
       t = vandq_u8(m, val);           // keep bits_local at locations larger than loc
@@ -599,7 +602,7 @@ class fwd_buf {
     this->tmp[cur_bytes] = (uint8_t)upper;  // copy byte
 
     this->bits += (uint32_t)bits_local;
-    this->unstuff = next_unstuff;  // next unstuff
+    this->unstuff = next_unstuff_arm;  // next unstuff
     assert(this->unstuff == 0 || this->unstuff == 1);
   }
 
