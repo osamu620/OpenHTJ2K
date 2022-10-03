@@ -27,7 +27,11 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  #include <x86intrin.h>
+  #if defined(_MSC_VER)
+    #include <intrin.h>
+  #else
+    #include <x86intrin.h>
+  #endif
   #include "color.hpp"
 
 // lossless: forward RCT
