@@ -105,10 +105,10 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
 
 // lossless: inverse RCT
 void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
+  __m256i mCb = *((__m256i *)sp1);
+  __m256i mCr = *((__m256i *)sp2);
+  __m256i mY  = *((__m256i *)sp0);
   for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-    __m256i mCb       = *((__m256i *)sp1);
-    __m256i mCr       = *((__m256i *)sp2);
-    __m256i mY        = *((__m256i *)sp0);
     __m256i tmp       = _mm256_add_epi32(mCb, mCr);
     tmp               = _mm256_srai_epi32(tmp, 2);  //(Cb + Cr) >> 2
     __m256i mG        = _mm256_sub_epi32(mY, tmp);
@@ -118,6 +118,9 @@ void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
     sp0 += 8;
     sp1 += 8;
     sp2 += 8;
+    mCb = *((__m256i *)sp1);
+    mCr = *((__m256i *)sp2);
+    mY  = *((__m256i *)sp0);
   }
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
