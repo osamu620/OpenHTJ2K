@@ -297,13 +297,14 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
       sprec_t *dp = buf + (2 * v + voffset[0]) * stride;
       size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
+      vfirst0     = vld1q_s16(first);
+      //      vfirst1      = vld1q_s16(first + 8);
+      vsecond0 = vld1q_s16(second);
+      //      vsecond1     = vld1q_s16(second + 8);
       for (; len >= 16; len -= 16) {
-        //        __builtin_prefetch(first, 0);
-        //        __builtin_prefetch(second, 0);
-        //        __builtin_prefetch(dp, 1);
-        vfirst0      = vld1q_s16(first);
-        vfirst1      = vld1q_s16(first + 8);
-        vsecond0     = vld1q_s16(second);
+        //        vfirst0      = vld1q_s16(first);
+        vfirst1 = vld1q_s16(first + 8);
+        //        vsecond0     = vld1q_s16(second);
         vsecond1     = vld1q_s16(second + 8);
         vdst0.val[0] = vfirst0;
         vdst0.val[1] = vsecond0;
@@ -314,6 +315,10 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
         first += 16;
         second += 16;
         dp += 32;
+        vfirst0 = vld1q_s16(first);
+        //        vfirst1      = vld1q_s16(first + 8);
+        vsecond0 = vld1q_s16(second);
+        //        vsecond1     = vld1q_s16(second + 8);
       }
       for (; len > 0; --len) {
         *dp++ = *first++;
@@ -343,13 +348,14 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
       sprec_t *dp = buf + (2 * v + voffset[2]) * stride;
       size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
+      vfirst0     = vld1q_s16(first);
+      //      vfirst1      = vld1q_s16(first + 8);
+      vsecond0 = vld1q_s16(second);
+      //      vsecond1     = vld1q_s16(second + 8);
       for (; len >= 16; len -= 16) {
-        //        __builtin_prefetch(first, 0);
-        //        __builtin_prefetch(second, 0);
-        //        __builtin_prefetch(dp, 1);
-        vfirst0      = vld1q_s16(first);
-        vfirst1      = vld1q_s16(first + 8);
-        vsecond0     = vld1q_s16(second);
+        //        vfirst0      = vld1q_s16(first);
+        vfirst1 = vld1q_s16(first + 8);
+        //        vsecond0     = vld1q_s16(second);
         vsecond1     = vld1q_s16(second + 8);
         vdst0.val[0] = vfirst0;
         vdst0.val[1] = vsecond0;
@@ -360,6 +366,10 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
         first += 16;
         second += 16;
         dp += 32;
+        vfirst0 = vld1q_s16(first);
+        //        vfirst1      = vld1q_s16(first + 8);
+        vsecond0 = vld1q_s16(second);
+        //        vsecond1     = vld1q_s16(second + 8);
       }
       for (; len > 0; --len) {
         *dp++ = *first++;
@@ -497,14 +507,16 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     int16x8_t vshift = vdupq_n_s16(normalizing_upshift);
     int16x8_t in0, in1;
+    in0 = vld1q_s16(src);
+    in1 = vld1q_s16(src + 8);
     for (; len >= 16; len -= 16) {
-      in0 = vld1q_s16(src);
-      in1 = vld1q_s16(src + 8);
       in0 = vshlq_s16(in0, vshift);
       in1 = vshlq_s16(in1, vshift);
       vst1q_s16(src, in0);
       vst1q_s16(src + 8, in1);
       src += 16;
+      in0 = vld1q_s16(src);
+      in1 = vld1q_s16(src + 8);
     }
     for (; len > 0; --len) {
       *src = static_cast<sprec_t>(*src << normalizing_upshift);

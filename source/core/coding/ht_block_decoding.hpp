@@ -565,10 +565,10 @@ class fwd_buf {
       // here we process 16 bytes
       --bits_local;  // consuming one stuffing bit
 
-      uint64_t loc_arm = static_cast<uint64_t>(15 - (__builtin_clzll(flags_arm) >> 2));
+      int32_t loc_arm = static_cast<int32_t>(15 - (__builtin_clzll(flags_arm) >> 2));
       flags_arm ^= (uint64_t)0xF << (loc_arm << 2);
       uint8x16_t m, t, c;
-      t = vdupq_n_s8((char)loc_arm);
+      t = vdupq_n_s8(static_cast<int8_t>(loc_arm));
       m = vcgtq_s8(offset, t);
 
       t = vandq_u8(m, val);           // keep bits_local at locations larger than loc
@@ -654,8 +654,25 @@ class fwd_buf {
         read();
     }
     auto t = vld1q_u8(this->tmp);
-    advance(vaddvq_u32(m));
-    __uint128_t v128i = (__uint128_t)t;
+    //    int32x4_t msvec, c, v;
+    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 0);
+    //    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 0)));
+    //    v     = aarch64_srli_si128(t, 8);
+    //    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 0)));
+    //    t     = vorrq_u8(c, v);
+    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 1);
+    //    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 1)));
+    //    v     = aarch64_srli_si128(t, 8);
+    //    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 1)));
+    //    t     = vorrq_u8(c, v);
+    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 2);
+    //    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 2)));
+    //    v     = aarch64_srli_si128(t, 8);
+    //    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 2)));
+    //    t     = vorrq_u8(c, v);
+    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 3);
+    //    advance(vaddvq_u32(m));
+    //    return msvec;
 
     //    uint32_t vtmp[4];
     //    vtmp[0] = v128i & 0xFFFFFFFFU;
@@ -667,6 +684,7 @@ class fwd_buf {
     //    vtmp[3] = v128i & 0xFFFFFFFFU;
     //    return vld1q_u32(vtmp);
 
+    __uint128_t v128i = (__uint128_t)t;
     int32x4_t vtmp;
     vtmp[0] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
     v128i >>= m[0];
@@ -675,7 +693,7 @@ class fwd_buf {
     vtmp[2] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
     v128i >>= m[2];
     vtmp[3] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
-
+    advance(vaddvq_u32(m));
     return vtmp;
   }
 };
