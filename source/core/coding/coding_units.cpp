@@ -2336,7 +2336,8 @@ void j2k_tile::decode() {
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
     const uint8_t NL       = this->tcomp[c].get_dwt_levels();
-    // const uint8_t transformation = this->tcomp[c].get_transformation();
+
+    uint32_t max_cblks = 0;
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
@@ -2347,13 +2348,24 @@ void j2k_tile::decode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        // auto gbuf     = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(total_cblks * 4096));
-        // int32_t *pbuf = gbuf.get();
-        int32_t *gbuf  = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
-        int32_t *pbuf  = gbuf;
-        uint8_t *sgbuf = static_cast<uint8_t *>(
-            malloc(sizeof(uint8_t) * total_cblks * 6156));  // 6156 = (1024+2) * (4 +2), worst case
-        uint8_t *spbuf = sgbuf;
+        max_cblks = (max_cblks < total_cblks) ? total_cblks : max_cblks;
+      }
+    }
+
+    // allocate memory for buffer in a codeblock
+    int32_t *buf_for_samples = static_cast<int32_t *>(malloc(sizeof(int32_t) * max_cblks * 4096));
+    uint8_t *buf_for_states  = static_cast<uint8_t *>(
+        malloc(sizeof(uint8_t) * max_cblks * 6156));  // 6156 = (1024+2) * (4 +2), worst case
+
+    for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
+      j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
+      const uint32_t num_precincts = cr->npw * cr->nph;
+      for (uint32_t p = 0; p < num_precincts; p++) {
+        j2k_precinct *cp = cr->access_precinct(p);
+
+        int32_t *pbuf  = buf_for_samples;
+        uint8_t *spbuf = buf_for_states;
+
 #ifdef OPENHTJ2K_THREAD
         // auto pool = ThreadPool::get();
         std::vector<std::future<int>> results;
@@ -2406,10 +2418,10 @@ void j2k_tile::decode() {
           result.get();
         }
 #endif
-        free(gbuf);
-        free(sgbuf);
       }  // end of precinct loop
     }
+    std::free(buf_for_states);
+    std::free(buf_for_samples);
   }
 
   for (uint16_t c = 0; c < num_components; c++) {
@@ -2505,13 +2517,15 @@ void j2k_tile::decode() {
 
     // AVX2 aligned version
     const __m256i zero = _mm256_setzero_si256();
+    __m256i v, s, lo, hi;
+    v = *(__m256i *)(sp);
     for (size_t i = 0; i < round_down(num_samples, 16); i += 16) {
-      __m256i v                = *(__m256i *)(sp + i);
-      __m256i s                = _mm256_cmpgt_epi16(zero, v);  // extended-sign
-      __m256i lo               = _mm256_unpacklo_epi16(v, s);  // dword
-      __m256i hi               = _mm256_unpackhi_epi16(v, s);  // dword
+      s                        = _mm256_cmpgt_epi16(zero, v);  // extended-sign
+      lo                       = _mm256_unpacklo_epi16(v, s);  // dword
+      hi                       = _mm256_unpackhi_epi16(v, s);  // dword
       *(__m256i *)(dp + i)     = _mm256_permute2x128_si256(lo, hi, 0x20);
       *(__m256i *)(dp + i + 8) = _mm256_permute2x128_si256(lo, hi, 0x31);
+      v                        = *(__m256i *)(sp + i + 16);
     }
     for (size_t i = round_down(num_samples, 16); i < num_samples; ++i) {
       dp[i] = sp[i];
@@ -2737,8 +2751,8 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         uint32_t len = in_stride;
         sp           = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
+        v            = _mm256_load_si256((__m256i *)sp);
         for (; len >= 8; len -= 8) {
-          v = _mm256_load_si256((__m256i *)sp);
           v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
@@ -2746,6 +2760,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
+          v = _mm256_load_si256((__m256i *)sp);
         }
         for (; len > 0; --len) {
           sp[0] = (sp[0] + offset) << -downshift;
@@ -2767,8 +2782,8 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         uint32_t len = in_stride;
         sp           = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
+        v            = _mm256_load_si256((__m256i *)sp);
         for (; len >= 8; len -= 8) {
-          v = _mm256_load_si256((__m256i *)sp);
           v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
@@ -2776,6 +2791,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
+          v = _mm256_load_si256((__m256i *)sp);
         }
         for (; len > 0; --len) {
           sp[0] = (sp[0] + offset) >> downshift;
