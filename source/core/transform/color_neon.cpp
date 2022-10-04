@@ -139,15 +139,14 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
   int32_t Y, Cb, Cr;
   int32x4_t vY0, vCb0, vCr0, vG0, vR0, vB0;
   int32x4_t vY1, vCb1, vCr1, vG1, vR1, vB1;
+  vY0  = vld1q_s32(sp0);
+  vCb0 = vld1q_s32(sp1);
+  vCr0 = vld1q_s32(sp2);
+  vY1  = vld1q_s32(sp0 + 4);
+  vCb1 = vld1q_s32(sp1 + 4);
+  vCr1 = vld1q_s32(sp2 + 4);
   // process two vectors at a time
   for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-    vY0  = vld1q_s32(sp0);
-    vY1  = vld1q_s32(sp0 + 4);
-    vCb0 = vld1q_s32(sp1);
-    vCb1 = vld1q_s32(sp1 + 4);
-    vCr0 = vld1q_s32(sp2);
-    vCr1 = vld1q_s32(sp2 + 4);
-
     vG0 = vsubq_s32(vY0, vshrq_n_s32(vaddq_s32(vCb0, vCr0), 2));
     vG1 = vsubq_s32(vY1, vshrq_n_s32(vaddq_s32(vCb1, vCr1), 2));
     vR0 = vaddq_s32(vCr0, vG0);
@@ -164,9 +163,12 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
     sp0 += 8;
     sp1 += 8;
     sp2 += 8;
-    __builtin_prefetch(sp0);
-    __builtin_prefetch(sp1);
-    __builtin_prefetch(sp2);
+    vY0  = vld1q_s32(sp0);
+    vCb0 = vld1q_s32(sp1);
+    vCr0 = vld1q_s32(sp2);
+    vY1  = vld1q_s32(sp0 + 4);
+    vCb1 = vld1q_s32(sp1 + 4);
+    vCr1 = vld1q_s32(sp2 + 4);
   }
   for (; num_tc_samples > 0; --num_tc_samples) {
     Y      = *sp0;
