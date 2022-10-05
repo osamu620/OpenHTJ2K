@@ -150,6 +150,7 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       B1 = vld1q_s32(B + 4);
       out += 48;
     }
+    int32_t val0, val1, val2;
     for (; len > 0; --len) {
       val0   = *R + PNM_OFFSET;
       val1   = *G + PNM_OFFSET;
