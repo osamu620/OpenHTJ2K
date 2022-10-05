@@ -2755,7 +2755,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         uint32_t len = in_stride;
         sp           = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
-        v            = _mm256_load_si256((__m256i *)sp);
+        v            = _mm256_loadu_si256((__m256i *)sp);
         for (; len >= 8; len -= 8) {
           v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
           v = _mm256_add_epi32(v, dco);
@@ -2764,7 +2764,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
-          v = _mm256_load_si256((__m256i *)sp);
+          v = _mm256_loadu_si256((__m256i *)sp);
         }
         for (; len > 0; --len) {
           sp[0] = (sp[0] + offset) << -downshift;
@@ -2786,7 +2786,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         uint32_t len = in_stride;
         sp           = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
-        v            = _mm256_load_si256((__m256i *)sp);
+        v            = _mm256_loadu_si256((__m256i *)sp);
         for (; len >= 8; len -= 8) {
           v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
           v = _mm256_add_epi32(v, dco);
@@ -2795,7 +2795,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
-          v = _mm256_load_si256((__m256i *)sp);
+          v = _mm256_loadu_si256((__m256i *)sp);
         }
         for (; len > 0; --len) {
           sp[0] = (sp[0] + offset) >> downshift;
