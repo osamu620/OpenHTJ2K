@@ -77,7 +77,6 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   // ppm_out buffer is allocated by malloc because it does not need value-initialization
   uint8_t *ppm_out = static_cast<uint8_t *>(malloc(num_pixels * bytes_per_pixel * 3));
   setvbuf(ofp, (char *)ppm_out, _IOFBF, num_pixels);
-  int32_t val0, val1, val2;
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   uint32_t len = num_pixels;
@@ -315,6 +314,7 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   }
 
 #else
+  int32_t val0, val1, val2;
   for (uint32_t i = 0; i < num_pixels; ++i) {
     val0 = (buf[0][i] + PNM_OFFSET);
     val1 = (buf[1][i] + PNM_OFFSET);
