@@ -37,9 +37,9 @@ void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
 
   // process two vectors at a time
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
       auto vR0  = vld1q_s32(p0);
@@ -92,9 +92,9 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   const float32x4_t a4 = vdupq_n_f32(static_cast<float32_t>(1.0 / CR_FACT_R));
   // process two vectors at a time
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
       R0  = vld1q_s32(p0);
@@ -158,9 +158,9 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
 
   // process two vectors at a time
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
 
     for (; len >= 8; len -= 8) {
@@ -217,9 +217,9 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   const float32x4_t fCR_FACT_G = vdupq_n_f32(static_cast<float32_t>(CR_FACT_G));
   const float32x4_t fCB_FACT_G = vdupq_n_f32(static_cast<float32_t>(CB_FACT_G));
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
       auto Y0  = vcvtq_f32_s32(vld1q_s32(p0));
