@@ -183,9 +183,9 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       already_included(false),
       refsegment(false) {
   const uint32_t QWx2 = round_up(size.x, 8U);  // TODO: needs padding?
-  const uint32_t QHx2 = round_up(size.y, 8U);  // TODO: needs padding?
-  blksampl_stride     = QWx2;
-  blkstate_stride     = QWx2 + 2;
+  // const uint32_t QHx2 = round_up(size.y, 8U);  // TODO: needs padding?
+  blksampl_stride = QWx2;
+  blkstate_stride = QWx2 + 2;
   //  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
   //  memset(block_states.get(), 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
 
@@ -1395,17 +1395,17 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
 
   // We consider "-reduce" parameter value to determine necessary buffer size.
   const uint32_t aligned_stride =
-      round_up((ceil_int(pos1.x, 1U << tile->reduce_NL) - ceil_int(pos0.x, 1U << tile->reduce_NL)), 32);
-  const uint32_t num_bufsamples =
-      aligned_stride * (ceil_int(pos1.y, 1U << tile->reduce_NL) - ceil_int(pos0.y, 1U << tile->reduce_NL));
+      round_up((ceil_int(pos1.x, 1U << tile->reduce_NL) - ceil_int(pos0.x, 1U << tile->reduce_NL)), 32U);
+  const auto height             = static_cast<uint32_t>(ceil_int(pos1.y, 1U << tile->reduce_NL)
+                                            - ceil_int(pos0.y, 1U << tile->reduce_NL));
+  const uint32_t num_bufsamples = aligned_stride * height;
   samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
 
   element_siz Osiz;
   hdr->SIZ->get_image_origin(Osiz);
   // create tile samples, only for encoding;
   if (!img.empty()) {
-    const auto height = static_cast<uint32_t>(pos1.y - pos0.y);
-    const auto width  = static_cast<uint32_t>(pos1.x - pos0.x);
+    const auto width = static_cast<uint32_t>(pos1.x - pos0.x);
     // stride may differ from width with non-zero origin
     const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
     int32_t *src          = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
@@ -1579,7 +1579,7 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
       __m256i v            = *(__m256i *)(sp + i);
       *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_slli_epi32(v, shiftup), doff);
     }
-    for (int32_t i = round_down(len, 8); i < length; ++i) {
+    for (int32_t i = round_down(len, 8); i < len; ++i) {
       sp[i] <<= shiftup;
       sp[i] -= DC_OFFSET;
     }
@@ -2470,9 +2470,9 @@ void j2k_tile::decode() {
     element_siz tc1 = this->tcomp[c].get_pos1();
 
     // copy samples in resolution buffer to that in tile component buffer
-    size_t height = static_cast<size_t>(tc1.y - tc0.y);
-    size_t width  = static_cast<size_t>(tc1.x - tc0.x);
-    size_t stride = static_cast<size_t>(round_up(width, 32));
+    uint32_t height = tc1.y - tc0.y;
+    uint32_t width  = tc1.x - tc0.x;
+    uint32_t stride = round_up(width, 32U);
     // size_t num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     int16x8_t v0, v1, v2, v3;
@@ -2541,16 +2541,15 @@ void j2k_tile::decode() {
     for (size_t y = 0; y < height; ++y) {
       sprec_t *sp = cr->i_samples + y * width;
       int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-      v           = *(__m256i *)(sp);
       for (size_t i = 0; i < round_down(width, 16); i += 16) {
-        s                        = _mm256_cmpgt_epi16(zero, v);  // extended-sign
-        lo                       = _mm256_unpacklo_epi16(v, s);  // dword
-        hi                       = _mm256_unpackhi_epi16(v, s);  // dword
-        *(__m256i *)(dp + i)     = _mm256_permute2x128_si256(lo, hi, 0x20);
-        *(__m256i *)(dp + i + 8) = _mm256_permute2x128_si256(lo, hi, 0x31);
-        v                        = *(__m256i *)(sp + i + 16);
+        v  = _mm256_loadu_si256((__m256i *)(sp + i));
+        s  = _mm256_cmpgt_epi16(zero, v);  // extended-sign
+        lo = _mm256_unpacklo_epi16(v, s);  // dword
+        hi = _mm256_unpackhi_epi16(v, s);  // dword
+        _mm256_store_si256((__m256i *)(dp + i), _mm256_permute2x128_si256(lo, hi, 0x20));
+        _mm256_store_si256((__m256i *)(dp + i + 8), _mm256_permute2x128_si256(lo, hi, 0x31));
       }
-      for (size_t i = round_down(width, 16); i < num_samples; ++i) {
+      for (size_t i = round_down(width, 16); i < width; ++i) {
         dp[i] = sp[i];
       }
     }
@@ -2653,15 +2652,14 @@ void j2k_tile::ycbcr_to_rgb() {
 
   element_siz tc0       = this->tcomp[0].get_pos0();
   element_siz tc1       = this->tcomp[0].get_pos1();
-  const uint32_t stride = round_up(tc1.x - tc0.x, 32);
+  const uint32_t width  = tc1.x - tc0.x;
   const uint32_t height = tc1.y - tc0.y;
-  //  uint32_t num_tc_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
 
   int32_t *sp0 = this->tcomp[0].get_sample_address(0, 0);  // samples;
   int32_t *sp1 = this->tcomp[1].get_sample_address(0, 0);  // samples;
   int32_t *sp2 = this->tcomp[2].get_sample_address(0, 0);  // samples;
 
-  cvt_ycbcr_to_rgb[transformation](sp0, sp1, sp2, tc1.x - tc0.x, tc1.y - tc0.y);
+  cvt_ycbcr_to_rgb[transformation](sp0, sp1, sp2, width, height);
 }
 
 void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int32_t *> &dst) {
@@ -2680,7 +2678,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     const uint32_t x1     = ceil_int(siz.x, Rsiz.x);
     const element_siz tc0 = tcomp[c].get_pos0();
     tcomp[c].get_size(csize);
-    const uint32_t in_stride = round_up(csize.x, 32);
+    const uint32_t in_stride = round_up(csize.x, 32U);
     const uint32_t in_height = csize.y;
     const uint32_t x_offset  = tc0.x - ceil_int(x0, (1U << reduce_NL));
     const uint32_t y_offset  = tc0.y - ceil_int(y0, (1U << reduce_NL));
@@ -2780,8 +2778,8 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         uint32_t len = csize.x;
         sp           = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
-        v            = _mm256_load_si256((__m256i *)sp);
         for (; len >= 8; len -= 8) {
+          v = _mm256_load_si256((__m256i *)sp);
           v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
@@ -2789,7 +2787,6 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
-          v = _mm256_load_si256((__m256i *)sp);
         }
         for (; len > 0; --len) {
           sp[0] = (sp[0] + offset) << -downshift;
@@ -2811,8 +2808,8 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         uint32_t len = csize.x;
         sp           = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
-        v            = _mm256_load_si256((__m256i *)sp);
         for (; len >= 8; len -= 8) {
+          v = _mm256_load_si256((__m256i *)sp);
           v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
@@ -2820,7 +2817,6 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           _mm256_storeu_si256((__m256i *)dp, v);
           sp += 8;
           dp += 8;
-          v = _mm256_load_si256((__m256i *)sp);
         }
         for (; len > 0; --len) {
           sp[0] = (sp[0] + offset) >> downshift;
@@ -2950,13 +2946,12 @@ void j2k_tile::rgb_to_ycbcr() {
   assert(transformation == this->tcomp[1].get_transformation());
   assert(transformation == this->tcomp[2].get_transformation());
 
-  const element_siz tc0         = this->tcomp[0].get_pos0();
-  const element_siz tc1         = this->tcomp[0].get_pos1();
-  const uint32_t num_tc_samples = (tc1.x - tc0.x) * (tc1.y - tc0.y);
+  const element_siz tc0 = this->tcomp[0].get_pos0();
+  const element_siz tc1 = this->tcomp[0].get_pos1();
 
-  int32_t *const sp0 = this->tcomp[0].get_sample_address(0, 0);  // samples;
-  int32_t *const sp1 = this->tcomp[1].get_sample_address(0, 0);  // samples;
-  int32_t *const sp2 = this->tcomp[2].get_sample_address(0, 0);  // samples;
+  int32_t *const sp0 = this->tcomp[0].get_sample_address(0, 0);  // assume that comp0 is red
+  int32_t *const sp1 = this->tcomp[1].get_sample_address(0, 0);  // assume that comp1 is green
+  int32_t *const sp2 = this->tcomp[2].get_sample_address(0, 0);  // assume that comp2 is blue
   if (MCT) {
     cvt_rgb_to_ycbcr[transformation](sp0, sp1, sp2, tc1.x - tc0.x, tc1.y - tc0.y);
   }
@@ -2976,14 +2971,14 @@ uint8_t *j2k_tile::encode() {
     element_siz bottom_right     = tcomp[c].get_pos1();
     j2k_resolution *cr           = tcomp[c].access_resolution(NL);
 
-    int32_t *sp0 = tcomp[c].get_sample_address(0, 0);
+    int32_t *const src = tcomp[c].get_sample_address(0, 0);
 
-    uint32_t stride = round_up(bottom_right.x - top_left.x, 32);
+    uint32_t stride = round_up(bottom_right.x - top_left.x, 32U);
     uint32_t height = (bottom_right.y - top_left.y);
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     for (uint32_t y = 0; y < height; ++y) {
-      int32_t *sp             = sp0 + y * stride;
+      int32_t *sp             = src + y * stride;
       sprec_t *dp             = cr->i_samples + y * (bottom_right.x - top_left.x);
       uint32_t num_tc_samples = bottom_right.x - top_left.x;
       for (; num_tc_samples >= 16; num_tc_samples -= 16) {
@@ -2995,12 +2990,12 @@ uint8_t *j2k_tile::encode() {
         dp += 16;
       }
       for (; num_tc_samples > 0; --num_tc_samples) {
-        *dp++ = static_cast<sprec_t>(*sp0++);
+        *dp++ = static_cast<sprec_t>(*sp++);
       }
     }
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
     for (uint32_t y = 0; y < height; ++y) {
-      int32_t *sp             = sp0 + y * stride;
+      int32_t *sp             = src + y * stride;
       sprec_t *dp             = cr->i_samples + y * (bottom_right.x - top_left.x);
       uint32_t num_tc_samples = bottom_right.x - top_left.x;
       for (; num_tc_samples >= 8; num_tc_samples -= 8) {
@@ -3016,7 +3011,7 @@ uint8_t *j2k_tile::encode() {
     }
 #else
       for (uint32_t y = 0; y < height; ++y) {
-        int32_t *sp             = sp0 + y * stride;
+        int32_t *sp             = src + y * stride;
         sprec_t *dp             = cr->i_samples + y * (bottom_right.x - top_left.x);
         uint32_t num_tc_samples = bottom_right.x - top_left.x;
         for (; num_tc_samples > 0; --num_tc_samples) {

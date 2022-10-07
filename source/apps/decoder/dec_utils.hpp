@@ -183,22 +183,23 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
     __m128i mask2hi  = _mm_setr_epi8(10, -1, -1, 11, -1, -1, 12, -1, -1, 13, -1, -1, 14, -1, -1, 15);
     __m128i v0, v1, v2, cff, blkmask;
     __m128i vval0, vval1, vval2;
-    __m128i val0 =
-        _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
-                                          _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset)),
-                         _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 8)), voffset),
-                                          _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 12)), voffset)));
-    __m128i val1 =
-        _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
-                                          _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset)),
-                         _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 8)), voffset),
-                                          _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 12)), voffset)));
-    __m128i val2 =
-        _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
-                                          _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset)),
-                         _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 8)), voffset),
-                                          _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 12)), voffset)));
+    __m128i val0, val1, val2;
     for (; len >= 16; len -= 16) {
+      val0 =
+          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset)),
+                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 8)), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 12)), voffset)));
+      val1 =
+          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset)),
+                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 8)), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 12)), voffset)));
+      val2 =
+          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset)),
+                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 8)), voffset),
+                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 12)), voffset)));
       v0 = _mm_unpacklo_epi8(val0, val1);
       v2 = _mm_unpackhi_epi8(val0, val1);
       v1 = _mm_alignr_epi8(v2, v0, 11);
@@ -225,21 +226,6 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       R += 16;
       G += 16;
       B += 16;
-      val0 =
-          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
-                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset)),
-                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 8)), voffset),
-                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 12)), voffset)));
-      val1 =
-          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
-                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset)),
-                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 8)), voffset),
-                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 12)), voffset)));
-      val2 =
-          _mm_packus_epi16(_mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
-                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset)),
-                           _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 8)), voffset),
-                                            _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 12)), voffset)));
       out += 48;
     }
     for (; len > 0; --len) {
@@ -256,16 +242,17 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
     __m128i mask2hi  = _mm_setr_epi8(-1, -1, 11, 10, -1, -1, -1, -1, 13, 12, -1, -1, -1, -1, 15, 14);
     __m128i v0, v1, v2, cff, blkmask;
     __m128i vval0, vval1, vval2;
-    __m128i val0 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
-                                    _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset));
-    __m128i val1 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
-                                    _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset));
-    __m128i val2 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
-                                    _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset));
+    __m128i val0, val1, val2;
     for (; len >= 8; len -= 8) {
-      v0 = _mm_unpacklo_epi16(val0, val1);
-      v2 = _mm_unpackhi_epi16(val0, val1);
-      v1 = _mm_alignr_epi8(v2, v0, 12);
+      val0 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
+                              _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset));
+      val1 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
+                              _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset));
+      val2 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
+                              _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset));
+      v0   = _mm_unpacklo_epi16(val0, val1);
+      v2   = _mm_unpackhi_epi16(val0, val1);
+      v1   = _mm_alignr_epi8(v2, v0, 12);
 
       vval0   = _mm_shuffle_epi8(v0, mask0);
       vval2   = _mm_shuffle_epi8(val2, mask2lo);
@@ -289,12 +276,6 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       R += 8;
       G += 8;
       B += 8;
-      val0 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)R), voffset),
-                              _mm_add_epi32(_mm_loadu_si128((__m128i *)(R + 4)), voffset));
-      val1 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)G), voffset),
-                              _mm_add_epi32(_mm_loadu_si128((__m128i *)(G + 4)), voffset));
-      val2 = _mm_packus_epi32(_mm_add_epi32(_mm_loadu_si128((__m128i *)B), voffset),
-                              _mm_add_epi32(_mm_loadu_si128((__m128i *)(B + 4)), voffset));
       out += 48;
     }
     int32_t r0, g0, b0;
