@@ -29,67 +29,87 @@
 #if not defined(OPENHTJ2K_TRY_AVX2) || not defined(__AVX2__) || not defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include "color.hpp"
 
-void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
+void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
-  for (uint32_t n = 0; n < num_tc_samples; ++n) {
-    R      = sp0[n];
-    G      = sp1[n];
-    B      = sp2[n];
-    Y      = (R + 2 * G + B) >> 2;
-    Cb     = B - G;
-    Cr     = R - G;
-    sp0[n] = Y;
-    sp1[n] = Cb;
-    sp2[n] = Cr;
+  for (uint32_t y = 0; y < height; ++y) {
+    int32_t *p0 = sp0 + y * round_up(width, 32);
+    int32_t *p1 = sp1 + y * round_up(width, 32);
+    int32_t *p2 = sp2 + y * round_up(width, 32);
+    for (uint32_t n = 0; n < width; n++) {
+      R     = p0[n];
+      G     = p1[n];
+      B     = p2[n];
+      Y     = (R + 2 * G + B) >> 2;
+      Cb    = B - G;
+      Cr    = R - G;
+      p0[n] = Y;
+      p1[n] = Cb;
+      p2[n] = Cr;
+    }
   }
 }
 
-void cvt_rgb_to_ycbcr_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
+void cvt_rgb_to_ycbcr_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   double fR, fG, fB;
   double fY, fCb, fCr;
-  for (uint32_t n = 0; n < num_tc_samples; n++) {
-    fR     = static_cast<double>(sp0[n]);
-    fG     = static_cast<double>(sp1[n]);
-    fB     = static_cast<double>(sp2[n]);
-    fY     = ALPHA_R * fR + ALPHA_G * fG + ALPHA_B * fB;
-    fCb    = (1.0 / CB_FACT_B) * (fB - fY);
-    fCr    = (1.0 / CR_FACT_R) * (fR - fY);
-    sp0[n] = round_d(fY);
-    sp1[n] = round_d(fCb);
-    sp2[n] = round_d(fCr);
+  for (uint32_t y = 0; y < height; ++y) {
+    int32_t *p0 = sp0 + y * round_up(width, 32);
+    int32_t *p1 = sp1 + y * round_up(width, 32);
+    int32_t *p2 = sp2 + y * round_up(width, 32);
+    for (uint32_t n = 0; n < width; n++) {
+      fR    = static_cast<double>(p0[n]);
+      fG    = static_cast<double>(p1[n]);
+      fB    = static_cast<double>(p2[n]);
+      fY    = ALPHA_R * fR + ALPHA_G * fG + ALPHA_B * fB;
+      fCb   = (1.0 / CB_FACT_B) * (fB - fY);
+      fCr   = (1.0 / CR_FACT_R) * (fR - fY);
+      p0[n] = round_d(fY);
+      p1[n] = round_d(fCb);
+      p2[n] = round_d(fCr);
+    }
   }
 }
 
-void cvt_ycbcr_to_rgb_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
+void cvt_ycbcr_to_rgb_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
-  for (uint32_t n = 0; n < num_tc_samples; ++n) {
-    Y      = sp0[n];
-    Cb     = sp1[n];
-    Cr     = sp2[n];
-    G      = Y - ((Cb + Cr) >> 2);
-    R      = Cr + G;
-    B      = Cb + G;
-    sp0[n] = R;
-    sp1[n] = G;
-    sp2[n] = B;
+  for (uint32_t y = 0; y < height; ++y) {
+    int32_t *p0 = sp0 + y * round_up(width, 32);
+    int32_t *p1 = sp1 + y * round_up(width, 32);
+    int32_t *p2 = sp2 + y * round_up(width, 32);
+    for (uint32_t n = 0; n < width; n++) {
+      Y     = p0[n];
+      Cb    = p1[n];
+      Cr    = p2[n];
+      G     = Y - ((Cb + Cr) >> 2);
+      R     = Cr + G;
+      B     = Cb + G;
+      p0[n] = R;
+      p1[n] = G;
+      p2[n] = B;
+    }
   }
 }
 
-void cvt_ycbcr_to_rgb_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t num_tc_samples) {
+void cvt_ycbcr_to_rgb_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   int32_t R, G, B;
   double fY, fCb, fCr;
-  for (uint32_t n = 0; n < num_tc_samples; n++) {
-    fY     = static_cast<double>(sp0[n]);
-    fCb    = static_cast<double>(sp1[n]);
-    fCr    = static_cast<double>(sp2[n]);
-    R      = static_cast<int32_t>(round_d(fY + CR_FACT_R * fCr));
-    B      = static_cast<int32_t>(round_d(fY + CB_FACT_B * fCb));
-    G      = static_cast<int32_t>(round_d(fY - CR_FACT_G * fCr - CB_FACT_G * fCb));
-    sp0[n] = R;
-    sp1[n] = G;
-    sp2[n] = B;
+  for (uint32_t y = 0; y < height; ++y) {
+    int32_t *p0 = sp0 + y * round_up(width, 32);
+    int32_t *p1 = sp1 + y * round_up(width, 32);
+    int32_t *p2 = sp2 + y * round_up(width, 32);
+    for (uint32_t n = 0; n < width; n++) {
+      fY    = static_cast<double>(p0[n]);
+      fCb   = static_cast<double>(p1[n]);
+      fCr   = static_cast<double>(p2[n]);
+      R     = static_cast<int32_t>(round_d(fY + CR_FACT_R * fCr));
+      B     = static_cast<int32_t>(round_d(fY + CB_FACT_B * fCb));
+      G     = static_cast<int32_t>(round_d(fY - CR_FACT_G * fCr - CB_FACT_G * fCb));
+      p0[n] = R;
+      p1[n] = G;
+      p2[n] = B;
+    }
   }
 }
 #endif
