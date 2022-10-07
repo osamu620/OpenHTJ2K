@@ -33,9 +33,9 @@ void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t wid
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     for (uint32_t n = 0; n < width; n++) {
       R     = p0[n];
       G     = p1[n];
@@ -54,9 +54,9 @@ void cvt_rgb_to_ycbcr_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t w
   double fR, fG, fB;
   double fY, fCb, fCr;
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     for (uint32_t n = 0; n < width; n++) {
       fR    = static_cast<double>(p0[n]);
       fG    = static_cast<double>(p1[n]);
@@ -75,9 +75,9 @@ void cvt_ycbcr_to_rgb_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t wid
   int32_t R, G, B;
   int32_t Y, Cb, Cr;
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     for (uint32_t n = 0; n < width; n++) {
       Y     = p0[n];
       Cb    = p1[n];
@@ -96,9 +96,9 @@ void cvt_ycbcr_to_rgb_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t w
   int32_t R, G, B;
   double fY, fCb, fCr;
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     for (uint32_t n = 0; n < width; n++) {
       fY    = static_cast<double>(p0[n]);
       fCb   = static_cast<double>(p1[n]);

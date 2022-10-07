@@ -37,9 +37,9 @@
 // lossless: forward RCT
 void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
       __m256i mR       = *((__m256i *)p0);
@@ -80,9 +80,9 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   const __m256 mCB_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CB_FACT_B));
   const __m256 mCR_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CR_FACT_R));
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
       __m256 mR        = _mm256_cvtepi32_ps(*((__m256i *)p0));
@@ -119,14 +119,14 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
 // lossless: inverse RCT
 void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
-      mCb              = *((__m256i *)p1);
-      mCr              = *((__m256i *)p2);
-      mY               = *((__m256i *)p0);
+      __m256i mCb      = *((__m256i *)p1);
+      __m256i mCr      = *((__m256i *)p2);
+      __m256i mY       = *((__m256i *)p0);
       __m256i tmp      = _mm256_add_epi32(mCb, mCr);
       tmp              = _mm256_srai_epi32(tmp, 2);  //(Cb + Cr) >> 2
       __m256i mG       = _mm256_sub_epi32(mY, tmp);
@@ -161,9 +161,9 @@ void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   __m256 mCB_FACT_B = _mm256_set1_ps(static_cast<float>(CB_FACT_B));
   __m256 mCB_FACT_G = _mm256_set1_ps(static_cast<float>(CB_FACT_G));
   for (uint32_t y = 0; y < height; ++y) {
-    int32_t *p0 = sp0 + y * round_up(width, 32);
-    int32_t *p1 = sp1 + y * round_up(width, 32);
-    int32_t *p2 = sp2 + y * round_up(width, 32);
+    int32_t *p0 = sp0 + y * round_up(width, 32U);
+    int32_t *p1 = sp1 + y * round_up(width, 32U);
+    int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
       __m256 mY        = _mm256_cvtepi32_ps(*((__m256i *)p0));
