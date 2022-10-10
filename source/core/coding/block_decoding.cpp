@@ -80,16 +80,16 @@ uint8_t j2k_codeblock::get_signLUT_index(const uint32_t &j1, const uint32_t &j2)
   uint8_t *sigma_p2  = block_states + (static_cast<unsigned long>(j1 + 2)) * blkstate_stride + j2;
   //  idx += get_state(Sigma, j1m1, j2);  // top
   idx += sigma_p0[1] & 1;
-  idx += (j1 > 0) ? get_sign(j1m1, j2) << 4 : 0;  // top
+  idx += (j1 > 0) ? get_sign(static_cast<const uint32_t>(j1m1), j2) << 4 : 0;  // top
   //  idx += get_state(Sigma, j1, j2m1) << 2;                                        // left
   idx += (sigma_p1[0] & 1) << 2;
-  idx += (j2 > 0) ? get_sign(j1, j2m1) << 6 : 0;  // left
+  idx += (j2 > 0) ? get_sign(j1, static_cast<const uint32_t>(j2m1)) << 6 : 0;  // left
   //  idx += get_state(Sigma, j1, j2p1) << 3;                                        // right
   idx += (sigma_p1[2] & 1) << 3;
-  idx += (j2 < static_cast<int16_t>(size.x) - 1) ? get_sign(j1, j2p1) << 7 : 0;  // right
+  idx += (j2 < size.x - 1) ? get_sign(j1, static_cast<const uint32_t>(j2p1)) << 7 : 0;  // right
   //  idx += get_state(Sigma, j1p1, j2) << 1;                                        // bottom
   idx += (sigma_p2[1] & 1) << 1;
-  idx += (j1 < static_cast<int16_t>(size.y) - 1) ? get_sign(j1p1, j2) << 5 : 0;  // bottom
+  idx += (j1 < size.y - 1) ? get_sign(static_cast<const uint32_t>(j1p1), j2) << 5 : 0;  // bottom
   return static_cast<uint8_t>(idx);
 }
 
