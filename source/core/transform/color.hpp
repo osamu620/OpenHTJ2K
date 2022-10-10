@@ -43,14 +43,78 @@
 
 typedef void (*cvt_color_func)(int32_t *, int32_t *, int32_t *, uint32_t, uint32_t);
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+/**
+ * @brief Forward reversible color transform (RCT) with AVX2 intrinsics
+ * @param sp0 pointer to Red samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Green samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Blue samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+/**
+ * @brief Forward irreversible color transform (ICT) with AVX2 intrinsics
+ * @param sp0 pointer to Red samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Green samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Blue samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+/**
+ * @brief Inverse reversible color transform (RCT) with AVX2 intrinsics
+ * @param sp0 pointer to Y samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Cb samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Cr samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+/**
+ * @brief Inverse irreversible color transform (ICT) with AVX2 intrinsics
+ * @param sp0 pointer to Y samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Cb samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Cr samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+/**
+ * @brief Forward reversible color transform (RCT) with NEON intrinsics
+ * @param sp0 pointer to Red samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Green samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Blue samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+/**
+ * @brief Forward irreversible color transform (ICT) with NEON intrinsics
+ * @param sp0 pointer to Red samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Green samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Blue samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+/**
+ * @brief Inverse reversible color transform (RCT) with NEON intrinsics
+ * @param sp0 pointer to Y samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Cb samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Cr samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+/**
+ * @brief Inverse irreversible color transform (ICT) with NEON intrinsics
+ * @param sp0 pointer to Y samples (shall be aligned and multiple of 8 samples)
+ * @param sp1 pointer to Cb samples (shall be aligned and multiple of 8 samples)
+ * @param sp2 pointer to Cr samples (shall be aligned and multiple of 8 samples)
+ * @param width original width (may not be multiple of 8)
+ * @param height original height
+ */
 void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 #else
 void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);

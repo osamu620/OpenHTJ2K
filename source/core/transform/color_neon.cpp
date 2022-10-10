@@ -32,16 +32,13 @@
 
 // lossless: forward RCT
 void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
-  int32_t R, G, B;
-  int32_t Y, Cb, Cr;
-
   // process two vectors at a time
   for (uint32_t y = 0; y < height; ++y) {
     int32_t *p0 = sp0 + y * round_up(width, 32U);
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       auto vR0  = vld1q_s32(p0);
       auto vR1  = vld1q_s32(p0 + 4);
       auto vG0  = vld1q_s32(p1);
@@ -64,25 +61,12 @@ void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
       p1 += 8;
       p2 += 8;
     }
-    for (; len > 0; --len) {
-      R     = *p0;
-      G     = *p1;
-      B     = *p2;
-      Y     = (R + 2 * G + B) >> 2;
-      Cb    = B - G;
-      Cr    = R - G;
-      *p0++ = Y;
-      *p1++ = Cb;
-      *p2++ = Cr;
-    }
   }
 }
 
 // lossy: forward ICT
 void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width,
                                  uint32_t height) {
-  double fRed, fGrn, fBlu;
-  double fY, fCb, fCr;
   int32x4_t R0, G0, B0, R1, G1, B1;
   float32x4_t Y0, Cb0, Cr0, fR0, fG0, fB0, Y1, Cb1, Cr1, fR1, fG1, fB1;
   const float32x4_t a0 = vdupq_n_f32(static_cast<float32_t>(ALPHA_R));
@@ -96,7 +80,7 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       R0  = vld1q_s32(p0);
       R1  = vld1q_s32(p0 + 4);
       G0  = vld1q_s32(p1);
@@ -132,27 +116,11 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
       p1 += 8;
       p2 += 8;
     }
-    for (; len > 0; --len) {
-      fRed  = static_cast<double>(p0[0]);
-      fGrn  = static_cast<double>(p1[0]);
-      fBlu  = static_cast<double>(p2[0]);
-      fY    = ALPHA_R * fRed + ALPHA_G * fGrn + ALPHA_B * fBlu;
-      fCb   = (1.0 / CB_FACT_B) * (fBlu - fY);
-      fCr   = (1.0 / CR_FACT_R) * (fRed - fY);
-      p0[0] = round_d(fY);
-      p1[0] = round_d(fCb);
-      p2[0] = round_d(fCr);
-      p0++;
-      p1++;
-      p2++;
-    }
   }
 }
 
 // lossless: inverse RCT
 void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
-  int32_t R, G, B;
-  int32_t Y, Cb, Cr;
   int32x4_t vY0, vCb0, vCr0, vG0, vR0, vB0;
   int32x4_t vY1, vCb1, vCr1, vG1, vR1, vB1;
 
@@ -163,7 +131,7 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
 
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       vY0  = vld1q_s32(p0);
       vCb0 = vld1q_s32(p1);
       vCr0 = vld1q_s32(p2);
@@ -193,25 +161,12 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
       vCb1 = vld1q_s32(sp1 + 4);
       vCr1 = vld1q_s32(sp2 + 4);
     }
-    for (; len > 0; --len) {
-      Y     = *p0;
-      Cb    = *p1;
-      Cr    = *p2;
-      G     = Y - ((Cb + Cr) >> 2);
-      R     = Cr + G;
-      B     = Cb + G;
-      *p0++ = R;
-      *p1++ = G;
-      *p2++ = B;
-    }
   }
 }
 
 // lossy: inverse ICT
 void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width,
                                  uint32_t height) {
-  int32_t R, G, B;
-  double fY, fCb, fCr;
   const float32x4_t fCR_FACT_R = vdupq_n_f32(static_cast<float32_t>(CR_FACT_R));
   const float32x4_t fCB_FACT_B = vdupq_n_f32(static_cast<float32_t>(CB_FACT_B));
   const float32x4_t fCR_FACT_G = vdupq_n_f32(static_cast<float32_t>(CR_FACT_G));
@@ -221,7 +176,7 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       auto Y0  = vcvtq_f32_s32(vld1q_s32(p0));
       auto Y1  = vcvtq_f32_s32(vld1q_s32(p0 + 4));
       auto Cb0 = vcvtq_f32_s32(vld1q_s32(p1));
@@ -241,17 +196,6 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
       p0 += 8;
       p1 += 8;
       p2 += 8;
-    }
-    for (; len > 0; --len) {
-      fY    = static_cast<double>(*p0);
-      fCb   = static_cast<double>(*p1);
-      fCr   = static_cast<double>(*p2);
-      R     = static_cast<int32_t>(round_d(fY + CR_FACT_R * fCr));
-      B     = static_cast<int32_t>(round_d(fY + CB_FACT_B * fCb));
-      G     = static_cast<int32_t>(round_d(fY - CR_FACT_G * fCr - CB_FACT_G * fCb));
-      *p0++ = R;
-      *p1++ = G;
-      *p2++ = B;
     }
   }
 }
