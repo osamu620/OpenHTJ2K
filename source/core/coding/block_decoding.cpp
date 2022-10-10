@@ -37,61 +37,67 @@ void j2k_codeblock::update_sample(const uint8_t &symbol, const uint8_t &p, const
       static_cast<int32_t>(symbol) << p;
 }
 
-void j2k_codeblock::update_sign(const int8_t &val, const int16_t &j1, const int16_t &j2) const {
+void j2k_codeblock::update_sign(const int8_t &val, const uint32_t &j1, const uint32_t &j2) const {
   sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * blksampl_stride] |= val << 31;
 }
 
-uint8_t j2k_codeblock::get_sign(const int16_t &j1, const int16_t &j2) const {
+uint8_t j2k_codeblock::get_sign(const uint32_t &j1, const uint32_t &j2) const {
   return static_cast<uint8_t>(
       ((uint32_t)(sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * blksampl_stride] | 0x8000))
       >> 31);
 }
 
-uint8_t j2k_codeblock::get_context_label_sig(const int16_t &j1, const int16_t &j2) const {
-  int32_t idx        = 0;
-  const int16_t j1m1 = static_cast<int16_t>(j1 - 1);
-  const int16_t j1p1 = static_cast<int16_t>(j1 + 1);
-  const int16_t j2m1 = static_cast<int16_t>(j2 - 1);
-  const int16_t j2p1 = static_cast<int16_t>(j2 + 1);
+uint8_t j2k_codeblock::get_context_label_sig(const uint32_t &j1, const uint32_t &j2) const {
+  int32_t idx;
+  int32_t idx0, idx1, idx2;
+
+  uint8_t *sigma_p0   = block_states + (unsigned long)j1 * blkstate_stride + j2;
+  uint8_t *sigma_p1   = block_states + (static_cast<unsigned long>(j1 + 1)) * blkstate_stride + j2;
+  uint8_t *sigma_p2   = block_states + (static_cast<unsigned long>(j1 + 2)) * blkstate_stride + j2;
+  const int32_t shift = 1 << SHIFT_SIGMA;
   // one line above left, center, right
-  idx = get_state(Sigma, j1m1, j2m1);
-  idx += get_state(Sigma, j1m1, j2) << 4;
-  idx += get_state(Sigma, j1m1, j2p1) << 1;
+  idx0 = (sigma_p0[0] & shift) + ((sigma_p0[1] & shift) << 4) + ((sigma_p0[2] & shift) << 1);
   // current line left, right
-  idx += get_state(Sigma, j1, j2m1) << 6;
-  idx += get_state(Sigma, j1, j2p1) << 7;
+  idx1 = ((sigma_p1[0] & shift) << 6) + ((sigma_p1[2] & shift) << 7);
   // one line below left, center, right
-  idx += get_state(Sigma, j1p1, j2m1) << 2;
-  idx += get_state(Sigma, j1p1, j2) << 5;
-  idx += get_state(Sigma, j1p1, j2p1) << 3;
+  idx2 = ((sigma_p2[0] & shift) << 2) + ((sigma_p2[1] & shift) << 5) + ((sigma_p2[2] & shift) << 3);
+
+  idx = idx0 + idx1 + idx2;
 
   if ((this->Cmodes & CAUSAL) && j1 % 4 == 3) {
     idx &= 0xD3;
   }
   return sig_LUT[this->band][idx];
 }
-uint8_t j2k_codeblock::get_signLUT_index(const int16_t &j1, const int16_t &j2) const {
+uint8_t j2k_codeblock::get_signLUT_index(const uint32_t &j1, const uint32_t &j2) const {
   int32_t idx        = 0;
   const int16_t j1m1 = static_cast<int16_t>(j1 - 1);
   const int16_t j1p1 = static_cast<int16_t>(j1 + 1);
   const int16_t j2m1 = static_cast<int16_t>(j2 - 1);
   const int16_t j2p1 = static_cast<int16_t>(j2 + 1);
-  idx += get_state(Sigma, j1m1, j2);                                             // top
-  idx += (j1 > 0) ? get_sign(j1m1, j2) << 4 : 0;                                 // top
-  idx += get_state(Sigma, j1, j2m1) << 2;                                        // left
-  idx += (j2 > 0) ? get_sign(j1, j2m1) << 6 : 0;                                 // left
-  idx += get_state(Sigma, j1, j2p1) << 3;                                        // right
+  uint8_t *sigma_p0  = block_states + (unsigned long)j1 * blkstate_stride + j2;
+  uint8_t *sigma_p1  = block_states + (static_cast<unsigned long>(j1 + 1)) * blkstate_stride + j2;
+  uint8_t *sigma_p2  = block_states + (static_cast<unsigned long>(j1 + 2)) * blkstate_stride + j2;
+  //  idx += get_state(Sigma, j1m1, j2);  // top
+  idx += sigma_p0[1] & 1;
+  idx += (j1 > 0) ? get_sign(j1m1, j2) << 4 : 0;  // top
+  //  idx += get_state(Sigma, j1, j2m1) << 2;                                        // left
+  idx += (sigma_p1[0] & 1) << 2;
+  idx += (j2 > 0) ? get_sign(j1, j2m1) << 6 : 0;  // left
+  //  idx += get_state(Sigma, j1, j2p1) << 3;                                        // right
+  idx += (sigma_p1[2] & 1) << 3;
   idx += (j2 < static_cast<int16_t>(size.x) - 1) ? get_sign(j1, j2p1) << 7 : 0;  // right
-  idx += get_state(Sigma, j1p1, j2) << 1;                                        // bottom
+  //  idx += get_state(Sigma, j1p1, j2) << 1;                                        // bottom
+  idx += (sigma_p2[1] & 1) << 1;
   idx += (j1 < static_cast<int16_t>(size.y) - 1) ? get_sign(j1p1, j2) << 5 : 0;  // bottom
   return static_cast<uint8_t>(idx);
 }
 
-void decode_j2k_sign_raw(j2k_codeblock *block, mq_decoder &mq_dec, const int16_t &j1, const int16_t &j2) {
+void decode_j2k_sign_raw(j2k_codeblock *block, mq_decoder &mq_dec, const uint32_t &j1, const uint32_t &j2) {
   uint8_t symbol = mq_dec.get_raw_symbol();
   block->update_sign(static_cast<int8_t>(symbol), j1, j2);
 }
-void decode_j2k_sign(j2k_codeblock *block, mq_decoder &mq_dec, const int16_t &j1, const int16_t &j2) {
+void decode_j2k_sign(j2k_codeblock *block, mq_decoder &mq_dec, const uint32_t &j1, const uint32_t &j2) {
   uint8_t idx = block->get_signLUT_index(j1, j2);
   if ((block->Cmodes & CAUSAL) && j1 % 4 == 3) {
     idx &= 0xDD;
@@ -103,45 +109,60 @@ void decode_j2k_sign(j2k_codeblock *block, mq_decoder &mq_dec, const int16_t &j1
 
 void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
   uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  int16_t j1, j2, j1_start = 0;
+  uint32_t j1, j2, j1_start = 0;
   uint8_t label_sig;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+    for (j2 = 0; j2 < block->size.x; j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
-        label_sig = block->get_context_label_sig(j1, j2);
-        if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+        label_sig        = block->get_context_label_sig(j1, j2);
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+          //            block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           symbol = mq_dec.get_raw_symbol();
-          block->update_sample(symbol, p, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
-            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
+            //            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            state_p[0] |= symbol;
             decode_j2k_sign_raw(block, mq_dec, j1, j2);
           }
-          block->modify_state(pi_, 1, j1, j2);
+          //          block->modify_state(pi_, 1, j1, j2);
+          state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
         } else {
-          block->modify_state(pi_, 0, j1, j2);
+          //          block->modify_state(pi_, 0, j1, j2);
+          state_p[0] &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
         }
       }
     }
-    j1_start = static_cast<int16_t>(j1_start + 4);
+    j1_start += 4;
   }
 
   if (block->size.y % 4) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
-      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
+    for (j2 = 0; j2 < block->size.x; j2++) {
+      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
         label_sig = block->get_context_label_sig(j1, j2);
-        if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+        uint8_t *state_p =
+            block->block_states + (static_cast<unsigned long>(j1 + 1)) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+          //            block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           symbol = mq_dec.get_raw_symbol();
-          block->update_sample(symbol, p, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
-            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
+            //            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            state_p[0] |= symbol;
             decode_j2k_sign_raw(block, mq_dec, j1, j2);
           }
-          block->modify_state(pi_, 1, j1, j2);
+          //          block->modify_state(pi_, 1, j1, j2);
+          state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
         } else {
-          block->modify_state(pi_, 0, j1, j2);
+          //          block->modify_state(pi_, 0, j1, j2);
+          state_p[0] &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
         }
       }
     }
@@ -150,45 +171,60 @@ void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder 
 
 void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
   uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  int16_t j1, j2, j1_start = 0;
+  uint32_t j1, j2, j1_start = 0;
   uint8_t label_sig;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+    for (j2 = 0; j2 < block->size.x; j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
         label_sig = block->get_context_label_sig(j1, j2);
-        if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+        uint8_t *state_p =
+            block->block_states + (static_cast<unsigned long>(j1 + 1)) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+          // block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           symbol = mq_dec.decode(label_sig);
-          block->update_sample(symbol, p, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
-            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
+            // block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            state_p[0] |= symbol;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
-          block->modify_state(pi_, 1, j1, j2);
+          // block->modify_state(pi_, 1, j1, j2);
+          state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
         } else {
-          block->modify_state(pi_, 0, j1, j2);
+          // block->modify_state(pi_, 0, j1, j2);
+          state_p[0] &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
         }
       }
     }
-    j1_start = static_cast<int16_t>(j1_start + 4);
+    j1_start += 4;
   }
 
   if (block->size.y % 4) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
-      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
-        label_sig = block->get_context_label_sig(j1, j2);
-        if (block->get_state(Sigma, j1, j2) == 0 && label_sig > 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+    for (j2 = 0; j2 < block->size.x; j2++) {
+      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+        label_sig        = block->get_context_label_sig(j1, j2);
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+          // block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           symbol = mq_dec.decode(label_sig);
-          block->update_sample(symbol, p, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
-            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
+            // block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            state_p[0] |= symbol;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
-          block->modify_state(pi_, 1, j1, j2);
+          // block->modify_state(pi_, 1, j1, j2);
+          state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
         } else {
-          block->modify_state(pi_, 0, j1, j2);
+          // block->modify_state(pi_, 0, j1, j2);
+          state_p[0] &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
         }
       }
     }
@@ -197,30 +233,40 @@ void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
 
 void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
   uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  int16_t j1, j2, j1_start = 0;
+  uint16_t j1, j2, j1_start = 0;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+    for (j2 = 0; j2 < block->size.x; j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
-        if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
+          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           symbol = mq_dec.get_raw_symbol();
-          block->update_sample(symbol, p, j1, j2);
-          block->modify_state(sigma_, 1, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
+          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
+          //          block->modify_state(sigma_, 1, j1, j2);
+          state_p[0] |= 1 << SHIFT_SIGMA_;
         }
       }
     }
-    j1_start = static_cast<int16_t>(j1_start + 4);
+    j1_start += 4;
   }
 
   if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
-      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
-        if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+    for (j2 = 0; j2 < block->size.x; j2++) {
+      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
+          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           symbol = mq_dec.get_raw_symbol();
-          block->update_sample(symbol, p, j1, j2);
-          block->modify_state(sigma_, 1, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
+          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
+          //          block->modify_state(sigma_, 1, j1, j2);
+          state_p[0] |= 1 << SHIFT_SIGMA_;
         }
       }
     }
@@ -229,47 +275,57 @@ void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &
 
 void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
   uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  int16_t j1, j2, j1_start = 0;
+  uint32_t j1, j2, j1_start = 0;
   uint8_t label_sig, label_mag = 0;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+    for (j2 = 0; j2 < block->size.x; j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
-        if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
+          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           label_sig = block->get_context_label_sig(j1, j2);
-          if (block->get_state(Sigma_, j1, j2) == 0 && label_sig == 0) {
+          if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig == 0) {
             label_mag = 14;
-          } else if (block->get_state(Sigma_, j1, j2) == 0 && label_sig > 0) {
+          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig > 0) {
             label_mag = 15;
-          } else if (block->get_state(Sigma_, j1, j2) == 1) {
+          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 1) {
             label_mag = 16;
           }
           symbol = mq_dec.decode(label_mag);
-          block->update_sample(symbol, p, j1, j2);
-          block->modify_state(sigma_, 1, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
+          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
+          //          block->modify_state(sigma_, 1, j1, j2);
+          state_p[0] |= 1 << SHIFT_SIGMA_;
         }
       }
     }
-    j1_start = static_cast<int16_t>(j1_start + 4);
+    j1_start += 4;
   }
 
   if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
-      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
-        if (block->get_state(Sigma, j1, j2) == 1 && block->get_state(Pi_, j1, j2) == 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+    for (j2 = 0; j2 < block->size.x; j2++) {
+      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
+          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           label_sig = block->get_context_label_sig(j1, j2);
-          if (block->get_state(Sigma_, j1, j2) == 0 && label_sig == 0) {
+          if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig == 0) {
             label_mag = 14;
-          } else if (block->get_state(Sigma_, j1, j2) == 0 && label_sig > 0) {
+          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig > 0) {
             label_mag = 15;
-          } else if (block->get_state(Sigma_, j1, j2) == 1) {
+          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 1) {
             label_mag = 16;
           }
           symbol = mq_dec.decode(label_mag);
-          block->update_sample(symbol, p, j1, j2);
-          block->modify_state(sigma_, 1, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
+          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
+          //          block->modify_state(sigma_, 1, j1, j2);
+          state_p[0] |= 1 << SHIFT_SIGMA_;
         }
       }
     }
@@ -278,7 +334,7 @@ void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_d
 
 void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
   uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  int16_t j1, j2, j1_start = 0;
+  uint32_t j1, j2, j1_start = 0;
   uint8_t label_sig;
   const uint8_t label_run = 17;
   const uint8_t label_uni = 18;
@@ -286,17 +342,16 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
   int32_t k;
   int32_t r = 0;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
+    for (j2 = 0; j2 < block->size.x; j2++) {
       k = 4;
       while (k > 0) {
-        j1 = static_cast<int16_t>(j1_start + 4 - k);
-        r  = -1;
-        if (j1 % 4 == 0 && j1 <= static_cast<int16_t>(block->size.y) - 4) {
+        j1               = j1_start + 4 - static_cast<uint32_t>(k);
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        r                = -1;
+        if (j1 % 4 == 0 && j1 <= block->size.y - 4) {
           label_sig = 0;
-          for (int i = 0; i < 4; i++) {
-            label_sig =
-                label_sig
-                | static_cast<uint8_t>(block->get_context_label_sig(static_cast<int16_t>(j1 + i), j2));
+          for (uint32_t i = 0; i < 4; i++) {
+            label_sig = label_sig | static_cast<uint8_t>(block->get_context_label_sig(j1 + i, j2));
           }
           if (label_sig == 0) {
             symbol = mq_dec.decode(label_run);
@@ -306,45 +361,56 @@ void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_
               r = mq_dec.decode(label_uni);
               r <<= 1;
               r += mq_dec.decode(label_uni);
-              block->update_sample(1, p, static_cast<int16_t>(j1 + r), j2);
+              //              block->update_sample(1, p, static_cast<int16_t>(j1 + r), j2);
+              block->sample_buf[(j1 + static_cast<uint32_t>(r)) * block->blksampl_stride + j2] |= symbol
+                                                                                                  << p;
             }
             k -= r;
           }
           if (k != 0) {
-            j1 = static_cast<int16_t>(j1_start + 4 - k);
+            j1      = j1_start + 4 - static_cast<uint32_t>(k);
+            state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
           }
         }
-        if (block->get_state(Sigma, j1, j2) == 0 && block->get_state(Pi_, j1, j2) == 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+        if ((state_p[0] & 1 << SHIFT_SIGMA) == 0 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
+          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           if (r >= 0) {
             r = r - 1;
           } else {
             label_sig = block->get_context_label_sig(j1, j2);
             symbol    = mq_dec.decode(label_sig);
-            block->update_sample(symbol, p, j1, j2);
+            //            block->update_sample(symbol, p, j1, j2);
+            block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
           }
-          if (block->sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * block->blksampl_stride]
-              == static_cast<int32_t>(1) << p) {
-            block->modify_state(sigma, 1, j1, j2);
+          if (block->sample_buf[j2 + j1 * block->blksampl_stride] == static_cast<int32_t>(1) << p) {
+            //            block->modify_state(sigma, 1, j1, j2);
+            state_p[0] |= 1;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
         }
         k--;
       }
     }
-    j1_start = static_cast<int16_t>(j1_start + 4);
+    j1_start += 4;
   }
 
   if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < static_cast<int16_t>(block->size.x); j2++) {
-      for (j1 = j1_start; j1 < j1_start + static_cast<int16_t>(block->size.y % 4); j1++) {
-        if (block->get_state(Sigma, j1, j2) == 0 && block->get_state(Pi_, j1, j2) == 0) {
-          block->modify_state(decoded_bitplane_index, p, j1, j2);
+    for (j2 = 0; j2 < block->size.x; j2++) {
+      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        if ((state_p[0] & 1 << SHIFT_SIGMA) == 0 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
+          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
+          state_p[0] &= 0x7;
+          state_p[0] |= p << SHIFT_P;
           label_sig = block->get_context_label_sig(j1, j2);
           symbol    = mq_dec.decode(label_sig);
-          block->update_sample(symbol, p, j1, j2);
+          //          block->update_sample(symbol, p, j1, j2);
+          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
           if (symbol) {
-            block->modify_state(sigma, 1, j1, j2);
+            //            block->modify_state(sigma, 1, j1, j2);
+            state_p[0] |= 1;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
         }

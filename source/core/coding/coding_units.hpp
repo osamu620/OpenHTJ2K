@@ -122,15 +122,15 @@ class j2k_codeblock : public j2k_region {
   // DEBUG FUNCTION, SOON BE DELETED
   [[maybe_unused]] [[nodiscard]] uint8_t get_orientation() const { return band; }
 
-  [[nodiscard]] uint8_t get_context_label_sig(const int16_t &j1, const int16_t &j2) const;
-  [[nodiscard]] uint8_t get_signLUT_index(const int16_t &j1, const int16_t &j2) const;
+  [[nodiscard]] uint8_t get_context_label_sig(const uint32_t &j1, const uint32_t &j2) const;
+  [[nodiscard]] uint8_t get_signLUT_index(const uint32_t &j1, const uint32_t &j2) const;
   [[nodiscard]] uint8_t get_Mb() const;
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   void create_compressed_buffer(buf_chain *tile_buf, int32_t buf_limit, const uint16_t &layer);
   void update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1, const int16_t &j2) const;
-  void update_sign(const int8_t &val, const int16_t &j1, const int16_t &j2) const;
-  [[nodiscard]] uint8_t get_sign(const int16_t &j1, const int16_t &j2) const;
+  void update_sign(const int8_t &val, const uint32_t &j1, const uint32_t &j2) const;
+  [[nodiscard]] uint8_t get_sign(const uint32_t &j1, const uint32_t &j2) const;
   void quantize(uint32_t &or_val);
   uint8_t calc_mbr(int16_t i, int16_t j, uint8_t causal_cond) const;
   void dequantize(uint8_t ROIshift) const;

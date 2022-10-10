@@ -3142,9 +3142,9 @@ uint8_t *j2k_tile::encode() {
     [[maybe_unused]] const uint8_t ROIshift = tcomp[c].get_ROIshift();
     const uint8_t NL                        = tcomp[c].get_dwt_levels();
     // const uint8_t transformation = tcomp[c].get_transformation();
-    element_siz top_left     = tcomp[c].get_pos0();
-    element_siz bottom_right = tcomp[c].get_pos1();
-    j2k_resolution *cr       = tcomp[c].access_resolution(NL);
+    //    element_siz top_left     = tcomp[c].get_pos0();
+    //    element_siz bottom_right = tcomp[c].get_pos1();
+    j2k_resolution *cr = tcomp[c].access_resolution(NL);
 
     auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
       uint32_t length = 0;
@@ -3178,9 +3178,9 @@ uint8_t *j2k_tile::encode() {
     for (uint8_t r = NL; r > 0; --r) {
       // encode codeblocks in HL or LH or HH
       length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
-      cr           = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
-      top_left     = cr->get_pos0();
-      bottom_right = cr->get_pos1();
+      cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
+      //      top_left     = cr->get_pos0();
+      //      bottom_right = cr->get_pos1();
     }
     // encode codeblocks in LL
     length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
