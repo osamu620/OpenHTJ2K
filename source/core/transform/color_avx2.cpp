@@ -41,7 +41,7 @@ void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       __m256i mR       = *((__m256i *)p0);
       __m256i mG       = *((__m256i *)p1);
       __m256i mB       = *((__m256i *)p2);
@@ -54,19 +54,6 @@ void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
       p0 += 8;
       p1 += 8;
       p2 += 8;
-    }
-    int32_t R, G, B;
-    int32_t Y, Cb, Cr;
-    for (; len > 0; --len) {
-      R     = *p0;
-      G     = *p1;
-      B     = *p2;
-      Y     = (R + 2 * G + B) >> 2;
-      Cb    = B - G;
-      Cr    = R - G;
-      *p0++ = Y;
-      *p1++ = Cb;
-      *p2++ = Cr;
     }
   }
 }
@@ -84,7 +71,7 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       __m256 mR        = _mm256_cvtepi32_ps(*((__m256i *)p0));
       __m256 mG        = _mm256_cvtepi32_ps(*((__m256i *)p1));
       __m256 mB        = _mm256_cvtepi32_ps(*((__m256i *)p2));
@@ -100,19 +87,6 @@ void cvt_rgb_to_ycbcr_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
       p1 += 8;
       p2 += 8;
     }
-    double fR, fG, fB;
-    double fY, fCb, fCr;
-    for (; len > 0; --len) {
-      fR    = static_cast<double>(*p0);
-      fG    = static_cast<double>(*p1);
-      fB    = static_cast<double>(*p2);
-      fY    = ALPHA_R * fR + ALPHA_G * fG + ALPHA_B * fB;
-      fCb   = (1.0 / CB_FACT_B) * (fB - fY);
-      fCr   = (1.0 / CR_FACT_R) * (fR - fY);
-      *p0++ = round_d(fY);
-      *p1++ = round_d(fCb);
-      *p2++ = round_d(fCr);
-    }
   }
 }
 
@@ -123,7 +97,7 @@ void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       __m256i mCb      = *((__m256i *)p1);
       __m256i mCr      = *((__m256i *)p2);
       __m256i mY       = *((__m256i *)p0);
@@ -136,19 +110,6 @@ void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
       p0 += 8;
       p1 += 8;
       p2 += 8;
-    }
-    int32_t R, G, B;
-    int32_t Y, Cb, Cr;
-    for (; len > 0; --len) {
-      Y     = *p0;
-      Cb    = *p1;
-      Cr    = *p2;
-      G     = Y - ((Cb + Cr) >> 2);
-      R     = Cr + G;
-      B     = Cb + G;
-      *p0++ = R;
-      *p1++ = G;
-      *p2++ = B;
     }
   }
 }
@@ -165,7 +126,7 @@ void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len >= 8; len -= 8) {
+    for (; len > 0; len -= 8) {
       __m256 mY        = _mm256_cvtepi32_ps(*((__m256i *)p0));
       __m256 mCb       = _mm256_cvtepi32_ps(*((__m256i *)p1));
       __m256 mCr       = _mm256_cvtepi32_ps(*((__m256i *)p2));
@@ -179,20 +140,6 @@ void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
       p0 += 8;
       p1 += 8;
       p2 += 8;
-    }
-    int32_t R, G, B;
-    double fY, fCb, fCr;
-    for (; len > 0; --len) {
-      fY  = static_cast<double>(*p0);
-      fCb = static_cast<double>(*p1);
-      fCr = static_cast<double>(*p2);
-      R   = static_cast<int32_t>(round_d(fY + static_cast<float>(CR_FACT_R) * fCr));
-      B   = static_cast<int32_t>(round_d(fY + static_cast<float>(CB_FACT_B) * fCb));
-      G   = static_cast<int32_t>(
-          round_d(fY - static_cast<float>(CR_FACT_G) * fCr - static_cast<float>(CB_FACT_G) * fCb));
-      *p0++ = R;
-      *p1++ = G;
-      *p2++ = B;
     }
   }
 }
