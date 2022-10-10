@@ -425,7 +425,8 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
         *sp |= bit << pLSB;
         *sp |= bit << (pLSB - 1);  // new bin center ( = 0.5)
       }
-      block->modify_state(scan, 1, i, j);
+      //      block->modify_state(scan, 1, i, j);
+      state_p[0] |= 1 << SHIFT_SCAN;
     }
   }
   // Decode sign
