@@ -41,33 +41,18 @@
   #define Q1 1
 
 uint8_t j2k_codeblock::calc_mbr(const int16_t i, const int16_t j, const uint8_t causal_cond) const {
-  const int16_t im1 = static_cast<int16_t>(i - 1);
-  const int16_t jm1 = static_cast<int16_t>(j - 1);
-  const int16_t ip1 = static_cast<int16_t>(i + 1);
-  const int16_t jp1 = static_cast<int16_t>(j + 1);
-  uint8_t mbr       = get_state(Sigma, im1, jm1);
-  mbr               = mbr | get_state(Sigma, im1, j);
-  mbr               = mbr | get_state(Sigma, im1, jp1);
-  mbr               = mbr | get_state(Sigma, i, jm1);
-  mbr               = mbr | get_state(Sigma, i, jp1);
-  mbr               = mbr | static_cast<uint8_t>(get_state(Sigma, ip1, jm1) * causal_cond);
-  mbr               = mbr | static_cast<uint8_t>(get_state(Sigma, ip1, j) * causal_cond);
-  mbr               = mbr | static_cast<uint8_t>(get_state(Sigma, ip1, jp1) * causal_cond);
+  uint8_t *state_p0 = block_states + static_cast<size_t>(i) * blkstate_stride + j;
+  uint8_t *state_p1 = block_states + static_cast<size_t>(i + 1) * blkstate_stride + j;
+  uint8_t *state_p2 = block_states + static_cast<size_t>(i + 2) * blkstate_stride + j;
 
-  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, im1, jm1) * get_state(Scan, im1, jm1));
-  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, im1, j) * get_state(Scan, im1, j));
-  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, im1, jp1) * get_state(Scan, im1, jp1));
-  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, i, jm1) * get_state(Scan, i, jm1));
-  mbr = mbr | static_cast<uint8_t>(get_state(Refinement_value, i, jp1) * get_state(Scan, i, jp1));
-  mbr = mbr
-        | static_cast<uint8_t>(get_state(Refinement_value, ip1, jm1) * get_state(Scan, ip1, jm1)
-                               * causal_cond);
-  mbr = mbr
-        | static_cast<uint8_t>(get_state(Refinement_value, ip1, j) * get_state(Scan, ip1, j) * causal_cond);
-  mbr = mbr
-        | static_cast<uint8_t>(get_state(Refinement_value, ip1, jp1) * get_state(Scan, ip1, jp1)
-                               * causal_cond);
-  return mbr;
+  uint8_t mbr0 = state_p0[0] | state_p0[1] | state_p0[2];
+  uint8_t mbr1 = state_p1[0] | state_p1[2];
+  uint8_t mbr2 = state_p2[0] | state_p2[1] | state_p2[2];
+  uint8_t mbr  = mbr0 | mbr1 | (mbr2 & causal_cond);
+  mbr |= (mbr0 >> SHIFT_REF) & (mbr0 >> SHIFT_SCAN);
+  mbr |= (mbr1 >> SHIFT_REF) & (mbr1 >> SHIFT_SCAN);
+  mbr |= (mbr2 >> SHIFT_REF) & (mbr2 >> SHIFT_SCAN) & causal_cond;
+  return mbr & 1;
 }
 
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
