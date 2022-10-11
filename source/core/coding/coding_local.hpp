@@ -37,37 +37,38 @@
 #define SHIFT_SMAG 5    // HTJ2K enc only; used for HT SigProp and MagRef
 #define SHIFT_SSGN 6    // HTJ2K enc only; used for HT SigProp
 
-// getters
-inline uint8_t Sigma(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_SIGMA) & 1); }
-inline uint8_t Sigma_(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_SIGMA_) & 1); }
-inline uint8_t Pi_(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_PI_) & 1); }
-inline uint8_t Scan(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_SCAN) & 1); }
-inline uint8_t Refinement_value(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_REF) & 1); }
-inline uint8_t Refinement_indicator(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_PI_) & 1); }
-inline uint8_t Decoded_bitplane_index(uint8_t &data) { return static_cast<uint8_t>(data >> SHIFT_P); }
-
-// setters
-inline void sigma(uint8_t &data, const uint8_t &val) { data |= val; }
-inline void sigma_(uint8_t &data, const uint8_t &val) { data |= static_cast<uint8_t>(val << SHIFT_SIGMA_); }
-inline void pi_(uint8_t &data, const uint8_t &val) {
-  if (val) {
-    data |= static_cast<uint8_t>(1 << SHIFT_PI_);
-  } else {
-    data &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
-  }
-}
-inline void scan(uint8_t &data, const uint8_t &val) { data |= static_cast<uint8_t>(val << SHIFT_SCAN); }
-inline void refinement_value(uint8_t &data, const uint8_t &val) {
-  data |= static_cast<uint8_t>(val << SHIFT_REF);
-}
-inline void refinement_indicator(uint8_t &data, const uint8_t &val) {
-  if (val) {
-    data |= static_cast<uint8_t>(1 << SHIFT_PI_);
-  } else {
-    data &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
-  }
-}
-inline void decoded_bitplane_index(uint8_t &data, const uint8_t &val) {
-  data &= 0x07;
-  data |= static_cast<uint8_t>(val << SHIFT_P);
-}
+//// getters
+// inline uint8_t Sigma(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_SIGMA) & 1); }
+// inline uint8_t Sigma_(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_SIGMA_) & 1); }
+// inline uint8_t Pi_(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_PI_) & 1); }
+// inline uint8_t Scan(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_SCAN) & 1); }
+// inline uint8_t Refinement_value(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_REF) & 1); }
+// inline uint8_t Refinement_indicator(uint8_t &data) { return static_cast<uint8_t>((data >> SHIFT_PI_) &
+// 1); } inline uint8_t Decoded_bitplane_index(uint8_t &data) { return static_cast<uint8_t>(data >>
+// SHIFT_P); }
+//
+//// setters
+// inline void sigma(uint8_t &data, const uint8_t &val) { data |= val; }
+// inline void sigma_(uint8_t &data, const uint8_t &val) { data |= static_cast<uint8_t>(val <<
+// SHIFT_SIGMA_); } inline void pi_(uint8_t &data, const uint8_t &val) {
+//   if (val) {
+//     data |= static_cast<uint8_t>(1 << SHIFT_PI_);
+//   } else {
+//     data &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
+//   }
+// }
+// inline void scan(uint8_t &data, const uint8_t &val) { data |= static_cast<uint8_t>(val << SHIFT_SCAN); }
+// inline void refinement_value(uint8_t &data, const uint8_t &val) {
+//   data |= static_cast<uint8_t>(val << SHIFT_REF);
+// }
+// inline void refinement_indicator(uint8_t &data, const uint8_t &val) {
+//   if (val) {
+//     data |= static_cast<uint8_t>(1 << SHIFT_PI_);
+//   } else {
+//     data &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
+//   }
+// }
+// inline void decoded_bitplane_index(uint8_t &data, const uint8_t &val) {
+//   data &= 0x07;
+//   data |= static_cast<uint8_t>(val << SHIFT_P);
+// }
