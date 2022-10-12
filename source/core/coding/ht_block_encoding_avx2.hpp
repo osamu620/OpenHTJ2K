@@ -113,7 +113,7 @@ class state_MS_enc {
 
     uint64_t t = 0;
     for (int i = 0; i < 8; ++i) {
-      tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+      tmp = (val >> (bits_local)) & ((1U << (8 - stuff)) - 1);
       t |= tmp << (8 * i);
       bits_local += 8 - stuff;
       stuff = (tmp == 0xFF);
@@ -244,25 +244,25 @@ class state_VLC_enc {
 
     temp      = (val >> bits_local) & 0xFF;
     stuff     = (last > 0x8F) && ((temp & 0x7F) == 0x7F);
-    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    last_byte = temp & ((1U << (8 - stuff)) - 1);
     t |= last_byte << 24;
     bits_local += 8 - stuff;
 
     temp      = (val >> bits_local) & 0xFF;
     stuff     = (last_byte > 0x8F) && ((temp & 0x7F) == 0x7F);
-    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    last_byte = temp & ((1U << (8 - stuff)) - 1);
     t |= last_byte << 16;
     bits_local += 8 - stuff;
 
     temp      = (val >> bits_local) & 0xFF;
     stuff     = (last_byte > 0x8F) && ((temp & 0x7F) == 0x7F);
-    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    last_byte = temp & ((1U << (8 - stuff)) - 1);
     t |= last_byte << 8;
     bits_local += 8 - stuff;
 
     temp      = (val >> bits_local) & 0xFF;
     stuff     = (last_byte > 0x8F) && ((temp & 0x7F) == 0x7F);
-    last_byte = temp & ((1 << (8 - stuff)) - 1);
+    last_byte = temp & ((1U << (8 - stuff)) - 1);
     t |= last_byte << 0;
     bits_local += 8 - stuff;
 

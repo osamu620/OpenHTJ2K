@@ -718,7 +718,7 @@ auto process_stripes_block_enc = [](SP_enc &SigProp, j2k_codeblock *block, const
         //        block->modify_state(refinement_indicator, 1, i, j);
         sp[0] |= 1 << SHIFT_PI_;
         //        block->modify_state(refinement_value, bit, i, j);
-        sp[0] |= bit << SHIFT_REF;
+        sp[0] |= static_cast<uint8_t>(bit << SHIFT_REF);
       }
       //      block->modify_state(scan, 1, i, j);
       sp[0] |= 1 << SHIFT_SCAN;

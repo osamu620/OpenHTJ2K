@@ -1547,7 +1547,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
-  const int32_t shiftup   = (transformation) ? 0U : FRACBITS - this->bitdepth;
+  const int32_t shiftup   = (transformation) ? 0 : FRACBITS - this->bitdepth;
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
   const int32_t stride    = round_up(static_cast<int32_t>(this->pos1.x - this->pos0.x), 32);
   const int32_t width     = static_cast<int32_t>(this->pos1.x - this->pos0.x);
