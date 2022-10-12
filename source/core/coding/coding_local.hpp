@@ -31,7 +31,7 @@
 #define SHIFT_SIGMA 0   // J2K and HTJ2K
 #define SHIFT_SIGMA_ 1  // J2K only
 #define SHIFT_PI_ 2     // J2K and HTJ2K; used as refinement indicator for HTJ2K
-#define SHIFT_REF 3     // HTJ2K only
+#define SHIFT_REF 3U    // HTJ2K only
 #define SHIFT_SCAN 4    // HTJ2K only
 #define SHIFT_P 3U      // J2K only
 #define SHIFT_SMAG 5    // HTJ2K enc only; used for HT SigProp and MagRef

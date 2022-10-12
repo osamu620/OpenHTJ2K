@@ -29,6 +29,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
+#include <exception>
 
 #if __GNUC__ || __has_attribute(always_inline)
   #define FORCE_INLINE inline __attribute__((always_inline))
@@ -804,7 +806,7 @@ class fwd_buf {
       --bits;  // consuming one stuffing bit
 
       uint32_t loc = 31 - count_leading_zeros(flags);
-      flags ^= 1 << loc;
+      flags ^= 1U << loc;
 
       __m128i m, t, c;
       t = _mm_set1_epi8((char)loc);
@@ -821,8 +823,8 @@ class fwd_buf {
 
     // combine with earlier data
     assert(this->bits >= 0 && this->bits <= 128);
-    int cur_bytes = this->bits >> 3;
-    int cur_bits  = this->bits & 7;
+    uint32_t cur_bytes = this->bits >> 3;
+    int cur_bits       = this->bits & 7;
     __m128i b1, b2;
     b1 = _mm_sll_epi64(val, _mm_set1_epi64x(cur_bits));
     b2 = _mm_slli_si128(val, 8);  // 8 bytes right

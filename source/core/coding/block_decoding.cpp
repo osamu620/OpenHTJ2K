@@ -123,7 +123,7 @@ inline void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_d
         if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
           //            block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.get_raw_symbol();
           //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
@@ -152,7 +152,7 @@ inline void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_d
         if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
           //            block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.get_raw_symbol();
           //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
@@ -186,7 +186,7 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
         if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
           // block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.decode(label_sig);
           //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
@@ -214,7 +214,7 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
         if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
           // block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.decode(label_sig);
           //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
@@ -236,7 +236,7 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
 
 inline void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
   uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  uint16_t j1, j2, j1_start = 0;
+  uint32_t j1, j2, j1_start = 0;
   uint8_t symbol;
   for (uint16_t n = 0; n < num_v_stripe; n++) {
     for (j2 = 0; j2 < block->size.x; j2++) {
@@ -245,7 +245,7 @@ inline void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_de
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
           //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.get_raw_symbol();
           //          block->update_sample(symbol, p, j1, j2);
           block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
@@ -264,7 +264,7 @@ inline void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_de
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
           //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.get_raw_symbol();
           //          block->update_sample(symbol, p, j1, j2);
           block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
@@ -288,7 +288,7 @@ inline void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decode
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
           //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           label_sig = get_context_label_sig(block, j1, j2);
           if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig == 0) {
             label_mag = 14;
@@ -315,7 +315,7 @@ inline void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decode
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
           //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           label_sig = get_context_label_sig(block, j1, j2);
           if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig == 0) {
             label_mag = 14;
@@ -378,7 +378,7 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 0 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
           //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           if (r >= 0) {
             r = r - 1;
           } else {
@@ -406,7 +406,7 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 0 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
           //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
-          state_p[0] |= p << SHIFT_P;
+          state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           label_sig = get_context_label_sig(block, j1, j2);
           symbol    = mq_dec.decode(label_sig);
           //          block->update_sample(symbol, p, j1, j2);
