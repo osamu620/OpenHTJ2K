@@ -43,7 +43,7 @@
   #define Q0 0
   #define Q1 1
 
-//#define HTSIMD
+// Uncomment for experimental use of HT SigProp and MagRef encoding (does not work)
 //#define ENABLE_SP_MR
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
@@ -57,19 +57,19 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 
   const uint32_t height = this->size.y;
   const uint32_t stride = this->band_stride;
-  const int32_t pshift  = (refsegment) ? 1 : 0;
-  const int32_t pLSB    = (refsegment) ? 2 : 1;
-
+  #if defined(ENABLE_SP_MR)
+  const int32_t pshift = (refsegment) ? 1 : 0;
+  const int32_t pLSB   = (refsegment) ? 1 : 1;
+  #endif
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states + block_index;
-
+  #if defined(ENABLE_SP_MR)
     const __m256i vpLSB = _mm256_set1_epi32(pLSB);
+  #endif
     const __m256i vone  = _mm256_set1_epi32(1);
-    // const __m256i vabsmask = _mm256_set1_epi32(0x7FFFFFFF);
-    // __m256i vorval         = _mm256_setzero_si256();
     const __m256 vscale = _mm256_set1_ps(fscale);
     // simd
     int32_t len = static_cast<int32_t>(this->size.x);
@@ -77,8 +77,6 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       __m256i coeff16 = _mm256_loadu_si256((__m256i *)sp);
       __m256i v0      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 0));
       __m256i v1      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 1));
-      // __m256i v0 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)sp));
-      // __m256i v1 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)sp + 1));
       // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
       v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), vscale));
       v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
@@ -87,11 +85,14 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       __m256i s1 = _mm256_srli_epi32(v1, 31);
       v0         = _mm256_abs_epi32(v0);
       v1         = _mm256_abs_epi32(v1);
+  #if defined(ENABLE_SP_MR)
       __m256i z0 = _mm256_and_si256(v0, vpLSB);  // only for SigProp and MagRef
       __m256i z1 = _mm256_and_si256(v1, vpLSB);  // only for SigProp and MagRef
-                                                 // Down-shift if other than HT Cleanup pass exists
+
+      // Down-shift if other than HT Cleanup pass exists
       v0 = _mm256_srai_epi32(v0, pshift);
       v1 = _mm256_srai_epi32(v1, pshift);
+  #endif
       // Generate masks for sigma
       __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
       __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
@@ -114,23 +115,21 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       sp += 16;
       dp += 16;
       // for Block states
-      v0        = _mm256_packs_epi32(vone0, vone1);  // re-use v0 as sigma
-      v0        = _mm256_permute4x64_epi64(v0, 0xD8);
-      vone0     = _mm256_packs_epi32(z0, z1);  // re-use vone0 as z
-      vone0     = _mm256_permute4x64_epi64(vone0, 0xD8);
-      vone1     = _mm256_packs_epi32(_mm256_and_si256(s0, mask0),
-                                     _mm256_and_si256(s1, mask1));  // re-use vone1 as sign
-      vone1     = _mm256_permute4x64_epi64(vone1, 0xD8);
-      v0        = _mm256_or_si256(v0, _mm256_slli_epi16(vone0, SHIFT_SMAG));
-      v0        = _mm256_or_si256(v0, _mm256_slli_epi16(vone1, SHIFT_SSGN));
+      v0 = _mm256_packs_epi32(vone0, vone1);  // re-use v0 as sigma
+      v0 = _mm256_permute4x64_epi64(v0, 0xD8);
+  #if defined(ENABLE_SP_MR)
+      vone0 = _mm256_packs_epi32(z0, z1);  // re-use vone0 as z
+      vone0 = _mm256_permute4x64_epi64(vone0, 0xD8);
+      vone1 = _mm256_packs_epi32(s0, s1);  // re-use vone1 as sign
+      vone1 = _mm256_permute4x64_epi64(vone1, 0xD8);
+      v0    = _mm256_or_si256(v0, _mm256_slli_epi16(vone0, SHIFT_SMAG));
+      v0    = _mm256_or_si256(v0, _mm256_slli_epi16(vone1, SHIFT_SSGN));
+  #endif
       v0        = _mm256_packs_epi16(v0, v0);  // re-use vone0
       v0        = _mm256_permute4x64_epi64(v0, 0xD8);
       __m128i v = _mm256_extracti128_si256(v0, 0);
       // _mm256_zeroupper(); // does not work on GCC, TODO: find a solution with __m128i v
       _mm_storeu_si128((__m128i *)dstblk, v);
-      // // Check emptiness of a block
-      // or_val |= *(uint32_t *)dstblk;
-      // or_val |= *(uint32_t *)(dstblk + 4);
       dstblk += 16;
     }
     // process leftover
@@ -138,11 +137,15 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       int32_t temp;
       temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+  #if defined(ENABLE_SP_MR)
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
       dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
+  #endif
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
+  #if defined(ENABLE_SP_MR)
       temp >>= pshift;
+  #endif
       if (temp) {
         or_val |= 1;
         dstblk[0] |= 1;
