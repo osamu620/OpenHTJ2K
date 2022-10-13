@@ -698,8 +698,8 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
       }
 
       const double eps0 = sqrt(0.5) / static_cast<double>(1 << RI);
-      double delta_Q    = alpha_Q * M_Q + eps0;
-      double delta_ref  = delta_Q * G_c_sqrt[0];
+      double delta_Q    = alpha_Q * M_Q;
+      double delta_ref  = delta_Q * G_c_sqrt[0] + eps0;
       double G_c        = G_c_sqrt[0];  // gain of color transform
       for (size_t i = 0; i < epsilon.size(); ++i) {
         int32_t exponent, mantissa;
@@ -1002,8 +1002,8 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
     }
 
     const double eps0 = sqrt(0.5) / static_cast<double>(1 << RI);
-    double delta_Q    = alpha_Q * M_Q + eps0;
-    double delta_ref  = delta_Q * G_c_sqrt[0];
+    double delta_Q    = alpha_Q * M_Q;
+    double delta_ref  = delta_Q * G_c_sqrt[0] + eps0;
     double G_c        = G_c_sqrt[Cqcc];  // gain of color transform
 
     for (size_t i = 0; i < epsilon.size(); ++i) {
