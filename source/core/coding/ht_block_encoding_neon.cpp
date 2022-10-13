@@ -35,7 +35,7 @@
 
   #include <arm_neon.h>
 
-//#define HTSIMD
+// Uncomment for experimental use of HT SigProp and MagRef encoding (does not work)
 //#define ENABLE_SP_MR
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
@@ -49,9 +49,10 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 
   const uint32_t height = this->size.y;
   const uint32_t stride = this->band_stride;
-  const int32_t pshift  = (refsegment) ? 1 : 0;
-  const int32_t pLSB    = (refsegment) ? 2 : 1;
-
+  #if defined(ENABLE_SP_MR)
+  const int32_t pshift = (refsegment) ? 1 : 0;
+  const int32_t pLSB   = (refsegment) ? 1 : 1;
+  #endif
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
@@ -60,8 +61,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 
     float32x4_t vscale = vdupq_n_f32(fscale);
     int32x4_t vorval   = vdupq_n_s32(0);
-    int32x4_t vpLSB    = vdupq_n_s32(pLSB);
-
+  #if defined(ENABLE_SP_MR)
+    int32x4_t vpLSB = vdupq_n_s32(pLSB);
+  #endif
     int16_t len = static_cast<int16_t>(this->size.x);
     for (; len >= 8; len -= 8) {
       int16x8_t coeff16 = vld1q_s16(sp);
@@ -74,20 +76,33 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       int32x4_t s0 = vshrq_n_u32(v0, 31);
       int32x4_t s1 = vshrq_n_u32(v1, 31);
       // Absolute value
-      v0           = vabsq_s32(v0);
-      v1           = vabsq_s32(v1);
+      v0 = vabsq_s32(v0);
+      v1 = vabsq_s32(v1);
+  #if defined(ENABLE_SP_MR)
       int32x4_t z0 = vandq_s32(v0, vpLSB);  // only for SigProp and MagRef
       int32x4_t z1 = vandq_s32(v1, vpLSB);  // only for SigProp and MagRef
       // Down-shift if other than HT Cleanup pass exists
       v0 = v0 >> pshift;
       v1 = v1 >> pshift;
-      //      // Generate masks for sigma
-      //      int32x4_t mask0 = vcgtzq_s32(v0);
-      //      int32x4_t mask1 = vcgtzq_s32(v1);
-      // for Block states
+  #endif
+      // ------------- Block states related begin
       uint8x8_t vblkstate = vdup_n_u8(0);
       vblkstate |=
           vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vmovn_s32(v0), vmovn_s32(v1))), vdupq_n_s16(1)));
+  #if defined(ENABLE_SP_MR)
+      // bits in lowest bitplane, only for SigProp and MagRef TODO: test this line
+      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), SHIFT_SMAG));
+      // sign-bits, only for SigProp and MagRef  TODO: test this line
+      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(s0), vmovn_s32(s1)), SHIFT_SSGN));
+  #endif
+      vst1_u8(dstblk, vblkstate);
+      dstblk += 8;
+      // ------------- Block states related end
+  #if defined(ENABLE_SP_MR)
+      // Modify sign if other than HT Cleanup pass exists
+      s0 = vandq_s32(vcgtzq_s32(v0), s0);
+      s1 = vandq_s32(vcgtzq_s32(v1), s1);
+  #endif
       // Check emptiness of a block
       vorval = vorrq_s32(vorval, v0);
       vorval = vorrq_s32(vorval, v1);
@@ -103,24 +118,6 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       vst1q_s32(dp + 4, v1);
       sp += 8;
       dp += 8;
-
-      // bits in lowest bitplane, only for SigProp and MagRef TODO: test this line
-      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), SHIFT_SMAG));
-      // sign-bits, only for SigProp and MagRef  TODO: test this line
-      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(s0), vmovn_s32(s1)), SHIFT_SSGN));
-      //      uint8x8_t vblkstate = vget_low_u8(vld1q_u8(dstblk + j));
-      //      uint16x8_t vsign = vcltzq_s16(coeff16) >> 15;
-      //      uint8x8_t vsmag  = vmovn_u16(vandq_s16(coeff16, vpLSB));
-      //      uint8x8_t vssgn  = vmovn_u16(vsign);
-      //      vblkstate |= vsmag << SHIFT_SMAG;
-      //      vblkstate |= vssgn << SHIFT_SSGN;
-      //      int16x8_t vabsmag     = (vabsq_s16(coeff16) & 0x7FFF) >> pshift;
-      //      vzero                 = vorrq_s16(vzero, vabsmag);
-      //      int16x8_t vmasked_one = (vceqzq_s16(vabsmag) ^ 0xFFFF) & vone;
-      //      vblkstate |= vmovn_u16(vmasked_one);
-
-      vst1_u8(dstblk, vblkstate);
-      dstblk += 8;
     }
     // Check emptiness of a block
     or_val |= static_cast<unsigned int>(vmaxvq_s32(vorval));
@@ -129,11 +126,16 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       int32_t temp;
       temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+  #if defined(ENABLE_SP_MR)
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
       dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
+  #endif
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
+  #if defined(ENABLE_SP_MR)
       temp >>= pshift;
+      sign = (temp > 0) ? sign : 0;
+  #endif
       if (temp) {
         or_val |= 1;
         dstblk[0] |= 1;
