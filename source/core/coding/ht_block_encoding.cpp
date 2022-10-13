@@ -38,7 +38,7 @@
   #define Q0 0
   #define Q1 1
 
-//#define HTSIMD
+// Uncomment for experimental use of HT SigProp and MagRef encoding (does not work)
 //#define ENABLE_SP_MR
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
@@ -52,9 +52,10 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 
   const uint32_t height = this->size.y;
   const uint32_t stride = this->band_stride;
-  const int32_t pshift  = (refsegment) ? 1 : 0;
-  const int32_t pLSB    = (refsegment) ? 2 : 1;
-
+  #if defined(ENABLE_SP_MR)
+  const int32_t pshift = (refsegment) ? 1 : 0;
+  const int32_t pLSB   = (refsegment) ? 2 : 1;
+  #endif
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
@@ -66,11 +67,15 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       int32_t temp;
       temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+  #if defined(ENABLE_SP_MR)
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
       dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
+  #endif
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
+  #if defined(ENABLE_SP_MR)
       temp >>= pshift;
+  #endif
       if (temp) {
         or_val |= 1;
         dstblk[0] |= 1;
