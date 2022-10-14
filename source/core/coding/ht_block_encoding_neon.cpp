@@ -33,8 +33,6 @@
   #include "enc_CxtVLC_tables.hpp"
   #include "utils.hpp"
 
-  #include <arm_neon.h>
-
 // Uncomment for experimental use of HT SigProp and MagRef encoding (does not work)
 //#define ENABLE_SP_MR
 
@@ -53,14 +51,13 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const int32_t pshift = (refsegment) ? 1 : 0;
   const int32_t pLSB   = (refsegment) ? 1 : 1;
   #endif
+  float32x4_t vscale = vdupq_n_f32(fscale);
+  int32x4_t vorval   = vdupq_n_s32(0);
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states + block_index;
-
-    float32x4_t vscale = vdupq_n_f32(fscale);
-    int32x4_t vorval   = vdupq_n_s32(0);
   #if defined(ENABLE_SP_MR)
     int32x4_t vpLSB = vdupq_n_s32(pLSB);
   #endif
@@ -87,8 +84,12 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   #endif
       // ------------- Block states related begin
       uint8x8_t vblkstate = vdup_n_u8(0);
+      // Signed saturating extract Narrow (qmovn) is important for very finer quantization stepsize
       vblkstate |=
-          vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vmovn_s32(v0), vmovn_s32(v1))), vdupq_n_s16(1)));
+          vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vqmovn_s32(v0), vqmovn_s32(v1))), vdupq_n_s16(1)));
+      //      vblkstate |=
+      //          vmovn_s16(vbicq_s16(vdupq_n_s16(1), vceqzq_s16(vcombine_s16(vqmovn_s32(v0),
+      //          vqmovn_s32(v1)))));
   #if defined(ENABLE_SP_MR)
       // bits in lowest bitplane, only for SigProp and MagRef TODO: test this line
       vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), SHIFT_SMAG));
