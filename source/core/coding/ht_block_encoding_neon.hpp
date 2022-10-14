@@ -49,7 +49,7 @@ class state_MS_enc {
  private:
   uint64_t Creg;  // temporal buffer for codewords
 
-  //  __uint128_t Creg;    // temporal buffer for codewords for emit_qwards()
+  //  __uint128_t Creg;  // temporal buffer for codewords for emit_qwards()
 
   uint32_t ctreg;      // number of used bits in Creg
   int32_t pos;         // current position in the buffer
@@ -111,13 +111,16 @@ class state_MS_enc {
     for (int i = 0; i < 4; ++i) {
       Creg |= static_cast<__uint128_t>(v[i]) << ctreg;
       ctreg += static_cast<unsigned int>(m[i]);
+      //      while (ctreg >= 64) {
+      //        emit_qword();
+      //      }
+      while (ctreg >= 32) {
+        emit_dword();
+      }
     }
-    //    while (ctreg >= 64) {
-    //      emit_qword();
+    //    while (ctreg >= 32) {
+    //      emit_dword();
     //    }
-    while (ctreg >= 32) {
-      emit_dword();
-    }
   }
 
   FORCE_INLINE int32_t termMS() {
