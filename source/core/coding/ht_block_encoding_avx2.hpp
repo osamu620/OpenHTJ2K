@@ -29,6 +29,12 @@
 #pragma once
 #include <cstdint>
 
+#if defined(_MSC_VER) || defined(__MINGW64__)
+  #include <intrin.h>
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  #include <x86intrin.h>
+#endif
+
 #if __GNUC__ || __has_attribute(always_inline)
   #define FORCE_INLINE inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
@@ -46,17 +52,17 @@
  *******************************************************************************/
 class state_MS_enc {
  private:
-#if defined(_MSC_VER)
-  uint64_t Creg;  // temporal buffer to store up to 4 codewords
-#else
-  __uint128_t Creg;                 // temporal buffer for codewords
-#endif
+  // #if defined(_MSC_VER)
+  //   uint64_t Creg;  // temporal buffer to store up to 4 codewords
+  // #else
+  //   __uint128_t Creg;  // temporal buffer for codewords
+  // #endif
+  uint64_t Creg;       // temporal buffer to store up to 4 codewords
   uint32_t ctreg;      // number of used bits in Creg
   int32_t pos;         // current position in the buffer
   uint8_t last;        // last byte in the buffer
   uint8_t *const buf;  // buffer for MagSgn
 
-#if defined(_MSC_VER)
   FORCE_INLINE void emit_dword() {  // internal function to emit 4 code words
     // The algorithm of bit-stuffing is:
     /*  for (int i = 0; i < 4; ++i) {
@@ -104,28 +110,31 @@ class state_MS_enc {
     *reinterpret_cast<uint32_t *>(buf + pos) = t;
     pos += 4;
   }
-#else
-  FORCE_INLINE void emit_qword() {  // internal function to emit 8 code words
-    uint32_t bits_local = 0;
-    uint64_t val        = Creg & 0xFFFFFFFF'FFFFFFFF;
-    uint32_t stuff      = (last == 0xFF);
-    uint64_t tmp;
 
-    uint64_t t = 0;
-    for (int i = 0; i < 8; ++i) {
-      tmp = (val >> (bits_local)) & ((1U << (8 - stuff)) - 1);
-      t |= tmp << (8 * i);
-      bits_local += 8 - stuff;
-      stuff = (tmp == 0xFF);
-    }
-    last = tmp & 0xFF;
+  /**  Internal function to emit 8 code words:
+   ***  - has a problem with finer quantization stepsize)
+   ***  - require 128bit precision of Creg
+   **/
+  // FORCE_INLINE void emit_qword() {
+  //   uint32_t bits_local = 0;
+  //   uint64_t val        = Creg & 0xFFFFFFFF'FFFFFFFF;
+  //   uint32_t stuff      = (last == 0xFF);
+  //   uint64_t tmp;
 
-    Creg >>= bits_local;
-    ctreg -= bits_local;
-    *reinterpret_cast<uint64_t *>(buf + pos) = t;
-    pos += 8;
-  }
-#endif
+  //   uint64_t t = 0;
+  //   for (int i = 0; i < 8; ++i) {
+  //     tmp = (val >> (bits_local)) & ((1U << (8 - stuff)) - 1);
+  //     t |= tmp << (8 * i);
+  //     bits_local += 8 - stuff;
+  //     stuff = (tmp == 0xFF);
+  //   }
+  //   last = tmp & 0xFF;
+
+  //   Creg >>= bits_local;
+  //   ctreg -= bits_local;
+  //   *reinterpret_cast<uint64_t *>(buf + pos) = t;
+  //   pos += 8;
+  // }
 
  public:
   explicit state_MS_enc(uint8_t *p) : Creg(0), ctreg(0), pos(0), last(0), buf(p) {}
@@ -163,10 +172,13 @@ class state_MS_enc {
       ctreg += static_cast<uint32_t>(_mm_cvtsi128_si32(m));
       v = _mm_srli_si128(v, 4);
       m = _mm_srli_si128(m, 4);
+      while (ctreg >= 32) {
+        emit_dword();
+      }
     }
-    while (ctreg >= 64) {
-      emit_qword();
-    }
+    // while (ctreg >= 64) {
+    //   emit_qword();
+    // }
 #endif
   }
 
