@@ -92,7 +92,7 @@ To see a help, use `-h` option.
 
 ## Supported file types
 ### Encoder
-- input image formats: .pgm, .ppm, .pgx
+- input image formats: .pgm, .ppm, .pgx, .tif (libtiff required)
 - output codestreams: .j2k, .j2c, .jphc (Part 15 codestream), .jph (Part 15 file format)
 ### Decoder
 - input codestreams : .j2k, .j2c, .jphc
