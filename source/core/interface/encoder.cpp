@@ -59,10 +59,12 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
         || strcmp(infile_ext_name, ".pgx") == 0 || strcmp(infile_ext_name, ".PGX") == 0) {
       is_pnm_pgx = true;
     }
+#if defined(OPENHTJ2K_TIFF_SUPPORT)
     if (strcmp(infile_ext_name, ".tif") == 0 || strcmp(infile_ext_name, ".TIF") == 0
         || strcmp(infile_ext_name, ".tiff") == 0 || strcmp(infile_ext_name, ".TIFF") == 0) {
       is_tiff = true;
     }
+#endif
 
     if (!is_pnm_pgx && !is_tiff) {
       printf("ERROR: Unsupported output file type.\n");
@@ -74,10 +76,12 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
       }
       c++;
     } else if (is_tiff) {
+#if defined(OPENHTJ2K_TIFF_SUPPORT)
       if (read_tiff(fname, c)) {
         throw std::exception();
       }
       c++;
+#endif
     }
   }
 }
