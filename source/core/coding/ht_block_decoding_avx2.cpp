@@ -441,9 +441,9 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
   uint32_t height = 4;
 
   // decode full-height (=4) stripes
-  for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
+  for (uint32_t n1 = 0; n1 < num_v_stripe; n1++) {
     j_start = 0;
-    for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
+    for (uint32_t n2 = 0; n2 < num_h_stripe; n2++) {
       process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, pLSB);
       j_start += 4;
     }
@@ -456,7 +456,7 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
   // decode remaining height stripes
   height  = block->size.y % 4;
   j_start = 0;
-  for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
+  for (uint32_t n2 = 0; n2 < num_h_stripe; n2++) {
     process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, pLSB);
     j_start += 4;
   }

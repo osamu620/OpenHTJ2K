@@ -469,7 +469,7 @@ int image::read_tiff(const std::string &filename, uint16_t nc) {
         uint8_t *src;
         int32_t *dst;
         src = &line_buf[c * byte_per_sample];
-        dst = &this->buf[c][i * tiff_width];
+        dst = &this->buf[c][static_cast<size_t>(i) * tiff_width];
 
         switch (byte_per_sample) {
           case 1:
