@@ -435,9 +435,9 @@ int image::read_tiff(const std::string &filename, uint16_t nc) {
     this->is_signed.push_back(false);
   }
 
-  const uint32_t byte_per_sample      = (tiff_bits_per_sample + 8U - 1U) / 8U;
-  const uint32_t component_gap        = num_iterations * byte_per_sample;
-  const uint32_t line_width           = component_gap * tiff_width;
+  const uint32_t byte_per_sample = (tiff_bits_per_sample + 8U - 1U) / 8U;
+  const uint32_t component_gap   = num_iterations * byte_per_sample;
+  // const uint32_t line_width = component_gap * tiff_width;
   std::unique_ptr<uint8_t[]> line_buf = MAKE_UNIQUE<uint8_t[]>(bytes_per_line);
 
   // allocate memory once
