@@ -19,8 +19,11 @@ else()
   check_cxx_compiler_flag("-std=c++17" COMPILER_SUPPORTS_CXX17)
 endif()
 
-# Cehck Thread support
+# Check Thread support
 find_package(Threads)
+
+# Check TIFF support
+find_package(TIFF)
 
 # Compiler settings
 if(COMPILER_SUPPORTS_CXX17)
@@ -33,8 +36,6 @@ else()
   set(CMAKE_CXX_STANDARD 11)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
-
-find_package(Threads REQUIRED)
 
 message(STATUS "${CMAKE_HOST_SYSTEM_PROCESSOR} ${CMAKE_CXX_COMPILER_ID}")
 
@@ -128,6 +129,17 @@ add_library(open_htj2k ${SOURCES})
 if (Threads_FOUND)
   message(STATUS "Thread library found")
   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+  message(STATUS "OPENHTJ2K_THREAD is set")
+endif()
+
+if (TIFF_FOUND)
+  message(STATUS "libtiff found")
+  message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
+  message(STATUS "tiff library = ${TIFF_LIBRARIES}")
+  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TIFF_SUPPORT")
+  target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
+  target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
+  message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
 endif()
 
 if(ENABLE_ARM_NEON)
@@ -152,8 +164,9 @@ set_target_properties(
   open_htj2k PROPERTIES OUTPUT_NAME
                         $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
 # target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
-target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
-
+if (Threads_FOUND)
+  target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+endif()
 # INSTALL(TARGETS open_htj2k EXPORT open_htj2k INCLUDES DESTINATION include
 # LIBRARY DESTINATION lib)
 #

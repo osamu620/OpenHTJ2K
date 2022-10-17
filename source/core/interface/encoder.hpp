@@ -32,7 +32,9 @@
 #include <memory>
 #include <string>
 #include <vector>
-
+#if defined(OPENHTJ2K_TIFF_SUPPORT)
+  #include <tiffio.h>
+#endif
 namespace open_htj2k {
 class image {
  private:
@@ -52,6 +54,7 @@ class image {
 #else
   explicit image(const std::vector<std::string> &filenames);
   int read_pnmpgx(const std::string &filename, uint16_t nc);
+  int read_tiff(const std::string &filename, uint16_t nc);
 #endif
 
   [[nodiscard]] uint32_t get_width() const { return this->width; }
