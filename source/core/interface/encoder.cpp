@@ -370,7 +370,7 @@ int image::read_tiff(const std::string &filename, uint16_t nc) {
   TIFFGetField(tiff_handle, TIFFTAG_IMAGEWIDTH, &tiff_width);
   TIFFGetField(tiff_handle, TIFFTAG_IMAGELENGTH, &tiff_height);
 
-  uint8_t tiff_bits_per_sample    = 0;
+  uint16_t tiff_bits_per_sample   = 0;
   uint16_t tiff_samples_per_pixel = 0;
   TIFFGetField(tiff_handle, TIFFTAG_BITSPERSAMPLE, &tiff_bits_per_sample);
   TIFFGetField(tiff_handle, TIFFTAG_SAMPLESPERPIXEL, &tiff_samples_per_pixel);
@@ -431,7 +431,7 @@ int image::read_tiff(const std::string &filename, uint16_t nc) {
   for (int i = 0; i < num_iterations; ++i) {
     this->component_width.push_back(width);
     this->component_height.push_back(height);
-    this->bits_per_pixel.push_back(tiff_bits_per_sample);
+    this->bits_per_pixel.push_back(static_cast<uint8_t>(tiff_bits_per_sample));
     this->is_signed.push_back(false);
   }
 
