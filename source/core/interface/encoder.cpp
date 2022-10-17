@@ -356,6 +356,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   return EXIT_SUCCESS;
 }
 
+#if defined(OPENHTJ2K_TIFF_SUPPORT)
 int image::read_tiff(const std::string &filename, uint16_t nc) {
   TIFF *tiff_handle;
   size_t bytes_per_line;
@@ -494,6 +495,7 @@ int image::read_tiff(const std::string &filename, uint16_t nc) {
   }
   return EXIT_SUCCESS;
 }
+#endif
 
 // openhtj2k_encoder_impl shall not be public
 class openhtj2k_encoder_impl {
