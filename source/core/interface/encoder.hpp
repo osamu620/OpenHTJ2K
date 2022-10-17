@@ -51,11 +51,15 @@ class image {
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   __declspec(dllexport) explicit image(const std::vector<std::string> &filenames);
   __declspec(dllexport) int read_pnmpgx(const std::string &filename, const uint16_t nc);
+  #if defined(OPENHTJ2K_TIFF_SUPPORT)
   __declspec(dllexport) int read_tiff(const std::string &filename, const uint16_t nc);
+  #endif
 #else
   explicit image(const std::vector<std::string> &filenames);
   int read_pnmpgx(const std::string &filename, uint16_t nc);
+  #if defined(OPENHTJ2K_TIFF_SUPPORT)
   int read_tiff(const std::string &filename, uint16_t nc);
+  #endif
 #endif
 
   [[nodiscard]] uint32_t get_width() const { return this->width; }
