@@ -53,7 +53,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC") # MSVC
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} /O2 /ZI")
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang") # Clang
   if(NOT COMPILER_SUPPORTS_CXX17)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -fsanitize=address")
   endif()
   set(CMAKE_CXX_FLAGS
       "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fcolor-diagnostics"
