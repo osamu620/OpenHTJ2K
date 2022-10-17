@@ -48,11 +48,37 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
   }
   num_components = static_cast<uint16_t>(num_files);  // num_components may change after parsing PPM header
   uint16_t c     = 0;
+  char ext_name[256];
+  char *infile_ext_name = ext_name;
   for (const auto &fname : filenames) {
-    if (read_pnmpgx(fname, c)) {
-      throw std::exception();
+    bool is_pnm_pgx = false;
+    bool is_tiff    = false;
+    infile_ext_name = strrchr(const_cast<char *>(fname.c_str()), '.');
+    if (strcmp(infile_ext_name, ".pgm") == 0 || strcmp(infile_ext_name, ".PGM") == 0
+        || strcmp(infile_ext_name, ".ppm") == 0 || strcmp(infile_ext_name, ".PPM") == 0
+        || strcmp(infile_ext_name, ".pgx") == 0 || strcmp(infile_ext_name, ".PGX") == 0) {
+      is_pnm_pgx = true;
     }
-    c++;
+    if (strcmp(infile_ext_name, ".tif") == 0 || strcmp(infile_ext_name, ".TIF") == 0
+        || strcmp(infile_ext_name, ".tiff") == 0 || strcmp(infile_ext_name, ".TIFF") == 0) {
+      is_tiff = true;
+    }
+
+    if (!is_pnm_pgx && !is_tiff) {
+      printf("ERROR: Unsupported output file type.\n");
+      exit(EXIT_FAILURE);
+    }
+    if (is_pnm_pgx) {
+      if (read_pnmpgx(fname, c)) {
+        throw std::exception();
+      }
+      c++;
+    } else if (is_tiff) {
+      if (read_tiff(fname, c)) {
+        throw std::exception();
+      }
+      c++;
+    }
   }
 }
 
@@ -327,6 +353,145 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     }
   }
   fclose(fp);
+  return EXIT_SUCCESS;
+}
+
+int image::read_tiff(const std::string &filename, uint16_t nc) {
+  TIFF *tiff_handle;
+  size_t bytes_per_line;
+  uint16_t planar_configuration;
+  if ((tiff_handle = TIFFOpen(filename.c_str(), "r")) == nullptr) {
+    printf("ERROR: File %s is not found.\n", filename.c_str());
+    return EXIT_FAILURE;
+  }
+
+  uint32_t tiff_width  = 0;
+  uint32_t tiff_height = 0;
+  TIFFGetField(tiff_handle, TIFFTAG_IMAGEWIDTH, &tiff_width);
+  TIFFGetField(tiff_handle, TIFFTAG_IMAGELENGTH, &tiff_height);
+
+  uint8_t tiff_bits_per_sample    = 0;
+  uint16_t tiff_samples_per_pixel = 0;
+  TIFFGetField(tiff_handle, TIFFTAG_BITSPERSAMPLE, &tiff_bits_per_sample);
+  TIFFGetField(tiff_handle, TIFFTAG_SAMPLESPERPIXEL, &tiff_samples_per_pixel);
+  // some TIFs have tiff_samples_per_pixel=0 when it is a single channel
+  // image - set to 1
+  tiff_samples_per_pixel = (tiff_samples_per_pixel < 1) ? 1 : tiff_samples_per_pixel;
+
+  uint16_t tiff_planar_configuration = 0;
+  uint16_t tiff_photometric          = 0;
+  TIFFGetField(tiff_handle, TIFFTAG_PLANARCONFIG, &tiff_planar_configuration);
+  TIFFGetField(tiff_handle, TIFFTAG_PHOTOMETRIC, &tiff_photometric);
+
+  planar_configuration = tiff_planar_configuration;
+
+  uint16_t tiff_compression    = 0;
+  uint32_t tiff_rows_per_strip = 0;
+  TIFFGetField(tiff_handle, TIFFTAG_COMPRESSION, &tiff_compression);
+  TIFFGetField(tiff_handle, TIFFTAG_ROWSPERSTRIP, &tiff_rows_per_strip);
+
+  if (tiff_planar_configuration == PLANARCONFIG_SEPARATE) {
+    bytes_per_line = tiff_samples_per_pixel * TIFFScanlineSize64(tiff_handle);
+  } else {
+    bytes_per_line = TIFFScanlineSize64(tiff_handle);
+  }
+  // Error on known incompatilbe input formats
+  if (tiff_bits_per_sample != 8 && tiff_bits_per_sample != 16) {
+    printf(
+        "ERROR: TIFF IO is currently limited to file limited"
+        " to files with TIFFTAG_BITSPERSAMPLE=8 and TIFFTAG_BITSPERSAMPLE=16 \n"
+        "input file = %s has TIFFTAG_BITSPERSAMPLE=%d\n",
+        filename.c_str(), tiff_bits_per_sample);
+    TIFFClose(tiff_handle);
+    return EXIT_FAILURE;
+  }
+  if (TIFFIsTiled(tiff_handle)) {
+    printf(
+        "ERROR: TIFF IO is currently limited to TIF files"
+        "without tiles. \nInput file %s has been detected as tiled\n",
+        filename.c_str());
+    TIFFClose(tiff_handle);
+    return EXIT_FAILURE;
+  }
+  if (PHOTOMETRIC_RGB != tiff_photometric && PHOTOMETRIC_MINISBLACK != tiff_photometric) {
+    printf(
+        "ERROR: TIFF IO is currently limited to "
+        "TIFFTAG_PHOTOMETRIC=PHOTOMETRIC_MINISBLACK=%d and "
+        "PHOTOMETRIC_RGB=%d. \nInput file %s has been detected "
+        "TIFFTAG_PHOTOMETRIC=%d\n",
+        PHOTOMETRIC_MINISBLACK, PHOTOMETRIC_RGB, filename.c_str(), tiff_photometric);
+    TIFFClose(tiff_handle);
+    return EXIT_FAILURE;
+  }
+  this->num_components    = tiff_samples_per_pixel;
+  uint16_t num_iterations = this->num_components;
+  // setting bit-depth for components
+  this->width  = tiff_width;
+  this->height = tiff_height;
+  for (int i = 0; i < num_iterations; ++i) {
+    this->component_width.push_back(width);
+    this->component_height.push_back(height);
+    this->bits_per_pixel.push_back(tiff_bits_per_sample);
+    this->is_signed.push_back(false);
+  }
+
+  const uint32_t byte_per_sample      = (tiff_bits_per_sample + 8U - 1U) / 8U;
+  const uint32_t component_gap        = num_iterations * byte_per_sample;
+  const uint32_t line_width           = component_gap * tiff_width;
+  std::unique_ptr<uint8_t[]> line_buf = MAKE_UNIQUE<uint8_t[]>(bytes_per_line);
+
+  // allocate memory once
+  if (this->buf == nullptr) {
+    this->buf = MAKE_UNIQUE<std::unique_ptr<int32_t[]>[]>(this->num_components);
+  }
+  for (size_t i = 0; i < this->num_components; ++i) {
+    this->buf[i] =
+        MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(this->component_width[i]) * this->component_height[i]);
+  }
+
+  if (PLANARCONFIG_SEPARATE == planar_configuration) {
+    // PLANAR read
+  } else if (PLANARCONFIG_CONTIG == planar_configuration) {
+    // NORMAL read
+    for (uint32_t i = 0; i < tiff_height; ++i) {
+      if (TIFFReadScanline(tiff_handle, line_buf.get(), i) < 0) {
+        printf("ERROR: not enough samples in the given pnm file.\n");
+        TIFFClose(tiff_handle);
+        return EXIT_FAILURE;
+      }
+
+      for (size_t c = 0; c < num_iterations; ++c) {
+        uint8_t *src;
+        int32_t *dst;
+        src = &line_buf[c * byte_per_sample];
+        dst = &this->buf[c][i * tiff_width];
+
+        switch (byte_per_sample) {
+          case 1:
+            for (size_t j = 0; j < tiff_width; ++j) {
+              *dst = *src;
+              dst++;
+              src += component_gap;
+            }
+            break;
+          case 2:
+            for (size_t j = 0; j < tiff_width; ++j) {
+              // suppose little-endian
+              *dst = src[0] | (src[1] << 8);
+              // *dst >>= 16 - tiff_bits_per_sample; // for future use
+              dst++;
+              src += component_gap;
+            }
+            break;
+          default:
+            printf("ERROR: bit-depth over 16 is not supported.\n");
+            TIFFClose(tiff_handle);
+            return EXIT_FAILURE;
+            break;
+        }
+      }
+    }
+  }
   return EXIT_SUCCESS;
 }
 

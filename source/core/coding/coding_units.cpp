@@ -246,7 +246,7 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
             static_cast<uint8_t *>(realloc(this->compressed_data, this->length + layer_length));
         this->compressed_data = newbuf;
         this->current_address = this->compressed_data + (this->length);
-        buf_limit             = this->length + layer_length;
+        buf_limit             = static_cast<int32_t>(this->length + layer_length);
         //        uint8_t *old_buf      = this->compressed_data.release();
         //        buf_limit += 8192;
         //        this->compressed_data = std::unique_ptr<uint8_t[]>(new uint8_t[static_cast<uint32_t>(
