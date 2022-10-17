@@ -35,27 +35,31 @@
 
 void print_help(char *cmd) {
   printf("%s: JPEG 2000 Part 15 encoder\n", cmd);
-  printf("USAGE: %s -i inputimage(PNM format) -o output-codestream [options...]\n\n", cmd);
-  printf("-i: Input file\n  PGM, PPM, and TIFF (optional, 8 or 16 bpp only) are supported.\n");
+  printf("USAGE: %s -i input-image(s) -o output-codestream [options...]\n\n", cmd);
+  printf("-i: Input-image(s)\n  PGM, PPM, and TIFF (optional, 8 or 16 bpp only) are supported.\n");
   printf("-o: Output codestream\n  `.jhc` or `.j2c` are recommended as the extension.\n");
   printf("  Note: If this option is unspecified, encoding result is placed on a memory buffer.\n\n");
   printf("OPTIONS:\n");
   printf(
       "Stiles=Size:\n  Size of tile. `Size` should be in the format "
-      "{height, width}"
-      ". Default is equal to the image size.\n");
-  printf("Sorigin=Size:\n  Offset from the origin of the reference grid to the image area. Default is \n");
-  printf("Stile_origin=Size\n  Offset from the origin of the reference grid to the first tile.\n");
+      "{height, width}."
+      "\n  Default is equal to the image size.\n");
+  printf(
+      "Sorigin=Size:\n  Offset from the origin of the reference grid to the image area.\n  Default is "
+      "{0,0}\n");
+  printf(
+      "Stile_origin=Size\n  Offset from the origin of the reference grid to the first tile.\n  Default is "
+      "{0,0}\n");
   printf(
       "Clevels=Int:\n  Number of DWT decomposition.\n  Valid range for number of DWT levels is from 0 to "
       "32 (Default is 5.)\n");
-  printf("Creversible=yes or no:\n  yes for lossless mode, no for lossy mode.\n");
-  printf("Cblk=Size:\n  Code-block size.\n");
+  printf("Creversible=yes or no:\n  yes for lossless mode, no for lossy mode. Default is no.\n");
+  printf("Cblk=Size:\n  Code-block size.\n  Default is {64,64}]");
   printf("Cprecincts=Size:\n  Precinct size. Shall be power of two.\n");
   printf("Cycc=yes or no:\n  yes to use RGB->YCbCr color space conversion.\n");
   printf("Corder:\n  Progression order. Valid entry is one of LRCP, RLCP, RPCL, PCRL, CPRL.\n");
-  printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n");
-  printf("Cuse_eph=yes or no:\n  yes to use EPH (End of Packet Header) marker.\n");
+  printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n  Default is no.\n");
+  printf("Cuse_eph=yes or no:\n  yes to use EPH (End of Packet Header) marker.\n  Default is no.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
   printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 8 (Default is 1.)\n");
   printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");

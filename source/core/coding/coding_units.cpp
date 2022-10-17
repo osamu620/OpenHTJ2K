@@ -1548,7 +1548,10 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
-  const int32_t shiftup   = (transformation) ? 0 : FRACBITS - this->bitdepth;
+  const int32_t shiftup = (transformation) ? 0 : FRACBITS - this->bitdepth;
+  if (shiftup < 0) {
+    printf("WARNING: Over 13 bpp precision will be down-shifted to 12 bpp.\n");
+  }
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
   const int32_t stride    = round_up(static_cast<int32_t>(this->pos1.x - this->pos0.x), 32);
   const int32_t width     = static_cast<int32_t>(this->pos1.x - this->pos0.x);
@@ -1572,26 +1575,53 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
     }
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
-  for (int32_t y = 0; y < height; ++y) {
-    int32_t *sp = src + y * stride;
-    int32_t len = width;
-    for (int32_t i = 0; i < round_down(len, 8); i += 8) {
-      __m256i v            = *(__m256i *)(sp + i);
-      *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_slli_epi32(v, shiftup), doff);
-    }
-    for (int32_t i = round_down(len, 8); i < len; ++i) {
-      sp[i] <<= shiftup;
-      sp[i] -= DC_OFFSET;
-    }
-  }
-#else
+  if (shiftup < 0) {
+    const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
     for (int32_t y = 0; y < height; ++y) {
       int32_t *sp = src + y * stride;
       int32_t len = width;
-      for (int32_t i = 0; i < len; ++i) {
+      for (int32_t i = 0; i < round_down(len, 8); i += 8) {
+        __m256i v            = *(__m256i *)(sp + i);
+        *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_srai_epi32(v, -shiftup), doff);
+      }
+      for (int32_t i = round_down(len, 8); i < len; ++i) {
+        sp[i] >>= -shiftup;
+        sp[i] -= DC_OFFSET;
+      }
+    }
+  } else {
+    const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
+    for (int32_t y = 0; y < height; ++y) {
+      int32_t *sp = src + y * stride;
+      int32_t len = width;
+      for (int32_t i = 0; i < round_down(len, 8); i += 8) {
+        __m256i v            = *(__m256i *)(sp + i);
+        *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_slli_epi32(v, shiftup), doff);
+      }
+      for (int32_t i = round_down(len, 8); i < len; ++i) {
         sp[i] <<= shiftup;
         sp[i] -= DC_OFFSET;
+      }
+    }
+  }
+#else
+    if (shiftup < 0) {
+      for (int32_t y = 0; y < height; ++y) {
+        int32_t *sp = src + y * stride;
+        int32_t len = width;
+        for (int32_t i = 0; i < len; ++i) {
+          sp[i] >>= -shiftup;
+          sp[i] -= DC_OFFSET;
+        }
+      }
+    } else {
+      for (int32_t y = 0; y < height; ++y) {
+        int32_t *sp = src + y * stride;
+        int32_t len = width;
+        for (int32_t i = 0; i < len; ++i) {
+          sp[i] <<= shiftup;
+          sp[i] -= DC_OFFSET;
+        }
       }
     }
 #endif

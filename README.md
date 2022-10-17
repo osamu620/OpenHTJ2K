@@ -37,7 +37,7 @@ Then the executables should be found in `${BUILD_DIR}/bin` directory.
 ## Encoder
 Only Part 15 compliant encoding is supported. Both .j2c (codestream) and .jph (file format) are available. 
 ```bash
-./open_htj2k_enc -i inputimage(in PNM/PGX format) -o output [options...]
+./open_htj2k_enc -i inputimage(in PNM/PGX/(TIFF, libtiff required) format) -o output [options...]
 ```
 The encoder can take comma-separated multiple files. For example, components in YCbCr color space can be encoded by
 ```
@@ -46,31 +46,35 @@ The encoder can take comma-separated multiple files. For example, components in 
 
 ### options
 - `Stiles=Size`
-  - Size of tile "{height, width}"
+  - Size of tile "{height, width}", Default is equal to the image size
 - `Sorigin=Size`
+  - origin of the input image in the reference grid, Default is {0,0} 
 - `Stile_origin=Size`
+  - origin of tiles in the reference grid, Default is {0,0}
 - `Clevels=Int`
-  - Valid range for number of DWT levels is from 0 to 32 (Default is 5)
+  - Valid range for number of DWT levels is from 0 to 32 (Default is **5**)
 - `Creversible=yes or no`
-  - `yes` for lossless mode, `no` for lossy mode
+  - `yes` for lossless mode, `no` for lossy mode, Default is **no**
 - `Cblk=Size`
-  - Code-block size
+  - Code-block size, Default is **64x64**
 - `Cprecincts=Size`
   - Precinct size
 - `Cycc=yes or no`
-  - `yes` to use RGB->YCbCr
+  - `yes` to use RGB->YCbCr, Default is **yes**
 - `Corder`
-  - Progression order: LRCP, RLCP, RPCL, PCRL, CPRL
+  - Progression order: LRCP, RLCP, RPCL, PCRL, CPRL, Default is **LRCP**
 - `Cuse_sop=yes or no`
+  - Default is **no** 
 - `Cuse_eph=yes or no`
+  - Default is **no**
 - `Qstep=Float`
   - 0.0 < base step size <= 2.0
 - `Qguard=Int`
-  - 0 to 7 for the number of guard bits 
+  - 0 to 7 for the number of guard bits, Default is **1** 
 - `Qderived=yes or no`
   - `yes` switches the quantyzation style to **derived** (Default is `no`)
 - `Qfactor=Int`
-  - 0 to 100 for the quality of the lossyly compressed image
+  - 0 to 100 for the quality of the lossy compressed image
   - for YCbCr inputs, valid chroma subsampling formats are 4:4:4, 4:2:0, and 4:2:2
 - `-jph_color_space`
   - Color space of input components: RGB, YCC
@@ -82,7 +86,7 @@ The encoder can take comma-separated multiple files. For example, components in 
 ## Decoder
 The both Part 1 and Part 15 compliant decoding are supported.
 ```bash
-./open_htj2k_dec -i codestream -o outputimage [-reduce n]
+./open_htj2k_dec -i codestream -o outputimage [-reduce n: number of DWT level reduction]
 ```
 To see a help, use `-h` option.
 
