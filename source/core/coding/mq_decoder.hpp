@@ -32,12 +32,13 @@
 
 class mq_decoder {
  public:
-  uint16_t A;
-  uint8_t t;
+  int32_t A;  // was uint16_t
+  int32_t t;  // was uint8_t
   // Lower-bound interval
-  uint32_t C;
+  int32_t C;  // was uint32_t
+  // int32_t D; // only for CDP implementation
   // Temporary byte register
-  uint8_t T;
+  int32_t T;  // was uint8_t
   // position in byte-stream
   uint32_t L;
   // start position in byte-stream
