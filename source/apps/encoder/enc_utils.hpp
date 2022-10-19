@@ -1,4 +1,4 @@
-// Copyright (c) 2019 - 2021, Osamu Watanabe
+// Copyright (c) 2019 - 2022, Osamu Watanabe
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -275,6 +275,7 @@ class j2k_argset {
         break;
       }
     }
+    args.erase(args.begin() + idx + 1);
     return fnames;
     // return args[idx + 1].c_str();
   }
@@ -290,7 +291,9 @@ class j2k_argset {
       printf("ERROR: file name for output is missing!\n");
       exit(EXIT_FAILURE);
     }
-    return args[idx + 1];
+    std::string out = args[idx + 1];
+    args.erase(args.begin() + idx + 1);
+    return out;
   }
 
   int32_t get_num_iteration() {
@@ -341,7 +344,7 @@ class j2k_argset {
       printf("ERROR: -jph_color_space requires name of color-space\n");
       exit(EXIT_FAILURE);
     }
-    if (args[idx + 1] != "YCC" || args[idx + 1] != "RGB") {
+    if (args[idx + 1] != "YCC" && args[idx + 1] != "RGB") {
       printf("ERROR: invalid name for color-space\n");
       exit(EXIT_FAILURE);
     } else if (args[idx + 1] == "YCC") {
