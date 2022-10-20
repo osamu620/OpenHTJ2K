@@ -275,7 +275,7 @@ class j2k_argset {
         break;
       }
     }
-    args.erase(args.begin() + idx + 1);
+    args.erase(args.begin() + static_cast<long>(idx) + 1);
     return fnames;
     // return args[idx + 1].c_str();
   }
@@ -292,7 +292,7 @@ class j2k_argset {
       exit(EXIT_FAILURE);
     }
     std::string out = args[idx + 1];
-    args.erase(args.begin() + idx + 1);
+    args.erase(args.begin() + static_cast<long>(idx) + 1);
     return out;
   }
 
