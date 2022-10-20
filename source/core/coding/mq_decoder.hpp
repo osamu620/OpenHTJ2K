@@ -30,13 +30,18 @@
 
 #include <cstdint>
 
+//#define MQNAIVE
+//#define CDP
+
 class mq_decoder {
  public:
   int32_t A;  // was uint16_t
   int32_t t;  // was uint8_t
   // Lower-bound interval
   int32_t C;  // was uint32_t
-  // int32_t D; // only for CDP implementation
+#if defined(CDP)
+  int32_t D;  // only for CDP implementation
+#endif
   // Temporary byte register
   int32_t T;  // was uint8_t
   // position in byte-stream
@@ -45,12 +50,10 @@ class mq_decoder {
   [[maybe_unused]] uint32_t L_start;
   // position of current codeword segment boundary
   uint32_t Lmax;
-  // Byte-stream buffer
-  uint8_t const *byte_buffer;
   // dynamic table for context
   uint16_t dynamic_table[2][19];
-  // static table for state transition
-  const uint16_t static_table[4][47];
+  // Byte-stream buffer
+  uint8_t const *byte_buffer;
   explicit mq_decoder(const uint8_t *buf);
   void fill_LSBs();
   void init(uint32_t buf_pos, uint32_t segment_length, bool is_bypass);
