@@ -31,28 +31,25 @@
 #include <cstdio>
 #include <stdexcept>
 
-constexpr int32_t Areg_min = 1 << (15 + 8);
+#if defined(MQNAIVE)
+  #define MQMINOFF 0
+#else
+  #define MQMINOFF 8
+#endif
+static constexpr int32_t Areg_min = 1 << (15 + MQMINOFF);
+
+// static table for state transition (32bits)
+// Xs (1bit), Sigma_mps (6bit in 7bit),Sigma_lps (6bit in 8bit), Qe (16bit)
+static constexpr uint32_t static_table[47] = {
+    0x81015601, 0x02063401, 0x03091801, 0x040c0ac1, 0x051d0521, 0x26210221, 0x87065601, 0x080e5401,
+    0x090e4801, 0x0a0e3801, 0x0b113001, 0x0c122401, 0x0d141c01, 0x1d151601, 0x8f0e5601, 0x100e5401,
+    0x110f5101, 0x12104801, 0x13113801, 0x14123401, 0x15133001, 0x16132801, 0x17142401, 0x18152201,
+    0x19161c01, 0x1a171801, 0x1b181601, 0x1c191401, 0x1d1a1201, 0x1e1b1101, 0x1f1c0ac1, 0x201d09c1,
+    0x211e08a1, 0x221f0521, 0x23200441, 0x242102a1, 0x25220221, 0x26230141, 0x27240111, 0x28250085,
+    0x29260049, 0x2a270025, 0x2b280015, 0x2c290009, 0x2d2a0005, 0x2d2b0001, 0x2e2e5601};
+
 mq_decoder::mq_decoder(const uint8_t *const buf)
-    : A(0),
-      t(0),
-      C(0),
-      T(0),
-      L(0),
-      L_start(0),
-      Lmax(0),
-      byte_buffer(buf),
-      dynamic_table{{}},
-      static_table{
-          {1,  2,  3,  4,  5,  38, 7,  8,  9,  10, 11, 12, 13, 29, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-           25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 45, 46},
-          {1,  6,  9,  12, 29, 33, 6,  14, 14, 14, 17, 18, 20, 21, 14, 14, 15, 16, 17, 18, 19, 19, 20, 21,
-           22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 46},
-          {1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-          {0x5601, 0x3401, 0x1801, 0x0AC1, 0x0521, 0x0221, 0x5601, 0x5401, 0x4801, 0x3801, 0x3001, 0x2401,
-           0x1C01, 0x1601, 0x5601, 0x5401, 0x5101, 0x4801, 0x3801, 0x3401, 0x3001, 0x2801, 0x2401, 0x2201,
-           0x1C01, 0x1801, 0x1601, 0x1401, 0x1201, 0x1101, 0x0AC1, 0x09C1, 0x08A1, 0x0521, 0x0441, 0x02A1,
-           0x0221, 0x0141, 0x0111, 0x0085, 0x0049, 0x0025, 0x0015, 0x0009, 0x0005, 0x0001, 0x5601}} {}
+    : A(0), t(0), C(0), T(0), L(0), L_start(0), Lmax(0), dynamic_table{{}}, byte_buffer(buf) {}
 
 void mq_decoder::init(uint32_t buf_pos, uint32_t segment_length, bool is_bypass) {
   L_start = buf_pos;
@@ -69,12 +66,13 @@ void mq_decoder::init(uint32_t buf_pos, uint32_t segment_length, bool is_bypass)
     fill_LSBs();
     C <<= 7;
     t -= 7;
-    /** only for CDP implementation
+#if defined(CDP)
+    // only for CDP implementation
     D = A - Areg_min;
     D = (C < D) ? C : D;
     A -= D;
     C -= D;
-    **/
+#endif
   }
 }
 
@@ -112,58 +110,62 @@ void mq_decoder::fill_LSBs() {
   }
 }
 
+#if defined(MQNAIVE)
 // Naive implementation
-// uint8_t mq_decoder::decode(uint8_t label) {
-//  uint8_t x;
-//  uint16_t tmp;
-//  constexpr uint8_t min_C_active   = 8;
-//  constexpr uint32_t C_active_mask = 0xFFFF00;
-//  uint16_t *sk                     = &dynamic_table[1][label];
-//  uint16_t *Sigma_k                = &dynamic_table[0][label];
-//  const uint16_t *Sigma_mps        = static_table[0];
-//  const uint16_t *Sigma_lps        = static_table[1];
-//  const uint16_t *Xs               = static_table[2];
-//  uint16_t p                       = static_table[3][*Sigma_k];
-//  uint16_t s                       = dynamic_table[1][label];
-//
-//  if (s > 1) {
-//    printf("ERROR: mq_dec error in function decode()\n");
-//    throw std::exception();
-//  }
-//
-//  A = static_cast<uint16_t>(A - p);
-//  if (A < p) {
-//    // Conditional exchange of MPS and LPS
-//    s = static_cast<uint16_t>(1 - s);
-//  }
-//
-//  // Compare active region of C
-//  if (((C & C_active_mask) >> 8) < p) {
-//    x = static_cast<uint8_t>(1 - s);
-//    A = p;
-//  } else {
-//    x   = static_cast<uint8_t>(s);
-//    tmp = static_cast<uint16_t>(((C & C_active_mask) >> min_C_active) - static_cast<uint32_t>(p));
-//    C &= ~C_active_mask;
-//    C += static_cast<uint32_t>((tmp << min_C_active)) & C_active_mask;
-//  }
-//  if (A < 0x8000) {
-//    if (x == *sk) {
-//      // The x was a real MPS
-//      *Sigma_k = Sigma_mps[*Sigma_k];
-//    } else {
-//      // The x was a real LPS
-//      *sk      = *sk ^ Xs[*Sigma_k];
-//      *Sigma_k = Sigma_lps[*Sigma_k];
-//    }
-//  }
-//
-//  while (A < 0x8000) {
-//    renormalize_once();
-//  }
-//  return x;
-//}
+uint8_t mq_decoder::decode(uint8_t label) {
+  uint8_t x;
+  uint16_t tmp;
+  constexpr uint8_t min_C_active   = 8;
+  constexpr uint32_t C_active_mask = 0xFFFF00;
+  uint16_t *sk                     = &dynamic_table[1][label];
+  uint16_t *Sigma_k                = &dynamic_table[0][label];
+  uint32_t val                     = static_table[*Sigma_k];
+  const uint16_t Sigma_mps         = (val >> 24) & 0x3F;  // static_table[0][Sigma_k];
+  const uint16_t Sigma_lps         = (val >> 16) & 0x3F;  // static_table[1][Sigma_k];
+  const uint16_t Xs                = val >> 31;           // static_table[2][Sigma_k];
+  uint16_t p                       = static_cast<uint16_t>(val & 0xFFFF);
+  uint16_t s                       = dynamic_table[1][label];
 
+  if (s > 1) {
+    printf("ERROR: mq_dec error in function decode()\n");
+    throw std::exception();
+  }
+
+  A = static_cast<uint16_t>(A - p);
+  if (A < p) {
+    // Conditional exchange of MPS and LPS
+    s = static_cast<uint16_t>(1 - s);
+  }
+
+  // Compare active region of C
+  if (((C & C_active_mask) >> 8) < p) {
+    x = static_cast<uint8_t>(1 - s);
+    A = p;
+  } else {
+    x   = static_cast<uint8_t>(s);
+    tmp = static_cast<uint16_t>(((C & C_active_mask) >> min_C_active) - static_cast<uint32_t>(p));
+    C &= ~C_active_mask;
+    C += static_cast<uint32_t>((tmp << min_C_active)) & C_active_mask;
+  }
+  if (A < 0x8000) {
+    if (x == *sk) {
+      // The x was a real MPS
+      *Sigma_k = Sigma_mps;
+    } else {
+      // The x was a real LPS
+      *sk      = *sk ^ Xs;
+      *Sigma_k = Sigma_lps;
+    }
+  }
+
+  while (A < 0x8000) {
+    renormalize_once();
+  }
+  return x;
+}
+#endif
+
+#if !defined(CDP) && !defined(MQNAIVE)
 /**
  * @brief MQ Decode Procedure (from JPEG 2000 book P.646 - 647)
  * @param[in] label context label
@@ -172,11 +174,12 @@ void mq_decoder::fill_LSBs() {
 uint8_t mq_decoder::decode(uint8_t label) {
   int32_t x;
   uint16_t Sigma_k         = dynamic_table[0][label];
-  const uint16_t Sigma_mps = static_table[0][Sigma_k];
-  const uint16_t Sigma_lps = static_table[1][Sigma_k];
-  const uint16_t Xs        = static_table[2][Sigma_k];
+  uint32_t val             = static_table[Sigma_k];
+  const uint16_t Sigma_mps = (val >> 24) & 0x3F;  // static_table[0][Sigma_k];
+  const uint16_t Sigma_lps = (val >> 16) & 0x3F;  // static_table[1][Sigma_k];
+  const uint16_t Xs        = val >> 31;           // static_table[2][Sigma_k];
   // = p_bar (from the static table) << 8
-  const int32_t p_shifted = (int32_t)static_table[3][Sigma_k] << 8;
+  const int32_t p_shifted = (int32_t)((val & 0xFFFF) << 8);
   uint16_t sk             = dynamic_table[1][label];
 
   x = sk;  // set to MPS for now, since this is most likely
@@ -212,57 +215,59 @@ uint8_t mq_decoder::decode(uint8_t label) {
   dynamic_table[1][label] = sk;
   return static_cast<uint8_t>(x);
 }
-
+#elif defined(CDP)
 // Common Decoding Path (CDP) implementation, require a new state value D
-// uint8_t mq_decoder::decode(uint8_t label) {
-//  int32_t x;
-//  uint16_t Sigma_k         = dynamic_table[0][label];
-//  const uint16_t Sigma_mps = static_table[0][Sigma_k];
-//  const uint16_t Sigma_lps = static_table[1][Sigma_k];
-//  const uint16_t Xs        = static_table[2][Sigma_k];
-//  // = p_bar (from the static table) << 8
-//  const int32_t p_shifted = (int32_t)static_table[3][Sigma_k] << 8;
-//  uint16_t sk             = dynamic_table[1][label];
-//
-//  x = sk;  // set to MPS for now, since this is most likely
-//  D -= p_shifted;
-//  if (D < 0) {
-//    A += D;
-//    C += D;
-//    if (C >= 0) {
-//      if (A < p_shifted) {  // conditional exchange, LPS decoded
-//        x       = 1 - sk;
-//        sk      = sk ^ Xs;
-//        Sigma_k = Sigma_lps;
-//      } else {  // MPS decoded
-//        Sigma_k = Sigma_mps;
-//      }
-//      while (A < Areg_min) {
-//        renormalize_once();
-//      }
-//    } else {
-//      C += p_shifted;
-//      if (A < p_shifted) {  // conditional exchange, MPS decoded
-//        Sigma_k = Sigma_mps;
-//      } else {  // LPS decoded
-//        x       = 1 - sk;
-//        sk      = sk ^ Xs;
-//        Sigma_k = Sigma_lps;
-//      }
-//      A = p_shifted;
-//      while (A < Areg_min) {
-//        renormalize_once();
-//      }
-//    }
-//    D = A - Areg_min;
-//    D = (C < D) ? C : D;
-//    A -= D;
-//    C -= D;
-//  }
-//  dynamic_table[0][label] = Sigma_k;
-//  dynamic_table[1][label] = sk;
-//  return static_cast<uint8_t>(x);
-//}
+uint8_t mq_decoder::decode(uint8_t label) {
+  int32_t x;
+  uint16_t Sigma_k         = dynamic_table[0][label];
+  uint32_t val             = static_table[Sigma_k];
+  const uint16_t Sigma_mps = (val >> 24) & 0x3F;  // static_table[0][Sigma_k];
+  const uint16_t Sigma_lps = (val >> 16) & 0x3F;  // static_table[1][Sigma_k];
+  const uint16_t Xs        = val >> 31;           // static_table[2][Sigma_k];
+  // = p_bar (from the static table) << 8
+  const int32_t p_shifted = (int32_t)((val & 0xFFFF) << 8);
+  uint16_t sk             = dynamic_table[1][label];
+
+  x = sk;  // set to MPS for now, since this is most likely
+  D -= p_shifted;
+  if (D < 0) {
+    A += D;
+    C += D;
+    if (C >= 0) {
+      if (A < p_shifted) {  // conditional exchange, LPS decoded
+        x       = 1 - sk;
+        sk      = sk ^ Xs;
+        Sigma_k = Sigma_lps;
+      } else {  // MPS decoded
+        Sigma_k = Sigma_mps;
+      }
+      while (A < Areg_min) {
+        renormalize_once();
+      }
+    } else {
+      C += p_shifted;
+      if (A < p_shifted) {  // conditional exchange, MPS decoded
+        Sigma_k = Sigma_mps;
+      } else {  // LPS decoded
+        x       = 1 - sk;
+        sk      = sk ^ Xs;
+        Sigma_k = Sigma_lps;
+      }
+      A = p_shifted;
+      while (A < Areg_min) {
+        renormalize_once();
+      }
+    }
+    D = A - Areg_min;
+    D = (C < D) ? C : D;
+    A -= D;
+    C -= D;
+  }
+  dynamic_table[0][label] = Sigma_k;
+  dynamic_table[1][label] = sk;
+  return static_cast<uint8_t>(x);
+}
+#endif
 
 uint8_t mq_decoder::get_raw_symbol() {
   if (t == 0) {
