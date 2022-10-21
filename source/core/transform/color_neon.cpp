@@ -30,6 +30,16 @@
   #include <arm_neon.h>
   #include "color.hpp"
 
+  #define neon_alphaR (static_cast<int32_t>(0.5 + ALPHA_R * (1 << 15)))
+  #define neon_alphaB (static_cast<int32_t>(0.5 + ALPHA_B * (1 << 15)))
+  #define neon_alphaG (static_cast<int32_t>(0.5 + ALPHA_G * (1 << 15)))
+  #define neon_CBfact (static_cast<int32_t>(0.5 + CB_FACT * (1 << 15)))
+  #define neon_CRfact (static_cast<int32_t>(0.5 + CR_FACT * (1 << 15)))
+  #define neon_CRfactR (static_cast<int32_t>(0.5 + (CR_FACT_R - 1) * (1 << 15)))
+  #define neon_CBfactB (static_cast<int32_t>(0.5 + (CB_FACT_B - 1) * (1 << 15)))
+  #define neon_neg_CRfactG (static_cast<int32_t>(0.5 - CR_FACT_G * (1 << 15)))
+  #define neon_neg_CBfactG (static_cast<int32_t>(0.5 - CB_FACT_G * (1 << 15)))
+
 // lossless: forward RCT
 void cvt_rgb_to_ycbcr_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   // process two vectors at a time
@@ -75,6 +85,7 @@ void cvt_rgb_to_ycbcr_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
   const float32x4_t a3 = vdupq_n_f32(static_cast<float32_t>(1.0 / CB_FACT_B));
   const float32x4_t a4 = vdupq_n_f32(static_cast<float32_t>(1.0 / CR_FACT_R));
   // process two vectors at a time
+
   for (uint32_t y = 0; y < height; ++y) {
     int32_t *p0 = sp0 + y * round_up(width, 32U);
     int32_t *p1 = sp1 + y * round_up(width, 32U);
@@ -199,4 +210,50 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     }
   }
 }
+
+  #if 0
+// 16bit fixedpoint calculation
+void cvt_ycbcr_to_rgb_irrev_neon2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width,
+                                  uint32_t height) {
+  const int16x8_t cr_fact_r     = vdupq_n_s16(neon_CRfactR);
+  const int16x8_t cb_fact_b     = vdupq_n_s16(neon_CBfactB);
+  const int16x8_t cr_neg_fact_g = vdupq_n_s16(neon_neg_CRfactG);
+  const int16x8_t cb_neg_fact_g = vdupq_n_s16(neon_neg_CBfactG);
+  int16x8_t Y, Cb, Cr, tmp0, tmp1;
+  int32x4_t Y32, Cb32, Cr32, tmp;
+  for (uint32_t y = 0; y < height; ++y) {
+    int32_t *src1 = sp0 + y * round_up(width, 32U);
+    int32_t *src2 = sp1 + y * round_up(width, 32U);
+    int32_t *src3 = sp2 + y * round_up(width, 32U);
+    int32_t len   = static_cast<int32_t>(width);
+    for (; len > 0; len -= 8) {
+      Y32  = vld1q_s32(src1);
+      Y    = vcombine_s16(vmovn_s32(Y32), vmovn_s32(vld1q_s32(src1 + 4)));
+      Cr32 = vld1q_s32(src3);
+      Cr   = vcombine_s16(vmovn_s32(Cr32), vmovn_s32(vld1q_s32(src3 + 4)));
+      tmp0 = vqrdmulhq_s16(Cr, cr_fact_r);
+      tmp0 = vaddq_s16(tmp0, Cr);
+      tmp1 = vaddq_s16(tmp0, Y);
+      vst1q_s32(src1, vmovl_s16(vget_low_s16(tmp1)));  // Save Red
+      vst1q_s32(src1 + 4, vmovl_high_s16(tmp1));       // Save Red
+      Cr   = vqrdmulhq_s16(Cr, cr_neg_fact_g);
+      Cb32 = vld1q_s32(src2);  // Load CB
+      Cb   = vcombine_s16(vmovn_s32(Cb32), vmovn_s32(vld1q_s32(src2 + 4)));
+      tmp0 = vqrdmulhq_s16(Cb, cb_fact_b);
+      tmp0 = vaddq_s16(tmp0, Cb);
+      tmp1 = vaddq_s16(tmp0, Y);
+      vst1q_s32(src3, vmovl_s16(vget_low_s16(tmp1)));  // Save Blue
+      vst1q_s32(src3 + 4, vmovl_high_s16(tmp1));       // Save Blue
+      Cb   = vqrdmulhq_s16(Cb, cb_neg_fact_g);
+      Y    = vqaddq_s16(Y, Cr);
+      tmp1 = vqaddq_s16(Y, Cb);
+      vst1q_s32(src2, vmovl_s16(vget_low_s16(tmp1)));  // Save Green
+      vst1q_s32(src2 + 4, vmovl_high_s16(tmp1));       // Save Green
+      src1 += 8;
+      src3 += 8;
+      src2 += 8;
+    }
+  }
+}
+  #endif
 #endif
