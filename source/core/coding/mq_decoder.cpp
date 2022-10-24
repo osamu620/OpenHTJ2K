@@ -175,9 +175,9 @@ uint8_t mq_decoder::decode(uint8_t label) {
   int32_t x;
   uint16_t Sigma_k         = dynamic_table[0][label];
   uint32_t val             = static_table[Sigma_k];
-  const uint16_t Sigma_mps = (val >> 24) & 0x3F;  // static_table[0][Sigma_k];
-  const uint16_t Sigma_lps = (val >> 16) & 0x3F;  // static_table[1][Sigma_k];
-  const uint16_t Xs        = val >> 31;           // static_table[2][Sigma_k];
+  const uint16_t Sigma_mps = (val >> 24) & 0x3F;                // static_table[0][Sigma_k];
+  const uint16_t Sigma_lps = (val >> 16) & 0x3F;                // static_table[1][Sigma_k];
+  const uint16_t Xs        = static_cast<uint16_t>(val >> 31);  // static_table[2][Sigma_k];
   // = p_bar (from the static table) << 8
   const int32_t p_shifted = (int32_t)((val & 0xFFFF) << 8);
   uint16_t sk             = dynamic_table[1][label];
