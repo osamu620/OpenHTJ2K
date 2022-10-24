@@ -143,7 +143,7 @@ endif()
 
 if(ENABLE_ARM_NEON)
   message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON22")
+  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
 elseif(ENABLE_AVX2)
   message(STATUS "OPENHTJ2K_TRY_AVX2 is set")
   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TRY_AVX2")
