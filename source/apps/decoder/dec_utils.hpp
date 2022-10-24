@@ -85,16 +85,19 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   R            = buf[0];
   G            = buf[1];
   B            = buf[2];
+  __builtin_prefetch(R);
+  __builtin_prefetch(G);
+  __builtin_prefetch(B);
   int32x4_t R0, R1, G0, G1, B0, B1;
   if (bytes_per_pixel == 1) {
     uint8x8_t voffset = vdup_n_u8(static_cast<uint8_t>(PNM_OFFSET));
-    R0                = vld1q_s32(R);
-    R1                = vld1q_s32(R + 4);
-    G0                = vld1q_s32(G);
-    G1                = vld1q_s32(G + 4);
-    B0                = vld1q_s32(B);
-    B1                = vld1q_s32(B + 4);
     for (; len >= 8; len -= 8) {
+      R0 = vld1q_s32(R);
+      R1 = vld1q_s32(R + 4);
+      G0 = vld1q_s32(G);
+      G1 = vld1q_s32(G + 4);
+      B0 = vld1q_s32(B);
+      B1 = vld1q_s32(B + 4);
       uint8x8x3_t vout;
       vout.val[0] = vadd_u8(vmovn_u16(vcombine_u16(vmovn_s32(R0), vmovn_s32(R1))), voffset);
       vout.val[1] = vadd_u8(vmovn_u16(vcombine_u16(vmovn_s32(G0), vmovn_s32(G1))), voffset);
@@ -104,12 +107,9 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       R += 8;
       G += 8;
       B += 8;
-      R0 = vld1q_s32(R);
-      R1 = vld1q_s32(R + 4);
-      G0 = vld1q_s32(G);
-      G1 = vld1q_s32(G + 4);
-      B0 = vld1q_s32(B);
-      B1 = vld1q_s32(B + 4);
+      __builtin_prefetch(R);
+      __builtin_prefetch(G);
+      __builtin_prefetch(B);
       out += 24;
     }
     for (; len > 0; --len) {
@@ -123,13 +123,13 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       throw std::exception();
     }
     uint16x8_t voffset = vdupq_n_u16(static_cast<uint16_t>(PNM_OFFSET));
-    R0                 = vld1q_s32(R);
-    R1                 = vld1q_s32(R + 4);
-    G0                 = vld1q_s32(G);
-    G1                 = vld1q_s32(G + 4);
-    B0                 = vld1q_s32(B);
-    B1                 = vld1q_s32(B + 4);
     for (; len >= 8; len -= 8) {
+      R0 = vld1q_s32(R);
+      R1 = vld1q_s32(R + 4);
+      G0 = vld1q_s32(G);
+      G1 = vld1q_s32(G + 4);
+      B0 = vld1q_s32(B);
+      B1 = vld1q_s32(B + 4);
       uint16x8x3_t vout;
       vout.val[0] = vcombine_u16(vmovn_s32(R0), vmovn_s32(R1));
       vout.val[1] = vcombine_u16(vmovn_s32(G0), vmovn_s32(G1));
@@ -142,12 +142,9 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       R += 8;
       G += 8;
       B += 8;
-      R0 = vld1q_s32(R);
-      R1 = vld1q_s32(R + 4);
-      G0 = vld1q_s32(G);
-      G1 = vld1q_s32(G + 4);
-      B0 = vld1q_s32(B);
-      B1 = vld1q_s32(B + 4);
+      __builtin_prefetch(R);
+      __builtin_prefetch(G);
+      __builtin_prefetch(B);
       out += 48;
     }
     int32_t val0, val1, val2;
