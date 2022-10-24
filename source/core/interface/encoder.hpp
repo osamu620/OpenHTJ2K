@@ -58,7 +58,7 @@ class image {
   explicit image(const std::vector<std::string> &filenames);
   int read_pnmpgx(const std::string &filename, uint16_t nc);
   #if defined(OPENHTJ2K_TIFF_SUPPORT)
-  int read_tiff(const std::string &filename, uint16_t nc);
+  int read_tiff(const std::string &filename);
   #endif
 #endif
 

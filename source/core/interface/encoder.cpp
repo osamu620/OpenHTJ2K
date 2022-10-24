@@ -77,7 +77,7 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
       c++;
     } else if (is_tiff) {
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
-      if (read_tiff(fname, c)) {
+      if (read_tiff(fname)) {
         throw std::exception();
       }
       c++;
@@ -361,7 +361,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
 }
 
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
-int image::read_tiff(const std::string &filename, uint16_t nc) {
+int image::read_tiff(const std::string &filename) {
   TIFF *tiff_handle;
   size_t bytes_per_line;
   uint16_t planar_configuration;
