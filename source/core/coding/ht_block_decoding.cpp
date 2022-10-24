@@ -195,7 +195,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     for (uint32_t i = 0; i < 4; i++) {
       known_1[Q0] = (emb_1_0 >> i) & 1;
-      v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
+      v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1U);
       v_quads[i] |= known_1[Q0] << m_quads[i];
       if (m_quads[i] != 0) {
         // mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
@@ -209,7 +209,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
     for (uint32_t i = 0; i < 4; i++) {
       known_1[Q1]    = (emb_1_1 >> i) & 1;
-      v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1);
+      v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1U);
       v_quads[i + 4] |= known_1[Q1] << m_quads[i + 4];
       if (m_quads[i + 4] != 0) {
         mu_quads[i + 4] = v_quads[i + 4] + 2;
@@ -297,7 +297,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     for (uint32_t i = 0; i < 4; i++) {
       known_1[Q0] = (emb_1_0 >> i) & 1;
-      v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
+      v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1U);
       v_quads[i] |= known_1[Q0] << m_quads[i];
       if (m_quads[i] != 0) {
         mu_quads[i] = v_quads[i] + 2;
@@ -436,7 +436,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       for (uint32_t i = 0; i < 4; i++) {
         known_1[Q0] = (emb_1_0 >> i) & 1;
-        v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
+        v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1U);
         v_quads[i] |= known_1[Q0] << m_quads[i];
         if (m_quads[i] != 0) {
           mu_quads[i] = v_quads[i] + 2;
@@ -449,7 +449,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
       for (uint32_t i = 0; i < 4; i++) {
         known_1[Q1]    = (emb_1_1 >> i) & 1;
-        v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1);
+        v_quads[i + 4] = msval[i + 4] & ((1 << m_quads[i + 4]) - 1U);
         v_quads[i + 4] |= known_1[Q1] << m_quads[i + 4];
         if (m_quads[i + 4] != 0) {
           mu_quads[i + 4] = v_quads[i + 4] + 2;
@@ -543,7 +543,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       for (uint32_t i = 0; i < 4; i++) {
         known_1[Q0] = (emb_1_0 >> i) & 1;
-        v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1);
+        v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1U);
         v_quads[i] |= known_1[Q0] << m_quads[i];
         if (m_quads[i] != 0) {
           mu_quads[i] = v_quads[i] + 2;
