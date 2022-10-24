@@ -292,6 +292,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       first  = HL;
       second = LL;
     }
+    __builtin_prefetch(first);
+    __builtin_prefetch(second);
     int16x8_t vfirst0, vfirst1, vsecond0, vsecond1;
     int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
@@ -314,6 +316,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
         vst2q_s16(dp + 16, vdst1);
         first += 16;
         second += 16;
+        __builtin_prefetch(first);
+        __builtin_prefetch(second);
         dp += 32;
         vfirst0 = vld1q_s16(first);
         //        vfirst1      = vld1q_s16(first + 8);
@@ -343,6 +347,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       first  = HH;
       second = LH;
     }
+    __builtin_prefetch(first);
+    __builtin_prefetch(second);
     int16x8_t vfirst0, vfirst1, vsecond0, vsecond1;
     int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
@@ -365,6 +371,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
         vst2q_s16(dp + 16, vdst1);
         first += 16;
         second += 16;
+        __builtin_prefetch(first);
+        __builtin_prefetch(second);
         dp += 32;
         vfirst0 = vld1q_s16(first);
         //        vfirst1      = vld1q_s16(first + 8);
