@@ -1,4 +1,4 @@
-// Copyright (c) 2019 - 2021, Osamu Watanabe
+// Copyright (c) 2019 - 2022, Osamu Watanabe
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -30,8 +30,9 @@
 // (a.k.a HTJ2K)
 //
 // This software is currently compliant to limited part of the standard.
-// Supported markers: SIZ, CAP, COD, QCD, COM. Other features are undone and future work.
+// Supported markers: SIZ, CAP, COD, QCD, QCC, COM. Other features are undone and future work.
 // (c) 2021 Osamu Watanabe, Takushoku University
+// (c) 2022 Osamu Watanabe, Takushoku University
 
 #include <chrono>
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
@@ -40,6 +41,7 @@
   #include <sys/stat.h>
 #endif
 #include <vector>
+#include <exception>
 #include "encoder.hpp"
 #include "enc_utils.hpp"
 
@@ -49,12 +51,16 @@ int main(int argc, char *argv[]) {
   for (const auto &fname : fnames) {
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
     try {
-      (void)std::filesystem::exists(fname);  // casting to void suppresses compiler warnings
+      if (!std::filesystem::exists(fname)) {
+        throw std::exception();
+      }
     }
 #else
     try {
       struct stat st;
-      stat(fname.c_str(), &st);
+      if (stat(fname.c_str(), &st)) {
+        throw std::exception();
+      }
     }
 #endif
     catch (std::exception &exc) {
