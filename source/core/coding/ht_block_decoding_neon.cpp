@@ -272,15 +272,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     mu1 = vandq_u32(mu1, sig1);
 
     // store mu
-    int32x4x2_t t = vzipq_s32(mu0, mu1);
-    vst1q_s32(mp0, vzip1q_s32(t.val[0], t.val[1]));
-    vst1q_s32(mp1, vzip2q_s32(t.val[0], t.val[1]));
+    vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
+    vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
     mp0 += 4;
     mp1 += 4;
 
     // update Exponent
-    t    = vzipq_s32(v_n_0, v_n_1);
-    vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(t.val[0], t.val[1])));
+    vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
     vst1q_s32(E_p, vExp);
     E_p += 4;
   }
@@ -441,9 +439,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu1 = vandq_u32(mu1, sig1);
 
       // store mu
-      int32x4x2_t t = vzipq_s32(mu0, mu1);
-      vst1q_s32(mp0, vzip1q_s32(t.val[0], t.val[1]));
-      vst1q_s32(mp1, vzip2q_s32(t.val[0], t.val[1]));
+      vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
+      vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
       mp0 += 4;
       mp1 += 4;
 
@@ -452,8 +449,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
 
       // Update Exponent
-      t    = vzipq_s32(v_n_0, v_n_1);
-      vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vzip2q_s32(t.val[0], t.val[1])));
+      vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
       vst1q_s32(E_p, vExp);
       E_p += 4;
     }
