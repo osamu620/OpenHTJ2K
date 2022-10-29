@@ -2551,14 +2551,16 @@ void j2k_tile::decode() {
     //   *dp++ = *sp++;
     // }
 
-    // AVX2 unaligned version
+    // AVX2 sign-extension version
+    // const __m256i zero = _mm256_setzero_si256();
+    //  __m256i v, lo, hi, s;
     // for (size_t n = num_samples; n >= 16; n -= 16) {
     //   __m256i v  = _mm256_loadu_si256((__m256i *)sp);  // word
     //   __m256i s  = _mm256_cmpgt_epi16(zero, v);        // extended-sign
     //   __m256i lo = _mm256_unpacklo_epi16(v, s);        // dword
     //   __m256i hi = _mm256_unpackhi_epi16(v, s);        // dword
-    //   _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(lo, hi, 0x20));
-    //   _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(lo, hi, 0x31));
+    // _mm256_stream_si256((__m256i *)(dp + i), _mm256_permute2x128_si256(lo, hi, 0x20));
+    // _mm256_stream_si256((__m256i *)(dp + i + 8), _mm256_permute2x128_si256(lo, hi, 0x31));
     //   sp += 16;
     //   dp += 16;
     // }
@@ -2566,19 +2568,17 @@ void j2k_tile::decode() {
     //   *dp++ = *sp++;
     // }
 
-    // AVX2 aligned version
-    const __m256i zero = _mm256_setzero_si256();
-    __m256i v, s, lo, hi;
+    // AVX2 version
+    __m256i v, lo, hi;
     for (size_t y = 0; y < height; ++y) {
       sprec_t *sp = cr->i_samples + y * width;
       int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
       for (size_t i = 0; i < round_down(width, 16); i += 16) {
         v  = _mm256_loadu_si256((__m256i *)(sp + i));
-        s  = _mm256_cmpgt_epi16(zero, v);  // extended-sign
-        lo = _mm256_unpacklo_epi16(v, s);  // dword
-        hi = _mm256_unpackhi_epi16(v, s);  // dword
-        _mm256_store_si256((__m256i *)(dp + i), _mm256_permute2x128_si256(lo, hi, 0x20));
-        _mm256_store_si256((__m256i *)(dp + i + 8), _mm256_permute2x128_si256(lo, hi, 0x31));
+        lo = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(v, 0));
+        hi = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(v, 1));
+        _mm256_stream_si256((__m256i *)(dp + i), lo);
+        _mm256_stream_si256((__m256i *)(dp + i + 8), hi);
       }
       for (size_t i = round_down(width, 16); i < width; ++i) {
         dp[i] = sp[i];
