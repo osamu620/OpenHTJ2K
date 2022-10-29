@@ -98,15 +98,18 @@ void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len > 0; len -= 8) {
-      __m256i mCb      = *((__m256i *)p1);
-      __m256i mCr      = *((__m256i *)p2);
-      __m256i mY       = *((__m256i *)p0);
-      __m256i tmp      = _mm256_add_epi32(mCb, mCr);
-      tmp              = _mm256_srai_epi32(tmp, 2);  //(Cb + Cr) >> 2
-      __m256i mG       = _mm256_sub_epi32(mY, tmp);
-      *((__m256i *)p1) = mG;
-      *((__m256i *)p0) = _mm256_add_epi32(mCr, mG);
-      *((__m256i *)p2) = _mm256_add_epi32(mCb, mG);
+      __m256i mCb = *((__m256i *)p1);
+      __m256i mCr = *((__m256i *)p2);
+      __m256i mY  = *((__m256i *)p0);
+      __m256i tmp = _mm256_add_epi32(mCb, mCr);
+      tmp         = _mm256_srai_epi32(tmp, 2);  //(Cb + Cr) >> 2
+      __m256i mG  = _mm256_sub_epi32(mY, tmp);
+      // *((__m256i *)p1) = mG;
+      // *((__m256i *)p0) = _mm256_add_epi32(mCr, mG);
+      // *((__m256i *)p2) = _mm256_add_epi32(mCb, mG);
+      _mm256_stream_si256((__m256i *)p1, mG);
+      _mm256_stream_si256((__m256i *)p0, _mm256_add_epi32(mCr, mG));
+      _mm256_stream_si256((__m256i *)p2, _mm256_add_epi32(mCb, mG));
       p0 += 8;
       p1 += 8;
       p2 += 8;
@@ -127,16 +130,19 @@ void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
     for (; len > 0; len -= 8) {
-      __m256 mY        = _mm256_cvtepi32_ps(*((__m256i *)p0));
-      __m256 mCb       = _mm256_cvtepi32_ps(*((__m256i *)p1));
-      __m256 mCr       = _mm256_cvtepi32_ps(*((__m256i *)p2));
-      __m256 mR        = _mm256_fmadd_ps(mCr, mCR_FACT_R, mY);
-      __m256 mB        = _mm256_fmadd_ps(mCb, mCB_FACT_B, mY);
-      __m256 mG        = _mm256_fnmadd_ps(mCr, mCR_FACT_G, mY);
-      mG               = _mm256_fnmadd_ps(mCb, mCB_FACT_G, mG);
-      *((__m256i *)p0) = _mm256_cvtps_epi32(_mm256_round_ps(mR, 0));
-      *((__m256i *)p1) = _mm256_cvtps_epi32(_mm256_round_ps(mG, 0));
-      *((__m256i *)p2) = _mm256_cvtps_epi32(_mm256_round_ps(mB, 0));
+      __m256 mY  = _mm256_cvtepi32_ps(*((__m256i *)p0));
+      __m256 mCb = _mm256_cvtepi32_ps(*((__m256i *)p1));
+      __m256 mCr = _mm256_cvtepi32_ps(*((__m256i *)p2));
+      __m256 mR  = _mm256_fmadd_ps(mCr, mCR_FACT_R, mY);
+      __m256 mB  = _mm256_fmadd_ps(mCb, mCB_FACT_B, mY);
+      __m256 mG  = _mm256_fnmadd_ps(mCr, mCR_FACT_G, mY);
+      mG         = _mm256_fnmadd_ps(mCb, mCB_FACT_G, mG);
+      // *((__m256i *)p0) = _mm256_cvtps_epi32(_mm256_round_ps(mR, 0));
+      // *((__m256i *)p1) = _mm256_cvtps_epi32(_mm256_round_ps(mG, 0));
+      // *((__m256i *)p2) = _mm256_cvtps_epi32(_mm256_round_ps(mB, 0));
+      _mm256_stream_si256((__m256i *)p0, _mm256_cvtps_epi32(_mm256_round_ps(mR, 0)));
+      _mm256_stream_si256((__m256i *)p1, _mm256_cvtps_epi32(_mm256_round_ps(mG, 0)));
+      _mm256_stream_si256((__m256i *)p2, _mm256_cvtps_epi32(_mm256_round_ps(mB, 0)));
       p0 += 8;
       p1 += 8;
       p2 += 8;
