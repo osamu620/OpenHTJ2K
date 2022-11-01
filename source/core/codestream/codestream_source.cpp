@@ -46,7 +46,7 @@ uint8_t j2c_src_memory::get_byte() {
 }
 
 int j2c_src_memory::get_N_byte(uint8_t *out, uint32_t length) {
-  memcpy(out, buf + pos, length);
+  memmove(out, buf + pos, length);  // memcpy is not valid because src and dst may overlap
   pos += length;
   //  for (unsigned long i = 0; i < length; i++) {
   //    out[i] = get_byte();

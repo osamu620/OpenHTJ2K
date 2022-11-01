@@ -43,14 +43,15 @@ class j2k_marker_io_base {
   uint16_t code;
   // length of marker segment in bytes
   uint16_t Lmar{};
-  // some markers requires pointer to buffer
-  uint8_t *buf;
   // position in buffer
   uint16_t pos;
+  // some markers require pointer to buffer
+  uint8_t *buf;
+  size_t buf_pos;
   bool is_set;
 
  public:
-  explicit j2k_marker_io_base(uint16_t mar) : code(mar), buf(nullptr), pos(0), is_set(false) {}
+  explicit j2k_marker_io_base(uint16_t mar) : code(mar), pos(0), buf(nullptr), buf_pos(0), is_set(false) {}
   ~j2k_marker_io_base() = default;
   void set_buf(uint8_t *p);
 
