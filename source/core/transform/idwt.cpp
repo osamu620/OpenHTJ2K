@@ -400,9 +400,9 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 
        // AVX2 version
        __m256i vfirst, vsecond;
-       vfirst  = _mm256_loadu_si256((__m256i *)first);
-       vsecond = _mm256_loadu_si256((__m256i *)second);
        for (; len >= 16; len -= 16) {
+         vfirst     = _mm256_loadu_si256((__m256i *)first);
+         vsecond    = _mm256_loadu_si256((__m256i *)second);
          auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
          auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
 
@@ -411,8 +411,6 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
          first += 16;
          second += 16;
          dp += 32;
-         vfirst  = _mm256_loadu_si256((__m256i *)first);
-         vsecond = _mm256_loadu_si256((__m256i *)second);
       }
        for (; len > 0; --len) {
          *dp++ = *first++;
@@ -455,9 +453,9 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 
        // AVX2 version
        __m256i vfirst, vsecond;
-       vfirst  = _mm256_loadu_si256((__m256i *)first);
-       vsecond = _mm256_loadu_si256((__m256i *)second);
        for (; len >= 16; len -= 16) {
+         vfirst     = _mm256_loadu_si256((__m256i *)first);
+         vsecond    = _mm256_loadu_si256((__m256i *)second);
          auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
          auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
 
@@ -466,8 +464,6 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
          first += 16;
          second += 16;
          dp += 32;
-         vfirst  = _mm256_loadu_si256((__m256i *)first);
-         vsecond = _mm256_loadu_si256((__m256i *)second);
       }
        for (; len > 0; --len) {
          *dp++ = *first++;
