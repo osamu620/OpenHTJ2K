@@ -69,7 +69,7 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   char fname[256], tmpname[256];
   memcpy(tmpname, outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name));
   tmpname[outfile_ext_name - outfile_name] = '\0';
-  sprintf(fname, "%s%s", tmpname, outfile_ext_name);
+  snprintf(fname, 256, "%s%s", tmpname, outfile_ext_name);
   FILE *ofp = fopen(fname, "wb");
   fprintf(ofp, "P6 %d %d %d\n", width[0], height[0], MAXVAL);
   const uint32_t num_pixels = width[0] * height[0];
@@ -363,7 +363,7 @@ void write_components(char *outfile_name, char *outfile_ext_name, std::vector<in
     char fname[256], tmpname[256];
     memcpy(tmpname, outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name));
     tmpname[outfile_ext_name - outfile_name] = '\0';
-    sprintf(fname, "%s_%02d%s", tmpname, c, outfile_ext_name);
+    snprintf(fname, 256, "%s_%02d%s", tmpname, c, outfile_ext_name);
 
     FILE *ofp           = fopen(fname, "wb");
     uint32_t num_pixels = width[c] * height[c];
