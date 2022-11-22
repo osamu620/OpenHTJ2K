@@ -597,7 +597,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const auto vROIshift = vdupq_n_s32(ROIshift);
 
   // vdst0, vdst1 cannot be auto for gcc
-  int32x4_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1;
+  int32x4_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1, vpLSB;
+  vpLSB    = vdupq_n_s32(pLSB);
   vmagmask = vdupq_n_s32(INT32_MAX);
   if (this->transformation) {
     // lossless path
@@ -615,12 +616,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         // upshift background region, if necessary
         vROImask = vandq_s32(v0, vmask);
         vROImask = vceqzq_s32(vROImask);
-        vROImask &= vROIshift;
-        v0       = vshlq_s32(v0, vROImask - pLSB);
+        vROImask = vandq_s32(vROImask, vROIshift);
+        v0       = vshlq_s32(v0, vsubq_s32(vROImask, vpLSB));
         vROImask = vandq_s32(v1, vmask);
         vROImask = vceqzq_s32(vROImask);
-        vROImask &= vROIshift;
-        v1 = vshlq_s32(v1, vROImask - pLSB);
+        vROImask = vandq_s32(vROImask, vROIshift);
+        v1       = vshlq_s32(v1, vsubq_s32(vROImask, vpLSB));
         // convert values from sign-magnitude form to two's complement one
         vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
         vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
@@ -675,12 +676,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         // upshift background region, if necessary
         vROImask = vandq_s32(v0, vmask);
         vROImask = vceqzq_s32(vROImask);
-        vROImask &= vROIshift;
+        vROImask = vandq_s32(vROImask, vROIshift);
         v0       = vshlq_s32(v0, vROImask);
         vROImask = vandq_s32(v1, vmask);
         vROImask = vceqzq_s32(vROImask);
-        vROImask &= vROIshift;
-        v1 = vshlq_s32(v1, vROImask);
+        vROImask = vandq_s32(vROImask, vROIshift);
+        v1       = vshlq_s32(v1, vROImask);
         // to prevent overflow, truncate to int16_t range
         v0 = vrshrq_n_s32(v0, 16);  // (v0 + (1 << 15)) >> 16;
         v1 = vrshrq_n_s32(v1, 16);  // (v1 + (1 << 15)) >> 16;
@@ -688,8 +689,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         v0 = vmulq_s32(v0, vdupq_n_s32(scale));
         v1 = vmulq_s32(v1, vdupq_n_s32(scale));
         // downshift and convert values from sign-magnitude form to two's complement one
-        v0    = (v0 + (1 << (downshift - 1))) >> downshift;
-        v1    = (v1 + (1 << (downshift - 1))) >> downshift;
+        v0    = vrshrq_n_s32(v0, downshift);
+        v1    = vrshrq_n_s32(v1, downshift);
         vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
         vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));

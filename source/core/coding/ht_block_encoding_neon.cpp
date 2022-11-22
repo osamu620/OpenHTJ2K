@@ -34,7 +34,7 @@
   #include "utils.hpp"
 
 // Uncomment for experimental use of HT SigProp and MagRef encoding (does not work)
-//#define ENABLE_SP_MR
+// #define ENABLE_SP_MR
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
 void j2k_codeblock::quantize(uint32_t &or_val) {
@@ -85,8 +85,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       // ------------- Block states related begin
       uint8x8_t vblkstate = vdup_n_u8(0);
       // Signed saturating extract Narrow (qmovn) is important for very finer quantization stepsize
-      vblkstate |=
-          vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vqmovn_s32(v0), vqmovn_s32(v1))), vdupq_n_s16(1)));
+      vblkstate = vorr_u8(
+          vblkstate,
+          vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vqmovn_s32(v0), vqmovn_s32(v1))), vdupq_n_s16(1))));
       //      vblkstate |=
       //          vmovn_s16(vbicq_s16(vdupq_n_s16(1), vceqzq_s16(vcombine_s16(vqmovn_s32(v0),
       //          vqmovn_s32(v1)))));
@@ -220,10 +221,11 @@ auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1,
   uint8x8_t sig01 = vand_u8(vzip1_u8(vld1_u8(ssp0), vld1_u8(ssp1)), vdup_n_u8(1));
   sig0            = vcgtzq_s32(vmovl_u16(vget_low_u16(vmovl_u8(sig01))));
   sig1            = vcgtzq_s32(vmovl_u16(vget_high_u16(vmovl_u8(sig01))));
-  int8x8_t shift  = {0, 1, 2, 3, 4, 5, 6, 7};
-  uint8_t rho01   = vaddv_u8(vshl_u8(sig01, shift));
-  rho0            = rho01 & 0xF;
-  rho1            = rho01 >> 4;
+  // int8x8_t shift  = {0, 1, 2, 3, 4, 5, 6, 7};
+  int8x8_t shift = vcreate_s8(0x0706050403020100);
+  uint8_t rho01  = vaddv_u8(vshl_u8(sig01, shift));
+  rho0           = rho01 & 0xF;
+  rho1           = rho01 >> 4;
 
   E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v0)), sig0);
   E1 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v1)), sig1);
@@ -237,8 +239,19 @@ auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *
   v0 = vsetq_lane_s32(sp0[1], v0, 2);
   v0 = vsetq_lane_s32(sp1[1], v0, 3);
 
-  int32x4_t sig   = {ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1};
-  int32x4_t shift = {0, 1, 2, 3};
+  //  int32x4_t sig   = {ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1};
+  //  int32x4_t shift = {0, 1, 2, 3};
+  int32x4_t sig   = {0};
+  sig             = vsetq_lane_s32(ssp0[0] & 1, sig, 0);
+  sig             = vsetq_lane_s32(ssp1[0] & 1, sig, 1);
+  sig             = vsetq_lane_s32(ssp0[1] & 1, sig, 2);
+  sig             = vsetq_lane_s32(ssp1[1] & 1, sig, 3);
+  int32x4_t shift = {0};
+  shift           = vsetq_lane_s32(0, shift, 0);
+  shift           = vsetq_lane_s32(1, shift, 1);
+  shift           = vsetq_lane_s32(2, shift, 2);
+  shift           = vsetq_lane_s32(3, shift, 3);
+
   uint32x4_t vtmp = vshlq_s32(sig, shift);
   rho0            = vaddvq_u32(vtmp) & 0xF;
   sig0            = vcgtzq_s32(sig);
@@ -354,9 +367,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t u_q, uoff, u_min, uvlc_idx, kappa = 1;
   int32_t emb_pattern, embk_0, embk_1, emb1_0, emb1_1;
 
-  const int32x4_t lshift = {0, 1, 2, 3};
-  const int32x4_t rshift = {0, -1, -2, -3};  // negative value with vshlq() does right shift
-  const int32x4_t vone   = vdupq_n_s32(1);
+  const int32x4_t lshift = vcombine_s32(vcreate_s32(0x0000000100000000),
+                                        vcreate_s32(0x0000000300000002));  //{0, 1, 2, 3};
+  const int32x4_t rshift = vcombine_s32(
+      vcreate_s32(0xFFFFFFFF00000000),
+      vcreate_s32(0xFFFFFFFDFFFFFFFE));  //{0, -1, -2, -3}; // negative value with vshlq() does right shift
+  const int32x4_t vone = vdupq_n_s32(1);
   int32x4_t v0, v1, E0, E1, sig0, sig1, Etmp, vuoff, mask, m0, m1, known1_0, known1_1;
 
   /*******************************************************************************************************************/
@@ -390,7 +406,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     Etmp        = vdupq_n_s32(Emax_q);
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E0, Etmp);
-    emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
+    emb_pattern = vaddvq_s32(vandq_s32(vshlq_s32(vuoff, lshift), mask));
     n_q         = emb_pattern + (rho0 << 4) + (context << 8);
     // prepare VLC encoding of quad 0
     CxtVLC = enc_CxtVLC_table0[n_q];
@@ -412,7 +428,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     Etmp        = vdupq_n_s32(Emax_q);
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E1, Etmp);
-    emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
+    emb_pattern = vaddvq_s32(vandq_s32(vshlq_s32(vuoff, lshift), mask));
     n_q         = emb_pattern + (rho1 << 4) + (context << 8);
     // VLC encoding of quads 0 and 1
     VLC_encoder.emitVLCBits(cwd, lw);  // quad 0
@@ -470,8 +486,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   }
   if (qx) {
     make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
-    *E_p++ = E0[1];
-    *E_p++ = E0[3];
+    *E_p++ = vgetq_lane_s32(E0, 1);
+    *E_p++ = vgetq_lane_s32(E0, 3);
 
     // MEL encoding
     if (context == 0) {
@@ -487,7 +503,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     Etmp        = vdupq_n_s32(Emax_q);
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E0, Etmp);
-    emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
+    emb_pattern = vaddvq_s32(vandq_s32(vshlq_s32(vuoff, lshift), mask));
     n_q         = emb_pattern + (rho0 << 4) + (context << 8);
     // VLC encoding
     CxtVLC = enc_CxtVLC_table0[n_q];
@@ -549,7 +565,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       Etmp        = vdupq_n_s32(Emax_q);
       vuoff       = vdupq_n_s32(uoff);
       mask        = vceqq_s32(E0, Etmp);
-      emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
+      emb_pattern = vaddvq_s32(vandq_s32(vshlq_s32(vuoff, lshift), mask));
       n_q         = emb_pattern + (rho0 << 4) + (context << 0);
       // prepare VLC encoding of quad 0
       CxtVLC = enc_CxtVLC_table1[n_q];
@@ -576,7 +592,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       Etmp        = vdupq_n_s32(Emax_q);
       vuoff       = vdupq_n_s32(uoff);
       mask        = vceqq_s32(E1, Etmp);
-      emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
+      emb_pattern = vaddvq_s32(vandq_s32(vshlq_s32(vuoff, lshift), mask));
       n_q         = emb_pattern + (rho1 << 4) + (context << 0);
       // VLC encoding of quands 0 and 1
       VLC_encoder.emitVLCBits(cwd, lw);  // quad 0
@@ -623,8 +639,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     }
     if (qx) {
       make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
-      *E_p++ = E0[1];
-      *E_p++ = E0[3];
+      *E_p++ = vgetq_lane_s32(E0, 1);
+      *E_p++ = vgetq_lane_s32(E0, 3);
 
       // MEL encoding of the first quad
       if (context == 0) {
@@ -642,7 +658,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       Etmp        = vdupq_n_s32(Emax_q);
       vuoff       = vdupq_n_s32(uoff);
       mask        = vceqq_s32(E0, Etmp);
-      emb_pattern = vaddvq_s32(vshlq_s32(vuoff, lshift) & mask);
+      emb_pattern = vaddvq_s32(vandq_s32(vshlq_s32(vuoff, lshift), mask));
       n_q         = emb_pattern + (rho0 << 4) + (context << 0);
       // VLC encoding
       CxtVLC = enc_CxtVLC_table1[n_q];

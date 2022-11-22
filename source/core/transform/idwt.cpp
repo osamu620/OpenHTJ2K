@@ -121,7 +121,7 @@ static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
     // need to perform symmetric extension
     const int32_t len = u1 - u0 + left + right;
     auto *Yext        = static_cast<sprec_t *>(aligned_mem_alloc(
-               sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
+        sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
     for (int32_t row = 0; row < v1 - v0; ++row) {
       idwt_1d_sr_fixed(Yext, in, left, right, u0, u1, transformation);
       in += stride;
@@ -292,8 +292,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       first  = HL;
       second = LL;
     }
-    __builtin_prefetch(first);
-    __builtin_prefetch(second);
+    openhtj2k_arm_prefetch(first);
+    openhtj2k_arm_prefetch(second);
     int16x8_t vfirst0, vfirst1, vsecond0, vsecond1;
     //    int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
@@ -310,8 +310,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
         vst1q_s16(dp + 24, vzip2q_s16(vfirst1, vsecond1));
         first += 16;
         second += 16;
-        __builtin_prefetch(first);
-        __builtin_prefetch(second);
+        openhtj2k_arm_prefetch(first);
+        openhtj2k_arm_prefetch(second);
         dp += 32;
       }
       for (; len > 0; --len) {
@@ -337,8 +337,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       first  = HH;
       second = LH;
     }
-    __builtin_prefetch(first);
-    __builtin_prefetch(second);
+    openhtj2k_arm_prefetch(first);
+    openhtj2k_arm_prefetch(second);
     int16x8_t vfirst0, vfirst1, vsecond0, vsecond1;
     //    int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
@@ -355,8 +355,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
         vst1q_s16(dp + 24, vzip2q_s16(vfirst1, vsecond1));
         first += 16;
         second += 16;
-        __builtin_prefetch(first);
-        __builtin_prefetch(second);
+        openhtj2k_arm_prefetch(first);
+        openhtj2k_arm_prefetch(second);
         dp += 32;
       }
       for (; len > 0; --len) {
@@ -367,115 +367,115 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   if ((ustop[0] - ustart[0]) != (ustop[1] - ustart[1])) {
-     for (uint8_t b = 0; b < 2; ++b) {
-       for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-         for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-           buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
+    for (uint8_t b = 0; b < 2; ++b) {
+      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+          buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
         }
       }
     }
   } else {
-     sprec_t *first, *second;
-     first  = LL;
-     second = HL;
-     if (uoffset[0] > uoffset[1]) {
-       first  = HL;
-       second = LL;
+    sprec_t *first, *second;
+    first  = LL;
+    second = HL;
+    if (uoffset[0] > uoffset[1]) {
+      first  = HL;
+      second = LL;
     }
-     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
-       sprec_t *dp = buf + (2 * v + voffset[0]) * stride;
-       size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
-       // SSE version
-       //  for (; len >= 8; len -= 8) {
-       //    auto vfirst  = _mm_loadu_si128((__m128i *)first);
-       //    auto vsecond = _mm_loadu_si128((__m128i *)second);
-       //    auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
-       //    auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
-       //    _mm_storeu_si128((__m128i *)dp, vtmp0);
-       //    _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
-       //    first += 8;
-       //    second += 8;
-       //    dp += 16;
-       // }
+    for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
+      sprec_t *dp = buf + (2 * v + voffset[0]) * stride;
+      size_t len  = static_cast<size_t>(ustop[0] - ustart[0]);
+      // SSE version
+      //  for (; len >= 8; len -= 8) {
+      //    auto vfirst  = _mm_loadu_si128((__m128i *)first);
+      //    auto vsecond = _mm_loadu_si128((__m128i *)second);
+      //    auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
+      //    auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
+      //    _mm_storeu_si128((__m128i *)dp, vtmp0);
+      //    _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
+      //    first += 8;
+      //    second += 8;
+      //    dp += 16;
+      // }
 
-       // AVX2 version
-       __m256i vfirst, vsecond;
-       for (; len >= 16; len -= 16) {
-         vfirst     = _mm256_loadu_si256((__m256i *)first);
-         vsecond    = _mm256_loadu_si256((__m256i *)second);
-         auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
-         auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
+      // AVX2 version
+      __m256i vfirst, vsecond;
+      for (; len >= 16; len -= 16) {
+        vfirst     = _mm256_loadu_si256((__m256i *)first);
+        vsecond    = _mm256_loadu_si256((__m256i *)second);
+        auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
+        auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
 
-         _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
-         _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
-         first += 16;
-         second += 16;
-         dp += 32;
+        _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
+        _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
+        first += 16;
+        second += 16;
+        dp += 32;
       }
-       for (; len > 0; --len) {
-         *dp++ = *first++;
-         *dp++ = *second++;
+      for (; len > 0; --len) {
+        *dp++ = *first++;
+        *dp++ = *second++;
       }
     }
   }
 
   if ((ustop[2] - ustart[2]) != (ustop[3] - ustart[3])) {
-     for (uint8_t b = 2; b < 4; ++b) {
-       for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-         for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-           buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
+    for (uint8_t b = 2; b < 4; ++b) {
+      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+          buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
         }
       }
     }
   } else {
-     sprec_t *first, *second;
-     first  = LH;
-     second = HH;
-     if (uoffset[2] > uoffset[3]) {
-       first  = HH;
-       second = LH;
+    sprec_t *first, *second;
+    first  = LH;
+    second = HH;
+    if (uoffset[2] > uoffset[3]) {
+      first  = HH;
+      second = LH;
     }
-     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
-       sprec_t *dp = buf + (2 * v + voffset[2]) * stride;
-       size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
-       // SSE version
-       //  for (; len >= 8; len -= 8) {
-       //    auto vfirst  = _mm_loadu_si128((__m128i *)first);
-       //    auto vsecond = _mm_loadu_si128((__m128i *)second);
-       //    auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
-       //    auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
-       //    _mm_storeu_si128((__m128i *)dp, vtmp0);
-       //    _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
-       //    first += 8;
-       //    second += 8;
-       //    dp += 16;
-       // }
+    for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
+      sprec_t *dp = buf + (2 * v + voffset[2]) * stride;
+      size_t len  = static_cast<size_t>(ustop[2] - ustart[2]);
+      // SSE version
+      //  for (; len >= 8; len -= 8) {
+      //    auto vfirst  = _mm_loadu_si128((__m128i *)first);
+      //    auto vsecond = _mm_loadu_si128((__m128i *)second);
+      //    auto vtmp0   = _mm_unpacklo_epi16(vfirst, vsecond);
+      //    auto vtmp1   = _mm_unpackhi_epi16(vfirst, vsecond);
+      //    _mm_storeu_si128((__m128i *)dp, vtmp0);
+      //    _mm_storeu_si128((__m128i *)(dp + 8), vtmp1);
+      //    first += 8;
+      //    second += 8;
+      //    dp += 16;
+      // }
 
-       // AVX2 version
-       __m256i vfirst, vsecond;
-       for (; len >= 16; len -= 16) {
-         vfirst     = _mm256_loadu_si256((__m256i *)first);
-         vsecond    = _mm256_loadu_si256((__m256i *)second);
-         auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
-         auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
+      // AVX2 version
+      __m256i vfirst, vsecond;
+      for (; len >= 16; len -= 16) {
+        vfirst     = _mm256_loadu_si256((__m256i *)first);
+        vsecond    = _mm256_loadu_si256((__m256i *)second);
+        auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
+        auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
 
-         _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
-         _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
-         first += 16;
-         second += 16;
-         dp += 32;
+        _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
+        _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
+        first += 16;
+        second += 16;
+        dp += 32;
       }
-       for (; len > 0; --len) {
-         *dp++ = *first++;
-         *dp++ = *second++;
+      for (; len > 0; --len) {
+        *dp++ = *first++;
+        *dp++ = *second++;
       }
     }
   }
 #else
   for (uint8_t b = 0; b < 4; ++b) {
-     for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-       for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-         buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
+    for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+      for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+        buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(sp[b]++);
       }
     }
   }
@@ -514,19 +514,19 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     for (; len >= 16; len -= 16) {
-       __m256i tmp0 = _mm256_load_si256((__m256i *)src);
-       __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
-       _mm256_store_si256((__m256i *)src, tmp1);
-       src += 16;
+      __m256i tmp0 = _mm256_load_si256((__m256i *)src);
+      __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
+      _mm256_store_si256((__m256i *)src, tmp1);
+      src += 16;
     }
     for (; len > 0; --len) {
-       // cast to unsigned to avoid undefined behavior
+      // cast to unsigned to avoid undefined behavior
       *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
       src++;
     }
 #else
     for (; len > 0; --len) {
-       // cast to unsigned to avoid undefined behavior
+      // cast to unsigned to avoid undefined behavior
       *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
       src++;
     }
