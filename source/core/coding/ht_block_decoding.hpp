@@ -34,10 +34,13 @@
 
 #if __GNUC__ || __has_attribute(always_inline)
   #define FORCE_INLINE inline __attribute__((always_inline))
+  #define openhtj2k_arm_clzll(x) __builtin_clzll((x))
 #elif defined(_MSC_VER)
   #define FORCE_INLINE __forceinline
+  #define openhtj2k_arm_clzll(x) _CountLeadingZeros64((x))
 #else
   #define FORCE_INLINE inline
+  #define openhtj2k_arm_clzll(x) __builtin_clzll((x))
 #endif
 
 // LUT for UVLC decoding in initial line-pair
@@ -362,6 +365,7 @@ class rev_buf {
  * fwd_buf:
  *******************************************************************************/
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #include <arm_neon.h>
 // NEON does not provide a version of this function, here is an article about
 // some ways to repro the results.
 // http://stackoverflow.com/questions/11870910/sse-mm-movemask-epi8-equivalent-method-for-arm-neon
@@ -567,17 +571,20 @@ class fwd_buf {
       // here we process 16 bytes
       --bits_local;  // consuming one stuffing bit
 
-      int32_t loc_arm = static_cast<int32_t>(15 - (__builtin_clzll(flags_arm) >> 2));
+      int32_t loc_arm = static_cast<int32_t>(15 - (openhtj2k_arm_clzll(flags_arm) >> 2));
       flags_arm ^= (uint64_t)0xF << (loc_arm << 2);
       uint8x16_t m, t, c;
       t = vdupq_n_s8(static_cast<int8_t>(loc_arm));
       m = vcgtq_s8(offset, t);
 
-      t = vandq_u8(m, val);           // keep bits_local at locations larger than loc
-      c = aarch64_srli_epi64(t, 1);   // 1 bits_local left
-      t = aarch64_srli_si128(t, 8);   // 8 bytes left
-      t = aarch64_slli_epi64(t, 63);  // keep the MSB only
-      t = vorrq_u8(t, c);             // combine the above 3 steps
+      t = vandq_u8(m, val);  // keep bits_local at locations larger than loc
+      // c = aarch64_srli_epi64(t, 1);  // 1 bits_local left
+      c = vreinterpretq_s32_u64(vshrq_n_u64(vreinterpretq_u64_s32(t), 1));  // 1 bits_local left
+      // t = aarch64_srli_si128(t, 8);   // 8 bytes left
+      t = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(t), vdupq_n_s8(0), 8));  // 8 bytes left
+      // t = aarch64_slli_epi64(t, 63);                                          // keep the MSB only
+      t = vreinterpretq_s32_s64(vshlq_n_s64(vreinterpretq_s64_s32(t), 63));  // keep the MSB only
+      t = vorrq_u8(t, c);                                                    // combine the above 3 steps
 
       val = vorrq_u8(t, vbicq_s8(val, m));
     }
@@ -589,7 +596,8 @@ class fwd_buf {
     uint8x16_t b1, b2;
     b1 = aarch64_sll_epi64(val, vdupq_n_s64(cur_bits));
 
-    b2 = aarch64_slli_si128(val, 8);  // 8 bytes right
+    //    b2 = aarch64_slli_si128(val, 8);  // 8 bytes right
+    b2 = vreinterpretq_s32_s8(vextq_s8(vdupq_n_s8(0), vreinterpretq_s8_s32(val), 16 - 8));  // 8 bytes left
     b2 = aarch64_srl_epi64(b2, static_cast<uint8_t>(64 - cur_bits));
     b1 = vorrq_u8(b1, b2);
     b2 = vld1q_u8(tmp + cur_bytes);
@@ -598,7 +606,8 @@ class fwd_buf {
 
     uint32_t consumed_bits = bits_local < 128 - cur_bits ? bits_local : 128 - cur_bits;
     cur_bytes              = (this->bits + (uint32_t)consumed_bits + 7) >> 3;  // round up
-    int upper              = aarch64_extract_epi16(val, 7);
+    // int upper = aarch64_extract_epi16(val, 7);
+    int upper = vgetq_lane_s16(vreinterpretq_s16_s32(val), 7) & 0x0000ffff;
 
     upper >>= consumed_bits - 128 + 16;
     this->tmp[cur_bytes] = (uint8_t)upper;  // copy byte
@@ -627,17 +636,20 @@ class fwd_buf {
 
     // shift right by num_bits
     c0 = aarch64_srl_epi64(v0, static_cast<uint8_t>(num_bits));
-    t  = aarch64_srli_si128(v0, 8);
+    //    t  = aarch64_srli_si128(v0, 8);
+    t  = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(v0), vdupq_n_s8(0), 8));
     t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
     c0 = vorrq_u8(c0, t);
-    t  = aarch64_slli_si128(v1, 8);
+    //    t  = aarch64_slli_si128(v1, 8);
+    t  = vreinterpretq_s32_s8(vextq_s8(vdupq_n_s8(0), vreinterpretq_s8_s32(v1), 16 - 8));
     t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
     c0 = vorrq_u8(c0, t);
 
     vst1q_u8(this->tmp, c0);
 
     c1 = aarch64_srl_epi64(v1, static_cast<uint8_t>(num_bits));
-    t  = aarch64_srli_si128(v1, 8);
+    //    t  = aarch64_srli_si128(v1, 8);
+    t  = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(v1), vdupq_n_s8(0), 8));
     t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
     c1 = vorrq_u8(c1, t);
 
@@ -656,26 +668,27 @@ class fwd_buf {
         read();
     }
     auto t = vld1q_u8(this->tmp);
-    //    int32x4_t msvec, c, v;
-    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 0);
-    //    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 0)));
-    //    v     = aarch64_srli_si128(t, 8);
-    //    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 0)));
-    //    t     = vorrq_u8(c, v);
-    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 1);
-    //    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 1)));
-    //    v     = aarch64_srli_si128(t, 8);
-    //    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 1)));
-    //    t     = vorrq_u8(c, v);
-    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 2);
-    //    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 2)));
-    //    v     = aarch64_srli_si128(t, 8);
-    //    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 2)));
-    //    t     = vorrq_u8(c, v);
-    //    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 3);
-    //    advance(vaddvq_u32(m));
-    //    return msvec;
-
+  #if defined(_MSC_VER)
+    int32x4_t msvec, c, v;
+    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 0);
+    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 0)));
+    v     = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(t), vdupq_n_s8(0), 8));
+    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 0)));
+    t     = vorrq_u8(c, v);
+    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 1);
+    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 1)));
+    v     = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(t), vdupq_n_s8(0), 8));
+    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 1)));
+    t     = vorrq_u8(c, v);
+    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 2);
+    c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 2)));
+    v     = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(t), vdupq_n_s8(0), 8));
+    v     = aarch64_sll_epi64(v, vdupq_n_s64(64 - vgetq_lane_s32(m, 2)));
+    t     = vorrq_u8(c, v);
+    msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 3);
+    advance(vaddvq_u32(m));
+    return msvec;
+  #else
     //    uint32_t vtmp[4];
     //    vtmp[0] = v128i & 0xFFFFFFFFU;
     //    v128i >>= m[0];
@@ -697,6 +710,7 @@ class fwd_buf {
     vtmp[3] = static_cast<int32_t>(v128i & 0xFFFFFFFFU);
     advance(vaddvq_u32(m));
     return vtmp;
+  #endif
   }
 };
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
@@ -1164,12 +1178,12 @@ class fwd_buf {
 //  uint8_t decodeMELSym();
 //};
 //
-//#define ADVANCED
-//#ifdef ADVANCED
+// #define ADVANCED
+// #ifdef ADVANCED
 //  #define getbitfunc getVLCbit()
-//#else
+// #else
 //  #define getbitfunc importVLCBit()
-//#endif
+// #endif
 ///********************************************************************************
 // * state_VLC: state class for VLC decoding
 // *******************************************************************************/
@@ -1177,19 +1191,19 @@ class fwd_buf {
 // private:
 //  int32_t pos;
 //  uint8_t last;
-//#ifndef ADVANCED
+// #ifndef ADVANCED
 //  uint8_t tmp;
 //  uint32_t rev_length;
-//#else
+// #else
 //  int32_t ctreg;
 //  uint64_t Creg;
-//#endif
+// #endif
 //  uint8_t bits;
 //  uint8_t *buf;
 //
 // public:
 //  state_VLC_dec(uint8_t *Dcup, uint32_t Lcup, int32_t Pcup)
-//#ifndef ADVANCED
+// #ifndef ADVANCED
 //      : pos((Lcup > 2) ? Lcup - 3 : 0),
 //        last(*(Dcup + Lcup - 2)),
 //        tmp(last >> 4),
@@ -1198,7 +1212,7 @@ class fwd_buf {
 //        buf(Dcup) {
 //  }
 //  uint8_t importVLCBit();
-//#else
+// #else
 //      : pos(static_cast<int32_t>(Lcup) - 2 - Pcup), ctreg(0), Creg(0), bits(0), buf(Dcup + Pcup) {
 //    load_bytes();
 //    ctreg -= 4;
@@ -1210,7 +1224,7 @@ class fwd_buf {
 //  void load_bytes();
 //  uint8_t getVLCbit();
 //  void close32(int32_t num_bits);
-//#endif
+// #endif
 //  void decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2], uint8_t (&emb_k)[2],
 //                    uint8_t (&emb_1)[2], const uint8_t &first_or_second, const uint16_t
 //                    *dec_CxtVLC_table);
@@ -1379,7 +1393,7 @@ class MR_dec {
 ///********************************************************************************
 // * functions for state_VLC: state class for VLC decoding
 // *******************************************************************************/
-//#ifndef ADVANCED
+// #ifndef ADVANCED
 // uint8_t state_VLC::importVLCBit() {
 //  uint8_t val;
 //  if (bits == 0) {
@@ -1404,7 +1418,7 @@ class MR_dec {
 //  bits--;
 //  return val;
 //}
-//#else
+// #else
 // void state_VLC_dec::load_bytes() {
 //  uint64_t load_val = 0;
 //  int32_t new_bits  = 32;
@@ -1465,20 +1479,20 @@ class MR_dec {
 //    load_bytes();
 //  }
 //}
-//#endif
+// #endif
 //
 //[[maybe_unused]] void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2],
 //                                                  uint8_t (&rho)[2], uint8_t (&emb_k)[2],
 //                                                  uint8_t (&emb_1)[2], const uint8_t &first_or_second,
 //                                                  const uint16_t *dec_CxtVLC_table) {
-//#ifndef ADVANCED
+// #ifndef ADVANCED
 //  uint8_t b_low = tmp;
 //  uint8_t b_upp = *(buf + pos);  // modDcup(VLC->pos, Lcup);
 //  uint16_t word = (b_upp << bits) + b_low;
 //  uint8_t cwd   = word & 0x7F;
-//#else
+// #else
 //  uint8_t cwd = Creg & 0x7f;
-//#endif
+// #endif
 //  uint16_t idx           = static_cast<uint16_t>(cwd + (context << 7));
 //  uint16_t value         = dec_CxtVLC_table[idx];
 //  u_off[first_or_second] = value & 1;
@@ -1495,13 +1509,13 @@ class MR_dec {
 //  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
 //  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
 //
-//#ifndef ADVANCED
+// #ifndef ADVANCED
 //  for (int i = 0; i < len; i++) {
 //    importVLCBit();
 //  }
-//#else
+// #else
 //  close32(len);
-//#endif
+// #endif
 //}
 //
 //[[maybe_unused]] uint8_t state_VLC_dec::decodeUPrefix() {

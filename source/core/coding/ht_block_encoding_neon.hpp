@@ -108,8 +108,30 @@ class state_MS_enc {
   FORCE_INLINE void emitBits(int32x4_t &v, int32x4_t &m, int32x4_t &emb1) {
     int32x4_t tmp = vshlq_s32(emb1, m);
     v             = vsubq_s32(v, tmp);
+#if defined(_MSC_VER)
+    Creg |= static_cast<uint64_t>(vdups_laneq_s32(v, 0)) << ctreg;
+    ctreg += static_cast<unsigned int>(vdups_laneq_s32(m, 0));
+    while (ctreg >= 32) {
+      emit_dword();
+    }
+    Creg |= static_cast<uint64_t>(vdups_laneq_s32(v, 1)) << ctreg;
+    ctreg += static_cast<unsigned int>(vdups_laneq_s32(m, 1));
+    while (ctreg >= 32) {
+      emit_dword();
+    }
+    Creg |= static_cast<uint64_t>(vdups_laneq_s32(v, 2)) << ctreg;
+    ctreg += static_cast<unsigned int>(vdups_laneq_s32(m, 2));
+    while (ctreg >= 32) {
+      emit_dword();
+    }
+    Creg |= static_cast<uint64_t>(vdups_laneq_s32(v, 3)) << ctreg;
+    ctreg += static_cast<unsigned int>(vdups_laneq_s32(m, 3));
+    while (ctreg >= 32) {
+      emit_dword();
+    }
+#else
     for (int i = 0; i < 4; ++i) {
-      Creg |= static_cast<__uint128_t>(v[i]) << ctreg;
+      Creg |= static_cast<uint64_t>(v[i]) << ctreg;
       ctreg += static_cast<unsigned int>(m[i]);
       //      while (ctreg >= 64) {
       //        emit_qword();
@@ -121,6 +143,7 @@ class state_MS_enc {
     //    while (ctreg >= 32) {
     //      emit_dword();
     //    }
+#endif
   }
 
   FORCE_INLINE int32_t termMS() {

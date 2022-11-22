@@ -39,11 +39,11 @@ auto idwt_irrev97_fixed_neon_hor_step0 = [](const int32_t init_pos, const int32_
                                             const int32_t n0, const int32_t n1) {
   auto vvv = vdupq_n_s16(Dcoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
-    auto tmp = (x0.val[0] + x1.val[0]);
-    tmp      = vqrdmulhq_s16(tmp, vvv);
-    x0.val[1] -= tmp;
+    auto x0   = vld2q_s16(X + n + n0);
+    auto x1   = vld2q_s16(X + n + n1);
+    auto tmp  = vaddq_s16(x0.val[0], x1.val[0]);
+    tmp       = vqrdmulhq_s16(tmp, vvv);
+    x0.val[1] = vsubq_s16(x0.val[1], tmp);
     vst2q_s16(X + n + n0, x0);
   }
 };
@@ -52,11 +52,11 @@ auto idwt_irrev97_fixed_neon_hor_step1 = [](const int32_t init_pos, const int32_
                                             const int32_t n0, const int32_t n1) {
   auto vvv = vdupq_n_s16(Ccoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
-    auto tmp = (x0.val[0] + x1.val[0]);
-    tmp      = vqrdmulhq_s16(tmp, vvv);
-    x0.val[1] -= tmp;
+    auto x0   = vld2q_s16(X + n + n0);
+    auto x1   = vld2q_s16(X + n + n1);
+    auto tmp  = vaddq_s16(x0.val[0], x1.val[0]);
+    tmp       = vqrdmulhq_s16(tmp, vvv);
+    x0.val[1] = vsubq_s16(x0.val[1], tmp);
     vst2q_s16(X + n + n0, x0);
   }
 };
@@ -65,11 +65,11 @@ auto idwt_irrev97_fixed_neon_hor_step2 = [](const int32_t init_pos, const int32_
                                             const int32_t n0, const int32_t n1) {
   auto vvv = vdupq_n_s16(Bcoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
-    auto tmp = vrhaddq_s16(x0.val[0], x1.val[0]);
-    tmp      = vqrdmulhq_s16(tmp, vvv);
-    x0.val[1] -= tmp;
+    auto x0   = vld2q_s16(X + n + n0);
+    auto x1   = vld2q_s16(X + n + n1);
+    auto tmp  = vrhaddq_s16(x0.val[0], x1.val[0]);
+    tmp       = vqrdmulhq_s16(tmp, vvv);
+    x0.val[1] = vsubq_s16(x0.val[1], tmp);
     vst2q_s16(X + n + n0, x0);
   }
 };
@@ -78,12 +78,12 @@ auto idwt_irrev97_fixed_neon_hor_step3 = [](const int32_t init_pos, const int32_
                                             const int32_t n0, const int32_t n1) {
   auto vvv = vdupq_n_s16(Acoeff_simd);
   for (int32_t n = init_pos, i = simdlen; i > 0; i -= 8, n += 16) {
-    auto x0  = vld2q_s16(X + n + n0);
-    auto x1  = vld2q_s16(X + n + n1);
-    auto tmp = (x0.val[0] + x1.val[0]);
-    tmp      = vqrdmulhq_s16(tmp, vvv);
-    tmp -= (x0.val[0] + x1.val[0]);
-    x0.val[1] -= tmp;
+    auto x0   = vld2q_s16(X + n + n0);
+    auto x1   = vld2q_s16(X + n + n1);
+    auto tmp  = vaddq_s16(x0.val[0], x1.val[0]);
+    tmp       = vqrdmulhq_s16(tmp, vvv);
+    tmp       = vsubq_s16(tmp, vaddq_s16(x0.val[0], x1.val[0]));
+    x0.val[1] = vsubq_s16(x0.val[1], tmp);
     vst2q_s16(X + n + n0, x0);
   }
 };
@@ -93,6 +93,7 @@ auto idwt_irrev97_fixed_neon_hor_step3 = [](const int32_t init_pos, const int32_
        const int32_t coeff, const int32_t offset, const int32_t shift) {
       auto vcoeff  = vdupq_n_s32(coeff);
       auto voffset = vdupq_n_s32(offset);
+      auto vshift  = vdupq_n_s32(-shift);
       for (int32_t n = init_pos, i = 0; i < simdlen; i += 8, n += 16) {
         auto xl0   = vld2q_s16(X + n + n0);
         auto xl1   = vld2q_s16(X + n + n1);
@@ -102,9 +103,9 @@ auto idwt_irrev97_fixed_neon_hor_step3 = [](const int32_t init_pos, const int32_
         auto x2    = vreinterpretq_s32_s16(xl1.val[0]);
         auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(x2)));
         auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(x2)));
-        auto xoutl = ((x0l + x2l) * vcoeff + voffset) >> shift;
-        auto xouth = ((x0h + x2h) * vcoeff + voffset) >> shift;
-        xl0.val[1] -= vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+        auto xoutl = vshlq_s32(vmlaq_s32(voffset, vaddq_s32(x0l, x2l), vcoeff), vshift);
+        auto xouth = vshlq_s32(vmlaq_s32(voffset, vaddq_s32(x0h, x2h), vcoeff), vshift);
+        xl0.val[1] = vsubq_s16(xl0.val[1], vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth)));
         vst2q_s16(X + n + n0, xl0);
       }
     };
@@ -149,7 +150,7 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   int16x8x2_t xl1 = vld2q_s16(sp + 1);
   for (; simdlen > 0; simdlen -= 8) {
     // (xl0.val[0] + xl1.val[0] + 2) >> 2;
-    xl0.val[1] -= vrshrq_n_s16(vhaddq_s16(xl0.val[0], xl1.val[0]), 1);
+    xl0.val[1] = vsubq_s16(xl0.val[1], vrshrq_n_s16(vhaddq_s16(xl0.val[0], xl1.val[0]), 1));
     vst2q_s16(sp - 1, xl0);
     sp += 16;
     xl0 = vld2q_s16(sp - 1);
@@ -162,8 +163,8 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   xl0     = vld2q_s16(sp);
   xl1     = vld2q_s16(sp + 2);
   for (; simdlen > 0; simdlen -= 8) {
-    auto xout = vhaddq_s16(xl0.val[0], xl1.val[0]);
-    xl0.val[1] += xout;
+    auto xout  = vhaddq_s16(xl0.val[0], xl1.val[0]);
+    xl0.val[1] = vaddq_s16(xl0.val[1], xout);
     vst2q_s16(sp, xl0);
     sp += 16;
     xl0 = vld2q_s16(sp);
@@ -182,9 +183,9 @@ auto idwt_irrev97_fixed_neon_ver_step0 = [](const int32_t simdlen, int16_t *cons
     auto x0  = vld1q_s16(Xin0 + n);
     auto x2  = vld1q_s16(Xin1 + n);
     auto x1  = vld1q_s16(Xout + n);
-    auto tmp = (x0 + x2);
+    auto tmp = vaddq_s16(x0, x2);
     tmp      = vqrdmulhq_s16(tmp, vvv);
-    x1 -= tmp;
+    x1       = vsubq_s16(x1, tmp);
     vst1q_s16(Xout + n, x1);
   }
 };
@@ -196,9 +197,9 @@ auto idwt_irrev97_fixed_neon_ver_step1 = [](const int32_t simdlen, int16_t *cons
     auto x0  = vld1q_s16(Xin0 + n);
     auto x2  = vld1q_s16(Xin1 + n);
     auto x1  = vld1q_s16(Xout + n);
-    auto tmp = (x0 + x2);
+    auto tmp = vaddq_s16(x0, x2);
     tmp      = vqrdmulhq_s16(tmp, vvv);
-    x1 -= tmp;
+    x1       = vsubq_s16(x1, tmp);
     vst1q_s16(Xout + n, x1);
   }
 };
@@ -212,7 +213,7 @@ auto idwt_irrev97_fixed_neon_ver_step2 = [](const int32_t simdlen, int16_t *cons
     auto x1  = vld1q_s16(Xout + n);
     auto tmp = vrhaddq_s16(x0, x2);
     tmp      = vqrdmulhq_s16(tmp, vvv);
-    x1 -= tmp;
+    x1       = vsubq_s16(x1, tmp);
     vst1q_s16(Xout + n, x1);
   }
 };
@@ -224,10 +225,10 @@ auto idwt_irrev97_fixed_neon_ver_step3 = [](const int32_t simdlen, int16_t *cons
     auto x0  = vld1q_s16(Xin0 + n);
     auto x2  = vld1q_s16(Xin1 + n);
     auto x1  = vld1q_s16(Xout + n);
-    auto tmp = x0 + x2;
-    x1 += tmp;
-    tmp = vqrdmulhq_s16(tmp, vvv);
-    x1 -= tmp;
+    auto tmp = vaddq_s16(x0, x2);
+    x1       = vaddq_s16(x1, tmp);
+    tmp      = vqrdmulhq_s16(tmp, vvv);
+    x1       = vsubq_s16(x1, tmp);
     vst1q_s16(Xout + n, x1);
   }
 };
@@ -237,17 +238,20 @@ auto idwt_irrev97_fixed_neon_ver_step3 = [](const int32_t simdlen, int16_t *cons
        const int32_t coeff, const int32_t offset, const int32_t shift) {
       auto vcoeff  = vdupq_n_s32(coeff);
       auto voffset = vdupq_n_s32(offset);
+      auto vshift  = vdupq_n_s32(-shift);
       for (int32_t n = 0; n < simdlen; n += 8) {
-        auto x0    = vld1q_s16(Xin0 + n);
-        auto x2    = vld1q_s16(Xin1 + n);
-        auto x1    = vld1q_s16(Xout + n);
-        auto x0l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(vreinterpretq_s32_s16(x0))));
-        auto x0h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(vreinterpretq_s32_s16(x0))));
-        auto x2l   = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(vreinterpretq_s32_s16(x2))));
-        auto x2h   = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(vreinterpretq_s32_s16(x2))));
-        auto xoutl = ((x0l + x2l) * vcoeff + voffset) >> shift;
-        auto xouth = ((x0h + x2h) * vcoeff + voffset) >> shift;
-        x1 -= vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth));
+        auto x0  = vld1q_s16(Xin0 + n);
+        auto x2  = vld1q_s16(Xin1 + n);
+        auto x1  = vld1q_s16(Xout + n);
+        auto x0l = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(vreinterpretq_s32_s16(x0))));
+        auto x0h = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(vreinterpretq_s32_s16(x0))));
+        auto x2l = vmovl_s16(vreinterpret_s16_s32(vget_low_s32(vreinterpretq_s32_s16(x2))));
+        auto x2h = vmovl_s16(vreinterpret_s16_s32(vget_high_s32(vreinterpretq_s32_s16(x2))));
+        //        auto xoutl = ((x0l + x2l) * vcoeff + voffset) >> shift;
+        //        auto xouth = ((x0h + x2h) * vcoeff + voffset) >> shift;
+        auto xoutl = vshlq_s32(vmlaq_s32(voffset, vaddq_s32(x0l, x2l), vcoeff), vshift);
+        auto xouth = vshlq_s32(vmlaq_s32(voffset, vaddq_s32(x0h, x2h), vcoeff), vshift);
+        x1         = vsubq_s16(x1, vcombine_s16(vmovn_s32(xoutl), vmovn_s32(xouth)));
         vst1q_s16(Xout + n, x1);
       }
     };
@@ -371,9 +375,9 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       int16_t *x0 = buf[n - 1];
       int16_t *x1 = buf[n];
       int16_t *x2 = buf[n + 1];
-      __builtin_prefetch(x0);
-      __builtin_prefetch(x1);
-      __builtin_prefetch(x2);
+      openhtj2k_arm_prefetch(x0);
+      openhtj2k_arm_prefetch(x1);
+      openhtj2k_arm_prefetch(x2);
       for (int32_t col = 0; col < simdlen; col += 16) {
         vin00 = vld1q_s16(x0);
         vin01 = vld1q_s16(x0 + 8);
@@ -381,16 +385,16 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         vout1 = vld1q_s16(x1 + 8);
         vin10 = vld1q_s16(x2);
         vin11 = vld1q_s16(x2 + 8);
-        vout0 -= vrshrq_n_s16(vhaddq_s16(vin00, vin10), 1);
-        vout1 -= vrshrq_n_s16(vhaddq_s16(vin01, vin11), 1);
+        vout0 = vsubq_s16(vout0, vrshrq_n_s16(vhaddq_s16(vin00, vin10), 1));
+        vout1 = vsubq_s16(vout1, vrshrq_n_s16(vhaddq_s16(vin01, vin11), 1));
         vst1q_s16(x1, vout0);
         vst1q_s16(x1 + 8, vout1);
         x0 += 16;
         x1 += 16;
         x2 += 16;
-        __builtin_prefetch(x0);
-        __builtin_prefetch(x1);
-        __builtin_prefetch(x2);
+        openhtj2k_arm_prefetch(x0);
+        openhtj2k_arm_prefetch(x1);
+        openhtj2k_arm_prefetch(x2);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = *x0++;
@@ -402,9 +406,9 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       int16_t *x0 = buf[n];
       int16_t *x1 = buf[n + 1];
       int16_t *x2 = buf[n + 2];
-      __builtin_prefetch(x0);
-      __builtin_prefetch(x1);
-      __builtin_prefetch(x2);
+      openhtj2k_arm_prefetch(x0);
+      openhtj2k_arm_prefetch(x1);
+      openhtj2k_arm_prefetch(x2);
       for (int32_t col = 0; col < simdlen; col += 16) {
         vin00 = vld1q_s16(x0);
         vin01 = vld1q_s16(x0 + 8);
@@ -412,16 +416,16 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         vout1 = vld1q_s16(x1 + 8);
         vin10 = vld1q_s16(x2);
         vin11 = vld1q_s16(x2 + 8);
-        vout0 += vhaddq_s16(vin00, vin10);
-        vout1 += vhaddq_s16(vin01, vin11);
+        vout0 = vaddq_s16(vout0, vhaddq_s16(vin00, vin10));
+        vout1 = vaddq_s16(vout1, vhaddq_s16(vin01, vin11));
         vst1q_s16(x1, vout0);
         vst1q_s16(x1 + 8, vout1);
         x0 += 16;
         x1 += 16;
         x2 += 16;
-        __builtin_prefetch(x0);
-        __builtin_prefetch(x1);
-        __builtin_prefetch(x2);
+        openhtj2k_arm_prefetch(x0);
+        openhtj2k_arm_prefetch(x1);
+        openhtj2k_arm_prefetch(x2);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = *x0++;

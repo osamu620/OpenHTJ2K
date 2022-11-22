@@ -32,7 +32,7 @@
 #include <cstdlib>
 
 #define round_up(x, n) (((x) + (n)-1) & (-n))
-//#define round_down(x, n) ((x) & (-n))
+// #define round_down(x, n) ((x) & (-n))
 #define round_down(x, n) ((x) - ((x) % (n)))
 #define ceil_int(a, b) ((a) + ((b)-1)) / (b)
 
@@ -41,8 +41,15 @@
 #endif
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  //#include <arm_acle.h>
+  // #include <arm_acle.h>
   #include <arm_neon.h>
+  #if defined(_MSC_VER)
+    #define openhtj2k_arm_prefetch(x) __prefetch((x))
+    #define openhtj2k_arm_prefetch2(x, y) __prefetch2((x), (y))
+  #else
+    #define openhtj2k_arm_prefetch(x) __builtin_prefetch((x))
+    #define openhtj2k_arm_prefetch2(x, y) __builtin_prefetch((x), (y))
+  #endif
 #elif defined(_MSC_VER) || defined(__MINGW64__)
   #include <intrin.h>
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)

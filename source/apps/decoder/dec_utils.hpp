@@ -31,6 +31,11 @@
 #include <memory>
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
+  #if defined(_MSC_VER)
+    #define openhtj2k_arm_prefetch(x) __prefetch((x))
+  #else
+    #define openhtj2k_arm_prefetch(x) __builtin_prefetch((x))
+  #endif
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #if defined(_MSC_VER)
     #include <intrin.h>
@@ -85,9 +90,9 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   R            = buf[0];
   G            = buf[1];
   B            = buf[2];
-  __builtin_prefetch(R);
-  __builtin_prefetch(G);
-  __builtin_prefetch(B);
+  openhtj2k_arm_prefetch(R);
+  openhtj2k_arm_prefetch(G);
+  openhtj2k_arm_prefetch(B);
   int32x4_t R0, R1, G0, G1, B0, B1;
   if (bytes_per_pixel == 1) {
     uint8x8_t voffset = vdup_n_u8(static_cast<uint8_t>(PNM_OFFSET));
@@ -107,9 +112,9 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       R += 8;
       G += 8;
       B += 8;
-      __builtin_prefetch(R);
-      __builtin_prefetch(G);
-      __builtin_prefetch(B);
+      openhtj2k_arm_prefetch(R);
+      openhtj2k_arm_prefetch(G);
+      openhtj2k_arm_prefetch(B);
       out += 24;
     }
     for (; len > 0; --len) {
@@ -142,9 +147,9 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
       R += 8;
       G += 8;
       B += 8;
-      __builtin_prefetch(R);
-      __builtin_prefetch(G);
-      __builtin_prefetch(B);
+      openhtj2k_arm_prefetch(R);
+      openhtj2k_arm_prefetch(G);
+      openhtj2k_arm_prefetch(B);
       out += 48;
     }
     int32_t val0, val1, val2;

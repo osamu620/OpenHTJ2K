@@ -51,7 +51,7 @@ static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_
 ThreadPool *ThreadPool::singleton = nullptr;
 std::mutex ThreadPool::singleton_mutex;
 #endif
-//#include <hwy/highway.h>
+// #include <hwy/highway.h>
 
 float bibo_step_gains[32][5] = {{1.00000000F, 4.17226868F, 1.44209458F, 2.10966980F, 1.69807026F},
                                 {1.38034954F, 4.58473765F, 1.83866981F, 2.13405021F, 1.63956779F},
@@ -1235,9 +1235,11 @@ void j2k_resolution::scale() {
   uint32_t length = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
   // TODO: The following code works correctly, but needs to be improved for speed
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  int16x8_t rshift = vdupq_n_s16(static_cast<int16_t>(-this->normalizing_downshift));
   for (uint32_t n = 0; n < length - length % 8; n += 8) {
     auto isrc = vld1q_s16(this->i_samples + n);
-    vst1q_s16(this->i_samples + n, isrc >> this->normalizing_downshift);
+    isrc      = vshlq_s16(isrc, rshift);  // left-shift with negative value equals to right-shift in NEON
+    vst1q_s16(this->i_samples + n, isrc);
   }
   for (uint32_t n = length - length % 8; n < length; ++n) {
     this->i_samples[n] >>= this->normalizing_downshift;
@@ -2729,12 +2731,13 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     int32_t *const cdst = dst[c];
     int32_t *sp, *dp;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    int32x4_t v0, v1, o, dco, vmax, vmin, vshift;
-    o      = vdupq_n_s32(offset);
-    dco    = vdupq_n_s32(DC_OFFSET);
-    vmax   = vdupq_n_s32(MAXVAL);
-    vmin   = vdupq_n_s32(MINVAL);
-    vshift = vdupq_n_s32(-downshift);
+    int32x4_t v0, v1, o, dco, vmax, vmin, vshift, nvshift;
+    o       = vdupq_n_s32(offset);
+    dco     = vdupq_n_s32(DC_OFFSET);
+    vmax    = vdupq_n_s32(MAXVAL);
+    vmin    = vdupq_n_s32(MINVAL);
+    vshift  = vdupq_n_s32(-downshift);
+    nvshift = vnegq_s16(vshift);
     if (downshift < 0) {
       for (uint32_t y = 0; y < in_height; ++y) {
         uint32_t len = csize.x;
@@ -2743,8 +2746,8 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         for (; len >= 8; len -= 8) {
           v0 = vld1q_s32(sp);
           v1 = vld1q_s32(sp + 4);
-          v0 = vshlq_s32(vaddq_s32(v0, o), -vshift);
-          v1 = vshlq_s32(vaddq_s32(v1, o), -vshift);
+          v0 = vshlq_s32(vaddq_s32(v0, o), nvshift);
+          v1 = vshlq_s32(vaddq_s32(v1, o), nvshift);
           v0 = vaddq_s32(v0, dco);
           v1 = vaddq_s32(v1, dco);
           v0 = vminq_s32(v0, vmax);
@@ -3186,7 +3189,7 @@ uint8_t *j2k_tile::encode() {
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
-          //#pragma omp parallel for reduction(+ : packet_length)
+          // #pragma omp parallel for reduction(+ : packet_length)
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
             packet_length += block->length;
