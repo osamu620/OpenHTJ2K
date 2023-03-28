@@ -7,9 +7,12 @@ set(CONFORMANCE_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/conformance_data")
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/ht_profile0.cmake)
 # PROFILE 1
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/ht_profile1.cmake)
+# HiFi
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/ht_HF.cmake)
 ## Part 1 decoding tests
 # PROFILE 0
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part1_profile0.cmake)
 # PROFILE 1
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part1_profile1.cmake)
-
+# HiFi
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part1_HF.cmake)
