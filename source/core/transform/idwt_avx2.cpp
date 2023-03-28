@@ -385,9 +385,9 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         vout         = _mm256_srai_epi16(vout, 1);
         x1           = _mm256_sub_epi16(x1, vout);
         _mm256_storeu_si256((__m256i *)xp1, x1);
-        _mm_prefetch(xp0 + 32, _MM_HINT_NTA);  // _mm_prefetch((__m256i *)xp0 + 2, _MM_HINT_NTA);
-        _mm_prefetch(xp1 + 32, _MM_HINT_NTA);  // _mm_prefetch((__m256i *)xp1 + 2, _MM_HINT_NTA);
-        _mm_prefetch(xp2 + 32, _MM_HINT_NTA);  // _mm_prefetch((__m256i *)xp2 + 2, _MM_HINT_NTA);
+        _mm_prefetch(reinterpret_cast<char *>((__m256i *)xp0 + 2), _MM_HINT_NTA);
+        _mm_prefetch(reinterpret_cast<char *>((__m256i *)xp1 + 2), _MM_HINT_NTA);
+        _mm_prefetch(reinterpret_cast<char *>((__m256i *)xp2 + 2), _MM_HINT_NTA);
         xp0 += 16;
         xp1 += 16;
         xp2 += 16;
