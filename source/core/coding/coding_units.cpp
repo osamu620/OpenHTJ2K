@@ -1550,6 +1550,9 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
+  if (is_signed) {
+    return;
+  }
   const int32_t shiftup = (transformation) ? 0 : FRACBITS - this->bitdepth;
   if (shiftup < 0) {
     printf("WARNING: Over 13 bpp precision will be down-shifted to 12 bpp.\n");
@@ -2724,7 +2727,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
       printf("WARNING: sample precision over 13 bit/pixel is not supported.\n");
     }
     // tentative workaround for negative downshift value
-    // TODO: fix this
+    // TODO: expand internal precisions to fix this problem
     int16_t offset      = (downshift < 0) ? static_cast<int16_t>((1 << -downshift) >> 1)
                                           : static_cast<int16_t>((1 << downshift) >> 1);
     int32_t *const src  = tcomp[c].get_sample_address(0, 0);
