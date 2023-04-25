@@ -494,6 +494,9 @@ RGN_marker::RGN_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
     len++;
     len++;
   }
+  if (len != 5 && len != 6) {
+    // TODO: generate Length error (Lrgn shall be 5 or 6).
+  }
   Srgn = get_byte();
   assert(Srgn == 0);
   SPrgn  = get_byte();
