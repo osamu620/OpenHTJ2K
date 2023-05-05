@@ -1550,13 +1550,11 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
-  if (is_signed) {
-    return;
-  }
   const int32_t shiftup = (transformation) ? 0 : FRACBITS - this->bitdepth;
   if (shiftup < 0) {
     printf("WARNING: Over 13 bpp precision will be down-shifted to 12 bpp.\n");
   }
+  // DC offset for signed input shall be 0
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
   const int32_t stride    = round_up(static_cast<int32_t>(this->pos1.x - this->pos0.x), 32);
   const int32_t width     = static_cast<int32_t>(this->pos1.x - this->pos0.x);
