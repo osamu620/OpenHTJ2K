@@ -37,7 +37,10 @@ void print_help(char *cmd) {
   printf("%s: JPEG 2000 Part 15 encoder\n", cmd);
   printf("USAGE: %s -i input-image(s) -o output-codestream [options...]\n\n", cmd);
   printf("-i: Input-image(s)\n  PGM, PPM, and TIFF (optional, 8 or 16 bpp only) are supported.\n");
-  printf("-o: Output codestream\n  `.jhc` or `.j2c` are recommended as the extension.\n");
+  printf(
+      "-o: Output codestream/file\n  To create a codestream, `.jhc` or `.j2c` are recommended as the "
+      "extension.\n");
+  printf("  Specifying `.jph` triggers a JPH file creation.\n");
   printf("  Note: If this option is unspecified, encoding result is placed on a memory buffer.\n\n");
   printf("OPTIONS:\n");
   printf(

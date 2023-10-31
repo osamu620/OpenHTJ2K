@@ -93,7 +93,8 @@ To see a help, use `-h` option.
 ## Supported file types
 ### Encoder
 - input image formats: .pgm, .ppm, .pgx, .tif (libtiff required)
-- output codestreams: .j2k, .j2c, .jphc (Part 15 codestream), .jph (Part 15 file format)
+- output codestreams: .jhc (Part 15 codestream, .j2k and .j2c can be used as aliases), .jph (Part 15 file format)
+  - Note: Specifying .jph as the output triggers a JPH file creation, otherwise just a codestream will be generated.
 ### Decoder
-- input codestreams : .j2k, .j2c, .jphc
+- input codestreams : .j2k, .j2c, .jhc
 - output image formats: .raw, .ppm, .pgm, .pgx
