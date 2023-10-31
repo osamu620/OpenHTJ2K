@@ -71,14 +71,14 @@ image_header_box::image_header_box(j2k_main_header &hdr) : box_base(22, 0x696864
   HEIGHT      = siz.y - Osiz.y;
   WIDTH       = siz.x - Osiz.x;
   NC          = hdr.SIZ->get_num_components();
-  uint8_t val = hdr.SIZ->get_bitdepth(0);
+  uint8_t val = hdr.SIZ->get_bitdepth(0) - 1;
   for (uint16_t c = 1; c < NC; ++c) {
-    if (val != hdr.SIZ->get_bitdepth(c)) {
+    if (val != hdr.SIZ->get_bitdepth(c) - 1) {
       val = 0xFF;
       break;
     }
   }
-  BPC = val;
+  BPC = val | static_cast<uint8_t>((hdr.SIZ->is_signed(0)) ? 0x80 : 0);
 }
 bool image_header_box::needBPCC() {
   bool val = false;
