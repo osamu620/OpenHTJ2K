@@ -1,0 +1,5 @@
+# [0.2.0] - 2023-11-02
+
+* Fix wrong treatment of bit-depth (Ssiz) for images having signed pixel values in the creation of the QCD marker at encoding.
+* Fix wrong shift-up for signed input
+* Fix wrong treatment of BPC parameter value in Image Header Bo
