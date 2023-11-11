@@ -7,6 +7,30 @@ project(
 option(BUILD_SHARED_LIBS "Shared Libraries" ON)
 enable_language(CXX)
 
+############################################################
+# Parse version file
+# credit: https://stackoverflow.com/a/47084079 and OpenJPH project https://github.com/aous72/OpenJPH
+
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/source/core/common/open_htj2k_version.hpp" VERFILE)
+if (NOT VERFILE)
+    message(FATAL_ERROR "Failed to parse open_htj2k_version.hpp!")
+endif()
+
+string(REGEX MATCH "OPENHTJ2K_VERSION_MAJOR ([0-9]*)" _ ${VERFILE})
+set(OPENHTJ2K_VERSION_MAJOR ${CMAKE_MATCH_1})
+string(REGEX MATCH "OPENHTJ2K_VERSION_MINOR ([0-9]*)" _ ${VERFILE})
+set(OPENHTJ2K_VERSION_MINOR ${CMAKE_MATCH_1})
+string(REGEX MATCH "OPENHTJ2K_VERSION_PATCH ([a-z0-9]*)" _ ${VERFILE})
+set(OPENHTJ2K_VERSION_PATCH ${CMAKE_MATCH_1})
+
+set(PROJECT_VERSION "${OPENHTJ2K_VERSION_MAJOR}.${OPENHTJ2K_VERSION_MINOR}.${OPENHTJ2K_VERSION_PATCH}")
+
+include(GNUInstallDirs)
+set(PKG_CONFIG_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+set(PKG_CONFIG_INCLUDEDIR "${CMAKE_INSTALL_PREFIX}/include/open_htj2k")
+set(PKG_CONFIG_LIBS "-L${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/open_htj2k")
+set(PKG_CONFIG_CFLAGS "-I${PKG_CONFIG_INCLUDEDIR}/interface")
+
 # Check C++ version supported by compiler
 include(CheckCXXCompilerFlag)
 if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
@@ -123,6 +147,15 @@ endif()
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/source/pkg-config.pc.cmake"
+  "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
+)
+
 # Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
 if (Threads_FOUND)
@@ -139,6 +172,7 @@ if (TIFF_FOUND)
   target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
   target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
   message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
+  set(PKG_CONFIG_REQUIRES "libtiff")
 endif()
 
 if(ENABLE_ARM_NEON)
@@ -175,8 +209,6 @@ endif()
 # INSTALL(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 # DESTINATION lib/pkgconfig)
 
-# find_package(OpenMP) if(OpenMP_FOUND) message(STATUS "OpenMP is found.")
-# target_link_libraries(open_htj2k OpenMP::OpenMP_CXX) endif()
 add_subdirectory(source/core/codestream)
 add_subdirectory(source/core/coding)
 add_subdirectory(source/core/transform)
@@ -208,6 +240,27 @@ add_executable(imgcmp)
 add_subdirectory(source/apps/imgcmp)
 target_include_directories(imgcmp PUBLIC source/apps/imgcmp/)
 
+################################################################################################
+# Install
+################################################################################################
+install(TARGETS open_htj2k_dec
+  DESTINATION bin)
+install(TARGETS open_htj2k_enc
+  DESTINATION bin)
+install(TARGETS open_htj2k LIBRARY
+  DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+install (DIRECTORY source/core/interface
+  DESTINATION include/open_htj2k
+  FILES_MATCHING
+  PATTERN "*.hpp")
+
+install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+
+################################################################################################
+# Testing
+################################################################################################
 # conformance testing
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
