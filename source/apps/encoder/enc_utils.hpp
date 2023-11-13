@@ -1,4 +1,4 @@
-// Copyright (c) 2019 - 2022, Osamu Watanabe
+// Copyright (c) 2019 - 2023, Osamu Watanabe
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -262,15 +262,17 @@ class j2k_argset {
       printf("ERROR: file name for input is missing!\n");
       exit(EXIT_FAILURE);
     }
-    const std::string buf = args[idx + 1];
+    std::string buf = args[idx + 1];
+    buf.erase(std::remove_if(buf.begin(), buf.end(), ::isspace), buf.end());
     const std::string comma(",");
     std::string::size_type pos = 0;
     std::string::size_type newpos;
     std::vector<std::string> fnames;
 
     while (true) {
-      newpos = buf.find(comma, pos + comma.length());
-      fnames.push_back(buf.substr(pos, newpos - pos));
+      newpos   = buf.find(comma, pos + comma.length());
+      auto tmp = buf.substr(pos, newpos - pos);
+      fnames.push_back(tmp);
       pos = newpos;
       if (pos != std::string::npos) {
         pos += 1;
@@ -384,10 +386,34 @@ class j2k_argset {
         num_threads(0),
         jph_color_space(0) {
     args.reserve(static_cast<unsigned long>(argc));
-    // skip command itself
+    // find position of comma separated file names
+    int fname_start = 0, fname_stop = 0;
+    bool is_i_found = false;
     for (int i = 1; i < argc; ++i) {
+      std::string tmp = argv[i];
+      if (tmp == "-i") {
+        fname_start = i + 1;
+        is_i_found  = true;
+      } else if ((tmp.front() == '-' || tmp.front() == 'C' || tmp.front() == 'S' || tmp.front() == 'Q')
+                 && is_i_found) {
+        fname_stop = i;
+        is_i_found = false;
+      }
+    }
+    // skip command itself
+    for (int i = 1; i < fname_start; ++i) {
       args.emplace_back(argv[i]);
     }
+    std::string fnames;
+    for (int i = fname_start; i < fname_stop; ++i) {
+      std::string tmp = argv[i];
+      fnames += tmp;
+    }
+    args.emplace_back(fnames);
+    for (int i = fname_stop; i < argc; ++i) {
+      args.emplace_back(argv[i]);
+    }
+
     get_help(argc, argv);
     ifnames         = get_infile();
     ofname          = get_outfile();
