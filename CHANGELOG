@@ -1,5 +1,10 @@
+# [0.2.1] - 2023-11-13
+
+* Add installation part to CMakeLists.txt
+* Allow space between comma separated input file names
+
 # [0.2.0] - 2023-11-02
 
 * Fix wrong treatment of bit-depth (Ssiz) for images having signed pixel values in the creation of the QCD marker at encoding.
 * Fix wrong shift-up for signed input
-* Fix wrong treatment of BPC parameter value in Image Header Bo
+* Fix wrong treatment of BPC parameter value in Image Header Box
