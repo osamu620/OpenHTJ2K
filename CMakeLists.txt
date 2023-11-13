@@ -147,10 +147,11 @@ endif()
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# set(CMAKE_SKIP_BUILD_RPATH FALSE)
+# INSTALL related settings
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/source/pkg-config.pc.cmake"
   "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
@@ -200,14 +201,6 @@ set_target_properties(
 if (Threads_FOUND)
   target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
 endif()
-# INSTALL(TARGETS open_htj2k EXPORT open_htj2k INCLUDES DESTINATION include
-# LIBRARY DESTINATION lib)
-#
-# INSTALL (DIRECTORY src/core/interface/ DESTINATION include/open_htj2k
-# FILES_MATCHING PATTERN "*.h")
-#
-# INSTALL(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
-# DESTINATION lib/pkgconfig)
 
 add_subdirectory(source/core/codestream)
 add_subdirectory(source/core/coding)
