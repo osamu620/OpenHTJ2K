@@ -19,7 +19,7 @@ open_htj2k::openhtj2k_decoder* cpp_create_decoder(uint8_t* data, size_t size, ui
 }
 
 void cpp_parse_j2c_data(open_htj2k::openhtj2k_decoder* dec) { dec->parse(); }
-void cpp_invoke_decoder(open_htj2k::openhtj2k_decoder* dec, uint8_t* out) {
+void cpp_invoke_decoder(open_htj2k::openhtj2k_decoder* dec, int32_t* out) {
   const uint16_t num_components = dec->get_num_component();
   std::vector<int32_t*> buf;
   std::vector<uint32_t> img_width;
@@ -30,8 +30,7 @@ void cpp_invoke_decoder(open_htj2k::openhtj2k_decoder* dec, uint8_t* out) {
   for (uint32_t y = 0; y < img_height[0]; ++y) {
     for (uint32_t x = 0; x < img_width[0]; ++x) {
       for (uint16_t c = 0; c < num_components; ++c) {
-        out[y * img_width[0] * num_components + x * num_components + c] =
-            (uint8_t)buf[c][y * img_width[0] + x];
+        out[y * img_width[0] * num_components + x * num_components + c] = buf[c][y * img_width[0] + x];
       }
     }
   }
@@ -68,7 +67,7 @@ EMSCRIPTEN_KEEPALIVE
 void parse_j2c_data(open_htj2k::openhtj2k_decoder* dec) { cpp_parse_j2c_data(dec); }
 
 EMSCRIPTEN_KEEPALIVE
-void invoke_decoder(open_htj2k::openhtj2k_decoder* dec, uint8_t* out) { cpp_invoke_decoder(dec, out); }
+void invoke_decoder(open_htj2k::openhtj2k_decoder* dec, int32_t* out) { cpp_invoke_decoder(dec, out); }
 
 EMSCRIPTEN_KEEPALIVE
 void release_j2c_data(open_htj2k::openhtj2k_decoder* dec) { cpp_release_j2c_data(dec); }
