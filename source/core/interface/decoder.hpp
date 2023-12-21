@@ -45,11 +45,20 @@ class openhtj2k_decoder {
                                     std::vector<uint32_t> &, std::vector<uint8_t> &, std::vector<bool> &);
   __declspec(dllexport) ~openhtj2k_decoder();
 #else
+  openhtj2k_decoder();
   openhtj2k_decoder(const char *, uint8_t reduce_NL, uint32_t num_threads);
   openhtj2k_decoder(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  void parse();
+  uint16_t get_num_component();
+  uint32_t get_component_width(uint16_t);
+  uint32_t get_component_height(uint16_t);
+  uint8_t get_component_depth(uint16_t);
+  bool get_component_signedness(uint16_t);
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
   ~openhtj2k_decoder();
+  void show();
 #endif
 };
 }  // namespace open_htj2k

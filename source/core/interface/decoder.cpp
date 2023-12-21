@@ -42,18 +42,42 @@ namespace open_htj2k {
 class openhtj2k_decoder_impl {
  private:
   j2c_src_memory in;
-  const uint8_t reduce_NL;
+  uint8_t reduce_NL;
+  bool is_codestream_set;
+  bool is_parsed;
+  j2k_main_header main_header;
 
  public:
+  openhtj2k_decoder_impl();
   openhtj2k_decoder_impl(const char *, uint8_t reduce_NL, uint32_t num_threads);
   openhtj2k_decoder_impl(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   ~openhtj2k_decoder_impl();
+  void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  void parse();
+  uint16_t get_num_component();
+  uint32_t get_component_width(uint16_t);
+  uint32_t get_component_height(uint16_t);
+  uint8_t get_component_depth(uint16_t);
+  bool get_component_signedness(uint16_t);
+
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
+  void show();
 };
 
+void openhtj2k_decoder_impl::show() {
+  printf("reduceNL = %d\n", reduce_NL);
+  printf("%d, %d\n", is_codestream_set, is_parsed);
+}
+
+openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
+  reduce_NL         = 0;
+  is_codestream_set = false;
+  is_parsed         = false;
+}
+
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
-    : reduce_NL(r) {
+    : reduce_NL(r), is_codestream_set(false), is_parsed(false) {
   uintmax_t file_size;
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   try {
@@ -83,11 +107,12 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
     throw std::exception();
   }
   fclose(fp);
+  is_codestream_set = true;
 }
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t length, const uint8_t r,
                                                uint32_t num_threads)
-    : reduce_NL(r) {
+    : reduce_NL(r), is_codestream_set(false), is_parsed(false) {
   if (buf == nullptr) {
   }
 #ifdef OPENHTJ2K_THREAD
@@ -97,15 +122,62 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
   in.alloc_memory(static_cast<uint32_t>(length));
   uint8_t *p = in.get_buf_pos();
   memcpy(p, buf, length);
+  is_codestream_set = true;
 }
+
+void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const uint8_t r,
+                                  uint32_t num_threads) {
+  reduce_NL = r;
+  if (buf == nullptr) {
+  }
+#ifdef OPENHTJ2K_THREAD
+  ThreadPool::instance(num_threads);
+#endif
+  // open codestream and store it in memory
+  in.alloc_memory(static_cast<uint32_t>(length));
+  uint8_t *p = in.get_buf_pos();
+  memcpy(p, buf, length);
+  is_codestream_set = true;
+}
+
+void openhtj2k_decoder_impl::parse() {
+  if (is_codestream_set == false) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::openhtj2k_decoder_impl() shall be called before calling "
+        "openhtj2k_decoder_impl::parse().\n");
+    throw std::exception();
+  }
+  // Read main header
+  main_header.read(in);
+  in.rewind_2bytes();
+  is_parsed = true;
+}
+
+uint16_t openhtj2k_decoder_impl::get_num_component() { return main_header.SIZ->get_num_components(); }
+uint32_t openhtj2k_decoder_impl::get_component_width(uint16_t c) {
+  // Currently does not return component specific width
+  element_siz tmp;
+  main_header.SIZ->get_image_size(tmp);
+  return tmp.x;
+}
+uint32_t openhtj2k_decoder_impl::get_component_height(uint16_t c) {
+  // Currently does not return component specific height
+  element_siz tmp;
+  main_header.SIZ->get_image_size(tmp);
+  return tmp.y;
+}
+uint8_t openhtj2k_decoder_impl::get_component_depth(uint16_t c) { return main_header.SIZ->get_bitdepth(c); }
+bool openhtj2k_decoder_impl::get_component_signedness(uint16_t c) { return main_header.SIZ->is_signed(c); }
 
 void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                     std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                     std::vector<bool> &is_signed) {
-  // Read main header
-  j2k_main_header main_header;
-  main_header.read(in);
-  in.rewind_2bytes();
+  if (is_parsed == false) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke().\n");
+    throw std::exception();
+  }
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   // printf("Tile num x = %d, y = %d\n", numTiles.x, numTiles.y);
@@ -172,6 +244,7 @@ openhtj2k_decoder_impl::~openhtj2k_decoder_impl() {
 }
 
 // public interface
+openhtj2k_decoder::openhtj2k_decoder() { this->impl = MAKE_UNIQUE<openhtj2k_decoder_impl>(); }
 openhtj2k_decoder::openhtj2k_decoder(const char *fname, const uint8_t reduce_NL, uint32_t num_threads) {
   this->impl = MAKE_UNIQUE<openhtj2k_decoder_impl>(fname, reduce_NL, num_threads);
 }
@@ -180,10 +253,26 @@ openhtj2k_decoder::openhtj2k_decoder(const uint8_t *buf, size_t length, const ui
                                      uint32_t num_threads) {
   this->impl = MAKE_UNIQUE<openhtj2k_decoder_impl>(buf, length, reduce_NL, num_threads);
 }
+void openhtj2k_decoder::init(const uint8_t *buf, size_t length, const uint8_t reduce_NL,
+                             uint32_t num_threads) {
+  this->impl->init(buf, length, reduce_NL, num_threads);
+}
+void openhtj2k_decoder::parse() { this->impl->parse(); }
+
+uint16_t openhtj2k_decoder::get_num_component() { return this->impl->get_num_component(); }
+uint32_t openhtj2k_decoder::get_component_width(uint16_t c) { return this->impl->get_component_width(c); }
+uint32_t openhtj2k_decoder::get_component_height(uint16_t c) { return this->impl->get_component_height(c); }
+uint8_t openhtj2k_decoder::get_component_depth(uint16_t c) { return this->impl->get_component_depth(c); }
+bool openhtj2k_decoder::get_component_signedness(uint16_t c) {
+  return this->impl->get_component_signedness(c);
+}
+
 void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                std::vector<bool> &is_signed) {
   this->impl->invoke(buf, width, height, depth, is_signed);
 }
+
 openhtj2k_decoder::~openhtj2k_decoder() = default;
+void openhtj2k_decoder::show() { this->impl->show(); }
 }  // namespace open_htj2k

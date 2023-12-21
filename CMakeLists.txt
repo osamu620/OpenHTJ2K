@@ -44,8 +44,9 @@ else()
 endif()
 
 # Check Thread support
+if (NOT EMSCRIPTEN)
 find_package(Threads)
-
+endif()
 # Check TIFF support
 find_package(TIFF)
 
@@ -167,13 +168,13 @@ configure_file(
 
 # Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
-if (Threads_FOUND)
-  message(STATUS "Thread library found")
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
-  message(STATUS "OPENHTJ2K_THREAD is set")
-endif()
-
 if (NOT EMSCRIPTEN)
+  if (Threads_FOUND)
+   message(STATUS "Thread library found")
+   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+   message(STATUS "OPENHTJ2K_THREAD is set")
+  endif()
+
   if (TIFF_FOUND)
     message(STATUS "libtiff found")
     message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
@@ -208,8 +209,10 @@ set_target_properties(
   open_htj2k PROPERTIES OUTPUT_NAME
                         $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
 # target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
+if (NOT EMSCRIPTEN)
 if (Threads_FOUND)
   target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+endif()
 endif()
 
 add_subdirectory(source/core/codestream)
