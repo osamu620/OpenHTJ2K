@@ -156,15 +156,19 @@ void openhtj2k_decoder_impl::parse() {
 uint16_t openhtj2k_decoder_impl::get_num_component() { return main_header.SIZ->get_num_components(); }
 uint32_t openhtj2k_decoder_impl::get_component_width(uint16_t c) {
   // Currently does not return component specific width
-  element_siz tmp;
-  main_header.SIZ->get_image_size(tmp);
-  return tmp.x;
+  element_siz size, origin;
+  main_header.SIZ->get_image_size(size);
+  main_header.SIZ->get_image_origin(origin);
+
+  return size.x - origin.x;
 }
 uint32_t openhtj2k_decoder_impl::get_component_height(uint16_t c) {
   // Currently does not return component specific height
-  element_siz tmp;
-  main_header.SIZ->get_image_size(tmp);
-  return tmp.y;
+  element_siz size, origin;
+  main_header.SIZ->get_image_size(size);
+  main_header.SIZ->get_image_origin(origin);
+
+  return size.y - origin.y;
 }
 uint8_t openhtj2k_decoder_impl::get_component_depth(uint16_t c) { return main_header.SIZ->get_bitdepth(c); }
 bool openhtj2k_decoder_impl::get_component_signedness(uint16_t c) { return main_header.SIZ->is_signed(c); }
