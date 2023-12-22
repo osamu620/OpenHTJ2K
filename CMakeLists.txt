@@ -44,8 +44,9 @@ else()
 endif()
 
 # Check Thread support
+if (NOT EMSCRIPTEN)
 find_package(Threads)
-
+endif()
 # Check TIFF support
 find_package(TIFF)
 
@@ -70,7 +71,14 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Compiler optimization settings
-if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC") # MSVC
+if(EMSCRIPTEN)
+  set(CMAKE_CXX_FLAGS
+      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fexceptions -fcolor-diagnostics"
+  )
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC") # MSVC
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd5051")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} /Od /DDEBUG /ZI")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /Ox")
@@ -108,39 +116,40 @@ else() # GCC
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
 endif()
 
-if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
-  if(NOT MINGW)
-    option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
-  endif()
-  if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    set(CMAKE_CXX_FLAGS
-        "${CMAKE_CXX_FLAGS} /arch:AVX2 /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
-  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM|Intel")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mtune=native")
-  endif()
-endif()
-
-if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]64$") # aarch64
-  option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics" ON)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    set(CMAKE_CXX_FLAGS
-        "${CMAKE_CXX_FLAGS} /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
-  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    if(APPLE)
-      message(STATUS "Added -mcpu=apple-m1")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=apple-m1 -mtune=native")
-    else()
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a -mtune=cortex-a72")
+if(NOT EMSCRIPTEN)
+  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
+    if(NOT MINGW)
+      option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
     endif()
-  else()
-    set(CMAKE_CXX_FLAGS
-        "${CMAKE_CXX_FLAGS} -Wno-unused-parameter -Wno-unused-variable -Wformat-overflow=0 -Wno-unused-but-set-variable"
-    )
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a -mtune=cortex-a72")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flax-vector-conversions")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+      set(CMAKE_CXX_FLAGS
+          "${CMAKE_CXX_FLAGS} /arch:AVX2 /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM|Intel")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mtune=native")
+    endif()
+  endif()
+
+  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]64$") # aarch64
+    option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics" ON)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+      set(CMAKE_CXX_FLAGS
+          "${CMAKE_CXX_FLAGS} /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      if(APPLE)
+        message(STATUS "Added -mcpu=apple-m1")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=apple-m1 -mtune=native")
+      else()
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a -mtune=cortex-a72")
+      endif()
+    else()
+      set(CMAKE_CXX_FLAGS
+          "${CMAKE_CXX_FLAGS} -Wno-unused-parameter -Wno-unused-variable -Wformat-overflow=0 -Wno-unused-but-set-variable"
+      )
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a -mtune=cortex-a72")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flax-vector-conversions")
+    endif()
   endif()
 endif()
-
 # add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
 # EXCLUDE_FROM_ALL)
 
@@ -159,29 +168,31 @@ configure_file(
 
 # Source files settings "libopen_htj2k" shared library target
 add_library(open_htj2k ${SOURCES})
-if (Threads_FOUND)
-  message(STATUS "Thread library found")
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
-  message(STATUS "OPENHTJ2K_THREAD is set")
-endif()
+if (NOT EMSCRIPTEN)
+  if (Threads_FOUND)
+   message(STATUS "Thread library found")
+   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+   message(STATUS "OPENHTJ2K_THREAD is set")
+  endif()
 
-if (TIFF_FOUND)
-  message(STATUS "libtiff found")
-  message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
-  message(STATUS "tiff library = ${TIFF_LIBRARIES}")
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TIFF_SUPPORT")
-  target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
-  target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
-  message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
-  set(PKG_CONFIG_REQUIRES "libtiff")
-endif()
+  if (TIFF_FOUND)
+    message(STATUS "libtiff found")
+    message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
+    message(STATUS "tiff library = ${TIFF_LIBRARIES}")
+    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TIFF_SUPPORT")
+    target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
+    target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
+    message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
+    set(PKG_CONFIG_REQUIRES "libtiff")
+  endif()
 
-if(ENABLE_ARM_NEON)
-  message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
-elseif(ENABLE_AVX2)
-  message(STATUS "OPENHTJ2K_TRY_AVX2 is set")
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TRY_AVX2")
+  if(ENABLE_ARM_NEON)
+    message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
+    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
+  elseif(ENABLE_AVX2)
+    message(STATUS "OPENHTJ2K_TRY_AVX2 is set")
+    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TRY_AVX2")
+  endif()
 endif()
 target_include_directories(
   open_htj2k
@@ -198,8 +209,10 @@ set_target_properties(
   open_htj2k PROPERTIES OUTPUT_NAME
                         $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
 # target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
+if (NOT EMSCRIPTEN)
 if (Threads_FOUND)
   target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+endif()
 endif()
 
 add_subdirectory(source/core/codestream)

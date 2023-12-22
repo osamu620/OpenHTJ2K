@@ -149,6 +149,7 @@ int main(int argc, char *argv[]) {
     img_signed.clear();
     // invoke decoding
     try {
+      decoder.parse();
       decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
     } catch (std::exception &exc) {
       return EXIT_FAILURE;

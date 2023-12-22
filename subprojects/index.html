@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <title>HTJ2K/J2K-1 decoding in the browser using Webassembly</title>
+  <meta charset="UTF-8">
+  <!-- This is a test of libopen_htj2k javascript (original code is from OpenJPH project)
+<script type="text/javascript" src="libopen_htj2k.js"></script>
+-->
+  <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
+</head>
+
+<body>
+  <h1>HTJ2K/J2K-1 decoding in the browser using WASM (with or without SIMD)</h1>
+  <pre style="font-size:16px" id='simd_message'>
+This webpage employs WASM SIMD if your browser supports it --> 
+</pre>
+<select name="im-select" id="im-select">
+  <option value="">--Please choose an image to decode--</option>
+  <option value="kodim23_mono.j2c">kodim23_mono.j2c</option>
+  <option value="u04_small.j2c">u04_small.j2c</option>
+  <option value="u10_part15_lossless.j2c">u10_part15_lossless.j2c</option>
+  <option value="u10_part1_lossless.j2c">u10_part1_lossless.j2c</option>
+  <option value="ds0_ht_03_b14.j2k">ds0_ht_03_b14.j2k</option>
+  <option value="ds0_ht_04_b12.j2k">ds0_ht_04_b12.j2k</option>
+  <option value="ds0_ht_07_b16.j2k">ds0_ht_07_b16.j2k</option>
+  <option value="ds1_ht_04_b9.j2k">ds1_ht_04_b9.j2k</option>
+  <option value="ds1_ht_05_b11.j2k">ds1_ht_05_b11.j2k</option>
+  <option value="hifi_ht1_02.j2k">hifi_ht1_02.j2k</option>
+</select>
+  <pre style="font-size:16px">
+Decoding the full resolution image.
+</pre>
+  <table>
+    <tr>
+      <td>Image size: </td>
+      <td>
+        <pre id="imgWidth">M</pre>
+      </td>
+      <td>x</td>
+      <td>
+        <pre id="imgHeight">N</pre>
+      </td>
+      <td>pixels, </td>
+      <td>
+        <pre id="imgDepth">8 bpp/component</pre>
+      </td>
+      <td>,</td>
+      <td>
+        <pre id="imgSigned">unsigned</pre>
+      </td>
+    </tr>
+  </table>
+
+  <canvas id="mycanvas" width="512" height="512"></canvas>
+  <br>
+  <pre id="time" style="font-size: 16px">Decode time: </pre>
+
+
+  <h1>HTJ2K/J2K-1 progressive decoding to the actual image resolution</h1>
+  <pre style="font-size:16px">
+This example shows that one source image can be used for multiple reconstructed resolutions.
+The client/browser can decide, depending on the rendering resolution, the number of bytes to load and decode for a given image.
+
+<!-- Note: Below each image, we display the number of decoded bytes -->
+</pre>
+  <table>
+    <tr>
+      <td></td>
+      <td style="text-align:center; vertical-align:bottom; height:512px"><canvas id='r1c5' width=48px"> </canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:512px"><canvas id='r1c4' width=48px"> </canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:512px"><canvas id='r1c3' width=64px"> </canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:512px"><canvas id='r1c2' width=128px"></canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:512px"><canvas id='r1c1' width=256px"></canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:512px"><canvas id='r1c0' width=512px"></canvas></td>
+    </tr>
+    <tr>
+      <td style="text-align:center; width:64px">
+        <pre>Decoded<br/>Bytes<br><pre>Time</pre></br></pre>
+      </td>
+      <td style="text-align:center; width:48px">
+        <pre>unkown<br/>bytes<br><pre id='t1c5'> ms</pre></br></pre>
+      </td>
+      <td style="text-align:center; width:48px">
+        <pre>unkown<br/>bytes<br><pre id='t1c4'> ms</pre></br></pre>
+      </td>
+      <td style="text-align:center; width:64px">
+        <pre>unkown<br/>bytes<br><pre id='t1c3'> ms</pre></br></pre>
+      </td>
+      <td style="text-align:center; width:128px">
+        <pre>unkown<br/>bytes<br><pre id='t1c2'> ms</pre></br></pre>
+      </td>
+      <td style="text-align:center; width:256px">
+        <pre>unkown<br/>bytes<br><pre id='t1c1'> ms</pre></br></pre>
+      </td>
+      <td style="text-align:center; width:512px">
+        <pre>unkown<br/>bytes<br><pre id='t1c0'> ms</pre></br></pre>
+      </td>
+    </tr>
+  </table>
+
+  <script>
+    function display_image(Module, data, canvas_name, skip_res_for_data, skip_res_for_recon, txt_ele_name, pre_text) {
+      create_decoder = Module.cwrap('create_decoder', 'number', ['number', 'number', 'number']);
+      parse_j2c_data = Module.cwrap('parse_j2c_data', 'void', ['number']);
+      invoke_decoder = Module.cwrap('invoke_decoder', 'void', ['number', 'number']);
+      release_j2c_data = Module.cwrap('release_j2c_data', 'void', ['number']);
+      get_j2c_width = Module.cwrap('get_width', 'number', ['number', 'number']);
+      get_j2c_height = Module.cwrap('get_height', 'number', ['number', 'number']);
+      get_j2c_num_components = Module.cwrap('get_num_components', 'number', ['number']);
+      get_j2c_bit_depth = Module.cwrap('get_depth', 'number', ['number', 'number']);
+      get_j2c_is_signed = Module.cwrap('get_signed', 'number', ['number', 'number']);
+      show = Module.cwrap('show', 'void', ['number']);
+
+      var t0 = performance.now();
+      const array = new Uint8Array(data, 0, data.byteLength);
+
+      var buffer = Module._malloc(array.length);
+      Module.writeArrayToMemory(array, buffer);
+      console.log("HTJ2K decoder creation start");
+      j2c = create_decoder(buffer, array.length, skip_res_for_data | 0);
+      console.log("HTJ2K decoder creation OK");
+      parse_j2c_data(j2c);
+
+      // TODO: need to consider origin for actual width and height 
+      var imgwidth = get_j2c_width(j2c, 0) | 0; //component 0
+      var imgheight = get_j2c_height(j2c, 0) | 0; //component 0
+      var num_comps = get_j2c_num_components(j2c) | 0;
+      var bit_depth = get_j2c_bit_depth(j2c, 0) | 0; //component 0
+      var is_signed = get_j2c_is_signed(j2c, 0) == 1; //component 0
+
+      var width = Math.round(imgwidth / (1 << skip_res_for_data));
+      var height = Math.round(imgheight / (1 << skip_res_for_data));
+      console.log("width = %d, height = %d, number of components = %d", width, height, num_comps);
+
+      var canvas = document.getElementById(canvas_name);
+      var dpr = window.devicePixelRatio || 1; // TBD
+      console.log(dpr); // TBD
+      canvas.width = width;
+      canvas.height = height;
+      var ctx = canvas.getContext("2d");
+      var cimg = ctx.createImageData(width, height);
+
+      var down_shift = (bit_depth >= 8 ? bit_depth - 8 : 0) | 0;
+      var up_shift = (bit_depth < 8 ? 8 - bit_depth: 0) | 0;
+      var half = (bit_depth > 8 ? (1 << (down_shift - 1)) : 0) | 0;
+      var offset = 0;
+      if (is_signed) {
+        offset = 1 << (bit_depth - 1);
+      }
+      var heap = Module["HEAP32"];
+      var compskip = 4 | 0;
+      var dst = cimg.data;
+
+      var src = Module._malloc(width * height * num_comps * 4); // a sample is 4byte length
+      invoke_decoder(j2c, src);
+      if (num_comps == 1) {
+        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
+          var didx = y * width * compskip;
+          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
+            // src is an address in memory, but since we are 
+            // dealing with integers (i.e, each entry is 4 bytes 
+            // away from the previous sample, we need to divide by 4 (>> 2)
+            var val = ((heap[((src + didx) >> 2) + x] + half + offset) >> down_shift) << up_shift;
+            dst[didx + x * compskip] = val;
+            dst[didx + x * compskip + 1] = val;
+            dst[didx + x * compskip + 2] = val;
+            dst[didx + x * compskip + 3] = 255;
+          }
+        }
+      }
+      else if (num_comps == 3) {
+        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
+          var didx = y * width * compskip;
+          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
+            var sidx = (y * width + x) * compskip * num_comps;
+            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 1 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 2 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 3] = 255;
+          }
+        }
+      }
+      else
+        console.log('Unsupported number of components');
+
+      release_j2c_data(j2c);
+      ctx.putImageData(cimg, 0, 0);
+      Module._free(buffer);
+      Module._free(src);
+
+      var t1 = performance.now();
+      document.getElementById(txt_ele_name).innerText = pre_text + (t1 - t0).toFixed(2) + " ms";
+      document.getElementById("imgWidth").innerText = imgwidth;
+      document.getElementById("imgHeight").innerText = imgheight;
+      document.getElementById("imgDepth").innerText = bit_depth + " bpp/component";
+      var signedness = "unsigned";
+      if (is_signed) {
+        signedness = "signed";
+      }
+      document.getElementById("imgSigned").innerText = signedness;
+    }
+
+      async function load_and_display_images(Module) {
+        let select = document.querySelector('[name="im-select"]');
+        var request = new XMLHttpRequest;
+        select.onchange = event => {
+          console.log(select.value);
+          request.open("GET", select.value, true);
+          request.responseType = "arraybuffer";
+        
+        request.onload = function (event) {
+          if (request.status == 200) {
+            display_image(Module, this.response, 'mycanvas', 0, 0, 'time', 'Decode Time: ');
+
+            for (var i = 0; i <= 5; ++i)
+              display_image(Module, this.response, 'r1c' + i, i, i, 't1c' + i, '');
+
+            // for (var i = 0; i <= 5; ++i)
+            //   display_image(Module, this.response, 'r2c' + i, i, 0, 't2c' + i, 'Decode Time: ');
+          }
+        };
+        request.send(null);
+      }
+    }
+    
+
+    async function load_simd_module() {
+      const openhtj2k = await import('./libopen_htj2k_simd.js');
+      const Module = await openhtj2k.default();
+      load_and_display_images(Module);
+    }
+
+    async function load_generic_module() {
+      const openhtj2k = await import('./libopen_htj2k.js');
+      const Module = await openhtj2k.default();
+      load_and_display_images(Module);
+    }
+
+    wasmFeatureDetect.simd().then(simdSupported => {
+      txt = document.getElementById('simd_message').innerText.slice(0, -1);
+
+      if (simdSupported) {
+        document.getElementById('simd_message').innerText = txt + "SIMD is detected. (But not used)\n";
+        // load_simd_module();
+        load_generic_module();
+      } else {
+        document.getElementById('simd_message').innerText = txt + "SIMD is not detected. \n";
+        load_generic_module();
+      }
+    });
+
+  </script>
+</body>
+
+</html>
