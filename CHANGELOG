@@ -1,3 +1,7 @@
+# [0.2.2] - 2023-11-27
+
+* Fix compilation errors in aarch64 and gcc 9 or earlier
+
 # [0.2.1] - 2023-11-13
 
 * Add installation part to CMakeLists.txt
