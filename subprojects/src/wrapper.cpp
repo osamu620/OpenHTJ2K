@@ -86,7 +86,4 @@ uint32_t get_depth(open_htj2k::openhtj2k_decoder* dec, uint16_t c) { return cpp_
 
 EMSCRIPTEN_KEEPALIVE
 uint32_t get_signed(open_htj2k::openhtj2k_decoder* dec, uint16_t c) { return cpp_get_signed(dec, c); }
-
-EMSCRIPTEN_KEEPALIVE
-void show(open_htj2k::openhtj2k_decoder* dec) { dec->show(); }
 }
