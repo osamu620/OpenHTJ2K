@@ -4,7 +4,7 @@
 <head>
   <title>HTJ2K/J2K-1 decoding in the browser using Webassembly</title>
   <meta charset="UTF-8">
-  <!-- This is a test of libopenjph javascript 
+  <!-- This is a test of libopen_htj2k javascript (original code is from OpenJPH project)
 <script type="text/javascript" src="libopen_htj2k.js"></script>
 -->
   <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
@@ -99,65 +99,6 @@ The client/browser can decide, depending on the rendering resolution, the number
     </tr>
   </table>
 
-  <!--
-<h1>HTJ2K progressive decoding to full resolution (downloaded once, decoded many ways)</h1>
-<pre style="font-size:16px">
-This example shows the progressive decoding of JPEG2000. 
-Image quality improves as more data arrives. This is better than waiting for the whole image to arrive before decoding it.
-
-Note: Below each image, we display the number of decoded bytes and PSNR.
-</pre>
-<table>
-  <tr>
-    <td><canvas id='r2c5' width="512px" height="512px"></canvas></td>
-    <td><canvas id='r2c4' width="512px" height="512px"></canvas></td>
-  </tr>
-  <tr>
-    <td><pre style="text-align:center">Decoded Bytes: 826 bytes</pre></td>
-    <td><pre style="text-align:center">Decoded Bytes: 2312 bytes</pre></td>
-  </tr>
-  <tr>
-    <td><pre style="text-align:center">PSNR: 16.96 dB</pre></td>
-    <td><pre style="text-align:center">PSNR: 18.25 dB</pre></td>
-  </tr>
-  <tr>
-    <td><pre id='t2c5' style="text-align:center">Decode Time: </pre></td>
-    <td><pre id='t2c4' style="text-align:center">Decode Time: </pre></td>
-  </tr>
-  <tr>
-    <td><canvas id='r2c3' width="512px" height="512px"></canvas></td>
-    <td><canvas id='r2c2' width="512px" height="512px"></canvas></td>
-  </tr>
-  <tr>
-    <td><pre style="text-align:center">Decoded Bytes: 5977 bytes</pre></td>
-    <td><pre style="text-align:center">Decoded Bytes: 13022 bytes</pre></td>
-  </tr>
-  <tr>
-    <td><pre style="text-align:center">PSNR: 21.21 dB</pre></td>
-    <td><pre style="text-align:center">PSNR: 25.46 dB</pre></td>
-  </tr>
-  <tr>
-    <td><pre id='t2c3' style="text-align:center">Decode Time: </pre></td>
-    <td><pre id='t2c2' style="text-align:center">Decode Time: </pre></td>
-  </tr>
-  <tr>
-    <td><canvas id='r2c1' width="512px" height="512px"></canvas></td>    
-    <td><canvas id='r2c0' width="512px" height="512px"></canvas></td>    
-  </tr>
-  <tr>
-    <td><pre style="text-align:center">Decoded Bytes: 22005 bytes</pre></td>
-    <td><pre style="text-align:center">Decoded Bytes: 32553 bytes</pre></td>
-  </tr>
-  <tr>
-    <td><pre style="text-align:center">PSNR: 30.82 dB</pre></td>
-    <td><pre style="text-align:center">PSNR: 37.13 dB</pre></td>
-  </tr>
-  <tr>
-    <td><pre id='t2c1' style="text-align:center">Decode Time: </pre></td>
-    <td><pre id='t2c0' style="text-align:center">Decode Time: </pre></td>
-  </tr>
-</table>
--->
   <script>
     function display_image(Module, data, canvas_name, skip_res_for_data, skip_res_for_recon, txt_ele_name, pre_text) {
       create_decoder = Module.cwrap('create_decoder', 'number', ['number', 'number', 'number']);
@@ -280,7 +221,8 @@ Note: Below each image, we display the number of decoded bytes and PSNR.
           }
         };
         request.send(null);
-      }}
+      }
+    }
     
 
     async function load_simd_module() {
