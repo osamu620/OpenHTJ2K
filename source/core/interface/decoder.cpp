@@ -62,13 +62,7 @@ class openhtj2k_decoder_impl {
 
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
-  void show();
 };
-
-void openhtj2k_decoder_impl::show() {
-  printf("reduceNL = %d\n", reduce_NL);
-  printf("%d, %d\n", is_codestream_set, is_parsed);
-}
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
   reduce_NL         = 0;
@@ -278,5 +272,4 @@ void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t
 }
 
 openhtj2k_decoder::~openhtj2k_decoder() = default;
-void openhtj2k_decoder::show() { this->impl->show(); }
 }  // namespace open_htj2k
