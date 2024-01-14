@@ -57,7 +57,7 @@ void print_help(char *cmd) {
       "Clevels=Int:\n  Number of DWT decomposition.\n  Valid range for number of DWT levels is from 0 to "
       "32 (Default is 5.)\n");
   printf("Creversible=yes or no:\n  yes for lossless mode, no for lossy mode. Default is no.\n");
-  printf("Cblk=Size:\n  Code-block size.\n  Default is {64,64}]");
+  printf("Cblk=Size:\n  Code-block size.\n  Default is {64,64}]\n");
   printf("Cprecincts=Size:\n  Precinct size. Shall be power of two.\n");
   printf("Cycc=yes or no:\n  yes to use RGB->YCbCr color space conversion.\n");
   printf("Corder:\n  Progression order. Valid entry is one of LRCP, RLCP, RPCL, PCRL, CPRL.\n");
