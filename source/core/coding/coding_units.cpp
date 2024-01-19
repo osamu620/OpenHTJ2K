@@ -2513,11 +2513,12 @@ void j2k_tile::decode() {
     for (size_t y = 0; y < height; ++y) {
       sprec_t *sp = cr->i_samples + y * width;
       int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-      v0          = vld1q_s16(sp);
-      v1          = vld1q_s16(sp + 8);
-      v2          = vld1q_s16(sp + 16);
-      v3          = vld1q_s16(sp + 24);
+
       for (size_t n = width; n >= 32; n -= 32) {
+        v0 = vld1q_s16(sp);
+        v1 = vld1q_s16(sp + 8);
+        v2 = vld1q_s16(sp + 16);
+        v3 = vld1q_s16(sp + 24);
         vst1q_s32(dp, vmovl_s16(vget_low_s16(v0)));
         vst1q_s32(dp + 4, vmovl_s16(vget_high_s16(v0)));
         vst1q_s32(dp + 8, vmovl_s16(vget_low_s16(v1)));
@@ -2527,10 +2528,6 @@ void j2k_tile::decode() {
         vst1q_s32(dp + 24, vmovl_s16(vget_low_s16(v3)));
         vst1q_s32(dp + 28, vmovl_s16(vget_high_s16(v3)));
         sp += 32;
-        v0 = vld1q_s16(sp);
-        v1 = vld1q_s16(sp + 8);
-        v2 = vld1q_s16(sp + 16);
-        v3 = vld1q_s16(sp + 24);
         dp += 32;
       }
       for (size_t n = width % 32; n > 0; --n) {
