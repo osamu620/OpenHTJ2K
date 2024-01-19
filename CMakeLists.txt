@@ -72,8 +72,9 @@ endif()
 
 # Compiler optimization settings
 if(EMSCRIPTEN)
+  option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics" ON)
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fexceptions -fcolor-diagnostics"
+      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fexceptions -fcolor-diagnostics -msimd128"
   )
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
