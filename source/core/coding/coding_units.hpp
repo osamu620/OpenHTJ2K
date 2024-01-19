@@ -156,6 +156,7 @@ class j2k_subband : public j2k_region {
               uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta, float nominal_range,
               sprec_t *ibuf);
   ~j2k_subband();
+  void destroy() { aligned_mem_free(i_samples); }
 };
 
 /********************************************************************************
@@ -309,6 +310,14 @@ class j2k_resolution : public j2k_region {
     child_ranges[3] = ranges[3];
   }
   void scale();
+  void destroy() {
+    aligned_mem_free(i_samples);
+    for (auto b = 0; b < num_bands; ++b) {
+      if (subbands != nullptr) {
+        subbands[b]->destroy();
+      }
+    }
+  }
 };
 
 /********************************************************************************
@@ -409,6 +418,15 @@ class j2k_tile_component : public j2k_tile_base {
   void create_resolutions(uint16_t numlayers);
 
   void perform_dc_offset(uint8_t transformation, bool is_signed);
+
+  void destroy() {
+    for (auto r = 0; r < this->NL; ++r) {
+      if (resolution != nullptr) {
+        auto p = resolution[r].get();
+        if (p != nullptr) resolution[r]->destroy();
+      }
+    }
+  }
 };
 
 /********************************************************************************
@@ -472,6 +490,11 @@ class j2k_tile : public j2k_tile_base {
 
  public:
   j2k_tile();
+  void destroy() {
+    for (auto c = 0; c < this->num_components; ++c) {
+      tcomp[c].destroy();
+    }
+  }
   // Decoding
   // Initialization with tile-index
   void dec_init(uint16_t idx, j2k_main_header &main_header, uint8_t reduce_levels);
