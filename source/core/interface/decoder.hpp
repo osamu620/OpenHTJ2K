@@ -30,44 +30,31 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
-
+#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
+  #define OPENHTJ2K_EXPORT __declspec(dllexport)
+#else
+  #define OPENHTJ2K_EXPORT
+#endif
 namespace open_htj2k {
 class openhtj2k_decoder {
  private:
   std::unique_ptr<class openhtj2k_decoder_impl> impl;
 
  public:
-#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
-  __declspec(dllexport) openhtj2k_decoder();
-  __declspec(dllexport) openhtj2k_decoder(const char *, const uint8_t reduce_NL, uint32_t num_threads);
-  __declspec(dllexport)
-      openhtj2k_decoder(const uint8_t *, size_t, const uint8_t reduce_NL, uint32_t num_threads);
-  __declspec(dllexport) void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
-  __declspec(dllexport) void parse();
-  __declspec(dllexport) uint16_t get_num_component();
-  __declspec(dllexport) uint32_t get_component_width(uint16_t);
-  __declspec(dllexport) uint32_t get_component_height(uint16_t);
-  __declspec(dllexport) uint8_t get_component_depth(uint16_t);
-  __declspec(dllexport) bool get_component_signedness(uint16_t);
-  __declspec(dllexport) void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &,
-                                    std::vector<uint32_t> &, std::vector<uint8_t> &, std::vector<bool> &);
-  __declspec(dllexport) ~openhtj2k_decoder();
-#else
-  openhtj2k_decoder();
-  openhtj2k_decoder(const char *, uint8_t reduce_NL, uint32_t num_threads);
-  openhtj2k_decoder(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
-  void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
-  void parse();
-  uint16_t get_num_component();
-  uint32_t get_component_width(uint16_t);
-  uint32_t get_component_height(uint16_t);
-  uint8_t get_component_depth(uint16_t);
-  bool get_component_signedness(uint16_t);
-  uint8_t get_minumum_DWT_levels();
-  void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
-              std::vector<uint8_t> &, std::vector<bool> &);
-  void destroy();
-  ~openhtj2k_decoder();
-#endif
+  OPENHTJ2K_EXPORT openhtj2k_decoder();
+  OPENHTJ2K_EXPORT openhtj2k_decoder(const char *, uint8_t reduce_NL, uint32_t num_threads);
+  OPENHTJ2K_EXPORT openhtj2k_decoder(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  OPENHTJ2K_EXPORT void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  OPENHTJ2K_EXPORT void parse();
+  OPENHTJ2K_EXPORT uint16_t get_num_component();
+  OPENHTJ2K_EXPORT uint32_t get_component_width(uint16_t);
+  OPENHTJ2K_EXPORT uint32_t get_component_height(uint16_t);
+  OPENHTJ2K_EXPORT uint8_t get_component_depth(uint16_t);
+  OPENHTJ2K_EXPORT bool get_component_signedness(uint16_t);
+  OPENHTJ2K_EXPORT uint8_t get_minumum_DWT_levels();
+  OPENHTJ2K_EXPORT void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
+                               std::vector<uint8_t> &, std::vector<bool> &);
+  OPENHTJ2K_EXPORT void destroy();
+  OPENHTJ2K_EXPORT ~openhtj2k_decoder();
 };
 }  // namespace open_htj2k
