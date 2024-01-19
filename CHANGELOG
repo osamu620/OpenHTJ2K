@@ -1,3 +1,20 @@
+# [0.2.5] - 2024-01-19
+
+* Fix memory leak in decoder with '-reduce' parameter greater than actual DWT levels
+* Fix buffer overrun with image width which is not multiple of vector length in IDWT and block-decoding for ARM NEON
+* Improve UI for WASM demo
+* Enable WASM SIMD (using NEON)
+
+# [0.2.4] - 2023-12-22
+
+* small fix for wasm wrapper
+
+# [0.2.3] - 2023-12-22
+
+* Experimental support of emscripten
+* Fix compilation error on aarch64 with gcc
+* Small editorial changes
+
 # [0.2.2] - 2023-11-27
 
 * Fix compilation errors in aarch64 and gcc 9 or earlier
