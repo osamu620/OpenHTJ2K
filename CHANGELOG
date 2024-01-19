@@ -4,6 +4,7 @@
 * Fix buffer overrun with image width which is not multiple of vector length in IDWT and block-decoding for ARM NEON
 * Improve UI for WASM demo
 * Enable WASM SIMD (using NEON)
+* Fix wrong line break in encoder usage (#162)
 
 # [0.2.4] - 2023-12-22
 
