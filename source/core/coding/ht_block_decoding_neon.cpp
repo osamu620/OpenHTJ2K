@@ -606,11 +606,11 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
-      v0           = vld1q_s32(val);
-      v1           = vld1q_s32(val + 4);
       for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
-        s0 = vshrq_n_s32(v0, 31);   // generate a mask for negative values
-        s1 = vshrq_n_s32(v1, 31);   // generate a mask for negative values
+        v0 = vld1q_s32(val);
+        v1 = vld1q_s32(val + 4);
+        s0 = vshrq_n_s32(v0, 31);  // generate a mask for negative values
+        s1 = vshrq_n_s32(v1, 31);  // generate a mask for negative values
         v0 = vandq_s32(v0, vmagmask);
         v1 = vandq_s32(v1, vmagmask);
         // upshift background region, if necessary
@@ -627,8 +627,6 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
         val += 8;
-        v0 = vld1q_s32(val);
-        v1 = vld1q_s32(val + 4);
         dst += 8;
       }
       for (; len > 0; --len) {
@@ -666,11 +664,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
-      v0           = vld1q_s32(val);
-      v1           = vld1q_s32(val + 4);
+
       for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
-        s0 = vshrq_n_s32(v0, 31);   // generate a mask for negative values
-        s1 = vshrq_n_s32(v1, 31);   // generate a mask for negative values
+        v0 = vld1q_s32(val);
+        v1 = vld1q_s32(val + 4);
+        s0 = vshrq_n_s32(v0, 31);  // generate a mask for negative values
+        s1 = vshrq_n_s32(v1, 31);  // generate a mask for negative values
         v0 = vandq_s32(v0, vmagmask);
         v1 = vandq_s32(v1, vmagmask);
         // upshift background region, if necessary
@@ -695,8 +694,6 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
         vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
         val += 8;
-        v0 = vld1q_s32(val);
-        v1 = vld1q_s32(val + 4);
         dst += 8;
       }
       for (; len > 0; --len) {

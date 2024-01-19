@@ -497,16 +497,15 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     int16x8_t vshift = vdupq_n_s16(normalizing_upshift);
     int16x8_t in0, in1;
-    in0 = vld1q_s16(src);
-    in1 = vld1q_s16(src + 8);
+
     for (; len >= 16; len -= 16) {
+      in0 = vld1q_s16(src);
+      in1 = vld1q_s16(src + 8);
       in0 = vshlq_s16(in0, vshift);
       in1 = vshlq_s16(in1, vshift);
       vst1q_s16(src, in0);
       vst1q_s16(src + 8, in1);
       src += 16;
-      in0 = vld1q_s16(src);
-      in1 = vld1q_s16(src + 8);
     }
     for (; len > 0; --len) {
       *src = static_cast<sprec_t>(*src << normalizing_upshift);
