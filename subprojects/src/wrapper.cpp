@@ -1,18 +1,13 @@
-#include <cstdint>
-#include <cstdio>
-#include <string>
-#include <vector>
-
-#include <exception>
 #ifdef __EMSCRIPTEN__
+  #include <cstdint>
+  #include <cstdio>
+  #include <string>
+  #include <vector>
+  #include <exception>
+
   #include <emscripten.h>
-#endif
 
-#ifndef __EMSCRIPTEN__
-  #define EMSCRIPTEN_KEEPALIVE [[maybe_unused]]
-#endif
-
-#include "decoder.hpp"
+  #include "decoder.hpp"
 
 open_htj2k::openhtj2k_decoder* cpp_create_decoder(uint8_t* data, size_t size, uint8_t reduce_NL) {
   return new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, 1);
@@ -56,6 +51,10 @@ bool cpp_get_signed(open_htj2k::openhtj2k_decoder* dec, uint16_t c) {
   return dec->get_component_signedness(c);
 }
 
+uint8_t cpp_get_minimum_DWT_levels(open_htj2k::openhtj2k_decoder* dec) {
+  return dec->get_minumum_DWT_levels();
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////////////
 extern "C" {
 EMSCRIPTEN_KEEPALIVE
@@ -86,4 +85,11 @@ uint32_t get_depth(open_htj2k::openhtj2k_decoder* dec, uint16_t c) { return cpp_
 
 EMSCRIPTEN_KEEPALIVE
 uint32_t get_signed(open_htj2k::openhtj2k_decoder* dec, uint16_t c) { return cpp_get_signed(dec, c); }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t get_minimum_DWT_levels(open_htj2k::openhtj2k_decoder* dec) {
+  return cpp_get_minimum_DWT_levels(dec);
 }
+}
+
+#endif

@@ -59,9 +59,12 @@ class openhtj2k_decoder_impl {
   uint32_t get_component_height(uint16_t);
   uint8_t get_component_depth(uint16_t);
   bool get_component_signedness(uint16_t);
+  uint8_t get_minimum_DWT_levels();
 
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
+
+  void destroy();
 };
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
@@ -167,6 +170,23 @@ uint32_t openhtj2k_decoder_impl::get_component_height(uint16_t c) {
 uint8_t openhtj2k_decoder_impl::get_component_depth(uint16_t c) { return main_header.SIZ->get_bitdepth(c); }
 bool openhtj2k_decoder_impl::get_component_signedness(uint16_t c) { return main_header.SIZ->is_signed(c); }
 
+uint8_t openhtj2k_decoder_impl::get_minimum_DWT_levels() {
+  uint8_t NL = main_header.COD->get_dwt_levels();
+  if (main_header.COC.empty() == false) {
+    size_t i = 0;
+    for (uint16_t c = 0; c < this->get_num_component(); ++c) {
+      if (main_header.COC[i]->get_component_index() == c) {
+        if (NL > main_header.COC[i]->get_dwt_levels()) {
+          NL = main_header.COC[i]->get_dwt_levels();
+        }
+        ++i;
+      }
+    }
+  }
+  return NL;
+}
+
+void openhtj2k_decoder_impl::destroy() {}
 void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                     std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                     std::vector<bool> &is_signed) {
@@ -175,6 +195,13 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
         "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
         "openhtj2k_decoder_impl::invoke().\n");
     throw std::exception();
+  }
+  if (reduce_NL > this->get_minimum_DWT_levels()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level within some\n"
+        "tile-component.  Problem almost certainly caused by trying to discard more\n"
+        "resolution levels than the number of DWT levels used to compress a\n"
+        "tile-component.");
   }
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
@@ -228,7 +255,14 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
 
   // Read codestream and decode it
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
-    tileSet[i].create_tile_buf(main_header);
+    try {
+      tileSet[i].create_tile_buf(main_header);
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+      tileSet[i].destroy();
+      throw std::runtime_error("Abort Decoding!");
+    };
+
     tileSet[i].decode();
     tileSet[i].ycbcr_to_rgb();
     tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer
@@ -264,12 +298,15 @@ uint8_t openhtj2k_decoder::get_component_depth(uint16_t c) { return this->impl->
 bool openhtj2k_decoder::get_component_signedness(uint16_t c) {
   return this->impl->get_component_signedness(c);
 }
+uint8_t openhtj2k_decoder::get_minumum_DWT_levels() { return this->impl->get_minimum_DWT_levels(); }
 
 void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                std::vector<bool> &is_signed) {
   this->impl->invoke(buf, width, height, depth, is_signed);
 }
+
+void openhtj2k_decoder::destroy() { this->impl->destroy(); }
 
 openhtj2k_decoder::~openhtj2k_decoder() = default;
 }  // namespace open_htj2k

@@ -63,8 +63,10 @@ class openhtj2k_decoder {
   uint32_t get_component_height(uint16_t);
   uint8_t get_component_depth(uint16_t);
   bool get_component_signedness(uint16_t);
+  uint8_t get_minumum_DWT_levels();
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
+  void destroy();
   ~openhtj2k_decoder();
 #endif
 };

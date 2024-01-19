@@ -152,6 +152,7 @@ int main(int argc, char *argv[]) {
       decoder.parse();
       decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
     } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
       return EXIT_FAILURE;
     }
   }

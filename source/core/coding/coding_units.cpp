@@ -1813,15 +1813,15 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   uint8_t c_NL;
   uint8_t max_c_NL = 0;
   for (uint16_t c = 0; c < num_components; c++) {
-    this->tcomp[c].create_resolutions(numlayers);
     c_NL = this->tcomp[c].NL;
     if (c_NL < this->reduce_NL) {
-      printf(
-          "ERROR: Resolution level reduction exceeds the DWT level of "
-          "component %d.\n",
-          c);
-      throw std::exception();
+      //      printf(
+      //          "ERROR: Resolution level reduction exceeds the DWT level of "
+      //          "component %d.\n",
+      //          c);
+      throw std::runtime_error("Resolution level reduction exceeds the DWT level");
     }
+    this->tcomp[c].create_resolutions(numlayers);
     max_c_NL = std::max(c_NL, max_c_NL);
     j2k_resolution *cr;
     for (uint8_t r = 0; r <= c_NL; r++) {
