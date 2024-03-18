@@ -3,8 +3,12 @@ cmake_minimum_required(VERSION 3.13)
 project(
   open_htj2k
   LANGUAGES CXX
-  DESCRIPTION "Open source implementation of 15444-1 and 15444-15")
-option(BUILD_SHARED_LIBS "Shared Libraries" ON)
+  DESCRIPTION "Open source implementation of ISO/IEC 15444-1 and -15")
+if (NOT EMSCRIPTEN)
+  option(BUILD_SHARED_LIBS "Shared Libraries" ON)
+else()
+  option(BUILD_SHARED_LIBS "Shared Libraries" OFF)
+endif()
 enable_language(CXX)
 
 ############################################################
@@ -43,13 +47,6 @@ else()
   check_cxx_compiler_flag("-std=c++17" COMPILER_SUPPORTS_CXX17)
 endif()
 
-# Check Thread support
-if (NOT EMSCRIPTEN)
-find_package(Threads)
-endif()
-# Check TIFF support
-find_package(TIFF)
-
 # Compiler settings
 if(COMPILER_SUPPORTS_CXX17)
   set(CMAKE_CXX_STANDARD 17)
@@ -70,50 +67,76 @@ if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "CMAKE_BUILD_TYPE is unspecified. Set it as Release.")
 endif()
 
+add_library(open_htj2k)
+add_subdirectory(source/core/codestream)
+add_subdirectory(source/core/coding)
+add_subdirectory(source/core/transform)
+add_subdirectory(source/core/interface)
+add_subdirectory(source/core/jph)
+target_include_directories(
+    open_htj2k
+    PRIVATE source/core/common
+    source/core/codestream
+    source/core/coding
+    source/core/transform
+    # source/core/interface
+    source/core/jph
+    # ${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
+)
+target_include_directories(open_htj2k INTERFACE source/core/interface)
+set_target_properties(
+    open_htj2k PROPERTIES OUTPUT_NAME
+    $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
+# target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
+
+if (NOT EMSCRIPTEN)
+  # Check Thread support
+  find_package(Threads)
+  if (Threads_FOUND)
+    message(STATUS "Thread library found")
+    target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+    message(STATUS "OPENHTJ2K_THREAD is set")
+  endif()
+  # Check TIFF support
+  find_package(TIFF)
+  if (TIFF_FOUND)
+    message(STATUS "libtiff found")
+    message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
+    message(STATUS "tiff library = ${TIFF_LIBRARIES}")
+    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TIFF_SUPPORT")
+    target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
+    target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
+    message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
+    set(PKG_CONFIG_REQUIRES "libtiff")
+  endif()
+endif()
+
 # Compiler optimization settings
-if(EMSCRIPTEN)
-  option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics" ON)
+if(NOT MSVC)
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fexceptions -fcolor-diagnostics -msimd128"
+      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fexceptions -fcolor-diagnostics"
   )
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC") # MSVC
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd5051")
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} /Od /DDEBUG /ZI")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /Ox")
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} /O2 /ZI")
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang") # Clang
   if(NOT COMPILER_SUPPORTS_CXX17)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
   endif()
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
+else()
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fcolor-diagnostics"
+      "${CMAKE_CXX_FLAGS} /wd5051 /_CRT_SECURE_NO_WARNINGS"
   )
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM") # Intel oneAPI DPC++/C++ Compiler
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
-  set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fcolor-diagnostics -gline-tables-only -fdebug-info-for-profiling")
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Intel$") # Intel Compiler Classic
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} /Od /DDEBUG /ZI")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /Ox")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} /O2 /ZI")
+endif ()
+if(CMAKE_CXX_COMPILER_ID MATCHES "Intel$") # Intel Compiler Classic
   message(STATUS "Intel compiler")
+  set(CMAKE_CXX_FLAGS "-Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fexceptions -fcolor-diagnostics")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -diag-disable=10441 -Wno-conversion -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -p")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -ipo")
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
-else() # GCC
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
-  set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wconversion -Wsign-conversion -Wunused-parameter -Wformat=0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fdiagnostics-color=always -Wformat-overflow=0"
-  )
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g -DNDEBUG")
 endif()
 
@@ -168,25 +191,8 @@ configure_file(
 )
 
 # Source files settings "libopen_htj2k" shared library target
-add_library(open_htj2k ${SOURCES})
+
 if (NOT EMSCRIPTEN)
-  if (Threads_FOUND)
-   message(STATUS "Thread library found")
-   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
-   message(STATUS "OPENHTJ2K_THREAD is set")
-  endif()
-
-  if (TIFF_FOUND)
-    message(STATUS "libtiff found")
-    message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
-    message(STATUS "tiff library = ${TIFF_LIBRARIES}")
-    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TIFF_SUPPORT")
-    target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
-    target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
-    message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
-    set(PKG_CONFIG_REQUIRES "libtiff")
-  endif()
-
   if(ENABLE_ARM_NEON)
     message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
     target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
@@ -195,32 +201,6 @@ if (NOT EMSCRIPTEN)
     target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TRY_AVX2")
   endif()
 endif()
-target_include_directories(
-  open_htj2k
-  PRIVATE source/core/common
-          source/core/codestream
-          source/core/coding
-          source/core/transform
-          # source/core/interface
-          source/core/jph
-          # ${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
-)
-target_include_directories(open_htj2k INTERFACE source/core/interface)
-set_target_properties(
-  open_htj2k PROPERTIES OUTPUT_NAME
-                        $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>)
-# target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
-if (NOT EMSCRIPTEN)
-if (Threads_FOUND)
-  target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
-endif()
-endif()
-
-add_subdirectory(source/core/codestream)
-add_subdirectory(source/core/coding)
-add_subdirectory(source/core/transform)
-add_subdirectory(source/core/interface)
-add_subdirectory(source/core/jph)
 
 # decoder target
 add_executable(open_htj2k_dec)
