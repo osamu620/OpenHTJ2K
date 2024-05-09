@@ -698,13 +698,20 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   block->set_compressed_data(fwd_buf.get(), static_cast<uint16_t>(Lcup), MAX_Lref);
   // set length of compressed data
   block->length         = static_cast<uint32_t>(Lcup);
-  block->pass_length[0] = static_cast<unsigned int>(Lcup);
+  block->pass_length[0] = 0;
+  block->pass_length[1] = 0;
+  block->pass_length[2] = 0;
+  block->pass_length[3] = static_cast<unsigned int>(Lcup);
   // set number of coding passes
-  block->num_passes      = 1;
-  block->layer_passes[0] = 1;
+  block->num_passes      = 4;
   block->layer_start[0]  = 0;
+  block->layer_passes[0] = 1;
+  block->layer_start[1]  = 1;
+  block->layer_passes[1] = 3;
+  block->layer_length[0] = 0;
+  block->layer_length[1] = static_cast<uint32_t>(Lcup);
   // set number of zero-bit planes (=Zblk)
-  block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1);
+  block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1) - 1;
   return static_cast<int32_t>(block->length);
 }
 /********************************************************************************

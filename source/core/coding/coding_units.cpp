@@ -191,10 +191,11 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
 
   //  sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
   //  memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
+  this->layer_length = std::vector<uint32_t>(num_layers, 0);
   this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
   this->layer_passes = MAKE_UNIQUE<uint8_t[]>(num_layers);
   if ((Cmodes & 0x40) == 0) this->pass_length.reserve(109);
-  this->pass_length = std::vector<uint32_t>(num_layers, 0);  // critical section
+  this->pass_length = std::vector<uint32_t>(4, 0);  // critical section
 }
 
 uint8_t j2k_codeblock::get_Mb() const { return this->M_b; }
@@ -922,10 +923,11 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
           buf_start += blk->pass_length[i];
         }
       }
-      for (size_t i = 0; i < l0 + l1; ++i) {
+      for (size_t i = l0; i < l0 + l1; ++i) {
         buf_end += blk->pass_length[i];
       }
-      // uint32_t number_of_bytes = buf_end - buf_start;
+      uint32_t number_of_bytes     = buf_end - buf_start;
+      blk->layer_length[layer_idx] = number_of_bytes;
 
       // length coding: currently only for HT Cleanup pass
       int new_passes = static_cast<int32_t>(num_passes);
@@ -938,7 +940,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
 
       while (new_passes > 0) {
         assert(blk->Cmodes & HT);
-        segment_passes = (pass_idx == 0) ? 1 : static_cast<uint8_t>(new_passes);
+        segment_passes = static_cast<uint8_t>(new_passes);
 
         length_bits = 0;
         // length_bits = floor(log2(segment_passes))
@@ -974,7 +976,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
 
       while (new_passes > 0) {
         assert(blk->Cmodes & HT);
-        segment_passes = (pass_idx == 0) ? 1 : static_cast<uint8_t>(new_passes);
+        segment_passes = static_cast<uint8_t>(new_passes);
 
         length_bits = 0;
         // length_bits = floor(log2(segment_passes))
@@ -1009,14 +1011,9 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
                            const std::unique_ptr<std::unique_ptr<j2k_subband>[]> &subband,
                            const uint16_t &num_layers, const element_siz &codeblock_size,
                            const uint8_t &Cmodes)
-    : j2k_region(p0, p1),
-      index(idx),
-      resolution(r),
-      num_bands((resolution == 0) ? 1 : 3),
-      length(0),
-      packet_header(nullptr),
-      packet_header_length(0) {
-  length = 0;  // for encoder only
+    : j2k_region(p0, p1), index(idx), resolution(r), num_bands((resolution == 0) ? 1 : 3) {
+  lengths              = std::vector<uint32_t>(4, 0);  // for encoder only
+  packet_header_length = std::vector<uint32_t>(num_layers, 0);
 
   this->pband          = MAKE_UNIQUE<std::unique_ptr<j2k_precinct_subband>[]>(num_bands);
   const uint8_t xob[4] = {0, 1, 0, 1};
@@ -1205,13 +1202,13 @@ j2c_packet::j2c_packet(const uint16_t l, const uint8_t r, const uint16_t c, cons
                        j2k_precinct *const cp, uint8_t num_bands)
     : layer(l), resolution(r), component(c), precinct(p), header(nullptr), body(nullptr) {
   // get length of the corresponding precinct
-  length = cp->get_length();
+  length = cp->get_length(l);
   // create buffer to accommodate packet header and body
   buf        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(length));
-  size_t pos = cp->packet_header_length;
+  size_t pos = cp->packet_header_length[l];
   // copy packet header to packet buffer
   for (size_t i = 0; i < pos; ++i) {
-    buf[i] = cp->packet_header[i];
+    buf[i] = cp->packet_header[l][i];
   }
   // copy packet body to packet buffer
   for (uint8_t b = 0; b < num_bands; ++b) {
@@ -1219,8 +1216,8 @@ j2c_packet::j2c_packet(const uint16_t l, const uint8_t r, const uint16_t c, cons
     const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
     for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
       j2k_codeblock *block = cpb->access_codeblock(block_index);
-      memcpy(&buf[pos], block->get_compressed_data(), sizeof(uint8_t) * block->length);
-      pos += block->length;
+      memcpy(&buf[pos], block->get_compressed_data(), sizeof(uint8_t) * block->layer_length[l]);
+      pos += block->layer_length[l];
     }
   }
 }
@@ -2941,10 +2938,9 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
 
   // create tile components
   this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
-
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img);
-    this->tcomp[c].create_resolutions(1);  // number of layers = 1
+    this->tcomp[c].create_resolutions(this->numlayers);  // number of layers = 1
   }
 
   // apply POC, if any
@@ -3178,7 +3174,7 @@ uint8_t *j2k_tile::encode() {
     //    element_siz bottom_right = tcomp[c].get_pos1();
     j2k_resolution *cr = tcomp[c].access_resolution(NL);
 
-    auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
+    auto t1_encode_packet = [](uint16_t layer_idx, bool use_EPH_local, j2k_resolution *cr) {
       uint32_t length = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         uint32_t packet_length = 0;
@@ -3190,32 +3186,34 @@ uint8_t *j2k_tile::encode() {
           // #pragma omp parallel for reduction(+ : packet_length)
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
-            packet_length += block->length;
+            packet_length += block->layer_length[layer_idx];
           }
           // construct packet header
-          cpb->generate_packet_header(pckt_hdr, static_cast<uint16_t>(numlayers_local - 1));
+          cpb->generate_packet_header(pckt_hdr, layer_idx);
         }
         // emit_qword packet header
         pckt_hdr.flush(use_EPH_local);
-        cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
-        cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
+        cp->packet_header_length[layer_idx] += static_cast<uint32_t>(pckt_hdr.get_length());
+        cp->packet_header.emplace_back(MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length[layer_idx]));
 
-        pckt_hdr.copy_buf(cp->packet_header.get());
+        pckt_hdr.copy_buf(cp->packet_header[layer_idx].get());
         packet_length += pckt_hdr.get_length();
-        cp->set_length(packet_length);
+        cp->set_length(packet_length, layer_idx);
         length += packet_length;
       }
       return length;
     };
-    for (uint8_t r = NL; r > 0; --r) {
-      // encode codeblocks in HL or LH or HH
-      length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
-      cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
-      //      top_left     = cr->get_pos0();
-      //      bottom_right = cr->get_pos1();
+    for (uint16_t l = 0; l < numlayers; ++l) {
+      for (uint8_t r = NL; r > 0; --r) {
+        // encode codeblocks in HL or LH or HH
+        length += static_cast<uint32_t>(t1_encode_packet(l, use_EPH, cr));
+        cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
+        //      top_left     = cr->get_pos0();
+        //      bottom_right = cr->get_pos1();
+      }
+      // encode codeblocks in LL
+      length += static_cast<uint32_t>(t1_encode_packet(l, use_EPH, cr));
     }
-    // encode codeblocks in LL
-    length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
   }  // end of component loop
 
   tile_part[0]->set_tile_index(this->index);

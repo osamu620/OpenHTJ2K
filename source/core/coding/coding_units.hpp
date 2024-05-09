@@ -93,6 +93,8 @@ class j2k_codeblock : public j2k_region {
   uint8_t Lblock;
   // length of a coding pass in byte
   std::vector<uint32_t> pass_length;
+  // length of a layer
+  std::vector<uint32_t> layer_length;
   // index of the coding-pass from which layer starts
   std::unique_ptr<uint8_t[]> layer_start;
   // number of coding-passes included in a layer
@@ -212,15 +214,15 @@ class j2k_precinct : public j2k_region {
   // number of subbands in this precinct
   const uint8_t num_bands;
   // length which includes packet header and body, used only for encoder
-  uint32_t length;
+  std::vector<uint32_t> lengths;
   // container for a subband within this precinct which includes codeblocks
   std::unique_ptr<std::unique_ptr<j2k_precinct_subband>[]> pband;
 
  public:
   // buffer for generated packet header: only for encoding
-  std::unique_ptr<uint8_t[]> packet_header;
+  std::vector<std::unique_ptr<uint8_t[]>> packet_header;
   // length of packet header
-  uint32_t packet_header_length;
+  std::vector<uint32_t> packet_header_length;
 
  public:
   j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_siz &p0, const element_siz &p1,
@@ -233,8 +235,8 @@ class j2k_precinct : public j2k_region {
   //  }
 
   j2k_precinct_subband *access_pband(uint8_t b);
-  void set_length(uint32_t len) { length = len; }
-  [[nodiscard]] uint32_t get_length() const { return length; }
+  void set_length(uint32_t len, uint16_t layer_idx) { lengths[layer_idx] = len; }
+  [[nodiscard]] uint32_t get_length(uint16_t layer_idx) { return lengths[layer_idx]; }
 };
 
 /********************************************************************************
@@ -253,7 +255,7 @@ class j2c_packet {
   uint32_t length;
 
   j2c_packet()
-      : layer(0), resolution(0), component(0), precinct(0), header(nullptr), body(nullptr), length(0){};
+      : layer(0), resolution(0), component(0), precinct(0), header(nullptr), body(nullptr), length(0) {};
   // constructor for decoding
   j2c_packet(const uint16_t l, const uint8_t r, const uint16_t c, const uint32_t p,
              buf_chain *const h = nullptr, buf_chain *const bo = nullptr)

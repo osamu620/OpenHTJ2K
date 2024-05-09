@@ -136,7 +136,7 @@ int main(int argc, char *argv[]) {
   cod.use_SOP                       = args.is_use_sop();
   cod.use_EPH                       = args.is_use_eph();
   cod.progression_order             = args.get_progression();
-  cod.number_of_layers              = 1;
+  cod.number_of_layers              = 2;
   cod.use_color_trafo               = args.get_ycc();
   cod.dwt_levels                    = args.get_dwt_levels();
   cod.codeblock_style               = 0x040;
