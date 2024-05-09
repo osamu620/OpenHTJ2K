@@ -190,8 +190,6 @@ configure_file(
   "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 )
 
-# Source files settings "libopen_htj2k" shared library target
-
 if (NOT EMSCRIPTEN)
   if(ENABLE_ARM_NEON)
     message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
