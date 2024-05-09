@@ -221,9 +221,15 @@ The client/browser can decide, depending on the rendering resolution, the number
       // console.log(dpr);
       canvas.style.width = width / dpr + "px";
       canvas.style.height = height / dpr + "px";
-      var ctx = canvas.getContext("2d");
+
+      var isP3Supported = displaySupportsP3Color() && canvasSupportsDisplayP3();
+      var colorSpaceName = "srgb";
+      if (isP3Supported) {
+        colorSpaceName = "display-p3";
+      }
+      var ctx = canvas.getContext("2d", {colorSpace: colorSpaceName});
       ctx.clearRect(0, 0, width, height);
-      var cimg = ctx.createImageData(width, height);
+      var cimg = ctx.createImageData(width, height, {colorSpace: colorSpaceName});
 console.log(cimg);
       var down_shift = (bit_depth >= 8 ? bit_depth - 8 : 0) | 0;
       var up_shift = (bit_depth < 8 ? 8 - bit_depth : 0) | 0;
@@ -273,9 +279,19 @@ console.log(cimg);
           }
         }
       }
-      else
-        console.log('Unsupported number of components');
-
+      else {
+        console.log('Unsupported number of components: Only the first component is shown.');
+        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
+          var didx = y * width * compskip;
+          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
+            var sidx = (y * width + x) * compskip * num_comps;
+            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 3] = 255;
+          }
+        }
+      }
       release_j2c_data(j2c);
       Module._free(buffer);
       Module._free(src);
@@ -418,14 +434,30 @@ console.log(cimg);
 
       if (simdSupported) {
         document.getElementById('simd_message').innerText = txt + "SIMD is detected. (But not used)\n";
-        // load_simd_module();
-        load_generic_module();
+        load_simd_module();
+        // load_generic_module();
       } else {
         document.getElementById('simd_message').innerText = txt + "SIMD is not detected. \n";
         load_generic_module();
       }
     });
 
+    function displaySupportsP3Color() {
+      return matchMedia("(color-gamut: p3)").matches;
+    }
+
+    function canvasSupportsDisplayP3() {
+      let canvas = document.createElement("canvas");
+      try {
+        // Safari throws a TypeError if the colorSpace option is supported, but
+        // the system requirements (minimum macOS or iOS version) for Display P3
+        // support are not met.
+        let context = canvas.getContext("2d", { colorSpace: "display-p3" });
+        return context.getContextAttributes().colorSpace == "display-p3";
+      } catch {
+      }
+      return false;
+    }
   </script>
 </body>
 
