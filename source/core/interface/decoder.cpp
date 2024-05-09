@@ -54,11 +54,11 @@ class openhtj2k_decoder_impl {
   ~openhtj2k_decoder_impl();
   void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   void parse();
-  uint16_t get_num_component();
-  uint32_t get_component_width(uint16_t);
-  uint32_t get_component_height(uint16_t);
-  uint8_t get_component_depth(uint16_t);
-  bool get_component_signedness(uint16_t);
+  [[nodiscard]] uint16_t get_num_component() const;
+  [[nodiscard]] uint32_t get_component_width(uint16_t) const;
+  [[nodiscard]] uint32_t get_component_height(uint16_t) const;
+  [[nodiscard]] uint8_t get_component_depth(uint16_t) const;
+  [[nodiscard]] bool get_component_signedness(uint16_t) const;
   uint8_t get_minimum_DWT_levels();
 
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
@@ -150,25 +150,29 @@ void openhtj2k_decoder_impl::parse() {
   is_parsed = true;
 }
 
-uint16_t openhtj2k_decoder_impl::get_num_component() { return main_header.SIZ->get_num_components(); }
-uint32_t openhtj2k_decoder_impl::get_component_width(uint16_t c) {
-  // Currently does not return component specific width
-  element_siz size, origin;
+uint16_t openhtj2k_decoder_impl::get_num_component() const { return main_header.SIZ->get_num_components(); }
+uint32_t openhtj2k_decoder_impl::get_component_width(uint16_t c) const {
+  element_siz size, origin, subsampling_factor;
   main_header.SIZ->get_image_size(size);
   main_header.SIZ->get_image_origin(origin);
+  main_header.SIZ->get_subsampling_factor(subsampling_factor, c);
 
-  return size.x - origin.x;
+  return ceil_int(size.x - origin.x, subsampling_factor.x);
 }
-uint32_t openhtj2k_decoder_impl::get_component_height(uint16_t c) {
-  // Currently does not return component specific height
-  element_siz size, origin;
+uint32_t openhtj2k_decoder_impl::get_component_height(uint16_t c) const {
+  element_siz size, origin, subsampling_factor;
   main_header.SIZ->get_image_size(size);
   main_header.SIZ->get_image_origin(origin);
+  main_header.SIZ->get_subsampling_factor(subsampling_factor, c);
 
-  return size.y - origin.y;
+  return ceil_int(size.y - origin.y, subsampling_factor.y);
 }
-uint8_t openhtj2k_decoder_impl::get_component_depth(uint16_t c) { return main_header.SIZ->get_bitdepth(c); }
-bool openhtj2k_decoder_impl::get_component_signedness(uint16_t c) { return main_header.SIZ->is_signed(c); }
+uint8_t openhtj2k_decoder_impl::get_component_depth(uint16_t c) const {
+  return main_header.SIZ->get_bitdepth(c);
+}
+bool openhtj2k_decoder_impl::get_component_signedness(uint16_t c) const {
+  return main_header.SIZ->is_signed(c);
+}
 
 uint8_t openhtj2k_decoder_impl::get_minimum_DWT_levels() {
   uint8_t NL = main_header.COD->get_dwt_levels();
