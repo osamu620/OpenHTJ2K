@@ -1400,7 +1400,7 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
   const uint32_t aligned_stride =
       round_up((ceil_int(pos1.x, 1U << tile->reduce_NL) - ceil_int(pos0.x, 1U << tile->reduce_NL)), 32U);
   const auto height             = static_cast<uint32_t>(ceil_int(pos1.y, 1U << tile->reduce_NL)
-                                            - ceil_int(pos0.y, 1U << tile->reduce_NL));
+                                                        - ceil_int(pos0.y, 1U << tile->reduce_NL));
   const uint32_t num_bufsamples = aligned_stride * height;
   samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
 
@@ -2457,7 +2457,7 @@ void j2k_tile::decode() {
 #endif
             }
           }  // end of codeblock loop
-        }    // end of subbnad loop
+        }  // end of subbnad loop
 #ifdef OPENHTJ2K_THREAD
         for (auto &result : results) {
           result.get();
