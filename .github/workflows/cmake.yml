@@ -50,6 +50,7 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         "D:/a/OpenHTJ2K/OpenHTJ2K/build/Release;D:/a/OpenHTJ2K/OpenHTJ2K/build/bin/Release" | Out-File -FilePath $env:GITHUB_PATH -Append
+        echo "$PATH"
         ctest -C ${{env.BUILD_TYPE}} -j 2 --output-on-failure
 #      run: ctest -C ${{env.BUILD_TYPE}} -j 2 --output-on-failure
     - name: Test on Linux or macOS
