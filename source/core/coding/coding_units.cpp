@@ -753,7 +753,6 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         }
       } else {
         new_passes -= static_cast<uint8_t>(segment_passes);
-        block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
         while (new_passes > 0) {
           if (bypass_term_threshold != 0) {
             if (new_passes > 1) {
