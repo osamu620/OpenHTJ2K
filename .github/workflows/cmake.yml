@@ -51,6 +51,8 @@ jobs:
       run: |
         echo "D:/a/OpenHTJ2K/OpenHTJ2K/build/Release" >> $GITHUB_PATH
         echo "D:/a/OpenHTJ2K/OpenHTJ2K/build/bin/Release" >> $GITHUB_PATH
+        dir D:\a\OpenHTJ2K\OpenHTJ2K\build\Release
+        dir D:\a\OpenHTJ2K\OpenHTJ2K\build\bin\Release
         ctest -C ${{env.BUILD_TYPE}} -j 2 --output-on-failure
     - name: Test on Linux or macOS
       if: runner.os != 'Windows'
