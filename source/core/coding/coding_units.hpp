@@ -220,7 +220,7 @@ class j2k_precinct : public j2k_region {
 
  public:
   // buffer for generated packet header: only for encoding
-  std::vector<std::unique_ptr<uint8_t[]>> packet_header;
+  std::vector<std::vector<uint8_t>> packet_header;
   // length of packet header
   std::vector<uint32_t> packet_header_length;
 

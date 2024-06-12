@@ -127,6 +127,7 @@ class j2k_argset {
   uint8_t Porder;
   bool use_sop;
   bool use_eph;
+  bool use_placeholder_pass;
   double base_step_size;
   uint8_t num_guard;
   bool qderived;
@@ -377,6 +378,7 @@ class j2k_argset {
         Porder(0),
         use_sop(false),
         use_eph(false),
+        use_placeholder_pass(false),
         base_step_size(0.0),
         num_guard(1),
         qderived(false),
@@ -528,6 +530,8 @@ class j2k_argset {
           get_bool(param, arg, use_sop);
         } else if (param == "use_eph") {
           get_bool(param, arg, use_eph);
+        } else if (param == "use_placeholder_pass") {
+          get_bool(param, arg, use_placeholder_pass);
         } else {
           printf("ERROR: unknown parameter C%s\n", param.c_str());
           exit(EXIT_FAILURE);
@@ -573,6 +577,7 @@ class j2k_argset {
   [[nodiscard]] uint8_t get_progression() const { return Porder; }
   [[nodiscard]] bool is_use_sop() const { return use_sop; }
   [[nodiscard]] bool is_use_eph() const { return use_eph; }
+  [[nodiscard]] bool is_use_placeholder_pass() const { return use_placeholder_pass; }
   [[nodiscard]] double get_basestep_size() const { return base_step_size; }
   [[nodiscard]] uint8_t get_num_guard() const { return num_guard; }
   [[nodiscard]] bool is_derived() const { return qderived; }

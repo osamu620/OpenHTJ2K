@@ -70,7 +70,7 @@ class image {
         bitDepth(0),
         isSigned(false),
         isBigendian(false),
-        data(nullptr){};
+        data(nullptr) {};
   // // destructor
   ~image() { delete[] data; }
 
@@ -112,7 +112,6 @@ class image {
   int read_pnmpgx(const char *name) {
     constexpr char SP = ' ';
     constexpr char LF = '\n';
-    constexpr char CR = 0x0d;
 
     FILE *fp = fopen(name, "rb");
     if (fp == nullptr) {
@@ -192,7 +191,7 @@ class image {
           val *= 10;
           val += c - '0';
           c = fgetc(fp);
-        } while (c != SP && c != LF && c != CR);
+        } while (c != SP && c != LF);
         bitDepth = static_cast<uint_fast8_t>(val);
         val      = 0;
         // fpos_t pos;
@@ -215,7 +214,7 @@ class image {
     while (status != DONE) {
       c = fgetc(fp);
       // eat white/LF/CR and comments
-      while (c == SP || c == LF || c == CR) {
+      while (c == SP || c == LF) {
         c = fgetc(fp);
         if (c == '#') {
           char *nouse = fgets(comment, sizeof(comment), fp);
@@ -227,7 +226,7 @@ class image {
         }
       }
       // read numerical value
-      while (c != SP && c != LF && c != CR) {
+      while (c != SP && c != LF) {
         val *= 10;
         val += c - '0';
         c = fgetc(fp);
@@ -260,7 +259,7 @@ class image {
     }
     // easting trailing spaces/LF/CR or comments
     c = fgetc(fp);
-    while (c == SP || c == LF || c == CR) {
+    while (c == SP || c == LF) {
       c = fgetc(fp);
       if (c == '#') {
         char *nouse = fgets(comment, sizeof(comment), fp);

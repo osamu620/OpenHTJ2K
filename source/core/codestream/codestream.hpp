@@ -258,9 +258,9 @@ class packet_header_writer {
 
   [[nodiscard]] uint32_t get_length() const { return pos; }
 
-  size_t copy_buf(uint8_t *p) {
+  size_t copy_buf(std::vector<uint8_t> &p) {
     for (size_t i = 0; i < buf.size(); ++i) {
-      p[i] = buf[i];
+      p.emplace_back(buf[i]);
     }
     return buf.size();
   }

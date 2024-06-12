@@ -195,7 +195,9 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
   this->layer_passes = MAKE_UNIQUE<uint8_t[]>(num_layers);
   if ((Cmodes & 0x40) == 0) this->pass_length.reserve(109);
-  this->pass_length = std::vector<uint32_t>(4, 0);  // critical section
+  int P0                 = 2;
+  int num_default_passes = 1 + 3 * P0;  // binary : 4, ternary: 7, quaternary:10
+  this->pass_length      = std::vector<uint32_t>(num_default_passes, 0);  // critical section
 }
 
 uint8_t j2k_codeblock::get_Mb() const { return this->M_b; }
@@ -754,7 +756,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         }
       } else {
         new_passes -= static_cast<uint8_t>(segment_passes);
-        block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
+        //        block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
         while (new_passes > 0) {
           if (bypass_term_threshold != 0) {
             if (new_passes > 1) {
@@ -1014,7 +1016,9 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
     : j2k_region(p0, p1), index(idx), resolution(r), num_bands((resolution == 0) ? 1 : 3) {
   lengths              = std::vector<uint32_t>(4, 0);  // for encoder only
   packet_header_length = std::vector<uint32_t>(num_layers, 0);
-
+  for (uint16_t l = 0; l < num_layers; ++l) {
+    packet_header.emplace_back(std::vector<uint8_t>(0, 0));
+  }
   this->pband          = MAKE_UNIQUE<std::unique_ptr<j2k_precinct_subband>[]>(num_bands);
   const uint8_t xob[4] = {0, 1, 0, 1};
   const uint8_t yob[4] = {0, 0, 1, 1};
@@ -3172,12 +3176,12 @@ uint8_t *j2k_tile::encode() {
     // const uint8_t transformation = tcomp[c].get_transformation();
     //    element_siz top_left     = tcomp[c].get_pos0();
     //    element_siz bottom_right = tcomp[c].get_pos1();
-    j2k_resolution *cr = tcomp[c].access_resolution(NL);
 
     auto t1_encode_packet = [](uint16_t layer_idx, bool use_EPH_local, j2k_resolution *cr) {
       uint32_t length = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         uint32_t packet_length = 0;
+        uint32_t header_length = 0;
         j2k_precinct *cp       = cr->access_precinct(p);
         packet_header_writer pckt_hdr;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -3187,25 +3191,31 @@ uint8_t *j2k_tile::encode() {
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
             packet_length += block->layer_length[layer_idx];
+            printf("layer = %d, r = %d, b= %d, blk idx = %d, blk length = %d, plhd passes =% d\n ",
+                   layer_idx, cr->get_index(), b, block_index, block->layer_length[layer_idx],
+                   block->num_passes);
           }
           // construct packet header
           cpb->generate_packet_header(pckt_hdr, layer_idx);
         }
         // emit_qword packet header
         pckt_hdr.flush(use_EPH_local);
-        cp->packet_header_length[layer_idx] += static_cast<uint32_t>(pckt_hdr.get_length());
-        cp->packet_header.emplace_back(MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length[layer_idx]));
+        header_length                       = static_cast<uint32_t>(pckt_hdr.get_length());
+        cp->packet_header_length[layer_idx] = header_length;  // TODO: is this (+=) correct? (=) is enough?
 
-        pckt_hdr.copy_buf(cp->packet_header[layer_idx].get());
+        pckt_hdr.copy_buf(cp->packet_header[layer_idx]);
         packet_length += pckt_hdr.get_length();
         cp->set_length(packet_length, layer_idx);
         length += packet_length;
       }
       return length;
     };
+
     for (uint16_t l = 0; l < numlayers; ++l) {
+      j2k_resolution *cr = tcomp[c].access_resolution(NL);
       for (uint8_t r = NL; r > 0; --r) {
         // encode codeblocks in HL or LH or HH
+        printf("\nlayer index = %d\n", l);
         length += static_cast<uint32_t>(t1_encode_packet(l, use_EPH, cr));
         cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
         //      top_left     = cr->get_pos0();

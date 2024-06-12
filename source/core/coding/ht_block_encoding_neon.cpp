@@ -32,7 +32,7 @@
   #include "coding_local.hpp"
   #include "enc_CxtVLC_tables.hpp"
   #include "utils.hpp"
-
+  #include <random>
 // Uncomment for experimental use of HT SigProp and MagRef encoding (does not work)
 // #define ENABLE_SP_MR
 
@@ -328,8 +328,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
   block->quantize(or_val);
 
-  if (!or_val) {
-    // nothing to do here because this codeblock is empty
+  if (!or_val && block->num_layers == 1) {
+    // Nothing to do here with no multiple layers because this codeblock is empty.
+    // If number of layers is greater than 1, it is not the case.
+
     // set length of coding passes
     block->length         = 0;
     block->pass_length[0] = 0;
@@ -697,21 +699,61 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   // transfer Dcup[] to block->compressed_data
   block->set_compressed_data(fwd_buf.get(), static_cast<uint16_t>(Lcup), MAX_Lref);
   // set length of compressed data
-  block->length         = static_cast<uint32_t>(Lcup);
-  block->pass_length[0] = 0;
-  block->pass_length[1] = 0;
-  block->pass_length[2] = 0;
-  block->pass_length[3] = static_cast<unsigned int>(Lcup);
-  // set number of coding passes
-  block->num_passes      = 4;
-  block->layer_start[0]  = 0;
-  block->layer_passes[0] = 1;
-  block->layer_start[1]  = 1;
-  block->layer_passes[1] = 3;
-  block->layer_length[0] = 0;
-  block->layer_length[1] = static_cast<uint32_t>(Lcup);
-  // set number of zero-bit planes (=Zblk)
-  block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1) - 1;
+  block->length = static_cast<uint32_t>(Lcup);
+
+  if (block->num_layers == 1) {
+    // No placeholder pass
+    block->pass_length[0] = static_cast<unsigned int>(Lcup);
+    // set number of coding passes
+    block->num_passes      = 1;
+    block->layer_passes[0] = 1;
+    block->layer_start[0]  = 0;
+    block->layer_length[0] = block->length;
+    // set number of zero-bit planes (=Zblk)
+    block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1);
+  } else {
+    // With placeholder pass
+
+    // set number of coding passes
+    std::random_device seed_gen;
+    std::default_random_engine engine(seed_gen());
+    // generate a random integer in the range from 1 to 2 with the uniform distribution
+    constexpr int num_P0 = 2;  // shall be equal to P0 at line 198 of coding_units.cpp
+    std::uniform_int_distribution<> dist(0, num_P0);
+
+    const uint8_t P0                   = static_cast<uint8_t>(dist(engine));
+    const uint8_t num_placeholder_pass = 3 * P0;
+    if (P0 == 0) {
+      // No placeholder pass
+      printf("0, ");
+      block->pass_length[0] = static_cast<unsigned int>(Lcup);
+      // set number of coding passes
+      block->num_passes      = 1;
+      block->layer_passes[0] = 1;
+      block->layer_start[0]  = 0;
+      block->layer_length[0] = block->length;
+      // set number of zero-bit planes (=Zblk)
+      block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1);
+    } else {
+      printf("%d, ", P0);
+      for (int i = 0; i < num_placeholder_pass; ++i) {
+        block->pass_length[i] = 0;
+      }
+      block->pass_length[num_placeholder_pass] = static_cast<unsigned int>(Lcup);
+      block->num_passes                        = num_placeholder_pass + 1;
+      block->layer_start[0]                    = 0;
+      block->layer_passes[0]                   = num_placeholder_pass;  // 1;
+      block->layer_start[1]                    = num_placeholder_pass;  // 1;
+      block->layer_passes[1]                   = 1;                     // num_placeholder_pass;
+      block->layer_length[0]                   = 0;
+      block->layer_length[1]                   = static_cast<uint32_t>(Lcup);
+      // set number of zero-bit planes (=Zblk)
+      //  block->num_ZBP = static_cast<uint8_t>(block->get_Mb() - 1) - 1;
+      int ZBP = block->get_Mb() - 1;
+      block->num_ZBP =
+          (ZBP > 1) ? static_cast<uint8_t>(ZBP - num_placeholder_pass / 3) : static_cast<uint8_t>(ZBP);
+    }
+  }
   return static_cast<int32_t>(block->length);
 }
 /********************************************************************************
