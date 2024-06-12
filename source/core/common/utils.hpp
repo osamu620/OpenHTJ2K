@@ -31,10 +31,10 @@
 #include <cstdint>
 #include <cstdlib>
 
-#define round_up(x, n) (((x) + (n)-1) & (-n))
+#define round_up(x, n) (((x) + (n) - 1) & (-n))
 // #define round_down(x, n) ((x) & (-n))
 #define round_down(x, n) ((x) - ((x) % (n)))
-#define ceil_int(a, b) ((a) + ((b)-1)) / (b)
+#define ceil_int(a, b) ((a) + ((b) - 1)) / (b)
 
 #if defined(__INTEL_LLVM_COMPILER)
   #define __INTEL_COMPILER
@@ -83,7 +83,7 @@ static inline T find_max(T x0, T x1, T x2, T x3) {
 
 static inline size_t popcount32(uint32_t num) {
   size_t precision = 0;
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(_M_ARM64)
   precision = __popcnt(static_cast<uint32_t>(num));
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
   precision = static_cast<size_t>(_popcnt32(num));
@@ -109,19 +109,19 @@ static inline uint32_t int_log2(const uint32_t x) {
   _BitScanReverse(&tmp, x);
   y = tmp;
 #else
-  y         = static_cast<uint32_t>(31 - __builtin_clz(x));
+  y = static_cast<uint32_t>(31 - __builtin_clz(x));
 #endif
   return (x == 0) ? 0 : y;
 }
 
 static inline uint32_t count_leading_zeros(const uint32_t x) {
   uint32_t y;
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(_M_ARM64)
   y = __lzcnt(x);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && defined(_MSC_VER) && defined(_WIN32)
-  y         = _lzcnt_u32(x);
+  y = _lzcnt_u32(x);
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && defined(__MINGW32__)
-  y              = __builtin_ia32_lzcnt_u32(x);
+  y = __builtin_ia32_lzcnt_u32(x);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   y = __builtin_clz(x);
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -137,9 +137,9 @@ static inline void* aligned_mem_alloc(size_t size, size_t align) {
 #if defined(__INTEL_COMPILER)
   result = _mm_malloc(size, align);
 #elif defined(_MSC_VER)
-  result    = _aligned_malloc(size, align);
+  result = _aligned_malloc(size, align);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
-  result         = __mingw_aligned_malloc(size, align);
+  result = __mingw_aligned_malloc(size, align);
 #else
   if (posix_memalign(&result, align, size)) {
     result = nullptr;
