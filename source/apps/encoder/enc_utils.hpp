@@ -396,6 +396,7 @@ class j2k_argset {
         is_i_found  = true;
       } else if ((tmp.front() == '-' || tmp.front() == 'C' || tmp.front() == 'S' || tmp.front() == 'Q')
                  && is_i_found) {
+        if (tmp[1] == ':') continue; // for Windows
         fname_stop = i;
         is_i_found = false;
       }
