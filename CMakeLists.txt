@@ -11,6 +11,9 @@ else()
 endif()
 enable_language(CXX)
 
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 ############################################################
 # Parse version file
 # credit: https://stackoverflow.com/a/47084079 and OpenJPH project https://github.com/aous72/OpenJPH
@@ -184,9 +187,6 @@ if(NOT EMSCRIPTEN)
 endif()
 # add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
 # EXCLUDE_FROM_ALL)
-
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # INSTALL related settings
 set(CMAKE_SKIP_BUILD_RPATH FALSE)
