@@ -33,10 +33,6 @@
   #include "coding_local.hpp"
   #include "utils.hpp"
 
-  #ifdef _OPENMP
-    #include <omp.h>
-  #endif
-
   #define Q0 0
   #define Q1 1
 
@@ -63,26 +59,22 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
-  #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  __m128i vExp;
-  #else
   alignas(32) uint32_t m_quads[8];
   alignas(32) uint32_t msval[8];
-  alignas(32) int32_t sigma_quads[8];
+  alignas(32) uint32_t sigma_quads[8];
   alignas(32) uint32_t mu_quads[8];
   alignas(32) uint32_t v_quads[8];
   alignas(32) uint32_t known_1[2];
-  #endif
 
   auto mp0 = block->sample_buf;
   auto mp1 = block->sample_buf + block->blksampl_stride;
   auto sp0 = block->block_states + 1 + block->blkstate_stride;
   auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
 
-  int32_t rho0, rho1;
+  uint32_t rho0, rho1;
   uint32_t u_off0, u_off1;
-  int32_t emb_k_0, emb_k_1;
-  int32_t emb_1_0, emb_1_1;
+  uint32_t emb_k_0, emb_k_1;
+  uint32_t emb_1_0, emb_1_1;
   uint32_t u0, u1;
   uint32_t U0, U1;
   uint8_t gamma0, gamma1;
@@ -92,22 +84,23 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   dec_table0 = dec_CxtVLC_table0_fast_16;
   dec_table1 = dec_CxtVLC_table1_fast_16;
 
-  alignas(32) auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 4U);
+  alignas(32) auto rholine = MAKE_UNIQUE<uint32_t[]>(QW + 4U);
   rholine[0]               = 0;
   auto rho_p               = rholine.get() + 1;
   alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 8U);
   Eline[0]                 = 0;
   auto E_p                 = Eline.get() + 1;
 
-  int32_t context = 0;
+  uint32_t context = 0;
   uint32_t vlcval;
   int32_t mel_run = MEL.get_run();
 
+  int32_t qx;
   // Initial line-pair
-  for (int32_t q = 0; q < QW - 1; q += 2) {
+  for (qx = QW; qx > 0; qx -= 2) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
+    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + context];
     if (context == 0) {
       mel_run -= 2;
       tv0 = (mel_run == -1) ? tv0 : 0;
@@ -116,28 +109,28 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       }
     }
 
-    rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_1_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_k_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+    rho0    = (tv0 & 0x00F0) >> 4;
+    emb_k_0 = (tv0 & 0xF000) >> 12;
+    emb_1_0 = (tv0 & 0x0F00) >> 8;
 
     *rho_p++ = rho0;
     // calculate context for the next quad
-    context = static_cast<uint16_t>((rho0 >> 1) | (rho0 & 1));
+    context = ((tv0 & 0xE0U) << 2) | ((tv0 & 0x10U) << 3);
 
     // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
-    if (context == 0) {
+    vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
+    uint16_t tv1 = dec_table0[(vlcval & 0x7F) + context];
+    if (context == 0 && qx > 1) {
       mel_run -= 2;
       tv1 = (mel_run == -1) ? tv1 : 0;
       if (mel_run < 0) {
         mel_run = MEL.get_run();
       }
     }
-
-    rho1    = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
-    emb_1_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
-    emb_k_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+    tv1     = (qx > 1) ? tv1 : 0;
+    rho1    = (tv1 & 0x00F0) >> 4;
+    emb_k_1 = (tv1 & 0xF000) >> 12;
+    emb_1_1 = (tv1 & 0x0F00) >> 8;
 
     *rho_p++ = rho1;
 
@@ -149,9 +142,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     }
 
     // calculate context for the next quad
-    context = static_cast<uint16_t>((rho1 >> 1) | (rho1 & 1));
+    context = ((tv1 & 0xE0U) << 2) | ((tv1 & 0x10U) << 3);
 
-    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+    // UVLC decoding
+    vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
     u_off0 = tv0 & 1;
     u_off1 = tv1 & 1;
 
@@ -163,8 +157,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mel_run = MEL.get_run();
       }
     }
-    uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
-    int32_t uvlc_result = uvlc_dec_0[idx];
+    uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
+    uint32_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
     vlcval = VLC_dec.advance(uvlc_result & 0x7);
     uvlc_result >>= 3;
@@ -177,14 +171,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     len = uvlc_result & 0x7;  // quad 0 suffix length
     uvlc_result >>= 3;
     u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-    u1 = static_cast<uint32_t>(uvlc_result >> 3) + (tmp >> len);
+    u1 = (uvlc_result >> 3) + (tmp >> len);
 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
     for (uint32_t i = 0; i < 4; i++) {
-      m_quads[i]     = static_cast<unsigned int>(sigma_quads[i]) * U0 - ((emb_k_0 >> i) & 1);
-      m_quads[i + 4] = static_cast<unsigned int>(sigma_quads[i + 4]) * U1 - ((emb_k_1 >> i) & 1);
+      m_quads[i]     = sigma_quads[i] * U0 - ((emb_k_0 >> i) & 1);
+      m_quads[i + 4] = sigma_quads[i + 4] * U1 - ((emb_k_1 >> i) & 1);
     }
 
     // recoverMagSgnValue
@@ -198,11 +192,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1U);
       v_quads[i] |= known_1[Q0] << m_quads[i];
       if (m_quads[i] != 0) {
-        // mu_quads[i] = static_cast<uint32_t>((v_quads[i] >> 1) + 1);
         mu_quads[i] = v_quads[i] + 2;
         mu_quads[i] |= 1;
         mu_quads[i] <<= pLSB - 1;
-        mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
+        mu_quads[i] |= (v_quads[i] & 1) << 31;  // sign bit
       } else {
         mu_quads[i] = 0;
       }
@@ -215,7 +208,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu_quads[i + 4] = v_quads[i + 4] + 2;
         mu_quads[i + 4] |= 1;
         mu_quads[i + 4] <<= pLSB - 1;
-        mu_quads[i + 4] |= static_cast<uint32_t>((v_quads[i + 4] & 1) << 31);  // sign bit
+        mu_quads[i + 4] |= (v_quads[i + 4] & 1) << 31;  // sign bit
       } else {
         mu_quads[i + 4] = 0;
       }
@@ -238,88 +231,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     *sp1++ = (rho1 >> 1) & 1;
     *sp1++ = (rho1 >> 3) & 1;
 
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
-  }
-  // if QW is odd number ..
-  if (QW % 2 == 1) {
-    // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table0[(vlcval & 0x7F) + (static_cast<unsigned int>(context << 7))];
-    if (context == 0) {
-      mel_run -= 2;
-      tv0 = (mel_run == -1) ? tv0 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
-    }
-    rho0     = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-    emb_1_0  = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-    emb_k_0  = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
-    *rho_p++ = rho0;
-
-    for (uint32_t i = 0; i < 4; i++) {
-      sigma_quads[i] = (rho0 >> i) & 1;
-    }
-
-    vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-
-    u_off0 = tv0 & 1;
-
-    uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U);
-    int32_t uvlc_result = uvlc_dec_0[idx];
-    // remove total prefix length
-    vlcval = VLC_dec.advance(uvlc_result & 0x7);
-    uvlc_result >>= 3;
-    // extract suffixes for quad 0 and 1
-    uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-    uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-    vlcval       = VLC_dec.advance(len);
-    uvlc_result >>= 4;
-    // quad 0 length
-    len = uvlc_result & 0x7;  // quad 0 suffix length
-    uvlc_result >>= 3;
-    u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-
-    U0 = kappa0 + u0;
-
-    for (uint32_t i = 0; i < 4; i++) {
-      m_quads[i] = static_cast<unsigned int>(sigma_quads[i]) * U0 - ((emb_k_0 >> i) & 1);
-    }
-
-    // recoverMagSgnValue
-    for (uint32_t i = 0; i < 4; i++) {
-      msval[i] = MagSgn.fetch();
-      MagSgn.advance(m_quads[i]);
-    }
-
-    for (uint32_t i = 0; i < 4; i++) {
-      known_1[Q0] = (emb_1_0 >> i) & 1;
-      v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1U);
-      v_quads[i] |= known_1[Q0] << m_quads[i];
-      if (m_quads[i] != 0) {
-        mu_quads[i] = v_quads[i] + 2;
-        mu_quads[i] |= 1;
-        mu_quads[i] <<= pLSB - 1;
-        mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
-      } else {
-        mu_quads[i] = 0;
-      }
-    }
-    *mp0++ = static_cast<int>(mu_quads[0]);
-    *mp0++ = static_cast<int>(mu_quads[2]);
-    *mp1++ = static_cast<int>(mu_quads[1]);
-    *mp1++ = static_cast<int>(mu_quads[3]);
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
-    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
-
-    *sp0++ = (rho0 >> 0) & 1;
-    *sp0++ = (rho0 >> 2) & 1;
-    *sp1++ = (rho0 >> 1) & 1;
-    *sp1++ = (rho0 >> 3) & 1;
-
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(v_quads[1]));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(v_quads[3]));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(v_quads[5]));
+    *E_p++ = static_cast<int32_t>(32 - count_leading_zeros(v_quads[7]));
   }  // Initial line-pair end
 
   /*******************************************************************************************************************/
@@ -327,17 +242,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   /*******************************************************************************************************************/
 
   for (uint16_t row = 1; row < QH; row++) {
-    rho_p      = rholine.get() + 1;
-    E_p        = Eline.get() + 1;
-    mp0        = block->sample_buf + (row * 2U) * block->blksampl_stride;
-    mp1        = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
-    sp0        = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
-    sp1        = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
-    int32_t qx = 0;
-    rho1       = 0;
+    rho_p = rholine.get() + 1;
+    E_p   = Eline.get() + 1;
+    mp0   = block->sample_buf + (row * 2U) * block->blksampl_stride;
+    mp1   = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
+    sp0   = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
+    sp1   = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
+    rho1  = 0;
 
-    // Calculate Emax for the next two quads
     int32_t Emax0, Emax1;
+    // Calculate Emax for the next two quads
     Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
     Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
 
@@ -346,10 +260,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     context |= ((rho_p[-1] & 0x8) << 4) | ((rho_p[0] & 0x2) << 6);  // (nw | n) << 7
     context |= ((rho_p[0] & 0x8) << 6) | ((rho_p[1] & 0x2) << 8);   // (ne | nf) << 9
 
-    for (qx = 0; qx < QW - 1; qx += 2) {
+    for (qx = QW; qx > 0; qx -= 2) {
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
+      uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
       if (context == 0) {
         mel_run -= 2;
         tv0 = (mel_run == -1) ? tv0 : 0;
@@ -358,11 +272,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         }
       }
 
-      rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-      emb_1_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-      emb_k_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
+      rho0    = (tv0 & 0x00F0) >> 4;
+      emb_k_0 = (tv0 & 0xF000) >> 12;
+      emb_1_0 = (tv0 & 0x0F00) >> 8;
 
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
 
       // calculate context for the next quad
       context = ((rho0 & 0x4) << 6) | ((rho0 & 0x8) << 5);           // (w | sw) << 8
@@ -370,25 +284,25 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= ((rho_p[1] & 0x8) << 6) | ((rho_p[2] & 0x2) << 8);  // (ne | nf) << 9
 
       // Decoding of significance and EMB patterns and unsigned residual offsets
-      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
-      if (context == 0) {
+      uint16_t tv1 = dec_table1[(vlcval & 0x7F) + context];
+      if (context == 0 && qx > 1) {
         mel_run -= 2;
         tv1 = (mel_run == -1) ? tv1 : 0;
         if (mel_run < 0) {
           mel_run = MEL.get_run();
         }
       }
-
-      rho1    = static_cast<uint8_t>((tv1 & 0x00F0) >> 4);
-      emb_1_1 = static_cast<uint8_t>((tv1 & 0x0F00) >> 8);
-      emb_k_1 = static_cast<uint8_t>((tv1 & 0xF000) >> 12);
+      tv1     = (qx > 1) ? tv1 : 0;
+      rho1    = (tv1 & 0x00F0) >> 4;
+      emb_k_1 = (tv1 & 0xF000) >> 12;
+      emb_1_1 = (tv1 & 0x0F00) >> 8;
 
       // calculate context for the next quad
       context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);           // (w | sw) << 8
       context |= ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0x2) << 6);  // (nw | n) << 7
       context |= ((rho_p[2] & 0x8) << 6) | ((rho_p[3] & 0x2) << 8);  // (ne | nf) << 9
 
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv1 & 0x000F) >> 1));
+      vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
 
       for (uint32_t i = 0; i < 4; i++) {
         sigma_quads[i] = (rho0 >> i) & 1;
@@ -397,11 +311,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         sigma_quads[i + 4] = (rho1 >> i) & 1;
       }
 
+      // UVLC decoding
       u_off0       = tv0 & 1;
       u_off1       = tv1 & 1;
       uint32_t idx = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U);
 
-      int32_t uvlc_result = uvlc_dec_1[idx];
+      uint32_t uvlc_result = uvlc_dec_1[idx];
       // remove total prefix length
       vlcval = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
@@ -414,18 +329,18 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       len = uvlc_result & 0x7;  // quad 0 suffix length
       uvlc_result >>= 3;
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-      u1 = static_cast<uint32_t>(uvlc_result >> 3) + (tmp >> len);
+      u1 = (uvlc_result >> 3) + (tmp >> len);
 
-      gamma0 = (popcount32(static_cast<uint32_t>(rho0)) < 2) ? 0 : 1;
-      gamma1 = (popcount32(static_cast<uint32_t>(rho1)) < 2) ? 0 : 1;
+      gamma0 = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;  // (popcount32(rho0) < 2) ? 0 : 1;
+      gamma1 = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;  // (popcount32(rho1) < 2) ? 0 : 1;
       kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
       kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma1 * (Emax1 - 1));
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
       for (uint32_t i = 0; i < 4; i++) {
-        m_quads[i]     = static_cast<unsigned int>(sigma_quads[i]) * U0 - ((emb_k_0 >> i) & 1);
-        m_quads[i + 4] = static_cast<unsigned int>(sigma_quads[i + 4]) * U1 - ((emb_k_1 >> i) & 1);
+        m_quads[i]     = sigma_quads[i] * U0 - ((emb_k_0 >> i) & 1);
+        m_quads[i + 4] = sigma_quads[i + 4] * U1 - ((emb_k_1 >> i) & 1);
       }
 
       // recoverMagSgnValue
@@ -442,7 +357,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mu_quads[i] = v_quads[i] + 2;
           mu_quads[i] |= 1;
           mu_quads[i] <<= pLSB - 1;
-          mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
+          mu_quads[i] |= (v_quads[i] & 1) << 31;  // sign bit
         } else {
           mu_quads[i] = 0;
         }
@@ -455,7 +370,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           mu_quads[i + 4] = v_quads[i + 4] + 2;
           mu_quads[i + 4] |= 1;
           mu_quads[i + 4] <<= pLSB - 1;
-          mu_quads[i + 4] |= static_cast<uint32_t>((v_quads[i + 4] & 1) << 31);  // sign bit
+          mu_quads[i + 4] |= (v_quads[i + 4] & 1) << 31;  // sign bit
         } else {
           mu_quads[i + 4] = 0;
         }
@@ -483,91 +398,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       Emax0  = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1  = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
-      E_p[0] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
-      E_p[1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
-      E_p[2] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[5])));
-      E_p[3] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[7])));
+      E_p[0] = static_cast<int32_t>(32 - count_leading_zeros(v_quads[1]));
+      E_p[1] = static_cast<int32_t>(32 - count_leading_zeros(v_quads[3]));
+      E_p[2] = static_cast<int32_t>(32 - count_leading_zeros(v_quads[5]));
+      E_p[3] = static_cast<int32_t>(32 - count_leading_zeros(v_quads[7]));
       E_p += 4;
-    }
-    // if QW is odd number ..
-    if (QW % 2 == 1) {
-      // Decoding of significance and EMB patterns and unsigned residual offsets
-      vlcval      = VLC_dec.fetch();
-      int32_t tv0 = dec_table1[(vlcval & 0x7F) + (static_cast<unsigned int>(context))];
-      if (context == 0) {
-        mel_run -= 2;
-        tv0 = (mel_run == -1) ? tv0 : 0;
-        if (mel_run < 0) {
-          mel_run = MEL.get_run();
-        }
-      }
-      rho0    = static_cast<uint8_t>((tv0 & 0x00F0) >> 4);
-      emb_1_0 = static_cast<uint8_t>((tv0 & 0x0F00) >> 8);
-      emb_k_0 = static_cast<uint8_t>((tv0 & 0xF000) >> 12);
-
-      for (uint32_t i = 0; i < 4; i++) {
-        sigma_quads[i] = (rho0 >> i) & 1;
-      }
-
-      vlcval = VLC_dec.advance(static_cast<uint8_t>((tv0 & 0x000F) >> 1));
-      u_off0 = tv0 & 1;
-
-      uint32_t idx        = (vlcval & 0x3F) + (u_off0 << 6U);
-      int32_t uvlc_result = uvlc_dec_0[idx];
-      // remove total prefix length
-      vlcval = VLC_dec.advance(uvlc_result & 0x7);
-      uvlc_result >>= 3;
-      // extract suffixes for quad 0 and 1
-      uint32_t len = uvlc_result & 0xF;            // suffix length for 2 quads (up to 10 = 5 + 5)
-      uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-      vlcval       = VLC_dec.advance(len);
-      uvlc_result >>= 4;
-      // quad 0 length
-      len = uvlc_result & 0x7;  // quad 0 suffix length
-      uvlc_result >>= 3;
-      u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-
-      gamma0 = (popcount32(static_cast<uint32_t>(rho0)) < 2) ? 0 : 1;
-      kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
-      U0     = kappa0 + u0;
-
-      for (uint32_t i = 0; i < 4; i++) {
-        m_quads[i] = static_cast<unsigned int>(sigma_quads[i]) * U0 - ((emb_k_0 >> i) & 1);
-      }
-
-      // recoverMagSgnValue
-      for (uint32_t i = 0; i < 4; i++) {
-        msval[i] = MagSgn.fetch();
-        MagSgn.advance(m_quads[i]);
-      }
-
-      for (uint32_t i = 0; i < 4; i++) {
-        known_1[Q0] = (emb_1_0 >> i) & 1;
-        v_quads[i]  = msval[i] & ((1 << m_quads[i]) - 1U);
-        v_quads[i] |= known_1[Q0] << m_quads[i];
-        if (m_quads[i] != 0) {
-          mu_quads[i] = v_quads[i] + 2;
-          mu_quads[i] |= 1;
-          mu_quads[i] <<= pLSB - 1;
-          mu_quads[i] |= static_cast<uint32_t>((v_quads[i] & 1) << 31);  // sign bit
-        } else {
-          mu_quads[i] = 0;
-        }
-      }
-      *mp0++ = static_cast<int>(mu_quads[0]);
-      *mp0++ = static_cast<int>(mu_quads[2]);
-      *mp1++ = static_cast<int>(mu_quads[1]);
-      *mp1++ = static_cast<int>(mu_quads[3]);
-      E_p[0] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[1])));
-      E_p[1] = static_cast<int32_t>(32 - count_leading_zeros(static_cast<uint32_t>(v_quads[3])));
-
-      *sp0++ = (rho0 >> 0) & 1;
-      *sp0++ = (rho0 >> 2) & 1;
-      *sp1++ = (rho0 >> 1) & 1;
-      *sp1++ = (rho0 >> 3) & 1;
-
-      *rho_p++ = rho0;
-      E_p += 2;
     }
   }  // Non-Initial line-pair end
 }
@@ -860,10 +695,8 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     Dcup[Lcup - 1] = 0xFF;
     Dcup[Lcup - 2] |= 0x0F;
     const int32_t Pcup = static_cast<int32_t>(Lcup - Scup);
-    //    state_MS_dec MS     = state_MS_dec(Dcup, Pcup);
-    //    state_MEL_unPacker MEL_unPacker = state_MEL_unPacker(Dcup, Lcup, Pcup);
-    //    state_MEL_decoder MEL_decoder   = state_MEL_decoder(MEL_unPacker);
-    //    state_VLC_dec VLC               = state_VLC_dec(Dcup, Lcup, Pcup);
+
+    // HT block decoding
     ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
@@ -875,7 +708,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // dequantization
     block->dequantize(ROIshift);
 
-  }  // end
+  }  // block decoding end
 
   return true;
 }
