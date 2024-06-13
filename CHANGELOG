@@ -1,3 +1,7 @@
+# [0.2.7] - 2024-06-13
+
+* Refactor non-SIMD HT cleanup decoding
+
 # [0.2.6] - 2024-06-12
 
 * Fix unnecessary assignment of `pass_length` in packet header parsing
