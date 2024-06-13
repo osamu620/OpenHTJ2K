@@ -112,6 +112,7 @@ class image {
   int read_pnmpgx(const char *name) {
     constexpr char SP = ' ';
     constexpr char LF = '\n';
+    constexpr char CR = 13;
 
     FILE *fp = fopen(name, "rb");
     if (fp == nullptr) {
@@ -222,7 +223,7 @@ class image {
         }
       }
       // read numerical value
-      while (c != SP && c != LF) {
+      while (c != SP && c != LF && c != CR) {
         val *= 10;
         val += c - '0';
         c = fgetc(fp);
