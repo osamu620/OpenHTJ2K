@@ -1,4 +1,4 @@
-# [0.2.5] - 2024-06-12
+# [0.2.6] - 2024-06-12
 
 * Fix unnecessary assignment of `pass_length` in packet header parsing
 * Remove CR (=0xd) from the delimiter in `imgcmp`
