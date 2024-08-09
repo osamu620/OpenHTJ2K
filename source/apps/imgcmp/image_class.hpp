@@ -70,7 +70,7 @@ class image {
         bitDepth(0),
         isSigned(false),
         isBigendian(false),
-        data(nullptr) {};
+        data(nullptr){};
   // // destructor
   ~image() { delete[] data; }
 
@@ -110,9 +110,9 @@ class image {
 
   // parsing PNM/PGX header
   int read_pnmpgx(const char *name) {
-    constexpr char SP = ' ';
-    constexpr char LF = '\n';
-    constexpr char CR = 13;
+    constexpr char SP                  = ' ';
+    constexpr char LF                  = '\n';
+    [[maybe_unused]] constexpr char CR = 13;
 
     FILE *fp = fopen(name, "rb");
     if (fp == nullptr) {

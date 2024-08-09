@@ -85,22 +85,22 @@ class state_MS_enc {
     uint32_t t = 0;
 
     // _bzhi_u32(UINT32_MAX, len) = ((1U << len) - 1U)
-    tmp = val & ((1 << (8 - stuff)) - 1);
+    tmp = val & ((1U << (8U - stuff)) - 1U);
     t |= tmp;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+    tmp = (val >> (bits_local)) & ((1U << (8U - stuff)) - 1U);
     t |= tmp << 8;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+    tmp = (val >> (bits_local)) & ((1U << (8U - stuff)) - 1U);
     t |= tmp << 16;
     bits_local += 8 - stuff;
     stuff = (tmp == 0xFF);
 
-    tmp = (val >> (bits_local)) & ((1 << (8 - stuff)) - 1);
+    tmp = (val >> (bits_local)) & ((1U << (8U - stuff)) - 1U);
     t |= tmp << 24;
     bits_local += 8 - stuff;
     last = tmp & 0xFF;
@@ -168,7 +168,7 @@ class state_MS_enc {
     }
 #else
     for (int i = 0; i < 4; ++i) {
-      Creg |= static_cast<__uint128_t>(_mm_cvtsi128_si32(v)) << ctreg;
+      Creg |= static_cast<uint64_t>(static_cast<__uint128_t>(_mm_cvtsi128_si32(v)) << ctreg);
       ctreg += static_cast<uint32_t>(_mm_cvtsi128_si32(m));
       v = _mm_srli_si128(v, 4);
       m = _mm_srli_si128(m, 4);

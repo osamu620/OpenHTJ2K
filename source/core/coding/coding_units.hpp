@@ -58,7 +58,7 @@ class j2k_region {
   // set bottom-right coordinate (exclusive)
   void set_pos1(element_siz in) { pos1 = in; }
   j2k_region() = default;
-  j2k_region(element_siz p0, element_siz p1) : pos0(p0), pos1(p1), stride(round_up(pos1.x - pos0.x, 32)) {}
+  j2k_region(element_siz p0, element_siz p1) : pos0(p0), pos1(p1), stride(round_up(pos1.x - pos0.x, 32U)) {}
 };
 
 /********************************************************************************
@@ -179,10 +179,9 @@ class j2k_precinct_subband : public j2k_region {
   uint32_t num_codeblock_x;
   uint32_t num_codeblock_y;
   j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
-                       float stepsize, sprec_t *ibuf, const element_siz &bp0, const element_siz &bp1,
-                       const element_siz &p0, const element_siz &p1, const uint32_t stride,
-                       const uint16_t &num_layers, const element_siz &codeblock_size,
-                       const uint8_t &Cmodes);
+                       float stepsize, sprec_t *ibuf, const element_siz &bp0, const element_siz &p0,
+                       const element_siz &p1, const uint32_t stride, const uint16_t &num_layers,
+                       const element_siz &codeblock_size, const uint8_t &Cmodes);
   ~j2k_precinct_subband() {
     delete inclusion_info;
     delete ZBP_info;
@@ -257,7 +256,7 @@ class j2c_packet {
   uint32_t length;
 
   j2c_packet()
-      : layer(0), resolution(0), component(0), precinct(0), header(nullptr), body(nullptr), length(0) {};
+      : layer(0), resolution(0), component(0), precinct(0), header(nullptr), body(nullptr), length(0){};
   // constructor for decoding
   j2c_packet(const uint16_t l, const uint8_t r, const uint16_t c, const uint32_t p,
              buf_chain *const h = nullptr, buf_chain *const bo = nullptr)
@@ -316,7 +315,7 @@ class j2k_resolution : public j2k_region {
   void scale();
   void destroy() {
     aligned_mem_free(i_samples);
-    for (auto b = 0; b < num_bands; ++b) {
+    for (uint8_t b = 0; b < num_bands; ++b) {
       if (subbands != nullptr) {
         subbands[b]->destroy();
       }
@@ -424,7 +423,7 @@ class j2k_tile_component : public j2k_tile_base {
   void perform_dc_offset(uint8_t transformation, bool is_signed);
 
   void destroy() {
-    for (auto r = 0; r < this->NL; ++r) {
+    for (uint8_t r = 0; r < this->NL; ++r) {
       if (resolution != nullptr) {
         auto p = resolution[r].get();
         if (p != nullptr) resolution[r]->destroy();
@@ -495,7 +494,7 @@ class j2k_tile : public j2k_tile_base {
  public:
   j2k_tile();
   void destroy() {
-    for (auto c = 0; c < this->num_components; ++c) {
+    for (uint16_t c = 0; c < this->num_components; ++c) {
       tcomp[c].destroy();
     }
   }

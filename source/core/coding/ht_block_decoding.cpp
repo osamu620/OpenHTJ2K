@@ -265,7 +265,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     for (uint32_t x = 0; x < block->size.x; sp += 2, ++vp) {
       uint32_t inf = sp[0];
       uint32_t U_q = sp[1];
-      if (U_q > ((30 - pLSB) + 2)) {
+      if (U_q > ((30U - pLSB) + 2U)) {
         printf("ERROR\n");
       }
 
@@ -279,14 +279,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         MagSgn.advance(m_n);                                // consume m_n
 
         val = ms_val << 31;                      // get sign bit
-        v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+        v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
         v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
         v_n |= 1;                                // add center of bin
         // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[0] = val;
+      dp[0] = static_cast<int32_t>(val);
 
       v_n = 0;
       val = 0;
@@ -298,14 +298,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         MagSgn.advance(m_n);                                // consume m_n
 
         val = ms_val << 31;                      // get sign bit
-        v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+        v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
         v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
         v_n |= 1;                                // add center of bin
         // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[block->blksampl_stride] = val;
+      dp[block->blksampl_stride] = static_cast<int32_t>(val);
       vp[0]                      = prev_v_n | v_n;
       prev_v_n                   = 0;
       ++dp;
@@ -323,14 +323,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         MagSgn.advance(m_n);                                // consume m_n
 
         val = ms_val << 31;                      // get sign bit
-        v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+        v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
         v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
         v_n |= 1;                                // add center of bin
         // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[0] = val;
+      dp[0] = static_cast<int32_t>(val);
 
       v_n = 0;
       val = 0;
@@ -342,14 +342,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         MagSgn.advance(m_n);                                // consume m_n
 
         val = ms_val << 31;                      // get sign bit
-        v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+        v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
         v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
         v_n |= 1;                                // add center of bin
         // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[block->blksampl_stride] = val;
+      dp[block->blksampl_stride] = static_cast<int32_t>(val);
       prev_v_n                   = v_n;
       ++dp;
       ++x;
@@ -357,7 +357,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     vp[0] = prev_v_n;
 
     for (uint32_t y = 2; y < block->size.y; y += 2) {
-      uint16_t *sp = scratch + (y >> 1) * sstr;
+      uint16_t *sp = scratch + (y >> 1) * static_cast<uint32_t>(sstr);
       uint32_t *vp = v_n_scratch;
       int32_t *dp  = block->sample_buf + y * block->blksampl_stride;
 
@@ -373,7 +373,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         uint32_t kappa = gamma ? emax : 1;
 
         uint32_t U_q = u_q + kappa;
-        if (U_q > ((30 - pLSB) + 2)) {
+        if (U_q > ((30U - pLSB) + 2U)) {
           printf("ERROR\n");
         }
 
@@ -387,14 +387,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           MagSgn.advance(m_n);                                // consume m_n
 
           val = ms_val << 31;                      // get sign bit
-          v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+          v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
           v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
           v_n |= 1;                                // add center of bin
           // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[0] = val;
+        dp[0] = static_cast<int32_t>(val);
 
         v_n = 0;
         val = 0;
@@ -406,14 +406,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           MagSgn.advance(m_n);                                // consume m_n
 
           val = ms_val << 31;                      // get sign bit
-          v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+          v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
           v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
           v_n |= 1;                                // add center of bin
           // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[block->blksampl_stride] = val;
+        dp[block->blksampl_stride] = static_cast<int32_t>(val);
         vp[0]                      = prev_v_n | v_n;
         prev_v_n                   = 0;
         ++dp;
@@ -431,14 +431,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           MagSgn.advance(m_n);                                // consume m_n
 
           val = ms_val << 31;                      // get sign bit
-          v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+          v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
           v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
           v_n |= 1;                                // add center of bin
           // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[0] = val;
+        dp[0] = static_cast<int32_t>(val);
 
         v_n = 0;
         val = 0;
@@ -450,14 +450,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           MagSgn.advance(m_n);                                // consume m_n
 
           val = ms_val << 31;                      // get sign bit
-          v_n = ms_val & ((1 << m_n) - 1);         // keep only m_n bits
+          v_n = ms_val & ((1U << m_n) - 1U);       // keep only m_n bits
           v_n |= ((inf >> (8 + bit)) & 1) << m_n;  // add EMB e_1 as MSB
           v_n |= 1;                                // add center of bin
           // v_n now has 2 * (\mu - 1) + 0.5 with correct sign bit
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[block->blksampl_stride] = val;
+        dp[block->blksampl_stride] = static_cast<int32_t>(val);
         prev_v_n                   = v_n;
         ++dp;
         ++x;

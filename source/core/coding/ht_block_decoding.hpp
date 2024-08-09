@@ -866,7 +866,7 @@ class fwd_buf {
    */
   FORCE_INLINE void advance(uint32_t num_bits) {
     // if (!num_bits) return;
-    if (!(num_bits >= 0 && num_bits <= this->bits && num_bits < 128)) {
+    if (!(num_bits <= this->bits && num_bits < 128)) {
       printf("Value of numbits = %d is out of range.\n", num_bits);
       throw std::exception();
     }
