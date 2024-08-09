@@ -258,8 +258,7 @@ auto idwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, int16_t *const
 };
 
 void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                  const int32_t v1) {
-  const int32_t stride            = u1 - u0;
+                                  const int32_t v1, const int32_t stride) {
   constexpr int32_t num_pse_i0[2] = {3, 4};
   constexpr int32_t num_pse_i1[2] = {4, 3};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -337,8 +336,7 @@ void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
 
 // reversible IDWT
 void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                const int32_t v1) {
-  const int32_t stride            = u1 - u0;
+                                const int32_t v1, const int32_t stride) {
   constexpr int32_t num_pse_i0[2] = {1, 2};
   constexpr int32_t num_pse_i1[2] = {2, 1};
   const int32_t top               = num_pse_i0[v0 % 2];
