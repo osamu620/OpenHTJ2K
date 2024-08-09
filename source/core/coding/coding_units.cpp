@@ -269,8 +269,8 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
                                            uint8_t transformation, float stepsize, sprec_t *ibuf,
                                            const element_siz &bp0, const element_siz &bp1,
                                            const element_siz &p0, const element_siz &p1,
-                                           const uint16_t &num_layers, const element_siz &codeblock_size,
-                                           const uint8_t &Cmodes)
+                                           const uint32_t band_stride, const uint16_t &num_layers,
+                                           const element_siz &codeblock_size, const uint8_t &Cmodes)
     : j2k_region(p0, p1),
       orientation(orientation),
       inclusion_info(nullptr),
@@ -290,7 +290,7 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
   }
 
   const uint32_t num_codeblocks = this->num_codeblock_x * this->num_codeblock_y;
-  const uint32_t band_stride    = bp1.x - bp0.x;
+  //  const uint32_t band_stride    = stride;
   if (num_codeblocks != 0) {
     inclusion_info = new tagtree(this->num_codeblock_x, this->num_codeblock_y);
     ZBP_info       = new tagtree(this->num_codeblock_x, this->num_codeblock_y);
@@ -1029,7 +1029,7 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
     this->pband[i] = MAKE_UNIQUE<j2k_precinct_subband>(
         subband[i]->orientation, subband[i]->M_b, subband[i]->R_b, subband[i]->transformation,
         subband[i]->delta, subband[i]->i_samples, subband[i]->pos0, subband[i]->pos1, pbpos0, pbpos1,
-        num_layers, codeblock_size, Cmodes);
+        subband[i]->stride, num_layers, codeblock_size, Cmodes);
   }
 }
 
@@ -1059,8 +1059,9 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
   if (num_samples) {
     if (orientation != BAND_LL) {
       // If not the lowest resolution, buffers for subbands shall be created.
-      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
-      memset(i_samples, 0, sizeof(sprec_t) * num_samples);
+      i_samples =
+          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
+      memset(i_samples, 0, sizeof(sprec_t) * this->stride * (pos1.y - pos0.y));
     } else {
       i_samples = ibuf;
     }
@@ -1096,10 +1097,12 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
   i_samples = nullptr;
   if (!is_empty) {
     if (index == 0) {
-      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
+      i_samples =
+          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
       memset(i_samples, 0, sizeof(sprec_t) * num_samples);
     } else {
-      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * num_samples, 32));
+      i_samples =
+          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
     }
   }
 }
@@ -2504,7 +2507,7 @@ void j2k_tile::decode() {
 
     // copy samples in resolution buffer to that in tile component buffer
     uint32_t height = tc1.y - tc0.y;
-    uint32_t width  = tc1.x - tc0.x;
+    uint32_t width  = round_up(tc1.x - tc0.x, 32);
     uint32_t stride = round_up(width, 32U);
     // size_t num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -3027,7 +3030,7 @@ uint8_t *j2k_tile::encode() {
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
     for (uint32_t y = 0; y < height; ++y) {
       int32_t *sp             = src + y * stride;
-      sprec_t *dp             = cr->i_samples + y * (bottom_right.x - top_left.x);
+      sprec_t *dp             = cr->i_samples + y * round_up(bottom_right.x - top_left.x, 32);
       uint32_t num_tc_samples = bottom_right.x - top_left.x;
       for (; num_tc_samples >= 8; num_tc_samples -= 8) {
         auto vsrc0 = vld1q_s32(sp);
@@ -3043,7 +3046,7 @@ uint8_t *j2k_tile::encode() {
 #else
       for (uint32_t y = 0; y < height; ++y) {
         int32_t *sp             = src + y * stride;
-        sprec_t *dp             = cr->i_samples + y * (bottom_right.x - top_left.x);
+        sprec_t *dp             = cr->i_samples + y * round_up(bottom_right.x - top_left.x, 32);
         uint32_t num_tc_samples = bottom_right.x - top_left.x;
         for (; num_tc_samples > 0; --num_tc_samples) {
           *dp++ = static_cast<sprec_t>(*sp++);
