@@ -41,6 +41,9 @@ class j2k_region {
   element_siz pos0;
   // bottom-right coordinate (exclusive) of a region in the reference grid
   element_siz pos1;
+  // width for line buffer
+  uint32_t stride;
+
   // return top-left coordinate (inclusive)
   [[nodiscard]] element_siz get_pos0() const { return pos0; }
   // return bottom-right coordinate (exclusive)
@@ -55,7 +58,7 @@ class j2k_region {
   // set bottom-right coordinate (exclusive)
   void set_pos1(element_siz in) { pos1 = in; }
   j2k_region() = default;
-  j2k_region(element_siz p0, element_siz p1) : pos0(p0), pos1(p1) {}
+  j2k_region(element_siz p0, element_siz p1) : pos0(p0), pos1(p1), stride(round_up(pos1.x - pos0.x, 32)) {}
 };
 
 /********************************************************************************
@@ -177,8 +180,9 @@ class j2k_precinct_subband : public j2k_region {
   uint32_t num_codeblock_y;
   j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
                        float stepsize, sprec_t *ibuf, const element_siz &bp0, const element_siz &bp1,
-                       const element_siz &p0, const element_siz &p1, const uint16_t &num_layers,
-                       const element_siz &codeblock_size, const uint8_t &Cmodes);
+                       const element_siz &p0, const element_siz &p1, const uint32_t stride,
+                       const uint16_t &num_layers, const element_siz &codeblock_size,
+                       const uint8_t &Cmodes);
   ~j2k_precinct_subband() {
     delete inclusion_info;
     delete ZBP_info;
@@ -253,7 +257,7 @@ class j2c_packet {
   uint32_t length;
 
   j2c_packet()
-      : layer(0), resolution(0), component(0), precinct(0), header(nullptr), body(nullptr), length(0){};
+      : layer(0), resolution(0), component(0), precinct(0), header(nullptr), body(nullptr), length(0) {};
   // constructor for decoding
   j2c_packet(const uint16_t l, const uint8_t r, const uint16_t c, const uint32_t p,
              buf_chain *const h = nullptr, buf_chain *const bo = nullptr)
