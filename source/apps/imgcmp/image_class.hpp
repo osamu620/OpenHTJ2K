@@ -223,7 +223,7 @@ class image {
         }
       }
       // read numerical value
-      while (c != SP && c != LF && c != CR) {
+      while (c >= '0' && c <= '9') {
         val *= 10;
         val += c - '0';
         c = fgetc(fp);
@@ -255,8 +255,10 @@ class image {
       }
     }
     // easting trailing spaces/LF/CR or comments
-    c = fgetc(fp);
+    c         = fgetc(fp);
+    int count = 0;
     while (c == SP || c == LF) {
+      count++;
       c = fgetc(fp);
       if (c == '#') {
         char *nouse = fgets(comment, sizeof(comment), fp);
@@ -267,7 +269,7 @@ class image {
         c = fgetc(fp);
       }
     }
-    fseek(fp, -1, SEEK_CUR);
+    fseek(fp, -count - 1, SEEK_CUR);
 
     const uint_fast8_t nbytes = static_cast<uint_fast8_t>((bitDepth + 7) / 8);  // ceil bitDepth to byte
     const size_t num_samples  = this->width * this->height * num_components;
