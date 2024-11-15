@@ -1,3 +1,9 @@
+# [0.2.8] - 2024-11-12
+
+* Fix incorrect packet parsing for RPCL, PCRL, CPRL
+* Introduce stride access into DWT
+* Change cmake configuration for MinGW environments
+
 # [0.2.7] - 2024-06-13
 
 * Refactor non-SIMD HT cleanup decoding
