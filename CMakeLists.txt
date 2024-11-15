@@ -153,9 +153,7 @@ endif()
 
 if(NOT EMSCRIPTEN)
   if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
-    if(NOT MINGW)
-      option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
-    endif()
+    option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
     if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
       set(CMAKE_CXX_FLAGS
           "${CMAKE_CXX_FLAGS} /arch:AVX2 /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
