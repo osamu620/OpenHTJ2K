@@ -26,6 +26,6 @@ target_link_libraries(libopen_htj2k PRIVATE open_htj2k)
 
 add_executable(libopen_htj2k_simd "src/wrapper.cpp")
 target_compile_definitions(libopen_htj2k_simd PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
-set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-msimd128 -mfpu=neon")
+set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-msimd128 -mrelaxed-simd -mfpu=neon")
 set_target_properties(libopen_htj2k_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k_simd PRIVATE open_htj2k)
