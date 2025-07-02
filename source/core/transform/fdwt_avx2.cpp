@@ -117,7 +117,7 @@ auto fdwt_irrev97_fixed_avx2_hor_step3 = [](const int32_t init_pos, const int32_
         auto xin20 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin_tmp, 0));
         auto vsum  = _mm256_add_epi32(xin00, xin20);
         xin01      = _mm256_add_epi32(
-                 _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), shift), xin01);
+            _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(vsum, vcoeff), voffset), shift), xin01);
         auto xout_even_odd    = _mm256_shuffle_epi32(_mm256_packs_epi32(xin00, xin01), 0xD8);
         auto xout_interleaved = _mm256_shufflelo_epi16(_mm256_shufflehi_epi16(xout_even_odd, 0xD8), 0xD8);
         _mm256_storeu_si256((__m256i *)(X + n + n0), xout_interleaved);
