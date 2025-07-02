@@ -96,6 +96,12 @@ set_target_properties(
 find_package(Threads)
 find_package(TIFF)
 
+if (EMSCRIPTEN)
+  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
+  set(CMAKE_CXX_FLAGS
+      "${CMAKE_CXX_FLAGS} -msimd128 -mrelaxed-simd -mfpu=neon"
+  )
+endif()
 if (NOT EMSCRIPTEN)
   # Check Thread support
   if (Threads_FOUND)
