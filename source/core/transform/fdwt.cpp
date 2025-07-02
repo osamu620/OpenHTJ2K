@@ -127,7 +127,7 @@ static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
     // need to perform symmetric extension
     const int32_t len = u1 - u0 + left + right;
     auto *Xext        = static_cast<sprec_t *>(aligned_mem_alloc(
-               sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
+        sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
     // #pragma omp parallel for
     for (int32_t row = 0; row < v1 - v0; ++row) {
       fdwt_1d_sr_fixed(Xext, in, left, right, u0, u1, transformation);
@@ -368,31 +368,31 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   if ((ustop[0] - ustart[0]) != (ustop[1] - ustart[1])) {
-     for (uint8_t b = 0; b < 2; ++b) {
-       for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-         sprec_t *line = dp[b] + v * stride2[b];
-         for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-           *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
+    for (uint8_t b = 0; b < 2; ++b) {
+      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+        sprec_t *line = dp[b] + v * stride2[b];
+        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+          *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
         }
       }
     }
   } else {
-     sprec_t *first, *second;
-     first  = dp[0];
-     second = dp[1];
-     if (uoffset[0] > uoffset[1]) {
-       first  = dp[1];
-       second = dp[0];
+    sprec_t *first, *second;
+    first  = dp[0];
+    second = dp[1];
+    if (uoffset[0] > uoffset[1]) {
+      first  = dp[1];
+      second = dp[0];
     }
-     const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
-                                             11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
-     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
-       sprec_t *sp    = buf + (2 * v + voffset[0]) * stride;
-       size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
-       sprec_t *line0 = first + v * stride2[0];
-       sprec_t *line1 = second + v * stride2[0];
-       for (; len >= 8; len -= 8) {
-         // SSE version
+    const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
+                                            11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
+    for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
+      sprec_t *sp    = buf + (2 * v + voffset[0]) * stride;
+      size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
+      sprec_t *line0 = first + v * stride2[0];
+      sprec_t *line1 = second + v * stride2[0];
+      for (; len >= 8; len -= 8) {
+        // SSE version
         // auto vline0 = _mm_loadu_si128((__m128i *)sp);
         // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
         // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
@@ -413,38 +413,38 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
         sp += 16;
       }
       for (; len > 0; --len) {
-         *line0++ = *sp++;
-         *line1++ = *sp++;
+        *line0++ = *sp++;
+        *line1++ = *sp++;
       }
     }
   }
 
   if ((ustop[2] - ustart[2]) != (ustop[3] - ustart[3])) {
-     for (uint8_t b = 2; b < 4; ++b) {
-       for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-         sprec_t *line = dp[b] + v * stride2[b];
-         for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-           *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
+    for (uint8_t b = 2; b < 4; ++b) {
+      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+        sprec_t *line = dp[b] + v * stride2[b];
+        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+          *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
         }
       }
     }
   } else {
-     sprec_t *first, *second;
-     first  = dp[2];
-     second = dp[3];
-     if (uoffset[2] > uoffset[3]) {
-       first  = dp[3];
-       second = dp[2];
+    sprec_t *first, *second;
+    first  = dp[2];
+    second = dp[3];
+    if (uoffset[2] > uoffset[3]) {
+      first  = dp[3];
+      second = dp[2];
     }
-     const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
-                                             11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
-     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
-       sprec_t *sp    = buf + (2 * v + voffset[2]) * stride;
-       size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
-       sprec_t *line0 = first + v * stride2[2];
-       sprec_t *line1 = second + v * stride2[2];
-       for (; len >= 8; len -= 8) {
-         // SSE version
+    const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
+                                            11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
+    for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
+      sprec_t *sp    = buf + (2 * v + voffset[2]) * stride;
+      size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
+      sprec_t *line0 = first + v * stride2[2];
+      sprec_t *line1 = second + v * stride2[2];
+      for (; len >= 8; len -= 8) {
+        // SSE version
         // auto vline0 = _mm_loadu_si128((__m128i *)sp);
         // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
         // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
@@ -465,17 +465,17 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
         sp += 16;
       }
       for (; len > 0; --len) {
-         *line0++ = *sp++;
-         *line1++ = *sp++;
+        *line0++ = *sp++;
+        *line1++ = *sp++;
       }
     }
   }
 #else
   for (uint8_t b = 0; b < 4; ++b) {
-     for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-       sprec_t *line = dp[b] + v * stride2[b];
-       for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-         *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
+    for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+      sprec_t *line = dp[b] + v * stride2[b];
+      for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
+        *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
       }
     }
   }
