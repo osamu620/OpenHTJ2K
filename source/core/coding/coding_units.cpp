@@ -1230,7 +1230,7 @@ void j2k_resolution::scale() {
   if (this->subbands[0]->transformation) {
     return;
   }
-  uint32_t length = (this->pos1.x - this->pos0.x) * (this->pos1.y - this->pos0.y);
+  uint32_t length = (this->stride) * (this->pos1.y - this->pos0.y);
   // TODO: The following code works correctly, but needs to be improved for speed
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   int16x8_t rshift = vdupq_n_s16(static_cast<int16_t>(-this->normalizing_downshift));
