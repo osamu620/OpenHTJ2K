@@ -1,3 +1,8 @@
+# [0.2.9] - 2025-07-07
+
+* Fix wrong stride for DWT coefficients in j2k_resolution::scale()
+* Add "HEAP32" in EXPORTED_RUNTIME_METHODS for wasm-build
+
 # [0.2.8] - 2024-11-12
 
 * Fix incorrect packet parsing for RPCL, PCRL, CPRL
