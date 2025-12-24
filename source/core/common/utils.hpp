@@ -124,8 +124,12 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
   y = __builtin_ia32_lzcnt_u32(x);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   y = __builtin_clz(x);
-#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) && !defined(_M_ARM64)
   y = static_cast<uint32_t>(__builtin_clz(x));
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) && defined(_M_ARM64)
+  unsigned long tmp;
+  _BitScanReverse(&tmp, x);
+  y = 31 - tmp;
 #else
   y = 31 - int_log2(x);
 #endif
