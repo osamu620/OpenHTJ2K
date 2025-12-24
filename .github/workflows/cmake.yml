@@ -33,8 +33,8 @@ jobs:
             c_compiler: cl
             cpp_compiler: cl
           - os: windows-11-arm
-            c_compiler: cl
-            cpp_compiler: cl
+            c_compiler: clang
+            cpp_compiler: clang++
           - os: ubuntu-latest
             c_compiler: gcc
             cpp_compiler: g++
@@ -61,7 +61,7 @@ jobs:
           - os: windows-11-arm
             c_compiler: gcc
           - os: windows-11-arm
-            c_compiler: clang
+            c_compiler: cl
           - os: ubuntu-latest
             c_compiler: cl
           - os: macos-latest
