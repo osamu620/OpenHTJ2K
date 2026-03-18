@@ -143,74 +143,92 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
   constexpr int32_t num_pse_i1[2] = {3, 4};
   const int32_t top               = num_pse_i0[v0 % 2];
   const int32_t bottom            = num_pse_i1[v1 % 2];
+  const int32_t height            = v1 - v0;
+  const int32_t width             = u1 - u0;
+  const int32_t total_rows        = top + height + bottom;
 
   if (v0 == v1 - 1) {
     // one sample case
-    for (int32_t col = 0; col < u1 - u0; ++col) {
+    for (int32_t col = 0; col < width; ++col) {
       if (v0 % 2) {
         in[col] <<= 0;
       }
     }
-  } else {
-    const int32_t len = round_up(stride, SIMD_LEN_I32);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
-    for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
-      // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
-    }
-    for (int32_t row = 0; row < v1 - v0; ++row) {
-      buf[top + row] = &in[row * stride];
-    }
-    for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
-    }
-    const int32_t start  = ceil_int(v0, 2);
-    const int32_t stop   = ceil_int(v1, 2);
-    const int32_t offset = top + v0 % 2;
+    return;
+  }
 
+  // Allocate a flat contiguous buffer reused across column strips.
+  // Layout: total_rows rows × DWT_VERT_STRIP columns (row-major).
+  // This keeps the working set cache-resident during vertical lifting.
+  const int32_t flat_stride = DWT_VERT_STRIP;
+  auto *flat = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(flat_stride) * static_cast<size_t>(total_rows),
+                        32));
+
+  const int32_t start  = ceil_int(v0, 2);
+  const int32_t stop   = ceil_int(v1, 2);
+  const int32_t offset = top + v0 % 2;
+
+  for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+    const int32_t cw = (cs + DWT_VERT_STRIP <= width) ? DWT_VERT_STRIP : width - cs;
+
+    // Fill PSE top rows
+    for (int32_t i = 1; i <= top; ++i) {
+      const int32_t src = PSEo(v0 - i, v0, v1);
+      memcpy(flat + (top - i) * flat_stride, in + src * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
+    }
+    // Fill actual rows
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(flat + (top + row) * flat_stride, in + row * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
+    }
+    // Fill PSE bottom rows
+    for (int32_t i = 1; i <= bottom; ++i) {
+      const int32_t src = PSEo(v1 - v0 + i - 1 + v0, v0, v1);
+      memcpy(flat + (top + height + i - 1) * flat_stride, in + src * stride + cs,
+             sizeof(sprec_t) * static_cast<size_t>(cw));
+    }
+
+    // Vertical lifting on the flat buffer (fully sequential memory access)
     for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + ((Acoeff * sum + Aoffset) >> Ashift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[n * flat_stride + col];
+        sum += flat[(n + 2) * flat_stride + col];
+        flat[(n + 1) * flat_stride + col] =
+            static_cast<sprec_t>(flat[(n + 1) * flat_stride + col] + ((Acoeff * sum + Aoffset) >> Ashift));
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((Bcoeff * sum + Boffset) >> Bshift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[(n - 1) * flat_stride + col];
+        sum += flat[(n + 1) * flat_stride + col];
+        flat[n * flat_stride + col] =
+            static_cast<sprec_t>(flat[n * flat_stride + col] + ((Bcoeff * sum + Boffset) >> Bshift));
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + ((Ccoeff * sum + Coffset) >> Cshift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[n * flat_stride + col];
+        sum += flat[(n + 2) * flat_stride + col];
+        flat[(n + 1) * flat_stride + col] =
+            static_cast<sprec_t>(flat[(n + 1) * flat_stride + col] + ((Ccoeff * sum + Coffset) >> Cshift));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((Dcoeff * sum + Doffset) >> Dshift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[(n - 1) * flat_stride + col];
+        sum += flat[(n + 1) * flat_stride + col];
+        flat[n * flat_stride + col] =
+            static_cast<sprec_t>(flat[n * flat_stride + col] + ((Dcoeff * sum + Doffset) >> Dshift));
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
+    // Copy results back to in[]
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(in + row * stride + cs, flat + (top + row) * flat_stride, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
-    delete[] buf;
   }
+
+  aligned_mem_free(flat);
 }
 
 void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
@@ -219,60 +237,68 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
   constexpr int32_t num_pse_i1[2] = {1, 2};
   const int32_t top               = num_pse_i0[v0 % 2];
   const int32_t bottom            = num_pse_i1[v1 % 2];
+  const int32_t height            = v1 - v0;
+  const int32_t width             = u1 - u0;
+  const int32_t total_rows        = top + height + bottom;
 
   if (v0 == v1 - 1) {
     // one sample case
-    for (int32_t col = 0; col < u1 - u0; ++col) {
+    for (int32_t col = 0; col < width; ++col) {
       if (v0 % 2) {
         in[col] = static_cast<sprec_t>(in[col] << 1);
       }
     }
-  } else {
-    const int32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    return;
+  }
+
+  const int32_t flat_stride = DWT_VERT_STRIP;
+  auto *flat = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(flat_stride) * static_cast<size_t>(total_rows),
+                        32));
+
+  const int32_t start  = ceil_int(v0, 2);
+  const int32_t stop   = ceil_int(v1, 2);
+  const int32_t offset = top + v0 % 2;
+
+  for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+    const int32_t cw = (cs + DWT_VERT_STRIP <= width) ? DWT_VERT_STRIP : width - cs;
+
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
-      // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
+      const int32_t src = PSEo(v0 - i, v0, v1);
+      memcpy(flat + (top - i) * flat_stride, in + src * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t row = 0; row < v1 - v0; ++row) {
-      buf[top + row] = &in[row * stride];
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(flat + (top + row) * flat_stride, in + row * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
+    for (int32_t i = 1; i <= bottom; ++i) {
+      const int32_t src = PSEo(v1 - v0 + i - 1 + v0, v0, v1);
+      memcpy(flat + (top + height + i - 1) * flat_stride, in + src * stride + cs,
+             sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    const int32_t start  = ceil_int(v0, 2);
-    const int32_t stop   = ceil_int(v1, 2);
-    const int32_t offset = top + v0 % 2;
 
     for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] - (sum >> 1));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[n * flat_stride + col];
+        sum += flat[(n + 2) * flat_stride + col];
+        flat[(n + 1) * flat_stride + col] =
+            static_cast<sprec_t>(flat[(n + 1) * flat_stride + col] - (sum >> 1));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((sum + 2) >> 2));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[(n - 1) * flat_stride + col];
+        sum += flat[(n + 1) * flat_stride + col];
+        flat[n * flat_stride + col] =
+            static_cast<sprec_t>(flat[n * flat_stride + col] + ((sum + 2) >> 2));
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(in + row * stride + cs, flat + (top + row) * flat_stride, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
-    delete[] buf;
   }
+
+  aligned_mem_free(flat);
 }
 
 // Deinterleaving to devide coefficients into subbands
@@ -491,4 +517,44 @@ void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH
   fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride);
   fdwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
   fdwt_2d_deinterleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
+}
+
+// ---------------------------------------------------------------------------
+// fdwt_2d_state  –  stateful line-based 2-D forward DWT (push model)
+// ---------------------------------------------------------------------------
+
+fdwt_2d_state::fdwt_2d_state(int32_t u0, int32_t u1, int32_t v0, int32_t v1, uint8_t transformation)
+    : u0_(u0),
+      u1_(u1),
+      v0_(v0),
+      v1_(v1),
+      transformation_(transformation),
+      width_(u1 - u0),
+      height_(v1 - v0),
+      stride_(round_up(u1 - u0, 32)),
+      buf_(nullptr),
+      n_pushed_(0) {
+  buf_ = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(stride_) * static_cast<size_t>(height_), 32));
+  memset(buf_, 0, sizeof(sprec_t) * static_cast<size_t>(stride_) * static_cast<size_t>(height_));
+}
+
+fdwt_2d_state::~fdwt_2d_state() { aligned_mem_free(buf_); }
+
+void fdwt_2d_state::push_row(const sprec_t *row) {
+  if (n_pushed_ >= height_) {
+    return;
+  }
+  memcpy(buf_ + n_pushed_ * stride_, row, sizeof(sprec_t) * static_cast<size_t>(width_));
+  ++n_pushed_;
+}
+
+void fdwt_2d_state::produce_subbands(sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH) {
+  if (n_pushed_ != height_) {
+    return;  // Not all rows have been pushed yet
+  }
+  // Apply 2-D DWT to the accumulated rows using the column-strip implementation.
+  fdwt_ver_sr_fixed[transformation_](buf_, u0_, u1_, v0_, v1_, stride_);
+  fdwt_hor_sr_fixed(buf_, u0_, u1_, v0_, v1_, transformation_, stride_);
+  fdwt_2d_deinterleave_fixed(buf_, LL, HL, LH, HH, u0_, u1_, v0_, v1_, stride_);
 }

@@ -35,6 +35,8 @@
   #define OPENHTJ2K_ENABLE_AVX2
 #endif
 #define SIMD_PADDING 32
+// Number of columns per vertical-DWT strip for cache-friendly processing
+#define DWT_VERT_STRIP 64
 
 constexpr int16_t Acoeff_simd      = -19206;  // need to -1
 constexpr int16_t Bcoeff_simd      = -3472;   // need to >> 1
@@ -113,6 +115,36 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int3
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
                       int32_t u1, int32_t v0, int32_t v1, uint8_t transformation);
 
+/**
+ * @brief Stateful line-based 2-D forward DWT (push model).
+ *
+ * Feed image rows one at a time via push_row().  After all rows have been
+ * pushed call produce_subbands() to retrieve the four output sub-bands.
+ * Internally the vertical lifting steps are executed on narrow column strips
+ * (DWT_VERT_STRIP wide) so the working set always fits in L2 cache.
+ */
+class fdwt_2d_state {
+ public:
+  fdwt_2d_state(int32_t u0, int32_t u1, int32_t v0, int32_t v1, uint8_t transformation);
+  ~fdwt_2d_state();
+
+  // Push one input row (length u1-u0).  Must be called exactly (v1-v0) times.
+  void push_row(const sprec_t *row);
+
+  // After all rows have been pushed, compute the 2-D DWT and write results
+  // into the four sub-band buffers.
+  void produce_subbands(sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH);
+
+ private:
+  int32_t u0_, u1_, v0_, v1_;
+  uint8_t transformation_;
+  int32_t width_;   // u1 - u0
+  int32_t height_;  // v1 - v0
+  int32_t stride_;  // round_up(width, 32)
+  sprec_t *buf_;    // internal buffer: height_ × stride_ (actual rows only)
+  int32_t n_pushed_;
+};
+
 // IDWT
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
 void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
@@ -137,3 +169,38 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int3
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
                       int32_t u1, int32_t v0, int32_t v1, uint8_t transformation,
                       uint8_t normalizing_upshift);
+
+/**
+ * @brief Stateful pull-based 2-D inverse DWT (pull model).
+ *
+ * Provide the decoded sub-bands via set_subbands(), then call pull_row() for
+ * each output row index in order.  The inverse DWT is computed lazily on the
+ * first pull_row() call using narrow column strips (DWT_VERT_STRIP wide) so
+ * the working set fits in L2 cache.
+ */
+class idwt_2d_state {
+ public:
+  idwt_2d_state(int32_t u0, int32_t u1, int32_t v0, int32_t v1, uint8_t transformation,
+                uint8_t normalizing_upshift);
+  ~idwt_2d_state();
+
+  // Provide pointers to the four decoded sub-band buffers.
+  void set_subbands(sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH);
+
+  // Return a pointer to the reconstructed output row row_idx (0-based).
+  // The IDWT is computed lazily on the first call and cached.
+  // Returns nullptr if row_idx is out of bounds [0, v1-v0).
+  // The pointer is valid until the destructor is called.
+  const sprec_t *pull_row(int32_t row_idx);
+
+ private:
+  int32_t u0_, u1_, v0_, v1_;
+  uint8_t transformation_;
+  uint8_t normalizing_upshift_;
+  int32_t width_;   // u1 - u0
+  int32_t height_;  // v1 - v0
+  int32_t stride_;  // round_up(width, 32)
+  sprec_t *buf_;    // output buffer: height_ × stride_
+  bool computed_;
+  sprec_t *LL_, *HL_, *LH_, *HH_;
+};

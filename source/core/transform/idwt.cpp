@@ -135,70 +135,82 @@ void idwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
   constexpr int32_t num_pse_i1[2] = {4, 3};
   const int32_t top               = num_pse_i0[v0 % 2];
   const int32_t bottom            = num_pse_i1[v1 % 2];
+  const int32_t height            = v1 - v0;
+  const int32_t width             = u1 - u0;
+  const int32_t total_rows        = top + height + bottom;
+
   if (v0 == v1 - 1) {
     // one sample case
-    for (int32_t col = 0; col < u1 - u0; ++col) {
+    for (int32_t col = 0; col < width; ++col) {
       in[col] >>= (v0 % 2 == 0) ? 0 : 0;
     }
-  } else {
-    const int32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    return;
+  }
+
+  const int32_t flat_stride = DWT_VERT_STRIP;
+  auto *flat = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(flat_stride) * static_cast<size_t>(total_rows),
+                        32));
+
+  const int32_t start  = v0 / 2;
+  const int32_t stop   = v1 / 2;
+  const int32_t offset = top - v0 % 2;
+
+  for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+    const int32_t cw = (cs + DWT_VERT_STRIP <= width) ? DWT_VERT_STRIP : width - cs;
+
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
+      const int32_t src = PSEo(v0 - i, v0, v1);
+      memcpy(flat + (top - i) * flat_stride, in + src * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t row = 0; row < v1 - v0; ++row) {
-      buf[top + row] = &in[row * stride];
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(flat + (top + row) * flat_stride, in + row * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
+    for (int32_t i = 1; i <= bottom; ++i) {
+      const int32_t src = PSEo(v1 - v0 + i - 1 + v0, v0, v1);
+      memcpy(flat + (top + height + i - 1) * flat_stride, in + src * stride + cs,
+             sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    const int32_t start  = v0 / 2;
-    const int32_t stop   = v1 / 2;
-    const int32_t offset = top - v0 % 2;
 
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] - ((Dcoeff * sum + Doffset) >> Dshift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[(n - 1) * flat_stride + col];
+        sum += flat[(n + 1) * flat_stride + col];
+        flat[n * flat_stride + col] =
+            static_cast<sprec_t>(flat[n * flat_stride + col] - ((Dcoeff * sum + Doffset) >> Dshift));
       }
     }
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] - ((Ccoeff * sum + Coffset) >> Cshift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[n * flat_stride + col];
+        sum += flat[(n + 2) * flat_stride + col];
+        flat[(n + 1) * flat_stride + col] =
+            static_cast<sprec_t>(flat[(n + 1) * flat_stride + col] - ((Ccoeff * sum + Coffset) >> Cshift));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] - ((Bcoeff * sum + Boffset) >> Bshift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[(n - 1) * flat_stride + col];
+        sum += flat[(n + 1) * flat_stride + col];
+        flat[n * flat_stride + col] =
+            static_cast<sprec_t>(flat[n * flat_stride + col] - ((Bcoeff * sum + Boffset) >> Bshift));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] - ((Acoeff * sum + Aoffset) >> Ashift));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[n * flat_stride + col];
+        sum += flat[(n + 2) * flat_stride + col];
+        flat[(n + 1) * flat_stride + col] =
+            static_cast<sprec_t>(flat[(n + 1) * flat_stride + col] - ((Acoeff * sum + Aoffset) >> Ashift));
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(in + row * stride + cs, flat + (top + row) * flat_stride, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
-    delete[] buf;
   }
+
+  aligned_mem_free(flat);
 }
 
 void idwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
@@ -207,56 +219,66 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
   constexpr int32_t num_pse_i1[2] = {2, 1};
   const int32_t top               = num_pse_i0[v0 % 2];
   const int32_t bottom            = num_pse_i1[v1 % 2];
+  const int32_t height            = v1 - v0;
+  const int32_t width             = u1 - u0;
+  const int32_t total_rows        = top + height + bottom;
+
   if (v0 == v1 - 1 && (v0 % 2)) {
     // one sample case
-    for (int32_t col = 0; col < u1 - u0; ++col) {
+    for (int32_t col = 0; col < width; ++col) {
       in[col] = static_cast<sprec_t>(in[col] >> 1);
     }
-  } else {
-    const int32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    return;
+  }
+
+  const int32_t flat_stride = DWT_VERT_STRIP;
+  auto *flat = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(flat_stride) * static_cast<size_t>(total_rows),
+                        32));
+
+  const int32_t start  = v0 / 2;
+  const int32_t stop   = v1 / 2;
+  const int32_t offset = top - v0 % 2;
+
+  for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+    const int32_t cw = (cs + DWT_VERT_STRIP <= width) ? DWT_VERT_STRIP : width - cs;
+
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
+      const int32_t src = PSEo(v0 - i, v0, v1);
+      memcpy(flat + (top - i) * flat_stride, in + src * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t row = 0; row < v1 - v0; ++row) {
-      buf[top + row] = &in[row * stride];
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(flat + (top + row) * flat_stride, in + row * stride + cs, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
-      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
-             sizeof(sprec_t) * static_cast<size_t>(stride));
+    for (int32_t i = 1; i <= bottom; ++i) {
+      const int32_t src = PSEo(v1 - v0 + i - 1 + v0, v0, v1);
+      memcpy(flat + (top + height + i - 1) * flat_stride, in + src * stride + cs,
+             sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    const int32_t start  = v0 / 2;
-    const int32_t stop   = v1 / 2;
-    const int32_t offset = top - v0 % 2;
 
     for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] - ((sum + 2) >> 2));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[(n - 1) * flat_stride + col];
+        sum += flat[(n + 1) * flat_stride + col];
+        flat[n * flat_stride + col] =
+            static_cast<sprec_t>(flat[n * flat_stride + col] - ((sum + 2) >> 2));
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + (sum >> 1));
+      for (int32_t col = 0; col < cw; ++col) {
+        int32_t sum     = flat[n * flat_stride + col];
+        sum += flat[(n + 2) * flat_stride + col];
+        flat[(n + 1) * flat_stride + col] =
+            static_cast<sprec_t>(flat[(n + 1) * flat_stride + col] + (sum >> 1));
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
+    for (int32_t row = 0; row < height; ++row) {
+      memcpy(in + row * stride + cs, flat + (top + row) * flat_stride, sizeof(sprec_t) * static_cast<size_t>(cw));
     }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
-    delete[] buf;
   }
+
+  aligned_mem_free(flat);
 }
 
 static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
@@ -535,4 +557,53 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
     }
 #endif
   }
+}
+
+// ---------------------------------------------------------------------------
+// idwt_2d_state  –  stateful pull-based 2-D inverse DWT (pull model)
+// ---------------------------------------------------------------------------
+
+idwt_2d_state::idwt_2d_state(int32_t u0, int32_t u1, int32_t v0, int32_t v1, uint8_t transformation,
+                               uint8_t normalizing_upshift)
+    : u0_(u0),
+      u1_(u1),
+      v0_(v0),
+      v1_(v1),
+      transformation_(transformation),
+      normalizing_upshift_(normalizing_upshift),
+      width_(u1 - u0),
+      height_(v1 - v0),
+      stride_(round_up(u1 - u0, 32)),
+      buf_(nullptr),
+      computed_(false),
+      LL_(nullptr),
+      HL_(nullptr),
+      LH_(nullptr),
+      HH_(nullptr) {
+  buf_ = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(stride_) * static_cast<size_t>(height_), 32));
+  memset(buf_, 0, sizeof(sprec_t) * static_cast<size_t>(stride_) * static_cast<size_t>(height_));
+}
+
+idwt_2d_state::~idwt_2d_state() { aligned_mem_free(buf_); }
+
+void idwt_2d_state::set_subbands(sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH) {
+  LL_       = LL;
+  HL_       = HL;
+  LH_       = LH;
+  HH_       = HH;
+  computed_ = false;
+}
+
+const sprec_t *idwt_2d_state::pull_row(int32_t row_idx) {
+  if (row_idx < 0 || row_idx >= height_) {
+    return nullptr;
+  }
+  if (!computed_) {
+    // Compute the full 2-D inverse DWT into buf_ using the column-strip implementation.
+    idwt_2d_sr_fixed(buf_, LL_, HL_, LH_, HH_, u0_, u1_, v0_, v1_, transformation_,
+                     normalizing_upshift_);
+    computed_ = true;
+  }
+  return buf_ + row_idx * stride_;
 }
