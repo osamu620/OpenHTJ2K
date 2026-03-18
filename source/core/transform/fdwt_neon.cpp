@@ -418,4 +418,89 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     delete[] buf;
   }
 }
+
+// ---- Flat-buffer vertical DWT (ARM NEON) ----
+
+void fdwt_irrev_ver_flat_fixed_neon(sprec_t *flat_buf, const int32_t top, const int32_t u0,
+                                    const int32_t u1, const int32_t v0, const int32_t v1,
+                                    const int32_t stride) {
+  const int32_t width   = u1 - u0;
+  const int32_t simdlen = width - width % 8;
+  const int32_t start   = ceil_int(v0, 2);
+  const int32_t stop    = ceil_int(v1, 2);
+  const int32_t offset  = top + v0 % 2;
+
+  for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
+    fdwt_irrev97_fixed_neon_ver_step0(simdlen, flat_buf + n * stride, flat_buf + (n + 2) * stride,
+                                      flat_buf + (n + 1) * stride);
+    for (int32_t col = simdlen; col < width; ++col) {
+      int32_t sum         = flat_buf[n * stride + col] + flat_buf[(n + 2) * stride + col];
+      flat_buf[(n + 1) * stride + col] =
+          static_cast<sprec_t>(flat_buf[(n + 1) * stride + col] + ((Acoeff * sum + Aoffset) >> Ashift));
+    }
+  }
+  for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+    fdwt_irrev97_fixed_neon_ver_step1(simdlen, flat_buf + (n - 1) * stride, flat_buf + (n + 1) * stride,
+                                      flat_buf + n * stride);
+    for (int32_t col = simdlen; col < width; ++col) {
+      int32_t sum      = flat_buf[(n - 1) * stride + col] + flat_buf[(n + 1) * stride + col];
+      flat_buf[n * stride + col] =
+          static_cast<sprec_t>(flat_buf[n * stride + col] + ((Bcoeff * sum + Boffset) >> Bshift));
+    }
+  }
+  for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
+    fdwt_irrev97_fixed_neon_ver_step2(simdlen, flat_buf + n * stride, flat_buf + (n + 2) * stride,
+                                      flat_buf + (n + 1) * stride);
+    for (int32_t col = simdlen; col < width; ++col) {
+      int32_t sum         = flat_buf[n * stride + col] + flat_buf[(n + 2) * stride + col];
+      flat_buf[(n + 1) * stride + col] =
+          static_cast<sprec_t>(flat_buf[(n + 1) * stride + col] + ((Ccoeff * sum + Coffset) >> Cshift));
+    }
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+    fdwt_irrev97_fixed_neon_ver_step3(simdlen, flat_buf + (n - 1) * stride, flat_buf + (n + 1) * stride,
+                                      flat_buf + n * stride);
+    for (int32_t col = simdlen; col < width; ++col) {
+      int32_t sum      = flat_buf[(n - 1) * stride + col] + flat_buf[(n + 1) * stride + col];
+      flat_buf[n * stride + col] =
+          static_cast<sprec_t>(flat_buf[n * stride + col] + ((Dcoeff * sum + Doffset) >> Dshift));
+    }
+  }
+}
+
+void fdwt_rev_ver_flat_fixed_neon(sprec_t *flat_buf, const int32_t top, const int32_t u0, const int32_t u1,
+                                  const int32_t v0, const int32_t v1, const int32_t stride) {
+  const int32_t width   = u1 - u0;
+  const int32_t simdlen = width - width % 8;
+  const int32_t start   = ceil_int(v0, 2);
+  const int32_t stop    = ceil_int(v1, 2);
+  const int32_t offset  = top + v0 % 2;
+
+  for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
+    for (int32_t col = 0; col < simdlen; col += 8) {
+      auto X0 = vld1q_s16(flat_buf + n * stride + col);
+      auto X2 = vld1q_s16(flat_buf + (n + 2) * stride + col);
+      auto X1 = vld1q_s16(flat_buf + (n + 1) * stride + col);
+      X1      = vsubq_s16(X1, vhaddq_s16(X0, X2));
+      vst1q_s16(flat_buf + (n + 1) * stride + col, X1);
+    }
+    for (int32_t col = simdlen; col < width; ++col) {
+      int32_t sum                      = flat_buf[n * stride + col] + flat_buf[(n + 2) * stride + col];
+      flat_buf[(n + 1) * stride + col] = static_cast<sprec_t>(flat_buf[(n + 1) * stride + col] - (sum >> 1));
+    }
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+    for (int32_t col = 0; col < simdlen; col += 8) {
+      auto X0 = vld1q_s16(flat_buf + (n - 1) * stride + col);
+      auto X2 = vld1q_s16(flat_buf + (n + 1) * stride + col);
+      auto X1 = vld1q_s16(flat_buf + n * stride + col);
+      X1      = vaddq_s16(X1, vrshrq_n_s16(vhaddq_s16(X0, X2), 1));
+      vst1q_s16(flat_buf + n * stride + col, X1);
+    }
+    for (int32_t col = simdlen; col < width; ++col) {
+      int32_t sum            = flat_buf[(n - 1) * stride + col] + flat_buf[(n + 1) * stride + col];
+      flat_buf[n * stride + col] = static_cast<sprec_t>(flat_buf[n * stride + col] + ((sum + 2) >> 2));
+    }
+  }
+}
 #endif

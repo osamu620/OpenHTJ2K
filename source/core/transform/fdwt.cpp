@@ -34,15 +34,20 @@ static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_
                                                           fdwt_1d_filtr_rev53_fixed_neon};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_neon,
                                                           fdwt_rev_ver_sr_fixed_neon};
+static fdwt_ver_flat_func_t fdwt_ver_flat[2]           = {fdwt_irrev_ver_flat_fixed_neon,
+                                                          fdwt_rev_ver_flat_fixed_neon};
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_avx2,
                                                           fdwt_rev_ver_sr_fixed_avx2};
+static fdwt_ver_flat_func_t fdwt_ver_flat[2]           = {fdwt_irrev_ver_flat_fixed_avx2,
+                                                          fdwt_rev_ver_flat_fixed_avx2};
 #else
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed,
                                                           fdwt_1d_filtr_rev53_fixed};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed, fdwt_rev_ver_sr_fixed};
+static fdwt_ver_flat_func_t fdwt_ver_flat[2]           = {fdwt_irrev_ver_flat_fixed, fdwt_rev_ver_flat_fixed};
 #endif
 // irreversible FDWT
 void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -482,13 +487,193 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
 #endif
 }
 
-// 2D FDWT function
+// 2D FDWT function - implemented via the push API for a cache-friendly, line-based interface
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
                       const int32_t u0, const int32_t u1, const int32_t v0, const int32_t v1,
                       const uint8_t transformation) {
-  const int32_t stride = round_up(u1 - u0, 32);
-  sprec_t *src         = previousLL;
-  fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride);
-  fdwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
-  fdwt_2d_deinterleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
+  fdwt_2d_push_t state;
+  fdwt_2d_push_init(&state, LL, HL, LH, HH, u0, u1, v0, v1, transformation);
+  const int32_t stride = round_up(u1 - u0, SIMD_PADDING);
+  for (int32_t row = 0; row < v1 - v0; ++row) {
+    fdwt_push_row(&state, previousLL + row * stride);
+  }
+  fdwt_2d_push_flush(&state);
+  fdwt_2d_push_free(&state);
+}
+
+// ---- Flat-buffer vertical DWT (generic C) ----
+
+// Apply irreversible (9/7) vertical forward lifting to a pre-filled flat buffer.
+// flat_buf layout: rows [0..top-1] = PSE top, [top..top+height-1] = tile data,
+// [top+height..top+height+bottom-1] = PSE bottom.
+void fdwt_irrev_ver_flat_fixed(sprec_t *flat_buf, const int32_t top, const int32_t u0, const int32_t u1,
+                                const int32_t v0, const int32_t v1, const int32_t stride) {
+  const int32_t start  = ceil_int(v0, 2);
+  const int32_t stop   = ceil_int(v1, 2);
+  const int32_t offset = top + v0 % 2;
+  const int32_t width  = u1 - u0;
+
+  for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
+    sprec_t *rn  = flat_buf + n * stride;
+    sprec_t *rn1 = flat_buf + (n + 1) * stride;
+    sprec_t *rn2 = flat_buf + (n + 2) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn[col] + rn2[col];
+      rn1[col]    = static_cast<sprec_t>(rn1[col] + ((Acoeff * sum + Aoffset) >> Ashift));
+    }
+  }
+  for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+    sprec_t *rn_1 = flat_buf + (n - 1) * stride;
+    sprec_t *rn   = flat_buf + n * stride;
+    sprec_t *rn1  = flat_buf + (n + 1) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn_1[col] + rn1[col];
+      rn[col]     = static_cast<sprec_t>(rn[col] + ((Bcoeff * sum + Boffset) >> Bshift));
+    }
+  }
+  for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
+    sprec_t *rn  = flat_buf + n * stride;
+    sprec_t *rn1 = flat_buf + (n + 1) * stride;
+    sprec_t *rn2 = flat_buf + (n + 2) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn[col] + rn2[col];
+      rn1[col]    = static_cast<sprec_t>(rn1[col] + ((Ccoeff * sum + Coffset) >> Cshift));
+    }
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+    sprec_t *rn_1 = flat_buf + (n - 1) * stride;
+    sprec_t *rn   = flat_buf + n * stride;
+    sprec_t *rn1  = flat_buf + (n + 1) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn_1[col] + rn1[col];
+      rn[col]     = static_cast<sprec_t>(rn[col] + ((Dcoeff * sum + Doffset) >> Dshift));
+    }
+  }
+}
+
+// Apply reversible (5/3) vertical forward lifting to a pre-filled flat buffer.
+void fdwt_rev_ver_flat_fixed(sprec_t *flat_buf, const int32_t top, const int32_t u0, const int32_t u1,
+                              const int32_t v0, const int32_t v1, const int32_t stride) {
+  const int32_t start  = ceil_int(v0, 2);
+  const int32_t stop   = ceil_int(v1, 2);
+  const int32_t offset = top + v0 % 2;
+  const int32_t width  = u1 - u0;
+
+  for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
+    sprec_t *rn  = flat_buf + n * stride;
+    sprec_t *rn1 = flat_buf + (n + 1) * stride;
+    sprec_t *rn2 = flat_buf + (n + 2) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn[col] + rn2[col];
+      rn1[col]    = static_cast<sprec_t>(rn1[col] - (sum >> 1));
+    }
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+    sprec_t *rn_1 = flat_buf + (n - 1) * stride;
+    sprec_t *rn   = flat_buf + n * stride;
+    sprec_t *rn1  = flat_buf + (n + 1) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn_1[col] + rn1[col];
+      rn[col]     = static_cast<sprec_t>(rn[col] + ((sum + 2) >> 2));
+    }
+  }
+}
+
+// ---- Push API implementation ----
+
+// Helper: fill PSE extension rows in flat_buf from the tile rows already stored
+// at flat_buf[top..top+height-1].
+static void fdwt_fill_pse(sprec_t *flat_buf, const int32_t top, const int32_t bottom,
+                           const int32_t v0, const int32_t v1, const int32_t stride) {
+  const int32_t height = v1 - v0;
+  for (int32_t i = 1; i <= top; ++i) {
+    const int32_t src = top + static_cast<int32_t>(PSEo(v0 - i, v0, v1));
+    memcpy(flat_buf + (top - i) * stride, flat_buf + src * stride, sizeof(sprec_t) * static_cast<size_t>(stride));
+  }
+  for (int32_t i = 1; i <= bottom; i++) {
+    const int32_t src = top + static_cast<int32_t>(PSEo(v1 - v0 + i - 1 + v0, v0, v1));
+    memcpy(flat_buf + (top + height + i - 1) * stride, flat_buf + src * stride,
+           sizeof(sprec_t) * static_cast<size_t>(stride));
+  }
+}
+
+void fdwt_2d_push_init(fdwt_2d_push_t *state, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
+                       const int32_t u0, const int32_t u1, const int32_t v0, const int32_t v1,
+                       const uint8_t transformation) {
+  state->u0             = u0;
+  state->u1             = u1;
+  state->v0             = v0;
+  state->v1             = v1;
+  state->transformation = transformation;
+  state->stride         = round_up(u1 - u0, SIMD_PADDING);
+  state->LL             = LL;
+  state->HL             = HL;
+  state->LH             = LH;
+  state->HH             = HH;
+  state->rows_pushed    = 0;
+
+  // PSE extension sizes match those used in the existing vertical DWT functions.
+  if (transformation == 1) {
+    constexpr int32_t pse_i0[2] = {2, 1};
+    constexpr int32_t pse_i1[2] = {1, 2};
+    state->top    = pse_i0[v0 % 2];
+    state->bottom = pse_i1[v1 % 2];
+  } else {
+    constexpr int32_t pse_i0[2] = {4, 3};
+    constexpr int32_t pse_i1[2] = {3, 4};
+    state->top    = pse_i0[v0 % 2];
+    state->bottom = pse_i1[v1 % 2];
+  }
+
+  const int32_t buf_rows =
+      state->top + (v1 - v0) + state->bottom;
+  state->line_buf = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(buf_rows * state->stride), 32));
+  memset(state->line_buf, 0, sizeof(sprec_t) * static_cast<size_t>(buf_rows * state->stride));
+}
+
+void fdwt_push_row(fdwt_2d_push_t *state, const sprec_t *row_data) {
+  const int32_t dest = state->top + state->rows_pushed;
+  memcpy(state->line_buf + dest * state->stride, row_data,
+         sizeof(sprec_t) * static_cast<size_t>(state->u1 - state->u0));
+  state->rows_pushed++;
+}
+
+void fdwt_2d_push_flush(fdwt_2d_push_t *state) {
+  const int32_t top    = state->top;
+  const int32_t stride = state->stride;
+  sprec_t *buf         = state->line_buf;
+
+  // Handle the single-row edge case identically to the original code.
+  if (state->v0 == state->v1 - 1) {
+    if (state->v0 % 2 != 0 && state->transformation == 1) {
+      for (int32_t col = 0; col < state->u1 - state->u0; ++col) {
+        buf[top * stride + col] = static_cast<sprec_t>(buf[top * stride + col] << 1);
+      }
+    }
+    fdwt_hor_sr_fixed(buf + top * stride, state->u0, state->u1, state->v0, state->v1,
+                      state->transformation, stride);
+    fdwt_2d_deinterleave_fixed(buf + top * stride, state->LL, state->HL, state->LH, state->HH,
+                               state->u0, state->u1, state->v0, state->v1, stride);
+    return;
+  }
+
+  // Fill PSE extension rows from the pushed tile data.
+  fdwt_fill_pse(buf, top, state->bottom, state->v0, state->v1, stride);
+
+  // Vertical DWT on the flat buffer (SIMD variant selected at build time).
+  fdwt_ver_flat[state->transformation](buf, top, state->u0, state->u1, state->v0, state->v1, stride);
+
+  // Horizontal DWT on the tile rows only (rows [top..top+height-1]).
+  fdwt_hor_sr_fixed(buf + top * stride, state->u0, state->u1, state->v0, state->v1,
+                    state->transformation, stride);
+
+  // Deinterleave tile rows into LL/HL/LH/HH subbands.
+  fdwt_2d_deinterleave_fixed(buf + top * stride, state->LL, state->HL, state->LH, state->HH,
+                             state->u0, state->u1, state->v0, state->v1, stride);
+}
+
+void fdwt_2d_push_free(fdwt_2d_push_t *state) {
+  aligned_mem_free(state->line_buf);
+  state->line_buf = nullptr;
 }

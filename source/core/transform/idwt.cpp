@@ -34,15 +34,20 @@ static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_
                                                           idwt_1d_filtr_rev53_fixed_neon};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
                                                           idwt_rev_ver_sr_fixed_neon};
+static idwt_ver_flat_func_t idwt_ver_flat[2]           = {idwt_irrev_ver_flat_fixed_neon,
+                                                          idwt_rev_ver_flat_fixed_neon};
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
                                                           idwt_1d_filtr_rev53_fixed_avx2};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_avx2,
                                                           idwt_rev_ver_sr_fixed_avx2};
+static idwt_ver_flat_func_t idwt_ver_flat[2]           = {idwt_irrev_ver_flat_fixed_avx2,
+                                                          idwt_rev_ver_flat_fixed_avx2};
 #else
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
                                                           idwt_1d_filtr_rev53_fixed};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
+static idwt_ver_flat_func_t idwt_ver_flat[2]           = {idwt_irrev_ver_flat_fixed, idwt_rev_ver_flat_fixed};
 #endif
 
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -488,51 +493,219 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, const int32_t u0,
                       const int32_t u1, const int32_t v0, const int32_t v1, const uint8_t transformation,
                       uint8_t normalizing_upshift) {
-  const int32_t stride     = round_up(u1 - u0, 32);
-  const int32_t buf_length = stride * (v1 - v0);
-  sprec_t *src             = nextLL;
-  idwt_2d_interleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
-  idwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
-  idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride);
+  idwt_2d_pull_t state;
+  idwt_2d_pull_init(&state, LL, HL, LH, HH, u0, u1, v0, v1, transformation, normalizing_upshift);
+  const int32_t stride = round_up(u1 - u0, SIMD_PADDING);
+  idwt_2d_pull_produce(&state, nextLL, stride);
+  idwt_2d_pull_free(&state);
+}
 
-  // scaling for 16bit width fixed-point representation
-  if (transformation != 1 && normalizing_upshift) {
-    int32_t len = buf_length;
+// ---- Flat-buffer vertical IDWT (generic C) ----
+
+// Apply irreversible (9/7) vertical inverse lifting to a pre-filled flat buffer.
+void idwt_irrev_ver_flat_fixed(sprec_t *flat_buf, const int32_t top, const int32_t u0, const int32_t u1,
+                                const int32_t v0, const int32_t v1, const int32_t stride) {
+  const int32_t start  = v0 / 2;
+  const int32_t stop   = v1 / 2;
+  const int32_t offset = top - v0 % 2;
+  const int32_t width  = u1 - u0;
+
+  for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
+    sprec_t *rn_1 = flat_buf + (n - 1) * stride;
+    sprec_t *rn   = flat_buf + n * stride;
+    sprec_t *rn1  = flat_buf + (n + 1) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn_1[col] + rn1[col];
+      rn[col]     = static_cast<sprec_t>(rn[col] - ((Dcoeff * sum + Doffset) >> Dshift));
+    }
+  }
+  for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+    sprec_t *rn  = flat_buf + n * stride;
+    sprec_t *rn1 = flat_buf + (n + 1) * stride;
+    sprec_t *rn2 = flat_buf + (n + 2) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn[col] + rn2[col];
+      rn1[col]    = static_cast<sprec_t>(rn1[col] - ((Ccoeff * sum + Coffset) >> Cshift));
+    }
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
+    sprec_t *rn_1 = flat_buf + (n - 1) * stride;
+    sprec_t *rn   = flat_buf + n * stride;
+    sprec_t *rn1  = flat_buf + (n + 1) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn_1[col] + rn1[col];
+      rn[col]     = static_cast<sprec_t>(rn[col] - ((Bcoeff * sum + Boffset) >> Bshift));
+    }
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+    sprec_t *rn  = flat_buf + n * stride;
+    sprec_t *rn1 = flat_buf + (n + 1) * stride;
+    sprec_t *rn2 = flat_buf + (n + 2) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      int32_t sum = rn[col] + rn2[col];
+      rn1[col]    = static_cast<sprec_t>(rn1[col] - ((Acoeff * sum + Aoffset) >> Ashift));
+    }
+  }
+}
+
+// Apply reversible (5/3) vertical inverse lifting to a pre-filled flat buffer.
+void idwt_rev_ver_flat_fixed(sprec_t *flat_buf, const int32_t top, const int32_t u0, const int32_t u1,
+                              const int32_t v0, const int32_t v1, const int32_t stride) {
+  const int32_t start  = v0 / 2;
+  const int32_t stop   = v1 / 2;
+  const int32_t offset = top - v0 % 2;
+  const int32_t width  = u1 - u0;
+
+  for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
+    sprec_t *rn_1 = flat_buf + (n - 1) * stride;
+    sprec_t *rn   = flat_buf + n * stride;
+    sprec_t *rn1  = flat_buf + (n + 1) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      rn[col] = static_cast<sprec_t>(rn[col] - ((rn_1[col] + rn1[col] + 2) >> 2));
+    }
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+    sprec_t *rn  = flat_buf + n * stride;
+    sprec_t *rn1 = flat_buf + (n + 1) * stride;
+    sprec_t *rn2 = flat_buf + (n + 2) * stride;
+    for (int32_t col = 0; col < width; ++col) {
+      rn1[col] = static_cast<sprec_t>(rn1[col] + ((rn[col] + rn2[col]) >> 1));
+    }
+  }
+}
+
+// ---- Pull API implementation ----
+
+// Helper: fill IDWT PSE extension rows from the tile rows in flat_buf[top..top+height-1].
+static void idwt_fill_pse(sprec_t *flat_buf, const int32_t top, const int32_t bottom, const int32_t v0,
+                           const int32_t v1, const int32_t stride) {
+  const int32_t height = v1 - v0;
+  for (int32_t i = 1; i <= top; ++i) {
+    const int32_t src = top + static_cast<int32_t>(PSEo(v0 - i, v0, v1));
+    memcpy(flat_buf + (top - i) * stride, flat_buf + src * stride, sizeof(sprec_t) * static_cast<size_t>(stride));
+  }
+  for (int32_t i = 1; i <= bottom; i++) {
+    const int32_t src = top + static_cast<int32_t>(PSEo(v1 - v0 + i - 1 + v0, v0, v1));
+    memcpy(flat_buf + (top + height + i - 1) * stride, flat_buf + src * stride,
+           sizeof(sprec_t) * static_cast<size_t>(stride));
+  }
+}
+
+void idwt_2d_pull_init(idwt_2d_pull_t *state, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
+                       const int32_t u0, const int32_t u1, const int32_t v0, const int32_t v1,
+                       const uint8_t transformation, const uint8_t normalizing_upshift) {
+  state->u0                  = u0;
+  state->u1                  = u1;
+  state->v0                  = v0;
+  state->v1                  = v1;
+  state->transformation      = transformation;
+  state->normalizing_upshift = normalizing_upshift;
+  state->stride              = round_up(u1 - u0, SIMD_PADDING);
+  state->LL                  = LL;
+  state->HL                  = HL;
+  state->LH                  = LH;
+  state->HH                  = HH;
+
+  // IDWT PSE sizes (note: different from FDWT PSE sizes).
+  if (transformation == 1) {
+    constexpr int32_t pse_i0[2] = {1, 2};
+    constexpr int32_t pse_i1[2] = {2, 1};
+    state->top    = pse_i0[v0 % 2];
+    state->bottom = pse_i1[v1 % 2];
+  } else {
+    constexpr int32_t pse_i0[2] = {3, 4};
+    constexpr int32_t pse_i1[2] = {4, 3};
+    state->top    = pse_i0[v0 % 2];
+    state->bottom = pse_i1[v1 % 2];
+  }
+
+  const int32_t buf_rows = state->top + (v1 - v0) + state->bottom;
+  state->line_buf        = static_cast<sprec_t *>(
+      aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(buf_rows * state->stride), 32));
+  memset(state->line_buf, 0, sizeof(sprec_t) * static_cast<size_t>(buf_rows * state->stride));
+}
+
+void idwt_2d_pull_produce(idwt_2d_pull_t *state, sprec_t *out_buf, const int32_t out_stride) {
+  const int32_t top    = state->top;
+  const int32_t stride = state->stride;
+  sprec_t *buf         = state->line_buf;
+  // Tile rows section starts at buf + top * stride.
+  sprec_t *tile_start  = buf + top * stride;
+
+  // Handle the single-row edge case identically to the original code.
+  if (state->v0 == state->v1 - 1) {
+    if (state->v0 % 2 != 0 && state->transformation == 1) {
+      for (int32_t col = 0; col < state->u1 - state->u0; ++col) {
+        tile_start[col] = static_cast<sprec_t>(tile_start[col] >> 1);
+      }
+    }
+    // Interleave the single output row.
+    idwt_2d_interleave_fixed(tile_start, state->LL, state->HL, state->LH, state->HH, state->u0, state->u1,
+                             state->v0, state->v1, stride);
+    idwt_hor_sr_fixed(tile_start, state->u0, state->u1, state->v0, state->v1, state->transformation, stride);
+    // No vertical DWT needed for a single-row tile.
+    memcpy(out_buf, tile_start, sizeof(sprec_t) * static_cast<size_t>(state->u1 - state->u0));
+    return;
+  }
+
+  // 1. Interleave subbands into the tile portion of the flat buffer.
+  idwt_2d_interleave_fixed(tile_start, state->LL, state->HL, state->LH, state->HH, state->u0, state->u1,
+                           state->v0, state->v1, stride);
+
+  // 2. Horizontal IDWT on each tile row.
+  idwt_hor_sr_fixed(tile_start, state->u0, state->u1, state->v0, state->v1, state->transformation, stride);
+
+  // 3. Fill PSE extension rows for the vertical IDWT (derived from the
+  //    horizontal-IDWT-processed tile rows).
+  idwt_fill_pse(buf, top, state->bottom, state->v0, state->v1, stride);
+
+  // 4. Vertical IDWT on the full flat buffer.
+  idwt_ver_flat[state->transformation](buf, top, state->u0, state->u1, state->v0, state->v1, stride);
+
+  // 5. Normalizing upshift (irreversible path only).
+  if (state->transformation != 1 && state->normalizing_upshift) {
+    const int32_t height  = state->v1 - state->v0;
+    const int32_t n_elems = stride * height;
+    int32_t len           = n_elems;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    int16x8_t vshift = vdupq_n_s16(normalizing_upshift);
-    int16x8_t in0, in1;
-
+    int16x8_t vshift = vdupq_n_s16(state->normalizing_upshift);
     for (; len >= 16; len -= 16) {
-      in0 = vld1q_s16(src);
-      in1 = vld1q_s16(src + 8);
-      in0 = vshlq_s16(in0, vshift);
-      in1 = vshlq_s16(in1, vshift);
-      vst1q_s16(src, in0);
-      vst1q_s16(src + 8, in1);
-      src += 16;
+      int16x8_t in0 = vld1q_s16(tile_start + (n_elems - len));
+      int16x8_t in1 = vld1q_s16(tile_start + (n_elems - len) + 8);
+      vst1q_s16(tile_start + (n_elems - len), vshlq_s16(in0, vshift));
+      vst1q_s16(tile_start + (n_elems - len) + 8, vshlq_s16(in1, vshift));
     }
     for (; len > 0; --len) {
-      *src = static_cast<sprec_t>(*src << normalizing_upshift);
-      src++;
+      sprec_t *p = tile_start + (n_elems - len);
+      *p         = static_cast<sprec_t>(*p << state->normalizing_upshift);
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     for (; len >= 16; len -= 16) {
-      __m256i tmp0 = _mm256_load_si256((__m256i *)src);
-      __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
-      _mm256_store_si256((__m256i *)src, tmp1);
-      src += 16;
+      __m256i tmp0 = _mm256_load_si256((__m256i *)(tile_start + (n_elems - len)));
+      _mm256_store_si256((__m256i *)(tile_start + (n_elems - len)),
+                         _mm256_slli_epi16(tmp0, static_cast<int32_t>(state->normalizing_upshift)));
     }
     for (; len > 0; --len) {
-      // cast to unsigned to avoid undefined behavior
-      *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
-      src++;
+      sprec_t *p = tile_start + (n_elems - len);
+      *p         = static_cast<sprec_t>(static_cast<usprec_t>(*p) << state->normalizing_upshift);
     }
 #else
     for (; len > 0; --len) {
-      // cast to unsigned to avoid undefined behavior
-      *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
-      src++;
+      sprec_t *p = tile_start + (n_elems - len);
+      *p         = static_cast<sprec_t>(static_cast<usprec_t>(*p) << state->normalizing_upshift);
     }
 #endif
   }
+
+  // 6. Copy tile rows to output buffer.
+  const int32_t height = state->v1 - state->v0;
+  const int32_t width  = state->u1 - state->u0;
+  for (int32_t row = 0; row < height; ++row) {
+    memcpy(out_buf + row * out_stride, tile_start + row * stride, sizeof(sprec_t) * static_cast<size_t>(width));
+  }
+}
+
+void idwt_2d_pull_free(idwt_2d_pull_t *state) {
+  aligned_mem_free(state->line_buf);
+  state->line_buf = nullptr;
 }

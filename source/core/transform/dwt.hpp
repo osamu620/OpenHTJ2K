@@ -113,6 +113,43 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int3
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
                       int32_t u1, int32_t v0, int32_t v1, uint8_t transformation);
 
+// ---- Forward DWT push-based state ----
+
+/// State for the push-based 2-D forward DWT.
+/// Accepts one input row at a time via fdwt_push_row(), then finalises with
+/// fdwt_2d_push_flush().  The internal flat contiguous buffer is cache-friendly
+/// and eliminates the scatter-gather overhead of the legacy row-pointer approach.
+struct fdwt_2d_push_t {
+  int32_t u0, u1, v0, v1;   ///< Tile/resolution coordinate bounds
+  uint8_t transformation;    ///< 0 = irreversible 9/7,  1 = reversible 5/3
+  int32_t stride;            ///< Row stride (samples) = round_up(u1-u0, SIMD_PADDING)
+  int32_t top, bottom;       ///< PSE extension row counts (filter-dependent)
+  /// Flat contiguous buffer of (top + height + bottom) * stride sprec_t elements.
+  /// Layout: [0..top-1] rows: PSE top (filled by fdwt_2d_push_flush),
+  ///         [top..top+height-1] rows: input tile data (filled by fdwt_push_row),
+  ///         [top+height..top+height+bottom-1] rows: PSE bottom (filled by flush).
+  sprec_t *line_buf;
+  sprec_t *LL, *HL, *LH, *HH;  ///< Output subband pointers
+  int32_t rows_pushed;           ///< Number of input rows pushed so far
+};
+
+/// Allocate the internal flat buffer and initialise all state fields.
+void fdwt_2d_push_init(fdwt_2d_push_t *state, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
+                       int32_t u0, int32_t u1, int32_t v0, int32_t v1, uint8_t transformation);
+
+/// Copy one input row into the internal buffer.
+/// Call exactly (v1-v0) times before fdwt_2d_push_flush().
+/// row_data must contain at least (u1-u0) valid sprec_t samples.
+void fdwt_push_row(fdwt_2d_push_t *state, const sprec_t *row_data);
+
+/// Compute PSE extension rows, run the vertical DWT on the flat buffer,
+/// apply the horizontal DWT, and deinterleave results into LL/HL/LH/HH.
+/// Call exactly once after all (v1-v0) rows have been pushed.
+void fdwt_2d_push_flush(fdwt_2d_push_t *state);
+
+/// Release resources allocated by fdwt_2d_push_init().
+void fdwt_2d_push_free(fdwt_2d_push_t *state);
+
 // IDWT
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
 void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
@@ -137,3 +174,73 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int3
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
                       int32_t u1, int32_t v0, int32_t v1, uint8_t transformation,
                       uint8_t normalizing_upshift);
+
+// ---- Inverse DWT pull-based state ----
+
+/// State for the pull-based 2-D inverse DWT.
+/// Register subband source pointers via idwt_2d_pull_init(), then produce the
+/// reconstructed tile via idwt_2d_pull_produce().  The single flat contiguous
+/// buffer improves cache utilisation compared to scatter-gather row pointers.
+struct idwt_2d_pull_t {
+  int32_t u0, u1, v0, v1;   ///< Tile/resolution coordinate bounds
+  uint8_t transformation;    ///< 0 = irreversible 9/7,  1 = reversible 5/3
+  uint8_t normalizing_upshift;
+  int32_t stride;            ///< Row stride (samples) = round_up(u1-u0, SIMD_PADDING)
+  int32_t top, bottom;       ///< PSE extension row counts for the INVERSE filter
+  /// Flat contiguous buffer: same layout convention as fdwt_2d_push_t.
+  sprec_t *line_buf;
+  sprec_t *LL, *HL, *LH, *HH;  ///< Input subband pointers
+};
+
+/// Allocate the flat buffer and record subband source pointers.
+void idwt_2d_pull_init(idwt_2d_pull_t *state, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
+                       int32_t u0, int32_t u1, int32_t v0, int32_t v1, uint8_t transformation,
+                       uint8_t normalizing_upshift);
+
+/// Reconstruct the full tile: interleave subbands → horizontal IDWT →
+/// vertical IDWT → normalizing upshift.  Writes (v1-v0) rows of (u1-u0)
+/// samples into out_buf with row stride out_stride.
+void idwt_2d_pull_produce(idwt_2d_pull_t *state, sprec_t *out_buf, int32_t out_stride);
+
+/// Release resources allocated by idwt_2d_pull_init().
+void idwt_2d_pull_free(idwt_2d_pull_t *state);
+
+// ---- Flat-buffer vertical DWT helpers ----
+// Apply only the lifting steps to a pre-filled flat buffer.
+// flat_buf: (top + height + bottom) * stride sprec_t elements.
+// top: number of PSE rows prepended (already filled before the call).
+// v0, v1, u0, u1: tile bounds; stride: row stride of flat_buf.
+
+typedef void (*fdwt_ver_flat_func_t)(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                     int32_t v1, int32_t stride);
+typedef void (*idwt_ver_flat_func_t)(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                     int32_t v1, int32_t stride);
+
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+void fdwt_irrev_ver_flat_fixed_neon(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                    int32_t v1, int32_t stride);
+void fdwt_rev_ver_flat_fixed_neon(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                  int32_t v1, int32_t stride);
+void idwt_irrev_ver_flat_fixed_neon(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                    int32_t v1, int32_t stride);
+void idwt_rev_ver_flat_fixed_neon(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                  int32_t v1, int32_t stride);
+#elif defined(OPENHTJ2K_ENABLE_AVX2)
+void fdwt_irrev_ver_flat_fixed_avx2(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                    int32_t v1, int32_t stride);
+void fdwt_rev_ver_flat_fixed_avx2(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                  int32_t v1, int32_t stride);
+void idwt_irrev_ver_flat_fixed_avx2(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                    int32_t v1, int32_t stride);
+void idwt_rev_ver_flat_fixed_avx2(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                                  int32_t v1, int32_t stride);
+#else
+void fdwt_irrev_ver_flat_fixed(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                               int32_t v1, int32_t stride);
+void fdwt_rev_ver_flat_fixed(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                             int32_t v1, int32_t stride);
+void idwt_irrev_ver_flat_fixed(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                               int32_t v1, int32_t stride);
+void idwt_rev_ver_flat_fixed(sprec_t *flat_buf, int32_t top, int32_t u0, int32_t u1, int32_t v0,
+                             int32_t v1, int32_t stride);
+#endif
