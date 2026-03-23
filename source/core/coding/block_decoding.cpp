@@ -568,7 +568,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   uint8_t state;
   sprec_t *dst = nullptr;
   int32_t sign;
-  int16_t QF15;
+  int32_t QF32;
   float fscale = block->stepsize;
   fscale *= (1 << FRACBITS);
   if (M_b <= 31) {
@@ -616,8 +616,8 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
         }
 
         assert(pLSB >= 0);  // assure downshift is not negative
-        QF15 = static_cast<int16_t>(*val >> pLSB);
-        *dst = QF15;
+        QF32 = static_cast<int32_t>(*val >> pLSB);
+        *dst = QF32;
       }
     }
   } else {
@@ -653,12 +653,12 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
         // dequantization
         *val *= scale;
         // downshift
-        QF15 = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        QF32 = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
         // convert sign-magnitude to two's complement form
         if (sign) {
-          QF15 = static_cast<int16_t>(-QF15);
+          QF32 = static_cast<int32_t>(-QF32);
         }
-        *dst = QF15;
+        *dst = QF32;
       }
     }
   }

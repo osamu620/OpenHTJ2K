@@ -625,7 +625,9 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         // convert values from sign-magnitude form to two's complement one
         vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
         vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
-        vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
+        // vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
+        vst1q_f32(dst, vcvtq_f32_s32(vdst0));
+        vst1q_f32(dst + 4, vcvtq_f32_s32(vdst1));
         val += 8;
         dst += 8;
       }
@@ -692,7 +694,9 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         v1    = vrshrq_n_s32(v1, downshift);
         vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
         vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
-        vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
+        // vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
+        vst1q_f32(dst, vcvtq_f32_s32(vdst0));
+        vst1q_f32(dst + 4, vcvtq_f32_s32(vdst1));
         val += 8;
         dst += 8;
       }
@@ -708,12 +712,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         //  dequantization
         *val *= scale;
         // downshift
-        *val = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        *val = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
         // convert sign-magnitude to two's complement form
         if (sign) {
           *val = -(*val & INT32_MAX);
         }
-        *dst = static_cast<int16_t>(*val);
+        *dst = static_cast<int32_t>(*val);
         val++;
         dst++;
       }

@@ -139,14 +139,14 @@ static void find_child_ranges(float *child_ranges, uint8_t &normalizing_upshift,
     }
   }
 
-  float overflow_limit = 1.0f * (1 << (16 - FRACBITS));
-  while (bibo_max > 0.95f * overflow_limit) {
-    normalizing_upshift++;
-    for (uint8_t b = 0; b < 4; ++b) {
-      child_ranges[b] *= 0.5f;
-    }
-    bibo_max *= 0.5f;
-  }
+  // float overflow_limit = 1.0f * (1 << (16 - FRACBITS));
+  // while (bibo_max > 0.95f * overflow_limit) {
+  //   normalizing_upshift++;
+  //   for (uint8_t b = 0; b < 4; ++b) {
+  //     child_ranges[b] *= 0.5f;
+  //   }
+  //   bibo_max *= 0.5f;
+  // }
   normalization = child_ranges[BAND_LL];
 }
 
@@ -1252,9 +1252,9 @@ void j2k_resolution::scale() {
     this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
   }
 #else
-  for (uint32_t n = 0; n < length; ++n) {
-    this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
-  }
+  // for (uint32_t n = 0; n < length; ++n) {
+  //   this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
+  // }
 #endif
 }
 

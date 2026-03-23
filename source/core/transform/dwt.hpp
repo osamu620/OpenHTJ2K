@@ -36,6 +36,11 @@
 #endif
 #define SIMD_PADDING 32
 
+constexpr float fA = -1.586134342059924f;
+constexpr float fB = -0.052980118572961f;
+constexpr float fC = 0.882911075530934f;
+constexpr float fD = 0.443506852043971f;
+
 constexpr int16_t Acoeff_simd      = -19206;  // need to -1
 constexpr int16_t Bcoeff_simd      = -3472;   // need to >> 1
 constexpr int16_t Bcoeff_simd_avx2 = -13888;  // need to (out+4) >> 3

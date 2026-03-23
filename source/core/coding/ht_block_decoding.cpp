@@ -994,7 +994,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         }
 
         assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<int16_t>(*val);
+        *dst = static_cast<int32_t>(*val);
         val++;
         dst++;
       }
@@ -1023,12 +1023,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         //  dequantization
         *val *= scale;
         // downshift
-        *val = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        *val = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
         // convert sign-magnitude to two's complement form
         if (sign) {
           *val = -(*val & INT32_MAX);
         }
-        *dst = static_cast<int16_t>(*val);
+        *dst = static_cast<int32_t>(*val);
         val++;
         dst++;
       }
