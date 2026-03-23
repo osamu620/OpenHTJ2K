@@ -29,7 +29,7 @@
 #include <cstring>
 #include "dwt.hpp"
 #include "utils.hpp"
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON) || 1
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
