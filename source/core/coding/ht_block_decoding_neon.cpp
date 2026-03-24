@@ -644,7 +644,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
           *val = -(*val & INT32_MAX);
         }
         assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<int16_t>(*val);
+        *dst = static_cast<int32_t>(*val);
         val++;
         dst++;
       }

@@ -1243,14 +1243,14 @@ void j2k_resolution::scale() {
     this->i_samples[n] >>= this->normalizing_downshift;
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  for (uint32_t n = 0; n < length - length % 16; n += 16) {
-    auto isrc = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
-    _mm256_storeu_si256((__m256i *)(this->i_samples + n),
-                        _mm256_srai_epi16(isrc, this->normalizing_downshift));
-  }
-  for (uint32_t n = length - length % 16; n < length; ++n) {
-    this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
-  }
+  // for (uint32_t n = 0; n < length - length % 16; n += 16) {
+  //   auto isrc = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
+  //   _mm256_storeu_si256((__m256i *)(this->i_samples + n),
+  //                       _mm256_srai_epi16(isrc, this->normalizing_downshift));
+  // }
+  // for (uint32_t n = length - length % 16; n < length; ++n) {
+  //   this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
+  // }
 #else
   // for (uint32_t n = 0; n < length; ++n) {
   //   this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
@@ -2567,19 +2567,24 @@ void j2k_tile::decode() {
     // }
 
     // AVX2 version
-    __m256i v, lo, hi;
+    // __m256 val;
+    // for (size_t y = 0; y < height; ++y) {
+    //   sprec_t *sp = cr->i_samples + y * width;
+    //   int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
+    //   for (size_t i = 0; i < round_down(width, 8); i += 8) {
+    //     val  = _mm256_loadu_ps(sp + i);
+    //     _mm256_storeu_si256((__m256i *)(dp + i), _mm256_cvtps_epi32(val));
+    //   }
+    //   for (size_t i = round_down(width, 8); i < width; ++i) {
+    //     dp[i] = sp[i];
+    //   }
+    // }
+
     for (size_t y = 0; y < height; ++y) {
       sprec_t *sp = cr->i_samples + y * width;
       int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-      for (size_t i = 0; i < round_down(width, 16); i += 16) {
-        v  = _mm256_loadu_si256((__m256i *)(sp + i));
-        lo = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(v, 0));
-        hi = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(v, 1));
-        _mm256_stream_si256((__m256i *)(dp + i), lo);
-        _mm256_stream_si256((__m256i *)(dp + i + 8), hi);
-      }
-      for (size_t i = round_down(width, 16); i < width; ++i) {
-        dp[i] = sp[i];
+      for (size_t n = 0; n < width; ++n) {
+        *dp++ = *sp++;
       }
     }
 

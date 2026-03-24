@@ -34,7 +34,7 @@ static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_
                                                           fdwt_1d_filtr_rev53_fixed_neon};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_neon,
                                                           fdwt_rev_ver_sr_fixed_neon};
-#elif defined(OPENHTJ2K_ENABLE_AVX2)
+#elif defined(OPENHTJ2K_ENABLE_AVX2) && 0
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_avx2,

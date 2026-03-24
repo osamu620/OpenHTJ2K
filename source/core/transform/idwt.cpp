@@ -29,7 +29,7 @@
 #include <cstring>
 #include "dwt.hpp"
 #include "utils.hpp"
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON) || 1
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
@@ -399,17 +399,17 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 
       // AVX2 version
       __m256i vfirst, vsecond;
-      for (; len >= 16; len -= 16) {
+      for (; len >= 8; len -= 8) {
         vfirst     = _mm256_loadu_si256((__m256i *)line0);
         vsecond    = _mm256_loadu_si256((__m256i *)line1);
-        auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
-        auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
+        auto vtmp0 = _mm256_unpacklo_epi32(vfirst, vsecond);
+        auto vtmp1 = _mm256_unpackhi_epi32(vfirst, vsecond);
 
         _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
         _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
-        line0 += 16;
-        line1 += 16;
-        dp += 32;
+        line0 += 8;
+        line1 += 8;
+        dp += 16;
       }
       for (; len > 0; --len) {
         *dp++ = *line0++;
@@ -455,17 +455,17 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 
       // AVX2 version
       __m256i vfirst, vsecond;
-      for (; len >= 16; len -= 16) {
+      for (; len >= 8; len -= 8) {
         vfirst     = _mm256_loadu_si256((__m256i *)line0);
         vsecond    = _mm256_loadu_si256((__m256i *)line1);
-        auto vtmp0 = _mm256_unpacklo_epi16(vfirst, vsecond);
-        auto vtmp1 = _mm256_unpackhi_epi16(vfirst, vsecond);
+        auto vtmp0 = _mm256_unpacklo_epi32(vfirst, vsecond);
+        auto vtmp1 = _mm256_unpackhi_epi32(vfirst, vsecond);
 
         _mm256_storeu_si256((__m256i *)dp, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x20));
         _mm256_storeu_si256((__m256i *)dp + 1, _mm256_permute2x128_si256(vtmp0, vtmp1, 0x31));
-        line0 += 16;
-        line1 += 16;
-        dp += 32;
+        line0 += 8;
+        line1 += 8;
+        dp += 16;
       }
       for (; len > 0; --len) {
         *dp++ = *line0++;
@@ -516,17 +516,17 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
       src++;
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    for (; len >= 16; len -= 16) {
-      __m256i tmp0 = _mm256_load_si256((__m256i *)src);
-      __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
-      _mm256_store_si256((__m256i *)src, tmp1);
-      src += 16;
-    }
-    for (; len > 0; --len) {
-      // cast to unsigned to avoid undefined behavior
-      *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
-      src++;
-    }
+    // for (; len >= 16; len -= 16) {
+    //   __m256i tmp0 = _mm256_load_si256((__m256i *)src);
+    //   __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
+    //   _mm256_store_si256((__m256i *)src, tmp1);
+    //   src += 16;
+    // }
+    // for (; len > 0; --len) {
+    //   // cast to unsigned to avoid undefined behavior
+    //   *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
+    //   src++;
+    // }
 #else
     // for (; len > 0; --len) {
     //   // cast to unsigned to avoid undefined behavior
