@@ -3011,7 +3011,7 @@ uint8_t *j2k_tile::encode() {
     uint32_t stride = round_up(bottom_right.x - top_left.x, 32U);
     uint32_t height = (bottom_right.y - top_left.y);
 
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && 0
     for (uint32_t y = 0; y < height; ++y) {
       int32_t *sp             = src + y * stride;
       sprec_t *dp             = cr->i_samples + y * stride;

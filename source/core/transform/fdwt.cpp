@@ -34,7 +34,7 @@ static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_
                                                           fdwt_1d_filtr_rev53_fixed_neon};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_neon,
                                                           fdwt_rev_ver_sr_fixed_neon};
-#elif defined(OPENHTJ2K_ENABLE_AVX2) && 0
+#elif defined(OPENHTJ2K_ENABLE_AVX2)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_avx2,
@@ -388,33 +388,19 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       first  = dp[1];
       second = dp[0];
     }
-    const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
-                                            11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
       sprec_t *sp    = buf + (2 * v + voffset[0]) * stride;
       size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
       sprec_t *line0 = first + v * stride2[0];
       sprec_t *line1 = second + v * stride2[0];
-      for (; len >= 8; len -= 8) {
-        // SSE version
-        // auto vline0 = _mm_loadu_si128((__m128i *)sp);
-        // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
-        // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
-        // vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
-        // _mm_storeu_si128((__m128i *)line0, _mm_unpacklo_epi64(vline0, vline1));
-        // _mm_storeu_si128((__m128i *)line1, _mm_unpackhi_epi64(vline0, vline1));
-
+      for (; len >= 4; len -= 4) {
         __m256i vline = _mm256_loadu_si256((__m256i *)sp);
-        vline         = _mm256_shuffle_epi8(vline, vshmask);
+        vline         = _mm256_shuffle_epi32(vline, 0xD8);
         vline         = _mm256_permute4x64_epi64(vline, 0xD8);
         _mm256_storeu2_m128i((__m128i *)line1, (__m128i *)line0, vline);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;
@@ -440,33 +426,19 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       first  = dp[3];
       second = dp[2];
     }
-    const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
-                                            11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
       sprec_t *sp    = buf + (2 * v + voffset[2]) * stride;
       size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
       sprec_t *line0 = first + v * stride2[2];
       sprec_t *line1 = second + v * stride2[2];
-      for (; len >= 8; len -= 8) {
-        // SSE version
-        // auto vline0 = _mm_loadu_si128((__m128i *)sp);
-        // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
-        // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
-        // vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
-        // _mm_storeu_si128((__m128i *)line0, _mm_unpacklo_epi64(vline0, vline1));
-        // _mm_storeu_si128((__m128i *)line1, _mm_unpackhi_epi64(vline0, vline1));
-
+      for (; len >= 4; len -= 4) {
         __m256i vline = _mm256_loadu_si256((__m256i *)sp);
-        vline         = _mm256_shuffle_epi8(vline, vshmask);
+        vline         = _mm256_shuffle_epi32(vline, 0xD8);
         vline         = _mm256_permute4x64_epi64(vline, 0xD8);
         _mm256_storeu2_m128i((__m128i *)line1, (__m128i *)line0, vline);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;

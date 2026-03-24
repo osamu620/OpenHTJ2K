@@ -100,7 +100,7 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v
 void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                                 int32_t stride);
 
-#elif defined(OPENHTJ2K_ENABLE_AVX2) && 0
+#elif defined(OPENHTJ2K_ENABLE_AVX2)
 void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
                                       const int32_t u_i1);
 void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1);

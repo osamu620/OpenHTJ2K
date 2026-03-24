@@ -26,7 +26,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && 0
   #include <algorithm>
   #include <cmath>
   #include "coding_units.hpp"
