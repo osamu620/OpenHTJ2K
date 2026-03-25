@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <cstring>
+#include <cmath>
 #include "dwt.hpp"
 #include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -86,11 +87,11 @@ void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
   const int32_t offset = left - i0 % 2;
 
   for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-    X[n] = static_cast<sprec_t>((int32_t)X[n] - (((int32_t)X[n - 1] + (int32_t)X[n + 1] + 2) >> 2));
+    X[n] -= floorf((X[n - 1] + X[n + 1] + 2) * 0.25f);
   }
 
   for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-    X[n + 1] = static_cast<sprec_t>((int32_t)X[n + 1] + (((int32_t)X[n] + (int32_t)X[n + 2]) >> 1));
+    X[n + 1] += floorf((X[n] + X[n + 2]) * 0.5f);
   }
 }
 
@@ -210,7 +211,7 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
   if (v0 == v1 - 1 && (v0 % 2)) {
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
-      in[col] = static_cast<sprec_t>((int32_t)in[col] >> 1);
+      in[col] = floorf(in[col] * 0.5f);
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
@@ -236,16 +237,14 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
 
     for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n - 1][col];
-        sum += (int32_t)buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>((int32_t)buf[n][col] - ((sum + 2) >> 2));
+        float sum = buf[n - 1][col] + buf[n + 1][col];
+        buf[n][col] -= floorf((sum + 2.0f) * 0.25f);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n][col];
-        sum += (int32_t)buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>((int32_t)buf[n + 1][col] + (sum >> 1));
+        float sum = buf[n][col] + buf[n + 2][col];
+        buf[n + 1][col] += floorf(sum * 0.5f);
       }
     }
 

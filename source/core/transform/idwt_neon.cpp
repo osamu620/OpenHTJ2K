@@ -31,6 +31,7 @@
   #include "utils.hpp"
   #include <cstring>
 #include <arm_neon.h>
+#include <cmath>
 
 /********************************************************************************
  * horizontal transforms
@@ -88,9 +89,10 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   int32_t simdlen = stop + 1 - start;
   auto xl0 = vld2q_f32(sp - 1);
   auto xl1 = vld2q_f32(sp + 1);
+  const auto vtwo = vdupq_n_f32(2.0f);
   for (; simdlen > 0; simdlen -= 4) {
     // (xl0.val[0] + xl1.val[0] + 2) >> 2;
-    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vdupq_n_f32(2.0f)), 0.25f));
+    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vtwo), 0.25f));
     xl0.val[1] = vsubq_f32(xl0.val[1], xfloor);
     // xl0.val[1] = vcvtq_f32_s32(
     //   vsubq_s32(vcvtq_s32_f32(xl0.val[1]), vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0])), 1))
@@ -224,7 +226,7 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
   if (v0 == v1 - 1) {
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
-      in[col] = (v0 % 2 == 0) ? in[col] : (int32_t)(in[col] / 2);
+      in[col] = (v0 % 2 == 0) ? in[col] : floorf(in[col] * 0.5f);
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
@@ -249,6 +251,7 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     const int32_t offset = top - v0 % 2;
 
     int32_t simdlen = (u1 - u0) - (u1 - u0) % 8;
+    const auto vtwo = vdupq_n_f32(2.0f);
     float32x4_t vin00, vout0, vin10, vin01, vout1, vin11;
     for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
       float *x0 = buf[n - 1];
@@ -264,9 +267,9 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         vout1 = vld1q_f32(x1 + 4);
         vin10 = vld1q_f32(x2);
         vin11 = vld1q_f32(x2 + 4);
-        auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin00, vin10), vdupq_n_f32(2.0f)), 0.25f));
+        auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin00, vin10), vtwo), 0.25f));
         vout0 = vsubq_f32(vout0, xfloor0);
-        auto xfloor1 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin01, vin11), vdupq_n_f32(2.0f)), 0.25f));
+        auto xfloor1 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin01, vin11), vtwo), 0.25f));
         vout1 = vsubq_f32(vout1, xfloor1);
         // vout0 = vsubq_f32(vout0, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin00), vcvtq_s32_f32(vin10)), 1)));
         // vout1 = vsubq_f32(vout1, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin01), vcvtq_s32_f32(vin11)), 1)));
@@ -280,9 +283,10 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         // openhtj2k_arm_prefetch(x2);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)*x0++;
-        sum += (int32_t)*x2++;
-        *x1++ -= static_cast<float>((sum + 2) >> 2);
+        float sum = *x0++;
+        sum += *x2++;
+        sum += 2.0f;
+        *x1++ -= floorf(sum * 0.25f);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
@@ -315,9 +319,9 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         // openhtj2k_arm_prefetch(x2);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)*x0++;
-        sum += (int32_t)*x2++;
-        *x1++ += static_cast<float>(sum >> 1);
+        float sum = *x0++;
+        sum += *x2++;
+        *x1++ += floorf(sum * 0.5f);
       }
     }
 

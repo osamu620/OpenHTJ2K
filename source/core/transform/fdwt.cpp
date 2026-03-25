@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <cstring>
+#include <cmath>
 #include "dwt.hpp"
 #include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -87,14 +88,12 @@ void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
   // X += left - i0 % 2;
   const int32_t offset = left + i0 % 2;
   for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
-    int32_t sum = (int32_t)X[n];
-    sum += (int32_t)X[n + 2];
-    X[n + 1] = static_cast<sprec_t>((int32_t)X[n + 1] - (sum >> 1));
+    float sum = X[n] + X[n + 2];
+    X[n + 1] -= floorf(sum * 0.5f);
   }
   for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-    int32_t sum = (int32_t)X[n - 1];
-    sum += (int32_t)X[n + 1];
-    X[n] = static_cast<sprec_t>((int32_t)X[n] + ((sum + 2) >> 2));
+    float sum = X[n - 1] + X[n + 1];
+    X[n] += floorf((sum + 2) * 0.25f);
   }
 };
 
@@ -124,7 +123,7 @@ static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
         in[row * stride] = (transformation) ? in[row * stride] : in[row * stride];
       } else {
         in[row * stride] =
-            (transformation) ? static_cast<sprec_t>((int32_t)in[row * stride] << 1) : in[row * stride];
+            (transformation) ? floorf(in[row * stride] * 2.0f) : in[row * stride];
       }
     }
   } else {
@@ -256,16 +255,14 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
 
     for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n][col];
-        sum += (int32_t)buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>((int32_t)buf[n + 1][col] - (sum >> 1));
+        float sum = buf[n][col] + buf[n + 2][col];
+        buf[n + 1][col] -= floorf(sum * 0.5f);
       }
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n - 1][col];
-        sum += (int32_t)buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>((int32_t)buf[n][col] + ((sum + 2) >> 2));
+        float sum = buf[n - 1][col] + buf[n + 1][col];
+        buf[n][col] += floorf((sum + 2) * 0.25f);
       }
     }
 

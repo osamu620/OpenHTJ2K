@@ -37,11 +37,12 @@
 auto idwt_irrev97_fixed_avx2_hor_step = [](const int32_t init_pos, const int32_t simdlen, float *const X,
                                             const int32_t n0, const int32_t n1, const float fV) {
   auto vcoeff = _mm256_set1_ps(fV);
+  auto vzero = _mm256_setzero_ps();
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 4, n += 8) {
     auto xin0 = _mm256_loadu_ps(X + n + n0);
     auto xin2 = _mm256_loadu_ps(X + n + n1);
     auto xsum = _mm256_add_ps(xin0, xin2);
-    xsum      = _mm256_blend_ps(xsum, _mm256_setzero_ps(), 0xAA);
+    xsum      = _mm256_blend_ps(xsum, vzero, 0xAA);
     xsum      = _mm256_mul_ps(xsum, vcoeff);
     xsum      = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xsum), 4));
     xin0      = _mm256_sub_ps(xin0, xsum);
@@ -223,7 +224,7 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
   if (v0 == v1 - 1 && (v0 % 2)) {
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
-      in[col] = static_cast<sprec_t>((int32_t)in[col] >> 1);
+      in[col] = floorf(in[col] * 0.5f);
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
@@ -273,10 +274,10 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         xp2 += 8;
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)*xp0++;
-        sum += (int32_t)*xp2++;
-        *xp1 = static_cast<sprec_t>((int32_t)*xp1 - ((sum + 2) >> 2));
-        xp1++;
+        float sum = *xp0++;
+        sum += *xp2++;
+        sum += 2.0f;
+        *xp1++ -= floorf(sum * 0.25f);
       }
     }
     const __m256 x05 = _mm256_set1_ps(0.5f);
@@ -300,10 +301,9 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         xp2 += 8;
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)*xp0++;
-        sum += (int32_t)*xp2++;
-        *xp1 = static_cast<sprec_t>((int32_t)*xp1 + (sum >> 1));
-        xp1++;
+        float sum = *xp0++;
+        sum += *xp2++;
+        *xp1++ += floorf(sum * 0.5f);
       }
     }
 

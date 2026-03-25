@@ -2492,7 +2492,7 @@ void j2k_tile::decode() {
         dp += 16;
       }
       for (size_t n = width % 16; n > 0; --n) {
-        *dp++ = *sp++;
+        *dp++ = static_cast<int32_t>(*sp++);
       }
     }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)

@@ -27,6 +27,8 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#include <cmath>
+
   #include "dwt.hpp"
   #include "utils.hpp"
   #include <cstring>
@@ -97,11 +99,12 @@ void fdwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   }
 
   simdlen = stop - start;
+  const auto vtwo = vdupq_n_f32(2.0f);
   for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 4, n += 8) {
     auto xl0 = vld2q_f32(X + n - 1);
     auto xl1 = vld2q_f32(X + n + 1);
     // (xl0.val[0] + xl1.val[0] + 2) >> 2;
-    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vdupq_n_f32(2)), 0.25f));
+    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vtwo), 0.25f));
     // xl0.val[1] = vcvtq_f32_s32(vaddq_s32(vcvtq_s32_f32(xl0.val[1]), vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0])), 1)));
     xl0.val[1] = vaddq_f32(xl0.val[1], xfloor);
     vst2q_f32(X + n - 1, xl0);
@@ -164,7 +167,7 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
     const int32_t stop   = ceil_int(v1, 2);
     const int32_t offset = top + v0 % 2;
 
-    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 8;
+    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 4;
     for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
       fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], fA);
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
@@ -257,24 +260,26 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         vst1q_f32(&buf[n + 1][col], X1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n][col];
-        sum += (int32_t)buf[n + 2][col];
-        buf[n + 1][col] -= static_cast<float>(sum >> 1);
+        float sum = buf[n][col];
+        sum += buf[n + 2][col];
+        buf[n + 1][col] -= floorf(sum * 0.5f);
       }
     }
+    const auto vtwo = vdupq_n_f32(2.0f);
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < simdlen; col += 4) {
         auto X0 = vld1q_f32(&buf[n - 1][col]);
         auto X2 = vld1q_f32(&buf[n + 1][col]);
         auto X1 = vld1q_f32(&buf[n][col]);
-        auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(X0, X2), vdupq_n_f32(2.0f)), 0.25f));
+        auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(X0, X2), vtwo), 0.25f));
         X1 = vaddq_f32(X1, xfloor);
         vst1q_f32(&buf[n][col], X1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n - 1][col];
-        sum += (int32_t)buf[n + 1][col];
-        buf[n][col] += static_cast<float>((sum + 2) >> 2);
+        float sum = buf[n - 1][col];
+        sum += buf[n + 1][col];
+        sum += 2.0f;
+        buf[n][col] += floorf(sum * 0.25f);
       }
     }
 

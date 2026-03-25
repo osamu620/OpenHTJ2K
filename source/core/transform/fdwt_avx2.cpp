@@ -229,7 +229,7 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
-        in[col] = static_cast<sprec_t>((int32_t)in[col] << 1);
+        in[col] = floorf(in[col] * 2.0f);
       }
     }
   } else {
@@ -267,9 +267,10 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         _mm256_store_ps(buf[n + 1] + col, x1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n][col];
-        sum += (int32_t)buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>((int32_t)buf[n + 1][col] - (sum >> 1));
+        float sum = buf[n][col];
+        sum += buf[n + 2][col];
+        buf[n+1][col] -= floorf(sum * 0.5f);
+        // buf[n + 1][col] = static_cast<sprec_t>((int32_t)buf[n + 1][col] - (sum >> 1));
       }
     }
     const __m256 xtwo = _mm256_set1_ps(2.0f);
@@ -284,12 +285,10 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         _mm256_store_ps(buf[n] + col, x1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        int32_t sum = (int32_t)buf[n - 1][col];
-        sum += (int32_t)buf[n + 1][col];
-        sum >>= 1;
-        sum += 1;
-        sum >>= 1;
-        buf[n][col] = static_cast<sprec_t>((int32_t)buf[n][col] + sum);
+        float sum = buf[n - 1][col];
+        sum += buf[n + 1][col];
+        sum += 2.0f;
+        buf[n][col] += floorf(sum * 0.25f);
         // buf[n][col] += ((sum >> 1) + 1) >> 1;  //((sum + 2) >> 2);
       }
     }
