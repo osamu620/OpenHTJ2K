@@ -43,9 +43,9 @@ auto fdwt_irrev97_fixed_neon_hor_step = [](const int32_t init_pos, const int32_t
     auto x0   = vld2q_f32(X + n0);
     auto x1   = vld2q_f32(X + n1);
     auto tmp  = vaddq_f32(x0.val[0], x1.val[0]);
-    tmp       = vmulq_f32(tmp, vvv);
-    x0.val[1] = vaddq_f32(x0.val[1], tmp);
-    // x0.val[1] = vfmaq_f32(x0.val[1], tmp, vvv);
+    // tmp       = vmulq_f32(tmp, vvv);
+    // x0.val[1] = vaddq_f32(x0.val[1], tmp);
+    x0.val[1] = vfmaq_f32(x0.val[1], tmp, vvv);
     vst2q_f32(X + n0, x0);
     X += 8;
   }
@@ -116,9 +116,9 @@ auto fdwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const X
     auto x2  = vld1q_f32(Xin1 + n);
     auto x1  = vld1q_f32(Xout + n);
     auto tmp = vaddq_f32(x0, x2);
-    // x1 = vfmaq_f32(x1, vvv, tmp);
-    tmp      = vmulq_f32(tmp, vvv);
-    x1       = vaddq_f32(x1, tmp);
+    x1 = vfmaq_f32(x1, vvv, tmp);
+    // tmp      = vmulq_f32(tmp, vvv);
+    // x1       = vaddq_f32(x1, tmp);
     vst1q_f32(Xout + n, x1);
   }
 };
