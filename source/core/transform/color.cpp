@@ -112,4 +112,39 @@ void cvt_ycbcr_to_rgb_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t w
     }
   }
 }
+
+void cvt_ycbcr_to_rgb_rev_float(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height,
+                                uint32_t stride) {
+  for (uint32_t y = 0; y < height; ++y) {
+    float *p0 = sp0 + y * stride;
+    float *p1 = sp1 + y * stride;
+    float *p2 = sp2 + y * stride;
+    for (uint32_t n = 0; n < width; ++n) {
+      int32_t Y  = static_cast<int32_t>(p0[n]);
+      int32_t Cb = static_cast<int32_t>(p1[n]);
+      int32_t Cr = static_cast<int32_t>(p2[n]);
+      int32_t G  = Y - ((Cb + Cr) >> 2);
+      p0[n]      = static_cast<float>(Cr + G);
+      p1[n]      = static_cast<float>(G);
+      p2[n]      = static_cast<float>(Cb + G);
+    }
+  }
+}
+
+void cvt_ycbcr_to_rgb_irrev_float(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height,
+                                  uint32_t stride) {
+  for (uint32_t y = 0; y < height; ++y) {
+    float *p0 = sp0 + y * stride;
+    float *p1 = sp1 + y * stride;
+    float *p2 = sp2 + y * stride;
+    for (uint32_t n = 0; n < width; ++n) {
+      float Y  = p0[n];
+      float Cb = p1[n];
+      float Cr = p2[n];
+      p0[n]    = Y + static_cast<float>(CR_FACT_R) * Cr;
+      p1[n]    = Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb;
+      p2[n]    = Y + static_cast<float>(CB_FACT_B) * Cb;
+    }
+  }
+}
 #endif

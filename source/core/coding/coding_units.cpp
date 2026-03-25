@@ -36,14 +36,17 @@
 #include "color.hpp"
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-static cvt_color_func cvt_ycbcr_to_rgb[2] = {cvt_ycbcr_to_rgb_irrev_avx2, cvt_ycbcr_to_rgb_rev_avx2};
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
+static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_avx2,
+                                                          cvt_ycbcr_to_rgb_rev_float_avx2};
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-static cvt_color_func cvt_ycbcr_to_rgb[2] = {cvt_ycbcr_to_rgb_irrev_neon, cvt_ycbcr_to_rgb_rev_neon};
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_neon, cvt_rgb_to_ycbcr_rev_neon};
+static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_neon,
+                                                          cvt_ycbcr_to_rgb_rev_float_neon};
 #else
-static cvt_color_func cvt_ycbcr_to_rgb[2] = {cvt_ycbcr_to_rgb_irrev, cvt_ycbcr_to_rgb_rev};
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
+static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float,
+                                                          cvt_ycbcr_to_rgb_rev_float};
 #endif
 
 #ifdef OPENHTJ2K_THREAD
@@ -2465,101 +2468,6 @@ void j2k_tile::decode() {
     // modify coordinates of tile component considering a value defined via "-reduce" parameter
     this->tcomp[c].set_pos0(cr->get_pos0());
     this->tcomp[c].set_pos1(cr->get_pos1());
-    element_siz tc0 = this->tcomp[c].get_pos0();
-    element_siz tc1 = this->tcomp[c].get_pos1();
-
-    // copy samples in resolution buffer to that in tile component buffer
-    uint32_t height = tc1.y - tc0.y;
-    uint32_t width  = round_up(tc1.x - tc0.x, 32U);
-    uint32_t stride = round_up(width, 32U);
-    // size_t num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    // int16x8_t v0, v1, v2, v3;
-    for (size_t y = 0; y < height; ++y) {
-      sprec_t *sp = cr->i_samples + y * width;
-      int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-
-      for (size_t n = width; n >= 16; n -= 16) {
-        auto v0 = vld1q_f32(sp);
-        auto v1 = vld1q_f32(sp + 4);
-        auto v2 = vld1q_f32(sp + 8);
-        auto v3 = vld1q_f32(sp + 12);
-        vst1q_s32(dp, vcvtq_s32_f32(v0));
-        vst1q_s32(dp + 4, vcvtq_s32_f32(v1));
-        vst1q_s32(dp + 8, vcvtq_s32_f32(v2));
-        vst1q_s32(dp + 12, vcvtq_s32_f32(v3));
-        sp += 16;
-        dp += 16;
-      }
-      for (size_t n = width % 16; n > 0; --n) {
-        *dp++ = static_cast<int32_t>(*sp++);
-      }
-    }
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    // SSE version
-    // const __m128i izero = _mm_setzero_si128();
-    // for (size_t n = num_samples; n >= 8; n -= 8) {
-    //   __m128i v0        = _mm_loadu_si128((__m128i *)sp);
-    //   __m128i words8hi  = _mm_cmpgt_epi16(izero, v0);
-    //   __m128i dwords4lo = _mm_unpacklo_epi16(v0, words8hi);
-    //   __m128i dwords4hi = _mm_unpackhi_epi16(v0, words8hi);
-    //   _mm_storeu_si128((__m128i *)dp, dwords4lo);
-    //   _mm_storeu_si128((__m128i *)(dp + 4), dwords4hi);
-    //   sp += 8;
-    //   dp += 8;
-    // }
-    // for (size_t n = num_samples % 8; n > 0; --n) {
-    //   *dp++ = *sp++;
-    // }
-
-    // AVX2 sign-extension version
-    // const __m256i zero = _mm256_setzero_si256();
-    //  __m256i v, lo, hi, s;
-    // for (size_t n = num_samples; n >= 16; n -= 16) {
-    //   __m256i v  = _mm256_loadu_si256((__m256i *)sp);  // word
-    //   __m256i s  = _mm256_cmpgt_epi16(zero, v);        // extended-sign
-    //   __m256i lo = _mm256_unpacklo_epi16(v, s);        // dword
-    //   __m256i hi = _mm256_unpackhi_epi16(v, s);        // dword
-    // _mm256_stream_si256((__m256i *)(dp + i), _mm256_permute2x128_si256(lo, hi, 0x20));
-    // _mm256_stream_si256((__m256i *)(dp + i + 8), _mm256_permute2x128_si256(lo, hi, 0x31));
-    //   sp += 16;
-    //   dp += 16;
-    // }
-    // for (size_t n = num_samples % 16; n > 0; --n) {
-    //   *dp++ = *sp++;
-    // }
-
-    // AVX2 version
-    __m256 val;
-    for (size_t y = 0; y < height; ++y) {
-      sprec_t *sp = cr->i_samples + y * width;
-      int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-      for (size_t i = 0; i < round_down(width, 8); i += 8) {
-        val  = _mm256_load_ps(sp + i);
-        _mm256_store_si256((__m256i *)(dp + i), _mm256_cvtps_epi32(val));
-      }
-      for (size_t i = round_down(width, 8); i < width; ++i) {
-        dp[i] = static_cast<int32_t>(sp[i]);
-      }
-    }
-
-    // for (size_t y = 0; y < height; ++y) {
-    //   sprec_t *sp = cr->i_samples + y * width;
-    //   int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-    //   for (size_t n = 0; n < width; ++n) {
-    //     *dp++ = *sp++;
-    //   }
-    // }
-
-#else
-      for (size_t y = 0; y < height; ++y) {
-        sprec_t *sp = cr->i_samples + y * width;
-        int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-        for (size_t n = 0; n < width; ++n) {
-          *dp++ = static_cast<int32_t>(*sp++);
-        }
-      }
-#endif
 
   }  // end of component loop
 }
@@ -2651,12 +2559,17 @@ void j2k_tile::ycbcr_to_rgb() {
   element_siz tc1       = this->tcomp[0].get_pos1();
   const uint32_t width  = tc1.x - tc0.x;
   const uint32_t height = tc1.y - tc0.y;
+  const uint32_t stride = round_up(width, 32U);
 
-  int32_t *sp0 = this->tcomp[0].get_sample_address(0, 0);  // samples;
-  int32_t *sp1 = this->tcomp[1].get_sample_address(0, 0);  // samples;
-  int32_t *sp2 = this->tcomp[2].get_sample_address(0, 0);  // samples;
+  // Access the float resolution buffers directly (avoiding the int32 intermediate copy)
+  const uint8_t NL0     = tcomp[0].get_dwt_levels();
+  const uint8_t NL1     = tcomp[1].get_dwt_levels();
+  const uint8_t NL2     = tcomp[2].get_dwt_levels();
+  sprec_t *sp0 = tcomp[0].access_resolution(static_cast<uint8_t>(NL0 - reduce_NL))->i_samples;
+  sprec_t *sp1 = tcomp[1].access_resolution(static_cast<uint8_t>(NL1 - reduce_NL))->i_samples;
+  sprec_t *sp2 = tcomp[2].access_resolution(static_cast<uint8_t>(NL2 - reduce_NL))->i_samples;
 
-  cvt_ycbcr_to_rgb[transformation](sp0, sp1, sp2, width, height);
+  cvt_ycbcr_to_rgb_float[transformation](sp0, sp1, sp2, width, height, stride);
 }
 
 void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int32_t *> &dst) {
@@ -2689,9 +2602,13 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     // No rounding offset is applied for a left shift (it would introduce a constant bias).
     // For bitdepth <= FRACBITS: downshift >= 0 (right shift), use (1<<downshift)>>1 for rounding.
     int16_t offset = (downshift <= 0) ? 0 : static_cast<int16_t>((1 << downshift) >> 1);
-    int32_t *const src  = tcomp[c].get_sample_address(0, 0);
-    int32_t *const cdst = dst[c];
-    int32_t *sp, *dp;
+    // Read directly from the float resolution buffer (avoiding the int32 intermediate copy)
+    const uint8_t NL_c    = tcomp[c].get_dwt_levels();
+    j2k_resolution *cr    = tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL));
+    sprec_t *const src    = cr->i_samples;
+    int32_t *const cdst   = dst[c];
+    const sprec_t *spf;
+    int32_t *dp;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
     int32x4_t v0, v1, o, dco, vmax, vmin, vshift;
     o      = vdupq_n_s32(offset);
@@ -2702,11 +2619,11 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     if (downshift < 0) {
       for (uint32_t y = 0; y < in_height; ++y) {
         uint32_t len = csize.x;
-        sp           = src + y * in_stride;
+        spf          = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
-          v0 = vld1q_s32(sp);
-          v1 = vld1q_s32(sp + 4);
+          v0 = vcvtq_s32_f32(vld1q_f32(spf));
+          v1 = vcvtq_s32_f32(vld1q_f32(spf + 4));
           v0 = vshlq_s32(vaddq_s32(v0, o), vshift);
           v1 = vshlq_s32(vaddq_s32(v1, o), vshift);
           v0 = vaddq_s32(v0, dco);
@@ -2717,27 +2634,26 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           v1 = vmaxq_s32(v1, vmin);
           vst1q_s32(dp, v0);
           vst1q_s32(dp + 4, v1);
-          sp += 8;
+          spf += 8;
           dp += 8;
         }
         for (; len > 0; --len) {
-          sp[0] = (sp[0] + offset) << -downshift;
-          sp[0] += DC_OFFSET;
-          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-          dp[0] = sp[0];
-          sp++;
-          dp++;
+          int32_t ival = static_cast<int32_t>(*spf++);
+          ival         = (ival + offset) << -downshift;
+          ival += DC_OFFSET;
+          ival   = (ival > MAXVAL) ? MAXVAL : ival;
+          ival   = (ival < MINVAL) ? MINVAL : ival;
+          *dp++  = ival;
         }
       }
     } else {
       for (uint32_t y = 0; y < in_height; ++y) {
         uint32_t len = csize.x;
-        sp           = src + y * in_stride;
+        spf          = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
-          v0 = vld1q_s32(sp);
-          v1 = vld1q_s32(sp + 4);
+          v0 = vcvtq_s32_f32(vld1q_f32(spf));
+          v1 = vcvtq_s32_f32(vld1q_f32(spf + 4));
           v0 = vshlq_s32(vaddq_s32(v0, o), vshift);
           v1 = vshlq_s32(vaddq_s32(v1, o), vshift);
           v0 = vaddq_s32(v0, dco);
@@ -2748,17 +2664,16 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           v1 = vmaxq_s32(v1, vmin);
           vst1q_s32(dp, v0);
           vst1q_s32(dp + 4, v1);
-          sp += 8;
+          spf += 8;
           dp += 8;
         }
         for (; len > 0; --len) {
-          sp[0] = (sp[0] + offset) >> downshift;
-          sp[0] += DC_OFFSET;
-          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-          dp[0] = sp[0];
-          sp++;
-          dp++;
+          int32_t ival = static_cast<int32_t>(*spf++);
+          ival         = (ival + offset) >> downshift;
+          ival += DC_OFFSET;
+          ival   = (ival > MAXVAL) ? MAXVAL : ival;
+          ival   = (ival < MINVAL) ? MINVAL : ival;
+          *dp++  = ival;
         }
       }
     }
@@ -2771,26 +2686,25 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
       vmin = _mm256_set1_epi32(MINVAL);
       for (uint32_t y = 0; y < in_height; ++y) {
         uint32_t len = csize.x;
-        sp           = src + y * in_stride;
+        spf          = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
-          v = _mm256_load_si256((__m256i *)sp);
+          v = _mm256_cvtps_epi32(_mm256_load_ps(spf));
           v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
           v = _mm256_max_epi32(v, vmin);
           _mm256_storeu_si256((__m256i *)dp, v);
-          sp += 8;
+          spf += 8;
           dp += 8;
         }
         for (; len > 0; --len) {
-          sp[0] = (sp[0] + offset) << -downshift;
-          sp[0] += DC_OFFSET;
-          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-          dp[0] = sp[0];
-          sp++;
-          dp++;
+          int32_t ival = static_cast<int32_t>(*spf++);
+          ival         = (ival + offset) << -downshift;
+          ival += DC_OFFSET;
+          ival   = (ival > MAXVAL) ? MAXVAL : ival;
+          ival   = (ival < MINVAL) ? MINVAL : ival;
+          *dp++  = ival;
         }
       }
     } else {
@@ -2801,26 +2715,25 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
       vmin = _mm256_set1_epi32(MINVAL);
       for (uint32_t y = 0; y < in_height; ++y) {
         uint32_t len = csize.x;
-        sp           = src + y * in_stride;
+        spf          = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
-          v = _mm256_load_si256((__m256i *)sp);
+          v = _mm256_cvtps_epi32(_mm256_load_ps(spf));
           v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
           v = _mm256_max_epi32(v, vmin);
           _mm256_storeu_si256((__m256i *)dp, v);
-          sp += 8;
+          spf += 8;
           dp += 8;
         }
         for (; len > 0; --len) {
-          sp[0] = (sp[0] + offset) >> downshift;
-          sp[0] += DC_OFFSET;
-          sp[0] = (sp[0] > MAXVAL) ? MAXVAL : sp[0];
-          sp[0] = (sp[0] < MINVAL) ? MINVAL : sp[0];
-          dp[0] = sp[0];
-          sp++;
-          dp++;
+          int32_t ival = static_cast<int32_t>(*spf++);
+          ival         = (ival + offset) >> downshift;
+          ival += DC_OFFSET;
+          ival   = (ival > MAXVAL) ? MAXVAL : ival;
+          ival   = (ival < MINVAL) ? MINVAL : ival;
+          *dp++  = ival;
         }
       }
     }
@@ -2828,27 +2741,29 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
       if (downshift < 0) {
         for (uint32_t y = 0; y < in_height; ++y) {
           uint32_t len = csize.x;
-          sp           = src + y * in_stride;
+          spf          = src + y * in_stride;
           dp           = cdst + x_offset + (y + y_offset) * out_stride;
           for (uint32_t n = 0; n < len; ++n) {
-            sp[n] = (sp[n] + offset) << -downshift;
-            sp[n] += DC_OFFSET;
-            sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-            sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
-            dp[n] = sp[n];
+            int32_t ival = static_cast<int32_t>(spf[n]);
+            ival         = (ival + offset) << -downshift;
+            ival += DC_OFFSET;
+            ival   = (ival > MAXVAL) ? MAXVAL : ival;
+            ival   = (ival < MINVAL) ? MINVAL : ival;
+            dp[n]  = ival;
           }
         }
       } else {
         for (uint32_t y = 0; y < in_height; ++y) {
           uint32_t len = csize.x;
-          sp           = src + y * in_stride;
+          spf          = src + y * in_stride;
           dp           = cdst + x_offset + (y + y_offset) * out_stride;
           for (uint32_t n = 0; n < len; ++n) {
-            sp[n] = (sp[n] + offset) >> downshift;
-            sp[n] += DC_OFFSET;
-            sp[n] = (sp[n] > MAXVAL) ? MAXVAL : sp[n];
-            sp[n] = (sp[n] < MINVAL) ? MINVAL : sp[n];
-            dp[n] = sp[n];
+            int32_t ival = static_cast<int32_t>(spf[n]);
+            ival         = (ival + offset) >> downshift;
+            ival += DC_OFFSET;
+            ival   = (ival > MAXVAL) ? MAXVAL : ival;
+            ival   = (ival < MINVAL) ? MINVAL : ival;
+            dp[n]  = ival;
           }
         }
       }
