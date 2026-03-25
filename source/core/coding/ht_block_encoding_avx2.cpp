@@ -26,7 +26,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && 0
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #include <algorithm>
   #include <cmath>
   #include "coding_units.hpp"
@@ -69,12 +69,14 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     // simd
     int32_t len = static_cast<int32_t>(this->size.x);
     for (; len >= 16; len -= 16) {
-      __m256i coeff16 = _mm256_loadu_si256((__m256i *)sp);
-      __m256i v0      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 0));
-      __m256i v1      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 1));
+      __m256 val0 = _mm256_loadu_ps(sp);
+      __m256 val1 = _mm256_loadu_ps(sp + 8);
+      // __m256i v0      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 0));
+      // __m256i v1      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 1));
       // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
-      v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), vscale));
-      v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
+      auto v0 = _mm256_cvttps_epi32(_mm256_mul_ps(val0, vscale));
+      auto v1 = _mm256_cvttps_epi32(_mm256_mul_ps(val1, vscale));
+      // v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
       // Take sign bit
       __m256i s0 = _mm256_srli_epi32(v0, 31);
       __m256i s1 = _mm256_srli_epi32(v1, 31);

@@ -264,15 +264,15 @@ auto idwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, float *const X
                                            float *const Xout, const float coeff) {
   auto vcoeff  = _mm256_set1_ps(coeff);
   for (int32_t n = 0; n < simdlen; n += 8) {
-    auto xin0 = _mm256_loadu_ps(Xin0 + n);
-    auto xin2 = _mm256_loadu_ps(Xin1 + n);
-    auto xout  = _mm256_loadu_ps(Xout + n);
+    auto xin0 = _mm256_load_ps(Xin0 + n);
+    auto xin2 = _mm256_load_ps(Xin1 + n);
+    auto xout  = _mm256_load_ps(Xout + n);
 
     auto xsum = _mm256_add_ps(xin0, xin2);
 
     xout      = _mm256_sub_ps(xout, _mm256_mul_ps(xsum, vcoeff));
 
-    _mm256_storeu_ps(Xout + n, xout);
+    _mm256_store_ps(Xout + n, xout);
 
     // // low
     // auto xin0_32 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(xin0_16, 0));
