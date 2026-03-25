@@ -131,7 +131,7 @@ auto fdwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const X
 };
 
 void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                  const int32_t v1, const int32_t stride) {
+                                  const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
   constexpr int32_t num_pse_i0[2] = {4, 3};
   constexpr int32_t num_pse_i1[2] = {3, 4};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -148,8 +148,9 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
     const int32_t len = round_up(stride, SIMD_LEN_I32);
     auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top - i] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
@@ -158,8 +159,9 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
       buf[top + row] = &in[row * stride];
     }
     for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top + (v1 - v0) + i - 1] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
@@ -201,19 +203,19 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
-    }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
+    // for (int32_t i = 1; i <= top; ++i) {
+    //   aligned_mem_free(buf[top - i]);
+    // }
+    // for (int32_t i = 1; i <= bottom; i++) {
+    //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
+    // }
     delete[] buf;
   }
 }
 
 // reversible FDWT
 void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                const int32_t v1, const int32_t stride) {
+                                const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
   constexpr int32_t num_pse_i0[2] = {2, 1};
   constexpr int32_t num_pse_i1[2] = {1, 2};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -230,8 +232,9 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     const int32_t len = round_up(stride, SIMD_PADDING);
     auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top - i] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
@@ -240,8 +243,9 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       buf[top + row] = &in[row * stride];
     }
     for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top + (v1 - v0) + i - 1] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
@@ -283,12 +287,12 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
-    }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
+    // for (int32_t i = 1; i <= top; ++i) {
+    //   aligned_mem_free(buf[top - i]);
+    // }
+    // for (int32_t i = 1; i <= bottom; i++) {
+    //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
+    // }
     delete[] buf;
   }
 }

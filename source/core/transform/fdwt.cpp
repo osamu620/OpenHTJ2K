@@ -141,7 +141,7 @@ static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
 }
 
 void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                             const int32_t v1, const int32_t stride) {
+                             const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
   constexpr int32_t num_pse_i0[2] = {4, 3};
   constexpr int32_t num_pse_i1[2] = {3, 4};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -158,8 +158,9 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
     const int32_t len = round_up(stride, SIMD_LEN_I32);
     auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top - i] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
@@ -168,8 +169,9 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
       buf[top + row] = &in[row * stride];
     }
     for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top + (v1 - v0) + i - 1] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
@@ -206,18 +208,18 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
-    }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
+    // for (int32_t i = 1; i <= top; ++i) {
+    //   aligned_mem_free(buf[top - i]);
+    // }
+    // for (int32_t i = 1; i <= bottom; i++) {
+    //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
+    // }
     delete[] buf;
   }
 }
 
 void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                           const int32_t v1, const int32_t stride) {
+                           const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
   constexpr int32_t num_pse_i0[2] = {2, 1};
   constexpr int32_t num_pse_i1[2] = {1, 2};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -227,15 +229,16 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
-        in[col] = static_cast<sprec_t>((int32_t)in[col] << 1);
+        in[col] = floorf(in[col] * 2.0f);
       }
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
     auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top - i] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
@@ -244,8 +247,9 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
       buf[top + row] = &in[row * stride];
     }
     for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top + (v1 - v0) + i - 1] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
@@ -266,12 +270,12 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
-    }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
+    // for (int32_t i = 1; i <= top; ++i) {
+    //   aligned_mem_free(buf[top - i]);
+    // }
+    // for (int32_t i = 1; i <= bottom; i++) {
+    //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
+    // }
     delete[] buf;
   }
 }
@@ -461,7 +465,17 @@ void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH
                       const uint8_t transformation) {
   const int32_t stride = round_up(u1 - u0, 32);
   sprec_t *src         = previousLL;
-  fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride);
+
+  // Vertical DWT
+  // scratch buffer for symmetric extension — allocate once:
+  const int32_t pse_rows = 7;  // max for irrev97
+  const int32_t pse_len  = round_up(stride, SIMD_LEN_I32);
+  auto *pse_scratch = static_cast<sprec_t*>(aligned_mem_alloc(sizeof(sprec_t) * pse_rows * static_cast<size_t>(pse_len), 32));
+  fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch);
+  aligned_mem_free(pse_scratch);
+
+  // Horizontal DWT
   fdwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
+
   fdwt_2d_deinterleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
 }
