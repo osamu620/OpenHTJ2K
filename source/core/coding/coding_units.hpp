@@ -312,7 +312,6 @@ class j2k_resolution : public j2k_region {
     child_ranges[2] = ranges[2];
     child_ranges[3] = ranges[3];
   }
-  void scale();
   void destroy() {
     aligned_mem_free(i_samples);
     for (uint8_t b = 0; b < num_bands; ++b) {

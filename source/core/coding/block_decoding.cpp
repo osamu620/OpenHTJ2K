@@ -616,8 +616,8 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
         }
 
         assert(pLSB >= 0);  // assure downshift is not negative
-        QF32 = static_cast<int32_t>(*val >> pLSB);
-        *dst = QF32;
+        QF32 = *val >> pLSB;
+        *dst = static_cast<float>(QF32);
       }
     }
   } else {
@@ -656,9 +656,9 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
         QF32 = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
         // convert sign-magnitude to two's complement form
         if (sign) {
-          QF32 = static_cast<int32_t>(-QF32);
+          QF32 = -QF32;
         }
-        *dst = QF32;
+        *dst = static_cast<float>(QF32);
       }
     }
   }

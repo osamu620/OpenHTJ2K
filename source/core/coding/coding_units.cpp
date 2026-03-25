@@ -1225,39 +1225,6 @@ j2c_packet::j2c_packet(const uint16_t l, const uint8_t r, const uint16_t c, cons
 
 j2k_subband *j2k_resolution::access_subband(uint8_t b) { return this->subbands[b].get(); }
 
-void j2k_resolution::scale() {
-  // if lossless, no scaling
-  if (this->subbands[0]->transformation) {
-    return;
-  }
-  uint32_t length = (this->stride) * (this->pos1.y - this->pos0.y);
-  // TODO: The following code works correctly, but needs to be improved for speed
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  // int16x8_t rshift = vdupq_n_s16(static_cast<int16_t>(-this->normalizing_downshift));
-  // for (uint32_t n = 0; n < length - length % 8; n += 8) {
-  //   auto isrc = vld1q_s16(this->i_samples + n);
-  //   isrc      = vshlq_s16(isrc, rshift);  // left-shift with negative value equals to right-shift in NEON
-  //   vst1q_s16(this->i_samples + n, isrc);
-  // }
-  // for (uint32_t n = length - length % 8; n < length; ++n) {
-  //   this->i_samples[n] >>= this->normalizing_downshift;
-  // }
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  // for (uint32_t n = 0; n < length - length % 16; n += 16) {
-  //   auto isrc = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
-  //   _mm256_storeu_si256((__m256i *)(this->i_samples + n),
-  //                       _mm256_srai_epi16(isrc, this->normalizing_downshift));
-  // }
-  // for (uint32_t n = length - length % 16; n < length; ++n) {
-  //   this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
-  // }
-#else
-  // for (uint32_t n = 0; n < length; ++n) {
-  //   this->i_samples[n] = static_cast<sprec_t>(this->i_samples[n] >> this->normalizing_downshift);
-  // }
-#endif
-}
-
 /********************************************************************************
  * j2k_tile_part
  *******************************************************************************/
@@ -2489,7 +2456,7 @@ void j2k_tile::decode() {
 
         if (u1 != u0 && v1 != v0) {
           idwt_2d_sr_fixed(cr->i_samples, pcr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0,
-                           u1, v0, v1, transformation, pcr->normalizing_upshift);
+                           u1, v0, v1, transformation);
         }
       }
     }  // end of resolution loop
@@ -2572,7 +2539,7 @@ void j2k_tile::decode() {
         _mm256_store_si256((__m256i *)(dp + i), _mm256_cvtps_epi32(val));
       }
       for (size_t i = round_down(width, 8); i < width; ++i) {
-        dp[i] = sp[i];
+        dp[i] = static_cast<int32_t>(sp[i]);
       }
     }
 
@@ -3149,7 +3116,7 @@ uint8_t *j2k_tile::encode() {
 
       // wavelet
       if (u1 != u0 && v1 != v0) {
-        cr->scale();
+        // cr->scale();
         fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
                          v0, v1, transformation);
       }

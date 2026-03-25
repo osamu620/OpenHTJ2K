@@ -486,53 +486,10 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 }
 
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, const int32_t u0,
-                      const int32_t u1, const int32_t v0, const int32_t v1, const uint8_t transformation,
-                      uint8_t normalizing_upshift) {
+                      const int32_t u1, const int32_t v0, const int32_t v1, const uint8_t transformation) {
   const int32_t stride     = round_up(u1 - u0, 32);
-  const int32_t buf_length = stride * (v1 - v0);
   sprec_t *src             = nextLL;
   idwt_2d_interleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
   idwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
   idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride);
-
-  // scaling for 16bit width fixed-point representation
-  if (transformation != 1 && normalizing_upshift) {
-    int32_t len = buf_length;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    // int16x8_t vshift = vdupq_n_s16(normalizing_upshift);
-    // int16x8_t in0, in1;
-    //
-    // for (; len >= 16; len -= 16) {
-    //   in0 = vld1q_s16(src);
-    //   in1 = vld1q_s16(src + 8);
-    //   in0 = vshlq_s16(in0, vshift);
-    //   in1 = vshlq_s16(in1, vshift);
-    //   vst1q_s16(src, in0);
-    //   vst1q_s16(src + 8, in1);
-    //   src += 16;
-    // }
-    // for (; len > 0; --len) {
-    //   *src = static_cast<sprec_t>(*src << normalizing_upshift);
-    //   src++;
-    // }
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    // for (; len >= 16; len -= 16) {
-    //   __m256i tmp0 = _mm256_load_si256((__m256i *)src);
-    //   __m256i tmp1 = _mm256_slli_epi16(tmp0, static_cast<int32_t>(normalizing_upshift));
-    //   _mm256_store_si256((__m256i *)src, tmp1);
-    //   src += 16;
-    // }
-    // for (; len > 0; --len) {
-    //   // cast to unsigned to avoid undefined behavior
-    //   *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
-    //   src++;
-    // }
-#else
-    // for (; len > 0; --len) {
-    //   // cast to unsigned to avoid undefined behavior
-    //   *src = static_cast<sprec_t>(static_cast<usprec_t>(*src) << normalizing_upshift);
-    //   src++;
-    // }
-#endif
-  }
 }
