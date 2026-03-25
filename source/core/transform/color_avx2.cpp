@@ -220,4 +220,79 @@ void cvt_ycbcr_to_rgb_irrev_float_avx2(float *sp0, float *sp1, float *sp2, uint3
     }
   }
 }
+
+// lossless: fused int32→float + forward RCT
+void cvt_rgb_to_ycbcr_rev_float_avx2(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                     float *dp0, float *dp1, float *dp2,
+                                     uint32_t width, uint32_t height, uint32_t stride) {
+  for (uint32_t y = 0; y < height; ++y) {
+    const int32_t *p0 = sp0 + y * stride;
+    const int32_t *p1 = sp1 + y * stride;
+    const int32_t *p2 = sp2 + y * stride;
+    float *d0         = dp0 + y * stride;
+    float *d1         = dp1 + y * stride;
+    float *d2         = dp2 + y * stride;
+    int32_t len       = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      __m256i mR  = _mm256_load_si256((__m256i *)p0);
+      __m256i mG  = _mm256_load_si256((__m256i *)p1);
+      __m256i mB  = _mm256_load_si256((__m256i *)p2);
+      __m256i mY  = _mm256_add_epi32(_mm256_add_epi32(mR, mB), _mm256_add_epi32(mG, mG));
+      mY          = _mm256_srai_epi32(mY, 2);  // (R + 2G + B) >> 2
+      _mm256_store_ps(d0, _mm256_cvtepi32_ps(mY));
+      _mm256_store_ps(d1, _mm256_cvtepi32_ps(_mm256_sub_epi32(mB, mG)));
+      _mm256_store_ps(d2, _mm256_cvtepi32_ps(_mm256_sub_epi32(mR, mG)));
+      p0 += 8; p1 += 8; p2 += 8;
+      d0 += 8; d1 += 8; d2 += 8;
+    }
+    for (; len > 0; --len) {
+      int32_t R = *p0++, G = *p1++, B = *p2++;
+      *d0++ = static_cast<float>((R + 2 * G + B) >> 2);
+      *d1++ = static_cast<float>(B - G);
+      *d2++ = static_cast<float>(R - G);
+    }
+  }
+}
+
+// lossy: fused int32→float + forward ICT
+void cvt_rgb_to_ycbcr_irrev_float_avx2(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                       float *dp0, float *dp1, float *dp2,
+                                       uint32_t width, uint32_t height, uint32_t stride) {
+  const __m256 mALPHA_R = _mm256_set1_ps(static_cast<float>(ALPHA_R));
+  const __m256 mALPHA_G = _mm256_set1_ps(static_cast<float>(ALPHA_G));
+  const __m256 mALPHA_B = _mm256_set1_ps(static_cast<float>(ALPHA_B));
+  const __m256 mCB_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CB_FACT_B));
+  const __m256 mCR_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CR_FACT_R));
+  for (uint32_t y = 0; y < height; ++y) {
+    const int32_t *p0 = sp0 + y * stride;
+    const int32_t *p1 = sp1 + y * stride;
+    const int32_t *p2 = sp2 + y * stride;
+    float *d0         = dp0 + y * stride;
+    float *d1         = dp1 + y * stride;
+    float *d2         = dp2 + y * stride;
+    int32_t len       = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      __m256 mR  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p0));
+      __m256 mG  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p1));
+      __m256 mB  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p2));
+      __m256 mY  = _mm256_fmadd_ps(mR, mALPHA_R, _mm256_mul_ps(mG, mALPHA_G));
+      mY         = _mm256_fmadd_ps(mB, mALPHA_B, mY);
+      _mm256_store_ps(d0, mY);
+      _mm256_store_ps(d1, _mm256_mul_ps(mCB_FACT, _mm256_sub_ps(mB, mY)));
+      _mm256_store_ps(d2, _mm256_mul_ps(mCR_FACT, _mm256_sub_ps(mR, mY)));
+      p0 += 8; p1 += 8; p2 += 8;
+      d0 += 8; d1 += 8; d2 += 8;
+    }
+    for (; len > 0; --len) {
+      float R = static_cast<float>(*p0++);
+      float G = static_cast<float>(*p1++);
+      float B = static_cast<float>(*p2++);
+      float Y = static_cast<float>(ALPHA_R) * R + static_cast<float>(ALPHA_G) * G
+                + static_cast<float>(ALPHA_B) * B;
+      *d0++ = Y;
+      *d1++ = static_cast<float>(1.0 / CB_FACT_B) * (B - Y);
+      *d2++ = static_cast<float>(1.0 / CR_FACT_R) * (R - Y);
+    }
+  }
+}
 #endif

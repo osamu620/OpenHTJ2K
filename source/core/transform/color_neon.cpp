@@ -294,6 +294,90 @@ void cvt_ycbcr_to_rgb_irrev_float_neon(float *sp0, float *sp1, float *sp2, uint3
   }
 }
 
+// lossless: fused int32→float + forward RCT
+void cvt_rgb_to_ycbcr_rev_float_neon(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                     float *dp0, float *dp1, float *dp2,
+                                     uint32_t width, uint32_t height, uint32_t stride) {
+  for (uint32_t y = 0; y < height; ++y) {
+    const int32_t *p0 = sp0 + y * stride;
+    const int32_t *p1 = sp1 + y * stride;
+    const int32_t *p2 = sp2 + y * stride;
+    float *d0         = dp0 + y * stride;
+    float *d1         = dp1 + y * stride;
+    float *d2         = dp2 + y * stride;
+    int32_t len       = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      int32x4_t mR0 = vld1q_s32(p0),     mR1 = vld1q_s32(p0 + 4);
+      int32x4_t mG0 = vld1q_s32(p1),     mG1 = vld1q_s32(p1 + 4);
+      int32x4_t mB0 = vld1q_s32(p2),     mB1 = vld1q_s32(p2 + 4);
+      int32x4_t mY0 = vshrq_n_s32(vaddq_s32(vaddq_s32(mR0, mB0), vaddq_s32(mG0, mG0)), 2);
+      int32x4_t mY1 = vshrq_n_s32(vaddq_s32(vaddq_s32(mR1, mB1), vaddq_s32(mG1, mG1)), 2);
+      vst1q_f32(d0,     vcvtq_f32_s32(mY0));
+      vst1q_f32(d0 + 4, vcvtq_f32_s32(mY1));
+      vst1q_f32(d1,     vcvtq_f32_s32(vsubq_s32(mB0, mG0)));
+      vst1q_f32(d1 + 4, vcvtq_f32_s32(vsubq_s32(mB1, mG1)));
+      vst1q_f32(d2,     vcvtq_f32_s32(vsubq_s32(mR0, mG0)));
+      vst1q_f32(d2 + 4, vcvtq_f32_s32(vsubq_s32(mR1, mG1)));
+      p0 += 8; p1 += 8; p2 += 8;
+      d0 += 8; d1 += 8; d2 += 8;
+    }
+    for (; len > 0; --len) {
+      int32_t R = *p0++, G = *p1++, B = *p2++;
+      *d0++ = static_cast<float>((R + 2 * G + B) >> 2);
+      *d1++ = static_cast<float>(B - G);
+      *d2++ = static_cast<float>(R - G);
+    }
+  }
+}
+
+// lossy: fused int32→float + forward ICT
+void cvt_rgb_to_ycbcr_irrev_float_neon(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                       float *dp0, float *dp1, float *dp2,
+                                       uint32_t width, uint32_t height, uint32_t stride) {
+  const float32x4_t fALPHA_R = vdupq_n_f32(static_cast<float>(ALPHA_R));
+  const float32x4_t fALPHA_G = vdupq_n_f32(static_cast<float>(ALPHA_G));
+  const float32x4_t fALPHA_B = vdupq_n_f32(static_cast<float>(ALPHA_B));
+  const float32x4_t fCB_FACT = vdupq_n_f32(static_cast<float>(1.0 / CB_FACT_B));
+  const float32x4_t fCR_FACT = vdupq_n_f32(static_cast<float>(1.0 / CR_FACT_R));
+  for (uint32_t y = 0; y < height; ++y) {
+    const int32_t *p0 = sp0 + y * stride;
+    const int32_t *p1 = sp1 + y * stride;
+    const int32_t *p2 = sp2 + y * stride;
+    float *d0         = dp0 + y * stride;
+    float *d1         = dp1 + y * stride;
+    float *d2         = dp2 + y * stride;
+    int32_t len       = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      float32x4_t mR0 = vcvtq_f32_s32(vld1q_s32(p0));
+      float32x4_t mR1 = vcvtq_f32_s32(vld1q_s32(p0 + 4));
+      float32x4_t mG0 = vcvtq_f32_s32(vld1q_s32(p1));
+      float32x4_t mG1 = vcvtq_f32_s32(vld1q_s32(p1 + 4));
+      float32x4_t mB0 = vcvtq_f32_s32(vld1q_s32(p2));
+      float32x4_t mB1 = vcvtq_f32_s32(vld1q_s32(p2 + 4));
+      float32x4_t mY0 = vfmaq_f32(vfmaq_f32(vmulq_f32(mR0, fALPHA_R), mG0, fALPHA_G), mB0, fALPHA_B);
+      float32x4_t mY1 = vfmaq_f32(vfmaq_f32(vmulq_f32(mR1, fALPHA_R), mG1, fALPHA_G), mB1, fALPHA_B);
+      vst1q_f32(d0,     mY0);
+      vst1q_f32(d0 + 4, mY1);
+      vst1q_f32(d1,     vmulq_f32(fCB_FACT, vsubq_f32(mB0, mY0)));
+      vst1q_f32(d1 + 4, vmulq_f32(fCB_FACT, vsubq_f32(mB1, mY1)));
+      vst1q_f32(d2,     vmulq_f32(fCR_FACT, vsubq_f32(mR0, mY0)));
+      vst1q_f32(d2 + 4, vmulq_f32(fCR_FACT, vsubq_f32(mR1, mY1)));
+      p0 += 8; p1 += 8; p2 += 8;
+      d0 += 8; d1 += 8; d2 += 8;
+    }
+    for (; len > 0; --len) {
+      float R = static_cast<float>(*p0++);
+      float G = static_cast<float>(*p1++);
+      float B = static_cast<float>(*p2++);
+      float Y = static_cast<float>(ALPHA_R) * R + static_cast<float>(ALPHA_G) * G
+                + static_cast<float>(ALPHA_B) * B;
+      *d0++ = Y;
+      *d1++ = static_cast<float>(1.0 / CB_FACT_B) * (B - Y);
+      *d2++ = static_cast<float>(1.0 / CR_FACT_R) * (R - Y);
+    }
+  }
+}
+
   #if 0
 // 16bit fixedpoint calculation
 void cvt_ycbcr_to_rgb_irrev_neon2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width,

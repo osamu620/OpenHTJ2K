@@ -39,14 +39,20 @@
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_avx2,
                                                           cvt_ycbcr_to_rgb_rev_float_avx2};
+static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_avx2,
+                                                              cvt_rgb_to_ycbcr_rev_float_avx2};
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_neon, cvt_rgb_to_ycbcr_rev_neon};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_neon,
                                                           cvt_ycbcr_to_rgb_rev_float_neon};
+static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_neon,
+                                                              cvt_rgb_to_ycbcr_rev_float_neon};
 #else
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float,
                                                           cvt_ycbcr_to_rgb_rev_float};
+static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float,
+                                                              cvt_rgb_to_ycbcr_rev_float};
 #endif
 
 #ifdef OPENHTJ2K_THREAD
@@ -2858,12 +2864,19 @@ void j2k_tile::rgb_to_ycbcr() {
 
   const element_siz tc0 = this->tcomp[0].get_pos0();
   const element_siz tc1 = this->tcomp[0].get_pos1();
+  const uint32_t width  = tc1.x - tc0.x;
+  const uint32_t height = tc1.y - tc0.y;
+  const uint32_t stride = round_up(width, 32U);
 
   int32_t *const sp0 = this->tcomp[0].get_sample_address(0, 0);  // assume that comp0 is red
   int32_t *const sp1 = this->tcomp[1].get_sample_address(0, 0);  // assume that comp1 is green
   int32_t *const sp2 = this->tcomp[2].get_sample_address(0, 0);  // assume that comp2 is blue
   if (MCT) {
-    cvt_rgb_to_ycbcr[transformation](sp0, sp1, sp2, tc1.x - tc0.x, tc1.y - tc0.y);
+    j2k_resolution *cr0 = this->tcomp[0].access_resolution(this->tcomp[0].get_dwt_levels());
+    j2k_resolution *cr1 = this->tcomp[1].access_resolution(this->tcomp[1].get_dwt_levels());
+    j2k_resolution *cr2 = this->tcomp[2].access_resolution(this->tcomp[2].get_dwt_levels());
+    cvt_rgb_to_ycbcr_float[transformation](sp0, sp1, sp2, cr0->i_samples, cr1->i_samples,
+                                           cr2->i_samples, width, height, stride);
   }
 }
 
@@ -2887,49 +2900,52 @@ uint8_t *j2k_tile::encode() {
     uint32_t height = (bottom_right.y - top_left.y);
 
     // convert int32_t pixel values into float
+    // (skipped for MCT components 0/1/2: already written by rgb_to_ycbcr())
+    if (!(MCT && num_components >= 3 && c < 3)) {
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    for (uint32_t y = 0; y < height; ++y) {
-      int32_t *sp             = src + y * stride;
-      sprec_t *dp             = cr->i_samples + y * stride;
-      uint32_t num_tc_samples = bottom_right.x - top_left.x;
-      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-        auto v0 = _mm256_load_si256((__m256i *)sp);
-        auto t0 = _mm256_cvtepi32_ps(v0);
-        _mm256_store_ps(dp, t0);
-        sp += 8;
-        dp += 8;
-      }
-      for (; num_tc_samples > 0; --num_tc_samples) {
-        *dp++ = static_cast<sprec_t>(*sp++);
-      }
-    }
-#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    for (uint32_t y = 0; y < height; ++y) {
-      int32_t *sp             = src + y * stride;
-      sprec_t *dp             = cr->i_samples + y * stride;
-      uint32_t num_tc_samples = bottom_right.x - top_left.x;
-      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
-        auto vsrc0 = vld1q_s32(sp);
-        auto vsrc1 = vld1q_s32(sp + 4);
-        vst1q_f32(dp, vcvtq_f32_s32(vsrc0));
-        vst1q_f32(dp + 4, vcvtq_f32_s32(vsrc1));
-        sp += 8;
-        dp += 8;
-      }
-      for (; num_tc_samples > 0; --num_tc_samples) {
-        *dp++ = static_cast<sprec_t>(*sp++);
-      }
-    }
-#else
       for (uint32_t y = 0; y < height; ++y) {
         int32_t *sp             = src + y * stride;
-        sprec_t *dp             = cr->i_samples + y * round_up(bottom_right.x - top_left.x, 32U);
+        sprec_t *dp             = cr->i_samples + y * stride;
         uint32_t num_tc_samples = bottom_right.x - top_left.x;
+        for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+          auto v0 = _mm256_load_si256((__m256i *)sp);
+          auto t0 = _mm256_cvtepi32_ps(v0);
+          _mm256_store_ps(dp, t0);
+          sp += 8;
+          dp += 8;
+        }
         for (; num_tc_samples > 0; --num_tc_samples) {
           *dp++ = static_cast<sprec_t>(*sp++);
         }
       }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      for (uint32_t y = 0; y < height; ++y) {
+        int32_t *sp             = src + y * stride;
+        sprec_t *dp             = cr->i_samples + y * stride;
+        uint32_t num_tc_samples = bottom_right.x - top_left.x;
+        for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+          auto vsrc0 = vld1q_s32(sp);
+          auto vsrc1 = vld1q_s32(sp + 4);
+          vst1q_f32(dp, vcvtq_f32_s32(vsrc0));
+          vst1q_f32(dp + 4, vcvtq_f32_s32(vsrc1));
+          sp += 8;
+          dp += 8;
+        }
+        for (; num_tc_samples > 0; --num_tc_samples) {
+          *dp++ = static_cast<sprec_t>(*sp++);
+        }
+      }
+#else
+        for (uint32_t y = 0; y < height; ++y) {
+          int32_t *sp             = src + y * stride;
+          sprec_t *dp             = cr->i_samples + y * round_up(bottom_right.x - top_left.x, 32U);
+          uint32_t num_tc_samples = bottom_right.x - top_left.x;
+          for (; num_tc_samples > 0; --num_tc_samples) {
+            *dp++ = static_cast<sprec_t>(*sp++);
+          }
+        }
 #endif
+    }  // end skip for MCT components
 
     // Lambda function of block-endocing
 #ifdef OPENHTJ2K_THREAD
