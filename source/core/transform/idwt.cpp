@@ -102,6 +102,30 @@ static void idwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, const int32_t left, cons
   memcpy(in, buf + left, sizeof(sprec_t) * (static_cast<size_t>(i1 - i0)));
 }
 
+// In-place 1-D IDWT for interior rows (not first or last).
+// Operates directly on in[-left..width+SIMD_LEN_I32-1] without copying to/from an external buffer.
+// Precondition: those memory locations are within the tile allocation (guaranteed for interior rows).
+static inline void idwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int32_t right,
+                                      const int32_t i0, const int32_t i1,
+                                      const uint8_t transformation) {
+  const int32_t width = i1 - i0;
+  // Save regions that the filter will temporarily overwrite with PSE data or SIMD tail writes.
+  sprec_t left_save[4];
+  sprec_t right_save[SIMD_LEN_I32];
+  for (int32_t i = 0; i < left; ++i) left_save[i] = in[-left + i];
+  for (int32_t i = 0; i < SIMD_LEN_I32; ++i) right_save[i] = in[width + i];
+  // Fill left PSE into in[-left..-1] and right PSE into in[width..width+right-1].
+  for (int32_t i = 1; i <= left; ++i)
+    in[-i] = in[PSEo(i0 - i, i0, i1)];
+  for (int32_t i = 1; i <= right; ++i)
+    in[width + i - 1] = in[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
+  // Filter in-place: in-left is the extended buffer (left PSE | data | right PSE).
+  idwt_1d_filtr_fixed[transformation](in - left, left, i0, i1);
+  // Restore the saved regions (IDWT output is in in[0..width-1], boundary regions are scratch).
+  for (int32_t i = 0; i < left; ++i) in[-left + i] = left_save[i];
+  for (int32_t i = 0; i < SIMD_LEN_I32; ++i) in[width + i] = right_save[i];
+}
+
 static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
                               const int32_t v1, const uint8_t transformation, const int32_t stride) {
   constexpr int32_t num_pse_i0[2][2] = {{3, 1}, {4, 2}};
@@ -112,18 +136,25 @@ static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
   if (u0 == u1 - 1) {
     // one sample case
     for (int32_t row = 0; row < v1 - v0; ++row) {
-      //      in[row] = in[row];
       if (u0 % 2 != 0 && transformation) {
         in[row * stride] = static_cast<sprec_t>(in[row * stride] / 2.0f);
       }
     }
   } else {
     // need to perform symmetric extension
-    const int32_t len = u1 - u0 + left + right;
-    auto *Yext        = static_cast<sprec_t *>(aligned_mem_alloc(
+    const int32_t nrows = v1 - v0;
+    const int32_t len   = u1 - u0 + left + right;
+    // Yext is used only for the first and last rows; interior rows use in-place transform.
+    auto *Yext = static_cast<sprec_t *>(aligned_mem_alloc(
         sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
-    for (int32_t row = 0; row < v1 - v0; ++row) {
-      idwt_1d_sr_fixed(Yext, in, left, right, u0, u1, transformation);
+    for (int32_t row = 0; row < nrows; ++row) {
+      if (row == 0 || row == nrows - 1) {
+        // First/last rows: use copy-based path (in[-left] or in[width+SIMD_LEN_I32-1] may be
+        // outside the tile allocation for the first and last rows respectively).
+        idwt_1d_sr_fixed(Yext, in, left, right, u0, u1, transformation);
+      } else {
+        idwt_1d_sr_inplace(in, left, right, u0, u1, transformation);
+      }
       in += stride;
     }
     aligned_mem_free(Yext);
