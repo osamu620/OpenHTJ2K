@@ -2684,24 +2684,21 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
 
     // downshift value for lossy path
     int16_t downshift = (tcomp[c].transformation) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
-    if (downshift < 0) {
-      printf("WARNING: sample precision over 13 bit/pixel is not supported.\n");
-    }
-    // tentative workaround for negative downshift value
-    // TODO: expand internal precisions to fix this problem
-    int16_t offset      = (downshift < 0) ? static_cast<int16_t>((1 << -downshift) >> 1)
-                                          : static_cast<int16_t>((1 << downshift) >> 1);
+    // For bitdepth > FRACBITS (e.g., 16-bit): downshift < 0, meaning the internal representation
+    // was right-shifted during encoding and must be left-shifted back during reconstruction.
+    // No rounding offset is applied for a left shift (it would introduce a constant bias).
+    // For bitdepth <= FRACBITS: downshift >= 0 (right shift), use (1<<downshift)>>1 for rounding.
+    int16_t offset = (downshift <= 0) ? 0 : static_cast<int16_t>((1 << downshift) >> 1);
     int32_t *const src  = tcomp[c].get_sample_address(0, 0);
     int32_t *const cdst = dst[c];
     int32_t *sp, *dp;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    int32x4_t v0, v1, o, dco, vmax, vmin, vshift, nvshift;
-    o       = vdupq_n_s32(offset);
-    dco     = vdupq_n_s32(DC_OFFSET);
-    vmax    = vdupq_n_s32(MAXVAL);
-    vmin    = vdupq_n_s32(MINVAL);
-    vshift  = vdupq_n_s32(-downshift);
-    nvshift = vnegq_s32(vshift);
+    int32x4_t v0, v1, o, dco, vmax, vmin, vshift;
+    o      = vdupq_n_s32(offset);
+    dco    = vdupq_n_s32(DC_OFFSET);
+    vmax   = vdupq_n_s32(MAXVAL);
+    vmin   = vdupq_n_s32(MINVAL);
+    vshift = vdupq_n_s32(-downshift);
     if (downshift < 0) {
       for (uint32_t y = 0; y < in_height; ++y) {
         uint32_t len = csize.x;
@@ -2710,8 +2707,8 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         for (; len >= 8; len -= 8) {
           v0 = vld1q_s32(sp);
           v1 = vld1q_s32(sp + 4);
-          v0 = vshlq_s32(vaddq_s32(v0, o), nvshift);
-          v1 = vshlq_s32(vaddq_s32(v1, o), nvshift);
+          v0 = vshlq_s32(vaddq_s32(v0, o), vshift);
+          v1 = vshlq_s32(vaddq_s32(v1, o), vshift);
           v0 = vaddq_s32(v0, dco);
           v1 = vaddq_s32(v1, dco);
           v0 = vminq_s32(v0, vmax);
