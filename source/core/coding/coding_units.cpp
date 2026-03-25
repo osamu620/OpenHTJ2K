@@ -2563,26 +2563,26 @@ void j2k_tile::decode() {
     // }
 
     // AVX2 version
-    // __m256 val;
-    // for (size_t y = 0; y < height; ++y) {
-    //   sprec_t *sp = cr->i_samples + y * width;
-    //   int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-    //   for (size_t i = 0; i < round_down(width, 8); i += 8) {
-    //     val  = _mm256_loadu_ps(sp + i);
-    //     _mm256_storeu_si256((__m256i *)(dp + i), _mm256_cvtps_epi32(val));
-    //   }
-    //   for (size_t i = round_down(width, 8); i < width; ++i) {
-    //     dp[i] = sp[i];
-    //   }
-    // }
-
+    __m256 val;
     for (size_t y = 0; y < height; ++y) {
       sprec_t *sp = cr->i_samples + y * width;
       int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
-      for (size_t n = 0; n < width; ++n) {
-        *dp++ = *sp++;
+      for (size_t i = 0; i < round_down(width, 8); i += 8) {
+        val  = _mm256_load_ps(sp + i);
+        _mm256_store_si256((__m256i *)(dp + i), _mm256_cvtps_epi32(val));
+      }
+      for (size_t i = round_down(width, 8); i < width; ++i) {
+        dp[i] = sp[i];
       }
     }
+
+    // for (size_t y = 0; y < height; ++y) {
+    //   sprec_t *sp = cr->i_samples + y * width;
+    //   int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
+    //   for (size_t n = 0; n < width; ++n) {
+    //     *dp++ = *sp++;
+    //   }
+    // }
 
 #else
       for (size_t y = 0; y < height; ++y) {
