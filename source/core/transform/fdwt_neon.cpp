@@ -169,37 +169,33 @@ void fdwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
     const int32_t stop   = ceil_int(v1, 2);
     const int32_t offset = top + v0 % 2;
 
-    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 4;
-    for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], fA);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] += fA * sum;
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
+      for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
+        fdwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fA);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] += fA * (buf[n][col] + buf[n + 2][col]);
+        }
       }
-    }
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], fB);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] += fB * sum;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+        fdwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fB);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] += fB * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
-    }
-    for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], fC);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] += fC * sum;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
+        fdwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fC);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] += fC * (buf[n][col] + buf[n + 2][col]);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      fdwt_irrev97_fixed_neon_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], fD);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] += fD * sum;
+      for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+        fdwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fD);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] += fD * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
     }
 
@@ -253,37 +249,36 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     const int32_t stop   = ceil_int(v1, 2);
     const int32_t offset = top + v0 % 2;
 
-    int32_t simdlen = (u1 - u0) - (u1 - u0) % 4;
-    for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < simdlen; col += 4) {
-        auto X0 = vld1q_f32(&buf[n][col]);
-        auto X2 = vld1q_f32(&buf[n + 2][col]);
-        auto X1 = vld1q_f32(&buf[n + 1][col]);
-        auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(X0, X2), 0.5f));
-        X1 = vsubq_f32(X1, xfloor);
-        vst1q_f32(&buf[n + 1][col], X1);
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 4) {
+          auto X0     = vld1q_f32(buf[n] + cs + col);
+          auto X2     = vld1q_f32(buf[n + 2] + cs + col);
+          auto X1     = vld1q_f32(buf[n + 1] + cs + col);
+          auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(X0, X2), 0.5f));
+          X1          = vsubq_f32(X1, xfloor);
+          vst1q_f32(buf[n + 1] + cs + col, X1);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] -= floorf((buf[n][col] + buf[n + 2][col]) * 0.5f);
+        }
       }
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] -= floorf(sum * 0.5f);
-      }
-    }
-    const auto vtwo = vdupq_n_f32(2.0f);
-    for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < simdlen; col += 4) {
-        auto X0 = vld1q_f32(&buf[n - 1][col]);
-        auto X2 = vld1q_f32(&buf[n + 1][col]);
-        auto X1 = vld1q_f32(&buf[n][col]);
-        auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(X0, X2), vtwo), 0.25f));
-        X1 = vaddq_f32(X1, xfloor);
-        vst1q_f32(&buf[n][col], X1);
-      }
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        sum += 2.0f;
-        buf[n][col] += floorf(sum * 0.25f);
+      const auto vtwo = vdupq_n_f32(2.0f);
+      for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 4) {
+          auto X0     = vld1q_f32(buf[n - 1] + cs + col);
+          auto X2     = vld1q_f32(buf[n + 1] + cs + col);
+          auto X1     = vld1q_f32(buf[n] + cs + col);
+          auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(X0, X2), vtwo), 0.25f));
+          X1          = vaddq_f32(X1, xfloor);
+          vst1q_f32(buf[n] + cs + col, X1);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] += floorf((buf[n - 1][col] + buf[n + 1][col] + 2.0f) * 0.25f);
+        }
       }
     }
 

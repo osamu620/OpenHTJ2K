@@ -35,6 +35,7 @@
   #define OPENHTJ2K_ENABLE_AVX2
 #endif
 #define SIMD_PADDING 32
+constexpr int32_t DWT_VERT_STRIP = 64;  // column-strip width for vertical DWT (multiple of 8)
 
 constexpr float fA = -1.586134342059924f;
 constexpr float fB = -0.052980118572961f;

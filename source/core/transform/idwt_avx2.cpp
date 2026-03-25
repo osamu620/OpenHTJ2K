@@ -170,37 +170,33 @@ void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
-    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 8;
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
-      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], fD);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = buf[n][col] - fD * sum;
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 8;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
+        idwt_irrev97_fixed_avx2_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fD);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] -= fD * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
-    }
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], fC);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = buf[n + 1][col] - fC * sum;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+        idwt_irrev97_fixed_avx2_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fC);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] -= fC * (buf[n][col] + buf[n + 2][col]);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
-      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], fB);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = buf[n][col] - fB * sum;
+      for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
+        idwt_irrev97_fixed_avx2_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fB);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] -= fB * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      idwt_irrev97_fixed_avx2_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], fA);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = buf[n + 1][col] - fA * sum;
+      for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+        idwt_irrev97_fixed_avx2_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fA);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] -= fA * (buf[n][col] + buf[n + 2][col]);
+        }
       }
     }
     delete[] buf;
@@ -239,62 +235,38 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
-    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 8;
-    const __m256 xtwo = _mm256_set1_ps(2.0f);
-    const __m256 x025 = _mm256_set1_ps(0.25f);
-    __m256 x0, x1, x2;
-    for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-      float *xp0 = buf[n - 1];
-      float *xp1 = buf[n];
-      float *xp2 = buf[n + 1];
-      for (int32_t col = 0; col < simdlen; col += 8) {
-        x0           = _mm256_load_ps(xp0);
-        x2           = _mm256_load_ps(xp2);
-        x1           = _mm256_load_ps(xp1);
-        auto xfloor = _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(x0, x2), xtwo), x025));
-        x1 = _mm256_sub_ps(x1, xfloor);
-        // __m256i vout = _mm256_add_epi32(vone, _mm256_srai_epi32(_mm256_add_epi32(_mm256_cvtps_epi32(x0), _mm256_cvtps_epi32(x2)), 1));
-        // vout         = _mm256_srai_epi32(vout, 1);
-        // x1           = _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_cvtps_epi32(x1), vout));
-        _mm256_store_ps(xp1, x1);
-        // _mm_prefetch(reinterpret_cast<char *>((__m256 *)xp0 + 2), _MM_HINT_NTA);
-        // _mm_prefetch(reinterpret_cast<char *>((__m256 *)xp1 + 2), _MM_HINT_NTA);
-        // _mm_prefetch(reinterpret_cast<char *>((__m256 *)xp2 + 2), _MM_HINT_NTA);
-        xp0 += 8;
-        xp1 += 8;
-        xp2 += 8;
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 8;
+      const __m256 xtwo = _mm256_set1_ps(2.0f);
+      const __m256 x025 = _mm256_set1_ps(0.25f);
+      for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 8) {
+          __m256 x0   = _mm256_load_ps(buf[n - 1] + cs + col);
+          __m256 x2   = _mm256_load_ps(buf[n + 1] + cs + col);
+          __m256 x1   = _mm256_load_ps(buf[n] + cs + col);
+          auto xfloor = _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(x0, x2), xtwo), x025));
+          x1          = _mm256_sub_ps(x1, xfloor);
+          _mm256_store_ps(buf[n] + cs + col, x1);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] -= floorf((buf[n - 1][col] + buf[n + 1][col] + 2.0f) * 0.25f);
+        }
       }
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = *xp0++;
-        sum += *xp2++;
-        sum += 2.0f;
-        *xp1++ -= floorf(sum * 0.25f);
-      }
-    }
-    const __m256 x05 = _mm256_set1_ps(0.5f);
-    for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      float *xp0 = buf[n];
-      float *xp1 = buf[n + 1];
-      float *xp2 = buf[n + 2];
-      for (int32_t col = 0; col < simdlen; col += 8) {
-        x0 = _mm256_load_ps(xp0);
-        x2 = _mm256_load_ps(xp2);
-        x1 = _mm256_load_ps(xp1);
-        auto xfloor = _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(x0, x2), x05));
-        x1 = _mm256_add_ps(x1, xfloor);
-        // x1 = _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_cvtps_epi32(x1), _mm256_srai_epi32(_mm256_add_epi32(_mm256_cvtps_epi32(x0), _mm256_cvtps_epi32(x2)), 1)));
-        _mm256_store_ps(xp1, x1);
-        // _mm_prefetch(reinterpret_cast<char *>((__m256 *)xp0 + 2), _MM_HINT_NTA);
-        // _mm_prefetch(reinterpret_cast<char *>((__m256 *)xp1 + 2), _MM_HINT_NTA);
-        // _mm_prefetch(reinterpret_cast<char *>((__m256 *)xp2 + 2), _MM_HINT_NTA);
-        xp0 += 8;
-        xp1 += 8;
-        xp2 += 8;
-      }
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = *xp0++;
-        sum += *xp2++;
-        *xp1++ += floorf(sum * 0.5f);
+      const __m256 x05 = _mm256_set1_ps(0.5f);
+      for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 8) {
+          __m256 x0   = _mm256_load_ps(buf[n] + cs + col);
+          __m256 x2   = _mm256_load_ps(buf[n + 2] + cs + col);
+          __m256 x1   = _mm256_load_ps(buf[n + 1] + cs + col);
+          auto xfloor = _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(x0, x2), x05));
+          x1          = _mm256_add_ps(x1, xfloor);
+          _mm256_store_ps(buf[n + 1] + cs + col, x1);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] += floorf((buf[n][col] + buf[n + 2][col]) * 0.5f);
+        }
       }
     }
     delete[] buf;

@@ -165,32 +165,28 @@ void idwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = buf[n][col] - fD * sum;
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n][col] -= fD * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
-    }
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = buf[n + 1][col] - fC * sum;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n + 1][col] -= fC * (buf[n][col] + buf[n + 2][col]);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = buf[n][col] - fB * sum;
+      for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n][col] -= fB * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = buf[n + 1][col] - fA * sum;
+      for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n + 1][col] -= fA * (buf[n][col] + buf[n + 2][col]);
+        }
       }
     }
 
@@ -239,16 +235,18 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
-    for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col] + buf[n + 1][col];
-        buf[n][col] -= floorf((sum + 2.0f) * 0.25f);
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n][col] -= floorf((buf[n - 1][col] + buf[n + 1][col] + 2.0f) * 0.25f);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        float sum = buf[n][col] + buf[n + 2][col];
-        buf[n + 1][col] += floorf(sum * 0.5f);
+      for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n + 1][col] += floorf((buf[n][col] + buf[n + 2][col]) * 0.5f);
+        }
       }
     }
 

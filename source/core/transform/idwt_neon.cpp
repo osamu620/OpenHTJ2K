@@ -174,37 +174,33 @@ void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
-    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 4;
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
-      idwt_irrev97_fixed_neon_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], fD);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] -= sum * fD; //(sprec_t)((Dcoeff * sum + Doffset) >> Dshift);
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
+        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fD);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] -= (buf[n - 1][col] + buf[n + 1][col]) * fD;
+        }
       }
-    }
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      idwt_irrev97_fixed_neon_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], fC);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] -= sum * fC; //(sprec_t)((Ccoeff * sum + Coffset) >> Cshift);
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fC);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] -= (buf[n][col] + buf[n + 2][col]) * fC;
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
-      idwt_irrev97_fixed_neon_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], fB);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] -= sum * fB; //(sprec_t)((Bcoeff * sum + Boffset) >> Bshift);
+      for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
+        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fB);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] -= (buf[n - 1][col] + buf[n + 1][col]) * fB;
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      idwt_irrev97_fixed_neon_ver_step(simdlen, buf[n], buf[n + 2], buf[n + 1], fA);
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] -= sum * fA; //(sprec_t)((Acoeff * sum + Aoffset) >> Ashift);
+      for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fA);
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] -= (buf[n][col] + buf[n + 2][col]) * fA;
+        }
       }
     }
 
@@ -254,78 +250,36 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
-    int32_t simdlen = (u1 - u0) - (u1 - u0) % 8;
-    const auto vtwo = vdupq_n_f32(2.0f);
-    float32x4_t vin00, vout0, vin10, vin01, vout1, vin11;
-    for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-      float *x0 = buf[n - 1];
-      float *x1 = buf[n];
-      float *x2 = buf[n + 1];
-      // openhtj2k_arm_prefetch(x0);
-      // openhtj2k_arm_prefetch(x1);
-      // openhtj2k_arm_prefetch(x2);
-      for (int32_t col = 0; col < simdlen; col += 8) {
-        vin00 = vld1q_f32(x0);
-        vin01 = vld1q_f32(x0 + 4);
-        vout0 = vld1q_f32(x1);
-        vout1 = vld1q_f32(x1 + 4);
-        vin10 = vld1q_f32(x2);
-        vin11 = vld1q_f32(x2 + 4);
-        auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin00, vin10), vtwo), 0.25f));
-        vout0 = vsubq_f32(vout0, xfloor0);
-        auto xfloor1 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin01, vin11), vtwo), 0.25f));
-        vout1 = vsubq_f32(vout1, xfloor1);
-        // vout0 = vsubq_f32(vout0, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin00), vcvtq_s32_f32(vin10)), 1)));
-        // vout1 = vsubq_f32(vout1, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin01), vcvtq_s32_f32(vin11)), 1)));
-        vst1q_f32(x1, vout0);
-        vst1q_f32(x1 + 4, vout1);
-        x0 += 8;
-        x1 += 8;
-        x2 += 8;
-        // openhtj2k_arm_prefetch(x0);
-        // openhtj2k_arm_prefetch(x1);
-        // openhtj2k_arm_prefetch(x2);
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
+      const auto vtwo         = vdupq_n_f32(2.0f);
+      for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 4) {
+          auto vin0    = vld1q_f32(buf[n - 1] + cs + col);
+          auto vout    = vld1q_f32(buf[n] + cs + col);
+          auto vin1    = vld1q_f32(buf[n + 1] + cs + col);
+          auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin0, vin1), vtwo), 0.25f));
+          vout         = vsubq_f32(vout, xfloor0);
+          vst1q_f32(buf[n] + cs + col, vout);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n][col] -= floorf((buf[n - 1][col] + buf[n + 1][col] + 2.0f) * 0.25f);
+        }
       }
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = *x0++;
-        sum += *x2++;
-        sum += 2.0f;
-        *x1++ -= floorf(sum * 0.25f);
-      }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      float *x0 = buf[n];
-      float *x1 = buf[n + 1];
-      float *x2 = buf[n + 2];
-      // openhtj2k_arm_prefetch(x0);
-      // openhtj2k_arm_prefetch(x1);
-      // openhtj2k_arm_prefetch(x2);
-      for (int32_t col = 0; col < simdlen; col += 8) {
-        vin00 = vld1q_f32(x0);
-        vin01 = vld1q_f32(x0 + 4);
-        vout0 = vld1q_f32(x1);
-        vout1 = vld1q_f32(x1 + 4);
-        vin10 = vld1q_f32(x2);
-        vin11 = vld1q_f32(x2 + 4);
-        auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vin00, vin10), 0.5f));
-        vout0 = vaddq_f32(vout0, xfloor0);
-        auto xfloor1 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vin01, vin11), 0.5f));
-        vout1 = vaddq_f32(vout1, xfloor1);
-        // vout0 = vaddq_f32(vout0, vcvtq_f32_s32(vhaddq_s32(vcvtq_s32_f32(vin00), vcvtq_s32_f32(vin10))));
-        // vout1 = vaddq_f32(vout1, vcvtq_f32_s32(vhaddq_s32(vcvtq_s32_f32(vin01), vcvtq_s32_f32(vin11))));
-        vst1q_f32(x1, vout0);
-        vst1q_f32(x1 + 4, vout1);
-        x0 += 8;
-        x1 += 8;
-        x2 += 8;
-        // openhtj2k_arm_prefetch(x0);
-        // openhtj2k_arm_prefetch(x1);
-        // openhtj2k_arm_prefetch(x2);
-      }
-      for (int32_t col = simdlen; col < u1 - u0; ++col) {
-        float sum = *x0++;
-        sum += *x2++;
-        *x1++ += floorf(sum * 0.5f);
+      for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 4) {
+          auto vin0    = vld1q_f32(buf[n] + cs + col);
+          auto vout    = vld1q_f32(buf[n + 1] + cs + col);
+          auto vin1    = vld1q_f32(buf[n + 2] + cs + col);
+          auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vin0, vin1), 0.5f));
+          vout         = vaddq_f32(vout, xfloor0);
+          vst1q_f32(buf[n + 1] + cs + col, vout);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
+          buf[n + 1][col] += floorf((buf[n][col] + buf[n + 2][col]) * 0.5f);
+        }
       }
     }
 
