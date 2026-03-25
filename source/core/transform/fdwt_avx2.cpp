@@ -44,7 +44,7 @@ auto fdwt_irrev97_fixed_avx2_hor_step = [](const int32_t init_pos, const int32_t
     auto xsum = _mm256_add_ps(xin0, xin2);
     xsum      = _mm256_blend_ps(xsum, _mm256_setzero_ps(), 0xAA);
     xsum      = _mm256_mul_ps(xsum, vcoeff);
-    xsum      = _mm256_cvtepi32_ps(_mm256_slli_si256(_mm256_cvtps_epi32(xsum), 4));
+    xsum      = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xsum), 4));
     xin0      = _mm256_add_ps(xsum, xin0);
     _mm256_storeu_ps(X + n + n0, xin0);
   }
