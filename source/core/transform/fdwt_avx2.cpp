@@ -30,6 +30,7 @@
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #include "dwt.hpp"
   #include <cstring>
+  #include <cmath>
 
 /********************************************************************************
  * horizontal transforms
