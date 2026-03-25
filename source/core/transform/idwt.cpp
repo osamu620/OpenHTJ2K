@@ -497,7 +497,7 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
 
   // Vertical DWT
   // scratch buffer for symmetric extension — allocate once:
-  const int32_t pse_rows = 7;  // max for irrev97
+  const int32_t pse_rows = 8;  // max for irrev97: top=4 + bottom=4
   const int32_t pse_len  = round_up(stride, SIMD_LEN_I32);
   auto *pse_scratch = static_cast<sprec_t*>(aligned_mem_alloc(sizeof(sprec_t) * pse_rows * static_cast<size_t>(pse_len), 32));
   idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch);
