@@ -38,11 +38,12 @@
 auto fdwt_irrev97_fixed_avx2_hor_step = [](const int32_t init_pos, const int32_t simdlen, float *const X,
                                             const int32_t n0, const int32_t n1, float coeff) {
   auto vcoeff = _mm256_set1_ps(coeff);
+  auto vzero = _mm256_setzero_ps();
   for (int32_t n = init_pos, i = 0; i < simdlen; i += 4, n += 8) {
     auto xin0 = _mm256_loadu_ps(X + n + n0);
     auto xin2 = _mm256_loadu_ps(X + n + n1);
     auto xsum = _mm256_add_ps(xin0, xin2);
-    xsum      = _mm256_blend_ps(xsum, _mm256_setzero_ps(), 0xAA);
+    xsum      = _mm256_blend_ps(xsum, vzero, 0xAA);
     xsum      = _mm256_mul_ps(xsum, vcoeff);
     xsum      = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xsum), 4));
     xin0      = _mm256_add_ps(xsum, xin0);
@@ -85,31 +86,33 @@ void fdwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
   const int32_t stop   = ceil_int(i1, 2);
   const int32_t offset = left + i0 % 2;
 
+  auto xzero = _mm256_setzero_ps();
+  auto x05 = _mm256_set1_ps(0.5f);
   // step 1
   int32_t simdlen = stop - (start - 1);
   for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 4, n += 8) {
     auto xin0 = _mm256_loadu_ps(X + n);
     auto xin2 = _mm256_loadu_ps(X + n + 2);
-    auto xsum = _mm256_add_epi32(_mm256_cvtps_epi32(xin0), _mm256_cvtps_epi32(xin2));
-    xsum      = _mm256_blend_epi32(xsum, _mm256_setzero_si256(), 0xAA);
-    xsum      = _mm256_srai_epi32(xsum, 1);
-    xsum      = _mm256_slli_si256(xsum, 4);
-    xin0      = _mm256_sub_ps(xin0, _mm256_cvtepi32_ps(xsum));
+    auto xsum = _mm256_add_ps(xin0, xin2);
+    xsum      = _mm256_blend_ps(xsum, xzero, 0xAA);
+    auto xfloor = _mm256_floor_ps(_mm256_mul_ps(xsum, x05));
+    xsum      = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfloor), 4));
+    xin0      = _mm256_sub_ps(xin0, xsum);
     _mm256_storeu_ps(X + n, xin0);
   }
 
   // step 2
   simdlen   = stop - start;
-  auto xtwo = _mm256_set1_epi32(2);
+  auto xtwo = _mm256_set1_ps(2.0f);
+  auto x025 = _mm256_set1_ps(0.25f);
   for (int32_t n = 0 + offset, i = 0; i < simdlen; i += 4, n += 8) {
     auto xin0 = _mm256_loadu_ps(X + n - 1);
     auto xin2 = _mm256_loadu_ps(X + n + 1);
-    auto xsum = _mm256_add_epi32(_mm256_cvtps_epi32(xin0), _mm256_cvtps_epi32(xin2));
-    xsum      = _mm256_add_epi32(xsum, xtwo);
-    xsum      = _mm256_blend_epi32(xsum, _mm256_setzero_si256(), 0xAA);
-    xsum      = _mm256_srai_epi32(xsum, 2);
-    xsum      = _mm256_slli_si256(xsum, 4);
-    xin0      = _mm256_add_ps(xin0, _mm256_cvtepi32_ps(xsum));
+    auto xsum = _mm256_add_ps(_mm256_add_ps(xin0, xin2), xtwo);
+    xsum      = _mm256_blend_ps(xsum, xzero, 0xAA);
+    auto xfloor = _mm256_floor_ps(_mm256_mul_ps(xsum, x025));
+    xsum      = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfloor), 4));
+    xin0      = _mm256_add_ps(xin0, xsum);
     _mm256_storeu_ps(X + n - 1, xin0);
   }
 }
@@ -124,13 +127,12 @@ auto fdwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, float *const X
                                             float *const Xout, float coeff) {
   auto vcoeff = _mm256_set1_ps(coeff);
   for (int32_t n = 0; n < simdlen; n += 8) {
-    auto xin0 = _mm256_loadu_ps(Xin0 + n);
-    auto xin2 = _mm256_loadu_ps(Xin1 + n);
+    auto xin0 = _mm256_load_ps(Xin0 + n);
+    auto xin2 = _mm256_load_ps(Xin1 + n);
     auto xsum = _mm256_add_ps(xin0, xin2);
-    auto xtmp = _mm256_mul_ps(xsum, vcoeff);
-    auto xout = _mm256_loadu_ps(Xout + n);
-    xout      = _mm256_add_ps(xout, xtmp);
-    _mm256_storeu_ps(Xout + n, xout);
+    auto xout = _mm256_load_ps(Xout + n);
+    xout = _mm256_fmadd_ps(xsum, vcoeff,xout);
+    _mm256_store_ps(Xout + n, xout);
   }
 };
 
@@ -254,17 +256,15 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
     const int32_t offset = top + v0 % 2;
 
     const int32_t simdlen = (u1 - u0) - (u1 - u0) % 8;
+    const __m256 x05 = _mm256_set1_ps(0.5f);
     for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < simdlen; col += 8) {
-        __m256 x0 = _mm256_loadu_ps(buf[n] + col);
-        __m256 x2 = _mm256_loadu_ps(buf[n + 2] + col);
-        __m256 x1 = _mm256_loadu_ps(buf[n + 1] + col);
-        x1         = _mm256_cvtepi32_ps(
-          _mm256_sub_epi32(_mm256_cvtps_epi32(x1),
-            _mm256_srai_epi32(_mm256_add_epi32(_mm256_cvtps_epi32(x0), _mm256_cvtps_epi32(x2)), 1)
-            )
-            );
-        _mm256_storeu_ps(buf[n + 1] + col, x1);
+        __m256 x0 = _mm256_load_ps(buf[n] + col);
+        __m256 x2 = _mm256_load_ps(buf[n + 2] + col);
+        __m256 x1 = _mm256_load_ps(buf[n + 1] + col);
+        auto xfloor = _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(x0, x2), x05));
+        x1 = _mm256_sub_ps(x1, xfloor);
+        _mm256_store_ps(buf[n + 1] + col, x1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = (int32_t)buf[n][col];
@@ -272,16 +272,16 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         buf[n + 1][col] = static_cast<sprec_t>((int32_t)buf[n + 1][col] - (sum >> 1));
       }
     }
+    const __m256 xtwo = _mm256_set1_ps(2.0f);
+    const __m256 x025 = _mm256_set1_ps(0.25f);
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < simdlen; col += 8) {
-        __m256 x0 = _mm256_loadu_ps(buf[n - 1] + col);
-        __m256 x2 = _mm256_loadu_ps(buf[n + 1] + col);
-        __m256 x1 = _mm256_loadu_ps(buf[n] + col);
-        __m256i vout =
-            _mm256_add_epi32(_mm256_set1_epi32(1), _mm256_srai_epi32(_mm256_add_epi32(_mm256_cvtps_epi32(x0), _mm256_cvtps_epi32(x2)), 1));
-        vout = _mm256_srai_epi32(vout, 1);
-        x1   = _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_cvtps_epi32(x1), vout));
-        _mm256_storeu_ps(buf[n] + col, x1);
+        __m256 x0 = _mm256_load_ps(buf[n - 1] + col);
+        __m256 x2 = _mm256_load_ps(buf[n + 1] + col);
+        __m256 x1 = _mm256_load_ps(buf[n] + col);
+        auto xfloor = _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(x0, x2), xtwo), x025));
+        x1 = _mm256_add_ps(x1, xfloor);
+        _mm256_store_ps(buf[n] + col, x1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = (int32_t)buf[n - 1][col];
