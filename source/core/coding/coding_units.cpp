@@ -3007,18 +3007,18 @@ uint8_t *j2k_tile::encode() {
     uint32_t stride = round_up(bottom_right.x - top_left.x, 32U);
     uint32_t height = (bottom_right.y - top_left.y);
 
+    // convert int32_t pixel values into float
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     for (uint32_t y = 0; y < height; ++y) {
       int32_t *sp             = src + y * stride;
       sprec_t *dp             = cr->i_samples + y * stride;
       uint32_t num_tc_samples = bottom_right.x - top_left.x;
-      for (; num_tc_samples >= 16; num_tc_samples -= 16) {
-        __m256i v0 = _mm256_load_si256((__m256i *)sp);
-        __m256i v1 = _mm256_load_si256((__m256i *)sp + 1);
-        __m256i t0 = _mm256_packs_epi32(v0, v1);
-        _mm256_storeu_si256((__m256i *)dp, _mm256_permute4x64_epi64(t0, 0xD8));
-        sp += 16;
-        dp += 16;
+      for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+        auto v0 = _mm256_load_si256((__m256i *)sp);
+        auto t0 = _mm256_cvtepi32_ps(v0);
+        _mm256_store_ps(dp, t0);
+        sp += 8;
+        dp += 8;
       }
       for (; num_tc_samples > 0; --num_tc_samples) {
         *dp++ = static_cast<sprec_t>(*sp++);
