@@ -2371,10 +2371,12 @@ void j2k_tile::decode() {
       }
     }
 
-    // allocate memory for buffer in a codeblock
+    // allocate memory for codeblock buffers once per component; reused across all precincts.
+    // Per-precinct bulk memsets (in the decode loop below) zero only the used portion,
+    // naturally pre-faulting pages without wasting writes on unused regions.
     int32_t *buf_for_samples = static_cast<int32_t *>(malloc(sizeof(int32_t) * max_cblks * 4096));
     uint8_t *buf_for_states  = static_cast<uint8_t *>(
-        malloc(sizeof(uint8_t) * max_cblks * 6156));  // 6156 = (1024+2) * (4 +2), worst case
+        malloc(sizeof(uint8_t) * max_cblks * 6156));  // 6156 = (1024+2) * (4+2), worst case
 
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
@@ -2958,6 +2960,9 @@ uint8_t *j2k_tile::encode() {
     // Lambda function of block-endocing
 #ifdef OPENHTJ2K_THREAD
     auto t1_encode = [pool](j2k_resolution *cr, uint8_t ROIshift) {
+      // Pre-scan: find the largest codeblock count across all precincts at this resolution.
+      // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
+      uint32_t max_total_cblks = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp     = cr->access_precinct(p);
         uint32_t total_cblks = 0;
@@ -2965,13 +2970,19 @@ uint8_t *j2k_tile::encode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        int32_t *gbuf  = static_cast<int32_t *>(calloc(total_cblks * 4096, sizeof(int32_t)));
-        int32_t *pbuf  = gbuf;
-        uint8_t *sgbuf = static_cast<uint8_t *>(calloc(total_cblks * 6156, sizeof(uint8_t)));
-        uint8_t *spbuf = sgbuf;
-        packet_header_writer pckt_hdr;
-        std::vector<std::future<int>> results;
-        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+        max_total_cblks = std::max(max_total_cblks, total_cblks);
+      }
+      if (max_total_cblks == 0) return;
+      int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
+      uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        int32_t *pbuf    = gbuf;
+        uint8_t *spbuf   = sgbuf;
+
+        // Pass 1: assign buffer pointers to all codeblocks in this precinct.
+        for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
@@ -2982,6 +2993,21 @@ uint8_t *j2k_tile::encode() {
             pbuf += QWx2 * QHx2;
             block->block_states = spbuf;
             spbuf += (QWx2 + 2) * (QHx2 + 2);
+          }
+        }
+
+        // Bulk zero of the used pool region for this precinct.
+        // Reuses already-faulted pages after the first precinct, avoiding repeated mmap faults.
+        memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
+        memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
+
+        // Pass 2: encode all codeblocks (buffers are zeroed above).
+        std::vector<std::future<int>> results;
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+            auto block = cpb->access_codeblock(block_index);
             if (pool->num_threads() > 1) {
               results.emplace_back(pool->enqueue([block, ROIshift] {
                 htj2k_encode(block, ROIshift);
@@ -2995,12 +3021,15 @@ uint8_t *j2k_tile::encode() {
         for (auto &result : results) {
           result.get();
         }
-        free(gbuf);
-        free(sgbuf);
       }
+      free(gbuf);
+      free(sgbuf);
     };
 #else
     auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
+      // Pre-scan: find the largest codeblock count across all precincts at this resolution.
+      // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
+      uint32_t max_total_cblks = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp     = cr->access_precinct(p);
         uint32_t total_cblks = 0;
@@ -3008,12 +3037,19 @@ uint8_t *j2k_tile::encode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        int32_t *gbuf  = static_cast<int32_t *>(calloc(total_cblks * 4096, sizeof(int32_t)));
-        int32_t *pbuf  = gbuf;
-        uint8_t *sgbuf = static_cast<uint8_t *>(calloc(total_cblks * 6156, sizeof(uint8_t)));
-        uint8_t *spbuf = sgbuf;
-        packet_header_writer pckt_hdr;
-        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+        max_total_cblks = std::max(max_total_cblks, total_cblks);
+      }
+      if (max_total_cblks == 0) return;
+      int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
+      uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        int32_t *pbuf    = gbuf;
+        uint8_t *spbuf   = sgbuf;
+
+        // Pass 1: assign buffer pointers to all codeblocks in this precinct.
+        for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
@@ -3024,12 +3060,26 @@ uint8_t *j2k_tile::encode() {
             pbuf += QWx2 * QHx2;
             block->block_states = spbuf;
             spbuf += (QWx2 + 2) * (QHx2 + 2);
+          }
+        }
+
+        // Bulk zero of the used pool region for this precinct.
+        // Reuses already-faulted pages after the first precinct, avoiding repeated mmap faults.
+        memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
+        memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
+
+        // Pass 2: encode all codeblocks (buffers are zeroed above).
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+            auto block = cpb->access_codeblock(block_index);
             htj2k_encode(block, ROIshift);
           }
         }
-        free(gbuf);
-        free(sgbuf);
       }
+      free(gbuf);
+      free(sgbuf);
     };
 #endif
     // Forward DWT
