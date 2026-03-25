@@ -90,9 +90,11 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   auto xl1 = vld2q_f32(sp + 1);
   for (; simdlen > 0; simdlen -= 4) {
     // (xl0.val[0] + xl1.val[0] + 2) >> 2;
-    xl0.val[1] = vcvtq_f32_s32(
-      vsubq_s32(vcvtq_s32_f32(xl0.val[1]), vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0])), 1))
-      );
+    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vdupq_n_f32(2.0f)), 0.25f));
+    xl0.val[1] = vsubq_f32(xl0.val[1], xfloor);
+    // xl0.val[1] = vcvtq_f32_s32(
+    //   vsubq_s32(vcvtq_s32_f32(xl0.val[1]), vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0])), 1))
+    //   );
     vst2q_f32(sp - 1, xl0);
     sp += 8;
     xl0 = vld2q_f32(sp - 1);
@@ -105,8 +107,10 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   xl0     = vld2q_f32(sp);
   xl1     = vld2q_f32(sp + 2);
   for (; simdlen > 0; simdlen -= 4) {
-    auto xout  = vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0]));
-    xl0.val[1] = vcvtq_f32_s32(vaddq_s32(vcvtq_s32_f32(xl0.val[1]), xout));
+    // auto xout  = vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0]));
+    // xl0.val[1] = vcvtq_f32_s32(vaddq_s32(vcvtq_s32_f32(xl0.val[1]), xout));
+    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0.val[0], xl1.val[0]), 0.5f));
+    xl0.val[1] = vaddq_f32(xl0.val[1], xfloor);
     vst2q_f32(sp, xl0);
     sp += 8;
     xl0 = vld2q_f32(sp);
@@ -166,7 +170,7 @@ void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
     const int32_t stop   = v1 / 2;
     const int32_t offset = top - v0 % 2;
 
-    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 16;
+    const int32_t simdlen = (u1 - u0) - (u1 - u0) % 4;
     for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
       idwt_irrev97_fixed_neon_ver_step(simdlen, buf[n - 1], buf[n + 1], buf[n], fD);
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
@@ -260,8 +264,12 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         vout1 = vld1q_f32(x1 + 4);
         vin10 = vld1q_f32(x2);
         vin11 = vld1q_f32(x2 + 4);
-        vout0 = vsubq_f32(vout0, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin00), vcvtq_s32_f32(vin10)), 1)));
-        vout1 = vsubq_f32(vout1, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin01), vcvtq_s32_f32(vin11)), 1)));
+        auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin00, vin10), vdupq_n_f32(2.0f)), 0.25f));
+        vout0 = vsubq_f32(vout0, xfloor0);
+        auto xfloor1 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin01, vin11), vdupq_n_f32(2.0f)), 0.25f));
+        vout1 = vsubq_f32(vout1, xfloor1);
+        // vout0 = vsubq_f32(vout0, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin00), vcvtq_s32_f32(vin10)), 1)));
+        // vout1 = vsubq_f32(vout1, vcvtq_f32_s32(vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(vin01), vcvtq_s32_f32(vin11)), 1)));
         vst1q_f32(x1, vout0);
         vst1q_f32(x1 + 4, vout1);
         x0 += 8;
@@ -291,8 +299,12 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         vout1 = vld1q_f32(x1 + 4);
         vin10 = vld1q_f32(x2);
         vin11 = vld1q_f32(x2 + 4);
-        vout0 = vaddq_f32(vout0, vcvtq_f32_s32(vhaddq_s32(vcvtq_s32_f32(vin00), vcvtq_s32_f32(vin10))));
-        vout1 = vaddq_f32(vout1, vcvtq_f32_s32(vhaddq_s32(vcvtq_s32_f32(vin01), vcvtq_s32_f32(vin11))));
+        auto xfloor0 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vin00, vin10), 0.5f));
+        vout0 = vaddq_f32(vout0, xfloor0);
+        auto xfloor1 = vrndmq_f32(vmulq_n_f32(vaddq_f32(vin01, vin11), 0.5f));
+        vout1 = vaddq_f32(vout1, xfloor1);
+        // vout0 = vaddq_f32(vout0, vcvtq_f32_s32(vhaddq_s32(vcvtq_s32_f32(vin00), vcvtq_s32_f32(vin10))));
+        // vout1 = vaddq_f32(vout1, vcvtq_f32_s32(vhaddq_s32(vcvtq_s32_f32(vin01), vcvtq_s32_f32(vin11))));
         vst1q_f32(x1, vout0);
         vst1q_f32(x1 + 4, vout1);
         x0 += 8;

@@ -90,7 +90,9 @@ void fdwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   for (int32_t n = -2 + offset, i = 0; i < simdlen; i += 4, n += 8) {
     auto xl0   = vld2q_f32(X + n);
     auto xl1   = vld2q_f32(X + n + 2);
-    xl0.val[1] = vcvtq_f32_s32(vsubq_s32(vcvtq_s32_f32(xl0.val[1]), vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0]))));
+    // xl0.val[1] = vcvtq_f32_s32(vsubq_s32(vcvtq_s32_f32(xl0.val[1]), vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0]))));
+    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0.val[0], xl1.val[0]), 0.5f));
+    xl0.val[1] = vsubq_f32(xl0.val[1], xfloor);
     vst2q_f32(X + n, xl0);
   }
 
@@ -99,7 +101,9 @@ void fdwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
     auto xl0 = vld2q_f32(X + n - 1);
     auto xl1 = vld2q_f32(X + n + 1);
     // (xl0.val[0] + xl1.val[0] + 2) >> 2;
-    xl0.val[1] = vcvtq_f32_s32(vaddq_s32(vcvtq_s32_f32(xl0.val[1]), vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0])), 1)));
+    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vdupq_n_f32(2)), 0.25f));
+    // xl0.val[1] = vcvtq_f32_s32(vaddq_s32(vcvtq_s32_f32(xl0.val[1]), vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0])), 1)));
+    xl0.val[1] = vaddq_f32(xl0.val[1], xfloor);
     vst2q_f32(X + n - 1, xl0);
   }
 }
@@ -245,11 +249,12 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     int32_t simdlen = (u1 - u0) - (u1 - u0) % 4;
     for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < simdlen; col += 4) {
-        auto X0 = vcvtq_s32_f32(vld1q_f32(&buf[n][col]));
-        auto X2 = vcvtq_s32_f32(vld1q_f32(&buf[n + 2][col]));
-        auto X1 = vcvtq_s32_f32(vld1q_f32(&buf[n + 1][col]));
-        X1      = vsubq_s32(X1, vhaddq_s32(X0, X2));
-        vst1q_f32(&buf[n + 1][col], vcvtq_f32_s32(X1));
+        auto X0 = vld1q_f32(&buf[n][col]);
+        auto X2 = vld1q_f32(&buf[n + 2][col]);
+        auto X1 = vld1q_f32(&buf[n + 1][col]);
+        auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(X0, X2), 0.5f));
+        X1 = vsubq_f32(X1, xfloor);
+        vst1q_f32(&buf[n + 1][col], X1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = (int32_t)buf[n][col];
@@ -259,11 +264,12 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     }
     for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
       for (int32_t col = 0; col < simdlen; col += 4) {
-        auto X0 = vcvtq_s32_f32(vld1q_f32(&buf[n - 1][col]));
-        auto X2 = vcvtq_s32_f32(vld1q_f32(&buf[n + 1][col]));
-        auto X1 = vcvtq_s32_f32(vld1q_f32(&buf[n][col]));
-        X1      = vaddq_s32(X1, vrshrq_n_s32(vhaddq_s32(X0, X2), 1));
-        vst1q_f32(&buf[n][col], vcvtq_f32_s32(X1));
+        auto X0 = vld1q_f32(&buf[n - 1][col]);
+        auto X2 = vld1q_f32(&buf[n + 1][col]);
+        auto X1 = vld1q_f32(&buf[n][col]);
+        auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(X0, X2), vdupq_n_f32(2.0f)), 0.25f));
+        X1 = vaddq_f32(X1, xfloor);
+        vst1q_f32(&buf[n][col], X1);
       }
       for (int32_t col = simdlen; col < u1 - u0; ++col) {
         int32_t sum = (int32_t)buf[n - 1][col];
