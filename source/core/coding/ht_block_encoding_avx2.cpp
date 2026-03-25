@@ -56,7 +56,14 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const int32_t pshift = (refsegment) ? 1 : 0;
   const int32_t pLSB   = (refsegment) ? 1 : 1;
   #endif
+  // Hoist loop-invariant constants out of the row loop
+  const __m256i vone  = _mm256_set1_epi32(1);
+  const __m256 vscale = _mm256_set1_ps(fscale);
+  // Vector accumulator for or_val; scalar update only in leftover path
+  __m256i vor_val = _mm256_setzero_si256();
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
+    // sp is always 32-byte aligned: subband buffer is aligned_alloc'd and
+    // band_stride is a multiple of 32 elements, so use _mm256_load_ps.
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
@@ -64,19 +71,15 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   #if defined(ENABLE_SP_MR)
     const __m256i vpLSB = _mm256_set1_epi32(pLSB);
   #endif
-    const __m256i vone  = _mm256_set1_epi32(1);
-    const __m256 vscale = _mm256_set1_ps(fscale);
     // simd
     int32_t len = static_cast<int32_t>(this->size.x);
     for (; len >= 16; len -= 16) {
-      __m256 val0 = _mm256_loadu_ps(sp);
-      __m256 val1 = _mm256_loadu_ps(sp + 8);
-      // __m256i v0      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 0));
-      // __m256i v1      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 1));
+      // sp is 32-byte aligned; use aligned load
+      __m256 val0 = _mm256_load_ps(sp);
+      __m256 val1 = _mm256_load_ps(sp + 8);
       // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
       auto v0 = _mm256_cvttps_epi32(_mm256_mul_ps(val0, vscale));
       auto v1 = _mm256_cvttps_epi32(_mm256_mul_ps(val1, vscale));
-      // v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
       // Take sign bit
       __m256i s0 = _mm256_srli_epi32(v0, 31);
       __m256i s1 = _mm256_srli_epi32(v1, 31);
@@ -93,9 +96,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       // Generate masks for sigma
       __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
       __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
-      // Check emptiness of a block
-      or_val |= static_cast<uint32_t>(_mm256_movemask_epi8(mask0));
-      or_val |= static_cast<uint32_t>(_mm256_movemask_epi8(mask1));
+      // Accumulate or_val in a vector register; no scalar dependency in hot loop
+      vor_val = _mm256_or_si256(vor_val, mask0);
+      vor_val = _mm256_or_si256(vor_val, mask1);
 
       // Convert two's compliment to MagSgn form
       __m256i vone0 = _mm256_and_si256(mask0, vone);
@@ -129,7 +132,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       _mm_storeu_si128((__m128i *)dstblk, v);
       dstblk += 16;
     }
-    // process leftover
+    // process leftover (writes dp[0] unconditionally so calloc pre-zero is sufficient)
     for (; len > 0; --len) {
       int32_t temp;
       temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
@@ -149,12 +152,16 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        dp[0] = temp;
       }
+      dp[0] = temp;  // write 0 for zero samples; makes pre-zero memset unnecessary
       ++sp;
       ++dp;
       ++dstblk;
     }
+  }
+  // Reduce vector or_val accumulator once, after all rows
+  if (!_mm256_testz_si256(vor_val, vor_val)) {
+    or_val |= 1;
   }
 }
 

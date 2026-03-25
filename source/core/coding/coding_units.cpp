@@ -2957,9 +2957,9 @@ uint8_t *j2k_tile::encode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        int32_t *gbuf  = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
+        int32_t *gbuf  = static_cast<int32_t *>(calloc(total_cblks * 4096, sizeof(int32_t)));
         int32_t *pbuf  = gbuf;
-        uint8_t *sgbuf = static_cast<uint8_t *>(malloc(sizeof(uint8_t) * total_cblks * 6156));
+        uint8_t *sgbuf = static_cast<uint8_t *>(calloc(total_cblks * 6156, sizeof(uint8_t)));
         uint8_t *spbuf = sgbuf;
         packet_header_writer pckt_hdr;
         std::vector<std::future<int>> results;
@@ -2975,20 +2975,11 @@ uint8_t *j2k_tile::encode() {
             block->block_states = spbuf;
             spbuf += (QWx2 + 2) * (QHx2 + 2);
             if (pool->num_threads() > 1) {
-              results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
-                // block->sample_buf =
-                //     new int32_t[QWx2 * QHx2];  // MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 *
-                //     QHx2));
-                memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
-                memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
+              results.emplace_back(pool->enqueue([block, ROIshift] {
                 htj2k_encode(block, ROIshift);
                 return 0;
               }));
             } else {
-              // block->sample_buf =
-              //     new int32_t[QWx2 * QHx2];  // MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
-              memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
-              memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
               htj2k_encode(block, ROIshift);
             }
           }
@@ -3009,8 +3000,10 @@ uint8_t *j2k_tile::encode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        int32_t *gbuf = static_cast<int32_t *>(malloc(sizeof(int32_t) * total_cblks * 4096));
-        int32_t *pbuf = gbuf;
+        int32_t *gbuf  = static_cast<int32_t *>(calloc(total_cblks * 4096, sizeof(int32_t)));
+        int32_t *pbuf  = gbuf;
+        uint8_t *sgbuf = static_cast<uint8_t *>(calloc(total_cblks * 6156, sizeof(uint8_t)));
+        uint8_t *spbuf = sgbuf;
         packet_header_writer pckt_hdr;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -3019,15 +3012,15 @@ uint8_t *j2k_tile::encode() {
             auto block          = cpb->access_codeblock(block_index);
             const uint32_t QWx2 = round_up(block->size.x, 8U);
             const uint32_t QHx2 = round_up(block->size.y, 8U);
-            // block->sample_buf =
-            //     new int32_t[QWx2 * QHx2];  // MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
-            memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
-            memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
-            block->sample_buf = pbuf + QWx2 * QHx2;
+            block->sample_buf   = pbuf;
+            pbuf += QWx2 * QHx2;
+            block->block_states = spbuf;
+            spbuf += (QWx2 + 2) * (QHx2 + 2);
             htj2k_encode(block, ROIshift);
           }
         }
         free(gbuf);
+        free(sgbuf);
       }
     };
 #endif
