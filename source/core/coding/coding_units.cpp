@@ -2556,7 +2556,7 @@ void j2k_tile::decode() {
         sprec_t *sp = cr->i_samples + y * width;
         int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
         for (size_t n = 0; n < width; ++n) {
-          *dp++ = *sp++;
+          *dp++ = static_cast<int32_t>(*sp++);
         }
       }
 #endif
