@@ -319,13 +319,13 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
       sprec_t *line0 = first + v * stride2[0];
       sprec_t *line1 = second + v * stride2[0];
-      for (; len >= 8; len -= 8) {
-        auto vline = vld2q_s16(sp);
-        vst1q_s16(line0, vline.val[0]);
-        vst1q_s16(line1, vline.val[1]);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+      for (; len >= 4; len -= 4) {
+        auto vline = vld2q_f32(sp);
+        vst1q_f32(line0, vline.val[0]);
+        vst1q_f32(line1, vline.val[1]);
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;
@@ -356,13 +356,13 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
       sprec_t *line0 = first + v * stride2[2];
       sprec_t *line1 = second + v * stride2[2];
-      for (; len >= 8; len -= 8) {
-        auto vline = vld2q_s16(sp);
-        vst1q_s16(line0, vline.val[0]);
-        vst1q_s16(line1, vline.val[1]);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+      for (; len >= 4; len -= 4) {
+        auto vline = vld2q_f32(sp);
+        vst1q_f32(line0, vline.val[0]);
+        vst1q_f32(line1, vline.val[1]);
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;

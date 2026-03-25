@@ -63,12 +63,11 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   #endif
     int16_t len = static_cast<int16_t>(this->size.x);
     for (; len >= 8; len -= 8) {
-      int16x8_t coeff16 = vld1q_s16(sp);
-      int32x4_t v0      = vmovl_s16(vget_low_s16(coeff16));
-      int32x4_t v1      = vmovl_high_s16(coeff16);
+      auto fv0      = vld1q_f32(sp);
+      auto fv1      = vld1q_f32(sp + 4);
       // Quantization
-      v0 = vcvtq_s32_f32(vmulq_f32(vcvtq_f32_s32(v0), vscale));
-      v1 = vcvtq_s32_f32(vmulq_f32(vcvtq_f32_s32(v1), vscale));
+      auto v0 = vcvtq_s32_f32(vmulq_f32(fv0, vscale));
+      auto v1 = vcvtq_s32_f32(vmulq_f32(fv1, vscale));
       // Take sign bit
       int32x4_t s0 = vshrq_n_u32(v0, 31);
       int32x4_t s1 = vshrq_n_u32(v1, 31);

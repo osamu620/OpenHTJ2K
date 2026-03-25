@@ -1233,15 +1233,15 @@ void j2k_resolution::scale() {
   uint32_t length = (this->stride) * (this->pos1.y - this->pos0.y);
   // TODO: The following code works correctly, but needs to be improved for speed
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  int16x8_t rshift = vdupq_n_s16(static_cast<int16_t>(-this->normalizing_downshift));
-  for (uint32_t n = 0; n < length - length % 8; n += 8) {
-    auto isrc = vld1q_s16(this->i_samples + n);
-    isrc      = vshlq_s16(isrc, rshift);  // left-shift with negative value equals to right-shift in NEON
-    vst1q_s16(this->i_samples + n, isrc);
-  }
-  for (uint32_t n = length - length % 8; n < length; ++n) {
-    this->i_samples[n] >>= this->normalizing_downshift;
-  }
+  // int16x8_t rshift = vdupq_n_s16(static_cast<int16_t>(-this->normalizing_downshift));
+  // for (uint32_t n = 0; n < length - length % 8; n += 8) {
+  //   auto isrc = vld1q_s16(this->i_samples + n);
+  //   isrc      = vshlq_s16(isrc, rshift);  // left-shift with negative value equals to right-shift in NEON
+  //   vst1q_s16(this->i_samples + n, isrc);
+  // }
+  // for (uint32_t n = length - length % 8; n < length; ++n) {
+  //   this->i_samples[n] >>= this->normalizing_downshift;
+  // }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   // for (uint32_t n = 0; n < length - length % 16; n += 16) {
   //   auto isrc = _mm256_loadu_si256((__m256i *)(this->i_samples + n));
@@ -2507,28 +2507,24 @@ void j2k_tile::decode() {
     uint32_t stride = round_up(width, 32U);
     // size_t num_samples = static_cast<size_t>(tc1.x - tc0.x) * (tc1.y - tc0.y);
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    int16x8_t v0, v1, v2, v3;
+    // int16x8_t v0, v1, v2, v3;
     for (size_t y = 0; y < height; ++y) {
       sprec_t *sp = cr->i_samples + y * width;
       int32_t *dp = this->tcomp[c].get_sample_address(0, 0) + y * stride;
 
-      for (size_t n = width; n >= 32; n -= 32) {
-        v0 = vld1q_s16(sp);
-        v1 = vld1q_s16(sp + 8);
-        v2 = vld1q_s16(sp + 16);
-        v3 = vld1q_s16(sp + 24);
-        vst1q_s32(dp, vmovl_s16(vget_low_s16(v0)));
-        vst1q_s32(dp + 4, vmovl_s16(vget_high_s16(v0)));
-        vst1q_s32(dp + 8, vmovl_s16(vget_low_s16(v1)));
-        vst1q_s32(dp + 12, vmovl_s16(vget_high_s16(v1)));
-        vst1q_s32(dp + 16, vmovl_s16(vget_low_s16(v2)));
-        vst1q_s32(dp + 20, vmovl_s16(vget_high_s16(v2)));
-        vst1q_s32(dp + 24, vmovl_s16(vget_low_s16(v3)));
-        vst1q_s32(dp + 28, vmovl_s16(vget_high_s16(v3)));
-        sp += 32;
-        dp += 32;
+      for (size_t n = width; n >= 16; n -= 16) {
+        auto v0 = vld1q_f32(sp);
+        auto v1 = vld1q_f32(sp + 4);
+        auto v2 = vld1q_f32(sp + 8);
+        auto v3 = vld1q_f32(sp + 12);
+        vst1q_s32(dp, vcvtq_s32_f32(v0));
+        vst1q_s32(dp + 4, vcvtq_s32_f32(v1));
+        vst1q_s32(dp + 8, vcvtq_s32_f32(v2));
+        vst1q_s32(dp + 12, vcvtq_s32_f32(v3));
+        sp += 16;
+        dp += 16;
       }
-      for (size_t n = width % 32; n > 0; --n) {
+      for (size_t n = width % 16; n > 0; --n) {
         *dp++ = *sp++;
       }
     }
@@ -2738,7 +2734,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     vmax    = vdupq_n_s32(MAXVAL);
     vmin    = vdupq_n_s32(MINVAL);
     vshift  = vdupq_n_s32(-downshift);
-    nvshift = vnegq_s16(vshift);
+    nvshift = vnegq_s32(vshift);
     if (downshift < 0) {
       for (uint32_t y = 0; y < in_height; ++y) {
         uint32_t len = csize.x;
@@ -3036,7 +3032,8 @@ uint8_t *j2k_tile::encode() {
       for (; num_tc_samples >= 8; num_tc_samples -= 8) {
         auto vsrc0 = vld1q_s32(sp);
         auto vsrc1 = vld1q_s32(sp + 4);
-        vst1q_s16(dp, vcombine_s16(vmovn_s32(vsrc0), vmovn_s32(vsrc1)));
+        vst1q_f32(dp, vcvtq_f32_s32(vsrc0));
+        vst1q_f32(dp + 4, vcvtq_f32_s32(vsrc1));
         sp += 8;
         dp += 8;
       }

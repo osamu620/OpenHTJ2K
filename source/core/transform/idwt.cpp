@@ -291,25 +291,25 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       first  = sp[1];
       second = sp[0];
     }
-    int16x8_t vfirst0, vfirst1, vsecond0, vsecond1;
+    float32x4_t vfirst0, vfirst1, vsecond0, vsecond1;
     //    int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
       sprec_t *dp    = buf + (2 * v + voffset[0]) * stride;
       size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
       sprec_t *line0 = first + v * stride2[0];
       sprec_t *line1 = second + v * stride2[0];
-      for (; len >= 16; len -= 16) {
-        vfirst0  = vld1q_s16(line0);
-        vsecond0 = vld1q_s16(line1);
-        vst1q_s16(dp, vzip1q_s16(vfirst0, vsecond0));
-        vst1q_s16(dp + 8, vzip2q_s16(vfirst0, vsecond0));
-        vfirst1  = vld1q_s16(line0 + 8);
-        vsecond1 = vld1q_s16(line1 + 8);
-        vst1q_s16(dp + 16, vzip1q_s16(vfirst1, vsecond1));
-        vst1q_s16(dp + 24, vzip2q_s16(vfirst1, vsecond1));
-        line0 += 16;
-        line1 += 16;
-        dp += 32;
+      for (; len >= 8; len -= 8) {
+        vfirst0  = vld1q_f32(line0);
+        vsecond0 = vld1q_f32(line1);
+        vst1q_f32(dp, vzip1q_f32(vfirst0, vsecond0));
+        vst1q_f32(dp + 4, vzip2q_f32(vfirst0, vsecond0));
+        vfirst1  = vld1q_f32(line0 + 4);
+        vsecond1 = vld1q_f32(line1 + 4);
+        vst1q_f32(dp + 8, vzip1q_f32(vfirst1, vsecond1));
+        vst1q_f32(dp + 12, vzip2q_f32(vfirst1, vsecond1));
+        line0 += 8;
+        line1 += 8;
+        dp += 16;
       }
       for (; len > 0; --len) {
         *dp++ = *line0++;
@@ -335,25 +335,25 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       first  = sp[3];
       second = sp[2];
     }
-    int16x8_t vfirst0, vfirst1, vsecond0, vsecond1;
+    float32x4_t vfirst0, vfirst1, vsecond0, vsecond1;
     //    int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
       sprec_t *dp    = buf + (2 * v + voffset[2]) * stride;
       size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
       sprec_t *line0 = first + v * stride2[2];
       sprec_t *line1 = second + v * stride2[2];
-      for (; len >= 16; len -= 16) {
-        vfirst0  = vld1q_s16(line0);
-        vsecond0 = vld1q_s16(line1);
-        vst1q_s16(dp, vzip1q_s16(vfirst0, vsecond0));
-        vst1q_s16(dp + 8, vzip2q_s16(vfirst0, vsecond0));
-        vfirst1  = vld1q_s16(line0 + 8);
-        vsecond1 = vld1q_s16(line1 + 8);
-        vst1q_s16(dp + 16, vzip1q_s16(vfirst1, vsecond1));
-        vst1q_s16(dp + 24, vzip2q_s16(vfirst1, vsecond1));
-        line0 += 16;
-        line1 += 16;
-        dp += 32;
+      for (; len >= 8; len -= 8) {
+        vfirst0  = vld1q_f32(line0);
+        vsecond0 = vld1q_f32(line1);
+        vst1q_f32(dp, vzip1q_f32(vfirst0, vsecond0));
+        vst1q_f32(dp + 4, vzip2q_f32(vfirst0, vsecond0));
+        vfirst1  = vld1q_f32(line0 + 4);
+        vsecond1 = vld1q_f32(line1 + 4);
+        vst1q_f32(dp + 8, vzip1q_f32(vfirst1, vsecond1));
+        vst1q_f32(dp + 12, vzip2q_f32(vfirst1, vsecond1));
+        line0 += 8;
+        line1 += 8;
+        dp += 16;
       }
       for (; len > 0; --len) {
         *dp++ = *line0++;
@@ -499,22 +499,22 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
   if (transformation != 1 && normalizing_upshift) {
     int32_t len = buf_length;
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    int16x8_t vshift = vdupq_n_s16(normalizing_upshift);
-    int16x8_t in0, in1;
-
-    for (; len >= 16; len -= 16) {
-      in0 = vld1q_s16(src);
-      in1 = vld1q_s16(src + 8);
-      in0 = vshlq_s16(in0, vshift);
-      in1 = vshlq_s16(in1, vshift);
-      vst1q_s16(src, in0);
-      vst1q_s16(src + 8, in1);
-      src += 16;
-    }
-    for (; len > 0; --len) {
-      *src = static_cast<sprec_t>(*src << normalizing_upshift);
-      src++;
-    }
+    // int16x8_t vshift = vdupq_n_s16(normalizing_upshift);
+    // int16x8_t in0, in1;
+    //
+    // for (; len >= 16; len -= 16) {
+    //   in0 = vld1q_s16(src);
+    //   in1 = vld1q_s16(src + 8);
+    //   in0 = vshlq_s16(in0, vshift);
+    //   in1 = vshlq_s16(in1, vshift);
+    //   vst1q_s16(src, in0);
+    //   vst1q_s16(src + 8, in1);
+    //   src += 16;
+    // }
+    // for (; len > 0; --len) {
+    //   *src = static_cast<sprec_t>(*src << normalizing_upshift);
+    //   src++;
+    // }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
     // for (; len >= 16; len -= 16) {
     //   __m256i tmp0 = _mm256_load_si256((__m256i *)src);
