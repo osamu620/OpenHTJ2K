@@ -447,23 +447,26 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     return static_cast<int32_t>(block->length);
   }
 
-  // buffers shall be zeroed.
-  std::unique_ptr<uint8_t[]> fwd_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Lcup);
-  std::unique_ptr<uint8_t[]> rev_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Scup);
-  memset(fwd_buf.get(), 0, sizeof(uint8_t) * (MAX_Lcup));
-  memset(rev_buf.get(), 0, sizeof(uint8_t) * MAX_Scup);
+  // Thread-local scratch buffers: one allocation per thread for the lifetime of the program.
+  // Must be zeroed before each codeblock (encoders rely on zero-initialized state).
+  static thread_local uint8_t fwd_buf[MAX_Lcup];
+  static thread_local uint8_t rev_buf[MAX_Scup];
+  memset(fwd_buf, 0, MAX_Lcup);
+  memset(rev_buf, 0, MAX_Scup);
 
-  state_MS_enc MagSgn_encoder(fwd_buf.get());
-  state_MEL_enc MEL_encoder(rev_buf.get());
-  state_VLC_enc VLC_encoder(rev_buf.get());
+  state_MS_enc MagSgn_encoder(fwd_buf);
+  state_MEL_enc MEL_encoder(rev_buf);
+  state_VLC_enc VLC_encoder(rev_buf);
 
   alignas(32) uint32_t v_n[8];
-  alignas(32) auto Eline         = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
-  Eline[0]                       = 0;
-  auto E_p                       = Eline.get() + 1;
-  alignas(32) auto rholine       = MAKE_UNIQUE<int32_t[]>(QW + 3U);
-  rholine[0]                     = 0;
-  auto rho_p                     = rholine.get() + 1;
+  // Stack-allocate Eline/rholine: bounded by max codeblock width (1024 → QW ≤ 512).
+  // Zero exactly the used range (matches make_unique<int32_t[]> zero-initialization).
+  alignas(32) int32_t Eline[2 * 512 + 6];
+  std::fill_n(Eline, 2U * QW + 6U, int32_t{0});
+  int32_t *E_p = Eline + 1;
+  alignas(32) int32_t rholine[512 + 3];
+  std::fill_n(rholine, QW + 3U, int32_t{0});
+  int32_t *rho_p                     = rholine + 1;
   alignas(32) uint8_t sigma_n[8] = {0}, rho_q[2] = {0}, m_n[8] = {0};
   alignas(32) int32_t E_n[8] = {0}, U_q[2] = {0};
   uint8_t lw, gamma;
@@ -632,8 +635,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   int32_t Emax0, Emax1;
   for (uint16_t qy = 1; qy < QH; qy++) {
-    E_p      = Eline.get() + 1;
-    rho_p    = rholine.get() + 1;
+    E_p      = Eline + 1;
+    rho_p    = rholine + 1;
     rho_q[1] = 0;
 
     Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
@@ -796,7 +799,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       (fwd_buf[static_cast<size_t>(Lcup - 2)] & 0xF0) | static_cast<uint8_t>(Scup & 0x0f);
 
   // transfer Dcup[] to block->compressed_data
-  block->set_compressed_data(fwd_buf.get(), static_cast<uint16_t>(Lcup), MAX_Lref);
+  block->set_compressed_data(fwd_buf, static_cast<uint16_t>(Lcup), MAX_Lref);
   // set length of compressed data
   block->length         = static_cast<uint32_t>(Lcup);
   block->pass_length[0] = static_cast<unsigned int>(Lcup);

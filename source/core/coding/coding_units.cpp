@@ -2385,10 +2385,7 @@ void j2k_tile::decode() {
         int32_t *pbuf  = buf_for_samples;
         uint8_t *spbuf = buf_for_states;
 
-#ifdef OPENHTJ2K_THREAD
-        // auto pool = ThreadPool::get();
-        std::vector<std::future<int>> results;
-#endif
+        // Pass 1: assign sample/state buffer pointers to all codeblocks in this precinct.
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -2400,13 +2397,28 @@ void j2k_tile::decode() {
             pbuf += QWx2 * QHx2;
             block->block_states = spbuf;
             spbuf += (QWx2 + 2) * (QHx2 + 2);
+          }
+        }
+
+        // Single bulk zero of the entire used pool region for this precinct.
+        // Replaces N per-codeblock memsets with 2 sequential writes for better cache streaming.
+        memset(buf_for_samples, 0, static_cast<size_t>(pbuf - buf_for_samples) * sizeof(int32_t));
+        memset(buf_for_states, 0, static_cast<size_t>(spbuf - buf_for_states));
+
+        // Pass 2: decode all non-empty codeblocks (buffers are already zeroed above).
+#ifdef OPENHTJ2K_THREAD
+        std::vector<std::future<int>> results;
+#endif
+        for (uint8_t b = 0; b < cr->num_bands; b++) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+            j2k_codeblock *block = cpb->access_codeblock(block_index);
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
 #ifdef OPENHTJ2K_THREAD
               if (pool->num_threads() > 1) {
-                results.emplace_back(pool->enqueue([block, ROIshift, QWx2, QHx2] {
-                  memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
-                  memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
+                results.emplace_back(pool->enqueue([block, ROIshift] {
                   if ((block->Cmodes & HT) >> 6)
                     htj2k_decode(block, ROIshift);
                   else
@@ -2414,16 +2426,12 @@ void j2k_tile::decode() {
                   return 0;
                 }));
               } else {
-                memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
-                memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
                 if ((block->Cmodes & HT) >> 6)
                   htj2k_decode(block, ROIshift);
                 else
                   j2k_decode(block, ROIshift);
               }
 #else
-              memset(block->sample_buf, 0, sizeof(int32_t) * QWx2 * QHx2);
-              memset(block->block_states, 0, sizeof(uint8_t) * (QWx2 + 2) * (QHx2 + 2));
               if ((block->Cmodes & HT) >> 6)
                 htj2k_decode(block, ROIshift);
               else
@@ -2431,7 +2439,7 @@ void j2k_tile::decode() {
 #endif
             }
           }  // end of codeblock loop
-        }  // end of subbnad loop
+        }  // end of subband loop
 #ifdef OPENHTJ2K_THREAD
         for (auto &result : results) {
           result.get();
