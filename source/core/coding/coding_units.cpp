@@ -52,7 +52,7 @@ struct TlPoolSlot {
 static thread_local TlPoolSlot g_tl_pool_slot;
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
+[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_avx2,
                                                           cvt_ycbcr_to_rgb_rev_float_avx2};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_avx2,
