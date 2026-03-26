@@ -44,14 +44,16 @@ class cblk_data_pool {
   static constexpr size_t SLAB_BYTES = 2u << 20;  // 2 MB per slab
   struct Slab {
     uint8_t *ptr;
-    size_t used;
+    std::atomic<size_t> used;
     size_t cap;
+    explicit Slab(uint8_t *p, size_t c) : ptr(p), used(0u), cap(c) {}
+    Slab(Slab &&o) noexcept : ptr(o.ptr), used(o.used.load()), cap(o.cap) {}
   };
   std::vector<Slab> slabs;
-  std::mutex mtx;
+  std::mutex overflow_mtx;  // only taken on slab growth (rare)
 
  public:
-  cblk_data_pool()                                = default;
+  cblk_data_pool() { slabs.reserve(16); }
   cblk_data_pool(const cblk_data_pool &)          = delete;
   cblk_data_pool &operator=(const cblk_data_pool &) = delete;
 
@@ -61,14 +63,31 @@ class cblk_data_pool {
 
   uint8_t *bump(size_t n) {
     n = (n + 7u) & ~7u;  // 8-byte alignment
-    std::lock_guard<std::mutex> g(mtx);
-    if (slabs.empty() || slabs.back().used + n > slabs.back().cap) {
-      const size_t cap = (n > SLAB_BYTES) ? n : SLAB_BYTES;
-      slabs.push_back({static_cast<uint8_t *>(malloc(cap)), 0u, cap});
+    // Fast path: lock-free CAS on the current last slab.
+    if (!slabs.empty()) {
+      auto &s    = slabs.back();
+      size_t old = s.used.load(std::memory_order_relaxed);
+      while (old + n <= s.cap) {
+        if (s.used.compare_exchange_weak(old, old + n, std::memory_order_relaxed,
+                                         std::memory_order_relaxed))
+          return s.ptr + old;
+      }
     }
-    uint8_t *p = slabs.back().ptr + slabs.back().used;
-    slabs.back().used += n;
-    return p;
+    // Slow path: need a new slab — take the overflow mutex.
+    std::lock_guard<std::mutex> g(overflow_mtx);
+    // Re-check under lock in case another thread already added a slab with room.
+    if (!slabs.empty()) {
+      auto &s    = slabs.back();
+      size_t old = s.used.load(std::memory_order_relaxed);
+      if (old + n <= s.cap) {
+        s.used.fetch_add(n, std::memory_order_relaxed);
+        return s.ptr + old;
+      }
+    }
+    const size_t cap = (n > SLAB_BYTES) ? n : SLAB_BYTES;
+    slabs.emplace_back(static_cast<uint8_t *>(malloc(cap)), cap);
+    slabs.back().used.store(n, std::memory_order_relaxed);
+    return slabs.back().ptr;
   }
 };
 

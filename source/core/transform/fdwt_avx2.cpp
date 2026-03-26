@@ -199,7 +199,7 @@ auto fdwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, float *const X
 };
 
 void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                  const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
+                                  const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {4, 3};
   constexpr int32_t num_pse_i1[2] = {3, 4};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -214,7 +214,7 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
     }
   } else {
     const int32_t len = round_up(stride, SIMD_LEN_I32);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    sprec_t **buf     = buf_scratch;
     for (int32_t i = 1; i <= top; ++i) {
       buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
@@ -261,13 +261,12 @@ void fdwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u
         }
       }
     }
-    delete[] buf;
   }
 }
 
 // reversible FDWT
 void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
+                                const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {2, 1};
   constexpr int32_t num_pse_i1[2] = {1, 2};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -282,7 +281,7 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    sprec_t **buf     = buf_scratch;
     for (int32_t i = 1; i <= top; ++i) {
       buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
@@ -334,7 +333,6 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         }
       }
     }
-    delete[] buf;
   }
 }
 #endif

@@ -2504,6 +2504,17 @@ void j2k_tile::decode() {
             ? static_cast<sprec_t *>(
                   aligned_mem_alloc(sizeof(sprec_t) * 8 * static_cast<size_t>(max_idwt_pse_len), 32))
             : nullptr;
+    // Allocate buf_scratch once: pointer array for the row-pointer table used in vertical DWT.
+    // Sized for the finest resolution height + 8 (covers max PSE extension top+bottom ≤ 8).
+    const uint32_t max_idwt_height =
+        (NL > this->reduce_NL)
+            ? static_cast<uint32_t>(
+                  this->tcomp[c].access_resolution(NL - this->reduce_NL)->get_pos1().y
+                  - this->tcomp[c].access_resolution(NL - this->reduce_NL)->get_pos0().y)
+            : 0u;
+    sprec_t **idwt_buf_scratch = (max_idwt_height > 0)
+                                     ? new sprec_t *[static_cast<size_t>(max_idwt_height + 8u)]
+                                     : nullptr;
 
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       j2k_resolution *cr = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
@@ -2523,11 +2534,12 @@ void j2k_tile::decode() {
 
         if (u1 != u0 && v1 != v0) {
           idwt_2d_sr_fixed(cr->i_samples, pcr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0,
-                           u1, v0, v1, transformation, idwt_pse_scratch);
+                           u1, v0, v1, transformation, idwt_pse_scratch, idwt_buf_scratch);
         }
       }
     }  // end of resolution loop
     aligned_mem_free(idwt_pse_scratch);
+    delete[] idwt_buf_scratch;
     j2k_resolution *cr = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - reduce_NL));
 
     // modify coordinates of tile component considering a value defined via "-reduce" parameter
@@ -3146,6 +3158,12 @@ uint8_t *j2k_tile::encode() {
         (NL > 0 && stride > 0)
             ? static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * 8 * stride, 32))
             : nullptr;
+    // Allocate buf_scratch: pointer array for the vertical DWT row-pointer table.
+    // Height at the finest level (before the DWT loop shrinks top_left/bottom_right).
+    const uint32_t fdwt_finest_height = static_cast<uint32_t>(bottom_right.y - top_left.y);
+    sprec_t **fdwt_buf_scratch        = (NL > 0 && fdwt_finest_height > 0)
+                                            ? new sprec_t *[static_cast<size_t>(fdwt_finest_height + 8u)]
+                                            : nullptr;
     // Forward DWT
     for (uint8_t r = NL; r > 0; --r) {
       j2k_resolution *ncr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
@@ -3161,7 +3179,7 @@ uint8_t *j2k_tile::encode() {
       if (u1 != u0 && v1 != v0) {
         // cr->scale();
         fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
-                         v0, v1, transformation, fdwt_pse_scratch);
+                         v0, v1, transformation, fdwt_pse_scratch, fdwt_buf_scratch);
       }
       // encode codeblocks in HL, LH, and HH
       t1_encode(cr, ROIshift);
@@ -3170,6 +3188,7 @@ uint8_t *j2k_tile::encode() {
       bottom_right = cr->get_pos1();
     }
     aligned_mem_free(fdwt_pse_scratch);
+    delete[] fdwt_buf_scratch;
     // encode codeblocks in LL
     t1_encode(cr, ROIshift);
   }  // end of component loop

@@ -40,13 +40,22 @@
 auto idwt_irrev97_fixed_neon_hor_step = [](const int32_t init_pos, const int32_t simdlen, float *const X,
                                             const int32_t n0, const int32_t n1, float coeff) {
   auto vvv = vdupq_n_f32(coeff);
-  for (int32_t n = init_pos, i = simdlen; i > 0; i -= 4, n += 8) {
+  int32_t n = init_pos, i = simdlen;
+  // 2× unrolled main loop: two independent 4-pair groups per iteration for better ILP.
+  for (; i > 4; i -= 8, n += 16) {
+    auto x0a  = vld2q_f32(X + n + n0);
+    auto x1a  = vld2q_f32(X + n + n1);
+    auto x0b  = vld2q_f32(X + n + 8 + n0);
+    auto x1b  = vld2q_f32(X + n + 8 + n1);
+    x0a.val[1] = vfmsq_f32(x0a.val[1], vaddq_f32(x0a.val[0], x1a.val[0]), vvv);
+    x0b.val[1] = vfmsq_f32(x0b.val[1], vaddq_f32(x0b.val[0], x1b.val[0]), vvv);
+    vst2q_f32(X + n + n0, x0a);
+    vst2q_f32(X + n + 8 + n0, x0b);
+  }
+  for (; i > 0; i -= 4, n += 8) {
     auto x0   = vld2q_f32(X + n + n0);
     auto x1   = vld2q_f32(X + n + n1);
-    auto tmp  = vaddq_f32(x0.val[0], x1.val[0]);
-    // tmp       = vmulq_f32(tmp, vvv);
-    // x0.val[1] = vsubq_f32(x0.val[1], tmp);
-    x0.val[1] = vfmsq_f32(x0.val[1], tmp, vvv);
+    x0.val[1] = vfmsq_f32(x0.val[1], vaddq_f32(x0.val[0], x1.val[0]), vvv);
     vst2q_f32(X + n + n0, x0);
   }
 };
@@ -78,45 +87,55 @@ void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int3
 
 // reversible IDWT
 void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_t i0, const int32_t i1) {
-  //  const auto i0        = static_cast<int32_t>(u_i0);
-  //  const auto i1        = static_cast<int32_t>(u_i1);
   const int32_t start  = i0 / 2;
   const int32_t stop   = i1 / 2;
   const int32_t offset = left - i0 % 2;
 
-  // step 1
-  sprec_t *sp     = X + offset;
-  int32_t simdlen = stop + 1 - start;
-  auto xl0 = vld2q_f32(sp - 1);
-  auto xl1 = vld2q_f32(sp + 1);
-  const auto vtwo = vdupq_n_f32(2.0f);
-  for (; simdlen > 0; simdlen -= 4) {
-    // (xl0.val[0] + xl1.val[0] + 2) >> 2;
-    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vtwo), 0.25f));
-    xl0.val[1] = vsubq_f32(xl0.val[1], xfloor);
-    // xl0.val[1] = vcvtq_f32_s32(
-    //   vsubq_s32(vcvtq_s32_f32(xl0.val[1]), vrshrq_n_s32(vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0])), 1))
-    //   );
+  // step 1: 2× unrolled
+  const int32_t base1 = offset;
+  int32_t simdlen     = stop + 1 - start;
+  const auto vtwo     = vdupq_n_f32(2.0f);
+  int32_t k = 0;
+  for (; k + 4 < simdlen; k += 8) {
+    sprec_t *sp = X + base1 + k * 2;
+    auto xl0a   = vld2q_f32(sp - 1);
+    auto xl1a   = vld2q_f32(sp + 1);
+    auto xl0b   = vld2q_f32(sp + 7);
+    auto xl1b   = vld2q_f32(sp + 9);
+    xl0a.val[1] = vsubq_f32(xl0a.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0a.val[0], xl1a.val[0]), vtwo), 0.25f)));
+    xl0b.val[1] = vsubq_f32(xl0b.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0b.val[0], xl1b.val[0]), vtwo), 0.25f)));
+    vst2q_f32(sp - 1, xl0a);
+    vst2q_f32(sp + 7, xl0b);
+  }
+  for (; k < simdlen; k += 4) {
+    sprec_t *sp = X + base1 + k * 2;
+    auto xl0    = vld2q_f32(sp - 1);
+    auto xl1    = vld2q_f32(sp + 1);
+    xl0.val[1]  = vsubq_f32(xl0.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0.val[0], xl1.val[0]), vtwo), 0.25f)));
     vst2q_f32(sp - 1, xl0);
-    sp += 8;
-    xl0 = vld2q_f32(sp - 1);
-    xl1 = vld2q_f32(sp + 1);
   }
 
-  // step 2
-  sp      = X + offset;
-  simdlen = stop - start;
-  xl0     = vld2q_f32(sp);
-  xl1     = vld2q_f32(sp + 2);
-  for (; simdlen > 0; simdlen -= 4) {
-    // auto xout  = vhaddq_s32(vcvtq_s32_f32(xl0.val[0]), vcvtq_s32_f32(xl1.val[0]));
-    // xl0.val[1] = vcvtq_f32_s32(vaddq_s32(vcvtq_s32_f32(xl0.val[1]), xout));
-    auto xfloor = vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0.val[0], xl1.val[0]), 0.5f));
-    xl0.val[1] = vaddq_f32(xl0.val[1], xfloor);
+  // step 2: 2× unrolled
+  const int32_t base2 = offset;
+  simdlen             = stop - start;
+  k                   = 0;
+  for (; k + 4 < simdlen; k += 8) {
+    sprec_t *sp = X + base2 + k * 2;
+    auto xl0a   = vld2q_f32(sp);
+    auto xl1a   = vld2q_f32(sp + 2);
+    auto xl0b   = vld2q_f32(sp + 8);
+    auto xl1b   = vld2q_f32(sp + 10);
+    xl0a.val[1] = vaddq_f32(xl0a.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0a.val[0], xl1a.val[0]), 0.5f)));
+    xl0b.val[1] = vaddq_f32(xl0b.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0b.val[0], xl1b.val[0]), 0.5f)));
+    vst2q_f32(sp, xl0a);
+    vst2q_f32(sp + 8, xl0b);
+  }
+  for (; k < simdlen; k += 4) {
+    sprec_t *sp = X + base2 + k * 2;
+    auto xl0    = vld2q_f32(sp);
+    auto xl1    = vld2q_f32(sp + 2);
+    xl0.val[1]  = vaddq_f32(xl0.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0.val[0], xl1.val[0]), 0.5f)));
     vst2q_f32(sp, xl0);
-    sp += 8;
-    xl0 = vld2q_f32(sp);
-    xl1 = vld2q_f32(sp + 2);
   }
 }
 
@@ -127,20 +146,27 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
 auto idwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const Xin0, float *const Xin1,
                                             float *const Xout, float coeff) {
   auto vvv = vdupq_n_f32(coeff);
-  for (int32_t n = 0; n < simdlen; n += 4) {
-    auto x0  = vld1q_f32(Xin0 + n);
-    auto x2  = vld1q_f32(Xin1 + n);
-    auto x1  = vld1q_f32(Xout + n);
-    auto tmp = vaddq_f32(x0, x2);
-    // tmp      = vmulq_f32(tmp, vvv);
-    // x1       = vsubq_f32(x1, tmp);
-    x1 = vfmsq_f32(x1, tmp, vvv);
+  int32_t n = 0;
+  // 2× unrolled: two independent FMS chains per iteration to hide 4-cycle FMA latency.
+  for (; n + 4 < simdlen; n += 8) {
+    auto x0a = vld1q_f32(Xin0 + n);     auto x2a = vld1q_f32(Xin1 + n);     auto x1a = vld1q_f32(Xout + n);
+    auto x0b = vld1q_f32(Xin0 + n + 4); auto x2b = vld1q_f32(Xin1 + n + 4); auto x1b = vld1q_f32(Xout + n + 4);
+    x1a = vfmsq_f32(x1a, vaddq_f32(x0a, x2a), vvv);
+    x1b = vfmsq_f32(x1b, vaddq_f32(x0b, x2b), vvv);
+    vst1q_f32(Xout + n, x1a);
+    vst1q_f32(Xout + n + 4, x1b);
+  }
+  for (; n < simdlen; n += 4) {
+    auto x0 = vld1q_f32(Xin0 + n);
+    auto x2 = vld1q_f32(Xin1 + n);
+    auto x1 = vld1q_f32(Xout + n);
+    x1 = vfmsq_f32(x1, vaddq_f32(x0, x2), vvv);
     vst1q_f32(Xout + n, x1);
   }
 };
 
 void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                  const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
+                                  const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {3, 4};
   constexpr int32_t num_pse_i1[2] = {4, 3};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -152,7 +178,7 @@ void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    sprec_t **buf     = buf_scratch;
     for (int32_t i = 1; i <= top; ++i) {
       // buf[top - i] =
       //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
@@ -210,13 +236,12 @@ void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
     // for (int32_t i = 1; i <= bottom; i++) {
     //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
     // }
-    delete[] buf;
   }
 }
 
 // reversible IDWT
 void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                                const int32_t v1, const int32_t stride, sprec_t *pse_scratch) {
+                                const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {1, 2};
   constexpr int32_t num_pse_i1[2] = {2, 1};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -228,7 +253,7 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    sprec_t **buf     = buf_scratch;
     for (int32_t i = 1; i <= top; ++i) {
       // buf[top - i] =
       //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
@@ -256,7 +281,20 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
       const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
       const auto vtwo         = vdupq_n_f32(2.0f);
       for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
-        for (int32_t col = 0; col < simdlen_s; col += 4) {
+        int32_t col = 0;
+        for (; col + 4 < simdlen_s; col += 8) {
+          auto vin0a   = vld1q_f32(buf[n - 1] + cs + col);
+          auto vouta   = vld1q_f32(buf[n] + cs + col);
+          auto vin1a   = vld1q_f32(buf[n + 1] + cs + col);
+          auto vin0b   = vld1q_f32(buf[n - 1] + cs + col + 4);
+          auto voutb   = vld1q_f32(buf[n] + cs + col + 4);
+          auto vin1b   = vld1q_f32(buf[n + 1] + cs + col + 4);
+          vouta        = vsubq_f32(vouta, vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin0a, vin1a), vtwo), 0.25f)));
+          voutb        = vsubq_f32(voutb, vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(vin0b, vin1b), vtwo), 0.25f)));
+          vst1q_f32(buf[n] + cs + col, vouta);
+          vst1q_f32(buf[n] + cs + col + 4, voutb);
+        }
+        for (; col < simdlen_s; col += 4) {
           auto vin0    = vld1q_f32(buf[n - 1] + cs + col);
           auto vout    = vld1q_f32(buf[n] + cs + col);
           auto vin1    = vld1q_f32(buf[n + 1] + cs + col);
@@ -269,7 +307,20 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
         }
       }
       for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-        for (int32_t col = 0; col < simdlen_s; col += 4) {
+        int32_t col = 0;
+        for (; col + 4 < simdlen_s; col += 8) {
+          auto vin0a   = vld1q_f32(buf[n] + cs + col);
+          auto vouta   = vld1q_f32(buf[n + 1] + cs + col);
+          auto vin1a   = vld1q_f32(buf[n + 2] + cs + col);
+          auto vin0b   = vld1q_f32(buf[n] + cs + col + 4);
+          auto voutb   = vld1q_f32(buf[n + 1] + cs + col + 4);
+          auto vin1b   = vld1q_f32(buf[n + 2] + cs + col + 4);
+          vouta        = vaddq_f32(vouta, vrndmq_f32(vmulq_n_f32(vaddq_f32(vin0a, vin1a), 0.5f)));
+          voutb        = vaddq_f32(voutb, vrndmq_f32(vmulq_n_f32(vaddq_f32(vin0b, vin1b), 0.5f)));
+          vst1q_f32(buf[n + 1] + cs + col, vouta);
+          vst1q_f32(buf[n + 1] + cs + col + 4, voutb);
+        }
+        for (; col < simdlen_s; col += 4) {
           auto vin0    = vld1q_f32(buf[n] + cs + col);
           auto vout    = vld1q_f32(buf[n + 1] + cs + col);
           auto vin1    = vld1q_f32(buf[n + 2] + cs + col);
@@ -289,7 +340,6 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     // for (int32_t i = 1; i <= bottom; i++) {
     //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
     // }
-    delete[] buf;
   }
 }
 
