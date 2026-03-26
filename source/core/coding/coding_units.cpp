@@ -64,7 +64,7 @@ static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_neon,
                                                               cvt_rgb_to_ycbcr_rev_float_neon};
 #else
-static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
+[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float,
                                                           cvt_ycbcr_to_rgb_rev_float};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float,
