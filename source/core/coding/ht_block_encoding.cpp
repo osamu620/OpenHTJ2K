@@ -142,6 +142,16 @@ void state_MS_enc::emitMagSgnBits(uint32_t cwd, uint8_t len, uint8_t emb_1) {
   }
 }
 void state_MS_enc::emit_dword() {
+  // Fast path: no byte stuffing when none of {last, Creg[7:0], Creg[15:8], Creg[23:16]} equals 0xFF.
+  if (last < 0xFF && (Creg & 0xFF) < 0xFF && ((Creg >> 8) & 0xFF) < 0xFF && ((Creg >> 16) & 0xFF) < 0xFF) {
+    for (int i = 0; i < 4; ++i) {
+      buf[pos++] = static_cast<uint8_t>(Creg & 0xFF);
+      Creg >>= 8;
+      ctreg -= 8;
+    }
+    last = buf[pos - 1];
+    return;
+  }
   for (int i = 0; i < 4; ++i) {
     if (last == 0xFF) {
       last = static_cast<uint8_t>(Creg & 0x7F);

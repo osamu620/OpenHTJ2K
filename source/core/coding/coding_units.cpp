@@ -2423,6 +2423,10 @@ void j2k_tile::decode() {
 
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
+#ifdef OPENHTJ2K_THREAD
+      std::vector<std::future<int>> results;
+      results.reserve(512);
+#endif
       for (uint32_t p = 0; p < num_precincts; p++) {
         j2k_precinct *cp = cr->access_precinct(p);
 
@@ -2451,7 +2455,7 @@ void j2k_tile::decode() {
 
         // Pass 2: decode all non-empty codeblocks (buffers are already zeroed above).
 #ifdef OPENHTJ2K_THREAD
-        std::vector<std::future<int>> results;
+        results.clear();
 #endif
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -3065,6 +3069,8 @@ uint8_t *j2k_tile::encode() {
       if (max_total_cblks == 0) return;
       int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
       uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+      std::vector<std::future<int>> results;
+      results.reserve(512);
 
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
@@ -3092,7 +3098,7 @@ uint8_t *j2k_tile::encode() {
         memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
 
         // Pass 2: encode all codeblocks (buffers are zeroed above).
-        std::vector<std::future<int>> results;
+        results.clear();
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
