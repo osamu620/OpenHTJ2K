@@ -209,6 +209,24 @@
       gap: 6px;
     }
     .site-footer a:hover { text-decoration: underline; }
+    /* ── Footer ──────────────────────────────────────────── */
+    .site-footer {
+      margin-top: 48px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+    .gh-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-sub);
+      text-decoration: none;
+      font-size: 13px;
+      transition: color 0.15s;
+    }
+    .gh-link:hover { color: var(--text); }
+
     @media (max-width: 860px)  { .viewer-grid   { grid-template-columns: 1fr; } }
     @media (max-width: 600px)  { .controls-row  { grid-template-columns: 1fr; } }
   </style>
