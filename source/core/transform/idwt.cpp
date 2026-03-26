@@ -518,17 +518,13 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 }
 
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, const int32_t u0,
-                      const int32_t u1, const int32_t v0, const int32_t v1, const uint8_t transformation) {
+                      const int32_t u1, const int32_t v0, const int32_t v1, const uint8_t transformation,
+                      sprec_t *pse_scratch) {
   const int32_t stride     = round_up(u1 - u0, 32);
   sprec_t *src             = nextLL;
   idwt_2d_interleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
   idwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
 
-  // Vertical DWT
-  // scratch buffer for symmetric extension — allocate once:
-  const int32_t pse_rows = 8;  // max for irrev97: top=4 + bottom=4
-  const int32_t pse_len  = round_up(stride, SIMD_LEN_I32);
-  auto *pse_scratch = static_cast<sprec_t*>(aligned_mem_alloc(sizeof(sprec_t) * pse_rows * static_cast<size_t>(pse_len), 32));
+  // Vertical DWT (pse_scratch provided by caller, sized for 8 * round_up(stride, SIMD_LEN_I32))
   idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch);
-  aligned_mem_free(pse_scratch);
 }

@@ -31,6 +31,46 @@
 #include "j2kmarkers.hpp"
 #include <cstring>
 #include <functional>
+#include <mutex>
+
+/********************************************************************************
+ * cblk_data_pool — monotonic bump allocator for HTJ2K codeblock bitstreams
+ *
+ * Replaces per-codeblock malloc() in set_compressed_data() with bulk 2 MB slab
+ * allocations, reducing ~11,520 individual malloc calls per 4K tile to a handful.
+ * Thread-safe: multiple encoder threads may call bump() concurrently.
+ *******************************************************************************/
+class cblk_data_pool {
+  static constexpr size_t SLAB_BYTES = 2u << 20;  // 2 MB per slab
+  struct Slab {
+    uint8_t *ptr;
+    size_t used;
+    size_t cap;
+  };
+  std::vector<Slab> slabs;
+  std::mutex mtx;
+
+ public:
+  cblk_data_pool()                                = default;
+  cblk_data_pool(const cblk_data_pool &)          = delete;
+  cblk_data_pool &operator=(const cblk_data_pool &) = delete;
+
+  ~cblk_data_pool() {
+    for (auto &s : slabs) free(s.ptr);
+  }
+
+  uint8_t *bump(size_t n) {
+    n = (n + 7u) & ~7u;  // 8-byte alignment
+    std::lock_guard<std::mutex> g(mtx);
+    if (slabs.empty() || slabs.back().used + n > slabs.back().cap) {
+      const size_t cap = (n > SLAB_BYTES) ? n : SLAB_BYTES;
+      slabs.push_back({static_cast<uint8_t *>(malloc(cap)), 0u, cap});
+    }
+    uint8_t *p = slabs.back().ptr + slabs.back().used;
+    slabs.back().used += n;
+    return p;
+  }
+};
 
 /********************************************************************************
  * j2k_region
@@ -74,6 +114,9 @@ class j2k_codeblock : public j2k_region {
   const uint8_t band;
   const uint8_t M_b;
   [[maybe_unused]] const uint32_t index;
+  // When true, compressed_data was bump-allocated by a cblk_data_pool owned by
+  // j2k_tile. The destructor must NOT free it; the pool manages the lifetime.
+  bool compressed_is_pooled = false;
 
  public:
   int32_t *sample_buf;
@@ -108,7 +151,7 @@ class j2k_codeblock : public j2k_region {
                 const uint16_t &numlayers, const uint8_t &codeblock_style, const element_siz &p0,
                 const element_siz &p1, const element_siz &s);
   ~j2k_codeblock() {
-    if (compressed_data != nullptr) {
+    if (compressed_data != nullptr && !compressed_is_pooled) {
       free(compressed_data);
     }
   }
@@ -477,6 +520,10 @@ class j2k_tile : public j2k_tile_base {
   uint16_t Ccap15;
   // progression order information for both COD and POC
   POC_marker porder_info;
+  // per-tile bump allocator for HTJ2K encode compressed bitstreams;
+  // eliminates ~11,520 individual malloc calls for a 4K 3-component tile.
+  // Heap-allocated so j2k_tile remains movable (std::mutex is not movable).
+  std::unique_ptr<cblk_data_pool> cblk_pool;
   // return SOP is used or not
   [[nodiscard]] bool is_use_SOP() const { return this->use_SOP; }
   // return EPH is used or not

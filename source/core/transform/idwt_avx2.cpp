@@ -40,7 +40,27 @@ auto idwt_irrev97_fixed_avx2_hor_step = [](const int32_t init_pos, const int32_t
                                             const int32_t n0, const int32_t n1, const float fV) {
   auto vcoeff = _mm256_set1_ps(fV);
   auto vzero = _mm256_setzero_ps();
-  for (int32_t n = init_pos, i = 0; i < simdlen; i += 4, n += 8) {
+  int32_t n = init_pos, i = 0;
+  // 2× unrolled main loop: two independent 4-sample groups per iteration for better ILP.
+  for (; i + 4 < simdlen; i += 8, n += 16) {
+    auto xin0a = _mm256_loadu_ps(X + n + n0);
+    auto xin2a = _mm256_loadu_ps(X + n + n1);
+    auto xin0b = _mm256_loadu_ps(X + n + 8 + n0);
+    auto xin2b = _mm256_loadu_ps(X + n + 8 + n1);
+    auto xsuma = _mm256_add_ps(xin0a, xin2a);
+    auto xsumb = _mm256_add_ps(xin0b, xin2b);
+    xsuma = _mm256_blend_ps(xsuma, vzero, 0xAA);
+    xsumb = _mm256_blend_ps(xsumb, vzero, 0xAA);
+    xsuma = _mm256_mul_ps(xsuma, vcoeff);
+    xsumb = _mm256_mul_ps(xsumb, vcoeff);
+    xsuma = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xsuma), 4));
+    xsumb = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xsumb), 4));
+    xin0a = _mm256_sub_ps(xin0a, xsuma);
+    xin0b = _mm256_sub_ps(xin0b, xsumb);
+    _mm256_storeu_ps(X + n + n0, xin0a);
+    _mm256_storeu_ps(X + n + 8 + n0, xin0b);
+  }
+  for (; i < simdlen; i += 4, n += 8) {
     auto xin0 = _mm256_loadu_ps(X + n + n0);
     auto xin2 = _mm256_loadu_ps(X + n + n1);
     auto xsum = _mm256_add_ps(xin0, xin2);
@@ -92,7 +112,27 @@ void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
   const auto xzero = _mm256_setzero_ps();
   const auto xtwo = _mm256_set1_ps(2.0f);
   const auto x025 = _mm256_set1_ps(0.25f);
-  for (; simdlen > 0; simdlen -= 4) {
+  int32_t i = 0;
+  // 2× unrolled main loop: two independent 4-sample groups per iteration for better ILP.
+  for (; i + 4 < simdlen; i += 8, sp += 16) {
+    auto xin0a = _mm256_loadu_ps(sp - 1);
+    auto xin2a = _mm256_loadu_ps(sp + 1);
+    auto xin0b = _mm256_loadu_ps(sp + 7);
+    auto xin2b = _mm256_loadu_ps(sp + 9);
+    auto xsuma = _mm256_add_ps(_mm256_add_ps(xin0a, xin2a), xtwo);
+    auto xsumb = _mm256_add_ps(_mm256_add_ps(xin0b, xin2b), xtwo);
+    xsuma      = _mm256_blend_ps(xsuma, xzero, 0xAA);
+    xsumb      = _mm256_blend_ps(xsumb, xzero, 0xAA);
+    auto xfa   = _mm256_floor_ps(_mm256_mul_ps(xsuma, x025));
+    auto xfb   = _mm256_floor_ps(_mm256_mul_ps(xsumb, x025));
+    xfa        = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfa), 4));
+    xfb        = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfb), 4));
+    xin0a      = _mm256_sub_ps(xin0a, xfa);
+    xin0b      = _mm256_sub_ps(xin0b, xfb);
+    _mm256_storeu_ps(sp - 1, xin0a);
+    _mm256_storeu_ps(sp + 7, xin0b);
+  }
+  for (; i < simdlen; i += 4, sp += 8) {
     auto xin0 = _mm256_loadu_ps(sp - 1);
     auto xin2 = _mm256_loadu_ps(sp + 1);
     auto xsum = _mm256_add_ps(_mm256_add_ps(xin0, xin2), xtwo);
@@ -101,14 +141,33 @@ void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
     xsum      = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfloor), 4));
     xin0      = _mm256_sub_ps(xin0, xsum);
     _mm256_storeu_ps(sp - 1, xin0);
-    sp += 8;
   }
 
   // step 2
   simdlen = stop - start;
   sp      = X + offset;
   auto x05 = _mm256_set1_ps(0.5f);
-  for (; simdlen > 0; simdlen -= 4) {
+  i = 0;
+  // 2× unrolled main loop: two independent 4-sample groups per iteration for better ILP.
+  for (; i + 4 < simdlen; i += 8, sp += 16) {
+    auto xin0a = _mm256_loadu_ps(sp);
+    auto xin2a = _mm256_loadu_ps(sp + 2);
+    auto xin0b = _mm256_loadu_ps(sp + 8);
+    auto xin2b = _mm256_loadu_ps(sp + 10);
+    auto xsuma = _mm256_add_ps(xin0a, xin2a);
+    auto xsumb = _mm256_add_ps(xin0b, xin2b);
+    xsuma      = _mm256_blend_ps(xsuma, xzero, 0xAA);
+    xsumb      = _mm256_blend_ps(xsumb, xzero, 0xAA);
+    auto xfa   = _mm256_floor_ps(_mm256_mul_ps(xsuma, x05));
+    auto xfb   = _mm256_floor_ps(_mm256_mul_ps(xsumb, x05));
+    xfa        = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfa), 4));
+    xfb        = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfb), 4));
+    xin0a      = _mm256_add_ps(xin0a, xfa);
+    xin0b      = _mm256_add_ps(xin0b, xfb);
+    _mm256_storeu_ps(sp, xin0a);
+    _mm256_storeu_ps(sp + 8, xin0b);
+  }
+  for (; i < simdlen; i += 4, sp += 8) {
     auto xin0 = _mm256_loadu_ps(sp);
     auto xin2 = _mm256_loadu_ps(sp + 2);
 
@@ -118,7 +177,6 @@ void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
     xsum      = _mm256_castsi256_ps(_mm256_slli_si256(_mm256_castps_si256(xfloor), 4));
     xin0      = _mm256_add_ps(xin0, xsum);
     _mm256_storeu_ps(sp, xin0);
-    sp += 8;
   }
 }
 

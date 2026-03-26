@@ -35,6 +35,11 @@
 #include "dwt.hpp"
 #include "color.hpp"
 
+// Thread-local pointer to the active cblk_data_pool for HTJ2K encode.
+// Set on each thread (main or worker) before calling htj2k_encode(),
+// cleared after. When null, set_compressed_data falls back to malloc().
+static thread_local cblk_data_pool *g_cblk_pool = nullptr;
+
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_avx2,
@@ -223,10 +228,13 @@ void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsi
       return;
     }
   }
-  // MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(bufsize + Lref * (refsegment)));
-  this->compressed_data =
-      static_cast<uint8_t *>(malloc(static_cast<size_t>(bufsize + Lref * (refsegment))));
-  //  std::unique_ptr<uint8_t[]>(new uint8_t[static_cast<size_t>(bufsize + Lref * (refsegment))]);
+  const size_t n = static_cast<size_t>(bufsize) + static_cast<size_t>(Lref) * refsegment;
+  if (g_cblk_pool != nullptr) {
+    this->compressed_data   = g_cblk_pool->bump(n);
+    this->compressed_is_pooled = true;
+  } else {
+    this->compressed_data = static_cast<uint8_t *>(malloc(n));
+  }
   memcpy(this->compressed_data, buf, bufsize);
   this->current_address = this->compressed_data;
 }
@@ -2356,7 +2364,11 @@ void j2k_tile::decode() {
     const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
     const uint8_t NL       = this->tcomp[c].get_dwt_levels();
 
-    uint32_t max_cblks = 0;
+    // Pre-scan: compute the max precinct codeblock count per DWT level.
+    // Stored per level so the decode pool can be grown incrementally (coarsest→finest),
+    // keeping the working set small for coarse levels and improving cache behaviour.
+    const int num_dec_levels = static_cast<int>(NL) - static_cast<int>(this->reduce_NL) + 1;
+    std::vector<uint32_t> level_max_cblks(num_dec_levels, 0);
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
@@ -2367,18 +2379,37 @@ void j2k_tile::decode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        max_cblks = (max_cblks < total_cblks) ? total_cblks : max_cblks;
+        const int idx                = static_cast<int>(NL - lev);
+        level_max_cblks[idx] = std::max(level_max_cblks[idx], total_cblks);
       }
     }
 
-    // allocate memory for codeblock buffers once per component; reused across all precincts.
-    // Per-precinct bulk memsets (in the decode loop below) zero only the used portion,
-    // naturally pre-faulting pages without wasting writes on unused regions.
-    int32_t *buf_for_samples = static_cast<int32_t *>(malloc(sizeof(int32_t) * max_cblks * 4096));
-    uint8_t *buf_for_states  = static_cast<uint8_t *>(
-        malloc(sizeof(uint8_t) * max_cblks * 6156));  // 6156 = (1024+2) * (4+2), worst case
+    // Grow-only pool: start empty, expand only when this level needs more than current capacity.
+    // Frees and re-allocates only on growth (never shrinks), so warm pages are preserved
+    // for precincts within the same level. Coarse levels start with a tiny allocation
+    // (better L2/L3 cache fit); the pool grows to full size only at the finest level.
+    size_t alloc_samples_bytes = 0;
+    size_t alloc_states_bytes  = 0;
+    int32_t *buf_for_samples   = nullptr;
+    uint8_t *buf_for_states    = nullptr;
 
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
+      const uint32_t lev_max = level_max_cblks[static_cast<int>(NL - lev)];
+      if (lev_max == 0) continue;
+
+      const size_t need_samples = sizeof(int32_t) * lev_max * 4096;
+      const size_t need_states  = sizeof(uint8_t) * lev_max * 6156;
+      if (need_samples > alloc_samples_bytes) {
+        std::free(buf_for_samples);
+        buf_for_samples     = static_cast<int32_t *>(malloc(need_samples));
+        alloc_samples_bytes = need_samples;
+      }
+      if (need_states > alloc_states_bytes) {
+        std::free(buf_for_states);
+        buf_for_states     = static_cast<uint8_t *>(malloc(need_states));
+        alloc_states_bytes = need_states;
+      }
+
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
       for (uint32_t p = 0; p < num_precincts; p++) {
@@ -2457,6 +2488,23 @@ void j2k_tile::decode() {
     // const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
     const uint8_t NL             = this->tcomp[c].get_dwt_levels();
     const uint8_t transformation = this->tcomp[c].get_transformation();
+
+    // Allocate pse_scratch once for all idwt_2d_sr_fixed calls in this component.
+    // Sized for the finest (widest) resolution level; coarser levels use a sub-region.
+    const int32_t max_idwt_pse_len =
+        (NL > this->reduce_NL)
+            ? round_up(
+                  static_cast<int32_t>(
+                      this->tcomp[c].access_resolution(NL - this->reduce_NL)->get_pos1().x
+                      - this->tcomp[c].access_resolution(NL - this->reduce_NL)->get_pos0().x),
+                  32)
+            : 0;
+    sprec_t *idwt_pse_scratch =
+        (max_idwt_pse_len > 0)
+            ? static_cast<sprec_t *>(
+                  aligned_mem_alloc(sizeof(sprec_t) * 8 * static_cast<size_t>(max_idwt_pse_len), 32))
+            : nullptr;
+
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       j2k_resolution *cr = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       // lowest resolution level (= LL0) does not have HL, LH, HH bands.
@@ -2475,10 +2523,11 @@ void j2k_tile::decode() {
 
         if (u1 != u0 && v1 != v0) {
           idwt_2d_sr_fixed(cr->i_samples, pcr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0,
-                           u1, v0, v1, transformation);
+                           u1, v0, v1, transformation, idwt_pse_scratch);
         }
       }
     }  // end of resolution loop
+    aligned_mem_free(idwt_pse_scratch);
     j2k_resolution *cr = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - reduce_NL));
 
     // modify coordinates of tile component considering a value defined via "-reduce" parameter
@@ -2957,9 +3006,12 @@ uint8_t *j2k_tile::encode() {
 #endif
     }  // end skip for MCT components
 
+    // Initialize the per-tile bump allocator for compressed bitstream data.
+    if (!this->cblk_pool) this->cblk_pool = std::make_unique<cblk_data_pool>();
+
     // Lambda function of block-endocing
 #ifdef OPENHTJ2K_THREAD
-    auto t1_encode = [pool](j2k_resolution *cr, uint8_t ROIshift) {
+    auto t1_encode = [pool, cblk_p = this->cblk_pool.get()](j2k_resolution *cr, uint8_t ROIshift) {
       // Pre-scan: find the largest codeblock count across all precincts at this resolution.
       // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
       uint32_t max_total_cblks = 0;
@@ -3009,12 +3061,16 @@ uint8_t *j2k_tile::encode() {
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
             if (pool->num_threads() > 1) {
-              results.emplace_back(pool->enqueue([block, ROIshift] {
+              results.emplace_back(pool->enqueue([block, ROIshift, cblk_p] {
+                g_cblk_pool = cblk_p;
                 htj2k_encode(block, ROIshift);
+                g_cblk_pool = nullptr;
                 return 0;
               }));
             } else {
+              g_cblk_pool = cblk_p;
               htj2k_encode(block, ROIshift);
+              g_cblk_pool = nullptr;
             }
           }
         }
@@ -3026,7 +3082,7 @@ uint8_t *j2k_tile::encode() {
       free(sgbuf);
     };
 #else
-    auto t1_encode = [](j2k_resolution *cr, uint8_t ROIshift) {
+    auto t1_encode = [cblk_p = this->cblk_pool.get()](j2k_resolution *cr, uint8_t ROIshift) {
       // Pre-scan: find the largest codeblock count across all precincts at this resolution.
       // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
       uint32_t max_total_cblks = 0;
@@ -3069,6 +3125,7 @@ uint8_t *j2k_tile::encode() {
         memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
 
         // Pass 2: encode all codeblocks (buffers are zeroed above).
+        g_cblk_pool = cblk_p;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -3077,11 +3134,18 @@ uint8_t *j2k_tile::encode() {
             htj2k_encode(block, ROIshift);
           }
         }
+        g_cblk_pool = nullptr;
       }
       free(gbuf);
       free(sgbuf);
     };
 #endif
+    // Allocate pse_scratch once for all fdwt_2d_sr_fixed calls in this component.
+    // stride (= round_up(finest_width, 32)) is already computed above; sized for 8 PSE rows.
+    sprec_t *fdwt_pse_scratch =
+        (NL > 0 && stride > 0)
+            ? static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * 8 * stride, 32))
+            : nullptr;
     // Forward DWT
     for (uint8_t r = NL; r > 0; --r) {
       j2k_resolution *ncr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
@@ -3097,7 +3161,7 @@ uint8_t *j2k_tile::encode() {
       if (u1 != u0 && v1 != v0) {
         // cr->scale();
         fdwt_2d_sr_fixed(cr->i_samples, ncr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0, u1,
-                         v0, v1, transformation);
+                         v0, v1, transformation, fdwt_pse_scratch);
       }
       // encode codeblocks in HL, LH, and HH
       t1_encode(cr, ROIshift);
@@ -3105,6 +3169,7 @@ uint8_t *j2k_tile::encode() {
       top_left     = cr->get_pos0();
       bottom_right = cr->get_pos1();
     }
+    aligned_mem_free(fdwt_pse_scratch);
     // encode codeblocks in LL
     t1_encode(cr, ROIshift);
   }  // end of component loop
