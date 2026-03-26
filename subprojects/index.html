@@ -398,7 +398,7 @@ console.log(cimg);
             // src is an address in memory, but since we are 
             // dealing with integers (i.e, each entry is 4 bytes 
             // away from the previous sample, we need to divide by 4 (>> 2)
-            var val = ((heap[((src + didx) >>> 2) + x] + half + offset) >>> down_shift) <<< up_shift;
+            var val = ((heap[((src + didx) >>> 2) + x] + half + offset) >>> down_shift) << up_shift;
             dst[didx + x * compskip] = val;
             dst[didx + x * compskip + 1] = val;
             dst[didx + x * compskip + 2] = val;
@@ -602,7 +602,7 @@ console.log(cimg);
   <!-- Wire SIMD badge from the hidden simd_message element (non-invasive addition) -->
   <script>
     new MutationObserver(function () {
-      var txt = document.getElementById('simd_message').innerText;
+      var txt = document.getElementById('simd_message').textContent;
       var badge = document.getElementById('simd_badge');
       if (txt.indexOf('not detected') !== -1) {
         badge.textContent = 'No SIMD';
