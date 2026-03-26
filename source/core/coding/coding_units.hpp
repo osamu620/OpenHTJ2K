@@ -36,24 +36,22 @@
 /********************************************************************************
  * cblk_data_pool — monotonic bump allocator for HTJ2K codeblock bitstreams
  *
- * Replaces per-codeblock malloc() in set_compressed_data() with bulk 2 MB slab
- * allocations, reducing ~11,520 individual malloc calls per 4K tile to a handful.
- * Thread-safe: multiple encoder threads may call bump() concurrently.
+ * Single-threaded bump allocator for HTJ2K encoder compressed bitstreams.
+ * Each encoder thread owns its own instance via a per-thread slot (g_tl_pool_slot),
+ * so no synchronisation is needed — bump() and trim() are plain arithmetic.
+ * Replaces ~11,520 individual malloc() calls per 4K tile with a handful of 2 MB slabs.
  *******************************************************************************/
 class cblk_data_pool {
   static constexpr size_t SLAB_BYTES = 2u << 20;  // 2 MB per slab
   struct Slab {
     uint8_t *ptr;
-    std::atomic<size_t> used;
+    size_t used;
     size_t cap;
-    explicit Slab(uint8_t *p, size_t c) : ptr(p), used(0u), cap(c) {}
-    Slab(Slab &&o) noexcept : ptr(o.ptr), used(o.used.load()), cap(o.cap) {}
   };
   std::vector<Slab> slabs;
-  std::mutex overflow_mtx;  // only taken on slab growth (rare)
 
  public:
-  cblk_data_pool() { slabs.reserve(16); }
+  cblk_data_pool() { slabs.reserve(8); }
   cblk_data_pool(const cblk_data_pool &)          = delete;
   cblk_data_pool &operator=(const cblk_data_pool &) = delete;
 
@@ -61,33 +59,32 @@ class cblk_data_pool {
     for (auto &s : slabs) free(s.ptr);
   }
 
+  // Allocate n bytes (rounded to 8-byte alignment).  NOT thread-safe.
   uint8_t *bump(size_t n) {
-    n = (n + 7u) & ~7u;  // 8-byte alignment
-    // Fast path: lock-free CAS on the current last slab.
-    if (!slabs.empty()) {
-      auto &s    = slabs.back();
-      size_t old = s.used.load(std::memory_order_relaxed);
-      while (old + n <= s.cap) {
-        if (s.used.compare_exchange_weak(old, old + n, std::memory_order_relaxed,
-                                         std::memory_order_relaxed))
-          return s.ptr + old;
-      }
+    n = (n + 7u) & ~7u;
+    if (slabs.empty() || slabs.back().used + n > slabs.back().cap) {
+      const size_t cap = (n > SLAB_BYTES) ? n : SLAB_BYTES;
+      slabs.push_back({static_cast<uint8_t *>(malloc(cap)), 0u, cap});
     }
-    // Slow path: need a new slab — take the overflow mutex.
-    std::lock_guard<std::mutex> g(overflow_mtx);
-    // Re-check under lock in case another thread already added a slab with room.
-    if (!slabs.empty()) {
-      auto &s    = slabs.back();
-      size_t old = s.used.load(std::memory_order_relaxed);
-      if (old + n <= s.cap) {
-        s.used.fetch_add(n, std::memory_order_relaxed);
-        return s.ptr + old;
-      }
+    uint8_t *p = slabs.back().ptr + slabs.back().used;
+    slabs.back().used += n;
+    return p;
+  }
+
+  // Release the last n bytes of the most-recent bump() (must still be in the same slab).
+  void trim(size_t n) noexcept {
+    if (!slabs.empty() && slabs.back().used >= n) slabs.back().used -= n;
+  }
+
+  // Reset all slabs to empty, keeping the allocated pages so they are already
+  // faulted-in for the next tile encode (avoids repeated mmap/munmap overhead).
+  void reset() noexcept {
+    for (auto &s : slabs) s.used = 0;
+    // Collapse to one slab to bound long-term memory footprint.
+    while (slabs.size() > 1) {
+      free(slabs.back().ptr);
+      slabs.pop_back();
     }
-    const size_t cap = (n > SLAB_BYTES) ? n : SLAB_BYTES;
-    slabs.emplace_back(static_cast<uint8_t *>(malloc(cap)), cap);
-    slabs.back().used.store(n, std::memory_order_relaxed);
-    return slabs.back().ptr;
   }
 };
 
@@ -539,10 +536,15 @@ class j2k_tile : public j2k_tile_base {
   uint16_t Ccap15;
   // progression order information for both COD and POC
   POC_marker porder_info;
-  // per-tile bump allocator for HTJ2K encode compressed bitstreams;
-  // eliminates ~11,520 individual malloc calls for a 4K 3-component tile.
-  // Heap-allocated so j2k_tile remains movable (std::mutex is not movable).
-  std::unique_ptr<cblk_data_pool> cblk_pool;
+  // Per-thread bump allocators for HTJ2K encode compressed bitstreams.
+  // One pool per concurrent encoder thread; no locking required.
+  // Heap-allocated to keep j2k_tile movable (std::atomic is not movable).
+  struct EncodePoolCtx {
+    std::vector<std::unique_ptr<cblk_data_pool>> pools;
+    uint32_t gen = 0;
+    std::atomic<int> slot_cnt{0};
+  };
+  std::unique_ptr<EncodePoolCtx> encode_pool_ctx;
   // return SOP is used or not
   [[nodiscard]] bool is_use_SOP() const { return this->use_SOP; }
   // return EPH is used or not

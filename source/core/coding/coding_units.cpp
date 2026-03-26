@@ -40,6 +40,17 @@
 // cleared after. When null, set_compressed_data falls back to malloc().
 static thread_local cblk_data_pool *g_cblk_pool = nullptr;
 
+// Per-thread pool slot for encoder pool assignment.
+// gen tracks the tile-encode generation; when it differs from EncodePoolCtx::gen,
+// the thread claims a new slot (one atomic fetch_add per thread per tile encode).
+namespace {
+struct TlPoolSlot {
+  int slot       = -1;
+  uint32_t gen   = ~uint32_t{0};
+};
+}  // namespace
+static thread_local TlPoolSlot g_tl_pool_slot;
+
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_avx2,
@@ -2956,6 +2967,24 @@ uint8_t *j2k_tile::encode() {
   auto pool = ThreadPool::get();
   // std::vector<std::future<int>> results;
 #endif
+  // Set up per-thread bump allocators once for the entire tile encode.
+  // All components share these pools; data must remain valid until packet writing is done.
+  if (!this->encode_pool_ctx) this->encode_pool_ctx = std::make_unique<EncodePoolCtx>();
+  {
+    auto *epc = this->encode_pool_ctx.get();
+    ++epc->gen;
+    epc->slot_cnt.store(0, std::memory_order_relaxed);
+#ifdef OPENHTJ2K_THREAD
+    const int nslots = (pool ? static_cast<int>(pool->num_threads()) : 0) + 1;
+#else
+    const int nslots = 1;
+#endif
+    while (static_cast<int>(epc->pools.size()) < nslots)
+      epc->pools.emplace_back(std::make_unique<cblk_data_pool>());
+    for (auto &ep : epc->pools) ep->reset();
+  }
+  auto *epc = this->encode_pool_ctx.get();
+
   // Copy pixel data (dword) to the root resolution buffer (word)
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift       = tcomp[c].get_ROIshift();
@@ -3018,12 +3047,9 @@ uint8_t *j2k_tile::encode() {
 #endif
     }  // end skip for MCT components
 
-    // Initialize the per-tile bump allocator for compressed bitstream data.
-    if (!this->cblk_pool) this->cblk_pool = std::make_unique<cblk_data_pool>();
-
     // Lambda function of block-endocing
 #ifdef OPENHTJ2K_THREAD
-    auto t1_encode = [pool, cblk_p = this->cblk_pool.get()](j2k_resolution *cr, uint8_t ROIshift) {
+    auto t1_encode = [epc, pool](j2k_resolution *cr, uint8_t ROIshift) {
       // Pre-scan: find the largest codeblock count across all precincts at this resolution.
       // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
       uint32_t max_total_cblks = 0;
@@ -3073,14 +3099,21 @@ uint8_t *j2k_tile::encode() {
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
             if (pool->num_threads() > 1) {
-              results.emplace_back(pool->enqueue([block, ROIshift, cblk_p] {
-                g_cblk_pool = cblk_p;
+              results.emplace_back(pool->enqueue([epc, block, ROIshift] {
+                // Claim a per-thread pool slot once per tile encode (generation-guarded).
+                TlPoolSlot &ts = g_tl_pool_slot;
+                if (ts.gen != epc->gen) {
+                  const int slot = epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
+                  ts.slot        = std::min(slot, static_cast<int>(epc->pools.size()) - 1);
+                  ts.gen         = epc->gen;
+                }
+                g_cblk_pool = epc->pools[static_cast<size_t>(ts.slot)].get();
                 htj2k_encode(block, ROIshift);
                 g_cblk_pool = nullptr;
                 return 0;
               }));
             } else {
-              g_cblk_pool = cblk_p;
+              g_cblk_pool = epc->pools[0].get();
               htj2k_encode(block, ROIshift);
               g_cblk_pool = nullptr;
             }
@@ -3094,7 +3127,7 @@ uint8_t *j2k_tile::encode() {
       free(sgbuf);
     };
 #else
-    auto t1_encode = [cblk_p = this->cblk_pool.get()](j2k_resolution *cr, uint8_t ROIshift) {
+    auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
       // Pre-scan: find the largest codeblock count across all precincts at this resolution.
       // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
       uint32_t max_total_cblks = 0;
@@ -3137,7 +3170,7 @@ uint8_t *j2k_tile::encode() {
         memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
 
         // Pass 2: encode all codeblocks (buffers are zeroed above).
-        g_cblk_pool = cblk_p;
+        g_cblk_pool = epc->pools[0].get();
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
