@@ -30,6 +30,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <cassert>
+#ifdef OPENHTJ2K_THREAD
+  #include <thread>
+#endif
 #include "coding_units.hpp"
 #include "block_decoding.hpp"
 #include "dwt.hpp"
@@ -50,6 +53,17 @@ struct TlPoolSlot {
 };
 }  // namespace
 static thread_local TlPoolSlot g_tl_pool_slot;
+
+#ifdef OPENHTJ2K_THREAD
+namespace {
+// Lightweight task descriptor for decoder: holds everything needed by a worker thread.
+struct DecTaskArgs {
+  j2k_codeblock *block;
+  uint8_t ROIshift;
+  std::atomic<int> *remaining;
+};
+}  // namespace
+#endif
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 [[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
@@ -2424,8 +2438,11 @@ void j2k_tile::decode() {
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
 #ifdef OPENHTJ2K_THREAD
-      std::vector<std::future<int>> results;
-      results.reserve(512);
+      // Pre-allocate task-arg array once per level; sized to the maximum codeblocks in any precinct
+      // so push_back() never reallocates (no pointer invalidation while dispatching).
+      std::vector<DecTaskArgs> dec_task_args;
+      dec_task_args.reserve(lev_max);
+      std::atomic<int> dec_remaining{0};
 #endif
       for (uint32_t p = 0; p < num_precincts; p++) {
         j2k_precinct *cp = cr->access_precinct(p);
@@ -2455,7 +2472,8 @@ void j2k_tile::decode() {
 
         // Pass 2: decode all non-empty codeblocks (buffers are already zeroed above).
 #ifdef OPENHTJ2K_THREAD
-        results.clear();
+        dec_task_args.clear();
+        dec_remaining.store(0, std::memory_order_relaxed);
 #endif
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -2466,13 +2484,16 @@ void j2k_tile::decode() {
             if (block->num_passes) {
 #ifdef OPENHTJ2K_THREAD
               if (pool->num_threads() > 1) {
-                results.emplace_back(pool->enqueue([block, ROIshift] {
-                  if ((block->Cmodes & HT) >> 6)
-                    htj2k_decode(block, ROIshift);
+                dec_task_args.push_back({block, ROIshift, &dec_remaining});
+                auto *da = &dec_task_args.back();
+                dec_remaining.fetch_add(1, std::memory_order_relaxed);
+                pool->push([da]() {
+                  if ((da->block->Cmodes & HT) >> 6)
+                    htj2k_decode(da->block, da->ROIshift);
                   else
-                    j2k_decode(block, ROIshift);
-                  return 0;
-                }));
+                    j2k_decode(da->block, da->ROIshift);
+                  da->remaining->fetch_sub(1, std::memory_order_release);
+                });
               } else {
                 if ((block->Cmodes & HT) >> 6)
                   htj2k_decode(block, ROIshift);
@@ -2489,9 +2510,8 @@ void j2k_tile::decode() {
           }  // end of codeblock loop
         }  // end of subband loop
 #ifdef OPENHTJ2K_THREAD
-        for (auto &result : results) {
-          result.get();
-        }
+        while (dec_remaining.load(std::memory_order_acquire) > 0)
+          std::this_thread::yield();
 #endif
       }  // end of precinct loop
     }
@@ -3054,6 +3074,13 @@ uint8_t *j2k_tile::encode() {
     // Lambda function of block-endocing
 #ifdef OPENHTJ2K_THREAD
     auto t1_encode = [epc, pool](j2k_resolution *cr, uint8_t ROIshift) {
+      // Per-task argument struct for the encoder: defined here to access private EncodePoolCtx.
+      struct EncTaskArgs {
+        EncodePoolCtx *epc;
+        j2k_codeblock *block;
+        uint8_t ROIshift;
+        std::atomic<int> *remaining;
+      };
       // Pre-scan: find the largest codeblock count across all precincts at this resolution.
       // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
       uint32_t max_total_cblks = 0;
@@ -3069,8 +3096,10 @@ uint8_t *j2k_tile::encode() {
       if (max_total_cblks == 0) return;
       int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
       uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
-      std::vector<std::future<int>> results;
-      results.reserve(512);
+      // Pre-allocate task-arg array once (sized to max codeblocks per precinct).
+      // Reused across precincts; pointer stability guaranteed since size never exceeds max_total_cblks.
+      auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
+      std::atomic<int> enc_remaining{0};
 
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
@@ -3098,26 +3127,30 @@ uint8_t *j2k_tile::encode() {
         memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
 
         // Pass 2: encode all codeblocks (buffers are zeroed above).
-        results.clear();
+        enc_remaining.store(0, std::memory_order_relaxed);
+        uint32_t task_idx = 0;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
             if (pool->num_threads() > 1) {
-              results.emplace_back(pool->enqueue([epc, block, ROIshift] {
+              auto *ea = &enc_task_args[task_idx++];
+              *ea      = {epc, block, ROIshift, &enc_remaining};
+              enc_remaining.fetch_add(1, std::memory_order_relaxed);
+              pool->push([ea]() {
                 // Claim a per-thread pool slot once per tile encode (generation-guarded).
                 TlPoolSlot &ts = g_tl_pool_slot;
-                if (ts.gen != epc->gen) {
-                  const int slot = epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
-                  ts.slot        = std::min(slot, static_cast<int>(epc->pools.size()) - 1);
-                  ts.gen         = epc->gen;
+                if (ts.gen != ea->epc->gen) {
+                  const int slot = ea->epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
+                  ts.slot        = std::min(slot, static_cast<int>(ea->epc->pools.size()) - 1);
+                  ts.gen         = ea->epc->gen;
                 }
-                g_cblk_pool = epc->pools[static_cast<size_t>(ts.slot)].get();
-                htj2k_encode(block, ROIshift);
+                g_cblk_pool = ea->epc->pools[static_cast<size_t>(ts.slot)].get();
+                htj2k_encode(ea->block, ea->ROIshift);
                 g_cblk_pool = nullptr;
-                return 0;
-              }));
+                ea->remaining->fetch_sub(1, std::memory_order_release);
+              });
             } else {
               g_cblk_pool = epc->pools[0].get();
               htj2k_encode(block, ROIshift);
@@ -3125,9 +3158,8 @@ uint8_t *j2k_tile::encode() {
             }
           }
         }
-        for (auto &result : results) {
-          result.get();
-        }
+        while (enc_remaining.load(std::memory_order_acquire) > 0)
+          std::this_thread::yield();
       }
       free(gbuf);
       free(sgbuf);

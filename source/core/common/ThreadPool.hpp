@@ -103,6 +103,15 @@ class ThreadPool {
     return future;
   }
 
+  /**
+   * @brief Push a void task directly, without a future (lower overhead than enqueue).
+   * Use with an external std::atomic<int> counter for barrier synchronization.
+   */
+  template <typename F>
+  void push(F &&task) {
+    push_task(std::forward<F>(task));
+  }
+
   static ThreadPool* get() { return instance(0); }
 
   static ThreadPool* instance(size_t numthreads) {
