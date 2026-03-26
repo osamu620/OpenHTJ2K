@@ -599,19 +599,20 @@ console.log(cimg);
     }
   </script>
 
-  <!-- Wire SIMD badge from the hidden simd_message element (non-invasive addition) -->
+  <!-- Update SIMD badge — calls wasmFeatureDetect.simd() directly (avoids
+       MutationObserver race: the simd() Promise resolves before the observer
+       is registered, because microtasks flush between script blocks) -->
   <script>
-    new MutationObserver(function () {
-      var txt = document.getElementById('simd_message').textContent;
+    wasmFeatureDetect.simd().then(function (simdSupported) {
       var badge = document.getElementById('simd_badge');
-      if (txt.indexOf('not detected') !== -1) {
-        badge.textContent = 'No SIMD';
-        badge.className = 'simd-badge simd-off';
-      } else if (txt.trim().length > 0) {
+      if (simdSupported) {
         badge.textContent = 'SIMD \u2713';
         badge.className = 'simd-badge simd-on';
+      } else {
+        badge.textContent = 'No SIMD';
+        badge.className = 'simd-badge simd-off';
       }
-    }).observe(document.getElementById('simd_message'), { childList: true, characterData: true, subtree: true });
+    });
   </script>
 
 </body>
