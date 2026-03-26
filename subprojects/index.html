@@ -2,182 +2,321 @@
 <html lang="en">
 
 <head>
-  <title>HTJ2K/J2K-1 decoding in the browser using Webassembly</title>
+  <title>HTJ2K / J2K-1 — Browser WASM Decoder</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- This is a test of libopen_htj2k javascript (original code is from OpenJPH project)
-<script type="text/javascript" src="libopen_htj2k.js"></script>
--->
   <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
   <style>
-    .drop-area {
-      --drop-area-height: 150px;
-      height: var(--drop-area-height);
-      width: 30%;
-      border: 1px dashed;
-      border-radius: 10px;
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #20233a;
+      --border:   #2d3040;
+      --accent:   #4f8ef7;
+      --text:     #e8eaf0;
+      --text-sub: #9aa0b8;
+      --radius:   10px;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+      min-height: 100vh;
+      padding: 32px 28px;
+      max-width: 1300px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    .site-header {
       display: flex;
-      justify-content: center;
       align-items: center;
-      flex-direction: column;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .site-header h1 { font-size: 20px; font-weight: 700; flex: 1; }
+    .simd-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 12px;
+      border-radius: 20px;
       font-size: 12px;
+      font-weight: 600;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+    .simd-badge.simd-detecting { background: var(--surface); color: var(--text-sub); border-color: var(--border); }
+    .simd-badge.simd-on  { background: #0d2540; color: var(--accent); border-color: var(--accent); }
+    .simd-badge.simd-off { background: #2a1a1a; color: #e06060;       border-color: #e06060; }
+
+    /* ── Cards ──────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .card-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-sub);
+      margin-bottom: 10px;
     }
 
-    .drop-area input[type="file"] {
-      --button-width: 50%;
-      padding: calc(var(--drop-area-height) / 2) calc((100% - var(--button-width)) / 2);
-      width: 50%;
+    /* ── Controls row ────────────────────────────────────── */
+    .controls-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 28px;
     }
-
-    .drop-area input[type="file"]::file-selector-button {
+    select#im-select {
       width: 100%;
-      display: block;
-      color: black;
-      border: solid lightgray;
-      background: lightgray;
-      padding: 8px 10px;
-      margin: 0 0 5px;
-      border-radius: 2px;
-      font-size: 12px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 30px 8px 10px;
+      font-size: 14px;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239aa0b8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
     }
+    select#im-select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-    .drop-area::before {
-      content: "Drag and Drop an image HERE\AOR";
-      white-space: pre;
-      text-align: center;
+    /* Drop area — kept light so JS style.backgroundColor="#ffffff" reset looks correct */
+    .drop-area {
+      border: 2px dashed #b0b8c8;
+      border-radius: 8px;
+      background: #f0f3f8;
+      color: #4a5268;
+      cursor: pointer;
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 3px;
+      position: relative;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop-area:hover { border-color: #6090d0; background: #e6edf8; }
+    .drop-area input[type="file"] {
       position: absolute;
-      margin-top: -4em;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+    .drop-text { pointer-events: none; font-size: 13px; font-weight: 500; }
+    .drop-hint { pointer-events: none; font-size: 11px; color: #7a88a8; }
+
+    /* ── Main viewer ─────────────────────────────────────── */
+    .viewer-section { margin-bottom: 40px; }
+    .section-title { font-size: 16px; font-weight: 700; margin-bottom: 14px; }
+    .viewer-grid {
+      display: grid;
+      grid-template-columns: 1fr 220px;
+      gap: 16px;
+      align-items: start;
+    }
+    .canvas-wrap {
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      min-height: 180px;
+    }
+    #mycanvas { display: block; max-width: 100%; }
+
+    /* Metadata + time panel */
+    .meta-panel { }
+    .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 13px; }
+    .meta-table td { padding: 7px 4px; border-bottom: 1px solid var(--border); }
+    .meta-table tr:last-child td { border-bottom: none; }
+    .meta-table td:first-child { color: var(--text-sub); }
+    .meta-table td:last-child  { text-align: right; font-weight: 500; }
+    .time-block {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .time-block-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-sub);
+      margin-bottom: 4px;
+    }
+    pre#time {
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--accent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    .drop-area input[type="file"]::file-selector-button:hover {
-      border: solid black;
+    /* ── Progressive section ─────────────────────────────── */
+    .prog-section { }
+    .section-desc { font-size: 13px; color: var(--text-sub); margin-bottom: 20px; line-height: 1.5; }
+    .prog-scroll { overflow-x: auto; padding-bottom: 8px; }
+    .prog-table { border-collapse: separate; border-spacing: 10px; }
+    .prog-header-cell {
+      font-size: 11px;
+      color: var(--text-sub);
+      text-align: center;
+      vertical-align: bottom;
+      padding-bottom: 6px;
+      white-space: nowrap;
+      line-height: 1.6;
     }
-
-    .fullimg {
-      th,
-      td {
-        border: solid 1px;
-        /* 枠線指定 */
-        padding: 4px;
-        /* 余白指定 */
-        font-size: 12px;
-      }
-
-      table {
-        border-collapse: collapse;
-        /* セルの線を重ねる */
-        margin-bottom: 20px;
-      }
+    .prog-cell {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+      vertical-align: bottom;
     }
+    .prog-cell canvas { display: block; margin: 0 auto; }
+    .prog-info { margin-top: 8px; }
+    .prog-discard { font-size: 11px; color: var(--text-sub); }
+    .prog-time    { font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+    /* ── Responsive ──────────────────────────────────────── */
+    @media (max-width: 860px)  { .viewer-grid   { grid-template-columns: 1fr; } }
+    @media (max-width: 600px)  { .controls-row  { grid-template-columns: 1fr; } }
   </style>
 </head>
 
 <body>
-  <h1>HTJ2K/J2K-1 decoding in the browser using WASM (with or without SIMD)</h1>
-  <pre style="font-size:16px" id='simd_message'>
-<!-- This webpage employs WASM SIMD if your browser supports it --> 
-</pre>
-  <pre>Please select a compressed image from the dropdown list</pre>
-  <select name="im-select" id="im-select" title="image selector">
-    <option value="">--Please choose an image to decode--</option>
-    <option value="kodim23_mono.j2c">kodim23_mono.j2c</option>
-    <option value="u04_small.j2c">u04_small.j2c</option>
-    <option value="u10_part15_lossless.j2c">u10_part15_lossless.j2c</option>
-    <option value="u10_part1_lossless.j2c">u10_part1_lossless.j2c</option>
-    <option value="ds0_ht_03_b14.j2k">ds0_ht_03_b14.j2k</option>
-    <option value="ds0_ht_04_b12.j2k">ds0_ht_04_b12.j2k</option>
-    <option value="ds0_ht_07_b16.j2k">ds0_ht_07_b16.j2k</option>
-    <option value="ds1_ht_04_b9.j2k">ds1_ht_04_b9.j2k</option>
-    <option value="ds1_ht_05_b11.j2k">ds1_ht_05_b11.j2k</option>
-    <option value="hifi_ht1_02.j2k">hifi_ht1_02.j2k</option>
-  </select>
-  <pre>OR</pre>
-  <div class="drop-area" id="dropbox">
-    <input id="uploadInput" type="file" title="dropzone" />
+
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header class="site-header">
+    <h1>HTJ2K / J2K-1 — Browser WASM Decoder</h1>
+    <span id="simd_badge" class="simd-badge simd-detecting">Detecting SIMD…</span>
+  </header>
+  <!-- Original simd_message element (hidden; JS reads/writes innerText; badge synced below) -->
+  <pre id="simd_message" style="display:none"></pre>
+
+  <!-- ── Controls ───────────────────────────────────────── -->
+  <div class="controls-row">
+    <div class="card">
+      <div class="card-label">Select a sample image</div>
+      <select name="im-select" id="im-select" title="image selector">
+        <option value="">— Choose an image to decode —</option>
+        <option value="kodim23_mono.j2c">kodim23_mono.j2c</option>
+        <option value="u04_small.j2c">u04_small.j2c</option>
+        <option value="u10_part15_lossless.j2c">u10_part15_lossless.j2c</option>
+        <option value="u10_part1_lossless.j2c">u10_part1_lossless.j2c</option>
+        <option value="ds0_ht_03_b14.j2k">ds0_ht_03_b14.j2k</option>
+        <option value="ds0_ht_04_b12.j2k">ds0_ht_04_b12.j2k</option>
+        <option value="ds0_ht_07_b16.j2k">ds0_ht_07_b16.j2k</option>
+        <option value="ds1_ht_04_b9.j2k">ds1_ht_04_b9.j2k</option>
+        <option value="ds1_ht_05_b11.j2k">ds1_ht_05_b11.j2k</option>
+        <option value="hifi_ht1_02.j2k">hifi_ht1_02.j2k</option>
+      </select>
+    </div>
+    <div class="card">
+      <div class="card-label">Or upload / drag &amp; drop</div>
+      <div class="drop-area" id="dropbox">
+        <input id="uploadInput" type="file" title="dropzone" />
+        <span class="drop-text">Drag &amp; drop a J2K / J2C file here</span>
+        <span class="drop-hint">or click to browse</span>
+      </div>
+    </div>
   </div>
-  <pre style="font-size:16px">
-Decoding the full resolution image.
-</pre>
-<div class="fullimg">
-  <table>
-    <tr>
-      <td>Image size</td>
-      <td>
-        <span id="imgWidth">M</span>x<span id="imgHeight">N</span>
-      </td>
-    <tr>
-      <td>BitDepth</td>
-      <td>
-        <span id="imgDepth">8 bpp/component</span>
-      </td>
-    </tr>
-    <tr>
-      <td>Signedness</td>
-      <td>
-        <span id="imgSigned">unsigned</span>
-      </td>
-    </tr>
-    <tr>
-      <td>minimum DWT levels</td>
-      <td>
-        <span id="DWTlevels">5</span>
-      </td>
-    </tr>
-  </table>
-</div>
-  <canvas id="mycanvas" width="512" height="512"></canvas>
-  <br>
-  <pre id="time" style="font-size: 16px">Decode time: </pre>
 
+  <!-- ── Full-resolution viewer ─────────────────────────── -->
+  <section class="viewer-section">
+    <h2 class="section-title">Decoded Image — Full Resolution</h2>
+    <div class="viewer-grid">
+      <div class="canvas-wrap">
+        <canvas id="mycanvas" width="512" height="512"></canvas>
+      </div>
+      <div class="card meta-panel">
+        <table class="meta-table">
+          <tr><td>Image size</td>    <td><span id="imgWidth">—</span> × <span id="imgHeight">—</span></td></tr>
+          <tr><td>Bit depth</td>     <td><span id="imgDepth">—</span></td></tr>
+          <tr><td>Signedness</td>    <td><span id="imgSigned">—</span></td></tr>
+          <tr><td>Min DWT levels</td><td><span id="DWTlevels">—</span></td></tr>
+        </table>
+        <div class="time-block">
+          <div class="time-block-label">Decode time</div>
+          <pre id="time">—</pre>
+        </div>
+      </div>
+    </div>
+  </section>
 
-  <h1>HTJ2K/J2K-1 progressive decoding to the actual image resolution</h1>
-  <pre style="font-size:16px">
-This example shows that one source image can be used for multiple reconstructed resolutions.
-The client/browser can decide, depending on the rendering resolution, the number of bytes to load and decode for a given image.
-
-<!-- Note: Below each image, we display the number of decoded bytes -->
-</pre>
-  <table>
-    <tr>
-      <td></td>
-      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c5' width=48px"> </canvas></td>
-      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c4' width=48px"> </canvas></td>
-      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c3' width=64px"> </canvas></td>
-      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c2' width=128px"></canvas></td>
-      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c1' width=256px"></canvas></td>
-      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c0' width=512px"></canvas></td>
-    </tr>
-    <tr>
-      <td style="text-align:center; width:64px">
-        <pre>Discarded<br/>DWT levels</pre>
-        <pre>Time</pre>
-      </td>
-      <td style="text-align:center; width:48px">
-        <pre id="d1c5">5</pre>
-        <pre id='t1c5'></br>ms</pre>
-      </td>
-      <td style="text-align:center; width:48px">
-        <pre id="d1c4">4</pre>
-        <pre id='t1c4'></br>ms</pre>
-      </td>
-      <td style="text-align:center; width:64px">
-        <pre id="d1c3">3</pre>
-        <pre id='t1c3'></br>ms</pre>
-      </td>
-      <td style="text-align:center; width:128px">
-        <pre id="d1c2">2</pre>
-        <pre id='t1c2'></br>ms</pre>
-      </td>
-      <td style="text-align:center; width:256px">
-        <pre id="d1c1">1</pre>
-        <pre id='t1c1'></br>ms</pre>
-      </td>
-      <td style="text-align:center; width:512px">
-        <pre id="d1c0">0</pre>
-        <pre id='t1c0'></br>ms</pre>
-      </td>
-    </tr>
-  </table>
+  <!-- ── Progressive resolution decoding ───────────────── -->
+  <section class="prog-section">
+    <h2 class="section-title">Progressive Resolution Decoding</h2>
+    <p class="section-desc">
+      The same compressed stream decoded at multiple resolutions.
+      The client chooses how many bytes to load depending on the display size.
+    </p>
+    <div class="prog-scroll">
+      <table class="prog-table">
+        <tr>
+          <th class="prog-header-cell">Discarded<br>DWT levels<br>Decode time</th>
+          <td class="prog-cell">
+            <canvas id="r1c5" width="15"></canvas>
+            <div class="prog-info">
+              <div class="prog-discard"><span id="d1c5">5</span></div>
+              <div class="prog-time"><span id="t1c5">—</span></div>
+            </div>
+          </td>
+          <td class="prog-cell">
+            <canvas id="r1c4" width="30"></canvas>
+            <div class="prog-info">
+              <div class="prog-discard"><span id="d1c4">4</span></div>
+              <div class="prog-time"><span id="t1c4">—</span></div>
+            </div>
+          </td>
+          <td class="prog-cell">
+            <canvas id="r1c3" width="60"></canvas>
+            <div class="prog-info">
+              <div class="prog-discard"><span id="d1c3">3</span></div>
+              <div class="prog-time"><span id="t1c3">—</span></div>
+            </div>
+          </td>
+          <td class="prog-cell">
+            <canvas id="r1c2" width="120"></canvas>
+            <div class="prog-info">
+              <div class="prog-discard"><span id="d1c2">2</span></div>
+              <div class="prog-time"><span id="t1c2">—</span></div>
+            </div>
+          </td>
+          <td class="prog-cell">
+            <canvas id="r1c1" width="240"></canvas>
+            <div class="prog-info">
+              <div class="prog-discard"><span id="d1c1">1</span></div>
+              <div class="prog-time"><span id="t1c1">—</span></div>
+            </div>
+          </td>
+          <td class="prog-cell">
+            <canvas id="r1c0" width="480"></canvas>
+            <div class="prog-info">
+              <div class="prog-discard"><span id="d1c0">0</span></div>
+              <div class="prog-time"><span id="t1c0">—</span></div>
+            </div>
+          </td>
+        </tr>
+      </table>
+    </div>
+  </section>
 
   <script>
     function display_image(Module, data, canvas_name, skip_res_for_data, skip_res_for_recon, txt_ele_name, pre_text) {
@@ -259,7 +398,7 @@ console.log(cimg);
             // src is an address in memory, but since we are 
             // dealing with integers (i.e, each entry is 4 bytes 
             // away from the previous sample, we need to divide by 4 (>> 2)
-            var val = ((heap[((src + didx) >> 2) + x] + half + offset) >> down_shift) << up_shift;
+            var val = ((heap[((src + didx) >>> 2) + x] + half + offset) >>> down_shift) <<< up_shift;
             dst[didx + x * compskip] = val;
             dst[didx + x * compskip + 1] = val;
             dst[didx + x * compskip + 2] = val;
@@ -272,9 +411,9 @@ console.log(cimg);
           var didx = y * width * compskip;
           for (var x = 0 | 0; x < width; x = x + 1 | 0) {
             var sidx = (y * width + x) * compskip * num_comps;
-            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
-            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 1 * compskip, 'i32') + half + offset) >> down_shift;
-            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 2 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >>> down_shift;
+            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 1 * compskip, 'i32') + half + offset) >>> down_shift;
+            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 2 * compskip, 'i32') + half + offset) >>> down_shift;
             dst[didx + x * compskip + 3] = 255;
           }
         }
@@ -459,6 +598,22 @@ console.log(cimg);
       return false;
     }
   </script>
+
+  <!-- Wire SIMD badge from the hidden simd_message element (non-invasive addition) -->
+  <script>
+    new MutationObserver(function () {
+      var txt = document.getElementById('simd_message').innerText;
+      var badge = document.getElementById('simd_badge');
+      if (txt.indexOf('not detected') !== -1) {
+        badge.textContent = 'No SIMD';
+        badge.className = 'simd-badge simd-off';
+      } else if (txt.trim().length > 0) {
+        badge.textContent = 'SIMD \u2713';
+        badge.className = 'simd-badge simd-on';
+      }
+    }).observe(document.getElementById('simd_message'), { childList: true, characterData: true, subtree: true });
+  </script>
+
 </body>
 
 </html>

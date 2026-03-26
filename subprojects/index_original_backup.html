@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <title>HTJ2K/J2K-1 decoding in the browser using Webassembly</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- This is a test of libopen_htj2k javascript (original code is from OpenJPH project)
+<script type="text/javascript" src="libopen_htj2k.js"></script>
+-->
+  <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
+  <style>
+    .drop-area {
+      --drop-area-height: 150px;
+      height: var(--drop-area-height);
+      width: 30%;
+      border: 1px dashed;
+      border-radius: 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      font-size: 12px;
+    }
+
+    .drop-area input[type="file"] {
+      --button-width: 50%;
+      padding: calc(var(--drop-area-height) / 2) calc((100% - var(--button-width)) / 2);
+      width: 50%;
+    }
+
+    .drop-area input[type="file"]::file-selector-button {
+      width: 100%;
+      display: block;
+      color: black;
+      border: solid lightgray;
+      background: lightgray;
+      padding: 8px 10px;
+      margin: 0 0 5px;
+      border-radius: 2px;
+      font-size: 12px;
+    }
+
+    .drop-area::before {
+      content: "Drag and Drop an image HERE\AOR";
+      white-space: pre;
+      text-align: center;
+      position: absolute;
+      margin-top: -4em;
+    }
+
+    .drop-area input[type="file"]::file-selector-button:hover {
+      border: solid black;
+    }
+
+    .fullimg {
+      th,
+      td {
+        border: solid 1px;
+        /* 枠線指定 */
+        padding: 4px;
+        /* 余白指定 */
+        font-size: 12px;
+      }
+
+      table {
+        border-collapse: collapse;
+        /* セルの線を重ねる */
+        margin-bottom: 20px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <h1>HTJ2K/J2K-1 decoding in the browser using WASM (with or without SIMD)</h1>
+  <pre style="font-size:16px" id='simd_message'>
+<!-- This webpage employs WASM SIMD if your browser supports it --> 
+</pre>
+  <pre>Please select a compressed image from the dropdown list</pre>
+  <select name="im-select" id="im-select" title="image selector">
+    <option value="">--Please choose an image to decode--</option>
+    <option value="kodim23_mono.j2c">kodim23_mono.j2c</option>
+    <option value="u04_small.j2c">u04_small.j2c</option>
+    <option value="u10_part15_lossless.j2c">u10_part15_lossless.j2c</option>
+    <option value="u10_part1_lossless.j2c">u10_part1_lossless.j2c</option>
+    <option value="ds0_ht_03_b14.j2k">ds0_ht_03_b14.j2k</option>
+    <option value="ds0_ht_04_b12.j2k">ds0_ht_04_b12.j2k</option>
+    <option value="ds0_ht_07_b16.j2k">ds0_ht_07_b16.j2k</option>
+    <option value="ds1_ht_04_b9.j2k">ds1_ht_04_b9.j2k</option>
+    <option value="ds1_ht_05_b11.j2k">ds1_ht_05_b11.j2k</option>
+    <option value="hifi_ht1_02.j2k">hifi_ht1_02.j2k</option>
+  </select>
+  <pre>OR</pre>
+  <div class="drop-area" id="dropbox">
+    <input id="uploadInput" type="file" title="dropzone" />
+  </div>
+  <pre style="font-size:16px">
+Decoding the full resolution image.
+</pre>
+<div class="fullimg">
+  <table>
+    <tr>
+      <td>Image size</td>
+      <td>
+        <span id="imgWidth">M</span>x<span id="imgHeight">N</span>
+      </td>
+    <tr>
+      <td>BitDepth</td>
+      <td>
+        <span id="imgDepth">8 bpp/component</span>
+      </td>
+    </tr>
+    <tr>
+      <td>Signedness</td>
+      <td>
+        <span id="imgSigned">unsigned</span>
+      </td>
+    </tr>
+    <tr>
+      <td>minimum DWT levels</td>
+      <td>
+        <span id="DWTlevels">5</span>
+      </td>
+    </tr>
+  </table>
+</div>
+  <canvas id="mycanvas" width="512" height="512"></canvas>
+  <br>
+  <pre id="time" style="font-size: 16px">Decode time: </pre>
+
+
+  <h1>HTJ2K/J2K-1 progressive decoding to the actual image resolution</h1>
+  <pre style="font-size:16px">
+This example shows that one source image can be used for multiple reconstructed resolutions.
+The client/browser can decide, depending on the rendering resolution, the number of bytes to load and decode for a given image.
+
+<!-- Note: Below each image, we display the number of decoded bytes -->
+</pre>
+  <table>
+    <tr>
+      <td></td>
+      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c5' width=48px"> </canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c4' width=48px"> </canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c3' width=64px"> </canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c2' width=128px"></canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c1' width=256px"></canvas></td>
+      <td style="text-align:center; vertical-align:bottom; height:256px"><canvas id='r1c0' width=512px"></canvas></td>
+    </tr>
+    <tr>
+      <td style="text-align:center; width:64px">
+        <pre>Discarded<br/>DWT levels</pre>
+        <pre>Time</pre>
+      </td>
+      <td style="text-align:center; width:48px">
+        <pre id="d1c5">5</pre>
+        <pre id='t1c5'></br>ms</pre>
+      </td>
+      <td style="text-align:center; width:48px">
+        <pre id="d1c4">4</pre>
+        <pre id='t1c4'></br>ms</pre>
+      </td>
+      <td style="text-align:center; width:64px">
+        <pre id="d1c3">3</pre>
+        <pre id='t1c3'></br>ms</pre>
+      </td>
+      <td style="text-align:center; width:128px">
+        <pre id="d1c2">2</pre>
+        <pre id='t1c2'></br>ms</pre>
+      </td>
+      <td style="text-align:center; width:256px">
+        <pre id="d1c1">1</pre>
+        <pre id='t1c1'></br>ms</pre>
+      </td>
+      <td style="text-align:center; width:512px">
+        <pre id="d1c0">0</pre>
+        <pre id='t1c0'></br>ms</pre>
+      </td>
+    </tr>
+  </table>
+
+  <script>
+    function display_image(Module, data, canvas_name, skip_res_for_data, skip_res_for_recon, txt_ele_name, pre_text) {
+      create_decoder = Module.cwrap('create_decoder', 'number', ['number', 'number', 'number']);
+      parse_j2c_data = Module.cwrap('parse_j2c_data', 'void', ['number']);
+      invoke_decoder = Module.cwrap('invoke_decoder', 'void', ['number', 'number']);
+      release_j2c_data = Module.cwrap('release_j2c_data', 'void', ['number']);
+      get_j2c_width = Module.cwrap('get_width', 'number', ['number', 'number']);
+      get_j2c_height = Module.cwrap('get_height', 'number', ['number', 'number']);
+      get_j2c_num_components = Module.cwrap('get_num_components', 'number', ['number']);
+      get_j2c_bit_depth = Module.cwrap('get_depth', 'number', ['number', 'number']);
+      get_j2c_is_signed = Module.cwrap('get_signed', 'number', ['number', 'number']);
+      get_minimum_DWT_levels = Module.cwrap('get_minimum_DWT_levels', 'number', ['number']);
+
+      var t0 = performance.now();
+      const array = new Uint8Array(data, 0, data.byteLength);
+
+      var buffer = Module._malloc(array.length);
+      Module.writeArrayToMemory(array, buffer);
+      // console.log("HTJ2K decoder creation start");
+      j2c = create_decoder(buffer, array.length, skip_res_for_data | 0);
+      // console.log("HTJ2K decoder creation OK");
+      parse_j2c_data(j2c);
+
+      var imgwidth = get_j2c_width(j2c, 0) | 0; // component 0
+      var imgheight = get_j2c_height(j2c, 0) | 0; // component 0
+      var num_comps = get_j2c_num_components(j2c) | 0;
+      var bit_depth = get_j2c_bit_depth(j2c, 0) | 0; // component 0
+      var is_signed = get_j2c_is_signed(j2c, 0) == 1; // component 0
+      var minNL = get_minimum_DWT_levels(j2c);
+
+      var width = Math.ceil(imgwidth / (1 << skip_res_for_data));
+      var height = Math.ceil(imgheight / (1 << skip_res_for_data));
+      // console.log("width = %d, height = %d, number of components = %d", width, height, num_comps);
+      // console.log("Minimum DWT level = %d, reduceNL = %d", minNL, skip_res_for_data);
+
+      var canvas = document.getElementById(canvas_name);
+      var dpr = window.devicePixelRatio || 1; // for HiDPI displays
+      canvas.width = width;
+      canvas.height = height;
+      // console.log(dpr);
+      canvas.style.width = width / dpr + "px";
+      canvas.style.height = height / dpr + "px";
+
+      var isP3Supported = displaySupportsP3Color() && canvasSupportsDisplayP3();
+      var colorSpaceName = "srgb";
+      if (isP3Supported) {
+        colorSpaceName = "display-p3";
+      }
+      var ctx = canvas.getContext("2d", {colorSpace: colorSpaceName});
+      ctx.clearRect(0, 0, width, height);
+      var cimg = ctx.createImageData(width, height, {colorSpace: colorSpaceName});
+console.log(cimg);
+      var down_shift = (bit_depth >= 8 ? bit_depth - 8 : 0) | 0;
+      var up_shift = (bit_depth < 8 ? 8 - bit_depth : 0) | 0;
+      var half = (bit_depth > 8 ? (1 << (down_shift - 1)) : 0) | 0;
+      var offset = 0;
+      if (is_signed) {
+        offset = 1 << (bit_depth - 1);
+      }
+      var heap = Module["HEAP32"];
+      var compskip = 4 | 0;
+      var dst = cimg.data;
+      
+
+      var src = Module._malloc(width * height * num_comps * 4); // a sample is 4byte length
+      
+      var NAflag = false;
+      try {
+        invoke_decoder(j2c, src);
+      } catch (msg) {
+        // console.log(msg);
+        NAflag = true;
+      }
+      if (num_comps == 1) {
+        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
+          var didx = y * width * compskip;
+          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
+            // src is an address in memory, but since we are 
+            // dealing with integers (i.e, each entry is 4 bytes 
+            // away from the previous sample, we need to divide by 4 (>> 2)
+            var val = ((heap[((src + didx) >>> 2) + x] + half + offset) >>> down_shift) <<< up_shift;
+            dst[didx + x * compskip] = val;
+            dst[didx + x * compskip + 1] = val;
+            dst[didx + x * compskip + 2] = val;
+            dst[didx + x * compskip + 3] = 255;
+          }
+        }
+      }
+      else if (num_comps == 3) {
+        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
+          var didx = y * width * compskip;
+          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
+            var sidx = (y * width + x) * compskip * num_comps;
+            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >>> down_shift;
+            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 1 * compskip, 'i32') + half + offset) >>> down_shift;
+            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 2 * compskip, 'i32') + half + offset) >>> down_shift;
+            dst[didx + x * compskip + 3] = 255;
+          }
+        }
+      }
+      else {
+        console.log('Unsupported number of components: Only the first component is shown.');
+        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
+          var didx = y * width * compskip;
+          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
+            var sidx = (y * width + x) * compskip * num_comps;
+            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            dst[didx + x * compskip + 3] = 255;
+          }
+        }
+      }
+      release_j2c_data(j2c);
+      Module._free(buffer);
+      Module._free(src);
+      var t1 = performance.now();
+
+      // Draw decoded image
+      if (NAflag == false) {
+        Promise.all([
+          createImageBitmap(cimg)
+        ]).then((bitmaps) => {
+          // ctx.scale(1/dpr, 1/dpr);
+          ctx.drawImage(bitmaps[0], 0, 0);
+        });
+        // ctx.putImageData(cimg, 0, 0);
+      }
+      document.getElementById(txt_ele_name).innerText = pre_text + (t1 - t0).toFixed(2) + " ms";
+      document.getElementById("imgWidth").innerText = imgwidth;
+      document.getElementById("imgHeight").innerText = imgheight;
+      document.getElementById("imgDepth").innerText = bit_depth + " bpp/component";
+      document.getElementById("DWTlevels").innerText = minNL;
+      var signedness = "unsigned";
+      if (is_signed) {
+        signedness = "signed";
+      }
+      document.getElementById("imgSigned").innerText = signedness;
+
+      if (NAflag) {
+        ctx.clearRect(0, 0, width, height);
+        document.getElementById("d1c" + skip_res_for_data).innerText = "N/A";
+      } else {
+        document.getElementById("d1c" + skip_res_for_data).innerText = skip_res_for_data;
+      }
+    }
+
+    async function load_and_display_images(Module) {
+      let select = document.querySelector('[name="im-select"]');
+      var request = new XMLHttpRequest;
+      select.onchange = event => {
+        // console.log(select.value);
+        request.open("GET", select.value, true);
+        request.responseType = "arraybuffer";
+
+        request.onload = function (event) {
+          if (request.status == 200) {
+            display_image(Module, this.response, 'mycanvas', 0, 0, 'time', 'Decode Time: ');
+
+            for (var i = 0; i <= 5; ++i)
+              display_image(Module, this.response, 'r1c' + i, i, i, 't1c' + i, '');
+
+
+            // for (var i = 0; i <= 5; ++i)
+            //   display_image(Module, this.response, 'r2c' + i, i, 0, 't2c' + i, 'Decode Time: ');
+          }
+        };
+        request.send(null);
+      }
+
+      const uploadInput = document.getElementById("uploadInput");
+      uploadInput.onchange = event => {
+        var files = event.target.files;	//FileListオブジェクトを取得
+
+        var file = files[0];	//最初のファイルを取得
+        if (!file) return;	//ファイルがなかったらやめる
+
+        //FileReaderを作る
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          var buffer = reader.result;	//readAsArrayBufferなのでArrayBufferが入っている
+          display_image(Module, buffer, 'mycanvas', 0, 0, 'time', 'Decode Time: ');
+          for (var i = 0; i <= 5; ++i)
+            display_image(Module, buffer, 'r1c' + i, i, i, 't1c' + i, '');
+        };
+        reader.readAsArrayBuffer(file);	//Fileオブジェクト（つまりBlob）を渡す
+      }
+
+      let dropbox;
+
+      dropbox = document.getElementById("dropbox");
+      dropbox.addEventListener("dragenter", dragenter, false);
+      dropbox.addEventListener("dragover", dragover, false);
+      dropbox.addEventListener("dragleave", dragleave, false);
+      dropbox.addEventListener("drop", drop, false);
+
+      function dragenter(e) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+
+      function dragover(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        document.getElementsByClassName("drop-area").item(0).style.backgroundColor = "#59b1eb"
+      }
+
+      function dragleave(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        document.getElementsByClassName("drop-area").item(0).style.backgroundColor = "#ffffff"
+      }
+
+
+      function drop(e) {
+        e.stopPropagation();
+        e.preventDefault();
+
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        var file = files[0];
+
+        //FileReaderを作る
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          var buffer = reader.result;	//readAsArrayBufferなのでArrayBufferが入っている
+          display_image(Module, buffer, 'mycanvas', 0, 0, 'time', 'Decode Time: ');
+          for (var i = 0; i <= 5; ++i) {
+            display_image(Module, buffer, 'r1c' + i, i, i, 't1c' + i, '');
+            // console.log(getExceptionMessage(e).toString());
+          }
+        };
+        reader.readAsArrayBuffer(file);	//Fileオブジェクト（つまりBlob）を渡す
+      }
+    }
+
+
+
+    async function load_simd_module() {
+      const openhtj2k = await import('./libopen_htj2k_simd.js');
+      const Module = await openhtj2k.default();
+      load_and_display_images(Module);
+    }
+
+    async function load_generic_module() {
+      const openhtj2k = await import('./libopen_htj2k.js');
+      const Module = await openhtj2k.default();
+      load_and_display_images(Module);
+    }
+
+    wasmFeatureDetect.simd().then(simdSupported => {
+      txt = document.getElementById('simd_message').innerText.slice(0, -1);
+
+      if (simdSupported) {
+        document.getElementById('simd_message').innerText = txt + "SIMD is detected. (But not used)\n";
+        load_simd_module();
+        // load_generic_module();
+      } else {
+        document.getElementById('simd_message').innerText = txt + "SIMD is not detected. \n";
+        load_generic_module();
+      }
+    });
+
+    function displaySupportsP3Color() {
+      return matchMedia("(color-gamut: p3)").matches;
+    }
+
+    function canvasSupportsDisplayP3() {
+      let canvas = document.createElement("canvas");
+      try {
+        // Safari throws a TypeError if the colorSpace option is supported, but
+        // the system requirements (minimum macOS or iOS version) for Display P3
+        // support are not met.
+        let context = canvas.getContext("2d", { colorSpace: "display-p3" });
+        return context.getContextAttributes().colorSpace == "display-p3";
+      } catch {
+      }
+      return false;
+    }
+  </script>
+</body>
+
+</html>
