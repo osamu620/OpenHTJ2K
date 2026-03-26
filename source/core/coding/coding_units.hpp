@@ -29,6 +29,8 @@
 #pragma once
 
 #include "j2kmarkers.hpp"
+
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <mutex>
