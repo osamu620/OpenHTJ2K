@@ -58,7 +58,7 @@ static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_avx2,
                                                               cvt_rgb_to_ycbcr_rev_float_avx2};
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_neon, cvt_rgb_to_ycbcr_rev_neon};
+[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_neon, cvt_rgb_to_ycbcr_rev_neon};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_neon,
                                                           cvt_ycbcr_to_rgb_rev_float_neon};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_neon,
@@ -2379,7 +2379,7 @@ void j2k_tile::decode() {
     // Stored per level so the decode pool can be grown incrementally (coarsest→finest),
     // keeping the working set small for coarse levels and improving cache behaviour.
     const int num_dec_levels = static_cast<int>(NL) - static_cast<int>(this->reduce_NL) + 1;
-    std::vector<uint32_t> level_max_cblks(num_dec_levels, 0);
+    std::vector<uint32_t> level_max_cblks(static_cast<size_t>(num_dec_levels), 0);
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
@@ -2390,7 +2390,7 @@ void j2k_tile::decode() {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
         }
-        const int idx                = static_cast<int>(NL - lev);
+        const size_t idx                = static_cast<size_t>(NL - lev);
         level_max_cblks[idx] = std::max(level_max_cblks[idx], total_cblks);
       }
     }
@@ -2405,7 +2405,7 @@ void j2k_tile::decode() {
     uint8_t *buf_for_states    = nullptr;
 
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
-      const uint32_t lev_max = level_max_cblks[static_cast<int>(NL - lev)];
+      const uint32_t lev_max = level_max_cblks[static_cast<size_t>(NL - lev)];
       if (lev_max == 0) continue;
 
       const size_t need_samples = sizeof(int32_t) * lev_max * 4096;
