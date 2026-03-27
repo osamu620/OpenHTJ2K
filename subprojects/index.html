@@ -421,6 +421,12 @@ console.log(cimg);
         // console.log(msg);
         NAflag = true;
       }
+      // Capture HEAP32 after all WASM allocations (input buffer + invoke_decoder
+      // internal buffers). If WASM memory grew during those allocations the
+      // ArrayBuffer is replaced; re-reading Module["HEAP32"] here guarantees a
+      // fresh, non-stale view for the pixel loops below.
+      var heap32 = Module["HEAP32"];
+      var srcBase = src >>> 2; // byte address → HEAP32 index (unsigned shift)
       if (num_comps == 1) {
         for (var y = 0 | 0; y < height; y = y + 1 | 0) {
           var didx = y * width * compskip;
@@ -439,11 +445,14 @@ console.log(cimg);
       else if (num_comps == 3) {
         for (var y = 0 | 0; y < height; y = y + 1 | 0) {
           var didx = y * width * compskip;
+          var yRow = y * width * num_comps;
           for (var x = 0 | 0; x < width; x = x + 1 | 0) {
-            var sidx = (y * width + x) * compskip * num_comps;
-            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >>> down_shift;
-            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 1 * compskip, 'i32') + half + offset) >>> down_shift;
-            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 2 * compskip, 'i32') + half + offset) >>> down_shift;
+            // Direct HEAP32 indexing: avoids Module.getValue() call overhead.
+            // heap32 is captured after all allocations to avoid stale-view bugs.
+            var pi = srcBase + yRow + x * num_comps;
+            dst[didx + x * compskip + 0] = (heap32[pi + 0] + half + offset) >>> down_shift;
+            dst[didx + x * compskip + 1] = (heap32[pi + 1] + half + offset) >>> down_shift;
+            dst[didx + x * compskip + 2] = (heap32[pi + 2] + half + offset) >>> down_shift;
             dst[didx + x * compskip + 3] = 255;
           }
         }
@@ -452,11 +461,12 @@ console.log(cimg);
         console.log('Unsupported number of components: Only the first component is shown.');
         for (var y = 0 | 0; y < height; y = y + 1 | 0) {
           var didx = y * width * compskip;
+          var yRow = y * width * num_comps;
           for (var x = 0 | 0; x < width; x = x + 1 | 0) {
-            var sidx = (y * width + x) * compskip * num_comps;
-            dst[didx + x * compskip + 0] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
-            dst[didx + x * compskip + 1] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
-            dst[didx + x * compskip + 2] = (Module.getValue(src + sidx + 0 * compskip, 'i32') + half + offset) >> down_shift;
+            var val = (heap32[srcBase + yRow + x * num_comps] + half + offset) >> down_shift;
+            dst[didx + x * compskip + 0] = val;
+            dst[didx + x * compskip + 1] = val;
+            dst[didx + x * compskip + 2] = val;
             dst[didx + x * compskip + 3] = 255;
           }
         }
