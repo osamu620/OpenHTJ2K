@@ -392,7 +392,6 @@
     function display_image(Module, data, canvas_name, skip_res_for_data, skip_res_for_recon, txt_ele_name, pre_text) {
       // cwrap wrappers are cached at module init in load_and_display_images
 
-      var t0 = performance.now();
       const array = new Uint8Array(data, 0, data.byteLength);
 
       var buffer = Module._malloc(array.length);
@@ -444,7 +443,8 @@ console.log(cimg);
       
 
       var src = Module._malloc(width * height * num_comps * 4); // a sample is 4byte length
-      
+
+      var t0 = performance.now();
       var NAflag = false;
       try {
         invoke_decoder(j2c, src);
@@ -452,6 +452,8 @@ console.log(cimg);
         // console.log(msg);
         NAflag = true;
       }
+      var t1 = performance.now();
+
       // Capture HEAP32 after all WASM allocations (input buffer + invoke_decoder
       // internal buffers). If WASM memory grew during those allocations the
       // ArrayBuffer is replaced; re-reading Module["HEAP32"] here guarantees a
@@ -505,7 +507,6 @@ console.log(cimg);
       release_j2c_data(j2c);
       Module._free(buffer);
       Module._free(src);
-      var t1 = performance.now();
 
       // Draw decoded image
       if (NAflag == false) {
