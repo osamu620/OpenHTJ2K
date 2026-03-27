@@ -137,8 +137,37 @@
       overflow: auto;
       min-height: 180px;
       max-height: 80vh;
+      position: relative; /* needed for overlay positioning */
     }
     #mycanvas { display: block; }
+
+    /* ── Canvas overlay (loading / error) ─────────────────── */
+    .canvas-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.85);
+      border-radius: var(--radius);
+      gap: 14px;
+      font-size: 13px;
+      pointer-events: none;
+      z-index: 1;
+    }
+    .canvas-overlay.loading { color: var(--text-sub); }
+    .canvas-overlay.error   { color: #e06060; font-weight: 600; }
+    .overlay-spinner {
+      width: 34px;
+      height: 34px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+    .canvas-overlay.error .overlay-spinner { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Metadata + time panel */
     .meta-panel { }
@@ -217,6 +246,13 @@
       gap: 6px;
     }
     .site-footer a:hover { text-decoration: underline; }
+    /* Keyboard focus ring on drop area when file input is focused */
+    .drop-area:focus-within {
+      border-color: var(--accent);
+      background: #1e2640;
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     @media (max-width: 860px)  { .viewer-grid   { grid-template-columns: 1fr; } }
     @media (max-width: 600px)  { .controls-row  { grid-template-columns: 1fr; } }
   </style>
@@ -261,7 +297,7 @@
     <div class="card">
       <div class="card-label">Or upload / drag &amp; drop</div>
       <div class="drop-area" id="dropbox">
-        <input id="uploadInput" type="file" title="dropzone" />
+        <input id="uploadInput" type="file" title="dropzone" accept=".j2c,.j2k,.jph" aria-label="Upload a J2K or J2C file" />
         <span class="drop-text">Drag &amp; drop a J2K / J2C file here</span>
         <span class="drop-hint">or click to browse</span>
       </div>
@@ -274,6 +310,10 @@
     <div class="viewer-grid">
       <div class="canvas-wrap">
         <canvas id="mycanvas" width="512" height="512"></canvas>
+        <div class="canvas-overlay loading" id="canvas-overlay">
+          <div class="overlay-spinner"></div>
+          <span>Initializing decoder…</span>
+        </div>
       </div>
       <div class="card meta-panel">
         <table class="meta-table">
@@ -350,16 +390,7 @@
 
   <script>
     function display_image(Module, data, canvas_name, skip_res_for_data, skip_res_for_recon, txt_ele_name, pre_text) {
-      create_decoder = Module.cwrap('create_decoder', 'number', ['number', 'number', 'number']);
-      parse_j2c_data = Module.cwrap('parse_j2c_data', 'void', ['number']);
-      invoke_decoder = Module.cwrap('invoke_decoder', 'void', ['number', 'number']);
-      release_j2c_data = Module.cwrap('release_j2c_data', 'void', ['number']);
-      get_j2c_width = Module.cwrap('get_width', 'number', ['number', 'number']);
-      get_j2c_height = Module.cwrap('get_height', 'number', ['number', 'number']);
-      get_j2c_num_components = Module.cwrap('get_num_components', 'number', ['number']);
-      get_j2c_bit_depth = Module.cwrap('get_depth', 'number', ['number', 'number']);
-      get_j2c_is_signed = Module.cwrap('get_signed', 'number', ['number', 'number']);
-      get_minimum_DWT_levels = Module.cwrap('get_minimum_DWT_levels', 'number', ['number']);
+      // cwrap wrappers are cached at module init in load_and_display_images
 
       var t0 = performance.now();
       const array = new Uint8Array(data, 0, data.byteLength);
@@ -500,12 +531,37 @@ console.log(cimg);
       if (NAflag) {
         ctx.clearRect(0, 0, width, height);
         document.getElementById("d1c" + skip_res_for_data).innerText = "N/A";
+        if (canvas_name === 'mycanvas') {
+          var ov = document.getElementById('canvas-overlay');
+          if (ov) { ov.className = 'canvas-overlay error'; ov.querySelector('span').textContent = '⚠ Decode failed — image cannot be displayed'; ov.style.display = ''; }
+        }
       } else {
         document.getElementById("d1c" + skip_res_for_data).innerText = skip_res_for_data;
+        if (canvas_name === 'mycanvas') {
+          var ov = document.getElementById('canvas-overlay');
+          if (ov) ov.style.display = 'none';
+        }
       }
     }
 
     async function load_and_display_images(Module) {
+      // Cache WASM function wrappers once at module init — avoids repeated
+      // cwrap() overhead on every display_image() call.
+      create_decoder = Module.cwrap('create_decoder', 'number', ['number', 'number', 'number']);
+      parse_j2c_data = Module.cwrap('parse_j2c_data', 'void', ['number']);
+      invoke_decoder = Module.cwrap('invoke_decoder', 'void', ['number', 'number']);
+      release_j2c_data = Module.cwrap('release_j2c_data', 'void', ['number']);
+      get_j2c_width = Module.cwrap('get_width', 'number', ['number', 'number']);
+      get_j2c_height = Module.cwrap('get_height', 'number', ['number', 'number']);
+      get_j2c_num_components = Module.cwrap('get_num_components', 'number', ['number']);
+      get_j2c_bit_depth = Module.cwrap('get_depth', 'number', ['number', 'number']);
+      get_j2c_is_signed = Module.cwrap('get_signed', 'number', ['number', 'number']);
+      get_minimum_DWT_levels = Module.cwrap('get_minimum_DWT_levels', 'number', ['number']);
+
+      // Hide the loading overlay — decoder is ready.
+      var ov = document.getElementById('canvas-overlay');
+      if (ov) ov.style.display = 'none';
+
       let select = document.querySelector('[name="im-select"]');
       var request = new XMLHttpRequest;
       select.onchange = event => {
