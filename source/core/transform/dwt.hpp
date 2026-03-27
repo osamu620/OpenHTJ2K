@@ -148,3 +148,65 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int3
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
                       int32_t u1, int32_t v0, int32_t v1, uint8_t transformation, sprec_t *pse_scratch,
                       sprec_t **buf_scratch);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Streaming 2D IDWT — produces one output row per call via pull_row().
+//
+// The caller supplies a row-source callback that returns one horizontally-
+// synthesised interleaved row (LL+HL interleaved for LP rows, LH+HH for HP)
+// for absolute row indices v0..v1-1.  Vertical lifting is driven internally
+// using a sliding ring buffer and delay-line d_level tracking.
+//
+// Memory per level  ≈  (RING_DEPTH + top_pse + bottom_pse) × stride × 4 B
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Callback: write the horizontally-synthesised interleaved row at absolute
+// index abs_row ∈ [v0, v1) into out_row[0..u1-u0-1].
+typedef void (*idwt_row_src_fn)(void *ctx, int32_t abs_row, sprec_t *out_row);
+
+// Ring depth: must be > max_look_ahead (4 for 9/7) + max_pse (4) with margin.
+constexpr int32_t IDWT_STATE_RING_DEPTH = 12;
+
+struct idwt_2d_state {
+  // ── geometry ──────────────────────────────────────────────────────────────
+  int32_t u0, u1, v0, v1;
+  int32_t stride;          // round_up(u1-u0, SIMD_PADDING)
+  uint8_t transformation;  // 0 = irrev 9/7, 1 = rev 5/3
+  int8_t  top_pse;         // PSE rows above v0  (3 or 4 for 9/7; 1 or 2 for 5/3)
+  int8_t  bottom_pse;      // PSE rows below v1-1
+
+  // ── PSE scratch (separate from the ring) ──────────────────────────────────
+  // top_pse_buf[0] ↔ physical row v0-1, [1] ↔ v0-2, …
+  // bot_pse_buf[0] ↔ physical row v1,   [1] ↔ v1+1, …
+  sprec_t *top_pse_buf;        // top_pse    × stride sprec_t (SIMD-aligned)
+  sprec_t *bot_pse_buf;        // bottom_pse × stride sprec_t
+  int8_t   top_dlevel[4];      // d_level per top-PSE slot (-1 = unfilled)
+  int8_t   bot_dlevel[4];      // d_level per bot-PSE slot (-1 = unfilled)
+
+  // ── sliding ring for real rows [v0, v1) ───────────────────────────────────
+  // Slot for absolute row r : (r - ring_origin) % IDWT_STATE_RING_DEPTH
+  sprec_t *ring_buf;                           // IDWT_STATE_RING_DEPTH × stride
+  int32_t  ring_origin;                         // abs row mapped to slot 0
+  int8_t   d_level[IDWT_STATE_RING_DEPTH];     // 0=raw, 1=step1, 2=step2, -1=unused
+
+  // ── cursors ───────────────────────────────────────────────────────────────
+  int32_t next_out;    // next output row (v0 ≤ next_out < v1)
+  int32_t next_fetch;  // next real row to fetch from source (v0 ≤ next_fetch ≤ v1)
+
+  // ── source ────────────────────────────────────────────────────────────────
+  idwt_row_src_fn get_src_row;
+  void           *src_ctx;
+};
+
+// Initialise (allocates ring_buf, top_pse_buf, bot_pse_buf).
+void idwt_2d_state_init(idwt_2d_state *s,
+                        int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                        uint8_t transformation,
+                        idwt_row_src_fn src_fn, void *src_ctx);
+
+// Free buffers allocated by idwt_2d_state_init.
+void idwt_2d_state_free(idwt_2d_state *s);
+
+// Pull the next output row into out[0..u1-u0-1].
+// Returns true while rows remain; false when all v1-v0 rows have been produced.
+bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out);

@@ -528,3 +528,240 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
   // Vertical DWT (pse_scratch provided by caller, sized for 8 * round_up(stride, SIMD_LEN_I32))
   idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
 }
+
+// =============================================================================
+// Streaming 2D IDWT — idwt_2d_state
+// =============================================================================
+//
+// PSE counts: [v0%2][transform] for top, [v1%2][transform] for bottom.
+// Indexed [parity][0=irrev97, 1=rev53].
+static constexpr int8_t kPseTop[2][2] = {{3, 1}, {4, 2}};
+static constexpr int8_t kPseBot[2][2] = {{4, 2}, {3, 1}};
+
+// Max d_level a row reaches before it is output-ready (2 for 9/7, 1 for 5/3).
+static inline int8_t max_dl(uint8_t transform) { return (transform == 0) ? 2 : 1; }
+
+// True if physical row r is a low-pass (LP) row at this level.
+static inline bool is_lp(const idwt_2d_state *s, int32_t r) {
+  return ((r ^ s->v0) & 1) == 0;
+}
+
+// Physical source row for PSE position p via periodic symmetric extension.
+static inline int32_t pse_source(int32_t p, int32_t v0, int32_t v1) {
+  return v0 + PSEo(p, v0, v1);
+}
+
+// Pointer to the row buffer for physical row r (ring, top-PSE, or bot-PSE).
+static sprec_t *rptr(const idwt_2d_state *s, int32_t r) {
+  if (r >= s->v0 && r < s->v1)
+    return s->ring_buf + static_cast<ptrdiff_t>((r - s->ring_origin) % IDWT_STATE_RING_DEPTH) * s->stride;
+  if (r < s->v0)
+    return s->top_pse_buf + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
+  return s->bot_pse_buf + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
+}
+
+// d_level for physical row r (-1 = unfilled / out of range).
+static int8_t get_dl(const idwt_2d_state *s, int32_t r) {
+  if (r >= s->v0 && r < s->v1) {
+    if (r < s->ring_origin || r >= s->ring_origin + IDWT_STATE_RING_DEPTH) return -1;
+    return s->d_level[(r - s->ring_origin) % IDWT_STATE_RING_DEPTH];
+  }
+  if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_dlevel[s->v0 - 1 - r];
+  if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_dlevel[r - s->v1];
+  return -1;
+}
+
+static void set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
+  if (r >= s->v0 && r < s->v1) {
+    s->d_level[(r - s->ring_origin) % IDWT_STATE_RING_DEPTH] = lv;
+    return;
+  }
+  if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_dlevel[s->v0 - 1 - r] = lv; return; }
+  if (r >= s->v1 && r < s->v1 + s->bottom_pse) { s->bot_dlevel[r - s->v1] = lv; }
+}
+
+// Required d_level of neighbor rows for row r to advance one level.
+//   9/7: LP: step D (cur 0→1) needs HP neighbors @0; step B (cur 1→2) needs HP @1
+//        HP: step C (cur 0→1) needs LP neighbors @1; step A (cur 1→2) needs LP @2
+//   5/3: LP: step Update (cur 0→1) needs HP @0; HP: step Predict (cur 0→1) needs LP @1
+static int8_t needed_neighbor_dl(const idwt_2d_state *s, int32_t r) {
+  const bool lp  = is_lp(s, r);
+  const int8_t cur = get_dl(s, r);
+  if (s->transformation == 0) {  // irrev 9/7
+    if (lp)  return (cur == 0) ? 0 : 1;   // D needs HP@0, B needs HP@1
+    else     return (cur == 0) ? 1 : 2;   // C needs LP@1, A needs LP@2
+  } else {                                 // rev 5/3
+    return lp ? 0 : 1;                    // Update needs HP@0, Predict needs LP@1
+  }
+}
+
+static bool can_adv(const idwt_2d_state *s, int32_t r) {
+  const int8_t cur = get_dl(s, r);
+  if (cur < 0 || cur >= max_dl(s->transformation)) return false;
+  const int8_t need = needed_neighbor_dl(s, r);
+  return get_dl(s, r - 1) >= need && get_dl(s, r + 1) >= need;
+}
+
+// Apply one lifting step to row r and increment its d_level.
+static void adv_step(idwt_2d_state *s, int32_t r) {
+  const bool  lp  = is_lp(s, r);
+  const int8_t cur = get_dl(s, r);
+  sprec_t *tgt  = rptr(s, r);
+  sprec_t *prev = rptr(s, r - 1);
+  sprec_t *next = rptr(s, r + 1);
+  const int32_t w = s->u1 - s->u0;
+
+  if (s->transformation == 0) {  // irrev 9/7
+    const float coeff = lp ? (cur == 0 ? fD : fB) : (cur == 0 ? fC : fA);
+    for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+      const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+      for (int32_t c = cs; c < ce; ++c) tgt[c] -= coeff * (prev[c] + next[c]);
+    }
+  } else {  // rev 5/3
+    if (lp) {
+      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+        for (int32_t c = cs; c < ce; ++c)
+          tgt[c] -= floorf((prev[c] + next[c] + 2.0f) * 0.25f);
+      }
+    } else {
+      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+        for (int32_t c = cs; c < ce; ++c)
+          tgt[c] += floorf((prev[c] + next[c]) * 0.5f);
+      }
+    }
+  }
+  set_dl(s, r, cur + 1);
+}
+
+// Fill any PSE slots whose source is physical row r (called after row r is fetched).
+static void fill_pse(idwt_2d_state *s, int32_t r) {
+  const size_t nb = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+  const sprec_t *src = rptr(s, r);
+  for (int8_t i = 1; i <= s->top_pse; ++i) {
+    if (s->top_dlevel[i - 1] < 0 && pse_source(s->v0 - i, s->v0, s->v1) == r) {
+      memcpy(s->top_pse_buf + static_cast<ptrdiff_t>(i - 1) * s->stride, src, nb);
+      s->top_dlevel[i - 1] = 0;
+    }
+  }
+  for (int8_t i = 0; i < s->bottom_pse; ++i) {
+    if (s->bot_dlevel[i] < 0 && pse_source(s->v1 + i, s->v0, s->v1) == r) {
+      memcpy(s->bot_pse_buf + static_cast<ptrdiff_t>(i) * s->stride, src, nb);
+      s->bot_dlevel[i] = 0;
+    }
+  }
+}
+
+// Run the cascade: advance every row that can advance, until stable.
+static void cascade(idwt_2d_state *s) {
+  bool progress = true;
+  while (progress) {
+    progress = false;
+    const int32_t lo = s->v0 - s->top_pse;
+    const int32_t hi = (s->next_fetch < s->v1) ? s->next_fetch + s->bottom_pse
+                                                 : s->v1 + s->bottom_pse;
+    for (int32_t r = lo; r < hi; ++r) {
+      if (can_adv(s, r)) { adv_step(s, r); progress = true; }
+    }
+  }
+}
+
+// Fetch the next real row from the source callback into the ring.
+// Ring eviction happens here before fetching if the ring is full and we've
+// already output the eviction candidate.
+static void fetch_one(idwt_2d_state *s) {
+  const int32_t r = s->next_fetch;
+  if (r >= s->v1) return;
+
+  // Make room in the ring: advance ring_origin over output rows.
+  while (r >= s->ring_origin + IDWT_STATE_RING_DEPTH) {
+    if (s->ring_origin >= s->next_out) break;  // can't evict un-output rows
+    s->d_level[s->ring_origin % IDWT_STATE_RING_DEPTH] = -1;
+    ++s->ring_origin;
+  }
+
+  const int32_t slot = (r - s->ring_origin) % IDWT_STATE_RING_DEPTH;
+  s->d_level[slot]   = -1;
+  s->get_src_row(s->src_ctx, r, s->ring_buf + static_cast<ptrdiff_t>(slot) * s->stride);
+  s->d_level[slot]   = 0;
+  ++s->next_fetch;
+  fill_pse(s, r);
+  cascade(s);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+void idwt_2d_state_init(idwt_2d_state *s,
+                        const int32_t u0, const int32_t u1,
+                        const int32_t v0, const int32_t v1,
+                        const uint8_t transformation,
+                        idwt_row_src_fn src_fn, void *src_ctx) {
+  s->u0            = u0;  s->u1 = u1;
+  s->v0            = v0;  s->v1 = v1;
+  s->stride        = round_up(u1 - u0, SIMD_PADDING);
+  s->transformation = transformation;
+  s->top_pse       = kPseTop[v0 % 2][transformation];
+  s->bottom_pse    = kPseBot[v1 % 2][transformation];
+
+  const size_t row_bytes = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+  s->ring_buf    = static_cast<sprec_t *>(aligned_mem_alloc(IDWT_STATE_RING_DEPTH * row_bytes, 32));
+  s->top_pse_buf = (s->top_pse    > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32)) : nullptr;
+  s->bot_pse_buf = (s->bottom_pse > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32)) : nullptr;
+
+  s->ring_origin = v0;
+  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) s->d_level[i]    = -1;
+  for (int32_t i = 0; i < 4;                     ++i) s->top_dlevel[i] = -1;
+  for (int32_t i = 0; i < 4;                     ++i) s->bot_dlevel[i] = -1;
+
+  s->next_out    = v0;
+  s->next_fetch  = v0;
+  s->get_src_row = src_fn;
+  s->src_ctx     = src_ctx;
+}
+
+void idwt_2d_state_free(idwt_2d_state *s) {
+  aligned_mem_free(s->ring_buf);    s->ring_buf    = nullptr;
+  aligned_mem_free(s->top_pse_buf); s->top_pse_buf = nullptr;
+  aligned_mem_free(s->bot_pse_buf); s->bot_pse_buf = nullptr;
+}
+
+bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out) {
+  if (s->next_out >= s->v1) return false;
+
+  // Special case: empty or trivial tile.
+  if (s->v1 <= s->v0) return false;
+
+  // Special case: single-row tile (v1 == v0+1).
+  if (s->v1 == s->v0 + 1) {
+    s->get_src_row(s->src_ctx, s->v0, out);
+    if (s->transformation == 1 && (s->v0 % 2) == 1) {
+      for (int32_t c = 0; c < s->u1 - s->u0; ++c) out[c] = floorf(out[c] * 0.5f);
+    }
+    ++s->next_out;
+    return true;
+  }
+
+  const int8_t mxdl = max_dl(s->transformation);
+
+  // Fetch source rows (and run cascade) until next_out is ready.
+  while (get_dl(s, s->next_out) < mxdl) {
+    if (s->next_fetch >= s->v1) {
+      cascade(s);  // final pass to drain bottom PSE
+      break;
+    }
+    // Advance ring_origin past already-output rows to make room for new fetches.
+    while (s->ring_origin < s->next_out &&
+           s->next_fetch >= s->ring_origin + IDWT_STATE_RING_DEPTH) {
+      s->d_level[s->ring_origin % IDWT_STATE_RING_DEPTH] = -1;
+      ++s->ring_origin;
+    }
+    fetch_one(s);
+  }
+
+  if (get_dl(s, s->next_out) < mxdl) return false;  // should not happen
+
+  memcpy(out, rptr(s, s->next_out), sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
+  ++s->next_out;
+  return true;
+}
