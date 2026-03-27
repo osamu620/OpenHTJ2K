@@ -529,6 +529,20 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
   idwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
 }
 
+void idwt_1d_row_fixed(sprec_t *ext_buf, sprec_t *row, const int32_t u0, const int32_t u1,
+                       const uint8_t transformation) {
+  if (u0 >= u1) return;
+  if (u0 == u1 - 1) {
+    if ((u0 % 2 != 0) && (transformation == 1)) row[0] /= 2.0f;
+    return;
+  }
+  constexpr int32_t num_pse_i0[2][2] = {{3, 1}, {4, 2}};
+  constexpr int32_t num_pse_i1[2][2] = {{4, 2}, {3, 1}};
+  const int32_t left  = num_pse_i0[u0 % 2][transformation];
+  const int32_t right = num_pse_i1[u1 % 2][transformation];
+  idwt_1d_sr_fixed(ext_buf, row, left, right, u0, u1, transformation);
+}
+
 // =============================================================================
 // Streaming 2D IDWT — idwt_2d_state
 // =============================================================================

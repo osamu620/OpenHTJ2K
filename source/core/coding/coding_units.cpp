@@ -37,6 +37,95 @@
 #include "block_decoding.hpp"
 #include "dwt.hpp"
 #include "color.hpp"
+#include "subband_row_buf.hpp"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Line-decode supporting types (file-scope, internal to this TU)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Source context for one idwt_2d_state level.
+struct idwt_level_src_ctx {
+  int32_t v0;           // first row of this resolution in full-tile space
+  int32_t u0, u1;       // horizontal extent of this resolution
+  uint8_t transformation;
+
+  // LL row source: either pull from child idwt_2d_state (levels > 1) or from ll0_buf (level 1).
+  bool             has_child;
+  idwt_2d_state   *child_state;        // non-null when has_child
+  j2k_subband_row_buf *ll0_buf;        // non-null when !has_child
+
+  // HL / LH / HH subband row buffers for this resolution level.
+  j2k_subband_row_buf *hl_buf;
+  j2k_subband_row_buf *lh_buf;
+  j2k_subband_row_buf *hh_buf;
+
+  // Scratch rows for interleaving (allocated per level).
+  sprec_t *lp_tmp;   // LL row (lp_width) or LH row
+  sprec_t *hp_tmp;   // HL row (hp_width) or HH row
+  sprec_t *ext_buf;  // PSE extension scratch for idwt_1d_row_fixed
+
+  // Subband dimensions (set once at init).
+  int32_t lp_width;   // width of LL / LH subband
+  int32_t hp_width;   // width of HL / HH subband
+  int32_t ll_y0;      // pos0.y of LL (used only when !has_child)
+  int32_t hl_y0, lh_y0, hh_y0;
+};
+
+// Callback invoked by idwt_2d_state::fetch_one() for each source row.
+static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
+  auto *c = static_cast<idwt_level_src_ctx *>(ctx);
+
+  const bool     lp      = (((abs_row ^ c->v0) & 1) == 0);
+  const int32_t sub_idx  = (abs_row - c->v0) >> 1;
+
+  sprec_t *lp_ptr = c->lp_tmp;
+  sprec_t *hp_ptr = c->hp_tmp;
+
+  if (lp) {
+    if (c->has_child) {
+      idwt_2d_state_pull_row(c->child_state, lp_ptr);
+    } else {
+      memcpy(lp_ptr, c->ll0_buf->row_ptr(c->ll_y0 + sub_idx),
+             sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
+    }
+    memcpy(hp_ptr, c->hl_buf->row_ptr(c->hl_y0 + sub_idx),
+           sizeof(sprec_t) * static_cast<size_t>(c->hp_width));
+  } else {
+    memcpy(lp_ptr, c->lh_buf->row_ptr(c->lh_y0 + sub_idx),
+           sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
+    memcpy(hp_ptr, c->hh_buf->row_ptr(c->hh_y0 + sub_idx),
+           sizeof(sprec_t) * static_cast<size_t>(c->hp_width));
+  }
+
+  // Interleave: LP always at u0%2 column-offset, HP at 1-u0%2.
+  const int32_t u_off = c->u0 & 1;
+  if (u_off == 0) {
+    for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i]     = lp_ptr[i];
+    for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i + 1] = hp_ptr[i];
+  } else {
+    for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i]     = hp_ptr[i];
+    for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i + 1] = lp_ptr[i];
+  }
+
+  idwt_1d_row_fixed(c->ext_buf, out, c->u0, c->u1, c->transformation);
+}
+
+// Per-component line-decode state (definition; forward-declared in coding_units.hpp as opaque ptr).
+struct j2k_tcomp_line_dec {
+  int32_t NL_active;   // NL - reduce_NL
+  int32_t next_row;    // abs row cursor (used only when NL_active==0)
+
+  j2k_subband_row_buf  ll0_buf;   // LL0 at the coarsest active resolution
+
+  // Per active IDWT level arrays (length NL_active each, heap-allocated).
+  idwt_2d_state        *states;
+  idwt_level_src_ctx   *ctxs;
+  j2k_subband_row_buf  *hl_bufs;
+  j2k_subband_row_buf  *lh_bufs;
+  j2k_subband_row_buf  *hh_bufs;
+};
+
+
 
 // Thread-local pointer to the active cblk_data_pool for HTJ2K encode.
 // Set on each thread (main or worker) before calling htj2k_encode(),
@@ -1329,9 +1418,140 @@ j2k_tile_component::j2k_tile_component() {
   ROIshift           = 0;
   samples            = nullptr;
   resolution         = nullptr;
+  line_dec           = nullptr;
 }
 
 j2k_tile_component::~j2k_tile_component() { aligned_mem_free(samples); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Line-based decode: init / pull / finalize
+// ─────────────────────────────────────────────────────────────────────────────
+
+void j2k_tile_component::init_line_decode() {
+  const int32_t NL_act   = static_cast<int32_t>(NL) - static_cast<int32_t>(reduce_NL);
+  const int32_t cb_h_val = static_cast<int32_t>(codeblock_size.y);
+
+  auto *ld = new j2k_tcomp_line_dec();
+  ld->NL_active = NL_act;
+  ld->next_row  = 0;
+  ld->states    = nullptr;
+  ld->ctxs      = nullptr;
+  ld->hl_bufs   = nullptr;
+  ld->lh_bufs   = nullptr;
+  ld->hh_bufs   = nullptr;
+  line_dec = ld;
+
+  // Coarsest active resolution: resolution[0] (always LL0 regardless of reduce_NL).
+  j2k_resolution *r0 = access_resolution(0);
+  ld->ll0_buf.init(r0, 0, cb_h_val, ROIshift);
+  ld->next_row = static_cast<int32_t>(r0->get_pos0().y);
+
+  if (NL_act == 0) return;  // no IDWT needed; pull directly from LL0
+
+  ld->states  = new idwt_2d_state[static_cast<size_t>(NL_act)];
+  ld->ctxs    = new idwt_level_src_ctx[static_cast<size_t>(NL_act)];
+  ld->hl_bufs = new j2k_subband_row_buf[static_cast<size_t>(NL_act)];
+  ld->lh_bufs = new j2k_subband_row_buf[static_cast<size_t>(NL_act)];
+  ld->hh_bufs = new j2k_subband_row_buf[static_cast<size_t>(NL_act)];
+
+  // Initialise states from coarsest (i=0) to finest (i=NL_act-1).
+  // resolution[i+1] corresponds to IDWT level i+1 (resolution index 1-based).
+  for (int32_t i = 0; i < NL_act; ++i) {
+    j2k_resolution *cr = access_resolution(static_cast<uint8_t>(i + 1));
+
+    // HL=subband[0], LH=subband[1], HH=subband[2]
+    j2k_subband *sb_HL = cr->access_subband(0);
+    j2k_subband *sb_LH = cr->access_subband(1);
+    j2k_subband *sb_HH = cr->access_subband(2);
+
+    ld->hl_bufs[i].init(cr, 0, cb_h_val, ROIshift);
+    ld->lh_bufs[i].init(cr, 1, cb_h_val, ROIshift);
+    ld->hh_bufs[i].init(cr, 2, cb_h_val, ROIshift);
+
+    // Resolution geometry (output space of IDWT at this level).
+    const int32_t u0 = static_cast<int32_t>(cr->get_pos0().x);
+    const int32_t u1 = static_cast<int32_t>(cr->get_pos1().x);
+    const int32_t v0 = static_cast<int32_t>(cr->get_pos0().y);
+    const int32_t v1 = static_cast<int32_t>(cr->get_pos1().y);
+
+    // LL-subband geometry for this level = resolution[i] (the child LL).
+    // For i==0: child LL lives in ld->ll0_buf (resolution[0]).
+    // For i>0:  child is the idwt_2d_state at level i-1.
+    j2k_resolution *cr_ll = access_resolution(static_cast<uint8_t>(i));
+    j2k_subband    *sb_LL = cr_ll->access_subband(0);
+
+    const int32_t lp_width = static_cast<int32_t>(sb_LL->get_pos1().x - sb_LL->get_pos0().x);
+    const int32_t hp_width = static_cast<int32_t>(sb_HL->get_pos1().x - sb_HL->get_pos0().x);
+    // ext_buf size: worst case left+width+right+SIMD_PADDING (8+width+8 for 9/7).
+    const int32_t ext_sz   = round_up(u1 - u0 + 16 + SIMD_PADDING, SIMD_PADDING);
+
+    idwt_level_src_ctx &c = ld->ctxs[i];
+    c.v0             = v0;
+    c.u0             = u0;
+    c.u1             = u1;
+    c.transformation = transformation;
+    c.has_child      = (i > 0);
+    c.child_state    = (i > 0) ? &ld->states[i - 1] : nullptr;
+    c.ll0_buf        = (i == 0) ? &ld->ll0_buf : nullptr;
+    c.hl_buf         = &ld->hl_bufs[i];
+    c.lh_buf         = &ld->lh_bufs[i];
+    c.hh_buf         = &ld->hh_bufs[i];
+    c.lp_width       = lp_width;
+    c.hp_width       = hp_width;
+    c.ll_y0          = static_cast<int32_t>(sb_LL->get_pos0().y);
+    c.hl_y0          = static_cast<int32_t>(sb_HL->get_pos0().y);
+    c.lh_y0          = static_cast<int32_t>(sb_LH->get_pos0().y);
+    c.hh_y0          = static_cast<int32_t>(sb_HH->get_pos0().y);
+
+    c.lp_tmp  = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(lp_width + SIMD_PADDING), 32));
+    c.hp_tmp  = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(hp_width + SIMD_PADDING), 32));
+    c.ext_buf = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(ext_sz), 32));
+
+    idwt_2d_state_init(&ld->states[i], u0, u1, v0, v1, transformation,
+                       idwt_level_src_fn, &ld->ctxs[i]);
+  }
+}
+
+bool j2k_tile_component::pull_line(sprec_t *out) {
+  if (line_dec == nullptr) return false;
+  j2k_tcomp_line_dec *ld = line_dec;
+
+  if (ld->NL_active == 0) {
+    // No IDWT: output directly from LL0 subband row buffer.
+    j2k_subband *sb = ld->ll0_buf.sb;
+    if (ld->next_row >= static_cast<int32_t>(sb->get_pos1().y)) return false;
+    const sprec_t *src = ld->ll0_buf.row_ptr(ld->next_row++);
+    const int32_t  w   = static_cast<int32_t>(sb->get_pos1().x - sb->get_pos0().x);
+    memcpy(out, src, sizeof(sprec_t) * static_cast<size_t>(w));
+    return true;
+  }
+
+  return idwt_2d_state_pull_row(&ld->states[ld->NL_active - 1], out);
+}
+
+void j2k_tile_component::finalize_line_decode() {
+  if (line_dec == nullptr) return;
+  j2k_tcomp_line_dec *ld = line_dec;
+
+  const int32_t n = ld->NL_active;
+  for (int32_t i = 0; i < n; ++i) {
+    idwt_2d_state_free(&ld->states[i]);
+    aligned_mem_free(ld->ctxs[i].lp_tmp);
+    aligned_mem_free(ld->ctxs[i].hp_tmp);
+    aligned_mem_free(ld->ctxs[i].ext_buf);
+    ld->hl_bufs[i].free_resources();
+    ld->lh_bufs[i].free_resources();
+    ld->hh_bufs[i].free_resources();
+  }
+  delete[] ld->states;
+  delete[] ld->ctxs;
+  delete[] ld->hl_bufs;
+  delete[] ld->lh_bufs;
+  delete[] ld->hh_bufs;
+  ld->ll0_buf.free_resources();
+  delete ld;
+  line_dec = nullptr;
+}
 
 void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile,
                               uint16_t c, std::vector<int32_t *> img) {

@@ -452,6 +452,8 @@ class j2k_tile_component : public j2k_tile_base {
   uint8_t ROIshift;
   // pointer to instances of resolution class
   std::unique_ptr<std::unique_ptr<j2k_resolution>[]> resolution;
+  // opaque line-decode state (allocated by init_line_decode, freed by finalize_line_decode)
+  struct j2k_tcomp_line_dec *line_dec;
   // set members related to COC marker
   void setCOCparams(COC_marker *COC);
   // set members related to QCC marker
@@ -481,6 +483,15 @@ class j2k_tile_component : public j2k_tile_base {
   void create_resolutions(uint16_t numlayers);
 
   void perform_dc_offset(uint8_t transformation, bool is_signed);
+
+  // ── Line-based decode API ─────────────────────────────────────────────────
+  // init_line_decode(): must be called after all packets are parsed.
+  // pull_line():        returns the next decoded row (float) into out[0..width-1].
+  //                     Returns false when all rows are exhausted.
+  // finalize_line_decode(): frees state allocated by init_line_decode().
+  void init_line_decode();
+  bool pull_line(sprec_t *out);
+  void finalize_line_decode();
 
   void destroy() {
     for (uint8_t r = 0; r < this->NL; ++r) {

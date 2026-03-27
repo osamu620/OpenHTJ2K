@@ -149,6 +149,10 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
                       int32_t u1, int32_t v0, int32_t v1, uint8_t transformation, sprec_t *pse_scratch,
                       sprec_t **buf_scratch);
 
+// Apply 1-D horizontal IDWT synthesis in-place on row[0..u1-u0-1].
+// ext_buf must hold at least round_up(u1-u0+8+SIMD_PADDING, SIMD_PADDING) sprec_t elements.
+void idwt_1d_row_fixed(sprec_t *ext_buf, sprec_t *row, int32_t u0, int32_t u1, uint8_t transformation);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming 2D IDWT — produces one output row per call via pull_row().
 //
@@ -210,3 +214,74 @@ void idwt_2d_state_free(idwt_2d_state *s);
 // Pull the next output row into out[0..u1-u0-1].
 // Returns true while rows remain; false when all v1-v0 rows have been produced.
 bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Streaming 2D FDWT — consumes one input row per push_row() call.
+//
+// The caller pushes image rows one at a time (v0..v1-1).  When vertical
+// lifting completes a row, horizontal analysis is applied and the result is
+// delivered to the sink callback (is_hp=false → LP/LL+HL row; true → HP/LH+HH
+// row).  The sink receives a pointer to an interleaved row that is valid only
+// for the duration of the callback.
+//
+// Call fdwt_2d_state_flush() after the last push_row() to drain any remaining
+// rows that depend on the bottom-PSE extension.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Callback: delivers a completed row after both V and H FDWT.
+// is_hp=false → LP row (even abs_phys_row), is_hp=true → HP row (odd).
+// interleaved_row: u1-u0 samples at stride alignment; valid only in callback.
+typedef void (*fdwt_row_sink_fn)(void *ctx, bool is_hp, int32_t abs_phys_row,
+                                 const sprec_t *interleaved_row);
+
+constexpr int32_t FDWT_STATE_RING_DEPTH = 12;
+
+struct fdwt_2d_state {
+  // ── geometry ──────────────────────────────────────────────────────────────
+  int32_t u0, u1, v0, v1;
+  int32_t stride;            // round_up(u1-u0, SIMD_PADDING)
+  int32_t horiz_left;        // horizontal-DWT left PSE length
+  int32_t horiz_right;       // horizontal-DWT right PSE length
+  uint8_t transformation;    // 0 = irrev 9/7, 1 = rev 5/3
+  int8_t  top_pse;           // PSE rows above v0
+  int8_t  bottom_pse;        // PSE rows below v1-1
+
+  // ── PSE scratch ───────────────────────────────────────────────────────────
+  sprec_t *top_pse_buf;      // top_pse    × stride sprec_t
+  sprec_t *bot_pse_buf;      // bottom_pse × stride sprec_t
+  int8_t   top_dlevel[4];    // d_level per top-PSE slot (-1 = unfilled)
+  int8_t   bot_dlevel[4];    // d_level per bot-PSE slot (-1 = unfilled)
+
+  // ── sliding ring ──────────────────────────────────────────────────────────
+  sprec_t *ring_buf;                          // FDWT_STATE_RING_DEPTH × stride
+  int32_t  ring_origin;
+  int8_t   d_level[FDWT_STATE_RING_DEPTH];   // 0=raw, 1=step1, 2=step2, -1=unused
+
+  // ── horizontal-DWT temp buffer ────────────────────────────────────────────
+  // Size: horiz_left + stride + horiz_right + SIMD_PADDING
+  sprec_t *horiz_tmp;
+
+  // ── cursors ───────────────────────────────────────────────────────────────
+  int32_t next_in;    // next row to accept via push_row() [v0, v1]
+  int32_t next_emit;  // next completed row waiting to be emitted [v0, v1)
+
+  // ── sink ──────────────────────────────────────────────────────────────────
+  fdwt_row_sink_fn put_row;
+  void            *sink_ctx;
+};
+
+// Initialise (allocates ring_buf, PSE buffers, horiz_tmp).
+void fdwt_2d_state_init(fdwt_2d_state *s,
+                        int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                        uint8_t transformation,
+                        fdwt_row_sink_fn sink_fn, void *sink_ctx);
+
+// Free buffers allocated by fdwt_2d_state_init.
+void fdwt_2d_state_free(fdwt_2d_state *s);
+
+// Push one input row in[0..u1-u0-1].  May trigger sink callbacks.
+void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in);
+
+// Finalise: fill bottom PSE, run remaining cascade, emit all pending rows.
+// Must be called after the last push_row().
+void fdwt_2d_state_flush(fdwt_2d_state *s);
