@@ -556,8 +556,9 @@ static constexpr int8_t kPseBot[2][2] = {{4, 2}, {3, 1}};
 static inline int8_t max_dl(uint8_t transform) { return (transform == 0) ? 2 : 1; }
 
 // True if physical row r is a low-pass (LP) row at this level.
-static inline bool is_lp(const idwt_2d_state *s, int32_t r) {
-  return ((r ^ s->v0) & 1) == 0;
+// LP rows are always at even absolute positions, regardless of v0.
+static inline bool is_lp(const idwt_2d_state *, int32_t r) {
+  return (r & 1) == 0;
 }
 
 // Physical source row for PSE position p via periodic symmetric extension.
@@ -566,9 +567,10 @@ static inline int32_t pse_source(int32_t p, int32_t v0, int32_t v1) {
 }
 
 // Pointer to the row buffer for physical row r (ring, top-PSE, or bot-PSE).
+// Ring slot is r % IDWT_STATE_RING_DEPTH (fixed per row, independent of ring_origin).
 static sprec_t *rptr(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1)
-    return s->ring_buf + static_cast<ptrdiff_t>((r - s->ring_origin) % IDWT_STATE_RING_DEPTH) * s->stride;
+    return s->ring_buf + static_cast<ptrdiff_t>(r % IDWT_STATE_RING_DEPTH) * s->stride;
   if (r < s->v0)
     return s->top_pse_buf + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
   return s->bot_pse_buf + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
@@ -578,7 +580,7 @@ static sprec_t *rptr(const idwt_2d_state *s, int32_t r) {
 static int8_t get_dl(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1) {
     if (r < s->ring_origin || r >= s->ring_origin + IDWT_STATE_RING_DEPTH) return -1;
-    return s->d_level[(r - s->ring_origin) % IDWT_STATE_RING_DEPTH];
+    return s->d_level[r % IDWT_STATE_RING_DEPTH];
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_dlevel[s->v0 - 1 - r];
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_dlevel[r - s->v1];
@@ -587,7 +589,7 @@ static int8_t get_dl(const idwt_2d_state *s, int32_t r) {
 
 static void set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
   if (r >= s->v0 && r < s->v1) {
-    s->d_level[(r - s->ring_origin) % IDWT_STATE_RING_DEPTH] = lv;
+    s->d_level[r % IDWT_STATE_RING_DEPTH] = lv;
     return;
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_dlevel[s->v0 - 1 - r] = lv; return; }
@@ -695,7 +697,7 @@ static void fetch_one(idwt_2d_state *s) {
     ++s->ring_origin;
   }
 
-  const int32_t slot = (r - s->ring_origin) % IDWT_STATE_RING_DEPTH;
+  const int32_t slot = r % IDWT_STATE_RING_DEPTH;
   s->d_level[slot]   = -1;
   s->get_src_row(s->src_ctx, r, s->ring_buf + static_cast<ptrdiff_t>(slot) * s->stride);
   s->d_level[slot]   = 0;
