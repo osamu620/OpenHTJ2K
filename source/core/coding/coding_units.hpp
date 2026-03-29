@@ -612,6 +612,13 @@ class j2k_tile : public j2k_tile_base {
   // float→int32 conversion.  Does NOT call decode() / ycbcr_to_rgb() / finalize().
   void decode_line_based(j2k_main_header &main_header, uint8_t reduce_NL,
                          std::vector<int32_t *> &dst);
+  // Streaming variant: same as decode_line_based() but outputs one row at a time via
+  // a callback instead of writing to a pre-allocated full-image buffer.
+  // The callback receives (y, row_ptrs[NC], NC) where row_ptrs[c] points to one
+  // decoded int32_t row for component c.  Allocates only per-row scratch buffers.
+  void decode_line_based_stream(
+      j2k_main_header &main_header, uint8_t reduce_NL,
+      const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb);
   // Diagnostic variant: decodes all codeblocks first (no IDWT), then uses
   // the pre-decoded sb->i_samples to bypass decode_strip() in row_ptr().
   // Used by lb_compare to isolate decode_strip bugs from IDWT state machine bugs.

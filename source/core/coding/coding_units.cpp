@@ -3474,6 +3474,97 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
     tcomp[c].finalize_line_decode();
 }
 
+void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_val,
+                                        const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb) {
+  const uint16_t NC = num_components;
+
+  struct CInfo {
+    int32_t DC_OFFSET, MAXVAL, MINVAL;
+    int16_t downshift, rnd;
+    uint32_t csize_x, csize_y;
+  };
+  std::vector<CInfo> ci(NC);
+  for (uint16_t c = 0; c < NC; ++c) {
+    CInfo &I        = ci[c];
+    const uint8_t bd = tcomp[c].bitdepth;
+    I.DC_OFFSET      = (hdr.SIZ->is_signed(c)) ? 0 : 1 << (bd - 1);
+    I.MAXVAL         = (hdr.SIZ->is_signed(c)) ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
+    I.MINVAL         = (hdr.SIZ->is_signed(c)) ? -(1 << (bd - 1)) : 0;
+
+    element_siz siz, Osiz, Rsiz;
+    hdr.SIZ->get_image_size(siz);
+    hdr.SIZ->get_image_origin(Osiz);
+    hdr.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint8_t NL_c = tcomp[c].get_dwt_levels();
+    j2k_resolution *cr_act =
+        tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL_val));
+    const element_siz tc1 = cr_act->get_pos1();
+    const element_siz tc0 = cr_act->get_pos0();
+    I.csize_x  = tc1.x - tc0.x;
+    I.csize_y  = tc1.y - tc0.y;
+    I.downshift = (tcomp[c].transformation) ? 0 : static_cast<int16_t>(FRACBITS - bd);
+    I.rnd       = (I.downshift <= 0) ? 0 : static_cast<int16_t>((1 << I.downshift) >> 1);
+  }
+
+  // Per-component float row scratch (SIMD headroom).
+  std::vector<std::vector<sprec_t>> rows(NC);
+  for (uint16_t c = 0; c < NC; ++c) {
+    const size_t sz = static_cast<size_t>(
+        round_up(static_cast<int32_t>(ci[c].csize_x) + SIMD_PADDING, SIMD_PADDING));
+    rows[c].assign(sz, 0.0f);
+  }
+
+  // Per-component int32 output row scratch (one row each, reused per y).
+  std::vector<std::vector<int32_t>> out_rows(NC);
+  for (uint16_t c = 0; c < NC; ++c)
+    out_rows[c].assign(ci[c].csize_x, 0);
+
+  // Pointers passed to the callback.
+  std::vector<int32_t *> out_ptrs(NC);
+  for (uint16_t c = 0; c < NC; ++c)
+    out_ptrs[c] = out_rows[c].data();
+
+  const bool    do_mct = (NC >= 3 && MCT != 0);
+  const uint8_t xform  = tcomp[0].get_transformation();
+  const uint32_t mct_w  = ci[0].csize_x;
+  const uint32_t mct_str = round_up(mct_w, 32U);
+
+  for (uint16_t c = 0; c < NC; ++c)
+    tcomp[c].init_line_decode(/*ring_mode=*/true);
+
+  const uint32_t H = ci[0].csize_y;
+  for (uint32_t y = 0; y < H; ++y) {
+    for (uint16_t c = 0; c < NC; ++c)
+      if (y < ci[c].csize_y) tcomp[c].pull_line(rows[c].data());
+
+    if (do_mct)
+      cvt_ycbcr_to_rgb_float[xform](rows[0].data(), rows[1].data(), rows[2].data(),
+                                    mct_w, 1, mct_str);
+
+    for (uint16_t c = 0; c < NC; ++c) {
+      if (y >= ci[c].csize_y) continue;
+      const CInfo   &I   = ci[c];
+      const sprec_t *spf = rows[c].data();
+      int32_t       *dp  = out_rows[c].data();
+      const int16_t  ds  = I.downshift;
+      const int16_t  ro  = I.rnd;
+      for (uint32_t n = 0; n < I.csize_x; ++n) {
+        int32_t v = static_cast<int32_t>(spf[n]);
+        v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
+        v += I.DC_OFFSET;
+        if (v > I.MAXVAL) v = I.MAXVAL;
+        if (v < I.MINVAL) v = I.MINVAL;
+        dp[n] = v;
+      }
+    }
+
+    cb(y, out_ptrs.data(), NC);
+  }
+
+  for (uint16_t c = 0; c < NC; ++c)
+    tcomp[c].finalize_line_decode();
+}
+
 // Helper: after init_line_decode(), mark all subband row bufs as bypass (sb->i_samples is
 // already populated by a prior decode_cblks call).
 // Diagnostic: decode codeblocks only (no IDWT), then run line-based IDWT from pre-decoded data.

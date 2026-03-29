@@ -28,6 +28,7 @@
 
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
@@ -60,6 +61,15 @@ class openhtj2k_decoder {
   OPENHTJ2K_EXPORT void invoke_line_based(std::vector<int32_t *> &, std::vector<uint32_t> &,
                                           std::vector<uint32_t> &, std::vector<uint8_t> &,
                                           std::vector<bool> &);
+  // Streaming variant of invoke_line_based(): outputs one row at a time via a callback
+  // instead of writing to a pre-allocated full-image buffer.  Avoids allocating W×H
+  // output buffers entirely — only per-row scratch is needed.  width/height/depth/is_signed
+  // are populated before the first callback invocation so the callback can use them.
+  // The callback receives (y, row_ptrs[NC], NC) and must copy the data if needed.
+  OPENHTJ2K_EXPORT void invoke_line_based_stream(
+      std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb,
+      std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
+      std::vector<bool> &is_signed);
   // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
   // the line-based IDWT using those pre-decoded values.  If this matches invoke()
   // but invoke_line_based() does not, the bug is in decode_strip(); otherwise
