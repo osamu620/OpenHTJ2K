@@ -447,42 +447,70 @@ void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsi
 
 void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_limit,
                                              const uint16_t &layer) {
+  if (this->layer_passes[layer] == 0) {
+    return;
+  }
+
+  // Compute total bytes contributed by this layer's passes.
+  int32_t l0       = this->layer_start[layer];
+  int32_t l1       = l0 + this->layer_passes[layer];
   uint32_t layer_length = 0;
-  int32_t l0, l1;
-  if (this->layer_passes[layer] > 0) {
-    l0 = this->layer_start[layer];
-    l1 = l0 + this->layer_passes[layer];
-    for (int32_t i = l0; i < l1; i++) {
-      layer_length += this->pass_length[static_cast<size_t>(i)];
-    }
-    // allocate buffer one once for the first contributing layer
-    if (this->compressed_data == nullptr) {
+  for (int32_t i = l0; i < l1; i++) {
+    layer_length += this->pass_length[static_cast<size_t>(i)];
+  }
+
+  if (this->compressed_data == nullptr) {
+    // First contributing layer for this codeblock.
+    if (layer_length == 0) {
+      // Passes exist but contribute zero bytes (valid in J2K spec).
+      // Allocate a minimal placeholder so later layers can append.
       this->compressed_data = static_cast<uint8_t *>(malloc(static_cast<size_t>(buf_limit)));
-      //      std::unique_ptr<uint8_t[]>(new uint8_t[static_cast<uint32_t>(
-      //          buf_limit)]);  // MAKE_UNIQUE<uint8_t[]>(static_cast<uint32_t>(buf_limit));
       this->current_address = this->compressed_data;
+    } else {
+      // Zero-copy: borrow a direct pointer into the codestream buffer.
+      // The codestream buffer outlives all codeblocks, and all decoders
+      // (HT fwd/rev/MEL, and MQ) treat compressed_data as read-only.
+      // compressed_is_pooled = true suppresses free() in the destructor.
+      this->compressed_data    = tile_buf->borrow_N_bytes(layer_length);
+      this->current_address    = this->compressed_data + layer_length;
+      this->length             = layer_length;
+      this->compressed_is_pooled = true;
     }
-    if (layer_length != 0) {
-      while (this->length + layer_length > static_cast<uint32_t>(buf_limit)) {
-        // extend buffer size, if necessary
-        uint8_t *newbuf =
-            static_cast<uint8_t *>(realloc(this->compressed_data, this->length + layer_length));
-        this->compressed_data = newbuf;
-        this->current_address = this->compressed_data + (this->length);
-        buf_limit             = static_cast<int32_t>(this->length + layer_length);
-        //        uint8_t *old_buf      = this->compressed_data.release();
-        //        buf_limit += 8192;
-        //        this->compressed_data = std::unique_ptr<uint8_t[]>(new uint8_t[static_cast<uint32_t>(
-        //            buf_limit)]);  // MAKE_UNIQUE<uint8_t[]>(static_cast<uint32_t>(buf_limit));
-        //        memcpy(this->compressed_data.get(), old_buf, sizeof(uint8_t) *
-        //        static_cast<uint32_t>(buf_limit)); this->current_address = this->compressed_data.get() +
-        //        (this->length); delete[] old_buf;
-      }
-      // we assume that the size of the compressed data is less than or equal to that of buf_chain node.
-      tile_buf->copy_N_bytes(this->current_address, layer_length);
-      this->length += layer_length;
+    return;
+  }
+
+  // Second or later layer: nothing to append if this layer is empty.
+  if (layer_length == 0) {
+    return;
+  }
+
+  // If compressed_data is a borrowed (zero-copy) pointer we must convert it
+  // to an owned buffer before appending, since the layers are not contiguous
+  // in the codestream.
+  if (this->compressed_is_pooled) {
+    // Allocate at least buf_limit bytes (same as the original first-layer malloc)
+    // so that subsequent layer appends do not overflow the owned buffer.
+    uint32_t alloc_size = std::max(static_cast<uint32_t>(buf_limit), this->length + layer_length);
+    uint8_t *owned      = static_cast<uint8_t *>(malloc(alloc_size));
+    memcpy(owned, this->compressed_data, this->length);
+    this->compressed_data      = owned;
+    this->current_address      = owned + this->length;
+    this->compressed_is_pooled = false;
+    buf_limit                  = static_cast<int32_t>(alloc_size);
+  } else {
+    // Already an owned buffer — extend if needed.
+    while (this->length + layer_length > static_cast<uint32_t>(buf_limit)) {
+      uint8_t *newbuf =
+          static_cast<uint8_t *>(realloc(this->compressed_data, this->length + layer_length));
+      this->compressed_data = newbuf;
+      this->current_address = this->compressed_data + this->length;
+      buf_limit             = static_cast<int32_t>(this->length + layer_length);
     }
   }
+
+  // we assume that the size of the compressed data is less than or equal to that of buf_chain node.
+  tile_buf->copy_N_bytes(this->current_address, layer_length);
+  this->length += layer_length;
 }
 
 /********************************************************************************
@@ -1865,13 +1893,13 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
       round_up((ceil_int(pos1.x, 1U << tile->reduce_NL) - ceil_int(pos0.x, 1U << tile->reduce_NL)), 32U);
   const auto height             = static_cast<uint32_t>(ceil_int(pos1.y, 1U << tile->reduce_NL)
                                                         - ceil_int(pos0.y, 1U << tile->reduce_NL));
-  const uint32_t num_bufsamples = aligned_stride * height;
-  samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
 
   element_siz Osiz;
   hdr->SIZ->get_image_origin(Osiz);
   // create tile samples, only for encoding;
   if (!img.empty()) {
+    const uint32_t num_bufsamples = aligned_stride * height;
+    samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
     const auto width = static_cast<uint32_t>(pos1.x - pos0.x);
     // stride may differ from width with non-zero origin
     const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
