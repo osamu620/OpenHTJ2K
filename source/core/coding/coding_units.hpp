@@ -467,13 +467,19 @@ class j2k_tile_component : public j2k_tile_base {
  public:
   // component bit-depth
   uint8_t bitdepth;
+  // LB encode: raw input pointer + dc-offset parameters (avoids allocating tcomp->samples)
+  const int32_t *lb_src_ptr = nullptr;
+  uint32_t lb_src_stride    = 0;
+  int32_t lb_dc_offset      = 0;
+  int32_t lb_dc_shiftup     = 0;
+  bool lb_enc_mode          = false;  // true in any LB encode path (streaming or buffered)
   // default constructor
   j2k_tile_component();
   // destructor
   ~j2k_tile_component();
   // initialization of coordinates and parameters defined in tile-part markers
   void init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile, uint16_t c,
-            std::vector<int32_t *> img = {});
+            std::vector<int32_t *> img = {}, bool lb_enc = false);
   int32_t *get_sample_address(uint32_t x, uint32_t y);
   uint8_t get_dwt_levels();
   uint8_t get_transformation();
@@ -483,7 +489,7 @@ class j2k_tile_component : public j2k_tile_base {
   [[maybe_unused]] element_siz get_codeblock_size();
   [[maybe_unused]] [[nodiscard]] uint8_t get_ROIshift() const;
   j2k_resolution *access_resolution(uint8_t r);
-  void create_resolutions(uint16_t numlayers, bool line_based = false);
+  void create_resolutions(uint16_t numlayers, bool line_based = false, bool enc_lb = false);
 
   void perform_dc_offset(uint8_t transformation, bool is_signed);
 
@@ -627,7 +633,8 @@ class j2k_tile : public j2k_tile_base {
 
   // Encoding
   // Initialization with tile-index
-  void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img);
+  void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
+                bool line_based = false, bool streaming = false);
   // DC offsetting
   int perform_dc_offset(j2k_main_header &main_header);
   // forward color transform
@@ -636,6 +643,9 @@ class j2k_tile : public j2k_tile_base {
   uint8_t *encode();
   // line-based encoding: uses stateful FDWT instead of batch FDWT
   uint8_t *encode_line_based();
+  // streaming line-based encoding: pulls rows via callback instead of pre-allocated buffer
+  uint8_t *encode_line_based_stream(
+      std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn);
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination

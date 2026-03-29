@@ -29,6 +29,7 @@
 #pragma once
 #include <cstdint>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -154,6 +155,7 @@ class openhtj2k_encoder {
   void set_output_buffer(std::vector<uint8_t> &output_buf);
   size_t invoke();
   size_t invoke_line_based();
+  size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
   ~openhtj2k_encoder();
 #endif
 };

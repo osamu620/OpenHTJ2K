@@ -1823,7 +1823,7 @@ void j2k_tile_component::finalize_line_encode() {
 }
 
 void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile,
-                              uint16_t c, std::vector<int32_t *> img) {
+                              uint16_t c, std::vector<int32_t *> img, bool lb_enc) {
   index = c;
   // copy both coding and quantization styles from COD or tile-part COD
   NL                 = tile->NL;
@@ -1902,19 +1902,27 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
   hdr->SIZ->get_image_origin(Osiz);
   // create tile samples, only for encoding;
   if (!img.empty()) {
-    const uint32_t num_bufsamples = aligned_stride * height;
-    samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
     const auto width = static_cast<uint32_t>(pos1.x - pos0.x);
     // stride may differ from width with non-zero origin
     const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
-    int32_t *src          = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
-    int32_t *dst          = samples;
-    for (uint32_t i = 0; i < height; ++i) {
-      memcpy(dst, src, sizeof(int32_t) * width);
-      src += stride;
-      dst += aligned_stride;
+    if (lb_enc) {
+      // In line-based encode mode, skip the full W×H int32 copy.
+      // Store the raw input pointer; DC offset is applied row-by-row during encode.
+      lb_src_ptr    = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
+      lb_src_stride = stride;
+    } else {
+      const uint32_t num_bufsamples = aligned_stride * height;
+      samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
+      int32_t *src = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
+      int32_t *dst = samples;
+      for (uint32_t i = 0; i < height; ++i) {
+        memcpy(dst, src, sizeof(int32_t) * width);
+        src += stride;
+        dst += aligned_stride;
+      }
     }
   }
+  lb_enc_mode = lb_enc;
 }
 
 void j2k_tile_component::setCOCparams(COC_marker *COC) {
@@ -1975,7 +1983,7 @@ uint8_t j2k_tile_component::get_ROIshift() const { return this->ROIshift; }
 
 j2k_resolution *j2k_tile_component::access_resolution(uint8_t r) { return this->resolution[r].get(); }
 
-void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based) {
+void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based, bool enc_lb) {
   resolution = MAKE_UNIQUE<std::unique_ptr<j2k_resolution>[]>(NL + 1U);
 
   float tmp_ranges[4]       = {1.0, 1.0, 1.0, 1.0};
@@ -2019,7 +2027,8 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based)
     const uint32_t npw = (respos1.x > respos0.x) ? ceil_int(respos1.x, PP.x) - respos0.x / PP.x : 0;
     const uint32_t nph = (respos1.y > respos0.y) ? ceil_int(respos1.y, PP.y) - respos0.y / PP.y : 0;
 
-    resolution[r] = MAKE_UNIQUE<j2k_resolution>(r, respos0, respos1, npw, nph, line_based);
+    resolution[r] = MAKE_UNIQUE<j2k_resolution>(r, respos0, respos1, npw, nph,
+                                                 line_based || (enc_lb && r == this->NL && this->NL > 0));
     resolution[r]->set_nominal_ranges(child_ranges[r]);
     resolution[r]->normalizing_downshift = nshift[r];
     resolution[r]->normalizing_upshift   = nshift[r + 1];
@@ -2052,6 +2061,15 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
   }
   // DC offset for signed input shall be 0
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
+
+  // In LB encode mode (lb_enc_mode), samples was not allocated.
+  // Store parameters for row-by-row application during encode_line_based().
+  if (lb_enc_mode) {
+    lb_dc_offset  = DC_OFFSET;
+    lb_dc_shiftup = shiftup;
+    return;
+  }
+
   const int32_t stride    = round_up(static_cast<int32_t>(this->pos1.x - this->pos0.x), 32);
   const int32_t width     = static_cast<int32_t>(this->pos1.x - this->pos0.x);
   const int32_t height    = static_cast<int32_t>(this->pos1.y - this->pos0.y);
@@ -3713,8 +3731,9 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
     tcomp[c].finalize_line_decode();
 }
 
-void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img) {
-  if (img.empty()) {
+void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
+                        bool line_based, bool streaming) {
+  if (img.empty() && !streaming) {
     printf("ERROR: input image is empty.\n");
     throw std::exception();
   }
@@ -3762,9 +3781,11 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   // create tile components
   this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
 
+  const bool lb_enc = line_based && (streaming || !(MCT && num_components >= 3));
+
   for (uint16_t c = 0; c < num_components; c++) {
-    this->tcomp[c].init(&main_header, tphdr, this, c, img);
-    this->tcomp[c].create_resolutions(1);  // number of layers = 1
+    this->tcomp[c].init(&main_header, tphdr, this, c, img, lb_enc);
+    this->tcomp[c].create_resolutions(1, false, lb_enc);  // enc_lb skips resolution[NL].i_samples
   }
 
   // apply POC, if any
@@ -4336,12 +4357,35 @@ uint8_t *j2k_tile::encode_line_based() {
       for (uint32_t y = 0; y < height; ++y)
         tcomp[c].push_line_enc(cr->i_samples + y * stride);
     } else {
-      int32_t *src     = tcomp[c].get_sample_address(0, 0);
       auto *scratch    = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * stride, 32));
-      for (uint32_t y = 0; y < height; ++y) {
-        const int32_t *sp = src + y * stride;
-        for (uint32_t x = 0; x < width; ++x) scratch[x] = static_cast<sprec_t>(sp[x]);
-        tcomp[c].push_line_enc(scratch);
+      if (tcomp[c].lb_src_ptr != nullptr) {
+        // LB encode mode: read directly from raw input, applying DC offset on-the-fly.
+        const int32_t *src    = tcomp[c].lb_src_ptr;
+        const uint32_t isrc   = tcomp[c].lb_src_stride;
+        const int32_t dco     = tcomp[c].lb_dc_offset;
+        const int32_t shiftup = tcomp[c].lb_dc_shiftup;
+        if (shiftup >= 0) {
+          for (uint32_t y = 0; y < height; ++y) {
+            const int32_t *sp = src + y * isrc;
+            for (uint32_t x = 0; x < width; ++x)
+              scratch[x] = static_cast<sprec_t>((sp[x] << shiftup) - dco);
+            tcomp[c].push_line_enc(scratch);
+          }
+        } else {
+          for (uint32_t y = 0; y < height; ++y) {
+            const int32_t *sp = src + y * isrc;
+            for (uint32_t x = 0; x < width; ++x)
+              scratch[x] = static_cast<sprec_t>((sp[x] >> (-shiftup)) - dco);
+            tcomp[c].push_line_enc(scratch);
+          }
+        }
+      } else {
+        int32_t *src = tcomp[c].get_sample_address(0, 0);
+        for (uint32_t y = 0; y < height; ++y) {
+          const int32_t *sp = src + y * stride;
+          for (uint32_t x = 0; x < width; ++x) scratch[x] = static_cast<sprec_t>(sp[x]);
+          tcomp[c].push_line_enc(scratch);
+        }
       }
       aligned_mem_free(scratch);
     }
@@ -4401,7 +4445,349 @@ uint8_t *j2k_tile::encode_line_based() {
   return nullptr;  // fake
 }
 
+uint8_t *j2k_tile::encode_line_based_stream(
+    std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn) {
+#ifdef OPENHTJ2K_THREAD
+  auto pool = ThreadPool::get();
+#endif
+  if (!this->encode_pool_ctx) this->encode_pool_ctx = std::make_unique<EncodePoolCtx>();
+  {
+    auto *epc = this->encode_pool_ctx.get();
+    ++epc->gen;
+    epc->slot_cnt.store(0, std::memory_order_relaxed);
+#ifdef OPENHTJ2K_THREAD
+    const int nslots = (pool ? static_cast<int>(pool->num_threads()) : 0) + 1;
+#else
+    const int nslots = 1;
+#endif
+    while (static_cast<int>(epc->pools.size()) < nslots)
+      epc->pools.emplace_back(std::make_unique<cblk_data_pool>());
+    for (auto &ep : epc->pools) ep->reset();
+  }
+  auto *epc = this->encode_pool_ctx.get();
 
+#ifdef OPENHTJ2K_THREAD
+  auto t1_encode = [epc, pool](j2k_resolution *cr, uint8_t ROIshift) {
+    struct EncTaskArgs {
+      EncodePoolCtx *epc;
+      j2k_codeblock *block;
+      uint8_t ROIshift;
+      std::atomic<int> *remaining;
+    };
+    uint32_t max_total_cblks = 0;
+    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+      j2k_precinct *cp     = cr->access_precinct(p);
+      uint32_t total_cblks = 0;
+      for (uint8_t b = 0; b < cr->num_bands; b++) {
+        j2k_precinct_subband *cpb = cp->access_pband(b);
+        total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
+      }
+      max_total_cblks = std::max(max_total_cblks, total_cblks);
+    }
+    if (max_total_cblks == 0) return;
+    int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
+    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+    auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
+    std::atomic<int> enc_remaining{0};
+    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+      j2k_precinct *cp = cr->access_precinct(p);
+      int32_t *pbuf    = gbuf;
+      uint8_t *spbuf   = sgbuf;
+      for (uint8_t b = 0; b < cr->num_bands; b++) {
+        j2k_precinct_subband *cpb = cp->access_pband(b);
+        const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+        for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+          auto block          = cpb->access_codeblock(block_index);
+          const uint32_t QWx2 = round_up(block->size.x, 8U);
+          const uint32_t QHx2 = round_up(block->size.y, 8U);
+          block->sample_buf   = pbuf;
+          pbuf += QWx2 * QHx2;
+          block->block_states = spbuf;
+          spbuf += (QWx2 + 2) * (QHx2 + 2);
+        }
+      }
+      memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
+      memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
+      enc_remaining.store(0, std::memory_order_relaxed);
+      uint32_t task_idx = 0;
+      for (uint8_t b = 0; b < cr->num_bands; ++b) {
+        j2k_precinct_subband *cpb = cp->access_pband(b);
+        const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+        for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+          auto block = cpb->access_codeblock(block_index);
+          if (pool->num_threads() > 1) {
+            auto *ea = &enc_task_args[task_idx++];
+            *ea      = {epc, block, ROIshift, &enc_remaining};
+            enc_remaining.fetch_add(1, std::memory_order_relaxed);
+            pool->push([ea]() {
+              TlPoolSlot &ts = g_tl_pool_slot;
+              if (ts.gen != ea->epc->gen) {
+                const int slot = ea->epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
+                ts.slot        = std::min(slot, static_cast<int>(ea->epc->pools.size()) - 1);
+                ts.gen         = ea->epc->gen;
+              }
+              g_cblk_pool = ea->epc->pools[static_cast<size_t>(ts.slot)].get();
+              htj2k_encode(ea->block, ea->ROIshift);
+              g_cblk_pool = nullptr;
+              ea->remaining->fetch_sub(1, std::memory_order_release);
+            });
+          } else {
+            g_cblk_pool = epc->pools[0].get();
+            htj2k_encode(block, ROIshift);
+            g_cblk_pool = nullptr;
+          }
+        }
+      }
+      while (enc_remaining.load(std::memory_order_acquire) > 0)
+        std::this_thread::yield();
+    }
+    free(gbuf);
+    free(sgbuf);
+  };
+#else
+  auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
+    uint32_t max_total_cblks = 0;
+    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+      j2k_precinct *cp     = cr->access_precinct(p);
+      uint32_t total_cblks = 0;
+      for (uint8_t b = 0; b < cr->num_bands; b++) {
+        j2k_precinct_subband *cpb = cp->access_pband(b);
+        total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
+      }
+      max_total_cblks = std::max(max_total_cblks, total_cblks);
+    }
+    if (max_total_cblks == 0) return;
+    int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
+    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+      j2k_precinct *cp = cr->access_precinct(p);
+      int32_t *pbuf    = gbuf;
+      uint8_t *spbuf   = sgbuf;
+      for (uint8_t b = 0; b < cr->num_bands; b++) {
+        j2k_precinct_subband *cpb = cp->access_pband(b);
+        const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+        for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+          auto block          = cpb->access_codeblock(block_index);
+          const uint32_t QWx2 = round_up(block->size.x, 8U);
+          const uint32_t QHx2 = round_up(block->size.y, 8U);
+          block->sample_buf   = pbuf;
+          pbuf += QWx2 * QHx2;
+          block->block_states = spbuf;
+          spbuf += (QWx2 + 2) * (QHx2 + 2);
+        }
+      }
+      memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
+      memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
+      g_cblk_pool = epc->pools[0].get();
+      for (uint8_t b = 0; b < cr->num_bands; ++b) {
+        j2k_precinct_subband *cpb = cp->access_pband(b);
+        const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+        for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+          auto block = cpb->access_codeblock(block_index);
+          htj2k_encode(block, ROIshift);
+        }
+      }
+      g_cblk_pool = nullptr;
+    }
+    free(gbuf);
+    free(sgbuf);
+  };
+#endif
+
+  // Geometry from component 0
+  const uint8_t NL0        = tcomp[0].get_dwt_levels();
+  const element_siz top0   = tcomp[0].get_pos0();
+  const element_siz bot0   = tcomp[0].get_pos1();
+  const uint32_t width     = bot0.x - top0.x;
+  const uint32_t height    = bot0.y - top0.y;
+  const uint32_t stride    = round_up(width, 32U);
+  const uint8_t transformation = tcomp[0].get_transformation();
+
+  // Per-component aligned row scratch buffers
+  std::vector<int32_t *> int_rows(num_components, nullptr);
+  std::vector<sprec_t *> float_rows(num_components, nullptr);
+  for (uint16_t c = 0; c < num_components; ++c) {
+    int_rows[c]   = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * stride, 32));
+    float_rows[c] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * stride, 32));
+  }
+
+  auto cleanup_rows = [&]() {
+    for (uint16_t c = 0; c < num_components; ++c) {
+      aligned_mem_free(int_rows[c]);
+      aligned_mem_free(float_rows[c]);
+    }
+  };
+
+  // Packet-header builder (identical to encode_line_based)
+  auto build_packet_headers = [&]() {
+    auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
+      uint32_t length = 0;
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        uint32_t packet_length = 0;
+        j2k_precinct *cp       = cr->access_precinct(p);
+        packet_header_writer pckt_hdr;
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+            auto block = cpb->access_codeblock(block_index);
+            packet_length += block->length;
+          }
+          cpb->generate_packet_header(pckt_hdr, static_cast<uint16_t>(numlayers_local - 1));
+        }
+        pckt_hdr.flush(use_EPH_local);
+        cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
+        cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
+        pckt_hdr.copy_buf(cp->packet_header.get());
+        packet_length += pckt_hdr.get_length();
+        cp->set_length(packet_length);
+        length += packet_length;
+      }
+      return length;
+    };
+    for (uint16_t c = 0; c < num_components; ++c) {
+      const uint8_t NL   = tcomp[c].get_dwt_levels();
+      j2k_resolution *cr = tcomp[c].access_resolution(NL);
+      for (uint8_t r = NL; r > 0; --r) {
+        this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
+        cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
+      }
+      this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
+    }
+  };
+
+  if (NL0 == 0) {
+    // No DWT: fill i_samples row by row then encode.
+    for (uint32_t y = 0; y < height; ++y) {
+      src_fn(y, int_rows.data(), num_components);
+      if (MCT && num_components >= 3) {
+        // Apply DC offset in-place for components 0,1,2
+        for (int c = 0; c < 3; ++c) {
+          const int32_t dco = tcomp[c].lb_dc_offset;
+          const int32_t shu = tcomp[c].lb_dc_shiftup;
+          int32_t *row      = int_rows[c];
+          if (shu >= 0)
+            for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] << shu) - dco;
+          else
+            for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
+        }
+        // Convert RGB→YCbCr float directly into i_samples
+        j2k_resolution *cr0 = tcomp[0].access_resolution(0);
+        j2k_resolution *cr1 = tcomp[1].access_resolution(0);
+        j2k_resolution *cr2 = tcomp[2].access_resolution(0);
+        cvt_rgb_to_ycbcr_float[transformation](int_rows[0], int_rows[1], int_rows[2],
+                                               cr0->i_samples + y * stride, cr1->i_samples + y * stride,
+                                               cr2->i_samples + y * stride, width, 1, stride);
+        // Extra components (c >= 3): non-MCT
+        for (uint16_t c = 3; c < num_components; ++c) {
+          const int32_t dco = tcomp[c].lb_dc_offset;
+          const int32_t shu = tcomp[c].lb_dc_shiftup;
+          const int32_t *sp = int_rows[c];
+          const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+          const uint32_t sc = round_up(wc, 32U);
+          sprec_t *dp       = tcomp[c].access_resolution(0)->i_samples + y * sc;
+          if (shu >= 0)
+            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+          else
+            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+        }
+      } else {
+        for (uint16_t c = 0; c < num_components; ++c) {
+          const int32_t dco = tcomp[c].lb_dc_offset;
+          const int32_t shu = tcomp[c].lb_dc_shiftup;
+          const int32_t *sp = int_rows[c];
+          const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+          const uint32_t sc = round_up(wc, 32U);
+          sprec_t *dp       = tcomp[c].access_resolution(0)->i_samples + y * sc;
+          if (shu >= 0)
+            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+          else
+            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+        }
+      }
+    }
+    for (uint16_t c = 0; c < num_components; ++c)
+      t1_encode(tcomp[c].access_resolution(0), tcomp[c].get_ROIshift());
+    build_packet_headers();
+    cleanup_rows();
+    tile_part[0]->set_tile_index(this->index);
+    tile_part[0]->set_tile_part_index(0);
+    return nullptr;
+  }
+
+  // NL > 0: stateful FDWT with streaming input
+  for (uint16_t c = 0; c < num_components; ++c)
+    tcomp[c].init_line_encode();
+
+  for (uint32_t y = 0; y < height; ++y) {
+    src_fn(y, int_rows.data(), num_components);
+    if (MCT && num_components >= 3) {
+      // Apply DC offset to components 0,1,2 in-place
+      for (int c = 0; c < 3; ++c) {
+        const int32_t dco = tcomp[c].lb_dc_offset;
+        const int32_t shu = tcomp[c].lb_dc_shiftup;
+        int32_t *row      = int_rows[c];
+        if (shu >= 0)
+          for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] << shu) - dco;
+        else
+          for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
+      }
+      // Convert RGB→YCbCr float into scratch float rows
+      cvt_rgb_to_ycbcr_float[transformation](int_rows[0], int_rows[1], int_rows[2], float_rows[0],
+                                             float_rows[1], float_rows[2], width, 1, stride);
+      for (int c = 0; c < 3; ++c)
+        tcomp[c].push_line_enc(float_rows[c]);
+      // Extra components without MCT
+      for (uint16_t c = 3; c < num_components; ++c) {
+        const int32_t dco = tcomp[c].lb_dc_offset;
+        const int32_t shu = tcomp[c].lb_dc_shiftup;
+        const int32_t *sp = int_rows[c];
+        const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+        if (shu >= 0)
+          for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+        else
+          for (uint32_t x = 0; x < wc; ++x)
+            float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+        tcomp[c].push_line_enc(float_rows[c]);
+      }
+    } else {
+      for (uint16_t c = 0; c < num_components; ++c) {
+        const int32_t dco = tcomp[c].lb_dc_offset;
+        const int32_t shu = tcomp[c].lb_dc_shiftup;
+        const int32_t *sp = int_rows[c];
+        const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+        if (shu >= 0)
+          for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+        else
+          for (uint32_t x = 0; x < wc; ++x)
+            float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+        tcomp[c].push_line_enc(float_rows[c]);
+      }
+    }
+  }
+
+  for (uint16_t c = 0; c < num_components; ++c)
+    tcomp[c].finalize_line_encode();
+
+  // Encode codeblocks
+  for (uint16_t c = 0; c < num_components; ++c) {
+    const uint8_t ROIshift = tcomp[c].get_ROIshift();
+    const uint8_t NL       = tcomp[c].get_dwt_levels();
+    j2k_resolution *cr     = tcomp[c].access_resolution(NL);
+    for (uint8_t r = NL; r > 0; --r) {
+      t1_encode(cr, ROIshift);
+      cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
+    }
+    t1_encode(cr, ROIshift);
+  }
+
+  build_packet_headers();
+  cleanup_rows();
+
+  tile_part[0]->set_tile_index(this->index);
+  tile_part[0]->set_tile_part_index(0);
+  return nullptr;
+}
 
 [[maybe_unused]] uint8_t j2k_tile::get_byte_from_tile_buf() { return this->tile_buf->get_byte(); }
 
