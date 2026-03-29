@@ -159,14 +159,14 @@ void cvt_ycbcr_to_rgb_rev_float_avx2(float *sp0, float *sp1, float *sp2, uint32_
     float *p2   = sp2 + y * stride;
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
-      __m256i iY  = _mm256_cvtps_epi32(_mm256_load_ps(p0));
-      __m256i iCb = _mm256_cvtps_epi32(_mm256_load_ps(p1));
-      __m256i iCr = _mm256_cvtps_epi32(_mm256_load_ps(p2));
+      __m256i iY  = _mm256_cvtps_epi32(_mm256_loadu_ps(p0));
+      __m256i iCb = _mm256_cvtps_epi32(_mm256_loadu_ps(p1));
+      __m256i iCr = _mm256_cvtps_epi32(_mm256_loadu_ps(p2));
       __m256i tmp = _mm256_srai_epi32(_mm256_add_epi32(iCb, iCr), 2);
       __m256i iG  = _mm256_sub_epi32(iY, tmp);
-      _mm256_store_ps(p0, _mm256_cvtepi32_ps(_mm256_add_epi32(iCr, iG)));
-      _mm256_store_ps(p1, _mm256_cvtepi32_ps(iG));
-      _mm256_store_ps(p2, _mm256_cvtepi32_ps(_mm256_add_epi32(iCb, iG)));
+      _mm256_storeu_ps(p0, _mm256_cvtepi32_ps(_mm256_add_epi32(iCr, iG)));
+      _mm256_storeu_ps(p1, _mm256_cvtepi32_ps(iG));
+      _mm256_storeu_ps(p2, _mm256_cvtepi32_ps(_mm256_add_epi32(iCb, iG)));
       p0 += 8;
       p1 += 8;
       p2 += 8;
@@ -196,16 +196,16 @@ void cvt_ycbcr_to_rgb_irrev_float_avx2(float *sp0, float *sp1, float *sp2, uint3
     float *p2   = sp2 + y * stride;
     int32_t len = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
-      __m256 mY  = _mm256_load_ps(p0);
-      __m256 mCb = _mm256_load_ps(p1);
-      __m256 mCr = _mm256_load_ps(p2);
+      __m256 mY  = _mm256_loadu_ps(p0);
+      __m256 mCb = _mm256_loadu_ps(p1);
+      __m256 mCr = _mm256_loadu_ps(p2);
       __m256 mR  = _mm256_fmadd_ps(mCr, mCR_FACT_R, mY);
       __m256 mB  = _mm256_fmadd_ps(mCb, mCB_FACT_B, mY);
       __m256 mG  = _mm256_fnmadd_ps(mCr, mCR_FACT_G, mY);
       mG         = _mm256_fnmadd_ps(mCb, mCB_FACT_G, mG);
-      _mm256_store_ps(p0, mR);
-      _mm256_store_ps(p1, mG);
-      _mm256_store_ps(p2, mB);
+      _mm256_storeu_ps(p0, mR);
+      _mm256_storeu_ps(p1, mG);
+      _mm256_storeu_ps(p2, mB);
       p0 += 8;
       p1 += 8;
       p2 += 8;
