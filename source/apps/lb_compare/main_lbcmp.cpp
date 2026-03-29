@@ -1,6 +1,9 @@
 // lb_compare: validate invoke_line_based() against invoke() for a given j2k file.
-// Usage: lb_compare <input.j2k> [-reduce N]
+// Usage: lb_compare <input.j2k> [-reduce N] [--predecoded]
 // Exits 0 on exact match, non-zero on mismatch or error.
+// --predecoded: use invoke_line_based_predecoded() (pre-decodes codeblocks via
+//   tile path, then runs line-based IDWT).  If this passes but invoke_line_based()
+//   fails, the bug is in decode_strip().  If both fail, the bug is in idwt_2d_state.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -8,12 +11,16 @@
 #include <vector>
 #include "decoder.hpp"
 
-static bool parse_args(int argc, char *argv[], std::string &infile, uint8_t &reduce_NL) {
+static bool parse_args(int argc, char *argv[], std::string &infile, uint8_t &reduce_NL,
+                       bool &predecoded) {
   infile     = "";
   reduce_NL  = 0;
+  predecoded = false;
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "-reduce") == 0 || strcmp(argv[i], "-r") == 0) {
       if (++i < argc) reduce_NL = static_cast<uint8_t>(atoi(argv[i]));
+    } else if (strcmp(argv[i], "--predecoded") == 0) {
+      predecoded = true;
     } else {
       infile = argv[i];
     }
@@ -38,8 +45,9 @@ static std::vector<uint8_t> read_file(const char *path) {
 int main(int argc, char *argv[]) {
   std::string infile;
   uint8_t     reduce_NL = 0;
-  if (!parse_args(argc, argv, infile, reduce_NL)) {
-    printf("Usage: lb_compare <input.j2k> [-reduce N]\n");
+  bool        predecoded = false;
+  if (!parse_args(argc, argv, infile, reduce_NL, predecoded)) {
+    printf("Usage: lb_compare <input.j2k> [-reduce N] [--predecoded]\n");
     return 1;
   }
 
@@ -61,18 +69,22 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // ── Line-based decode via invoke_line_based() ─────────────────────────────
+  // ── Line-based decode ─────────────────────────────────────────────────────
   std::vector<int32_t *> lb_buf;
   std::vector<uint32_t>  lb_w, lb_h;
   std::vector<uint8_t>   lb_depth;
   std::vector<bool>      lb_signed;
+  const char *lb_mode = predecoded ? "invoke_line_based_predecoded()" : "invoke_line_based()";
   try {
     open_htj2k::openhtj2k_decoder dec_lb;
     dec_lb.init(codestream.data(), codestream.size(), reduce_NL, 1);
     dec_lb.parse();
-    dec_lb.invoke_line_based(lb_buf, lb_w, lb_h, lb_depth, lb_signed);
+    if (predecoded)
+      dec_lb.invoke_line_based_predecoded(lb_buf, lb_w, lb_h, lb_depth, lb_signed);
+    else
+      dec_lb.invoke_line_based(lb_buf, lb_w, lb_h, lb_depth, lb_signed);
   } catch (std::exception &e) {
-    printf("ERROR invoke_line_based(): %s\n", e.what());
+    printf("ERROR %s: %s\n", lb_mode, e.what());
     return 1;
   }
 
@@ -96,8 +108,8 @@ int main(int argc, char *argv[]) {
       if (ref_buf[c][i] != lb_buf[c][i]) {
         const uint32_t x = static_cast<uint32_t>(i % ref_w[c]);
         const uint32_t y = static_cast<uint32_t>(i / ref_w[c]);
-        printf("FAIL: comp %u pixel (%u,%u): invoke=%d  line_based=%d\n",
-               c, x, y, ref_buf[c][i], lb_buf[c][i]);
+        printf("FAIL [%s]: comp %u pixel (%u,%u): invoke=%d  %s=%d\n",
+               infile.c_str(), c, x, y, ref_buf[c][i], lb_mode, lb_buf[c][i]);
         ok = false;
         break;
       }

@@ -492,6 +492,8 @@ class j2k_tile_component : public j2k_tile_base {
   void init_line_decode();
   bool pull_line(sprec_t *out);
   void finalize_line_decode();
+  // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
+  void mark_line_dec_predecoded();
 
   void destroy() {
     for (uint8_t r = 0; r < this->NL; ++r) {
@@ -591,6 +593,16 @@ class j2k_tile : public j2k_tile_base {
   void ycbcr_to_rgb();
   // inverse DC offset and clipping
   void finalize(j2k_main_header &main_header, uint8_t reduce_NL, std::vector<int32_t *> &dst);
+  // Line-based decode: parses packets first (via create_tile_buf), then lazily
+  // pulls float rows component-by-component, applies per-row YCbCr→RGB and
+  // float→int32 conversion.  Does NOT call decode() / ycbcr_to_rgb() / finalize().
+  void decode_line_based(j2k_main_header &main_header, uint8_t reduce_NL,
+                         std::vector<int32_t *> &dst);
+  // Diagnostic variant: decodes all codeblocks first (no IDWT), then uses
+  // the pre-decoded sb->i_samples to bypass decode_strip() in row_ptr().
+  // Used by lb_compare to isolate decode_strip bugs from IDWT state machine bugs.
+  void decode_line_based_predecoded(j2k_main_header &main_header, uint8_t reduce_NL,
+                                    std::vector<int32_t *> &dst);
 
   // Encoding
   // Initialization with tile-index

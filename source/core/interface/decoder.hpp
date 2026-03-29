@@ -54,6 +54,19 @@ class openhtj2k_decoder {
   OPENHTJ2K_EXPORT uint8_t get_minumum_DWT_levels();
   OPENHTJ2K_EXPORT void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
                                std::vector<uint8_t> &, std::vector<bool> &);
+  // Line-based decode: same signature as invoke() but uses stateful row-pull
+  // instead of full-tile IDWT.  Peak memory proportional to DWT ring depth
+  // rather than image size.
+  OPENHTJ2K_EXPORT void invoke_line_based(std::vector<int32_t *> &, std::vector<uint32_t> &,
+                                          std::vector<uint32_t> &, std::vector<uint8_t> &,
+                                          std::vector<bool> &);
+  // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
+  // the line-based IDWT using those pre-decoded values.  If this matches invoke()
+  // but invoke_line_based() does not, the bug is in decode_strip(); otherwise
+  // the bug is in idwt_2d_state.
+  OPENHTJ2K_EXPORT void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
+                                                     std::vector<uint32_t> &, std::vector<uint8_t> &,
+                                                     std::vector<bool> &);
   OPENHTJ2K_EXPORT void destroy();
   OPENHTJ2K_EXPORT ~openhtj2k_decoder();
 };

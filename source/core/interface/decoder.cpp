@@ -63,6 +63,11 @@ class openhtj2k_decoder_impl {
 
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
+  void invoke_line_based(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
+                         std::vector<uint8_t> &, std::vector<bool> &);
+  void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
+                                    std::vector<uint32_t> &, std::vector<uint8_t> &,
+                                    std::vector<bool> &);
 
   void destroy();
 };
@@ -308,6 +313,175 @@ void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                std::vector<bool> &is_signed) {
   this->impl->invoke(buf, width, height, depth, is_signed);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
+                                               std::vector<uint32_t> &width,
+                                               std::vector<uint32_t> &height,
+                                               std::vector<uint8_t> &depth,
+                                               std::vector<bool> &is_signed) {
+  if (!is_parsed) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based().\n");
+    throw std::exception();
+  }
+  if (reduce_NL > this->get_minimum_DWT_levels()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level within some\n"
+        "tile-component.  Problem almost certainly caused by trying to discard more\n"
+        "resolution levels than the number of DWT levels used to compress a\n"
+        "tile-component.");
+  }
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+
+  // Allocate output buffers (identical to invoke()).
+  uint16_t num_components = main_header.SIZ->get_num_components();
+  element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
+  main_header.SIZ->get_image_size(siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
+  for (uint16_t c = 0; c < num_components; c++) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
+    const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
+    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    buf.emplace_back(new int32_t[width[c] * height[c]]);
+    depth.push_back(main_header.SIZ->get_bitdepth(c));
+    is_signed.push_back(main_header.SIZ->is_signed(c));
+  }
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
+
+  std::vector<j2k_tile> tileSet;
+  tileSet.resize(static_cast<size_t>(numTiles.x) * numTiles.y);
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+    tileSet[i].dec_init(i, main_header, reduce_NL);
+  }
+
+  uint16_t word;
+  SOT_marker tmpSOT;
+  uint16_t tile_index;
+  while ((word = in.get_word()) != _EOC) {
+    if (word != _SOT) {
+      printf("ERROR: SOT marker segment expected but %04X is found\n", word);
+      throw std::exception();
+    }
+    tmpSOT     = SOT_marker(in);
+    tile_index = tmpSOT.get_tile_index();
+    tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
+  }
+
+  for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
+    try {
+      tileSet[i].create_tile_buf(main_header);
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+      tileSet[i].destroy();
+      throw std::runtime_error("Abort Decoding!");
+    }
+    // decode_line_based() replaces decode() + ycbcr_to_rgb() + finalize().
+    tileSet[i].decode_line_based(main_header, reduce_NL, buf);
+  }
+}
+
+void openhtj2k_decoder::invoke_line_based(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
+                                          std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
+                                          std::vector<bool> &is_signed) {
+  this->impl->invoke_line_based(buf, width, height, depth, is_signed);
+}
+
+void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
+                                                          std::vector<uint32_t> &width,
+                                                          std::vector<uint32_t> &height,
+                                                          std::vector<uint8_t> &depth,
+                                                          std::vector<bool> &is_signed) {
+  if (!is_parsed) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_predecoded().\n");
+    throw std::exception();
+  }
+  if (reduce_NL > this->get_minimum_DWT_levels()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level within some\n"
+        "tile-component.  Problem almost certainly caused by trying to discard more\n"
+        "resolution levels than the number of DWT levels used to compress a\n"
+        "tile-component.");
+  }
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+
+  uint16_t num_components = main_header.SIZ->get_num_components();
+  element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
+  main_header.SIZ->get_image_size(siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
+  for (uint16_t c = 0; c < num_components; c++) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
+    const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
+    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    buf.emplace_back(new int32_t[width[c] * height[c]]);
+    depth.push_back(main_header.SIZ->get_bitdepth(c));
+    is_signed.push_back(main_header.SIZ->is_signed(c));
+  }
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
+
+  std::vector<j2k_tile> tileSet;
+  tileSet.resize(static_cast<size_t>(numTiles.x) * numTiles.y);
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+    tileSet[i].dec_init(i, main_header, reduce_NL);
+  }
+
+  uint16_t word;
+  SOT_marker tmpSOT;
+  uint16_t tile_index;
+  while ((word = in.get_word()) != _EOC) {
+    if (word != _SOT) {
+      printf("ERROR: SOT marker segment expected but %04X is found\n", word);
+      throw std::exception();
+    }
+    tmpSOT     = SOT_marker(in);
+    tile_index = tmpSOT.get_tile_index();
+    tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
+  }
+
+  for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
+    try {
+      tileSet[i].create_tile_buf(main_header);
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+      tileSet[i].destroy();
+      throw std::runtime_error("Abort Decoding!");
+    }
+    tileSet[i].decode_line_based_predecoded(main_header, reduce_NL, buf);
+  }
+}
+
+void openhtj2k_decoder::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
+                                                     std::vector<uint32_t> &width,
+                                                     std::vector<uint32_t> &height,
+                                                     std::vector<uint8_t> &depth,
+                                                     std::vector<bool> &is_signed) {
+  this->impl->invoke_line_based_predecoded(buf, width, height, depth, is_signed);
 }
 
 void openhtj2k_decoder::destroy() { this->impl->destroy(); }

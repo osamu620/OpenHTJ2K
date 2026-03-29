@@ -239,6 +239,11 @@ add_executable(imgcmp)
 add_subdirectory(source/apps/imgcmp)
 target_include_directories(imgcmp PUBLIC source/apps/imgcmp/)
 
+add_executable(lb_compare)
+add_subdirectory(source/apps/lb_compare)
+target_include_directories(lb_compare PUBLIC source/core/interface)
+target_link_libraries(lb_compare PUBLIC open_htj2k)
+
 ################################################################################################
 # Install
 ################################################################################################
@@ -262,4 +267,5 @@ install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 ################################################################################################
 # conformance testing
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/line_based_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)

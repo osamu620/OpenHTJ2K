@@ -37,12 +37,13 @@
 
 void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
                                int32_t codeblock_height, uint8_t roi_shift) {
-  res       = resolution;
-  band_idx  = b_idx;
-  ROIshift  = roi_shift;
-  cb_h      = codeblock_height;
-  strip_y0  = -1;
-  strip_y1  = -1;
+  res            = resolution;
+  band_idx       = b_idx;
+  ROIshift       = roi_shift;
+  cb_h           = codeblock_height;
+  strip_y0       = -1;
+  strip_y1       = -1;
+  bypass_decode  = false;
 
   sb = res->access_subband(band_idx);
 
@@ -124,7 +125,15 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
-  if (abs_row < strip_y0 || abs_row >= strip_y1) decode_strip(abs_row);
+  // Guard: empty subband (zero-height or zero-width tile boundary case).
+  // i_samples is null when pos1.x==pos0.x or pos1.y==pos0.y (num_samples==0).
+  // Return a pointer into a static zero buffer; the caller memcpy's width bytes
+  // which are all zero — correct since an empty subband has no HF content.
+  if (sb->i_samples == nullptr) {
+    static const sprec_t zero_row[4096] = {};
+    return zero_row;
+  }
+  if (!bypass_decode && (abs_row < strip_y0 || abs_row >= strip_y1)) decode_strip(abs_row);
   const int32_t rel = abs_row - static_cast<int32_t>(sb->get_pos0().y);
   return sb->i_samples + static_cast<ptrdiff_t>(rel) * sb->stride;
 }
