@@ -36,7 +36,7 @@
 // ─── init / free ──────────────────────────────────────────────────────────────
 
 void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
-                               int32_t codeblock_height, uint8_t roi_shift) {
+                               int32_t codeblock_height, uint8_t roi_shift, bool use_ring) {
   res            = resolution;
   band_idx       = b_idx;
   ROIshift       = roi_shift;
@@ -44,8 +44,21 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   strip_y0       = -1;
   strip_y1       = -1;
   bypass_decode  = false;
+  ring_mode      = use_ring;
+  ring_buf       = nullptr;
+  ring_y0        = -1;
 
   sb = res->access_subband(band_idx);
+
+  if (use_ring) {
+    const int32_t sb_w = static_cast<int32_t>(sb->get_pos1().x - sb->get_pos0().x);
+    const int32_t sb_h = static_cast<int32_t>(sb->get_pos1().y - sb->get_pos0().y);
+    if (sb_w > 0 && sb_h > 0) {
+      const size_t ring_rows = static_cast<size_t>(codeblock_height);
+      ring_buf = static_cast<sprec_t *>(
+          aligned_mem_alloc(sizeof(sprec_t) * ring_rows * static_cast<size_t>(sb->stride), 32));
+    }
+  }
 
   // Pre-allocate scratch for a 64×64 codeblock (grow-on-demand).
   cb_sample_cap  = static_cast<size_t>(round_up(64, 8) * round_up(64, 8));
@@ -55,6 +68,7 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
 }
 
 void j2k_subband_row_buf::free_resources() {
+  aligned_mem_free(ring_buf); ring_buf = nullptr; ring_y0 = -1;
   std::free(cb_sample_buf); cb_sample_buf = nullptr; cb_sample_cap = 0;
   std::free(cb_state_buf);  cb_state_buf  = nullptr; cb_state_cap  = 0;
   strip_y0 = strip_y1 = -1;
@@ -72,6 +86,16 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
 
   strip_y0 = s_y0;
   strip_y1 = s_y1;
+
+  if (ring_mode) {
+    ring_y0 = s_y0;
+    // Zero the ring buffer rows for this strip so empty codeblock regions read as zero
+    // (same invariant as sb->i_samples which is zero-initialized at allocation).
+    if (ring_buf != nullptr) {
+      const int32_t rows = s_y1 - s_y0;
+      std::memset(ring_buf, 0, sizeof(sprec_t) * static_cast<size_t>(rows) * static_cast<size_t>(sb->stride));
+    }
+  }
 
   // Iterate over all precincts; find codeblocks in this band that overlap the strip.
   const uint32_t np = res->npw * res->nph;
@@ -114,6 +138,13 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
       block->block_states  = cb_state_buf;
       block->blkstate_stride = QWx2 + 2;
 
+      // In ring mode: redirect block->i_samples into the ring buffer.
+      if (ring_mode && ring_buf != nullptr) {
+        const ptrdiff_t row_off = (static_cast<int32_t>(block->get_pos0().y) - s_y0) * static_cast<ptrdiff_t>(sb->stride);
+        const ptrdiff_t col_off = static_cast<int32_t>(block->get_pos0().x) - static_cast<int32_t>(sb->get_pos0().x);
+        block->i_samples = ring_buf + row_off + col_off;
+      }
+
       if ((block->Cmodes & HT) >> 6)
         htj2k_decode(block, ROIshift);
       else
@@ -125,6 +156,14 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
+  if (ring_mode) {
+    if (ring_buf == nullptr) {
+      static const sprec_t zero_row[4096] = {};
+      return zero_row;
+    }
+    if (abs_row < strip_y0 || abs_row >= strip_y1) decode_strip(abs_row);
+    return ring_buf + static_cast<ptrdiff_t>(abs_row - ring_y0) * sb->stride;
+  }
   // Guard: empty subband (zero-height or zero-width tile boundary case).
   // i_samples is null when pos1.x==pos0.x or pos1.y==pos0.y (num_samples==0).
   // Return a pointer into a static zero buffer; the caller memcpy's width bytes

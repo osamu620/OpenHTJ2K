@@ -62,6 +62,12 @@ struct j2k_subband_row_buf {
   // When true, skip decode_strip() in row_ptr() — caller has pre-populated sb->i_samples.
   bool    bypass_decode;
 
+  // Ring buffer for line-based mode.
+  // When ring_mode=true, decoded samples go here instead of sb->i_samples.
+  bool     ring_mode;   // use ring buffer instead of sb->i_samples
+  sprec_t *ring_buf;    // cb_h × sb->stride floats (one strip wide)
+  int32_t  ring_y0;     // first row of current strip in ring_buf (= strip_y0)
+
   // Scratch buffers reused across codeblocks (serial decode; one block at a time).
   int32_t *cb_sample_buf;
   uint8_t *cb_state_buf;
@@ -69,7 +75,9 @@ struct j2k_subband_row_buf {
   size_t   cb_state_cap;
 
   // Initialise. cb_h is the maximum codeblock height for this resolution level.
-  void init(j2k_resolution *res, uint8_t band_idx, int32_t cb_h, uint8_t ROIshift);
+  // When use_ring=true, allocates a ring buffer (cb_h rows) instead of using sb->i_samples.
+  void init(j2k_resolution *res, uint8_t band_idx, int32_t cb_h, uint8_t ROIshift,
+            bool use_ring = false);
 
   // Release scratch buffers.
   void free_resources();

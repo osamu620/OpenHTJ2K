@@ -1520,7 +1520,7 @@ j2k_tile_component::~j2k_tile_component() { aligned_mem_free(samples); }
 // Line-based decode: init / pull / finalize
 // ─────────────────────────────────────────────────────────────────────────────
 
-void j2k_tile_component::init_line_decode() {
+void j2k_tile_component::init_line_decode(bool ring_mode) {
   const int32_t NL_act   = static_cast<int32_t>(NL) - static_cast<int32_t>(reduce_NL);
   const int32_t cb_h_val = static_cast<int32_t>(codeblock_size.y);
 
@@ -1536,10 +1536,17 @@ void j2k_tile_component::init_line_decode() {
 
   // Coarsest active resolution: resolution[0] (always LL0 regardless of reduce_NL).
   j2k_resolution *r0 = access_resolution(0);
-  ld->ll0_buf.init(r0, 0, cb_h_val, ROIshift);
+  ld->ll0_buf.init(r0, 0, cb_h_val, ROIshift, ring_mode);
   ld->next_row = static_cast<int32_t>(r0->get_pos0().y);
 
-  if (NL_act == 0) return;  // no IDWT needed; pull directly from LL0
+  if (NL_act == 0) {
+    // Free full-tile sample buffers when ring mode is active (no IDWT needed).
+    if (ring_mode) {
+      aligned_mem_free(r0->i_samples);
+      r0->i_samples = nullptr;
+    }
+    return;  // no IDWT needed; pull directly from LL0
+  }
 
   ld->states  = new idwt_2d_state[static_cast<size_t>(NL_act)];
   ld->ctxs    = new idwt_level_src_ctx[static_cast<size_t>(NL_act)];
@@ -1557,9 +1564,9 @@ void j2k_tile_component::init_line_decode() {
     j2k_subband *sb_LH = cr->access_subband(1);
     j2k_subband *sb_HH = cr->access_subband(2);
 
-    ld->hl_bufs[i].init(cr, 0, cb_h_val, ROIshift);
-    ld->lh_bufs[i].init(cr, 1, cb_h_val, ROIshift);
-    ld->hh_bufs[i].init(cr, 2, cb_h_val, ROIshift);
+    ld->hl_bufs[i].init(cr, 0, cb_h_val, ROIshift, ring_mode);
+    ld->lh_bufs[i].init(cr, 1, cb_h_val, ROIshift, ring_mode);
+    ld->hh_bufs[i].init(cr, 2, cb_h_val, ROIshift, ring_mode);
 
     // Resolution geometry (output space of IDWT at this level).
     const int32_t u0 = static_cast<int32_t>(cr->get_pos0().x);
@@ -1605,6 +1612,25 @@ void j2k_tile_component::init_line_decode() {
 
     idwt_2d_state_init(&ld->states[i], u0, u1, v0, v1, transformation,
                        idwt_level_src_fn, &ld->ctxs[i]);
+  }
+
+  // In ring mode: free full-tile sample buffers — ring bufs are used instead.
+  // The destructors of j2k_resolution/j2k_subband call aligned_mem_free(i_samples);
+  // with nullptr set here that becomes free(nullptr) which is a safe no-op.
+  if (ring_mode) {
+    const int32_t NL_all = static_cast<int32_t>(NL);
+    for (int32_t lv = 0; lv <= NL_all; ++lv) {
+      j2k_resolution *cr = access_resolution(static_cast<uint8_t>(lv));
+      aligned_mem_free(cr->i_samples);
+      cr->i_samples = nullptr;
+      for (uint8_t b = 0; b < cr->num_bands; ++b) {
+        j2k_subband *sb = cr->access_subband(b);
+        if (sb->orientation != BAND_LL) {
+          aligned_mem_free(sb->i_samples);
+          sb->i_samples = nullptr;
+        }
+      }
+    }
   }
 }
 
@@ -3370,9 +3396,9 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
   const uint32_t mct_w   = ci[0].csize_x;
   const uint32_t mct_str = round_up(mct_w, 32U);
 
-  // Init line-based decoder state on all components.
+  // Init line-based decoder state on all components (ring mode: use per-strip ring buffers).
   for (uint16_t c = 0; c < NC; ++c)
-    tcomp[c].init_line_decode();
+    tcomp[c].init_line_decode(/*ring_mode=*/true);
 
   // Pull rows from the stateful IDWT, apply per-row color transform and
   // float→int32 conversion, then write to the output buffer.

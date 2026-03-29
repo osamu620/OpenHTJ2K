@@ -141,7 +141,7 @@ class j2k_codeblock : public j2k_region {
   size_t blksampl_stride;
   uint8_t *block_states;
   size_t blkstate_stride;
-  sprec_t *const i_samples;
+  sprec_t *i_samples;
   const uint32_t band_stride;
   [[maybe_unused]] const uint8_t R_b;
   const uint8_t transformation;
@@ -491,7 +491,7 @@ class j2k_tile_component : public j2k_tile_base {
   // pull_line():        returns the next decoded row (float) into out[0..width-1].
   //                     Returns false when all rows are exhausted.
   // finalize_line_decode(): frees state allocated by init_line_decode().
-  void init_line_decode();
+  void init_line_decode(bool ring_mode = false);
   bool pull_line(sprec_t *out);
   void finalize_line_decode();
   // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
