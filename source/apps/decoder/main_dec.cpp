@@ -51,6 +51,7 @@ void print_help(char *cmd) {
   printf("    .jp2 and .jph (box based file-format) are not supported.\n");
   printf("-o: Output file. Supported formats are PPM, PGM, PGX and RAW.\n");
   printf("-reduce n: Number of DWT resolution reduction.\n");
+  printf("-lb: Use line-based decode path (invoke_line_based()).\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -129,6 +130,7 @@ int main(int argc, char *argv[]) {
     //    num_iterations = static_cast<int32_t>(tmp_val);
     num_threads = static_cast<uint32_t>(tmp_val);  // strtoul(tmp_param, nullptr, 10);
   }
+  const bool use_line_based = command_option_exists(argc, argv, "-lb");
 
   std::vector<int32_t *> buf;
   std::vector<uint32_t> img_width;
@@ -150,7 +152,11 @@ int main(int argc, char *argv[]) {
     // invoke decoding
     try {
       decoder.parse();
-      decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+      if (use_line_based) {
+        decoder.invoke_line_based(buf, img_width, img_height, img_depth, img_signed);
+      } else {
+        decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+      }
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
       return EXIT_FAILURE;

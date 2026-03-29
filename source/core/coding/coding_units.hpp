@@ -218,7 +218,7 @@ class j2k_subband : public j2k_region {
   // j2k_subband();
   j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation, uint8_t R_b,
               uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta, float nominal_range,
-              sprec_t *ibuf);
+              sprec_t *ibuf, bool no_alloc = false);
   ~j2k_subband();
   void destroy() { aligned_mem_free(i_samples); }
 };
@@ -361,7 +361,8 @@ class j2k_resolution : public j2k_region {
   [[maybe_unused]] uint8_t get_index() const { return index; }
   void create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                        std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
-                       uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth);
+                       uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
+                       bool line_based = false);
   void create_precincts(element_siz PP, uint16_t num_layers, element_siz codeblock_size, uint8_t Cmodes);
 
   // void create_precinct_bands(uint16_t num_layers, element_siz codeblock_size, uint8_t Cmodes);
@@ -482,7 +483,7 @@ class j2k_tile_component : public j2k_tile_base {
   [[maybe_unused]] element_siz get_codeblock_size();
   [[maybe_unused]] [[nodiscard]] uint8_t get_ROIshift() const;
   j2k_resolution *access_resolution(uint8_t r);
-  void create_resolutions(uint16_t numlayers);
+  void create_resolutions(uint16_t numlayers, bool line_based = false);
 
   void perform_dc_offset(uint8_t transformation, bool is_signed);
 
@@ -584,6 +585,9 @@ class j2k_tile : public j2k_tile_base {
   void find_gcd_of_precinct_size(element_siz &out);
 
  public:
+  // When true, j2k_subband constructors skip large non-LL buffer allocation.
+  // Set this before calling create_tile_buf() to enable ring-mode decoder RSS savings.
+  bool line_based_decode = false;
   j2k_tile();
   void destroy() {
     for (uint16_t c = 0; c < this->num_components; ++c) {

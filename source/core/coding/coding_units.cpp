@@ -388,7 +388,7 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       M_b(M_b),
       index(idx),
       //  public
-      i_samples(ibuf + offset),
+      i_samples(ibuf ? ibuf + offset : nullptr),
       band_stride(band_stride),
       R_b(R_b),
       transformation(transformation),
@@ -1262,7 +1262,7 @@ j2k_precinct_subband *j2k_precinct::access_pband(uint8_t b) {
  *******************************************************************************/
 j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation,
                          uint8_t R_b, uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta,
-                         float nominal_range, sprec_t *ibuf)
+                         float nominal_range, sprec_t *ibuf, bool no_alloc)
     : j2k_region(p0, p1),
       orientation(orientation),
       transformation(transformation),
@@ -1277,10 +1277,16 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
   const uint32_t num_samples = (pos1.x - pos0.x) * (pos1.y - pos0.y);
   if (num_samples) {
     if (orientation != BAND_LL) {
-      // If not the lowest resolution, buffers for subbands shall be created.
-      i_samples =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
-      memset(i_samples, 0, sizeof(sprec_t) * this->stride * (pos1.y - pos0.y));
+      if (!no_alloc) {
+        // Batch decode path: allocate and zero the full subband sample buffer.
+        i_samples =
+            static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
+        memset(i_samples, 0, sizeof(sprec_t) * this->stride * (pos1.y - pos0.y));
+      }
+      // When no_alloc=true (ring-mode line-based decode), i_samples stays nullptr.
+      // decode_strip() will redirect block->i_samples to the ring buffer before decoding.
+      // When no_alloc=true (ring-mode line-based decode), i_samples stays nullptr.
+      // decode_strip() will redirect block->i_samples to the ring buffer before decoding.
     } else {
       i_samples = ibuf;
     }
@@ -1330,7 +1336,8 @@ j2k_resolution::~j2k_resolution() { aligned_mem_free(i_samples); }
 
 void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                                      std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
-                                     uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth) {
+                                     uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
+                                     bool line_based) {
   subbands = MAKE_UNIQUE<std::unique_ptr<j2k_subband>[]>(num_bands);
   uint8_t i;
   uint8_t b;
@@ -1385,7 +1392,7 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       delta *= nominal_range;
     }
     subbands[i] = MAKE_UNIQUE<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b, M_b,
-                                           delta, nominal_range, i_samples);
+                                           delta, nominal_range, i_samples, line_based);
   }
 }
 
@@ -1936,7 +1943,7 @@ uint8_t j2k_tile_component::get_ROIshift() const { return this->ROIshift; }
 
 j2k_resolution *j2k_tile_component::access_resolution(uint8_t r) { return this->resolution[r].get(); }
 
-void j2k_tile_component::create_resolutions(uint16_t numlayers) {
+void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based) {
   resolution = MAKE_UNIQUE<std::unique_ptr<j2k_resolution>[]>(NL + 1U);
 
   float tmp_ranges[4]       = {1.0, 1.0, 1.0, 1.0};
@@ -1986,7 +1993,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers) {
     resolution[r]->normalizing_upshift   = nshift[r + 1];
     resolution[r]->create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
                                    this->mantissas, this->num_guard_bits, this->quantization_style,
-                                   this->bitdepth);
+                                   this->bitdepth, line_based);
 #ifdef OPENHTJ2K_THREAD
     if (pool->num_threads() > 1) {
       results.emplace_back(pool->enqueue([r, numlayers, this] {
@@ -2278,7 +2285,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       //          c);
       throw std::runtime_error("Resolution level reduction exceeds the DWT level");
     }
-    this->tcomp[c].create_resolutions(numlayers);
+    this->tcomp[c].create_resolutions(numlayers, this->line_based_decode);
     max_c_NL = std::max(c_NL, max_c_NL);
     j2k_resolution *cr;
     for (uint8_t r = 0; r <= c_NL; r++) {

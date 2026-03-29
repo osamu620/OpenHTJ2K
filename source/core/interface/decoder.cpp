@@ -383,6 +383,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
 
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     try {
+      tileSet[i].line_based_decode = true;
       tileSet[i].create_tile_buf(main_header);
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
