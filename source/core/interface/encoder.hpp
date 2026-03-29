@@ -153,6 +153,7 @@ class openhtj2k_encoder {
                     uint32_t num_threads);
   void set_output_buffer(std::vector<uint8_t> &output_buf);
   size_t invoke();
+  size_t invoke_line_based();
   ~openhtj2k_encoder();
 #endif
 };

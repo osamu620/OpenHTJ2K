@@ -364,6 +364,7 @@ class j2k_argset {
   int32_t num_iteration;
   uint32_t num_threads;
   uint8_t jph_color_space;
+  bool line_based;
 
   j2k_argset(int argc, char *argv[])
       : origin(0, 0),
@@ -384,7 +385,8 @@ class j2k_argset {
         ifnames{},
         num_iteration(1),
         num_threads(0),
-        jph_color_space(0) {
+        jph_color_space(0),
+        line_based(false) {
     args.reserve(static_cast<unsigned long>(argc));
     // find position of comma separated file names
     int fname_start = 0, fname_stop = 0;
@@ -421,13 +423,14 @@ class j2k_argset {
     num_threads     = get_num_threads();
     num_iteration   = get_num_iteration();
     jph_color_space = get_jph_color_space();
+    line_based      = (std::find(args.begin(), args.end(), "-line_based") != args.end());
 
     for (auto &arg : args) {
       char &c = arg.front();
       if (c == '-') {
         std::string optname = arg.substr(1);
         if (optname != "i" && optname != "o" && optname != "num_threads" && optname != "jph_color_space"
-            && optname != "iter") {
+            && optname != "iter" && optname != "line_based") {
           printf("ERROR: unknown option %s\n", arg.c_str());
           exit(EXIT_FAILURE);
         }

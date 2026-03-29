@@ -454,6 +454,8 @@ class j2k_tile_component : public j2k_tile_base {
   std::unique_ptr<std::unique_ptr<j2k_resolution>[]> resolution;
   // opaque line-decode state (allocated by init_line_decode, freed by finalize_line_decode)
   struct j2k_tcomp_line_dec *line_dec;
+  // opaque line-encode state (allocated by init_line_encode, freed by finalize_line_encode)
+  struct j2k_tcomp_line_enc *line_enc;
   // set members related to COC marker
   void setCOCparams(COC_marker *COC);
   // set members related to QCC marker
@@ -494,6 +496,14 @@ class j2k_tile_component : public j2k_tile_base {
   void finalize_line_decode();
   // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
   void mark_line_dec_predecoded();
+
+  // ── Line-based encode API ─────────────────────────────────────────────────
+  // init_line_encode():     allocates FDWT state chain; call after enc_init().
+  // push_line_enc(in):      feeds one float input row into the FDWT chain.
+  // finalize_line_encode(): flushes states, fills subband buffers, frees state.
+  void init_line_encode();
+  void push_line_enc(const sprec_t *in);
+  void finalize_line_encode();
 
   void destroy() {
     for (uint8_t r = 0; r < this->NL; ++r) {
@@ -613,6 +623,8 @@ class j2k_tile : public j2k_tile_base {
   void rgb_to_ycbcr();
   // encoding (does block encoding and FDWT) function for a tile
   uint8_t *encode();
+  // line-based encoding: uses stateful FDWT instead of batch FDWT
+  uint8_t *encode_line_based();
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination

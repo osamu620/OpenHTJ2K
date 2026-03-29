@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
     }
     // invoke encoding
     try {
-      total_size = encoder.invoke();
+      total_size = args.line_based ? encoder.invoke_line_based() : encoder.invoke();
     } catch (std::exception &exc) {
       return EXIT_FAILURE;
     }

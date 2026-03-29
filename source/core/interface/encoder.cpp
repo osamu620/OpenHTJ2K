@@ -514,12 +514,15 @@ class openhtj2k_encoder_impl {
   bool isJPH;
   uint8_t color_space;
 
+  size_t invoke_internal(bool line_based);
+
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
                          qcd_params &, uint8_t, bool, uint8_t);
   void set_output_buffer(std::vector<uint8_t> &);
   ~openhtj2k_encoder_impl();
   size_t invoke();
+  size_t invoke_line_based();
 };
 
 openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
@@ -537,7 +540,7 @@ void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf)
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
 
-size_t openhtj2k_encoder_impl::invoke() {
+size_t openhtj2k_encoder_impl::invoke_internal(bool line_based) {
   std::vector<uint8_t> Ssiz;
   std::vector<uint8_t> XRsiz, YRsiz;
 
@@ -641,7 +644,10 @@ size_t openhtj2k_encoder_impl::invoke() {
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
     tileSet[i].perform_dc_offset(main_header);
     tileSet[i].rgb_to_ycbcr();
-    tileSet[i].encode();
+    if (line_based)
+      tileSet[i].encode_line_based();
+    else
+      tileSet[i].encode();
     tileSet[i].construct_packets(main_header);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
@@ -680,7 +686,12 @@ size_t openhtj2k_encoder_impl::invoke() {
   return codestream_size;
 }
 
-// public interface
+
+size_t openhtj2k_encoder_impl::invoke() { return invoke_internal(false); }
+size_t openhtj2k_encoder_impl::invoke_line_based() { return invoke_internal(true); }
+
+
+
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
                                      siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
                                      bool isJPH, uint8_t color_space, uint32_t num_threads) {
@@ -702,6 +713,8 @@ void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
 }
 
 size_t openhtj2k_encoder::invoke() { return this->impl->invoke(); }
+
+size_t openhtj2k_encoder::invoke_line_based() { return this->impl->invoke_line_based(); }
 
 openhtj2k_encoder::~openhtj2k_encoder() {
 #ifdef OPENHTJ2K_THREAD
