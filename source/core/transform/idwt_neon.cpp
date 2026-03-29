@@ -165,6 +165,31 @@ auto idwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const X
   }
 };
 
+// Single-row irreversible vertical lifting step for idwt_2d_state::adv_step().
+// Applies tgt[i] -= coeff*(prev[i]+next[i]) using FMS, matching the batch path exactly.
+// n is the row width; ring-buffer rows are always sufficiently aligned.
+void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *tgt, float coeff) {
+  auto vvv  = vdupq_n_f32(coeff);
+  int32_t i = 0;
+  for (; i + 4 < n; i += 8) {
+    auto x0a = vld1q_f32(prev + i);     auto x2a = vld1q_f32(next + i);     auto x1a = vld1q_f32(tgt + i);
+    auto x0b = vld1q_f32(prev + i + 4); auto x2b = vld1q_f32(next + i + 4); auto x1b = vld1q_f32(tgt + i + 4);
+    x1a = vfmsq_f32(x1a, vaddq_f32(x0a, x2a), vvv);
+    x1b = vfmsq_f32(x1b, vaddq_f32(x0b, x2b), vvv);
+    vst1q_f32(tgt + i, x1a);
+    vst1q_f32(tgt + i + 4, x1b);
+  }
+  for (; i + 4 <= n; i += 4) {
+    auto x0 = vld1q_f32(prev + i);
+    auto x2 = vld1q_f32(next + i);
+    auto x1 = vld1q_f32(tgt  + i);
+    x1 = vfmsq_f32(x1, vaddq_f32(x0, x2), vvv);
+    vst1q_f32(tgt + i, x1);
+  }
+  for (; i < n; ++i)
+    tgt[i] -= coeff * (prev[i] + next[i]);
+}
+
 void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
                                   const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {3, 4};

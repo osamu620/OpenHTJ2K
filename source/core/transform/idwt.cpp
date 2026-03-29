@@ -35,15 +35,24 @@ static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_
                                                           idwt_1d_filtr_rev53_fixed_neon};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
                                                           idwt_rev_ver_sr_fixed_neon};
+typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
+static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_neon;
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
                                                           idwt_1d_filtr_rev53_fixed_avx2};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_avx2,
                                                           idwt_rev_ver_sr_fixed_avx2};
+typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
+static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_avx2;
 #else
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
                                                           idwt_1d_filtr_rev53_fixed};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
+static void adv_irrev_ver_step_scalar(int32_t n, float *prev, float *next, float *tgt, float coeff) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] -= coeff * (prev[i] + next[i]);
+}
+typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
+static adv_irrev_step_fn adv_irrev_ver_step_fn = adv_irrev_ver_step_scalar;
 #endif
 
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -628,11 +637,10 @@ static void adv_step(idwt_2d_state *s, int32_t r) {
   const int32_t w = s->u1 - s->u0;
 
   if (s->transformation == 0) {  // irrev 9/7
+    // Use the same FMA-based lifting as the batch vertical IDWT to guarantee
+    // bit-exact agreement between invoke() and invoke_line_based() on all platforms.
     const float coeff = lp ? (cur == 0 ? fD : fB) : (cur == 0 ? fC : fA);
-    for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-      const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-      for (int32_t c = cs; c < ce; ++c) tgt[c] -= coeff * (prev[c] + next[c]);
-    }
+    adv_irrev_ver_step_fn(w, prev, next, tgt, coeff);
   } else {  // rev 5/3
     if (lp) {
       for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {

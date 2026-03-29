@@ -192,10 +192,27 @@ auto idwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, float *const X
     auto xin2 = _mm256_load_ps(Xin1 + n);
     auto xout  = _mm256_load_ps(Xout + n);
     auto xsum = _mm256_add_ps(xin0, xin2);
-    xout = _mm256_fnmadd_ps(xsum, vcoeff,xout);
+    xout = _mm256_fnmadd_ps(xsum, vcoeff, xout);
     _mm256_store_ps(Xout + n, xout);
   }
 };
+
+// Single-row irreversible vertical lifting step for idwt_2d_state::adv_step().
+// Applies tgt[i] -= coeff*(prev[i]+next[i]) using FMA, matching the batch path exactly.
+// n is the row width; the ring-buffer rows are 32-byte aligned so load_ps is safe.
+void idwt_irrev_ver_step_fixed_avx2(int32_t n, float *prev, float *next, float *tgt, float coeff) {
+  auto vcoeff = _mm256_set1_ps(coeff);
+  int32_t i   = 0;
+  for (; i + 8 <= n; i += 8) {
+    auto xin0 = _mm256_load_ps(prev + i);
+    auto xin1 = _mm256_load_ps(next + i);
+    auto xout = _mm256_load_ps(tgt  + i);
+    xout = _mm256_fnmadd_ps(_mm256_add_ps(xin0, xin1), vcoeff, xout);
+    _mm256_store_ps(tgt + i, xout);
+  }
+  for (; i < n; ++i)
+    tgt[i] -= coeff * (prev[i] + next[i]);
+}
 
 void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
                                   const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
