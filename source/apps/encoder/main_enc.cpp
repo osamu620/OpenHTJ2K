@@ -114,7 +114,10 @@ class PnmStreamReader {
     fgetc(fp_);
 
     if (maxval == 0 || maxval > 65535) return -1;
-    bitdepth_ = (maxval > 255) ? 16 : 8;
+    // Compute the exact bit depth from maxval (e.g. 4095 → 12, 255 → 8).
+    uint8_t bd = 1;
+    while ((1U << bd) <= maxval) bd++;
+    bitdepth_ = bd;
     bps_      = (bitdepth_ > 8) ? 2 : 1;
 
     raw_.resize(static_cast<size_t>(width_) * nc_ * bps_);
