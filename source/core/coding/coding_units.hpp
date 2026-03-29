@@ -356,7 +356,7 @@ class j2k_resolution : public j2k_region {
   sprec_t *i_samples;
   //  float *f_samples;
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
-                 const uint32_t &nph);
+                 const uint32_t &nph, bool no_alloc = false);
   ~j2k_resolution();
   [[maybe_unused]] uint8_t get_index() const { return index; }
   void create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,

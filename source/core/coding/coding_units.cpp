@@ -1332,7 +1332,7 @@ j2k_subband::~j2k_subband() {
  * j2k_resolution
  *******************************************************************************/
 j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1,
-                               const uint32_t &w, const uint32_t &h)
+                               const uint32_t &w, const uint32_t &h, bool no_alloc)
     : j2k_region(p0, p1),
       index(r),
       precincts(nullptr),
@@ -1348,7 +1348,11 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
   const uint32_t num_samples = (pos1.x - pos0.x) * (pos1.y - pos0.y);
   // create buffer of LL band
   i_samples = nullptr;
-  if (!is_empty) {
+  // In line-based decode mode (no_alloc=true), skip the large i_samples buffer.
+  // init_line_decode() uses ring buffers instead; it would free these pages anyway,
+  // but on macOS free() does not return pages to the OS. Skipping the allocation
+  // avoids the malloc+memset entirely, keeping these pages out of RSS.
+  if (!is_empty && !no_alloc) {
     if (index == 0) {
       i_samples =
           static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
@@ -2015,7 +2019,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based)
     const uint32_t npw = (respos1.x > respos0.x) ? ceil_int(respos1.x, PP.x) - respos0.x / PP.x : 0;
     const uint32_t nph = (respos1.y > respos0.y) ? ceil_int(respos1.y, PP.y) - respos0.y / PP.y : 0;
 
-    resolution[r] = MAKE_UNIQUE<j2k_resolution>(r, respos0, respos1, npw, nph);
+    resolution[r] = MAKE_UNIQUE<j2k_resolution>(r, respos0, respos1, npw, nph, line_based);
     resolution[r]->set_nominal_ranges(child_ranges[r]);
     resolution[r]->normalizing_downshift = nshift[r];
     resolution[r]->normalizing_upshift   = nshift[r + 1];
