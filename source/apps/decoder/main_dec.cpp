@@ -152,6 +152,7 @@ int main(int argc, char *argv[]) {
     // Output file state (opened lazily on first row).
     const bool want_ppm = (strcmp(outfile_ext_name, ".ppm") == 0);
     const bool want_pgm = (strcmp(outfile_ext_name, ".pgm") == 0);
+    const bool want_pgx = (strcmp(outfile_ext_name, ".pgx") == 0);
     std::vector<FILE *> fps;
     std::vector<uint8_t> row_buf;  // per-row byte buffer (reused)
     uint8_t bpp            = 0;
@@ -162,8 +163,9 @@ int main(int argc, char *argv[]) {
       decoder.invoke_line_based_stream(
           [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
             if (y == 0) {
-              bpp        = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(img_depth[0]), 8));
-              pnm_offset = (img_signed[0]) ? (1 << (img_depth[0] - 1)) : 0;
+              bpp = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(img_depth[0]), 8));
+              // PGM shifts signed values to unsigned; PGX and RAW store values as-is
+              pnm_offset = (want_pgm && img_signed[0]) ? (1 << (img_depth[0] - 1)) : 0;
               if (want_ppm && nc == 3 && img_width[0] == img_width[1] &&
                   img_width[0] == img_width[2]) {
                 // Single PPM file: interleaved RGB
@@ -192,6 +194,11 @@ int main(int argc, char *argv[]) {
                   if (want_pgm)
                     fprintf(fps[c], "P5 %d %d %d\n", img_width[c], img_height[c],
                             (1 << img_depth[c]) - 1);
+                  if (want_pgx) {
+                    char sign = img_signed[c] ? '-' : '+';
+                    fprintf(fps[c], "PG LM %c %d %d %d\n", sign, img_depth[c], img_width[c],
+                            img_height[c]);
+                  }
                 }
                 uint32_t max_w = 0;
                 for (uint16_t c = 0; c < nc; ++c)
@@ -234,7 +241,15 @@ int main(int argc, char *argv[]) {
                 if (bpp == 1) {
                   for (uint32_t n = 0; n < img_width[c]; ++n)
                     *out++ = static_cast<uint8_t>(rows[c][n] + pnm_offset);
+                } else if (want_pgx) {
+                  // PGX: little-endian (LM = LSB first), no offset
+                  for (uint32_t n = 0; n < img_width[c]; ++n) {
+                    int32_t v = rows[c][n];
+                    *out++    = static_cast<uint8_t>(v);
+                    *out++    = static_cast<uint8_t>(v >> 8);
+                  }
                 } else {
+                  // PGM / other: big-endian with offset
                   for (uint32_t n = 0; n < img_width[c]; ++n) {
                     int32_t v = rows[c][n] + pnm_offset;
                     *out++    = static_cast<uint8_t>(v >> 8);
