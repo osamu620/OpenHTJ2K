@@ -1,6 +1,7 @@
 #ifdef __EMSCRIPTEN__
   #include <cstdint>
   #include <cstdio>
+  #include <cstring>
   #include <string>
   #include <vector>
   #include <exception>

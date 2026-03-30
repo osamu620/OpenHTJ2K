@@ -62,8 +62,6 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   // Vector accumulator for or_val; scalar update only in leftover path
   __m256i vor_val = _mm256_setzero_si256();
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
-    // sp is always 32-byte aligned: subband buffer is aligned_alloc'd and
-    // band_stride is a multiple of 32 elements, so use _mm256_load_ps.
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
@@ -74,9 +72,8 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     // simd
     int32_t len = static_cast<int32_t>(this->size.x);
     for (; len >= 16; len -= 16) {
-      // sp is 32-byte aligned; use aligned load
-      __m256 val0 = _mm256_load_ps(sp);
-      __m256 val1 = _mm256_load_ps(sp + 8);
+      __m256 val0 = _mm256_loadu_ps(sp);
+      __m256 val1 = _mm256_loadu_ps(sp + 8);
       // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
       auto v0 = _mm256_cvttps_epi32(_mm256_mul_ps(val0, vscale));
       auto v1 = _mm256_cvttps_epi32(_mm256_mul_ps(val1, vscale));

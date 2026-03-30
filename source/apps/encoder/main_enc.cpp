@@ -111,8 +111,8 @@ class PnmStreamReader {
     width_  = read_uint(fp_);
     height_ = read_uint(fp_);
     uint32_t maxval = read_uint(fp_);
-    // Skip exactly one whitespace byte after maxval
-    fgetc(fp_);
+    // Skip arbitrary whitespace and comments after maxval to reach first pixel byte
+    skip_ws(fp_);
 
     if (maxval == 0 || maxval > 65535) return -1;
     // Compute the exact bit depth from maxval (e.g. 4095 → 12, 255 → 8).
