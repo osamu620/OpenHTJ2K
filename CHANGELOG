@@ -1,3 +1,42 @@
+# [0.4.0] - 2026-03-30
+
+## New APIs
+* Add `invoke_line_based()` decoder API: row-by-row output via callback
+  using per-subband ring buffers; avoids full-image intermediate allocation
+* Add `invoke_line_based_stream()` decoder API: multi-tile scatter path
+  assembling full-width output rows from per-tile strip buffers
+* Add `encode_line_based_stream()` encoder API: push-row streaming encoder
+  driven by a user-supplied source callback
+* Add `lb_compare` utility to validate line-based output against `invoke()`
+
+## Architecture
+* Change `sprec_t` from `int32_t` to `float`: DWT pipeline now operates
+  natively in float32, eliminating integer↔float round-trip conversions
+* `fdwt_2d_state` / `idwt_2d_state`: new stateful streaming DWT classes
+  that process one row at a time for the line-based encode/decode paths
+* Line-based mode is now the default for encoder and decoder apps;
+  the previous full-image (batch) path is selected with the `-batch` flag
+
+## Performance
+* AVX2 horizontal DWT: 2× loop unrolling on all lifting step loops
+* NEON: full float32 horizontal and vertical DWT kernels
+* ICT/RCT color transforms: AVX2 and NEON variants with runtime dispatch
+* LB decoder: pipeline MCT+clamp of row Y with pool pull of row Y+1,
+  achieving 18–23 % throughput improvement at T≥4 threads
+* Encoder: per-thread `cblk_data_pool` bump allocator replaces per-block
+  `malloc`/`free` in the HTCOT hot path; PSE scratch buffer hoisted out
+  of per-tile DWT calls
+
+## Build / Tests
+* Decoder and encoder apps reject unknown command-line flag names
+* Introduce `OPENHTJ2K_EXPORT` macro, removing duplicated `__declspec`
+  guards from `encoder.hpp`
+* Add `lb_stream_validation.cmake`: conformance tests for
+  `invoke_line_based_stream()` across all HT profile-0/1 and HF bitstreams
+* Remove redundant `lb_*` cmake test files (duplicate of non-lb equivalents);
+  CTest count reduced from 480 to 277
+* WASM: dark UI redesign, SIMD badge, decode-time display, GitHub link
+
 # [0.3.1] - 2025-12-24
 
 * Add Windows ARM + MSVC support to CI workflow 
