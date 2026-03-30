@@ -101,7 +101,7 @@ find_package(TIFF)
 if (EMSCRIPTEN)
   target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -msimd128 -mrelaxed-simd -mfpu=neon"
+      "${CMAKE_CXX_FLAGS} -msimd128 -mfpu=neon"
   )
 endif()
 if (NOT EMSCRIPTEN)
@@ -239,6 +239,11 @@ add_executable(imgcmp)
 add_subdirectory(source/apps/imgcmp)
 target_include_directories(imgcmp PUBLIC source/apps/imgcmp/)
 
+add_executable(lb_compare)
+add_subdirectory(source/apps/lb_compare)
+target_include_directories(lb_compare PUBLIC source/core/interface)
+target_link_libraries(lb_compare PUBLIC open_htj2k)
+
 ################################################################################################
 # Install
 ################################################################################################
@@ -262,4 +267,5 @@ install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 ################################################################################################
 # conformance testing
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/lb_stream_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
