@@ -3308,7 +3308,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         spf          = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
-          v = _mm256_cvtps_epi32(_mm256_load_ps(spf));
+          v = _mm256_cvttps_epi32(_mm256_load_ps(spf));
           v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
@@ -3337,7 +3337,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
         spf          = src + y * in_stride;
         dp           = cdst + x_offset + (y + y_offset) * out_stride;
         for (; len >= 8; len -= 8) {
-          v = _mm256_cvtps_epi32(_mm256_load_ps(spf));
+          v = _mm256_cvttps_epi32(_mm256_load_ps(spf));
           v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
           v = _mm256_add_epi32(v, dco);
           v = _mm256_min_epi32(v, vmax);
