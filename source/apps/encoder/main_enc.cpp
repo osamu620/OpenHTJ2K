@@ -58,6 +58,7 @@ class PnmStreamReader {
   uint8_t bitdepth_   = 0;
   uint32_t bps_       = 0;  // bytes per sample
   bool isPPM_         = false;
+  long data_start_    = 0;  // file offset of first pixel byte
   std::vector<uint8_t> raw_;
 
   // Skip whitespace and PNM comments
@@ -121,6 +122,8 @@ class PnmStreamReader {
     bps_      = (bitdepth_ > 8) ? 2 : 1;
 
     raw_.resize(static_cast<size_t>(width_) * nc_ * bps_);
+    // Record the file position of the first pixel byte for random-access reads.
+    data_start_ = ftell(fp_);
     return 0;
   }
 
@@ -129,8 +132,11 @@ class PnmStreamReader {
   uint16_t get_num_components() const { return nc_; }
   uint8_t get_bitdepth() const { return bitdepth_; }
 
-  // Fill rows[0..nc-1][0..width-1] with int32 pixels for row y (sequential reads)
-  void get_row(uint32_t /*y*/, int32_t **rows, uint16_t /*nc*/) {
+  // Fill rows[0..nc-1][0..width-1] with int32 pixels for the given absolute row y.
+  // Seeks to the correct file position so multi-tile images are handled correctly.
+  void get_row(uint32_t y, int32_t **rows, uint16_t /*nc*/) {
+    const long row_bytes = static_cast<long>(raw_.size());
+    fseek(fp_, data_start_ + y * row_bytes, SEEK_SET);
     fread(raw_.data(), 1, raw_.size(), fp_);
     if (bps_ == 1) {
       if (isPPM_) {

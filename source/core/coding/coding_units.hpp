@@ -651,7 +651,8 @@ class j2k_tile : public j2k_tile_base {
   uint8_t *encode_line_based();
   // streaming line-based encoding: pulls rows via callback instead of pre-allocated buffer
   uint8_t *encode_line_based_stream(
-      std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn);
+      std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn,
+      const std::vector<uint32_t> &img_comp_widths);
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination

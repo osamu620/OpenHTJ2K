@@ -4360,7 +4360,6 @@ uint8_t *j2k_tile::encode_line_based() {
     const uint32_t height    = bottom_right.y - top_left.y;
     const uint32_t stride    = round_up(width, 32U);
     j2k_resolution *cr       = tcomp[c].access_resolution(NL);
-
     if (NL == 0) {
       // No FDWT: copy int32 → float to res[0]->i_samples (if not already done by MCT).
       if (!(MCT && num_components >= 3 && c < 3)) {
@@ -4472,7 +4471,8 @@ uint8_t *j2k_tile::encode_line_based() {
 }
 
 uint8_t *j2k_tile::encode_line_based_stream(
-    std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn) {
+    std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn,
+    const std::vector<uint32_t> &img_comp_widths) {
 #ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
 #endif
@@ -4629,12 +4629,16 @@ uint8_t *j2k_tile::encode_line_based_stream(
   const uint32_t stride    = round_up(width, 32U);
   const uint8_t transformation = tcomp[0].get_transformation();
 
-  // Per-component aligned row scratch buffers
+  // Per-component aligned row scratch buffers.
+  // int_rows[c] must hold the full image row so that src_fn (which provides
+  // the full-width image row) can write into it without overflow.
+  // float_rows[c] only needs tile width.
   std::vector<int32_t *> int_rows(num_components, nullptr);
   std::vector<sprec_t *> float_rows(num_components, nullptr);
   for (uint16_t c = 0; c < num_components; ++c) {
-    int_rows[c]   = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * stride, 32));
-    float_rows[c] = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * stride, 32));
+    const uint32_t alloc_w = round_up(img_comp_widths[c], 32U);
+    int_rows[c]            = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * alloc_w, 32));
+    float_rows[c]          = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * stride, 32));
   }
 
   auto cleanup_rows = [&]() {
@@ -4685,13 +4689,14 @@ uint8_t *j2k_tile::encode_line_based_stream(
   if (NL0 == 0) {
     // No DWT: fill i_samples row by row then encode.
     for (uint32_t y = 0; y < height; ++y) {
-      src_fn(y, int_rows.data(), num_components);
+      src_fn(top0.y + y, int_rows.data(), num_components);
       if (MCT && num_components >= 3) {
-        // Apply DC offset in-place for components 0,1,2
+        // Apply DC offset in-place for tile-local portion of each MCT component.
+        const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x);
         for (int c = 0; c < 3; ++c) {
           const int32_t dco = tcomp[c].lb_dc_offset;
           const int32_t shu = tcomp[c].lb_dc_shiftup;
-          int32_t *row      = int_rows[c];
+          int32_t *row      = int_rows[c] + x_off0;
           if (shu >= 0)
             for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] << shu) - dco;
           else
@@ -4701,17 +4706,18 @@ uint8_t *j2k_tile::encode_line_based_stream(
         j2k_resolution *cr0 = tcomp[0].access_resolution(0);
         j2k_resolution *cr1 = tcomp[1].access_resolution(0);
         j2k_resolution *cr2 = tcomp[2].access_resolution(0);
-        cvt_rgb_to_ycbcr_float[transformation](int_rows[0], int_rows[1], int_rows[2],
+        cvt_rgb_to_ycbcr_float[transformation](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
                                                cr0->i_samples + y * stride, cr1->i_samples + y * stride,
                                                cr2->i_samples + y * stride, width, 1, stride);
         // Extra components (c >= 3): non-MCT
         for (uint16_t c = 3; c < num_components; ++c) {
-          const int32_t dco = tcomp[c].lb_dc_offset;
-          const int32_t shu = tcomp[c].lb_dc_shiftup;
-          const int32_t *sp = int_rows[c];
-          const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
-          const uint32_t sc = round_up(wc, 32U);
-          sprec_t *dp       = tcomp[c].access_resolution(0)->i_samples + y * sc;
+          const int32_t dco     = tcomp[c].lb_dc_offset;
+          const int32_t shu     = tcomp[c].lb_dc_shiftup;
+          const uint32_t wc     = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+          const uint32_t x_off  = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+          const int32_t *sp     = int_rows[c] + x_off;
+          const uint32_t sc     = round_up(wc, 32U);
+          sprec_t *dp           = tcomp[c].access_resolution(0)->i_samples + y * sc;
           if (shu >= 0)
             for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] << shu) - dco);
           else
@@ -4719,12 +4725,13 @@ uint8_t *j2k_tile::encode_line_based_stream(
         }
       } else {
         for (uint16_t c = 0; c < num_components; ++c) {
-          const int32_t dco = tcomp[c].lb_dc_offset;
-          const int32_t shu = tcomp[c].lb_dc_shiftup;
-          const int32_t *sp = int_rows[c];
-          const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
-          const uint32_t sc = round_up(wc, 32U);
-          sprec_t *dp       = tcomp[c].access_resolution(0)->i_samples + y * sc;
+          const int32_t dco    = tcomp[c].lb_dc_offset;
+          const int32_t shu    = tcomp[c].lb_dc_shiftup;
+          const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+          const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+          const int32_t *sp    = int_rows[c] + x_off;
+          const uint32_t sc    = round_up(wc, 32U);
+          sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + y * sc;
           if (shu >= 0)
             for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] << shu) - dco);
           else
@@ -4746,29 +4753,31 @@ uint8_t *j2k_tile::encode_line_based_stream(
     tcomp[c].init_line_encode();
 
   for (uint32_t y = 0; y < height; ++y) {
-    src_fn(y, int_rows.data(), num_components);
+    src_fn(top0.y + y, int_rows.data(), num_components);
     if (MCT && num_components >= 3) {
-      // Apply DC offset to components 0,1,2 in-place
+      // Apply DC offset to tile-local portion of components 0,1,2 in-place.
+      const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x);
       for (int c = 0; c < 3; ++c) {
         const int32_t dco = tcomp[c].lb_dc_offset;
         const int32_t shu = tcomp[c].lb_dc_shiftup;
-        int32_t *row      = int_rows[c];
+        int32_t *row      = int_rows[c] + x_off0;
         if (shu >= 0)
           for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] << shu) - dco;
         else
           for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
       }
       // Convert RGB→YCbCr float into scratch float rows
-      cvt_rgb_to_ycbcr_float[transformation](int_rows[0], int_rows[1], int_rows[2], float_rows[0],
-                                             float_rows[1], float_rows[2], width, 1, stride);
+      cvt_rgb_to_ycbcr_float[transformation](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
+                                             float_rows[0], float_rows[1], float_rows[2], width, 1, stride);
       for (int c = 0; c < 3; ++c)
         tcomp[c].push_line_enc(float_rows[c]);
       // Extra components without MCT
       for (uint16_t c = 3; c < num_components; ++c) {
-        const int32_t dco = tcomp[c].lb_dc_offset;
-        const int32_t shu = tcomp[c].lb_dc_shiftup;
-        const int32_t *sp = int_rows[c];
-        const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+        const int32_t dco    = tcomp[c].lb_dc_offset;
+        const int32_t shu    = tcomp[c].lb_dc_shiftup;
+        const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+        const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+        const int32_t *sp    = int_rows[c] + x_off;
         if (shu >= 0)
           for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
         else
@@ -4778,10 +4787,11 @@ uint8_t *j2k_tile::encode_line_based_stream(
       }
     } else {
       for (uint16_t c = 0; c < num_components; ++c) {
-        const int32_t dco = tcomp[c].lb_dc_offset;
-        const int32_t shu = tcomp[c].lb_dc_shiftup;
-        const int32_t *sp = int_rows[c];
-        const uint32_t wc = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+        const int32_t dco    = tcomp[c].lb_dc_offset;
+        const int32_t shu    = tcomp[c].lb_dc_shiftup;
+        const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+        const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+        const int32_t *sp    = int_rows[c] + x_off;
         if (shu >= 0)
           for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
         else

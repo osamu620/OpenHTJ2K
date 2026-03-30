@@ -789,9 +789,16 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     tileSet[i].enc_init(i, main_header, empty_buf, true, true);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
+    // Compute per-component image widths (needed by encode_line_based_stream to
+    // allocate int_rows large enough for the full image row and to offset reads).
+    std::vector<uint32_t> img_comp_widths(static_cast<size_t>(siz->Csiz));
+    for (size_t c = 0; c < siz->Csiz; ++c) {
+      const uint32_t xr = static_cast<uint32_t>(siz->XRsiz[c]);
+      img_comp_widths[c] = (static_cast<uint32_t>(siz->Xsiz) - static_cast<uint32_t>(siz->XOsiz) + xr - 1) / xr;
+    }
     tileSet[i].perform_dc_offset(main_header);
     // MCT is handled inside encode_line_based_stream
-    tileSet[i].encode_line_based_stream(src_fn);
+    tileSet[i].encode_line_based_stream(src_fn, img_comp_widths);
     tileSet[i].construct_packets(main_header);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
