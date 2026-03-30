@@ -26,6 +26,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <algorithm>
+#include <cstring>
 #include <cstdio>
 #include <functional>
 #include "decoder.hpp"
@@ -466,16 +468,91 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
 
-  for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
-    try {
-      tileSet[i].line_based_decode = true;
-      tileSet[i].create_tile_buf(main_header);
-    } catch (std::exception &exc) {
-      printf("ERROR: %s\n", exc.what());
-      tileSet[i].destroy();
-      throw std::runtime_error("Abort Decoding!");
+  const uint32_t rscale = 1U << reduce_NL;
+
+  // Compute tile-component geometry (pixel offset + size at active resolution).
+  auto get_tile_geom = [&](uint32_t tx, uint32_t ty, uint16_t c, uint32_t &x_off,
+                           uint32_t &y_off, uint32_t &t_w, uint32_t &t_h) {
+    element_siz Rsiz_c;
+    main_header.SIZ->get_subsampling_factor(Rsiz_c, c);
+    const uint32_t x0_c  = ceil_int(Osiz.x, Rsiz_c.x);
+    const uint32_t y0_c  = ceil_int(Osiz.y, Rsiz_c.y);
+    const uint32_t gtx0  = std::max(TOsiz.x + tx * Tsiz.x, Osiz.x);
+    const uint32_t gtx1  = std::min(TOsiz.x + (tx + 1) * Tsiz.x, siz.x);
+    const uint32_t gty0  = std::max(TOsiz.y + ty * Tsiz.y, Osiz.y);
+    const uint32_t gty1  = std::min(TOsiz.y + (ty + 1) * Tsiz.y, siz.y);
+    const uint32_t tcx0  = ceil_int(gtx0, Rsiz_c.x);
+    const uint32_t tcx1  = ceil_int(gtx1, Rsiz_c.x);
+    const uint32_t tcy0  = ceil_int(gty0, Rsiz_c.y);
+    const uint32_t tcy1  = ceil_int(gty1, Rsiz_c.y);
+    x_off = ceil_int(tcx0, rscale) - ceil_int(x0_c, rscale);
+    y_off = ceil_int(tcy0, rscale) - ceil_int(y0_c, rscale);
+    t_w   = ceil_int(tcx1, rscale) - ceil_int(tcx0, rscale);
+    t_h   = ceil_int(tcy1, rscale) - ceil_int(tcy0, rscale);
+  };
+
+  uint32_t global_y = 0;
+
+  for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
+    // Compute band height per component (same for all tx in this tile row).
+    std::vector<uint32_t> band_h(num_components);
+    {
+      uint32_t x_off, y_off, t_w;
+      for (uint16_t c = 0; c < num_components; ++c)
+        get_tile_geom(0, ty, c, x_off, y_off, t_w, band_h[c]);
     }
-    tileSet[i].decode_line_based_stream(main_header, reduce_NL, cb);
+
+    // Allocate full-width accumulator buffers for this tile-row band.
+    std::vector<std::vector<int32_t>> accum(num_components);
+    for (uint16_t c = 0; c < num_components; ++c)
+      accum[c].assign(static_cast<size_t>(band_h[c]) * width[c], 0);
+
+    for (uint32_t tx = 0; tx < numTiles.x; ++tx) {
+      const uint32_t tile_idx = ty * numTiles.x + tx;
+
+      // Compute per-component x-offsets and widths for this tile.
+      std::vector<uint32_t> tile_x_off(num_components), tile_w(num_components);
+      {
+        uint32_t x_off, y_off, t_w, t_h;
+        for (uint16_t c = 0; c < num_components; ++c) {
+          get_tile_geom(tx, ty, c, x_off, y_off, t_w, t_h);
+          tile_x_off[c] = x_off;
+          tile_w[c]     = t_w;
+        }
+      }
+
+      // Internal scatter callback: copy tile-local rows into accumulator.
+      auto scatter = [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
+        for (uint16_t c = 0; c < nc; ++c) {
+          if (tile_w[c] == 0 || y_local >= band_h[c]) continue;
+          int32_t *dst =
+              accum[c].data() + static_cast<ptrdiff_t>(y_local) * width[c] + tile_x_off[c];
+          std::memcpy(dst, rows[c], tile_w[c] * sizeof(int32_t));
+        }
+      };
+
+      try {
+        tileSet[tile_idx].line_based_decode = true;
+        tileSet[tile_idx].create_tile_buf(main_header);
+      } catch (std::exception &exc) {
+        printf("ERROR: %s\n", exc.what());
+        tileSet[tile_idx].destroy();
+        throw std::runtime_error("Abort Decoding!");
+      }
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter);
+    }
+
+    // Deliver complete rows for this tile-row band to the user callback.
+    std::vector<int32_t *> row_ptrs(num_components);
+    for (uint32_t y = 0; y < band_h[0]; ++y) {
+      for (uint16_t c = 0; c < num_components; ++c) {
+        // For subsampled components, clamp to last valid row.
+        const uint32_t cy = (band_h[c] > 0) ? std::min(y, band_h[c] - 1) : 0;
+        row_ptrs[c] = accum[c].data() + static_cast<ptrdiff_t>(cy) * width[c];
+      }
+      cb(global_y + y, row_ptrs.data(), num_components);
+    }
+    global_y += band_h[0];
   }
 }
 
