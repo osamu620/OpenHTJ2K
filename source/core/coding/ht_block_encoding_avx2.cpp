@@ -56,7 +56,14 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const int32_t pshift = (refsegment) ? 1 : 0;
   const int32_t pLSB   = (refsegment) ? 1 : 1;
   #endif
+  // Hoist loop-invariant constants out of the row loop
+  const __m256i vone  = _mm256_set1_epi32(1);
+  const __m256 vscale = _mm256_set1_ps(fscale);
+  // Vector accumulator for or_val; scalar update only in leftover path
+  __m256i vor_val = _mm256_setzero_si256();
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
+    // sp is always 32-byte aligned: subband buffer is aligned_alloc'd and
+    // band_stride is a multiple of 32 elements, so use _mm256_load_ps.
     sprec_t *sp        = this->i_samples + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
@@ -64,17 +71,15 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   #if defined(ENABLE_SP_MR)
     const __m256i vpLSB = _mm256_set1_epi32(pLSB);
   #endif
-    const __m256i vone  = _mm256_set1_epi32(1);
-    const __m256 vscale = _mm256_set1_ps(fscale);
     // simd
     int32_t len = static_cast<int32_t>(this->size.x);
     for (; len >= 16; len -= 16) {
-      __m256i coeff16 = _mm256_loadu_si256((__m256i *)sp);
-      __m256i v0      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 0));
-      __m256i v1      = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(coeff16, 1));
+      // sp is 32-byte aligned; use aligned load
+      __m256 val0 = _mm256_load_ps(sp);
+      __m256 val1 = _mm256_load_ps(sp + 8);
       // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
-      v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), vscale));
-      v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), vscale));
+      auto v0 = _mm256_cvttps_epi32(_mm256_mul_ps(val0, vscale));
+      auto v1 = _mm256_cvttps_epi32(_mm256_mul_ps(val1, vscale));
       // Take sign bit
       __m256i s0 = _mm256_srli_epi32(v0, 31);
       __m256i s1 = _mm256_srli_epi32(v1, 31);
@@ -91,9 +96,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       // Generate masks for sigma
       __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
       __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
-      // Check emptiness of a block
-      or_val |= static_cast<uint32_t>(_mm256_movemask_epi8(mask0));
-      or_val |= static_cast<uint32_t>(_mm256_movemask_epi8(mask1));
+      // Accumulate or_val in a vector register; no scalar dependency in hot loop
+      vor_val = _mm256_or_si256(vor_val, mask0);
+      vor_val = _mm256_or_si256(vor_val, mask1);
 
       // Convert two's compliment to MagSgn form
       __m256i vone0 = _mm256_and_si256(mask0, vone);
@@ -127,7 +132,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       _mm_storeu_si128((__m128i *)dstblk, v);
       dstblk += 16;
     }
-    // process leftover
+    // process leftover (writes dp[0] unconditionally so calloc pre-zero is sufficient)
     for (; len > 0; --len) {
       int32_t temp;
       temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
@@ -147,12 +152,16 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        dp[0] = temp;
       }
+      dp[0] = temp;  // write 0 for zero samples; makes pre-zero memset unnecessary
       ++sp;
       ++dp;
       ++dstblk;
     }
+  }
+  // Reduce vector or_val accumulator once, after all rows
+  if (!_mm256_testz_si256(vor_val, vor_val)) {
+    or_val |= 1;
   }
 }
 
@@ -301,15 +310,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     return static_cast<int32_t>(block->length);
   }
 
-  // buffers shall be zeroed. unique_pre shoul be initialized by 0
-  std::unique_ptr<uint8_t[]> fwd_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Lcup);
-  std::unique_ptr<uint8_t[]> rev_buf = MAKE_UNIQUE<uint8_t[]>(MAX_Scup);
-  // memset(fwd_buf.get(), 0, sizeof(uint8_t) * (MAX_Lcup));
-  // memset(rev_buf.get(), 0, sizeof(uint8_t) * MAX_Scup);
+  // Thread-local scratch buffers: one allocation per thread for the lifetime of the program.
+  // Must be zeroed before each codeblock (encoders rely on zero-initialized state).
+  // Thread-local scratch buffers: one allocation per thread for the lifetime of the program.
+  // All positions written before they are read; no zeroing needed between codeblocks.
+  static thread_local uint8_t fwd_buf[MAX_Lcup];
+  static thread_local uint8_t rev_buf[MAX_Scup];
 
-  state_MS_enc MagSgn_encoder(fwd_buf.get());
-  state_MEL_enc MEL_encoder(rev_buf.get());
-  state_VLC_enc VLC_encoder(rev_buf.get());
+  state_MS_enc MagSgn_encoder(fwd_buf);
+  state_MEL_enc MEL_encoder(rev_buf);
+  state_VLC_enc VLC_encoder(rev_buf);
 
   int32_t rho0, rho1, U0, U1;
 
@@ -321,12 +331,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t *sp0  = block->sample_buf;
   int32_t *sp1  = sp0 + block->blksampl_stride;
 
-  alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 6U);
-  Eline[0]                 = 0;
-  auto E_p                 = Eline.get() + 1;
-  alignas(32) auto rholine = MAKE_UNIQUE<int32_t[]>(QW + 3U);
-  rholine[0]               = 0;
-  auto rho_p               = rholine.get() + 1;
+  // Stack-allocate Eline/rholine: bounded by max codeblock width (1024 → QW ≤ 512).
+  // Zero exactly the used range (matches make_unique<int32_t[]> zero-initialization).
+  alignas(32) int32_t Eline[2 * 512 + 6];
+  std::fill_n(Eline, 2U * QW + 6U, int32_t{0});
+  int32_t *E_p = Eline + 1;
+  alignas(32) int32_t rholine[512 + 3];
+  std::fill_n(rholine, QW + 3U, int32_t{0});
+  int32_t *rho_p = rholine + 1;
 
   int32_t gamma;
   int32_t context = 0, n_q;
@@ -496,8 +508,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   int32_t Emax0, Emax1;
   for (uint16_t qy = 1; qy < QH; qy++) {
-    E_p   = Eline.get() + 1;
-    rho_p = rholine.get() + 1;
+    E_p   = Eline + 1;
+    rho_p = rholine + 1;
     rho1  = 0;
 
     Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
@@ -675,7 +687,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       (fwd_buf[static_cast<size_t>(Lcup - 2)] & 0xF0) | static_cast<uint8_t>(Scup & 0x0f);
 
   // transfer Dcup[] to block->compressed_data
-  block->set_compressed_data(fwd_buf.get(), static_cast<uint16_t>(Lcup), MAX_Lref);
+  block->set_compressed_data(fwd_buf, static_cast<uint16_t>(Lcup), MAX_Lref);
   // set length of compressed data
   block->length         = static_cast<uint32_t>(Lcup);
   block->pass_length[0] = static_cast<unsigned int>(Lcup);

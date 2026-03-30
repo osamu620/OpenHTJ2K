@@ -26,7 +26,10 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <algorithm>
+#include <cstring>
 #include <cstdio>
+#include <functional>
 #include "decoder.hpp"
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   #include <filesystem>
@@ -63,6 +66,14 @@ class openhtj2k_decoder_impl {
 
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
+  void invoke_line_based(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
+                         std::vector<uint8_t> &, std::vector<bool> &);
+  void invoke_line_based_stream(std::function<void(uint32_t, int32_t *const *, uint16_t)> cb,
+                                std::vector<uint32_t> &, std::vector<uint32_t> &,
+                                std::vector<uint8_t> &, std::vector<bool> &);
+  void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
+                                    std::vector<uint32_t> &, std::vector<uint8_t> &,
+                                    std::vector<bool> &);
 
   void destroy();
 };
@@ -270,6 +281,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     tileSet[i].decode();
     tileSet[i].ycbcr_to_rgb();
     tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer
+    tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
 }
 
@@ -308,6 +320,358 @@ void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                std::vector<bool> &is_signed) {
   this->impl->invoke(buf, width, height, depth, is_signed);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
+                                               std::vector<uint32_t> &width,
+                                               std::vector<uint32_t> &height,
+                                               std::vector<uint8_t> &depth,
+                                               std::vector<bool> &is_signed) {
+  if (!is_parsed) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based().\n");
+    throw std::exception();
+  }
+  if (reduce_NL > this->get_minimum_DWT_levels()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level within some\n"
+        "tile-component.  Problem almost certainly caused by trying to discard more\n"
+        "resolution levels than the number of DWT levels used to compress a\n"
+        "tile-component.");
+  }
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+
+  // Allocate output buffers (identical to invoke()).
+  uint16_t num_components = main_header.SIZ->get_num_components();
+  element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
+  main_header.SIZ->get_image_size(siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
+  for (uint16_t c = 0; c < num_components; c++) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
+    const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
+    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    buf.emplace_back(new int32_t[width[c] * height[c]]);
+    depth.push_back(main_header.SIZ->get_bitdepth(c));
+    is_signed.push_back(main_header.SIZ->is_signed(c));
+  }
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
+
+  std::vector<j2k_tile> tileSet;
+  tileSet.resize(static_cast<size_t>(numTiles.x) * numTiles.y);
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+    tileSet[i].dec_init(i, main_header, reduce_NL);
+  }
+
+  uint16_t word;
+  SOT_marker tmpSOT;
+  uint16_t tile_index;
+  while ((word = in.get_word()) != _EOC) {
+    if (word != _SOT) {
+      printf("ERROR: SOT marker segment expected but %04X is found\n", word);
+      throw std::exception();
+    }
+    tmpSOT     = SOT_marker(in);
+    tile_index = tmpSOT.get_tile_index();
+    tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
+  }
+
+  for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
+    try {
+      tileSet[i].line_based_decode = true;
+      tileSet[i].create_tile_buf(main_header);
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+      tileSet[i].destroy();
+      throw std::runtime_error("Abort Decoding!");
+    }
+    // decode_line_based() replaces decode() + ycbcr_to_rgb() + finalize().
+    tileSet[i].decode_line_based(main_header, reduce_NL, buf);
+    tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
+  }
+}
+
+void openhtj2k_decoder::invoke_line_based(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
+                                          std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
+                                          std::vector<bool> &is_signed) {
+  this->impl->invoke_line_based(buf, width, height, depth, is_signed);
+}
+
+void openhtj2k_decoder_impl::invoke_line_based_stream(
+    std::function<void(uint32_t, int32_t *const *, uint16_t)> cb, std::vector<uint32_t> &width,
+    std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  if (!is_parsed) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_stream().\n");
+    throw std::exception();
+  }
+  if (reduce_NL > this->get_minimum_DWT_levels()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level within some\n"
+        "tile-component.  Problem almost certainly caused by trying to discard more\n"
+        "resolution levels than the number of DWT levels used to compress a\n"
+        "tile-component.");
+  }
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+
+  uint16_t num_components = main_header.SIZ->get_num_components();
+  element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
+  main_header.SIZ->get_image_size(siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
+  for (uint16_t c = 0; c < num_components; c++) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
+    const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
+    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    depth.push_back(main_header.SIZ->get_bitdepth(c));
+    is_signed.push_back(main_header.SIZ->is_signed(c));
+  }
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
+
+  std::vector<j2k_tile> tileSet;
+  tileSet.resize(static_cast<size_t>(numTiles.x) * numTiles.y);
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+    tileSet[i].dec_init(i, main_header, reduce_NL);
+  }
+
+  uint16_t word;
+  SOT_marker tmpSOT;
+  uint16_t tile_index;
+  while ((word = in.get_word()) != _EOC) {
+    if (word != _SOT) {
+      printf("ERROR: SOT marker segment expected but %04X is found\n", word);
+      throw std::exception();
+    }
+    tmpSOT     = SOT_marker(in);
+    tile_index = tmpSOT.get_tile_index();
+    tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
+  }
+
+  const uint32_t rscale = 1U << reduce_NL;
+
+  // Compute tile-component geometry (pixel offset + size at active resolution).
+  auto get_tile_geom = [&](uint32_t tx, uint32_t ty, uint16_t c, uint32_t &x_off,
+                           uint32_t &y_off, uint32_t &t_w, uint32_t &t_h) {
+    element_siz Rsiz_c;
+    main_header.SIZ->get_subsampling_factor(Rsiz_c, c);
+    const uint32_t x0_c  = ceil_int(Osiz.x, Rsiz_c.x);
+    const uint32_t y0_c  = ceil_int(Osiz.y, Rsiz_c.y);
+    const uint32_t gtx0  = std::max(TOsiz.x + tx * Tsiz.x, Osiz.x);
+    const uint32_t gtx1  = std::min(TOsiz.x + (tx + 1) * Tsiz.x, siz.x);
+    const uint32_t gty0  = std::max(TOsiz.y + ty * Tsiz.y, Osiz.y);
+    const uint32_t gty1  = std::min(TOsiz.y + (ty + 1) * Tsiz.y, siz.y);
+    const uint32_t tcx0  = ceil_int(gtx0, Rsiz_c.x);
+    const uint32_t tcx1  = ceil_int(gtx1, Rsiz_c.x);
+    const uint32_t tcy0  = ceil_int(gty0, Rsiz_c.y);
+    const uint32_t tcy1  = ceil_int(gty1, Rsiz_c.y);
+    x_off = ceil_int(tcx0, rscale) - ceil_int(x0_c, rscale);
+    y_off = ceil_int(tcy0, rscale) - ceil_int(y0_c, rscale);
+    t_w   = ceil_int(tcx1, rscale) - ceil_int(tcx0, rscale);
+    t_h   = ceil_int(tcy1, rscale) - ceil_int(tcy0, rscale);
+  };
+
+  uint32_t global_y = 0;
+
+  if (numTiles.x == 1) {
+    // Fast path: single tile column — deliver rows directly to user callback, no accumulator.
+    for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
+      uint32_t x_off, y_off, t_w, band_h0;
+      get_tile_geom(0, ty, 0, x_off, y_off, t_w, band_h0);
+      const uint32_t tile_idx = ty;
+      try {
+        tileSet[tile_idx].line_based_decode = true;
+        tileSet[tile_idx].create_tile_buf(main_header);
+      } catch (std::exception &exc) {
+        printf("ERROR: %s\n", exc.what());
+        tileSet[tile_idx].destroy();
+        throw std::runtime_error("Abort Decoding!");
+      }
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL,
+          [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
+            cb(global_y + y_local, rows, nc);
+          });
+      tileSet[tile_idx].destroy();
+      global_y += band_h0;
+    }
+    return;
+  }
+
+  // General path: multiple tile columns — scatter into per-band-row accumulators.
+  for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
+    // Compute band height per component (same for all tx in this tile row).
+    std::vector<uint32_t> band_h(num_components);
+    {
+      uint32_t x_off, y_off, t_w;
+      for (uint16_t c = 0; c < num_components; ++c)
+        get_tile_geom(0, ty, c, x_off, y_off, t_w, band_h[c]);
+    }
+
+    // Allocate full-width accumulator buffers for this tile-row band.
+    std::vector<std::vector<int32_t>> accum(num_components);
+    for (uint16_t c = 0; c < num_components; ++c)
+      accum[c].assign(static_cast<size_t>(band_h[c]) * width[c], 0);
+
+    for (uint32_t tx = 0; tx < numTiles.x; ++tx) {
+      const uint32_t tile_idx = ty * numTiles.x + tx;
+
+      // Compute per-component x-offsets and widths for this tile.
+      std::vector<uint32_t> tile_x_off(num_components), tile_w(num_components);
+      {
+        uint32_t x_off, y_off, t_w, t_h;
+        for (uint16_t c = 0; c < num_components; ++c) {
+          get_tile_geom(tx, ty, c, x_off, y_off, t_w, t_h);
+          tile_x_off[c] = x_off;
+          tile_w[c]     = t_w;
+        }
+      }
+
+      // Internal scatter callback: copy tile-local rows into accumulator.
+      auto scatter = [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
+        for (uint16_t c = 0; c < nc; ++c) {
+          if (tile_w[c] == 0 || y_local >= band_h[c]) continue;
+          int32_t *dst =
+              accum[c].data() + static_cast<ptrdiff_t>(y_local) * width[c] + tile_x_off[c];
+          std::memcpy(dst, rows[c], tile_w[c] * sizeof(int32_t));
+        }
+      };
+
+      try {
+        tileSet[tile_idx].line_based_decode = true;
+        tileSet[tile_idx].create_tile_buf(main_header);
+      } catch (std::exception &exc) {
+        printf("ERROR: %s\n", exc.what());
+        tileSet[tile_idx].destroy();
+        throw std::runtime_error("Abort Decoding!");
+      }
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter);
+      tileSet[tile_idx].destroy();  // Release tile-internal buffers immediately
+    }
+
+    // Deliver complete rows for this tile-row band to the user callback.
+    std::vector<int32_t *> row_ptrs(num_components);
+    for (uint32_t y = 0; y < band_h[0]; ++y) {
+      for (uint16_t c = 0; c < num_components; ++c) {
+        // For subsampled components, clamp to last valid row.
+        const uint32_t cy = (band_h[c] > 0) ? std::min(y, band_h[c] - 1) : 0;
+        row_ptrs[c] = accum[c].data() + static_cast<ptrdiff_t>(cy) * width[c];
+      }
+      cb(global_y + y, row_ptrs.data(), num_components);
+    }
+    global_y += band_h[0];
+  }
+}
+
+void openhtj2k_decoder::invoke_line_based_stream(
+    std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb, std::vector<uint32_t> &width,
+    std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  this->impl->invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
+}
+
+void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
+                                                          std::vector<uint32_t> &width,
+                                                          std::vector<uint32_t> &height,
+                                                          std::vector<uint8_t> &depth,
+                                                          std::vector<bool> &is_signed) {
+  if (!is_parsed) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_predecoded().\n");
+    throw std::exception();
+  }
+  if (reduce_NL > this->get_minimum_DWT_levels()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level within some\n"
+        "tile-component.  Problem almost certainly caused by trying to discard more\n"
+        "resolution levels than the number of DWT levels used to compress a\n"
+        "tile-component.");
+  }
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+
+  uint16_t num_components = main_header.SIZ->get_num_components();
+  element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
+  main_header.SIZ->get_image_size(siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
+  for (uint16_t c = 0; c < num_components; c++) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
+    const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
+    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    buf.emplace_back(new int32_t[width[c] * height[c]]);
+    depth.push_back(main_header.SIZ->get_bitdepth(c));
+    is_signed.push_back(main_header.SIZ->is_signed(c));
+  }
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
+
+  std::vector<j2k_tile> tileSet;
+  tileSet.resize(static_cast<size_t>(numTiles.x) * numTiles.y);
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+    tileSet[i].dec_init(i, main_header, reduce_NL);
+  }
+
+  uint16_t word;
+  SOT_marker tmpSOT;
+  uint16_t tile_index;
+  while ((word = in.get_word()) != _EOC) {
+    if (word != _SOT) {
+      printf("ERROR: SOT marker segment expected but %04X is found\n", word);
+      throw std::exception();
+    }
+    tmpSOT     = SOT_marker(in);
+    tile_index = tmpSOT.get_tile_index();
+    tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
+  }
+
+  for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
+    try {
+      tileSet[i].create_tile_buf(main_header);
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+      tileSet[i].destroy();
+      throw std::runtime_error("Abort Decoding!");
+    }
+    tileSet[i].decode_line_based_predecoded(main_header, reduce_NL, buf);
+  }
+}
+
+void openhtj2k_decoder::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
+                                                     std::vector<uint32_t> &width,
+                                                     std::vector<uint32_t> &height,
+                                                     std::vector<uint8_t> &depth,
+                                                     std::vector<bool> &is_signed) {
+  this->impl->invoke_line_based_predecoded(buf, width, height, depth, is_signed);
 }
 
 void openhtj2k_decoder::destroy() { this->impl->destroy(); }

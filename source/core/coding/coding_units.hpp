@@ -29,8 +29,66 @@
 #pragma once
 
 #include "j2kmarkers.hpp"
+
+#include <atomic>
 #include <cstring>
 #include <functional>
+#include <mutex>
+
+/********************************************************************************
+ * cblk_data_pool — monotonic bump allocator for HTJ2K codeblock bitstreams
+ *
+ * Single-threaded bump allocator for HTJ2K encoder compressed bitstreams.
+ * Each encoder thread owns its own instance via a per-thread slot (g_tl_pool_slot),
+ * so no synchronisation is needed — bump() and trim() are plain arithmetic.
+ * Replaces ~11,520 individual malloc() calls per 4K tile with a handful of 2 MB slabs.
+ *******************************************************************************/
+class cblk_data_pool {
+  static constexpr size_t SLAB_BYTES = 2u << 20;  // 2 MB per slab
+  struct Slab {
+    uint8_t *ptr;
+    size_t used;
+    size_t cap;
+  };
+  std::vector<Slab> slabs;
+
+ public:
+  cblk_data_pool() { slabs.reserve(8); }
+  cblk_data_pool(const cblk_data_pool &)          = delete;
+  cblk_data_pool &operator=(const cblk_data_pool &) = delete;
+
+  ~cblk_data_pool() {
+    for (auto &s : slabs) free(s.ptr);
+  }
+
+  // Allocate n bytes (rounded to 8-byte alignment).  NOT thread-safe.
+  uint8_t *bump(size_t n) {
+    n = (n + 7u) & ~7u;
+    if (slabs.empty() || slabs.back().used + n > slabs.back().cap) {
+      const size_t cap = (n > SLAB_BYTES) ? n : SLAB_BYTES;
+      slabs.push_back({static_cast<uint8_t *>(malloc(cap)), 0u, cap});
+    }
+    uint8_t *p = slabs.back().ptr + slabs.back().used;
+    slabs.back().used += n;
+    return p;
+  }
+
+  // Release the last n bytes of the most-recent bump() (must still be in the same slab).
+  void trim(size_t n) noexcept {
+    if (!slabs.empty() && slabs.back().used >= n) slabs.back().used -= n;
+  }
+
+  // Reset all slabs to empty, keeping the allocated pages so they are already
+  // faulted-in for the next tile encode (avoids repeated mmap/munmap overhead).
+  void reset() noexcept {
+    for (auto &s : slabs) s.used = 0;
+    // Collapse to one slab to bound long-term memory footprint.
+    while (slabs.size() > 1) {
+      free(slabs.back().ptr);
+      slabs.pop_back();
+    }
+  }
+};
 
 /********************************************************************************
  * j2k_region
@@ -74,13 +132,16 @@ class j2k_codeblock : public j2k_region {
   const uint8_t band;
   const uint8_t M_b;
   [[maybe_unused]] const uint32_t index;
+  // When true, compressed_data was bump-allocated by a cblk_data_pool owned by
+  // j2k_tile. The destructor must NOT free it; the pool manages the lifetime.
+  bool compressed_is_pooled = false;
 
  public:
   int32_t *sample_buf;
   size_t blksampl_stride;
   uint8_t *block_states;
   size_t blkstate_stride;
-  sprec_t *const i_samples;
+  sprec_t *i_samples;
   const uint32_t band_stride;
   [[maybe_unused]] const uint8_t R_b;
   const uint8_t transformation;
@@ -108,7 +169,7 @@ class j2k_codeblock : public j2k_region {
                 const uint16_t &numlayers, const uint8_t &codeblock_style, const element_siz &p0,
                 const element_siz &p1, const element_siz &s);
   ~j2k_codeblock() {
-    if (compressed_data != nullptr) {
+    if (compressed_data != nullptr && !compressed_is_pooled) {
       free(compressed_data);
     }
   }
@@ -157,9 +218,14 @@ class j2k_subband : public j2k_region {
   // j2k_subband();
   j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, uint8_t transformation, uint8_t R_b,
               uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta, float nominal_range,
-              sprec_t *ibuf);
+              sprec_t *ibuf, bool no_alloc = false);
   ~j2k_subband();
-  void destroy() { aligned_mem_free(i_samples); }
+  void destroy() {
+    if (orientation != BAND_LL) {
+      aligned_mem_free(i_samples);
+      i_samples = nullptr;
+    }
+  }
 };
 
 /********************************************************************************
@@ -295,12 +361,13 @@ class j2k_resolution : public j2k_region {
   sprec_t *i_samples;
   //  float *f_samples;
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
-                 const uint32_t &nph);
+                 const uint32_t &nph, bool no_alloc = false);
   ~j2k_resolution();
   [[maybe_unused]] uint8_t get_index() const { return index; }
   void create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                        std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
-                       uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth);
+                       uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
+                       bool line_based = false);
   void create_precincts(element_siz PP, uint16_t num_layers, element_siz codeblock_size, uint8_t Cmodes);
 
   // void create_precinct_bands(uint16_t num_layers, element_siz codeblock_size, uint8_t Cmodes);
@@ -312,9 +379,9 @@ class j2k_resolution : public j2k_region {
     child_ranges[2] = ranges[2];
     child_ranges[3] = ranges[3];
   }
-  void scale();
   void destroy() {
     aligned_mem_free(i_samples);
+    i_samples = nullptr;
     for (uint8_t b = 0; b < num_bands; ++b) {
       if (subbands != nullptr) {
         subbands[b]->destroy();
@@ -392,6 +459,10 @@ class j2k_tile_component : public j2k_tile_base {
   uint8_t ROIshift;
   // pointer to instances of resolution class
   std::unique_ptr<std::unique_ptr<j2k_resolution>[]> resolution;
+  // opaque line-decode state (allocated by init_line_decode, freed by finalize_line_decode)
+  struct j2k_tcomp_line_dec *line_dec;
+  // opaque line-encode state (allocated by init_line_encode, freed by finalize_line_encode)
+  struct j2k_tcomp_line_enc *line_enc;
   // set members related to COC marker
   void setCOCparams(COC_marker *COC);
   // set members related to QCC marker
@@ -402,13 +473,19 @@ class j2k_tile_component : public j2k_tile_base {
  public:
   // component bit-depth
   uint8_t bitdepth;
+  // LB encode: raw input pointer + dc-offset parameters (avoids allocating tcomp->samples)
+  const int32_t *lb_src_ptr = nullptr;
+  uint32_t lb_src_stride    = 0;
+  int32_t lb_dc_offset      = 0;
+  int32_t lb_dc_shiftup     = 0;
+  bool lb_enc_mode          = false;  // true in any LB encode path (streaming or buffered)
   // default constructor
   j2k_tile_component();
   // destructor
   ~j2k_tile_component();
   // initialization of coordinates and parameters defined in tile-part markers
   void init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile, uint16_t c,
-            std::vector<int32_t *> img = {});
+            std::vector<int32_t *> img = {}, bool lb_enc = false);
   int32_t *get_sample_address(uint32_t x, uint32_t y);
   uint8_t get_dwt_levels();
   uint8_t get_transformation();
@@ -418,9 +495,28 @@ class j2k_tile_component : public j2k_tile_base {
   [[maybe_unused]] element_siz get_codeblock_size();
   [[maybe_unused]] [[nodiscard]] uint8_t get_ROIshift() const;
   j2k_resolution *access_resolution(uint8_t r);
-  void create_resolutions(uint16_t numlayers);
+  void create_resolutions(uint16_t numlayers, bool line_based = false, bool enc_lb = false);
 
   void perform_dc_offset(uint8_t transformation, bool is_signed);
+
+  // ── Line-based decode API ─────────────────────────────────────────────────
+  // init_line_decode(): must be called after all packets are parsed.
+  // pull_line():        returns the next decoded row (float) into out[0..width-1].
+  //                     Returns false when all rows are exhausted.
+  // finalize_line_decode(): frees state allocated by init_line_decode().
+  void init_line_decode(bool ring_mode = false);
+  bool pull_line(sprec_t *out);
+  void finalize_line_decode();
+  // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
+  void mark_line_dec_predecoded();
+
+  // ── Line-based encode API ─────────────────────────────────────────────────
+  // init_line_encode():     allocates FDWT state chain; call after enc_init().
+  // push_line_enc(in):      feeds one float input row into the FDWT chain.
+  // finalize_line_encode(): flushes states, fills subband buffers, frees state.
+  void init_line_encode();
+  void push_line_enc(const sprec_t *in);
+  void finalize_line_encode();
 
   void destroy() {
     for (uint8_t r = 0; r < this->NL; ++r) {
@@ -478,6 +574,15 @@ class j2k_tile : public j2k_tile_base {
   uint16_t Ccap15;
   // progression order information for both COD and POC
   POC_marker porder_info;
+  // Per-thread bump allocators for HTJ2K encode compressed bitstreams.
+  // One pool per concurrent encoder thread; no locking required.
+  // Heap-allocated to keep j2k_tile movable (std::atomic is not movable).
+  struct EncodePoolCtx {
+    std::vector<std::unique_ptr<cblk_data_pool>> pools;
+    uint32_t gen = 0;
+    std::atomic<int> slot_cnt{0};
+  };
+  std::unique_ptr<EncodePoolCtx> encode_pool_ctx;
   // return SOP is used or not
   [[nodiscard]] bool is_use_SOP() const { return this->use_SOP; }
   // return EPH is used or not
@@ -492,6 +597,9 @@ class j2k_tile : public j2k_tile_base {
   void find_gcd_of_precinct_size(element_siz &out);
 
  public:
+  // When true, j2k_subband constructors skip large non-LL buffer allocation.
+  // Set this before calling create_tile_buf() to enable ring-mode decoder RSS savings.
+  bool line_based_decode = false;
   j2k_tile();
   void destroy() {
     for (uint16_t c = 0; c < this->num_components; ++c) {
@@ -511,16 +619,40 @@ class j2k_tile : public j2k_tile_base {
   void ycbcr_to_rgb();
   // inverse DC offset and clipping
   void finalize(j2k_main_header &main_header, uint8_t reduce_NL, std::vector<int32_t *> &dst);
+  // Line-based decode: parses packets first (via create_tile_buf), then lazily
+  // pulls float rows component-by-component, applies per-row YCbCr→RGB and
+  // float→int32 conversion.  Does NOT call decode() / ycbcr_to_rgb() / finalize().
+  void decode_line_based(j2k_main_header &main_header, uint8_t reduce_NL,
+                         std::vector<int32_t *> &dst);
+  // Streaming variant: same as decode_line_based() but outputs one row at a time via
+  // a callback instead of writing to a pre-allocated full-image buffer.
+  // The callback receives (y, row_ptrs[NC], NC) where row_ptrs[c] points to one
+  // decoded int32_t row for component c.  Allocates only per-row scratch buffers.
+  void decode_line_based_stream(
+      j2k_main_header &main_header, uint8_t reduce_NL,
+      const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb);
+  // Diagnostic variant: decodes all codeblocks first (no IDWT), then uses
+  // the pre-decoded sb->i_samples to bypass decode_strip() in row_ptr().
+  // Used by lb_compare to isolate decode_strip bugs from IDWT state machine bugs.
+  void decode_line_based_predecoded(j2k_main_header &main_header, uint8_t reduce_NL,
+                                    std::vector<int32_t *> &dst);
 
   // Encoding
   // Initialization with tile-index
-  void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img);
+  void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
+                bool line_based = false, bool streaming = false);
   // DC offsetting
   int perform_dc_offset(j2k_main_header &main_header);
   // forward color transform
   void rgb_to_ycbcr();
   // encoding (does block encoding and FDWT) function for a tile
   uint8_t *encode();
+  // line-based encoding: uses stateful FDWT instead of batch FDWT
+  uint8_t *encode_line_based();
+  // streaming line-based encoding: pulls rows via callback instead of pre-allocated buffer
+  uint8_t *encode_line_based_stream(
+      std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn,
+      const std::vector<uint32_t> &img_comp_widths);
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination

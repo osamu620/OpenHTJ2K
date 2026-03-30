@@ -10,4 +10,5 @@ target_sources(open_htj2k
     ht_block_encoding_avx2.cpp
     block_decoding.cpp
     mq_decoder.cpp
+    subband_row_buf.cpp
 )
