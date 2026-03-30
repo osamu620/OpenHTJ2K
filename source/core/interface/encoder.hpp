@@ -33,6 +33,13 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
+  #define OPENHTJ2K_EXPORT __declspec(dllexport)
+#else
+  #define OPENHTJ2K_EXPORT
+#endif
+
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
   #include <tiffio.h>
 #endif
@@ -49,19 +56,11 @@ class image {
   std::vector<bool> is_signed;
 
  public:
-#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
-  __declspec(dllexport) explicit image(const std::vector<std::string> &filenames);
-  __declspec(dllexport) int read_pnmpgx(const std::string &filename, const uint16_t nc);
+OPENHTJ2K_EXPORT  explicit image(const std::vector<std::string> &filenames);
+OPENHTJ2K_EXPORT  int read_pnmpgx(const std::string &filename, uint16_t nc);
   #if defined(OPENHTJ2K_TIFF_SUPPORT)
-  __declspec(dllexport) int read_tiff(const std::string &filename, const uint16_t nc);
+OPENHTJ2K_EXPORT  int read_tiff(const std::string &filename);
   #endif
-#else
-  explicit image(const std::vector<std::string> &filenames);
-  int read_pnmpgx(const std::string &filename, uint16_t nc);
-  #if defined(OPENHTJ2K_TIFF_SUPPORT)
-  int read_tiff(const std::string &filename);
-  #endif
-#endif
 
   [[nodiscard]] uint32_t get_width() const { return this->width; }
   [[nodiscard]] uint32_t get_height() const { return this->height; }
@@ -140,26 +139,13 @@ class openhtj2k_encoder {
   std::unique_ptr<class openhtj2k_encoder_impl> impl;
 
  public:
-#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
-  __declspec(dllexport)
-      openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz,
-                        cod_params &cod, qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space,
-                        uint32_t num_threads);
-  __declspec(dllexport) void set_output_buffer(std::vector<uint8_t> &output_buf);
-  __declspec(dllexport) size_t invoke();
-  __declspec(dllexport) size_t invoke_line_based();
-  __declspec(dllexport) size_t invoke_line_based_stream(
-      std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
-  __declspec(dllexport) ~openhtj2k_encoder();
-#else
-  openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz, cod_params &cod,
+OPENHTJ2K_EXPORT openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz, cod_params &cod,
                     qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space,
                     uint32_t num_threads);
-  void set_output_buffer(std::vector<uint8_t> &output_buf);
-  size_t invoke();
-  size_t invoke_line_based();
-  size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
-  ~openhtj2k_encoder();
-#endif
+OPENHTJ2K_EXPORT void set_output_buffer(std::vector<uint8_t> &output_buf);
+OPENHTJ2K_EXPORT size_t invoke();
+OPENHTJ2K_EXPORT size_t invoke_line_based();
+OPENHTJ2K_EXPORT size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
+OPENHTJ2K_EXPORT ~openhtj2k_encoder();
 };
 }  // namespace open_htj2k
