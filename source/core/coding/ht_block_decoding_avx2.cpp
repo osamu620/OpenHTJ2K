@@ -669,7 +669,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   const uint8_t S_skip = 0;
 
   if (block->num_passes > 3) {
-    for (uint32_t i = 0; i < block->pass_length.size(); i++) {
+    for (uint32_t i = 0; i < block->pass_length_count; i++) {
       if (block->pass_length[i] != 0) {
         break;
       }
@@ -697,7 +697,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   if (num_ht_passes > 0) {
     std::vector<uint8_t> all_segments;
     all_segments.reserve(3);
-    for (uint32_t i = 0; i < block->pass_length.size(); i++) {
+    for (uint32_t i = 0; i < block->pass_length_count; i++) {
       if (block->pass_length[i] != 0) {
         all_segments.push_back(static_cast<uint8_t>(i));
       }

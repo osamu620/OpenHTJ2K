@@ -962,14 +962,14 @@ int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept {
       HTMagRefLength         = termSPandMR(SigProp, MagRef);
       block->num_passes      = static_cast<uint8_t>(block->num_passes + 2);
       block->layer_passes[0] = static_cast<uint8_t>(block->layer_passes[0] + 2);
-      block->pass_length.push_back(SigProp.get_length());
-      block->pass_length.push_back(MagRef.get_length());
+      block->pass_length[block->pass_length_count++] = SigProp.get_length();
+      block->pass_length[block->pass_length_count++] = MagRef.get_length();
     } else {
       SigProp.termSP();
       HTMagRefLength         = static_cast<int32_t>(SigProp.get_length());
       block->num_passes      = static_cast<uint8_t>(block->num_passes + 1);
       block->layer_passes[0] = static_cast<uint8_t>(block->layer_passes[0] + 1);
-      block->pass_length.push_back(SigProp.get_length());
+      block->pass_length[block->pass_length_count++] = SigProp.get_length();
     }
     if (HTMagRefLength) {
       block->length += static_cast<unsigned int>(HTMagRefLength);

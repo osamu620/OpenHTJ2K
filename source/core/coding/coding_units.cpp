@@ -402,19 +402,12 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       Lblock(0),
       already_included(false),
       refsegment(false) {
-  const uint32_t QWx2 = round_up(size.x, 8U);  // TODO: needs padding?
-  // const uint32_t QHx2 = round_up(size.y, 8U);  // TODO: needs padding?
-  blksampl_stride = QWx2;
-  blkstate_stride = QWx2 + 2;
-  //  block_states        = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
-  //  memset(block_states.get(), 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
-
-  //  sample_buf = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(QWx2 * QHx2));
-  //  memset(sample_buf.get(), 0, sizeof(int32_t) * QWx2 * QHx2);
-  this->layer_start  = MAKE_UNIQUE<uint8_t[]>(num_layers);
-  this->layer_passes = MAKE_UNIQUE<uint8_t[]>(num_layers);
-  if ((Cmodes & 0x40) == 0) this->pass_length.reserve(109);
-  this->pass_length = std::vector<uint32_t>(num_layers, 0);  // critical section
+  const uint32_t QWx2 = round_up(size.x, 8U);
+  blksampl_stride    = QWx2;
+  blkstate_stride    = QWx2 + 2;
+  memset(this->pass_length, 0, sizeof(this->pass_length));
+  this->pass_length_count = 0;
+  // layer_start and layer_passes are set by j2k_precinct_subband after construction
 }
 
 uint8_t j2k_codeblock::get_Mb() const { return this->M_b; }
@@ -541,18 +534,17 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
   }
 
   const uint32_t num_codeblocks = this->num_codeblock_x * this->num_codeblock_y;
-  //  const uint32_t band_stride    = stride;
   if (num_codeblocks != 0) {
     inclusion_info = new tagtree(this->num_codeblock_x, this->num_codeblock_y);
     ZBP_info       = new tagtree(this->num_codeblock_x, this->num_codeblock_y);
-    //    inclusion_info =
-    //        MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);            // critical
-    //        section
-    //    ZBP_info = MAKE_UNIQUE<tagtree>(this->num_codeblock_x, this->num_codeblock_y);     // critical
-    //    section
-    this->codeblocks = new j2k_codeblock
-        *[num_codeblocks];  // MAKE_UNIQUE<std::unique_ptr<j2k_codeblock>[]>(num_codeblocks);
-                            // // critical section
+
+    // Single flat buffer for all layer_start + layer_passes arrays
+    cb_layer_pool = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(num_codeblocks) * 2 * num_layers);
+    memset(cb_layer_pool.get(), 0, static_cast<size_t>(num_codeblocks) * 2 * num_layers);
+
+    // Single allocation for all codeblock objects (placement new)
+    this->codeblocks = static_cast<j2k_codeblock *>(operator new[](sizeof(j2k_codeblock) * num_codeblocks));
+    uint8_t *layer_pool_ptr = cb_layer_pool.get();
     for (uint32_t cb = 0; cb < num_codeblocks; cb++) {
       const uint32_t x = cb % this->num_codeblock_x;
       const uint32_t y = cb / this->num_codeblock_x;
@@ -563,16 +555,15 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
                                  std::min(pos1.y, codeblock_size.y * (y + 1 + pos0.y / codeblock_size.y)));
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
       const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
-      this->codeblocks[cb] =
-          new j2k_codeblock(cb, orientation, M_b, R_b, transformation, stepsize, band_stride, ibuf, offset,
-                            num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
-      //      this->codeblocks[cb] =
-      //          MAKE_UNIQUE<j2k_codeblock>(cb, orientation, M_b, R_b, transformation, stepsize,
-      //          band_stride, ibuf,
-      //                                     offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
+      j2k_codeblock *blk =
+          new (&this->codeblocks[cb]) j2k_codeblock(cb, orientation, M_b, R_b, transformation, stepsize,
+                                                    band_stride, ibuf, offset, num_layers, Cmodes,
+                                                    cblkpos0, cblkpos1, cblksize);
+      // Hand out slices of the layer pool (layer_start then layer_passes)
+      blk->layer_start  = layer_pool_ptr;
+      blk->layer_passes = layer_pool_ptr + num_layers;
+      layer_pool_ptr += 2 * num_layers;
     }
-  } else {
-    // this->codeblocks = {};
   }
 }
 
@@ -581,7 +572,7 @@ tagtree_node *j2k_precinct_subband::get_inclusion_node(uint32_t i) {
 }
 tagtree_node *j2k_precinct_subband::get_ZBP_node(uint32_t i) { return &this->ZBP_info->node[i]; }
 
-j2k_codeblock *j2k_precinct_subband::access_codeblock(uint32_t i) { return this->codeblocks[i]; }
+j2k_codeblock *j2k_precinct_subband::access_codeblock(uint32_t i) { return &this->codeblocks[i]; }
 
 void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_t layer_idx,
                                                uint16_t Ccap15) {
@@ -923,8 +914,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
       }
 
       block->num_passes = static_cast<uint8_t>(block->num_passes + segment_passes);
-      while (block->pass_length.size() < block->num_passes) {
-        block->pass_length.push_back(0);
+      while (block->pass_length_count < block->num_passes) {
+        block->pass_length[block->pass_length_count++] = 0;
       }
       block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
       // number_of_bytes += segment_bytes;
@@ -993,8 +984,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           }
 
           block->num_passes = static_cast<uint8_t>(block->num_passes + segment_passes);
-          while (block->pass_length.size() < block->num_passes) {
-            block->pass_length.push_back(0);
+          while (block->pass_length_count < block->num_passes) {
+            block->pass_length[block->pass_length_count++] = 0;
           }
           block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
           // number_of_bytes += segment_bytes;
@@ -1019,8 +1010,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           segment_bytes = packet_header->get_N_bits(bits_to_read);
           new_passes -= static_cast<uint8_t>(segment_passes);
           block->num_passes = static_cast<uint8_t>(block->num_passes + segment_passes);
-          while (block->pass_length.size() < block->num_passes) {
-            block->pass_length.push_back(0);
+          while (block->pass_length_count < block->num_passes) {
+            block->pass_length[block->pass_length_count++] = 0;
           }
           block->pass_length[static_cast<size_t>(block->num_passes - 1)] = segment_bytes;
           // number_of_bytes += segment_bytes;
