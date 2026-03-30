@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <cstring>
+#include <cmath>
 #include "dwt.hpp"
 #include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
@@ -53,24 +54,28 @@ void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u
 
   const int32_t offset = left + i0 % 2;
   for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
-    int32_t sum = X[n];
+    float sum = X[n];
     sum += X[n + 2];
-    X[n + 1] = static_cast<sprec_t>(X[n + 1] + ((Acoeff * sum + Aoffset) >> Ashift));
+    // X[n + 1] = static_cast<sprec_t>(X[n + 1] + ((Acoeff * sum + Aoffset) >> Ashift));
+    X[n + 1] += fA * sum;
   }
   for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-    int32_t sum = X[n - 1];
+    float sum = X[n - 1];
     sum += X[n + 1];
-    X[n] = static_cast<sprec_t>(X[n] + ((Bcoeff * sum + Boffset) >> Bshift));
+    // X[n] = static_cast<sprec_t>(X[n] + ((Bcoeff * sum + Boffset) >> Bshift));
+    X[n] += fB * sum;
   }
   for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
-    int32_t sum = X[n];
+    float sum = X[n];
     sum += X[n + 2];
-    X[n + 1] = static_cast<sprec_t>(X[n + 1] + ((Ccoeff * sum + Coffset) >> Cshift));
+    // X[n + 1] = static_cast<sprec_t>(X[n + 1] + ((Ccoeff * sum + Coffset) >> Cshift));
+    X[n + 1] += fC * sum;
   }
   for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-    int32_t sum = X[n - 1];
+    float sum = X[n - 1];
     sum += X[n + 1];
-    X[n] = static_cast<sprec_t>(X[n] + ((Dcoeff * sum + Doffset) >> Dshift));
+    // X[n] = static_cast<sprec_t>(X[n] + ((Dcoeff * sum + Doffset) >> Dshift));
+    X[n] += fD * sum;
   }
 };
 
@@ -83,26 +88,45 @@ void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
   // X += left - i0 % 2;
   const int32_t offset = left + i0 % 2;
   for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
-    int32_t sum = X[n];
-    sum += X[n + 2];
-    X[n + 1] = static_cast<sprec_t>(X[n + 1] - (sum >> 1));
+    float sum = X[n] + X[n + 2];
+    X[n + 1] -= floorf(sum * 0.5f);
   }
   for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-    int32_t sum = X[n - 1];
-    sum += X[n + 1];
-    X[n] = static_cast<sprec_t>(X[n] + ((sum + 2) >> 2));
+    float sum = X[n - 1] + X[n + 1];
+    X[n] += floorf((sum + 2) * 0.25f);
   }
 };
 
 // 1-dimensional FDWT
 static inline void fdwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, const int32_t left, const int32_t right,
                                     const int32_t i0, const int32_t i1, const uint8_t transformation) {
-  //  const uint32_t len = round_up(i1 - i0 + left + right, SIMD_PADDING);
-  //  auto *Xext         = static_cast<int16_t *>(aligned_mem_alloc(sizeof(int16_t) * len, 32));
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
   fdwt_1d_filtr_fixed[transformation](buf, left, i0, i1);
   memcpy(in, buf + left, sizeof(sprec_t) * (static_cast<size_t>(i1 - i0)));
-  //  aligned_mem_free(Xext);
+}
+
+// In-place 1-D FDWT for interior rows (not first or last).
+// Operates directly on in[-left..width+SIMD_LEN_I32-1] without copying to/from an external buffer.
+// Precondition: those memory locations are within the tile allocation (guaranteed for interior rows).
+static inline void fdwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int32_t right,
+                                      const int32_t i0, const int32_t i1,
+                                      const uint8_t transformation) {
+  const int32_t width = i1 - i0;
+  // Save regions that the filter will temporarily overwrite with PSE data or SIMD tail writes.
+  sprec_t left_save[4];
+  sprec_t right_save[SIMD_LEN_I32];
+  for (int32_t i = 0; i < left; ++i) left_save[i] = in[-left + i];
+  for (int32_t i = 0; i < SIMD_LEN_I32; ++i) right_save[i] = in[width + i];
+  // Fill left PSE into in[-left..-1] and right PSE into in[width..width+right-1].
+  for (int32_t i = 1; i <= left; ++i)
+    in[-i] = in[PSEo(i0 - i, i0, i1)];
+  for (int32_t i = 1; i <= right; ++i)
+    in[width + i - 1] = in[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
+  // Filter in-place: in-left is the extended buffer (left PSE | data | right PSE).
+  fdwt_1d_filtr_fixed[transformation](in - left, left, i0, i1);
+  // Restore the saved regions (DWT output is in in[0..width-1], boundary regions are scratch).
+  for (int32_t i = 0; i < left; ++i) in[-left + i] = left_save[i];
+  for (int32_t i = 0; i < SIMD_LEN_I32; ++i) in[width + i] = right_save[i];
 }
 
 // FDWT for horizontal direction
@@ -120,17 +144,24 @@ static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
         in[row * stride] = (transformation) ? in[row * stride] : in[row * stride];
       } else {
         in[row * stride] =
-            (transformation) ? static_cast<sprec_t>(in[row * stride] << 1) : in[row * stride];
+            (transformation) ? floorf(in[row * stride] * 2.0f) : in[row * stride];
       }
     }
   } else {
     // need to perform symmetric extension
-    const int32_t len = u1 - u0 + left + right;
-    auto *Xext        = static_cast<sprec_t *>(aligned_mem_alloc(
+    const int32_t nrows = v1 - v0;
+    const int32_t len   = u1 - u0 + left + right;
+    // Xext is used only for the first and last rows; interior rows use in-place transform.
+    auto *Xext = static_cast<sprec_t *>(aligned_mem_alloc(
         sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
-    // #pragma omp parallel for
-    for (int32_t row = 0; row < v1 - v0; ++row) {
-      fdwt_1d_sr_fixed(Xext, in, left, right, u0, u1, transformation);
+    for (int32_t row = 0; row < nrows; ++row) {
+      if (row == 0 || row == nrows - 1) {
+        // First/last rows: use copy-based path (in[-left] or in[width+SIMD_LEN_I32-1] may be
+        // outside the tile allocation for the first and last rows respectively).
+        fdwt_1d_sr_fixed(Xext, in, left, right, u0, u1, transformation);
+      } else {
+        fdwt_1d_sr_inplace(in, left, right, u0, u1, transformation);
+      }
       in += stride;
     }
     aligned_mem_free(Xext);
@@ -138,7 +169,8 @@ static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
 }
 
 void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                             const int32_t v1, const int32_t stride) {
+                             const int32_t v1, const int32_t stride, sprec_t *pse_scratch,
+                             sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {4, 3};
   constexpr int32_t num_pse_i1[2] = {3, 4};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -148,15 +180,16 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
-        in[col] <<= 0;
+        // in[col] <<= 0;
       }
     }
   } else {
     const int32_t len = round_up(stride, SIMD_LEN_I32);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    sprec_t **buf     = buf_scratch;
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top - i] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
@@ -165,8 +198,9 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
       buf[top + row] = &in[row * stride];
     }
     for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top + (v1 - v0) + i - 1] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
@@ -174,47 +208,43 @@ void fdwt_irrev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, co
     const int32_t stop   = ceil_int(v1, 2);
     const int32_t offset = top + v0 % 2;
 
-    for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + ((Acoeff * sum + Aoffset) >> Ashift));
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      for (int32_t n = -4 + offset, i = start - 2; i < stop + 1; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n + 1][col] += fA * (buf[n][col] + buf[n + 2][col]);
+        }
       }
-    }
-    for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((Bcoeff * sum + Boffset) >> Bshift));
+      for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n][col] += fB * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
-    }
-    for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] + ((Ccoeff * sum + Coffset) >> Cshift));
+      for (int32_t n = -2 + offset, i = start - 1; i < stop; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n + 1][col] += fC * (buf[n][col] + buf[n + 2][col]);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((Dcoeff * sum + Doffset) >> Dshift));
+      for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n][col] += fD * (buf[n - 1][col] + buf[n + 1][col]);
+        }
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
-    }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
-    delete[] buf;
+    // for (int32_t i = 1; i <= top; ++i) {
+    //   aligned_mem_free(buf[top - i]);
+    // }
+    // for (int32_t i = 1; i <= bottom; i++) {
+    //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
+    // }
   }
 }
 
 void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
-                           const int32_t v1, const int32_t stride) {
+                           const int32_t v1, const int32_t stride, sprec_t *pse_scratch,
+                           sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {2, 1};
   constexpr int32_t num_pse_i1[2] = {1, 2};
   const int32_t top               = num_pse_i0[v0 % 2];
@@ -224,15 +254,16 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
     // one sample case
     for (int32_t col = 0; col < u1 - u0; ++col) {
       if (v0 % 2) {
-        in[col] = static_cast<sprec_t>(in[col] << 1);
+        in[col] = floorf(in[col] * 2.0f);
       }
     }
   } else {
     const int32_t len = round_up(stride, SIMD_PADDING);
-    auto **buf        = new sprec_t *[static_cast<size_t>(top + v1 - v0 + bottom)];
+    sprec_t **buf     = buf_scratch;
     for (int32_t i = 1; i <= top; ++i) {
-      buf[top - i] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top - i] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top - i] = pse_scratch + (i - 1) * len;
       memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
       // buf[top - i] = &in[(PSEo(v0 - i, v0, v1) - v0) * stride];
@@ -241,8 +272,9 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
       buf[top + row] = &in[row * stride];
     }
     for (int32_t i = 1; i <= bottom; i++) {
-      buf[top + (v1 - v0) + i - 1] =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      // buf[top + (v1 - v0) + i - 1] =
+      //     static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(len), 32));
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
@@ -250,28 +282,27 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
     const int32_t stop   = ceil_int(v1, 2);
     const int32_t offset = top + v0 % 2;
 
-    for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n][col];
-        sum += buf[n + 2][col];
-        buf[n + 1][col] = static_cast<sprec_t>(buf[n + 1][col] - (sum >> 1));
+    const int32_t width = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n + 1][col] -= floorf((buf[n][col] + buf[n + 2][col]) * 0.5f);
+        }
       }
-    }
-    for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
-      for (int32_t col = 0; col < u1 - u0; ++col) {
-        int32_t sum = buf[n - 1][col];
-        sum += buf[n + 1][col];
-        buf[n][col] = static_cast<sprec_t>(buf[n][col] + ((sum + 2) >> 2));
+      for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+        for (int32_t col = cs; col < ce; ++col) {
+          buf[n][col] += floorf((buf[n - 1][col] + buf[n + 1][col] + 2) * 0.25f);
+        }
       }
     }
 
-    for (int32_t i = 1; i <= top; ++i) {
-      aligned_mem_free(buf[top - i]);
-    }
-    for (int32_t i = 1; i <= bottom; i++) {
-      aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
-    }
-    delete[] buf;
+    // for (int32_t i = 1; i <= top; ++i) {
+    //   aligned_mem_free(buf[top - i]);
+    // }
+    // for (int32_t i = 1; i <= bottom; i++) {
+    //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
+    // }
   }
 }
 
@@ -315,13 +346,13 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
       sprec_t *line0 = first + v * stride2[0];
       sprec_t *line1 = second + v * stride2[0];
-      for (; len >= 8; len -= 8) {
-        auto vline = vld2q_s16(sp);
-        vst1q_s16(line0, vline.val[0]);
-        vst1q_s16(line1, vline.val[1]);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+      for (; len >= 4; len -= 4) {
+        auto vline = vld2q_f32(sp);
+        vst1q_f32(line0, vline.val[0]);
+        vst1q_f32(line1, vline.val[1]);
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;
@@ -352,13 +383,13 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
       sprec_t *line0 = first + v * stride2[2];
       sprec_t *line1 = second + v * stride2[2];
-      for (; len >= 8; len -= 8) {
-        auto vline = vld2q_s16(sp);
-        vst1q_s16(line0, vline.val[0]);
-        vst1q_s16(line1, vline.val[1]);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+      for (; len >= 4; len -= 4) {
+        auto vline = vld2q_f32(sp);
+        vst1q_f32(line0, vline.val[0]);
+        vst1q_f32(line1, vline.val[1]);
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;
@@ -384,33 +415,19 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       first  = dp[1];
       second = dp[0];
     }
-    const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
-                                            11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
       sprec_t *sp    = buf + (2 * v + voffset[0]) * stride;
       size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
       sprec_t *line0 = first + v * stride2[0];
       sprec_t *line1 = second + v * stride2[0];
-      for (; len >= 8; len -= 8) {
-        // SSE version
-        // auto vline0 = _mm_loadu_si128((__m128i *)sp);
-        // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
-        // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
-        // vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
-        // _mm_storeu_si128((__m128i *)line0, _mm_unpacklo_epi64(vline0, vline1));
-        // _mm_storeu_si128((__m128i *)line1, _mm_unpackhi_epi64(vline0, vline1));
-
+      for (; len >= 4; len -= 4) {
         __m256i vline = _mm256_loadu_si256((__m256i *)sp);
-        vline         = _mm256_shuffle_epi8(vline, vshmask);
+        vline         = _mm256_shuffle_epi32(vline, 0xD8);
         vline         = _mm256_permute4x64_epi64(vline, 0xD8);
         _mm256_storeu2_m128i((__m128i *)line1, (__m128i *)line0, vline);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;
@@ -436,33 +453,19 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       first  = dp[3];
       second = dp[2];
     }
-    const __m256i vshmask = _mm256_set_epi8(15, 14, 11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0, 15, 14,
-                                            11, 10, 7, 6, 3, 2, 13, 12, 9, 8, 5, 4, 1, 0);
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
       sprec_t *sp    = buf + (2 * v + voffset[2]) * stride;
       size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
       sprec_t *line0 = first + v * stride2[2];
       sprec_t *line1 = second + v * stride2[2];
-      for (; len >= 8; len -= 8) {
-        // SSE version
-        // auto vline0 = _mm_loadu_si128((__m128i *)sp);
-        // auto vline1 = _mm_loadu_si128((__m128i *)(sp + 8));
-        // vline0      = _mm_shufflelo_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shufflehi_epi16(vline0, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflelo_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline1      = _mm_shufflehi_epi16(vline1, _MM_SHUFFLE(3, 1, 2, 0));
-        // vline0      = _mm_shuffle_epi32(vline0, _MM_SHUFFLE(3, 1, 2, 0));  // A1 A2 A3 A4 B1 B2 B3 B4
-        // vline1      = _mm_shuffle_epi32(vline1, _MM_SHUFFLE(3, 1, 2, 0));  // A5 A6 A7 A8 B5 B6 B7 B8
-        // _mm_storeu_si128((__m128i *)line0, _mm_unpacklo_epi64(vline0, vline1));
-        // _mm_storeu_si128((__m128i *)line1, _mm_unpackhi_epi64(vline0, vline1));
-
+      for (; len >= 4; len -= 4) {
         __m256i vline = _mm256_loadu_si256((__m256i *)sp);
-        vline         = _mm256_shuffle_epi8(vline, vshmask);
+        vline         = _mm256_shuffle_epi32(vline, 0xD8);
         vline         = _mm256_permute4x64_epi64(vline, 0xD8);
         _mm256_storeu2_m128i((__m128i *)line1, (__m128i *)line0, vline);
-        line0 += 8;
-        line1 += 8;
-        sp += 16;
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
       }
       for (; len > 0; --len) {
         *line0++ = *sp++;
@@ -485,10 +488,304 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
 // 2D FDWT function
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH,
                       const int32_t u0, const int32_t u1, const int32_t v0, const int32_t v1,
-                      const uint8_t transformation) {
+                      const uint8_t transformation, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   const int32_t stride = round_up(u1 - u0, 32);
   sprec_t *src         = previousLL;
-  fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride);
+
+  // Vertical DWT (pse_scratch provided by caller, sized for 8 * round_up(stride, SIMD_LEN_I32))
+  fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
+
+  // Horizontal DWT
   fdwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
+
   fdwt_2d_deinterleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
+}
+
+// =============================================================================
+// Streaming 2D FDWT — fdwt_2d_state
+// =============================================================================
+//
+// Vertical analysis PSE counts: [v0%2][transform].
+// Note: FDWT PSE is the mirror of IDWT (top↔bottom).
+static constexpr int8_t kPseFdwtTop[2][2] = {{4, 2}, {3, 1}};
+static constexpr int8_t kPseFdwtBot[2][2] = {{3, 1}, {4, 2}};
+
+// Horizontal PSE sizes per [edge_parity][transform]:
+// num_pse_i0[u0%2][transform] / num_pse_i1[u1%2][transform] in fdwt_hor_sr_fixed.
+static constexpr int32_t kHorizLeft[2][2]  = {{4, 2}, {3, 1}};
+static constexpr int32_t kHorizRight[2][2] = {{3, 1}, {4, 2}};
+
+// For FDWT, LP rows are at even absolute row indices, HP at odd.
+static inline bool is_lp_fdwt(int32_t r) { return (r % 2) == 0; }
+
+// Max d_level before row is output-ready: 2 for 9/7, 1 for 5/3.
+static inline int8_t max_dl_fdwt(uint8_t transform) { return (transform == 0) ? 2 : 1; }
+
+// Physical source row for FDWT PSE position p.
+static inline int32_t pse_src_fdwt(int32_t p, int32_t v0, int32_t v1) {
+  return v0 + PSEo(p, v0, v1);
+}
+
+// Ring slot is r % FDWT_STATE_RING_DEPTH (fixed per row, independent of ring_origin).
+// Pointer to ring / PSE row buffer for physical row r.
+static sprec_t *rptr_f(const fdwt_2d_state *s, int32_t r) {
+  if (r >= s->v0 && r < s->v1)
+    return s->ring_buf + static_cast<ptrdiff_t>(r % FDWT_STATE_RING_DEPTH) * s->stride;
+  if (r < s->v0)
+    return s->top_pse_buf + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
+  return s->bot_pse_buf + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
+}
+
+static int8_t get_dl_f(const fdwt_2d_state *s, int32_t r) {
+  if (r >= s->v0 && r < s->v1) {
+    if (r < s->ring_origin || r >= s->ring_origin + FDWT_STATE_RING_DEPTH) return -1;
+    return s->d_level[r % FDWT_STATE_RING_DEPTH];
+  }
+  if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_dlevel[s->v0 - 1 - r];
+  if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_dlevel[r - s->v1];
+  return -1;
+}
+
+static void set_dl_f(fdwt_2d_state *s, int32_t r, int8_t lv) {
+  if (r >= s->v0 && r < s->v1) {
+    s->d_level[r % FDWT_STATE_RING_DEPTH] = lv; return;
+  }
+  if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_dlevel[s->v0 - 1 - r] = lv; return; }
+  if (r >= s->v1 && r < s->v1 + s->bottom_pse) { s->bot_dlevel[r - s->v1] = lv; }
+}
+
+// FDWT dependency rule:
+//   HP rows (odd): step A (cur=0→1) needs LP@0; step C (cur=1→2) needs LP@1.
+//   LP rows (even): step B (cur=0→1) needs HP@1; step D (cur=1→2) needs HP@2.
+static int8_t needed_neighbor_dl_f(const fdwt_2d_state *s, int32_t r) {
+  const bool lp  = is_lp_fdwt(r);
+  const int8_t cur = get_dl_f(s, r);
+  if (s->transformation == 0) {  // irrev 9/7
+    if (!lp) return (cur == 0) ? 0 : 1;   // HP: step A needs LP@0, step C needs LP@1
+    else     return (cur == 0) ? 1 : 2;   // LP: step B needs HP@1, step D needs HP@2
+  } else {                                 // rev 5/3
+    return lp ? 1 : 0;                    // LP: update needs HP@1, HP: predict needs LP@0
+  }
+}
+
+static bool can_adv_f(const fdwt_2d_state *s, int32_t r) {
+  const int8_t cur = get_dl_f(s, r);
+  if (cur < 0 || cur >= max_dl_fdwt(s->transformation)) return false;
+  const int8_t need = needed_neighbor_dl_f(s, r);
+  return get_dl_f(s, r - 1) >= need && get_dl_f(s, r + 1) >= need;
+}
+
+static void adv_step_f(fdwt_2d_state *s, int32_t r) {
+  const bool  lp  = is_lp_fdwt(r);
+  const int8_t cur = get_dl_f(s, r);
+  sprec_t *tgt  = rptr_f(s, r);
+  sprec_t *prev = rptr_f(s, r - 1);
+  sprec_t *next = rptr_f(s, r + 1);
+  const int32_t w = s->u1 - s->u0;
+
+  if (s->transformation == 0) {  // irrev 9/7
+    // HP: step A (coeff fA), step C (coeff fC); LP: step B (coeff fB), step D (coeff fD)
+    const float coeff = lp ? (cur == 0 ? fB : fD) : (cur == 0 ? fA : fC);
+    for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+      const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+      for (int32_t c = cs; c < ce; ++c) tgt[c] += coeff * (prev[c] + next[c]);
+    }
+  } else {  // rev 5/3
+    if (!lp) {  // HP predict: HP -= floor((LP[r-1] + LP[r+1]) * 0.5f)
+      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+        for (int32_t c = cs; c < ce; ++c) tgt[c] -= floorf((prev[c] + next[c]) * 0.5f);
+      }
+    } else {  // LP update: LP += floor((HP[r-1] + HP[r+1] + 2) * 0.25f)
+      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+        for (int32_t c = cs; c < ce; ++c) tgt[c] += floorf((prev[c] + next[c] + 2.0f) * 0.25f);
+      }
+    }
+  }
+  set_dl_f(s, r, cur + 1);
+}
+
+// Fill PSE slots reflecting from just-pushed row r.
+static void fill_pse_f(fdwt_2d_state *s, int32_t r) {
+  const size_t nb = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+  const sprec_t *src = rptr_f(s, r);
+  for (int8_t i = 1; i <= s->top_pse; ++i) {
+    if (s->top_dlevel[i - 1] < 0 && pse_src_fdwt(s->v0 - i, s->v0, s->v1) == r) {
+      memcpy(s->top_pse_buf + static_cast<ptrdiff_t>(i - 1) * s->stride, src, nb);
+      s->top_dlevel[i - 1] = 0;
+    }
+  }
+  for (int8_t i = 0; i < s->bottom_pse; ++i) {
+    if (s->bot_dlevel[i] < 0 && pse_src_fdwt(s->v1 + i, s->v0, s->v1) == r) {
+      memcpy(s->bot_pse_buf + static_cast<ptrdiff_t>(i) * s->stride, src, nb);
+      s->bot_dlevel[i] = 0;
+    }
+  }
+}
+
+// Run cascade until stable.
+static void cascade_f(fdwt_2d_state *s) {
+  bool progress = true;
+  while (progress) {
+    progress = false;
+    const int32_t lo = s->v0 - s->top_pse;
+    const int32_t hi = (s->next_in < s->v1) ? s->next_in + s->bottom_pse
+                                              : s->v1 + s->bottom_pse;
+    for (int32_t r = lo; r < hi; ++r) {
+      if (can_adv_f(s, r)) { adv_step_f(s, r); progress = true; }
+    }
+  }
+}
+
+// Emit all rows that have reached max_dl, in order from next_emit.
+static void emit_ready_f(fdwt_2d_state *s) {
+  const int8_t mxdl = max_dl_fdwt(s->transformation);
+  while (s->next_emit < s->v1 && get_dl_f(s, s->next_emit) >= mxdl) {
+    const int32_t r = s->next_emit;
+    const bool    is_hp = !is_lp_fdwt(r);
+
+    // Copy ring row into horiz_tmp without modifying the ring (other rows may
+    // still reference r as a vertical-lifting neighbour).
+    const sprec_t *ring_row = rptr_f(s, r);
+
+    if (s->u1 == s->u0 + 1) {
+      // Single-column: skip PSE/filter (PSEo has UB for length-1 signals).
+      // Match fdwt_hor_sr_fixed: LP even u0 → no-op; HP odd u0 → *2 for 5/3.
+      sprec_t *out = s->horiz_tmp + s->horiz_left;
+      out[0] = ring_row[0];
+      if (s->transformation == 1 && (s->u0 % 2 != 0)) out[0] = floorf(out[0] * 2.0f);
+    } else {
+      dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(ring_row),
+                        s->horiz_left, s->horiz_right, s->u0, s->u1);
+      fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+    }
+
+    s->put_row(s->sink_ctx, is_hp, r, s->horiz_tmp + s->horiz_left);
+    ++s->next_emit;
+
+    // Reclaim ring slots that are at least 4 rows behind next_emit (safe look-back).
+    while (s->ring_origin < s->next_emit - 4 &&
+           get_dl_f(s, s->ring_origin) >= mxdl) {
+      s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+      ++s->ring_origin;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+void fdwt_2d_state_init(fdwt_2d_state *s,
+                        const int32_t u0, const int32_t u1,
+                        const int32_t v0, const int32_t v1,
+                        const uint8_t transformation,
+                        fdwt_row_sink_fn sink_fn, void *sink_ctx) {
+  s->u0            = u0;  s->u1 = u1;
+  s->v0            = v0;  s->v1 = v1;
+  s->stride        = round_up(u1 - u0, SIMD_PADDING);
+  s->transformation = transformation;
+  s->top_pse       = kPseFdwtTop[v0 % 2][transformation];
+  s->bottom_pse    = kPseFdwtBot[v1 % 2][transformation];
+  s->horiz_left    = kHorizLeft[u0 % 2][transformation];
+  s->horiz_right   = kHorizRight[u1 % 2][transformation];
+
+  const size_t row_bytes = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+  s->ring_buf    = static_cast<sprec_t *>(aligned_mem_alloc(FDWT_STATE_RING_DEPTH * row_bytes, 32));
+  s->top_pse_buf = (s->top_pse    > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32)) : nullptr;
+  s->bot_pse_buf = (s->bottom_pse > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32)) : nullptr;
+
+  const size_t htmp_bytes = sizeof(sprec_t) *
+      static_cast<size_t>(s->horiz_left + s->stride + s->horiz_right + SIMD_PADDING);
+  s->horiz_tmp = static_cast<sprec_t *>(aligned_mem_alloc(htmp_bytes, 32));
+
+  s->ring_origin = v0;
+  for (int32_t i = 0; i < FDWT_STATE_RING_DEPTH; ++i) s->d_level[i]    = -1;
+  for (int32_t i = 0; i < 4;                     ++i) s->top_dlevel[i] = -1;
+  for (int32_t i = 0; i < 4;                     ++i) s->bot_dlevel[i] = -1;
+
+  s->next_in   = v0;
+  s->next_emit = v0;
+  s->put_row   = sink_fn;
+  s->sink_ctx  = sink_ctx;
+}
+
+void fdwt_2d_state_free(fdwt_2d_state *s) {
+  aligned_mem_free(s->ring_buf);    s->ring_buf    = nullptr;
+  aligned_mem_free(s->top_pse_buf); s->top_pse_buf = nullptr;
+  aligned_mem_free(s->bot_pse_buf); s->bot_pse_buf = nullptr;
+  aligned_mem_free(s->horiz_tmp);   s->horiz_tmp   = nullptr;
+}
+
+void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in) {
+  if (s->next_in >= s->v1) return;
+
+  // Special case: single-row tile (handled by flush()).
+  if (s->v1 == s->v0 + 1) {
+    // Still store the row in ring_buf so flush() can read it.
+    const int32_t slot = s->next_in % FDWT_STATE_RING_DEPTH;
+    memcpy(s->ring_buf + static_cast<ptrdiff_t>(slot) * s->stride, in,
+           sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
+    ++s->next_in;
+    return;
+  }
+
+  const int32_t r    = s->next_in;
+  const int32_t slot = r % FDWT_STATE_RING_DEPTH;
+
+  memcpy(s->ring_buf + static_cast<ptrdiff_t>(slot) * s->stride, in,
+         sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
+  s->d_level[slot] = 0;
+  ++s->next_in;
+
+  fill_pse_f(s, r);
+  cascade_f(s);
+  emit_ready_f(s);
+}
+
+void fdwt_2d_state_flush(fdwt_2d_state *s) {
+  // Handle single-row tile special case.
+  if (s->v1 == s->v0 + 1 && s->next_in == s->v0 + 1 && s->next_emit == s->v0) {
+    // Single-row: LL-only or HP-only scaling.
+    // For 5/3 with v0 odd: HP *= 2; for irrev: no-op.
+    const bool is_hp = !is_lp_fdwt(s->v0);
+    const sprec_t *src = s->ring_buf + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
+    sprec_t *out = s->horiz_tmp + s->horiz_left;
+    if (s->u1 == s->u0 + 1) {
+      // Single-column: PSEo has UB for length-1 — bypass filter entirely.
+      // Match fdwt_hor_sr_fixed: even u0 (LP) → no-op; odd u0 (HP) → *2 for 5/3.
+      out[0] = src[0];
+      if (s->transformation == 1) {
+        if (s->v0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // vertical HP: match fdwt_rev_ver_sr_fixed
+        if (s->u0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // horizontal HP: match fdwt_hor_sr_fixed
+      }
+    } else {
+      // Match fdwt_rev_ver_sr_fixed: scale HP row by 2 BEFORE horizontal DWT.
+      // (floorf makes 5/3 non-linear, so order matters.)
+      if (s->transformation == 1 && is_hp) {
+        sprec_t *ms = s->ring_buf + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
+        const int32_t w = s->u1 - s->u0;
+        for (int32_t c = 0; c < w; ++c) ms[c] = floorf(ms[c] * 2.0f);
+      }
+      dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(src),
+                        s->horiz_left, s->horiz_right, s->u0, s->u1);
+      fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+    }
+    s->put_row(s->sink_ctx, is_hp, s->v0, out);
+    ++s->next_emit;
+    return;
+  }
+
+  // After last push, bottom PSE may not yet be filled; fill them now.
+  // (Some bottom PSE sources reflect to early rows already in ring.)
+  for (int8_t i = 0; i < s->bottom_pse; ++i) {
+    if (s->bot_dlevel[i] < 0) {
+      const int32_t src_r = pse_src_fdwt(s->v1 + i, s->v0, s->v1);
+      if (src_r >= s->ring_origin && src_r < s->ring_origin + FDWT_STATE_RING_DEPTH &&
+          get_dl_f(s, src_r) >= 0) {
+        fill_pse_f(s, src_r);
+      }
+    }
+  }
+  cascade_f(s);
+  emit_ready_f(s);
 }

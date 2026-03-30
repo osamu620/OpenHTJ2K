@@ -42,6 +42,13 @@
 #define CB_FACT_G (2 * ALPHA_B * (1 - ALPHA_B) / ALPHA_G)
 
 typedef void (*cvt_color_func)(int32_t *, int32_t *, int32_t *, uint32_t, uint32_t);
+// Float-domain inverse color transform (used in decode to avoid float→int32 intermediate copy).
+// sp0/sp1/sp2 point to float sample buffers; stride = row stride in floats.
+typedef void (*cvt_color_float_func)(float *, float *, float *, uint32_t, uint32_t, uint32_t);
+// Fused int32→float + forward color transform (used in encode to avoid int32 intermediate copy).
+// sp0/sp1/sp2: int32 input; dp0/dp1/dp2: float output; all share the same row stride.
+typedef void (*cvt_color_i32_to_f_func)(const int32_t *, const int32_t *, const int32_t *, float *,
+                                        float *, float *, uint32_t, uint32_t, uint32_t);
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 /**
  * @brief Forward reversible color transform (RCT) with AVX2 intrinsics
@@ -79,6 +86,14 @@ void cvt_ycbcr_to_rgb_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
  * @param height original height
  */
 void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_rev_float_avx2(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_ycbcr_to_rgb_irrev_float_avx2(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_rev_float_avx2(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                     float *dp0, float *dp1, float *dp2,
+                                     uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_irrev_float_avx2(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                       float *dp0, float *dp1, float *dp2,
+                                       uint32_t width, uint32_t height, uint32_t stride);
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 /**
  * @brief Forward reversible color transform (RCT) with NEON intrinsics
@@ -116,11 +131,27 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
  * @param height original height
  */
 void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_rev_float_neon(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_ycbcr_to_rgb_irrev_float_neon(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_rev_float_neon(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                     float *dp0, float *dp1, float *dp2,
+                                     uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_irrev_float_neon(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                       float *dp0, float *dp1, float *dp2,
+                                       uint32_t width, uint32_t height, uint32_t stride);
 #else
 void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 void cvt_rgb_to_ycbcr_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 void cvt_ycbcr_to_rgb_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 void cvt_ycbcr_to_rgb_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_rev_float(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_ycbcr_to_rgb_irrev_float(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_rev_float(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                float *dp0, float *dp1, float *dp2,
+                                uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_irrev_float(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                  float *dp0, float *dp1, float *dp2,
+                                  uint32_t width, uint32_t height, uint32_t stride);
 #endif
 
 inline int32_t round_d(double val) {
