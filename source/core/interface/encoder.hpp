@@ -147,6 +147,9 @@ class openhtj2k_encoder {
                         uint32_t num_threads);
   __declspec(dllexport) void set_output_buffer(std::vector<uint8_t> &output_buf);
   __declspec(dllexport) size_t invoke();
+  __declspec(dllexport) size_t invoke_line_based();
+  __declspec(dllexport) size_t invoke_line_based_stream(
+      std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
   __declspec(dllexport) ~openhtj2k_encoder();
 #else
   openhtj2k_encoder(const char *, const std::vector<int32_t *> &input_buf, siz_params &siz, cod_params &cod,
