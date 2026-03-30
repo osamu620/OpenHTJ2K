@@ -29,6 +29,7 @@
 #pragma once
 #include <cstdint>
 #include <arm_neon.h>
+#include "utils.hpp"
 
 #if __GNUC__ || __has_attribute(always_inline)
   #define FORCE_INLINE inline __attribute__((always_inline))
@@ -231,7 +232,7 @@ class state_VLC_enc {
       last = static_cast<uint8_t>(val >> 24);
       Creg >>= 32;
       ctreg -= 32;
-      *reinterpret_cast<uint32_t *>(buf + pos - 3) = __builtin_bswap32(val);
+      *reinterpret_cast<uint32_t *>(buf + pos - 3) = openhtj2k_bswap32(val);
       pos -= 4;
       return;
     }

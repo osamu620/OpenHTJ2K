@@ -265,7 +265,7 @@ class state_VLC_enc {
       last = static_cast<uint8_t>(val >> 24);
       Creg >>= 32;
       ctreg -= 32;
-      *reinterpret_cast<uint32_t *>(buf + pos - 3) = __builtin_bswap32(val);
+      *reinterpret_cast<uint32_t *>(buf + pos - 3) = openhtj2k_bswap32(val);
       pos -= 4;
       return;
     }
