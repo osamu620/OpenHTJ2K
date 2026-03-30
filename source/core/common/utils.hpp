@@ -81,6 +81,13 @@ static inline T find_max(T x0, T x1, T x2, T x3) {
   return (v0 > v1) ? v0 : v1;
 }
 
+#ifdef _MSC_VER
+#include <stdlib.h>
+#define openhtj2k_bswap32(x) _byteswap_ulong(x)
+#else
+#define openhtj2k_bswap32(x) __builtin_bswap32(x)
+#endif
+
 static inline size_t popcount32(uint32_t num) {
   size_t precision = 0;
 #if defined(_MSC_VER) && !defined(_M_ARM64)
