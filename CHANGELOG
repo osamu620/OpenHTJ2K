@@ -24,7 +24,7 @@
 * LB decoder: pipeline MCT+clamp of row Y with pool pull of row Y+1,
   achieving 18–23 % throughput improvement at T≥4 threads
 * Encoder: per-thread `cblk_data_pool` bump allocator replaces per-block
-  `malloc`/`free` in the HTCOT hot path; PSE scratch buffer hoisted out
+  `malloc`/`free` in the HT block coding hot path; PSE scratch buffer hoisted out
   of per-tile DWT calls
 
 ## Build / Tests
