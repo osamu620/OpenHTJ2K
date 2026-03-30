@@ -71,6 +71,6 @@ add_test(NAME lbs_p1_03  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_03.j2k --
 add_test(NAME lbs_p1_04  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_04.j2k --stream)
 add_test(NAME lbs_p1_05  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_05.j2k --stream)
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "ARM64")
-  set_tests_properties(lbs_p1_ht_05_11 PROPERTIES WILL_FAIL TRUE)
+  set_tests_properties(lbs_p1_05 PROPERTIES WILL_FAIL TRUE)
 endif()
 add_test(NAME lbs_p1_06  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_06.j2k --stream)
