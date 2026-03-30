@@ -155,12 +155,12 @@ class j2k_codeblock : public j2k_region {
   uint8_t num_ZBP;
   uint8_t fast_skip_passes;
   uint8_t Lblock;
-  // length of a coding pass in byte
-  std::vector<uint32_t> pass_length;
-  // index of the coding-pass from which layer starts
-  std::unique_ptr<uint8_t[]> layer_start;
-  // number of coding-passes included in a layer
-  std::unique_ptr<uint8_t[]> layer_passes;
+  // length of a coding pass in bytes (fixed array, max 128 coding passes)
+  uint32_t pass_length[128];
+  uint8_t pass_length_count;
+  // non-owning: pooled by the owning j2k_precinct_subband
+  uint8_t *layer_start;
+  uint8_t *layer_passes;
   bool already_included;
   bool refsegment;
 
@@ -234,12 +234,12 @@ class j2k_subband : public j2k_region {
 class j2k_precinct_subband : public j2k_region {
  private:
   [[maybe_unused]] const uint8_t orientation;
-  //  std::unique_ptr<tagtree> inclusion_info;
-  //  std::unique_ptr<tagtree> ZBP_info;
-  //  std::unique_ptr<std::unique_ptr<j2k_codeblock>[]> codeblocks;
   tagtree *inclusion_info;
   tagtree *ZBP_info;
-  j2k_codeblock **codeblocks;
+  // Flat array of codeblock objects (placement-new'd into a single allocation)
+  j2k_codeblock *codeblocks;
+  // Single slab backing layer_start[] and layer_passes[] for all codeblocks
+  std::unique_ptr<uint8_t[]> cb_layer_pool;
 
  public:
   uint32_t num_codeblock_x;
@@ -251,10 +251,12 @@ class j2k_precinct_subband : public j2k_region {
   ~j2k_precinct_subband() {
     delete inclusion_info;
     delete ZBP_info;
-    for (uint32_t i = 0; i < num_codeblock_x * num_codeblock_y; ++i) {
-      delete codeblocks[i];
+    const uint32_t N = num_codeblock_x * num_codeblock_y;
+    for (uint32_t i = 0; i < N; ++i) {
+      codeblocks[i].~j2k_codeblock();
     }
-    delete[] codeblocks;
+    operator delete[](codeblocks);
+    // cb_layer_pool unique_ptr destructs here, after all codeblocks are destroyed
   }
   //  void destroy_codeblocks() {
   //    for (uint32_t i = 0; i < num_codeblock_x * num_codeblock_y; ++i) {
