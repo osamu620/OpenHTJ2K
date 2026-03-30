@@ -3551,9 +3551,35 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     tcomp[c].init_line_decode(/*ring_mode=*/true);
 
   const uint32_t H = ci[0].csize_y;
+
+#ifdef OPENHTJ2K_THREAD
+  auto *pool          = ThreadPool::get();
+  const bool use_comp_par = (pool && pool->num_threads() > 1 && NC > 1);
+  std::atomic<int> comp_remaining{0};
+#endif
+
   for (uint32_t y = 0; y < H; ++y) {
-    for (uint16_t c = 0; c < NC; ++c)
-      if (y < ci[c].csize_y) tcomp[c].pull_line(rows[c].data());
+#ifdef OPENHTJ2K_THREAD
+    if (use_comp_par) {
+      comp_remaining.store(0, std::memory_order_relaxed);
+      for (uint16_t c = 0; c < NC; ++c) {
+        if (y < ci[c].csize_y) {
+          comp_remaining.fetch_add(1, std::memory_order_relaxed);
+          pool->push([this, c, &rows, &comp_remaining]() {
+            tcomp[c].pull_line(rows[c].data());
+            comp_remaining.fetch_sub(1, std::memory_order_release);
+          });
+        }
+      }
+      while (comp_remaining.load(std::memory_order_acquire) > 0)
+        std::this_thread::yield();
+    } else {
+#endif
+      for (uint16_t c = 0; c < NC; ++c)
+        if (y < ci[c].csize_y) tcomp[c].pull_line(rows[c].data());
+#ifdef OPENHTJ2K_THREAD
+    }
+#endif
 
     if (do_mct)
       cvt_ycbcr_to_rgb_float[xform](rows[0].data(), rows[1].data(), rows[2].data(),

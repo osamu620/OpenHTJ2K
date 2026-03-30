@@ -29,9 +29,15 @@
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <memory>
+#include <vector>
 #include "subband_row_buf.hpp"
 #include "block_decoding.hpp"
 #include "../common/open_htj2k_typedef.hpp"
+#ifdef OPENHTJ2K_THREAD
+  #include <thread>
+  #include "ThreadPool.hpp"
+#endif
 
 // ─── init / free ──────────────────────────────────────────────────────────────
 
@@ -97,8 +103,91 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
     }
   }
 
-  // Iterate over all precincts; find codeblocks in this band that overlap the strip.
   const uint32_t np = res->npw * res->nph;
+
+#ifdef OPENHTJ2K_THREAD
+  {
+    auto *pool = ThreadPool::get();
+    // Avoid nested dispatch: if this call is already running inside a pool worker
+    // (e.g. triggered by component-parallel pull_line()), fall through to serial.
+    const bool in_worker = pool && (pool->thread_number(std::this_thread::get_id()) >= 0);
+    if (pool && pool->num_threads() > 1 && !in_worker) {
+      // ── Parallel path ────────────────────────────────────────────────────────
+      // Descriptor for one block task.
+      struct BlockTask {
+        j2k_codeblock *block;
+        uint32_t       QWx2, QHx2;
+        size_t         sample_off, state_off;
+        ptrdiff_t      ring_row_off, ring_col_off;
+      };
+
+      // Pass 1: enumerate in-strip blocks and compute total scratch budget.
+      std::vector<BlockTask> tasks;
+      size_t total_s = 0, total_st = 0;
+
+      for (uint32_t p = 0; p < np; ++p) {
+        j2k_precinct         *cp  = res->access_precinct(p);
+        j2k_precinct_subband *cpb = cp->access_pband(band_idx);
+        const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+        for (uint32_t bi = 0; bi < num_cblks; ++bi) {
+          j2k_codeblock *block = cpb->access_codeblock(bi);
+          if (static_cast<int32_t>(block->get_pos1().y) <= s_y0) continue;
+          if (static_cast<int32_t>(block->get_pos0().y) >= s_y1) continue;
+          if (!block->num_passes) continue;
+          const uint32_t QWx2 = round_up(block->size.x, 8U);
+          const uint32_t QHx2 = round_up(block->size.y, 8U);
+          BlockTask bt;
+          bt.block      = block;
+          bt.QWx2       = QWx2;
+          bt.QHx2       = QHx2;
+          bt.sample_off = total_s;
+          bt.state_off  = total_st;
+          bt.ring_row_off = (ring_mode && ring_buf)
+              ? (static_cast<int32_t>(block->get_pos0().y) - s_y0) * static_cast<ptrdiff_t>(sb->stride)
+              : 0;
+          bt.ring_col_off = (ring_mode && ring_buf)
+              ? static_cast<int32_t>(block->get_pos0().x) - static_cast<int32_t>(sb->get_pos0().x)
+              : 0;
+          total_s  += static_cast<size_t>(QWx2 * QHx2);
+          total_st += static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
+          tasks.push_back(bt);
+        }
+      }
+
+      if (!tasks.empty()) {
+        // Allocate zeroed scratch pool for all blocks (one contiguous buffer each).
+        std::vector<int32_t> spool(total_s, 0);
+        std::vector<uint8_t> stpool(total_st, 0);
+
+        // Pass 2: assign pointers and dispatch tasks.
+        std::atomic<int> remaining{static_cast<int>(tasks.size())};
+        for (auto &bt : tasks) {
+          bt.block->sample_buf     = spool.data() + bt.sample_off;
+          bt.block->blksampl_stride = bt.QWx2;
+          bt.block->block_states   = stpool.data() + bt.state_off;
+          bt.block->blkstate_stride = bt.QWx2 + 2;
+          if (ring_mode && ring_buf)
+            bt.block->i_samples = ring_buf + bt.ring_row_off + bt.ring_col_off;
+
+          auto *blk = bt.block;
+          auto  roi = ROIshift;
+          pool->push([blk, roi, &remaining]() {
+            if ((blk->Cmodes & HT) >> 6)
+              htj2k_decode(blk, roi);
+            else
+              j2k_decode(blk, roi);
+            remaining.fetch_sub(1, std::memory_order_release);
+          });
+        }
+        while (remaining.load(std::memory_order_acquire) > 0)
+          std::this_thread::yield();
+      }
+      return;
+    }
+  }
+#endif
+
+  // ── Serial path ──────────────────────────────────────────────────────────────
   for (uint32_t p = 0; p < np; ++p) {
     j2k_precinct         *cp  = res->access_precinct(p);
     j2k_precinct_subband *cpb = cp->access_pband(band_idx);
@@ -107,13 +196,10 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
     for (uint32_t bi = 0; bi < num_cblks; ++bi) {
       j2k_codeblock *block = cpb->access_codeblock(bi);
 
-      // Skip codeblocks outside this strip.
       if (static_cast<int32_t>(block->get_pos1().y) <= s_y0) continue;
       if (static_cast<int32_t>(block->get_pos0().y) >= s_y1) continue;
-      // Skip empty codeblocks (no coding passes).
       if (!block->num_passes) continue;
 
-      // Grow scratch if needed for this codeblock size.
       const uint32_t QWx2 = round_up(block->size.x, 8U);
       const uint32_t QHx2 = round_up(block->size.y, 8U);
       const size_t need_s  = static_cast<size_t>(QWx2 * QHx2);
@@ -133,12 +219,11 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
       std::memset(cb_sample_buf, 0, need_s * sizeof(int32_t));
       std::memset(cb_state_buf,  0, need_st);
 
-      block->sample_buf    = cb_sample_buf;
+      block->sample_buf      = cb_sample_buf;
       block->blksampl_stride = QWx2;
-      block->block_states  = cb_state_buf;
+      block->block_states    = cb_state_buf;
       block->blkstate_stride = QWx2 + 2;
 
-      // In ring mode: redirect block->i_samples into the ring buffer.
       if (ring_mode && ring_buf != nullptr) {
         const ptrdiff_t row_off = (static_cast<int32_t>(block->get_pos0().y) - s_y0) * static_cast<ptrdiff_t>(sb->stride);
         const ptrdiff_t col_off = static_cast<int32_t>(block->get_pos0().x) - static_cast<int32_t>(sb->get_pos0().x);
