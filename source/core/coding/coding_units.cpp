@@ -3556,30 +3556,86 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   auto *pool          = ThreadPool::get();
   const bool use_comp_par = (pool && pool->num_threads() > 1 && NC > 1);
   std::atomic<int> comp_remaining{0};
-#endif
 
-  for (uint32_t y = 0; y < H; ++y) {
-#ifdef OPENHTJ2K_THREAD
-    if (use_comp_par) {
+  if (use_comp_par) {
+    // Pipeline: overlap mct+clamp(y) with pool pull(y+1).
+    // 'rows' and 'rows_prev' alternate as the pull target each iteration.
+    std::vector<std::vector<sprec_t>> rows_prev(NC);
+    for (uint16_t c = 0; c < NC; ++c) {
+      const size_t sz = static_cast<size_t>(
+          round_up(static_cast<int32_t>(ci[c].csize_x) + SIMD_PADDING, SIMD_PADDING));
+      rows_prev[c].assign(sz, 0.0f);
+    }
+
+    // Dispatch pull for row 'y' into target buffer set.
+    auto do_dispatch = [&](std::vector<std::vector<sprec_t>> &target, uint32_t y) {
       comp_remaining.store(0, std::memory_order_relaxed);
       for (uint16_t c = 0; c < NC; ++c) {
         if (y < ci[c].csize_y) {
           comp_remaining.fetch_add(1, std::memory_order_relaxed);
-          pool->push([this, c, &rows, &comp_remaining]() {
-            tcomp[c].pull_line(rows[c].data());
+          j2k_tile_component &comp_c = tcomp[c];
+          sprec_t *dst               = target[c].data();
+          pool->push([&comp_c, dst, &comp_remaining]() {
+            comp_c.pull_line(dst);
             comp_remaining.fetch_sub(1, std::memory_order_release);
           });
         }
       }
+    };
+    auto wait_pull = [&]() {
       while (comp_remaining.load(std::memory_order_acquire) > 0)
         std::this_thread::yield();
-    } else {
-#endif
-      for (uint16_t c = 0; c < NC; ++c)
-        if (y < ci[c].csize_y) tcomp[c].pull_line(rows[c].data());
-#ifdef OPENHTJ2K_THREAD
+    };
+    // MCT + clamp float rows src[c] → out_rows[c] int32.
+    auto do_mct_clamp = [&](std::vector<std::vector<sprec_t>> &src, uint32_t y) {
+      if (do_mct)
+        cvt_ycbcr_to_rgb_float[xform](src[0].data(), src[1].data(), src[2].data(),
+                                      mct_w, 1, mct_str);
+      for (uint16_t c = 0; c < NC; ++c) {
+        if (y >= ci[c].csize_y) continue;
+        const CInfo   &I   = ci[c];
+        const sprec_t *spf = src[c].data();
+        int32_t       *dp  = out_rows[c].data();
+        const int16_t  ds  = I.downshift, ro = I.rnd;
+        for (uint32_t n = 0; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << (-ds) : (v + ro) >> ds;
+          v += I.DC_OFFSET;
+          v = std::min(v, static_cast<int32_t>(I.MAXVAL));
+          v = std::max(v, static_cast<int32_t>(I.MINVAL));
+          dp[n] = v;
+        }
+      }
+    };
+
+    // Bootstrap: pull row 0 into 'rows'.
+    do_dispatch(rows, 0);
+    wait_pull();
+
+    for (uint32_t y = 0; y < H; ++y) {
+      // rows holds pull(y). Fire pull(y+1) into rows_prev while we process rows.
+      if (y + 1 < H)
+        do_dispatch(rows_prev, y + 1);
+
+      do_mct_clamp(rows, y);   // overlaps with pool pull(y+1)
+
+      if (y + 1 < H) {
+        wait_pull();
+        std::swap(rows, rows_prev);  // rows now has pull(y+1); rows_prev free
+      }
+
+      cb(y, out_ptrs.data(), NC);
     }
+
+    for (uint16_t c = 0; c < NC; ++c)
+      tcomp[c].finalize_line_decode();
+    return;
+  }
 #endif
+
+  for (uint32_t y = 0; y < H; ++y) {
+    for (uint16_t c = 0; c < NC; ++c)
+      if (y < ci[c].csize_y) tcomp[c].pull_line(rows[c].data());
 
     if (do_mct)
       cvt_ycbcr_to_rgb_float[xform](rows[0].data(), rows[1].data(), rows[2].data(),
@@ -3596,8 +3652,8 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
         int32_t v = static_cast<int32_t>(spf[n]);
         v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
         v += I.DC_OFFSET;
-        if (v > I.MAXVAL) v = I.MAXVAL;
-        if (v < I.MINVAL) v = I.MINVAL;
+        v = std::min(v, static_cast<int32_t>(I.MAXVAL));
+        v = std::max(v, static_cast<int32_t>(I.MINVAL));
         dp[n] = v;
       }
     }
