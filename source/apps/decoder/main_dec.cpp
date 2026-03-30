@@ -51,6 +51,7 @@ void print_help(char *cmd) {
   printf("    .jp2 and .jph (box based file-format) are not supported.\n");
   printf("-o: Output file. Supported formats are PPM, PGM, PGX and RAW.\n");
   printf("-reduce n: Number of DWT resolution reduction.\n");
+  printf("-batch: Use batch (full-image) decode path instead of the default line-based path.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -129,6 +130,24 @@ int main(int argc, char *argv[]) {
     //    num_iterations = static_cast<int32_t>(tmp_val);
     num_threads = static_cast<uint32_t>(tmp_val);  // strtoul(tmp_param, nullptr, 10);
   }
+  const bool use_line_based = !command_option_exists(argc, argv, "-batch");
+
+  // Reject any unrecognised flags.
+  {
+    static const char *const known[] = {
+        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", "-batch", nullptr};
+    for (int i = 1; i < argc; ++i) {
+      if (argv[i][0] != '-') continue;
+      bool recognised = false;
+      for (int k = 0; known[k]; ++k) {
+        if (strcmp(argv[i], known[k]) == 0) { recognised = true; break; }
+      }
+      if (!recognised) {
+        printf("ERROR: unknown option %s\n", argv[i]);
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
 
   std::vector<int32_t *> buf;
   std::vector<uint32_t> img_width;
@@ -136,6 +155,144 @@ int main(int argc, char *argv[]) {
   std::vector<uint8_t> img_depth;
   std::vector<bool> img_signed;
   auto start = std::chrono::high_resolution_clock::now();
+
+  // Streaming line-based decode: no full-image output buffers; writes rows to file as decoded.
+  if (use_line_based && num_iterations == 1) {
+    open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
+    try {
+      decoder.parse();
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+      return EXIT_FAILURE;
+    }
+
+    // Output file state (opened lazily on first row).
+    const bool want_ppm = (strcmp(outfile_ext_name, ".ppm") == 0);
+    const bool want_pgm = (strcmp(outfile_ext_name, ".pgm") == 0);
+    const bool want_pgx = (strcmp(outfile_ext_name, ".pgx") == 0);
+    std::vector<FILE *> fps;
+    std::vector<uint8_t> row_buf;  // per-row byte buffer (reused)
+    uint8_t bpp            = 0;
+    int32_t pnm_offset     = 0;
+    uint32_t total_samples = 0;
+
+    try {
+      decoder.invoke_line_based_stream(
+          [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+            if (y == 0) {
+              bpp = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(img_depth[0]), 8));
+              // PGM shifts signed values to unsigned; PGX and RAW store values as-is
+              pnm_offset = (want_pgm && img_signed[0]) ? (1 << (img_depth[0] - 1)) : 0;
+              if (want_ppm && nc == 3 && img_width[0] == img_width[1] &&
+                  img_width[0] == img_width[2]) {
+                // Single PPM file: interleaved RGB
+                char fname[256], base[256];
+                memcpy(base, outfile_name,
+                       static_cast<size_t>(outfile_ext_name - outfile_name));
+                base[outfile_ext_name - outfile_name] = '\0';
+                snprintf(fname, sizeof(fname), "%s%s", base, outfile_ext_name);
+                FILE *fp = fopen(fname, "wb");
+                fprintf(fp, "P6 %d %d %d\n", img_width[0], img_height[0],
+                        (1 << img_depth[0]) - 1);
+                fps.push_back(fp);
+                fps.push_back(nullptr);
+                fps.push_back(nullptr);
+                row_buf.resize(static_cast<size_t>(img_width[0]) * 3 * bpp);
+              } else {
+                // One file per component (PGM, PGX, or RAW)
+                fps.resize(nc, nullptr);
+                for (uint16_t c = 0; c < nc; ++c) {
+                  char fname[256], base[256];
+                  memcpy(base, outfile_name,
+                         static_cast<size_t>(outfile_ext_name - outfile_name));
+                  base[outfile_ext_name - outfile_name] = '\0';
+                  snprintf(fname, sizeof(fname), "%s_%02d%s", base, c, outfile_ext_name);
+                  fps[c] = fopen(fname, "wb");
+                  if (want_pgm)
+                    fprintf(fps[c], "P5 %d %d %d\n", img_width[c], img_height[c],
+                            (1 << img_depth[c]) - 1);
+                  if (want_pgx) {
+                    char sign = img_signed[c] ? '-' : '+';
+                    fprintf(fps[c], "PG LM %c %d %d %d\n", sign, img_depth[c], img_width[c],
+                            img_height[c]);
+                  }
+                }
+                uint32_t max_w = 0;
+                for (uint16_t c = 0; c < nc; ++c)
+                  max_w = std::max(max_w, img_width[c]);
+                row_buf.resize(static_cast<size_t>(max_w) * bpp);
+              }
+              for (uint16_t c = 0; c < nc; ++c)
+                total_samples += img_width[c] * img_height[c];
+            }
+
+            const uint16_t nc_all = static_cast<uint16_t>(fps.size() > 0 ? fps.size() : 0);
+            if (want_ppm && nc_all >= 3 && fps[0] != nullptr && fps[1] == nullptr) {
+              // Interleaved PPM row
+              uint8_t *out = row_buf.data();
+              if (bpp == 1) {
+                for (uint32_t n = 0; n < img_width[0]; ++n) {
+                  *out++ = static_cast<uint8_t>(rows[0][n] + pnm_offset);
+                  *out++ = static_cast<uint8_t>(rows[1][n] + pnm_offset);
+                  *out++ = static_cast<uint8_t>(rows[2][n] + pnm_offset);
+                }
+              } else {
+                for (uint32_t n = 0; n < img_width[0]; ++n) {
+                  int32_t r = rows[0][n] + pnm_offset;
+                  int32_t g = rows[1][n] + pnm_offset;
+                  int32_t b = rows[2][n] + pnm_offset;
+                  *out++    = static_cast<uint8_t>(r >> 8);
+                  *out++    = static_cast<uint8_t>(r);
+                  *out++    = static_cast<uint8_t>(g >> 8);
+                  *out++    = static_cast<uint8_t>(g);
+                  *out++    = static_cast<uint8_t>(b >> 8);
+                  *out++    = static_cast<uint8_t>(b);
+                }
+              }
+              fwrite(row_buf.data(), 1, row_buf.size(), fps[0]);
+            } else {
+              // Per-component files
+              for (uint16_t c = 0; c < static_cast<uint16_t>(fps.size()); ++c) {
+                if (fps[c] == nullptr || y >= img_height[c]) continue;
+                uint8_t *out = row_buf.data();
+                if (bpp == 1) {
+                  for (uint32_t n = 0; n < img_width[c]; ++n)
+                    *out++ = static_cast<uint8_t>(rows[c][n] + pnm_offset);
+                } else if (want_pgx) {
+                  // PGX: little-endian (LM = LSB first), no offset
+                  for (uint32_t n = 0; n < img_width[c]; ++n) {
+                    int32_t v = rows[c][n];
+                    *out++    = static_cast<uint8_t>(v);
+                    *out++    = static_cast<uint8_t>(v >> 8);
+                  }
+                } else {
+                  // PGM / other: big-endian with offset
+                  for (uint32_t n = 0; n < img_width[c]; ++n) {
+                    int32_t v = rows[c][n] + pnm_offset;
+                    *out++    = static_cast<uint8_t>(v >> 8);
+                    *out++    = static_cast<uint8_t>(v);
+                  }
+                }
+                fwrite(row_buf.data(), 1, static_cast<size_t>(img_width[c]) * bpp, fps[c]);
+              }
+            }
+          },
+          img_width, img_height, img_depth, img_signed);
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+    }
+    for (FILE *fp : fps)
+      if (fp) fclose(fp);
+
+    auto duration2  = std::chrono::high_resolution_clock::now() - start;
+    auto count2     = std::chrono::duration_cast<std::chrono::microseconds>(duration2).count();
+    double time2    = static_cast<double>(count2) / 1000.0;
+    printf("elapsed time %-15.3lf[ms]\n", time2);
+    printf("throughput %lf [Msamples/s]\n", total_samples / (double)count2);
+    printf("throughput %lf [usec/sample]\n", (double)count2 / total_samples);
+    return EXIT_SUCCESS;
+  }
+
   for (int i = 0; i < num_iterations; ++i) {
     // create decoder
     open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
@@ -150,7 +307,11 @@ int main(int argc, char *argv[]) {
     // invoke decoding
     try {
       decoder.parse();
-      decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+      if (use_line_based) {
+        decoder.invoke_line_based(buf, img_width, img_height, img_depth, img_signed);
+      } else {
+        decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+      }
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
       return EXIT_FAILURE;
