@@ -132,6 +132,23 @@ int main(int argc, char *argv[]) {
   }
   const bool use_line_based = !command_option_exists(argc, argv, "-batch");
 
+  // Reject any unrecognised flags.
+  {
+    static const char *const known[] = {
+        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", "-batch", nullptr};
+    for (int i = 1; i < argc; ++i) {
+      if (argv[i][0] != '-') continue;
+      bool recognised = false;
+      for (int k = 0; known[k]; ++k) {
+        if (strcmp(argv[i], known[k]) == 0) { recognised = true; break; }
+      }
+      if (!recognised) {
+        printf("ERROR: unknown option %s\n", argv[i]);
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
+
   std::vector<int32_t *> buf;
   std::vector<uint32_t> img_width;
   std::vector<uint32_t> img_height;
