@@ -592,6 +592,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
   uint8_t bit;
   bool is_included = false;
   uint16_t threshold;
+  std::vector<uint32_t> tree_path;
 
   for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
     j2k_codeblock *block  = this->access_codeblock(idx);
@@ -618,7 +619,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
       assert(block->fast_skip_passes == 0);
 
       // build tagtree search path
-      std::vector<uint32_t> tree_path;
+      tree_path.clear();
       current_node           = this->get_inclusion_node(idx);
       uint8_t max_tree_level = current_node->get_level();
       if (max_tree_level != 0xFF) {
@@ -1040,6 +1041,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
 
   uint16_t threshold;
   j2k_codeblock *blk;
+  std::vector<int32_t> tree_path;
 
   // set value for each leaf node
   for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
@@ -1069,7 +1071,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       current_node = this->get_inclusion_node(idx);
 
       // build tagtree search path
-      std::vector<int32_t> tree_path;
+      tree_path.clear();
       uint8_t max_tree_level = current_node->get_level();
       if (max_tree_level != 0xFF) {
         max_tree_level++;
