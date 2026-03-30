@@ -149,4 +149,150 @@ void cvt_ycbcr_to_rgb_irrev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     }
   }
 }
+
+// lossless: inverse RCT on float buffers (values are exact integers stored as float)
+void cvt_ycbcr_to_rgb_rev_float_avx2(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height,
+                                     uint32_t stride) {
+  for (uint32_t y = 0; y < height; ++y) {
+    float *p0   = sp0 + y * stride;
+    float *p1   = sp1 + y * stride;
+    float *p2   = sp2 + y * stride;
+    int32_t len = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      __m256i iY  = _mm256_cvtps_epi32(_mm256_loadu_ps(p0));
+      __m256i iCb = _mm256_cvtps_epi32(_mm256_loadu_ps(p1));
+      __m256i iCr = _mm256_cvtps_epi32(_mm256_loadu_ps(p2));
+      __m256i tmp = _mm256_srai_epi32(_mm256_add_epi32(iCb, iCr), 2);
+      __m256i iG  = _mm256_sub_epi32(iY, tmp);
+      _mm256_storeu_ps(p0, _mm256_cvtepi32_ps(_mm256_add_epi32(iCr, iG)));
+      _mm256_storeu_ps(p1, _mm256_cvtepi32_ps(iG));
+      _mm256_storeu_ps(p2, _mm256_cvtepi32_ps(_mm256_add_epi32(iCb, iG)));
+      p0 += 8;
+      p1 += 8;
+      p2 += 8;
+    }
+    for (; len > 0; --len) {
+      int32_t Y  = static_cast<int32_t>(*p0);
+      int32_t Cb = static_cast<int32_t>(*p1);
+      int32_t Cr = static_cast<int32_t>(*p2);
+      int32_t G  = Y - ((Cb + Cr) >> 2);
+      *p0++      = static_cast<float>(Cr + G);
+      *p1++      = static_cast<float>(G);
+      *p2++      = static_cast<float>(Cb + G);
+    }
+  }
+}
+
+// lossy: inverse ICT on float buffers
+void cvt_ycbcr_to_rgb_irrev_float_avx2(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height,
+                                       uint32_t stride) {
+  const __m256 mCR_FACT_R = _mm256_set1_ps(static_cast<float>(CR_FACT_R));
+  const __m256 mCR_FACT_G = _mm256_set1_ps(static_cast<float>(CR_FACT_G));
+  const __m256 mCB_FACT_B = _mm256_set1_ps(static_cast<float>(CB_FACT_B));
+  const __m256 mCB_FACT_G = _mm256_set1_ps(static_cast<float>(CB_FACT_G));
+  for (uint32_t y = 0; y < height; ++y) {
+    float *p0   = sp0 + y * stride;
+    float *p1   = sp1 + y * stride;
+    float *p2   = sp2 + y * stride;
+    int32_t len = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      __m256 mY  = _mm256_loadu_ps(p0);
+      __m256 mCb = _mm256_loadu_ps(p1);
+      __m256 mCr = _mm256_loadu_ps(p2);
+      __m256 mR  = _mm256_fmadd_ps(mCr, mCR_FACT_R, mY);
+      __m256 mB  = _mm256_fmadd_ps(mCb, mCB_FACT_B, mY);
+      __m256 mG  = _mm256_fnmadd_ps(mCr, mCR_FACT_G, mY);
+      mG         = _mm256_fnmadd_ps(mCb, mCB_FACT_G, mG);
+      _mm256_storeu_ps(p0, mR);
+      _mm256_storeu_ps(p1, mG);
+      _mm256_storeu_ps(p2, mB);
+      p0 += 8;
+      p1 += 8;
+      p2 += 8;
+    }
+    for (; len > 0; --len) {
+      float Y  = *p0;
+      float Cb = *p1;
+      float Cr = *p2;
+      *p0++    = Y + static_cast<float>(CR_FACT_R) * Cr;
+      *p1++    = Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb;
+      *p2++    = Y + static_cast<float>(CB_FACT_B) * Cb;
+    }
+  }
+}
+
+// lossless: fused int32→float + forward RCT
+void cvt_rgb_to_ycbcr_rev_float_avx2(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                     float *dp0, float *dp1, float *dp2,
+                                     uint32_t width, uint32_t height, uint32_t stride) {
+  for (uint32_t y = 0; y < height; ++y) {
+    const int32_t *p0 = sp0 + y * stride;
+    const int32_t *p1 = sp1 + y * stride;
+    const int32_t *p2 = sp2 + y * stride;
+    float *d0         = dp0 + y * stride;
+    float *d1         = dp1 + y * stride;
+    float *d2         = dp2 + y * stride;
+    int32_t len       = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      __m256i mR  = _mm256_load_si256((__m256i *)p0);
+      __m256i mG  = _mm256_load_si256((__m256i *)p1);
+      __m256i mB  = _mm256_load_si256((__m256i *)p2);
+      __m256i mY  = _mm256_add_epi32(_mm256_add_epi32(mR, mB), _mm256_add_epi32(mG, mG));
+      mY          = _mm256_srai_epi32(mY, 2);  // (R + 2G + B) >> 2
+      _mm256_store_ps(d0, _mm256_cvtepi32_ps(mY));
+      _mm256_store_ps(d1, _mm256_cvtepi32_ps(_mm256_sub_epi32(mB, mG)));
+      _mm256_store_ps(d2, _mm256_cvtepi32_ps(_mm256_sub_epi32(mR, mG)));
+      p0 += 8; p1 += 8; p2 += 8;
+      d0 += 8; d1 += 8; d2 += 8;
+    }
+    for (; len > 0; --len) {
+      int32_t R = *p0++, G = *p1++, B = *p2++;
+      *d0++ = static_cast<float>((R + 2 * G + B) >> 2);
+      *d1++ = static_cast<float>(B - G);
+      *d2++ = static_cast<float>(R - G);
+    }
+  }
+}
+
+// lossy: fused int32→float + forward ICT
+void cvt_rgb_to_ycbcr_irrev_float_avx2(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                       float *dp0, float *dp1, float *dp2,
+                                       uint32_t width, uint32_t height, uint32_t stride) {
+  const __m256 mALPHA_R = _mm256_set1_ps(static_cast<float>(ALPHA_R));
+  const __m256 mALPHA_G = _mm256_set1_ps(static_cast<float>(ALPHA_G));
+  const __m256 mALPHA_B = _mm256_set1_ps(static_cast<float>(ALPHA_B));
+  const __m256 mCB_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CB_FACT_B));
+  const __m256 mCR_FACT = _mm256_set1_ps(static_cast<float>(1.0 / CR_FACT_R));
+  for (uint32_t y = 0; y < height; ++y) {
+    const int32_t *p0 = sp0 + y * stride;
+    const int32_t *p1 = sp1 + y * stride;
+    const int32_t *p2 = sp2 + y * stride;
+    float *d0         = dp0 + y * stride;
+    float *d1         = dp1 + y * stride;
+    float *d2         = dp2 + y * stride;
+    int32_t len       = static_cast<int32_t>(width);
+    for (; len >= 8; len -= 8) {
+      __m256 mR  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p0));
+      __m256 mG  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p1));
+      __m256 mB  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p2));
+      __m256 mY  = _mm256_fmadd_ps(mR, mALPHA_R, _mm256_mul_ps(mG, mALPHA_G));
+      mY         = _mm256_fmadd_ps(mB, mALPHA_B, mY);
+      _mm256_store_ps(d0, mY);
+      _mm256_store_ps(d1, _mm256_mul_ps(mCB_FACT, _mm256_sub_ps(mB, mY)));
+      _mm256_store_ps(d2, _mm256_mul_ps(mCR_FACT, _mm256_sub_ps(mR, mY)));
+      p0 += 8; p1 += 8; p2 += 8;
+      d0 += 8; d1 += 8; d2 += 8;
+    }
+    for (; len > 0; --len) {
+      float R = static_cast<float>(*p0++);
+      float G = static_cast<float>(*p1++);
+      float B = static_cast<float>(*p2++);
+      float Y = static_cast<float>(ALPHA_R) * R + static_cast<float>(ALPHA_G) * G
+                + static_cast<float>(ALPHA_B) * B;
+      *d0++ = Y;
+      *d1++ = static_cast<float>(1.0 / CB_FACT_B) * (B - Y);
+      *d2++ = static_cast<float>(1.0 / CR_FACT_R) * (R - Y);
+    }
+  }
+}
 #endif
