@@ -15,17 +15,31 @@ open_htj2k::openhtj2k_decoder* cpp_create_decoder(uint8_t* data, size_t size, ui
 
 void cpp_parse_j2c_data(open_htj2k::openhtj2k_decoder* dec) { dec->parse(); }
 void cpp_invoke_decoder(open_htj2k::openhtj2k_decoder* dec, int32_t* out) {
-  const uint16_t num_components = dec->get_num_component();
+  const uint16_t C = dec->get_num_component();
   std::vector<int32_t*> buf;
   std::vector<uint32_t> img_width;
   std::vector<uint32_t> img_height;
   std::vector<uint8_t> img_depth;
   std::vector<bool> img_signed;
   dec->invoke(buf, img_width, img_height, img_depth, img_signed);
-  for (uint32_t y = 0; y < img_height[0]; ++y) {
-    for (uint32_t x = 0; x < img_width[0]; ++x) {
-      for (uint16_t c = 0; c < num_components; ++c) {
-        out[y * img_width[0] * num_components + x * num_components + c] = buf[c][y * img_width[0] + x];
+
+  const uint32_t W = img_width[0];
+  const uint32_t H = img_height[0];
+
+  if (C == 1) {
+    // Grayscale: direct copy — no interleaving needed
+    std::memcpy(out, buf[0], (size_t)W * H * sizeof(int32_t));
+  } else {
+    // Planar → interleaved row by row.
+    // Inner loop reads buf[c] sequentially (cache-friendly) and writes
+    // with stride C; LLVM auto-vectorizes to v128 scatter ops.
+    for (uint32_t y = 0; y < H; ++y) {
+      int32_t* __restrict__ dst = out + (size_t)y * W * C;
+      for (uint16_t c = 0; c < C; ++c) {
+        const int32_t* __restrict__ src = buf[c] + (size_t)y * W;
+        for (uint32_t x = 0; x < W; ++x) {
+          dst[x * C + c] = src[x];
+        }
       }
     }
   }
