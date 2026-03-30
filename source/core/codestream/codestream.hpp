@@ -319,7 +319,8 @@ class tagtree_node {
   uint8_t level;
   int32_t index;
   int32_t parent_index;
-  std::vector<int32_t> child_index;
+  int32_t child_index[4];
+  uint8_t num_children;
   uint8_t state;
   uint16_t current_value;
   uint16_t value;
@@ -330,7 +331,7 @@ class tagtree_node {
     level         = 0;
     index         = -1;
     parent_index  = 0;
-    child_index   = {};
+    num_children  = 0;
     state         = 0;
     current_value = 0;
     value         = 0;
@@ -345,11 +346,12 @@ class tagtree_node {
     index        = i;
     parent_index = pi;
   }
-  void add_child(int32_t val = 0) { child_index.push_back(val); }
+  void add_child(int32_t val = 0) { child_index[num_children++] = val; }
   [[nodiscard]] uint8_t get_level() const { return level; }
   [[nodiscard]] int32_t get_index() const { return index; }
   [[nodiscard]] int32_t get_parent_index() const { return parent_index; }
-  std::vector<int32_t> get_child_index() { return child_index; }
+  [[nodiscard]] const int32_t *get_child_index() const { return child_index; }
+  [[nodiscard]] uint8_t get_num_children() const { return num_children; }
   [[nodiscard]] uint8_t get_state() const { return state; }
   void set_state(uint8_t s) { state = s; }
   [[nodiscard]] uint16_t get_current_value() const { return current_value; }
@@ -441,15 +443,15 @@ class tagtree {
   void build() const {
     for (uint32_t i = 0; i < this->num_nodes; ++i) {
       tagtree_node *current = &this->node[i];
-      // need to reset current value because packet header generation will be done twice
       current->set_current_value(0);
       current->set_state(0);
       if (!current->is_set()) {
-        std::vector<int32_t> children = current->get_child_index();
-        uint16_t val                  = this->node[static_cast<size_t>(children[0])].get_value();
-        for (int &j : children) {
-          uint16_t tmp = this->node[static_cast<size_t>(j)].get_value();
-          val          = (val > tmp) ? tmp : val;
+        const int32_t *children = current->get_child_index();
+        uint8_t nc              = current->get_num_children();
+        uint16_t val            = this->node[static_cast<size_t>(children[0])].get_value();
+        for (uint8_t j = 1; j < nc; ++j) {
+          uint16_t tmp = this->node[static_cast<size_t>(children[j])].get_value();
+          if (tmp < val) val = tmp;
         }
         current->set_value(val);
       }
