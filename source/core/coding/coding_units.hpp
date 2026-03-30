@@ -220,7 +220,12 @@ class j2k_subband : public j2k_region {
               uint8_t epsilon_b, uint16_t mantissa_b, uint8_t M_b, float delta, float nominal_range,
               sprec_t *ibuf, bool no_alloc = false);
   ~j2k_subband();
-  void destroy() { aligned_mem_free(i_samples); }
+  void destroy() {
+    if (orientation != BAND_LL) {
+      aligned_mem_free(i_samples);
+      i_samples = nullptr;
+    }
+  }
 };
 
 /********************************************************************************
@@ -376,6 +381,7 @@ class j2k_resolution : public j2k_region {
   }
   void destroy() {
     aligned_mem_free(i_samples);
+    i_samples = nullptr;
     for (uint8_t b = 0; b < num_bands; ++b) {
       if (subbands != nullptr) {
         subbands[b]->destroy();

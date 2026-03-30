@@ -281,6 +281,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     tileSet[i].decode();
     tileSet[i].ycbcr_to_rgb();
     tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer
+    tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
 }
 
@@ -398,6 +399,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     }
     // decode_line_based() replaces decode() + ycbcr_to_rgb() + finalize().
     tileSet[i].decode_line_based(main_header, reduce_NL, buf);
+    tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
 }
 
@@ -493,6 +495,31 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
 
   uint32_t global_y = 0;
 
+  if (numTiles.x == 1) {
+    // Fast path: single tile column — deliver rows directly to user callback, no accumulator.
+    for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
+      uint32_t x_off, y_off, t_w, band_h0;
+      get_tile_geom(0, ty, 0, x_off, y_off, t_w, band_h0);
+      const uint32_t tile_idx = ty;
+      try {
+        tileSet[tile_idx].line_based_decode = true;
+        tileSet[tile_idx].create_tile_buf(main_header);
+      } catch (std::exception &exc) {
+        printf("ERROR: %s\n", exc.what());
+        tileSet[tile_idx].destroy();
+        throw std::runtime_error("Abort Decoding!");
+      }
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL,
+          [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
+            cb(global_y + y_local, rows, nc);
+          });
+      tileSet[tile_idx].destroy();
+      global_y += band_h0;
+    }
+    return;
+  }
+
+  // General path: multiple tile columns — scatter into per-band-row accumulators.
   for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
     // Compute band height per component (same for all tx in this tile row).
     std::vector<uint32_t> band_h(num_components);
@@ -540,6 +567,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         throw std::runtime_error("Abort Decoding!");
       }
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter);
+      tileSet[tile_idx].destroy();  // Release tile-internal buffers immediately
     }
 
     // Deliver complete rows for this tile-row band to the user callback.
