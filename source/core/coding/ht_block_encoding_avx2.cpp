@@ -311,8 +311,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   // Must be zeroed before each codeblock (encoders rely on zero-initialized state).
   // Thread-local scratch buffers: one allocation per thread for the lifetime of the program.
   // All positions written before they are read; no zeroing needed between codeblocks.
-  static thread_local uint8_t fwd_buf[MAX_Lcup];
-  static thread_local uint8_t rev_buf[MAX_Scup];
+  alignas(32) static thread_local uint8_t fwd_buf[MAX_Lcup];
+  alignas(32) static thread_local uint8_t rev_buf[MAX_Scup];
 
   state_MS_enc MagSgn_encoder(fwd_buf);
   state_MEL_enc MEL_encoder(rev_buf);
