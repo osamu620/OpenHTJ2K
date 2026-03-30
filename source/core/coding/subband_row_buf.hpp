@@ -30,6 +30,9 @@
 
 #include <cstdint>
 #include <cstddef>
+#ifdef OPENHTJ2K_THREAD
+  #include <future>
+#endif
 #include "coding_units.hpp"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,6 +77,16 @@ struct j2k_subband_row_buf {
   size_t   cb_sample_cap;  // current capacity in elements
   size_t   cb_state_cap;
 
+#ifdef OPENHTJ2K_THREAD
+  // Double-buffer for strip prefetch: while IDWT consumes ring_buf (current strip),
+  // a background task decodes the next strip into prefetch_buf.
+  sprec_t           *prefetch_buf;    // decode target for next strip
+  int32_t            prefetch_y0;     // strip bounds of pending prefetch task
+  int32_t            prefetch_y1;
+  std::future<void>  prefetch_future; // wait handle (valid only when prefetch_active)
+  bool               prefetch_active; // true while a prefetch task is in flight
+#endif
+
   // Initialise. cb_h is the maximum codeblock height for this resolution level.
   // When use_ring=true, allocates a ring buffer (cb_h rows) instead of using sb->i_samples.
   void init(j2k_resolution *res, uint8_t band_idx, int32_t cb_h, uint8_t ROIshift,
@@ -90,6 +103,17 @@ struct j2k_subband_row_buf {
   void get_row(int32_t abs_row, sprec_t *out);
 
  private:
-  // Decode all codeblocks in the strip covering abs_row.
+  // Core per-strip codeblock decode. Writes decoded samples to target_buf
+  // (when ring_mode && target_buf != nullptr); otherwise leaves block->i_samples
+  // pointing into sb->i_samples (non-ring / bypass path).
+  void decode_strip_core(sprec_t *target_buf, int32_t y0, int32_t y1);
+
+  // Decode-on-demand wrapper: computes strip bounds, zeros ring_buf, calls core,
+  // and (when OPENHTJ2K_THREAD) triggers a prefetch for the next strip.
   void decode_strip(int32_t abs_row);
+
+#ifdef OPENHTJ2K_THREAD
+  // Submit a background task to decode the strip starting at next_y0 into prefetch_buf.
+  void trigger_prefetch(int32_t next_y0);
+#endif
 };
