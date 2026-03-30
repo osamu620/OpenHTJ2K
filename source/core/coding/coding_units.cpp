@@ -3477,6 +3477,38 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
       int32_t       *dp  = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
       const int16_t  ds  = I.downshift;
       const int16_t  ro  = I.rnd;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      {
+        const int32x4_t vo    = vdupq_n_s32(ro);
+        const int32x4_t vdco  = vdupq_n_s32(I.DC_OFFSET);
+        const int32x4_t vmx   = vdupq_n_s32(I.MAXVAL);
+        const int32x4_t vmn   = vdupq_n_s32(I.MINVAL);
+        const int32x4_t vs    = vdupq_n_s32(-ds);
+        uint32_t n = 0;
+        for (; n + 8 <= I.csize_x; n += 8) {
+          int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
+          int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
+          v0 = vshlq_s32(vaddq_s32(v0, vo), vs);
+          v1 = vshlq_s32(vaddq_s32(v1, vo), vs);
+          v0 = vaddq_s32(v0, vdco);
+          v1 = vaddq_s32(v1, vdco);
+          v0 = vminq_s32(v0, vmx);
+          v1 = vminq_s32(v1, vmx);
+          v0 = vmaxq_s32(v0, vmn);
+          v1 = vmaxq_s32(v1, vmn);
+          vst1q_s32(dp + n, v0);
+          vst1q_s32(dp + n + 4, v1);
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
+#else
       for (uint32_t n = 0; n < I.csize_x; ++n) {
         int32_t v = static_cast<int32_t>(spf[n]);
         v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
@@ -3485,6 +3517,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
         if (v < I.MINVAL) v = I.MINVAL;
         dp[n] = v;
       }
+#endif
     }
   }
 
@@ -3597,14 +3630,47 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
         const sprec_t *spf = src[c].data();
         int32_t       *dp  = out_rows[c].data();
         const int16_t  ds  = I.downshift, ro = I.rnd;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+        {
+          const int32x4_t vo    = vdupq_n_s32(ro);
+          const int32x4_t vdco  = vdupq_n_s32(I.DC_OFFSET);
+          const int32x4_t vmx   = vdupq_n_s32(I.MAXVAL);
+          const int32x4_t vmn   = vdupq_n_s32(I.MINVAL);
+          const int32x4_t vs    = vdupq_n_s32(-ds);
+          uint32_t n = 0;
+          for (; n + 8 <= I.csize_x; n += 8) {
+            int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
+            int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
+            v0 = vshlq_s32(vaddq_s32(v0, vo), vs);
+            v1 = vshlq_s32(vaddq_s32(v1, vo), vs);
+            v0 = vaddq_s32(v0, vdco);
+            v1 = vaddq_s32(v1, vdco);
+            v0 = vminq_s32(v0, vmx);
+            v1 = vminq_s32(v1, vmx);
+            v0 = vmaxq_s32(v0, vmn);
+            v1 = vmaxq_s32(v1, vmn);
+            vst1q_s32(dp + n, v0);
+            vst1q_s32(dp + n + 4, v1);
+          }
+          for (; n < I.csize_x; ++n) {
+            int32_t v = static_cast<int32_t>(spf[n]);
+            v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
+            v += I.DC_OFFSET;
+            if (v > I.MAXVAL) v = I.MAXVAL;
+            if (v < I.MINVAL) v = I.MINVAL;
+            dp[n] = v;
+          }
+        }
+#else
         for (uint32_t n = 0; n < I.csize_x; ++n) {
           int32_t v = static_cast<int32_t>(spf[n]);
-          v = (ds < 0) ? (v + ro) << (-ds) : (v + ro) >> ds;
+          v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
           v += I.DC_OFFSET;
           v = std::min(v, static_cast<int32_t>(I.MAXVAL));
           v = std::max(v, static_cast<int32_t>(I.MINVAL));
           dp[n] = v;
         }
+#endif
       }
     };
 
@@ -3648,6 +3714,38 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       int32_t       *dp  = out_rows[c].data();
       const int16_t  ds  = I.downshift;
       const int16_t  ro  = I.rnd;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      {
+        const int32x4_t vo    = vdupq_n_s32(ro);
+        const int32x4_t vdco  = vdupq_n_s32(I.DC_OFFSET);
+        const int32x4_t vmx   = vdupq_n_s32(I.MAXVAL);
+        const int32x4_t vmn   = vdupq_n_s32(I.MINVAL);
+        const int32x4_t vs    = vdupq_n_s32(-ds);
+        uint32_t n = 0;
+        for (; n + 8 <= I.csize_x; n += 8) {
+          int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
+          int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
+          v0 = vshlq_s32(vaddq_s32(v0, vo), vs);
+          v1 = vshlq_s32(vaddq_s32(v1, vo), vs);
+          v0 = vaddq_s32(v0, vdco);
+          v1 = vaddq_s32(v1, vdco);
+          v0 = vminq_s32(v0, vmx);
+          v1 = vminq_s32(v1, vmx);
+          v0 = vmaxq_s32(v0, vmn);
+          v1 = vmaxq_s32(v1, vmn);
+          vst1q_s32(dp + n, v0);
+          vst1q_s32(dp + n + 4, v1);
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
+#else
       for (uint32_t n = 0; n < I.csize_x; ++n) {
         int32_t v = static_cast<int32_t>(spf[n]);
         v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
@@ -3656,6 +3754,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
         v = std::max(v, static_cast<int32_t>(I.MINVAL));
         dp[n] = v;
       }
+#endif
     }
 
     cb(y, out_ptrs.data(), NC);
@@ -3798,6 +3897,38 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       int32_t *dp      = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
       const int16_t ds = I.downshift;
       const int16_t ro = I.rnd;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      {
+        const int32x4_t vo    = vdupq_n_s32(ro);
+        const int32x4_t vdco  = vdupq_n_s32(I.DC_OFFSET);
+        const int32x4_t vmx   = vdupq_n_s32(I.MAXVAL);
+        const int32x4_t vmn   = vdupq_n_s32(I.MINVAL);
+        const int32x4_t vs    = vdupq_n_s32(-ds);
+        uint32_t n = 0;
+        for (; n + 8 <= I.csize_x; n += 8) {
+          int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
+          int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
+          v0 = vshlq_s32(vaddq_s32(v0, vo), vs);
+          v1 = vshlq_s32(vaddq_s32(v1, vo), vs);
+          v0 = vaddq_s32(v0, vdco);
+          v1 = vaddq_s32(v1, vdco);
+          v0 = vminq_s32(v0, vmx);
+          v1 = vminq_s32(v1, vmx);
+          v0 = vmaxq_s32(v0, vmn);
+          v1 = vmaxq_s32(v1, vmn);
+          vst1q_s32(dp + n, v0);
+          vst1q_s32(dp + n + 4, v1);
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
+#else
       for (uint32_t n = 0; n < I.csize_x; ++n) {
         int32_t v = static_cast<int32_t>(spf[n]);
         v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
@@ -3806,6 +3937,7 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
         if (v < I.MINVAL) v = I.MINVAL;
         dp[n] = v;
       }
+#endif
     }
   }
 
