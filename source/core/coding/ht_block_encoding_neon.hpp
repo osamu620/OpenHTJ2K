@@ -82,8 +82,19 @@ class state_MS_enc {
   //  }
 
   FORCE_INLINE void emit_dword() {  // internal function to emit 4 code words
+    uint32_t val = Creg & 0xFFFFFFFF;
+    // Fast path: no byte stuffing when none of {last, val[7:0], val[15:8], val[23:16]} equals 0xFF.
+    // Byte stuffing in MagSgn only occurs when a byte is exactly 0xFF.
+    if (last < 0xFF && (val & 0xFF) < 0xFF && ((val >> 8) & 0xFF) < 0xFF && ((val >> 16) & 0xFF) < 0xFF) {
+      last = static_cast<uint8_t>(val >> 24);
+      Creg >>= 32;
+      ctreg -= 32;
+      *reinterpret_cast<uint32_t *>(buf + pos) = val;
+      pos += 4;
+      return;
+    }
+    // Slow path: handle byte stuffing.
     uint32_t bits_local = 0;
-    uint32_t val        = Creg & 0xFFFFFFFF;
     uint32_t stuff      = (last == 0xFF);
     uint32_t tmp;
 
@@ -212,8 +223,19 @@ class state_VLC_enc {
   }
 
   FORCE_INLINE void emit_dword() {
+    uint32_t val = Creg & 0xFFFFFFFF;
+    // Fast path: no stuffing when all of {last, val[7:0], val[15:8], val[23:16]} <= 0x8F.
+    // VLC stuffing requires previous byte > 0x8F; if all four "previous" bytes are <= 0x8F
+    // no stuffing can occur. (a|b|c|d) & 0x70 == 0 is equivalent to all four <= 0x8F.
+    if (((last | (val & 0xFF) | ((val >> 8) & 0xFF) | ((val >> 16) & 0xFF)) & 0x70) == 0) {
+      last = static_cast<uint8_t>(val >> 24);
+      Creg >>= 32;
+      ctreg -= 32;
+      *reinterpret_cast<uint32_t *>(buf + pos - 3) = __builtin_bswap32(val);
+      pos -= 4;
+      return;
+    }
     uint32_t bits_local = 0;
-    uint32_t val        = Creg & 0xFFFFFFFF;
     uint32_t temp, t = 0;
     uint32_t stuff;
     uint32_t last_byte;

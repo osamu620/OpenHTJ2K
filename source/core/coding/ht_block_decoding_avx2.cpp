@@ -552,8 +552,10 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         // convert values from sign-magnitude form to two's complement one
         vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
         vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
-        v0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(vdst0, vdst1), 0xD8);
-        _mm256_storeu_si256((__m256i *)dst, v0);
+        _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(vdst0));
+        _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(vdst1));
+        // v0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(vdst0, vdst1), 0xD8);
+        // _mm256_storeu_si256((__m256i *)dst, v0);
         val += 16;
         dst += 16;
       }
@@ -571,7 +573,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         }
 
         assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<int16_t>(*val);
+        *dst = static_cast<float>(*val);
         val++;
         dst++;
       }
@@ -624,7 +626,9 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         v0 = _mm256_sign_epi32(v0, s0);
         v1 = _mm256_sign_epi32(v1, s1);
 
-        _mm256_storeu_si256((__m256i *)dst, _mm256_permute4x64_epi64(_mm256_packs_epi32(v0, v1), 0xD8));
+        _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(v0));
+        _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(v1));
+        // _mm256_storeu_si256((__m256i *)dst, _mm256_permute4x64_epi64(_mm256_packs_epi32(v0, v1), 0xD8));
 
         val += 16;
         dst += 16;
@@ -641,12 +645,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         //  dequantization
         *val *= scale;
         // downshift
-        *val = (int16_t)((*val + (1 << (downshift - 1))) >> downshift);
+        *val = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
         // convert sign-magnitude to two's complement form
         if (sign) {
           *val = -(*val & INT32_MAX);
         }
-        *dst = static_cast<int16_t>(*val);
+        *dst = static_cast<float>(*val);
         val++;
         dst++;
       }

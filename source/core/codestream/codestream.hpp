@@ -208,6 +208,16 @@ class buf_chain {
     buf += N;
   }
 
+  // Returns a direct pointer into the current node's buffer and advances pos by N.
+  // The caller must NOT free this pointer (it belongs to j2c_src_memory).
+  // N bytes must lie within the current node (same guarantee as copy_N_bytes).
+  uint8_t *borrow_N_bytes(uint32_t N) {
+    assert((pos + N) <= current_length);
+    uint8_t *ptr = current_buf + pos;
+    pos += N;
+    return ptr;
+  }
+
   uint16_t get_word() {
     uint16_t word = get_byte();
     // word <<= 8;

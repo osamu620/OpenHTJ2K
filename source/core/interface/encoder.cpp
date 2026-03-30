@@ -514,12 +514,16 @@ class openhtj2k_encoder_impl {
   bool isJPH;
   uint8_t color_space;
 
+  size_t invoke_internal(bool line_based);
+
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
                          qcd_params &, uint8_t, bool, uint8_t);
   void set_output_buffer(std::vector<uint8_t> &);
   ~openhtj2k_encoder_impl();
   size_t invoke();
+  size_t invoke_line_based();
+  size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
 };
 
 openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
@@ -537,7 +541,7 @@ void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf)
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
 
-size_t openhtj2k_encoder_impl::invoke() {
+size_t openhtj2k_encoder_impl::invoke_internal(bool line_based) {
   std::vector<uint8_t> Ssiz;
   std::vector<uint8_t> XRsiz, YRsiz;
 
@@ -636,12 +640,15 @@ size_t openhtj2k_encoder_impl::invoke() {
 
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
   for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
-    tileSet[i].enc_init(i, main_header, *buf);
+    tileSet[i].enc_init(i, main_header, *buf, line_based);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
     tileSet[i].perform_dc_offset(main_header);
     tileSet[i].rgb_to_ycbcr();
-    tileSet[i].encode();
+    if (line_based)
+      tileSet[i].encode_line_based();
+    else
+      tileSet[i].encode();
     tileSet[i].construct_packets(main_header);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
@@ -680,7 +687,157 @@ size_t openhtj2k_encoder_impl::invoke() {
   return codestream_size;
 }
 
-// public interface
+
+size_t openhtj2k_encoder_impl::invoke() { return invoke_internal(false); }
+size_t openhtj2k_encoder_impl::invoke_line_based() { return invoke_internal(true); }
+
+size_t openhtj2k_encoder_impl::invoke_line_based_stream(
+    std::function<void(uint32_t, int32_t **, uint16_t)> src_fn) {
+  std::vector<uint8_t> Ssiz;
+  std::vector<uint8_t> XRsiz, YRsiz;
+
+  if ((siz->XOsiz > siz->Xsiz) || (siz->YOsiz > siz->Ysiz)) {
+    printf("ERROR: image origin exceeds the size of input image.\n");
+    throw std::exception();
+  }
+  if ((siz->XTOsiz > siz->XOsiz) || (siz->YTOsiz > siz->YOsiz)) {
+    printf("ERROR: tile origin shall be no greater than the image origin.\n");
+    throw std::exception();
+  }
+  if (siz->XTsiz * siz->YTsiz == 0) {
+    siz->XTsiz = siz->Xsiz - siz->XOsiz;
+    siz->YTsiz = siz->Ysiz - siz->YOsiz;
+  }
+  if (((siz->XTOsiz + siz->XTsiz) <= siz->XOsiz) || ((siz->YTOsiz + siz->YTsiz) <= siz->YOsiz)) {
+    printf("ERROR: tile size plus tile origin shall be greater than the image origin.\n");
+    throw std::exception();
+  }
+
+  for (size_t c = 0; c < siz->Csiz; ++c) {
+    Ssiz.push_back(siz->Ssiz[c]);
+    XRsiz.push_back(siz->XRsiz[c]);
+    YRsiz.push_back(siz->YRsiz[c]);
+  }
+
+  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2])
+      && (YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
+    cod->use_color_trafo = 0;
+    printf("WARNING: Cycc is set to 'no' because size of each component is not identical.\n");
+  }
+  if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
+    cod->use_color_trafo = 0;
+    printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
+  }
+  if (qfactor != NO_QFACTOR) {
+    if (siz->Csiz == 3) {
+      if (cod->use_color_trafo == 0) {
+        printf("WARNING: Color conversion is OFF while Qfactor feature is enabled.\n");
+        printf("         It is OK if the inputs are in YCbCr color space.\n");
+      }
+    } else if (siz->Csiz != 1) {
+      printf("WARNING: Qfactor is designed for only gray-scale or RGB or YCbCr input.\n");
+    }
+  }
+
+  SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
+                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, true);
+  COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
+                      cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels,
+                      static_cast<uint8_t>(cod->blkwidth), static_cast<uint8_t>(cod->blkheight),
+                      cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
+  QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
+                      static_cast<uint8_t>((Ssiz[0] & 0x7F) + 1U), cod->use_color_trafo, qcd->base_step,
+                      qfactor);
+  uint16_t bits14_15 = 0;
+  uint16_t bit13     = 0;
+  uint16_t bit12     = 0;
+  uint16_t bit11     = 0;
+  uint16_t bit5      = !cod->transformation;
+  uint16_t bits0_4;
+  uint8_t MAGB = main_QCD.get_MAGB();
+  if (MAGB < 27) {
+    bits0_4 = static_cast<uint16_t>((MAGB > 8) ? MAGB - 8 : 0);
+  } else if (MAGB <= 71) {
+    bits0_4 = static_cast<uint16_t>((MAGB - 27) / 4 + 19);
+  } else {
+    bits0_4 = 31;
+  }
+  auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12) + (bit11 << 11)
+                                      + (bit5 << 5) + bits0_4);
+  CAP_marker main_CAP;
+  main_CAP.set_Ccap(Ccap15, 15);
+
+  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor);
+  COM_marker main_COM("OpenHTJ2K version 0", true);
+  main_header.add_COM_marker(main_COM);
+
+  j2c_dst_memory j2c_dst, jph_dst;
+  j2c_dst.put_word(_SOC);
+  main_header.flush(j2c_dst);
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
+
+  // Empty input buffer for streaming (img is not used)
+  std::vector<int32_t *> empty_buf;
+  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
+  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+    tileSet[i].enc_init(i, main_header, empty_buf, true, true);
+  }
+  for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
+    // Compute per-component image widths (needed by encode_line_based_stream to
+    // allocate int_rows large enough for the full image row and to offset reads).
+    std::vector<uint32_t> img_comp_widths(static_cast<size_t>(siz->Csiz));
+    for (size_t c = 0; c < siz->Csiz; ++c) {
+      const uint32_t xr = static_cast<uint32_t>(siz->XRsiz[c]);
+      img_comp_widths[c] = (static_cast<uint32_t>(siz->Xsiz) - static_cast<uint32_t>(siz->XOsiz) + xr - 1) / xr;
+    }
+    tileSet[i].perform_dc_offset(main_header);
+    // MCT is handled inside encode_line_based_stream
+    tileSet[i].encode_line_based_stream(src_fn, img_comp_widths);
+    tileSet[i].construct_packets(main_header);
+  }
+  for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
+    tileSet[i].write_packets(j2c_dst);
+  }
+  j2c_dst.put_word(_EOC);
+  size_t codestream_size = j2c_dst.get_length();
+
+  if (isJPH) {
+    bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
+    jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+    size_t file_format_size = jph_info.write(jph_dst);
+    codestream_size += file_format_size - codestream_size;
+  }
+  if (outbuf != nullptr) {
+    if (isJPH) {
+      if (jph_dst.flush(outbuf)) {
+        printf("illegal attempt to flush empty buffer.\n");
+        throw std::exception();
+      }
+    }
+    if (j2c_dst.flush(outbuf)) {
+      printf("illegal attempt to flush empty buffer.\n");
+      throw std::exception();
+    }
+  } else {
+    std::ofstream dst;
+    dst.open(this->outfile, std::ios::out | std::ios::binary);
+    if (isJPH) {
+      jph_dst.flush(dst);
+    }
+    j2c_dst.flush(dst);
+    dst.close();
+  }
+  return codestream_size;
+}
+
+
+
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
                                      siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
                                      bool isJPH, uint8_t color_space, uint32_t num_threads) {
@@ -702,6 +859,13 @@ void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
 }
 
 size_t openhtj2k_encoder::invoke() { return this->impl->invoke(); }
+
+size_t openhtj2k_encoder::invoke_line_based() { return this->impl->invoke_line_based(); }
+
+size_t openhtj2k_encoder::invoke_line_based_stream(
+    std::function<void(uint32_t, int32_t **, uint16_t)> src_fn) {
+  return this->impl->invoke_line_based_stream(src_fn);
+}
 
 openhtj2k_encoder::~openhtj2k_encoder() {
 #ifdef OPENHTJ2K_THREAD
