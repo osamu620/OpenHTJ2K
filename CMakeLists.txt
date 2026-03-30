@@ -268,4 +268,6 @@ install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 # conformance testing
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/line_based_validation.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/lb_stream_validation.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/lb_encoder_test.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
