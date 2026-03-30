@@ -12,7 +12,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 set(WASM_FLAGS "\
     -O3 -flto -s WASM=1 -s EXPORT_ES6=1 -s MODULARIZE=1 -s ENVIRONMENT=web \
     -s EXPORTED_FUNCTIONS=[_free,_malloc] \
--    -s MALLOC=emmalloc \
+    -s MALLOC=emmalloc \
     -s FILESYSTEM=0 \
     -s EXPORTED_RUNTIME_METHODS=[ccall,cwrap,writeArrayToMemory,getValue,HEAP32] \
     -s NO_EXIT_RUNTIME=1 \
