@@ -648,9 +648,18 @@ static void emit_ready_f(fdwt_2d_state *s) {
     // Copy ring row into horiz_tmp without modifying the ring (other rows may
     // still reference r as a vertical-lifting neighbour).
     const sprec_t *ring_row = rptr_f(s, r);
-    dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(ring_row),
-                      s->horiz_left, s->horiz_right, s->u0, s->u1);
-    fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+
+    if (s->u1 == s->u0 + 1) {
+      // Single-column: skip PSE/filter (PSEo has UB for length-1 signals).
+      // Match fdwt_hor_sr_fixed: LP even u0 → no-op; HP odd u0 → *2 for 5/3.
+      sprec_t *out = s->horiz_tmp + s->horiz_left;
+      out[0] = ring_row[0];
+      if (s->transformation == 1 && (s->u0 % 2 != 0)) out[0] = floorf(out[0] * 2.0f);
+    } else {
+      dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(ring_row),
+                        s->horiz_left, s->horiz_right, s->u0, s->u1);
+      fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+    }
 
     s->put_row(s->sink_ctx, is_hp, r, s->horiz_tmp + s->horiz_left);
     ++s->next_emit;
@@ -711,7 +720,14 @@ void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in) {
   if (s->next_in >= s->v1) return;
 
   // Special case: single-row tile (handled by flush()).
-  if (s->v1 == s->v0 + 1) { ++s->next_in; return; }
+  if (s->v1 == s->v0 + 1) {
+    // Still store the row in ring_buf so flush() can read it.
+    const int32_t slot = s->next_in % FDWT_STATE_RING_DEPTH;
+    memcpy(s->ring_buf + static_cast<ptrdiff_t>(slot) * s->stride, in,
+           sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
+    ++s->next_in;
+    return;
+  }
 
   const int32_t r    = s->next_in;
   const int32_t slot = r % FDWT_STATE_RING_DEPTH;
@@ -730,19 +746,31 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
   // Handle single-row tile special case.
   if (s->v1 == s->v0 + 1 && s->next_in == s->v0 + 1 && s->next_emit == s->v0) {
     // Single-row: LL-only or HP-only scaling.
-    // For 5/3 with v0 odd: LP *= 2; for irrev: no-op.
-    // The sink receives the row as-is (no vertical lifting needed).
+    // For 5/3 with v0 odd: HP *= 2; for irrev: no-op.
     const bool is_hp = !is_lp_fdwt(s->v0);
-    dwt_1d_extr_fixed(s->horiz_tmp, s->ring_buf,
-                      s->horiz_left, s->horiz_right, s->u0, s->u1);
-    fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
-    // For rev 5/3 single HP row: scale by 2.
-    if (s->transformation == 1 && is_hp) {
-      const int32_t w = s->u1 - s->u0;
-      sprec_t *out = s->horiz_tmp + s->horiz_left;
-      for (int32_t c = 0; c < w; ++c) out[c] = floorf(out[c] * 2.0f);
+    const sprec_t *src = s->ring_buf + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
+    sprec_t *out = s->horiz_tmp + s->horiz_left;
+    if (s->u1 == s->u0 + 1) {
+      // Single-column: PSEo has UB for length-1 — bypass filter entirely.
+      // Match fdwt_hor_sr_fixed: even u0 (LP) → no-op; odd u0 (HP) → *2 for 5/3.
+      out[0] = src[0];
+      if (s->transformation == 1) {
+        if (s->v0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // vertical HP: match fdwt_rev_ver_sr_fixed
+        if (s->u0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // horizontal HP: match fdwt_hor_sr_fixed
+      }
+    } else {
+      // Match fdwt_rev_ver_sr_fixed: scale HP row by 2 BEFORE horizontal DWT.
+      // (floorf makes 5/3 non-linear, so order matters.)
+      if (s->transformation == 1 && is_hp) {
+        sprec_t *ms = s->ring_buf + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
+        const int32_t w = s->u1 - s->u0;
+        for (int32_t c = 0; c < w; ++c) ms[c] = floorf(ms[c] * 2.0f);
+      }
+      dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(src),
+                        s->horiz_left, s->horiz_right, s->u0, s->u1);
+      fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
     }
-    s->put_row(s->sink_ctx, is_hp, s->v0, s->horiz_tmp + s->horiz_left);
+    s->put_row(s->sink_ctx, is_hp, s->v0, out);
     ++s->next_emit;
     return;
   }
