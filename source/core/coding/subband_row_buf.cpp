@@ -336,6 +336,16 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
 }
 
 void j2k_subband_row_buf::get_row(int32_t abs_row, sprec_t *out) {
+  const int32_t width = static_cast<int32_t>(sb->get_pos1().x - sb->get_pos0().x);
+  if (width <= 0) {
+    return;
+  }
+  // If there is no backing buffer for this subband row, return zeros without
+  // reading from the small static zero_row used by row_ptr().
+  if ((ring_mode && ring_buf == nullptr) || (!ring_mode && sb->i_samples == nullptr)) {
+    std::memset(out, 0, sizeof(sprec_t) * static_cast<size_t>(width));
+    return;
+  }
   const sprec_t *p = row_ptr(abs_row);
-  std::memcpy(out, p, sizeof(sprec_t) * static_cast<size_t>(sb->get_pos1().x - sb->get_pos0().x));
+  std::memcpy(out, p, sizeof(sprec_t) * static_cast<size_t>(width));
 }

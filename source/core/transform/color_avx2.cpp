@@ -234,14 +234,14 @@ void cvt_rgb_to_ycbcr_rev_float_avx2(const int32_t *sp0, const int32_t *sp1, con
     float *d2         = dp2 + y * stride;
     int32_t len       = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
-      __m256i mR  = _mm256_load_si256((__m256i *)p0);
-      __m256i mG  = _mm256_load_si256((__m256i *)p1);
-      __m256i mB  = _mm256_load_si256((__m256i *)p2);
+      __m256i mR  = _mm256_loadu_si256((__m256i *)p0);
+      __m256i mG  = _mm256_loadu_si256((__m256i *)p1);
+      __m256i mB  = _mm256_loadu_si256((__m256i *)p2);
       __m256i mY  = _mm256_add_epi32(_mm256_add_epi32(mR, mB), _mm256_add_epi32(mG, mG));
       mY          = _mm256_srai_epi32(mY, 2);  // (R + 2G + B) >> 2
-      _mm256_store_ps(d0, _mm256_cvtepi32_ps(mY));
-      _mm256_store_ps(d1, _mm256_cvtepi32_ps(_mm256_sub_epi32(mB, mG)));
-      _mm256_store_ps(d2, _mm256_cvtepi32_ps(_mm256_sub_epi32(mR, mG)));
+      _mm256_storeu_ps(d0, _mm256_cvtepi32_ps(mY));
+      _mm256_storeu_ps(d1, _mm256_cvtepi32_ps(_mm256_sub_epi32(mB, mG)));
+      _mm256_storeu_ps(d2, _mm256_cvtepi32_ps(_mm256_sub_epi32(mR, mG)));
       p0 += 8; p1 += 8; p2 += 8;
       d0 += 8; d1 += 8; d2 += 8;
     }
@@ -272,14 +272,14 @@ void cvt_rgb_to_ycbcr_irrev_float_avx2(const int32_t *sp0, const int32_t *sp1, c
     float *d2         = dp2 + y * stride;
     int32_t len       = static_cast<int32_t>(width);
     for (; len >= 8; len -= 8) {
-      __m256 mR  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p0));
-      __m256 mG  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p1));
-      __m256 mB  = _mm256_cvtepi32_ps(_mm256_load_si256((__m256i *)p2));
+      __m256 mR  = _mm256_cvtepi32_ps(_mm256_loadu_si256((__m256i *)p0));
+      __m256 mG  = _mm256_cvtepi32_ps(_mm256_loadu_si256((__m256i *)p1));
+      __m256 mB  = _mm256_cvtepi32_ps(_mm256_loadu_si256((__m256i *)p2));
       __m256 mY  = _mm256_fmadd_ps(mR, mALPHA_R, _mm256_mul_ps(mG, mALPHA_G));
       mY         = _mm256_fmadd_ps(mB, mALPHA_B, mY);
-      _mm256_store_ps(d0, mY);
-      _mm256_store_ps(d1, _mm256_mul_ps(mCB_FACT, _mm256_sub_ps(mB, mY)));
-      _mm256_store_ps(d2, _mm256_mul_ps(mCR_FACT, _mm256_sub_ps(mR, mY)));
+      _mm256_storeu_ps(d0, mY);
+      _mm256_storeu_ps(d1, _mm256_mul_ps(mCB_FACT, _mm256_sub_ps(mB, mY)));
+      _mm256_storeu_ps(d2, _mm256_mul_ps(mCR_FACT, _mm256_sub_ps(mR, mY)));
       p0 += 8; p1 += 8; p2 += 8;
       d0 += 8; d1 += 8; d2 += 8;
     }
