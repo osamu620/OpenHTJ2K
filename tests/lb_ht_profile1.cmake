@@ -1,14 +1,14 @@
 # Decoding
-add_test(NAME lb_dec_p1_ht_01_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_01_b11.j2k -o lb_p1_01_b11.pgx -lb)
-add_test(NAME lb_dec_p1_ht_01_12 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_01_b12.j2k -o lb_p1_01_b12.pgx -lb)
-add_test(NAME lb_dec_p1_ht_02_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_02_b11.j2k -o lb_p1_02_b11.pgx -lb)
-add_test(NAME lb_dec_p1_ht_02_12 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_02_b12.j2k -o lb_p1_02_b12.pgx -lb)
-add_test(NAME lb_dec_p1_ht_03_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b11.j2k -o lb_p1_03_b11.pgx -lb)
-add_test(NAME lb_dec_p1_ht_03_12 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b12.j2k -o lb_p1_03_b12.pgx -lb)
-add_test(NAME lb_dec_p1_ht_04_9 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_04_b9.j2k -o lb_p1_04_b9.pgx -lb)
-add_test(NAME lb_dec_p1_ht_05_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_05_b11.j2k -o lb_p1_05_b11.pgx -lb)
-add_test(NAME lb_dec_p1_ht_06_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_06_b11.j2k -o lb_p1_06_b11.pgx -lb)
-add_test(NAME lb_dec_p1_ht_07_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_07_b11.j2k -o lb_p1_07_b11.pgx -lb)
+add_test(NAME lb_dec_p1_ht_01_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_01_b11.j2k -o lb_p1_01_b11.pgx)
+add_test(NAME lb_dec_p1_ht_01_12 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_01_b12.j2k -o lb_p1_01_b12.pgx)
+add_test(NAME lb_dec_p1_ht_02_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_02_b11.j2k -o lb_p1_02_b11.pgx)
+add_test(NAME lb_dec_p1_ht_02_12 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_02_b12.j2k -o lb_p1_02_b12.pgx)
+add_test(NAME lb_dec_p1_ht_03_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b11.j2k -o lb_p1_03_b11.pgx)
+add_test(NAME lb_dec_p1_ht_03_12 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b12.j2k -o lb_p1_03_b12.pgx)
+add_test(NAME lb_dec_p1_ht_04_9 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_04_b9.j2k -o lb_p1_04_b9.pgx)
+add_test(NAME lb_dec_p1_ht_05_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_05_b11.j2k -o lb_p1_05_b11.pgx)
+add_test(NAME lb_dec_p1_ht_06_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_06_b11.j2k -o lb_p1_06_b11.pgx)
+add_test(NAME lb_dec_p1_ht_07_11 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds1_ht_07_b11.j2k -o lb_p1_07_b11.pgx)
 
 # calculate PAE and MSE
 # 1

@@ -1,5 +1,5 @@
 # Decoding
-add_test(NAME lb_dec_HF_ht1_02 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/hifi_ht1_02.j2k -o lb_HF_ht1_02.pgx -lb)
+add_test(NAME lb_dec_HF_ht1_02 COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/hifi_ht1_02.j2k -o lb_HF_ht1_02.pgx)
 
 # calculate PAE and MSE
 # 1

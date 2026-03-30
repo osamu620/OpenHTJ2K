@@ -4693,7 +4693,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       if (MCT && num_components >= 3) {
         // Apply DC offset in-place for tile-local portion of each MCT component.
         const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x);
-        for (int c = 0; c < 3; ++c) {
+        for (uint32_t c = 0; c < 3; ++c) {
           const int32_t dco = tcomp[c].lb_dc_offset;
           const int32_t shu = tcomp[c].lb_dc_shiftup;
           int32_t *row      = int_rows[c] + x_off0;
@@ -4757,7 +4757,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
     if (MCT && num_components >= 3) {
       // Apply DC offset to tile-local portion of components 0,1,2 in-place.
       const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x);
-      for (int c = 0; c < 3; ++c) {
+      for (uint32_t c = 0; c < 3; ++c) {
         const int32_t dco = tcomp[c].lb_dc_offset;
         const int32_t shu = tcomp[c].lb_dc_shiftup;
         int32_t *row      = int_rows[c] + x_off0;
@@ -4769,7 +4769,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       // Convert RGB→YCbCr float into scratch float rows
       cvt_rgb_to_ycbcr_float[transformation](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
                                              float_rows[0], float_rows[1], float_rows[2], width, 1, stride);
-      for (int c = 0; c < 3; ++c)
+      for (uint32_t c = 0; c < 3; ++c)
         tcomp[c].push_line_enc(float_rows[c]);
       // Extra components without MCT
       for (uint16_t c = 3; c < num_components; ++c) {
