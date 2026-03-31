@@ -60,8 +60,10 @@ struct idwt_level_src_ctx {
   j2k_subband_row_buf *hh_buf;
 
   // Scratch rows for interleaving (allocated per level).
-  sprec_t *lp_tmp;   // LL row (lp_width) or LH row
-  sprec_t *hp_tmp;   // HL row (hp_width) or HH row
+  // lp_tmp: used when has_child=true to receive output of idwt_2d_state_pull_row.
+  //         nullptr (not allocated) when has_child=false (direct pointer to ll0_buf used).
+  // hp_tmp: no longer allocated — HP data is read directly from subband row buffers.
+  sprec_t *lp_tmp;   // LL row scratch (non-null only when has_child=true)
   sprec_t *ext_buf;  // PSE extension scratch for idwt_1d_row_fixed
 
   // Subband dimensions (set once at init).
@@ -92,25 +94,25 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   const int32_t sub_idx = lp ? (abs_row >> 1) - ((c->v0 + 1) >> 1)
                              : (abs_row >> 1) - (c->v0 >> 1);
 
-  sprec_t *lp_ptr = c->lp_tmp;
-  sprec_t *hp_ptr = c->hp_tmp;
+  // Obtain direct const-pointers to the LP and HP subband data, avoiding
+  // unnecessary memcpy to scratch buffers. lp_tmp is only needed when
+  // has_child=true (the child state writes its output into lp_tmp).
+  const sprec_t *lp_ptr;
+  const sprec_t *hp_ptr;
 
   if (lp) {
     if (c->has_child) {
-      if (!idwt_2d_state_pull_row(c->child_state, lp_ptr))
-        memset(lp_ptr, 0, sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
+      if (!idwt_2d_state_pull_row(c->child_state, c->lp_tmp))
+        memset(c->lp_tmp, 0, sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
+      lp_ptr = c->lp_tmp;
     } else {
       const int32_t clamped = pse_row_idx(sub_idx, c->ll0_height);
-      memcpy(lp_ptr, c->ll0_buf->row_ptr(c->ll_y0 + clamped),
-             sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
+      lp_ptr = c->ll0_buf->row_ptr(c->ll_y0 + clamped);  // no copy
     }
-    memcpy(hp_ptr, c->hl_buf->row_ptr(c->hl_y0 + sub_idx),
-           sizeof(sprec_t) * static_cast<size_t>(c->hp_width));
+    hp_ptr = c->hl_buf->row_ptr(c->hl_y0 + sub_idx);     // no copy
   } else {
-    memcpy(lp_ptr, c->lh_buf->row_ptr(c->lh_y0 + sub_idx),
-           sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
-    memcpy(hp_ptr, c->hh_buf->row_ptr(c->hh_y0 + sub_idx),
-           sizeof(sprec_t) * static_cast<size_t>(c->hp_width));
+    lp_ptr = c->lh_buf->row_ptr(c->lh_y0 + sub_idx);     // no copy
+    hp_ptr = c->hh_buf->row_ptr(c->hh_y0 + sub_idx);     // no copy
   }
 
   // Interleave: LP always at u0%2 column-offset, HP at 1-u0%2.
@@ -1786,8 +1788,9 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     c.lh_y0          = static_cast<int32_t>(sb_LH->get_pos0().y);
     c.hh_y0          = static_cast<int32_t>(sb_HH->get_pos0().y);
 
-    c.lp_tmp  = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(lp_width + SIMD_PADDING), 32));
-    c.hp_tmp  = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(hp_width + SIMD_PADDING), 32));
+    // lp_tmp only needed when has_child (child state writes output into it).
+    // hp_tmp eliminated: HP data is read directly from subband row buffers.
+    c.lp_tmp  = (i > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(lp_width + SIMD_PADDING), 32)) : nullptr;
     c.ext_buf = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(ext_sz), 32));
 
     idwt_2d_state_init(&ld->states[i], u0, u1, v0, v1, transformation,
@@ -1839,7 +1842,6 @@ void j2k_tile_component::finalize_line_decode() {
   for (int32_t i = 0; i < n; ++i) {
     idwt_2d_state_free(&ld->states[i]);
     aligned_mem_free(ld->ctxs[i].lp_tmp);
-    aligned_mem_free(ld->ctxs[i].hp_tmp);
     aligned_mem_free(ld->ctxs[i].ext_buf);
     ld->hl_bufs[i].free_resources();
     ld->lh_bufs[i].free_resources();
