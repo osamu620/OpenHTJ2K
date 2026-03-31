@@ -58,7 +58,7 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   prefetch_buf    = nullptr;
   prefetch_y0     = -1;
   prefetch_y1     = -1;
-  prefetch_active = false;
+  prefetch_cnt.reset();
 #endif
 
   sb = res->access_subband(band_idx);
@@ -85,7 +85,12 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
 
 void j2k_subband_row_buf::free_resources() {
 #ifdef OPENHTJ2K_THREAD
-  if (prefetch_active) { prefetch_future.wait(); prefetch_active = false; }
+  if (prefetch_cnt) {
+    while (prefetch_cnt->load(std::memory_order_acquire) > 0)
+      std::this_thread::yield();
+    prefetch_cnt.reset();
+  }
+  prefetch_y0 = prefetch_y1 = -1;
   aligned_mem_free(prefetch_buf); prefetch_buf = nullptr;
 #endif
   aligned_mem_free(ring_buf); ring_buf = nullptr; ring_y0 = -1;
@@ -263,33 +268,95 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
 
 #ifdef OPENHTJ2K_THREAD
 // ─── trigger_prefetch ────────────────────────────────────────────────────────
-// Submit a background task to decode the strip starting at next_y0 into
-// prefetch_buf, so it is ready before row_ptr() is called for those rows.
+// Enumerate all codeblocks for the strip starting at next_y0 and dispatch each
+// as an independent pool task.  A shared atomic counter tracks outstanding tasks;
+// row_ptr() spins on it before swapping buffers.
 
 void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
-  if (prefetch_buf == nullptr || prefetch_active) return;
+  if (prefetch_buf == nullptr || prefetch_y0 != -1) return;  // no buf or already pending
 
   const int32_t sb_y1 = static_cast<int32_t>(sb->get_pos1().y);
-  if (next_y0 >= sb_y1) return;  // no more strips to prefetch
+  if (next_y0 >= sb_y1) return;
 
   auto *pool = ThreadPool::get();
   if (!pool || pool->num_threads() <= 1) return;
-  // Don't enqueue from inside a pool worker to avoid pool exhaustion.
-  if (pool->thread_number(std::this_thread::get_id()) >= 0) return;
 
-  prefetch_y0     = next_y0;
-  prefetch_y1     = std::min(next_y0 + cb_h, sb_y1);
-  prefetch_active = true;
+  prefetch_y0 = next_y0;
+  prefetch_y1 = std::min(next_y0 + cb_h, sb_y1);
 
-  // Zero target buffer before decode (same invariant as ring_buf in decode_strip).
   const int32_t rows = prefetch_y1 - prefetch_y0;
   std::memset(prefetch_buf, 0,
               sizeof(sprec_t) * static_cast<size_t>(rows) * static_cast<size_t>(sb->stride));
 
-  // Capture by value everything the task needs; 'this' is stable for the subband lifetime.
-  prefetch_future = pool->enqueue([this]() {
-    decode_strip_core(prefetch_buf, prefetch_y0, prefetch_y1);
-  });
+  // ── Enumerate codeblocks for [prefetch_y0, prefetch_y1) ──────────────────
+  struct PrefetchBlock {
+    j2k_codeblock *block;
+    ptrdiff_t      row_off, col_off;
+    uint32_t       QWx2, QHx2;
+    size_t         sample_off, state_off;
+  };
+
+  const uint32_t np = res->npw * res->nph;
+  std::vector<PrefetchBlock> pblocks;
+  size_t total_s = 0, total_st = 0;
+
+  for (uint32_t p = 0; p < np; ++p) {
+    j2k_precinct         *cp  = res->access_precinct(p);
+    j2k_precinct_subband *cpb = cp->access_pband(band_idx);
+    const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+    for (uint32_t bi = 0; bi < num_cblks; ++bi) {
+      j2k_codeblock *block = cpb->access_codeblock(bi);
+      if (static_cast<int32_t>(block->get_pos1().y) <= prefetch_y0) continue;
+      if (static_cast<int32_t>(block->get_pos0().y) >= prefetch_y1) continue;
+      if (!block->num_passes) continue;
+      PrefetchBlock pb;
+      pb.block      = block;
+      pb.QWx2       = round_up(block->size.x, 8U);
+      pb.QHx2       = round_up(block->size.y, 8U);
+      pb.sample_off = total_s;
+      pb.state_off  = total_st;
+      pb.row_off    = (static_cast<int32_t>(block->get_pos0().y) - prefetch_y0)
+                      * static_cast<ptrdiff_t>(sb->stride);
+      pb.col_off    = static_cast<int32_t>(block->get_pos0().x)
+                      - static_cast<int32_t>(sb->get_pos0().x);
+      total_s  += static_cast<size_t>(pb.QWx2 * pb.QHx2);
+      total_st += static_cast<size_t>((pb.QWx2 + 2) * (pb.QHx2 + 2));
+      pblocks.push_back(pb);
+    }
+  }
+
+  if (pblocks.empty()) {
+    // No codeblocks to decode — prefetch is trivially complete.
+    prefetch_cnt.reset();
+    return;
+  }
+
+  // ── Allocate shared scratch pools; all tasks write to non-overlapping offsets.
+  auto spool  = std::make_shared<std::vector<int32_t>>(total_s,  0);
+  auto stpool = std::make_shared<std::vector<uint8_t>> (total_st, 0);
+
+  auto cnt = std::make_shared<std::atomic<int>>(static_cast<int>(pblocks.size()));
+  prefetch_cnt = cnt;
+
+  sprec_t *pbuf = prefetch_buf;
+  const uint8_t roi = ROIshift;
+
+  for (auto &pb : pblocks) {
+    pb.block->sample_buf      = spool->data()  + pb.sample_off;
+    pb.block->blksampl_stride = pb.QWx2;
+    pb.block->block_states    = stpool->data() + pb.state_off;
+    pb.block->blkstate_stride = pb.QWx2 + 2;
+    pb.block->i_samples       = pbuf + pb.row_off + pb.col_off;
+
+    auto *blk = pb.block;
+    pool->push([blk, roi, cnt, spool, stpool]() {
+      if ((blk->Cmodes & HT) >> 6)
+        htj2k_decode(blk, roi);
+      else
+        j2k_decode(blk, roi);
+      cnt->fetch_sub(1, std::memory_order_release);
+    });
+  }
 }
 #endif
 
@@ -303,17 +370,26 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
     }
     if (abs_row < strip_y0 || abs_row >= strip_y1) {
 #ifdef OPENHTJ2K_THREAD
-      if (prefetch_active && abs_row >= prefetch_y0 && abs_row < prefetch_y1) {
-        // Prefetch hit: wait for background decode, then swap buffers.
-        prefetch_future.wait();
-        prefetch_active = false;
+      if (prefetch_y0 != -1 && abs_row >= prefetch_y0 && abs_row < prefetch_y1) {
+        // Prefetch hit: wait for all flat dispatch tasks to finish, then swap buffers.
+        if (prefetch_cnt) {
+          while (prefetch_cnt->load(std::memory_order_acquire) > 0)
+            std::this_thread::yield();
+          prefetch_cnt.reset();
+        }
         std::swap(ring_buf, prefetch_buf);
         strip_y0 = ring_y0 = prefetch_y0;
         strip_y1            = prefetch_y1;
+        prefetch_y0 = prefetch_y1 = -1;
         trigger_prefetch(strip_y1);
       } else {
-        // Prefetch miss or stale: cancel stale prefetch and decode synchronously.
-        if (prefetch_active) { prefetch_future.wait(); prefetch_active = false; }
+        // Prefetch miss or stale: drain any in-flight tasks, then decode synchronously.
+        if (prefetch_cnt) {
+          while (prefetch_cnt->load(std::memory_order_acquire) > 0)
+            std::this_thread::yield();
+          prefetch_cnt.reset();
+        }
+        prefetch_y0 = prefetch_y1 = -1;
         decode_strip(abs_row);
       }
 #else
