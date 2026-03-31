@@ -97,6 +97,7 @@ uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_
   return mbr & 1;
 }
 
+template <bool skip_sigma>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
@@ -179,14 +180,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     emb_1_1 = (tv1 & 0x0F00) >> 8;
 
     // store sigma
-    *sp0++   = (rho0 >> 0) & 1;
-    *sp0++   = (rho0 >> 2) & 1;
-    *sp0++   = (rho1 >> 0) & 1;
-    *sp0++   = (rho1 >> 2) & 1;
-    *sp1++   = (rho0 >> 1) & 1;
-    *sp1++   = (rho0 >> 3) & 1;
-    *sp1++   = (rho1 >> 1) & 1;
-    *sp1++   = (rho1 >> 3) & 1;
+    if constexpr (!skip_sigma) {
+      *sp0++ = (rho0 >> 0) & 1;
+      *sp0++ = (rho0 >> 2) & 1;
+      *sp0++ = (rho1 >> 0) & 1;
+      *sp0++ = (rho1 >> 2) & 1;
+      *sp1++ = (rho0 >> 1) & 1;
+      *sp1++ = (rho0 >> 3) & 1;
+      *sp1++ = (rho1 >> 1) & 1;
+      *sp1++ = (rho1 >> 3) & 1;
+    }
     *rho_p++ = rho0;
     *rho_p++ = rho1;
 
@@ -350,14 +353,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= ((rho_p[2] & 0x8) << 6) | ((rho_p[3] & 0x2) << 8);  // (ne | nf) << 9
 
       // store sigma
-      *sp0++ = (rho0 >> 0) & 1;
-      *sp0++ = (rho0 >> 2) & 1;
-      *sp0++ = (rho1 >> 0) & 1;
-      *sp0++ = (rho1 >> 2) & 1;
-      *sp1++ = (rho0 >> 1) & 1;
-      *sp1++ = (rho0 >> 3) & 1;
-      *sp1++ = (rho1 >> 1) & 1;
-      *sp1++ = (rho1 >> 3) & 1;
+      if constexpr (!skip_sigma) {
+        *sp0++ = (rho0 >> 0) & 1;
+        *sp0++ = (rho0 >> 2) & 1;
+        *sp0++ = (rho1 >> 0) & 1;
+        *sp0++ = (rho1 >> 2) & 1;
+        *sp1++ = (rho0 >> 1) & 1;
+        *sp1++ = (rho0 >> 3) & 1;
+        *sp1++ = (rho1 >> 1) & 1;
+        *sp1++ = (rho1 >> 3) & 1;
+      }
       // Update rho_p
       *rho_p++ = rho0;
       *rho_p++ = rho1;
@@ -804,7 +809,11 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       Dref = nullptr;
     }
 
-    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    if (num_ht_passes == 1) {
+      ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    } else {
+      ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    }
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
