@@ -53,6 +53,7 @@ void print_help(char *cmd) {
   printf("-reduce n: Number of DWT resolution reduction.\n");
   printf("-iter n: Repeat decoding n times (for benchmarking). Output is written once.\n");
   printf("-num_threads n: Number of threads (0 = auto).\n");
+  printf("-batch: Use batch (full-image buffer) decode path instead of the default streaming path.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -134,7 +135,7 @@ int main(int argc, char *argv[]) {
   // Reject any unrecognised flags.
   {
     static const char *const known[] = {
-        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", nullptr};
+        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", "-batch", nullptr};
     for (int i = 1; i < argc; ++i) {
       if (argv[i][0] != '-') continue;
       bool recognised = false;
@@ -148,6 +149,57 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  const bool use_batch = command_option_exists(argc, argv, "-batch");
+
+  std::vector<uint32_t> img_width;
+  std::vector<uint32_t> img_height;
+  std::vector<uint8_t> img_depth;
+  std::vector<bool> img_signed;
+
+  auto start = std::chrono::high_resolution_clock::now();
+
+  // Batch path: decode entire image into full-image buffers, then write.
+  if (use_batch) {
+    std::vector<int32_t *> buf;
+    for (int32_t i = 0; i < num_iterations; ++i) {
+      open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
+      for (auto &p : buf) delete[] p;
+      buf.clear();
+      img_width.clear();
+      img_height.clear();
+      img_depth.clear();
+      img_signed.clear();
+      try {
+        decoder.parse();
+        decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
+      } catch (std::exception &exc) {
+        printf("ERROR: %s\n", exc.what());
+        return EXIT_FAILURE;
+      }
+    }
+    auto duration       = std::chrono::high_resolution_clock::now() - start;
+    auto num_components = static_cast<uint16_t>(img_depth.size());
+    if (strcmp(outfile_ext_name, ".ppm") == 0) {
+      write_ppm(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth, img_signed);
+    } else {
+      write_components(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth,
+                       img_signed);
+    }
+    uint32_t total_samples = 0;
+    for (uint16_t c = 0; c < num_components; ++c) {
+      total_samples += img_width[c] * img_height[c];
+      delete[] buf[c];
+    }
+    auto count = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+    printf("elapsed time %-15.3lf[ms]\n",
+           static_cast<double>(count) / 1000.0 / static_cast<double>(num_iterations));
+    printf("throughput %lf [Msamples/s]\n",
+           total_samples * static_cast<double>(num_iterations) / static_cast<double>(count));
+    printf("throughput %lf [usec/sample]\n",
+           static_cast<double>(count) / static_cast<double>(num_iterations) / total_samples);
+    return EXIT_SUCCESS;
+  }
+
   const bool want_ppm = (strcmp(outfile_ext_name, ".ppm") == 0);
   const bool want_pgm = (strcmp(outfile_ext_name, ".pgm") == 0);
   const bool want_pgx = (strcmp(outfile_ext_name, ".pgx") == 0);
@@ -158,13 +210,6 @@ int main(int argc, char *argv[]) {
   uint8_t bpp            = 0;
   int32_t pnm_offset     = 0;
   uint32_t total_samples = 0;
-
-  std::vector<uint32_t> img_width;
-  std::vector<uint32_t> img_height;
-  std::vector<uint8_t> img_depth;
-  std::vector<bool> img_signed;
-
-  auto start = std::chrono::high_resolution_clock::now();
 
   for (int32_t i = 0; i < num_iterations; ++i) {
     const bool is_last = (i == num_iterations - 1);
