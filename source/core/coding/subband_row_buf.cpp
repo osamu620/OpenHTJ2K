@@ -63,6 +63,7 @@ static inline void spin_wait(std::atomic_int &cnt) {
 
 // ─── init / free ──────────────────────────────────────────────────────────────
 
+
 void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
                                int32_t codeblock_height, uint8_t roi_shift, bool use_ring) {
   res            = resolution;
@@ -106,8 +107,12 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
       combined_buf = combined;
       ring_buf     = combined;
       prefetch_buf = combined + buf_floats;
+      // Pre-fault all pages once at allocation time so that dequantize's first
+      // write to i_samples doesn't trigger repeated page-table lock acquisitions.
+      std::memset(combined, 0, buf_bytes * 2);
 #else
       ring_buf = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes, 32));
+      std::memset(ring_buf, 0, buf_bytes);
 #endif
     }
   }
