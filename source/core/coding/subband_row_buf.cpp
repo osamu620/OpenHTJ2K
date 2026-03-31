@@ -222,10 +222,12 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           par_stpool     = static_cast<uint8_t *>(std::malloc(total_st));
           par_stpool_cap = total_st;
         }
-        std::memset(par_spool,  0, total_s  * sizeof(int32_t));
-        std::memset(par_stpool, 0, total_st);
-
-        // Setup pass: assign scratch pointers (no lock needed).
+        // Setup pass: assign scratch pointers and selectively zero buffers.
+        // ht_cleanup_decode writes every sample_buf/block_states position before
+        // reading, so HT single-pass blocks need no pre-zeroing. EBCOT and HT
+        // multi-pass blocks still require it (EBCOT reads before writing; HT
+        // multi-pass sigprop/magref read the block_states border written only by
+        // the cleanup interior pass, leaving the border uninitialised).
         par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
         for (auto &bt : par_tasks) {
           bt.block->sample_buf      = par_spool  + bt.sample_off;
@@ -234,6 +236,13 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           bt.block->blkstate_stride = bt.QWx2 + 2;
           if (ring_mode && target_buf)
             bt.block->i_samples = target_buf + bt.row_off + bt.col_off;
+          const bool is_ht = (bt.block->Cmodes & HT) >> 6;
+          if (!is_ht) {
+            std::memset(bt.block->sample_buf, 0, bt.QWx2 * bt.QHx2 * sizeof(int32_t));
+            std::memset(bt.block->block_states, 0, (bt.QWx2 + 2) * (bt.QHx2 + 2));
+          } else if (bt.block->num_passes > 1) {
+            std::memset(bt.block->block_states, 0, (bt.QWx2 + 2) * (bt.QHx2 + 2));
+          }
         }
         // Batch-push all tasks under a single mutex lock + notify_all.
         const uint8_t roi = ROIshift;
@@ -284,8 +293,16 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         cb_state_cap = need_st;
       }
 
-      std::memset(cb_sample_buf, 0, need_s * sizeof(int32_t));
-      std::memset(cb_state_buf,  0, need_st);
+      // ht_cleanup_decode writes every position before reading, so no
+      // pre-zeroing is needed for single-pass HT blocks. For EBCOT and
+      // multi-pass HT blocks, zero the necessary regions.
+      const bool is_ht = (block->Cmodes & HT) >> 6;
+      if (!is_ht) {
+        std::memset(cb_sample_buf, 0, need_s * sizeof(int32_t));
+        std::memset(cb_state_buf,  0, need_st);
+      } else if (block->num_passes > 1) {
+        std::memset(cb_state_buf,  0, need_st);
+      }
 
       block->sample_buf      = cb_sample_buf;
       block->blksampl_stride = QWx2;
@@ -404,12 +421,12 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     par_stpool     = static_cast<uint8_t *>(std::malloc(total_st));
     par_stpool_cap = total_st;
   }
-  std::memset(par_spool,  0, total_s  * sizeof(int32_t));
-  std::memset(par_stpool, 0, total_st);
 
   par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
 
-  // Setup pass: assign scratch/output pointers before any worker can touch them.
+  // Setup pass: assign scratch/output pointers and selectively zero buffers.
+  // HT single-pass blocks need no pre-zeroing (ht_cleanup_decode writes all
+  // positions before reading). EBCOT and multi-pass HT blocks still need it.
   sprec_t *pbuf     = prefetch_buf;
   const uint8_t roi = ROIshift;
   for (auto &pb : par_tasks) {
@@ -418,6 +435,13 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     pb.block->block_states    = par_stpool + pb.state_off;
     pb.block->blkstate_stride = pb.QWx2 + 2;
     pb.block->i_samples       = pbuf + pb.row_off + pb.col_off;
+    const bool is_ht = (pb.block->Cmodes & HT) >> 6;
+    if (!is_ht) {
+      std::memset(pb.block->sample_buf,   0, pb.QWx2 * pb.QHx2 * sizeof(int32_t));
+      std::memset(pb.block->block_states, 0, (pb.QWx2 + 2) * (pb.QHx2 + 2));
+    } else if (pb.block->num_passes > 1) {
+      std::memset(pb.block->block_states, 0, (pb.QWx2 + 2) * (pb.QHx2 + 2));
+    }
   }
   // Batch-push all tasks under a single mutex lock + notify_all.
   pool->push_batch(par_tasks, [roi, this](const CblkTask &pb) {

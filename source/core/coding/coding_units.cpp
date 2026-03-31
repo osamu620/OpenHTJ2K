@@ -3891,6 +3891,11 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
         int32_t *pbuf    = dl_sample_buf;
         uint8_t *spbuf   = dl_state_buf;
 
+        // Assign buffer pointers and decode in one pass.
+        // ht_cleanup_decode writes every sample_buf and block_states position
+        // before reading them, so pre-zeroing is unnecessary for single-pass
+        // HT blocks (the common case for lossless HTJ2K). For EBCOT and
+        // multi-pass HT blocks, zero only what is actually needed.
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t nc        = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -3900,18 +3905,21 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
             const uint32_t QHx2  = round_up(block->size.y, 8U);
             block->sample_buf    = pbuf; pbuf += QWx2 * QHx2;
             block->block_states  = spbuf; spbuf += (QWx2 + 2) * (QHx2 + 2);
-          }
-        }
-        memset(dl_sample_buf, 0, static_cast<size_t>(pbuf - dl_sample_buf) * sizeof(int32_t));
-        memset(dl_state_buf,  0, static_cast<size_t>(spbuf - dl_state_buf));
-
-        for (uint8_t b = 0; b < cr->num_bands; b++) {
-          j2k_precinct_subband *cpb = cp->access_pband(b);
-          const uint32_t nc        = cpb->num_codeblock_x * cpb->num_codeblock_y;
-          for (uint32_t bi = 0; bi < nc; ++bi) {
-            j2k_codeblock *block = cpb->access_codeblock(bi);
             if (!block->num_passes) continue;
-            if ((block->Cmodes & HT) >> 6)
+            const bool is_ht = (block->Cmodes & HT) >> 6;
+            if (!is_ht) {
+              // EBCOT: both buffers must be pre-zeroed.
+              memset(block->sample_buf, 0, QWx2 * QHx2 * sizeof(int32_t));
+              memset(block->block_states, 0, (QWx2 + 2) * (QHx2 + 2));
+            } else if (block->num_passes > 1) {
+              // HT multi-pass: sigprop/magref read the block_states border
+              // (written by cleanup only for the interior). Zero block_states;
+              // sample_buf is fully written by cleanup before sigprop reads it.
+              memset(block->block_states, 0, (QWx2 + 2) * (QHx2 + 2));
+            }
+            // HT single-pass: ht_cleanup_decode initialises all positions
+            // before reading — no pre-zeroing needed.
+            if (is_ht)
               htj2k_decode(block, ROIshift);
             else
               j2k_decode(block, ROIshift);
