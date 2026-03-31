@@ -64,25 +64,6 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
   v = _mm_subs_epu16(_mm_set1_epi32(158), v);  // undo bias
   v = _mm_min_epi16(v, _mm_set1_epi32(32));    // clamp at 32
 
-  // __m128i t;
-  // const __m128i lut_lo        = _mm_set_epi8(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 31);
-  // const __m128i lut_hi        = _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 31);
-  // const __m128i nibble_mask   = _mm_set1_epi8(0x0F);
-  // const __m128i byte_offset8  = _mm_set1_epi16(8);
-  // const __m128i byte_offset16 = _mm_set1_epi16(16);
-  // t                           = _mm_and_si128(nibble_mask, v);
-  // v                           = _mm_and_si128(_mm_srli_epi16(v, 4), nibble_mask);
-  // t                           = _mm_shuffle_epi8(lut_lo, t);
-  // v                           = _mm_shuffle_epi8(lut_hi, v);
-  // v                           = _mm_min_epu8(v, t);
-
-  // t = _mm_srli_epi16(v, 8);
-  // v = _mm_or_si128(v, byte_offset8);
-  // v = _mm_min_epu8(v, t);
-
-  // t = _mm_srli_epi32(v, 16);
-  // v = _mm_or_si128(v, byte_offset16);
-  // v = _mm_min_epu8(v, t);
   return v;
 }
 
@@ -326,10 +307,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     // Calculate Emax for the next two quads
     int32_t Emax0, Emax1;
-    Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
-    Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
-    // Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p - 1)));
-    // Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 1)));
+    Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p - 1)));
+    Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 1)));
     for (qx = QW; qx > 0; qx -= 2, sp += 4) {
       v_n  = _mm_setzero_si128();
       qinf = _mm_loadu_si128((__m128i *)sp);
@@ -372,10 +351,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mp1 += 4;
 
       // Update Exponent
-      Emax0 = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
-      Emax1 = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
-      // Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p + 3)));
-      // Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 5)));
+      Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p + 3)));
+      Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 5)));
       v_n = sse_lzcnt_epi32(v_n);
       v_n = _mm_sub_epi32(_mm_set1_epi32(32), v_n);
       _mm_storeu_si128((__m128i *)E_p, v_n);

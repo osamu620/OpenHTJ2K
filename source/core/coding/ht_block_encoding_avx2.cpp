@@ -357,8 +357,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       MEL_encoder.encodeMEL((rho0 != 0));
     }
 
-    Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
-                        _mm_extract_epi32(E0, 3));
+    Emax_q   = hMax(E0);
     U0       = std::max((int32_t)Emax_q, kappa);
     u_q      = U0 - kappa;
     u_min    = u_q;
@@ -382,8 +381,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     // context for the next quad
     context = (rho0 >> 1) | (rho0 & 0x1);
 
-    Emax_q = find_max(_mm_extract_epi32(E1, 0), _mm_extract_epi32(E1, 1), _mm_extract_epi32(E1, 2),
-                      _mm_extract_epi32(E1, 3));
+    Emax_q = hMax(E1);
     U1     = std::max((int32_t)Emax_q, kappa);
     u_q    = U1 - kappa;
     u_min  = (u_min < u_q) ? u_min : u_q;
@@ -462,8 +460,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     if (context == 0) {
       MEL_encoder.encodeMEL((rho0 != 0));
     }
-    Emax_q      = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
-                           _mm_extract_epi32(E0, 3));
+    Emax_q      = hMax(E0);
     U0          = std::max((int32_t)Emax_q, kappa);
     u_q         = U0 - kappa;
     uvlc_idx    = u_q;
@@ -532,8 +529,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
       gamma       = ((rho0 & (rho0 - 1)) == 0) ? 0 : (int32_t)0xFFFFFFFF;
       kappa       = std::max((Emax0 - 1) & gamma, 1);
-      Emax_q      = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
-                             _mm_extract_epi32(E0, 3));
+      Emax_q      = hMax(E0);
       U0          = std::max((int32_t)Emax_q, kappa);
       u_q         = U0 - kappa;
       uvlc_idx    = u_q;
@@ -563,8 +559,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
       gamma  = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;
       kappa  = std::max((Emax1 - 1) * gamma, 1);
-      Emax_q = find_max(_mm_extract_epi32(E1, 0), _mm_extract_epi32(E1, 1), _mm_extract_epi32(E1, 2),
-                        _mm_extract_epi32(E1, 3));
+      Emax_q = hMax(E1);
       U1     = std::max((int32_t)Emax_q, kappa);
       u_q    = U1 - kappa;
       uvlc_idx += u_q << 5;
@@ -633,8 +628,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       //(popcount32((uint32_t)rho0) > 1) ? 0xFFFFFFFF : 0;
       gamma    = ((rho0 & (rho0 - 1)) == 0) ? 0 : (int32_t)0xFFFFFFFF;
       kappa    = std::max((Emax0 - 1) & gamma, 1);
-      Emax_q   = find_max(_mm_extract_epi32(E0, 0), _mm_extract_epi32(E0, 1), _mm_extract_epi32(E0, 2),
-                          _mm_extract_epi32(E0, 3));
+      Emax_q   = hMax(E0);
       U0       = std::max((int32_t)Emax_q, kappa);
       u_q      = U0 - kappa;
       uvlc_idx = u_q;

@@ -398,28 +398,22 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
     }
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  if ((ustop[0] - ustart[0]) != (ustop[1] - ustart[1])) {
-    for (uint8_t b = 0; b < 2; ++b) {
-      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-        sprec_t *line = dp[b] + v * stride2[b];
-        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-          *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
-        }
-      }
-    }
-  } else {
-    sprec_t *first, *second;
-    first  = dp[0];
-    second = dp[1];
+  {
+    // Band pair {LL, HL}: AVX2 deinterleave for common length, scalar for the extra sample.
+    const int32_t len0       = ustop[0] - ustart[0];
+    const int32_t len1       = ustop[1] - ustart[1];
+    const int32_t common_len = len0 < len1 ? len0 : len1;
+    sprec_t *bdp0 = dp[0], *bdp1 = dp[1];
+    int32_t s0 = stride2[0], s1 = stride2[1];
     if (uoffset[0] > uoffset[1]) {
-      first  = dp[1];
-      second = dp[0];
+      std::swap(bdp0, bdp1);
+      std::swap(s0, s1);
     }
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
       sprec_t *sp    = buf + (2 * v + voffset[0]) * stride;
-      size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
-      sprec_t *line0 = first + v * stride2[0];
-      sprec_t *line1 = second + v * stride2[0];
+      size_t len     = static_cast<size_t>(common_len);
+      sprec_t *line0 = bdp0 + static_cast<ptrdiff_t>(v) * s0;
+      sprec_t *line1 = bdp1 + static_cast<ptrdiff_t>(v) * s1;
       for (; len >= 4; len -= 4) {
         __m256i vline = _mm256_loadu_si256((__m256i *)sp);
         vline         = _mm256_shuffle_epi32(vline, 0xD8);
@@ -432,32 +426,36 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       for (; len > 0; --len) {
         *line0++ = *sp++;
         *line1++ = *sp++;
+      }
+    }
+    // Write the one extra sample from the wider band into its sub-band array.
+    for (uint8_t b = 0; b < 2; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+          dp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len] =
+              buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride];
+        }
+        break;
       }
     }
   }
 
-  if ((ustop[2] - ustart[2]) != (ustop[3] - ustart[3])) {
-    for (uint8_t b = 2; b < 4; ++b) {
-      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-        sprec_t *line = dp[b] + v * stride2[b];
-        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-          *(line++) = buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride];
-        }
-      }
-    }
-  } else {
-    sprec_t *first, *second;
-    first  = dp[2];
-    second = dp[3];
+  {
+    // Band pair {LH, HH}: same treatment.
+    const int32_t len2       = ustop[2] - ustart[2];
+    const int32_t len3       = ustop[3] - ustart[3];
+    const int32_t common_len = len2 < len3 ? len2 : len3;
+    sprec_t *bdp2 = dp[2], *bdp3 = dp[3];
+    int32_t s2 = stride2[2], s3 = stride2[3];
     if (uoffset[2] > uoffset[3]) {
-      first  = dp[3];
-      second = dp[2];
+      std::swap(bdp2, bdp3);
+      std::swap(s2, s3);
     }
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
       sprec_t *sp    = buf + (2 * v + voffset[2]) * stride;
-      size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
-      sprec_t *line0 = first + v * stride2[2];
-      sprec_t *line1 = second + v * stride2[2];
+      size_t len     = static_cast<size_t>(common_len);
+      sprec_t *line0 = bdp2 + static_cast<ptrdiff_t>(v) * s2;
+      sprec_t *line1 = bdp3 + static_cast<ptrdiff_t>(v) * s3;
       for (; len >= 4; len -= 4) {
         __m256i vline = _mm256_loadu_si256((__m256i *)sp);
         vline         = _mm256_shuffle_epi32(vline, 0xD8);
@@ -470,6 +468,16 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       for (; len > 0; --len) {
         *line0++ = *sp++;
         *line1++ = *sp++;
+      }
+    }
+    // Write the one extra sample from the wider band.
+    for (uint8_t b = 2; b < 4; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+          dp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len] =
+              buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride];
+        }
+        break;
       }
     }
   }
