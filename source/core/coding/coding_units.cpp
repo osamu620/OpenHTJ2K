@@ -115,6 +115,53 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
 
   // Interleave: LP always at u0%2 column-offset, HP at 1-u0%2.
   const int32_t u_off = c->u0 & 1;
+  const int32_t min_w = std::min(c->lp_width, c->hp_width);
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  {
+    // AVX2: process 8 LP + 8 HP → 16 interleaved floats per iteration.
+    // _mm256_unpacklo/hi_ps interleave lanes, permute2f128 reorders 128-bit halves.
+    const sprec_t *a_ptr = (u_off == 0) ? lp_ptr : hp_ptr;  // → even slots
+    const sprec_t *b_ptr = (u_off == 0) ? hp_ptr : lp_ptr;  // → odd slots
+    int32_t i = 0;
+    for (; i + 8 <= min_w; i += 8) {
+      __m256 va  = _mm256_loadu_ps(a_ptr + i);
+      __m256 vb  = _mm256_loadu_ps(b_ptr + i);
+      __m256 lo  = _mm256_unpacklo_ps(va, vb);  // a0,b0,a1,b1, a4,b4,a5,b5
+      __m256 hi  = _mm256_unpackhi_ps(va, vb);  // a2,b2,a3,b3, a6,b6,a7,b7
+      __m256 r0  = _mm256_permute2f128_ps(lo, hi, 0x20);  // a0..b3
+      __m256 r1  = _mm256_permute2f128_ps(lo, hi, 0x31);  // a4..b7
+      _mm256_storeu_ps(out + 2 * i,     r0);
+      _mm256_storeu_ps(out + 2 * i + 8, r1);
+    }
+    // Two independent scalar tails starting from i (independent loop variables).
+    if (u_off == 0) {
+      for (int32_t j = i; j < c->lp_width; ++j)  out[2 * j]     = lp_ptr[j];
+      for (int32_t j = i; j < c->hp_width; ++j)  out[2 * j + 1] = hp_ptr[j];
+    } else {
+      for (int32_t j = i; j < c->hp_width; ++j)  out[2 * j]     = hp_ptr[j];
+      for (int32_t j = i; j < c->lp_width; ++j)  out[2 * j + 1] = lp_ptr[j];
+    }
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  {
+    // NEON: vzipq_f32 interleaves two float32x4 vectors.
+    const sprec_t *a_ptr = (u_off == 0) ? lp_ptr : hp_ptr;
+    const sprec_t *b_ptr = (u_off == 0) ? hp_ptr : lp_ptr;
+    int32_t i = 0;
+    for (; i + 4 <= min_w; i += 4) {
+      float32x4x2_t zipped = vzipq_f32(vld1q_f32(a_ptr + i), vld1q_f32(b_ptr + i));
+      vst1q_f32(out + 2 * i,     zipped.val[0]);
+      vst1q_f32(out + 2 * i + 4, zipped.val[1]);
+    }
+    if (u_off == 0) {
+      for (int32_t j = i; j < c->lp_width; ++j)  out[2 * j]     = lp_ptr[j];
+      for (int32_t j = i; j < c->hp_width; ++j)  out[2 * j + 1] = hp_ptr[j];
+    } else {
+      for (int32_t j = i; j < c->hp_width; ++j)  out[2 * j]     = hp_ptr[j];
+      for (int32_t j = i; j < c->lp_width; ++j)  out[2 * j + 1] = lp_ptr[j];
+    }
+  }
+#else
   if (u_off == 0) {
     for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i]     = lp_ptr[i];
     for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i + 1] = hp_ptr[i];
@@ -122,6 +169,7 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
     for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i]     = hp_ptr[i];
     for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i + 1] = lp_ptr[i];
   }
+#endif
 
   idwt_1d_row_fixed(c->ext_buf, out, c->u0, c->u1, c->transformation);
 }
