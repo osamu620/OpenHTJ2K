@@ -178,8 +178,12 @@ class ThreadPool {
    * set to true.
    */
   void worker() {
+    // Grab up to this many tasks per lock acquisition to reduce mutex contention.
+    constexpr size_t BATCH = 4;
+    std::function<void()> batch[BATCH];
+
     for (;;) {
-      std::function<void()> task;
+      size_t n = 0;
 
       {
         std::unique_lock<std::mutex> lock(tasks_mutex);
@@ -189,11 +193,16 @@ class ThreadPool {
           return;
         }
 
-        task = std::move(tasks.front());
-        tasks.pop();
+        // Drain up to BATCH tasks in one lock hold.
+        while (n < BATCH && !tasks.empty()) {
+          batch[n++] = std::move(tasks.front());
+          tasks.pop();
+        }
       }
 
-      task();
+      for (size_t i = 0; i < n; ++i) {
+        batch[i]();
+      }
     }
   }
 
