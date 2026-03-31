@@ -28,6 +28,7 @@
 
 #include <cstring>
 #include <cmath>
+#include <utility>
 #include "dwt.hpp"
 #include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
