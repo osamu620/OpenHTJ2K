@@ -769,11 +769,11 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   uint8_t *Dref;
 
   if (num_ht_passes > 0) {
-    std::vector<uint8_t> all_segments;
-    all_segments.reserve(3);
+    uint8_t  all_segments[4];
+    uint32_t num_segments = 0;
     for (uint32_t i = 0; i < block->pass_length_count; i++) {
       if (block->pass_length[i] != 0) {
-        all_segments.push_back(static_cast<uint8_t>(i));
+        all_segments[num_segments++] = static_cast<uint8_t>(i);
       }
     }
     Lcup += static_cast<int32_t>(block->pass_length[all_segments[0]]);
@@ -795,10 +795,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // Prefix length (=MagSgn) of HT Cleanup pass
     const auto Pcup = static_cast<int32_t>(Lcup - Scup);
 
-    for (uint32_t i = 1; i < all_segments.size(); i++) {
+    for (uint32_t i = 1; i < num_segments; i++) {
       Lref += block->pass_length[all_segments[i]];
     }
-    if (block->num_passes > 1 && all_segments.size() > 1) {
+    if (block->num_passes > 1 && num_segments > 1) {
       Dref = block->get_compressed_data() + Lcup;
     } else {
       Dref = nullptr;
