@@ -56,6 +56,7 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
 
 #ifdef OPENHTJ2K_THREAD
   prefetch_buf    = nullptr;
+  combined_buf    = nullptr;
   prefetch_y0     = -1;
   prefetch_y1     = -1;
   par_spool       = nullptr;
@@ -71,11 +72,20 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
     const int32_t sb_w = static_cast<int32_t>(sb->get_pos1().x - sb->get_pos0().x);
     const int32_t sb_h = static_cast<int32_t>(sb->get_pos1().y - sb->get_pos0().y);
     if (sb_w > 0 && sb_h > 0) {
-      const size_t ring_rows = static_cast<size_t>(codeblock_height);
-      const size_t buf_bytes = sizeof(sprec_t) * ring_rows * static_cast<size_t>(sb->stride);
-      ring_buf = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes, 32));
+      const size_t ring_rows  = static_cast<size_t>(codeblock_height);
+      const size_t buf_floats = ring_rows * static_cast<size_t>(sb->stride);
+      const size_t buf_bytes  = sizeof(sprec_t) * buf_floats;
 #ifdef OPENHTJ2K_THREAD
-      prefetch_buf = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes, 32));
+      // Allocate ring_buf and prefetch_buf as a single contiguous block:
+      // [ring_buf | prefetch_buf], each buf_floats elements.
+      // combined_buf holds the base pointer (ring_buf/prefetch_buf swap on prefetch hit,
+      // so ring_buf may become an interior pointer — always free combined_buf).
+      sprec_t *combined = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes * 2, 32));
+      combined_buf = combined;
+      ring_buf     = combined;
+      prefetch_buf = combined + buf_floats;
+#else
+      ring_buf = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes, 32));
 #endif
     }
   }
@@ -135,7 +145,11 @@ void j2k_subband_row_buf::free_resources() {
   while (par_cnt.load(std::memory_order_acquire) > 0)
     std::this_thread::yield();
   prefetch_y0 = prefetch_y1 = -1;
-  aligned_mem_free(prefetch_buf); prefetch_buf = nullptr;
+  // Free combined allocation via its stable base pointer — ring_buf may have been
+  // swapped with prefetch_buf and could be an interior pointer after prefetch hits.
+  aligned_mem_free(combined_buf);
+  combined_buf = ring_buf = prefetch_buf = nullptr;
+  ring_y0 = -1;
   std::free(par_spool);  par_spool  = nullptr;  par_spool_cap  = 0;
   std::free(par_stpool); par_stpool = nullptr;  par_stpool_cap = 0;
   par_tasks.clear();
@@ -211,6 +225,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         std::memset(par_spool,  0, total_s  * sizeof(int32_t));
         std::memset(par_stpool, 0, total_st);
 
+        // Setup pass: assign scratch pointers (no lock needed).
         par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
         for (auto &bt : par_tasks) {
           bt.block->sample_buf      = par_spool  + bt.sample_off;
@@ -219,17 +234,19 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           bt.block->blkstate_stride = bt.QWx2 + 2;
           if (ring_mode && target_buf)
             bt.block->i_samples = target_buf + bt.row_off + bt.col_off;
-
+        }
+        // Batch-push all tasks under a single mutex lock + notify_all.
+        const uint8_t roi = ROIshift;
+        pool->push_batch(par_tasks, [roi, this](const CblkTask &bt) {
           auto *blk = bt.block;
-          auto  roi = ROIshift;
-          pool->push([blk, roi, this]() {
+          return [blk, roi, this]() {
             if ((blk->Cmodes & HT) >> 6)
               htj2k_decode(blk, roi);
             else
               j2k_decode(blk, roi);
             par_cnt.fetch_sub(1, std::memory_order_release);
-          });
-        }
+          };
+        });
         while (par_cnt.load(std::memory_order_acquire) > 0)
           std::this_thread::yield();
       }
@@ -392,25 +409,27 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
 
   par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
 
-  sprec_t *pbuf = prefetch_buf;
+  // Setup pass: assign scratch/output pointers before any worker can touch them.
+  sprec_t *pbuf     = prefetch_buf;
   const uint8_t roi = ROIshift;
-
   for (auto &pb : par_tasks) {
     pb.block->sample_buf      = par_spool  + pb.sample_off;
     pb.block->blksampl_stride = pb.QWx2;
     pb.block->block_states    = par_stpool + pb.state_off;
     pb.block->blkstate_stride = pb.QWx2 + 2;
     pb.block->i_samples       = pbuf + pb.row_off + pb.col_off;
-
+  }
+  // Batch-push all tasks under a single mutex lock + notify_all.
+  pool->push_batch(par_tasks, [roi, this](const CblkTask &pb) {
     auto *blk = pb.block;
-    pool->push([blk, roi, this]() {
+    return [blk, roi, this]() {
       if ((blk->Cmodes & HT) >> 6)
         htj2k_decode(blk, roi);
       else
         j2k_decode(blk, roi);
       par_cnt.fetch_sub(1, std::memory_order_release);
-    });
-  }
+    };
+  });
 }
 #endif
 

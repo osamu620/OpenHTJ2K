@@ -3755,6 +3755,12 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce_NL_val,
                                             std::vector<int32_t *> &dst) {
   // Step 1: decode all codeblocks into sb->i_samples (same as decode() first loop).
+  // Grow-only scratch buffers shared across all components and resolution levels —
+  // avoids one heap allocation per level (previously std::vector per level).
+  size_t   dl_sample_cap = 0, dl_state_cap = 0;
+  int32_t *dl_sample_buf = nullptr;
+  uint8_t *dl_state_buf  = nullptr;
+
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
     const uint8_t NL       = this->tcomp[c].get_dwt_levels();
@@ -3774,13 +3780,24 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       }
       if (lev_max == 0) continue;
 
-      std::vector<int32_t> sample_pool(static_cast<size_t>(lev_max) * 4096, 0);
-      std::vector<uint8_t> state_pool(static_cast<size_t>(lev_max) * 6156, 0);
+      // Grow-only: realloc only when capacity is insufficient.
+      const size_t need_s  = static_cast<size_t>(lev_max) * 4096;
+      const size_t need_st = static_cast<size_t>(lev_max) * 6156;
+      if (need_s > dl_sample_cap) {
+        std::free(dl_sample_buf);
+        dl_sample_buf = static_cast<int32_t *>(std::malloc(need_s * sizeof(int32_t)));
+        dl_sample_cap = need_s;
+      }
+      if (need_st > dl_state_cap) {
+        std::free(dl_state_buf);
+        dl_state_buf = static_cast<uint8_t *>(std::malloc(need_st));
+        dl_state_cap = need_st;
+      }
 
       for (uint32_t p = 0; p < num_precincts; p++) {
         j2k_precinct *cp = cr->access_precinct(p);
-        int32_t *pbuf    = sample_pool.data();
-        uint8_t *spbuf   = state_pool.data();
+        int32_t *pbuf    = dl_sample_buf;
+        uint8_t *spbuf   = dl_state_buf;
 
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -3793,8 +3810,8 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
             block->block_states  = spbuf; spbuf += (QWx2 + 2) * (QHx2 + 2);
           }
         }
-        memset(sample_pool.data(), 0, static_cast<size_t>(pbuf - sample_pool.data()) * sizeof(int32_t));
-        memset(state_pool.data(),  0, static_cast<size_t>(spbuf - state_pool.data()));
+        memset(dl_sample_buf, 0, static_cast<size_t>(pbuf - dl_sample_buf) * sizeof(int32_t));
+        memset(dl_state_buf,  0, static_cast<size_t>(spbuf - dl_state_buf));
 
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -3811,6 +3828,8 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       }
     }
   }
+  std::free(dl_sample_buf);
+  std::free(dl_state_buf);
 
   // Step 2: run line-based path but bypass decode_strip (use pre-decoded sb->i_samples).
   const uint16_t NC = num_components;

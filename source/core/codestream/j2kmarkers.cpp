@@ -305,11 +305,11 @@ COD_marker::COD_marker(j2c_src_memory &in)
   len++;
   SGcod = get_dword();
   len   = static_cast<uint16_t>(len + 4);
-  for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
-    if (i < SPcod.size()) {
+  {
+    const size_t splen = static_cast<size_t>(Lmar - len);
+    if (splen > SPcod.size()) SPcod.resize(splen);
+    for (size_t i = 0; i < splen; ++i) {
       SPcod[i] = get_byte();
-    } else {
-      SPcod.push_back(get_byte());
     }
   }
   is_set = true;
@@ -353,6 +353,7 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
   uint8_t last_PPx = '\0', last_PPy = '\0';
   if (!is_max_precincts) {
     std::vector<uint8_t> tmpPP;
+    tmpPP.reserve(static_cast<size_t>(dwt_levels) + 1);
     for (size_t i = 0; i <= dwt_levels; ++i) {
       if (i < PPlength) {
         last_PPx = PPx[i];
@@ -360,6 +361,7 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
       }
       tmpPP.push_back(static_cast<unsigned char>(last_PPx + (last_PPy << 4)));
     }
+    SPcod.reserve(SPcod.size() + static_cast<size_t>(dwt_levels) + 1);
     for (size_t i = 0; i <= dwt_levels; ++i) {
       SPcod.push_back(tmpPP[dwt_levels - i]);
     }
@@ -519,22 +521,18 @@ QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
   len++;
   if ((Sqcd & 0x1F) == 0) {
     // reversible transform
-    for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
-      if (i < SPqcd.size()) {
-        SPqcd[i] = get_byte();
-      } else {
-        SPqcd.push_back(get_byte());
-      }
+    const size_t splen = static_cast<size_t>(Lmar - len);
+    if (splen > SPqcd.size()) SPqcd.resize(splen);
+    for (size_t i = 0; i < splen; ++i) {
+      SPqcd[i] = get_byte();
     }
   } else {
     // irreversible transformation
     assert((Lmar - len) % 2 == 0);
-    for (size_t i = 0; i < static_cast<size_t>(Lmar - len) / 2U; ++i) {
-      if (i < SPqcd.size()) {
-        SPqcd[i] = get_word();
-      } else {
-        SPqcd.push_back(get_word());
-      }
+    const size_t splen = static_cast<size_t>(Lmar - len) / 2U;
+    if (splen > SPqcd.size()) SPqcd.resize(splen);
+    for (size_t i = 0; i < splen; ++i) {
+      SPqcd[i] = get_word();
     }
   }
   is_set = true;

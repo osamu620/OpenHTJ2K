@@ -34,12 +34,12 @@
   #include <cstdint>
   #include <functional>
   #include <future>
-  #include <map>
   #include <memory>
   #include <mutex>
   #include <queue>
   #include <thread>
   #include <type_traits>
+  #include <unordered_map>
 
 class ThreadPool {
  public:
@@ -110,6 +110,33 @@ class ThreadPool {
   template <typename F>
   void push(F &&task) {
     push_task(std::forward<F>(task));
+  }
+
+  /**
+   * @brief Push a batch of tasks built from a container in a single lock+notify_all.
+   * @param items  Container whose elements are passed one-by-one to @p factory.
+   * @param factory  Callable: factory(item) → void() callable.
+   *
+   * Acquires the task-queue mutex exactly once and notifies all worker threads once,
+   * replacing N individual push() calls (each of which locks + notify_one()).
+   */
+  template <typename Container, typename Factory>
+  void push_batch(Container &&items, Factory &&factory) {
+    const size_t n = items.size();
+    if (n == 0) return;
+    {
+      const std::lock_guard<std::mutex> lock(tasks_mutex);
+      if (stop) {
+        throw std::runtime_error("Cannot schedule new task after shutdown.");
+      }
+      for (auto &&item : items) {
+        tasks.push(std::function<void()>(factory(item)));
+      }
+    }
+    if (n >= 2)
+      condition.notify_all();
+    else
+      condition.notify_one();
   }
 
   static ThreadPool* get() { return instance(0); }
@@ -183,7 +210,7 @@ class ThreadPool {
    */
   std::atomic<bool> stop;
 
-  std::map<std::thread::id, size_t> id_map;
+  std::unordered_map<std::thread::id, size_t> id_map;
 
   /**
    * @brief A queue of tasks to be executed by the threads.
