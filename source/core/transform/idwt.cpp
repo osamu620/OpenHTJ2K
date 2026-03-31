@@ -315,30 +315,23 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
                               round_up(ustop[2] - ustart[2], 32), round_up(ustop[3] - ustart[3], 32)};
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  if ((ustop[0] - ustart[0]) != (ustop[1] - ustart[1])) {
-    for (uint8_t b = 0; b < 2; ++b) {
-      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-        sprec_t *line = sp[b] + v * stride2[b];
-        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-          buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(line++);
-        }
-      }
-    }
-  } else {
-    sprec_t *first, *second;
-    first  = sp[0];
-    second = sp[1];
+  {
+    // Band pair {LL, HL}: NEON zip for common length, scalar for extra sample.
+    const int32_t len0       = ustop[0] - ustart[0];
+    const int32_t len1       = ustop[1] - ustart[1];
+    const int32_t common_len = len0 < len1 ? len0 : len1;
+    sprec_t *bp0 = sp[0], *bp1 = sp[1];
+    int32_t s0 = stride2[0], s1 = stride2[1];
     if (uoffset[0] > uoffset[1]) {
-      first  = sp[1];
-      second = sp[0];
+      std::swap(bp0, bp1);
+      std::swap(s0, s1);
     }
     float32x4_t vfirst0, vfirst1, vsecond0, vsecond1;
-    //    int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[0]; vb < vstop[0]; ++vb, ++v) {
       sprec_t *dp    = buf + (2 * v + voffset[0]) * stride;
-      size_t len     = static_cast<size_t>(ustop[0] - ustart[0]);
-      sprec_t *line0 = first + v * stride2[0];
-      sprec_t *line1 = second + v * stride2[0];
+      size_t len     = static_cast<size_t>(common_len);
+      sprec_t *line0 = bp0 + static_cast<ptrdiff_t>(v) * s0;
+      sprec_t *line1 = bp1 + static_cast<ptrdiff_t>(v) * s1;
       for (; len >= 8; len -= 8) {
         vfirst0  = vld1q_f32(line0);
         vsecond0 = vld1q_f32(line1);
@@ -355,34 +348,36 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       for (; len > 0; --len) {
         *dp++ = *line0++;
         *dp++ = *line1++;
+      }
+    }
+    for (uint8_t b = 0; b < 2; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+          buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride] =
+              sp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len];
+        }
+        break;
       }
     }
   }
 
-  if ((ustop[2] - ustart[2]) != (ustop[3] - ustart[3])) {
-    for (uint8_t b = 2; b < 4; ++b) {
-      for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
-        sprec_t *line = sp[b] + v * stride2[b];
-        for (int32_t u = 0, ub = ustart[b]; ub < ustop[b]; ++ub, ++u) {
-          buf[2 * u + uoffset[b] + (2 * v + voffset[b]) * stride] = *(line++);
-        }
-      }
-    }
-  } else {
-    sprec_t *first, *second;
-    first  = sp[2];
-    second = sp[3];
+  {
+    // Band pair {LH, HH}: same treatment.
+    const int32_t len2       = ustop[2] - ustart[2];
+    const int32_t len3       = ustop[3] - ustart[3];
+    const int32_t common_len = len2 < len3 ? len2 : len3;
+    sprec_t *bp2 = sp[2], *bp3 = sp[3];
+    int32_t s2 = stride2[2], s3 = stride2[3];
     if (uoffset[2] > uoffset[3]) {
-      first  = sp[3];
-      second = sp[2];
+      std::swap(bp2, bp3);
+      std::swap(s2, s3);
     }
     float32x4_t vfirst0, vfirst1, vsecond0, vsecond1;
-    //    int16x8x2_t vdst0, vdst1;
     for (int32_t v = 0, vb = vstart[2]; vb < vstop[2]; ++vb, ++v) {
       sprec_t *dp    = buf + (2 * v + voffset[2]) * stride;
-      size_t len     = static_cast<size_t>(ustop[2] - ustart[2]);
-      sprec_t *line0 = first + v * stride2[2];
-      sprec_t *line1 = second + v * stride2[2];
+      size_t len     = static_cast<size_t>(common_len);
+      sprec_t *line0 = bp2 + static_cast<ptrdiff_t>(v) * s2;
+      sprec_t *line1 = bp3 + static_cast<ptrdiff_t>(v) * s3;
       for (; len >= 8; len -= 8) {
         vfirst0  = vld1q_f32(line0);
         vsecond0 = vld1q_f32(line1);
@@ -399,6 +394,15 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
       for (; len > 0; --len) {
         *dp++ = *line0++;
         *dp++ = *line1++;
+      }
+    }
+    for (uint8_t b = 2; b < 4; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
+          buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride] =
+              sp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len];
+        }
+        break;
       }
     }
   }
