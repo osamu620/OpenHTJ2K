@@ -698,15 +698,56 @@ static void fill_pse(idwt_2d_state *s, int32_t r) {
 }
 
 // Run the cascade: advance every row that can advance, until stable.
+//
+// Key optimisation — dynamic lo:
+//   The naive lo = v0 - top_pse is fixed, so the scan window grows O(n) per call
+//   and the total cascade work is O(n²) in the tile height.  Once ring_origin has
+//   advanced past the initial PSE processing zone, all rows below ring_origin are
+//   either evicted (d_level=-1) or at max_dl; scanning them is pure wasted work.
+//   Using lo = max(v0-top_pse, ring_origin - margin) caps the window to a constant
+//   number of rows per call, making total cascade work O(n).
+//
+// For rev 5/3 (max_dl=1): the cascade is strictly 2-phase:
+//   Phase 1 — LP Update  (even rows): needs HP neighbors at dl >= 0
+//   Phase 2 — HP Predict (odd  rows): needs LP neighbors at dl >= 1
+// Two dedicated single passes replace the while(progress) loop.
+//
+// For irrev 9/7 (max_dl=2): use the generic while(progress) loop (also with dynamic lo).
 static void cascade(idwt_2d_state *s) {
-  bool progress = true;
-  while (progress) {
-    progress = false;
-    const int32_t lo = s->v0 - s->top_pse;
-    const int32_t hi = (s->next_fetch < s->v1) ? s->next_fetch + s->bottom_pse
-                                                 : s->v1 + s->bottom_pse;
-    for (int32_t r = lo; r < hi; ++r) {
-      if (can_adv(s, r)) { adv_step(s, r); progress = true; }
+  // Margin: enough to cover PSE rows and propagation distance for this transform.
+  // 5/3: top_pse≤2, propagation=2  → margin=6
+  // 9/7: top_pse≤4, propagation=4  → margin=10
+  const int32_t margin  = (int32_t)s->top_pse + max_dl(s->transformation) * 2 + 2;
+  const int32_t lo_full = s->v0 - (int32_t)s->top_pse;
+  const int32_t lo      = (s->ring_origin - margin > lo_full)
+                          ? s->ring_origin - margin : lo_full;
+  const int32_t hi      = (s->next_fetch < s->v1) ? s->next_fetch + s->bottom_pse
+                                                   : s->v1 + s->bottom_pse;
+
+  if (s->transformation == 1) {
+    // Rev 5/3: exactly two phases — LP Update then HP Predict. No while(progress) needed.
+
+    // Phase 1: Update LP rows (even absolute index) — need HP neighbors at dl >= 0.
+    const int32_t lp0 = lo + (lo & 1);   // first even row >= lo  (works for negative lo)
+    for (int32_t r = lp0; r < hi; r += 2) {
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 0 && get_dl(s, r + 1) >= 0)
+        adv_step(s, r);
+    }
+
+    // Phase 2: Predict HP rows (odd absolute index) — need LP neighbors at dl >= 1.
+    const int32_t hp0 = lo + (1 - (lo & 1));   // first odd row >= lo
+    for (int32_t r = hp0; r < hi; r += 2) {
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1)
+        adv_step(s, r);
+    }
+  } else {
+    // Irrev 9/7: generic while(progress) loop (max_dl=2, cascade≤4 passes).
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      for (int32_t r = lo; r < hi; ++r) {
+        if (can_adv(s, r)) { adv_step(s, r); progress = true; }
+      }
     }
   }
 }
