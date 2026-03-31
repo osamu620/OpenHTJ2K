@@ -135,6 +135,9 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0,
 // Single-row irreversible vertical lifting step: tgt[i] -= coeff*(prev[i]+next[i]) using FMA.
 // Uses SIMD for multiples of 4 elements, scalar for the tail.
 void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *tgt, float coeff);
+// Single-row reversible (5/3) vertical lifting steps.
+void idwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, float *tgt);
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
@@ -145,6 +148,9 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, int32_t u0, int32_t u1, int32_t v0,
 // Single-row irreversible vertical lifting step: tgt[i] -= coeff*(prev[i]+next[i]) using FMA.
 // Uses SIMD for multiples of 8 elements, scalar for the tail.
 void idwt_irrev_ver_step_fixed_avx2(int32_t n, float *prev, float *next, float *tgt, float coeff);
+// Single-row reversible (5/3) vertical lifting steps.
+void idwt_rev_ver_lp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_rev_ver_hp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt);
 #else
 void idwt_1d_filtr_rev53_fixed(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);

@@ -197,6 +197,37 @@ auto idwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, float *const X
   }
 };
 
+// Single-row reversible (5/3) LP vertical lifting: tgt[i] -= floor((prev[i]+next[i]+2)*0.25)
+void idwt_rev_ver_lp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt) {
+  const __m256 k025 = _mm256_set1_ps(0.25f);
+  const __m256 k2   = _mm256_set1_ps(2.0f);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m256 a = _mm256_loadu_ps(prev + i);
+    __m256 b = _mm256_loadu_ps(next + i);
+    __m256 t = _mm256_loadu_ps(tgt  + i);
+    t = _mm256_sub_ps(t, _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(a, b), k2), k025)));
+    _mm256_storeu_ps(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] -= floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+}
+
+// Single-row reversible (5/3) HP vertical lifting: tgt[i] += floor((prev[i]+next[i])*0.5)
+void idwt_rev_ver_hp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt) {
+  const __m256 k05 = _mm256_set1_ps(0.5f);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m256 a = _mm256_loadu_ps(prev + i);
+    __m256 b = _mm256_loadu_ps(next + i);
+    __m256 t = _mm256_loadu_ps(tgt  + i);
+    t = _mm256_add_ps(t, _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(a, b), k05)));
+    _mm256_storeu_ps(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] += floorf((prev[i] + next[i]) * 0.5f);
+}
+
 // Single-row irreversible vertical lifting step for idwt_2d_state::adv_step().
 // Applies tgt[i] -= coeff*(prev[i]+next[i]) using FMA, matching the batch path exactly.
 // n is the row width; the ring-buffer rows are 32-byte aligned so load_ps is safe.
