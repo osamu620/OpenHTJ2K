@@ -31,7 +31,8 @@
 #include <cstdint>
 #include <cstddef>
 #ifdef OPENHTJ2K_THREAD
-  #include <future>
+  #include <atomic>
+  #include <memory>
 #endif
 #include "coding_units.hpp"
 
@@ -79,12 +80,12 @@ struct j2k_subband_row_buf {
 
 #ifdef OPENHTJ2K_THREAD
   // Double-buffer for strip prefetch: while IDWT consumes ring_buf (current strip),
-  // a background task decodes the next strip into prefetch_buf.
-  sprec_t           *prefetch_buf;    // decode target for next strip
-  int32_t            prefetch_y0;     // strip bounds of pending prefetch task
-  int32_t            prefetch_y1;
-  std::future<void>  prefetch_future; // wait handle (valid only when prefetch_active)
-  bool               prefetch_active; // true while a prefetch task is in flight
+  // background tasks decode the next strip into prefetch_buf.
+  sprec_t *prefetch_buf;    // decode target for next strip
+  int32_t  prefetch_y0;     // strip bounds of pending prefetch task (-1 = none)
+  int32_t  prefetch_y1;
+  // Shared counter of outstanding codeblock decode tasks.  0 (or nullptr) = all done.
+  std::shared_ptr<std::atomic<int>> prefetch_cnt;
 #endif
 
   // Initialise. cb_h is the maximum codeblock height for this resolution level.
