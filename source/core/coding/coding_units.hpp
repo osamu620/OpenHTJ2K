@@ -519,6 +519,7 @@ class j2k_tile_component : public j2k_tile_base {
   void init_line_encode();
   void push_line_enc(const sprec_t *in);
   void finalize_line_encode();
+  struct j2k_tcomp_line_enc *get_line_enc() { return line_enc; }
 
   void destroy() {
     for (uint8_t r = 0; r < this->NL; ++r) {
@@ -576,14 +577,14 @@ class j2k_tile : public j2k_tile_base {
   uint16_t Ccap15;
   // progression order information for both COD and POC
   POC_marker porder_info;
-  // Per-thread bump allocators for HTJ2K encode compressed bitstreams.
-  // One pool per concurrent encoder thread; no locking required.
-  // Heap-allocated to keep j2k_tile movable (std::atomic is not movable).
+ public:
+  // Bump-allocator pool for HTJ2K encode compressed bitstreams (one pool per thread).
   struct EncodePoolCtx {
     std::vector<std::unique_ptr<cblk_data_pool>> pools;
     uint32_t gen = 0;
     std::atomic<int> slot_cnt{0};
   };
+ private:
   std::unique_ptr<EncodePoolCtx> encode_pool_ctx;
   // return SOP is used or not
   [[nodiscard]] bool is_use_SOP() const { return this->use_SOP; }
