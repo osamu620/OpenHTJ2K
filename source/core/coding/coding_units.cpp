@@ -3657,6 +3657,57 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
           dp[n] = v;
         }
       }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      {
+        // AVX2: 16 elements per iteration, uniform-shift variants for speed.
+        const __m256i vro  = _mm256_set1_epi32(ro);
+        const __m256i vdco = _mm256_set1_epi32(I.DC_OFFSET);
+        const __m256i vmx  = _mm256_set1_epi32(I.MAXVAL);
+        const __m256i vmn  = _mm256_set1_epi32(I.MINVAL);
+        uint32_t n = 0;
+        if (ds < 0) {
+          const __m128i vsh = _mm_cvtsi32_si128(-ds);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
+            v0 = _mm256_sll_epi32(_mm256_add_epi32(v0, vro), vsh);
+            v1 = _mm256_sll_epi32(_mm256_add_epi32(v1, vro), vsh);
+            v0 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx);
+            v1 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v0);
+            _mm256_storeu_si256((__m256i *)(dp + n + 8), v1);
+          }
+        } else if (ds > 0) {
+          const __m128i vsh = _mm_cvtsi32_si128(ds);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
+            v0 = _mm256_sra_epi32(_mm256_add_epi32(v0, vro), vsh);
+            v1 = _mm256_sra_epi32(_mm256_add_epi32(v1, vro), vsh);
+            v0 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx);
+            v1 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v0);
+            _mm256_storeu_si256((__m256i *)(dp + n + 8), v1);
+          }
+        } else {
+          for (; n + 16 <= I.csize_x; n += 16) {
+            __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
+            v0 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx);
+            v1 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v0);
+            _mm256_storeu_si256((__m256i *)(dp + n + 8), v1);
+          }
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
 #else
       for (uint32_t n = 0; n < I.csize_x; ++n) {
         int32_t v = static_cast<int32_t>(spf[n]);
@@ -3782,40 +3833,51 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
       {
-        const __m256i vo   = _mm256_set1_epi32(ro);
+        // Process 16 elements per iteration using two 256-bit loads/stores.
+        // Use _mm256_sll/sra_epi32 (uniform XMM shift count) instead of sllv/srav
+        // (per-lane variable shift) — uniform shift is faster on all x86 uarches.
+        const __m256i vro  = _mm256_set1_epi32(ro);
         const __m256i vdco = _mm256_set1_epi32(I.DC_OFFSET);
         const __m256i vmx  = _mm256_set1_epi32(I.MAXVAL);
         const __m256i vmn  = _mm256_set1_epi32(I.MINVAL);
         uint32_t n = 0;
         if (ds < 0) {
-          const __m256i vsh = _mm256_set1_epi32(-ds);
-          for (; n + 8 <= I.csize_x; n += 8) {
-            __m256i v = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
-            v = _mm256_sllv_epi32(_mm256_add_epi32(v, vo), vsh);
-            v = _mm256_add_epi32(v, vdco);
-            v = _mm256_min_epi32(_mm256_max_epi32(v, vmn), vmx);
-            _mm256_storeu_si256((__m256i *)(dp + n), v);
+          const __m128i vsh = _mm_cvtsi32_si128(-ds);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
+            v0 = _mm256_sll_epi32(_mm256_add_epi32(v0, vro), vsh);
+            v1 = _mm256_sll_epi32(_mm256_add_epi32(v1, vro), vsh);
+            v0 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx);
+            v1 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v0);
+            _mm256_storeu_si256((__m256i *)(dp + n + 8), v1);
           }
         } else if (ds > 0) {
-          const __m256i vsh = _mm256_set1_epi32(ds);
-          for (; n + 8 <= I.csize_x; n += 8) {
-            __m256i v = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
-            v = _mm256_srav_epi32(_mm256_add_epi32(v, vo), vsh);
-            v = _mm256_add_epi32(v, vdco);
-            v = _mm256_min_epi32(_mm256_max_epi32(v, vmn), vmx);
-            _mm256_storeu_si256((__m256i *)(dp + n), v);
+          const __m128i vsh = _mm_cvtsi32_si128(ds);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
+            v0 = _mm256_sra_epi32(_mm256_add_epi32(v0, vro), vsh);
+            v1 = _mm256_sra_epi32(_mm256_add_epi32(v1, vro), vsh);
+            v0 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx);
+            v1 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v0);
+            _mm256_storeu_si256((__m256i *)(dp + n + 8), v1);
           }
         } else {
-          for (; n + 8 <= I.csize_x; n += 8) {
-            __m256i v = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
-            v = _mm256_add_epi32(v, vdco);
-            v = _mm256_min_epi32(_mm256_max_epi32(v, vmn), vmx);
-            _mm256_storeu_si256((__m256i *)(dp + n), v);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
+            v0 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx);
+            v1 = _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v0);
+            _mm256_storeu_si256((__m256i *)(dp + n + 8), v1);
           }
         }
         for (; n < I.csize_x; ++n) {
           int32_t v = static_cast<int32_t>(spf[n]);
-          v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
+          v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
           v += I.DC_OFFSET;
           if (v > I.MAXVAL) v = I.MAXVAL;
           if (v < I.MINVAL) v = I.MINVAL;
