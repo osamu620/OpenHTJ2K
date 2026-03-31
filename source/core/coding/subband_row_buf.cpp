@@ -189,7 +189,20 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           j2k_codeblock *block = cpb->access_codeblock(bi);
           if (static_cast<int32_t>(block->get_pos1().y) <= y0) continue;
           if (static_cast<int32_t>(block->get_pos0().y) >= y1) continue;
-          if (!block->num_passes) continue;
+          if (!block->num_passes) {
+            // Empty block: dequantize never runs, so zero its region in target_buf
+            // explicitly (replaces the bulk ring_buf pre-zero in decode_strip).
+            if (ring_mode && target_buf) {
+              const ptrdiff_t roff =
+                  (static_cast<int32_t>(block->get_pos0().y) - y0) * static_cast<ptrdiff_t>(sb->stride);
+              const ptrdiff_t coff = static_cast<int32_t>(block->get_pos0().x)
+                                     - static_cast<int32_t>(sb->get_pos0().x);
+              sprec_t *dst = target_buf + roff + coff;
+              for (uint32_t r = 0; r < block->size.y; r++)
+                std::memset(dst + r * sb->stride, 0, block->size.x * sizeof(sprec_t));
+            }
+            continue;
+          }
           const uint32_t QWx2 = round_up(block->size.x, 8U);
           const uint32_t QHx2 = round_up(block->size.y, 8U);
           CblkTask bt;
@@ -275,7 +288,19 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
 
       if (static_cast<int32_t>(block->get_pos1().y) <= y0) continue;
       if (static_cast<int32_t>(block->get_pos0().y) >= y1) continue;
-      if (!block->num_passes) continue;
+      if (!block->num_passes) {
+        // Empty block: zero its region in target_buf (replaces bulk pre-zero).
+        if (ring_mode && target_buf) {
+          const ptrdiff_t roff =
+              (static_cast<int32_t>(block->get_pos0().y) - y0) * static_cast<ptrdiff_t>(sb->stride);
+          const ptrdiff_t coff = static_cast<int32_t>(block->get_pos0().x)
+                                 - static_cast<int32_t>(sb->get_pos0().x);
+          sprec_t *dst = target_buf + roff + coff;
+          for (uint32_t r = 0; r < block->size.y; r++)
+            std::memset(dst + r * sb->stride, 0, block->size.x * sizeof(sprec_t));
+        }
+        continue;
+      }
 
       const uint32_t QWx2 = round_up(block->size.x, 8U);
       const uint32_t QHx2 = round_up(block->size.y, 8U);
@@ -339,10 +364,7 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
 
   if (ring_mode) {
     ring_y0 = s_y0;
-    if (ring_buf != nullptr) {
-      const int32_t rows = s_y1 - s_y0;
-      std::memset(ring_buf, 0, sizeof(sprec_t) * static_cast<size_t>(rows) * static_cast<size_t>(sb->stride));
-    }
+    // No bulk pre-zero: decode_strip_core zeroes empty-block regions selectively.
   }
 
   decode_strip_core(ring_mode ? ring_buf : nullptr, s_y0, s_y1);
@@ -370,11 +392,8 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   prefetch_y0 = next_y0;
   prefetch_y1 = std::min(next_y0 + cb_h, sb_y1);
 
-  const int32_t rows = prefetch_y1 - prefetch_y0;
-  std::memset(prefetch_buf, 0,
-              sizeof(sprec_t) * static_cast<size_t>(rows) * static_cast<size_t>(sb->stride));
-
   // ── Enumerate codeblocks for [prefetch_y0, prefetch_y1) ──────────────────
+  // No bulk pre-zero of prefetch_buf: empty blocks are zeroed selectively below.
   par_tasks.clear();
   const uint32_t np = res->npw * res->nph;
   size_t total_s = 0, total_st = 0;
@@ -387,7 +406,19 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
       j2k_codeblock *block = cpb->access_codeblock(bi);
       if (static_cast<int32_t>(block->get_pos1().y) <= prefetch_y0) continue;
       if (static_cast<int32_t>(block->get_pos0().y) >= prefetch_y1) continue;
-      if (!block->num_passes) continue;
+      if (!block->num_passes) {
+        // Empty block: zero its region in prefetch_buf now (before workers start).
+        if (prefetch_buf) {
+          const ptrdiff_t roff = (static_cast<int32_t>(block->get_pos0().y) - prefetch_y0)
+                                 * static_cast<ptrdiff_t>(sb->stride);
+          const ptrdiff_t coff = static_cast<int32_t>(block->get_pos0().x)
+                                 - static_cast<int32_t>(sb->get_pos0().x);
+          sprec_t *dst = prefetch_buf + roff + coff;
+          for (uint32_t r = 0; r < block->size.y; r++)
+            std::memset(dst + r * sb->stride, 0, block->size.x * sizeof(sprec_t));
+        }
+        continue;
+      }
       CblkTask pb;
       pb.block      = block;
       pb.QWx2       = round_up(block->size.x, 8U);
