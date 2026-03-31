@@ -168,6 +168,38 @@ auto idwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const X
 // Single-row irreversible vertical lifting step for idwt_2d_state::adv_step().
 // Applies tgt[i] -= coeff*(prev[i]+next[i]) using FMS, matching the batch path exactly.
 // n is the row width; ring-buffer rows are always sufficiently aligned.
+// Single-row reversible (5/3) LP vertical lifting: tgt[i] -= floor((prev[i]+next[i]+2)*0.25)
+void idwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, float *tgt) {
+  const float32x4_t k025 = vdupq_n_f32(0.25f);
+  const float32x4_t k2   = vdupq_n_f32(2.0f);
+  int32_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    float32x4_t a = vld1q_f32(prev + i);
+    float32x4_t b = vld1q_f32(next + i);
+    float32x4_t t = vld1q_f32(tgt  + i);
+    float32x4_t s = vmulq_f32(vaddq_f32(vaddq_f32(a, b), k2), k025);
+    t = vsubq_f32(t, vrndmq_f32(s));  // vrndmq = floor
+    vst1q_f32(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] -= floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+}
+
+// Single-row reversible (5/3) HP vertical lifting: tgt[i] += floor((prev[i]+next[i])*0.5)
+void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, float *tgt) {
+  const float32x4_t k05 = vdupq_n_f32(0.5f);
+  int32_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    float32x4_t a = vld1q_f32(prev + i);
+    float32x4_t b = vld1q_f32(next + i);
+    float32x4_t t = vld1q_f32(tgt  + i);
+    t = vaddq_f32(t, vrndmq_f32(vmulq_f32(vaddq_f32(a, b), k05)));
+    vst1q_f32(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] += floorf((prev[i] + next[i]) * 0.5f);
+}
+
 void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *tgt, float coeff) {
   auto vvv  = vdupq_n_f32(coeff);
   int32_t i = 0;

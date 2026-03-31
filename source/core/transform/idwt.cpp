@@ -38,6 +38,9 @@ static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixe
                                                           idwt_rev_ver_sr_fixed_neon};
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
 static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_neon;
+typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
+static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_neon;
+static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_neon;
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
                                                           idwt_1d_filtr_rev53_fixed_avx2};
@@ -45,6 +48,9 @@ static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixe
                                                           idwt_rev_ver_sr_fixed_avx2};
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
 static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_avx2;
+typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
+static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_avx2;
+static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_avx2;
 #else
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
                                                           idwt_1d_filtr_rev53_fixed};
@@ -54,6 +60,15 @@ static void adv_irrev_ver_step_scalar(int32_t n, float *prev, float *next, float
 }
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
 static adv_irrev_step_fn adv_irrev_ver_step_fn = adv_irrev_ver_step_scalar;
+static void adv_rev_ver_lp_step_scalar(int32_t n, const float *prev, const float *next, float *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] -= floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+}
+static void adv_rev_ver_hp_step_scalar(int32_t n, const float *prev, const float *next, float *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] += floorf((prev[i] + next[i]) * 0.5f);
+}
+typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
+static adv_rev_step_fn adv_rev_ver_lp_step_fn = adv_rev_ver_lp_step_scalar;
+static adv_rev_step_fn adv_rev_ver_hp_step_fn = adv_rev_ver_hp_step_scalar;
 #endif
 
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -652,23 +667,13 @@ static void adv_step(idwt_2d_state *s, int32_t r) {
   const int32_t w = s->u1 - s->u0;
 
   if (s->transformation == 0) {  // irrev 9/7
-    // Use the same FMA-based lifting as the batch vertical IDWT to guarantee
-    // bit-exact agreement between invoke() and invoke_line_based() on all platforms.
     const float coeff = lp ? (cur == 0 ? fD : fB) : (cur == 0 ? fC : fA);
     adv_irrev_ver_step_fn(w, prev, next, tgt, coeff);
   } else {  // rev 5/3
     if (lp) {
-      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-        for (int32_t c = cs; c < ce; ++c)
-          tgt[c] -= floorf((prev[c] + next[c] + 2.0f) * 0.25f);
-      }
+      adv_rev_ver_lp_step_fn(w, prev, next, tgt);
     } else {
-      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-        for (int32_t c = cs; c < ce; ++c)
-          tgt[c] += floorf((prev[c] + next[c]) * 0.5f);
-      }
+      adv_rev_ver_hp_step_fn(w, prev, next, tgt);
     }
   }
   set_dl(s, r, cur + 1);
