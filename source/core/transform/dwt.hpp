@@ -180,8 +180,13 @@ void idwt_1d_row_fixed(sprec_t *ext_buf, sprec_t *row, int32_t u0, int32_t u1, u
 // index abs_row ∈ [v0, v1) into out_row[0..u1-u0-1].
 typedef void (*idwt_row_src_fn)(void *ctx, int32_t abs_row, sprec_t *out_row);
 
-// Ring depth: must be > max_look_ahead (4 for 9/7) + max_pse (4) with margin.
-constexpr int32_t IDWT_STATE_RING_DEPTH = 12;
+// Ring depth: must hold enough real rows for steady-state output.
+// PSE rows use separate top_pse_buf/bot_pse_buf and never occupy ring slots.
+// For 9/7 (max_dl=2): need rows r..r+4 simultaneously → 5 ring slots; RING_DEPTH=8 is safe.
+// For 5/3 (max_dl=1): need rows r..r+2 simultaneously → 3 ring slots; RING_DEPTH=8 is more than enough.
+// Reducing from 12 → 8 cuts level-1 ring buffer (4K: 3840 floats/row) from 180KB to 120KB,
+// improving L2 cache utilization for vertical lifting steps.
+constexpr int32_t IDWT_STATE_RING_DEPTH = 8;
 
 struct idwt_2d_state {
   // ── geometry ──────────────────────────────────────────────────────────────
