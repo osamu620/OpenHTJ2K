@@ -81,11 +81,34 @@ struct j2k_subband_row_buf {
 #ifdef OPENHTJ2K_THREAD
   // Double-buffer for strip prefetch: while IDWT consumes ring_buf (current strip),
   // background tasks decode the next strip into prefetch_buf.
-  sprec_t *prefetch_buf;    // decode target for next strip
-  int32_t  prefetch_y0;     // strip bounds of pending prefetch task (-1 = none)
+  sprec_t *prefetch_buf;  // decode target for next strip
+  int32_t  prefetch_y0;   // strip bounds of pending prefetch task (-1 = none)
   int32_t  prefetch_y1;
-  // Shared counter of outstanding codeblock decode tasks.  0 (or nullptr) = all done.
-  std::shared_ptr<std::atomic<int>> prefetch_cnt;
+
+  // Unified codeblock task descriptor used by both decode_strip_core() (parallel path)
+  // and trigger_prefetch().  The two paths are mutually exclusive — decode_strip_core
+  // waits synchronously for all tasks before returning, and trigger_prefetch is called
+  // only after that — so a single set of scratch resources serves both.
+  struct CblkTask {
+    j2k_codeblock *block;
+    uint32_t       QWx2, QHx2;
+    size_t         sample_off, state_off;
+    ptrdiff_t      row_off, col_off;  // ring/prefetch target offset; 0 in non-ring mode
+  };
+
+  // Grow-only scratch pools (never freed until free_resources()).
+  // Sized at init() from a per-subband strip pre-scan; only realloc'd on growth.
+  int32_t *par_spool;
+  uint8_t *par_stpool;
+  size_t   par_spool_cap;
+  size_t   par_stpool_cap;
+
+  // Task list pre-reserved to max codeblocks per strip (from init() pre-scan).
+  std::vector<CblkTask> par_tasks;
+
+  // In-flight counter shared by decode_strip_core and trigger_prefetch.
+  // Replaces both the local 'remaining' atomic and the old shared_ptr<atomic> prefetch_cnt.
+  std::atomic<int> par_cnt;
 #endif
 
   // Initialise. cb_h is the maximum codeblock height for this resolution level.

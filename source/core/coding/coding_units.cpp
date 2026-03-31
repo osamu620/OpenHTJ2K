@@ -3019,6 +3019,12 @@ void j2k_tile::decode() {
     size_t alloc_states_bytes  = 0;
     int32_t *buf_for_samples   = nullptr;
     uint8_t *buf_for_states    = nullptr;
+#ifdef OPENHTJ2K_THREAD
+    // Hoist dec_task_args outside the level loop: clear()+reserve() per iteration
+    // avoids one heap allocation per level (15 allocs saved for a 5-level 3-component tile).
+    std::vector<DecTaskArgs> dec_task_args;
+    std::atomic<int> dec_remaining{0};
+#endif
 
     for (int8_t lev = (int8_t)NL; lev >= this->reduce_NL; --lev) {
       const uint32_t lev_max = level_max_cblks[static_cast<size_t>(NL - lev)];
@@ -3040,11 +3046,9 @@ void j2k_tile::decode() {
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
       const uint32_t num_precincts = cr->npw * cr->nph;
 #ifdef OPENHTJ2K_THREAD
-      // Pre-allocate task-arg array once per level; sized to the maximum codeblocks in any precinct
-      // so push_back() never reallocates (no pointer invalidation while dispatching).
-      std::vector<DecTaskArgs> dec_task_args;
+      dec_task_args.clear();
       dec_task_args.reserve(lev_max);
-      std::atomic<int> dec_remaining{0};
+      dec_remaining.store(0, std::memory_order_relaxed);
 #endif
       for (uint32_t p = 0; p < num_precincts; p++) {
         j2k_precinct *cp = cr->access_precinct(p);
@@ -4140,8 +4144,11 @@ uint8_t *j2k_tile::encode() {
         max_total_cblks = std::max(max_total_cblks, total_cblks);
       }
       if (max_total_cblks == 0) return;
-      int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
-      uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+      // Use the tile-level grow-only scratch buffers to avoid per-resolution malloc/free.
+      epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
+                           static_cast<size_t>(max_total_cblks) * 6156);
+      int32_t *gbuf  = epc->gbuf;
+      uint8_t *sgbuf = epc->sgbuf;
       // Pre-allocate task-arg array once (sized to max codeblocks per precinct).
       // Reused across precincts; pointer stability guaranteed since size never exceeds max_total_cblks.
       auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
@@ -4207,8 +4214,6 @@ uint8_t *j2k_tile::encode() {
         while (enc_remaining.load(std::memory_order_acquire) > 0)
           std::this_thread::yield();
       }
-      free(gbuf);
-      free(sgbuf);
     };
 #else
     auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
@@ -4225,8 +4230,11 @@ uint8_t *j2k_tile::encode() {
         max_total_cblks = std::max(max_total_cblks, total_cblks);
       }
       if (max_total_cblks == 0) return;
-      int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
-      uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+      // Use the tile-level grow-only scratch buffers to avoid per-resolution malloc/free.
+      epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
+                           static_cast<size_t>(max_total_cblks) * 6156);
+      int32_t *gbuf  = epc->gbuf;
+      uint8_t *sgbuf = epc->sgbuf;
 
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
@@ -4265,8 +4273,6 @@ uint8_t *j2k_tile::encode() {
         }
         g_cblk_pool = nullptr;
       }
-      free(gbuf);
-      free(sgbuf);
     };
 #endif
     // Allocate pse_scratch once for all fdwt_2d_sr_fixed calls in this component.
@@ -4411,8 +4417,10 @@ uint8_t *j2k_tile::encode_line_based() {
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
-    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
+                         static_cast<size_t>(max_total_cblks) * 6156);
+    int32_t *gbuf  = epc->gbuf;
+    uint8_t *sgbuf = epc->sgbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
@@ -4467,8 +4475,6 @@ uint8_t *j2k_tile::encode_line_based() {
       while (enc_remaining.load(std::memory_order_acquire) > 0)
         std::this_thread::yield();
     }
-    free(gbuf);
-    free(sgbuf);
   };
 #else
   auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
@@ -4483,8 +4489,10 @@ uint8_t *j2k_tile::encode_line_based() {
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
-    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
+                         static_cast<size_t>(max_total_cblks) * 6156);
+    int32_t *gbuf  = epc->gbuf;
+    uint8_t *sgbuf = epc->sgbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
       int32_t *pbuf    = gbuf;
@@ -4515,8 +4523,6 @@ uint8_t *j2k_tile::encode_line_based() {
       }
       g_cblk_pool = nullptr;
     }
-    free(gbuf);
-    free(sgbuf);
   };
 #endif
 
@@ -4680,8 +4686,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
-    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
+                         static_cast<size_t>(max_total_cblks) * 6156);
+    int32_t *gbuf  = epc->gbuf;
+    uint8_t *sgbuf = epc->sgbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
@@ -4736,8 +4744,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
       while (enc_remaining.load(std::memory_order_acquire) > 0)
         std::this_thread::yield();
     }
-    free(gbuf);
-    free(sgbuf);
   };
 #else
   auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
@@ -4752,8 +4758,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    int32_t *gbuf  = static_cast<int32_t *>(malloc(max_total_cblks * 4096 * sizeof(int32_t)));
-    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(max_total_cblks * 6156));
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
+                         static_cast<size_t>(max_total_cblks) * 6156);
+    int32_t *gbuf  = epc->gbuf;
+    uint8_t *sgbuf = epc->sgbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
       int32_t *pbuf    = gbuf;
@@ -4784,8 +4792,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
       }
       g_cblk_pool = nullptr;
     }
-    free(gbuf);
-    free(sgbuf);
   };
 #endif
 

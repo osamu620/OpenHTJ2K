@@ -583,6 +583,33 @@ class j2k_tile : public j2k_tile_base {
     std::vector<std::unique_ptr<cblk_data_pool>> pools;
     uint32_t gen = 0;
     std::atomic<int> slot_cnt{0};
+    // Grow-only scratch buffers for codeblock sample/state data during HT block encoding.
+    // Allocated once per tile (sized to the largest resolution's codeblock count) and
+    // reused across all resolution levels and precincts — eliminating per-resolution
+    // malloc/free cycles that cause expensive mmap/munmap page-fault pressure on Linux.
+    int32_t *gbuf      = nullptr;
+    uint8_t *sgbuf     = nullptr;
+    size_t   gbuf_cap  = 0;  // capacity in int32_t elements
+    size_t   sgbuf_cap = 0;  // capacity in uint8_t elements
+
+    ~EncodePoolCtx() {
+      std::free(gbuf);
+      std::free(sgbuf);
+    }
+
+    // Ensure gbuf/sgbuf have at least the requested capacity (never shrink).
+    void reserve_scratch(size_t need_g, size_t need_sg) {
+      if (need_g > gbuf_cap) {
+        std::free(gbuf);
+        gbuf     = static_cast<int32_t *>(std::malloc(need_g * sizeof(int32_t)));
+        gbuf_cap = need_g;
+      }
+      if (need_sg > sgbuf_cap) {
+        std::free(sgbuf);
+        sgbuf     = static_cast<uint8_t *>(std::malloc(need_sg));
+        sgbuf_cap = need_sg;
+      }
+    }
   };
  private:
   std::unique_ptr<EncodePoolCtx> encode_pool_ctx;
