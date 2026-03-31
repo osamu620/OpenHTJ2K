@@ -58,7 +58,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const uint16_t QW        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
-  uint16_t scratch[8 * 513] = {0};
+  uint16_t scratch[8 * 513];
   int32_t sstr              = static_cast<int32_t>(((block->size.x + 2) + 7u) & ~7u);  // multiples of 8
   uint16_t *sp;
   int32_t qx;
@@ -158,7 +158,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     sp[1] = static_cast<uint16_t>(u0);
     sp[3] = static_cast<uint16_t>(u1);
   }
-  // sp[0] = sp[1] = 0;
+  std::memset(sp, 0, sizeof(uint16_t) * 4);  // zero 8-byte guard for MagSgn context reads
 
   // Non-initial line-pair
   dec_table = dec_CxtVLC_table1_fast_16;
@@ -244,7 +244,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       sp[1] = static_cast<uint16_t>(u0);
       sp[3] = static_cast<uint16_t>(u1);
     }
-    // sp[0] = sp[1] = 0;
+    std::memset(sp, 0, sizeof(uint16_t) * 4);  // zero 8-byte guard per row
   }
 
   /*******************************************************************************************************************/
