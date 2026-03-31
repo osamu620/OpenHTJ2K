@@ -3730,6 +3730,48 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
           dp[n] = v;
         }
       }
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+      {
+        const __m256i vo   = _mm256_set1_epi32(ro);
+        const __m256i vdco = _mm256_set1_epi32(I.DC_OFFSET);
+        const __m256i vmx  = _mm256_set1_epi32(I.MAXVAL);
+        const __m256i vmn  = _mm256_set1_epi32(I.MINVAL);
+        uint32_t n = 0;
+        if (ds < 0) {
+          const __m256i vsh = _mm256_set1_epi32(-ds);
+          for (; n + 8 <= I.csize_x; n += 8) {
+            __m256i v = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            v = _mm256_sllv_epi32(_mm256_add_epi32(v, vo), vsh);
+            v = _mm256_add_epi32(v, vdco);
+            v = _mm256_min_epi32(_mm256_max_epi32(v, vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v);
+          }
+        } else if (ds > 0) {
+          const __m256i vsh = _mm256_set1_epi32(ds);
+          for (; n + 8 <= I.csize_x; n += 8) {
+            __m256i v = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            v = _mm256_srav_epi32(_mm256_add_epi32(v, vo), vsh);
+            v = _mm256_add_epi32(v, vdco);
+            v = _mm256_min_epi32(_mm256_max_epi32(v, vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v);
+          }
+        } else {
+          for (; n + 8 <= I.csize_x; n += 8) {
+            __m256i v = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+            v = _mm256_add_epi32(v, vdco);
+            v = _mm256_min_epi32(_mm256_max_epi32(v, vmn), vmx);
+            _mm256_storeu_si256((__m256i *)(dp + n), v);
+          }
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (v + ro) >> ds;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
 #else
       for (uint32_t n = 0; n < I.csize_x; ++n) {
         int32_t v = static_cast<int32_t>(spf[n]);
