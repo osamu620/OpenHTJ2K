@@ -67,6 +67,7 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
   return v;
 }
 
+template <bool skip_sigma>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   uint8_t *compressed_data = block->get_compressed_data();
@@ -127,14 +128,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     sp[2] = tv1;
 
     // store sigma
-    *sp0++ = ((tv0 >> 4) >> 0) & 1;
-    *sp0++ = ((tv0 >> 4) >> 2) & 1;
-    *sp0++ = ((tv1 >> 4) >> 0) & 1;
-    *sp0++ = ((tv1 >> 4) >> 2) & 1;
-    *sp1++ = ((tv0 >> 4) >> 1) & 1;
-    *sp1++ = ((tv0 >> 4) >> 3) & 1;
-    *sp1++ = ((tv1 >> 4) >> 1) & 1;
-    *sp1++ = ((tv1 >> 4) >> 3) & 1;
+    if constexpr (!skip_sigma) {
+      *sp0++ = ((tv0 >> 4) >> 0) & 1;
+      *sp0++ = ((tv0 >> 4) >> 2) & 1;
+      *sp0++ = ((tv1 >> 4) >> 0) & 1;
+      *sp0++ = ((tv1 >> 4) >> 2) & 1;
+      *sp1++ = ((tv0 >> 4) >> 1) & 1;
+      *sp1++ = ((tv0 >> 4) >> 3) & 1;
+      *sp1++ = ((tv1 >> 4) >> 1) & 1;
+      *sp1++ = ((tv1 >> 4) >> 3) & 1;
+    }
 
     // calculate context for the next quad, Eq. (1) in the spec
     context = ((tv1 & 0xE0U) << 2) | ((tv1 & 0x10U) << 3);  // = context << 7
@@ -223,14 +226,16 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       sp[2] = tv1;
 
       // store sigma
-      *sp0++ = ((tv0 >> 4) >> 0) & 1;
-      *sp0++ = ((tv0 >> 4) >> 2) & 1;
-      *sp0++ = ((tv1 >> 4) >> 0) & 1;
-      *sp0++ = ((tv1 >> 4) >> 2) & 1;
-      *sp1++ = ((tv0 >> 4) >> 1) & 1;
-      *sp1++ = ((tv0 >> 4) >> 3) & 1;
-      *sp1++ = ((tv1 >> 4) >> 1) & 1;
-      *sp1++ = ((tv1 >> 4) >> 3) & 1;
+      if constexpr (!skip_sigma) {
+        *sp0++ = ((tv0 >> 4) >> 0) & 1;
+        *sp0++ = ((tv0 >> 4) >> 2) & 1;
+        *sp0++ = ((tv1 >> 4) >> 0) & 1;
+        *sp0++ = ((tv1 >> 4) >> 2) & 1;
+        *sp1++ = ((tv0 >> 4) >> 1) & 1;
+        *sp1++ = ((tv0 >> 4) >> 3) & 1;
+        *sp1++ = ((tv1 >> 4) >> 1) & 1;
+        *sp1++ = ((tv1 >> 4) >> 3) & 1;
+      }
 
       vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
 
@@ -738,7 +743,11 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     Dcup[Lcup - 2] |= 0x0F;
     const int32_t Pcup = static_cast<int32_t>(Lcup - Scup);
 
-    ht_cleanup_decode(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    if (num_ht_passes == 1) {
+      ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    } else {
+      ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+    }
     if (num_ht_passes > 1) {
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
