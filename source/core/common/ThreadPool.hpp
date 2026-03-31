@@ -133,9 +133,11 @@ class ThreadPool {
         tasks.push(std::function<void()>(factory(item)));
       }
     }
-    if (n >= 2)
-      condition.notify_all();
-    else
+    // Wake only as many workers as actually needed to drain the queue.
+    // Each worker drains up to BATCH tasks per lock hold, so ceil(n/BATCH)
+    // workers suffice.  notify_one() avoids waking idle workers needlessly.
+    const size_t wakeups = std::min((n + BATCH - 1) / BATCH, thread_count_);
+    for (size_t i = 0; i < wakeups; ++i)
       condition.notify_one();
   }
 
@@ -171,6 +173,8 @@ class ThreadPool {
     condition.notify_one();
   }
 
+  static constexpr size_t BATCH = 4;  // tasks drained per lock hold in worker()
+
   /**
    * @brief A worker function to be assigned to each thread in the pool.
    *
@@ -178,8 +182,6 @@ class ThreadPool {
    * set to true.
    */
   void worker() {
-    // Grab up to this many tasks per lock acquisition to reduce mutex contention.
-    constexpr size_t BATCH = 4;
     std::function<void()> batch[BATCH];
 
     for (;;) {
