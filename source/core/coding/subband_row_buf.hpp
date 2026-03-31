@@ -81,8 +81,12 @@ struct j2k_subband_row_buf {
 #ifdef OPENHTJ2K_THREAD
   // Double-buffer for strip prefetch: while IDWT consumes ring_buf (current strip),
   // background tasks decode the next strip into prefetch_buf.
-  sprec_t *prefetch_buf;  // decode target for next strip
-  int32_t  prefetch_y0;   // strip bounds of pending prefetch task (-1 = none)
+  // ring_buf and prefetch_buf are the two halves of a single combined aligned allocation
+  // (combined_buf).  std::swap(ring_buf, prefetch_buf) happens on prefetch hit, so after
+  // a swap ring_buf may point to the upper half.  Always free combined_buf, not ring_buf.
+  sprec_t *prefetch_buf;   // decode target for next strip (upper half of combined alloc)
+  sprec_t *combined_buf;   // base pointer of the ring+prefetch combined allocation
+  int32_t  prefetch_y0;    // strip bounds of pending prefetch task (-1 = none)
   int32_t  prefetch_y1;
 
   // Unified codeblock task descriptor used by both decode_strip_core() (parallel path)
