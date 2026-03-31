@@ -81,6 +81,16 @@ static inline T find_max(T x0, T x1, T x2, T x3) {
   return (v0 > v1) ? v0 : v1;
 }
 
+#if (defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)) \
+    || (defined(_MSC_VER) && defined(_M_X64))
+// Horizontal max of 4 int32 lanes using SSE4.1 (implied by AVX2).
+static inline int32_t hMax(__m128i v) {
+  v = _mm_max_epi32(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(2, 3, 0, 1)));
+  v = _mm_max_epi32(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(1, 0, 3, 2)));
+  return _mm_cvtsi128_si32(v);
+}
+#endif
+
 #ifdef _MSC_VER
 #include <stdlib.h>
 #define openhtj2k_bswap32(x) _byteswap_ulong(x)
