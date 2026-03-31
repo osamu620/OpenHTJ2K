@@ -130,6 +130,12 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
 // Line-encode supporting types
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Forward declaration so fdwt_level_sink_ctx can hold a pointer without the
+// full ThreadPool class being visible here (included later under OPENHTJ2K_THREAD).
+#ifdef OPENHTJ2K_THREAD
+class ThreadPool;
+#endif
+
 // Sink context for one fdwt_2d_state level.
 struct fdwt_level_sink_ctx {
   int32_t u0;
@@ -142,11 +148,13 @@ struct fdwt_level_sink_ctx {
   sprec_t  *hl_samples;
   uint32_t  hl_stride;
   int32_t   hl_y0;
+  int32_t   hl_h;      // HL band height in rows
 
   // LH subband (HP-vert, LP-horiz)
   sprec_t  *lh_samples;
   uint32_t  lh_stride;
   int32_t   lh_y0;
+  int32_t   lh_h;      // LH band height in rows (same as HH band height)
 
   // HH subband (HP-vert, HP-horiz)
   sprec_t  *hh_samples;
@@ -161,7 +169,28 @@ struct fdwt_level_sink_ctx {
   sprec_t  *ll0_samples;
   uint32_t  ll0_stride;
   int32_t   ll0_y0;
+
+  // --- Overlap HT block encoding (populated by encode_line_based_stream) ---
+  // cb_h == 0 means overlap is disabled for this level.
+  int32_t   cb_h          = 0;
+  int32_t   num_cblk_rows = 0;
+  // Per-codeblock-row completion flags: bit0 = HL done, bit1 = LH+HH done.
+  // Dispatch fires when both bits are set (flags == 3).
+  std::unique_ptr<std::atomic<uint8_t>[]> cblk_row_done;
+
+  j2k_resolution *enc_cr      = nullptr;
+  uint8_t         enc_ROIshift = 0;
+  j2k_tile::EncodePoolCtx *enc_epc      = nullptr;
+#ifdef OPENHTJ2K_THREAD
+  ThreadPool        *enc_pool      = nullptr;
+  std::atomic<int>  *enc_remaining = nullptr;
+#endif
 };
+
+// Dispatch HT block encoding for all codeblocks in logical codeblock row `br`
+// (0-indexed relative to each band's subband-row origin) at the resolution
+// Forward declaration; full definition is after the ThreadPool include below.
+static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br);
 
 // Sink callback invoked by fdwt_2d_state after each row has been through H-DWT.
 // The interleaved_row has u1-u0 samples: LP at u0%2 offsets, HP at (1-u0%2) offsets.
@@ -185,6 +214,15 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
       memcpy(c->ll0_samples + (ptrdiff_t)ll_sub * c->ll0_stride, c->lp_tmp,
              static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
     }
+    // Overlap: dispatch HT block encoding if this HL row completes codeblock row br.
+    if (c->cb_h > 0) {
+      const int32_t br   = hl_sub / c->cb_h;
+      const int32_t last = std::min((br + 1) * c->cb_h, c->hl_h) - 1;
+      if (hl_sub == last) {
+        const uint8_t old = c->cblk_row_done[static_cast<size_t>(br)].fetch_or(1, std::memory_order_acq_rel);
+        if ((old | 1) == 3) enc_overlap_dispatch(c, br);
+      }
+    }
   } else {
     // HP vertical row: LP-horiz → LH, HP-horiz → HH
     const int32_t hp_sub = (abs_row >> 1) - c->lh_y0;
@@ -192,6 +230,15 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
            static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
     memcpy(c->hh_samples + (ptrdiff_t)hp_sub * c->hh_stride, c->hp_tmp,
            static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
+    // Overlap: dispatch HT block encoding if this LH+HH row completes codeblock row br.
+    if (c->cb_h > 0) {
+      const int32_t br   = hp_sub / c->cb_h;
+      const int32_t last = std::min((br + 1) * c->cb_h, c->lh_h) - 1;
+      if (hp_sub == last) {
+        const uint8_t old = c->cblk_row_done[static_cast<size_t>(br)].fetch_or(2, std::memory_order_acq_rel);
+        if ((old | 2) == 3) enc_overlap_dispatch(c, br);
+      }
+    }
   }
 }
 
@@ -272,6 +319,59 @@ ThreadPool *ThreadPool::singleton = nullptr;
 std::mutex ThreadPool::singleton_mutex;
 #endif
 // #include <hwy/highway.h>
+
+// Full definition of enc_overlap_dispatch (declared earlier).
+// Placed here so ThreadPool, g_cblk_pool, TlPoolSlot, and htj2k_encode are visible.
+static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
+  using EPC = j2k_tile::EncodePoolCtx;
+  j2k_resolution *cr = c->enc_cr;
+  const int32_t cb_h = c->cb_h;
+  for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+    j2k_precinct *cp = cr->access_precinct(p);
+    for (uint8_t b = 0; b < cr->num_bands; ++b) {
+      j2k_precinct_subband *cpb = cp->access_pband(b);
+      if (!cpb->num_codeblock_x || !cpb->num_codeblock_y) continue;
+      // LH and HH share the HP-vert origin (lh_y0); HL uses hl_y0.
+      const int32_t band_y0    = (b == 0) ? c->hl_y0 : c->lh_y0;
+      const int32_t abs_cblk_y = (band_y0 + br * cb_h) / cb_h;
+      const int32_t base_y     = static_cast<int32_t>(cpb->pos0.y) / cb_h;
+      const int32_t cy_local   = abs_cblk_y - base_y;
+      if (cy_local < 0 || cy_local >= static_cast<int32_t>(cpb->num_codeblock_y)) continue;
+      for (uint32_t cx = 0; cx < cpb->num_codeblock_x; ++cx) {
+        j2k_codeblock *block =
+            cpb->access_codeblock(cx + static_cast<uint32_t>(cy_local) * cpb->num_codeblock_x);
+#ifdef OPENHTJ2K_THREAD
+        if (c->enc_pool && c->enc_pool->num_threads() > 1) {
+          c->enc_remaining->fetch_add(1, std::memory_order_relaxed);
+          EPC              *epc       = c->enc_epc;
+          uint8_t           ROIshift  = c->enc_ROIshift;
+          std::atomic<int> *remaining = c->enc_remaining;
+          c->enc_pool->push([epc, block, ROIshift, remaining]() {
+            TlPoolSlot &ts = g_tl_pool_slot;
+            if (ts.gen != epc->gen) {
+              const int slot = epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
+              ts.slot        = std::min(slot, static_cast<int>(epc->pools.size()) - 1);
+              ts.gen         = epc->gen;
+            }
+            g_cblk_pool = epc->pools[static_cast<size_t>(ts.slot)].get();
+            htj2k_encode(block, ROIshift);
+            g_cblk_pool = nullptr;
+            remaining->fetch_sub(1, std::memory_order_release);
+          });
+        } else {
+          g_cblk_pool = c->enc_epc->pools[0].get();
+          htj2k_encode(block, c->enc_ROIshift);
+          g_cblk_pool = nullptr;
+        }
+#else
+        g_cblk_pool = c->enc_epc->pools[0].get();
+        htj2k_encode(block, c->enc_ROIshift);
+        g_cblk_pool = nullptr;
+#endif
+      }
+    }
+  }
+}
 
 float bibo_step_gains[32][5] = {{1.00000000F, 4.17226868F, 1.44209458F, 2.10966980F, 1.69807026F},
                                 {1.38034954F, 4.58473765F, 1.83866981F, 2.13405021F, 1.63956779F},
@@ -1766,10 +1866,12 @@ void j2k_tile_component::init_line_encode() {
     cx->hl_samples = HL->i_samples;
     cx->hl_stride  = HL->stride;
     cx->hl_y0      = static_cast<int32_t>(HL->get_pos0().y);
+    cx->hl_h       = static_cast<int32_t>(HL->get_pos1().y - HL->get_pos0().y);
 
     cx->lh_samples = LH->i_samples;
     cx->lh_stride  = LH->stride;
     cx->lh_y0      = static_cast<int32_t>(LH->get_pos0().y);
+    cx->lh_h       = static_cast<int32_t>(LH->get_pos1().y - LH->get_pos0().y);
 
     cx->hh_samples = HH->i_samples;
     cx->hh_stride  = HH->stride;
@@ -4815,9 +4917,105 @@ uint8_t *j2k_tile::encode_line_based_stream(
     return nullptr;
   }
 
-  // NL > 0: stateful FDWT with streaming input
+  // NL > 0: stateful FDWT with streaming input.
   for (uint16_t c = 0; c < num_components; ++c)
     tcomp[c].init_line_encode();
+
+  // Set up DWT–HT block encoder overlap.
+  // For each component, if hl_y0 == lh_y0 for every FDWT level (true for tile
+  // origins aligned to 2^NL), pre-allocate one flat sample/state slab for all
+  // HL/LH/HH codeblocks and wire up the per-level dispatch contexts.
+  // Otherwise the component falls back to sequential encode after finalize.
+#ifdef OPENHTJ2K_THREAD
+  std::atomic<int> enc_remaining{0};
+#endif
+  std::vector<int32_t *> comp_gbuf(num_components, nullptr);
+  std::vector<uint8_t *> comp_sgbuf(num_components, nullptr);
+  std::vector<bool>      comp_overlap(num_components, false);
+
+  for (uint16_t c = 0; c < num_components; ++c) {
+    const uint8_t NL = tcomp[c].get_dwt_levels();
+    auto *le = tcomp[c].get_line_enc();
+    if (!le || le->NL_active == 0) continue;
+
+    // Overlap requires hl_y0 == lh_y0 for all levels (true for y0=0 tiles).
+    bool ok = true;
+    for (int32_t i = 0; i < le->NL_active && ok; ++i)
+      if (le->ctxs[i].hl_y0 != le->ctxs[i].lh_y0 || le->ctxs[i].hl_h == 0) ok = false;
+    if (!ok) continue;
+
+    // Compute total flat buffer sizes for levels 1..NL (HL/LH/HH codeblocks).
+    uint32_t total_cbuf = 0, total_sbuf = 0;
+    for (uint8_t r = 1; r <= NL; ++r) {
+      j2k_resolution *cr = tcomp[c].access_resolution(r);
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          for (uint32_t cb = 0; cb < cpb->num_codeblock_x * cpb->num_codeblock_y; ++cb) {
+            j2k_codeblock *block = cpb->access_codeblock(cb);
+            const uint32_t QWx2 = round_up(block->size.x, 8U);
+            const uint32_t QHx2 = round_up(block->size.y, 8U);
+            total_cbuf += QWx2 * QHx2;
+            total_sbuf += (QWx2 + 2) * (QHx2 + 2);
+          }
+        }
+      }
+    }
+    if (total_cbuf == 0) continue;
+
+    int32_t *gbuf  = static_cast<int32_t *>(malloc(total_cbuf * sizeof(int32_t)));
+    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(total_sbuf));
+    memset(gbuf, 0, total_cbuf * sizeof(int32_t));
+    memset(sgbuf, 0, total_sbuf);
+
+    // Assign sample_buf/block_states pointers and set up per-level overlap state.
+    int32_t *pbuf  = gbuf;
+    uint8_t *spbuf = sgbuf;
+    const int32_t cb_h_val = static_cast<int32_t>(tcomp[c].get_codeblock_size().y);
+
+    for (int32_t i = 0; i < le->NL_active; ++i) {
+      j2k_resolution *cr = tcomp[c].access_resolution(static_cast<uint8_t>(i + 1));
+      auto &cx = le->ctxs[i];
+
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          for (uint32_t cb = 0; cb < cpb->num_codeblock_x * cpb->num_codeblock_y; ++cb) {
+            j2k_codeblock *block = cpb->access_codeblock(cb);
+            const uint32_t QWx2  = round_up(block->size.x, 8U);
+            const uint32_t QHx2  = round_up(block->size.y, 8U);
+            block->sample_buf    = pbuf;
+            block->block_states  = spbuf;
+            pbuf  += QWx2 * QHx2;
+            spbuf += (QWx2 + 2) * (QHx2 + 2);
+          }
+        }
+      }
+
+      cx.cb_h         = cb_h_val;
+      cx.num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_val - 1) / cb_h_val;
+      cx.cblk_row_done = std::make_unique<std::atomic<uint8_t>[]>(static_cast<size_t>(cx.num_cblk_rows));
+      for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
+        uint8_t init_flags = 0;
+        if (br * cb_h_val >= cx.hl_h) init_flags |= 1;  // no HL codeblocks in this row
+        if (br * cb_h_val >= cx.lh_h) init_flags |= 2;  // no LH/HH codeblocks in this row
+        cx.cblk_row_done[static_cast<size_t>(br)].store(init_flags, std::memory_order_relaxed);
+      }
+      cx.enc_cr       = cr;
+      cx.enc_ROIshift = tcomp[c].get_ROIshift();
+      cx.enc_epc      = epc;
+#ifdef OPENHTJ2K_THREAD
+      cx.enc_pool      = pool;
+      cx.enc_remaining = &enc_remaining;
+#endif
+    }
+
+    comp_gbuf[c]    = gbuf;
+    comp_sgbuf[c]   = sgbuf;
+    comp_overlap[c] = true;
+  }
 
   for (uint32_t y = 0; y < height; ++y) {
     src_fn(top0.y + y, int_rows.data(), num_components);
@@ -4872,16 +5070,34 @@ uint8_t *j2k_tile::encode_line_based_stream(
   for (uint16_t c = 0; c < num_components; ++c)
     tcomp[c].finalize_line_encode();
 
-  // Encode codeblocks
+  // Wait for all overlapped HT block encoder tasks dispatched from the DWT sink.
+#ifdef OPENHTJ2K_THREAD
+  while (enc_remaining.load(std::memory_order_acquire) > 0)
+    std::this_thread::yield();
+#endif
+
+  // For components that used the overlap path, HL/LH/HH are already encoded.
+  // For fallback components, encode HL/LH/HH sequentially now.
+  // In both cases, encode LL0 (r=0) sequentially — it's complete only after
+  // finalize_line_encode() flushes the coarsest DWT stage.
   for (uint16_t c = 0; c < num_components; ++c) {
     const uint8_t ROIshift = tcomp[c].get_ROIshift();
     const uint8_t NL       = tcomp[c].get_dwt_levels();
-    j2k_resolution *cr     = tcomp[c].access_resolution(NL);
-    for (uint8_t r = NL; r > 0; --r) {
-      t1_encode(cr, ROIshift);
-      cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
+    if (!comp_overlap[c]) {
+      j2k_resolution *cr = tcomp[c].access_resolution(NL);
+      for (uint8_t r = NL; r > 0; --r) {
+        t1_encode(cr, ROIshift);
+        cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
+      }
+      // cr is now access_resolution(0) — LL0 encoded below
     }
-    t1_encode(cr, ROIshift);
+    t1_encode(tcomp[c].access_resolution(0), ROIshift);
+  }
+
+  // Release pre-allocated codeblock slabs.
+  for (uint16_t c = 0; c < num_components; ++c) {
+    free(comp_gbuf[c]);
+    free(comp_sgbuf[c]);
   }
 
   build_packet_headers();
