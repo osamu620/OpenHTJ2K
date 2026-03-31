@@ -37,6 +37,28 @@
 #ifdef OPENHTJ2K_THREAD
   #include <thread>
   #include "ThreadPool.hpp"
+  #if defined(__x86_64__) || defined(_M_X64)
+    #include <immintrin.h>
+    #define HW_PAUSE() _mm_pause()
+  #elif defined(__aarch64__) || defined(_M_ARM64)
+    #include <arm_acle.h>
+    #define HW_PAUSE() __isb(0xf)
+  #else
+    #define HW_PAUSE() ((void)0)
+  #endif
+#endif
+
+#ifdef OPENHTJ2K_THREAD
+// Spin-wait with hardware pause hints before falling back to OS yield.
+// Avoids kernel scheduler spinlock contention for short waits.
+static inline void spin_wait(std::atomic_int &cnt) {
+  for (int spin = 0; spin < 1000; ++spin) {
+    if (cnt.load(std::memory_order_acquire) == 0) return;
+    HW_PAUSE();
+  }
+  while (cnt.load(std::memory_order_acquire) > 0)
+    std::this_thread::yield();
+}
 #endif
 
 // ─── init / free ──────────────────────────────────────────────────────────────
@@ -142,8 +164,7 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
 void j2k_subband_row_buf::free_resources() {
 #ifdef OPENHTJ2K_THREAD
   // Drain any in-flight tasks before touching the scratch buffers.
-  while (par_cnt.load(std::memory_order_acquire) > 0)
-    std::this_thread::yield();
+  spin_wait(par_cnt);
   prefetch_y0 = prefetch_y1 = -1;
   // Free combined allocation via its stable base pointer — ring_buf may have been
   // swapped with prefetch_buf and could be an interior pointer after prefetch hits.
@@ -269,8 +290,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
             par_cnt.fetch_sub(1, std::memory_order_release);
           };
         });
-        while (par_cnt.load(std::memory_order_acquire) > 0)
-          std::this_thread::yield();
+        spin_wait(par_cnt);
       }
       return;
     }
@@ -500,8 +520,7 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
 #ifdef OPENHTJ2K_THREAD
       if (prefetch_y0 != -1 && abs_row >= prefetch_y0 && abs_row < prefetch_y1) {
         // Prefetch hit: wait for all in-flight tasks to finish, then swap buffers.
-        while (par_cnt.load(std::memory_order_acquire) > 0)
-          std::this_thread::yield();
+        spin_wait(par_cnt);
         std::swap(ring_buf, prefetch_buf);
         strip_y0 = ring_y0 = prefetch_y0;
         strip_y1            = prefetch_y1;
@@ -509,8 +528,7 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
         trigger_prefetch(strip_y1);
       } else {
         // Prefetch miss or stale: drain any in-flight tasks, then decode synchronously.
-        while (par_cnt.load(std::memory_order_acquire) > 0)
-          std::this_thread::yield();
+        spin_wait(par_cnt);
         prefetch_y0 = prefetch_y1 = -1;
         decode_strip(abs_row);
       }

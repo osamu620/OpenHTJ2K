@@ -73,8 +73,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const uint16_t QW        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
-  uint16_t scratch[8 * 513] = {0};
+  uint16_t scratch[8 * 513];
   int32_t sstr              = static_cast<int32_t>(((block->size.x + 2) + 7u) & ~7u);  // multiples of 8
+  // Zero only the portion used for this block (QH rows × sstr cols + 8-element SSE guard).
+  // This is ~44% less zeroing than the full array for typical 64×64 blocks.
+  std::memset(scratch, 0, (static_cast<size_t>(QH) * static_cast<size_t>(sstr) + 8U) * sizeof(uint16_t));
   uint16_t *sp;
   int32_t qx;
   /*******************************************************************************************************************/
@@ -509,50 +512,74 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->i_samples + i * this->band_stride;
       size_t len   = this->size.x;
-      for (; len >= 16; len -= 16) {
-        v0 = _mm256_loadu_si256((__m256i *)val);
-        v1 = _mm256_loadu_si256((__m256i *)(val + 8));
-        s0 = v0;  //_mm256_or_si256(_mm256_and_si256(v0, signmask), one);
-        s1 = v1;  //_mm256_or_si256(_mm256_and_si256(v1, signmask), one);
-        v0 = _mm256_and_si256(v0, magmask);
-        v1 = _mm256_and_si256(v1, magmask);
-        // upshift background region, if necessary
-        vROImask = _mm256_and_si256(v0, vmask);
-        vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-        vROImask = _mm256_and_si256(vROImask, shift);
-        v0       = _mm256_sllv_epi32(v0, vROImask);
-        vROImask = _mm256_and_si256(v1, vmask);
-        vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-        vROImask = _mm256_and_si256(vROImask, shift);
-        v1       = _mm256_sllv_epi32(v1, vROImask);
-
-        // convert values from sign-magnitude form to two's complement one
-        vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
-        vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
-        _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(vdst0));
-        _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(vdst1));
-        // v0    = _mm256_permute4x64_epi64(_mm256_packs_epi32(vdst0, vdst1), 0xD8);
-        // _mm256_storeu_si256((__m256i *)dst, v0);
-        val += 16;
-        dst += 16;
-      }
-      for (; len > 0; --len) {
-        int32_t sign = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        // detect background region and upshift it
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
+      if (ROIshift == 0) {
+        // Common case: no ROI — skip the ROI upshift entirely.
+        for (; len >= 16; len -= 16) {
+          v0    = _mm256_loadu_si256((__m256i *)val);
+          v1    = _mm256_loadu_si256((__m256i *)(val + 8));
+          s0    = v0;
+          s1    = v1;
+          v0    = _mm256_and_si256(v0, magmask);
+          v1    = _mm256_and_si256(v1, magmask);
+          vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
+          vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
+          _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(vdst0));
+          _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(vdst1));
+          val += 16;
+          dst += 16;
         }
-        *val >>= pLSB;
-        // convert sign-magnitude to two's complement form
-        if (sign) {
-          *val = -(*val & INT32_MAX);
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          *val &= INT32_MAX;
+          *val >>= pLSB;
+          if (sign) *val = -(*val & INT32_MAX);
+          *dst = static_cast<float>(*val);
+          val++;
+          dst++;
         }
+      } else {
+        for (; len >= 16; len -= 16) {
+          v0 = _mm256_loadu_si256((__m256i *)val);
+          v1 = _mm256_loadu_si256((__m256i *)(val + 8));
+          s0 = v0;
+          s1 = v1;
+          v0 = _mm256_and_si256(v0, magmask);
+          v1 = _mm256_and_si256(v1, magmask);
+          // upshift background region, if necessary
+          vROImask = _mm256_and_si256(v0, vmask);
+          vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+          vROImask = _mm256_and_si256(vROImask, shift);
+          v0       = _mm256_sllv_epi32(v0, vROImask);
+          vROImask = _mm256_and_si256(v1, vmask);
+          vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+          vROImask = _mm256_and_si256(vROImask, shift);
+          v1       = _mm256_sllv_epi32(v1, vROImask);
+          // convert values from sign-magnitude form to two's complement one
+          vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
+          vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
+          _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(vdst0));
+          _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(vdst1));
+          val += 16;
+          dst += 16;
+        }
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          *val &= INT32_MAX;
+          // detect background region and upshift it
+          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+            *val <<= ROIshift;
+          }
+          *val >>= pLSB;
+          // convert sign-magnitude to two's complement form
+          if (sign) {
+            *val = -(*val & INT32_MAX);
+          }
 
-        assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<float>(*val);
-        val++;
-        dst++;
+          assert(pLSB >= 0);  // assure downshift is not negative
+          *dst = static_cast<float>(*val);
+          val++;
+          dst++;
+        }
       }
     }
   } else {
