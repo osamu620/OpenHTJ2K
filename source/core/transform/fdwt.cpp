@@ -31,7 +31,15 @@
 #include <utility>
 #include "dwt.hpp"
 #include "utils.hpp"
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+// WASM builds: dedicated WASM-SIMD horizontal kernels avoid the vld2q_f32 overhead
+// (4 WASM-SIMD ops vs. 1 on native NEON).  Vertical kernels use the NEON
+// implementations unchanged — vld1q/vst1q map 1:1 via Emscripten's shim.
+static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_wasm,
+                                                           fdwt_1d_filtr_rev53_fixed_wasm};
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_neon,
+                                                           fdwt_rev_ver_sr_fixed_neon};
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
                                                           fdwt_1d_filtr_rev53_fixed_neon};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_neon,
