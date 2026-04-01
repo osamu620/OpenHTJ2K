@@ -67,7 +67,7 @@ emcmake cmake ..
 cmake --build . -j
 ```
 
-Open `subprojects/index.html` in a browser (served via a local HTTP server) to try the interactive demo.
+A live demo is available at **https://htj2k-demo.pages.dev/**
 
 # Usage
 ## Encoder
