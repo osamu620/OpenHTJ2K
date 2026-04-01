@@ -713,6 +713,161 @@ class fwd_buf {
   #endif
   }
 };
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  #include <wasm_simd128.h>
+
+template <int X>
+class fwd_buf {
+ private:
+  const uint8_t *data;
+  uint8_t tmp[48];
+  uint32_t bits;
+  uint32_t unstuff;
+  int size;
+
+  static inline v128_t srli_si128_8(v128_t a) {
+    return wasm_i8x16_shuffle(a, wasm_i32x4_const_splat(0),
+                              8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
+  }
+  static inline v128_t slli_si128_8(v128_t a) {
+    return wasm_i8x16_shuffle(wasm_i32x4_const_splat(0), a,
+                              0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+  }
+
+ public:
+  fwd_buf(const uint8_t *data, int size) : data(data), bits(0), unstuff(0), size(size) {
+    wasm_v128_store(this->tmp,      wasm_i32x4_const_splat(0));
+    wasm_v128_store(this->tmp + 16, wasm_i32x4_const_splat(0));
+    wasm_v128_store(this->tmp + 32, wasm_i32x4_const_splat(0));
+    read();
+  }
+
+  inline void read() {
+    assert(this->bits <= 128);
+    v128_t offset, val, validity, all_xff;
+    val       = wasm_v128_load(this->data);
+    int bytes = this->size >= 16 ? 16 : this->size;
+    validity  = wasm_i8x16_splat((char)bytes);
+    this->data += bytes;
+    this->size -= bytes;
+    int bits = 128;
+    offset   = wasm_i8x16_const(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    validity = wasm_i8x16_gt(validity, offset);
+    all_xff  = wasm_i8x16_const_splat(-1);
+    if (X == 0xFF) {
+      v128_t t = wasm_v128_xor(validity, all_xff);
+      val      = wasm_v128_or(t, val);
+    } else if (X == 0)
+      val = wasm_v128_and(validity, val);
+    else
+      assert(0);
+
+    v128_t ff_bytes;
+    ff_bytes       = wasm_i8x16_eq(val, all_xff);
+    ff_bytes       = wasm_v128_and(ff_bytes, validity);
+    uint32_t flags = (uint32_t)wasm_i8x16_bitmask(ff_bytes);
+    flags <<= 1;
+    uint32_t next_unstuff = flags >> 16;
+    flags |= this->unstuff;
+    flags &= 0xFFFF;
+
+    while (flags) {
+      --bits;
+      uint32_t loc = 31 - __builtin_clz(flags);
+      flags ^= 1U << loc;
+      v128_t m, t, c;
+      t = wasm_i8x16_splat((char)loc);
+      m = wasm_i8x16_gt(offset, t);
+      t = wasm_v128_and(m, val);
+      c = wasm_u64x2_shr(t, 1);
+      t = srli_si128_8(t);
+      t = wasm_i64x2_shl(t, 63);
+      t = wasm_v128_or(t, c);
+      val = wasm_v128_or(t, wasm_v128_andnot(val, m));
+    }
+
+    assert(this->bits >= 0 && this->bits <= 128);
+    uint32_t cur_bytes = this->bits >> 3;
+    int cur_bits       = this->bits & 7;
+    v128_t b1, b2;
+    b1 = wasm_i64x2_shl(val, cur_bits);
+    if (cur_bits > 0) {
+      b2 = slli_si128_8(val);
+      b2 = wasm_u64x2_shr(b2, 64 - cur_bits);
+      b1 = wasm_v128_or(b1, b2);
+    }
+    b2 = wasm_v128_load(this->tmp + cur_bytes);
+    b2 = wasm_v128_or(b1, b2);
+    wasm_v128_store(this->tmp + cur_bytes, b2);
+
+    int consumed_bits = bits < 128 - cur_bits ? bits : 128 - cur_bits;
+    cur_bytes         = (this->bits + (uint32_t)consumed_bits + 7) >> 3;
+    int upper         = wasm_i16x8_extract_lane(val, 7);
+    upper >>= consumed_bits - 128 + 16;
+    this->tmp[cur_bytes] = (uint8_t)upper;
+
+    this->bits += (uint32_t)bits;
+    this->unstuff = next_unstuff;
+    assert(this->unstuff == 0 || this->unstuff == 1);
+  }
+
+  FORCE_INLINE void advance(uint32_t num_bits) {
+    if (!(num_bits <= this->bits && num_bits < 128)) {
+      printf("Value of numbits = %d is out of range.\n", num_bits);
+      throw std::exception();
+    }
+    this->bits -= num_bits;
+    v128_t *p = (v128_t *)(this->tmp + ((num_bits >> 3) & 0x18));
+    num_bits &= 63;
+
+    v128_t v0, v1, c0, c1, t;
+    v0 = wasm_v128_load(p);
+    v1 = wasm_v128_load(p + 1);
+
+    c0 = wasm_u64x2_shr(v0, num_bits);
+    if (num_bits > 0) {
+      t  = srli_si128_8(v0);
+      t  = wasm_i64x2_shl(t, 64 - num_bits);
+      c0 = wasm_v128_or(c0, t);
+      t  = slli_si128_8(v1);
+      t  = wasm_i64x2_shl(t, 64 - num_bits);
+      c0 = wasm_v128_or(c0, t);
+    }
+    wasm_v128_store(this->tmp, c0);
+
+    c1 = wasm_u64x2_shr(v1, num_bits);
+    if (num_bits > 0) {
+      t  = srli_si128_8(v1);
+      t  = wasm_i64x2_shl(t, 64 - num_bits);
+      c1 = wasm_v128_or(c1, t);
+    }
+    wasm_v128_store(this->tmp + 16, c1);
+  }
+
+  FORCE_INLINE v128_t fetch(const v128_t &m) {
+    if (this->bits <= 128) {
+      read();
+      if (this->bits <= 128)
+        read();
+    }
+    v128_t t = wasm_v128_load(this->tmp);
+    uint64_t lo = (uint64_t)wasm_i64x2_extract_lane(t, 0);
+    uint64_t hi = (uint64_t)wasm_i64x2_extract_lane(t, 1);
+    __uint128_t v128i = ((__uint128_t)hi << 64) | lo;
+    v128_t vtmp;
+    int32_t m0 = wasm_i32x4_extract_lane(m, 0);
+    int32_t m1 = wasm_i32x4_extract_lane(m, 1);
+    int32_t m2 = wasm_i32x4_extract_lane(m, 2);
+    int32_t m3 = wasm_i32x4_extract_lane(m, 3);
+    int32_t r0 = (int32_t)(v128i & 0xFFFFFFFFU); v128i >>= m0;
+    int32_t r1 = (int32_t)(v128i & 0xFFFFFFFFU); v128i >>= m1;
+    int32_t r2 = (int32_t)(v128i & 0xFFFFFFFFU); v128i >>= m2;
+    int32_t r3 = (int32_t)(v128i & 0xFFFFFFFFU);
+    vtmp = wasm_i32x4_make(r0, r1, r2, r3);
+    advance((uint32_t)(m0 + m1 + m2 + m3));
+    return vtmp;
+  }
+};
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
 FORCE_INLINE int32_t hsum_epi32_sse2(__m128i x) {

@@ -38,6 +38,9 @@
 #include "dwt.hpp"
 #include "color.hpp"
 #include "subband_row_buf.hpp"
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  #include <wasm_simd128.h>
+#endif
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Line-decode supporting types (file-scope, internal to this TU)
@@ -136,6 +139,28 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
       _mm256_storeu_ps(out + 2 * i + 8, r1);
     }
     // Two independent scalar tails starting from i (independent loop variables).
+    if (u_off == 0) {
+      for (int32_t j = i; j < c->lp_width; ++j)  out[2 * j]     = lp_ptr[j];
+      for (int32_t j = i; j < c->hp_width; ++j)  out[2 * j + 1] = hp_ptr[j];
+    } else {
+      for (int32_t j = i; j < c->hp_width; ++j)  out[2 * j]     = hp_ptr[j];
+      for (int32_t j = i; j < c->lp_width; ++j)  out[2 * j + 1] = lp_ptr[j];
+    }
+  }
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  {
+    const sprec_t *a_ptr = (u_off == 0) ? lp_ptr : hp_ptr;
+    const sprec_t *b_ptr = (u_off == 0) ? hp_ptr : lp_ptr;
+    int32_t i = 0;
+    for (; i + 4 <= min_w; i += 4) {
+      v128_t va = wasm_v128_load(a_ptr + i);
+      v128_t vb = wasm_v128_load(b_ptr + i);
+      // Interleave 4 floats: lo=a0,b0,a1,b1  hi=a2,b2,a3,b3
+      v128_t lo = wasm_i8x16_shuffle(va, vb, 0,1,2,3, 16,17,18,19, 4,5,6,7, 20,21,22,23);
+      v128_t hi = wasm_i8x16_shuffle(va, vb, 8,9,10,11, 24,25,26,27, 12,13,14,15, 28,29,30,31);
+      wasm_v128_store(out + 2 * i,     lo);
+      wasm_v128_store(out + 2 * i + 4, hi);
+    }
     if (u_off == 0) {
       for (int32_t j = i; j < c->lp_width; ++j)  out[2 * j]     = lp_ptr[j];
       for (int32_t j = i; j < c->hp_width; ++j)  out[2 * j + 1] = hp_ptr[j];
@@ -349,6 +374,12 @@ static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_
                                                           cvt_ycbcr_to_rgb_rev_float_avx2};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_avx2,
                                                               cvt_rgb_to_ycbcr_rev_float_avx2};
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
+static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float,
+                                                          cvt_ycbcr_to_rgb_rev_float};
+static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float,
+                                                              cvt_rgb_to_ycbcr_rev_float};
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 [[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_neon, cvt_rgb_to_ycbcr_rev_neon};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_neon,
@@ -2219,7 +2250,42 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
   const int32_t width     = static_cast<int32_t>(this->pos1.x - this->pos0.x);
   const int32_t height    = static_cast<int32_t>(this->pos1.y - this->pos0.y);
   int32_t *src            = this->samples;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  {
+    const v128_t vdoff = wasm_i32x4_splat(DC_OFFSET);
+    if (shiftup < 0) {
+      for (int32_t y = 0; y < height; ++y) {
+        int32_t *sp = src + y * stride;
+        int32_t len = width;
+        for (int32_t i = 0; i < round_down(len, 8); i += 8) {
+          v128_t v0 = wasm_v128_load(sp + i);
+          v128_t v1 = wasm_v128_load(sp + i + 4);
+          wasm_v128_store(sp + i,     wasm_i32x4_sub(wasm_i32x4_shr(v0, -shiftup), vdoff));
+          wasm_v128_store(sp + i + 4, wasm_i32x4_sub(wasm_i32x4_shr(v1, -shiftup), vdoff));
+        }
+        for (int32_t i = round_down(len, 8); i < len; ++i) {
+          sp[i] >>= -shiftup;
+          sp[i] -= DC_OFFSET;
+        }
+      }
+    } else {
+      for (int32_t y = 0; y < height; ++y) {
+        int32_t *sp = src + y * stride;
+        int32_t len = width;
+        for (int32_t i = 0; i < round_down(len, 8); i += 8) {
+          v128_t v0 = wasm_v128_load(sp + i);
+          v128_t v1 = wasm_v128_load(sp + i + 4);
+          wasm_v128_store(sp + i,     wasm_i32x4_sub(wasm_i32x4_shl(v0, shiftup), vdoff));
+          wasm_v128_store(sp + i + 4, wasm_i32x4_sub(wasm_i32x4_shl(v1, shiftup), vdoff));
+        }
+        for (int32_t i = round_down(len, 8); i < len; ++i) {
+          sp[i] <<= shiftup;
+          sp[i] -= DC_OFFSET;
+        }
+      }
+    }
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   const int32x4_t doff     = vdupq_n_s32(DC_OFFSET);
   const int32x4_t vshiftup = vdupq_n_s32(shiftup);
   for (int32_t y = 0; y < height; ++y) {
@@ -3377,7 +3443,84 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     int32_t *const cdst   = dst[c];
     const sprec_t *spf;
     int32_t *dp;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+    {
+      const v128_t vdco = wasm_i32x4_splat(DC_OFFSET);
+      const v128_t vmx  = wasm_i32x4_splat(MAXVAL);
+      const v128_t vmn  = wasm_i32x4_splat(MINVAL);
+      if (downshift == 0) {
+        for (uint32_t y = 0; y < in_height; ++y) {
+          uint32_t len = csize.x;
+          spf          = src + y * in_stride;
+          dp           = cdst + x_offset + (y + y_offset) * out_stride;
+          for (; len >= 8; len -= 8) {
+            v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf));
+            v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + 4));
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            wasm_v128_store(dp, v0);
+            wasm_v128_store(dp + 4, v1);
+            spf += 8;
+            dp += 8;
+          }
+          for (; len > 0; --len) {
+            int32_t ival = static_cast<int32_t>(*spf++) + DC_OFFSET;
+            ival  = (ival > MAXVAL) ? MAXVAL : ival;
+            ival  = (ival < MINVAL) ? MINVAL : ival;
+            *dp++ = ival;
+          }
+        }
+      } else if (downshift < 0) {
+        const v128_t vo = wasm_i32x4_splat(offset);
+        for (uint32_t y = 0; y < in_height; ++y) {
+          uint32_t len = csize.x;
+          spf          = src + y * in_stride;
+          dp           = cdst + x_offset + (y + y_offset) * out_stride;
+          for (; len >= 8; len -= 8) {
+            v128_t v0 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf)), vo), (int)-downshift);
+            v128_t v1 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + 4)), vo), (int)-downshift);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            wasm_v128_store(dp, v0);
+            wasm_v128_store(dp + 4, v1);
+            spf += 8;
+            dp += 8;
+          }
+          for (; len > 0; --len) {
+            int32_t ival = (static_cast<int32_t>(*spf++) + offset) << -downshift;
+            ival += DC_OFFSET;
+            ival  = (ival > MAXVAL) ? MAXVAL : ival;
+            ival  = (ival < MINVAL) ? MINVAL : ival;
+            *dp++ = ival;
+          }
+        }
+      } else {
+        const v128_t vo = wasm_i32x4_splat(offset);
+        for (uint32_t y = 0; y < in_height; ++y) {
+          uint32_t len = csize.x;
+          spf          = src + y * in_stride;
+          dp           = cdst + x_offset + (y + y_offset) * out_stride;
+          for (; len >= 8; len -= 8) {
+            v128_t v0 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf)), vo), (int)downshift);
+            v128_t v1 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + 4)), vo), (int)downshift);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            wasm_v128_store(dp, v0);
+            wasm_v128_store(dp + 4, v1);
+            spf += 8;
+            dp += 8;
+          }
+          for (; len > 0; --len) {
+            int32_t ival = (static_cast<int32_t>(*spf++) + offset) >> downshift;
+            ival += DC_OFFSET;
+            ival  = (ival > MAXVAL) ? MAXVAL : ival;
+            ival  = (ival < MINVAL) ? MINVAL : ival;
+            *dp++ = ival;
+          }
+        }
+      }
+    }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
     {
       const int32x4_t dco  = vdupq_n_s32(DC_OFFSET);
       const int32x4_t vmax = vdupq_n_s32(MAXVAL);
@@ -3638,7 +3781,70 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
       int32_t       *dp  = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
       const int16_t  ds  = I.downshift;
       const int16_t  ro  = I.rnd;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+      {
+        const v128_t vdco = wasm_i32x4_splat(I.DC_OFFSET);
+        const v128_t vmx  = wasm_i32x4_splat(I.MAXVAL);
+        const v128_t vmn  = wasm_i32x4_splat(I.MINVAL);
+        uint32_t n = 0;
+        if (ds == 0) {
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n));
+            v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4));
+            v128_t v2 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8));
+            v128_t v3 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12));
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        } else if (ds < 0) {
+          const v128_t vro = wasm_i32x4_splat(ro);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vro), (int)-ds);
+            v128_t v1 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vro), (int)-ds);
+            v128_t v2 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8)), vro), (int)-ds);
+            v128_t v3 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12)), vro), (int)-ds);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        } else {
+          const v128_t vro = wasm_i32x4_splat(ro);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vro), (int)ds);
+            v128_t v1 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vro), (int)ds);
+            v128_t v2 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8)), vro), (int)ds);
+            v128_t v3 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12)), vro), (int)ds);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
       {
         const int32x4_t vdco = vdupq_n_s32(I.DC_OFFSET);
         const int32x4_t vmx  = vdupq_n_s32(I.MAXVAL);
@@ -3847,7 +4053,70 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       int32_t       *dp  = out_rows[c].data();
       const int16_t  ds  = I.downshift;
       const int16_t  ro  = I.rnd;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+      {
+        const v128_t vdco = wasm_i32x4_splat(I.DC_OFFSET);
+        const v128_t vmx  = wasm_i32x4_splat(I.MAXVAL);
+        const v128_t vmn  = wasm_i32x4_splat(I.MINVAL);
+        uint32_t n = 0;
+        if (ds == 0) {
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n));
+            v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4));
+            v128_t v2 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8));
+            v128_t v3 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12));
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        } else if (ds < 0) {
+          const v128_t vro = wasm_i32x4_splat(ro);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vro), (int)-ds);
+            v128_t v1 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vro), (int)-ds);
+            v128_t v2 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8)), vro), (int)-ds);
+            v128_t v3 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12)), vro), (int)-ds);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        } else {
+          const v128_t vro = wasm_i32x4_splat(ro);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vro), (int)ds);
+            v128_t v1 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vro), (int)ds);
+            v128_t v2 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8)), vro), (int)ds);
+            v128_t v3 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12)), vro), (int)ds);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
       {
         const int32x4_t vdco = vdupq_n_s32(I.DC_OFFSET);
         const int32x4_t vmx  = vdupq_n_s32(I.MAXVAL);
@@ -4145,7 +4414,70 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       int32_t *dp      = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
       const int16_t ds = I.downshift;
       const int16_t ro = I.rnd;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+      {
+        const v128_t vdco = wasm_i32x4_splat(I.DC_OFFSET);
+        const v128_t vmx  = wasm_i32x4_splat(I.MAXVAL);
+        const v128_t vmn  = wasm_i32x4_splat(I.MINVAL);
+        uint32_t n = 0;
+        if (ds == 0) {
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n));
+            v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4));
+            v128_t v2 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8));
+            v128_t v3 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12));
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        } else if (ds < 0) {
+          const v128_t vro = wasm_i32x4_splat(ro);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vro), (int)-ds);
+            v128_t v1 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vro), (int)-ds);
+            v128_t v2 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8)), vro), (int)-ds);
+            v128_t v3 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12)), vro), (int)-ds);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        } else {
+          const v128_t vro = wasm_i32x4_splat(ro);
+          for (; n + 16 <= I.csize_x; n += 16) {
+            v128_t v0 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vro), (int)ds);
+            v128_t v1 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vro), (int)ds);
+            v128_t v2 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 8)), vro), (int)ds);
+            v128_t v3 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 12)), vro), (int)ds);
+            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
+            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
+            v2 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v2, vdco), vmx), vmn);
+            v3 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v3, vdco), vmx), vmn);
+            wasm_v128_store(dp + n, v0);
+            wasm_v128_store(dp + n + 4, v1);
+            wasm_v128_store(dp + n + 8, v2);
+            wasm_v128_store(dp + n + 12, v3);
+          }
+        }
+        for (; n < I.csize_x; ++n) {
+          int32_t v = static_cast<int32_t>(spf[n]);
+          v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+          v += I.DC_OFFSET;
+          if (v > I.MAXVAL) v = I.MAXVAL;
+          if (v < I.MINVAL) v = I.MINVAL;
+          dp[n] = v;
+        }
+      }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
       {
         const int32x4_t vdco = vdupq_n_s32(I.DC_OFFSET);
         const int32x4_t vmx  = vdupq_n_s32(I.MAXVAL);
@@ -4383,6 +4715,21 @@ uint8_t *j2k_tile::encode() {
           auto v0 = _mm256_load_si256((__m256i *)sp);
           auto t0 = _mm256_cvtepi32_ps(v0);
           _mm256_store_ps(dp, t0);
+          sp += 8;
+          dp += 8;
+        }
+        for (; num_tc_samples > 0; --num_tc_samples) {
+          *dp++ = static_cast<sprec_t>(*sp++);
+        }
+      }
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+      for (uint32_t y = 0; y < height; ++y) {
+        int32_t *sp             = src + y * stride;
+        sprec_t *dp             = cr->i_samples + y * stride;
+        uint32_t num_tc_samples = bottom_right.x - top_left.x;
+        for (; num_tc_samples >= 8; num_tc_samples -= 8) {
+          wasm_v128_store(dp,     wasm_f32x4_convert_i32x4(wasm_v128_load(sp)));
+          wasm_v128_store(dp + 4, wasm_f32x4_convert_i32x4(wasm_v128_load(sp + 4)));
           sp += 8;
           dp += 8;
         }
