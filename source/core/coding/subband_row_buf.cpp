@@ -42,7 +42,6 @@
     #define HW_PAUSE() _mm_pause()
   #elif defined(__aarch64__) || defined(_M_ARM64)
     #if defined(_MSC_VER)
-      #include <arm_acle.h>
       #define HW_PAUSE() __yield()
     #else
       #define HW_PAUSE() __asm__ volatile("yield" ::: "memory")
