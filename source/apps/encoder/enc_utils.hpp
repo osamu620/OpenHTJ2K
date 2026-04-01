@@ -1,4 +1,4 @@
-// Copyright (c) 2019 - 2023, Osamu Watanabe
+// Copyright (c) 2019 - 2026, Osamu Watanabe
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without

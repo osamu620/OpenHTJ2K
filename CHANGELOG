@@ -1,3 +1,43 @@
+# [0.5.0] - 2026-04-01
+
+ ## WASM SIMD
+ * Complete separation of WASM-SIMD from NEON: dedicated source files
+   (fdwt_wasm.cpp, idwt_wasm.cpp, ht_block_encoding_wasm.cpp,
+   ht_block_decoding_wasm.cpp) guarded solely by
+   OPENHTJ2K_ENABLE_WASM_SIMD; no NEON flag is used in WASM builds
+ * Translate HT block encoding and decoding to native WASM-SIMD intrinsics
+   (v128_t); encoder state classes in ht_block_encoding_wasm.hpp
+ * Add dedicated WASM fwd_buf<X> implementation in ht_block_decoding.hpp
+ * subprojects/CMakeLists.txt: compile library twice — scalar build
+   linked to libopen_htj2k.js, SIMD build linked to libopen_htj2k_simd.js
+
+ ## Performance
+ * IDWT: eliminate redundant memcpy in idwt_level_src_fn; remove hp_tmp
+   scratch buffer; reduce streaming ring buffer depth from 12 to 8
+ * IDWT: vectorize LP/HP interleave with AVX2 (unpacklo/hi + permute2f128)
+   and NEON; vectorize 5/3 reversible vertical lifting steps with AVX2
+ * FDWT/IDWT: AVX2 and NEON odd-width interleave/deinterleave fixes
+ * Decoder finalization: AVX2 and NEON paths for float→int32 conversion
+   in decode_line_based_stream; NEON ds==0 fast path; 16-element/iter loop
+ * NEON: 2× unroll reversible vertical lifting steps and FDWT deinterleave
+ * DWT cascade: specialize 5/3 path; fix O(n²) scan-window growth
+ * HT block decoding: skip sigma stores for single-pass codeblocks;
+   skip redundant memset for single-pass codeblocks
+ * Allocation: eliminate per-codeblock allocation storm in
+   j2k_precinct_subband; replace per-strip and per-resolution allocation;
+   hoist tree_path vector out of per-codeblock loop; replace per-block
+   all_segments std::vector with stack array in htj2k_decode()
+ * ThreadPool: batch-push tasks, reserve marker list, combine ring buffer
+   and predecoded pool; pre-fault ring/prefetch buffers; reduce
+   task-queue thundering herd
+ * LB encoder: overlap DWT computation with HT block encoding
+ * Eliminate bulk ring_buf/prefetch_buf zeroing; zero only empty regions
+ * Replace scratch array memset with per-row 8-byte guard zeros
+
+ ## Fixes
+ * Fix O(n²) scan window growth in DWT cascade 5/3 specialization
+ * Add <utility> include for std::swap in fdwt.cpp and idwt.cpp
+
 # [0.4.1] - 2026-03-30
 
 * Introduce a temporary workaround for the line-based validation test in Windows ARM64.
