@@ -1,3 +1,11 @@
+# [0.5.1] - 2026-04-01
+
+ ## WASM SIMD
+ * Add color transform vectorization: new color_wasm.cpp with all 8
+   color transform functions (forward/inverse RCT and ICT, integer and
+   float-domain variants) implemented using WASM SIMD 128-bit intrinsics,
+   processing 4 elements per iteration
+
 # [0.5.0] - 2026-04-01
 
  ## WASM SIMD
