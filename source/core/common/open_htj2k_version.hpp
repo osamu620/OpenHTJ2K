@@ -1,4 +1,4 @@
-// Copyright (c) 2019 - 2023, Osamu Watanabe
+// Copyright (c) 2019 - 2026, Osamu Watanabe
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -27,5 +27,5 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define OPENHTJ2K_VERSION_MAJOR 0
-#define OPENHTJ2K_VERSION_MINOR 4
-#define OPENHTJ2K_VERSION_PATCH 1
+#define OPENHTJ2K_VERSION_MINOR 5
+#define OPENHTJ2K_VERSION_PATCH 0
