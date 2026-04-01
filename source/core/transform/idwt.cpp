@@ -32,17 +32,18 @@
 #include "dwt.hpp"
 #include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
-// WASM builds: dedicated WASM-SIMD horizontal kernels avoid the vld2q_f32 overhead.
-// Vertical kernels (including adv_step) use NEON implementations via Emscripten's shim.
+  #include <wasm_simd128.h>
+#endif
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_wasm,
                                                            idwt_1d_filtr_rev53_fixed_wasm};
-static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
-                                                           idwt_rev_ver_sr_fixed_neon};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_wasm,
+                                                           idwt_rev_ver_sr_fixed_wasm};
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
-static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_neon;
+static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_wasm;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
-static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_neon;
-static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_neon;
+static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_wasm;
+static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_wasm;
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
@@ -342,7 +343,59 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
   const int32_t stride2[4] = {round_up(ustop[0] - ustart[0], 32), round_up(ustop[1] - ustart[1], 32),
                               round_up(ustop[2] - ustart[2], 32), round_up(ustop[3] - ustart[3], 32)};
 
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  // WASM-SIMD interleave: use wasm_i32x4_shuffle instead of vzip1q/vzip2q.
+  auto wasm_interleave_pair = [](sprec_t *buf, sprec_t *bp0, sprec_t *bp1, int32_t s0, int32_t s1,
+                                  int32_t common_len, int32_t vstart_b, int32_t vstop_b, int32_t voffset_b,
+                                  int32_t stride) {
+    for (int32_t v = 0, vb = vstart_b; vb < vstop_b; ++vb, ++v) {
+      sprec_t *dp    = buf + (2 * v + voffset_b) * stride;
+      size_t len     = static_cast<size_t>(common_len);
+      sprec_t *line0 = bp0 + static_cast<ptrdiff_t>(v) * s0;
+      sprec_t *line1 = bp1 + static_cast<ptrdiff_t>(v) * s1;
+      for (; len >= 8; len -= 8) {
+        v128_t a0 = wasm_v128_load(line0);     v128_t b0 = wasm_v128_load(line1);
+        v128_t a1 = wasm_v128_load(line0 + 4); v128_t b1 = wasm_v128_load(line1 + 4);
+        wasm_v128_store(dp,      wasm_i32x4_shuffle(a0, b0, 0, 4, 1, 5));
+        wasm_v128_store(dp + 4,  wasm_i32x4_shuffle(a0, b0, 2, 6, 3, 7));
+        wasm_v128_store(dp + 8,  wasm_i32x4_shuffle(a1, b1, 0, 4, 1, 5));
+        wasm_v128_store(dp + 12, wasm_i32x4_shuffle(a1, b1, 2, 6, 3, 7));
+        line0 += 8; line1 += 8; dp += 16;
+      }
+      for (; len > 0; --len) { *dp++ = *line0++; *dp++ = *line1++; }
+    }
+  };
+  {
+    const int32_t len0 = ustop[0] - ustart[0], len1 = ustop[1] - ustart[1];
+    const int32_t common_len = len0 < len1 ? len0 : len1;
+    sprec_t *bp0 = sp[0]; sprec_t *bp1 = sp[1]; int32_t s0 = stride2[0], s1 = stride2[1];
+    if (uoffset[0] > uoffset[1]) { std::swap(bp0, bp1); std::swap(s0, s1); }
+    wasm_interleave_pair(buf, bp0, bp1, s0, s1, common_len, vstart[0], vstop[0], voffset[0], stride);
+    for (uint8_t b = 0; b < 2; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v)
+          buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride] =
+              sp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len];
+        break;
+      }
+    }
+  }
+  {
+    const int32_t len2 = ustop[2] - ustart[2], len3 = ustop[3] - ustart[3];
+    const int32_t common_len = len2 < len3 ? len2 : len3;
+    sprec_t *bp2 = sp[2]; sprec_t *bp3 = sp[3]; int32_t s2 = stride2[2], s3 = stride2[3];
+    if (uoffset[2] > uoffset[3]) { std::swap(bp2, bp3); std::swap(s2, s3); }
+    wasm_interleave_pair(buf, bp2, bp3, s2, s3, common_len, vstart[2], vstop[2], voffset[2], stride);
+    for (uint8_t b = 2; b < 4; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v)
+          buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride] =
+              sp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len];
+        break;
+      }
+    }
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   {
     // Band pair {LL, HL}: NEON zip for common length, scalar for extra sample.
     const int32_t len0       = ustop[0] - ustart[0];

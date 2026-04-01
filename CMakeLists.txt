@@ -99,9 +99,9 @@ find_package(Threads)
 find_package(TIFF)
 
 if (EMSCRIPTEN)
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON" "OPENHTJ2K_ENABLE_WASM_SIMD")
+  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_WASM_SIMD")
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -msimd128 -mfpu=neon"
+      "${CMAKE_CXX_FLAGS} -msimd128"
   )
 endif()
 if (NOT EMSCRIPTEN)
