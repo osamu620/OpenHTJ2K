@@ -139,6 +139,19 @@ void cvt_rgb_to_ycbcr_rev_float_neon(const int32_t *sp0, const int32_t *sp1, con
 void cvt_rgb_to_ycbcr_irrev_float_neon(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
                                        float *dp0, float *dp1, float *dp2,
                                        uint32_t width, uint32_t height, uint32_t stride);
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+void cvt_rgb_to_ycbcr_rev_wasm(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_rgb_to_ycbcr_irrev_wasm(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_rev_wasm(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_irrev_wasm(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_rev_float_wasm(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_ycbcr_to_rgb_irrev_float_wasm(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_rev_float_wasm(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                     float *dp0, float *dp1, float *dp2,
+                                     uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_irrev_float_wasm(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                       float *dp0, float *dp1, float *dp2,
+                                       uint32_t width, uint32_t height, uint32_t stride);
 #else
 void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 void cvt_rgb_to_ycbcr_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);

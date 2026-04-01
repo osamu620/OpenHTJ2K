@@ -12,4 +12,5 @@ target_sources(open_htj2k
     color.cpp
     color_avx2.cpp
     color_neon.cpp
+    color_wasm.cpp
 )
