@@ -125,13 +125,19 @@ class state_MS_enc {
         wasm_i32x4_extract_lane(emb1,2) << wasm_i32x4_extract_lane(m,2),
         wasm_i32x4_extract_lane(emb1,3) << wasm_i32x4_extract_lane(m,3));
     v = wasm_i32x4_sub(v, tmp);
-    for (int i = 0; i < 4; ++i) {
-      Creg |= static_cast<uint64_t>(wasm_i32x4_extract_lane(v, i)) << ctreg;
-      ctreg += static_cast<unsigned int>(wasm_i32x4_extract_lane(m, i));
-      while (ctreg >= 32) {
-        emit_dword();
-      }
-    }
+    // Lane index must be a compile-time constant — unroll manually.
+    Creg |= static_cast<uint64_t>(wasm_i32x4_extract_lane(v, 0)) << ctreg;
+    ctreg += static_cast<unsigned int>(wasm_i32x4_extract_lane(m, 0));
+    while (ctreg >= 32) { emit_dword(); }
+    Creg |= static_cast<uint64_t>(wasm_i32x4_extract_lane(v, 1)) << ctreg;
+    ctreg += static_cast<unsigned int>(wasm_i32x4_extract_lane(m, 1));
+    while (ctreg >= 32) { emit_dword(); }
+    Creg |= static_cast<uint64_t>(wasm_i32x4_extract_lane(v, 2)) << ctreg;
+    ctreg += static_cast<unsigned int>(wasm_i32x4_extract_lane(m, 2));
+    while (ctreg >= 32) { emit_dword(); }
+    Creg |= static_cast<uint64_t>(wasm_i32x4_extract_lane(v, 3)) << ctreg;
+    ctreg += static_cast<unsigned int>(wasm_i32x4_extract_lane(m, 3));
+    while (ctreg >= 32) { emit_dword(); }
   }
 
   FORCE_INLINE int32_t termMS() {
