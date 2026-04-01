@@ -341,6 +341,18 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       size_t len     = static_cast<size_t>(common_len);
       sprec_t *line0 = bdp0 + static_cast<ptrdiff_t>(v) * s0;
       sprec_t *line1 = bdp1 + static_cast<ptrdiff_t>(v) * s1;
+      // 2× unrolled: two vld2q_f32 per iteration to hide load latency.
+      for (; len >= 8; len -= 8) {
+        auto vline0 = vld2q_f32(sp);
+        auto vline1 = vld2q_f32(sp + 8);
+        vst1q_f32(line0, vline0.val[0]);
+        vst1q_f32(line1, vline0.val[1]);
+        vst1q_f32(line0 + 4, vline1.val[0]);
+        vst1q_f32(line1 + 4, vline1.val[1]);
+        line0 += 8;
+        line1 += 8;
+        sp += 16;
+      }
       for (; len >= 4; len -= 4) {
         auto vline = vld2q_f32(sp);
         vst1q_f32(line0, vline.val[0]);
@@ -381,6 +393,18 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       size_t len     = static_cast<size_t>(common_len);
       sprec_t *line0 = bdp2 + static_cast<ptrdiff_t>(v) * s2;
       sprec_t *line1 = bdp3 + static_cast<ptrdiff_t>(v) * s3;
+      // 2× unrolled: two vld2q_f32 per iteration to hide load latency.
+      for (; len >= 8; len -= 8) {
+        auto vline0 = vld2q_f32(sp);
+        auto vline1 = vld2q_f32(sp + 8);
+        vst1q_f32(line0, vline0.val[0]);
+        vst1q_f32(line1, vline0.val[1]);
+        vst1q_f32(line0 + 4, vline1.val[0]);
+        vst1q_f32(line1 + 4, vline1.val[1]);
+        line0 += 8;
+        line1 += 8;
+        sp += 16;
+      }
       for (; len >= 4; len -= 4) {
         auto vline = vld2q_f32(sp);
         vst1q_f32(line0, vline.val[0]);
