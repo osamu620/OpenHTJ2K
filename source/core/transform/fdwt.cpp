@@ -32,13 +32,13 @@
 #include "dwt.hpp"
 #include "utils.hpp"
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
-// WASM builds: dedicated WASM-SIMD horizontal kernels avoid the vld2q_f32 overhead
-// (4 WASM-SIMD ops vs. 1 on native NEON).  Vertical kernels use the NEON
-// implementations unchanged — vld1q/vst1q map 1:1 via Emscripten's shim.
+  #include <wasm_simd128.h>
+#endif
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_wasm,
                                                            fdwt_1d_filtr_rev53_fixed_wasm};
-static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_neon,
-                                                           fdwt_rev_ver_sr_fixed_neon};
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_wasm,
+                                                           fdwt_rev_ver_sr_fixed_wasm};
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
                                                           fdwt_1d_filtr_rev53_fixed_neon};
@@ -332,7 +332,65 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
   const int32_t stride2[4] = {round_up(ustop[0] - ustart[0], 32), round_up(ustop[1] - ustart[1], 32),
                               round_up(ustop[2] - ustart[2], 32), round_up(ustop[3] - ustart[3], 32)};
 
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  // WASM-SIMD deinterleave: use wasm_i32x4_shuffle instead of vld2q_f32.
+  auto wasm_deinterleave_pair = [](sprec_t *buf, sprec_t *bdp0, sprec_t *bdp1, int32_t s0, int32_t s1,
+                                   int32_t common_len, int32_t vstart_b, int32_t vstop_b, int32_t voffset_b,
+                                   int32_t stride) {
+    for (int32_t v = 0, vb = vstart_b; vb < vstop_b; ++vb, ++v) {
+      sprec_t *sp    = buf + (2 * v + voffset_b) * stride;
+      size_t len     = static_cast<size_t>(common_len);
+      sprec_t *line0 = bdp0 + static_cast<ptrdiff_t>(v) * s0;
+      sprec_t *line1 = bdp1 + static_cast<ptrdiff_t>(v) * s1;
+      for (; len >= 8; len -= 8) {
+        v128_t lo0 = wasm_v128_load(sp);      v128_t hi0 = wasm_v128_load(sp + 4);
+        v128_t lo1 = wasm_v128_load(sp + 8);  v128_t hi1 = wasm_v128_load(sp + 12);
+        wasm_v128_store(line0,     wasm_i32x4_shuffle(lo0, hi0, 0, 2, 4, 6));
+        wasm_v128_store(line1,     wasm_i32x4_shuffle(lo0, hi0, 1, 3, 5, 7));
+        wasm_v128_store(line0 + 4, wasm_i32x4_shuffle(lo1, hi1, 0, 2, 4, 6));
+        wasm_v128_store(line1 + 4, wasm_i32x4_shuffle(lo1, hi1, 1, 3, 5, 7));
+        line0 += 8; line1 += 8; sp += 16;
+      }
+      for (; len >= 4; len -= 4) {
+        v128_t lo = wasm_v128_load(sp); v128_t hi = wasm_v128_load(sp + 4);
+        wasm_v128_store(line0, wasm_i32x4_shuffle(lo, hi, 0, 2, 4, 6));
+        wasm_v128_store(line1, wasm_i32x4_shuffle(lo, hi, 1, 3, 5, 7));
+        line0 += 4; line1 += 4; sp += 8;
+      }
+      for (; len > 0; --len) { *line0++ = *sp++; *line1++ = *sp++; }
+    }
+  };
+  {
+    const int32_t len0 = ustop[0] - ustart[0], len1 = ustop[1] - ustart[1];
+    const int32_t common_len = len0 < len1 ? len0 : len1;
+    sprec_t *bdp0 = dp[0]; sprec_t *bdp1 = dp[1]; int32_t s0 = stride2[0], s1 = stride2[1];
+    if (uoffset[0] > uoffset[1]) { std::swap(bdp0, bdp1); std::swap(s0, s1); }
+    wasm_deinterleave_pair(buf, bdp0, bdp1, s0, s1, common_len, vstart[0], vstop[0], voffset[0], stride);
+    for (uint8_t b = 0; b < 2; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v)
+          dp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len] =
+              buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride];
+        break;
+      }
+    }
+  }
+  {
+    const int32_t len2 = ustop[2] - ustart[2], len3 = ustop[3] - ustart[3];
+    const int32_t common_len = len2 < len3 ? len2 : len3;
+    sprec_t *bdp2 = dp[2]; sprec_t *bdp3 = dp[3]; int32_t s2 = stride2[2], s3 = stride2[3];
+    if (uoffset[2] > uoffset[3]) { std::swap(bdp2, bdp3); std::swap(s2, s3); }
+    wasm_deinterleave_pair(buf, bdp2, bdp3, s2, s3, common_len, vstart[2], vstop[2], voffset[2], stride);
+    for (uint8_t b = 2; b < 4; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v)
+          dp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len] =
+              buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride];
+        break;
+      }
+    }
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   {
     // Band pair {LL, HL}: NEON deinterleave for common length, scalar for extra sample.
     const int32_t len0       = ustop[0] - ustart[0];

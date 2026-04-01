@@ -158,14 +158,26 @@ void idwt_irrev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, in
 void idwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1, int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 #endif
 
-// WASM-SIMD horizontal-only DWT kernels (EMSCRIPTEN builds).
-// Vertical kernels continue to use the NEON implementations via Emscripten's shim,
-// since they use only vld1q/vst1q which map cleanly to WASM-SIMD.
+// WASM-SIMD DWT kernels (EMSCRIPTEN builds only, no NEON dependency).
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+// horizontal
 void fdwt_1d_filtr_irrev97_fixed_wasm(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void fdwt_1d_filtr_rev53_fixed_wasm(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_wasm(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_rev53_fixed_wasm(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+// vertical (batch)
+void fdwt_irrev_ver_sr_fixed_wasm(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                  int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void fdwt_rev_ver_sr_fixed_wasm(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void idwt_irrev_ver_sr_fixed_wasm(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                  int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void idwt_rev_ver_sr_fixed_wasm(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+// single-row vertical step (for streaming idwt_2d_state)
+void idwt_irrev_ver_step_fixed_wasm(int32_t n, float *prev, float *next, float *tgt, float coeff);
+void idwt_rev_ver_lp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
 #endif
 
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
