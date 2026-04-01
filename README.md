@@ -58,8 +58,6 @@ Two variants are produced under `subprojects/build/html/`:
 - `libopen_htj2k.js` — scalar build
 - `libopen_htj2k_simd.js` — WASM SIMD 128-bit build (recommended for modern browsers)
 
-The SIMD build uses dedicated intrinsic kernels (`fdwt_wasm.cpp`, `idwt_wasm.cpp`, `ht_block_encoding_wasm.cpp`, `ht_block_decoding_wasm.cpp`) with no NEON dependency.
-
 ```bash
 cd subprojects
 mkdir -p build && cd build
