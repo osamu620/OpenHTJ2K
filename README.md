@@ -27,7 +27,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 
 **Performance**
 - DWT internal precision is float32 throughout (FDWT and IDWT)
-- SIMD acceleration: AVX2 (x86-64) and NEON (AArch64) for DWT and color transforms
+- SIMD acceleration: AVX2 (x86-64), NEON (AArch64), and WASM SIMD 128-bit for DWT, HT block coding, and color transforms
 - Multi-threaded encode and decode via a built-in thread pool
 
 # Requirements
@@ -50,6 +50,24 @@ make
 ```
 
 Executables are placed in `${BUILD_DIR}/bin`.
+
+## Building for WebAssembly (WASM)
+Requires [Emscripten](https://emscripten.org/) (tested with 3.x / 5.x).
+
+Two variants are produced under `subprojects/build/html/`:
+- `libopen_htj2k.js` — scalar build
+- `libopen_htj2k_simd.js` — WASM SIMD 128-bit build (recommended for modern browsers)
+
+The SIMD build uses dedicated intrinsic kernels (`fdwt_wasm.cpp`, `idwt_wasm.cpp`, `ht_block_encoding_wasm.cpp`, `ht_block_decoding_wasm.cpp`) with no NEON dependency.
+
+```bash
+cd subprojects
+mkdir -p build && cd build
+emcmake cmake ..
+cmake --build . -j
+```
+
+Open `subprojects/index.html` in a browser (served via a local HTTP server) to try the interactive demo.
 
 # Usage
 ## Encoder
