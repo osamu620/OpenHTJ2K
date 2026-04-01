@@ -31,7 +31,19 @@
 #include <utility>
 #include "dwt.hpp"
 #include "utils.hpp"
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+// WASM builds: dedicated WASM-SIMD horizontal kernels avoid the vld2q_f32 overhead.
+// Vertical kernels (including adv_step) use NEON implementations via Emscripten's shim.
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_wasm,
+                                                           idwt_1d_filtr_rev53_fixed_wasm};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
+                                                           idwt_rev_ver_sr_fixed_neon};
+typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
+static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_neon;
+typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
+static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_neon;
+static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_neon;
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
 static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
