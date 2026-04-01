@@ -27,7 +27,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 
 **Performance**
 - DWT internal precision is float32 throughout (FDWT and IDWT)
-- SIMD acceleration: AVX2 (x86-64), NEON (AArch64), and WASM SIMD 128-bit for DWT, HT block coding, and color transforms
+- SIMD acceleration: AVX2 (x86-64), NEON (AArch64), and WASM SIMD 128-bit for Color Transform, DWT, and HT block coding
 - Multi-threaded encode and decode via a built-in thread pool
 
 # Requirements
