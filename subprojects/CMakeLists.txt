@@ -20,25 +20,44 @@ set(WASM_FLAGS "\
     -sNO_DISABLE_EXCEPTION_CATCHING \
     "
 )
-add_subdirectory(".." open_htj2k EXCLUDE_FROM_ALL)
+# Pull in the open_htj2k library (compiled without SIMD flags → scalar build).
+add_subdirectory(".." open_htj2k_dir EXCLUDE_FROM_ALL)
 
-# Scalar (non-SIMD) build — open_htj2k library compiled without any SIMD flags.
+# Collect the library's sources, include dirs, and any extra compile flags so
+# that we can recompile them a second time with WASM-SIMD enabled.
+get_target_property(_SOURCES   open_htj2k SOURCES)
+get_target_property(_INC_DIRS  open_htj2k INCLUDE_DIRECTORIES)
+get_target_property(_COMP_DEFS open_htj2k COMPILE_DEFINITIONS)
+get_target_property(_COMP_OPTS open_htj2k COMPILE_OPTIONS)
+get_target_property(_IFACE_INC open_htj2k INTERFACE_INCLUDE_DIRECTORIES)
+
+# ── Scalar (non-SIMD) wrapper ────────────────────────────────────────────────
+# open_htj2k is already compiled without any SIMD flags; link it directly.
 add_executable(libopen_htj2k "src/wrapper.cpp")
 set_target_properties(libopen_htj2k PROPERTIES COMPILE_FLAGS "-O3 -flto")
 set_target_properties(libopen_htj2k PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k PRIVATE open_htj2k)
 
-# WASM-SIMD build — enable WASM-SIMD on the library and wrapper.
-# NOTE: Because open_htj2k is compiled once and shared by both targets, libopen_htj2k
-# also links to the SIMD-compiled library.  For a true scalar fallback, run cmake
-# from a separate build directory without -DENABLE_WASM_SIMD or configure the parent
-# CMakeLists.txt to omit the WASM_SIMD define.
-# We use PRIVATE so the flag is applied to the library's own TUs without propagating
-# to the (already-built) scalar wrapper.
-target_compile_definitions(open_htj2k PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD")
-target_compile_options(open_htj2k PRIVATE "-msimd128")
+# ── WASM-SIMD variant ────────────────────────────────────────────────────────
+# Recompile all library sources with -msimd128 + OPENHTJ2K_ENABLE_WASM_SIMD.
+# Using an OBJECT library keeps the two compilations independent.
+add_library(open_htj2k_simd_objs OBJECT ${_SOURCES})
+target_include_directories(open_htj2k_simd_objs PRIVATE ${_INC_DIRS})
+if(_COMP_DEFS)
+  target_compile_definitions(open_htj2k_simd_objs PRIVATE ${_COMP_DEFS})
+endif()
+if(_COMP_OPTS)
+  target_compile_options(open_htj2k_simd_objs PRIVATE ${_COMP_OPTS})
+endif()
+target_compile_definitions(open_htj2k_simd_objs PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD")
+target_compile_options(open_htj2k_simd_objs PRIVATE "-msimd128")
+
+add_library(open_htj2k_simd_lib STATIC $<TARGET_OBJECTS:open_htj2k_simd_objs>)
+if(_IFACE_INC)
+  target_include_directories(open_htj2k_simd_lib INTERFACE ${_IFACE_INC})
+endif()
 
 add_executable(libopen_htj2k_simd "src/wrapper.cpp")
 set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128")
 set_target_properties(libopen_htj2k_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
-target_link_libraries(libopen_htj2k_simd PRIVATE open_htj2k)
+target_link_libraries(libopen_htj2k_simd PRIVATE open_htj2k_simd_lib)
