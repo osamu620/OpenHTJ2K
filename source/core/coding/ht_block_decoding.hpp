@@ -802,7 +802,7 @@ class fwd_buf {
 
     int consumed_bits = bits < 128 - cur_bits ? bits : 128 - cur_bits;
     cur_bytes         = (this->bits + (uint32_t)consumed_bits + 7) >> 3;
-    int upper         = wasm_i16x8_extract_lane(val, 7);
+    int upper         = wasm_i16x8_extract_lane(val, 7) & 0xFFFF;
     upper >>= consumed_bits - 128 + 16;
     this->tmp[cur_bytes] = (uint8_t)upper;
 
