@@ -99,10 +99,8 @@ find_package(Threads)
 find_package(TIFF)
 
 if (EMSCRIPTEN)
-  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_WASM_SIMD")
-  set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -msimd128"
-  )
+  # No automatic SIMD here — subprojects/CMakeLists.txt controls SIMD enablement
+  # for the two WASM variants (libopen_htj2k = scalar, libopen_htj2k_simd = WASM-SIMD).
 endif()
 if (NOT EMSCRIPTEN)
   # Check Thread support
