@@ -50,7 +50,7 @@ class j2c_src_memory {
     len = 0;
   }
   ~j2c_src_memory() {
-    if (buf != nullptr) free(buf);
+    if (buf != nullptr) aligned_mem_free(buf);
   }
   void alloc_memory(uint32_t length);
   uint8_t get_byte();
