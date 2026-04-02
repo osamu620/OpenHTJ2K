@@ -344,7 +344,7 @@ class SP_enc {
       pos++;  // this prevents the appearance of a terminal 0xFF
     }
   }
-  [[nodiscard]] uint32_t get_length() const { return pos; }
+  OPENHTJ2K_NODISCARD uint32_t get_length() const { return pos; }
 };
 /********************************************************************************
  * MR_enc: state class for HT MagRef encoding
@@ -374,6 +374,6 @@ class MR_enc {
       bits = 0;
     }
   }
-  [[nodiscard]] uint32_t get_length() const { return MAX_Lref - pos; }
+  OPENHTJ2K_NODISCARD uint32_t get_length() const { return MAX_Lref - pos; }
 };
 #endif  // OPENHTJ2K_ENABLE_WASM_SIMD

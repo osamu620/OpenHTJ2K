@@ -29,6 +29,7 @@
 #if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2))
   #pragma once
   #include <cstdint>
+  #include "open_htj2k_typedef.hpp"
 
   #define MAX_Lcup 16834
   #define MAX_Scup 4079
@@ -164,7 +165,7 @@ class SP_enc {
       pos++;  // this prevents the appearance of a terminal 0xFF
     }
   }
-  [[nodiscard]] uint32_t get_length() const { return pos; }
+  OPENHTJ2K_NODISCARD uint32_t get_length() const { return pos; }
 };
 /********************************************************************************
  * MR_enc: state class for HT MagRef encoding
@@ -194,6 +195,6 @@ class MR_enc {
       bits = 0;
     }
   }
-  [[nodiscard]] uint32_t get_length() const { return MAX_Lref - pos; }
+  OPENHTJ2K_NODISCARD uint32_t get_length() const { return MAX_Lref - pos; }
 };
 #endif

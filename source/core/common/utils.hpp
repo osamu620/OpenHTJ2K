@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include "open_htj2k_typedef.hpp"
 
 #define round_up(x, n) (((x) + (n) - 1) & (-n))
 // #define round_down(x, n) ((x) & (-n))

@@ -31,6 +31,16 @@
 #include <iterator>
 #include <string>
 
+#ifndef OPENHTJ2K_NODISCARD
+  #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+    #define OPENHTJ2K_NODISCARD [[nodiscard]]
+    #define OPENHTJ2K_MAYBE_UNUSED [[maybe_unused]]
+  #else
+    #define OPENHTJ2K_NODISCARD
+    #define OPENHTJ2K_MAYBE_UNUSED
+  #endif
+#endif
+
 #define NO_QFACTOR 0xFF
 
 void print_help(char *cmd) {
@@ -569,20 +579,20 @@ class j2k_argset {
     exit(EXIT_SUCCESS);
   }
 
-  [[nodiscard]] element_siz_local get_origin() const { return origin; }
-  [[nodiscard]] element_siz_local get_tile_origin() const { return tile_origin; }
-  [[nodiscard]] uint8_t get_transformation() const { return transformation; }
-  [[nodiscard]] uint8_t get_ycc() const { return use_ycc; }
-  [[nodiscard]] uint8_t get_dwt_levels() const { return dwt_levels; }
+  OPENHTJ2K_NODISCARD element_siz_local get_origin() const { return origin; }
+  OPENHTJ2K_NODISCARD element_siz_local get_tile_origin() const { return tile_origin; }
+  OPENHTJ2K_NODISCARD uint8_t get_transformation() const { return transformation; }
+  OPENHTJ2K_NODISCARD uint8_t get_ycc() const { return use_ycc; }
+  OPENHTJ2K_NODISCARD uint8_t get_dwt_levels() const { return dwt_levels; }
   element_siz_local get_cblk_size() { return cblksize; }
-  [[nodiscard]] bool is_max_precincts() const { return max_precincts; }
+  OPENHTJ2K_NODISCARD bool is_max_precincts() const { return max_precincts; }
   std::vector<element_siz_local> get_prct_size() { return prctsize; }
   element_siz_local get_tile_size() { return tilesize; }
-  [[nodiscard]] uint8_t get_progression() const { return Porder; }
-  [[nodiscard]] bool is_use_sop() const { return use_sop; }
-  [[nodiscard]] bool is_use_eph() const { return use_eph; }
-  [[nodiscard]] double get_basestep_size() const { return base_step_size; }
-  [[nodiscard]] uint8_t get_num_guard() const { return num_guard; }
-  [[nodiscard]] bool is_derived() const { return qderived; }
-  [[nodiscard]] uint8_t get_qfactor() const { return qfactor; }
+  OPENHTJ2K_NODISCARD uint8_t get_progression() const { return Porder; }
+  OPENHTJ2K_NODISCARD bool is_use_sop() const { return use_sop; }
+  OPENHTJ2K_NODISCARD bool is_use_eph() const { return use_eph; }
+  OPENHTJ2K_NODISCARD double get_basestep_size() const { return base_step_size; }
+  OPENHTJ2K_NODISCARD uint8_t get_num_guard() const { return num_guard; }
+  OPENHTJ2K_NODISCARD bool is_derived() const { return qderived; }
+  OPENHTJ2K_NODISCARD uint8_t get_qfactor() const { return qfactor; }
 };

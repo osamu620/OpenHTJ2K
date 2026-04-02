@@ -394,7 +394,7 @@ struct DecTaskArgs {
 #endif
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
+OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx2, cvt_rgb_to_ycbcr_rev_avx2};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_avx2,
                                                           cvt_ycbcr_to_rgb_rev_float_avx2};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_avx2,
@@ -404,7 +404,7 @@ static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irr
 static fused_mct_finalize_func fused_mct_finalize[2] = {fused_ycbcr_irrev_to_rgb_i32_avx2,
                                                          fused_ycbcr_rev_to_rgb_i32_avx2};
 #elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
-[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_wasm, cvt_rgb_to_ycbcr_rev_wasm};
+OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_wasm, cvt_rgb_to_ycbcr_rev_wasm};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_wasm,
                                                           cvt_ycbcr_to_rgb_rev_float_wasm};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_wasm,
@@ -412,7 +412,7 @@ static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irr
 static fused_mct_finalize_func fused_mct_finalize[2] = {fused_ycbcr_irrev_to_rgb_i32_wasm,
                                                          fused_ycbcr_rev_to_rgb_i32_wasm};
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_neon, cvt_rgb_to_ycbcr_rev_neon};
+OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_neon, cvt_rgb_to_ycbcr_rev_neon};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float_neon,
                                                           cvt_ycbcr_to_rgb_rev_float_neon};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float_neon,
@@ -420,7 +420,7 @@ static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irr
 static fused_mct_finalize_func fused_mct_finalize[2] = {fused_ycbcr_irrev_to_rgb_i32_neon,
                                                          fused_ycbcr_rev_to_rgb_i32_neon};
 #else
-[[maybe_unused]] static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
+OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev, cvt_rgb_to_ycbcr_rev};
 static cvt_color_float_func cvt_ycbcr_to_rgb_float[2] = {cvt_ycbcr_to_rgb_irrev_float,
                                                           cvt_ycbcr_to_rgb_rev_float};
 static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2] = {cvt_rgb_to_ycbcr_irrev_float,
@@ -1138,7 +1138,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
 
       uint8_t primary_passes, secondary_passes;
       uint32_t primary_bytes, secondary_bytes;
-      [[maybe_unused]] uint32_t fast_skip_bytes = 0;
+      OPENHTJ2K_MAYBE_UNUSED uint32_t fast_skip_bytes = 0;
       bool empty_set;
       if ((block->Cmodes & (HT | HT_PHLD)) == HT) {
         new_passes -= static_cast<uint8_t>(segment_passes);
@@ -1370,7 +1370,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       uint8_t l0 = blk->layer_start[layer_idx];
       uint8_t l1 = blk->layer_passes[layer_idx];
 
-      [[maybe_unused]] uint32_t buf_start = 0, buf_end = 0;
+      OPENHTJ2K_MAYBE_UNUSED uint32_t buf_start = 0, buf_end = 0;
       // NOTE: the following code to derive number_of_bytes shall be improved
       if (l0) {
         for (size_t i = 0; i < l0; ++i) {
@@ -1388,7 +1388,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       uint8_t pass_idx                      = l0;
       uint32_t segment_bytes                = 0;
       uint8_t segment_passes                = 0;
-      [[maybe_unused]] uint32_t total_bytes = 0;
+      OPENHTJ2K_MAYBE_UNUSED uint32_t total_bytes = 0;
       uint8_t length_bits                   = 0;
 
       while (new_passes > 0) {
@@ -3356,7 +3356,7 @@ void j2k_tile::decode() {
   }  // end of component loop
 }
 void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band) {
-  [[maybe_unused]] uint16_t Nsop = 0;
+  OPENHTJ2K_MAYBE_UNUSED uint16_t Nsop = 0;
   uint16_t Lsop;
   if (use_SOP) {
     uint16_t word = this->tile_buf->get_word();
@@ -4858,7 +4858,7 @@ uint8_t *j2k_tile::encode() {
 
   // Encode packets
   for (uint16_t c = 0; c < num_components; c++) {
-    [[maybe_unused]] const uint8_t ROIshift = tcomp[c].get_ROIshift();
+    OPENHTJ2K_MAYBE_UNUSED const uint8_t ROIshift = tcomp[c].get_ROIshift();
     const uint8_t NL                        = tcomp[c].get_dwt_levels();
     // const uint8_t transformation = tcomp[c].get_transformation();
     //    element_siz top_left     = tcomp[c].get_pos0();
@@ -5648,10 +5648,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
   return nullptr;
 }
 
-[[maybe_unused]] uint8_t j2k_tile::get_byte_from_tile_buf() { return this->tile_buf->get_byte(); }
+OPENHTJ2K_MAYBE_UNUSED uint8_t j2k_tile::get_byte_from_tile_buf() { return this->tile_buf->get_byte(); }
 
-[[maybe_unused]] uint8_t j2k_tile::get_bit_from_tile_buf() { return this->tile_buf->get_bit(); }
+OPENHTJ2K_MAYBE_UNUSED uint8_t j2k_tile::get_bit_from_tile_buf() { return this->tile_buf->get_bit(); }
 
-[[maybe_unused]] uint32_t j2k_tile::get_length() const { return length; }
+OPENHTJ2K_MAYBE_UNUSED uint32_t j2k_tile::get_length() const { return length; }
 
-[[maybe_unused]] uint32_t j2k_tile::get_buf_length() { return tile_buf->get_total_length(); }
+OPENHTJ2K_MAYBE_UNUSED uint32_t j2k_tile::get_buf_length() { return tile_buf->get_total_length(); }

@@ -2,7 +2,7 @@
 [![CodeQL](https://github.com/osamu620/OpenHTJ2K/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/osamu620/OpenHTJ2K/actions/workflows/codeql-analysis.yml)
 [![Packaging status](https://repology.org/badge/tiny-repos/openhtj2k.svg)](https://repology.org/project/openhtj2k/versions)
 # OpenHTJ2K
-OpenHTJ2K is an open source implementation of ITU-T Rec.814 | ISO/IEC 15444-15 (a.k.a. JPEG 2000 Part 15, High-Throughput JPEG 2000; HTJ2K)
+OpenHTJ2K is an open source implementation of ITU-T Rec.800 | ISO/IEC 15444-1 (JPEG 2000 Part 1) and ITU-T Rec.814 | ISO/IEC 15444-15 (High-Throughput JPEG 2000; HTJ2K).
 
 # What OpenHTJ2K provides
 OpenHTJ2K provides a shared library and sample applications with the following features:
@@ -11,9 +11,9 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 - Decodes ITU-T Rec.800 | ISO/IEC 15444-1 (JPEG 2000 Part 1) and ITU-T Rec.814 | ISO/IEC 15444-15 (HTJ2K) codestreams
 - Fully compliant with conformance testing defined in ITU-T Rec.803 | ISO 15444-4
 - Three decode APIs:
-  - `invoke()` — batch (full-image) path
-  - `invoke_line_based()` — streaming row-by-row output via callback, using per-subband ring buffers
-  - `invoke_line_based_stream()` — streaming path for multi-tile images, assembling full-width rows
+  - `invoke()` — batch (full-image) path; writes decoded samples into a pre-allocated W×H buffer
+  - `invoke_line_based()` — streaming IDWT via ring buffers; writes row-by-row into a pre-allocated full-image buffer (lower peak memory than `invoke()`)
+  - `invoke_line_based_stream()` — same streaming IDWT but delivers rows via a callback; avoids allocating the W×H output buffer entirely
 - The line-based path is the default; the batch path is available with the `-batch` flag
 
 **Encoding**
@@ -31,7 +31,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 - Multi-threaded encode and decode via a built-in thread pool
 
 # Requirements
-cmake (version 3.14 or later) and a C++17 compliant compiler.
+cmake (version 3.13 or later) and a C++14 compliant compiler (C++17 or later recommended for best diagnostics).
 
 # Building
 `./` is the root of the cloned repository and `${BUILD_DIR}` is a build directory (e.g. `../build` or `./build`).
@@ -45,8 +45,7 @@ cmake (version 3.14 or later) and a C++17 compliant compiler.
 ```
 cd ./
 cmake -G "Unix Makefiles" -B ${BUILD_DIR} -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_THREAD=ON
-cd  ${BUILD_DIR}
-make
+cmake --build ${BUILD_DIR} --config Release -j
 ```
 
 Executables are placed in `${BUILD_DIR}/bin`.
@@ -70,8 +69,8 @@ A live demo is available at **https://htj2k-demo.pages.dev/**
 ### Node.js CLI decoder (`open_htj2k_dec.mjs`)
 
 `open_htj2k_dec.mjs` is a Node.js ES module that wraps the WASM build so you
-can decode J2C / J2K / JPH files from the terminal without compiling a native
-binary.
+can decode J2C / J2K / JPH files from the terminal. It requires the WASM build
+(see above) but not a platform-native C++ toolchain on the target machine.
 
 **Requirements:** Node.js ≥ 18 and the WASM build (see above).
 
@@ -95,7 +94,7 @@ node open_htj2k_dec.mjs -i image.j2c -o image_half.ppm -r 1   # half resolution
 
 The script auto-selects the SIMD build (`libopen_htj2k_simd.js`) when
 available, falling back to the scalar build. Decoding uses the streaming
-`invoke_decoder_to_rgba` path, keeping peak WASM heap well below the
+`invoke_decoder_stream` path, keeping peak WASM heap well below the
 full-image `int32` buffer approach (~52 MB peak for a 4K RGB image vs ~486 MB
 with the batch path).
 
@@ -158,6 +157,10 @@ Both Part 1 and Part 15 compliant decoding are supported.
 ### Options
 - `-reduce n`
   - Decode at a reduced resolution by skipping `n` DWT levels.
+- `-num_threads n`
+  - Number of threads. `0` (default) uses all available hardware threads.
+- `-iter n`
+  - Repeat decoding `n` times (benchmarking). Output is written only once.
 - `-batch`
   - Use the batch (full-image) decode path. The default path is line-based (streaming).
 

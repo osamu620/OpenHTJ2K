@@ -34,6 +34,16 @@
 #include <string>
 #include <vector>
 
+#ifndef OPENHTJ2K_NODISCARD
+  #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+    #define OPENHTJ2K_NODISCARD [[nodiscard]]
+    #define OPENHTJ2K_MAYBE_UNUSED [[maybe_unused]]
+  #else
+    #define OPENHTJ2K_NODISCARD
+    #define OPENHTJ2K_MAYBE_UNUSED
+  #endif
+#endif
+
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   #define OPENHTJ2K_EXPORT __declspec(dllexport)
 #else
@@ -62,23 +72,23 @@ OPENHTJ2K_EXPORT  int read_pnmpgx(const std::string &filename, uint16_t nc);
 OPENHTJ2K_EXPORT  int read_tiff(const std::string &filename);
   #endif
 
-  [[nodiscard]] uint32_t get_width() const { return this->width; }
-  [[nodiscard]] uint32_t get_height() const { return this->height; }
-  [[nodiscard]] uint32_t get_component_width(uint16_t c) const {
+  OPENHTJ2K_NODISCARD uint32_t get_width() const { return this->width; }
+  OPENHTJ2K_NODISCARD uint32_t get_height() const { return this->height; }
+  OPENHTJ2K_NODISCARD uint32_t get_component_width(uint16_t c) const {
     if (c > num_components) {
       printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
       throw std::exception();
     }
     return this->component_width[c];
   }
-  [[nodiscard]] uint32_t get_component_height(uint16_t c) const {
+  OPENHTJ2K_NODISCARD uint32_t get_component_height(uint16_t c) const {
     if (c > num_components) {
       printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
       throw std::exception();
     }
     return this->component_height[c];
   }
-  [[nodiscard]] uint16_t get_num_components() const { return this->num_components; }
+  OPENHTJ2K_NODISCARD uint16_t get_num_components() const { return this->num_components; }
   uint8_t get_Ssiz_value(uint16_t c) {
     uint8_t val = static_cast<uint8_t>(this->bits_per_pixel[c] - 1);
     if (this->is_signed[c]) {

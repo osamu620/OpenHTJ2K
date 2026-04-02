@@ -34,6 +34,16 @@
 #include <cmath>
 #include <memory>
 
+#ifndef OPENHTJ2K_NODISCARD
+  #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+    #define OPENHTJ2K_NODISCARD [[nodiscard]]
+    #define OPENHTJ2K_MAYBE_UNUSED [[maybe_unused]]
+  #else
+    #define OPENHTJ2K_NODISCARD
+    #define OPENHTJ2K_MAYBE_UNUSED
+  #endif
+#endif
+
 #define READ_WIDTH 0
 #define READ_HEIGHT 1
 #define READ_MAXVAL 2
@@ -74,19 +84,19 @@ class image {
   // // destructor
   ~image() { delete[] data; }
 
-  [[nodiscard]] uint_fast32_t get_width() const { return width; }
+  OPENHTJ2K_NODISCARD uint_fast32_t get_width() const { return width; }
 
-  [[nodiscard]] uint_fast32_t get_height() const { return height; }
+  OPENHTJ2K_NODISCARD uint_fast32_t get_height() const { return height; }
 
-  [[nodiscard]] uint_fast32_t get_maxval() const { return static_cast<uint_fast32_t>((1 << bitDepth) - 1); }
+  OPENHTJ2K_NODISCARD uint_fast32_t get_maxval() const { return static_cast<uint_fast32_t>((1 << bitDepth) - 1); }
 
-  [[maybe_unused]] [[nodiscard]] uint8_t get_bpp() const { return bitDepth; }
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint8_t get_bpp() const { return bitDepth; }
 
-  [[nodiscard]] uint_fast16_t get_num_components() const { return num_components; }
+  OPENHTJ2K_NODISCARD uint_fast16_t get_num_components() const { return num_components; }
 
   int_fast32_t *access_pixels() { return data; }
 
-  [[maybe_unused]] void cvt_to_planner() {
+  OPENHTJ2K_MAYBE_UNUSED void cvt_to_planner() {
     auto *tmp = new int_fast32_t[this->width * this->height * num_components];
     for (uint_fast16_t c = 0; c < num_components; ++c) {
       for (uint_fast32_t i = 0; i < height; ++i) {
@@ -100,7 +110,7 @@ class image {
     this->data = tmp;
   }
 
-  [[maybe_unused]] int_fast32_t *access_components(uint_fast16_t c) {
+  OPENHTJ2K_MAYBE_UNUSED int_fast32_t *access_components(uint_fast16_t c) {
     if (c > num_components) {
       printf("ERROR: input argument c exceeds the number of components of the image.\n");
       exit(EXIT_FAILURE);
@@ -112,7 +122,7 @@ class image {
   int read_pnmpgx(const char *name) {
     constexpr char SP                  = ' ';
     constexpr char LF                  = '\n';
-    [[maybe_unused]] constexpr char CR = 13;
+    OPENHTJ2K_MAYBE_UNUSED constexpr char CR = 13;
 
     FILE *fp = fopen(name, "rb");
     if (fp == nullptr) {
@@ -336,7 +346,7 @@ class image {
     return EXIT_SUCCESS;
   }
   // show info
-  [[maybe_unused]] int show() {
+  OPENHTJ2K_MAYBE_UNUSED int show() {
     if (this->data == nullptr) {
       return EXIT_FAILURE;
     }

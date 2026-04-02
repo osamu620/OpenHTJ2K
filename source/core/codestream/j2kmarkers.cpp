@@ -41,7 +41,7 @@ constexpr uint8_t YCC422 = 2;
  *******************************************************************************/
 void j2k_marker_io_base::set_buf(uint8_t *p) { buf = p; }
 
-[[maybe_unused]] uint16_t j2k_marker_io_base::get_marker() const { return this->code; }
+OPENHTJ2K_MAYBE_UNUSED uint16_t j2k_marker_io_base::get_marker() const { return this->code; }
 
 uint16_t j2k_marker_io_base::get_length() const { return this->Lmar; }
 
@@ -238,7 +238,7 @@ CAP_marker::CAP_marker(j2c_src_memory &in) : j2k_marker_io_base(_CAP), Ccap{0} {
   is_set = true;
 }
 
-[[maybe_unused]] uint32_t CAP_marker::get_Pcap() const { return Pcap; }
+OPENHTJ2K_MAYBE_UNUSED uint32_t CAP_marker::get_Pcap() const { return Pcap; }
 
 uint16_t CAP_marker::get_Ccap(uint8_t n) {
   assert(n < 32);
@@ -1239,7 +1239,7 @@ void POC_marker::add(uint8_t RS, uint16_t CS, uint16_t LYE, uint8_t RE, uint16_t
   nPOC++;
 }
 
-[[maybe_unused]] unsigned long POC_marker::get_num_poc() const { return nPOC; }
+OPENHTJ2K_MAYBE_UNUSED unsigned long POC_marker::get_num_poc() const { return nPOC; }
 
 /********************************************************************************
  * TLM_marker
@@ -1482,7 +1482,7 @@ uint32_t SOT_marker::get_tile_part_length() const { return Psot; }
 
 uint8_t SOT_marker::get_tile_part_index() const { return TPsot; }
 
-[[maybe_unused]] uint8_t SOT_marker::get_number_of_tile_parts() const { return TNsot; }
+OPENHTJ2K_MAYBE_UNUSED uint8_t SOT_marker::get_number_of_tile_parts() const { return TNsot; }
 
 /********************************************************************************
  * PLT_marker

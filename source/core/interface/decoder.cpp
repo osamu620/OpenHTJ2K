@@ -57,11 +57,11 @@ class openhtj2k_decoder_impl {
   ~openhtj2k_decoder_impl();
   void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   void parse();
-  [[nodiscard]] uint16_t get_num_component() const;
-  [[nodiscard]] uint32_t get_component_width(uint16_t) const;
-  [[nodiscard]] uint32_t get_component_height(uint16_t) const;
-  [[nodiscard]] uint8_t get_component_depth(uint16_t) const;
-  [[nodiscard]] bool get_component_signedness(uint16_t) const;
+  OPENHTJ2K_NODISCARD uint16_t get_num_component() const;
+  OPENHTJ2K_NODISCARD uint32_t get_component_width(uint16_t) const;
+  OPENHTJ2K_NODISCARD uint32_t get_component_height(uint16_t) const;
+  OPENHTJ2K_NODISCARD uint8_t get_component_depth(uint16_t) const;
+  OPENHTJ2K_NODISCARD bool get_component_signedness(uint16_t) const;
   uint8_t get_minimum_DWT_levels();
 
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
