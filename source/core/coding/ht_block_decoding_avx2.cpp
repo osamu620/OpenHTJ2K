@@ -273,9 +273,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   int32_t *mp0              = sample_buf;
   int32_t *mp1              = sample_buf + block->blksampl_stride;
 
-  alignas(32) auto Eline = MAKE_UNIQUE<int32_t[]>(2U * QW + 8U);
-  Eline[0]               = 0;
-  int32_t *E_p           = Eline.get() + 1;
+  alignas(32) int32_t Eline[1032];  // 2 * QW_max + 8, QW_max = 512
+  std::memset(Eline, 0, (2U * QW + 8U) * sizeof(int32_t));
+  int32_t *E_p = Eline + 1;
 
   __m128i v_n, qinf, U_q, mu0_n, mu1_n;
   fwd_buf<0xFF> MagSgn(compressed_data, Pcup);
@@ -307,7 +307,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   }
   // Non-initial line-pair
   for (uint16_t row = 1; row < QH; row++) {
-    E_p = Eline.get() + 1;
+    E_p = Eline + 1;
     mp0 = sample_buf + (row * 2U) * block->blksampl_stride;
     mp1 = mp0 + block->blksampl_stride;
 

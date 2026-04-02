@@ -34,6 +34,7 @@
 #include "subband_row_buf.hpp"
 #include "block_decoding.hpp"
 #include "../common/open_htj2k_typedef.hpp"
+#include "../common/utils.hpp"
 #ifdef OPENHTJ2K_THREAD
   #include <thread>
   #include "ThreadPool.hpp"
@@ -129,8 +130,8 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   // Pre-allocate scratch for a 64×64 codeblock (grow-on-demand).
   cb_sample_cap  = static_cast<size_t>(round_up(64, 8) * round_up(64, 8));
   cb_state_cap   = static_cast<size_t>((round_up(64, 8) + 2) * (round_up(64, 8) + 2));
-  cb_sample_buf  = static_cast<int32_t *>(std::malloc(cb_sample_cap * sizeof(int32_t)));
-  cb_state_buf   = static_cast<uint8_t *>(std::malloc(cb_state_cap));
+  cb_sample_buf  = static_cast<int32_t *>(aligned_mem_alloc(cb_sample_cap * sizeof(int32_t), 16));
+  cb_state_buf   = static_cast<uint8_t *>(aligned_mem_alloc(cb_state_cap, 16));
 
 #ifdef OPENHTJ2K_THREAD
   // par_spool / par_stpool start at zero capacity; decode_strip_core will
@@ -149,14 +150,14 @@ void j2k_subband_row_buf::free_resources() {
   aligned_mem_free(combined_buf);
   combined_buf = ring_buf = prefetch_buf = nullptr;
   ring_y0 = -1;
-  std::free(par_spool);  par_spool  = nullptr;  par_spool_cap  = 0;
-  std::free(par_stpool); par_stpool = nullptr;  par_stpool_cap = 0;
+  aligned_mem_free(par_spool);  par_spool  = nullptr;  par_spool_cap  = 0;
+  aligned_mem_free(par_stpool); par_stpool = nullptr;  par_stpool_cap = 0;
   par_tasks.clear();
   par_tasks.shrink_to_fit();
 #endif
   aligned_mem_free(ring_buf); ring_buf = nullptr; ring_y0 = -1;
-  std::free(cb_sample_buf); cb_sample_buf = nullptr; cb_sample_cap = 0;
-  std::free(cb_state_buf);  cb_state_buf  = nullptr; cb_state_cap  = 0;
+  aligned_mem_free(cb_sample_buf); cb_sample_buf = nullptr; cb_sample_cap = 0;
+  aligned_mem_free(cb_state_buf);  cb_state_buf  = nullptr; cb_state_cap  = 0;
   strip_y0 = strip_y1 = -1;
 }
 
@@ -241,13 +242,13 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
       if (!par_tasks.empty()) {
         // Grow-only: realloc only when capacity is insufficient.
         if (total_s > par_spool_cap) {
-          std::free(par_spool);
-          par_spool     = static_cast<int32_t *>(std::malloc(total_s * sizeof(int32_t)));
+          aligned_mem_free(par_spool);
+          par_spool     = static_cast<int32_t *>(aligned_mem_alloc(total_s * sizeof(int32_t), 32));
           par_spool_cap = total_s;
         }
         if (total_st > par_stpool_cap) {
-          std::free(par_stpool);
-          par_stpool     = static_cast<uint8_t *>(std::malloc(total_st));
+          aligned_mem_free(par_stpool);
+          par_stpool     = static_cast<uint8_t *>(aligned_mem_alloc(total_st, 16));
           par_stpool_cap = total_st;
         }
         // Setup pass: assign scratch pointers and selectively zero buffers.
@@ -336,13 +337,13 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         const size_t   need_st = static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
 
         if (need_s > cb_sample_cap) {
-          std::free(cb_sample_buf);
-          cb_sample_buf = static_cast<int32_t *>(std::malloc(need_s * sizeof(int32_t)));
+          aligned_mem_free(cb_sample_buf);
+          cb_sample_buf = static_cast<int32_t *>(aligned_mem_alloc(need_s * sizeof(int32_t), 32));
           cb_sample_cap = need_s;
         }
         if (need_st > cb_state_cap) {
-          std::free(cb_state_buf);
-          cb_state_buf = static_cast<uint8_t *>(std::malloc(need_st));
+          aligned_mem_free(cb_state_buf);
+          cb_state_buf = static_cast<uint8_t *>(aligned_mem_alloc(need_st, 16));
           cb_state_cap = need_st;
         }
 
@@ -483,13 +484,13 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
 
   // ── Grow-only scratch pools; shared with decode_strip_core (never concurrent) ──
   if (total_s > par_spool_cap) {
-    std::free(par_spool);
-    par_spool     = static_cast<int32_t *>(std::malloc(total_s * sizeof(int32_t)));
+    aligned_mem_free(par_spool);
+    par_spool     = static_cast<int32_t *>(aligned_mem_alloc(total_s * sizeof(int32_t), 32));
     par_spool_cap = total_s;
   }
   if (total_st > par_stpool_cap) {
-    std::free(par_stpool);
-    par_stpool     = static_cast<uint8_t *>(std::malloc(total_st));
+    aligned_mem_free(par_stpool);
+    par_stpool     = static_cast<uint8_t *>(aligned_mem_alloc(total_st, 16));
     par_stpool_cap = total_st;
   }
 
