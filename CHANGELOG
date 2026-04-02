@@ -1,3 +1,49 @@
+# [0.6.0] - 2026-04-02
+
+## WASM
+* Add `invoke_decoder_stream()` C export: streaming line-based decode via
+  callback, eliminating the 96 MB W×H×C int32 output buffer entirely
+* Add `invoke_decoder_to_rgba()` C export: converts decoded samples to a
+  packed uint8/uint16 big-endian buffer inside WASM, eliminating the JS
+  per-sample pixel loop
+* Add `open_htj2k_dec.mjs`: Node.js CLI decoder built on the WASM library;
+  supports J2C / J2K / JPH input, PGM / PPM / PGX output, `--reduce`,
+  `--num_threads`, and `--iter` options
+* Fix WASM SIMD build: add `-O3 -flto` to SIMD object compilation
+* Fix `open_htj2k_dec.mjs`: compute correct output dimensions when `--reduce` > 0
+* Update `index.html` to use the new streaming and RGBA export APIs
+
+## Performance (native)
+* Fused MCT + finalize: color inverse transform and int32 output writeback
+  combined into a single pass, eliminating an intermediate float buffer
+* In-place horizontal IDWT: eliminates ext_buf memcpy per row
+* NEON: port lossy dequantize fast path; fix color_neon build failure
+* NEON: 2× unroll `idwt_level_src_fn` interleave loop
+* IDWT cascade: eliminate redundant `get_dl` / `is_lp` calls in hot loop
+* AlignedLargePool: extend macOS support; route file I/O buffers through pool
+* Stack-allocate Eline / rholine scratch arrays; route large buffers through
+  AlignedLargePool to reduce heap fragmentation
+* Use aligned AVX2 loads (`_mm256_load_ps`) where 32-byte alignment is
+  guaranteed, replacing unaligned variants in hot DWT paths
+
+## Portability
+* Lower minimum compiler requirement from C++17 to C++11
+* Replace all `[[nodiscard]]` / `[[maybe_unused]]` raw attributes with
+  `OPENHTJ2K_NODISCARD` / `OPENHTJ2K_MAYBE_UNUSED` macros that expand
+  to the real attributes under C++17 and to nothing under C++14/11
+* Replace `if constexpr` with plain `if` in HT block decoding (all four
+  variants: generic, AVX2, NEON, WASM)
+* ThreadPool: split pre-C++17 `enqueue()` into separate C++14 and C++11
+  branches using `std::decay_t` and `typename std::decay<T>::type`
+  respectively
+* Remove pre-existing malformed `#define[[maybe_unsed]]` line in utils.hpp
+* All three standard levels (C++11, C++14, C++17) verified: clean build
+  and 277/277 conformance tests pass under each
+
+## Documentation
+* README: expand Requirements section with per-standard compatibility table
+* README: document `open_htj2k_dec.mjs` build and usage
+
 # [0.5.1] - 2026-04-01
 
  ## WASM SIMD
