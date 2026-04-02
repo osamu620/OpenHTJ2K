@@ -67,6 +67,38 @@ cmake --build . -j
 
 A live demo is available at **https://htj2k-demo.pages.dev/**
 
+### Node.js CLI decoder (`open_htj2k_dec.mjs`)
+
+`open_htj2k_dec.mjs` is a Node.js ES module that wraps the WASM build so you
+can decode J2C / J2K / JPH files from the terminal without compiling a native
+binary.
+
+**Requirements:** Node.js ≥ 18 and the WASM build (see above).
+
+**Usage:**
+```bash
+cd subprojects
+node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> [-r <reduce_NL>]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-i`, `--input`  | Input codestream (`.j2c`, `.j2k`, `.jph`) |
+| `-o`, `--output` | Output image (`.ppm` for RGB, `.pgm` for grayscale) |
+| `-r`, `--reduce` | Resolution reduction: skip `n` DWT levels (0 = full resolution) |
+
+**Example:**
+```bash
+node open_htj2k_dec.mjs -i image.j2c -o image.ppm
+node open_htj2k_dec.mjs -i image.j2c -o image_half.ppm -r 1   # half resolution
+```
+
+The script auto-selects the SIMD build (`libopen_htj2k_simd.js`) when
+available, falling back to the scalar build. Decoding uses the streaming
+`invoke_decoder_to_rgba` path, keeping peak WASM heap well below the
+full-image `int32` buffer approach (~52 MB peak for a 4K RGB image vs ~486 MB
+with the batch path).
+
 # Usage
 ## Encoder
 Only Part 15 compliant encoding is supported. Both .j2c (codestream) and .jph (file format) are available.
