@@ -88,8 +88,14 @@ const H = M._get_height(dec, 0);
 const C = M._get_num_components(dec);
 const depth = M._get_depth(dec, 0);
 
-// Allocate output buffer: W × H × C int32_t values
-const outPtr = M._malloc(W * H * C * 4);
+// get_width/get_height return full-resolution dimensions. When --reduce is
+// used, the decoder outputs a downsampled image: ceil(dim / 2^reduce).
+const rFactor = 1 << reduce;
+const Wd = Math.ceil(W / rFactor);
+const Hd = Math.ceil(H / rFactor);
+
+// Allocate output buffer: Wd × Hd × C int32_t values
+const outPtr = M._malloc(Wd * Hd * C * 4);
 if (!outPtr) {
   console.error('WASM malloc failed for output buffer');
   M._release_j2c_data(dec);
@@ -110,15 +116,15 @@ const t1 = performance.now();
 
 // ── Extract pixels from WASM heap ────────────────────────────────────────────
 // Re-read HEAP32 after decode: ALLOW_MEMORY_GROWTH may have updated the buffer.
-const pixels = new Int32Array(M.HEAP32.buffer, outPtr, W * H * C);
+const pixels = new Int32Array(M.HEAP32.buffer, outPtr, Wd * Hd * C);
 
 // ── Write PPM / PGM ──────────────────────────────────────────────────────────
 const maxval      = Math.min((1 << depth) - 1, 65535);
 const bytesPerSmp = maxval > 255 ? 2 : 1;
 const magic       = C === 1 ? 'P5' : 'P6';
-const header      = `${magic}\n${W} ${H}\n${maxval}\n`;
+const header      = `${magic}\n${Wd} ${Hd}\n${maxval}\n`;
 const headerBuf   = Buffer.from(header, 'ascii');
-const pixelBuf    = Buffer.allocUnsafe(W * H * C * bytesPerSmp);
+const pixelBuf    = Buffer.allocUnsafe(Wd * Hd * C * bytesPerSmp);
 
 if (bytesPerSmp === 1) {
   for (let i = 0; i < pixels.length; i++)
@@ -141,4 +147,4 @@ try {
 
 const elapsed = (t1 - t0).toFixed(1);
 const fmt     = C === 1 ? 'grayscale' : 'RGB';
-console.log(`Decoded ${W}×${H} ${fmt} ${depth}bpc in ${elapsed} ms → ${output}`);
+console.log(`Decoded ${Wd}×${Hd} ${fmt} ${depth}bpc in ${elapsed} ms → ${output}`);
