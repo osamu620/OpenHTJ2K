@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // HTJ2K / JPEG 2000 decoder CLI — runs the WASM build of OpenHTJ2K in Node.js.
-// Usage: node decode_cli.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> [-r <reduce_NL>]
+// Usage: node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> [-r <reduce_NL>]
 //
 // Output format is auto-selected:
 //   1-component → PGM (P5 binary), 3-component → PPM (P6 binary)
@@ -22,7 +22,7 @@ function parseArgs() {
     else if ((args[i] === '-r' || args[i] === '--reduce') && i + 1 < args.length)
       reduce = parseInt(args[++i], 10);
     else if (args[i] === '-h' || args[i] === '--help') {
-      console.log('Usage: node decode_cli.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>]');
+      console.log('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>]');
       console.log('  -i, --input   Input J2C/J2K/JPH file');
       console.log('  -o, --output  Output PPM (RGB) or PGM (grayscale) file');
       console.log('  -r, --reduce  Resolution reduction (0 = full, 1 = half, ...)');
@@ -35,7 +35,7 @@ function parseArgs() {
 const { input, output, reduce } = parseArgs();
 if (!input || !output) {
   console.error('Error: -i and -o are required.');
-  console.error('Usage: node decode_cli.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>]');
+  console.error('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>]');
   process.exit(1);
 }
 
