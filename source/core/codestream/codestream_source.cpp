@@ -30,7 +30,9 @@
 
 // MARK: j2c_src_memory -
 void j2c_src_memory::alloc_memory(uint32_t length) {
-  buf = static_cast<uint8_t *>(aligned_mem_alloc(sizeof(uint8_t) * length, 16));
+  // Allocate 16 extra bytes so SIMD-accelerated memcpy in fwd_buf/rev_buf
+  // never reads past the end of the buffer (reads in 16-byte chunks).
+  buf = static_cast<uint8_t *>(aligned_mem_alloc(sizeof(uint8_t) * (length + 16), 16));
   pos = 0;
   len = length;
 }
