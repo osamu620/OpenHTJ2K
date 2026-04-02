@@ -40,9 +40,9 @@ add_test(NAME lbs_p1_ht_03_11 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_
 add_test(NAME lbs_p1_ht_03_12 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b12.j2k --stream)
 add_test(NAME lbs_p1_ht_04_9  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_04_b9.j2k --stream)
 add_test(NAME lbs_p1_ht_05_11 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_05_b11.j2k --stream)
-#if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "ARM64")
-#  set_tests_properties(lbs_p1_ht_05_11 PROPERTIES WILL_FAIL TRUE)
-#endif()
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "ARM64")
+  set_tests_properties(lbs_p1_ht_05_11 PROPERTIES WILL_FAIL TRUE)
+endif()
 add_test(NAME lbs_p1_ht_06_11 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_06_b11.j2k --stream)
 add_test(NAME lbs_p1_ht_07_11 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_07_b11.j2k --stream)
 
