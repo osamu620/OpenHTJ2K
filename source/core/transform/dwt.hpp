@@ -188,6 +188,12 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
 // ext_buf must hold at least round_up(u1-u0+8+SIMD_PADDING, SIMD_PADDING) sprec_t elements.
 void idwt_1d_row_fixed(sprec_t *ext_buf, sprec_t *row, int32_t u0, int32_t u1, uint8_t transformation);
 
+// In-place variant for ring buffer slots: requires writable PSE scratch at row[-left..-1]
+// and row[u1-u0..u1-u0+right-1] (guaranteed by IDWT_RING_PSE_LEFT slot prefix and SIMD_PADDING suffix).
+// left and right are precomputed PSE counts (function of u0%2, u1%2, and transformation).
+void idwt_1d_row_inplace(sprec_t *row, int32_t left, int32_t right,
+                         int32_t u0, int32_t u1, uint8_t transformation);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming 2D IDWT — produces one output row per call via pull_row().
 //
@@ -211,10 +217,15 @@ typedef void (*idwt_row_src_fn)(void *ctx, int32_t abs_row, sprec_t *out_row);
 // improving L2 cache utilization for vertical lifting steps.
 constexpr int32_t IDWT_STATE_RING_DEPTH = 8;
 
+// Extra floats reserved before each ring buffer slot for in-place horizontal PSE.
+// Must be >= max(left PSE) = 4 and a multiple of 8 (8×4B=32B) for AVX2 alignment.
+constexpr int32_t IDWT_RING_PSE_LEFT = 8;
+
 struct idwt_2d_state {
   // ── geometry ──────────────────────────────────────────────────────────────
   int32_t u0, u1, v0, v1;
-  int32_t stride;          // round_up(u1-u0, SIMD_PADDING)
+  int32_t stride;          // round_up(u1-u0, SIMD_PADDING) — data width per row
+  int32_t slot_stride;     // IDWT_RING_PSE_LEFT + round_up(u1-u0+SIMD_PADDING, SIMD_PADDING)
   uint8_t transformation;  // 0 = irrev 9/7, 1 = rev 5/3
   int8_t  top_pse;         // PSE rows above v0  (3 or 4 for 9/7; 1 or 2 for 5/3)
   int8_t  bottom_pse;      // PSE rows below v1-1
@@ -228,8 +239,11 @@ struct idwt_2d_state {
   int8_t   bot_dlevel[4];      // d_level per bot-PSE slot (-1 = unfilled)
 
   // ── sliding ring for real rows [v0, v1) ───────────────────────────────────
-  // Slot for absolute row r : (r - ring_origin) % IDWT_STATE_RING_DEPTH
-  sprec_t *ring_buf;                           // IDWT_STATE_RING_DEPTH × stride
+  // Slot for absolute row r : r % IDWT_STATE_RING_DEPTH
+  // Each ring slot is slot_stride floats wide; the data portion (post-horizontal-IDWT)
+  // starts at offset IDWT_RING_PSE_LEFT within the slot, providing scratch space
+  // for the in-place horizontal PSE fill and filter (no separate ext_buf needed).
+  sprec_t *ring_buf;                           // IDWT_STATE_RING_DEPTH × slot_stride
   int32_t  ring_origin;                         // abs row mapped to slot 0
   int8_t   d_level[IDWT_STATE_RING_DEPTH];     // 0=raw, 1=step1, 2=step2, -1=unused
 
