@@ -109,6 +109,122 @@ uint32_t get_minimum_DWT_levels(open_htj2k::openhtj2k_decoder* dec) {
   return cpp_get_minimum_DWT_levels(dec);
 }
 
+// invoke_decoder_to_rgba: decode and convert directly to 8-bit RGBA in one pass.
+// rgba_dst must be pre-allocated as W × H × 4 bytes.
+// Handles all bit depths (1–16) and signed/unsigned samples; correct down/up-shift
+// and rounding (half-pel bias) are applied in C++ rather than in JS.
+// WASM-SIMD paths process 4 pixels per iteration for both grayscale and color.
+EMSCRIPTEN_KEEPALIVE
+void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_dst) {
+  std::vector<uint32_t> width, height;
+  std::vector<uint8_t>  depth;
+  std::vector<bool>     is_signed;
+
+  dec->invoke_line_based_stream(
+    [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+      const uint32_t W       = width[0];
+      const uint8_t  d       = depth[0];
+      const int32_t  down_sh = (d >= 8) ? (d - 8) : 0;
+      const int32_t  up_sh   = (d < 8)  ? (8 - d) : 0;
+      const int32_t  half    = (d > 8)  ? (1 << (down_sh - 1)) : 0;
+      const int32_t  offset  = is_signed[0] ? (1 << (d - 1)) : 0;
+      const int32_t  bias    = half + offset;
+
+      uint8_t* __restrict__ row = rgba_dst + (size_t)y * W * 4;
+
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+      const v128_t vbias  = wasm_i32x4_splat(bias);
+      const v128_t vzero  = wasm_i32x4_const_splat(0);
+      const v128_t vmax   = wasm_i32x4_const_splat(255);
+      const v128_t valpha = wasm_i8x16_const_splat(-1);  // 0xFF bytes
+      uint32_t x = 0;
+      if (nc == 1) {
+        for (; x + 4 <= W; x += 4) {
+          v128_t v = wasm_v128_load(rows[0] + x);
+          v = wasm_i32x4_add(v, vbias);
+          v = wasm_i32x4_shr(v, down_sh);
+          v = wasm_i32x4_shl(v, up_sh);
+          v = wasm_i32x4_min(wasm_i32x4_max(v, vzero), vmax);
+          // narrow int32×4 → uint8×4 (values sit in byte positions 0-3)
+          v128_t n8 = wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(v, v),
+                                              wasm_i16x8_narrow_i32x4(v, v));
+          // replicate each gray byte to RGB and insert alpha=0xFF
+          // [g0,g0,g0,FF, g1,g1,g1,FF, g2,g2,g2,FF, g3,g3,g3,FF]
+          v128_t rgba = wasm_i8x16_shuffle(n8, valpha,
+              0,0,0,16, 1,1,1,16, 2,2,2,16, 3,3,3,16);
+          wasm_v128_store(row + x * 4, rgba);
+        }
+      } else {
+        for (; x + 4 <= W; x += 4) {
+          // Process R, G, B channels — each loads 4 int32 values and narrows
+          v128_t rv = wasm_v128_load(rows[0] + x);
+          rv = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_shl(wasm_i32x4_shr(
+               wasm_i32x4_add(rv, vbias), down_sh), up_sh), vzero), vmax);
+          v128_t gv = wasm_v128_load(rows[1] + x);
+          gv = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_shl(wasm_i32x4_shr(
+               wasm_i32x4_add(gv, vbias), down_sh), up_sh), vzero), vmax);
+          v128_t bv = wasm_v128_load(rows[2] + x);
+          bv = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_shl(wasm_i32x4_shr(
+               wasm_i32x4_add(bv, vbias), down_sh), up_sh), vzero), vmax);
+          // narrow each channel: int32×4 → uint8 bytes at positions 0-3
+          v128_t rn = wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(rv, rv),
+                                              wasm_i16x8_narrow_i32x4(rv, rv));
+          v128_t gn = wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(gv, gv),
+                                              wasm_i16x8_narrow_i32x4(gv, gv));
+          v128_t bn = wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(bv, bv),
+                                              wasm_i16x8_narrow_i32x4(bv, bv));
+          // interleave: RG pairs then BA pairs, then combine
+          // rn[0..3]=r0..r3, gn[0..3]=g0..g3, bn[0..3]=b0..b3
+          v128_t rg = wasm_i8x16_shuffle(rn, gn,
+              0,16,1,17,2,18,3,19, 0,16,1,17,2,18,3,19); // [r0,g0,r1,g1,r2,g2,r3,g3,...]
+          v128_t ba = wasm_i8x16_shuffle(bn, valpha,
+              0,16,1,17,2,18,3,19, 0,16,1,17,2,18,3,19); // [b0,FF,b1,FF,b2,FF,b3,FF,...]
+          v128_t rgba = wasm_i8x16_shuffle(rg, ba,
+              0,1,16,17, 2,3,18,19, 4,5,20,21, 6,7,22,23); // [r0,g0,b0,FF,...]
+          wasm_v128_store(row + x * 4, rgba);
+        }
+      }
+      // scalar tail (and full scalar for nc>3 or up_sh paths)
+      if (nc == 1) {
+        for (; x < W; ++x) {
+          int32_t v = ((rows[0][x] + bias) >> down_sh) << up_sh;
+          if (v < 0) v = 0; else if (v > 255) v = 255;
+          uint8_t u = static_cast<uint8_t>(v);
+          row[x*4+0] = row[x*4+1] = row[x*4+2] = u; row[x*4+3] = 255;
+        }
+      } else {
+        for (; x < W; ++x) {
+          for (uint16_t c = 0; c < 3 && c < nc; ++c) {
+            int32_t v = ((rows[c][x] + bias) >> down_sh) << up_sh;
+            if (v < 0) v = 0; else if (v > 255) v = 255;
+            row[x*4+c] = static_cast<uint8_t>(v);
+          }
+          row[x*4+3] = 255;
+        }
+      }
+#else
+      if (nc == 1) {
+        for (uint32_t x = 0; x < W; ++x) {
+          int32_t v = ((rows[0][x] + bias) >> down_sh) << up_sh;
+          if (v < 0) v = 0; else if (v > 255) v = 255;
+          uint8_t u = static_cast<uint8_t>(v);
+          row[x*4+0] = row[x*4+1] = row[x*4+2] = u; row[x*4+3] = 255;
+        }
+      } else {
+        for (uint32_t x = 0; x < W; ++x) {
+          for (uint16_t c = 0; c < 3 && c < nc; ++c) {
+            int32_t v = ((rows[c][x] + bias) >> down_sh) << up_sh;
+            if (v < 0) v = 0; else if (v > 255) v = 255;
+            row[x*4+c] = static_cast<uint8_t>(v);
+          }
+          row[x*4+3] = 255;
+        }
+      }
+#endif
+    },
+    width, height, depth, is_signed);
+}
+
 // invoke_decoder_stream: decode using invoke_line_based_stream() so that the
 // internal planar tile buffers and the full W×H×C int32 output buffer are
 // never simultaneously live.  Rows are interleaved and packed directly into

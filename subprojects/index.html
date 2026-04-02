@@ -429,78 +429,22 @@
       var ctx = canvas.getContext("2d", {colorSpace: colorSpaceName});
       ctx.clearRect(0, 0, width, height);
       var cimg = ctx.createImageData(width, height, {colorSpace: colorSpaceName});
-      var down_shift = (bit_depth >= 8 ? bit_depth - 8 : 0) | 0;
-      var up_shift = (bit_depth < 8 ? 8 - bit_depth : 0) | 0;
-      var half = (bit_depth > 8 ? (1 << (down_shift - 1)) : 0) | 0;
-      var offset = 0;
-      if (is_signed) {
-        offset = 1 << (bit_depth - 1);
-      }
-      var heap = Module["HEAP32"];
-      var compskip = 4 | 0;
-      var dst = cimg.data;
-      
 
-      var src = Module._malloc(width * height * num_comps * 4); // a sample is 4byte length
+      var src = Module._malloc(width * height * 4);
 
       var t0 = performance.now();
       var NAflag = false;
       try {
-        invoke_decoder(j2c, src);
+        invoke_decoder_to_rgba(j2c, src);
       } catch (msg) {
-        // console.log(msg);
         NAflag = true;
       }
       var t1 = performance.now();
 
-      // Capture HEAP32 after all WASM allocations (input buffer + invoke_decoder
-      // internal buffers). If WASM memory grew during those allocations the
-      // ArrayBuffer is replaced; re-reading Module["HEAP32"] here guarantees a
-      // fresh, non-stale view for the pixel loops below.
-      var heap32 = Module["HEAP32"];
-      var srcBase = src >>> 2; // byte address → HEAP32 index (unsigned shift)
-      if (num_comps == 1) {
-        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
-          var didx = y * width * compskip;
-          var yRow = y * width;
-          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
-            var val = ((heap32[srcBase + yRow + x] + half + offset) >>> down_shift) << up_shift;
-            dst[didx + x * compskip] = val;
-            dst[didx + x * compskip + 1] = val;
-            dst[didx + x * compskip + 2] = val;
-            dst[didx + x * compskip + 3] = 255;
-          }
-        }
-      }
-      else if (num_comps == 3) {
-        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
-          var didx = y * width * compskip;
-          var yRow = y * width * num_comps;
-          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
-            // Direct HEAP32 indexing: avoids Module.getValue() call overhead.
-            // heap32 is captured after all allocations to avoid stale-view bugs.
-            var pi = srcBase + yRow + x * num_comps;
-            dst[didx + x * compskip + 0] = (heap32[pi + 0] + half + offset) >>> down_shift;
-            dst[didx + x * compskip + 1] = (heap32[pi + 1] + half + offset) >>> down_shift;
-            dst[didx + x * compskip + 2] = (heap32[pi + 2] + half + offset) >>> down_shift;
-            dst[didx + x * compskip + 3] = 255;
-          }
-        }
-      }
-      else {
-        console.log('Unsupported number of components: Only the first component is shown.');
-        for (var y = 0 | 0; y < height; y = y + 1 | 0) {
-          var didx = y * width * compskip;
-          var yRow = y * width * num_comps;
-          for (var x = 0 | 0; x < width; x = x + 1 | 0) {
-            var val = (heap32[srcBase + yRow + x * num_comps] + half + offset) >> down_shift;
-            dst[didx + x * compskip + 0] = val;
-            dst[didx + x * compskip + 1] = val;
-            dst[didx + x * compskip + 2] = val;
-            dst[didx + x * compskip + 3] = 255;
-          }
-        }
-      }
+      // Re-read HEAPU8 after decode: ALLOW_MEMORY_GROWTH may have replaced the
+      // backing ArrayBuffer. Copy RGBA bytes directly into ImageData — no JS
+      // per-pixel work needed.
+      cimg.data.set(Module["HEAPU8"].subarray(src, src + width * height * 4));
       release_j2c_data(j2c);
       Module._free(buffer);
       Module._free(src);
@@ -555,6 +499,8 @@
       get_j2c_bit_depth = Module.cwrap('get_depth', 'number', ['number', 'number']);
       get_j2c_is_signed = Module.cwrap('get_signed', 'number', ['number', 'number']);
       get_minimum_DWT_levels = Module.cwrap('get_minimum_DWT_levels', 'number', ['number']);
+      // invoke_decoder_to_rgba: streaming decode + RGBA packing (eliminates JS pixel loop)
+      invoke_decoder_to_rgba = Module.cwrap('invoke_decoder_to_rgba', 'void', ['number', 'number']);
       // pack_samples: int32 → uint8/uint16-BE packed buffer (used by Node.js CLI)
       pack_samples = Module.cwrap('pack_samples', 'void', ['number', 'number', 'number', 'number', 'number']);
       // invoke_decoder_stream: streaming decode + pack into pre-allocated buffer (used by Node.js CLI)
