@@ -649,82 +649,110 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
           *val = -(*val & INT32_MAX);
         }
         assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<int32_t>(*val);
+        *dst = static_cast<float>(*val);
         val++;
         dst++;
       }
     }
   } else {
-    // lossy path
-    float fscale = this->stepsize;
-    fscale *= (1 << FRACBITS);
-    if (M_b <= 31) {
-      fscale /= (static_cast<float>(1 << (31 - M_b)));
-    } else {
-      fscale *= (static_cast<float>(1 << (M_b - 31)));
-    }
-    constexpr int32_t downshift = 15;
-    fscale *= (float)(1 << 16) * (float)(1 << downshift);
-    const auto scale = (int32_t)(fscale + 0.5);
+    // lossy path: compute the direct float scale factor.
+    // decoded magnitude is in Q(31-M_b) fixed-point; result must be in Q(FRACBITS)
+    float fscale_direct = this->stepsize;
+    fscale_direct *= static_cast<float>(1 << FRACBITS);
+    if (M_b <= 31)
+      fscale_direct /= static_cast<float>(1 << (31 - M_b));
+    else
+      fscale_direct *= static_cast<float>(1 << (M_b - 31));
 
-    for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
-      size_t len   = this->size.x;
-
-      for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
-        v0 = vld1q_s32(val);
-        v1 = vld1q_s32(val + 4);
-        s0 = vshrq_n_s32(v0, 31);  // generate a mask for negative values
-        s1 = vshrq_n_s32(v1, 31);  // generate a mask for negative values
-        v0 = vandq_s32(v0, vmagmask);
-        v1 = vandq_s32(v1, vmagmask);
-        // upshift background region, if necessary
-        vROImask = vandq_s32(v0, vmask);
-        vROImask = vceqzq_s32(vROImask);
-        vROImask = vandq_s32(vROImask, vROIshift);
-        v0       = vshlq_s32(v0, vROImask);
-        vROImask = vandq_s32(v1, vmask);
-        vROImask = vceqzq_s32(vROImask);
-        vROImask = vandq_s32(vROImask, vROIshift);
-        v1       = vshlq_s32(v1, vROImask);
-        // to prevent overflow, truncate to int16_t range
-        v0 = vrshrq_n_s32(v0, 16);  // (v0 + (1 << 15)) >> 16;
-        v1 = vrshrq_n_s32(v1, 16);  // (v1 + (1 << 15)) >> 16;
-        // dequantization
-        v0 = vmulq_s32(v0, vdupq_n_s32(scale));
-        v1 = vmulq_s32(v1, vdupq_n_s32(scale));
-        // downshift and convert values from sign-magnitude form to two's complement one
-        v0    = vrshrq_n_s32(v0, downshift);
-        v1    = vrshrq_n_s32(v1, downshift);
-        vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
-        vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
-        // vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
-        vst1q_f32(dst, vcvtq_f32_s32(vdst0));
-        vst1q_f32(dst + 4, vcvtq_f32_s32(vdst1));
-        val += 8;
-        dst += 8;
+    if (ROIshift == 0) {
+      // Common case: no ROI — direct float multiply, sign via XOR.
+      // Eliminates integer truncate→mul→shift pipeline: saves ~5 ops per 4 elements.
+      const float32x4_t vfscale  = vdupq_n_f32(fscale_direct);
+      const int32x4_t vsignmask  = vdupq_n_s32(INT32_MIN);
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->i_samples + i * this->band_stride;
+        size_t len   = this->size.x;
+        // 2× unrolled: 8 elements per iteration for better ILP.
+        for (; len >= 8; len -= 8) {
+          int32x4_t a0   = vld1q_s32(val);
+          int32x4_t a1   = vld1q_s32(val + 4);
+          int32x4_t m0   = vandq_s32(a0, vmagmask);
+          int32x4_t m1   = vandq_s32(a1, vmagmask);
+          float32x4_t f0 = vmulq_f32(vcvtq_f32_s32(m0), vfscale);
+          float32x4_t f1 = vmulq_f32(vcvtq_f32_s32(m1), vfscale);
+          // XOR sign bit from input integer into float result.
+          f0 = vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(f0),
+                                               vreinterpretq_u32_s32(vandq_s32(a0, vsignmask))));
+          f1 = vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(f1),
+                                               vreinterpretq_u32_s32(vandq_s32(a1, vsignmask))));
+          vst1q_f32(dst, f0);
+          vst1q_f32(dst + 4, f1);
+          val += 8;
+          dst += 8;
+        }
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          float f      = static_cast<float>(*val & INT32_MAX) * fscale_direct;
+          if (sign) f  = -f;
+          *dst++ = f;
+          val++;
+        }
       }
-      for (; len > 0; --len) {
-        int32_t sign = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        // upshift background region, if necessary
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
+    } else {
+      // ROI path — rarely used; keep integer-arithmetic approach for correctness.
+      float fscale = fscale_direct;
+      constexpr int32_t downshift = 15;
+      fscale *= static_cast<float>(1 << 16) * static_cast<float>(1 << downshift);
+      const auto scale = static_cast<int32_t>(fscale + 0.5f);
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->i_samples + i * this->band_stride;
+        size_t len   = this->size.x;
+        for (; len >= 8; len -= 8) {
+          v0 = vld1q_s32(val);
+          v1 = vld1q_s32(val + 4);
+          s0 = vshrq_n_s32(v0, 31);
+          s1 = vshrq_n_s32(v1, 31);
+          v0 = vandq_s32(v0, vmagmask);
+          v1 = vandq_s32(v1, vmagmask);
+          // upshift background region
+          vROImask = vandq_s32(v0, vmask);
+          vROImask = vceqzq_s32(vROImask);
+          vROImask = vandq_s32(vROImask, vROIshift);
+          v0       = vshlq_s32(v0, vROImask);
+          vROImask = vandq_s32(v1, vmask);
+          vROImask = vceqzq_s32(vROImask);
+          vROImask = vandq_s32(vROImask, vROIshift);
+          v1       = vshlq_s32(v1, vROImask);
+          // truncate to int16 range
+          v0 = vrshrq_n_s32(v0, 16);
+          v1 = vrshrq_n_s32(v1, 16);
+          // dequantization
+          v0 = vmulq_s32(v0, vdupq_n_s32(scale));
+          v1 = vmulq_s32(v1, vdupq_n_s32(scale));
+          // downshift and sign
+          v0    = vrshrq_n_s32(v0, downshift);
+          v1    = vrshrq_n_s32(v1, downshift);
+          vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
+          vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
+          vst1q_f32(dst, vcvtq_f32_s32(vdst0));
+          vst1q_f32(dst + 4, vcvtq_f32_s32(vdst1));
+          val += 8;
+          dst += 8;
         }
-        // to prevent overflow, truncate to int16_t
-        *val = (*val + (1 << 15)) >> 16;
-        //  dequantization
-        *val *= scale;
-        // downshift
-        *val = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
-        // convert sign-magnitude to two's complement form
-        if (sign) {
-          *val = -(*val & INT32_MAX);
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          *val &= INT32_MAX;
+          if (((uint32_t)*val & ~mask) == 0) *val <<= ROIshift;
+          *val = (*val + (1 << 15)) >> 16;
+          *val *= scale;
+          *val = static_cast<int32_t>((*val + (1 << (downshift - 1))) >> downshift);
+          if (sign) *val = -(*val & INT32_MAX);
+          *dst = static_cast<float>(*val);
+          val++;
+          dst++;
         }
-        *dst = static_cast<int32_t>(*val);
-        val++;
-        dst++;
       }
     }
   }

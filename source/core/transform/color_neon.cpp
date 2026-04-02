@@ -378,51 +378,6 @@ void cvt_rgb_to_ycbcr_irrev_float_neon(const int32_t *sp0, const int32_t *sp1, c
   }
 }
 
-  #if 0
-// 16bit fixedpoint calculation
-void cvt_ycbcr_to_rgb_irrev_neon2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width,
-                                  uint32_t height) {
-  const int16x8_t cr_fact_r     = vdupq_n_s16(neon_CRfactR);
-  const int16x8_t cb_fact_b     = vdupq_n_s16(neon_CBfactB);
-  const int16x8_t cr_neg_fact_g = vdupq_n_s16(neon_neg_CRfactG);
-  const int16x8_t cb_neg_fact_g = vdupq_n_s16(neon_neg_CBfactG);
-  int16x8_t Y, Cb, Cr, tmp0, tmp1;
-  int32x4_t Y32, Cb32, Cr32, tmp;
-  for (uint32_t y = 0; y < height; ++y) {
-    int32_t *src1 = sp0 + y * round_up(width, 32U);
-    int32_t *src2 = sp1 + y * round_up(width, 32U);
-    int32_t *src3 = sp2 + y * round_up(width, 32U);
-    int32_t len   = static_cast<int32_t>(width);
-    for (; len > 0; len -= 8) {
-      Y32  = vld1q_s32(src1);
-      Y    = vcombine_s16(vmovn_s32(Y32), vmovn_s32(vld1q_s32(src1 + 4)));
-      Cr32 = vld1q_s32(src3);
-      Cr   = vcombine_s16(vmovn_s32(Cr32), vmovn_s32(vld1q_s32(src3 + 4)));
-      tmp0 = vqrdmulhq_s16(Cr, cr_fact_r);
-      tmp0 = vaddq_s16(tmp0, Cr);
-      tmp1 = vaddq_s16(tmp0, Y);
-      vst1q_s32(src1, vmovl_s16(vget_low_s16(tmp1)));  // Save Red
-      vst1q_s32(src1 + 4, vmovl_high_s16(tmp1));       // Save Red
-      Cr   = vqrdmulhq_s16(Cr, cr_neg_fact_g);
-      Cb32 = vld1q_s32(src2);  // Load CB
-      Cb   = vcombine_s16(vmovn_s32(Cb32), vmovn_s32(vld1q_s32(src2 + 4)));
-      tmp0 = vqrdmulhq_s16(Cb, cb_fact_b);
-      tmp0 = vaddq_s16(tmp0, Cb);
-      tmp1 = vaddq_s16(tmp0, Y);
-      vst1q_s32(src3, vmovl_s16(vget_low_s16(tmp1)));  // Save Blue
-      vst1q_s32(src3 + 4, vmovl_high_s16(tmp1));       // Save Blue
-      Cb   = vqrdmulhq_s16(Cb, cb_neg_fact_g);
-      Y    = vqaddq_s16(Y, Cr);
-      tmp1 = vqaddq_s16(Y, Cb);
-      vst1q_s32(src2, vmovl_s16(vget_low_s16(tmp1)));  // Save Green
-      vst1q_s32(src2 + 4, vmovl_high_s16(tmp1));       // Save Green
-      src1 += 8;
-      src3 += 8;
-      src2 += 8;
-    }
-  }
-}
-
 void fused_ycbcr_irrev_to_rgb_i32_neon(const float *y, const float *cb, const float *cr,
                                         int32_t *r, int32_t *g, int32_t *b, uint32_t width,
                                         const FinalizeParams *fp) {
@@ -457,9 +412,9 @@ void fused_ycbcr_irrev_to_rgb_i32_neon(const float *y, const float *cb, const fl
       float32x4_t mB  = vmlaq_f32(mY, mCb, mCB_FACT_B);
       float32x4_t mG  = vmlsq_f32(mY, mCr, mCR_FACT_G);
       mG              = vmlsq_f32(mG, mCb, mCB_FACT_G);
-      int32x4_t vR    = vshlq_s32(vaddq_s32(vcvttq_s32_f32(mR), vrnd0), vs0);
-      int32x4_t vG    = vshlq_s32(vaddq_s32(vcvttq_s32_f32(mG), vrnd1), vs1);
-      int32x4_t vB    = vshlq_s32(vaddq_s32(vcvttq_s32_f32(mB), vrnd2), vs2);
+      int32x4_t vR    = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mR), vrnd0), vs0);
+      int32x4_t vG    = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mG), vrnd1), vs1);
+      int32x4_t vB    = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mB), vrnd2), vs2);
       vR = vmaxq_s32(vminq_s32(vaddq_s32(vR, vdc0), vmx0), vmn0);
       vG = vmaxq_s32(vminq_s32(vaddq_s32(vG, vdc1), vmx1), vmn1);
       vB = vmaxq_s32(vminq_s32(vaddq_s32(vB, vdc2), vmx2), vmn2);
@@ -476,9 +431,9 @@ void fused_ycbcr_irrev_to_rgb_i32_neon(const float *y, const float *cb, const fl
       float32x4_t mB  = vmlaq_f32(mY, mCb, mCB_FACT_B);
       float32x4_t mG  = vmlsq_f32(mY, mCr, mCR_FACT_G);
       mG              = vmlsq_f32(mG, mCb, mCB_FACT_G);
-      int32x4_t vR   = vmaxq_s32(vminq_s32(vaddq_s32(vcvttq_s32_f32(mR), vdc0), vmx0), vmn0);
-      int32x4_t vG   = vmaxq_s32(vminq_s32(vaddq_s32(vcvttq_s32_f32(mG), vdc1), vmx1), vmn1);
-      int32x4_t vB   = vmaxq_s32(vminq_s32(vaddq_s32(vcvttq_s32_f32(mB), vdc2), vmx2), vmn2);
+      int32x4_t vR   = vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mR), vdc0), vmx0), vmn0);
+      int32x4_t vG   = vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mG), vdc1), vmx1), vmn1);
+      int32x4_t vB   = vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mB), vdc2), vmx2), vmn2);
       vst1q_s32(r + n, vR);
       vst1q_s32(g + n, vG);
       vst1q_s32(b + n, vB);
@@ -543,5 +498,4 @@ void fused_ycbcr_rev_to_rgb_i32_neon(const float *y, const float *cb, const floa
     b[n] = clamp(Cb + G, fp[2]);
   }
 }
-  #endif
 #endif
