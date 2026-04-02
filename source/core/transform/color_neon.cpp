@@ -422,5 +422,126 @@ void cvt_ycbcr_to_rgb_irrev_neon2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint
     }
   }
 }
+
+void fused_ycbcr_irrev_to_rgb_i32_neon(const float *y, const float *cb, const float *cr,
+                                        int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                        const FinalizeParams *fp) {
+  const float32x4_t mCR_FACT_R = vdupq_n_f32(static_cast<float>(CR_FACT_R));
+  const float32x4_t mCR_FACT_G = vdupq_n_f32(static_cast<float>(CR_FACT_G));
+  const float32x4_t mCB_FACT_B = vdupq_n_f32(static_cast<float>(CB_FACT_B));
+  const float32x4_t mCB_FACT_G = vdupq_n_f32(static_cast<float>(CB_FACT_G));
+
+  const int32x4_t vrnd0 = vdupq_n_s32(fp[0].rnd);
+  const int32x4_t vdc0  = vdupq_n_s32(fp[0].dc);
+  const int32x4_t vmx0  = vdupq_n_s32(fp[0].maxval);
+  const int32x4_t vmn0  = vdupq_n_s32(fp[0].minval);
+  const int32x4_t vrnd1 = vdupq_n_s32(fp[1].rnd);
+  const int32x4_t vdc1  = vdupq_n_s32(fp[1].dc);
+  const int32x4_t vmx1  = vdupq_n_s32(fp[1].maxval);
+  const int32x4_t vmn1  = vdupq_n_s32(fp[1].minval);
+  const int32x4_t vrnd2 = vdupq_n_s32(fp[2].rnd);
+  const int32x4_t vdc2  = vdupq_n_s32(fp[2].dc);
+  const int32x4_t vmx2  = vdupq_n_s32(fp[2].maxval);
+  const int32x4_t vmn2  = vdupq_n_s32(fp[2].minval);
+
+  uint32_t n = 0;
+  if (fp[0].ds > 0 && fp[1].ds > 0 && fp[2].ds > 0) {
+    const int32x4_t vs0 = vdupq_n_s32(-fp[0].ds);
+    const int32x4_t vs1 = vdupq_n_s32(-fp[1].ds);
+    const int32x4_t vs2 = vdupq_n_s32(-fp[2].ds);
+    for (; n + 4 <= width; n += 4) {
+      float32x4_t mY  = vld1q_f32(y + n);
+      float32x4_t mCb = vld1q_f32(cb + n);
+      float32x4_t mCr = vld1q_f32(cr + n);
+      float32x4_t mR  = vmlaq_f32(mY, mCr, mCR_FACT_R);
+      float32x4_t mB  = vmlaq_f32(mY, mCb, mCB_FACT_B);
+      float32x4_t mG  = vmlsq_f32(mY, mCr, mCR_FACT_G);
+      mG              = vmlsq_f32(mG, mCb, mCB_FACT_G);
+      int32x4_t vR    = vshlq_s32(vaddq_s32(vcvttq_s32_f32(mR), vrnd0), vs0);
+      int32x4_t vG    = vshlq_s32(vaddq_s32(vcvttq_s32_f32(mG), vrnd1), vs1);
+      int32x4_t vB    = vshlq_s32(vaddq_s32(vcvttq_s32_f32(mB), vrnd2), vs2);
+      vR = vmaxq_s32(vminq_s32(vaddq_s32(vR, vdc0), vmx0), vmn0);
+      vG = vmaxq_s32(vminq_s32(vaddq_s32(vG, vdc1), vmx1), vmn1);
+      vB = vmaxq_s32(vminq_s32(vaddq_s32(vB, vdc2), vmx2), vmn2);
+      vst1q_s32(r + n, vR);
+      vst1q_s32(g + n, vG);
+      vst1q_s32(b + n, vB);
+    }
+  } else if (fp[0].ds == 0 && fp[1].ds == 0 && fp[2].ds == 0) {
+    for (; n + 4 <= width; n += 4) {
+      float32x4_t mY  = vld1q_f32(y + n);
+      float32x4_t mCb = vld1q_f32(cb + n);
+      float32x4_t mCr = vld1q_f32(cr + n);
+      float32x4_t mR  = vmlaq_f32(mY, mCr, mCR_FACT_R);
+      float32x4_t mB  = vmlaq_f32(mY, mCb, mCB_FACT_B);
+      float32x4_t mG  = vmlsq_f32(mY, mCr, mCR_FACT_G);
+      mG              = vmlsq_f32(mG, mCb, mCB_FACT_G);
+      int32x4_t vR   = vmaxq_s32(vminq_s32(vaddq_s32(vcvttq_s32_f32(mR), vdc0), vmx0), vmn0);
+      int32x4_t vG   = vmaxq_s32(vminq_s32(vaddq_s32(vcvttq_s32_f32(mG), vdc1), vmx1), vmn1);
+      int32x4_t vB   = vmaxq_s32(vminq_s32(vaddq_s32(vcvttq_s32_f32(mB), vdc2), vmx2), vmn2);
+      vst1q_s32(r + n, vR);
+      vst1q_s32(g + n, vG);
+      vst1q_s32(b + n, vB);
+    }
+  }
+  auto finalize_one = [](float v, const FinalizeParams &p) -> int32_t {
+    int32_t x = static_cast<int32_t>(v);
+    if (p.ds > 0) x = (x + p.rnd) >> p.ds;
+    else if (p.ds < 0) x <<= -p.ds;
+    x += p.dc;
+    if (x > p.maxval) x = p.maxval;
+    if (x < p.minval) x = p.minval;
+    return x;
+  };
+  for (; n < width; ++n) {
+    float Y = y[n], Cb = cb[n], Cr = cr[n];
+    r[n] = finalize_one(Y + static_cast<float>(CR_FACT_R) * Cr, fp[0]);
+    g[n] = finalize_one(
+        Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb, fp[1]);
+    b[n] = finalize_one(Y + static_cast<float>(CB_FACT_B) * Cb, fp[2]);
+  }
+}
+
+void fused_ycbcr_rev_to_rgb_i32_neon(const float *y, const float *cb, const float *cr,
+                                      int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                      const FinalizeParams *fp) {
+  const int32x4_t vdc0 = vdupq_n_s32(fp[0].dc);
+  const int32x4_t vmx0 = vdupq_n_s32(fp[0].maxval);
+  const int32x4_t vmn0 = vdupq_n_s32(fp[0].minval);
+  const int32x4_t vdc1 = vdupq_n_s32(fp[1].dc);
+  const int32x4_t vmx1 = vdupq_n_s32(fp[1].maxval);
+  const int32x4_t vmn1 = vdupq_n_s32(fp[1].minval);
+  const int32x4_t vdc2 = vdupq_n_s32(fp[2].dc);
+  const int32x4_t vmx2 = vdupq_n_s32(fp[2].maxval);
+  const int32x4_t vmn2 = vdupq_n_s32(fp[2].minval);
+
+  uint32_t n = 0;
+  for (; n + 4 <= width; n += 4) {
+    int32x4_t iY  = vcvtq_s32_f32(vld1q_f32(y + n));
+    int32x4_t iCb = vcvtq_s32_f32(vld1q_f32(cb + n));
+    int32x4_t iCr = vcvtq_s32_f32(vld1q_f32(cr + n));
+    int32x4_t iG  = vsubq_s32(iY, vshrq_n_s32(vaddq_s32(iCb, iCr), 2));
+    int32x4_t iR  = vaddq_s32(iCr, iG);
+    int32x4_t iB  = vaddq_s32(iCb, iG);
+    vst1q_s32(r + n, vmaxq_s32(vminq_s32(vaddq_s32(iR, vdc0), vmx0), vmn0));
+    vst1q_s32(g + n, vmaxq_s32(vminq_s32(vaddq_s32(iG, vdc1), vmx1), vmn1));
+    vst1q_s32(b + n, vmaxq_s32(vminq_s32(vaddq_s32(iB, vdc2), vmx2), vmn2));
+  }
+  for (; n < width; ++n) {
+    int32_t Y  = static_cast<int32_t>(y[n]);
+    int32_t Cb = static_cast<int32_t>(cb[n]);
+    int32_t Cr = static_cast<int32_t>(cr[n]);
+    int32_t G  = Y - ((Cb + Cr) >> 2);
+    auto clamp = [](int32_t v, const FinalizeParams &p) -> int32_t {
+      v += p.dc;
+      if (v > p.maxval) v = p.maxval;
+      if (v < p.minval) v = p.minval;
+      return v;
+    };
+    r[n] = clamp(Cr + G, fp[0]);
+    g[n] = clamp(G, fp[1]);
+    b[n] = clamp(Cb + G, fp[2]);
+  }
+}
   #endif
 #endif

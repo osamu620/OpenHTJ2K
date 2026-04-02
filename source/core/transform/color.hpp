@@ -49,6 +49,22 @@ typedef void (*cvt_color_float_func)(float *, float *, float *, uint32_t, uint32
 // sp0/sp1/sp2: int32 input; dp0/dp1/dp2: float output; all share the same row stride.
 typedef void (*cvt_color_i32_to_f_func)(const int32_t *, const int32_t *, const int32_t *, float *,
                                         float *, float *, uint32_t, uint32_t, uint32_t);
+
+// Per-component parameters for the float→int32 finalization step.
+struct FinalizeParams {
+  int16_t ds;      // downshift: > 0 → right shift, < 0 → left shift, 0 → no shift
+  int16_t rnd;     // rounding offset added before right shift (= (1<<ds)>>1); 0 when ds <= 0
+  int32_t dc;      // DC offset added after shift (e.g. 128 for 8-bit unsigned)
+  int32_t maxval;  // clamp upper bound
+  int32_t minval;  // clamp lower bound
+};
+
+// Fused inverse color transform (float-domain) + float→int32 finalize.
+// Reads Y/Cb/Cr from ring buffer (read-only), applies inverse MCT, applies per-component
+// finalize (shift + DC_OFFSET + clamp), and writes R/G/B as int32.
+// fp[3]: finalize params for component 0 (R), 1 (G), 2 (B).
+typedef void (*fused_mct_finalize_func)(const float *, const float *, const float *, int32_t *,
+                                        int32_t *, int32_t *, uint32_t, const FinalizeParams *);
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 /**
  * @brief Forward reversible color transform (RCT) with AVX2 intrinsics
@@ -94,6 +110,14 @@ void cvt_rgb_to_ycbcr_rev_float_avx2(const int32_t *sp0, const int32_t *sp1, con
 void cvt_rgb_to_ycbcr_irrev_float_avx2(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
                                        float *dp0, float *dp1, float *dp2,
                                        uint32_t width, uint32_t height, uint32_t stride);
+// Fused inverse ICT (lossy) + float→int32 finalize (AVX2)
+void fused_ycbcr_irrev_to_rgb_i32_avx2(const float *y, const float *cb, const float *cr,
+                                        int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                        const FinalizeParams *fp);
+// Fused inverse RCT (lossless) + int32 finalize (AVX2)
+void fused_ycbcr_rev_to_rgb_i32_avx2(const float *y, const float *cb, const float *cr,
+                                      int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                      const FinalizeParams *fp);
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 /**
  * @brief Forward reversible color transform (RCT) with NEON intrinsics
@@ -139,6 +163,14 @@ void cvt_rgb_to_ycbcr_rev_float_neon(const int32_t *sp0, const int32_t *sp1, con
 void cvt_rgb_to_ycbcr_irrev_float_neon(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
                                        float *dp0, float *dp1, float *dp2,
                                        uint32_t width, uint32_t height, uint32_t stride);
+// Fused inverse ICT (lossy) + float→int32 finalize (NEON)
+void fused_ycbcr_irrev_to_rgb_i32_neon(const float *y, const float *cb, const float *cr,
+                                        int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                        const FinalizeParams *fp);
+// Fused inverse RCT (lossless) + int32 finalize (NEON)
+void fused_ycbcr_rev_to_rgb_i32_neon(const float *y, const float *cb, const float *cr,
+                                      int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                      const FinalizeParams *fp);
 #elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
 void cvt_rgb_to_ycbcr_rev_wasm(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 void cvt_rgb_to_ycbcr_irrev_wasm(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
@@ -152,6 +184,12 @@ void cvt_rgb_to_ycbcr_rev_float_wasm(const int32_t *sp0, const int32_t *sp1, con
 void cvt_rgb_to_ycbcr_irrev_float_wasm(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
                                        float *dp0, float *dp1, float *dp2,
                                        uint32_t width, uint32_t height, uint32_t stride);
+void fused_ycbcr_irrev_to_rgb_i32_wasm(const float *y, const float *cb, const float *cr,
+                                        int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                        const FinalizeParams *fp);
+void fused_ycbcr_rev_to_rgb_i32_wasm(const float *y, const float *cb, const float *cr,
+                                      int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                      const FinalizeParams *fp);
 #else
 void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
 void cvt_rgb_to_ycbcr_irrev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
@@ -165,6 +203,12 @@ void cvt_rgb_to_ycbcr_rev_float(const int32_t *sp0, const int32_t *sp1, const in
 void cvt_rgb_to_ycbcr_irrev_float(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
                                   float *dp0, float *dp1, float *dp2,
                                   uint32_t width, uint32_t height, uint32_t stride);
+void fused_ycbcr_irrev_to_rgb_i32(const float *y, const float *cb, const float *cr,
+                                   int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                   const FinalizeParams *fp);
+void fused_ycbcr_rev_to_rgb_i32(const float *y, const float *cb, const float *cr,
+                                 int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                 const FinalizeParams *fp);
 #endif
 
 inline int32_t round_d(double val) {
