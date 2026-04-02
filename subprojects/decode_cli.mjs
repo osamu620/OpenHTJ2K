@@ -114,29 +114,24 @@ M._release_j2c_data(dec);
 
 const t1 = performance.now();
 
-// ── Extract pixels from WASM heap ────────────────────────────────────────────
-// Re-read HEAP32 after decode: ALLOW_MEMORY_GROWTH may have updated the buffer.
-const pixels = new Int32Array(M.HEAP32.buffer, outPtr, Wd * Hd * C);
-
-// ── Write PPM / PGM ──────────────────────────────────────────────────────────
+// ── Pack pixels in WASM, copy result to Node.js Buffer ───────────────────────
+// Re-read HEAPU8 after decode: ALLOW_MEMORY_GROWTH may have replaced the buffer.
 const maxval      = Math.min((1 << depth) - 1, 65535);
 const bytesPerSmp = maxval > 255 ? 2 : 1;
 const magic       = C === 1 ? 'P5' : 'P6';
 const header      = `${magic}\n${Wd} ${Hd}\n${maxval}\n`;
 const headerBuf   = Buffer.from(header, 'ascii');
-const pixelBuf    = Buffer.allocUnsafe(Wd * Hd * C * bytesPerSmp);
+const nSamples    = Wd * Hd * C;
+const packedPtr   = M._malloc(nSamples * bytesPerSmp);
 
-if (bytesPerSmp === 1) {
-  for (let i = 0; i < pixels.length; i++)
-    pixelBuf[i] = pixels[i] < 0 ? 0 : pixels[i] > 255 ? 255 : pixels[i];
-} else {
-  for (let i = 0; i < pixels.length; i++) {
-    const v = pixels[i] < 0 ? 0 : pixels[i] > maxval ? maxval : pixels[i];
-    pixelBuf.writeUInt16BE(v, i * 2);
-  }
-}
-
+M._pack_samples(outPtr, packedPtr, nSamples, maxval, bytesPerSmp);
 M._free(outPtr);
+
+// Snapshot packed bytes before freeing (copy out of WASM heap)
+const pixelBuf = Buffer.from(
+  M.HEAPU8.buffer.slice(packedPtr, packedPtr + nSamples * bytesPerSmp)
+);
+M._free(packedPtr);
 
 try {
   writeFileSync(output, Buffer.concat([headerBuf, pixelBuf]));
