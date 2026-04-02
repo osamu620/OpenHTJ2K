@@ -153,15 +153,22 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
   return (x == 0) ? 32 : y;
 }
 
-// Large-buffer reuse pool (Linux/glibc only).
-// Buffers >= ALIGNED_POOL_THRESHOLD bytes freed via aligned_mem_free are cached
+// Large-buffer reuse pool (Linux/glibc and Apple platforms).
+// Buffers >= THRESHOLD bytes freed via aligned_mem_free are cached
 // (physical pages kept mapped) and returned on the next aligned_mem_alloc of a
 // compatible size, eliminating repeated mmap/munmap page-fault cycles on
 // successive decode calls with the same image geometry.
-#if defined(__linux__) && !defined(__INTEL_COMPILER) && !defined(_MSC_VER) \
+#if !defined(__INTEL_COMPILER) && !defined(_MSC_VER) \
     && !defined(__MINGW32__) && !defined(__MINGW64__)
-  #include <malloc.h>  // malloc_usable_size
-  #define OPENHTJ2K_LARGE_POOL 1
+  #if defined(__linux__)
+    #include <malloc.h>          // malloc_usable_size
+    #define OPENHTJ2K_POOL_SIZE_FN(p) malloc_usable_size(p)
+    #define OPENHTJ2K_LARGE_POOL 1
+  #elif defined(__APPLE__)
+    #include <malloc/malloc.h>   // malloc_size
+    #define OPENHTJ2K_POOL_SIZE_FN(p) malloc_size(p)
+    #define OPENHTJ2K_LARGE_POOL 1
+  #endif
 #endif
 
 #ifdef OPENHTJ2K_LARGE_POOL
@@ -196,7 +203,7 @@ struct AlignedLargePool {
 
   void release(void* ptr) {
     if (!ptr) return;
-    size_t sz = malloc_usable_size(ptr);
+    size_t sz = OPENHTJ2K_POOL_SIZE_FN(ptr);
     if (sz >= THRESHOLD && count < MAX_SLOTS) {
       slots[count++] = {ptr, sz};
     } else {
