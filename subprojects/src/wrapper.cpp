@@ -7,6 +7,9 @@
   #include <exception>
 
   #include <emscripten.h>
+  #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+    #include <wasm_simd128.h>
+  #endif
 
   #include "decoder.hpp"
 
@@ -104,6 +107,62 @@ uint32_t get_signed(open_htj2k::openhtj2k_decoder* dec, uint16_t c) { return cpp
 EMSCRIPTEN_KEEPALIVE
 uint32_t get_minimum_DWT_levels(open_htj2k::openhtj2k_decoder* dec) {
   return cpp_get_minimum_DWT_levels(dec);
+}
+
+// pack_samples: convert interleaved int32 pixels → packed uint8 or uint16 big-endian.
+// src[0..count-1] are clamped to [0, maxval] then written into dst.
+// bytes_per_sample: 1 → P5/P6 8-bit, 2 → P5/P6 16-bit big-endian.
+// WASM-SIMD paths process 16 (8-bit) or 8 (16-bit) samples per iteration.
+EMSCRIPTEN_KEEPALIVE
+void pack_samples(const int32_t* __restrict__ src, uint8_t* __restrict__ dst,
+                  uint32_t count, int32_t maxval, int32_t bytes_per_sample) {
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  const v128_t vmx   = wasm_i32x4_splat(maxval);
+  const v128_t vzero = wasm_i32x4_const_splat(0);
+  uint32_t i = 0;
+  if (bytes_per_sample == 1) {
+    for (; i + 16 <= count; i += 16) {
+      v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + i),      vzero), vmx);
+      v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + i +  4), vzero), vmx);
+      v128_t c = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + i +  8), vzero), vmx);
+      v128_t d = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + i + 12), vzero), vmx);
+      wasm_v128_store(dst + i, wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(a, b),
+                                                        wasm_i16x8_narrow_i32x4(c, d)));
+    }
+    for (; i < count; i++) {
+      int32_t v = src[i]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+      dst[i] = static_cast<uint8_t>(v);
+    }
+  } else {
+    uint8_t* d = dst;
+    for (; i + 8 <= count; i += 8) {
+      v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + i),     vzero), vmx);
+      v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + i + 4), vzero), vmx);
+      // narrow int32 → uint16 LE, then byte-swap each pair for big-endian output
+      v128_t u16le = wasm_u16x8_narrow_i32x4(a, b);
+      v128_t u16be = wasm_i8x16_shuffle(u16le, u16le, 1,0, 3,2, 5,4, 7,6, 9,8, 11,10, 13,12, 15,14);
+      wasm_v128_store(d, u16be);
+      d += 16;
+    }
+    for (; i < count; i++) {
+      int32_t v = src[i]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+      *d++ = static_cast<uint8_t>(v >> 8); *d++ = static_cast<uint8_t>(v & 0xff);
+    }
+  }
+#else
+  if (bytes_per_sample == 1) {
+    for (uint32_t i = 0; i < count; i++) {
+      int32_t v = src[i]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+      dst[i] = static_cast<uint8_t>(v);
+    }
+  } else {
+    uint8_t* d = dst;
+    for (uint32_t i = 0; i < count; i++) {
+      int32_t v = src[i]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+      *d++ = static_cast<uint8_t>(v >> 8); *d++ = static_cast<uint8_t>(v & 0xff);
+    }
+  }
+#endif
 }
 }
 
