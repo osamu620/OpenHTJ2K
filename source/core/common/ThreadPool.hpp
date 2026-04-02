@@ -41,20 +41,16 @@
   #include <type_traits>
   #include <unordered_map>
 
+// Thread-local flag: true when the current thread is running inside the pool worker loop.
+// Set once in worker() — avoids the hash-map lookup in decode_strip_core's in_worker check.
+inline thread_local bool g_in_worker_thread = false;
+
 class ThreadPool {
  public:
   inline explicit ThreadPool(size_t thread_count) : stop(false), thread_count_(thread_count) {
-    // if (thread_count == 1) return;
-
     threads = std::make_unique<std::thread[]>(thread_count_);
-
     for (size_t i = 0; i < thread_count_; ++i) {
       threads[i] = std::thread(&ThreadPool::worker, this);
-    }
-    size_t t = 0;
-    for (size_t i = 0; i < thread_count_; ++i) {
-      id_map[threads[i].get_id()] = t;
-      t++;
     }
   }
 
@@ -83,6 +79,10 @@ class ThreadPool {
   }
 
   size_t num_threads() const { return thread_count_; }
+
+  // Returns true when called from inside a pool worker thread.
+  // Uses a thread-local flag set in worker() — no hash map lookup.
+  static bool is_worker_thread() { return g_in_worker_thread; }
 
   #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   /**
@@ -143,6 +143,22 @@ class ThreadPool {
 
   static ThreadPool* get() { return instance(0); }
 
+  // Try to dequeue and execute one pending task from the calling thread.
+  // Returns true if a task was executed, false if the queue was empty or locked.
+  // Safe to call from any thread (including the main thread) to do useful work
+  // instead of spinning in a busy-wait loop.
+  bool try_run_one() {
+    std::function<void()> task;
+    {
+      std::unique_lock<std::mutex> lock(tasks_mutex, std::try_to_lock);
+      if (!lock.owns_lock() || tasks.empty()) return false;
+      task = std::move(tasks.front());
+      tasks.pop();
+    }
+    task();
+    return true;
+  }
+
   static ThreadPool* instance(size_t numthreads) {
     std::unique_lock<std::mutex> lock(singleton_mutex);
     if (!singleton) {
@@ -182,6 +198,7 @@ class ThreadPool {
    * set to true.
    */
   void worker() {
+    g_in_worker_thread = true;
     std::function<void()> batch[BATCH];
 
     for (;;) {
