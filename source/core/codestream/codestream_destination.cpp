@@ -82,7 +82,7 @@ int32_t j2c_dst_memory::flush(std::vector<uint8_t> *obuf) {
 
 size_t j2c_dst_memory::get_length() const { return buf.size(); }
 
-[[maybe_unused]] [[deprecated]] void j2c_dst_memory::print_bytes() {
+OPENHTJ2K_MAYBE_UNUSED [[deprecated]] void j2c_dst_memory::print_bytes() {
   for (uint32_t i = 0; i < pos; i++) {
     if (i % 32 == 0) {
       printf("\n");

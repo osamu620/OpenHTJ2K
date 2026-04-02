@@ -103,9 +103,9 @@ class j2k_region {
   uint32_t stride;
 
   // return top-left coordinate (inclusive)
-  [[nodiscard]] element_siz get_pos0() const { return pos0; }
+  OPENHTJ2K_NODISCARD element_siz get_pos0() const { return pos0; }
   // return bottom-right coordinate (exclusive)
-  [[nodiscard]] element_siz get_pos1() const { return pos1; }
+  OPENHTJ2K_NODISCARD element_siz get_pos1() const { return pos1; }
   // get size of a region
   void get_size(element_siz &out) const {
     out.x = pos1.x - pos0.x;
@@ -131,7 +131,7 @@ class j2k_codeblock : public j2k_region {
   uint8_t *current_address;
   const uint8_t band;
   const uint8_t M_b;
-  [[maybe_unused]] const uint32_t index;
+  OPENHTJ2K_MAYBE_UNUSED const uint32_t index;
   // When true, compressed_data was bump-allocated by a cblk_data_pool owned by
   // j2k_tile. The destructor must NOT free it; the pool manages the lifetime.
   bool compressed_is_pooled = false;
@@ -143,7 +143,7 @@ class j2k_codeblock : public j2k_region {
   size_t blkstate_stride;
   sprec_t *i_samples;
   const uint32_t band_stride;
-  [[maybe_unused]] const uint8_t R_b;
+  OPENHTJ2K_MAYBE_UNUSED const uint8_t R_b;
   const uint8_t transformation;
   const float stepsize;
 
@@ -184,17 +184,17 @@ class j2k_codeblock : public j2k_region {
   //        block_states[static_cast<uint32_t>(j1 + 1) * (blkstate_stride) + static_cast<uint32_t>(j2 +
   //        1)]);
   //  }
-  [[nodiscard]] uint8_t get_orientation() const { return band; }
+  OPENHTJ2K_NODISCARD uint8_t get_orientation() const { return band; }
 
-  //  [[nodiscard]] uint8_t get_context_label_sig(const uint32_t &j1, const uint32_t &j2) const;
-  //  [[nodiscard]] uint8_t get_signLUT_index(const uint32_t &j1, const uint32_t &j2) const;
-  [[nodiscard]] uint8_t get_Mb() const;
+  //  OPENHTJ2K_NODISCARD uint8_t get_context_label_sig(const uint32_t &j1, const uint32_t &j2) const;
+  //  OPENHTJ2K_NODISCARD uint8_t get_signLUT_index(const uint32_t &j1, const uint32_t &j2) const;
+  OPENHTJ2K_NODISCARD uint8_t get_Mb() const;
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   void create_compressed_buffer(buf_chain *tile_buf, int32_t buf_limit, const uint16_t &layer);
   //  void update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1, const int16_t &j2)
   //  const; void update_sign(const int8_t &val, const uint32_t &j1, const uint32_t &j2) const;
-  //  [[nodiscard]] uint8_t get_sign(const uint32_t &j1, const uint32_t &j2) const;
+  //  OPENHTJ2K_NODISCARD uint8_t get_sign(const uint32_t &j1, const uint32_t &j2) const;
   void quantize(uint32_t &or_val);
   uint8_t calc_mbr(uint32_t i, uint32_t j, uint8_t causal_cond) const;
   void dequantize(uint8_t ROIshift) const;
@@ -208,11 +208,11 @@ class j2k_subband : public j2k_region {
   uint8_t orientation;
   uint8_t transformation;
   uint8_t R_b;
-  [[maybe_unused]] uint8_t epsilon_b;
-  [[maybe_unused]] uint16_t mantissa_b;
+  OPENHTJ2K_MAYBE_UNUSED uint8_t epsilon_b;
+  OPENHTJ2K_MAYBE_UNUSED uint16_t mantissa_b;
   uint8_t M_b;
   float delta;
-  [[maybe_unused]] float nominal_range;
+  OPENHTJ2K_MAYBE_UNUSED float nominal_range;
   sprec_t *i_samples;
 
   // j2k_subband();
@@ -233,7 +233,7 @@ class j2k_subband : public j2k_region {
  *******************************************************************************/
 class j2k_precinct_subband : public j2k_region {
  private:
-  [[maybe_unused]] const uint8_t orientation;
+  OPENHTJ2K_MAYBE_UNUSED const uint8_t orientation;
   tagtree *inclusion_info;
   tagtree *ZBP_info;
   // Flat array of codeblock objects (placement-new'd into a single allocation)
@@ -277,7 +277,7 @@ class j2k_precinct_subband : public j2k_region {
 class j2k_precinct : public j2k_region {
  private:
   // index of this precinct
-  [[maybe_unused]] const uint32_t index;
+  OPENHTJ2K_MAYBE_UNUSED const uint32_t index;
   // index of resolution level to which this precinct belongs
   const uint8_t resolution;
   // number of subbands in this precinct
@@ -305,7 +305,7 @@ class j2k_precinct : public j2k_region {
 
   j2k_precinct_subband *access_pband(uint8_t b);
   void set_length(uint32_t len) { length = len; }
-  [[nodiscard]] uint32_t get_length() const { return length; }
+  OPENHTJ2K_NODISCARD uint32_t get_length() const { return length; }
 };
 
 /********************************************************************************
@@ -313,12 +313,12 @@ class j2k_precinct : public j2k_region {
  *******************************************************************************/
 class j2c_packet {
  public:
-  [[maybe_unused]] uint16_t layer;
-  [[maybe_unused]] uint8_t resolution;
-  [[maybe_unused]] uint16_t component;
-  [[maybe_unused]] uint32_t precinct;
-  [[maybe_unused]] buf_chain *header;
-  [[maybe_unused]] buf_chain *body;
+  OPENHTJ2K_MAYBE_UNUSED uint16_t layer;
+  OPENHTJ2K_MAYBE_UNUSED uint8_t resolution;
+  OPENHTJ2K_MAYBE_UNUSED uint16_t component;
+  OPENHTJ2K_MAYBE_UNUSED uint32_t precinct;
+  OPENHTJ2K_MAYBE_UNUSED buf_chain *header;
+  OPENHTJ2K_MAYBE_UNUSED buf_chain *body;
   // only for encoder
   std::unique_ptr<uint8_t[]> buf;
   uint32_t length;
@@ -365,7 +365,7 @@ class j2k_resolution : public j2k_region {
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
                  const uint32_t &nph, bool no_alloc = false);
   ~j2k_resolution();
-  [[maybe_unused]] uint8_t get_index() const { return index; }
+  OPENHTJ2K_MAYBE_UNUSED uint8_t get_index() const { return index; }
   void create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                        std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
                        uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
@@ -412,9 +412,9 @@ class j2k_tile_part {
   explicit j2k_tile_part(uint16_t num_components);
   void set_SOT(SOT_marker &tmpSOT);
   int read(j2c_src_memory &);
-  [[maybe_unused]] [[nodiscard]] uint16_t get_tile_index() const;
-  [[maybe_unused]] [[nodiscard]] uint8_t get_tile_part_index() const;
-  [[nodiscard]] uint32_t get_length() const;
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint16_t get_tile_index() const;
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint8_t get_tile_part_index() const;
+  OPENHTJ2K_NODISCARD uint32_t get_length() const;
   uint8_t *get_buf();
   void set_tile_index(uint16_t t);
   void set_tile_part_index(uint8_t tp);
@@ -491,11 +491,11 @@ class j2k_tile_component : public j2k_tile_base {
   int32_t *get_sample_address(uint32_t x, uint32_t y);
   uint8_t get_dwt_levels();
   uint8_t get_transformation();
-  [[maybe_unused]] [[nodiscard]] uint8_t get_Cmodes() const;
-  [[maybe_unused]] [[nodiscard]] uint8_t get_bitdepth() const;
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint8_t get_Cmodes() const;
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint8_t get_bitdepth() const;
   element_siz get_precinct_size(uint8_t r);
-  [[maybe_unused]] element_siz get_codeblock_size();
-  [[maybe_unused]] [[nodiscard]] uint8_t get_ROIshift() const;
+  OPENHTJ2K_MAYBE_UNUSED element_siz get_codeblock_size();
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint8_t get_ROIshift() const;
   j2k_resolution *access_resolution(uint8_t r);
   void create_resolutions(uint16_t numlayers, bool line_based = false, bool enc_lb = false);
 
@@ -618,9 +618,9 @@ class j2k_tile : public j2k_tile_base {
  private:
   std::unique_ptr<EncodePoolCtx> encode_pool_ctx;
   // return SOP is used or not
-  [[nodiscard]] bool is_use_SOP() const { return this->use_SOP; }
+  OPENHTJ2K_NODISCARD bool is_use_SOP() const { return this->use_SOP; }
   // return EPH is used or not
-  [[maybe_unused]] [[nodiscard]] bool is_use_EPH() const { return this->use_EPH; }
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD bool is_use_EPH() const { return this->use_EPH; }
   // set members related to COD marker
   void setCODparams(COD_marker *COD);
   // set members related to QCD marker
@@ -693,13 +693,13 @@ class j2k_tile : public j2k_tile_base {
   void write_packets(j2c_dst_memory &outbuf);
 
   // getters
-  [[maybe_unused]] [[nodiscard]] uint16_t get_numlayers() const { return this->numlayers; }
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint16_t get_numlayers() const { return this->numlayers; }
   j2k_tile_component *get_tile_component(uint16_t c);
 
-  [[maybe_unused]] [[maybe_unused]] uint8_t get_byte_from_tile_buf();
-  [[maybe_unused]] uint8_t get_bit_from_tile_buf();
-  [[nodiscard]] uint32_t get_length() const;
-  [[maybe_unused]] uint32_t get_buf_length();
+  OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_MAYBE_UNUSED uint8_t get_byte_from_tile_buf();
+  OPENHTJ2K_MAYBE_UNUSED uint8_t get_bit_from_tile_buf();
+  OPENHTJ2K_NODISCARD uint32_t get_length() const;
+  OPENHTJ2K_MAYBE_UNUSED uint32_t get_buf_length();
 };
 
 int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;

@@ -76,8 +76,8 @@ class j2c_dst_memory {
   int32_t put_N_bytes(uint8_t *src, uint32_t length);
   int32_t flush(std::ofstream &dst);
   int32_t flush(std::vector<uint8_t> *obuf);
-  [[nodiscard]] size_t get_length() const;
-  [[maybe_unused]] void print_bytes();
+  OPENHTJ2K_NODISCARD size_t get_length() const;
+  OPENHTJ2K_MAYBE_UNUSED void print_bytes();
 };
 
 class buf_chain {
@@ -174,9 +174,9 @@ class buf_chain {
       this->get_bit();
     }
   }
-  [[nodiscard]] uint32_t get_total_length() const { return total_length; }
+  OPENHTJ2K_NODISCARD uint32_t get_total_length() const { return total_length; }
 
-  [[maybe_unused]] uint8_t get_specific_byte(uint32_t bufpos) { return *(current_buf + bufpos); }
+  OPENHTJ2K_MAYBE_UNUSED uint8_t get_specific_byte(uint32_t bufpos) { return *(current_buf + bufpos); }
   uint8_t get_byte() {
     if (pos > current_length - 1) {
       node_pos++;
@@ -188,7 +188,7 @@ class buf_chain {
     return *(current_buf + pos++);
   }
 
-  [[maybe_unused]] uint8_t *get_current_address() {
+  OPENHTJ2K_MAYBE_UNUSED uint8_t *get_current_address() {
     if (pos > current_length - 1) {
       node_pos++;
       assert(node_pos <= num_nodes);
@@ -266,7 +266,7 @@ class packet_header_writer {
     put_bit(1);
   };
 
-  [[nodiscard]] uint32_t get_length() const { return pos; }
+  OPENHTJ2K_NODISCARD uint32_t get_length() const { return pos; }
 
   size_t copy_buf(uint8_t *p) {
     for (size_t i = 0; i < buf.size(); ++i) {
@@ -347,21 +347,21 @@ class tagtree_node {
     parent_index = pi;
   }
   void add_child(int32_t val = 0) { child_index[num_children++] = val; }
-  [[nodiscard]] uint8_t get_level() const { return level; }
-  [[nodiscard]] int32_t get_index() const { return index; }
-  [[nodiscard]] int32_t get_parent_index() const { return parent_index; }
-  [[nodiscard]] const int32_t *get_child_index() const { return child_index; }
-  [[nodiscard]] uint8_t get_num_children() const { return num_children; }
-  [[nodiscard]] uint8_t get_state() const { return state; }
+  OPENHTJ2K_NODISCARD uint8_t get_level() const { return level; }
+  OPENHTJ2K_NODISCARD int32_t get_index() const { return index; }
+  OPENHTJ2K_NODISCARD int32_t get_parent_index() const { return parent_index; }
+  OPENHTJ2K_NODISCARD const int32_t *get_child_index() const { return child_index; }
+  OPENHTJ2K_NODISCARD uint8_t get_num_children() const { return num_children; }
+  OPENHTJ2K_NODISCARD uint8_t get_state() const { return state; }
   void set_state(uint8_t s) { state = s; }
-  [[nodiscard]] uint16_t get_current_value() const { return current_value; }
+  OPENHTJ2K_NODISCARD uint16_t get_current_value() const { return current_value; }
   void set_current_value(uint16_t cv) { current_value = cv; }
-  [[nodiscard]] uint16_t get_value() const { return value; }
+  OPENHTJ2K_NODISCARD uint16_t get_value() const { return value; }
   void set_value(uint16_t v) {
     value    = v;
     set_flag = true;
   }
-  [[nodiscard]] bool is_set() const { return set_flag; }
+  OPENHTJ2K_NODISCARD bool is_set() const { return set_flag; }
 };
 
 class tagtree {

@@ -163,7 +163,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     emb_k_1 = (tv1 & 0xF000) >> 12;
     emb_1_1 = (tv1 & 0x0F00) >> 8;
 
-    if constexpr (!skip_sigma) {
+    if (!skip_sigma) {
       *sp0++ = (rho0 >> 0) & 1;
       *sp0++ = (rho0 >> 2) & 1;
       *sp0++ = (rho1 >> 0) & 1;
@@ -324,7 +324,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       context |= ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0x2) << 6);
       context |= ((rho_p[2] & 0x8) << 6) | ((rho_p[3] & 0x2) << 8);
 
-      if constexpr (!skip_sigma) {
+      if (!skip_sigma) {
         *sp0++ = (rho0 >> 0) & 1;
         *sp0++ = (rho0 >> 2) & 1;
         *sp0++ = (rho1 >> 0) & 1;

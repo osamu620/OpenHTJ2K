@@ -125,7 +125,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     sp[2] = tv1;
 
     // store sigma
-    if constexpr (!skip_sigma) {
+    if (!skip_sigma) {
       *sp0++ = ((tv0 >> 4) >> 0) & 1;
       *sp0++ = ((tv0 >> 4) >> 2) & 1;
       *sp0++ = ((tv1 >> 4) >> 0) & 1;
@@ -225,7 +225,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       sp[2] = tv1;
 
       // store sigma
-      if constexpr (!skip_sigma) {
+      if (!skip_sigma) {
         *sp0++ = ((tv0 >> 4) >> 0) & 1;
         *sp0++ = ((tv0 >> 4) >> 2) & 1;
         *sp0++ = ((tv1 >> 4) >> 0) & 1;

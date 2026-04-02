@@ -109,7 +109,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     sp[2] = tv1;
 
     // store sigma
-    if constexpr (!skip_sigma) {
+    if (!skip_sigma) {
       *sp0++ = ((tv0 >> 4) >> 0) & 1;
       *sp0++ = ((tv0 >> 4) >> 2) & 1;
       *sp0++ = ((tv1 >> 4) >> 0) & 1;
@@ -207,7 +207,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       sp[2] = tv1;
 
       // store sigma
-      if constexpr (!skip_sigma) {
+      if (!skip_sigma) {
         *sp0++ = ((tv0 >> 4) >> 0) & 1;
         *sp0++ = ((tv0 >> 4) >> 2) & 1;
         *sp0++ = ((tv1 >> 4) >> 0) & 1;
@@ -1006,7 +1006,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     }
   } else {
     // lossy path
-    [[maybe_unused]] int32_t ROImask = 0;
+    OPENHTJ2K_MAYBE_UNUSED int32_t ROImask = 0;
     if (ROIshift) {
       ROImask = static_cast<int32_t>(0xFFFFFFFF);
     }

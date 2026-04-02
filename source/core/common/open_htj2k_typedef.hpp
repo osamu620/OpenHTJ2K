@@ -30,6 +30,15 @@
 
 #include <cstdint>
 
+// Portability macros for C++17 attributes — expand to nothing in C++14/11.
+#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+  #define OPENHTJ2K_NODISCARD [[nodiscard]]
+  #define OPENHTJ2K_MAYBE_UNUSED [[maybe_unused]]
+#else
+  #define OPENHTJ2K_NODISCARD
+  #define OPENHTJ2K_MAYBE_UNUSED
+#endif
+
 // calc BIBO gain? if not, LUT is used
 //#define BIBO
 

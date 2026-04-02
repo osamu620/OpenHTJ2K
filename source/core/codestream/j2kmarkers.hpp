@@ -55,7 +55,7 @@ class j2k_marker_io_base {
   ~j2k_marker_io_base() = default;
   void set_buf(uint8_t *p);
 
-  [[maybe_unused]] uint16_t get_marker() const;
+  OPENHTJ2K_MAYBE_UNUSED uint16_t get_marker() const;
   uint16_t get_length() const;
   uint8_t *get_buf();
   uint8_t get_byte();
@@ -114,7 +114,7 @@ class CAP_marker : public j2k_marker_io_base {
   explicit CAP_marker(j2c_src_memory &in);
   void set_Ccap(uint16_t val, uint8_t Ccap);
 
-  [[maybe_unused]] uint32_t get_Pcap() const;
+  OPENHTJ2K_MAYBE_UNUSED uint32_t get_Pcap() const;
   uint16_t get_Ccap(uint8_t n);
   int write(j2c_dst_memory &dst);
 };
@@ -262,7 +262,7 @@ class POC_marker : public j2k_marker_io_base {
   POC_marker(j2c_src_memory &in, uint16_t Csiz);
   void add(uint8_t RS, uint16_t CS, uint16_t LYE, uint8_t RE, uint16_t CE, uint8_t P);
 
-  [[maybe_unused]] unsigned long get_num_poc() const;
+  OPENHTJ2K_MAYBE_UNUSED unsigned long get_num_poc() const;
 };
 
 /********************************************************************************
@@ -355,7 +355,7 @@ class SOT_marker : public j2k_marker_io_base {
   uint32_t get_tile_part_length() const;
   uint8_t get_tile_part_index() const;
 
-  [[maybe_unused]] uint8_t get_number_of_tile_parts() const;
+  OPENHTJ2K_MAYBE_UNUSED uint8_t get_number_of_tile_parts() const;
 };
 
 /********************************************************************************

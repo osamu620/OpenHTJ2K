@@ -29,6 +29,7 @@
 #pragma once
 
 #include <cstdint>
+#include "open_htj2k_typedef.hpp"
 
 //#define MQNAIVE
 //#define CDP
@@ -47,7 +48,7 @@ class mq_decoder {
   // position in byte-stream
   uint32_t L;
   // start position in byte-stream
-  [[maybe_unused]] uint32_t L_start;
+  OPENHTJ2K_MAYBE_UNUSED uint32_t L_start;
   // position of current codeword segment boundary
   uint32_t Lmax;
   // dynamic table for context

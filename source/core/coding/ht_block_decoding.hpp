@@ -1456,7 +1456,7 @@ class MR_dec {
 //  }
 //}
 //
-//[[maybe_unused]] uint8_t state_MS_dec::importMagSgnBit() {
+//OPENHTJ2K_MAYBE_UNUSED uint8_t state_MS_dec::importMagSgnBit() {
 //  uint8_t val;
 //  if (bits == 0) {
 //    bits = (last == 0xFF) ? 7 : 8;
@@ -1481,7 +1481,7 @@ class MR_dec {
 //  return val;
 //}
 //
-//[[maybe_unused]] int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
+//OPENHTJ2K_MAYBE_UNUSED int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
 //  int32_t val = 0;
 //  // uint8_t bit;
 //  if (m_n > 0) {
@@ -1636,7 +1636,7 @@ class MR_dec {
 //}
 // #endif
 //
-//[[maybe_unused]] void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2],
+//OPENHTJ2K_MAYBE_UNUSED void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2],
 //                                                  uint8_t (&rho)[2], uint8_t (&emb_k)[2],
 //                                                  uint8_t (&emb_1)[2], const uint8_t &first_or_second,
 //                                                  const uint16_t *dec_CxtVLC_table) {
@@ -1673,7 +1673,7 @@ class MR_dec {
 // #endif
 //}
 //
-//[[maybe_unused]] uint8_t state_VLC_dec::decodeUPrefix() {
+//OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUPrefix() {
 //  if (getbitfunc == 1) {
 //    return 1;
 //  }
@@ -1687,7 +1687,7 @@ class MR_dec {
 //  }
 //}
 //
-//[[maybe_unused]] uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
+//OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
 //  uint8_t bit, val;
 //  if (u_pfx < 3) {
 //    return 0;
@@ -1702,7 +1702,7 @@ class MR_dec {
 //  }
 //  return val;
 //}
-//[[maybe_unused]] uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
+//OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
 //  uint8_t bit, val;
 //  if (u_sfx < 28) {
 //    return 0;
@@ -1763,7 +1763,7 @@ uint8_t MR_dec::importMagRefBit() {
   return val;
 }
 
-//[[maybe_unused]] auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec,
+//OPENHTJ2K_MAYBE_UNUSED auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec,
 //                                        const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
 //                                        uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
 //                                        const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table)
