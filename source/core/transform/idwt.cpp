@@ -678,9 +678,7 @@ static inline int8_t max_dl(uint8_t transform) { return (transform == 0) ? 2 : 1
 
 // True if physical row r is a low-pass (LP) row at this level.
 // LP rows are always at even absolute positions, regardless of v0.
-static inline bool is_lp(const idwt_2d_state *, int32_t r) {
-  return (r & 1) == 0;
-}
+static inline bool is_lp(int32_t r) { return (r & 1) == 0; }
 
 // Physical source row for PSE position p via periodic symmetric extension.
 static inline int32_t pse_source(int32_t p, int32_t v0, int32_t v1) {
@@ -721,32 +719,18 @@ static void set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) { s->bot_dlevel[r - s->v1] = lv; }
 }
 
-// Required d_level of neighbor rows for row r to advance one level.
-//   9/7: LP: step D (cur 0→1) needs HP neighbors @0; step B (cur 1→2) needs HP @1
-//        HP: step C (cur 0→1) needs LP neighbors @1; step A (cur 1→2) needs LP @2
-//   5/3: LP: step Update (cur 0→1) needs HP @0; HP: step Predict (cur 0→1) needs LP @1
-static int8_t needed_neighbor_dl(const idwt_2d_state *s, int32_t r) {
-  const bool lp  = is_lp(s, r);
-  const int8_t cur = get_dl(s, r);
-  if (s->transformation == 0) {  // irrev 9/7
-    if (lp)  return (cur == 0) ? 0 : 1;   // D needs HP@0, B needs HP@1
-    else     return (cur == 0) ? 1 : 2;   // C needs LP@1, A needs LP@2
-  } else {                                 // rev 5/3
-    return lp ? 0 : 1;                    // Update needs HP@0, Predict needs LP@1
-  }
-}
-
-static bool can_adv(const idwt_2d_state *s, int32_t r) {
-  const int8_t cur = get_dl(s, r);
-  if (cur < 0 || cur >= max_dl(s->transformation)) return false;
-  const int8_t need = needed_neighbor_dl(s, r);
-  return get_dl(s, r - 1) >= need && get_dl(s, r + 1) >= need;
+// Required d_level of neighbor rows for row r to advance one level (irrev 9/7 only).
+//   LP: step D (cur 0→1) needs HP neighbors @0; step B (cur 1→2) needs HP @1
+//   HP: step C (cur 0→1) needs LP neighbors @1; step A (cur 1→2) needs LP @2
+// Simplified: for LP need = cur, for HP need = cur + 1.
+static inline int8_t needed_neighbor_dl_97(bool lp, int8_t cur) {
+  return lp ? cur : static_cast<int8_t>(cur + 1);
 }
 
 // Apply one lifting step to row r and increment its d_level.
-static void adv_step(idwt_2d_state *s, int32_t r) {
-  const bool  lp  = is_lp(s, r);
-  const int8_t cur = get_dl(s, r);
+// cur must be the current d_level of row r (caller already fetched it).
+static void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
+  const bool    lp   = is_lp(r);
   sprec_t *tgt  = rptr(s, r);
   sprec_t *prev = rptr(s, r - 1);
   sprec_t *next = rptr(s, r + 1);
@@ -812,27 +796,38 @@ static void cascade(idwt_2d_state *s) {
 
   if (s->transformation == 1) {
     // Rev 5/3: exactly two phases — LP Update then HP Predict. No while(progress) needed.
+    // All rows that advance start at dl=0, so cur=0 is known.
 
     // Phase 1: Update LP rows (even absolute index) — need HP neighbors at dl >= 0.
     const int32_t lp0 = lo + (lo & 1);   // first even row >= lo  (works for negative lo)
     for (int32_t r = lp0; r < hi; r += 2) {
       if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 0 && get_dl(s, r + 1) >= 0)
-        adv_step(s, r);
+        adv_step(s, r, 0);
     }
 
     // Phase 2: Predict HP rows (odd absolute index) — need LP neighbors at dl >= 1.
     const int32_t hp0 = lo + (1 - (lo & 1));   // first odd row >= lo
     for (int32_t r = hp0; r < hi; r += 2) {
       if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1)
-        adv_step(s, r);
+        adv_step(s, r, 0);
     }
   } else {
     // Irrev 9/7: generic while(progress) loop (max_dl=2, cascade≤4 passes).
+    // Inline can_adv + needed_neighbor_dl to avoid redundant get_dl calls for row r
+    // and the repeated max_dl()/is_lp() overhead across 31M+ iterations.
+    const int8_t mxdl = max_dl(s->transformation);
     bool progress = true;
     while (progress) {
       progress = false;
       for (int32_t r = lo; r < hi; ++r) {
-        if (can_adv(s, r)) { adv_step(s, r); progress = true; }
+        const int8_t cur = get_dl(s, r);
+        if (cur < 0 || cur >= mxdl) continue;
+        const bool lp = is_lp(r);
+        const int8_t need = needed_neighbor_dl_97(lp, cur);
+        if (get_dl(s, r - 1) >= need && get_dl(s, r + 1) >= need) {
+          adv_step(s, r, cur);
+          progress = true;
+        }
       }
     }
   }
