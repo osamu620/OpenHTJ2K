@@ -3204,8 +3204,8 @@ void j2k_tile::decode() {
         alloc_samples_bytes = need_samples;
       }
       if (need_states > alloc_states_bytes) {
-        std::free(buf_for_states);
-        buf_for_states     = static_cast<uint8_t *>(malloc(need_states));
+        aligned_mem_free(buf_for_states);
+        buf_for_states     = static_cast<uint8_t *>(aligned_mem_alloc(need_states, 32));
         alloc_states_bytes = need_states;
       }
 
