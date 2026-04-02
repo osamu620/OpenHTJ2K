@@ -605,7 +605,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   int32x4_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1, vpLSB;
   vpLSB    = vdupq_n_s32(pLSB);
   vmagmask = vdupq_n_s32(INT32_MAX);
-  if (this->transformation) {
+  if (this->transformation == 1) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;

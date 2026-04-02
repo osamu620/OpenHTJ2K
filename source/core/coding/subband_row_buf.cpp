@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <memory>
 #include <vector>
+#include <cstdio>
 #include "subband_row_buf.hpp"
 #include "block_decoding.hpp"
 #include "../common/open_htj2k_typedef.hpp"

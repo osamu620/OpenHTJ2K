@@ -137,7 +137,9 @@ class PnmStreamReader {
   void get_row(uint32_t y, int32_t **rows, uint16_t /*nc*/) {
     const long row_bytes = static_cast<long>(raw_.size());
     fseek(fp_, data_start_ + y * row_bytes, SEEK_SET);
-    fread(raw_.data(), 1, raw_.size(), fp_);
+    if (fread(raw_.data(), 1, raw_.size(), fp_) != raw_.size()) {
+      throw std::runtime_error("fread: failed to read row data");
+    }
     if (bps_ == 1) {
       if (isPPM_) {
         for (uint32_t x = 0; x < width_; ++x) {

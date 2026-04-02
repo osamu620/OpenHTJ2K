@@ -280,8 +280,8 @@ class j2k_precinct : public j2k_region {
   OPENHTJ2K_MAYBE_UNUSED const uint32_t index;
   // index of resolution level to which this precinct belongs
   const uint8_t resolution;
-  // number of subbands in this precinct
-  const uint8_t num_bands;
+  // number of subbands in this precinct (DFS-dependent)
+  uint8_t num_bands;
   // length which includes packet header and body, used only for encoder
   uint32_t length;
   // container for a subband within this precinct which includes codeblocks
@@ -296,16 +296,13 @@ class j2k_precinct : public j2k_region {
  public:
   j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_siz &p0, const element_siz &p1,
                const std::unique_ptr<std::unique_ptr<j2k_subband>[]> &subband, const uint16_t &num_layers,
-               const element_siz &codeblock_size, const uint8_t &Cmodes);
-  //  ~j2k_precinct() {
-  //    for (size_t i = 0; i < num_bands; ++i) {
-  //      pband[i]->destroy_codeblocks();
-  //    }
-  //  }
+               const element_siz &codeblock_size, const uint8_t &Cmodes, uint8_t nb = 0,
+               dwt_type dfs_dir = DWT_BIDIR);
 
   j2k_precinct_subband *access_pband(uint8_t b);
   void set_length(uint32_t len) { length = len; }
   OPENHTJ2K_NODISCARD uint32_t get_length() const { return length; }
+  OPENHTJ2K_NODISCARD uint8_t get_num_bands() const { return num_bands; }
 };
 
 /********************************************************************************
@@ -348,8 +345,10 @@ class j2k_resolution : public j2k_region {
   float child_ranges[4]{};
 
  public:
-  // number of subbands
-  const uint8_t num_bands;
+  // number of subbands (DFS-dependent; 1 for LL and HORZ/VERT levels, 3 for BIDIR)
+  uint8_t num_bands;
+  // DWT type for this resolution (DWT_BIDIR for standard, DWT_HORZ/VERT when DFS active)
+  dwt_type transform_direction;
   // number of precincts wide
   const uint32_t npw;
   // number of precincts height
@@ -361,18 +360,17 @@ class j2k_resolution : public j2k_region {
   // pre-shift value for forward DWT
   uint8_t normalizing_downshift;
   sprec_t *i_samples;
-  //  float *f_samples;
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
-                 const uint32_t &nph, bool no_alloc = false);
+                 const uint32_t &nph, bool no_alloc = false, uint8_t nb = 0,
+                 dwt_type dir = DWT_BIDIR);
   ~j2k_resolution();
   OPENHTJ2K_MAYBE_UNUSED uint8_t get_index() const { return index; }
   void create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                        std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
                        uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
-                       bool line_based = false);
+                       bool line_based = false, const DFS_marker *dfs = nullptr);
   void create_precincts(element_siz PP, uint16_t num_layers, element_siz codeblock_size, uint8_t Cmodes);
 
-  // void create_precinct_bands(uint16_t num_layers, element_siz codeblock_size, uint8_t Cmodes);
   j2k_precinct *access_precinct(uint32_t p);
   j2k_subband *access_subband(uint8_t b);
   void set_nominal_ranges(const float *ranges) {
@@ -459,6 +457,8 @@ class j2k_tile_component : public j2k_tile_base {
   int32_t *samples;
   // shift value for ROI
   uint8_t ROIshift;
+  // DFS index for this component (0 = DFS not active)
+  uint8_t dfs_index = 0;
   // pointer to instances of resolution class
   std::unique_ptr<std::unique_ptr<j2k_resolution>[]> resolution;
   // opaque line-decode state (allocated by init_line_decode, freed by finalize_line_decode)
@@ -498,6 +498,9 @@ class j2k_tile_component : public j2k_tile_base {
   OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint8_t get_ROIshift() const;
   j2k_resolution *access_resolution(uint8_t r);
   void create_resolutions(uint16_t numlayers, bool line_based = false, bool enc_lb = false);
+  // DFS/ATK pointers resolved during init; nullptr = not active for this component.
+  const DFS_marker *dfs_info = nullptr;
+  const ATK_marker *atk_info = nullptr;
 
   void perform_dc_offset(uint8_t transformation, bool is_signed);
 

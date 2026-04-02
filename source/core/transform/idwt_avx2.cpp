@@ -159,6 +159,74 @@ void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_
   }
 }
 
+// ATK irreversible 5/3 horizontal IDWT — same structure as rev53 but without floor().
+// Step 1: LP[k] -= 0.25*(HP[k-1] + HP[k])
+// Step 2: HP[k] += 0.5*(LP_mod[k] + LP_mod[k+1])
+// slli_epi64 trick: shifts each 64-bit lane left 32 bits, placing the even-element sum at the odd
+// (update-target) slot and zeroing the even (pass-through) slot — no blend or separate scatter needed.
+void idwt_1d_filtr_irrev53_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                      const int32_t u_i1) {
+  const int32_t i0     = static_cast<int32_t>(u_i0);
+  const int32_t i1     = static_cast<int32_t>(u_i1);
+  const int32_t start  = i0 / 2;
+  const int32_t stop   = i1 / 2;
+  const int32_t offset = left - i0 % 2;
+
+  // Step 1: LP[k] -= 0.25*(HP[k-1]+HP[k])
+  // sp-1: [HP[k-1], LP[k], HP[k], LP[k+1], ...];  sp+1: [HP[k], LP[k+1], HP[k+1], ...]
+  // slli places HP sums at LP (odd) positions; fnmadd updates only those, passes HP through.
+  int32_t simdlen = stop + 1 - start;
+  sprec_t *sp     = X + offset;
+  const auto x025 = _mm256_set1_ps(0.25f);
+  int32_t i = 0;
+  for (; i + 4 < simdlen; i += 8, sp += 16) {
+    auto xin0a = _mm256_loadu_ps(sp - 1);
+    auto xin2a = _mm256_loadu_ps(sp + 1);
+    auto xin0b = _mm256_loadu_ps(sp + 7);
+    auto xin2b = _mm256_loadu_ps(sp + 9);
+    auto xsuma = _mm256_castsi256_ps(_mm256_slli_epi64(_mm256_castps_si256(_mm256_add_ps(xin0a, xin2a)), 32));
+    auto xsumb = _mm256_castsi256_ps(_mm256_slli_epi64(_mm256_castps_si256(_mm256_add_ps(xin0b, xin2b)), 32));
+    xin0a = _mm256_fnmadd_ps(xsuma, x025, xin0a);
+    xin0b = _mm256_fnmadd_ps(xsumb, x025, xin0b);
+    _mm256_storeu_ps(sp - 1, xin0a);
+    _mm256_storeu_ps(sp + 7, xin0b);
+  }
+  for (; i < simdlen; i += 4, sp += 8) {
+    auto xin0 = _mm256_loadu_ps(sp - 1);
+    auto xin2 = _mm256_loadu_ps(sp + 1);
+    auto xsum = _mm256_castsi256_ps(_mm256_slli_epi64(_mm256_castps_si256(_mm256_add_ps(xin0, xin2)), 32));
+    xin0      = _mm256_fnmadd_ps(xsum, x025, xin0);
+    _mm256_storeu_ps(sp - 1, xin0);
+  }
+
+  // Step 2: HP[k] += 0.5*(LP_mod[k]+LP_mod[k+1])
+  // sp: [LP[k], HP[k], ...];  sp+2: [LP[k+1], HP[k+1], ...]
+  // slli places LP sums at HP (odd) positions; fmadd updates only those, passes LP through.
+  simdlen = stop - start;
+  sp      = X + offset;
+  const auto x05 = _mm256_set1_ps(0.5f);
+  i = 0;
+  for (; i + 4 < simdlen; i += 8, sp += 16) {
+    auto xin0a = _mm256_loadu_ps(sp);
+    auto xin2a = _mm256_loadu_ps(sp + 2);
+    auto xin0b = _mm256_loadu_ps(sp + 8);
+    auto xin2b = _mm256_loadu_ps(sp + 10);
+    auto xsuma = _mm256_castsi256_ps(_mm256_slli_epi64(_mm256_castps_si256(_mm256_add_ps(xin0a, xin2a)), 32));
+    auto xsumb = _mm256_castsi256_ps(_mm256_slli_epi64(_mm256_castps_si256(_mm256_add_ps(xin0b, xin2b)), 32));
+    xin0a = _mm256_fmadd_ps(xsuma, x05, xin0a);
+    xin0b = _mm256_fmadd_ps(xsumb, x05, xin0b);
+    _mm256_storeu_ps(sp, xin0a);
+    _mm256_storeu_ps(sp + 8, xin0b);
+  }
+  for (; i < simdlen; i += 4, sp += 8) {
+    auto xin0 = _mm256_loadu_ps(sp);
+    auto xin2 = _mm256_loadu_ps(sp + 2);
+    auto xsum = _mm256_castsi256_ps(_mm256_slli_epi64(_mm256_castps_si256(_mm256_add_ps(xin0, xin2)), 32));
+    xin0      = _mm256_fmadd_ps(xsum, x05, xin0);
+    _mm256_storeu_ps(sp, xin0);
+  }
+}
+
 /********************************************************************************
  * vertical transform
  *******************************************************************************/
@@ -355,6 +423,68 @@ void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
         for (int32_t col = cs + simdlen_s; col < ce; ++col) {
           buf[n + 1][col] += floorf((buf[n][col] + buf[n + 2][col]) * 0.5f);
         }
+      }
+    }
+  }
+}
+
+// ATK irreversible 5/3 vertical IDWT — same structure as rev53 vertical but without floor().
+// Step 1: LP[k] -= 0.25*(HP_above + HP_below)   [original HP rows]
+// Step 2: HP[k] += 0.5*(LP_mod_above + LP_mod_below)  [LP rows modified by step 1]
+// Row buffers (ring/PSE) are 32-byte aligned, so _mm256_load_ps is safe.
+void idwt_irrev53_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
+                                    const int32_t v1, const int32_t stride, sprec_t *pse_scratch,
+                                    sprec_t **buf_scratch) {
+  constexpr int32_t num_pse_i0[2] = {1, 2};
+  constexpr int32_t num_pse_i1[2] = {2, 1};
+  const int32_t top    = num_pse_i0[v0 % 2];
+  const int32_t bottom = num_pse_i1[v1 % 2];
+  if (v0 == v1 - 1) {
+    // single row: nothing to do
+  } else {
+    const int32_t len = round_up(stride, SIMD_PADDING);
+    sprec_t **buf     = buf_scratch;
+    for (int32_t i = 1; i <= top; ++i) {
+      buf[top - i] = pse_scratch + (i - 1) * len;
+      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride], sizeof(sprec_t) * static_cast<size_t>(stride));
+    }
+    for (int32_t row = 0; row < v1 - v0; ++row) buf[top + row] = &in[row * stride];
+    for (int32_t i = 1; i <= bottom; i++) {
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
+      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
+             sizeof(sprec_t) * static_cast<size_t>(stride));
+    }
+    const int32_t lp_count = ceil_int(v1, 2) - ceil_int(v0, 2);
+    const int32_t hp_count = v1 / 2 - v0 / 2;
+    const int32_t offset   = top - v0 % 2;
+    const int32_t lp_n0    = top + v0 % 2;
+    const int32_t width    = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 8;
+      const __m256 x025       = _mm256_set1_ps(0.25f);
+      for (int32_t k = 0, n = lp_n0; k < lp_count; ++k, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 8) {
+          __m256 x0 = _mm256_load_ps(buf[n - 1] + cs + col);
+          __m256 x2 = _mm256_load_ps(buf[n + 1] + cs + col);
+          __m256 x1 = _mm256_load_ps(buf[n]     + cs + col);
+          x1 = _mm256_fnmadd_ps(_mm256_add_ps(x0, x2), x025, x1);
+          _mm256_store_ps(buf[n] + cs + col, x1);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col)
+          buf[n][col] -= 0.25f * (buf[n - 1][col] + buf[n + 1][col]);
+      }
+      const __m256 x05 = _mm256_set1_ps(0.5f);
+      for (int32_t k = 0, n = offset; k < hp_count; ++k, n += 2) {
+        for (int32_t col = 0; col < simdlen_s; col += 8) {
+          __m256 x0 = _mm256_load_ps(buf[n]     + cs + col);
+          __m256 x2 = _mm256_load_ps(buf[n + 2] + cs + col);
+          __m256 x1 = _mm256_load_ps(buf[n + 1] + cs + col);
+          x1 = _mm256_fmadd_ps(_mm256_add_ps(x0, x2), x05, x1);
+          _mm256_store_ps(buf[n + 1] + cs + col, x1);
+        }
+        for (int32_t col = cs + simdlen_s; col < ce; ++col)
+          buf[n + 1][col] += 0.5f * (buf[n][col] + buf[n + 2][col]);
       }
     }
   }

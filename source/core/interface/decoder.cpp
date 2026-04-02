@@ -191,8 +191,12 @@ uint8_t openhtj2k_decoder_impl::get_minimum_DWT_levels() {
     size_t i = 0;
     for (uint16_t c = 0; c < this->get_num_component(); ++c) {
       if (main_header.COC[i]->get_component_index() == c) {
-        if (NL > main_header.COC[i]->get_dwt_levels()) {
-          NL = main_header.COC[i]->get_dwt_levels();
+        // When DFS is active, SPcoc[0] encodes the DFS index, not level count.
+        // Skip this COC for minimum level calculation; use COD's NL instead.
+        if (!main_header.COC[i]->is_dfs_defined()) {
+          if (NL > main_header.COC[i]->get_dwt_levels()) {
+            NL = main_header.COC[i]->get_dwt_levels();
+          }
         }
         ++i;
       }
@@ -277,7 +281,6 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
       tileSet[i].destroy();
       throw std::runtime_error("Abort Decoding!");
     };
-
     tileSet[i].decode();
     tileSet[i].ycbcr_to_rgb();
     tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer

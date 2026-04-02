@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cassert>
@@ -51,6 +52,7 @@ struct idwt_level_src_ctx {
   int32_t v0;           // first row of this resolution in full-tile space
   int32_t u0, u1;       // horizontal extent of this resolution
   uint8_t transformation;
+  dwt_type dir;         // DWT type for this level (BIDIR, HORZ, NO)
 
   // LL row source: either pull from child idwt_2d_state (levels > 1) or from ll0_buf (level 1).
   bool             has_child;
@@ -59,8 +61,8 @@ struct idwt_level_src_ctx {
 
   // HL / LH / HH subband row buffers for this resolution level.
   j2k_subband_row_buf *hl_buf;
-  j2k_subband_row_buf *lh_buf;
-  j2k_subband_row_buf *hh_buf;
+  j2k_subband_row_buf *lh_buf;         // null for HORZ and NO levels
+  j2k_subband_row_buf *hh_buf;         // null for HORZ and NO levels
 
   // Scratch rows for interleaving (allocated per level).
   // lp_tmp: used when has_child=true to receive output of idwt_2d_state_pull_row.
@@ -94,6 +96,60 @@ static inline int32_t pse_row_idx(int32_t idx, int32_t len) {
 static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   auto *c = static_cast<idwt_level_src_ctx *>(ctx);
 
+  // ── DWT_NO: passthrough — copy LL row directly ────────────────────────────
+  if (c->dir == DWT_NO) {
+    const int32_t sub_idx = abs_row - c->v0;
+    const sprec_t *lp_ptr;
+    if (c->has_child) {
+      lp_ptr = idwt_2d_state_pull_row_ref(c->child_state);
+      if (lp_ptr == nullptr) { memset(out, 0, sizeof(sprec_t) * static_cast<size_t>(c->lp_width)); return; }
+    } else {
+      const int32_t clamped = pse_row_idx(sub_idx, c->ll0_height);
+      lp_ptr = c->ll0_buf->row_ptr(c->ll_y0 + clamped);
+    }
+    memcpy(out, lp_ptr, sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
+    return;
+  }
+
+  // ── DWT_HORZ: all rows are LP-style — interleave LL+H then horizontal IDWT ─
+  // For HORZ levels, there is no vertical split: abs_row maps 1:1 to subband rows.
+  if (c->dir == DWT_HORZ) {
+    const int32_t sub_idx = abs_row - c->v0;  // direct row index (no /2)
+    const sprec_t *lp_ptr;
+    if (c->has_child) {
+      lp_ptr = idwt_2d_state_pull_row_ref(c->child_state);
+      if (lp_ptr == nullptr) {
+        memset(c->lp_tmp, 0, sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
+        lp_ptr = c->lp_tmp;
+      }
+    } else {
+      const int32_t clamped = pse_row_idx(sub_idx, c->ll0_height);
+      lp_ptr = c->ll0_buf->row_ptr(c->ll_y0 + clamped);
+    }
+    const sprec_t *hp_ptr = c->hl_buf->row_ptr(c->hl_y0 + sub_idx);
+    // Fall through to shared interleave + horizontal IDWT code below.
+    // Interleave: LP at u0%2, HP at 1-u0%2.
+    const int32_t u_off  = c->u0 & 1;
+    const int32_t min_w  = std::min(c->lp_width, c->hp_width);
+    if (u_off == 0) {
+      for (int32_t j = 0; j < c->lp_width; ++j)  out[2 * j]     = lp_ptr[j];
+      for (int32_t j = 0; j < c->hp_width; ++j)  out[2 * j + 1] = hp_ptr[j];
+    } else {
+      for (int32_t j = 0; j < c->hp_width; ++j)  out[2 * j]     = hp_ptr[j];
+      for (int32_t j = 0; j < c->lp_width; ++j)  out[2 * j + 1] = lp_ptr[j];
+    }
+    (void)min_w;  // suppress unused-variable warning (used in BIDIR path below)
+    const int32_t width = c->u1 - c->u0;
+    if (width <= 0) return;
+    if (width == 1) {
+      if ((c->u0 % 2 != 0) && (c->transformation == 1)) out[0] /= 2.0f;
+      return;
+    }
+    idwt_1d_row_inplace(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation);
+    return;
+  }
+
+  // ── DWT_BIDIR: LP rows (even) carry LL+HL, HP rows (odd) carry LH+HH ─────
   // LP rows are at even absolute positions; HP at odd.
   const bool lp = (abs_row & 1) == 0;
   // LP sub_idx = floor(abs_row/2) - ll_y0,  where ll_y0 = ceil(v0/2) = (v0+1)>>1
@@ -523,14 +579,13 @@ float bibo_step_gains[32][5] = {{1.00000000F, 4.17226868F, 1.44209458F, 2.109669
                                 {1.29921404F, 4.43678829F, 1.72124381F, 1.99614652F, 1.59825947F}};
 
 static void find_child_ranges(float *child_ranges, uint8_t &normalizing_upshift, float &normalization,
-                              uint8_t lev, uint32_t u0, uint32_t u1, uint32_t v0, uint32_t v1) {
+                              uint8_t lev, uint32_t u0, uint32_t u1, uint32_t v0, uint32_t v1,
+                              dwt_type dir = DWT_BIDIR, float K = 1.230174104914001F) {
   if (u0 == u1 || v0 == v1) {
     return;
   }
-  // constants
-  constexpr float K         = 1.230174104914001F;
-  constexpr float low_gain  = 1.0f / K;
-  constexpr float high_gain = K / 2.0f;
+  const float low_gain  = 1.0f / K;
+  const float high_gain = K / 2.0f;
 
   // initialization
   const bool unit_width  = (u0 == u1 - 1);
@@ -541,8 +596,12 @@ static void find_child_ranges(float *child_ranges, uint8_t &normalizing_upshift,
     child_ranges[b] = normalization;
   }
 
+  // DFS direction selects which axes are transformed
+  const bool do_vert = (dir == DWT_BIDIR || dir == DWT_VERT) && !unit_height;
+  const bool do_horz = (dir == DWT_BIDIR || dir == DWT_HORZ) && !unit_width;
+
   // vertical analysis gain, if any
-  if (!unit_height) {
+  if (do_vert) {
     child_ranges[BAND_LL] /= low_gain;
     child_ranges[BAND_HL] /= low_gain;
     child_ranges[BAND_LH] /= high_gain;
@@ -558,7 +617,7 @@ static void find_child_ranges(float *child_ranges, uint8_t &normalizing_upshift,
     }
   }
   // horizontal analysis gain, if any
-  if (!unit_width) {
+  if (do_horz) {
     child_ranges[BAND_LL] /= low_gain;
     child_ranges[BAND_HL] /= high_gain;
     child_ranges[BAND_LH] /= low_gain;
@@ -1463,11 +1522,11 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
                            const element_siz &p1,
                            const std::unique_ptr<std::unique_ptr<j2k_subband>[]> &subband,
                            const uint16_t &num_layers, const element_siz &codeblock_size,
-                           const uint8_t &Cmodes)
+                           const uint8_t &Cmodes, uint8_t nb, dwt_type dfs_dir)
     : j2k_region(p0, p1),
       index(idx),
       resolution(r),
-      num_bands((resolution == 0) ? 1 : 3),
+      num_bands((nb != 0) ? nb : ((resolution == 0) ? 1 : 3)),
       length(0),
       packet_header(nullptr),
       packet_header_length(0) {
@@ -1477,11 +1536,15 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
   const uint8_t xob[4] = {0, 1, 0, 1};
   const uint8_t yob[4] = {0, 0, 1, 1};
   for (unsigned long i = 0; i < num_bands; ++i) {
-    const uint32_t sr = (subband[i]->orientation == BAND_LL) ? 1 << 0 : 1 << 1;
-    const element_siz pbpos0(ceil_int(pos0.x - xob[subband[i]->orientation], sr),
-                             ceil_int(pos0.y - yob[subband[i]->orientation], sr));
-    const element_siz pbpos1(ceil_int(pos1.x - xob[subband[i]->orientation], sr),
-                             ceil_int(pos1.y - yob[subband[i]->orientation], sr));
+    const uint8_t ori = subband[i]->orientation;
+    uint32_t sr_x     = (ori == BAND_LL) ? 1U : 2U;
+    uint32_t sr_y     = (ori == BAND_LL) ? 1U : 2U;
+    // DFS HORZ: H band splits only horizontally — no vertical halving in precinct subband
+    if (dfs_dir == DWT_HORZ) sr_y = 1U;
+    // DFS VERT: H band splits only vertically — no horizontal halving
+    if (dfs_dir == DWT_VERT) sr_x = 1U;
+    const element_siz pbpos0(ceil_int(pos0.x - xob[ori], sr_x), ceil_int(pos0.y - yob[ori], sr_y));
+    const element_siz pbpos1(ceil_int(pos1.x - xob[ori], sr_x), ceil_int(pos1.y - yob[ori], sr_y));
     this->pband[i] = MAKE_UNIQUE<j2k_precinct_subband>(
         subband[i]->orientation, subband[i]->M_b, subband[i]->R_b, subband[i]->transformation,
         subband[i]->delta, subband[i]->i_samples, subband[i]->pos0, pbpos0, pbpos1, subband[i]->stride,
@@ -1541,13 +1604,15 @@ j2k_subband::~j2k_subband() {
  * j2k_resolution
  *******************************************************************************/
 j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1,
-                               const uint32_t &w, const uint32_t &h, bool no_alloc)
+                               const uint32_t &w, const uint32_t &h, bool no_alloc, uint8_t nb,
+                               dwt_type dir)
     : j2k_region(p0, p1),
       index(r),
       precincts(nullptr),
       subbands(nullptr),
       // public
-      num_bands((index == 0) ? 1 : 3),
+      num_bands((nb != 0) ? nb : ((index == 0) ? 1 : 3)),
+      transform_direction(dir),
       npw(w),
       nph(h),
       is_empty((npw * nph == 0)),
@@ -1578,7 +1643,7 @@ j2k_resolution::~j2k_resolution() { aligned_mem_free(i_samples); }
 void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                                      std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
                                      uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
-                                     bool line_based) {
+                                     bool line_based, const DFS_marker *dfs) {
   subbands = MAKE_UNIQUE<std::unique_ptr<j2k_subband>[]>(num_bands);
   uint8_t i;
   uint8_t b;
@@ -1587,7 +1652,25 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
   uint8_t gain_b[4] = {0, 1, 1, 2};
   uint8_t bstart    = (index == 0) ? 0 : 1;
   uint8_t bstop     = (index == 0) ? 0 : 3;
-  uint8_t nb        = static_cast<uint8_t>(NL - index);
+
+  // Determine DFS type and QCD offset for this resolution.
+  dwt_type dfs_type = transform_direction;  // already set by create_resolutions
+  uint8_t qcd_base  = 0;  // base index into exponents/mantissas for this resolution
+  if (dfs != nullptr && index > 0) {
+    qcd_base = dfs->qcd_offset[index];
+    // Adjust bstart/bstop based on DFS type.
+    if (dfs_type == DWT_HORZ) {
+      bstart = bstop = BAND_HL;  // only horizontal high-freq band
+    } else if (dfs_type == DWT_VERT) {
+      bstart = bstop = BAND_LH;  // only vertical high-freq band
+    } else if (dfs_type == DWT_NO) {
+      // NO_DWT: no high-freq bands; subbands array is empty (num_bands was set to 0).
+      return;
+    }
+    // BIDIR: bstart=1, bstop=3 as normal.
+  }
+
+  uint8_t nb = static_cast<uint8_t>(NL - index);
   if (index != 0) {
     nb++;
   }
@@ -1600,30 +1683,62 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
   float delta, nominal_range;
 
   for (i = 0, b = bstart; b <= bstop; b++, i++) {
-    const element_siz pos0(ceil_int(p0.x - (1U << (nb_1)) * xob[b], 1U << nb),
-                           ceil_int(p0.y - (1U << (nb_1)) * yob[b], 1U << nb));
-    const element_siz pos1(ceil_int(p1.x - (1U << (nb_1)) * xob[b], 1U << nb),
-                           ceil_int(p1.y - (1U << (nb_1)) * yob[b], 1U << nb));
+    // For DFS HORZ or VERT, the subband divides only one axis.
+    // xob/yob control which origin offset to subtract before halving.
+    element_siz spos0, spos1;
+    if (dfs != nullptr && index > 0 && dfs_type != DWT_BIDIR) {
+      if (dfs_type == DWT_HORZ) {
+        // Split only horizontally: x is halved, y spans full resolution extent.
+        spos0 = element_siz(ceil_int(p0.x - (1U << nb_1) * xob[BAND_HL], 1U << nb), pos0.y);
+        spos1 = element_siz(ceil_int(p1.x - (1U << nb_1) * xob[BAND_HL], 1U << nb), pos1.y);
+      } else {
+        // VERT: split only vertically: y is halved, x spans full resolution extent.
+        spos0 = element_siz(pos0.x, ceil_int(p0.y - (1U << nb_1) * yob[BAND_LH], 1U << nb));
+        spos1 = element_siz(pos1.x, ceil_int(p1.y - (1U << nb_1) * yob[BAND_LH], 1U << nb));
+      }
+    } else if (b == BAND_LL) {
+      // LL0 (index==0): use the resolution's own pos0/pos1.
+      // create_resolutions already accounts for DFS (only BIDIR/VERT levels split vertically),
+      // so pos0/pos1 are correct for both standard and DFS codestreams.
+      spos0 = pos0;
+      spos1 = pos1;
+    } else {
+      spos0 = element_siz(ceil_int(p0.x - (1U << (nb_1)) * xob[b], 1U << nb),
+                          ceil_int(p0.y - (1U << (nb_1)) * yob[b], 1U << nb));
+      spos1 = element_siz(ceil_int(p1.x - (1U << (nb_1)) * xob[b], 1U << nb),
+                          ceil_int(p1.y - (1U << (nb_1)) * yob[b], 1U << nb));
+    }
 
     // nominal range does not have any effect to lossless path
     nominal_range = this->child_ranges[b];
+
+    // Compute QCD flat index for this subband.
+    uint8_t qcd_idx;
+    if (dfs != nullptr && index > 0) {
+      // DFS: use precomputed qcd_offset[r] + local band index within this resolution.
+      qcd_idx = static_cast<uint8_t>(qcd_base + i);
+    } else {
+      // Standard: 3*(NL-nb)+b, equivalent to 3*(r-1)+b for r > 0 (b 1-indexed).
+      qcd_idx = static_cast<uint8_t>(3 * (NL - nb) + b);
+    }
+
     if (transformation == 1) {
       // lossless
-      epsilon_b = exponents[static_cast<size_t>(3 * (NL - nb) + b)];
+      epsilon_b = exponents[qcd_idx];
       M_b       = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       delta     = 1.0;
     } else {
-      assert(transformation == 0);
-      // lossy compression
+      // lossy compression (irrev97 or ATK irrev)
+      assert(transformation == 0 || transformation >= 2);
       if (qstyle == 1) {
-        // dervied
+        // derived
         epsilon_b  = static_cast<uint8_t>(exponents[0] - NL + nb);
         mantissa_b = mantissas[0];
       } else {
         // expounded
         assert(qstyle == 2);
-        epsilon_b  = exponents[static_cast<size_t>(3 * (NL - nb) + b)];
-        mantissa_b = mantissas[static_cast<size_t>(3 * (NL - nb) + b)];
+        epsilon_b  = exponents[qcd_idx];
+        mantissa_b = mantissas[qcd_idx];
       }
       M_b   = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       R_b   = static_cast<uint8_t>(bitdepth + gain_b[b]);
@@ -1632,8 +1747,8 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       // delta, which is quantization step-size, is scaled by nominal-range of this band
       delta *= nominal_range;
     }
-    subbands[i] = MAKE_UNIQUE<j2k_subband>(pos0, pos1, b, transformation, R_b, epsilon_b, mantissa_b, M_b,
-                                           delta, nominal_range, i_samples, line_based);
+    subbands[i] = MAKE_UNIQUE<j2k_subband>(spos0, spos1, b, transformation, R_b, epsilon_b, mantissa_b,
+                                           M_b, delta, nominal_range, i_samples, line_based);
   }
 }
 
@@ -1657,7 +1772,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
       const element_siz prcpos1(std::min(pos1.x, 0 + PP.x * (x + 1 + idxoff_x)),
                                 std::min(pos1.y, 0 + PP.y * (y + 1 + idxoff_y)));
       precincts[i] = MAKE_UNIQUE<j2k_precinct>(index, i, prcpos0, prcpos1, subbands, numlayers,
-                                               codeblock_size, Cmodes);
+                                               codeblock_size, Cmodes, num_bands, transform_direction);
     }
   }
 }
@@ -1716,7 +1831,23 @@ void j2k_tile_part::set_SOT(SOT_marker &tmpSOT) {
 
 int j2k_tile_part::read(j2c_src_memory &in) {
   uint32_t length_of_tilepart_markers = this->header->read(in);
-  this->length += this->header->SOT.get_tile_part_length() - length_of_tilepart_markers;
+  const uint32_t Psot                 = this->header->SOT.get_tile_part_length();
+  if (Psot == 0) {
+    // Psot=0: tile-part extends to EOC. Scan backward to find the EOC marker (0xFF 0xD9);
+    // some encoders append padding bytes after EOC, so don't assume it is the final 2 bytes.
+    const uint32_t remaining = in.get_remaining();
+    const uint8_t *p         = in.get_buf_pos();
+    uint32_t eoc_offset      = (remaining >= 2) ? remaining - 2 : 0;
+    for (uint32_t i = remaining; i >= 2; i -= 2) {
+      if (p[i - 2] == 0xFF && p[i - 1] == 0xD9) {
+        eoc_offset = i - 2;
+        break;
+      }
+    }
+    this->length = eoc_offset;
+  } else {
+    this->length += Psot - length_of_tilepart_markers;
+  }
   this->body = in.get_buf_pos();
 
   try {
@@ -1805,16 +1936,33 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
   // Initialise states from coarsest (i=0) to finest (i=NL_act-1).
   // resolution[i+1] corresponds to IDWT level i+1 (resolution index 1-based).
   for (int32_t i = 0; i < NL_act; ++i) {
-    j2k_resolution *cr = access_resolution(static_cast<uint8_t>(i + 1));
+    j2k_resolution *cr         = access_resolution(static_cast<uint8_t>(i + 1));
+    const dwt_type  level_dir  = cr->transform_direction;
 
-    // HL=subband[0], LH=subband[1], HH=subband[2]
-    j2k_subband *sb_HL = cr->access_subband(0);
-    j2k_subband *sb_LH = cr->access_subband(1);
-    j2k_subband *sb_HH = cr->access_subband(2);
+    if (level_dir == DWT_VERT) {
+      throw std::runtime_error(
+          "Line-based streaming decode does not support DWT_VERT DFS levels.");
+    }
 
-    ld->hl_bufs[i].init(cr, 0, cb_h_val, ROIshift, ring_mode);
-    ld->lh_bufs[i].init(cr, 1, cb_h_val, ROIshift, ring_mode);
-    ld->hh_bufs[i].init(cr, 2, cb_h_val, ROIshift, ring_mode);
+    // Initialise subband row buffers based on DWT type.
+    // BIDIR: HL (0), LH (1), HH (2).  HORZ: H band in slot 0 only.  NO: no high-freq bands.
+    j2k_subband *sb_HL = nullptr;
+    j2k_subband *sb_LH = nullptr;
+    j2k_subband *sb_HH = nullptr;
+
+    if (level_dir == DWT_BIDIR) {
+      sb_HL = cr->access_subband(0);
+      sb_LH = cr->access_subband(1);
+      sb_HH = cr->access_subband(2);
+      ld->hl_bufs[i].init(cr, 0, cb_h_val, ROIshift, ring_mode);
+      ld->lh_bufs[i].init(cr, 1, cb_h_val, ROIshift, ring_mode);
+      ld->hh_bufs[i].init(cr, 2, cb_h_val, ROIshift, ring_mode);
+    } else if (level_dir == DWT_HORZ) {
+      sb_HL = cr->access_subband(0);  // H band (horizontal high-pass)
+      ld->hl_bufs[i].init(cr, 0, cb_h_val, ROIshift, ring_mode);
+      // lh_bufs[i] and hh_bufs[i] left default-constructed (no high-freq vertical bands).
+    }
+    // DWT_NO: no high-freq subbands at all.
 
     // Resolution geometry (output space of IDWT at this level).
     const int32_t u0 = static_cast<int32_t>(cr->get_pos0().x);
@@ -1828,41 +1976,44 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     j2k_resolution *cr_ll = access_resolution(static_cast<uint8_t>(i));
 
     // lp_width = width of the child LL output = full width of resolution[i].
-    // NOTE: for i>0, access_subband(0) returns HL (not LL), so we must use
-    // the resolution width directly instead of sb_LL->pos1.x - sb_LL->pos0.x.
     const int32_t lp_width = static_cast<int32_t>(cr_ll->get_pos1().x - cr_ll->get_pos0().x);
-    const int32_t hp_width = static_cast<int32_t>(sb_HL->get_pos1().x - sb_HL->get_pos0().x);
-    // PSE counts for in-place horizontal filter (precomputed; indexed [u%2][transformation]).
-    static constexpr int32_t kHPseLeft[2][2]  = {{3, 1}, {4, 2}};  // [u0%2][transformation]
-    static constexpr int32_t kHPseRight[2][2] = {{4, 2}, {3, 1}};  // [u1%2][transformation]
+    const int32_t hp_width = (sb_HL != nullptr)
+                             ? static_cast<int32_t>(sb_HL->get_pos1().x - sb_HL->get_pos0().x)
+                             : 0;
+    // PSE counts for in-place horizontal filter (precomputed; indexed [u%2][eff]).
+    // ATK (transformation>=2) uses same PSE lengths as rev53 (2-step filter).
+    static constexpr int32_t kHPseLeft[2][2]  = {{3, 1}, {4, 2}};  // [u0%2][eff]
+    static constexpr int32_t kHPseRight[2][2] = {{4, 2}, {3, 1}};  // [u1%2][eff]
+    const uint8_t eff = (transformation < 2) ? transformation : 1;
 
     idwt_level_src_ctx &c = ld->ctxs[i];
     c.v0             = v0;
     c.u0             = u0;
     c.u1             = u1;
     c.transformation = transformation;
+    c.dir            = level_dir;
     c.has_child      = (i > 0);
     c.child_state    = (i > 0) ? &ld->states[i - 1] : nullptr;
     c.ll0_buf        = (i == 0) ? &ld->ll0_buf : nullptr;
-    c.hl_buf         = &ld->hl_bufs[i];
-    c.lh_buf         = &ld->lh_bufs[i];
-    c.hh_buf         = &ld->hh_bufs[i];
+    c.hl_buf         = (sb_HL != nullptr) ? &ld->hl_bufs[i] : nullptr;
+    c.lh_buf         = (sb_LH != nullptr) ? &ld->lh_bufs[i] : nullptr;
+    c.hh_buf         = (sb_HH != nullptr) ? &ld->hh_bufs[i] : nullptr;
     c.lp_width       = lp_width;
     c.hp_width       = hp_width;
     c.ll_y0          = static_cast<int32_t>(cr_ll->get_pos0().y);
     c.ll0_height     = (i == 0) ? static_cast<int32_t>(cr_ll->get_pos1().y - cr_ll->get_pos0().y) : 0;
-    c.hl_y0          = static_cast<int32_t>(sb_HL->get_pos0().y);
-    c.lh_y0          = static_cast<int32_t>(sb_LH->get_pos0().y);
-    c.hh_y0          = static_cast<int32_t>(sb_HH->get_pos0().y);
-    c.h_pse_left     = (u1 - u0 > 1) ? kHPseLeft[u0 % 2][transformation]  : 0;
-    c.h_pse_right    = (u1 - u0 > 1) ? kHPseRight[u1 % 2][transformation] : 0;
+    c.hl_y0          = (sb_HL != nullptr) ? static_cast<int32_t>(sb_HL->get_pos0().y) : 0;
+    c.lh_y0          = (sb_LH != nullptr) ? static_cast<int32_t>(sb_LH->get_pos0().y) : 0;
+    c.hh_y0          = (sb_HH != nullptr) ? static_cast<int32_t>(sb_HH->get_pos0().y) : 0;
+    c.h_pse_left     = (u1 - u0 > 1) ? kHPseLeft[u0 % 2][eff]  : 0;
+    c.h_pse_right    = (u1 - u0 > 1) ? kHPseRight[u1 % 2][eff] : 0;
 
-    // lp_tmp only needed when has_child (child state writes output into it).
+    // lp_tmp only needed when has_child (child state writes output into it as fallback).
     // hp_tmp eliminated: HP data is read directly from subband row buffers.
     // ext_buf eliminated: in-place horizontal IDWT uses ring buffer PSE prefix.
     c.lp_tmp  = (i > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(lp_width + SIMD_PADDING), 32)) : nullptr;
 
-    idwt_2d_state_init(&ld->states[i], u0, u1, v0, v1, transformation,
+    idwt_2d_state_init(&ld->states[i], u0, u1, v0, v1, transformation, level_dir,
                        idwt_level_src_fn, &ld->ctxs[i]);
   }
 
@@ -1925,8 +2076,12 @@ void j2k_tile_component::finalize_line_decode() {
     idwt_2d_state_free(&ld->states[i]);
     aligned_mem_free(ld->ctxs[i].lp_tmp);
     ld->hl_bufs[i].free_resources();
-    ld->lh_bufs[i].free_resources();
-    ld->hh_bufs[i].free_resources();
+    // lh_bufs and hh_bufs are only initialised for BIDIR levels.
+    const dwt_type dir = access_resolution(static_cast<uint8_t>(i + 1))->transform_direction;
+    if (dir == DWT_BIDIR) {
+      ld->lh_bufs[i].free_resources();
+      ld->hh_bufs[i].free_resources();
+    }
   }
   delete[] ld->states;
   delete[] ld->ctxs;
@@ -1945,8 +2100,11 @@ void j2k_tile_component::mark_line_dec_predecoded() {
   const int32_t n = ld->NL_active;
   for (int32_t i = 0; i < n; ++i) {
     ld->hl_bufs[i].bypass_decode = true;
-    ld->lh_bufs[i].bypass_decode = true;
-    ld->hh_bufs[i].bypass_decode = true;
+    const dwt_type dir = access_resolution(static_cast<uint8_t>(i + 1))->transform_direction;
+    if (dir == DWT_BIDIR) {
+      ld->lh_bufs[i].bypass_decode = true;
+      ld->hh_bufs[i].bypass_decode = true;
+    }
   }
 }
 
@@ -2149,11 +2307,25 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
     }
   }
   lb_enc_mode = lb_enc;
+
+  // Resolve DFS and ATK marker pointers for this component.
+  if (dfs_index != 0) {
+    dfs_info = hdr->get_dfs_marker(dfs_index);
+  }
+  if (transformation >= 2) {
+    atk_info = hdr->get_atk_marker(transformation);
+  }
 }
 
 void j2k_tile_component::setCOCparams(COC_marker *COC) {
   // coding style related properties
-  NL = COC->get_dwt_levels();
+  // When DFS is active, SPcoc[0] encodes the DFS index, not the level count.
+  // Keep NL from COD in that case.
+  if (!COC->is_dfs_defined()) {
+    NL = COC->get_dwt_levels();
+  } else {
+    dfs_index = COC->get_dfs_index();
+  }
   COC->get_codeblock_size(codeblock_size);
   Cmodes         = COC->get_Cmodes();
   transformation = COC->get_transformation();
@@ -2172,7 +2344,9 @@ void j2k_tile_component::setQCCparams(QCC_marker *QCC) {
   mantissas.clear();
   if (quantization_style != 1) {
     // lossless or lossy expounded
-    for (uint8_t nb = 0; nb < static_cast<uint8_t>(3 * NL + 1); nb++) {
+    const uint8_t max_entries = static_cast<uint8_t>(3 * NL + 1);
+    const uint8_t actual      = std::min(max_entries, QCC->get_num_entries());
+    for (uint8_t nb = 0; nb < actual; nb++) {
       exponents.push_back(QCC->get_exponents(nb));
       if (quantization_style == 2) {
         // lossy expounded
@@ -2218,17 +2392,25 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
   uint8_t normalizing_shift = 0;
   uint8_t nb, r, b;
   uint8_t nshift[32] = {0};
-  uint32_t d;
+  uint32_t dx, dy;
   element_siz log2PP, PP, respos0, respos1;
   for (r = static_cast<uint8_t>(NL - reduce_NL); r > 0; --r) {
-    d         = static_cast<uint32_t>(1 << (NL - r));
-    respos0.x = static_cast<uint32_t>(ceil_int(pos0.x, d));
-    respos0.y = static_cast<uint32_t>(ceil_int(pos0.y, d));
-    respos1.x = static_cast<uint32_t>(ceil_int(pos1.x, d));
-    respos1.y = static_cast<uint32_t>(ceil_int(pos1.y, d));
-    nb        = static_cast<uint8_t>(NL - r + 1);
+    if (dfs_info != nullptr) {
+      dx = 1U << dfs_info->hor_depth[NL - r];
+      dy = 1U << dfs_info->ver_depth[NL - r];
+    } else {
+      dx = dy = static_cast<uint32_t>(1 << (NL - r));
+    }
+    respos0.x = static_cast<uint32_t>(ceil_int(pos0.x, dx));
+    respos0.y = static_cast<uint32_t>(ceil_int(pos0.y, dy));
+    respos1.x = static_cast<uint32_t>(ceil_int(pos1.x, dx));
+    respos1.y = static_cast<uint32_t>(ceil_int(pos1.y, dy));
+    nb                = static_cast<uint8_t>(NL - r + 1);
+    const dwt_type dir = (dfs_info != nullptr) ? dfs_info->get_dwt_type(nb) : DWT_BIDIR;
+    const float K      = (transformation >= 2 && atk_info != nullptr) ? atk_info->get_Katk()
+                                                                       : 1.230174104914001F;
     find_child_ranges(tmp_ranges, normalizing_shift, normalization, nb, respos0.x, respos1.x, respos0.y,
-                      respos1.y);
+                      respos1.y, dir, K);
     nshift[r] = normalizing_shift;
     for (b = 0; b < 4; ++b) {
       child_ranges[r][b] = tmp_ranges[b];
@@ -2242,25 +2424,42 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
   std::vector<std::future<int>> results;
 #endif
   for (r = 0; r <= NL; r++) {
-    d                  = static_cast<uint32_t>(1 << (NL - r));
-    respos0.x          = static_cast<uint32_t>(ceil_int(pos0.x, d));
-    respos0.y          = static_cast<uint32_t>(ceil_int(pos0.y, d));
-    respos1.x          = static_cast<uint32_t>(ceil_int(pos1.x, d));
-    respos1.y          = static_cast<uint32_t>(ceil_int(pos1.y, d));
+    if (dfs_info != nullptr) {
+      dx = 1U << dfs_info->hor_depth[NL - r];
+      dy = 1U << dfs_info->ver_depth[NL - r];
+    } else {
+      dx = dy = static_cast<uint32_t>(1 << (NL - r));
+    }
+    respos0.x          = static_cast<uint32_t>(ceil_int(pos0.x, dx));
+    respos0.y          = static_cast<uint32_t>(ceil_int(pos0.y, dy));
+    respos1.x          = static_cast<uint32_t>(ceil_int(pos1.x, dx));
+    respos1.y          = static_cast<uint32_t>(ceil_int(pos1.y, dy));
     log2PP             = get_precinct_size(r);
     PP.x               = 1U << log2PP.x;
     PP.y               = 1U << log2PP.y;
     const uint32_t npw = (respos1.x > respos0.x) ? ceil_int(respos1.x, PP.x) - respos0.x / PP.x : 0;
     const uint32_t nph = (respos1.y > respos0.y) ? ceil_int(respos1.y, PP.y) - respos0.y / PP.y : 0;
 
+    // Determine DFS type and band count for this resolution.
+    dwt_type dir  = DWT_BIDIR;
+    uint8_t dfs_nb = 0;  // 0 = use default (1 for r=0, 3 otherwise)
+    if (dfs_info != nullptr && r > 0) {
+      const uint8_t dfs_lev = static_cast<uint8_t>(NL - r + 1);  // 1=finest, NL=coarsest
+      dir    = dfs_info->get_dwt_type(dfs_lev);
+      dfs_nb = dfs_info->get_num_bands(r, NL);
+    } else if (r == 0) {
+      dfs_nb = 1;
+    }
+
     resolution[r] = MAKE_UNIQUE<j2k_resolution>(r, respos0, respos1, npw, nph,
-                                                 line_based || (enc_lb && r == this->NL && this->NL > 0));
+                                                 line_based || (enc_lb && r == this->NL && this->NL > 0),
+                                                 dfs_nb, dir);
     resolution[r]->set_nominal_ranges(child_ranges[r]);
     resolution[r]->normalizing_downshift = nshift[r];
     resolution[r]->normalizing_upshift   = nshift[r + 1];
     resolution[r]->create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
                                    this->mantissas, this->num_guard_bits, this->quantization_style,
-                                   this->bitdepth, line_based);
+                                   this->bitdepth, line_based, this->dfs_info);
 #ifdef OPENHTJ2K_THREAD
     if (pool->num_threads() > 1) {
       results.emplace_back(pool->enqueue([r, numlayers, this] {
@@ -2281,7 +2480,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
-  const int32_t shiftup = (transformation) ? 0 : FRACBITS - this->bitdepth;
+  const int32_t shiftup = (transformation == 1) ? 0 : FRACBITS - this->bitdepth;
   if (shiftup < 0) {
     printf("WARNING: Over 13 bpp precision will be down-shifted to 12 bpp.\n");
   }
@@ -2455,7 +2654,9 @@ void j2k_tile::setQCDparams(QCD_marker *QCD) {
   mantissas.clear();
   if (quantization_style != 1) {
     // lossless or lossy expounded
-    for (uint8_t nb = 0; nb < static_cast<uint8_t>(3 * NL + 1); nb++) {
+    const uint8_t max_entries = static_cast<uint8_t>(3 * NL + 1);
+    const uint8_t actual      = std::min(max_entries, QCD->get_num_entries());
+    for (uint8_t nb = 0; nb < actual; nb++) {
       exponents.push_back(QCD->get_exponents(nb));
       if (quantization_style == 2) {
         // lossy expounded
@@ -2710,12 +2911,17 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                     x_cond          = false;
                     y_cond          = false;
                     main_header.SIZ->get_subsampling_factor(csub, c);
-                    x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
-                             || ((x == pos0.x)
-                                 && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
-                             || ((y == pos0.y)
-                                 && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
+                    {
+                      const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                      const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                               || ((x == pos0.x)
+                                   && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                               || ((y == pos0.y)
+                                   && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
                       cp = cr->access_precinct(p);
@@ -2767,12 +2973,17 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
-                           || ((x == pos0.x)
-                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
-                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
-                           || ((y == pos0.y)
-                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
+                  {
+                    const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                    const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                             || ((x == pos0.x)
+                                 && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                             || ((y == pos0.y)
+                                 && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                  }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -2823,12 +3034,17 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
-                           || ((x == pos0.x)
-                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
-                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
-                           || ((y == pos0.y)
-                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
+                  {
+                    const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                    const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                             || ((x == pos0.x)
+                                 && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                             || ((y == pos0.y)
+                                 && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                  }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -2984,12 +3200,17 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                     x_cond          = false;
                     y_cond          = false;
                     main_header.SIZ->get_subsampling_factor(csub, c);
-                    x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
-                             || ((x == pos0.x)
-                                 && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
-                             || ((y == pos0.y)
-                                 && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
+                    {
+                      const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                      const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                               || ((x == pos0.x)
+                                   && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                               || ((y == pos0.y)
+                                   && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
                       cp = cr->access_precinct(p);
@@ -3039,12 +3260,17 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
-                           || ((x == pos0.x)
-                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
-                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
-                           || ((y == pos0.y)
-                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
+                  {
+                    const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                    const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                             || ((x == pos0.x)
+                                 && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                             || ((y == pos0.y)
+                                 && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                  }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -3093,12 +3319,17 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                   x_cond          = false;
                   y_cond          = false;
                   main_header.SIZ->get_subsampling_factor(csub, c);
-                  x_cond = (x % (csub.x * (1U << (cPP.x + c_NL - r))) == 0)
-                           || ((x == pos0.x)
-                               && ((tr0.x * (1U << (c_NL - r))) % (1U << (cPP.x + c_NL - r)) != 0));
-                  y_cond = (y % (csub.y * (1U << (cPP.y + c_NL - r))) == 0)
-                           || ((y == pos0.y)
-                               && ((tr0.y * (1U << (c_NL - r))) % (1U << (cPP.y + c_NL - r)) != 0));
+                  {
+                    const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                    const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                    x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                             || ((x == pos0.x)
+                                 && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                             || ((y == pos0.y)
+                                 && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                  }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
                     cp = cr->access_precinct(p);
@@ -3336,12 +3567,30 @@ void j2k_tile::decode() {
         const int32_t v1               = static_cast<int32_t>(bottom_right.y);
 
         j2k_subband *HL = cr->access_subband(0);
-        j2k_subband *LH = cr->access_subband(1);
-        j2k_subband *HH = cr->access_subband(2);
 
         if (u1 != u0 && v1 != v0) {
-          idwt_2d_sr_fixed(cr->i_samples, pcr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples, u0,
-                           u1, v0, v1, transformation, idwt_pse_scratch, idwt_buf_scratch);
+          switch (cr->transform_direction) {
+            case DWT_BIDIR:
+            default: {
+              j2k_subband *LH = cr->access_subband(1);
+              j2k_subband *HH = cr->access_subband(2);
+              idwt_2d_sr_fixed(cr->i_samples, pcr->i_samples, HL->i_samples, LH->i_samples, HH->i_samples,
+                               u0, u1, v0, v1, transformation, idwt_pse_scratch, idwt_buf_scratch);
+              break;
+            }
+            case DWT_HORZ:
+              idwt_horz_only_sr_fixed(cr->i_samples, pcr->i_samples, HL->i_samples, u0, u1, v0, v1,
+                                      transformation);
+              break;
+            case DWT_VERT:
+              idwt_vert_only_sr_fixed(cr->i_samples, pcr->i_samples, HL->i_samples, u0, u1, v0, v1,
+                                      transformation, idwt_pse_scratch, idwt_buf_scratch);
+              break;
+            case DWT_NO:
+              memcpy(cr->i_samples, pcr->i_samples,
+                     sizeof(sprec_t) * static_cast<size_t>(cr->stride) * static_cast<size_t>(v1 - v0));
+              break;
+          }
         }
       }
     }  // end of resolution loop
@@ -3453,7 +3702,10 @@ void j2k_tile::ycbcr_to_rgb() {
   sprec_t *sp1 = tcomp[1].access_resolution(static_cast<uint8_t>(NL1 - reduce_NL))->i_samples;
   sprec_t *sp2 = tcomp[2].access_resolution(static_cast<uint8_t>(NL2 - reduce_NL))->i_samples;
 
-  cvt_ycbcr_to_rgb_float[transformation](sp0, sp1, sp2, width, height, stride);
+  // ATK (transformation>=2) is irreversible → use ICT (index 0), same as irrev97.
+  // Dispatch table has only 2 entries (0=irrev, 1=rev); never index with raw transformation.
+  const uint8_t ct_idx = (transformation == 1) ? 1 : 0;
+  cvt_ycbcr_to_rgb_float[ct_idx](sp0, sp1, sp2, width, height, stride);
 }
 
 void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int32_t *> &dst) {
@@ -3480,7 +3732,9 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     const uint32_t out_stride = ceil_int(x1 - x0, (1U << reduce_NL));
 
     // downshift value for lossy path
-    int16_t downshift = (tcomp[c].transformation) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
+    // Reversible (transformation==1) uses downshift=0 (lossless, no scaling).
+    // All irreversible paths (irrev97=0, ATK irrev>=2) use downshift = FRACBITS - bitdepth.
+    int16_t downshift = (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
     // For bitdepth > FRACBITS (e.g., 16-bit): downshift < 0, meaning the internal representation
     // was right-shifted during encoding and must be left-shifted back during reconstruction.
     // No rounding offset is applied for a left shift (it would introduce a constant bias).
@@ -3788,8 +4042,8 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
     I.x_offset  = tc0.x - ceil_int(x0, (1U << reduce_NL_val));
     I.y_offset  = tc0.y - ceil_int(y0, (1U << reduce_NL_val));
     I.out_stride = ceil_int(x1 - x0, (1U << reduce_NL_val));
-    I.downshift = (tcomp[c].transformation) ? 0
-                                             : static_cast<int16_t>(FRACBITS - bd);
+    I.downshift = (tcomp[c].transformation == 1) ? 0
+                                                 : static_cast<int16_t>(FRACBITS - bd);
     I.rnd  = (I.downshift <= 0) ? 0 : static_cast<int16_t>((1 << I.downshift) >> 1);
     I.cdst = dst[c];
   }
@@ -3800,6 +4054,8 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
 
   const bool   do_mct    = (NC >= 3 && MCT != 0);
   const uint8_t xform    = tcomp[0].get_transformation();
+  // ATK (xform>=2) is irreversible; dispatch table has only 2 entries (0=irrev, 1=rev).
+  const uint8_t xform_ct = (xform == 1) ? 1 : 0;
   const uint32_t mct_w   = ci[0].csize_x;
 
   // Pre-build FinalizeParams for the fused MCT+finalize path.
@@ -3838,7 +4094,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
       int32_t *dp0 = ci[0].cdst + ci[0].x_offset + (y + ci[0].y_offset) * ci[0].out_stride;
       int32_t *dp1 = ci[1].cdst + ci[1].x_offset + (y + ci[1].y_offset) * ci[1].out_stride;
       int32_t *dp2 = ci[2].cdst + ci[2].x_offset + (y + ci[2].y_offset) * ci[2].out_stride;
-      fused_mct_finalize[xform](p0, p1, p2, dp0, dp1, dp2, mct_w, fp);
+      fused_mct_finalize[xform_ct](p0, p1, p2, dp0, dp1, dp2, mct_w, fp);
       // Extra components beyond 3 (no MCT applied); finalize individually.
       for (uint16_t c = 3; c < NC; ++c) {
         if (y >= ci[c].csize_y) continue;
@@ -3958,7 +4214,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     const element_siz tc0 = cr_act->get_pos0();
     I.csize_x  = tc1.x - tc0.x;
     I.csize_y  = tc1.y - tc0.y;
-    I.downshift = (tcomp[c].transformation) ? 0 : static_cast<int16_t>(FRACBITS - bd);
+    I.downshift = (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - bd);
     I.rnd       = (I.downshift <= 0) ? 0 : static_cast<int16_t>((1 << I.downshift) >> 1);
   }
 
@@ -3974,6 +4230,8 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
   const bool    do_mct = (NC >= 3 && MCT != 0);
   const uint8_t xform  = tcomp[0].get_transformation();
+  // ATK (xform>=2) is irreversible; dispatch table has only 2 entries (0=irrev, 1=rev).
+  const uint8_t xform_ct = (xform == 1) ? 1 : 0;
   const uint32_t mct_w  = ci[0].csize_x;
 
   // Pre-build FinalizeParams for the fused MCT+finalize path.
@@ -3998,7 +4256,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       const sprec_t *p0 = tcomp[0].pull_line_ref();
       const sprec_t *p1 = tcomp[1].pull_line_ref();
       const sprec_t *p2 = tcomp[2].pull_line_ref();
-      fused_mct_finalize[xform](p0, p1, p2,
+      fused_mct_finalize[xform_ct](p0, p1, p2,
                                 out_rows[0].data(), out_rows[1].data(), out_rows[2].data(),
                                 mct_w, fp);
       // Extra components beyond 3 (no MCT applied); use pull_line_ref + per-component finalize.
@@ -4266,7 +4524,7 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
     I.x_offset  = tc0.x - ceil_int(x0, (1U << reduce_NL_val));
     I.y_offset  = tc0.y - ceil_int(y0, (1U << reduce_NL_val));
     I.out_stride = ceil_int(x1 - x0, (1U << reduce_NL_val));
-    I.downshift = tcomp[c].transformation ? 0 : static_cast<int16_t>(FRACBITS - bd);
+    I.downshift = (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - bd);
     I.rnd       = (I.downshift <= 0) ? 0 : static_cast<int16_t>((1 << I.downshift) >> 1);
     I.cdst      = dst[c];
   }
@@ -4280,6 +4538,8 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
 
   const bool    do_mct = (NC >= 3 && MCT != 0);
   const uint8_t xform  = tcomp[0].get_transformation();
+  // ATK (xform>=2) is irreversible; dispatch table has only 2 entries (0=irrev, 1=rev).
+  const uint8_t xform_ct = (xform == 1) ? 1 : 0;
   const uint32_t mct_w = ci[0].csize_x;
   const uint32_t mct_str = round_up(mct_w, 32U);
 
@@ -4294,7 +4554,7 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       if (y < ci[c].csize_y) tcomp[c].pull_line(rows[c].data());
 
     if (do_mct)
-      cvt_ycbcr_to_rgb_float[xform](rows[0].data(), rows[1].data(), rows[2].data(), mct_w, 1, mct_str);
+      cvt_ycbcr_to_rgb_float[xform_ct](rows[0].data(), rows[1].data(), rows[2].data(), mct_w, 1, mct_str);
 
     for (uint16_t c = 0; c < NC; ++c) {
       if (y >= ci[c].csize_y) continue;
@@ -4546,12 +4806,14 @@ void j2k_tile::rgb_to_ycbcr() {
   int32_t *const sp0 = this->tcomp[0].get_sample_address(0, 0);  // assume that comp0 is red
   int32_t *const sp1 = this->tcomp[1].get_sample_address(0, 0);  // assume that comp1 is green
   int32_t *const sp2 = this->tcomp[2].get_sample_address(0, 0);  // assume that comp2 is blue
+  // ATK (transformation>=2) is irreversible; dispatch table has only 2 entries (0=irrev, 1=rev).
+  const uint8_t ct_idx = (transformation == 1) ? 1 : 0;
   if (MCT) {
     j2k_resolution *cr0 = this->tcomp[0].access_resolution(this->tcomp[0].get_dwt_levels());
     j2k_resolution *cr1 = this->tcomp[1].access_resolution(this->tcomp[1].get_dwt_levels());
     j2k_resolution *cr2 = this->tcomp[2].access_resolution(this->tcomp[2].get_dwt_levels());
-    cvt_rgb_to_ycbcr_float[transformation](sp0, sp1, sp2, cr0->i_samples, cr1->i_samples,
-                                           cr2->i_samples, width, height, stride);
+    cvt_rgb_to_ycbcr_float[ct_idx](sp0, sp1, sp2, cr0->i_samples, cr1->i_samples,
+                                   cr2->i_samples, width, height, stride);
   }
 }
 
@@ -5337,6 +5599,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
   const uint32_t height    = bot0.y - top0.y;
   const uint32_t stride    = round_up(width, 32U);
   const uint8_t transformation = tcomp[0].get_transformation();
+  // ATK (transformation>=2) is irreversible; dispatch table has only 2 entries (0=irrev, 1=rev).
+  const uint8_t ct_idx = (transformation == 1) ? 1 : 0;
 
   // Per-component aligned row scratch buffers.
   // int_rows[c] must hold the full image row so that src_fn (which provides
@@ -5415,7 +5679,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
         j2k_resolution *cr0 = tcomp[0].access_resolution(0);
         j2k_resolution *cr1 = tcomp[1].access_resolution(0);
         j2k_resolution *cr2 = tcomp[2].access_resolution(0);
-        cvt_rgb_to_ycbcr_float[transformation](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
+        cvt_rgb_to_ycbcr_float[ct_idx](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
                                                cr0->i_samples + y * stride, cr1->i_samples + y * stride,
                                                cr2->i_samples + y * stride, width, 1, stride);
         // Extra components (c >= 3): non-MCT
@@ -5572,7 +5836,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
       }
       // Convert RGB→YCbCr float into scratch float rows
-      cvt_rgb_to_ycbcr_float[transformation](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
+      cvt_rgb_to_ycbcr_float[ct_idx](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
                                              float_rows[0], float_rows[1], float_rows[2], width, 1, stride);
       for (uint32_t c = 0; c < 3; ++c)
         tcomp[c].push_line_enc(float_rows[c]);

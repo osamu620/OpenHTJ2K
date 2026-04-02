@@ -59,6 +59,7 @@ class j2c_src_memory {
   uint8_t *get_buf_pos() { return (buf + pos); }
   int rewind_2bytes();
   int forward_Nbytes(uint32_t N);
+  uint32_t get_remaining() const { return len - pos; }
 };
 
 class j2c_dst_memory {

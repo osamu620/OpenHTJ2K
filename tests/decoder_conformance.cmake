@@ -16,3 +16,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part1_profile0.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part1_profile1.cmake)
 # HiFi
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part1_HF.cmake)
+## Part 2 decoding tests
+# DFS + ATK
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part2_dfs_atk.cmake)

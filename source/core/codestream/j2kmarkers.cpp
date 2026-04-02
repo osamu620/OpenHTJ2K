@@ -453,7 +453,13 @@ uint16_t COC_marker::get_component_index() const { return Ccoc; }
 
 bool COC_marker::is_maximum_precincts() const { return (Scoc & 1) == 0; }
 
-uint8_t COC_marker::get_dwt_levels() { return SPcoc[0]; }
+bool COC_marker::is_dfs_defined() const { return (SPcoc[0] & 0x80) != 0; }
+
+uint8_t COC_marker::get_dfs_index() const { return SPcoc[0] & 0x0F; }
+
+// When DFS is active, SPcoc[0] encodes the DFS index rather than the level count.
+// Callers must check is_dfs_defined() and use COD's level count instead.
+uint8_t COC_marker::get_dwt_levels() { return SPcoc[0] & 0x1F; }
 
 void COC_marker::get_codeblock_size(element_siz &out) {
   out.x = static_cast<uint32_t>(1 << (SPcoc[1] + 2));
@@ -510,8 +516,104 @@ uint16_t RGN_marker::get_component_index() const { return Crgn; }
 uint8_t RGN_marker::get_ROIshift() const { return SPrgn; }
 
 /********************************************************************************
- * QCD_marker
+ * DFS_marker  (Part 2, 0xFF72)
  *******************************************************************************/
+DFS_marker::DFS_marker(j2c_src_memory &in) : j2k_marker_io_base(_DFS) {
+  Lmar = in.get_word();
+  this->set_buf(in.get_buf_pos());
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
+  Sdfs = get_word();
+  Ids  = get_byte();
+  // Ddfs: 2 bits per level, packed MSB-first, ceil(Ids/4) bytes
+  const uint8_t nbytes = static_cast<uint8_t>((Ids + 3) / 4);
+  Ddfs.resize(Ids, DWT_BIDIR);
+  for (uint8_t b = 0, lvl = 0; b < nbytes; ++b) {
+    uint8_t byte = get_byte();
+    for (int shift = 6; shift >= 0 && lvl < Ids; shift -= 2, ++lvl) {
+      Ddfs[lvl] = static_cast<dwt_type>((byte >> shift) & 0x3);
+    }
+  }
+  // Precompute cumulative decomp depths: hor_depth[k]/ver_depth[k] = number of
+  // horizontal/vertical splits among the k finest DWT levels.
+  // DFS level 1 = finest; Ddfs[l-1] = type for DFS level l.
+  hor_depth[0] = 0;
+  ver_depth[0] = 0;
+  for (uint8_t k = 1; k <= Ids; ++k) {
+    dwt_type t   = Ddfs[k - 1];
+    hor_depth[k] = static_cast<uint8_t>(hor_depth[k - 1] + ((t == DWT_BIDIR || t == DWT_HORZ) ? 1 : 0));
+    ver_depth[k] = static_cast<uint8_t>(ver_depth[k - 1] + ((t == DWT_BIDIR || t == DWT_VERT) ? 1 : 0));
+  }
+  // Precompute qcd_offset[r] = starting flat SPqcd index for resolution r (1..Ids).
+  // Resolution r=1 is coarsest non-LL, corresponding to DFS level Ids (coarsest).
+  // QCD orders from coarsest to finest: 3 entries for BIDIR, 1 for HORZ/VERT.
+  qcd_offset[0] = 0;  // r=0 is LL at flat index 0; not used via this offset
+  uint8_t flat  = 1;
+  for (uint8_t r = 1; r <= Ids; ++r) {
+    uint8_t dfs_lev = static_cast<uint8_t>(Ids - r + 1);  // coarsest first
+    qcd_offset[r]   = flat;
+    dwt_type t      = Ddfs[dfs_lev - 1];
+    flat = static_cast<uint8_t>(flat + ((t == DWT_BIDIR) ? 3 : (t == DWT_NO) ? 0 : 1));
+  }
+  is_set = true;
+}
+
+uint8_t DFS_marker::get_index() const { return static_cast<uint8_t>(Sdfs & 0x0F); }
+
+uint8_t DFS_marker::get_num_levels() const { return Ids; }
+
+dwt_type DFS_marker::get_dwt_type(uint8_t level) const {
+  // level is 1-based (1 = finest DWT decomposition level)
+  if (level == 0 || level > Ids) return DWT_BIDIR;
+  return Ddfs[level - 1];
+}
+
+uint8_t DFS_marker::get_num_bands(uint8_t r, uint8_t NL) const {
+  if (r == 0) return 1;
+  // DFS level (1-indexed from finest); resolution NL = finest → DFS level 1.
+  uint8_t dfs_lev = static_cast<uint8_t>(NL - r + 1);
+  if (dfs_lev == 0 || dfs_lev > Ids) return 3;
+  dwt_type t = Ddfs[dfs_lev - 1];
+  return (t == DWT_BIDIR) ? 3 : (t == DWT_NO) ? 0 : 1;
+}
+
+/********************************************************************************
+ * ATK_marker  (Part 2, 0xFF79)
+ *******************************************************************************/
+ATK_marker::ATK_marker(j2c_src_memory &in) : j2k_marker_io_base(_ATK), Katk(1.0f), Natk(0) {
+  Lmar = in.get_word();
+  this->set_buf(in.get_buf_pos());
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
+  Satk = get_word();
+  if (!is_reversible()) {
+    // Katk is a big-endian float32
+    uint32_t bits = get_dword();
+    memcpy(&Katk, &bits, sizeof(float));
+  }
+  Natk = get_byte();
+  if (is_reversible()) {
+    printf("WARNING: ATK reversible kernels are not supported\n");
+  } else {
+    steps.resize(Natk);
+    for (uint8_t k = 0; k < Natk; ++k) {
+      steps[k].mk = get_byte();
+      uint32_t bits = get_dword();
+      memcpy(&steps[k].Aatk, &bits, sizeof(float));
+    }
+  }
+  is_set = true;
+}
+
+uint8_t ATK_marker::get_index() const { return static_cast<uint8_t>(Satk & 0x0F); }
+
+bool ATK_marker::is_reversible() const { return (Satk & 0x1000) != 0; }
+
+float ATK_marker::get_Katk() const { return Katk; }
+
+uint8_t ATK_marker::get_num_steps() const { return Natk; }
+
+const atk_step &ATK_marker::get_step(uint8_t k) const { return steps[k]; }
+
+
 QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
@@ -1661,6 +1763,12 @@ int j2k_main_header::read(j2c_src_memory &in) {
       case _COM:
         COM.push_back(MAKE_UNIQUE<COM_marker>(in));
         break;
+      case _DFS:
+        DFS.push_back(MAKE_UNIQUE<DFS_marker>(in));
+        break;
+      case _ATK:
+        ATK.push_back(MAKE_UNIQUE<ATK_marker>(in));
+        break;
       default:
         printf("WARNING: unknown marker %04X is found in main header\n", word);
         break;
@@ -1705,6 +1813,20 @@ void j2k_main_header::get_number_of_tiles(uint32_t &xsize, uint32_t &ysize) cons
   SIZ->get_tile_origin(tosiz);
   xsize = ceil_int(imsiz.x - tosiz.x, tsiz.x);
   ysize = ceil_int(imsiz.y - tosiz.y, tsiz.y);
+}
+
+const DFS_marker *j2k_main_header::get_dfs_marker(uint8_t dfs_index) const {
+  for (auto &d : DFS) {
+    if (d->get_index() == dfs_index) return d.get();
+  }
+  return nullptr;
+}
+
+const ATK_marker *j2k_main_header::get_atk_marker(uint8_t atk_index) const {
+  for (auto &a : ATK) {
+    if (a->get_index() == atk_index) return a.get();
+  }
+  return nullptr;
 }
 
 /********************************************************************************

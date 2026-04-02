@@ -511,7 +511,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const __m256i zero    = _mm256_setzero_si256();
   const __m256i shift   = _mm256_set1_epi32(ROIshift);
   __m256i v0, v1, s0, s1, vdst0, vdst1, vROImask;
-  if (this->transformation) {
+  if (this->transformation == 1) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
@@ -746,7 +746,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   uint8_t *Dref;
 
   if (num_ht_passes > 0) {
-    uint8_t  all_segments[4];
+    uint8_t  all_segments[4] = {};
     uint32_t num_segments = 0;
     for (uint32_t i = 0; i < block->pass_length_count; i++) {
       if (block->pass_length[i] != 0) {
