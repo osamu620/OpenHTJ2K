@@ -64,3 +64,7 @@
 
 // Part 15 marker segment
 #define _CPF 0xFF59
+
+// Part 2 marker segments
+#define _DFS 0xFF72
+#define _ATK 0xFF79

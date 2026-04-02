@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <cstddef>
 #include "open_htj2k_typedef.hpp"
+#include "j2kmarkers.hpp"
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #define OPENHTJ2K_ENABLE_AVX2
 #endif
@@ -141,10 +142,13 @@ void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, 
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_1d_filtr_irrev53_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                                   int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 void idwt_rev_ver_sr_fixed_avx2(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                                 int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void idwt_irrev53_ver_sr_fixed_avx2(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                    int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 // Single-row irreversible vertical lifting step: tgt[i] -= coeff*(prev[i]+next[i]) using FMA.
 // Uses SIMD for multiples of 8 elements, scalar for the tail.
 void idwt_irrev_ver_step_fixed_avx2(int32_t n, float *prev, float *next, float *tgt, float coeff);
@@ -183,6 +187,17 @@ void idwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, 
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
                       int32_t u1, int32_t v0, int32_t v1, uint8_t transformation, sprec_t *pse_scratch,
                       sprec_t **buf_scratch);
+
+// DFS HORZ level: interleave LL (even x) and H (odd x), apply horizontal 1D IDWT only.
+// LL and H must have strides = round_up(their_width, 32); nextLL stride = round_up(u1-u0, 32).
+void idwt_horz_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *H, int32_t u0, int32_t u1,
+                              int32_t v0, int32_t v1, uint8_t transformation);
+
+// DFS VERT level: interleave LL (even y) and H (odd y), apply vertical 1D IDWT only.
+// LL, H, and nextLL all have stride = round_up(u1-u0, 32).
+void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *H, int32_t u0, int32_t u1,
+                              int32_t v0, int32_t v1, uint8_t transformation, sprec_t *pse_scratch,
+                              sprec_t **buf_scratch);
 
 // Apply 1-D horizontal IDWT synthesis in-place on row[0..u1-u0-1].
 // ext_buf must hold at least round_up(u1-u0+8+SIMD_PADDING, SIMD_PADDING) sprec_t elements.
@@ -226,26 +241,32 @@ struct idwt_2d_state {
   int32_t u0, u1, v0, v1;
   int32_t stride;          // round_up(u1-u0, SIMD_PADDING) — data width per row
   int32_t slot_stride;     // IDWT_RING_PSE_LEFT + round_up(u1-u0+SIMD_PADDING, SIMD_PADDING)
-  uint8_t transformation;  // 0 = irrev 9/7, 1 = rev 5/3
-  int8_t  top_pse;         // PSE rows above v0  (3 or 4 for 9/7; 1 or 2 for 5/3)
+  uint8_t transformation;  // 0 = irrev 9/7, 1 = rev 5/3, 2+ = ATK irrev
+  dwt_type dir;            // DWT_BIDIR (full 2D), DWT_HORZ (horizontal only), DWT_NO (passthrough)
+  int8_t  top_pse;         // PSE rows above v0  (3 or 4 for 9/7; 1 or 2 for 5/3 / ATK)
   int8_t  bottom_pse;      // PSE rows below v1-1
 
-  // ── PSE scratch (separate from the ring) ──────────────────────────────────
+  // ── PSE scratch (separate from the ring, BIDIR only) ──────────────────────
   // top_pse_buf[0] ↔ physical row v0-1, [1] ↔ v0-2, …
   // bot_pse_buf[0] ↔ physical row v1,   [1] ↔ v1+1, …
-  sprec_t *top_pse_buf;        // top_pse    × stride sprec_t (SIMD-aligned)
-  sprec_t *bot_pse_buf;        // bottom_pse × stride sprec_t
+  sprec_t *top_pse_buf;        // top_pse    × stride sprec_t (SIMD-aligned); nullptr for HORZ/NO
+  sprec_t *bot_pse_buf;        // bottom_pse × stride sprec_t; nullptr for HORZ/NO
   int8_t   top_dlevel[4];      // d_level per top-PSE slot (-1 = unfilled)
   int8_t   bot_dlevel[4];      // d_level per bot-PSE slot (-1 = unfilled)
 
-  // ── sliding ring for real rows [v0, v1) ───────────────────────────────────
+  // ── sliding ring for real rows [v0, v1) (BIDIR only) ─────────────────────
   // Slot for absolute row r : r % IDWT_STATE_RING_DEPTH
   // Each ring slot is slot_stride floats wide; the data portion (post-horizontal-IDWT)
   // starts at offset IDWT_RING_PSE_LEFT within the slot, providing scratch space
   // for the in-place horizontal PSE fill and filter (no separate ext_buf needed).
-  sprec_t *ring_buf;                           // IDWT_STATE_RING_DEPTH × slot_stride
+  sprec_t *ring_buf;                           // IDWT_STATE_RING_DEPTH × slot_stride; nullptr for HORZ/NO
   int32_t  ring_origin;                         // abs row mapped to slot 0
   int8_t   d_level[IDWT_STATE_RING_DEPTH];     // 0=raw, 1=step1, 2=step2, -1=unused
+
+  // ── single-row output buffer (HORZ and NO only) ───────────────────────────
+  // Allocated with IDWT_RING_PSE_LEFT prefix for in-place horizontal IDWT.
+  // Data area starts at horz_out_buf + IDWT_RING_PSE_LEFT.
+  sprec_t *horz_out_buf;   // nullptr for BIDIR
 
   // ── cursors ───────────────────────────────────────────────────────────────
   int32_t next_out;    // next output row (v0 ≤ next_out < v1)
@@ -256,10 +277,14 @@ struct idwt_2d_state {
   void           *src_ctx;
 };
 
-// Initialise (allocates ring_buf, top_pse_buf, bot_pse_buf).
+// Initialise the streaming IDWT state.
+// For dir=DWT_BIDIR: allocates ring_buf, top_pse_buf, bot_pse_buf (full 2D vertical+horizontal).
+// For dir=DWT_HORZ: allocates only horz_out_buf; no vertical lifting, horizontal IDWT only.
+// For dir=DWT_NO:   allocates only horz_out_buf (passthrough — no filtering).
+// DWT_VERT is not supported in the streaming path.
 void idwt_2d_state_init(idwt_2d_state *s,
                         int32_t u0, int32_t u1, int32_t v0, int32_t v1,
-                        uint8_t transformation,
+                        uint8_t transformation, dwt_type dir,
                         idwt_row_src_fn src_fn, void *src_ctx);
 
 // Free buffers allocated by idwt_2d_state_init.

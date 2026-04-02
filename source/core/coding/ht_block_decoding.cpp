@@ -979,7 +979,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   constexpr int32_t downshift = 15;
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
   const auto scale = (int32_t)(fscale + 0.5);
-  if (this->transformation) {
+  if (this->transformation == 1) {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;

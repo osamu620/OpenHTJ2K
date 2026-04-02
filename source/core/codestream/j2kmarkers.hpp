@@ -29,6 +29,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #include "open_htj2k_typedef.hpp"
 #include "codestream.hpp"
@@ -175,6 +176,8 @@ class COC_marker : public j2k_marker_io_base {
   COC_marker(j2c_src_memory &in, uint16_t Csiz);
   uint16_t get_component_index() const;
   bool is_maximum_precincts() const;
+  bool is_dfs_defined() const;  // bit 7 of SPcoc[0] set → DFS active for this component
+  uint8_t get_dfs_index() const;  // bits[3:0] of SPcoc[0] when DFS active
   uint8_t get_dwt_levels();
   void get_codeblock_size(element_siz &out);
   void get_precinct_size(element_siz &out, uint8_t resolution);
@@ -199,6 +202,61 @@ class RGN_marker : public j2k_marker_io_base {
 };
 
 /********************************************************************************
+ * DFS_marker  (Part 2, marker code 0xFF72)
+ * Defines per-level DWT directionality for one DFS index.
+ *******************************************************************************/
+enum dwt_type : uint8_t { DWT_NO = 0, DWT_BIDIR = 1, DWT_HORZ = 2, DWT_VERT = 3 };
+
+class DFS_marker : public j2k_marker_io_base {
+ private:
+  uint16_t Sdfs;  // DFS descriptor word; bits[3:0] = DFS index (1-15)
+  uint8_t Ids;    // number of DWT levels described
+  std::vector<dwt_type> Ddfs;  // per-level DWT type (index 0 = finest, i.e. Ddfs[0]=type of level 1)
+
+ public:
+  // Precomputed cumulative horizontal/vertical decomposition depths.
+  // hor_depth[k] = number of BIDIR/HORZ levels among the k finest DWT levels (0..Ids).
+  // ver_depth[k] = number of BIDIR/VERT levels among the k finest DWT levels (0..Ids).
+  // These replace the uniform d=1<<(NL-r) formula for DFS-active components.
+  uint8_t hor_depth[33]{};
+  uint8_t ver_depth[33]{};
+  // qcd_offset[r] = starting SPqcd flat index for resolution r (1..NL).
+  // Accounts for the fact that HORZ/VERT levels contribute only 1 SPqcd entry instead of 3.
+  uint8_t qcd_offset[33]{};
+
+  explicit DFS_marker(j2c_src_memory &in);
+  uint8_t get_index() const;
+  uint8_t get_num_levels() const;
+  dwt_type get_dwt_type(uint8_t level) const;  // level 1..Ids (1=finest); DWT_BIDIR if out of range
+  uint8_t get_num_bands(uint8_t r, uint8_t NL) const;  // num subbands for resolution r (0=LL)
+};
+
+/********************************************************************************
+ * ATK_marker  (Part 2, marker code 0xFF79)
+ * Defines an arbitrary lifting kernel (irreversible only for our implementation).
+ *******************************************************************************/
+struct atk_step {
+  uint8_t mk;    // step offset parameter
+  float Aatk;    // lifting coefficient (irreversible)
+};
+
+class ATK_marker : public j2k_marker_io_base {
+ private:
+  uint16_t Satk;  // descriptor word; bits[3:0]=index, bit12=0→irrev
+  float Katk;     // DC-level normalisation gain (present when irreversible)
+  uint8_t Natk;   // number of lifting steps
+  std::vector<atk_step> steps;
+
+ public:
+  explicit ATK_marker(j2c_src_memory &in);
+  uint8_t get_index() const;
+  bool is_reversible() const;
+  float get_Katk() const;
+  uint8_t get_num_steps() const;
+  const atk_step &get_step(uint8_t k) const;
+};
+
+/********************************************************************************
  * QCD_marker
  *******************************************************************************/
 class QCD_marker : public j2k_marker_io_base {
@@ -216,6 +274,8 @@ class QCD_marker : public j2k_marker_io_base {
   uint8_t get_exponents(uint8_t nb);
   uint16_t get_mantissas(uint8_t nb);
   uint8_t get_number_of_guardbits() const;
+  // return the actual number of SPqcd entries as parsed from the marker body
+  uint8_t get_num_entries() const { return static_cast<uint8_t>(SPqcd.size()); }
   // return MAGB value for CAP
   uint8_t get_MAGB();
 };
@@ -242,6 +302,8 @@ class QCC_marker : public j2k_marker_io_base {
   uint8_t get_exponents(uint8_t nb);
   uint16_t get_mantissas(uint8_t nb);
   uint8_t get_number_of_guardbits() const;
+  // return the actual number of SPqcc entries as parsed from the marker body
+  uint8_t get_num_entries() const { return static_cast<uint8_t>(SPqcc.size()); }
 };
 
 /********************************************************************************
@@ -405,6 +467,9 @@ class j2k_main_header {
   std::vector<std::unique_ptr<PLM_marker>> PLM;
   std::unique_ptr<CRG_marker> CRG;
   std::vector<std::unique_ptr<COM_marker>> COM;
+  // Part 2 extensions
+  std::vector<std::unique_ptr<DFS_marker>> DFS;
+  std::vector<std::unique_ptr<ATK_marker>> ATK;
   std::unique_ptr<buf_chain> ppm_header;
   std::unique_ptr<uint8_t[]> ppm_buf;
 
@@ -418,6 +483,10 @@ class j2k_main_header {
   int read(j2c_src_memory &);
   void get_number_of_tiles(uint32_t &x, uint32_t &y) const;
   buf_chain *get_ppm_header() const { return ppm_header.get(); }
+  // Return the DFS marker for the given DFS index, or nullptr if not found.
+  const DFS_marker *get_dfs_marker(uint8_t dfs_index) const;
+  // Return the ATK marker for the given ATK index, or nullptr if not found.
+  const ATK_marker *get_atk_marker(uint8_t atk_index) const;
 };
 
 /********************************************************************************

@@ -106,11 +106,30 @@ void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
   }
 };
 
+// ATK irreversible 5/3 horizontal FDWT (analysis): 2-step without floor.
+// Step 1: HP[k] -= 0.5*(LP[k] + LP[k+1])   [predict using original LP]
+// Step 2: LP[k] += 0.25*(HP_mod[k-1] + HP_mod[k])  [update using modified HP]
+static void fdwt_1d_filtr_irrev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                        const int32_t u_i1) {
+  const int32_t i0     = static_cast<int32_t>(u_i0);
+  const int32_t i1     = static_cast<int32_t>(u_i1);
+  const int32_t start  = ceil_int(i0, 2);
+  const int32_t stop   = ceil_int(i1, 2);
+  const int32_t offset = left + i0 % 2;
+  for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2)
+    X[n + 1] -= 0.5f * (X[n] + X[n + 2]);
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2)
+    X[n] += 0.25f * (X[n - 1] + X[n + 1]);
+}
+
 // 1-dimensional FDWT
 static inline void fdwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, const int32_t left, const int32_t right,
                                     const int32_t i0, const int32_t i1, const uint8_t transformation) {
   dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
-  fdwt_1d_filtr_fixed[transformation](buf, left, i0, i1);
+  if (transformation < 2)
+    fdwt_1d_filtr_fixed[transformation](buf, left, i0, i1);
+  else
+    fdwt_1d_filtr_irrev53_fixed(buf, left, i0, i1);
   memcpy(in, buf + left, sizeof(sprec_t) * (static_cast<size_t>(i1 - i0)));
 }
 
@@ -132,7 +151,10 @@ static inline void fdwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int
   for (int32_t i = 1; i <= right; ++i)
     in[width + i - 1] = in[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
   // Filter in-place: in-left is the extended buffer (left PSE | data | right PSE).
-  fdwt_1d_filtr_fixed[transformation](in - left, left, i0, i1);
+  if (transformation < 2)
+    fdwt_1d_filtr_fixed[transformation](in - left, left, i0, i1);
+  else
+    fdwt_1d_filtr_irrev53_fixed(in - left, left, i0, i1);
   // Restore the saved regions (DWT output is in in[0..width-1], boundary regions are scratch).
   for (int32_t i = 0; i < left; ++i) in[-left + i] = left_save[i];
   for (int32_t i = 0; i < SIMD_LEN_I32; ++i) in[width + i] = right_save[i];
@@ -143,17 +165,16 @@ static void fdwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
                               const int32_t v1, const uint8_t transformation, const int32_t stride) {
   constexpr int32_t num_pse_i0[2][2] = {{4, 2}, {3, 1}};
   constexpr int32_t num_pse_i1[2][2] = {{3, 1}, {4, 2}};
-  const int32_t left                 = num_pse_i0[u0 % 2][transformation];
-  const int32_t right                = num_pse_i1[u1 % 2][transformation];
+  // ATK (transformation>=2) uses same PSE sizes as rev53 (2-step filter).
+  const int32_t cls   = (transformation == 0) ? 0 : 1;
+  const int32_t left  = num_pse_i0[u0 % 2][cls];
+  const int32_t right = num_pse_i1[u1 % 2][cls];
 
   if (u0 == u1 - 1) {
-    // one sample case
+    // one sample case: irrev53 (ATK) needs no scaling; rev53 HP *= 2; irrev97 no-op.
     for (int32_t row = 0; row < v1 - v0; ++row) {
-      if (u0 % 2 == 0) {
-        in[row * stride] = (transformation) ? in[row * stride] : in[row * stride];
-      } else {
-        in[row * stride] =
-            (transformation) ? floorf(in[row * stride] * 2.0f) : in[row * stride];
+      if (u0 % 2 != 0) {
+        if (transformation == 1) in[row * stride] = floorf(in[row * stride] * 2.0f);
       }
     }
   } else {
@@ -312,6 +333,50 @@ void fdwt_rev_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, cons
     // for (int32_t i = 1; i <= bottom; i++) {
     //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
     // }
+  }
+}
+
+// ATK irreversible 5/3 vertical FDWT (analysis): 2-step without floor.
+// Step 1: HP rows -= 0.5*(LP_above + LP_below)   [predict using original LP rows]
+// Step 2: LP rows += 0.25*(HP_mod_above + HP_mod_below)  [update using modified HP rows]
+static void fdwt_irrev53_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
+                                      const int32_t v1, const int32_t stride, sprec_t *pse_scratch,
+                                      sprec_t **buf_scratch) {
+  constexpr int32_t num_pse_i0[2] = {2, 1};
+  constexpr int32_t num_pse_i1[2] = {1, 2};
+  const int32_t top               = num_pse_i0[v0 % 2];
+  const int32_t bottom            = num_pse_i1[v1 % 2];
+  if (v0 == v1 - 1) {
+    // single row: nothing to do (no neighbouring rows for lifting)
+  } else {
+    const int32_t len = round_up(stride, SIMD_LEN_I32);
+    sprec_t **buf     = buf_scratch;
+    for (int32_t i = 1; i <= top; ++i) {
+      buf[top - i] = pse_scratch + (i - 1) * len;
+      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
+             sizeof(sprec_t) * static_cast<size_t>(stride));
+    }
+    for (int32_t row = 0; row < v1 - v0; ++row) buf[top + row] = &in[row * stride];
+    for (int32_t i = 1; i <= bottom; i++) {
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
+      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
+             sizeof(sprec_t) * static_cast<size_t>(stride));
+    }
+    const int32_t start  = ceil_int(v0, 2);
+    const int32_t stop   = ceil_int(v1, 2);
+    const int32_t offset = top + v0 % 2;
+    const int32_t width  = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      // Step 1: HP -= 0.5*(LP_left + LP_right)
+      for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2)
+        for (int32_t col = cs; col < ce; ++col)
+          buf[n + 1][col] -= 0.5f * (buf[n][col] + buf[n + 2][col]);
+      // Step 2: LP += 0.25*(HP_mod_left + HP_mod_right)
+      for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2)
+        for (int32_t col = cs; col < ce; ++col)
+          buf[n][col] += 0.25f * (buf[n - 1][col] + buf[n + 1][col]);
+    }
   }
 }
 
@@ -598,7 +663,10 @@ void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH
   sprec_t *src         = previousLL;
 
   // Vertical DWT (pse_scratch provided by caller, sized for 8 * round_up(stride, SIMD_LEN_I32))
-  fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
+  if (transformation < 2)
+    fdwt_ver_sr_fixed[transformation](src, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
+  else
+    fdwt_irrev53_ver_sr_fixed(src, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
 
   // Horizontal DWT
   fdwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
@@ -695,6 +763,18 @@ static void adv_step_f(fdwt_2d_state *s, int32_t r) {
       const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
       for (int32_t c = cs; c < ce; ++c) tgt[c] += coeff * (prev[c] + next[c]);
     }
+  } else if (s->transformation >= 2) {  // ATK irrev 5/3
+    if (!lp) {  // HP predict: HP -= 0.5*(LP[r-1] + LP[r+1])
+      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+        for (int32_t c = cs; c < ce; ++c) tgt[c] -= 0.5f * (prev[c] + next[c]);
+      }
+    } else {  // LP update: LP += 0.25*(HP[r-1] + HP[r+1])
+      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
+        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
+        for (int32_t c = cs; c < ce; ++c) tgt[c] += 0.25f * (prev[c] + next[c]);
+      }
+    }
   } else {  // rev 5/3
     if (!lp) {  // HP predict: HP -= floor((LP[r-1] + LP[r+1]) * 0.5f)
       for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
@@ -763,7 +843,10 @@ static void emit_ready_f(fdwt_2d_state *s) {
     } else {
       dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(ring_row),
                         s->horiz_left, s->horiz_right, s->u0, s->u1);
-      fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+      if (s->transformation < 2)
+        fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+      else
+        fdwt_1d_filtr_irrev53_fixed(s->horiz_tmp, s->horiz_left, s->u0, s->u1);
     }
 
     s->put_row(s->sink_ctx, is_hp, r, s->horiz_tmp + s->horiz_left);
@@ -789,10 +872,11 @@ void fdwt_2d_state_init(fdwt_2d_state *s,
   s->v0            = v0;  s->v1 = v1;
   s->stride        = round_up(u1 - u0, SIMD_PADDING);
   s->transformation = transformation;
-  s->top_pse       = kPseFdwtTop[v0 % 2][transformation];
-  s->bottom_pse    = kPseFdwtBot[v1 % 2][transformation];
-  s->horiz_left    = kHorizLeft[u0 % 2][transformation];
-  s->horiz_right   = kHorizRight[u1 % 2][transformation];
+  const int32_t cls = (transformation == 0) ? 0 : 1;
+  s->top_pse       = kPseFdwtTop[v0 % 2][cls];
+  s->bottom_pse    = kPseFdwtBot[v1 % 2][cls];
+  s->horiz_left    = kHorizLeft[u0 % 2][cls];
+  s->horiz_right   = kHorizRight[u1 % 2][cls];
 
   const size_t row_bytes = sizeof(sprec_t) * static_cast<size_t>(s->stride);
   s->ring_buf    = static_cast<sprec_t *>(aligned_mem_alloc(FDWT_STATE_RING_DEPTH * row_bytes, 32));
@@ -863,6 +947,7 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
         if (s->v0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // vertical HP: match fdwt_rev_ver_sr_fixed
         if (s->u0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // horizontal HP: match fdwt_hor_sr_fixed
       }
+      // ATK (transformation>=2) irrev53: no scaling needed for single-sample case.
     } else {
       // Match fdwt_rev_ver_sr_fixed: scale HP row by 2 BEFORE horizontal DWT.
       // (floorf makes 5/3 non-linear, so order matters.)
@@ -873,7 +958,10 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
       }
       dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(src),
                         s->horiz_left, s->horiz_right, s->u0, s->u1);
-      fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+      if (s->transformation < 2)
+        fdwt_1d_filtr_fixed[s->transformation](s->horiz_tmp, s->horiz_left, s->u0, s->u1);
+      else
+        fdwt_1d_filtr_irrev53_fixed(s->horiz_tmp, s->horiz_left, s->u0, s->u1);
     }
     s->put_row(s->sink_ctx, is_hp, s->v0, out);
     ++s->next_emit;

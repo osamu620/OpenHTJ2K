@@ -580,7 +580,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
   const auto scale = (int32_t)(fscale + 0.5);
 
-  if (block->transformation) {
+  if (block->transformation == 1) {
     // reversible path
     for (int16_t y = 0; y < static_cast<int16_t>(block->size.y); y++) {
       for (int16_t x = 0; x < static_cast<int16_t>(block->size.x); x++) {
