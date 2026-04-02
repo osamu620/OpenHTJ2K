@@ -153,6 +153,65 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
   return (x == 0) ? 32 : y;
 }
 
+// Large-buffer reuse pool (Linux/glibc only).
+// Buffers >= ALIGNED_POOL_THRESHOLD bytes freed via aligned_mem_free are cached
+// (physical pages kept mapped) and returned on the next aligned_mem_alloc of a
+// compatible size, eliminating repeated mmap/munmap page-fault cycles on
+// successive decode calls with the same image geometry.
+#if defined(__linux__) && !defined(__INTEL_COMPILER) && !defined(_MSC_VER) \
+    && !defined(__MINGW32__) && !defined(__MINGW64__)
+  #include <malloc.h>  // malloc_usable_size
+  #define OPENHTJ2K_LARGE_POOL 1
+#endif
+
+#ifdef OPENHTJ2K_LARGE_POOL
+struct AlignedLargePool {
+  static constexpr size_t THRESHOLD = 16384;  // 16 KB: cache buffers >= this size
+  static constexpr int    MAX_SLOTS = 128;    // max cached entries per thread
+  struct Slot { void* ptr; size_t usable; };
+  Slot   slots[MAX_SLOTS];
+  int    count = 0;
+
+  void* alloc(size_t bytes, size_t align) {
+    if (bytes >= THRESHOLD) {
+      // Best-fit: find smallest cached buffer with usable >= bytes.
+      int    best_i = -1;
+      size_t best_u = SIZE_MAX;
+      for (int i = 0; i < count; ++i) {
+        if (slots[i].usable >= bytes && slots[i].usable < best_u) {
+          best_i = i;
+          best_u = slots[i].usable;
+        }
+      }
+      if (best_i >= 0) {
+        void* p        = slots[best_i].ptr;
+        slots[best_i]  = slots[--count];
+        return p;
+      }
+    }
+    void* result;
+    if (posix_memalign(&result, align, bytes)) result = nullptr;
+    return result;
+  }
+
+  void release(void* ptr) {
+    if (!ptr) return;
+    size_t sz = malloc_usable_size(ptr);
+    if (sz >= THRESHOLD && count < MAX_SLOTS) {
+      slots[count++] = {ptr, sz};
+    } else {
+      free(ptr);
+    }
+  }
+
+  ~AlignedLargePool() {
+    for (int i = 0; i < count; ++i) free(slots[i].ptr);
+    count = 0;
+  }
+};
+static thread_local AlignedLargePool tl_aligned_pool;
+#endif  // OPENHTJ2K_LARGE_POOL
+
 static inline void* aligned_mem_alloc(size_t size, size_t align) {
   void* result;
 #if defined(__INTEL_COMPILER)
@@ -161,6 +220,8 @@ static inline void* aligned_mem_alloc(size_t size, size_t align) {
   result = _aligned_malloc(size, align);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   result = __mingw_aligned_malloc(size, align);
+#elif defined(OPENHTJ2K_LARGE_POOL)
+  result = tl_aligned_pool.alloc(size, align);
 #else
   if (posix_memalign(&result, align, size)) {
     result = nullptr;
@@ -176,6 +237,8 @@ static inline void aligned_mem_free(void* ptr) {
   _aligned_free(ptr);
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   __mingw_aligned_free(ptr);
+#elif defined(OPENHTJ2K_LARGE_POOL)
+  tl_aligned_pool.release(ptr);
 #else
   free(ptr);
 #endif

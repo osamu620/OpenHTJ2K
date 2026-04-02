@@ -119,12 +119,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   dec_table0 = dec_CxtVLC_table0_fast_16;
   dec_table1 = dec_CxtVLC_table1_fast_16;
 
-  alignas(32) auto rholine = MAKE_UNIQUE<uint32_t[]>(QW + 4U);
-  rholine[0]               = 0;
-  auto rho_p               = rholine.get() + 1;
-  alignas(32) auto Eline   = MAKE_UNIQUE<int32_t[]>(2U * QW + 8U);
-  Eline[0]                 = 0;
-  auto E_p                 = Eline.get() + 1;
+  alignas(32) uint32_t rholine[516];  // QW_max + 4, QW_max = 512
+  std::memset(rholine, 0, (QW + 4U) * sizeof(uint32_t));
+  uint32_t *rho_p    = rholine + 1;
+  alignas(32) int32_t Eline[1032];   // 2 * QW_max + 8, QW_max = 512
+  std::memset(Eline, 0, (2U * QW + 8U) * sizeof(int32_t));
+  int32_t *E_p       = Eline + 1;
 
   uint32_t context = 0;
   uint32_t vlcval;
@@ -270,8 +270,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   // Non-initial line-pair
   /*******************************************************************************************************************/
   for (uint16_t row = 1; row < QH; row++) {
-    rho_p = rholine.get() + 1;
-    E_p   = Eline.get() + 1;
+    rho_p = rholine + 1;
+    E_p   = Eline + 1;
     mp0   = block->sample_buf + (row * 2U) * block->blksampl_stride;
     mp1   = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
     sp0   = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
