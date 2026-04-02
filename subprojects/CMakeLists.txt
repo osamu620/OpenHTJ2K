@@ -50,7 +50,7 @@ if(_COMP_OPTS)
   target_compile_options(open_htj2k_simd_objs PRIVATE ${_COMP_OPTS})
 endif()
 target_compile_definitions(open_htj2k_simd_objs PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD")
-target_compile_options(open_htj2k_simd_objs PRIVATE "-msimd128")
+target_compile_options(open_htj2k_simd_objs PRIVATE "-O3" "-flto" "-msimd128")
 
 add_library(open_htj2k_simd_lib STATIC $<TARGET_OBJECTS:open_htj2k_simd_objs>)
 if(_IFACE_INC)
