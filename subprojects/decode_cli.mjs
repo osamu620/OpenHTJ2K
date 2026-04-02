@@ -44,14 +44,14 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 const simdPath = join(__dir, 'build/html/libopen_htj2k_simd.js');
 const scalarPath = join(__dir, 'build/html/libopen_htj2k.js');
 
-let createModule;
+let M;
 try {
-  ({ default: createModule } = await import(simdPath));
+  const { default: createModule } = await import(simdPath);
+  M = await createModule();
 } catch {
-  ({ default: createModule } = await import(scalarPath));
+  const { default: createModule } = await import(scalarPath);
+  M = await createModule();
 }
-
-const M = await createModule();
 
 // ── Read input file ──────────────────────────────────────────────────────────
 let j2cData;
@@ -94,19 +94,27 @@ const rFactor = 1 << reduce;
 const Wd = Math.ceil(W / rFactor);
 const Hd = Math.ceil(H / rFactor);
 
-// Allocate output buffer: Wd × Hd × C int32_t values
-const outPtr = M._malloc(Wd * Hd * C * 4);
-if (!outPtr) {
-  console.error('WASM malloc failed for output buffer');
+const maxval      = Math.min((1 << depth) - 1, 65535);
+const bytesPerSmp = maxval > 255 ? 2 : 1;
+const magic       = C === 1 ? 'P5' : 'P6';
+const header      = `${magic}\n${Wd} ${Hd}\n${maxval}\n`;
+const headerBuf   = Buffer.from(header, 'ascii');
+
+// Allocate packed output buffer (W × H × C × bytes_per_sample).
+// invoke_decoder_stream() writes directly here, avoiding a separate 96MB int32 buffer.
+const nSamples  = Wd * Hd * C;
+const packedPtr = M._malloc(nSamples * bytesPerSmp);
+if (!packedPtr) {
+  console.error('WASM malloc failed for packed output buffer');
   M._release_j2c_data(dec);
   process.exit(1);
 }
 
 try {
-  M._invoke_decoder(dec, outPtr);
+  M._invoke_decoder_stream(dec, packedPtr, maxval, bytesPerSmp);
 } catch (e) {
   console.error(`Decode error: ${e}`);
-  M._free(outPtr);
+  M._free(packedPtr);
   M._release_j2c_data(dec);
   process.exit(1);
 }
@@ -114,20 +122,8 @@ M._release_j2c_data(dec);
 
 const t1 = performance.now();
 
-// ── Pack pixels in WASM, copy result to Node.js Buffer ───────────────────────
-// Re-read HEAPU8 after decode: ALLOW_MEMORY_GROWTH may have replaced the buffer.
-const maxval      = Math.min((1 << depth) - 1, 65535);
-const bytesPerSmp = maxval > 255 ? 2 : 1;
-const magic       = C === 1 ? 'P5' : 'P6';
-const header      = `${magic}\n${Wd} ${Hd}\n${maxval}\n`;
-const headerBuf   = Buffer.from(header, 'ascii');
-const nSamples    = Wd * Hd * C;
-const packedPtr   = M._malloc(nSamples * bytesPerSmp);
-
-M._pack_samples(outPtr, packedPtr, nSamples, maxval, bytesPerSmp);
-M._free(outPtr);
-
-// Snapshot packed bytes before freeing (copy out of WASM heap)
+// Snapshot packed bytes before freeing (copy out of WASM heap).
+// Re-read HEAPU8: ALLOW_MEMORY_GROWTH may have replaced the backing buffer.
 const pixelBuf = Buffer.from(
   M.HEAPU8.buffer.slice(packedPtr, packedPtr + nSamples * bytesPerSmp)
 );

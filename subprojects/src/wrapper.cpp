@@ -109,6 +109,94 @@ uint32_t get_minimum_DWT_levels(open_htj2k::openhtj2k_decoder* dec) {
   return cpp_get_minimum_DWT_levels(dec);
 }
 
+// invoke_decoder_stream: decode using invoke_line_based_stream() so that the
+// internal planar tile buffers and the full W×H×C int32 output buffer are
+// never simultaneously live.  Rows are interleaved and packed directly into
+// dst (already sized W × H × nc × bytes_per_sample) as they are produced.
+// Peak WASM heap is reduced by ~(W × H × nc × 4) bytes vs invoke_decoder().
+EMSCRIPTEN_KEEPALIVE
+void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
+                           int32_t maxval, int32_t bytes_per_sample) {
+  std::vector<uint32_t> width, height;
+  std::vector<uint8_t>  depth;
+  std::vector<bool>     is_signed;
+
+  dec->invoke_line_based_stream(
+    [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+      const uint32_t W = width[0];
+      uint8_t* row_dst = dst + (size_t)y * W * nc * bytes_per_sample;
+      if (nc == 1) {
+        // Grayscale — single component, already "interleaved"
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+        const v128_t vmx   = wasm_i32x4_splat(maxval);
+        const v128_t vzero = wasm_i32x4_const_splat(0);
+        uint32_t x = 0;
+        if (bytes_per_sample == 1) {
+          for (; x + 16 <= W; x += 16) {
+            v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x),      vzero), vmx);
+            v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x +  4), vzero), vmx);
+            v128_t c = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x +  8), vzero), vmx);
+            v128_t d = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x + 12), vzero), vmx);
+            wasm_v128_store(row_dst + x,
+                            wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(a, b),
+                                                    wasm_i16x8_narrow_i32x4(c, d)));
+          }
+          for (; x < W; ++x) {
+            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            row_dst[x] = static_cast<uint8_t>(v);
+          }
+        } else {
+          uint8_t* d = row_dst;
+          for (; x + 8 <= W; x += 8) {
+            v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x),     vzero), vmx);
+            v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x + 4), vzero), vmx);
+            v128_t u16le = wasm_u16x8_narrow_i32x4(a, b);
+            v128_t u16be = wasm_i8x16_shuffle(u16le, u16le,
+                                              1,0, 3,2, 5,4, 7,6, 9,8, 11,10, 13,12, 15,14);
+            wasm_v128_store(d, u16be); d += 16;
+          }
+          for (; x < W; ++x) {
+            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            *d++ = static_cast<uint8_t>(v >> 8); *d++ = static_cast<uint8_t>(v & 0xff);
+          }
+        }
+#else
+        if (bytes_per_sample == 1) {
+          for (uint32_t x = 0; x < W; ++x) {
+            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            row_dst[x] = static_cast<uint8_t>(v);
+          }
+        } else {
+          uint8_t* d = row_dst;
+          for (uint32_t x = 0; x < W; ++x) {
+            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            *d++ = static_cast<uint8_t>(v >> 8); *d++ = static_cast<uint8_t>(v & 0xff);
+          }
+        }
+#endif
+      } else {
+        // Multi-component: interleave R/G/B... and pack in one pass
+        if (bytes_per_sample == 1) {
+          for (uint32_t x = 0; x < W; ++x) {
+            for (uint16_t c = 0; c < nc; ++c) {
+              int32_t v = rows[c][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+              *row_dst++ = static_cast<uint8_t>(v);
+            }
+          }
+        } else {
+          for (uint32_t x = 0; x < W; ++x) {
+            for (uint16_t c = 0; c < nc; ++c) {
+              int32_t v = rows[c][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+              *row_dst++ = static_cast<uint8_t>(v >> 8);
+              *row_dst++ = static_cast<uint8_t>(v & 0xff);
+            }
+          }
+        }
+      }
+    },
+    width, height, depth, is_signed);
+}
+
 // pack_samples: convert interleaved int32 pixels → packed uint8 or uint16 big-endian.
 // src[0..count-1] are clamped to [0, maxval] then written into dst.
 // bytes_per_sample: 1 → P5/P6 8-bit, 2 → P5/P6 16-bit big-endian.
