@@ -178,10 +178,18 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   }
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   {
-    // NEON: vzipq_f32 interleaves two float32x4 vectors.
+    // NEON: vzipq_f32 interleaves two float32x4 vectors. 2× unrolled to process 8 pairs/iter.
     const sprec_t *a_ptr = (u_off == 0) ? lp_ptr : hp_ptr;
     const sprec_t *b_ptr = (u_off == 0) ? hp_ptr : lp_ptr;
     int32_t i = 0;
+    for (; i + 8 <= min_w; i += 8) {
+      float32x4x2_t z0 = vzipq_f32(vld1q_f32(a_ptr + i),     vld1q_f32(b_ptr + i));
+      float32x4x2_t z1 = vzipq_f32(vld1q_f32(a_ptr + i + 4), vld1q_f32(b_ptr + i + 4));
+      vst1q_f32(out + 2 * i,      z0.val[0]);
+      vst1q_f32(out + 2 * i + 4,  z0.val[1]);
+      vst1q_f32(out + 2 * i + 8,  z1.val[0]);
+      vst1q_f32(out + 2 * i + 12, z1.val[1]);
+    }
     for (; i + 4 <= min_w; i += 4) {
       float32x4x2_t zipped = vzipq_f32(vld1q_f32(a_ptr + i), vld1q_f32(b_ptr + i));
       vst1q_f32(out + 2 * i,     zipped.val[0]);
