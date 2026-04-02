@@ -505,9 +505,13 @@ class j2k_tile_component : public j2k_tile_base {
   // init_line_decode(): must be called after all packets are parsed.
   // pull_line():        returns the next decoded row (float) into out[0..width-1].
   //                     Returns false when all rows are exhausted.
+  // pull_line_ref():    zero-copy variant — returns a pointer into the internal ring
+  //                     buffer (valid until the next pull call).  Returns nullptr
+  //                     when exhausted.  The caller may modify the row in-place.
   // finalize_line_decode(): frees state allocated by init_line_decode().
   void init_line_decode(bool ring_mode = false);
   bool pull_line(sprec_t *out);
+  sprec_t *pull_line_ref();
   void finalize_line_decode();
   // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
   void mark_line_dec_predecoded();
