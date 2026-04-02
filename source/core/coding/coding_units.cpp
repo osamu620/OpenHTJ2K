@@ -3199,8 +3199,8 @@ void j2k_tile::decode() {
       const size_t need_samples = sizeof(int32_t) * lev_max * 4096;
       const size_t need_states  = sizeof(uint8_t) * lev_max * 6156;
       if (need_samples > alloc_samples_bytes) {
-        std::free(buf_for_samples);
-        buf_for_samples     = static_cast<int32_t *>(malloc(need_samples));
+        aligned_mem_free(buf_for_samples);
+        buf_for_samples     = static_cast<int32_t *>(aligned_mem_alloc(need_samples, 32));
         alloc_samples_bytes = need_samples;
       }
       if (need_states > alloc_states_bytes) {
@@ -3287,8 +3287,8 @@ void j2k_tile::decode() {
 #endif
       }  // end of precinct loop
     }
-    std::free(buf_for_states);
-    std::free(buf_for_samples);
+    aligned_mem_free(buf_for_states);
+    aligned_mem_free(buf_for_samples);
   }
 
   for (uint16_t c = 0; c < num_components; c++) {
@@ -4177,8 +4177,8 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       const size_t need_s  = static_cast<size_t>(lev_max) * 4096;
       const size_t need_st = static_cast<size_t>(lev_max) * 6156;
       if (need_s > dl_sample_cap) {
-        std::free(dl_sample_buf);
-        dl_sample_buf = static_cast<int32_t *>(std::malloc(need_s * sizeof(int32_t)));
+        aligned_mem_free(dl_sample_buf);
+        dl_sample_buf = static_cast<int32_t *>(aligned_mem_alloc(need_s * sizeof(int32_t), 32));
         dl_sample_cap = need_s;
       }
       if (need_st > dl_state_cap) {
@@ -4229,7 +4229,7 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       }
     }
   }
-  std::free(dl_sample_buf);
+  aligned_mem_free(dl_sample_buf);
   std::free(dl_state_buf);
 
   // Step 2: run line-based path but bypass decode_strip (use pre-decoded sb->i_samples).

@@ -128,9 +128,10 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   }
 
   // Pre-allocate scratch for a 64×64 codeblock (grow-on-demand).
+  // 32-byte alignment allows _mm256_load_si256 in the dequantize hot path.
   cb_sample_cap  = static_cast<size_t>(round_up(64, 8) * round_up(64, 8));
   cb_state_cap   = static_cast<size_t>((round_up(64, 8) + 2) * (round_up(64, 8) + 2));
-  cb_sample_buf  = static_cast<int32_t *>(aligned_mem_alloc(cb_sample_cap * sizeof(int32_t), 16));
+  cb_sample_buf  = static_cast<int32_t *>(aligned_mem_alloc(cb_sample_cap * sizeof(int32_t), 32));
   cb_state_buf   = static_cast<uint8_t *>(aligned_mem_alloc(cb_state_cap, 16));
 
 #ifdef OPENHTJ2K_THREAD

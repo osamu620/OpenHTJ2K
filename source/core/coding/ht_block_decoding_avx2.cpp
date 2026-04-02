@@ -519,9 +519,11 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       size_t len   = this->size.x;
       if (ROIshift == 0) {
         // Common case: no ROI — skip the ROI upshift entirely.
+        // val = sample_buf + i * blksampl_stride; blksampl_stride = round_up(width,8) is a
+        // multiple of 8 int32 = 32 bytes, and sample_buf is 32-byte aligned → _mm256_load_si256 ok.
         for (; len >= 16; len -= 16) {
-          v0    = _mm256_loadu_si256((__m256i *)val);
-          v1    = _mm256_loadu_si256((__m256i *)(val + 8));
+          v0    = _mm256_load_si256((__m256i *)val);
+          v1    = _mm256_load_si256((__m256i *)(val + 8));
           s0    = v0;
           s1    = v1;
           v0    = _mm256_and_si256(v0, magmask);
@@ -544,8 +546,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         }
       } else {
         for (; len >= 16; len -= 16) {
-          v0 = _mm256_loadu_si256((__m256i *)val);
-          v1 = _mm256_loadu_si256((__m256i *)(val + 8));
+          v0 = _mm256_load_si256((__m256i *)val);
+          v1 = _mm256_load_si256((__m256i *)(val + 8));
           s0 = v0;
           s1 = v1;
           v0 = _mm256_and_si256(v0, magmask);
@@ -606,11 +608,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         sprec_t *dst = this->i_samples + i * this->band_stride;
         size_t len   = this->size.x;
         // 2× unrolled: 4 vectors (32 elements) per iteration for better ILP
+        // val = sample_buf + i*blksampl_stride; 32-byte aligned → _mm256_load_si256 ok.
         for (; len >= 32; len -= 32) {
-          __m256i a0 = _mm256_loadu_si256((__m256i *)val);
-          __m256i a1 = _mm256_loadu_si256((__m256i *)(val + 8));
-          __m256i a2 = _mm256_loadu_si256((__m256i *)(val + 16));
-          __m256i a3 = _mm256_loadu_si256((__m256i *)(val + 24));
+          __m256i a0 = _mm256_load_si256((__m256i *)val);
+          __m256i a1 = _mm256_load_si256((__m256i *)(val + 8));
+          __m256i a2 = _mm256_load_si256((__m256i *)(val + 16));
+          __m256i a3 = _mm256_load_si256((__m256i *)(val + 24));
           __m256i m0 = _mm256_and_si256(a0, magmask);
           __m256i m1 = _mm256_and_si256(a1, magmask);
           __m256i m2 = _mm256_and_si256(a2, magmask);
@@ -631,7 +634,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
           dst += 32;
         }
         for (; len >= 8; len -= 8) {
-          __m256i a0 = _mm256_loadu_si256((__m256i *)val);
+          __m256i a0 = _mm256_load_si256((__m256i *)val);
           __m256i m0 = _mm256_and_si256(a0, magmask);
           __m256 f0  = _mm256_mul_ps(_mm256_cvtepi32_ps(m0), vfscale);
           f0 = _mm256_xor_ps(f0, _mm256_castsi256_ps(_mm256_and_si256(a0, vsignmask)));
@@ -658,8 +661,8 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         sprec_t *dst = this->i_samples + i * this->band_stride;
         size_t len   = this->size.x;
         for (; len >= 16; len -= 16) {
-          v0 = _mm256_loadu_si256((__m256i *)val);
-          v1 = _mm256_loadu_si256((__m256i *)(val + 8));
+          v0 = _mm256_load_si256((__m256i *)val);
+          v1 = _mm256_load_si256((__m256i *)(val + 8));
           s0 = v0;
           s1 = v1;
           v0 = _mm256_and_si256(v0, magmask);
