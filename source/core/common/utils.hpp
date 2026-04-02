@@ -181,11 +181,13 @@ struct AlignedLargePool {
 
   void* alloc(size_t bytes, size_t align) {
     if (bytes >= THRESHOLD) {
-      // Best-fit: find smallest cached buffer with usable >= bytes.
+      // Best-fit: find smallest cached buffer with usable >= bytes AND alignment compatible.
       int    best_i = -1;
       size_t best_u = SIZE_MAX;
       for (int i = 0; i < count; ++i) {
-        if (slots[i].usable >= bytes && slots[i].usable < best_u) {
+        const uintptr_t addr = reinterpret_cast<uintptr_t>(slots[i].ptr);
+        if (slots[i].usable >= bytes && slots[i].usable < best_u
+            && (addr & (align - 1)) == 0) {
           best_i = i;
           best_u = slots[i].usable;
         }
