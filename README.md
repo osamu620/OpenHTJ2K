@@ -31,7 +31,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 - Multi-threaded encode and decode via a built-in thread pool
 
 # Requirements
-cmake (version 3.13 or later) and a C++14 compliant compiler (C++17 or later recommended for best diagnostics).
+cmake (version 3.13 or later) and a C++11 compliant compiler (C++17 or later recommended for best diagnostics).
 
 # Building
 `./` is the root of the cloned repository and `${BUILD_DIR}` is a build directory (e.g. `../build` or `./build`).
