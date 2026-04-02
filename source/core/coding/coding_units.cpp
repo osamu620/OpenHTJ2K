@@ -67,7 +67,8 @@ struct idwt_level_src_ctx {
   //         nullptr (not allocated) when has_child=false (direct pointer to ll0_buf used).
   // hp_tmp: no longer allocated — HP data is read directly from subband row buffers.
   sprec_t *lp_tmp;   // LL row scratch (non-null only when has_child=true)
-  sprec_t *ext_buf;  // PSE extension scratch for idwt_1d_row_fixed
+  // ext_buf removed: ring buffer slots now include PSE prefix/suffix (IDWT_RING_PSE_LEFT),
+  // so in-place horizontal PSE fill + filter is applied directly on the slot data area.
 
   // Subband dimensions (set once at init).
   int32_t lp_width;    // width of LL / LH subband
@@ -75,6 +76,9 @@ struct idwt_level_src_ctx {
   int32_t ll_y0;       // pos0.y of LL (used only when !has_child)
   int32_t ll0_height;  // row count of LL0 subband; PSE needed when sub_idx >= ll0_height
   int32_t hl_y0, lh_y0, hh_y0;
+  // PSE counts for in-place horizontal filter (precomputed at init).
+  int32_t h_pse_left;   // left PSE samples for this level (function of u0%2, transformation)
+  int32_t h_pse_right;  // right PSE samples for this level (function of u1%2, transformation)
 };
 
 // Whole-sample symmetric extension: reflect idx into [0, len).
@@ -201,7 +205,17 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   }
 #endif
 
-  idwt_1d_row_fixed(c->ext_buf, out, c->u0, c->u1, c->transformation);
+  // In-place horizontal IDWT: the ring buffer slot has IDWT_RING_PSE_LEFT scratch floats
+  // before out[0], so we can fill PSE directly into out[-left..-1] and out[width..width+right-1]
+  // then filter in-place — no ext_buf copy needed.
+  const int32_t width = c->u1 - c->u0;
+  if (width <= 0) return;
+  if (width == 1) {
+    // Single-sample edge case (same as idwt_1d_row_fixed).
+    if ((c->u0 % 2 != 0) && (c->transformation == 1)) out[0] /= 2.0f;
+    return;
+  }
+  idwt_1d_row_inplace(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1810,8 +1824,9 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     // the resolution width directly instead of sb_LL->pos1.x - sb_LL->pos0.x.
     const int32_t lp_width = static_cast<int32_t>(cr_ll->get_pos1().x - cr_ll->get_pos0().x);
     const int32_t hp_width = static_cast<int32_t>(sb_HL->get_pos1().x - sb_HL->get_pos0().x);
-    // ext_buf size: worst case left+width+right+SIMD_PADDING (8+width+8 for 9/7).
-    const int32_t ext_sz   = round_up(u1 - u0 + 16 + SIMD_PADDING, SIMD_PADDING);
+    // PSE counts for in-place horizontal filter (precomputed; indexed [u%2][transformation]).
+    static constexpr int32_t kHPseLeft[2][2]  = {{3, 1}, {4, 2}};  // [u0%2][transformation]
+    static constexpr int32_t kHPseRight[2][2] = {{4, 2}, {3, 1}};  // [u1%2][transformation]
 
     idwt_level_src_ctx &c = ld->ctxs[i];
     c.v0             = v0;
@@ -1831,11 +1846,13 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     c.hl_y0          = static_cast<int32_t>(sb_HL->get_pos0().y);
     c.lh_y0          = static_cast<int32_t>(sb_LH->get_pos0().y);
     c.hh_y0          = static_cast<int32_t>(sb_HH->get_pos0().y);
+    c.h_pse_left     = (u1 - u0 > 1) ? kHPseLeft[u0 % 2][transformation]  : 0;
+    c.h_pse_right    = (u1 - u0 > 1) ? kHPseRight[u1 % 2][transformation] : 0;
 
     // lp_tmp only needed when has_child (child state writes output into it).
     // hp_tmp eliminated: HP data is read directly from subband row buffers.
+    // ext_buf eliminated: in-place horizontal IDWT uses ring buffer PSE prefix.
     c.lp_tmp  = (i > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(lp_width + SIMD_PADDING), 32)) : nullptr;
-    c.ext_buf = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(ext_sz), 32));
 
     idwt_2d_state_init(&ld->states[i], u0, u1, v0, v1, transformation,
                        idwt_level_src_fn, &ld->ctxs[i]);
@@ -1899,7 +1916,6 @@ void j2k_tile_component::finalize_line_decode() {
   for (int32_t i = 0; i < n; ++i) {
     idwt_2d_state_free(&ld->states[i]);
     aligned_mem_free(ld->ctxs[i].lp_tmp);
-    aligned_mem_free(ld->ctxs[i].ext_buf);
     ld->hl_bufs[i].free_resources();
     ld->lh_bufs[i].free_resources();
     ld->hh_bufs[i].free_resources();

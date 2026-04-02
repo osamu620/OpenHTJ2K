@@ -647,6 +647,23 @@ void idwt_1d_row_fixed(sprec_t *ext_buf, sprec_t *row, const int32_t u0, const i
   idwt_1d_sr_fixed(ext_buf, row, left, right, u0, u1, transformation);
 }
 
+// In-place 1-D IDWT for rows that have writable PSE scratch space immediately before and
+// after the data area (ring buffer slots with IDWT_RING_PSE_LEFT prefix).
+// row[-left..-1] and row[width..width+right-1] must be writable (within the slot's PSE areas).
+// After this call, row[0..u1-u0-1] holds the filtered output.
+void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right,
+                         const int32_t u0, const int32_t u1, const uint8_t transformation) {
+  const int32_t width = u1 - u0;
+  // Fill left PSE into row[-left..-1].
+  for (int32_t i = 1; i <= left; ++i)
+    row[-i] = row[PSEo(u0 - i, u0, u1)];
+  // Fill right PSE into row[width..width+right-1].
+  for (int32_t i = 1; i <= right; ++i)
+    row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+  // Apply horizontal IDWT filter in-place (X = row - left, data at X[left..left+width-1]).
+  idwt_1d_filtr_fixed[transformation](row - left, left, u0, u1);
+}
+
 // =============================================================================
 // Streaming 2D IDWT — idwt_2d_state
 // =============================================================================
@@ -672,9 +689,13 @@ static inline int32_t pse_source(int32_t p, int32_t v0, int32_t v1) {
 
 // Pointer to the row buffer for physical row r (ring, top-PSE, or bot-PSE).
 // Ring slot is r % IDWT_STATE_RING_DEPTH (fixed per row, independent of ring_origin).
+// For ring rows, returns a pointer to the DATA area (offset IDWT_RING_PSE_LEFT into the slot),
+// which is 32-byte aligned because IDWT_RING_PSE_LEFT=8 floats=32 bytes and ring_buf is
+// 32-byte aligned with slot_stride also a multiple of 8 floats.
 static sprec_t *rptr(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1)
-    return s->ring_buf + static_cast<ptrdiff_t>(r % IDWT_STATE_RING_DEPTH) * s->stride;
+    return s->ring_buf + static_cast<ptrdiff_t>(r % IDWT_STATE_RING_DEPTH) * s->slot_stride
+           + IDWT_RING_PSE_LEFT;
   if (r < s->v0)
     return s->top_pse_buf + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
   return s->bot_pse_buf + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
@@ -833,7 +854,7 @@ static void fetch_one(idwt_2d_state *s) {
 
   const int32_t slot = r % IDWT_STATE_RING_DEPTH;
   s->d_level[slot]   = -1;
-  s->get_src_row(s->src_ctx, r, s->ring_buf + static_cast<ptrdiff_t>(slot) * s->stride);
+  s->get_src_row(s->src_ctx, r, rptr(s, r));
   s->d_level[slot]   = 0;
   ++s->next_fetch;
   fill_pse(s, r);
@@ -850,12 +871,19 @@ void idwt_2d_state_init(idwt_2d_state *s,
   s->u0            = u0;  s->u1 = u1;
   s->v0            = v0;  s->v1 = v1;
   s->stride        = round_up(u1 - u0, SIMD_PADDING);
+  // slot_stride: PSE prefix (IDWT_RING_PSE_LEFT) + data + right SIMD tail.
+  // Extra SIMD_PADDING on the right ensures in-place horizontal PSE reads and
+  // AVX2 unaligned stores don't stray into the next slot.
+  // slot_stride is a multiple of 8 floats (32 bytes) so the data area (at +IDWT_RING_PSE_LEFT)
+  // is 32-byte aligned when ring_buf is 32-byte aligned.
+  s->slot_stride   = IDWT_RING_PSE_LEFT + round_up(u1 - u0 + SIMD_PADDING, SIMD_PADDING);
   s->transformation = transformation;
   s->top_pse       = kPseTop[v0 % 2][transformation];
   s->bottom_pse    = kPseBot[v1 % 2][transformation];
 
-  const size_t row_bytes = sizeof(sprec_t) * static_cast<size_t>(s->stride);
-  s->ring_buf    = static_cast<sprec_t *>(aligned_mem_alloc(IDWT_STATE_RING_DEPTH * row_bytes, 32));
+  const size_t row_bytes     = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+  const size_t slot_bytes    = sizeof(sprec_t) * static_cast<size_t>(s->slot_stride);
+  s->ring_buf    = static_cast<sprec_t *>(aligned_mem_alloc(IDWT_STATE_RING_DEPTH * slot_bytes, 32));
   s->top_pse_buf = (s->top_pse    > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32)) : nullptr;
   s->bot_pse_buf = (s->bottom_pse > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32)) : nullptr;
 
