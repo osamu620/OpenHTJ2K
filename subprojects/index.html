@@ -429,7 +429,6 @@
       var ctx = canvas.getContext("2d", {colorSpace: colorSpaceName});
       ctx.clearRect(0, 0, width, height);
       var cimg = ctx.createImageData(width, height, {colorSpace: colorSpaceName});
-console.log(cimg);
       var down_shift = (bit_depth >= 8 ? bit_depth - 8 : 0) | 0;
       var up_shift = (bit_depth < 8 ? 8 - bit_depth : 0) | 0;
       var half = (bit_depth > 8 ? (1 << (down_shift - 1)) : 0) | 0;
@@ -556,6 +555,10 @@ console.log(cimg);
       get_j2c_bit_depth = Module.cwrap('get_depth', 'number', ['number', 'number']);
       get_j2c_is_signed = Module.cwrap('get_signed', 'number', ['number', 'number']);
       get_minimum_DWT_levels = Module.cwrap('get_minimum_DWT_levels', 'number', ['number']);
+      // pack_samples: int32 → uint8/uint16-BE packed buffer (used by Node.js CLI)
+      pack_samples = Module.cwrap('pack_samples', 'void', ['number', 'number', 'number', 'number', 'number']);
+      // invoke_decoder_stream: streaming decode + pack into pre-allocated buffer (used by Node.js CLI)
+      invoke_decoder_stream = Module.cwrap('invoke_decoder_stream', 'void', ['number', 'number', 'number', 'number']);
 
       // Hide the loading overlay — decoder is ready.
       var ov = document.getElementById('canvas-overlay');
