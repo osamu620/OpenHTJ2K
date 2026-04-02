@@ -877,19 +877,27 @@ void idwt_2d_state_free(idwt_2d_state *s) {
 }
 
 bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out) {
-  if (s->next_out >= s->v1) return false;
+  const sprec_t *ptr = idwt_2d_state_pull_row_ref(s);
+  if (!ptr) return false;
+  memcpy(out, ptr, sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
+  return true;
+}
+
+sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
+  if (s->next_out >= s->v1) return nullptr;
 
   // Special case: empty or trivial tile.
-  if (s->v1 <= s->v0) return false;
+  if (s->v1 <= s->v0) return nullptr;
 
-  // Special case: single-row tile (v1 == v0+1).
+  // Special case: single-row tile (v1 == v0+1) — write into ring buffer slot.
   if (s->v1 == s->v0 + 1) {
-    s->get_src_row(s->src_ctx, s->v0, out);
+    sprec_t *dst = rptr(s, s->v0);
+    s->get_src_row(s->src_ctx, s->v0, dst);
     if (s->transformation == 1 && (s->v0 % 2) == 1) {
-      for (int32_t c = 0; c < s->u1 - s->u0; ++c) out[c] = floorf(out[c] * 0.5f);
+      for (int32_t c = 0; c < s->u1 - s->u0; ++c) dst[c] = floorf(dst[c] * 0.5f);
     }
     ++s->next_out;
-    return true;
+    return dst;
   }
 
   const int8_t mxdl = max_dl(s->transformation);
@@ -909,9 +917,9 @@ bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out) {
     fetch_one(s);
   }
 
-  if (get_dl(s, s->next_out) < mxdl) return false;  // should not happen
+  if (get_dl(s, s->next_out) < mxdl) return nullptr;  // should not happen
 
-  memcpy(out, rptr(s, s->next_out), sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
+  sprec_t *result = rptr(s, s->next_out);
   ++s->next_out;
-  return true;
+  return result;
 }

@@ -105,9 +105,12 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
 
   if (lp) {
     if (c->has_child) {
-      if (!idwt_2d_state_pull_row(c->child_state, c->lp_tmp))
+      // Zero-copy: use pointer directly into child state's ring buffer.
+      lp_ptr = idwt_2d_state_pull_row_ref(c->child_state);
+      if (lp_ptr == nullptr) {
         memset(c->lp_tmp, 0, sizeof(sprec_t) * static_cast<size_t>(c->lp_width));
-      lp_ptr = c->lp_tmp;
+        lp_ptr = c->lp_tmp;
+      }
     } else {
       const int32_t clamped = pse_row_idx(sub_idx, c->ll0_height);
       lp_ptr = c->ll0_buf->row_ptr(c->ll_y0 + clamped);  // no copy
@@ -1863,6 +1866,19 @@ bool j2k_tile_component::pull_line(sprec_t *out) {
   }
 
   return idwt_2d_state_pull_row(&ld->states[ld->NL_active - 1], out);
+}
+
+sprec_t *j2k_tile_component::pull_line_ref() {
+  if (line_dec == nullptr) return nullptr;
+  j2k_tcomp_line_dec *ld = line_dec;
+
+  if (ld->NL_active == 0) {
+    j2k_subband *sb = ld->ll0_buf.sb;
+    if (ld->next_row >= static_cast<int32_t>(sb->get_pos1().y)) return nullptr;
+    return const_cast<sprec_t *>(ld->ll0_buf.row_ptr(ld->next_row++));
+  }
+
+  return idwt_2d_state_pull_row_ref(&ld->states[ld->NL_active - 1]);
 }
 
 void j2k_tile_component::finalize_line_decode() {
@@ -4383,6 +4399,7 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
     I.cdst      = dst[c];
   }
 
+  // Per-component float row scratch buffers (each sized with SIMD headroom).
   std::vector<std::vector<sprec_t>> rows(NC);
   for (uint16_t c = 0; c < NC; ++c) {
     const size_t sz = static_cast<size_t>(round_up(static_cast<int32_t>(ci[c].csize_x) + SIMD_PADDING, SIMD_PADDING));

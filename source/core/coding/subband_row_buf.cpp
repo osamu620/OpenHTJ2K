@@ -120,12 +120,8 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
       combined_buf = combined;
       ring_buf     = combined;
       prefetch_buf = combined + buf_floats;
-      // Pre-fault all pages once at allocation time so that dequantize's first
-      // write to i_samples doesn't trigger repeated page-table lock acquisitions.
-      std::memset(combined, 0, buf_bytes * 2);
 #else
       ring_buf = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes, 32));
-      std::memset(ring_buf, 0, buf_bytes);
 #endif
     }
   }
@@ -137,45 +133,9 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   cb_state_buf   = static_cast<uint8_t *>(std::malloc(cb_state_cap));
 
 #ifdef OPENHTJ2K_THREAD
-  // Pre-scan all codeblock strips so par_spool / par_stpool / par_tasks can be
-  // pre-allocated to the worst-case strip size, eliminating per-strip malloc.
-  {
-    const int32_t sb_y0_v = static_cast<int32_t>(sb->get_pos0().y);
-    const int32_t sb_y1_v = static_cast<int32_t>(sb->get_pos1().y);
-    size_t   max_s = 0, max_st = 0;
-    uint32_t max_cblks = 0;
-    const uint32_t np = resolution->npw * resolution->nph;
-    for (int32_t sy = sb_y0_v; sy < sb_y1_v; sy += codeblock_height) {
-      const int32_t ey = std::min(sy + codeblock_height, sb_y1_v);
-      size_t   strip_s = 0, strip_st = 0;
-      uint32_t strip_cblks = 0;
-      for (uint32_t p = 0; p < np; ++p) {
-        j2k_precinct_subband *cpb = resolution->access_precinct(p)->access_pband(b_idx);
-        const uint32_t nc = cpb->num_codeblock_x * cpb->num_codeblock_y;
-        for (uint32_t bi = 0; bi < nc; ++bi) {
-          j2k_codeblock *blk = cpb->access_codeblock(bi);
-          if (static_cast<int32_t>(blk->get_pos1().y) <= sy) continue;
-          if (static_cast<int32_t>(blk->get_pos0().y) >= ey) continue;
-          const uint32_t QWx2 = round_up(blk->size.x, 8U);
-          const uint32_t QHx2 = round_up(blk->size.y, 8U);
-          strip_s  += static_cast<size_t>(QWx2 * QHx2);
-          strip_st += static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
-          ++strip_cblks;
-        }
-      }
-      if (strip_s  > max_s)     max_s     = strip_s;
-      if (strip_st > max_st)    max_st    = strip_st;
-      if (strip_cblks > max_cblks) max_cblks = strip_cblks;
-    }
-    // Ensure at least room for a single 64×64 codeblock.
-    const size_t min_s  = static_cast<size_t>(round_up(64, 8) * round_up(64, 8));
-    const size_t min_st = static_cast<size_t>((round_up(64, 8) + 2) * (round_up(64, 8) + 2));
-    par_spool_cap  = std::max(max_s,  min_s);
-    par_stpool_cap = std::max(max_st, min_st);
-    par_spool  = static_cast<int32_t *>(std::malloc(par_spool_cap * sizeof(int32_t)));
-    par_stpool = static_cast<uint8_t *>(std::malloc(par_stpool_cap));
-    par_tasks.reserve(std::max(max_cblks, 16U));
-  }
+  // par_spool / par_stpool start at zero capacity; decode_strip_core will
+  // grow-on-demand on the first strip and reuse from the second strip onwards.
+  par_tasks.reserve(16);
 #endif
 }
 

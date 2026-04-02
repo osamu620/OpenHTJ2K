@@ -588,80 +588,119 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       }
     }
   } else {
-    // lossy path
-    float fscale = this->stepsize;
-    fscale *= (1 << FRACBITS);
-    if (M_b <= 31) {
-      fscale /= (static_cast<float>(1 << (31 - M_b)));
-    } else {
-      fscale *= (static_cast<float>(1 << (M_b - 31)));
-    }
-    constexpr int32_t downshift = 15;
-    fscale *= (float)(1 << 16) * (float)(1 << downshift);
-    const auto scale = (int32_t)(fscale + 0.5);
-    for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
-      size_t len   = this->size.x;
-      for (; len >= 16; len -= 16) {
-        v0 = _mm256_loadu_si256((__m256i *)val);
-        v1 = _mm256_loadu_si256((__m256i *)(val + 8));
-        s0 = v0;  //_mm256_or_si256(_mm256_and_si256(v0, signmask), one);
-        s1 = v1;  //_mm256_or_si256(_mm256_and_si256(v1, signmask), one);
-        v0 = _mm256_and_si256(v0, magmask);
-        v1 = _mm256_and_si256(v1, magmask);
-        // upshift background region, if necessary
-        vROImask = _mm256_and_si256(v0, vmask);
-        vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-        vROImask = _mm256_and_si256(vROImask, shift);
-        v0       = _mm256_sllv_epi32(v0, vROImask);
-        vROImask = _mm256_and_si256(v1, vmask);
-        vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-        vROImask = _mm256_and_si256(vROImask, shift);
-        v1       = _mm256_sllv_epi32(v1, vROImask);
+    // lossy path: compute the direct float scale factor
+    // decoded magnitude is in Q(31-M_b) fixed-point; result must be in Q(FRACBITS)
+    float fscale_direct = this->stepsize;
+    fscale_direct *= static_cast<float>(1 << FRACBITS);
+    if (M_b <= 31)
+      fscale_direct /= static_cast<float>(1 << (31 - M_b));
+    else
+      fscale_direct *= static_cast<float>(1 << (M_b - 31));
 
-        // to prevent overflow, truncate to int16_t range
-        v0 = _mm256_srai_epi32(_mm256_add_epi32(v0, _mm256_set1_epi32(1 << 15)), 16);
-        v1 = _mm256_srai_epi32(_mm256_add_epi32(v1, _mm256_set1_epi32(1 << 15)), 16);
-
-        // dequantization
-        v0 = _mm256_mullo_epi32(v0, _mm256_set1_epi32(scale));
-        v1 = _mm256_mullo_epi32(v1, _mm256_set1_epi32(scale));
-
-        // downshift and convert values from sign-magnitude form to two's complement one
-        v0 = _mm256_srai_epi32(_mm256_add_epi32(v0, _mm256_set1_epi32(1 << (downshift - 1))), downshift);
-        v1 = _mm256_srai_epi32(_mm256_add_epi32(v1, _mm256_set1_epi32(1 << (downshift - 1))), downshift);
-
-        v0 = _mm256_sign_epi32(v0, s0);
-        v1 = _mm256_sign_epi32(v1, s1);
-
-        _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(v0));
-        _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(v1));
-        // _mm256_storeu_si256((__m256i *)dst, _mm256_permute4x64_epi64(_mm256_packs_epi32(v0, v1), 0xD8));
-
-        val += 16;
-        dst += 16;
+    if (ROIshift == 0) {
+      // Common case: no ROI — direct float multiply, sign via XOR.
+      const __m256 vfscale   = _mm256_set1_ps(fscale_direct);
+      const __m256i vsignmask = _mm256_set1_epi32(INT32_MIN);
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->i_samples + i * this->band_stride;
+        size_t len   = this->size.x;
+        // 2× unrolled: 4 vectors (32 elements) per iteration for better ILP
+        for (; len >= 32; len -= 32) {
+          __m256i a0 = _mm256_loadu_si256((__m256i *)val);
+          __m256i a1 = _mm256_loadu_si256((__m256i *)(val + 8));
+          __m256i a2 = _mm256_loadu_si256((__m256i *)(val + 16));
+          __m256i a3 = _mm256_loadu_si256((__m256i *)(val + 24));
+          __m256i m0 = _mm256_and_si256(a0, magmask);
+          __m256i m1 = _mm256_and_si256(a1, magmask);
+          __m256i m2 = _mm256_and_si256(a2, magmask);
+          __m256i m3 = _mm256_and_si256(a3, magmask);
+          __m256 f0  = _mm256_mul_ps(_mm256_cvtepi32_ps(m0), vfscale);
+          __m256 f1  = _mm256_mul_ps(_mm256_cvtepi32_ps(m1), vfscale);
+          __m256 f2  = _mm256_mul_ps(_mm256_cvtepi32_ps(m2), vfscale);
+          __m256 f3  = _mm256_mul_ps(_mm256_cvtepi32_ps(m3), vfscale);
+          f0 = _mm256_xor_ps(f0, _mm256_castsi256_ps(_mm256_and_si256(a0, vsignmask)));
+          f1 = _mm256_xor_ps(f1, _mm256_castsi256_ps(_mm256_and_si256(a1, vsignmask)));
+          f2 = _mm256_xor_ps(f2, _mm256_castsi256_ps(_mm256_and_si256(a2, vsignmask)));
+          f3 = _mm256_xor_ps(f3, _mm256_castsi256_ps(_mm256_and_si256(a3, vsignmask)));
+          _mm256_storeu_ps(dst, f0);
+          _mm256_storeu_ps(dst + 8, f1);
+          _mm256_storeu_ps(dst + 16, f2);
+          _mm256_storeu_ps(dst + 24, f3);
+          val += 32;
+          dst += 32;
+        }
+        for (; len >= 8; len -= 8) {
+          __m256i a0 = _mm256_loadu_si256((__m256i *)val);
+          __m256i m0 = _mm256_and_si256(a0, magmask);
+          __m256 f0  = _mm256_mul_ps(_mm256_cvtepi32_ps(m0), vfscale);
+          f0 = _mm256_xor_ps(f0, _mm256_castsi256_ps(_mm256_and_si256(a0, vsignmask)));
+          _mm256_storeu_ps(dst, f0);
+          val += 8;
+          dst += 8;
+        }
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          float f      = static_cast<float>(*val & INT32_MAX) * fscale_direct;
+          if (sign) f  = -f;
+          *dst++ = f;
+          val++;
+        }
       }
-      for (; len > 0; --len) {
-        int32_t sign = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        // detect background region and upshift it
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
+    } else {
+      // ROI path — rarely used; keep integer-arithmetic approach for correctness.
+      float fscale = fscale_direct;
+      constexpr int32_t downshift = 15;
+      fscale *= static_cast<float>(1 << 16) * static_cast<float>(1 << downshift);
+      const auto scale = static_cast<int32_t>(fscale + 0.5f);
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->i_samples + i * this->band_stride;
+        size_t len   = this->size.x;
+        for (; len >= 16; len -= 16) {
+          v0 = _mm256_loadu_si256((__m256i *)val);
+          v1 = _mm256_loadu_si256((__m256i *)(val + 8));
+          s0 = v0;
+          s1 = v1;
+          v0 = _mm256_and_si256(v0, magmask);
+          v1 = _mm256_and_si256(v1, magmask);
+          // upshift background region
+          vROImask = _mm256_and_si256(v0, vmask);
+          vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+          vROImask = _mm256_and_si256(vROImask, shift);
+          v0       = _mm256_sllv_epi32(v0, vROImask);
+          vROImask = _mm256_and_si256(v1, vmask);
+          vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+          vROImask = _mm256_and_si256(vROImask, shift);
+          v1       = _mm256_sllv_epi32(v1, vROImask);
+          // truncate to int16 range
+          v0 = _mm256_srai_epi32(_mm256_add_epi32(v0, _mm256_set1_epi32(1 << 15)), 16);
+          v1 = _mm256_srai_epi32(_mm256_add_epi32(v1, _mm256_set1_epi32(1 << 15)), 16);
+          // dequantization
+          v0 = _mm256_mullo_epi32(v0, _mm256_set1_epi32(scale));
+          v1 = _mm256_mullo_epi32(v1, _mm256_set1_epi32(scale));
+          // downshift and sign
+          v0 = _mm256_srai_epi32(_mm256_add_epi32(v0, _mm256_set1_epi32(1 << (downshift - 1))), downshift);
+          v1 = _mm256_srai_epi32(_mm256_add_epi32(v1, _mm256_set1_epi32(1 << (downshift - 1))), downshift);
+          v0 = _mm256_sign_epi32(v0, s0);
+          v1 = _mm256_sign_epi32(v1, s1);
+          _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(v0));
+          _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(v1));
+          val += 16;
+          dst += 16;
         }
-        // to prevent overflow, truncate to int16_t
-        *val = (*val + (1 << 15)) >> 16;
-        //  dequantization
-        *val *= scale;
-        // downshift
-        *val = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
-        // convert sign-magnitude to two's complement form
-        if (sign) {
-          *val = -(*val & INT32_MAX);
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          *val &= INT32_MAX;
+          if (((uint32_t)*val & ~mask) == 0) *val <<= ROIshift;
+          *val = (*val + (1 << 15)) >> 16;
+          *val *= scale;
+          *val = static_cast<int32_t>((*val + (1 << (downshift - 1))) >> downshift);
+          if (sign) *val = -(*val & INT32_MAX);
+          *dst = static_cast<float>(*val);
+          val++;
+          dst++;
         }
-        *dst = static_cast<float>(*val);
-        val++;
-        dst++;
       }
     }
   }

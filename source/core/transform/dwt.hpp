@@ -255,6 +255,12 @@ void idwt_2d_state_free(idwt_2d_state *s);
 // Returns true while rows remain; false when all v1-v0 rows have been produced.
 bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out);
 
+// Zero-copy variant: returns a pointer into the internal ring buffer for the next
+// output row (u1-u0 elements).  The pointer is valid until the next call to
+// pull_row_ref or pull_row for this state.  Returns nullptr when exhausted.
+// The caller MAY modify the returned row (e.g. in-place colour transform).
+sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming 2D FDWT — consumes one input row per push_row() call.
 //
