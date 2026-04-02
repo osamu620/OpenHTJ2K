@@ -283,4 +283,46 @@ void cvt_rgb_to_ycbcr_irrev_float_wasm(const int32_t *sp0, const int32_t *sp1, c
     }
   }
 }
+
+// Scalar fallback used for WASM builds (no WASM-SIMD specialization for the fused path).
+void fused_ycbcr_irrev_to_rgb_i32_wasm(const float *y, const float *cb, const float *cr,
+                                        int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                        const FinalizeParams *fp) {
+  auto finalize_one = [](float v, const FinalizeParams &p) -> int32_t {
+    int32_t x = static_cast<int32_t>(v);
+    if (p.ds > 0) x = (x + p.rnd) >> p.ds;
+    else if (p.ds < 0) x <<= -p.ds;
+    x += p.dc;
+    if (x > p.maxval) x = p.maxval;
+    if (x < p.minval) x = p.minval;
+    return x;
+  };
+  for (uint32_t n = 0; n < width; ++n) {
+    float Y = y[n], Cb = cb[n], Cr = cr[n];
+    r[n] = finalize_one(Y + static_cast<float>(CR_FACT_R) * Cr, fp[0]);
+    g[n] = finalize_one(
+        Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb, fp[1]);
+    b[n] = finalize_one(Y + static_cast<float>(CB_FACT_B) * Cb, fp[2]);
+  }
+}
+
+void fused_ycbcr_rev_to_rgb_i32_wasm(const float *y, const float *cb, const float *cr,
+                                      int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                      const FinalizeParams *fp) {
+  for (uint32_t n = 0; n < width; ++n) {
+    int32_t Y  = static_cast<int32_t>(y[n]);
+    int32_t Cb = static_cast<int32_t>(cb[n]);
+    int32_t Cr = static_cast<int32_t>(cr[n]);
+    int32_t G  = Y - ((Cb + Cr) >> 2);
+    auto clamp = [](int32_t v, const FinalizeParams &p) -> int32_t {
+      v += p.dc;
+      if (v > p.maxval) v = p.maxval;
+      if (v < p.minval) v = p.minval;
+      return v;
+    };
+    r[n] = clamp(Cr + G, fp[0]);
+    g[n] = clamp(G, fp[1]);
+    b[n] = clamp(Cb + G, fp[2]);
+  }
+}
 #endif
