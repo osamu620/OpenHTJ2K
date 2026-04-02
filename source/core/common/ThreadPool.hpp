@@ -91,9 +91,13 @@ class ThreadPool {
    */
   template <typename F, typename... Args,
             typename R = std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>>
-  #else
+  #elif ((defined(_MSVC_LANG) && _MSVC_LANG >= 201402L) || __cplusplus >= 201402L)
   template <typename F, typename... Args,
             typename R = typename std::result_of<std::decay_t<F>(std::decay_t<Args>...)>::type>
+  #else
+  template <typename F, typename... Args,
+            typename R = typename std::result_of<typename std::decay<F>::type(
+                typename std::decay<Args>::type...)>::type>
   #endif
   std::future<R> enqueue(F&& func, Args&&... args) {
     auto task   = std::make_shared<std::packaged_task<R()>>([func, args...]() { return func(args...); });
