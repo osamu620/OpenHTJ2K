@@ -120,7 +120,21 @@
     }
     .drop-text { pointer-events: none; font-size: 13px; font-weight: 500; }
     .drop-hint { pointer-events: none; font-size: 11px; color: var(--text-sub); opacity: 0.7; }
-    .drop-privacy { pointer-events: none; font-size: 11px; color: var(--text-sub); opacity: 0.9; margin-top: 2px; }
+
+    /* ── Privacy notice ──────────────────────────────────── */
+    .privacy-notice {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0 0;
+      padding: 9px 14px;
+      background: rgba(79, 142, 247, 0.08);
+      border: 1px solid rgba(79, 142, 247, 0.25);
+      border-radius: var(--radius);
+      font-size: 13px;
+      color: var(--text-sub);
+    }
+    .privacy-notice .lock { font-size: 15px; flex-shrink: 0; }
 
     /* ── Main viewer ─────────────────────────────────────── */
     .viewer-section { margin-bottom: 40px; }
@@ -344,9 +358,13 @@
         <input id="uploadInput" type="file" title="dropzone" accept=".j2c,.j2k,.jph" aria-label="Upload a J2K, J2C or JPH file" />
         <span class="drop-text">Drag &amp; drop a J2K / J2C / JPH file here</span>
         <span class="drop-hint">or click to browse</span>
-        <span class="drop-privacy">🔒 Decoding runs entirely in your browser — your files are never uploaded.</span>
       </div>
     </div>
+  </div>
+
+  <div class="privacy-notice">
+    <span class="lock">🔒</span>
+    <span>Decoding runs entirely in your browser — your files are never uploaded to any server.</span>
   </div>
 
   <!-- ── Full-resolution viewer ─────────────────────────── -->
