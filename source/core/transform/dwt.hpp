@@ -32,6 +32,9 @@
 #include <cstddef>
 #include "open_htj2k_typedef.hpp"
 #include "j2kmarkers.hpp"
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
+  #define OPENHTJ2K_ENABLE_AVX512
+#endif
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #define OPENHTJ2K_ENABLE_AVX2
 #endif
@@ -126,7 +129,20 @@ void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH
                       sprec_t **buf_scratch);
 
 // IDWT
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_AVX512)
+void idwt_1d_filtr_rev53_fixed_avx512(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_1d_filtr_irrev97_fixed_avx512(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_1d_filtr_irrev53_fixed_avx512(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_irrev_ver_sr_fixed_avx512(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                    int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void idwt_rev_ver_sr_fixed_avx512(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                  int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                      int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void idwt_irrev_ver_step_fixed_avx512(int32_t n, float *prev, float *next, float *tgt, float coeff);
+void idwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,

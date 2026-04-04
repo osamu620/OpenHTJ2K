@@ -52,6 +52,18 @@ static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_wasm;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
 static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_wasm;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_wasm;
+#elif defined(OPENHTJ2K_ENABLE_AVX512)
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx512,
+                                                           idwt_1d_filtr_rev53_fixed_avx512};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_avx512,
+                                                           idwt_rev_ver_sr_fixed_avx512};
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_irrev53_fn = idwt_1d_filtr_irrev53_fixed_avx512;
+static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn    = idwt_irrev53_ver_sr_fixed_avx512;
+typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
+static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_avx512;
+typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
+static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_avx512;
+static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_avx512;
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
@@ -179,17 +191,19 @@ static void idwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, const int32_t left, cons
 }
 
 // In-place 1-D IDWT for interior rows (not first or last).
-// Operates directly on in[-left..width+SIMD_LEN_I32-1] without copying to/from an external buffer.
+// Operates directly on in[-left..width+SIMD_PADDING-1] without copying to/from an external buffer.
 // Precondition: those memory locations are within the tile allocation (guaranteed for interior rows).
 static inline void idwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int32_t right,
                                       const int32_t i0, const int32_t i1,
                                       const uint8_t transformation) {
   const int32_t width = i1 - i0;
   // Save regions that the filter will temporarily overwrite with PSE data or SIMD tail writes.
+  // SIMD_PADDING (32 floats) accommodates tail writes from the widest SIMD register (AVX-512 = 16
+  // floats per ZMM), which can write up to 15 floats past the end of the valid data region.
   sprec_t left_save[4];
-  sprec_t right_save[SIMD_LEN_I32];
+  sprec_t right_save[SIMD_PADDING];
   for (int32_t i = 0; i < left; ++i) left_save[i] = in[-left + i];
-  for (int32_t i = 0; i < SIMD_LEN_I32; ++i) right_save[i] = in[width + i];
+  for (int32_t i = 0; i < SIMD_PADDING; ++i) right_save[i] = in[width + i];
   // Fill left PSE into in[-left..-1] and right PSE into in[width..width+right-1].
   for (int32_t i = 1; i <= left; ++i)
     in[-i] = in[PSEo(i0 - i, i0, i1)];
@@ -202,7 +216,7 @@ static inline void idwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int
     idwt_1d_filtr_irrev53_fn(in - left, left, i0, i1);
   // Restore the saved regions (IDWT output is in in[0..width-1], boundary regions are scratch).
   for (int32_t i = 0; i < left; ++i) in[-left + i] = left_save[i];
-  for (int32_t i = 0; i < SIMD_LEN_I32; ++i) in[width + i] = right_save[i];
+  for (int32_t i = 0; i < SIMD_PADDING; ++i) in[width + i] = right_save[i];
 }
 
 static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
