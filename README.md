@@ -196,7 +196,7 @@ Both Part 1 and Part 15 compliant decoding are supported.
 | RAW | | ✓ | |
 
 ### Codestream / file formats
-| Extension | Encoder input | Decoder input | Description |
+| Extension | Encoder output | Decoder input | Description |
 |-----------|:---:|:---:|-------------|
 | `.jhc`, `.j2c`, `.j2k` | | ✓ | HTJ2K / JPEG 2000 Part 1 codestream |
 | `.jph` | | ✓ | HTJ2K file format (JPH); the colour specification box is parsed to auto-detect YCbCr colorspace |
