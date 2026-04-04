@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 // HTJ2K / JPEG 2000 decoder CLI — runs the WASM build of OpenHTJ2K in Node.js.
-// Usage: node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> [-r <reduce_NL>]
+// Usage: node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> [-r <reduce_NL>] [-ycbcr bt601|bt709]
 //
 // Output format is auto-selected:
 //   1-component → PGM (P5 binary), 3-component → PPM (P6 binary)
 //   depth ≤ 8 → 8-bit samples (maxval 255), depth 9–16 → 16-bit big-endian samples
+//
+// YCbCr→RGB conversion:
+//   For .jph inputs whose colour specification box declares YCbCr (EnumCS=18),
+//   BT.601 conversion is applied automatically when writing PPM output.
+//   Use -ycbcr bt709 to override, or -ycbcr bt601 to force BT.601 explicitly.
 
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -13,7 +18,7 @@ import { dirname, join, extname } from 'path';
 // ── Argument parsing ─────────────────────────────────────────────────────────
 function parseArgs() {
   const args = process.argv.slice(2);
-  let input = null, output = null, reduce = 0;
+  let input = null, output = null, reduce = 0, ycbcr = null;
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '-i' || args[i] === '--input') && i + 1 < args.length)
       input = args[++i];
@@ -21,22 +26,71 @@ function parseArgs() {
       output = args[++i];
     else if ((args[i] === '-r' || args[i] === '--reduce') && i + 1 < args.length)
       reduce = parseInt(args[++i], 10);
-    else if (args[i] === '-h' || args[i] === '--help') {
-      console.log('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>]');
-      console.log('  -i, --input   Input J2C/J2K/JPH file');
-      console.log('  -o, --output  Output PPM (RGB) or PGM (grayscale) file');
-      console.log('  -r, --reduce  Resolution reduction (0 = full, 1 = half, ...)');
+    else if ((args[i] === '-ycbcr' || args[i] === '--ycbcr') && i + 1 < args.length) {
+      ycbcr = args[++i];
+      if (ycbcr !== 'bt601' && ycbcr !== 'bt709') {
+        console.error(`Error: -ycbcr takes 'bt601' or 'bt709', got '${ycbcr}'.`);
+        process.exit(1);
+      }
+    } else if (args[i] === '-h' || args[i] === '--help') {
+      console.log('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>] [-ycbcr bt601|bt709]');
+      console.log('  -i, --input      Input J2C/J2K/JPH file');
+      console.log('  -o, --output     Output PPM (RGB) or PGM (grayscale) file');
+      console.log('  -r, --reduce     Resolution reduction (0 = full, 1 = half, ...)');
+      console.log('  -ycbcr bt601|bt709  YCbCr→RGB conversion for PPM output (auto-detected from JPH)');
       process.exit(0);
     }
   }
-  return { input, output, reduce };
+  return { input, output, reduce, ycbcr };
 }
 
-const { input, output, reduce } = parseArgs();
+const { input, output, reduce, ycbcr } = parseArgs();
 if (!input || !output) {
   console.error('Error: -i and -o are required.');
-  console.error('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>]');
+  console.error('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>] [-ycbcr bt601|bt709]');
   process.exit(1);
+}
+
+// ── YCbCr→RGB coefficient tables (fixed-point, scaled by 2^14) ───────────────
+// Matches the native decoder in dec_utils.hpp.
+// Full-range BT.601 (JFIF / JPEG):  R = Y + 1.402*Cr,  B = Y + 1.772*Cb
+// Full-range BT.709 (HDTV):         R = Y + 1.5748*Cr, B = Y + 1.8556*Cb
+const YCBCR_COEFFS = {
+  bt601: { crToR: 22970, cbToG: 5639,  crToG: 11701, cbToB: 29032 },
+  bt709: { crToR: 25802, cbToG: 3069,  crToG: 7668,  cbToB: 30394 },
+};
+
+// Convert in-place: buf holds interleaved [Y,Cb,Cr,...] per pixel,
+// packed as 8-bit (bytesPerSmp=1) or 16-bit big-endian (bytesPerSmp=2).
+function applyYcbcrToRgb(buf, nPixels, maxval, coeffs, bytesPerSmp) {
+  const clamp = (v) => v < 0 ? 0 : v > maxval ? maxval : v;
+  const center = (maxval + 1) >> 1;  // 128 for 8-bit, 32768 for 16-bit
+  const { crToR, cbToG, crToG, cbToB } = coeffs;
+  if (bytesPerSmp === 1) {
+    for (let i = 0; i < nPixels; i++) {
+      const off = i * 3;
+      const Y  =  buf[off];
+      const Cb =  buf[off + 1] - center;
+      const Cr =  buf[off + 2] - center;
+      buf[off]     = clamp(Y + ((crToR * Cr + 8192) >> 14));
+      buf[off + 1] = clamp(Y - ((cbToG * Cb + crToG * Cr + 8192) >> 14));
+      buf[off + 2] = clamp(Y + ((cbToB * Cb + 8192) >> 14));
+    }
+  } else {
+    // 16-bit big-endian: read two bytes per sample, convert, write back.
+    for (let i = 0; i < nPixels; i++) {
+      const off = i * 6;
+      const Y  =  (buf[off]     << 8) | buf[off + 1];
+      const Cb = ((buf[off + 2] << 8) | buf[off + 3]) - center;
+      const Cr = ((buf[off + 4] << 8) | buf[off + 5]) - center;
+      const R  = clamp(Y + ((crToR * Cr + 8192) >> 14));
+      const G  = clamp(Y - ((cbToG * Cb + crToG * Cr + 8192) >> 14));
+      const B  = clamp(Y + ((cbToB * Cb + 8192) >> 14));
+      buf[off]     = R >> 8;   buf[off + 1] = R & 0xff;
+      buf[off + 2] = G >> 8;   buf[off + 3] = G & 0xff;
+      buf[off + 4] = B >> 8;   buf[off + 5] = B & 0xff;
+    }
+  }
 }
 
 // ── Load WASM module (prefer SIMD build) ─────────────────────────────────────
@@ -75,6 +129,10 @@ const dec = M._create_decoder(inPtr, j2cData.length, reduce);
 M._free(inPtr);
 if (!dec) { console.error('create_decoder returned null'); process.exit(1); }
 
+// Detect JPH colorspace (returns 0 for raw codestreams, 18 for YCbCr JPH).
+const ENUMCS_YCBCR = 18;
+const detectedCs = M._get_colorspace(dec);
+
 try {
   M._parse_j2c_data(dec);
 } catch (e) {
@@ -99,6 +157,28 @@ const bytesPerSmp = maxval > 255 ? 2 : 1;
 const magic       = C === 1 ? 'P5' : 'P6';
 const header      = `${magic}\n${Wd} ${Hd}\n${maxval}\n`;
 const headerBuf   = Buffer.from(header, 'ascii');
+
+// Determine whether to apply YCbCr→RGB conversion.
+// Auto-enable for JPH files declaring YCbCr colorspace (EnumCS=18) + PPM output.
+const wantPpm = output.toLowerCase().endsWith('.ppm');
+let doYcbcr = false;
+let ycbcrCoeffs = null;
+if (C >= 3 && wantPpm) {
+  if (ycbcr) {
+    doYcbcr    = true;
+    ycbcrCoeffs = YCBCR_COEFFS[ycbcr];
+    console.log(`INFO: YCbCr→RGB conversion enabled (${ycbcr.toUpperCase()}).`);
+  } else if (detectedCs === ENUMCS_YCBCR) {
+    doYcbcr    = true;
+    ycbcrCoeffs = YCBCR_COEFFS.bt601;
+    console.log('INFO: JPH colorspace: YCbCr');
+    console.log('INFO: YCbCr→RGB conversion auto-enabled (BT.601). Use -ycbcr bt709 to override.');
+  } else if (detectedCs === 16) {
+    console.log('INFO: JPH colorspace: sRGB');
+  } else if (detectedCs === 17) {
+    console.log('INFO: JPH colorspace: Grayscale');
+  }
+}
 
 // Allocate packed output buffer (W × H × C × bytes_per_sample).
 // invoke_decoder_stream() writes directly here, avoiding a separate 96MB int32 buffer.
@@ -129,6 +209,11 @@ const pixelBuf = Buffer.from(
 );
 M._free(packedPtr);
 
+// Apply YCbCr→RGB in-place on the packed pixel buffer (after WASM chroma upsampling).
+if (doYcbcr) {
+  applyYcbcrToRgb(pixelBuf, Wd * Hd, maxval, ycbcrCoeffs, bytesPerSmp);
+}
+
 try {
   writeFileSync(output, Buffer.concat([headerBuf, pixelBuf]));
 } catch (e) {
@@ -137,5 +222,5 @@ try {
 }
 
 const elapsed = (t1 - t0).toFixed(1);
-const fmt     = C === 1 ? 'grayscale' : 'RGB';
+const fmt     = C === 1 ? 'grayscale' : (doYcbcr ? 'YCbCr→RGB' : 'RGB');
 console.log(`Decoded ${Wd}×${Hd} ${fmt} ${depth}bpc in ${elapsed} ms → ${output}`);

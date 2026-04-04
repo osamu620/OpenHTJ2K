@@ -113,6 +113,11 @@ uint32_t get_max_safe_reduce_NL(open_htj2k::openhtj2k_decoder* dec) {
   return dec->get_max_safe_reduce_NL();
 }
 
+EMSCRIPTEN_KEEPALIVE
+uint32_t get_colorspace(open_htj2k::openhtj2k_decoder* dec) {
+  return dec->get_colorspace();
+}
+
 // invoke_decoder_to_rgba: decode and convert directly to 8-bit RGBA in one pass.
 // rgba_dst must be pre-allocated as W × H × 4 bytes.
 // Handles all bit depths (1–16) and signed/unsigned samples; correct down/up-shift
