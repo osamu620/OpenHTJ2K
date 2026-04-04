@@ -8,7 +8,8 @@ OpenHTJ2K is an open source implementation of ITU-T Rec.800 | ISO/IEC 15444-1 (J
 OpenHTJ2K provides a shared library and sample applications with the following features:
 
 **Decoding**
-- Decodes ITU-T Rec.800 | ISO/IEC 15444-1 (JPEG 2000 Part 1) and ITU-T Rec.814 | ISO/IEC 15444-15 (HTJ2K) codestreams
+- Decodes ITU-T Rec.800 | ISO/IEC 15444-1 (JPEG 2000 Part 1) and ITU-T Rec.814 | ISO/IEC 15444-15 (HTJ2K) codestreams, and HTJ2K JPH files (`.jph`)
+- JPH files: the colour specification box is parsed to auto-detect YCbCr colorspace; BT.601 YCbCr→RGB conversion is applied automatically for PPM output
 - Partial support for JPEG 2000 Part 2: Downsampling Factor Structures (DFS) and Arbitrary Transform Kernels (ATK) — irreversible 9/7-based and reversible 5/3-based ATK kernels
 - Fully compliant with conformance testing defined in ITU-T Rec.803 | ISO 15444-4
 - Three decode APIs:
@@ -22,7 +23,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 - Optional markers (COC, POC, etc.) and HT SigProp/MagRef passes are not implemented
 - Up to **16 bit** per component sample supported
 - Quality control for lossy compression via the `Qfactor` parameter
-- Encoder input supports PGM, PPM, PGX, and TIFF (with libtiff); PGX streaming works without `-batch`
+- Encoder input supports PGM, PPM, PGX, and TIFF (with libtiff); PGX streaming supports subsampled component sets (4:2:0, 4:2:2) without `-batch`
 - Two encode APIs:
   - `invoke()` — batch (full-image) path
   - `invoke_line_based_stream()` — streaming push-row path driven by a source callback
@@ -179,20 +180,24 @@ Both Part 1 and Part 15 compliant decoding are supported.
   - Use the batch (full-image) decode path. The default path is line-based (streaming).
 - `-ycbcr bt601|bt709` *(experimental)*
   - Convert YCbCr to RGB during PPM output using full-range ITU-R BT.601 or
-    BT.709 coefficients. Handles 4:2:2 nearest-neighbour chroma upsampling.
+    BT.709 coefficients. Handles 4:2:0 and 4:2:2 nearest-neighbour chroma upsampling.
     Has no effect when writing PGX, PGM, or RAW outputs.
+    When decoding a `.jph` file whose colour specification box declares YCbCr
+    (EnumCS = 18), BT.601 conversion is applied automatically; use `-ycbcr bt709`
+    to override.
 
 ## Supported file formats
 ### Encoder input / Decoder output
-| Format | Encoder input | Decoder output |
-|--------|:---:|:---:|
-| PGM / PPM | ✓ | ✓ |
-| PGX | ✓ | ✓ |
-| TIFF (libtiff required, 8/16 bpp) | ✓ | |
-| RAW | | ✓ |
+| Format | Encoder input | Decoder output | Notes |
+|--------|:---:|:---:|-------|
+| PGM / PPM | ✓ | ✓ | PPM encoder input and decoder output support subsampled (4:2:2, 4:2:0) components |
+| PGX | ✓ | ✓ | Encoder streaming path (`invoke_line_based_stream`) accepts subsampled PGX component sets (4:2:2, 4:2:0) |
+| TIFF (libtiff required, 8/16 bpp) | ✓ | | |
+| RAW | | ✓ | |
 
-### Codestream formats
-| Extension | Description |
-|-----------|-------------|
-| `.jhc`, `.j2c`, `.j2k` | HTJ2K / JPEG 2000 Part 1 codestream |
-| `.jph` | HTJ2K file format (JPH); specifying this as encoder output triggers JPH creation |
+### Codestream / file formats
+| Extension | Encoder input | Decoder input | Description |
+|-----------|:---:|:---:|-------------|
+| `.jhc`, `.j2c`, `.j2k` | | ✓ | HTJ2K / JPEG 2000 Part 1 codestream |
+| `.jph` | | ✓ | HTJ2K file format (JPH); the colour specification box is parsed to auto-detect YCbCr colorspace |
+| `.jhc`, `.j2c`, `.j2k`, `.jph` | ✓ | | Encoder output: `.jph` triggers JPH box creation; all others produce a raw codestream |
