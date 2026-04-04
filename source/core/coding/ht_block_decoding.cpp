@@ -931,8 +931,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
           //          block->modify_state(refinement_indicator, 1, i, j);
           state_p[0] |= 1 << SHIFT_PI_;
           bit = MagRef.importMagRefBit();
-          tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
-          tmp <<= pLSB;
+          tmp = static_cast<int32_t>((0xFFFFFFFEU | static_cast<unsigned int>(bit)) << pLSB);
           sp[0] &= tmp;
           sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
         }
@@ -950,8 +949,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
         //          block->modify_state(refinement_indicator, 1, i, j);
         state_p[0] |= 1 << SHIFT_PI_;
         bit = MagRef.importMagRefBit();
-        tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
-        tmp <<= pLSB;
+        tmp = static_cast<int32_t>((0xFFFFFFFEU | static_cast<unsigned int>(bit)) << pLSB);
         sp[0] &= tmp;
         sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
       }

@@ -1,3 +1,17 @@
+# [0.7.1] - 2026-04-04
+
+## Bugfixes
+* Fix undefined behaviour in `ht_magref_decode` (scalar and NEON paths):
+  left-shifting a negative `int32_t` value is UB in C++; combined into a
+  single unsigned-arithmetic shift
+  (`static_cast<int32_t>((0xFFFFFFFEU | ...) << pLSB)`)
+* Work around clang-18 code-generation bug: clang 18 miscompiles certain
+  inline functions in `coding_units.cpp` when building for AArch64 NEON,
+  producing wrong decoder output. Add `-fno-inline` to `coding_units.cpp`
+  when `CMAKE_CXX_COMPILER_VERSION < 19` and the compiler is Clang.
+  Clang 19+, GCC, and MSVC are unaffected. All 445 conformance tests pass
+  on both clang-18 and clang-20.
+
 # [0.7.0] - 2026-04-04
 
 ## JPEG 2000 Part 2: DFS and ATK kernel support
