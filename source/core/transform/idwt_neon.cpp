@@ -41,16 +41,24 @@ auto idwt_irrev97_fixed_neon_hor_step = [](const int32_t init_pos, const int32_t
                                             const int32_t n0, const int32_t n1, float coeff) {
   auto vvv = vdupq_n_f32(coeff);
   int32_t n = init_pos, i = simdlen;
-  // 2× unrolled main loop: two independent 4-pair groups per iteration for better ILP.
-  for (; i > 4; i -= 8, n += 16) {
-    auto x0a  = vld2q_f32(X + n + n0);
-    auto x1a  = vld2q_f32(X + n + n1);
-    auto x0b  = vld2q_f32(X + n + 8 + n0);
-    auto x1b  = vld2q_f32(X + n + 8 + n1);
-    x0a.val[1] = vfmsq_f32(x0a.val[1], vaddq_f32(x0a.val[0], x1a.val[0]), vvv);
-    x0b.val[1] = vfmsq_f32(x0b.val[1], vaddq_f32(x0b.val[0], x1b.val[0]), vvv);
-    vst2q_f32(X + n + n0, x0a);
-    vst2q_f32(X + n + 8 + n0, x0b);
+  // 2× unrolled main loop. n1 == n0+2 always (all 4 irrev97 steps), so:
+  //   x1a.val[0] = vextq_f32(x0a.val[0], x0b.val[0], 1)
+  //   x1b.val[0] = vextq_f32(x0b.val[0], x0c.val[0], 1)
+  // x0c is a one-group look-ahead (safe: within SIMD_PADDING). Carrying x0c → x0a
+  // across iterations cuts LD2 count from 4 to 2 per 8-pair group.
+  if (i > 4) {
+    auto x0a = vld2q_f32(X + n + n0);  // prologue: preload first group
+    for (; i > 4; i -= 8, n += 16) {
+      auto x0b         = vld2q_f32(X + n + 8 + n0);
+      auto x0c         = vld2q_f32(X + n + 16 + n0);  // look-ahead for x1b and carry
+      float32x4_t x1a0 = vextq_f32(x0a.val[0], x0b.val[0], 1);
+      float32x4_t x1b0 = vextq_f32(x0b.val[0], x0c.val[0], 1);
+      x0a.val[1]        = vfmsq_f32(x0a.val[1], vaddq_f32(x0a.val[0], x1a0), vvv);
+      x0b.val[1]        = vfmsq_f32(x0b.val[1], vaddq_f32(x0b.val[0], x1b0), vvv);
+      vst2q_f32(X + n + n0, x0a);
+      vst2q_f32(X + n + 8 + n0, x0b);
+      x0a = x0c;  // carry: x0c is the next iteration's x0a (no re-load needed)
+    }
   }
   for (; i > 0; i -= 4, n += 8) {
     auto x0   = vld2q_f32(X + n + n0);
@@ -91,21 +99,25 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   const int32_t stop   = i1 / 2;
   const int32_t offset = left - i0 % 2;
 
-  // step 1: 2× unrolled
+  // step 1: 2× unrolled; xl1*.val[0] derived via vextq (n1 = n0+2 = -1+2 = +1) with carry.
   const int32_t base1 = offset;
   int32_t simdlen     = stop + 1 - start;
   const auto vtwo     = vdupq_n_f32(2.0f);
-  int32_t k = 0;
-  for (; k + 4 < simdlen; k += 8) {
-    sprec_t *sp = X + base1 + k * 2;
-    auto xl0a   = vld2q_f32(sp - 1);
-    auto xl1a   = vld2q_f32(sp + 1);
-    auto xl0b   = vld2q_f32(sp + 7);
-    auto xl1b   = vld2q_f32(sp + 9);
-    xl0a.val[1] = vsubq_f32(xl0a.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0a.val[0], xl1a.val[0]), vtwo), 0.25f)));
-    xl0b.val[1] = vsubq_f32(xl0b.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0b.val[0], xl1b.val[0]), vtwo), 0.25f)));
-    vst2q_f32(sp - 1, xl0a);
-    vst2q_f32(sp + 7, xl0b);
+  int32_t k           = 0;
+  if (k + 4 < simdlen) {
+    auto xl0a = vld2q_f32(X + base1 - 1);  // prologue: preload first group (sp-1)
+    for (; k + 4 < simdlen; k += 8) {
+      sprec_t *sp       = X + base1 + k * 2;
+      auto xl0b         = vld2q_f32(sp + 7);     // next group at sp+8-1
+      auto xl0c         = vld2q_f32(sp + 15);    // look-ahead for xl1b and carry
+      float32x4_t xl1a0 = vextq_f32(xl0a.val[0], xl0b.val[0], 1);
+      float32x4_t xl1b0 = vextq_f32(xl0b.val[0], xl0c.val[0], 1);
+      xl0a.val[1]        = vsubq_f32(xl0a.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0a.val[0], xl1a0), vtwo), 0.25f)));
+      xl0b.val[1]        = vsubq_f32(xl0b.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(vaddq_f32(xl0b.val[0], xl1b0), vtwo), 0.25f)));
+      vst2q_f32(sp - 1, xl0a);
+      vst2q_f32(sp + 7, xl0b);
+      xl0a = xl0c;  // carry: xl0c becomes xl0a for next iteration
+    }
   }
   for (; k < simdlen; k += 4) {
     sprec_t *sp = X + base1 + k * 2;
@@ -115,20 +127,24 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
     vst2q_f32(sp - 1, xl0);
   }
 
-  // step 2: 2× unrolled
+  // step 2: 2× unrolled; xl1*.val[0] derived via vextq (n1 = n0+2 = 0+2 = +2) with carry.
   const int32_t base2 = offset;
   simdlen             = stop - start;
   k                   = 0;
-  for (; k + 4 < simdlen; k += 8) {
-    sprec_t *sp = X + base2 + k * 2;
-    auto xl0a   = vld2q_f32(sp);
-    auto xl1a   = vld2q_f32(sp + 2);
-    auto xl0b   = vld2q_f32(sp + 8);
-    auto xl1b   = vld2q_f32(sp + 10);
-    xl0a.val[1] = vaddq_f32(xl0a.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0a.val[0], xl1a.val[0]), 0.5f)));
-    xl0b.val[1] = vaddq_f32(xl0b.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0b.val[0], xl1b.val[0]), 0.5f)));
-    vst2q_f32(sp, xl0a);
-    vst2q_f32(sp + 8, xl0b);
+  if (k + 4 < simdlen) {
+    auto xl0a = vld2q_f32(X + base2);  // prologue: preload first group (sp+0)
+    for (; k + 4 < simdlen; k += 8) {
+      sprec_t *sp       = X + base2 + k * 2;
+      auto xl0b         = vld2q_f32(sp + 8);     // next group at sp+8
+      auto xl0c         = vld2q_f32(sp + 16);    // look-ahead
+      float32x4_t xl1a0 = vextq_f32(xl0a.val[0], xl0b.val[0], 1);
+      float32x4_t xl1b0 = vextq_f32(xl0b.val[0], xl0c.val[0], 1);
+      xl0a.val[1]        = vaddq_f32(xl0a.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0a.val[0], xl1a0), 0.5f)));
+      xl0b.val[1]        = vaddq_f32(xl0b.val[1], vrndmq_f32(vmulq_n_f32(vaddq_f32(xl0b.val[0], xl1b0), 0.5f)));
+      vst2q_f32(sp, xl0a);
+      vst2q_f32(sp + 8, xl0b);
+      xl0a = xl0c;  // carry
+    }
   }
   for (; k < simdlen; k += 4) {
     sprec_t *sp = X + base2 + k * 2;
