@@ -61,6 +61,9 @@ struct StreamReader {
   virtual uint8_t  get_bitdepth(uint16_t c = 0) const          = 0;
   // Returns the SIZ Ssiz byte for component c (bit-depth minus 1; bit 7 set if signed).
   virtual uint8_t  get_Ssiz(uint16_t c) const                  = 0;
+  // Returns SIZ XRsiz/YRsiz for component c (1 = no subsampling).
+  virtual uint8_t  get_XRsiz(uint16_t /*c*/) const { return 1; }
+  virtual uint8_t  get_YRsiz(uint16_t /*c*/) const { return 1; }
   virtual void     get_row(uint32_t y, int32_t **rows, uint16_t nc) = 0;
 };
 
@@ -199,6 +202,7 @@ class PgxStreamReader : public StreamReader {
     std::vector<uint8_t> raw;
   };
   std::vector<Component> comps_;
+  std::vector<uint8_t>   xr_, yr_;
 
   static int parse_pgx_header(const std::string &fname, Component &c) {
     c.fp = fopen(fname.c_str(), "rb");
@@ -255,11 +259,17 @@ class PgxStreamReader : public StreamReader {
       }
       comps_.push_back(std::move(c));
     }
+    xr_.resize(comps_.size(), 1);
+    yr_.resize(comps_.size(), 1);
     for (size_t i = 1; i < comps_.size(); ++i) {
-      if (comps_[i].height != comps_[0].height) {
-        printf("ERROR: PGX component heights differ across files.\n");
+      if (comps_[0].width % comps_[i].width != 0 || comps_[0].height % comps_[i].height != 0) {
+        printf("ERROR: PGX component %zu dimensions (%ux%u) are not integer submultiples of"
+               " component 0 (%ux%u).\n",
+               i, comps_[i].width, comps_[i].height, comps_[0].width, comps_[0].height);
         return -1;
       }
+      xr_[i] = static_cast<uint8_t>(comps_[0].width  / comps_[i].width);
+      yr_[i] = static_cast<uint8_t>(comps_[0].height / comps_[i].height);
     }
     return 0;
   }
@@ -275,13 +285,16 @@ class PgxStreamReader : public StreamReader {
     uint8_t bd = comps_[c].bitdepth;
     return static_cast<uint8_t>(comps_[c].isSigned ? ((bd - 1) | 0x80u) : (bd - 1));
   }
+  uint8_t get_XRsiz(uint16_t c) const override { return (c < xr_.size()) ? xr_[c] : 1; }
+  uint8_t get_YRsiz(uint16_t c) const override { return (c < yr_.size()) ? yr_[c] : 1; }
 
   void get_row(uint32_t y, int32_t **rows, uint16_t nc) override {
     for (uint16_t ci = 0; ci < nc && ci < static_cast<uint16_t>(comps_.size()); ++ci) {
       auto    &c         = comps_[ci];
       uint32_t bps       = (c.bitdepth > 8) ? 2u : 1u;
       long     row_bytes = static_cast<long>(c.width * bps);
-      fseek(c.fp, c.data_start + y * row_bytes, SEEK_SET);
+      uint32_t file_y    = (ci < yr_.size()) ? (y / yr_[ci]) : y;
+      fseek(c.fp, c.data_start + static_cast<long>(file_y) * row_bytes, SEEK_SET);
       if (fread(c.raw.data(), 1, c.raw.size(), c.fp) != c.raw.size())
         throw std::runtime_error("fread: failed to read PGX row data");
       if (bps == 1) {
@@ -401,8 +414,8 @@ int main(int argc, char *argv[]) {
     siz_s.Csiz   = nc_s;
     for (uint16_t c = 0; c < nc_s; ++c) {
       siz_s.Ssiz.push_back(reader->get_Ssiz(c));
-      siz_s.XRsiz.push_back(1);
-      siz_s.YRsiz.push_back(1);
+      siz_s.XRsiz.push_back(reader->get_XRsiz(c));
+      siz_s.YRsiz.push_back(reader->get_YRsiz(c));
     }
 
     open_htj2k::cod_params cod_s;
