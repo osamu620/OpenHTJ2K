@@ -4,6 +4,7 @@ target_sources(open_htj2k
     idwt.cpp
     idwt_neon.cpp
     idwt_avx2.cpp
+    idwt_avx512.cpp
     idwt_wasm.cpp
     fdwt.cpp
     fdwt_avx2.cpp
