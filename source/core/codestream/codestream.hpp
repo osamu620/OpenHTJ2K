@@ -178,10 +178,22 @@ class buf_chain {
   OPENHTJ2K_NODISCARD uint32_t get_total_length() const { return total_length; }
 
   OPENHTJ2K_MAYBE_UNUSED uint8_t get_specific_byte(uint32_t bufpos) { return *(current_buf + bufpos); }
+  // Returns the number of bytes remaining across all nodes from the current position.
+  uint32_t get_remaining_bytes() const {
+    uint32_t remaining = (pos < current_length) ? (current_length - static_cast<uint32_t>(pos)) : 0;
+    for (size_t i = node_pos + 1; i < num_nodes; ++i) {
+      remaining += node_length[i];
+    }
+    return remaining;
+  }
+
   uint8_t get_byte() {
     if (pos > current_length - 1) {
+      if (node_pos + 1 >= num_nodes) {
+        // Truncated codestream: return 0x00 as safe padding.
+        return 0;
+      }
       node_pos++;
-      assert(node_pos <= num_nodes);
       current_buf    = node_buf[node_pos];
       current_length = node_length[node_pos];
       pos            = 0;
@@ -191,8 +203,12 @@ class buf_chain {
 
   OPENHTJ2K_MAYBE_UNUSED uint8_t *get_current_address() {
     if (pos > current_length - 1) {
+      if (node_pos + 1 >= num_nodes) {
+        // Truncated codestream: return pointer to zero byte (safe read-only sentinel).
+        static const uint8_t zero = 0;
+        return const_cast<uint8_t *>(&zero);
+      }
       node_pos++;
-      assert(node_pos <= num_nodes);
       current_buf    = node_buf[node_pos];
       current_length = node_length[node_pos];
       pos            = 0;
@@ -212,6 +228,7 @@ class buf_chain {
   // Returns a direct pointer into the current node's buffer and advances pos by N.
   // The caller must NOT free this pointer (it belongs to j2c_src_memory).
   // N bytes must lie within the current node (same guarantee as copy_N_bytes).
+  // Callers should check get_remaining_bytes() and clamp N for truncated streams.
   uint8_t *borrow_N_bytes(uint32_t N) {
     assert((pos + N) <= current_length);
     uint8_t *ptr = current_buf + pos;

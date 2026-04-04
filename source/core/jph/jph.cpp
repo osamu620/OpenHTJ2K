@@ -60,9 +60,12 @@ static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &o
       payload = p + 8;
       box_end = end;
     } else {
-      if (lbox < 8 || p + lbox > end) return;
-      payload = p + 8;
-      box_end = p + lbox;
+      // Clamp to file end: handles jp2c boxes whose declared lbox exceeds
+      // the actual file size (e.g. Kakadu streaming output pre-declares a
+      // larger lbox; the codestream ends at EOF via its own EOC marker).
+      if (lbox < 8) return;
+      payload  = p + 8;
+      box_end  = (p + lbox <= end) ? (p + lbox) : end;
     }
     if (tbox == BOX_JP2H) {
       jph_scan_boxes(payload, box_end, out);

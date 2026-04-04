@@ -317,8 +317,8 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   uint16_t word;
   SOT_marker tmpSOT;
   uint16_t tile_index;
-  // Read all tile parts
-  while ((word = in.get_word()) != _EOC) {
+  // Read all tile parts; treat EOF as EOC for truncated codestreams.
+  while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
     if (word != _SOT) {
       printf("ERROR: SOT marker segment expected but %04X is found\n", word);
       throw std::exception();
@@ -439,7 +439,8 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
   uint16_t word;
   SOT_marker tmpSOT;
   uint16_t tile_index;
-  while ((word = in.get_word()) != _EOC) {
+  // Read all tile parts; treat EOF as EOC for truncated codestreams.
+  while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
     if (word != _SOT) {
       printf("ERROR: SOT marker segment expected but %04X is found\n", word);
       throw std::exception();
@@ -521,7 +522,8 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   uint16_t word;
   SOT_marker tmpSOT;
   uint16_t tile_index;
-  while ((word = in.get_word()) != _EOC) {
+  // Read all tile parts; treat EOF as EOC for truncated codestreams.
+  while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
     if (word != _SOT) {
       printf("ERROR: SOT marker segment expected but %04X is found\n", word);
       throw std::exception();

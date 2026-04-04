@@ -736,6 +736,14 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
       this->current_address = this->compressed_data;
     } else {
       // Zero-copy: borrow a direct pointer into the codestream buffer.
+      // Clamp layer_length to available data for truncated codestreams.
+      const uint32_t avail = tile_buf->get_remaining_bytes();
+      if (layer_length > avail) {
+        layer_length = avail;
+      }
+      if (layer_length == 0) {
+        return;
+      }
       // The codestream buffer outlives all codeblocks, and all decoders
       // (HT fwd/rev/MEL, and MQ) treat compressed_data as read-only.
       // compressed_is_pooled = true suppresses free() in the destructor.
@@ -1847,6 +1855,12 @@ int j2k_tile_part::read(j2c_src_memory &in) {
     this->length = eoc_offset;
   } else {
     this->length += Psot - length_of_tilepart_markers;
+    // Clamp to available data: handles truncated codestreams where the encoder
+    // pre-declared a Psot larger than the bytes actually written to file.
+    const uint32_t remaining = in.get_remaining();
+    if (this->length > remaining) {
+      this->length = remaining;
+    }
   }
   this->body = in.get_buf_pos();
 
