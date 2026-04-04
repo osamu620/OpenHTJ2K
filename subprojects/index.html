@@ -253,6 +253,49 @@
       outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
+
+    /* ── YCbCr conversion panel ──────────────────────────── */
+    .ycbcr-panel {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .ycbcr-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-sub);
+      margin-bottom: 10px;
+    }
+    .ycbcr-btns { display: flex; gap: 8px; }
+    .ycbcr-btn {
+      flex: 1;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 8px 0;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, opacity 0.15s;
+      letter-spacing: 0.02em;
+    }
+    .ycbcr-btn:hover:not(:disabled) {
+      background: var(--accent);
+      color: #fff;
+    }
+    .ycbcr-btn:disabled { opacity: 0.3; cursor: default; }
+    .ycbcr-note {
+      font-size: 11px;
+      color: var(--text-sub);
+      margin-top: 8px;
+      text-align: center;
+      opacity: 0.8;
+    }
+
     @media (max-width: 860px)  { .viewer-grid   { grid-template-columns: 1fr; } }
     @media (max-width: 600px)  { .controls-row  { grid-template-columns: 1fr; } }
   </style>
@@ -326,6 +369,15 @@
           <div class="time-block-label">Decode time</div>
           <pre id="time">—</pre>
         </div>
+        <!-- YCbCr→RGB conversion buttons (shown only when num_comps >= 3) -->
+        <div id="ycbcr-panel" class="ycbcr-panel" style="display:none;">
+          <div class="ycbcr-label">YCbCr → RGB</div>
+          <div class="ycbcr-btns">
+            <button id="btn-bt601" class="ycbcr-btn" onclick="applyYCbCrConversion('bt601')">BT.601 · Photo</button>
+            <button id="btn-bt709" class="ycbcr-btn" onclick="applyYCbCrConversion('bt709')">BT.709 · HDTV</button>
+          </div>
+          <div id="ycbcr-note" class="ycbcr-note">Apply once · reload to reset</div>
+        </div>
       </div>
     </div>
   </section>
@@ -389,6 +441,45 @@
   </section>
 
   <script>
+    // JS copy of decoded RGBA for mycanvas — safe to keep across display_image calls
+    // because it lives in JS heap, not WASM linear memory.
+    var g_module       = null;   // set once in load_and_display_images
+    var g_ycbcr_js     = null;   // Uint8Array copy of decoded RGBA
+    var g_ycbcr_width  = 0;
+    var g_ycbcr_height = 0;
+    var g_ycbcr_converted = false;
+    var apply_ycbcr_bt601 = null;
+    var apply_ycbcr_bt709 = null;
+
+    function applyYCbCrConversion(standard) {
+      if (!g_ycbcr_js || g_ycbcr_converted || !g_module) return;
+      var M = g_module;
+      var fn = (standard === 'bt601') ? apply_ycbcr_bt601
+             : (standard === 'bt709') ? apply_ycbcr_bt709
+             : null;
+      if (!fn) return;
+      // Round-trip: JS array → temp WASM buffer → WASM conversion → JS array
+      var n = g_ycbcr_width * g_ycbcr_height;
+      var tmpPtr = M._malloc(n * 4);
+      M['HEAPU8'].set(g_ycbcr_js, tmpPtr);
+      fn(tmpPtr, n);
+      g_ycbcr_js.set(M['HEAPU8'].subarray(tmpPtr, tmpPtr + n * 4));
+      M._free(tmpPtr);
+
+      g_ycbcr_converted = true;
+      document.getElementById('btn-bt601').disabled = true;
+      document.getElementById('btn-bt709').disabled = true;
+      document.getElementById('ycbcr-note').textContent = 'Converted. Reload image to reset.';
+      // Redraw mycanvas from the converted JS buffer.
+      var canvas = document.getElementById('mycanvas');
+      var isP3Supported = displaySupportsP3Color() && canvasSupportsDisplayP3();
+      var colorSpaceName = isP3Supported ? "display-p3" : "srgb";
+      var ctx = canvas.getContext("2d", {colorSpace: colorSpaceName});
+      var cimg = ctx.createImageData(g_ycbcr_width, g_ycbcr_height, {colorSpace: colorSpaceName});
+      cimg.data.set(g_ycbcr_js);
+      createImageBitmap(cimg).then(bmp => ctx.drawImage(bmp, 0, 0));
+    }
+
     function display_image(Module, data, canvas_name, skip_res_for_data, skip_res_for_recon, txt_ele_name, pre_text) {
       // cwrap wrappers are cached at module init in load_and_display_images
 
@@ -447,6 +538,26 @@
       cimg.data.set(Module["HEAPU8"].subarray(src, src + width * height * 4));
       release_j2c_data(j2c);
       Module._free(buffer);
+
+      // For mycanvas, take a JS-side copy of the RGBA data for the YCbCr→RGB
+      // buttons.  We free src immediately (same as before) — keeping a WASM
+      // buffer alive across multiple display_image() calls disturbs the WASM heap.
+      if (canvas_name === 'mycanvas') {
+        var n = width * height * 4;
+        g_ycbcr_js        = Module["HEAPU8"].slice(src, src + n);  // JS Uint8Array copy
+        g_ycbcr_width     = width;
+        g_ycbcr_height    = height;
+        g_ycbcr_converted = false;
+        // Show/hide and reset the YCbCr panel.
+        var panel = document.getElementById('ycbcr-panel');
+        if (panel) panel.style.display = (num_comps >= 3) ? '' : 'none';
+        var b601 = document.getElementById('btn-bt601');
+        var b709 = document.getElementById('btn-bt709');
+        if (b601) b601.disabled = false;
+        if (b709) b709.disabled = false;
+        var note = document.getElementById('ycbcr-note');
+        if (note) note.textContent = 'Apply once — reload image to reset.';
+      }
       Module._free(src);
 
       // Draw decoded image
@@ -505,6 +616,10 @@
       pack_samples = Module.cwrap('pack_samples', 'void', ['number', 'number', 'number', 'number', 'number']);
       // invoke_decoder_stream: streaming decode + pack into pre-allocated buffer (used by Node.js CLI)
       invoke_decoder_stream = Module.cwrap('invoke_decoder_stream', 'void', ['number', 'number', 'number', 'number']);
+      // YCbCr→RGB in-place converters
+      apply_ycbcr_bt601 = Module.cwrap('apply_ycbcr_bt601_to_rgba', 'void', ['number', 'number']);
+      apply_ycbcr_bt709 = Module.cwrap('apply_ycbcr_bt709_to_rgba', 'void', ['number', 'number']);
+      g_module = Module;  // store reference for applyYCbCrConversion (global scope)
 
       // Hide the loading overlay — decoder is ready.
       var ov = document.getElementById('canvas-overlay');

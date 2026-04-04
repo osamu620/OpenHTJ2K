@@ -122,13 +122,17 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
 
   dec->invoke_line_based_stream(
     [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
-      const uint32_t W       = width[0];
-      const uint8_t  d       = depth[0];
-      const int32_t  down_sh = (d >= 8) ? (d - 8) : 0;
-      const int32_t  up_sh   = (d < 8)  ? (8 - d) : 0;
-      const int32_t  half    = (d > 8)  ? (1 << (down_sh - 1)) : 0;
-      const int32_t  offset  = is_signed[0] ? (1 << (d - 1)) : 0;
-      const int32_t  bias    = half + offset;
+      const uint32_t W        = width[0];
+      // For subsampled formats (e.g. 4:2:2), chroma components have smaller width.
+      // Detect this and map output pixel x to chroma sample x>>1 in the scalar paths.
+      const uint32_t chromaW  = (nc >= 2) ? width[1] : W;
+      const bool     subsamp  = (chromaW < W);
+      const uint8_t  d        = depth[0];
+      const int32_t  down_sh  = (d >= 8) ? (d - 8) : 0;
+      const int32_t  up_sh    = (d < 8)  ? (8 - d) : 0;
+      const int32_t  half     = (d > 8)  ? (1 << (down_sh - 1)) : 0;
+      const int32_t  offset   = is_signed[0] ? (1 << (d - 1)) : 0;
+      const int32_t  bias     = half + offset;
 
       uint8_t* __restrict__ row = rgba_dst + (size_t)y * W * 4;
 
@@ -154,7 +158,8 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
               0,0,0,16, 1,1,1,16, 2,2,2,16, 3,3,3,16);
           wasm_v128_store(row + x * 4, rgba);
         }
-      } else {
+      } else if (!subsamp) {
+        // Full-resolution color SIMD path (not used for subsampled chroma — falls to scalar tail).
         for (; x + 4 <= W; x += 4) {
           // Process R, G, B channels — each loads 4 int32 values and narrows
           v128_t rv = wasm_v128_load(rows[0] + x);
@@ -184,7 +189,7 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
           wasm_v128_store(row + x * 4, rgba);
         }
       }
-      // scalar tail (and full scalar for nc>3 or up_sh paths)
+      // scalar tail (and full scalar for subsamp, nc>3, or up_sh paths)
       if (nc == 1) {
         for (; x < W; ++x) {
           int32_t v = ((rows[0][x] + bias) >> down_sh) << up_sh;
@@ -195,7 +200,8 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
       } else {
         for (; x < W; ++x) {
           for (uint16_t c = 0; c < 3 && c < nc; ++c) {
-            int32_t v = ((rows[c][x] + bias) >> down_sh) << up_sh;
+            uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);  // nearest-neighbour chroma upsample
+            int32_t v = ((rows[c][sx] + bias) >> down_sh) << up_sh;
             if (v < 0) v = 0; else if (v > 255) v = 255;
             row[x*4+c] = static_cast<uint8_t>(v);
           }
@@ -213,7 +219,8 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
       } else {
         for (uint32_t x = 0; x < W; ++x) {
           for (uint16_t c = 0; c < 3 && c < nc; ++c) {
-            int32_t v = ((rows[c][x] + bias) >> down_sh) << up_sh;
+            uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);  // nearest-neighbour chroma upsample
+            int32_t v = ((rows[c][sx] + bias) >> down_sh) << up_sh;
             if (v < 0) v = 0; else if (v > 255) v = 255;
             row[x*4+c] = static_cast<uint8_t>(v);
           }
@@ -239,7 +246,10 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
 
   dec->invoke_line_based_stream(
     [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
-      const uint32_t W = width[0];
+      const uint32_t W       = width[0];
+      // Detect chroma subsampling (e.g. 4:2:2): chroma rows are narrower than luma.
+      const uint32_t chromaW = (nc >= 2) ? width[1] : W;
+      const bool     subsamp = (chromaW < W);
       uint8_t* row_dst = dst + (size_t)y * W * nc * bytes_per_sample;
       if (nc == 1) {
         // Grayscale — single component, already "interleaved"
@@ -291,18 +301,21 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
         }
 #endif
       } else {
-        // Multi-component: interleave R/G/B... and pack in one pass
+        // Multi-component: interleave components and pack in one pass.
+        // For subsampled chroma (e.g. 4:2:2), upsample with nearest-neighbour: rows[c][x>>1].
         if (bytes_per_sample == 1) {
           for (uint32_t x = 0; x < W; ++x) {
             for (uint16_t c = 0; c < nc; ++c) {
-              int32_t v = rows[c][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+              uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);
+              int32_t v = rows[c][sx]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
               *row_dst++ = static_cast<uint8_t>(v);
             }
           }
         } else {
           for (uint32_t x = 0; x < W; ++x) {
             for (uint16_t c = 0; c < nc; ++c) {
-              int32_t v = rows[c][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+              uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);
+              int32_t v = rows[c][sx]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
               *row_dst++ = static_cast<uint8_t>(v >> 8);
               *row_dst++ = static_cast<uint8_t>(v & 0xff);
             }
@@ -367,6 +380,52 @@ void pack_samples(const int32_t* __restrict__ src, uint8_t* __restrict__ dst,
     }
   }
 #endif
+}
+
+// ── In-place YCbCr→RGB conversion ──────────────────────────────────────────
+// Input RGBA: R=Y, G=Cb, B=Cr, A=255 (as produced by invoke_decoder_to_rgba
+// when MCT=0 / colour transform disabled).  Converts in-place to sRGB.
+// n_pixels = width * height.
+
+// Shared helper: clamp an int32 to [0, 255] and return as uint8.
+static inline uint8_t clamp_u8(int32_t v) {
+  return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
+}
+
+// BT.601 full-range (JFIF / JPEG convention, typical for photos):
+//   R = Y + 1.402*(Cr-128)
+//   G = Y - 0.344136*(Cb-128) - 0.714136*(Cr-128)
+//   B = Y + 1.772*(Cb-128)
+EMSCRIPTEN_KEEPALIVE
+void apply_ycbcr_bt601_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
+  for (uint32_t i = 0; i < n_pixels; ++i) {
+    uint8_t* p  = rgba + i * 4;
+    int32_t Y   = p[0];
+    int32_t Cb  = static_cast<int32_t>(p[1]) - 128;
+    int32_t Cr  = static_cast<int32_t>(p[2]) - 128;
+    // Fixed-point coefficients scaled by 16384 (>>14), bias +8192 for rounding.
+    p[0] = clamp_u8(Y + ((22970 * Cr + 8192) >> 14));
+    p[1] = clamp_u8(Y - ((5638 * Cb + 11698 * Cr + 8192) >> 14));
+    p[2] = clamp_u8(Y + ((29032 * Cb + 8192) >> 14));
+    // p[3] (alpha) unchanged
+  }
+}
+
+// BT.709 full-range (HDTV / H.264 / H.265 convention):
+//   R = Y + 1.5748*(Cr-128)
+//   G = Y - 0.187324*(Cb-128) - 0.468124*(Cr-128)
+//   B = Y + 1.8556*(Cb-128)
+EMSCRIPTEN_KEEPALIVE
+void apply_ycbcr_bt709_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
+  for (uint32_t i = 0; i < n_pixels; ++i) {
+    uint8_t* p  = rgba + i * 4;
+    int32_t Y   = p[0];
+    int32_t Cb  = static_cast<int32_t>(p[1]) - 128;
+    int32_t Cr  = static_cast<int32_t>(p[2]) - 128;
+    p[0] = clamp_u8(Y + ((25801 * Cr + 8192) >> 14));
+    p[1] = clamp_u8(Y - ((3069 * Cb + 7672 * Cr + 8192) >> 14));
+    p[2] = clamp_u8(Y + ((30397 * Cb + 8192) >> 14));
+  }
 }
 }
 
