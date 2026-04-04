@@ -1,3 +1,42 @@
+# [0.7.0] - 2026-04-04
+
+## JPEG 2000 Part 2: DFS and ATK kernel support
+* Add encoder and decoder support for Part 2 Downsampling Factor Structures
+  (DFS) markers
+* Add decoder support for arbitrary ATK (Arbitrary Transform Kernel) DWT
+  kernels: irreversible 9/7-based and reversible 5/3-based ATK
+* Add scalar FDWT and AVX2 IDWT implementations for ATK kernels
+* Add 5 conformance test cases for Part 2 DFS+ATK bitstreams (all pass)
+* Fix AVX2 dequantize: use `transformation == 1` (not truthy) to distinguish
+  lossless from ATK kernels (`transformation >= 2` is lossy but truthy)
+* Fix ATK finalize downshift: `(transformation==1)?0:FRACBITS-bitdepth`
+* Fix bounds-safe color transform dispatch for ATK (`transformation >= 2`)
+* Fix LL0 subband dimensions for DFS codestreams in streaming decode
+* Fix ATK encode OOB color dispatch; add line-based DFS/ATK tests
+
+## Decoder
+* `-reduce` now respects DFS markers: the maximum reduce level is clamped to
+  the number of consecutive bidirectional DWT levels, preventing nonsensical
+  HONLY/VONLY reduced-resolution outputs
+* Fix PPM output for subsampled (4:2:2) codestreams: the streaming path
+  correctly upsamples chroma with nearest-neighbour interpolation; the batch
+  `write_ppm` path uses a scalar fallback for mismatched component dimensions
+* Add experimental `-ycbcr bt601|bt709` flag: converts YCbCr to RGB during
+  PPM output using full-range ITU-R BT.601 or BT.709 coefficients
+  (fixed-point 2^14); handles 4:2:2 nearest-neighbour chroma upsampling;
+  applies to PPM output only
+
+## Encoder
+* Fix streaming (line-based) path for PGX input: a new `PgxStreamReader`
+  opens one file per component and reads rows on demand; previously PGX input
+  always triggered "Failed to open input file for streaming"
+
+## WASM
+* Fix 4:2:2 chroma subsampling in `invoke_decoder_to_rgba()` WASM wrapper
+* Add YCbCr→RGB conversion buttons (BT.601 / BT.709) to the web demo at
+  https://htj2k-demo.pages.dev/
+* Modernize button styling in the web demo
+
 # [0.6.0] - 2026-04-02
 
 ## WASM
