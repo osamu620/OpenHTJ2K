@@ -120,6 +120,7 @@
     }
     .drop-text { pointer-events: none; font-size: 13px; font-weight: 500; }
     .drop-hint { pointer-events: none; font-size: 11px; color: var(--text-sub); opacity: 0.7; }
+    .drop-privacy { pointer-events: none; font-size: 11px; color: var(--text-sub); opacity: 0.9; margin-top: 2px; }
 
     /* ── Main viewer ─────────────────────────────────────── */
     .viewer-section { margin-bottom: 40px; }
@@ -340,9 +341,10 @@
     <div class="card">
       <div class="card-label">Or upload / drag &amp; drop</div>
       <div class="drop-area" id="dropbox">
-        <input id="uploadInput" type="file" title="dropzone" accept=".j2c,.j2k,.jph" aria-label="Upload a J2K or J2C file" />
-        <span class="drop-text">Drag &amp; drop a J2K / J2C file here</span>
+        <input id="uploadInput" type="file" title="dropzone" accept=".j2c,.j2k,.jph" aria-label="Upload a J2K, J2C or JPH file" />
+        <span class="drop-text">Drag &amp; drop a J2K / J2C / JPH file here</span>
         <span class="drop-hint">or click to browse</span>
+        <span class="drop-privacy">🔒 Decoding runs entirely in your browser — your files are never uploaded.</span>
       </div>
     </div>
   </div>
