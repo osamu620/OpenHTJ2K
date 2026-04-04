@@ -11,6 +11,12 @@
   when `CMAKE_CXX_COMPILER_VERSION < 19` and the compiler is Clang.
   Clang 19+, GCC, and MSVC are unaffected. All 445 conformance tests pass
   on both clang-18 and clang-20.
+* Fix streaming encoder (`-i file.pgx,...`) rejecting subsampled (4:2:2,
+  4:2:0, etc.) PGX inputs. `PgxStreamReader` now accepts component files
+  whose dimensions are integer sub-multiples of the luma component, computes
+  the correct XRsiz/YRsiz factors for the SIZ marker, seeks each chroma file
+  to the correct row (`y / YRsiz`), and skips redundant `push_line_enc` calls
+  for chroma on luma rows that carry no new chroma data.
 
 # [0.7.0] - 2026-04-04
 
