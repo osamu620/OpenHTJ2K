@@ -28,12 +28,36 @@
 
 #pragma once
 
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <vector>
 #include "j2kmarkers.hpp"
 #include "codestream.hpp"
 #include "open_htj2k_typedef.hpp"
+
+// ---------------------------------------------------------------------------
+// JPH / JP2 box reader (decoder side)
+// ---------------------------------------------------------------------------
+// EnumCS values defined in ISO/IEC 15444-1 Annex I.
+static constexpr uint32_t OPENHTJ2K_ENUMCS_SRGB      = 16u;
+static constexpr uint32_t OPENHTJ2K_ENUMCS_GRAYSCALE = 17u;
+static constexpr uint32_t OPENHTJ2K_ENUMCS_YCBCR     = 18u;
+
+// Information extracted from a JPH/JP2 file.
+struct jph_info {
+  const uint8_t *cs_data = nullptr;  // pointer into caller-owned buffer at J2K codestream start
+  size_t         cs_size = 0;        // codestream length in bytes
+  uint32_t       enum_cs = 0;        // EnumCS from colr box (0 = not found / raw codestream)
+};
+
+// Parse a JPH/JP2 buffer.  Returns true if a valid signature and codestream box
+// were found; fills `out`.  Does NOT copy data — `buf` must outlive `out`.
+bool jph_parse_buffer(const uint8_t *buf, size_t len, jph_info &out);
+
+// Convenience: returns true when the first 12 bytes match the JP2/JPH signature.
+bool jph_is_signature(const uint8_t *buf, size_t len);
+// ---------------------------------------------------------------------------
 
 class box_base {
  public:

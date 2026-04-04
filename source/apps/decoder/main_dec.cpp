@@ -43,98 +43,6 @@
 #include "decoder.hpp"
 #include "dec_utils.hpp"
 
-// ---------------------------------------------------------------------------
-// Minimal JPH / JP2 box parser
-// ---------------------------------------------------------------------------
-// Box type constants (big-endian 4CC as uint32_t)
-static constexpr uint32_t BOX_JP   = 0x6A502020u;  // "jP  " — signature
-static constexpr uint32_t BOX_JP2H = 0x6A703268u;  // "jp2h" — header superbox
-static constexpr uint32_t BOX_COLR = 0x636F6C72u;  // "colr" — colour spec
-static constexpr uint32_t BOX_JP2C = 0x6A703263u;  // "jp2c" — codestream
-
-// EnumCS values in the colr box
-static constexpr uint32_t ENUMCS_SRGB      = 16u;
-static constexpr uint32_t ENUMCS_GRAYSCALE = 17u;
-static constexpr uint32_t ENUMCS_YCBCR     = 18u;
-
-static inline uint32_t read_be32(const uint8_t *p) {
-  return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16)
-         | (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
-}
-static inline uint64_t read_be64(const uint8_t *p) {
-  return (static_cast<uint64_t>(read_be32(p)) << 32) | static_cast<uint64_t>(read_be32(p + 4));
-}
-
-struct JphInfo {
-  const uint8_t *cs_data = nullptr;  // pointer into file buffer at start of J2K codestream
-  size_t         cs_size = 0;        // length of codestream in bytes
-  uint32_t       enum_cs = 0;        // EnumCS from colr box (0 = not found)
-};
-
-// Iterates boxes in [begin, end) and fills `out`.  Recurses into jp2h.
-static bool scan_boxes(const uint8_t *begin, const uint8_t *end, JphInfo &out) {
-  const uint8_t *p = begin;
-  while (p + 8 <= end) {
-    uint32_t lbox = read_be32(p);
-    uint32_t tbox = read_be32(p + 4);
-    const uint8_t *payload;
-    const uint8_t *box_end;
-    if (lbox == 1) {
-      if (p + 16 > end) return false;
-      uint64_t xlen = read_be64(p + 8);
-      if (xlen < 16 || p + xlen > end) return false;
-      payload = p + 16;
-      box_end = p + xlen;
-    } else if (lbox == 0) {
-      payload = p + 8;
-      box_end = end;
-    } else {
-      if (lbox < 8 || p + lbox > end) return false;
-      payload = p + 8;
-      box_end = p + lbox;
-    }
-    if (tbox == BOX_JP2H) {
-      scan_boxes(payload, box_end, out);
-    } else if (tbox == BOX_COLR) {
-      // METH(1) PREC(1) APPROX(1) EnumCS(4) — only for METH==1
-      if (payload + 7 <= box_end && payload[0] == 1)
-        out.enum_cs = read_be32(payload + 3);
-    } else if (tbox == BOX_JP2C) {
-      out.cs_data = payload;
-      out.cs_size = static_cast<size_t>(box_end - payload);
-    }
-    p = box_end;
-  }
-  return true;
-}
-
-// Reads the file at `path` into `buf`, then extracts JPH metadata.
-// Returns true on success; `buf` keeps the data alive.
-static bool parse_jph_file(const char *path, std::vector<uint8_t> &buf, JphInfo &out) {
-  FILE *fp = fopen(path, "rb");
-  if (!fp) { printf("ERROR: Cannot open %s\n", path); return false; }
-  fseek(fp, 0, SEEK_END);
-  long flen = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-  if (flen <= 0) { fclose(fp); printf("ERROR: Empty file %s\n", path); return false; }
-  buf.resize(static_cast<size_t>(flen));
-  if (fread(buf.data(), 1, buf.size(), fp) != buf.size()) {
-    fclose(fp); printf("ERROR: Failed to read %s\n", path); return false;
-  }
-  fclose(fp);
-  // Validate signature box (LBox=0x0000000C, TBox="jP  ", payload=0x0D0A870A)
-  if (buf.size() < 12 || read_be32(buf.data()) != 12 || read_be32(buf.data() + 4) != BOX_JP
-      || read_be32(buf.data() + 8) != 0x0D0A870Au) {
-    printf("ERROR: Not a valid JPH/JP2 file (bad signature).\n"); return false;
-  }
-  scan_boxes(buf.data(), buf.data() + buf.size(), out);
-  if (!out.cs_data || out.cs_size == 0) {
-    printf("ERROR: No codestream box (jp2c) found in %s\n", path); return false;
-  }
-  return true;
-}
-// ---------------------------------------------------------------------------
-
 void print_help(char *cmd) {
   printf("JPEG 2000 Part 1 and Part 15 decoder\n");
   printf("USAGE: %s [options]\n\n", cmd);
@@ -242,26 +150,26 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // For JPH inputs: parse boxes once, extract codestream and colorspace.
-  std::vector<uint8_t> jph_buf;
-  JphInfo              jph_info;
+  // For JPH inputs: probe the colorspace from the library (no app-level box parsing).
+  uint32_t detected_cs = 0;
   if (is_jph) {
-    if (!parse_jph_file(infile_name, jph_buf, jph_info)) exit(EXIT_FAILURE);
-    if (jph_info.enum_cs == ENUMCS_SRGB)
+    open_htj2k::openhtj2k_decoder probe(infile_name, 0, 0);
+    detected_cs = probe.get_colorspace();
+    if (detected_cs == open_htj2k::ENUMCS_SRGB)
       printf("INFO: JPH colorspace: sRGB\n");
-    else if (jph_info.enum_cs == ENUMCS_GRAYSCALE)
+    else if (detected_cs == open_htj2k::ENUMCS_GRAYSCALE)
       printf("INFO: JPH colorspace: Grayscale\n");
-    else if (jph_info.enum_cs == ENUMCS_YCBCR)
+    else if (detected_cs == open_htj2k::ENUMCS_YCBCR)
       printf("INFO: JPH colorspace: YCbCr\n");
-    else if (jph_info.enum_cs != 0)
-      printf("INFO: JPH colorspace: unknown EnumCS %u\n", jph_info.enum_cs);
+    else if (detected_cs != 0)
+      printf("INFO: JPH colorspace: unknown EnumCS %u\n", detected_cs);
   }
 
   // Parse experimental -ycbcr flag (PPM output only).
   bool               do_ycbcr  = false;
   ycbcr_coefficients ycbcr_coeff{};
   // Auto-enable for JPH files with YCbCr colorspace (BT.601 by default).
-  if (is_jph && jph_info.enum_cs == ENUMCS_YCBCR && strcmp(outfile_ext_name, ".ppm") == 0) {
+  if (detected_cs == open_htj2k::ENUMCS_YCBCR && strcmp(outfile_ext_name, ".ppm") == 0) {
     do_ycbcr    = true;
     ycbcr_coeff = YCBCR_BT601;
   }
@@ -282,7 +190,7 @@ int main(int argc, char *argv[]) {
   }
   if (do_ycbcr && strcmp(outfile_ext_name, ".ppm") == 0) {
     const bool is601 = (ycbcr_coeff.cr_to_r == YCBCR_BT601.cr_to_r);
-    if (is_jph && jph_info.enum_cs == ENUMCS_YCBCR && get_command_option(argc, argv, "-ycbcr") == nullptr)
+    if (detected_cs == open_htj2k::ENUMCS_YCBCR && get_command_option(argc, argv, "-ycbcr") == nullptr)
       printf("INFO: YCbCr→RGB conversion auto-enabled (BT.601). Use -ycbcr bt709 to override.\n");
     else
       printf("INFO: YCbCr→RGB conversion enabled (%s).\n", is601 ? "BT.601" : "BT.709");
@@ -301,10 +209,7 @@ int main(int argc, char *argv[]) {
   if (use_batch) {
     std::vector<int32_t *> buf;
     for (int32_t i = 0; i < num_iterations; ++i) {
-      open_htj2k::openhtj2k_decoder decoder =
-          is_jph ? open_htj2k::openhtj2k_decoder(jph_info.cs_data, jph_info.cs_size, reduce_NL,
-                                                  num_threads)
-                 : open_htj2k::openhtj2k_decoder(infile_name, reduce_NL, num_threads);
+      open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
       for (auto &p : buf) delete[] p;
       buf.clear();
       img_width.clear();
@@ -359,10 +264,7 @@ int main(int argc, char *argv[]) {
   for (int32_t i = 0; i < num_iterations; ++i) {
     const bool is_last = (i == num_iterations - 1);
 
-    open_htj2k::openhtj2k_decoder decoder =
-        is_jph ? open_htj2k::openhtj2k_decoder(jph_info.cs_data, jph_info.cs_size, reduce_NL,
-                                                num_threads)
-               : open_htj2k::openhtj2k_decoder(infile_name, reduce_NL, num_threads);
+    open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
     try {
       decoder.parse();
     } catch (std::exception &exc) {

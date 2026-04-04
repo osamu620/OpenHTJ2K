@@ -28,6 +28,69 @@
 
 #include "jph.hpp"
 
+// ---------------------------------------------------------------------------
+// JPH / JP2 box reader implementation
+// ---------------------------------------------------------------------------
+static inline uint32_t jph_read_be32(const uint8_t *p) {
+  return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16)
+         | (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+}
+static inline uint64_t jph_read_be64(const uint8_t *p) {
+  return (static_cast<uint64_t>(jph_read_be32(p)) << 32)
+         | static_cast<uint64_t>(jph_read_be32(p + 4));
+}
+
+static constexpr uint32_t BOX_JP2H = 0x6A703268u;  // "jp2h"
+static constexpr uint32_t BOX_COLR = 0x636F6C72u;  // "colr"
+static constexpr uint32_t BOX_JP2C = 0x6A703263u;  // "jp2c"
+
+static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &out) {
+  const uint8_t *p = begin;
+  while (p + 8 <= end) {
+    uint32_t lbox = jph_read_be32(p);
+    uint32_t tbox = jph_read_be32(p + 4);
+    const uint8_t *payload, *box_end;
+    if (lbox == 1) {
+      if (p + 16 > end) return;
+      uint64_t xlen = jph_read_be64(p + 8);
+      if (xlen < 16 || p + xlen > end) return;
+      payload = p + 16;
+      box_end = p + xlen;
+    } else if (lbox == 0) {
+      payload = p + 8;
+      box_end = end;
+    } else {
+      if (lbox < 8 || p + lbox > end) return;
+      payload = p + 8;
+      box_end = p + lbox;
+    }
+    if (tbox == BOX_JP2H) {
+      jph_scan_boxes(payload, box_end, out);
+    } else if (tbox == BOX_COLR) {
+      // METH(1) PREC(1) APPROX(1) EnumCS(4) — only for Enumerated Colourspace (METH==1)
+      if (payload + 7 <= box_end && payload[0] == 1)
+        out.enum_cs = jph_read_be32(payload + 3);
+    } else if (tbox == BOX_JP2C) {
+      out.cs_data = payload;
+      out.cs_size = static_cast<size_t>(box_end - payload);
+    }
+    p = box_end;
+  }
+}
+
+bool jph_is_signature(const uint8_t *buf, size_t len) {
+  // Signature box: LBox=12, TBox="jP  " (0x6A502020), payload=0x0D0A870A
+  return len >= 12 && jph_read_be32(buf) == 12 && jph_read_be32(buf + 4) == 0x6A502020u
+         && jph_read_be32(buf + 8) == 0x0D0A870Au;
+}
+
+bool jph_parse_buffer(const uint8_t *buf, size_t len, jph_info &out) {
+  if (!jph_is_signature(buf, len)) return false;
+  jph_scan_boxes(buf, buf + len, out);
+  return out.cs_data != nullptr && out.cs_size > 0;
+}
+// ---------------------------------------------------------------------------
+
 signature_box::signature_box() : box_base(12, 0x6A502020), signature(0x0D0A870A) {}
 
 size_t signature_box::write(j2c_dst_memory &dst) {

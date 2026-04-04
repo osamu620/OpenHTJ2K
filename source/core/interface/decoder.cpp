@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <functional>
 #include "decoder.hpp"
+#include "jph.hpp"
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   #include <filesystem>
 #else
@@ -49,6 +50,8 @@ class openhtj2k_decoder_impl {
   bool is_codestream_set;
   bool is_parsed;
   j2k_main_header main_header;
+  uint32_t enum_cs;             // EnumCS from JPH colr box; 0 for raw codestreams
+  std::vector<uint8_t> jph_file_buf;  // owns full file data when input is a JPH file
 
  public:
   openhtj2k_decoder_impl();
@@ -62,6 +65,7 @@ class openhtj2k_decoder_impl {
   OPENHTJ2K_NODISCARD uint32_t get_component_height(uint16_t) const;
   OPENHTJ2K_NODISCARD uint8_t get_component_depth(uint16_t) const;
   OPENHTJ2K_NODISCARD bool get_component_signedness(uint16_t) const;
+  OPENHTJ2K_NODISCARD uint32_t get_colorspace() const { return enum_cs; }
   uint8_t get_minimum_DWT_levels();
   uint8_t get_max_safe_reduce_NL();
 
@@ -83,10 +87,11 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
   reduce_NL         = 0;
   is_codestream_set = false;
   is_parsed         = false;
+  enum_cs           = 0;
 }
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
-    : reduce_NL(r), is_codestream_set(false), is_parsed(false) {
+    : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
   uintmax_t file_size;
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   try {
@@ -106,46 +111,72 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
-  // open codestream and store it in memory
+  // Read the entire file into a temporary buffer for JPH detection.
   FILE *fp = fopen(filename, "rb");
-  in.alloc_memory(static_cast<uint32_t>(file_size));
-  uint8_t *p        = in.get_buf_pos();
-  size_t bytes_read = fread(p, sizeof(uint8_t), static_cast<size_t>(file_size), fp);
-  if (bytes_read < file_size) {
+  jph_file_buf.resize(static_cast<size_t>(file_size));
+  size_t bytes_read = fread(jph_file_buf.data(), sizeof(uint8_t), jph_file_buf.size(), fp);
+  fclose(fp);
+  if (bytes_read < static_cast<size_t>(file_size)) {
     printf("ERROR: %s seems to have not enough data.\n", filename);
     throw std::exception();
   }
-  fclose(fp);
+  // Detect JPH/JP2 signature and extract embedded codestream if found.
+  jph_info info;
+  if (jph_parse_buffer(jph_file_buf.data(), jph_file_buf.size(), info)) {
+    enum_cs = info.enum_cs;
+    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
+    jph_file_buf.clear();  // no longer needed; codestream is copied into `in`
+    jph_file_buf.shrink_to_fit();
+  } else {
+    // Raw codestream: transfer directly.
+    in.alloc_memory(static_cast<uint32_t>(file_size));
+    memcpy(in.get_buf_pos(), jph_file_buf.data(), file_size);
+    jph_file_buf.clear();
+    jph_file_buf.shrink_to_fit();
+  }
   is_codestream_set = true;
 }
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t length, const uint8_t r,
                                                uint32_t num_threads)
-    : reduce_NL(r), is_codestream_set(false), is_parsed(false) {
+    : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
   if (buf == nullptr) {
   }
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
-  // open codestream and store it in memory
-  in.alloc_memory(static_cast<uint32_t>(length));
-  uint8_t *p = in.get_buf_pos();
-  memcpy(p, buf, length);
+  // Detect JPH/JP2 and extract the embedded codestream if present.
+  jph_info info;
+  if (jph_parse_buffer(buf, length, info)) {
+    enum_cs = info.enum_cs;
+    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
+  } else {
+    in.alloc_memory(static_cast<uint32_t>(length));
+    memcpy(in.get_buf_pos(), buf, length);
+  }
   is_codestream_set = true;
 }
 
 void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const uint8_t r,
                                   uint32_t num_threads) {
   reduce_NL = r;
+  enum_cs   = 0;
   if (buf == nullptr) {
   }
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
-  // open codestream and store it in memory
-  in.alloc_memory(static_cast<uint32_t>(length));
-  uint8_t *p = in.get_buf_pos();
-  memcpy(p, buf, length);
+  jph_info info;
+  if (jph_parse_buffer(buf, length, info)) {
+    enum_cs = info.enum_cs;
+    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
+  } else {
+    in.alloc_memory(static_cast<uint32_t>(length));
+    memcpy(in.get_buf_pos(), buf, length);
+  }
   is_codestream_set = true;
 }
 
@@ -344,6 +375,7 @@ bool openhtj2k_decoder::get_component_signedness(uint16_t c) {
 }
 uint8_t openhtj2k_decoder::get_minumum_DWT_levels() { return this->impl->get_minimum_DWT_levels(); }
 uint8_t openhtj2k_decoder::get_max_safe_reduce_NL() { return this->impl->get_max_safe_reduce_NL(); }
+uint32_t openhtj2k_decoder::get_colorspace() { return this->impl->get_colorspace(); }
 
 void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
