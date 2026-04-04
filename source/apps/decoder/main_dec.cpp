@@ -54,6 +54,7 @@ void print_help(char *cmd) {
   printf("-iter n: Repeat decoding n times (for benchmarking). Output is written once.\n");
   printf("-num_threads n: Number of threads (0 = auto).\n");
   printf("-batch: Use batch (full-image buffer) decode path instead of the default streaming path.\n");
+  printf("-ycbcr bt601|bt709: [EXPERIMENTAL] Convert YCbCr to RGB (PPM output only).\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -135,7 +136,7 @@ int main(int argc, char *argv[]) {
   // Reject any unrecognised flags.
   {
     static const char *const known[] = {
-        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", "-batch", nullptr};
+        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", "-batch", "-ycbcr", nullptr};
     for (int i = 1; i < argc; ++i) {
       if (argv[i][0] != '-') continue;
       bool recognised = false;
@@ -146,6 +147,25 @@ int main(int argc, char *argv[]) {
         printf("ERROR: unknown option %s\n", argv[i]);
         exit(EXIT_FAILURE);
       }
+    }
+  }
+
+  // Parse experimental -ycbcr flag (PPM output only).
+  bool               do_ycbcr  = false;
+  ycbcr_coefficients ycbcr_coeff{};
+  if (nullptr != (tmp_param = get_command_option(argc, argv, "-ycbcr"))) {
+    if (strcmp(tmp_param, "bt601") == 0) {
+      do_ycbcr    = true;
+      ycbcr_coeff = YCBCR_BT601;
+    } else if (strcmp(tmp_param, "bt709") == 0) {
+      do_ycbcr    = true;
+      ycbcr_coeff = YCBCR_BT709;
+    } else {
+      printf("ERROR: -ycbcr takes 'bt601' or 'bt709'.\n");
+      exit(EXIT_FAILURE);
+    }
+    if (strcmp(outfile_ext_name, ".ppm") != 0) {
+      printf("WARNING: -ycbcr has no effect for non-PPM output.\n");
     }
   }
 
@@ -180,7 +200,8 @@ int main(int argc, char *argv[]) {
     auto duration       = std::chrono::high_resolution_clock::now() - start;
     auto num_components = static_cast<uint16_t>(img_depth.size());
     if (strcmp(outfile_ext_name, ".ppm") == 0) {
-      write_ppm(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth, img_signed);
+      write_ppm(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth, img_signed,
+                do_ycbcr ? &ycbcr_coeff : nullptr);
     } else {
       write_components(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth,
                        img_signed);
@@ -210,6 +231,8 @@ int main(int argc, char *argv[]) {
   uint8_t bpp            = 0;
   int32_t pnm_offset     = 0;
   uint32_t total_samples = 0;
+  // State for experimental YCbCr→RGB streaming conversion.
+  int32_t ycbcr_cb_center = 0, ycbcr_cr_center = 0, ycbcr_maxval = 0;
 
   for (int32_t i = 0; i < num_iterations; ++i) {
     const bool is_last = (i == num_iterations - 1);
@@ -231,12 +254,15 @@ int main(int argc, char *argv[]) {
               total_samples = 0;
               bpp           = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(img_depth[0]), 8));
               pnm_offset    = (want_pgm && img_signed[0]) ? (1 << (img_depth[0] - 1)) : 0;
-              if (want_ppm && nc == 3 && img_width[0] == img_width[1] &&
-                  img_width[0] == img_width[2]) {
-                // Single PPM file: interleaved RGB
+              if (do_ycbcr && nc >= 3) {
+                ycbcr_maxval    = (1 << img_depth[0]) - 1;
+                ycbcr_cb_center = img_signed[1] ? 0 : (1 << (img_depth[1] - 1));
+                ycbcr_cr_center = img_signed[2] ? 0 : (1 << (img_depth[2] - 1));
+              }
+              if (want_ppm && nc == 3) {
+                // Single PPM file: chroma is nearest-neighbour upsampled during row write.
                 char fname[256], base[256];
-                memcpy(base, outfile_name,
-                       static_cast<size_t>(outfile_ext_name - outfile_name));
+                memcpy(base, outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name));
                 base[outfile_ext_name - outfile_name] = '\0';
                 snprintf(fname, sizeof(fname), "%s%s", base, outfile_ext_name);
                 FILE *fp = fopen(fname, "wb");
@@ -278,17 +304,55 @@ int main(int argc, char *argv[]) {
             if (want_ppm && nc_all >= 3 && fps[0] != nullptr && fps[1] == nullptr) {
               // Interleaved PPM row
               uint8_t *out = row_buf.data();
-              if (bpp == 1) {
+              if (do_ycbcr) {
+                // YCbCr→RGB conversion (experimental); chroma upsampled as needed.
+                if (bpp == 1) {
+                  for (uint32_t n = 0; n < img_width[0]; ++n) {
+                    const uint32_t n1 = n * img_width[1] / img_width[0];
+                    const uint32_t n2 = n * img_width[2] / img_width[0];
+                    const int32_t Y   = rows[0][n];
+                    const int32_t Cb  = rows[1][n1] - ycbcr_cb_center;
+                    const int32_t Cr  = rows[2][n2] - ycbcr_cr_center;
+                    int32_t r = Y + ((ycbcr_coeff.cr_to_r * Cr + 8192) >> 14);
+                    int32_t g = Y - ((ycbcr_coeff.cb_to_g * Cb + ycbcr_coeff.cr_to_g * Cr + 8192) >> 14);
+                    int32_t b = Y + ((ycbcr_coeff.cb_to_b * Cb + 8192) >> 14);
+                    *out++ = static_cast<uint8_t>(r < 0 ? 0 : r > ycbcr_maxval ? ycbcr_maxval : r);
+                    *out++ = static_cast<uint8_t>(g < 0 ? 0 : g > ycbcr_maxval ? ycbcr_maxval : g);
+                    *out++ = static_cast<uint8_t>(b < 0 ? 0 : b > ycbcr_maxval ? ycbcr_maxval : b);
+                  }
+                } else {
+                  for (uint32_t n = 0; n < img_width[0]; ++n) {
+                    const uint32_t n1 = n * img_width[1] / img_width[0];
+                    const uint32_t n2 = n * img_width[2] / img_width[0];
+                    const int32_t Y   = rows[0][n];
+                    const int32_t Cb  = rows[1][n1] - ycbcr_cb_center;
+                    const int32_t Cr  = rows[2][n2] - ycbcr_cr_center;
+                    int32_t r = Y + ((ycbcr_coeff.cr_to_r * Cr + 8192) >> 14);
+                    int32_t g = Y - ((ycbcr_coeff.cb_to_g * Cb + ycbcr_coeff.cr_to_g * Cr + 8192) >> 14);
+                    int32_t b = Y + ((ycbcr_coeff.cb_to_b * Cb + 8192) >> 14);
+                    r         = r < 0 ? 0 : r > ycbcr_maxval ? ycbcr_maxval : r;
+                    g         = g < 0 ? 0 : g > ycbcr_maxval ? ycbcr_maxval : g;
+                    b         = b < 0 ? 0 : b > ycbcr_maxval ? ycbcr_maxval : b;
+                    *out++    = static_cast<uint8_t>(r >> 8); *out++ = static_cast<uint8_t>(r);
+                    *out++    = static_cast<uint8_t>(g >> 8); *out++ = static_cast<uint8_t>(g);
+                    *out++    = static_cast<uint8_t>(b >> 8); *out++ = static_cast<uint8_t>(b);
+                  }
+                }
+              } else if (bpp == 1) {
                 for (uint32_t n = 0; n < img_width[0]; ++n) {
+                  const uint32_t n1 = n * img_width[1] / img_width[0];
+                  const uint32_t n2 = n * img_width[2] / img_width[0];
                   *out++ = static_cast<uint8_t>(rows[0][n] + pnm_offset);
-                  *out++ = static_cast<uint8_t>(rows[1][n] + pnm_offset);
-                  *out++ = static_cast<uint8_t>(rows[2][n] + pnm_offset);
+                  *out++ = static_cast<uint8_t>(rows[1][n1] + pnm_offset);
+                  *out++ = static_cast<uint8_t>(rows[2][n2] + pnm_offset);
                 }
               } else {
                 for (uint32_t n = 0; n < img_width[0]; ++n) {
+                  const uint32_t n1 = n * img_width[1] / img_width[0];
+                  const uint32_t n2 = n * img_width[2] / img_width[0];
                   int32_t r = rows[0][n] + pnm_offset;
-                  int32_t g = rows[1][n] + pnm_offset;
-                  int32_t b = rows[2][n] + pnm_offset;
+                  int32_t g = rows[1][n1] + pnm_offset;
+                  int32_t b = rows[2][n2] + pnm_offset;
                   *out++    = static_cast<uint8_t>(r >> 8);
                   *out++    = static_cast<uint8_t>(r);
                   *out++    = static_cast<uint8_t>(g >> 8);

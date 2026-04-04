@@ -229,6 +229,11 @@ class DFS_marker : public j2k_marker_io_base {
   uint8_t get_num_levels() const;
   dwt_type get_dwt_type(uint8_t level) const;  // level 1..Ids (1=finest); DWT_BIDIR if out of range
   uint8_t get_num_bands(uint8_t r, uint8_t NL) const;  // num subbands for resolution r (0=LL)
+  // Returns count of consecutive DWT_BIDIR levels from the finest level onward.
+  // This is the maximum -reduce value that produces a valid 2D reduced image for
+  // components using this DFS marker; beyond this, a HONLY or VONLY level would
+  // halve only one spatial dimension, which is meaningless as a resolution step.
+  uint8_t get_max_safe_reduce() const;
 };
 
 /********************************************************************************

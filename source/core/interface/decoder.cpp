@@ -63,6 +63,7 @@ class openhtj2k_decoder_impl {
   OPENHTJ2K_NODISCARD uint8_t get_component_depth(uint16_t) const;
   OPENHTJ2K_NODISCARD bool get_component_signedness(uint16_t) const;
   uint8_t get_minimum_DWT_levels();
+  uint8_t get_max_safe_reduce_NL();
 
   void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
               std::vector<uint8_t> &, std::vector<bool> &);
@@ -205,6 +206,30 @@ uint8_t openhtj2k_decoder_impl::get_minimum_DWT_levels() {
   return NL;
 }
 
+uint8_t openhtj2k_decoder_impl::get_max_safe_reduce_NL() {
+  // Start with the non-DFS upper bound.
+  uint8_t max_r = get_minimum_DWT_levels();
+  // For each DFS-active component, further limit to consecutive BIDIR levels from
+  // the finest: reducing through a HONLY or VONLY level produces an image that
+  // only has half the resolution in one spatial dimension, which is meaningless.
+  if (!main_header.COC.empty()) {
+    size_t i = 0;
+    for (uint16_t c = 0; c < this->get_num_component(); ++c) {
+      if (i < main_header.COC.size() && main_header.COC[i]->get_component_index() == c) {
+        if (main_header.COC[i]->is_dfs_defined()) {
+          const DFS_marker *dfs = main_header.get_dfs_marker(main_header.COC[i]->get_dfs_index());
+          if (dfs != nullptr) {
+            uint8_t dfs_safe = dfs->get_max_safe_reduce();
+            if (max_r > dfs_safe) max_r = dfs_safe;
+          }
+        }
+        ++i;
+      }
+    }
+  }
+  return max_r;
+}
+
 void openhtj2k_decoder_impl::destroy() {}
 void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                     std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
@@ -215,12 +240,12 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
         "openhtj2k_decoder_impl::invoke().\n");
     throw std::exception();
   }
-  if (reduce_NL > this->get_minimum_DWT_levels()) {
+  if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
-        "Attempting to access a non-existent resolution level within some\n"
-        "tile-component.  Problem almost certainly caused by trying to discard more\n"
-        "resolution levels than the number of DWT levels used to compress a\n"
-        "tile-component.");
+        "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
+        "maximum safe value for this codestream.  For DFS streams this is the count\n"
+        "of consecutive bidirectional DWT levels from the finest; for other streams\n"
+        "it is the minimum DWT level count across all tile-components.");
   }
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
@@ -318,6 +343,7 @@ bool openhtj2k_decoder::get_component_signedness(uint16_t c) {
   return this->impl->get_component_signedness(c);
 }
 uint8_t openhtj2k_decoder::get_minumum_DWT_levels() { return this->impl->get_minimum_DWT_levels(); }
+uint8_t openhtj2k_decoder::get_max_safe_reduce_NL() { return this->impl->get_max_safe_reduce_NL(); }
 
 void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
@@ -337,12 +363,12 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
         "openhtj2k_decoder_impl::invoke_line_based().\n");
     throw std::exception();
   }
-  if (reduce_NL > this->get_minimum_DWT_levels()) {
+  if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
-        "Attempting to access a non-existent resolution level within some\n"
-        "tile-component.  Problem almost certainly caused by trying to discard more\n"
-        "resolution levels than the number of DWT levels used to compress a\n"
-        "tile-component.");
+        "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
+        "maximum safe value for this codestream.  For DFS streams this is the count\n"
+        "of consecutive bidirectional DWT levels from the finest; for other streams\n"
+        "it is the minimum DWT level count across all tile-components.");
   }
 
   element_siz numTiles;
@@ -421,12 +447,12 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         "openhtj2k_decoder_impl::invoke_line_based_stream().\n");
     throw std::exception();
   }
-  if (reduce_NL > this->get_minimum_DWT_levels()) {
+  if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
-        "Attempting to access a non-existent resolution level within some\n"
-        "tile-component.  Problem almost certainly caused by trying to discard more\n"
-        "resolution levels than the number of DWT levels used to compress a\n"
-        "tile-component.");
+        "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
+        "maximum safe value for this codestream.  For DFS streams this is the count\n"
+        "of consecutive bidirectional DWT levels from the finest; for other streams\n"
+        "it is the minimum DWT level count across all tile-components.");
   }
 
   element_siz numTiles;
@@ -604,12 +630,12 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
         "openhtj2k_decoder_impl::invoke_line_based_predecoded().\n");
     throw std::exception();
   }
-  if (reduce_NL > this->get_minimum_DWT_levels()) {
+  if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
-        "Attempting to access a non-existent resolution level within some\n"
-        "tile-component.  Problem almost certainly caused by trying to discard more\n"
-        "resolution levels than the number of DWT levels used to compress a\n"
-        "tile-component.");
+        "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
+        "maximum safe value for this codestream.  For DFS streams this is the count\n"
+        "of consecutive bidirectional DWT levels from the finest; for other streams\n"
+        "it is the minimum DWT level count across all tile-components.");
   }
 
   element_siz numTiles;

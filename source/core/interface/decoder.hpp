@@ -52,7 +52,8 @@ class openhtj2k_decoder {
   OPENHTJ2K_EXPORT uint32_t get_component_height(uint16_t);
   OPENHTJ2K_EXPORT uint8_t get_component_depth(uint16_t);
   OPENHTJ2K_EXPORT bool get_component_signedness(uint16_t);
-  OPENHTJ2K_EXPORT uint8_t get_minumum_DWT_levels();
+  OPENHTJ2K_EXPORT uint8_t get_minumum_DWT_levels();  // note: typo preserved for ABI compat
+  OPENHTJ2K_EXPORT uint8_t get_max_safe_reduce_NL();
   OPENHTJ2K_EXPORT void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
                                std::vector<uint8_t> &, std::vector<bool> &);
   // Line-based decode: same signature as invoke() but uses stateful row-pull
