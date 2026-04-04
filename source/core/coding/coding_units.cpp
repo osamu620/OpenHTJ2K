@@ -4194,6 +4194,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     int32_t DC_OFFSET, MAXVAL, MINVAL;
     int16_t downshift, rnd;
     uint32_t csize_x, csize_y;
+    uint32_t yr;  // SIZ YRsiz: vertical subsampling factor (1 = no subsampling)
   };
   std::vector<CInfo> ci(NC);
   for (uint16_t c = 0; c < NC; ++c) {
@@ -4207,6 +4208,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     hdr.SIZ->get_image_size(siz);
     hdr.SIZ->get_image_origin(Osiz);
     hdr.SIZ->get_subsampling_factor(Rsiz, c);
+    I.yr             = Rsiz.y;
     const uint8_t NL_c = tcomp[c].get_dwt_levels();
     j2k_resolution *cr_act =
         tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL_val));
@@ -4328,7 +4330,12 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       // No MCT: each component is independent. Use pull_line_ref to read directly from
       // the ring buffer without memcpy, then apply per-component finalize.
       for (uint16_t c = 0; c < NC; ++c) {
-        if (y >= ci[c].csize_y) continue;
+        // Use the SIZ YRsiz factor to handle vertically subsampled components
+        // (e.g. yr=2 for 4:2:0 chroma): pull from the ring buffer once per yr luma
+        // rows, and reuse the decoded row on the intermediate rows.
+        const uint32_t yr_c = ci[c].yr;
+        if (y % yr_c != 0) continue;           // reuse previous row for intermediate luma rows
+        if (y / yr_c >= ci[c].csize_y) continue;  // past last row of this component
         const sprec_t *spf = tcomp[c].pull_line_ref();
         int32_t       *dp  = out_rows[c].data();
         const CInfo   &I   = ci[c];

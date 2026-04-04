@@ -488,9 +488,22 @@ int main(int argc, char *argv[]) {
               }
               fwrite(row_buf.data(), 1, row_buf.size(), fps[0]);
             } else {
-              // Per-component files
+              // Per-component files.
+              // For vertically subsampled components (yr_c > 1, e.g. 4:2:0 chroma):
+              // decode_line_based_stream holds the component row stable across yr_c luma
+              // rows and only advances the ring buffer every yr_c luma rows.  So we write
+              // once per yr_c luma rows (at y%yr_c==0) and use y/yr_c as the component-
+              // space row boundary.  For non-subsampled components (yr_c==1) the
+              // behaviour is identical to the original.
+              // Use ceiling division to recover YRsiz: ceil(H0/Hc), which is exact for
+              // any valid JPEG 2000 subsampling factor (including odd-height images where
+              // integer division would give the wrong answer).
               for (uint16_t c = 0; c < nc_all; ++c) {
-                if (fps[c] == nullptr || y >= img_height[c]) continue;
+                if (fps[c] == nullptr) continue;
+                const uint32_t h0 = img_height[0], hc = img_height[c];
+                const uint32_t yr_c = (hc > 0 && hc < h0) ? (h0 + hc - 1) / hc : 1u;
+                if (y % yr_c != 0) continue;         // duplicate luma row: skip
+                if (y / yr_c >= hc) continue;         // past end of component
                 uint8_t *out = row_buf.data();
                 if (bpp == 1) {
                   for (uint32_t n = 0; n < img_width[c]; ++n)
