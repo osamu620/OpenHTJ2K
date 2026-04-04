@@ -9,6 +9,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 
 **Decoding**
 - Decodes ITU-T Rec.800 | ISO/IEC 15444-1 (JPEG 2000 Part 1) and ITU-T Rec.814 | ISO/IEC 15444-15 (HTJ2K) codestreams
+- Partial support for JPEG 2000 Part 2: Downsampling Factor Structures (DFS) and Arbitrary Transform Kernels (ATK) — irreversible 9/7-based and reversible 5/3-based ATK kernels
 - Fully compliant with conformance testing defined in ITU-T Rec.803 | ISO 15444-4
 - Three decode APIs:
   - `invoke()` — batch (full-image) path; writes decoded samples into a pre-allocated W×H buffer
@@ -21,6 +22,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 - Optional markers (COC, POC, etc.) and HT SigProp/MagRef passes are not implemented
 - Up to **16 bit** per component sample supported
 - Quality control for lossy compression via the `Qfactor` parameter
+- Encoder input supports PGM, PPM, PGX, and TIFF (with libtiff); PGX streaming works without `-batch`
 - Two encode APIs:
   - `invoke()` — batch (full-image) path
   - `invoke_line_based_stream()` — streaming push-row path driven by a source callback
@@ -166,12 +168,19 @@ Both Part 1 and Part 15 compliant decoding are supported.
 ### Options
 - `-reduce n`
   - Decode at a reduced resolution by skipping `n` DWT levels.
+  - When the codestream uses DFS markers (Part 2), the value is clamped to the
+    number of consecutive bidirectional DWT levels, avoiding nonsensical
+    HONLY/VONLY outputs.
 - `-num_threads n`
   - Number of threads. `0` (default) uses all available hardware threads.
 - `-iter n`
   - Repeat decoding `n` times (benchmarking). Output is written only once.
 - `-batch`
   - Use the batch (full-image) decode path. The default path is line-based (streaming).
+- `-ycbcr bt601|bt709` *(experimental)*
+  - Convert YCbCr to RGB during PPM output using full-range ITU-R BT.601 or
+    BT.709 coefficients. Handles 4:2:2 nearest-neighbour chroma upsampling.
+    Has no effect when writing PGX, PGM, or RAW outputs.
 
 ## Supported file formats
 ### Encoder input / Decoder output
