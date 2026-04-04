@@ -67,6 +67,12 @@ inline __m128i sse_lzcnt_epi32(__m128i v) {
   return v;
 }
 
+// Build __m256i with lower 128 = broadcast of qinf[0], upper = broadcast of qinf[1].
+static FORCE_INLINE __m256i expand_two_quads(__m128i qinf128) {
+  return _mm256_set_m128i(_mm_shuffle_epi32(qinf128, _MM_SHUFFLE(1, 1, 1, 1)),
+                          _mm_shuffle_epi32(qinf128, _MM_SHUFFLE(0, 0, 0, 0)));
+}
+
 template <bool skip_sigma>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
@@ -277,19 +283,21 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   std::memset(Eline, 0, (2U * QW + 8U) * sizeof(int32_t));
   int32_t *E_p = Eline + 1;
 
-  __m128i v_n, qinf, U_q, mu0_n, mu1_n;
+  __m128i v_n, mu0_n, mu1_n;
   fwd_buf<0xFF> MagSgn(compressed_data, Pcup);
 
   // Initial line-pair
   sp = scratch;
   for (qx = QW; qx > 0; qx -= 2, sp += 4) {
-    v_n   = _mm_setzero_si128();
-    qinf  = _mm_loadu_si128((__m128i *)sp);
-    U_q   = _mm_srli_epi32(qinf, 16);
-    mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);  // 0, 1, 2, 3
-    mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);  // 4, 5, 6, 7
+    v_n              = _mm_setzero_si128();
+    __m128i qinf128  = _mm_loadu_si128((__m128i *)sp);
+    __m256i qinf256  = expand_two_quads(qinf128);
+    __m256i U_q256   = _mm256_srli_epi32(qinf256, 16);
+    __m256i row256   = MagSgn.decode_two_quads(qinf256, U_q256, pLSB, v_n);
 
-    // store mu
+    // Transpose and store: lower 128 = quad 0, upper 128 = quad 1.
+    mu0_n = _mm256_castsi256_si128(row256);
+    mu1_n = _mm256_extracti128_si256(row256, 1);
     auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);  // 0, 4, 1, 5
     auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);  // 2, 6, 3, 7
     mu0_n   = _mm_unpacklo_epi32(t0, t1);        // 0, 2, 4, 6
@@ -318,41 +326,35 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p - 1)));
     Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 1)));
     for (qx = QW; qx > 0; qx -= 2, sp += 4) {
-      v_n  = _mm_setzero_si128();
-      qinf = _mm_loadu_si128((__m128i *)sp);
+      v_n             = _mm_setzero_si128();
+      __m128i qinf128 = _mm_loadu_si128((__m128i *)sp);
+      __m256i qinf256 = expand_two_quads(qinf128);
+      __m256i U_q256;
       {
-        // Compute gamma, kappa, U_q with Emax
-        // The SIMD code below does the following
-        //
-        // gamma0 = (popcount32(rho0) < 2) ? 0 : 1;
-        // gamma1 = (popcount32(rho1) < 2) ? 0 : 1;
-        // kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint8_t>(gamma0 * (Emax0 - 1));
-        // kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint8_t>(gamma1 * (Emax1 - 1));
-        // U0     = kappa0 + u0;
-        // U1     = kappa1 + u1;
+        // 256-bit gamma/kappa computation — both quads in one pass.
+        // gamma: popcount(rho) < 2 → 0, else 1.  Computed as (x & (x-1)) == 0.
+        __m256i gamma  = _mm256_and_si256(qinf256, _mm256_set1_epi32(0xF0));
+        __m256i gm1    = _mm256_sub_epi32(gamma, _mm256_set1_epi32(1));
+        gamma          = _mm256_and_si256(gamma, gm1);
+        gamma          = _mm256_cmpeq_epi32(gamma, _mm256_setzero_si256());
 
-        __m128i gamma, emax, kappa, u_q, w0;  // needed locally
-        gamma = _mm_and_si128(qinf, _mm_set1_epi32(0xF0));
-        w0    = _mm_sub_epi32(gamma, _mm_set1_epi32(1));
-        gamma = _mm_and_si128(gamma, w0);
-        gamma = _mm_cmpeq_epi32(gamma, _mm_setzero_si128());
+        // emax: quad 0 uses Emax0-1, quad 1 uses Emax1-1.
+        __m256i emax256 = _mm256_set_m128i(_mm_set1_epi32(Emax1 - 1),
+                                            _mm_set1_epi32(Emax0 - 1));
+        emax256         = _mm256_andnot_si256(gamma, emax256);
+        __m256i kappa   = _mm256_max_epi16(emax256, _mm256_set1_epi32(1));
 
-        emax  = _mm_set_epi32(0, 0, Emax1 - 1, Emax0 - 1);
-        emax  = _mm_andnot_si128(gamma, emax);
-        kappa = _mm_set1_epi32(1);
-        kappa = _mm_max_epi16(emax, kappa);  // no max_epi32 in ssse3
-
-        u_q = _mm_srli_epi32(qinf, 16);
-        U_q = _mm_add_epi32(u_q, kappa);
+        U_q256 = _mm256_add_epi32(_mm256_srli_epi32(qinf256, 16), kappa);
       }
-      mu0_n = MagSgn.decode_one_quad<0>(qinf, U_q, pLSB, v_n);  // 0, 1, 2, 3
-      mu1_n = MagSgn.decode_one_quad<1>(qinf, U_q, pLSB, v_n);  // 4, 5, 6, 7
+      __m256i row256 = MagSgn.decode_two_quads(qinf256, U_q256, pLSB, v_n);
 
-      // store mu
-      auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);  // 0, 4, 1, 5
-      auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);  // 2, 6, 3, 7
-      mu0_n   = _mm_unpacklo_epi32(t0, t1);        // 0, 2, 4, 6
-      mu1_n   = _mm_unpackhi_epi32(t0, t1);        // 1, 3, 5, 7
+      // Transpose and store
+      mu0_n = _mm256_castsi256_si128(row256);
+      mu1_n = _mm256_extracti128_si256(row256, 1);
+      auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);
+      auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
+      mu0_n   = _mm_unpacklo_epi32(t0, t1);
+      mu1_n   = _mm_unpackhi_epi32(t0, t1);
       _mm_storeu_si128((__m128i *)mp0, mu0_n);
       _mm_storeu_si128((__m128i *)mp1, mu1_n);
       mp0 += 4;
