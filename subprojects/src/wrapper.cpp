@@ -109,6 +109,10 @@ uint32_t get_minimum_DWT_levels(open_htj2k::openhtj2k_decoder* dec) {
   return cpp_get_minimum_DWT_levels(dec);
 }
 
+uint32_t get_max_safe_reduce_NL(open_htj2k::openhtj2k_decoder* dec) {
+  return dec->get_max_safe_reduce_NL();
+}
+
 // invoke_decoder_to_rgba: decode and convert directly to 8-bit RGBA in one pass.
 // rgba_dst must be pre-allocated as W × H × 4 bytes.
 // Handles all bit depths (1–16) and signed/unsigned samples; correct down/up-shift

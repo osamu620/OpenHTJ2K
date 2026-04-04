@@ -576,6 +576,17 @@ uint8_t DFS_marker::get_num_bands(uint8_t r, uint8_t NL) const {
   return (t == DWT_BIDIR) ? 3 : (t == DWT_NO) ? 0 : 1;
 }
 
+uint8_t DFS_marker::get_max_safe_reduce() const {
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < Ids; ++i) {
+    if (Ddfs[i] == DWT_BIDIR)
+      ++n;
+    else
+      break;
+  }
+  return n;
+}
+
 /********************************************************************************
  * ATK_marker  (Part 2, 0xFF79)
  *******************************************************************************/

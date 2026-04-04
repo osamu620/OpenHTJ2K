@@ -29,6 +29,7 @@
 #pragma once
 #include <cstring>
 #include <memory>
+#include <vector>
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
   #if defined(_MSC_VER)
@@ -64,9 +65,26 @@ char *get_command_option(int argc, char *argv[], const char *option) {
   return nullptr;
 }
 
+// YCbCr→RGB conversion coefficients (fixed-point, scaled by 2^14).
+// Full-range (JPEG-style) inverse colour transform:
+//   R = Y + (cr_to_r × Cr' + 8192) >> 14
+//   G = Y - (cb_to_g × Cb' + cr_to_g × Cr' + 8192) >> 14
+//   B = Y + (cb_to_b × Cb' + 8192) >> 14
+// where Cb' = Cb - chroma_center, Cr' = Cr - chroma_center.
+struct ycbcr_coefficients {
+  int32_t cr_to_r;
+  int32_t cb_to_g;
+  int32_t cr_to_g;
+  int32_t cb_to_b;
+};
+// ITU-R BT.601 full-range
+constexpr ycbcr_coefficients YCBCR_BT601 = {22970, 5639, 11701, 29032};
+// ITU-R BT.709 full-range
+constexpr ycbcr_coefficients YCBCR_BT709 = {25802, 3069, 7668, 30394};
+
 void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *> buf,
                std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
-               std::vector<bool> &is_signed) {
+               std::vector<bool> &is_signed, const ycbcr_coefficients *ycbcr = nullptr) {
   // ppm does not allow negative value
   int32_t PNM_OFFSET      = (is_signed[0]) ? 1 << (depth[0] - 1) : 0;
   uint8_t bytes_per_pixel = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(depth[0]), 8));
@@ -82,6 +100,57 @@ void write_ppm(char *outfile_name, char *outfile_ext_name, std::vector<int32_t *
   // ppm_out buffer is allocated by malloc because it does not need value-initialization
   uint8_t *ppm_out = static_cast<uint8_t *>(malloc(num_pixels * bytes_per_pixel * 3));
   setvbuf(ofp, (char *)ppm_out, _IOFBF, num_pixels);
+
+  // Scalar path: handles subsampled components (e.g. 4:2:2) and optional
+  // YCbCr→RGB conversion. SIMD paths below require same-dimension 4:4:4 data
+  // and no colour conversion, so they are skipped when either condition holds.
+  const bool same_dims = (width[0] == width[1] && width[0] == width[2] &&
+                          height[0] == height[1] && height[0] == height[2]);
+  const int32_t cb_center = (ycbcr && !is_signed[1]) ? (1 << (depth[1] - 1)) : 0;
+  const int32_t cr_center = (ycbcr && !is_signed[2]) ? (1 << (depth[2] - 1)) : 0;
+  if (!same_dims || ycbcr != nullptr) {
+    uint8_t *out = ppm_out;
+    for (uint32_t y = 0; y < height[0]; ++y) {
+      const uint32_t cy1 = y * height[1] / height[0];
+      const uint32_t cy2 = y * height[2] / height[0];
+      for (uint32_t x = 0; x < width[0]; ++x) {
+        const uint32_t cx1  = x * width[1] / width[0];
+        const uint32_t cx2  = x * width[2] / width[0];
+        const int32_t  Y_v  = buf[0][y * width[0] + x];
+        const int32_t  cb_v = buf[1][cy1 * width[1] + cx1];
+        const int32_t  cr_v = buf[2][cy2 * width[2] + cx2];
+        int32_t r, g, b;
+        if (ycbcr) {
+          const int32_t Cb = cb_v - cb_center;
+          const int32_t Cr = cr_v - cr_center;
+          const int32_t lo = -PNM_OFFSET, hi = MAXVAL - PNM_OFFSET;
+          r = Y_v + ((ycbcr->cr_to_r * Cr + 8192) >> 14);
+          g = Y_v - ((ycbcr->cb_to_g * Cb + ycbcr->cr_to_g * Cr + 8192) >> 14);
+          b = Y_v + ((ycbcr->cb_to_b * Cb + 8192) >> 14);
+          r = (r < lo ? lo : r > hi ? hi : r) + PNM_OFFSET;
+          g = (g < lo ? lo : g > hi ? hi : g) + PNM_OFFSET;
+          b = (b < lo ? lo : b > hi ? hi : b) + PNM_OFFSET;
+        } else {
+          r = Y_v + PNM_OFFSET;
+          g = cb_v + PNM_OFFSET;
+          b = cr_v + PNM_OFFSET;
+        }
+        if (bytes_per_pixel == 1) {
+          *out++ = static_cast<uint8_t>(r);
+          *out++ = static_cast<uint8_t>(g);
+          *out++ = static_cast<uint8_t>(b);
+        } else {
+          *out++ = static_cast<uint8_t>(r >> 8); *out++ = static_cast<uint8_t>(r);
+          *out++ = static_cast<uint8_t>(g >> 8); *out++ = static_cast<uint8_t>(g);
+          *out++ = static_cast<uint8_t>(b >> 8); *out++ = static_cast<uint8_t>(b);
+        }
+      }
+    }
+    fwrite(ppm_out, sizeof(uint8_t), num_pixels * bytes_per_pixel * 3, ofp);
+    fclose(ofp);
+    free(ppm_out);
+    return;
+  }
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   uint32_t len = num_pixels;
