@@ -17,6 +17,13 @@
   the correct XRsiz/YRsiz factors for the SIZ marker, seeks each chroma file
   to the correct row (`y / YRsiz`), and skips redundant `push_line_enc` calls
   for chroma on luma rows that carry no new chroma data.
+* Add JPH file format decoding to `open_htj2k_dec`. The decoder now accepts
+  `.jph` input files, parses the box structure (signature → ftyp → jp2h →
+  jp2c), extracts the embedded J2K codestream, and reads the `colr` box
+  EnumCS field. When EnumCS is 18 (YCbCr) and the output is PPM, YCbCr→RGB
+  conversion (BT.601) is applied automatically — no `-ycbcr` flag needed.
+  The explicit `-ycbcr bt601|bt709` flag still overrides the auto-detected
+  standard.
 
 # [0.7.0] - 2026-04-04
 
