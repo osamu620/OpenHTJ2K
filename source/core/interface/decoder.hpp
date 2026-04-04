@@ -37,6 +37,12 @@
   #define OPENHTJ2K_EXPORT
 #endif
 namespace open_htj2k {
+// EnumCS values from the JPH/JP2 colour specification box (ISO/IEC 15444-1 Annex I).
+// get_colorspace() returns one of these; 0 means the input was a raw codestream.
+static constexpr uint32_t ENUMCS_SRGB      = 16u;
+static constexpr uint32_t ENUMCS_GRAYSCALE = 17u;
+static constexpr uint32_t ENUMCS_YCBCR     = 18u;
+
 class openhtj2k_decoder {
  private:
   std::unique_ptr<class openhtj2k_decoder_impl> impl;
@@ -54,6 +60,9 @@ class openhtj2k_decoder {
   OPENHTJ2K_EXPORT bool get_component_signedness(uint16_t);
   OPENHTJ2K_EXPORT uint8_t get_minumum_DWT_levels();  // note: typo preserved for ABI compat
   OPENHTJ2K_EXPORT uint8_t get_max_safe_reduce_NL();
+  // Returns the EnumCS value from the JPH/JP2 colour specification box, or 0 for raw codestreams.
+  // Compare against open_htj2k::ENUMCS_SRGB / ENUMCS_GRAYSCALE / ENUMCS_YCBCR.
+  OPENHTJ2K_EXPORT uint32_t get_colorspace();
   OPENHTJ2K_EXPORT void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
                                std::vector<uint8_t> &, std::vector<bool> &);
   // Line-based decode: same signature as invoke() but uses stateful row-pull
