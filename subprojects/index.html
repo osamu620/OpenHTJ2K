@@ -450,6 +450,7 @@
     var g_ycbcr_converted = false;
     var apply_ycbcr_bt601 = null;
     var apply_ycbcr_bt709 = null;
+    var get_colorspace     = null;
 
     function applyYCbCrConversion(standard) {
       if (!g_ycbcr_js || g_ycbcr_converted || !g_module) return;
@@ -489,6 +490,9 @@
       Module.writeArrayToMemory(array, buffer);
       // console.log("HTJ2K decoder creation start");
       j2c = create_decoder(buffer, array.length, skip_res_for_data | 0);
+      // Query JPH colorspace before parsing (set in constructor; 0 for raw codestreams).
+      // EnumCS: 16=sRGB, 17=Grayscale, 18=YCbCr
+      var enumCS = get_colorspace ? (get_colorspace(j2c) | 0) : 0;
       // console.log("HTJ2K decoder creation OK");
       parse_j2c_data(j2c);
 
@@ -524,9 +528,15 @@
       var src = Module._malloc(width * height * 4);
 
       var t0 = performance.now();
+      var autoYcbcr = false;
       var NAflag = false;
       try {
         invoke_decoder_to_rgba(j2c, src);
+        // Auto-apply BT.601 YCbCr→RGB when the JPH colour box declares YCbCr.
+        if (enumCS === 18 && num_comps >= 3 && apply_ycbcr_bt601) {
+          apply_ycbcr_bt601(src, width * height);
+          autoYcbcr = true;
+        }
       } catch (msg) {
         NAflag = true;
       }
@@ -547,16 +557,18 @@
         g_ycbcr_js        = Module["HEAPU8"].slice(src, src + n);  // JS Uint8Array copy
         g_ycbcr_width     = width;
         g_ycbcr_height    = height;
-        g_ycbcr_converted = false;
+        g_ycbcr_converted = autoYcbcr;
         // Show/hide and reset the YCbCr panel.
         var panel = document.getElementById('ycbcr-panel');
         if (panel) panel.style.display = (num_comps >= 3) ? '' : 'none';
         var b601 = document.getElementById('btn-bt601');
         var b709 = document.getElementById('btn-bt709');
-        if (b601) b601.disabled = false;
-        if (b709) b709.disabled = false;
+        if (b601) b601.disabled = autoYcbcr;
+        if (b709) b709.disabled = autoYcbcr;
         var note = document.getElementById('ycbcr-note');
-        if (note) note.textContent = 'Apply once — reload image to reset.';
+        if (note) note.textContent = autoYcbcr
+          ? 'Auto-detected YCbCr from JPH \u2014 BT.601 applied. Reload image to change.'
+          : 'Apply once \u2014 reload image to reset.';
       }
       Module._free(src);
 
@@ -619,6 +631,7 @@
       // YCbCr→RGB in-place converters
       apply_ycbcr_bt601 = Module.cwrap('apply_ycbcr_bt601_to_rgba', 'void', ['number', 'number']);
       apply_ycbcr_bt709 = Module.cwrap('apply_ycbcr_bt709_to_rgba', 'void', ['number', 'number']);
+      get_colorspace    = Module.cwrap('get_colorspace', 'number', ['number']);
       g_module = Module;  // store reference for applyYCbCrConversion (global scope)
 
       // Hide the loading overlay — decoder is ready.
