@@ -5698,13 +5698,17 @@ uint8_t *j2k_tile::encode_line_based_stream(
         }
       } else {
         for (uint16_t c = 0; c < num_components; ++c) {
+          const uint32_t h_c = tcomp[c].get_pos1().y - tcomp[c].get_pos0().y;
+          const uint32_t yr  = (h_c > 0 && h_c < height) ? height / h_c : 1;
+          if (yr > 1 && (y % yr) != 0) continue;
+          const uint32_t cy    = (yr > 1) ? (y / yr) : y;
           const int32_t dco    = tcomp[c].lb_dc_offset;
           const int32_t shu    = tcomp[c].lb_dc_shiftup;
           const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
           const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
           const int32_t *sp    = int_rows[c] + x_off;
           const uint32_t sc    = round_up(wc, 32U);
-          sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + y * sc;
+          sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + cy * sc;
           if (shu >= 0)
             for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] << shu) - dco);
           else
@@ -5856,6 +5860,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
       }
     } else {
       for (uint16_t c = 0; c < num_components; ++c) {
+        const uint32_t h_c = tcomp[c].get_pos1().y - tcomp[c].get_pos0().y;
+        const uint32_t yr  = (h_c > 0 && h_c < height) ? height / h_c : 1;
+        if (yr > 1 && (y % yr) != 0) continue;
         const int32_t dco    = tcomp[c].lb_dc_offset;
         const int32_t shu    = tcomp[c].lb_dc_shiftup;
         const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
