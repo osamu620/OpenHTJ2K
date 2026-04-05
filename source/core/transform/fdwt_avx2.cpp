@@ -308,4 +308,37 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
     }
   }
 }
+
+// Single-row reversible (5/3) FDWT HP vertical lifting: tgt[i] -= floor((prev[i]+next[i])*0.5)
+// Ring-buffer rows are 32-byte aligned, so _mm256_load_ps is safe.
+void fdwt_rev_ver_hp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt) {
+  const __m256 k05 = _mm256_set1_ps(0.5f);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m256 a = _mm256_load_ps(prev + i);
+    __m256 b = _mm256_load_ps(next + i);
+    __m256 t = _mm256_load_ps(tgt  + i);
+    t = _mm256_sub_ps(t, _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(a, b), k05)));
+    _mm256_store_ps(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] -= floorf((prev[i] + next[i]) * 0.5f);
+}
+
+// Single-row reversible (5/3) FDWT LP vertical lifting: tgt[i] += floor((prev[i]+next[i]+2)*0.25)
+// Ring-buffer rows are 32-byte aligned, so _mm256_load_ps is safe.
+void fdwt_rev_ver_lp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt) {
+  const __m256 k025 = _mm256_set1_ps(0.25f);
+  const __m256 k2   = _mm256_set1_ps(2.0f);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m256 a = _mm256_load_ps(prev + i);
+    __m256 b = _mm256_load_ps(next + i);
+    __m256 t = _mm256_load_ps(tgt  + i);
+    t = _mm256_add_ps(t, _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(a, b), k2), k025)));
+    _mm256_store_ps(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] += floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+}
 #endif

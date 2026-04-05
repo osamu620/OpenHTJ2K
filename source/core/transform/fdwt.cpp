@@ -43,6 +43,9 @@ static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixe
 // FDWT calls with -coeff when the step is additive (tgt[i] += coeff*(prev[i]+next[i])).
 typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
 static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_wasm;
+typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_wasm;
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_wasm;
 #elif defined(OPENHTJ2K_ENABLE_AVX512)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
@@ -50,6 +53,9 @@ static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixe
                                                           fdwt_rev_ver_sr_fixed_avx2};
 typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
 static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_avx512;
+typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_avx512;
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_avx512;
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
                                                           fdwt_1d_filtr_rev53_fixed_neon};
@@ -57,6 +63,9 @@ static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixe
                                                           fdwt_rev_ver_sr_fixed_neon};
 typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
 static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_neon;
+typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_neon;
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_neon;
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
@@ -64,6 +73,9 @@ static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixe
                                                           fdwt_rev_ver_sr_fixed_avx2};
 typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
 static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_avx2;
+typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_avx2;
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_avx2;
 #else
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed,
                                                           fdwt_1d_filtr_rev53_fixed};
@@ -73,6 +85,15 @@ static void adv_fdwt_irrev_step_scalar(int32_t n, float *prev, float *next, floa
 }
 typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
 static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = adv_fdwt_irrev_step_scalar;
+static void adv_fdwt_rev_hp_step_scalar(int32_t n, const float *prev, const float *next, float *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] -= floorf((prev[i] + next[i]) * 0.5f);
+}
+static void adv_fdwt_rev_lp_step_scalar(int32_t n, const float *prev, const float *next, float *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] += floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+}
+typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = adv_fdwt_rev_hp_step_scalar;
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = adv_fdwt_rev_lp_step_scalar;
 #endif
 // irreversible FDWT
 void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -788,9 +809,9 @@ static void adv_step_f(fdwt_2d_state *s, int32_t r) {
     adv_fdwt_irrev_step_fn(w, prev, next, tgt, coeff);
   } else {  // rev 5/3
     if (!lp) {  // HP predict: HP -= floor((LP[r-1] + LP[r+1]) * 0.5f)
-      for (int32_t c = 0; c < w; ++c) tgt[c] -= floorf((prev[c] + next[c]) * 0.5f);
+      adv_fdwt_rev_hp_step_fn(w, prev, next, tgt);
     } else {  // LP update: LP += floor((HP[r-1] + HP[r+1] + 2) * 0.25f)
-      for (int32_t c = 0; c < w; ++c) tgt[c] += floorf((prev[c] + next[c] + 2.0f) * 0.25f);
+      adv_fdwt_rev_lp_step_fn(w, prev, next, tgt);
     }
   }
   set_dl_f(s, r, cur + 1);
