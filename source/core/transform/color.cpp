@@ -26,7 +26,10 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if not defined(OPENHTJ2K_TRY_AVX2) && not defined(OPENHTJ2K_ENABLE_ARM_NEON)
+// Scalar fallback: active when neither AVX2 (both flag+ISA), WASM-SIMD, nor NEON are available.
+// This mirrors the #else branch of the dispatch table in coding_units.cpp.
+#if !(defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)) && \
+    !defined(OPENHTJ2K_ENABLE_WASM_SIMD) && !defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include "color.hpp"
 
 void cvt_rgb_to_ycbcr_rev(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
