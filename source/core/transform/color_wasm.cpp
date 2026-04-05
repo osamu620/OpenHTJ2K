@@ -284,11 +284,64 @@ void cvt_rgb_to_ycbcr_irrev_float_wasm(const int32_t *sp0, const int32_t *sp1, c
   }
 }
 
-// Scalar fallback used for WASM builds (no WASM-SIMD specialization for the fused path).
+// Fused inverse ICT + float→int32 finalize, WASM-SIMD vectorized.
+// Mirrors the AVX2 implementation: two fast paths (ds>0 and ds==0), scalar tail for ds<0.
 void fused_ycbcr_irrev_to_rgb_i32_wasm(const float *y, const float *cb, const float *cr,
                                         int32_t *r, int32_t *g, int32_t *b, uint32_t width,
                                         const FinalizeParams *fp) {
-  auto finalize_one = [](float v, const FinalizeParams &p) -> int32_t {
+  const v128_t fCR_FACT_R = wasm_f32x4_splat(static_cast<float>(CR_FACT_R));
+  const v128_t fCR_FACT_G = wasm_f32x4_splat(static_cast<float>(CR_FACT_G));
+  const v128_t fCB_FACT_B = wasm_f32x4_splat(static_cast<float>(CB_FACT_B));
+  const v128_t fCB_FACT_G = wasm_f32x4_splat(static_cast<float>(CB_FACT_G));
+
+  const v128_t vrnd0 = wasm_i32x4_splat(fp[0].rnd);
+  const v128_t vdc0  = wasm_i32x4_splat(fp[0].dc);
+  const v128_t vmx0  = wasm_i32x4_splat(fp[0].maxval);
+  const v128_t vmn0  = wasm_i32x4_splat(fp[0].minval);
+  const v128_t vrnd1 = wasm_i32x4_splat(fp[1].rnd);
+  const v128_t vdc1  = wasm_i32x4_splat(fp[1].dc);
+  const v128_t vmx1  = wasm_i32x4_splat(fp[1].maxval);
+  const v128_t vmn1  = wasm_i32x4_splat(fp[1].minval);
+  const v128_t vrnd2 = wasm_i32x4_splat(fp[2].rnd);
+  const v128_t vdc2  = wasm_i32x4_splat(fp[2].dc);
+  const v128_t vmx2  = wasm_i32x4_splat(fp[2].maxval);
+  const v128_t vmn2  = wasm_i32x4_splat(fp[2].minval);
+
+  uint32_t n = 0;
+  if (fp[0].ds > 0 && fp[1].ds > 0 && fp[2].ds > 0) {
+    const int ds0 = fp[0].ds, ds1 = fp[1].ds, ds2 = fp[2].ds;
+    for (; n + 4 <= width; n += 4) {
+      v128_t fY  = wasm_v128_load(y + n);
+      v128_t fCb = wasm_v128_load(cb + n);
+      v128_t fCr = wasm_v128_load(cr + n);
+      v128_t fR  = wasm_f32x4_add(fY, wasm_f32x4_mul(fCr, fCR_FACT_R));
+      v128_t fB  = wasm_f32x4_add(fY, wasm_f32x4_mul(fCb, fCB_FACT_B));
+      v128_t fG  = wasm_f32x4_sub(wasm_f32x4_sub(fY, wasm_f32x4_mul(fCr, fCR_FACT_G)),
+                                   wasm_f32x4_mul(fCb, fCB_FACT_G));
+      v128_t vR  = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(fR), vrnd0), ds0);
+      v128_t vG  = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(fG), vrnd1), ds1);
+      v128_t vB  = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(fB), vrnd2), ds2);
+      wasm_v128_store(r + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vR, vdc0), vmn0), vmx0));
+      wasm_v128_store(g + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vG, vdc1), vmn1), vmx1));
+      wasm_v128_store(b + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vB, vdc2), vmn2), vmx2));
+    }
+  } else if (fp[0].ds == 0 && fp[1].ds == 0 && fp[2].ds == 0) {
+    for (; n + 4 <= width; n += 4) {
+      v128_t fY  = wasm_v128_load(y + n);
+      v128_t fCb = wasm_v128_load(cb + n);
+      v128_t fCr = wasm_v128_load(cr + n);
+      v128_t vR  = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_add(fY, wasm_f32x4_mul(fCr, fCR_FACT_R)));
+      v128_t vB  = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_add(fY, wasm_f32x4_mul(fCb, fCB_FACT_B)));
+      v128_t vG  = wasm_i32x4_trunc_sat_f32x4(
+          wasm_f32x4_sub(wasm_f32x4_sub(fY, wasm_f32x4_mul(fCr, fCR_FACT_G)),
+                         wasm_f32x4_mul(fCb, fCB_FACT_G)));
+      wasm_v128_store(r + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vR, vdc0), vmn0), vmx0));
+      wasm_v128_store(g + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vG, vdc1), vmn1), vmx1));
+      wasm_v128_store(b + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vB, vdc2), vmn2), vmx2));
+    }
+  }
+  // Scalar tail (also handles ds < 0 edge case for high-bitdepth images).
+  auto finalize_scalar = [](float v, const FinalizeParams &p) -> int32_t {
     int32_t x = static_cast<int32_t>(v);
     if (p.ds > 0) x = (x + p.rnd) >> p.ds;
     else if (p.ds < 0) x <<= -p.ds;
@@ -297,19 +350,45 @@ void fused_ycbcr_irrev_to_rgb_i32_wasm(const float *y, const float *cb, const fl
     if (x < p.minval) x = p.minval;
     return x;
   };
-  for (uint32_t n = 0; n < width; ++n) {
+  for (; n < width; ++n) {
     float Y = y[n], Cb = cb[n], Cr = cr[n];
-    r[n] = finalize_one(Y + static_cast<float>(CR_FACT_R) * Cr, fp[0]);
-    g[n] = finalize_one(
+    r[n] = finalize_scalar(Y + static_cast<float>(CR_FACT_R) * Cr, fp[0]);
+    g[n] = finalize_scalar(
         Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb, fp[1]);
-    b[n] = finalize_one(Y + static_cast<float>(CB_FACT_B) * Cb, fp[2]);
+    b[n] = finalize_scalar(Y + static_cast<float>(CB_FACT_B) * Cb, fp[2]);
   }
 }
 
+// Fused inverse RCT (lossless) + int32 finalize, WASM-SIMD vectorized.
+// ds must be 0 for all components; only DC_OFFSET and clamp are applied.
 void fused_ycbcr_rev_to_rgb_i32_wasm(const float *y, const float *cb, const float *cr,
                                       int32_t *r, int32_t *g, int32_t *b, uint32_t width,
                                       const FinalizeParams *fp) {
-  for (uint32_t n = 0; n < width; ++n) {
+  const v128_t vdc0 = wasm_i32x4_splat(fp[0].dc);
+  const v128_t vmx0 = wasm_i32x4_splat(fp[0].maxval);
+  const v128_t vmn0 = wasm_i32x4_splat(fp[0].minval);
+  const v128_t vdc1 = wasm_i32x4_splat(fp[1].dc);
+  const v128_t vmx1 = wasm_i32x4_splat(fp[1].maxval);
+  const v128_t vmn1 = wasm_i32x4_splat(fp[1].minval);
+  const v128_t vdc2 = wasm_i32x4_splat(fp[2].dc);
+  const v128_t vmx2 = wasm_i32x4_splat(fp[2].maxval);
+  const v128_t vmn2 = wasm_i32x4_splat(fp[2].minval);
+
+  uint32_t n = 0;
+  for (; n + 4 <= width; n += 4) {
+    // Float values are integer-valued after 5/3 IDWT; trunc == floor for exact integers.
+    v128_t iY  = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(y + n));
+    v128_t iCb = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(cb + n));
+    v128_t iCr = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(cr + n));
+    // RCT: G = Y - (Cb+Cr)>>2 (arithmetic shift); R = Cr+G; B = Cb+G
+    v128_t iG  = wasm_i32x4_sub(iY, wasm_i32x4_shr(wasm_i32x4_add(iCb, iCr), 2));
+    v128_t iR  = wasm_i32x4_add(iCr, iG);
+    v128_t iB  = wasm_i32x4_add(iCb, iG);
+    wasm_v128_store(r + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(iR, vdc0), vmn0), vmx0));
+    wasm_v128_store(g + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(iG, vdc1), vmn1), vmx1));
+    wasm_v128_store(b + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(iB, vdc2), vmn2), vmx2));
+  }
+  for (; n < width; ++n) {
     int32_t Y  = static_cast<int32_t>(y[n]);
     int32_t Cb = static_cast<int32_t>(cb[n]);
     int32_t Cr = static_cast<int32_t>(cr[n]);
