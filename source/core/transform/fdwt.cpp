@@ -39,20 +39,40 @@ static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_
                                                            fdwt_1d_filtr_rev53_fixed_wasm};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_wasm,
                                                            fdwt_rev_ver_sr_fixed_wasm};
+// Single-row vertical lifting step: tgt[i] -= coeff*(prev[i]+next[i]).
+// FDWT calls with -coeff when the step is additive (tgt[i] += coeff*(prev[i]+next[i])).
+typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
+static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_wasm;
+#elif defined(OPENHTJ2K_ENABLE_AVX512)
+static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
+                                                          fdwt_1d_filtr_rev53_fixed_avx2};
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_avx2,
+                                                          fdwt_rev_ver_sr_fixed_avx2};
+typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
+static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_avx512;
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
                                                           fdwt_1d_filtr_rev53_fixed_neon};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_neon,
                                                           fdwt_rev_ver_sr_fixed_neon};
+typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
+static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_neon;
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_avx2,
                                                           fdwt_rev_ver_sr_fixed_avx2};
+typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
+static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_avx2;
 #else
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed,
                                                           fdwt_1d_filtr_rev53_fixed};
 static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed, fdwt_rev_ver_sr_fixed};
+static void adv_fdwt_irrev_step_scalar(int32_t n, float *prev, float *next, float *tgt, float coeff) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] -= coeff * (prev[i] + next[i]);
+}
+typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
+static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = adv_fdwt_irrev_step_scalar;
 #endif
 // irreversible FDWT
 void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -749,7 +769,7 @@ static bool can_adv_f(const fdwt_2d_state *s, int32_t r) {
 }
 
 static void adv_step_f(fdwt_2d_state *s, int32_t r) {
-  const bool  lp  = is_lp_fdwt(r);
+  const bool   lp  = is_lp_fdwt(r);
   const int8_t cur = get_dl_f(s, r);
   sprec_t *tgt  = rptr_f(s, r);
   sprec_t *prev = rptr_f(s, r - 1);
@@ -758,34 +778,19 @@ static void adv_step_f(fdwt_2d_state *s, int32_t r) {
 
   if (s->transformation == 0) {  // irrev 9/7
     // HP: step A (coeff fA), step C (coeff fC); LP: step B (coeff fB), step D (coeff fD)
+    // FDWT does tgt += coeff*(prev+next); dispatch fn does tgt -= coeff*(prev+next) → negate.
     const float coeff = lp ? (cur == 0 ? fB : fD) : (cur == 0 ? fA : fC);
-    for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-      const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-      for (int32_t c = cs; c < ce; ++c) tgt[c] += coeff * (prev[c] + next[c]);
-    }
+    adv_fdwt_irrev_step_fn(w, prev, next, tgt, -coeff);
   } else if (s->transformation >= 2) {  // ATK irrev 5/3
-    if (!lp) {  // HP predict: HP -= 0.5*(LP[r-1] + LP[r+1])
-      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-        for (int32_t c = cs; c < ce; ++c) tgt[c] -= 0.5f * (prev[c] + next[c]);
-      }
-    } else {  // LP update: LP += 0.25*(HP[r-1] + HP[r+1])
-      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-        for (int32_t c = cs; c < ce; ++c) tgt[c] += 0.25f * (prev[c] + next[c]);
-      }
-    }
+    // HP predict: HP -= 0.5*(LP[r-1]+LP[r+1]) → coeff=0.5 (fn subtracts → pass 0.5)
+    // LP update:  LP += 0.25*(HP[r-1]+HP[r+1]) → fn subtracts → pass -0.25
+    const float coeff = lp ? -0.25f : 0.5f;
+    adv_fdwt_irrev_step_fn(w, prev, next, tgt, coeff);
   } else {  // rev 5/3
     if (!lp) {  // HP predict: HP -= floor((LP[r-1] + LP[r+1]) * 0.5f)
-      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-        for (int32_t c = cs; c < ce; ++c) tgt[c] -= floorf((prev[c] + next[c]) * 0.5f);
-      }
+      for (int32_t c = 0; c < w; ++c) tgt[c] -= floorf((prev[c] + next[c]) * 0.5f);
     } else {  // LP update: LP += floor((HP[r-1] + HP[r+1] + 2) * 0.25f)
-      for (int32_t cs = 0; cs < w; cs += DWT_VERT_STRIP) {
-        const int32_t ce = (cs + DWT_VERT_STRIP < w) ? cs + DWT_VERT_STRIP : w;
-        for (int32_t c = cs; c < ce; ++c) tgt[c] += floorf((prev[c] + next[c] + 2.0f) * 0.25f);
-      }
+      for (int32_t c = 0; c < w; ++c) tgt[c] += floorf((prev[c] + next[c] + 2.0f) * 0.25f);
     }
   }
   set_dl_f(s, r, cur + 1);
@@ -810,15 +815,49 @@ static void fill_pse_f(fdwt_2d_state *s, int32_t r) {
 }
 
 // Run cascade until stable.
+//
+// Key optimisation — dynamic lo:
+//   The naive lo = v0 - top_pse is fixed, so the scan window grows O(n) per call
+//   and the total cascade work is O(n²) in the tile height.  Once ring_origin has
+//   advanced past the initial PSE zone, scanning earlier rows is wasted work.
+//   Using lo = max(v0-top_pse, ring_origin-margin) caps the window to a constant
+//   number of rows per call, making total cascade work O(n).
+//
+// For rev 5/3 and ATK (max_dl=1): the cascade is strictly 2-phase:
+//   Phase 1 — HP Predict (odd  rows): needs LP neighbors at dl >= 0
+//   Phase 2 — LP Update  (even rows): needs HP neighbors at dl >= 1
+// Two dedicated single passes replace the while(progress) loop.
+//
+// For irrev 9/7 (max_dl=2): use the generic while(progress) loop (also with dynamic lo).
 static void cascade_f(fdwt_2d_state *s) {
-  bool progress = true;
-  while (progress) {
-    progress = false;
-    const int32_t lo = s->v0 - s->top_pse;
-    const int32_t hi = (s->next_in < s->v1) ? s->next_in + s->bottom_pse
-                                              : s->v1 + s->bottom_pse;
-    for (int32_t r = lo; r < hi; ++r) {
-      if (can_adv_f(s, r)) { adv_step_f(s, r); progress = true; }
+  const int32_t margin  = (int32_t)s->top_pse + max_dl_fdwt(s->transformation) * 2 + 2;
+  const int32_t lo_full = s->v0 - (int32_t)s->top_pse;
+  const int32_t lo      = (s->ring_origin - margin > lo_full)
+                          ? s->ring_origin - margin : lo_full;
+  const int32_t hi      = (s->next_in < s->v1) ? s->next_in + s->bottom_pse
+                                                : s->v1 + s->bottom_pse;
+
+  if (s->transformation != 0) {  // 2-step filters: rev53 and ATK irrev53 (max_dl=1)
+    // Phase 1: Predict HP rows (odd absolute index) — need LP neighbors at dl >= 0.
+    const int32_t hp0 = lo + (1 - (lo & 1));  // first odd row >= lo
+    for (int32_t r = hp0; r < hi; r += 2) {
+      if (get_dl_f(s, r) == 0 && get_dl_f(s, r - 1) >= 0 && get_dl_f(s, r + 1) >= 0)
+        adv_step_f(s, r);
+    }
+    // Phase 2: Update LP rows (even absolute index) — need HP neighbors at dl >= 1.
+    const int32_t lp0 = lo + (lo & 1);  // first even row >= lo
+    for (int32_t r = lp0; r < hi; r += 2) {
+      if (get_dl_f(s, r) == 0 && get_dl_f(s, r - 1) >= 1 && get_dl_f(s, r + 1) >= 1)
+        adv_step_f(s, r);
+    }
+  } else {
+    // Irrev 9/7: generic while(progress) loop (max_dl=2, cascade ≤ 4 passes).
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      for (int32_t r = lo; r < hi; ++r) {
+        if (can_adv_f(s, r)) { adv_step_f(s, r); progress = true; }
+      }
     }
   }
 }
