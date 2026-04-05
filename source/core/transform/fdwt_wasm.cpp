@@ -361,4 +361,54 @@ void fdwt_rev_ver_sr_fixed_wasm(sprec_t *in, const int32_t u0, const int32_t u1,
   }
 }
 
+// Single-row rev53 FDWT HP vertical lifting: tgt[i] -= floor((prev[i]+next[i])*0.5).
+void fdwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt) {
+  const v128_t k05 = wasm_f32x4_splat(0.5f);
+  int32_t i = 0;
+  for (; i + 4 < n; i += 8) {
+    v128_t a0 = wasm_v128_load(prev + i);     v128_t b0 = wasm_v128_load(next + i);     v128_t t0 = wasm_v128_load(tgt + i);
+    v128_t a1 = wasm_v128_load(prev + i + 4); v128_t b1 = wasm_v128_load(next + i + 4); v128_t t1 = wasm_v128_load(tgt + i + 4);
+    t0 = wasm_f32x4_sub(t0, wasm_f32x4_floor(wasm_f32x4_mul(wasm_f32x4_add(a0, b0), k05)));
+    t1 = wasm_f32x4_sub(t1, wasm_f32x4_floor(wasm_f32x4_mul(wasm_f32x4_add(a1, b1), k05)));
+    wasm_v128_store(tgt + i,     t0);
+    wasm_v128_store(tgt + i + 4, t1);
+  }
+  for (; i + 4 <= n; i += 4) {
+    v128_t a = wasm_v128_load(prev + i);
+    v128_t b = wasm_v128_load(next + i);
+    v128_t t = wasm_v128_load(tgt  + i);
+    t = wasm_f32x4_sub(t, wasm_f32x4_floor(wasm_f32x4_mul(wasm_f32x4_add(a, b), k05)));
+    wasm_v128_store(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] -= floorf((prev[i] + next[i]) * 0.5f);
+}
+
+// Single-row rev53 FDWT LP vertical lifting: tgt[i] += floor((prev[i]+next[i]+2)*0.25).
+void fdwt_rev_ver_lp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt) {
+  const v128_t k025 = wasm_f32x4_splat(0.25f);
+  const v128_t k2   = wasm_f32x4_splat(2.0f);
+  int32_t i = 0;
+  for (; i + 4 < n; i += 8) {
+    v128_t a0 = wasm_v128_load(prev + i);     v128_t b0 = wasm_v128_load(next + i);     v128_t t0 = wasm_v128_load(tgt + i);
+    v128_t a1 = wasm_v128_load(prev + i + 4); v128_t b1 = wasm_v128_load(next + i + 4); v128_t t1 = wasm_v128_load(tgt + i + 4);
+    t0 = wasm_f32x4_add(t0, wasm_f32x4_floor(wasm_f32x4_mul(
+           wasm_f32x4_add(wasm_f32x4_add(a0, b0), k2), k025)));
+    t1 = wasm_f32x4_add(t1, wasm_f32x4_floor(wasm_f32x4_mul(
+           wasm_f32x4_add(wasm_f32x4_add(a1, b1), k2), k025)));
+    wasm_v128_store(tgt + i,     t0);
+    wasm_v128_store(tgt + i + 4, t1);
+  }
+  for (; i + 4 <= n; i += 4) {
+    v128_t a = wasm_v128_load(prev + i);
+    v128_t b = wasm_v128_load(next + i);
+    v128_t t = wasm_v128_load(tgt  + i);
+    t = wasm_f32x4_add(t, wasm_f32x4_floor(wasm_f32x4_mul(
+          wasm_f32x4_add(wasm_f32x4_add(a, b), k2), k025)));
+    wasm_v128_store(tgt + i, t);
+  }
+  for (; i < n; ++i)
+    tgt[i] += floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+}
+
 #endif  // OPENHTJ2K_ENABLE_WASM_SIMD
