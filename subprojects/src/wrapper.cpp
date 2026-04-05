@@ -313,6 +313,54 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
         // Multi-component: interleave components and pack in one pass.
         // For subsampled chroma (e.g. 4:2:2), upsample with nearest-neighbour: rows[c][x>>1].
         if (bytes_per_sample == 1) {
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+          // Fast SIMD path for the common case: 3 non-subsampled 8-bit channels.
+          // Processes 16 pixels at a time, producing 48 bytes (3 × v128_t stores).
+          // Uses a 3-way byte-interleave via 6 wasm_i8x16_shuffle operations.
+          if (nc == 3 && !subsamp) {
+            const v128_t vmx   = wasm_i32x4_splat(maxval);
+            const v128_t vzero = wasm_i32x4_const_splat(0);
+            uint32_t x = 0;
+            for (; x + 16 <= W; x += 16) {
+              // Clamp 16 samples per channel and narrow to bytes.
+              auto clamp_narrow16 = [&](const int32_t* src) -> v128_t {
+                v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src),      vzero), vmx);
+                v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + 4),  vzero), vmx);
+                v128_t c = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + 8),  vzero), vmx);
+                v128_t d = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + 12), vzero), vmx);
+                return wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(a, b),
+                                               wasm_i16x8_narrow_i32x4(c, d));
+              };
+              v128_t R = clamp_narrow16(rows[0] + x);
+              v128_t G = clamp_narrow16(rows[1] + x);
+              v128_t B = clamp_narrow16(rows[2] + x);
+              // 3-channel byte interleave: R,G,B[0..15] → RGB[0..47] (3 stores).
+              // Step 1: interleave R and G into pairs.
+              v128_t rg0 = wasm_i8x16_shuffle(R, G, 0,16,1,17,2,18,3,19,4,20,5,21,6,22,7,23);
+              v128_t rg1 = wasm_i8x16_shuffle(R, G, 8,24,9,25,10,26,11,27,12,28,13,29,14,30,15,31);
+              // Step 2: insert B bytes at every third position across three output vectors.
+              // out0 = [R0,G0,B0, R1,G1,B1, R2,G2,B2, R3,G3,B3, R4,G4,B4, R5]  (bytes 0-15)
+              v128_t out0 = wasm_i8x16_shuffle(rg0, B, 0,1,16, 2,3,17, 4,5,18, 6,7,19, 8,9,20, 10);
+              // mid: bridge rg0[11..15] + rg1[0..10] for out1 construction.
+              v128_t mid  = wasm_i8x16_shuffle(rg0, rg1, 11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26);
+              // out1 = [G5,B5, R6,G6,B6, R7,G7,B7, R8,G8,B8, R9,G9,B9, R10,G10]  (bytes 16-31)
+              v128_t out1 = wasm_i8x16_shuffle(mid, B, 0,21, 1,2,22, 3,4,23, 5,6,24, 7,8,25, 9,10);
+              // out2 = [B10, R11,G11,B11, R12,G12,B12, R13,G13,B13, R14,G14,B14, R15,G15,B15]  (bytes 32-47)
+              v128_t out2 = wasm_i8x16_shuffle(B, rg1, 10, 22,23,11, 24,25,12, 26,27,13, 28,29,14, 30,31,15);
+              wasm_v128_store(row_dst,      out0); row_dst += 16;
+              wasm_v128_store(row_dst,      out1); row_dst += 16;
+              wasm_v128_store(row_dst,      out2); row_dst += 16;
+            }
+            for (; x < W; ++x) {
+              int32_t rv = rows[0][x]; if (rv < 0) rv = 0; else if (rv > maxval) rv = maxval;
+              int32_t gv = rows[1][x]; if (gv < 0) gv = 0; else if (gv > maxval) gv = maxval;
+              int32_t bv = rows[2][x]; if (bv < 0) bv = 0; else if (bv > maxval) bv = maxval;
+              *row_dst++ = static_cast<uint8_t>(rv);
+              *row_dst++ = static_cast<uint8_t>(gv);
+              *row_dst++ = static_cast<uint8_t>(bv);
+            }
+          } else {
+#endif
           for (uint32_t x = 0; x < W; ++x) {
             for (uint16_t c = 0; c < nc; ++c) {
               uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);
@@ -320,6 +368,9 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
               *row_dst++ = static_cast<uint8_t>(v);
             }
           }
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+          }
+#endif
         } else {
           for (uint32_t x = 0; x < W; ++x) {
             for (uint16_t c = 0; c < nc; ++c) {
@@ -407,6 +458,53 @@ static inline uint8_t clamp_u8(int32_t v) {
 //   B = Y + 1.772*(Cb-128)
 EMSCRIPTEN_KEEPALIVE
 void apply_ycbcr_bt601_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  // Fixed-point coefficients scaled by 16384 (>>14), bias +8192 for rounding.
+  const v128_t v22970 = wasm_i32x4_const_splat(22970);
+  const v128_t v5638  = wasm_i32x4_const_splat(5638);
+  const v128_t v11698 = wasm_i32x4_const_splat(11698);
+  const v128_t v29032 = wasm_i32x4_const_splat(29032);
+  const v128_t vrnd   = wasm_i32x4_const_splat(8192);
+  const v128_t v128   = wasm_i32x4_const_splat(128);
+  const v128_t v255   = wasm_i32x4_const_splat(255);
+  const v128_t vzero  = wasm_i32x4_const_splat(0);
+  const v128_t vmask  = wasm_i32x4_const_splat(0xFF);
+  uint32_t i = 0;
+  for (; i + 4 <= n_pixels; i += 4) {
+    // Load 4 RGBA pixels (16 bytes) and extract channels as i32x4.
+    v128_t pix = wasm_v128_load(rgba + i * 4);
+    v128_t vY  = wasm_v128_and(pix, vmask);                                    // R (= Y)
+    v128_t vCb = wasm_i32x4_sub(wasm_v128_and(wasm_u32x4_shr(pix, 8),  vmask), v128);  // G - 128
+    v128_t vCr = wasm_i32x4_sub(wasm_v128_and(wasm_u32x4_shr(pix, 16), vmask), v128);  // B - 128
+    v128_t vA  = wasm_u32x4_shr(pix, 24);                                      // alpha unchanged
+    v128_t newR = wasm_i32x4_add(vY, wasm_i32x4_shr(
+        wasm_i32x4_add(wasm_i32x4_mul(v22970, vCr), vrnd), 14));
+    v128_t newG = wasm_i32x4_sub(vY, wasm_i32x4_shr(
+        wasm_i32x4_add(wasm_i32x4_add(wasm_i32x4_mul(v5638,  vCb),
+                                      wasm_i32x4_mul(v11698, vCr)), vrnd), 14));
+    v128_t newB = wasm_i32x4_add(vY, wasm_i32x4_shr(
+        wasm_i32x4_add(wasm_i32x4_mul(v29032, vCb), vrnd), 14));
+    newR = wasm_i32x4_min(wasm_i32x4_max(newR, vzero), v255);
+    newG = wasm_i32x4_min(wasm_i32x4_max(newG, vzero), v255);
+    newB = wasm_i32x4_min(wasm_i32x4_max(newB, vzero), v255);
+    // Narrow i32x4 → i16x8 → u8x16, then transpose planar→interleaved.
+    // rg = [R0,R1,R2,R3,G0,G1,G2,G3], ba = [B0,B1,B2,B3,A0,A1,A2,A3]
+    v128_t packed = wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(newR, newG),
+                                            wasm_i16x8_narrow_i32x4(newB, vA));
+    // packed = [R0..R3, G0..G3, B0..B3, A0..A3]; shuffle to RGBA pixels.
+    wasm_v128_store(rgba + i * 4,
+        wasm_i8x16_shuffle(packed, packed, 0,4,8,12, 1,5,9,13, 2,6,10,14, 3,7,11,15));
+  }
+  for (; i < n_pixels; ++i) {
+    uint8_t* p  = rgba + i * 4;
+    int32_t Y   = p[0];
+    int32_t Cb  = static_cast<int32_t>(p[1]) - 128;
+    int32_t Cr  = static_cast<int32_t>(p[2]) - 128;
+    p[0] = clamp_u8(Y + ((22970 * Cr + 8192) >> 14));
+    p[1] = clamp_u8(Y - ((5638 * Cb + 11698 * Cr + 8192) >> 14));
+    p[2] = clamp_u8(Y + ((29032 * Cb + 8192) >> 14));
+  }
+#else
   for (uint32_t i = 0; i < n_pixels; ++i) {
     uint8_t* p  = rgba + i * 4;
     int32_t Y   = p[0];
@@ -418,6 +516,7 @@ void apply_ycbcr_bt601_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
     p[2] = clamp_u8(Y + ((29032 * Cb + 8192) >> 14));
     // p[3] (alpha) unchanged
   }
+#endif
 }
 
 // BT.709 full-range (HDTV / H.264 / H.265 convention):
@@ -426,6 +525,48 @@ void apply_ycbcr_bt601_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
 //   B = Y + 1.8556*(Cb-128)
 EMSCRIPTEN_KEEPALIVE
 void apply_ycbcr_bt709_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  const v128_t v25801 = wasm_i32x4_const_splat(25801);
+  const v128_t v3069  = wasm_i32x4_const_splat(3069);
+  const v128_t v7672  = wasm_i32x4_const_splat(7672);
+  const v128_t v30397 = wasm_i32x4_const_splat(30397);
+  const v128_t vrnd   = wasm_i32x4_const_splat(8192);
+  const v128_t v128   = wasm_i32x4_const_splat(128);
+  const v128_t v255   = wasm_i32x4_const_splat(255);
+  const v128_t vzero  = wasm_i32x4_const_splat(0);
+  const v128_t vmask  = wasm_i32x4_const_splat(0xFF);
+  uint32_t i = 0;
+  for (; i + 4 <= n_pixels; i += 4) {
+    v128_t pix = wasm_v128_load(rgba + i * 4);
+    v128_t vY  = wasm_v128_and(pix, vmask);
+    v128_t vCb = wasm_i32x4_sub(wasm_v128_and(wasm_u32x4_shr(pix, 8),  vmask), v128);
+    v128_t vCr = wasm_i32x4_sub(wasm_v128_and(wasm_u32x4_shr(pix, 16), vmask), v128);
+    v128_t vA  = wasm_u32x4_shr(pix, 24);
+    v128_t newR = wasm_i32x4_add(vY, wasm_i32x4_shr(
+        wasm_i32x4_add(wasm_i32x4_mul(v25801, vCr), vrnd), 14));
+    v128_t newG = wasm_i32x4_sub(vY, wasm_i32x4_shr(
+        wasm_i32x4_add(wasm_i32x4_add(wasm_i32x4_mul(v3069, vCb),
+                                      wasm_i32x4_mul(v7672, vCr)), vrnd), 14));
+    v128_t newB = wasm_i32x4_add(vY, wasm_i32x4_shr(
+        wasm_i32x4_add(wasm_i32x4_mul(v30397, vCb), vrnd), 14));
+    newR = wasm_i32x4_min(wasm_i32x4_max(newR, vzero), v255);
+    newG = wasm_i32x4_min(wasm_i32x4_max(newG, vzero), v255);
+    newB = wasm_i32x4_min(wasm_i32x4_max(newB, vzero), v255);
+    v128_t packed = wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(newR, newG),
+                                            wasm_i16x8_narrow_i32x4(newB, vA));
+    wasm_v128_store(rgba + i * 4,
+        wasm_i8x16_shuffle(packed, packed, 0,4,8,12, 1,5,9,13, 2,6,10,14, 3,7,11,15));
+  }
+  for (; i < n_pixels; ++i) {
+    uint8_t* p  = rgba + i * 4;
+    int32_t Y   = p[0];
+    int32_t Cb  = static_cast<int32_t>(p[1]) - 128;
+    int32_t Cr  = static_cast<int32_t>(p[2]) - 128;
+    p[0] = clamp_u8(Y + ((25801 * Cr + 8192) >> 14));
+    p[1] = clamp_u8(Y - ((3069 * Cb + 7672 * Cr + 8192) >> 14));
+    p[2] = clamp_u8(Y + ((30397 * Cb + 8192) >> 14));
+  }
+#else
   for (uint32_t i = 0; i < n_pixels; ++i) {
     uint8_t* p  = rgba + i * 4;
     int32_t Y   = p[0];
@@ -435,6 +576,7 @@ void apply_ycbcr_bt709_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
     p[1] = clamp_u8(Y - ((3069 * Cb + 7672 * Cr + 8192) >> 14));
     p[2] = clamp_u8(Y + ((30397 * Cb + 8192) >> 14));
   }
+#endif
 }
 }
 

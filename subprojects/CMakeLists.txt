@@ -10,7 +10,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 
 set(WASM_FLAGS "\
-    -O3 -flto -s WASM=1 -s EXPORT_ES6=1 -s MODULARIZE=1 -s ENVIRONMENT=web,node \
+    -O3 -flto -mnontrapping-fptoint -mbulk-memory -s WASM=1 -s EXPORT_ES6=1 -s MODULARIZE=1 -s ENVIRONMENT=web,node \
     -s EXPORTED_FUNCTIONS=[_free,_malloc] \
     -s MALLOC=emmalloc \
     -s FILESYSTEM=0 \
@@ -35,7 +35,7 @@ get_target_property(_IFACE_INC open_htj2k INTERFACE_INCLUDE_DIRECTORIES)
 # ── Scalar (non-SIMD) wrapper ────────────────────────────────────────────────
 # open_htj2k is already compiled without any SIMD flags; link it directly.
 add_executable(libopen_htj2k "src/wrapper.cpp")
-set_target_properties(libopen_htj2k PROPERTIES COMPILE_FLAGS "-O3 -flto")
+set_target_properties(libopen_htj2k PROPERTIES COMPILE_FLAGS "-O3 -flto -mnontrapping-fptoint -mbulk-memory")
 set_target_properties(libopen_htj2k PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k PRIVATE open_htj2k)
 
@@ -51,7 +51,7 @@ if(_COMP_OPTS)
   target_compile_options(open_htj2k_simd_objs PRIVATE ${_COMP_OPTS})
 endif()
 target_compile_definitions(open_htj2k_simd_objs PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD")
-target_compile_options(open_htj2k_simd_objs PRIVATE "-O3" "-flto" "-msimd128")
+target_compile_options(open_htj2k_simd_objs PRIVATE "-O3" "-flto" "-msimd128" "-mnontrapping-fptoint" "-mbulk-memory")
 
 add_library(open_htj2k_simd_lib STATIC $<TARGET_OBJECTS:open_htj2k_simd_objs>)
 if(_IFACE_INC)
@@ -59,6 +59,6 @@ if(_IFACE_INC)
 endif()
 
 add_executable(libopen_htj2k_simd "src/wrapper.cpp")
-set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128")
+set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory")
 set_target_properties(libopen_htj2k_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k_simd PRIVATE open_htj2k_simd_lib)
