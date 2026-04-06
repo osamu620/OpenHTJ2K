@@ -362,23 +362,28 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mp1 = mp0 + block->blksampl_stride;
       sp  = scratch + row * sstr;
 
-      int32_t Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p - 1)));
-      int32_t Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 1)));
-      int32_t Emax2 = hMax(_mm_loadu_si128((__m128i *)(E_p + 3)));
-      int32_t Emax3 = hMax(_mm_loadu_si128((__m128i *)(E_p + 5)));
+      // Vectorized Emax: sliding max over 4-column windows using AVX2.
+      // Emax[q] = max(E_p[2q-1], E_p[2q], E_p[2q+1], E_p[2q+2]).
+      // Two 8-wide loads offset by 2 → max → per-lane shift → pairwise max → permute.
+      const __m256i perm_emax = _mm256_set_epi32(0, 0, 0, 0, 6, 4, 2, 0);
+      __m256i elo     = _mm256_loadu_si256((__m256i *)(E_p - 1));
+      __m256i ehi     = _mm256_loadu_si256((__m256i *)(E_p + 1));
+      __m256i emx     = _mm256_max_epi32(elo, ehi);
+      __m256i epr     = _mm256_max_epi32(emx, _mm256_srli_si256(emx, 4));
+      __m128i emax128 = _mm256_castsi256_si128(
+          _mm256_permutevar8x32_epi32(epr, perm_emax));
 
       for (qx = QW; qx >= 4; qx -= 4, sp += 8, mp0 += 8, mp1 += 8) {
         v_n             = _mm_setzero_si128();
         __m128i qinf128 = _mm_loadu_si128((__m128i *)sp);
 
-        // Compute kappa for all 4 quads.
-        // gamma = (popcount(rho) < 2) all-1s : 0;  rho is bits 7:4 of each inf.
+        // Compute kappa for all 4 quads using vectorized emax128.
         __m128i rho128   = _mm_and_si128(qinf128, _mm_set1_epi32(0x00F0));
         __m128i gm1      = _mm_sub_epi32(rho128, _mm_set1_epi32(1));
         __m128i gamma128 = _mm_cmpeq_epi32(_mm_and_si128(rho128, gm1), _mm_setzero_si128());
-        __m128i emax128  = _mm_set_epi32(Emax3 - 1, Emax2 - 1, Emax1 - 1, Emax0 - 1);
-        emax128          = _mm_andnot_si128(gamma128, emax128);
-        __m128i kappa128 = _mm_max_epi32(emax128, _mm_set1_epi32(1));
+        __m128i em1      = _mm_sub_epi32(emax128, _mm_set1_epi32(1));
+        em1              = _mm_andnot_si128(gamma128, em1);
+        __m128i kappa128 = _mm_max_epi32(em1, _mm_set1_epi32(1));
         __m128i U_q128   = _mm_add_epi32(_mm_srli_epi32(qinf128, 16), kappa128);
 
         __m256i row256 = MagSgn.decode_four_quads(qinf128, U_q128, pLSB_adj, v_n);
@@ -386,10 +391,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         _mm256_storeu_si256((__m256i *)mp0, _mm256_shuffle_epi8(row256, shuffle_r0));
         _mm256_storeu_si256((__m256i *)mp1, _mm256_shuffle_epi8(row256, shuffle_r1));
 
-        Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p + 7)));
-        Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 9)));
-        Emax2 = hMax(_mm_loadu_si128((__m128i *)(E_p + 11)));
-        Emax3 = hMax(_mm_loadu_si128((__m128i *)(E_p + 13)));
+        // Read-ahead: vectorized Emax for next 4 quads BEFORE writing E_p.
+        elo     = _mm256_loadu_si256((__m256i *)(E_p + 7));
+        ehi     = _mm256_loadu_si256((__m256i *)(E_p + 9));
+        emx     = _mm256_max_epi32(elo, ehi);
+        epr     = _mm256_max_epi32(emx, _mm256_srli_si256(emx, 4));
+        emax128 = _mm256_castsi256_si128(
+            _mm256_permutevar8x32_epi32(epr, perm_emax));
 
         __m256i vn32 = _mm256_cvtepu16_epi32(v_n);
         vn32 = avx2_lzcnt_epi32(vn32);
@@ -397,13 +405,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         _mm256_storeu_si256((__m256i *)E_p, vn32);
         E_p += 8;
       }
-      // Remaining 0 or 2 quads — use decode_one_quad per quad for per-column E_p.
+      // Remaining 0 or 2 quads — emax128[0..1] already hold the correct Emax values.
       for (; qx > 0; qx -= 2, sp += 4, mp0 += 4, mp1 += 4) {
         v_n             = _mm_setzero_si128();
         __m128i qinf128 = _mm_loadu_si128((__m128i *)sp);
         __m256i qinf256 = expand_two_quads(qinf128);
         __m256i U_q256;
         {
+          int32_t Emax0 = _mm_extract_epi32(emax128, 0);
+          int32_t Emax1 = _mm_extract_epi32(emax128, 1);
           __m256i gamma  = _mm256_and_si256(qinf256, _mm256_set1_epi32(0xF0));
           __m256i gm1    = _mm256_sub_epi32(gamma, _mm256_set1_epi32(1));
           gamma          = _mm256_and_si256(gamma, gm1);
@@ -413,12 +423,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           __m256i kappa  = _mm256_max_epi32(emax256, _mm256_set1_epi32(1));
           U_q256         = _mm256_add_epi32(_mm256_srli_epi32(qinf256, 16), kappa);
         }
-        // Pack per-quad U_q into a 128-bit register: position 0 = quad0, position 1 = quad1.
         __m128i U_q128 = _mm_unpacklo_epi32(_mm256_castsi256_si128(U_q256),
                                              _mm256_extracti128_si256(U_q256, 1));
         mu0_n          = MagSgn.decode_one_quad<0>(qinf128, U_q128, pLSB, v_n);
         mu1_n          = MagSgn.decode_one_quad<1>(qinf128, U_q128, pLSB, v_n);
-        // v_n now has per-column (row-1 only) values for 4 columns.
 
         auto t0 = _mm_unpacklo_epi32(mu0_n, mu1_n);
         auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
@@ -426,8 +434,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu1_n   = _mm_unpackhi_epi32(t0, t1);
         _mm_storeu_si128((__m128i *)mp0, mu0_n);
         _mm_storeu_si128((__m128i *)mp1, mu1_n);
-        Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p + 3)));
-        Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 5)));
+        // Read-ahead Emax for next 2 quads.
+        __m128i elo128 = _mm_loadu_si128((__m128i *)(E_p + 3));
+        __m128i ehi128 = _mm_loadu_si128((__m128i *)(E_p + 5));
+        __m128i emx128 = _mm_max_epi32(elo128, ehi128);
+        __m128i epr128 = _mm_max_epi32(emx128, _mm_srli_si128(emx128, 4));
+        emax128 = _mm_shuffle_epi32(epr128, _MM_SHUFFLE(3, 3, 2, 0));
         v_n   = sse_lzcnt_epi32(v_n);
         v_n   = _mm_sub_epi32(_mm_set1_epi32(32), v_n);
         _mm_storeu_si128((__m128i *)E_p, v_n);
@@ -465,8 +477,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mp1 = mp0 + block->blksampl_stride;
       sp  = scratch + row * sstr;
 
-      int32_t Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p - 1)));
-      int32_t Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 1)));
+      // Vectorized Emax for 2-quad path: sliding max over 4-column windows.
+      __m128i elo128 = _mm_loadu_si128((__m128i *)(E_p - 1));
+      __m128i ehi128 = _mm_loadu_si128((__m128i *)(E_p + 1));
+      __m128i emx128 = _mm_max_epi32(elo128, ehi128);
+      __m128i epr128 = _mm_max_epi32(emx128, _mm_srli_si128(emx128, 4));
+      // epr128 positions {0, 2} = {Emax[0], Emax[1]}.
+      int32_t Emax0 = _mm_extract_epi32(epr128, 0);
+      int32_t Emax1 = _mm_extract_epi32(epr128, 2);
       for (qx = QW; qx > 0; qx -= 2, sp += 4, mp0 += 4, mp1 += 4) {
         v_n             = _mm_setzero_si128();
         __m128i qinf128 = _mm_loadu_si128((__m128i *)sp);
@@ -491,8 +509,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu1_n          = _mm_unpackhi_epi32(t0, t1);
         _mm_storeu_si128((__m128i *)mp0, mu0_n);
         _mm_storeu_si128((__m128i *)mp1, mu1_n);
-        Emax0 = hMax(_mm_loadu_si128((__m128i *)(E_p + 3)));
-        Emax1 = hMax(_mm_loadu_si128((__m128i *)(E_p + 5)));
+        // Read-ahead: vectorized Emax for next 2 quads BEFORE writing E_p.
+        elo128 = _mm_loadu_si128((__m128i *)(E_p + 3));
+        ehi128 = _mm_loadu_si128((__m128i *)(E_p + 5));
+        emx128 = _mm_max_epi32(elo128, ehi128);
+        epr128 = _mm_max_epi32(emx128, _mm_srli_si128(emx128, 4));
+        Emax0  = _mm_extract_epi32(epr128, 0);
+        Emax1  = _mm_extract_epi32(epr128, 2);
         v_n   = sse_lzcnt_epi32(v_n);
         v_n   = _mm_sub_epi32(_mm_set1_epi32(32), v_n);
         _mm_storeu_si128((__m128i *)E_p, v_n);
