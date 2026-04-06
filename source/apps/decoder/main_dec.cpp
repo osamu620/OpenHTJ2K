@@ -34,6 +34,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #ifdef _OPENMP
@@ -69,6 +70,10 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
   infile_ext_name = strrchr(infile_name, '.');
+  if (infile_ext_name == nullptr) {
+    printf("ERROR: Supported extensions are .j2k, .j2c, .jhc, .jph\n");
+    exit(EXIT_FAILURE);
+  }
   const bool is_jph = (strcmp(infile_ext_name, ".jph") == 0 || strcmp(infile_ext_name, ".JPH") == 0);
   if (!is_jph && strcmp(infile_ext_name, ".j2k") != 0 && strcmp(infile_ext_name, ".j2c") != 0
       && strcmp(infile_ext_name, ".jhc") != 0) {
@@ -81,8 +86,10 @@ int main(int argc, char *argv[]) {
         "names.\n");
     exit(EXIT_FAILURE);
   }
-  outfile_ext_name = strrchr(outfile_name, '.');
-  if (strcmp(outfile_ext_name, ".pgm") != 0 && strcmp(outfile_ext_name, ".ppm") != 0
+  outfile_ext_name        = strrchr(outfile_name, '.');
+  bool discard_output     = (outfile_ext_name == nullptr);
+  if (!discard_output
+      && strcmp(outfile_ext_name, ".pgm") != 0 && strcmp(outfile_ext_name, ".ppm") != 0
       && strcmp(outfile_ext_name, ".raw") != 0 && strcmp(outfile_ext_name, ".pgx") != 0) {
     printf("ERROR: Unsupported output file type.\n");
     exit(EXIT_FAILURE);
@@ -226,12 +233,14 @@ int main(int argc, char *argv[]) {
     }
     auto duration       = std::chrono::high_resolution_clock::now() - start;
     auto num_components = static_cast<uint16_t>(img_depth.size());
-    if (strcmp(outfile_ext_name, ".ppm") == 0) {
-      write_ppm(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth, img_signed,
-                do_ycbcr ? &ycbcr_coeff : nullptr);
-    } else {
-      write_components(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth,
-                       img_signed);
+    if (!discard_output) {
+      if (strcmp(outfile_ext_name, ".ppm") == 0) {
+        write_ppm(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth, img_signed,
+                  do_ycbcr ? &ycbcr_coeff : nullptr);
+      } else {
+        write_components(outfile_name, outfile_ext_name, buf, img_width, img_height, img_depth,
+                         img_signed);
+      }
     }
     uint32_t total_samples = 0;
     for (uint16_t c = 0; c < num_components; ++c) {
@@ -248,9 +257,9 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
-  const bool want_ppm = (strcmp(outfile_ext_name, ".ppm") == 0);
-  const bool want_pgm = (strcmp(outfile_ext_name, ".pgm") == 0);
-  const bool want_pgx = (strcmp(outfile_ext_name, ".pgx") == 0);
+  const bool want_ppm = !discard_output && (strcmp(outfile_ext_name, ".ppm") == 0);
+  const bool want_pgm = !discard_output && (strcmp(outfile_ext_name, ".pgm") == 0);
+  const bool want_pgx = !discard_output && (strcmp(outfile_ext_name, ".pgx") == 0);
 
   // Output file handles (opened lazily on the last iteration's first row).
   std::vector<FILE *> fps;
@@ -276,6 +285,7 @@ int main(int argc, char *argv[]) {
       decoder.invoke_line_based_stream(
           [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
             if (!is_last) return;  // warm-up iterations: decode but discard output
+            if (discard_output) return;  // no extension → discard output (e.g. /dev/null)
 
             if (y == 0) {
               total_samples = 0;
@@ -293,6 +303,10 @@ int main(int argc, char *argv[]) {
                 base[outfile_ext_name - outfile_name] = '\0';
                 snprintf(fname, sizeof(fname), "%s%s", base, outfile_ext_name);
                 FILE *fp = fopen(fname, "wb");
+                if (fp == nullptr) {
+                  printf("ERROR: Failed to open output file: %s\n", fname);
+                  throw std::runtime_error("fopen failed");
+                }
                 fprintf(fp, "P6 %d %d %d\n", img_width[0], img_height[0],
                         (1 << img_depth[0]) - 1);
                 fps.push_back(fp);
@@ -309,6 +323,10 @@ int main(int argc, char *argv[]) {
                   base[outfile_ext_name - outfile_name] = '\0';
                   snprintf(fname, sizeof(fname), "%s_%02d%s", base, c, outfile_ext_name);
                   fps[c] = fopen(fname, "wb");
+                  if (fps[c] == nullptr) {
+                    printf("ERROR: Failed to open output file: %s\n", fname);
+                    throw std::runtime_error("fopen failed");
+                  }
                   if (want_pgm)
                     fprintf(fps[c], "P5 %d %d %d\n", img_width[c], img_height[c],
                             (1 << img_depth[c]) - 1);

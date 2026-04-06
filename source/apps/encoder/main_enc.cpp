@@ -345,13 +345,17 @@ int main(int argc, char *argv[]) {
     toFile = false;
   } else {
     std::string::size_type pos = out_filename.find_last_of('.');
-    std::string fext           = out_filename.substr(pos, 4);
-    if (fext == ".jph" || fext == ".JPH") {
-      isJPH = true;
-    } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc") && fext.compare(".J2C")
-               && fext.compare(".J2K") && fext.compare(".JPHC")) {
-      printf("ERROR: invalid extension for output file\n");
-      exit(EXIT_FAILURE);
+    if (pos == std::string::npos) {
+      toFile = false;  // no extension (e.g. /dev/null on Linux, NUL on Windows): discard output
+    } else {
+      std::string fext = out_filename.substr(pos, 4);
+      if (fext == ".jph" || fext == ".JPH") {
+        isJPH = true;
+      } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc") && fext.compare(".J2C")
+                 && fext.compare(".J2K") && fext.compare(".JPHC")) {
+        printf("ERROR: invalid extension for output file\n");
+        exit(EXIT_FAILURE);
+      }
     }
   }
 
