@@ -1971,8 +1971,7 @@ class MR_dec {
 /********************************************************************************
  * functions for SP_dec: state class for HT SigProp decoding
  *******************************************************************************/
-uint8_t SP_dec::importSigPropBit() {
-  uint8_t val;
+FORCE_INLINE uint8_t SP_dec::importSigPropBit() {
   if (bits == 0) {
     bits = (last == 0xFF) ? 7 : 8;
     if (pos < Lref) {
@@ -1987,7 +1986,7 @@ uint8_t SP_dec::importSigPropBit() {
     }
     last = tmp;
   }
-  val = tmp & 1;
+  uint8_t val = tmp & 1;
   tmp = static_cast<uint8_t>(tmp >> 1);
   bits--;
   return val;
@@ -1996,8 +1995,7 @@ uint8_t SP_dec::importSigPropBit() {
 /********************************************************************************
  * MR_dec: state class for HT MagRef decoding
  *******************************************************************************/
-uint8_t MR_dec::importMagRefBit() {
-  uint8_t val;
+FORCE_INLINE uint8_t MR_dec::importMagRefBit() {
   if (bits == 0) {
     if (pos >= 0) {
       tmp = *(Dref + pos);
@@ -2011,7 +2009,7 @@ uint8_t MR_dec::importMagRefBit() {
     }
     last = tmp;
   }
-  val = tmp & 1;
+  uint8_t val = tmp & 1;
   tmp = static_cast<uint8_t>(tmp >> 1);
   bits--;
   return val;
