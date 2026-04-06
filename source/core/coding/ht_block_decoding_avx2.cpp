@@ -55,6 +55,22 @@ static FORCE_INLINE uint8_t calc_mbr_inline(const uint8_t *block_states, size_t 
   return mbr & 1;
 }
 
+// Pointer-based MBR: state_p points to state[(i+1)*stride + (j+1)].
+static FORCE_INLINE uint8_t calc_mbr_p(const uint8_t *state_p, size_t stride, uint8_t causal_cond) {
+  const uint8_t *p0 = state_p - stride - 1;
+  const uint8_t *p1 = state_p - 1;
+  const uint8_t *p2 = state_p + stride - 1;
+
+  uint32_t mbr0 = p0[0] | p0[1] | p0[2];
+  uint32_t mbr1 = p1[0] | p1[2];
+  uint32_t mbr2 = p2[0] | p2[1] | p2[2];
+  uint32_t mbr  = mbr0 | mbr1 | (mbr2 & causal_cond);
+  mbr |= (mbr0 >> SHIFT_REF) & (mbr0 >> SHIFT_SCAN);
+  mbr |= (mbr1 >> SHIFT_REF) & (mbr1 >> SHIFT_SCAN);
+  mbr |= (mbr2 >> SHIFT_REF) & (mbr2 >> SHIFT_SCAN) & causal_cond;
+  return mbr & 1;
+}
+
 // Keep the member function for ABI compatibility (used by non-AVX2 callers).
 uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_t causal_cond) const {
   return calc_mbr_inline(block_states, blkstate_stride, i, j, causal_cond);
@@ -534,42 +550,38 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const uint32_t i_start,
                                     const uint32_t j_start, const uint32_t width, const uint32_t height,
                                     const uint8_t &pLSB) {
-  const uint8_t *states      = block->block_states;
   const size_t bstride       = block->blkstate_stride;
-  int32_t *samples           = block->sample_buf;
   const size_t sstride       = block->blksampl_stride;
   const auto block_width     = j_start + width;
   const auto block_height    = i_start + height;
   const uint8_t non_causal   = static_cast<uint8_t>((block->Cmodes & CAUSAL) == 0);
   const uint32_t last_i      = block_height - 1;
+  const int32_t spp_mask     = (3 << (pLSB - 1));
 
-  // Decode magnitude
+  // Decode magnitude — use pointer increments to avoid per-iteration multiply
   for (uint32_t j = j_start; j < block_width; j++) {
-    uint8_t *state_col = block->block_states + (j + 1);
-    for (uint32_t i = i_start; i < block_height; i++) {
-      uint8_t *state_p = state_col + (i + 1) * bstride;
+    uint8_t *state_p = block->block_states + (j + 1) + (i_start + 1) * bstride;
+    int32_t *sp      = block->sample_buf + j + i_start * sstride;
+    for (uint32_t i = i_start; i < block_height; i++, state_p += bstride, sp += sstride) {
       if (!(state_p[0] & (1 << SHIFT_SIGMA))) {
         uint8_t causal_cond = non_causal | static_cast<uint8_t>(i != last_i);
-        uint8_t mbr = calc_mbr_inline(states, bstride, i, j, causal_cond);
+        uint8_t mbr = calc_mbr_p(state_p, bstride, causal_cond);
         if (mbr) {
           state_p[0] |= 1 << SHIFT_PI_;
-          uint8_t bit = SigProp.importSigPropBit();
+          int32_t bit = SigProp.importSigPropBit();
           state_p[0] |= static_cast<uint8_t>(bit << SHIFT_REF);
-          int32_t *sp = samples + j + i * sstride;
-          *sp |= bit << pLSB;
-          *sp |= bit << (pLSB - 1);  // new bin center ( = 0.5)
+          *sp |= (-bit) & spp_mask;
         }
       }
       state_p[0] |= 1 << SHIFT_SCAN;
     }
   }
-  // Decode sign
+  // Decode sign — pointer increments
   for (uint32_t j = j_start; j < block_width; j++) {
-    uint8_t *state_col = block->block_states + (j + 1);
-    for (uint32_t i = i_start; i < block_height; i++) {
-      uint8_t *state_p = state_col + (i + 1) * bstride;
+    uint8_t *state_p = block->block_states + (j + 1) + (i_start + 1) * bstride;
+    int32_t *sp      = block->sample_buf + j + i_start * sstride;
+    for (uint32_t i = i_start; i < block_height; i++, state_p += bstride, sp += sstride) {
       if ((state_p[0] >> SHIFT_REF) & 1) {
-        int32_t *sp = samples + j + i * sstride;
         *sp |= static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
       }
     }
@@ -626,18 +638,16 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   uint32_t height             = 4;
   for (uint32_t n1 = 0; n1 < num_v_stripe; n1++) {
     for (uint32_t j = 0; j < blk_width; j++) {
-      uint8_t *state_col = states + (j + 1);
-      int32_t *samp_col  = samples + j;
-      for (uint32_t i = i_start; i < i_start + height; i++) {
-        uint8_t *state_p = state_col + (i + 1) * bstride;
+      uint8_t *state_p = states + (j + 1) + (i_start + 1) * bstride;
+      int32_t *sp      = samples + j + i_start * sstride;
+      for (uint32_t i = 0; i < height; i++, state_p += bstride, sp += sstride) {
         if ((state_p[0] >> SHIFT_SIGMA & 1) != 0) {
           state_p[0] |= 1 << SHIFT_PI_;
           int32_t bit = MagRef.importMagRefBit();
           int32_t tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
           tmp <<= pLSB;
-          int32_t *sp = samp_col + i * sstride;
           sp[0] &= tmp;
-          sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
+          sp[0] |= 1 << (pLSB - 1);
         }
       }
     }
@@ -645,18 +655,16 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
   height = blk_height % 4;
   for (uint32_t j = 0; j < blk_width; j++) {
-    uint8_t *state_col = states + (j + 1);
-    int32_t *samp_col  = samples + j;
-    for (uint32_t i = i_start; i < i_start + height; i++) {
-      uint8_t *state_p = state_col + (i + 1) * bstride;
+    uint8_t *state_p = states + (j + 1) + (i_start + 1) * bstride;
+    int32_t *sp      = samples + j + i_start * sstride;
+    for (uint32_t i = 0; i < height; i++, state_p += bstride, sp += sstride) {
       if ((state_p[0] >> SHIFT_SIGMA & 1) != 0) {
         state_p[0] |= 1 << SHIFT_PI_;
         int32_t bit = MagRef.importMagRefBit();
         int32_t tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
         tmp <<= pLSB;
-        int32_t *sp = samp_col + i * sstride;
         sp[0] &= tmp;
-        sp[0] |= 1 << (pLSB - 1);  // new bin center ( = 0.5)
+        sp[0] |= 1 << (pLSB - 1);
       }
     }
   }
