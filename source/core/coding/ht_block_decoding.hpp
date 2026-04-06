@@ -1203,7 +1203,7 @@ class fwd_buf {
       int total_mn0   = _mm256_extract_epi16(inc_sum, 6);   // quad 0 total bits
       int total_mn1   = _mm256_extract_epi16(inc_sum, 14);  // quad 1 total bits
 
-      // Fetch MagSgn data sequentially: advance quad 0 before fetching quad 1.
+      // Fetch MagSgn data sequentially; advance quad 0 before fetching quad 1.
       __m128i ms_vec0 = this->fetch();
       if (total_mn0) this->advance(static_cast<uint32_t>(total_mn0));
       __m128i ms_vec1 = this->fetch();
@@ -1260,6 +1260,161 @@ class fwd_buf {
                    0x0F, 0x0E, 0x0D, 0x0C, 0x07, 0x06, 0x05, 0x04));
       v_n = _mm_or_si128(v_n, _mm_or_si128(_mm256_castsi256_si128(tvn),
                                             _mm256_extracti128_si256(tvn, 1)));
+    }
+    return row256;
+  }
+
+  // ── AVX2 256-bit four-quad decoder (16-bit arithmetic) ────────────────────
+  // Processes quads 0-3 simultaneously using 16-bit lanes.
+  // Requires pLSB_adj = pLSB - 16 so the output fits in int16_t.
+  // Active when pLSB > 16 (i.e. mmsbp2 = 32 - pLSB < 16).
+  //
+  // inf_u_q: 8 × uint16_t = [inf0, u0, inf1, u1, inf2, u2, inf3, u3]
+  // U_q:     4 × uint32_t  = [U0, U1, U2, U3] (already kappa-adjusted)
+  // Returns __m256i of 16 × int16_t: interleaved row0/row1 per quad column.
+  // Sign bit is in bit 15 of each int16_t.
+  // Caller must expand to int32_t via zero-extend then slli_epi32(x, 16).
+  FORCE_INLINE __m256i decode_four_quads(__m128i inf_u_q, __m128i U_q, uint8_t pLSB_adj,
+                                          __m128i &v_n) {
+    const __m256i vone16 = _mm256_set1_epi16(1);
+    const __m256i vtwo16 = _mm256_set1_epi16(2);
+    __m256i row256       = _mm256_setzero_si256();
+
+    // Broadcast each quad's inf word to all 4 sample slots in its 64-bit group.
+    // inf_u_q = [inf0(16b), u0(16b), inf1(16b), u1(16b), inf2(16b), u2(16b), inf3(16b), u3(16b)]
+    // Step 1: duplicate each inf to both 16-bit positions of its 32-bit slot.
+    __m128i ddd = _mm_shuffle_epi8(
+        inf_u_q, _mm_set_epi32(0x0D0C0D0C, 0x09080908, 0x05040504, 0x01000100));
+    // ddd (8 × 16-bit): [inf0,inf0, inf1,inf1, inf2,inf2, inf3,inf3]
+    // Step 2: broadcast each 32-bit pair to two 32-bit slots in the 256-bit register.
+    __m256i w0 = _mm256_permutevar8x32_epi32(
+        _mm256_castsi128_si256(ddd), _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3));
+    // w0 (16 × 16-bit): [inf0 ×4, inf1 ×4, inf2 ×4, inf3 ×4]
+
+    // Extract significance/EMB flags per sample.
+    __m256i flags = _mm256_and_si256(
+        w0, _mm256_set_epi16((int16_t)0x8880, 0x4440, 0x2220, 0x1110,
+                              (int16_t)0x8880, 0x4440, 0x2220, 0x1110,
+                              (int16_t)0x8880, 0x4440, 0x2220, 0x1110,
+                              (int16_t)0x8880, 0x4440, 0x2220, 0x1110));
+    __m256i insig = _mm256_cmpeq_epi16(flags, _mm256_setzero_si256());
+
+    if ((uint32_t)_mm256_movemask_epi8(insig) != 0xFFFFFFFFu) {
+      // Broadcast each U_q value (uint32_t → uint16_t pair) to 4 samples per quad.
+      ddd          = _mm_or_si128(_mm_bslli_si128(U_q, 2), U_q);
+      __m256i U_q_avx = _mm256_permutevar8x32_epi32(
+          _mm256_castsi128_si256(ddd), _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3));
+      // U_q_avx (16 × 16-bit): [U0 ×4, U1 ×4, U2 ×4, U3 ×4]
+
+      flags = _mm256_mullo_epi16(
+          flags, _mm256_set_epi16(1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8));
+      // After mullo: e_k at bit 15, e_1 at bit 11, rho at bit 7.
+
+      __m256i emb_k = _mm256_srli_epi16(flags, 15);
+      __m256i m_n   = _mm256_sub_epi16(U_q_avx, emb_k);
+      m_n           = _mm256_andnot_si256(insig, m_n);
+
+      // Inclusive prefix sum of m_n within each 128-bit lane (= one quad-pair).
+      __m256i inc_sum = m_n;
+      inc_sum = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 2));
+      inc_sum = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 4));
+      inc_sum = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 8));
+      int total_mn0 = _mm256_extract_epi16(inc_sum, 7);   // quads 0+1 total bits
+      int total_mn1 = _mm256_extract_epi16(inc_sum, 15);  // quads 2+3 total bits
+
+      __m128i ms_vec0 = _mm_setzero_si128();
+      __m128i ms_vec1 = _mm_setzero_si128();
+      if (total_mn0 > 0) {
+        ms_vec0 = this->fetch();
+        this->advance(static_cast<uint32_t>(total_mn0));
+      }
+      if (total_mn1 > 0) {
+        ms_vec1 = this->fetch();
+        this->advance(static_cast<uint32_t>(total_mn1));
+      }
+      __m256i ms_vec = _mm256_inserti128_si256(_mm256_castsi128_si256(ms_vec0), ms_vec1, 1);
+
+      __m256i ex_sum = _mm256_bslli_epi128(inc_sum, 2);  // exclusive scan
+
+      // Extract each sample's magnitude bits from its 128-bit fetch window.
+      __m256i byte_idx = _mm256_srli_epi16(ex_sum, 3);
+      __m256i bit_idx  = _mm256_and_si256(ex_sum, _mm256_set1_epi16(7));
+      byte_idx         = _mm256_shuffle_epi8(
+          byte_idx, _mm256_set_epi16(0x0E0E, 0x0C0C, 0x0A0A, 0x0808, 0x0606, 0x0404,
+                                      0x0202, 0x0000, 0x0E0E, 0x0C0C, 0x0A0A, 0x0808,
+                                      0x0606, 0x0404, 0x0202, 0x0000));
+      byte_idx      = _mm256_add_epi16(byte_idx, _mm256_set1_epi16(0x0100));
+      __m256i d0    = _mm256_shuffle_epi8(ms_vec, byte_idx);
+      byte_idx      = _mm256_add_epi16(byte_idx, _mm256_set1_epi16(0x0101));
+      __m256i d1    = _mm256_shuffle_epi8(ms_vec, byte_idx);
+
+      // For 16-bit elements, bit_idx high byte must stay 0 so vpshufb maps it to
+      // table[0]=0xFF; after +0x0101 the high byte wraps to 0x00, giving the correct
+      // single-byte multiplier for mullo_epi16.  (The 32-bit decode_two_quads path
+      // duplicates across 16-bit halves of a 32-bit element, which is different.)
+      __m256i bit_shift = _mm256_shuffle_epi8(
+          _mm256_set_epi8(1, 3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1,
+                          1, 3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1),
+          bit_idx);
+      bit_shift = _mm256_add_epi16(bit_shift, _mm256_set1_epi16(0x0101));
+      d0        = _mm256_mullo_epi16(d0, bit_shift);
+      d0        = _mm256_srli_epi16(d0, 8);
+      d1        = _mm256_mullo_epi16(d1, bit_shift);
+      d1        = _mm256_and_si256(d1, _mm256_set1_epi16((int16_t)0xFF00));
+      ms_vec    = _mm256_or_si256(d0, d1);
+
+      // Compute mask = 2^m_n - 1 and place e_1 at bit position m_n.
+      // AVX2 has no _mm256_sllv_epi16; split into four _mm_sll_epi16 calls,
+      // one per quad (each quad has a uniform shift = U_q - 1).
+      // w0 = (2 - e_k): 1 when e_k=1, 2 when e_k=0.
+      w0              = _mm256_sub_epi16(vtwo16, emb_k);
+      __m256i Uq_m1   = _mm256_sub_epi16(U_q_avx, vone16);
+      // Shift count for even quads (0 and 2) within each 128-bit lane.
+      __m256i Uq_evn  = _mm256_and_si256(Uq_m1, _mm256_set_epi32(0, 0, 0, 0x1F, 0, 0, 0, 0x1F));
+      // Shift count for odd quads (1 and 3) — move to element 0 of each lane.
+      __m256i Uq_odd  = _mm256_bsrli_epi128(Uq_m1, 14);
+      __m256i t_evn   = _mm256_and_si256(w0, _mm256_set_epi64x(0, -1, 0, -1));
+      __m256i t_odd   = _mm256_and_si256(w0, _mm256_set_epi64x(-1, 0, -1, 0));
+      {  // no _mm256_sllv_epi16 in AVX2 — use four _mm_sll_epi16 calls instead
+        __m128i lo, hi;
+        lo    = _mm_sll_epi16(_mm256_castsi256_si128(t_evn), _mm256_castsi256_si128(Uq_evn));
+        hi    = _mm_sll_epi16(_mm256_extracti128_si256(t_evn, 1),
+                               _mm256_extracti128_si256(Uq_evn, 1));
+        t_evn = _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1);
+        lo    = _mm_sll_epi16(_mm256_castsi256_si128(t_odd), _mm256_castsi256_si128(Uq_odd));
+        hi    = _mm_sll_epi16(_mm256_extracti128_si256(t_odd, 1),
+                               _mm256_extracti128_si256(Uq_odd, 1));
+        t_odd = _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1);
+      }
+      __m256i shift = _mm256_or_si256(t_evn, t_odd);  // = (2 - e_k) << (U_q - 1) = 2^m_n
+
+      ms_vec = _mm256_and_si256(ms_vec, _mm256_sub_epi16(shift, vone16));  // m_n magnitude bits
+
+      // Place e_1 at bit position m_n.
+      __m256i emb1_mask = _mm256_cmpeq_epi16(
+          _mm256_and_si256(flags, _mm256_set1_epi16(0x800)), _mm256_setzero_si256());
+      ms_vec = _mm256_or_si256(ms_vec, _mm256_andnot_si256(emb1_mask, shift));
+
+      // Build decoded sample: sign at bit 15, magnitude shifted by (pLSB_adj - 1).
+      __m256i tvn    = ms_vec;                                 // save for v_n update (before |=1)
+      __m256i w_sign = _mm256_slli_epi16(ms_vec, 15);        // sign bit → bit 15
+      ms_vec         = _mm256_or_si256(ms_vec, vone16);       // bin center
+      ms_vec         = _mm256_add_epi16(ms_vec, vtwo16);      // + 2
+      ms_vec         = _mm256_slli_epi16(ms_vec, pLSB_adj - 1);
+      ms_vec         = _mm256_or_si256(ms_vec, w_sign);       // sign
+      row256         = _mm256_andnot_si256(insig, ms_vec);
+
+      // Update v_n (8 × int16_t): pairwise OR of row-0 and row-1 magnitudes per column.
+      // Gather odd-indexed 16-bit elements (row 1 only) into lower 64 bits of each 128-bit lane.
+      tvn = _mm256_andnot_si256(insig, tvn);
+      __m256i vn256 = _mm256_shuffle_epi8(
+          tvn, _mm256_set_epi8(-1,-1,-1,-1,-1,-1,-1,-1,
+                                0x0F,0x0E,0x0B,0x0A,0x07,0x06,0x03,0x02,
+                                -1,-1,-1,-1,-1,-1,-1,-1,
+                                0x0F,0x0E,0x0B,0x0A,0x07,0x06,0x03,0x02));
+      // Combine: lower 64 bits of each lane into the lower 128 bits.
+      vn256 = _mm256_permute4x64_epi64(vn256, _MM_SHUFFLE(2, 0, 2, 0));
+      v_n   = _mm_or_si128(v_n, _mm256_castsi256_si128(vn256));
     }
     return row256;
   }
