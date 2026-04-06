@@ -40,9 +40,154 @@
 #ifdef _OPENMP
   #include <omp.h>
 #endif
+#if defined(__AVX2__)
+  #include <immintrin.h>
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+  #include <arm_neon.h>
+#endif
 
 #include "decoder.hpp"
 #include "dec_utils.hpp"
+
+// Vectorized int32 → big-endian byte packing for PGM/PGX output
+namespace {
+
+// bpp==2, big-endian: int32 + offset → {hi, lo} byte pairs
+inline void pack_i32_to_be16(const int32_t *src, uint8_t *dst, uint32_t width, int32_t offset) {
+#if defined(__AVX2__)
+  const __m256i voff = _mm256_set1_epi32(offset);
+  const __m256i bswap =
+      _mm256_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4,
+                       7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
+  uint32_t n = 0;
+  for (; n + 16 <= width; n += 16) {
+    __m256i v0 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n)), voff);
+    __m256i v1 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 8)), voff);
+    __m256i packed = _mm256_packs_epi32(v0, v1);
+    packed         = _mm256_permute4x64_epi64(packed, 0xD8);
+    packed         = _mm256_shuffle_epi8(packed, bswap);
+    _mm256_storeu_si256((__m256i *)(dst + n * 2), packed);
+  }
+  for (; n < width; ++n) {
+    int32_t v            = src[n] + offset;
+    dst[n * 2]           = static_cast<uint8_t>(v >> 8);
+    dst[n * 2 + 1]       = static_cast<uint8_t>(v);
+  }
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+  const int32x4_t voff = vdupq_n_s32(offset);
+  uint32_t n = 0;
+  for (; n + 8 <= width; n += 8) {
+    int32x4_t v0 = vaddq_s32(vld1q_s32(src + n), voff);
+    int32x4_t v1 = vaddq_s32(vld1q_s32(src + n + 4), voff);
+    int16x4_t lo = vmovn_s32(v0);
+    int16x4_t hi = vmovn_s32(v1);
+    int16x8_t combined = vcombine_s16(lo, hi);
+    // Byte-swap for big-endian
+    uint8x16_t bytes = vreinterpretq_u8_s16(combined);
+    uint8x16_t swapped = vrev16q_u8(bytes);
+    vst1q_u8(dst + n * 2, swapped);
+  }
+  for (; n < width; ++n) {
+    int32_t v            = src[n] + offset;
+    dst[n * 2]           = static_cast<uint8_t>(v >> 8);
+    dst[n * 2 + 1]       = static_cast<uint8_t>(v);
+  }
+#else
+  for (uint32_t n = 0; n < width; ++n) {
+    int32_t v            = src[n] + offset;
+    dst[n * 2]           = static_cast<uint8_t>(v >> 8);
+    dst[n * 2 + 1]       = static_cast<uint8_t>(v);
+  }
+#endif
+}
+
+// bpp==2, little-endian (PGX): int32 → {lo, hi} byte pairs (no offset)
+inline void pack_i32_to_le16(const int32_t *src, uint8_t *dst, uint32_t width) {
+#if defined(__AVX2__)
+  uint32_t n = 0;
+  for (; n + 16 <= width; n += 16) {
+    __m256i v0     = _mm256_loadu_si256((const __m256i *)(src + n));
+    __m256i v1     = _mm256_loadu_si256((const __m256i *)(src + n + 8));
+    __m256i packed = _mm256_packs_epi32(v0, v1);
+    packed         = _mm256_permute4x64_epi64(packed, 0xD8);
+    // Already little-endian on x86
+    _mm256_storeu_si256((__m256i *)(dst + n * 2), packed);
+  }
+  for (; n < width; ++n) {
+    int32_t v            = src[n];
+    dst[n * 2]           = static_cast<uint8_t>(v);
+    dst[n * 2 + 1]       = static_cast<uint8_t>(v >> 8);
+  }
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+  uint32_t n = 0;
+  for (; n + 8 <= width; n += 8) {
+    int32x4_t v0 = vld1q_s32(src + n);
+    int32x4_t v1 = vld1q_s32(src + n + 4);
+    int16x4_t lo = vmovn_s32(v0);
+    int16x4_t hi = vmovn_s32(v1);
+    int16x8_t combined = vcombine_s16(lo, hi);
+    vst1q_s16((int16_t *)(dst + n * 2), combined);
+  }
+  for (; n < width; ++n) {
+    int32_t v            = src[n];
+    dst[n * 2]           = static_cast<uint8_t>(v);
+    dst[n * 2 + 1]       = static_cast<uint8_t>(v >> 8);
+  }
+#else
+  for (uint32_t n = 0; n < width; ++n) {
+    int32_t v            = src[n];
+    dst[n * 2]           = static_cast<uint8_t>(v);
+    dst[n * 2 + 1]       = static_cast<uint8_t>(v >> 8);
+  }
+#endif
+}
+
+// bpp==1: int32 + offset → uint8
+inline void pack_i32_to_u8(const int32_t *src, uint8_t *dst, uint32_t width, int32_t offset) {
+#if defined(__AVX2__)
+  const __m256i voff = _mm256_set1_epi32(offset);
+  // Permutation to fix the lane-crossing interleave of successive packs
+  const __m256i fix = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+  uint32_t n = 0;
+  for (; n + 32 <= width; n += 32) {
+    __m256i v0 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n)), voff);
+    __m256i v1 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 8)), voff);
+    __m256i v2 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 16)), voff);
+    __m256i v3 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 24)), voff);
+    __m256i p01 = _mm256_packs_epi32(v0, v1);
+    __m256i p23 = _mm256_packs_epi32(v2, v3);
+    __m256i p8  = _mm256_packus_epi16(p01, p23);
+    p8          = _mm256_permutevar8x32_epi32(p8, fix);
+    _mm256_storeu_si256((__m256i *)(dst + n), p8);
+  }
+  for (; n < width; ++n)
+    dst[n] = static_cast<uint8_t>(src[n] + offset);
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+  const int32x4_t voff = vdupq_n_s32(offset);
+  uint32_t n = 0;
+  for (; n + 16 <= width; n += 16) {
+    int32x4_t v0 = vaddq_s32(vld1q_s32(src + n), voff);
+    int32x4_t v1 = vaddq_s32(vld1q_s32(src + n + 4), voff);
+    int32x4_t v2 = vaddq_s32(vld1q_s32(src + n + 8), voff);
+    int32x4_t v3 = vaddq_s32(vld1q_s32(src + n + 12), voff);
+    int16x4_t h0 = vmovn_s32(v0);
+    int16x4_t h1 = vmovn_s32(v1);
+    int16x4_t h2 = vmovn_s32(v2);
+    int16x4_t h3 = vmovn_s32(v3);
+    uint8x8_t b0 = vmovn_u16(vreinterpretq_u16_s16(vcombine_s16(h0, h1)));
+    uint8x8_t b1 = vmovn_u16(vreinterpretq_u16_s16(vcombine_s16(h2, h3)));
+    vst1_u8(dst + n, b0);
+    vst1_u8(dst + n + 8, b1);
+  }
+  for (; n < width; ++n)
+    dst[n] = static_cast<uint8_t>(src[n] + offset);
+#else
+  for (uint32_t n = 0; n < width; ++n)
+    dst[n] = static_cast<uint8_t>(src[n] + offset);
+#endif
+}
+
+}  // namespace
 
 void print_help(char *cmd) {
   printf("JPEG 2000 Part 1 and Part 15 decoder\n");
@@ -426,22 +571,11 @@ int main(int argc, char *argv[]) {
                 if (y / yr_c >= hc) continue;         // past end of component
                 uint8_t *out = row_buf.data();
                 if (bpp == 1) {
-                  for (uint32_t n = 0; n < img_width[c]; ++n)
-                    *out++ = static_cast<uint8_t>(rows[c][n] + pnm_offset);
+                  pack_i32_to_u8(rows[c], out, img_width[c], pnm_offset);
                 } else if (want_pgx) {
-                  // PGX: little-endian (LM = LSB first), no offset
-                  for (uint32_t n = 0; n < img_width[c]; ++n) {
-                    int32_t v = rows[c][n];
-                    *out++    = static_cast<uint8_t>(v);
-                    *out++    = static_cast<uint8_t>(v >> 8);
-                  }
+                  pack_i32_to_le16(rows[c], out, img_width[c]);
                 } else {
-                  // PGM / other: big-endian with offset
-                  for (uint32_t n = 0; n < img_width[c]; ++n) {
-                    int32_t v = rows[c][n] + pnm_offset;
-                    *out++    = static_cast<uint8_t>(v >> 8);
-                    *out++    = static_cast<uint8_t>(v);
-                  }
+                  pack_i32_to_be16(rows[c], out, img_width[c], pnm_offset);
                 }
                 fwrite(row_buf.data(), 1, static_cast<size_t>(img_width[c]) * bpp, fps[c]);
               }
