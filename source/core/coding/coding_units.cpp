@@ -487,7 +487,7 @@ static fused_mct_finalize_func fused_mct_finalize[2] = {fused_ycbcr_irrev_to_rgb
 
 #ifdef OPENHTJ2K_THREAD
   #include "ThreadPool.hpp"
-ThreadPool *ThreadPool::singleton = nullptr;
+std::atomic<ThreadPool *> ThreadPool::singleton_{nullptr};
 std::mutex ThreadPool::singleton_mutex;
 #endif
 // #include <hwy/highway.h>
@@ -2475,7 +2475,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
                                    this->mantissas, this->num_guard_bits, this->quantization_style,
                                    this->bitdepth, line_based, this->dfs_info);
 #ifdef OPENHTJ2K_THREAD
-    if (pool->num_threads() > 1) {
+    if (pool && pool->num_threads() > 1) {
       results.emplace_back(pool->enqueue([r, numlayers, this] {
         resolution[r]->create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
         return 0;
@@ -3500,7 +3500,7 @@ void j2k_tile::decode() {
             // only decode a codeblock having non-zero coding passes
             if (block->num_passes) {
 #ifdef OPENHTJ2K_THREAD
-              if (pool->num_threads() > 1) {
+              if (pool && pool->num_threads() > 1) {
                 dec_task_args.push_back({block, ROIshift, &dec_remaining});
                 auto *da = &dec_task_args.back();
                 dec_remaining.fetch_add(1, std::memory_order_relaxed);
@@ -5004,7 +5004,7 @@ uint8_t *j2k_tile::encode() {
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             auto block = cpb->access_codeblock(block_index);
-            if (pool->num_threads() > 1) {
+            if (pool && pool->num_threads() > 1) {
               auto *ea = &enc_task_args[task_idx++];
               *ea      = {epc, block, ROIshift, &enc_remaining};
               enc_remaining.fetch_add(1, std::memory_order_relaxed);
@@ -5266,7 +5266,7 @@ uint8_t *j2k_tile::encode_line_based() {
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
         for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
           auto block = cpb->access_codeblock(block_index);
-          if (pool->num_threads() > 1) {
+          if (pool && pool->num_threads() > 1) {
             auto *ea = &enc_task_args[task_idx++];
             *ea      = {epc, block, ROIshift, &enc_remaining};
             enc_remaining.fetch_add(1, std::memory_order_relaxed);
@@ -5535,7 +5535,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
         for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
           auto block = cpb->access_codeblock(block_index);
-          if (pool->num_threads() > 1) {
+          if (pool && pool->num_threads() > 1) {
             auto *ea = &enc_task_args[task_idx++];
             *ea      = {epc, block, ROIshift, &enc_remaining};
             enc_remaining.fetch_add(1, std::memory_order_relaxed);

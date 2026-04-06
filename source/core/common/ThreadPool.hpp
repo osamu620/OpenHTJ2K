@@ -145,7 +145,9 @@ class ThreadPool {
       condition.notify_one();
   }
 
-  static ThreadPool* get() { return instance(0); }
+  // Lock-free fast path: the singleton is set once during init and cleared on
+  // release, so an acquire load is sufficient after the first call.
+  static ThreadPool* get() { return singleton_.load(std::memory_order_acquire); }
 
   // Try to dequeue and execute one pending task from the calling thread.
   // Returns true if a task was executed, false if the queue was empty or locked.
@@ -164,17 +166,26 @@ class ThreadPool {
   }
 
   static ThreadPool* instance(size_t numthreads) {
+    // Fast path: pool already created.
+    auto *p = singleton_.load(std::memory_order_acquire);
+    if (p) return p;
+
     std::unique_lock<std::mutex> lock(singleton_mutex);
-    if (!singleton) {
-      singleton = new ThreadPool(numthreads ? numthreads : std::thread::hardware_concurrency());
+    if (!singleton_.load(std::memory_order_relaxed)) {
+      const size_t n = numthreads ? numthreads : std::thread::hardware_concurrency();
+      // Skip pool creation entirely for single-threaded mode: all callers
+      // already guard with `pool && pool->num_threads() > 1`.
+      if (n > 1) {
+        singleton_.store(new ThreadPool(n), std::memory_order_release);
+      }
     }
-    return singleton;
+    return singleton_.load(std::memory_order_relaxed);
   }
 
   static void release() {
     std::unique_lock<std::mutex> lock(singleton_mutex);
-    delete singleton;
-    singleton = nullptr;
+    delete singleton_.load(std::memory_order_relaxed);
+    singleton_.store(nullptr, std::memory_order_release);
   }
 
  private:
@@ -265,9 +276,9 @@ class ThreadPool {
   std::condition_variable condition;
 
   /**
-   * @brief A singleton for the instance.
+   * @brief An atomic singleton for the instance (lock-free read via get()).
    */
-  static ThreadPool* singleton;
+  static std::atomic<ThreadPool*> singleton_;
 
   /**
    * @brief A mutex to synchronize access to the instance.
