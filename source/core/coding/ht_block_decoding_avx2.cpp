@@ -630,66 +630,37 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
 
       uint32_t new_sig = 0;
       if (mbr) {
+        static const uint32_t row_masks[4] = {0x33u, 0x76u, 0xECu, 0xC8u};
         uint32_t inv_sig = ~cs & pat;
-        uint32_t col_mask = 0xFu;
-        for (int col = 0; col < 4; col++, col_mask <<= 4) {
-          if ((col_mask & mbr) == 0) continue;
-
-          int i              = col * 4;
-          uint32_t smask     = 0x1111u & col_mask;
-          // Row 0
-          if (mbr & smask) {
-            mbr &= ~smask;
-            if (SigProp.importSigPropBit()) {
-              new_sig |= smask;
-              mbr |= (0x33u << i) & inv_sig & ~new_sig;
-            }
-          }
-          // Row 1
-          smask <<= 1;
-          if (mbr & smask) {
-            mbr &= ~smask;
-            if (SigProp.importSigPropBit()) {
-              new_sig |= smask;
-              mbr |= (0x76u << i) & inv_sig & ~new_sig;
-            }
-          }
-          // Row 2
-          smask <<= 1;
-          if (mbr & smask) {
-            mbr &= ~smask;
-            if (SigProp.importSigPropBit()) {
-              new_sig |= smask;
-              mbr |= (0xECu << i) & inv_sig & ~new_sig;
-            }
-          }
-          // Row 3
-          smask <<= 1;
-          if (mbr & smask) {
-            mbr &= ~smask;
-            if (SigProp.importSigPropBit()) {
-              new_sig |= smask;
-              mbr |= (0xC8u << i) & inv_sig & ~new_sig;
-            }
-          }
+        // CTZ iteration: process only set mbr bits in column-major order
+        // (nibble layout guarantees ascending bit positions = column-major).
+        // Branchless bit-result handling eliminates the unpredictable
+        // if(importSigPropBit()) branch (~50% mispredict rate).
+        while (mbr) {
+          uint32_t pos   = static_cast<uint32_t>(__builtin_ctz(mbr));
+          uint32_t smask = 1u << pos;
+          mbr &= ~smask;
+          uint32_t bit      = SigProp.importSigPropBit();
+          uint32_t bit_mask = static_cast<uint32_t>(-static_cast<int32_t>(bit));
+          new_sig |= smask & bit_mask;
+          uint32_t neighbor = row_masks[pos & 3] << (pos & ~3u);
+          mbr |= neighbor & inv_sig & ~new_sig & bit_mask;
         }
 
-        // Write magnitude and sign for newly significant samples
+        // Write magnitude + sign using CTZ (avoids 32 branch checks)
         if (new_sig) {
-          // Magnitude
-          for (uint32_t col = 0; col < 4 && x + col < width; col++) {
-            for (uint32_t row = 0; row < sh; row++) {
-              if (new_sig & (1u << (col * 4 + row)))
-                samples[(y + row) * sstride + (x + col)] |= spp_mask;
-            }
+          uint32_t bits = new_sig;
+          while (bits) {
+            uint32_t pos = static_cast<uint32_t>(__builtin_ctz(bits));
+            bits &= bits - 1;
+            samples[(y + (pos & 3)) * sstride + (x + (pos >> 2))] |= spp_mask;
           }
-          // Sign (column-major order matches bitstream)
-          for (uint32_t col = 0; col < 4 && x + col < width; col++) {
-            for (uint32_t row = 0; row < sh; row++) {
-              if (new_sig & (1u << (col * 4 + row)))
-                samples[(y + row) * sstride + (x + col)] |=
-                    static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
-            }
+          bits = new_sig;
+          while (bits) {
+            uint32_t pos = static_cast<uint32_t>(__builtin_ctz(bits));
+            bits &= bits - 1;
+            samples[(y + (pos & 3)) * sstride + (x + (pos >> 2))] |=
+                static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
           }
         }
       }
@@ -717,25 +688,24 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   int32_t *samples      = block->sample_buf;
 
   for (uint32_t y = 0; y < height; y += 4) {
-    const uint32_t sh     = (height - y < 4) ? (height - y) : 4;
     const uint16_t *csig  = sigma + (y >> 2) * mstr;
 
     for (uint32_t x = 0; x < width; x += 4) {
       uint16_t sig = csig[x >> 2];
       if (!sig) continue;
 
-      // Process column-major within the 4×4 quad
-      for (uint32_t col = 0; col < 4 && x + col < width; col++) {
-        for (uint32_t row = 0; row < sh; row++) {
-          if (sig & (1u << (col * 4 + row))) {
-            int32_t *sp  = samples + (y + row) * sstride + (x + col);
-            int32_t bit  = MagRef.importMagRefBit();
-            int32_t mask = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
-            mask <<= pLSB;
-            sp[0] &= mask;
-            sp[0] |= 1 << (pLSB - 1);
-          }
-        }
+      // CTZ iteration: process only significant samples (column-major order
+      // preserved by nibble layout). Avoids 16 per-quad if(sig & bit) checks.
+      uint32_t s = sig;
+      while (s) {
+        uint32_t pos = static_cast<uint32_t>(__builtin_ctz(s));
+        s &= s - 1;
+        int32_t *sp  = samples + (y + (pos & 3)) * sstride + (x + (pos >> 2));
+        int32_t bit  = MagRef.importMagRefBit();
+        int32_t mask = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
+        mask <<= pLSB;
+        sp[0] &= mask;
+        sp[0] |= 1 << (pLSB - 1);
       }
     }
   }
