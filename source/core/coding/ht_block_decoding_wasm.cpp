@@ -85,6 +85,37 @@ uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_
   return mbr & 1;
 }
 
+// Pack block_states SIGMA bits into nibble-packed uint16_t sigma array.
+// Layout: sigma[qy * mstr + qx] holds 16 bits for the 4×4 block at (qy*4, qx*4).
+// Nibbles: bits[0:3] = column 0, bits[4:7] = column 1, bits[8:11] = column 2, bits[12:15] = column 3.
+// Within each nibble: bit 0 = row 0, bit 1 = row 1, bit 2 = row 2, bit 3 = row 3.
+static void pack_sigma(const uint8_t *states, size_t bstride, uint32_t width, uint32_t height,
+                       uint16_t *sigma, uint32_t mstr) {
+  const uint32_t qw = (width + 3) >> 2;
+  const uint32_t qh = (height + 3) >> 2;
+  for (uint32_t qy = 0; qy < qh; qy++) {
+    const uint32_t y0 = qy * 4;
+    const uint32_t sh = (height - y0 < 4) ? (height - y0) : 4;
+    for (uint32_t qx = 0; qx < qw; qx++) {
+      const uint32_t x0 = qx * 4;
+      const uint32_t sw = (width - x0 < 4) ? (width - x0) : 4;
+      uint16_t s        = 0;
+      for (uint32_t col = 0; col < sw; col++) {
+        const uint8_t *p = states + (y0 + 1) * bstride + (x0 + col + 1);
+        for (uint32_t row = 0; row < sh; row++) {
+          s |= static_cast<uint16_t>((p[0] & 1) << (col * 4 + row));
+          p += bstride;
+        }
+      }
+      sigma[qy * mstr + qx] = s;
+    }
+    sigma[qy * mstr + qw] = 0;
+  }
+  for (uint32_t qx = 0; qx <= qw; qx++) {
+    sigma[qh * mstr + qx] = 0;
+  }
+}
+
 template <bool skip_sigma>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
@@ -424,120 +455,149 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   }  // Non-Initial line-pair end
 }  // Cleanup decoding end
 
-auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const uint32_t i_start,
-                                    const uint32_t j_start, const uint32_t width, const uint32_t height,
-                                    const uint8_t &pLSB) {
-  int32_t *sp;
-  uint8_t causal_cond     = 0;
-  uint8_t bit;
-  uint8_t mbr;
-  const auto block_width  = j_start + width;
-  const auto block_height = i_start + height;
-
-  for (uint32_t j = j_start; j < block_width; j++) {
-    for (uint32_t i = i_start; i < block_height; i++) {
-      sp               = &block->sample_buf[j + i * block->blksampl_stride];
-      causal_cond      = (((block->Cmodes & CAUSAL) == 0) || (i != block_height - 1));
-      mbr              = 0;
-      uint8_t *state_p = block->block_states + (i + 1) * block->blkstate_stride + (j + 1);
-      if ((state_p[0] >> SHIFT_SIGMA & 1) == 0) {
-        mbr = block->calc_mbr(i, j, causal_cond);
-      }
-      if (mbr != 0) {
-        state_p[0] |= 1 << SHIFT_PI_;
-        bit = SigProp.importSigPropBit();
-        state_p[0] |= bit << SHIFT_REF;
-        *sp |= bit << pLSB;
-        *sp |= bit << (pLSB - 1);
-      }
-      state_p[0] |= 1 << SHIFT_SCAN;
-    }
-  }
-  for (uint32_t j = j_start; j < block_width; j++) {
-    for (uint32_t i = i_start; i < block_height; i++) {
-      sp               = &block->sample_buf[j + i * block->blksampl_stride];
-      uint8_t *state_p = block->block_states + (i + 1) * block->blkstate_stride + (j + 1);
-      if ((state_p[0] >> SHIFT_REF) & 1) {
-        *sp |= static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
-      }
-    }
-  }
-};
-
 void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
-                       const uint8_t &pLSB) {
+                       const uint8_t &pLSB, uint16_t *sigma, uint32_t mstr) {
   SP_dec SigProp(HT_magref_segment, magref_length);
-  const uint32_t num_v_stripe = block->size.y / 4;
-  const uint32_t num_h_stripe = block->size.x / 4;
-  uint32_t i_start            = 0, j_start;
-  uint32_t width              = 4;
-  uint32_t width_last;
-  uint32_t height = 4;
+  const uint32_t height       = block->size.y;
+  const uint32_t width        = block->size.x;
+  const size_t sstride        = block->blksampl_stride;
+  int32_t *samples            = block->sample_buf;
+  const bool non_causal       = (block->Cmodes & CAUSAL) == 0;
+  const int32_t spp_mask      = 3 << (pLSB - 1);
+  uint16_t prev_row_sig[264];
+  memset(prev_row_sig, 0, sizeof(prev_row_sig));
 
-  for (uint16_t n1 = 0; n1 < num_v_stripe; n1++) {
-    j_start = 0;
-    for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-      process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, pLSB);
-      j_start += 4;
+  for (uint32_t y = 0; y < height; y += 4) {
+    const uint32_t sh = (height - y < 4) ? (height - y) : 4;
+    uint32_t pattern  = 0xFFFFu;
+    if (sh < 4) pattern = (sh == 3) ? 0x7777u : (sh == 2) ? 0x3333u : 0x1111u;
+
+    uint32_t prev     = 0;
+    uint16_t *cur_sig = sigma + (y >> 2) * mstr;
+
+    for (uint32_t x = 0; x < width; x += 4) {
+      const uint32_t qx = x >> 2;
+      uint32_t pat      = pattern;
+      int32_t excess    = static_cast<int32_t>(x + 4) - static_cast<int32_t>(width);
+      if (excess > 0) pat >>= (excess * 4);
+
+      uint32_t cs = *reinterpret_cast<const uint32_t *>(cur_sig + qx);
+      uint32_t ps = *reinterpret_cast<const uint32_t *>(prev_row_sig + qx);
+      uint32_t ns = *reinterpret_cast<const uint32_t *>(cur_sig + mstr + qx);
+
+      uint32_t u = (ps & 0x88888888u) >> 3;
+      if (non_causal) u |= (ns & 0x11111111u) << 3;
+
+      uint32_t mbr = cs;
+      mbr |= (cs & 0x77777777u) << 1;
+      mbr |= (cs & 0xEEEEEEEEu) >> 1;
+      mbr |= u;
+      uint32_t t = mbr;
+      mbr |= t << 4;
+      mbr |= t >> 4;
+      mbr |= prev >> 12;
+
+      mbr &= pat;
+      mbr &= ~cs;
+
+      uint32_t new_sig = 0;
+      if (mbr) {
+        uint32_t inv_sig = ~cs & pat;
+        uint32_t col_mask = 0xFu;
+        for (int col = 0; col < 4; col++, col_mask <<= 4) {
+          if ((col_mask & mbr) == 0) continue;
+
+          int i              = col * 4;
+          uint32_t smask     = 0x1111u & col_mask;
+          if (mbr & smask) {
+            mbr &= ~smask;
+            if (SigProp.importSigPropBit()) {
+              new_sig |= smask;
+              mbr |= (0x33u << i) & inv_sig & ~new_sig;
+            }
+          }
+          smask <<= 1;
+          if (mbr & smask) {
+            mbr &= ~smask;
+            if (SigProp.importSigPropBit()) {
+              new_sig |= smask;
+              mbr |= (0x76u << i) & inv_sig & ~new_sig;
+            }
+          }
+          smask <<= 1;
+          if (mbr & smask) {
+            mbr &= ~smask;
+            if (SigProp.importSigPropBit()) {
+              new_sig |= smask;
+              mbr |= (0xECu << i) & inv_sig & ~new_sig;
+            }
+          }
+          smask <<= 1;
+          if (mbr & smask) {
+            mbr &= ~smask;
+            if (SigProp.importSigPropBit()) {
+              new_sig |= smask;
+              mbr |= (0xC8u << i) & inv_sig & ~new_sig;
+            }
+          }
+        }
+
+        if (new_sig) {
+          for (uint32_t col = 0; col < 4 && x + col < width; col++) {
+            for (uint32_t row = 0; row < sh; row++) {
+              if (new_sig & (1u << (col * 4 + row)))
+                samples[(y + row) * sstride + (x + col)] |= spp_mask;
+            }
+          }
+          for (uint32_t col = 0; col < 4 && x + col < width; col++) {
+            for (uint32_t row = 0; row < sh; row++) {
+              if (new_sig & (1u << (col * 4 + row)))
+                samples[(y + row) * sstride + (x + col)] |=
+                    static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
+            }
+          }
+        }
+      }
+
+      // Do NOT update sigma — it must retain cleanup-only significance for MRP
+      new_sig |= cs & 0xFFFFu;
+      prev_row_sig[qx] = static_cast<uint16_t>(new_sig);
+
+      t = new_sig;
+      new_sig |= (t & 0x7777u) << 1;
+      new_sig |= (t & 0xEEEEu) >> 1;
+      prev = (new_sig | u) & 0xF000u;
     }
-    width_last = block->size.x % 4;
-    if (width_last) {
-      process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, pLSB);
-    }
-    i_start += 4;
-  }
-  height  = block->size.y % 4;
-  j_start = 0;
-  for (uint16_t n2 = 0; n2 < num_h_stripe; n2++) {
-    process_stripes_block_dec(SigProp, block, i_start, j_start, width, height, pLSB);
-    j_start += 4;
-  }
-  width_last = block->size.x % 4;
-  if (width_last) {
-    process_stripes_block_dec(SigProp, block, i_start, j_start, width_last, height, pLSB);
   }
 }
 
 void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
-                      const uint8_t &pLSB) {
+                      const uint8_t &pLSB, const uint16_t *sigma, uint32_t mstr) {
   MR_dec MagRef(HT_magref_segment, magref_length);
-  const uint32_t blk_height   = block->size.y;
-  const uint32_t blk_width    = block->size.x;
-  const uint32_t num_v_stripe = block->size.y / 4;
-  uint32_t i_start            = 0;
-  uint32_t height             = 4;
-  int32_t *sp;
-  int32_t bit;
-  int32_t tmp;
-  for (uint32_t n1 = 0; n1 < num_v_stripe; n1++) {
-    for (uint32_t j = 0; j < blk_width; j++) {
-      for (uint32_t i = i_start; i < i_start + height; i++) {
-        sp               = &block->sample_buf[j + i * block->blksampl_stride];
-        uint8_t *state_p = block->block_states + (i + 1) * block->blkstate_stride + (j + 1);
-        if ((state_p[0] >> SHIFT_SIGMA & 1) != 0) {
-          state_p[0] |= 1 << SHIFT_PI_;
-          bit = MagRef.importMagRefBit();
-          tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
-          tmp <<= pLSB;
-          sp[0] &= tmp;
-          sp[0] |= 1 << (pLSB - 1);
+  const uint32_t height = block->size.y;
+  const uint32_t width  = block->size.x;
+  const size_t sstride  = block->blksampl_stride;
+  int32_t *samples      = block->sample_buf;
+
+  for (uint32_t y = 0; y < height; y += 4) {
+    const uint32_t sh     = (height - y < 4) ? (height - y) : 4;
+    const uint16_t *csig  = sigma + (y >> 2) * mstr;
+
+    for (uint32_t x = 0; x < width; x += 4) {
+      uint16_t sig = csig[x >> 2];
+      if (!sig) continue;
+
+      for (uint32_t col = 0; col < 4 && x + col < width; col++) {
+        for (uint32_t row = 0; row < sh; row++) {
+          if (sig & (1u << (col * 4 + row))) {
+            int32_t *sp  = samples + (y + row) * sstride + (x + col);
+            int32_t bit  = MagRef.importMagRefBit();
+            int32_t mask = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
+            mask <<= pLSB;
+            sp[0] &= mask;
+            sp[0] |= 1 << (pLSB - 1);
+          }
         }
-      }
-    }
-    i_start += 4;
-  }
-  height = blk_height % 4;
-  for (uint32_t j = 0; j < blk_width; j++) {
-    for (uint32_t i = i_start; i < i_start + height; i++) {
-      sp               = &block->sample_buf[j + i * block->blksampl_stride];
-      uint8_t *state_p = block->block_states + (i + 1) * block->blkstate_stride + (j + 1);
-      if ((state_p[0] >> SHIFT_SIGMA & 1) != 0) {
-        state_p[0] |= 1 << SHIFT_PI_;
-        bit = MagRef.importMagRefBit();
-        tmp = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
-        tmp <<= pLSB;
-        sp[0] &= tmp;
-        sp[0] |= 1 << (pLSB - 1);
       }
     }
   }
@@ -740,12 +800,18 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
     } else {
       ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
-    }
-    if (num_ht_passes > 1) {
-      ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
-    }
-    if (num_ht_passes > 2) {
-      ht_magref_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
+
+      // Pack block_states SIGMA bits into nibble-packed sigma array
+      const uint32_t qw   = (block->size.x + 3) >> 2;
+      const uint32_t mstr = ((qw + 2) + 7u) & ~7u;
+      uint16_t sigma_buf[(17 + 1) * 24] = {};
+      pack_sigma(block->block_states, block->blkstate_stride, block->size.x, block->size.y,
+                 sigma_buf, mstr);
+
+      ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)), sigma_buf, mstr);
+      if (num_ht_passes > 2) {
+        ht_magref_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)), sigma_buf, mstr);
+      }
     }
 
     block->dequantize(ROIshift);
