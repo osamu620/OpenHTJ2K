@@ -43,3 +43,5 @@ build*/
 
 # Bin directory
 bin/
+perf.data
+perf.data.old
