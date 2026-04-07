@@ -189,6 +189,259 @@ inline void pack_i32_to_u8(const int32_t *src, uint8_t *dst, uint32_t width, int
 #endif
 }
 
+// 3-component int32 → interleaved 8-bit PPM output (R,G,B per pixel).
+// Clamps each sample to [0, max_val], then packs to uint8.
+inline void ppm_interleave_8(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                             uint8_t *dp, uint32_t width, uint32_t bit_depth) {
+#if defined(__SSE4_1__) || defined(__AVX2__)
+  const __m128i max_val = _mm_set1_epi32((1 << bit_depth) - 1);
+  const __m128i zero    = _mm_setzero_si128();
+  // Shuffle: pack 4 pixels of [R,G,B,0] → 12 bytes of [R,G,B,R,G,B,...].
+  // Each 32-bit word has R in byte 0, G in byte 1, B in byte 2, 0 in byte 3.
+  // Output: first 12 of 16 bytes (3 pixels = 12 bytes, 4th pixel in bytes 12-14).
+  const __m128i m0 = _mm_setr_epi8(0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1);
+  uint32_t n       = 0;
+  for (; n + 16 <= width; n += 16, sp0 += 16, sp1 += 16, sp2 += 16, dp += 48) {
+    __m128i t, u, v, w, a;
+    // Pixels 0-3
+    a = _mm_loadu_si128((const __m128i *)sp0);
+    a = _mm_max_epi32(a, zero);
+    t = _mm_min_epi32(a, max_val);
+    a = _mm_loadu_si128((const __m128i *)sp1);
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    t = _mm_or_si128(t, _mm_slli_epi32(a, 8));
+    a = _mm_loadu_si128((const __m128i *)sp2);
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    t = _mm_or_si128(t, _mm_slli_epi32(a, 16));
+    t = _mm_shuffle_epi8(t, m0);  // 12 bytes of output
+    // Pixels 4-7
+    a = _mm_loadu_si128((const __m128i *)(sp0 + 4));
+    a = _mm_max_epi32(a, zero);
+    u = _mm_min_epi32(a, max_val);
+    a = _mm_loadu_si128((const __m128i *)(sp1 + 4));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    u = _mm_or_si128(u, _mm_slli_epi32(a, 8));
+    a = _mm_loadu_si128((const __m128i *)(sp2 + 4));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    u = _mm_or_si128(u, _mm_slli_epi32(a, 16));
+    u = _mm_shuffle_epi8(u, m0);
+    // Pixels 8-11
+    a = _mm_loadu_si128((const __m128i *)(sp0 + 8));
+    a = _mm_max_epi32(a, zero);
+    v = _mm_min_epi32(a, max_val);
+    a = _mm_loadu_si128((const __m128i *)(sp1 + 8));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    v = _mm_or_si128(v, _mm_slli_epi32(a, 8));
+    a = _mm_loadu_si128((const __m128i *)(sp2 + 8));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    v = _mm_or_si128(v, _mm_slli_epi32(a, 16));
+    v = _mm_shuffle_epi8(v, m0);
+    // Pixels 12-15
+    a = _mm_loadu_si128((const __m128i *)(sp0 + 12));
+    a = _mm_max_epi32(a, zero);
+    w = _mm_min_epi32(a, max_val);
+    a = _mm_loadu_si128((const __m128i *)(sp1 + 12));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    w = _mm_or_si128(w, _mm_slli_epi32(a, 8));
+    a = _mm_loadu_si128((const __m128i *)(sp2 + 12));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    w = _mm_or_si128(w, _mm_slli_epi32(a, 16));
+    w = _mm_shuffle_epi8(w, m0);
+    // Combine 4 groups of 12 bytes into 3 × 16-byte stores
+    _mm_storeu_si128((__m128i *)dp, _mm_or_si128(t, _mm_bslli_si128(u, 12)));
+    _mm_storeu_si128((__m128i *)(dp + 16),
+                     _mm_or_si128(_mm_bsrli_si128(u, 4), _mm_bslli_si128(v, 8)));
+    _mm_storeu_si128((__m128i *)(dp + 32),
+                     _mm_or_si128(_mm_bsrli_si128(v, 8), _mm_bslli_si128(w, 4)));
+  }
+  int mv = (1 << bit_depth) - 1;
+  for (; n < width; ++n, ++sp0, ++sp1, ++sp2) {
+    int v;
+    v     = *sp0;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp1;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp2;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+  }
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+  const int32x4_t vmax = vdupq_n_s32((1 << bit_depth) - 1);
+  const int32x4_t zero = vdupq_n_s32(0);
+  uint32_t n           = 0;
+  for (; n + 8 <= width; n += 8, sp0 += 8, sp1 += 8, sp2 += 8, dp += 24) {
+    // Process 8 pixels → 24 bytes
+    int32x4_t r0 = vminq_s32(vmaxq_s32(vld1q_s32(sp0), zero), vmax);
+    int32x4_t r1 = vminq_s32(vmaxq_s32(vld1q_s32(sp0 + 4), zero), vmax);
+    int32x4_t g0 = vminq_s32(vmaxq_s32(vld1q_s32(sp1), zero), vmax);
+    int32x4_t g1 = vminq_s32(vmaxq_s32(vld1q_s32(sp1 + 4), zero), vmax);
+    int32x4_t b0 = vminq_s32(vmaxq_s32(vld1q_s32(sp2), zero), vmax);
+    int32x4_t b1 = vminq_s32(vmaxq_s32(vld1q_s32(sp2 + 4), zero), vmax);
+    uint16x4_t r16_lo = vqmovun_s32(r0), r16_hi = vqmovun_s32(r1);
+    uint16x4_t g16_lo = vqmovun_s32(g0), g16_hi = vqmovun_s32(g1);
+    uint16x4_t b16_lo = vqmovun_s32(b0), b16_hi = vqmovun_s32(b1);
+    uint8x8_t r8 = vqmovn_u16(vcombine_u16(r16_lo, r16_hi));
+    uint8x8_t g8 = vqmovn_u16(vcombine_u16(g16_lo, g16_hi));
+    uint8x8_t b8 = vqmovn_u16(vcombine_u16(b16_lo, b16_hi));
+    uint8x8x3_t rgb;
+    rgb.val[0] = r8;
+    rgb.val[1] = g8;
+    rgb.val[2] = b8;
+    vst3_u8(dp, rgb);
+  }
+  int mv = (1 << bit_depth) - 1;
+  for (; n < width; ++n, ++sp0, ++sp1, ++sp2) {
+    int v;
+    v     = *sp0;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp1;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp2;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+  }
+#else
+  int mv = (1 << bit_depth) - 1;
+  for (uint32_t n = 0; n < width; ++n, ++sp0, ++sp1, ++sp2) {
+    int v;
+    v     = *sp0;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp1;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp2;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+  }
+#endif
+}
+
+// 3-component int32 → interleaved 16-bit big-endian PPM output.
+// Clamps each sample to [0, max_val], byte-swaps to big-endian, and interleaves R,G,B.
+inline void ppm_interleave_16be(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                uint8_t *dp, uint32_t width, uint32_t bit_depth) {
+#if defined(__SSE4_1__) || defined(__AVX2__)
+  const __m128i max_val = _mm_set1_epi32((1 << bit_depth) - 1);
+  const __m128i zero    = _mm_setzero_si128();
+  uint16_t *p           = reinterpret_cast<uint16_t *>(dp);
+
+  // Shuffle masks for 3-way 16-bit big-endian interleave (8 pixels → 48 bytes).
+  // t = [r|g<<16] per 32-bit word. u = [b|r'<<16]. v = [g'|b'<<16].
+  // Masks produce big-endian byte order and interleave R,G,B across 3 stores.
+  const __m128i m0 = _mm_set_epi64x((long long)0x0A0B0809FFFF0607ULL, (long long)0x0405FFFF02030001ULL);
+  const __m128i m1 = _mm_set_epi64x((long long)0xFFFFFFFF0405FFFFULL, (long long)0xFFFF0001FFFFFFFFULL);
+  const __m128i m2 = _mm_set_epi64x((long long)0xFFFFFFFFFFFFFFFFULL, (long long)0xFFFF0E0F0C0DFFFFULL);
+  const __m128i m3 = _mm_set_epi64x((long long)0x0607FFFFFFFF0203ULL, (long long)0x0C0DFFFFFFFF0809ULL);
+  const __m128i m4 = _mm_set_epi64x((long long)0xFFFF02030001FFFFULL, (long long)0xFFFFFFFFFFFFFFFFULL);
+  const __m128i m5 = _mm_set_epi64x((long long)0xFFFFFFFF0E0FFFFFULL, (long long)0xFFFF0A0BFFFFFFFFULL);
+  const __m128i m6 = _mm_set_epi64x((long long)0x0E0F0C0DFFFF0A0BULL, (long long)0x0809FFFF06070405ULL);
+
+  uint32_t n = 0;
+  for (; n + 8 <= width; n += 8, sp0 += 8, sp1 += 8, sp2 += 8, p += 24) {
+    __m128i a, t, u, v;
+    // t = [r|g<<16] for pixels 0-3
+    a = _mm_loadu_si128((const __m128i *)sp0);
+    a = _mm_max_epi32(a, zero);
+    t = _mm_min_epi32(a, max_val);
+    a = _mm_loadu_si128((const __m128i *)sp1);
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    t = _mm_or_si128(t, _mm_slli_epi32(a, 16));
+    // u = [b|r'<<16]: b for pixels 0-3, r for pixels 4-7
+    a = _mm_loadu_si128((const __m128i *)sp2);
+    a = _mm_max_epi32(a, zero);
+    u = _mm_min_epi32(a, max_val);
+    a = _mm_loadu_si128((const __m128i *)(sp0 + 4));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    u = _mm_or_si128(u, _mm_slli_epi32(a, 16));
+    // v = [g'|b'<<16]: g for pixels 4-7, b for pixels 4-7
+    a = _mm_loadu_si128((const __m128i *)(sp1 + 4));
+    a = _mm_max_epi32(a, zero);
+    v = _mm_min_epi32(a, max_val);
+    a = _mm_loadu_si128((const __m128i *)(sp2 + 4));
+    a = _mm_max_epi32(a, zero);
+    a = _mm_min_epi32(a, max_val);
+    v = _mm_or_si128(v, _mm_slli_epi32(a, 16));
+    // Shuffle + interleave → 3 × 16 bytes
+    _mm_storeu_si128((__m128i *)p,
+                     _mm_or_si128(_mm_shuffle_epi8(t, m0), _mm_shuffle_epi8(u, m1)));
+    _mm_storeu_si128(
+        (__m128i *)(p + 8),
+        _mm_or_si128(_mm_shuffle_epi8(t, m2),
+                     _mm_or_si128(_mm_shuffle_epi8(u, m3), _mm_shuffle_epi8(v, m4))));
+    _mm_storeu_si128((__m128i *)(p + 16),
+                     _mm_or_si128(_mm_shuffle_epi8(u, m5), _mm_shuffle_epi8(v, m6)));
+  }
+  int mv = (1 << bit_depth) - 1;
+  for (; n < width; ++n, ++sp0, ++sp1, ++sp2) {
+    int v;
+    v    = *sp0;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+    v    = *sp1;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+    v    = *sp2;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+  }
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+  const int32x4_t vmax = vdupq_n_s32((1 << bit_depth) - 1);
+  const int32x4_t vzero = vdupq_n_s32(0);
+  uint16_t *p           = reinterpret_cast<uint16_t *>(dp);
+  uint32_t n            = 0;
+  for (; n + 4 <= width; n += 4, sp0 += 4, sp1 += 4, sp2 += 4, p += 12) {
+    int32x4_t rv = vminq_s32(vmaxq_s32(vld1q_s32(sp0), vzero), vmax);
+    int32x4_t gv = vminq_s32(vmaxq_s32(vld1q_s32(sp1), vzero), vmax);
+    int32x4_t bv = vminq_s32(vmaxq_s32(vld1q_s32(sp2), vzero), vmax);
+    uint16x4_t r16 = vqmovun_s32(rv);
+    uint16x4_t g16 = vqmovun_s32(gv);
+    uint16x4_t b16 = vqmovun_s32(bv);
+    // Byte-swap for big-endian
+    uint8x8_t rs = vrev16_u8(vreinterpret_u8_u16(r16));
+    uint8x8_t gs = vrev16_u8(vreinterpret_u8_u16(g16));
+    uint8x8_t bs = vrev16_u8(vreinterpret_u8_u16(b16));
+    uint16x4x3_t rgb;
+    rgb.val[0] = vreinterpret_u16_u8(rs);
+    rgb.val[1] = vreinterpret_u16_u8(gs);
+    rgb.val[2] = vreinterpret_u16_u8(bs);
+    vst3_u16(p, rgb);
+  }
+  int mv = (1 << bit_depth) - 1;
+  for (; n < width; ++n, ++sp0, ++sp1, ++sp2) {
+    int v;
+    v    = *sp0;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+    v    = *sp1;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+    v    = *sp2;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+  }
+#else
+  int mv = (1 << bit_depth) - 1;
+  for (uint32_t n = 0; n < width; ++n, ++sp0, ++sp1, ++sp2) {
+    int v;
+    v    = *sp0;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+    v    = *sp1;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+    v    = *sp2;
+    v    = v < 0 ? 0 : v > mv ? mv : v;
+    *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
+  }
+#endif
+}
+
 }  // namespace
 
 void print_help(char *cmd) {
@@ -531,26 +784,34 @@ int main(int argc, char *argv[]) {
                   }
                 }
               } else if (bpp == 1) {
-                for (uint32_t n = 0; n < img_width[0]; ++n) {
-                  const uint32_t n1 = n * img_width[1] / img_width[0];
-                  const uint32_t n2 = n * img_width[2] / img_width[0];
-                  *out++ = static_cast<uint8_t>(rows[0][n] + pnm_offset);
-                  *out++ = static_cast<uint8_t>(rows[1][n1] + pnm_offset);
-                  *out++ = static_cast<uint8_t>(rows[2][n2] + pnm_offset);
+                if (img_width[0] == img_width[1] && img_width[0] == img_width[2]) {
+                  ppm_interleave_8(rows[0], rows[1], rows[2], out, img_width[0], img_depth[0]);
+                } else {
+                  for (uint32_t n = 0; n < img_width[0]; ++n) {
+                    const uint32_t n1 = n * img_width[1] / img_width[0];
+                    const uint32_t n2 = n * img_width[2] / img_width[0];
+                    *out++ = static_cast<uint8_t>(rows[0][n] + pnm_offset);
+                    *out++ = static_cast<uint8_t>(rows[1][n1] + pnm_offset);
+                    *out++ = static_cast<uint8_t>(rows[2][n2] + pnm_offset);
+                  }
                 }
               } else {
-                for (uint32_t n = 0; n < img_width[0]; ++n) {
-                  const uint32_t n1 = n * img_width[1] / img_width[0];
-                  const uint32_t n2 = n * img_width[2] / img_width[0];
-                  int32_t r = rows[0][n] + pnm_offset;
-                  int32_t g = rows[1][n1] + pnm_offset;
-                  int32_t b = rows[2][n2] + pnm_offset;
-                  *out++    = static_cast<uint8_t>(r >> 8);
-                  *out++    = static_cast<uint8_t>(r);
-                  *out++    = static_cast<uint8_t>(g >> 8);
-                  *out++    = static_cast<uint8_t>(g);
-                  *out++    = static_cast<uint8_t>(b >> 8);
-                  *out++    = static_cast<uint8_t>(b);
+                if (img_width[0] == img_width[1] && img_width[0] == img_width[2]) {
+                  ppm_interleave_16be(rows[0], rows[1], rows[2], out, img_width[0], img_depth[0]);
+                } else {
+                  for (uint32_t n = 0; n < img_width[0]; ++n) {
+                    const uint32_t n1 = n * img_width[1] / img_width[0];
+                    const uint32_t n2 = n * img_width[2] / img_width[0];
+                    int32_t r = rows[0][n] + pnm_offset;
+                    int32_t g = rows[1][n1] + pnm_offset;
+                    int32_t b = rows[2][n2] + pnm_offset;
+                    *out++    = static_cast<uint8_t>(r >> 8);
+                    *out++    = static_cast<uint8_t>(r);
+                    *out++    = static_cast<uint8_t>(g >> 8);
+                    *out++    = static_cast<uint8_t>(g);
+                    *out++    = static_cast<uint8_t>(b >> 8);
+                    *out++    = static_cast<uint8_t>(b);
+                  }
                 }
               }
               fwrite(row_buf.data(), 1, row_buf.size(), fps[0]);
