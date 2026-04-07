@@ -155,6 +155,67 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
   }
 }
 
+// ATK irreversible 5/3 IDWT (horizontal)
+void idwt_1d_filtr_irrev53_fixed_neon(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                      const int32_t u_i1) {
+  const int32_t start    = u_i0 / 2;
+  const int32_t stop     = u_i1 / 2;
+  const int32_t offset   = left - u_i0 % 2;
+  const int32_t lp_offset = offset + (u_i0 % 2) * 2;
+
+  // Step 1: LP[k] -= 0.25*(HP[k-1]+HP[k])
+  int32_t simdlen = stop + 1 - start;
+  const auto x025 = vdupq_n_f32(0.25f);
+  sprec_t *sp     = X + lp_offset;
+  int32_t k       = 0;
+  if (k + 4 < simdlen) {
+    auto x0a = vld2q_f32(sp - 1);
+    for (; k + 4 < simdlen; k += 8, sp += 16) {
+      auto x0b         = vld2q_f32(sp + 7);
+      auto x0c         = vld2q_f32(sp + 15);
+      float32x4_t x1a0 = vextq_f32(x0a.val[0], x0b.val[0], 1);
+      float32x4_t x1b0 = vextq_f32(x0b.val[0], x0c.val[0], 1);
+      x0a.val[1]        = vfmsq_f32(x0a.val[1], vaddq_f32(x0a.val[0], x1a0), x025);
+      x0b.val[1]        = vfmsq_f32(x0b.val[1], vaddq_f32(x0b.val[0], x1b0), x025);
+      vst2q_f32(sp - 1, x0a);
+      vst2q_f32(sp + 7, x0b);
+      x0a = x0c;
+    }
+  }
+  for (; k < simdlen; k += 4, sp += 8) {
+    auto x0   = vld2q_f32(sp - 1);
+    auto x1   = vld2q_f32(sp + 1);
+    x0.val[1] = vfmsq_f32(x0.val[1], vaddq_f32(x0.val[0], x1.val[0]), x025);
+    vst2q_f32(sp - 1, x0);
+  }
+
+  // Step 2: HP[k] += 0.5*(LP_mod[k]+LP_mod[k+1])
+  simdlen = stop - start;
+  const auto x05 = vdupq_n_f32(0.5f);
+  sp = X + offset;
+  k  = 0;
+  if (k + 4 < simdlen) {
+    auto x0a = vld2q_f32(sp);
+    for (; k + 4 < simdlen; k += 8, sp += 16) {
+      auto x0b         = vld2q_f32(sp + 8);
+      auto x0c         = vld2q_f32(sp + 16);
+      float32x4_t x1a0 = vextq_f32(x0a.val[0], x0b.val[0], 1);
+      float32x4_t x1b0 = vextq_f32(x0b.val[0], x0c.val[0], 1);
+      x0a.val[1]        = vfmaq_f32(x0a.val[1], vaddq_f32(x0a.val[0], x1a0), x05);
+      x0b.val[1]        = vfmaq_f32(x0b.val[1], vaddq_f32(x0b.val[0], x1b0), x05);
+      vst2q_f32(sp, x0a);
+      vst2q_f32(sp + 8, x0b);
+      x0a = x0c;
+    }
+  }
+  for (; k < simdlen; k += 4, sp += 8) {
+    auto x0   = vld2q_f32(sp);
+    auto x1   = vld2q_f32(sp + 2);
+    x0.val[1] = vfmaq_f32(x0.val[1], vaddq_f32(x0.val[0], x1.val[0]), x05);
+    vst2q_f32(sp, x0);
+  }
+}
+
 /********************************************************************************
  * vertical transform
  *******************************************************************************/
@@ -430,6 +491,94 @@ void idwt_rev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1,
     // for (int32_t i = 1; i <= bottom; i++) {
     //   aligned_mem_free(buf[top + (v1 - v0) + i - 1]);
     // }
+  }
+}
+
+// ATK irreversible 5/3 IDWT (vertical)
+void idwt_irrev53_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
+                                    const int32_t v1, const int32_t stride, sprec_t *pse_scratch,
+                                    sprec_t **buf_scratch) {
+  constexpr int32_t num_pse_i0[2] = {1, 2};
+  constexpr int32_t num_pse_i1[2] = {2, 1};
+  const int32_t top    = num_pse_i0[v0 % 2];
+  const int32_t bottom = num_pse_i1[v1 % 2];
+  if (v0 == v1 - 1) {
+    // single row: nothing to do
+  } else {
+    const int32_t len = round_up(stride, SIMD_PADDING);
+    sprec_t **buf     = buf_scratch;
+    for (int32_t i = 1; i <= top; ++i) {
+      buf[top - i] = pse_scratch + (i - 1) * len;
+      memcpy(buf[top - i], &in[PSEo(v0 - i, v0, v1) * stride],
+             sizeof(sprec_t) * static_cast<size_t>(stride));
+    }
+    for (int32_t row = 0; row < v1 - v0; ++row) buf[top + row] = &in[row * stride];
+    for (int32_t i = 1; i <= bottom; i++) {
+      buf[top + (v1 - v0) + i - 1] = pse_scratch + (top + i - 1) * len;
+      memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
+             sizeof(sprec_t) * static_cast<size_t>(stride));
+    }
+    const int32_t lp_count = ceil_int(v1, 2) - ceil_int(v0, 2);
+    const int32_t hp_count = v1 / 2 - v0 / 2;
+    const int32_t offset   = top - v0 % 2;
+    const int32_t lp_n0    = top + v0 % 2;
+    const int32_t width    = u1 - u0;
+    for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
+      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
+      // Step 1: LP[k] -= 0.25*(HP[k-1]+HP[k])
+      const auto x025 = vdupq_n_f32(0.25f);
+      for (int32_t k = 0, n = lp_n0; k < lp_count; ++k, n += 2) {
+        int32_t col = 0;
+        for (; col + 4 < simdlen_s; col += 8) {
+          auto x0a = vld1q_f32(buf[n - 1] + cs + col);
+          auto x2a = vld1q_f32(buf[n + 1] + cs + col);
+          auto x1a = vld1q_f32(buf[n] + cs + col);
+          auto x0b = vld1q_f32(buf[n - 1] + cs + col + 4);
+          auto x2b = vld1q_f32(buf[n + 1] + cs + col + 4);
+          auto x1b = vld1q_f32(buf[n] + cs + col + 4);
+          x1a = vfmsq_f32(x1a, vaddq_f32(x0a, x2a), x025);
+          x1b = vfmsq_f32(x1b, vaddq_f32(x0b, x2b), x025);
+          vst1q_f32(buf[n] + cs + col, x1a);
+          vst1q_f32(buf[n] + cs + col + 4, x1b);
+        }
+        for (; col < simdlen_s; col += 4) {
+          auto x0 = vld1q_f32(buf[n - 1] + cs + col);
+          auto x2 = vld1q_f32(buf[n + 1] + cs + col);
+          auto x1 = vld1q_f32(buf[n] + cs + col);
+          x1 = vfmsq_f32(x1, vaddq_f32(x0, x2), x025);
+          vst1q_f32(buf[n] + cs + col, x1);
+        }
+        for (int32_t c = cs + simdlen_s; c < ce; ++c)
+          buf[n][c] -= 0.25f * (buf[n - 1][c] + buf[n + 1][c]);
+      }
+      // Step 2: HP[k] += 0.5*(LP_mod[k]+LP_mod[k+1])
+      const auto x05 = vdupq_n_f32(0.5f);
+      for (int32_t k = 0, n = offset; k < hp_count; ++k, n += 2) {
+        int32_t col = 0;
+        for (; col + 4 < simdlen_s; col += 8) {
+          auto x0a = vld1q_f32(buf[n] + cs + col);
+          auto x2a = vld1q_f32(buf[n + 2] + cs + col);
+          auto x1a = vld1q_f32(buf[n + 1] + cs + col);
+          auto x0b = vld1q_f32(buf[n] + cs + col + 4);
+          auto x2b = vld1q_f32(buf[n + 2] + cs + col + 4);
+          auto x1b = vld1q_f32(buf[n + 1] + cs + col + 4);
+          x1a = vfmaq_f32(x1a, vaddq_f32(x0a, x2a), x05);
+          x1b = vfmaq_f32(x1b, vaddq_f32(x0b, x2b), x05);
+          vst1q_f32(buf[n + 1] + cs + col, x1a);
+          vst1q_f32(buf[n + 1] + cs + col + 4, x1b);
+        }
+        for (; col < simdlen_s; col += 4) {
+          auto x0 = vld1q_f32(buf[n] + cs + col);
+          auto x2 = vld1q_f32(buf[n + 2] + cs + col);
+          auto x1 = vld1q_f32(buf[n + 1] + cs + col);
+          x1 = vfmaq_f32(x1, vaddq_f32(x0, x2), x05);
+          vst1q_f32(buf[n + 1] + cs + col, x1);
+        }
+        for (int32_t c = cs + simdlen_s; c < ce; ++c)
+          buf[n + 1][c] += 0.5f * (buf[n][c] + buf[n + 2][c]);
+      }
+    }
   }
 }
 
