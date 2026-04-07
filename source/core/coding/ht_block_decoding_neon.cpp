@@ -228,62 +228,71 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    // NEON section
-    int32x4_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
+    if (pLSB > 16) {
+      // 16-bit fast path: batch bit extraction via vqtbl1q_u8
+      const uint8_t pLSB_adj = pLSB - 16;
+      int16x4_t vn_16        = vdup_n_s16(0);
+      int16x8_t row16 =
+          MagSgn.decode_two_quads_16bit(tv0, tv1, static_cast<uint16_t>(U0),
+                                        static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+      // Deinterleave row0/row1 and expand int16 -> int32 (sign bit 15 -> bit 31).
+      int16x4_t lo      = vget_low_s16(row16);
+      int16x4_t hi      = vget_high_s16(row16);
+      int16x4_t row0_16 = vuzp1_s16(lo, hi);
+      int16x4_t row1_16 = vuzp2_s16(lo, hi);
+      vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
+      vst1q_s32(mp1, vshll_n_s16(row1_16, 16));
+      mp0 += 4;
+      mp1 += 4;
+      // Expand v_n to int32 and compute E_p.
+      int32x4_t vn32 = vreinterpretq_s32_u32(vmovl_u16(vreinterpret_u16_s16(vn_16)));
+      vExp           = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vn32));
+      vst1q_s32(E_p, vExp);
+      E_p += 4;
+    } else {
+      // Existing 32-bit path
+      int32x4_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
 
-    sig0 = vdupq_n_u32(rho0);
-    sig0 = vtstq_s32(sig0, vm);
-    // k_n in the spec can be derived from emb_k
-    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
-    m_n_0 = vsubq_s32(vandq_s32(sig0, vdupq_n_u32(U0)), vtmp);
-    sig1  = vdupq_n_u32(rho1);
-    sig1  = vtstq_s32(sig1, vm);
-    // k_n in the spec can be derived from emb_k
-    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
-    m_n_1 = vsubq_s32(vandq_s32(sig1, vdupq_n_u32(U1)), vtmp);
+      sig0 = vdupq_n_u32(rho0);
+      sig0 = vtstq_s32(sig0, vm);
+      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
+      m_n_0 = vsubq_s32(vandq_s32(sig0, vdupq_n_u32(U0)), vtmp);
+      sig1  = vdupq_n_u32(rho1);
+      sig1  = vtstq_s32(sig1, vm);
+      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
+      m_n_1 = vsubq_s32(vandq_s32(sig1, vdupq_n_u32(U1)), vtmp);
 
-    /******************************** RecoverMagSgnValue step ****************************************/
+      vmask1 = vsubq_u32(vshlq_u32(vone, m_n_0), vone);
+      msvec  = MagSgn.fetch(m_n_0);
+      v_n_0  = vandq_u32(msvec, vmask1);
+      vtmp   = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
+      v_n_0  = vorrq_u32(v_n_0, vshlq_u32(vtmp, m_n_0));
+      mu0    = vaddq_u32(v_n_0, vtwo);
+      mu0    = vorrq_s32(mu0, vone);
+      mu0    = vshlq_u32(mu0, vshift);
+      mu0    = vorrq_u32(mu0, vshlq_n_u32(v_n_0, 31));
+      mu0    = vandq_u32(mu0, sig0);
 
-    vmask1 = vsubq_u32(vshlq_u32(vone, m_n_0), vone);
-    // retrieve MagSgn codewords
-    msvec = MagSgn.fetch(m_n_0);
-    //      MagSgn.advance(vaddvq_u32(m_n_0));
-    v_n_0 = vandq_u32(msvec, vmask1);
-    // i_n in the spec can be derived from emb_^{-1}
-    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
-    v_n_0 = vorrq_u32(v_n_0, vshlq_u32(vtmp, m_n_0));  // v = 2(mu-1) + sign (0 or 1)
-    mu0   = vaddq_u32(v_n_0, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
-    // Add center bin (would be used for lossy and truncated lossless codestreams)
-    mu0 = vorrq_s32(mu0, vone);  // This cancels the effect of a sign bit in LSB
-    mu0 = vshlq_u32(mu0, vshift);
-    mu0 = vorrq_u32(mu0, vshlq_n_u32(v_n_0, 31));
-    mu0 = vandq_u32(mu0, sig0);
+      vmask1 = vsubq_u32(vshlq_u32(vone, m_n_1), vone);
+      msvec  = MagSgn.fetch(m_n_1);
+      v_n_1  = vandq_u32(msvec, vmask1);
+      vtmp   = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
+      v_n_1  = vorrq_u32(v_n_1, vshlq_u32(vtmp, m_n_1));
+      mu1    = vaddq_u32(v_n_1, vtwo);
+      mu1    = vorrq_s32(mu1, vone);
+      mu1    = vshlq_u32(mu1, vshift);
+      mu1    = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
+      mu1    = vandq_u32(mu1, sig1);
 
-    vmask1 = vsubq_u32(vshlq_u32(vone, m_n_1), vone);
-    // retrieve MagSgn codewords
-    msvec = MagSgn.fetch(m_n_1);
-    //      MagSgn.advance(vaddvq_u32(m_n_1));
-    v_n_1 = vandq_u32(msvec, vmask1);
-    // i_n in the spec can be derived from emb_^{-1}
-    vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
-    v_n_1 = vorrq_u32(v_n_1, vshlq_u32(vtmp, m_n_1));  // v = 2(mu-1) + sign (0 or 1)
-    mu1   = vaddq_u32(v_n_1, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
-    // Add center bin (would be used for lossy and truncated lossless codestreams)
-    mu1 = vorrq_s32(mu1, vone);  // This cancels the effect of a sign bit in LSB
-    mu1 = vshlq_u32(mu1, vshift);
-    mu1 = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
-    mu1 = vandq_u32(mu1, sig1);
+      vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
+      vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
+      mp0 += 4;
+      mp1 += 4;
 
-    // store mu
-    vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
-    vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
-    mp0 += 4;
-    mp1 += 4;
-
-    // update Exponent
-    vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
-    vst1q_s32(E_p, vExp);
-    E_p += 4;
+      vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
+      vst1q_s32(E_p, vExp);
+      E_p += 4;
+    }
   }
 
   // Initial line-pair end
@@ -397,66 +406,76 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
-      // NEON section
-      int32x4_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
+      if (pLSB > 16) {
+        // 16-bit fast path: batch bit extraction via vqtbl1q_u8
+        const uint8_t pLSB_adj = pLSB - 16;
+        int16x4_t vn_16        = vdup_n_s16(0);
+        int16x8_t row16 =
+            MagSgn.decode_two_quads_16bit(tv0, tv1, static_cast<uint16_t>(U0),
+                                          static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+        int16x4_t lo      = vget_low_s16(row16);
+        int16x4_t hi      = vget_high_s16(row16);
+        int16x4_t row0_16 = vuzp1_s16(lo, hi);
+        int16x4_t row1_16 = vuzp2_s16(lo, hi);
+        vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
+        vst1q_s32(mp1, vshll_n_s16(row1_16, 16));
+        mp0 += 4;
+        mp1 += 4;
 
-      sig0 = vdupq_n_u32(rho0);
-      sig0 = vtstq_s32(sig0, vm);
-      // k_n in the spec can be derived from emb_k
-      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
-      m_n_0 = vsubq_s32(vandq_s32(sig0, vdupq_n_u32(U0)), vtmp);
-      sig1  = vdupq_n_u32(rho1);
-      sig1  = vtstq_s32(sig1, vm);
-      // k_n in the spec can be derived from emb_k
-      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
-      m_n_1 = vsubq_s32(vandq_s32(sig1, vdupq_n_u32(U1)), vtmp);
+        Emax0 = vmaxvq_s32(vld1q_s32(E_p + 3));
+        Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
 
-      /******************************** RecoverMagSgnValue step ****************************************/
+        int32x4_t vn32 = vreinterpretq_s32_u32(vmovl_u16(vreinterpret_u16_s16(vn_16)));
+        vExp           = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vn32));
+        vst1q_s32(E_p, vExp);
+        E_p += 4;
+      } else {
+        // Existing 32-bit path
+        int32x4_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
 
-      vmask1 = vsubq_u32(vshlq_u32(vone, m_n_0), vone);
-      // retrieve MagSgn codewords
-      msvec = MagSgn.fetch(m_n_0);
-      //      MagSgn.advance(vaddvq_u32(m_n_0));
-      v_n_0 = vandq_u32(msvec, vmask1);
-      // i_n in the spec can be derived from emb_^{-1}
-      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
-      v_n_0 = vorrq_u32(v_n_0, vshlq_u32(vtmp, m_n_0));  // v = 2(mu-1) + sign (0 or 1)
-      mu0   = vaddq_u32(v_n_0, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
-      // Add center bin (would be used for lossy and truncated lossless codestreams)
-      mu0 = vorrq_s32(mu0, vone);  // This cancels the effect of a sign bit in LSB
-      mu0 = vshlq_u32(mu0, vshift);
-      mu0 = vorrq_u32(mu0, vshlq_n_u32(v_n_0, 31));
-      mu0 = vandq_u32(mu0, sig0);
+        sig0 = vdupq_n_u32(rho0);
+        sig0 = vtstq_s32(sig0, vm);
+        vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_0), vm), vone);
+        m_n_0 = vsubq_s32(vandq_s32(sig0, vdupq_n_u32(U0)), vtmp);
+        sig1  = vdupq_n_u32(rho1);
+        sig1  = vtstq_s32(sig1, vm);
+        vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_k_1), vm), vone);
+        m_n_1 = vsubq_s32(vandq_s32(sig1, vdupq_n_u32(U1)), vtmp);
 
-      vmask1 = vsubq_u32(vshlq_u32(vone, m_n_1), vone);
-      // retrieve MagSgn codewords
-      msvec = MagSgn.fetch(m_n_1);
-      //      MagSgn.advance(vaddvq_u32(m_n_1));
-      v_n_1 = vandq_u32(msvec, vmask1);
-      // i_n in the spec can be derived from emb_^{-1}
-      vtmp  = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
-      v_n_1 = vorrq_u32(v_n_1, vshlq_u32(vtmp, m_n_1));  // v = 2(mu-1) + sign (0 or 1)
-      mu1   = vaddq_u32(v_n_1, vtwo);                    // 2(mu-1) + sign + 2 = 2mu + sign
-      // Add center bin (would be used for lossy and truncated lossless codestreams)
-      mu1 = vorrq_s32(mu1, vone);  // This cancels the effect of a sign bit in LSB
-      mu1 = vshlq_u32(mu1, vshift);
-      mu1 = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
-      mu1 = vandq_u32(mu1, sig1);
+        vmask1 = vsubq_u32(vshlq_u32(vone, m_n_0), vone);
+        msvec  = MagSgn.fetch(m_n_0);
+        v_n_0  = vandq_u32(msvec, vmask1);
+        vtmp   = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_0), vm), vone);
+        v_n_0  = vorrq_u32(v_n_0, vshlq_u32(vtmp, m_n_0));
+        mu0    = vaddq_u32(v_n_0, vtwo);
+        mu0    = vorrq_s32(mu0, vone);
+        mu0    = vshlq_u32(mu0, vshift);
+        mu0    = vorrq_u32(mu0, vshlq_n_u32(v_n_0, 31));
+        mu0    = vandq_u32(mu0, sig0);
 
-      // store mu
-      vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
-      vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
-      mp0 += 4;
-      mp1 += 4;
+        vmask1 = vsubq_u32(vshlq_u32(vone, m_n_1), vone);
+        msvec  = MagSgn.fetch(m_n_1);
+        v_n_1  = vandq_u32(msvec, vmask1);
+        vtmp   = vandq_s32(vtstq_s32(vdupq_n_u32(emb_1_1), vm), vone);
+        v_n_1  = vorrq_u32(v_n_1, vshlq_u32(vtmp, m_n_1));
+        mu1    = vaddq_u32(v_n_1, vtwo);
+        mu1    = vorrq_s32(mu1, vone);
+        mu1    = vshlq_u32(mu1, vshift);
+        mu1    = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
+        mu1    = vandq_u32(mu1, sig1);
 
-      // calculate Emax for the next two quads
-      Emax0 = vmaxvq_s32(vld1q_s32(E_p + 3));
-      Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
+        vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
+        vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
+        mp0 += 4;
+        mp1 += 4;
 
-      // Update Exponent
-      vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
-      vst1q_s32(E_p, vExp);
-      E_p += 4;
+        Emax0 = vmaxvq_s32(vld1q_s32(E_p + 3));
+        Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
+
+        vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
+        vst1q_s32(E_p, vExp);
+        E_p += 4;
+      }
     }
   }  // Non-Initial line-pair end
 }  // Cleanup decoding end

@@ -713,6 +713,152 @@ class fwd_buf {
     return vtmp;
   #endif
   }
+
+  //************************************************************************/
+  /** @brief Fetches raw 128 bits from the fwd_buf bitstream without
+   *         per-lane extraction.  Caller handles bit-level extraction
+   *         (e.g. via vqtbl1q_u8).
+   */
+  FORCE_INLINE uint8x16_t fetch_raw() {
+    if (this->bits <= 128) {
+      read();
+      if (this->bits <= 128)
+        read();
+    }
+    return vld1q_u8(this->tmp);
+  }
+
+  //************************************************************************/
+  /** @brief Decode 2 quads (8 samples) using 16-bit arithmetic.
+   *
+   *  Active when pLSB > 16 (mmsbp2 < 16, output fits in int16_t).
+   *  Uses vqtbl1q_u8 for batch bit extraction instead of sequential
+   *  __uint128_t shifts, providing better ILP on AArch64.
+   *
+   *  @param [in]     tv0       raw VLC table entry for quad 0
+   *  @param [in]     tv1       raw VLC table entry for quad 1
+   *  @param [in]     U0        kappa-adjusted U value for quad 0
+   *  @param [in]     U1        kappa-adjusted U value for quad 1
+   *  @param [in]     pLSB_adj  pLSB - 16
+   *  @param [in,out] v_n       4 x int16_t per-column row-1 magnitudes (ORed in)
+   *  @return int16x8_t [r0c0,r1c0,r0c1,r1c1,r0c2,r1c2,r0c3,r1c3]
+   *          sign at bit 15; expand to int32 via vshll_n_s16(x, 16).
+   */
+  FORCE_INLINE int16x8_t decode_two_quads_16bit(uint16_t tv0, uint16_t tv1,
+                                                  uint16_t U0, uint16_t U1,
+                                                  uint8_t pLSB_adj, int16x4_t &v_n) {
+    const int16x8_t vone16  = vdupq_n_s16(1);
+    const int16x8_t vtwo16  = vdupq_n_s16(2);
+    const int16x8_t vzero16 = vdupq_n_s16(0);
+    int16x8_t row           = vzero16;
+
+    // Broadcast inf words: tv0 to lanes 0-3, tv1 to lanes 4-7.
+    int16x8_t w0 = vcombine_s16(vdup_n_s16(static_cast<int16_t>(tv0)),
+                                 vdup_n_s16(static_cast<int16_t>(tv1)));
+
+    // Extract per-sample significance/EMB flags.
+    // flag_mask[i] tests bit i of rho (bit 4+i), emb_1 (bit 8+i), emb_k (bit 12+i).
+    alignas(16) static const int16_t flag_mask_arr[8] = {
+        (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880,
+        (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880};
+    int16x8_t flags    = vandq_s16(w0, vld1q_s16(flag_mask_arr));
+    uint16x8_t insig   = vceqq_s16(flags, vzero16);
+
+    // Early exit if all 8 samples are insignificant.
+    if (vmaxvq_u16(vreinterpretq_u16_s16(flags)) == 0) {
+      return row;
+    }
+
+    // Broadcast U values: U0 to lanes 0-3, U1 to lanes 4-7.
+    int16x8_t U_vec = vcombine_s16(vdup_n_s16(static_cast<int16_t>(U0)),
+                                    vdup_n_s16(static_cast<int16_t>(U1)));
+
+    // Normalize flags: multiply by {8,4,2,1} to align all samples to
+    // e_k @ bit 15, e_1 @ bit 11, rho @ bit 7.
+    alignas(16) static const int16_t mul_arr[8] = {8, 4, 2, 1, 8, 4, 2, 1};
+    flags = vmulq_s16(flags, vld1q_s16(mul_arr));
+
+    // Compute m_n = U - e_k.  Zero inactive lanes before prefix sum.
+    uint16x8_t emb_k = vshrq_n_u16(vreinterpretq_u16_s16(flags), 15);
+    int16x8_t m_n    = vsubq_s16(U_vec, vreinterpretq_s16_u16(emb_k));
+    m_n              = vbicq_s16(m_n, vreinterpretq_s16_u16(insig));
+
+    // Inclusive prefix sum of m_n (8 x 16-bit).
+    int16x8_t inc_sum = m_n;
+    inc_sum = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 7));
+    inc_sum = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 6));
+    inc_sum = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 4));
+    int total_mn = vgetq_lane_s16(inc_sum, 7);
+
+    // Fetch raw MagSgn bits (gated on total_mn > 0).
+    uint8x16_t ms_raw = vdupq_n_u8(0);
+    if (total_mn > 0) {
+      ms_raw = this->fetch_raw();
+      this->advance(static_cast<uint32_t>(total_mn));
+    }
+
+    // Exclusive prefix sum = inclusive shifted right by 1 element.
+    int16x8_t ex_sum = vextq_s16(vzero16, inc_sum, 7);
+
+    // Byte-level extraction via vqtbl1q_u8 (NEON equivalent of vpshufb).
+    uint16x8_t byte_idx = vshrq_n_u16(vreinterpretq_u16_s16(ex_sum), 3);
+    uint16x8_t bit_idx  = vandq_u16(vreinterpretq_u16_s16(ex_sum), vdupq_n_u16(7));
+
+    // Duplicate low byte of each 16-bit byte_idx to both bytes.
+    alignas(16) static const uint8_t dup_lo[16] = {
+        0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14};
+    uint8x16_t bidx = vqtbl1q_u8(vreinterpretq_u8_u16(byte_idx), vld1q_u8(dup_lo));
+    // Add [0,1] per 16-bit element to fetch consecutive byte pairs [n, n+1].
+    alignas(16) static const uint8_t add_01[16] = {
+        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    bidx          = vaddq_u8(bidx, vld1q_u8(add_01));
+    uint8x16_t d0 = vqtbl1q_u8(ms_raw, bidx);
+    bidx          = vaddq_u8(bidx, vdupq_n_u8(1));
+    uint8x16_t d1 = vqtbl1q_u8(ms_raw, bidx);
+
+    // Bit-level alignment: multiply-shift to extract bits within each byte pair.
+    // For 16-bit elements, high byte of bit_idx is 0 so vqtbl1q reads table[0]=0xFF;
+    // after +0x0101 the high byte wraps to 0x00 giving the correct multiplier.
+    alignas(16) static const uint8_t bit_tab[16] = {
+        0xFF, 127, 63, 31, 15, 7, 3, 1, 0xFF, 127, 63, 31, 15, 7, 3, 1};
+    uint8x16_t bit_shift   = vqtbl1q_u8(vld1q_u8(bit_tab), vreinterpretq_u8_u16(bit_idx));
+    uint16x8_t bit_shift16 = vaddq_u16(vreinterpretq_u16_u8(bit_shift), vdupq_n_u16(0x0101));
+
+    uint16x8_t d0_16 = vmulq_u16(vreinterpretq_u16_u8(d0), bit_shift16);
+    d0_16            = vshrq_n_u16(d0_16, 8);
+    uint16x8_t d1_16 = vmulq_u16(vreinterpretq_u16_u8(d1), bit_shift16);
+    d1_16            = vandq_u16(d1_16, vdupq_n_u16(0xFF00));
+    uint16x8_t ms_vec = vorrq_u16(d0_16, d1_16);
+
+    // Compute 2^m_n = (2 - e_k) << (U_q - 1).  NEON per-lane variable shift.
+    int16x8_t w0_val  = vsubq_s16(vtwo16, vreinterpretq_s16_u16(emb_k));
+    int16x8_t Uq_m1   = vsubq_s16(U_vec, vone16);
+    uint16x8_t shift_v = vshlq_u16(vreinterpretq_u16_s16(w0_val), Uq_m1);
+
+    // Mask ms_vec to m_n magnitude bits.
+    ms_vec = vandq_u16(ms_vec, vsubq_u16(shift_v, vreinterpretq_u16_s16(vone16)));
+
+    // Place e_1 at bit position m_n: OR shift where e_1 flag is set.
+    uint16x8_t emb1_absent = vceqq_u16(
+        vandq_u16(vreinterpretq_u16_s16(flags), vdupq_n_u16(0x800)), vdupq_n_u16(0));
+    ms_vec = vorrq_u16(ms_vec, vbicq_u16(shift_v, emb1_absent));
+
+    // Build final sample: sign at bit 15, magnitude at pLSB_adj - 1.
+    uint16x8_t tvn    = vbicq_u16(ms_vec, insig);                         // save for v_n
+    uint16x8_t w_sign = vshlq_n_u16(ms_vec, 15);                          // sign bit -> bit 15
+    ms_vec            = vorrq_u16(ms_vec, vreinterpretq_u16_s16(vone16));  // bin center
+    ms_vec            = vaddq_u16(ms_vec, vreinterpretq_u16_s16(vtwo16));  // + 2
+    ms_vec = vshlq_u16(ms_vec, vdupq_n_s16(pLSB_adj - 1));               // runtime shift
+    ms_vec = vorrq_u16(ms_vec, w_sign);                                    // sign
+    row    = vreinterpretq_s16_u16(vbicq_u16(ms_vec, insig));
+
+    // Update v_n: extract row-1 magnitudes (odd elements) per column.
+    int16x4_t tvn_lo = vget_low_s16(vreinterpretq_s16_u16(tvn));
+    int16x4_t tvn_hi = vget_high_s16(vreinterpretq_s16_u16(tvn));
+    v_n              = vorr_s16(v_n, vuzp2_s16(tvn_lo, tvn_hi));
+
+    return row;
+  }
 };
 #elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
