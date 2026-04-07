@@ -154,10 +154,13 @@ void fdwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_1d_filtr_irrev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                                   int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 void idwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                                 int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void idwt_irrev53_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                    int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 // Single-row irreversible vertical lifting step: tgt[i] -= coeff*(prev[i]+next[i]) using FMA.
 // Uses SIMD for multiples of 4 elements, scalar for the tail.
 void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *tgt, float coeff);
