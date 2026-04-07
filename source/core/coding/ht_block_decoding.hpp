@@ -282,7 +282,7 @@ class rev_buf {
     for (auto i = 0; i < tnum; ++i) {
       uint64_t d64;
       d64             = *buf--;
-      uint32_t d_bits = 8 - ((unstuff && ((d64 & 0x7F) == 0x7F)) ? 1 : 0);
+      uint32_t d_bits = 8 - static_cast<uint32_t>(unstuff & ((d64 & 0x7F) == 0x7F));
       Creg |= d64 << bits;
       bits += d_bits;
       unstuff = d64 > 0x8F;
@@ -319,19 +319,20 @@ class rev_buf {
     uint32_t bits_local;
 
     // test unstuff (previous byte is >0x8F), and this byte is 0x7F
-    bits_local        = 8 - ((unstuff && (((val >> 24) & 0x7F) == 0x7F)) ? 1 : 0);
+    // Use bitwise & instead of && to avoid short-circuit branches.
+    bits_local        = 8 - static_cast<uint32_t>(unstuff & (((val >> 24) & 0x7F) == 0x7F));
     bool unstuff_flag = (val >> 24) > 0x8F;  // this is for the next byte
 
     tmp |= ((val >> 16) & 0xFF) << bits_local;  // process the next byte
-    bits_local += 8 - ((unstuff_flag && (((val >> 16) & 0x7F) == 0x7F)) ? 1 : 0);
+    bits_local += 8 - static_cast<uint32_t>(unstuff_flag & (((val >> 16) & 0x7F) == 0x7F));
     unstuff_flag = ((val >> 16) & 0xFF) > 0x8F;
 
     tmp |= ((val >> 8) & 0xFF) << bits_local;
-    bits_local += 8 - ((unstuff_flag && (((val >> 8) & 0x7F) == 0x7F)) ? 1 : 0);
+    bits_local += 8 - static_cast<uint32_t>(unstuff_flag & (((val >> 8) & 0x7F) == 0x7F));
     unstuff_flag = ((val >> 8) & 0xFF) > 0x8F;
 
     tmp |= (val & 0xFF) << bits_local;
-    bits_local += 8 - ((unstuff_flag && ((val & 0x7F) == 0x7F)) ? 1 : 0);
+    bits_local += 8 - static_cast<uint32_t>(unstuff_flag & ((val & 0x7F) == 0x7F));
     unstuff_flag = (val & 0xFF) > 0x8F;
 
     // now move the read and unstuffed bits into this->Creg
