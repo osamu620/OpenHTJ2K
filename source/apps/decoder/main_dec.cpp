@@ -145,17 +145,19 @@ inline void pack_i32_to_le16(const int32_t *src, uint8_t *dst, uint32_t width) {
 // bpp==1: int32 + offset → uint8
 inline void pack_i32_to_u8(const int32_t *src, uint8_t *dst, uint32_t width, int32_t offset) {
 #if defined(__AVX2__)
-  const __m256i voff = _mm256_set1_epi32(offset);
+  const __m256i voff  = _mm256_set1_epi32(offset);
+  const __m256i vmask = _mm256_set1_epi32(0xFF);
   // Permutation to fix the lane-crossing interleave of successive packs
   const __m256i fix = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
   uint32_t n = 0;
   for (; n + 32 <= width; n += 32) {
-    __m256i v0 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n)), voff);
-    __m256i v1 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 8)), voff);
-    __m256i v2 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 16)), voff);
-    __m256i v3 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 24)), voff);
-    __m256i p01 = _mm256_packs_epi32(v0, v1);
-    __m256i p23 = _mm256_packs_epi32(v2, v3);
+    // Mask to low byte so packus works correctly for both signed and unsigned data
+    __m256i v0 = _mm256_and_si256(_mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n)), voff), vmask);
+    __m256i v1 = _mm256_and_si256(_mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 8)), voff), vmask);
+    __m256i v2 = _mm256_and_si256(_mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 16)), voff), vmask);
+    __m256i v3 = _mm256_and_si256(_mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 24)), voff), vmask);
+    __m256i p01 = _mm256_packus_epi32(v0, v1);
+    __m256i p23 = _mm256_packus_epi32(v2, v3);
     __m256i p8  = _mm256_packus_epi16(p01, p23);
     p8          = _mm256_permutevar8x32_epi32(p8, fix);
     _mm256_storeu_si256((__m256i *)(dst + n), p8);
