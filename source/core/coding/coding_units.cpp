@@ -1627,7 +1627,6 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
       normalizing_upshift(0),
       normalizing_downshift(0),
       i_samples(nullptr) {
-  const uint32_t num_samples = (pos1.x - pos0.x) * (pos1.y - pos0.y);
   // create buffer of LL band
   i_samples = nullptr;
   // In line-based decode mode (no_alloc=true), skip the large i_samples buffer.
@@ -1635,13 +1634,12 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
   // but on macOS free() does not return pages to the OS. Skipping the allocation
   // avoids the malloc+memset entirely, keeping these pages out of RSS.
   if (!is_empty && !no_alloc) {
+    const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y);
     if (index == 0) {
-      i_samples =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
-      memset(i_samples, 0, sizeof(sprec_t) * num_samples);
+      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
+      memset(i_samples, 0, alloc_samples);
     } else {
-      i_samples =
-          static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
+      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
     }
   }
 }
