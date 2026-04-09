@@ -110,7 +110,9 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
     const int32_t sb_w = static_cast<int32_t>(sb->get_pos1().x - sb->get_pos0().x);
     const int32_t sb_h = static_cast<int32_t>(sb->get_pos1().y - sb->get_pos0().y);
     if (sb_w > 0 && sb_h > 0) {
-      const size_t ring_rows  = static_cast<size_t>(codeblock_height);
+      // +1 padding row: the fused dequantize path writes mp1 (second row of a
+      // line-pair) one row past the codeblock height when the height is odd.
+      const size_t ring_rows  = static_cast<size_t>(codeblock_height) + 1;
       const size_t buf_floats = ring_rows * static_cast<size_t>(sb->stride);
       const size_t buf_bytes  = sizeof(sprec_t) * buf_floats;
 #ifdef OPENHTJ2K_THREAD

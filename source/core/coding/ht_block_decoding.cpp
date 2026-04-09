@@ -100,12 +100,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.fetch();
     uint16_t tv0 = dec_table[(vlcval & 0x7F) + context];
-    if (context == 0) {
-      mel_run -= 2;
-      tv0 = (mel_run == -1) ? tv0 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
+    {
+      // Branchless context-0 MEL handling: replace unpredictable branch with mask
+      int32_t cm = -static_cast<int32_t>(context == 0);
+      mel_run -= cm & 2;
+      tv0 &= static_cast<uint16_t>(-(mel_run == -1) | ~cm);
+      if (mel_run < 0) mel_run = MEL.get_run();
     }
     sp[0] = tv0;
 
@@ -115,12 +115,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // Decoding of significance and EMB patterns and unsigned residual offsets
     vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
     uint16_t tv1 = dec_table[(vlcval & 0x7F) + context];
-    if (context == 0 && qx > 1) {
-      mel_run -= 2;
-      tv1 = (mel_run == -1) ? tv1 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
+    {
+      int32_t cm = -static_cast<int32_t>((context == 0) & (qx > 1));
+      mel_run -= cm & 2;
+      tv1 &= static_cast<uint16_t>(-(mel_run == -1) | ~cm);
+      if (mel_run < 0) mel_run = MEL.get_run();
     }
     tv1   = (qx > 1) ? tv1 : 0;
     sp[2] = tv1;
@@ -144,14 +143,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     u_off0 = tv0 & 1;
     u_off1 = tv1 & 1;
 
-    uint32_t mel_offset = 0;
-    if (u_off0 == 1 && u_off1 == 1) {
-      mel_run -= 2;
-      mel_offset = (mel_run == -1) ? 0x40 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
-    }
+    // Branchless MEL offset: replace compound branch with mask
+    uint32_t both_off = u_off0 & u_off1;
+    int32_t om        = -static_cast<int32_t>(both_off);
+    mel_run -= om & 2;
+    uint32_t mel_offset = static_cast<uint32_t>(-(mel_run == -1) & om) & 0x40;
+    if (mel_run < 0) mel_run = MEL.get_run();
 
     // UVLC decoding
     uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
@@ -617,14 +614,12 @@ void ht_cleanup_decode2(j2k_codeblock *block, const uint8_t &pLSB, const int32_t
     u_off0 = tv0 & 1;
     u_off1 = tv1 & 1;
 
-    uint32_t mel_offset = 0;
-    if (u_off0 == 1 && u_off1 == 1) {
-      mel_run -= 2;
-      mel_offset = (mel_run == -1) ? 0x40 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
-    }
+    // Branchless MEL offset: replace compound branch with mask
+    uint32_t both_off = u_off0 & u_off1;
+    int32_t om        = -static_cast<int32_t>(both_off);
+    mel_run -= om & 2;
+    uint32_t mel_offset = static_cast<uint32_t>(-(mel_run == -1) & om) & 0x40;
+    if (mel_run < 0) mel_run = MEL.get_run();
     uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
     uint32_t uvlc_result = uvlc_dec_0[idx];
     // remove total prefix length
