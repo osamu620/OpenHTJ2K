@@ -1115,8 +1115,8 @@ class fwd_buf {
 
     // shift_v = (2 - e_k) << (U - 1): U0 for lanes 0-3, U1 for lanes 4-7.
     v128_t w0_val   = wasm_i16x8_sub(vtwo16, emb_k);
-    v128_t shift_lo = wasm_u16x8_shl(w0_val, U0 - 1);
-    v128_t shift_hi = wasm_u16x8_shl(w0_val, U1 - 1);
+    v128_t shift_lo = wasm_i16x8_shl(w0_val, U0 - 1);
+    v128_t shift_hi = wasm_i16x8_shl(w0_val, U1 - 1);
     v128_t shift_v  = wasm_i16x8_shuffle(shift_lo, shift_hi, 0, 1, 2, 3, 8, 9, 10, 11);
 
     // Mask ms_vec to m_n magnitude bits.
@@ -1129,10 +1129,10 @@ class fwd_buf {
 
     // Build final sample: sign at bit 15, magnitude at pLSB_adj-1.
     v128_t tvn    = wasm_v128_andnot(ms_vec, insig);        // save pre-shift for v_n
-    v128_t w_sign = wasm_u16x8_shl(ms_vec, 15);             // sign bit → bit 15
+    v128_t w_sign = wasm_i16x8_shl(ms_vec, 15);             // sign bit → bit 15
     ms_vec        = wasm_v128_or(ms_vec, vone16);            // bin center
     ms_vec        = wasm_i16x8_add(ms_vec, vtwo16);          // +2
-    ms_vec        = wasm_u16x8_shl(ms_vec, pLSB_adj - 1);   // runtime shift
+    ms_vec        = wasm_i16x8_shl(ms_vec, pLSB_adj - 1);   // runtime shift
     ms_vec        = wasm_v128_or(ms_vec, w_sign);            // apply sign
     row           = wasm_v128_andnot(ms_vec, insig);         // zero inactive
 
