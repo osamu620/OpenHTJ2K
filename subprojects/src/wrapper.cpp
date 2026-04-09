@@ -86,6 +86,21 @@ void parse_j2c_data(open_htj2k::openhtj2k_decoder* dec) { cpp_parse_j2c_data(dec
 EMSCRIPTEN_KEEPALIVE
 void invoke_decoder(open_htj2k::openhtj2k_decoder* dec, int32_t* out) { cpp_invoke_decoder(dec, out); }
 
+// Decode and write per-component planar buffers at native resolution.
+// dst_ptrs[c] receives W[c] × H[c] int32 values for component c.
+// Handles different component sizes (subsampled images) correctly.
+EMSCRIPTEN_KEEPALIVE
+void invoke_decoder_planar(open_htj2k::openhtj2k_decoder* dec, int32_t** dst_ptrs) {
+  std::vector<int32_t*> buf;
+  std::vector<uint32_t> img_width, img_height;
+  std::vector<uint8_t> img_depth;
+  std::vector<bool> img_signed;
+  dec->invoke(buf, img_width, img_height, img_depth, img_signed);
+  for (uint16_t c = 0; c < buf.size(); ++c) {
+    std::memcpy(dst_ptrs[c], buf[c], (size_t)img_width[c] * img_height[c] * sizeof(int32_t));
+  }
+}
+
 EMSCRIPTEN_KEEPALIVE
 void release_j2c_data(open_htj2k::openhtj2k_decoder* dec) { cpp_release_j2c_data(dec); }
 
@@ -248,13 +263,29 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
 // Peak WASM heap is reduced by ~(W × H × nc × 4) bytes vs invoke_decoder().
 EMSCRIPTEN_KEEPALIVE
 void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
-                           int32_t maxval, int32_t bytes_per_sample) {
+                           int32_t maxval, int32_t bytes_per_sample,
+                           int32_t apply_dc_offset = 1) {
   std::vector<uint32_t> width, height;
   std::vector<uint8_t>  depth;
   std::vector<bool>     is_signed;
 
+  // Precompute per-component DC level shift offsets for signed components.
+  // JPEG 2000 stores signed data with a DC offset of 2^(depth-1); the inverse
+  // transform subtracts it, leaving negative values.  For PGM/PPM output we
+  // add it back so values fall in [0, maxval].  For PGX, skip (raw signed).
+  int32_t dc_offset[16] = {};
+  // defer filling until nc is known (inside the lambda on first call)
+  bool dc_offset_ready = false;
+
   dec->invoke_line_based_stream(
     [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+      if (!dc_offset_ready) {
+        if (apply_dc_offset) {
+          for (uint16_t c = 0; c < nc; ++c)
+            dc_offset[c] = is_signed[c] ? (1 << (depth[c] - 1)) : 0;
+        }
+        dc_offset_ready = true;
+      }
       const uint32_t W       = width[0];
       // Detect chroma subsampling (e.g. 4:2:2): chroma rows are narrower than luma.
       const uint32_t chromaW = (nc >= 2) ? width[1] : W;
@@ -262,49 +293,51 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
       uint8_t* row_dst = dst + (size_t)y * W * nc * bytes_per_sample;
       if (nc == 1) {
         // Grayscale — single component, already "interleaved"
+        const int32_t off0 = dc_offset[0];
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
         const v128_t vmx   = wasm_i32x4_splat(maxval);
         const v128_t vzero = wasm_i32x4_const_splat(0);
+        const v128_t voff  = wasm_i32x4_splat(off0);
         uint32_t x = 0;
         if (bytes_per_sample == 1) {
           for (; x + 16 <= W; x += 16) {
-            v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x),      vzero), vmx);
-            v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x +  4), vzero), vmx);
-            v128_t c = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x +  8), vzero), vmx);
-            v128_t d = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x + 12), vzero), vmx);
+            v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(rows[0] + x),      voff), vzero), vmx);
+            v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(rows[0] + x +  4), voff), vzero), vmx);
+            v128_t c = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(rows[0] + x +  8), voff), vzero), vmx);
+            v128_t d = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(rows[0] + x + 12), voff), vzero), vmx);
             wasm_v128_store(row_dst + x,
                             wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(a, b),
                                                     wasm_i16x8_narrow_i32x4(c, d)));
           }
           for (; x < W; ++x) {
-            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            int32_t v = rows[0][x] + off0; if (v < 0) v = 0; else if (v > maxval) v = maxval;
             row_dst[x] = static_cast<uint8_t>(v);
           }
         } else {
           uint8_t* d = row_dst;
           for (; x + 8 <= W; x += 8) {
-            v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x),     vzero), vmx);
-            v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(rows[0] + x + 4), vzero), vmx);
+            v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(rows[0] + x),     voff), vzero), vmx);
+            v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(rows[0] + x + 4), voff), vzero), vmx);
             v128_t u16le = wasm_u16x8_narrow_i32x4(a, b);
             v128_t u16be = wasm_i8x16_shuffle(u16le, u16le,
                                               1,0, 3,2, 5,4, 7,6, 9,8, 11,10, 13,12, 15,14);
             wasm_v128_store(d, u16be); d += 16;
           }
           for (; x < W; ++x) {
-            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            int32_t v = rows[0][x] + off0; if (v < 0) v = 0; else if (v > maxval) v = maxval;
             *d++ = static_cast<uint8_t>(v >> 8); *d++ = static_cast<uint8_t>(v & 0xff);
           }
         }
 #else
         if (bytes_per_sample == 1) {
           for (uint32_t x = 0; x < W; ++x) {
-            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            int32_t v = rows[0][x] + off0; if (v < 0) v = 0; else if (v > maxval) v = maxval;
             row_dst[x] = static_cast<uint8_t>(v);
           }
         } else {
           uint8_t* d = row_dst;
           for (uint32_t x = 0; x < W; ++x) {
-            int32_t v = rows[0][x]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+            int32_t v = rows[0][x] + off0; if (v < 0) v = 0; else if (v > maxval) v = maxval;
             *d++ = static_cast<uint8_t>(v >> 8); *d++ = static_cast<uint8_t>(v & 0xff);
           }
         }
@@ -320,20 +353,23 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
           if (nc == 3 && !subsamp) {
             const v128_t vmx   = wasm_i32x4_splat(maxval);
             const v128_t vzero = wasm_i32x4_const_splat(0);
+            const v128_t voff0 = wasm_i32x4_splat(dc_offset[0]);
+            const v128_t voff1 = wasm_i32x4_splat(dc_offset[1]);
+            const v128_t voff2 = wasm_i32x4_splat(dc_offset[2]);
             uint32_t x = 0;
             for (; x + 16 <= W; x += 16) {
               // Clamp 16 samples per channel and narrow to bytes.
-              auto clamp_narrow16 = [&](const int32_t* src) -> v128_t {
-                v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src),      vzero), vmx);
-                v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + 4),  vzero), vmx);
-                v128_t c = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + 8),  vzero), vmx);
-                v128_t d = wasm_i32x4_min(wasm_i32x4_max(wasm_v128_load(src + 12), vzero), vmx);
+              auto clamp_narrow16 = [&](const int32_t* src, v128_t voff) -> v128_t {
+                v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(src),      voff), vzero), vmx);
+                v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(src + 4),  voff), vzero), vmx);
+                v128_t c = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(src + 8),  voff), vzero), vmx);
+                v128_t d = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(src + 12), voff), vzero), vmx);
                 return wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(a, b),
                                                wasm_i16x8_narrow_i32x4(c, d));
               };
-              v128_t R = clamp_narrow16(rows[0] + x);
-              v128_t G = clamp_narrow16(rows[1] + x);
-              v128_t B = clamp_narrow16(rows[2] + x);
+              v128_t R = clamp_narrow16(rows[0] + x, voff0);
+              v128_t G = clamp_narrow16(rows[1] + x, voff1);
+              v128_t B = clamp_narrow16(rows[2] + x, voff2);
               // 3-channel byte interleave: R,G,B[0..15] → RGB[0..47] (3 stores).
               // Step 1: interleave R and G into pairs.
               v128_t rg0 = wasm_i8x16_shuffle(R, G, 0,16,1,17,2,18,3,19,4,20,5,21,6,22,7,23);
@@ -352,9 +388,9 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
               wasm_v128_store(row_dst,      out2); row_dst += 16;
             }
             for (; x < W; ++x) {
-              int32_t rv = rows[0][x]; if (rv < 0) rv = 0; else if (rv > maxval) rv = maxval;
-              int32_t gv = rows[1][x]; if (gv < 0) gv = 0; else if (gv > maxval) gv = maxval;
-              int32_t bv = rows[2][x]; if (bv < 0) bv = 0; else if (bv > maxval) bv = maxval;
+              int32_t rv = rows[0][x] + dc_offset[0]; if (rv < 0) rv = 0; else if (rv > maxval) rv = maxval;
+              int32_t gv = rows[1][x] + dc_offset[1]; if (gv < 0) gv = 0; else if (gv > maxval) gv = maxval;
+              int32_t bv = rows[2][x] + dc_offset[2]; if (bv < 0) bv = 0; else if (bv > maxval) bv = maxval;
               *row_dst++ = static_cast<uint8_t>(rv);
               *row_dst++ = static_cast<uint8_t>(gv);
               *row_dst++ = static_cast<uint8_t>(bv);
@@ -364,7 +400,7 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
           for (uint32_t x = 0; x < W; ++x) {
             for (uint16_t c = 0; c < nc; ++c) {
               uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);
-              int32_t v = rows[c][sx]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+              int32_t v = rows[c][sx] + dc_offset[c]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
               *row_dst++ = static_cast<uint8_t>(v);
             }
           }
@@ -375,7 +411,7 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
           for (uint32_t x = 0; x < W; ++x) {
             for (uint16_t c = 0; c < nc; ++c) {
               uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);
-              int32_t v = rows[c][sx]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
+              int32_t v = rows[c][sx] + dc_offset[c]; if (v < 0) v = 0; else if (v > maxval) v = maxval;
               *row_dst++ = static_cast<uint8_t>(v >> 8);
               *row_dst++ = static_cast<uint8_t>(v & 0xff);
             }

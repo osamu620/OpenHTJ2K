@@ -471,8 +471,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
-      if (pLSB > 16) {
+      if (pLSB > 16 && U0 + pLSB <= 30 && U1 + pLSB <= 30) {
         // 16-bit fast path: batch bit extraction via wasm_i8x16_swizzle
+        // Guard: U + pLSB <= 30 ensures magnitude fits in int16 and total_mn <= 128.
         const uint8_t pLSB_adj = static_cast<uint8_t>(pLSB - 16);
         const v128_t zero16    = wasm_i32x4_const_splat(0);
         v128_t vn_16           = zero16;
