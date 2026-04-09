@@ -1636,7 +1636,11 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
   // but on macOS free() does not return pages to the OS. Skipping the allocation
   // avoids the malloc+memset entirely, keeping these pages out of RSS.
   if (!is_empty && !no_alloc) {
-    const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y);
+    // For resolution 0 (LL band), add one extra stride row of padding so the
+    // fused dequantize path can safely write mp1 for the last line-pair of a
+    // codeblock with odd height (same padding that j2k_subband already adds).
+    const uint32_t pad  = (index == 0) ? 1U : 0U;
+    const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y + pad);
     if (index == 0) {
       i_samples = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
       memset(i_samples, 0, alloc_samples);

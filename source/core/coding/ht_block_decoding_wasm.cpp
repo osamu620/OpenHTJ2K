@@ -207,12 +207,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   for (qx = QW; qx > 0; qx -= 2) {
     vlcval       = VLC_dec.fetch();
     uint16_t tv0 = dec_table0[(vlcval & 0x7F) + context];
-    if (context == 0) {
-      mel_run -= 2;
-      tv0 = (mel_run == -1) ? tv0 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
+    {
+      // Branchless context-0 MEL handling: replace unpredictable branch with mask
+      int32_t cm = -static_cast<int32_t>(context == 0);
+      mel_run -= cm & 2;
+      tv0 &= static_cast<uint16_t>(-(mel_run == -1) | ~cm);
+      if (mel_run < 0) mel_run = MEL.get_run();
     }
 
     rho0    = (tv0 & 0x00F0) >> 4;
@@ -223,12 +223,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
     uint16_t tv1 = dec_table0[(vlcval & 0x7F) + context];
-    if (context == 0 && qx > 1) {
-      mel_run -= 2;
-      tv1 = (mel_run == -1) ? tv1 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
+    {
+      int32_t cm = -static_cast<int32_t>((context == 0) & (qx > 1));
+      mel_run -= cm & 2;
+      tv1 &= static_cast<uint16_t>(-(mel_run == -1) | ~cm);
+      if (mel_run < 0) mel_run = MEL.get_run();
     }
     tv1     = (qx > 1) ? tv1 : 0;
     rho1    = (tv1 & 0x00F0) >> 4;
@@ -254,14 +253,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     u_off0 = tv0 & 1;
     u_off1 = tv1 & 1;
 
-    uint32_t mel_offset = 0;
-    if (u_off0 == 1 && u_off1 == 1) {
-      mel_run -= 2;
-      mel_offset = (mel_run == -1) ? 0x40 : 0;
-      if (mel_run < 0) {
-        mel_run = MEL.get_run();
-      }
-    }
+    // Branchless MEL offset: replace compound branch with mask
+    uint32_t both_off = u_off0 & u_off1;
+    int32_t om        = -static_cast<int32_t>(both_off);
+    mel_run -= om & 2;
+    uint32_t mel_offset = static_cast<uint32_t>(-(mel_run == -1) & om) & 0x40;
+    if (mel_run < 0) mel_run = MEL.get_run();
     uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
     uint32_t uvlc_result = uvlc_dec_0[idx];
     vlcval               = VLC_dec.advance(uvlc_result & 0x7);
@@ -828,7 +825,9 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     }
 
     bool dequant_done = false;
-    if (num_ht_passes == 1 && ROIshift == 0) {
+    // Fused dequant gate: WASM SIMD stores write 4 elements (128-bit); when block width
+    // is not a multiple of 4, the overshoot corrupts adjacent blocks in parallel decode.
+    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0) {
       ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {
