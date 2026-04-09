@@ -243,6 +243,20 @@ auto idwt_irrev97_fixed_avx512_ver_step = [](const int32_t simdlen, float *const
   }
 };
 
+// Masked tail: handle remaining 1-15 columns with AVX-512 mask instead of scalar loop.
+// tgt[i] -= coeff * (prev[i] + next[i]) for i in [0, remain).
+auto irrev97_masked_tail = [](const int32_t remain, float *prev, float *next, float *tgt,
+                              const float coeff) {
+  if (remain <= 0) return;
+  const __mmask16 mask = static_cast<__mmask16>((1U << remain) - 1U);
+  auto vcoeff          = _mm512_set1_ps(coeff);
+  auto a               = _mm512_maskz_loadu_ps(mask, prev);
+  auto b               = _mm512_maskz_loadu_ps(mask, next);
+  auto t               = _mm512_maskz_loadu_ps(mask, tgt);
+  t                    = _mm512_fnmadd_ps(_mm512_add_ps(a, b), vcoeff, t);
+  _mm512_mask_storeu_ps(tgt, mask, t);
+};
+
 // Single-row irrev streaming vertical lifting: tgt[i] -= coeff*(prev[i]+next[i]).
 void idwt_irrev_ver_step_fixed_avx512(int32_t n, float *prev, float *next, float *tgt, float coeff) {
   const auto vcoeff = _mm512_set1_ps(coeff);
@@ -254,8 +268,14 @@ void idwt_irrev_ver_step_fixed_avx512(int32_t n, float *prev, float *next, float
     xout      = _mm512_fnmadd_ps(_mm512_add_ps(xin0, xin1), vcoeff, xout);
     _mm512_storeu_ps(tgt + i, xout);
   }
-  for (; i < n; ++i)
-    tgt[i] -= coeff * (prev[i] + next[i]);
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    auto xin0 = _mm512_maskz_loadu_ps(mask, prev + i);
+    auto xin1 = _mm512_maskz_loadu_ps(mask, next + i);
+    auto xout = _mm512_maskz_loadu_ps(mask, tgt + i);
+    xout      = _mm512_fnmadd_ps(_mm512_add_ps(xin0, xin1), vcoeff, xout);
+    _mm512_mask_storeu_ps(tgt + i, mask, xout);
+  }
 }
 
 // Single-row rev53 LP vertical lifting: tgt[i] -= floor((prev[i]+next[i]+2)*0.25).
@@ -270,8 +290,14 @@ void idwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next
     t = _mm512_sub_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(a, b), k2), k025)));
     _mm512_storeu_ps(tgt + i, t);
   }
-  for (; i < n; ++i)
-    tgt[i] -= floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    auto a = _mm512_maskz_loadu_ps(mask, prev + i);
+    auto b = _mm512_maskz_loadu_ps(mask, next + i);
+    auto t = _mm512_maskz_loadu_ps(mask, tgt + i);
+    t = _mm512_sub_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(a, b), k2), k025)));
+    _mm512_mask_storeu_ps(tgt + i, mask, t);
+  }
 }
 
 // Single-row rev53 HP vertical lifting: tgt[i] += floor((prev[i]+next[i])*0.5).
@@ -285,8 +311,14 @@ void idwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next
     t = _mm512_add_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(a, b), k05)));
     _mm512_storeu_ps(tgt + i, t);
   }
-  for (; i < n; ++i)
-    tgt[i] += floorf((prev[i] + next[i]) * 0.5f);
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    auto a = _mm512_maskz_loadu_ps(mask, prev + i);
+    auto b = _mm512_maskz_loadu_ps(mask, next + i);
+    auto t = _mm512_maskz_loadu_ps(mask, tgt + i);
+    t = _mm512_add_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(a, b), k05)));
+    _mm512_mask_storeu_ps(tgt + i, mask, t);
+  }
 }
 
 // Irreversible 9/7 vertical IDWT — AVX-512 variant.
@@ -323,29 +355,30 @@ void idwt_irrev_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32_t
     for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
       const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       const int32_t simdlen_s = (ce - cs) - (ce - cs) % 16;
+      const int32_t tail      = ce - cs - simdlen_s;
       for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
         idwt_irrev97_fixed_avx512_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs,
                                            fD);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n][col] -= fD * (buf[n - 1][col] + buf[n + 1][col]);
+        irrev97_masked_tail(tail, buf[n - 1] + cs + simdlen_s, buf[n + 1] + cs + simdlen_s,
+                            buf[n] + cs + simdlen_s, fD);
       }
       for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
         idwt_irrev97_fixed_avx512_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs,
                                            fC);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n + 1][col] -= fC * (buf[n][col] + buf[n + 2][col]);
+        irrev97_masked_tail(tail, buf[n] + cs + simdlen_s, buf[n + 2] + cs + simdlen_s,
+                            buf[n + 1] + cs + simdlen_s, fC);
       }
       for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
         idwt_irrev97_fixed_avx512_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs,
                                            fB);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n][col] -= fB * (buf[n - 1][col] + buf[n + 1][col]);
+        irrev97_masked_tail(tail, buf[n - 1] + cs + simdlen_s, buf[n + 1] + cs + simdlen_s,
+                            buf[n] + cs + simdlen_s, fB);
       }
       for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
         idwt_irrev97_fixed_avx512_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs,
                                            fA);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n + 1][col] -= fA * (buf[n][col] + buf[n + 2][col]);
+        irrev97_masked_tail(tail, buf[n] + cs + simdlen_s, buf[n + 2] + cs + simdlen_s,
+                            buf[n + 1] + cs + simdlen_s, fA);
       }
     }
   }
@@ -385,8 +418,10 @@ void idwt_rev_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32_t u
     for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
       const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       const int32_t simdlen_s = (ce - cs) - (ce - cs) % 16;
+      const int32_t tail      = ce - cs - simdlen_s;
       const __m512 xtwo = _mm512_set1_ps(2.0f);
       const __m512 x025 = _mm512_set1_ps(0.25f);
+      const __mmask16 tmask = tail > 0 ? static_cast<__mmask16>((1U << tail) - 1U) : 0;
       for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
         for (int32_t col = 0; col < simdlen_s; col += 16) {
           __m512 x0     = _mm512_loadu_ps(buf[n - 1] + cs + col);
@@ -396,8 +431,13 @@ void idwt_rev_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32_t u
           x1            = _mm512_sub_ps(x1, xfloor);
           _mm512_storeu_ps(buf[n] + cs + col, x1);
         }
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n][col] -= floorf((buf[n - 1][col] + buf[n + 1][col] + 2.0f) * 0.25f);
+        if (tail > 0) {
+          auto x0 = _mm512_maskz_loadu_ps(tmask, buf[n - 1] + cs + simdlen_s);
+          auto x2 = _mm512_maskz_loadu_ps(tmask, buf[n + 1] + cs + simdlen_s);
+          auto x1 = _mm512_maskz_loadu_ps(tmask, buf[n] + cs + simdlen_s);
+          x1      = _mm512_sub_ps(x1, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(x0, x2), xtwo), x025)));
+          _mm512_mask_storeu_ps(buf[n] + cs + simdlen_s, tmask, x1);
+        }
       }
       const __m512 x05 = _mm512_set1_ps(0.5f);
       for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
@@ -409,8 +449,13 @@ void idwt_rev_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32_t u
           x1          = _mm512_add_ps(x1, xfloor);
           _mm512_storeu_ps(buf[n + 1] + cs + col, x1);
         }
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n + 1][col] += floorf((buf[n][col] + buf[n + 2][col]) * 0.5f);
+        if (tail > 0) {
+          auto x0 = _mm512_maskz_loadu_ps(tmask, buf[n] + cs + simdlen_s);
+          auto x2 = _mm512_maskz_loadu_ps(tmask, buf[n + 2] + cs + simdlen_s);
+          auto x1 = _mm512_maskz_loadu_ps(tmask, buf[n + 1] + cs + simdlen_s);
+          x1      = _mm512_add_ps(x1, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(x0, x2), x05)));
+          _mm512_mask_storeu_ps(buf[n + 1] + cs + simdlen_s, tmask, x1);
+        }
       }
     }
   }
@@ -451,6 +496,7 @@ void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32
     for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
       const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       const int32_t simdlen_s = (ce - cs) - (ce - cs) % 16;
+      const int32_t tail      = ce - cs - simdlen_s;
       const __m512 x025       = _mm512_set1_ps(0.25f);
       for (int32_t k = 0, n = lp_n0; k < lp_count; ++k, n += 2) {
         for (int32_t col = 0; col < simdlen_s; col += 16) {
@@ -460,8 +506,8 @@ void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32
           x1        = _mm512_fnmadd_ps(_mm512_add_ps(x0, x2), x025, x1);
           _mm512_storeu_ps(buf[n] + cs + col, x1);
         }
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n][col] -= 0.25f * (buf[n - 1][col] + buf[n + 1][col]);
+        irrev97_masked_tail(tail, buf[n - 1] + cs + simdlen_s, buf[n + 1] + cs + simdlen_s,
+                            buf[n] + cs + simdlen_s, 0.25f);
       }
       const __m512 x05 = _mm512_set1_ps(0.5f);
       for (int32_t k = 0, n = offset; k < hp_count; ++k, n += 2) {
@@ -472,8 +518,8 @@ void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32
           x1        = _mm512_fmadd_ps(_mm512_add_ps(x0, x2), x05, x1);
           _mm512_storeu_ps(buf[n + 1] + cs + col, x1);
         }
-        for (int32_t col = cs + simdlen_s; col < ce; ++col)
-          buf[n + 1][col] += 0.5f * (buf[n][col] + buf[n + 2][col]);
+        irrev97_masked_tail(tail, buf[n] + cs + simdlen_s, buf[n + 2] + cs + simdlen_s,
+                            buf[n + 1] + cs + simdlen_s, -0.5f);
       }
     }
   }
@@ -490,8 +536,14 @@ void fdwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next
     t = _mm512_sub_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(a, b), k05)));
     _mm512_storeu_ps(tgt + i, t);
   }
-  for (; i < n; ++i)
-    tgt[i] -= floorf((prev[i] + next[i]) * 0.5f);
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    auto a = _mm512_maskz_loadu_ps(mask, prev + i);
+    auto b = _mm512_maskz_loadu_ps(mask, next + i);
+    auto t = _mm512_maskz_loadu_ps(mask, tgt + i);
+    t = _mm512_sub_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(a, b), k05)));
+    _mm512_mask_storeu_ps(tgt + i, mask, t);
+  }
 }
 
 // Single-row rev53 FDWT LP vertical lifting: tgt[i] += floor((prev[i]+next[i]+2)*0.25).
@@ -506,8 +558,14 @@ void fdwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next
     t = _mm512_add_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(a, b), k2), k025)));
     _mm512_storeu_ps(tgt + i, t);
   }
-  for (; i < n; ++i)
-    tgt[i] += floorf((prev[i] + next[i] + 2.0f) * 0.25f);
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    auto a = _mm512_maskz_loadu_ps(mask, prev + i);
+    auto b = _mm512_maskz_loadu_ps(mask, next + i);
+    auto t = _mm512_maskz_loadu_ps(mask, tgt + i);
+    t = _mm512_add_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(a, b), k2), k025)));
+    _mm512_mask_storeu_ps(tgt + i, mask, t);
+  }
 }
 
 #endif  // OPENHTJ2K_TRY_AVX2 && __AVX512F__
