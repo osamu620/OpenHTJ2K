@@ -30,7 +30,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 
 **Performance**
 - DWT internal precision is float32 throughout (FDWT and IDWT)
-- SIMD acceleration: AVX2 (x86-64), NEON (AArch64), and WASM SIMD 128-bit for Color Transform, DWT, and HT block coding
+- SIMD acceleration: AVX2 / AVX-512 (x86-64), NEON (AArch64), and WASM SIMD 128-bit for Color Transform, DWT, and HT block coding
 - Multi-threaded encode and decode via a built-in thread pool
 
 # Requirements
@@ -187,17 +187,17 @@ Both Part 1 and Part 15 compliant decoding are supported.
     to override.
 
 ## Supported file formats
-### Encoder input / Decoder output
-| Format | Encoder input | Decoder output | Notes |
+
+### Library (codestream / file format)
+| Extension | Encode | Decode | Description |
+|-----------|:---:|:---:|-------------|
+| `.jhc`, `.j2c`, `.j2k` | ✓ | ✓ | HTJ2K / JPEG 2000 Part 1 codestream |
+| `.jph` | ✓ | ✓ | HTJ2K file format (JPH); `.jph` triggers JPH box creation on encode; the colour specification box is parsed to auto-detect YCbCr colorspace on decode |
+
+### Example applications (image I/O)
+| Format | `open_htj2k_enc` input | `open_htj2k_dec` output | Notes |
 |--------|:---:|:---:|-------|
-| PGM / PPM | ✓ | ✓ | PPM encoder input and decoder output support subsampled (4:2:2, 4:2:0) components |
-| PGX | ✓ | ✓ | Encoder streaming path (`invoke_line_based_stream`) accepts subsampled PGX component sets (4:2:2, 4:2:0) |
+| PGM / PPM | ✓ | ✓ | PPM supports subsampled (4:2:2, 4:2:0) components |
+| PGX | ✓ | ✓ | Encoder streaming path accepts subsampled PGX component sets (4:2:2, 4:2:0) |
 | TIFF (libtiff required, 8/16 bpp) | ✓ | | |
 | RAW | | ✓ | |
-
-### Codestream / file formats
-| Extension | Encoder output | Decoder input | Description |
-|-----------|:---:|:---:|-------------|
-| `.jhc`, `.j2c`, `.j2k` | | ✓ | HTJ2K / JPEG 2000 Part 1 codestream |
-| `.jph` | | ✓ | HTJ2K file format (JPH); the colour specification box is parsed to auto-detect YCbCr colorspace |
-| `.jhc`, `.j2c`, `.j2k`, `.jph` | ✓ | | Encoder output: `.jph` triggers JPH box creation; all others produce a raw codestream |
