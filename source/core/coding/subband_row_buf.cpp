@@ -330,7 +330,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
             const ptrdiff_t coff = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
             sprec_t *dst = target_buf + roff + coff;
             for (uint32_t row = 0; row < block->size.y; row++)
-              std::memset(dst + row * stride, 0, block->size.x * sizeof(sprec_t));
+              std::memset(dst + static_cast<ptrdiff_t>(row) * stride, 0, block->size.x * sizeof(sprec_t));
           }
           continue;
         }
@@ -561,7 +561,7 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
       decode_strip(abs_row);
 #endif
     }
-    return ring_buf + static_cast<ptrdiff_t>(abs_row - ring_y0) * sb->stride;
+    return ring_buf + static_cast<ptrdiff_t>(abs_row - ring_y0) * static_cast<ptrdiff_t>(sb->stride);
   }
   // Guard: empty subband (zero-height or zero-width tile boundary case).
   // i_samples is null when pos1.x==pos0.x or pos1.y==pos0.y (num_samples==0).
@@ -573,7 +573,7 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
   }
   if (!bypass_decode && (abs_row < strip_y0 || abs_row >= strip_y1)) decode_strip(abs_row);
   const int32_t rel = abs_row - static_cast<int32_t>(sb->get_pos0().y);
-  return sb->i_samples + static_cast<ptrdiff_t>(rel) * sb->stride;
+  return sb->i_samples + static_cast<ptrdiff_t>(rel) * static_cast<ptrdiff_t>(sb->stride);
 }
 
 void j2k_subband_row_buf::get_row(int32_t abs_row, sprec_t *out) {

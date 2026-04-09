@@ -882,9 +882,10 @@ static void set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
 //   LP: step D (cur 0→1) needs HP neighbors @0; step B (cur 1→2) needs HP @1
 //   HP: step C (cur 0→1) needs LP neighbors @1; step A (cur 1→2) needs LP @2
 // Simplified: for LP need = cur, for HP need = cur + 1.
-static inline int8_t needed_neighbor_dl_97(bool lp, int8_t cur) {
-  return lp ? cur : static_cast<int8_t>(cur + 1);
-}
+// (Currently unused — kept for documentation / future use.)
+// static inline int8_t needed_neighbor_dl_97(bool lp, int8_t cur) {
+//   return lp ? cur : static_cast<int8_t>(cur + 1);
+// }
 
 // Apply one lifting step to row r and increment its d_level.
 // cur must be the current d_level of row r (caller already fetched it).
