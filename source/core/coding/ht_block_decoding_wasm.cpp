@@ -116,7 +116,27 @@ static void pack_sigma(const uint8_t *states, size_t bstride, uint32_t width, ui
   }
 }
 
-template <bool skip_sigma>
+// WASM SIMD fused dequantize-and-store: 4 × int32 sign-magnitude → 4 × float.
+static inline void dequant_store_wasm(int32_t *dst, v128_t val, uint8_t transformation, int32_t pLSB_dq,
+                                      v128_t vfscale, v128_t vmagmask, v128_t vsignmask) {
+  if (transformation == 1) {
+    v128_t mag     = wasm_v128_and(val, vmagmask);
+    v128_t shifted = wasm_i32x4_shr(mag, pLSB_dq);
+    // Apply sign: negate where val is negative (sign bit set)
+    v128_t neg     = wasm_i32x4_lt(val, wasm_i32x4_const_splat(0));
+    v128_t negated = wasm_i32x4_sub(wasm_i32x4_const_splat(0), shifted);
+    v128_t res     = wasm_v128_bitselect(negated, shifted, neg);
+    wasm_v128_store(dst, wasm_f32x4_convert_i32x4(res));
+  } else {
+    v128_t mag = wasm_v128_and(val, vmagmask);
+    v128_t f   = wasm_f32x4_mul(wasm_f32x4_convert_i32x4(mag), vfscale);
+    // Apply sign via XOR with sign bit
+    f = wasm_v128_xor(f, wasm_v128_and(val, vsignmask));
+    wasm_v128_store(dst, f);
+  }
+}
+
+template <bool skip_sigma, bool fuse_dequant = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
@@ -126,14 +146,35 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
+  // Fused dequantize setup
+  int32_t pLSB_dq  = 0;
+  v128_t vfscale_dq  = wasm_f32x4_const_splat(0.0f);
+  v128_t vmagmask_dq = wasm_i32x4_const_splat(0);
+  v128_t vsignmask_dq = wasm_i32x4_const_splat(0);
+  if constexpr (fuse_dequant) {
+    const int32_t M_b_val = block->get_Mb();
+    pLSB_dq               = 31 - M_b_val;
+    vmagmask_dq            = wasm_i32x4_const_splat(0x7FFFFFFF);
+    vsignmask_dq           = wasm_i32x4_const_splat((int32_t)0x80000000u);
+    if (block->transformation != 1) {
+      float fscale_direct = block->stepsize;
+      fscale_direct *= static_cast<float>(1 << FRACBITS);
+      if (M_b_val <= 31)
+        fscale_direct /= static_cast<float>(1 << (31 - M_b_val));
+      else
+        fscale_direct *= static_cast<float>(1 << (M_b_val - 31));
+      vfscale_dq = wasm_f32x4_splat(fscale_direct);
+    }
+  }
+
   v128_t vExp;
   const v128_t vm     = wasm_i32x4_const(1, 2, 4, 8);
   const v128_t vone   = wasm_i32x4_const_splat(1);
   const v128_t vtwo   = wasm_i32x4_const_splat(2);
   const v128_t vshift = wasm_i32x4_splat(pLSB - 1);
 
-  auto mp0 = block->sample_buf;
-  auto mp1 = block->sample_buf + block->blksampl_stride;
+  auto mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->i_samples) : block->sample_buf;
+  auto mp1 = mp0 + (fuse_dequant ? block->band_stride : block->blksampl_stride);
   auto sp0 = block->block_states + 1 + block->blkstate_stride;
   auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
 
@@ -283,8 +324,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     mu1   = wasm_v128_or(mu1, wasm_i32x4_shl(v_n_1, 31));
     mu1   = wasm_v128_and(mu1, sig1);
 
-    wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
-    wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
+    if constexpr (fuse_dequant) {
+      dequant_store_wasm(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation, pLSB_dq,
+                         vfscale_dq, vmagmask_dq, vsignmask_dq);
+      dequant_store_wasm(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation, pLSB_dq,
+                         vfscale_dq, vmagmask_dq, vsignmask_dq);
+    } else {
+      wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
+      wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
+    }
     mp0 += 4;
     mp1 += 4;
 
@@ -303,8 +351,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   for (uint16_t row = 1; row < QH; row++) {
     rho_p = rholine + 1;
     E_p   = Eline + 1;
-    mp0   = block->sample_buf + (row * 2U) * block->blksampl_stride;
-    mp1   = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
+    if constexpr (fuse_dequant) {
+      mp0 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U) * block->band_stride;
+      mp1 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U + 1U) * block->band_stride;
+    } else {
+      mp0 = block->sample_buf + (row * 2U) * block->blksampl_stride;
+      mp1 = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
+    }
     sp0   = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
     sp1   = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
     rho1  = 0;
@@ -438,8 +491,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu1   = wasm_v128_or(mu1, wasm_i32x4_shl(v_n_1, 31));
       mu1   = wasm_v128_and(mu1, sig1);
 
-      wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
-      wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
+      if constexpr (fuse_dequant) {
+        dequant_store_wasm(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation,
+                           pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_wasm(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation,
+                           pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+      } else {
+        wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
+        wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
+      }
       mp0 += 4;
       mp1 += 4;
 
@@ -767,7 +827,11 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       Dref = nullptr;
     }
 
-    if (num_ht_passes == 1) {
+    bool dequant_done = false;
+    if (num_ht_passes == 1 && ROIshift == 0) {
+      ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      dequant_done = true;
+    } else if (num_ht_passes == 1) {
       ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
     } else {
       ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
@@ -785,7 +849,9 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       }
     }
 
-    block->dequantize(ROIshift);
+    if (!dequant_done) {
+      block->dequantize(ROIshift);
+    }
 
   }  // end
 
