@@ -619,7 +619,7 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
         static const uint32_t row_masks[4] = {0x33u, 0x76u, 0xECu, 0xC8u};
         uint32_t inv_sig = ~cs & pat;
         while (mbr) {
-          uint32_t pos   = static_cast<uint32_t>(__builtin_ctz(mbr));
+          uint32_t pos   = static_cast<uint32_t>(openhtj2k_ctz32(mbr));
           uint32_t smask = 1u << pos;
           mbr &= ~smask;
           uint32_t bit      = SigProp.importSigPropBit();
@@ -632,13 +632,13 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
         if (new_sig) {
           uint32_t bits = new_sig;
           while (bits) {
-            uint32_t pos = static_cast<uint32_t>(__builtin_ctz(bits));
+            uint32_t pos = static_cast<uint32_t>(openhtj2k_ctz32(bits));
             bits &= bits - 1;
             samples[(y + (pos & 3)) * sstride + (x + (pos >> 2))] |= spp_mask;
           }
           bits = new_sig;
           while (bits) {
-            uint32_t pos = static_cast<uint32_t>(__builtin_ctz(bits));
+            uint32_t pos = static_cast<uint32_t>(openhtj2k_ctz32(bits));
             bits &= bits - 1;
             samples[(y + (pos & 3)) * sstride + (x + (pos >> 2))] |=
                 static_cast<int32_t>(SigProp.importSigPropBit()) << 31;
@@ -675,7 +675,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
 
       uint32_t s = sig;
       while (s) {
-        uint32_t pos = static_cast<uint32_t>(__builtin_ctz(s));
+        uint32_t pos = static_cast<uint32_t>(openhtj2k_ctz32(s));
         s &= s - 1;
         int32_t *sp  = samples + (y + (pos & 3)) * sstride + (x + (pos >> 2));
         int32_t bit  = MagRef.importMagRefBit();
