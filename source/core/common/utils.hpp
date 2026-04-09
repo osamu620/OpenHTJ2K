@@ -99,6 +99,17 @@ static inline int32_t hMax(__m128i v) {
 #define openhtj2k_bswap32(x) __builtin_bswap32(x)
 #endif
 
+// Portable count-trailing-zeros for uint32_t (input must be non-zero).
+static inline uint32_t openhtj2k_ctz32(uint32_t x) {
+#if defined(_MSC_VER)
+  unsigned long idx;
+  _BitScanForward(&idx, static_cast<unsigned long>(x));
+  return static_cast<uint32_t>(idx);
+#else
+  return static_cast<uint32_t>(__builtin_ctz(x));
+#endif
+}
+
 static inline size_t popcount32(uint32_t num) {
   size_t precision = 0;
 #if defined(_MSC_VER) && !defined(_M_ARM64)
