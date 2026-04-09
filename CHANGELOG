@@ -1,3 +1,50 @@
+# [0.9.0] - 2026-04-09
+
+## Performance
+* HT block decoder: nibble-packed sigma representation for SPP/MRP passes,
+  replacing byte-per-sample storage; halves memory traffic in significance
+  propagation and magnitude refinement
+* HT block decoder: branchless VLC unstuff eliminates short-circuit branches;
+  CTZ-based SPP/MRP with branchless bit importers halve branch misses
+* HT block decoder: fused dequantize pass with vectorized kappa computation
+  and specialized 9/7 cascade; removes a separate dequant loop
+* HT block decoder: vectorize Emax computation in cleanup decode
+* AVX2: add 4-quad 16-bit decode path for HT block decoder
+* AVX-512: expand coverage to FDWT vertical lifting and all color transform
+  functions (forward/inverse ICT and RCT)
+* AVX-512: masked stores for vertical DWT tail columns, eliminating scalar
+  fallback for non-multiple-of-16 widths
+* NEON: port nibble-packed sigma SPP/MRP, add irrev 5/3 (ATK) IDWT kernels
+  (horizontal and vertical), add 16-bit HT cleanup decode path (pLSB > 16)
+* WASM: port nibble-packed sigma SPP/MRP to WASM SIMD decoder
+* Vectorize PPM interleave output (SSE4.1 / NEON) and PGM/PGX byte-packing
+  in decoder CLI
+* ThreadPool: lock-free `get()` via atomic index; skip pool overhead entirely
+  in single-threaded mode
+
+## Bug Fixes
+* Fix AVX2 `pack_i32_to_u8`: signed values were incorrectly clamped to zero
+  by `packus`; now clamps via `max(0)` before packing
+* Fix fused dequant SIMD overshoot race condition with branchless VLC/MEL
+* Fix WASM `wasm_u16x8_shl` → `wasm_i16x8_shl` in 16-bit decode path
+* Fix WASM 16-bit HT decode regression and DC level shift
+* Fix intermittent DFS/ATK test failures: zero full stride×height in LL
+  resolution buffer
+* Fix segfault when `/dev/null` used as decoder output
+* Suppress all compiler warnings in native and WASM builds
+
+## WASM
+* Node.js v24 compatibility: rewrite module loader to evaluate Emscripten JS
+  as CJS via `new Function()`, pass `.wasm` binary directly via `wasmBinary`
+  option, bypassing Emscripten's `fetch()`-based loader
+* Add WASM CI job to GitHub Actions workflow
+* Add ~137 WASM conformance tests (HT Profile 0, Profile 1, HiFi) using
+  `node open_htj2k_dec.mjs` decode + native `imgcmp` comparison
+* Align `index.html` ESM exports with updated wrapper API
+
+## Build
+* Add ctest cleanup fixture to remove stale test artifacts
+
 # [0.8.0] - 2026-04-05
 
 ## New Features
