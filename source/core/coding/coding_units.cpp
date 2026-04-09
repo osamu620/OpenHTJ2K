@@ -260,6 +260,7 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
     }
   }
 #else
+  (void)min_w;
   if (u_off == 0) {
     for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i]     = lp_ptr[i];
     for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i + 1] = hp_ptr[i];
@@ -361,13 +362,13 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
   if (!is_hp) {
     // LP vertical row: HP-horiz → HL, LP-horiz → child/LL0
     const int32_t hl_sub = (abs_row >> 1) - c->hl_y0;
-    memcpy(c->hl_samples + (ptrdiff_t)hl_sub * c->hl_stride, c->hp_tmp,
+    memcpy(c->hl_samples + static_cast<ptrdiff_t>(hl_sub) * static_cast<ptrdiff_t>(c->hl_stride), c->hp_tmp,
            static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
     if (c->has_child) {
       fdwt_2d_state_push_row(c->child_state, c->lp_tmp);
     } else {
       const int32_t ll_sub = (abs_row >> 1) - c->ll0_y0;
-      memcpy(c->ll0_samples + (ptrdiff_t)ll_sub * c->ll0_stride, c->lp_tmp,
+      memcpy(c->ll0_samples + static_cast<ptrdiff_t>(ll_sub) * static_cast<ptrdiff_t>(c->ll0_stride), c->lp_tmp,
              static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
     }
     // Overlap: dispatch HT block encoding if this HL row completes codeblock row br.
@@ -382,9 +383,9 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
   } else {
     // HP vertical row: LP-horiz → LH, HP-horiz → HH
     const int32_t hp_sub = (abs_row >> 1) - c->lh_y0;
-    memcpy(c->lh_samples + (ptrdiff_t)hp_sub * c->lh_stride, c->lp_tmp,
+    memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride), c->lp_tmp,
            static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
-    memcpy(c->hh_samples + (ptrdiff_t)hp_sub * c->hh_stride, c->hp_tmp,
+    memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride), c->hp_tmp,
            static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
     // Overlap: dispatch HT block encoding if this LH+HH row completes codeblock row br.
     if (c->cb_h > 0) {
@@ -430,6 +431,7 @@ static thread_local cblk_data_pool *g_cblk_pool = nullptr;
 // Per-thread pool slot for encoder pool assignment.
 // gen tracks the tile-encode generation; when it differs from EncodePoolCtx::gen,
 // the thread claims a new slot (one atomic fetch_add per thread per tile encode).
+#ifdef OPENHTJ2K_THREAD
 namespace {
 struct TlPoolSlot {
   int slot       = -1;
@@ -437,6 +439,7 @@ struct TlPoolSlot {
 };
 }  // namespace
 static thread_local TlPoolSlot g_tl_pool_slot;
+#endif
 
 #ifdef OPENHTJ2K_THREAD
 namespace {
@@ -503,7 +506,6 @@ std::mutex ThreadPool::singleton_mutex;
 // Full definition of enc_overlap_dispatch (declared earlier).
 // Placed here so ThreadPool, g_cblk_pool, TlPoolSlot, and htj2k_encode are visible.
 static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
-  using EPC = j2k_tile::EncodePoolCtx;
   j2k_resolution *cr = c->enc_cr;
   const int32_t cb_h = c->cb_h;
   for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
@@ -522,6 +524,7 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
             cpb->access_codeblock(cx + static_cast<uint32_t>(cy_local) * cpb->num_codeblock_x);
 #ifdef OPENHTJ2K_THREAD
         if (c->enc_pool && c->enc_pool->num_threads() > 1) {
+          using EPC = j2k_tile::EncodePoolCtx;
           c->enc_remaining->fetch_add(1, std::memory_order_relaxed);
           EPC              *epc       = c->enc_epc;
           uint8_t           ROIshift  = c->enc_ROIshift;

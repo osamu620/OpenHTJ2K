@@ -131,7 +131,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   } else {
     // Raw codestream: transfer directly.
     in.alloc_memory(static_cast<uint32_t>(file_size));
-    memcpy(in.get_buf_pos(), jph_file_buf.data(), file_size);
+    memcpy(in.get_buf_pos(), jph_file_buf.data(), static_cast<size_t>(file_size));
     jph_file_buf.clear();
     jph_file_buf.shrink_to_fit();
   }
@@ -616,7 +616,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         for (uint16_t c = 0; c < nc; ++c) {
           if (tile_w[c] == 0 || y_local >= band_h[c]) continue;
           int32_t *dst =
-              accum[c].data() + static_cast<ptrdiff_t>(y_local) * width[c] + tile_x_off[c];
+              accum[c].data() + static_cast<ptrdiff_t>(y_local) * static_cast<ptrdiff_t>(width[c]) + tile_x_off[c];
           std::memcpy(dst, rows[c], tile_w[c] * sizeof(int32_t));
         }
       };
@@ -639,7 +639,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       for (uint16_t c = 0; c < num_components; ++c) {
         // For subsampled components, clamp to last valid row.
         const uint32_t cy = (band_h[c] > 0) ? std::min(y, band_h[c] - 1) : 0;
-        row_ptrs[c] = accum[c].data() + static_cast<ptrdiff_t>(cy) * width[c];
+        row_ptrs[c] = accum[c].data() + static_cast<ptrdiff_t>(cy) * static_cast<ptrdiff_t>(width[c]);
       }
       cb(global_y + y, row_ptrs.data(), num_components);
     }
