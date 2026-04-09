@@ -1117,7 +1117,7 @@ class fwd_buf {
     v128_t w0_val   = wasm_i16x8_sub(vtwo16, emb_k);
     v128_t shift_lo = wasm_i16x8_shl(w0_val, U0 - 1);
     v128_t shift_hi = wasm_i16x8_shl(w0_val, U1 - 1);
-    v128_t shift_v  = wasm_i16x8_shuffle(shift_lo, shift_hi, 0, 1, 2, 3, 8, 9, 10, 11);
+    v128_t shift_v  = wasm_i16x8_shuffle(shift_lo, shift_hi, 0, 1, 2, 3, 12, 13, 14, 15);
 
     // Mask ms_vec to m_n magnitude bits.
     ms_vec = wasm_v128_and(ms_vec, wasm_i16x8_sub(shift_v, vone16));

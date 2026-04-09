@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // HTJ2K / JPEG 2000 decoder CLI — runs the WASM build of OpenHTJ2K in Node.js.
-// Usage: node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> [-r <reduce_NL>] [-ycbcr bt601|bt709]
+// Usage: node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm|.pgx> [-r <reduce_NL>] [-ycbcr bt601|bt709]
 //
 // Output format is auto-selected:
 //   1-component → PGM (P5 binary), 3-component → PPM (P6 binary)
@@ -35,7 +35,7 @@ function parseArgs() {
     } else if (args[i] === '-h' || args[i] === '--help') {
       console.log('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>] [-ycbcr bt601|bt709]');
       console.log('  -i, --input      Input J2C/J2K/JPH file');
-      console.log('  -o, --output     Output PPM (RGB) or PGM (grayscale) file');
+      console.log('  -o, --output     Output PPM (RGB), PGM (grayscale), or PGX (per-component) file');
       console.log('  -r, --reduce     Resolution reduction (0 = full, 1 = half, ...)');
       console.log('  -ycbcr bt601|bt709  YCbCr→RGB conversion for PPM output (auto-detected from JPH)');
       process.exit(0);
@@ -146,6 +146,15 @@ const H = M._get_height(dec, 0);
 const C = M._get_num_components(dec);
 const depth = M._get_depth(dec, 0);
 
+// Per-component properties (needed for PGX output).
+const compDepth = [], compSigned = [], compWidth = [], compHeight = [];
+for (let c = 0; c < C; c++) {
+  compDepth.push(M._get_depth(dec, c));
+  compSigned.push(M._get_signed(dec, c));
+  compWidth.push(M._get_width(dec, c));
+  compHeight.push(M._get_height(dec, c));
+}
+
 // get_width/get_height return full-resolution dimensions. When --reduce is
 // used, the decoder outputs a downsampled image: ceil(dim / 2^reduce).
 const rFactor = 1 << reduce;
@@ -180,47 +189,107 @@ if (C >= 3 && wantPpm) {
   }
 }
 
-// Allocate packed output buffer (W × H × C × bytes_per_sample).
-// invoke_decoder_stream() writes directly here, avoiding a separate 96MB int32 buffer.
-const nSamples  = Wd * Hd * C;
-const packedPtr = M._malloc(nSamples * bytesPerSmp);
-if (!packedPtr) {
-  console.error('WASM malloc failed for packed output buffer');
-  M._release_j2c_data(dec);
-  process.exit(1);
-}
+const isPGX = output.toLowerCase().endsWith('.pgx');
 
-try {
-  M._invoke_decoder_stream(dec, packedPtr, maxval, bytesPerSmp);
-} catch (e) {
-  console.error(`Decode error: ${e}`);
+if (isPGX) {
+  // PGX output: use invoke_decoder_planar() which returns per-component planar int32
+  // buffers at native resolution (no clamping, no DC offset, handles subsampling).
+  // Allocate per-component buffers and a pointer array.
+  const compPtrs = [];
+  for (let c = 0; c < C; c++) {
+    const cW = Math.ceil(compWidth[c] / rFactor);
+    const cH = Math.ceil(compHeight[c] / rFactor);
+    compPtrs.push(M._malloc(cW * cH * 4));
+  }
+  // Write pointer array into WASM heap (C pointers, 4 bytes each in wasm32).
+  const ptrArrayPtr = M._malloc(C * 4);
+  const ptrView = new Uint32Array(M.HEAPU8.buffer, ptrArrayPtr, C);
+  for (let c = 0; c < C; c++) ptrView[c] = compPtrs[c];
+
+  try {
+    M._invoke_decoder_planar(dec, ptrArrayPtr);
+  } catch (e) {
+    console.error(`Decode error: ${e}`);
+    compPtrs.forEach(p => M._free(p));
+    M._free(ptrArrayPtr);
+    M._release_j2c_data(dec);
+    process.exit(1);
+  }
+  M._release_j2c_data(dec);
+  const t1 = performance.now();
+
+  // PGX: one file per component at native resolution.
+  // Format: "PG LM <sign> <depth> <width> <height>\n" + raw little-endian samples.
+  const baseName = output.slice(0, -4);
+  for (let c = 0; c < C; c++) {
+    const fname   = `${baseName}_${String(c).padStart(2, '0')}.pgx`;
+    const sign    = compSigned[c] ? '-' : '+';
+    const cDepth  = compDepth[c];
+    const cW      = Math.ceil(compWidth[c] / rFactor);
+    const cH      = Math.ceil(compHeight[c] / rFactor);
+    const hdr     = `PG LM ${sign} ${cDepth} ${cW} ${cH}\n`;
+    const nPixels = cW * cH;
+    const bps     = Math.ceil(cDepth / 8);  // bytes per sample: 1 or 2
+
+    // Re-read heap view (may have been invalidated by memory growth).
+    const heap32 = new Int32Array(M.HEAPU8.buffer);
+    const baseIdx = compPtrs[c] >> 2;
+
+    const compBuf = Buffer.alloc(nPixels * bps);
+    for (let i = 0; i < nPixels; i++) {
+      const val = heap32[baseIdx + i];
+      if (bps === 1) {
+        compBuf[i] = val & 0xFF;
+      } else {
+        compBuf.writeInt16LE(val, i * 2);
+      }
+    }
+    writeFileSync(fname, Buffer.concat([Buffer.from(hdr, 'ascii'), compBuf]));
+    M._free(compPtrs[c]);
+  }
+  M._free(ptrArrayPtr);
+  const elapsed = (t1 - t0).toFixed(1);
+  console.log(`Decoded ${Wd}×${Hd} ${C}comp ${depth}bpc in ${elapsed} ms → ${baseName}_*.pgx`);
+} else {
+  // PPM/PGM output: use streaming decoder with DC offset for signed components.
+  const nSamples  = Wd * Hd * C;
+  const packedPtr = M._malloc(nSamples * bytesPerSmp);
+  if (!packedPtr) {
+    console.error('WASM malloc failed for packed output buffer');
+    M._release_j2c_data(dec);
+    process.exit(1);
+  }
+  try {
+    M._invoke_decoder_stream(dec, packedPtr, maxval, bytesPerSmp, 1);
+  } catch (e) {
+    console.error(`Decode error: ${e}`);
+    M._free(packedPtr);
+    M._release_j2c_data(dec);
+    process.exit(1);
+  }
+  M._release_j2c_data(dec);
+  const t1 = performance.now();
+
+  // Snapshot packed bytes before freeing (copy out of WASM heap).
+  // Re-read HEAPU8: ALLOW_MEMORY_GROWTH may have replaced the backing buffer.
+  const pixelBuf = Buffer.from(
+    M.HEAPU8.buffer.slice(packedPtr, packedPtr + nSamples * bytesPerSmp)
+  );
   M._free(packedPtr);
-  M._release_j2c_data(dec);
-  process.exit(1);
+  // PPM/PGM output path.
+  // Apply YCbCr→RGB in-place on the packed pixel buffer (after WASM chroma upsampling).
+  if (doYcbcr) {
+    applyYcbcrToRgb(pixelBuf, Wd * Hd, maxval, ycbcrCoeffs, bytesPerSmp);
+  }
+
+  try {
+    writeFileSync(output, Buffer.concat([headerBuf, pixelBuf]));
+  } catch (e) {
+    console.error(`Error writing output file: ${e.message}`);
+    process.exit(1);
+  }
+
+  const elapsed = (t1 - t0).toFixed(1);
+  const fmt     = C === 1 ? 'grayscale' : (doYcbcr ? 'YCbCr→RGB' : 'RGB');
+  console.log(`Decoded ${Wd}×${Hd} ${fmt} ${depth}bpc in ${elapsed} ms → ${output}`);
 }
-M._release_j2c_data(dec);
-
-const t1 = performance.now();
-
-// Snapshot packed bytes before freeing (copy out of WASM heap).
-// Re-read HEAPU8: ALLOW_MEMORY_GROWTH may have replaced the backing buffer.
-const pixelBuf = Buffer.from(
-  M.HEAPU8.buffer.slice(packedPtr, packedPtr + nSamples * bytesPerSmp)
-);
-M._free(packedPtr);
-
-// Apply YCbCr→RGB in-place on the packed pixel buffer (after WASM chroma upsampling).
-if (doYcbcr) {
-  applyYcbcrToRgb(pixelBuf, Wd * Hd, maxval, ycbcrCoeffs, bytesPerSmp);
-}
-
-try {
-  writeFileSync(output, Buffer.concat([headerBuf, pixelBuf]));
-} catch (e) {
-  console.error(`Error writing output file: ${e.message}`);
-  process.exit(1);
-}
-
-const elapsed = (t1 - t0).toFixed(1);
-const fmt     = C === 1 ? 'grayscale' : (doYcbcr ? 'YCbCr→RGB' : 'RGB');
-console.log(`Decoded ${Wd}×${Hd} ${fmt} ${depth}bpc in ${elapsed} ms → ${output}`);
