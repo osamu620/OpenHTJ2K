@@ -525,47 +525,4 @@ void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32
   }
 }
 
-// Single-row rev53 FDWT HP vertical lifting: tgt[i] -= floor((prev[i]+next[i])*0.5).
-void fdwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt) {
-  const __m512 k05 = _mm512_set1_ps(0.5f);
-  int32_t i = 0;
-  for (; i + 16 <= n; i += 16) {
-    __m512 a = _mm512_loadu_ps(prev + i);
-    __m512 b = _mm512_loadu_ps(next + i);
-    __m512 t = _mm512_loadu_ps(tgt + i);
-    t = _mm512_sub_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(a, b), k05)));
-    _mm512_storeu_ps(tgt + i, t);
-  }
-  if (i < n) {
-    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
-    auto a = _mm512_maskz_loadu_ps(mask, prev + i);
-    auto b = _mm512_maskz_loadu_ps(mask, next + i);
-    auto t = _mm512_maskz_loadu_ps(mask, tgt + i);
-    t = _mm512_sub_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(a, b), k05)));
-    _mm512_mask_storeu_ps(tgt + i, mask, t);
-  }
-}
-
-// Single-row rev53 FDWT LP vertical lifting: tgt[i] += floor((prev[i]+next[i]+2)*0.25).
-void fdwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt) {
-  const __m512 k025 = _mm512_set1_ps(0.25f);
-  const __m512 k2   = _mm512_set1_ps(2.0f);
-  int32_t i = 0;
-  for (; i + 16 <= n; i += 16) {
-    __m512 a = _mm512_loadu_ps(prev + i);
-    __m512 b = _mm512_loadu_ps(next + i);
-    __m512 t = _mm512_loadu_ps(tgt + i);
-    t = _mm512_add_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(a, b), k2), k025)));
-    _mm512_storeu_ps(tgt + i, t);
-  }
-  if (i < n) {
-    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
-    auto a = _mm512_maskz_loadu_ps(mask, prev + i);
-    auto b = _mm512_maskz_loadu_ps(mask, next + i);
-    auto t = _mm512_maskz_loadu_ps(mask, tgt + i);
-    t = _mm512_add_ps(t, _mm512_floor_ps(_mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(a, b), k2), k025)));
-    _mm512_mask_storeu_ps(tgt + i, mask, t);
-  }
-}
-
 #endif  // OPENHTJ2K_TRY_AVX2 && __AVX512F__

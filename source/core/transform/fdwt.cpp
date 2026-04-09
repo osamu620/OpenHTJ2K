@@ -47,10 +47,10 @@ typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, fl
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_wasm;
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_wasm;
 #elif defined(OPENHTJ2K_ENABLE_AVX512)
-static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
-                                                          fdwt_1d_filtr_rev53_fixed_avx2};
-static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_avx2,
-                                                          fdwt_rev_ver_sr_fixed_avx2};
+static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx512,
+                                                          fdwt_1d_filtr_rev53_fixed_avx512};
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_avx512,
+                                                          fdwt_rev_ver_sr_fixed_avx512};
 typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
 static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fixed_avx512;
 typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
