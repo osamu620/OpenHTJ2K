@@ -96,7 +96,8 @@ void invoke_decoder_planar(open_htj2k::openhtj2k_decoder* dec, int32_t** dst_ptr
   std::vector<uint8_t> img_depth;
   std::vector<bool> img_signed;
   dec->invoke(buf, img_width, img_height, img_depth, img_signed);
-  for (uint16_t c = 0; c < buf.size(); ++c) {
+  uint16_t nc = static_cast<uint16_t>(buf.size());
+  for (uint16_t c = 0; c < nc; ++c) {
     std::memcpy(dst_ptrs[c], buf[c], (size_t)img_width[c] * img_height[c] * sizeof(int32_t));
   }
 }
@@ -124,6 +125,7 @@ uint32_t get_minimum_DWT_levels(open_htj2k::openhtj2k_decoder* dec) {
   return cpp_get_minimum_DWT_levels(dec);
 }
 
+EMSCRIPTEN_KEEPALIVE
 uint32_t get_max_safe_reduce_NL(open_htj2k::openhtj2k_decoder* dec) {
   return dec->get_max_safe_reduce_NL();
 }
