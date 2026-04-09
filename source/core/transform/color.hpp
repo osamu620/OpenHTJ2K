@@ -65,7 +65,26 @@ struct FinalizeParams {
 // fp[3]: finalize params for component 0 (R), 1 (G), 2 (B).
 typedef void (*fused_mct_finalize_func)(const float *, const float *, const float *, int32_t *,
                                         int32_t *, int32_t *, uint32_t, const FinalizeParams *);
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
+void cvt_rgb_to_ycbcr_rev_avx512(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_rgb_to_ycbcr_irrev_avx512(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_rev_avx512(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_irrev_avx512(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height);
+void cvt_ycbcr_to_rgb_rev_float_avx512(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_ycbcr_to_rgb_irrev_float_avx512(float *sp0, float *sp1, float *sp2, uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_rev_float_avx512(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                       float *dp0, float *dp1, float *dp2,
+                                       uint32_t width, uint32_t height, uint32_t stride);
+void cvt_rgb_to_ycbcr_irrev_float_avx512(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
+                                         float *dp0, float *dp1, float *dp2,
+                                         uint32_t width, uint32_t height, uint32_t stride);
+void fused_ycbcr_irrev_to_rgb_i32_avx512(const float *y, const float *cb, const float *cr,
+                                          int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                          const FinalizeParams *fp);
+void fused_ycbcr_rev_to_rgb_i32_avx512(const float *y, const float *cb, const float *cr,
+                                        int32_t *r, int32_t *g, int32_t *b, uint32_t width,
+                                        const FinalizeParams *fp);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 /**
  * @brief Forward reversible color transform (RCT) with AVX2 intrinsics
  * @param sp0 pointer to Red samples (shall be aligned and multiple of 8 samples)
