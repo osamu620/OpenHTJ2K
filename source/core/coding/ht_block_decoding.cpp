@@ -51,7 +51,24 @@ uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_
   return mbr & 1;
 }
 
-template <bool skip_sigma>
+// Scalar fused dequantize-and-store: convert sign-magnitude int32 to dequantized float.
+static FORCE_INLINE void dequant_store_scalar(void *dst, int32_t val, uint8_t transformation,
+                                              int32_t pLSB_dq, float fscale_direct) {
+  if (transformation == 1) {
+    int32_t sign = val & INT32_MIN;
+    val &= INT32_MAX;
+    val >>= pLSB_dq;
+    if (sign) val = -(val & INT32_MAX);
+    *reinterpret_cast<float *>(dst) = static_cast<float>(val);
+  } else {
+    int32_t sign = val & INT32_MIN;
+    float f      = static_cast<float>(val & INT32_MAX) * fscale_direct;
+    if (sign) f  = -f;
+    *reinterpret_cast<float *>(dst) = f;
+  }
+}
+
+template <bool skip_sigma, bool fuse_dequant = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   uint8_t *compressed_data = block->get_compressed_data();
@@ -251,6 +268,25 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   // MagSgn decoding
   /*******************************************************************************************************************/
   {
+    // Fused dequantize setup
+    int32_t pLSB_dq    = 0;
+    float fscale_direct = 0.0f;
+    uint32_t out_stride = block->blksampl_stride;
+    if constexpr (fuse_dequant) {
+      const int32_t M_b_val = block->get_Mb();
+      pLSB_dq               = 31 - M_b_val;
+      out_stride             = block->band_stride;
+      if (block->transformation != 1) {
+        // lossy path (transformation==0 for irrev97, transformation>=2 for ATK irrev)
+        fscale_direct = block->stepsize;
+        fscale_direct *= static_cast<float>(1 << FRACBITS);
+        if (M_b_val <= 31)
+          fscale_direct /= static_cast<float>(1 << (31 - M_b_val));
+        else
+          fscale_direct *= static_cast<float>(1 << (M_b_val - 31));
+      }
+    }
+
     // We allocate a scratch row for storing v_n values.
     // We have 512 quads horizontally.
     // We need an extra entry to handle the case of vp[1]
@@ -262,9 +298,18 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     fwd_buf<0xFF> MagSgn(compressed_data, Pcup);
 
+    // Helper to store a decoded sample, optionally fusing dequantize.
+    auto store_sample = [&](int32_t *dst, int32_t ival) {
+      if constexpr (fuse_dequant) {
+        dequant_store_scalar(dst, ival, block->transformation, pLSB_dq, fscale_direct);
+      } else {
+        *dst = ival;
+      }
+    };
+
     uint16_t *sp = scratch;
     uint32_t *vp = v_n_scratch;
-    int32_t *dp  = block->sample_buf;
+    int32_t *dp  = fuse_dequant ? reinterpret_cast<int32_t *>(block->i_samples) : block->sample_buf;
 
     uint32_t prev_v_n = 0;
     for (uint32_t x = 0; x < block->size.x; sp += 2, ++vp) {
@@ -291,7 +336,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[0] = static_cast<int32_t>(val);
+      store_sample(&dp[0], static_cast<int32_t>(val));
 
       v_n = 0;
       val = 0;
@@ -310,9 +355,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[block->blksampl_stride] = static_cast<int32_t>(val);
-      vp[0]                      = prev_v_n | v_n;
-      prev_v_n                   = 0;
+      store_sample(&dp[out_stride], static_cast<int32_t>(val));
+      vp[0]    = prev_v_n | v_n;
+      prev_v_n = 0;
       ++dp;
       if (++x >= block->size.x) {
         ++vp;
@@ -335,7 +380,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[0] = static_cast<int32_t>(val);
+      store_sample(&dp[0], static_cast<int32_t>(val));
 
       v_n = 0;
       val = 0;
@@ -354,8 +399,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
         val |= (v_n + 2) << (pLSB - 1);
       }
-      dp[block->blksampl_stride] = static_cast<int32_t>(val);
-      prev_v_n                   = v_n;
+      store_sample(&dp[out_stride], static_cast<int32_t>(val));
+      prev_v_n = v_n;
       ++dp;
       ++x;
     }
@@ -364,7 +409,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     for (uint32_t y = 2; y < block->size.y; y += 2) {
       uint16_t *sp = scratch + (y >> 1) * static_cast<uint32_t>(sstr);
       uint32_t *vp = v_n_scratch;
-      int32_t *dp  = block->sample_buf + y * block->blksampl_stride;
+      int32_t *dp  = fuse_dequant
+                         ? reinterpret_cast<int32_t *>(block->i_samples) + y * block->band_stride
+                         : block->sample_buf + y * block->blksampl_stride;
 
       prev_v_n = 0;
       for (uint32_t x = 0; x < block->size.x; sp += 2, ++vp) {
@@ -399,7 +446,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[0] = static_cast<int32_t>(val);
+        store_sample(&dp[0], static_cast<int32_t>(val));
 
         v_n = 0;
         val = 0;
@@ -418,9 +465,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[block->blksampl_stride] = static_cast<int32_t>(val);
-        vp[0]                      = prev_v_n | v_n;
-        prev_v_n                   = 0;
+        store_sample(&dp[out_stride], static_cast<int32_t>(val));
+        vp[0]    = prev_v_n | v_n;
+        prev_v_n = 0;
         ++dp;
         if (++x >= block->size.x) {
           ++vp;
@@ -443,7 +490,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[0] = static_cast<int32_t>(val);
+        store_sample(&dp[0], static_cast<int32_t>(val));
 
         v_n = 0;
         val = 0;
@@ -462,8 +509,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
           // add 2 to make it 2*\mu+0.5, shift it up to missing MSBs
           val |= (v_n + 2) << (pLSB - 1);
         }
-        dp[block->blksampl_stride] = static_cast<int32_t>(val);
-        prev_v_n                   = v_n;
+        store_sample(&dp[out_stride], static_cast<int32_t>(val));
+        prev_v_n = v_n;
         ++dp;
         ++x;
       }
@@ -1116,7 +1163,11 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     const int32_t Pcup = static_cast<int32_t>(Lcup - Scup);
 
     // HT block decoding
-    if (num_ht_passes == 1) {
+    bool dequant_done = false;
+    if (num_ht_passes == 1 && ROIshift == 0) {
+      ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      dequant_done = true;
+    } else if (num_ht_passes == 1) {
       ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
     } else {
       ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
@@ -1128,8 +1179,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       ht_magref_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
     }
 
-    // dequantization
-    block->dequantize(ROIshift);
+    // dequantization (skipped when already fused into MagSgn output)
+    if (!dequant_done) {
+      block->dequantize(ROIshift);
+    }
 
   }  // block decoding end
 

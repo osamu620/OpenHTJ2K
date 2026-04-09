@@ -975,23 +975,34 @@ static void cascade(idwt_2d_state *s) {
         adv_step(s, r, 0);
     }
   } else {
-    // Irrev 9/7: generic while(progress) loop (max_dl=2, cascade≤4 passes).
-    // Inline can_adv + needed_neighbor_dl to avoid redundant get_dl calls for row r
-    // and the repeated max_dl()/is_lp() overhead across 31M+ iterations.
-    const int8_t mxdl = max_dl(s->transformation);
-    bool progress = true;
-    while (progress) {
-      progress = false;
-      for (int32_t r = lo; r < hi; ++r) {
-        const int8_t cur = get_dl(s, r);
-        if (cur < 0 || cur >= mxdl) continue;
-        const bool lp = is_lp(r);
-        const int8_t need = needed_neighbor_dl_97(lp, cur);
-        if (get_dl(s, r - 1) >= need && get_dl(s, r + 1) >= need) {
-          adv_step(s, r, cur);
-          progress = true;
-        }
-      }
+    // Irrev 9/7: 4 dedicated phases replace the generic while(progress) loop.
+    // Dependency chain (max_dl=2):
+    //   Phase 1 (D): LP rows dl=0, need HP neighbors @0 → advance to dl=1
+    //   Phase 2 (C): HP rows dl=0, need LP neighbors @1 → advance to dl=1
+    //   Phase 3 (B): LP rows dl=1, need HP neighbors @1 → advance to dl=2
+    //   Phase 4 (A): HP rows dl=1, need LP neighbors @2 → advance to dl=2
+    const int32_t lp0 = lo + (lo & 1);        // first even row >= lo
+    const int32_t hp0 = lo + (1 - (lo & 1));   // first odd row >= lo
+
+    // Phase 1 (D): LP dl=0 → dl=1
+    for (int32_t r = lp0; r < hi; r += 2) {
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 0 && get_dl(s, r + 1) >= 0)
+        adv_step(s, r, 0);
+    }
+    // Phase 2 (C): HP dl=0 → dl=1
+    for (int32_t r = hp0; r < hi; r += 2) {
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1)
+        adv_step(s, r, 0);
+    }
+    // Phase 3 (B): LP dl=1 → dl=2
+    for (int32_t r = lp0; r < hi; r += 2) {
+      if (get_dl(s, r) == 1 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1)
+        adv_step(s, r, 1);
+    }
+    // Phase 4 (A): HP dl=1 → dl=2
+    for (int32_t r = hp0; r < hi; r += 2) {
+      if (get_dl(s, r) == 1 && get_dl(s, r - 1) >= 2 && get_dl(s, r + 1) >= 2)
+        adv_step(s, r, 1);
     }
   }
 }

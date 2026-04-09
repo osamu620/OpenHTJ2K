@@ -1587,9 +1587,11 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
     if (orientation != BAND_LL) {
       if (!no_alloc) {
         // Batch decode path: allocate and zero the full subband sample buffer.
-        i_samples =
-            static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * this->stride * (pos1.y - pos0.y), 32));
-        memset(i_samples, 0, sizeof(sprec_t) * this->stride * (pos1.y - pos0.y));
+        // One extra stride of padding allows the fused dequantize path to write
+        // mp1 (the second row of a pair) safely even for the last row of a subband.
+        const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y + 1);
+        i_samples = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
+        memset(i_samples, 0, alloc_samples);
       }
       // When no_alloc=true (ring-mode line-based decode), i_samples stays nullptr.
       // decode_strip() will redirect block->i_samples to the ring buffer before decoding.

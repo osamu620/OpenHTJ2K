@@ -97,7 +97,28 @@ uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_
   return mbr & 1;
 }
 
-template <bool skip_sigma>
+// Fused dequantize-and-store for 4 × int32 MagSgn samples → 4 × float.
+// Lossless (transformation==1): sign-magnitude → two's-complement shift → float.
+// Lossy   (transformation==0): magnitude → float → scale → apply sign via XOR.
+static FORCE_INLINE void dequant_store_neon(int32_t *dst, int32x4_t val, uint8_t transformation,
+                                            int32_t pLSB_dq, float32x4_t vfscale, int32x4_t vmagmask,
+                                            int32x4_t vsignmask) {
+  if (transformation == 1) {
+    int32x4_t mag     = vandq_s32(val, vmagmask);
+    int32x4_t shifted = vshlq_s32(mag, vdupq_n_s32(-pLSB_dq));
+    uint32x4_t neg    = vreinterpretq_u32_s32(vshrq_n_s32(val, 31));
+    int32x4_t res     = vbslq_s32(neg, vnegq_s32(shifted), shifted);
+    vst1q_f32(reinterpret_cast<float *>(dst), vcvtq_f32_s32(res));
+  } else {
+    int32x4_t mag  = vandq_s32(val, vmagmask);
+    float32x4_t f  = vmulq_f32(vcvtq_f32_s32(mag), vfscale);
+    f              = vreinterpretq_f32_s32(
+        veorq_s32(vreinterpretq_s32_f32(f), vandq_s32(val, vsignmask)));
+    vst1q_f32(reinterpret_cast<float *>(dst), f);
+  }
+}
+
+template <bool skip_sigma, bool fuse_dequant = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
@@ -114,8 +135,33 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const int32x4_t vtwo   = vdupq_n_s32(2);
   const int32x4_t vshift = vdupq_n_s32(pLSB - 1);
 
-  auto mp0 = block->sample_buf;
-  auto mp1 = block->sample_buf + block->blksampl_stride;
+  // Fused dequantize setup: when fuse_dequant is true, we write dequantized float values
+  // directly to i_samples, eliminating the separate dequantize pass.
+  // pLSB_dq is the dequantization shift (31 - M_b), distinct from the MagSgn pLSB.
+  int32_t pLSB_dq         = 0;
+  float32x4_t vfscale_dq  = vdupq_n_f32(0.0f);
+  int32x4_t vmagmask_dq   = vdupq_n_s32(0);
+  int32x4_t vsignmask_dq  = vdupq_n_s32(0);
+  if constexpr (fuse_dequant) {
+    const int32_t M_b_val = block->get_Mb();
+    pLSB_dq               = 31 - M_b_val;
+    vmagmask_dq            = vdupq_n_s32(0x7FFFFFFF);
+    vsignmask_dq           = vdupq_n_s32(INT32_MIN);
+    if (block->transformation != 1) {
+      // lossy path (transformation==0 for irrev97, transformation>=2 for ATK irrev)
+      float fscale_direct = block->stepsize;
+      fscale_direct *= static_cast<float>(1 << FRACBITS);
+      if (M_b_val <= 31)
+        fscale_direct /= static_cast<float>(1 << (31 - M_b_val));
+      else
+        fscale_direct *= static_cast<float>(1 << (M_b_val - 31));
+      vfscale_dq = vdupq_n_f32(fscale_direct);
+    }
+  }
+
+  int32_t *const sample_buf = block->sample_buf;
+  int32_t *mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->i_samples) : sample_buf;
+  int32_t *mp1 = mp0 + (fuse_dequant ? block->band_stride : block->blksampl_stride);
   auto sp0 = block->block_states + 1 + block->blkstate_stride;
   auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
 
@@ -240,8 +286,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       int16x4_t hi      = vget_high_s16(row16);
       int16x4_t row0_16 = vuzp1_s16(lo, hi);
       int16x4_t row1_16 = vuzp2_s16(lo, hi);
-      vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
-      vst1q_s32(mp1, vshll_n_s16(row1_16, 16));
+      if constexpr (fuse_dequant) {
+        dequant_store_neon(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
+                           vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_neon(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
+                           vfscale_dq, vmagmask_dq, vsignmask_dq);
+      } else {
+        vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
+        vst1q_s32(mp1, vshll_n_s16(row1_16, 16));
+      }
       mp0 += 4;
       mp1 += 4;
       // Expand v_n to int32 and compute E_p.
@@ -284,8 +337,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu1    = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
       mu1    = vandq_u32(mu1, sig1);
 
-      vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
-      vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
+      if constexpr (fuse_dequant) {
+        dequant_store_neon(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq,
+                           vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_neon(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq,
+                           vfscale_dq, vmagmask_dq, vsignmask_dq);
+      } else {
+        vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
+        vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
+      }
       mp0 += 4;
       mp1 += 4;
 
@@ -303,8 +363,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   for (uint16_t row = 1; row < QH; row++) {
     rho_p = rholine + 1;
     E_p   = Eline + 1;
-    mp0   = block->sample_buf + (row * 2U) * block->blksampl_stride;
-    mp1   = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
+    if constexpr (fuse_dequant) {
+      mp0 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U) * block->band_stride;
+      mp1 = mp0 + block->band_stride;
+    } else {
+      mp0 = sample_buf + (row * 2U) * block->blksampl_stride;
+      mp1 = sample_buf + (row * 2U + 1U) * block->blksampl_stride;
+    }
     sp0   = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
     sp1   = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
     rho1  = 0;
@@ -417,8 +482,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         int16x4_t hi      = vget_high_s16(row16);
         int16x4_t row0_16 = vuzp1_s16(lo, hi);
         int16x4_t row1_16 = vuzp2_s16(lo, hi);
-        vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
-        vst1q_s32(mp1, vshll_n_s16(row1_16, 16));
+        if constexpr (fuse_dequant) {
+          dequant_store_neon(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
+                             vfscale_dq, vmagmask_dq, vsignmask_dq);
+          dequant_store_neon(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
+                             vfscale_dq, vmagmask_dq, vsignmask_dq);
+        } else {
+          vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
+          vst1q_s32(mp1, vshll_n_s16(row1_16, 16));
+        }
         mp0 += 4;
         mp1 += 4;
 
@@ -464,8 +536,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu1    = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
         mu1    = vandq_u32(mu1, sig1);
 
-        vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
-        vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
+        if constexpr (fuse_dequant) {
+          dequant_store_neon(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq,
+                             vfscale_dq, vmagmask_dq, vsignmask_dq);
+          dequant_store_neon(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq,
+                             vfscale_dq, vmagmask_dq, vsignmask_dq);
+        } else {
+          vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
+          vst1q_s32(mp1, vuzp2q_s32(mu0, mu1));
+        }
         mp0 += 4;
         mp1 += 4;
 
@@ -874,12 +953,17 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       Dref = nullptr;
     }
 
-    if (num_ht_passes == 1) {
+    // Single HT pass with no ROI: use fused dequantize path to eliminate
+    // the separate dequantize pass over sample_buf.
+    bool dequant_done = false;
+    if (num_ht_passes == 1 && ROIshift == 0) {
+      ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      dequant_done = true;
+    } else if (num_ht_passes == 1) {
       ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
     } else {
       ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
-    }
-    if (num_ht_passes > 1) {
+
       const uint32_t qw   = (block->size.x + 3) >> 2;
       const uint32_t mstr = ((qw + 2) + 7u) & ~7u;
       uint16_t sigma_buf[(17 + 1) * 24] = {};
@@ -891,8 +975,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       }
     }
 
-    // dequantization
-    block->dequantize(ROIshift);
+    // dequantization (skipped when already fused into MagSgn output)
+    if (!dequant_done) {
+      block->dequantize(ROIshift);
+    }
 
   }  // end
 
