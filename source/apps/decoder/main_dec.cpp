@@ -42,7 +42,7 @@
 #endif
 #if defined(__AVX2__)
   #include <immintrin.h>
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
   #include <arm_neon.h>
 #endif
 
@@ -73,7 +73,7 @@ inline void pack_i32_to_be16(const int32_t *src, uint8_t *dst, uint32_t width, i
     dst[n * 2]           = static_cast<uint8_t>(v >> 8);
     dst[n * 2 + 1]       = static_cast<uint8_t>(v);
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
   const int32x4_t voff = vdupq_n_s32(offset);
   uint32_t n = 0;
   for (; n + 8 <= width; n += 8) {
@@ -118,7 +118,7 @@ inline void pack_i32_to_le16(const int32_t *src, uint8_t *dst, uint32_t width) {
     dst[n * 2]           = static_cast<uint8_t>(v);
     dst[n * 2 + 1]       = static_cast<uint8_t>(v >> 8);
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
   uint32_t n = 0;
   for (; n + 8 <= width; n += 8) {
     int32x4_t v0 = vld1q_s32(src + n);
@@ -164,7 +164,7 @@ inline void pack_i32_to_u8(const int32_t *src, uint8_t *dst, uint32_t width, int
   }
   for (; n < width; ++n)
     dst[n] = static_cast<uint8_t>(src[n] + offset);
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
   const int32x4_t voff = vdupq_n_s32(offset);
   uint32_t n = 0;
   for (; n + 16 <= width; n += 16) {
@@ -272,7 +272,7 @@ inline void ppm_interleave_8(const int32_t *sp0, const int32_t *sp1, const int32
     v     = *sp2;
     *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
   const int32x4_t vmax = vdupq_n_s32((1 << bit_depth) - 1);
   const int32x4_t zero = vdupq_n_s32(0);
   uint32_t n           = 0;
@@ -390,7 +390,7 @@ inline void ppm_interleave_16be(const int32_t *sp0, const int32_t *sp1, const in
     v    = v < 0 ? 0 : v > mv ? mv : v;
     *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
   const int32x4_t vmax = vdupq_n_s32((1 << bit_depth) - 1);
   const int32x4_t vzero = vdupq_n_s32(0);
   uint16_t *p           = reinterpret_cast<uint16_t *>(dp);
