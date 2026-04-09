@@ -954,6 +954,7 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
 
 void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
                       const uint8_t &pLSB) {
+  if (pLSB == 0) return;
   MR_dec MagRef(HT_magref_segment, magref_length);
   const uint32_t blk_height   = block->size.y;
   const uint32_t blk_width    = block->size.x;
