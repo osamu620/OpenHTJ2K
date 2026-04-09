@@ -118,6 +118,14 @@ static FORCE_INLINE void dequant_store_neon(int32_t *dst, int32x4_t val, uint8_t
   }
 }
 
+// Returns {max(a[0..3]), max(b[0..3])} as int32x2_t using NEON pairwise max.
+// Avoids the SIMD-to-scalar extraction that vmaxvq_s32 requires.
+static inline int32x2_t max4_pair(int32x4_t a, int32x4_t b) {
+  int32x2_t ra = vpmax_s32(vget_low_s32(a), vget_high_s32(a));
+  int32x2_t rb = vpmax_s32(vget_low_s32(b), vget_high_s32(b));
+  return vpmax_s32(ra, rb);
+}
+
 template <bool skip_sigma, bool fuse_dequant = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
@@ -171,7 +179,6 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   uint32_t emb_1_0, emb_1_1;
   uint32_t u0, u1;
   uint32_t U0, U1;
-  uint8_t gamma0, gamma1;
   uint32_t kappa0 = 1, kappa1 = 1;  // kappa is always 1 for initial line-pair
 
   const uint16_t *dec_table0, *dec_table1;
@@ -371,10 +378,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     sp1   = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
     rho1  = 0;
 
-    int32_t Emax0, Emax1;
-    // calculate Emax for the next two quads
-    Emax0 = vmaxvq_s32(vld1q_s32(E_p - 1));
-    Emax1 = vmaxvq_s32(vld1q_s32(E_p + 1));
+    // {max(E_p[-1..2]), max(E_p[1..4])} — kept in NEON to avoid scalar round-trip
+    int32x2_t vEmax = max4_pair(vld1q_s32(E_p - 1), vld1q_s32(E_p + 1));
 
     // calculate context for the next quad
     context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);            // (w | sw) << 8
@@ -461,12 +466,18 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
       u1 = (uvlc_result >> 3) + (tmp >> len);
 
-      gamma0 = ((rho0 & (rho0 - 1)) == 0) ? 0 : 1;  // (popcount32(rho0) < 2) ? 0 : 1;
-      gamma1 = ((rho1 & (rho1 - 1)) == 0) ? 0 : 1;  // (popcount32(rho1) < 2) ? 0 : 1;
-      kappa0 = (1 > gamma0 * (Emax0 - 1)) ? 1U : static_cast<uint32_t>(Emax0 - 1);
-      kappa1 = (1 > gamma1 * (Emax1 - 1)) ? 1U : static_cast<uint32_t>(Emax1 - 1);
-      U0     = kappa0 + u0;
-      U1     = kappa1 + u1;
+      {
+        // gamma: 0 if popcount(rho) < 2 (single bit or zero), else 1
+        int32x2_t vrho    = vset_lane_s32((int32_t)rho1, vdup_n_s32((int32_t)rho0), 1);
+        int32x2_t vrho_m1 = vsub_s32(vrho, vdup_n_s32(1));
+        // rho & (rho-1) == 0  ↔  popcount < 2  ↔  gamma = 0
+        uint32x2_t vz     = vceq_u32(vreinterpret_u32_s32(vand_s32(vrho, vrho_m1)), vdup_n_u32(0));
+        int32x2_t vgamma  = vreinterpret_s32_u32(vbic_u32(vdup_n_u32(1), vz));
+        // kappa = max(1, gamma * (Emax - 1))
+        int32x2_t vkappa  = vmax_s32(vmul_s32(vgamma, vsub_s32(vEmax, vdup_n_s32(1))), vdup_n_s32(1));
+        U0 = (uint32_t)vget_lane_s32(vkappa, 0) + u0;
+        U1 = (uint32_t)vget_lane_s32(vkappa, 1) + u1;
+      }
 
       if (pLSB > 16) {
         // 16-bit fast path: batch bit extraction via vqtbl1q_u8
@@ -491,8 +502,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mp0 += 4;
         mp1 += 4;
 
-        Emax0 = vmaxvq_s32(vld1q_s32(E_p + 3));
-        Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
+        vEmax = max4_pair(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5));
 
         int32x4_t vn32 = vreinterpretq_s32_u32(vmovl_u16(vreinterpret_u16_s16(vn_16)));
         vExp           = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vn32));
@@ -545,8 +555,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mp0 += 4;
         mp1 += 4;
 
-        Emax0 = vmaxvq_s32(vld1q_s32(E_p + 3));
-        Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));
+        vEmax = max4_pair(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5));
 
         vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
         vst1q_s32(E_p, vExp);

@@ -98,6 +98,122 @@ Phase 4 (A): Odd  rows, dl=1→2, need LP neighbors @dl≥2
 
 ---
 
+### P9: Vectorize NEON Emax/Kappa — Keep Exponents in NEON Registers
+
+**Goal:** Eliminate SIMD-to-scalar round-trips for the Emax horizontal-max and kappa
+computation in the non-initial line-pair MagSgn loop.
+
+**Impact:** ~1-2% improvement on AArch64 by avoiding pipeline breaks between
+NEON and integer units.
+
+**Files modified:**
+
+| File | What changed |
+|---|---|
+| `source/core/coding/ht_block_decoding_neon.cpp` | Added `max4_pair()` helper; replaced `int32_t Emax0,Emax1` + `vmaxvq_s32` with `int32x2_t vEmax` + `vpmax_s32` chain; vectorized gamma/kappa computation with NEON; removed unused `gamma0/gamma1` variables |
+
+**Key design decisions:**
+- `max4_pair(a, b)` returns `{max(a[0..3]), max(b[0..3])}` as `int32x2_t` using 3 `vpmax_s32`
+- `vgamma = vbic_u32(1, vceq(rho & (rho-1), 0))` — branchless 0-or-1
+- `vkappa = vmax_s32(vmul_s32(vgamma, Emax-1), 1)` — fused in NEON
+- U0/U1 extracted via `vget_lane_s32(vkappa, 0/1)` after kappa is done
+
+**Verified on:** arm64/NEON (445/445 tests pass)
+**Needs verification on:** x86-64/AVX2 (code does not compile on AVX2)
+
+---
+
+### P10: WASM Lossy Dequantize — Direct Float Multiply
+
+**Goal:** Replace the integer approximation in the WASM `dequantize()` lossy path
+with direct `wasm_f32x4_mul`, eliminating the truncate→int16→multiply→downshift
+chain for the common `ROIshift == 0` case.
+
+**Impact:** ~4-6% for WASM lossy decode (avoids ~8 extra integer instructions per 8
+samples). Also fixes the ROI scalar path (removed redundant `if (ROIshift)` guard).
+
+**Files modified:**
+
+| File | What changed |
+|---|---|
+| `source/core/coding/ht_block_decoding_wasm.cpp` | `dequantize()`: split lossy branch into `ROIshift==0` fast path (float mul) and ROI path (existing integer approx); scalar tail fixed |
+
+**Condition:** `ROIshift == 0` (the common case — no region of interest)
+
+**Verified on:** arm64/NEON (445/445 tests pass; WASM path compiled but not exercised)
+**Needs verification on:** WASM/Emscripten
+
+---
+
+### P11: Fix NEON Color Transform Loop Bounds and Dead Loads
+
+**Goal:** Fix two bugs in `color_neon.cpp`:
+1. `for (; len > 0; len -= 8)` processes 8 elements even when `len < 8` (partial OOB write)
+2. Lines 170-175: 6 dead `vld1q_s32` loads from base pointers after advancing `p0/p1/p2`
+
+**Impact:** Bug fix (correctness) + eliminates 6 wasted loads per 8-pixel loop iteration.
+Also adds missing scalar tail loop for widths not divisible by 8.
+
+**Files modified:**
+
+| File | What changed |
+|---|---|
+| `source/core/transform/color_neon.cpp` | `cvt_ycbcr_to_rgb_rev_neon`: `len > 0` → `len >= 8`, deleted dead loads, added scalar tail. `cvt_ycbcr_to_rgb_irrev_neon`: `len > 0` → `len >= 8`, added scalar tail |
+
+**Verified on:** arm64/NEON (445/445 tests pass)
+
+---
+
+### P12: WASM Vectorized CLZ via Float Exponent Trick
+
+**Goal:** Replace the 4-scalar-extract CLZ in `wasm_u32x4_clz()` with a vectorized
+float-exponent computation.
+
+**Impact:** ~2-3% for WASM decode (eliminates 4 `i32x4_extract_lane` + `__builtin_clz`
+per exponent update, replacing with 3 SIMD instructions).
+
+**Files modified:**
+
+| File | What changed |
+|---|---|
+| `source/core/coding/ht_block_decoding_wasm.cpp` | `wasm_u32x4_clz()`: replaced scalar body with `convert→shr(23)→sub(158)→min(32)` |
+
+**Formula:** `clz32(a) = min(158 - (float_bits(a) >> 23), 32)` — valid for non-negative inputs; returns 32 for a == 0.
+
+**Verified on:** arm64/NEON (445/445 tests pass; WASM path compiled but not exercised)
+**Needs verification on:** WASM/Emscripten
+
+---
+
+### P7: WASM 16-bit Fast Path for MagSgn Decode
+
+**Goal:** Add a `pLSB > 16` fast path to the WASM MagSgn decode that uses
+`wasm_i8x16_swizzle`-based batch bit extraction, matching the NEON `decode_two_quads_16bit`
+approach. Eliminates `wasm_i32x4_shlv` (4 scalar extracts per call) from the common path.
+
+**Impact:** ~10-15% improvement in WASM throughput for typical images (pLSB > 16 is
+the common case for standard precision images at the HT cleanup pass).
+
+**Files modified:**
+
+| File | What changed |
+|---|---|
+| `source/core/coding/ht_block_decoding.hpp` | Added `fetch_raw()` and `decode_two_quads_16bit_wasm()` to WASM `fwd_buf` class |
+| `source/core/coding/ht_block_decoding_wasm.cpp` | Both initial and non-initial line-pair loops: added `if (pLSB > 16)` branch with 16-bit decode path using `decode_two_quads_16bit_wasm`; exponent update uses `wasm_u32x4_extend_low_u16x8` to widen v_n |
+
+**Key design decisions:**
+- `fetch_raw()` = `wasm_v128_load(this->tmp)` — same buffer layout as NEON
+- Variable per-quad shift `vshlq_u16(w0_val, Uq_m1)` → two constant shifts + `wasm_i16x8_shuffle` blend
+- `wasm_i8x16_swizzle` returns 0 for indices ≥ 16, matching `vqtbl1q_u8` semantics
+- v_n stored as `v128_t` with only low 4 × int16 lanes meaningful; widened to uint32 for CLZ
+
+**Condition:** `pLSB > 16` (same as NEON fast path)
+
+**Verified on:** arm64/NEON (445/445 tests pass; WASM path compiled but not exercised)
+**Needs verification on:** WASM/Emscripten
+
+---
+
 ## Remaining Work (Not Started)
 
 ### P2: Branchless VLC/MEL Decode
@@ -114,6 +230,11 @@ Phase 4 (A): Odd  rows, dl=1→2, need LP neighbors @dl≥2
 - Create `fdwt_avx512.cpp` and `color_avx512.cpp`
 - Mirror AVX2 variants with 512-bit operations
 - Guard with `#if defined(__AVX512F__) && defined(__AVX512BW__)`
+
+### P8: NEON 4-Quad Decode
+- Add `decode_four_quads_16bit()` wrapper calling `decode_two_quads_16bit` twice
+- Update initial and non-initial NEON loops to step `qx -= 4` when `qx >= 4`
+- Reduces loop overhead and enables better compiler scheduling
 
 ---
 
