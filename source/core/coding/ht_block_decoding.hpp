@@ -1014,6 +1014,134 @@ class fwd_buf {
     advance((uint32_t)(m0 + m1 + m2 + m3));
     return vtmp;
   }
+
+  /** @brief Fetch 16 raw bytes from the current bit position for batch bit extraction. */
+  FORCE_INLINE v128_t fetch_raw() {
+    if (this->bits <= 128) {
+      read();
+      if (this->bits <= 128)
+        read();
+    }
+    return wasm_v128_load(this->tmp);
+  }
+
+  /** @brief Decode 2 quads (8 samples) using 16-bit arithmetic.
+   *  Active when pLSB > 16 (coefficients fit in int16_t).
+   *  Uses wasm_i8x16_swizzle for batch bit extraction.
+   *  @param tv0,tv1     VLC table entries for quads 0 and 1
+   *  @param U0,U1       kappa-adjusted U values (must fit in uint16_t)
+   *  @param pLSB_adj    pLSB - 16
+   *  @param v_n         4×int16 per-column row-1 magnitudes (ORed in, low 4 lanes only)
+   *  @return v128_t     [r0c0,r1c0,r0c1,r1c1,r0c2,r1c2,r0c3,r1c3] as int16
+   *                     sign at bit 15; expand to int32 via shl 16 + extend
+   */
+  FORCE_INLINE v128_t decode_two_quads_16bit_wasm(uint16_t tv0, uint16_t tv1,
+                                                    uint16_t U0, uint16_t U1,
+                                                    uint8_t pLSB_adj, v128_t &v_n) {
+    const v128_t vone16  = wasm_i16x8_const_splat(1);
+    const v128_t vtwo16  = wasm_i16x8_const_splat(2);
+    const v128_t vzero16 = wasm_i16x8_const_splat(0);
+    v128_t row           = vzero16;
+
+    // Broadcast tv0 to lanes 0-3, tv1 to lanes 4-7.
+    v128_t w0 = wasm_i16x8_shuffle(wasm_i16x8_splat((int16_t)tv0),
+                                    wasm_i16x8_splat((int16_t)tv1), 0, 1, 2, 3, 8, 9, 10, 11);
+
+    // Extract per-sample significance/EMB flags.
+    alignas(16) static const int16_t flag_mask_arr[8] = {
+        (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880,
+        (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880};
+    v128_t flags = wasm_v128_and(w0, wasm_v128_load(flag_mask_arr));
+    v128_t insig = wasm_i16x8_eq(flags, vzero16);  // all-1 where insignificant
+
+    // Early exit if all 8 samples are insignificant.
+    if (!wasm_v128_any_true(flags)) return row;
+
+    // Broadcast U values: U0 to lanes 0-3, U1 to lanes 4-7.
+    v128_t U_vec = wasm_i16x8_shuffle(wasm_i16x8_splat((int16_t)U0),
+                                       wasm_i16x8_splat((int16_t)U1), 0, 1, 2, 3, 8, 9, 10, 11);
+
+    // Normalize flags: emb_k → bit 15, emb_1 → bit 11, rho → bit 7.
+    alignas(16) static const int16_t mul_arr[8] = {8, 4, 2, 1, 8, 4, 2, 1};
+    flags = wasm_i16x8_mul(flags, wasm_v128_load(mul_arr));
+
+    // m_n = U - e_k; zero inactive lanes.
+    v128_t emb_k = wasm_u16x8_shr(flags, 15);          // 0 or 1
+    v128_t m_n   = wasm_i16x8_sub(U_vec, emb_k);
+    m_n          = wasm_v128_andnot(m_n, insig);        // zero where insignificant
+
+    // Inclusive prefix sum of m_n (8 × int16).
+    v128_t inc_sum = m_n;
+    inc_sum = wasm_i16x8_add(inc_sum, wasm_i16x8_shuffle(vzero16, inc_sum, 7, 8, 9, 10, 11, 12, 13, 14));
+    inc_sum = wasm_i16x8_add(inc_sum, wasm_i16x8_shuffle(vzero16, inc_sum, 6, 7, 8, 9, 10, 11, 12, 13));
+    inc_sum = wasm_i16x8_add(inc_sum, wasm_i16x8_shuffle(vzero16, inc_sum, 4, 5, 6, 7, 8, 9, 10, 11));
+    int total_mn = wasm_i16x8_extract_lane(inc_sum, 7);
+
+    // Fetch raw MagSgn bits.
+    v128_t ms_raw = vzero16;
+    if (total_mn > 0) {
+      ms_raw = this->fetch_raw();
+      this->advance((uint32_t)total_mn);
+    }
+
+    // Exclusive prefix sum (inclusive shifted right by 1 element).
+    v128_t ex_sum = wasm_i16x8_shuffle(vzero16, inc_sum, 7, 8, 9, 10, 11, 12, 13, 14);
+
+    // Byte/bit index for each sample's bit offset within ms_raw.
+    v128_t byte_idx = wasm_u16x8_shr(ex_sum, 3);
+    v128_t bit_idx  = wasm_v128_and(ex_sum, wasm_i16x8_const_splat(7));
+
+    // Duplicate low byte of each 16-bit byte_idx to both bytes of the pair.
+    alignas(16) static const uint8_t dup_lo[16] = {
+        0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14};
+    v128_t bidx = wasm_i8x16_swizzle(byte_idx, wasm_v128_load(dup_lo));
+    alignas(16) static const uint8_t add_01[16] = {
+        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    bidx       = wasm_i8x16_add(bidx, wasm_v128_load(add_01));
+    v128_t d0  = wasm_i8x16_swizzle(ms_raw, bidx);
+    bidx       = wasm_i8x16_add(bidx, wasm_i8x16_const_splat(1));
+    v128_t d1  = wasm_i8x16_swizzle(ms_raw, bidx);
+
+    // Bit-level alignment: multiply-shift to align bits to bit 0.
+    alignas(16) static const uint8_t bit_tab[16] = {
+        0xFF, 127, 63, 31, 15, 7, 3, 1, 0xFF, 127, 63, 31, 15, 7, 3, 1};
+    v128_t bit_shift   = wasm_i8x16_swizzle(wasm_v128_load(bit_tab), bit_idx);
+    v128_t bit_shift16 = wasm_i16x8_add(bit_shift, wasm_i16x8_const_splat(0x0101));
+
+    v128_t d0_16  = wasm_u16x8_shr(wasm_i16x8_mul(d0, bit_shift16), 8);
+    v128_t d1_16  = wasm_v128_and(wasm_i16x8_mul(d1, bit_shift16),
+                                   wasm_i16x8_const_splat((int16_t)0xFF00));
+    v128_t ms_vec = wasm_v128_or(d0_16, d1_16);
+
+    // shift_v = (2 - e_k) << (U - 1): U0 for lanes 0-3, U1 for lanes 4-7.
+    v128_t w0_val   = wasm_i16x8_sub(vtwo16, emb_k);
+    v128_t shift_lo = wasm_u16x8_shl(w0_val, U0 - 1);
+    v128_t shift_hi = wasm_u16x8_shl(w0_val, U1 - 1);
+    v128_t shift_v  = wasm_i16x8_shuffle(shift_lo, shift_hi, 0, 1, 2, 3, 8, 9, 10, 11);
+
+    // Mask ms_vec to m_n magnitude bits.
+    ms_vec = wasm_v128_and(ms_vec, wasm_i16x8_sub(shift_v, vone16));
+
+    // Place e_1 at bit position m_n.
+    v128_t emb1_absent = wasm_i16x8_eq(
+        wasm_v128_and(flags, wasm_i16x8_const_splat((int16_t)0x800)), vzero16);
+    ms_vec = wasm_v128_or(ms_vec, wasm_v128_andnot(shift_v, emb1_absent));
+
+    // Build final sample: sign at bit 15, magnitude at pLSB_adj-1.
+    v128_t tvn    = wasm_v128_andnot(ms_vec, insig);        // save pre-shift for v_n
+    v128_t w_sign = wasm_u16x8_shl(ms_vec, 15);             // sign bit → bit 15
+    ms_vec        = wasm_v128_or(ms_vec, vone16);            // bin center
+    ms_vec        = wasm_i16x8_add(ms_vec, vtwo16);          // +2
+    ms_vec        = wasm_u16x8_shl(ms_vec, pLSB_adj - 1);   // runtime shift
+    ms_vec        = wasm_v128_or(ms_vec, w_sign);            // apply sign
+    row           = wasm_v128_andnot(ms_vec, insig);         // zero inactive
+
+    // Update v_n: odd lanes (1,3,5,7) → low 4 lanes of v_n.
+    v128_t tvn_odd = wasm_i16x8_shuffle(tvn, vzero16, 1, 3, 5, 7, 8, 8, 8, 8);
+    v_n = wasm_v128_or(v_n, tvn_odd);
+
+    return row;
+  }
 };
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
 // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction

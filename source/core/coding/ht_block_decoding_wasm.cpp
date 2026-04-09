@@ -62,12 +62,13 @@ static inline int32_t wasm_i32x4_reduce_max(v128_t a) {
   return wasm_i32x4_extract_lane(t, 0);
 }
 
+// Branchless vectorized CLZ via float exponent: clz32(a) = min(158 - (float_bits(a) >> 23), 32).
+// Valid for non-negative int32 inputs; correctly returns 32 for a == 0.
 static inline v128_t wasm_u32x4_clz(v128_t a) {
-  auto clz32 = [](uint32_t x) -> int32_t { return x == 0 ? 32 : __builtin_clz(x); };
-  return wasm_i32x4_make(clz32((uint32_t)wasm_i32x4_extract_lane(a, 0)),
-                         clz32((uint32_t)wasm_i32x4_extract_lane(a, 1)),
-                         clz32((uint32_t)wasm_i32x4_extract_lane(a, 2)),
-                         clz32((uint32_t)wasm_i32x4_extract_lane(a, 3)));
+  v128_t vf  = wasm_f32x4_convert_i32x4(a);                             // int32 → float (non-negative)
+  v128_t exp = wasm_u32x4_shr(vf, 23);                                  // extract biased exponent
+  v128_t clz = wasm_i32x4_sub(wasm_i32x4_const_splat(158), exp);        // 158 - biased_exp = clz
+  return wasm_i32x4_min(clz, wasm_i32x4_const_splat(32));               // clamp: handles a == 0
 }
 
 uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_t causal_cond) const {
@@ -275,69 +276,97 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     U0 = kappa0 + u0;
     U1 = kappa1 + u1;
 
-    // WASM section
-    v128_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
-
-    sig0  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
-    vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm),
-                                       wasm_i32x4_const_splat(0)),
-                         vone);
-    m_n_0 = wasm_i32x4_sub(wasm_v128_and(sig0, wasm_i32x4_splat((int32_t)U0)), vtmp);
-    sig1  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho1), vm), wasm_i32x4_const_splat(0));
-    vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm),
-                                       wasm_i32x4_const_splat(0)),
-                         vone);
-    m_n_1 = wasm_i32x4_sub(wasm_v128_and(sig1, wasm_i32x4_splat((int32_t)U1)), vtmp);
-
-    vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1,
-                             (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
-                             (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1,
-                             (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
-    msvec = MagSgn.fetch(m_n_0);
-    v_n_0 = wasm_v128_and(msvec, vmask1);
-    vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm),
-                                       wasm_i32x4_const_splat(0)),
-                         vone);
-    v_n_0 = wasm_v128_or(v_n_0, wasm_i32x4_shlv(vtmp, m_n_0));
-    mu0   = wasm_i32x4_add(v_n_0, vtwo);
-    mu0   = wasm_v128_or(mu0, vone);
-    mu0   = wasm_i32x4_shlv(mu0, vshift);
-    mu0   = wasm_v128_or(mu0, wasm_i32x4_shl(v_n_0, 31));
-    mu0   = wasm_v128_and(mu0, sig0);
-
-    vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1,
-                             (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
-                             (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1,
-                             (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
-    msvec = MagSgn.fetch(m_n_1);
-    v_n_1 = wasm_v128_and(msvec, vmask1);
-    vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm),
-                                       wasm_i32x4_const_splat(0)),
-                         vone);
-    v_n_1 = wasm_v128_or(v_n_1, wasm_i32x4_shlv(vtmp, m_n_1));
-    mu1   = wasm_i32x4_add(v_n_1, vtwo);
-    mu1   = wasm_v128_or(mu1, vone);
-    mu1   = wasm_i32x4_shlv(mu1, vshift);
-    mu1   = wasm_v128_or(mu1, wasm_i32x4_shl(v_n_1, 31));
-    mu1   = wasm_v128_and(mu1, sig1);
-
-    if constexpr (fuse_dequant) {
-      dequant_store_wasm(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation, pLSB_dq,
-                         vfscale_dq, vmagmask_dq, vsignmask_dq);
-      dequant_store_wasm(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation, pLSB_dq,
-                         vfscale_dq, vmagmask_dq, vsignmask_dq);
+    if (pLSB > 16) {
+      // 16-bit fast path: batch bit extraction via wasm_i8x16_swizzle
+      const uint8_t pLSB_adj = static_cast<uint8_t>(pLSB - 16);
+      const v128_t zero16    = wasm_i32x4_const_splat(0);
+      v128_t vn_16           = zero16;
+      v128_t row16           = MagSgn.decode_two_quads_16bit_wasm(
+          tv0, tv1, static_cast<uint16_t>(U0), static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+      // Deinterleave: even lanes → row0, odd lanes → row1
+      v128_t row0_16 = wasm_i16x8_shuffle(row16, zero16, 0, 2, 4, 6, 8, 8, 8, 8);
+      v128_t row1_16 = wasm_i16x8_shuffle(row16, zero16, 1, 3, 5, 7, 8, 8, 8, 8);
+      // Expand int16 → int32 in sign-magnitude format (sign at bit 31)
+      v128_t mu0_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row0_16), 16);
+      v128_t mu1_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row1_16), 16);
+      if constexpr (fuse_dequant) {
+        dequant_store_wasm(mp0, mu0_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_wasm(mp1, mu1_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+      } else {
+        wasm_v128_store(mp0, mu0_32);
+        wasm_v128_store(mp1, mu1_32);
+      }
+      mp0 += 4;
+      mp1 += 4;
+      // Update exponent: widen v_n int16 → uint32 then CLZ
+      v128_t vn32 = wasm_u32x4_extend_low_u16x8(vn_16);
+      vExp        = wasm_i32x4_sub(wasm_i32x4_const_splat(32), wasm_u32x4_clz(vn32));
+      wasm_v128_store(E_p, vExp);
+      E_p += 4;
     } else {
-      wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
-      wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
-    }
-    mp0 += 4;
-    mp1 += 4;
+      // 32-bit path
+      v128_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
 
-    // update Exponent
-    vExp = wasm_i32x4_sub(wasm_i32x4_const_splat(32),
-                          wasm_u32x4_clz(wasm_i32x4_shuffle(v_n_0, v_n_1, 1, 3, 5, 7)));
-    wasm_v128_store(E_p, vExp);
-    E_p += 4;
+      sig0  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
+      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm),
+                                         wasm_i32x4_const_splat(0)),
+                           vone);
+      m_n_0 = wasm_i32x4_sub(wasm_v128_and(sig0, wasm_i32x4_splat((int32_t)U0)), vtmp);
+      sig1  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho1), vm), wasm_i32x4_const_splat(0));
+      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm),
+                                         wasm_i32x4_const_splat(0)),
+                           vone);
+      m_n_1 = wasm_i32x4_sub(wasm_v128_and(sig1, wasm_i32x4_splat((int32_t)U1)), vtmp);
+
+      vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1,
+                               (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
+                               (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1,
+                               (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
+      msvec = MagSgn.fetch(m_n_0);
+      v_n_0 = wasm_v128_and(msvec, vmask1);
+      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm),
+                                         wasm_i32x4_const_splat(0)),
+                           vone);
+      v_n_0 = wasm_v128_or(v_n_0, wasm_i32x4_shlv(vtmp, m_n_0));
+      mu0   = wasm_i32x4_add(v_n_0, vtwo);
+      mu0   = wasm_v128_or(mu0, vone);
+      mu0   = wasm_i32x4_shlv(mu0, vshift);
+      mu0   = wasm_v128_or(mu0, wasm_i32x4_shl(v_n_0, 31));
+      mu0   = wasm_v128_and(mu0, sig0);
+
+      vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1,
+                               (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
+                               (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1,
+                               (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
+      msvec = MagSgn.fetch(m_n_1);
+      v_n_1 = wasm_v128_and(msvec, vmask1);
+      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm),
+                                         wasm_i32x4_const_splat(0)),
+                           vone);
+      v_n_1 = wasm_v128_or(v_n_1, wasm_i32x4_shlv(vtmp, m_n_1));
+      mu1   = wasm_i32x4_add(v_n_1, vtwo);
+      mu1   = wasm_v128_or(mu1, vone);
+      mu1   = wasm_i32x4_shlv(mu1, vshift);
+      mu1   = wasm_v128_or(mu1, wasm_i32x4_shl(v_n_1, 31));
+      mu1   = wasm_v128_and(mu1, sig1);
+
+      if constexpr (fuse_dequant) {
+        dequant_store_wasm(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation, pLSB_dq,
+                           vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_wasm(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation, pLSB_dq,
+                           vfscale_dq, vmagmask_dq, vsignmask_dq);
+      } else {
+        wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
+        wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
+      }
+      mp0 += 4;
+      mp1 += 4;
+      // Update exponent
+      vExp = wasm_i32x4_sub(wasm_i32x4_const_splat(32),
+                            wasm_u32x4_clz(wasm_i32x4_shuffle(v_n_0, v_n_1, 1, 3, 5, 7)));
+      wasm_v128_store(E_p, vExp);
+      E_p += 4;
+    }
   }
 
   // Initial line-pair end
@@ -442,72 +471,99 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       U0     = kappa0 + u0;
       U1     = kappa1 + u1;
 
-      // WASM section
-      v128_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
-
-      sig0  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
-      m_n_0 = wasm_i32x4_sub(wasm_v128_and(sig0, wasm_i32x4_splat((int32_t)U0)), vtmp);
-      sig1  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho1), vm), wasm_i32x4_const_splat(0));
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
-      m_n_1 = wasm_i32x4_sub(wasm_v128_and(sig1, wasm_i32x4_splat((int32_t)U1)), vtmp);
-
-      vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
-      msvec = MagSgn.fetch(m_n_0);
-      v_n_0 = wasm_v128_and(msvec, vmask1);
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
-      v_n_0 = wasm_v128_or(v_n_0, wasm_i32x4_shlv(vtmp, m_n_0));
-      mu0   = wasm_i32x4_add(v_n_0, vtwo);
-      mu0   = wasm_v128_or(mu0, vone);
-      mu0   = wasm_i32x4_shlv(mu0, vshift);
-      mu0   = wasm_v128_or(mu0, wasm_i32x4_shl(v_n_0, 31));
-      mu0   = wasm_v128_and(mu0, sig0);
-
-      vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
-      msvec = MagSgn.fetch(m_n_1);
-      v_n_1 = wasm_v128_and(msvec, vmask1);
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
-      v_n_1 = wasm_v128_or(v_n_1, wasm_i32x4_shlv(vtmp, m_n_1));
-      mu1   = wasm_i32x4_add(v_n_1, vtwo);
-      mu1   = wasm_v128_or(mu1, vone);
-      mu1   = wasm_i32x4_shlv(mu1, vshift);
-      mu1   = wasm_v128_or(mu1, wasm_i32x4_shl(v_n_1, 31));
-      mu1   = wasm_v128_and(mu1, sig1);
-
-      if constexpr (fuse_dequant) {
-        dequant_store_wasm(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation,
-                           pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
-        dequant_store_wasm(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation,
-                           pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+      if (pLSB > 16) {
+        // 16-bit fast path: batch bit extraction via wasm_i8x16_swizzle
+        const uint8_t pLSB_adj = static_cast<uint8_t>(pLSB - 16);
+        const v128_t zero16    = wasm_i32x4_const_splat(0);
+        v128_t vn_16           = zero16;
+        v128_t row16           = MagSgn.decode_two_quads_16bit_wasm(
+            tv0, tv1, static_cast<uint16_t>(U0), static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+        v128_t row0_16 = wasm_i16x8_shuffle(row16, zero16, 0, 2, 4, 6, 8, 8, 8, 8);
+        v128_t row1_16 = wasm_i16x8_shuffle(row16, zero16, 1, 3, 5, 7, 8, 8, 8, 8);
+        v128_t mu0_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row0_16), 16);
+        v128_t mu1_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row1_16), 16);
+        if constexpr (fuse_dequant) {
+          dequant_store_wasm(mp0, mu0_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+          dequant_store_wasm(mp1, mu1_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+        } else {
+          wasm_v128_store(mp0, mu0_32);
+          wasm_v128_store(mp1, mu1_32);
+        }
+        mp0 += 4;
+        mp1 += 4;
+        // Update exponent (before E_p advance, matching 32-bit path)
+        v128_t vn32 = wasm_u32x4_extend_low_u16x8(vn_16);
+        vExp        = wasm_i32x4_sub(wasm_i32x4_const_splat(32), wasm_u32x4_clz(vn32));
+        Emax0       = wasm_i32x4_reduce_max(wasm_v128_load(E_p + 3));
+        Emax1       = wasm_i32x4_reduce_max(wasm_v128_load(E_p + 5));
+        wasm_v128_store(E_p, vExp);
+        E_p += 4;
       } else {
-        wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
-        wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
+        // 32-bit path
+        v128_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
+
+        sig0  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
+        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm),
+                                           wasm_i32x4_const_splat(0)),
+                             vone);
+        m_n_0 = wasm_i32x4_sub(wasm_v128_and(sig0, wasm_i32x4_splat((int32_t)U0)), vtmp);
+        sig1  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho1), vm), wasm_i32x4_const_splat(0));
+        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm),
+                                           wasm_i32x4_const_splat(0)),
+                             vone);
+        m_n_1 = wasm_i32x4_sub(wasm_v128_and(sig1, wasm_i32x4_splat((int32_t)U1)), vtmp);
+
+        vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1,
+                                 (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
+                                 (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1,
+                                 (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
+        msvec = MagSgn.fetch(m_n_0);
+        v_n_0 = wasm_v128_and(msvec, vmask1);
+        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm),
+                                           wasm_i32x4_const_splat(0)),
+                             vone);
+        v_n_0 = wasm_v128_or(v_n_0, wasm_i32x4_shlv(vtmp, m_n_0));
+        mu0   = wasm_i32x4_add(v_n_0, vtwo);
+        mu0   = wasm_v128_or(mu0, vone);
+        mu0   = wasm_i32x4_shlv(mu0, vshift);
+        mu0   = wasm_v128_or(mu0, wasm_i32x4_shl(v_n_0, 31));
+        mu0   = wasm_v128_and(mu0, sig0);
+
+        vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1,
+                                 (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
+                                 (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1,
+                                 (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
+        msvec = MagSgn.fetch(m_n_1);
+        v_n_1 = wasm_v128_and(msvec, vmask1);
+        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm),
+                                           wasm_i32x4_const_splat(0)),
+                             vone);
+        v_n_1 = wasm_v128_or(v_n_1, wasm_i32x4_shlv(vtmp, m_n_1));
+        mu1   = wasm_i32x4_add(v_n_1, vtwo);
+        mu1   = wasm_v128_or(mu1, vone);
+        mu1   = wasm_i32x4_shlv(mu1, vshift);
+        mu1   = wasm_v128_or(mu1, wasm_i32x4_shl(v_n_1, 31));
+        mu1   = wasm_v128_and(mu1, sig1);
+
+        if constexpr (fuse_dequant) {
+          dequant_store_wasm(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation,
+                             pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+          dequant_store_wasm(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation,
+                             pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+        } else {
+          wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
+          wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
+        }
+        mp0 += 4;
+        mp1 += 4;
+
+        Emax0 = wasm_i32x4_reduce_max(wasm_v128_load(E_p + 3));
+        Emax1 = wasm_i32x4_reduce_max(wasm_v128_load(E_p + 5));
+        vExp  = wasm_i32x4_sub(wasm_i32x4_const_splat(32),
+                               wasm_u32x4_clz(wasm_i32x4_shuffle(v_n_0, v_n_1, 1, 3, 5, 7)));
+        wasm_v128_store(E_p, vExp);
+        E_p += 4;
       }
-      mp0 += 4;
-      mp1 += 4;
-
-      Emax0 = wasm_i32x4_reduce_max(wasm_v128_load(E_p + 3));
-      Emax1 = wasm_i32x4_reduce_max(wasm_v128_load(E_p + 5));
-
-      // Update Exponent
-      vExp = wasm_i32x4_sub(wasm_i32x4_const_splat(32),
-                            wasm_u32x4_clz(wasm_i32x4_shuffle(v_n_0, v_n_1, 1, 3, 5, 7)));
-      wasm_v128_store(E_p, vExp);
-      E_p += 4;
     }
   }  // Non-Initial line-pair end
 }  // Cleanup decoding end
@@ -687,70 +743,103 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     }
   } else {
     // lossy path
-    float fscale = this->stepsize;
-    fscale *= (1 << FRACBITS);
+    float fscale_direct = this->stepsize;
+    fscale_direct *= (1 << FRACBITS);
     if (M_b <= 31) {
-      fscale /= (static_cast<float>(1 << (31 - M_b)));
+      fscale_direct /= static_cast<float>(1 << (31 - M_b));
     } else {
-      fscale *= (static_cast<float>(1 << (M_b - 31)));
+      fscale_direct *= static_cast<float>(1 << (M_b - 31));
     }
-    constexpr int32_t downshift = 15;
-    fscale *= (float)(1 << 16) * (float)(1 << downshift);
-    const auto scale = (int32_t)(fscale + 0.5);
 
-    for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
-      size_t len   = this->size.x;
+    if (ROIshift == 0) {
+      // Fast path: direct float multiply avoids integer approximation and ROI overhead
+      const v128_t vfscale   = wasm_f32x4_splat(fscale_direct);
+      const v128_t vsignmask = wasm_i32x4_const_splat(INT32_MIN);
 
-      for (; len >= 8; len -= 8) {
-        v0       = wasm_v128_load(val);
-        v1       = wasm_v128_load(val + 4);
-        s0       = wasm_i32x4_shr(v0, 31);
-        s1       = wasm_i32x4_shr(v1, 31);
-        v0       = wasm_v128_and(v0, vmagmask);
-        v1       = wasm_v128_and(v1, vmagmask);
-        vROImask = wasm_v128_and(v0, vmask);
-        vROImask = wasm_i32x4_eq(vROImask, wasm_i32x4_const_splat(0));
-        vROImask = wasm_v128_and(vROImask, vROIshift);
-        v0       = wasm_i32x4_vshl(v0, vROImask);
-        vROImask = wasm_v128_and(v1, vmask);
-        vROImask = wasm_i32x4_eq(vROImask, wasm_i32x4_const_splat(0));
-        vROImask = wasm_v128_and(vROImask, vROIshift);
-        v1       = wasm_i32x4_vshl(v1, vROImask);
-        // to prevent overflow, truncate to int16_t range
-        v0       = wasm_i32x4_shr(wasm_i32x4_add(v0, wasm_i32x4_const_splat(1 << 15)), 16);
-        v1       = wasm_i32x4_shr(wasm_i32x4_add(v1, wasm_i32x4_const_splat(1 << 15)), 16);
-        // dequantization
-        v0       = wasm_i32x4_mul(v0, wasm_i32x4_splat(scale));
-        v1       = wasm_i32x4_mul(v1, wasm_i32x4_splat(scale));
-        // downshift
-        v0       = wasm_i32x4_shr(wasm_i32x4_add(v0, wasm_i32x4_const_splat(1 << (downshift - 1))),
-                                  downshift);
-        v1       = wasm_i32x4_shr(wasm_i32x4_add(v1, wasm_i32x4_const_splat(1 << (downshift - 1))),
-                                  downshift);
-        vdst0    = wasm_v128_bitselect(wasm_i32x4_neg(v0), v0, s0);
-        vdst1    = wasm_v128_bitselect(wasm_i32x4_neg(v1), v1, s1);
-        wasm_v128_store(dst, wasm_f32x4_convert_i32x4(vdst0));
-        wasm_v128_store(dst + 4, wasm_f32x4_convert_i32x4(vdst1));
-        val += 8;
-        dst += 8;
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->i_samples + i * this->band_stride;
+        size_t len   = this->size.x;
+        for (; len >= 8; len -= 8) {
+          v0 = wasm_v128_load(val);
+          v1 = wasm_v128_load(val + 4);
+          // magnitude (strip sign bit), convert to float, scale
+          v128_t m0 = wasm_v128_and(v0, vmagmask);
+          v128_t m1 = wasm_v128_and(v1, vmagmask);
+          v128_t f0 = wasm_f32x4_mul(wasm_f32x4_convert_i32x4(m0), vfscale);
+          v128_t f1 = wasm_f32x4_mul(wasm_f32x4_convert_i32x4(m1), vfscale);
+          // apply sign via XOR of sign bit into float sign bit
+          wasm_v128_store(dst,     wasm_v128_xor(f0, wasm_v128_and(v0, vsignmask)));
+          wasm_v128_store(dst + 4, wasm_v128_xor(f1, wasm_v128_and(v1, vsignmask)));
+          val += 8;
+          dst += 8;
+        }
+        for (; len > 0; --len) {
+          float mag = static_cast<float>(*val & INT32_MAX);
+          float f   = mag * fscale_direct;
+          *dst      = (*val < 0) ? -f : f;
+          val++;
+          dst++;
+        }
       }
-      for (; len > 0; --len) {
-        int32_t sign = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
+    } else {
+      // ROI path: integer approximation avoids int32 overflow when ROI shift inflates magnitude
+      constexpr int32_t downshift = 15;
+      float fscale                = fscale_direct * (float)(1 << 16) * (float)(1 << downshift);
+      const auto scale            = static_cast<int32_t>(fscale + 0.5f);
+
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->i_samples + i * this->band_stride;
+        size_t len   = this->size.x;
+
+        for (; len >= 8; len -= 8) {
+          v0       = wasm_v128_load(val);
+          v1       = wasm_v128_load(val + 4);
+          s0       = wasm_i32x4_shr(v0, 31);
+          s1       = wasm_i32x4_shr(v1, 31);
+          v0       = wasm_v128_and(v0, vmagmask);
+          v1       = wasm_v128_and(v1, vmagmask);
+          vROImask = wasm_v128_and(v0, vmask);
+          vROImask = wasm_i32x4_eq(vROImask, wasm_i32x4_const_splat(0));
+          vROImask = wasm_v128_and(vROImask, vROIshift);
+          v0       = wasm_i32x4_vshl(v0, vROImask);
+          vROImask = wasm_v128_and(v1, vmask);
+          vROImask = wasm_i32x4_eq(vROImask, wasm_i32x4_const_splat(0));
+          vROImask = wasm_v128_and(vROImask, vROIshift);
+          v1       = wasm_i32x4_vshl(v1, vROImask);
+          // to prevent overflow, truncate to int16_t range
+          v0       = wasm_i32x4_shr(wasm_i32x4_add(v0, wasm_i32x4_const_splat(1 << 15)), 16);
+          v1       = wasm_i32x4_shr(wasm_i32x4_add(v1, wasm_i32x4_const_splat(1 << 15)), 16);
+          // dequantization
+          v0       = wasm_i32x4_mul(v0, wasm_i32x4_splat(scale));
+          v1       = wasm_i32x4_mul(v1, wasm_i32x4_splat(scale));
+          // downshift
+          v0 = wasm_i32x4_shr(wasm_i32x4_add(v0, wasm_i32x4_const_splat(1 << (downshift - 1))), downshift);
+          v1 = wasm_i32x4_shr(wasm_i32x4_add(v1, wasm_i32x4_const_splat(1 << (downshift - 1))), downshift);
+          vdst0 = wasm_v128_bitselect(wasm_i32x4_neg(v0), v0, s0);
+          vdst1 = wasm_v128_bitselect(wasm_i32x4_neg(v1), v1, s1);
+          wasm_v128_store(dst, wasm_f32x4_convert_i32x4(vdst0));
+          wasm_v128_store(dst + 4, wasm_f32x4_convert_i32x4(vdst1));
+          val += 8;
+          dst += 8;
         }
-        *val = (*val + (1 << 15)) >> 16;
-        *val *= scale;
-        *val = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
-        if (sign) {
-          *val = -(*val & INT32_MAX);
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          *val &= INT32_MAX;
+          if (((uint32_t)*val & ~mask) == 0) {
+            *val <<= ROIshift;
+          }
+          *val = (*val + (1 << 15)) >> 16;
+          *val *= scale;
+          *val = static_cast<int32_t>((*val + (1 << (downshift - 1))) >> downshift);
+          if (sign) {
+            *val = -(*val & INT32_MAX);
+          }
+          *dst = static_cast<int32_t>(*val);
+          val++;
+          dst++;
         }
-        *dst = static_cast<int32_t>(*val);
-        val++;
-        dst++;
       }
     }
   }

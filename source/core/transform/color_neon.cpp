@@ -144,7 +144,7 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
 
-    for (; len > 0; len -= 8) {
+    for (; len >= 8; len -= 8) {
       vY0  = vld1q_s32(p0);
       vCb0 = vld1q_s32(p1);
       vCr0 = vld1q_s32(p2);
@@ -167,12 +167,15 @@ void cvt_ycbcr_to_rgb_rev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_
       p0 += 8;
       p1 += 8;
       p2 += 8;
-      vY0  = vld1q_s32(sp0);
-      vCb0 = vld1q_s32(sp1);
-      vCr0 = vld1q_s32(sp2);
-      vY1  = vld1q_s32(sp0 + 4);
-      vCb1 = vld1q_s32(sp1 + 4);
-      vCr1 = vld1q_s32(sp2 + 4);
+    }
+    for (; len > 0; --len) {
+      int32_t Y  = *p0;
+      int32_t Cb = *p1;
+      int32_t Cr = *p2;
+      int32_t G  = Y - ((Cb + Cr) >> 2);
+      *p0++      = Cr + G;
+      *p1++      = G;
+      *p2++      = Cb + G;
     }
   }
 }
@@ -189,7 +192,7 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
     int32_t *p1 = sp1 + y * round_up(width, 32U);
     int32_t *p2 = sp2 + y * round_up(width, 32U);
     int32_t len = static_cast<int32_t>(width);
-    for (; len > 0; len -= 8) {
+    for (; len >= 8; len -= 8) {
       auto Y0  = vcvtq_f32_s32(vld1q_s32(p0));
       auto Y1  = vcvtq_f32_s32(vld1q_s32(p0 + 4));
       auto Cb0 = vcvtq_f32_s32(vld1q_s32(p1));
@@ -209,6 +212,15 @@ void cvt_ycbcr_to_rgb_irrev_neon(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint3
       p0 += 8;
       p1 += 8;
       p2 += 8;
+    }
+    for (; len > 0; --len) {
+      float Y  = static_cast<float>(*p0);
+      float Cb = static_cast<float>(*p1);
+      float Cr = static_cast<float>(*p2);
+      *p0++    = static_cast<int32_t>(std::roundf(Y + static_cast<float>(CR_FACT_R) * Cr));
+      *p2++    = static_cast<int32_t>(std::roundf(Y + static_cast<float>(CB_FACT_B) * Cb));
+      *p1++    = static_cast<int32_t>(
+          std::roundf(Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb));
     }
   }
 }
