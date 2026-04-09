@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
+import { createRequire } from 'module';
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
 function parseArgs() {
@@ -98,13 +99,38 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 const simdPath = join(__dir, 'build/html/libopen_htj2k_simd.js');
 const scalarPath = join(__dir, 'build/html/libopen_htj2k.js');
 
+// Emscripten 3.1.x with EXPORT_ES6=1 generates JS that mixes ESM constructs
+// (import.meta.url, export default) with CJS ones (__dirname, require).  Node.js
+// v24+ refuses to load such a .js file because it cannot determine the module
+// format.  We work around this by reading the file as text, stripping the ESM
+// export, and evaluating it as a plain script — the IIFE assigns the factory to
+// a local `Module` variable which we return from a wrapper Function.
+//
+// We also pass wasmBinary directly to bypass Emscripten's fetch()-based .wasm
+// loading, which fails on Node.js v24+ (native fetch expects URLs, not file
+// paths).
+function loadEmscriptenFactory(jsPath) {
+  let src = readFileSync(jsPath, 'utf-8');
+  // Replace ESM-only constructs so the code can run inside new Function():
+  //   import.meta.url  → the file:// URL of the JS file (used for locateFile)
+  //   export default   → stripped (we return Module explicitly)
+  const fileUrl = 'file://' + jsPath;
+  src = src.replace(/import\.meta\.url/g, JSON.stringify(fileUrl));
+  src = src.replace(/export\s+default\s+Module\s*;?\s*$/, '');
+  const require = createRequire(jsPath);
+  const fn = new Function('require', '__filename', '__dirname', src + '\nreturn Module;');
+  return fn(require, jsPath, dirname(jsPath));
+}
+
 let M;
 try {
-  const { default: createModule } = await import(simdPath);
-  M = await createModule();
+  const wasmBinary = readFileSync(join(__dir, 'build/html/libopen_htj2k_simd.wasm'));
+  const createModule = loadEmscriptenFactory(simdPath);
+  M = await createModule({ wasmBinary });
 } catch {
-  const { default: createModule } = await import(scalarPath);
-  M = await createModule();
+  const wasmBinary = readFileSync(join(__dir, 'build/html/libopen_htj2k.wasm'));
+  const createModule = loadEmscriptenFactory(scalarPath);
+  M = await createModule({ wasmBinary });
 }
 
 // ── Read input file ──────────────────────────────────────────────────────────

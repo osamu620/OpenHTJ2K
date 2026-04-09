@@ -647,10 +647,11 @@
       // pack_samples: int32 → uint8/uint16-BE packed buffer (used by Node.js CLI)
       pack_samples = Module.cwrap('pack_samples', 'void', ['number', 'number', 'number', 'number', 'number']);
       // invoke_decoder_stream: streaming decode + pack into pre-allocated buffer (used by Node.js CLI)
-      invoke_decoder_stream = Module.cwrap('invoke_decoder_stream', 'void', ['number', 'number', 'number', 'number']);
+      invoke_decoder_stream = Module.cwrap('invoke_decoder_stream', 'void', ['number', 'number', 'number', 'number', 'number']);
       // YCbCr→RGB in-place converters
       apply_ycbcr_bt601 = Module.cwrap('apply_ycbcr_bt601_to_rgba', 'void', ['number', 'number']);
       apply_ycbcr_bt709 = Module.cwrap('apply_ycbcr_bt709_to_rgba', 'void', ['number', 'number']);
+      invoke_decoder_planar = Module.cwrap('invoke_decoder_planar', 'void', ['number', 'number']);
       get_colorspace    = Module.cwrap('get_colorspace', 'number', ['number']);
       g_module = Module;  // store reference for applyYCbCrConversion (global scope)
 

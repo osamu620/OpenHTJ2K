@@ -117,3 +117,30 @@ jobs:
         # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
         # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
         run: ctest --build-config ${{ matrix.build_type }} -VV
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build WASM (scalar + SIMD)
+        run: |
+          emcmake cmake -B subprojects/build -S subprojects
+          cmake --build subprojects/build -j$(nproc)
+
+      - name: Build native (imgcmp + decoder for comparison tests)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Test WASM conformance
+        working-directory: build
+        run: ctest -R wasm_ -VV
