@@ -240,10 +240,6 @@ void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *
                               int32_t v0, int32_t v1, uint8_t transformation, sprec_t *pse_scratch,
                               sprec_t **buf_scratch);
 
-// Apply 1-D horizontal IDWT synthesis in-place on row[0..u1-u0-1].
-// ext_buf must hold at least round_up(u1-u0+8+SIMD_PADDING, SIMD_PADDING) sprec_t elements.
-void idwt_1d_row_fixed(sprec_t *ext_buf, sprec_t *row, int32_t u0, int32_t u1, uint8_t transformation);
-
 // In-place variant for ring buffer slots: requires writable PSE scratch at row[-left..-1]
 // and row[u1-u0..u1-u0+right-1] (guaranteed by IDWT_RING_PSE_LEFT slot prefix and SIMD_PADDING suffix).
 // left and right are precomputed PSE counts (function of u0%2, u1%2, and transformation).

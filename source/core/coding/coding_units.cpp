@@ -1607,9 +1607,16 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
         // Batch decode path: allocate and zero the full subband sample buffer.
         // One extra stride of padding allows the fused dequantize path to write
         // mp1 (the second row of a pair) safely even for the last row of a subband.
-        const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y + 1);
-        i_samples = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
-        memset(i_samples, 0, alloc_samples);
+        // Additional DWT_LEFT_SLACK + DWT_RIGHT_SLACK floats are allocated as
+        // border slack so that the in-place horizontal DWT can safely process
+        // the first row's in[-LEFT..-1] and the last row's in[width..width+RIGHT-1]
+        // without falling outside the allocation. The user-visible i_samples
+        // pointer is offset by DWT_LEFT_SLACK from the allocator base.
+        const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y + 1)
+                                     + sizeof(sprec_t) * (DWT_LEFT_SLACK + DWT_RIGHT_SLACK);
+        sprec_t *base = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
+        memset(base, 0, alloc_samples);
+        i_samples = base + DWT_LEFT_SLACK;
       }
       // When no_alloc=true (ring-mode line-based decode), i_samples stays nullptr.
       // decode_strip() will redirect block->i_samples to the ring buffer before decoding.
@@ -1624,7 +1631,7 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
 j2k_subband::~j2k_subband() {
   // printf("INFO: destructor of j2k_subband %d is called\n", orientation);
   if (orientation != BAND_LL) {
-    aligned_mem_free(i_samples);
+    if (i_samples != nullptr) aligned_mem_free(i_samples - DWT_LEFT_SLACK);
   }
 }
 
@@ -1658,14 +1665,19 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
     // For resolution 0 (LL band), add one extra stride row of padding so the
     // fused dequantize path can safely write mp1 for the last line-pair of a
     // codeblock with odd height (same padding that j2k_subband already adds).
+    // Additional DWT_LEFT_SLACK + DWT_RIGHT_SLACK floats are allocated as
+    // border slack so that the in-place horizontal DWT can safely process
+    // the first row's in[-LEFT..-1] and the last row's in[width..width+RIGHT-1]
+    // without falling outside the allocation. The user-visible i_samples
+    // pointer is offset by DWT_LEFT_SLACK from the allocator base.
     const uint32_t pad  = (index == 0) ? 1U : 0U;
-    const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y + pad);
+    const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y + pad)
+                                 + sizeof(sprec_t) * (DWT_LEFT_SLACK + DWT_RIGHT_SLACK);
+    sprec_t *base = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
     if (index == 0) {
-      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
-      memset(i_samples, 0, alloc_samples);
-    } else {
-      i_samples = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
+      memset(base, 0, alloc_samples);
     }
+    i_samples = base + DWT_LEFT_SLACK;
   }
 }
 
@@ -1684,7 +1696,7 @@ j2k_resolution::~j2k_resolution() {
     }
     operator delete[](subbands);
   }
-  aligned_mem_free(i_samples);
+  if (i_samples != nullptr) aligned_mem_free(i_samples - DWT_LEFT_SLACK);
 }
 
 void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
@@ -1987,7 +1999,7 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
   if (NL_act == 0) {
     // Free full-tile sample buffers when ring mode is active (no IDWT needed).
     if (ring_mode) {
-      aligned_mem_free(r0->i_samples);
+      if (r0->i_samples != nullptr) aligned_mem_free(r0->i_samples - DWT_LEFT_SLACK);
       r0->i_samples = nullptr;
     }
     return;  // no IDWT needed; pull directly from LL0
@@ -2096,18 +2108,18 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
   }
 
   // In ring mode: free full-tile sample buffers — ring bufs are used instead.
-  // The destructors of j2k_resolution/j2k_subband call aligned_mem_free(i_samples);
+  // The destructors of j2k_resolution/j2k_subband call aligned_mem_free(i_samples - DWT_LEFT_SLACK);
   // with nullptr set here that becomes free(nullptr) which is a safe no-op.
   if (ring_mode) {
     const int32_t NL_all = static_cast<int32_t>(NL);
     for (int32_t lv = 0; lv <= NL_all; ++lv) {
       j2k_resolution *cr = access_resolution(static_cast<uint8_t>(lv));
-      aligned_mem_free(cr->i_samples);
+      if (cr->i_samples != nullptr) aligned_mem_free(cr->i_samples - DWT_LEFT_SLACK);
       cr->i_samples = nullptr;
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
         j2k_subband *sb = cr->access_subband(b);
         if (sb->orientation != BAND_LL) {
-          aligned_mem_free(sb->i_samples);
+          if (sb->i_samples != nullptr) aligned_mem_free(sb->i_samples - DWT_LEFT_SLACK);
           sb->i_samples = nullptr;
         }
       }

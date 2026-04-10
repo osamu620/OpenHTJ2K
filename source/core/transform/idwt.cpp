@@ -180,19 +180,13 @@ void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
     X[n + 1] += 0.5f * (X[n] + X[n + 2]);
 }
 
-static void idwt_1d_sr_fixed(sprec_t *buf, sprec_t *in, const int32_t left, const int32_t right,
-                             const int32_t i0, const int32_t i1, const uint8_t transformation) {
-  dwt_1d_extr_fixed(buf, in, left, right, i0, i1);
-  if (transformation < 2)
-    idwt_1d_filtr_fixed[transformation](buf, left, i0, i1);
-  else
-    idwt_1d_filtr_irrev53_fn(buf, left, i0, i1);
-  memcpy(in, buf + left, sizeof(sprec_t) * (static_cast<size_t>(i1 - i0)));
-}
-
-// In-place 1-D IDWT for interior rows (not first or last).
+// In-place 1-D IDWT for all rows.
 // Operates directly on in[-left..width+SIMD_PADDING-1] without copying to/from an external buffer.
-// Precondition: those memory locations are within the tile allocation (guaranteed for interior rows).
+// Precondition: those memory locations are within the tile allocation. The j2k_subband /
+// j2k_resolution allocators add DWT_LEFT_SLACK floats before the first row and DWT_RIGHT_SLACK
+// floats after the last row of the buffer (border slack), which is what makes the precondition
+// hold for the first/last rows of a tile. Interior rows always satisfied it because the slack
+// regions overlap adjacent rows' data — save/restore below preserves them.
 static inline void idwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int32_t right,
                                       const int32_t i0, const int32_t i1,
                                       const uint8_t transformation) {
@@ -236,23 +230,18 @@ static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
       }
     }
   } else {
-    // need to perform symmetric extension
+    // All rows use the in-place horizontal IDWT.  The j2k_subband / j2k_resolution
+    // allocators add DWT_LEFT_SLACK + DWT_RIGHT_SLACK floats of border slack to
+    // the buffer (and offset the user-visible i_samples pointer by DWT_LEFT_SLACK),
+    // so the first row's in[-left..-1] and the last row's in[width..width+SIMD_PADDING-1]
+    // both fall inside valid memory.  Interior rows are handled by save/restore inside
+    // idwt_1d_sr_inplace.  This eliminates the per-tile-per-level Yext allocation and
+    // the redundant memcpy of every row that the legacy copy path performed.
     const int32_t nrows = v1 - v0;
-    const int32_t len   = u1 - u0 + left + right;
-    // Yext is used only for the first and last rows; interior rows use in-place transform.
-    auto *Yext = static_cast<sprec_t *>(aligned_mem_alloc(
-        sizeof(sprec_t) * static_cast<size_t>(round_up(len + SIMD_PADDING, SIMD_PADDING)), 32));
     for (int32_t row = 0; row < nrows; ++row) {
-      if (row == 0 || row == nrows - 1) {
-        // First/last rows: use copy-based path (in[-left] or in[width+SIMD_LEN_I32-1] may be
-        // outside the tile allocation for the first and last rows respectively).
-        idwt_1d_sr_fixed(Yext, in, left, right, u0, u1, transformation);
-      } else {
-        idwt_1d_sr_inplace(in, left, right, u0, u1, transformation);
-      }
+      idwt_1d_sr_inplace(in, left, right, u0, u1, transformation);
       in += stride;
     }
-    aligned_mem_free(Yext);
   }
 }
 
@@ -786,21 +775,6 @@ void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *
     idwt_ver_sr_fixed[transformation](nextLL, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
   else
     idwt_ver_irrev53_fn(nextLL, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
-}
-
-void idwt_1d_row_fixed(sprec_t *ext_buf, sprec_t *row, const int32_t u0, const int32_t u1,
-                       const uint8_t transformation) {
-  if (u0 >= u1) return;
-  if (u0 == u1 - 1) {
-    if ((u0 % 2 != 0) && (transformation == 1)) row[0] /= 2.0f;
-    return;
-  }
-  constexpr int32_t num_pse_i0[2][2] = {{3, 1}, {4, 2}};
-  constexpr int32_t num_pse_i1[2][2] = {{4, 2}, {3, 1}};
-  const uint8_t eff   = (transformation < 2) ? transformation : 1;
-  const int32_t left  = num_pse_i0[u0 % 2][eff];
-  const int32_t right = num_pse_i1[u1 % 2][eff];
-  idwt_1d_sr_fixed(ext_buf, row, left, right, u0, u1, transformation);
 }
 
 // In-place 1-D IDWT for rows that have writable PSE scratch space immediately before and
