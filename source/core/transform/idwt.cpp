@@ -192,24 +192,29 @@ static inline void idwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int
                                       const uint8_t transformation) {
   const int32_t width = i1 - i0;
   // Save regions that the filter will temporarily overwrite with PSE data or SIMD tail writes.
-  // SIMD_PADDING (32 floats) accommodates tail writes from the widest SIMD register (AVX-512 = 16
-  // floats per ZMM), which can write up to 15 floats past the end of the valid data region.
-  sprec_t left_save[4];
+  // left_save[8] covers the dwt_pse_fill_inplace_simd write window (8 floats per side).
+  // right_save[SIMD_PADDING] (32 floats) also accommodates tail writes from the widest SIMD
+  // register (AVX-512 = 16 floats per ZMM), which can write up to 15 floats past width.
+  sprec_t left_save[8];
   sprec_t right_save[SIMD_PADDING];
-  for (int32_t i = 0; i < left; ++i) left_save[i] = in[-left + i];
+  for (int32_t i = 0; i < 8; ++i) left_save[i] = in[-8 + i];
   for (int32_t i = 0; i < SIMD_PADDING; ++i) right_save[i] = in[width + i];
   // Fill left PSE into in[-left..-1] and right PSE into in[width..width+right-1].
-  for (int32_t i = 1; i <= left; ++i)
-    in[-i] = in[PSEo(i0 - i, i0, i1)];
-  for (int32_t i = 1; i <= right; ++i)
-    in[width + i - 1] = in[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
+  if (width >= 9) {
+    dwt_pse_fill_inplace_simd(in, width);
+  } else {
+    for (int32_t i = 1; i <= left; ++i)
+      in[-i] = in[PSEo(i0 - i, i0, i1)];
+    for (int32_t i = 1; i <= right; ++i)
+      in[width + i - 1] = in[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
+  }
   // Filter in-place: in-left is the extended buffer (left PSE | data | right PSE).
   if (transformation < 2)
     idwt_1d_filtr_fixed[transformation](in - left, left, i0, i1);
   else
     idwt_1d_filtr_irrev53_fn(in - left, left, i0, i1);
   // Restore the saved regions (IDWT output is in in[0..width-1], boundary regions are scratch).
-  for (int32_t i = 0; i < left; ++i) in[-left + i] = left_save[i];
+  for (int32_t i = 0; i < 8; ++i) in[-8 + i] = left_save[i];
   for (int32_t i = 0; i < SIMD_PADDING; ++i) in[width + i] = right_save[i];
 }
 
@@ -784,12 +789,18 @@ void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *
 void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right,
                          const int32_t u0, const int32_t u1, const uint8_t transformation) {
   const int32_t width = u1 - u0;
-  // Fill left PSE into row[-left..-1].
-  for (int32_t i = 1; i <= left; ++i)
-    row[-i] = row[PSEo(u0 - i, u0, u1)];
-  // Fill right PSE into row[width..width+right-1].
-  for (int32_t i = 1; i <= right; ++i)
-    row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+  if (width >= 9) {
+    // Constant-pattern SIMD reflection — see dwt_pse_fill_inplace_simd in dwt.hpp.
+    // The slot has IDWT_RING_PSE_LEFT = 8 floats prefix and >= SIMD_PADDING suffix,
+    // so the 8-lane writes are always within the slot's scratch area.
+    dwt_pse_fill_inplace_simd(row, width);
+  } else {
+    // Narrow-row scalar fallback (rare in practice; widths < 9 only at small subbands).
+    for (int32_t i = 1; i <= left; ++i)
+      row[-i] = row[PSEo(u0 - i, u0, u1)];
+    for (int32_t i = 1; i <= right; ++i)
+      row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+  }
   // Apply horizontal IDWT filter in-place (X = row - left, data at X[left..left+width-1]).
   if (transformation < 2)
     idwt_1d_filtr_fixed[transformation](row - left, left, u0, u1);
