@@ -52,6 +52,13 @@ class UdpSocket {
   // Set SO_RCVBUF hint (best-effort).  Useful for 4K streams at high bitrate.
   bool set_recv_buffer_size(int bytes);
 
+  // Block up to `timeout_ms` milliseconds waiting for the socket to become
+  // readable.  Returns 1 on readable, 0 on timeout, -1 on error (last_error()
+  // holds the reason).  Lets the main loop sleep briefly between socket polls
+  // without pegging a CPU core, while still letting GLFW events fire every
+  // few milliseconds.
+  int wait_readable(int timeout_ms);
+
   bool is_open() const { return fd_ >= 0; }
   const std::string& last_error() const { return last_error_; }
 
