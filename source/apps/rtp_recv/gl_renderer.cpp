@@ -27,7 +27,7 @@ void key_callback(GLFWwindow* win, int key, int /*scan*/, int action, int /*mods
 
 GlRenderer::~GlRenderer() { shutdown(); }
 
-bool GlRenderer::init(int window_w, int window_h, const char* title) {
+bool GlRenderer::init(int window_w, int window_h, const char* title, bool vsync) {
   glfwSetErrorCallback(glfw_error_callback);
   if (!glfwInit()) return false;
 
@@ -43,7 +43,7 @@ bool GlRenderer::init(int window_w, int window_h, const char* title) {
     return false;
   }
   glfwMakeContextCurrent(window_);
-  glfwSwapInterval(1);  // vsync
+  glfwSwapInterval(vsync ? 1 : 0);
   glfwSetKeyCallback(window_, key_callback);
   return true;
 }

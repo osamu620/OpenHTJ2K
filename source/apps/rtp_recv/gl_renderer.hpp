@@ -36,7 +36,11 @@ class GlRenderer {
   // Open a window of the given logical size with the given title.  The
   // GL context becomes current on this thread.  Returns false on failure;
   // the caller should fall back to a headless mode.
-  bool init(int window_w, int window_h, const char* title);
+  //
+  // `vsync` enables glfwSwapInterval(1) — display-locked swap, the default
+  // and visually correct setting.  Pass false for an interval of 0 (no
+  // vsync, immediate swap) when benchmarking.
+  bool init(int window_w, int window_h, const char* title, bool vsync = true);
 
   // Tear down the window and GL context.  Safe to call multiple times.
   void shutdown();
