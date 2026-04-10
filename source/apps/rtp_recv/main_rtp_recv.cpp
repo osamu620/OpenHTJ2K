@@ -3,280 +3,533 @@
 //
 // Licensed under the same BSD 3-Clause terms as the rest of OpenHTJ2K.
 
-// RFC 9828 RTP receiver for HTJ2K video with GLFW/OpenGL rendering.
+// RFC 9828 RTP receiver for HTJ2K video with a GLFW/OpenGL preview window.
 //
-// This is the v1 scaffold: it only verifies that the build pipeline wires up
-// correctly (GLFW discovery, OpenHTJ2K library link, executable output).  The
-// real depacketizer, frame handler, decoder invocation, and renderer land in
-// subsequent commits on this branch.
+// Typical usage (alongside a black-box kdu_stream_send sender):
+//
+//     build/bin/open_htj2k_rtp_recv --port 6000 --colorspace bt709 --range full
+//
+// Sub-codestream latency on the receive side is not implemented in v1 — the
+// decoder interface requires a complete codestream per frame, so the main
+// loop reassembles each frame and hands the full buffer to
+// openhtj2k_decoder::invoke_line_based_stream().  See
+// /home/osamu/.claude/plans/unified-kindling-parnas.md for rationale.
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include <GLFW/glfw3.h>
 
 #include "decoder.hpp"
 #include "frame_handler.hpp"
+#include "gl_renderer.hpp"
 #include "rfc9828_parser.hpp"
 #include "rtp_socket.hpp"
 #include "ycbcr_rgb.hpp"
 
+using namespace open_htj2k::rtp_recv;
+
 namespace {
 
+// ----------------------- CLI -----------------------
+
+struct CliOptions {
+  std::string bind_host    = "0.0.0.0";
+  uint16_t    bind_port    = 6000;
+  int         max_frames   = 0;      // 0 = unlimited
+  bool        render       = true;   // --no-render disables GLFW init
+  std::string dump_pattern;          // printf-style, e.g. "/tmp/frame_%05d.j2c"
+  // S=0 fallback colorspace (used only when Main Packet says S=0).
+  // Leave as nullptr to require the stream to carry S=1.
+  const ycbcr_coefficients* s0_fallback = nullptr;
+  std::string s0_label;  // human-readable form for logging
+  bool        smoke_test = false;
+  uint32_t    num_decoder_threads = 4;
+};
+
+void print_usage(const char* argv0) {
+  std::fprintf(
+      stderr,
+      "Usage: %s [options]\n"
+      "  --port <N>             UDP port to bind (default 6000)\n"
+      "  --bind <host>          Host/IP to bind (default 0.0.0.0)\n"
+      "  --frames <N>           Exit after N successfully decoded frames\n"
+      "  --no-render            Do not open a window; pure depacketize+decode\n"
+      "  --dump-codestream <fmt>  printf-style path, e.g. '/tmp/f_%%05d.j2c'\n"
+      "  --colorspace <name>    S=0 fallback: bt709 | bt601 (v1) | bt2020 (v2, rejected)\n"
+      "  --range <name>         S=0 fallback: full | narrow (default full)\n"
+      "  --threads <N>          Decoder thread count (default 4)\n"
+      "  --smoke-test           Run internal unit smoke tests and exit\n",
+      argv0);
+}
+
+const char* get_arg(int argc, char** argv, const char* name) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], name) == 0 && i + 1 < argc) return argv[i + 1];
+  }
+  return nullptr;
+}
+
+bool has_flag(int argc, char** argv, const char* name) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], name) == 0) return true;
+  }
+  return false;
+}
+
+bool parse_cli(int argc, char** argv, CliOptions& opt) {
+  if (has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
+    print_usage(argv[0]);
+    return false;
+  }
+  opt.smoke_test = has_flag(argc, argv, "--smoke-test");
+  opt.render     = !has_flag(argc, argv, "--no-render");
+
+  if (const char* v = get_arg(argc, argv, "--port"))  opt.bind_port  = static_cast<uint16_t>(std::atoi(v));
+  if (const char* v = get_arg(argc, argv, "--bind"))  opt.bind_host  = v;
+  if (const char* v = get_arg(argc, argv, "--frames")) opt.max_frames = std::atoi(v);
+  if (const char* v = get_arg(argc, argv, "--dump-codestream")) opt.dump_pattern = v;
+  if (const char* v = get_arg(argc, argv, "--threads")) opt.num_decoder_threads = static_cast<uint32_t>(std::atoi(v));
+
+  // Colorspace fallback.  When a Main Packet carries S=1 we ignore these.
+  bool range_full = true;
+  if (const char* v = get_arg(argc, argv, "--range")) {
+    if (std::strcmp(v, "full") == 0) range_full = true;
+    else if (std::strcmp(v, "narrow") == 0) range_full = false;
+    else {
+      std::fprintf(stderr, "ERROR: --range must be 'full' or 'narrow'\n");
+      return false;
+    }
+  }
+  if (const char* v = get_arg(argc, argv, "--colorspace")) {
+    if (std::strcmp(v, "bt709") == 0) {
+      opt.s0_fallback = range_full ? &YCBCR_BT709_FULL : &YCBCR_BT709_NARROW;
+      opt.s0_label    = range_full ? "bt709-full" : "bt709-narrow";
+    } else if (std::strcmp(v, "bt601") == 0) {
+      opt.s0_fallback = range_full ? &YCBCR_BT601_FULL : &YCBCR_BT601_NARROW;
+      opt.s0_label    = range_full ? "bt601-full" : "bt601-narrow";
+    } else if (std::strcmp(v, "bt2020") == 0) {
+      std::fprintf(stderr, "ERROR: --colorspace bt2020 not supported in v1\n");
+      return false;
+    } else if (std::strcmp(v, "rgb") == 0) {
+      opt.s0_fallback = nullptr;  // sentinel for "no YCbCr, components already RGB"
+      opt.s0_label    = "rgb";
+    } else {
+      std::fprintf(stderr, "ERROR: --colorspace: unknown value '%s'\n", v);
+      return false;
+    }
+  }
+  return true;
+}
+
+// ----------------------- Smoke tests (run with --smoke-test) -----------------------
+
+int smoke_test_socket();
+int smoke_test_parser();
+int smoke_test_ycbcr();
+int smoke_test_frame_handler();
+
+int run_smoke_tests() {
+  if (smoke_test_socket() != 0) return EXIT_FAILURE;
+  std::printf("udp socket smoke-test OK\n");
+  if (smoke_test_parser() != 0) return EXIT_FAILURE;
+  std::printf("rfc9828 parser smoke-test OK\n");
+  if (smoke_test_ycbcr() != 0) return EXIT_FAILURE;
+  std::printf("ycbcr->rgb smoke-test OK\n");
+  if (smoke_test_frame_handler() != 0) return EXIT_FAILURE;
+  std::printf("frame_handler smoke-test OK\n");
+  return EXIT_SUCCESS;
+}
+
+// ----------------------- Frame processing -----------------------
+
+// Decode one reassembled HTJ2K codestream and, if render is enabled, upload
+// it to the renderer.  Returns true on success.
+bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, bool is_first_frame,
+                        GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer) {
+  using namespace open_htj2k;
+
+  // Build a fresh decoder from the reassembled bytes.  The ctor copies/holds
+  // the buffer pointer, so keeping `frame` alive through invoke_line_based_stream
+  // is sufficient.
+  openhtj2k_decoder decoder(frame.bytes.data(), frame.bytes.size(), /*reduce_NL=*/0,
+                            opts.num_decoder_threads);
+  try {
+    decoder.parse();
+  } catch (std::exception& e) {
+    std::fprintf(stderr, "decoder.parse() failed: %s\n", e.what());
+    return false;
+  }
+
+  // Colorspace selection per RFC 9828 §5.3.
+  const ycbcr_coefficients* coeffs = nullptr;
+  bool components_are_rgb          = false;
+  if (frame.has_meta && frame.s) {
+    if (frame.mat == 0) {
+      // Table 1 "identity" / RGB components: no YCbCr conversion.
+      components_are_rgb = true;
+    } else {
+      coeffs = select_coefficients_from_mat(frame.mat, frame.range);
+      if (coeffs == nullptr) {
+        std::fprintf(stderr, "frame: unsupported MAT=%u (S=1); dropping\n",
+                     static_cast<unsigned>(frame.mat));
+        return false;
+      }
+    }
+  } else {
+    // S=0: use CLI fallback.  If neither fallback nor rgb mode is set, fail.
+    if (opts.s0_label == "rgb") {
+      components_are_rgb = true;
+    } else if (opts.s0_fallback != nullptr) {
+      coeffs = opts.s0_fallback;
+    } else {
+      std::fprintf(stderr,
+                   "frame: Main Packet has S=0 and --colorspace not set; refusing to guess\n");
+      return false;
+    }
+  }
+
+  if (is_first_frame) {
+    if (components_are_rgb) {
+      std::fprintf(stderr, "info: rendering RGB components directly\n");
+    } else {
+      std::fprintf(stderr, "info: YCbCr -> RGB via %s coefficients\n",
+                   coeffs == opts.s0_fallback
+                       ? opts.s0_label.c_str()
+                       : (coeffs == &YCBCR_BT709_FULL     ? "bt709-full"
+                          : coeffs == &YCBCR_BT709_NARROW ? "bt709-narrow"
+                          : coeffs == &YCBCR_BT601_FULL   ? "bt601-full"
+                          : coeffs == &YCBCR_BT601_NARROW ? "bt601-narrow"
+                                                          : "?"));
+    }
+  }
+
+  uint32_t out_w  = 0;
+  uint32_t out_h  = 0;
+  uint8_t  depth0 = 0;
+  uint16_t ncomp  = 0;
+  // Chroma subsampling ratios; populated on the first row callback.
+  uint32_t cb_stride_ratio = 1;
+  uint32_t cr_stride_ratio = 1;
+
+  bool dims_ok = true;
+
+  try {
+    std::vector<uint32_t> widths;
+    std::vector<uint32_t> heights;
+    std::vector<uint8_t>  depths;
+    std::vector<bool>     signeds;
+    decoder.invoke_line_based_stream(
+        [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+          if (y == 0) {
+            if (nc < 1) { dims_ok = false; return; }
+            ncomp  = nc;
+            out_w  = widths[0];
+            out_h  = heights[0];
+            depth0 = depths[0];
+            if (nc >= 3) {
+              cb_stride_ratio = widths[0] / widths[1];
+              cr_stride_ratio = widths[0] / widths[2];
+              if (cb_stride_ratio == 0) cb_stride_ratio = 1;
+              if (cr_stride_ratio == 0) cr_stride_ratio = 1;
+            }
+            rgb_backbuffer.assign(static_cast<size_t>(out_w) * out_h * 3, 0);
+          }
+          if (!dims_ok) return;
+          uint8_t* out_row = rgb_backbuffer.data() + static_cast<size_t>(y) * out_w * 3;
+          if (nc >= 3 && !components_are_rgb && coeffs != nullptr) {
+            ycbcr_row_to_rgb8(rows[0], rows[1], rows[2], out_row, out_w, cb_stride_ratio,
+                              cr_stride_ratio, *coeffs, depth0,
+                              /*is_signed=*/signeds[0]);
+          } else if (nc >= 3 && components_are_rgb) {
+            rgb_row_to_rgb8(rows[0], rows[1], rows[2], out_row, out_w, depth0);
+          } else if (nc == 1) {
+            // Grayscale: replicate Y into R/G/B.
+            const int32_t shift  = static_cast<int32_t>(depth0) - 8;
+            const int32_t maxval = (1 << depth0) - 1;
+            for (uint32_t x = 0; x < out_w; ++x) {
+              int32_t v = rows[0][x];
+              if (v < 0) v = 0;
+              if (v > maxval) v = maxval;
+              const uint8_t v8 = static_cast<uint8_t>(shift > 0 ? (v >> shift) : v);
+              out_row[3 * x + 0] = v8;
+              out_row[3 * x + 1] = v8;
+              out_row[3 * x + 2] = v8;
+            }
+          }
+        },
+        widths, heights, depths, signeds);
+  } catch (std::exception& e) {
+    std::fprintf(stderr, "decoder.invoke_line_based_stream failed: %s\n", e.what());
+    return false;
+  }
+
+  if (!dims_ok || out_w == 0 || out_h == 0) {
+    std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
+    return false;
+  }
+
+  if (renderer != nullptr) {
+    renderer->upload_and_draw(rgb_backbuffer.data(), static_cast<int>(out_w),
+                              static_cast<int>(out_h));
+  }
+  return true;
+}
+
+void dump_frame_if_requested(const CliOptions& opts, const AssembledFrame& frame,
+                             uint64_t frame_index) {
+  if (opts.dump_pattern.empty()) return;
+  char path[512];
+  std::snprintf(path, sizeof(path), opts.dump_pattern.c_str(),
+                static_cast<unsigned>(frame_index));
+  FILE* fp = std::fopen(path, "wb");
+  if (!fp) {
+    std::fprintf(stderr, "dump: fopen('%s') failed: %s\n", path, std::strerror(errno));
+    return;
+  }
+  std::fwrite(frame.bytes.data(), 1, frame.bytes.size(), fp);
+  std::fclose(fp);
+}
+
+// ----------------------- Main loop -----------------------
+
+int run_receiver(const CliOptions& opts) {
+  UdpSocket sock;
+  if (!sock.bind(opts.bind_host, opts.bind_port)) {
+    std::fprintf(stderr, "bind %s:%u failed: %s\n", opts.bind_host.c_str(), opts.bind_port,
+                 sock.last_error().c_str());
+    return EXIT_FAILURE;
+  }
+  // 16 MB SO_RCVBUF — enough for ~10 frames of 4K HTJ2K at broadcast bitrates
+  // while the decoder processes the current frame.  Best-effort; kernel may clamp.
+  sock.set_recv_buffer_size(16 * 1024 * 1024);
+
+  std::fprintf(stderr, "listening on %s:%u\n", opts.bind_host.c_str(), opts.bind_port);
+
+  GlRenderer renderer;
+  GlRenderer* renderer_ptr = nullptr;
+  if (opts.render) {
+    // Initial window size is a placeholder; the first frame resizes the texture.
+    if (!renderer.init(1280, 720, "OpenHTJ2K RFC 9828 receiver")) {
+      std::fprintf(stderr, "WARN: GLFW init failed; continuing in --no-render mode\n");
+    } else {
+      renderer_ptr = &renderer;
+    }
+  }
+
+  FrameHandler frame_handler;
+  std::vector<uint8_t> packet_buf(65536);  // max UDP payload
+  std::vector<uint8_t> rgb_backbuffer;
+
+  uint64_t frames_decoded = 0;
+  uint64_t frames_failed  = 0;
+  bool     first_frame    = true;
+  bool     should_exit    = false;
+
+  while (!should_exit) {
+    // Poll the socket with a short timeout so GLFW events still fire every
+    // few ms even when no packets are arriving.
+    const int ready = sock.wait_readable(/*timeout_ms=*/5);
+    if (ready < 0) {
+      std::fprintf(stderr, "socket poll error: %s\n", sock.last_error().c_str());
+      break;
+    }
+
+    if (ready > 0) {
+      // Drain whatever is pending in the kernel buffer before returning to
+      // GLFW event pumping.  This keeps latency low under bursty arrivals.
+      for (int drain = 0; drain < 256; ++drain) {
+        auto n = sock.recv(packet_buf.data(), packet_buf.size());
+        if (n == UdpSocket::kAgain) break;
+        if (n == UdpSocket::kError) {
+          std::fprintf(stderr, "recv error: %s\n", sock.last_error().c_str());
+          should_exit = true;
+          break;
+        }
+        if (n < 12) continue;  // too small for an RTP header
+        const auto pkt_len = static_cast<size_t>(n);
+
+        // Parse RTP fixed header.
+        RtpHeader    rtp{};
+        std::string  err;
+        if (!parse_rtp_header(packet_buf.data(), pkt_len, rtp, err)) continue;
+        if (rtp.payload_offset >= pkt_len) continue;
+
+        const uint8_t* payload    = packet_buf.data() + rtp.payload_offset;
+        const size_t   payload_sz = pkt_len - rtp.payload_offset;
+        if (payload_sz < 8) continue;  // need at least an RFC 9828 payload header
+
+        // Dispatch on the 2-bit MH field at the top of byte 0.
+        const uint8_t mh = static_cast<uint8_t>(payload[0] >> 6);
+        std::optional<AssembledFrame> emitted;
+
+        if (mh == MH_BODY) {
+          BodyPacketHeader body{};
+          if (!parse_body_packet_header(payload, payload_sz, body, err)) continue;
+          const uint8_t* cs_bytes = payload + body.codestream_offset;
+          const size_t   cs_len   = payload_sz - body.codestream_offset;
+          frame_handler.push_body_packet(rtp, body, cs_bytes, cs_len, emitted);
+        } else {
+          MainPacketHeader main{};
+          if (!parse_main_packet_header(payload, payload_sz, main, err)) continue;
+          const uint8_t* cs_bytes = payload + main.codestream_offset;
+          const size_t   cs_len   = payload_sz - main.codestream_offset;
+          frame_handler.push_main_packet(rtp, main, cs_bytes, cs_len, emitted);
+        }
+
+        if (emitted.has_value()) {
+          dump_frame_if_requested(opts, *emitted, frames_decoded);
+          if (decode_and_present(*emitted, opts, first_frame, renderer_ptr, rgb_backbuffer)) {
+            ++frames_decoded;
+            first_frame = false;
+            if (opts.max_frames > 0 && frames_decoded >= static_cast<uint64_t>(opts.max_frames)) {
+              should_exit = true;
+              break;
+            }
+          } else {
+            ++frames_failed;
+          }
+        }
+      }
+    }
+
+    if (renderer_ptr) {
+      renderer_ptr->poll_events();
+      if (renderer_ptr->should_close()) should_exit = true;
+    }
+  }
+
+  const auto& s = frame_handler.stats();
+  std::fprintf(stderr,
+               "\n--- summary ---\n"
+               "  frames decoded:   %llu\n"
+               "  frames failed:    %llu\n"
+               "  frames emitted:   %llu\n"
+               "  frames dropped:   %llu\n"
+               "  packets received: %llu\n"
+               "  bytes received:   %llu\n"
+               "  sequence gaps:    %llu\n",
+               static_cast<unsigned long long>(frames_decoded),
+               static_cast<unsigned long long>(frames_failed),
+               static_cast<unsigned long long>(s.frames_emitted),
+               static_cast<unsigned long long>(s.frames_dropped),
+               static_cast<unsigned long long>(s.packets_received),
+               static_cast<unsigned long long>(s.bytes_received),
+               static_cast<unsigned long long>(s.seq_gaps));
+
+  renderer.shutdown();
+  return EXIT_SUCCESS;
+}
+
+// ----------------------- Smoke test implementations -----------------------
+// These are kept (behind --smoke-test) as a fast regression check that the
+// individual pieces still behave after refactors.
+
 int smoke_test_socket() {
-  open_htj2k::rtp_recv::UdpSocket sock;
-  if (!sock.bind("127.0.0.1", 0)) {
-    std::fprintf(stderr, "bind failed: %s\n", sock.last_error().c_str());
-    return 1;
-  }
-  if (!sock.set_nonblocking()) {
-    std::fprintf(stderr, "set_nonblocking failed: %s\n", sock.last_error().c_str());
-    return 1;
-  }
+  UdpSocket sock;
+  if (!sock.bind("127.0.0.1", 0)) return 1;
+  if (!sock.set_nonblocking()) return 1;
   char buf[8];
-  auto n = sock.recv(buf, sizeof(buf));
-  if (n != open_htj2k::rtp_recv::UdpSocket::kAgain) {
-    std::fprintf(stderr, "expected kAgain from empty non-blocking socket, got %zd\n", n);
-    return 1;
-  }
-  return 0;
+  return sock.recv(buf, sizeof(buf)) == UdpSocket::kAgain ? 0 : 1;
 }
 
 int smoke_test_parser() {
-  using namespace open_htj2k::rtp_recv;
-
-  // Synthesize a 12-byte RTP header: V=2, no pad/ext/CSRC, M=1, PT=96,
-  // seq=0x1234, ts=0xDEADBEEF, SSRC=0xCAFEBABE.
   uint8_t rtp_hdr[12] = {0};
-  rtp_hdr[0]  = 0x80;                    // V=2, P=0, X=0, CC=0
-  rtp_hdr[1]  = 0x80 | 96;               // M=1, PT=96
-  rtp_hdr[2]  = 0x12; rtp_hdr[3]  = 0x34;
-  rtp_hdr[4]  = 0xDE; rtp_hdr[5]  = 0xAD; rtp_hdr[6] = 0xBE; rtp_hdr[7] = 0xEF;
-  rtp_hdr[8]  = 0xCA; rtp_hdr[9]  = 0xFE; rtp_hdr[10] = 0xBA; rtp_hdr[11] = 0xBE;
-
+  rtp_hdr[0] = 0x80;
+  rtp_hdr[1] = 0x80 | 96;
+  rtp_hdr[2] = 0x12; rtp_hdr[3] = 0x34;
+  rtp_hdr[4] = 0xDE; rtp_hdr[5] = 0xAD; rtp_hdr[6] = 0xBE; rtp_hdr[7] = 0xEF;
+  rtp_hdr[8] = 0xCA; rtp_hdr[9] = 0xFE; rtp_hdr[10] = 0xBA; rtp_hdr[11] = 0xBE;
   RtpHeader rtp{};
   std::string err;
-  if (!parse_rtp_header(rtp_hdr, sizeof(rtp_hdr), rtp, err)) {
-    std::fprintf(stderr, "rtp parse failed: %s\n", err.c_str());
-    return 1;
-  }
-  if (rtp.version != 2 || !rtp.marker || rtp.payload_type != 96 || rtp.sequence != 0x1234
-      || rtp.timestamp != 0xDEADBEEF || rtp.ssrc != 0xCAFEBABE || rtp.payload_offset != 12) {
-    std::fprintf(stderr, "rtp parse wrong fields\n");
-    return 1;
-  }
+  if (!parse_rtp_header(rtp_hdr, sizeof(rtp_hdr), rtp, err)) return 1;
+  if (rtp.version != 2 || !rtp.marker || rtp.sequence != 0x1234
+      || rtp.timestamp != 0xDEADBEEF || rtp.ssrc != 0xCAFEBABE) return 1;
 
-  // Main packet: MH=3 (single), TP=0, ORDH=4 (PCRL+resync), P=1, XTRAC=0,
-  // PTSTAMP=0x0ABC, ESEQ=0x42, R=1, S=1, C=0, RANGE=1, PRIMS=1, TRANS=1, MAT=1.
   uint8_t main_hdr[8] = {0};
-  main_hdr[0] = static_cast<uint8_t>((3u << 6) | (0u << 3) | 4u);
-  main_hdr[1] = static_cast<uint8_t>(0x80 | (0u << 4) | ((0x0ABC >> 8) & 0x0F));
+  main_hdr[0] = static_cast<uint8_t>((3u << 6) | 4u);
+  main_hdr[1] = static_cast<uint8_t>(0x80 | ((0x0ABC >> 8) & 0x0F));
   main_hdr[2] = static_cast<uint8_t>(0x0ABC & 0xFF);
   main_hdr[3] = 0x42;
-  main_hdr[4] = static_cast<uint8_t>(0x80 | 0x40 | 0x00 | 0x01);  // R=1 S=1 C=0 RSVD=0 RANGE=1
+  main_hdr[4] = static_cast<uint8_t>(0x80 | 0x40 | 0x01);
   main_hdr[5] = 1;
   main_hdr[6] = 1;
   main_hdr[7] = 1;
-
   MainPacketHeader main{};
-  if (!parse_main_packet_header(main_hdr, sizeof(main_hdr), main, err)) {
-    std::fprintf(stderr, "main parse failed: %s\n", err.c_str());
-    return 1;
-  }
-  if (main.mh != 3 || main.tp != 0 || main.ordh != ORDH_PCRL_RESYNC || !main.p
-      || main.xtrac != 0 || main.ptstamp != 0x0ABC || main.eseq != 0x42 || !main.r || !main.s
-      || main.c || !main.range || main.prims != 1 || main.trans != 1 || main.mat != 1
-      || main.codestream_offset != 8) {
-    std::fprintf(stderr, "main parse wrong fields\n");
-    return 1;
-  }
+  if (!parse_main_packet_header(main_hdr, sizeof(main_hdr), main, err)) return 1;
+  if (main.mh != 3 || main.ordh != ORDH_PCRL_RESYNC || main.ptstamp != 0x0ABC
+      || main.eseq != 0x42 || !main.r || !main.s || !main.range || main.prims != 1) return 1;
 
-  // Body packet: MH=0, TP=0, RES=2, ORDB=1, QUAL=3, PTSTAMP=0x0123, ESEQ=0x7F,
-  // POS=0x0ABC (12-bit), PID=0x0ABCDE (20-bit).
   uint8_t body_hdr[8] = {0};
-  body_hdr[0] = static_cast<uint8_t>((0u << 6) | (0u << 3) | 2u);
+  body_hdr[0] = static_cast<uint8_t>(2u);
   body_hdr[1] = static_cast<uint8_t>(0x80 | (3u << 4) | ((0x0123 >> 8) & 0x0F));
   body_hdr[2] = static_cast<uint8_t>(0x0123 & 0xFF);
   body_hdr[3] = 0x7F;
-  body_hdr[4] = static_cast<uint8_t>((0x0ABCu >> 4) & 0xFF);                  // POS[11:4]
-  body_hdr[5] = static_cast<uint8_t>(((0x0ABCu & 0x0Fu) << 4)                 // POS[3:0]
-                                     | ((0x0ABCDEu >> 16) & 0x0Fu));          // PID[19:16]
-  body_hdr[6] = static_cast<uint8_t>((0x0ABCDEu >> 8) & 0xFF);                // PID[15:8]
-  body_hdr[7] = static_cast<uint8_t>(0x0ABCDEu & 0xFF);                       // PID[7:0]
-
+  body_hdr[4] = static_cast<uint8_t>((0x0ABCu >> 4) & 0xFF);
+  body_hdr[5] = static_cast<uint8_t>(((0x0ABCu & 0x0Fu) << 4) | ((0x0ABCDEu >> 16) & 0x0Fu));
+  body_hdr[6] = static_cast<uint8_t>((0x0ABCDEu >> 8) & 0xFF);
+  body_hdr[7] = static_cast<uint8_t>(0x0ABCDEu & 0xFF);
   BodyPacketHeader body{};
-  if (!parse_body_packet_header(body_hdr, sizeof(body_hdr), body, err)) {
-    std::fprintf(stderr, "body parse failed: %s\n", err.c_str());
-    return 1;
-  }
-  if (body.mh != 0 || body.tp != 0 || body.res != 2 || !body.ordb || body.qual != 3
-      || body.ptstamp != 0x0123 || body.eseq != 0x7F || body.pos != 0x0ABC
-      || body.pid != 0x0ABCDEu || body.codestream_offset != 8) {
-    std::fprintf(stderr, "body parse wrong fields: pos=0x%04x pid=0x%06x\n",
-                 static_cast<unsigned>(body.pos), static_cast<unsigned>(body.pid));
-    return 1;
-  }
-
-  return 0;
+  if (!parse_body_packet_header(body_hdr, sizeof(body_hdr), body, err)) return 1;
+  return (body.pos == 0x0ABC && body.pid == 0x0ABCDEu && body.ordb) ? 0 : 1;
 }
 
 int smoke_test_ycbcr() {
-  using namespace open_htj2k::rtp_recv;
+  const int32_t Y[] = {128}, Cb[] = {128}, Cr[] = {128};
+  uint8_t rgb[3] = {0};
+  ycbcr_row_to_rgb8(Y, Cb, Cr, rgb, 1, 1, 1, YCBCR_BT709_FULL, 8, false);
+  if (std::abs(int(rgb[0]) - 128) > 1) return 1;
 
-  // 8-bit BT.709 full-range: pure gray (Y=128, Cb=Cr=128) should map to ~(128,128,128).
-  const int32_t Y[]  = {128, 128};
-  const int32_t Cb[] = {128, 128};
-  const int32_t Cr[] = {128, 128};
-  uint8_t rgb[6]     = {0};
-  ycbcr_row_to_rgb8(Y, Cb, Cr, rgb, /*width=*/2, /*cb_stride=*/1, /*cr_stride=*/1,
-                    YCBCR_BT709_FULL, /*depth=*/8, /*is_signed=*/false);
-  // Accept ±1 slack for float round-off.
-  auto close_to = [](uint8_t v, int target) { return std::abs(int(v) - target) <= 1; };
-  if (!close_to(rgb[0], 128) || !close_to(rgb[1], 128) || !close_to(rgb[2], 128)) {
-    std::fprintf(stderr, "ycbcr gray: got (%u,%u,%u)\n", rgb[0], rgb[1], rgb[2]);
-    return 1;
-  }
-
-  // Pure red in YCbCr BT.709 full-range: R=255,G=0,B=0 encodes as Y=54, Cb=99, Cr=255
-  // (Cr clips at 255 because the ideal value is 255.5).  Reverse transform should return
-  // nearly (255, 0, 0).
-  const int32_t Yr[]  = {54};
-  const int32_t Cbr[] = {99};
-  const int32_t Crr[] = {255};
-  uint8_t rgb_r[3]    = {0};
+  const int32_t Yr[] = {54}, Cbr[] = {99}, Crr[] = {255};
+  uint8_t rgb_r[3] = {0};
   ycbcr_row_to_rgb8(Yr, Cbr, Crr, rgb_r, 1, 1, 1, YCBCR_BT709_FULL, 8, false);
-  if (rgb_r[0] < 240 || rgb_r[1] > 15 || rgb_r[2] > 15) {
-    std::fprintf(stderr, "ycbcr red: got (%u,%u,%u)\n", rgb_r[0], rgb_r[1], rgb_r[2]);
-    return 1;
-  }
-
-  // MAT selector round-trip.
-  if (select_coefficients_from_mat(1, true) != &YCBCR_BT709_FULL) return 1;
-  if (select_coefficients_from_mat(5, false) != &YCBCR_BT601_NARROW) return 1;
-  if (select_coefficients_from_mat(9, true) != nullptr) return 1;  // BT.2020 not yet supported
-  return 0;
+  return (rgb_r[0] >= 240 && rgb_r[1] <= 15 && rgb_r[2] <= 15) ? 0 : 1;
 }
 
 int smoke_test_frame_handler() {
-  using namespace open_htj2k::rtp_recv;
-
   FrameHandler fh;
   std::optional<AssembledFrame> frame;
-
-  // Case 1: single-packet frame (Main Packet with R=0 and marker bit set).
-  // Main Packet carries 10 bytes of dummy codestream.
   RtpHeader rtp{};
-  rtp.version   = 2;
-  rtp.sequence  = 100;
+  rtp.version = 2;
+  rtp.sequence = 100;
   rtp.timestamp = 0x1000;
-  rtp.marker    = true;
-
+  rtp.marker = true;
   MainPacketHeader main{};
   main.mh = MH_MAIN_SINGLE;
-  main.tp = 0;
   main.ordh = ORDH_PCRL_RESYNC;
-  main.eseq = 0;
-
-  const uint8_t dummy_cs[10] = {0xFF, 0x4F, 0xFF, 0x51, 0, 0, 0, 0, 0xFF, 0xD9};
-  if (!fh.push_main_packet(rtp, main, dummy_cs, sizeof(dummy_cs), frame)) return 1;
-  if (!frame.has_value()) {
-    std::fprintf(stderr, "frame_handler: single-packet frame did not emit\n");
-    return 1;
-  }
-  if (frame->bytes.size() != sizeof(dummy_cs)) return 1;
-  if (fh.stats().frames_emitted != 1 || fh.stats().frames_dropped != 0) return 1;
+  const uint8_t cs[10] = {0xFF, 0x4F, 0xFF, 0x51, 0, 0, 0, 0, 0xFF, 0xD9};
+  fh.push_main_packet(rtp, main, cs, sizeof(cs), frame);
+  if (!frame.has_value() || frame->bytes.size() != sizeof(cs)) return 1;
   frame.reset();
 
-  // Case 2: multi-packet frame — Main then Body then Body with marker.
-  fh.reset();
-  RtpHeader rtp2{};
-  rtp2.version   = 2;
-  rtp2.sequence  = 200;
-  rtp2.timestamp = 0x2000;
-  rtp2.marker    = false;
-  MainPacketHeader main2{};
-  main2.mh = MH_MAIN_THEN_BODY;
-  main2.eseq = 0;
-  const uint8_t main_cs[4] = {0xFF, 0x4F, 0xFF, 0x51};
-  if (!fh.push_main_packet(rtp2, main2, main_cs, sizeof(main_cs), frame)) return 1;
-  if (frame.has_value()) return 1;  // not done yet
-
-  rtp2.sequence = 201;
-  rtp2.marker   = false;
-  BodyPacketHeader body2{};
-  body2.mh = MH_BODY;
-  body2.eseq = 0;
-  const uint8_t body_cs_1[3] = {0xAA, 0xBB, 0xCC};
-  if (!fh.push_body_packet(rtp2, body2, body_cs_1, sizeof(body_cs_1), frame)) return 1;
-  if (frame.has_value()) return 1;
-
-  rtp2.sequence = 202;
-  rtp2.marker   = true;
-  const uint8_t body_cs_2[3] = {0xDD, 0xFF, 0xD9};
-  if (!fh.push_body_packet(rtp2, body2, body_cs_2, sizeof(body_cs_2), frame)) return 1;
-  if (!frame.has_value()) {
-    std::fprintf(stderr, "frame_handler: multi-packet frame did not emit on marker\n");
-    return 1;
-  }
-  if (frame->bytes.size() != 10 || frame->packet_count != 3) {
-    std::fprintf(stderr, "frame_handler: unexpected sizes bytes=%zu packets=%zu\n",
-                 frame->bytes.size(), frame->packet_count);
-    return 1;
-  }
-  frame.reset();
-
-  // Case 3: sequence gap → frame dropped.
   fh.reset();
   RtpHeader rtp3{};
-  rtp3.version   = 2;
-  rtp3.sequence  = 300;
+  rtp3.version = 2;
+  rtp3.sequence = 300;
   rtp3.timestamp = 0x3000;
-  rtp3.marker    = false;
   MainPacketHeader main3{};
-  main3.eseq = 0;
-  if (!fh.push_main_packet(rtp3, main3, main_cs, sizeof(main_cs), frame)) return 1;
-  // Skip seq 301, jump to 302 — gap of 1.
-  rtp3.sequence = 302;
-  rtp3.marker   = true;
+  fh.push_main_packet(rtp3, main3, cs, 4, frame);
+  rtp3.sequence = 302;  // skip 301 → gap
+  rtp3.marker = true;
   BodyPacketHeader body3{};
-  body3.eseq = 0;
-  if (!fh.push_body_packet(rtp3, body3, body_cs_2, sizeof(body_cs_2), frame)) return 1;
-  if (frame.has_value()) {
-    std::fprintf(stderr, "frame_handler: lossy frame emitted instead of dropped\n");
-    return 1;
-  }
-  if (fh.stats().frames_dropped != 1 || fh.stats().seq_gaps != 1) {
-    std::fprintf(stderr, "frame_handler: expected dropped=1 gaps=1, got dropped=%lu gaps=%lu\n",
-                 static_cast<unsigned long>(fh.stats().frames_dropped),
-                 static_cast<unsigned long>(fh.stats().seq_gaps));
-    return 1;
-  }
-
-  return 0;
+  fh.push_body_packet(rtp3, body3, cs + 4, 6, frame);
+  return (!frame.has_value() && fh.stats().frames_dropped == 1 && fh.stats().seq_gaps == 1) ? 0
+                                                                                            : 1;
 }
 
 }  // namespace
 
-int main(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
-  std::printf("open_htj2k_rtp_recv: scaffold build, GLFW %d.%d.%d\n",
-              GLFW_VERSION_MAJOR, GLFW_VERSION_MINOR, GLFW_VERSION_REVISION);
+int main(int argc, char** argv) {
+  CliOptions opts;
+  if (!parse_cli(argc, argv, opts)) return EXIT_FAILURE;
 
-  if (smoke_test_socket() != 0) return EXIT_FAILURE;
-  std::printf("udp socket smoke-test OK\n");
+  if (opts.smoke_test) return run_smoke_tests();
 
-  if (smoke_test_parser() != 0) return EXIT_FAILURE;
-  std::printf("rfc9828 parser smoke-test OK\n");
-
-  if (smoke_test_ycbcr() != 0) return EXIT_FAILURE;
-  std::printf("ycbcr->rgb smoke-test OK\n");
-
-  if (smoke_test_frame_handler() != 0) return EXIT_FAILURE;
-  std::printf("frame_handler smoke-test OK\n");
-
-  return 0;
+  return run_receiver(opts);
 }

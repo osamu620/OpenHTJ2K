@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -117,6 +118,23 @@ bool UdpSocket::set_recv_buffer_size(int bytes) {
     return false;
   }
   return true;
+}
+
+int UdpSocket::wait_readable(int timeout_ms) {
+  if (fd_ < 0) {
+    last_error_ = "wait_readable(): socket not open";
+    return -1;
+  }
+  pollfd pfd{};
+  pfd.fd     = fd_;
+  pfd.events = POLLIN;
+  int rc     = ::poll(&pfd, 1, timeout_ms);
+  if (rc < 0) {
+    if (errno == EINTR) return 0;  // signal, treat as timeout
+    last_error_ = errno_message("poll()");
+    return -1;
+  }
+  return rc > 0 ? 1 : 0;
 }
 
 ptrdiff_t UdpSocket::recv(void* buf, size_t buf_size) {
