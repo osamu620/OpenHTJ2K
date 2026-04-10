@@ -3,4 +3,5 @@ target_sources(open_htj2k_rtp_recv
     PRIVATE
         main_rtp_recv.cpp
         rtp_socket.cpp
+        rfc9828_parser.cpp
 )
