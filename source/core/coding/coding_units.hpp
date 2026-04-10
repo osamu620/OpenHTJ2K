@@ -33,6 +33,7 @@
 #include <atomic>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <mutex>
 
 /********************************************************************************
@@ -234,8 +235,10 @@ class j2k_subband : public j2k_region {
 class j2k_precinct_subband : public j2k_region {
  private:
   OPENHTJ2K_MAYBE_UNUSED const uint8_t orientation;
-  tagtree *inclusion_info;
-  tagtree *ZBP_info;
+  // Embedded directly (was previously raw `tagtree *` with `new`/`delete`).
+  // Default-constructed when num_codeblocks==0 (stays empty); otherwise move-assigned in ctor.
+  tagtree inclusion_info;
+  tagtree ZBP_info;
   // Flat array of codeblock objects (placement-new'd into a single allocation)
   j2k_codeblock *codeblocks;
   // Single slab backing layer_start[] and layer_passes[] for all codeblocks
@@ -249,14 +252,12 @@ class j2k_precinct_subband : public j2k_region {
                        const element_siz &p1, const uint32_t stride, const uint16_t &num_layers,
                        const element_siz &codeblock_size, const uint8_t &Cmodes);
   ~j2k_precinct_subband() {
-    delete inclusion_info;
-    delete ZBP_info;
     const uint32_t N = num_codeblock_x * num_codeblock_y;
     for (uint32_t i = 0; i < N; ++i) {
       codeblocks[i].~j2k_codeblock();
     }
     operator delete[](codeblocks);
-    // cb_layer_pool unique_ptr destructs here, after all codeblocks are destroyed
+    // tagtree members and cb_layer_pool unique_ptr destruct automatically.
   }
   //  void destroy_codeblocks() {
   //    for (uint32_t i = 0; i < num_codeblock_x * num_codeblock_y; ++i) {
@@ -284,8 +285,10 @@ class j2k_precinct : public j2k_region {
   uint8_t num_bands;
   // length which includes packet header and body, used only for encoder
   uint32_t length;
-  // container for a subband within this precinct which includes codeblocks
-  std::unique_ptr<std::unique_ptr<j2k_precinct_subband>[]> pband;
+  // Flat array of precinct-subbands (placement-new'd into a single allocation).
+  // Replaces the old `unique_ptr<unique_ptr<T>[]>` double-indirection — one heap
+  // allocation per precinct instead of (1 + num_bands).
+  j2k_precinct_subband *pband;
 
  public:
   // buffer for generated packet header: only for encoding
@@ -295,9 +298,20 @@ class j2k_precinct : public j2k_region {
 
  public:
   j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_siz &p0, const element_siz &p1,
-               const std::unique_ptr<std::unique_ptr<j2k_subband>[]> &subband, const uint16_t &num_layers,
+               const j2k_subband *subband, const uint16_t &num_layers,
                const element_siz &codeblock_size, const uint8_t &Cmodes, uint8_t nb = 0,
                dwt_type dfs_dir = DWT_BIDIR);
+  ~j2k_precinct() {
+    for (uint8_t i = 0; i < num_bands; ++i) {
+      pband[i].~j2k_precinct_subband();
+    }
+    operator delete[](pband);
+  }
+  // Disable copy/move — owns raw pointer with manual destruction.
+  j2k_precinct(const j2k_precinct &)            = delete;
+  j2k_precinct &operator=(const j2k_precinct &) = delete;
+  j2k_precinct(j2k_precinct &&)                 = delete;
+  j2k_precinct &operator=(j2k_precinct &&)      = delete;
 
   j2k_precinct_subband *access_pband(uint8_t b);
   void set_length(uint32_t len) { length = len; }
@@ -337,10 +351,11 @@ class j2k_resolution : public j2k_region {
  private:
   // resolution level
   const uint8_t index;
-  // array of unique pointer to precincts
-  std::unique_ptr<std::unique_ptr<j2k_precinct>[]> precincts;
-  // unique pointer to subbands
-  std::unique_ptr<std::unique_ptr<j2k_subband>[]> subbands;
+  // Flat array of precincts (placement-new'd, single allocation per resolution).
+  j2k_precinct *precincts;
+  uint32_t num_precincts;  // == npw * nph for non-empty resolutions, else 0
+  // Flat array of subbands (placement-new'd, single allocation per resolution).
+  j2k_subband *subbands;
   // nominal ranges of subbands
   float child_ranges[4]{};
 
@@ -382,12 +397,17 @@ class j2k_resolution : public j2k_region {
   void destroy() {
     aligned_mem_free(i_samples);
     i_samples = nullptr;
-    for (uint8_t b = 0; b < num_bands; ++b) {
-      if (subbands != nullptr) {
-        subbands[b]->destroy();
+    if (subbands != nullptr) {
+      for (uint8_t b = 0; b < num_bands; ++b) {
+        subbands[b].destroy();
       }
     }
   }
+  // Disable copy/move — owns raw arrays with manual destruction.
+  j2k_resolution(const j2k_resolution &)            = delete;
+  j2k_resolution &operator=(const j2k_resolution &) = delete;
+  j2k_resolution(j2k_resolution &&)                 = delete;
+  j2k_resolution &operator=(j2k_resolution &&)      = delete;
 };
 
 /********************************************************************************
@@ -459,12 +479,13 @@ class j2k_tile_component : public j2k_tile_base {
   uint8_t ROIshift;
   // DFS index for this component (0 = DFS not active)
   uint8_t dfs_index = 0;
-  // pointer to instances of resolution class
-  std::unique_ptr<std::unique_ptr<j2k_resolution>[]> resolution;
+  // Flat array of j2k_resolution objects (placement-new'd, single allocation per tile component).
+  j2k_resolution *resolution;
+  uint8_t num_resolutions;  // == NL + 1 when allocated, else 0
   // opaque line-decode state (allocated by init_line_decode, freed by finalize_line_decode)
-  struct j2k_tcomp_line_dec *line_dec;
+  std::unique_ptr<struct j2k_tcomp_line_dec> line_dec;
   // opaque line-encode state (allocated by init_line_encode, freed by finalize_line_encode)
-  struct j2k_tcomp_line_enc *line_enc;
+  std::unique_ptr<struct j2k_tcomp_line_enc> line_enc;
   // set members related to COC marker
   void setCOCparams(COC_marker *COC);
   // set members related to QCC marker
@@ -485,6 +506,11 @@ class j2k_tile_component : public j2k_tile_base {
   j2k_tile_component();
   // destructor
   ~j2k_tile_component();
+  // Disable copy/move — owns raw pointer arrays (resolution[]) with manual destruction.
+  j2k_tile_component(const j2k_tile_component &)            = delete;
+  j2k_tile_component &operator=(const j2k_tile_component &) = delete;
+  j2k_tile_component(j2k_tile_component &&)                 = delete;
+  j2k_tile_component &operator=(j2k_tile_component &&)      = delete;
   // initialization of coordinates and parameters defined in tile-part markers
   void init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile, uint16_t c,
             std::vector<int32_t *> img = {}, bool lb_enc = false);
@@ -526,13 +552,12 @@ class j2k_tile_component : public j2k_tile_base {
   void init_line_encode();
   void push_line_enc(const sprec_t *in);
   void finalize_line_encode();
-  struct j2k_tcomp_line_enc *get_line_enc() { return line_enc; }
+  struct j2k_tcomp_line_enc *get_line_enc() { return line_enc.get(); }
 
   void destroy() {
-    for (uint8_t r = 0; r < this->NL; ++r) {
-      if (resolution != nullptr) {
-        auto p = resolution[r].get();
-        if (p != nullptr) resolution[r]->destroy();
+    if (resolution != nullptr) {
+      for (uint8_t r = 0; r < this->NL; ++r) {
+        resolution[r].destroy();
       }
     }
   }
