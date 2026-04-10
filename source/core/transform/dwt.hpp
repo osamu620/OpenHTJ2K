@@ -45,6 +45,13 @@
   #define OPENHTJ2K_ENABLE_AVX2
 #endif
 #define SIMD_PADDING 32
+// DWT_RIGHT_SLACK is declared in utils.hpp (accessible to coding_units.cpp without
+// pulling in the transform headers).  It must equal SIMD_PADDING because both
+// describe the same per-row right-edge padding the in-place horizontal DWT
+// requires.  This static_assert keeps the two constants in sync without
+// creating a header dependency from utils.hpp on dwt.hpp.
+static_assert(DWT_RIGHT_SLACK == SIMD_PADDING,
+              "DWT_RIGHT_SLACK (utils.hpp) must equal SIMD_PADDING (dwt.hpp)");
 constexpr int32_t DWT_VERT_STRIP = 64;  // column-strip width for vertical DWT (multiple of 8)
 
 constexpr float fA = -1.586134342059924f;
