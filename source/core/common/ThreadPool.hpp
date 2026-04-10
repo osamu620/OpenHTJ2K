@@ -31,12 +31,12 @@
   #pragma once
 
   #include <atomic>
+  #include <cassert>
   #include <cstdint>
-  #include <functional>
+  #include <cstring>
   #include <future>
   #include <memory>
   #include <mutex>
-  #include <queue>
   #include <thread>
   #include <type_traits>
   #include <unordered_map>
@@ -45,9 +45,89 @@
 // Set once in worker() — avoids the hash-map lookup in decode_strip_core's in_worker check.
 inline thread_local bool g_in_worker_thread = false;
 
+// ─── InlineTask ──────────────────────────────────────────────────────────────
+// Type-erased callable with fixed inline storage — replaces std::function<void()>
+// in the task queue to eliminate heap allocation and virtual-dispatch overhead.
+//
+// All hot-path lambdas in this codebase capture <= 32 bytes of trivially-copyable
+// data (raw pointers + small integers), which hits the fast memcpy path (no
+// per-task heap allocation, no destructor call).  Non-trivially-destructible
+// captures (e.g. shared_ptr in enqueue()) are supported via an ops_ trampoline.
+class InlineTask {
+  static constexpr size_t CAPACITY = 32;
+  alignas(8) unsigned char storage_[CAPACITY];
+  void (*invoke_)(void *) = nullptr;
+  // Relocate / destroy trampoline for non-trivially-copyable captures.
+  //   ops_(dst, src) with src != nullptr  →  move-construct dst from src, destroy src
+  //   ops_(dst, nullptr)                  →  destroy dst
+  //   nullptr  →  type is trivially copyable+destructible; use memcpy, skip destroy.
+  void (*ops_)(void *, void *) = nullptr;
+
+ public:
+  InlineTask() = default;
+
+  template <typename F, typename = typename std::enable_if<
+                            !std::is_same<typename std::decay<F>::type, InlineTask>::value>::type>
+  InlineTask(F &&f) noexcept(std::is_nothrow_move_constructible<typename std::decay<F>::type>::value) {
+    using Fn = typename std::decay<F>::type;
+    static_assert(sizeof(Fn) <= CAPACITY, "Lambda capture exceeds InlineTask capacity (32 bytes)");
+    static_assert(alignof(Fn) <= 8, "Lambda alignment exceeds InlineTask alignment");
+    new (storage_) Fn(std::forward<F>(f));
+    invoke_ = [](void *p) { (*static_cast<Fn *>(p))(); };
+    // Trivially-copyable + trivially-destructible  →  fast path (no ops_ needed).
+    // Otherwise install a relocate/destroy trampoline for correct lifetime management.
+    if (!std::is_trivially_copyable<Fn>::value || !std::is_trivially_destructible<Fn>::value) {
+      ops_ = [](void *dst, void *src) {
+        if (src) {
+          new (dst) Fn(std::move(*static_cast<Fn *>(src)));
+          static_cast<Fn *>(src)->~Fn();
+        } else {
+          static_cast<Fn *>(dst)->~Fn();
+        }
+      };
+    }
+  }
+
+  ~InlineTask() {
+    if (ops_ && invoke_) ops_(storage_, nullptr);
+  }
+
+  InlineTask(InlineTask &&o) noexcept : invoke_(o.invoke_), ops_(o.ops_) {
+    if (ops_) {
+      ops_(storage_, o.storage_);
+    } else {
+      std::memcpy(storage_, o.storage_, CAPACITY);
+    }
+    o.invoke_ = nullptr;
+  }
+
+  InlineTask &operator=(InlineTask &&o) noexcept {
+    if (this != &o) {
+      if (ops_ && invoke_) ops_(storage_, nullptr);
+      invoke_ = o.invoke_;
+      ops_    = o.ops_;
+      if (ops_) {
+        ops_(storage_, o.storage_);
+      } else {
+        std::memcpy(storage_, o.storage_, CAPACITY);
+      }
+      o.invoke_ = nullptr;
+    }
+    return *this;
+  }
+
+  InlineTask(const InlineTask &)            = delete;
+  InlineTask &operator=(const InlineTask &) = delete;
+
+  explicit operator bool() const noexcept { return invoke_ != nullptr; }
+  void operator()() { invoke_(storage_); }
+};
+
 class ThreadPool {
  public:
-  inline explicit ThreadPool(size_t thread_count) : stop(false), thread_count_(thread_count) {
+  inline explicit ThreadPool(size_t thread_count)
+      : stop(false), ring_head_(0), ring_tail_(0), thread_count_(thread_count) {
+    ring_ = std::unique_ptr<InlineTask[]>(new InlineTask[RING_CAP]);
     threads = std::make_unique<std::thread[]>(thread_count_);
     for (size_t i = 0; i < thread_count_; ++i) {
       threads[i] = std::thread(&ThreadPool::worker, this);
@@ -117,11 +197,11 @@ class ThreadPool {
   }
 
   /**
-   * @brief Push a batch of tasks built from a container in a single lock+notify_all.
+   * @brief Push a batch of tasks built from a container in a single lock+notify.
    * @param items  Container whose elements are passed one-by-one to @p factory.
-   * @param factory  Callable: factory(item) → void() callable.
+   * @param factory  Callable: factory(item) -> void() callable.
    *
-   * Acquires the task-queue mutex exactly once and notifies all worker threads once,
+   * Acquires the task-queue mutex exactly once and notifies worker threads once,
    * replacing N individual push() calls (each of which locks + notify_one()).
    */
   template <typename Container, typename Factory>
@@ -134,7 +214,9 @@ class ThreadPool {
         throw std::runtime_error("Cannot schedule new task after shutdown.");
       }
       for (auto &&item : items) {
-        tasks.push(std::function<void()>(factory(item)));
+        assert(ring_size_() < RING_CAP && "InlineTask ring overflow — increase RING_CAP");
+        ring_[ring_tail_ & RING_MASK] = InlineTask(factory(item));
+        ++ring_tail_;
       }
     }
     // Wake only as many workers as actually needed to drain the queue.
@@ -154,12 +236,12 @@ class ThreadPool {
   // Safe to call from any thread (including the main thread) to do useful work
   // instead of spinning in a busy-wait loop.
   bool try_run_one() {
-    std::function<void()> task;
+    InlineTask task;
     {
       std::unique_lock<std::mutex> lock(tasks_mutex, std::try_to_lock);
-      if (!lock.owns_lock() || tasks.empty()) return false;
-      task = std::move(tasks.front());
-      tasks.pop();
+      if (!lock.owns_lock() || ring_empty_()) return false;
+      task = std::move(ring_[ring_head_ & RING_MASK]);
+      ++ring_head_;
     }
     task();
     return true;
@@ -190,7 +272,7 @@ class ThreadPool {
 
  private:
   template <typename F>
-  inline void push_task(const F& task) {
+  inline void push_task(F &&task) {
     {
       const std::lock_guard<std::mutex> lock(tasks_mutex);
 
@@ -198,13 +280,20 @@ class ThreadPool {
         throw std::runtime_error("Cannot schedule new task after shutdown.");
       }
 
-      tasks.push(std::function<void()>(task));
+      assert(ring_size_() < RING_CAP && "InlineTask ring overflow — increase RING_CAP");
+      ring_[ring_tail_ & RING_MASK] = InlineTask(std::forward<F>(task));
+      ++ring_tail_;
     }
 
     condition.notify_one();
   }
 
-  static constexpr size_t BATCH = 4;  // tasks drained per lock hold in worker()
+  static constexpr size_t BATCH    = 4;     // tasks drained per lock hold in worker()
+  static constexpr size_t RING_CAP = 8192;  // must be power of 2
+  static constexpr size_t RING_MASK = RING_CAP - 1;
+
+  bool ring_empty_() const { return ring_head_ == ring_tail_; }
+  size_t ring_size_() const { return ring_tail_ - ring_head_; }
 
   /**
    * @brief A worker function to be assigned to each thread in the pool.
@@ -214,23 +303,23 @@ class ThreadPool {
    */
   void worker() {
     g_in_worker_thread = true;
-    std::function<void()> batch[BATCH];
+    InlineTask batch[BATCH];
 
     for (;;) {
       size_t n = 0;
 
       {
         std::unique_lock<std::mutex> lock(tasks_mutex);
-        condition.wait(lock, [&] { return !tasks.empty() || stop; });
+        condition.wait(lock, [&] { return !ring_empty_() || stop; });
 
-        if (stop && tasks.empty()) {
+        if (stop && ring_empty_()) {
           return;
         }
 
         // Drain up to BATCH tasks in one lock hold.
-        while (n < BATCH && !tasks.empty()) {
-          batch[n++] = std::move(tasks.front());
-          tasks.pop();
+        while (n < BATCH && !ring_empty_()) {
+          batch[n++] = std::move(ring_[ring_head_ & RING_MASK]);
+          ++ring_head_;
         }
       }
 
@@ -256,9 +345,13 @@ class ThreadPool {
   std::unordered_map<std::thread::id, size_t> id_map;
 
   /**
-   * @brief A queue of tasks to be executed by the threads.
+   * @brief Pre-allocated ring buffer of tasks (replaces std::queue<std::function>).
+   * Eliminates per-task heap allocation from std::deque chunk management and
+   * std::function's type-erased storage.
    */
-  std::queue<std::function<void()>> tasks;
+  std::unique_ptr<InlineTask[]> ring_;
+  size_t ring_head_;  // consumer index (next pop position)
+  size_t ring_tail_;  // producer index (next push position)
 
   /**
    * @brief The number of threads in the pool.
