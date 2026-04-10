@@ -387,17 +387,14 @@ class tagtree {
   uint8_t level;
   std::unique_ptr<tagtree_node[]> node;
   uint32_t num_nodes;
-  const uint32_t num_cblk_x;
-  const uint32_t num_cblk_y;
+  // Non-const so the class is move-assignable (allows embedding by value).
+  uint32_t num_cblk_x;
+  uint32_t num_cblk_y;
 
  public:
-  // tagtree() {
-  //   level      = 0;
-  //   node       = nullptr;
-  //   num_nodes  = 0;
-  //   num_cblk_x = 0;
-  //   num_cblk_y = 0;
-  // }
+  // Default constructor: zero-initialised, no node array. Used when the owning
+  // container needs default construction before move-assigning a real instance.
+  tagtree() : level(0), node(nullptr), num_nodes(0), num_cblk_x(0), num_cblk_y(0) {}
   tagtree(const uint32_t nx, const uint32_t ny) : level(1), num_nodes(0), num_cblk_x(nx), num_cblk_y(ny) {
     int32_t num_nodes_current_level, width_current_level, height_current_level;
     width_current_level  = (int32_t)num_cblk_x;

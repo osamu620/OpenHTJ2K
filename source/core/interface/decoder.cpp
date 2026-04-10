@@ -281,6 +281,12 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   // printf("Tile num x = %d, y = %d\n", numTiles.x, numTiles.y);
+  // Validate tile count BEFORE allocating output buffers — otherwise the raw `new int32_t[]`
+  // pointers pushed into `buf` would leak on throw (caller owns `buf` but only after return).
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
 
   // Create output buffer
   uint16_t num_components = main_header.SIZ->get_num_components();
@@ -301,10 +307,6 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     buf.emplace_back(new int32_t[width[c] * height[c]]);
     depth.push_back(main_header.SIZ->get_bitdepth(c) - 0);
     is_signed.push_back(main_header.SIZ->is_signed(c));
-  }
-  if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
   }
 
   //  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
@@ -405,6 +407,11 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
 
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  // Validate tile count BEFORE allocating output buffers — see invoke() for rationale.
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
 
   // Allocate output buffers (identical to invoke()).
   uint16_t num_components = main_header.SIZ->get_num_components();
@@ -424,10 +431,6 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     buf.emplace_back(new int32_t[width[c] * height[c]]);
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
-  }
-  if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
   }
 
   std::vector<j2k_tile> tileSet;
@@ -490,6 +493,11 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
 
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  // Validate tile count BEFORE populating output metadata — see invoke() for rationale.
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
 
   uint16_t num_components = main_header.SIZ->get_num_components();
   element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
@@ -507,10 +515,6 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
-  }
-  if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
   }
 
   std::vector<j2k_tile> tileSet;
@@ -583,17 +587,24 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   }
 
   // General path: multiple tile columns — scatter into per-band-row accumulators.
+  // Hoist all per-iteration scratch vectors out of the loops so the heap allocations
+  // happen once instead of (numTiles.y * (1 + numTiles.x + 1)) times.
+  std::vector<uint32_t>             band_h(num_components);
+  std::vector<uint32_t>             tile_x_off(num_components);
+  std::vector<uint32_t>             tile_w(num_components);
+  std::vector<int32_t *>            row_ptrs(num_components);
+  std::vector<std::vector<int32_t>> accum(num_components);
+
   for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
     // Compute band height per component (same for all tx in this tile row).
-    std::vector<uint32_t> band_h(num_components);
     {
       uint32_t x_off, y_off, t_w;
       for (uint16_t c = 0; c < num_components; ++c)
         get_tile_geom(0, ty, c, x_off, y_off, t_w, band_h[c]);
     }
 
-    // Allocate full-width accumulator buffers for this tile-row band.
-    std::vector<std::vector<int32_t>> accum(num_components);
+    // (Re)allocate full-width accumulator buffers for this tile-row band.
+    // assign() reuses existing capacity when the new size fits.
     for (uint16_t c = 0; c < num_components; ++c)
       accum[c].assign(static_cast<size_t>(band_h[c]) * width[c], 0);
 
@@ -601,7 +612,6 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       const uint32_t tile_idx = ty * numTiles.x + tx;
 
       // Compute per-component x-offsets and widths for this tile.
-      std::vector<uint32_t> tile_x_off(num_components), tile_w(num_components);
       {
         uint32_t x_off, y_off, t_w, t_h;
         for (uint16_t c = 0; c < num_components; ++c) {
@@ -634,7 +644,6 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     }
 
     // Deliver complete rows for this tile-row band to the user callback.
-    std::vector<int32_t *> row_ptrs(num_components);
     for (uint32_t y = 0; y < band_h[0]; ++y) {
       for (uint16_t c = 0; c < num_components; ++c) {
         // For subsampled components, clamp to last valid row.
@@ -674,6 +683,11 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
 
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  // Validate tile count BEFORE allocating output buffers — see invoke() for rationale.
+  if (numTiles.x * numTiles.y > 65535) {
+    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
+    throw std::exception();
+  }
 
   uint16_t num_components = main_header.SIZ->get_num_components();
   element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
@@ -692,10 +706,6 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
     buf.emplace_back(new int32_t[width[c] * height[c]]);
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
-  }
-  if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
   }
 
   std::vector<j2k_tile> tileSet;
