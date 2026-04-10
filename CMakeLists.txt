@@ -242,6 +242,26 @@ add_subdirectory(source/apps/lb_compare)
 target_include_directories(lb_compare PUBLIC source/core/interface)
 target_link_libraries(lb_compare PUBLIC open_htj2k)
 
+# RFC 9828 RTP receiver (experimental, requires GLFW + OpenGL)
+option(OPENHTJ2K_RTP "Build experimental RFC 9828 RTP receiver (requires GLFW)" OFF)
+if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
+  find_package(glfw3 QUIET)
+  find_package(OpenGL QUIET)
+  if (glfw3_FOUND AND OpenGL_FOUND)
+    message(STATUS "OPENHTJ2K_RTP: building open_htj2k_rtp_recv")
+    add_executable(open_htj2k_rtp_recv)
+    target_include_directories(open_htj2k_rtp_recv PUBLIC source/core/interface)
+    add_subdirectory(source/apps/rtp_recv)
+    set_target_properties(
+      open_htj2k_rtp_recv
+      PROPERTIES OUTPUT_NAME
+                 $<IF:$<CONFIG:Debug>,open_htj2k_rtp_recv_dbg,open_htj2k_rtp_recv>)
+    target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL)
+  else()
+    message(WARNING "OPENHTJ2K_RTP requested but glfw3/OpenGL not found; skipping rtp_recv target")
+  endif()
+endif()
+
 ################################################################################################
 # Install
 ################################################################################################
