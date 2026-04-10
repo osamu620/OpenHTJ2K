@@ -1955,12 +1955,16 @@ int j2k_tile_part::read(j2c_src_memory &in) {
   uint32_t length_of_tilepart_markers = this->header->read(in);
   const uint32_t Psot                 = this->header->SOT.get_tile_part_length();
   if (Psot == 0) {
-    // Psot=0: tile-part extends to EOC. Scan backward to find the EOC marker (0xFF 0xD9);
-    // some encoders append padding bytes after EOC, so don't assume it is the final 2 bytes.
+    // Psot=0: tile-part extends to EOC. Scan backward to find the last
+    // 0xFF 0xD9 marker; some encoders append padding bytes after EOC, so
+    // don't assume it is the final 2 bytes. The scan steps by 1 byte
+    // because EOC can land at any byte offset within the tile-part body
+    // (e.g., when the body length is odd) — stepping by 2 misses every
+    // EOC at an odd offset.
     const uint32_t remaining = in.get_remaining();
     const uint8_t *p         = in.get_buf_pos();
     uint32_t eoc_offset      = (remaining >= 2) ? remaining - 2 : 0;
-    for (uint32_t i = remaining; i >= 2; i -= 2) {
+    for (uint32_t i = remaining; i >= 2; --i) {
       if (p[i - 2] == 0xFF && p[i - 1] == 0xD9) {
         eoc_offset = i - 2;
         break;
