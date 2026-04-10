@@ -88,6 +88,14 @@ constexpr int32_t DWT_RIGHT_SLACK = 32;
   #ifndef __clang__
     #ifndef __INTEL_COMPILER
       #if defined(__GNUC__) && (__GNUC__ < 10)
+// _mm256_storeu2_m128i and _mm256_set_m128i were added to GCC's <avxintrin.h>
+// in GCC 10 (October 2019).  Older GCCs (e.g. GCC 7.5.0 still found in some
+// long-LTS distros and embedded toolchains) lack them entirely, which manifests
+// in template-heavy headers as a two-phase-lookup error of the form
+//   "there are no arguments to _mm256_set_m128i that depend on a template
+//    parameter, so a declaration of _mm256_set_m128i must be available"
+// Provide static-inline polyfills here so call sites can keep using the
+// readable Intel-style names.
 static inline void _mm256_storeu2_m128i(__m128i_u* __addr_hi, __m128i_u* __addr_lo, __m256i __a) {
   __m128i __v128;
 
@@ -95,6 +103,10 @@ static inline void _mm256_storeu2_m128i(__m128i_u* __addr_hi, __m128i_u* __addr_
   _mm_storeu_si128(__addr_lo, __v128);
   __v128 = _mm256_extractf128_si256(__a, 1);
   _mm_storeu_si128(__addr_hi, __v128);
+}
+
+static inline __m256i _mm256_set_m128i(__m128i __H, __m128i __L) {
+  return _mm256_insertf128_si256(_mm256_castsi128_si256(__L), __H, 1);
 }
       #endif
     #endif
