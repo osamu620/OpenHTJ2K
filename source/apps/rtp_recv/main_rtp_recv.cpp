@@ -19,6 +19,7 @@
 #include <GLFW/glfw3.h>
 
 #include "decoder.hpp"
+#include "frame_handler.hpp"
 #include "rfc9828_parser.hpp"
 #include "rtp_socket.hpp"
 #include "ycbcr_rgb.hpp"
@@ -159,6 +160,104 @@ int smoke_test_ycbcr() {
   return 0;
 }
 
+int smoke_test_frame_handler() {
+  using namespace open_htj2k::rtp_recv;
+
+  FrameHandler fh;
+  std::optional<AssembledFrame> frame;
+
+  // Case 1: single-packet frame (Main Packet with R=0 and marker bit set).
+  // Main Packet carries 10 bytes of dummy codestream.
+  RtpHeader rtp{};
+  rtp.version   = 2;
+  rtp.sequence  = 100;
+  rtp.timestamp = 0x1000;
+  rtp.marker    = true;
+
+  MainPacketHeader main{};
+  main.mh = MH_MAIN_SINGLE;
+  main.tp = 0;
+  main.ordh = ORDH_PCRL_RESYNC;
+  main.eseq = 0;
+
+  const uint8_t dummy_cs[10] = {0xFF, 0x4F, 0xFF, 0x51, 0, 0, 0, 0, 0xFF, 0xD9};
+  if (!fh.push_main_packet(rtp, main, dummy_cs, sizeof(dummy_cs), frame)) return 1;
+  if (!frame.has_value()) {
+    std::fprintf(stderr, "frame_handler: single-packet frame did not emit\n");
+    return 1;
+  }
+  if (frame->bytes.size() != sizeof(dummy_cs)) return 1;
+  if (fh.stats().frames_emitted != 1 || fh.stats().frames_dropped != 0) return 1;
+  frame.reset();
+
+  // Case 2: multi-packet frame — Main then Body then Body with marker.
+  fh.reset();
+  RtpHeader rtp2{};
+  rtp2.version   = 2;
+  rtp2.sequence  = 200;
+  rtp2.timestamp = 0x2000;
+  rtp2.marker    = false;
+  MainPacketHeader main2{};
+  main2.mh = MH_MAIN_THEN_BODY;
+  main2.eseq = 0;
+  const uint8_t main_cs[4] = {0xFF, 0x4F, 0xFF, 0x51};
+  if (!fh.push_main_packet(rtp2, main2, main_cs, sizeof(main_cs), frame)) return 1;
+  if (frame.has_value()) return 1;  // not done yet
+
+  rtp2.sequence = 201;
+  rtp2.marker   = false;
+  BodyPacketHeader body2{};
+  body2.mh = MH_BODY;
+  body2.eseq = 0;
+  const uint8_t body_cs_1[3] = {0xAA, 0xBB, 0xCC};
+  if (!fh.push_body_packet(rtp2, body2, body_cs_1, sizeof(body_cs_1), frame)) return 1;
+  if (frame.has_value()) return 1;
+
+  rtp2.sequence = 202;
+  rtp2.marker   = true;
+  const uint8_t body_cs_2[3] = {0xDD, 0xFF, 0xD9};
+  if (!fh.push_body_packet(rtp2, body2, body_cs_2, sizeof(body_cs_2), frame)) return 1;
+  if (!frame.has_value()) {
+    std::fprintf(stderr, "frame_handler: multi-packet frame did not emit on marker\n");
+    return 1;
+  }
+  if (frame->bytes.size() != 10 || frame->packet_count != 3) {
+    std::fprintf(stderr, "frame_handler: unexpected sizes bytes=%zu packets=%zu\n",
+                 frame->bytes.size(), frame->packet_count);
+    return 1;
+  }
+  frame.reset();
+
+  // Case 3: sequence gap → frame dropped.
+  fh.reset();
+  RtpHeader rtp3{};
+  rtp3.version   = 2;
+  rtp3.sequence  = 300;
+  rtp3.timestamp = 0x3000;
+  rtp3.marker    = false;
+  MainPacketHeader main3{};
+  main3.eseq = 0;
+  if (!fh.push_main_packet(rtp3, main3, main_cs, sizeof(main_cs), frame)) return 1;
+  // Skip seq 301, jump to 302 — gap of 1.
+  rtp3.sequence = 302;
+  rtp3.marker   = true;
+  BodyPacketHeader body3{};
+  body3.eseq = 0;
+  if (!fh.push_body_packet(rtp3, body3, body_cs_2, sizeof(body_cs_2), frame)) return 1;
+  if (frame.has_value()) {
+    std::fprintf(stderr, "frame_handler: lossy frame emitted instead of dropped\n");
+    return 1;
+  }
+  if (fh.stats().frames_dropped != 1 || fh.stats().seq_gaps != 1) {
+    std::fprintf(stderr, "frame_handler: expected dropped=1 gaps=1, got dropped=%lu gaps=%lu\n",
+                 static_cast<unsigned long>(fh.stats().frames_dropped),
+                 static_cast<unsigned long>(fh.stats().seq_gaps));
+    return 1;
+  }
+
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -175,6 +274,9 @@ int main(int argc, char **argv) {
 
   if (smoke_test_ycbcr() != 0) return EXIT_FAILURE;
   std::printf("ycbcr->rgb smoke-test OK\n");
+
+  if (smoke_test_frame_handler() != 0) return EXIT_FAILURE;
+  std::printf("frame_handler smoke-test OK\n");
 
   return 0;
 }
