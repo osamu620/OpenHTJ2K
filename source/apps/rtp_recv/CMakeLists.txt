@@ -5,4 +5,5 @@ target_sources(open_htj2k_rtp_recv
         rtp_socket.cpp
         rfc9828_parser.cpp
         frame_handler.cpp
+        gl_renderer.cpp
 )
