@@ -16,10 +16,12 @@
 // /home/osamu/.claude/plans/unified-kindling-parnas.md for rationale.
 
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -332,6 +334,17 @@ int run_receiver(const CliOptions& opts) {
   bool     first_frame    = true;
   bool     should_exit    = false;
 
+  // Timing instrumentation.  Wall-clock per frame from the moment the frame
+  // leaves frame_handler to when decode+render returns; aggregate into
+  // min/avg/max and a running FPS over the last 30 frames.
+  using Clock             = std::chrono::steady_clock;
+  const auto run_start_tp = Clock::now();
+  auto  last_log_tp       = run_start_tp;
+  double decode_ms_sum    = 0.0;
+  double decode_ms_min    = std::numeric_limits<double>::infinity();
+  double decode_ms_max    = 0.0;
+  uint64_t frames_at_last_log = 0;
+
   while (!should_exit) {
     // Poll the socket with a short timeout so GLFW events still fire every
     // few ms even when no packets are arriving.
@@ -385,9 +398,32 @@ int run_receiver(const CliOptions& opts) {
 
         if (emitted.has_value()) {
           dump_frame_if_requested(opts, *emitted, frames_decoded);
-          if (decode_and_present(*emitted, opts, first_frame, renderer_ptr, rgb_backbuffer)) {
+          const auto decode_start = Clock::now();
+          const bool ok =
+              decode_and_present(*emitted, opts, first_frame, renderer_ptr, rgb_backbuffer);
+          const auto decode_end = Clock::now();
+          const double decode_ms =
+              std::chrono::duration<double, std::milli>(decode_end - decode_start).count();
+          if (ok) {
             ++frames_decoded;
+            decode_ms_sum += decode_ms;
+            if (decode_ms < decode_ms_min) decode_ms_min = decode_ms;
+            if (decode_ms > decode_ms_max) decode_ms_max = decode_ms;
             first_frame = false;
+
+            // Print a running FPS line every ~1 second.
+            const auto now = Clock::now();
+            const double since_log_s =
+                std::chrono::duration<double>(now - last_log_tp).count();
+            if (since_log_s >= 1.0) {
+              const uint64_t delta_frames = frames_decoded - frames_at_last_log;
+              const double   fps          = static_cast<double>(delta_frames) / since_log_s;
+              std::fprintf(stderr, "  [%llu frames] inst=%.2f fps, last decode=%.2f ms\n",
+                           static_cast<unsigned long long>(frames_decoded), fps, decode_ms);
+              frames_at_last_log = frames_decoded;
+              last_log_tp        = now;
+            }
+
             if (opts.max_frames > 0 && frames_decoded >= static_cast<uint64_t>(opts.max_frames)) {
               should_exit = true;
               break;
@@ -405,23 +441,37 @@ int run_receiver(const CliOptions& opts) {
     }
   }
 
+  const auto   run_end_tp   = Clock::now();
+  const double run_secs     = std::chrono::duration<double>(run_end_tp - run_start_tp).count();
+  const double avg_fps      = frames_decoded > 0 ? static_cast<double>(frames_decoded) / run_secs
+                                                 : 0.0;
+  const double decode_ms_avg =
+      frames_decoded > 0 ? decode_ms_sum / static_cast<double>(frames_decoded) : 0.0;
+  if (frames_decoded == 0) decode_ms_min = 0.0;
+
   const auto& s = frame_handler.stats();
   std::fprintf(stderr,
                "\n--- summary ---\n"
+               "  wall time:        %.2f s\n"
                "  frames decoded:   %llu\n"
                "  frames failed:    %llu\n"
                "  frames emitted:   %llu\n"
                "  frames dropped:   %llu\n"
                "  packets received: %llu\n"
                "  bytes received:   %llu\n"
-               "  sequence gaps:    %llu\n",
+               "  sequence gaps:    %llu\n"
+               "  avg FPS:          %.2f\n"
+               "  decode time ms:   min=%.2f avg=%.2f max=%.2f\n",
+               run_secs,
                static_cast<unsigned long long>(frames_decoded),
                static_cast<unsigned long long>(frames_failed),
                static_cast<unsigned long long>(s.frames_emitted),
                static_cast<unsigned long long>(s.frames_dropped),
                static_cast<unsigned long long>(s.packets_received),
                static_cast<unsigned long long>(s.bytes_received),
-               static_cast<unsigned long long>(s.seq_gaps));
+               static_cast<unsigned long long>(s.seq_gaps),
+               avg_fps,
+               decode_ms_min, decode_ms_avg, decode_ms_max);
 
   renderer.shutdown();
   return EXIT_SUCCESS;
