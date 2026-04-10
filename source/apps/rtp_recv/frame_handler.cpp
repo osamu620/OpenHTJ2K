@@ -23,14 +23,15 @@ void FrameHandler::reserve_frame_capacity(size_t bytes) { accum_.reserve(bytes);
 void FrameHandler::reset() {
   accum_.clear();
   cached_main_.clear();
-  have_cached_main_   = false;
-  have_frame_         = false;
-  current_ts_         = 0;
-  frame_eseq_first_   = 0;
-  frame_eseq_last_    = 0;
-  frame_packet_count_ = 0;
-  frame_intact_       = true;
-  frame_has_meta_     = false;
+  have_cached_main_     = false;
+  have_frame_           = false;
+  current_ts_           = 0;
+  frame_eseq_first_     = 0;
+  frame_eseq_last_      = 0;
+  frame_packet_count_   = 0;
+  frame_intact_         = true;
+  last_pkt_was_marker_  = false;
+  frame_has_meta_       = false;
   frame_tp_           = 0;
   frame_ordh_         = 0;
   frame_r_            = false;
@@ -61,10 +62,11 @@ void FrameHandler::track_sequence(uint32_t ext_seq) {
 
 void FrameHandler::start_frame_empty() {
   accum_.clear();
-  have_frame_         = true;
-  frame_packet_count_ = 0;
-  frame_intact_       = true;
-  frame_has_meta_     = false;
+  have_frame_          = true;
+  frame_packet_count_  = 0;
+  frame_intact_        = true;
+  last_pkt_was_marker_ = false;
+  frame_has_meta_      = false;
 }
 
 void FrameHandler::start_frame_with_main_prepend() {
@@ -76,14 +78,24 @@ void FrameHandler::start_frame_with_main_prepend() {
     // Flag lossy so finalize_frame drops it.
     frame_intact_ = true;  // reset first
   }
-  have_frame_         = true;
-  frame_packet_count_ = 0;
-  frame_intact_       = have_cached_main_;
-  frame_has_meta_     = false;
+  have_frame_          = true;
+  frame_packet_count_  = 0;
+  frame_intact_        = have_cached_main_;
+  last_pkt_was_marker_ = false;
+  frame_has_meta_      = false;
 }
 
 void FrameHandler::finalize_frame(std::optional<AssembledFrame>& out_frame) {
   if (!have_frame_) return;
+
+  // Tail-loss check: if we are finalizing because of an external trigger
+  // (timestamp change on the next packet) and the most recent packet of the
+  // current frame did not carry M=1, we know packet(s) at the end of the
+  // frame were dropped — the codestream is missing its tail.
+  if (frame_intact_ && !last_pkt_was_marker_) {
+    frame_intact_ = false;
+    ++stats_.tail_loss_drops;
+  }
 
   if (frame_intact_ && !accum_.empty()) {
     AssembledFrame f;
@@ -145,6 +157,10 @@ bool FrameHandler::push_main_packet(const RtpHeader& rtp, const MainPacketHeader
     accum_.insert(accum_.end(), codestream_bytes, codestream_bytes + codestream_len);
   }
 
+  // Track marker bit so finalize_frame() can detect tail-loss when triggered
+  // by a later timestamp change.
+  last_pkt_was_marker_ = rtp.marker;
+
   // Capture metadata from the most recent Main Packet in this frame.
   frame_has_meta_ = true;
   frame_tp_       = main.tp;
@@ -202,6 +218,8 @@ bool FrameHandler::push_body_packet(const RtpHeader& rtp, const BodyPacketHeader
   if (codestream_bytes != nullptr && codestream_len > 0) {
     accum_.insert(accum_.end(), codestream_bytes, codestream_bytes + codestream_len);
   }
+
+  last_pkt_was_marker_ = rtp.marker;
 
   if (rtp.marker) {
     finalize_frame(out_frame);
