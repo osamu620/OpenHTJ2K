@@ -223,7 +223,7 @@ class j2k_subband : public j2k_region {
   ~j2k_subband();
   void destroy() {
     if (orientation != BAND_LL) {
-      aligned_mem_free(i_samples);
+      if (i_samples != nullptr) aligned_mem_free(i_samples - DWT_LEFT_SLACK);
       i_samples = nullptr;
     }
   }
@@ -395,7 +395,7 @@ class j2k_resolution : public j2k_region {
     child_ranges[3] = ranges[3];
   }
   void destroy() {
-    aligned_mem_free(i_samples);
+    if (i_samples != nullptr) aligned_mem_free(i_samples - DWT_LEFT_SLACK);
     i_samples = nullptr;
     if (subbands != nullptr) {
       for (uint8_t b = 0; b < num_bands; ++b) {

@@ -37,6 +37,32 @@
 #define round_down(x, n) ((x) - ((x) % (n)))
 #define ceil_int(a, b) ((a) + ((b) - 1)) / (b)
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DWT buffer border slack
+//
+// j2k_resolution and j2k_subband sample buffers are allocated with
+// DWT_LEFT_SLACK floats of slack before the first row and DWT_RIGHT_SLACK
+// floats of slack after the last row. The user-visible i_samples pointer is
+// offset by DWT_LEFT_SLACK from the allocator base, so consumers continue to
+// index as i_samples + y * stride + x as before — the stride is unchanged.
+//
+// This border slack lets the in-place horizontal DWT process the *first* and
+// *last* rows of a tile without an external copy buffer (Xext/Yext): the
+// first row's negative-index slack and the last row's past-the-end slack
+// both land in valid memory inside the allocation. Interior rows already
+// worked via save/restore in fdwt_1d_sr_inplace / idwt_1d_sr_inplace.
+//
+// DWT_LEFT_SLACK is 8 floats (32 bytes) so that adding it to a 32-byte-aligned
+// base preserves 32-byte alignment of i_samples. The horizontal filter only
+// needs MAX_PSE_LEFT = 4 (9/7), but rounding up to 8 avoids alignment
+// surprises in the SIMD loads.
+//
+// DWT_RIGHT_SLACK matches SIMD_PADDING (= 32 floats) so that AVX-512 tail
+// writes (up to 15 floats past width) and the right PSE prefix both fit.
+// ─────────────────────────────────────────────────────────────────────────────
+constexpr int32_t DWT_LEFT_SLACK  = 8;
+constexpr int32_t DWT_RIGHT_SLACK = 32;
+
 #if defined(__INTEL_LLVM_COMPILER)
   #define __INTEL_COMPILER
 #endif
