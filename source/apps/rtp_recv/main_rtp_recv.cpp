@@ -30,6 +30,7 @@
 
 #include "decoder.hpp"
 #include "frame_handler.hpp"
+#include "frame_pipeline.hpp"
 #include "gl_renderer.hpp"
 #include "rfc9828_parser.hpp"
 #include "rtp_socket.hpp"
