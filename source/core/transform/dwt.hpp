@@ -32,6 +32,12 @@
 #include <cstddef>
 #include "open_htj2k_typedef.hpp"
 #include "j2kmarkers.hpp"
+// utils.hpp brings in <x86intrin.h> / <arm_neon.h> conditionally on the active
+// SIMD backend, which dwt_pse_fill_inplace_simd needs for the intrinsics below.
+#include "utils.hpp"
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  #include <wasm_simd128.h>
+#endif
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
   #define OPENHTJ2K_ENABLE_AVX512
 #endif
@@ -85,6 +91,72 @@ static inline int32_t PSEo(const int32_t i, const int32_t i0, const int32_t i1) 
   const int32_t mod_val = tmp1 % tmp0;
   const int32_t min_val = mod_val < tmp0 - mod_val ? mod_val : tmp0 - mod_val;
   return min_val;
+}
+
+// In-place whole-sample symmetric extension (WSSE) of row[].
+//
+// Writes:
+//   row[-i] = row[+i]              for i = 1..8   (left mirror around 0)
+//   row[width+k] = row[width-2-k]  for k = 0..7   (right mirror around width-1)
+//
+// The horizontal DWT filter only reads at most LEFT, RIGHT in {3, 4} samples
+// past each end (parity-dependent for the 9/7 and 5/3 filters), so the upper
+// 4-5 write lanes spill into the caller-owned scratch region and are harmless.
+//
+// Preconditions:
+//   - row[0..width-1] holds valid data
+//   - row[1..8] and row[width-9..width-2] are valid (width >= 9 — caller must
+//     dispatch narrow widths to the scalar PSEo() path)
+//   - row[-8..-1] and row[width..width+7] are writable scratch (8 floats each side):
+//       * line-based path: ring-buffer slot has IDWT_RING_PSE_LEFT = 8 prefix
+//         and SIMD_PADDING = 32 suffix
+//       * batch path: caller saves left_save[8] / right_save[SIMD_PADDING]
+//
+// Implementation: load 8 floats per side, reverse via constant-pattern permute,
+// store. ~3 instructions per side on AVX2 / NEON / WASM.
+static inline void dwt_pse_fill_inplace_simd(sprec_t *row, int32_t width) {
+#if defined(OPENHTJ2K_ENABLE_AVX2)
+  // AVX2 (and AVX-512 builds): 8-lane reverse via vpermps.
+  const __m256i rev = _mm256_setr_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+  __m256 lv = _mm256_loadu_ps(row + 1);                       // [row[1]..row[8]]
+  __m256 lr = _mm256_permutevar8x32_ps(lv, rev);              // [row[8]..row[1]]
+  _mm256_storeu_ps(row - 8, lr);                              // row[-8..-1]
+  __m256 rv = _mm256_loadu_ps(row + width - 9);               // [row[w-9]..row[w-2]]
+  __m256 rr = _mm256_permutevar8x32_ps(rv, rev);              // [row[w-2]..row[w-9]]
+  _mm256_storeu_ps(row + width, rr);                          // row[w..w+7]
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  // NEON: 4-lane reverse via vrev64q + vextq combo, two halves per side.
+  float32x4_t lo = vld1q_f32(row + 1);                        // [row[1],row[2],row[3],row[4]]
+  float32x4_t hi = vld1q_f32(row + 5);                        // [row[5],row[6],row[7],row[8]]
+  float32x4_t lo_rev = vrev64q_f32(vextq_f32(lo, lo, 2));     // [row[4],row[3],row[2],row[1]]
+  float32x4_t hi_rev = vrev64q_f32(vextq_f32(hi, hi, 2));     // [row[8],row[7],row[6],row[5]]
+  vst1q_f32(row - 4, lo_rev);                                 // row[-4..-1]
+  vst1q_f32(row - 8, hi_rev);                                 // row[-8..-5] (slack)
+  float32x4_t r_lo = vld1q_f32(row + width - 9);              // [row[w-9]..row[w-6]]
+  float32x4_t r_hi = vld1q_f32(row + width - 5);              // [row[w-5]..row[w-2]]
+  float32x4_t r_hi_rev = vrev64q_f32(vextq_f32(r_hi, r_hi, 2));  // [row[w-2],row[w-3],row[w-4],row[w-5]]
+  float32x4_t r_lo_rev = vrev64q_f32(vextq_f32(r_lo, r_lo, 2));  // [row[w-6],row[w-7],row[w-8],row[w-9]]
+  vst1q_f32(row + width,     r_hi_rev);                       // row[w..w+3]
+  vst1q_f32(row + width + 4, r_lo_rev);                       // row[w+4..w+7] (slack)
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  // WASM SIMD128: 4-lane shuffle, two halves per side.
+  v128_t lo = wasm_v128_load(row + 1);
+  v128_t hi = wasm_v128_load(row + 5);
+  v128_t lo_rev = wasm_i32x4_shuffle(lo, lo, 3, 2, 1, 0);
+  v128_t hi_rev = wasm_i32x4_shuffle(hi, hi, 3, 2, 1, 0);
+  wasm_v128_store(row - 4, lo_rev);
+  wasm_v128_store(row - 8, hi_rev);
+  v128_t r_lo = wasm_v128_load(row + width - 9);
+  v128_t r_hi = wasm_v128_load(row + width - 5);
+  v128_t r_hi_rev = wasm_i32x4_shuffle(r_hi, r_hi, 3, 2, 1, 0);
+  v128_t r_lo_rev = wasm_i32x4_shuffle(r_lo, r_lo, 3, 2, 1, 0);
+  wasm_v128_store(row + width,     r_hi_rev);
+  wasm_v128_store(row + width + 4, r_lo_rev);
+#else
+  // Scalar fallback: 8-iter unrolled, no PSEo() / modulo / branch.
+  for (int32_t i = 1; i <= 8; ++i) row[-i]            = row[i];
+  for (int32_t i = 0; i <  8; ++i) row[width + i]     = row[width - 2 - i];
+#endif
 }
 template <class T>
 static inline void dwt_1d_extr_fixed(T *extbuf, T *buf, const int32_t left, const int32_t right,
