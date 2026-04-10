@@ -21,6 +21,34 @@
   in decoder CLI
 * ThreadPool: lock-free `get()` via atomic index; skip pool overhead entirely
   in single-threaded mode
+* ThreadPool: replace `std::queue<std::function<void()>>` with a fixed-size
+  32 K-slot `InlineTask` ring buffer with cache-line aligned head/tail; eliminates
+  per-task heap allocation from `std::deque` chunk management and `std::function`
+  type-erased storage. 32-byte inline storage with `memcpy` fast path for
+  trivially-copyable lambdas (all hot-path captures); relocate-trampoline slow
+  path for non-trivial captures
+* DWT batch path: eliminate per-tile per-level `Xext` / `Yext` copy buffer.
+  In-place horizontal DWT now handles all rows (including the first and last
+  row of each tile) by prepending `DWT_LEFT_SLACK = 8` floats and appending
+  `DWT_RIGHT_SLACK = SIMD_PADDING = 32` floats of border slack to every
+  `j2k_subband` / `j2k_resolution::i_samples` allocation; the user-visible
+  pointer is offset by `DWT_LEFT_SLACK`. Removes a per-row `memcpy` round-trip
+  for the boundary rows
+* DWT: replace scalar PSE-fill loops with constant-pattern SIMD reflection
+  (`vpermps` on AVX2 / AVX-512, `vrev64q` + `vextq` on NEON, `i32x4_shuffle`
+  on WASM SIMD); covers `idwt_1d_row_inplace`, `idwt_1d_sr_inplace`, and
+  `fdwt_1d_sr_inplace`. Drops the `PSEo()` modulo + branch on the hot path
+* `coding_units`: flatten `unique_ptr<unique_ptr<T>[]>` double-indirection in
+  `pband`, `subbands`, `precincts`, and `resolution` to single-allocation
+  flat arrays via `operator new[]` + placement-new (matching the existing
+  `j2k_codeblock` pattern). Reduces N+1 heap allocations to 1 per container
+  and improves cache locality
+* `coding_units`: embed `tagtree` by value in `j2k_precinct_subband`,
+  eliminating two heap allocations per precinct-subband
+* `decoder`: hoist per-tile scratch vectors (`band_h`, `tile_x_off`, `tile_w`,
+  `row_ptrs`, `accum`) out of the multi-tile scatter loop in
+  `decode_line_based_stream`; reduces O(numTiles.x × numTiles.y) heap
+  allocations to a constant 5
 
 ## Bug Fixes
 * Fix AVX2 `pack_i32_to_u8`: signed values were incorrectly clamped to zero
@@ -32,6 +60,23 @@
   resolution buffer
 * Fix segfault when `/dev/null` used as decoder output
 * Suppress all compiler warnings in native and WASM builds
+* Fix four memory leaks on exception paths: `~j2k_tile_component` now finalizes
+  `line_dec` / `line_enc` so `aligned_mem_alloc`'d sub-resources are released
+  even if `finalize_*()` was never called explicitly; `init_line_decode`
+  validates DWT direction before allocating state arrays (fail-fast);
+  `create_compressed_buffer` NULL-checks the `realloc` result instead of
+  losing the original pointer; the four `decoder.cpp` `invoke` variants
+  validate tile count *before* allocating raw `new int32_t[]` output buffers
+  (was leaking on the validation throw)
+* `coding_units`: add RAII `placement_new_array_guard<T>` and apply it at all
+  five placement-new array construction sites (codeblocks, pband, subbands,
+  precincts, resolution); partial construction failures now unwind cleanly
+  instead of leaving the destructor calling `~T` on uninitialized memory
+* ThreadPool: replace silent ring overflow under `NDEBUG` (`assert`-only) with
+  a `std::runtime_error` throw in both `push_task` and `push_batch`; raise
+  `RING_CAP` from 8192 to 32768 to comfortably hold the worst-case 4K-tile
+  encode burst (a single precinct can enqueue ~5-8 K codeblock tasks
+  back-to-back via `push_batch` before workers begin draining)
 
 ## WASM
 * Node.js v24 compatibility: rewrite module loader to evaluate Emscripten JS
@@ -44,6 +89,12 @@
 
 ## Build
 * Add ctest cleanup fixture to remove stale test artifacts
+* Polyfill `_mm256_set_m128i` in `utils.hpp` under `__GNUC__ < 10` (next to
+  the existing `_mm256_storeu2_m128i` fallback). Fixes build on GCC 7.5.0
+  and other older toolchains where the intrinsic was added to GCC's
+  `<avxintrin.h>` only in GCC 10 (October 2019). Resolves a two-phase template
+  lookup error in `ht_block_decoding.hpp` and a regular declaration error in
+  `ht_block_decoding_avx2.cpp`
 
 # [0.8.0] - 2026-04-05
 
