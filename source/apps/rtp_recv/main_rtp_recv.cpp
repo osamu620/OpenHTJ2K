@@ -21,6 +21,7 @@
 #include "decoder.hpp"
 #include "rfc9828_parser.hpp"
 #include "rtp_socket.hpp"
+#include "ycbcr_rgb.hpp"
 
 namespace {
 
@@ -121,6 +122,43 @@ int smoke_test_parser() {
   return 0;
 }
 
+int smoke_test_ycbcr() {
+  using namespace open_htj2k::rtp_recv;
+
+  // 8-bit BT.709 full-range: pure gray (Y=128, Cb=Cr=128) should map to ~(128,128,128).
+  const int32_t Y[]  = {128, 128};
+  const int32_t Cb[] = {128, 128};
+  const int32_t Cr[] = {128, 128};
+  uint8_t rgb[6]     = {0};
+  ycbcr_row_to_rgb8(Y, Cb, Cr, rgb, /*width=*/2, /*cb_stride=*/1, /*cr_stride=*/1,
+                    YCBCR_BT709_FULL, /*depth=*/8, /*is_signed=*/false);
+  // Accept ±1 slack for float round-off.
+  auto close_to = [](uint8_t v, int target) { return std::abs(int(v) - target) <= 1; };
+  if (!close_to(rgb[0], 128) || !close_to(rgb[1], 128) || !close_to(rgb[2], 128)) {
+    std::fprintf(stderr, "ycbcr gray: got (%u,%u,%u)\n", rgb[0], rgb[1], rgb[2]);
+    return 1;
+  }
+
+  // Pure red in YCbCr BT.709 full-range: R=255,G=0,B=0 encodes as Y=54, Cb=99, Cr=255
+  // (Cr clips at 255 because the ideal value is 255.5).  Reverse transform should return
+  // nearly (255, 0, 0).
+  const int32_t Yr[]  = {54};
+  const int32_t Cbr[] = {99};
+  const int32_t Crr[] = {255};
+  uint8_t rgb_r[3]    = {0};
+  ycbcr_row_to_rgb8(Yr, Cbr, Crr, rgb_r, 1, 1, 1, YCBCR_BT709_FULL, 8, false);
+  if (rgb_r[0] < 240 || rgb_r[1] > 15 || rgb_r[2] > 15) {
+    std::fprintf(stderr, "ycbcr red: got (%u,%u,%u)\n", rgb_r[0], rgb_r[1], rgb_r[2]);
+    return 1;
+  }
+
+  // MAT selector round-trip.
+  if (select_coefficients_from_mat(1, true) != &YCBCR_BT709_FULL) return 1;
+  if (select_coefficients_from_mat(5, false) != &YCBCR_BT601_NARROW) return 1;
+  if (select_coefficients_from_mat(9, true) != nullptr) return 1;  // BT.2020 not yet supported
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -134,6 +172,9 @@ int main(int argc, char **argv) {
 
   if (smoke_test_parser() != 0) return EXIT_FAILURE;
   std::printf("rfc9828 parser smoke-test OK\n");
+
+  if (smoke_test_ycbcr() != 0) return EXIT_FAILURE;
+  std::printf("ycbcr->rgb smoke-test OK\n");
 
   return 0;
 }
