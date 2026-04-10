@@ -1,3 +1,17 @@
+# [0.9.1] - 2026-04-10
+
+## Bugfixes
+* Fix `Psot=0` backward EOC scan in `j2k_tile_part::read()`
+  (`source/core/coding/coding_units.cpp`) stepping by 2 bytes per
+  iteration instead of 1. The scan only inspected byte pairs starting
+  at even offsets within the tile-part body; codestreams whose
+  `0xFF 0xD9` EOC marker happened to land at an odd offset were
+  silently mis-decoded, falling back to the last two bytes, then
+  over-advancing the input cursor by one byte and producing
+  `SOT marker segment expected but D900 is found`. Surfaced against
+  real-world 4K 4:2:2 1.7-bpp broadcast HTJ2K captures where roughly
+  half of all frames had an odd-offset EOC.
+
 # [0.9.0] - 2026-04-09
 
 ## Performance
