@@ -197,12 +197,19 @@ class ThreadPool {
   }
 
   /**
-   * @brief Push a batch of tasks built from a container in a single lock+notify.
+   * @brief Push a batch of tasks built from a container in a single lock hold.
    * @param items  Container whose elements are passed one-by-one to @p factory.
    * @param factory  Callable: factory(item) -> void() callable.
    *
-   * Acquires the task-queue mutex exactly once and notifies worker threads once,
-   * replacing N individual push() calls (each of which locks + notify_one()).
+   * Acquires the task-queue mutex exactly once for the whole batch (replacing
+   * N individual push() calls each of which would re-acquire the lock), then
+   * issues ceil(n/BATCH) targeted notify_one() wakeups — one per worker that
+   * is expected to find a non-empty BATCH-sized chunk to drain.  This is
+   * cheaper than notify_all() which would wake every idle worker only to have
+   * most of them go straight back to sleep.
+   *
+   * Throws std::runtime_error if the ring buffer cannot accommodate the
+   * incoming batch (see RING_CAP for the limit).
    */
   template <typename Container, typename Factory>
   void push_batch(Container &&items, Factory &&factory) {
@@ -214,7 +221,10 @@ class ThreadPool {
         throw std::runtime_error("Cannot schedule new task after shutdown.");
       }
       for (auto &&item : items) {
-        assert(ring_size_() < RING_CAP && "InlineTask ring overflow — increase RING_CAP");
+        if (ring_size_() >= RING_CAP) {
+          throw std::runtime_error(
+              "ThreadPool task ring overflow — too many in-flight tasks (raise RING_CAP)");
+        }
         ring_[ring_tail_ & RING_MASK] = InlineTask(factory(item));
         ++ring_tail_;
       }
@@ -280,7 +290,10 @@ class ThreadPool {
         throw std::runtime_error("Cannot schedule new task after shutdown.");
       }
 
-      assert(ring_size_() < RING_CAP && "InlineTask ring overflow — increase RING_CAP");
+      if (ring_size_() >= RING_CAP) {
+        throw std::runtime_error(
+            "ThreadPool task ring overflow — too many in-flight tasks (raise RING_CAP)");
+      }
       ring_[ring_tail_ & RING_MASK] = InlineTask(std::forward<F>(task));
       ++ring_tail_;
     }
@@ -288,8 +301,14 @@ class ThreadPool {
     condition.notify_one();
   }
 
-  static constexpr size_t BATCH    = 4;     // tasks drained per lock hold in worker()
-  static constexpr size_t RING_CAP = 8192;  // must be power of 2
+  static constexpr size_t BATCH    = 4;      // tasks drained per lock hold in worker()
+  // RING_CAP must be a power of two.  Sized to comfortably hold the worst-case
+  // burst from a 4K encode tile (a single precinct can enqueue ~5-8 K codeblock
+  // tasks back-to-back via push_batch before workers begin draining).  At
+  // sizeof(InlineTask) = 48 bytes, 32768 slots is ~1.5 MB per pool — allocated
+  // once at process init.  Producers throw std::runtime_error on overflow
+  // (see push_task / push_batch); never silently wrap-around.
+  static constexpr size_t RING_CAP = 32768;
   static constexpr size_t RING_MASK = RING_CAP - 1;
 
   bool ring_empty_() const { return ring_head_ == ring_tail_; }
@@ -348,10 +367,16 @@ class ThreadPool {
    * @brief Pre-allocated ring buffer of tasks (replaces std::queue<std::function>).
    * Eliminates per-task heap allocation from std::deque chunk management and
    * std::function's type-erased storage.
+   *
+   * ring_head_ and ring_tail_ are cache-line aligned so that the consumer
+   * (worker threads incrementing head_) and producer (main thread incrementing
+   * tail_) do not false-share the cache line that holds them.  Both indices
+   * are still mutated under tasks_mutex, so the alignment is purely a
+   * micro-architectural optimization for the lock-acquire path.
    */
   std::unique_ptr<InlineTask[]> ring_;
-  size_t ring_head_;  // consumer index (next pop position)
-  size_t ring_tail_;  // producer index (next push position)
+  alignas(64) size_t ring_head_;  // consumer index (next pop position)
+  alignas(64) size_t ring_tail_;  // producer index (next push position)
 
   /**
    * @brief The number of threads in the pool.

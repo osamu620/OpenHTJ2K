@@ -43,6 +43,42 @@
   #include <wasm_simd128.h>
 #endif
 
+namespace {
+// RAII guard for placement-new array construction loops.
+//
+// Pattern:
+//   T *arr = static_cast<T *>(operator new[](sizeof(T) * n));
+//   placement_new_array_guard<T> guard(arr);
+//   for (uint32_t i = 0; i < n; ++i) {
+//     new (&arr[i]) T(...);
+//     guard.commit_one();
+//   }
+//   guard.release();          // success — leave the array intact for the owner
+//
+// If any T(...) throws, ~placement_new_array_guard destroys the elements
+// already constructed (0..constructed-1), frees the raw storage, and the
+// exception propagates to the caller.  This keeps the placement-new pattern
+// (used for non-default-constructible types like j2k_subband, j2k_precinct,
+// j2k_codeblock) exception-safe without requiring extra member fields on the
+// owning class.
+template <typename T>
+struct placement_new_array_guard {
+  T *base;
+  uint32_t constructed = 0;
+  explicit placement_new_array_guard(T *b) : base(b) {}
+  ~placement_new_array_guard() {
+    if (base) {
+      for (uint32_t i = 0; i < constructed; ++i) base[i].~T();
+      operator delete[](base);
+    }
+  }
+  placement_new_array_guard(const placement_new_array_guard &)            = delete;
+  placement_new_array_guard &operator=(const placement_new_array_guard &) = delete;
+  void commit_one() noexcept { ++constructed; }
+  void release() noexcept { base = nullptr; }
+};
+}  // namespace
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Line-decode supporting types (file-scope, internal to this TU)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -838,8 +874,10 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
     cb_layer_pool = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(num_codeblocks) * 2 * num_layers);
     memset(cb_layer_pool.get(), 0, static_cast<size_t>(num_codeblocks) * 2 * num_layers);
 
-    // Single allocation for all codeblock objects (placement new)
-    this->codeblocks = static_cast<j2k_codeblock *>(operator new[](sizeof(j2k_codeblock) * num_codeblocks));
+    // Single allocation for all codeblock objects (placement new).  The guard
+    // unwinds partial construction if any j2k_codeblock(...) throws.
+    auto *raw = static_cast<j2k_codeblock *>(operator new[](sizeof(j2k_codeblock) * num_codeblocks));
+    placement_new_array_guard<j2k_codeblock> guard(raw);
     uint8_t *layer_pool_ptr = cb_layer_pool.get();
     for (uint32_t cb = 0; cb < num_codeblocks; cb++) {
       const uint32_t x = cb % this->num_codeblock_x;
@@ -852,14 +890,17 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
       const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
       j2k_codeblock *blk =
-          new (&this->codeblocks[cb]) j2k_codeblock(cb, orientation, M_b, R_b, transformation, stepsize,
-                                                    band_stride, ibuf, offset, num_layers, Cmodes,
-                                                    cblkpos0, cblkpos1, cblksize);
+          new (&raw[cb]) j2k_codeblock(cb, orientation, M_b, R_b, transformation, stepsize,
+                                       band_stride, ibuf, offset, num_layers, Cmodes,
+                                       cblkpos0, cblkpos1, cblksize);
+      guard.commit_one();
       // Hand out slices of the layer pool (layer_start then layer_passes)
       blk->layer_start  = layer_pool_ptr;
       blk->layer_passes = layer_pool_ptr + num_layers;
       layer_pool_ptr += 2 * num_layers;
     }
+    guard.release();
+    this->codeblocks = raw;
   }
 }
 
@@ -1555,9 +1596,11 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
   length = 0;  // for encoder only
 
   // Single allocation for all precinct-subbands (placement new) — replaces the
-  // double-indirection unique_ptr<unique_ptr<T>[]> pattern.
-  this->pband          = static_cast<j2k_precinct_subband *>(
+  // double-indirection unique_ptr<unique_ptr<T>[]> pattern.  The guard unwinds
+  // partial construction if any j2k_precinct_subband(...) throws.
+  auto *raw = static_cast<j2k_precinct_subband *>(
       operator new[](sizeof(j2k_precinct_subband) * num_bands));
+  placement_new_array_guard<j2k_precinct_subband> guard(raw);
   const uint8_t xob[4] = {0, 1, 0, 1};
   const uint8_t yob[4] = {0, 0, 1, 1};
   for (unsigned long i = 0; i < num_bands; ++i) {
@@ -1571,11 +1614,14 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
     if (dfs_dir == DWT_VERT) sr_x = 1U;
     const element_siz pbpos0(ceil_int(pos0.x - xob[ori], sr_x), ceil_int(pos0.y - yob[ori], sr_y));
     const element_siz pbpos1(ceil_int(pos1.x - xob[ori], sr_x), ceil_int(pos1.y - yob[ori], sr_y));
-    new (&this->pband[i]) j2k_precinct_subband(
+    new (&raw[i]) j2k_precinct_subband(
         sb.orientation, sb.M_b, sb.R_b, sb.transformation,
         sb.delta, sb.i_samples, sb.pos0, pbpos0, pbpos1, sb.stride,
         num_layers, codeblock_size, Cmodes);
+    guard.commit_one();
   }
+  guard.release();
+  this->pband = raw;
 }
 
 j2k_precinct_subband *j2k_precinct::access_pband(uint8_t b) {
@@ -1704,7 +1750,10 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
                                      uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
                                      bool line_based, const DFS_marker *dfs) {
   // Flat array of j2k_subband objects (single allocation, placement-new'd).
-  subbands = static_cast<j2k_subband *>(operator new[](sizeof(j2k_subband) * num_bands));
+  // Build into a local pointer under a guard so partial construction unwinds
+  // cleanly if any j2k_subband(...) throws; subbands stays nullptr on failure.
+  auto *raw = static_cast<j2k_subband *>(operator new[](sizeof(j2k_subband) * num_bands));
+  placement_new_array_guard<j2k_subband> sb_guard(raw);
   uint8_t i;
   uint8_t b;
   uint8_t xob[4]    = {0, 1, 0, 1};
@@ -1807,9 +1856,12 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       // delta, which is quantization step-size, is scaled by nominal-range of this band
       delta *= nominal_range;
     }
-    new (&subbands[i]) j2k_subband(spos0, spos1, b, transformation, R_b, epsilon_b, mantissa_b,
-                                   M_b, delta, nominal_range, i_samples, line_based);
+    new (&raw[i]) j2k_subband(spos0, spos1, b, transformation, R_b, epsilon_b, mantissa_b,
+                              M_b, delta, nominal_range, i_samples, line_based);
+    sb_guard.commit_one();
   }
+  sb_guard.release();
+  subbands = raw;
 }
 
 void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, element_siz codeblock_size,
@@ -1822,10 +1874,14 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
   const uint32_t idxoff_y = (pos0.y - 0) / PP.y;
 
   if (!is_empty) {
-    num_precincts = npw * nph;
+    const uint32_t total = npw * nph;
     // Single allocation for all precincts (placement new) — replaces double-indirection.
-    precincts = static_cast<j2k_precinct *>(operator new[](sizeof(j2k_precinct) * num_precincts));
-    for (uint32_t i = 0; i < num_precincts; i++) {
+    // Build into a local pointer under a guard so partial construction unwinds
+    // cleanly if any j2k_precinct(...) throws; precincts stays nullptr on failure
+    // and num_precincts only commits to the constructed count.
+    auto *raw = static_cast<j2k_precinct *>(operator new[](sizeof(j2k_precinct) * total));
+    placement_new_array_guard<j2k_precinct> guard(raw);
+    for (uint32_t i = 0; i < total; i++) {
       uint32_t x, y;
       x = i % npw;
       y = i / npw;
@@ -1833,9 +1889,13 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
                                 std::max(pos0.y, 0 + PP.y * (y + idxoff_y)));
       const element_siz prcpos1(std::min(pos1.x, 0 + PP.x * (x + 1 + idxoff_x)),
                                 std::min(pos1.y, 0 + PP.y * (y + 1 + idxoff_y)));
-      new (&precincts[i]) j2k_precinct(index, i, prcpos0, prcpos1, subbands, numlayers,
-                                       codeblock_size, Cmodes, num_bands, transform_direction);
+      new (&raw[i]) j2k_precinct(index, i, prcpos0, prcpos1, subbands, numlayers,
+                                 codeblock_size, Cmodes, num_bands, transform_direction);
+      guard.commit_one();
     }
+    guard.release();
+    precincts     = raw;
+    num_precincts = total;
   }
 }
 
@@ -2480,9 +2540,23 @@ uint8_t j2k_tile_component::get_ROIshift() const { return this->ROIshift; }
 j2k_resolution *j2k_tile_component::access_resolution(uint8_t r) { return &this->resolution[r]; }
 
 void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based, bool enc_lb) {
-  num_resolutions = static_cast<uint8_t>(NL + 1U);
+  const uint8_t total_res = static_cast<uint8_t>(NL + 1U);
   // Single allocation for all j2k_resolution objects (placement new) — replaces double-indirection.
-  resolution = static_cast<j2k_resolution *>(operator new[](sizeof(j2k_resolution) * num_resolutions));
+  // Build into a local pointer under a guard so that if any j2k_resolution(...)
+  // placement-new throws partway through the loop, the previously-constructed
+  // resolutions are destroyed and the raw storage is freed.  num_resolutions
+  // commits to the full count only on success.
+  //
+  // NOTE: methods called after each placement-new (set_nominal_ranges,
+  // create_subbands, create_precincts) are individually exception-safe via their
+  // own guards, so if one of them throws the resolution at index r is left
+  // in a partially-initialized state and its destructor (run during this
+  // function's unwind via the guard) will correctly clean up whatever
+  // sub-resources WERE constructed.  The thread-pool dispatch path below
+  // does NOT wait for in-flight futures on exception — that is a separate
+  // pre-existing concern.
+  auto *raw = static_cast<j2k_resolution *>(operator new[](sizeof(j2k_resolution) * total_res));
+  placement_new_array_guard<j2k_resolution> res_guard(raw);
 
   float tmp_ranges[4]       = {1.0, 1.0, 1.0, 1.0};
   float child_ranges[32][4] = {{0}};
@@ -2549,32 +2623,36 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
       dfs_nb = 1;
     }
 
-    new (&resolution[r]) j2k_resolution(r, respos0, respos1, npw, nph,
-                                        line_based || (enc_lb && r == this->NL && this->NL > 0),
-                                        dfs_nb, dir);
-    resolution[r].set_nominal_ranges(child_ranges[r]);
-    resolution[r].normalizing_downshift = nshift[r];
-    resolution[r].normalizing_upshift   = nshift[r + 1];
-    resolution[r].create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
-                                  this->mantissas, this->num_guard_bits, this->quantization_style,
-                                  this->bitdepth, line_based, this->dfs_info);
+    new (&raw[r]) j2k_resolution(r, respos0, respos1, npw, nph,
+                                 line_based || (enc_lb && r == this->NL && this->NL > 0),
+                                 dfs_nb, dir);
+    res_guard.commit_one();
+    raw[r].set_nominal_ranges(child_ranges[r]);
+    raw[r].normalizing_downshift = nshift[r];
+    raw[r].normalizing_upshift   = nshift[r + 1];
+    raw[r].create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
+                           this->mantissas, this->num_guard_bits, this->quantization_style,
+                           this->bitdepth, line_based, this->dfs_info);
 #ifdef OPENHTJ2K_THREAD
     if (pool && pool->num_threads() > 1) {
-      results.emplace_back(pool->enqueue([r, numlayers, this] {
-        resolution[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+      results.emplace_back(pool->enqueue([r, raw, numlayers, this] {
+        raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
         return 0;
       }));
     } else {
-      resolution[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+      raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
     }
   }
   for (auto &result : results) {
     result.get();
   }
 #else
-    resolution[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+    raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
   }
 #endif
+  res_guard.release();
+  resolution      = raw;
+  num_resolutions = total_res;
 }
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
