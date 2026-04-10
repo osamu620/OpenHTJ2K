@@ -15,15 +15,18 @@
 // openhtj2k_decoder::invoke_line_based_stream().  See
 // /home/osamu/.claude/plans/unified-kindling-parnas.md for rationale.
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <GLFW/glfw3.h>
@@ -48,29 +51,37 @@ struct CliOptions {
   int         max_frames   = 0;      // 0 = unlimited
   bool        render       = true;   // --no-render disables GLFW init
   bool        decode       = true;   // --no-decode skips the openhtj2k decoder entirely
+  bool        threading    = true;   // --threading=off falls back to v1 single-threaded
+  bool        vsync        = true;   // --no-vsync flips the GLFW swap interval to 0
   std::string dump_pattern;          // printf-style, e.g. "/tmp/frame_%05d.j2c"
   // S=0 fallback colorspace (used only when Main Packet says S=0).
   // Leave as nullptr to require the stream to carry S=1.
   const ycbcr_coefficients* s0_fallback = nullptr;
   std::string s0_label;  // human-readable form for logging
   bool        smoke_test = false;
-  uint32_t    num_decoder_threads = 4;
+  // Default 2 matches the benchmarked optimum on broadcast 4K HT codestreams
+  // (HTJ2K's intra-frame parallelism saturates fast; more threads pay extra
+  // ThreadPool spinup cost without speedup).  Override per machine/content
+  // via --threads.
+  uint32_t    num_decoder_threads = 2;
 };
 
 void print_usage(const char* argv0) {
   std::fprintf(
       stderr,
       "Usage: %s [options]\n"
-      "  --port <N>             UDP port to bind (default 6000)\n"
-      "  --bind <host>          Host/IP to bind (default 0.0.0.0)\n"
-      "  --frames <N>           Exit after N successfully decoded frames\n"
-      "  --no-render            Do not open a window; pure depacketize+decode\n"
-      "  --no-decode            Skip the openhtj2k decoder entirely (capture only)\n"
+      "  --port <N>               UDP port to bind (default 6000)\n"
+      "  --bind <host>            Host/IP to bind (default 0.0.0.0)\n"
+      "  --frames <N>             Exit after N successfully decoded frames\n"
+      "  --no-render              Do not open a window; pure depacketize+decode\n"
+      "  --no-vsync               Disable GLFW vsync (immediate swap, no display lock)\n"
+      "  --no-decode              Skip the openhtj2k decoder entirely (capture only)\n"
+      "  --threading {on,off}     v2 multi-thread (default on); off = v1 single-thread\n"
       "  --dump-codestream <fmt>  printf-style path, e.g. '/tmp/f_%%05d.j2c'\n"
-      "  --colorspace <name>    S=0 fallback: bt709 | bt601 (v1) | bt2020 (v2, rejected)\n"
-      "  --range <name>         S=0 fallback: full | narrow (default full)\n"
-      "  --threads <N>          Decoder thread count (default 4)\n"
-      "  --smoke-test           Run internal unit smoke tests and exit\n",
+      "  --colorspace <name>      S=0 fallback: bt709 | bt601 | rgb (bt2020 not yet)\n"
+      "  --range <name>           S=0 fallback: full | narrow (default full)\n"
+      "  --threads <N>            Decoder thread count (default 2; 0 = hardware)\n"
+      "  --smoke-test             Run internal unit smoke tests and exit\n",
       argv0);
 }
 
@@ -95,8 +106,17 @@ bool parse_cli(int argc, char** argv, CliOptions& opt) {
   }
   opt.smoke_test = has_flag(argc, argv, "--smoke-test");
   opt.render     = !has_flag(argc, argv, "--no-render");
+  opt.vsync      = !has_flag(argc, argv, "--no-vsync");
   opt.decode     = !has_flag(argc, argv, "--no-decode");
   if (!opt.decode) opt.render = false;  // can't render without a decoded frame
+  if (const char* v = get_arg(argc, argv, "--threading")) {
+    if (std::strcmp(v, "on") == 0) opt.threading = true;
+    else if (std::strcmp(v, "off") == 0) opt.threading = false;
+    else {
+      std::fprintf(stderr, "ERROR: --threading must be 'on' or 'off'\n");
+      return false;
+    }
+  }
 
   if (const char* v = get_arg(argc, argv, "--port"))  opt.bind_port  = static_cast<uint16_t>(std::atoi(v));
   if (const char* v = get_arg(argc, argv, "--bind"))  opt.bind_host  = v;
@@ -156,27 +176,15 @@ int run_smoke_tests() {
 
 // ----------------------- Frame processing -----------------------
 
-// Decode one reassembled HTJ2K codestream and, if render is enabled, upload
-// it to the renderer.  Returns true on success.
-bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, bool is_first_frame,
-                        GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer) {
-  using namespace open_htj2k;
-
-  // Build a fresh decoder from the reassembled bytes.  The ctor copies/holds
-  // the buffer pointer, so keeping `frame` alive through invoke_line_based_stream
-  // is sufficient.
-  openhtj2k_decoder decoder(frame.bytes.data(), frame.bytes.size(), /*reduce_NL=*/0,
-                            opts.num_decoder_threads);
-  try {
-    decoder.parse();
-  } catch (std::exception& e) {
-    std::fprintf(stderr, "decoder.parse() failed: %s\n", e.what());
-    return false;
-  }
-
-  // Colorspace selection per RFC 9828 §5.3.
-  const ycbcr_coefficients* coeffs = nullptr;
-  bool components_are_rgb          = false;
+// Picks YCbCr->RGB coefficients per RFC 9828 §5.3 (S=1 in-band, S=0 CLI
+// fallback).  Sets `components_are_rgb` if no conversion is needed (Table 1
+// identity components or `--colorspace rgb`).  Logs and returns false on
+// rejection.  Used by both the v1 single-threaded decoder path and the v2
+// decode worker.
+bool select_coefficients_for_frame(const AssembledFrame& frame, const CliOptions& opts,
+                                   const ycbcr_coefficients*& coeffs, bool& components_are_rgb) {
+  coeffs             = nullptr;
+  components_are_rgb = false;
   if (frame.has_meta && frame.s) {
     if (frame.mat == 0) {
       // Table 1 "identity" / RGB components: no YCbCr conversion.
@@ -201,31 +209,42 @@ bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, boo
       return false;
     }
   }
+  return true;
+}
 
-  if (is_first_frame) {
-    if (components_are_rgb) {
-      std::fprintf(stderr, "info: rendering RGB components directly\n");
-    } else {
-      std::fprintf(stderr, "info: YCbCr -> RGB via %s coefficients\n",
-                   coeffs == opts.s0_fallback
-                       ? opts.s0_label.c_str()
-                       : (coeffs == &YCBCR_BT709_FULL     ? "bt709-full"
-                          : coeffs == &YCBCR_BT709_NARROW ? "bt709-narrow"
-                          : coeffs == &YCBCR_BT601_FULL   ? "bt601-full"
-                          : coeffs == &YCBCR_BT601_NARROW ? "bt601-narrow"
-                                                          : "?"));
-    }
+void log_coefficients_choice_once(const CliOptions& opts, const ycbcr_coefficients* coeffs,
+                                  bool components_are_rgb) {
+  if (components_are_rgb) {
+    std::fprintf(stderr, "info: rendering RGB components directly\n");
+    return;
   }
+  std::fprintf(stderr, "info: YCbCr -> RGB via %s coefficients\n",
+               coeffs == opts.s0_fallback
+                   ? opts.s0_label.c_str()
+                   : (coeffs == &YCBCR_BT709_FULL     ? "bt709-full"
+                      : coeffs == &YCBCR_BT709_NARROW ? "bt709-narrow"
+                      : coeffs == &YCBCR_BT601_FULL   ? "bt601-full"
+                      : coeffs == &YCBCR_BT601_NARROW ? "bt601-narrow"
+                                                      : "?"));
+}
 
-  uint32_t out_w  = 0;
-  uint32_t out_h  = 0;
-  uint8_t  depth0 = 0;
-  uint16_t ncomp  = 0;
-  // Chroma subsampling ratios; populated on the first row callback.
+// Run invoke_line_based_stream on `decoder` and write the result as 8-bit
+// interleaved RGB into `out_rgb` (resized as needed).  `decoder.parse()`
+// must already have been called.  On success returns true and fills out_w,
+// out_h with the luma dimensions; on failure logs and returns false.
+//
+// Used by both the v1 (fresh-decoder-per-frame) and v2 (long-lived decoder
+// + per-frame init()) paths — they differ in how the decoder is loaded,
+// not in how the row callback fills the RGB buffer.
+bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
+                          const ycbcr_coefficients* coeffs, bool components_are_rgb,
+                          std::vector<uint8_t>& out_rgb, uint32_t& out_w, uint32_t& out_h) {
+  uint8_t  depth0          = 0;
   uint32_t cb_stride_ratio = 1;
   uint32_t cr_stride_ratio = 1;
-
-  bool dims_ok = true;
+  bool     dims_ok         = true;
+  out_w                    = 0;
+  out_h                    = 0;
 
   try {
     std::vector<uint32_t> widths;
@@ -235,8 +254,10 @@ bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, boo
     decoder.invoke_line_based_stream(
         [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
           if (y == 0) {
-            if (nc < 1) { dims_ok = false; return; }
-            ncomp  = nc;
+            if (nc < 1) {
+              dims_ok = false;
+              return;
+            }
             out_w  = widths[0];
             out_h  = heights[0];
             depth0 = depths[0];
@@ -246,10 +267,10 @@ bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, boo
               if (cb_stride_ratio == 0) cb_stride_ratio = 1;
               if (cr_stride_ratio == 0) cr_stride_ratio = 1;
             }
-            rgb_backbuffer.assign(static_cast<size_t>(out_w) * out_h * 3, 0);
+            out_rgb.assign(static_cast<size_t>(out_w) * out_h * 3, 0);
           }
           if (!dims_ok) return;
-          uint8_t* out_row = rgb_backbuffer.data() + static_cast<size_t>(y) * out_w * 3;
+          uint8_t* out_row = out_rgb.data() + static_cast<size_t>(y) * out_w * 3;
           if (nc >= 3 && !components_are_rgb && coeffs != nullptr) {
             ycbcr_row_to_rgb8(rows[0], rows[1], rows[2], out_row, out_w, cb_stride_ratio,
                               cr_stride_ratio, *coeffs, depth0,
@@ -264,7 +285,7 @@ bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, boo
               int32_t v = rows[0][x];
               if (v < 0) v = 0;
               if (v > maxval) v = maxval;
-              const uint8_t v8 = static_cast<uint8_t>(shift > 0 ? (v >> shift) : v);
+              const uint8_t v8   = static_cast<uint8_t>(shift > 0 ? (v >> shift) : v);
               out_row[3 * x + 0] = v8;
               out_row[3 * x + 1] = v8;
               out_row[3 * x + 2] = v8;
@@ -277,7 +298,33 @@ bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, boo
     return false;
   }
 
-  if (!dims_ok || out_w == 0 || out_h == 0) {
+  return dims_ok && out_w > 0 && out_h > 0;
+}
+
+// v1 path: decode one reassembled HTJ2K codestream by constructing a fresh
+// openhtj2k_decoder, then upload to the renderer.  Used only when
+// --threading=off.  Returns true on success.
+bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, bool is_first_frame,
+                        GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer) {
+  using namespace open_htj2k;
+
+  openhtj2k_decoder decoder(frame.bytes.data(), frame.bytes.size(), /*reduce_NL=*/0,
+                            opts.num_decoder_threads);
+  try {
+    decoder.parse();
+  } catch (std::exception& e) {
+    std::fprintf(stderr, "decoder.parse() failed: %s\n", e.what());
+    return false;
+  }
+
+  const ycbcr_coefficients* coeffs = nullptr;
+  bool                      components_are_rgb = false;
+  if (!select_coefficients_for_frame(frame, opts, coeffs, components_are_rgb)) return false;
+  if (is_first_frame) log_coefficients_choice_once(opts, coeffs, components_are_rgb);
+
+  uint32_t out_w = 0;
+  uint32_t out_h = 0;
+  if (!decode_to_rgb_buffer(decoder, coeffs, components_are_rgb, rgb_backbuffer, out_w, out_h)) {
     std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
     return false;
   }
@@ -304,9 +351,9 @@ void dump_frame_if_requested(const CliOptions& opts, const AssembledFrame& frame
   std::fclose(fp);
 }
 
-// ----------------------- Main loop -----------------------
+// ----------------------- v1 single-threaded main loop (--threading=off) -----------------------
 
-int run_receiver(const CliOptions& opts) {
+int run_receiver_single_threaded(const CliOptions& opts) {
   UdpSocket sock;
   if (!sock.bind(opts.bind_host, opts.bind_port)) {
     std::fprintf(stderr, "bind %s:%u failed: %s\n", opts.bind_host.c_str(), opts.bind_port,
@@ -338,7 +385,7 @@ int run_receiver(const CliOptions& opts) {
   GlRenderer* renderer_ptr = nullptr;
   if (opts.render) {
     // Initial window size is a placeholder; the first frame resizes the texture.
-    if (!renderer.init(1280, 720, "OpenHTJ2K RFC 9828 receiver")) {
+    if (!renderer.init(1280, 720, "OpenHTJ2K RFC 9828 receiver", opts.vsync)) {
       std::fprintf(stderr, "WARN: GLFW init failed; continuing in --no-render mode\n");
     } else {
       renderer_ptr = &renderer;
@@ -503,6 +550,341 @@ int run_receiver(const CliOptions& opts) {
 
   renderer.shutdown();
   return EXIT_SUCCESS;
+}
+
+// ----------------------- v2 multi-threaded main loop (--threading=on) -----------------------
+
+// Shared mutable state for the v2 receive/decode/render trio.  Owned by
+// run_receiver_threaded(); references handed to recv_thread_main and
+// decode_thread_main.
+struct ReceiverState {
+  std::atomic<bool>           stop_flag{false};
+  LatestSlot<AssembledFrame>  decode_slot;
+  LatestSlot<DecodedFrame>    render_slot;
+
+  // Counters (atomic for thread-safe summary at exit).
+  std::atomic<uint64_t> frames_emitted_to_decode{0};  // dump index, increments per frame_handler emission
+  std::atomic<uint64_t> frames_decoded{0};
+  std::atomic<uint64_t> frames_failed{0};
+
+  // Decode timing — written only by the decode thread, read by main at exit.
+  std::atomic<uint64_t> decode_us_sum{0};
+  std::atomic<uint64_t> decode_us_min{UINT64_MAX};
+  std::atomic<uint64_t> decode_us_max{0};
+};
+
+void recv_thread_main(const CliOptions& opts, UdpSocket& sock, FrameHandler& frame_handler,
+                      ReceiverState& st) {
+  std::vector<uint8_t> packet_buf(65536);
+
+  while (!st.stop_flag.load(std::memory_order_acquire)) {
+    const int ready = sock.wait_readable(/*timeout_ms=*/5);
+    if (ready < 0) {
+      std::fprintf(stderr, "socket poll error: %s\n", sock.last_error().c_str());
+      st.stop_flag.store(true, std::memory_order_release);
+      st.decode_slot.notify();
+      st.render_slot.notify();
+      return;
+    }
+    if (ready == 0) continue;
+
+    // Drain everything pending in the kernel buffer in one batch so the
+    // socket never falls behind real time.  No upper bound: with the
+    // 32 MB SO_RCVBUF and the dedicated thread, this loop empties the
+    // kernel buffer faster than it can fill at 30 fps × 4K.  The socket
+    // is non-blocking (set in run_receiver_threaded), so recv() returns
+    // kAgain immediately when the kernel buffer empties.
+    while (true) {
+      auto n = sock.recv(packet_buf.data(), packet_buf.size());
+      if (n == UdpSocket::kAgain) break;
+      if (n == UdpSocket::kError) {
+        std::fprintf(stderr, "recv error: %s\n", sock.last_error().c_str());
+        st.stop_flag.store(true, std::memory_order_release);
+        st.decode_slot.notify();
+        st.render_slot.notify();
+        return;
+      }
+      if (n < 12) continue;
+      const auto pkt_len = static_cast<size_t>(n);
+
+      RtpHeader   rtp{};
+      std::string err;
+      if (!parse_rtp_header(packet_buf.data(), pkt_len, rtp, err)) continue;
+      if (rtp.payload_offset >= pkt_len) continue;
+
+      const uint8_t* payload    = packet_buf.data() + rtp.payload_offset;
+      const size_t   payload_sz = pkt_len - rtp.payload_offset;
+      if (payload_sz < 8) continue;
+
+      const uint8_t                  mh = static_cast<uint8_t>(payload[0] >> 6);
+      std::optional<AssembledFrame>  emitted;
+
+      if (mh == MH_BODY) {
+        BodyPacketHeader body{};
+        if (!parse_body_packet_header(payload, payload_sz, body, err)) continue;
+        const uint8_t* cs_bytes = payload + body.codestream_offset;
+        const size_t   cs_len   = payload_sz - body.codestream_offset;
+        frame_handler.push_body_packet(rtp, body, cs_bytes, cs_len, emitted);
+      } else {
+        MainPacketHeader main{};
+        if (!parse_main_packet_header(payload, payload_sz, main, err)) continue;
+        const uint8_t* cs_bytes = payload + main.codestream_offset;
+        const size_t   cs_len   = payload_sz - main.codestream_offset;
+        frame_handler.push_main_packet(rtp, main, cs_bytes, cs_len, emitted);
+      }
+
+      if (emitted.has_value()) {
+        const uint64_t idx = st.frames_emitted_to_decode.fetch_add(1, std::memory_order_relaxed);
+        dump_frame_if_requested(opts, *emitted, idx);
+        // Latest-wins: if the decoder is busy and a previous frame is still
+        // queued, the previous frame is dropped.  Counter inside the slot.
+        st.decode_slot.push(std::move(*emitted));
+      }
+    }
+  }
+}
+
+void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
+  using Clock = std::chrono::steady_clock;
+
+  // ONE long-lived decoder for the entire thread lifetime.  The default
+  // ctor does NOT call ThreadPool::instance() — that happens on the first
+  // init() below, which spawns the worker pool exactly once and reuses it
+  // for every subsequent frame.  The destructor (when this thread exits)
+  // is the only place that calls ThreadPool::release().
+  open_htj2k::openhtj2k_decoder decoder;
+
+  bool first_frame = true;
+  while (!st.stop_flag.load(std::memory_order_acquire)) {
+    auto frame_opt = st.decode_slot.pop_wait(st.stop_flag);
+    if (!frame_opt) break;
+    const AssembledFrame frame = std::move(*frame_opt);
+
+    const auto t0 = Clock::now();
+
+    const ycbcr_coefficients* coeffs             = nullptr;
+    bool                      components_are_rgb = false;
+    if (!select_coefficients_for_frame(frame, opts, coeffs, components_are_rgb)) {
+      st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+    if (first_frame) log_coefficients_choice_once(opts, coeffs, components_are_rgb);
+
+    // Re-load the codestream into the same decoder instance.  This is the
+    // hot path: with Core change A in place (alloc_memory free), init()
+    // does not leak the previous frame's buffer, and because the decoder
+    // is constructed once at thread startup, ThreadPool::release() is
+    // called once (at thread exit) instead of per frame — saving the
+    // ~14 ms ThreadPool spinup cost we measured for v1.
+    try {
+      decoder.init(frame.bytes.data(), frame.bytes.size(), /*reduce_NL=*/0,
+                   opts.num_decoder_threads);
+      decoder.parse();
+    } catch (std::exception& e) {
+      std::fprintf(stderr, "decoder.init/parse failed: %s\n", e.what());
+      st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+
+    DecodedFrame df;
+    uint32_t     out_w = 0;
+    uint32_t     out_h = 0;
+    if (!decode_to_rgb_buffer(decoder, coeffs, components_are_rgb, df.rgb, out_w, out_h)) {
+      std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
+      st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+    df.width  = out_w;
+    df.height = out_h;
+
+    const auto     t1     = Clock::now();
+    const uint64_t us     = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
+    st.decode_us_sum.fetch_add(us, std::memory_order_relaxed);
+    {
+      uint64_t cur = st.decode_us_min.load(std::memory_order_relaxed);
+      while (us < cur && !st.decode_us_min.compare_exchange_weak(cur, us)) {}
+    }
+    {
+      uint64_t cur = st.decode_us_max.load(std::memory_order_relaxed);
+      while (us > cur && !st.decode_us_max.compare_exchange_weak(cur, us)) {}
+    }
+
+    const uint64_t decoded =
+        st.frames_decoded.fetch_add(1, std::memory_order_relaxed) + 1;
+    first_frame = false;
+
+    // Hand the decoded RGB to the renderer.  If main hasn't picked up the
+    // previous decoded frame yet (e.g. blocked in vsync), it gets dropped
+    // here — latest-wins keeps motion-to-photon minimal.
+    st.render_slot.push(std::move(df));
+
+    if (opts.max_frames > 0 && decoded >= static_cast<uint64_t>(opts.max_frames)) {
+      st.stop_flag.store(true, std::memory_order_release);
+      st.render_slot.notify();
+      break;
+    }
+  }
+}
+
+int run_receiver_threaded(const CliOptions& opts) {
+  UdpSocket sock;
+  if (!sock.bind(opts.bind_host, opts.bind_port)) {
+    std::fprintf(stderr, "bind %s:%u failed: %s\n", opts.bind_host.c_str(), opts.bind_port,
+                 sock.last_error().c_str());
+    return EXIT_FAILURE;
+  }
+  // Non-blocking is essential for v2: the dedicated receive thread uses
+  // wait_readable + recv in a tight drain loop, and recv() must return
+  // kAgain immediately when the kernel buffer is empty so the thread can
+  // observe stop_flag and check for new packets via wait_readable.  In
+  // blocking mode the second recv after a single-packet wait_readable
+  // would hang forever, deadlocking the receive thread on shutdown.
+  if (!sock.set_nonblocking()) {
+    std::fprintf(stderr, "set_nonblocking failed: %s\n", sock.last_error().c_str());
+    return EXIT_FAILURE;
+  }
+  constexpr int kRequestedRecvBuf = 32 * 1024 * 1024;
+  sock.set_recv_buffer_size(kRequestedRecvBuf);
+  const int granted = sock.last_granted_recv_buf();
+
+  std::fprintf(stderr, "listening on %s:%u (threaded; %u decoder threads)\n",
+               opts.bind_host.c_str(), opts.bind_port, opts.num_decoder_threads);
+  std::fprintf(stderr, "SO_RCVBUF: requested %d MB, kernel granted %d KB\n",
+               kRequestedRecvBuf / (1024 * 1024), granted / 1024);
+  if (granted < 4 * 1024 * 1024) {
+    std::fprintf(stderr,
+                 "WARN: SO_RCVBUF is < 4 MB. The kernel will drop packets when the\n"
+                 "      receiver falls behind the sender. Raise net.core.rmem_max:\n"
+                 "          sudo sysctl -w net.core.rmem_max=33554432\n"
+                 "      and re-run.\n");
+  }
+
+  GlRenderer  renderer;
+  GlRenderer* renderer_ptr = nullptr;
+  if (opts.render) {
+    if (!renderer.init(1280, 720, "OpenHTJ2K RFC 9828 receiver", opts.vsync)) {
+      std::fprintf(stderr, "WARN: GLFW init failed; continuing in --no-render mode\n");
+    } else {
+      renderer_ptr = &renderer;
+    }
+  }
+
+  FrameHandler  frame_handler;
+  ReceiverState state;
+
+  using Clock         = std::chrono::steady_clock;
+  const auto run_start_tp = Clock::now();
+
+  std::thread recv_thread(recv_thread_main, std::cref(opts), std::ref(sock),
+                          std::ref(frame_handler), std::ref(state));
+  std::thread decode_thread(decode_thread_main, std::cref(opts), std::ref(state));
+
+  // Main loop: GLFW events + render slot polling + periodic FPS log.
+  uint64_t last_log_decoded = 0;
+  auto     last_log_tp      = run_start_tp;
+  while (!state.stop_flag.load(std::memory_order_acquire)) {
+    if (renderer_ptr) {
+      renderer_ptr->poll_events();
+      if (renderer_ptr->should_close()) {
+        state.stop_flag.store(true, std::memory_order_release);
+        state.decode_slot.notify();
+        state.render_slot.notify();
+        break;
+      }
+    }
+
+    auto df = state.render_slot.try_pop();
+    if (df.has_value() && renderer_ptr) {
+      renderer_ptr->upload_and_draw(df->rgb.data(), static_cast<int>(df->width),
+                                    static_cast<int>(df->height));
+    } else if (!df.has_value()) {
+      // Nothing to draw; brief sleep to avoid spinning while the decode
+      // thread is busy.  Vsync would be doing this for us in --render
+      // mode, but in headless mode there is nothing to throttle on.
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    const auto   now      = Clock::now();
+    const double since_log = std::chrono::duration<double>(now - last_log_tp).count();
+    if (since_log >= 1.0) {
+      const uint64_t decoded = state.frames_decoded.load(std::memory_order_relaxed);
+      const uint64_t delta   = decoded - last_log_decoded;
+      const double   fps     = static_cast<double>(delta) / since_log;
+      std::fprintf(stderr, "  [%llu frames] inst=%.2f fps\n",
+                   static_cast<unsigned long long>(decoded), fps);
+      last_log_decoded = decoded;
+      last_log_tp      = now;
+    }
+  }
+
+  // Shutdown.  Wake any thread blocked on a slot, then join.
+  state.stop_flag.store(true, std::memory_order_release);
+  state.decode_slot.notify();
+  state.render_slot.notify();
+  decode_thread.join();
+  recv_thread.join();
+
+  // Drain anything left in the render slot so RAII doesn't print spurious
+  // warnings (the destructor doesn't, but be tidy).
+  (void)state.render_slot.try_pop();
+
+  const auto   run_end_tp = Clock::now();
+  const double run_secs   = std::chrono::duration<double>(run_end_tp - run_start_tp).count();
+
+  const uint64_t decoded         = state.frames_decoded.load();
+  const uint64_t failed          = state.frames_failed.load();
+  const uint64_t emitted_to_dec  = state.frames_emitted_to_decode.load();
+  const double   avg_fps         = decoded > 0 ? static_cast<double>(decoded) / run_secs : 0.0;
+  const uint64_t us_sum          = state.decode_us_sum.load();
+  const double   decode_ms_avg   = decoded > 0 ? (static_cast<double>(us_sum)
+                                                  / static_cast<double>(decoded)) / 1000.0
+                                               : 0.0;
+  const double   decode_ms_min   = decoded > 0
+                                       ? static_cast<double>(state.decode_us_min.load()) / 1000.0
+                                       : 0.0;
+  const double   decode_ms_max   = static_cast<double>(state.decode_us_max.load()) / 1000.0;
+
+  const auto& s = frame_handler.stats();
+  std::fprintf(stderr,
+               "\n--- summary (threaded) ---\n"
+               "  wall time:           %.2f s\n"
+               "  frames emitted:      %llu (frame_handler)\n"
+               "  frames pushed:       %llu (to decode slot)\n"
+               "  frames decoded:      %llu\n"
+               "  frames failed:       %llu\n"
+               "  frames dropped:      %llu (mid-frame seq gap)\n"
+               "  tail-loss drops:     %llu (frame ended w/o RTP M=1)\n"
+               "  decode-slot evicts:  %llu (decoder couldn't keep up)\n"
+               "  render-slot evicts:  %llu (display refresh < decode)\n"
+               "  packets received:    %llu\n"
+               "  bytes received:      %llu\n"
+               "  sequence gaps:       %llu\n"
+               "  avg FPS:             %.2f\n"
+               "  decode time ms:      min=%.2f avg=%.2f max=%.2f\n",
+               run_secs,
+               static_cast<unsigned long long>(s.frames_emitted),
+               static_cast<unsigned long long>(emitted_to_dec),
+               static_cast<unsigned long long>(decoded),
+               static_cast<unsigned long long>(failed),
+               static_cast<unsigned long long>(s.frames_dropped),
+               static_cast<unsigned long long>(s.tail_loss_drops),
+               static_cast<unsigned long long>(state.decode_slot.evictions()),
+               static_cast<unsigned long long>(state.render_slot.evictions()),
+               static_cast<unsigned long long>(s.packets_received),
+               static_cast<unsigned long long>(s.bytes_received),
+               static_cast<unsigned long long>(s.seq_gaps),
+               avg_fps,
+               decode_ms_min, decode_ms_avg, decode_ms_max);
+
+  if (renderer_ptr) renderer.shutdown();
+  return EXIT_SUCCESS;
+}
+
+// Top-level dispatcher: pick v1 or v2 main loop based on --threading.
+int run_receiver(const CliOptions& opts) {
+  if (opts.threading) return run_receiver_threaded(opts);
+  return run_receiver_single_threaded(opts);
 }
 
 // ----------------------- Smoke test implementations -----------------------
