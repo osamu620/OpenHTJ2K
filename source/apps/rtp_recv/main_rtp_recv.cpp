@@ -46,6 +46,7 @@ struct CliOptions {
   uint16_t    bind_port    = 6000;
   int         max_frames   = 0;      // 0 = unlimited
   bool        render       = true;   // --no-render disables GLFW init
+  bool        decode       = true;   // --no-decode skips the openhtj2k decoder entirely
   std::string dump_pattern;          // printf-style, e.g. "/tmp/frame_%05d.j2c"
   // S=0 fallback colorspace (used only when Main Packet says S=0).
   // Leave as nullptr to require the stream to carry S=1.
@@ -63,6 +64,7 @@ void print_usage(const char* argv0) {
       "  --bind <host>          Host/IP to bind (default 0.0.0.0)\n"
       "  --frames <N>           Exit after N successfully decoded frames\n"
       "  --no-render            Do not open a window; pure depacketize+decode\n"
+      "  --no-decode            Skip the openhtj2k decoder entirely (capture only)\n"
       "  --dump-codestream <fmt>  printf-style path, e.g. '/tmp/f_%%05d.j2c'\n"
       "  --colorspace <name>    S=0 fallback: bt709 | bt601 (v1) | bt2020 (v2, rejected)\n"
       "  --range <name>         S=0 fallback: full | narrow (default full)\n"
@@ -92,6 +94,8 @@ bool parse_cli(int argc, char** argv, CliOptions& opt) {
   }
   opt.smoke_test = has_flag(argc, argv, "--smoke-test");
   opt.render     = !has_flag(argc, argv, "--no-render");
+  opt.decode     = !has_flag(argc, argv, "--no-decode");
+  if (!opt.decode) opt.render = false;  // can't render without a decoded frame
 
   if (const char* v = get_arg(argc, argv, "--port"))  opt.bind_port  = static_cast<uint16_t>(std::atoi(v));
   if (const char* v = get_arg(argc, argv, "--bind"))  opt.bind_host  = v;
@@ -308,11 +312,26 @@ int run_receiver(const CliOptions& opts) {
                  sock.last_error().c_str());
     return EXIT_FAILURE;
   }
-  // 16 MB SO_RCVBUF — enough for ~10 frames of 4K HTJ2K at broadcast bitrates
-  // while the decoder processes the current frame.  Best-effort; kernel may clamp.
-  sock.set_recv_buffer_size(16 * 1024 * 1024);
+  // 32 MB SO_RCVBUF — enough for ~20 frames of 4K HTJ2K at broadcast bitrates
+  // while the decoder processes the current frame.  Best-effort; the kernel
+  // doubles the request internally and silently clamps to net.core.rmem_max,
+  // so we read back the granted value and warn the user if it is too small
+  // to absorb a single frame.
+  constexpr int kRequestedRecvBuf = 32 * 1024 * 1024;
+  sock.set_recv_buffer_size(kRequestedRecvBuf);
+  const int granted = sock.last_granted_recv_buf();
 
   std::fprintf(stderr, "listening on %s:%u\n", opts.bind_host.c_str(), opts.bind_port);
+  std::fprintf(stderr, "SO_RCVBUF: requested %d MB, kernel granted %d KB\n",
+               kRequestedRecvBuf / (1024 * 1024), granted / 1024);
+  if (granted < 4 * 1024 * 1024) {
+    std::fprintf(stderr,
+                 "WARN: SO_RCVBUF is < 4 MB. The kernel will drop packets when the\n"
+                 "      receiver falls behind the sender. Raise net.core.rmem_max:\n"
+                 "          sudo sysctl -w net.core.rmem_max=33554432\n"
+                 "      and re-run.  Without this, expect frame corruption under\n"
+                 "      sustained high-bitrate input.\n");
+  }
 
   GlRenderer renderer;
   GlRenderer* renderer_ptr = nullptr;
@@ -331,6 +350,7 @@ int run_receiver(const CliOptions& opts) {
 
   uint64_t frames_decoded = 0;
   uint64_t frames_failed  = 0;
+  uint64_t frames_attempted = 0;  // dump index — counts every emitted frame, success or fail
   bool     first_frame    = true;
   bool     should_exit    = false;
 
@@ -397,10 +417,13 @@ int run_receiver(const CliOptions& opts) {
         }
 
         if (emitted.has_value()) {
-          dump_frame_if_requested(opts, *emitted, frames_decoded);
+          dump_frame_if_requested(opts, *emitted, frames_attempted);
+          ++frames_attempted;
           const auto decode_start = Clock::now();
           const bool ok =
-              decode_and_present(*emitted, opts, first_frame, renderer_ptr, rgb_backbuffer);
+              opts.decode
+                  ? decode_and_present(*emitted, opts, first_frame, renderer_ptr, rgb_backbuffer)
+                  : true;  // --no-decode: count emitted frame as a success
           const auto decode_end = Clock::now();
           const double decode_ms =
               std::chrono::duration<double, std::milli>(decode_end - decode_start).count();
@@ -453,20 +476,24 @@ int run_receiver(const CliOptions& opts) {
   std::fprintf(stderr,
                "\n--- summary ---\n"
                "  wall time:        %.2f s\n"
+               "  frames attempted: %llu\n"
                "  frames decoded:   %llu\n"
                "  frames failed:    %llu\n"
                "  frames emitted:   %llu\n"
-               "  frames dropped:   %llu\n"
+               "  frames dropped:   %llu (mid-frame seq gap)\n"
+               "  tail-loss drops:  %llu (frame ended w/o RTP M=1)\n"
                "  packets received: %llu\n"
                "  bytes received:   %llu\n"
                "  sequence gaps:    %llu\n"
                "  avg FPS:          %.2f\n"
                "  decode time ms:   min=%.2f avg=%.2f max=%.2f\n",
                run_secs,
+               static_cast<unsigned long long>(frames_attempted),
                static_cast<unsigned long long>(frames_decoded),
                static_cast<unsigned long long>(frames_failed),
                static_cast<unsigned long long>(s.frames_emitted),
                static_cast<unsigned long long>(s.frames_dropped),
+               static_cast<unsigned long long>(s.tail_loss_drops),
                static_cast<unsigned long long>(s.packets_received),
                static_cast<unsigned long long>(s.bytes_received),
                static_cast<unsigned long long>(s.seq_gaps),

@@ -117,8 +117,19 @@ bool UdpSocket::set_recv_buffer_size(int bytes) {
     last_error_ = errno_message("setsockopt(SO_RCVBUF)");
     return false;
   }
+  // Read back the actual value the kernel applied (it doubles the request
+  // internally and clamps to net.core.rmem_max, often silently).  Bytes
+  // outside the granted window will be dropped from the kernel buffer
+  // when the application falls behind, so the caller must know.
+  int       got     = 0;
+  socklen_t got_len = sizeof(got);
+  if (::getsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &got, &got_len) == 0) {
+    last_granted_recv_buf_ = got;
+  }
   return true;
 }
+
+int UdpSocket::last_granted_recv_buf() const { return last_granted_recv_buf_; }
 
 int UdpSocket::wait_readable(int timeout_ms) {
   if (fd_ < 0) {

@@ -50,7 +50,14 @@ class UdpSocket {
   ptrdiff_t recv(void* buf, size_t buf_size);
 
   // Set SO_RCVBUF hint (best-effort).  Useful for 4K streams at high bitrate.
+  // The kernel internally doubles the value and clamps to net.core.rmem_max
+  // without failing the call, so callers should also check last_granted_recv_buf().
   bool set_recv_buffer_size(int bytes);
+
+  // Bytes the kernel actually granted on the most recent set_recv_buffer_size()
+  // call.  Includes the kernel's internal x2 doubling.  Returns 0 if no
+  // request has been made yet.
+  int last_granted_recv_buf() const;
 
   // Block up to `timeout_ms` milliseconds waiting for the socket to become
   // readable.  Returns 1 on readable, 0 on timeout, -1 on error (last_error()
@@ -65,7 +72,8 @@ class UdpSocket {
   void close();
 
  private:
-  int fd_ = -1;
+  int         fd_                     = -1;
+  int         last_granted_recv_buf_  = 0;
   std::string last_error_;
 };
 

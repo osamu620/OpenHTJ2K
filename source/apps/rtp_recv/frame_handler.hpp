@@ -64,6 +64,7 @@ struct FrameHandlerStats {
   uint64_t packets_received  = 0;
   uint64_t bytes_received    = 0;  // codestream bytes only, not RTP/9828 headers
   uint64_t seq_gaps          = 0;
+  uint64_t tail_loss_drops   = 0;  // frames dropped because they ended without M=1
 };
 
 class FrameHandler {
@@ -128,6 +129,12 @@ class FrameHandler {
   uint32_t frame_eseq_last_   = 0;
   size_t   frame_packet_count_ = 0;
   bool     frame_intact_      = true;
+  // True iff the most recent packet pushed into the current frame had the
+  // RTP marker bit set.  finalize_frame() consults this when it was triggered
+  // by a timestamp change rather than by the marker bit, and treats the frame
+  // as lossy if the previous packet did not carry M=1 — that's how we catch
+  // tail-end packet loss the sequence-gap detector misses.
+  bool     last_pkt_was_marker_ = false;
 
   // Latest Main Packet metadata for this frame.
   bool     frame_has_meta_ = false;
