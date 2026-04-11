@@ -113,6 +113,32 @@ struct j2k_subband_row_buf {
   // In-flight counter shared by decode_strip_core and trigger_prefetch.
   // Replaces both the local 'remaining' atomic and the old shared_ptr<atomic> prefetch_cnt.
   std::atomic<int> par_cnt;
+
+  // Per-strip cached codeblock enumeration.  Populated lazily on the first
+  // trigger_prefetch() call for each strip; reused on every subsequent frame
+  // under single-tile reuse because the codeblock *tree* (positions, sizes,
+  // count) is stable across frames once the main-header fingerprint is
+  // unchanged.  Retires the access_precinct / access_pband / overlap-filter
+  // walk that perf showed as ~14% of total cycles on 4K HT.
+  //
+  // Key subtlety: a codeblock's empty-vs-nonempty status (block->num_passes)
+  // is re-parsed per frame from the packet stream and is NOT stable across
+  // frames.  The cache therefore stores EVERY block in the strip regardless
+  // of emptiness, and the hot path branches on num_passes at dispatch time.
+  // The per-block branch is cheap relative to the tree walk we avoid.
+  //
+  // Indexed by strip_idx = (next_y0 - sb_y0) / cb_h.
+  struct CachedBlock {
+    j2k_codeblock *block;
+    uint32_t       QWx2, QHx2;      // round_up(size.x, 8), round_up(size.y, 8)
+    ptrdiff_t      row_off, col_off; // strip-relative offsets into prefetch_buf
+    uint32_t       size_x, size_y;   // block->size, captured for empty memset
+  };
+  struct StripCacheEntry {
+    bool                      built = false;
+    std::vector<CachedBlock>  blocks;
+  };
+  std::vector<StripCacheEntry> strip_cache_;
 #endif
 
   // Initialise. cb_h is the maximum codeblock height for this resolution level.

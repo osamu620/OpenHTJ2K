@@ -141,6 +141,22 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   // par_spool / par_stpool start at zero capacity; decode_strip_core will
   // grow-on-demand on the first strip and reuse from the second strip onwards.
   par_tasks.reserve(16);
+
+  // Size the per-strip cache to the exact number of strips that will ever be
+  // enumerated for this subband.  Every strip entry starts unbuilt; the first
+  // trigger_prefetch() that touches a given strip fills its entry once and
+  // every subsequent frame reuses it.
+  strip_cache_.clear();
+  if (sb != nullptr && codeblock_height > 0) {
+    const int32_t sb_y0 = static_cast<int32_t>(sb->get_pos0().y);
+    const int32_t sb_y1 = static_cast<int32_t>(sb->get_pos1().y);
+    if (sb_y1 > sb_y0) {
+      const int32_t num_strips = (sb_y1 - sb_y0 + codeblock_height - 1) / codeblock_height;
+      if (num_strips > 0) {
+        strip_cache_.resize(static_cast<size_t>(num_strips));
+      }
+    }
+  }
 #endif
 }
 
@@ -158,6 +174,8 @@ void j2k_subband_row_buf::free_resources() {
   aligned_mem_free(par_stpool); par_stpool = nullptr;  par_stpool_cap = 0;
   par_tasks.clear();
   par_tasks.shrink_to_fit();
+  strip_cache_.clear();
+  strip_cache_.shrink_to_fit();
 #endif
   aligned_mem_free(ring_buf); ring_buf = nullptr; ring_y0 = -1;
   aligned_mem_free(cb_sample_buf); cb_sample_buf = nullptr; cb_sample_cap = 0;
@@ -410,8 +428,22 @@ void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
 #ifdef OPENHTJ2K_THREAD
 // ─── trigger_prefetch ────────────────────────────────────────────────────────
 // Enumerate all codeblocks for the strip starting at next_y0 and dispatch each
-// as an independent pool task.  A shared atomic counter tracks outstanding tasks;
-// row_ptr() spins on it before swapping buffers.
+// non-empty block as an independent pool task.  A shared atomic counter tracks
+// outstanding tasks; row_ptr() spins on it before swapping buffers.
+//
+// The first call per (subband, strip_idx) walks the precinct/codeblock tree
+// via access_precinct / access_pband and captures every block in that strip
+// into strip_cache_ (positions, sizes, strip-relative offsets).  Subsequent
+// calls for the same strip — i.e. every frame after the first under
+// single-tile reuse — iterate the cached block list and skip the tree walk.
+// Roughly 14% of total cycles on 4K HT is in that tree walk, so caching it
+// saves ~3-5 ms/frame.
+//
+// What is NOT cached: a block's empty-vs-nonempty status
+// (`block->num_passes`).  reset_for_next_frame() clears num_passes at frame
+// boundaries and the decoder re-populates it from the current frame's
+// packet stream, so the hot path must branch on num_passes per block.  That
+// branch is cheap relative to the tree walk it replaces.
 
 void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   if (prefetch_buf == nullptr || prefetch_y0 != -1) return;  // no buf or already pending
@@ -425,63 +457,128 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   prefetch_y0 = next_y0;
   prefetch_y1 = std::min(next_y0 + cb_h, sb_y1);
 
-  // ── Enumerate codeblocks for [prefetch_y0, prefetch_y1) ──────────────────
-  // No bulk pre-zero of prefetch_buf: empty blocks are zeroed selectively below.
-  par_tasks.clear();
-  const uint32_t np    = res->npw * res->nph;
-  const int32_t  sb_x0 = static_cast<int32_t>(sb->get_pos0().x);
-  const auto     stride = static_cast<ptrdiff_t>(sb->stride);
-  size_t total_s = 0, total_st = 0;
+  const int32_t sb_y0     = static_cast<int32_t>(sb->get_pos0().y);
+  const int32_t strip_idx = (prefetch_y0 - sb_y0) / cb_h;
+  StripCacheEntry *entry = (strip_idx >= 0
+                            && static_cast<size_t>(strip_idx) < strip_cache_.size())
+                               ? &strip_cache_[static_cast<size_t>(strip_idx)]
+                               : nullptr;
 
-  for (uint32_t p = 0; p < np; ++p) {
-    j2k_precinct         *cp  = res->access_precinct(p);
-    j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-    const uint32_t        ncx = cpb->num_codeblock_x;
-    const uint32_t        ncy = cpb->num_codeblock_y;
-    if (ncx == 0 || ncy == 0) continue;
-    // Skip precincts that don't overlap with [prefetch_y0, prefetch_y1).
-    const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
-    const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
-    if (cpb_y1_i <= prefetch_y0 || cpb_y0_i >= prefetch_y1) continue;
-    // Jump directly to the first potentially-overlapping codeblock row.
-    const uint32_t r0 = (prefetch_y0 > cpb_y0_i)
-                            ? static_cast<uint32_t>((prefetch_y0 - cpb_y0_i) / static_cast<int32_t>(cb_h))
-                            : 0u;
-    for (uint32_t r = r0; r < ncy; ++r) {
-      j2k_codeblock *row_first = cpb->access_codeblock(r * ncx);
-      if (static_cast<int32_t>(row_first->get_pos1().y) <= prefetch_y0) continue;
-      if (static_cast<int32_t>(row_first->get_pos0().y) >= prefetch_y1) break;
-      for (uint32_t c = 0; c < ncx; ++c) {
-        j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
-        if (!block->num_passes) {
-          // Empty block: zero its region in prefetch_buf now (before workers start).
-          if (prefetch_buf) {
-            const ptrdiff_t roff =
-                (static_cast<int32_t>(block->get_pos0().y) - prefetch_y0) * stride;
-            const ptrdiff_t coff = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
-            sprec_t *dst = prefetch_buf + roff + coff;
-            for (uint32_t row = 0; row < block->size.y; row++)
-              std::memset(dst + row * stride, 0, block->size.x * sizeof(sprec_t));
-          }
-          continue;
+  // ── Cold miss: walk the tree once and capture the per-strip block list ──
+  if (entry != nullptr && !entry->built) {
+    const uint32_t np     = res->npw * res->nph;
+    const int32_t  sb_x0  = static_cast<int32_t>(sb->get_pos0().x);
+    const auto     stride_cold = static_cast<ptrdiff_t>(sb->stride);
+
+    entry->blocks.clear();
+
+    for (uint32_t p = 0; p < np; ++p) {
+      j2k_precinct         *cp  = res->access_precinct(p);
+      j2k_precinct_subband *cpb = cp->access_pband(band_idx);
+      const uint32_t        ncx = cpb->num_codeblock_x;
+      const uint32_t        ncy = cpb->num_codeblock_y;
+      if (ncx == 0 || ncy == 0) continue;
+      const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
+      const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
+      if (cpb_y1_i <= prefetch_y0 || cpb_y0_i >= prefetch_y1) continue;
+      const uint32_t r0 = (prefetch_y0 > cpb_y0_i)
+                              ? static_cast<uint32_t>((prefetch_y0 - cpb_y0_i) / static_cast<int32_t>(cb_h))
+                              : 0u;
+      for (uint32_t r = r0; r < ncy; ++r) {
+        j2k_codeblock *row_first = cpb->access_codeblock(r * ncx);
+        if (static_cast<int32_t>(row_first->get_pos1().y) <= prefetch_y0) continue;
+        if (static_cast<int32_t>(row_first->get_pos0().y) >= prefetch_y1) break;
+        for (uint32_t c = 0; c < ncx; ++c) {
+          j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
+          CachedBlock ce;
+          ce.block   = block;
+          ce.QWx2    = round_up(block->size.x, 8U);
+          ce.QHx2    = round_up(block->size.y, 8U);
+          ce.row_off = (static_cast<int32_t>(block->get_pos0().y) - prefetch_y0) * stride_cold;
+          ce.col_off = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
+          ce.size_x  = block->size.x;
+          ce.size_y  = block->size.y;
+          entry->blocks.push_back(ce);
         }
-        CblkTask pb;
-        pb.block      = block;
-        pb.QWx2       = round_up(block->size.x, 8U);
-        pb.QHx2       = round_up(block->size.y, 8U);
-        pb.sample_off = total_s;
-        pb.state_off  = total_st;
-        pb.row_off = (static_cast<int32_t>(block->get_pos0().y) - prefetch_y0) * stride;
-        pb.col_off = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
-        total_s  += static_cast<size_t>(pb.QWx2 * pb.QHx2);
-        total_st += static_cast<size_t>((pb.QWx2 + 2) * (pb.QHx2 + 2));
-        par_tasks.push_back(pb);
       }
     }
+    entry->built = true;
+  }
+
+  // ── Hot path: iterate the cached block list, branching on num_passes ────
+  // On the degenerate case where the cache couldn't be sized (entry == nullptr)
+  // we fall back to a tree walk that builds into a thread-local block list.
+  // That path should not normally be taken.
+  par_tasks.clear();
+  size_t total_s = 0, total_st = 0;
+  const ptrdiff_t stride = static_cast<ptrdiff_t>(sb->stride);
+
+  auto process_block = [&](const CachedBlock &ce) {
+    if (!ce.block->num_passes) {
+      if (prefetch_buf != nullptr) {
+        sprec_t *dst = prefetch_buf + ce.row_off + ce.col_off;
+        for (uint32_t row = 0; row < ce.size_y; ++row) {
+          std::memset(dst + static_cast<ptrdiff_t>(row) * stride, 0,
+                      ce.size_x * sizeof(sprec_t));
+        }
+      }
+      return;
+    }
+    CblkTask pb;
+    pb.block      = ce.block;
+    pb.QWx2       = ce.QWx2;
+    pb.QHx2       = ce.QHx2;
+    pb.sample_off = total_s;
+    pb.state_off  = total_st;
+    pb.row_off    = ce.row_off;
+    pb.col_off    = ce.col_off;
+    total_s  += static_cast<size_t>(ce.QWx2 * ce.QHx2);
+    total_st += static_cast<size_t>((ce.QWx2 + 2) * (ce.QHx2 + 2));
+    par_tasks.push_back(pb);
+  };
+
+  if (entry != nullptr) {
+    for (const auto &ce : entry->blocks) process_block(ce);
+  } else {
+    // Fallback tree walk: populate a thread-local list then process it.
+    static thread_local std::vector<CachedBlock> fb_blocks;
+    fb_blocks.clear();
+    const uint32_t np    = res->npw * res->nph;
+    const int32_t  sb_x0 = static_cast<int32_t>(sb->get_pos0().x);
+    for (uint32_t p = 0; p < np; ++p) {
+      j2k_precinct         *cp  = res->access_precinct(p);
+      j2k_precinct_subband *cpb = cp->access_pband(band_idx);
+      const uint32_t        ncx = cpb->num_codeblock_x;
+      const uint32_t        ncy = cpb->num_codeblock_y;
+      if (ncx == 0 || ncy == 0) continue;
+      const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
+      const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
+      if (cpb_y1_i <= prefetch_y0 || cpb_y0_i >= prefetch_y1) continue;
+      const uint32_t r0 = (prefetch_y0 > cpb_y0_i)
+                              ? static_cast<uint32_t>((prefetch_y0 - cpb_y0_i) / static_cast<int32_t>(cb_h))
+                              : 0u;
+      for (uint32_t r = r0; r < ncy; ++r) {
+        j2k_codeblock *row_first = cpb->access_codeblock(r * ncx);
+        if (static_cast<int32_t>(row_first->get_pos1().y) <= prefetch_y0) continue;
+        if (static_cast<int32_t>(row_first->get_pos0().y) >= prefetch_y1) break;
+        for (uint32_t c = 0; c < ncx; ++c) {
+          j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
+          CachedBlock ce;
+          ce.block   = block;
+          ce.QWx2    = round_up(block->size.x, 8U);
+          ce.QHx2    = round_up(block->size.y, 8U);
+          ce.row_off = (static_cast<int32_t>(block->get_pos0().y) - prefetch_y0) * stride;
+          ce.col_off = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
+          ce.size_x  = block->size.x;
+          ce.size_y  = block->size.y;
+          fb_blocks.push_back(ce);
+        }
+      }
+    }
+    for (const auto &ce : fb_blocks) process_block(ce);
   }
 
   if (par_tasks.empty()) {
-    // No codeblocks to decode — prefetch is trivially complete.
     par_cnt.store(0, std::memory_order_relaxed);
     return;
   }
