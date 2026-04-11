@@ -53,6 +53,18 @@ class openhtj2k_decoder_impl {
   uint32_t enum_cs;             // EnumCS from JPH colr box; 0 for raw codestreams
   std::vector<uint8_t> jph_file_buf;  // owns full file data when input is a JPH file
 
+  // ── Single-tile cache (RFC 9828 streaming opt-in) ─────────────────────
+  // When single_tile_reuse_enabled_ is set, invoke_line_based_stream_reuse()
+  // keeps the decoded tile alive across calls so the next frame can reuse
+  // every aligned allocation hanging off tcomp[] → resolution[] → precinct[]
+  // → j2k_codeblock (compressed buffers, tagtrees, ring buffers, line_dec
+  // sub-objects).  Only valid when the main-header marker bytes are byte-
+  // identical across frames; cached_header_fingerprint_ is the FNV-1a hash
+  // of SIZ/COD/COC/QCD/QCC/RGN used as the cache-validity check.
+  bool single_tile_reuse_enabled_      = false;
+  std::vector<j2k_tile> cached_tileSet_;
+  uint64_t cached_header_fingerprint_  = 0;
+
  public:
   openhtj2k_decoder_impl();
   openhtj2k_decoder_impl(const char *, uint8_t reduce_NL, uint32_t num_threads);
@@ -76,9 +88,13 @@ class openhtj2k_decoder_impl {
   void invoke_line_based_stream(std::function<void(uint32_t, int32_t *const *, uint16_t)> cb,
                                 std::vector<uint32_t> &, std::vector<uint32_t> &,
                                 std::vector<uint8_t> &, std::vector<bool> &);
+  void invoke_line_based_stream_reuse(std::function<void(uint32_t, int32_t *const *, uint16_t)> cb,
+                                       std::vector<uint32_t> &, std::vector<uint32_t> &,
+                                       std::vector<uint8_t> &, std::vector<bool> &);
   void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
                                     std::vector<uint32_t> &, std::vector<uint8_t> &,
                                     std::vector<bool> &);
+  void enable_single_tile_reuse(bool on);
 
   void destroy();
 };
@@ -660,6 +676,230 @@ void openhtj2k_decoder::invoke_line_based_stream(
     std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   this->impl->invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
+}
+
+void openhtj2k_decoder::invoke_line_based_stream_reuse(
+    std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb, std::vector<uint32_t> &width,
+    std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  this->impl->invoke_line_based_stream_reuse(std::move(cb), width, height, depth, is_signed);
+}
+
+void openhtj2k_decoder::enable_single_tile_reuse(bool on) {
+  this->impl->enable_single_tile_reuse(on);
+}
+
+void openhtj2k_decoder_impl::enable_single_tile_reuse(bool on) {
+  single_tile_reuse_enabled_ = on;
+  if (!on) {
+    // Drop the cache so the next call starts from a clean slate.
+    cached_tileSet_.clear();
+    cached_header_fingerprint_ = 0;
+  }
+}
+
+// Single-tile reuse entry point.  Mirrors the single-tile fast path of
+// invoke_line_based_stream (numTiles.x == 1 branch) but keeps the j2k_tile
+// parked on cached_tileSet_ so the next call skips create_resolutions,
+// packet[] allocation, and the per-codeblock aligned_mem_alloc storm in
+// subband_row_buf::init.  See reference_rtp_recv_v3_profile_2026_04_11.md
+// in the user's memory for the measurements that motivated this.
+//
+// Multi-tile streams, multi-tile-column streams, and grayscale-only streams
+// with numTiles.x != 1 are NOT supported — they fall through to the legacy
+// invoke_line_based_stream which allocates per-call.  rtp_recv only emits
+// single-tile codestreams for RFC 9828 (see project memory).
+void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
+    std::function<void(uint32_t, int32_t *const *, uint16_t)> cb, std::vector<uint32_t> &width,
+    std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  if (!is_parsed) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_stream_reuse().\n");
+    throw std::exception();
+  }
+  if (!single_tile_reuse_enabled_) {
+    invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
+    return;
+  }
+  if (reduce_NL > this->get_max_safe_reduce_NL()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
+        "maximum safe value for this codestream.  For DFS streams this is the count\n"
+        "of consecutive bidirectional DWT levels from the finest; for other streams\n"
+        "it is the minimum DWT level count across all tile-components.");
+  }
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  // Only single-tile codestreams are eligible for the cache path.  Anything
+  // else — including the multi-tile-row single-column case used by some
+  // JPEG 2000 encoders — falls through to the legacy path.  The cache is
+  // dropped to prevent us from mixing shapes across calls.
+  if (numTiles.x != 1 || numTiles.y != 1) {
+    cached_tileSet_.clear();
+    cached_header_fingerprint_ = 0;
+    invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
+    return;
+  }
+
+  // Compute a fingerprint of the marker segments that the tile tree is
+  // structurally sensitive to.  SIZ/COD/COC/QCD/QCC/RGN cover every field
+  // read by create_resolutions / create_subbands / create_precincts; if
+  // any of their encoded bytes change, we must drop the cache.  The
+  // fingerprint is a cheap FNV-1a over the marker's get_length() /
+  // parameter-derived values obtained from the parsed main_header —
+  // computing over the raw bytes would require keeping a copy of the
+  // codestream prefix, which is overkill for a safety check.
+  auto fnv1a_u64 = [](uint64_t h, const void *data, size_t len) {
+    const uint8_t *p = static_cast<const uint8_t *>(data);
+    for (size_t i = 0; i < len; ++i) {
+      h ^= p[i];
+      h *= 1099511628211ull;
+    }
+    return h;
+  };
+  uint64_t fp = 14695981039346656037ull;  // FNV-1a offset basis
+  auto mix_u64 = [&](uint64_t v) {
+    fp = fnv1a_u64(fp, &v, sizeof(v));
+  };
+  {
+    element_siz s_siz, s_osiz, s_tsiz, s_tosiz;
+    main_header.SIZ->get_image_size(s_siz);
+    main_header.SIZ->get_image_origin(s_osiz);
+    main_header.SIZ->get_tile_size(s_tsiz);
+    main_header.SIZ->get_tile_origin(s_tosiz);
+    const uint16_t ncomp = main_header.SIZ->get_num_components();
+    mix_u64((static_cast<uint64_t>(s_siz.x)  << 32) | s_siz.y);
+    mix_u64((static_cast<uint64_t>(s_osiz.x) << 32) | s_osiz.y);
+    mix_u64((static_cast<uint64_t>(s_tsiz.x) << 32) | s_tsiz.y);
+    mix_u64((static_cast<uint64_t>(s_tosiz.x)<< 32) | s_tosiz.y);
+    mix_u64(ncomp);
+    for (uint16_t c = 0; c < ncomp; ++c) {
+      element_siz sub;
+      const uint8_t bd = main_header.SIZ->get_bitdepth(c);
+      const bool    sn = main_header.SIZ->is_signed(c);
+      main_header.SIZ->get_subsampling_factor(sub, c);
+      mix_u64((static_cast<uint64_t>(bd) << 56)
+              | (static_cast<uint64_t>(sn ? 1 : 0) << 48)
+              | (static_cast<uint64_t>(sub.x) << 16)
+              | static_cast<uint64_t>(sub.y));
+    }
+    if (main_header.COD != nullptr) {
+      const uint8_t  dl  = main_header.COD->get_dwt_levels();
+      const uint8_t  po  = main_header.COD->get_progression_order();
+      const uint16_t nl  = main_header.COD->get_number_of_layers();
+      const uint8_t  mct = main_header.COD->use_color_trafo();
+      const uint8_t  cm  = main_header.COD->get_Cmodes();
+      const uint8_t  tx  = main_header.COD->get_transformation();
+      element_siz    cbsz; main_header.COD->get_codeblock_size(cbsz);
+      mix_u64((static_cast<uint64_t>(dl) << 56) | (static_cast<uint64_t>(po) << 48)
+              | (static_cast<uint64_t>(nl) << 32)
+              | (static_cast<uint64_t>(mct) << 24) | (static_cast<uint64_t>(cm) << 16)
+              | static_cast<uint64_t>(tx));
+      mix_u64((static_cast<uint64_t>(cbsz.x) << 32) | cbsz.y);
+      for (uint8_t r = 0; r <= dl; ++r) {
+        element_siz pp; main_header.COD->get_precinct_size(pp, r);
+        mix_u64((static_cast<uint64_t>(pp.x) << 32) | pp.y);
+      }
+    }
+    if (main_header.QCD != nullptr) {
+      const uint8_t qs = main_header.QCD->get_quantization_style();
+      const uint8_t gb = main_header.QCD->get_number_of_guardbits();
+      const uint8_t n0 = main_header.QCD->get_num_entries();
+      mix_u64((static_cast<uint64_t>(qs) << 16) | (static_cast<uint64_t>(gb) << 8)
+              | static_cast<uint64_t>(n0));
+      if (n0 > 0) {
+        const uint8_t  e0 = main_header.QCD->get_exponents(0);
+        const uint16_t m0 = main_header.QCD->get_mantissas(0);
+        mix_u64((static_cast<uint64_t>(e0) << 16) | m0);
+      }
+    }
+    // COC / QCC / RGN lists: hash the count only.  rtp_recv streams do not
+    // use per-component overrides or region-of-interest, so any non-zero
+    // count is an unexpected-shape signal that invalidates the cache.
+    mix_u64(static_cast<uint64_t>(main_header.COC.size()));
+    mix_u64(static_cast<uint64_t>(main_header.QCC.size()));
+    mix_u64(static_cast<uint64_t>(main_header.RGN.size()));
+  }
+
+  // Populate the output metadata vectors the same way the legacy path does.
+  uint16_t num_components = main_header.SIZ->get_num_components();
+  element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
+  main_header.SIZ->get_image_size(siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
+  for (uint16_t c = 0; c < num_components; ++c) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
+    const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
+    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    depth.push_back(main_header.SIZ->get_bitdepth(c));
+    is_signed.push_back(main_header.SIZ->is_signed(c));
+  }
+
+  // Cache hit if: we have a cached tile whose tree is built AND whose
+  // fingerprint matches the current frame's main-header.  Otherwise drop
+  // the cache and treat this frame as a first frame.
+  const bool cache_hit = !cached_tileSet_.empty()
+                         && cached_tileSet_[0].is_structure_built()
+                         && cached_header_fingerprint_ == fp;
+  if (!cache_hit) {
+    cached_tileSet_.clear();
+    cached_tileSet_.resize(1);
+    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
+  } else {
+    cached_tileSet_[0].prepare_for_next_frame();
+    // dec_init is a scalar-only update that's safe to call repeatedly;
+    // calling it ensures tile.index / num_components / CCap15 / reduce_NL
+    // track any ABI-compatible main-header tweaks (same fingerprint).
+    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
+  }
+
+  // Read tile-parts from the current bitstream into the cached (or fresh) tile.
+  {
+    uint16_t word;
+    SOT_marker tmpSOT;
+    while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
+      if (word != _SOT) {
+        printf("ERROR: SOT marker segment expected but %04X is found\n", word);
+        throw std::exception();
+      }
+      tmpSOT = SOT_marker(in);
+      const uint16_t tile_index = tmpSOT.get_tile_index();
+      if (tile_index != 0) {
+        throw std::runtime_error(
+            "openhtj2k_decoder_impl::invoke_line_based_stream_reuse expected a "
+            "single-tile codestream (tile_index != 0 found)");
+      }
+      cached_tileSet_[0].add_tile_part(tmpSOT, in, main_header);
+    }
+  }
+
+  // Flip persistence on tile_components BEFORE decode_line_based_stream so
+  // finalize_line_decode inside the decode call skips teardown.  On the
+  // first frame this is the point at which the flag starts holding true;
+  // on subsequent frames prepare_for_next_frame already set it.
+  cached_tileSet_[0].set_line_decode_persistent_all(true);
+
+  try {
+    cached_tileSet_[0].line_based_decode = true;
+    cached_tileSet_[0].create_tile_buf(main_header);
+  } catch (std::exception &exc) {
+    printf("ERROR: %s\n", exc.what());
+    // On a create_tile_buf failure the cache is likely in a bad state —
+    // drop it and rethrow.
+    cached_tileSet_.clear();
+    cached_header_fingerprint_ = 0;
+    throw std::runtime_error("Abort Decoding!");
+  }
+
+  cached_tileSet_[0].decode_line_based_stream(main_header, reduce_NL, cb);
+
+  cached_header_fingerprint_ = fp;
 }
 
 void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *> &buf,

@@ -342,7 +342,7 @@ bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
     std::vector<uint32_t> heights;
     std::vector<uint8_t>  depths;
     std::vector<bool>     signeds;
-    decoder.invoke_line_based_stream(
+    decoder.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
           if (y == 0) {
             if (nc < 1) {
@@ -427,7 +427,7 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
     std::vector<uint32_t> heights;
     std::vector<uint8_t>  depths;
     std::vector<bool>     signeds;
-    decoder.invoke_line_based_stream(
+    decoder.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
           if (y == 0) {
             if (nc < 1) {
@@ -891,6 +891,14 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
   // for every subsequent frame.  The destructor (when this thread exits)
   // is the only place that calls ThreadPool::release().
   open_htj2k::openhtj2k_decoder decoder;
+  // v4 single-tile reuse: opt in so the second and subsequent frames skip
+  // create_resolutions / packet-array allocation / init_line_decode's
+  // ring-buffer allocation storm.  Saves ~3 ms/frame on 4K 4:2:2 HT at
+  // threads=2.  Fingerprint-guarded inside the decoder; any main-header
+  // shape change automatically invalidates the cache and falls back to
+  // the legacy path.  RFC 9828 streams are single-tile by construction
+  // (see project_rtp_streaming_single_tile in memory).
+  decoder.enable_single_tile_reuse(true);
 
   bool first_frame = true;
   while (!st.stop_flag.load(std::memory_order_acquire)) {

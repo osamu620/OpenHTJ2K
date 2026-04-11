@@ -1069,6 +1069,21 @@ void idwt_2d_state_free(idwt_2d_state *s) {
   aligned_mem_free(s->horz_out_buf); s->horz_out_buf = nullptr;
 }
 
+// Rewind the streaming cursors to their post-init state without touching
+// any of the aligned buffers (ring_buf / top_pse_buf / bot_pse_buf /
+// horz_out_buf).  Used by the single-tile reuse path to return a state
+// that has already produced v1-v0 rows back to "nothing emitted yet".
+// Geometry, transformation, dir, PSE counts and src pointers remain set,
+// so a subsequent pull_row call restarts from row v0.
+void idwt_2d_state_rewind(idwt_2d_state *s) {
+  s->ring_origin = s->v0;
+  s->next_out    = s->v0;
+  s->next_fetch  = s->v0;
+  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) s->d_level[i]    = -1;
+  for (int32_t i = 0; i < 4;                     ++i) s->top_dlevel[i] = -1;
+  for (int32_t i = 0; i < 4;                     ++i) s->bot_dlevel[i] = -1;
+}
+
 bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out) {
   const sprec_t *ptr = idwt_2d_state_pull_row_ref(s);
   if (!ptr) return false;

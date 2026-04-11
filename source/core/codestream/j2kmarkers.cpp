@@ -1727,6 +1727,25 @@ void j2k_main_header::flush(j2c_dst_memory &buf) {
 }
 
 int j2k_main_header::read(j2c_src_memory &in) {
+  // Clear vector-based marker lists so a re-parse on the same main_header
+  // instance (the openhtj2k_decoder::init() + parse() reuse pattern used
+  // by rtp_recv and v4 single-tile cache) sees a clean slate rather than
+  // the previous frame's entries concatenated to the current frame's.
+  // The unique_ptr markers (SIZ, CAP, COD, QCD, POC, CPF, CRG) are
+  // overwritten below via MAKE_UNIQUE assignment and do not need to be
+  // cleared explicitly.
+  COC.clear();
+  TLM.clear();
+  PLM.clear();
+  QCC.clear();
+  RGN.clear();
+  PPM.clear();
+  COM.clear();
+  DFS.clear();
+  ATK.clear();
+  ppm_buf.reset();
+  ppm_header.reset();
+
   uint16_t word = in.get_word();
   assert(word == _SOC);  // check SOC
 
