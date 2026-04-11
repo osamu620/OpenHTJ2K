@@ -1,3 +1,23 @@
+# [0.13.1] - 2026-04-12
+
+## Build fixes
+
+* RTP receiver: fix `-DOPENHTJ2K_RTP=ON` build on macOS.  The
+  experimental `open_htj2k_rtp_recv` target unconditionally included
+  `<GL/gl.h>` and `<GL/glext.h>` from `source/apps/rtp_recv/gl_loader.hpp`
+  and `gl_renderer.cpp`.  Those paths exist on Linux but not under the
+  Apple OpenGL framework, where the headers live at `<OpenGL/gl3.h>`
+  and `<OpenGL/gl3ext.h>`, breaking the configure-and-build cycle on
+  Apple Silicon and Intel Macs.  `gl_loader.hpp` now selects the
+  Apple paths under `__APPLE__` (and defines `GL_SILENCE_DEPRECATION`
+  to quiet Apple's legacy-OpenGL warnings) while keeping the Linux
+  branch unchanged; the redundant `<GL/gl.h>` include in
+  `gl_renderer.cpp` is dropped since the loader header already brings
+  in the right GL headers for the platform.  Verified by a clean
+  configure + build of the RTP target on macOS (Apple Silicon,
+  AppleClang 21).  Linux builds are byte-identical because the
+  non-Apple `#else` branch is the original two includes.
+
 # [0.13.0] - 2026-04-12
 
 ## HDR display pipeline (RTP receiver)

@@ -9,7 +9,6 @@
 #include "ycbcr_rgb.hpp"
 
 #include <GLFW/glfw3.h>
-#include <GL/gl.h>
 
 #include <cstdio>
 #include <cstring>
