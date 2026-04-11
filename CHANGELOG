@@ -1,3 +1,92 @@
+# [0.11.0] - 2026-04-11
+
+## Performance
+* RTP receiver: AVX2 fast path for the planar `int32 -> u8` shift
+  callback used by the shader color path. Processes 8 samples per
+  iteration with a clamp + arithmetic-shift-right + `packus_epi32`
+  + `packus_epi16` chain; cuts the scalar shift-to-u8 cost on 4K 4:2:2
+  broadcast HT from ~4.56 ms/frame to ~1.70 ms/frame. Scalar tail
+  covers `width % 8`. Byte-equal against the scalar reference across
+  every `(shift, width)` residue in `--smoke-test`.
+* Decoder: persistent single-tile cache for streaming reuse. New
+  opt-in public API (`openhtj2k_decoder::enable_single_tile_reuse` +
+  `invoke_line_based_stream_reuse`) lets the same decoder instance
+  skip `create_resolutions`, the `j2c_packet[]` allocation, the
+  ~50-call `aligned_alloc` storm inside `init_line_decode`, and the
+  matching frees inside `finalize_line_decode` on every frame after
+  the first. The POC iteration and per-frame `read_packet` still run
+  against cached codeblock state via new helpers
+  (`j2k_tile::prepare_for_next_frame`,
+  `j2k_codeblock::reset_for_next_frame`,
+  `j2k_precinct_subband::reset_for_next_frame`,
+  `tagtree_node::reset_for_next_frame`, `idwt_2d_state_rewind`).
+  An FNV-1a fingerprint over the SIZ/COD/QCD scalars and COC/QCC/RGN
+  counts guards the cache: any main-header shape change invalidates
+  automatically and falls back to the legacy path. Default off; the
+  legacy path is byte-for-byte untouched. Saves ~3 ms/frame on 4K
+  4:2:2 broadcast HT when enabled.
+* Decoder: per-strip codeblock enumeration cache in
+  `j2k_subband_row_buf::trigger_prefetch`. The first call per
+  (subband, strip) walks the precinct / codeblock tree via
+  `access_precinct` / `access_pband` and captures every block's
+  position, size, and strip-relative offset into a persistent
+  `strip_cache_` on the row-buf object. Every subsequent call —
+  i.e. every frame after the first under single-tile reuse —
+  iterates the cached list and skips the tree walk entirely.
+  Block empty-vs-nonempty status is NOT cached because
+  `j2k_codeblock::reset_for_next_frame()` clears `num_passes` at
+  frame boundaries; the hot path branches on `num_passes` per
+  block, which is cheap relative to the tree walk it replaces.
+  Cache invalidation is implicit: any main-header shape change
+  destroys the tile and its row-buf objects, which drops the cache.
+  Saves another ~4 ms/frame on 4K 4:2:2 broadcast HT (17.07 ms ->
+  13.13 ms live decode time). Byte-equal against the legacy path
+  across the full 582-test conformance suite plus a 50-frame
+  Y/Cb/Cr plane dump.
+* Combined receiver ceiling on 4K 4:2:2 1.7-bpp broadcast HT at
+  `--threads 2`: **80.8 fps** (up from 41.7 fps in 0.10.0) measured
+  against a 59.94 fps source through the offline profiler. Live
+  `open_htj2k_rtp_recv --no-vsync` sustains **60.01 +/- 0.31 fps**
+  locked to the source cadence over a 2000-frame soak driven from
+  a real 59.94 fps sender on the camera 4K 4:2:2 1.7-bpp fixture.
+  Decode time avg 13.13 ms (max 25.47 ms), **zero** decode-slot
+  evictions, **zero** render-slot evictions, **zero** frame drops,
+  no thermal-related drift.
+
+## Tools
+* `source/apps/rtp_recv/tools/rtp_decode_profile.cpp` - offline
+  single-threaded harness that loads dumped `.j2c` codestreams and
+  times `init() + parse() + invoke_line_based_stream[_reuse]()` per
+  frame across a configurable number of loops. Built as
+  `open_htj2k_rtp_decode_profile` when `-DOPENHTJ2K_RTP=ON`. Used
+  to bound rtp_recv decode cost without the receive / socket /
+  display pipeline in the way, and to dump decoded Y/Cb/Cr planes
+  for byte-equality comparison between the legacy and reuse paths.
+* `source/apps/rtp_recv/tools/rtp_file_replay.py` - minimal
+  `.rtp` file replayer for the 16-bit-length-prefixed file format,
+  with `--rate-bps` wire-rate pacing and `--start-delay` receiver
+  warm-up. Complements `rtp_loopback_send.py` (single-codestream)
+  and lets regression tests drive the receiver from captured
+  multi-frame fixtures without a live sender.
+* `source/apps/rtp_recv/tools/README.md` documents the
+  dump -> replay -> profile -> perf workflow end to end.
+
+## Bugfixes
+* `j2k_main_header::read()` was `push_back`-ing COC, TLM, PLM, QCC,
+  RGN, PPM, COM, DFS, and ATK marker segments into their parent
+  vectors without clearing them first. Single-decoder-instance users
+  were unaffected because those codepaths never iterated the
+  growing lists, and users that allocated a fresh
+  `openhtj2k_decoder` per frame were unaffected because the vectors
+  started empty on every parse. Users that called
+  `openhtj2k_decoder::init()` to re-load a new codestream into the
+  same instance (as the new RTP receiver's decode worker does) saw
+  the previous frame's marker segments concatenated onto the
+  current frame's, which invalidated the main-header reuse
+  fingerprint comparison. Clears each marker-segment vector at the
+  top of `read()`. Three lines, no behavior change for single-call
+  users.
+
 # [0.10.0] - 2026-04-11
 
 ## New Features
