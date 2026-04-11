@@ -35,6 +35,7 @@
 #include "frame_handler.hpp"
 #include "frame_pipeline.hpp"
 #include "gl_renderer.hpp"
+#include "planar_shift.hpp"
 #include "rfc9828_parser.hpp"
 #include "rtp_socket.hpp"
 #include "ycbcr_rgb.hpp"
@@ -254,6 +255,11 @@ int run_smoke_tests() {
   std::printf("rfc9828 parser smoke-test OK\n");
   if (smoke_test_ycbcr() != 0) return EXIT_FAILURE;
   std::printf("ycbcr->rgb smoke-test OK\n");
+  if (!plane_shift_smoke_test()) {
+    std::fprintf(stderr, "planar shift smoke-test FAILED\n");
+    return EXIT_FAILURE;
+  }
+  std::printf("planar shift smoke-test OK\n");
   if (smoke_test_frame_handler() != 0) return EXIT_FAILURE;
   std::printf("frame_handler smoke-test OK\n");
   return EXIT_SUCCESS;
@@ -468,16 +474,8 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
           const int32_t maxval_y = (1 << depth_y) - 1;
 
           // Luma row — every call has a Y row at the current y.
-          {
-            uint8_t* out = df.plane_y.data() + static_cast<size_t>(y) * luma_w;
-            const int32_t* in = rows[0];
-            for (uint32_t x = 0; x < luma_w; ++x) {
-              int32_t v = in[x];
-              if (v < 0) v = 0;
-              if (v > maxval_y) v = maxval_y;
-              out[x] = static_cast<uint8_t>(shift_y > 0 ? (v >> shift_y) : v);
-            }
-          }
+          shift_i32_plane_to_u8(rows[0], df.plane_y.data() + static_cast<size_t>(y) * luma_w,
+                                luma_w, shift_y, maxval_y);
 
           // Chroma (or G/B for PLANAR_RGB).  Written only for rows that
           // land on the chroma grid.  For 4:2:2 the chroma height equals
@@ -492,17 +490,16 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
                                                static_cast<uint64_t>(y) * chroma_h_0 / luma_h)
                                          : 0;
             if (yc < chroma_h_0) {
-              auto store_chroma = [&](const int32_t* in, std::vector<uint8_t>& dst) {
-                uint8_t* out = dst.data() + static_cast<size_t>(yc) * chroma_w_0;
-                for (uint32_t x = 0; x < chroma_w_0; ++x) {
-                  int32_t v = in[x];
-                  if (v < 0) v = 0;
-                  if (v > maxval_c) v = maxval_c;
-                  out[x] = static_cast<uint8_t>(shift_c > 0 ? (v >> shift_c) : v);
-                }
-              };
-              if (rows[1] != nullptr) store_chroma(rows[1], df.plane_cb);
-              if (rows[2] != nullptr) store_chroma(rows[2], df.plane_cr);
+              if (rows[1] != nullptr) {
+                shift_i32_plane_to_u8(rows[1],
+                                      df.plane_cb.data() + static_cast<size_t>(yc) * chroma_w_0,
+                                      chroma_w_0, shift_c, maxval_c);
+              }
+              if (rows[2] != nullptr) {
+                shift_i32_plane_to_u8(rows[2],
+                                      df.plane_cr.data() + static_cast<size_t>(yc) * chroma_w_0,
+                                      chroma_w_0, shift_c, maxval_c);
+              }
             }
           }
         },

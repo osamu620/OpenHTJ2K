@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "decoder.hpp"
+#include "../planar_shift.hpp"
 
 namespace fs = std::filesystem;
 using Clock  = std::chrono::steady_clock;
@@ -202,16 +203,9 @@ int main(int argc, char** argv) {
 
               const int32_t shift_y  = static_cast<int32_t>(depth_y) - 8;
               const int32_t maxval_y = (1 << depth_y) - 1;
-              {
-                uint8_t*       out = plane_y.data() + static_cast<size_t>(y) * luma_w;
-                const int32_t* in  = rows[0];
-                for (uint32_t x = 0; x < luma_w; ++x) {
-                  int32_t v = in[x];
-                  if (v < 0) v = 0;
-                  if (v > maxval_y) v = maxval_y;
-                  out[x] = static_cast<uint8_t>(shift_y > 0 ? (v >> shift_y) : v);
-                }
-              }
+              open_htj2k::rtp_recv::shift_i32_plane_to_u8(
+                  rows[0], plane_y.data() + static_cast<size_t>(y) * luma_w, luma_w,
+                  shift_y, maxval_y);
               if (nc >= 3 && chroma_h > 0) {
                 const int32_t shift_c  = static_cast<int32_t>(depth_c) - 8;
                 const int32_t maxval_c = (1 << depth_c) - 1;
@@ -220,17 +214,16 @@ int main(int argc, char** argv) {
                                                    static_cast<uint64_t>(y) * chroma_h / luma_h)
                                              : 0;
                 if (yc < chroma_h) {
-                  auto store = [&](const int32_t* in, std::vector<uint8_t>& dst) {
-                    uint8_t* out = dst.data() + static_cast<size_t>(yc) * chroma_w;
-                    for (uint32_t x = 0; x < chroma_w; ++x) {
-                      int32_t v = in[x];
-                      if (v < 0) v = 0;
-                      if (v > maxval_c) v = maxval_c;
-                      out[x] = static_cast<uint8_t>(shift_c > 0 ? (v >> shift_c) : v);
-                    }
-                  };
-                  if (rows[1]) store(rows[1], plane_cb);
-                  if (rows[2]) store(rows[2], plane_cr);
+                  if (rows[1]) {
+                    open_htj2k::rtp_recv::shift_i32_plane_to_u8(
+                        rows[1], plane_cb.data() + static_cast<size_t>(yc) * chroma_w,
+                        chroma_w, shift_c, maxval_c);
+                  }
+                  if (rows[2]) {
+                    open_htj2k::rtp_recv::shift_i32_plane_to_u8(
+                        rows[2], plane_cr.data() + static_cast<size_t>(yc) * chroma_w,
+                        chroma_w, shift_c, maxval_c);
+                  }
                 }
               }
 
