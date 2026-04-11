@@ -193,6 +193,12 @@ class j2k_codeblock : public j2k_region {
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   void create_compressed_buffer(buf_chain *tile_buf, int32_t buf_limit, const uint16_t &layer);
+  // Single-tile reuse: clear every field touched by parse_packet_header /
+  // create_compressed_buffer so the codeblock returns to its post-ctor
+  // "ready to parse" state, without deallocating structural resources.
+  // Frees compressed_data if it is a non-pooled owned buffer (matching
+  // the destructor's ownership convention).
+  void reset_for_next_frame();
   //  void update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1, const int16_t &j2)
   //  const; void update_sign(const int8_t &val, const uint32_t &j1, const uint32_t &j2) const;
   //  OPENHTJ2K_NODISCARD uint8_t get_sign(const uint32_t &j1, const uint32_t &j2) const;
@@ -270,6 +276,10 @@ class j2k_precinct_subband : public j2k_region {
   j2k_codeblock *access_codeblock(uint32_t i);
   void parse_packet_header(buf_chain *packet_header, uint16_t layer_idx, uint16_t Ccap15);
   void generate_packet_header(packet_header_writer &header, uint16_t layer_idx);
+  // Single-tile reuse: reset both tagtrees and every codeblock's per-frame
+  // state so parse_packet_header can be called again.  Keeps all structural
+  // allocations alive (codeblocks[], cb_layer_pool, tagtree_node arrays).
+  void reset_for_next_frame();
 };
 
 /********************************************************************************
@@ -486,6 +496,12 @@ class j2k_tile_component : public j2k_tile_base {
   std::unique_ptr<struct j2k_tcomp_line_dec> line_dec;
   // opaque line-encode state (allocated by init_line_encode, freed by finalize_line_encode)
   std::unique_ptr<struct j2k_tcomp_line_enc> line_enc;
+  // Single-tile reuse: when true, init_line_decode() short-circuits to a
+  // cursor-only reset if line_dec is already allocated, and
+  // finalize_line_decode() leaves line_dec alive.  The destructor clears the
+  // flag before calling finalize_line_decode() so full teardown still runs
+  // when the j2k_tile_component itself is destroyed.
+  bool line_dec_persistent_ = false;
   // set members related to COC marker
   void setCOCparams(COC_marker *COC);
   // set members related to QCC marker
@@ -544,6 +560,16 @@ class j2k_tile_component : public j2k_tile_base {
   void finalize_line_decode();
   // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
   void mark_line_dec_predecoded();
+  // Single-tile reuse: reset line-decode cursor state (next_row, strip_y0,
+  // prefetch_y0, etc. on every subband_row_buf) without freeing ring buffers
+  // or idwt states.  A subsequent init_line_decode() must detect that
+  // line_dec is already allocated and short-circuit the allocation path.
+  void reset_line_decode_cursors();
+  // Single-tile reuse opt-in.  When true, init_line_decode reuses an existing
+  // line_dec (cursor reset only) and finalize_line_decode is a no-op.  When
+  // false, both functions behave as before.  The destructor forces false
+  // before calling finalize_line_decode to guarantee cleanup.
+  void set_line_decode_persistent(bool on) { line_dec_persistent_ = on; }
 
   // ── Line-based encode API ─────────────────────────────────────────────────
   // init_line_encode():     allocates FDWT state chain; call after enc_init().
@@ -609,6 +635,12 @@ class j2k_tile : public j2k_tile_base {
   uint16_t Ccap15;
   // progression order information for both COD and POC
   POC_marker porder_info;
+  // Set to true after create_tile_buf has allocated the resolution/precinct/
+  // codeblock tree.  When openhtj2k_decoder_impl is driving this tile through
+  // the single-tile reuse path, prepare_for_next_frame() clears per-frame
+  // mutable state but leaves structure_built_ set, and create_tile_buf
+  // short-circuits its allocation steps on the next call.
+  bool structure_built_ = false;
  public:
   // Bump-allocator pool for HTJ2K encode compressed bitstreams (one pool per thread).
   struct EncodePoolCtx {
@@ -675,6 +707,23 @@ class j2k_tile : public j2k_tile_base {
   void add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_header &main_header);
   // create buffer to store compressed data for decoding
   void create_tile_buf(j2k_main_header &main_header);
+  // Single-tile reuse: clear every piece of mutable per-frame state while
+  // keeping the tile/component/resolution/precinct/codeblock allocations
+  // (and their sub-allocations — ring buffers, compressed buffers, tagtrees,
+  // line_dec) alive.  After this returns, the caller may re-populate the
+  // tile via the normal add_tile_part() loop and then re-call
+  // create_tile_buf() — which will short-circuit its structural allocations
+  // because structure_built_ stays true — and then decode_line_based_stream().
+  void prepare_for_next_frame();
+  // Read-only accessor used by openhtj2k_decoder_impl to decide whether a
+  // cached tile is in "tree is allocated" state (= reuse path) or not (=
+  // still a fresh j2k_tile that has never seen a codestream).
+  OPENHTJ2K_NODISCARD bool is_structure_built() const { return structure_built_; }
+  // Flip persistence on all tile_components of this tile.  Called by the
+  // reuse entry point on the first frame, just before decode_line_based_stream,
+  // so finalize_line_decode() skips teardown and keeps line_dec alive for
+  // the next call.  Calling it is idempotent.
+  void set_line_decode_persistent_all(bool on);
   // decoding (does block decoding and IDWT) function for a tile
   void decode();
   // inverse color transform

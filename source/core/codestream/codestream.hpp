@@ -380,6 +380,18 @@ class tagtree_node {
     set_flag = true;
   }
   OPENHTJ2K_NODISCARD bool is_set() const { return set_flag; }
+  // Reset per-decode state without touching the tree topology (level/index/
+  // parent_index/child_index/num_children).  Used by the single-tile reuse
+  // path in openhtj2k_decoder_impl: on frame N+1 the tagtree structure is
+  // identical to frame N, but every node's current_value/state/value/set_flag
+  // must return to the pristine "never parsed" state so parse_packet_header
+  // can re-read inclusion bits into the same nodes.
+  void reset_for_next_frame() {
+    state         = 0;
+    current_value = 0;
+    value         = 0;
+    set_flag      = false;
+  }
 };
 
 class tagtree {

@@ -840,6 +840,37 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
   this->length += layer_length;
 }
 
+void j2k_codeblock::reset_for_next_frame() {
+  // Release an owned compressed buffer before nulling the pointer.  Pooled
+  // buffers are freed by their owning cblk_data_pool (decoder-side pools
+  // are per-tile and are reset by the surrounding code; encoder-side pools
+  // live in EncodePoolCtx and are not relevant here).
+  if (compressed_data != nullptr && !compressed_is_pooled) {
+    free(compressed_data);
+  }
+  compressed_data       = nullptr;
+  current_address       = nullptr;
+  compressed_is_pooled  = false;
+  length                = 0;
+  num_passes            = 0;
+  num_ZBP               = 0;
+  fast_skip_passes      = 0;
+  Lblock                = 0;
+  already_included      = false;
+  refsegment            = false;
+  pass_length_count     = 0;
+  memset(pass_length, 0, sizeof(pass_length));
+  // parse_packet_header ORs HT_PHLD and HT_MIXED onto Cmodes during parse;
+  // strip those back off so the codeblock starts from the COD-declared
+  // base codeblock style.  (The base bits, e.g. HT itself, stay set.)
+  Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT_MIXED));
+  // layer_start / layer_passes are pooled by the owning j2k_precinct_subband
+  // (cb_layer_pool) and must be zeroed so parse_packet_header sees no
+  // stale contributions from the previous frame.
+  if (layer_start != nullptr) memset(layer_start, 0, num_layers);
+  if (layer_passes != nullptr) memset(layer_passes, 0, num_layers);
+}
+
 /********************************************************************************
  * j2k_precinct_subband
  *******************************************************************************/
@@ -910,6 +941,24 @@ tagtree_node *j2k_precinct_subband::get_inclusion_node(uint32_t i) {
 tagtree_node *j2k_precinct_subband::get_ZBP_node(uint32_t i) { return &this->ZBP_info.node[i]; }
 
 j2k_codeblock *j2k_precinct_subband::access_codeblock(uint32_t i) { return &this->codeblocks[i]; }
+
+void j2k_precinct_subband::reset_for_next_frame() {
+  // Reset the two tagtrees node-by-node.  tagtree::build() is not used here
+  // because it skips nodes whose set_flag is true (a ctor-time encoder path
+  // we don't want to trigger), and it recomputes value from children —
+  // which for the decoder means propagating stale values from the previous
+  // frame.  reset_for_next_frame() on the node clears all four state fields.
+  for (uint32_t i = 0; i < inclusion_info.num_nodes; ++i) {
+    inclusion_info.node[i].reset_for_next_frame();
+  }
+  for (uint32_t i = 0; i < ZBP_info.num_nodes; ++i) {
+    ZBP_info.node[i].reset_for_next_frame();
+  }
+  const uint32_t N = num_codeblock_x * num_codeblock_y;
+  for (uint32_t i = 0; i < N; ++i) {
+    codeblocks[i].reset_for_next_frame();
+  }
+}
 
 void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_t layer_idx,
                                                uint16_t Ccap15) {
@@ -2029,7 +2078,9 @@ j2k_tile_component::j2k_tile_component() {
 j2k_tile_component::~j2k_tile_component() {
   // Ensure aligned_mem_alloc'd sub-resources inside line_dec/line_enc (lp_tmp, hp_tmp,
   // ring buffers, row buffers) are freed even if finalize_*() was never called
-  // explicitly (e.g. due to an exception during decode/encode).
+  // explicitly (e.g. due to an exception during decode/encode).  Clear the
+  // single-tile reuse flag so finalize_line_decode does a real teardown.
+  line_dec_persistent_ = false;
   finalize_line_decode();
   finalize_line_encode();
   // Destroy resolutions (placement-new'd flat array).
@@ -2047,6 +2098,15 @@ j2k_tile_component::~j2k_tile_component() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void j2k_tile_component::init_line_decode(bool ring_mode) {
+  // Single-tile reuse fast path: the line_dec tree built on the first frame
+  // already has the right geometry — the underlying j2k_subband_row_buf
+  // ring allocations, idwt_2d_state, and level contexts are all reusable.
+  // All we need is to return each cursor to its pristine position.
+  if (line_dec != nullptr && line_dec_persistent_) {
+    reset_line_decode_cursors();
+    return;
+  }
+
   const int32_t NL_act   = static_cast<int32_t>(NL) - static_cast<int32_t>(reduce_NL);
   const int32_t cb_h_val = static_cast<int32_t>(codeblock_size.y);
 
@@ -2223,6 +2283,11 @@ sprec_t *j2k_tile_component::pull_line_ref() {
 
 void j2k_tile_component::finalize_line_decode() {
   if (line_dec == nullptr) return;
+  // Single-tile reuse: skip teardown so init_line_decode on the next frame
+  // can reuse every allocation.  The j2k_tile_component destructor clears
+  // line_dec_persistent_ before calling us, so final cleanup still happens
+  // when the tile_component itself is destroyed.
+  if (line_dec_persistent_) return;
   j2k_tcomp_line_dec *ld = line_dec.get();
 
   idwt_2d_state       *states  = ld->states.get();
@@ -2245,6 +2310,83 @@ void j2k_tile_component::finalize_line_decode() {
   }
   ld->ll0_buf.free_resources();
   line_dec.reset();
+}
+
+// Reset every cursor in the persistent line_dec so the next decode starts
+// from a clean state.  Ring buffers, prefetch buffers, scratch allocations,
+// idwt_2d_state contents, and all idwt_level_src_ctx fields stay alive —
+// this function only walks the subband_row_buf objects and rewinds their
+// strip_y0/strip_y1/ring_y0/prefetch_y0 cursors plus par_cnt.
+//
+// Must be kept in sync with j2k_subband_row_buf::init — any cursor field
+// init sets to a "nothing decoded yet" value must be reset here too.
+void j2k_tile_component::reset_line_decode_cursors() {
+  if (line_dec == nullptr) return;
+  j2k_tcomp_line_dec *ld = line_dec.get();
+
+  auto rewind = [](j2k_subband_row_buf &rb) {
+    rb.strip_y0 = -1;
+    rb.strip_y1 = -1;
+    rb.ring_y0  = -1;
+    rb.bypass_decode = false;
+#ifdef OPENHTJ2K_THREAD
+    rb.prefetch_y0 = -1;
+    rb.prefetch_y1 = -1;
+    // After free_resources has NOT been called, the combined allocation is
+    // still live, but ring_buf may have been swapped with prefetch_buf on a
+    // prefetch hit — restore the canonical layout (ring_buf = low half,
+    // prefetch_buf = high half) so decode_strip writes to the expected
+    // location.  combined_buf is the stable base pointer.
+    if (rb.combined_buf != nullptr && rb.ring_mode) {
+      const int32_t sb_w =
+          rb.sb ? static_cast<int32_t>(rb.sb->get_pos1().x - rb.sb->get_pos0().x) : 0;
+      const int32_t sb_h =
+          rb.sb ? static_cast<int32_t>(rb.sb->get_pos1().y - rb.sb->get_pos0().y) : 0;
+      if (sb_w > 0 && sb_h > 0) {
+        const size_t ring_rows  = static_cast<size_t>(rb.cb_h) + 1;
+        const size_t buf_floats = ring_rows * static_cast<size_t>(rb.sb->stride);
+        rb.ring_buf     = rb.combined_buf;
+        rb.prefetch_buf = rb.combined_buf + buf_floats;
+      }
+    }
+    rb.par_cnt.store(0, std::memory_order_relaxed);
+    rb.par_tasks.clear();
+#endif
+  };
+
+  // LL0 is always present.
+  rewind(ld->ll0_buf);
+
+  // Per active IDWT level: HL is always populated for BIDIR/HORZ; LH and HH
+  // only for BIDIR levels.  Mirror the init loop's selective path so we
+  // don't touch default-constructed slots for HORZ/VERT/NO levels.
+  const int32_t n = ld->NL_active;
+  if (n > 0) {
+    j2k_subband_row_buf *hl_bufs = ld->hl_bufs.get();
+    j2k_subband_row_buf *lh_bufs = ld->lh_bufs.get();
+    j2k_subband_row_buf *hh_bufs = ld->hh_bufs.get();
+    for (int32_t i = 0; i < n; ++i) {
+      const dwt_type dir =
+          access_resolution(static_cast<uint8_t>(i + 1))->transform_direction;
+      if (dir == DWT_BIDIR) {
+        rewind(hl_bufs[i]);
+        rewind(lh_bufs[i]);
+        rewind(hh_bufs[i]);
+      } else if (dir == DWT_HORZ) {
+        rewind(hl_bufs[i]);
+      }
+      // DWT_VERT is rejected by init_line_decode; DWT_NO has no HP bufs.
+    }
+    // Rewind idwt_2d_state cursors so the pull loop restarts at the top.
+    idwt_2d_state *states = ld->states.get();
+    for (int32_t i = 0; i < n; ++i) {
+      idwt_2d_state_rewind(&states[i]);
+    }
+  }
+
+  // next_row cursor: tied to LL0 geometry when NL_active == 0, else unused.
+  j2k_resolution *r0 = access_resolution(0);
+  ld->next_row       = static_cast<int32_t>(r0->get_pos0().y);
 }
 
 void j2k_tile_component::mark_line_dec_predecoded() {
@@ -2901,8 +3043,15 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
       setQCDparams(tphdr->QCD.get());
     }
 
-    // create tile components
-    this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
+    // create tile components — skipped on the single-tile reuse path, where
+    // prepare_for_next_frame() has cleared mutable state but left the
+    // tile_component array (and all of its line_dec / resolution / precinct
+    // / codeblock sub-allocations) alive.  tcomp[c].init() is still called
+    // unconditionally because it only writes scalar fields and vectors that
+    // are idempotent under identical main-header bytes.
+    if (!structure_built_) {
+      this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
+    }
     for (uint16_t c = 0; c < num_components; c++) {
       this->tcomp[c].init(&main_header, tphdr, this, c);
     }
@@ -2923,6 +3072,22 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
 }
 
 void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
+  // On the single-tile reuse path, num_packets and porder_info accumulate
+  // across calls (see lines that `+=` and `.add`) unless we reset them
+  // here.  The packet[] array is allocated below from num_packets, so it
+  // must start from zero on every call — the reuse-path guard further
+  // down skips the actual allocation when the shape is unchanged.
+  if (structure_built_) {
+    num_packets = 0;
+    porder_info.nPOC = 0;
+    porder_info.RSpoc.clear();
+    porder_info.CSpoc.clear();
+    porder_info.LYEpoc.clear();
+    porder_info.REpoc.clear();
+    porder_info.CEpoc.clear();
+    porder_info.Ppoc.clear();
+  }
+
   uint8_t t = 0;
   // concatenate tile-parts into a tile
   this->tile_buf = MAKE_UNIQUE<buf_chain>(num_tile_part);
@@ -2977,7 +3142,15 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       //          c);
       throw std::runtime_error("Resolution level reduction exceeds the DWT level");
     }
-    this->tcomp[c].create_resolutions(numlayers, this->line_based_decode);
+    // Single-tile reuse: the resolution/precinct/codeblock tree was built
+    // on the first frame and its shape is identical under matching main-
+    // header bytes.  create_resolutions() allocates fresh storage on every
+    // call, so skipping it here avoids both the allocation and the (much
+    // larger) cost of recomputing nominal_ranges, subband geometry, and
+    // per-codeblock placement for the full tree.
+    if (!structure_built_) {
+      this->tcomp[c].create_resolutions(numlayers, this->line_based_decode);
+    }
     max_c_NL = std::max(c_NL, max_c_NL);
     j2k_resolution *cr;
     for (uint8_t r = 0; r <= c_NL; r++) {
@@ -2988,7 +3161,14 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   }
   num_packets *= numlayers;
   // TODO: create packets with progression order
-  this->packet = MAKE_UNIQUE<j2c_packet[]>(static_cast<size_t>(num_packets));
+  // The packet[] array is a scratch "log of packets seen during parse" used
+  // only within create_tile_buf (j2c_packet's decode ctor is the only
+  // call site).  On the reuse path its size is unchanged, so we reallocate
+  // only when num_packets differs — which shouldn't happen in practice for
+  // same-geometry streams, but the guard keeps the contract simple.
+  if (packet == nullptr || !structure_built_) {
+    this->packet = MAKE_UNIQUE<j2c_packet[]>(static_cast<size_t>(num_packets));
+  }
   // need to construct a POC marker from progression order value in COD marker
   porder_info.add(0, 0, this->numlayers, static_cast<uint8_t>(max_c_NL + 1), this->num_components,
                   this->progression_order);
@@ -3256,6 +3436,68 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
         throw std::exception();
         // break;
     }
+  }
+  // Mark the tree as built so the next create_tile_buf call on this tile
+  // skips structural allocations.  The decoder_impl cache path reads this
+  // flag via the public accessor before deciding whether to call
+  // prepare_for_next_frame() (reuse) or dec_init() (fresh build).
+  structure_built_ = true;
+}
+
+void j2k_tile::prepare_for_next_frame() {
+  // Reset per-frame packet-parsing state across every codeblock and
+  // tagtree, reset per-frame tile-level accumulators, and drop the
+  // last frame's tile_buf / ppt_header / tile_part owning pointers so
+  // the next add_tile_part loop repopulates from scratch.  Does NOT
+  // touch tcomp[] (resolution/precinct/codeblock tree) or line_dec —
+  // those are what we're trying to keep alive.
+  if (!structure_built_) return;
+  // Tile-level mutable fields.
+  tile_part.clear();
+  length                = 0;
+  num_tile_part         = 0;
+  current_tile_part_pos = -1;
+  tile_buf.reset();
+  ppt_header.reset();
+  packet_header        = nullptr;
+  // POC accumulator: cleared inside create_tile_buf via the same branch,
+  // but do it here as well for robustness if a caller skips create_tile_buf.
+  porder_info.nPOC = 0;
+  porder_info.RSpoc.clear();
+  porder_info.CSpoc.clear();
+  porder_info.LYEpoc.clear();
+  porder_info.REpoc.clear();
+  porder_info.CEpoc.clear();
+  porder_info.Ppoc.clear();
+  num_packets = 0;
+
+  // Walk every precinct_subband to reset its tagtrees + codeblocks.
+  for (uint16_t c = 0; c < num_components; ++c) {
+    const uint8_t c_NL = tcomp[c].NL;
+    for (uint8_t r = 0; r <= c_NL; ++r) {
+      j2k_resolution *cr = tcomp[c].access_resolution(r);
+      if (cr == nullptr) continue;
+      const uint32_t np = cr->npw * cr->nph;
+      for (uint32_t p = 0; p < np; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        if (cp == nullptr) continue;
+        const uint8_t nb = cp->get_num_bands();
+        for (uint8_t b = 0; b < nb; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          if (cpb != nullptr) cpb->reset_for_next_frame();
+        }
+      }
+    }
+    // Keep line_dec alive and let init_line_decode on the next frame see
+    // the persistence flag so it short-circuits to a cursor reset.
+    tcomp[c].set_line_decode_persistent(true);
+  }
+}
+
+void j2k_tile::set_line_decode_persistent_all(bool on) {
+  if (tcomp == nullptr) return;
+  for (uint16_t c = 0; c < num_components; ++c) {
+    tcomp[c].set_line_decode_persistent(on);
   }
 }
 

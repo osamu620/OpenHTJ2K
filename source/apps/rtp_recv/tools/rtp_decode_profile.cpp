@@ -108,6 +108,15 @@ int main(int argc, char** argv) {
   size_t      max_frames = argc > 2 ? std::stoul(argv[2]) : 200;
   size_t      loops      = argc > 3 ? std::stoul(argv[3]) : 3;
   uint32_t    nthreads   = argc > 4 ? static_cast<uint32_t>(std::stoul(argv[4])) : 2;
+  // Optional 5th arg: pass "reuse" to exercise the single-tile cache path;
+  // anything else (or no arg) uses the legacy invoke_line_based_stream so
+  // we can A/B the two on the same codestream set.
+  const bool  use_reuse = (argc > 5 && std::string(argv[5]) == "reuse");
+  // Optional 6th arg: path prefix for dumping frame 0's decoded planes
+  // (suffix _y.bin / _cb.bin / _cr.bin is appended).  Used to verify
+  // byte-equality between the legacy and reuse paths: run twice with
+  // different prefixes and `cmp` the outputs.  Empty string = no dump.
+  std::string dump_prefix = argc > 6 ? argv[6] : "";
 
   std::printf("loading up to %zu codestreams from %s ...\n", max_frames, dir.c_str());
   auto frames = load_dir(dir, max_frames);
@@ -120,9 +129,11 @@ int main(int argc, char** argv) {
   std::printf("loaded %zu frames, %.1f MiB, avg %.1f KiB per frame\n", frames.size(),
               static_cast<double>(total_bytes) / (1024.0 * 1024.0),
               static_cast<double>(total_bytes) / 1024.0 / static_cast<double>(frames.size()));
-  std::printf("threads=%u  loops=%zu\n\n", nthreads, loops);
+  std::printf("threads=%u  loops=%zu  path=%s\n\n", nthreads, loops,
+              use_reuse ? "invoke_line_based_stream_reuse" : "invoke_line_based_stream");
 
   open_htj2k::openhtj2k_decoder decoder;
+  if (use_reuse) decoder.enable_single_tile_reuse(true);
 
   Stats s_init, s_parse, s_stream, s_cbshift, s_total;
   size_t iters                  = 0;
@@ -131,6 +142,8 @@ int main(int argc, char** argv) {
   std::vector<uint8_t> plane_y, plane_cb, plane_cr;
 
   // Warm-up: one full pass not counted, to prime caches and ThreadPool.
+  // Also primes the single-tile reuse cache on the first frame so the
+  // timed loop below sees the cached fast path from iteration 1.
   for (size_t i = 0; i < frames.size(); ++i) {
     try {
       decoder.init(frames[i].bytes.data(), frames[i].bytes.size(), 0, nthreads);
@@ -138,9 +151,15 @@ int main(int argc, char** argv) {
       std::vector<uint32_t> widths, heights;
       std::vector<uint8_t>  depths;
       std::vector<bool>     signeds;
-      decoder.invoke_line_based_stream(
-          [&](uint32_t, int32_t* const*, uint16_t) {},
-          widths, heights, depths, signeds);
+      if (use_reuse) {
+        decoder.invoke_line_based_stream_reuse(
+            [&](uint32_t, int32_t* const*, uint16_t) {},
+            widths, heights, depths, signeds);
+      } else {
+        decoder.invoke_line_based_stream(
+            [&](uint32_t, int32_t* const*, uint16_t) {},
+            widths, heights, depths, signeds);
+      }
     } catch (std::exception& e) {
       std::fprintf(stderr, "warm-up frame %zu failed: %s\n", i, e.what());
       return 2;
@@ -182,8 +201,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> widths, heights;
         std::vector<uint8_t>  depths;
         std::vector<bool>     signeds;
-        decoder.invoke_line_based_stream(
-            [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+        auto stream_cb = [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
               const auto cb0 = Clock::now();
               if (first_row) {
                 first_row = false;
@@ -229,8 +247,12 @@ int main(int argc, char** argv) {
 
               const auto cb1 = Clock::now();
               cb_time_ns += std::chrono::duration_cast<ns>(cb1 - cb0).count();
-            },
-            widths, heights, depths, signeds);
+            };
+        if (use_reuse) {
+          decoder.invoke_line_based_stream_reuse(stream_cb, widths, heights, depths, signeds);
+        } else {
+          decoder.invoke_line_based_stream(stream_cb, widths, heights, depths, signeds);
+        }
       } catch (std::exception& e) {
         std::fprintf(stderr, "stream[%zu] failed: %s\n", i, e.what());
         return 5;
@@ -263,5 +285,21 @@ int main(int argc, char** argv) {
   std::printf("\nceiling fps (1 / avg total): %.2f\n", 1000.0 / std::max(s_total.mean(), 1e-9));
   std::printf("sustained fps (%zu frames / total wall): %.2f\n", iters,
               static_cast<double>(iters) / total_s);
+
+  if (!dump_prefix.empty()) {
+    // At this point plane_y / plane_cb / plane_cr hold the LAST-decoded
+    // frame's planar bytes (loops × frames.size() iterations, last frame
+    // of the last loop).  Write them out so an external `cmp` can check
+    // byte-equality between paths.
+    auto write_file = [](const std::string& path, const std::vector<uint8_t>& data) {
+      std::ofstream ofs(path, std::ios::binary);
+      ofs.write(reinterpret_cast<const char*>(data.data()),
+                static_cast<std::streamsize>(data.size()));
+    };
+    write_file(dump_prefix + "_y.bin",  plane_y);
+    write_file(dump_prefix + "_cb.bin", plane_cb);
+    write_file(dump_prefix + "_cr.bin", plane_cr);
+    std::printf("dumped last frame's planes to %s_{y,cb,cr}.bin\n", dump_prefix.c_str());
+  }
   return 0;
 }

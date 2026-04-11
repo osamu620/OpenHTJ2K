@@ -406,6 +406,12 @@ void idwt_2d_state_init(idwt_2d_state *s,
 // Free buffers allocated by idwt_2d_state_init.
 void idwt_2d_state_free(idwt_2d_state *s);
 
+// Rewind streaming cursors (next_out / next_fetch / ring_origin / d_level /
+// top_dlevel / bot_dlevel) to the post-init state without freeing any
+// buffers.  Used by the single-tile reuse path; a subsequent pull_row
+// call restarts at row v0.  Safe to call on any dir.
+void idwt_2d_state_rewind(idwt_2d_state *s);
+
 // Pull the next output row into out[0..u1-u0-1].
 // Returns true while rows remain; false when all v1-v0 rows have been produced.
 bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out);

@@ -80,6 +80,24 @@ class openhtj2k_decoder {
       std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb,
       std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
       std::vector<bool> &is_signed);
+  // Opt-in single-tile streaming variant: when enable_single_tile_reuse(true)
+  // has been set, consecutive calls reuse the decoded tile tree (codeblock
+  // allocations, precinct tagtrees, line-decode ring buffers) so per-frame
+  // init cost is proportional to the new bitstream's packet headers instead
+  // of to a full tile rebuild.  Only valid for codestreams whose main-header
+  // bytes (SIZ/COD/COC/QCD/QCC/RGN) are byte-identical across calls — a
+  // fingerprint check invalidates the cache automatically when that changes.
+  // Falls through to invoke_line_based_stream() for the first call after a
+  // cache invalidation or when reuse is disabled.
+  OPENHTJ2K_EXPORT void invoke_line_based_stream_reuse(
+      std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb,
+      std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
+      std::vector<bool> &is_signed);
+  // Enable the single-tile reuse optimization (default off).  Call once
+  // after constructing the decoder and before the first init()/parse()
+  // sequence for the stream you want to keep cached.  Passing false drops
+  // any cached state and returns the decoder to the legacy per-frame path.
+  OPENHTJ2K_EXPORT void enable_single_tile_reuse(bool on);
   // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
   // the line-based IDWT using those pre-decoded values.  If this matches invoke()
   // but invoke_line_based() does not, the bug is in decode_strip(); otherwise
