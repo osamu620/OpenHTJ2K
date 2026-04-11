@@ -29,6 +29,8 @@
 #include <utility>
 #include <vector>
 
+#include "color_pipeline.hpp"
+
 namespace open_htj2k::rtp_recv {
 
 struct ycbcr_coefficients;  // from ycbcr_rgb.hpp
@@ -162,6 +164,11 @@ struct DecodedFrame {
   // because it aliases immortal constexpr data.
   const ycbcr_coefficients* shader_coeffs      = nullptr;
   bool                      components_are_rgb = false;
+  // HDR colour pipeline (inverse transfer, gamut matrix, display encoding).
+  // Selected by the decode thread per-frame from the Main Packet
+  // TRANS/PRIMS fields and the CLI fallbacks.  Defaults to the v0.12.0-
+  // equivalent gamma2.2 + identity + sRGB pipeline for SDR BT.709 sources.
+  ColorPipelineParams       pipeline;
   // Sender's RTP timestamp (90 kHz per RFC 3551 video profile).  Copied
   // from the AssembledFrame by the decode thread so the main-thread
   // frame pacer can schedule presentation at the sender's intended

@@ -51,6 +51,46 @@ quick local testing without a live sender.
   shader (default) or the AVX2 CPU path. Auto-forced to `cpu` if a
   GL 3.3 core context cannot be created.
 
+### HDR colour pipeline (shader path only)
+
+After the YCbCr→RGB matrix, the fragment shader runs an inverse
+transfer (EOTF), a linear-light gamut matrix, hard clipping, and a
+display-encoding stage. The three switches below pick each stage.
+
+- `--transfer {auto|gamma|pq|hlg}` — Inverse EOTF applied to the
+  post-matrix non-linear R′G′B′. Default `auto` reads the Main Packet
+  `TRANS` field per ITU-T H.273 Table 3:
+  - `TRANS = 1, 6, 14, 15` → `gamma` (BT.709 / BT.601 / BT.2020 NCL)
+  - `TRANS = 16` → `pq` (SMPTE ST 2084)
+  - `TRANS = 18` → `hlg` (ARIB STD-B67)
+  - Any other value falls through to the CLI fallback (default `gamma`).
+- `--display-primaries {bt709|bt2020}` — Target primaries for the
+  linear-light gamut matrix. Default `bt709`. `bt2020` is an identity
+  stub for a future HDR output path. The matrix is identity unless the
+  source primaries are BT.2020 (H.273 `PRIMS = 9` under S=1 or the CLI
+  `--colorspace bt2020` fallback) and the display primaries are not.
+- `--display-encoding {srgb|gamma22|linear}` — Final non-linear
+  encoding written to the framebuffer. Default `srgb` (IEC 61966-2-1
+  piecewise). `gamma22` is a cheaper inverse of the default `gamma`
+  transfer and, combined with `--transfer gamma`, is a bit-identical
+  round-trip for SDR BT.709 sources. `linear` writes linear light
+  directly and is diagnostic only.
+
+The default pipeline for an SDR BT.709 source is
+`--transfer auto` → `gamma` → `--display-primaries bt709` (identity)
+→ `--display-encoding srgb`. This differs from the v0.12.0 shader,
+which wrote the non-linear R′G′B′ directly to the framebuffer: both
+targets the same display light through the monitor's own gamma, so
+the two paths are visually indistinguishable. Byte values diverge
+slightly (max ~9/255 in the deep-grey region); pass
+`--display-encoding gamma22` for a bit-identical round-trip.
+
+**Tone mapping** is currently a hard `clamp(rgb, 0, 1)` in linear
+light, which is correct for any source below the display peak
+(including all HLG content treated as display-referred) but clips
+highlights on above-peak PQ content. The ITU-R BT.2390 EETF soft-knee
+curve is a planned follow-up.
+
 ### Pacing and throughput
 
 - `--pace-fps <N>` — Frame-pacing target, default `30`, `0`
@@ -62,11 +102,12 @@ quick local testing without a live sender.
 ### Color fallback (when the Main Packet declares S=0)
 
 - `--colorspace {bt709|bt601|bt2020|rgb}` — Fallback colorspace.
-  `bt2020` selects the BT.2020 NCL matrix (ITU-T H.273 MatrixCoefficients = 9).
-  Note that this slice only switches the YCbCr→RGB matrix; a PQ / HLG
-  transfer function and gamut-mapping from BT.2020 primaries to the
-  display primaries are not yet implemented, so a BT.2020 HDR source
-  still renders with the display's native gamma curve.
+  `bt2020` selects the BT.2020 NCL matrix (ITU-T H.273 MatrixCoefficients = 9)
+  and also feeds the BT.2020 → BT.709 gamut matrix when the display
+  primaries stay at the default `bt709`. The inverse transfer and
+  display encoding come from the `--transfer` / `--display-encoding`
+  switches above; pair with `--transfer pq` (or `hlg`) for a BT.2020
+  HDR source served under S=0.
 - `--range {full|narrow}` — Fallback range. Default `full`.
 
 ### Diagnostics
@@ -90,6 +131,12 @@ open_htj2k_rtp_recv --no-render --frames 1000
 
 # Capture and dump reassembled codestreams to /tmp
 open_htj2k_rtp_recv --no-decode --frames 200 --dump-codestream /tmp/f_%05d.j2c
+
+# Bit-identical with v0.12.0 on SDR BT.709 sources (gamma inverse + gamma22 encode)
+open_htj2k_rtp_recv --transfer gamma --display-encoding gamma22
+
+# Force a BT.2020 PQ source under S=0 (receiver has no TRANS/PRIMS to read)
+open_htj2k_rtp_recv --colorspace bt2020 --transfer pq
 ```
 
 ## Kernel receive buffer

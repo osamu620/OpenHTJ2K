@@ -35,7 +35,8 @@ struct GLFWwindow;
 
 namespace open_htj2k::rtp_recv {
 
-struct ycbcr_coefficients;  // from ycbcr_rgb.hpp
+struct ycbcr_coefficients;    // from ycbcr_rgb.hpp
+struct ColorPipelineParams;   // from color_pipeline.hpp
 
 class GlRenderer {
  public:
@@ -77,7 +78,8 @@ class GlRenderer {
   // planes as R/G/B.
   void upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* cb_plane,
                               const uint8_t* cr_plane, int w_y, int h_y, int w_c, int h_c,
-                              const ycbcr_coefficients* coeffs, bool components_are_rgb);
+                              const ycbcr_coefficients* coeffs, bool components_are_rgb,
+                              const ColorPipelineParams& pipeline);
 
   // Shader path, >8-bit source: upload three 16-bit planar samples
   // (unsigned, clamped to [0, (1<<bit_depth)-1], NOT right-shifted) into
@@ -94,7 +96,8 @@ class GlRenderer {
   void upload_planar_16_and_draw(const uint16_t* y_plane, const uint16_t* cb_plane,
                                  const uint16_t* cr_plane, int w_y, int h_y, int w_c, int h_c,
                                  int bit_depth, const ycbcr_coefficients* coeffs,
-                                 bool components_are_rgb);
+                                 bool components_are_rgb,
+                                 const ColorPipelineParams& pipeline);
 
  private:
   bool compile_shader_programs();
@@ -108,10 +111,13 @@ class GlRenderer {
   bool ensure_planar_textures(int w_y, int h_y, int w_c, int h_c, int bpp);
   // Shared tail of upload_planar_and_draw / upload_planar_16_and_draw:
   // binds the three planar textures to the YCbCr program, sets the matrix
-  // + bias/scale + uNormScale uniforms, draws the fullscreen triangle
-  // strip, and swaps buffers.  `norm_scale` is a pointer to three floats.
+  // + bias/scale + uNormScale + HDR-pipeline uniforms, draws the fullscreen
+  // triangle strip, and swaps buffers.  `norm_scale` is a pointer to three
+  // floats.  `pipeline` carries the inverse-transfer / gamut / display-
+  // encoding selection for the HDR colour pipeline.
   void draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* coeffs,
-                          bool components_are_rgb, const float* norm_scale);
+                          bool components_are_rgb, const float* norm_scale,
+                          const ColorPipelineParams& pipeline);
   void draw_fullscreen_quad(int fb_w, int fb_h, int content_w, int content_h);
   // Drains the GL error queue and logs each non-zero code with the
   // given context label.  Called only at allocation / program-link
@@ -144,6 +150,9 @@ class GlRenderer {
   int          u_yc_scale_       = -1;
   int          u_yc_norm_scale_  = -1;  // per-plane renormalization factor (1.0 for R8)
   int          u_yc_rgb_mode_    = -1;  // int: 0=ycbcr, 1=passthrough RGB components
+  int          u_yc_transfer_    = -1;  // int: 0=gamma2.2, 1=PQ, 2=HLG
+  int          u_yc_gamut_       = -1;  // mat3: identity or BT.2020 -> BT.709
+  int          u_yc_display_enc_ = -1;  // int: 0=sRGB, 1=gamma22, 2=linear
   int          u_yc_viewport_    = -1;
   unsigned int tex_y_            = 0;
   unsigned int tex_cb_           = 0;
