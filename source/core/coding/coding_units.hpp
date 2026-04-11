@@ -557,6 +557,14 @@ class j2k_tile_component : public j2k_tile_base {
   void init_line_decode(bool ring_mode = false);
   bool pull_line(sprec_t *out);
   sprec_t *pull_line_ref();
+  // Pull `count` consecutive rows via pull_line_ref() + memcpy into a
+  // per-component aligned strip scratch buffer held by line_dec.  Returns a
+  // pointer to the first row (stride = stride_floats), or nullptr if
+  // line_dec is not initialised.  Grows the scratch buffer on demand.
+  // Intended for the strip-granular decode_line_based_stream driver — the
+  // copy is necessary because idwt_2d_state's ring is too shallow to keep a
+  // whole outer strip pinned.
+  sprec_t *pull_strip_into_buf(uint32_t count, uint32_t stride_floats);
   void finalize_line_decode();
   // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
   void mark_line_dec_predecoded();

@@ -455,6 +455,19 @@ struct j2k_tcomp_line_dec {
   std::unique_ptr<j2k_subband_row_buf[]> hl_bufs;
   std::unique_ptr<j2k_subband_row_buf[]> lh_bufs;
   std::unique_ptr<j2k_subband_row_buf[]> hh_bufs;
+
+  // Grow-only scratch buffer holding one outer strip worth of finalized IDWT
+  // rows for this component.  Filled by pull_strip_into_buf() via
+  // pull_line_ref() + memcpy, consumed by the finalize + callback inner loop
+  // in j2k_tile::decode_line_based_stream.  The memcpy is necessary because
+  // idwt_2d_state's internal ring is only IDWT_STATE_RING_DEPTH (8) slots
+  // deep — too shallow to keep a whole strip of rows pinned.
+  //
+  // 32-byte aligned so the AVX2/AVX-512 finalize inner loops can use
+  // unaligned loads without penalty.  Persistent across frames under
+  // single-tile reuse; freed in finalize_line_decode() on teardown.
+  sprec_t *strip_buf       = nullptr;
+  size_t   strip_buf_floats = 0;   // current capacity, in sprec_t elements
 };
 
 
@@ -2281,6 +2294,39 @@ sprec_t *j2k_tile_component::pull_line_ref() {
   return idwt_2d_state_pull_row_ref(&ld->states.get()[ld->NL_active - 1]);
 }
 
+sprec_t *j2k_tile_component::pull_strip_into_buf(uint32_t count, uint32_t stride_floats) {
+  if (line_dec == nullptr) return nullptr;
+  j2k_tcomp_line_dec *ld = line_dec.get();
+
+  // Grow-on-demand: the largest strip seen over the component's lifetime
+  // sets the capacity, so steady-state decode allocates once and reuses.
+  const size_t needed = static_cast<size_t>(count) * static_cast<size_t>(stride_floats);
+  if (needed > ld->strip_buf_floats) {
+    aligned_mem_free(ld->strip_buf);
+    ld->strip_buf = static_cast<sprec_t *>(
+        aligned_mem_alloc(needed * sizeof(sprec_t), 32));
+    ld->strip_buf_floats = needed;
+  }
+
+  if (count == 0) return ld->strip_buf;
+
+  sprec_t *dst = ld->strip_buf;
+  for (uint32_t r = 0; r < count; ++r) {
+    const sprec_t *src = pull_line_ref();
+    if (src == nullptr) {
+      // Component exhausted earlier than the caller expected — zero the
+      // tail so the finalize inner loop does not read uninitialised memory.
+      const size_t tail_rows = count - r;
+      std::memset(dst + static_cast<size_t>(r) * stride_floats, 0,
+                  sizeof(sprec_t) * stride_floats * tail_rows);
+      break;
+    }
+    std::memcpy(dst + static_cast<size_t>(r) * stride_floats, src,
+                sizeof(sprec_t) * stride_floats);
+  }
+  return ld->strip_buf;
+}
+
 void j2k_tile_component::finalize_line_decode() {
   if (line_dec == nullptr) return;
   // Single-tile reuse: skip teardown so init_line_decode on the next frame
@@ -2309,6 +2355,9 @@ void j2k_tile_component::finalize_line_decode() {
     }
   }
   ld->ll0_buf.free_resources();
+  aligned_mem_free(ld->strip_buf);
+  ld->strip_buf        = nullptr;
+  ld->strip_buf_floats = 0;
   line_dec.reset();
 }
 
