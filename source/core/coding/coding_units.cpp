@@ -549,6 +549,22 @@ static fused_mct_finalize_func fused_mct_finalize[2] = {fused_ycbcr_irrev_to_rgb
   #include "ThreadPool.hpp"
 std::atomic<ThreadPool *> ThreadPool::singleton_{nullptr};
 std::mutex ThreadPool::singleton_mutex;
+
+// Local "wait for N outstanding worker tasks" helper used by
+// j2k_tile::decode_line_based_stream to barrier the per-component
+// strip-pull tasks.  Mirrors subband_row_buf.cpp's spin_wait but is
+// private to this translation unit.  The calling thread drains work
+// from the shared pool queue via try_run_one() while blocked, so it
+// contributes to draining its own tasks' nested HT subtasks.
+namespace {
+inline void dec_strip_barrier_wait(std::atomic<int> &cnt) {
+  auto *p = ThreadPool::get();
+  while (cnt.load(std::memory_order_acquire) > 0) {
+    if (p && p->try_run_one()) continue;
+    std::this_thread::yield();
+  }
+}
+}  // namespace
 #endif
 // #include <hwy/highway.h>
 
@@ -4722,20 +4738,125 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
   const uint32_t H = ci[0].csize_y;
 
-  for (uint32_t y = 0; y < H; ++y) {
+  // ── Strip-granular pull driver ────────────────────────────────────────────
+  // Batch row pulls for one outer strip per component at a time, then run
+  // the existing finalize + callback inner loop against the strip scratch.
+  // Per-component pulls for the same strip are mutually independent (each
+  // tcomp's line_dec state is disjoint), so they dispatch as worker tasks
+  // while the main thread pitches in via try_run_one.
+  //
+  // Outer strip height = tcomp[0].codeblock_size.y rounded up to the max
+  // vertical subsampling factor — guarantees every strip boundary is on an
+  // integer chroma row.  Per-component pull counts:
+  //   • MCT main (c=0..2 when do_mct): strip_y1 - strip_y0.  The existing
+  //     driver iterates over ci[0].csize_y and pulls unconditionally for
+  //     c=0..2, ignoring SIZ.YRsiz, because MCT demands 4:4:4 and the
+  //     three components share geometry.  Matching this semantics is how
+  //     conformance test p0_10 (YRsiz=4 on all 3 MCT comps) stays green.
+  //   • Everything else: the subsampling-aware formula below, the same
+  //     cadence the old non-MCT / MCT-extras path used.
+  uint32_t max_yr = 1;
+  for (uint16_t c = 0; c < NC; ++c) {
+    if (ci[c].yr > max_yr) max_yr = ci[c].yr;
+  }
+  // Pick an outer strip height large enough to amortise the per-strip pull
+  // dispatch + barrier, but not so large that the strip scratch outgrows L3.
+  // Broadcast HTJ2K fixtures use cb_h as small as 8 rows for sub-codestream
+  // latency; dispatching 3 tasks every 8 luma rows would spend more time on
+  // mutex + spin than on actual IDWT.  Bump the strip up to at least 64 rows.
+  uint32_t strip_h_luma = static_cast<uint32_t>(tcomp[0].codeblock_size.y);
+  if (strip_h_luma == 0) strip_h_luma = 64;
+  if (strip_h_luma < 64) strip_h_luma = 64;
+  strip_h_luma = ((strip_h_luma + max_yr - 1) / max_yr) * max_yr;
+
+  // Per-component base pointers into the strip scratch buffers; refreshed
+  // at the top of every strip.  Row stride is ci[c].csize_x floats.
+  std::vector<sprec_t *> strip_ptrs(NC, nullptr);
+
+#ifdef OPENHTJ2K_THREAD
+  // Scratch records for the per-component worker tasks.  The array lives
+  // across the whole decode; spin-wait at the end of each strip guarantees
+  // no task from strip N can still be reading these after strip N+1 begins
+  // populating them.
+  struct StripPullCtx {
+    j2k_tile_component *tc;
+    sprec_t           **slot;
+    std::atomic<int>   *cnt;
+    uint32_t            count;
+    uint32_t            stride;
+  };
+  std::vector<StripPullCtx> strip_tasks(NC);
+  std::atomic<int> pull_cnt(0);
+  auto *pool = ThreadPool::get();
+  const bool can_parallel_pull =
+      (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
+#endif
+
+  for (uint32_t strip_y0 = 0; strip_y0 < H; strip_y0 += strip_h_luma) {
+    const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, H);
+
+    // Pre-compute per-component pull counts.
+    uint32_t counts[16] = {};
+    for (uint16_t c = 0; c < NC && c < 16; ++c) {
+      if (do_mct && c < 3) {
+        counts[c] = strip_y1 - strip_y0;
+      } else {
+        const uint32_t yr_c = ci[c].yr;
+        const uint32_t c_y0 = strip_y0 / yr_c;
+        const uint32_t c_y1 = std::min((strip_y1 + yr_c - 1) / yr_c, ci[c].csize_y);
+        counts[c] = (c_y1 > c_y0) ? (c_y1 - c_y0) : 0u;
+      }
+    }
+
+    // Phase 1: pull per-component strip rows into scratch.  Parallel when
+    // a pool is available, serial otherwise.
+#ifdef OPENHTJ2K_THREAD
+    if (can_parallel_pull) {
+      for (uint16_t c = 0; c < NC; ++c) {
+        strip_tasks[c] = {&tcomp[c], &strip_ptrs[c], &pull_cnt,
+                          counts[c], ci[c].csize_x};
+      }
+      pull_cnt.store(static_cast<int>(NC), std::memory_order_relaxed);
+      // Batch-push all NC pull tasks in one mutex acquire to minimise
+      // contention with the nested codeblock dispatch running inside
+      // the tasks themselves.
+      pool->push_batch(strip_tasks, [](const StripPullCtx &ctx) {
+        const StripPullCtx *t = &ctx;
+        return [t]() {
+          *t->slot = t->tc->pull_strip_into_buf(t->count, t->stride);
+          t->cnt->fetch_sub(1, std::memory_order_release);
+        };
+      });
+      dec_strip_barrier_wait(pull_cnt);
+    } else
+#endif
+    {
+      for (uint16_t c = 0; c < NC; ++c) {
+        strip_ptrs[c] = tcomp[c].pull_strip_into_buf(counts[c], ci[c].csize_x);
+      }
+    }
+
+    // Phase 2: finalize + callback inner loop — reads strip_ptrs[c] at the
+    // subsampling-aware row offset.  Inner SIMD kernels and control flow
+    // are unchanged from the pre-strip driver.
+    for (uint32_t y = strip_y0; y < strip_y1; ++y) {
     if (do_mct) {
-      // Fused path: get read-only ring buffer pointers for 3 MCT components, then apply
-      // inverse MCT + float→int32 finalize in a single pass (no scratch buffer, no memcpy).
-      const sprec_t *p0 = tcomp[0].pull_line_ref();
-      const sprec_t *p1 = tcomp[1].pull_line_ref();
-      const sprec_t *p2 = tcomp[2].pull_line_ref();
+      // Fused path: read 3 MCT component rows from strip scratch, then
+      // apply inverse MCT + float→int32 finalize in a single pass.
+      const size_t rs = static_cast<size_t>(y - strip_y0);
+      const sprec_t *p0 = strip_ptrs[0] + rs * ci[0].csize_x;
+      const sprec_t *p1 = strip_ptrs[1] + rs * ci[1].csize_x;
+      const sprec_t *p2 = strip_ptrs[2] + rs * ci[2].csize_x;
       fused_mct_finalize[xform_ct](p0, p1, p2,
                                 out_rows[0].data(), out_rows[1].data(), out_rows[2].data(),
                                 mct_w, fp);
-      // Extra components beyond 3 (no MCT applied); use pull_line_ref + per-component finalize.
+      // Extra components beyond 3 (no MCT applied).
       for (uint16_t c = 3; c < NC; ++c) {
-        if (y >= ci[c].csize_y) continue;
-        const sprec_t *spf = tcomp[c].pull_line_ref();
+        const uint32_t yr_c = ci[c].yr;
+        if (y % yr_c != 0) continue;
+        if (y / yr_c >= ci[c].csize_y) continue;
+        const size_t rs_c = static_cast<size_t>((y - strip_y0) / yr_c);
+        const sprec_t *spf = strip_ptrs[c] + rs_c * ci[c].csize_x;
         int32_t       *dp  = out_rows[c].data();
         const CInfo   &I   = ci[c];
         const int16_t  ds  = I.downshift;
@@ -4798,16 +4919,14 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 #endif
       }
     } else {
-      // No MCT: each component is independent. Use pull_line_ref to read directly from
-      // the ring buffer without memcpy, then apply per-component finalize.
+      // No MCT: each component is independent.  Read from its strip scratch
+      // at the subsampling-aware offset; skip intermediate luma rows.
       for (uint16_t c = 0; c < NC; ++c) {
-        // Use the SIZ YRsiz factor to handle vertically subsampled components
-        // (e.g. yr=2 for 4:2:0 chroma): pull from the ring buffer once per yr luma
-        // rows, and reuse the decoded row on the intermediate rows.
         const uint32_t yr_c = ci[c].yr;
         if (y % yr_c != 0) continue;           // reuse previous row for intermediate luma rows
         if (y / yr_c >= ci[c].csize_y) continue;  // past last row of this component
-        const sprec_t *spf = tcomp[c].pull_line_ref();
+        const size_t rs_c = static_cast<size_t>((y - strip_y0) / yr_c);
+        const sprec_t *spf = strip_ptrs[c] + rs_c * ci[c].csize_x;
         int32_t       *dp  = out_rows[c].data();
         const CInfo   &I   = ci[c];
         const int16_t  ds  = I.downshift;
@@ -4872,7 +4991,8 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     }
 
     cb(y, out_ptrs.data(), NC);
-  }
+    }  // end of inner y-loop
+  }    // end of outer strip loop
 
   for (uint16_t c = 0; c < NC; ++c)
     tcomp[c].finalize_line_decode();
