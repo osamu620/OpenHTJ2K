@@ -1,3 +1,24 @@
+# [0.11.1] - 2026-04-11
+
+## Documentation
+* README: update the RTP receiver capability claim from
+  "sustains 4K @ 30 fps" to "sustains 4K @ 60 fps on modern x86-64
+  with --threads 2", to reflect the v4-perf work that shipped in
+  0.11.0. Retitles the "Hardware requirements" section to
+  "4K @ 60 fps sustained", rewrites the CPU / headless / network /
+  display bullets around the new ceiling, and points at the
+  offline profiler at
+  `source/apps/rtp_recv/tools/rtp_decode_profile.cpp` as the
+  reproduction harness. Network bullet bumped from ~50 MB/s to
+  ~100 MB/s for broadcast 4K 4:2:2 HT at ~1.7 bpp at 60 fps.
+  Explicitly notes that `--color-path cpu` has a lower ceiling
+  than the shader path because it runs the full YCbCr->RGB matrix
+  on the CPU (a different hot path than the phase-1-optimised
+  planar shift the shader path uses). Display guidance: at
+  60 fps source + 60 Hz display the RTP-timestamp pacer naturally
+  lands one present per vblank under `--no-vsync`; `--pace-fps`
+  only matters for mismatched rates. No code change.
+
 # [0.11.0] - 2026-04-11
 
 ## Performance
