@@ -118,6 +118,45 @@ bool has_flag(int argc, char** argv, const char* name) {
   return false;
 }
 
+// Validates that a --dump-codestream pattern is a safe printf format
+// string that takes exactly one integer argument.  Accepts optional
+// flags (-+#0 space), width, and precision, and requires the conversion
+// specifier to be one of d/i/u/o/x/X.  Literal "%%" is allowed.  Any
+// other format directive (or zero/multiple integer slots) is rejected,
+// closing the attack surface where passing e.g. "%s" or "%n" as the
+// pattern would hand an arbitrary user string to snprintf's varargs
+// parser with an unsigned int on the stack — undefined behaviour even
+// when run by the local user.
+bool validate_dump_pattern(const std::string& pattern) {
+  int int_slots = 0;
+  for (size_t i = 0; i < pattern.size(); ++i) {
+    if (pattern[i] != '%') continue;
+    ++i;
+    if (i >= pattern.size()) return false;     // trailing bare '%'
+    if (pattern[i] == '%') continue;           // literal "%%"
+    // Optional flags.
+    while (i < pattern.size()
+           && (pattern[i] == '-' || pattern[i] == '+' || pattern[i] == ' '
+               || pattern[i] == '#' || pattern[i] == '0'))
+      ++i;
+    // Optional width (digits only; refuse "*" indirection).
+    while (i < pattern.size() && pattern[i] >= '0' && pattern[i] <= '9') ++i;
+    // Optional precision ".digits".
+    if (i < pattern.size() && pattern[i] == '.') {
+      ++i;
+      while (i < pattern.size() && pattern[i] >= '0' && pattern[i] <= '9') ++i;
+    }
+    if (i >= pattern.size()) return false;
+    const char c = pattern[i];
+    if (c == 'd' || c == 'i' || c == 'u' || c == 'o' || c == 'x' || c == 'X') {
+      ++int_slots;
+    } else {
+      return false;                            // rejects %s, %n, %p, %f, %lu, etc.
+    }
+  }
+  return int_slots == 1;
+}
+
 bool parse_cli(int argc, char** argv, CliOptions& opt) {
   if (has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
     print_usage(argv[0]);
@@ -140,7 +179,17 @@ bool parse_cli(int argc, char** argv, CliOptions& opt) {
   if (const char* v = get_arg(argc, argv, "--port"))  opt.bind_port  = static_cast<uint16_t>(std::atoi(v));
   if (const char* v = get_arg(argc, argv, "--bind"))  opt.bind_host  = v;
   if (const char* v = get_arg(argc, argv, "--frames")) opt.max_frames = std::atoi(v);
-  if (const char* v = get_arg(argc, argv, "--dump-codestream")) opt.dump_pattern = v;
+  if (const char* v = get_arg(argc, argv, "--dump-codestream")) {
+    opt.dump_pattern = v;
+    if (!validate_dump_pattern(opt.dump_pattern)) {
+      std::fprintf(stderr,
+                   "ERROR: --dump-codestream pattern must contain exactly one\n"
+                   "       integer conversion specifier (%%d, %%i, %%u, %%o,\n"
+                   "       %%x, or %%X, with optional flags/width/precision).\n"
+                   "       Example: '/tmp/frame_%%05d.j2c'\n");
+      return false;
+    }
+  }
   if (const char* v = get_arg(argc, argv, "--threads")) opt.num_decoder_threads = static_cast<uint32_t>(std::atoi(v));
   if (const char* v = get_arg(argc, argv, "--color-path")) {
     if (std::strcmp(v, "shader") == 0) opt.color_path = CliOptions::ColorPath::Shader;
@@ -153,8 +202,8 @@ bool parse_cli(int argc, char** argv, CliOptions& opt) {
   if (const char* v = get_arg(argc, argv, "--pace-fps")) {
     char*        end = nullptr;
     const double d   = std::strtod(v, &end);
-    if (end == v || d < 0.0 || d > 240.0) {
-      std::fprintf(stderr, "ERROR: --pace-fps must be in [0, 240]\n");
+    if (end == v || d < 0.0 || d > 1000.0) {
+      std::fprintf(stderr, "ERROR: --pace-fps must be in [0, 1000]\n");
       return false;
     }
     opt.pace_fps = d;
@@ -1068,8 +1117,11 @@ int run_receiver_threaded(const CliOptions& opts) {
         if (target > now) {
           std::this_thread::sleep_until(target);
         } else if (rtp_ref_valid && (now - target) > 4 * pace_period) {
-          // Runaway / resync: rebase the reference at the current
-          // frame so the next present targets roughly now+period.
+          // Runaway / resync: rebase the reference to this frame's
+          // (rtp_ts, wall time).  The next present then computes its
+          // target as new_ref_tp + (next_rtp_ts - new_ref_ts) /
+          // 90 kHz, which — assuming the sender resumes normal
+          // cadence — lands one sender frame period after this one.
           rtp_ref_ts = df->source_rtp_ts;
           rtp_ref_tp = now;
         }

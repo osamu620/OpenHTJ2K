@@ -183,6 +183,13 @@ inline void ycbcr_row_to_rgb8(const int32_t* y_row, const int32_t* cb_row, const
     const __m256i vdup_chroma =
         _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
 
+    // Scratch buffers for the 8-pixel RGB pack.  Hoisted out of the
+    // loop body so the compiler doesn't need to prove that the stack
+    // allocation is loop-invariant; harmless in any case and clearer.
+    alignas(32) int32_t rtmp[8];
+    alignas(32) int32_t gtmp[8];
+    alignas(32) int32_t btmp[8];
+
     for (; x + 8 <= width; x += 8) {
       __m256i yi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(y_row + x));
 
@@ -227,9 +234,6 @@ inline void ycbcr_row_to_rgb8(const int32_t* y_row, const int32_t* cb_row, const
       b = _mm256_min_ps(_mm256_max_ps(b, vzero), v255);
 
       // Truncating convert is fine now because we added 0.5 above.
-      alignas(32) int32_t rtmp[8];
-      alignas(32) int32_t gtmp[8];
-      alignas(32) int32_t btmp[8];
       _mm256_store_si256(reinterpret_cast<__m256i*>(rtmp), _mm256_cvttps_epi32(r));
       _mm256_store_si256(reinterpret_cast<__m256i*>(gtmp), _mm256_cvttps_epi32(g));
       _mm256_store_si256(reinterpret_cast<__m256i*>(btmp), _mm256_cvttps_epi32(b));
