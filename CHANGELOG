@@ -1,3 +1,96 @@
+# [0.10.0] - 2026-04-11
+
+## New Features
+* Experimental **RFC 9828 RTP receiver** at
+  `source/apps/rtp_recv/open_htj2k_rtp_recv`, gated behind the new
+  `-DOPENHTJ2K_RTP=ON` CMake option. Receives a live HTJ2K RTP stream
+  over UDP, reassembles frames per RFC 9828 §5.1/§5.2, decodes through
+  the line-based streaming decoder, and displays the result in a
+  letterboxed GLFW window (or dumps codestreams for diagnosis).
+  Default builds are unaffected; the receiver and its GLFW/OpenGL
+  dependencies are only pulled in when the flag is set.
+* Three-thread pipeline. A dedicated receive thread drains the UDP
+  socket (non-blocking `recv` + `wait_readable` poll) and feeds a
+  1-deep latest-wins decode slot. A decode thread reuses one
+  long-lived `openhtj2k_decoder` via `init()` across frames, saving
+  the ~14 ms `ThreadPool` spin-up per frame, and pushes results into
+  a 1-deep latest-wins render slot. The main thread owns the GL
+  context and does upload + draw + swap. Latest-wins semantics drop
+  stale frames in favour of minimum motion-to-photon latency.
+* Two color-conversion paths, both sustaining real-time 4K 4:2:2 @
+  30 fps on modern x86-64:
+  - `--color-path shader` (default): GL 3.3 core fragment shader
+    samples three planar R8 textures (Y, Cb, Cr) and bakes the
+    BT.601/709, full- or narrow-range matrix + bias + scale into
+    uniforms. One vertex shader, one VAO, one fullscreen triangle
+    strip; GLSL 330 programs compiled at renderer init.
+  - `--color-path cpu`: AVX2 inner loop processing 8 luma pixels
+    per iteration. Handles 4:4:4 and 4:2:2 / 4:2:0 chroma layouts
+    via a 4-wide chroma load and `permutevar8x32` duplication;
+    asymmetric ratios fall through to the existing scalar loop.
+    Auto-selected when GL 3.3 core context creation fails, so
+    headless and GL-incompatible environments also sustain 30 fps.
+* RTP-timestamp frame pacer. Under `--no-vsync`, presentation is
+  scheduled at `ref_steady_tp + (source_rtp_ts - ref_rtp_ts) / 90 kHz`
+  so the render cadence follows the sender's intended cadence
+  frame-for-frame and is immune to UDP burst arrival jitter. A
+  runaway guard rebases the reference on decode stalls, sender
+  restarts, or long pauses. `--pace-fps N` sets the fallback period
+  and the runaway-guard window; `--pace-fps 0` disables the pacer.
+* RFC 9828 §5.1 Main Packet and §5.2 Body Packet parser, 24-bit
+  extended sequence tracking per §5.2, R=1 main-header caching,
+  tail-loss detection via the RTP marker bit, and per-frame Main
+  Packet metadata (TP/ORDH/R/S/C/PRIMS/TRANS/MAT/RANGE) carried
+  through to the YCbCr→RGB path so §5.3 coefficients are picked
+  per frame. Supports BT.601 and BT.709 in full- and narrow-range;
+  BT.2020 NCL, signed components, and `C=1` code-block caching are
+  not yet implemented.
+* `source/apps/rtp_recv/tools/rtp_loopback_send.py` — Python helper
+  that wraps a single complete codestream as one RFC 9828 Main
+  Packet and sends it over UDP loopback for local regression
+  testing without a live sender.
+* New CLI surface: `--port`, `--bind`, `--frames`, `--no-render`,
+  `--no-vsync`, `--no-decode`, `--threading {on,off}`,
+  `--color-path {shader|cpu}`, `--pace-fps <N>`, `--threads <N>`,
+  `--colorspace {bt709|bt601|rgb}`, `--range {full|narrow}`,
+  `--dump-codestream <fmt>`, `--smoke-test`.
+* `--dump-codestream` pattern strings are validated at parse time
+  to contain exactly one integer conversion specifier (`%d`, `%i`,
+  `%u`, `%o`, `%x`, or `%X`, with optional flags / width /
+  precision). Rejects any other format directive so the snprintf
+  call in the dump helper cannot be handed an unexpected specifier.
+
+## Build
+* New `-DOPENHTJ2K_RTP=ON` CMake option builds the experimental
+  `open_htj2k_rtp_recv` binary. Requires GLFW 3.x development
+  headers (`libglfw3-dev` on Debian/Ubuntu, `glfw-devel` on Fedora,
+  `brew install glfw` on macOS) and an OpenGL 3.3 core profile
+  driver at runtime. Off by default so existing builds on systems
+  without a window system are unaffected.
+
+## Documentation
+* README gains three new sections covering the RTP receiver: a
+  summary bullet under *What OpenHTJ2K provides*, a build
+  subsection alongside the WebAssembly build, and a usage
+  subsection next to the decoder one. The usage section documents
+  the CLI option list, the recommended `net.core.rmem_max` sysctl
+  for 4K streams, realistic hardware requirements for 4K @ 30 fps,
+  and the known NVIDIA + GNOME/Mutter + Wayland + vsync issue
+  (workaround: run with `--no-vsync` and rely on the RTP-timestamp
+  pacer).
+
+## Bugfixes
+* `j2c_src_memory::alloc_memory`
+  (`source/core/codestream/codestream_source.cpp`) was overwriting
+  `buf` without freeing the previous allocation. Single-call usage
+  from the `openhtj2k_decoder` constructor never tripped this
+  because `buf` starts as `nullptr` from the default ctor and the
+  destructor frees it once. Callers that reuse a decoder instance
+  via `openhtj2k_decoder::init()` would leak ~1.7 MB per 4K frame
+  — roughly 3 GB/min at 30 fps. Fixes the leak so the decoder is
+  safe to reuse across frames in long-running pipelines (such as
+  the new RTP receiver's long-lived decode worker).
+
 # [0.9.1] - 2026-04-10
 
 ## Bugfixes
