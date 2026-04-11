@@ -20,11 +20,18 @@
 //   - unsigned JPEG 2000 components (the broadcast case; signed is TODO)
 //   - input depths 8..16
 //   - chroma subsampling 4:4:4, 4:2:2, 4:2:0 via per-component stride ratios
-//   - full-range and narrow-range BT.601 / BT.709
+//   - full-range and narrow-range BT.601 / BT.709 / BT.2020 NCL
 //
-// NOT supported in v1:
+// NOT supported:
 //   - signed components (triggers an assert / std::abort)
-//   - BT.2020 NCL (add in v2)
+//   - BT.2020 constant-luminance (ITU-T H.273 MatrixCoefficients = 10)
+//   - ICtCp / XYZ matrices
+//
+// HDR colorimetry scope: this file covers only the YCbCr -> RGB matrix step.
+// The result is non-linear R'G'B' in the source primaries (BT.601 / BT.709 /
+// BT.2020) -- NOT linear light.  A PQ / HLG EOTF and a gamut-mapping step
+// from the source primaries to the display primaries belong in a later
+// slice of the HDR roadmap.
 
 #include <algorithm>
 #include <cassert>
@@ -80,18 +87,52 @@ constexpr ycbcr_coefficients YCBCR_BT709_NARROW = {
     /*cb_to_b*/ 2.112f,
 };
 
+// ITU-R BT.2020 NCL full-range.  Derived from Kr=0.2627, Kg=0.6780,
+// Kb=0.0593 (BT.2020 Table 4, ITU-T H.273 MatrixCoefficients = 9):
+//   cr_to_r = 2*(1 - Kr)                         = 1.4746
+//   cb_to_b = 2*(1 - Kb)                         = 1.8814
+//   cr_to_g = (2 * Kr * (1 - Kr)) / Kg           = 0.571353...
+//   cb_to_g = (2 * Kb * (1 - Kb)) / Kg           = 0.164553...
+constexpr ycbcr_coefficients YCBCR_BT2020_FULL = {
+    /*narrow_range*/ false,
+    /*cr_to_r*/ 1.4746f,
+    /*cb_to_g*/ 0.16455313f,
+    /*cr_to_g*/ 0.57135314f,
+    /*cb_to_b*/ 1.8814f,
+};
+
+// ITU-R BT.2020 NCL narrow-range.  Mirrors the existing BT.601 / BT.709
+// narrow-range entries, which scale the full-range coefficients by
+// 255/224.  Kept consistent with the pre-existing narrow-range
+// convention so the four narrow entries behave uniformly end-to-end;
+// whether that convention is itself arithmetically correct under the
+// shader's `(s - uBias) * uScale` prelude is tracked as a separate
+// investigation rather than being fixed in this slice.
+constexpr ycbcr_coefficients YCBCR_BT2020_NARROW = {
+    /*narrow_range*/ true,
+    /*cr_to_r*/ 1.67861f,    // 1.4746   * 255/224
+    /*cb_to_g*/ 0.18732f,    // 0.164553 * 255/224
+    /*cr_to_g*/ 0.65026f,    // 0.571353 * 255/224
+    /*cb_to_b*/ 2.14179f,    // 1.8814   * 255/224
+};
+
 // Select coefficients from RFC 9828 §5.3 MAT + RANGE (S=1 case).
-// Returns nullptr for unsupported MAT values (e.g. BT.2020 NCL, log, etc.);
-// the caller should log and drop the frame or fall back to CLI settings.
+// Returns nullptr for unsupported MAT values (constant-luminance BT.2020,
+// ICtCp, chroma-derived, log); the caller should log and drop the frame
+// or fall back to CLI settings.
 inline const ycbcr_coefficients* select_coefficients_from_mat(uint8_t mat, bool full_range) {
   // Values from ITU-T H.273 Table 4 (MatrixCoefficients).
-  // 1 = BT.709; 5, 6 = BT.601 (625/525 lines); 9 = BT.2020 NCL (not yet).
+  // 1 = BT.709; 5, 6 = BT.601 (625/525 lines); 9 = BT.2020 NCL.
+  // 10 (BT.2020 CL), 11 (SMPTE ST 2085), 12-14 (chroma-derived /
+  // ICtCp) are intentionally not mapped.
   switch (mat) {
     case 1:
       return full_range ? &YCBCR_BT709_FULL : &YCBCR_BT709_NARROW;
     case 5:
     case 6:
       return full_range ? &YCBCR_BT601_FULL : &YCBCR_BT601_NARROW;
+    case 9:
+      return full_range ? &YCBCR_BT2020_FULL : &YCBCR_BT2020_NARROW;
     default:
       return nullptr;
   }

@@ -95,7 +95,7 @@ void print_usage(const char* argv0) {
       "  --no-decode              Skip the openhtj2k decoder entirely (capture only)\n"
       "  --threading {on,off}     v2 multi-thread (default on); off = v1 single-thread\n"
       "  --dump-codestream <fmt>  printf-style path, e.g. '/tmp/f_%%05d.j2c'\n"
-      "  --colorspace <name>      S=0 fallback: bt709 | bt601 | rgb (bt2020 not yet)\n"
+      "  --colorspace <name>      S=0 fallback: bt709 | bt601 | bt2020 | rgb\n"
       "  --range <name>           S=0 fallback: full | narrow (default full)\n"
       "  --threads <N>            Decoder thread count (default 2; 0 = hardware)\n"
       "  --color-path {shader|cpu} YCbCr->RGB on GPU (default) or CPU fallback\n"
@@ -228,8 +228,8 @@ bool parse_cli(int argc, char** argv, CliOptions& opt) {
       opt.s0_fallback = range_full ? &YCBCR_BT601_FULL : &YCBCR_BT601_NARROW;
       opt.s0_label    = range_full ? "bt601-full" : "bt601-narrow";
     } else if (std::strcmp(v, "bt2020") == 0) {
-      std::fprintf(stderr, "ERROR: --colorspace bt2020 not supported in v1\n");
-      return false;
+      opt.s0_fallback = range_full ? &YCBCR_BT2020_FULL : &YCBCR_BT2020_NARROW;
+      opt.s0_label    = range_full ? "bt2020-full" : "bt2020-narrow";
     } else if (std::strcmp(v, "rgb") == 0) {
       opt.s0_fallback = nullptr;  // sentinel for "no YCbCr, components already RGB"
       opt.s0_label    = "rgb";
@@ -316,6 +316,8 @@ void log_coefficients_choice_once(const CliOptions& opts, const ycbcr_coefficien
                       : coeffs == &YCBCR_BT709_NARROW ? "bt709-narrow"
                       : coeffs == &YCBCR_BT601_FULL   ? "bt601-full"
                       : coeffs == &YCBCR_BT601_NARROW ? "bt601-narrow"
+                      : coeffs == &YCBCR_BT2020_FULL  ? "bt2020-full"
+                      : coeffs == &YCBCR_BT2020_NARROW? "bt2020-narrow"
                                                       : "?"));
 }
 
@@ -1406,6 +1408,33 @@ int smoke_test_ycbcr() {
         if (std::abs(static_cast<int>(out[3 * x + c]) - 128) > 1) return 1;
       }
     }
+  }
+
+  // BT.2020 sanity: the RFC 9828 MAT -> matrix dispatch routes correctly
+  // and a neutral-gray input produces gray output through the BT.2020
+  // matrix.  BT.2020 NCL is MAT=9 in ITU-T H.273 Table 4.
+  {
+    if (select_coefficients_from_mat(/*mat=*/9, /*full_range=*/true) != &YCBCR_BT2020_FULL)
+      return 1;
+    if (select_coefficients_from_mat(/*mat=*/9, /*full_range=*/false) != &YCBCR_BT2020_NARROW)
+      return 1;
+
+    const int32_t Y2020[] = {128}, Cb2020[] = {128}, Cr2020[] = {128};
+    uint8_t rgb2020[3] = {0};
+    ycbcr_row_to_rgb8(Y2020, Cb2020, Cr2020, rgb2020, 1, 1, 1, YCBCR_BT2020_FULL, 8, false);
+    if (std::abs(int(rgb2020[0]) - 128) > 1) return 1;
+    if (std::abs(int(rgb2020[1]) - 128) > 1) return 1;
+    if (std::abs(int(rgb2020[2]) - 128) > 1) return 1;
+
+    // Same neutral test at 10-bit depth so the bit-depth-dependent
+    // normalization constants in ycbcr_row_to_rgb8 get exercised for
+    // the BT.2020 matrix too.
+    const int32_t Y10[]  = {512}, Cb10[] = {512}, Cr10[] = {512};
+    uint8_t rgb10[3] = {0};
+    ycbcr_row_to_rgb8(Y10, Cb10, Cr10, rgb10, 1, 1, 1, YCBCR_BT2020_FULL, 10, false);
+    if (std::abs(int(rgb10[0]) - 128) > 1) return 1;
+    if (std::abs(int(rgb10[1]) - 128) > 1) return 1;
+    if (std::abs(int(rgb10[2]) - 128) > 1) return 1;
   }
 
   return 0;
