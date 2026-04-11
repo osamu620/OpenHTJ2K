@@ -115,7 +115,7 @@ void print_usage(const char* argv0) {
       "  --dump-codestream <fmt>  printf-style path, e.g. '/tmp/f_%%05d.j2c'\n"
       "  --colorspace <name>      S=0 fallback: bt709 | bt601 | bt2020 | rgb\n"
       "  --range <name>           S=0 fallback: full | narrow (default full)\n"
-      "  --threads <N>            Decoder thread count (default 2; 0 = hardware)\n"
+      "  --threads <N>            Decoder thread count (default 4; 0 = hardware)\n"
       "  --color-path {shader|cpu} YCbCr->RGB on GPU (default) or CPU fallback\n"
       "  --transfer {auto|gamma|pq|hlg}\n"
       "                           Inverse EOTF (default auto, reads H.273 TRANS)\n"
