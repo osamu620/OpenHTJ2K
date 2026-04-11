@@ -61,11 +61,12 @@ struct CliOptions {
   const ycbcr_coefficients* s0_fallback = nullptr;
   std::string s0_label;  // human-readable form for logging
   bool        smoke_test = false;
-  // Default 2 matches the benchmarked optimum on broadcast 4K HT codestreams
-  // (HTJ2K's intra-frame parallelism saturates fast; more threads pay extra
-  // ThreadPool spinup cost without speedup).  Override per machine/content
-  // via --threads.
-  uint32_t    num_decoder_threads = 2;
+  // Default 4 matches the benchmarked optimum on broadcast 4K HT codestreams
+  // after component-parallel IDWT dispatch landed (earlier code peaked at 2
+  // threads because IDWT was main-thread serial; component-parallel IDWT
+  // pushes the peak to threads=4..6 on 4K 4:2:2 HT).  Override per
+  // machine/content via --threads.
+  uint32_t    num_decoder_threads = 4;
   // Color conversion path.  "shader" (default) does YCbCr→RGB in the
   // fragment shader — the CPU only shifts samples to 8-bit per plane.
   // "cpu" runs the legacy scalar ycbcr_row_to_rgb8 on the decode thread
