@@ -4,6 +4,7 @@
 // Licensed under the same BSD 3-Clause terms as the rest of OpenHTJ2K.
 
 #include "gl_renderer.hpp"
+#include "color_pipeline.hpp"
 #include "gl_loader.hpp"
 #include "ycbcr_rgb.hpp"
 
@@ -72,6 +73,59 @@ uniform vec3      uScale;      // per-plane scale after bias subtraction
 uniform vec3      uNormScale;  // per-plane renorm factor (1.0 for R8,
                                // 65535/((1<<depth)-1) for R16 with >8-bit src)
 uniform int       uRgbMode;    // 0 = YCbCr -> RGB, 1 = treat planes as R/G/B
+
+// HDR colour pipeline uniforms.  Defaults reproduce v0.12.0 behaviour
+// up to a bounded re-encoding drift on SDR sources (see
+// smoke_test_color_pipeline for the drift bound).
+uniform int  uTransfer;        // 0=gamma2.2, 1=PQ, 2=HLG
+uniform mat3 uGamutMatrix;     // identity or BT.2020 -> BT.709
+uniform int  uDisplayEncoding; // 0=sRGB, 1=gamma2.2, 2=linear
+
+// SMPTE ST 2084 PQ EOTF constants (BT.2100 Table 4).
+const float kPqM1 = 0.1593017578125;
+const float kPqM2 = 78.84375;
+const float kPqC1 = 0.8359375;
+const float kPqC2 = 18.8515625;
+const float kPqC3 = 18.6875;
+
+vec3 pq_to_linear(vec3 e) {
+  vec3 v   = pow(max(e, vec3(0.0)), vec3(1.0 / kPqM2));
+  vec3 num = max(v - vec3(kPqC1), vec3(0.0));
+  vec3 den = vec3(kPqC2) - vec3(kPqC3) * v;
+  return pow(num / den, vec3(1.0 / kPqM1));
+}
+
+// ITU-R BT.2100 HLG inverse OETF.  System OOTF treated as identity for
+// display-referred SDR output; a tunable-gamma OOTF is a follow-up.
+vec3 hlg_inverse(vec3 e) {
+  const float a = 0.17883277;
+  const float b = 0.28466892;
+  const float c = 0.55991073;
+  vec3 lo = (e * e) / 3.0;
+  vec3 hi = (exp((e - vec3(c)) / a) + vec3(b)) / 12.0;
+  return mix(lo, hi, vec3(greaterThan(e, vec3(0.5))));
+}
+
+vec3 apply_inverse_transfer(vec3 e) {
+  if (uTransfer == 1) return pq_to_linear(e);
+  if (uTransfer == 2) return hlg_inverse(e);
+  return pow(max(e, vec3(0.0)), vec3(2.2));
+}
+
+// sRGB EOTF^-1 (piecewise).  IEC 61966-2-1.
+vec3 linear_to_srgb(vec3 l) {
+  vec3  lo  = l * 12.92;
+  vec3  hi  = 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055;
+  bvec3 cut = lessThanEqual(l, vec3(0.0031308));
+  return mix(hi, lo, vec3(cut));
+}
+
+vec3 apply_display_encoding(vec3 l) {
+  if (uDisplayEncoding == 1) return pow(max(l, vec3(0.0)), vec3(1.0 / 2.2));
+  if (uDisplayEncoding == 2) return l;
+  return linear_to_srgb(l);
+}
+
 void main() {
   vec3 s;
   s.x = texture(uY,  vTexCoord).r;
@@ -81,13 +135,22 @@ void main() {
   // textures uNormScale restores the source's native [0,1] range before
   // bias/scale math runs, so the rest of the shader is depth-agnostic.
   vec3 n = s * uNormScale;
-  vec3 rgb;
+  vec3 rgb_nl;
   if (uRgbMode == 1) {
-    rgb = n;
+    rgb_nl = n;
   } else {
-    rgb = uMatrix * ((n - uBias) * uScale);
+    rgb_nl = uMatrix * ((n - uBias) * uScale);
   }
-  fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+  // Clamp post-matrix before the inverse-transfer stage.  Out-of-range
+  // values on a narrow-range BT.709 source would otherwise feed a pow()
+  // with negative base.
+  rgb_nl      = clamp(rgb_nl, 0.0, 1.0);
+  vec3 lin_s  = apply_inverse_transfer(rgb_nl);
+  vec3 lin_d  = uGamutMatrix * lin_s;
+  // Stage 3: hard clip.  BT.2390 EETF soft-knee is a follow-up PR.
+  lin_d       = clamp(lin_d, 0.0, 1.0);
+  vec3 out_nl = apply_display_encoding(lin_d);
+  fragColor   = vec4(clamp(out_nl, 0.0, 1.0), 1.0);
 }
 )glsl";
 
@@ -229,6 +292,9 @@ bool GlRenderer::compile_shader_programs() {
   u_yc_scale_      = gl::GetUniformLocation(prog_ycbcr_, "uScale");
   u_yc_norm_scale_ = gl::GetUniformLocation(prog_ycbcr_, "uNormScale");
   u_yc_rgb_mode_   = gl::GetUniformLocation(prog_ycbcr_, "uRgbMode");
+  u_yc_transfer_   = gl::GetUniformLocation(prog_ycbcr_, "uTransfer");
+  u_yc_gamut_      = gl::GetUniformLocation(prog_ycbcr_, "uGamutMatrix");
+  u_yc_display_enc_ = gl::GetUniformLocation(prog_ycbcr_, "uDisplayEncoding");
 
   // Drain any residual error state from the compile/link sync point so
   // later per-frame glGetError checks (if added) don't see ghosts.
@@ -443,7 +509,8 @@ void GlRenderer::upload_and_draw(const uint8_t* rgb, int w, int h) {
 void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* cb_plane,
                                         const uint8_t* cr_plane, int w_y, int h_y, int w_c,
                                         int h_c, const ycbcr_coefficients* coeffs,
-                                        bool components_are_rgb) {
+                                        bool components_are_rgb,
+                                        const ColorPipelineParams& pipeline) {
   if (!window_ || w_y <= 0 || h_y <= 0 || w_c <= 0 || h_c <= 0) return;
 
   if (!ensure_planar_textures(w_y, h_y, w_c, h_c, /*bpp=*/1)) return;
@@ -462,14 +529,15 @@ void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* c
   // 8-bit source: the texture value already lives in the sample's native
   // [0, 1] range, so uNormScale is the identity.
   const float norm_scale[3] = {1.0f, 1.0f, 1.0f};
-  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale);
+  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale, pipeline);
 }
 
 void GlRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uint16_t* cb_plane,
                                            const uint16_t* cr_plane, int w_y, int h_y,
                                            int w_c, int h_c, int bit_depth,
                                            const ycbcr_coefficients* coeffs,
-                                           bool components_are_rgb) {
+                                           bool components_are_rgb,
+                                           const ColorPipelineParams& pipeline) {
   if (!window_ || w_y <= 0 || h_y <= 0 || w_c <= 0 || h_c <= 0) return;
   if (bit_depth < 9 || bit_depth > 16) return;  // caller routes 8-bit to the u8 path
 
@@ -490,11 +558,12 @@ void GlRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uint16
   const float native_max    = static_cast<float>((1 << bit_depth) - 1);
   const float k             = 65535.0f / native_max;
   const float norm_scale[3] = {k, k, k};
-  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale);
+  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale, pipeline);
 }
 
 void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* coeffs,
-                                    bool components_are_rgb, const float* norm_scale) {
+                                    bool components_are_rgb, const float* norm_scale,
+                                    const ColorPipelineParams& pipeline) {
   gl::UseProgram(prog_ycbcr_);
   gl::ActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, tex_y_);
@@ -508,6 +577,13 @@ void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* 
 
   gl::Uniform3fv(u_yc_norm_scale_, 1, norm_scale);
   gl::Uniform1i(u_yc_rgb_mode_, components_are_rgb ? 1 : 0);
+
+  // HDR pipeline uniforms.  The defaults (gamma2.2 / identity / sRGB)
+  // preserve v0.12.0 behaviour modulo a bounded re-encoding drift on
+  // SDR BT.709 sources (quantified in smoke_test_color_pipeline).
+  gl::Uniform1i(u_yc_transfer_, pipeline.transfer);
+  gl::UniformMatrix3fv(u_yc_gamut_, 1, GL_FALSE, pipeline.gamut_matrix);
+  gl::Uniform1i(u_yc_display_enc_, pipeline.display_encoding);
 
   if (!components_are_rgb && coeffs != nullptr) {
     // Column-major: mat3(col0, col1, col2) where
