@@ -1,3 +1,89 @@
+# [0.12.0] - 2026-04-11
+
+## HDR groundwork (experimental)
+* RTP receiver: for sources with a luma bit depth greater than 8,
+  the shader color path now uploads planes as `GL_R16` instead of
+  right-shifting to `GL_R8` at the CPU -> GPU boundary, preserving
+  the full source bit depth end-to-end.  A new CPU-side helper
+  (`clamp_i32_plane_to_u16` in `planar_shift.hpp`) performs the
+  int32 -> uint16 clamp with an AVX2 inner loop (8 samples per
+  iteration).  The fragment shader renormalizes via a new
+  `uNormScale` uniform (`65535 / ((1 << depth) - 1)`) so the
+  existing BT.601 / BT.709 matrix math runs in the source's native
+  `[0, 1]` range regardless of input depth.  8-bit sources keep the
+  unchanged `GL_R8` path; `uNormScale = (1, 1, 1)` for those, which
+  is an IEEE 754 identity multiply, so the 8-bit output is
+  bit-identical to 0.11.1.  `GL_R16` is normalized (not
+  `GL_R16UI`) so `GL_LINEAR` filtering still works for 4:2:2 / 4:2:0
+  chroma upsampling.  A 12-bit 4K 4:2:2 live soak runs at
+  source-locked cadence with zero decode-slot evictions and no GL
+  errors.  Note that this is a texture-format and pipeline change
+  only; no PQ / HLG transfer-function decoding and no gamut mapping
+  are implemented, so a BT.2020 PQ source will preserve its LSBs
+  but still render with the display's native gamma curve.
+* RTP receiver: routes RFC 9828 frames carrying `MAT = 9`
+  (ITU-T H.273 BT.2020 NCL) through the correct YCbCr -> RGB matrix
+  instead of erroring out with an unsupported-MAT log.  New
+  `YCBCR_BT2020_FULL` and `YCBCR_BT2020_NARROW` constants, derived
+  from `Kr = 0.2627`, `Kg = 0.6780`, `Kb = 0.0593` per ITU-R
+  BT.2020 Table 4.  `select_coefficients_from_mat()` gains a case
+  for `MAT = 9`; `MAT = 10` (BT.2020 CL / constant-luminance), 11
+  (SMPTE ST 2085), and 12-14 (chroma-derived / ICtCp) are
+  intentionally not mapped.  The `--colorspace bt2020` CLI value
+  is accepted as the `S = 0` fallback and composes with `--range
+  full` / `--range narrow` the same way `bt601` and `bt709` do.
+  As with the `GL_R16` work above, this is a matrix change only;
+  a BT.2020 HDR source still needs PQ / HLG decoding and gamut
+  mapping to render correctly on an SDR display.
+
+## Tests
+* Fix intermittent `ctest -j` failure on the encoder round-trip
+  tests.  `comp_lossless` / `comp_lossless_odd` were flaky under
+  parallel ctest execution (`imgcmp` error "File
+  kodim23lossless.ppm is not found"), while serial ctest always
+  passed.  Root cause was a race between the `cleanup_artifacts`
+  fixture (which `file(REMOVE *.ppm *.pgm *.pgx)` in the build
+  directory) and the encoder round-trip chain.  The decoder
+  conformance tests declared `FIXTURES_REQUIRED test_artifacts`
+  but the encoder tests did not, so ctest was free to schedule
+  `cleanup_artifacts` concurrently with `enc_lossless ->
+  dec_lossless -> comp_lossless`, wiping the intermediate `.ppm`
+  between `dec_lossless` writing it and `comp_lossless` reading
+  it.  Fix: declare `FIXTURES_REQUIRED test_artifacts` on all nine
+  encoder tests.  Five consecutive `ctest -j32` runs now pass
+  582 / 582.
+
+## Documentation
+* README restructured from 318 lines into a concise ~165-line
+  overview (elevator pitch, highlights, quick build, CLI
+  quick-start with three examples and the key flags per app,
+  supported formats, docs index) plus a new `docs/` directory
+  with one file per topic:
+  `docs/building.md` (full CMake flag reference, native build,
+  WebAssembly build + Node.js CLI, RTP receiver prerequisites),
+  `docs/cli_encoder.md` (full `open_htj2k_enc` option reference),
+  `docs/cli_decoder.md` (full `open_htj2k_dec` option reference),
+  and `docs/cli_rtp_recv.md` (full `open_htj2k_rtp_recv` option
+  reference, kernel `rmem_max` tuning, 4K @ 60 fps hardware
+  requirements, known issues including the NVIDIA + Mutter +
+  Wayland + vsync interaction).  Runtime `-h` remains the primary
+  reference; `docs/` is for offline browsing.
+* Corrected the README's CLI I/O table notes.  Previously the
+  table claimed "PPM supports subsampled (4:2:2, 4:2:0)
+  components", which is wrong because PPM is packed RGB; what
+  actually happens is a nearest-neighbour chroma upsample on the
+  decoder side when `-ycbcr bt601|bt709` is set.  The "streaming
+  path accepts subsampled PGX" note was misleading because both
+  the batch and streaming encoder paths support multi-file PGX
+  input.  The TIFF row said "8/16 bpp" which reads as bits per
+  pixel (an 8-bit RGB TIFF is 24 bpp); it should read "8 or 16
+  bits per sample" and also state that TIFF input is batch-only.
+  The RAW row had no note at all.  PGM and PPM are now separate
+  rows since they carry different notes.
+* `docs/cli_rtp_recv.md`: `--colorspace` documents the new `bt2020`
+  value and calls out the current scope limitation (matrix only;
+  no PQ / HLG EOTF, no gamut mapping yet).
+
 # [0.11.1] - 2026-04-11
 
 ## Documentation
