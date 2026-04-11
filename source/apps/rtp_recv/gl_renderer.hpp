@@ -81,6 +81,11 @@ class GlRenderer {
   bool ensure_rgb_texture(int w, int h);
   bool ensure_planar_textures(int w_y, int h_y, int w_c, int h_c);
   void draw_fullscreen_quad(int fb_w, int fb_h, int content_w, int content_h);
+  // Drains the GL error queue and logs each non-zero code with the
+  // given context label.  Called only at allocation / program-link
+  // sync points so the per-frame draw path isn't forced to sync with
+  // the driver.  Returns true if no error was observed.
+  bool check_gl_error(const char* context) const;
 
   GLFWwindow* window_ = nullptr;
 

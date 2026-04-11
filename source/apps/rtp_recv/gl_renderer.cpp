@@ -223,6 +223,9 @@ bool GlRenderer::compile_shader_programs() {
   u_yc_scale_     = gl::GetUniformLocation(prog_ycbcr_, "uScale");
   u_yc_rgb_mode_  = gl::GetUniformLocation(prog_ycbcr_, "uRgbMode");
 
+  // Drain any residual error state from the compile/link sync point so
+  // later per-frame glGetError checks (if added) don't see ghosts.
+  check_gl_error("compile_shader_programs");
   return true;
 }
 
@@ -280,6 +283,16 @@ void GlRenderer::shutdown() {
   tex_cr_h_  = 0;
 }
 
+bool GlRenderer::check_gl_error(const char* context) const {
+  bool clean = true;
+  for (GLenum err = glGetError(); err != GL_NO_ERROR; err = glGetError()) {
+    clean = false;
+    std::fprintf(stderr, "gl_renderer: GL error 0x%04x at %s\n",
+                 static_cast<unsigned>(err), context);
+  }
+  return clean;
+}
+
 bool GlRenderer::should_close() const {
   return window_ ? glfwWindowShouldClose(window_) != 0 : true;
 }
@@ -292,6 +305,11 @@ bool GlRenderer::ensure_rgb_texture(int w, int h) {
   if (tex_rgb_ == 0) {
     GLuint t = 0;
     glGenTextures(1, &t);
+    if (t == 0) {
+      std::fprintf(stderr, "gl_renderer: glGenTextures returned 0 (out of memory?)\n");
+      check_gl_error("glGenTextures(rgb)");
+      return false;
+    }
     tex_rgb_ = t;
     glBindTexture(GL_TEXTURE_2D, tex_rgb_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -304,6 +322,7 @@ bool GlRenderer::ensure_rgb_texture(int w, int h) {
   if (w != tex_rgb_w_ || h != tex_rgb_h_) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    if (!check_gl_error("glTexImage2D(rgb initial alloc)")) return false;
     tex_rgb_w_ = w;
     tex_rgb_h_ = h;
   }
@@ -318,10 +337,17 @@ bool GlRenderer::ensure_planar_textures(int w_y, int h_y, int w_c, int h_c) {
   // on the first frame (Cb allocation updated the shared counters) and
   // the shader then sampled an incomplete texture — usually reading as
   // all zeros, producing a strongly red-shifted output.
-  auto ensure_one = [](GLuint& tex, int& cur_w, int& cur_h, int w, int h) {
+  auto ensure_one = [this](const char* label, GLuint& tex, int& cur_w, int& cur_h,
+                           int w, int h) -> bool {
     const bool fresh = (tex == 0);
     if (fresh) {
       glGenTextures(1, &tex);
+      if (tex == 0) {
+        std::fprintf(stderr, "gl_renderer: glGenTextures(%s) returned 0 (out of memory?)\n",
+                     label);
+        check_gl_error("glGenTextures(planar)");
+        return false;
+      }
       glBindTexture(GL_TEXTURE_2D, tex);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -333,13 +359,15 @@ bool GlRenderer::ensure_planar_textures(int w_y, int h_y, int w_c, int h_c) {
     if (fresh || w != cur_w || h != cur_h) {
       glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
       glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+      if (!check_gl_error("glTexImage2D(planar initial alloc)")) return false;
       cur_w = w;
       cur_h = h;
     }
+    return true;
   };
-  ensure_one(tex_y_,  tex_y_w_,  tex_y_h_,  w_y, h_y);
-  ensure_one(tex_cb_, tex_cb_w_, tex_cb_h_, w_c, h_c);
-  ensure_one(tex_cr_, tex_cr_w_, tex_cr_h_, w_c, h_c);
+  if (!ensure_one("Y",  tex_y_,  tex_y_w_,  tex_y_h_,  w_y, h_y)) return false;
+  if (!ensure_one("Cb", tex_cb_, tex_cb_w_, tex_cb_h_, w_c, h_c)) return false;
+  if (!ensure_one("Cr", tex_cr_, tex_cr_w_, tex_cr_h_, w_c, h_c)) return false;
   return true;
 }
 
