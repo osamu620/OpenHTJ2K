@@ -94,6 +94,66 @@ inline void shift_i32_plane_to_u8(const int32_t* in, uint8_t* out, uint32_t widt
   }
 }
 
+// ── 16-bit variant ──────────────────────────────────────────────────────────
+// Clamp int32 samples to [0, maxval] and pack into the top `depth` bits of a
+// uint16_t, where `depth` is the source bit depth.  Used by the shader path
+// when the source is >8 bit: the GL_R16 texture is unsigned-normalized, so
+// writing the sample value directly produces a texture that reads back as
+// (sample / 65535) in the shader; the fragment program then renormalizes
+// via a uNormScale uniform set to (65535.0 / ((1<<depth)-1)) to restore the
+// sample's original [0, 1] range before bias/scale/matrix math.  No right
+// shift: the whole point of the 16-bit path is to preserve the LSBs the u8
+// path truncated.
+inline void clamp_i32_plane_to_u16_scalar(const int32_t* in, uint16_t* out, uint32_t width,
+                                          int32_t maxval) {
+  for (uint32_t x = 0; x < width; ++x) {
+    int32_t v = in[x];
+    if (v < 0) v = 0;
+    if (v > maxval) v = maxval;
+    out[x] = static_cast<uint16_t>(v);
+  }
+}
+
+inline void clamp_i32_plane_to_u16(const int32_t* in, uint16_t* out, uint32_t width,
+                                   int32_t maxval) {
+  uint32_t x = 0;
+
+#if defined(__AVX2__)
+  // AVX2: 8 int32 per iteration.  Clamp to [0, maxval], pack down to 8 u16
+  // via packus_epi32, reassemble the two lanes into a single __m128i, and
+  // store the eight u16 values.
+  //
+  // packus_epi32 is lane-local: the low 64 bits of each 128-bit lane hold
+  // four u16 values, and the high 64 bits duplicate them.  We
+  // unpacklo_epi64 the two lanes to get eight contiguous u16s.
+  //
+  // No srai here: the u16 preserves the source's full dynamic range, and
+  // the fragment shader renormalizes via uNormScale at sample time.
+  const __m256i vzero   = _mm256_setzero_si256();
+  const __m256i vmaxval = _mm256_set1_epi32(maxval);
+  for (; x + 8 <= width; x += 8) {
+    __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in + x));
+    v         = _mm256_max_epi32(v, vzero);
+    v         = _mm256_min_epi32(v, vmaxval);
+
+    const __m256i p16      = _mm256_packus_epi32(v, v);
+    const __m128i lane0    = _mm256_castsi256_si128(p16);
+    const __m128i lane1    = _mm256_extracti128_si256(p16, 1);
+    const __m128i merged16 = _mm_unpacklo_epi64(lane0, lane1);
+
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(out + x), merged16);
+  }
+#endif
+
+  // Tail (and the whole row on non-AVX2 builds).
+  for (; x < width; ++x) {
+    int32_t v = in[x];
+    if (v < 0) v = 0;
+    if (v > maxval) v = maxval;
+    out[x] = static_cast<uint16_t>(v);
+  }
+}
+
 // Byte-equality smoke test used from main_rtp_recv --smoke-test.  Drives
 // the AVX2 and scalar paths with a hand-crafted input that exercises the
 // clamp low/high edges, every residue of width % 8, and the shift == 0
@@ -103,6 +163,8 @@ inline bool plane_shift_smoke_test() {
   alignas(32) int32_t input[kMax];
   alignas(32) uint8_t  out_simd[kMax];
   alignas(32) uint8_t  out_ref[kMax];
+  alignas(32) uint16_t out16_simd[kMax];
+  alignas(32) uint16_t out16_ref[kMax];
 
   // Mix: negatives, zeros, small positives, near-max, over-max.
   for (uint32_t i = 0; i < kMax; ++i) {
@@ -147,6 +209,26 @@ inline bool plane_shift_smoke_test() {
       }
     }
   }
+
+  // Same matrix against the u16 clamp helper.
+  const int32_t u16_cases[] = {255, 1023, 4095, 65535};
+  for (int32_t maxval : u16_cases) {
+    for (uint32_t w = 1; w <= kMax; ++w) {
+      for (uint32_t i = 0; i < kMax; ++i) out16_simd[i] = 0xABCD;
+      for (uint32_t i = 0; i < kMax; ++i) out16_ref[i]  = 0xABCD;
+
+      clamp_i32_plane_to_u16(input, out16_simd, w, maxval);
+      clamp_i32_plane_to_u16_scalar(input, out16_ref, w, maxval);
+
+      for (uint32_t i = 0; i < w; ++i) {
+        if (out16_simd[i] != out16_ref[i]) return false;
+      }
+      for (uint32_t i = w; i < kMax; ++i) {
+        if (out16_simd[i] != 0xABCD) return false;
+      }
+    }
+  }
+
   return true;
 }
 
