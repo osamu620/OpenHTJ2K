@@ -61,7 +61,12 @@ quick local testing without a live sender.
 
 ### Color fallback (when the Main Packet declares S=0)
 
-- `--colorspace {bt709|bt601|rgb}` — Fallback colorspace.
+- `--colorspace {bt709|bt601|bt2020|rgb}` — Fallback colorspace.
+  `bt2020` selects the BT.2020 NCL matrix (ITU-T H.273 MatrixCoefficients = 9).
+  Note that this slice only switches the YCbCr→RGB matrix; a PQ / HLG
+  transfer function and gamut-mapping from BT.2020 primaries to the
+  display primaries are not yet implemented, so a BT.2020 HDR source
+  still renders with the display's native gamma curve.
 - `--range {full|narrow}` — Fallback range. Default `full`.
 
 ### Diagnostics
