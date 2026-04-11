@@ -1,3 +1,124 @@
+# [0.13.0] - 2026-04-12
+
+## HDR display pipeline (RTP receiver)
+
+* RTP receiver: complete HDR colour pipeline in the fragment shader.
+  Extends the v0.12.0 shader path (which shipped the `GL_R16` plane
+  upload and the BT.2020 YCbCr→RGB matrix) with inverse EOTF,
+  linear-light gamut mapping, hard-clip tone mapping, and a display
+  encoding stage, so a BT.2020 PQ or HLG broadcast source renders
+  with the correct transfer and primaries on an SDR display.  New
+  `source/apps/rtp_recv/color_pipeline.hpp` holds the stage-selection
+  state (`ColorPipelineParams`) that flows from RFC 9828
+  `TRANS` / `PRIMS` fields through `AssembledFrame → DecodedFrame`
+  into the shader as uniforms.  The fragment shader runs: planar
+  YCbCr → RGB matrix (existing) → inverse EOTF (gamma / PQ / HLG) →
+  BT.2020→BT.709 gamut matrix in linear light → hard clip to
+  display gamut → sRGB (or gamma-2.2, or linear) display encoding.
+  Three new CLI flags drive the pipeline:
+    * `--transfer {auto|gamma|pq|hlg}` — inverse EOTF choice;
+      `auto` reads RFC 9828 `TRANS` (ITU-T H.273 TransferCharacteristics)
+      and defaults to gamma if missing or unsupported.
+    * `--display-primaries {bt709|bt2020}` — target gamut for the
+      linear-light matrix stage; default `bt709`.
+    * `--display-encoding {srgb|gamma22|linear}` — the output
+      transfer curve written into the framebuffer; default `srgb`.
+  Defaults (`--transfer auto --display-primaries bt709
+  --display-encoding srgb`) reproduce the v0.12.0 shader path's
+  appearance on SDR BT.709 sources modulo a bounded re-encoding
+  drift (the gamma inverse followed by sRGB re-encoding is not a
+  byte identity, but differs by at most 1 LSB in 8-bit quantised
+  output).  `--color-path cpu` remains explicitly scoped out of the
+  HDR pipeline and runs the legacy scalar YCbCr→RGB path.
+
+## Decoder threading redesign (starting point of Option A)
+
+Three-commit precursor series that reshapes the line-based streaming
+decoder's driver to enable per-component IDWT dispatch to pool worker
+threads.  Peak wall-time on 4K 4:2:2 12-bit HT moves from 12.14 ms
+@ `--threads 2` (v0.12.0 sweet spot) to 10.46 ms @ `--threads 6` — a
+14% improvement and the first time the decode ceiling has cleared
+90 fps on this fixture.
+
+* Decoder: nested `ThreadPool` dispatch precursor
+  (`source/core/coding/subband_row_buf.cpp:203`).  Removes the
+  `!is_worker_thread` bail that forced `decode_strip_core` onto the
+  serial path whenever reached from inside a pool worker.
+  Re-entrant dispatch is safe because `push_batch` / `try_run_one`
+  never hold `tasks_mutex` across task invocation — the popped task
+  is moved out of the ring under the lock and invoked unlocked, so a
+  worker pushing its own subtasks and draining them via `spin_wait`
+  + `try_run_one` cannot self-deadlock.  No-op for current callers
+  on its own (the guard was only ever reached from main), but a
+  precondition for the component-parallel IDWT dispatch that follows
+  in this release.  Also adds a re-entrancy contract comment on
+  `ThreadPool::try_run_one` documenting the lock discipline.
+  Perf-neutral on threads={2,4,8}.
+* Decoder: per-component strip scratch buffer infrastructure.  Adds
+  `sprec_t *strip_buf; size_t strip_buf_floats` fields to
+  `j2k_tcomp_line_dec` plus a public helper
+  `j2k_tile_component::pull_strip_into_buf(count, stride_floats)`
+  that grows the scratch on demand, pulls `count` rows via
+  `pull_line_ref` + `memcpy`, and returns the base pointer.  32-byte
+  aligned so AVX2 finalize kernels can read it with unaligned loads
+  at full speed; persistent across frames under single-tile reuse
+  (freed in `finalize_line_decode` on tile-component teardown).
+  Unused by the driver in that commit — pure infrastructure — then
+  consumed by the next commit.
+* Decoder: component-parallel IDWT strip pulls in the line-based
+  streaming driver.  Reshapes `j2k_tile::decode_line_based_stream`
+  from a row-at-a-time `for y { for c pull_line_ref }` loop into a
+  strip-granular driver.  The outer loop walks the tile in strips
+  of `max(tcomp[0].codeblock_size.y, 64)` luma rows (rounded up to
+  the max `SIZ.YRsiz` across components so chroma strip boundaries
+  always land on an integer chroma row).  At the top of every strip
+  each component's rows are pulled into its strip scratch via
+  `pull_strip_into_buf`, and the pull phase dispatches `NC`
+  per-component tasks through `ThreadPool::push_batch`.  The calling
+  thread pitches in via `try_run_one` inside a local barrier
+  helper (`dec_strip_barrier_wait` in `coding_units.cpp`).  The
+  inner finalize + callback loop is unchanged byte-for-byte and
+  reads `strip_ptrs[c] + row_in_strip * stride`.  One non-obvious
+  correctness trap is preserved through the rewrite: the existing
+  driver iterates over `ci[0].csize_y` and calls `pull_line_ref`
+  unconditionally for `c=0..2` regardless of `SIZ.YRsiz`, because
+  MCT demands 4:4:4 and the three components share geometry in
+  component row space.  The strip-granular pull phase uses
+  `count = strip_y1 - strip_y0` for MCT main, and the
+  subsampling-aware `(strip_y1+yr_c-1)/yr_c - strip_y0/yr_c`
+  formula for non-MCT and MCT extras `c>=3`.  A unified
+  "divide by yr_c everywhere" formula breaks conformance fixture
+  `p0_10` (which declares `YRsiz=4` on all three MCT components).
+  The minimum strip height of 64 luma rows amortises the per-strip
+  pull dispatch + barrier: broadcast HTJ2K fixtures use `cb_h`
+  values as small as 8 to shorten sub-codestream latency, and
+  dispatching `NC` tasks every 8 luma rows spends more time in
+  mutex + barrier than in IDWT.
+
+  Measured on the Spark 4K 4:2:2 12-bit HT fixture (200 frames × 3
+  loops via `rtp_decode_profile`, reuse path, Ryzen 9 9950X):
+
+  | `--threads` | v0.12.0 | v0.13.0 | delta    | ceiling fps |
+  |-------------|--------:|--------:|---------:|------------:|
+  | 2           | 12.14 ms| 12.60 ms|   +0.46  |       79.4  |
+  | 3           |     --  | 11.12 ms|          |       89.4  |
+  | 4           | 12.41 ms| 10.70 ms|   −1.71  |       92.9  |
+  | **6**       |     --  |**10.46 ms**|        |     **94.9**|
+  | 8           | 13.78 ms| 11.41 ms|   −2.37  |       87.1  |
+
+  `threads=2` has a small (~0.4 ms) regression because with only
+  `main + 2 workers` the per-component pulls cannot add a fourth
+  compute stream and the strip scratch memcpy is not absorbed.
+  This is the trade-off for the ~15% peak improvement at
+  `threads=4..6`, and motivates the default-threads bump below.
+* `open_htj2k_rtp_recv`: bump `--threads` default from 2 to 4.  The
+  v0.12.0 default was benchmarked at the pre-A1b sweet spot; the
+  component-parallel IDWT dispatch moves the new sweet spot to
+  `threads=4..6` on 4K 4:2:2 broadcast HT.
+
+All 582 conformance tests pass, including `p0_10` (`YRsiz=4` MCT)
+and `dec_lossless` / `comp_lossless_odd` under `ctest -j`.
+
 # [0.12.0] - 2026-04-11
 
 ## HDR groundwork (experimental)
