@@ -251,12 +251,20 @@ if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
     message(STATUS "OPENHTJ2K_RTP: building open_htj2k_rtp_recv")
     add_executable(open_htj2k_rtp_recv)
     target_include_directories(open_htj2k_rtp_recv PUBLIC source/core/interface)
+    # Offline decode profiler shares the same sub-CMakeLists for source lists.
+    add_executable(open_htj2k_rtp_decode_profile)
+    target_include_directories(open_htj2k_rtp_decode_profile PUBLIC source/core/interface)
     add_subdirectory(source/apps/rtp_recv)
     set_target_properties(
       open_htj2k_rtp_recv
       PROPERTIES OUTPUT_NAME
                  $<IF:$<CONFIG:Debug>,open_htj2k_rtp_recv_dbg,open_htj2k_rtp_recv>)
+    set_target_properties(
+      open_htj2k_rtp_decode_profile
+      PROPERTIES OUTPUT_NAME
+                 $<IF:$<CONFIG:Debug>,open_htj2k_rtp_decode_profile_dbg,open_htj2k_rtp_decode_profile>)
     target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL)
+    target_link_libraries(open_htj2k_rtp_decode_profile PUBLIC open_htj2k)
   else()
     message(WARNING "OPENHTJ2K_RTP requested but glfw3/OpenGL not found; skipping rtp_recv target")
   endif()
