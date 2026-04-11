@@ -245,6 +245,15 @@ class ThreadPool {
   // Returns true if a task was executed, false if the queue was empty or locked.
   // Safe to call from any thread (including the main thread) to do useful work
   // instead of spinning in a busy-wait loop.
+  //
+  // Re-entrancy contract: a worker thread may call push() / push_batch()
+  // while running inside another task and then spin_wait() on a counter
+  // decremented by the pushed subtasks.  This works because neither
+  // push_batch nor try_run_one holds tasks_mutex across task invocation —
+  // the popped task is moved out of the ring under the lock and invoked
+  // unlocked (see line ~253), so a worker can drain its own subtasks
+  // during spin_wait without self-deadlock, and other workers can
+  // concurrently pop the same subtasks through the shared ring.
   bool try_run_one() {
     InlineTask task;
     {

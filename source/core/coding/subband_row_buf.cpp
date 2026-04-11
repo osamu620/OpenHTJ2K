@@ -197,11 +197,13 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
 #ifdef OPENHTJ2K_THREAD
   {
     auto *pool = ThreadPool::get();
-    // Avoid nested dispatch: if this call is already running inside a pool worker
-    // (e.g. triggered by component-parallel pull_line() or a prefetch task),
-    // fall through to serial.
-    const bool in_worker = ThreadPool::is_worker_thread();
-    if (pool && pool->num_threads() > 1 && !in_worker) {
+    // Nested dispatch is supported: when this runs inside a worker the
+    // spin_wait() below uses try_run_one() to drain the newly-pushed
+    // codeblock tasks on the calling thread while other workers pick up
+    // the rest.  push_batch / try_run_one never hold tasks_mutex across
+    // task invocation, so a worker pushing its own subtasks cannot
+    // deadlock on its own fetch loop.
+    if (pool && pool->num_threads() > 1) {
       // ── Parallel path ──────────────────────────────────────────────────────
       par_tasks.clear();
       size_t total_s = 0, total_st = 0;
