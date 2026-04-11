@@ -30,6 +30,10 @@
 #include <cassert>
 #include <cstdint>
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
 namespace open_htj2k::rtp_recv {
 
 struct ycbcr_coefficients {
@@ -129,21 +133,125 @@ inline void ycbcr_row_to_rgb8(const int32_t* y_row, const int32_t* cb_row, const
   const float narrow_y_range  = static_cast<float>((235 - 16) << shift);
   const float narrow_c_range  = static_cast<float>((240 - 16) << shift);  // for scaling Cb/Cr around center
 
-  for (uint32_t x = 0; x < width; ++x) {
+  // Pre-baked bias/scale for the normalization step: y_n = (Y - y_bias) * y_scale,
+  // cb_n = (Cb - c_bias) * c_scale, cr_n = (Cr - c_bias) * c_scale.  Folding
+  // the range selection outside the per-pixel loop lets the compiler hoist
+  // the branch and keeps the SIMD inner loop branchless.
+  float y_bias;
+  float y_scale;
+  float c_bias = c_center_f;
+  float c_scale;
+  if (coeffs.narrow_range) {
+    y_bias  = narrow_y_black;
+    y_scale = 1.0f / narrow_y_range;
+    c_scale = 1.0f / narrow_c_range;
+  } else {
+    y_bias  = 0.0f;
+    y_scale = 1.0f / maxval_f;
+    c_scale = 1.0f / maxval_f;
+  }
+
+  uint32_t x = 0;
+
+#if defined(__AVX2__)
+  // AVX2 fast path: 8 luma pixels per iteration.  Handles the two
+  // chroma layouts that appear in broadcast content (4:4:4 with
+  // stride_ratio 1, and 4:2:2 / 4:2:0 with stride_ratio 2).  Both Cb
+  // and Cr must use the same ratio so the SIMD loader can hit one of
+  // the two precomputed duplication patterns; asymmetric ratios fall
+  // through to the scalar loop below.
+  //
+  // The per-frame speedup versus the scalar loop is ~6-8x on broadcast
+  // 4K 4:2:2 and is the reason the CPU color path is still a viable
+  // fallback for GL-incompatible environments (headless, no GL 3.3,
+  // WSL without hardware GL).  See the project memory for measurements.
+  if (cb_stride_ratio == cr_stride_ratio
+      && (cb_stride_ratio == 1 || cb_stride_ratio == 2)) {
+    const __m256 vy_bias    = _mm256_set1_ps(y_bias);
+    const __m256 vy_scale   = _mm256_set1_ps(y_scale);
+    const __m256 vc_bias    = _mm256_set1_ps(c_bias);
+    const __m256 vc_scale   = _mm256_set1_ps(c_scale);
+    const __m256 vcr_to_r   = _mm256_set1_ps(coeffs.cr_to_r);
+    const __m256 vcb_to_g   = _mm256_set1_ps(coeffs.cb_to_g);
+    const __m256 vcr_to_g   = _mm256_set1_ps(coeffs.cr_to_g);
+    const __m256 vcb_to_b   = _mm256_set1_ps(coeffs.cb_to_b);
+    const __m256 v255       = _mm256_set1_ps(255.0f);
+    const __m256 vhalf      = _mm256_set1_ps(0.5f);
+    const __m256 vzero      = _mm256_setzero_ps();
+    // Permute lanes used for 4:2:2 / 4:2:0 to replicate each of 4
+    // chroma samples into adjacent luma positions.
+    const __m256i vdup_chroma =
+        _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
+
+    for (; x + 8 <= width; x += 8) {
+      __m256i yi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(y_row + x));
+
+      __m256i cbi;
+      __m256i cri;
+      if (cb_stride_ratio == 1) {
+        cbi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(cb_row + x));
+        cri = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(cr_row + x));
+      } else {  // cb_stride_ratio == 2
+        const __m128i cb_half =
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(cb_row + (x >> 1)));
+        const __m128i cr_half =
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(cr_row + (x >> 1)));
+        // Promote to 256-bit (low half carries the 4 samples; high half
+        // is don't-care) and duplicate via the permute mask.
+        cbi = _mm256_permutevar8x32_epi32(_mm256_castsi128_si256(cb_half), vdup_chroma);
+        cri = _mm256_permutevar8x32_epi32(_mm256_castsi128_si256(cr_half), vdup_chroma);
+      }
+
+      const __m256 yf  = _mm256_cvtepi32_ps(yi);
+      const __m256 cbf = _mm256_cvtepi32_ps(cbi);
+      const __m256 crf = _mm256_cvtepi32_ps(cri);
+
+      const __m256 yn  = _mm256_mul_ps(_mm256_sub_ps(yf, vy_bias), vy_scale);
+      const __m256 cbn = _mm256_mul_ps(_mm256_sub_ps(cbf, vc_bias), vc_scale);
+      const __m256 crn = _mm256_mul_ps(_mm256_sub_ps(crf, vc_bias), vc_scale);
+
+      // R = y + cr_to_r * cr
+      __m256 r = _mm256_fmadd_ps(vcr_to_r, crn, yn);
+      // G = y - cb_to_g * cb - cr_to_g * cr
+      __m256 g = _mm256_fnmadd_ps(vcb_to_g, cbn, yn);
+      g        = _mm256_fnmadd_ps(vcr_to_g, crn, g);
+      // B = y + cb_to_b * cb
+      __m256 b = _mm256_fmadd_ps(vcb_to_b, cbn, yn);
+
+      // Scale to 0..255 with round-to-nearest, then clamp.
+      r = _mm256_add_ps(_mm256_mul_ps(r, v255), vhalf);
+      g = _mm256_add_ps(_mm256_mul_ps(g, v255), vhalf);
+      b = _mm256_add_ps(_mm256_mul_ps(b, v255), vhalf);
+      r = _mm256_min_ps(_mm256_max_ps(r, vzero), v255);
+      g = _mm256_min_ps(_mm256_max_ps(g, vzero), v255);
+      b = _mm256_min_ps(_mm256_max_ps(b, vzero), v255);
+
+      // Truncating convert is fine now because we added 0.5 above.
+      alignas(32) int32_t rtmp[8];
+      alignas(32) int32_t gtmp[8];
+      alignas(32) int32_t btmp[8];
+      _mm256_store_si256(reinterpret_cast<__m256i*>(rtmp), _mm256_cvttps_epi32(r));
+      _mm256_store_si256(reinterpret_cast<__m256i*>(gtmp), _mm256_cvttps_epi32(g));
+      _mm256_store_si256(reinterpret_cast<__m256i*>(btmp), _mm256_cvttps_epi32(b));
+      uint8_t* out = out_rgb + static_cast<size_t>(x) * 3;
+      for (int i = 0; i < 8; ++i) {
+        out[3 * i + 0] = static_cast<uint8_t>(rtmp[i]);
+        out[3 * i + 1] = static_cast<uint8_t>(gtmp[i]);
+        out[3 * i + 2] = static_cast<uint8_t>(btmp[i]);
+      }
+    }
+    // Fall through to the scalar loop for the trailing 0..7 pixels.
+  }
+#endif
+
+  for (; x < width; ++x) {
     const int32_t Y_i  = y_row[x];
     const int32_t Cb_i = cb_row[x / cb_stride_ratio];
     const int32_t Cr_i = cr_row[x / cr_stride_ratio];
 
-    float y_n, cb_n, cr_n;
-    if (coeffs.narrow_range) {
-      y_n  = (static_cast<float>(Y_i) - narrow_y_black) / narrow_y_range;
-      cb_n = (static_cast<float>(Cb_i) - c_center_f) / narrow_c_range;
-      cr_n = (static_cast<float>(Cr_i) - c_center_f) / narrow_c_range;
-    } else {
-      y_n  = static_cast<float>(Y_i) / maxval_f;
-      cb_n = (static_cast<float>(Cb_i) - c_center_f) / maxval_f;
-      cr_n = (static_cast<float>(Cr_i) - c_center_f) / maxval_f;
-    }
+    const float y_n  = (static_cast<float>(Y_i)  - y_bias) * y_scale;
+    const float cb_n = (static_cast<float>(Cb_i) - c_bias) * c_scale;
+    const float cr_n = (static_cast<float>(Cr_i) - c_bias) * c_scale;
 
     const float r = y_n + coeffs.cr_to_r * cr_n;
     const float g = y_n - coeffs.cb_to_g * cb_n - coeffs.cr_to_g * cr_n;

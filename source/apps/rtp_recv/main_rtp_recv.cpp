@@ -1243,7 +1243,56 @@ int smoke_test_ycbcr() {
   const int32_t Yr[] = {54}, Cbr[] = {99}, Crr[] = {255};
   uint8_t rgb_r[3] = {0};
   ycbcr_row_to_rgb8(Yr, Cbr, Crr, rgb_r, 1, 1, 1, YCBCR_BT709_FULL, 8, false);
-  return (rgb_r[0] >= 240 && rgb_r[1] <= 15 && rgb_r[2] <= 15) ? 0 : 1;
+  if (!(rgb_r[0] >= 240 && rgb_r[1] <= 15 && rgb_r[2] <= 15)) return 1;
+
+  // Multi-pixel rows to exercise the AVX2 fast path (engages at >= 8
+  // luma pixels) and the scalar tail.  17 luma pixels covers both the
+  // 8-wide SIMD loop and the 1-pixel remainder.
+  {
+    const uint32_t W = 17;
+    int32_t Yrow[W];
+    int32_t Cbrow[W];
+    int32_t Crrow[W];
+    for (uint32_t x = 0; x < W; ++x) {
+      // Smooth ramp so a SIMD off-by-one on a lane would shift the
+      // output in a visually detectable way.
+      Yrow[x]  = static_cast<int32_t>(16 + x * 12);
+      Cbrow[x] = 128;
+      Crrow[x] = 128;
+    }
+    uint8_t out[W * 3] = {0};
+    ycbcr_row_to_rgb8(Yrow, Cbrow, Crrow, out, W, 1, 1, YCBCR_BT709_FULL, 8, false);
+    for (uint32_t x = 0; x < W; ++x) {
+      const int expected = static_cast<int>(16 + x * 12);  // gray → R=G=B=Y
+      for (uint32_t c = 0; c < 3; ++c) {
+        if (std::abs(static_cast<int>(out[3 * x + c]) - expected) > 1) return 1;
+      }
+    }
+  }
+
+  // 4:2:2 chroma layout: 18 luma pixels with 9 chroma samples.
+  // Uses ramped chroma to verify the stride-ratio=2 SIMD duplication
+  // path (each Cb/Cr sample maps to two adjacent luma positions).
+  {
+    const uint32_t W  = 18;
+    const uint32_t Wc = 9;
+    int32_t Yrow[W];
+    int32_t Cbrow[Wc];
+    int32_t Crrow[Wc];
+    for (uint32_t x = 0; x < W;  ++x) Yrow[x]  = 128;
+    for (uint32_t x = 0; x < Wc; ++x) Cbrow[x] = 128;
+    for (uint32_t x = 0; x < Wc; ++x) Crrow[x] = 128;
+    uint8_t out[W * 3] = {0};
+    ycbcr_row_to_rgb8(Yrow, Cbrow, Crrow, out, W, 2, 2, YCBCR_BT709_FULL, 8, false);
+    // All-neutral input should decode to mid-gray at every position.
+    for (uint32_t x = 0; x < W; ++x) {
+      for (uint32_t c = 0; c < 3; ++c) {
+        if (std::abs(static_cast<int>(out[3 * x + c]) - 128) > 1) return 1;
+      }
+    }
+  }
+
+  return 0;
 }
 
 int smoke_test_frame_handler() {
