@@ -31,6 +31,8 @@
 
 namespace open_htj2k::rtp_recv {
 
+struct ycbcr_coefficients;  // from ycbcr_rgb.hpp
+
 template <typename T>
 class LatestSlot {
  public:
@@ -101,12 +103,42 @@ class LatestSlot {
 };
 
 // Carries one decoded frame from the decode worker to the renderer.
-// The decoder converts to 8-bit RGB on its own thread; the main thread
-// just uploads `rgb` to a GL_RGB8 texture and draws.
+//
+// Two content shapes share the struct (selected by `kind`):
+//
+//   - CPU_RGB: the decode worker ran YCbCr→RGB on the CPU and filled
+//     `rgb` with width*height*3 interleaved bytes.  Used by the
+//     --color-path=cpu fallback and by GL-incompatible environments.
+//   - PLANAR_YCBCR / PLANAR_RGB: the decode worker only shifted samples
+//     to 8-bit per plane and filled `plane_y/cb/cr`.  Luma dims are in
+//     `width/height`; chroma dims in `chroma_width/chroma_height`
+//     (which equal the luma dims for 4:4:4 / PLANAR_RGB).  The GPU
+//     shader applies the YCbCr→RGB matrix in the fragment stage.
+//
+// `rgb` is left empty in the planar shapes and vice versa, so
+// std::move-ing a DecodedFrame does not copy unused buffers.
 struct DecodedFrame {
-  std::vector<uint8_t> rgb;       // width * height * 3 bytes
-  uint32_t             width  = 0;
-  uint32_t             height = 0;
+  enum Kind : uint8_t {
+    CPU_RGB      = 0,
+    PLANAR_YCBCR = 1,
+    PLANAR_RGB   = 2,
+  };
+
+  std::vector<uint8_t>      rgb;       // CPU_RGB: width * height * 3 bytes
+  std::vector<uint8_t>      plane_y;   // PLANAR_*: width * height bytes
+  std::vector<uint8_t>      plane_cb;  // PLANAR_*: chroma_width * chroma_height bytes
+  std::vector<uint8_t>      plane_cr;  // PLANAR_*: chroma_width * chroma_height bytes
+  uint32_t                  width         = 0;  // luma width
+  uint32_t                  height        = 0;  // luma height
+  uint32_t                  chroma_width  = 0;  // 0 in CPU_RGB
+  uint32_t                  chroma_height = 0;  // 0 in CPU_RGB
+  Kind                      kind          = CPU_RGB;
+  // For PLANAR_YCBCR: points at one of the static-const YCBCR_* constants
+  // in ycbcr_rgb.hpp (BT601/709 × full/narrow).  Never owns.  Null in
+  // PLANAR_RGB / CPU_RGB.  The pointer is safe to move across threads
+  // because it aliases immortal constexpr data.
+  const ycbcr_coefficients* shader_coeffs      = nullptr;
+  bool                      components_are_rgb = false;
 };
 
 }  // namespace open_htj2k::rtp_recv

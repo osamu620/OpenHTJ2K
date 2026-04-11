@@ -64,6 +64,14 @@ struct CliOptions {
   // ThreadPool spinup cost without speedup).  Override per machine/content
   // via --threads.
   uint32_t    num_decoder_threads = 2;
+  // Color conversion path.  "shader" (default) does YCbCr→RGB in the
+  // fragment shader — the CPU only shifts samples to 8-bit per plane.
+  // "cpu" runs the legacy scalar ycbcr_row_to_rgb8 on the decode thread
+  // and uploads interleaved RGB.  Forced to "cpu" if the renderer fails
+  // to create a GL 3.3 core context (fallback for headless / GL-limited
+  // environments).
+  enum class ColorPath : uint8_t { Shader, Cpu };
+  ColorPath   color_path = ColorPath::Shader;
 };
 
 void print_usage(const char* argv0) {
@@ -81,6 +89,7 @@ void print_usage(const char* argv0) {
       "  --colorspace <name>      S=0 fallback: bt709 | bt601 | rgb (bt2020 not yet)\n"
       "  --range <name>           S=0 fallback: full | narrow (default full)\n"
       "  --threads <N>            Decoder thread count (default 2; 0 = hardware)\n"
+      "  --color-path {shader|cpu} YCbCr->RGB on GPU (default) or CPU fallback\n"
       "  --smoke-test             Run internal unit smoke tests and exit\n",
       argv0);
 }
@@ -123,6 +132,14 @@ bool parse_cli(int argc, char** argv, CliOptions& opt) {
   if (const char* v = get_arg(argc, argv, "--frames")) opt.max_frames = std::atoi(v);
   if (const char* v = get_arg(argc, argv, "--dump-codestream")) opt.dump_pattern = v;
   if (const char* v = get_arg(argc, argv, "--threads")) opt.num_decoder_threads = static_cast<uint32_t>(std::atoi(v));
+  if (const char* v = get_arg(argc, argv, "--color-path")) {
+    if (std::strcmp(v, "shader") == 0) opt.color_path = CliOptions::ColorPath::Shader;
+    else if (std::strcmp(v, "cpu") == 0) opt.color_path = CliOptions::ColorPath::Cpu;
+    else {
+      std::fprintf(stderr, "ERROR: --color-path must be 'shader' or 'cpu'\n");
+      return false;
+    }
+  }
 
   // Colorspace fallback.  When a Main Packet carries S=1 we ignore these.
   bool range_full = true;
@@ -301,11 +318,141 @@ bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
   return dims_ok && out_w > 0 && out_h > 0;
 }
 
+// Shader-path twin of decode_to_rgb_buffer.  Runs invoke_line_based_stream
+// and writes each component's int32 samples into one of three 8-bit
+// planar buffers, shifting down to 8 bits per sample (the broadcast 10-bit
+// 4:2:2 source loses 2 LSBs — visually fine for SDR preview; HDR will
+// bump to R16 later).  All matrix math and range normalization moves to
+// the fragment shader, so the CPU side is just a cast + clamp + store.
+//
+// On success, `df` is populated with plane_y/plane_cb/plane_cr, width,
+// height, chroma_width, chroma_height, and kind (PLANAR_YCBCR or
+// PLANAR_RGB).  On failure returns false.
+bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool components_are_rgb,
+                              DecodedFrame& df) {
+  df.rgb.clear();
+  df.plane_y.clear();
+  df.plane_cb.clear();
+  df.plane_cr.clear();
+  df.width         = 0;
+  df.height        = 0;
+  df.chroma_width  = 0;
+  df.chroma_height = 0;
+  df.kind          = components_are_rgb ? DecodedFrame::PLANAR_RGB : DecodedFrame::PLANAR_YCBCR;
+
+  bool     dims_ok    = true;
+  uint32_t luma_w     = 0;
+  uint32_t luma_h     = 0;
+  uint32_t chroma_w_0 = 0;
+  uint32_t chroma_h_0 = 0;
+  uint8_t  depth_y    = 0;
+  uint8_t  depth_c    = 0;
+
+  try {
+    std::vector<uint32_t> widths;
+    std::vector<uint32_t> heights;
+    std::vector<uint8_t>  depths;
+    std::vector<bool>     signeds;
+    decoder.invoke_line_based_stream(
+        [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+          if (y == 0) {
+            if (nc < 1) {
+              dims_ok = false;
+              return;
+            }
+            luma_w  = widths[0];
+            luma_h  = heights[0];
+            depth_y = depths[0];
+            if (nc >= 3) {
+              chroma_w_0 = widths[1];
+              chroma_h_0 = heights[1];
+              depth_c    = depths[1];
+              // 3 planes assumed equal chroma dims (422 / 420 / 444).
+              if (widths.size() >= 3 && heights.size() >= 3) {
+                if (widths[2] != chroma_w_0 || heights[2] != chroma_h_0) {
+                  // Mismatched chroma planes (asymmetric subsampling).
+                  // v3 day one doesn't handle this; dims_ok stays true
+                  // but we force single-plane width/height so the
+                  // upload still produces something sane.
+                  chroma_w_0 = std::min(chroma_w_0, widths[2]);
+                  chroma_h_0 = std::min(chroma_h_0, heights[2]);
+                }
+              }
+            } else {
+              // Grayscale: replicate Y into Cb/Cr with neutral chroma.
+              chroma_w_0 = luma_w;
+              chroma_h_0 = luma_h;
+              depth_c    = depth_y;
+            }
+            df.width         = luma_w;
+            df.height        = luma_h;
+            df.chroma_width  = chroma_w_0;
+            df.chroma_height = chroma_h_0;
+            df.plane_y.assign(static_cast<size_t>(luma_w) * luma_h, 0);
+            df.plane_cb.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
+                               components_are_rgb ? 0 : 128);
+            df.plane_cr.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
+                               components_are_rgb ? 0 : 128);
+          }
+          if (!dims_ok) return;
+
+          const int32_t shift_y  = static_cast<int32_t>(depth_y) - 8;
+          const int32_t maxval_y = (1 << depth_y) - 1;
+
+          // Luma row — every call has a Y row at the current y.
+          {
+            uint8_t* out = df.plane_y.data() + static_cast<size_t>(y) * luma_w;
+            const int32_t* in = rows[0];
+            for (uint32_t x = 0; x < luma_w; ++x) {
+              int32_t v = in[x];
+              if (v < 0) v = 0;
+              if (v > maxval_y) v = maxval_y;
+              out[x] = static_cast<uint8_t>(shift_y > 0 ? (v >> shift_y) : v);
+            }
+          }
+
+          // Chroma (or G/B for PLANAR_RGB).  Written only for rows that
+          // land on the chroma grid.  For 4:2:2 the chroma height equals
+          // luma height and every luma row contributes.  For 4:2:0 the
+          // luma height is 2x chroma; rows[] pointers may be nullptr on
+          // the "skip" luma rows — guard with the callback nc check.
+          if (nc >= 3) {
+            const int32_t shift_c  = static_cast<int32_t>(depth_c) - 8;
+            const int32_t maxval_c = (1 << depth_c) - 1;
+            const uint32_t yc      = (luma_h > 0)
+                                         ? static_cast<uint32_t>(
+                                               static_cast<uint64_t>(y) * chroma_h_0 / luma_h)
+                                         : 0;
+            if (yc < chroma_h_0) {
+              auto store_chroma = [&](const int32_t* in, std::vector<uint8_t>& dst) {
+                uint8_t* out = dst.data() + static_cast<size_t>(yc) * chroma_w_0;
+                for (uint32_t x = 0; x < chroma_w_0; ++x) {
+                  int32_t v = in[x];
+                  if (v < 0) v = 0;
+                  if (v > maxval_c) v = maxval_c;
+                  out[x] = static_cast<uint8_t>(shift_c > 0 ? (v >> shift_c) : v);
+                }
+              };
+              if (rows[1] != nullptr) store_chroma(rows[1], df.plane_cb);
+              if (rows[2] != nullptr) store_chroma(rows[2], df.plane_cr);
+            }
+          }
+        },
+        widths, heights, depths, signeds);
+  } catch (std::exception& e) {
+    std::fprintf(stderr, "decoder.invoke_line_based_stream failed: %s\n", e.what());
+    return false;
+  }
+
+  return dims_ok && df.width > 0 && df.height > 0;
+}
+
 // v1 path: decode one reassembled HTJ2K codestream by constructing a fresh
 // openhtj2k_decoder, then upload to the renderer.  Used only when
 // --threading=off.  Returns true on success.
 bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, bool is_first_frame,
-                        GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer) {
+                        GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer,
+                        DecodedFrame& planar_scratch) {
   using namespace open_htj2k;
 
   openhtj2k_decoder decoder(frame.bytes.data(), frame.bytes.size(), /*reduce_NL=*/0,
@@ -322,16 +469,30 @@ bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, boo
   if (!select_coefficients_for_frame(frame, opts, coeffs, components_are_rgb)) return false;
   if (is_first_frame) log_coefficients_choice_once(opts, coeffs, components_are_rgb);
 
-  uint32_t out_w = 0;
-  uint32_t out_h = 0;
-  if (!decode_to_rgb_buffer(decoder, coeffs, components_are_rgb, rgb_backbuffer, out_w, out_h)) {
-    std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
-    return false;
-  }
-
-  if (renderer != nullptr) {
-    renderer->upload_and_draw(rgb_backbuffer.data(), static_cast<int>(out_w),
-                              static_cast<int>(out_h));
+  if (opts.color_path == CliOptions::ColorPath::Shader) {
+    if (!decode_to_planar_buffers(decoder, components_are_rgb, planar_scratch)) {
+      std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
+      return false;
+    }
+    if (renderer != nullptr) {
+      renderer->upload_planar_and_draw(
+          planar_scratch.plane_y.data(), planar_scratch.plane_cb.data(),
+          planar_scratch.plane_cr.data(), static_cast<int>(planar_scratch.width),
+          static_cast<int>(planar_scratch.height),
+          static_cast<int>(planar_scratch.chroma_width),
+          static_cast<int>(planar_scratch.chroma_height), coeffs, components_are_rgb);
+    }
+  } else {
+    uint32_t out_w = 0;
+    uint32_t out_h = 0;
+    if (!decode_to_rgb_buffer(decoder, coeffs, components_are_rgb, rgb_backbuffer, out_w, out_h)) {
+      std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
+      return false;
+    }
+    if (renderer != nullptr) {
+      renderer->upload_and_draw(rgb_backbuffer.data(), static_cast<int>(out_w),
+                                static_cast<int>(out_h));
+    }
   }
   return true;
 }
@@ -392,9 +553,20 @@ int run_receiver_single_threaded(const CliOptions& opts) {
     }
   }
 
+  // If the renderer failed to come up, force the CPU color path — nothing
+  // else needs the GL 3.3 shader machinery and we still want --no-render
+  // + --threading=off to work for diagnostics.
+  CliOptions opts_effective = opts;
+  if (renderer_ptr == nullptr && opts_effective.color_path == CliOptions::ColorPath::Shader) {
+    // Shader path is only meaningful with a live GL context.  Switch to
+    // the CPU path so the decode function still writes something.
+    opts_effective.color_path = CliOptions::ColorPath::Cpu;
+  }
+
   FrameHandler frame_handler;
   std::vector<uint8_t> packet_buf(65536);  // max UDP payload
   std::vector<uint8_t> rgb_backbuffer;
+  DecodedFrame         planar_scratch;
 
   uint64_t frames_decoded = 0;
   uint64_t frames_failed  = 0;
@@ -469,8 +641,9 @@ int run_receiver_single_threaded(const CliOptions& opts) {
           ++frames_attempted;
           const auto decode_start = Clock::now();
           const bool ok =
-              opts.decode
-                  ? decode_and_present(*emitted, opts, first_frame, renderer_ptr, rgb_backbuffer)
+              opts_effective.decode
+                  ? decode_and_present(*emitted, opts_effective, first_frame, renderer_ptr,
+                                       rgb_backbuffer, planar_scratch)
                   : true;  // --no-decode: count emitted frame as a success
           const auto decode_end = Clock::now();
           const double decode_ms =
@@ -687,15 +860,26 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
     }
 
     DecodedFrame df;
-    uint32_t     out_w = 0;
-    uint32_t     out_h = 0;
-    if (!decode_to_rgb_buffer(decoder, coeffs, components_are_rgb, df.rgb, out_w, out_h)) {
-      std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
-      st.frames_failed.fetch_add(1, std::memory_order_relaxed);
-      continue;
+    df.shader_coeffs      = coeffs;
+    df.components_are_rgb = components_are_rgb;
+    if (opts.color_path == CliOptions::ColorPath::Shader) {
+      if (!decode_to_planar_buffers(decoder, components_are_rgb, df)) {
+        std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
+        st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+        continue;
+      }
+    } else {
+      uint32_t out_w = 0;
+      uint32_t out_h = 0;
+      if (!decode_to_rgb_buffer(decoder, coeffs, components_are_rgb, df.rgb, out_w, out_h)) {
+        std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
+        st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+        continue;
+      }
+      df.width  = out_w;
+      df.height = out_h;
+      df.kind   = DecodedFrame::CPU_RGB;
     }
-    df.width  = out_w;
-    df.height = out_h;
 
     const auto     t1     = Clock::now();
     const uint64_t us     = static_cast<uint64_t>(
@@ -770,15 +954,24 @@ int run_receiver_threaded(const CliOptions& opts) {
     }
   }
 
+  // With no live GL 3.3 context the shader path would produce nothing
+  // useful, so force the CPU color path for headless and v1-fallback
+  // runs.  This keeps --no-render and GL-incompatible environments
+  // functional through the same CLI.
+  CliOptions opts_effective = opts;
+  if (renderer_ptr == nullptr && opts_effective.color_path == CliOptions::ColorPath::Shader) {
+    opts_effective.color_path = CliOptions::ColorPath::Cpu;
+  }
+
   FrameHandler  frame_handler;
   ReceiverState state;
 
   using Clock         = std::chrono::steady_clock;
   const auto run_start_tp = Clock::now();
 
-  std::thread recv_thread(recv_thread_main, std::cref(opts), std::ref(sock),
+  std::thread recv_thread(recv_thread_main, std::cref(opts_effective), std::ref(sock),
                           std::ref(frame_handler), std::ref(state));
-  std::thread decode_thread(decode_thread_main, std::cref(opts), std::ref(state));
+  std::thread decode_thread(decode_thread_main, std::cref(opts_effective), std::ref(state));
 
   // Main loop: GLFW events + render slot polling + periodic FPS log.
   uint64_t last_log_decoded = 0;
@@ -796,8 +989,16 @@ int run_receiver_threaded(const CliOptions& opts) {
 
     auto df = state.render_slot.try_pop();
     if (df.has_value() && renderer_ptr) {
-      renderer_ptr->upload_and_draw(df->rgb.data(), static_cast<int>(df->width),
-                                    static_cast<int>(df->height));
+      if (df->kind == DecodedFrame::CPU_RGB) {
+        renderer_ptr->upload_and_draw(df->rgb.data(), static_cast<int>(df->width),
+                                      static_cast<int>(df->height));
+      } else {
+        renderer_ptr->upload_planar_and_draw(
+            df->plane_y.data(), df->plane_cb.data(), df->plane_cr.data(),
+            static_cast<int>(df->width), static_cast<int>(df->height),
+            static_cast<int>(df->chroma_width), static_cast<int>(df->chroma_height),
+            df->shader_coeffs, df->components_are_rgb);
+      }
     } else if (!df.has_value()) {
       // Nothing to draw; brief sleep to avoid spinning while the decode
       // thread is busy.  Vsync would be doing this for us in --render
