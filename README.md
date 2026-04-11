@@ -36,7 +36,7 @@ OpenHTJ2K provides a shared library and sample applications with the following f
 **Live streaming (experimental)**
 - RFC 9828 RTP receiver (`open_htj2k_rtp_recv`) for live HTJ2K video over UDP
 - Three-thread pipeline (receive / decode / render) with an RTP-timestamp frame pacer
-- Two color-conversion paths: GL 3.3 core fragment shader (default) or AVX2 CPU fallback; sustains 4K @ 30 fps on modern x86-64
+- Two color-conversion paths: GL 3.3 core fragment shader (default) or AVX2 CPU fallback; sustains **4K @ 60 fps** on modern x86-64 with `--threads 2`
 - Opt-in via `-DOPENHTJ2K_RTP=ON` (adds a dependency on GLFW + OpenGL)
 
 # Requirements
@@ -259,24 +259,40 @@ To persist across reboots:
 echo 'net.core.rmem_max = 33554432' | sudo tee /etc/sysctl.d/99-openhtj2k-rtp.conf
 ```
 
-### Hardware requirements (4K @ 30 fps sustained)
+### Hardware requirements (4K @ 60 fps sustained)
+Measured on the `feat/v4-perf-pr` branch against a 4K 4:2:2 1.7-bpp
+broadcast HT fixture at `--threads 2` on an AMD Ryzen 9 9950X running
+Linux. Reproduce with the offline profiler at
+`source/apps/rtp_recv/tools/rtp_decode_profile.cpp` (built as
+`open_htj2k_rtp_decode_profile` when `-DOPENHTJ2K_RTP=ON`). Higher-bitrate
+streams, 4:4:4 chroma, or deeper bit depths will not hit the same numbers.
+
 - **CPU**: recent high-end x86-64 with AVX2. HTJ2K decode is bounded by
   per-thread throughput — `--threads 2` (the default) saturates HT
   intra-frame parallelism on 4K, so single-thread speed matters more
-  than core count. Mid-range or older parts are unlikely to sustain
-  30 fps at 4K; non-AVX2 CPUs additionally fall back to the scalar
-  YCbCr path.
+  than core count. The dev-box profiler peaks at ~80 fps on the above
+  fixture; the live `open_htj2k_rtp_recv --no-vsync` pipeline locks to
+  the source cadence at 60 fps with zero decode-slot evictions and
+  ~13 ms average decode time, leaving ~3.5 ms of p99 headroom inside
+  the 16.67 ms frame budget. Mid-range or older parts are unlikely to
+  sustain 60 fps at 4K; non-AVX2 CPUs additionally fall back to the
+  scalar YCbCr path and will not reach real-time.
 - **GPU** (default `--color-path shader`): any integrated or discrete
   GPU with OpenGL 3.3 core. A modern IGP is ample; the YCbCr fragment
   shader is trivial.
 - **Headless / no-GPU**: `--color-path cpu` uses the AVX2 color path
-  and sustains 30 fps at 4K on the same CPU class. Auto-selected when
-  GL 3.3 context creation fails, so the same binary runs on headless
-  servers and in containers without X/Wayland.
-- **Network**: LAN bandwidth for ~50 MB/s (broadcast 4K 4:2:2 HT at
-  ~1.7 bpp, 30 fps); raise `net.core.rmem_max` as above.
-- **Display**: 60 Hz pairs cleanly with `--pace-fps 30`. Other source
-  rates need `--pace-fps` set accordingly.
+  on the same CPU class. Note that `--color-path cpu` does the full
+  YCbCr→RGB matrix on the CPU (a different and heavier hot path than
+  the shader path), so its ceiling is lower than the shader path's;
+  it is auto-selected when GL 3.3 context creation fails so the same
+  binary runs on headless servers and in containers without X/Wayland.
+- **Network**: LAN bandwidth for ~100 MB/s (broadcast 4K 4:2:2 HT at
+  ~1.7 bpp, 60 fps); raise `net.core.rmem_max` as above.
+- **Display**: with a 60 fps source and a 60 Hz display, the RTP-timestamp
+  pacer naturally lands one present per vblank under `--no-vsync`.
+  For 30 fps sources on a 60 Hz display, set `--pace-fps 30`. Other
+  source rates need `--pace-fps` set accordingly (or `0` to rely
+  purely on the RTP-timestamp pacer).
 
 ### Known issues
 - **NVIDIA + Mutter + Wayland + vsync**: `glfwSwapInterval(1)` in
