@@ -17,8 +17,14 @@
 // any required symbol is missing (the caller should log and fall back to
 // the CPU RGB path, which is what GL-incompatible environments will use).
 
-#include <GL/gl.h>
-#include <GL/glext.h>
+#if defined(__APPLE__)
+#  define GL_SILENCE_DEPRECATION
+#  include <OpenGL/gl3.h>
+#  include <OpenGL/gl3ext.h>
+#else
+#  include <GL/gl.h>
+#  include <GL/glext.h>
+#endif
 
 namespace open_htj2k::rtp_recv::gl {
 
