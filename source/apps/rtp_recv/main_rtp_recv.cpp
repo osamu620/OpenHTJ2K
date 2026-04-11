@@ -408,10 +408,14 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
   df.plane_y.clear();
   df.plane_cb.clear();
   df.plane_cr.clear();
+  df.plane_y_16.clear();
+  df.plane_cb_16.clear();
+  df.plane_cr_16.clear();
   df.width         = 0;
   df.height        = 0;
   df.chroma_width  = 0;
   df.chroma_height = 0;
+  df.bit_depth     = 0;
   df.kind          = components_are_rgb ? DecodedFrame::PLANAR_RGB : DecodedFrame::PLANAR_YCBCR;
 
   bool     dims_ok    = true;
@@ -421,6 +425,7 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
   uint32_t chroma_h_0 = 0;
   uint8_t  depth_y    = 0;
   uint8_t  depth_c    = 0;
+  bool     use_16     = false;  // true when depth_y > 8 -> take the GL_R16 path
 
   try {
     std::vector<uint32_t> widths;
@@ -462,43 +467,80 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
             df.height        = luma_h;
             df.chroma_width  = chroma_w_0;
             df.chroma_height = chroma_h_0;
-            df.plane_y.assign(static_cast<size_t>(luma_w) * luma_h, 0);
-            df.plane_cb.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
-                               components_are_rgb ? 0 : 128);
-            df.plane_cr.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
-                               components_are_rgb ? 0 : 128);
+            df.bit_depth     = depth_y;
+            use_16           = (depth_y > 8);
+            if (use_16) {
+              // 16-bit plane path.  Neutral chroma in the u16 space is the
+              // midpoint of the source's [0, (1<<depth)-1] range.
+              const uint16_t neutral_c = components_are_rgb
+                                             ? 0
+                                             : static_cast<uint16_t>(1u << (depth_c - 1));
+              df.plane_y_16.assign(static_cast<size_t>(luma_w) * luma_h, 0);
+              df.plane_cb_16.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0, neutral_c);
+              df.plane_cr_16.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0, neutral_c);
+            } else {
+              df.plane_y.assign(static_cast<size_t>(luma_w) * luma_h, 0);
+              df.plane_cb.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
+                                 components_are_rgb ? 0 : 128);
+              df.plane_cr.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
+                                 components_are_rgb ? 0 : 128);
+            }
           }
           if (!dims_ok) return;
 
-          const int32_t shift_y  = static_cast<int32_t>(depth_y) - 8;
           const int32_t maxval_y = (1 << depth_y) - 1;
 
-          // Luma row — every call has a Y row at the current y.
-          shift_i32_plane_to_u8(rows[0], df.plane_y.data() + static_cast<size_t>(y) * luma_w,
-                                luma_w, shift_y, maxval_y);
+          // Luma row -- every call has a Y row at the current y.
+          if (use_16) {
+            clamp_i32_plane_to_u16(
+                rows[0], df.plane_y_16.data() + static_cast<size_t>(y) * luma_w, luma_w,
+                maxval_y);
+          } else {
+            const int32_t shift_y = static_cast<int32_t>(depth_y) - 8;
+            shift_i32_plane_to_u8(rows[0],
+                                  df.plane_y.data() + static_cast<size_t>(y) * luma_w,
+                                  luma_w, shift_y, maxval_y);
+          }
 
           // Chroma (or G/B for PLANAR_RGB).  Written only for rows that
           // land on the chroma grid.  For 4:2:2 the chroma height equals
           // luma height and every luma row contributes.  For 4:2:0 the
           // luma height is 2x chroma; rows[] pointers may be nullptr on
-          // the "skip" luma rows — guard with the callback nc check.
+          // the "skip" luma rows -- guard with the callback nc check.
           if (nc >= 3) {
-            const int32_t shift_c  = static_cast<int32_t>(depth_c) - 8;
             const int32_t maxval_c = (1 << depth_c) - 1;
             const uint32_t yc      = (luma_h > 0)
                                          ? static_cast<uint32_t>(
                                                static_cast<uint64_t>(y) * chroma_h_0 / luma_h)
                                          : 0;
             if (yc < chroma_h_0) {
-              if (rows[1] != nullptr) {
-                shift_i32_plane_to_u8(rows[1],
-                                      df.plane_cb.data() + static_cast<size_t>(yc) * chroma_w_0,
-                                      chroma_w_0, shift_c, maxval_c);
-              }
-              if (rows[2] != nullptr) {
-                shift_i32_plane_to_u8(rows[2],
-                                      df.plane_cr.data() + static_cast<size_t>(yc) * chroma_w_0,
-                                      chroma_w_0, shift_c, maxval_c);
+              if (use_16) {
+                if (rows[1] != nullptr) {
+                  clamp_i32_plane_to_u16(
+                      rows[1],
+                      df.plane_cb_16.data() + static_cast<size_t>(yc) * chroma_w_0,
+                      chroma_w_0, maxval_c);
+                }
+                if (rows[2] != nullptr) {
+                  clamp_i32_plane_to_u16(
+                      rows[2],
+                      df.plane_cr_16.data() + static_cast<size_t>(yc) * chroma_w_0,
+                      chroma_w_0, maxval_c);
+                }
+              } else {
+                const int32_t shift_c = static_cast<int32_t>(depth_c) - 8;
+                if (rows[1] != nullptr) {
+                  shift_i32_plane_to_u8(
+                      rows[1],
+                      df.plane_cb.data() + static_cast<size_t>(yc) * chroma_w_0,
+                      chroma_w_0, shift_c, maxval_c);
+                }
+                if (rows[2] != nullptr) {
+                  shift_i32_plane_to_u8(
+                      rows[2],
+                      df.plane_cr.data() + static_cast<size_t>(yc) * chroma_w_0,
+                      chroma_w_0, shift_c, maxval_c);
+                }
               }
             }
           }
@@ -540,12 +582,22 @@ bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, boo
       return false;
     }
     if (renderer != nullptr) {
-      renderer->upload_planar_and_draw(
-          planar_scratch.plane_y.data(), planar_scratch.plane_cb.data(),
-          planar_scratch.plane_cr.data(), static_cast<int>(planar_scratch.width),
-          static_cast<int>(planar_scratch.height),
-          static_cast<int>(planar_scratch.chroma_width),
-          static_cast<int>(planar_scratch.chroma_height), coeffs, components_are_rgb);
+      if (planar_scratch.bit_depth > 8) {
+        renderer->upload_planar_16_and_draw(
+            planar_scratch.plane_y_16.data(), planar_scratch.plane_cb_16.data(),
+            planar_scratch.plane_cr_16.data(), static_cast<int>(planar_scratch.width),
+            static_cast<int>(planar_scratch.height),
+            static_cast<int>(planar_scratch.chroma_width),
+            static_cast<int>(planar_scratch.chroma_height),
+            static_cast<int>(planar_scratch.bit_depth), coeffs, components_are_rgb);
+      } else {
+        renderer->upload_planar_and_draw(
+            planar_scratch.plane_y.data(), planar_scratch.plane_cb.data(),
+            planar_scratch.plane_cr.data(), static_cast<int>(planar_scratch.width),
+            static_cast<int>(planar_scratch.height),
+            static_cast<int>(planar_scratch.chroma_width),
+            static_cast<int>(planar_scratch.chroma_height), coeffs, components_are_rgb);
+      }
     }
   } else {
     uint32_t out_w = 0;
@@ -1141,6 +1193,13 @@ int run_receiver_threaded(const CliOptions& opts) {
       if (df->kind == DecodedFrame::CPU_RGB) {
         renderer_ptr->upload_and_draw(df->rgb.data(), static_cast<int>(df->width),
                                       static_cast<int>(df->height));
+      } else if (df->bit_depth > 8) {
+        renderer_ptr->upload_planar_16_and_draw(
+            df->plane_y_16.data(), df->plane_cb_16.data(), df->plane_cr_16.data(),
+            static_cast<int>(df->width), static_cast<int>(df->height),
+            static_cast<int>(df->chroma_width), static_cast<int>(df->chroma_height),
+            static_cast<int>(df->bit_depth), df->shader_coeffs,
+            df->components_are_rgb);
       } else {
         renderer_ptr->upload_planar_and_draw(
             df->plane_y.data(), df->plane_cb.data(), df->plane_cr.data(),

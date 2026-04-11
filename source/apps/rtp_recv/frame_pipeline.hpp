@@ -120,14 +120,22 @@ class LatestSlot {
 //   - CPU_RGB: the decode worker ran YCbCr→RGB on the CPU and filled
 //     `rgb` with width*height*3 interleaved bytes.  Used by the
 //     --color-path=cpu fallback and by GL-incompatible environments.
-//   - PLANAR_YCBCR / PLANAR_RGB: the decode worker only shifted samples
-//     to 8-bit per plane and filled `plane_y/cb/cr`.  Luma dims are in
-//     `width/height`; chroma dims in `chroma_width/chroma_height`
-//     (which equal the luma dims for 4:4:4 / PLANAR_RGB).  The GPU
-//     shader applies the YCbCr→RGB matrix in the fragment stage.
+//   - PLANAR_YCBCR / PLANAR_RGB: the decode worker wrote per-plane
+//     samples into either the 8-bit or 16-bit plane vectors,
+//     selected by `bit_depth`.  Luma dims are in `width/height`;
+//     chroma dims in `chroma_width/chroma_height` (which equal the
+//     luma dims for 4:4:4 / PLANAR_RGB).  The GPU shader applies
+//     the YCbCr→RGB matrix in the fragment stage.
 //
-// `rgb` is left empty in the planar shapes and vice versa, so
-// std::move-ing a DecodedFrame does not copy unused buffers.
+//     - bit_depth == 8: `plane_y/cb/cr` hold uint8_t samples, the
+//       `_16` vectors are empty.  Uploaded as GL_R8 by the renderer.
+//     - bit_depth >  8: `plane_y_16/cb_16/cr_16` hold uint16_t samples
+//       (clamp-only, NOT shifted to 8-bit), the u8 vectors are empty.
+//       Uploaded as GL_R16 by the renderer.  The fragment shader
+//       renormalizes via uNormScale before bias/scale.
+//
+// The u8 and u16 vector sets are mutually exclusive per frame, so
+// std::move-ing a DecodedFrame only moves whichever set is populated.
 struct DecodedFrame {
   enum Kind : uint8_t {
     CPU_RGB      = 0,
@@ -135,14 +143,18 @@ struct DecodedFrame {
     PLANAR_RGB   = 2,
   };
 
-  std::vector<uint8_t>      rgb;       // CPU_RGB: width * height * 3 bytes
-  std::vector<uint8_t>      plane_y;   // PLANAR_*: width * height bytes
-  std::vector<uint8_t>      plane_cb;  // PLANAR_*: chroma_width * chroma_height bytes
-  std::vector<uint8_t>      plane_cr;  // PLANAR_*: chroma_width * chroma_height bytes
+  std::vector<uint8_t>      rgb;          // CPU_RGB: width * height * 3 bytes
+  std::vector<uint8_t>      plane_y;      // PLANAR_*, 8-bit source: width * height bytes
+  std::vector<uint8_t>      plane_cb;     // PLANAR_*, 8-bit source
+  std::vector<uint8_t>      plane_cr;     // PLANAR_*, 8-bit source
+  std::vector<uint16_t>     plane_y_16;   // PLANAR_*, >8-bit source: width * height shorts
+  std::vector<uint16_t>     plane_cb_16;  // PLANAR_*, >8-bit source
+  std::vector<uint16_t>     plane_cr_16;  // PLANAR_*, >8-bit source
   uint32_t                  width         = 0;  // luma width
   uint32_t                  height        = 0;  // luma height
   uint32_t                  chroma_width  = 0;  // 0 in CPU_RGB
   uint32_t                  chroma_height = 0;  // 0 in CPU_RGB
+  uint8_t                   bit_depth     = 8;  // luma bit depth; 0 in CPU_RGB
   Kind                      kind          = CPU_RGB;
   // For PLANAR_YCBCR: points at one of the static-const YCBCR_* constants
   // in ycbcr_rgb.hpp (BT601/709 × full/narrow).  Never owns.  Null in

@@ -7,20 +7,22 @@
 
 // GLFW + OpenGL 3.3 core renderer for the RFC 9828 receiver.
 //
-// Two draw paths share one GL context, one VAO, and the same vertex shader:
+// Three draw paths share one GL context, one VAO, and the same vertex shader:
 //
-//   - upload_and_draw(rgb, w, h)               → RGB8 texture + passthrough
-//                                                fragment shader.  Used by
-//                                                the CPU fallback path
-//                                                (decode_to_rgb_buffer) for
-//                                                headless / GL-limited envs.
-//   - upload_planar_and_draw(y, cb, cr, ...)  → three R8 textures + YCbCr
-//                                                matrix fragment shader.
-//                                                Used by the default shader
-//                                                path so the CPU only shifts
-//                                                samples to 8-bit and the
-//                                                color conversion happens on
-//                                                the GPU.
+//   - upload_and_draw(rgb, w, h)                     → RGB8 texture +
+//     passthrough fragment shader.  Used by the CPU fallback path
+//     (decode_to_rgb_buffer) for headless / GL-limited envs.
+//   - upload_planar_and_draw(y, cb, cr, ...)        → three R8 textures +
+//     YCbCr matrix fragment shader.  Used by the shader color path when the
+//     source is 8-bit.  CPU does a clamp+shift to u8 before upload.
+//   - upload_planar_16_and_draw(y16, cb16, cr16,    → three R16 textures +
+//     ..., bit_depth)                                 the same fragment
+//     shader.  Used when the source is 10/12/16-bit so the LSBs survive
+//     the CPU -> GPU hop.  CPU does a clamp-only pack to u16; the fragment
+//     shader renormalizes via a uNormScale uniform set from bit_depth so the
+//     bias/scale/matrix math runs in normalized [0, 1] regardless of
+//     source depth.  GL_R16 is unsigned-normalized so GL_LINEAR chroma
+//     upsampling still works (GL_R16UI would need nearest+manual bilinear).
 //
 // init() tries to create a GL 3.3 core context.  Returns false if glfwInit
 // or context creation fails; the caller should log and fall back to
@@ -64,22 +66,52 @@ class GlRenderer {
   // call.  Does NOT own the pixel buffer.
   void upload_and_draw(const uint8_t* rgb, int w, int h);
 
-  // Shader path: upload three 8-bit planar samples (Y and two chroma
-  // planes, already right-shifted to 8 bits on the CPU side) and draw
-  // them through the YCbCr→RGB fragment shader.  Cb/Cr widths/heights
-  // may be smaller than luma for 4:2:2 / 4:2:0; GL_LINEAR + clamp-to-
-  // edge handles the chroma upsample.  `coeffs` selects BT.601/709 and
-  // full/narrow range; the matrix + normalization bias/scale are baked
-  // into shader uniforms on each call.  `components_are_rgb` skips the
-  // matrix entirely and treats the three planes as R/G/B.
+  // Shader path, 8-bit source: upload three 8-bit planar samples (Y and
+  // two chroma planes, already right-shifted to 8 bits on the CPU side)
+  // and draw them through the YCbCr->RGB fragment shader.  Cb/Cr widths/
+  // heights may be smaller than luma for 4:2:2 / 4:2:0; GL_LINEAR +
+  // clamp-to-edge handles the chroma upsample.  `coeffs` selects
+  // BT.601/709 and full/narrow range; the matrix + normalization bias/
+  // scale are baked into shader uniforms on each call.
+  // `components_are_rgb` skips the matrix entirely and treats the three
+  // planes as R/G/B.
   void upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* cb_plane,
                               const uint8_t* cr_plane, int w_y, int h_y, int w_c, int h_c,
                               const ycbcr_coefficients* coeffs, bool components_are_rgb);
 
+  // Shader path, >8-bit source: upload three 16-bit planar samples
+  // (unsigned, clamped to [0, (1<<bit_depth)-1], NOT right-shifted) into
+  // three GL_R16 textures and draw them through the same YCbCr->RGB
+  // fragment shader.  The shader samples each texture as a [0, 1]
+  // normalized value and then multiplies by a uNormScale of
+  // (65535 / ((1<<bit_depth)-1)) so the sample renormalizes to [0, 1]
+  // in the source's native scale before bias/scale/matrix math runs.
+  // `bit_depth` is the source luma depth (9..16); for chroma planes at a
+  // different depth, pass the luma depth and rely on the streams we've
+  // encountered which are always same-depth across planes.  The LSBs
+  // the 8-bit path would have truncated are preserved through to the
+  // fragment stage, which is the foundational slice for HDR.
+  void upload_planar_16_and_draw(const uint16_t* y_plane, const uint16_t* cb_plane,
+                                 const uint16_t* cr_plane, int w_y, int h_y, int w_c, int h_c,
+                                 int bit_depth, const ycbcr_coefficients* coeffs,
+                                 bool components_are_rgb);
+
  private:
   bool compile_shader_programs();
   bool ensure_rgb_texture(int w, int h);
-  bool ensure_planar_textures(int w_y, int h_y, int w_c, int h_c);
+  // Allocate/resize three planar textures.  `bpp` is 1 for GL_R8 or 2 for
+  // GL_R16; swapping bpp across frames forces a fresh `glTexImage2D`
+  // allocation on each texture (not just `glTexSubImage2D`).  Each
+  // texture caches its own (w, h, bpp) so swapping one bit depth doesn't
+  // silently skip reallocation on the others (same class of bug that
+  // bit us when Cb/Cr shared (w, h) tracking in the initial draft).
+  bool ensure_planar_textures(int w_y, int h_y, int w_c, int h_c, int bpp);
+  // Shared tail of upload_planar_and_draw / upload_planar_16_and_draw:
+  // binds the three planar textures to the YCbCr program, sets the matrix
+  // + bias/scale + uNormScale uniforms, draws the fullscreen triangle
+  // strip, and swaps buffers.  `norm_scale` is a pointer to three floats.
+  void draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* coeffs,
+                          bool components_are_rgb, const float* norm_scale);
   void draw_fullscreen_quad(int fb_w, int fb_h, int content_w, int content_h);
   // Drains the GL error queue and logs each non-zero code with the
   // given context label.  Called only at allocation / program-link
@@ -110,17 +142,25 @@ class GlRenderer {
   int          u_yc_matrix_      = -1;
   int          u_yc_bias_        = -1;
   int          u_yc_scale_       = -1;
+  int          u_yc_norm_scale_  = -1;  // per-plane renormalization factor (1.0 for R8)
   int          u_yc_rgb_mode_    = -1;  // int: 0=ycbcr, 1=passthrough RGB components
   int          u_yc_viewport_    = -1;
   unsigned int tex_y_            = 0;
   unsigned int tex_cb_           = 0;
   unsigned int tex_cr_           = 0;
+  // Per-texture (width, height, bytes-per-pixel) so we can detect resize or
+  // format swaps on any of the three planes independently.  Sharing any of
+  // these across textures is a bug class -- see the comment above
+  // ensure_planar_textures in gl_renderer.cpp.
   int          tex_y_w_          = 0;
   int          tex_y_h_          = 0;
+  int          tex_y_bpp_        = 0;
   int          tex_cb_w_         = 0;
   int          tex_cb_h_         = 0;
+  int          tex_cb_bpp_       = 0;
   int          tex_cr_w_         = 0;
   int          tex_cr_h_         = 0;
+  int          tex_cr_bpp_       = 0;
 };
 
 }  // namespace open_htj2k::rtp_recv

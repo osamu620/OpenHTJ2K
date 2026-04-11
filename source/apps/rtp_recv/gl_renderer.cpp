@@ -66,20 +66,26 @@ out vec4 fragColor;
 uniform sampler2D uY;
 uniform sampler2D uCb;
 uniform sampler2D uCr;
-uniform mat3      uMatrix;   // rgb = uMatrix * ((sample - uBias) * uScale)
-uniform vec3      uBias;     // per-plane bias in [0,1] (texture-normalized)
-uniform vec3      uScale;    // per-plane scale after bias subtraction
-uniform int       uRgbMode;  // 0 = YCbCr → RGB, 1 = treat planes as R/G/B
+uniform mat3      uMatrix;     // rgb = uMatrix * ((n - uBias) * uScale)
+uniform vec3      uBias;       // per-plane bias in [0,1] after renormalization
+uniform vec3      uScale;      // per-plane scale after bias subtraction
+uniform vec3      uNormScale;  // per-plane renorm factor (1.0 for R8,
+                               // 65535/((1<<depth)-1) for R16 with >8-bit src)
+uniform int       uRgbMode;    // 0 = YCbCr -> RGB, 1 = treat planes as R/G/B
 void main() {
   vec3 s;
   s.x = texture(uY,  vTexCoord).r;
   s.y = texture(uCb, vTexCoord).r;
   s.z = texture(uCr, vTexCoord).r;
+  // For R8 textures uNormScale is (1,1,1) and this is a no-op; for R16
+  // textures uNormScale restores the source's native [0,1] range before
+  // bias/scale math runs, so the rest of the shader is depth-agnostic.
+  vec3 n = s * uNormScale;
   vec3 rgb;
   if (uRgbMode == 1) {
-    rgb = s;
+    rgb = n;
   } else {
-    rgb = uMatrix * ((s - uBias) * uScale);
+    rgb = uMatrix * ((n - uBias) * uScale);
   }
   fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }
@@ -214,14 +220,15 @@ bool GlRenderer::compile_shader_programs() {
     prog_rgb_ = 0;
     return false;
   }
-  prog_ycbcr_     = prog_yc;
-  u_yc_y_tex_     = gl::GetUniformLocation(prog_ycbcr_, "uY");
-  u_yc_cb_tex_    = gl::GetUniformLocation(prog_ycbcr_, "uCb");
-  u_yc_cr_tex_    = gl::GetUniformLocation(prog_ycbcr_, "uCr");
-  u_yc_matrix_    = gl::GetUniformLocation(prog_ycbcr_, "uMatrix");
-  u_yc_bias_      = gl::GetUniformLocation(prog_ycbcr_, "uBias");
-  u_yc_scale_     = gl::GetUniformLocation(prog_ycbcr_, "uScale");
-  u_yc_rgb_mode_  = gl::GetUniformLocation(prog_ycbcr_, "uRgbMode");
+  prog_ycbcr_      = prog_yc;
+  u_yc_y_tex_      = gl::GetUniformLocation(prog_ycbcr_, "uY");
+  u_yc_cb_tex_     = gl::GetUniformLocation(prog_ycbcr_, "uCb");
+  u_yc_cr_tex_     = gl::GetUniformLocation(prog_ycbcr_, "uCr");
+  u_yc_matrix_     = gl::GetUniformLocation(prog_ycbcr_, "uMatrix");
+  u_yc_bias_       = gl::GetUniformLocation(prog_ycbcr_, "uBias");
+  u_yc_scale_      = gl::GetUniformLocation(prog_ycbcr_, "uScale");
+  u_yc_norm_scale_ = gl::GetUniformLocation(prog_ycbcr_, "uNormScale");
+  u_yc_rgb_mode_   = gl::GetUniformLocation(prog_ycbcr_, "uRgbMode");
 
   // Drain any residual error state from the compile/link sync point so
   // later per-frame glGetError checks (if added) don't see ghosts.
@@ -273,14 +280,17 @@ void GlRenderer::shutdown() {
     window_ = nullptr;
     glfwTerminate();
   }
-  tex_rgb_w_ = 0;
-  tex_rgb_h_ = 0;
-  tex_y_w_   = 0;
-  tex_y_h_   = 0;
-  tex_cb_w_  = 0;
-  tex_cb_h_  = 0;
-  tex_cr_w_  = 0;
-  tex_cr_h_  = 0;
+  tex_rgb_w_  = 0;
+  tex_rgb_h_  = 0;
+  tex_y_w_    = 0;
+  tex_y_h_    = 0;
+  tex_y_bpp_  = 0;
+  tex_cb_w_   = 0;
+  tex_cb_h_   = 0;
+  tex_cb_bpp_ = 0;
+  tex_cr_w_   = 0;
+  tex_cr_h_   = 0;
+  tex_cr_bpp_ = 0;
 }
 
 bool GlRenderer::check_gl_error(const char* context) const {
@@ -329,16 +339,21 @@ bool GlRenderer::ensure_rgb_texture(int w, int h) {
   return true;
 }
 
-bool GlRenderer::ensure_planar_textures(int w_y, int h_y, int w_c, int h_c) {
+bool GlRenderer::ensure_planar_textures(int w_y, int h_y, int w_c, int h_c, int bpp) {
   // A freshly-created texture has no backing store, so the glTexImage2D
   // step must run even when the cached (cur_w, cur_h) already match the
   // requested size.  The earlier version of this function shared Cb/Cr
   // tracking variables, which caused the Cr texture to skip allocation
   // on the first frame (Cb allocation updated the shared counters) and
   // the shader then sampled an incomplete texture — usually reading as
-  // all zeros, producing a strongly red-shifted output.
-  auto ensure_one = [this](const char* label, GLuint& tex, int& cur_w, int& cur_h,
-                           int w, int h) -> bool {
+  // all zeros, producing a strongly red-shifted output.  Each texture
+  // now owns its (w, h, bpp) triple so a depth swap on one plane cannot
+  // silently skip reallocation on the others either.
+  const GLint       internal = (bpp == 2) ? GL_R16 : GL_R8;
+  const GLenum      type     = (bpp == 2) ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
+  const char*       label_bpp = (bpp == 2) ? "R16" : "R8";
+  auto ensure_one = [&](const char* label, GLuint& tex, int& cur_w, int& cur_h,
+                        int& cur_bpp, int w, int h) -> bool {
     const bool fresh = (tex == 0);
     if (fresh) {
       glGenTextures(1, &tex);
@@ -356,18 +371,25 @@ bool GlRenderer::ensure_planar_textures(int w_y, int h_y, int w_c, int h_c) {
     } else {
       glBindTexture(GL_TEXTURE_2D, tex);
     }
-    if (fresh || w != cur_w || h != cur_h) {
-      glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-      if (!check_gl_error("glTexImage2D(planar initial alloc)")) return false;
-      cur_w = w;
-      cur_h = h;
+    if (fresh || w != cur_w || h != cur_h || bpp != cur_bpp) {
+      // GL_UNPACK_ALIGNMENT matters for row padding: R8 rows are 1-byte
+      // aligned, R16 rows are naturally 2-byte aligned.
+      glPixelStorei(GL_UNPACK_ALIGNMENT, bpp);
+      glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0, GL_RED, type, nullptr);
+      if (!check_gl_error("glTexImage2D(planar initial alloc)")) {
+        std::fprintf(stderr, "gl_renderer: ensure_planar_textures(%s, %s) alloc failed\n",
+                     label, label_bpp);
+        return false;
+      }
+      cur_w   = w;
+      cur_h   = h;
+      cur_bpp = bpp;
     }
     return true;
   };
-  if (!ensure_one("Y",  tex_y_,  tex_y_w_,  tex_y_h_,  w_y, h_y)) return false;
-  if (!ensure_one("Cb", tex_cb_, tex_cb_w_, tex_cb_h_, w_c, h_c)) return false;
-  if (!ensure_one("Cr", tex_cr_, tex_cr_w_, tex_cr_h_, w_c, h_c)) return false;
+  if (!ensure_one("Y",  tex_y_,  tex_y_w_,  tex_y_h_,  tex_y_bpp_,  w_y, h_y)) return false;
+  if (!ensure_one("Cb", tex_cb_, tex_cb_w_, tex_cb_h_, tex_cb_bpp_, w_c, h_c)) return false;
+  if (!ensure_one("Cr", tex_cr_, tex_cr_w_, tex_cr_h_, tex_cr_bpp_, w_c, h_c)) return false;
   return true;
 }
 
@@ -424,7 +446,7 @@ void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* c
                                         bool components_are_rgb) {
   if (!window_ || w_y <= 0 || h_y <= 0 || w_c <= 0 || h_c <= 0) return;
 
-  ensure_planar_textures(w_y, h_y, w_c, h_c);
+  if (!ensure_planar_textures(w_y, h_y, w_c, h_c, /*bpp=*/1)) return;
 
   // Upload Y.
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -437,6 +459,42 @@ void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* c
   glBindTexture(GL_TEXTURE_2D, tex_cr_);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, GL_UNSIGNED_BYTE, cr_plane);
 
+  // 8-bit source: the texture value already lives in the sample's native
+  // [0, 1] range, so uNormScale is the identity.
+  const float norm_scale[3] = {1.0f, 1.0f, 1.0f};
+  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale);
+}
+
+void GlRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uint16_t* cb_plane,
+                                           const uint16_t* cr_plane, int w_y, int h_y,
+                                           int w_c, int h_c, int bit_depth,
+                                           const ycbcr_coefficients* coeffs,
+                                           bool components_are_rgb) {
+  if (!window_ || w_y <= 0 || h_y <= 0 || w_c <= 0 || h_c <= 0) return;
+  if (bit_depth < 9 || bit_depth > 16) return;  // caller routes 8-bit to the u8 path
+
+  if (!ensure_planar_textures(w_y, h_y, w_c, h_c, /*bpp=*/2)) return;
+
+  // R16 row pitch is 2-byte aligned.
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+  glBindTexture(GL_TEXTURE_2D, tex_y_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, GL_UNSIGNED_SHORT, y_plane);
+  glBindTexture(GL_TEXTURE_2D, tex_cb_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, GL_UNSIGNED_SHORT, cb_plane);
+  glBindTexture(GL_TEXTURE_2D, tex_cr_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, GL_UNSIGNED_SHORT, cr_plane);
+
+  // GL_R16 reads back as (sample / 65535).  Multiply by this factor in the
+  // shader to restore the sample's native [0, 1] range so the bias/scale/
+  // matrix math is depth-agnostic.
+  const float native_max    = static_cast<float>((1 << bit_depth) - 1);
+  const float k             = 65535.0f / native_max;
+  const float norm_scale[3] = {k, k, k};
+  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale);
+}
+
+void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* coeffs,
+                                    bool components_are_rgb, const float* norm_scale) {
   gl::UseProgram(prog_ycbcr_);
   gl::ActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, tex_y_);
@@ -448,6 +506,7 @@ void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* c
   glBindTexture(GL_TEXTURE_2D, tex_cr_);
   gl::Uniform1i(u_yc_cr_tex_, 2);
 
+  gl::Uniform3fv(u_yc_norm_scale_, 1, norm_scale);
   gl::Uniform1i(u_yc_rgb_mode_, components_are_rgb ? 1 : 0);
 
   if (!components_are_rgb && coeffs != nullptr) {
@@ -466,10 +525,10 @@ void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* c
     };
     gl::UniformMatrix3fv(u_yc_matrix_, 1, GL_FALSE, mat);
 
-    // Bias and scale applied as `(sample - bias) * scale` where sample
-    // is the texture value in [0,1].  The CPU uploads an 8-bit plane so
-    // we compute bias/scale for 8-bit samples regardless of the source
-    // bit depth.
+    // Bias / scale in the sample's native [0, 1] range.  uNormScale above
+    // renormalized before this step, so these constants are depth-
+    // independent -- the 8-bit narrow-range offsets read as 16/255 and
+    // 128/255 regardless of whether the wire depth is 8, 10, 12, or 16.
     float bias[3];
     float scale[3];
     if (coeffs->narrow_range) {
