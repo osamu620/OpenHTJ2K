@@ -72,6 +72,14 @@ struct CliOptions {
   // environments).
   enum class ColorPath : uint8_t { Shader, Cpu };
   ColorPath   color_path = ColorPath::Shader;
+  // Frame-pacing target in fps, active only when vsync is off.  A 30 fps
+  // source on a 60 Hz display without pacing shows 3:2 pulldown judder
+  // because decoded frames are presented as soon as they're ready, which
+  // drifts relative to vblank — some frames land on one vblank, others
+  // on the next.  Pacing holds the next present until last_present_tp
+  // + 1/pace_fps, giving a stable 2:2 cadence on 60 Hz.  0 disables the
+  // pacer (useful for benchmarking and --no-render runs).
+  double      pace_fps = 30.0;
 };
 
 void print_usage(const char* argv0) {
@@ -90,6 +98,8 @@ void print_usage(const char* argv0) {
       "  --range <name>           S=0 fallback: full | narrow (default full)\n"
       "  --threads <N>            Decoder thread count (default 2; 0 = hardware)\n"
       "  --color-path {shader|cpu} YCbCr->RGB on GPU (default) or CPU fallback\n"
+      "  --pace-fps <N>           Frame-pacing target (default 30; 0 = disabled)\n"
+      "                           Only active when vsync is off\n"
       "  --smoke-test             Run internal unit smoke tests and exit\n",
       argv0);
 }
@@ -139,6 +149,15 @@ bool parse_cli(int argc, char** argv, CliOptions& opt) {
       std::fprintf(stderr, "ERROR: --color-path must be 'shader' or 'cpu'\n");
       return false;
     }
+  }
+  if (const char* v = get_arg(argc, argv, "--pace-fps")) {
+    char*        end = nullptr;
+    const double d   = std::strtod(v, &end);
+    if (end == v || d < 0.0 || d > 240.0) {
+      std::fprintf(stderr, "ERROR: --pace-fps must be in [0, 240]\n");
+      return false;
+    }
+    opt.pace_fps = d;
   }
 
   // Colorspace fallback.  When a Main Packet carries S=1 we ignore these.
@@ -862,6 +881,7 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
     DecodedFrame df;
     df.shader_coeffs      = coeffs;
     df.components_are_rgb = components_are_rgb;
+    df.source_rtp_ts      = frame.rtp_timestamp;
     if (opts.color_path == CliOptions::ColorPath::Shader) {
       if (!decode_to_planar_buffers(decoder, components_are_rgb, df)) {
         std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
@@ -976,6 +996,41 @@ int run_receiver_threaded(const CliOptions& opts) {
   // Main loop: GLFW events + render slot polling + periodic FPS log.
   uint64_t last_log_decoded = 0;
   auto     last_log_tp      = run_start_tp;
+
+  // Frame pacer.  With --no-vsync the main thread would present each
+  // decoded frame as soon as it lands in the render slot, which on a
+  // 60 Hz display produces 3:2 pulldown judder against a 30 fps source
+  // and also amplifies sender arrival jitter: a burst of two quick
+  // sender frames overwrites the first in the render_slot (eviction)
+  // and the overall motion stutters.
+  //
+  // Primary pacing strategy: schedule each present at
+  //   ref_steady_tp + (source_rtp_ts - ref_rtp_ts) / 90 kHz
+  // where the reference is the first paced frame.  This follows the
+  // sender's intended cadence frame-for-frame regardless of physical
+  // arrival jitter or small sender/receiver clock differences.
+  //
+  // --pace-fps now plays two roles: (a) >0 enables the pacer at all,
+  // and (b) sets a "runaway guard" period used for outlier detection
+  // and for the fallback branch when two successive frames carry the
+  // same RTP timestamp (defensive; frame_handler emits only complete
+  // frames so this should not happen in practice).
+  //
+  // Disabled with vsync on (swap interval 1 paces via the vblank) and
+  // with pace_fps == 0 (benchmarking).
+  const bool pacer_active =
+      (renderer_ptr != nullptr) && (!opts_effective.vsync) && (opts_effective.pace_fps > 0.0);
+  const auto pace_period = pacer_active
+                               ? std::chrono::nanoseconds(static_cast<int64_t>(
+                                     1.0e9 / opts_effective.pace_fps))
+                               : std::chrono::nanoseconds(0);
+  constexpr double kRtpClockHz = 90000.0;  // RFC 3551 video profile
+  auto     last_present_tp     = Clock::now();
+  bool     first_present       = true;
+  bool     rtp_ref_valid       = false;
+  uint32_t rtp_ref_ts          = 0;
+  auto     rtp_ref_tp          = Clock::now();
+
   while (!state.stop_flag.load(std::memory_order_acquire)) {
     if (renderer_ptr) {
       renderer_ptr->poll_events();
@@ -989,6 +1044,43 @@ int run_receiver_threaded(const CliOptions& opts) {
 
     auto df = state.render_slot.try_pop();
     if (df.has_value() && renderer_ptr) {
+      // Pacer.  Two branches:
+      //  1. RTP-timestamp branch (primary): schedule this present at
+      //     rtp_ref_tp + (df->source_rtp_ts - rtp_ref_ts) / 90kHz.
+      //     Signed int32 subtraction wraps cleanly at the 32-bit RTP
+      //     boundary (~13.25 h at 90 kHz).  Reset the reference when
+      //     we're more than four pace_periods behind the computed
+      //     target (catastrophic decode stall, sender restart, pause)
+      //     so the pacer rebases instead of chasing a past deadline.
+      //  2. Fallback (same RTP ts as previous, or pacer just enabled):
+      //     use the fixed --pace-fps period.  Defensive; shouldn't
+      //     trigger on the Spark fixture.
+      if (pacer_active && !first_present) {
+        auto target = last_present_tp + pace_period;
+        if (rtp_ref_valid && df->source_rtp_ts != rtp_ref_ts) {
+          const int32_t delta_ticks =
+              static_cast<int32_t>(df->source_rtp_ts - rtp_ref_ts);
+          const auto delta = std::chrono::nanoseconds(static_cast<int64_t>(
+              static_cast<double>(delta_ticks) / kRtpClockHz * 1.0e9));
+          target = rtp_ref_tp + delta;
+        }
+        const auto now = Clock::now();
+        if (target > now) {
+          std::this_thread::sleep_until(target);
+        } else if (rtp_ref_valid && (now - target) > 4 * pace_period) {
+          // Runaway / resync: rebase the reference at the current
+          // frame so the next present targets roughly now+period.
+          rtp_ref_ts = df->source_rtp_ts;
+          rtp_ref_tp = now;
+        }
+      }
+      if (!rtp_ref_valid) {
+        rtp_ref_valid = true;
+        rtp_ref_ts    = df->source_rtp_ts;
+        rtp_ref_tp    = Clock::now();
+      }
+      first_present = false;
+
       if (df->kind == DecodedFrame::CPU_RGB) {
         renderer_ptr->upload_and_draw(df->rgb.data(), static_cast<int>(df->width),
                                       static_cast<int>(df->height));
@@ -999,6 +1091,7 @@ int run_receiver_threaded(const CliOptions& opts) {
             static_cast<int>(df->chroma_width), static_cast<int>(df->chroma_height),
             df->shader_coeffs, df->components_are_rgb);
       }
+      last_present_tp = Clock::now();
     } else if (!df.has_value()) {
       // Nothing to draw; brief sleep to avoid spinning while the decode
       // thread is busy.  Vsync would be doing this for us in --render

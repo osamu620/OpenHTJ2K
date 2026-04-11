@@ -139,6 +139,14 @@ struct DecodedFrame {
   // because it aliases immortal constexpr data.
   const ycbcr_coefficients* shader_coeffs      = nullptr;
   bool                      components_are_rgb = false;
+  // Sender's RTP timestamp (90 kHz per RFC 3551 video profile).  Copied
+  // from the AssembledFrame by the decode thread so the main-thread
+  // frame pacer can schedule presentation at the sender's intended
+  // cadence instead of a fixed --pace-fps rate.  0 is not a reliable
+  // "absent" sentinel — the first frame of a stream can legitimately
+  // have rtp_timestamp=0 — so pacing code must rely on its own
+  // "reference established" flag rather than on source_rtp_ts != 0.
+  uint32_t                  source_rtp_ts      = 0;
 };
 
 }  // namespace open_htj2k::rtp_recv
