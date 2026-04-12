@@ -39,6 +39,8 @@
 
 #if defined(__AVX2__)
 #include <immintrin.h>
+#elif defined(__ARM_NEON)
+#include <arm_neon.h>
 #endif
 
 namespace open_htj2k::rtp_recv {
@@ -284,6 +286,107 @@ inline void ycbcr_row_to_rgb8(const int32_t* y_row, const int32_t* cb_row, const
         out[3 * i + 1] = static_cast<uint8_t>(gtmp[i]);
         out[3 * i + 2] = static_cast<uint8_t>(btmp[i]);
       }
+    }
+    // Fall through to the scalar loop for the trailing 0..7 pixels.
+  }
+#elif defined(__ARM_NEON)
+  // NEON fast path: 8 luma pixels per iteration (two float32x4 groups).
+  // Uses the same normalize → FMA → clamp → pack chain as AVX2, but with
+  // NEON float ops and vst3_u8 for a true interleaved RGB store (no scalar
+  // scatter needed).
+  if (cb_stride_ratio == cr_stride_ratio
+      && (cb_stride_ratio == 1 || cb_stride_ratio == 2)) {
+    const float32x4_t vy_bias  = vdupq_n_f32(y_bias);
+    const float32x4_t vy_scale = vdupq_n_f32(y_scale);
+    const float32x4_t vc_bias  = vdupq_n_f32(c_bias);
+    const float32x4_t vc_scale = vdupq_n_f32(c_scale);
+    const float32x4_t vcr_to_r = vdupq_n_f32(coeffs.cr_to_r);
+    const float32x4_t vcb_to_g = vdupq_n_f32(coeffs.cb_to_g);
+    const float32x4_t vcr_to_g = vdupq_n_f32(coeffs.cr_to_g);
+    const float32x4_t vcb_to_b = vdupq_n_f32(coeffs.cb_to_b);
+    const float32x4_t v255     = vdupq_n_f32(255.0f);
+    const float32x4_t vhalf    = vdupq_n_f32(0.5f);
+    const float32x4_t vzero    = vdupq_n_f32(0.0f);
+
+    for (; x + 8 <= width; x += 8) {
+      // Load 8 luma samples as two float32x4 groups.
+      float32x4_t yf0 = vcvtq_f32_s32(vld1q_s32(y_row + x));
+      float32x4_t yf1 = vcvtq_f32_s32(vld1q_s32(y_row + x + 4));
+
+      float32x4_t cbf0, cbf1, crf0, crf1;
+      if (cb_stride_ratio == 1) {
+        cbf0 = vcvtq_f32_s32(vld1q_s32(cb_row + x));
+        cbf1 = vcvtq_f32_s32(vld1q_s32(cb_row + x + 4));
+        crf0 = vcvtq_f32_s32(vld1q_s32(cr_row + x));
+        crf1 = vcvtq_f32_s32(vld1q_s32(cr_row + x + 4));
+      } else {  // cb_stride_ratio == 2: load 4 chroma, duplicate each to 2 luma positions
+        // Load 4 subsampled chroma samples.
+        int32x4_t cb4 = vld1q_s32(cb_row + (x >> 1));
+        int32x4_t cr4 = vld1q_s32(cr_row + (x >> 1));
+        // Duplicate: [a,b,c,d] -> [a,a,b,b] for group 0, [c,c,d,d] for group 1.
+        // vzip produces two interleaved results from two inputs; zipping a
+        // vector with itself duplicates each element.
+        int32x4x2_t cb_dup = vzipq_s32(cb4, cb4);  // .val[0]=[a,a,b,b], .val[1]=[c,c,d,d]
+        int32x4x2_t cr_dup = vzipq_s32(cr4, cr4);
+        cbf0 = vcvtq_f32_s32(cb_dup.val[0]);
+        cbf1 = vcvtq_f32_s32(cb_dup.val[1]);
+        crf0 = vcvtq_f32_s32(cr_dup.val[0]);
+        crf1 = vcvtq_f32_s32(cr_dup.val[1]);
+      }
+
+      // Normalize: yn = (Y - y_bias) * y_scale, etc.
+      float32x4_t yn0  = vmulq_f32(vsubq_f32(yf0, vy_bias), vy_scale);
+      float32x4_t yn1  = vmulq_f32(vsubq_f32(yf1, vy_bias), vy_scale);
+      float32x4_t cbn0 = vmulq_f32(vsubq_f32(cbf0, vc_bias), vc_scale);
+      float32x4_t cbn1 = vmulq_f32(vsubq_f32(cbf1, vc_bias), vc_scale);
+      float32x4_t crn0 = vmulq_f32(vsubq_f32(crf0, vc_bias), vc_scale);
+      float32x4_t crn1 = vmulq_f32(vsubq_f32(crf1, vc_bias), vc_scale);
+
+      // R = y + cr_to_r * cr
+      float32x4_t r0 = vfmaq_f32(yn0, vcr_to_r, crn0);
+      float32x4_t r1 = vfmaq_f32(yn1, vcr_to_r, crn1);
+      // G = y - cb_to_g * cb - cr_to_g * cr
+      float32x4_t g0 = vfmsq_f32(yn0, vcb_to_g, cbn0);
+      g0             = vfmsq_f32(g0, vcr_to_g, crn0);
+      float32x4_t g1 = vfmsq_f32(yn1, vcb_to_g, cbn1);
+      g1             = vfmsq_f32(g1, vcr_to_g, crn1);
+      // B = y + cb_to_b * cb
+      float32x4_t b0 = vfmaq_f32(yn0, vcb_to_b, cbn0);
+      float32x4_t b1 = vfmaq_f32(yn1, vcb_to_b, cbn1);
+
+      // Scale to 0..255 with round-to-nearest, clamp.
+      r0 = vaddq_f32(vmulq_f32(r0, v255), vhalf);
+      r1 = vaddq_f32(vmulq_f32(r1, v255), vhalf);
+      g0 = vaddq_f32(vmulq_f32(g0, v255), vhalf);
+      g1 = vaddq_f32(vmulq_f32(g1, v255), vhalf);
+      b0 = vaddq_f32(vmulq_f32(b0, v255), vhalf);
+      b1 = vaddq_f32(vmulq_f32(b1, v255), vhalf);
+      r0 = vminq_f32(vmaxq_f32(r0, vzero), v255);
+      r1 = vminq_f32(vmaxq_f32(r1, vzero), v255);
+      g0 = vminq_f32(vmaxq_f32(g0, vzero), v255);
+      g1 = vminq_f32(vmaxq_f32(g1, vzero), v255);
+      b0 = vminq_f32(vmaxq_f32(b0, vzero), v255);
+      b1 = vminq_f32(vmaxq_f32(b1, vzero), v255);
+
+      // Convert to int32, narrow to uint8.
+      int32x4_t ri0 = vcvtq_s32_f32(r0);
+      int32x4_t ri1 = vcvtq_s32_f32(r1);
+      int32x4_t gi0 = vcvtq_s32_f32(g0);
+      int32x4_t gi1 = vcvtq_s32_f32(g1);
+      int32x4_t bi0 = vcvtq_s32_f32(b0);
+      int32x4_t bi1 = vcvtq_s32_f32(b1);
+
+      // Narrow: int32 → int16 → uint8 (8 values each).
+      uint8x8_t r8 = vqmovun_s16(vcombine_s16(vqmovn_s32(ri0), vqmovn_s32(ri1)));
+      uint8x8_t g8 = vqmovun_s16(vcombine_s16(vqmovn_s32(gi0), vqmovn_s32(gi1)));
+      uint8x8_t b8 = vqmovun_s16(vcombine_s16(vqmovn_s32(bi0), vqmovn_s32(bi1)));
+
+      // Interleaved RGB store — single instruction, no scalar scatter.
+      uint8x8x3_t rgb;
+      rgb.val[0] = r8;
+      rgb.val[1] = g8;
+      rgb.val[2] = b8;
+      vst3_u8(out_rgb + static_cast<size_t>(x) * 3, rgb);
     }
     // Fall through to the scalar loop for the trailing 0..7 pixels.
   }

@@ -71,6 +71,7 @@ class openhtj2k_decoder_impl {
   openhtj2k_decoder_impl(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   ~openhtj2k_decoder_impl();
   void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  void init_borrow(uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   void parse();
   OPENHTJ2K_NODISCARD uint16_t get_num_component() const;
   OPENHTJ2K_NODISCARD uint32_t get_component_width(uint16_t) const;
@@ -192,6 +193,32 @@ void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const
   } else {
     in.alloc_memory(static_cast<uint32_t>(length));
     memcpy(in.get_buf_pos(), buf, length);
+  }
+  is_codestream_set = true;
+}
+
+void openhtj2k_decoder_impl::init_borrow(uint8_t *buf, const size_t length, const uint8_t r,
+                                          uint32_t num_threads) {
+  reduce_NL = r;
+  enum_cs   = 0;
+  if (buf == nullptr) {
+  }
+#ifdef OPENHTJ2K_THREAD
+  ThreadPool::instance(num_threads);
+#endif
+  // Zero-copy: lend the caller's buffer to the decoder.  The caller must
+  // keep the data alive through parse() + invoke*().  16 bytes of readable
+  // padding past buf+length are required for SIMD over-reads.
+  // JPH/JP2 wrapping is not expected on the RTP path; fall back to copy
+  // if detected.
+  jph_info info;
+  if (jph_parse_buffer(buf, length, info)) {
+    // JPH container detected — must copy the embedded codestream.
+    enum_cs = info.enum_cs;
+    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
+  } else {
+    in.borrow_memory(buf, static_cast<uint32_t>(length));
   }
   is_codestream_set = true;
 }
@@ -381,6 +408,10 @@ openhtj2k_decoder::openhtj2k_decoder(const uint8_t *buf, size_t length, const ui
 void openhtj2k_decoder::init(const uint8_t *buf, size_t length, const uint8_t reduce_NL,
                              uint32_t num_threads) {
   this->impl->init(buf, length, reduce_NL, num_threads);
+}
+void openhtj2k_decoder::init_borrow(uint8_t *buf, size_t length, const uint8_t reduce_NL,
+                                    uint32_t num_threads) {
+  this->impl->init_borrow(buf, length, reduce_NL, num_threads);
 }
 void openhtj2k_decoder::parse() { this->impl->parse(); }
 

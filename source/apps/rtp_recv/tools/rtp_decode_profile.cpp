@@ -214,9 +214,15 @@ int main(int argc, char** argv) {
                   chroma_h = heights[1];
                   depth_c  = depths[1];
                 }
-                plane_y.assign(static_cast<size_t>(luma_w) * luma_h, 0);
-                plane_cb.assign(static_cast<size_t>(chroma_w) * chroma_h, 128);
-                plane_cr.assign(static_cast<size_t>(chroma_w) * chroma_h, 128);
+                // First frame: allocate.  Subsequent frames: resize is a no-op
+                // (same dimensions) and avoids the ~1 ms memset at 4K.  The
+                // shift callback overwrites every byte so the fill value is
+                // irrelevant after the first frame.
+                if (plane_y.size() != static_cast<size_t>(luma_w) * luma_h) {
+                  plane_y.assign(static_cast<size_t>(luma_w) * luma_h, 0);
+                  plane_cb.assign(static_cast<size_t>(chroma_w) * chroma_h, 128);
+                  plane_cr.assign(static_cast<size_t>(chroma_w) * chroma_h, 128);
+                }
               }
 
               const int32_t shift_y  = static_cast<int32_t>(depth_y) - 8;
