@@ -378,8 +378,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     sp1   = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
     rho1  = 0;
 
-    // {max(E_p[-1..2]), max(E_p[1..4])} — kept in NEON to avoid scalar round-trip
-    int32x2_t vEmax = max4_pair(vld1q_s32(E_p - 1), vld1q_s32(E_p + 1));
+    // Pre-compute Emax for first 4 quads (vectorized sliding max).
+    int32x4_t vEmax4;
+    {
+      int32x2_t m01 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p - 1), vld1q_s32(E_p + 1))),
+                                  vget_high_s32(vmaxq_s32(vld1q_s32(E_p - 1), vld1q_s32(E_p + 1))));
+      int32x2_t m23 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))),
+                                  vget_high_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))));
+      vEmax4 = vcombine_s32(m01, m23);
+    }
 
     // calculate context for the next quad
     context = ((rho1 & 0x4) << 6) | ((rho1 & 0x8) << 5);            // (w | sw) << 8
@@ -468,15 +475,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       {
         // gamma: 0 if popcount(rho) < 2 (single bit or zero), else 1
+        // Use vEmax4[0..1] for this quad-pair (consumed in order).
+        int32x2_t vEmax   = vget_low_s32(vEmax4);
         int32x2_t vrho    = vset_lane_s32((int32_t)rho1, vdup_n_s32((int32_t)rho0), 1);
         int32x2_t vrho_m1 = vsub_s32(vrho, vdup_n_s32(1));
-        // rho & (rho-1) == 0  ↔  popcount < 2  ↔  gamma = 0
         uint32x2_t vz     = vceq_u32(vreinterpret_u32_s32(vand_s32(vrho, vrho_m1)), vdup_n_u32(0));
         int32x2_t vgamma  = vreinterpret_s32_u32(vbic_u32(vdup_n_u32(1), vz));
-        // kappa = max(1, gamma * (Emax - 1))
         int32x2_t vkappa  = vmax_s32(vmul_s32(vgamma, vsub_s32(vEmax, vdup_n_s32(1))), vdup_n_s32(1));
         U0 = (uint32_t)vget_lane_s32(vkappa, 0) + u0;
         U1 = (uint32_t)vget_lane_s32(vkappa, 1) + u1;
+        // Shift vEmax4: next quad-pair will use [2..3] via vget_low after shift.
+        vEmax4 = vextq_s32(vEmax4, vEmax4, 2);
       }
 
       if (pLSB > 16) {
@@ -502,7 +511,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mp0 += 4;
         mp1 += 4;
 
-        vEmax = max4_pair(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5));
+        // Read-ahead Emax: reload 4-quad Emax every other iteration (after the
+        // shifted vEmax4's high pair was consumed).  The shift in the kappa block
+        // moved [2..3]→[0..1]; after this iteration consumes [0..1], both pairs
+        // are spent.  Reload from E_p+3 (which still holds the previous row's values).
+        {
+          int32x2_t nm01 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))),
+                                      vget_high_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))));
+          int32x2_t nm23 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p + 7), vld1q_s32(E_p + 9))),
+                                      vget_high_s32(vmaxq_s32(vld1q_s32(E_p + 7), vld1q_s32(E_p + 9))));
+          vEmax4 = vcombine_s32(nm01, nm23);
+        }
 
         int32x4_t vn32 = vreinterpretq_s32_u32(vmovl_u16(vreinterpret_u16_s16(vn_16)));
         vExp           = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vn32));
@@ -555,7 +574,13 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mp0 += 4;
         mp1 += 4;
 
-        vEmax = max4_pair(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5));
+        {
+          int32x2_t nm01 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))),
+                                      vget_high_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))));
+          int32x2_t nm23 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p + 7), vld1q_s32(E_p + 9))),
+                                      vget_high_s32(vmaxq_s32(vld1q_s32(E_p + 7), vld1q_s32(E_p + 9))));
+          vEmax4 = vcombine_s32(nm01, nm23);
+        }
 
         vExp = vsubq_s32(vdupq_n_s32(32), vclzq_s32(vuzp2q_s32(v_n_0, v_n_1)));
         vst1q_s32(E_p, vExp);
