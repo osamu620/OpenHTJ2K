@@ -158,7 +158,7 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
     df.pipeline           = pipeline;
     df.source_rtp_ts      = frame.rtp_timestamp;
     if (opts.color_path == CliOptions::ColorPath::Shader) {
-      if (!decode_to_planar_buffers(decoder, components_are_rgb, df)) {
+      if (!decode_to_planar_buffers_direct(decoder, components_are_rgb, df)) {
         std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
         st.frames_failed.fetch_add(1, std::memory_order_relaxed);
         continue;

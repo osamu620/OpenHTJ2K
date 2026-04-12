@@ -31,6 +31,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include "planar_output_desc.hpp"
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   #define OPENHTJ2K_EXPORT __declspec(dllexport)
 #else
@@ -98,6 +99,15 @@ class openhtj2k_decoder {
       std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb,
       std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
       std::vector<bool> &is_signed);
+  // Direct-to-planar streaming decode.  Reads float from IDWT ring and
+  // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
+  // the callback and int32 scratch entirely.  Respects enable_single_tile_reuse().
+  // Falls back to invoke_line_based_stream_reuse() + callback for MCT (4:4:4)
+  // or multi-tile codestreams.  PlanarOutputDesc is defined in coding_units.hpp.
+  OPENHTJ2K_EXPORT void invoke_line_based_direct(
+      PlanarOutputDesc *descs, uint16_t nc,
+      std::vector<uint32_t> &width, std::vector<uint32_t> &height,
+      std::vector<uint8_t> &depth, std::vector<bool> &is_signed);
   // Enable the single-tile reuse optimization (default off).  Call once
   // after constructing the decoder and before the first init()/parse()
   // sequence for the stream you want to keep cached.  Passing false drops
