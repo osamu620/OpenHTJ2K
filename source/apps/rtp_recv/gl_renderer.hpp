@@ -109,15 +109,10 @@ class GlRenderer {
   // silently skip reallocation on the others (same class of bug that
   // bit us when Cb/Cr shared (w, h) tracking in the initial draft).
   bool ensure_planar_textures(int w_y, int h_y, int w_c, int h_c, int bpp);
-  // Shared tail of upload_planar_and_draw / upload_planar_16_and_draw:
-  // binds the three planar textures to the YCbCr program, sets the matrix
-  // + bias/scale + uNormScale + HDR-pipeline uniforms, draws the fullscreen
-  // triangle strip, and swaps buffers.  `norm_scale` is a pointer to three
-  // floats.  `pipeline` carries the inverse-transfer / gamut / display-
-  // encoding selection for the HDR colour pipeline.
   void draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* coeffs,
-                          bool components_are_rgb, const float* norm_scale,
-                          const ColorPipelineParams& pipeline);
+                          const float* norm_scale, const ColorPipelineParams& pipeline);
+  void draw_planar_rgb_program(int w_y, int h_y, const float* norm_scale,
+                               const ColorPipelineParams& pipeline);
   void draw_fullscreen_quad(int fb_w, int fb_h, int content_w, int content_h);
   // Drains the GL error queue and logs each non-zero code with the
   // given context label.  Called only at allocation / program-link
@@ -140,7 +135,7 @@ class GlRenderer {
   int          tex_rgb_w_      = 0;
   int          tex_rgb_h_      = 0;
 
-  // YCbCr planar program (shader path).
+  // YCbCr planar program — always applies matrix + bias + scale.
   unsigned int prog_ycbcr_       = 0;
   int          u_yc_y_tex_       = -1;
   int          u_yc_cb_tex_      = -1;
@@ -148,12 +143,20 @@ class GlRenderer {
   int          u_yc_matrix_      = -1;
   int          u_yc_bias_        = -1;
   int          u_yc_scale_       = -1;
-  int          u_yc_norm_scale_  = -1;  // per-plane renormalization factor (1.0 for R8)
-  int          u_yc_rgb_mode_    = -1;  // int: 0=ycbcr, 1=passthrough RGB components
-  int          u_yc_transfer_    = -1;  // int: 0=gamma2.2, 1=PQ, 2=HLG
-  int          u_yc_gamut_       = -1;  // mat3: identity or BT.2020 -> BT.709
-  int          u_yc_display_enc_ = -1;  // int: 0=sRGB, 1=gamma22, 2=linear
-  int          u_yc_viewport_    = -1;
+  int          u_yc_norm_scale_  = -1;
+  int          u_yc_transfer_    = -1;
+  int          u_yc_gamut_       = -1;
+  int          u_yc_display_enc_ = -1;
+
+  // Planar RGB passthrough program — no matrix/bias/scale, just HDR pipeline.
+  unsigned int prog_planar_rgb_       = 0;
+  int          u_pr_y_tex_            = -1;
+  int          u_pr_cb_tex_           = -1;
+  int          u_pr_cr_tex_           = -1;
+  int          u_pr_norm_scale_       = -1;
+  int          u_pr_transfer_         = -1;
+  int          u_pr_gamut_            = -1;
+  int          u_pr_display_enc_      = -1;
   unsigned int tex_y_            = 0;
   unsigned int tex_cb_           = 0;
   unsigned int tex_cr_           = 0;
