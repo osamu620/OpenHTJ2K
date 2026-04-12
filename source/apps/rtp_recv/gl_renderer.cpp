@@ -59,27 +59,10 @@ void main() {
 }
 )glsl";
 
-constexpr const char* kFragmentShaderYcbcrSrc = R"glsl(
-#version 330 core
-in  vec2 vTexCoord;
-out vec4 fragColor;
-uniform sampler2D uY;
-uniform sampler2D uCb;
-uniform sampler2D uCr;
-uniform mat3      uMatrix;     // rgb = uMatrix * ((n - uBias) * uScale)
-uniform vec3      uBias;       // per-plane bias in [0,1] after renormalization
-uniform vec3      uScale;      // per-plane scale after bias subtraction
-uniform vec3      uNormScale;  // per-plane renorm factor (1.0 for R8,
-                               // 65535/((1<<depth)-1) for R16 with >8-bit src)
-uniform int       uRgbMode;    // 0 = YCbCr -> RGB, 1 = treat planes as R/G/B
-
-// HDR colour pipeline uniforms.  Defaults reproduce v0.12.0 behaviour
-// up to a bounded re-encoding drift on SDR sources (see
-// smoke_test_color_pipeline for the drift bound).
-uniform int  uTransfer;        // 0=gamma2.2, 1=PQ, 2=HLG
-uniform mat3 uGamutMatrix;     // identity or BT.2020 -> BT.709
-uniform int  uDisplayEncoding; // 0=sRGB, 1=gamma2.2, 2=linear
-
+// Shared GLSL helper functions used by both the YCbCr and planar-RGB
+// fragment shaders.  Concatenated with each shader's own preamble + main()
+// via glShaderSource's array-of-strings interface.
+constexpr const char* kFragmentPlanarHelpers = R"glsl(
 // SMPTE ST 2084 PQ EOTF constants (BT.2100 Table 4).
 const float kPqM1 = 0.1593017578125;
 const float kPqM2 = 78.84375;
@@ -94,8 +77,6 @@ vec3 pq_to_linear(vec3 e) {
   return pow(num / den, vec3(1.0 / kPqM1));
 }
 
-// ITU-R BT.2100 HLG inverse OETF.  System OOTF treated as identity for
-// display-referred SDR output; a tunable-gamma OOTF is a follow-up.
 vec3 hlg_inverse(vec3 e) {
   const float a = 0.17883277;
   const float b = 0.28466892;
@@ -111,7 +92,6 @@ vec3 apply_inverse_transfer(vec3 e) {
   return pow(max(e, vec3(0.0)), vec3(2.2));
 }
 
-// sRGB EOTF^-1 (piecewise).  IEC 61966-2-1.
 vec3 linear_to_srgb(vec3 l) {
   vec3  lo  = l * 12.92;
   vec3  hi  = 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055;
@@ -124,38 +104,77 @@ vec3 apply_display_encoding(vec3 l) {
   if (uDisplayEncoding == 2) return l;
   return linear_to_srgb(l);
 }
+)glsl";
 
+// YCbCr planar → RGB conversion.  Always applies matrix + bias + scale;
+// no uRgbMode branch (the RGB-passthrough case uses prog_planar_rgb_).
+constexpr const char* kFragmentShaderYcbcrSrc = R"glsl(
+#version 330 core
+in  vec2 vTexCoord;
+out vec4 fragColor;
+uniform sampler2D uY;
+uniform sampler2D uCb;
+uniform sampler2D uCr;
+uniform mat3      uMatrix;
+uniform vec3      uBias;
+uniform vec3      uScale;
+uniform vec3      uNormScale;
+uniform int  uTransfer;
+uniform mat3 uGamutMatrix;
+uniform int  uDisplayEncoding;
+)glsl";
+
+constexpr const char* kFragmentShaderYcbcrMain = R"glsl(
 void main() {
   vec3 s;
   s.x = texture(uY,  vTexCoord).r;
   s.y = texture(uCb, vTexCoord).r;
   s.z = texture(uCr, vTexCoord).r;
-  // For R8 textures uNormScale is (1,1,1) and this is a no-op; for R16
-  // textures uNormScale restores the source's native [0,1] range before
-  // bias/scale math runs, so the rest of the shader is depth-agnostic.
   vec3 n = s * uNormScale;
-  vec3 rgb_nl;
-  if (uRgbMode == 1) {
-    rgb_nl = n;
-  } else {
-    rgb_nl = uMatrix * ((n - uBias) * uScale);
-  }
-  // Clamp post-matrix before the inverse-transfer stage.  Out-of-range
-  // values on a narrow-range BT.709 source would otherwise feed a pow()
-  // with negative base.
+  vec3 rgb_nl = uMatrix * ((n - uBias) * uScale);
   rgb_nl      = clamp(rgb_nl, 0.0, 1.0);
   vec3 lin_s  = apply_inverse_transfer(rgb_nl);
   vec3 lin_d  = uGamutMatrix * lin_s;
-  // Stage 3: hard clip.  BT.2390 EETF soft-knee is a follow-up PR.
   lin_d       = clamp(lin_d, 0.0, 1.0);
   vec3 out_nl = apply_display_encoding(lin_d);
   fragColor   = vec4(clamp(out_nl, 0.0, 1.0), 1.0);
 }
 )glsl";
 
-GLuint compile_one_shader(GLenum kind, const char* src, const char* label) {
+// Planar RGB passthrough: three R8/R16 planes interpreted directly as
+// R, G, B.  No matrix/bias/scale — just renormalization + HDR pipeline.
+constexpr const char* kFragmentShaderPlanarRgbSrc = R"glsl(
+#version 330 core
+in  vec2 vTexCoord;
+out vec4 fragColor;
+uniform sampler2D uY;
+uniform sampler2D uCb;
+uniform sampler2D uCr;
+uniform vec3      uNormScale;
+uniform int  uTransfer;
+uniform mat3 uGamutMatrix;
+uniform int  uDisplayEncoding;
+)glsl";
+
+constexpr const char* kFragmentShaderPlanarRgbMain = R"glsl(
+void main() {
+  vec3 s;
+  s.x = texture(uY,  vTexCoord).r;
+  s.y = texture(uCb, vTexCoord).r;
+  s.z = texture(uCr, vTexCoord).r;
+  vec3 rgb_nl = s * uNormScale;
+  rgb_nl      = clamp(rgb_nl, 0.0, 1.0);
+  vec3 lin_s  = apply_inverse_transfer(rgb_nl);
+  vec3 lin_d  = uGamutMatrix * lin_s;
+  lin_d       = clamp(lin_d, 0.0, 1.0);
+  vec3 out_nl = apply_display_encoding(lin_d);
+  fragColor   = vec4(clamp(out_nl, 0.0, 1.0), 1.0);
+}
+)glsl";
+
+GLuint compile_one_shader(GLenum kind, const char* const* srcs, int count, const char* label) {
   GLuint sh = gl::CreateShader(kind);
-  gl::ShaderSource(sh, 1, &src, nullptr);
+  gl::ShaderSource(sh, count, srcs, nullptr);
   gl::CompileShader(sh);
   GLint ok = GL_FALSE;
   gl::GetShaderiv(sh, GL_COMPILE_STATUS, &ok);
@@ -248,10 +267,12 @@ bool GlRenderer::init(int window_w, int window_h, const char* title, bool vsync)
 }
 
 bool GlRenderer::compile_shader_programs() {
-  GLuint vs = compile_one_shader(GL_VERTEX_SHADER, kVertexShaderSrc, "vertex shader");
+  const char* vs_srcs[] = {kVertexShaderSrc};
+  GLuint vs = compile_one_shader(GL_VERTEX_SHADER, vs_srcs, 1, "vertex shader");
   if (!vs) return false;
 
-  GLuint fs_rgb = compile_one_shader(GL_FRAGMENT_SHADER, kFragmentShaderRgbSrc,
+  const char* fs_rgb_srcs[] = {kFragmentShaderRgbSrc};
+  GLuint fs_rgb = compile_one_shader(GL_FRAGMENT_SHADER, fs_rgb_srcs, 1,
                                      "rgb fragment shader");
   if (!fs_rgb) {
     gl::DeleteShader(vs);
@@ -266,7 +287,10 @@ bool GlRenderer::compile_shader_programs() {
   prog_rgb_  = prog_rgb;
   u_rgb_tex_ = gl::GetUniformLocation(prog_rgb_, "uTex");
 
-  GLuint fs_yc = compile_one_shader(GL_FRAGMENT_SHADER, kFragmentShaderYcbcrSrc,
+  // YCbCr program: preamble + helpers + main.
+  const char* fs_yc_srcs[] = {kFragmentShaderYcbcrSrc, kFragmentPlanarHelpers,
+                               kFragmentShaderYcbcrMain};
+  GLuint fs_yc = compile_one_shader(GL_FRAGMENT_SHADER, fs_yc_srcs, 3,
                                     "ycbcr fragment shader");
   if (!fs_yc) {
     gl::DeleteShader(vs);
@@ -275,9 +299,9 @@ bool GlRenderer::compile_shader_programs() {
     return false;
   }
   GLuint prog_yc = link_program(vs, fs_yc, "ycbcr program");
-  gl::DeleteShader(vs);
   gl::DeleteShader(fs_yc);
   if (!prog_yc) {
+    gl::DeleteShader(vs);
     gl::DeleteProgram(prog_rgb_);
     prog_rgb_ = 0;
     return false;
@@ -290,13 +314,42 @@ bool GlRenderer::compile_shader_programs() {
   u_yc_bias_       = gl::GetUniformLocation(prog_ycbcr_, "uBias");
   u_yc_scale_      = gl::GetUniformLocation(prog_ycbcr_, "uScale");
   u_yc_norm_scale_ = gl::GetUniformLocation(prog_ycbcr_, "uNormScale");
-  u_yc_rgb_mode_   = gl::GetUniformLocation(prog_ycbcr_, "uRgbMode");
   u_yc_transfer_   = gl::GetUniformLocation(prog_ycbcr_, "uTransfer");
   u_yc_gamut_      = gl::GetUniformLocation(prog_ycbcr_, "uGamutMatrix");
   u_yc_display_enc_ = gl::GetUniformLocation(prog_ycbcr_, "uDisplayEncoding");
 
-  // Drain any residual error state from the compile/link sync point so
-  // later per-frame glGetError checks (if added) don't see ghosts.
+  // Planar RGB passthrough program: preamble + helpers + main.
+  const char* fs_pr_srcs[] = {kFragmentShaderPlanarRgbSrc, kFragmentPlanarHelpers,
+                               kFragmentShaderPlanarRgbMain};
+  GLuint fs_pr = compile_one_shader(GL_FRAGMENT_SHADER, fs_pr_srcs, 3,
+                                    "planar-rgb fragment shader");
+  if (!fs_pr) {
+    gl::DeleteShader(vs);
+    gl::DeleteProgram(prog_rgb_);
+    gl::DeleteProgram(prog_ycbcr_);
+    prog_rgb_ = 0;
+    prog_ycbcr_ = 0;
+    return false;
+  }
+  GLuint prog_pr = link_program(vs, fs_pr, "planar-rgb program");
+  gl::DeleteShader(vs);
+  gl::DeleteShader(fs_pr);
+  if (!prog_pr) {
+    gl::DeleteProgram(prog_rgb_);
+    gl::DeleteProgram(prog_ycbcr_);
+    prog_rgb_ = 0;
+    prog_ycbcr_ = 0;
+    return false;
+  }
+  prog_planar_rgb_       = prog_pr;
+  u_pr_y_tex_            = gl::GetUniformLocation(prog_planar_rgb_, "uY");
+  u_pr_cb_tex_           = gl::GetUniformLocation(prog_planar_rgb_, "uCb");
+  u_pr_cr_tex_           = gl::GetUniformLocation(prog_planar_rgb_, "uCr");
+  u_pr_norm_scale_       = gl::GetUniformLocation(prog_planar_rgb_, "uNormScale");
+  u_pr_transfer_         = gl::GetUniformLocation(prog_planar_rgb_, "uTransfer");
+  u_pr_gamut_            = gl::GetUniformLocation(prog_planar_rgb_, "uGamutMatrix");
+  u_pr_display_enc_      = gl::GetUniformLocation(prog_planar_rgb_, "uDisplayEncoding");
+
   check_gl_error("compile_shader_programs");
   return true;
 }
@@ -339,6 +392,10 @@ void GlRenderer::shutdown() {
   if (prog_ycbcr_ != 0 && gl::DeleteProgram != nullptr) {
     gl::DeleteProgram(prog_ycbcr_);
     prog_ycbcr_ = 0;
+  }
+  if (prog_planar_rgb_ != 0 && gl::DeleteProgram != nullptr) {
+    gl::DeleteProgram(prog_planar_rgb_);
+    prog_planar_rgb_ = 0;
   }
   if (window_) {
     glfwDestroyWindow(window_);
@@ -528,7 +585,10 @@ void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* c
   // 8-bit source: the texture value already lives in the sample's native
   // [0, 1] range, so uNormScale is the identity.
   const float norm_scale[3] = {1.0f, 1.0f, 1.0f};
-  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale, pipeline);
+  if (components_are_rgb)
+    draw_planar_rgb_program(w_y, h_y, norm_scale, pipeline);
+  else
+    draw_ycbcr_program(w_y, h_y, coeffs, norm_scale, pipeline);
 }
 
 void GlRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uint16_t* cb_plane,
@@ -557,11 +617,14 @@ void GlRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uint16
   const float native_max    = static_cast<float>((1 << bit_depth) - 1);
   const float k             = 65535.0f / native_max;
   const float norm_scale[3] = {k, k, k};
-  draw_ycbcr_program(w_y, h_y, coeffs, components_are_rgb, norm_scale, pipeline);
+  if (components_are_rgb)
+    draw_planar_rgb_program(w_y, h_y, norm_scale, pipeline);
+  else
+    draw_ycbcr_program(w_y, h_y, coeffs, norm_scale, pipeline);
 }
 
 void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* coeffs,
-                                    bool components_are_rgb, const float* norm_scale,
+                                    const float* norm_scale,
                                     const ColorPipelineParams& pipeline) {
   gl::UseProgram(prog_ycbcr_);
   gl::ActiveTexture(GL_TEXTURE0);
@@ -575,24 +638,12 @@ void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* 
   gl::Uniform1i(u_yc_cr_tex_, 2);
 
   gl::Uniform3fv(u_yc_norm_scale_, 1, norm_scale);
-  gl::Uniform1i(u_yc_rgb_mode_, components_are_rgb ? 1 : 0);
 
-  // HDR pipeline uniforms.  The defaults (gamma2.2 / identity / sRGB)
-  // preserve v0.12.0 behaviour modulo a bounded re-encoding drift on
-  // SDR BT.709 sources (quantified in smoke_test_color_pipeline).
   gl::Uniform1i(u_yc_transfer_, pipeline.transfer);
   gl::UniformMatrix3fv(u_yc_gamut_, 1, GL_FALSE, pipeline.gamut_matrix);
   gl::Uniform1i(u_yc_display_enc_, pipeline.display_encoding);
 
-  if (!components_are_rgb && coeffs != nullptr) {
-    // Column-major: mat3(col0, col1, col2) where
-    //   col0 (Y) = (1, 1, 1)
-    //   col1 (Cb) = (0, -cb_to_g, cb_to_b)
-    //   col2 (Cr) = (cr_to_r, -cr_to_g, 0)
-    // so rgb = uMatrix * vec3(y_n, cb_n, cr_n) computes:
-    //   R = y_n + cr_to_r * cr_n
-    //   G = y_n - cb_to_g * cb_n - cr_to_g * cr_n
-    //   B = y_n + cb_to_b * cb_n
+  if (coeffs != nullptr) {
     const float mat[9] = {
         1.0f,           1.0f,            1.0f,
         0.0f,          -coeffs->cb_to_g, coeffs->cb_to_b,
@@ -600,10 +651,6 @@ void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* 
     };
     gl::UniformMatrix3fv(u_yc_matrix_, 1, GL_FALSE, mat);
 
-    // Bias / scale in the sample's native [0, 1] range.  uNormScale above
-    // renormalized before this step, so these constants are depth-
-    // independent -- the 8-bit narrow-range offsets read as 16/255 and
-    // 128/255 regardless of whether the wire depth is 8, 10, 12, or 16.
     float bias[3];
     float scale[3];
     if (coeffs->narrow_range) {
@@ -624,6 +671,33 @@ void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* 
     gl::Uniform3fv(u_yc_bias_, 1, bias);
     gl::Uniform3fv(u_yc_scale_, 1, scale);
   }
+
+  int fb_w = 0;
+  int fb_h = 0;
+  glfwGetFramebufferSize(window_, &fb_w, &fb_h);
+  draw_fullscreen_quad(fb_w, fb_h, w_y, h_y);
+
+  glfwSwapBuffers(window_);
+}
+
+void GlRenderer::draw_planar_rgb_program(int w_y, int h_y, const float* norm_scale,
+                                         const ColorPipelineParams& pipeline) {
+  gl::UseProgram(prog_planar_rgb_);
+  gl::ActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, tex_y_);
+  gl::Uniform1i(u_pr_y_tex_, 0);
+  gl::ActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, tex_cb_);
+  gl::Uniform1i(u_pr_cb_tex_, 1);
+  gl::ActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, tex_cr_);
+  gl::Uniform1i(u_pr_cr_tex_, 2);
+
+  gl::Uniform3fv(u_pr_norm_scale_, 1, norm_scale);
+
+  gl::Uniform1i(u_pr_transfer_, pipeline.transfer);
+  gl::UniformMatrix3fv(u_pr_gamut_, 1, GL_FALSE, pipeline.gamut_matrix);
+  gl::Uniform1i(u_pr_display_enc_, pipeline.display_encoding);
 
   int fb_w = 0;
   int fb_h = 0;
