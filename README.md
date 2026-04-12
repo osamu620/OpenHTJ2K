@@ -40,9 +40,11 @@ on modern x86-64**.
 **Live streaming (experimental)**
 - `open_htj2k_rtp_recv` implements RFC 9828 (JPEG 2000 RTP with
   sub-codestream latency). Three-thread pipeline (receive / decode /
-  render) with an RTP-timestamp frame pacer. **Sustains 4K @ 60 fps**
-  on 4K 4:2:2 1.7-bpp broadcast HT with `--threads 2` on modern
-  x86-64. Opt-in via `-DOPENHTJ2K_RTP=ON`.
+  render) with GPU shader rendering, HDR colour pipeline (PQ / HLG +
+  BT.2020 gamut mapping), and an RTP-timestamp frame pacer.
+  **Sustains 4K @ 60 fps** on 4K 4:2:2 1.7-bpp broadcast HT with
+  `--threads 4` on modern x86-64 (component-parallel IDWT).
+  Opt-in via `-DOPENHTJ2K_RTP=ON`.
 
 ## Quick build
 
@@ -119,7 +121,8 @@ core. Opt-in at build time with `-DOPENHTJ2K_RTP=ON`.
 ```
 
 Key flags: `--port N`, `--bind host`, `--no-vsync`, `--frames N`,
-`--threads 2` (default, HT-optimal for 4K), `--colorspace {bt709|bt601}`.
+`--threads 4` (default, optimal after component-parallel IDWT),
+`--colorspace {bt709|bt601|bt2020}`.
 Full reference, kernel `rmem_max` tuning, hardware requirements for
 4K @ 60 fps sustained, and known issues:
 [**docs/cli_rtp_recv.md**](docs/cli_rtp_recv.md).
