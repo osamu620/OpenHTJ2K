@@ -824,44 +824,13 @@ static inline int8_t max_dl(uint8_t transform) { return (transform == 0) ? 2 : 1
 // LP rows are always at even absolute positions, regardless of v0.
 static inline bool is_lp(int32_t r) { return (r & 1) == 0; }
 
-// Physical source row for PSE position p via periodic symmetric extension.
-static inline int32_t pse_source(int32_t p, int32_t v0, int32_t v1) {
-  return v0 + PSEo(p, v0, v1);
-}
-
-// Pointer to the row buffer for physical row r (ring, top-PSE, or bot-PSE).
-// Ring slot is r % IDWT_STATE_RING_DEPTH (fixed per row, independent of ring_origin).
-// For ring rows, returns a pointer to the DATA area (offset IDWT_RING_PSE_LEFT into the slot),
-// which is 32-byte aligned because IDWT_RING_PSE_LEFT=8 floats=32 bytes and ring_buf is
-// 32-byte aligned with slot_stride also a multiple of 8 floats.
-static sprec_t *rptr(const idwt_2d_state *s, int32_t r) {
-  if (r >= s->v0 && r < s->v1)
-    return s->ring_buf + static_cast<ptrdiff_t>(r % IDWT_STATE_RING_DEPTH) * s->slot_stride
-           + IDWT_RING_PSE_LEFT;
-  if (r < s->v0)
-    return s->top_pse_buf + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
-  return s->bot_pse_buf + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
-}
-
-// d_level for physical row r (-1 = unfilled / out of range).
-static int8_t get_dl(const idwt_2d_state *s, int32_t r) {
-  if (r >= s->v0 && r < s->v1) {
-    if (r < s->ring_origin || r >= s->ring_origin + IDWT_STATE_RING_DEPTH) return -1;
-    return s->d_level[r % IDWT_STATE_RING_DEPTH];
-  }
-  if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_dlevel[s->v0 - 1 - r];
-  if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_dlevel[r - s->v1];
-  return -1;
-}
-
-static void set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
-  if (r >= s->v0 && r < s->v1) {
-    s->d_level[r % IDWT_STATE_RING_DEPTH] = lv;
-    return;
-  }
-  if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_dlevel[s->v0 - 1 - r] = lv; return; }
-  if (r >= s->v1 && r < s->v1 + s->bottom_pse) { s->bot_dlevel[r - s->v1] = lv; }
-}
+// rptr, get_dl, set_dl, pse_source are now inline in dwt.hpp as
+// idwt_rptr, idwt_get_dl, idwt_set_dl, idwt_pse_source.
+// Local aliases for brevity in this file:
+#define rptr       idwt_rptr
+#define get_dl     idwt_get_dl
+#define set_dl     idwt_set_dl
+#define pse_source idwt_pse_source
 
 // Required d_level of neighbor rows for row r to advance one level (irrev 9/7 only).
 //   LP: step D (cur 0→1) needs HP neighbors @0; step B (cur 1→2) needs HP @1
@@ -874,7 +843,7 @@ static void set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
 
 // Apply one lifting step to row r and increment its d_level.
 // cur must be the current d_level of row r (caller already fetched it).
-static void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
+static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
   const bool    lp   = is_lp(r);
   sprec_t *tgt  = rptr(s, r);
   sprec_t *prev = rptr(s, r - 1);
@@ -899,7 +868,7 @@ static void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
 }
 
 // Fill any PSE slots whose source is physical row r (called after row r is fetched).
-static void fill_pse(idwt_2d_state *s, int32_t r) {
+static inline void fill_pse(idwt_2d_state *s, int32_t r) {
   const size_t nb = sizeof(sprec_t) * static_cast<size_t>(s->stride);
   const sprec_t *src = rptr(s, r);
   for (int8_t i = 1; i <= s->top_pse; ++i) {
