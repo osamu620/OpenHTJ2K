@@ -92,6 +92,9 @@ class openhtj2k_decoder_impl {
   void invoke_line_based_stream_reuse(std::function<void(uint32_t, int32_t *const *, uint16_t)> cb,
                                        std::vector<uint32_t> &, std::vector<uint32_t> &,
                                        std::vector<uint8_t> &, std::vector<bool> &);
+  void invoke_line_based_direct(PlanarOutputDesc *descs, uint16_t nc,
+                                std::vector<uint32_t> &, std::vector<uint32_t> &,
+                                std::vector<uint8_t> &, std::vector<bool> &);
   void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
                                     std::vector<uint32_t> &, std::vector<uint8_t> &,
                                     std::vector<bool> &);
@@ -715,6 +718,12 @@ void openhtj2k_decoder::invoke_line_based_stream_reuse(
   this->impl->invoke_line_based_stream_reuse(std::move(cb), width, height, depth, is_signed);
 }
 
+void openhtj2k_decoder::invoke_line_based_direct(
+    PlanarOutputDesc *descs, uint16_t nc, std::vector<uint32_t> &width,
+    std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  this->impl->invoke_line_based_direct(descs, nc, width, height, depth, is_signed);
+}
+
 void openhtj2k_decoder::enable_single_tile_reuse(bool on) {
   this->impl->enable_single_tile_reuse(on);
 }
@@ -929,6 +938,210 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
   }
 
   cached_tileSet_[0].decode_line_based_stream(main_header, reduce_NL, cb);
+
+  cached_header_fingerprint_ = fp;
+}
+
+// ── Direct-to-planar decode ───────────────────────────────────────────────
+// Reuses the exact same fingerprint / cache / tile-part machinery as
+// invoke_line_based_stream_reuse, but calls decode_line_based_stream_planar
+// instead of decode_line_based_stream.  Falls back to the callback path
+// when the codestream is multi-tile or when reuse is disabled.
+void openhtj2k_decoder_impl::invoke_line_based_direct(
+    PlanarOutputDesc *descs, uint16_t nc, std::vector<uint32_t> &width,
+    std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  if (!is_parsed) {
+    printf(
+        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_direct().\n");
+    throw std::exception();
+  }
+  if (!single_tile_reuse_enabled_) {
+    // No single-tile cache — fall back to the callback path with a
+    // synthesized callback that writes to the planar descriptors.
+    invoke_line_based_stream(
+        [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
+          for (uint16_t c = 0; c < nc_cb && c < nc; ++c) {
+            const PlanarOutputDesc &d = descs[c];
+            if (y % d.yr != 0) continue;
+            const uint32_t cy = y / d.yr;
+            if (cy >= d.height) continue;
+            if (d.is_16bit) {
+              auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+              for (uint32_t x = 0; x < d.width; ++x) {
+                int32_t v = rows[c][x];
+                if (v < d.minval) v = d.minval;
+                if (v > d.maxval) v = d.maxval;
+                dst[x] = static_cast<uint16_t>(v);
+              }
+            } else {
+              auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+              for (uint32_t x = 0; x < d.width; ++x) {
+                int32_t v = rows[c][x];
+                if (v < d.minval) v = d.minval;
+                if (v > d.maxval) v = d.maxval;
+                dst[x] = static_cast<uint8_t>(d.depth_shift > 0 ? (v >> d.depth_shift) : v);
+              }
+            }
+          }
+        },
+        width, height, depth, is_signed);
+    return;
+  }
+  if (reduce_NL > this->get_max_safe_reduce_NL()) {
+    throw std::runtime_error(
+        "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
+        "maximum safe value for this codestream.  For DFS streams this is the count\n"
+        "of consecutive bidirectional DWT levels from the finest; for other streams\n"
+        "it is the minimum DWT level count across all tile-components.");
+  }
+
+  element_siz numTiles;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  if (numTiles.x != 1 || numTiles.y != 1) {
+    cached_tileSet_.clear();
+    cached_header_fingerprint_ = 0;
+    // Multi-tile: fall back via recursive call with reuse disabled.
+    bool was_enabled = single_tile_reuse_enabled_;
+    single_tile_reuse_enabled_ = false;
+    invoke_line_based_direct(descs, nc, width, height, depth, is_signed);
+    single_tile_reuse_enabled_ = was_enabled;
+    return;
+  }
+
+  // Fingerprint — identical to invoke_line_based_stream_reuse.
+  auto fnv1a_u64 = [](uint64_t h, const void *data, size_t len) {
+    const uint8_t *p = static_cast<const uint8_t *>(data);
+    for (size_t i = 0; i < len; ++i) {
+      h ^= p[i];
+      h *= 1099511628211ull;
+    }
+    return h;
+  };
+  uint64_t fp = 14695981039346656037ull;
+  auto mix_u64 = [&](uint64_t v) {
+    fp = fnv1a_u64(fp, &v, sizeof(v));
+  };
+  {
+    element_siz s_siz, s_osiz, s_tsiz, s_tosiz;
+    main_header.SIZ->get_image_size(s_siz);
+    main_header.SIZ->get_image_origin(s_osiz);
+    main_header.SIZ->get_tile_size(s_tsiz);
+    main_header.SIZ->get_tile_origin(s_tosiz);
+    const uint16_t ncomp = main_header.SIZ->get_num_components();
+    mix_u64((static_cast<uint64_t>(s_siz.x)  << 32) | s_siz.y);
+    mix_u64((static_cast<uint64_t>(s_osiz.x) << 32) | s_osiz.y);
+    mix_u64((static_cast<uint64_t>(s_tsiz.x) << 32) | s_tsiz.y);
+    mix_u64((static_cast<uint64_t>(s_tosiz.x)<< 32) | s_tosiz.y);
+    mix_u64(ncomp);
+    for (uint16_t c = 0; c < ncomp; ++c) {
+      element_siz sub;
+      const uint8_t bd = main_header.SIZ->get_bitdepth(c);
+      const bool    sn = main_header.SIZ->is_signed(c);
+      main_header.SIZ->get_subsampling_factor(sub, c);
+      mix_u64((static_cast<uint64_t>(bd) << 56)
+              | (static_cast<uint64_t>(sn ? 1 : 0) << 48)
+              | (static_cast<uint64_t>(sub.x) << 16)
+              | static_cast<uint64_t>(sub.y));
+    }
+    if (main_header.COD != nullptr) {
+      const uint8_t  dl  = main_header.COD->get_dwt_levels();
+      const uint8_t  po  = main_header.COD->get_progression_order();
+      const uint16_t nl  = main_header.COD->get_number_of_layers();
+      const uint8_t  mct = main_header.COD->use_color_trafo();
+      const uint8_t  cm  = main_header.COD->get_Cmodes();
+      const uint8_t  tx  = main_header.COD->get_transformation();
+      element_siz    cbsz; main_header.COD->get_codeblock_size(cbsz);
+      mix_u64((static_cast<uint64_t>(dl) << 56) | (static_cast<uint64_t>(po) << 48)
+              | (static_cast<uint64_t>(nl) << 32)
+              | (static_cast<uint64_t>(mct) << 24) | (static_cast<uint64_t>(cm) << 16)
+              | static_cast<uint64_t>(tx));
+      mix_u64((static_cast<uint64_t>(cbsz.x) << 32) | cbsz.y);
+      for (uint8_t r = 0; r <= dl; ++r) {
+        element_siz pp; main_header.COD->get_precinct_size(pp, r);
+        mix_u64((static_cast<uint64_t>(pp.x) << 32) | pp.y);
+      }
+    }
+    if (main_header.QCD != nullptr) {
+      const uint8_t qs = main_header.QCD->get_quantization_style();
+      const uint8_t gb = main_header.QCD->get_number_of_guardbits();
+      const uint8_t n0 = main_header.QCD->get_num_entries();
+      mix_u64((static_cast<uint64_t>(qs) << 16) | (static_cast<uint64_t>(gb) << 8)
+              | static_cast<uint64_t>(n0));
+      if (n0 > 0) {
+        const uint8_t  e0 = main_header.QCD->get_exponents(0);
+        const uint16_t m0 = main_header.QCD->get_mantissas(0);
+        mix_u64((static_cast<uint64_t>(e0) << 16) | m0);
+      }
+    }
+    mix_u64(static_cast<uint64_t>(main_header.COC.size()));
+    mix_u64(static_cast<uint64_t>(main_header.QCC.size()));
+    mix_u64(static_cast<uint64_t>(main_header.RGN.size()));
+  }
+
+  // Populate output metadata.
+  uint16_t num_components = main_header.SIZ->get_num_components();
+  element_siz siz, Osiz, Tsiz, TOsiz, Rsiz;
+  main_header.SIZ->get_image_size(siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
+  for (uint16_t c = 0; c < num_components; ++c) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
+    const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
+    const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
+    const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
+    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
+    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    depth.push_back(main_header.SIZ->get_bitdepth(c));
+    is_signed.push_back(main_header.SIZ->is_signed(c));
+  }
+
+  const bool cache_hit = !cached_tileSet_.empty()
+                         && cached_tileSet_[0].is_structure_built()
+                         && cached_header_fingerprint_ == fp;
+  if (!cache_hit) {
+    cached_tileSet_.clear();
+    cached_tileSet_.resize(1);
+    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
+  } else {
+    cached_tileSet_[0].prepare_for_next_frame();
+    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
+  }
+
+  {
+    uint16_t word;
+    SOT_marker tmpSOT;
+    while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
+      if (word != _SOT) {
+        printf("ERROR: SOT marker segment expected but %04X is found\n", word);
+        throw std::exception();
+      }
+      tmpSOT = SOT_marker(in);
+      const uint16_t tile_index = tmpSOT.get_tile_index();
+      if (tile_index != 0) {
+        throw std::runtime_error(
+            "openhtj2k_decoder_impl::invoke_line_based_direct expected a "
+            "single-tile codestream (tile_index != 0 found)");
+      }
+      cached_tileSet_[0].add_tile_part(tmpSOT, in, main_header);
+    }
+  }
+
+  cached_tileSet_[0].set_line_decode_persistent_all(true);
+
+  try {
+    cached_tileSet_[0].line_based_decode = true;
+    cached_tileSet_[0].create_tile_buf(main_header);
+  } catch (std::exception &exc) {
+    printf("ERROR: %s\n", exc.what());
+    cached_tileSet_.clear();
+    cached_header_fingerprint_ = 0;
+    throw std::runtime_error("Abort Decoding!");
+  }
+
+  cached_tileSet_[0].decode_line_based_stream_planar(main_header, reduce_NL, descs, nc);
 
   cached_header_fingerprint_ = fp;
 }

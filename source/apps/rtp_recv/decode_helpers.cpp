@@ -375,6 +375,126 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
   return dims_ok && df.width > 0 && df.height > 0;
 }
 
+bool decode_to_planar_buffers_direct(open_htj2k::openhtj2k_decoder& decoder,
+                                     bool components_are_rgb, DecodedFrame& df) {
+  df.rgb.clear();
+  if (df.kind != (components_are_rgb ? DecodedFrame::PLANAR_RGB : DecodedFrame::PLANAR_YCBCR)) {
+    df.plane_y.clear();
+    df.plane_cb.clear();
+    df.plane_cr.clear();
+    df.plane_y_16.clear();
+    df.plane_cb_16.clear();
+    df.plane_cr_16.clear();
+  }
+  df.width         = 0;
+  df.height        = 0;
+  df.chroma_width  = 0;
+  df.chroma_height = 0;
+  df.bit_depth     = 0;
+  df.kind          = components_are_rgb ? DecodedFrame::PLANAR_RGB : DecodedFrame::PLANAR_YCBCR;
+
+  // Query component metadata via a lightweight pre-decode call.
+  static thread_local std::vector<uint32_t> widths;
+  static thread_local std::vector<uint32_t> heights;
+  static thread_local std::vector<uint8_t>  depths;
+  static thread_local std::vector<bool>     signeds;
+  widths.clear();
+  heights.clear();
+  depths.clear();
+  signeds.clear();
+
+  // Peek at component info — invoke_line_based_direct populates these
+  // before doing any decode work.
+  const uint16_t nc = decoder.get_num_component();
+  if (nc < 1) return false;
+  for (uint16_t c = 0; c < nc; ++c) {
+    widths.push_back(decoder.get_component_width(c));
+    heights.push_back(decoder.get_component_height(c));
+    depths.push_back(decoder.get_component_depth(c));
+    signeds.push_back(decoder.get_component_signedness(c));
+  }
+
+  const uint32_t luma_w  = widths[0];
+  const uint32_t luma_h  = heights[0];
+  const uint8_t  depth_y = depths[0];
+  const uint32_t chroma_w = (nc >= 3) ? widths[1]  : luma_w;
+  const uint32_t chroma_h = (nc >= 3) ? heights[1] : luma_h;
+  const uint8_t  depth_c  = (nc >= 3) ? depths[1]  : depth_y;
+  const bool     use_16   = (depth_y > 8);
+
+  df.width         = luma_w;
+  df.height        = luma_h;
+  df.chroma_width  = chroma_w;
+  df.chroma_height = chroma_h;
+  df.bit_depth     = depth_y;
+
+  // Allocate / reuse plane buffers.
+  const size_t y_sz = static_cast<size_t>(luma_w) * luma_h;
+  const size_t c_sz = static_cast<size_t>(chroma_w) * chroma_h;
+  if (use_16) {
+    const uint16_t neutral_c = components_are_rgb ? 0 : static_cast<uint16_t>(1u << (depth_c - 1));
+    if (df.plane_y_16.size() != y_sz) {
+      df.plane_y_16.assign(y_sz, 0);
+      df.plane_cb_16.assign(c_sz, neutral_c);
+      df.plane_cr_16.assign(c_sz, neutral_c);
+    }
+  } else {
+    if (df.plane_y.size() != y_sz) {
+      df.plane_y.assign(y_sz, 0);
+      df.plane_cb.assign(c_sz, components_are_rgb ? 0 : 128);
+      df.plane_cr.assign(c_sz, components_are_rgb ? 0 : 128);
+    }
+  }
+
+  // Build PlanarOutputDesc array.
+  const uint16_t desc_nc = std::min(nc, static_cast<uint16_t>(3));
+  open_htj2k::PlanarOutputDesc descs[3] = {};
+  for (uint16_t c = 0; c < desc_nc; ++c) {
+    auto& d     = descs[c];
+    const uint8_t  bd    = depths[c];
+    const bool     is_s  = signeds[c];
+    d.width      = widths[c];
+    d.height     = heights[c];
+    d.stride     = widths[c];  // planar, no padding
+    d.yr         = (c == 0) ? 1 : (luma_h / heights[c]);
+    d.dc         = is_s ? 0 : (1 << (bd - 1));
+    d.maxval     = is_s ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
+    d.minval     = is_s ? -(1 << (bd - 1)) : 0;
+    d.is_16bit   = use_16;
+    if (use_16) {
+      d.depth_shift = 0;
+      if (c == 0)
+        d.base = df.plane_y_16.data();
+      else if (c == 1)
+        d.base = df.plane_cb_16.data();
+      else
+        d.base = df.plane_cr_16.data();
+    } else {
+      d.depth_shift = static_cast<int32_t>(bd) - 8;
+      if (c == 0)
+        d.base = df.plane_y.data();
+      else if (c == 1)
+        d.base = df.plane_cb.data();
+      else
+        d.base = df.plane_cr.data();
+    }
+  }
+
+  try {
+    // Clear the metadata vectors — invoke_line_based_direct repopulates them.
+    widths.clear();
+    heights.clear();
+    depths.clear();
+    signeds.clear();
+    decoder.invoke_line_based_direct(descs, desc_nc, widths, heights, depths, signeds);
+  } catch (std::exception& e) {
+    std::fprintf(stderr, "decoder.invoke_line_based_direct failed: %s\n", e.what());
+    return false;
+  }
+
+  return df.width > 0 && df.height > 0;
+}
+
 bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, bool is_first_frame,
                         GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer,
                         DecodedFrame& planar_scratch) {

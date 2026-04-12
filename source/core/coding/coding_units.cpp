@@ -38,6 +38,7 @@
 #include "block_decoding.hpp"
 #include "dwt.hpp"
 #include "color.hpp"
+#include "finalize_narrow.hpp"
 #include "subband_row_buf.hpp"
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
@@ -5073,6 +5074,175 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     cb(y, out_ptrs.data(), NC);
     }  // end of inner y-loop
   }    // end of outer strip loop
+
+  for (uint16_t c = 0; c < NC; ++c)
+    tcomp[c].finalize_line_decode();
+}
+
+// ── Direct-to-planar streaming decode ─────────────────────────────────────
+// Row-by-row pull from IDWT ring → fused finalize+narrow → direct write to
+// caller-provided uint8/uint16 plane buffers.  No strip scratch, no int32
+// intermediate, no callback overhead.
+void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t reduce_NL_val,
+                                               open_htj2k::PlanarOutputDesc *descs, uint16_t nc) {
+  const uint16_t NC  = num_components;
+  const uint8_t  MCT = hdr.COD->use_color_trafo();
+
+  // MCT fallback: synthesize a callback that does the two-stage path.  This
+  // keeps the initial implementation simple; a fused MCT+narrow NEON kernel
+  // can be added later for 4:4:4 content.
+  if (NC >= 3 && MCT != 0) {
+    decode_line_based_stream(
+        hdr, reduce_NL_val,
+        [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
+          for (uint16_t c = 0; c < nc_cb && c < nc; ++c) {
+            const open_htj2k::PlanarOutputDesc &d = descs[c];
+            const uint32_t yr_c = d.yr;
+            if (y % yr_c != 0) continue;
+            const uint32_t cy = y / yr_c;
+            if (cy >= d.height) continue;
+            if (d.is_16bit) {
+              auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+              for (uint32_t x = 0; x < d.width; ++x) {
+                int32_t v = rows[c][x];
+                if (v < d.minval) v = d.minval;
+                if (v > d.maxval) v = d.maxval;
+                dst[x] = static_cast<uint16_t>(v);
+              }
+            } else {
+              auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+              const int32_t ds = d.depth_shift;
+              for (uint32_t x = 0; x < d.width; ++x) {
+                int32_t v = rows[c][x];
+                if (v < d.minval) v = d.minval;
+                if (v > d.maxval) v = d.maxval;
+                dst[x] = static_cast<uint8_t>(ds > 0 ? (v >> ds) : v);
+              }
+            }
+          }
+        });
+    return;
+  }
+
+  // Non-MCT path: use the same strip-granular pull driver as
+  // decode_line_based_stream (parallel per-component IDWT batch) but
+  // replace Phase 2 with fused finalize+narrow → direct plane write.
+  // This keeps the parallel IDWT throughput while eliminating the
+  // out_rows int32 intermediate and callback overhead.
+
+  // Compute CInfo (same as decode_line_based_stream).
+  struct CInfo {
+    uint32_t csize_x, csize_y, yr;
+    int16_t downshift, rnd;
+  };
+  CInfo ci[16] = {};
+  for (uint16_t c = 0; c < NC && c < 16; ++c) {
+    element_siz Rsiz;
+    hdr.SIZ->get_subsampling_factor(Rsiz, c);
+    ci[c].yr = Rsiz.y;
+    const uint8_t NL_c = tcomp[c].get_dwt_levels();
+    j2k_resolution *cr_act =
+        tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL_val));
+    ci[c].csize_x  = cr_act->get_pos1().x - cr_act->get_pos0().x;
+    ci[c].csize_y  = cr_act->get_pos1().y - cr_act->get_pos0().y;
+    ci[c].downshift = (tcomp[c].transformation == 1)
+                          ? 0
+                          : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
+    ci[c].rnd = (ci[c].downshift <= 0) ? 0 : static_cast<int16_t>((1 << ci[c].downshift) >> 1);
+  }
+
+  for (uint16_t c = 0; c < NC; ++c)
+    tcomp[c].init_line_decode(/*ring_mode=*/true);
+
+  const uint32_t H = ci[0].csize_y;
+
+  // Strip height — same logic as decode_line_based_stream.
+  uint32_t max_yr = 1;
+  for (uint16_t c = 0; c < NC; ++c) {
+    if (ci[c].yr > max_yr) max_yr = ci[c].yr;
+  }
+  uint32_t strip_h_luma = static_cast<uint32_t>(tcomp[0].codeblock_size.y);
+  if (strip_h_luma == 0) strip_h_luma = 64;
+  if (strip_h_luma < 64) strip_h_luma = 64;
+  strip_h_luma = ((strip_h_luma + max_yr - 1) / max_yr) * max_yr;
+
+  std::vector<sprec_t *> strip_ptrs(NC, nullptr);
+
+#ifdef OPENHTJ2K_THREAD
+  struct StripPullCtx {
+    j2k_tile_component *tc;
+    sprec_t           **slot;
+    std::atomic<int>   *cnt;
+    uint32_t            count;
+    uint32_t            stride;
+  };
+  std::vector<StripPullCtx> strip_tasks(NC);
+  std::atomic<int> pull_cnt(0);
+  auto *pool = ThreadPool::get();
+  const bool can_parallel_pull =
+      (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
+#endif
+
+  for (uint32_t strip_y0 = 0; strip_y0 < H; strip_y0 += strip_h_luma) {
+    const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, H);
+
+    // Pre-compute per-component pull counts.
+    uint32_t counts[16] = {};
+    for (uint16_t c = 0; c < NC && c < 16; ++c) {
+      const uint32_t yr_c = ci[c].yr;
+      const uint32_t c_y0 = strip_y0 / yr_c;
+      const uint32_t c_y1 = std::min((strip_y1 + yr_c - 1) / yr_c, ci[c].csize_y);
+      counts[c] = (c_y1 > c_y0) ? (c_y1 - c_y0) : 0u;
+    }
+
+    // Phase 1: pull per-component strip rows into scratch (parallel).
+#ifdef OPENHTJ2K_THREAD
+    if (can_parallel_pull) {
+      for (uint16_t c = 0; c < NC; ++c) {
+        strip_tasks[c] = {&tcomp[c], &strip_ptrs[c], &pull_cnt,
+                          counts[c], ci[c].csize_x};
+      }
+      pull_cnt.store(static_cast<int>(NC), std::memory_order_relaxed);
+      pool->push_batch(strip_tasks, [](const StripPullCtx &ctx) {
+        const StripPullCtx *t = &ctx;
+        return [t]() {
+          *t->slot = t->tc->pull_strip_into_buf(t->count, t->stride);
+          t->cnt->fetch_sub(1, std::memory_order_release);
+        };
+      });
+      dec_strip_barrier_wait(pull_cnt);
+    } else
+#endif
+    {
+      for (uint16_t c = 0; c < NC; ++c) {
+        strip_ptrs[c] = tcomp[c].pull_strip_into_buf(counts[c], ci[c].csize_x);
+      }
+    }
+
+    // Phase 2: fused finalize+narrow directly to caller's plane buffers.
+    // No out_rows int32 intermediate, no callback.
+    for (uint32_t y = strip_y0; y < strip_y1; ++y) {
+      for (uint16_t c = 0; c < NC && c < nc; ++c) {
+        const uint32_t yr_c = ci[c].yr;
+        if (y % yr_c != 0) continue;
+        if (y / yr_c >= ci[c].csize_y) continue;
+        const size_t rs_c = static_cast<size_t>((y - strip_y0) / yr_c);
+        const sprec_t *spf = strip_ptrs[c] + rs_c * ci[c].csize_x;
+        const open_htj2k::PlanarOutputDesc &d = descs[c];
+        const uint32_t cy = y / yr_c;
+
+        if (d.is_16bit) {
+          auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+          open_htj2k::finalize_f32_to_u16(spf, dst, d.width, ci[c].downshift, ci[c].rnd,
+                                          d.dc, d.maxval, d.minval);
+        } else {
+          auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+          open_htj2k::finalize_f32_to_u8(spf, dst, d.width, ci[c].downshift, ci[c].rnd,
+                                         d.dc, d.maxval, d.minval, d.depth_shift);
+        }
+      }
+    }
+  }
 
   for (uint16_t c = 0; c < NC; ++c)
     tcomp[c].finalize_line_decode();

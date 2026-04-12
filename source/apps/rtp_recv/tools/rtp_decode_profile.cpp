@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "decoder.hpp"
+#include "planar_output_desc.hpp"
 #include "../planar_shift.hpp"
 
 namespace fs = std::filesystem;
@@ -108,10 +109,12 @@ int main(int argc, char** argv) {
   size_t      max_frames = argc > 2 ? std::stoul(argv[2]) : 200;
   size_t      loops      = argc > 3 ? std::stoul(argv[3]) : 3;
   uint32_t    nthreads   = argc > 4 ? static_cast<uint32_t>(std::stoul(argv[4])) : 2;
-  // Optional 5th arg: pass "reuse" to exercise the single-tile cache path;
-  // anything else (or no arg) uses the legacy invoke_line_based_stream so
-  // we can A/B the two on the same codestream set.
-  const bool  use_reuse = (argc > 5 && std::string(argv[5]) == "reuse");
+  // Optional 5th arg: "reuse" for the single-tile cache path,
+  // "direct" for the fused direct-to-planar path (invoke_line_based_direct),
+  // anything else uses the legacy invoke_line_based_stream.
+  const std::string mode_str = (argc > 5) ? argv[5] : "";
+  const bool  use_reuse  = (mode_str == "reuse");
+  const bool  use_direct = (mode_str == "direct");
   // Optional 6th arg: path prefix for dumping frame 0's decoded planes
   // (suffix _y.bin / _cb.bin / _cr.bin is appended).  Used to verify
   // byte-equality between the legacy and reuse paths: run twice with
@@ -129,11 +132,13 @@ int main(int argc, char** argv) {
   std::printf("loaded %zu frames, %.1f MiB, avg %.1f KiB per frame\n", frames.size(),
               static_cast<double>(total_bytes) / (1024.0 * 1024.0),
               static_cast<double>(total_bytes) / 1024.0 / static_cast<double>(frames.size()));
-  std::printf("threads=%u  loops=%zu  path=%s\n\n", nthreads, loops,
-              use_reuse ? "invoke_line_based_stream_reuse" : "invoke_line_based_stream");
+  const char* mode_label = use_direct ? "invoke_line_based_direct"
+                         : use_reuse ? "invoke_line_based_stream_reuse"
+                                     : "invoke_line_based_stream";
+  std::printf("threads=%u  loops=%zu  path=%s\n\n", nthreads, loops, mode_label);
 
   open_htj2k::openhtj2k_decoder decoder;
-  if (use_reuse) decoder.enable_single_tile_reuse(true);
+  if (use_reuse || use_direct) decoder.enable_single_tile_reuse(true);
 
   Stats s_init, s_parse, s_stream, s_cbshift, s_total;
   size_t iters                  = 0;
@@ -151,7 +156,11 @@ int main(int argc, char** argv) {
       std::vector<uint32_t> widths, heights;
       std::vector<uint8_t>  depths;
       std::vector<bool>     signeds;
-      if (use_reuse) {
+      if (use_direct) {
+        // Direct path: allocate scratch planes and invoke fused decode.
+        open_htj2k::PlanarOutputDesc descs[3] = {};
+        decoder.invoke_line_based_direct(descs, 0, widths, heights, depths, signeds);
+      } else if (use_reuse) {
         decoder.invoke_line_based_stream_reuse(
             [&](uint32_t, int32_t* const*, uint16_t) {},
             widths, heights, depths, signeds);
@@ -254,7 +263,38 @@ int main(int argc, char** argv) {
               const auto cb1 = Clock::now();
               cb_time_ns += std::chrono::duration_cast<ns>(cb1 - cb0).count();
             };
-        if (use_reuse) {
+        if (use_direct) {
+          // Direct path: use get_component_*() for dimensions after parse().
+          const uint16_t nc = decoder.get_num_component();
+          luma_w  = decoder.get_component_width(0);
+          luma_h  = decoder.get_component_height(0);
+          depth_y = decoder.get_component_depth(0);
+          if (nc >= 3) {
+            chroma_w = decoder.get_component_width(1);
+            chroma_h = decoder.get_component_height(1);
+            depth_c  = decoder.get_component_depth(1);
+          }
+          if (plane_y.size() != static_cast<size_t>(luma_w) * luma_h) {
+            plane_y.assign(static_cast<size_t>(luma_w) * luma_h, 0);
+            plane_cb.assign(static_cast<size_t>(chroma_w) * chroma_h, 128);
+            plane_cr.assign(static_cast<size_t>(chroma_w) * chroma_h, 128);
+          }
+          const uint16_t desc_nc = std::min(nc, static_cast<uint16_t>(3));
+          open_htj2k::PlanarOutputDesc descs[3] = {};
+          descs[0] = {plane_y.data(),  luma_w,   luma_w,   luma_h,   1,
+                      1 << (depth_y - 1), (1 << depth_y) - 1, 0,
+                      static_cast<int32_t>(depth_y) - 8, false};
+          if (nc >= 3) {
+            const uint32_t yr_c = (chroma_h > 0 && luma_h > 0) ? luma_h / chroma_h : 1u;
+            descs[1] = {plane_cb.data(), chroma_w, chroma_w, chroma_h, yr_c,
+                        1 << (depth_c - 1), (1 << depth_c) - 1, 0,
+                        static_cast<int32_t>(depth_c) - 8, false};
+            descs[2] = {plane_cr.data(), chroma_w, chroma_w, chroma_h, yr_c,
+                        1 << (depth_c - 1), (1 << depth_c) - 1, 0,
+                        static_cast<int32_t>(depth_c) - 8, false};
+          }
+          decoder.invoke_line_based_direct(descs, desc_nc, widths, heights, depths, signeds);
+        } else if (use_reuse) {
           decoder.invoke_line_based_stream_reuse(stream_cb, widths, heights, depths, signeds);
         } else {
           decoder.invoke_line_based_stream(stream_cb, widths, heights, depths, signeds);

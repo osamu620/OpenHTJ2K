@@ -54,6 +54,13 @@ bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
 bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool components_are_rgb,
                               DecodedFrame& df);
 
+// Fused direct-to-planar variant.  Uses invoke_line_based_direct() to
+// write uint8/uint16 directly from the IDWT ring buffer, bypassing the
+// int32 intermediate and callback overhead.  Same output as
+// decode_to_planar_buffers, ~3x less memory traffic.
+bool decode_to_planar_buffers_direct(open_htj2k::openhtj2k_decoder& decoder,
+                                     bool components_are_rgb, DecodedFrame& df);
+
 void dump_frame_if_requested(const CliOptions& opts, const AssembledFrame& frame,
                              uint64_t frame_index);
 

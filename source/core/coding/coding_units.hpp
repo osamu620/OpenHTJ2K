@@ -29,6 +29,7 @@
 #pragma once
 
 #include "j2kmarkers.hpp"
+#include "planar_output_desc.hpp"
 
 #include <atomic>
 #include <cstring>
@@ -750,6 +751,14 @@ class j2k_tile : public j2k_tile_base {
   void decode_line_based_stream(
       j2k_main_header &main_header, uint8_t reduce_NL,
       const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb);
+  // Direct-to-planar streaming decode.  Reads float from IDWT ring buffers and
+  // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
+  // the strip scratch, out_rows int32 intermediate, and callback overhead.
+  // Only for single-tile, non-MCT codestreams; falls back to decode_line_based_stream()
+  // with a synthesized callback when MCT is active.
+  void decode_line_based_stream_planar(
+      j2k_main_header &main_header, uint8_t reduce_NL,
+      open_htj2k::PlanarOutputDesc *descs, uint16_t nc);
   // Diagnostic variant: decodes all codeblocks first (no IDWT), then uses
   // the pre-decoded sb->i_samples to bypass decode_strip() in row_ptr().
   // Used by lb_compare to isolate decode_strip bugs from IDWT state machine bugs.
