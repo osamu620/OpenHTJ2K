@@ -96,8 +96,8 @@ curve is a planned follow-up.
 - `--pace-fps <N>` — Frame-pacing target, default `30`, `0`
   disables. Active only with `--no-vsync`. Uses RTP timestamp deltas
   when available.
-- `--threads <N>` — Decoder thread count. Default `2`, matches HT
-  intra-frame parallelism saturation on 4K.
+- `--threads <N>` — Decoder thread count. Default `4`, optimal on
+  4K with component-parallel IDWT dispatch (v0.13.0+).
 
 ### Color fallback (when the Main Packet declares S=0)
 
@@ -159,7 +159,7 @@ echo 'net.core.rmem_max = 33554432' | sudo tee /etc/sysctl.d/99-openhtj2k-rtp.co
 ## Hardware requirements (4K @ 60 fps sustained)
 
 Measured against a 4K 4:2:2 1.7-bpp broadcast HT fixture at
-`--threads 2` on an AMD Ryzen 9 9950X running Linux. Reproduce with
+`--threads 4` on an AMD Ryzen 9 9950X running Linux. Reproduce with
 the offline profiler at
 `source/apps/rtp_recv/tools/rtp_decode_profile.cpp` (built as
 `open_htj2k_rtp_decode_profile` when `-DOPENHTJ2K_RTP=ON`). Higher-
@@ -167,15 +167,15 @@ bitrate streams, 4:4:4 chroma, or deeper bit depths will not hit the
 same numbers.
 
 - **CPU**: recent high-end x86-64 with AVX2. HTJ2K decode is bounded
-  by per-thread throughput — `--threads 2` (the default) saturates HT
-  intra-frame parallelism on 4K, so single-thread speed matters more
-  than core count. The dev-box profiler peaks at ~80 fps on the above
+  by per-thread throughput — `--threads 4` (the default, v0.13.0+)
+  is optimal on 4K with the component-parallel IDWT strip dispatch.
+  The dev-box profiler peaks at ~95 fps (10.7 ms/frame) on the above
   fixture; the live `open_htj2k_rtp_recv --no-vsync` pipeline locks
-  to the source cadence at 60 fps with zero decode-slot evictions and
-  ~13 ms average decode time, leaving ~3.5 ms of p99 headroom inside
-  the 16.67 ms frame budget. Mid-range or older parts are unlikely
-  to sustain 60 fps at 4K; non-AVX2 CPUs additionally fall back to
-  the scalar YCbCr path and will not reach real-time.
+  to the source cadence at 60 fps with zero decode-slot evictions,
+  leaving comfortable headroom inside the 16.67 ms frame budget.
+  Mid-range or older parts are unlikely to sustain 60 fps at 4K;
+  non-AVX2 CPUs additionally fall back to the scalar YCbCr path and
+  will not reach real-time.
 - **GPU** (default `--color-path shader`): any integrated or discrete
   GPU with OpenGL 3.3 core. A modern IGP is ample; the YCbCr fragment
   shader is trivial.
