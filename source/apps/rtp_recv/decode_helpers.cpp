@@ -153,10 +153,10 @@ bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
   out_h                    = 0;
 
   try {
-    std::vector<uint32_t> widths;
-    std::vector<uint32_t> heights;
-    std::vector<uint8_t>  depths;
-    std::vector<bool>     signeds;
+    static thread_local std::vector<uint32_t> widths;
+    static thread_local std::vector<uint32_t> heights;
+    static thread_local std::vector<uint8_t>  depths;
+    static thread_local std::vector<bool>     signeds;
     decoder.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
           if (y == 0) {
@@ -209,13 +209,21 @@ bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
 
 bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool components_are_rgb,
                               DecodedFrame& df) {
+  // Do NOT clear() the plane buffers here — that would deallocate their
+  // memory and force a full re-alloc+memset on the next frame.  The size
+  // check in the y==0 callback (below) skips assign() when dimensions are
+  // unchanged, reusing the existing allocation.  Clear only the RGB buffer
+  // (unused on the shader/planar path) and the non-active bit-depth path.
   df.rgb.clear();
-  df.plane_y.clear();
-  df.plane_cb.clear();
-  df.plane_cr.clear();
-  df.plane_y_16.clear();
-  df.plane_cb_16.clear();
-  df.plane_cr_16.clear();
+  if (df.kind != (components_are_rgb ? DecodedFrame::PLANAR_RGB : DecodedFrame::PLANAR_YCBCR)) {
+    // Kind changed (e.g. RGB↔YCbCr) — force re-init on the first row.
+    df.plane_y.clear();
+    df.plane_cb.clear();
+    df.plane_cr.clear();
+    df.plane_y_16.clear();
+    df.plane_cb_16.clear();
+    df.plane_cr_16.clear();
+  }
   df.width         = 0;
   df.height        = 0;
   df.chroma_width  = 0;
@@ -233,10 +241,12 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
   bool     use_16     = false;  // true when depth_y > 8 -> take the GL_R16 path
 
   try {
-    std::vector<uint32_t> widths;
-    std::vector<uint32_t> heights;
-    std::vector<uint8_t>  depths;
-    std::vector<bool>     signeds;
+    // Reuse across frames to avoid per-frame heap allocation.  The decoder
+    // clears and repopulates these on each invoke.
+    static thread_local std::vector<uint32_t> widths;
+    static thread_local std::vector<uint32_t> heights;
+    static thread_local std::vector<uint8_t>  depths;
+    static thread_local std::vector<bool>     signeds;
     decoder.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
           if (y == 0) {
@@ -274,21 +284,27 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
             df.chroma_height = chroma_h_0;
             df.bit_depth     = depth_y;
             use_16           = (depth_y > 8);
+            // First frame: allocate + fill.  Subsequent frames with identical
+            // dimensions: skip the ~1 ms memset — the callback overwrites
+            // every byte.  Dimension changes (e.g. resolution switch) still
+            // trigger a full re-init.
+            const size_t y_sz  = static_cast<size_t>(luma_w) * luma_h;
+            const size_t c_sz  = static_cast<size_t>(chroma_w_0) * chroma_h_0;
             if (use_16) {
-              // 16-bit plane path.  Neutral chroma in the u16 space is the
-              // midpoint of the source's [0, (1<<depth)-1] range.
               const uint16_t neutral_c = components_are_rgb
                                              ? 0
                                              : static_cast<uint16_t>(1u << (depth_c - 1));
-              df.plane_y_16.assign(static_cast<size_t>(luma_w) * luma_h, 0);
-              df.plane_cb_16.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0, neutral_c);
-              df.plane_cr_16.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0, neutral_c);
+              if (df.plane_y_16.size() != y_sz) {
+                df.plane_y_16.assign(y_sz, 0);
+                df.plane_cb_16.assign(c_sz, neutral_c);
+                df.plane_cr_16.assign(c_sz, neutral_c);
+              }
             } else {
-              df.plane_y.assign(static_cast<size_t>(luma_w) * luma_h, 0);
-              df.plane_cb.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
-                                 components_are_rgb ? 0 : 128);
-              df.plane_cr.assign(static_cast<size_t>(chroma_w_0) * chroma_h_0,
-                                 components_are_rgb ? 0 : 128);
+              if (df.plane_y.size() != y_sz) {
+                df.plane_y.assign(y_sz, 0);
+                df.plane_cb.assign(c_sz, components_are_rgb ? 0 : 128);
+                df.plane_cr.assign(c_sz, components_are_rgb ? 0 : 128);
+              }
             }
           }
           if (!dims_ok) return;

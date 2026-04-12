@@ -42,17 +42,27 @@ class j2c_src_memory {
   uint8_t *buf;
   uint32_t pos;
   uint32_t len;
+  uint32_t cap;       // allocated capacity (>= len + 16); 0 when buf == nullptr
+  bool     borrowed;  // true when buf points to external memory (do not free)
 
  public:
   j2c_src_memory() {
-    buf = nullptr;
-    pos = 0;
-    len = 0;
+    buf      = nullptr;
+    pos      = 0;
+    len      = 0;
+    cap      = 0;
+    borrowed = false;
   }
   ~j2c_src_memory() {
-    if (buf != nullptr) aligned_mem_free(buf);
+    if (buf != nullptr && !borrowed) aligned_mem_free(buf);
+    cap = 0;
   }
   void alloc_memory(uint32_t length);
+  // Borrow an external buffer without copying.  The caller must keep the
+  // data alive until the next alloc_memory / borrow_memory / destructor.
+  // 16 bytes of readable padding past `data + length` are required (the
+  // same SIMD over-read guarantee as alloc_memory provides).
+  void borrow_memory(uint8_t *data, uint32_t length);
   uint8_t get_byte();
   int get_N_byte(uint8_t *buf, uint32_t length);
   uint16_t get_word();

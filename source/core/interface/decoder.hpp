@@ -52,6 +52,11 @@ class openhtj2k_decoder {
   OPENHTJ2K_EXPORT openhtj2k_decoder(const char *, uint8_t reduce_NL, uint32_t num_threads);
   OPENHTJ2K_EXPORT openhtj2k_decoder(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   OPENHTJ2K_EXPORT void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  // Zero-copy init: borrows the caller's buffer instead of copying.
+  // The caller MUST keep the data alive through parse() + invoke*().
+  // 16 bytes of readable padding past buf+length are required for SIMD reads.
+  // Falls back to a copy if the buffer contains a JPH/JP2 container.
+  OPENHTJ2K_EXPORT void init_borrow(uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   OPENHTJ2K_EXPORT void parse();
   OPENHTJ2K_EXPORT uint16_t get_num_component();
   OPENHTJ2K_EXPORT uint32_t get_component_width(uint16_t);

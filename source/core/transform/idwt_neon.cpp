@@ -224,7 +224,27 @@ auto idwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const X
                                             float *const Xout, float coeff) {
   auto vvv = vdupq_n_f32(coeff);
   int32_t n = 0;
-  // 2× unrolled: two independent FMS chains per iteration to hide 4-cycle FMA latency.
+#if defined(__APPLE__) && defined(__aarch64__)
+  // 4× unrolled: four independent FMS chains per iteration to fill Apple Silicon
+  // P-core's 8-wide issue window.  Guarded to Apple Silicon only; mainstream
+  // Cortex-A cores (A76 etc.) have narrower issue and the extra register
+  // pressure from 4× hurts more than the reduced loop overhead helps.
+  for (; n + 12 < simdlen; n += 16) {
+    auto x0a = vld1q_f32(Xin0 + n);      auto x2a = vld1q_f32(Xin1 + n);      auto x1a = vld1q_f32(Xout + n);
+    auto x0b = vld1q_f32(Xin0 + n + 4);  auto x2b = vld1q_f32(Xin1 + n + 4);  auto x1b = vld1q_f32(Xout + n + 4);
+    auto x0c = vld1q_f32(Xin0 + n + 8);  auto x2c = vld1q_f32(Xin1 + n + 8);  auto x1c = vld1q_f32(Xout + n + 8);
+    auto x0d = vld1q_f32(Xin0 + n + 12); auto x2d = vld1q_f32(Xin1 + n + 12); auto x1d = vld1q_f32(Xout + n + 12);
+    x1a = vfmsq_f32(x1a, vaddq_f32(x0a, x2a), vvv);
+    x1b = vfmsq_f32(x1b, vaddq_f32(x0b, x2b), vvv);
+    x1c = vfmsq_f32(x1c, vaddq_f32(x0c, x2c), vvv);
+    x1d = vfmsq_f32(x1d, vaddq_f32(x0d, x2d), vvv);
+    vst1q_f32(Xout + n, x1a);
+    vst1q_f32(Xout + n + 4, x1b);
+    vst1q_f32(Xout + n + 8, x1c);
+    vst1q_f32(Xout + n + 12, x1d);
+  }
+#else
+  // 2× unrolled for Cortex-A class cores.
   for (; n + 4 < simdlen; n += 8) {
     auto x0a = vld1q_f32(Xin0 + n);     auto x2a = vld1q_f32(Xin1 + n);     auto x1a = vld1q_f32(Xout + n);
     auto x0b = vld1q_f32(Xin0 + n + 4); auto x2b = vld1q_f32(Xin1 + n + 4); auto x1b = vld1q_f32(Xout + n + 4);
@@ -233,6 +253,7 @@ auto idwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const X
     vst1q_f32(Xout + n, x1a);
     vst1q_f32(Xout + n + 4, x1b);
   }
+#endif
   for (; n < simdlen; n += 4) {
     auto x0 = vld1q_f32(Xin0 + n);
     auto x2 = vld1q_f32(Xin1 + n);
@@ -251,6 +272,22 @@ void idwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, 
   const float32x4_t k025 = vdupq_n_f32(0.25f);
   const float32x4_t k2   = vdupq_n_f32(2.0f);
   int32_t i = 0;
+#if defined(__APPLE__) && defined(__aarch64__)
+  for (; i + 12 < n; i += 16) {
+    float32x4_t a0 = vld1q_f32(prev + i);      float32x4_t b0 = vld1q_f32(next + i);      float32x4_t t0 = vld1q_f32(tgt + i);
+    float32x4_t a1 = vld1q_f32(prev + i + 4);  float32x4_t b1 = vld1q_f32(next + i + 4);  float32x4_t t1 = vld1q_f32(tgt + i + 4);
+    float32x4_t a2 = vld1q_f32(prev + i + 8);  float32x4_t b2 = vld1q_f32(next + i + 8);  float32x4_t t2 = vld1q_f32(tgt + i + 8);
+    float32x4_t a3 = vld1q_f32(prev + i + 12); float32x4_t b3 = vld1q_f32(next + i + 12); float32x4_t t3 = vld1q_f32(tgt + i + 12);
+    t0 = vsubq_f32(t0, vrndmq_f32(vmulq_f32(vaddq_f32(vaddq_f32(a0, b0), k2), k025)));
+    t1 = vsubq_f32(t1, vrndmq_f32(vmulq_f32(vaddq_f32(vaddq_f32(a1, b1), k2), k025)));
+    t2 = vsubq_f32(t2, vrndmq_f32(vmulq_f32(vaddq_f32(vaddq_f32(a2, b2), k2), k025)));
+    t3 = vsubq_f32(t3, vrndmq_f32(vmulq_f32(vaddq_f32(vaddq_f32(a3, b3), k2), k025)));
+    vst1q_f32(tgt + i, t0);
+    vst1q_f32(tgt + i + 4, t1);
+    vst1q_f32(tgt + i + 8, t2);
+    vst1q_f32(tgt + i + 12, t3);
+  }
+#else
   for (; i + 4 < n; i += 8) {
     float32x4_t a0 = vld1q_f32(prev + i);     float32x4_t b0 = vld1q_f32(next + i);     float32x4_t t0 = vld1q_f32(tgt + i);
     float32x4_t a1 = vld1q_f32(prev + i + 4); float32x4_t b1 = vld1q_f32(next + i + 4); float32x4_t t1 = vld1q_f32(tgt + i + 4);
@@ -259,6 +296,7 @@ void idwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, 
     vst1q_f32(tgt + i, t0);
     vst1q_f32(tgt + i + 4, t1);
   }
+#endif
   for (; i + 4 <= n; i += 4) {
     float32x4_t a = vld1q_f32(prev + i);
     float32x4_t b = vld1q_f32(next + i);
@@ -275,6 +313,22 @@ void idwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, 
 void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, float *tgt) {
   const float32x4_t k05 = vdupq_n_f32(0.5f);
   int32_t i = 0;
+#if defined(__APPLE__) && defined(__aarch64__)
+  for (; i + 12 < n; i += 16) {
+    float32x4_t a0 = vld1q_f32(prev + i);      float32x4_t b0 = vld1q_f32(next + i);      float32x4_t t0 = vld1q_f32(tgt + i);
+    float32x4_t a1 = vld1q_f32(prev + i + 4);  float32x4_t b1 = vld1q_f32(next + i + 4);  float32x4_t t1 = vld1q_f32(tgt + i + 4);
+    float32x4_t a2 = vld1q_f32(prev + i + 8);  float32x4_t b2 = vld1q_f32(next + i + 8);  float32x4_t t2 = vld1q_f32(tgt + i + 8);
+    float32x4_t a3 = vld1q_f32(prev + i + 12); float32x4_t b3 = vld1q_f32(next + i + 12); float32x4_t t3 = vld1q_f32(tgt + i + 12);
+    t0 = vaddq_f32(t0, vrndmq_f32(vmulq_f32(vaddq_f32(a0, b0), k05)));
+    t1 = vaddq_f32(t1, vrndmq_f32(vmulq_f32(vaddq_f32(a1, b1), k05)));
+    t2 = vaddq_f32(t2, vrndmq_f32(vmulq_f32(vaddq_f32(a2, b2), k05)));
+    t3 = vaddq_f32(t3, vrndmq_f32(vmulq_f32(vaddq_f32(a3, b3), k05)));
+    vst1q_f32(tgt + i, t0);
+    vst1q_f32(tgt + i + 4, t1);
+    vst1q_f32(tgt + i + 8, t2);
+    vst1q_f32(tgt + i + 12, t3);
+  }
+#else
   for (; i + 4 < n; i += 8) {
     float32x4_t a0 = vld1q_f32(prev + i);     float32x4_t b0 = vld1q_f32(next + i);     float32x4_t t0 = vld1q_f32(tgt + i);
     float32x4_t a1 = vld1q_f32(prev + i + 4); float32x4_t b1 = vld1q_f32(next + i + 4); float32x4_t t1 = vld1q_f32(tgt + i + 4);
@@ -283,6 +337,7 @@ void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, 
     vst1q_f32(tgt + i, t0);
     vst1q_f32(tgt + i + 4, t1);
   }
+#endif
   for (; i + 4 <= n; i += 4) {
     float32x4_t a = vld1q_f32(prev + i);
     float32x4_t b = vld1q_f32(next + i);
@@ -297,6 +352,22 @@ void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, 
 void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *tgt, float coeff) {
   auto vvv  = vdupq_n_f32(coeff);
   int32_t i = 0;
+#if defined(__APPLE__) && defined(__aarch64__)
+  for (; i + 12 < n; i += 16) {
+    auto x0a = vld1q_f32(prev + i);      auto x2a = vld1q_f32(next + i);      auto x1a = vld1q_f32(tgt + i);
+    auto x0b = vld1q_f32(prev + i + 4);  auto x2b = vld1q_f32(next + i + 4);  auto x1b = vld1q_f32(tgt + i + 4);
+    auto x0c = vld1q_f32(prev + i + 8);  auto x2c = vld1q_f32(next + i + 8);  auto x1c = vld1q_f32(tgt + i + 8);
+    auto x0d = vld1q_f32(prev + i + 12); auto x2d = vld1q_f32(next + i + 12); auto x1d = vld1q_f32(tgt + i + 12);
+    x1a = vfmsq_f32(x1a, vaddq_f32(x0a, x2a), vvv);
+    x1b = vfmsq_f32(x1b, vaddq_f32(x0b, x2b), vvv);
+    x1c = vfmsq_f32(x1c, vaddq_f32(x0c, x2c), vvv);
+    x1d = vfmsq_f32(x1d, vaddq_f32(x0d, x2d), vvv);
+    vst1q_f32(tgt + i, x1a);
+    vst1q_f32(tgt + i + 4, x1b);
+    vst1q_f32(tgt + i + 8, x1c);
+    vst1q_f32(tgt + i + 12, x1d);
+  }
+#else
   for (; i + 4 < n; i += 8) {
     auto x0a = vld1q_f32(prev + i);     auto x2a = vld1q_f32(next + i);     auto x1a = vld1q_f32(tgt + i);
     auto x0b = vld1q_f32(prev + i + 4); auto x2b = vld1q_f32(next + i + 4); auto x1b = vld1q_f32(tgt + i + 4);
@@ -305,6 +376,7 @@ void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *
     vst1q_f32(tgt + i, x1a);
     vst1q_f32(tgt + i + 4, x1b);
   }
+#endif
   for (; i + 4 <= n; i += 4) {
     auto x0 = vld1q_f32(prev + i);
     auto x2 = vld1q_f32(next + i);

@@ -52,7 +52,14 @@
 // creating a header dependency from utils.hpp on dwt.hpp.
 static_assert(DWT_RIGHT_SLACK == SIMD_PADDING,
               "DWT_RIGHT_SLACK (utils.hpp) must equal SIMD_PADDING (dwt.hpp)");
-constexpr int32_t DWT_VERT_STRIP = 64;  // column-strip width for vertical DWT (multiple of 8)
+// Column-strip width for vertical DWT (must be a multiple of 16).
+// 128 on Apple Silicon to match M-series 128-byte cache lines (128 floats × 4B = 512B = 4 lines);
+// 64 elsewhere to fit x86/Cortex-A 64-byte cache lines.
+#if defined(__APPLE__) && defined(__aarch64__)
+constexpr int32_t DWT_VERT_STRIP = 128;
+#else
+constexpr int32_t DWT_VERT_STRIP = 64;
+#endif
 
 constexpr float fA = -1.586134342059924f;
 constexpr float fB = -0.052980118572961f;

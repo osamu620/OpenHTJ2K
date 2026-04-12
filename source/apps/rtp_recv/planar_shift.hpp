@@ -30,6 +30,8 @@
 
 #if defined(__AVX2__)
 #  include <immintrin.h>
+#elif defined(__ARM_NEON)
+#  include <arm_neon.h>
 #endif
 
 namespace open_htj2k::rtp_recv {
@@ -82,6 +84,43 @@ inline void shift_i32_plane_to_u8(const int32_t* in, uint8_t* out, uint32_t widt
     const __m128i packed8  = _mm_packus_epi16(merged16, merged16);
 
     _mm_storel_epi64(reinterpret_cast<__m128i*>(out + x), packed8);
+  }
+#elif defined(__ARM_NEON)
+  // NEON: 16 int32 per iteration (four int32x4 groups).  Clamp to [0, maxval],
+  // arithmetic right-shift, narrow int32→int16→uint8, store 16 bytes.
+  // Widened to 16-wide to match Apple Clang's auto-vectorized 16-wide loop.
+  const int32x4_t vzero   = vdupq_n_s32(0);
+  const int32x4_t vmaxval = vdupq_n_s32(maxval);
+  const int32x4_t vshift  = vdupq_n_s32(-shift);  // negative = right-shift
+  for (; x + 16 <= width; x += 16) {
+    int32x4_t a = vld1q_s32(in + x);
+    int32x4_t b = vld1q_s32(in + x + 4);
+    int32x4_t c = vld1q_s32(in + x + 8);
+    int32x4_t d = vld1q_s32(in + x + 12);
+    a = vminq_s32(vmaxq_s32(a, vzero), vmaxval);
+    b = vminq_s32(vmaxq_s32(b, vzero), vmaxval);
+    c = vminq_s32(vmaxq_s32(c, vzero), vmaxval);
+    d = vminq_s32(vmaxq_s32(d, vzero), vmaxval);
+    a = vshlq_s32(a, vshift);
+    b = vshlq_s32(b, vshift);
+    c = vshlq_s32(c, vshift);
+    d = vshlq_s32(d, vshift);
+    // Narrow: int32→int16 (saturating), then int16→uint8 (unsigned saturating).
+    int16x8_t ab = vcombine_s16(vqmovn_s32(a), vqmovn_s32(b));
+    int16x8_t cd = vcombine_s16(vqmovn_s32(c), vqmovn_s32(d));
+    uint8x16_t packed = vcombine_u8(vqmovun_s16(ab), vqmovun_s16(cd));
+    vst1q_u8(out + x, packed);
+  }
+  // 8-wide tail for residual 8..15 samples.
+  for (; x + 8 <= width; x += 8) {
+    int32x4_t a = vld1q_s32(in + x);
+    int32x4_t b = vld1q_s32(in + x + 4);
+    a = vminq_s32(vmaxq_s32(a, vzero), vmaxval);
+    b = vminq_s32(vmaxq_s32(b, vzero), vmaxval);
+    a = vshlq_s32(a, vshift);
+    b = vshlq_s32(b, vshift);
+    int16x8_t merged = vcombine_s16(vqmovn_s32(a), vqmovn_s32(b));
+    vst1_u8(out + x, vqmovun_s16(merged));
   }
 #endif
 
@@ -142,6 +181,33 @@ inline void clamp_i32_plane_to_u16(const int32_t* in, uint16_t* out, uint32_t wi
     const __m128i merged16 = _mm_unpacklo_epi64(lane0, lane1);
 
     _mm_storeu_si128(reinterpret_cast<__m128i*>(out + x), merged16);
+  }
+#elif defined(__ARM_NEON)
+  // NEON: 16 int32 per iteration.  Clamp to [0, maxval], narrow int32→uint16,
+  // store 16 u16 values.
+  const int32x4_t vzero   = vdupq_n_s32(0);
+  const int32x4_t vmaxval = vdupq_n_s32(maxval);
+  for (; x + 16 <= width; x += 16) {
+    int32x4_t a = vld1q_s32(in + x);
+    int32x4_t b = vld1q_s32(in + x + 4);
+    int32x4_t c = vld1q_s32(in + x + 8);
+    int32x4_t d = vld1q_s32(in + x + 12);
+    a = vminq_s32(vmaxq_s32(a, vzero), vmaxval);
+    b = vminq_s32(vmaxq_s32(b, vzero), vmaxval);
+    c = vminq_s32(vmaxq_s32(c, vzero), vmaxval);
+    d = vminq_s32(vmaxq_s32(d, vzero), vmaxval);
+    uint16x8_t ab = vcombine_u16(vqmovun_s32(a), vqmovun_s32(b));
+    uint16x8_t cd = vcombine_u16(vqmovun_s32(c), vqmovun_s32(d));
+    vst1q_u16(out + x, ab);
+    vst1q_u16(out + x + 8, cd);
+  }
+  // 8-wide tail.
+  for (; x + 8 <= width; x += 8) {
+    int32x4_t a = vld1q_s32(in + x);
+    int32x4_t b = vld1q_s32(in + x + 4);
+    a = vminq_s32(vmaxq_s32(a, vzero), vmaxval);
+    b = vminq_s32(vmaxq_s32(b, vzero), vmaxval);
+    vst1q_u16(out + x, vcombine_u16(vqmovun_s32(a), vqmovun_s32(b)));
   }
 #endif
 

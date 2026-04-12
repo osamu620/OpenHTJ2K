@@ -4907,6 +4907,46 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
             dp[n] = v;
           }
         }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+        {
+          const int32x4_t vdco = vdupq_n_s32(I.DC_OFFSET);
+          const int32x4_t vmx  = vdupq_n_s32(I.MAXVAL);
+          const int32x4_t vmn  = vdupq_n_s32(I.MINVAL);
+          uint32_t n = 0;
+          if (ds < 0) {
+            const int32x4_t vsh = vdupq_n_s32(-ds);
+            for (; n + 8 <= I.csize_x; n += 8) {
+              int32x4_t v0 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vsh);
+              int32x4_t v1 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vsh);
+              vst1q_s32(dp + n,     vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
+              vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
+            }
+          } else if (ds > 0) {
+            const int32x4_t vsh  = vdupq_n_s32(-ds);  // negative = right-shift
+            const int32x4_t vrnd = vdupq_n_s32(ro);
+            for (; n + 8 <= I.csize_x; n += 8) {
+              int32x4_t v0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vrnd), vsh);
+              int32x4_t v1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vrnd), vsh);
+              vst1q_s32(dp + n,     vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
+              vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
+            }
+          } else {
+            for (; n + 8 <= I.csize_x; n += 8) {
+              int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
+              int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
+              vst1q_s32(dp + n,     vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
+              vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
+            }
+          }
+          for (; n < I.csize_x; ++n) {
+            int32_t v = static_cast<int32_t>(spf[n]);
+            v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v += I.DC_OFFSET;
+            if (v > I.MAXVAL) v = I.MAXVAL;
+            if (v < I.MINVAL) v = I.MINVAL;
+            dp[n] = v;
+          }
+        }
 #else
         for (uint32_t n = 0; n < I.csize_x; ++n) {
           int32_t v = static_cast<int32_t>(spf[n]);
@@ -4966,6 +5006,46 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
                                   _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
               _mm256_storeu_si256((__m256i *)(dp + n + 8),
                                   _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
+            }
+          }
+          for (; n < I.csize_x; ++n) {
+            int32_t v = static_cast<int32_t>(spf[n]);
+            v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v += I.DC_OFFSET;
+            if (v > I.MAXVAL) v = I.MAXVAL;
+            if (v < I.MINVAL) v = I.MINVAL;
+            dp[n] = v;
+          }
+        }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+        {
+          const int32x4_t vdco = vdupq_n_s32(I.DC_OFFSET);
+          const int32x4_t vmx  = vdupq_n_s32(I.MAXVAL);
+          const int32x4_t vmn  = vdupq_n_s32(I.MINVAL);
+          uint32_t n = 0;
+          if (ds < 0) {
+            const int32x4_t vsh = vdupq_n_s32(-ds);
+            for (; n + 8 <= I.csize_x; n += 8) {
+              int32x4_t v0 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vsh);
+              int32x4_t v1 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vsh);
+              vst1q_s32(dp + n,     vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
+              vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
+            }
+          } else if (ds > 0) {
+            const int32x4_t vsh  = vdupq_n_s32(-ds);  // negative = right-shift
+            const int32x4_t vrnd = vdupq_n_s32(ro);
+            for (; n + 8 <= I.csize_x; n += 8) {
+              int32x4_t v0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vrnd), vsh);
+              int32x4_t v1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vrnd), vsh);
+              vst1q_s32(dp + n,     vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
+              vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
+            }
+          } else {
+            for (; n + 8 <= I.csize_x; n += 8) {
+              int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
+              int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
+              vst1q_s32(dp + n,     vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
+              vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
             }
           }
           for (; n < I.csize_x; ++n) {
