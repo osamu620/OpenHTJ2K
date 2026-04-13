@@ -118,11 +118,12 @@ function loadEmscriptenFactory(jsPath) {
   //   export default   → stripped (we return Module explicitly)
   const fileUrl = 'file://' + jsPath;
   src = src.replace(/import\.meta\.url/g, JSON.stringify(fileUrl));
-  src = src.replace(/export\s+default\s+Module\s*;?\s*$/, '');
   // Strip trailing isPthread bootstrap (pthreads builds append worker self-init
   // code that references globalThis.name and dynamic import — not valid inside
   // new Function()).  The main thread never needs this block.
+  // Must run before the export-default strip because isPthread follows it.
   src = src.replace(/;var isPthread=[\s\S]*$/, '');
+  src = src.replace(/export\s+default\s+Module\s*;?\s*$/, '');
   const require = createRequire(jsPath);
   const fn = new Function('require', '__filename', '__dirname', src + '\nreturn Module;');
   return fn(require, jsPath, dirname(jsPath));
