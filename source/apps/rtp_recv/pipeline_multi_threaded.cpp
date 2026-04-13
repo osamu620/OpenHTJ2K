@@ -328,8 +328,11 @@ int run_receiver_threaded(const CliOptions& opts) {
   if (granted < 4 * 1024 * 1024) {
     std::fprintf(stderr,
                  "WARN: SO_RCVBUF is < 4 MB. The kernel will drop packets when the\n"
-                 "      receiver falls behind the sender. Raise net.core.rmem_max:\n"
+                 "      receiver falls behind the sender.\n"
+#ifdef __linux__
+                 "      Raise net.core.rmem_max:\n"
                  "          sudo sysctl -w net.core.rmem_max=33554432\n"
+#endif
                  "      and re-run.\n");
   }
 

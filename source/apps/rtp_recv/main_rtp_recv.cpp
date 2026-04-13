@@ -15,11 +15,13 @@
 // openhtj2k_decoder::invoke_line_based_stream().  See
 // /home/osamu/.claude/plans/unified-kindling-parnas.md for rationale.
 
+#include <cstdio>
 #include <cstdlib>
 
 #include "cli.hpp"
 #include "pipeline_multi_threaded.hpp"
 #include "pipeline_single_threaded.hpp"
+#include "rtp_socket.hpp"
 #include "smoke_tests.hpp"
 
 using namespace open_htj2k::rtp_recv;
@@ -30,10 +32,23 @@ static int run_receiver(const CliOptions& opts) {
 }
 
 int main(int argc, char** argv) {
+  if (!UdpSocket::wsa_init()) {
+    std::fprintf(stderr, "FATAL: socket library initialization failed\n");
+    return EXIT_FAILURE;
+  }
+
   CliOptions opts;
-  if (!parse_cli(argc, argv, opts)) return EXIT_FAILURE;
+  if (!parse_cli(argc, argv, opts)) {
+    UdpSocket::wsa_cleanup();
+    return EXIT_FAILURE;
+  }
 
-  if (opts.smoke_test) return run_smoke_tests(opts);
+  int rc;
+  if (opts.smoke_test)
+    rc = run_smoke_tests(opts);
+  else
+    rc = run_receiver(opts);
 
-  return run_receiver(opts);
+  UdpSocket::wsa_cleanup();
+  return rc;
 }
