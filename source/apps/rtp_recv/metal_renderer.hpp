@@ -60,6 +60,31 @@ class MetalRenderer {
                                  bool components_are_rgb,
                                  const ColorPipelineParams& pipeline);
 
+  // ── Zero-copy plane buffer API ──────────────────────────────────────────
+  // The decode thread calls acquire_plane_buffers() to get raw pointers into
+  // GPU-visible shared memory.  After decoding, draw_acquired_planes() renders
+  // directly from those buffers — no memcpy, no upload.
+  //
+  // Internally uses a ring of 3 buffer sets so the decode thread always has
+  // a free set even while the GPU renders one and another sits in the
+  // LatestSlot waiting for the render thread.
+  struct PlanePointers {
+    void    *y, *cb, *cr;     // Raw pointers into MTLBuffer.contents
+    uint32_t stride_y;        // Row stride in samples (= width for packed planes)
+    uint32_t stride_c;
+    int      ring_index;      // Opaque — pass back to draw_acquired_planes
+  };
+
+  // Thread-safe: may be called from the decode thread.
+  PlanePointers acquire_plane_buffers(uint32_t w_y, uint32_t h_y,
+                                      uint32_t w_c, uint32_t h_c, int bpp);
+
+  // Must be called from the main (render) thread.
+  void draw_acquired_planes(int ring_index, int w_y, int h_y, int w_c, int h_c,
+                            int bpp, int bit_depth,
+                            const ycbcr_coefficients* coeffs, bool components_are_rgb,
+                            const ColorPipelineParams& pipeline);
+
  private:
   // Opaque pointer to the Obj-C implementation struct.  Defined in metal_renderer.mm.
   struct Impl;

@@ -17,6 +17,7 @@
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -193,6 +194,21 @@ struct MetalRenderer::Impl {
   };
   PlaneBuffer planeRgb;
   PlaneBuffer planeY, planeCb, planeCr;
+
+  // ── Zero-copy ring buffer pool ──────────────────────────────────────────
+  // 3 sets of (Y, Cb, Cr) buffers.  The decode thread acquires one set via
+  // acquire_plane_buffers(), writes decoded samples directly into the
+  // buffer.contents pointers, then the render thread renders from the same
+  // buffers with zero memcpy.
+  //
+  // Ring depth 3: one being rendered (GPU), one in the LatestSlot (waiting),
+  // one available for the decode thread to write into.
+  static constexpr int kRingDepth = 3;
+  struct RingEntry {
+    PlaneBuffer y, cb, cr;
+  };
+  RingEntry ring[kRingDepth];
+  std::atomic<int> ring_next{0};  // next index for decode thread to acquire
 
   // Ensure a plane buffer + texture view exists at the right dimensions.
   // Returns the texture view for binding to the fragment shader.
@@ -561,6 +577,84 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
   id<MTLRenderPipelineState> pso = components_are_rgb ? impl_->psoPlanarRgb : impl_->psoYcbcr;
   impl_->drawQuad(pso, fbW, fbH, w_y, h_y,
                   impl_->planeY.texture, impl_->planeCb.texture, impl_->planeCr.texture, &u);
+}
+
+// ── Zero-copy API ────────────────────────────────────────────────────────
+
+MetalRenderer::PlanePointers MetalRenderer::acquire_plane_buffers(
+    uint32_t w_y, uint32_t h_y, uint32_t w_c, uint32_t h_c, int bpp) {
+  if (!impl_) return {};
+
+  // Round-robin through the ring.  The atomic fetch_add ensures the decode
+  // thread always gets a unique index even if called concurrently (it won't
+  // be, but defense-in-depth is free here).
+  const int idx = impl_->ring_next.fetch_add(1, std::memory_order_relaxed) % Impl::kRingDepth;
+  auto& entry = impl_->ring[idx];
+
+  MTLPixelFormat fmt = (bpp == 2) ? MTLPixelFormatR16Unorm : MTLPixelFormatR8Unorm;
+  impl_->ensurePlane(entry.y,  static_cast<int>(w_y), static_cast<int>(h_y), bpp, fmt);
+  impl_->ensurePlane(entry.cb, static_cast<int>(w_c), static_cast<int>(h_c), bpp, fmt);
+  impl_->ensurePlane(entry.cr, static_cast<int>(w_c), static_cast<int>(h_c), bpp, fmt);
+
+  PlanePointers pp = {};
+  pp.y       = entry.y.buffer.contents;
+  pp.cb      = entry.cb.buffer.contents;
+  pp.cr      = entry.cr.buffer.contents;
+  pp.stride_y = w_y;
+  pp.stride_c = w_c;
+  pp.ring_index = idx;
+  return pp;
+}
+
+void MetalRenderer::draw_acquired_planes(int ring_index, int w_y, int h_y, int w_c, int h_c,
+                                         int bpp, int bit_depth,
+                                         const ycbcr_coefficients* coeffs,
+                                         bool components_are_rgb,
+                                         const ColorPipelineParams& pipeline) {
+  if (!window_ || !impl_ || w_y <= 0 || h_y <= 0) return;
+  const int idx = ring_index % Impl::kRingDepth;
+  auto& entry = impl_->ring[idx];
+
+  FragmentUniforms u = {};
+  if (bit_depth > 8) {
+    const float native_max = static_cast<float>((1 << bit_depth) - 1);
+    const float k = 65535.0f / native_max;
+    u.norm_scale = simd_make_float3(k, k, k);
+  } else {
+    u.norm_scale = simd_make_float3(1.0f, 1.0f, 1.0f);
+  }
+  u.transfer = pipeline.transfer;
+  u.display_encoding = pipeline.display_encoding;
+  u.gamut_matrix = mat3_from_packed(pipeline.gamut_matrix);
+
+  if (!components_are_rgb && coeffs) {
+    float mat[9] = {
+        1.0f,            1.0f,             1.0f,
+        0.0f,           -coeffs->cb_to_g,  coeffs->cb_to_b,
+        coeffs->cr_to_r, -coeffs->cr_to_g, 0.0f,
+    };
+    u.matrix = mat3_from_packed(mat);
+    if (coeffs->narrow_range) {
+      u.bias  = simd_make_float3(16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f);
+      u.scale = simd_make_float3(255.0f / 219.0f, 255.0f / 224.0f, 255.0f / 224.0f);
+    } else {
+      u.bias  = simd_make_float3(0.0f, 0.5f, 0.5f);
+      u.scale = simd_make_float3(1.0f, 1.0f, 1.0f);
+    }
+  } else {
+    const float id3[9] = {1,0,0, 0,1,0, 0,0,1};
+    u.matrix = mat3_from_packed(id3);
+    u.bias  = simd_make_float3(0.0f, 0.0f, 0.0f);
+    u.scale = simd_make_float3(1.0f, 1.0f, 1.0f);
+  }
+
+  int fbW, fbH;
+  glfwGetFramebufferSize(window_, &fbW, &fbH);
+  impl_->layer.drawableSize = CGSizeMake(fbW, fbH);
+
+  id<MTLRenderPipelineState> pso = components_are_rgb ? impl_->psoPlanarRgb : impl_->psoYcbcr;
+  impl_->drawQuad(pso, fbW, fbH, w_y, h_y,
+                  entry.y.texture, entry.cb.texture, entry.cr.texture, &u);
 }
 
 }  // namespace open_htj2k::rtp_recv
