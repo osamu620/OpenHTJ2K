@@ -5,6 +5,29 @@
   <title>HTJ2K / J2K-1 — Browser WASM Decoder</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Register a service worker that injects COOP/COEP headers to enable
+       SharedArrayBuffer (required for multi-threaded WASM).  On first visit
+       the page reloads once after the worker activates. -->
+  <script>
+    if (!window.crossOriginIsolated && window.isSecureContext) {
+      navigator.serviceWorker.register("coi-serviceworker.js").then(
+        function (reg) {
+          // Worker is installed but not yet controlling this page — reload.
+          if (!window.crossOriginIsolated) {
+            reg.addEventListener("updatefound", function () {
+              reg.installing.addEventListener("statechange", function () {
+                if (this.state === "activated") location.reload();
+              });
+            });
+            // If already active (repeat visit) but still not isolated, reload now.
+            if (reg.active && !navigator.serviceWorker.controller)
+              location.reload();
+          }
+        },
+        function (err) { console.warn("COI service worker failed:", err); }
+      );
+    }
+  </script>
   <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
