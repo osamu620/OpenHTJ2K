@@ -17,7 +17,7 @@
 #include "decoder.hpp"
 #include "frame_handler.hpp"
 #include "frame_pipeline.hpp"
-#include "gl_renderer.hpp"
+#include "renderer.hpp"
 #include "rfc9828_parser.hpp"
 #include "rtp_socket.hpp"
 
@@ -241,8 +241,8 @@ int run_receiver_threaded(const CliOptions& opts) {
                  "      and re-run.\n");
   }
 
-  GlRenderer  renderer;
-  GlRenderer* renderer_ptr = nullptr;
+  Renderer  renderer;
+  Renderer* renderer_ptr = nullptr;
   if (opts.render) {
     if (!renderer.init(1280, 720, "OpenHTJ2K RFC 9828 receiver", opts.vsync)) {
       std::fprintf(stderr, "WARN: GLFW init failed; continuing in --no-render mode\n");

@@ -10,9 +10,17 @@ target_sources(open_htj2k_rtp_recv
         rtp_socket.cpp
         rfc9828_parser.cpp
         frame_handler.cpp
-        gl_loader.cpp
-        gl_renderer.cpp
 )
+if (APPLE)
+  target_sources(open_htj2k_rtp_recv PRIVATE metal_renderer.mm)
+  # shaders.metal is compiled at runtime from the embedded source string in
+  # metal_renderer.mm.  The .metal file is kept as the authoritative source
+  # for readability; a future step can add offline .metallib compilation
+  # once the Metal Toolchain component is installed (xcodebuild
+  # -downloadComponent MetalToolchain).
+else()
+  target_sources(open_htj2k_rtp_recv PRIVATE gl_loader.cpp gl_renderer.cpp)
+endif()
 
 # Offline decode profiler — feeds dumped .j2c codestreams through the same
 # decoder path decode_thread_main uses, with per-stage timing instrumentation.

@@ -12,7 +12,7 @@
 #include "color_pipeline.hpp"
 #include "frame_handler.hpp"
 #include "frame_pipeline.hpp"
-#include "gl_renderer.hpp"
+#include "renderer.hpp"
 #include "ycbcr_rgb.hpp"
 
 // Forward declaration from the core library.
@@ -68,7 +68,7 @@ void dump_frame_if_requested(const CliOptions& opts, const AssembledFrame& frame
 // openhtj2k_decoder, then upload to the renderer.  Used only when
 // --threading=off.  Returns true on success.
 bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, bool is_first_frame,
-                        GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer,
+                        Renderer* renderer, std::vector<uint8_t>& rgb_backbuffer,
                         DecodedFrame& planar_scratch);
 
 }  // namespace open_htj2k::rtp_recv

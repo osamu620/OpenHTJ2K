@@ -496,7 +496,7 @@ bool decode_to_planar_buffers_direct(open_htj2k::openhtj2k_decoder& decoder,
 }
 
 bool decode_and_present(const AssembledFrame& frame, const CliOptions& opts, bool is_first_frame,
-                        GlRenderer* renderer, std::vector<uint8_t>& rgb_backbuffer,
+                        Renderer* renderer, std::vector<uint8_t>& rgb_backbuffer,
                         DecodedFrame& planar_scratch) {
   using namespace open_htj2k;
 
