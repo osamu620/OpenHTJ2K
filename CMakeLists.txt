@@ -242,31 +242,49 @@ add_subdirectory(source/apps/lb_compare)
 target_include_directories(lb_compare PUBLIC source/core/interface)
 target_link_libraries(lb_compare PUBLIC open_htj2k)
 
-# RFC 9828 RTP receiver (experimental, requires GLFW + OpenGL)
+# RFC 9828 RTP receiver (experimental, requires GLFW)
 option(OPENHTJ2K_RTP "Build experimental RFC 9828 RTP receiver (requires GLFW)" OFF)
 if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
   find_package(glfw3 QUIET)
-  find_package(OpenGL QUIET)
-  if (glfw3_FOUND AND OpenGL_FOUND)
-    message(STATUS "OPENHTJ2K_RTP: building open_htj2k_rtp_recv")
-    add_executable(open_htj2k_rtp_recv)
-    target_include_directories(open_htj2k_rtp_recv PUBLIC source/core/interface)
-    # Offline decode profiler shares the same sub-CMakeLists for source lists.
-    add_executable(open_htj2k_rtp_decode_profile)
-    target_include_directories(open_htj2k_rtp_decode_profile PUBLIC source/core/interface)
-    add_subdirectory(source/apps/rtp_recv)
-    set_target_properties(
-      open_htj2k_rtp_recv
-      PROPERTIES OUTPUT_NAME
-                 $<IF:$<CONFIG:Debug>,open_htj2k_rtp_recv_dbg,open_htj2k_rtp_recv>)
-    set_target_properties(
-      open_htj2k_rtp_decode_profile
-      PROPERTIES OUTPUT_NAME
-                 $<IF:$<CONFIG:Debug>,open_htj2k_rtp_decode_profile_dbg,open_htj2k_rtp_decode_profile>)
-    target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL)
-    target_link_libraries(open_htj2k_rtp_decode_profile PUBLIC open_htj2k)
+  if (glfw3_FOUND)
+    # On Apple: native Metal renderer (no OpenGL dependency).
+    # Elsewhere: OpenGL 3.3 core renderer.
+    if (APPLE)
+      set(_RTP_RENDERER_FOUND TRUE)
+    else()
+      find_package(OpenGL QUIET)
+      set(_RTP_RENDERER_FOUND ${OpenGL_FOUND})
+    endif()
+    if (_RTP_RENDERER_FOUND)
+      message(STATUS "OPENHTJ2K_RTP: building open_htj2k_rtp_recv")
+      add_executable(open_htj2k_rtp_recv)
+      target_include_directories(open_htj2k_rtp_recv PUBLIC source/core/interface)
+      # Offline decode profiler shares the same sub-CMakeLists for source lists.
+      add_executable(open_htj2k_rtp_decode_profile)
+      target_include_directories(open_htj2k_rtp_decode_profile PUBLIC source/core/interface)
+      add_subdirectory(source/apps/rtp_recv)
+      set_target_properties(
+        open_htj2k_rtp_recv
+        PROPERTIES OUTPUT_NAME
+                   $<IF:$<CONFIG:Debug>,open_htj2k_rtp_recv_dbg,open_htj2k_rtp_recv>)
+      set_target_properties(
+        open_htj2k_rtp_decode_profile
+        PROPERTIES OUTPUT_NAME
+                   $<IF:$<CONFIG:Debug>,open_htj2k_rtp_decode_profile_dbg,open_htj2k_rtp_decode_profile>)
+      if (APPLE)
+        target_compile_definitions(open_htj2k_rtp_recv PRIVATE OPENHTJ2K_USE_METAL)
+        target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw
+                              "-framework Metal" "-framework QuartzCore" "-framework Cocoa")
+        message(STATUS "OPENHTJ2K_USE_METAL is set")
+      else()
+        target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL)
+      endif()
+      target_link_libraries(open_htj2k_rtp_decode_profile PUBLIC open_htj2k)
+    else()
+      message(WARNING "OPENHTJ2K_RTP requested but glfw3/OpenGL not found; skipping rtp_recv target")
+    endif()
   else()
-    message(WARNING "OPENHTJ2K_RTP requested but glfw3/OpenGL not found; skipping rtp_recv target")
+    message(WARNING "OPENHTJ2K_RTP requested but glfw3 not found; skipping rtp_recv target")
   endif()
 endif()
 

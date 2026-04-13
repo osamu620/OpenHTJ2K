@@ -16,7 +16,7 @@
 #include "decode_helpers.hpp"
 #include "frame_handler.hpp"
 #include "frame_pipeline.hpp"
-#include "gl_renderer.hpp"
+#include "renderer.hpp"
 #include "rfc9828_parser.hpp"
 #include "rtp_socket.hpp"
 
@@ -50,8 +50,8 @@ int run_receiver_single_threaded(const CliOptions& opts) {
                  "      sustained high-bitrate input.\n");
   }
 
-  GlRenderer renderer;
-  GlRenderer* renderer_ptr = nullptr;
+  Renderer renderer;
+  Renderer* renderer_ptr = nullptr;
   if (opts.render) {
     // Initial window size is a placeholder; the first frame resizes the texture.
     if (!renderer.init(1280, 720, "OpenHTJ2K RFC 9828 receiver", opts.vsync)) {
