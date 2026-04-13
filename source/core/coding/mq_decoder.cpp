@@ -30,6 +30,7 @@
 
 #include <cstdio>
 #include <stdexcept>
+#include "utils.hpp"
 
 #if defined(MQNAIVE)
   #define MQMINOFF 0
@@ -93,6 +94,31 @@ void mq_decoder::renormalize_once() {
   A <<= 1;
   C <<= 1;
   t--;
+}
+
+void mq_decoder::renormalize() {
+  int32_t n = static_cast<int32_t>(count_leading_zeros(static_cast<uint32_t>(A))) - 8;
+  if (t == 0) {
+    fill_LSBs();
+  }
+  if (n <= t) {
+    A <<= n;
+    C <<= n;
+    t -= n;
+  } else {
+    A <<= t;
+    C <<= t;
+    n -= t;
+    t = 0;
+    do {
+      fill_LSBs();
+      int32_t shift = (n <= t) ? n : t;
+      A <<= shift;
+      C <<= shift;
+      t -= shift;
+      n -= shift;
+    } while (n > 0);
+  }
 }
 
 void mq_decoder::fill_LSBs() {
@@ -186,30 +212,20 @@ uint8_t mq_decoder::decode(uint8_t label) {
   A = A - p_shifted;
   if (C >= p_shifted) {     // identical to C_active >= p_bar (upper sub-interval selected),
     C -= p_shifted;         // identical to C_active -= p_bar, C_active is equal to (C & 0xFFFF00)
-    if (A < Areg_min) {     // need renormalization and perhaps conditional exchange
-      if (A < p_shifted) {  // conditional exchange, LPS decoded
-        x       = 1 - sk;
-        sk      = sk ^ Xs;
-        Sigma_k = Sigma_lps;
-      } else {  // MPS decoded
-        Sigma_k = Sigma_mps;
-      }
-      while (A < Areg_min) {
-        renormalize_once();
-      }
+    if (A < Areg_min) {  // need renormalization and perhaps conditional exchange
+      int32_t is_lps = (A < p_shifted) ? 1 : 0;
+      x              = sk ^ is_lps;
+      sk             = sk ^ (Xs & static_cast<uint16_t>(-is_lps));
+      Sigma_k        = is_lps ? Sigma_lps : Sigma_mps;
+      renormalize();
     }
-  } else {                // lower sub-interval selected; renormalization is inevitable
-    if (A < p_shifted) {  // conditional exchange, MPS decoded
-      Sigma_k = Sigma_mps;
-    } else {  // LPS decoded
-      x       = 1 - sk;
-      sk      = sk ^ Xs;
-      Sigma_k = Sigma_lps;
-    }
-    A = p_shifted;
-    while (A < Areg_min) {
-      renormalize_once();
-    }
+  } else {  // lower sub-interval selected; renormalization is inevitable
+    int32_t is_lps = (A >= p_shifted) ? 1 : 0;
+    x              = sk ^ is_lps;
+    sk             = sk ^ (Xs & static_cast<uint16_t>(-is_lps));
+    Sigma_k        = is_lps ? Sigma_lps : Sigma_mps;
+    A              = p_shifted;
+    renormalize();
   }
   dynamic_table[0][label] = Sigma_k;
   dynamic_table[1][label] = sk;
@@ -241,9 +257,7 @@ uint8_t mq_decoder::decode(uint8_t label) {
       } else {  // MPS decoded
         Sigma_k = Sigma_mps;
       }
-      while (A < Areg_min) {
-        renormalize_once();
-      }
+      renormalize();
     } else {
       C += p_shifted;
       if (A < p_shifted) {  // conditional exchange, MPS decoded
@@ -254,9 +268,7 @@ uint8_t mq_decoder::decode(uint8_t label) {
         Sigma_k = Sigma_lps;
       }
       A = p_shifted;
-      while (A < Areg_min) {
-        renormalize_once();
-      }
+      renormalize();
     }
     D = A - Areg_min;
     D = (C < D) ? C : D;

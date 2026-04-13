@@ -30,6 +30,7 @@
 #include "mq_decoder.hpp"
 #include "coding_local.hpp"
 #include "EBCOTtables.hpp"
+#include "block_dequant.hpp"
 
 // void j2k_codeblock::update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1,
 //                                   const int16_t &j2) const {
@@ -181,32 +182,38 @@ inline void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_d
 }
 
 inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  uint32_t j1, j2, j1_start = 0;
-  uint8_t label_sig;
-  uint8_t symbol;
+  const uint32_t width        = block->size.x;
+  const uint32_t height       = block->size.y;
+  const uint16_t num_v_stripe = static_cast<uint16_t>(height / 4);
+  const size_t stride         = block->blkstate_stride;
+  const size_t sstride        = block->blksampl_stride;
+  uint8_t *const states       = block->block_states;
+  int32_t *const samples      = block->sample_buf;
+  uint32_t j1_start = 0;
+  uint8_t label_sig, symbol;
+
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + 4; j1++) {
-        label_sig = get_context_label_sig(block, j1, j2);
-        uint8_t *state_p =
-            block->block_states + (static_cast<unsigned long>(j1 + 1)) * block->blkstate_stride + (j2 + 1);
+    // Precompute row base pointers for this stripe
+    uint8_t *row[6];
+    for (int r = 0; r < 6; r++) {
+      row[r] = states + (j1_start + static_cast<uint32_t>(r)) * stride;
+    }
+    for (uint32_t j2 = 0; j2 < width; j2++) {
+      for (int ri = 0; ri < 4; ri++) {
+        uint32_t j1      = j1_start + static_cast<uint32_t>(ri);
+        label_sig        = get_context_label_sig(block, j1, j2);
+        uint8_t *state_p = row[ri + 1] + (j2 + 1);
         if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
-          // block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.decode(label_sig);
-          //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
-            block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
-            // block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            samples[j1 * sstride + j2] |= 1 << p;
             state_p[0] |= symbol;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
-          // block->modify_state(pi_, 1, j1, j2);
           state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
         } else {
-          // block->modify_state(pi_, 0, j1, j2);
           state_p[0] &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
         }
       }
@@ -214,27 +221,22 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
     j1_start += 4;
   }
 
-  if (block->size.y % 4) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
+  if (height % 4) {
+    for (uint32_t j2 = 0; j2 < width; j2++) {
+      for (uint32_t j1 = j1_start; j1 < j1_start + height % 4; j1++) {
         label_sig        = get_context_label_sig(block, j1, j2);
-        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        uint8_t *state_p = states + (j1 + 1) * stride + (j2 + 1);
         if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
-          // block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.decode(label_sig);
-          //          block->update_sample(symbol, p, j1, j2);
           if (symbol) {
-            block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
-            // block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
+            samples[j1 * sstride + j2] |= 1 << p;
             state_p[0] |= symbol;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
-          // block->modify_state(pi_, 1, j1, j2);
           state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
         } else {
-          // block->modify_state(pi_, 0, j1, j2);
           state_p[0] &= static_cast<uint8_t>(~(1 << SHIFT_PI_));
         }
       }
@@ -285,34 +287,33 @@ inline void decode_magref_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_de
 }
 
 inline void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  uint32_t j1, j2, j1_start = 0;
-  uint8_t label_sig, label_mag = 0;
+  const uint32_t width        = block->size.x;
+  const uint32_t height       = block->size.y;
+  const uint16_t num_v_stripe = static_cast<uint16_t>(height / 4);
+  const size_t stride         = block->blkstate_stride;
+  const size_t sstride        = block->blksampl_stride;
+  uint8_t *const states       = block->block_states;
+  int32_t *const samples      = block->sample_buf;
+  uint32_t j1_start = 0;
+  uint8_t label_sig, label_mag;
   uint8_t symbol;
   constexpr uint8_t mmm[4] = {14, 15, 16, 16};
+
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + 4; j1++) {
-        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+    uint8_t *row[6];
+    for (int r = 0; r < 6; r++) {
+      row[r] = states + (j1_start + static_cast<uint32_t>(r)) * stride;
+    }
+    for (uint32_t j2 = 0; j2 < width; j2++) {
+      for (int ri = 0; ri < 4; ri++) {
+        uint8_t *state_p = row[ri + 1] + (j2 + 1);
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
-          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
-          label_sig = get_context_label_sig(block, j1, j2);
-          //          if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig == 0) {
-          //            label_mag = 14;
-          //          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig > 0) {
-          //            label_mag = 15;
-          //
-          //          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 1) {
-          //            label_mag = 16;
-          //          }
+          label_sig = get_context_label_sig(block, j1_start + static_cast<uint32_t>(ri), j2);
           label_mag = mmm[(state_p[0] & 0x2) | (label_sig > 0)];
-
-          symbol = mq_dec.decode(label_mag);
-          //          block->update_sample(symbol, p, j1, j2);
-          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
-          //          block->modify_state(sigma_, 1, j1, j2);
+          symbol    = mq_dec.decode(label_mag);
+          samples[(j1_start + static_cast<uint32_t>(ri)) * sstride + j2] |= symbol << p;
           state_p[0] |= 1 << SHIFT_SIGMA_;
         }
       }
@@ -320,27 +321,17 @@ inline void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decode
     j1_start += 4;
   }
 
-  if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
-        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+  if (height % 4 != 0) {
+    for (uint32_t j2 = 0; j2 < width; j2++) {
+      for (uint32_t j1 = j1_start; j1 < j1_start + height % 4; j1++) {
+        uint8_t *state_p = states + (j1 + 1) * stride + (j2 + 1);
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 1 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
-          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           label_sig = get_context_label_sig(block, j1, j2);
-          //          if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig == 0) {
-          //            label_mag = 14;
-          //          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 0 && label_sig > 0) {
-          //            label_mag = 15;
-          //          } else if ((state_p[0] >> SHIFT_SIGMA_ & 1) == 1) {
-          //            label_mag = 16;
-          //          }
           label_mag = mmm[(state_p[0] & 0x2) | (label_sig > 0)];
           symbol    = mq_dec.decode(label_mag);
-          //          block->update_sample(symbol, p, j1, j2);
-          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
-          //          block->modify_state(sigma_, 1, j1, j2);
+          samples[j1 * sstride + j2] |= symbol << p;
           state_p[0] |= 1 << SHIFT_SIGMA_;
         }
       }
@@ -349,22 +340,29 @@ inline void decode_magref_pass(j2k_codeblock *block, const uint8_t &p, mq_decode
 }
 
 inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decoder &mq_dec) {
-  uint16_t num_v_stripe = static_cast<uint16_t>(block->size.y / 4);
-  uint32_t j1, j2, j1_start = 0;
+  const uint32_t width        = block->size.x;
+  const uint32_t height       = block->size.y;
+  const uint16_t num_v_stripe = static_cast<uint16_t>(height / 4);
+  const size_t stride         = block->blkstate_stride;
+  const size_t sstride        = block->blksampl_stride;
+  uint8_t *const states       = block->block_states;
+  int32_t *const samples      = block->sample_buf;
+  uint32_t j1_start           = 0;
   uint8_t label_sig;
   const uint8_t label_run = 17;
   const uint8_t label_uni = 18;
   uint8_t symbol          = 0;
   int32_t k;
   int32_t r = 0;
+
   for (uint16_t n = 0; n < num_v_stripe; n++) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
+    for (uint32_t j2 = 0; j2 < width; j2++) {
       k = 4;
       while (k > 0) {
-        j1               = j1_start + 4 - static_cast<uint32_t>(k);
-        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+        uint32_t j1      = j1_start + 4 - static_cast<uint32_t>(k);
+        uint8_t *state_p = states + (j1 + 1) * stride + (j2 + 1);
         r                = -1;
-        if (j1 % 4 == 0 && j1 <= block->size.y - 4) {
+        if (j1 % 4 == 0 && j1 <= height - 4) {
           label_sig = 0;
           for (uint32_t i = 0; i < 4; i++) {
             label_sig = label_sig | static_cast<uint8_t>(get_context_label_sig(block, j1 + i, j2));
@@ -377,19 +375,16 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
               r = mq_dec.decode(label_uni);
               r <<= 1;
               r += mq_dec.decode(label_uni);
-              //              block->update_sample(1, p, static_cast<int16_t>(j1 + r), j2);
-              block->sample_buf[(j1 + static_cast<uint32_t>(r)) * block->blksampl_stride + j2] |= symbol
-                                                                                                  << p;
+              samples[(j1 + static_cast<uint32_t>(r)) * sstride + j2] |= symbol << p;
             }
             k -= r;
           }
           if (k != 0) {
             j1      = j1_start + 4 - static_cast<uint32_t>(k);
-            state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+            state_p = states + (j1 + 1) * stride + (j2 + 1);
           }
         }
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 0 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
-          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           if (r >= 0) {
@@ -397,11 +392,9 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
           } else {
             label_sig = get_context_label_sig(block, j1, j2);
             symbol    = mq_dec.decode(label_sig);
-            //            block->update_sample(symbol, p, j1, j2);
-            block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
+            samples[j1 * sstride + j2] |= symbol << p;
           }
-          if (block->sample_buf[j2 + j1 * block->blksampl_stride] == static_cast<int32_t>(1) << p) {
-            //            block->modify_state(sigma, 1, j1, j2);
+          if (samples[j2 + j1 * sstride] == static_cast<int32_t>(1) << p) {
             state_p[0] |= 1;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
@@ -412,20 +405,17 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
     j1_start += 4;
   }
 
-  if (block->size.y % 4 != 0) {
-    for (j2 = 0; j2 < block->size.x; j2++) {
-      for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
-        uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
+  if (height % 4 != 0) {
+    for (uint32_t j2 = 0; j2 < width; j2++) {
+      for (uint32_t j1 = j1_start; j1 < j1_start + height % 4; j1++) {
+        uint8_t *state_p = states + (j1 + 1) * stride + (j2 + 1);
         if ((state_p[0] & 1 << SHIFT_SIGMA) == 0 && (state_p[0] & 1 << SHIFT_PI_) == 0) {
-          //          block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           label_sig = get_context_label_sig(block, j1, j2);
           symbol    = mq_dec.decode(label_sig);
-          //          block->update_sample(symbol, p, j1, j2);
-          block->sample_buf[j1 * block->blksampl_stride + j2] |= symbol << p;
+          samples[j1 * sstride + j2] |= symbol << p;
           if (symbol) {
-            //            block->modify_state(sigma, 1, j1, j2);
             state_p[0] |= 1;
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
@@ -542,126 +532,8 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     k++;
   }  // end of while
 
-  // number of decoded magnitude bits, see D.2.1 in the spec
-  int32_t N_b;
-  // indicates binary point
-  const int32_t pLSB = 31 - M_b;
-#ifdef TEMP
-  for (uint16_t y = 0; y < block->size.y; y++) {
-    for (uint16_t x = 0; x < block->size.x; x++) {
-      if (ROIshift) {
-        N_b = 30 - pLSB + 1;
-      } else {
-        N_b = 30 - block->get_state(Decoded_bitplane_index, y, x) + 1;
-      }
-      block->dequantize(y, x, N_b, pLSB, ROIshift);
-    }
-  }
-#else
-  // bit mask for ROI detection
-  const uint32_t mask = UINT32_MAX >> (M_b + 1);
-  // reconstruction parameter defined in E.1.1.2 of the spec
-  int32_t r_val;
-  int32_t offset = 0;
-
-  int32_t *val = nullptr;
-  uint8_t state;
-  sprec_t *dst = nullptr;
-  int32_t sign;
-  int32_t QF32;
-  float fscale = block->stepsize;
-  fscale *= (1 << FRACBITS);
-  if (M_b <= 31) {
-    fscale /= (static_cast<float>(1 << (31 - M_b)));
-  } else {
-    fscale *= (static_cast<float>(1 << (M_b - 31)));
-  }
-  constexpr int32_t downshift = 15;
-  fscale *= (float)(1 << 16) * (float)(1 << downshift);
-  const auto scale = (int32_t)(fscale + 0.5);
-
-  if (block->transformation == 1) {
-    // reversible path
-    for (int16_t y = 0; y < static_cast<int16_t>(block->size.y); y++) {
-      for (int16_t x = 0; x < static_cast<int16_t>(block->size.x); x++) {
-        const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
-        val = &block->sample_buf[static_cast<size_t>(x) + static_cast<size_t>(y) * block->blksampl_stride];
-        state = block->block_states[static_cast<size_t>(x + 1)
-                                    + static_cast<size_t>(y + 1) * block->blkstate_stride];
-        dst   = block->i_samples + n;
-        sign  = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        // detect background region and upshift it
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
-        }
-        // do adjustment of the position indicating 0.5
-        if (ROIshift) {
-          N_b = 30 - pLSB + 1;
-        } else {
-          N_b = 30 - (state >> 3) + 1;
-        }
-        // construct reconstruction value (=0.5)
-        offset = (M_b > N_b) ? M_b - N_b : 0;
-        r_val  = 1 << (pLSB - 1 + offset);
-        // add 0.5 if necessary
-        if (*val != 0 && N_b < M_b) {
-          *val |= r_val;
-        }
-        // bring sign back
-        *val |= sign;
-        // convert sign-magnitude to two's complement form
-        if (*val < 0) {
-          *val = -(*val & INT32_MAX);
-        }
-
-        assert(pLSB >= 0);  // assure downshift is not negative
-        QF32 = *val >> pLSB;
-        *dst = static_cast<float>(QF32);
-      }
-    }
-  } else {
-    // irreversible path
-    for (int16_t y = 0; y < static_cast<int16_t>(block->size.y); y++) {
-      for (int16_t x = 0; x < static_cast<int16_t>(block->size.x); x++) {
-        const uint32_t n = static_cast<uint32_t>(x) + static_cast<uint32_t>(y) * block->band_stride;
-        val = &block->sample_buf[static_cast<size_t>(x) + static_cast<size_t>(y) * block->blksampl_stride];
-        state = block->block_states[static_cast<size_t>(x + 1)
-                                    + static_cast<size_t>(y + 1) * block->blkstate_stride];
-        dst   = block->i_samples + n;
-        sign  = *val & INT32_MIN;  // extract sign bit
-        *val &= INT32_MAX;         // delete sign bit temporally
-        // detect background region and upshift it
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
-        }
-        // do adjustment of the position indicating 0.5
-        if (ROIshift) {
-          N_b = 30 - pLSB + 1;
-        } else {
-          N_b = 30 - (state >> 3) + 1;
-        }
-        // construct reconstruction value (=0.5)
-        offset = (M_b > N_b) ? M_b - N_b : 0;
-        r_val  = 1 << (pLSB - 1 + offset);
-        // add 0.5, if necessary
-        if (*val != 0) {
-          *val |= r_val;
-        }
-        // to prevent overflow, truncate to int16_t
-        *val = (*val + (1 << 15)) >> 16;
-        // dequantization
-        *val *= scale;
-        // downshift
-        QF32 = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
-        // convert sign-magnitude to two's complement form
-        if (sign) {
-          QF32 = -QF32;
-        }
-        *dst = static_cast<float>(QF32);
-      }
-    }
-  }
-#endif
+  j2k_dequant(block->sample_buf, block->blksampl_stride, block->block_states, block->blkstate_stride,
+              block->i_samples, block->band_stride, block->size.x, block->size.y, M_b, ROIshift,
+              block->transformation, block->stepsize);
   // TODO: if k !=0
 }

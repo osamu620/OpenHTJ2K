@@ -28,40 +28,11 @@
 
 #pragma once
 
-#include <cstdint>
 #include "open_htj2k_typedef.hpp"
+#include <cstddef>
+#include <cstdint>
 
-//#define MQNAIVE
-//#define CDP
-
-class mq_decoder {
- public:
-  int32_t A;  // was uint16_t
-  int32_t t;  // was uint8_t
-  // Lower-bound interval
-  int32_t C;  // was uint32_t
-#if defined(CDP)
-  int32_t D;  // only for CDP implementation
-#endif
-  // Temporary byte register
-  int32_t T;  // was uint8_t
-  // position in byte-stream
-  uint32_t L;
-  // start position in byte-stream
-  OPENHTJ2K_MAYBE_UNUSED uint32_t L_start;
-  // position of current codeword segment boundary
-  uint32_t Lmax;
-  // dynamic table for context
-  uint16_t dynamic_table[2][19];
-  // Byte-stream buffer
-  uint8_t const *byte_buffer;
-  explicit mq_decoder(const uint8_t *buf);
-  void fill_LSBs();
-  void init(uint32_t buf_pos, uint32_t segment_length, bool is_bypass);
-  void init_states_for_all_contexts();
-  void renormalize_once();
-  void renormalize();
-  uint8_t decode(uint8_t label);
-  uint8_t get_raw_symbol();
-  void finish();
-};
+void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
+                 size_t blkstate_stride, sprec_t *i_samples, uint32_t band_stride, uint32_t width,
+                 uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
+                 float stepsize);
