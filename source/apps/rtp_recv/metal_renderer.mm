@@ -182,46 +182,42 @@ struct MetalRenderer::Impl {
   id<MTLBuffer>              vertexBuffer  = nil;
   CAMetalLayer*              layer         = nil;
 
-  // Per-plane textures, recreated on dimension/format change.
-  id<MTLTexture> texRgb  = nil;
-  int            texRgbW = 0, texRgbH = 0;
+  // Per-plane shared-memory buffers + buffer-backed texture views.
+  // The decode thread (or upload path) writes to buffer.contents via memcpy,
+  // and the fragment shader samples from the texture view — no replaceRegion,
+  // no GPU-side tiling conversion.
+  struct PlaneBuffer {
+    id<MTLBuffer>  buffer  = nil;
+    id<MTLTexture> texture = nil;  // texture view over buffer
+    int w = 0, h = 0, bpp = 0;
+  };
+  PlaneBuffer planeRgb;
+  PlaneBuffer planeY, planeCb, planeCr;
 
-  id<MTLTexture> texY  = nil;
-  id<MTLTexture> texCb = nil;
-  id<MTLTexture> texCr = nil;
-  int texYW = 0, texYH = 0, texYBpp = 0;
-  int texCbW = 0, texCbH = 0, texCbBpp = 0;
-  int texCrW = 0, texCrH = 0, texCrBpp = 0;
-
-  id<MTLTexture> ensureTexture(id<MTLTexture>& tex, int& cachedW, int& cachedH, int& cachedBpp,
-                               int w, int h, int bpp) {
-    if (tex != nil && cachedW == w && cachedH == h && cachedBpp == bpp)
-      return tex;
-    MTLPixelFormat fmt = (bpp == 2) ? MTLPixelFormatR16Unorm : MTLPixelFormatR8Unorm;
+  // Ensure a plane buffer + texture view exists at the right dimensions.
+  // Returns the texture view for binding to the fragment shader.
+  id<MTLTexture> ensurePlane(PlaneBuffer& p, int w, int h, int bpp, MTLPixelFormat fmt) {
+    if (p.buffer != nil && p.w == w && p.h == h && p.bpp == bpp)
+      return p.texture;
+    const NSUInteger bytesPerRow = static_cast<NSUInteger>(w) * static_cast<NSUInteger>(bpp);
+    const NSUInteger totalBytes  = bytesPerRow * static_cast<NSUInteger>(h);
+    p.buffer = [device newBufferWithLength:totalBytes options:MTLResourceStorageModeShared];
+    // Create a texture view over the buffer.
     MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt
-                                                                                   width:w
-                                                                                  height:h
+                                                                                   width:static_cast<NSUInteger>(w)
+                                                                                  height:static_cast<NSUInteger>(h)
                                                                                mipmapped:NO];
     desc.usage = MTLTextureUsageShaderRead;
     desc.storageMode = MTLStorageModeShared;
-    tex = [device newTextureWithDescriptor:desc];
-    cachedW = w;  cachedH = h;  cachedBpp = bpp;
-    return tex;
+    p.texture = [p.buffer newTextureWithDescriptor:desc
+                                           offset:0
+                                      bytesPerRow:bytesPerRow];
+    p.w = w;  p.h = h;  p.bpp = bpp;
+    return p.texture;
   }
 
-  id<MTLTexture> ensureRgbTexture(int w, int h) {
-    if (texRgb != nil && texRgbW == w && texRgbH == h)
-      return texRgb;
-    MTLTextureDescriptor* desc =
-        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                          width:w
-                                                         height:h
-                                                      mipmapped:NO];
-    desc.usage = MTLTextureUsageShaderRead;
-    desc.storageMode = MTLStorageModeShared;
-    texRgb = [device newTextureWithDescriptor:desc];
-    texRgbW = w;  texRgbH = h;
-    return texRgb;
+  id<MTLTexture> ensureRgbPlane(int w, int h) {
+    return ensurePlane(planeRgb, w, h, 4, MTLPixelFormatRGBA8Unorm);
   }
 
   void drawQuad(id<MTLRenderPipelineState> pso, int fbW, int fbH, int contentW, int contentH,
@@ -396,10 +392,10 @@ bool MetalRenderer::init(int window_w, int window_h, const char* title, bool vsy
 void MetalRenderer::shutdown() {
   if (impl_) {
     // Release all Metal objects (ARC handles the actual dealloc).
-    impl_->texRgb = nil;
-    impl_->texY = nil;
-    impl_->texCb = nil;
-    impl_->texCr = nil;
+    impl_->planeRgb = {};
+    impl_->planeY = {};
+    impl_->planeCb = {};
+    impl_->planeCr = {};
     impl_->vertexBuffer = nil;
     impl_->psoRgb = nil;
     impl_->psoYcbcr = nil;
@@ -431,28 +427,23 @@ void MetalRenderer::poll_events() {
 void MetalRenderer::upload_and_draw(const uint8_t* rgb, int w, int h) {
   if (!window_ || !impl_ || w <= 0 || h <= 0) return;
 
-  impl_->ensureRgbTexture(w, h);
+  impl_->ensureRgbPlane(w, h);
 
-  // Convert RGB → RGBA (Metal has no RGB8 texture format).
-  // For the CPU fallback path this extra copy is acceptable.
+  // Convert RGB → RGBA directly into the shared buffer (Metal has no RGB8).
   const size_t npix = static_cast<size_t>(w) * h;
-  std::vector<uint8_t> rgba(npix * 4);
+  uint8_t* dst = static_cast<uint8_t*>(impl_->planeRgb.buffer.contents);
   for (size_t i = 0; i < npix; ++i) {
-    rgba[4 * i + 0] = rgb[3 * i + 0];
-    rgba[4 * i + 1] = rgb[3 * i + 1];
-    rgba[4 * i + 2] = rgb[3 * i + 2];
-    rgba[4 * i + 3] = 255;
+    dst[4 * i + 0] = rgb[3 * i + 0];
+    dst[4 * i + 1] = rgb[3 * i + 1];
+    dst[4 * i + 2] = rgb[3 * i + 2];
+    dst[4 * i + 3] = 255;
   }
-  [impl_->texRgb replaceRegion:MTLRegionMake2D(0, 0, w, h)
-                   mipmapLevel:0
-                     withBytes:rgba.data()
-                   bytesPerRow:w * 4];
 
   int fbW, fbH;
   glfwGetFramebufferSize(window_, &fbW, &fbH);
   impl_->layer.drawableSize = CGSizeMake(fbW, fbH);
 
-  impl_->drawQuad(impl_->psoRgb, fbW, fbH, w, h, impl_->texRgb, nil, nil, nullptr);
+  impl_->drawQuad(impl_->psoRgb, fbW, fbH, w, h, impl_->planeRgb.texture, nil, nil, nullptr);
 }
 
 // ── Planar 8-bit ─────────────────────────────────────────────────────────
@@ -465,16 +456,14 @@ void MetalRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t
                                            const ColorPipelineParams& pipeline) {
   if (!window_ || !impl_ || w_y <= 0 || h_y <= 0 || w_c <= 0 || h_c <= 0) return;
 
-  impl_->ensureTexture(impl_->texY,  impl_->texYW,  impl_->texYH,  impl_->texYBpp,  w_y, h_y, 1);
-  impl_->ensureTexture(impl_->texCb, impl_->texCbW, impl_->texCbH, impl_->texCbBpp, w_c, h_c, 1);
-  impl_->ensureTexture(impl_->texCr, impl_->texCrW, impl_->texCrH, impl_->texCrBpp, w_c, h_c, 1);
+  impl_->ensurePlane(impl_->planeY,  w_y, h_y, 1, MTLPixelFormatR8Unorm);
+  impl_->ensurePlane(impl_->planeCb, w_c, h_c, 1, MTLPixelFormatR8Unorm);
+  impl_->ensurePlane(impl_->planeCr, w_c, h_c, 1, MTLPixelFormatR8Unorm);
 
-  [impl_->texY  replaceRegion:MTLRegionMake2D(0, 0, w_y, h_y) mipmapLevel:0
-                    withBytes:y_plane  bytesPerRow:w_y];
-  [impl_->texCb replaceRegion:MTLRegionMake2D(0, 0, w_c, h_c) mipmapLevel:0
-                    withBytes:cb_plane bytesPerRow:w_c];
-  [impl_->texCr replaceRegion:MTLRegionMake2D(0, 0, w_c, h_c) mipmapLevel:0
-                    withBytes:cr_plane bytesPerRow:w_c];
+  // Direct memcpy into shared GPU memory — no replaceRegion, no tiling.
+  std::memcpy(impl_->planeY.buffer.contents,  y_plane,  static_cast<size_t>(w_y) * h_y);
+  std::memcpy(impl_->planeCb.buffer.contents, cb_plane, static_cast<size_t>(w_c) * h_c);
+  std::memcpy(impl_->planeCr.buffer.contents, cr_plane, static_cast<size_t>(w_c) * h_c);
 
   FragmentUniforms u = {};
   u.norm_scale = simd_make_float3(1.0f, 1.0f, 1.0f);
@@ -511,7 +500,8 @@ void MetalRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t
   impl_->layer.drawableSize = CGSizeMake(fbW, fbH);
 
   id<MTLRenderPipelineState> pso = components_are_rgb ? impl_->psoPlanarRgb : impl_->psoYcbcr;
-  impl_->drawQuad(pso, fbW, fbH, w_y, h_y, impl_->texY, impl_->texCb, impl_->texCr, &u);
+  impl_->drawQuad(pso, fbW, fbH, w_y, h_y,
+                  impl_->planeY.texture, impl_->planeCb.texture, impl_->planeCr.texture, &u);
 }
 
 // ── Planar 16-bit ────────────────────────────────────────────────────────
@@ -525,16 +515,13 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
   if (!window_ || !impl_ || w_y <= 0 || h_y <= 0 || w_c <= 0 || h_c <= 0) return;
   if (bit_depth < 9 || bit_depth > 16) return;
 
-  impl_->ensureTexture(impl_->texY,  impl_->texYW,  impl_->texYH,  impl_->texYBpp,  w_y, h_y, 2);
-  impl_->ensureTexture(impl_->texCb, impl_->texCbW, impl_->texCbH, impl_->texCbBpp, w_c, h_c, 2);
-  impl_->ensureTexture(impl_->texCr, impl_->texCrW, impl_->texCrH, impl_->texCrBpp, w_c, h_c, 2);
+  impl_->ensurePlane(impl_->planeY,  w_y, h_y, 2, MTLPixelFormatR16Unorm);
+  impl_->ensurePlane(impl_->planeCb, w_c, h_c, 2, MTLPixelFormatR16Unorm);
+  impl_->ensurePlane(impl_->planeCr, w_c, h_c, 2, MTLPixelFormatR16Unorm);
 
-  [impl_->texY  replaceRegion:MTLRegionMake2D(0, 0, w_y, h_y) mipmapLevel:0
-                    withBytes:y_plane  bytesPerRow:w_y * 2];
-  [impl_->texCb replaceRegion:MTLRegionMake2D(0, 0, w_c, h_c) mipmapLevel:0
-                    withBytes:cb_plane bytesPerRow:w_c * 2];
-  [impl_->texCr replaceRegion:MTLRegionMake2D(0, 0, w_c, h_c) mipmapLevel:0
-                    withBytes:cr_plane bytesPerRow:w_c * 2];
+  std::memcpy(impl_->planeY.buffer.contents,  y_plane,  static_cast<size_t>(w_y) * h_y * 2);
+  std::memcpy(impl_->planeCb.buffer.contents, cb_plane, static_cast<size_t>(w_c) * h_c * 2);
+  std::memcpy(impl_->planeCr.buffer.contents, cr_plane, static_cast<size_t>(w_c) * h_c * 2);
 
   const float native_max = static_cast<float>((1 << bit_depth) - 1);
   const float k = 65535.0f / native_max;
@@ -572,7 +559,8 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
   impl_->layer.drawableSize = CGSizeMake(fbW, fbH);
 
   id<MTLRenderPipelineState> pso = components_are_rgb ? impl_->psoPlanarRgb : impl_->psoYcbcr;
-  impl_->drawQuad(pso, fbW, fbH, w_y, h_y, impl_->texY, impl_->texCb, impl_->texCr, &u);
+  impl_->drawQuad(pso, fbW, fbH, w_y, h_y,
+                  impl_->planeY.texture, impl_->planeCb.texture, impl_->planeCr.texture, &u);
 }
 
 }  // namespace open_htj2k::rtp_recv
