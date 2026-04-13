@@ -156,6 +156,16 @@ struct FragmentUniforms {
   int32_t       display_encoding;
 };
 
+// Copy 9 packed floats (column-major) into a padded simd_float3x3.
+// simd_float3x3 stores 3 columns of simd_float3, each padded to 16 bytes.
+static inline simd_float3x3 mat3_from_packed(const float m[9]) {
+  return (simd_float3x3){
+      simd_make_float3(m[0], m[1], m[2]),
+      simd_make_float3(m[3], m[4], m[5]),
+      simd_make_float3(m[6], m[7], m[8]),
+  };
+}
+
 // ESC/Q key callback.
 static void key_callback(GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/) {
   if ((key == GLFW_KEY_ESCAPE || key == GLFW_KEY_Q) && action == GLFW_PRESS)
@@ -470,7 +480,7 @@ void MetalRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t
   u.norm_scale = simd_make_float3(1.0f, 1.0f, 1.0f);
   u.transfer = pipeline.transfer;
   u.display_encoding = pipeline.display_encoding;
-  std::memcpy(&u.gamut_matrix, pipeline.gamut_matrix, sizeof(float) * 9);
+  u.gamut_matrix = mat3_from_packed(pipeline.gamut_matrix);
 
   if (!components_are_rgb && coeffs) {
     // Column-major 3x3 YCbCr→RGB matrix (same layout as the GLSL version).
@@ -479,7 +489,7 @@ void MetalRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t
         0.0f,           -coeffs->cb_to_g,  coeffs->cb_to_b,
         coeffs->cr_to_r, -coeffs->cr_to_g, 0.0f,
     };
-    std::memcpy(&u.matrix, mat, sizeof(float) * 9);
+    u.matrix = mat3_from_packed(mat);
 
     if (coeffs->narrow_range) {
       u.bias  = simd_make_float3(16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f);
@@ -490,8 +500,8 @@ void MetalRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t
     }
   } else {
     // Identity for RGB passthrough.
-    float id3[9] = {1,0,0, 0,1,0, 0,0,1};
-    std::memcpy(&u.matrix, id3, sizeof(float) * 9);
+    const float id3[9] = {1,0,0, 0,1,0, 0,0,1};
+    u.matrix = mat3_from_packed(id3);
     u.bias  = simd_make_float3(0.0f, 0.0f, 0.0f);
     u.scale = simd_make_float3(1.0f, 1.0f, 1.0f);
   }
@@ -533,7 +543,7 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
   u.norm_scale = simd_make_float3(k, k, k);
   u.transfer = pipeline.transfer;
   u.display_encoding = pipeline.display_encoding;
-  std::memcpy(&u.gamut_matrix, pipeline.gamut_matrix, sizeof(float) * 9);
+  u.gamut_matrix = mat3_from_packed(pipeline.gamut_matrix);
 
   if (!components_are_rgb && coeffs) {
     float mat[9] = {
@@ -541,7 +551,7 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
         0.0f,           -coeffs->cb_to_g,  coeffs->cb_to_b,
         coeffs->cr_to_r, -coeffs->cr_to_g, 0.0f,
     };
-    std::memcpy(&u.matrix, mat, sizeof(float) * 9);
+    u.matrix = mat3_from_packed(mat);
 
     if (coeffs->narrow_range) {
       u.bias  = simd_make_float3(16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f);
@@ -551,8 +561,8 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
       u.scale = simd_make_float3(1.0f, 1.0f, 1.0f);
     }
   } else {
-    float id3[9] = {1,0,0, 0,1,0, 0,0,1};
-    std::memcpy(&u.matrix, id3, sizeof(float) * 9);
+    const float id3[9] = {1,0,0, 0,1,0, 0,0,1};
+    u.matrix = mat3_from_packed(id3);
     u.bias  = simd_make_float3(0.0f, 0.0f, 0.0f);
     u.scale = simd_make_float3(1.0f, 1.0f, 1.0f);
   }
