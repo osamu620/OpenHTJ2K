@@ -9,7 +9,7 @@ message(STATUS "**** WASM BUILD")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 
-set(WASM_FLAGS "\
+set(WASM_FLAGS_COMMON "\
     -O3 -flto -mnontrapping-fptoint -mbulk-memory -s WASM=1 -s EXPORT_ES6=1 -s MODULARIZE=1 -s ENVIRONMENT=web,node \
     -s EXPORTED_FUNCTIONS=[_free,_malloc] \
     -s MALLOC=emmalloc \
@@ -21,7 +21,23 @@ set(WASM_FLAGS "\
     -sNO_DISABLE_EXCEPTION_CATCHING \
     "
 )
-# Pull in the open_htj2k library (compiled without SIMD flags → scalar build).
+
+# Single-threaded link flags (original)
+set(WASM_FLAGS "${WASM_FLAGS_COMMON}")
+
+# Multi-threaded link flags — adds pthreads and SharedArrayBuffer support.
+# PTHREAD_POOL_SIZE is set at link time; the JS runtime pre-creates this many
+# Web Workers so that std::thread / ThreadPool do not block on worker creation.
+set(WASM_MT_FLAGS "\
+    ${WASM_FLAGS_COMMON} \
+    -pthread \
+    -s USE_PTHREADS=1 \
+    -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency||4 \
+    -s SHARED_MEMORY=1 \
+    -s MALLOC=dlmalloc \
+    "
+)
+# Pull in the open_htj2k library (compiled without SIMD or pthread flags → scalar single-threaded build).
 add_subdirectory(".." open_htj2k_dir EXCLUDE_FROM_ALL)
 
 # Collect the library's sources, include dirs, and any extra compile flags so
@@ -62,3 +78,56 @@ add_executable(libopen_htj2k_simd "src/wrapper.cpp")
 set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory")
 set_target_properties(libopen_htj2k_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k_simd PRIVATE open_htj2k_simd_lib)
+
+# ── Multi-threaded variants (pthreads) ──────────────────────────────────────
+# Recompile all library sources with OPENHTJ2K_THREAD + -pthread so that
+# ThreadPool and std::thread are available via Emscripten's pthreads layer.
+# Produces two additional targets:
+#   libopen_htj2k_mt      — scalar + pthreads
+#   libopen_htj2k_mt_simd — WASM-SIMD + pthreads
+
+# ── Scalar + pthreads ───────────────────────────────────────────────────────
+add_library(open_htj2k_mt_objs OBJECT ${_SOURCES})
+target_include_directories(open_htj2k_mt_objs PRIVATE ${_INC_DIRS})
+if(_COMP_DEFS)
+  target_compile_definitions(open_htj2k_mt_objs PRIVATE ${_COMP_DEFS})
+endif()
+if(_COMP_OPTS)
+  target_compile_options(open_htj2k_mt_objs PRIVATE ${_COMP_OPTS})
+endif()
+target_compile_definitions(open_htj2k_mt_objs PRIVATE "OPENHTJ2K_THREAD" "OPENHTJ2K_ENABLE_WASM_THREADS")
+target_compile_options(open_htj2k_mt_objs PRIVATE "-O3" "-flto" "-mnontrapping-fptoint" "-mbulk-memory" "-pthread")
+
+add_library(open_htj2k_mt_lib STATIC $<TARGET_OBJECTS:open_htj2k_mt_objs>)
+if(_IFACE_INC)
+  target_include_directories(open_htj2k_mt_lib INTERFACE ${_IFACE_INC})
+endif()
+
+add_executable(libopen_htj2k_mt "src/wrapper.cpp")
+target_compile_definitions(libopen_htj2k_mt PRIVATE "OPENHTJ2K_THREAD")
+set_target_properties(libopen_htj2k_mt PROPERTIES COMPILE_FLAGS "-O3 -flto -mnontrapping-fptoint -mbulk-memory -pthread")
+set_target_properties(libopen_htj2k_mt PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_MT_FLAGS})
+target_link_libraries(libopen_htj2k_mt PRIVATE open_htj2k_mt_lib)
+
+# ── WASM-SIMD + pthreads ────────────────────────────────────────────────────
+add_library(open_htj2k_mt_simd_objs OBJECT ${_SOURCES})
+target_include_directories(open_htj2k_mt_simd_objs PRIVATE ${_INC_DIRS})
+if(_COMP_DEFS)
+  target_compile_definitions(open_htj2k_mt_simd_objs PRIVATE ${_COMP_DEFS})
+endif()
+if(_COMP_OPTS)
+  target_compile_options(open_htj2k_mt_simd_objs PRIVATE ${_COMP_OPTS})
+endif()
+target_compile_definitions(open_htj2k_mt_simd_objs PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD" "OPENHTJ2K_THREAD" "OPENHTJ2K_ENABLE_WASM_THREADS")
+target_compile_options(open_htj2k_mt_simd_objs PRIVATE "-O3" "-flto" "-msimd128" "-mnontrapping-fptoint" "-mbulk-memory" "-pthread")
+
+add_library(open_htj2k_mt_simd_lib STATIC $<TARGET_OBJECTS:open_htj2k_mt_simd_objs>)
+if(_IFACE_INC)
+  target_include_directories(open_htj2k_mt_simd_lib INTERFACE ${_IFACE_INC})
+endif()
+
+add_executable(libopen_htj2k_mt_simd "src/wrapper.cpp")
+target_compile_definitions(libopen_htj2k_mt_simd PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD" "OPENHTJ2K_THREAD")
+set_target_properties(libopen_htj2k_mt_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory -pthread")
+set_target_properties(libopen_htj2k_mt_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_MT_FLAGS})
+target_link_libraries(libopen_htj2k_mt_simd PRIVATE open_htj2k_mt_simd_lib)

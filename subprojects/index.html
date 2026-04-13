@@ -330,6 +330,7 @@
     </svg>
     <h1>HTJ2K / J2K-1 — Browser WASM Decoder</h1>
     <span id="simd_badge" class="simd-badge simd-detecting">Detecting SIMD…</span>
+    <span id="mt_badge" class="simd-badge simd-detecting">Detecting Threads…</span>
   </header>
   <!-- Original simd_message element (hidden; JS reads/writes innerText; badge synced below) -->
   <pre id="simd_message" style="display:none"></pre>
@@ -384,6 +385,7 @@
           <tr><td>Bit depth</td>     <td><span id="imgDepth">—</span></td></tr>
           <tr><td>Signedness</td>    <td><span id="imgSigned">—</span></td></tr>
           <tr><td>Min DWT levels</td><td><span id="DWTlevels">—</span></td></tr>
+          <tr><td>Threads</td>       <td><span id="numThreads">—</span></td></tr>
         </table>
         <div class="time-block">
           <div class="time-block-label">Decode time</div>
@@ -471,6 +473,7 @@
     var apply_ycbcr_bt601 = null;
     var apply_ycbcr_bt709 = null;
     var get_colorspace     = null;
+    var g_use_mt           = false;  // true when multi-threaded module is loaded
 
     function applyYCbCrConversion(standard) {
       if (!g_ycbcr_js || g_ycbcr_converted || !g_module) return;
@@ -509,7 +512,9 @@
       var buffer = Module._malloc(array.length);
       Module.writeArrayToMemory(array, buffer);
       // console.log("HTJ2K decoder creation start");
-      j2c = create_decoder(buffer, array.length, skip_res_for_data | 0);
+      j2c = g_use_mt
+        ? create_decoder_mt(buffer, array.length, skip_res_for_data | 0, 0)
+        : create_decoder(buffer, array.length, skip_res_for_data | 0);
       // Query JPH colorspace before parsing (set in constructor; 0 for raw codestreams).
       // EnumCS: 16=sRGB, 17=Grayscale, 18=YCbCr
       var enumCS = get_colorspace ? (get_colorspace(j2c) | 0) : 0;
@@ -653,6 +658,14 @@
       apply_ycbcr_bt709 = Module.cwrap('apply_ycbcr_bt709_to_rgba', 'void', ['number', 'number']);
       invoke_decoder_planar = Module.cwrap('invoke_decoder_planar', 'void', ['number', 'number']);
       get_colorspace    = Module.cwrap('get_colorspace', 'number', ['number']);
+      // Multi-threaded API — only present in _mt / _mt_simd builds.
+      if (g_use_mt) {
+        create_decoder_mt = Module.cwrap('create_decoder_mt', 'number', ['number', 'number', 'number', 'number']);
+        get_hardware_concurrency = Module.cwrap('get_hardware_concurrency', 'number', []);
+        document.getElementById('numThreads').innerText = get_hardware_concurrency();
+      } else {
+        document.getElementById('numThreads').innerText = '1 (single-threaded)';
+      }
       g_module = Module;  // store reference for applyYCbCrConversion (global scope)
 
       // Hide the loading overlay — decoder is ready.
@@ -749,6 +762,28 @@
 
 
 
+    // Detect whether SharedArrayBuffer is available (requires Cross-Origin-Isolation
+    // headers: COOP=same-origin, COEP=require-corp).
+    function threadsSupported() {
+      try {
+        return typeof SharedArrayBuffer !== 'undefined';
+      } catch { return false; }
+    }
+
+    async function load_mt_simd_module() {
+      const openhtj2k = await import('./libopen_htj2k_mt_simd.js');
+      const Module = await openhtj2k.default();
+      g_use_mt = true;
+      load_and_display_images(Module);
+    }
+
+    async function load_mt_module() {
+      const openhtj2k = await import('./libopen_htj2k_mt.js');
+      const Module = await openhtj2k.default();
+      g_use_mt = true;
+      load_and_display_images(Module);
+    }
+
     async function load_simd_module() {
       const openhtj2k = await import('./libopen_htj2k_simd.js');
       const Module = await openhtj2k.default();
@@ -763,13 +798,19 @@
 
     wasmFeatureDetect.simd().then(simdSupported => {
       txt = document.getElementById('simd_message').innerText.slice(0, -1);
+      var mt = threadsSupported();
 
-      if (simdSupported) {
-        document.getElementById('simd_message').innerText = txt + "SIMD is detected. (But not used)\n";
+      if (simdSupported && mt) {
+        document.getElementById('simd_message').innerText = txt + "SIMD + Threads detected.\n";
+        load_mt_simd_module();
+      } else if (simdSupported) {
+        document.getElementById('simd_message').innerText = txt + "SIMD is detected.\n";
         load_simd_module();
-        // load_generic_module();
+      } else if (mt) {
+        document.getElementById('simd_message').innerText = txt + "Threads detected (no SIMD).\n";
+        load_mt_module();
       } else {
-        document.getElementById('simd_message').innerText = txt + "SIMD is not detected. \n";
+        document.getElementById('simd_message').innerText = txt + "SIMD is not detected.\n";
         load_generic_module();
       }
     });
@@ -806,6 +847,17 @@
         badge.className = 'simd-badge simd-off';
       }
     });
+    // Threads badge
+    (function () {
+      var badge = document.getElementById('mt_badge');
+      if (threadsSupported()) {
+        badge.textContent = 'Threads \u2713';
+        badge.className = 'simd-badge simd-on';
+      } else {
+        badge.textContent = 'No Threads';
+        badge.className = 'simd-badge simd-off';
+      }
+    })();
   </script>
 
   <!-- ── Footer ────────────────────────────────────────── -->

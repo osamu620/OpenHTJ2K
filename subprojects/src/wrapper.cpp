@@ -12,10 +12,25 @@
   #endif
 
   #include "decoder.hpp"
+  #if defined(OPENHTJ2K_THREAD)
+    #include <thread>
+  #endif
 
 open_htj2k::openhtj2k_decoder* cpp_create_decoder(uint8_t* data, size_t size, uint8_t reduce_NL) {
   return new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, 1);
 }
+
+#if defined(OPENHTJ2K_THREAD)
+// Multi-threaded variant: num_threads=0 uses hardware_concurrency (navigator.hardwareConcurrency).
+open_htj2k::openhtj2k_decoder* cpp_create_decoder_mt(uint8_t* data, size_t size, uint8_t reduce_NL,
+                                                     uint32_t num_threads) {
+  if (num_threads == 0) {
+    num_threads = std::thread::hardware_concurrency();
+    if (num_threads == 0) num_threads = 4;  // fallback
+  }
+  return new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, num_threads);
+}
+#endif
 
 void cpp_parse_j2c_data(open_htj2k::openhtj2k_decoder* dec) { dec->parse(); }
 void cpp_invoke_decoder(open_htj2k::openhtj2k_decoder* dec, int32_t* out) {
@@ -79,6 +94,22 @@ EMSCRIPTEN_KEEPALIVE
 open_htj2k::openhtj2k_decoder* create_decoder(uint8_t* data, size_t size, uint8_t reduce_NL) {
   return cpp_create_decoder(data, size, reduce_NL);
 }
+
+#if defined(OPENHTJ2K_THREAD)
+// Create a decoder that uses num_threads worker threads (0 = auto-detect from
+// navigator.hardwareConcurrency).  Only available in the _mt / _mt_simd builds.
+EMSCRIPTEN_KEEPALIVE
+open_htj2k::openhtj2k_decoder* create_decoder_mt(uint8_t* data, size_t size, uint8_t reduce_NL,
+                                                  uint32_t num_threads) {
+  return cpp_create_decoder_mt(data, size, reduce_NL, num_threads);
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t get_hardware_concurrency() {
+  uint32_t n = std::thread::hardware_concurrency();
+  return n ? n : 4;
+}
+#endif
 
 EMSCRIPTEN_KEEPALIVE
 void parse_j2c_data(open_htj2k::openhtj2k_decoder* dec) { cpp_parse_j2c_data(dec); }
