@@ -149,13 +149,24 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
 
     const auto t0 = Clock::now();
 
-    // Zero-copy init: lend frame.bytes to the decoder.  The AssembledFrame
-    // stays alive through parse() + invoke_line_based_stream_reuse() below,
-    // satisfying the borrow lifetime requirement.  Saves the alloc + 1.7 MB
-    // memcpy that init() would do.
+    // Zero-copy init + cache warmup.  init_borrow() avoids the 0.5 ms
+    // alloc + memcpy of init(), while the volatile read loop forces every
+    // cache line of the codestream into this core's L1/L2 (~0.1 ms for
+    // 1.7 MB at M3's L2 bandwidth).  The recv_thread populated
+    // frame.bytes on a different core, so without this sweep the HT
+    // decoder's scattered codeblock reads would hit L3/SLC (~20 ns each)
+    // instead of L2 (~5 ns), costing ~2 ms in aggregate.
     try {
       decoder.init_borrow(frame.bytes.data(), cs_len, /*reduce_NL=*/0,
                           opts.num_decoder_threads);
+      // Warm codestream into decode core's L2 via mandatory loads.
+      // Unlike __builtin_prefetch (advisory hint the HW can drop),
+      // volatile reads guarantee the cache line is fetched.
+      {
+        const volatile uint8_t* p = frame.bytes.data();
+        for (size_t off = 0; off < cs_len; off += 64)
+          (void)p[off];
+      }
       decoder.parse();
     } catch (std::exception& e) {
       std::fprintf(stderr, "decoder.init/parse failed: %s\n", e.what());
