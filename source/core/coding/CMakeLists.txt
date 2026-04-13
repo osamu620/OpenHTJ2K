@@ -13,6 +13,8 @@ target_sources(open_htj2k
     block_decoding.cpp
     block_dequant.cpp
     block_dequant_neon.cpp
+    block_dequant_avx2.cpp
+    block_dequant_avx512.cpp
     mq_decoder.cpp
     subband_row_buf.cpp
 )
