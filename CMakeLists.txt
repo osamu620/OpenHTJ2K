@@ -276,6 +276,8 @@ if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
         target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw
                               "-framework Metal" "-framework QuartzCore" "-framework Cocoa")
         message(STATUS "OPENHTJ2K_USE_METAL is set")
+      elseif(WIN32)
+        target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL ws2_32)
       else()
         target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL)
       endif()

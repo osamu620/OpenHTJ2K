@@ -5,12 +5,16 @@
 
 #include "rtp_socket.hpp"
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#ifdef _WIN32
+  // winsock2.h / ws2tcpip.h already included via rtp_socket.hpp.
+#else
+  #include <arpa/inet.h>
+  #include <fcntl.h>
+  #include <netinet/in.h>
+  #include <poll.h>
+  #include <sys/socket.h>
+  #include <unistd.h>
+#endif
 
 #include <cerrno>
 #include <cstring>
@@ -18,52 +22,86 @@
 
 namespace open_htj2k::rtp_recv {
 
-namespace {
-std::string errno_message(const char* what) {
+// ── Platform error helpers ──────────────────────────────────────────────
+#ifdef _WIN32
+static std::string socket_error_message(const char* what) {
+  int err = WSAGetLastError();
+  std::string s(what);
+  s += ": error ";
+  s += std::to_string(err);
+  return s;
+}
+#else
+static std::string socket_error_message(const char* what) {
   std::string s(what);
   s += ": ";
   s += std::strerror(errno);
   return s;
 }
-}  // namespace
+#endif
 
+// ── WSA init/cleanup ────────────────────────────────────────────────────
+#ifdef _WIN32
+bool UdpSocket::wsa_init() {
+  WSADATA wsa;
+  return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+}
+void UdpSocket::wsa_cleanup() { WSACleanup(); }
+#else
+bool UdpSocket::wsa_init() { return true; }
+void UdpSocket::wsa_cleanup() {}
+#endif
+
+// ── Lifecycle ───────────────────────────────────────────────────────────
 UdpSocket::~UdpSocket() { close(); }
 
 UdpSocket::UdpSocket(UdpSocket&& other) noexcept
-    : fd_(other.fd_), last_error_(std::move(other.last_error_)) {
-  other.fd_ = -1;
+    : fd_(other.fd_), last_granted_recv_buf_(other.last_granted_recv_buf_),
+      last_error_(std::move(other.last_error_)) {
+  other.fd_ = kInvalidSocket;
 }
 
 UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept {
   if (this != &other) {
     close();
-    fd_         = other.fd_;
-    last_error_ = std::move(other.last_error_);
-    other.fd_   = -1;
+    fd_                    = other.fd_;
+    last_granted_recv_buf_ = other.last_granted_recv_buf_;
+    last_error_            = std::move(other.last_error_);
+    other.fd_              = kInvalidSocket;
   }
   return *this;
 }
 
 void UdpSocket::close() {
-  if (fd_ >= 0) {
+  if (fd_ != kInvalidSocket) {
+#ifdef _WIN32
+    ::closesocket(fd_);
+#else
     ::close(fd_);
-    fd_ = -1;
+#endif
+    fd_ = kInvalidSocket;
   }
 }
 
+// ── Bind ────────────────────────────────────────────────────────────────
 bool UdpSocket::bind(const std::string& host, uint16_t port) {
   close();
 
   fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
-  if (fd_ < 0) {
-    last_error_ = errno_message("socket()");
+  if (fd_ == kInvalidSocket) {
+    last_error_ = socket_error_message("socket()");
     return false;
   }
 
-  // SO_REUSEADDR so restarts don't hit EADDRINUSE during a cycling kdu_stream_send.
+  // SO_REUSEADDR so restarts don't hit EADDRINUSE during a cycling sender.
   int yes = 1;
+#ifdef _WIN32
+  if (::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&yes), sizeof(yes)) < 0) {
+#else
   if (::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) < 0) {
-    last_error_ = errno_message("setsockopt(SO_REUSEADDR)");
+#endif
+    last_error_ = socket_error_message("setsockopt(SO_REUSEADDR)");
     close();
     return false;
   }
@@ -82,7 +120,7 @@ bool UdpSocket::bind(const std::string& host, uint16_t port) {
   }
 
   if (::bind(fd_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
-    last_error_ = errno_message("bind()");
+    last_error_ = socket_error_message("bind()");
     close();
     return false;
   }
@@ -90,40 +128,56 @@ bool UdpSocket::bind(const std::string& host, uint16_t port) {
   return true;
 }
 
+// ── Non-blocking ────────────────────────────────────────────────────────
 bool UdpSocket::set_nonblocking() {
-  if (fd_ < 0) {
+  if (fd_ == kInvalidSocket) {
     last_error_ = "set_nonblocking(): socket not open";
     return false;
   }
+#ifdef _WIN32
+  u_long one = 1;
+  if (::ioctlsocket(fd_, FIONBIO, &one) != 0) {
+    last_error_ = socket_error_message("ioctlsocket(FIONBIO)");
+    return false;
+  }
+#else
   int flags = ::fcntl(fd_, F_GETFL, 0);
   if (flags < 0) {
-    last_error_ = errno_message("fcntl(F_GETFL)");
+    last_error_ = socket_error_message("fcntl(F_GETFL)");
     return false;
   }
   if (::fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
-    last_error_ = errno_message("fcntl(F_SETFL O_NONBLOCK)");
+    last_error_ = socket_error_message("fcntl(F_SETFL O_NONBLOCK)");
     return false;
   }
+#endif
   return true;
 }
 
+// ── Receive buffer ──────────────────────────────────────────────────────
 bool UdpSocket::set_recv_buffer_size(int bytes) {
-  if (fd_ < 0) {
+  if (fd_ == kInvalidSocket) {
     last_error_ = "set_recv_buffer_size(): socket not open";
     return false;
   }
+#ifdef _WIN32
+  if (::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF,
+                   reinterpret_cast<const char*>(&bytes), sizeof(bytes)) < 0) {
+#else
   if (::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &bytes, sizeof(bytes)) < 0) {
-    // Best-effort; some kernels silently clamp without failing.
-    last_error_ = errno_message("setsockopt(SO_RCVBUF)");
+#endif
+    last_error_ = socket_error_message("setsockopt(SO_RCVBUF)");
     return false;
   }
-  // Read back the actual value the kernel applied (it doubles the request
-  // internally and clamps to net.core.rmem_max, often silently).  Bytes
-  // outside the granted window will be dropped from the kernel buffer
-  // when the application falls behind, so the caller must know.
   int       got     = 0;
+#ifdef _WIN32
+  int got_len = sizeof(got);
+  if (::getsockopt(fd_, SOL_SOCKET, SO_RCVBUF,
+                   reinterpret_cast<char*>(&got), &got_len) == 0) {
+#else
   socklen_t got_len = sizeof(got);
   if (::getsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &got, &got_len) == 0) {
+#endif
     last_granted_recv_buf_ = got;
   }
   return true;
@@ -131,35 +185,61 @@ bool UdpSocket::set_recv_buffer_size(int bytes) {
 
 int UdpSocket::last_granted_recv_buf() const { return last_granted_recv_buf_; }
 
+// ── Poll ────────────────────────────────────────────────────────────────
 int UdpSocket::wait_readable(int timeout_ms) {
-  if (fd_ < 0) {
+  if (fd_ == kInvalidSocket) {
     last_error_ = "wait_readable(): socket not open";
     return -1;
   }
+#ifdef _WIN32
+  WSAPOLLFD pfd{};
+  pfd.fd     = fd_;
+  pfd.events = POLLIN;
+  int rc     = ::WSAPoll(&pfd, 1, timeout_ms);
+  if (rc < 0) {
+    int err = WSAGetLastError();
+    if (err == WSAEINTR) return 0;
+    last_error_ = socket_error_message("WSAPoll()");
+    return -1;
+  }
+#else
   pollfd pfd{};
   pfd.fd     = fd_;
   pfd.events = POLLIN;
   int rc     = ::poll(&pfd, 1, timeout_ms);
   if (rc < 0) {
     if (errno == EINTR) return 0;  // signal, treat as timeout
-    last_error_ = errno_message("poll()");
+    last_error_ = socket_error_message("poll()");
     return -1;
   }
+#endif
   return rc > 0 ? 1 : 0;
 }
 
+// ── Receive ─────────────────────────────────────────────────────────────
 ptrdiff_t UdpSocket::recv(void* buf, size_t buf_size) {
-  if (fd_ < 0) {
+  if (fd_ == kInvalidSocket) {
     last_error_ = "recv(): socket not open";
     return kError;
   }
+#ifdef _WIN32
+  int n = ::recvfrom(fd_, static_cast<char*>(buf), static_cast<int>(buf_size),
+                     0, nullptr, nullptr);
+  if (n < 0) {
+    int err = WSAGetLastError();
+    if (err == WSAEWOULDBLOCK || err == WSAEINTR) return kAgain;
+    last_error_ = socket_error_message("recvfrom()");
+    return kError;
+  }
+#else
   ssize_t n = ::recvfrom(fd_, buf, buf_size, 0, nullptr, nullptr);
   if (n < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return kAgain;
-    if (errno == EINTR) return kAgain;  // signal, treat as "try again"
-    last_error_ = errno_message("recvfrom()");
+    if (errno == EINTR) return kAgain;
+    last_error_ = socket_error_message("recvfrom()");
     return kError;
   }
+#endif
   return static_cast<ptrdiff_t>(n);
 }
 

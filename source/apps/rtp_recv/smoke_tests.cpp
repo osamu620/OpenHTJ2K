@@ -167,7 +167,7 @@ int smoke_test_ycbcr() {
 // epsilon), so this exercises the same arithmetic the fragment shader
 // runs without needing a GL context.
 int smoke_test_color_pipeline() {
-  auto near = [](float a, float b, float tol) { return std::fabs(a - b) <= tol; };
+  auto approx = [](float a, float b, float tol) { return std::fabs(a - b) <= tol; };
 
   // --- SMPTE ST 2084 PQ EOTF reference points ---
   // Hand-computed values.  At e=0.0 the EOTF returns 0; at e=1.0 it
@@ -176,27 +176,27 @@ int smoke_test_color_pipeline() {
   // on the 10 000-nit scale.  Recompute with:
   //   v = 0.5^(1/m2); num = v - c1; den = c2 - c3*v
   //   result = (num/den)^(1/m1)
-  if (!near(pq_to_linear(0.0f), 0.0f, 1e-5f)) return 1;
-  if (!near(pq_to_linear(1.0f), 1.0f, 1e-3f)) return 1;
-  if (!near(pq_to_linear(0.5f), 0.00922f, 5e-4f)) return 1;
+  if (!approx(pq_to_linear(0.0f), 0.0f, 1e-5f)) return 1;
+  if (!approx(pq_to_linear(1.0f), 1.0f, 1e-3f)) return 1;
+  if (!approx(pq_to_linear(0.5f), 0.00922f, 5e-4f)) return 1;
 
   // --- HLG inverse OETF reference points ---
   // Formula: e <= 0.5 -> e^2/3; else (exp((e-c)/a)+b)/12.
   // HLG(0)=0, HLG(0.5)=0.25/3=0.08333..., HLG(1)=1.00013 (tiny rounding
   // on the constants brings the spec'd result slightly above 1.0; the
   // shader clamps downstream so this is harmless).
-  if (!near(hlg_inverse(0.0f), 0.0f, 1e-6f)) return 1;
-  if (!near(hlg_inverse(0.5f), 1.0f / 12.0f, 1e-5f)) return 1;
-  if (!near(hlg_inverse(1.0f), 1.0f, 2e-4f)) return 1;
+  if (!approx(hlg_inverse(0.0f), 0.0f, 1e-6f)) return 1;
+  if (!approx(hlg_inverse(0.5f), 1.0f / 12.0f, 1e-5f)) return 1;
+  if (!approx(hlg_inverse(1.0f), 1.0f, 2e-4f)) return 1;
 
   // --- sRGB EOTF^-1 reference points ---
   // Below the knee (l <= 0.0031308) the encoding is 12.92*l; above it
   // the Hermite segment 1.055*l^(1/2.4) - 0.055 kicks in.
-  if (!near(linear_to_srgb(0.0f), 0.0f, 1e-6f)) return 1;
-  if (!near(linear_to_srgb(0.0031308f), 12.92f * 0.0031308f, 1e-5f)) return 1;
-  if (!near(linear_to_srgb(1.0f), 1.0f, 1e-5f)) return 1;
+  if (!approx(linear_to_srgb(0.0f), 0.0f, 1e-6f)) return 1;
+  if (!approx(linear_to_srgb(0.0031308f), 12.92f * 0.0031308f, 1e-5f)) return 1;
+  if (!approx(linear_to_srgb(1.0f), 1.0f, 1e-5f)) return 1;
   // linear_to_srgb(0.5) = 1.055 * 0.5^(1/2.4) - 0.055 ≈ 0.7354.
-  if (!near(linear_to_srgb(0.5f), 0.7354f, 2e-4f)) return 1;
+  if (!approx(linear_to_srgb(0.5f), 0.7354f, 2e-4f)) return 1;
 
   // --- gamma22 display encoding is the exact inverse of the default
   // gamma2.2 inverse transfer, so pow(pow(e, 2.2), 1/2.2) == e. ---
@@ -209,9 +209,9 @@ int smoke_test_color_pipeline() {
     float       r, g, b;
     apply_color_pipeline(gamma22_pipeline, e, e, e, r, g, b);
     // Round-trip should reproduce the input to within float epsilon.
-    if (!near(r, e, 1e-4f)) return 1;
-    if (!near(g, e, 1e-4f)) return 1;
-    if (!near(b, e, 1e-4f)) return 1;
+    if (!approx(r, e, 1e-4f)) return 1;
+    if (!approx(g, e, 1e-4f)) return 1;
+    if (!approx(b, e, 1e-4f)) return 1;
   }
 
   // --- Default pipeline (gamma2.2 + identity + sRGB) drift bound. ---
@@ -245,9 +245,9 @@ int smoke_test_color_pipeline() {
   // rounding), so a grey input should map to grey output within ~2e-4.
   float mr, mg, mb;
   apply_gamut_matrix(kBt2020ToBt709, 0.5f, 0.5f, 0.5f, mr, mg, mb);
-  if (!near(mr, 0.5f, 2e-4f)) return 1;
-  if (!near(mg, 0.5f, 2e-4f)) return 1;
-  if (!near(mb, 0.5f, 2e-4f)) return 1;
+  if (!approx(mr, 0.5f, 2e-4f)) return 1;
+  if (!approx(mg, 0.5f, 2e-4f)) return 1;
+  if (!approx(mb, 0.5f, 2e-4f)) return 1;
 
   // --- Neutral-grey round trip through the PQ + BT.2020->BT.709 + sRGB
   // pipeline.  PQ(0.5) ≈ 0.00922 linear (i.e. ~92 nits on the 10 000-nit
@@ -260,9 +260,9 @@ int smoke_test_color_pipeline() {
   pq_pipeline.gamut_matrix     = kBt2020ToBt709;
   float pr, pg, pb;
   apply_color_pipeline(pq_pipeline, 0.5f, 0.5f, 0.5f, pr, pg, pb);
-  if (!near(pr, 0.0947f, 2e-3f)) return 1;
-  if (!near(pg, 0.0947f, 2e-3f)) return 1;
-  if (!near(pb, 0.0947f, 2e-3f)) return 1;
+  if (!approx(pr, 0.0947f, 2e-3f)) return 1;
+  if (!approx(pg, 0.0947f, 2e-3f)) return 1;
+  if (!approx(pb, 0.0947f, 2e-3f)) return 1;
 
   // Pipeline label helpers.
   if (std::strcmp(transfer_label(TRANSFER_PQ), "pq") != 0) return 1;
