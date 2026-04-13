@@ -32,7 +32,19 @@
 #include <functional>
 #include "decoder.hpp"
 #include "jph.hpp"
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+// GCC 7.x claims C++17 (__cplusplus >= 201703L) but ships <filesystem>
+// only as <experimental/filesystem>, so the language-version check alone
+// is not sufficient.  Use __has_include when available (GCC 5+, Clang,
+// MSVC 2017+) and fall back to the language-version test otherwise.
+#if defined(__has_include)
+  #if __has_include(<filesystem>) && ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+    #define OPENHTJ2K_HAS_FILESYSTEM 1
+  #endif
+#elif ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+  #define OPENHTJ2K_HAS_FILESYSTEM 1
+#endif
+
+#ifdef OPENHTJ2K_HAS_FILESYSTEM
   #include <filesystem>
 #else
   #include <sys/stat.h>
@@ -113,7 +125,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
   uintmax_t file_size;
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+#ifdef OPENHTJ2K_HAS_FILESYSTEM
   try {
     file_size = std::filesystem::file_size(filename);
   } catch (std::filesystem::filesystem_error &err) {

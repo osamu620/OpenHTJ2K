@@ -35,7 +35,14 @@
 // (c) 2022 Osamu Watanabe, Takushoku University
 
 #include <chrono>
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+#if defined(__has_include)
+  #if __has_include(<filesystem>) && ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+    #define OPENHTJ2K_HAS_FILESYSTEM 1
+  #endif
+#elif ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+  #define OPENHTJ2K_HAS_FILESYSTEM 1
+#endif
+#ifdef OPENHTJ2K_HAS_FILESYSTEM
   #include <filesystem>
 #else
   #include <sys/stat.h>
@@ -319,7 +326,7 @@ int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
   std::vector<std::string> fnames = args.ifnames;
   for (const auto &fname : fnames) {
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
+#ifdef OPENHTJ2K_HAS_FILESYSTEM
     try {
       if (!std::filesystem::exists(fname)) {
         throw std::exception();

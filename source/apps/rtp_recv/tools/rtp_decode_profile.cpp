@@ -29,6 +29,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+// This tool requires C++17 <filesystem> for directory iteration.
+// GCC 7.x claims C++17 but does not ship the standard <filesystem> header.
+#if defined(__has_include)
+  #if !__has_include(<filesystem>)
+    #error "rtp_decode_profile requires <filesystem> (GCC 8+, Clang 7+, MSVC 2017 15.7+)"
+  #endif
+#endif
 #include <filesystem>
 #include <fstream>
 #include <string>
