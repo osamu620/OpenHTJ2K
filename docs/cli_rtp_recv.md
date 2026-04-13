@@ -158,24 +158,28 @@ echo 'net.core.rmem_max = 33554432' | sudo tee /etc/sysctl.d/99-openhtj2k-rtp.co
 
 ## Hardware requirements (4K @ 60 fps sustained)
 
-Measured against a 4K 4:2:2 1.7-bpp broadcast HT fixture at
-`--threads 4` on an AMD Ryzen 9 9950X running Linux. Reproduce with
-the offline profiler at
+Measured against a 4K 4:2:2 1.7-bpp broadcast HT fixture. Reproduce
+with the offline profiler at
 `source/apps/rtp_recv/tools/rtp_decode_profile.cpp` (built as
 `open_htj2k_rtp_decode_profile` when `-DOPENHTJ2K_RTP=ON`). Higher-
 bitrate streams, 4:4:4 chroma, or deeper bit depths will not hit the
 same numbers.
 
-- **CPU**: recent high-end x86-64 with AVX2. HTJ2K decode is bounded
-  by per-thread throughput — `--threads 4` (the default, v0.13.0+)
-  is optimal on 4K with the component-parallel IDWT strip dispatch.
-  The dev-box profiler peaks at ~95 fps (10.7 ms/frame) on the above
-  fixture; the live `open_htj2k_rtp_recv --no-vsync` pipeline locks
-  to the source cadence at 60 fps with zero decode-slot evictions,
-  leaving comfortable headroom inside the 16.67 ms frame budget.
+- **CPU (x86-64)**: recent high-end with AVX2, `--threads 4`
+  (default). HTJ2K decode is bounded by per-thread throughput — the
+  component-parallel IDWT strip dispatch (v0.13.0+) is optimal at 4
+  threads on 4K. The dev-box profiler (Ryzen 9 9950X, Linux) peaks
+  at ~95 fps (10.7 ms/frame); the live pipeline locks to 60 fps
+  with zero decode-slot evictions, leaving comfortable headroom.
   Mid-range or older parts are unlikely to sustain 60 fps at 4K;
-  non-AVX2 CPUs additionally fall back to the scalar YCbCr path and
-  will not reach real-time.
+  non-AVX2 CPUs fall back to the scalar YCbCr path.
+- **CPU (Apple Silicon)**: M3 Max with `--threads 2`, 4K @ ~60 fps
+  (avg 16.86 ms/frame, 7 evictions — cold start only). v0.13.2 adds
+  codestream cache warmup (volatile read sweep after `init_borrow`)
+  and CRP-cached packet traversal that together save ~3.1 ms/frame
+  on the inter-core cache-miss and per-frame allocation overhead
+  specific to the live receiver path. M1 Pro / M2 Max are expected
+  to sustain 60 fps at similar thread counts.
 - **GPU** (default `--color-path shader`): any integrated or discrete
   GPU with OpenGL 3.3 core. A modern IGP is ample; the YCbCr fragment
   shader is trivial.

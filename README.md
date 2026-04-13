@@ -42,8 +42,9 @@ on modern x86-64**.
   sub-codestream latency). Three-thread pipeline (receive / decode /
   render) with GPU shader rendering, HDR colour pipeline (PQ / HLG +
   BT.2020 gamut mapping), and an RTP-timestamp frame pacer.
-  **Sustains 4K @ 60 fps** on 4K 4:2:2 1.7-bpp broadcast HT with
-  `--threads 4` on modern x86-64 (component-parallel IDWT).
+  **Sustains 4K @ 60 fps** on 4K 4:2:2 1.7-bpp broadcast HT —
+  `--threads 4` on modern x86-64 (AVX2) and `--threads 2` on Apple
+  Silicon (M3 Max NEON, v0.13.2+).
   Opt-in via `-DOPENHTJ2K_RTP=ON`.
 
 ## Quick build
@@ -121,7 +122,7 @@ core. Opt-in at build time with `-DOPENHTJ2K_RTP=ON`.
 ```
 
 Key flags: `--port N`, `--bind host`, `--no-vsync`, `--frames N`,
-`--threads 4` (default, optimal after component-parallel IDWT),
+`--threads 4` (x86-64 default) or `--threads 2` (Apple Silicon),
 `--colorspace {bt709|bt601|bt2020}`.
 Full reference, kernel `rmem_max` tuning, hardware requirements for
 4K @ 60 fps sustained, and known issues:

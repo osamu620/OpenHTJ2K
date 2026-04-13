@@ -1,3 +1,37 @@
+# [0.13.2] - 2026-04-13
+
+## Performance — 4K @ 60 fps on Apple Silicon (RTP receiver)
+
+* RTP receiver: close the 3.9 ms live-vs-offline decode gap on M3 Max,
+  bringing the live receiver from ~50 fps to ~60 fps on 4K 4:2:2 HT
+  at 1.7 bpp with `--threads 2`.  Two optimizations:
+
+  1. **Codestream cache warmup** (`pipeline_multi_threaded.cpp`):
+     after `init_borrow()`, a volatile read loop forces every cache
+     line of the codestream into the decode core's L1/L2.  The
+     recv_thread populates frame data on a different core, so without
+     this sweep the HT decoder's scattered codeblock reads hit L3/SLC
+     (~20 ns) instead of L2 (~5 ns).  Saves ~1.7 ms/frame compared
+     to the unaided zero-copy path.
+
+  2. **CRP-cached packet traversal** (`coding_units.cpp`):
+     after the first frame's progression-order traversal, cache every
+     (component, resolution, precinct) tuple in a flat vector.
+     Subsequent frames replay this vector directly — the
+     progression-order switch, the 4D `is_packet_read` vector
+     allocation, and all per-frame `p_x`/`p_y`/`x_examin`/`y_examin`
+     heap allocations are skipped entirely.  Saves ~1.4 ms/frame.
+
+  Supporting change: `buf_chain::reset()` in `codestream.hpp` reuses
+  the tile_buf across frames instead of heap-allocating per frame.
+
+  Results on M3 Max (4K 4:2:2, 1.7 bpp, `--threads 2`):
+    Before: avg 20.0 ms/frame, ~50 fps, many decode-slot evictions
+    After:  avg 16.86 ms/frame, ~59-60 fps, 7 evictions (cold start)
+
+  All 582 conformance tests pass.  No SIMD code touched — AVX2, NEON,
+  and WASM paths are unaffected.
+
 # [0.13.1] - 2026-04-12
 
 ## Build fixes
