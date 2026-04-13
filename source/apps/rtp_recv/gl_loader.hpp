@@ -21,12 +21,6 @@
 #  define GL_SILENCE_DEPRECATION
 #  include <OpenGL/gl3.h>
 #  include <OpenGL/gl3ext.h>
-#elif defined(_WIN32)
-  // On Windows, including <GL/gl.h> directly after <winsock2.h> (which
-  // pulls in <windows.h>) causes C2086 redefinition errors.  GLFW's
-  // header includes the GL headers in the correct order.
-#  include <GLFW/glfw3.h>
-#  include <GL/glext.h>
 #else
 #  include <GL/gl.h>
 #  include <GL/glext.h>
