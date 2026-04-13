@@ -3164,9 +3164,14 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     porder_info.Ppoc.clear();
   }
 
+  // Concatenate tile-parts into a tile.  On the reuse path, reset the
+  // existing buf_chain instead of heap-allocating a new one.
   uint8_t t = 0;
-  // concatenate tile-parts into a tile
-  this->tile_buf = MAKE_UNIQUE<buf_chain>(num_tile_part);
+  if (structure_built_ && tile_buf) {
+    tile_buf->reset(num_tile_part);
+  } else {
+    this->tile_buf = MAKE_UNIQUE<buf_chain>(num_tile_part);
+  }
   for (unsigned long i = 0; i < num_tile_part; i++) {
     // If a length of a tile-part is 0, buf number 't' should not be
     // incremented!!
@@ -3212,18 +3217,11 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   for (uint16_t c = 0; c < num_components; c++) {
     c_NL = this->tcomp[c].NL;
     if (c_NL < this->reduce_NL) {
-      //      printf(
-      //          "ERROR: Resolution level reduction exceeds the DWT level of "
-      //          "component %d.\n",
-      //          c);
       throw std::runtime_error("Resolution level reduction exceeds the DWT level");
     }
-    // Single-tile reuse: the resolution/precinct/codeblock tree was built
-    // on the first frame and its shape is identical under matching main-
-    // header bytes.  create_resolutions() allocates fresh storage on every
-    // call, so skipping it here avoids both the allocation and the (much
-    // larger) cost of recomputing nominal_ranges, subband geometry, and
-    // per-codeblock placement for the full tree.
+    // Single-tile reuse: skip create_resolutions (structural allocations),
+    // but keep the counting loop — it warms resolution/precinct objects
+    // into L1/L2 cache before the progression-order packet-parse loop.
     if (!structure_built_) {
       this->tcomp[c].create_resolutions(numlayers, this->line_based_decode);
     }
@@ -3245,101 +3243,185 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   if (packet == nullptr || !structure_built_) {
     this->packet = MAKE_UNIQUE<j2c_packet[]>(static_cast<size_t>(num_packets));
   }
-  // need to construct a POC marker from progression order value in COD marker
-  porder_info.add(0, 0, this->numlayers, static_cast<uint8_t>(max_c_NL + 1), this->num_components,
-                  this->progression_order);
-  uint8_t PO, RS, RE, r, local_RE;
-  uint16_t LYE, CS, CE, c, l;
-  uint32_t p;
-  bool x_cond, y_cond;
-  std::vector<std::vector<std::vector<std::vector<bool>>>> is_packet_read(
-      numlayers, std::vector<std::vector<std::vector<bool>>>(
-                     max_c_NL + 1U, std::vector<std::vector<bool>>(
-                                        num_components, std::vector<bool>(max_res_precincts, false))));
-  j2k_resolution *cr  = nullptr;
-  j2k_precinct *cp    = nullptr;
-  size_t packet_count = 0;
-  for (unsigned long i = 0; i < porder_info.nPOC; ++i) {
-    RS  = porder_info.RSpoc[i];
-    CS  = porder_info.CSpoc[i];
-    LYE = std::min(porder_info.LYEpoc[i], numlayers);
-    RE  = porder_info.REpoc[i];
-    CE  = std::min(porder_info.CEpoc[i], num_components);
-    PO  = porder_info.Ppoc[i];
-    std::vector<std::vector<uint32_t>> p_x(static_cast<uint32_t>(num_components),
-                                           std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
-    std::vector<std::vector<uint32_t>> p_y(static_cast<uint32_t>(num_components),
-                                           std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
+  // ── Packet parsing ─────────────────────────────────────────────────────
+  // After the first frame, the progression order never changes, so we
+  // cache the (component, resolution, precinct) traversal order and replay
+  // it directly — skipping the progression-order switch, the 4D
+  // is_packet_read vector, and all per-frame p_x/p_y/x_examin/y_examin
+  // heap allocations.
+  if (crp_cached_) {
+    // Fast path: replay the cached traversal order.
+    size_t packet_count = 0;
+    for (const auto &e : cached_crp_) {
+      j2k_resolution *cr = this->tcomp[e.c].access_resolution(e.r);
+      j2k_precinct   *cp = cr->access_precinct(e.p);
+      this->packet[packet_count++] = j2c_packet(0, e.r, e.c, e.p, packet_header, tile_buf.get());
+      this->read_packet(cp, 0, cr->num_bands);
+    }
+  } else {
+    // First frame: run the full progression-order traversal and record
+    // every (c, r, p) tuple into cached_crp_.
+    porder_info.add(0, 0, this->numlayers, static_cast<uint8_t>(max_c_NL + 1), this->num_components,
+                    this->progression_order);
+    uint8_t PO, RS, RE, r, local_RE;
+    uint16_t LYE, CS, CE, c, l;
+    uint32_t p;
+    bool x_cond, y_cond;
+    std::vector<std::vector<std::vector<std::vector<bool>>>> is_packet_read(
+        numlayers, std::vector<std::vector<std::vector<bool>>>(
+                       max_c_NL + 1U, std::vector<std::vector<bool>>(
+                                          num_components, std::vector<bool>(max_res_precincts, false))));
+    j2k_resolution *cr  = nullptr;
+    j2k_precinct *cp    = nullptr;
+    size_t packet_count = 0;
+    cached_crp_.clear();
+    cached_crp_.reserve(num_packets);
+    for (unsigned long i = 0; i < porder_info.nPOC; ++i) {
+      RS  = porder_info.RSpoc[i];
+      CS  = porder_info.CSpoc[i];
+      LYE = std::min(porder_info.LYEpoc[i], numlayers);
+      RE  = porder_info.REpoc[i];
+      CE  = std::min(porder_info.CEpoc[i], num_components);
+      PO  = porder_info.Ppoc[i];
+      std::vector<std::vector<uint32_t>> p_x(static_cast<uint32_t>(num_components),
+                                             std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
+      std::vector<std::vector<uint32_t>> p_y(static_cast<uint32_t>(num_components),
+                                             std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
 
-    element_siz PP, cPP, csub;
-    std::vector<uint32_t> x_examin;
-    std::vector<uint32_t> y_examin;
+      element_siz PP, cPP, csub;
+      std::vector<uint32_t> x_examin;
+      std::vector<uint32_t> y_examin;
 
-    switch (PO) {
-      case 0:  // LRCP
-        for (l = 0; l < LYE; l++) {
-          for (r = RS; r < RE; r++) {
-            for (c = CS; c < CE; c++) {
-              c_NL = this->tcomp[c].NL;
-              if (r <= c_NL) {
-                cr = this->tcomp[c].access_resolution(r);
-                if (!cr->is_empty) {
-                  for (p = 0; p < cr->npw * cr->nph; p++) {
-                    cp = cr->access_precinct(p);  //&cr->precincts[p];
-                    if (!is_packet_read[l][r][c][p]) {
-                      this->packet[packet_count++] = j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                      this->read_packet(cp, l, cr->num_bands);
-                      is_packet_read[l][r][c][p] = true;
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        break;
-      case 1:  // RLCP
-        for (r = RS; r < RE; r++) {
+      switch (PO) {
+        case 0:  // LRCP
           for (l = 0; l < LYE; l++) {
-            for (c = CS; c < CE; c++) {
-              c_NL = this->tcomp[c].NL;
-              if (r <= c_NL) {
-                cr = this->tcomp[c].access_resolution(r);
-                if (!cr->is_empty) {
-                  for (p = 0; p < cr->npw * cr->nph; p++) {
-                    cp = cr->access_precinct(p);
-                    if (!is_packet_read[l][r][c][p]) {
-                      this->packet[packet_count++] = j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                      this->read_packet(cp, l, cr->num_bands);
-                      is_packet_read[l][r][c][p] = true;
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        break;
-      case 2:  // RPCL
-        this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
-        for (r = RS; r < RE; r++) {
-          for (uint32_t y : y_examin) {
-            for (uint32_t x : x_examin) {
+            for (r = RS; r < RE; r++) {
               for (c = CS; c < CE; c++) {
                 c_NL = this->tcomp[c].NL;
                 if (r <= c_NL) {
+                  cr = this->tcomp[c].access_resolution(r);
+                  if (!cr->is_empty) {
+                    for (p = 0; p < cr->npw * cr->nph; p++) {
+                      cp = cr->access_precinct(p);
+                      if (!is_packet_read[l][r][c][p]) {
+                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                        this->packet[packet_count++] = j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                        this->read_packet(cp, l, cr->num_bands);
+                        is_packet_read[l][r][c][p] = true;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          break;
+        case 1:  // RLCP
+          for (r = RS; r < RE; r++) {
+            for (l = 0; l < LYE; l++) {
+              for (c = CS; c < CE; c++) {
+                c_NL = this->tcomp[c].NL;
+                if (r <= c_NL) {
+                  cr = this->tcomp[c].access_resolution(r);
+                  if (!cr->is_empty) {
+                    for (p = 0; p < cr->npw * cr->nph; p++) {
+                      cp = cr->access_precinct(p);
+                      if (!is_packet_read[l][r][c][p]) {
+                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                        this->packet[packet_count++] = j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                        this->read_packet(cp, l, cr->num_bands);
+                        is_packet_read[l][r][c][p] = true;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          break;
+        case 2:  // RPCL
+          this->find_gcd_of_precinct_size(PP);
+          x_examin.push_back(pos0.x);
+          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
+            if (x > pos0.x) {
+              x_examin.push_back(x);
+            }
+          }
+          y_examin.push_back(pos0.y);
+          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
+            if (y > pos0.y) {
+              y_examin.push_back(y);
+            }
+          }
+          for (r = RS; r < RE; r++) {
+            for (uint32_t y : y_examin) {
+              for (uint32_t x : x_examin) {
+                for (c = CS; c < CE; c++) {
+                  c_NL = this->tcomp[c].NL;
+                  if (r <= c_NL) {
+                    cPP = this->tcomp[c].get_precinct_size(r);
+                    cr  = this->tcomp[c].access_resolution(r);
+                    if (!cr->is_empty) {
+                      element_siz tr0 = cr->get_pos0();
+                      x_cond          = false;
+                      y_cond          = false;
+                      main_header.SIZ->get_subsampling_factor(csub, c);
+                      {
+                        const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                        const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                        const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                        x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                                 || ((x == pos0.x)
+                                     && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                        y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                                 || ((y == pos0.y)
+                                     && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      }
+                      if (x_cond && y_cond) {
+                        p  = p_x[c][r] + p_y[c][r] * cr->npw;
+                        cp = cr->access_precinct(p);
+                        for (l = 0; l < LYE; l++) {
+                          if (!is_packet_read[l][r][c][p]) {
+                            cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                            this->packet[packet_count++] =
+                                j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                            this->read_packet(cp, l, cr->num_bands);
+                            is_packet_read[l][r][c][p] = true;
+                          }
+                        }
+                        p_x[c][r] += 1;
+                        if (p_x[c][r] == cr->npw) {
+                          p_x[c][r] = 0;
+                          p_y[c][r] += 1;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          break;
+        case 3:  // PCRL
+          this->find_gcd_of_precinct_size(PP);
+          x_examin.push_back(pos0.x);
+          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
+            if (x > pos0.x) {
+              x_examin.push_back(x);
+            }
+          }
+          y_examin.push_back(pos0.y);
+          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
+            if (y > pos0.y) {
+              y_examin.push_back(y);
+            }
+          }
+          for (uint32_t y : y_examin) {
+            for (uint32_t x : x_examin) {
+              for (c = CS; c < CE; c++) {
+                c_NL     = this->tcomp[c].NL;
+                local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
+                for (r = RS; r < local_RE; r++) {
                   cPP = this->tcomp[c].get_precinct_size(r);
                   cr  = this->tcomp[c].access_resolution(r);
                   if (!cr->is_empty) {
@@ -3363,6 +3445,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       cp = cr->access_precinct(p);
                       for (l = 0; l < LYE; l++) {
                         if (!is_packet_read[l][r][c][p]) {
+                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
                           this->packet[packet_count++] =
                               j2c_packet(l, r, c, p, packet_header, tile_buf.get());
                           this->read_packet(cp, l, cr->num_bands);
@@ -3380,138 +3463,79 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
               }
             }
           }
-        }
-        break;
-      case 3:  // PCRL
-        this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
+          break;
+        case 4:  // CPRL
+          this->find_gcd_of_precinct_size(PP);
+          x_examin.push_back(pos0.x);
+          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
+            if (x > pos0.x) {
+              x_examin.push_back(x);
+            }
           }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
+          y_examin.push_back(pos0.y);
+          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
+            if (y > pos0.y) {
+              y_examin.push_back(y);
+            }
           }
-        }
-        for (uint32_t y : y_examin) {
-          for (uint32_t x : x_examin) {
-            for (c = CS; c < CE; c++) {
-              c_NL     = this->tcomp[c].NL;
-              local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
-              for (r = RS; r < local_RE; r++) {
-                cPP = this->tcomp[c].get_precinct_size(r);
-                cr  = this->tcomp[c].access_resolution(r);
-                if (!cr->is_empty) {
-                  element_siz tr0 = cr->get_pos0();
-                  x_cond          = false;
-                  y_cond          = false;
-                  main_header.SIZ->get_subsampling_factor(csub, c);
-                  {
-                    const DFS_marker *cdfs = this->tcomp[c].dfs_info;
-                    const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x)
-                                 && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y)
-                                 && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
-                  }
-                  if (x_cond && y_cond) {
-                    p  = p_x[c][r] + p_y[c][r] * cr->npw;
-                    cp = cr->access_precinct(p);
-                    for (l = 0; l < LYE; l++) {
-                      if (!is_packet_read[l][r][c][p]) {
-                        this->packet[packet_count++] =
-                            j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                        is_packet_read[l][r][c][p] = true;
-                        this->read_packet(cp, l, cr->num_bands);
-                      }
+          for (c = CS; c < CE; c++) {
+            c_NL     = this->tcomp[c].NL;
+            local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
+            for (uint32_t y : y_examin) {
+              for (uint32_t x : x_examin) {
+                for (r = RS; r < local_RE; r++) {
+                  cPP = this->tcomp[c].get_precinct_size(r);
+                  cr  = this->tcomp[c].access_resolution(r);
+                  if (!cr->is_empty) {
+                    element_siz tr0 = cr->get_pos0();
+                    x_cond          = false;
+                    y_cond          = false;
+                    main_header.SIZ->get_subsampling_factor(csub, c);
+                    {
+                      const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                      const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                               || ((x == pos0.x)
+                                   && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                               || ((y == pos0.y)
+                                   && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
                     }
-                    p_x[c][r] += 1;
-                    if (p_x[c][r] == cr->npw) {
-                      p_x[c][r] = 0;
-                      p_y[c][r] += 1;
+                    if (x_cond && y_cond) {
+                      p  = p_x[c][r] + p_y[c][r] * cr->npw;
+                      cp = cr->access_precinct(p);
+                      for (l = 0; l < LYE; l++) {
+                        if (!is_packet_read[l][r][c][p]) {
+                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                          this->packet[packet_count++] =
+                              j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                          this->read_packet(cp, l, cr->num_bands);
+                          is_packet_read[l][r][c][p] = true;
+                        }
+                      }
+                      p_x[c][r] += 1;
+                      if (p_x[c][r] == cr->npw) {
+                        p_x[c][r] = 0;
+                        p_y[c][r] += 1;
+                      }
                     }
                   }
                 }
               }
             }
           }
-        }
-        break;
-      case 4:  // CPRL
-        this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
-        for (c = CS; c < CE; c++) {
-          c_NL     = this->tcomp[c].NL;
-          local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
-          for (uint32_t y : y_examin) {
-            for (uint32_t x : x_examin) {
-              for (r = RS; r < local_RE; r++) {
-                cPP = this->tcomp[c].get_precinct_size(r);
-                cr  = this->tcomp[c].access_resolution(r);
-                if (!cr->is_empty) {
-                  element_siz tr0 = cr->get_pos0();
-                  x_cond          = false;
-                  y_cond          = false;
-                  main_header.SIZ->get_subsampling_factor(csub, c);
-                  {
-                    const DFS_marker *cdfs = this->tcomp[c].dfs_info;
-                    const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x)
-                                 && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y)
-                                 && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
-                  }
-                  if (x_cond && y_cond) {
-                    p  = p_x[c][r] + p_y[c][r] * cr->npw;
-                    cp = cr->access_precinct(p);
-                    for (l = 0; l < LYE; l++) {
-                      if (!is_packet_read[l][r][c][p]) {
-                        this->packet[packet_count++] =
-                            j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                        is_packet_read[l][r][c][p] = true;
-                        this->read_packet(cp, l, cr->num_bands);
-                      }
-                    }
-                    p_x[c][r] += 1;
-                    if (p_x[c][r] == cr->npw) {
-                      p_x[c][r] = 0;
-                      p_y[c][r] += 1;
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        break;
+          break;
 
-      default:
-        printf(
-            "ERROR: Progression order number shall be in the range from 0 "
-            "to 4\n");
-        throw std::exception();
-        // break;
+        default:
+          printf(
+              "ERROR: Progression order number shall be in the range from 0 "
+              "to 4\n");
+          throw std::exception();
+          // break;
+      }
     }
+    crp_cached_ = true;
   }
   // Mark the tree as built so the next create_tile_buf call on this tile
   // skips structural allocations.  The decoder_impl cache path reads this

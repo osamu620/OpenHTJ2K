@@ -650,6 +650,18 @@ class j2k_tile : public j2k_tile_base {
   // mutable state but leaves structure_built_ set, and create_tile_buf
   // short-circuits its allocation steps on the next call.
   bool structure_built_ = false;
+  // Cached packet traversal order: after the first create_tile_buf call,
+  // records which (component, resolution, precinct) tuples were visited
+  // and in what order.  On subsequent frames the progression-order switch
+  // and is_packet_read 4D vector are skipped entirely — the cached_crp_
+  // vector is replayed with a flat loop calling read_packet() directly.
+  struct CRP {
+    uint8_t  c;  // component index
+    uint8_t  r;  // resolution level
+    uint16_t p;  // precinct index
+  };
+  std::vector<CRP> cached_crp_;
+  bool crp_cached_ = false;
  public:
   // Bump-allocator pool for HTJ2K encode compressed bitstreams (one pool per thread).
   struct EncodePoolCtx {

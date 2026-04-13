@@ -155,6 +155,26 @@ class buf_chain {
     }
     return *this;
   }
+  // Reuse an existing buf_chain without heap reallocation: clear node data
+  // and resize to `num` slots.  Keeps the vector capacity from the previous
+  // frame so steady-state decode does zero allocations.
+  void reset(uint32_t num) {
+    node_pos       = 0;
+    pos            = 0;
+    total_length   = 0;
+    current_buf    = nullptr;
+    current_length = 0;
+    tmp_byte       = 0;
+    last_byte      = 0;
+    bits           = 0;
+    node_buf.resize(num);
+    node_length.resize(num);
+    for (uint32_t i = 0; i < num; ++i) {
+      node_buf[i]    = nullptr;
+      node_length[i] = 0;
+    }
+    num_nodes = num;
+  }
   void add_buf_node(uint8_t *buf, uint32_t len) {
     total_length += len;
     node_buf.push_back(buf);
