@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // HTJ2K / JPEG 2000 decoder CLI — runs the WASM build of OpenHTJ2K in Node.js.
-// Usage: node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm|.pgx> [-r <reduce_NL>] [-ycbcr bt601|bt709]
+// Usage: node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm|.pgx> [-r <reduce_NL>] [-num_threads <N>] [-ycbcr bt601|bt709]
 //
 // Output format is auto-selected:
 //   1-component → PGM (P5 binary), 3-component → PPM (P6 binary)
@@ -19,7 +19,7 @@ import { createRequire } from 'module';
 // ── Argument parsing ─────────────────────────────────────────────────────────
 function parseArgs() {
   const args = process.argv.slice(2);
-  let input = null, output = null, reduce = 0, ycbcr = null;
+  let input = null, output = null, reduce = 0, ycbcr = null, numThreads = 1;
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '-i' || args[i] === '--input') && i + 1 < args.length)
       input = args[++i];
@@ -27,6 +27,8 @@ function parseArgs() {
       output = args[++i];
     else if ((args[i] === '-r' || args[i] === '--reduce') && i + 1 < args.length)
       reduce = parseInt(args[++i], 10);
+    else if ((args[i] === '-num_threads' || args[i] === '-t') && i + 1 < args.length)
+      numThreads = parseInt(args[++i], 10);
     else if ((args[i] === '-ycbcr' || args[i] === '--ycbcr') && i + 1 < args.length) {
       ycbcr = args[++i];
       if (ycbcr !== 'bt601' && ycbcr !== 'bt709') {
@@ -34,21 +36,22 @@ function parseArgs() {
         process.exit(1);
       }
     } else if (args[i] === '-h' || args[i] === '--help') {
-      console.log('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>] [-ycbcr bt601|bt709]');
-      console.log('  -i, --input      Input J2C/J2K/JPH file');
-      console.log('  -o, --output     Output PPM (RGB), PGM (grayscale), or PGX (per-component) file');
-      console.log('  -r, --reduce     Resolution reduction (0 = full, 1 = half, ...)');
-      console.log('  -ycbcr bt601|bt709  YCbCr→RGB conversion for PPM output (auto-detected from JPH)');
+      console.log('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>] [-num_threads <N>] [-ycbcr bt601|bt709]');
+      console.log('  -i, --input          Input J2C/J2K/JPH file');
+      console.log('  -o, --output         Output PPM (RGB), PGM (grayscale), or PGX (per-component) file');
+      console.log('  -r, --reduce         Resolution reduction (0 = full, 1 = half, ...)');
+      console.log('  -num_threads, -t     Number of decode threads (0 = auto, 1 = single-threaded; requires _mt build)');
+      console.log('  -ycbcr bt601|bt709   YCbCr→RGB conversion for PPM output (auto-detected from JPH)');
       process.exit(0);
     }
   }
-  return { input, output, reduce, ycbcr };
+  return { input, output, reduce, ycbcr, numThreads };
 }
 
-const { input, output, reduce, ycbcr } = parseArgs();
+const { input, output, reduce, ycbcr, numThreads } = parseArgs();
 if (!input || !output) {
   console.error('Error: -i and -o are required.');
-  console.error('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>] [-ycbcr bt601|bt709]');
+  console.error('Usage: node open_htj2k_dec.mjs -i <input.j2c> -o <output.ppm> [-r <reduce_NL>] [-num_threads <N>] [-ycbcr bt601|bt709]');
   process.exit(1);
 }
 
@@ -94,10 +97,9 @@ function applyYcbcrToRgb(buf, nPixels, maxval, coeffs, bytesPerSmp) {
   }
 }
 
-// ── Load WASM module (prefer SIMD build) ─────────────────────────────────────
+// ── Load WASM module (prefer SIMD; prefer _mt when threads requested) ────────
 const __dir = dirname(fileURLToPath(import.meta.url));
-const simdPath = join(__dir, 'build/html/libopen_htj2k_simd.js');
-const scalarPath = join(__dir, 'build/html/libopen_htj2k.js');
+const useMt = numThreads !== 1;
 
 // Emscripten 3.1.x with EXPORT_ES6=1 generates JS that mixes ESM constructs
 // (import.meta.url, export default) with CJS ones (__dirname, require).  Node.js
@@ -117,21 +119,40 @@ function loadEmscriptenFactory(jsPath) {
   const fileUrl = 'file://' + jsPath;
   src = src.replace(/import\.meta\.url/g, JSON.stringify(fileUrl));
   src = src.replace(/export\s+default\s+Module\s*;?\s*$/, '');
+  // Strip trailing isPthread bootstrap (pthreads builds append worker self-init
+  // code that references globalThis.name and dynamic import — not valid inside
+  // new Function()).  The main thread never needs this block.
+  src = src.replace(/;var isPthread=[\s\S]*$/, '');
   const require = createRequire(jsPath);
   const fn = new Function('require', '__filename', '__dirname', src + '\nreturn Module;');
   return fn(require, jsPath, dirname(jsPath));
 }
 
-let M;
-try {
-  const wasmBinary = readFileSync(join(__dir, 'build/html/libopen_htj2k_simd.wasm'));
-  const createModule = loadEmscriptenFactory(simdPath);
-  M = await createModule({ wasmBinary });
-} catch {
-  const wasmBinary = readFileSync(join(__dir, 'build/html/libopen_htj2k.wasm'));
-  const createModule = loadEmscriptenFactory(scalarPath);
-  M = await createModule({ wasmBinary });
+// Build preference order: SIMD+MT → SIMD → MT → scalar
+// When -num_threads != 1, try _mt variants first.
+const candidates = useMt
+  ? ['libopen_htj2k_mt_simd', 'libopen_htj2k_mt', 'libopen_htj2k_simd', 'libopen_htj2k']
+  : ['libopen_htj2k_simd', 'libopen_htj2k'];
+
+let M, loadedVariant;
+for (const name of candidates) {
+  const jsPath = join(__dir, `build/html/${name}.js`);
+  const wasmPath = join(__dir, `build/html/${name}.wasm`);
+  try {
+    const wasmBinary = readFileSync(wasmPath);
+    const createModule = loadEmscriptenFactory(jsPath);
+    M = await createModule({ wasmBinary });
+    loadedVariant = name;
+    break;
+  } catch {
+    continue;
+  }
 }
+if (!M) {
+  console.error('Error: no WASM build found in build/html/. Run the Emscripten build first.');
+  process.exit(1);
+}
+const mtLoaded = loadedVariant.includes('_mt');
 
 // ── Read input file ──────────────────────────────────────────────────────────
 let j2cData;
@@ -150,10 +171,16 @@ const inPtr = M._malloc(j2cData.length);
 if (!inPtr) { console.error('WASM malloc failed for input buffer'); process.exit(1); }
 M.HEAPU8.set(j2cData, inPtr);
 
-// create_decoder(data, size, reduce_NL)
-const dec = M._create_decoder(inPtr, j2cData.length, reduce);
+// create_decoder(data, size, reduce_NL) or create_decoder_mt(data, size, reduce_NL, num_threads)
+const dec = mtLoaded
+  ? M._create_decoder_mt(inPtr, j2cData.length, reduce, numThreads)
+  : M._create_decoder(inPtr, j2cData.length, reduce);
 M._free(inPtr);
 if (!dec) { console.error('create_decoder returned null'); process.exit(1); }
+if (mtLoaded) {
+  const actualThreads = M._get_hardware_concurrency();
+  console.log(`INFO: multi-threaded WASM (${loadedVariant}), ${numThreads === 0 ? actualThreads + ' (auto)' : numThreads} threads`);
+}
 
 // Detect JPH colorspace (returns 0 for raw codestreams, 18 for YCbCr JPH).
 const ENUMCS_YCBCR = 18;
