@@ -11,6 +11,7 @@
 #include "cli.hpp"
 #include "frame_handler.hpp"
 #include "frame_pipeline.hpp"
+#include "renderer.hpp"
 
 namespace open_htj2k::rtp_recv {
 
@@ -31,6 +32,12 @@ struct ReceiverState {
   std::atomic<uint64_t> decode_us_sum{0};
   std::atomic<uint64_t> decode_us_min{UINT64_MAX};
   std::atomic<uint64_t> decode_us_max{0};
+
+#ifdef OPENHTJ2K_USE_METAL
+  // Renderer pointer for zero-copy Metal decode.  Set before the decode
+  // thread is launched; read (not written) by the decode thread.
+  Renderer* renderer_ptr = nullptr;
+#endif
 };
 
 // v2 multi-threaded main loop (--threading=on, default).

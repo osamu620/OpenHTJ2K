@@ -177,6 +177,14 @@ struct DecodedFrame {
   // have rtp_timestamp=0 — so pacing code must rely on its own
   // "reference established" flag rather than on source_rtp_ts != 0.
   uint32_t                  source_rtp_ts      = 0;
+
+#ifdef OPENHTJ2K_USE_METAL
+  // Zero-copy Metal path: ring buffer index into MetalRenderer's internal
+  // buffer pool.  When >= 0, the plane data lives in GPU-visible shared
+  // memory and the renderer skips the memcpy upload.  -1 = not used (CPU
+  // vector path).  This field is harmless on non-Metal builds (never set).
+  int                       metal_ring_index   = -1;
+#endif
 };
 
 }  // namespace open_htj2k::rtp_recv

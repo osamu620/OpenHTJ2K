@@ -158,6 +158,68 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
     df.pipeline           = pipeline;
     df.source_rtp_ts      = frame.rtp_timestamp;
     if (opts.color_path == CliOptions::ColorPath::Shader) {
+#ifdef OPENHTJ2K_USE_METAL
+      // Zero-copy Metal path: decode directly into GPU-visible shared memory.
+      if (st.renderer_ptr != nullptr) {
+        const uint16_t nc = decoder.get_num_component();
+        if (nc < 1) { st.frames_failed.fetch_add(1, std::memory_order_relaxed); continue; }
+        const uint32_t luma_w  = decoder.get_component_width(0);
+        const uint32_t luma_h  = decoder.get_component_height(0);
+        const uint8_t  depth_y = decoder.get_component_depth(0);
+        const uint32_t chroma_w = (nc >= 3) ? decoder.get_component_width(1)  : luma_w;
+        const uint32_t chroma_h = (nc >= 3) ? decoder.get_component_height(1) : luma_h;
+        const uint8_t  depth_c  = (nc >= 3) ? decoder.get_component_depth(1)  : depth_y;
+        const bool     use_16   = (depth_y > 8);
+        const int      bpp      = use_16 ? 2 : 1;
+
+        auto pp = st.renderer_ptr->acquire_plane_buffers(luma_w, luma_h, chroma_w, chroma_h, bpp);
+        if (pp.y) {
+          // Build PlanarOutputDesc pointing at Metal shared memory.
+          const uint16_t desc_nc = std::min(nc, static_cast<uint16_t>(3));
+          open_htj2k::PlanarOutputDesc descs[3] = {};
+          for (uint16_t c = 0; c < desc_nc; ++c) {
+            auto& d      = descs[c];
+            const uint8_t  bd   = (c == 0) ? depth_y : depth_c;
+            const bool     is_s = decoder.get_component_signedness(c);
+            d.width       = (c == 0) ? luma_w  : chroma_w;
+            d.height      = (c == 0) ? luma_h  : chroma_h;
+            d.stride      = (c == 0) ? pp.stride_y : pp.stride_c;
+            d.yr          = (c == 0) ? 1 : ((chroma_h > 0 && luma_h > 0) ? luma_h / chroma_h : 1u);
+            d.dc          = is_s ? 0 : (1 << (bd - 1));
+            d.maxval      = is_s ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
+            d.minval      = is_s ? -(1 << (bd - 1)) : 0;
+            d.depth_shift = use_16 ? 0 : (static_cast<int32_t>(bd) - 8);
+            d.is_16bit    = use_16;
+            d.base        = (c == 0) ? pp.y : (c == 1) ? pp.cb : pp.cr;
+          }
+          static thread_local std::vector<uint32_t> widths;
+          static thread_local std::vector<uint32_t> heights;
+          static thread_local std::vector<uint8_t>  depths;
+          static thread_local std::vector<bool>     signeds;
+          widths.clear(); heights.clear(); depths.clear(); signeds.clear();
+          try {
+            decoder.invoke_line_based_direct(descs, desc_nc, widths, heights, depths, signeds);
+          } catch (std::exception& e) {
+            std::fprintf(stderr, "decoder.invoke_line_based_direct (metal) failed: %s\n", e.what());
+            st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+            continue;
+          }
+          df.width         = luma_w;
+          df.height        = luma_h;
+          df.chroma_width  = chroma_w;
+          df.chroma_height = chroma_h;
+          df.bit_depth     = depth_y;
+          df.kind          = components_are_rgb ? DecodedFrame::PLANAR_RGB : DecodedFrame::PLANAR_YCBCR;
+          df.metal_ring_index = pp.ring_index;
+        } else {
+          // Fallback: renderer not ready or alloc failed.
+          if (!decode_to_planar_buffers_direct(decoder, components_are_rgb, df)) {
+            st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+            continue;
+          }
+        }
+      } else
+#endif
       if (!decode_to_planar_buffers_direct(decoder, components_are_rgb, df)) {
         std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
         st.frames_failed.fetch_add(1, std::memory_order_relaxed);
@@ -262,6 +324,9 @@ int run_receiver_threaded(const CliOptions& opts) {
 
   FrameHandler  frame_handler;
   ReceiverState state;
+#ifdef OPENHTJ2K_USE_METAL
+  state.renderer_ptr = renderer_ptr;
+#endif
 
   using Clock         = std::chrono::steady_clock;
   const auto run_start_tp = Clock::now();
@@ -364,7 +429,19 @@ int run_receiver_threaded(const CliOptions& opts) {
       if (df->kind == DecodedFrame::CPU_RGB) {
         renderer_ptr->upload_and_draw(df->rgb.data(), static_cast<int>(df->width),
                                       static_cast<int>(df->height));
-      } else if (df->bit_depth > 8) {
+      }
+#ifdef OPENHTJ2K_USE_METAL
+      else if (df->metal_ring_index >= 0) {
+        // Zero-copy Metal path: data is already in GPU-visible shared memory.
+        renderer_ptr->draw_acquired_planes(
+            df->metal_ring_index,
+            static_cast<int>(df->width), static_cast<int>(df->height),
+            static_cast<int>(df->chroma_width), static_cast<int>(df->chroma_height),
+            df->bit_depth > 8 ? 2 : 1, static_cast<int>(df->bit_depth),
+            df->shader_coeffs, df->components_are_rgb, df->pipeline);
+      }
+#endif
+      else if (df->bit_depth > 8) {
         renderer_ptr->upload_planar_16_and_draw(
             df->plane_y_16.data(), df->plane_cb_16.data(), df->plane_cr_16.data(),
             static_cast<int>(df->width), static_cast<int>(df->height),
