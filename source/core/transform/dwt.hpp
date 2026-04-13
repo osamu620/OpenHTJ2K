@@ -378,7 +378,7 @@ struct idwt_2d_state {
   int8_t   bot_dlevel[4];      // d_level per bot-PSE slot (-1 = unfilled)
 
   // ── sliding ring for real rows [v0, v1) (BIDIR only) ─────────────────────
-  // Slot for absolute row r : r % IDWT_STATE_RING_DEPTH
+  // Slot for absolute row r : r & (IDWT_STATE_RING_DEPTH - 1)
   // Each ring slot is slot_stride floats wide; the data portion (post-horizontal-IDWT)
   // starts at offset IDWT_RING_PSE_LEFT within the slot, providing scratch space
   // for the in-place horizontal PSE fill and filter (no separate ext_buf needed).
@@ -436,7 +436,7 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s);
 // Pointer to the row buffer for physical row r (ring, top-PSE, or bot-PSE).
 static inline sprec_t *idwt_rptr(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1)
-    return s->ring_buf + static_cast<ptrdiff_t>(r % IDWT_STATE_RING_DEPTH) * s->slot_stride
+    return s->ring_buf + static_cast<ptrdiff_t>(r & (IDWT_STATE_RING_DEPTH - 1)) * s->slot_stride
            + IDWT_RING_PSE_LEFT;
   if (r < s->v0)
     return s->top_pse_buf + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
@@ -447,7 +447,7 @@ static inline sprec_t *idwt_rptr(const idwt_2d_state *s, int32_t r) {
 static inline int8_t idwt_get_dl(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1) {
     if (r < s->ring_origin || r >= s->ring_origin + IDWT_STATE_RING_DEPTH) return -1;
-    return s->d_level[r % IDWT_STATE_RING_DEPTH];
+    return s->d_level[r & (IDWT_STATE_RING_DEPTH - 1)];
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_dlevel[s->v0 - 1 - r];
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_dlevel[r - s->v1];
@@ -457,7 +457,7 @@ static inline int8_t idwt_get_dl(const idwt_2d_state *s, int32_t r) {
 // Set d_level for physical row r.
 static inline void idwt_set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
   if (r >= s->v0 && r < s->v1) {
-    s->d_level[r % IDWT_STATE_RING_DEPTH] = lv;
+    s->d_level[r & (IDWT_STATE_RING_DEPTH - 1)] = lv;
     return;
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_dlevel[s->v0 - 1 - r] = lv; return; }

@@ -197,6 +197,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   int32_t mel_run = MEL.get_run();
 
   int32_t qx;
+  // Pre-load NEON constant vectors once for the entire codeblock.
+  const typename fwd_buf<0xFF>::DecodeConstants dc;
   // Initial line-pair
   for (qx = QW; qx > 0; qx -= 2) {
     // Decoding of significance and EMB patterns and unsigned residual offsets
@@ -284,7 +286,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       int16x4_t vn_16        = vdup_n_s16(0);
       int16x8_t row16 =
           MagSgn.decode_two_quads_16bit(tv0, tv1, static_cast<uint16_t>(U0),
-                                        static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+                                        static_cast<uint16_t>(U1), pLSB_adj, vn_16, dc);
       // Deinterleave row0/row1 and expand int16 -> int32 (sign bit 15 -> bit 31).
       int16x4_t lo      = vget_low_s16(row16);
       int16x4_t hi      = vget_high_s16(row16);
@@ -482,8 +484,11 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         uint32x2_t vz     = vceq_u32(vreinterpret_u32_s32(vand_s32(vrho, vrho_m1)), vdup_n_u32(0));
         int32x2_t vgamma  = vreinterpret_s32_u32(vbic_u32(vdup_n_u32(1), vz));
         int32x2_t vkappa  = vmax_s32(vmul_s32(vgamma, vsub_s32(vEmax, vdup_n_s32(1))), vdup_n_s32(1));
-        U0 = (uint32_t)vget_lane_s32(vkappa, 0) + u0;
-        U1 = (uint32_t)vget_lane_s32(vkappa, 1) + u1;
+        // Store kappa to stack to avoid vget_lane cross-pipeline penalty (~4c each).
+        int32_t kappa_arr[2];
+        vst1_s32(kappa_arr, vkappa);
+        U0 = static_cast<uint32_t>(kappa_arr[0]) + u0;
+        U1 = static_cast<uint32_t>(kappa_arr[1]) + u1;
         // Shift vEmax4: next quad-pair will use [2..3] via vget_low after shift.
         vEmax4 = vextq_s32(vEmax4, vEmax4, 2);
       }
@@ -494,7 +499,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         int16x4_t vn_16        = vdup_n_s16(0);
         int16x8_t row16 =
             MagSgn.decode_two_quads_16bit(tv0, tv1, static_cast<uint16_t>(U0),
-                                          static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+                                          static_cast<uint16_t>(U1), pLSB_adj, vn_16, dc);
         int16x4_t lo      = vget_low_s16(row16);
         int16x4_t hi      = vget_high_s16(row16);
         int16x4_t row0_16 = vuzp1_s16(lo, hi);
