@@ -11,6 +11,9 @@
 #include <cstdlib>
 #include <thread>
 #include <vector>
+#if defined(__APPLE__)
+#  include <pthread.h>
+#endif
 
 #include "cli.hpp"
 #include "decode_helpers.hpp"
@@ -115,10 +118,18 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
   decoder.enable_single_tile_reuse(true);
 
   bool first_frame = true;
+  auto t_prev_end  = Clock::now();
+  int64_t idle_us_sum = 0, wait_us_sum = 0;
+  uint64_t idle_count = 0;
   while (!st.stop_flag.load(std::memory_order_acquire)) {
+    const auto t_wait_start = Clock::now();
     auto frame_opt = st.decode_slot.pop_wait(st.stop_flag);
+    const auto t_wait_end = Clock::now();
     if (!frame_opt) break;
     AssembledFrame frame = std::move(*frame_opt);
+    idle_us_sum += std::chrono::duration_cast<std::chrono::microseconds>(t_wait_end - t_prev_end).count();
+    wait_us_sum += std::chrono::duration_cast<std::chrono::microseconds>(t_wait_end - t_wait_start).count();
+    ++idle_count;
 
     // Ensure 16 bytes of readable padding past the codestream end for
     // SIMD over-reads in fwd_buf/rev_buf, then lend the buffer to the
@@ -258,6 +269,7 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
     // Hand the decoded RGB to the renderer.  If main hasn't picked up the
     // previous decoded frame yet (e.g. blocked in vsync), it gets dropped
     // here — latest-wins keeps motion-to-photon minimal.
+    t_prev_end = Clock::now();
     st.render_slot.push(std::move(df));
 
     if (opts.max_frames > 0 && decoded >= static_cast<uint64_t>(opts.max_frames)) {
@@ -265,6 +277,13 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
       st.render_slot.notify();
       break;
     }
+  }
+  if (idle_count > 1) {
+    std::fprintf(stderr, "  decode-thread timing:\n");
+    std::fprintf(stderr, "    avg idle gap:   %.2f ms\n",
+                 static_cast<double>(idle_us_sum) / static_cast<double>(idle_count) / 1000.0);
+    std::fprintf(stderr, "    avg pop_wait:   %.2f ms\n",
+                 static_cast<double>(wait_us_sum) / static_cast<double>(idle_count) / 1000.0);
   }
 }
 
