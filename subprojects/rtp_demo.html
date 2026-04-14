@@ -328,6 +328,24 @@ function threadsSupported() {
   try { return typeof SharedArrayBuffer !== 'undefined'; } catch { return false; }
 }
 
+// ── Display-P3 capability detection (copied from index.html) ──────────────
+// True iff the user agent reports the display can render P3 colors.
+function displaySupportsP3Color() {
+  try { return matchMedia('(color-gamut: p3)').matches; } catch { return false; }
+}
+// True iff Canvas 2D accepts colorSpace:'display-p3' and the resulting
+// context actually reports back display-p3 (Safari prior to OS support
+// for P3 throws TypeError; older Chromium silently downgrades to srgb).
+function canvasSupportsDisplayP3() {
+  try {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d', { colorSpace: 'display-p3' });
+    return ctx && ctx.getContextAttributes().colorSpace === 'display-p3';
+  } catch { return false; }
+}
+// Module-level cache so each renderer doesn't re-probe.
+const _USE_P3 = displaySupportsP3Color() && canvasSupportsDisplayP3();
+
 // Allow forcing a specific WASM build via `?variant=…` in the URL.  Useful
 // for A/B-testing single-threaded SIMD vs multi-threaded SIMD on the same
 // machine/file.  Accepted values:
@@ -533,7 +551,9 @@ function setStat(id, v) {
     // we don't get caught by canvas-context-lock-in (calling getContext()
     // with one type prevents using any other on the same element).
     renderer = pickRenderer(document.getElementById('mycanvas'));
-    console.log('[rtp_demo] renderer =', renderer.name());
+    console.log('[rtp_demo] renderer =', renderer.name(),
+                'colorspace =', renderer.colorSpaceLabel(),
+                _USE_P3 ? '(P3 supported)' : '(P3 unavailable)');
     setOverlay('Select a .rtp file or URL and press Play.', 'loading');
     document.getElementById('btn-play').disabled = false;
   } catch (e) {
@@ -576,17 +596,28 @@ function ensurePlanarBufs(lumaSz, chromaSz) {
 class Canvas2DRenderer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx    = canvas.getContext('2d');
+    // Try Display-P3 first when the OS+browser+display support it.  If the
+    // browser silently downgrades to sRGB, that's fine — our pixel values
+    // still render correctly because BT.709 fits inside sRGB.
+    this.colorSpace = _USE_P3 ? 'display-p3' : 'srgb';
+    this.ctx = canvas.getContext('2d', { colorSpace: this.colorSpace });
+    // The actual color space the context resolved to (may differ from request).
+    const attrs = this.ctx.getContextAttributes ? this.ctx.getContextAttributes() : {};
+    this.activeColorSpace = attrs.colorSpace || 'srgb';
   }
   name()           { return '2d'; }
-  needsCpuYcbcr()  { return true; }   // CPU apply_bt*_to_rgba pass is required
-  supportsPlanar() { return false; }  // Canvas 2D path only handles packed RGBA
+  needsCpuYcbcr()  { return true; }
+  supportsPlanar() { return false; }
+  colorSpaceLabel(){ return this.activeColorSpace; }
   render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
     if (this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas.width  = W;
       this.canvas.height = H;
     }
-    const img = this.ctx.createImageData(W, H);
+    // Tag the ImageData with the same color space as the context so the
+    // browser doesn't insert a sRGB→P3 conversion (we want the pixels we
+    // wrote to land in the framebuffer 1:1).
+    const img = this.ctx.createImageData(W, H, { colorSpace: this.activeColorSpace });
     img.data.set(view.subarray(rgbaBufPtr, rgbaBufPtr + W * H * 4));
     this.ctx.putImageData(img, 0, 0);
   }
@@ -718,6 +749,14 @@ class WebGL2Renderer {
     if (!gl) throw new Error('webgl2 context unavailable');
     this.gl = gl;
     this.lost = false;
+    // Try to upgrade the canvas to Display-P3.  The drawingBufferColorSpace
+    // setter is a no-op (or throws) on browsers/devices that don't support
+    // P3; we read it back to know what we actually got.
+    this.activeColorSpace = 'srgb';
+    if (_USE_P3) {
+      try { gl.drawingBufferColorSpace = 'display-p3'; } catch (e) { /* ignore */ }
+      this.activeColorSpace = gl.drawingBufferColorSpace || 'srgb';
+    }
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       this.lost = true;
@@ -815,6 +854,7 @@ class WebGL2Renderer {
   name()           { return 'webgl2'; }
   needsCpuYcbcr()  { return false; }   // shader does the matrix in-GPU
   supportsPlanar() { return true; }    // can render from 3 R8 textures
+  colorSpaceLabel(){ return this.activeColorSpace; }
 
   render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
     if (this.lost) return;
@@ -1012,7 +1052,7 @@ function decodeAndRender() {
       console.log(`[rtp_demo]   Range                    = ${range}   [0=narrow/TV, 1=full/PC, 2=unknown]`);
       console.log(`[rtp_demo]   ColourPrimaries  (prims) = ${prims}`);
       console.log(`[rtp_demo]   TransferCharacteristics  = ${trans}`);
-      console.log(`[rtp_demo] renderer = ${renderer.name()}  cpu_ycbcr=${renderer.needsCpuYcbcr()}`);
+      console.log(`[rtp_demo] renderer = ${renderer.name()}  cpu_ycbcr=${renderer.needsCpuYcbcr()}  colorspace=${renderer.colorSpaceLabel()}`);
       console.log(`[rtp_demo] ─────────────────────────────────────`);
 
       // Populate stats panel too.
