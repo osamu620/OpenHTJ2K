@@ -72,11 +72,21 @@ jobs:
           echo "Deploy directory contents:"
           ls -lh deploy/
 
+      # Deploy with the official wrangler CLI so bindings declared in
+      # wrangler.toml (specifically the R2 binding for the /samples/*
+      # Pages Function) get applied on every deploy — the older
+      # cloudflare/pages-action@v1 did direct upload and ignored the
+      # wrangler.toml.  Uses the same secrets as before.
+      - name: Install wrangler
+        run: npm install --global wrangler@latest
+
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/pages-action@v1
-        with:
-          apiToken:    ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId:   ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: htj2k-demo
-          directory:   deploy
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          wrangler pages deploy deploy \
+            --project-name=htj2k-demo \
+            --commit-hash="${{ github.sha }}" \
+            --commit-dirty=true \
+            --branch=main

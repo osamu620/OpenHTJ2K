@@ -1,0 +1,16 @@
+# Cloudflare Pages configuration — declares the bindings required by
+# Pages Functions under functions/ so we don't have to configure them
+# in the dashboard.
+#
+# Applies to both production and preview deployments.  If you want
+# different bindings per environment, add [env.preview] / [env.production]
+# sections.
+
+name = "htj2k-demo"
+compatibility_date = "2026-01-01"
+pages_build_output_dir = "./deploy"
+
+# R2 bucket the /samples/* Pages Function reads from.
+[[r2_buckets]]
+binding     = "SAMPLES_BUCKET"
+bucket_name = "htj2k-samples"
