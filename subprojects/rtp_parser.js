@@ -63,16 +63,22 @@ function quickParseRtp(pkt) {
  *     `bytes` is valid only until the next `next()` call — copy it if you need
  *     to retain the data.
  */
-export async function* parseRtpStream(source) {
+export async function* parseRtpStream(source, opts = {}) {
   const reader = await sourceToReader(source);
   const buf    = new RollingBuffer();
   let   eof    = false;
+  // Optional callback invoked once per chunk received from the underlying
+  // stream — lets the caller measure disk-read rate vs. packet-consumption rate.
+  const onChunk = typeof opts.onChunk === 'function' ? opts.onChunk : null;
 
   async function fillAtLeast(nBytes) {
     while (buf.length < nBytes && !eof) {
       const { value, done } = await reader.read();
       if (done) { eof = true; break; }
-      if (value && value.length) buf.append(value);
+      if (value && value.length) {
+        buf.append(value);
+        if (onChunk) onChunk(value.length);
+      }
     }
   }
 
