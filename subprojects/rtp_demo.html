@@ -154,12 +154,16 @@
       gap: 14px; font-size: 13px; pointer-events: none; z-index: 1;
     }
     .canvas-overlay.loading { color: var(--text-sub); }
+    .canvas-overlay.idle    { color: var(--text-sub); }
     .canvas-overlay.error   { color: #e06060; font-weight: 600; }
     .overlay-spinner {
       width: 34px; height: 34px;
       border: 3px solid var(--border); border-top-color: var(--accent);
       border-radius: 50%; animation: spin 0.75s linear infinite;
     }
+    /* Spinner is shown only for 'loading' (actively working).  Idle + error
+       modes are static messages — no animated spinner. */
+    .canvas-overlay.idle  .overlay-spinner { display: none; }
     .canvas-overlay.error .overlay-spinner { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
     /* Display-FPS HUD — transparent background; text shadow keeps it
@@ -700,7 +704,7 @@ function setStat(id, v) {
     console.log('[rtp_demo] renderer =', renderer.name(),
                 'colorspace =', renderer.colorSpaceLabel(),
                 _USE_P3 ? '(P3 supported)' : '(P3 unavailable)');
-    setOverlay('Select a .rtp file or URL and press Play.', 'loading');
+    setOverlay('Select a .rtp file or URL and press Play.', 'idle');
     document.getElementById('btn-play').disabled = false;
   } catch (e) {
     console.error(e);
@@ -1544,7 +1548,7 @@ async function startPlayback(source) {
   // "finished" message if no error is currently shown.
   const ov = document.getElementById('canvas-overlay');
   if (ov && !ov.classList.contains('error')) {
-    setOverlay('Playback finished. ' + frameCount + ' frames decoded.', 'loading');
+    setOverlay('Playback finished. ' + frameCount + ' frames decoded.', 'idle');
   }
 }
 
@@ -1603,7 +1607,7 @@ document.getElementById('btn-stop').addEventListener('click', () => {
   document.getElementById('btn-play').disabled  = false;
   document.getElementById('btn-pause').disabled = true;
   document.getElementById('btn-stop').disabled  = true;
-  setOverlay(`Stopped. ${frameCount} frames decoded.`, 'loading');
+  setOverlay(`Stopped. ${frameCount} frames decoded.`, 'idle');
 });
 
 // ── Fullscreen ─────────────────────────────────────────────────────────
