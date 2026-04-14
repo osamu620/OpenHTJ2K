@@ -219,6 +219,15 @@
             <option value="2">Quarter (÷4)</option>
           </select>
         </label>
+        <label style="font-size:12px;color:var(--text-sub);">
+          YCbCr→RGB
+          <select id="ycbcr-mode" style="margin-left:4px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:2px 6px; font-size:12px;">
+            <option value="auto" selected>Auto (RFC 9828 mat)</option>
+            <option value="none">None (RGB as-is)</option>
+            <option value="bt601">BT.601</option>
+            <option value="bt709">BT.709</option>
+          </select>
+        </label>
         <label><input type="radio" name="pacing" value="paced" checked> Paced (RTP clock)</label>
         <label><input type="radio" name="pacing" value="max"> As-fast-as-possible</label>
       </div>
@@ -240,6 +249,9 @@
         <tr><td>Image size</td>     <td><span id="imgWidth">—</span> × <span id="imgHeight">—</span></td></tr>
         <tr><td>Depth</td>          <td><span id="imgDepth">—</span></td></tr>
         <tr><td>Components</td>     <td><span id="numComps">—</span></td></tr>
+        <tr><td>Chroma</td>         <td><span id="chroma">—</span></td></tr>
+        <tr><td>Signedness</td>     <td><span id="signedness">—</span></td></tr>
+        <tr><td>Color (RFC 9828)</td><td><span id="colorInfo">—</span></td></tr>
         <tr><td>Packets received</td><td><span id="statPackets">0</span></td></tr>
         <tr><td>Frames decoded</td>  <td><span id="statFrames">0</span></td></tr>
         <tr><td>Frames dropped</td>  <td><span id="statDrops">0</span></td></tr>
@@ -320,6 +332,12 @@ let reduceNLMode  = 'auto';
 let reduceNLValue = 0;      // effective value passed to create_decoder
 let autoDecided   = false;  // have we measured the first frame?
 
+// YCbCr→RGB override.  'auto' uses RFC 9828 mat; explicit modes force a matrix.
+let ycbcrMode = 'auto';
+
+// Has the one-shot per-playback diagnostic dump been printed?
+let firstFrameDiagnosticsDumped = false;
+
 // WASM-side resources (allocated once on first Play, freed on Stop).
 let rtpSession   = 0;
 let decoder      = 0;
@@ -382,7 +400,11 @@ function setStat(id, v) {
       rtp_push:              Module.cwrap('rtp_push_packet',     'number', ['number','number','number']),
       rtp_peek_size:         Module.cwrap('rtp_peek_frame_size', 'number', ['number']),
       rtp_pop:               Module.cwrap('rtp_pop_frame',       'number', ['number','number','number']),
-      rtp_pop_matrix:        Module.cwrap('rtp_pop_frame_matrix','number', ['number']),
+      rtp_pop_matrix:        Module.cwrap('rtp_pop_frame_matrix',  'number', ['number']),
+      rtp_pop_range:         Module.cwrap('rtp_pop_frame_range',   'number', ['number']),
+      rtp_pop_primaries:     Module.cwrap('rtp_pop_frame_primaries','number', ['number']),
+      rtp_pop_transfer:      Module.cwrap('rtp_pop_frame_transfer','number', ['number']),
+      get_signed:            Module.cwrap('get_signed',             'number', ['number','number']),
       rtp_frames:            Module.cwrap('rtp_frames_emitted',  'number', ['number']),
       rtp_drops:             Module.cwrap('rtp_frames_dropped',  'number', ['number']),
       rtp_gaps:              Module.cwrap('rtp_seq_gaps',        'number', ['number']),
@@ -419,6 +441,9 @@ function decodeAndRender() {
   if (got <= 0) return false;
 
   const matrix = F.rtp_pop_matrix(rtpSession);
+  const range  = F.rtp_pop_range(rtpSession);
+  const prims  = F.rtp_pop_primaries(rtpSession);
+  const trans  = F.rtp_pop_transfer(rtpSession);
 
   // Per-frame create + release.  The wrapper's release_j2c_data() deletes
   // the decoder, so we can't keep one alive across frames using the
@@ -438,9 +463,46 @@ function decodeAndRender() {
     const NC = F.get_num_components(dec) | 0;
     const D  = F.get_depth(dec, 0) | 0;
 
+    // Gather per-component metadata for diagnostics + chroma-subsampling display.
+    const compW = [], compH = [], compS = [], compD = [];
+    for (let c = 0; c < Math.min(NC, 4); c++) {
+      compW.push(F.get_width(dec, c)  | 0);
+      compH.push(F.get_height(dec, c) | 0);
+      compS.push(F.get_signed(dec, c) | 0);
+      compD.push(F.get_depth(dec, c)  | 0);
+    }
+
+    // One-shot diagnostic dump on the very first frame decoded.
+    if (!firstFrameDiagnosticsDumped) {
+      firstFrameDiagnosticsDumped = true;
+      console.log('[rtp_demo] ───── First-frame diagnostics ─────');
+      console.log(`[rtp_demo] size: ${W} x ${H}, NC=${NC}, depth=${D} bpc`);
+      for (let c = 0; c < NC; c++) {
+        console.log(`[rtp_demo]   comp[${c}]: ${compW[c]}x${compH[c]}  depth=${compD[c]}  signed=${compS[c]}`);
+      }
+      console.log(`[rtp_demo] RFC 9828 metadata:`);
+      console.log(`[rtp_demo]   MatrixCoefficients (mat) = ${matrix}   [0=RGB, 1=BT.709, 5/6=BT.601, 255=unknown]`);
+      console.log(`[rtp_demo]   Range                    = ${range}   [0=narrow/TV, 1=full/PC, 2=unknown]`);
+      console.log(`[rtp_demo]   ColourPrimaries  (prims) = ${prims}`);
+      console.log(`[rtp_demo]   TransferCharacteristics  = ${trans}`);
+      console.log(`[rtp_demo] ─────────────────────────────────────`);
+
+      // Populate stats panel too.
+      const chromaInfo = NC < 2 ? 'mono'
+        : compW[1] === compW[0] && compH[1] === compH[0] ? '4:4:4'
+        : compW[1] * 2 === compW[0] && compH[1] === compH[0] ? '4:2:2'
+        : compW[1] * 2 === compW[0] && compH[1] * 2 === compH[0] ? '4:2:0'
+        : `${compW[0]}:${compW[1]}:${compW[2] ?? '?'}`;
+      setStat('chroma', chromaInfo);
+      setStat('signedness', compS.map(s => s ? 's' : 'u').join(''));
+      const matName  = matrix === 0 ? 'RGB' : matrix === 1 ? 'BT.709'
+                     : matrix === 5 || matrix === 6 ? 'BT.601' : `mat=${matrix}`;
+      const rangeName = range === 1 ? 'full' : range === 0 ? 'narrow' : '?';
+      setStat('colorInfo', `${matName} / ${rangeName}`);
+    }
+
     // Auto-resolution: after the first successful decode, if the full-res width
     // (W * 2^reduceNLValue) is >= 2048, bump reduce_NL to 1 for subsequent frames.
-    // Since reduceNLValue starts at 0 in auto mode, W here is the full-res width.
     if (reduceNLMode === 'auto' && !autoDecided) {
       const fullW = W * (1 << reduceNLValue);
       if (fullW >= 2048 && reduceNLValue === 0) {
@@ -452,14 +514,23 @@ function decodeAndRender() {
 
     ensureRgbaBuf(W * H * 4);
     F.invoke_to_rgba(dec, rgbaBuf);
-    // FrameHandler surfaces the H.273 MatrixCoefficients (mat). Per RFC 9828 §5.3:
-    //   1 = BT.709,  5/6 = BT.601,  255 = unknown.
-    // invoke_decoder_to_rgba packs Y into R, Cb into G, Cr into B (no conversion);
-    // we post-multiply by the matrix below.
+    // Apply YCbCr→RGB conversion.  The dropdown override takes precedence;
+    // Auto uses the RFC 9828 MatrixCoefficients (mat) field if available.
+    //   mat=0   → RGB (no conversion)
+    //   mat=1   → BT.709
+    //   mat=5|6 → BT.601 (NTSC/PAL)
+    //   mat=255 → no metadata (try BT.709 as a sensible modern default if mode=auto)
     if (NC >= 3) {
-      if (matrix === 1)         F.apply_bt709(rgbaBuf, W * H);
-      else if (matrix === 5 || matrix === 6) F.apply_bt601(rgbaBuf, W * H);
-      // else: no metadata; leave as-is.
+      let chosen = ycbcrMode;  // 'auto'|'none'|'bt601'|'bt709'
+      if (chosen === 'auto') {
+        if      (matrix === 1)                    chosen = 'bt709';
+        else if (matrix === 5 || matrix === 6)    chosen = 'bt601';
+        else if (matrix === 0)                    chosen = 'none';
+        else                                      chosen = 'bt709';  // default for unknown
+      }
+      if      (chosen === 'bt709') F.apply_bt709(rgbaBuf, W * H);
+      else if (chosen === 'bt601') F.apply_bt601(rgbaBuf, W * H);
+      // else 'none': RGB passthrough.
     }
 
     // Paint into canvas.
@@ -575,7 +646,11 @@ async function startPlayback(source) {
     reduceNLValue = parseInt(reduceNLMode, 10) | 0;
     autoDecided   = true;
   }
+  // YCbCr override.
+  ycbcrMode = document.getElementById('ycbcr-mode').value;
+  firstFrameDiagnosticsDumped = false;
   console.log(`[rtp_demo] reduce_NL mode=${reduceNLMode} initial_value=${reduceNLValue}`);
+  console.log(`[rtp_demo] ycbcr_mode=${ycbcrMode}`);
 
   const pacing = document.querySelector('input[name="pacing"]:checked').value;
   const ticker = startStatsTicker();
