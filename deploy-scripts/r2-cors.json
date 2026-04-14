@@ -1,18 +1,23 @@
-[
-  {
-    "AllowedOrigins": [
-      "https://htj2k-demo.pages.dev",
-      "http://localhost:8000",
-      "http://localhost:3000"
-    ],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": [
-      "Content-Length",
-      "Content-Range",
-      "Accept-Ranges",
-      "ETag"
-    ],
-    "MaxAgeSeconds": 3600
-  }
-]
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": [
+          "https://htj2k-demo.pages.dev",
+          "https://osamu620.dev",
+          "http://localhost:8000",
+          "http://localhost:3000"
+        ],
+        "methods": ["GET", "HEAD"],
+        "headers": ["*"]
+      },
+      "exposeHeaders": [
+        "Content-Length",
+        "Content-Range",
+        "Accept-Ranges",
+        "ETag"
+      ],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
