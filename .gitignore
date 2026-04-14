@@ -45,3 +45,6 @@ build*/
 bin/
 perf.data
 perf.data.old
+
+# Cloudflare Wrangler local state (OAuth tokens, cache, etc.)
+.wrangler/

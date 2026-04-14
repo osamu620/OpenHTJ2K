@@ -10,6 +10,7 @@ on:
     paths:
       - 'subprojects/**'
       - 'source/**'
+      - 'functions/**'
       - 'CMakeLists.txt'
       - '.github/workflows/deploy-wasm-demo.yml'
   workflow_dispatch:
@@ -42,6 +43,12 @@ jobs:
           cp subprojects/rtp_demo.html                  deploy/
           cp subprojects/rtp_parser.js                  deploy/
           cp subprojects/coi-serviceworker.js           deploy/
+          # Pages Functions: cp -r so the functions/ directory lands at the
+          # root of the deploy bundle.  Cloudflare Pages auto-detects it and
+          # routes /samples/* to the [[path]].js handler bound to the R2
+          # bucket (binding is configured in the Pages project settings —
+          # see functions/samples/[[path]].js for details).
+          cp -r functions                               deploy/
           # Sample codestreams referenced by index.html's preset dropdown.
           # Only the files the UI actually lists are copied — adjust this
           # list if you add/remove presets.
