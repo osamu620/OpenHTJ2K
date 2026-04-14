@@ -37,10 +37,15 @@
       --text-sub: #9aa0b8;
       --radius:   10px;
     }
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     body {
       background: var(--bg); color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       min-height: 100vh; padding: 32px 28px; max-width: 1300px; margin: 0 auto;
+      /* Prevent iOS auto text inflation inside narrow columns (stats panel
+         rows looked larger than designed on iOS Safari / iOS Edge). */
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
     .site-header {
       display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
