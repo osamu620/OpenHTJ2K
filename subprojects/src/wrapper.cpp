@@ -31,6 +31,9 @@ struct RtpSession {
   bool     ssrc_seen         = false;
   uint32_t last_popped_ts    = 0;  // RTP timestamp of most recently popped frame
   uint8_t  last_popped_mat   = 0;  // H.273 matrix coeffs of most recently popped frame
+  uint8_t  last_popped_prims = 0;  // H.273 colour primaries
+  uint8_t  last_popped_trans = 0;  // H.273 transfer characteristics
+  bool     last_popped_range = false;  // false = narrow (TV), true = full (PC)
   bool     last_popped_has_meta = false;
   std::string last_error;
 };
@@ -810,6 +813,9 @@ int32_t rtp_pop_frame(RtpSession* s, uint8_t* out, uint32_t max_len) {
   uint32_t copied           = static_cast<uint32_t>(f.bytes.size());
   s->last_popped_ts         = f.rtp_timestamp;
   s->last_popped_mat        = f.mat;
+  s->last_popped_prims      = f.prims;
+  s->last_popped_trans      = f.trans;
+  s->last_popped_range      = f.range;
   s->last_popped_has_meta   = f.has_meta;
   s->ready.pop_front();
   return static_cast<int32_t>(copied);
@@ -824,6 +830,25 @@ EMSCRIPTEN_KEEPALIVE
 uint32_t rtp_pop_frame_matrix(RtpSession* s) {
   if (!s) return 255u;
   return s->last_popped_has_meta ? static_cast<uint32_t>(s->last_popped_mat) : 255u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_pop_frame_range(RtpSession* s) {
+  // Returns 0 = narrow (TV range), 1 = full (PC range), 2 = unknown.
+  if (!s || !s->last_popped_has_meta) return 2u;
+  return s->last_popped_range ? 1u : 0u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_pop_frame_primaries(RtpSession* s) {
+  if (!s) return 255u;
+  return s->last_popped_has_meta ? static_cast<uint32_t>(s->last_popped_prims) : 255u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_pop_frame_transfer(RtpSession* s) {
+  if (!s) return 255u;
+  return s->last_popped_has_meta ? static_cast<uint32_t>(s->last_popped_trans) : 255u;
 }
 
 EMSCRIPTEN_KEEPALIVE
