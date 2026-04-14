@@ -510,7 +510,8 @@ async function startPlayback(source) {
 
   const pacing = document.querySelector('input[name="pacing"]:checked').value;
   const ticker = startStatsTicker();
-  setOverlay(null);
+  setOverlay('Waiting for first frame…', 'loading');
+  let firstFrameDrawn = false;
 
   // Paced-mode clock anchors (set on first frame decoded).
   let wallStart = 0;
@@ -539,6 +540,7 @@ async function startPlayback(source) {
       }
       if (r === 1) {
         const ok = decodeAndRender();
+        if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
         // When r===1, the current packet is the one that completed the frame,
         // so its RTP timestamp equals the frame timestamp.
         if (ok && pacing === 'paced') {
@@ -587,14 +589,24 @@ document.getElementById('btn-play').addEventListener('click', async () => {
   document.getElementById('btn-play').disabled  = true;
   document.getElementById('btn-pause').disabled = false;
   document.getElementById('btn-stop').disabled  = false;
+  setOverlay('Starting playback…', 'loading');
 
+  // For local File inputs, use .stream() to read incrementally.  Reading a
+  // multi-GB .rtp via .arrayBuffer() blows past the browser's Uint8Array size
+  // limit (typically 2 GB); .stream() hands us a ReadableStream instead so
+  // parseRtpStream can pull chunks as the decoder is ready for them.
   let source;
-  if (src instanceof File) {
-    // Read the whole file — browsers cache it in memory but simpler than streaming a Blob.
-    const ab = await src.arrayBuffer();
-    source = new Uint8Array(ab);
+  if (src instanceof Blob) {            // Blob covers File as well
+    try {
+      source = src.stream();            // ReadableStream<Uint8Array>
+    } catch (e) {
+      console.error('File.stream() failed:', e);
+      setOverlay('Browser does not support File.stream().', 'error');
+      document.getElementById('btn-play').disabled = false;
+      return;
+    }
   } else {
-    source = src;
+    source = src;                       // URL string — fetch() inside parseRtpStream
   }
   startPlayback(source);
 });
