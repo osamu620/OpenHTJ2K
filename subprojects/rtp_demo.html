@@ -402,54 +402,61 @@ function decodeAndRender() {
 
   const matrix = F.rtp_pop_matrix(rtpSession);
 
-  // First frame: create decoder + enable single-tile-reuse for subsequent.
+  // Per-frame create + release.  The wrapper's release_j2c_data() deletes
+  // the decoder, so we can't keep one alive across frames using the
+  // existing API.  Decoder reuse via init() on a live instance would
+  // require a separate "reset-but-don't-delete" export + verifying the
+  // underlying openhtj2k_decoder cleanly handles re-parse — v2 work.
   const t0 = performance.now();
-  if (decoder === 0) {
-    decoder = F.create_decoder(frameBuf, got, 0);
-    F.enable_single_tile(decoder, 1);
-  } else {
-    F.reset_decoder_bytes(decoder, frameBuf, got, 0);
+  let dec = 0;
+  try {
+    dec = F.create_decoder(frameBuf, got, 0);
+    if (dec === 0) throw new Error('create_decoder returned null');
+    F.parse_j2c(dec);
+
+    const W  = F.get_width(dec, 0)  | 0;
+    const H  = F.get_height(dec, 0) | 0;
+    const NC = F.get_num_components(dec) | 0;
+    const D  = F.get_depth(dec, 0) | 0;
+
+    ensureRgbaBuf(W * H * 4);
+    F.invoke_to_rgba(dec, rgbaBuf);
+    // FrameHandler surfaces the H.273 MatrixCoefficients (mat). Per RFC 9828 §5.3:
+    //   1 = BT.709,  5/6 = BT.601,  255 = unknown.
+    // invoke_decoder_to_rgba packs Y into R, Cb into G, Cr into B (no conversion);
+    // we post-multiply by the matrix below.
+    if (NC >= 3) {
+      if (matrix === 1)         F.apply_bt709(rgbaBuf, W * H);
+      else if (matrix === 5 || matrix === 6) F.apply_bt601(rgbaBuf, W * H);
+      // else: no metadata; leave as-is.
+    }
+
+    // Paint into canvas.
+    const canvas = document.getElementById('mycanvas');
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width  = W;
+      canvas.height = H;
+    }
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(W, H);
+    img.data.set(Module.HEAPU8.subarray(rgbaBuf, rgbaBuf + W * H * 4));
+    ctx.putImageData(img, 0, 0);
+
+    const t1 = performance.now();
+    lastDecodeTimes.push(t1 - t0);
+    if (lastDecodeTimes.length > FPS_WIN) lastDecodeTimes.shift();
+    frameCount++;
+    setStat('imgWidth',  W);
+    setStat('imgHeight', H);
+    setStat('imgDepth',  D + ' bpc');
+    setStat('numComps',  NC);
+    return true;
+  } catch (e) {
+    console.warn('frame decode failed:', e);
+    return false;
+  } finally {
+    if (dec !== 0) F.release_j2c(dec);
   }
-  F.parse_j2c(decoder);
-
-  const W  = F.get_width(decoder, 0)  | 0;
-  const H  = F.get_height(decoder, 0) | 0;
-  const NC = F.get_num_components(decoder) | 0;
-  const D  = F.get_depth(decoder, 0) | 0;
-
-  ensureRgbaBuf(W * H * 4);
-  F.invoke_to_rgba(decoder, rgbaBuf);
-  // FrameHandler surfaces the H.273 MatrixCoefficients (mat). Per RFC 9828 §5.3:
-  //   1 = BT.709,  5/6 = BT.601,  255 = unknown.
-  // The codestream itself is monochrome planes; the wrapper packs Y into the R
-  // channel, Cb into G, Cr into B (no conversion).  Auto-apply the matrix here.
-  if (NC >= 3) {
-    if (matrix === 1)         F.apply_bt709(rgbaBuf, W * H);
-    else if (matrix === 5 || matrix === 6) F.apply_bt601(rgbaBuf, W * H);
-    // else: no metadata; leave as-is (won't look right but decoder won't fail).
-  }
-  F.release_j2c(decoder);
-
-  // Paint into canvas.
-  const canvas = document.getElementById('mycanvas');
-  if (canvas.width !== W || canvas.height !== H) {
-    canvas.width  = W;
-    canvas.height = H;
-  }
-  const ctx   = canvas.getContext('2d');
-  const img   = ctx.createImageData(W, H);
-  img.data.set(Module.HEAPU8.subarray(rgbaBuf, rgbaBuf + W * H * 4));
-  ctx.putImageData(img, 0, 0);
-
-  const t1 = performance.now();
-  lastDecodeTimes.push(t1 - t0);
-  if (lastDecodeTimes.length > FPS_WIN) lastDecodeTimes.shift();
-  frameCount++;
-  setStat('imgWidth',  W);
-  setStat('imgHeight', H);
-  setStat('imgDepth',  D + ' bpc');
-  setStat('numComps',  NC);
-  return true;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -567,7 +574,12 @@ async function startPlayback(source) {
   document.getElementById('btn-play').disabled  = false;
   document.getElementById('btn-pause').disabled = true;
   document.getElementById('btn-stop').disabled  = true;
-  setOverlay('Playback finished. ' + frameCount + ' frames decoded.', 'loading');
+  // Preserve any error overlay set by the catch clause — only set the
+  // "finished" message if no error is currently shown.
+  const ov = document.getElementById('canvas-overlay');
+  if (ov && !ov.classList.contains('error')) {
+    setOverlay('Playback finished. ' + frameCount + ' frames decoded.', 'loading');
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
