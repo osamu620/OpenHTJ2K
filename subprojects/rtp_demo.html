@@ -457,13 +457,22 @@ function decodeAndRender() {
     if (dec === 0) throw new Error('create_decoder returned null');
     F.parse_j2c(dec);
 
-    // Reported dimensions reflect the reduced resolution: W_out = ceil(W_full / 2^reduce_NL).
-    const W  = F.get_width(dec, 0)  | 0;
-    const H  = F.get_height(dec, 0) | 0;
-    const NC = F.get_num_components(dec) | 0;
-    const D  = F.get_depth(dec, 0) | 0;
+    // get_width/get_height return FULL-RESOLUTION dimensions even after
+    // create_decoder(..., reduce_NL).  The JS side must divide by 2^reduce_NL
+    // to match what invoke_decoder_to_rgba actually writes — same pattern as
+    // index.html's display_image (lines 526-527).  Otherwise the reduced-size
+    // decoded bytes get painted into a full-size Canvas and the image is
+    // stitched/repeated incorrectly (users see ~2 subsampled copies in the
+    // upper quarter of the canvas).
+    const fullW = F.get_width(dec, 0)  | 0;
+    const fullH = F.get_height(dec, 0) | 0;
+    const NC    = F.get_num_components(dec) | 0;
+    const D     = F.get_depth(dec, 0) | 0;
+    const W     = Math.ceil(fullW / (1 << reduceNLValue));
+    const H     = Math.ceil(fullH / (1 << reduceNLValue));
 
     // Gather per-component metadata for diagnostics + chroma-subsampling display.
+    // These also reflect full-resolution per-component dimensions.
     const compW = [], compH = [], compS = [], compD = [];
     for (let c = 0; c < Math.min(NC, 4); c++) {
       compW.push(F.get_width(dec, c)  | 0);
@@ -476,7 +485,8 @@ function decodeAndRender() {
     if (!firstFrameDiagnosticsDumped) {
       firstFrameDiagnosticsDumped = true;
       console.log('[rtp_demo] ───── First-frame diagnostics ─────');
-      console.log(`[rtp_demo] size: ${W} x ${H}, NC=${NC}, depth=${D} bpc`);
+      console.log(`[rtp_demo] full-res: ${fullW} x ${fullH}, decoded: ${W} x ${H} (reduce_NL=${reduceNLValue})`);
+      console.log(`[rtp_demo] NC=${NC}, depth=${D} bpc`);
       for (let c = 0; c < NC; c++) {
         console.log(`[rtp_demo]   comp[${c}]: ${compW[c]}x${compH[c]}  depth=${compD[c]}  signed=${compS[c]}`);
       }
@@ -501,13 +511,12 @@ function decodeAndRender() {
       setStat('colorInfo', `${matName} / ${rangeName}`);
     }
 
-    // Auto-resolution: after the first successful decode, if the full-res width
-    // (W * 2^reduceNLValue) is >= 2048, bump reduce_NL to 1 for subsequent frames.
+    // Auto-resolution: after the first successful decode, if the full-res
+    // width is >= 2048, bump reduce_NL to 1 for subsequent frames.
     if (reduceNLMode === 'auto' && !autoDecided) {
-      const fullW = W * (1 << reduceNLValue);
       if (fullW >= 2048 && reduceNLValue === 0) {
         reduceNLValue = 1;
-        console.log(`[rtp_demo] auto: W=${fullW} >= 2048, switching to reduce_NL=1 for subsequent frames`);
+        console.log(`[rtp_demo] auto: full-res W=${fullW} >= 2048, switching to reduce_NL=1 for subsequent frames`);
       }
       autoDecided = true;
     }
