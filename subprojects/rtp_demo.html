@@ -450,6 +450,12 @@ let frameBuf     = 0;
 const MAX_FRAME  = 16 * 1024 * 1024;  // 16 MB: generous for 4K HTJ2K
 let rgbaBuf      = 0;
 let rgbaBufSz    = 0;
+// Per-component buffers for the planar render path (WebGL only).  Sized to
+// luma + chroma + chroma bytes; reallocated when the per-component sizes
+// change (e.g. on auto-reduce_NL switch after the first frame).
+let yBuf    = 0; let yBufSz    = 0;
+let cbBuf   = 0; let cbBufSz   = 0;
+let crBuf   = 0; let crBufSz   = 0;
 
 // Stats.
 let pktCount   = 0;
@@ -496,6 +502,7 @@ function setStat(id, v) {
       enable_single_tile:    Module.cwrap('enable_single_tile_reuse', 'void', ['number','number']),
       parse_j2c:             Module.cwrap('parse_j2c_data',      'void',   ['number']),
       invoke_to_rgba:        Module.cwrap('invoke_decoder_to_rgba', 'void', ['number','number']),
+      invoke_planar_u8:      Module.cwrap('invoke_decoder_planar_u8', 'void', ['number','number','number','number']),
       release_j2c:           Module.cwrap('release_j2c_data',    'void',   ['number']),
       get_width:             Module.cwrap('get_width',           'number', ['number','number']),
       get_height:            Module.cwrap('get_height',          'number', ['number','number']),
@@ -545,6 +552,14 @@ function ensureRgbaBuf(size) {
   rgbaBufSz = size;
 }
 
+// Reallocate the three planar buffers if the requested sizes don't fit.
+// Returns nothing; updates yBuf/cbBuf/crBuf module-level state.
+function ensurePlanarBufs(lumaSz, chromaSz) {
+  if (yBufSz < lumaSz)    { if (yBuf)  Module._free(yBuf);  yBuf  = Module._malloc(lumaSz);   yBufSz  = lumaSz;   }
+  if (cbBufSz < chromaSz) { if (cbBuf) Module._free(cbBuf); cbBuf = Module._malloc(chromaSz); cbBufSz = chromaSz; }
+  if (crBufSz < chromaSz) { if (crBuf) Module._free(crBuf); crBuf = Module._malloc(chromaSz); crBufSz = chromaSz; }
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Renderers
 // ──────────────────────────────────────────────────────────────────────────
@@ -565,6 +580,7 @@ class Canvas2DRenderer {
   }
   name()           { return '2d'; }
   needsCpuYcbcr()  { return true; }   // CPU apply_bt*_to_rgba pass is required
+  supportsPlanar() { return false; }  // Canvas 2D path only handles packed RGBA
   render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
     if (this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas.width  = W;
@@ -601,6 +617,28 @@ out vec4 o_color;
 void main() {
   vec4 s   = texture(u_tex, v_uv);
   vec3 ycc = vec3(s.r, s.g, s.b) - u_offset;
+  vec3 rgb = clamp(u_matrix * ycc, 0.0, 1.0);
+  o_color  = vec4(rgb, 1.0);
+}`;
+
+// Planar variant: three R8 textures (Y, Cb, Cr) at native per-component
+// sizes.  Linear-filtered chroma sampling gives free hardware bilinear
+// upsampling — significantly nicer than the C++ nearest-neighbor path
+// used by invoke_decoder_to_rgba, AND saves ~50% upload bytes for 4:2:2.
+const _FS_PLANAR_SRC = `#version 300 es
+precision highp float;
+uniform sampler2D u_y;
+uniform sampler2D u_cb;
+uniform sampler2D u_cr;
+uniform mat3      u_matrix;
+uniform vec3      u_offset;
+in  vec2 v_uv;
+out vec4 o_color;
+void main() {
+  float Y  = texture(u_y,  v_uv).r;
+  float Cb = texture(u_cb, v_uv).r;
+  float Cr = texture(u_cr, v_uv).r;
+  vec3 ycc = vec3(Y, Cb, Cr) - u_offset;
   vec3 rgb = clamp(u_matrix * ycc, 0.0, 1.0);
   o_color  = vec4(rgb, 1.0);
 }`;
@@ -699,23 +737,7 @@ class WebGL2Renderer {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
 
-    const vs   = _compileShader(gl, gl.VERTEX_SHADER,   _VS_SRC);
-    const fs   = _compileShader(gl, gl.FRAGMENT_SHADER, _FS_SRC);
-    const prog = gl.createProgram();
-    gl.attachShader(prog, vs); gl.attachShader(prog, fs);
-    gl.bindAttribLocation(prog, 0, 'a_pos');
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      const log = gl.getProgramInfoLog(prog);
-      throw new Error('program link failed: ' + log);
-    }
-    gl.useProgram(prog);
-    this.prog    = prog;
-    this.uTex    = gl.getUniformLocation(prog, 'u_tex');
-    this.uMatrix = gl.getUniformLocation(prog, 'u_matrix');
-    this.uOffset = gl.getUniformLocation(prog, 'u_offset');
-
-    // Fullscreen triangle-strip quad.
+    // Fullscreen triangle-strip quad.  Created once, shared by both programs.
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     const vbo = gl.createBuffer();
@@ -726,7 +748,26 @@ class WebGL2Renderer {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-    // Texture — allocated lazily on first render at the right size.
+    // Compile both programs up front so the user can switch render paths
+    // (packed vs planar) without paying compile latency on first frame.
+    const vs   = _compileShader(gl, gl.VERTEX_SHADER, _VS_SRC);
+    this.prog        = this._buildProgram(vs, _FS_SRC);
+    this.progPlanar  = this._buildProgram(vs, _FS_PLANAR_SRC);
+
+    // Uniform locations for packed program.
+    gl.useProgram(this.prog);
+    this.uTex     = gl.getUniformLocation(this.prog, 'u_tex');
+    this.uMatrix  = gl.getUniformLocation(this.prog, 'u_matrix');
+    this.uOffset  = gl.getUniformLocation(this.prog, 'u_offset');
+    // Uniform locations for planar program.
+    gl.useProgram(this.progPlanar);
+    this.uY       = gl.getUniformLocation(this.progPlanar, 'u_y');
+    this.uCb      = gl.getUniformLocation(this.progPlanar, 'u_cb');
+    this.uCr      = gl.getUniformLocation(this.progPlanar, 'u_cr');
+    this.uMatrixP = gl.getUniformLocation(this.progPlanar, 'u_matrix');
+    this.uOffsetP = gl.getUniformLocation(this.progPlanar, 'u_offset');
+
+    // Packed RGBA texture (used by render()).
     this.tex   = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -735,12 +776,45 @@ class WebGL2Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T,     gl.CLAMP_TO_EDGE);
     this.texW = 0; this.texH = 0;
 
+    // Planar textures (used by renderPlanar()).
+    //   - Y uses NEAREST (1:1 with output).
+    //   - Cb/Cr use LINEAR — hardware bilinear chroma upsampling for 4:2:0/4:2:2.
+    const mkR8 = (filter) => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S,     gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T,     gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    this.texY  = mkR8(gl.NEAREST);
+    this.texCb = mkR8(gl.LINEAR);
+    this.texCr = mkR8(gl.LINEAR);
+    this.lumaW = 0; this.lumaH = 0; this.chromaW = 0; this.chromaH = 0;
+
     // Cache: skip uniform uploads when the matrix didn't change between frames.
     this.lastMatSig = null;
+    this.lastProg   = null;  // which program was last used
+  }
+
+  _buildProgram(vs, fsSrc) {
+    const gl = this.gl;
+    const fs = _compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+    const p  = gl.createProgram();
+    gl.attachShader(p, vs); gl.attachShader(p, fs);
+    gl.bindAttribLocation(p, 0, 'a_pos');
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(p);
+      throw new Error('program link failed: ' + log);
+    }
+    return p;
   }
 
   name()           { return 'webgl2'; }
   needsCpuYcbcr()  { return false; }   // shader does the matrix in-GPU
+  supportsPlanar() { return true; }    // can render from 3 R8 textures
 
   render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
     if (this.lost) return;
@@ -751,6 +825,12 @@ class WebGL2Renderer {
       this.canvas.height = H;
       gl.viewport(0, 0, W, H);
       this.texW = 0;   // force texImage2D realloc
+    }
+
+    if (this.lastProg !== this.prog) {
+      gl.useProgram(this.prog);
+      this.lastProg   = this.prog;
+      this.lastMatSig = null;          // force uniform re-upload after program switch
     }
 
     // ArrayBufferView slice into the current WASM heap.  Pass directly to
@@ -772,6 +852,73 @@ class WebGL2Renderer {
       gl.uniformMatrix3fv(this.uMatrix, false, u.mat);
       gl.uniform3fv(this.uOffset, u.off);
       gl.uniform1i(this.uTex, 0);
+      this.lastMatSig = u.sig;
+    }
+
+    gl.bindVertexArray(this.vao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  // Render from three planar uint8 buffers (Y at lumaW×lumaH, Cb/Cr at
+  // chromaW×chromaH).  Hardware bilinear filtering on Cb/Cr does the chroma
+  // upsampling for free.  Canvas size matches lumaW×lumaH.
+  renderPlanar(view, yPtr, cbPtr, crPtr, lumaW, lumaH, chromaW, chromaH,
+               matrix, range, ycbcrMode, NC) {
+    if (this.lost) return;
+    const gl = this.gl;
+
+    if (this.canvas.width !== lumaW || this.canvas.height !== lumaH) {
+      this.canvas.width  = lumaW;
+      this.canvas.height = lumaH;
+      gl.viewport(0, 0, lumaW, lumaH);
+    }
+
+    if (this.lastProg !== this.progPlanar) {
+      gl.useProgram(this.progPlanar);
+      this.lastProg   = this.progPlanar;
+      this.lastMatSig = null;          // force uniform re-upload after program switch
+    }
+
+    // Y plane (texture unit 0).
+    const yPx = view.subarray(yPtr, yPtr + lumaW * lumaH);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.texY);
+    if (this.lumaW !== lumaW || this.lumaH !== lumaH) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, lumaW, lumaH, 0, gl.RED, gl.UNSIGNED_BYTE, yPx);
+      this.lumaW = lumaW; this.lumaH = lumaH;
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, lumaW, lumaH, gl.RED, gl.UNSIGNED_BYTE, yPx);
+    }
+
+    // Cb plane (texture unit 1).
+    const chromaSz = chromaW * chromaH;
+    const cbPx = view.subarray(cbPtr, cbPtr + chromaSz);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.texCb);
+    if (this.chromaW !== chromaW || this.chromaH !== chromaH) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, chromaW, chromaH, 0, gl.RED, gl.UNSIGNED_BYTE, cbPx);
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chromaW, chromaH, gl.RED, gl.UNSIGNED_BYTE, cbPx);
+    }
+
+    // Cr plane (texture unit 2).
+    const crPx = view.subarray(crPtr, crPtr + chromaSz);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.texCr);
+    if (this.chromaW !== chromaW || this.chromaH !== chromaH) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, chromaW, chromaH, 0, gl.RED, gl.UNSIGNED_BYTE, crPx);
+      this.chromaW = chromaW; this.chromaH = chromaH;
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chromaW, chromaH, gl.RED, gl.UNSIGNED_BYTE, crPx);
+    }
+
+    const u = _pickYcbcrUniforms(matrix, range, ycbcrMode, NC);
+    if (u.sig !== this.lastMatSig) {
+      gl.uniformMatrix3fv(this.uMatrixP, false, u.mat);
+      gl.uniform3fv(this.uOffsetP, u.off);
+      gl.uniform1i(this.uY,  0);
+      gl.uniform1i(this.uCb, 1);
+      gl.uniform1i(this.uCr, 2);
       this.lastMatSig = u.sig;
     }
 
@@ -892,34 +1039,50 @@ function decodeAndRender() {
       autoDecided = true;
     }
 
-    ensureRgbaBuf(W * H * 4);
-    F.invoke_to_rgba(dec, rgbaBuf);
-    // Apply YCbCr→RGB conversion.  The dropdown override takes precedence;
-    // Auto uses the RFC 9828 MatrixCoefficients (mat) field if available.
-    //   mat=0   → RGB (no conversion)
-    //   mat=1   → BT.709
-    //   mat=5|6 → BT.601 (NTSC/PAL)
-    //   mat=255 → no metadata (try BT.709 as a sensible modern default if mode=auto)
-    // YCbCr→RGB conversion runs on CPU only when the active renderer can't
-    // do it in-shader (Canvas 2D path).  WebGL2Renderer does the matrix in
-    // its fragment shader and reports needsCpuYcbcr()===false.
-    if (NC >= 3 && renderer.needsCpuYcbcr()) {
-      let chosen = ycbcrMode;  // 'auto'|'none'|'bt601'|'bt709'
-      if (chosen === 'auto') {
-        if      (matrix === 1)                    chosen = 'bt709';
-        else if (matrix === 5 || matrix === 6)    chosen = 'bt601';
-        else if (matrix === 0)                    chosen = 'none';
-        else                                      chosen = 'bt709';  // default for unknown
+    // Two render paths:
+    //   (a) Planar — WebGL only.  Decode into 3 R8 buffers at native chroma
+    //       sizes; shader samples them.  Free hardware bilinear chroma upsample.
+    //   (b) Packed — Canvas 2D fallback.  Decode into one RGBA buffer; CPU
+    //       YCbCr→RGB pass; putImageData.
+    if (renderer.supportsPlanar() && NC >= 3) {
+      // Per-component dimensions: get_width/get_height already return the
+      // REDUCED-resolution sizes for non-luma components (e.g. 1920×1080 luma
+      // and 960×1080 chroma for 4:2:2 at full res; 960×540 / 480×540 at half res).
+      const lumaW   = compW[0], lumaH   = compH[0];
+      const chromaW = compW[1], chromaH = compH[1];
+      // The decoder reports per-component dims at full-resolution; we need
+      // the reduced-resolution sizes (after dividing by 2^reduce_NL).
+      const lumaW_r   = Math.ceil(lumaW   / (1 << reduceNLValue));
+      const lumaH_r   = Math.ceil(lumaH   / (1 << reduceNLValue));
+      const chromaW_r = Math.ceil(chromaW / (1 << reduceNLValue));
+      const chromaH_r = Math.ceil(chromaH / (1 << reduceNLValue));
+      const lumaSz    = lumaW_r   * lumaH_r;
+      const chromaSz  = chromaW_r * chromaH_r;
+      ensurePlanarBufs(lumaSz, chromaSz);
+      F.invoke_planar_u8(dec, yBuf, cbBuf, crBuf);
+      renderer.renderPlanar(Module.HEAPU8, yBuf, cbBuf, crBuf,
+                            lumaW_r, lumaH_r, chromaW_r, chromaH_r,
+                            matrix, range, ycbcrMode, NC);
+    } else {
+      ensureRgbaBuf(W * H * 4);
+      F.invoke_to_rgba(dec, rgbaBuf);
+      // Apply YCbCr→RGB conversion on CPU only when the active renderer can't
+      // do it in-shader (Canvas 2D path).  Mat=0/none = RGB passthrough.
+      if (NC >= 3 && renderer.needsCpuYcbcr()) {
+        let chosen = ycbcrMode;  // 'auto'|'none'|'bt601'|'bt709'
+        if (chosen === 'auto') {
+          if      (matrix === 1)                    chosen = 'bt709';
+          else if (matrix === 5 || matrix === 6)    chosen = 'bt601';
+          else if (matrix === 0)                    chosen = 'none';
+          else                                      chosen = 'bt709';
+        }
+        if      (chosen === 'bt709') F.apply_bt709(rgbaBuf, W * H);
+        else if (chosen === 'bt601') F.apply_bt601(rgbaBuf, W * H);
       }
-      if      (chosen === 'bt709') F.apply_bt709(rgbaBuf, W * H);
-      else if (chosen === 'bt601') F.apply_bt601(rgbaBuf, W * H);
-      // else 'none': RGB passthrough.
+      // Paint via the active renderer.  Module.HEAPU8 re-read each frame so
+      // a heap-grow event doesn't leave the renderer with a stale view.
+      renderer.render(Module.HEAPU8, rgbaBuf, W, H, matrix, range, ycbcrMode, NC);
     }
-
-    // Paint into canvas via the active renderer.  Module.HEAPU8 is re-read on
-    // every call so a heap-grow event between WASM allocations doesn't leave
-    // the renderer with a stale ArrayBuffer view.
-    renderer.render(Module.HEAPU8, rgbaBuf, W, H, matrix, range, ycbcrMode, NC);
 
     const t1 = performance.now();
     lastDecodeMs = t1 - t0;
