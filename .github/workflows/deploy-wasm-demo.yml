@@ -43,16 +43,6 @@ jobs:
           cp subprojects/rtp_demo.html                  deploy/
           cp subprojects/rtp_parser.js                  deploy/
           cp subprojects/coi-serviceworker.js           deploy/
-          # Rewrite rule: /samples/* → public r2.dev URL for the RTP
-          # sample clips.  Served at our origin so the demo's fetch() is
-          # same-origin and doesn't need CORS.  This is a pure edge-level
-          # rewrite (Cloudflare _redirects file, status 200 = rewrite,
-          # not a user-visible redirect) — no Pages Function runtime,
-          # no bindings, no dashboard steps.  :splat captures the rest
-          # of the path after /samples/.
-          cat > deploy/_redirects <<'EOF'
-          /samples/* https://pub-21f3cc3ea54a4a65b2d083c2139002d6.r2.dev/:splat 200
-          EOF
           # Sample codestreams referenced by index.html's preset dropdown.
           # Only the files the UI actually lists are copied — adjust this
           # list if you add/remove presets.
@@ -76,11 +66,9 @@ jobs:
           echo "Deploy directory contents:"
           ls -lh deploy/
 
-      # Deploy with the official wrangler CLI so bindings declared in
-      # wrangler.toml (specifically the R2 binding for the /samples/*
-      # Pages Function) get applied on every deploy — the older
-      # cloudflare/pages-action@v1 did direct upload and ignored the
-      # wrangler.toml.  Uses the same secrets as before.
+      # Deploy with the official wrangler CLI.  (Kept over the older
+      # cloudflare/pages-action@v1 because wrangler is the modern path
+      # and more actively maintained.)
       - name: Install wrangler
         run: npm install --global wrangler@latest
 
