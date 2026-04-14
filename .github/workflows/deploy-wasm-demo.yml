@@ -1,0 +1,65 @@
+# .github/workflows/deploy-wasm-demo.yml
+# Builds the Emscripten/WASM demo bundle and deploys it to Cloudflare Pages.
+# Runs on push to the listed branches when the WASM inputs change, and can
+# also be triggered manually via Actions → Run workflow.
+name: Deploy WASM demo
+
+on:
+  push:
+    branches: [main, feat/wasm-rtp-demo]
+    paths:
+      - 'subprojects/**'
+      - 'source/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/deploy-wasm-demo.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.61
+          actions-cache-folder: emsdk-cache
+
+      - name: Build WASM
+        run: |
+          cd subprojects
+          mkdir -p build && cd build
+          emcmake cmake ..
+          cmake --build . -j
+
+      - name: Stage deploy dir
+        run: |
+          mkdir -p deploy
+          cp subprojects/build/html/libopen_htj2k*.js   deploy/
+          cp subprojects/build/html/libopen_htj2k*.wasm deploy/
+          cp subprojects/index.html                     deploy/
+          cp subprojects/rtp_demo.html                  deploy/
+          cp subprojects/rtp_parser.js                  deploy/
+          cp subprojects/coi-serviceworker.js           deploy/
+          # Cloudflare Pages _headers file: sets the cross-origin isolation
+          # headers required for SharedArrayBuffer (multi-threaded WASM).
+          # Obsoletes the coi-serviceworker hack for users hitting the
+          # deployed URL; SW stays as a fallback for file:// / local dev.
+          cat > deploy/_headers <<'EOF'
+          /*
+            Cross-Origin-Opener-Policy: same-origin
+            Cross-Origin-Embedder-Policy: credentialless
+            Cross-Origin-Resource-Policy: same-origin
+          EOF
+          echo "Deploy directory contents:"
+          ls -lh deploy/
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken:    ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId:   ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: openhtj2k-demo
+          directory:   deploy
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
