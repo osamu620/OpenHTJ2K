@@ -269,6 +269,7 @@
         <tr><td>Seq gaps</td>        <td><span id="statGaps">0</span></td></tr>
         <tr><td>Pending in WASM</td> <td><span id="statPending">0</span></td></tr>
         <tr><td>Last decode</td>     <td><span id="statLastDecode">—</span></td></tr>
+        <tr><td>Display FPS</td>     <td><span id="statDispFps">—</span></td></tr>
         <tr><td>Network rate</td>    <td><span id="statMbps">—</span></td></tr>
       </table>
       <div class="big-number">
@@ -414,6 +415,7 @@ let frameCount = 0;
 let lastDecodeTimes = [];  // ms, ring of last N
 const FPS_WIN = 30;
 let lastDecodeMs = 0;
+let lastFramePacketTs = null;  // previous frame's RTP timestamp for Δts logging
 
 function setOverlay(text, mode = 'loading') {
   const ov = document.getElementById('canvas-overlay');
@@ -668,17 +670,22 @@ function startStatsTicker() {
   byteCountStart  = byteCount;
   chunkBytesStart = chunkBytes;
   let tickN = 0;
+  let frameCountStart = frameCount;
   return setInterval(() => {
     const now  = performance.now();
     const dt   = (now - mbpsSampleT) / 1000;  // seconds
     const dB   = byteCount  - byteCountStart;
     const dC   = chunkBytes - chunkBytesStart;
+    const dF   = frameCount - frameCountStart;
     const pktMbps   = dt > 0 ? (dB * 8 / 1e6) / dt : 0;
     const chunkMbps = dt > 0 ? (dC * 8 / 1e6) / dt : 0;
+    const dispFps   = dt > 0 ? dF / dt : 0;            // actual wall-clock rate of rendered frames
     setStat('statMbps', `${chunkMbps.toFixed(0)} in / ${pktMbps.toFixed(0)} parsed Mbps`);
+    setStat('statDispFps', dispFps.toFixed(1));
     mbpsSampleT     = now;
     byteCountStart  = byteCount;
     chunkBytesStart = chunkBytes;
+    frameCountStart = frameCount;
 
     setStat('statPackets', pktCount);
     setStat('statFrames',  frameCount);
@@ -692,11 +699,14 @@ function startStatsTicker() {
       setStat('statFps', fps.toFixed(1));
     }
     // Console diagnostic: one concise line per second so stalls are visible.
+    // dispFps is the actual rate of frames rendered per wall-clock second — the
+    // number to compare against the source fps (e.g. 29.97).  The "Decode FPS"
+    // big-number is the CPU-time ceiling (1000 / decode_ms).
     tickN++;
     const v = Module && Module.__variant ? Module.__variant.replace('libopen_htj2k_', '') : '?';
     console.log(
       `[rtp_demo t=${tickN}s build=${v}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
-      `pkts=${pktCount} frames=${frameCount} drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
+      `pkts=${pktCount} frames=${frameCount} disp=${dispFps.toFixed(1)} fps  drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
       `pending=${rtpSession?F.rtp_ready_count(rtpSession):0} lastDec=${lastDecodeMs.toFixed(0)}ms`);
   }, 1000);
 }
@@ -722,6 +732,7 @@ async function startPlayback(source) {
   frameCount = 0;
   lastDecodeTimes = [];
   lastDecodeMs = 0;
+  lastFramePacketTs = null;
 
   // Read resolution-reduce setting from UI.
   reduceNLMode = document.getElementById('reduce-nl').value;
@@ -779,6 +790,20 @@ async function startPlayback(source) {
       if (r === 1) {
         const ok = decodeAndRender();
         if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
+
+        // Log the RTP timestamp delta for the first few frames so we can
+        // verify the paced-mode clock assumption (90 kHz = RFC 3551 default
+        // for video PTs).  For 29.97 fps @ 90 kHz we expect delta = 3003.
+        // delta = 1501 would mean 180 kHz (would cause fast-motion).
+        // delta = 6006 would mean 45 kHz (would cause slow-motion).
+        if (frameCount <= 5 && ok) {
+          const d = lastFramePacketTs !== null
+              ? ((pkt.timestamp - lastFramePacketTs) >>> 0) : 0;
+          console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}` +
+                      (d ? `  Δts=${d} (${(d*1000/90000).toFixed(2)} ms @ 90 kHz)` : ''));
+          lastFramePacketTs = pkt.timestamp;
+        }
+
         // When r===1, the current packet is the one that completed the frame,
         // so its RTP timestamp equals the frame timestamp.
         if (ok && pacing === 'paced') {
