@@ -178,6 +178,17 @@
     <h1>HTJ2K RTP Replay — Browser WASM Demo</h1>
     <span id="simd_badge" class="simd-badge simd-detecting">Detecting SIMD…</span>
     <span id="mt_badge"   class="simd-badge simd-detecting">Detecting Threads…</span>
+    <!-- Build selector: changes ?variant=… in the URL and reloads.  Useful
+         for A/B testing mt_simd vs simd on the same machine/file. -->
+    <select id="variant-select" title="WASM build variant (reloads page on change)"
+            style="background: var(--bg); color: var(--text); border: 1px solid var(--border);
+                   border-radius: 4px; padding: 3px 8px; font-size: 12px; font-family: inherit;">
+      <option value="auto">Build: auto</option>
+      <option value="mt_simd">Build: mt_simd</option>
+      <option value="simd">Build: simd</option>
+      <option value="mt">Build: mt</option>
+      <option value="scalar">Build: scalar</option>
+    </select>
   </header>
 
   <div class="privacy-notice">
@@ -258,6 +269,7 @@
         <tr><td>Seq gaps</td>        <td><span id="statGaps">0</span></td></tr>
         <tr><td>Pending in WASM</td> <td><span id="statPending">0</span></td></tr>
         <tr><td>Last decode</td>     <td><span id="statLastDecode">—</span></td></tr>
+        <tr><td>Display FPS</td>     <td><span id="statDispFps">—</span></td></tr>
         <tr><td>Network rate</td>    <td><span id="statMbps">—</span></td></tr>
       </table>
       <div class="big-number">
@@ -283,15 +295,36 @@ function threadsSupported() {
   try { return typeof SharedArrayBuffer !== 'undefined'; } catch { return false; }
 }
 
-async function loadModule() {
-  const hasSimd = await wasmFeatureDetect.simd();
-  const hasMt   = threadsSupported();
-  const variant =
+// Allow forcing a specific WASM build via `?variant=…` in the URL.  Useful
+// for A/B-testing single-threaded SIMD vs multi-threaded SIMD on the same
+// machine/file.  Accepted values:
+//   auto      (default)   — best available based on browser capabilities
+//   mt_simd               — libopen_htj2k_mt_simd.js
+//   simd                  — libopen_htj2k_simd.js (forces single-threaded)
+//   mt                    — libopen_htj2k_mt.js (no SIMD)
+//   scalar    / generic   — libopen_htj2k.js
+function chooseVariant(hasSimd, hasMt) {
+  const q = new URLSearchParams(window.location.search).get('variant') || 'auto';
+  const fallback =
       (hasSimd && hasMt) ? 'libopen_htj2k_mt_simd'
     : hasSimd            ? 'libopen_htj2k_simd'
     : hasMt              ? 'libopen_htj2k_mt'
     :                      'libopen_htj2k';
-  console.log('loading', variant);
+  switch (q) {
+    case 'mt_simd':          return 'libopen_htj2k_mt_simd';
+    case 'simd':             return 'libopen_htj2k_simd';
+    case 'mt':               return 'libopen_htj2k_mt';
+    case 'scalar':
+    case 'generic':          return 'libopen_htj2k';
+    default:                 return fallback;
+  }
+}
+
+async function loadModule() {
+  const hasSimd = await wasmFeatureDetect.simd();
+  const hasMt   = threadsSupported();
+  const variant = chooseVariant(hasSimd, hasMt);
+  console.log('[rtp_demo] loading variant:', variant, '(hasSimd=' + hasSimd + ', hasMt=' + hasMt + ')');
   const mod = await import(`./${variant}.js`).catch(e => {
     console.warn('failed to load', variant, '— trying non-MT fallback');
     return import(`./${hasSimd ? 'libopen_htj2k_simd' : 'libopen_htj2k'}.js`);
@@ -299,6 +332,22 @@ async function loadModule() {
   const Module = await mod.default();
   Module.__variant = variant;
   return Module;
+}
+
+// Variant dropdown wiring: reflect current ?variant=… and reload on change.
+{
+  const sel = document.getElementById('variant-select');
+  const cur = new URLSearchParams(window.location.search).get('variant') || 'auto';
+  if (['auto','mt_simd','simd','mt','scalar','generic'].includes(cur)) {
+    sel.value = cur === 'generic' ? 'scalar' : cur;
+  }
+  sel.addEventListener('change', () => {
+    const params = new URLSearchParams(window.location.search);
+    if (sel.value === 'auto') params.delete('variant');
+    else params.set('variant', sel.value);
+    const qs = params.toString();
+    window.location.search = qs ? ('?' + qs) : '';
+  });
 }
 
 // Update SIMD / threads badges.
@@ -366,6 +415,7 @@ let frameCount = 0;
 let lastDecodeTimes = [];  // ms, ring of last N
 const FPS_WIN = 30;
 let lastDecodeMs = 0;
+let lastFramePacketTs = null;  // previous frame's RTP timestamp for Δts logging
 
 function setOverlay(text, mode = 'loading') {
   const ov = document.getElementById('canvas-overlay');
@@ -614,23 +664,40 @@ function sleep(ms) {
   return ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve();
 }
 
+// Fast macrotask yield via MessageChannel.  Chrome clamps nested
+// setTimeout(0) to 4 ms after ~5 levels of nesting; MessageChannel's
+// postMessage queues a macrotask with no minimum delay, so this is
+// the right primitive for "unblock the event loop briefly" in a hot
+// loop.  Used for the per-N-packet yield and the ASAP post-frame yield.
+const _yieldMC = new MessageChannel();
+const _yieldQ  = [];
+_yieldMC.port1.onmessage = () => { const r = _yieldQ.shift(); if (r) r(); };
+function fastYield() {
+  return new Promise(resolve => { _yieldQ.push(resolve); _yieldMC.port2.postMessage(0); });
+}
+
 // Stats tick (every 1 s)
 function startStatsTicker() {
   mbpsSampleT     = performance.now();
   byteCountStart  = byteCount;
   chunkBytesStart = chunkBytes;
   let tickN = 0;
+  let frameCountStart = frameCount;
   return setInterval(() => {
     const now  = performance.now();
     const dt   = (now - mbpsSampleT) / 1000;  // seconds
     const dB   = byteCount  - byteCountStart;
     const dC   = chunkBytes - chunkBytesStart;
+    const dF   = frameCount - frameCountStart;
     const pktMbps   = dt > 0 ? (dB * 8 / 1e6) / dt : 0;
     const chunkMbps = dt > 0 ? (dC * 8 / 1e6) / dt : 0;
+    const dispFps   = dt > 0 ? dF / dt : 0;            // actual wall-clock rate of rendered frames
     setStat('statMbps', `${chunkMbps.toFixed(0)} in / ${pktMbps.toFixed(0)} parsed Mbps`);
+    setStat('statDispFps', dispFps.toFixed(1));
     mbpsSampleT     = now;
     byteCountStart  = byteCount;
     chunkBytesStart = chunkBytes;
+    frameCountStart = frameCount;
 
     setStat('statPackets', pktCount);
     setStat('statFrames',  frameCount);
@@ -644,10 +711,14 @@ function startStatsTicker() {
       setStat('statFps', fps.toFixed(1));
     }
     // Console diagnostic: one concise line per second so stalls are visible.
+    // dispFps is the actual rate of frames rendered per wall-clock second — the
+    // number to compare against the source fps (e.g. 29.97).  The "Decode FPS"
+    // big-number is the CPU-time ceiling (1000 / decode_ms).
     tickN++;
+    const v = Module && Module.__variant ? Module.__variant.replace('libopen_htj2k_', '') : '?';
     console.log(
-      `[rtp_demo t=${tickN}s] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
-      `pkts=${pktCount} frames=${frameCount} drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
+      `[rtp_demo t=${tickN}s build=${v}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
+      `pkts=${pktCount} frames=${frameCount} disp=${dispFps.toFixed(1)} fps  drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
       `pending=${rtpSession?F.rtp_ready_count(rtpSession):0} lastDec=${lastDecodeMs.toFixed(0)}ms`);
   }, 1000);
 }
@@ -673,6 +744,7 @@ async function startPlayback(source) {
   frameCount = 0;
   lastDecodeTimes = [];
   lastDecodeMs = 0;
+  lastFramePacketTs = null;
 
   // Read resolution-reduce setting from UI.
   reduceNLMode = document.getElementById('reduce-nl').value;
@@ -720,7 +792,7 @@ async function startPlayback(source) {
       // user click events for long periods when decode can't keep up.  This
       // is critical for File.stream() sources where disk reads can sustain
       // hundreds of thousands of packets/sec.
-      if ((pktCount & 0xFF) === 0) await new Promise(r => setTimeout(r, 0));
+      if ((pktCount & 0xFF) === 0) await fastYield();
 
       const r = F.rtp_push(rtpSession, pktBuf, b.length);
       if (r < 0) {
@@ -730,6 +802,20 @@ async function startPlayback(source) {
       if (r === 1) {
         const ok = decodeAndRender();
         if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
+
+        // Log the RTP timestamp delta for the first few frames so we can
+        // verify the paced-mode clock assumption (90 kHz = RFC 3551 default
+        // for video PTs).  For 29.97 fps @ 90 kHz we expect delta = 3003.
+        // delta = 1501 would mean 180 kHz (would cause fast-motion).
+        // delta = 6006 would mean 45 kHz (would cause slow-motion).
+        if (frameCount <= 5 && ok) {
+          const d = lastFramePacketTs !== null
+              ? ((pkt.timestamp - lastFramePacketTs) >>> 0) : 0;
+          console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}` +
+                      (d ? `  Δts=${d} (${(d*1000/90000).toFixed(2)} ms @ 90 kHz)` : ''));
+          lastFramePacketTs = pkt.timestamp;
+        }
+
         // When r===1, the current packet is the one that completed the frame,
         // so its RTP timestamp equals the frame timestamp.
         if (ok && pacing === 'paced') {
@@ -744,7 +830,7 @@ async function startPlayback(source) {
           if (delayMs > 1) await sleep(delayMs);
         }
         // Pump microtasks so the UI stays responsive even in ASAP mode.
-        if (pacing === 'max') await new Promise(r => setTimeout(r, 0));
+        if (pacing === 'max') await fastYield();
       }
     }
   } catch (e) {
