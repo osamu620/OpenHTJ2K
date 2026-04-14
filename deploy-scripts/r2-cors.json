@@ -1,0 +1,18 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://htj2k-demo.pages.dev",
+      "http://localhost:8000",
+      "http://localhost:3000"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": [
+      "Content-Length",
+      "Content-Range",
+      "Accept-Ranges",
+      "ETag"
+    ],
+    "MaxAgeSeconds": 3600
+  }
+]
