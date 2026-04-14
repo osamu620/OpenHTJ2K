@@ -446,6 +446,10 @@
       <span id="statDrops">0</span>
     </div>
     <div class="stat-chip">
+      <label>Pace drops</label>
+      <span id="statDropsPace">0</span>
+    </div>
+    <div class="stat-chip">
       <label>Seq gaps</label>
       <span id="statGaps">0</span>
     </div>
@@ -609,6 +613,14 @@ let autoDecided   = false;  // have we measured the first frame?
 // YCbCr→RGB override.  'auto' uses RFC 9828 mat; explicit modes force a matrix.
 let ycbcrMode = 'auto';
 
+// Network-pacing frame drop: when wall-clock is past a frame's target by
+// more than 2 frame periods we skip decoding it and discard the WASM
+// reassembler's ready slot, keeping playback aligned with the RTP clock.
+// Active only in paced mode; disabled by ?nodrop=1 for diagnostics.
+const PACE_DROP_ENABLED = !(new URLSearchParams(location.search).has('nodrop'));
+let droppedByPace = 0;
+let framePeriodMs = 0;          // derived from inter-frame RTP Δts; 0 before second frame arrives
+
 // Has the one-shot per-playback diagnostic dump been printed?
 let firstFrameDiagnosticsDumped = false;
 
@@ -695,6 +707,7 @@ function setStat(id, v) {
       rtp_peek_size:         Module.cwrap('rtp_peek_frame_size', 'number', ['number']),
       rtp_ready_count:       Module.cwrap('rtp_ready_count',     'number', ['number']),
       rtp_pop:               Module.cwrap('rtp_pop_frame',       'number', ['number','number','number']),
+      rtp_drop_ready:        Module.cwrap('rtp_drop_ready',      'number', ['number']),
       rtp_pop_matrix:        Module.cwrap('rtp_pop_frame_matrix',  'number', ['number']),
       rtp_pop_range:         Module.cwrap('rtp_pop_frame_range',   'number', ['number']),
       rtp_pop_primaries:     Module.cwrap('rtp_pop_frame_primaries','number', ['number']),
@@ -1402,6 +1415,7 @@ function startStatsTicker() {
     setStat('statPackets', pktCount);
     setStat('statFrames',  frameCount);
     setStat('statDrops',   rtpSession ? F.rtp_drops(rtpSession) : 0);
+    setStat('statDropsPace', droppedByPace);
     setStat('statGaps',    rtpSession ? F.rtp_gaps(rtpSession) : 0);
     setStat('statPending', rtpSession ? F.rtp_ready_count(rtpSession) : 0);
     setStat('statLastDecode', lastDecodeMs ? lastDecodeMs.toFixed(0) + ' ms' : '—');
@@ -1420,7 +1434,7 @@ function startStatsTicker() {
       console.log(
         `[rtp_demo t=${tickN}s build=${v}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
         `pkts=${pktCount} frames=${frameCount} disp=${dispFps.toFixed(1)} fps  drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
-        `pending=${rtpSession?F.rtp_ready_count(rtpSession):0} lastDec=${lastDecodeMs.toFixed(0)}ms`);
+        `paceDrops=${droppedByPace} pending=${rtpSession?F.rtp_ready_count(rtpSession):0} lastDec=${lastDecodeMs.toFixed(0)}ms`);
     }
   }, 1000);
 }
@@ -1449,6 +1463,8 @@ async function startPlayback(source) {
   lastFramePacketTs = null;
   lastDecodedW = 0; lastDecodedH = 0;
   totalPausedMs = 0; pauseStartedAt = 0;
+  droppedByPace = 0;
+  framePeriodMs = 0;
 
   // Read resolution-reduce setting from UI.
   reduceNLMode = document.getElementById('reduce-nl').value;
@@ -1508,6 +1524,32 @@ async function startPlayback(source) {
         continue;
       }
       if (r === 1) {
+        // Track inter-frame Δts on every completed frame so the pace-drop
+        // threshold self-adapts to the source framerate.  Sanity-clamp to
+        // (0, 1 s) to ignore wrap-around or out-of-order timestamps.
+        if (lastFramePacketTs !== null) {
+          const d = (pkt.timestamp - lastFramePacketTs) >>> 0;
+          if (d > 0 && d < 90000) framePeriodMs = d * (1000 / 90000);
+        }
+        lastFramePacketTs = pkt.timestamp;
+
+        // Network-pacing frame drop.  If the completed frame's target wall
+        // time is already in the past by more than 2 frame periods, skip
+        // decoding: pop the reassembled bitstream out of the ready slot
+        // without copying, and continue pulling packets.  wallStart===0 on
+        // the very first completed frame — never drop it, since the clock
+        // anchors are set *after* its decode below.
+        if (PACE_DROP_ENABLED && pacing === 'paced' && wallStart !== 0) {
+          const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
+          const target  = wallStart + totalPausedMs + dtMs;
+          const period  = framePeriodMs || (1000 / 60);   // 16.7 ms fallback
+          if (performance.now() - target > 2 * period) {
+            F.rtp_drop_ready(rtpSession);
+            droppedByPace++;
+            continue;
+          }
+        }
+
         const ok = decodeAndRender();
         if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
 
@@ -1515,11 +1557,8 @@ async function startPlayback(source) {
         // verify the paced-mode clock assumption (90 kHz = RFC 3551 default).
         // Only emitted with ?verbose=1.
         if (verboseLog && frameCount <= 5 && ok) {
-          const d = lastFramePacketTs !== null
-              ? ((pkt.timestamp - lastFramePacketTs) >>> 0) : 0;
-          console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}` +
-                      (d ? `  Δts=${d} (${(d*1000/90000).toFixed(2)} ms @ 90 kHz)` : ''));
-          lastFramePacketTs = pkt.timestamp;
+          const d = framePeriodMs ? framePeriodMs.toFixed(2) : '—';
+          console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}  Δt=${d} ms`);
         }
 
         // When r===1, the current packet is the one that completed the frame,
