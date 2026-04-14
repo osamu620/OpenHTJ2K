@@ -251,7 +251,7 @@
   </footer>
 
 <script type="module">
-import { parseRtpStream } from './src/rtp_parser.js';
+import { parseRtpStream } from './rtp_parser.js';
 
 // ──────────────────────────────────────────────────────────────────────────
 // WASM module loading: prefer mt_simd > simd > mt > scalar, matching index.html.
@@ -269,9 +269,9 @@ async function loadModule() {
     : hasMt              ? 'libopen_htj2k_mt'
     :                      'libopen_htj2k';
   console.log('loading', variant);
-  const mod = await import(`./build/html/${variant}.js`).catch(e => {
+  const mod = await import(`./${variant}.js`).catch(e => {
     console.warn('failed to load', variant, '— trying non-MT fallback');
-    return import(`./build/html/${hasSimd ? 'libopen_htj2k_simd' : 'libopen_htj2k'}.js`);
+    return import(`./${hasSimd ? 'libopen_htj2k_simd' : 'libopen_htj2k'}.js`);
   });
   const Module = await mod.default();
   Module.__variant = variant;
