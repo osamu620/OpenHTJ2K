@@ -10,7 +10,5 @@ name = "htj2k-demo"
 compatibility_date = "2026-01-01"
 pages_build_output_dir = "./deploy"
 
-# R2 bucket the /samples/* Pages Function reads from.
-[[r2_buckets]]
-binding     = "SAMPLES_BUCKET"
-bucket_name = "htj2k-samples"
+# No bindings needed — functions/samples/[[path]].js proxies r2.dev
+# via plain fetch() to avoid the dashboard binding step.

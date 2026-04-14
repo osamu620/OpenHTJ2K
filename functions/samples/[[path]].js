@@ -1,81 +1,58 @@
-// Pages Function that streams files out of the bound R2 bucket.
+// Pages Function that proxies /samples/* to the R2 bucket's public r2.dev
+// URL.  Same origin as the rest of htj2k-demo.pages.dev from the browser's
+// perspective, so the demo's fetch() works without CORS complications.
 //
-// Routes every request under /samples/* to the R2 object with the same key.
-// Same-origin with the rest of htj2k-demo.pages.dev, so no CORS is needed
-// — the demo's fetch() doesn't trigger a preflight and the page's existing
-// COOP/COEP headers apply.
+// We use fetch() over HTTPS (not an R2 binding) specifically because Pages
+// bindings have to be configured in the dashboard, and that UI has shifted
+// enough across 2025-2026 that it's hard to find.  fetch() of r2.dev is
+// slightly slower than a direct R2 binding (one extra Cloudflare internal
+// hop) but avoids the dashboard step entirely, which is the simpler
+// tradeoff for a public demo.
 //
-// Handles HTTP range requests so the demo's Blob.stream()-style consumer
-// can apply backpressure without downloading the whole file up front.
+// Both the client→Pages and Pages→r2.dev legs stay on Cloudflare's edge,
+// so the total path is still much faster than S3 direct from outside the
+// US West Coast.
 //
-// R2 binding required (set in the Pages project's Settings → Functions →
-// R2 Bucket Bindings):
-//   Variable name: SAMPLES_BUCKET
-//   R2 bucket:     htj2k-samples
-//
-// Public access on the r2.dev subdomain is NOT required with this setup —
-// the Function is bound directly to the bucket.  You can revoke r2.dev
-// public access after this is deployed for tighter security.
+// Range requests: the client's Range header is forwarded to r2.dev verbatim,
+// and r2.dev's 206 Partial Content response is passed back through.  This
+// keeps Blob.stream() / fetch-body backpressure working end-to-end.
+
+const R2_PUBLIC_URL =
+  'https://pub-21f3cc3ea54a4a65b2d083c2139002d6.r2.dev';
 
 export async function onRequestGet(context) {
-  const { request, env, params } = context;
+  const { request, params } = context;
 
-  // [[path]] matches one or more path segments; normalise to the R2 object key.
   const key = Array.isArray(params.path) ? params.path.join('/') : String(params.path);
+  const upstream = `${R2_PUBLIC_URL}/${key}`;
 
-  // Forward the client's Range header (if any) to R2 so we get a partial object.
-  const range = parseRange(request.headers.get('range'));
+  // Forward Range (if any).  Don't forward the browser's own headers
+  // wholesale — r2.dev doesn't need Cookie/Accept-Language/etc., and
+  // stripping them lets Cloudflare cache the upstream response more
+  // aggressively across all visitors.
+  const upstreamHeaders = new Headers();
+  const range = request.headers.get('range');
+  if (range) upstreamHeaders.set('range', range);
 
-  const object = await env.SAMPLES_BUCKET.get(key, range ? { range } : undefined);
-  if (!object) {
-    return new Response('Not Found: ' + key, { status: 404 });
-  }
+  const upstreamRes = await fetch(upstream, {
+    method:  'GET',
+    headers: upstreamHeaders,
+    // The Cloudflare fetch() implementation honors these hints; defaults are fine.
+    cf: { cacheEverything: true, cacheTtl: 86400 },
+  });
 
-  const headers = new Headers();
-  // Writes Content-Type, Content-Language, Content-Disposition, Content-Encoding,
-  // Cache-Control, and Content-Length from the R2 object's httpMetadata.
-  object.writeHttpMetadata(headers);
-  headers.set('etag', object.httpEtag);
+  // Copy response headers, then overwrite with our CORS / cache / ranges.
+  // We explicitly set Access-Control-Allow-Origin so same-origin works even
+  // if the request is ever hit cross-origin (e.g. from a future subdomain
+  // demo page).  The page's own COOP/COEP come from _headers.
+  const headers = new Headers(upstreamRes.headers);
+  headers.set('access-control-allow-origin', '*');
   headers.set('accept-ranges', 'bytes');
-  // Aggressive cache hint — these .rtp files are immutable test clips.
   headers.set('cache-control', 'public, max-age=86400, immutable');
 
-  let status = 200;
-  if (object.range) {
-    const { offset, length } = object.range;
-    headers.set(
-      'content-range',
-      `bytes ${offset}-${offset + length - 1}/${object.size}`
-    );
-    status = 206;
-  }
-
-  return new Response(object.body, { status, headers });
-}
-
-// Minimal RFC 7233 Range parser.  Handles `bytes=NNN-MMM`, `bytes=NNN-`,
-// and `bytes=-NNN` (suffix).  Multi-range requests aren't supported (R2 only
-// accepts a single range per call; the browser's fetch() / Blob.stream()
-// path always emits a single contiguous range so this is fine in practice).
-function parseRange(header) {
-  if (!header || !header.toLowerCase().startsWith('bytes=')) return null;
-  const spec = header.slice(6).split(',')[0].trim();
-  const dash = spec.indexOf('-');
-  if (dash < 0) return null;
-  const startStr = spec.slice(0, dash);
-  const endStr   = spec.slice(dash + 1);
-  if (!startStr && endStr) {
-    // bytes=-N (last N bytes)
-    const n = parseInt(endStr, 10);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    return { suffix: n };
-  }
-  const start = parseInt(startStr, 10);
-  if (!Number.isFinite(start) || start < 0) return null;
-  if (!endStr) {
-    return { offset: start };
-  }
-  const end = parseInt(endStr, 10);
-  if (!Number.isFinite(end) || end < start) return null;
-  return { offset: start, length: end - start + 1 };
+  return new Response(upstreamRes.body, {
+    status:     upstreamRes.status,   // preserves 200 / 206 / 404
+    statusText: upstreamRes.statusText,
+    headers,
+  });
 }
