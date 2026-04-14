@@ -1,3 +1,160 @@
+# [0.14.0] - 2026-04-14
+
+## Browser-side HTJ2K video playback
+
+Turns the existing still-image WASM build into a full browser video
+player for RFC 9828 `.rtp` recordings, with multi-threaded WASM,
+WebGL2 GPU rendering, Display-P3 on supported hardware, and
+automated deployment to Cloudflare Pages.  The existing still-image
+`index.html` demo is unchanged in behavior but gets the new layout
+polish (tab navigation, iOS text-size fix).
+
+### Multi-threaded WASM
+
+* New targets `libopen_htj2k_mt.js` (scalar + pthreads) and
+  `libopen_htj2k_mt_simd.js` (SIMD + pthreads) in
+  `subprojects/CMakeLists.txt`.  Thread pool size defaults to
+  `navigator.hardwareConcurrency || 4`.  Requires
+  Cross-Origin-Opener-Policy + Cross-Origin-Embedder-Policy headers
+  (served by Cloudflare Pages via `_headers`; a service worker
+  `coi-serviceworker.js` is shipped as a fallback for local / file://
+  access).
+* `subprojects/CMakeLists.txt` switched from `emmalloc` to `dlmalloc`
+  for all four variants.  emmalloc had a small-allocation corruption
+  bug that crashed `std::vector` destruction inside the RTP
+  reassembly pipeline.
+* `subprojects/src/wrapper.cpp` adds a new `create_decoder_mt(data,
+  size, reduce_NL, num_threads)` entry point (passing `0` picks
+  `navigator.hardwareConcurrency`) and a `get_hardware_concurrency()`
+  helper.
+* `subprojects/open_htj2k_dec.mjs` (Node CLI) gains a `-num_threads`
+  / `-t` flag; with it set to anything but 1, prefers the multi-
+  threaded builds.  Also fixes a regex ordering bug so the pthreads
+  JS glue can be loaded inside `new Function()` (needed because the
+  bottom of the generated module has an `await import(...)` for
+  worker bootstrap that we don't need on the main thread).
+
+### Browser RTP replay demo (`rtp_demo.html`)
+
+* New page that fetches an RFC 9828 `.rtp` file (Spark fixture
+  format — `[0xFFFF][length][RTP]...`) from a URL, local file, or
+  preset dropdown; reassembles into JPEG 2000 codestreams via a
+  WASM-side `RtpSession`; decodes each frame and paints to canvas.
+* Ports `source/apps/rtp_recv/rfc9828_parser.cpp` and `frame_handler.cpp`
+  into the WASM build as four per-flag-set OBJECT libraries
+  (`rtp_reassembly_{,simd_,mt_,mt_simd_}objs`).  One per wrapper
+  variant because mismatched `-msimd128` / `-pthread` flags produce
+  different libc++ layouts and crash inside `std::deque::pop_front`
+  destruction.
+* New C API in `wrapper.cpp`: `rtp_session_create/destroy/reset`,
+  `rtp_push_packet`, `rtp_peek_frame_size`, `rtp_pop_frame`,
+  `rtp_pop_frame_{matrix,range,primaries,transfer,timestamp}`,
+  and stats getters (`rtp_frames_emitted`, `rtp_frames_dropped`,
+  `rtp_seq_gaps`, `rtp_packets_received`, `rtp_last_error`).
+* Parser in `subprojects/rtp_parser.js`: async generator with a
+  growable rolling buffer (amortised O(N)), try/finally cleanup
+  that cancels the underlying `ReadableStream` on exit so
+  `Blob.stream()` / `fetch` resources don't leak across
+  play→stop→play cycles.
+* Auto-selects BT.601 or BT.709 based on RFC 9828
+  `MatrixCoefficients`; falls back to BT.709 for unknown values and
+  honors a user-selectable override dropdown.
+* Auto-reduce: a 4K input stream downshifts to `reduce_NL=1` after
+  the first frame so typical displays get a smooth 2K decode.
+
+### WebGL2 renderer
+
+* Replaces the Canvas 2D `createImageData` + `putImageData` path
+  with a WebGL2 renderer.  Two render programs compiled up front:
+  * Packed path: takes `invoke_decoder_to_rgba` output as an RGBA8
+    texture; fragment shader applies the YCbCr→RGB matrix on GPU
+    (skips `apply_ycbcr_bt601/709_to_rgba` CPU pass).  Coefficients
+    derived from the same `/16384` fixed-point values as the CPU
+    path for bit-parity within ±1/255.
+  * Planar path: three `R8` textures at native per-component sizes
+    (Y at luma size, Cb/Cr at chroma size), shader samples three
+    textures.  Cb/Cr use `LINEAR` filter → hardware bilinear chroma
+    upsampling for free.  Upload bandwidth ~50% lower for 4:2:2 and
+    ~75% lower for 4:2:0 compared to the packed path.  New WASM
+    export `invoke_decoder_planar_u8(dec, y_buf, cb_buf, cr_buf)`
+    with per-component signedness (the packed path uses
+    `is_signed[0]` for all three — a latent bug for typical Y-
+    unsigned + Cb/Cr-signed streams).
+* Display-P3 colorspace: sets `gl.drawingBufferColorSpace =
+  'display-p3'` when the OS+browser+display all support it;
+  `Canvas2DRenderer` uses the matching `{ colorSpace: 'display-p3'
+  }` option on `getContext` and `createImageData`.
+* Context-loss handlers re-compile the programs and re-create the
+  VAO + textures on `webglcontextrestored`.
+* URL parameter `?renderer=auto|webgl|2d` + dropdown in the header
+  for A/B testing.
+
+### Video-player UI
+
+* Full-width canvas with `aspect-ratio` set dynamically from the
+  first frame's full-resolution dimensions — no scrollbars, no
+  fixed height cap, letterboxes/pillarboxes when the canvas doesn't
+  match the container.
+* Stats move from a right-side table into a horizontal chip strip
+  below the video.  Display FPS is the primary chip with accent
+  color.  Show/Hide toggle above the strip.
+* **Fullscreen** button (`⛶`), double-click-video, and keyboard
+  shortcut all toggle native fullscreen on the canvas wrapper only
+  (not the whole page).  Display FPS HUD appears in the top-right
+  corner with a transparent background (text-shadow outline for
+  readability), visible only while in fullscreen.
+* **Click-to-pause** on the video (single click, with a 220 ms
+  window to disambiguate from double-click fullscreen).
+* **Spacebar** toggles pause/resume; suppressed when focus is in
+  an `INPUT`/`SELECT`/`TEXTAREA`/contenteditable so URL typing
+  still works.
+* **Tab navigation** between `index.html` and `rtp_demo.html` via a
+  two-tab bar below the site header; active tab highlighted with
+  accent color.
+* iOS text-size-adjust fix (`text-size-adjust: 100%`) so the
+  progressive-resolution cells in `index.html` and the stats strip
+  in `rtp_demo.html` don't inflate on iOS Safari / iOS Edge.
+
+### Paced-mode pause compensation
+
+* Previously, pausing for N seconds left paced mode's wall-clock
+  target N seconds behind the RTP timeline, so on resume the
+  decoder ran flat-out until the two timelines re-converged —
+  visible as a multi-second fast-forward sprint.  `setPaused` now
+  accumulates pause durations into a module-level `totalPausedMs`
+  that is added to the paced target, making resume seamless.
+
+### Performance
+
+* Replaced `setTimeout(0)` event-loop yields with
+  `MessageChannel.postMessage` (no 4 ms clamp under nesting), which
+  was costing ~32 ms/frame on 1080p content — enough for ASAP
+  playback to be visibly slower than paced playback under load.
+* Diagnostic infrastructure opt-in behind `?verbose=1`:  once-per-
+  second console log with input-bytes, parsed-bytes, decode-time,
+  drops, pending-queue depth, display FPS; first-frame dump of
+  per-component sizes, signedness, depth, and RFC 9828 metadata.
+
+### Automated deployment (Cloudflare Pages)
+
+* New GitHub Actions workflow
+  `.github/workflows/deploy-wasm-demo.yml`:  runs on push to `main`
+  or `feat/wasm-rtp-demo` (or manual dispatch), installs Emscripten
+  via `mymindstorm/setup-emsdk@v14` with `actions-cache-folder:
+  emsdk-cache`, builds all four variants, stages a deploy directory
+  (HTML pages, JS glue, WASM, sample codestreams, `coi-serviceworker`,
+  `_headers` file with COOP/COEP), and uploads to Cloudflare Pages
+  via `cloudflare/pages-action@v1`.
+* `conformance_data/` gains the four `.j2c` samples the still-image
+  demo's preset dropdown referenced (`kodim23_mono`, `u04_small`,
+  `u10_part1_lossless`, `u10_part15_lossless`) so the deployed
+  site's dropdown works end-to-end.
+
+Both encoder and decoder are unchanged at the native / Part 1 / HT
+coding level — this release is a rendering / transport / deployment
+milestone, not an algorithmic one.  All 582 conformance tests still
+pass.
+
 # [0.13.2] - 2026-04-13
 
 ## Performance — 4K @ 60 fps on Apple Silicon (RTP receiver)

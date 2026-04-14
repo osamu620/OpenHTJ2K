@@ -56,11 +56,14 @@ on platform.
 
 Requires [Emscripten](https://emscripten.org/) (tested with 3.x / 5.x).
 
-Two variants are produced under `subprojects/build/html/`:
+Four variants are produced under `subprojects/build/html/`:
 
-- `libopen_htj2k.js` — scalar build
-- `libopen_htj2k_simd.js` — WASM SIMD 128-bit build (recommended for
-  modern browsers)
+- `libopen_htj2k.js`           — scalar, single-threaded
+- `libopen_htj2k_simd.js`      — WASM-SIMD 128-bit, single-threaded
+  (recommended for most browsers)
+- `libopen_htj2k_mt.js`        — scalar + pthreads (multi-threaded)
+- `libopen_htj2k_mt_simd.js`   — WASM-SIMD + pthreads (fastest where
+  available)
 
 ```bash
 cd subprojects
@@ -69,7 +72,30 @@ emcmake cmake ..
 cmake --build . -j
 ```
 
-A live demo is available at **https://htj2k-demo.pages.dev/**.
+The multi-threaded variants use Emscripten's pthreads, which require
+the page to be **cross-origin isolated** (responses carry both
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` — or `credentialless`).
+When served from a static host that can set headers (e.g. Cloudflare
+Pages via a `_headers` file), this works on first load.  For local
+development or `file://` access, the bundled `coi-serviceworker.js`
+installs the headers via a service worker.
+
+A live demo is available at **https://htj2k-demo.pages.dev/**.  It
+hosts two pages:
+
+- `index.html` — still-image decoder (preset dropdown + file upload,
+  progressive-resolution grid).
+- `rtp_demo.html` — RFC 9828 `.rtp` file replay (WebGL2 GPU renderer,
+  YCbCr→RGB in fragment shader, planar Y/Cb/Cr textures, Display-P3
+  on supported hardware).  URL parameters `?variant=mt_simd|simd|mt|
+  scalar` and `?renderer=auto|webgl|2d` force a specific build /
+  renderer for A/B testing.  `?verbose=1` enables per-second console
+  diagnostics.
+
+A GitHub Actions workflow (`.github/workflows/deploy-wasm-demo.yml`)
+rebuilds all four variants and publishes the demo site on every
+push to `main` or `feat/wasm-rtp-demo`.
 
 ### Node.js CLI decoder (`open_htj2k_dec.mjs`)
 
@@ -83,14 +109,17 @@ target machine.
 **Usage:**
 ```bash
 cd subprojects
-node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> [-r <reduce_NL>]
+node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> \
+     [-r <reduce_NL>] [-num_threads <N>] [-ycbcr bt601|bt709]
 ```
 
 | Option | Description |
 |--------|-------------|
-| `-i`, `--input`  | Input codestream (`.j2c`, `.j2k`, `.jph`) |
-| `-o`, `--output` | Output image (`.ppm` for RGB, `.pgm` for grayscale) |
-| `-r`, `--reduce` | Resolution reduction: skip `n` DWT levels (`0` = full resolution) |
+| `-i`, `--input`     | Input codestream (`.j2c`, `.j2k`, `.jph`) |
+| `-o`, `--output`    | Output image (`.ppm` for RGB, `.pgm` for grayscale, `.pgx` for per-component raw) |
+| `-r`, `--reduce`    | Resolution reduction: skip `n` DWT levels (`0` = full resolution) |
+| `-num_threads`, `-t` | Number of decode threads (`0` = auto-detect, `1` = single-threaded).  Selects the multi-threaded WASM build when `> 1` or `= 0`. |
+| `-ycbcr`            | YCbCr→RGB conversion for PPM output: `bt601` or `bt709` (auto-detected from JPH `EnumCS` otherwise). |
 
 **Examples:**
 ```bash
