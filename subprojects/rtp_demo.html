@@ -162,6 +162,31 @@
     }
     .canvas-overlay.error .overlay-spinner { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    /* Display-FPS HUD — transparent background; text shadow keeps it
+       readable against any luminance.  Stays in the corner in fullscreen
+       too because it's a child of .canvas-wrap. */
+    .fps-hud {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      z-index: 2;
+      pointer-events: none;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+      /* Multi-layer text-shadow acts as a soft outline that works over
+         both bright and dark backgrounds without needing a solid box. */
+      text-shadow:
+        0 0 2px rgba(0, 0, 0, 0.9),
+        0 1px 4px rgba(0, 0, 0, 0.8),
+        0 0 8px rgba(0, 0, 0, 0.5);
+    }
+    .canvas-wrap:fullscreen .fps-hud {
+      top: 16px; right: 20px;
+      font-size: 16px;   /* scale up slightly in fullscreen */
+    }
     /* Paused indicator: overlay a faint ▶ glyph when paused. */
     .canvas-wrap.paused::after {
       content: "▶";
@@ -344,6 +369,9 @@
   <section class="viewer-section" id="viewer-section">
     <div class="canvas-wrap" id="canvas-wrap" title="Click / Space to pause">
       <canvas id="mycanvas" width="640" height="360"></canvas>
+      <!-- Always-visible Display-FPS HUD — stays over the video in both
+           windowed and fullscreen modes because it lives inside .canvas-wrap. -->
+      <div class="fps-hud" id="fps-hud" title="Display FPS (wall-clock)">— fps</div>
       <div class="canvas-overlay loading" id="canvas-overlay">
         <div class="overlay-spinner"></div>
         <span id="overlay-text">Loading WASM decoder…</span>
@@ -1318,6 +1346,9 @@ function startStatsTicker() {
     const dispFps   = dt > 0 ? dF / dt : 0;            // actual wall-clock rate of rendered frames
     setStat('statMbps', `${chunkMbps.toFixed(0)} in / ${pktMbps.toFixed(0)} parsed Mbps`);
     setStat('statDispFps', dispFps.toFixed(1));
+    // HUD mirrors the display-fps chip; always visible, no background.
+    const hud = document.getElementById('fps-hud');
+    if (hud) hud.textContent = `${dispFps.toFixed(1)} fps`;
     mbpsSampleT     = now;
     byteCountStart  = byteCount;
     chunkBytesStart = chunkBytes;
