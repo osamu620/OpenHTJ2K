@@ -311,6 +311,65 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
     width, height, depth, is_signed);
 }
 
+// invoke_decoder_planar_u8: streaming decode that writes Y/Cb/Cr to three
+// caller-provided uint8 buffers at NATIVE per-component sizes (no chroma
+// upsampling, no packing into RGBA).  Designed for the WebGL renderer to
+// upload three R8 textures and let the GPU do bilinear chroma upsampling
+// for free.
+//
+// Per-component buffer sizes (caller allocates):
+//   y_buf  : get_width(0) * get_height(0)   bytes
+//   cb_buf : get_width(1) * get_height(1)   bytes  (NC>=2)
+//   cr_buf : get_width(2) * get_height(2)   bytes  (NC>=3)
+//
+// For 4:2:0 chroma (chroma height < luma height), the line-based callback
+// fires once per LUMA row, so the chroma rows would be re-decoded twice.
+// We dedup by tracking the last chroma row index written per component.
+//
+// Per-component depth + signedness are honored individually here (the packed
+// invoke_decoder_to_rgba shares is_signed[0] across all three; for typical
+// JPEG 2000 YCbCr where Y is unsigned and Cb/Cr are signed, that's wrong —
+// this planar variant does it right).
+EMSCRIPTEN_KEEPALIVE
+void invoke_decoder_planar_u8(open_htj2k::openhtj2k_decoder* dec,
+                              uint8_t* y_buf, uint8_t* cb_buf, uint8_t* cr_buf) {
+  std::vector<uint32_t> width, height;
+  std::vector<uint8_t>  depth;
+  std::vector<bool>     is_signed;
+  uint8_t* bufs[3] = { y_buf, cb_buf, cr_buf };
+  int32_t last_chroma_y[3] = { -1, -1, -1 };
+
+  dec->invoke_line_based_stream(
+    [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+      const uint16_t cmax = nc < 3 ? nc : 3;
+      for (uint16_t c = 0; c < cmax; ++c) {
+        // Map luma row to per-component row.  For c==0 this is identity.
+        // For 4:2:0 chroma (height[c] < height[0]) two consecutive luma rows
+        // map to the same chroma row — write only on the first to save the
+        // copy.  For 4:2:2 / 4:4:4, chroma height == luma height so every
+        // row is a fresh write.
+        const uint32_t cy = (y * height[c]) / height[0];
+        if (static_cast<int32_t>(cy) == last_chroma_y[c]) continue;
+        last_chroma_y[c] = cy;
+
+        const uint8_t  d        = depth[c];
+        const int32_t  down_sh  = (d >= 8) ? (d - 8) : 0;
+        const int32_t  up_sh    = (d < 8)  ? (8 - d) : 0;
+        const int32_t  half     = (d > 8)  ? (1 << (down_sh - 1)) : 0;
+        const int32_t  offset   = is_signed[c] ? (1 << (d - 1)) : 0;
+        const int32_t  bias     = half + offset;
+        const uint32_t W        = width[c];
+        uint8_t* __restrict__ dst = bufs[c] + (size_t)cy * W;
+        for (uint32_t x = 0; x < W; ++x) {
+          int32_t v = ((rows[c][x] + bias) >> down_sh) << up_sh;
+          if (v < 0) v = 0; else if (v > 255) v = 255;
+          dst[x] = static_cast<uint8_t>(v);
+        }
+      }
+    },
+    width, height, depth, is_signed);
+}
+
 // invoke_decoder_stream: decode using invoke_line_based_stream() so that the
 // internal planar tile buffers and the full W×H×C int32 output buffer are
 // never simultaneously live.  Rows are interleaved and packed directly into
