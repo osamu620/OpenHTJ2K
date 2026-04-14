@@ -42,6 +42,16 @@ jobs:
           cp subprojects/rtp_demo.html                  deploy/
           cp subprojects/rtp_parser.js                  deploy/
           cp subprojects/coi-serviceworker.js           deploy/
+          # Sample codestreams referenced by index.html's preset dropdown.
+          # Only the files the UI actually lists are copied — adjust this
+          # list if you add/remove presets.
+          for f in \
+              ds0_ht_03_b14.j2k ds0_ht_04_b12.j2k ds0_ht_07_b16.j2k \
+              ds1_ht_04_b9.j2k  ds1_ht_05_b11.j2k hifi_ht1_02.j2k \
+              kodim23_mono.j2c  u04_small.j2c \
+              u10_part1_lossless.j2c u10_part15_lossless.j2c; do
+            cp "conformance_data/$f" deploy/
+          done
           # Cloudflare Pages _headers file: sets the cross-origin isolation
           # headers required for SharedArrayBuffer (multi-threaded WASM).
           # Obsoletes the coi-serviceworker hack for users hitting the
@@ -60,6 +70,6 @@ jobs:
         with:
           apiToken:    ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId:   ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: openhtj2k-demo
+          projectName: htj2k-demo
           directory:   deploy
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
