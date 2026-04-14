@@ -12,7 +12,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 set(WASM_FLAGS_COMMON "\
     -O3 -flto -mnontrapping-fptoint -mbulk-memory -s WASM=1 -s EXPORT_ES6=1 -s MODULARIZE=1 -s ENVIRONMENT=web,node \
     -s EXPORTED_FUNCTIONS=[_free,_malloc] \
-    -s MALLOC=emmalloc \
+    -s MALLOC=dlmalloc \
     -s FILESYSTEM=0 \
     -s EXPORTED_RUNTIME_METHODS=[ccall,cwrap,writeArrayToMemory,getValue,HEAP32,HEAPU8] \
     -s NO_EXIT_RUNTIME=1 \
@@ -34,7 +34,6 @@ set(WASM_MT_FLAGS "\
     -s USE_PTHREADS=1 \
     -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency||4 \
     -s SHARED_MEMORY=1 \
-    -s MALLOC=dlmalloc \
     "
 )
 # Pull in the open_htj2k library (compiled without SIMD or pthread flags → scalar single-threaded build).
@@ -48,9 +47,48 @@ get_target_property(_COMP_DEFS open_htj2k COMPILE_DEFINITIONS)
 get_target_property(_COMP_OPTS open_htj2k COMPILE_OPTIONS)
 get_target_property(_IFACE_INC open_htj2k INTERFACE_INCLUDE_DIRECTORIES)
 
+# ── RTP reassembly OBJECT libraries ──────────────────────────────────────────
+# Pure-C++ frame_handler + RFC 9828 packet parser, ported as-is from the
+# native open_htj2k_rtp_recv app.  No OS dependencies (no sockets, no threads).
+#
+# We build ONE OBJECT library per wrapper-flag set so the flags match the
+# wrapper.cpp compile flags exactly — otherwise std::vector / std::deque
+# layouts compiled with different flag sets can mismatch (seen as a crash
+# inside pop_front() destructor), because libc++'s hardening macros differ
+# between -msimd128 / -pthread builds.
+set(_RTP_RECV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../source/apps/rtp_recv")
+set(_RTP_SRCS
+    ${_RTP_RECV_DIR}/rfc9828_parser.cpp
+    ${_RTP_RECV_DIR}/frame_handler.cpp)
+
+# Scalar (no SIMD, no pthreads)
+add_library(rtp_reassembly_objs OBJECT ${_RTP_SRCS})
+target_include_directories(rtp_reassembly_objs PUBLIC ${_RTP_RECV_DIR})
+target_compile_options(rtp_reassembly_objs PRIVATE
+    "-O3" "-flto" "-mnontrapping-fptoint" "-mbulk-memory")
+
+# SIMD
+add_library(rtp_reassembly_simd_objs OBJECT ${_RTP_SRCS})
+target_include_directories(rtp_reassembly_simd_objs PUBLIC ${_RTP_RECV_DIR})
+target_compile_options(rtp_reassembly_simd_objs PRIVATE
+    "-O3" "-flto" "-msimd128" "-mnontrapping-fptoint" "-mbulk-memory")
+
+# Pthreads (no SIMD)
+add_library(rtp_reassembly_mt_objs OBJECT ${_RTP_SRCS})
+target_include_directories(rtp_reassembly_mt_objs PUBLIC ${_RTP_RECV_DIR})
+target_compile_options(rtp_reassembly_mt_objs PRIVATE
+    "-O3" "-flto" "-mnontrapping-fptoint" "-mbulk-memory" "-pthread")
+
+# Pthreads + SIMD
+add_library(rtp_reassembly_mt_simd_objs OBJECT ${_RTP_SRCS})
+target_include_directories(rtp_reassembly_mt_simd_objs PUBLIC ${_RTP_RECV_DIR})
+target_compile_options(rtp_reassembly_mt_simd_objs PRIVATE
+    "-O3" "-flto" "-msimd128" "-mnontrapping-fptoint" "-mbulk-memory" "-pthread")
+
 # ── Scalar (non-SIMD) wrapper ────────────────────────────────────────────────
 # open_htj2k is already compiled without any SIMD flags; link it directly.
-add_executable(libopen_htj2k "src/wrapper.cpp")
+add_executable(libopen_htj2k "src/wrapper.cpp" $<TARGET_OBJECTS:rtp_reassembly_objs>)
+target_include_directories(libopen_htj2k PRIVATE ${_RTP_RECV_DIR})
 set_target_properties(libopen_htj2k PROPERTIES COMPILE_FLAGS "-O3 -flto -mnontrapping-fptoint -mbulk-memory")
 set_target_properties(libopen_htj2k PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k PRIVATE open_htj2k)
@@ -74,7 +112,8 @@ if(_IFACE_INC)
   target_include_directories(open_htj2k_simd_lib INTERFACE ${_IFACE_INC})
 endif()
 
-add_executable(libopen_htj2k_simd "src/wrapper.cpp")
+add_executable(libopen_htj2k_simd "src/wrapper.cpp" $<TARGET_OBJECTS:rtp_reassembly_simd_objs>)
+target_include_directories(libopen_htj2k_simd PRIVATE ${_RTP_RECV_DIR})
 set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory")
 set_target_properties(libopen_htj2k_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k_simd PRIVATE open_htj2k_simd_lib)
@@ -103,7 +142,8 @@ if(_IFACE_INC)
   target_include_directories(open_htj2k_mt_lib INTERFACE ${_IFACE_INC})
 endif()
 
-add_executable(libopen_htj2k_mt "src/wrapper.cpp")
+add_executable(libopen_htj2k_mt "src/wrapper.cpp" $<TARGET_OBJECTS:rtp_reassembly_mt_objs>)
+target_include_directories(libopen_htj2k_mt PRIVATE ${_RTP_RECV_DIR})
 target_compile_definitions(libopen_htj2k_mt PRIVATE "OPENHTJ2K_THREAD")
 set_target_properties(libopen_htj2k_mt PROPERTIES COMPILE_FLAGS "-O3 -flto -mnontrapping-fptoint -mbulk-memory -pthread")
 set_target_properties(libopen_htj2k_mt PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_MT_FLAGS})
@@ -126,7 +166,8 @@ if(_IFACE_INC)
   target_include_directories(open_htj2k_mt_simd_lib INTERFACE ${_IFACE_INC})
 endif()
 
-add_executable(libopen_htj2k_mt_simd "src/wrapper.cpp")
+add_executable(libopen_htj2k_mt_simd "src/wrapper.cpp" $<TARGET_OBJECTS:rtp_reassembly_mt_simd_objs>)
+target_include_directories(libopen_htj2k_mt_simd PRIVATE ${_RTP_RECV_DIR})
 target_compile_definitions(libopen_htj2k_mt_simd PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD" "OPENHTJ2K_THREAD")
 set_target_properties(libopen_htj2k_mt_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory -pthread")
 set_target_properties(libopen_htj2k_mt_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_MT_FLAGS})

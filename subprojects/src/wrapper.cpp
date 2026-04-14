@@ -16,6 +16,25 @@
     #include <thread>
   #endif
 
+  #include <deque>
+  #include "frame_handler.hpp"
+  #include "rfc9828_parser.hpp"
+
+// ────────────────────────────────────────────────────────────────────────────
+// RTP session: reassembles RFC 9828 Main/Body packets into complete JPEG 2000
+// codestreams.  One session == one SSRC.  On SSRC change we reset state.
+// ────────────────────────────────────────────────────────────────────────────
+struct RtpSession {
+  open_htj2k::rtp_recv::FrameHandler handler;
+  std::deque<open_htj2k::rtp_recv::AssembledFrame> ready;
+  uint32_t last_ssrc         = 0;
+  bool     ssrc_seen         = false;
+  uint32_t last_popped_ts    = 0;  // RTP timestamp of most recently popped frame
+  uint8_t  last_popped_mat   = 0;  // H.273 matrix coeffs of most recently popped frame
+  bool     last_popped_has_meta = false;
+  std::string last_error;
+};
+
 open_htj2k::openhtj2k_decoder* cpp_create_decoder(uint8_t* data, size_t size, uint8_t reduce_NL) {
   return new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, 1);
 }
@@ -646,6 +665,190 @@ void apply_ycbcr_bt709_to_rgba(uint8_t* rgba, uint32_t n_pixels) {
     p[2] = clamp_u8(Y + ((30397 * Cb + 8192) >> 14));
   }
 #endif
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Decoder reuse: init a previously-constructed decoder instance with a fresh
+// codestream.  For RTP replay (30+ fps) this avoids per-frame new/delete and
+// enables single_tile_reuse caching across frames whose main-header bytes
+// match.  Caller must have created the decoder with create_decoder(_mt).
+// ────────────────────────────────────────────────────────────────────────────
+EMSCRIPTEN_KEEPALIVE
+void reset_decoder_with_bytes(open_htj2k::openhtj2k_decoder* dec, uint8_t* data, size_t size,
+                              uint8_t reduce_NL) {
+  if (!dec) return;
+  // num_threads=1 keeps existing ThreadPool if one was spun up by create_decoder_mt.
+  dec->init(data, size, reduce_NL, 1);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void enable_single_tile_reuse(open_htj2k::openhtj2k_decoder* dec, int32_t on) {
+  if (!dec) return;
+  dec->enable_single_tile_reuse(on != 0);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// RTP session API.  Used by rtp_demo.html to reassemble RFC 9828 packets
+// into complete JPEG 2000 codestreams that the existing decoder can parse.
+// ────────────────────────────────────────────────────────────────────────────
+EMSCRIPTEN_KEEPALIVE
+RtpSession* rtp_session_create() {
+  auto* s = new RtpSession();
+  s->handler.reserve_frame_capacity(4 * 1024 * 1024);  // 4 MiB default
+  return s;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void rtp_session_destroy(RtpSession* s) { delete s; }
+
+EMSCRIPTEN_KEEPALIVE
+void rtp_session_reset(RtpSession* s) {
+  if (!s) return;
+  s->handler.reset();
+  s->ready.clear();
+  s->ssrc_seen = false;
+  s->last_ssrc = 0;
+  s->last_error.clear();
+}
+
+// Parse one RTP datagram + RFC 9828 Main/Body header, feed the codestream
+// bytes to FrameHandler.  Returns:
+//    1  — one new frame is now available on the ready queue (call rtp_pop_frame)
+//    0  — packet accepted, no frame completed yet
+//   -1  — parse error (query rtp_last_error)
+EMSCRIPTEN_KEEPALIVE
+int32_t rtp_push_packet(RtpSession* s, const uint8_t* data, size_t len) {
+  if (!s) return -1;
+  using namespace open_htj2k::rtp_recv;
+
+  RtpHeader rtp;
+  std::string err;
+  if (!parse_rtp_header(data, len, rtp, err)) {
+    s->last_error = "rtp: " + err;
+    return -1;
+  }
+  if (rtp.version != 2) {
+    s->last_error = "rtp: version != 2";
+    return -1;
+  }
+
+  // SSRC change == stream switch; discard partially-assembled frame.
+  if (s->ssrc_seen && rtp.ssrc != s->last_ssrc) {
+    s->handler.reset();
+    s->ready.clear();
+  }
+  s->last_ssrc = rtp.ssrc;
+  s->ssrc_seen = true;
+
+  if (rtp.payload_offset >= len) {
+    s->last_error = "rtp: payload offset past end";
+    return -1;
+  }
+  const uint8_t* payload   = data + rtp.payload_offset;
+  size_t         payloadLen = len - rtp.payload_offset;
+  if (payloadLen < 8) {
+    s->last_error = "9828: payload < 8 bytes";
+    return -1;
+  }
+
+  // MH field = top 2 bits of payload[0]. 0 = Body packet.
+  uint8_t mh = (payload[0] >> 6) & 0x03;
+  std::optional<AssembledFrame> out_frame;
+  bool accepted = false;
+  if (mh == MH_BODY) {
+    BodyPacketHeader body;
+    if (!parse_body_packet_header(payload, payloadLen, body, err)) {
+      s->last_error = "body: " + err;
+      return -1;
+    }
+    const uint8_t* cs     = payload + body.codestream_offset;
+    size_t         cs_len = payloadLen - body.codestream_offset;
+    accepted = s->handler.push_body_packet(rtp, body, cs, cs_len, out_frame);
+  } else {
+    MainPacketHeader main;
+    if (!parse_main_packet_header(payload, payloadLen, main, err)) {
+      s->last_error = "main: " + err;
+      return -1;
+    }
+    const uint8_t* cs     = payload + main.codestream_offset;
+    size_t         cs_len = payloadLen - main.codestream_offset;
+    accepted = s->handler.push_main_packet(rtp, main, cs, cs_len, out_frame);
+  }
+  if (!accepted) {
+    s->last_error = "frame_handler: protocol violation";
+    return -1;
+  }
+  if (out_frame.has_value()) {
+    // Cap the ready queue at 2 — drop oldest if decoder falls behind.
+    while (s->ready.size() >= 2) s->ready.pop_front();
+    s->ready.emplace_back(std::move(*out_frame));
+    return 1;
+  }
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_ready_count(RtpSession* s) {
+  return s ? static_cast<uint32_t>(s->ready.size()) : 0u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_peek_frame_size(RtpSession* s) {
+  if (!s || s->ready.empty()) return 0;
+  return static_cast<uint32_t>(s->ready.front().bytes.size());
+}
+
+// Pop the oldest ready frame into `out` (up to max_len bytes).
+// Returns bytes copied, or 0 if queue empty, or -2 if max_len too small
+// (frame is left on the queue in that case).
+EMSCRIPTEN_KEEPALIVE
+int32_t rtp_pop_frame(RtpSession* s, uint8_t* out, uint32_t max_len) {
+  if (!s || s->ready.empty()) return 0;
+  auto& f = s->ready.front();
+  if (f.bytes.size() > max_len) return -2;
+  std::memcpy(out, f.bytes.data(), f.bytes.size());
+  uint32_t copied           = static_cast<uint32_t>(f.bytes.size());
+  s->last_popped_ts         = f.rtp_timestamp;
+  s->last_popped_mat        = f.mat;
+  s->last_popped_has_meta   = f.has_meta;
+  s->ready.pop_front();
+  return static_cast<int32_t>(copied);
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_pop_frame_timestamp(RtpSession* s) { return s ? s->last_popped_ts : 0u; }
+
+// H.273 MatrixCoefficients of the last popped frame (1 = BT.709, 5/6 = BT.601).
+// 255 if the frame had no Main Packet metadata.
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_pop_frame_matrix(RtpSession* s) {
+  if (!s) return 255u;
+  return s->last_popped_has_meta ? static_cast<uint32_t>(s->last_popped_mat) : 255u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_frames_emitted(RtpSession* s) {
+  return s ? static_cast<uint32_t>(s->handler.stats().frames_emitted) : 0u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_frames_dropped(RtpSession* s) {
+  return s ? static_cast<uint32_t>(s->handler.stats().frames_dropped) : 0u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_packets_received(RtpSession* s) {
+  return s ? static_cast<uint32_t>(s->handler.stats().packets_received) : 0u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_seq_gaps(RtpSession* s) {
+  return s ? static_cast<uint32_t>(s->handler.stats().seq_gaps) : 0u;
+}
+
+EMSCRIPTEN_KEEPALIVE
+const char* rtp_last_error(RtpSession* s) {
+  return s ? s->last_error.c_str() : "";
 }
 }
 
