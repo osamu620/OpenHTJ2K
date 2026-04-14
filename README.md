@@ -34,8 +34,10 @@ on modern x86-64**.
 - Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs.
 - CLI tools: `open_htj2k_enc`, `open_htj2k_dec`, and the experimental
   `open_htj2k_rtp_recv`.
-- WebAssembly build + Node.js CLI decoder — try the live demo at
-  **https://htj2k-demo.pages.dev/**.
+- WebAssembly build (scalar / SIMD / pthreads / SIMD+pthreads) +
+  Node.js CLI decoder + in-browser RTP replay demo (WebGL2 GPU
+  rendering, Display-P3, planar Y/Cb/Cr textures with hardware
+  chroma upsampling) — try both at **https://htj2k-demo.pages.dev/**.
 
 **Live streaming (experimental)**
 - `open_htj2k_rtp_recv` implements RFC 9828 (JPEG 2000 RTP with
