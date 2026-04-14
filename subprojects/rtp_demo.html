@@ -209,7 +209,16 @@
       <button id="btn-play"  class="btn primary" disabled>Play</button>
       <button id="btn-pause" class="btn" disabled>Pause</button>
       <button id="btn-stop"  class="btn" disabled>Stop</button>
-      <div class="pacing-group">
+      <div class="pacing-group" style="gap:18px;">
+        <label style="font-size:12px;color:var(--text-sub);">
+          Resolution
+          <select id="reduce-nl" style="margin-left:4px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:2px 6px; font-size:12px;">
+            <option value="auto" selected>Auto (half for 4K+)</option>
+            <option value="0">Full</option>
+            <option value="1">Half (÷2)</option>
+            <option value="2">Quarter (÷4)</option>
+          </select>
+        </label>
         <label><input type="radio" name="pacing" value="paced" checked> Paced (RTP clock)</label>
         <label><input type="radio" name="pacing" value="max"> As-fast-as-possible</label>
       </div>
@@ -298,9 +307,18 @@ let Module = null;
 let F = {};             // cwrap'd functions
 
 // Playback state.
-let running = false;     // full stop
-let paused  = false;
-let pauseResolver = null;
+let running = false;        // full stop
+let paused  = false;        // pause/resume toggle
+// Barrier — waitIfPaused() awaits this promise while `paused === true`.
+// On pause: create a new unresolved promise.  On resume: resolve it.
+let pauseBarrier = Promise.resolve();
+let pauseBarrierResolve = () => {};
+
+// Resolution selection (JPEG 2000 DWT resolution-reduce_NL).
+//   0 = full, 1 = half, 2 = quarter.  'auto' picks 1 when decoded W >= 2048.
+let reduceNLMode  = 'auto';
+let reduceNLValue = 0;      // effective value passed to create_decoder
+let autoDecided   = false;  // have we measured the first frame?
 
 // WASM-side resources (allocated once on first Play, freed on Stop).
 let rtpSession   = 0;
@@ -410,14 +428,27 @@ function decodeAndRender() {
   const t0 = performance.now();
   let dec = 0;
   try {
-    dec = F.create_decoder(frameBuf, got, 0);
+    dec = F.create_decoder(frameBuf, got, reduceNLValue);
     if (dec === 0) throw new Error('create_decoder returned null');
     F.parse_j2c(dec);
 
+    // Reported dimensions reflect the reduced resolution: W_out = ceil(W_full / 2^reduce_NL).
     const W  = F.get_width(dec, 0)  | 0;
     const H  = F.get_height(dec, 0) | 0;
     const NC = F.get_num_components(dec) | 0;
     const D  = F.get_depth(dec, 0) | 0;
+
+    // Auto-resolution: after the first successful decode, if the full-res width
+    // (W * 2^reduceNLValue) is >= 2048, bump reduce_NL to 1 for subsequent frames.
+    // Since reduceNLValue starts at 0 in auto mode, W here is the full-res width.
+    if (reduceNLMode === 'auto' && !autoDecided) {
+      const fullW = W * (1 << reduceNLValue);
+      if (fullW >= 2048 && reduceNLValue === 0) {
+        reduceNLValue = 1;
+        console.log(`[rtp_demo] auto: W=${fullW} >= 2048, switching to reduce_NL=1 for subsequent frames`);
+      }
+      autoDecided = true;
+    }
 
     ensureRgbaBuf(W * H * 4);
     F.invoke_to_rgba(dec, rgbaBuf);
@@ -462,9 +493,29 @@ function decodeAndRender() {
 // ──────────────────────────────────────────────────────────────────────────
 // Pacing helpers
 // ──────────────────────────────────────────────────────────────────────────
-function waitUntilUnpaused() {
-  if (!paused) return Promise.resolve();
-  return new Promise(resolve => { pauseResolver = resolve; });
+// Block the decode loop until resumed.  Called at the top of each packet
+// iteration and after each decode so pause takes effect quickly.
+function waitIfPaused() {
+  return paused ? pauseBarrier : Promise.resolve();
+}
+
+function setPaused(nextPaused) {
+  if (nextPaused === paused) return;
+  if (nextPaused) {
+    // Transition running → paused: install a new barrier that waitIfPaused will block on.
+    pauseBarrier = new Promise(resolve => { pauseBarrierResolve = resolve; });
+    paused = true;
+    console.log('[rtp_demo] PAUSED');
+  } else {
+    // Transition paused → running: release the barrier immediately.
+    paused = false;
+    pauseBarrierResolve();
+    pauseBarrier = Promise.resolve();
+    pauseBarrierResolve = () => {};
+    console.log('[rtp_demo] RESUMED');
+  }
+  const btn = document.getElementById('btn-pause');
+  if (btn) btn.textContent = paused ? 'Resume' : 'Pause';
 }
 
 function sleep(ms) {
@@ -502,7 +553,7 @@ function startStatsTicker() {
 async function startPlayback(source) {
   if (!Module || running) return;
   running = true;
-  paused  = false;
+  setPaused(false);  // defensive: ensure clean barrier state
 
   // Allocate persistent buffers.
   if (!rtpSession) rtpSession = F.rtp_create();
@@ -514,6 +565,17 @@ async function startPlayback(source) {
   byteCount  = 0;
   frameCount = 0;
   lastDecodeTimes = [];
+
+  // Read resolution-reduce setting from UI.
+  reduceNLMode = document.getElementById('reduce-nl').value;
+  if (reduceNLMode === 'auto') {
+    reduceNLValue = 0;       // start full-res, measure first frame, then maybe bump
+    autoDecided   = false;
+  } else {
+    reduceNLValue = parseInt(reduceNLMode, 10) | 0;
+    autoDecided   = true;
+  }
+  console.log(`[rtp_demo] reduce_NL mode=${reduceNLMode} initial_value=${reduceNLValue}`);
 
   const pacing = document.querySelector('input[name="pacing"]:checked').value;
   const ticker = startStatsTicker();
@@ -527,7 +589,7 @@ async function startPlayback(source) {
   try {
     for await (const pkt of parseRtpStream(source)) {
       if (!running) break;
-      if (paused) await waitUntilUnpaused();
+      if (paused) await waitIfPaused();
 
       // Copy packet into the shared scratch buffer.  Reallocate if a packet
       // ever exceeds 2 KiB (jumbo frame or IPv6 extensions).
@@ -625,20 +687,12 @@ document.getElementById('btn-play').addEventListener('click', async () => {
 
 document.getElementById('btn-pause').addEventListener('click', () => {
   if (!running) return;
-  if (paused) {
-    paused = false;
-    if (pauseResolver) { pauseResolver(); pauseResolver = null; }
-    document.getElementById('btn-pause').textContent = 'Pause';
-  } else {
-    paused = true;
-    document.getElementById('btn-pause').textContent = 'Resume';
-  }
+  setPaused(!paused);
 });
 
 document.getElementById('btn-stop').addEventListener('click', () => {
   running = false;
-  paused  = false;
-  if (pauseResolver) { pauseResolver(); pauseResolver = null; }
+  if (paused) setPaused(false);  // release any pending waitIfPaused()
 });
 </script>
 
