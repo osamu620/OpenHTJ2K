@@ -880,6 +880,17 @@ int32_t rtp_pop_frame(RtpSession* s, uint8_t* out, uint32_t max_len) {
   return static_cast<int32_t>(copied);
 }
 
+// Discard the oldest ready frame without copying it out.  Used by the JS
+// paced loop when wall-clock shows the frame's target is already in the
+// past by more than the drop threshold — skipping decode keeps playback
+// in sync with the RTP clock when decode+download can't keep up.
+EMSCRIPTEN_KEEPALIVE
+int32_t rtp_drop_ready(RtpSession* s) {
+  if (!s || s->ready.empty()) return 0;
+  s->ready.pop_front();
+  return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE
 uint32_t rtp_pop_frame_timestamp(RtpSession* s) { return s ? s->last_popped_ts : 0u; }
 
