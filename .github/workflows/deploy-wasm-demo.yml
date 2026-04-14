@@ -43,12 +43,16 @@ jobs:
           cp subprojects/rtp_demo.html                  deploy/
           cp subprojects/rtp_parser.js                  deploy/
           cp subprojects/coi-serviceworker.js           deploy/
-          # Pages Functions: cp -r so the functions/ directory lands at the
-          # root of the deploy bundle.  Cloudflare Pages auto-detects it and
-          # routes /samples/* to the [[path]].js handler bound to the R2
-          # bucket (binding is configured in the Pages project settings —
-          # see functions/samples/[[path]].js for details).
-          cp -r functions                               deploy/
+          # Rewrite rule: /samples/* → public r2.dev URL for the RTP
+          # sample clips.  Served at our origin so the demo's fetch() is
+          # same-origin and doesn't need CORS.  This is a pure edge-level
+          # rewrite (Cloudflare _redirects file, status 200 = rewrite,
+          # not a user-visible redirect) — no Pages Function runtime,
+          # no bindings, no dashboard steps.  :splat captures the rest
+          # of the path after /samples/.
+          cat > deploy/_redirects <<'EOF'
+          /samples/* https://pub-21f3cc3ea54a4a65b2d083c2139002d6.r2.dev/:splat 200
+          EOF
           # Sample codestreams referenced by index.html's preset dropdown.
           # Only the files the UI actually lists are copied — adjust this
           # list if you add/remove presets.
