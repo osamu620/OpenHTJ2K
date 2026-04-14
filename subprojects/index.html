@@ -62,6 +62,22 @@
       border-bottom: 1px solid var(--border);
     }
     .site-header h1 { font-size: 20px; font-weight: 700; flex: 1; }
+    /* Tab-style nav between demo pages. */
+    .nav-tabs {
+      display: flex; gap: 4px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-tabs a {
+      padding: 10px 18px;
+      color: var(--text-sub); text-decoration: none;
+      font-size: 13px; font-weight: 600;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .nav-tabs a:hover { color: var(--text); }
+    .nav-tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
     .simd-badge {
       display: inline-flex;
       align-items: center;
@@ -355,6 +371,11 @@
     <span id="simd_badge" class="simd-badge simd-detecting">Detecting SIMD…</span>
     <span id="mt_badge" class="simd-badge simd-detecting">Detecting Threads…</span>
   </header>
+  <!-- Page navigation -->
+  <nav class="nav-tabs">
+    <a href="index.html"    class="active">Still Image</a>
+    <a href="rtp_demo.html">RTP Replay</a>
+  </nav>
   <!-- Original simd_message element (hidden; JS reads/writes innerText; badge synced below) -->
   <pre id="simd_message" style="display:none"></pre>
 
