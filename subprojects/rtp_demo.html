@@ -417,6 +417,10 @@ const FPS_WIN = 30;
 let lastDecodeMs = 0;
 let lastFramePacketTs = null;  // previous frame's RTP timestamp for Δts logging
 
+// Opt-in verbose per-second console.log — off by default because console.log
+// has real cost with DevTools open.  Enable with ?verbose=1 in the URL.
+const verboseLog = new URLSearchParams(window.location.search).has('verbose');
+
 function setOverlay(text, mode = 'loading') {
   const ov = document.getElementById('canvas-overlay');
   if (!ov) return;
@@ -710,16 +714,18 @@ function startStatsTicker() {
       const fps = meanMs > 0 ? (1000 / meanMs) : 0;
       setStat('statFps', fps.toFixed(1));
     }
-    // Console diagnostic: one concise line per second so stalls are visible.
-    // dispFps is the actual rate of frames rendered per wall-clock second — the
-    // number to compare against the source fps (e.g. 29.97).  The "Decode FPS"
-    // big-number is the CPU-time ceiling (1000 / decode_ms).
+    // Console diagnostic — opt-in because console.log has real cost when
+    // DevTools is open (Network/Performance panels hook every call).  Enable
+    // with ?verbose=1 in the URL when you want the per-second dump.  The
+    // on-page stats panel updates regardless.
     tickN++;
-    const v = Module && Module.__variant ? Module.__variant.replace('libopen_htj2k_', '') : '?';
-    console.log(
-      `[rtp_demo t=${tickN}s build=${v}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
-      `pkts=${pktCount} frames=${frameCount} disp=${dispFps.toFixed(1)} fps  drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
-      `pending=${rtpSession?F.rtp_ready_count(rtpSession):0} lastDec=${lastDecodeMs.toFixed(0)}ms`);
+    if (verboseLog) {
+      const v = Module && Module.__variant ? Module.__variant.replace('libopen_htj2k_', '') : '?';
+      console.log(
+        `[rtp_demo t=${tickN}s build=${v}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
+        `pkts=${pktCount} frames=${frameCount} disp=${dispFps.toFixed(1)} fps  drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
+        `pending=${rtpSession?F.rtp_ready_count(rtpSession):0} lastDec=${lastDecodeMs.toFixed(0)}ms`);
+    }
   }, 1000);
 }
 
@@ -804,11 +810,9 @@ async function startPlayback(source) {
         if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
 
         // Log the RTP timestamp delta for the first few frames so we can
-        // verify the paced-mode clock assumption (90 kHz = RFC 3551 default
-        // for video PTs).  For 29.97 fps @ 90 kHz we expect delta = 3003.
-        // delta = 1501 would mean 180 kHz (would cause fast-motion).
-        // delta = 6006 would mean 45 kHz (would cause slow-motion).
-        if (frameCount <= 5 && ok) {
+        // verify the paced-mode clock assumption (90 kHz = RFC 3551 default).
+        // Only emitted with ?verbose=1.
+        if (verboseLog && frameCount <= 5 && ok) {
           const d = lastFramePacketTs !== null
               ? ((pkt.timestamp - lastFramePacketTs) >>> 0) : 0;
           console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}` +
