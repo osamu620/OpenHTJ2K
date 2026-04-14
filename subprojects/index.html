@@ -41,6 +41,7 @@
       --text-sub: #9aa0b8;
       --radius:   10px;
     }
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     body {
       background: var(--bg);
       color: var(--text);
@@ -49,6 +50,11 @@
       padding: 32px 28px;
       max-width: 1300px;
       margin: 0 auto;
+      /* Prevent iOS Safari/Edge from auto-inflating text inside narrow
+         columns (prog-cell labels/times were showing much larger than
+         designed on mobile). */
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
 
     /* ── Header ─────────────────────────────────────────── */
