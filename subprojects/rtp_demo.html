@@ -325,6 +325,12 @@
       <div>
         <select id="rtp-preset">
           <option value="">— Preset (none) —</option>
+          <option value="https://samples.osamu620.dev/Spark_4K_2997_422_1.7bpp.rtp" selected>
+            4K 29.97 10bit 4:2:2 @ 1.7 bpp — Spark (Cloudflare R2)
+          </option>
+          <option value="https://20210305-how-cloudfront.s3.us-west-1.amazonaws.com/2026_04_14_osamu_rtp_file/1080p2997_10bit_150frames.rtp">
+            1080p 29.97 10bit 4:2:2 — 150 frames (AWS S3 us-west-1)
+          </option>
         </select>
         <div style="font-size:11px;color:var(--text-sub);margin-top:6px;">
           Or use the file picker:
@@ -1574,6 +1580,34 @@ function currentSource() {
   const file = document.getElementById('rtp-file').files[0];
   if (file) return file;
   return null;
+}
+
+// When the user picks a preset, mirror it into the URL field so the URL
+// input is the single source of truth for string URLs.  When they type
+// a new URL, clear the preset dropdown so the two don't look out of sync.
+{
+  const presetEl = document.getElementById('rtp-preset');
+  const urlEl    = document.getElementById('rtp-url');
+  const fileEl   = document.getElementById('rtp-file');
+  presetEl.addEventListener('change', () => {
+    if (presetEl.value) {
+      urlEl.value = presetEl.value;
+      if (fileEl.value) fileEl.value = '';  // clear any local file selection
+    }
+  });
+  urlEl.addEventListener('input', () => {
+    // If the user hand-edits away from the preset value, deselect it.
+    if (urlEl.value.trim() !== presetEl.value) {
+      presetEl.value = '';
+    }
+  });
+  fileEl.addEventListener('change', () => {
+    if (fileEl.files[0]) {
+      // Picking a local file wins — clear the other two so Play is unambiguous.
+      urlEl.value    = '';
+      presetEl.value = '';
+    }
+  });
 }
 
 document.getElementById('btn-play').addEventListener('click', async () => {
