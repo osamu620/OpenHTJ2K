@@ -76,23 +76,32 @@ export async function* parseRtpStream(source) {
     }
   }
 
-  while (true) {
-    await fillAtLeast(4);
-    if (buf.length < 4) return;          // clean EOF
-    const hdr    = buf.bytes(0, 4);
-    const marker = (hdr[0] << 8) | hdr[1];
-    if (marker !== MARKER) {
-      throw new Error(`parseRtpStream: bad marker 0x${marker.toString(16)} at stream offset`);
+  try {
+    while (true) {
+      await fillAtLeast(4);
+      if (buf.length < 4) return;          // clean EOF
+      const hdr    = buf.bytes(0, 4);
+      const marker = (hdr[0] << 8) | hdr[1];
+      if (marker !== MARKER) {
+        throw new Error(`parseRtpStream: bad marker 0x${marker.toString(16)} at stream offset`);
+      }
+      const length = (hdr[2] << 8) | hdr[3];
+      await fillAtLeast(4 + length);
+      if (buf.length < 4 + length) {
+        throw new Error(`parseRtpStream: truncated packet (need ${length} bytes)`);
+      }
+      const pkt = buf.bytes(4, length);   // view, lifetime = until next consume()
+      const q   = quickParseRtp(pkt);
+      yield { bytes: pkt, ...q };
+      buf.consume(4 + length);
     }
-    const length = (hdr[2] << 8) | hdr[3];
-    await fillAtLeast(4 + length);
-    if (buf.length < 4 + length) {
-      throw new Error(`parseRtpStream: truncated packet (need ${length} bytes)`);
-    }
-    const pkt = buf.bytes(4, length);   // view, lifetime = until next consume()
-    const q   = quickParseRtp(pkt);
-    yield { bytes: pkt, ...q };
-    buf.consume(4 + length);
+  } finally {
+    // Called on normal completion, exception, or when the consumer calls
+    // iterator.return() (for-await `break`).  Cancel the underlying stream
+    // so the Blob's file reader / fetch network socket closes and nothing
+    // leaks across play→stop→play cycles.
+    try { await reader.cancel(); } catch (e) { /* ignore */ }
+    try { reader.releaseLock(); }  catch (e) { /* ignore */ }
   }
 }
 
