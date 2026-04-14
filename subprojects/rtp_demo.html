@@ -664,6 +664,18 @@ function sleep(ms) {
   return ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve();
 }
 
+// Fast macrotask yield via MessageChannel.  Chrome clamps nested
+// setTimeout(0) to 4 ms after ~5 levels of nesting; MessageChannel's
+// postMessage queues a macrotask with no minimum delay, so this is
+// the right primitive for "unblock the event loop briefly" in a hot
+// loop.  Used for the per-N-packet yield and the ASAP post-frame yield.
+const _yieldMC = new MessageChannel();
+const _yieldQ  = [];
+_yieldMC.port1.onmessage = () => { const r = _yieldQ.shift(); if (r) r(); };
+function fastYield() {
+  return new Promise(resolve => { _yieldQ.push(resolve); _yieldMC.port2.postMessage(0); });
+}
+
 // Stats tick (every 1 s)
 function startStatsTicker() {
   mbpsSampleT     = performance.now();
@@ -780,7 +792,7 @@ async function startPlayback(source) {
       // user click events for long periods when decode can't keep up.  This
       // is critical for File.stream() sources where disk reads can sustain
       // hundreds of thousands of packets/sec.
-      if ((pktCount & 0xFF) === 0) await new Promise(r => setTimeout(r, 0));
+      if ((pktCount & 0xFF) === 0) await fastYield();
 
       const r = F.rtp_push(rtpSession, pktBuf, b.length);
       if (r < 0) {
@@ -818,7 +830,7 @@ async function startPlayback(source) {
           if (delayMs > 1) await sleep(delayMs);
         }
         // Pump microtasks so the UI stays responsive even in ASAP mode.
-        if (pacing === 'max') await new Promise(r => setTimeout(r, 0));
+        if (pacing === 'max') await fastYield();
       }
     }
   } catch (e) {
