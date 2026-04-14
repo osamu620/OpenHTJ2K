@@ -17,7 +17,7 @@ set(WASM_FLAGS_COMMON "\
     -s EXPORTED_RUNTIME_METHODS=[ccall,cwrap,writeArrayToMemory,getValue,HEAP32,HEAPU8] \
     -s NO_EXIT_RUNTIME=1 \
     -s ALLOW_MEMORY_GROWTH=1 \
-    -s MAXIMUM_MEMORY=1GB \
+    -s MAXIMUM_MEMORY=2GB \
     -sNO_DISABLE_EXCEPTION_CATCHING \
     "
 )

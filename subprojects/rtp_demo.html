@@ -1229,12 +1229,17 @@ function decodeAndRender() {
       setStat('colorInfo', `${matName} / ${rangeName}`);
     }
 
-    // Auto-resolution: after the first successful decode, if the full-res
-    // width is >= 2048, bump reduce_NL to 1 for subsequent frames.
+    // Auto-resolution: we started at reduce_NL=1 as a safe default for the
+    // (unknown) first frame.  Now that we know the source's full-res width,
+    // decide what to do for subsequent frames:
+    //   - fullW < 2048 (1080p or smaller) → upgrade to reduce_NL=0 (full res)
+    //   - fullW >= 2048 (4K and up)       → stay at reduce_NL=1 (half res)
     if (reduceNLMode === 'auto' && !autoDecided) {
-      if (fullW >= 2048 && reduceNLValue === 0) {
-        reduceNLValue = 1;
-        console.log(`[rtp_demo] auto: full-res W=${fullW} >= 2048, switching to reduce_NL=1 for subsequent frames`);
+      if (fullW < 2048 && reduceNLValue === 1) {
+        reduceNLValue = 0;
+        console.log(`[rtp_demo] auto: full-res W=${fullW} < 2048, upgrading to reduce_NL=0 (full) for subsequent frames`);
+      } else {
+        console.log(`[rtp_demo] auto: full-res W=${fullW} >= 2048, staying at reduce_NL=1 for subsequent frames`);
       }
       autoDecided = true;
     }
@@ -1442,7 +1447,11 @@ async function startPlayback(source) {
   // Read resolution-reduce setting from UI.
   reduceNLMode = document.getElementById('reduce-nl').value;
   if (reduceNLMode === 'auto') {
-    reduceNLValue = 0;       // start full-res, measure first frame, then maybe bump
+    // Start at reduce_NL=1 (safer memory-wise — a 4K first frame at
+    // full-res can overflow the 2GB WASM heap during HT decode).  If
+    // the first frame turns out to be 1080p or smaller, we upgrade to
+    // full-res for subsequent frames.
+    reduceNLValue = 1;
     autoDecided   = false;
   } else {
     reduceNLValue = parseInt(reduceNLMode, 10) | 0;
