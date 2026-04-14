@@ -321,6 +321,11 @@ let F = {};             // cwrap'd functions
 // Playback state.
 let running = false;        // full stop
 let paused  = false;        // pause/resume toggle
+// Generation counter: incremented on every Play and every Stop.  A running
+// for-await loop stores its generation and exits as soon as playbackGen
+// diverges — this lets Stop (or a second Play before the first exited) tell
+// the old loop "you're superseded" without relying on racy running flag flips.
+let playbackGen = 0;
 // Barrier — waitIfPaused() awaits this promise while `paused === true`.
 // On pause: create a new unresolved promise.  On resume: resolve it.
 let pauseBarrier = Promise.resolve();
@@ -632,6 +637,7 @@ function startStatsTicker() {
 // ──────────────────────────────────────────────────────────────────────────
 async function startPlayback(source) {
   if (!Module || running) return;
+  const myGen = ++playbackGen;   // claim a generation; older loops will see a mismatch and exit
   running = true;
   setPaused(false);  // defensive: ensure clean barrier state
 
@@ -672,7 +678,8 @@ async function startPlayback(source) {
 
   try {
     for await (const pkt of parseRtpStream(source)) {
-      if (!running) break;
+      // Superseded by a newer Play or by Stop (playbackGen bumped).
+      if (playbackGen !== myGen || !running) break;
       if (paused) await waitIfPaused();
 
       // Copy packet into the shared scratch buffer.  Reallocate if a packet
@@ -712,10 +719,20 @@ async function startPlayback(source) {
       }
     }
   } catch (e) {
-    console.error('playback error:', e);
-    setOverlay('Playback error: ' + e.message, 'error');
+    // Only surface the error if we are still the current generation — a
+    // superseded loop may throw during its reader.cancel() teardown, and we
+    // don't want that to clobber the new playback's UI.
+    if (playbackGen === myGen) {
+      console.error('playback error:', e);
+      setOverlay('Playback error: ' + e.message, 'error');
+    }
   }
   clearInterval(ticker);
+  // If a newer generation has taken over, do NOT touch UI state — it's theirs now.
+  if (playbackGen !== myGen) {
+    console.log(`[rtp_demo] gen ${myGen} superseded by ${playbackGen}; skipping UI cleanup`);
+    return;
+  }
   running = false;
   document.getElementById('btn-play').disabled  = false;
   document.getElementById('btn-pause').disabled = true;
@@ -775,8 +792,15 @@ document.getElementById('btn-pause').addEventListener('click', () => {
 });
 
 document.getElementById('btn-stop').addEventListener('click', () => {
+  if (!running && playbackGen === 0) return;  // nothing to stop
+  playbackGen++;                 // signal running loop to exit ASAP
   running = false;
   if (paused) setPaused(false);  // release any pending waitIfPaused()
+  // Update UI directly — the superseded loop skips its own cleanup.
+  document.getElementById('btn-play').disabled  = false;
+  document.getElementById('btn-pause').disabled = true;
+  document.getElementById('btn-stop').disabled  = true;
+  setOverlay(`Stopped. ${frameCount} frames decoded.`, 'loading');
 });
 </script>
 
