@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <title>HTJ2K RTP Replay — Browser WASM Demo</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Register a service worker that injects COOP/COEP headers to enable
+       SharedArrayBuffer (required for multi-threaded WASM). -->
+  <script>
+    if (!window.crossOriginIsolated && window.isSecureContext) {
+      navigator.serviceWorker.register("coi-serviceworker.js").then(
+        function (reg) {
+          if (!window.crossOriginIsolated) {
+            reg.addEventListener("updatefound", function () {
+              reg.installing.addEventListener("statechange", function () {
+                if (this.state === "activated") location.reload();
+              });
+            });
+            if (reg.active && !navigator.serviceWorker.controller) location.reload();
+          }
+        },
+        function (err) { console.warn("COI service worker failed:", err); }
+      );
+    }
+  </script>
+  <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #20233a;
+      --border:   #2d3040;
+      --accent:   #4f8ef7;
+      --text:     #e8eaf0;
+      --text-sub: #9aa0b8;
+      --radius:   10px;
+    }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh; padding: 32px 28px; max-width: 1300px; margin: 0 auto;
+    }
+    .site-header {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      margin-bottom: 28px; padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .site-header h1 { font-size: 20px; font-weight: 700; flex: 1; }
+    .simd-badge {
+      display: inline-flex; align-items: center;
+      padding: 3px 12px; border-radius: 20px; font-size: 12px;
+      font-weight: 600; border: 1px solid; white-space: nowrap;
+    }
+    .simd-badge.simd-detecting { background: var(--surface); color: var(--text-sub); border-color: var(--border); }
+    .simd-badge.simd-on  { background: #0d2e1a; color: #4caf7d; border-color: #4caf7d; }
+    .simd-badge.simd-off { background: #2a1a1a; color: #e06060; border-color: #e06060; }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px; margin-bottom: 20px;
+    }
+    .card-label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.6px; color: var(--text-sub); margin-bottom: 10px;
+    }
+
+    .source-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 700px) { .source-row { grid-template-columns: 1fr; } }
+
+    input#rtp-url, select#rtp-preset {
+      width: 100%; background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 8px 10px; font-size: 14px; font-family: inherit;
+    }
+    input#rtp-url:focus, select#rtp-preset:focus {
+      outline: 2px solid var(--accent); outline-offset: 1px;
+    }
+
+    .controls {
+      display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+      margin-top: 14px;
+    }
+    .btn {
+      background: transparent; color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 6px;
+      padding: 8px 18px; font-size: 13px; font-weight: 600;
+      font-family: inherit; cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+    .btn:disabled { opacity: 0.3; cursor: default; }
+    .btn.primary { background: var(--accent); color: #fff; }
+    .btn.primary:hover:not(:disabled) { background: #6aa0ff; border-color: #6aa0ff; }
+
+    .pacing-group { display: flex; gap: 14px; margin-left: auto; align-items: center; }
+    .pacing-group label { font-size: 12px; color: var(--text-sub); cursor: pointer; }
+    .pacing-group input[type="radio"] { margin-right: 4px; vertical-align: middle; }
+
+    /* Viewer grid */
+    .viewer-grid {
+      display: grid; grid-template-columns: 1fr 280px; gap: 16px; align-items: start;
+    }
+    @media (max-width: 900px) { .viewer-grid { grid-template-columns: 1fr; } }
+
+    .canvas-wrap {
+      background: #000; border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: auto;
+      min-height: 200px; max-height: 80vh; position: relative;
+    }
+    #mycanvas { display: block; }
+    .canvas-overlay {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.85); border-radius: var(--radius);
+      gap: 14px; font-size: 13px; pointer-events: none; z-index: 1;
+    }
+    .canvas-overlay.loading { color: var(--text-sub); }
+    .canvas-overlay.error   { color: #e06060; font-weight: 600; }
+    .overlay-spinner {
+      width: 34px; height: 34px;
+      border: 3px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.75s linear infinite;
+    }
+    .canvas-overlay.error .overlay-spinner { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Stats panel */
+    .stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .stats-table td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
+    .stats-table tr:last-child td { border-bottom: none; }
+    .stats-table td:first-child  { color: var(--text-sub); }
+    .stats-table td:last-child   { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .big-number {
+      display: block; text-align: center; padding: 14px 8px;
+      background: var(--surface2); border-radius: 8px; margin-top: 12px;
+    }
+    .big-number .label { display: block; font-size: 10px;
+                         text-transform: uppercase; letter-spacing: 0.08em;
+                         color: var(--text-sub); margin-bottom: 4px; }
+    .big-number .value {
+      font-size: 26px; font-weight: 800; color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .privacy-notice {
+      display: flex; align-items: center; gap: 8px;
+      margin: 0 0 20px; padding: 9px 14px;
+      background: rgba(79, 142, 247, 0.08);
+      border: 1px solid rgba(79, 142, 247, 0.25);
+      border-radius: var(--radius);
+      font-size: 13px; color: var(--text-sub);
+    }
+
+    .site-footer {
+      margin-top: 48px; padding: 20px 0;
+      border-top: 1px solid var(--border);
+      text-align: center; font-size: 13px; color: var(--text-sub);
+    }
+    .site-footer a {
+      color: var(--accent); text-decoration: none;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header class="site-header">
+    <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="flex-shrink:0">
+      <rect width="38" height="38" rx="8" fill="#4f8ef7"/>
+      <rect x="6"  y="6"  width="11" height="11" rx="2" fill="white" opacity="1.0"/>
+      <rect x="21" y="6"  width="11" height="11" rx="2" fill="white" opacity="0.65"/>
+      <rect x="6"  y="21" width="11" height="11" rx="2" fill="white" opacity="0.4"/>
+      <rect x="21" y="21" width="11" height="11" rx="2" fill="white" opacity="0.2"/>
+    </svg>
+    <h1>HTJ2K RTP Replay — Browser WASM Demo</h1>
+    <span id="simd_badge" class="simd-badge simd-detecting">Detecting SIMD…</span>
+    <span id="mt_badge"   class="simd-badge simd-detecting">Detecting Threads…</span>
+  </header>
+
+  <div class="privacy-notice">
+    <span>▶</span>
+    <span>Replays a recorded RFC 9828 <code>.rtp</code> file from a URL or local disk, reassembles packets into HTJ2K codestreams, and decodes in your browser.</span>
+  </div>
+
+  <!-- Source -->
+  <div class="card">
+    <div class="card-label">Source</div>
+    <div class="source-row">
+      <div>
+        <select id="rtp-preset">
+          <option value="">— Preset (none) —</option>
+        </select>
+        <div style="font-size:11px;color:var(--text-sub);margin-top:6px;">
+          Or use the file picker:
+        </div>
+        <input type="file" id="rtp-file" accept=".rtp" style="margin-top:6px; font-size: 12px; color: var(--text-sub);">
+      </div>
+      <div>
+        <input id="rtp-url" type="url" placeholder="https://example.com/clip.rtp">
+        <div style="font-size:11px;color:var(--text-sub);margin-top:6px;">
+          Requires CORS <code>Access-Control-Allow-Origin</code> on the host.
+        </div>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="btn-play"  class="btn primary" disabled>Play</button>
+      <button id="btn-pause" class="btn" disabled>Pause</button>
+      <button id="btn-stop"  class="btn" disabled>Stop</button>
+      <div class="pacing-group">
+        <label><input type="radio" name="pacing" value="paced" checked> Paced (RTP clock)</label>
+        <label><input type="radio" name="pacing" value="max"> As-fast-as-possible</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Viewer + stats -->
+  <div class="viewer-grid">
+    <div class="canvas-wrap">
+      <canvas id="mycanvas" width="640" height="360"></canvas>
+      <div class="canvas-overlay loading" id="canvas-overlay">
+        <div class="overlay-spinner"></div>
+        <span id="overlay-text">Loading WASM decoder…</span>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:0;">
+      <div class="card-label">Stream</div>
+      <table class="stats-table">
+        <tr><td>Image size</td>     <td><span id="imgWidth">—</span> × <span id="imgHeight">—</span></td></tr>
+        <tr><td>Depth</td>          <td><span id="imgDepth">—</span></td></tr>
+        <tr><td>Components</td>     <td><span id="numComps">—</span></td></tr>
+        <tr><td>Packets received</td><td><span id="statPackets">0</span></td></tr>
+        <tr><td>Frames decoded</td>  <td><span id="statFrames">0</span></td></tr>
+        <tr><td>Frames dropped</td>  <td><span id="statDrops">0</span></td></tr>
+        <tr><td>Seq gaps</td>        <td><span id="statGaps">0</span></td></tr>
+        <tr><td>Network rate</td>    <td><span id="statMbps">—</span></td></tr>
+      </table>
+      <div class="big-number">
+        <span class="label">Decode FPS</span>
+        <span class="value" id="statFps">—</span>
+      </div>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <a href="https://github.com/osamu620/OpenHTJ2K" target="_blank" rel="noopener">
+      osamu620/OpenHTJ2K
+    </a>
+  </footer>
+
+<script type="module">
+import { parseRtpStream } from './src/rtp_parser.js';
+
+// ──────────────────────────────────────────────────────────────────────────
+// WASM module loading: prefer mt_simd > simd > mt > scalar, matching index.html.
+// ──────────────────────────────────────────────────────────────────────────
+function threadsSupported() {
+  try { return typeof SharedArrayBuffer !== 'undefined'; } catch { return false; }
+}
+
+async function loadModule() {
+  const hasSimd = await wasmFeatureDetect.simd();
+  const hasMt   = threadsSupported();
+  const variant =
+      (hasSimd && hasMt) ? 'libopen_htj2k_mt_simd'
+    : hasSimd            ? 'libopen_htj2k_simd'
+    : hasMt              ? 'libopen_htj2k_mt'
+    :                      'libopen_htj2k';
+  console.log('loading', variant);
+  const mod = await import(`./build/html/${variant}.js`).catch(e => {
+    console.warn('failed to load', variant, '— trying non-MT fallback');
+    return import(`./build/html/${hasSimd ? 'libopen_htj2k_simd' : 'libopen_htj2k'}.js`);
+  });
+  const Module = await mod.default();
+  Module.__variant = variant;
+  return Module;
+}
+
+// Update SIMD / threads badges.
+wasmFeatureDetect.simd().then(ok => {
+  const b = document.getElementById('simd_badge');
+  b.textContent = ok ? 'SIMD ✓' : 'No SIMD';
+  b.className = 'simd-badge ' + (ok ? 'simd-on' : 'simd-off');
+});
+{
+  const b = document.getElementById('mt_badge');
+  const ok = threadsSupported();
+  b.textContent = ok ? 'Threads ✓' : 'No Threads';
+  b.className = 'simd-badge ' + (ok ? 'simd-on' : 'simd-off');
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Pipeline state
+// ──────────────────────────────────────────────────────────────────────────
+let Module = null;
+let F = {};             // cwrap'd functions
+
+// Playback state.
+let running = false;     // full stop
+let paused  = false;
+let pauseResolver = null;
+
+// WASM-side resources (allocated once on first Play, freed on Stop).
+let rtpSession   = 0;
+let decoder      = 0;
+let pktBuf       = 0;
+const PKT_BUF_SZ = 2048;
+let frameBuf     = 0;
+const MAX_FRAME  = 16 * 1024 * 1024;  // 16 MB: generous for 4K HTJ2K
+let rgbaBuf      = 0;
+let rgbaBufSz    = 0;
+
+// Stats.
+let pktCount   = 0;
+let byteCount  = 0;
+let byteCountStart = 0;
+let mbpsSampleT = 0;
+let frameCount = 0;
+let lastDecodeTimes = [];  // ms, ring of last N
+const FPS_WIN = 30;
+
+function setOverlay(text, mode = 'loading') {
+  const ov = document.getElementById('canvas-overlay');
+  if (!ov) return;
+  ov.className = 'canvas-overlay ' + mode;
+  const span = ov.querySelector('span');
+  if (span) span.textContent = text;
+  if (text === null) ov.style.display = 'none';
+  else ov.style.display = '';
+}
+
+function setStat(id, v) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = v;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Module init
+// ──────────────────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    Module = await loadModule();
+    F = {
+      // Decoder
+      create_decoder:        Module.cwrap('create_decoder',      'number', ['number','number','number']),
+      reset_decoder_bytes:   Module.cwrap('reset_decoder_with_bytes', 'void', ['number','number','number','number']),
+      enable_single_tile:    Module.cwrap('enable_single_tile_reuse', 'void', ['number','number']),
+      parse_j2c:             Module.cwrap('parse_j2c_data',      'void',   ['number']),
+      invoke_to_rgba:        Module.cwrap('invoke_decoder_to_rgba', 'void', ['number','number']),
+      release_j2c:           Module.cwrap('release_j2c_data',    'void',   ['number']),
+      get_width:             Module.cwrap('get_width',           'number', ['number','number']),
+      get_height:            Module.cwrap('get_height',          'number', ['number','number']),
+      get_num_components:    Module.cwrap('get_num_components',  'number', ['number']),
+      get_depth:             Module.cwrap('get_depth',           'number', ['number','number']),
+      // YCbCr helpers
+      apply_bt601:           Module.cwrap('apply_ycbcr_bt601_to_rgba', 'void', ['number','number']),
+      apply_bt709:           Module.cwrap('apply_ycbcr_bt709_to_rgba', 'void', ['number','number']),
+      // RTP session
+      rtp_create:            Module.cwrap('rtp_session_create',  'number', []),
+      rtp_destroy:           Module.cwrap('rtp_session_destroy', 'void',   ['number']),
+      rtp_reset:             Module.cwrap('rtp_session_reset',   'void',   ['number']),
+      rtp_push:              Module.cwrap('rtp_push_packet',     'number', ['number','number','number']),
+      rtp_peek_size:         Module.cwrap('rtp_peek_frame_size', 'number', ['number']),
+      rtp_pop:               Module.cwrap('rtp_pop_frame',       'number', ['number','number','number']),
+      rtp_pop_matrix:        Module.cwrap('rtp_pop_frame_matrix','number', ['number']),
+      rtp_frames:            Module.cwrap('rtp_frames_emitted',  'number', ['number']),
+      rtp_drops:             Module.cwrap('rtp_frames_dropped',  'number', ['number']),
+      rtp_gaps:              Module.cwrap('rtp_seq_gaps',        'number', ['number']),
+      rtp_last_error:        Module.cwrap('rtp_last_error',      'string', ['number']),
+    };
+    setOverlay('Select a .rtp file or URL and press Play.', 'loading');
+    document.getElementById('btn-play').disabled = false;
+  } catch (e) {
+    console.error(e);
+    setOverlay('Failed to load WASM decoder: ' + e, 'error');
+  }
+})();
+
+// ──────────────────────────────────────────────────────────────────────────
+// Decode + render one codestream
+// ──────────────────────────────────────────────────────────────────────────
+function ensureRgbaBuf(size) {
+  if (rgbaBufSz >= size) return;
+  if (rgbaBuf) Module._free(rgbaBuf);
+  rgbaBuf = Module._malloc(size);
+  rgbaBufSz = size;
+}
+
+function decodeAndRender() {
+  const frameSize = F.rtp_peek_size(rtpSession);
+  if (frameSize === 0) return false;
+  if (frameSize > MAX_FRAME) {
+    console.warn('frame too large', frameSize, '— skipping');
+    // Drain so the queue doesn't back up.
+    F.rtp_pop(rtpSession, frameBuf, MAX_FRAME);
+    return false;
+  }
+  const got = F.rtp_pop(rtpSession, frameBuf, MAX_FRAME);
+  if (got <= 0) return false;
+
+  const matrix = F.rtp_pop_matrix(rtpSession);
+
+  // First frame: create decoder + enable single-tile-reuse for subsequent.
+  const t0 = performance.now();
+  if (decoder === 0) {
+    decoder = F.create_decoder(frameBuf, got, 0);
+    F.enable_single_tile(decoder, 1);
+  } else {
+    F.reset_decoder_bytes(decoder, frameBuf, got, 0);
+  }
+  F.parse_j2c(decoder);
+
+  const W  = F.get_width(decoder, 0)  | 0;
+  const H  = F.get_height(decoder, 0) | 0;
+  const NC = F.get_num_components(decoder) | 0;
+  const D  = F.get_depth(decoder, 0) | 0;
+
+  ensureRgbaBuf(W * H * 4);
+  F.invoke_to_rgba(decoder, rgbaBuf);
+  // FrameHandler surfaces the H.273 MatrixCoefficients (mat). Per RFC 9828 §5.3:
+  //   1 = BT.709,  5/6 = BT.601,  255 = unknown.
+  // The codestream itself is monochrome planes; the wrapper packs Y into the R
+  // channel, Cb into G, Cr into B (no conversion).  Auto-apply the matrix here.
+  if (NC >= 3) {
+    if (matrix === 1)         F.apply_bt709(rgbaBuf, W * H);
+    else if (matrix === 5 || matrix === 6) F.apply_bt601(rgbaBuf, W * H);
+    // else: no metadata; leave as-is (won't look right but decoder won't fail).
+  }
+  F.release_j2c(decoder);
+
+  // Paint into canvas.
+  const canvas = document.getElementById('mycanvas');
+  if (canvas.width !== W || canvas.height !== H) {
+    canvas.width  = W;
+    canvas.height = H;
+  }
+  const ctx   = canvas.getContext('2d');
+  const img   = ctx.createImageData(W, H);
+  img.data.set(Module.HEAPU8.subarray(rgbaBuf, rgbaBuf + W * H * 4));
+  ctx.putImageData(img, 0, 0);
+
+  const t1 = performance.now();
+  lastDecodeTimes.push(t1 - t0);
+  if (lastDecodeTimes.length > FPS_WIN) lastDecodeTimes.shift();
+  frameCount++;
+  setStat('imgWidth',  W);
+  setStat('imgHeight', H);
+  setStat('imgDepth',  D + ' bpc');
+  setStat('numComps',  NC);
+  return true;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Pacing helpers
+// ──────────────────────────────────────────────────────────────────────────
+function waitUntilUnpaused() {
+  if (!paused) return Promise.resolve();
+  return new Promise(resolve => { pauseResolver = resolve; });
+}
+
+function sleep(ms) {
+  return ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve();
+}
+
+// Stats tick (every 500 ms)
+function startStatsTicker() {
+  mbpsSampleT    = performance.now();
+  byteCountStart = byteCount;
+  return setInterval(() => {
+    const now  = performance.now();
+    const dt   = (now - mbpsSampleT) / 1000;  // seconds
+    const dB   = byteCount - byteCountStart;
+    const mbps = dt > 0 ? (dB * 8 / 1e6) / dt : 0;
+    setStat('statMbps', mbps.toFixed(1) + ' Mbps');
+    mbpsSampleT    = now;
+    byteCountStart = byteCount;
+
+    setStat('statPackets', pktCount);
+    setStat('statFrames',  frameCount);
+    setStat('statDrops',   rtpSession ? F.rtp_drops(rtpSession) : 0);
+    setStat('statGaps',    rtpSession ? F.rtp_gaps(rtpSession) : 0);
+    if (lastDecodeTimes.length > 0) {
+      const meanMs = lastDecodeTimes.reduce((a, b) => a + b, 0) / lastDecodeTimes.length;
+      const fps = meanMs > 0 ? (1000 / meanMs) : 0;
+      setStat('statFps', fps.toFixed(1));
+    }
+  }, 500);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Playback
+// ──────────────────────────────────────────────────────────────────────────
+async function startPlayback(source) {
+  if (!Module || running) return;
+  running = true;
+  paused  = false;
+
+  // Allocate persistent buffers.
+  if (!rtpSession) rtpSession = F.rtp_create();
+  else             F.rtp_reset(rtpSession);
+  if (!pktBuf)   pktBuf   = Module._malloc(PKT_BUF_SZ);
+  if (!frameBuf) frameBuf = Module._malloc(MAX_FRAME);
+
+  pktCount   = 0;
+  byteCount  = 0;
+  frameCount = 0;
+  lastDecodeTimes = [];
+
+  const pacing = document.querySelector('input[name="pacing"]:checked').value;
+  const ticker = startStatsTicker();
+  setOverlay(null);
+
+  // Paced-mode clock anchors (set on first frame decoded).
+  let wallStart = 0;
+  let rtpStart  = 0;
+
+  try {
+    for await (const pkt of parseRtpStream(source)) {
+      if (!running) break;
+      if (paused) await waitUntilUnpaused();
+
+      // Copy packet into the shared scratch buffer.  Reallocate if a packet
+      // ever exceeds 2 KiB (jumbo frame or IPv6 extensions).
+      const b = pkt.bytes;
+      if (b.length > PKT_BUF_SZ) {
+        console.warn('packet', b.length, 'bytes — exceeds PKT_BUF_SZ, skipping');
+        continue;
+      }
+      Module.HEAPU8.set(b, pktBuf);
+      pktCount++;
+      byteCount += b.length;
+
+      const r = F.rtp_push(rtpSession, pktBuf, b.length);
+      if (r < 0) {
+        console.warn('rtp_push:', F.rtp_last_error(rtpSession));
+        continue;
+      }
+      if (r === 1) {
+        const ok = decodeAndRender();
+        // When r===1, the current packet is the one that completed the frame,
+        // so its RTP timestamp equals the frame timestamp.
+        if (ok && pacing === 'paced') {
+          if (wallStart === 0) {
+            wallStart = performance.now();
+            rtpStart  = pkt.timestamp;
+          }
+          // 90 kHz clock is the default for standard video payload types (RFC 3551 §4.1).
+          const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
+          const target  = wallStart + dtMs;
+          const delayMs = target - performance.now();
+          if (delayMs > 1) await sleep(delayMs);
+        }
+        // Pump microtasks so the UI stays responsive even in ASAP mode.
+        if (pacing === 'max') await new Promise(r => setTimeout(r, 0));
+      }
+    }
+  } catch (e) {
+    console.error('playback error:', e);
+    setOverlay('Playback error: ' + e.message, 'error');
+  }
+  clearInterval(ticker);
+  running = false;
+  document.getElementById('btn-play').disabled  = false;
+  document.getElementById('btn-pause').disabled = true;
+  document.getElementById('btn-stop').disabled  = true;
+  setOverlay('Playback finished. ' + frameCount + ' frames decoded.', 'loading');
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// UI wiring
+// ──────────────────────────────────────────────────────────────────────────
+function currentSource() {
+  const url = document.getElementById('rtp-url').value.trim();
+  if (url) return url;
+  const preset = document.getElementById('rtp-preset').value;
+  if (preset) return preset;
+  const file = document.getElementById('rtp-file').files[0];
+  if (file) return file;
+  return null;
+}
+
+document.getElementById('btn-play').addEventListener('click', async () => {
+  const src = currentSource();
+  if (!src) { alert('Select a .rtp file, preset, or URL first.'); return; }
+  document.getElementById('btn-play').disabled  = true;
+  document.getElementById('btn-pause').disabled = false;
+  document.getElementById('btn-stop').disabled  = false;
+
+  let source;
+  if (src instanceof File) {
+    // Read the whole file — browsers cache it in memory but simpler than streaming a Blob.
+    const ab = await src.arrayBuffer();
+    source = new Uint8Array(ab);
+  } else {
+    source = src;
+  }
+  startPlayback(source);
+});
+
+document.getElementById('btn-pause').addEventListener('click', () => {
+  if (!running) return;
+  if (paused) {
+    paused = false;
+    if (pauseResolver) { pauseResolver(); pauseResolver = null; }
+    document.getElementById('btn-pause').textContent = 'Pause';
+  } else {
+    paused = true;
+    document.getElementById('btn-pause').textContent = 'Resume';
+  }
+});
+
+document.getElementById('btn-stop').addEventListener('click', () => {
+  running = false;
+  paused  = false;
+  if (pauseResolver) { pauseResolver(); pauseResolver = null; }
+});
+</script>
+
+</body>
+</html>
