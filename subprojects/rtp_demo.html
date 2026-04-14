@@ -210,6 +210,13 @@
       <option value="mt">Build: mt</option>
       <option value="scalar">Build: scalar</option>
     </select>
+    <select id="renderer-select" title="Renderer (reloads page on change)"
+            style="background: var(--bg); color: var(--text); border: 1px solid var(--border);
+                   border-radius: 4px; padding: 3px 8px; font-size: 12px; font-family: inherit;">
+      <option value="auto">Renderer: auto</option>
+      <option value="webgl">Renderer: WebGL2</option>
+      <option value="2d">Renderer: Canvas 2D</option>
+    </select>
   </header>
   <!-- Page navigation -->
   <nav class="nav-tabs">
@@ -376,6 +383,20 @@ async function loadModule() {
   });
 }
 
+// Renderer dropdown wiring: reflect current ?renderer=… and reload on change.
+{
+  const sel = document.getElementById('renderer-select');
+  const cur = new URLSearchParams(window.location.search).get('renderer') || 'auto';
+  if (['auto','webgl','2d'].includes(cur)) sel.value = cur;
+  sel.addEventListener('change', () => {
+    const params = new URLSearchParams(window.location.search);
+    if (sel.value === 'auto') params.delete('renderer');
+    else params.set('renderer', sel.value);
+    const qs = params.toString();
+    window.location.search = qs ? ('?' + qs) : '';
+  });
+}
+
 // Update SIMD / threads badges.
 wasmFeatureDetect.simd().then(ok => {
   const b = document.getElementById('simd_badge');
@@ -501,6 +522,11 @@ function setStat(id, v) {
       rtp_gaps:              Module.cwrap('rtp_seq_gaps',        'number', ['number']),
       rtp_last_error:        Module.cwrap('rtp_last_error',      'string', ['number']),
     };
+    // Eager renderer init — must run before the first decodeAndRender so
+    // we don't get caught by canvas-context-lock-in (calling getContext()
+    // with one type prevents using any other on the same element).
+    renderer = pickRenderer(document.getElementById('mycanvas'));
+    console.log('[rtp_demo] renderer =', renderer.name());
     setOverlay('Select a .rtp file or URL and press Play.', 'loading');
     document.getElementById('btn-play').disabled = false;
   } catch (e) {
@@ -517,6 +543,259 @@ function ensureRgbaBuf(size) {
   if (rgbaBuf) Module._free(rgbaBuf);
   rgbaBuf = Module._malloc(size);
   rgbaBufSz = size;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Renderers
+// ──────────────────────────────────────────────────────────────────────────
+// Two implementations behind a small interface:
+//   render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) — paint one frame
+//   needsCpuYcbcr() — true if caller must run apply_bt*_to_rgba before render
+//   name() — short label for diagnostics
+//
+// The active renderer is constructed once during module init (see eager init
+// near the bottom).  This avoids the canvas-context-lock-in problem: once
+// canvas.getContext('2d') has been called, the canvas can't be used for WebGL
+// (and vice versa) — so we choose at startup, not lazily.
+
+class Canvas2DRenderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx    = canvas.getContext('2d');
+  }
+  name()           { return '2d'; }
+  needsCpuYcbcr()  { return true; }   // CPU apply_bt*_to_rgba pass is required
+  render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
+    if (this.canvas.width !== W || this.canvas.height !== H) {
+      this.canvas.width  = W;
+      this.canvas.height = H;
+    }
+    const img = this.ctx.createImageData(W, H);
+    img.data.set(view.subarray(rgbaBufPtr, rgbaBufPtr + W * H * 4));
+    this.ctx.putImageData(img, 0, 0);
+  }
+}
+
+// ── WebGL2 shaders ───────────────────────────────────────────────────────
+// Vertex shader: fullscreen triangle-strip + Y-flip.  We keep
+// UNPACK_FLIP_Y_WEBGL at its default (false) and do the flip in-shader so
+// the GL state stays minimal.
+const _VS_SRC = `#version 300 es
+in vec2 a_pos;
+out vec2 v_uv;
+void main() {
+  v_uv = vec2((a_pos.x + 1.0) * 0.5, 1.0 - (a_pos.y + 1.0) * 0.5);
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+// Fragment shader: sample the packed RGBA, subtract the per-channel offset,
+// apply the YCbCr→RGB matrix, clamp.  For mat=0 / ycbcrMode='none' the
+// matrix is identity and the offset is zero, so the texture is rendered
+// as-is (RGB passthrough).
+const _FS_SRC = `#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+uniform mat3      u_matrix;   // YCbCr→RGB (column-major in JS upload)
+uniform vec3      u_offset;   // subtracted from sample before matrix
+in  vec2 v_uv;
+out vec4 o_color;
+void main() {
+  vec4 s   = texture(u_tex, v_uv);
+  vec3 ycc = vec3(s.r, s.g, s.b) - u_offset;
+  vec3 rgb = clamp(u_matrix * ycc, 0.0, 1.0);
+  o_color  = vec4(rgb, 1.0);
+}`;
+
+// Coefficient tables — float versions of the integer fixed-point values in
+// wrapper.cpp's apply_ycbcr_bt601_to_rgba and apply_ycbcr_bt709_to_rgba.
+// All values divided by 16384 to convert from the >>14 fixed-point format.
+//
+//   BT.601: K_YR=22970/16384, K_CbG=5638/16384, K_CrG=11698/16384, K_CbB=29032/16384
+//   BT.709: K_YR=25801/16384, K_CbG=3069/16384, K_CrG=7672/16384,  K_CbB=30397/16384
+//
+// Matrix layout (column-major, suitable for gl.uniformMatrix3fv):
+//   col 0 (Y  multiplier):  [1, 1, 1]
+//   col 1 (Cb multiplier):  [0, -K_CbG, K_CbB]
+//   col 2 (Cr multiplier):  [K_YR, -K_CrG, 0]
+//
+// Offset for full-range YCbCr: Cb/Cr neutral at 128/255 ≈ 0.5019607...
+// (Use 128/255 exactly to match wrapper.cpp's `Cb - 128` semantics; using
+// 0.5 instead introduces a ~0.08/255 bias.)
+const _F_HALF = 128.0 / 255.0;
+const _MAT_IDENTITY = new Float32Array([1,0,0, 0,1,0, 0,0,1]);
+const _MAT_BT709F   = new Float32Array([
+  1, 1, 1,
+  0, -3069/16384, 30397/16384,
+  25801/16384, -7672/16384, 0,
+]);
+const _MAT_BT601F   = new Float32Array([
+  1, 1, 1,
+  0, -5638/16384, 29032/16384,
+  22970/16384, -11698/16384, 0,
+]);
+const _OFF_ZERO     = new Float32Array([0, 0, 0]);
+const _OFF_FULL     = new Float32Array([0, _F_HALF, _F_HALF]);
+
+// Pick the matrix + offset + uniform-cache signature for the current frame.
+// Mirrors the JS-side decision in decodeAndRender's CPU path.  `range` is
+// 0=narrow, 1=full, 2=unknown (treat as full).  Narrow-range support is
+// stubbed for now (deferred — current source files are full-range).
+function _pickYcbcrUniforms(matrix, range, ycbcrMode, NC) {
+  if (NC < 3) return { mat: _MAT_IDENTITY, off: _OFF_ZERO, sig: 'id' };
+  let chosen = ycbcrMode;
+  if (chosen === 'auto') {
+    if      (matrix === 1)                 chosen = 'bt709';
+    else if (matrix === 5 || matrix === 6) chosen = 'bt601';
+    else if (matrix === 0)                 chosen = 'none';
+    else                                   chosen = 'bt709';   // default for unknown
+  }
+  if (chosen === 'bt709') return { mat: _MAT_BT709F, off: _OFF_FULL, sig: '709f' };
+  if (chosen === 'bt601') return { mat: _MAT_BT601F, off: _OFF_FULL, sig: '601f' };
+  /* 'none' */          return { mat: _MAT_IDENTITY, off: _OFF_ZERO, sig: 'id' };
+}
+
+function _compileShader(gl, type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh);
+    gl.deleteShader(sh);
+    throw new Error('shader compile failed: ' + log);
+  }
+  return sh;
+}
+
+class WebGL2Renderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    const gl = canvas.getContext('webgl2', {
+      premultipliedAlpha: false,
+      antialias:          false,
+      preserveDrawingBuffer: false,
+      powerPreference:    'high-performance',
+      alpha:              true,
+      depth:              false,
+      stencil:            false,
+    });
+    if (!gl) throw new Error('webgl2 context unavailable');
+    this.gl = gl;
+    this.lost = false;
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.lost = true;
+      console.warn('[rtp_demo] WebGL context lost');
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      console.log('[rtp_demo] WebGL context restored, recreating resources');
+      this._setup();
+      this.lost = false;
+    });
+    this._setup();
+  }
+
+  _setup() {
+    const gl = this.gl;
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+
+    const vs   = _compileShader(gl, gl.VERTEX_SHADER,   _VS_SRC);
+    const fs   = _compileShader(gl, gl.FRAGMENT_SHADER, _FS_SRC);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+    gl.bindAttribLocation(prog, 0, 'a_pos');
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(prog);
+      throw new Error('program link failed: ' + log);
+    }
+    gl.useProgram(prog);
+    this.prog    = prog;
+    this.uTex    = gl.getUniformLocation(prog, 'u_tex');
+    this.uMatrix = gl.getUniformLocation(prog, 'u_matrix');
+    this.uOffset = gl.getUniformLocation(prog, 'u_offset');
+
+    // Fullscreen triangle-strip quad.
+    this.vao = gl.createVertexArray();
+    gl.bindVertexArray(this.vao);
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1,   1, -1,   -1, 1,   1, 1,
+    ]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    // Texture — allocated lazily on first render at the right size.
+    this.tex   = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S,     gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T,     gl.CLAMP_TO_EDGE);
+    this.texW = 0; this.texH = 0;
+
+    // Cache: skip uniform uploads when the matrix didn't change between frames.
+    this.lastMatSig = null;
+  }
+
+  name()           { return 'webgl2'; }
+  needsCpuYcbcr()  { return false; }   // shader does the matrix in-GPU
+
+  render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
+    if (this.lost) return;
+    const gl = this.gl;
+
+    if (this.canvas.width !== W || this.canvas.height !== H) {
+      this.canvas.width  = W;
+      this.canvas.height = H;
+      gl.viewport(0, 0, W, H);
+      this.texW = 0;   // force texImage2D realloc
+    }
+
+    // ArrayBufferView slice into the current WASM heap.  Pass directly to
+    // texImage2D / texSubImage2D — WebGL2 spec says the upload copies the
+    // bytes, so the view doesn't need to live past this call.
+    const pixels = view.subarray(rgbaBufPtr, rgbaBufPtr + W * H * 4);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    if (this.texW !== W || this.texH !== H) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      this.texW = W; this.texH = H;
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    }
+
+    const u = _pickYcbcrUniforms(matrix, range, ycbcrMode, NC);
+    if (u.sig !== this.lastMatSig) {
+      gl.uniformMatrix3fv(this.uMatrix, false, u.mat);
+      gl.uniform3fv(this.uOffset, u.off);
+      gl.uniform1i(this.uTex, 0);
+      this.lastMatSig = u.sig;
+    }
+
+    gl.bindVertexArray(this.vao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+}
+
+let renderer = null;  // chosen once during module init
+
+// Choose a renderer based on the ?renderer= URL param.  Falls back to
+// Canvas 2D if WebGL2 is requested but unavailable.
+function pickRenderer(canvas) {
+  const q = new URLSearchParams(window.location.search).get('renderer') || 'auto';
+  const want = (q === 'webgl' || q === '2d') ? q : 'auto';
+  if (want === 'webgl' || want === 'auto') {
+    try {
+      return new WebGL2Renderer(canvas);
+    } catch (e) {
+      if (want === 'webgl') console.warn('[rtp_demo] WebGL2 requested but unavailable; using Canvas 2D:', e);
+      else                   console.log('[rtp_demo] WebGL2 unavailable; using Canvas 2D');
+    }
+  }
+  return new Canvas2DRenderer(canvas);
 }
 
 function decodeAndRender() {
@@ -586,6 +865,7 @@ function decodeAndRender() {
       console.log(`[rtp_demo]   Range                    = ${range}   [0=narrow/TV, 1=full/PC, 2=unknown]`);
       console.log(`[rtp_demo]   ColourPrimaries  (prims) = ${prims}`);
       console.log(`[rtp_demo]   TransferCharacteristics  = ${trans}`);
+      console.log(`[rtp_demo] renderer = ${renderer.name()}  cpu_ycbcr=${renderer.needsCpuYcbcr()}`);
       console.log(`[rtp_demo] ─────────────────────────────────────`);
 
       // Populate stats panel too.
@@ -620,7 +900,10 @@ function decodeAndRender() {
     //   mat=1   → BT.709
     //   mat=5|6 → BT.601 (NTSC/PAL)
     //   mat=255 → no metadata (try BT.709 as a sensible modern default if mode=auto)
-    if (NC >= 3) {
+    // YCbCr→RGB conversion runs on CPU only when the active renderer can't
+    // do it in-shader (Canvas 2D path).  WebGL2Renderer does the matrix in
+    // its fragment shader and reports needsCpuYcbcr()===false.
+    if (NC >= 3 && renderer.needsCpuYcbcr()) {
       let chosen = ycbcrMode;  // 'auto'|'none'|'bt601'|'bt709'
       if (chosen === 'auto') {
         if      (matrix === 1)                    chosen = 'bt709';
@@ -633,16 +916,10 @@ function decodeAndRender() {
       // else 'none': RGB passthrough.
     }
 
-    // Paint into canvas.
-    const canvas = document.getElementById('mycanvas');
-    if (canvas.width !== W || canvas.height !== H) {
-      canvas.width  = W;
-      canvas.height = H;
-    }
-    const ctx = canvas.getContext('2d');
-    const img = ctx.createImageData(W, H);
-    img.data.set(Module.HEAPU8.subarray(rgbaBuf, rgbaBuf + W * H * 4));
-    ctx.putImageData(img, 0, 0);
+    // Paint into canvas via the active renderer.  Module.HEAPU8 is re-read on
+    // every call so a heap-grow event between WASM allocations doesn't leave
+    // the renderer with a stale ArrayBuffer view.
+    renderer.render(Module.HEAPU8, rgbaBuf, W, H, matrix, range, ycbcrMode, NC);
 
     const t1 = performance.now();
     lastDecodeMs = t1 - t0;
