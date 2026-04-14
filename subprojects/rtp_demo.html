@@ -621,6 +621,11 @@ let lastDecodeTimes = [];  // ms, ring of last N
 const FPS_WIN = 30;
 let lastDecodeMs = 0;
 let lastFramePacketTs = null;  // previous frame's RTP timestamp for Δts logging
+// Most recently decoded output size — used by the on-video HUD.  Updated
+// each frame inside decodeAndRender so auto-reduce resolution changes
+// show up in the HUD on the next ticker refresh.
+let lastDecodedW = 0;
+let lastDecodedH = 0;
 
 // Opt-in verbose per-second console.log — off by default because console.log
 // has real cost with DevTools open.  Enable with ?verbose=1 in the URL.
@@ -1161,6 +1166,9 @@ function decodeAndRender() {
     const D     = F.get_depth(dec, 0) | 0;
     const W     = Math.ceil(fullW / (1 << reduceNLValue));
     const H     = Math.ceil(fullH / (1 << reduceNLValue));
+    // Cache for the on-video HUD.
+    lastDecodedW = W;
+    lastDecodedH = H;
 
     // Gather per-component metadata for diagnostics + chroma-subsampling display.
     // These also reflect full-resolution per-component dimensions.
@@ -1347,8 +1355,13 @@ function startStatsTicker() {
     setStat('statMbps', `${chunkMbps.toFixed(0)} in / ${pktMbps.toFixed(0)} parsed Mbps`);
     setStat('statDispFps', dispFps.toFixed(1));
     // HUD mirrors the display-fps chip; always visible, no background.
+    // Include the current decoded resolution so the effect of auto-reduce
+    // (or a manual Resolution dropdown change) is visible at a glance.
     const hud = document.getElementById('fps-hud');
-    if (hud) hud.textContent = `${dispFps.toFixed(1)} fps`;
+    if (hud) {
+      const res = (lastDecodedW && lastDecodedH) ? `${lastDecodedW}×${lastDecodedH}  ` : '';
+      hud.textContent = `${res}${dispFps.toFixed(1)} fps`;
+    }
     mbpsSampleT     = now;
     byteCountStart  = byteCount;
     chunkBytesStart = chunkBytes;
@@ -1402,6 +1415,7 @@ async function startPlayback(source) {
   lastDecodeTimes = [];
   lastDecodeMs = 0;
   lastFramePacketTs = null;
+  lastDecodedW = 0; lastDecodedH = 0;
 
   // Read resolution-reduce setting from UI.
   reduceNLMode = document.getElementById('reduce-nl').value;
