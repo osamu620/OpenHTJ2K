@@ -90,7 +90,7 @@ target_include_directories(
 target_include_directories(open_htj2k INTERFACE source/core/interface source/core/common)
 set_target_properties(
         open_htj2k PROPERTIES
-        OUTPUT_NAME $<IF:$<CONFIG:Debug>,open_htj2k_d,open_htj2k_R>
+        OUTPUT_NAME openhtj2k
         VERSION ${PROJECT_VERSION}
         SOVERSION ${OPENHTJ2K_VERSION_MAJOR})
 # target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
