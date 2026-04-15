@@ -617,10 +617,27 @@ let autoDecided   = false;  // have we measured the first frame?
 let ycbcrMode = 'auto';
 
 // Network-pacing frame drop: when wall-clock is past a frame's target by
-// more than 2 frame periods we skip decoding it and discard the WASM
-// reassembler's ready slot, keeping playback aligned with the RTP clock.
-// Active only in paced mode; disabled by ?nodrop=1 for diagnostics.
+// more than PACE_DROP_PERIODS frame periods we skip decoding it and discard
+// the WASM reassembler's ready slot, keeping playback loosely aligned with
+// the RTP clock.  The threshold is generous because a decoder that runs
+// just below real-time (e.g. 28 fps on a 30 fps source) will accumulate
+// sub-period lag every frame and otherwise trigger a burst of drops —
+// whereas letting it run freely produces visibly smoother playback at a
+// marginally lower display FPS.  Override via ?drop_periods=N; disable
+// entirely with ?nodrop=1.
 const PACE_DROP_ENABLED = !(new URLSearchParams(location.search).has('nodrop'));
+const PACE_DROP_PERIODS = Math.max(1,
+    Number(new URLSearchParams(location.search).get('drop_periods')) || 8);
+
+// Pre-roll: decode the first N frames back-to-back without anchoring the
+// paced-mode wall clock.  A cold-cache first frame can take much longer
+// than later frames (SIMD warmup, WASM code JIT, initial memory grow),
+// and anchoring wallStart on that atypical frame leaves every later frame
+// running with a biased target.  Letting a handful of frames complete
+// first lets the decode pipeline settle, after which anchoring gives a
+// representative starting point.  Override via ?preroll=N.
+const PRE_ROLL_FRAMES = Math.max(0,
+    Number(new URLSearchParams(location.search).get('preroll')) || 3);
 let droppedByPace = 0;
 let framePeriodMs = 0;          // derived from inter-frame RTP Δts; 0 before second frame arrives
 
@@ -1537,16 +1554,16 @@ async function startPlayback(source) {
         lastFramePacketTs = pkt.timestamp;
 
         // Network-pacing frame drop.  If the completed frame's target wall
-        // time is already in the past by more than 2 frame periods, skip
-        // decoding: pop the reassembled bitstream out of the ready slot
-        // without copying, and continue pulling packets.  wallStart===0 on
-        // the very first completed frame — never drop it, since the clock
-        // anchors are set *after* its decode below.
+        // time is already in the past by more than PACE_DROP_PERIODS frame
+        // periods, skip decoding: pop the reassembled bitstream out of the
+        // ready slot without copying, and continue pulling packets.
+        // wallStart===0 on the very first completed frame — never drop it,
+        // since the clock anchors are set *after* its decode below.
         if (PACE_DROP_ENABLED && pacing === 'paced' && wallStart !== 0) {
           const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
           const target  = wallStart + totalPausedMs + dtMs;
           const period  = framePeriodMs || (1000 / 60);   // 16.7 ms fallback
-          if (performance.now() - target > 2 * period) {
+          if (performance.now() - target > PACE_DROP_PERIODS * period) {
             F.rtp_drop_ready(rtpSession);
             droppedByPace++;
             continue;
@@ -1567,18 +1584,24 @@ async function startPlayback(source) {
         // When r===1, the current packet is the one that completed the frame,
         // so its RTP timestamp equals the frame timestamp.
         if (ok && pacing === 'paced') {
+          // Pre-roll: let the first PRE_ROLL_FRAMES decodes run back-to-back
+          // with no pacing.  wallStart===0 during this window, which also
+          // disables pace-drop (see its guard above).
           if (wallStart === 0) {
-            wallStart = performance.now();
-            rtpStart  = pkt.timestamp;
+            if (frameCount > PRE_ROLL_FRAMES) {
+              wallStart = performance.now();
+              rtpStart  = pkt.timestamp;
+            }
+          } else {
+            // 90 kHz clock is the default for standard video payload types (RFC 3551 §4.1).
+            // totalPausedMs is added so any wall-clock time spent paused doesn't
+            // count as "behind schedule" when we resume — otherwise the decoder
+            // sprints until the real and RTP clocks re-converge.
+            const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
+            const target  = wallStart + totalPausedMs + dtMs;
+            const delayMs = target - performance.now();
+            if (delayMs > 1) await sleep(delayMs);
           }
-          // 90 kHz clock is the default for standard video payload types (RFC 3551 §4.1).
-          // totalPausedMs is added so any wall-clock time spent paused doesn't
-          // count as "behind schedule" when we resume — otherwise the decoder
-          // sprints until the real and RTP clocks re-converge.
-          const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
-          const target  = wallStart + totalPausedMs + dtMs;
-          const delayMs = target - performance.now();
-          if (delayMs > 1) await sleep(delayMs);
         }
         // Pump microtasks so the UI stays responsive even in ASAP mode.
         if (pacing === 'max') await fastYield();
