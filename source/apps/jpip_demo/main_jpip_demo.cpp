@@ -1,10 +1,9 @@
 // Copyright (c) 2026, Osamu Watanabe
 // All rights reserved.
 //
-// JPIP Phase-1 mouse-driven foveation demo.
+// JPIP mouse-driven foveation demo.
 //
-// Loads a JPEG 2000 codestream (typically the land_shallow_topo_1920_fov.j2c
-// asset produced by the encoder), builds a CodestreamIndex once, opens a
+// Loads a JPEG 2000 codestream, builds a CodestreamIndex once, opens a
 // window, and redecodes the image every frame with a JPIP precinct filter
 // that picks precincts by concentric cones around the mouse cursor:
 //
@@ -13,12 +12,20 @@
 //   periphery : fsiz = canvas / 4         → drop the top two resolutions, whole image
 //
 // The unioned precinct set becomes the decoder's set_precinct_filter, the
-// decode runs, and the resulting RGB frame is uploaded to the rtp_recv
-// renderer (Metal on macOS, OpenGL 3.3 elsewhere).
+// decoder streams rows via invoke_line_based_stream(), each row is
+// nearest-neighbour downsampled into a fixed-size RGB buffer, and that
+// buffer is uploaded to the rtp_recv renderer (Metal on macOS, OpenGL 3.3
+// elsewhere).
+//
+// Decoupling the window/texture size from the canvas size lets the demo
+// run on canvases that exceed the GPU texture limit (Metal: 16384 wide on
+// Apple silicon) — including the 21600 × 10800 NASA Blue Marble.  Peak RSS
+// is proportional to the ring-buffer depth rather than canvas W × H.
 //
 // Usage:
 //   open_htj2k_jpip_demo <input.j2c>
 //       [--fovea-radius N=256] [--parafovea-radius N=512]
+//       [--window-size WxH=1920x1080]
 //       [--decode-on-move-only] [--no-vsync]
 //
 // Exits on window close or ESC.
@@ -51,6 +58,14 @@ struct Options {
   std::string infile;
   uint32_t    fovea_radius     = 256;
   uint32_t    parafovea_radius = 512;
+  // Window/texture dimensions, decoupled from canvas size.  The decoder still
+  // operates at canvas resolution; the row-callback downsamples into a
+  // window-sized RGB buffer before upload.  Default 1920×1080 fits the Metal
+  // 16384 texture limit for arbitrarily large canvases (the original demo
+  // used canvas size directly and aborted on the 21600-wide NASA Blue Marble
+  // asset because Metal rejects MTLTextureDescriptor.width > 16384).
+  uint32_t    window_w         = 1920;
+  uint32_t    window_h         = 1080;
   bool        decode_on_move   = false;
   bool        vsync            = true;
 };
@@ -60,6 +75,17 @@ bool parse_args(int argc, char **argv, Options &opt) {
     const std::string a = argv[i];
     if (a == "--fovea-radius" && i + 1 < argc)      opt.fovea_radius = static_cast<uint32_t>(std::stoul(argv[++i]));
     else if (a == "--parafovea-radius" && i + 1 < argc) opt.parafovea_radius = static_cast<uint32_t>(std::stoul(argv[++i]));
+    else if (a == "--window-size" && i + 1 < argc) {
+      // "WxH" or "W,H".
+      const std::string s = argv[++i];
+      const auto sep = s.find_first_of("x,");
+      if (sep == std::string::npos) {
+        std::fprintf(stderr, "ERROR: --window-size expects WxH or W,H, got '%s'\n", s.c_str());
+        return false;
+      }
+      opt.window_w = static_cast<uint32_t>(std::stoul(s.substr(0, sep)));
+      opt.window_h = static_cast<uint32_t>(std::stoul(s.substr(sep + 1)));
+    }
     else if (a == "--decode-on-move-only")          opt.decode_on_move = true;
     else if (a == "--no-vsync")                     opt.vsync = false;
     else if (a.size() > 0 && a[0] != '-' && opt.infile.empty()) opt.infile = a;
@@ -174,13 +200,26 @@ int main(int argc, char **argv) {
   // program lifetime, so the re-init is zero-copy and dominated by marker
   // parsing — sub-millisecond for a single-tile stream.
 
+  // Clamp the requested window to a known-safe upper bound so we never feed
+  // the renderer something that violates its texture size limit (Metal: 16384
+  // on Apple silicon; GL: implementation-defined but typically ≥ 16384 too).
+  if (opt.window_w == 0) opt.window_w = canvas_w;
+  if (opt.window_h == 0) opt.window_h = canvas_h;
+  constexpr uint32_t kMaxTex = 16384;
+  if (opt.window_w > kMaxTex) opt.window_w = kMaxTex;
+  if (opt.window_h > kMaxTex) opt.window_h = kMaxTex;
+
   Renderer renderer;
-  if (!renderer.init(static_cast<int>(canvas_w), static_cast<int>(canvas_h),
+  if (!renderer.init(static_cast<int>(opt.window_w), static_cast<int>(opt.window_h),
                      "OpenHTJ2K JPIP Foveation Demo", opt.vsync)) {
     std::fprintf(stderr, "FATAL: renderer.init failed\n");
     return EXIT_FAILURE;
   }
   GLFWwindow *window = renderer.get_window();
+  std::printf("window %u×%u  (downsample factor %.2f×%.2f from canvas)\n",
+              opt.window_w, opt.window_h,
+              static_cast<double>(canvas_w) / opt.window_w,
+              static_cast<double>(canvas_h) / opt.window_h);
 
   std::vector<uint8_t> rgb;
   uint64_t frames = 0;
@@ -227,44 +266,59 @@ int main(int argc, char **argv) {
           return keep_moved.count(idx_ptr->I(t, c, r, p_rc)) > 0;
         });
 
-    std::vector<int32_t *> planes;
-    std::vector<uint32_t>  w, h;
-    std::vector<uint8_t>   depth;
-    std::vector<bool>      sgn;
-    bool                   ok = true;
+    // Line-based stream decode + on-the-fly nearest-neighbour downsample
+    // into the window-sized RGB buffer.  Peak RSS is now proportional to
+    // (ring depth × canvas_w) instead of (canvas_w × canvas_h) — the 233 MP
+    // NASA Blue Marble crop drops from ~10 GB to a few hundred MB.
+    if (rgb.size() != static_cast<std::size_t>(opt.window_w) * opt.window_h * 3u) {
+      rgb.assign(static_cast<std::size_t>(opt.window_w) * opt.window_h * 3u, 0);
+    }
+    std::vector<uint32_t> w, h;
+    std::vector<uint8_t>  depth;
+    std::vector<bool>     sgn;
+    // Track which window rows have been written this frame so we don't
+    // overwrite a row when several canvas rows map to it (first canvas row
+    // in each window-row bucket wins — nearest-neighbour vertical downsample).
+    static thread_local std::vector<uint8_t> row_written;
+    row_written.assign(opt.window_h, 0);
+    bool ok      = true;
+    bool dims_ok = true;
     try {
-      dec.invoke(planes, w, h, depth, sgn);
+      dec.invoke_line_based_stream(
+          [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+            if (nc < 3 || w.empty() || h.empty()) { dims_ok = false; return; }
+            const uint32_t cw = w[0];
+            const uint32_t ch = h[0];
+            // Map this canvas row to a window row.  Floor-div is fine for
+            // nearest-neighbour; any canvas row whose mapped target_y has
+            // already been written is dropped.
+            const uint32_t target_y =
+                static_cast<uint32_t>(static_cast<uint64_t>(y) * opt.window_h / std::max(1u, ch));
+            if (target_y >= opt.window_h || row_written[target_y]) return;
+            row_written[target_y] = 1;
+            uint8_t *dst = rgb.data() + static_cast<std::size_t>(target_y) * opt.window_w * 3u;
+            for (uint32_t x_w = 0; x_w < opt.window_w; ++x_w) {
+              const uint32_t x_c =
+                  static_cast<uint32_t>(static_cast<uint64_t>(x_w) * cw / std::max(1u, opt.window_w));
+              auto clamp_u8 = [](int32_t v) -> uint8_t {
+                if (v < 0) return 0;
+                if (v > 255) return 255;
+                return static_cast<uint8_t>(v);
+              };
+              dst[3u * x_w + 0] = clamp_u8(rows[0][x_c]);
+              dst[3u * x_w + 1] = clamp_u8(rows[1][x_c]);
+              dst[3u * x_w + 2] = clamp_u8(rows[2][x_c]);
+            }
+          },
+          w, h, depth, sgn);
     } catch (std::exception &e) {
       std::fprintf(stderr, "decode failed: %s\n", e.what());
       break;
     }
-    const uint32_t out_w = (w.size() > 0) ? w[0] : 0u;
-    const uint32_t out_h = (h.size() > 0) ? h[0] : 0u;
-    if (planes.size() < 3 || out_w == 0 || out_h == 0) {
-      ok = false;
-    } else {
-      if (rgb.size() != static_cast<std::size_t>(out_w) * out_h * 3) {
-        rgb.assign(static_cast<std::size_t>(out_w) * out_h * 3, 0);
-      }
-      for (uint32_t y = 0; y < out_h; ++y) {
-        uint8_t *dst = rgb.data() + static_cast<std::size_t>(y) * out_w * 3;
-        const int32_t *rp = planes[0] + static_cast<std::ptrdiff_t>(y) * out_w;
-        const int32_t *gp = planes[1] + static_cast<std::ptrdiff_t>(y) * out_w;
-        const int32_t *bp = planes[2] + static_cast<std::ptrdiff_t>(y) * out_w;
-        for (uint32_t x = 0; x < out_w; ++x) {
-          auto clamp_u8 = [](int32_t v) -> uint8_t {
-            if (v < 0) return 0;
-            if (v > 255) return 255;
-            return static_cast<uint8_t>(v);
-          };
-          dst[3 * x + 0] = clamp_u8(rp[x]);
-          dst[3 * x + 1] = clamp_u8(gp[x]);
-          dst[3 * x + 2] = clamp_u8(bp[x]);
-        }
-      }
-    }
+    if (!dims_ok) ok = false;
 
-    if (ok) renderer.upload_and_draw(rgb.data(), static_cast<int>(out_w), static_cast<int>(out_h));
+    if (ok) renderer.upload_and_draw(rgb.data(), static_cast<int>(opt.window_w),
+                                     static_cast<int>(opt.window_h));
 
     ++frames;
     ++frames_since_log;
