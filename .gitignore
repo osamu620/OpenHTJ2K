@@ -48,3 +48,7 @@ perf.data.old
 
 # Cloudflare Wrangler local state (OAuth tokens, cache, etc.)
 .wrangler/
+
+# Working planning notes that live in the repo for the author's
+# convenience and should not be tracked.
+PHASE2_PLAN.md
