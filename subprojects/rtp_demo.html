@@ -373,9 +373,14 @@
             <option value="bt709">BT.709</option>
           </select>
         </label>
-        <label><input type="radio" name="pacing" value="paced" checked> Paced (RTP clock)</label>
-        <label><input type="radio" name="pacing" value="max"> As-fast-as-possible</label>
+        <label><input type="radio" name="pacing" value="paced"> Paced (RTP clock)</label>
+        <label><input type="radio" name="pacing" value="max" checked> As-fast-as-possible</label>
       </div>
+    </div>
+    <div style="font-size:11px; color:var(--text-sub); margin-top:10px;">
+      Default is <b>As-fast-as-possible</b>. Paced playback requires a
+      high-performance CPU (decoder must sustain source frame rate);
+      on slower machines the Paced mode may stutter or stall.
     </div>
   </div>
 
@@ -619,13 +624,11 @@ let ycbcrMode = 'auto';
 // Network-pacing frame drop: when wall-clock is past a frame's target by
 // more than PACE_DROP_PERIODS frame periods we skip decoding it and discard
 // the WASM reassembler's ready slot, keeping playback loosely aligned with
-// the RTP clock.  The threshold is generous because a decoder that runs
-// just below real-time (e.g. 28 fps on a 30 fps source) will accumulate
-// sub-period lag every frame and otherwise trigger a burst of drops —
-// whereas letting it run freely produces visibly smoother playback at a
-// marginally lower display FPS.  Override via ?drop_periods=N; disable
-// entirely with ?nodrop=1.
-const PACE_DROP_ENABLED = !(new URLSearchParams(location.search).has('nodrop'));
+// the RTP clock.  Off by default — slow decoders otherwise get stuck in a
+// burst-then-stall pattern that trips Cloudflare/NAT timeouts.  Opt in
+// with ?drop=1; tune the threshold via ?drop_periods=N.  ?nodrop=1 is
+// kept as a legacy synonym for the default (no-op).
+const PACE_DROP_ENABLED = new URLSearchParams(location.search).has('drop');
 const PACE_DROP_PERIODS = Math.max(1,
     Number(new URLSearchParams(location.search).get('drop_periods')) || 8);
 
