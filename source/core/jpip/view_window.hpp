@@ -34,11 +34,12 @@ struct ViewWindow {
 // Resolve a view-window into the set of precincts a server must deliver.
 // Returned keys are deterministic and sorted by (t, c, r, p_rc).  Duplicates
 // never appear.  Codestreams with DFS/POC are NOT yet supported (Phase 1).
-std::vector<PrecinctKey> resolve_view_window(const CodestreamIndex &idx,
-                                             const ViewWindow &vw);
+OPENHTJ2K_JPIP_EXPORT std::vector<PrecinctKey>
+resolve_view_window(const CodestreamIndex &idx, const ViewWindow &vw);
 
 // Pick the discard level r* per §C.4.2 Table C.1.  Exposed for testing.
-uint8_t pick_discard_level(const CodestreamIndex &idx, const ViewWindow &vw);
+OPENHTJ2K_JPIP_EXPORT uint8_t pick_discard_level(const CodestreamIndex &idx,
+                                                 const ViewWindow &vw);
 
 }  // namespace jpip
 }  // namespace open_htj2k

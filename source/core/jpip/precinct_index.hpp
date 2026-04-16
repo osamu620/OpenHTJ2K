@@ -12,6 +12,17 @@
 #include <memory>
 #include <vector>
 
+// Mirrors the OPENHTJ2K_EXPORT pattern in source/core/interface/decoder.hpp:
+// MSVC needs __declspec(dllexport) on out-of-line definitions reachable from
+// other DLLs / executables; everywhere else the macro is empty and ELF/Mach-O
+// default visibility takes care of it.  Defined inline here so this header
+// doesn't have to include the existing public ABI surface.
+#if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
+  #define OPENHTJ2K_JPIP_EXPORT __declspec(dllexport)
+#else
+  #define OPENHTJ2K_JPIP_EXPORT
+#endif
+
 namespace open_htj2k {
 namespace jpip {
 
@@ -72,7 +83,8 @@ class CodestreamIndex {
  public:
   // Build the index by parsing the main header of a raw J2C codestream
   // (no JP2/JPH container).  Throws std::runtime_error on parse failure.
-  static std::unique_ptr<CodestreamIndex> build(const uint8_t *codestream, std::size_t len);
+  OPENHTJ2K_JPIP_EXPORT static std::unique_ptr<CodestreamIndex> build(
+      const uint8_t *codestream, std::size_t len);
 
   uint32_t num_tiles_x()    const { return num_tiles_x_; }
   uint32_t num_tiles_y()    const { return num_tiles_y_; }
@@ -84,20 +96,20 @@ class CodestreamIndex {
   bool     is_irreversible()   const { return is_irreversible_; }
   // Largest NL across all (t, c).  Used by resolve_view_window for picking
   // the discard level under round-direction "down".
-  uint8_t  max_NL() const;
+  OPENHTJ2K_JPIP_EXPORT uint8_t  max_NL() const;
   // Component subsampling XRsiz/YRsiz (Point2.{x,y}).
-  Point2   subsampling(uint16_t c) const;
+  OPENHTJ2K_JPIP_EXPORT Point2   subsampling(uint16_t c) const;
 
-  const TileComponentInfo &tile_component(uint16_t t, uint16_t c) const;
+  OPENHTJ2K_JPIP_EXPORT const TileComponentInfo &tile_component(uint16_t t, uint16_t c) const;
 
   // JPIP §A.3.2.1 sequence number within the tile-component.
-  uint32_t s(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc) const;
+  OPENHTJ2K_JPIP_EXPORT uint32_t s(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc) const;
 
   // JPIP §A.3.2.1 Eq A-1: I = t + (c + s · num_components) · num_tiles
-  uint64_t I(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc) const;
+  OPENHTJ2K_JPIP_EXPORT uint64_t I(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc) const;
 
   // Total precinct count summed over all (t, c).
-  uint64_t total_precincts() const;
+  OPENHTJ2K_JPIP_EXPORT uint64_t total_precincts() const;
 
  private:
   CodestreamIndex() = default;
