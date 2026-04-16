@@ -77,6 +77,7 @@ add_subdirectory(source/core/coding)
 add_subdirectory(source/core/transform)
 add_subdirectory(source/core/interface)
 add_subdirectory(source/core/jph)
+add_subdirectory(source/core/jpip)
 target_include_directories(
     open_htj2k
     PRIVATE source/core/common
@@ -85,6 +86,7 @@ target_include_directories(
     source/core/transform
     # source/core/interface
     source/core/jph
+    source/core/jpip
     # ${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
 )
 target_include_directories(open_htj2k INTERFACE source/core/interface source/core/common)
@@ -249,6 +251,11 @@ add_subdirectory(source/apps/lb_compare)
 target_include_directories(lb_compare PUBLIC source/core/interface)
 target_link_libraries(lb_compare PUBLIC open_htj2k)
 
+# JPIP Phase-1 index-check harness (used by tests/jpip_phase1.cmake)
+add_executable(jpip_index_check)
+add_subdirectory(source/apps/jpip_index_check)
+target_link_libraries(jpip_index_check PUBLIC open_htj2k)
+
 # RFC 9828 RTP receiver (experimental, requires GLFW)
 option(OPENHTJ2K_RTP "Build experimental RFC 9828 RTP receiver (requires GLFW)" OFF)
 if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
@@ -322,3 +329,4 @@ install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/batch_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
