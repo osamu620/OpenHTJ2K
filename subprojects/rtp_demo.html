@@ -272,6 +272,41 @@
       color: var(--accent); text-decoration: none;
       display: inline-flex; align-items: center; gap: 6px;
     }
+
+    /* Collapsible URL-parameters reference. */
+    .url-params {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px 20px; margin-bottom: 20px;
+      font-size: 13px;
+    }
+    .url-params > summary {
+      cursor: pointer; font-weight: 600; color: var(--text-sub);
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px;
+      list-style: none;          /* hide default marker */
+      user-select: none;
+    }
+    .url-params > summary::before {
+      content: "▸ "; color: var(--accent); display: inline-block;
+      transition: transform 0.15s;
+    }
+    .url-params[open] > summary::before { content: "▾ "; }
+    .url-params table {
+      width: 100%; border-collapse: collapse; margin-top: 12px;
+    }
+    .url-params th, .url-params td {
+      text-align: left; padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .url-params th {
+      color: var(--text-sub); font-weight: 600; font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .url-params td code {
+      background: var(--bg); padding: 1px 5px; border-radius: 3px;
+      font-size: 12px; color: var(--accent);
+    }
+    .url-params tr:last-child td { border-bottom: none; }
   </style>
 </head>
 
@@ -470,6 +505,60 @@
       <span id="statMbps">—</span>
     </div>
   </section>
+
+  <!-- URL-parameters reference (collapsed by default). -->
+  <details class="url-params">
+    <summary>URL parameters</summary>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Default</th><th>Values</th><th>Effect</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>?variant=</code></td>
+          <td><code>auto</code></td>
+          <td><code>auto</code> · <code>mt_simd</code> · <code>simd</code> · <code>mt</code> · <code>scalar</code></td>
+          <td>Force a specific WASM build. <code>auto</code> picks the best available for the browser.</td>
+        </tr>
+        <tr>
+          <td><code>?renderer=</code></td>
+          <td><code>auto</code></td>
+          <td><code>auto</code> · <code>webgl</code> · <code>2d</code></td>
+          <td>Force the renderer. <code>auto</code> prefers WebGL2 and falls back to Canvas 2D.</td>
+        </tr>
+        <tr>
+          <td><code>?drop=1</code></td>
+          <td>off</td>
+          <td>presence toggle</td>
+          <td>Enable paced-mode frame dropping (skip frames whose RTP-clock target is too far past). Off by default — slow decoders play slow-motion rather than stall.</td>
+        </tr>
+        <tr>
+          <td><code>?drop_periods=</code></td>
+          <td><code>8</code></td>
+          <td>integer ≥ 1</td>
+          <td>Number of frame periods of slack before a frame is dropped (only when <code>?drop=1</code>). At 29.97 fps the default is ≈ 267 ms.</td>
+        </tr>
+        <tr>
+          <td><code>?nodrop=1</code></td>
+          <td>—</td>
+          <td>presence toggle</td>
+          <td>Legacy synonym for the current default (no dropping). Kept for URL compatibility; has no additional effect.</td>
+        </tr>
+        <tr>
+          <td><code>?preroll=</code></td>
+          <td><code>3</code></td>
+          <td>integer ≥ 0</td>
+          <td>Frames decoded back-to-back before the paced wall clock anchors. Absorbs cold-start decode spikes (SIMD warmup, WASM JIT).</td>
+        </tr>
+        <tr>
+          <td><code>?verbose=1</code></td>
+          <td>off</td>
+          <td>presence toggle</td>
+          <td>Emit one <code>[rtp_demo t=Ns …]</code> line per second to the browser console with full pipeline stats.</td>
+        </tr>
+      </tbody>
+    </table>
+  </details>
 
   <footer class="site-footer">
     <a href="https://github.com/osamu620/OpenHTJ2K" target="_blank" rel="noopener">
