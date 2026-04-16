@@ -59,32 +59,77 @@ function quickParseRtp(pkt) {
  * Async generator over RTP packets in a .rtp file.
  * @param {string | Uint8Array | ReadableStream<Uint8Array>} source
  *     URL to fetch, a Uint8Array containing the file bytes, or a ReadableStream.
+ * @param {object} [opts]
+ * @param {(n: number) => void} [opts.onChunk]
+ *     Fires per chunk received from the underlying stream.  Used by the
+ *     caller to measure network-delivery rate vs. packet-consumption rate.
+ * @param {number} [opts.highWaterMark=128*1024*1024]
+ *     Maximum in-memory buffer size (bytes).  The background pump pauses
+ *     reading once the buffer grows past this; it resumes as the consumer
+ *     drains.  Higher values protect against decoder-rate ↔ network-rate
+ *     mismatches at the cost of JS heap.
  * @yields {{bytes: Uint8Array, seq: number, timestamp: number, marker: boolean}}
  *     `bytes` is valid only until the next `next()` call — copy it if you need
  *     to retain the data.
  */
 export async function* parseRtpStream(source, opts = {}) {
-  const reader = await sourceToReader(source);
-  const buf    = new RollingBuffer();
-  let   eof    = false;
-  // Optional callback invoked once per chunk received from the underlying
-  // stream — lets the caller measure disk-read rate vs. packet-consumption rate.
+  const reader  = await sourceToReader(source);
+  const buf     = new RollingBuffer();
   const onChunk = typeof opts.onChunk === 'function' ? opts.onChunk : null;
+  // 128 MiB default — absorbs large producer/consumer rate mismatches so
+  // the fetch reader never sits idle long enough to trip Cloudflare/NAT
+  // connection timeouts we've seen with on-demand reads on slow decoders.
+  const HIGH_WATER_MARK = opts.highWaterMark ?? (128 * 1024 * 1024);
 
-  async function fillAtLeast(nBytes) {
-    while (buf.length < nBytes && !eof) {
-      const { value, done } = await reader.read();
-      if (done) { eof = true; break; }
-      if (value && value.length) {
-        buf.append(value);
-        if (onChunk) onChunk(value.length);
+  let eof       = false;   // reader exhausted (or consumer finished)
+  let readError = null;    // deferred error from the pump — rethrown in waitForBytes
+
+  // Background pump: drain the reader into `buf` as fast as the network
+  // delivers bytes, independent of the consumer's packet-yield rate.
+  // When `buf` exceeds HIGH_WATER_MARK, the pump sleeps briefly before
+  // checking again (backpressure to the network via reader.read()).  The
+  // consumer path below calls buf.consume() as it yields packets, which
+  // naturally lets the buffer drain and unblocks the pump.
+  //
+  // Why a pump at all: the previous on-demand design called reader.read()
+  // only when the for-await body asked for more bytes.  A slow decoder
+  // starved those reads, which made the fetch socket idle for seconds
+  // and triggered Cloudflare- or NAT-side stream cancellation (observed
+  // as a hard stall after ~60 MB, see rtp_demo PR history).
+  const pumpDone = (async () => {
+    try {
+      while (!eof) {
+        if (buf.length > HIGH_WATER_MARK) {
+          await new Promise(r => setTimeout(r, 10));
+          continue;
+        }
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value && value.length) {
+          buf.append(value);
+          if (onChunk) onChunk(value.length);
+        }
       }
+    } catch (e) {
+      readError = e;
+    } finally {
+      eof = true;
     }
+  })();
+
+  // Wait until at least `nBytes` are in the buffer (or the pump finishes).
+  // 1 ms polling is cheap and fine for this workload; we're not trying to
+  // meet sub-millisecond latency — the decoder takes tens of ms per frame.
+  async function waitForBytes(nBytes) {
+    while (buf.length < nBytes && !eof) {
+      await new Promise(r => setTimeout(r, 1));
+    }
+    if (readError) throw readError;
   }
 
   try {
     while (true) {
-      await fillAtLeast(4);
+      await waitForBytes(4);
       if (buf.length < 4) return;          // clean EOF
       const hdr    = buf.bytes(0, 4);
       const marker = (hdr[0] << 8) | hdr[1];
@@ -92,7 +137,7 @@ export async function* parseRtpStream(source, opts = {}) {
         throw new Error(`parseRtpStream: bad marker 0x${marker.toString(16)} at stream offset`);
       }
       const length = (hdr[2] << 8) | hdr[3];
-      await fillAtLeast(4 + length);
+      await waitForBytes(4 + length);
       if (buf.length < 4 + length) {
         throw new Error(`parseRtpStream: truncated packet (need ${length} bytes)`);
       }
@@ -102,11 +147,13 @@ export async function* parseRtpStream(source, opts = {}) {
       buf.consume(4 + length);
     }
   } finally {
-    // Called on normal completion, exception, or when the consumer calls
-    // iterator.return() (for-await `break`).  Cancel the underlying stream
-    // so the Blob's file reader / fetch network socket closes and nothing
-    // leaks across play→stop→play cycles.
+    // Called on normal completion, exception, or iterator.return() (for-await
+    // `break`).  Flag eof so the pump's HIGH_WATER_MARK sleep loop exits,
+    // then cancel the underlying reader to close the fetch socket / Blob
+    // reader so nothing leaks across play→stop→play cycles.
+    eof = true;
     try { await reader.cancel(); } catch (e) { /* ignore */ }
+    try { await pumpDone; }        catch (e) { /* ignore */ }
     try { reader.releaseLock(); }  catch (e) { /* ignore */ }
   }
 }
