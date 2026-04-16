@@ -277,6 +277,11 @@ add_executable(jpip_emitter_check)
 add_subdirectory(source/apps/jpip_emitter_check)
 target_link_libraries(jpip_emitter_check PUBLIC open_htj2k)
 
+# JPIP Phase-2 JPP-stream parser self-test (used by tests/jpip_phase1.cmake)
+add_executable(jpip_parser_check)
+add_subdirectory(source/apps/jpip_parser_check)
+target_link_libraries(jpip_parser_check PUBLIC open_htj2k)
+
 # RFC 9828 RTP receiver (experimental, requires GLFW)
 option(OPENHTJ2K_RTP "Build experimental RFC 9828 RTP receiver (requires GLFW)" OFF)
 if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)

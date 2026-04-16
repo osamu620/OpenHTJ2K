@@ -7,4 +7,5 @@ target_sources(open_htj2k
     jpp_message.cpp
     codestream_walker.cpp
     data_bin_emitter.cpp
+    jpp_parser.cpp
 )
