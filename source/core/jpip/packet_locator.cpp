@@ -68,14 +68,25 @@ std::unique_ptr<PacketLocator> PacketLocator::build(const uint8_t *codestream,
   dec.set_packet_observer([self_raw, &layout, observer_ok](
                               uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc,
                               uint16_t layer, uint64_t offset, uint64_t length) {
-    (void)layer;  // layer is implicit in insertion order
+    (void)layer;  // layer is implicit in insertion order within packets_[key]
     const uint64_t abs_off = to_absolute(layout, t, offset);
     if (abs_off == UINT64_MAX) {
       *observer_ok = false;
       return;
     }
-    PacketByteRange r1{abs_off, length};
-    self_raw->packets_[std::make_tuple(t, c, r, p_rc)].push_back(r1);
+    const PacketLocator::Key key = std::make_tuple(t, c, r, p_rc);
+    auto &entry = self_raw->packets_[key];
+    // Record the precinct visit order the first time we see this key —
+    // used by the reassembler to walk precincts in codestream byte order.
+    if (entry.empty()) {
+      PrecinctKey pk{};
+      pk.t    = t;
+      pk.c    = c;
+      pk.r    = r;
+      pk.p_rc = p_rc;
+      self_raw->precinct_visit_order_.push_back(pk);
+    }
+    entry.push_back(PacketByteRange{abs_off, length});
     ++self_raw->total_packets_;
   });
 
@@ -111,6 +122,14 @@ const std::vector<PacketByteRange> &PacketLocator::packets_of(uint16_t t, uint16
   auto it = packets_.find(std::make_tuple(t, c, r, p_rc));
   if (it == packets_.end()) return empty_ranges();
   return it->second;
+}
+
+std::vector<PrecinctKey> PacketLocator::precincts_of_tile(uint16_t t) const {
+  std::vector<PrecinctKey> out;
+  for (const auto &pk : precinct_visit_order_) {
+    if (pk.t == t) out.push_back(pk);
+  }
+  return out;
 }
 
 }  // namespace jpip

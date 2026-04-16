@@ -9,4 +9,5 @@ target_sources(open_htj2k
     data_bin_emitter.cpp
     jpp_parser.cpp
     packet_locator.cpp
+    codestream_assembler.cpp
 )
