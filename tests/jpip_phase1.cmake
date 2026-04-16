@@ -7,6 +7,25 @@
 
 set(_JPIP_BIN_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
+# ── Decoder precinct-filter sanity (§M.4.1 partial-decode plumbing) ──
+# Exercises the public openhtj2k_decoder::set_precinct_filter hook against a
+# Part-1 and a Part-15 conformance stream.  The assets live under
+# conformance_data/ so these tests always run.
+#
+#   --identity : keep-every-precinct filter → byte-identical to no-filter.
+#   --empty N  : drop-every-precinct filter → uniform field with peak-absolute
+#                spread ≤ N per component.  9/7 lossy + ICT needs N=4 to
+#                absorb inverse-colour-transform rounding of a (0,0,0) input.
+add_test(NAME jpip_pd_identity_p0_04
+         COMMAND jpip_partial_decode_check ${CONFORMANCE_DATA_DIR}/p0_04.j2k --identity)
+add_test(NAME jpip_pd_empty_p0_04
+         COMMAND jpip_partial_decode_check ${CONFORMANCE_DATA_DIR}/p0_04.j2k --empty 4)
+add_test(NAME jpip_pd_identity_ht_01
+         COMMAND jpip_partial_decode_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k --identity)
+add_test(NAME jpip_pd_empty_ht_01
+         COMMAND jpip_partial_decode_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k --empty 4)
+
+
 # ── Asset 1: full-resolution NASA Blue Marble (LRCP, default precincts) ──
 # Each (t, c) → NL+1 = 6 resolutions, each holding exactly one precinct
 # because PPx=PPy=15 (max) covers the whole resolution.  3 components ×
@@ -78,4 +97,12 @@ if (EXISTS "${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c")
     add_test(NAME jpip_vw_land1920_corner_quadrant
              COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
                      --vw 1920,1920,0,0,960,960=942)
+
+    # Partial-decode sanity on the 9/7 foveation asset (PAE ≤ 2 since Cycc=on).
+    add_test(NAME jpip_pd_identity_land1920_fov
+             COMMAND jpip_partial_decode_check
+                     ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c --identity)
+    add_test(NAME jpip_pd_empty_land1920_fov
+             COMMAND jpip_partial_decode_check
+                     ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c --empty 2)
 endif()

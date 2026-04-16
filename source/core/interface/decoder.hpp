@@ -113,6 +113,17 @@ class openhtj2k_decoder {
   // sequence for the stream you want to keep cached.  Passing false drops
   // any cached state and returns the decoder to the legacy per-frame path.
   OPENHTJ2K_EXPORT void enable_single_tile_reuse(bool on);
+  // JPIP partial-decode hook.  When set, every subsequent invoke*() call
+  // consults this filter per-packet: precincts for which the filter returns
+  // false have their body bytes dropped (not attached to codeblocks) while
+  // the packet-header bit stream still advances — so the byte stream stays
+  // aligned with the next packet.  Masked precincts contribute zero samples
+  // to the IDWT; unmasked precincts decode exactly as they would without
+  // the filter.  Pass an empty std::function to clear the filter.  Arguments
+  // are (tile, component, resolution, intra-resolution precinct index) as
+  // defined in ISO/IEC 15444-9 §A.3.2.1.
+  OPENHTJ2K_EXPORT void set_precinct_filter(
+      std::function<bool(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc)> f);
   // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
   // the line-based IDWT using those pre-decoded values.  If this matches invoke()
   // but invoke_line_based() does not, the bug is in decode_strip(); otherwise

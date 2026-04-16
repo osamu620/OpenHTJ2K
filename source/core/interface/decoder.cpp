@@ -77,6 +77,12 @@ class openhtj2k_decoder_impl {
   std::vector<j2k_tile> cached_tileSet_;
   uint64_t cached_header_fingerprint_  = 0;
 
+  // JPIP partial-decode filter: invoked per-packet during every subsequent
+  // invoke*() call, once per (t, c, r, p_rc).  An empty std::function means
+  // "no filter" — the tile-level precinct_filter_ stays unset and all
+  // precincts decode normally.
+  std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> precinct_filter_;
+
  public:
   openhtj2k_decoder_impl();
   openhtj2k_decoder_impl(const char *, uint8_t reduce_NL, uint32_t num_threads);
@@ -111,6 +117,13 @@ class openhtj2k_decoder_impl {
                                     std::vector<uint32_t> &, std::vector<uint8_t> &,
                                     std::vector<bool> &);
   void enable_single_tile_reuse(bool on);
+  void set_precinct_filter(std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> f);
+
+  // Binds precinct_filter_'s (t, c, r, p_rc) signature into a (c, r, p_rc)
+  // closure for the given tile and installs it on the tile (or clears it
+  // when precinct_filter_ is empty).  Called just before each
+  // create_tile_buf() so the packet-parsing loop sees the current filter.
+  void install_precinct_filter(j2k_tile &tile, uint16_t tile_idx);
 
   void destroy();
 };
@@ -391,6 +404,7 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
   // Read codestream and decode it
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     try {
+      install_precinct_filter(tileSet[i], static_cast<uint16_t>(i));
       tileSet[i].create_tile_buf(main_header);
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
@@ -518,6 +532,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     try {
       tileSet[i].line_based_decode = true;
+      install_precinct_filter(tileSet[i], static_cast<uint16_t>(i));
       tileSet[i].create_tile_buf(main_header);
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
@@ -632,6 +647,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       const uint32_t tile_idx = ty;
       try {
         tileSet[tile_idx].line_based_decode = true;
+        install_precinct_filter(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
         tileSet[tile_idx].create_tile_buf(main_header);
       } catch (std::exception &exc) {
         printf("ERROR: %s\n", exc.what());
@@ -695,6 +711,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
 
       try {
         tileSet[tile_idx].line_based_decode = true;
+        install_precinct_filter(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
         tileSet[tile_idx].create_tile_buf(main_header);
       } catch (std::exception &exc) {
         printf("ERROR: %s\n", exc.what());
@@ -746,6 +763,27 @@ void openhtj2k_decoder_impl::enable_single_tile_reuse(bool on) {
     // Drop the cache so the next call starts from a clean slate.
     cached_tileSet_.clear();
     cached_header_fingerprint_ = 0;
+  }
+}
+
+void openhtj2k_decoder::set_precinct_filter(
+    std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> f) {
+  this->impl->set_precinct_filter(std::move(f));
+}
+
+void openhtj2k_decoder_impl::set_precinct_filter(
+    std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> f) {
+  precinct_filter_ = std::move(f);
+}
+
+void openhtj2k_decoder_impl::install_precinct_filter(j2k_tile &tile, uint16_t tile_idx) {
+  if (precinct_filter_) {
+    auto pf = precinct_filter_;  // capture by value — filter may be replaced between invokes
+    tile.set_precinct_filter([pf, tile_idx](uint16_t c, uint8_t r, uint32_t p_rc) {
+      return pf(tile_idx, c, r, p_rc);
+    });
+  } else {
+    tile.set_precinct_filter({});
   }
 }
 
@@ -939,6 +977,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
 
   try {
     cached_tileSet_[0].line_based_decode = true;
+    install_precinct_filter(cached_tileSet_[0], 0);
     cached_tileSet_[0].create_tile_buf(main_header);
   } catch (std::exception &exc) {
     printf("ERROR: %s\n", exc.what());
@@ -1145,6 +1184,7 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
 
   try {
     cached_tileSet_[0].line_based_decode = true;
+    install_precinct_filter(cached_tileSet_[0], 0);
     cached_tileSet_[0].create_tile_buf(main_header);
   } catch (std::exception &exc) {
     printf("ERROR: %s\n", exc.what());
@@ -1225,6 +1265,7 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
 
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     try {
+      install_precinct_filter(tileSet[i], static_cast<uint16_t>(i));
       tileSet[i].create_tile_buf(main_header);
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());

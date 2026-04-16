@@ -880,6 +880,30 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
   this->length += layer_length;
 }
 
+void j2k_codeblock::skip_compressed_buffer(buf_chain *tile_buf, const uint16_t &layer) {
+  if (this->layer_passes[layer] == 0) {
+    return;
+  }
+  // Mirror create_compressed_buffer's layer_length computation so the byte
+  // stream advances by exactly the same amount as the attach path.
+  int32_t l0 = this->layer_start[layer];
+  int32_t l1 = l0 + this->layer_passes[layer];
+  uint32_t layer_length = 0;
+  for (int32_t i = l0; i < l1; i++) {
+    layer_length += this->pass_length[static_cast<size_t>(i)];
+  }
+  if (layer_length == 0) return;
+
+  const uint32_t avail = tile_buf->get_remaining_bytes();
+  if (layer_length > avail) layer_length = avail;
+  if (layer_length == 0) return;
+
+  // Advance tile_buf's read cursor without attaching the borrowed pointer
+  // anywhere — borrow_N_bytes just moves `pos` forward by N within the
+  // current node.
+  (void)tile_buf->borrow_N_bytes(layer_length);
+}
+
 void j2k_codeblock::reset_for_next_frame() {
   // Release an owned compressed buffer before nulling the pointer.  Pooled
   // buffers are freed by their owning cblk_data_pool (decoder-side pools
@@ -3255,8 +3279,9 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     for (const auto &e : cached_crp_) {
       j2k_resolution *cr = this->tcomp[e.c].access_resolution(e.r);
       j2k_precinct   *cp = cr->access_precinct(e.p);
+      const bool skip = precinct_filter_ && !precinct_filter_(e.c, e.r, e.p);
       this->packet[packet_count++] = j2c_packet(0, e.r, e.c, e.p, packet_header, tile_buf.get());
-      this->read_packet(cp, 0, cr->num_bands);
+      this->read_packet(cp, 0, cr->num_bands, skip);
     }
   } else {
     // First frame: run the full progression-order traversal and record
@@ -3306,7 +3331,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       if (!is_packet_read[l][r][c][p]) {
                         cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
                         this->packet[packet_count++] = j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                        this->read_packet(cp, l, cr->num_bands);
+                        this->read_packet(cp, l, cr->num_bands,
+                                          precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                         is_packet_read[l][r][c][p] = true;
                       }
                     }
@@ -3329,7 +3355,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       if (!is_packet_read[l][r][c][p]) {
                         cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
                         this->packet[packet_count++] = j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                        this->read_packet(cp, l, cr->num_bands);
+                        this->read_packet(cp, l, cr->num_bands,
+                                          precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                         is_packet_read[l][r][c][p] = true;
                       }
                     }
@@ -3385,7 +3412,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                             cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
                             this->packet[packet_count++] =
                                 j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                            this->read_packet(cp, l, cr->num_bands);
+                            this->read_packet(cp, l, cr->num_bands,
+                                          precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                             is_packet_read[l][r][c][p] = true;
                           }
                         }
@@ -3448,7 +3476,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                           cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
                           this->packet[packet_count++] =
                               j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                          this->read_packet(cp, l, cr->num_bands);
+                          this->read_packet(cp, l, cr->num_bands,
+                                          precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                           is_packet_read[l][r][c][p] = true;
                         }
                       }
@@ -3510,7 +3539,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                           cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
                           this->packet[packet_count++] =
                               j2c_packet(l, r, c, p, packet_header, tile_buf.get());
-                          this->read_packet(cp, l, cr->num_bands);
+                          this->read_packet(cp, l, cr->num_bands,
+                                          precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                           is_packet_read[l][r][c][p] = true;
                         }
                       }
@@ -4005,8 +4035,12 @@ void j2k_tile::decode() {
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
           for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
             j2k_codeblock *block = cpb->access_codeblock(block_index);
-            // only decode a codeblock having non-zero coding passes
-            if (block->num_passes) {
+            // only decode a codeblock having non-zero coding passes AND
+            // attached compressed data.  The JPIP precinct filter installs a
+            // state where num_passes > 0 (packet header was parsed) but
+            // compressed_data == nullptr (body was dropped); treat that as
+            // "no passes to decode" so the codeblock's samples remain zero.
+            if (block->num_passes && block->get_compressed_data() != nullptr) {
 #ifdef OPENHTJ2K_THREAD
               if (pool && pool->num_threads() > 1) {
                 dec_task_args.push_back({block, ROIshift, &dec_remaining});
@@ -4126,7 +4160,8 @@ void j2k_tile::decode() {
 
   }  // end of component loop
 }
-void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band) {
+void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band,
+                           bool skip_body) {
   OPENHTJ2K_MAYBE_UNUSED uint16_t Nsop = 0;
   uint16_t Lsop;
   if (use_SOP) {
@@ -4181,7 +4216,11 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
     if (num_cblks != 0) {
       for (uint32_t block_index = 0; block_index < num_cblks; block_index++) {
         block = cpb->access_codeblock(block_index);
-        block->create_compressed_buffer(this->tile_buf.get(), buf_limit, layer);
+        if (skip_body) {
+          block->skip_compressed_buffer(this->tile_buf.get(), layer);
+        } else {
+          block->create_compressed_buffer(this->tile_buf.get(), buf_limit, layer);
+        }
       }
     }
   }
@@ -5346,7 +5385,10 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
             const uint32_t QHx2  = round_up(block->size.y, 8U);
             block->sample_buf    = pbuf; pbuf += QWx2 * QHx2;
             block->block_states  = spbuf; spbuf += (QWx2 + 2) * (QHx2 + 2);
-            if (!block->num_passes) continue;
+            // Same JPIP precinct-filter guard as the tile decode path: a
+            // masked codeblock has its packet header parsed (num_passes > 0)
+            // but no compressed body attached.
+            if (!block->num_passes || block->get_compressed_data() == nullptr) continue;
             const bool is_ht = (block->Cmodes & HT) >> 6;
             if (!is_ht) {
               // EBCOT: both buffers must be pre-zeroed.
