@@ -466,6 +466,7 @@ int main(int argc, char *argv[]) {
         total_size = encoder.invoke_line_based_stream(
             [&reader](uint32_t y, int32_t **rows, uint16_t nc) { reader->get_row(y, rows, nc); });
       } catch (std::exception &exc) {
+        printf("ERROR: encoder.invoke_line_based_stream failed: %s\n", exc.what());
         return EXIT_FAILURE;
       }
     }
@@ -548,6 +549,7 @@ int main(int argc, char *argv[]) {
       try {
         total_size = encoder.invoke();
       } catch (std::exception &exc) {
+        printf("ERROR: encoder.invoke() failed: %s\n", exc.what());
         return EXIT_FAILURE;
       }
     }
