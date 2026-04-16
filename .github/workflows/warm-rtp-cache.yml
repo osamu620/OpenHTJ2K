@@ -2,7 +2,7 @@ name: warm-rtp-cache
 on:
   workflow_dispatch:
   push:
-    paths: [deploy-scripts/rtp-samples.txt]
+    paths: [.github/deploy/rtp-samples.txt]
 jobs:
   warm:
     runs-on: ubuntu-latest
@@ -14,4 +14,4 @@ jobs:
             [ -z "$url" ] && continue
             echo "→ $url"
             curl -sS -o /dev/null -D - --max-time 300 "$url" | grep -iE 'cf-ray|cf-cache-status'
-          done < deploy-scripts/rtp-samples.txt
+          done < .github/deploy/rtp-samples.txt
