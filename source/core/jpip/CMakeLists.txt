@@ -8,4 +8,5 @@ target_sources(open_htj2k
     codestream_walker.cpp
     data_bin_emitter.cpp
     jpp_parser.cpp
+    packet_locator.cpp
 )

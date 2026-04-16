@@ -679,6 +679,16 @@ class j2k_tile : public j2k_tile_base {
   // Empty filter (the default) = keep every precinct.
   std::function<bool(uint16_t c, uint8_t r, uint32_t p_rc)> precinct_filter_;
 
+  // JPIP packet observer: when set, invoked once per read_packet() call
+  // with (component, resolution, precinct-index, layer, tile_buf offset,
+  // byte length).  Offsets are relative to this tile's concatenated
+  // tile-part bodies (0 == first byte after the first tile-part's SOD).
+  // Used by the JPIP packet locator to record per-precinct byte ranges
+  // without re-implementing parse_packet_header.  Empty observer (default)
+  // means "do not observe" — no extra work per packet.
+  std::function<void(uint16_t c, uint8_t r, uint32_t p_rc, uint16_t layer,
+                     uint64_t offset, uint64_t length)> packet_observer_;
+
  public:
   // Bump-allocator pool for HTJ2K encode compressed bitstreams (one pool per thread).
   struct EncodePoolCtx {
@@ -768,6 +778,14 @@ class j2k_tile : public j2k_tile_base {
   // rather than attached.  Must be set before decode() / decode_line_based_*.
   void set_precinct_filter(std::function<bool(uint16_t c, uint8_t r, uint32_t p_rc)> f) {
     precinct_filter_ = std::move(f);
+  }
+  // Install (or clear) a JPIP packet observer — see packet_observer_.
+  // Called with the byte range each read_packet() consumes in this tile's
+  // tile_buf.  Must be set before decode() / decode_line_based_*.
+  void set_packet_observer(
+      std::function<void(uint16_t c, uint8_t r, uint32_t p_rc, uint16_t layer,
+                         uint64_t offset, uint64_t length)> f) {
+    packet_observer_ = std::move(f);
   }
   // Flip persistence on all tile_components of this tile.  Called by the
   // reuse entry point on the first frame, just before decode_line_based_stream,

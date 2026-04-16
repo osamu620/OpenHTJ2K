@@ -207,6 +207,16 @@ class buf_chain {
   }
   OPENHTJ2K_NODISCARD uint32_t get_total_length() const { return total_length; }
 
+  // Absolute byte position within the chain (0 at the first byte of node 0,
+  // `total_length` when the read cursor has just stepped past the last
+  // byte).  Intended for observers that need to record byte ranges of
+  // parsed sub-structures without tracking pos/node_pos manually.
+  OPENHTJ2K_NODISCARD uint64_t get_total_position() const {
+    uint64_t p = static_cast<uint64_t>(pos);
+    for (size_t i = 0; i < node_pos; ++i) p += node_length[i];
+    return p;
+  }
+
   OPENHTJ2K_MAYBE_UNUSED uint8_t get_specific_byte(uint32_t bufpos) { return *(current_buf + bufpos); }
   // Returns the number of bytes remaining across all nodes from the current position.
   uint32_t get_remaining_bytes() const {
