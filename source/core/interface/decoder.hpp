@@ -124,6 +124,17 @@ class openhtj2k_decoder {
   // defined in ISO/IEC 15444-9 §A.3.2.1.
   OPENHTJ2K_EXPORT void set_precinct_filter(
       std::function<bool(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc)> f);
+  // JPIP packet observer hook.  When set, every subsequent invoke*() call
+  // reports per-packet byte ranges (relative to each tile's concatenated
+  // tile-part bodies) via the callback.  The JPIP packet locator combines
+  // this with a CodestreamLayout to map tile-buf offsets back to absolute
+  // codestream offsets.  Usually paired with a precinct filter that returns
+  // false for everything so block decode is skipped while packet headers
+  // are still parsed (keeping the byte stream in sync).  Pass an empty
+  // std::function to clear the observer.
+  OPENHTJ2K_EXPORT void set_packet_observer(
+      std::function<void(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc,
+                         uint16_t layer, uint64_t offset, uint64_t length)> f);
   // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
   // the line-based IDWT using those pre-decoded values.  If this matches invoke()
   // but invoke_line_based() does not, the bug is in decode_strip(); otherwise

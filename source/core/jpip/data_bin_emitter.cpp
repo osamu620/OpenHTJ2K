@@ -89,5 +89,35 @@ std::size_t emit_metadata_bin_zero(MessageHeaderContext &ctx,
   return append_message(hdr, /*payload=*/nullptr, 0, ctx, out);
 }
 
+std::size_t emit_precinct_databin(const uint8_t *codestream, std::size_t len,
+                                  uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc,
+                                  const CodestreamIndex &idx,
+                                  const PacketLocator &locator,
+                                  MessageHeaderContext &ctx,
+                                  std::vector<uint8_t> &out) {
+  if (codestream == nullptr) return 0;
+  const auto &ranges = locator.packets_of(t, c, r, p_rc);
+  if (ranges.empty()) return 0;
+  // Concatenate each packet's bytes into a contiguous payload.  For
+  // precinct-subordinate progression orders (PCRL, RPCL, CPRL) the ranges
+  // are already contiguous in the source, so this is effectively a single
+  // memcpy; for LRCP/RLCP the copies stitch scattered packets together.
+  std::vector<uint8_t> payload;
+  std::size_t total = 0;
+  for (const auto &rg : ranges) total += static_cast<std::size_t>(rg.length);
+  payload.reserve(total);
+  for (const auto &rg : ranges) {
+    if (rg.offset + rg.length > len) return 0;  // malformed
+    payload.insert(payload.end(), codestream + rg.offset,
+                   codestream + rg.offset + rg.length);
+  }
+
+  MessageHeader hdr{};
+  hdr.class_id    = kMsgClassPrecinct;
+  hdr.cs_n        = 0;
+  hdr.in_class_id = idx.I(t, c, r, p_rc);
+  return append_message(hdr, payload.data(), payload.size(), ctx, out);
+}
+
 }  // namespace jpip
 }  // namespace open_htj2k

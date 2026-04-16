@@ -24,6 +24,8 @@
 
 #include "codestream_walker.hpp"
 #include "jpp_message.hpp"
+#include "packet_locator.hpp"
+#include "precinct_index.hpp"
 
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   #define OPENHTJ2K_JPIP_EXPORT __declspec(dllexport)
@@ -64,6 +66,27 @@ emit_tile_header_databin(const uint8_t *codestream, std::size_t len,
 // message.
 OPENHTJ2K_JPIP_EXPORT std::size_t
 emit_metadata_bin_zero(MessageHeaderContext &ctx, std::vector<uint8_t> &out);
+
+// Emit a precinct data-bin (class 0, in-class id = `I` per §A.3.2.1
+// Eq. A-1) covering every packet of this precinct across every layer.
+// The payload is the concatenation of the ranges reported by
+// `locator.packets_of(t, c, r, p_rc)`.  For PCRL/RPCL/CPRL codestreams
+// those ranges are contiguous in the source bytes; for LRCP/RLCP they
+// are scattered — the emitter copies each range in the locator's order
+// (= insertion order = layer order) so the v1 output still round-trips
+// through the decoder when the receiver's reassembler stitches them
+// back into a sparse codestream.
+//
+// Returns 0 if the precinct has no recorded packets (e.g. empty
+// resolution or out-of-range index) — in that case the caller should
+// emit a zero-length is_last message separately if the spec requires it.
+OPENHTJ2K_JPIP_EXPORT std::size_t
+emit_precinct_databin(const uint8_t *codestream, std::size_t len,
+                      uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc,
+                      const CodestreamIndex &idx,
+                      const PacketLocator &locator,
+                      MessageHeaderContext &ctx,
+                      std::vector<uint8_t> &out);
 
 }  // namespace jpip
 }  // namespace open_htj2k
