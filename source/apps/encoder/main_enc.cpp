@@ -138,8 +138,19 @@ class PnmStreamReader : public StreamReader {
     width_  = read_uint(fp_);
     height_ = read_uint(fp_);
     uint32_t maxval = read_uint(fp_);
-    // Skip arbitrary whitespace and comments after maxval to reach first pixel byte
-    skip_ws(fp_);
+    // Per the netpbm PPM/PGM binary spec (P5/P6), the maxval field is followed
+    // by EXACTLY ONE whitespace character; the very next byte starts the
+    // raster.  read_uint() already ungetc'd the trailing whitespace, so we
+    // consume that single byte here.  A previous version called skip_ws()
+    // which kept eating bytes greedily — fine until the first pixel value
+    // happened to be 0x09/0x0A/0x0D/0x20 (e.g. NASA Blue Marble crops where
+    // R≈10), at which point the first 1–3 pixel bytes were misread as
+    // "header whitespace" and every fread shifted, eventually overrunning
+    // EOF on the last row and aborting with "fread: failed to read row data".
+    {
+      const int sep = fgetc(fp_);
+      if (sep != ' ' && sep != '\t' && sep != '\n' && sep != '\r') return -1;
+    }
 
     if (maxval == 0 || maxval > 65535) return -1;
     // Compute the exact bit depth from maxval (e.g. 4095 → 12, 255 → 8).
