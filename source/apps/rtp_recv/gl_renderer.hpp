@@ -62,6 +62,11 @@ class GlRenderer {
   // Pump window events.  Call once per frame.
   void poll_events();
 
+  // Accessor for the owned GLFWwindow* so callers can invoke GLFW input
+  // APIs (glfwGetCursorPos, glfwSetKeyCallback, …) against the same window.
+  // Returns nullptr when init() has not been called or has failed.
+  GLFWwindow* get_window() const { return window_; }
+
   // CPU fallback path: upload an 8-bit interleaved RGB image and draw it
   // once.  Reallocates the RGB texture if (w,h) changed since the last
   // call.  Does NOT own the pixel buffer.

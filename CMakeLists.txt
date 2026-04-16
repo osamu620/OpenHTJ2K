@@ -302,6 +302,24 @@ if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
         target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL)
       endif()
       target_link_libraries(open_htj2k_rtp_decode_profile PUBLIC open_htj2k)
+
+      # JPIP Phase-1 foveation demo — shares the rtp_recv renderer, so it
+      # lives in the same glfw-gated block.
+      message(STATUS "OPENHTJ2K_RTP: building open_htj2k_jpip_demo")
+      add_executable(open_htj2k_jpip_demo)
+      add_subdirectory(source/apps/jpip_demo)
+      set_target_properties(
+        open_htj2k_jpip_demo
+        PROPERTIES OUTPUT_NAME
+                   $<IF:$<CONFIG:Debug>,open_htj2k_jpip_demo_dbg,open_htj2k_jpip_demo>)
+      if (APPLE)
+        target_link_libraries(open_htj2k_jpip_demo PUBLIC open_htj2k glfw
+                              "-framework Metal" "-framework QuartzCore" "-framework Cocoa")
+      elseif(WIN32)
+        target_link_libraries(open_htj2k_jpip_demo PUBLIC open_htj2k glfw OpenGL::GL)
+      else()
+        target_link_libraries(open_htj2k_jpip_demo PUBLIC open_htj2k glfw OpenGL::GL)
+      endif()
     else()
       message(WARNING "OPENHTJ2K_RTP requested but glfw3/OpenGL not found; skipping rtp_recv target")
     endif()
