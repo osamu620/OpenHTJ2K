@@ -16,6 +16,13 @@ add_test(NAME jpip_vbas_codec COMMAND jpip_vbas_check)
 # dependent-form behaviour + rejection cases.
 add_test(NAME jpip_message_codec COMMAND jpip_message_check)
 
+# ── Header data-bin emitters (§A.3.5 main-header / §A.3.3 tile-header /
+# §A.3.6 metadata-bin 0).  Validates against any conformance asset.
+add_test(NAME jpip_emitter_p0_04
+         COMMAND jpip_emitter_check ${CONFORMANCE_DATA_DIR}/p0_04.j2k)
+add_test(NAME jpip_emitter_ht_01
+         COMMAND jpip_emitter_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k)
+
 # ── Decoder precinct-filter sanity (§M.4.1 partial-decode plumbing) ──
 # Exercises the public openhtj2k_decoder::set_precinct_filter hook against a
 # Part-1 and a Part-15 conformance stream.  The assets live under
