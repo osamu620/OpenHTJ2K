@@ -1,0 +1,17 @@
+name: warm-rtp-cache
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/deploy/rtp-samples.txt]
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Warm each URL listed in rtp-samples.txt
+        run: |
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            echo "→ $url"
+            curl -sS -o /dev/null -D - --max-time 300 "$url" | grep -iE 'cf-ray|cf-cache-status'
+          done < .github/deploy/rtp-samples.txt

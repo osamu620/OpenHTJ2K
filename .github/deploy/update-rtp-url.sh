@@ -3,7 +3,7 @@
 # Run from the repo root after uploading a new clip to R2 / S3 / wherever.
 #
 # Usage:
-#   ./deploy-scripts/update-rtp-url.sh <full-https-url>
+#   ./.github/deploy/update-rtp-url.sh <full-https-url>
 
 set -euo pipefail
 
