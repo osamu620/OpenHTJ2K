@@ -46,6 +46,10 @@ class MetalRenderer {
   void shutdown();
   bool should_close() const;
   void poll_events();
+  // Accessor for the owned GLFWwindow* so callers can invoke input APIs
+  // (glfwGetCursorPos, glfwSetKeyCallback, …) against the same window.
+  // Returns nullptr when init() has not been called or has failed.
+  GLFWwindow* get_window() const { return window_; }
 
   void upload_and_draw(const uint8_t* rgb, int w, int h);
 

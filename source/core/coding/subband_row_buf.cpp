@@ -229,7 +229,10 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           // All columns in this row overlap with [y0, y1).
           for (uint32_t c = 0; c < ncx; ++c) {
             j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
-            if (!block->num_passes) {
+            // Treat JPIP-masked codeblocks (compressed_data == nullptr despite
+            // num_passes > 0) the same way as empty blocks: dequant never runs
+            // and the target-buf region must be explicitly zeroed.
+            if (!block->num_passes || block->get_compressed_data() == nullptr) {
               // Empty block: dequantize never runs, so zero its region in target_buf
               // explicitly (replaces the bulk ring_buf pre-zero in decode_strip).
               if (ring_mode && target_buf) {
@@ -342,7 +345,9 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
       for (uint32_t c = 0; c < ncx; ++c) {
         j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
 
-        if (!block->num_passes) {
+        // JPIP-masked codeblocks (num_passes > 0 but no compressed data) take
+        // the same "empty block" path — zero the target region and skip decode.
+        if (!block->num_passes || block->get_compressed_data() == nullptr) {
           // Empty block: zero its region in target_buf (replaces bulk pre-zero).
           if (ring_mode && target_buf) {
             const ptrdiff_t roff =
@@ -516,7 +521,10 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   const ptrdiff_t stride = static_cast<ptrdiff_t>(sb->stride);
 
   auto process_block = [&](const CachedBlock &ce) {
-    if (!ce.block->num_passes) {
+    // Same JPIP-masked / empty-block handling as the walking path: if the
+    // codeblock has no data to decode, zero the output region (when using a
+    // ring prefetch buffer) and skip the decode task.
+    if (!ce.block->num_passes || ce.block->get_compressed_data() == nullptr) {
       if (prefetch_buf != nullptr) {
         sprec_t *dst = prefetch_buf + ce.row_off + ce.col_off;
         for (uint32_t row = 0; row < ce.size_y; ++row) {
