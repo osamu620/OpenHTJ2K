@@ -194,6 +194,15 @@ class j2k_codeblock : public j2k_region {
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   void create_compressed_buffer(buf_chain *tile_buf, int32_t buf_limit, const uint16_t &layer);
+  // JPIP precinct-mask path: consume the packet body bytes belonging to this
+  // layer from tile_buf (keeping the byte stream in sync with the next
+  // packet) without attaching them to the codeblock.  Leaves compressed_data
+  // untouched — when it is nullptr (first layer of a masked precinct) the
+  // codeblock stays in "no passes decoded" state and the HT block decoder
+  // skips it; when it is non-null (masked later layer after an unmasked
+  // first layer) the already-attached layers decode normally while the
+  // masked layer's passes are dropped.
+  void skip_compressed_buffer(buf_chain *tile_buf, const uint16_t &layer);
   // Single-tile reuse: clear every field touched by parse_packet_header /
   // create_compressed_buffer so the codeblock returns to its post-ctor
   // "ready to parse" state, without deallocating structural resources.
@@ -662,6 +671,14 @@ class j2k_tile : public j2k_tile_base {
   };
   std::vector<CRP> cached_crp_;
   bool crp_cached_ = false;
+
+  // JPIP precinct filter: when set, read_packet() still parses the packet
+  // header (so tagtrees and the header bit stream stay in sync), but drops
+  // the packet body bytes for precincts the filter rejects.  The callback
+  // is invoked with this tile's (component, resolution, precinct-index).
+  // Empty filter (the default) = keep every precinct.
+  std::function<bool(uint16_t c, uint8_t r, uint32_t p_rc)> precinct_filter_;
+
  public:
   // Bump-allocator pool for HTJ2K encode compressed bitstreams (one pool per thread).
   struct EncodePoolCtx {
@@ -706,8 +723,13 @@ class j2k_tile : public j2k_tile_base {
   void setCODparams(COD_marker *COD);
   // set members related to QCD marker
   void setQCDparams(QCD_marker *QCD);
-  // read packets
-  void read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band);
+  // read packets; when skip_body is true the packet header is still parsed
+  // (advancing tagtrees and the header bit stream) but the body bytes are
+  // dropped without attaching to any codeblock — see §M.4.1.  The JPIP
+  // precinct filter decides this per-precinct; callers that don't use the
+  // mask path can leave skip_body at its default.
+  void read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band,
+                   bool skip_body = false);
   // function to retrieve greatest common divisor of precinct size among resolution levels
   void find_gcd_of_precinct_size(element_siz &out);
 
@@ -740,6 +762,13 @@ class j2k_tile : public j2k_tile_base {
   // cached tile is in "tree is allocated" state (= reuse path) or not (=
   // still a fresh j2k_tile that has never seen a codestream).
   OPENHTJ2K_NODISCARD bool is_structure_built() const { return structure_built_; }
+  // Install (or clear, via an empty std::function) a JPIP precinct filter.
+  // The filter is consulted once per packet in read_packet(); a false
+  // return causes the body bytes to be dropped via skip_compressed_buffer
+  // rather than attached.  Must be set before decode() / decode_line_based_*.
+  void set_precinct_filter(std::function<bool(uint16_t c, uint8_t r, uint32_t p_rc)> f) {
+    precinct_filter_ = std::move(f);
+  }
   // Flip persistence on all tile_components of this tile.  Called by the
   // reuse entry point on the first frame, just before decode_line_based_stream,
   // so finalize_line_decode() skips teardown and keeps line_dec alive for
