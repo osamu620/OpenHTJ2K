@@ -91,6 +91,15 @@ class CodestreamIndex {
   uint32_t num_tiles()      const { return num_tiles_x_ * num_tiles_y_; }
   uint16_t num_components() const { return num_components_; }
   uint8_t  progression_order() const { return progression_; }
+  // Number of quality layers declared in the main-header COD marker.
+  // Reassembly needs this when synthesising empty-packet placeholders for
+  // absent precincts: one placeholder per layer.
+  uint16_t num_layers()        const { return num_layers_; }
+  // Scod bits from the main-header COD (§A.6.1 Table A.13): bit 1 = SOP
+  // markers in use, bit 2 = EPH markers.  The reassembler refuses to
+  // produce a sparse codestream when either is set (v1 scope).
+  bool     use_SOP()           const { return use_SOP_; }
+  bool     use_EPH()           const { return use_EPH_; }
   const ImageGeometry &geometry() const { return geometry_; }
   // COD SPcod[4]: 0 = 9/7 (irreversible, lossy), 1 = 5/3 (reversible).
   bool     is_irreversible()   const { return is_irreversible_; }
@@ -118,6 +127,9 @@ class CodestreamIndex {
   uint32_t num_tiles_x_    = 0;
   uint32_t num_tiles_y_    = 0;
   uint8_t  progression_    = 0;
+  uint16_t num_layers_     = 1;
+  bool     use_SOP_        = false;
+  bool     use_EPH_        = false;
   bool     is_irreversible_ = false;
   ImageGeometry geometry_{};
   std::vector<Point2> subsampling_;  // size num_components_

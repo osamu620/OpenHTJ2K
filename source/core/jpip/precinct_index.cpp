@@ -124,6 +124,10 @@ std::unique_ptr<CodestreamIndex> CodestreamIndex::build(const uint8_t *codestrea
   std::unique_ptr<CodestreamIndex> idx(new CodestreamIndex());
   idx->num_components_  = mh.SIZ->get_num_components();
   idx->progression_     = mh.COD->get_progression_order();
+  idx->num_layers_      = mh.COD->get_number_of_layers();
+  // COD Scod (§A.6.1 Table A.13): bit 1 = SOP in use, bit 2 = EPH in use.
+  idx->use_SOP_         = mh.COD->is_use_SOP();
+  idx->use_EPH_         = mh.COD->is_use_EPH();
   idx->is_irreversible_ = (mh.COD->get_transformation() == 0);
   mh.get_number_of_tiles(idx->num_tiles_x_, idx->num_tiles_y_);
 

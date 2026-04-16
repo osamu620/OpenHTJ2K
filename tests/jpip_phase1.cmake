@@ -38,6 +38,22 @@ add_test(NAME jpip_precinct_p0_04
 add_test(NAME jpip_precinct_ht_01
          COMMAND jpip_precinct_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k)
 
+# ── Full JPP-stream round-trip: emit every data-bin, parse it back,
+# reassemble a sparse codestream, decode both original and reassembled,
+# and verify pixel-identical output across every component.  Conformance
+# assets all use LRCP progression (v1 reassembler rejects that — the
+# harness treats UnsupportedProgression as a pass and only exercises the
+# emit+parse path).  The foveation asset is PCRL and exercises the full
+# reassemble → decode path; it's auto-skipped when the asset is absent.
+add_test(NAME jpip_assembler_p0_04
+         COMMAND jpip_assembler_check ${CONFORMANCE_DATA_DIR}/p0_04.j2k)
+add_test(NAME jpip_assembler_ht_01
+         COMMAND jpip_assembler_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k)
+if (EXISTS "${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c")
+    add_test(NAME jpip_assembler_land1920_fov
+             COMMAND jpip_assembler_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c)
+endif()
+
 # ── Decoder precinct-filter sanity (§M.4.1 partial-decode plumbing) ──
 # Exercises the public openhtj2k_decoder::set_precinct_filter hook against a
 # Part-1 and a Part-15 conformance stream.  The assets live under

@@ -287,6 +287,11 @@ add_executable(jpip_precinct_check)
 add_subdirectory(source/apps/jpip_precinct_check)
 target_link_libraries(jpip_precinct_check PUBLIC open_htj2k)
 
+# JPIP Phase-2 full JPP-stream round-trip (emit → parse → reassemble → decode)
+add_executable(jpip_assembler_check)
+add_subdirectory(source/apps/jpip_assembler_check)
+target_link_libraries(jpip_assembler_check PUBLIC open_htj2k)
+
 # RFC 9828 RTP receiver (experimental, requires GLFW)
 option(OPENHTJ2K_RTP "Build experimental RFC 9828 RTP receiver (requires GLFW)" OFF)
 if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)

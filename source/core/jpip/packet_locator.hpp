@@ -61,11 +61,24 @@ class OPENHTJ2K_JPIP_EXPORT PacketLocator {
   // Total number of packet byte ranges recorded.
   std::size_t size() const { return total_packets_; }
 
+  // Precincts in the order the decoder first visited them within the
+  // requested tile.  For layer-subordinate progression orders (PCRL,
+  // RPCL, CPRL) this is also the order the precincts appear in the
+  // tile-part body bytes — each precinct's packets (across every layer)
+  // form a contiguous run in the codestream.  The returned keys all
+  // share the requested tile index; an unknown tile returns an empty
+  // vector.
+  std::vector<PrecinctKey> precincts_of_tile(uint16_t t) const;
+
  private:
   PacketLocator() = default;
 
   using Key = std::tuple<uint16_t, uint16_t, uint8_t, uint32_t>;
   std::map<Key, std::vector<PacketByteRange>> packets_;
+  // Precincts in first-appearance order, flat across all tiles.  The
+  // tile index on each PrecinctKey distinguishes them; precincts_of_tile()
+  // applies the obvious per-tile filter.
+  std::vector<PrecinctKey> precinct_visit_order_;
   std::size_t total_packets_ = 0;
 };
 
