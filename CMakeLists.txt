@@ -267,6 +267,11 @@ add_executable(jpip_vbas_check)
 add_subdirectory(source/apps/jpip_vbas_check)
 target_link_libraries(jpip_vbas_check PUBLIC open_htj2k)
 
+# JPIP Phase-2 message header codec self-test (used by tests/jpip_phase1.cmake)
+add_executable(jpip_message_check)
+add_subdirectory(source/apps/jpip_message_check)
+target_link_libraries(jpip_message_check PUBLIC open_htj2k)
+
 # RFC 9828 RTP receiver (experimental, requires GLFW)
 option(OPENHTJ2K_RTP "Build experimental RFC 9828 RTP receiver (requires GLFW)" OFF)
 if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
