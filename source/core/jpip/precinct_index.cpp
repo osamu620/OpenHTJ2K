@@ -48,6 +48,14 @@ void build_tile_component(j2k_main_header &mh, uint16_t c,
   out.npw.assign(NL_tc + 1u, 0);
   out.nph.assign(NL_tc + 1u, 0);
   out.s_offset.assign(NL_tc + 1u, 0);
+  out.log2PPx.assign(NL_tc + 1u, 0);
+  out.log2PPy.assign(NL_tc + 1u, 0);
+  out.respos0_x.assign(NL_tc + 1u, 0);
+  out.respos0_y.assign(NL_tc + 1u, 0);
+  out.tc_pos0.x = tc_x0;
+  out.tc_pos0.y = tc_y0;
+  out.tc_pos1.x = tc_x1;
+  out.tc_pos1.y = tc_y1;
 
   uint32_t cumulative = 0;
   for (uint8_t r = 0; r <= NL_tc; ++r) {
@@ -71,9 +79,13 @@ void build_tile_component(j2k_main_header &mh, uint16_t c,
     const uint32_t nph =
         (respos1_y > respos0_y) ? (ceil_int(respos1_y, PPy) - respos0_y / PPy) : 0u;
 
-    out.npw[r]      = npw;
-    out.nph[r]      = nph;
-    out.s_offset[r] = cumulative;
+    out.npw[r]       = npw;
+    out.nph[r]       = nph;
+    out.s_offset[r]  = cumulative;
+    out.log2PPx[r]   = static_cast<uint8_t>(log2PP.x);
+    out.log2PPy[r]   = static_cast<uint8_t>(log2PP.y);
+    out.respos0_x[r] = respos0_x;
+    out.respos0_y[r] = respos0_y;
     cumulative += npw * nph;
   }
   out.total = cumulative;
@@ -110,8 +122,9 @@ std::unique_ptr<CodestreamIndex> CodestreamIndex::build(const uint8_t *codestrea
   }
 
   std::unique_ptr<CodestreamIndex> idx(new CodestreamIndex());
-  idx->num_components_ = mh.SIZ->get_num_components();
-  idx->progression_    = mh.COD->get_progression_order();
+  idx->num_components_  = mh.SIZ->get_num_components();
+  idx->progression_     = mh.COD->get_progression_order();
+  idx->is_irreversible_ = (mh.COD->get_transformation() == 0);
   mh.get_number_of_tiles(idx->num_tiles_x_, idx->num_tiles_y_);
 
   element_siz canvas, origin, tsize, torigin;
@@ -119,6 +132,17 @@ std::unique_ptr<CodestreamIndex> CodestreamIndex::build(const uint8_t *codestrea
   mh.SIZ->get_image_origin(origin);
   mh.SIZ->get_tile_size(tsize);
   mh.SIZ->get_tile_origin(torigin);
+  idx->geometry_.canvas_size   = {canvas.x, canvas.y};
+  idx->geometry_.canvas_origin = {origin.x, origin.y};
+  idx->geometry_.tile_size     = {tsize.x, tsize.y};
+  idx->geometry_.tile_origin   = {torigin.x, torigin.y};
+
+  idx->subsampling_.resize(idx->num_components_);
+  for (uint16_t c = 0; c < idx->num_components_; ++c) {
+    element_siz sub;
+    mh.SIZ->get_subsampling_factor(sub, c);
+    idx->subsampling_[c] = {sub.x, sub.y};
+  }
 
   const uint64_t total_tc =
       static_cast<uint64_t>(idx->num_tiles()) * idx->num_components_;
@@ -167,6 +191,21 @@ uint64_t CodestreamIndex::total_precincts() const {
   uint64_t sum = 0;
   for (const auto &info : tcinfo_) sum += info.total;
   return sum;
+}
+
+uint8_t CodestreamIndex::max_NL() const {
+  uint8_t m = 0;
+  for (const auto &info : tcinfo_) {
+    if (info.NL > m) m = info.NL;
+  }
+  return m;
+}
+
+Point2 CodestreamIndex::subsampling(uint16_t c) const {
+  if (c >= num_components_) {
+    throw std::out_of_range("CodestreamIndex::subsampling");
+  }
+  return subsampling_[c];
 }
 
 }  // namespace jpip

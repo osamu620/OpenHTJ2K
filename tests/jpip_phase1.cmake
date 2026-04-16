@@ -40,4 +40,42 @@ if (EXISTS "${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c")
                      --per-res 0,0=1,4,16,64,225,900
                      --per-res 0,1=1,4,16,64,225,900
                      --per-res 0,2=1,4,16,64,225,900)
+
+    # ── view-window resolver (§C.4 + §M.4.1) ──
+    # Full-image at full resolution → every precinct.
+    add_test(NAME jpip_vw_land1920_full_res
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw 1920,1920,0,0,1920,1920=3630)
+    # Empty region (sx=sy=0) is treated as whole-image, per §C.4.4.
+    add_test(NAME jpip_vw_land1920_empty_region
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw 1920,1920,0,0,0,0=3630)
+    # Half-res whole image — r*=1 drops r=5 (900/component).  310·3 = 930.
+    add_test(NAME jpip_vw_land1920_half_res
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw 960,960,0,0,960,960=930)
+    # Round-down at fx=800 → r*=2 (480).  Kept r=0..3: 1+4+16+64=85, ×3 = 255.
+    add_test(NAME jpip_vw_land1920_round_down
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw 800,800,0,0,800,800,down=255)
+    # Round-up at fx=800 → r*=1 (960).  Region sx=800 on fx'=960 grid maps to
+    # (0,0)..(1600,1600) on canvas — NOT the whole canvas.  717 precincts.
+    add_test(NAME jpip_vw_land1920_round_up
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw 800,800,0,0,800,800,up=717)
+    # 200×200 centred RoI at full res — foveation probe.  Per resolution at
+    # r=0..5 with DWT over-fetch margin 8: 1, 4, 4, 4, 9, 16 per component
+    # → 38·3 = 114.
+    add_test(NAME jpip_vw_land1920_centre_roi
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw 1920,1920,860,860,200,200=114)
+    # Same RoI, Y component only (comps=0).  Per-component total 38.
+    add_test(NAME jpip_vw_land1920_centre_roi_yonly
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw "1920,1920,860,860,200,200,comps=0=38")
+    # Corner 960×960 quadrant at full res — per component 225+64+16+4+4+1 = 314,
+    # ×3 = 942 (includes DWT over-fetch at coarser resolutions).
+    add_test(NAME jpip_vw_land1920_corner_quadrant
+             COMMAND jpip_index_check ${_JPIP_BIN_DIR}/land_shallow_topo_1920_fov.j2c
+                     --vw 1920,1920,0,0,960,960=942)
 endif()

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "precinct_index.hpp"
+#include "view_window.hpp"
 
 static std::vector<uint8_t> read_file(const char *path) {
   FILE *f = std::fopen(path, "rb");
@@ -78,23 +79,81 @@ static bool parse_per_res_spec(const char *spec, uint16_t &t, uint16_t &c,
   return !expected.empty();
 }
 
+// Parse --vw arg of shape
+//   "fx,fy,ox,oy,sx,sy[,round][,comps=c1:c2:…]=N"
+// where round ∈ {down,up,closest} (default down), N is the expected
+// precinct count, and comps is an optional colon-separated list.  Returns
+// true on success.
+static bool parse_vw_spec(const char *spec, open_htj2k::jpip::ViewWindow &vw,
+                          uint64_t &expected_count) {
+  // Split on the trailing '='
+  const char *eq = std::strrchr(spec, '=');
+  if (!eq) return false;
+  expected_count = std::strtoull(eq + 1, nullptr, 10);
+
+  // Walk the prefix split on commas.
+  std::string prefix(spec, eq);
+  std::size_t pos = 0;
+  auto next = [&](std::string &out) -> bool {
+    std::size_t comma = prefix.find(',', pos);
+    if (comma == std::string::npos) {
+      out = prefix.substr(pos);
+      pos = prefix.size();
+    } else {
+      out = prefix.substr(pos, comma - pos);
+      pos = comma + 1;
+    }
+    return !out.empty();
+  };
+  std::string field;
+  if (!next(field)) return false; vw.fx = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false; vw.fy = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false; vw.ox = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false; vw.oy = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false; vw.sx = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false; vw.sy = static_cast<uint32_t>(std::stoul(field));
+  while (next(field)) {
+    if (field == "down")    vw.round = open_htj2k::jpip::ViewWindow::Round::Down;
+    else if (field == "up") vw.round = open_htj2k::jpip::ViewWindow::Round::Up;
+    else if (field == "closest") vw.round = open_htj2k::jpip::ViewWindow::Round::Closest;
+    else if (field.rfind("comps=", 0) == 0) {
+      std::string list = field.substr(6);
+      std::size_t lp = 0;
+      while (lp < list.size()) {
+        std::size_t colon = list.find(':', lp);
+        std::string item = list.substr(lp, colon == std::string::npos ? std::string::npos : colon - lp);
+        if (!item.empty()) vw.comps.push_back(static_cast<uint16_t>(std::stoul(item)));
+        if (colon == std::string::npos) break;
+        lp = colon + 1;
+      }
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 int main(int argc, char *argv[]) {
   if (argc < 2) {
     std::fprintf(stderr,
                  "Usage: jpip_index_check <input.j2c> [--total N] "
-                 "[--per-res t,c=r0,...] [--print]\n");
+                 "[--per-res t,c=r0,...] [--vw fx,fy,ox,oy,sx,sy[,round]=N] "
+                 "[--print]\n");
     return 1;
   }
   std::string infile     = argv[1];
   long long expected_tot = -1;
   bool do_print          = false;
   std::vector<std::string> per_res_specs;
+  std::vector<std::string> vw_specs;
 
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--total") == 0 && i + 1 < argc) {
       expected_tot = std::atoll(argv[++i]);
     } else if (std::strcmp(argv[i], "--per-res") == 0 && i + 1 < argc) {
       per_res_specs.emplace_back(argv[++i]);
+    } else if (std::strcmp(argv[i], "--vw") == 0 && i + 1 < argc) {
+      vw_specs.emplace_back(argv[++i]);
     } else if (std::strcmp(argv[i], "--print") == 0) {
       do_print = true;
     } else {
@@ -156,6 +215,26 @@ int main(int argc, char *argv[]) {
       }
     }
     if (spec_ok) std::printf("OK --per-res %s\n", spec.c_str());
+  }
+
+  for (const auto &spec : vw_specs) {
+    open_htj2k::jpip::ViewWindow vw;
+    uint64_t expected = 0;
+    if (!parse_vw_spec(spec.c_str(), vw, expected)) {
+      std::fprintf(stderr, "FAIL --vw: cannot parse '%s'\n", spec.c_str());
+      ++failed;
+      continue;
+    }
+    auto got = open_htj2k::jpip::resolve_view_window(*idx, vw);
+    if (got.size() != expected) {
+      std::fprintf(stderr,
+                   "FAIL --vw '%s': expected %llu precincts, got %zu\n",
+                   spec.c_str(), static_cast<unsigned long long>(expected),
+                   got.size());
+      ++failed;
+    } else {
+      std::printf("OK --vw %s\n", spec.c_str());
+    }
   }
 
   return failed == 0 ? 0 : 1;
