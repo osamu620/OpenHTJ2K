@@ -11,6 +11,11 @@ set(_JPIP_BIN_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # Self-contained: round-trip / interop / reject cases live inside the exe.
 add_test(NAME jpip_vbas_codec COMMAND jpip_vbas_check)
 
+# ── JPP-stream message header codec (§A.2 + Tables A.1, A.2) ──
+# Self-contained: round-trip + spec §A.3.2.2 byte-identical interop +
+# dependent-form behaviour + rejection cases.
+add_test(NAME jpip_message_codec COMMAND jpip_message_check)
+
 # ── Decoder precinct-filter sanity (§M.4.1 partial-decode plumbing) ──
 # Exercises the public openhtj2k_decoder::set_precinct_filter hook against a
 # Part-1 and a Part-15 conformance stream.  The assets live under

@@ -4,4 +4,5 @@ target_sources(open_htj2k
     precinct_index.cpp
     view_window.cpp
     vbas.cpp
+    jpp_message.cpp
 )
