@@ -25,9 +25,12 @@
 //
 // Usage:
 //   open_htj2k_jpip_demo <input.j2c>
-//       [--fovea-radius N=256] [--parafovea-radius N=512]
+//       [--fovea-radius N]          (canvas px; default = canvas_w / 15)
+//       [--parafovea-radius N]      (canvas px; default = canvas_w / 8)
+//       [--parafovea-ratio F=0.5]   (fsiz ratio; lower = coarser)
+//       [--periphery-ratio F=0.125] (fsiz ratio; default drops 3 of 5 DWT levels)
 //       [--window-size WxH=1920x1080]
-//       [--use-filter]  (Phase-1 direct filter, skip JPP round-trip)
+//       [--use-filter]              (Phase-1 direct filter, skip JPP round-trip)
 //       [--decode-on-move-only] [--no-vsync]
 //
 // Exits on window close or ESC.
@@ -63,22 +66,21 @@ namespace {
 
 struct Options {
   std::string infile;
-  uint32_t    fovea_radius     = 256;
-  uint32_t    parafovea_radius = 512;
-  // Window/texture dimensions, decoupled from canvas size.  The decoder still
-  // operates at canvas resolution; the row-callback downsamples into a
-  // window-sized RGB buffer before upload.  Default 1920×1080 fits the Metal
-  // 16384 texture limit for arbitrarily large canvases (the original demo
-  // used canvas size directly and aborted on the 21600-wide NASA Blue Marble
-  // asset because Metal rejects MTLTextureDescriptor.width > 16384).
+  // Foveation cone radii in canvas pixels.  0 = auto-scale from canvas
+  // width (fovea = W/15, parafovea = W/8) so the demo "just works" at
+  // any resolution without manually tuning radii.
+  uint32_t    fovea_radius     = 0;
+  uint32_t    parafovea_radius = 0;
+  // fsiz ratios for the parafovea and periphery cones — control how many
+  // DWT resolutions are kept.  0.5 → r*=1 (drop the finest), 0.25 → r*=2
+  // (drop the top two), 0.125 → r*=3 (drop the top three).  Lower values
+  // produce a more dramatic quality drop outside the fovea.
+  float       parafovea_ratio  = 0.5f;
+  float       periphery_ratio  = 0.125f;
   uint32_t    window_w         = 1920;
   uint32_t    window_h         = 1080;
   bool        decode_on_move   = false;
   bool        vsync            = true;
-  // When true, the demo falls back to the Phase-1 direct filter path
-  // (set_precinct_filter on the decoder).  When false (default), the
-  // demo round-trips through the full JPP-stream wire format:
-  //   emit → parse → reassemble → decode.
   bool        use_filter       = false;
 };
 
@@ -98,6 +100,8 @@ bool parse_args(int argc, char **argv, Options &opt) {
       opt.window_w = static_cast<uint32_t>(std::stoul(s.substr(0, sep)));
       opt.window_h = static_cast<uint32_t>(std::stoul(s.substr(sep + 1)));
     }
+    else if (a == "--parafovea-ratio" && i + 1 < argc) opt.parafovea_ratio = std::stof(argv[++i]);
+    else if (a == "--periphery-ratio" && i + 1 < argc) opt.periphery_ratio = std::stof(argv[++i]);
     else if (a == "--decode-on-move-only")          opt.decode_on_move = true;
     else if (a == "--use-filter")                   opt.use_filter = true;
     else if (a == "--no-vsync")                     opt.vsync = false;
@@ -164,15 +168,16 @@ std::unordered_set<uint64_t> foveated_i_set(const CodestreamIndex &idx,
   };
 
   // Fovea: full resolution, tight RoI centred on gaze.
-  auto vw_f = make_view_window(idx, gx, gy, opt.fovea_radius,     1.00f, false);
+  auto vw_f = make_view_window(idx, gx, gy, opt.fovea_radius, 1.00f, false);
   add(open_htj2k::jpip::resolve_view_window(idx, vw_f));
 
-  // Parafovea: half resolution, wider RoI.
-  auto vw_p = make_view_window(idx, gx, gy, opt.parafovea_radius, 0.50f, false);
+  // Parafovea: reduced resolution, wider RoI.
+  auto vw_p = make_view_window(idx, gx, gy, opt.parafovea_radius,
+                               opt.parafovea_ratio, false);
   add(open_htj2k::jpip::resolve_view_window(idx, vw_p));
 
-  // Periphery: quarter resolution, whole image (covers everything at coarse detail).
-  auto vw_q = make_view_window(idx, gx, gy, 0, 0.25f, true);
+  // Periphery: aggressively reduced resolution, whole image.
+  auto vw_q = make_view_window(idx, gx, gy, 0, opt.periphery_ratio, true);
   add(open_htj2k::jpip::resolve_view_window(idx, vw_q));
 
   return out;
@@ -203,6 +208,17 @@ int main(int argc, char **argv) {
   const uint32_t canvas_w = idx->geometry().canvas_size.x;
   const uint32_t canvas_h = idx->geometry().canvas_size.y;
   const uint64_t total_p  = idx->total_precincts();
+
+  // Auto-scale foveation radii if not explicitly set (0 = auto).  The
+  // defaults produce a proportionally-sized fovea regardless of canvas
+  // resolution — about 1/15 of the canvas width for the fovea and 1/8
+  // for the parafovea.
+  if (opt.fovea_radius == 0)     opt.fovea_radius     = std::max(16u, canvas_w / 15u);
+  if (opt.parafovea_radius == 0) opt.parafovea_radius = std::max(32u, canvas_w / 8u);
+  std::printf("foveation: fovea=%u  parafovea=%u  ratios=%.3f/%.3f (canvas px)\n",
+              opt.fovea_radius, opt.parafovea_radius,
+              static_cast<double>(opt.parafovea_ratio),
+              static_cast<double>(opt.periphery_ratio));
   std::printf("loaded %s: canvas %u×%u, %u components, %llu precincts\n",
               opt.infile.c_str(), canvas_w, canvas_h, idx->num_components(),
               static_cast<unsigned long long>(total_p));
