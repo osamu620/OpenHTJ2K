@@ -7,6 +7,10 @@
 
 set(_JPIP_BIN_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
+# ── VBAS codec (ISO/IEC 15444-9 §A.2.1) ──
+# Self-contained: round-trip / interop / reject cases live inside the exe.
+add_test(NAME jpip_vbas_codec COMMAND jpip_vbas_check)
+
 # ── Decoder precinct-filter sanity (§M.4.1 partial-decode plumbing) ──
 # Exercises the public openhtj2k_decoder::set_precinct_filter hook against a
 # Part-1 and a Part-15 conformance stream.  The assets live under
