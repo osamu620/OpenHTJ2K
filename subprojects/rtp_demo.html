@@ -682,6 +682,60 @@ let lastDecodedH = 0;
 // has real cost with DevTools open.  Enable with ?verbose=1 in the URL.
 const verboseLog = new URLSearchParams(window.location.search).has('verbose');
 
+// ── Paced-mode ring buffer between decode (producer) and rAF display
+// (consumer) ─────────────────────────────────────────────────────────
+// The paced path decouples decode from display so neither setTimeout
+// imprecision nor bursty decode time introduces jitter at the monitor
+// refresh boundary.  Decoded frames are snapshotted to JS-side Uint8Array
+// copies (the WASM heap reuses one set of buffers per decode call, so we
+// can't hold multiple frames there) and pushed into this ring; the rAF
+// loop consumes them in order at VSync ticks.
+// ASAP mode bypasses the ring entirely and renders inline as before.
+const RING_CAPACITY = 4;
+const _ring = new Array(RING_CAPACITY).fill(null);
+let _ringHead = 0;   // next write index (producer)
+let _ringTail = 0;   // next read index (consumer)
+let _ringCount = 0;  // current occupancy
+
+function ringPush(entry) {
+  if (_ringCount >= RING_CAPACITY) {
+    // Defensive: consumer fell behind despite the producer's backpressure
+    // yield.  Drop the oldest so we never block indefinitely.
+    _ring[_ringTail] = null;
+    _ringTail = (_ringTail + 1) % RING_CAPACITY;
+    _ringCount--;
+  }
+  _ring[_ringHead] = entry;
+  _ringHead = (_ringHead + 1) % RING_CAPACITY;
+  _ringCount++;
+}
+function ringPeek() { return _ringCount > 0 ? _ring[_ringTail] : null; }
+function ringPop() {
+  if (_ringCount === 0) return null;
+  const entry = _ring[_ringTail];
+  _ring[_ringTail] = null;
+  _ringTail = (_ringTail + 1) % RING_CAPACITY;
+  _ringCount--;
+  return entry;
+}
+function ringClear() {
+  _ring.fill(null);
+  _ringHead = _ringTail = _ringCount = 0;
+}
+
+// ── Paced-mode wall-clock anchors ────────────────────────────────────
+// Module scope because the decode producer (pre-decode pace-drop check)
+// and the rAF consumer (anchor + per-frame target) both read/write them.
+let wallStart = 0;     // performance.now() / rAF-timestamp of pre-roll end
+let rtpStart  = 0;     // RTP ts corresponding to wallStart
+let decodeCount   = 0;          // frames decoded (producer)
+let decodeFinished = false;     // packet stream exhausted
+let decodeError    = null;      // error raised inside the decode loop
+let displayedPreRoll = 0;       // pre-roll frames rendered by rAF
+let firstFrameDrawn  = false;   // overlay dismissed
+let _rafId = 0;                 // current requestAnimationFrame handle
+let ticker = 0;                 // setInterval id for the stats ticker
+
 function setOverlay(text, mode = 'loading') {
   const ov = document.getElementById('canvas-overlay');
   if (!ov) return;
@@ -1176,17 +1230,22 @@ function pickRenderer(canvas) {
   return new Canvas2DRenderer(canvas);
 }
 
-function decodeAndRender() {
+// Decode one completed frame and snapshot the result into a ring-buffer
+// entry.  Does NOT render — the caller either hands the entry to the
+// rAF consumer (paced mode) or passes it to renderFrame() directly (ASAP).
+// Returns null if nothing was ready or a frame was skipped.
+// `rtpTs` is the RTP timestamp of the packet that completed this frame.
+function decodeFrame(rtpTs) {
   const frameSize = F.rtp_peek_size(rtpSession);
-  if (frameSize === 0) return false;
+  if (frameSize === 0) return null;
   if (frameSize > MAX_FRAME) {
     console.warn('frame too large', frameSize, '— skipping');
     // Drain so the queue doesn't back up.
     F.rtp_pop(rtpSession, frameBuf, MAX_FRAME);
-    return false;
+    return null;
   }
   const got = F.rtp_pop(rtpSession, frameBuf, MAX_FRAME);
-  if (got <= 0) return false;
+  if (got <= 0) return null;
 
   const matrix = F.rtp_pop_matrix(rtpSession);
   const range  = F.rtp_pop_range(rtpSession);
@@ -1283,19 +1342,14 @@ function decodeAndRender() {
       autoDecided = true;
     }
 
-    // Two render paths:
-    //   (a) Planar — WebGL only.  Decode into 3 R8 buffers at native chroma
-    //       sizes; shader samples them.  Free hardware bilinear chroma upsample.
-    //   (b) Packed — Canvas 2D fallback.  Decode into one RGBA buffer; CPU
-    //       YCbCr→RGB pass; putImageData.
+    // Decode into WASM buffers, then snapshot the decoded pixels into JS
+    // Uint8Array copies so we can hold multiple frames in flight (the WASM
+    // heap reuses one set of buffers per decode call).  The copy cost is
+    // roughly the same order as the GPU upload that follows on render.
+    let entry;
     if (renderer.supportsPlanar() && NC >= 3) {
-      // Per-component dimensions: get_width/get_height already return the
-      // REDUCED-resolution sizes for non-luma components (e.g. 1920×1080 luma
-      // and 960×1080 chroma for 4:2:2 at full res; 960×540 / 480×540 at half res).
       const lumaW   = compW[0], lumaH   = compH[0];
       const chromaW = compW[1], chromaH = compH[1];
-      // The decoder reports per-component dims at full-resolution; we need
-      // the reduced-resolution sizes (after dividing by 2^reduce_NL).
       const lumaW_r   = Math.ceil(lumaW   / (1 << reduceNLValue));
       const lumaH_r   = Math.ceil(lumaH   / (1 << reduceNLValue));
       const chromaW_r = Math.ceil(chromaW / (1 << reduceNLValue));
@@ -1304,14 +1358,25 @@ function decodeAndRender() {
       const chromaSz  = chromaW_r * chromaH_r;
       ensurePlanarBufs(lumaSz, chromaSz);
       F.invoke_planar_u8(dec, yBuf, cbBuf, crBuf);
-      renderer.renderPlanar(Module.HEAPU8, yBuf, cbBuf, crBuf,
-                            lumaW_r, lumaH_r, chromaW_r, chromaH_r,
-                            matrix, range, ycbcrMode, NC);
+      entry = {
+        planar: true,
+        yData:  Module.HEAPU8.slice(yBuf,  yBuf  + lumaSz),
+        cbData: Module.HEAPU8.slice(cbBuf, cbBuf + chromaSz),
+        crData: Module.HEAPU8.slice(crBuf, crBuf + chromaSz),
+        lumaW: lumaW_r, lumaH: lumaH_r,
+        chromaW: chromaW_r, chromaH: chromaH_r,
+        matrix, range, ycbcrMode, NC,
+        W, H, D,
+        rtpTimestamp: rtpTs >>> 0,
+        framePeriodMs,
+      };
     } else {
       ensureRgbaBuf(W * H * 4);
       F.invoke_to_rgba(dec, rgbaBuf);
       // Apply YCbCr→RGB conversion on CPU only when the active renderer can't
       // do it in-shader (Canvas 2D path).  Mat=0/none = RGB passthrough.
+      // Done at decode time so the snapshot in the ring buffer is already
+      // in the final RGB colorspace — render-time stays identical to today.
       if (NC >= 3 && renderer.needsCpuYcbcr()) {
         let chosen = ycbcrMode;  // 'auto'|'none'|'bt601'|'bt709'
         if (chosen === 'auto') {
@@ -1323,26 +1388,75 @@ function decodeAndRender() {
         if      (chosen === 'bt709') F.apply_bt709(rgbaBuf, W * H);
         else if (chosen === 'bt601') F.apply_bt601(rgbaBuf, W * H);
       }
-      // Paint via the active renderer.  Module.HEAPU8 re-read each frame so
-      // a heap-grow event doesn't leave the renderer with a stale view.
-      renderer.render(Module.HEAPU8, rgbaBuf, W, H, matrix, range, ycbcrMode, NC);
+      entry = {
+        planar: false,
+        rgbaData: Module.HEAPU8.slice(rgbaBuf, rgbaBuf + W * H * 4),
+        W, H, D,
+        matrix, range, ycbcrMode, NC,
+        rtpTimestamp: rtpTs >>> 0,
+        framePeriodMs,
+      };
     }
 
     const t1 = performance.now();
     lastDecodeMs = t1 - t0;
     lastDecodeTimes.push(lastDecodeMs);
     if (lastDecodeTimes.length > FPS_WIN) lastDecodeTimes.shift();
-    frameCount++;
+    decodeCount++;
     setStat('imgWidth',  W);
     setStat('imgHeight', H);
     setStat('imgDepth',  D + ' bpc');
     setStat('numComps',  NC);
-    return true;
+    return entry;
   } catch (e) {
     console.warn('frame decode failed:', e);
-    return false;
+    return null;
   } finally {
     if (dec !== 0) F.release_j2c(dec);
+  }
+}
+
+// Render a ring-buffer entry produced by decodeFrame().  Copies the JS
+// Uint8Array snapshots back into the existing WASM heap buffers so the
+// renderers (Canvas2D / WebGL2) work against unchanged pointer-based APIs.
+// Counts toward frameCount (displayed).
+function renderFrame(entry) {
+  if (entry.planar) {
+    // Make sure the WASM buffers are large enough (auto-reduce can change
+    // sizes between frames).
+    const lumaSz = entry.yData.length;
+    const chromaSz = entry.cbData.length;
+    ensurePlanarBufs(lumaSz, chromaSz);
+    Module.HEAPU8.set(entry.yData,  yBuf);
+    Module.HEAPU8.set(entry.cbData, cbBuf);
+    Module.HEAPU8.set(entry.crData, crBuf);
+    renderer.renderPlanar(Module.HEAPU8, yBuf, cbBuf, crBuf,
+                          entry.lumaW, entry.lumaH,
+                          entry.chromaW, entry.chromaH,
+                          entry.matrix, entry.range, entry.ycbcrMode, entry.NC);
+  } else {
+    ensureRgbaBuf(entry.rgbaData.length);
+    Module.HEAPU8.set(entry.rgbaData, rgbaBuf);
+    renderer.render(Module.HEAPU8, rgbaBuf,
+                    entry.W, entry.H,
+                    entry.matrix, entry.range, entry.ycbcrMode, entry.NC);
+  }
+  frameCount++;
+}
+
+// ASAP-mode convenience wrapper — decode + render inline, matching the
+// pre-rAF behaviour.  Returns true if a frame was rendered.
+// The RTP timestamp is recorded in the entry but the ASAP path doesn't
+// use it for pacing.
+function decodeAndRender(rtpTs = 0) {
+  const entry = decodeFrame(rtpTs);
+  if (!entry) return false;
+  try {
+    renderFrame(entry);
+    return true;
+  } catch (e) {
+    console.warn('frame render failed:', e);
+    return false;
   }
 }
 
@@ -1401,6 +1515,98 @@ function fastYield() {
   return new Promise(resolve => { _yieldQ.push(resolve); _yieldMC.port2.postMessage(0); });
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// rAF display loop — paced mode only
+// ──────────────────────────────────────────────────────────────────────
+// Consumes frames from the ring at monitor VSync rate.  Every tick
+// receives a `rafTimestamp` argument that is phase-locked to the next
+// screen paint; using it (instead of performance.now()) means each
+// frame's target maps to a whole number of VSync periods, so inter-
+// frame hold times are uniform — the micro-judder that setTimeout-based
+// pacing produced at 29.97 fps on 60 Hz goes away.
+//
+// Pre-roll: first PRE_ROLL_FRAMES frames render immediately when they
+// appear in the ring (no timing check, no anchor).  After that, the
+// next frame to render anchors wallStart/rtpStart and every subsequent
+// frame is released at VSync ≥ its RTP-clock target.
+//
+// Pace-drop: if the next ring entry's target is already past by more
+// than PACE_DROP_PERIODS periods, it's dropped (ringPop without render)
+// and we try the one after.
+function startDisplayLoop(myGen) {
+  function tick(rafTimestamp) {
+    // Superseded or stopped?
+    if (playbackGen !== myGen || !running) { _rafId = 0; return; }
+    // Paused: keep the loop alive but don't consume frames.
+    if (paused) { _rafId = requestAnimationFrame(tick); return; }
+
+    while (_ringCount > 0) {
+      const entry = ringPeek();
+
+      // Pre-roll: render immediately, no timing.
+      if (displayedPreRoll < PRE_ROLL_FRAMES) {
+        renderFrame(ringPop());
+        displayedPreRoll++;
+        if (!firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
+        continue;                    // drain pre-roll frames if available
+      }
+
+      // Anchor on the first post-pre-roll frame.
+      if (wallStart === 0) {
+        wallStart = rafTimestamp;
+        rtpStart  = entry.rtpTimestamp;
+      }
+
+      const dtMs   = ((entry.rtpTimestamp - rtpStart) >>> 0) * (1000 / 90000);
+      const target = wallStart + totalPausedMs + dtMs;
+      const period = entry.framePeriodMs || (1000 / 60);
+
+      // Pace-drop: too far behind?  Discard and re-check next entry.
+      if (PACE_DROP_ENABLED && rafTimestamp - target > PACE_DROP_PERIODS * period) {
+        ringPop();
+        droppedByPace++;
+        continue;
+      }
+
+      // Not yet its turn — hold current frame until the next VSync.
+      // The 0.5 ms slack accepts frames whose target falls inside the
+      // current VSync window (the rAF timestamp is the *start* of that
+      // window, so targets up to ≈½ period past it are "due now").
+      if (rafTimestamp < target - 0.5) break;
+
+      renderFrame(ringPop());
+      if (!firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
+      break;                          // one frame per VSync after pre-roll
+    }
+
+    // End-of-playback cleanup: decode loop finished *and* the ring is
+    // drained.  The rAF loop owns UI cleanup because the decode loop
+    // may finish long before the last buffered frame is displayed.
+    if (decodeFinished && _ringCount === 0) {
+      _rafId = 0;
+      if (ticker) { clearInterval(ticker); ticker = 0; }
+      running = false;
+      if (playbackGen === myGen) {
+        document.getElementById('btn-play').disabled  = false;
+        document.getElementById('btn-pause').disabled = true;
+        document.getElementById('btn-stop').disabled  = true;
+        const ov = document.getElementById('canvas-overlay');
+        if (ov && !ov.classList.contains('error')) {
+          if (decodeError) {
+            setOverlay('Playback error: ' + decodeError.message, 'error');
+          } else {
+            setOverlay('Playback finished. ' + frameCount + ' frames decoded.', 'idle');
+          }
+        }
+      }
+      return;
+    }
+
+    _rafId = requestAnimationFrame(tick);
+  }
+  _rafId = requestAnimationFrame(tick);
+}
+
 // Stats tick (every 1 s)
 function startStatsTicker() {
   mbpsSampleT     = performance.now();
@@ -1433,11 +1639,13 @@ function startStatsTicker() {
     frameCountStart = frameCount;
 
     setStat('statPackets', pktCount);
-    setStat('statFrames',  frameCount);
+    setStat('statFrames',  frameCount);                         // displayed
     setStat('statDrops',   rtpSession ? F.rtp_drops(rtpSession) : 0);
     setStat('statDropsPace', droppedByPace);
     setStat('statGaps',    rtpSession ? F.rtp_gaps(rtpSession) : 0);
-    setStat('statPending', rtpSession ? F.rtp_ready_count(rtpSession) : 0);
+    // Pending = WASM reassembler ready queue + decoded-but-undisplayed ring.
+    setStat('statPending',
+      (rtpSession ? F.rtp_ready_count(rtpSession) : 0) + _ringCount);
     setStat('statLastDecode', lastDecodeMs ? lastDecodeMs.toFixed(0) + ' ms' : '—');
     if (lastDecodeTimes.length > 0) {
       const meanMs = lastDecodeTimes.reduce((a, b) => a + b, 0) / lastDecodeTimes.length;
@@ -1453,8 +1661,10 @@ function startStatsTicker() {
       const v = Module && Module.__variant ? Module.__variant.replace('libopen_htj2k_', '') : '?';
       console.log(
         `[rtp_demo t=${tickN}s build=${v}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
-        `pkts=${pktCount} frames=${frameCount} disp=${dispFps.toFixed(1)} fps  drops=${rtpSession?F.rtp_drops(rtpSession):0} ` +
-        `paceDrops=${droppedByPace} pending=${rtpSession?F.rtp_ready_count(rtpSession):0} lastDec=${lastDecodeMs.toFixed(0)}ms`);
+        `pkts=${pktCount} dec=${decodeCount} disp=${frameCount} (${dispFps.toFixed(1)} fps)  ` +
+        `drops=${rtpSession?F.rtp_drops(rtpSession):0} paceDrops=${droppedByPace}  ` +
+        `ring=${_ringCount} pending=${rtpSession?F.rtp_ready_count(rtpSession):0}  ` +
+        `lastDec=${lastDecodeMs.toFixed(0)}ms`);
     }
   }, 1000);
 }
@@ -1485,6 +1695,15 @@ async function startPlayback(source) {
   totalPausedMs = 0; pauseStartedAt = 0;
   droppedByPace = 0;
   framePeriodMs = 0;
+  // rAF-path state (see module-scope declarations).
+  decodeCount = 0;
+  decodeFinished = false;
+  decodeError = null;
+  displayedPreRoll = 0;
+  firstFrameDrawn = false;
+  wallStart = 0;
+  rtpStart  = 0;
+  ringClear();
 
   // Read resolution-reduce setting from UI.
   reduceNLMode = document.getElementById('reduce-nl').value;
@@ -1506,13 +1725,15 @@ async function startPlayback(source) {
   console.log(`[rtp_demo] ycbcr_mode=${ycbcrMode}`);
 
   const pacing = document.querySelector('input[name="pacing"]:checked').value;
-  const ticker = startStatsTicker();
+  ticker = startStatsTicker();
   setOverlay('Buffering first frame… (check console for disk-read + decode stats)', 'loading');
-  let firstFrameDrawn = false;
 
-  // Paced-mode clock anchors (set on first frame decoded).
-  let wallStart = 0;
-  let rtpStart  = 0;
+  // Paced mode: start the rAF display loop immediately.  It pulls frames
+  // from the ring as the decode loop below pushes them in.  ASAP mode
+  // keeps decode and render inline on the same task — no rAF needed.
+  if (pacing === 'paced') {
+    startDisplayLoop(myGen);
+  }
 
   try {
     for await (const pkt of parseRtpStream(source, { onChunk: (n) => { chunkBytes += n; } })) {
@@ -1553,16 +1774,14 @@ async function startPlayback(source) {
         }
         lastFramePacketTs = pkt.timestamp;
 
-        // Network-pacing frame drop.  If the completed frame's target wall
-        // time is already in the past by more than PACE_DROP_PERIODS frame
-        // periods, skip decoding: pop the reassembled bitstream out of the
-        // ready slot without copying, and continue pulling packets.
-        // wallStart===0 on the very first completed frame — never drop it,
-        // since the clock anchors are set *after* its decode below.
+        // Pre-decode pace-drop: if the completed frame's wall-clock target
+        // is already past by more than PACE_DROP_PERIODS periods, skip
+        // decoding entirely (pop the reassembled bitstream from the ready
+        // slot).  wallStart===0 during pre-roll → check is bypassed.
         if (PACE_DROP_ENABLED && pacing === 'paced' && wallStart !== 0) {
           const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
           const target  = wallStart + totalPausedMs + dtMs;
-          const period  = framePeriodMs || (1000 / 60);   // 16.7 ms fallback
+          const period  = framePeriodMs || (1000 / 60);
           if (performance.now() - target > PACE_DROP_PERIODS * period) {
             F.rtp_drop_ready(rtpSession);
             droppedByPace++;
@@ -1570,41 +1789,34 @@ async function startPlayback(source) {
           }
         }
 
-        const ok = decodeAndRender();
-        if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
-
-        // Log the RTP timestamp delta for the first few frames so we can
-        // verify the paced-mode clock assumption (90 kHz = RFC 3551 default).
-        // Only emitted with ?verbose=1.
-        if (verboseLog && frameCount <= 5 && ok) {
-          const d = framePeriodMs ? framePeriodMs.toFixed(2) : '—';
-          console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}  Δt=${d} ms`);
-        }
-
-        // When r===1, the current packet is the one that completed the frame,
-        // so its RTP timestamp equals the frame timestamp.
-        if (ok && pacing === 'paced') {
-          // Pre-roll: let the first PRE_ROLL_FRAMES decodes run back-to-back
-          // with no pacing.  wallStart===0 during this window, which also
-          // disables pace-drop (see its guard above).
-          if (wallStart === 0) {
-            if (frameCount > PRE_ROLL_FRAMES) {
-              wallStart = performance.now();
-              rtpStart  = pkt.timestamp;
-            }
-          } else {
-            // 90 kHz clock is the default for standard video payload types (RFC 3551 §4.1).
-            // totalPausedMs is added so any wall-clock time spent paused doesn't
-            // count as "behind schedule" when we resume — otherwise the decoder
-            // sprints until the real and RTP clocks re-converge.
-            const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
-            const target  = wallStart + totalPausedMs + dtMs;
-            const delayMs = target - performance.now();
-            if (delayMs > 1) await sleep(delayMs);
+        if (pacing === 'paced') {
+          // Backpressure: wait for room in the ring before decoding.
+          // fastYield() lets rAF run and drain one frame.
+          while (_ringCount >= RING_CAPACITY && running && playbackGen === myGen && !paused) {
+            await fastYield();
           }
+          if (playbackGen !== myGen || !running) break;
+          if (paused) await waitIfPaused();
+
+          const entry = decodeFrame(pkt.timestamp);
+          if (entry) {
+            ringPush(entry);
+            if (verboseLog && decodeCount <= 5) {
+              const d = framePeriodMs ? framePeriodMs.toFixed(2) : '—';
+              console.log(`[rtp_demo] frame ${decodeCount} RTP ts=${pkt.timestamp}  Δt=${d} ms`);
+            }
+          }
+        } else {
+          // ASAP mode: decode + render inline on the same task, as before.
+          const ok = decodeAndRender(pkt.timestamp);
+          if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
+          if (verboseLog && frameCount <= 5 && ok) {
+            const d = framePeriodMs ? framePeriodMs.toFixed(2) : '—';
+            console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}  Δt=${d} ms`);
+          }
+          // Pump microtasks so the UI stays responsive.
+          await fastYield();
         }
-        // Pump microtasks so the UI stays responsive even in ASAP mode.
-        if (pacing === 'max') await fastYield();
       }
     }
   } catch (e) {
@@ -1613,11 +1825,25 @@ async function startPlayback(source) {
     // don't want that to clobber the new playback's UI.
     if (playbackGen === myGen) {
       console.error('playback error:', e);
-      setOverlay('Playback error: ' + e.message, 'error');
+      if (pacing === 'paced') {
+        // Defer overlay to the rAF loop so in-flight ring frames still paint.
+        decodeError = e;
+      } else {
+        setOverlay('Playback error: ' + e.message, 'error');
+      }
     }
   }
-  clearInterval(ticker);
-  // If a newer generation has taken over, do NOT touch UI state — it's theirs now.
+
+  if (pacing === 'paced') {
+    // Hand UI cleanup off to the rAF loop — it will run once the ring
+    // drains (or immediately if it's already empty).  decodeError, if
+    // set, will be surfaced there too.
+    decodeFinished = true;
+    return;
+  }
+
+  // ASAP-mode cleanup (synchronous, same as pre-refactor behaviour).
+  if (ticker) { clearInterval(ticker); ticker = 0; }
   if (playbackGen !== myGen) {
     console.log(`[rtp_demo] gen ${myGen} superseded by ${playbackGen}; skipping UI cleanup`);
     return;
@@ -1626,8 +1852,6 @@ async function startPlayback(source) {
   document.getElementById('btn-play').disabled  = false;
   document.getElementById('btn-pause').disabled = true;
   document.getElementById('btn-stop').disabled  = true;
-  // Preserve any error overlay set by the catch clause — only set the
-  // "finished" message if no error is currently shown.
   const ov = document.getElementById('canvas-overlay');
   if (ov && !ov.classList.contains('error')) {
     setOverlay('Playback finished. ' + frameCount + ' frames decoded.', 'idle');
@@ -1713,6 +1937,11 @@ document.getElementById('btn-stop').addEventListener('click', () => {
   playbackGen++;                 // signal running loop to exit ASAP
   running = false;
   if (paused) setPaused(false);  // release any pending waitIfPaused()
+  // Cancel the rAF display loop (paced mode) and drop any buffered frames;
+  // the superseded loop sees the gen mismatch on its next tick and exits.
+  if (_rafId) { cancelAnimationFrame(_rafId); _rafId = 0; }
+  ringClear();
+  if (ticker) { clearInterval(ticker); ticker = 0; }
   // Update UI directly — the superseded loop skips its own cleanup.
   document.getElementById('btn-play').disabled  = false;
   document.getElementById('btn-pause').disabled = true;
