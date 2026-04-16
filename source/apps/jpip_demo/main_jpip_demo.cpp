@@ -11,11 +11,12 @@
 //   parafovea : fsiz = canvas / 2         → drop the finest resolution, wider RoI
 //   periphery : fsiz = canvas / 4         → drop the top two resolutions, whole image
 //
-// The unioned precinct set becomes the decoder's set_precinct_filter, the
-// decoder streams rows via invoke_line_based_stream(), each row is
-// nearest-neighbour downsampled into a fixed-size RGB buffer, and that
-// buffer is uploaded to the rtp_recv renderer (Metal on macOS, OpenGL 3.3
-// elsewhere).
+// By default (Phase 2 JPP round-trip mode), each frame's foveated precinct
+// set is serialised to a JPP-stream, parsed back into a DataBinSet,
+// reassembled into a sparse J2C codestream, and decoded.  The --use-filter
+// flag falls back to the Phase-1 direct set_precinct_filter path for A/B
+// performance comparison.  Both paths produce visually identical output;
+// the JPP path exercises every byte of the JPIP wire format.
 //
 // Decoupling the window/texture size from the canvas size lets the demo
 // run on canvases that exceed the GPU texture limit (Metal: 16384 wide on
@@ -26,6 +27,7 @@
 //   open_htj2k_jpip_demo <input.j2c>
 //       [--fovea-radius N=256] [--parafovea-radius N=512]
 //       [--window-size WxH=1920x1080]
+//       [--use-filter]  (Phase-1 direct filter, skip JPP round-trip)
 //       [--decode-on-move-only] [--no-vsync]
 //
 // Exits on window close or ESC.
@@ -42,7 +44,12 @@
 
 #include <GLFW/glfw3.h>
 
+#include "codestream_assembler.hpp"
+#include "codestream_walker.hpp"
+#include "data_bin_emitter.hpp"
 #include "decoder.hpp"
+#include "jpp_parser.hpp"
+#include "packet_locator.hpp"
 #include "precinct_index.hpp"
 #include "view_window.hpp"
 #include "renderer.hpp"
@@ -68,6 +75,11 @@ struct Options {
   uint32_t    window_h         = 1080;
   bool        decode_on_move   = false;
   bool        vsync            = true;
+  // When true, the demo falls back to the Phase-1 direct filter path
+  // (set_precinct_filter on the decoder).  When false (default), the
+  // demo round-trips through the full JPP-stream wire format:
+  //   emit → parse → reassemble → decode.
+  bool        use_filter       = false;
 };
 
 bool parse_args(int argc, char **argv, Options &opt) {
@@ -87,6 +99,7 @@ bool parse_args(int argc, char **argv, Options &opt) {
       opt.window_h = static_cast<uint32_t>(std::stoul(s.substr(sep + 1)));
     }
     else if (a == "--decode-on-move-only")          opt.decode_on_move = true;
+    else if (a == "--use-filter")                   opt.use_filter = true;
     else if (a == "--no-vsync")                     opt.vsync = false;
     else if (a.size() > 0 && a[0] != '-' && opt.infile.empty()) opt.infile = a;
     else {
@@ -200,6 +213,36 @@ int main(int argc, char **argv) {
   // program lifetime, so the re-init is zero-copy and dominated by marker
   // parsing — sub-millisecond for a single-tile stream.
 
+  // JPP round-trip mode (default) needs a one-time PacketLocator build.
+  // This drives the decoder once with a packet observer to learn per-
+  // precinct byte ranges; on the 1920×1920 asset it costs ~25 ms.
+  open_htj2k::jpip::CodestreamLayout layout;
+  std::unique_ptr<open_htj2k::jpip::PacketLocator> locator;
+  if (!opt.use_filter) {
+    open_htj2k::jpip::walk_codestream(bytes.data(), bytes.size(), &layout);
+    locator = open_htj2k::jpip::PacketLocator::build(bytes.data(), bytes.size(), *idx, layout);
+    if (!locator) {
+      std::fprintf(stderr, "WARN: PacketLocator build failed; falling back to --use-filter\n");
+      opt.use_filter = true;
+    }
+    if (!opt.use_filter) {
+      const uint8_t po = idx->progression_order();
+      if (po == 0 || po == 1) {
+        std::fprintf(stderr,
+                     "WARN: progression order %u (LRCP/RLCP) not supported by "
+                     "JPP reassembler; falling back to --use-filter\n", po);
+        opt.use_filter = true;
+      }
+    }
+    if (!opt.use_filter) {
+      std::printf("JPP round-trip mode enabled (locator: %zu packet ranges)\n",
+                  locator->size());
+    }
+  }
+  if (opt.use_filter) {
+    std::printf("direct-filter mode enabled\n");
+  }
+
   // Clamp the requested window to a known-safe upper bound so we never feed
   // the renderer something that violates its texture size limit (Metal: 16384
   // on Apple silicon; GL: implementation-defined but typically ≥ 16384 too).
@@ -254,31 +297,69 @@ int main(int argc, char **argv) {
     auto keep = foveated_i_set(*idx, gx, gy, opt);
     precincts_since_log += keep.size();
 
+    // Build the codestream to decode this frame — either via JPP
+    // round-trip or via the legacy precinct-filter path.
+    std::vector<uint8_t> frame_cs;
+    if (!opt.use_filter) {
+      // ── JPP round-trip: emit → parse → reassemble ──
+      std::vector<uint8_t> stream;
+      open_htj2k::jpip::MessageHeaderContext enc_ctx;
+      open_htj2k::jpip::emit_main_header_databin(bytes.data(), bytes.size(), layout, enc_ctx, stream);
+      for (uint32_t t = 0; t < idx->num_tiles(); ++t) {
+        open_htj2k::jpip::emit_tile_header_databin(bytes.data(), bytes.size(),
+                                                    static_cast<uint16_t>(t), layout, enc_ctx, stream);
+      }
+      open_htj2k::jpip::emit_metadata_bin_zero(enc_ctx, stream);
+      for (uint32_t t = 0; t < idx->num_tiles(); ++t) {
+        for (uint16_t c = 0; c < idx->num_components(); ++c) {
+          const auto &info = idx->tile_component(static_cast<uint16_t>(t), c);
+          for (uint8_t r = 0; r <= info.NL; ++r) {
+            const uint32_t n = info.npw[r] * info.nph[r];
+            for (uint32_t p = 0; p < n; ++p) {
+              const uint64_t I = idx->I(static_cast<uint16_t>(t), c, r, p);
+              if (keep.count(I)) {
+                open_htj2k::jpip::emit_precinct_databin(
+                    bytes.data(), bytes.size(),
+                    static_cast<uint16_t>(t), c, r, p, *idx, *locator, enc_ctx, stream);
+              }
+            }
+          }
+        }
+      }
+      open_htj2k::jpip::DataBinSet set;
+      open_htj2k::jpip::parse_jpp_stream(stream.data(), stream.size(), &set);
+      const auto rc = open_htj2k::jpip::reassemble_codestream(
+          bytes.data(), bytes.size(), set, *idx, layout, *locator, frame_cs);
+      if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
+        std::fprintf(stderr, "reassemble failed status=%d\n", static_cast<int>(rc));
+        break;
+      }
+    }
+
     // Fresh decoder per frame — init() + parse() rewind the codestream cursor.
     open_htj2k::openhtj2k_decoder dec;
-    dec.init(bytes.data(), bytes.size(), /*reduce_NL=*/0, /*num_threads=*/1);
+    const uint8_t *dec_buf = opt.use_filter ? bytes.data() : frame_cs.data();
+    const std::size_t dec_len = opt.use_filter ? bytes.size() : frame_cs.size();
+    dec.init(dec_buf, dec_len, /*reduce_NL=*/0, /*num_threads=*/1);
     dec.parse();
 
-    auto *idx_ptr = idx.get();
-    dec.set_precinct_filter(
-        [idx_ptr, keep_moved = std::move(keep)](
-            uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc) {
-          return keep_moved.count(idx_ptr->I(t, c, r, p_rc)) > 0;
-        });
+    if (opt.use_filter) {
+      auto *idx_ptr = idx.get();
+      dec.set_precinct_filter(
+          [idx_ptr, keep_moved = std::move(keep)](
+              uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc) {
+            return keep_moved.count(idx_ptr->I(t, c, r, p_rc)) > 0;
+          });
+    }
 
     // Line-based stream decode + on-the-fly nearest-neighbour downsample
-    // into the window-sized RGB buffer.  Peak RSS is now proportional to
-    // (ring depth × canvas_w) instead of (canvas_w × canvas_h) — the 233 MP
-    // NASA Blue Marble crop drops from ~10 GB to a few hundred MB.
+    // into the window-sized RGB buffer.
     if (rgb.size() != static_cast<std::size_t>(opt.window_w) * opt.window_h * 3u) {
       rgb.assign(static_cast<std::size_t>(opt.window_w) * opt.window_h * 3u, 0);
     }
     std::vector<uint32_t> w, h;
     std::vector<uint8_t>  depth;
     std::vector<bool>     sgn;
-    // Track which window rows have been written this frame so we don't
-    // overwrite a row when several canvas rows map to it (first canvas row
-    // in each window-row bucket wins — nearest-neighbour vertical downsample).
     static thread_local std::vector<uint8_t> row_written;
     row_written.assign(opt.window_h, 0);
     bool ok      = true;
@@ -289,9 +370,6 @@ int main(int argc, char **argv) {
             if (nc < 3 || w.empty() || h.empty()) { dims_ok = false; return; }
             const uint32_t cw = w[0];
             const uint32_t ch = h[0];
-            // Map this canvas row to a window row.  Floor-div is fine for
-            // nearest-neighbour; any canvas row whose mapped target_y has
-            // already been written is dropped.
             const uint32_t target_y =
                 static_cast<uint32_t>(static_cast<uint64_t>(y) * opt.window_h / std::max(1u, ch));
             if (target_y >= opt.window_h || row_written[target_y]) return;
