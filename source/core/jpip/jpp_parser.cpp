@@ -83,8 +83,7 @@ bool parse_jpp_stream(const uint8_t *bytes, std::size_t len, DataBinSet *out) {
     if (hdr.msg_length > len - pos) return false;  // truncated payload
     if (hdr.class_id == kMsgClassEOR) {
       if (hdr.msg_length >= 1 && pos < len) {
-        out->eor_received_ = true;
-        out->eor_reason_   = bytes[pos];
+        out->set_eor(bytes[pos]);
       }
       pos += static_cast<std::size_t>(hdr.msg_length);
       break;
