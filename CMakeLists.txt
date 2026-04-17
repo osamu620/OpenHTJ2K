@@ -342,6 +342,15 @@ add_executable(jpip_precinct_check)
 add_subdirectory(source/apps/jpip_precinct_check)
 target_link_libraries(jpip_precinct_check PUBLIC open_htj2k)
 
+# JPIP foveation benchmark (bandwidth + decode workload comparison)
+add_executable(open_htj2k_jpip_benchmark)
+add_subdirectory(source/apps/jpip_benchmark)
+target_link_libraries(open_htj2k_jpip_benchmark PUBLIC open_htj2k)
+set_target_properties(
+  open_htj2k_jpip_benchmark
+  PROPERTIES OUTPUT_NAME
+             $<IF:$<CONFIG:Debug>,open_htj2k_jpip_benchmark_dbg,open_htj2k_jpip_benchmark>)
+
 # JPIP Phase-2 full JPP-stream round-trip (emit → parse → reassemble → decode)
 add_executable(jpip_assembler_check)
 add_subdirectory(source/apps/jpip_assembler_check)
