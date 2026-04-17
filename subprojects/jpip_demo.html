@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenHTJ2K JPIP Foveation Demo</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font-family: monospace; }
+  #controls { padding: 8px; }
+  #controls label { margin-right: 12px; }
+  #controls input { width: 200px; }
+  canvas { display: block; margin: 8px auto; cursor: crosshair; image-rendering: pixelated; }
+  #stats { padding: 4px 8px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <label>JPIP Server: <input id="server" value="http://localhost:8080" /></label>
+  <button id="connectBtn">Connect</button>
+  <span id="info"></span>
+</div>
+<canvas id="canvas"></canvas>
+<div id="stats"></div>
+
+<script type="module">
+// Import path: the HTML and the WASM JS loader must be in the same directory.
+// Serve from the WASM build output dir: subprojects/build/html/
+import createModule from './libopen_htj2k_jpip.js';
+
+const $ = id => document.getElementById(id);
+
+let M = null;   // WASM module
+let ctx = 0;    // jpip context handle (pointer)
+let canvasW = 0, canvasH = 0;
+let rgbPtr = 0; // WASM heap pointer for RGBA output
+let running = false;
+let serverUrl = '';
+let busy = false;  // guard against overlapping fetch/decode
+
+// Foveation params (match the native demo defaults).
+const FOVEA_RATIO = 1.0;
+const PARA_RATIO  = 0.5;
+const PERI_RATIO  = 0.125;
+
+async function init() {
+  $('info').textContent = 'Loading WASM…';
+  try {
+    M = await createModule();
+    $('info').textContent = 'WASM ready. Enter server URL and click Connect.';
+  } catch (e) {
+    $('info').textContent = 'WASM load failed: ' + e.message;
+    console.error('WASM load error:', e);
+  }
+  $('connectBtn').onclick = connect;
+}
+
+function buildQuery(fx, fy, ox, oy, sx, sy) {
+  let q = `fsiz=${fx},${fy}`;
+  if (ox || oy) q += `&roff=${ox},${oy}`;
+  if (sx || sy) q += `&rsiz=${sx},${sy}`;
+  q += '&type=jpp-stream';
+  return q;
+}
+
+async function connect() {
+  if (!M) { $('info').textContent = 'WASM not loaded yet'; return; }
+  serverUrl = $('server').value.replace(/\/+$/, '');
+  $('info').textContent = 'Connecting to ' + serverUrl + '…';
+
+  try {
+    // Initial request — fsiz=1,1 gets the main-header data-bin
+    // plus minimal precinct data.
+    const resp = await fetch(`${serverUrl}/jpip?fsiz=1,1&type=jpp-stream`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    $('info').textContent = `Got ${buf.length} bytes, creating context…`;
+
+    // jpip_create_context parses the JPP-stream response internally,
+    // extracts the main-header data-bin, and builds the CodestreamIndex.
+    const binPtr = M._malloc(buf.length);
+    M.HEAPU8.set(buf, binPtr);
+    ctx = M._jpip_create_context(binPtr, buf.length);
+    M._free(binPtr);
+  } catch (e) {
+    $('info').textContent = `Connect failed: ${e.message}`;
+    console.error('connect error:', e);
+    return;
+  }
+
+  if (!ctx) {
+    $('info').textContent = 'Error: failed to build index from server response';
+    return;
+  }
+
+  canvasW = M._jpip_get_canvas_width(ctx);
+  canvasH = M._jpip_get_canvas_height(ctx);
+  const totalP = M._jpip_get_total_precincts(ctx);
+
+  const c = $('canvas');
+  // Display at a reasonable size (cap at 1920 wide).
+  const displayW = Math.min(canvasW, 1920);
+  const displayH = Math.round(displayW * canvasH / canvasW);
+  c.width = displayW;
+  c.height = displayH;
+
+  rgbPtr = M._malloc(displayW * displayH * 4);
+  $('info').textContent = `${canvasW}×${canvasH}, ${totalP} precincts`;
+
+  running = true;
+  let lastGx = -1, lastGy = -1;
+  let frameCount = 0, lastFpsTime = performance.now();
+
+  c.addEventListener('mousemove', async (e) => {
+    if (!running || busy) return;
+    const rect = c.getBoundingClientRect();
+    const gx = Math.round((e.clientX - rect.left) / rect.width * (canvasW - 1));
+    const gy = Math.round((e.clientY - rect.top) / rect.height * (canvasH - 1));
+    if (gx === lastGx && gy === lastGy) return;
+    lastGx = gx; lastGy = gy;
+
+    const foveaR = Math.max(16, Math.round(canvasW / 15));
+    const paraR  = Math.max(32, Math.round(canvasW / 8));
+
+    // Build 3 view-window queries.
+    const foveaFx = canvasW, foveaFy = canvasH;
+    const paraFx = Math.round(canvasW * PARA_RATIO), paraFy = Math.round(canvasH * PARA_RATIO);
+    const periFx = Math.round(canvasW * PERI_RATIO), periFy = Math.round(canvasH * PERI_RATIO);
+
+    const foveaQ = buildQuery(foveaFx, foveaFy,
+        Math.max(0, gx - foveaR), Math.max(0, gy - foveaR), foveaR * 2, foveaR * 2);
+    const paraGx = Math.round(gx * PARA_RATIO), paraGy = Math.round(gy * PARA_RATIO);
+    const paraRf = Math.round(paraR * PARA_RATIO);
+    const paraQ = buildQuery(paraFx, paraFy,
+        Math.max(0, paraGx - paraRf), Math.max(0, paraGy - paraRf), paraRf * 2, paraRf * 2);
+    const periQ = buildQuery(periFx, periFy, 0, 0, periFx, periFy);
+
+    busy = true;
+    try {
+      const [r1, r2, r3] = await Promise.all([
+        fetch(`${serverUrl}/jpip?${foveaQ}`).then(r => r.arrayBuffer()),
+        fetch(`${serverUrl}/jpip?${paraQ}`).then(r => r.arrayBuffer()),
+        fetch(`${serverUrl}/jpip?${periQ}`).then(r => r.arrayBuffer()),
+      ]);
+
+      M._jpip_begin_frame(ctx);
+      for (const ab of [r1, r2, r3]) {
+        const arr = new Uint8Array(ab);
+        const ptr = M._malloc(arr.length);
+        M.HEAPU8.set(arr, ptr);
+        M._jpip_add_response(ctx, ptr, arr.length);
+        M._free(ptr);
+      }
+      const rc = M._jpip_end_frame(ctx, rgbPtr, c.width, c.height);
+      if (rc !== 0) {
+        $('stats').textContent = `decode error: ${rc}`;
+        return;
+      }
+
+      // Copy RGBA from WASM heap to canvas.
+      const rgba = new Uint8ClampedArray(M.HEAPU8.buffer, rgbPtr, c.width * c.height * 4);
+      const ctx2d = c.getContext('2d');
+      const img = new ImageData(rgba, c.width, c.height);
+      ctx2d.putImageData(img, 0, 0);
+
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime > 1000) {
+        const fps = frameCount / ((now - lastFpsTime) / 1000);
+        $('stats').textContent = `gaze=(${gx},${gy})  ${fps.toFixed(1)} fps`;
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+    } catch (e) {
+      $('stats').textContent = `fetch error: ${e.message}`;
+      console.error('frame error:', e);
+    }
+    busy = false;
+  });
+}
+
+init();
+</script>
+</body>
+</html>

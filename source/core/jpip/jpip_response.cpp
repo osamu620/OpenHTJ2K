@@ -16,6 +16,7 @@ std::vector<uint8_t> format_jpp_response(const uint8_t *body, std::size_t body_l
                         "HTTP/1.1 200 OK\r\n"
                         "Content-Type: image/jpp-stream\r\n"
                         "Content-Length: %zu\r\n"
+                        "Access-Control-Allow-Origin: *\r\n"
                         "Connection: close\r\n",
                         body_len);
   std::vector<uint8_t> out;
@@ -41,6 +42,7 @@ std::vector<uint8_t> format_error_response(int http_status, const std::string &r
   int n = std::snprintf(buf, sizeof(buf),
                         "HTTP/1.1 %d %s\r\n"
                         "Content-Length: 0\r\n"
+                        "Access-Control-Allow-Origin: *\r\n"
                         "Connection: close\r\n"
                         "\r\n",
                         http_status, reason.c_str());

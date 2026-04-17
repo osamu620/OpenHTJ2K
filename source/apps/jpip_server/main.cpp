@@ -108,6 +108,21 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
     request_line.assign(s, eol);
   }
 
+  // Handle CORS preflight (OPTIONS) — browsers send this before cross-origin
+  // fetch() requests.
+  if (request_line.substr(0, 8) == "OPTIONS ") {
+    const char *cors =
+        "HTTP/1.1 204 No Content\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+        "Access-Control-Allow-Headers: *\r\n"
+        "Access-Control-Max-Age: 86400\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    conn.send_all(reinterpret_cast<const uint8_t *>(cors), std::strlen(cors));
+    return;
+  }
+
   std::string path, query;
   if (!split_http_get_line(request_line, &path, &query)) {
     conn.send_all(format_error_response(405, "Method Not Allowed"));
