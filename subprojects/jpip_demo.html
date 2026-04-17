@@ -26,6 +26,13 @@
 </div>
 <canvas id="canvas"></canvas>
 <div id="stats"></div>
+<script>
+  (function() {
+    var p = new URLSearchParams(location.search);
+    var s = p.get('server');  if (s) document.getElementById('server').value = s;
+    var r = p.get('reduce');  if (r) document.getElementById('reduce').value = r;
+  })();
+</script>
 
 <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
 <script>
@@ -56,16 +63,6 @@ const wasmFile = useMt ? './libopen_htj2k_jpip_mt_simd.js' : './libopen_htj2k_jp
 const {default: createModule} = await import(wasmFile);
 
 const $ = id => document.getElementById(id);
-
-// Apply ?server=URL and ?reduce=N from the query string.
-// Module scripts run after DOM is parsed, so elements are already available.
-{
-  const params = new URLSearchParams(location.search);
-  const s = params.get('server');
-  if (s) $('server').value = s;
-  const r = params.get('reduce');
-  if (r) $('reduce').value = r;
-}
 
 let M = null;   // WASM module
 let ctx = 0;    // jpip context handle (pointer)
