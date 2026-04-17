@@ -104,7 +104,7 @@ static int64_t open_uni_stream(H3ConnCtx *ctx) {
 
 // ── nghttp3 callbacks ──���────────────────────────────────────────────────────
 
-static int h3_recv_header(nghttp3_conn *, int64_t stream_id, int32_t,
+static int h3_recv_header(nghttp3_conn *, int64_t stream_id, int32_t token,
                           nghttp3_rcbuf *name, nghttp3_rcbuf *value, uint8_t, void *conn_data,
                           void *) {
   auto *ctx = static_cast<H3ConnCtx *>(conn_data);
@@ -113,6 +113,8 @@ static int h3_recv_header(nghttp3_conn *, int64_t stream_id, int32_t,
   std::string n(reinterpret_cast<const char *>(nv.base), nv.len);
   std::string v(reinterpret_cast<const char *>(vv.base), vv.len);
 
+  std::fprintf(stderr, "H3 server: recv_header stream=%lld %s: %s\n",
+               (long long)stream_id, n.c_str(), v.c_str());
   auto &req = ctx->requests[stream_id];
   if (n == ":method")    req.method = v;
   else if (n == ":path") req.path   = v;
@@ -120,10 +122,16 @@ static int h3_recv_header(nghttp3_conn *, int64_t stream_id, int32_t,
   return 0;
 }
 
+static int h3_end_headers(nghttp3_conn *, int64_t stream_id, int, void *conn_data, void *) {
+  std::fprintf(stderr, "H3 server: end_headers stream=%lld\n", (long long)stream_id);
+  return 0;
+}
+
 static int h3_end_stream(nghttp3_conn *, int64_t stream_id, void *conn_data, void *) {
+  std::fprintf(stderr, "H3 server: end_stream stream=%lld\n", (long long)stream_id);
   auto *ctx = static_cast<H3ConnCtx *>(conn_data);
   auto it = ctx->requests.find(stream_id);
-  if (it == ctx->requests.end()) return 0;
+  if (it == ctx->requests.end()) { std::fprintf(stderr, "H3 server: no request for stream %lld\n", (long long)stream_id); return 0; }
 
   H3Request req;
   req.stream_id = stream_id;
@@ -209,6 +217,7 @@ static int h3_deferred_consume(nghttp3_conn *, int64_t stream_id, size_t consume
 static bool setup_h3(H3ConnCtx *ctx) {
   nghttp3_callbacks cb = {};
   cb.recv_header       = h3_recv_header;
+  cb.end_headers       = h3_end_headers;
   cb.end_stream        = h3_end_stream;
   cb.acked_stream_data = h3_acked_stream_data;
   cb.stream_close      = h3_stream_close;

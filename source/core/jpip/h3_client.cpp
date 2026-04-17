@@ -398,7 +398,14 @@ std::vector<uint8_t> H3Client::fetch(const std::string &path_and_query) {
     c->responses[sid] = {};
   }
 
-  nghttp3_conn_submit_request(c->h3conn, sid, nva, 4, nullptr, nullptr);
+  std::fprintf(stderr, "H3 client: submit_request stream=%lld path=%s\n",
+               (long long)sid, path_and_query.c_str());
+  int rv = nghttp3_conn_submit_request(c->h3conn, sid, nva, 4, nullptr, nullptr);
+  if (rv != 0) {
+    std::fprintf(stderr, "H3 client: submit_request failed: %d\n", rv);
+    impl_->error = "submit_request failed";
+    return {};
+  }
   h3_client_flush(c);
 
   {
