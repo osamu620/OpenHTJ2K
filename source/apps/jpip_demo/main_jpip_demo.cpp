@@ -395,7 +395,7 @@ int main(int argc, char **argv) {
 
   std::vector<uint8_t> rgb;
   open_htj2k::jpip::CacheModel client_cache;
-  open_htj2k::jpip::DataBinSet cached_bins;
+  open_htj2k::jpip::DataBinSet header_cache;  // persistent: main header + tile headers + metadata
   uint64_t frames = 0;
   int32_t  last_gx = -1, last_gy = -1;
 
@@ -464,15 +464,18 @@ int main(int argc, char **argv) {
         open_htj2k::jpip::DataBinSet tmp;
         if (client.fetch(opt.server_host, opt.server_port, vw_peri, &tmp, &client_cache)) set.merge_from(tmp);
       }
-      // Merge new data into the persistent cache and update the model.
-      cached_bins.merge_from(set);
+      // Cache headers persistently; update model for all received bins.
+      header_cache.merge_from(set);
       for (const auto &kv : set.keys()) {
-        if (set.is_complete(kv.first, kv.second))
+        if (set.is_complete(kv.first, kv.second) && kv.first != open_htj2k::jpip::kMsgClassPrecinct)
           client_cache.mark(kv.first, kv.second);
       }
-      // Reassemble from the FULL cache (includes headers + precincts
-      // from this and previous frames).
-      const auto rc = open_htj2k::jpip::reassemble_codestream_client(cached_bins, *idx, frame_cs);
+      // Reassemble from headers (cached) + this frame's precincts.
+      // Don't use accumulated precincts — that would erase foveation.
+      open_htj2k::jpip::DataBinSet frame_set;
+      frame_set.merge_from(header_cache);
+      frame_set.merge_from(set);
+      const auto rc = open_htj2k::jpip::reassemble_codestream_client(frame_set, *idx, frame_cs);
       if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
         std::fprintf(stderr, "reassemble (client) failed status=%d\n", static_cast<int>(rc));
         break;
@@ -504,13 +507,16 @@ int main(int argc, char **argv) {
       fetch_vw(make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false));
       fetch_vw(make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false));
       fetch_vw(make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true));
-      cached_bins.merge_from(set);
+      header_cache.merge_from(set);
       for (const auto &kv : set.keys()) {
-        if (set.is_complete(kv.first, kv.second))
+        if (set.is_complete(kv.first, kv.second) && kv.first != open_htj2k::jpip::kMsgClassPrecinct)
           client_cache.mark(kv.first, kv.second);
       }
 
-      const auto rc = open_htj2k::jpip::reassemble_codestream_client(cached_bins, *idx, frame_cs);
+      open_htj2k::jpip::DataBinSet frame_set;
+      frame_set.merge_from(header_cache);
+      frame_set.merge_from(set);
+      const auto rc = open_htj2k::jpip::reassemble_codestream_client(frame_set, *idx, frame_cs);
       if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
         std::fprintf(stderr, "reassemble (H3 client) failed status=%d\n", static_cast<int>(rc));
         break;
