@@ -92,12 +92,14 @@ static int64_t client_open_uni(ClientConn *c) {
   HQUIC stream = nullptr;
   QUIC_STATUS s = c->q->StreamOpen(c->conn, QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL,
                                    client_stream_cb, c, &stream);
-  if (QUIC_FAILED(s)) return -1;
+  if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 client: uni StreamOpen failed 0x%x\n", s); return -1; }
   s = c->q->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE);
-  if (QUIC_FAILED(s)) { c->q->StreamClose(stream); return -1; }
+  if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 client: uni StreamStart failed 0x%x\n", s); c->q->StreamClose(stream); return -1; }
 
-  // Client-initiated unidirectional: 0x02, 0x06, 0x0A, ...
-  int64_t id = 0x02 + 4 * c->next_uni_id++;
+  QUIC_UINT62 qid = 0;
+  uint32_t sz = sizeof(qid);
+  c->q->GetParam(stream, QUIC_PARAM_STREAM_ID, &sz, &qid);
+  int64_t id = static_cast<int64_t>(qid);
   c->stream_ids[stream] = id;
   c->id_to_stream[id]   = stream;
   return id;
@@ -146,16 +148,22 @@ static bool setup_h3_client(ClientConn *c) {
   nghttp3_settings_default(&settings);
 
   int rv = nghttp3_conn_client_new(&c->h3conn, &cb, &settings, nghttp3_mem_default(), c);
-  if (rv != 0) return false;
+  if (rv != 0) { std::fprintf(stderr, "H3 client: nghttp3_conn_client_new failed: %d\n", rv); return false; }
 
   int64_t ctrl = client_open_uni(c);
   int64_t qenc = client_open_uni(c);
   int64_t qdec = client_open_uni(c);
-  if (ctrl < 0 || qenc < 0 || qdec < 0) return false;
+  if (ctrl < 0 || qenc < 0 || qdec < 0) { std::fprintf(stderr, "H3 client: failed to open uni streams\n"); return false; }
 
-  nghttp3_conn_bind_control_stream(c->h3conn, ctrl);
-  nghttp3_conn_bind_qpack_streams(c->h3conn, qenc, qdec);
+  std::fprintf(stderr, "H3 client: control=%lld qenc=%lld qdec=%lld\n",
+               (long long)ctrl, (long long)qenc, (long long)qdec);
+
+  rv = nghttp3_conn_bind_control_stream(c->h3conn, ctrl);
+  if (rv != 0) { std::fprintf(stderr, "H3 client: bind_control_stream: %d\n", rv); return false; }
+  rv = nghttp3_conn_bind_qpack_streams(c->h3conn, qenc, qdec);
+  if (rv != 0) { std::fprintf(stderr, "H3 client: bind_qpack_streams: %d\n", rv); return false; }
   h3_client_flush(c);
+  std::fprintf(stderr, "H3 client: HTTP/3 setup complete\n");
   return true;
 }
 
@@ -307,12 +315,22 @@ bool H3Client::connect(const std::string &host, uint16_t port, bool validate_cer
     return false;
   }
 
-  // Wait for connection to complete
+  std::fprintf(stderr, "H3 client: waiting for QUIC handshake...\n");
   {
     std::unique_lock<std::mutex> lk(c->mu);
-    c->cv.wait(lk, [c] { return c->connected || c->conn_failed; });
-    if (c->conn_failed) { impl_->error = "QUIC handshake failed"; return false; }
+    if (!c->cv.wait_for(lk, std::chrono::seconds(5),
+                        [c] { return c->connected || c->conn_failed; })) {
+      impl_->error = "QUIC handshake timed out (5s)";
+      std::fprintf(stderr, "H3 client: %s\n", impl_->error.c_str());
+      return false;
+    }
+    if (c->conn_failed) {
+      impl_->error = "QUIC handshake failed";
+      std::fprintf(stderr, "H3 client: %s\n", impl_->error.c_str());
+      return false;
+    }
   }
+  std::fprintf(stderr, "H3 client: QUIC connected\n");
 
   if (!setup_h3_client(c)) {
     impl_->error = "HTTP/3 setup failed";
@@ -383,13 +401,16 @@ std::vector<uint8_t> H3Client::fetch(const std::string &path_and_query) {
   nghttp3_conn_submit_request(c->h3conn, sid, nva, 4, nullptr, nullptr);
   h3_client_flush(c);
 
-  // Wait for response to complete
   {
     std::unique_lock<std::mutex> lk(c->mu);
-    c->cv.wait(lk, [c, sid] {
-      auto it = c->responses.find(sid);
-      return it != c->responses.end() && it->second.done;
-    });
+    if (!c->cv.wait_for(lk, std::chrono::seconds(10), [c, sid] {
+          auto it = c->responses.find(sid);
+          return it != c->responses.end() && it->second.done;
+        })) {
+      impl_->error = "H3 fetch timed out (10s)";
+      std::fprintf(stderr, "H3 client: %s for stream %lld\n", impl_->error.c_str(), (long long)sid);
+      return {};
+    }
   }
 
   std::lock_guard<std::mutex> lk(c->mu);
