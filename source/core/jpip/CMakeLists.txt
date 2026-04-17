@@ -14,4 +14,6 @@ target_sources(open_htj2k
     jpip_response.cpp
     tcp_socket.cpp
     jpip_client.cpp
+    h3_server.cpp
+    h3_client.cpp
 )
