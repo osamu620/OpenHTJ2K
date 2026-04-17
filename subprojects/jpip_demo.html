@@ -7,7 +7,7 @@
   body { margin: 0; background: #111; color: #eee; font-family: monospace; }
   #controls { padding: 8px; }
   #controls label { margin-right: 12px; }
-  #controls input { width: 200px; }
+  #controls input { width: 360px; }
   canvas { display: block; margin: 8px auto; cursor: crosshair; }
   #stats { padding: 4px 8px; font-size: 13px; }
 </style>
@@ -28,6 +28,13 @@
 import createModule from './libopen_htj2k_jpip.js';
 
 const $ = id => document.getElementById(id);
+
+// Allow ?server=URL to pre-fill the server field (useful for tunnel links).
+{
+  const params = new URLSearchParams(location.search);
+  const s = params.get('server');
+  if (s) document.addEventListener('DOMContentLoaded', () => $('server').value = s);
+}
 
 let M = null;   // WASM module
 let ctx = 0;    // jpip context handle (pointer)
