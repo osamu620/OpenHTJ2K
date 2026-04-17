@@ -90,7 +90,7 @@ static int64_t open_uni_stream(H3ConnCtx *ctx) {
   QUIC_STATUS s = ctx->q->StreamOpen(ctx->conn, QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL,
                                      stream_cb, ctx, &stream);
   if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 server: uni StreamOpen failed 0x%x\n", s); return -1; }
-  s = ctx->q->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE);
+  s = ctx->q->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE);
   if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 server: uni StreamStart failed 0x%x\n", s); ctx->q->StreamClose(stream); return -1; }
 
   QUIC_UINT62 qid = 0;
