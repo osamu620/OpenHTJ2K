@@ -27,10 +27,33 @@
 <canvas id="canvas"></canvas>
 <div id="stats"></div>
 
+<script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
+<script>
+  if (!window.crossOriginIsolated && window.isSecureContext) {
+    navigator.serviceWorker.register("coi-serviceworker.js").then(
+      function (reg) {
+        if (!window.crossOriginIsolated) {
+          reg.addEventListener("updatefound", function () {
+            reg.installing.addEventListener("statechange", function () {
+              if (this.state === "activated") location.reload();
+            });
+          });
+          if (reg.active && !navigator.serviceWorker.controller) location.reload();
+        }
+      },
+      function (err) { console.warn("COI service worker failed:", err); }
+    );
+  }
+</script>
 <script type="module">
-// Import path: the HTML and the WASM JS loader must be in the same directory.
-// Serve from the WASM build output dir: subprojects/build/html/
-import createModule from './libopen_htj2k_jpip.js';
+// Auto-detect the best WASM variant: multi-threaded SIMD if available,
+// otherwise single-threaded SIMD.  ?variant=st forces single-threaded.
+const hasSimd = await wasmFeatureDetect.simd();
+const hasMt = window.crossOriginIsolated && (typeof SharedArrayBuffer !== 'undefined');
+const forceVariant = new URLSearchParams(location.search).get('variant');
+const useMt = forceVariant === 'mt' ? true : forceVariant === 'st' ? false : (hasSimd && hasMt);
+const wasmFile = useMt ? './libopen_htj2k_jpip_mt_simd.js' : './libopen_htj2k_jpip.js';
+const {default: createModule} = await import(wasmFile);
 
 const $ = id => document.getElementById(id);
 
@@ -124,7 +147,7 @@ async function init() {
   $('info').textContent = 'Loading WASM…';
   try {
     M = await createModule();
-    $('info').textContent = 'WASM ready. Enter server URL and click Connect.';
+    $('info').textContent = `WASM ready (${useMt ? 'MT+SIMD' : 'SIMD'}). Enter server URL and click Connect.`;
   } catch (e) {
     $('info').textContent = 'WASM load failed: ' + e.message;
     console.error('WASM load error:', e);

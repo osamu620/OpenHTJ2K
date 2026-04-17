@@ -116,7 +116,11 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
 
   // Decode.
   open_htj2k::openhtj2k_decoder dec;
+#ifdef OPENHTJ2K_THREAD
+  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 0);
+#else
   dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 1);
+#endif
   dec.parse();
 
   std::vector<uint32_t> widths, heights;
