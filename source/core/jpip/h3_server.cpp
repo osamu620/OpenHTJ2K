@@ -30,7 +30,9 @@ struct H3ConnCtx {
   // Stream map: QUIC stream handle → stream ID (for nghttp3)
   std::unordered_map<HQUIC, int64_t> stream_ids;
   std::unordered_map<int64_t, HQUIC> id_to_stream;
-  int64_t next_uni_id = 0;
+  int64_t next_uni_id       = 0;  // server-initiated uni: 3, 7, 11, ...
+  int64_t next_peer_bidi_id = 0;  // client-initiated bidi: 0, 4, 8, ...
+  int64_t next_peer_uni_id  = 0;  // client-initiated uni: 2, 6, 10, ...
 
   // Per-request accumulator
   struct ReqState {
@@ -297,13 +299,17 @@ static QUIC_STATUS QUIC_API connection_cb(HQUIC conn, void *context,
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
       HQUIC stream = event->PEER_STREAM_STARTED.Stream;
       ctx->q->SetCallbackHandler(stream, (void *)stream_cb, ctx);
-      // Client bidi streams have IDs 0x00, 0x04, 0x08, ...
-      // Client uni streams have IDs 0x02, 0x06, 0x0A, ...
-      QUIC_UINT62 sid = 0;
-      uint32_t sz = sizeof(sid);
-      ctx->q->GetParam(stream, QUIC_PARAM_STREAM_ID, &sz, &sid);
-      ctx->stream_ids[stream]     = static_cast<int64_t>(sid);
-      ctx->id_to_stream[static_cast<int64_t>(sid)] = stream;
+      int64_t sid;
+      if (event->PEER_STREAM_STARTED.Flags & QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL) {
+        sid = 0x02 + 4 * ctx->next_peer_uni_id++;
+      } else {
+        sid = 4 * ctx->next_peer_bidi_id++;
+      }
+      std::fprintf(stderr, "H3 server: peer stream started sid=%lld uni=%d\n",
+                   (long long)sid,
+                   (event->PEER_STREAM_STARTED.Flags & QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL) ? 1 : 0);
+      ctx->stream_ids[stream]  = sid;
+      ctx->id_to_stream[sid]   = stream;
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:

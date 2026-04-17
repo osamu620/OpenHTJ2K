@@ -29,8 +29,9 @@ struct ClientConn {
 
   std::unordered_map<HQUIC, int64_t> stream_ids;
   std::unordered_map<int64_t, HQUIC> id_to_stream;
-  int64_t next_uni_id  = 0;
-  int64_t next_bidi_id = 0;
+  int64_t next_uni_id       = 0;  // client-initiated uni: 2, 6, 10, ...
+  int64_t next_bidi_id      = 0;  // client-initiated bidi: 0, 4, 8, ...
+  int64_t next_peer_uni_id  = 0;  // server-initiated uni: 3, 7, 11, ...
 
   // Synchronisation for blocking fetch()
   std::mutex              mu;
@@ -238,11 +239,10 @@ static QUIC_STATUS QUIC_API client_conn_cb(HQUIC conn, void *context,
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
       HQUIC stream = event->PEER_STREAM_STARTED.Stream;
       c->q->SetCallbackHandler(stream, (void *)client_stream_cb, c);
-      QUIC_UINT62 sid = 0;
-      uint32_t sz = sizeof(sid);
-      c->q->GetParam(stream, QUIC_PARAM_STREAM_ID, &sz, &sid);
-      c->stream_ids[stream]                        = static_cast<int64_t>(sid);
-      c->id_to_stream[static_cast<int64_t>(sid)]   = stream;
+      // Server-initiated uni streams: 3, 7, 11, ...
+      int64_t sid = 0x03 + 4 * c->next_peer_uni_id++;
+      c->stream_ids[stream]  = sid;
+      c->id_to_stream[sid]   = stream;
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
