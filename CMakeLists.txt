@@ -299,6 +299,15 @@ if(WIN32)
   target_link_libraries(jpip_tcp_check PUBLIC ws2_32)
 endif()
 
+# JPIP Phase-3 standalone HTTP/1.1 server
+add_executable(open_htj2k_jpip_server)
+add_subdirectory(source/apps/jpip_server)
+target_link_libraries(open_htj2k_jpip_server PUBLIC open_htj2k)
+set_target_properties(
+  open_htj2k_jpip_server
+  PROPERTIES OUTPUT_NAME
+             $<IF:$<CONFIG:Debug>,open_htj2k_jpip_server_dbg,open_htj2k_jpip_server>)
+
 # JPIP Phase-2 precinct data-bin + packet-locator self-test
 add_executable(jpip_precinct_check)
 add_subdirectory(source/apps/jpip_precinct_check)
