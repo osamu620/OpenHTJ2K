@@ -1,13 +1,14 @@
 // Copyright (c) 2026, Osamu Watanabe
 // All rights reserved.
 //
-// open_htj2k_jpip_server: stateless JPIP HTTP/1.1 server.
+// open_htj2k_jpip_server: stateless JPIP server (HTTP/1.1 or HTTP/3).
 //
 // Loads a single JPEG 2000 codestream, builds the JPIP index + packet
-// locator once, then serves view-window requests over HTTP/1.1.
+// locator once, then serves view-window requests.
 //
 // Usage:
 //   open_htj2k_jpip_server <input.j2c> [--port N=8080]
+//       [--h3 --cert server.cert --key server.key]
 //
 // Each request is an HTTP GET with JPIP query parameters:
 //   GET /jpip?fsiz=W,H&roff=X,Y&rsiz=W,H&type=jpp-stream HTTP/1.1
@@ -35,6 +36,9 @@
 #include "precinct_index.hpp"
 #include "tcp_socket.hpp"
 #include "view_window.hpp"
+#ifdef OPENHTJ2K_ENABLE_QUIC
+#include "h3_server.hpp"
+#endif
 
 using namespace open_htj2k::jpip;
 
@@ -171,22 +175,66 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
   conn.send_all(resp);
 }
 
+#ifdef OPENHTJ2K_ENABLE_QUIC
+// H3 request handler — parses the JPIP query from the HTTP/3 :path pseudo-header
+// and builds the same JPP-stream as the HTTP/1.1 path.
+std::vector<uint8_t> handle_h3_request(const ServerState &st,
+                                       const open_htj2k::jpip::H3Request &req) {
+  JpipRequest jpip_req;
+  const auto ps = parse_jpip_query(req.query, &jpip_req);
+  if (ps != RequestParseStatus::Ok) return {};
+
+  if (!jpip_req.has_fsiz) {
+    jpip_req.view_window.fx = st.idx->geometry().canvas_size.x;
+    jpip_req.view_window.fy = st.idx->geometry().canvas_size.y;
+  }
+  if (!jpip_req.has_rsiz) {
+    jpip_req.view_window.sx = jpip_req.view_window.fx;
+    jpip_req.view_window.sy = jpip_req.view_window.fy;
+  }
+
+  using Clock = std::chrono::steady_clock;
+  const auto t0 = Clock::now();
+  auto jpp = build_jpp_stream(st, jpip_req.view_window);
+  const auto t1 = Clock::now();
+  const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+  auto keys = resolve_view_window(*st.idx, jpip_req.view_window);
+  std::printf("  [H3] → %zu precincts (%.1f%%), %zu bytes, %.1f ms\n",
+              keys.size(),
+              st.idx->total_precincts()
+                  ? (100.0 * static_cast<double>(keys.size()) / static_cast<double>(st.idx->total_precincts()))
+                  : 0.0,
+              jpp.size(), ms);
+  std::fflush(stdout);
+  return jpp;
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    std::fprintf(stderr, "Usage: open_htj2k_jpip_server <input.j2c> [--port N=8080]\n");
+    std::fprintf(stderr,
+        "Usage: open_htj2k_jpip_server <input.j2c> [--port N=8080]\n"
+        "       [--h3 --cert server.cert --key server.key]\n");
     return EXIT_FAILURE;
   }
   std::string infile = argv[1];
   uint16_t port = 8080;
+  bool use_h3 = false;
+  std::string cert_file, key_file;
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
       port = static_cast<uint16_t>(std::atoi(argv[++i]));
+    } else if (std::strcmp(argv[i], "--h3") == 0) {
+      use_h3 = true;
+    } else if (std::strcmp(argv[i], "--cert") == 0 && i + 1 < argc) {
+      cert_file = argv[++i];
+    } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+      key_file = argv[++i];
     }
   }
-
-  tcp_wsa_init();
 
   ServerState st;
   st.codestream = read_file(infile.c_str());
@@ -206,6 +254,35 @@ int main(int argc, char **argv) {
               infile.c_str(),
               st.idx->geometry().canvas_size.x, st.idx->geometry().canvas_size.y,
               static_cast<unsigned long long>(st.idx->total_precincts()));
+
+#ifdef OPENHTJ2K_ENABLE_QUIC
+  if (use_h3) {
+    if (cert_file.empty() || key_file.empty()) {
+      std::fprintf(stderr, "ERROR: --h3 requires --cert and --key\n");
+      return EXIT_FAILURE;
+    }
+    open_htj2k::jpip::TlsCertConfig tls{cert_file, key_file};
+    open_htj2k::jpip::H3Server h3;
+    if (!h3.start(port, tls, [&st](const open_htj2k::jpip::H3Request &req) {
+          return handle_h3_request(st, req);
+        })) {
+      std::fprintf(stderr, "H3 server start failed: %s\n", h3.last_error().c_str());
+      return EXIT_FAILURE;
+    }
+    std::printf("listening on https://localhost:%u/jpip (HTTP/3 over QUIC)\n", port);
+    std::fflush(stdout);
+    // Block until interrupted — MsQuic handles connections on its own threads.
+    std::printf("Press Enter to stop.\n");
+    std::fflush(stdout);
+    std::getchar();
+    h3.stop();
+    return EXIT_SUCCESS;
+  }
+#else
+  (void)use_h3; (void)cert_file; (void)key_file;
+#endif
+
+  tcp_wsa_init();
 
   TcpListener listener;
   if (!listener.bind(port)) {

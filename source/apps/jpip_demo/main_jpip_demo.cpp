@@ -31,6 +31,7 @@
 //       [--periphery-ratio F=0.125] (fsiz ratio; default drops 3 of 5 DWT levels)
 //       [--window-size WxH=1920x1080]
 //       [--reduce N=0]             (DWT reduce levels; trades resolution for speed)
+//       [--server-h3 host:port]     (HTTP/3 QUIC server mode)
 //       [--use-filter]              (Phase-1 direct filter, skip JPP round-trip)
 //       [--decode-on-move-only] [--no-vsync]
 //
@@ -57,6 +58,9 @@
 #include "packet_locator.hpp"
 #include "precinct_index.hpp"
 #include "view_window.hpp"
+#ifdef OPENHTJ2K_ENABLE_QUIC
+#include "h3_client.hpp"
+#endif
 #include "renderer.hpp"
 
 using open_htj2k::rtp_recv::Renderer;
@@ -89,6 +93,8 @@ struct Options {
   // given JPIP server instead of doing in-process round-trip.
   std::string server_host;
   uint16_t    server_port      = 8080;
+  std::string server_h3_host;
+  uint16_t    server_h3_port   = 8080;
 };
 
 bool parse_args(int argc, char **argv, Options &opt) {
@@ -114,7 +120,6 @@ bool parse_args(int argc, char **argv, Options &opt) {
     else if (a == "--use-filter")                   opt.use_filter = true;
     else if (a == "--no-vsync")                     opt.vsync = false;
     else if (a == "--server" && i + 1 < argc) {
-      // "host:port" or "host" (default port 8080).
       const std::string hp = argv[++i];
       const auto colon = hp.rfind(':');
       if (colon == std::string::npos) {
@@ -124,13 +129,23 @@ bool parse_args(int argc, char **argv, Options &opt) {
         opt.server_port = static_cast<uint16_t>(std::stoul(hp.substr(colon + 1)));
       }
     }
+    else if (a == "--server-h3" && i + 1 < argc) {
+      const std::string hp = argv[++i];
+      const auto colon = hp.rfind(':');
+      if (colon == std::string::npos) {
+        opt.server_h3_host = hp;
+      } else {
+        opt.server_h3_host = hp.substr(0, colon);
+        opt.server_h3_port = static_cast<uint16_t>(std::stoul(hp.substr(colon + 1)));
+      }
+    }
     else if (a.size() > 0 && a[0] != '-' && opt.infile.empty()) opt.infile = a;
     else {
       std::fprintf(stderr, "ERROR: unknown arg '%s'\n", a.c_str());
       return false;
     }
   }
-  return !opt.infile.empty() || !opt.server_host.empty();
+  return !opt.infile.empty() || !opt.server_host.empty() || !opt.server_h3_host.empty();
 }
 
 std::vector<uint8_t> read_file(const char *path) {
@@ -426,7 +441,41 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "reassemble (client) failed status=%d\n", static_cast<int>(rc));
         break;
       }
-    } else if (!opt.use_filter) {
+    }
+#ifdef OPENHTJ2K_ENABLE_QUIC
+    else if (!opt.server_h3_host.empty()) {
+      // ── HTTP/3 network path ──
+      static open_htj2k::jpip::H3Client h3c;
+      static bool h3_connected = false;
+      if (!h3_connected) {
+        if (!h3c.connect(opt.server_h3_host, opt.server_h3_port, false)) {
+          std::fprintf(stderr, "H3 connect failed: %s\n", h3c.last_error().c_str());
+          break;
+        }
+        h3_connected = true;
+      }
+      open_htj2k::jpip::DataBinSet set;
+      auto fetch_vw = [&](const open_htj2k::jpip::ViewWindow &vw) {
+        std::string q = "/jpip?" + open_htj2k::jpip::format_view_window_query(vw);
+        auto body = h3c.fetch(q);
+        if (!body.empty()) {
+          open_htj2k::jpip::DataBinSet tmp;
+          open_htj2k::jpip::parse_jpp_stream(body.data(), body.size(), &tmp);
+          set.merge_from(tmp);
+        }
+      };
+      fetch_vw(make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false));
+      fetch_vw(make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false));
+      fetch_vw(make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true));
+
+      const auto rc = open_htj2k::jpip::reassemble_codestream_client(set, *idx, frame_cs);
+      if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
+        std::fprintf(stderr, "reassemble (H3 client) failed status=%d\n", static_cast<int>(rc));
+        break;
+      }
+    }
+#endif
+    else if (!opt.use_filter) {
       // ── In-process JPP round-trip: emit → parse → reassemble ──
       std::vector<uint8_t> stream;
       open_htj2k::jpip::MessageHeaderContext enc_ctx;
