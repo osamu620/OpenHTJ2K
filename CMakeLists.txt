@@ -136,6 +136,35 @@ if (NOT EMSCRIPTEN)
   endif()
 endif()
 
+# ── QUIC / HTTP/3 support (Phase 5) ─────────────────────────────────────────
+# Requires MsQuic (QUIC transport) and nghttp3 (HTTP/3 framing).
+# On macOS: brew install libmsquic libnghttp3
+# On Linux: install from packages or build from source.
+option(OPENHTJ2K_QUIC "Build HTTP/3 QUIC transport for JPIP (requires MsQuic + nghttp3)" OFF)
+if(OPENHTJ2K_QUIC AND NOT EMSCRIPTEN)
+  find_library(MSQUIC_LIBRARY NAMES msquic)
+  find_path(MSQUIC_INCLUDE_DIR NAMES msquic.h)
+  find_library(NGHTTP3_LIBRARY NAMES nghttp3)
+  find_path(NGHTTP3_INCLUDE_DIR NAMES nghttp3/nghttp3.h)
+
+  if(MSQUIC_LIBRARY AND MSQUIC_INCLUDE_DIR AND NGHTTP3_LIBRARY AND NGHTTP3_INCLUDE_DIR)
+    message(STATUS "OPENHTJ2K_QUIC: MsQuic found: ${MSQUIC_LIBRARY}")
+    message(STATUS "OPENHTJ2K_QUIC: nghttp3 found: ${NGHTTP3_LIBRARY}")
+    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_QUIC")
+    target_include_directories(open_htj2k PUBLIC ${MSQUIC_INCLUDE_DIR} ${NGHTTP3_INCLUDE_DIR})
+    target_link_libraries(open_htj2k PUBLIC ${MSQUIC_LIBRARY} ${NGHTTP3_LIBRARY})
+  else()
+    message(WARNING "OPENHTJ2K_QUIC requested but libraries not found:")
+    if(NOT MSQUIC_LIBRARY OR NOT MSQUIC_INCLUDE_DIR)
+      message(WARNING "  MsQuic not found (brew install libmsquic)")
+    endif()
+    if(NOT NGHTTP3_LIBRARY OR NOT NGHTTP3_INCLUDE_DIR)
+      message(WARNING "  nghttp3 not found (brew install libnghttp3)")
+    endif()
+    set(OPENHTJ2K_QUIC OFF)
+  endif()
+endif()
+
 # Compiler optimization settings
 if(NOT MSVC)
   set(CMAKE_CXX_FLAGS
