@@ -52,20 +52,27 @@ static QUIC_STATUS QUIC_API stream_cb(HQUIC, void *, QUIC_STREAM_EVENT *);
 // ── nghttp3 → MsQuic glue: flush pending writes ────────────────────────────
 
 static void h3_flush_writes(H3ConnCtx *ctx) {
+  int rounds = 0;
   for (;;) {
     nghttp3_vec vec[16];
     int         fin  = 0;
     int64_t     sid  = -1;
     nghttp3_ssize n = nghttp3_conn_writev_stream(ctx->h3conn, &sid, &fin, vec, 16);
-    if (n < 0 || sid < 0) break;
+    if (n < 0) { std::fprintf(stderr, "H3 server flush: writev error %lld\n", (long long)n); break; }
+    if (sid < 0) break;
     if (n == 0 && !fin) break;
 
     auto it = ctx->id_to_stream.find(sid);
-    if (it == ctx->id_to_stream.end()) break;
+    if (it == ctx->id_to_stream.end()) {
+      std::fprintf(stderr, "H3 server flush: no QUIC stream for sid=%lld\n", (long long)sid);
+      break;
+    }
     HQUIC stream = it->second;
 
     size_t total = 0;
     for (nghttp3_ssize i = 0; i < n; ++i) total += vec[i].len;
+
+    std::fprintf(stderr, "H3 server flush: sid=%lld %zu bytes fin=%d\n", (long long)sid, total, fin);
 
     if (total > 0 || fin) {
       auto *buf = new uint8_t[total];
@@ -78,10 +85,15 @@ static void h3_flush_writes(H3ConnCtx *ctx) {
       qb.Length = static_cast<uint32_t>(total);
       qb.Buffer = buf;
       QUIC_SEND_FLAGS flags = fin ? QUIC_SEND_FLAG_FIN : QUIC_SEND_FLAG_NONE;
-      ctx->q->StreamSend(stream, &qb, 1, flags, buf);
+      QUIC_STATUS s = ctx->q->StreamSend(stream, &qb, 1, flags, buf);
+      if (QUIC_FAILED(s)) {
+        std::fprintf(stderr, "H3 server flush: StreamSend FAILED 0x%x sid=%lld\n", s, (long long)sid);
+        delete[] buf;
+      }
       nghttp3_conn_add_write_offset(ctx->h3conn, sid, static_cast<int64_t>(total));
     }
     if (n == 0) break;
+    if (++rounds > 200) break;
   }
 }
 
