@@ -119,6 +119,15 @@ static int64_t client_open_uni(ClientConn *c) {
 
 // ── nghttp3 client callbacks ────────────────────────────────────────────────
 
+static int h3c_recv_header(nghttp3_conn *, int64_t stream_id, int32_t,
+                           nghttp3_rcbuf *name, nghttp3_rcbuf *value, uint8_t, void *, void *) {
+  auto nv = nghttp3_rcbuf_get_buf(name);
+  auto vv = nghttp3_rcbuf_get_buf(value);
+  std::fprintf(stderr, "H3 client recv_header: sid=%lld %.*s: %.*s\n",
+               (long long)stream_id, (int)nv.len, nv.base, (int)vv.len, vv.base);
+  return 0;
+}
+
 static int h3c_recv_data(nghttp3_conn *, int64_t stream_id, const uint8_t *data,
                          size_t datalen, void *conn_data, void *) {
   auto *c = static_cast<ClientConn *>(conn_data);
@@ -152,6 +161,7 @@ static int h3c_deferred_consume(nghttp3_conn *, int64_t stream_id, size_t consum
 
 static bool setup_h3_client(ClientConn *c) {
   nghttp3_callbacks cb = {};
+  cb.recv_header      = h3c_recv_header;
   cb.recv_data        = h3c_recv_data;
   cb.end_stream       = h3c_end_stream;
   cb.deferred_consume = h3c_deferred_consume;
@@ -194,9 +204,16 @@ static QUIC_STATUS QUIC_API client_stream_cb(HQUIC stream, void *context,
       int64_t sid = it->second;
       uint64_t total = 0;
       for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) total += event->RECEIVE.Buffers[i].Length;
-      std::fprintf(stderr, "H3 client recv: sid=%lld %llu bytes fin=%d\n",
+      std::fprintf(stderr, "H3 client recv: sid=%lld %llu bytes fin=%d",
                    (long long)sid, (unsigned long long)total,
                    (event->RECEIVE.Flags & QUIC_RECEIVE_FLAG_FIN) ? 1 : 0);
+      if (total > 0 && total <= 32 && event->RECEIVE.BufferCount > 0) {
+        std::fprintf(stderr, " hex=");
+        const uint8_t *p = event->RECEIVE.Buffers[0].Buffer;
+        for (uint32_t j = 0; j < event->RECEIVE.Buffers[0].Length && j < 32; ++j)
+          std::fprintf(stderr, "%02x", p[j]);
+      }
+      std::fprintf(stderr, "\n");
       for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
         nghttp3_ssize consumed = nghttp3_conn_read_stream(c->h3conn, sid,
                                  event->RECEIVE.Buffers[i].Buffer,
