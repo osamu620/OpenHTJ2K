@@ -395,6 +395,7 @@ int main(int argc, char **argv) {
 
   std::vector<uint8_t> rgb;
   open_htj2k::jpip::CacheModel client_cache;
+  open_htj2k::jpip::DataBinSet cached_bins;
   uint64_t frames = 0;
   int32_t  last_gx = -1, last_gy = -1;
 
@@ -463,15 +464,15 @@ int main(int argc, char **argv) {
         open_htj2k::jpip::DataBinSet tmp;
         if (client.fetch(opt.server_host, opt.server_port, vw_peri, &tmp, &client_cache)) set.merge_from(tmp);
       }
-      // Update the cache model with newly received data-bins.
+      // Merge new data into the persistent cache and update the model.
+      cached_bins.merge_from(set);
       for (const auto &kv : set.keys()) {
         if (set.is_complete(kv.first, kv.second))
           client_cache.mark(kv.first, kv.second);
       }
-      // Client-side reassembly — no original codestream or PacketLocator
-      // needed.  The reassembler patches the COD to LRCP and emits
-      // packets in simple nested-loop order.
-      const auto rc = open_htj2k::jpip::reassemble_codestream_client(set, *idx, frame_cs);
+      // Reassemble from the FULL cache (includes headers + precincts
+      // from this and previous frames).
+      const auto rc = open_htj2k::jpip::reassemble_codestream_client(cached_bins, *idx, frame_cs);
       if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
         std::fprintf(stderr, "reassemble (client) failed status=%d\n", static_cast<int>(rc));
         break;
@@ -503,12 +504,13 @@ int main(int argc, char **argv) {
       fetch_vw(make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false));
       fetch_vw(make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false));
       fetch_vw(make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true));
+      cached_bins.merge_from(set);
       for (const auto &kv : set.keys()) {
         if (set.is_complete(kv.first, kv.second))
           client_cache.mark(kv.first, kv.second);
       }
 
-      const auto rc = open_htj2k::jpip::reassemble_codestream_client(set, *idx, frame_cs);
+      const auto rc = open_htj2k::jpip::reassemble_codestream_client(cached_bins, *idx, frame_cs);
       if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
         std::fprintf(stderr, "reassemble (H3 client) failed status=%d\n", static_cast<int>(rc));
         break;
