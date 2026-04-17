@@ -10,4 +10,6 @@ target_sources(open_htj2k
     jpp_parser.cpp
     packet_locator.cpp
     codestream_assembler.cpp
+    jpip_request.cpp
+    jpip_response.cpp
 )

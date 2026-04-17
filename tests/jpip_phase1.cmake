@@ -11,6 +11,9 @@ set(_JPIP_BIN_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # Self-contained: round-trip / interop / reject cases live inside the exe.
 add_test(NAME jpip_vbas_codec COMMAND jpip_vbas_check)
 
+# ── JPIP HTTP request/response formatting (§C.1–C.4, §D.2) ──
+add_test(NAME jpip_http_format COMMAND jpip_http_check)
+
 # ── JPP-stream message header codec (§A.2 + Tables A.1, A.2) ──
 # Self-contained: round-trip + spec §A.3.2.2 byte-identical interop +
 # dependent-form behaviour + rejection cases.

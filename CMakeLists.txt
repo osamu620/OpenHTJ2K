@@ -282,6 +282,11 @@ add_executable(jpip_parser_check)
 add_subdirectory(source/apps/jpip_parser_check)
 target_link_libraries(jpip_parser_check PUBLIC open_htj2k)
 
+# JPIP Phase-3 HTTP request/response formatting self-test
+add_executable(jpip_http_check)
+add_subdirectory(source/apps/jpip_http_check)
+target_link_libraries(jpip_http_check PUBLIC open_htj2k)
+
 # JPIP Phase-2 precinct data-bin + packet-locator self-test
 add_executable(jpip_precinct_check)
 add_subdirectory(source/apps/jpip_precinct_check)
