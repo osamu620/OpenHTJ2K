@@ -51,6 +51,7 @@
 #include "codestream_walker.hpp"
 #include "data_bin_emitter.hpp"
 #include "decoder.hpp"
+#include "jpip_client.hpp"
 #include "jpp_parser.hpp"
 #include "packet_locator.hpp"
 #include "precinct_index.hpp"
@@ -82,6 +83,10 @@ struct Options {
   bool        decode_on_move   = false;
   bool        vsync            = true;
   bool        use_filter       = false;
+  // When non-empty, the demo fetches each frame's JPP-stream from the
+  // given JPIP server instead of doing in-process round-trip.
+  std::string server_host;
+  uint16_t    server_port      = 8080;
 };
 
 bool parse_args(int argc, char **argv, Options &opt) {
@@ -105,6 +110,17 @@ bool parse_args(int argc, char **argv, Options &opt) {
     else if (a == "--decode-on-move-only")          opt.decode_on_move = true;
     else if (a == "--use-filter")                   opt.use_filter = true;
     else if (a == "--no-vsync")                     opt.vsync = false;
+    else if (a == "--server" && i + 1 < argc) {
+      // "host:port" or "host" (default port 8080).
+      const std::string hp = argv[++i];
+      const auto colon = hp.rfind(':');
+      if (colon == std::string::npos) {
+        opt.server_host = hp;
+      } else {
+        opt.server_host = hp.substr(0, colon);
+        opt.server_port = static_cast<uint16_t>(std::stoul(hp.substr(colon + 1)));
+      }
+    }
     else if (a.size() > 0 && a[0] != '-' && opt.infile.empty()) opt.infile = a;
     else {
       std::fprintf(stderr, "ERROR: unknown arg '%s'\n", a.c_str());
@@ -255,7 +271,10 @@ int main(int argc, char **argv) {
                   locator->size());
     }
   }
-  if (opt.use_filter) {
+  if (!opt.server_host.empty()) {
+    std::printf("network mode: server %s:%u\n", opt.server_host.c_str(), opt.server_port);
+    // Network mode doesn't need the locator (server has its own).
+  } else if (opt.use_filter) {
     std::printf("direct-filter mode enabled\n");
   }
 
@@ -310,14 +329,49 @@ int main(int argc, char **argv) {
     last_gx = static_cast<int32_t>(gx);
     last_gy = static_cast<int32_t>(gy);
 
+    // Build the view-window for this frame's gaze position.
+    // For --server mode we send the view-window directly to the server;
+    // for in-process modes we use the foveated I-set.
+    open_htj2k::jpip::ViewWindow frame_vw;
+    {
+      auto vw_f = make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false);
+      frame_vw = vw_f;  // use the fovea's full-res fsiz for the server request
+      // For the server, we send one request with the fovea's fsiz; the
+      // server resolves view-window → precincts.  For in-process, we
+      // still build the three-cone union ourselves.
+    }
+
     auto keep = foveated_i_set(*idx, gx, gy, opt);
     precincts_since_log += keep.size();
 
-    // Build the codestream to decode this frame — either via JPP
-    // round-trip or via the legacy precinct-filter path.
+    // Build the codestream to decode this frame — via network, in-process
+    // JPP round-trip, or the legacy precinct-filter path.
     std::vector<uint8_t> frame_cs;
-    if (!opt.use_filter) {
-      // ── JPP round-trip: emit → parse → reassemble ──
+    if (!opt.server_host.empty()) {
+      // ── Network path: fetch from JPIP server ──
+      // Send a single foveal view-window; the server resolves precincts.
+      // For a proper foveation demo we'd send 3 requests (fovea/para/
+      // periphery) or a JPIP session with progressive refinement. v1
+      // just sends the fovea's fsiz + roff + rsiz.
+      open_htj2k::jpip::JpipClient client;
+      open_htj2k::jpip::DataBinSet set;
+      // Build a combined view-window that covers the three-cone union.
+      // Simplest: send a full-image request at the periphery ratio (gets
+      // the coarse background) merged with the foveal RoI request.
+      // For v1 we just send the fovea at full res — precincts outside
+      // the fovea will be absent and decode as zero.
+      if (!client.fetch(opt.server_host, opt.server_port, frame_vw, &set)) {
+        std::fprintf(stderr, "server fetch: %s\n", client.last_error().c_str());
+        break;
+      }
+      const auto rc = open_htj2k::jpip::reassemble_codestream(
+          bytes.data(), bytes.size(), set, *idx, layout, *locator, frame_cs);
+      if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
+        std::fprintf(stderr, "reassemble (server) failed status=%d\n", static_cast<int>(rc));
+        break;
+      }
+    } else if (!opt.use_filter) {
+      // ── In-process JPP round-trip: emit → parse → reassemble ──
       std::vector<uint8_t> stream;
       open_htj2k::jpip::MessageHeaderContext enc_ctx;
       open_htj2k::jpip::emit_main_header_databin(bytes.data(), bytes.size(), layout, enc_ctx, stream);
