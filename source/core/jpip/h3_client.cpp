@@ -187,12 +187,24 @@ static QUIC_STATUS QUIC_API client_stream_cb(HQUIC stream, void *context,
   switch (event->Type) {
     case QUIC_STREAM_EVENT_RECEIVE: {
       auto it = c->stream_ids.find(stream);
-      if (it == c->stream_ids.end()) break;
+      if (it == c->stream_ids.end()) {
+        std::fprintf(stderr, "H3 client recv: unknown stream handle\n");
+        break;
+      }
       int64_t sid = it->second;
+      uint64_t total = 0;
+      for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) total += event->RECEIVE.Buffers[i].Length;
+      std::fprintf(stderr, "H3 client recv: sid=%lld %llu bytes fin=%d\n",
+                   (long long)sid, (unsigned long long)total,
+                   (event->RECEIVE.Flags & QUIC_RECEIVE_FLAG_FIN) ? 1 : 0);
       for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
-        nghttp3_conn_read_stream(c->h3conn, sid,
+        nghttp3_ssize consumed = nghttp3_conn_read_stream(c->h3conn, sid,
                                  event->RECEIVE.Buffers[i].Buffer,
                                  event->RECEIVE.Buffers[i].Length, 0);
+        if (consumed < 0) {
+          std::fprintf(stderr, "H3 client recv: read_stream error %lld sid=%lld\n",
+                       (long long)consumed, (long long)sid);
+        }
       }
       if (event->RECEIVE.Flags & QUIC_RECEIVE_FLAG_FIN) {
         nghttp3_conn_read_stream(c->h3conn, sid, nullptr, 0, 1);
