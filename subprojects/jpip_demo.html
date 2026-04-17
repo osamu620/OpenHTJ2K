@@ -201,14 +201,17 @@ async function connect() {
   $('reduce').onchange = () => M._jpip_set_reduce(ctx, parseInt($('reduce').value) || 0);
 
   const c = $('canvas');
-  // Display at a reasonable size (cap at 1920 wide).
-  const displayW = Math.min(canvasW, 1920);
-  const displayH = Math.round(displayW * canvasH / canvasW);
-  c.width = displayW;
-  c.height = displayH;
+  // Use full canvas resolution for the texture — WebGL's GL_LINEAR
+  // handles downsampling to the CSS display size.  CSS max-width
+  // keeps the on-screen size reasonable.
+  c.width = canvasW;
+  c.height = canvasH;
+  c.style.maxWidth = '1920px';
+  c.style.width = '100%';
+  c.style.height = 'auto';
 
-  rgbPtr = M._malloc(displayW * displayH * 4);
-  initWebGL(c, displayW, displayH);
+  rgbPtr = M._malloc(canvasW * canvasH * 4);
+  initWebGL(c, canvasW, canvasH);
   $('info').textContent = `${canvasW}×${canvasH}, ${totalP} precincts` +
       (gl ? ' [WebGL2]' : ' [Canvas 2D]');
 
