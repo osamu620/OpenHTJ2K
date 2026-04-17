@@ -556,16 +556,13 @@ int main(int argc, char **argv) {
           });
     }
 
-    // Line-based stream decode + on-the-fly nearest-neighbour downsample
-    // into the window-sized RGB buffer.
-    if (rgb.size() != static_cast<std::size_t>(opt.window_w) * opt.window_h * 3u) {
-      rgb.assign(static_cast<std::size_t>(opt.window_w) * opt.window_h * 3u, 0);
-    }
+    // Line-based stream decode at full decoded resolution.
+    // The GPU texture scaler handles downsampling to window size with
+    // bilinear filtering — no CPU nearest-neighbour artifacts.
     std::vector<uint32_t> w, h;
     std::vector<uint8_t>  depth;
     std::vector<bool>     sgn;
-    static thread_local std::vector<uint8_t> row_written;
-    row_written.assign(opt.window_h, 0);
+    uint32_t tex_w = 0, tex_h = 0;
     bool ok      = true;
     bool dims_ok = true;
     try {
@@ -574,27 +571,23 @@ int main(int argc, char **argv) {
             if (nc < 3 || w.empty() || h.empty()) { dims_ok = false; return; }
             const uint32_t cw = w[0];
             const uint32_t ch = h[0];
-            const uint32_t target_y =
-                static_cast<uint32_t>(static_cast<uint64_t>(y) * opt.window_h / std::max(1u, ch));
-            if (target_y >= opt.window_h || row_written[target_y]) return;
-            row_written[target_y] = 1;
-            // Right-shift samples to 8 bits for display.  For 8-bit sources
-            // (depth=8) the shift is 0 (no-op); for 10/12/16-bit the MSBs
-            // are preserved and the LSBs are discarded.
+            if (tex_w != cw || tex_h != ch) {
+              tex_w = cw; tex_h = ch;
+              rgb.assign(static_cast<std::size_t>(cw) * ch * 3u, 0);
+            }
+            if (y >= ch) return;
             const int32_t shift = (depth.empty() ? 0 : static_cast<int32_t>(depth[0]) - 8);
-            uint8_t *dst = rgb.data() + static_cast<std::size_t>(target_y) * opt.window_w * 3u;
-            for (uint32_t x_w = 0; x_w < opt.window_w; ++x_w) {
-              const uint32_t x_c =
-                  static_cast<uint32_t>(static_cast<uint64_t>(x_w) * cw / std::max(1u, opt.window_w));
+            uint8_t *dst = rgb.data() + static_cast<std::size_t>(y) * cw * 3u;
+            for (uint32_t x = 0; x < cw; ++x) {
               auto to_u8 = [shift](int32_t v) -> uint8_t {
                 if (shift > 0) v >>= shift;
                 if (v < 0) return 0;
                 if (v > 255) return 255;
                 return static_cast<uint8_t>(v);
               };
-              dst[3u * x_w + 0] = to_u8(rows[0][x_c]);
-              dst[3u * x_w + 1] = to_u8(rows[1][x_c]);
-              dst[3u * x_w + 2] = to_u8(rows[2][x_c]);
+              dst[3u * x + 0] = to_u8(rows[0][x]);
+              dst[3u * x + 1] = to_u8(rows[1][x]);
+              dst[3u * x + 2] = to_u8(rows[2][x]);
             }
           },
           w, h, depth, sgn);
@@ -604,8 +597,9 @@ int main(int argc, char **argv) {
     }
     if (!dims_ok) ok = false;
 
-    if (ok) renderer.upload_and_draw(rgb.data(), static_cast<int>(opt.window_w),
-                                     static_cast<int>(opt.window_h));
+    if (ok && tex_w > 0 && tex_h > 0)
+      renderer.upload_and_draw(rgb.data(), static_cast<int>(tex_w),
+                               static_cast<int>(tex_h));
 
     ++frames;
     ++frames_since_log;
