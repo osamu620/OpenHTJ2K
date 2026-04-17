@@ -172,3 +172,22 @@ target_compile_definitions(libopen_htj2k_mt_simd PRIVATE "OPENHTJ2K_ENABLE_WASM_
 set_target_properties(libopen_htj2k_mt_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory -pthread")
 set_target_properties(libopen_htj2k_mt_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_MT_FLAGS})
 target_link_libraries(libopen_htj2k_mt_simd PRIVATE open_htj2k_mt_simd_lib)
+
+# ── JPIP browser demo (WASM-SIMD variant) ──────────────────────────────────
+# Exposes the JPIP client-side pipeline (parse → reassemble → decode) via
+# a thin C API that the JS side calls per frame.  Uses the SIMD library
+# for the best decode performance.
+set(JPIP_WASM_FLAGS "\
+    ${WASM_FLAGS_COMMON} \
+    -s EXPORTED_FUNCTIONS=[_malloc,_free,_jpip_create_context,_jpip_get_canvas_width,_jpip_get_canvas_height,_jpip_get_num_components,_jpip_get_total_precincts,_jpip_begin_frame,_jpip_add_response,_jpip_end_frame,_jpip_destroy_context] \
+    ")
+add_executable(libopen_htj2k_jpip "src/jpip_wrapper.cpp")
+target_include_directories(libopen_htj2k_jpip PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../source/core/jpip
+    ${CMAKE_CURRENT_SOURCE_DIR}/../source/core/interface
+    ${CMAKE_CURRENT_SOURCE_DIR}/../source/core/common)
+set_target_properties(libopen_htj2k_jpip PROPERTIES
+    COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory"
+    SUFFIX ".js"
+    LINK_FLAGS "${JPIP_WASM_FLAGS}")
+target_link_libraries(libopen_htj2k_jpip PRIVATE open_htj2k_simd_lib)
