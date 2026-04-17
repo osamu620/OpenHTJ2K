@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 
+#include "cache_model.hpp"
 #include "jpp_parser.hpp"
 #include "view_window.hpp"
 
@@ -29,7 +30,8 @@ class OPENHTJ2K_JPIP_EXPORT JpipClient {
   // (last_error() holds the reason).  The DataBinSet is cleared at the
   // start of each call (v1 stateless — no incremental caching).
   bool fetch(const std::string &host, uint16_t port,
-             const ViewWindow &vw, DataBinSet *out);
+             const ViewWindow &vw, DataBinSet *out,
+             const CacheModel *model = nullptr);
 
   const std::string &last_error() const { return err_; }
 
