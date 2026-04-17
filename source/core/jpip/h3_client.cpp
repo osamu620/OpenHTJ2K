@@ -93,7 +93,7 @@ static int64_t client_open_uni(ClientConn *c) {
   QUIC_STATUS s = c->q->StreamOpen(c->conn, QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL,
                                    client_stream_cb, c, &stream);
   if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 client: uni StreamOpen failed 0x%x\n", s); return -1; }
-  s = c->q->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE);
+  s = c->q->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE);
   if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 client: uni StreamStart failed 0x%x\n", s); c->q->StreamClose(stream); return -1; }
 
   QUIC_UINT62 qid = 0;
@@ -369,7 +369,7 @@ std::vector<uint8_t> H3Client::fetch(const std::string &path_and_query) {
     impl_->error = "StreamOpen failed";
     return {};
   }
-  if (QUIC_FAILED(impl_->q->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE))) {
+  if (QUIC_FAILED(impl_->q->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE))) {
     impl_->error = "StreamStart failed";
     impl_->q->StreamClose(stream);
     return {};
