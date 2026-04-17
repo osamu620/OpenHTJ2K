@@ -89,12 +89,14 @@ static int64_t open_uni_stream(H3ConnCtx *ctx) {
   HQUIC stream = nullptr;
   QUIC_STATUS s = ctx->q->StreamOpen(ctx->conn, QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL,
                                      stream_cb, ctx, &stream);
-  if (QUIC_FAILED(s)) return -1;
+  if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 server: uni StreamOpen failed 0x%x\n", s); return -1; }
   s = ctx->q->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE);
-  if (QUIC_FAILED(s)) { ctx->q->StreamClose(stream); return -1; }
+  if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 server: uni StreamStart failed 0x%x\n", s); ctx->q->StreamClose(stream); return -1; }
 
-  // MsQuic assigns stream IDs: server-initiated unidirectional = 0x03, 0x07, 0x0B, ...
-  int64_t id = 0x03 + 4 * ctx->next_uni_id++;
+  QUIC_UINT62 qid = 0;
+  uint32_t sz = sizeof(qid);
+  ctx->q->GetParam(stream, QUIC_PARAM_STREAM_ID, &sz, &qid);
+  int64_t id = static_cast<int64_t>(qid);
   ctx->stream_ids[stream] = id;
   ctx->id_to_stream[id]   = stream;
   return id;
@@ -216,16 +218,22 @@ static bool setup_h3(H3ConnCtx *ctx) {
   nghttp3_settings_default(&settings);
 
   int rv = nghttp3_conn_server_new(&ctx->h3conn, &cb, &settings, nghttp3_mem_default(), ctx);
-  if (rv != 0) { ctx->error = "nghttp3_conn_server_new failed"; return false; }
+  if (rv != 0) { std::fprintf(stderr, "H3 server: nghttp3_conn_server_new failed: %d\n", rv); return false; }
 
   int64_t ctrl = open_uni_stream(ctx);
   int64_t qenc = open_uni_stream(ctx);
   int64_t qdec = open_uni_stream(ctx);
-  if (ctrl < 0 || qenc < 0 || qdec < 0) { ctx->error = "failed to open uni streams"; return false; }
+  if (ctrl < 0 || qenc < 0 || qdec < 0) { std::fprintf(stderr, "H3 server: failed to open uni streams\n"); return false; }
 
-  nghttp3_conn_bind_control_stream(ctx->h3conn, ctrl);
-  nghttp3_conn_bind_qpack_streams(ctx->h3conn, qenc, qdec);
+  std::fprintf(stderr, "H3 server: control=%lld qenc=%lld qdec=%lld\n",
+               (long long)ctrl, (long long)qenc, (long long)qdec);
+
+  rv = nghttp3_conn_bind_control_stream(ctx->h3conn, ctrl);
+  if (rv != 0) { std::fprintf(stderr, "H3 server: bind_control_stream: %d\n", rv); return false; }
+  rv = nghttp3_conn_bind_qpack_streams(ctx->h3conn, qenc, qdec);
+  if (rv != 0) { std::fprintf(stderr, "H3 server: bind_qpack_streams: %d\n", rv); return false; }
   h3_flush_writes(ctx);
+  std::fprintf(stderr, "H3 server: connection setup complete\n");
   return true;
 }
 
@@ -276,6 +284,7 @@ static QUIC_STATUS QUIC_API connection_cb(HQUIC conn, void *context,
   auto *ctx = static_cast<H3ConnCtx *>(context);
   switch (event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
+      std::fprintf(stderr, "H3 server: QUIC connected\n");
       setup_h3(ctx);
       break;
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
