@@ -390,18 +390,23 @@ int main(int argc, char **argv) {
                 static_cast<uint32_t>(static_cast<uint64_t>(y) * opt.window_h / std::max(1u, ch));
             if (target_y >= opt.window_h || row_written[target_y]) return;
             row_written[target_y] = 1;
+            // Right-shift samples to 8 bits for display.  For 8-bit sources
+            // (depth=8) the shift is 0 (no-op); for 10/12/16-bit the MSBs
+            // are preserved and the LSBs are discarded.
+            const int32_t shift = (depth.empty() ? 0 : static_cast<int32_t>(depth[0]) - 8);
             uint8_t *dst = rgb.data() + static_cast<std::size_t>(target_y) * opt.window_w * 3u;
             for (uint32_t x_w = 0; x_w < opt.window_w; ++x_w) {
               const uint32_t x_c =
                   static_cast<uint32_t>(static_cast<uint64_t>(x_w) * cw / std::max(1u, opt.window_w));
-              auto clamp_u8 = [](int32_t v) -> uint8_t {
+              auto to_u8 = [shift](int32_t v) -> uint8_t {
+                if (shift > 0) v >>= shift;
                 if (v < 0) return 0;
                 if (v > 255) return 255;
                 return static_cast<uint8_t>(v);
               };
-              dst[3u * x_w + 0] = clamp_u8(rows[0][x_c]);
-              dst[3u * x_w + 1] = clamp_u8(rows[1][x_c]);
-              dst[3u * x_w + 2] = clamp_u8(rows[2][x_c]);
+              dst[3u * x_w + 0] = to_u8(rows[0][x_c]);
+              dst[3u * x_w + 1] = to_u8(rows[1][x_c]);
+              dst[3u * x_w + 2] = to_u8(rows[2][x_c]);
             }
           },
           w, h, depth, sgn);
