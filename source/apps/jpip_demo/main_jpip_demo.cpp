@@ -247,8 +247,8 @@ int main(int argc, char **argv) {
   if (!opt.infile.empty()) {
     bytes = read_file(opt.infile.c_str());
     if (bytes.empty()) return EXIT_FAILURE;
-  } else if (opt.server_host.empty()) {
-    std::fprintf(stderr, "ERROR: either <input.j2c> or --server host:port is required\n");
+  } else if (opt.server_host.empty() && opt.server_h3_host.empty()) {
+    std::fprintf(stderr, "ERROR: either <input.j2c> or --server/--server-h3 host:port is required\n");
     return EXIT_FAILURE;
   }
 
@@ -260,8 +260,37 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "CodestreamIndex build failed: %s\n", e.what());
       return EXIT_FAILURE;
     }
-  } else {
-    // Server-only mode: fetch an initial full-image request to get
+  }
+#ifdef OPENHTJ2K_ENABLE_QUIC
+  else if (!opt.server_h3_host.empty()) {
+    // H3 server-only mode: fetch initial main-header over HTTP/3.
+    open_htj2k::jpip::H3Client h3_init;
+    if (!h3_init.connect(opt.server_h3_host, opt.server_h3_port, false)) {
+      std::fprintf(stderr, "H3 initial connect: %s\n", h3_init.last_error().c_str());
+      return EXIT_FAILURE;
+    }
+    auto init_body = h3_init.fetch("/jpip?fsiz=1,1&type=jpp-stream");
+    if (init_body.empty()) {
+      std::fprintf(stderr, "H3 initial fetch empty\n");
+      return EXIT_FAILURE;
+    }
+    open_htj2k::jpip::DataBinSet init_set;
+    open_htj2k::jpip::parse_jpp_stream(init_body.data(), init_body.size(), &init_set);
+    const auto &mh_bin = init_set.get(open_htj2k::jpip::kMsgClassMainHeader, 0);
+    if (mh_bin.empty()) {
+      std::fprintf(stderr, "H3 server response missing main-header data-bin\n");
+      return EXIT_FAILURE;
+    }
+    idx = CodestreamIndex::build_from_main_header_bin(mh_bin);
+    if (!idx) {
+      std::fprintf(stderr, "CodestreamIndex build from H3 main-header bin failed\n");
+      return EXIT_FAILURE;
+    }
+    std::printf("built index from H3 server's main-header data-bin\n");
+  }
+#endif
+  else {
+    // HTTP/1.1 server-only mode: fetch an initial full-image request to get
     // the main-header data-bin, then build the index from it.
     open_htj2k::jpip::JpipClient client;
     open_htj2k::jpip::DataBinSet init_set;
@@ -298,7 +327,7 @@ int main(int argc, char **argv) {
               static_cast<double>(opt.parafovea_ratio),
               static_cast<double>(opt.periphery_ratio));
   std::printf("loaded %s: canvas %u×%u, %u components, %llu precincts\n",
-              opt.infile.c_str(), canvas_w, canvas_h, idx->num_components(),
+              opt.infile.empty() ? "(server)" : opt.infile.c_str(), canvas_w, canvas_h, idx->num_components(),
               static_cast<unsigned long long>(total_p));
 
   // The decoder's codestream cursor advances during each invoke(), so every
