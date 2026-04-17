@@ -86,6 +86,13 @@ class CodestreamIndex {
   OPENHTJ2K_JPIP_EXPORT static std::unique_ptr<CodestreamIndex> build(
       const uint8_t *codestream, std::size_t len);
 
+  // Client-side variant: build from the main-header data-bin bytes
+  // (class 6, id 0) received from a JPIP server.  The bin contains SOC
+  // through the last main-header marker; this method appends a fake SOT
+  // sentinel so the internal j2k_main_header parser stops cleanly.
+  OPENHTJ2K_JPIP_EXPORT static std::unique_ptr<CodestreamIndex>
+  build_from_main_header_bin(const std::vector<uint8_t> &bin);
+
   uint32_t num_tiles_x()    const { return num_tiles_x_; }
   uint32_t num_tiles_y()    const { return num_tiles_y_; }
   uint32_t num_tiles()      const { return num_tiles_x_ * num_tiles_y_; }
