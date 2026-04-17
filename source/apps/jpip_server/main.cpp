@@ -95,6 +95,7 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
       }
     }
   }
+  emit_eor(EorReason::WindowDone, ctx, stream);
   return stream;
 }
 

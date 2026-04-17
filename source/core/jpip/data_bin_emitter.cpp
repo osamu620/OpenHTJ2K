@@ -119,5 +119,16 @@ std::size_t emit_precinct_databin(const uint8_t *codestream, std::size_t len,
   return append_message(hdr, payload.data(), payload.size(), ctx, out);
 }
 
+std::size_t emit_eor(EorReason reason, MessageHeaderContext &ctx, std::vector<uint8_t> &out) {
+  MessageHeader hdr;
+  hdr.class_id    = kMsgClassEOR;
+  hdr.in_class_id = 0;
+  hdr.msg_offset  = 0;
+  hdr.msg_length  = 1;
+  hdr.is_last     = true;
+  const uint8_t reason_byte = static_cast<uint8_t>(reason);
+  return append_message(hdr, &reason_byte, 1, ctx, out);
+}
+
 }  // namespace jpip
 }  // namespace open_htj2k

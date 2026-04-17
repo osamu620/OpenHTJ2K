@@ -81,6 +81,14 @@ bool parse_jpp_stream(const uint8_t *bytes, std::size_t len, DataBinSet *out) {
     if (!decode_header(bytes + pos, len - pos, ctx, &hdr, &hdr_bytes)) return false;
     pos += hdr_bytes;
     if (hdr.msg_length > len - pos) return false;  // truncated payload
+    if (hdr.class_id == kMsgClassEOR) {
+      if (hdr.msg_length >= 1 && pos < len) {
+        out->eor_received_ = true;
+        out->eor_reason_   = bytes[pos];
+      }
+      pos += static_cast<std::size_t>(hdr.msg_length);
+      break;
+    }
     if (!out->append(hdr.class_id, hdr.in_class_id, hdr.msg_offset, bytes + pos,
                      static_cast<std::size_t>(hdr.msg_length), hdr.is_last)) {
       return false;

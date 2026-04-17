@@ -57,6 +57,11 @@ class OPENHTJ2K_JPIP_EXPORT DataBinSet {
   // (class, in_class_id) keys in deterministic ascending order.
   std::vector<std::pair<uint8_t, uint64_t>> keys() const;
 
+  // True if an EOR message was received.  The reason code is available
+  // via eor_reason().
+  bool has_eor() const { return eor_received_; }
+  uint8_t eor_reason() const { return eor_reason_; }
+
   // Feed one message's body into the set.  Returns true on success, false
   // if the message violates the in-order assumption (non-contiguous
   // msg_offset, or further bytes arriving on a bin that was already
@@ -65,6 +70,7 @@ class OPENHTJ2K_JPIP_EXPORT DataBinSet {
   bool append(uint8_t class_id, uint64_t in_class_id, uint64_t msg_offset,
               const uint8_t *payload, std::size_t payload_len, bool is_last);
 
+  friend bool parse_jpp_stream(const uint8_t *, std::size_t, DataBinSet *);
  private:
   struct Entry {
     std::vector<uint8_t> bytes;
@@ -72,6 +78,8 @@ class OPENHTJ2K_JPIP_EXPORT DataBinSet {
   };
   using Key = std::pair<uint8_t, uint64_t>;
   std::map<Key, Entry> bins_;
+  bool    eor_received_ = false;
+  uint8_t eor_reason_   = 0;
 };
 
 // Parse a complete JPP-stream byte buffer, appending every message's body

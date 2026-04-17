@@ -44,11 +44,24 @@ constexpr uint8_t kMsgClassTileHeader  = 2;  // JPP-stream
 constexpr uint8_t kMsgClassTile        = 4;  // JPT-stream
 constexpr uint8_t kMsgClassExtTile     = 5;  // JPT-stream, has Aux
 constexpr uint8_t kMsgClassMainHeader  = 6;  // JPP- and JPT-stream
+constexpr uint8_t kMsgClassEOR         = 7;  // End of Response (§A.3)
 constexpr uint8_t kMsgClassMetadata    = 8;  // JPP- and JPT-stream
+
+// EOR reason codes (§A.3, Table A.3).
+enum class EorReason : uint8_t {
+  ImageDone     = 1,   // entire target image has been delivered
+  WindowDone    = 2,   // all data for the current view-window has been sent
+  WindowChange  = 3,   // server is changing window (preemption)
+  QualityLimit  = 4,   // response quality limit reached
+  ByteLimit     = 5,   // response byte limit reached
+  NonSpecified  = 0xFF
+};
 
 // Per §A.2.2: "Class identifiers are chosen such that an Aux VBAS is present
 // if and only if the identifier is odd."
-inline bool msg_class_has_aux(uint8_t class_id) { return (class_id & 1u) != 0u; }
+inline bool msg_class_has_aux(uint8_t class_id) {
+  return class_id != kMsgClassEOR && (class_id & 1u) != 0u;
+}
 
 struct MessageHeader {
   uint8_t  class_id    = 0;

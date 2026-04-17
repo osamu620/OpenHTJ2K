@@ -88,5 +88,11 @@ emit_precinct_databin(const uint8_t *codestream, std::size_t len,
                       MessageHeaderContext &ctx,
                       std::vector<uint8_t> &out);
 
+// Emit an End-of-Response (EOR) message (class 7, §A.3) with the given
+// reason code.  The EOR message signals the end of a server response and
+// carries a one-byte reason code as its body.
+OPENHTJ2K_JPIP_EXPORT std::size_t
+emit_eor(EorReason reason, MessageHeaderContext &ctx, std::vector<uint8_t> &out);
+
 }  // namespace jpip
 }  // namespace open_htj2k
