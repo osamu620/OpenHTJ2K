@@ -130,6 +130,10 @@ if (NOT EMSCRIPTEN)
     message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
     set(PKG_CONFIG_REQUIRES "libtiff")
   endif()
+  # JPIP TCP socket wrapper (source/core/jpip/tcp_socket.cpp) uses Winsock2.
+  if(WIN32)
+    target_link_libraries(open_htj2k PUBLIC ws2_32)
+  endif()
 endif()
 
 # Compiler optimization settings
@@ -286,6 +290,14 @@ target_link_libraries(jpip_parser_check PUBLIC open_htj2k)
 add_executable(jpip_http_check)
 add_subdirectory(source/apps/jpip_http_check)
 target_link_libraries(jpip_http_check PUBLIC open_htj2k)
+
+# JPIP Phase-3 TCP socket wrapper self-test
+add_executable(jpip_tcp_check)
+add_subdirectory(source/apps/jpip_tcp_check)
+target_link_libraries(jpip_tcp_check PUBLIC open_htj2k)
+if(WIN32)
+  target_link_libraries(jpip_tcp_check PUBLIC ws2_32)
+endif()
 
 # JPIP Phase-2 precinct data-bin + packet-locator self-test
 add_executable(jpip_precinct_check)
