@@ -831,6 +831,15 @@ static inline bool is_lp(int32_t r) { return (r & 1) == 0; }
 #define get_dl     idwt_get_dl
 #define set_dl     idwt_set_dl
 #define pse_source idwt_pse_source
+#define is_zero    idwt_is_zero
+#define set_zero   idwt_set_zero
+
+static inline bool row_all_zero(const sprec_t *row, int32_t width) {
+  uint32_t acc = 0;
+  const uint32_t *p = reinterpret_cast<const uint32_t *>(row);
+  for (int32_t i = 0; i < width; ++i) acc |= p[i];
+  return acc == 0;
+}
 
 // Required d_level of neighbor rows for row r to advance one level (irrev 9/7 only).
 //   LP: step D (cur 0→1) needs HP neighbors @0; step B (cur 1→2) needs HP @1
@@ -844,6 +853,12 @@ static inline bool is_lp(int32_t r) { return (r & 1) == 0; }
 // Apply one lifting step to row r and increment its d_level.
 // cur must be the current d_level of row r (caller already fetched it).
 static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
+  if (is_zero(s, r - 1) && is_zero(s, r + 1)) {
+    set_dl(s, r, cur + 1);
+    return;
+  }
+  set_zero(s, r, false);
+
   const bool    lp   = is_lp(r);
   sprec_t *tgt  = rptr(s, r);
   sprec_t *prev = rptr(s, r - 1);
@@ -854,8 +869,7 @@ static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
     const float coeff = lp ? (cur == 0 ? fD : fB) : (cur == 0 ? fC : fA);
     adv_irrev_ver_step_fn(w, prev, next, tgt, coeff);
   } else if (s->transformation >= 2) {  // ATK irrev (e.g. irrev53): no floor, 2-step filter
-    // irrev53 synthesis: LP[k] -= 0.25*(HP[k-1]+HP[k]);  HP[k] += 0.5*(LP[k]+LP[k+1])
-    const float coeff = lp ? 0.25f : -0.5f;  // adv_irrev_ver does: tgt -= coeff*(prev+next)
+    const float coeff = lp ? 0.25f : -0.5f;
     adv_irrev_ver_step_fn(w, prev, next, tgt, coeff);
   } else {  // rev 5/3
     if (lp) {
@@ -871,16 +885,19 @@ static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
 static inline void fill_pse(idwt_2d_state *s, int32_t r) {
   const size_t nb = sizeof(sprec_t) * static_cast<size_t>(s->stride);
   const sprec_t *src = rptr(s, r);
+  const bool z = is_zero(s, r);
   for (int8_t i = 1; i <= s->top_pse; ++i) {
     if (s->top_dlevel[i - 1] < 0 && pse_source(s->v0 - i, s->v0, s->v1) == r) {
       memcpy(s->top_pse_buf + static_cast<ptrdiff_t>(i - 1) * s->stride, src, nb);
       s->top_dlevel[i - 1] = 0;
+      s->top_pse_zero[i - 1] = z;
     }
   }
   for (int8_t i = 0; i < s->bottom_pse; ++i) {
     if (s->bot_dlevel[i] < 0 && pse_source(s->v1 + i, s->v0, s->v1) == r) {
       memcpy(s->bot_pse_buf + static_cast<ptrdiff_t>(i) * s->stride, src, nb);
       s->bot_dlevel[i] = 0;
+      s->bot_pse_zero[i] = z;
     }
   }
 }
@@ -978,8 +995,10 @@ static void fetch_one(idwt_2d_state *s) {
 
   const int32_t slot = r % IDWT_STATE_RING_DEPTH;
   s->d_level[slot]   = -1;
-  s->get_src_row(s->src_ctx, r, rptr(s, r));
+  sprec_t *dst = rptr(s, r);
+  s->get_src_row(s->src_ctx, r, dst);
   s->d_level[slot]   = 0;
+  s->row_zero[slot]  = row_all_zero(dst, s->u1 - s->u0);
   ++s->next_fetch;
   fill_pse(s, r);
   cascade(s);
@@ -1021,9 +1040,9 @@ void idwt_2d_state_init(idwt_2d_state *s,
   }
 
   s->ring_origin = v0;
-  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) s->d_level[i]    = -1;
-  for (int32_t i = 0; i < 4;                     ++i) s->top_dlevel[i] = -1;
-  for (int32_t i = 0; i < 4;                     ++i) s->bot_dlevel[i] = -1;
+  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) { s->d_level[i] = -1; s->row_zero[i] = true; }
+  for (int32_t i = 0; i < 4;                     ++i) { s->top_dlevel[i] = -1; s->top_pse_zero[i] = true; }
+  for (int32_t i = 0; i < 4;                     ++i) { s->bot_dlevel[i] = -1; s->bot_pse_zero[i] = true; }
 
   s->next_out    = v0;
   s->next_fetch  = v0;
@@ -1048,9 +1067,9 @@ void idwt_2d_state_rewind(idwt_2d_state *s) {
   s->ring_origin = s->v0;
   s->next_out    = s->v0;
   s->next_fetch  = s->v0;
-  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) s->d_level[i]    = -1;
-  for (int32_t i = 0; i < 4;                     ++i) s->top_dlevel[i] = -1;
-  for (int32_t i = 0; i < 4;                     ++i) s->bot_dlevel[i] = -1;
+  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) { s->d_level[i] = -1; s->row_zero[i] = true; }
+  for (int32_t i = 0; i < 4;                     ++i) { s->top_dlevel[i] = -1; s->top_pse_zero[i] = true; }
+  for (int32_t i = 0; i < 4;                     ++i) { s->bot_dlevel[i] = -1; s->bot_pse_zero[i] = true; }
 }
 
 bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out) {

@@ -179,7 +179,7 @@ target_link_libraries(libopen_htj2k_mt_simd PRIVATE open_htj2k_mt_simd_lib)
 # for the best decode performance.
 set(JPIP_WASM_FLAGS "\
     ${WASM_FLAGS_COMMON} \
-    -s EXPORTED_FUNCTIONS=[_malloc,_free,_jpip_create_context,_jpip_get_canvas_width,_jpip_get_canvas_height,_jpip_get_num_components,_jpip_get_total_precincts,_jpip_begin_frame,_jpip_add_response,_jpip_end_frame,_jpip_destroy_context] \
+    -s EXPORTED_FUNCTIONS=[_malloc,_free,_jpip_create_context,_jpip_get_canvas_width,_jpip_get_canvas_height,_jpip_get_num_components,_jpip_get_total_precincts,_jpip_set_reduce,_jpip_begin_frame,_jpip_add_response,_jpip_end_frame,_jpip_destroy_context] \
     ")
 add_executable(libopen_htj2k_jpip "src/jpip_wrapper.cpp")
 target_include_directories(libopen_htj2k_jpip PRIVATE

@@ -32,8 +32,9 @@
 struct JpipContext {
   std::unique_ptr<open_htj2k::jpip::CodestreamIndex> idx;
   open_htj2k::jpip::DataBinSet set;
-  uint32_t canvas_w = 0;
-  uint32_t canvas_h = 0;
+  uint32_t canvas_w  = 0;
+  uint32_t canvas_h  = 0;
+  uint8_t  reduce_NL = 0;
 };
 
 extern "C" {
@@ -82,6 +83,12 @@ int jpip_get_total_precincts(void *handle) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+void jpip_set_reduce(void *handle, int n) {
+  if (!handle) return;
+  static_cast<JpipContext *>(handle)->reduce_NL = static_cast<uint8_t>(n);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void jpip_begin_frame(void *handle) {
   if (!handle) return;
   static_cast<JpipContext *>(handle)->set = {};
@@ -109,7 +116,7 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
 
   // Decode.
   open_htj2k::openhtj2k_decoder dec;
-  dec.init(sparse_cs.data(), sparse_cs.size(), 0, 1);
+  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 1);
   dec.parse();
 
   std::vector<uint32_t> widths, heights;
