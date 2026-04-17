@@ -57,13 +57,14 @@ const {default: createModule} = await import(wasmFile);
 
 const $ = id => document.getElementById(id);
 
-// Allow ?server=URL to pre-fill the server field (useful for tunnel links).
+// Apply ?server=URL and ?reduce=N from the query string.
+// Module scripts run after DOM is parsed, so elements are already available.
 {
   const params = new URLSearchParams(location.search);
   const s = params.get('server');
-  if (s) document.addEventListener('DOMContentLoaded', () => $('server').value = s);
+  if (s) $('server').value = s;
   const r = params.get('reduce');
-  if (r) document.addEventListener('DOMContentLoaded', () => $('reduce').value = r);
+  if (r) $('reduce').value = r;
 }
 
 let M = null;   // WASM module
