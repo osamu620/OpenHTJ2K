@@ -57,3 +57,7 @@ PHASE4_PLAN.md
 PHASE5_PLAN.md
 WASM_DEMO_PLAN.md
 WEBGL_NOTES.md
+
+# Generated TLS certificates for QUIC localhost testing
+server.key
+server.cert
