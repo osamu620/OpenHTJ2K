@@ -30,6 +30,7 @@
 //       [--parafovea-ratio F=0.5]   (fsiz ratio; lower = coarser)
 //       [--periphery-ratio F=0.125] (fsiz ratio; default drops 3 of 5 DWT levels)
 //       [--window-size WxH=1920x1080]
+//       [--reduce N=0]             (DWT reduce levels; trades resolution for speed)
 //       [--use-filter]              (Phase-1 direct filter, skip JPP round-trip)
 //       [--decode-on-move-only] [--no-vsync]
 //
@@ -82,6 +83,7 @@ struct Options {
   uint32_t    window_h         = 1080;
   bool        decode_on_move   = false;
   bool        vsync            = true;
+  uint8_t     reduce           = 0;
   bool        use_filter       = false;
   // When non-empty, the demo fetches each frame's JPP-stream from the
   // given JPIP server instead of doing in-process round-trip.
@@ -107,6 +109,7 @@ bool parse_args(int argc, char **argv, Options &opt) {
     }
     else if (a == "--parafovea-ratio" && i + 1 < argc) opt.parafovea_ratio = std::stof(argv[++i]);
     else if (a == "--periphery-ratio" && i + 1 < argc) opt.periphery_ratio = std::stof(argv[++i]);
+    else if (a == "--reduce" && i + 1 < argc)        opt.reduce = static_cast<uint8_t>(std::stoul(argv[++i]));
     else if (a == "--decode-on-move-only")          opt.decode_on_move = true;
     else if (a == "--use-filter")                   opt.use_filter = true;
     else if (a == "--no-vsync")                     opt.vsync = false;
@@ -463,7 +466,7 @@ int main(int argc, char **argv) {
     open_htj2k::openhtj2k_decoder dec;
     const uint8_t *dec_buf = opt.use_filter ? bytes.data() : frame_cs.data();
     const std::size_t dec_len = opt.use_filter ? bytes.size() : frame_cs.size();
-    dec.init(dec_buf, dec_len, /*reduce_NL=*/0, /*num_threads=*/1);
+    dec.init(dec_buf, dec_len, opt.reduce, /*num_threads=*/1);
     dec.parse();
 
     if (opt.use_filter) {
