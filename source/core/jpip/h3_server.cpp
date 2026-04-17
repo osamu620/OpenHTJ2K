@@ -93,10 +93,8 @@ static int64_t open_uni_stream(H3ConnCtx *ctx) {
   s = ctx->q->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE);
   if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 server: uni StreamStart failed 0x%x\n", s); ctx->q->StreamClose(stream); return -1; }
 
-  QUIC_UINT62 qid = 0;
-  uint32_t sz = sizeof(qid);
-  ctx->q->GetParam(stream, QUIC_PARAM_STREAM_ID, &sz, &qid);
-  int64_t id = static_cast<int64_t>(qid);
+  // Server-initiated unidirectional stream IDs: 0x03, 0x07, 0x0B, ...
+  int64_t id = 0x03 + 4 * ctx->next_uni_id++;
   ctx->stream_ids[stream] = id;
   ctx->id_to_stream[id]   = stream;
   return id;

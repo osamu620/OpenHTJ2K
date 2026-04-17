@@ -29,7 +29,8 @@ struct ClientConn {
 
   std::unordered_map<HQUIC, int64_t> stream_ids;
   std::unordered_map<int64_t, HQUIC> id_to_stream;
-  int64_t next_uni_id = 0;
+  int64_t next_uni_id  = 0;
+  int64_t next_bidi_id = 0;
 
   // Synchronisation for blocking fetch()
   std::mutex              mu;
@@ -96,10 +97,8 @@ static int64_t client_open_uni(ClientConn *c) {
   s = c->q->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE);
   if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 client: uni StreamStart failed 0x%x\n", s); c->q->StreamClose(stream); return -1; }
 
-  QUIC_UINT62 qid = 0;
-  uint32_t sz = sizeof(qid);
-  c->q->GetParam(stream, QUIC_PARAM_STREAM_ID, &sz, &qid);
-  int64_t id = static_cast<int64_t>(qid);
+  // Client-initiated unidirectional stream IDs: 0x02, 0x06, 0x0A, ...
+  int64_t id = 0x02 + 4 * c->next_uni_id++;
   c->stream_ids[stream] = id;
   c->id_to_stream[id]   = stream;
   return id;
@@ -375,11 +374,8 @@ std::vector<uint8_t> H3Client::fetch(const std::string &path_and_query) {
     return {};
   }
 
-  // Get the QUIC-assigned stream ID
-  QUIC_UINT62 qid = 0;
-  uint32_t sz = sizeof(qid);
-  impl_->q->GetParam(stream, QUIC_PARAM_STREAM_ID, &sz, &qid);
-  int64_t sid = static_cast<int64_t>(qid);
+  // Client-initiated bidirectional stream IDs: 0x00, 0x04, 0x08, ...
+  int64_t sid = 4 * c->next_bidi_id++;
   c->stream_ids[stream] = sid;
   c->id_to_stream[sid]  = stream;
 
