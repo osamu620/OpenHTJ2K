@@ -16,6 +16,11 @@
 
 <div id="controls">
   <label>JPIP Server: <input id="server" value="http://localhost:8080" /></label>
+  <label>Reduce: <select id="reduce">
+    <option value="0">0 (full res)</option>
+    <option value="1" selected>1 (half res, 4x faster)</option>
+    <option value="2">2 (quarter res, 16x faster)</option>
+  </select></label>
   <button id="connectBtn">Connect</button>
   <span id="info"></span>
 </div>
@@ -34,6 +39,8 @@ const $ = id => document.getElementById(id);
   const params = new URLSearchParams(location.search);
   const s = params.get('server');
   if (s) document.addEventListener('DOMContentLoaded', () => $('server').value = s);
+  const r = params.get('reduce');
+  if (r) document.addEventListener('DOMContentLoaded', () => $('reduce').value = r);
 }
 
 let M = null;   // WASM module
@@ -166,6 +173,11 @@ async function connect() {
   canvasW = M._jpip_get_canvas_width(ctx);
   canvasH = M._jpip_get_canvas_height(ctx);
   const totalP = M._jpip_get_total_precincts(ctx);
+
+  // Apply reduce level (Phase 4 Option C — trades resolution for decode speed).
+  const reduceN = parseInt($('reduce').value) || 0;
+  M._jpip_set_reduce(ctx, reduceN);
+  $('reduce').onchange = () => M._jpip_set_reduce(ctx, parseInt($('reduce').value) || 0);
 
   const c = $('canvas');
   // Display at a reasonable size (cap at 1920 wide).
