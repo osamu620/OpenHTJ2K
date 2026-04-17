@@ -221,11 +221,13 @@ async function connect() {
 
     busy = true;
     try {
+      const t0 = performance.now();
       const [r1, r2, r3] = await Promise.all([
         fetch(`${serverUrl}/jpip?${foveaQ}`).then(r => r.arrayBuffer()),
         fetch(`${serverUrl}/jpip?${paraQ}`).then(r => r.arrayBuffer()),
         fetch(`${serverUrl}/jpip?${periQ}`).then(r => r.arrayBuffer()),
       ]);
+      const tFetch = performance.now();
 
       M._jpip_begin_frame(ctx);
       for (const ab of [r1, r2, r3]) {
@@ -236,6 +238,7 @@ async function connect() {
         M._free(ptr);
       }
       const rc = M._jpip_end_frame(ctx, rgbPtr, c.width, c.height);
+      const tDecode = performance.now();
       if (rc !== 0) {
         $('stats').textContent = `decode error: ${rc}`;
         return;
@@ -245,10 +248,12 @@ async function connect() {
       drawFrame(rgba, c.width, c.height);
 
       frameCount++;
+      const fetchMs = (tFetch - t0).toFixed(0);
+      const decodeMs = (tDecode - tFetch).toFixed(0);
       const now = performance.now();
       if (now - lastFpsTime > 1000) {
         const fps = frameCount / ((now - lastFpsTime) / 1000);
-        $('stats').textContent = `gaze=(${gx},${gy})  ${fps.toFixed(1)} fps`;
+        $('stats').textContent = `gaze=(${gx},${gy})  ${fps.toFixed(1)} fps  fetch=${fetchMs}ms  decode=${decodeMs}ms`;
         frameCount = 0;
         lastFpsTime = now;
       }
