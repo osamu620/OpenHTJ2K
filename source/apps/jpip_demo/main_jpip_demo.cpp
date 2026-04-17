@@ -53,6 +53,7 @@
 #include "codestream_walker.hpp"
 #include "data_bin_emitter.hpp"
 #include "decoder.hpp"
+#include "cache_model.hpp"
 #include "jpip_client.hpp"
 #include "jpp_parser.hpp"
 #include "packet_locator.hpp"
@@ -393,6 +394,7 @@ int main(int argc, char **argv) {
               static_cast<double>(canvas_h) / opt.window_h);
 
   std::vector<uint8_t> rgb;
+  open_htj2k::jpip::CacheModel client_cache;
   uint64_t frames = 0;
   int32_t  last_gx = -1, last_gy = -1;
 
@@ -442,25 +444,29 @@ int main(int argc, char **argv) {
     std::vector<uint8_t> frame_cs;
     if (!opt.server_host.empty()) {
       // ── Network path: fetch 3 concentric view-windows from server ──
+      // The cache model tells the server which data-bins we already have
+      // so it can skip redundant data (§C.9).
       open_htj2k::jpip::JpipClient client;
       open_htj2k::jpip::DataBinSet set;
-      // Fovea: full resolution, tight RoI.
       auto vw_fov = make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false);
-      if (!client.fetch(opt.server_host, opt.server_port, vw_fov, &set)) {
+      if (!client.fetch(opt.server_host, opt.server_port, vw_fov, &set, &client_cache)) {
         std::fprintf(stderr, "server fetch (fovea): %s\n", client.last_error().c_str());
         break;
       }
-      // Parafovea: reduced resolution, wider RoI.
       {
         auto vw_para = make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false);
         open_htj2k::jpip::DataBinSet tmp;
-        if (client.fetch(opt.server_host, opt.server_port, vw_para, &tmp)) set.merge_from(tmp);
+        if (client.fetch(opt.server_host, opt.server_port, vw_para, &tmp, &client_cache)) set.merge_from(tmp);
       }
-      // Periphery: aggressively reduced resolution, whole image.
       {
         auto vw_peri = make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true);
         open_htj2k::jpip::DataBinSet tmp;
-        if (client.fetch(opt.server_host, opt.server_port, vw_peri, &tmp)) set.merge_from(tmp);
+        if (client.fetch(opt.server_host, opt.server_port, vw_peri, &tmp, &client_cache)) set.merge_from(tmp);
+      }
+      // Update the cache model with newly received data-bins.
+      for (const auto &kv : set.keys()) {
+        if (set.is_complete(kv.first, kv.second))
+          client_cache.mark(kv.first, kv.second);
       }
       // Client-side reassembly — no original codestream or PacketLocator
       // needed.  The reassembler patches the COD to LRCP and emits
@@ -486,6 +492,7 @@ int main(int argc, char **argv) {
       open_htj2k::jpip::DataBinSet set;
       auto fetch_vw = [&](const open_htj2k::jpip::ViewWindow &vw) {
         std::string q = "/jpip?" + open_htj2k::jpip::format_view_window_query(vw);
+        if (client_cache.size() > 0) q += "&model=" + client_cache.format();
         auto body = h3c.fetch(q);
         if (!body.empty()) {
           open_htj2k::jpip::DataBinSet tmp;
@@ -496,6 +503,10 @@ int main(int argc, char **argv) {
       fetch_vw(make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false));
       fetch_vw(make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false));
       fetch_vw(make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true));
+      for (const auto &kv : set.keys()) {
+        if (set.is_complete(kv.first, kv.second))
+          client_cache.mark(kv.first, kv.second);
+      }
 
       const auto rc = open_htj2k::jpip::reassemble_codestream_client(set, *idx, frame_cs);
       if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {

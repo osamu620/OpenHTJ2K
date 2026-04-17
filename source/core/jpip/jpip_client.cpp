@@ -5,6 +5,7 @@
 
 #include <cstdio>
 
+#include "cache_model.hpp"
 #include "jpip_response.hpp"
 #include "tcp_socket.hpp"
 
@@ -46,9 +47,10 @@ std::string format_view_window_query(const ViewWindow &vw) {
 }
 
 bool JpipClient::fetch(const std::string &host, uint16_t port,
-                       const ViewWindow &vw, DataBinSet *out) {
+                       const ViewWindow &vw, DataBinSet *out,
+                       const CacheModel *model) {
   if (!out) { err_ = "null DataBinSet"; return false; }
-  *out = {};  // v1: fresh set per request (no caching)
+  *out = {};
 
   TcpStream conn;
   if (!conn.connect(host, port)) {
@@ -56,8 +58,11 @@ bool JpipClient::fetch(const std::string &host, uint16_t port,
     return false;
   }
 
-  // Format the HTTP GET request.
-  const std::string query = format_view_window_query(vw);
+  std::string query = format_view_window_query(vw);
+  if (model && model->size() > 0) {
+    query += "&model=";
+    query += model->format();
+  }
   std::string request = "GET /jpip?" + query + " HTTP/1.1\r\n"
                         "Host: " + host + "\r\n"
                         "Connection: close\r\n"
