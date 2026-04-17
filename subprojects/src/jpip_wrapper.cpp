@@ -136,10 +136,12 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
           const uint32_t cw = widths[0];
           const uint32_t ch = heights[0];
           const int32_t shift = (depths.empty() ? 0 : static_cast<int32_t>(depths[0]) - 8);
-          const uint32_t ty =
+          const uint32_t ty0 =
               static_cast<uint32_t>(static_cast<uint64_t>(y) * oh / (ch > 0 ? ch : 1));
-          if (ty >= oh) return;
-          uint8_t *dst = rgb_out + static_cast<size_t>(ty) * ow * 4;  // RGBA
+          const uint32_t ty1 =
+              static_cast<uint32_t>(static_cast<uint64_t>(y + 1) * oh / (ch > 0 ? ch : 1));
+          if (ty0 >= oh) return;
+          uint8_t *dst = rgb_out + static_cast<size_t>(ty0) * ow * 4;
           for (uint32_t xw = 0; xw < ow; ++xw) {
             const uint32_t xc =
                 static_cast<uint32_t>(static_cast<uint64_t>(xw) * cw / (ow > 0 ? ow : 1));
@@ -152,7 +154,10 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
             dst[4 * xw + 0] = to_u8(rows[0][xc]);
             dst[4 * xw + 1] = to_u8(rows[1][xc]);
             dst[4 * xw + 2] = to_u8(rows[2][xc]);
-            dst[4 * xw + 3] = 255;  // alpha
+            dst[4 * xw + 3] = 255;
+          }
+          for (uint32_t ty = ty0 + 1; ty < ty1 && ty < oh; ++ty) {
+            std::memcpy(rgb_out + static_cast<size_t>(ty) * ow * 4, dst, ow * 4);
           }
         },
         widths, heights, depths, signeds);
