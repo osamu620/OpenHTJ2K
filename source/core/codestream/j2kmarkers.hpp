@@ -345,6 +345,15 @@ class TLM_marker : public j2k_marker_io_base {
  public:
   TLM_marker();
   explicit TLM_marker(j2c_src_memory &in);
+  TLM_marker(uint8_t ztlm, const std::vector<uint16_t> &tile_indices,
+             const std::vector<uint32_t> &tile_part_lengths);
+  void write(j2c_dst_memory &buf) const;
+
+  uint8_t index() const { return Ztlm; }
+  size_t  num_entries() const { return Ptlm.size(); }
+  bool    has_tile_indices() const { return !Ttlm.empty() && ((Stlm >> 4) & 0x03) != 0; }
+  const std::vector<uint16_t> &tile_indices() const { return Ttlm; }
+  const std::vector<uint32_t> &tile_part_lengths() const { return Ptlm; }
 };
 
 /********************************************************************************

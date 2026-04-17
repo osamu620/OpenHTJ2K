@@ -1426,6 +1426,34 @@ TLM_marker::TLM_marker(j2c_src_memory &in) : j2k_marker_io_base(_TLM) {
   is_set = true;
 }
 
+TLM_marker::TLM_marker(uint8_t ztlm, const std::vector<uint16_t> &tile_indices,
+                       const std::vector<uint32_t> &tile_part_lengths)
+    : j2k_marker_io_base(_TLM), Ztlm(ztlm), Stlm(0), Ttlm(tile_indices), Ptlm(tile_part_lengths) {
+  // ST=0 (no tile index), SP=1 (32-bit Ptlm) by default.
+  // If tile indices are provided, use ST=2 (16-bit Ttlm).
+  uint8_t ST = tile_indices.empty() ? 0 : 2;
+  uint8_t SP = 1;
+  Stlm = static_cast<uint8_t>((ST << 4) | (SP << 6));
+  is_set = true;
+}
+
+void TLM_marker::write(j2c_dst_memory &buf) const {
+  uint8_t ST = (Stlm >> 4) & 0x03;
+  uint8_t SP = ((Stlm >> 4) & 0x0C) >> 2;
+  size_t entry_size = (ST == 0 ? 0 : (ST == 1 ? 1 : 2)) + (SP == 0 ? 2 : 4);
+  uint16_t Ltlm = static_cast<uint16_t>(4 + Ptlm.size() * entry_size);
+  buf.put_word(_TLM);
+  buf.put_word(Ltlm);
+  buf.put_byte(Ztlm);
+  buf.put_byte(Stlm);
+  for (size_t i = 0; i < Ptlm.size(); ++i) {
+    if (ST == 1)      buf.put_byte(static_cast<uint8_t>(Ttlm[i]));
+    else if (ST == 2) buf.put_word(Ttlm[i]);
+    if (SP == 0)      buf.put_word(static_cast<uint16_t>(Ptlm[i]));
+    else              buf.put_dword(Ptlm[i]);
+  }
+}
+
 /********************************************************************************
  * PLM_marker
  *******************************************************************************/
@@ -1568,10 +1596,6 @@ int SOT_marker::set_SOT_marker(uint16_t tile_index, uint8_t tile_part_index, uin
 }
 
 int SOT_marker::set_tile_part_length(uint32_t length) {
-  if (is_set) {
-    printf("WARNING: illegal attempt to call SOT_marker::set_tile_part_length() twice.\n");
-  }
-  // `length` includes parcket header + packet body
   Psot   = length + Lmar + 2 + 2;  // 2 + 2 = length of SOT + SOD
   is_set = true;
   return EXIT_SUCCESS;
@@ -1710,7 +1734,7 @@ void j2k_main_header::flush(j2c_dst_memory &buf) {
   }
   if (!TLM.empty()) {
     for (size_t i = 0; i < TLM.size(); ++i) {
-      // TLM[i]->write(buf);
+      TLM[i]->write(buf);
     }
   }
   if (!PLM.empty()) {

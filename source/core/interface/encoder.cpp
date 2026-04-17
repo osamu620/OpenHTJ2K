@@ -627,10 +627,6 @@ size_t openhtj2k_encoder_impl::invoke_internal(bool line_based) {
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
-  j2c_dst_memory j2c_dst, jph_dst;
-  j2c_dst.put_word(_SOC);
-  main_header.flush(j2c_dst);
-
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   if (numTiles.x * numTiles.y > 65535) {
@@ -651,7 +647,26 @@ size_t openhtj2k_encoder_impl::invoke_internal(bool line_based) {
       tileSet[i].encode();
     tileSet[i].construct_packets(main_header);
   }
-  for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
+
+  // Measure tile-part lengths to generate TLM marker.
+  const uint32_t num_tiles = numTiles.x * numTiles.y;
+  {
+    std::vector<uint16_t> tile_indices(num_tiles);
+    std::vector<uint32_t> tile_lengths(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+      j2c_dst_memory tmp;
+      tileSet[i].write_packets(tmp);
+      tile_indices[i] = static_cast<uint16_t>(i);
+      tile_lengths[i] = static_cast<uint32_t>(tmp.get_length());
+    }
+    main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
+  }
+
+  j2c_dst_memory j2c_dst, jph_dst;
+  j2c_dst.put_word(_SOC);
+  main_header.flush(j2c_dst);
+
+  for (uint32_t i = 0; i < num_tiles; ++i) {
     tileSet[i].write_packets(j2c_dst);
   }
   j2c_dst.put_word(_EOC);
@@ -771,10 +786,6 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
-  j2c_dst_memory j2c_dst, jph_dst;
-  j2c_dst.put_word(_SOC);
-  main_header.flush(j2c_dst);
-
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   if (numTiles.x * numTiles.y > 65535) {
@@ -784,24 +795,40 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
 
   // Empty input buffer for streaming (img is not used)
   std::vector<int32_t *> empty_buf;
-  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
-  for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+  const uint32_t num_tiles_lbs = numTiles.x * numTiles.y;
+  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(num_tiles_lbs));
+  for (uint16_t i = 0; i < static_cast<uint16_t>(num_tiles_lbs); ++i) {
     tileSet[i].enc_init(i, main_header, empty_buf, true, true);
   }
-  for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
-    // Compute per-component image widths (needed by encode_line_based_stream to
-    // allocate int_rows large enough for the full image row and to offset reads).
+  for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
     std::vector<uint32_t> img_comp_widths(static_cast<size_t>(siz->Csiz));
     for (size_t c = 0; c < siz->Csiz; ++c) {
       const uint32_t xr = static_cast<uint32_t>(siz->XRsiz[c]);
       img_comp_widths[c] = (static_cast<uint32_t>(siz->Xsiz) - static_cast<uint32_t>(siz->XOsiz) + xr - 1) / xr;
     }
     tileSet[i].perform_dc_offset(main_header);
-    // MCT is handled inside encode_line_based_stream
     tileSet[i].encode_line_based_stream(src_fn, img_comp_widths);
     tileSet[i].construct_packets(main_header);
   }
-  for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
+
+  // Measure tile-part lengths to generate TLM marker.
+  {
+    std::vector<uint16_t> tile_indices(num_tiles_lbs);
+    std::vector<uint32_t> tile_lengths(num_tiles_lbs);
+    for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
+      j2c_dst_memory tmp;
+      tileSet[i].write_packets(tmp);
+      tile_indices[i] = static_cast<uint16_t>(i);
+      tile_lengths[i] = static_cast<uint32_t>(tmp.get_length());
+    }
+    main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
+  }
+
+  j2c_dst_memory j2c_dst, jph_dst;
+  j2c_dst.put_word(_SOC);
+  main_header.flush(j2c_dst);
+
+  for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
     tileSet[i].write_packets(j2c_dst);
   }
   j2c_dst.put_word(_EOC);
