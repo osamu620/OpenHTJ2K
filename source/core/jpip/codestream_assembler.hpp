@@ -75,5 +75,20 @@ reassemble_codestream(const uint8_t *codestream, std::size_t len,
                       const PacketLocator &locator,
                       std::vector<uint8_t> &out);
 
+// Client-side reassembly — does NOT require the original codestream,
+// CodestreamLayout, or PacketLocator.  Builds the sparse codestream
+// entirely from the DataBinSet (main-header + tile-header + precinct
+// data-bins) and the CodestreamIndex (which can itself be built from
+// the main-header data-bin).
+//
+// Internally patches the COD's progression-order byte to LRCP so the
+// body can use a simple nested loop (for r, for c, for p → emit).
+// This makes the reassembled codestream's byte order differ from the
+// original, but the decoder handles LRCP natively.
+OPENHTJ2K_JPIP_EXPORT ReassembleStatus
+reassemble_codestream_client(const DataBinSet &set,
+                             const CodestreamIndex &idx,
+                             std::vector<uint8_t> &out);
+
 }  // namespace jpip
 }  // namespace open_htj2k

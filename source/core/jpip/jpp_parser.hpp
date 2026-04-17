@@ -48,6 +48,12 @@ class OPENHTJ2K_JPIP_EXPORT DataBinSet {
   // Number of distinct data-bins known to the set.
   std::size_t size() const { return bins_.size(); }
 
+  // Merge all bins from `other` into this set.  For bins that exist in
+  // both, the larger of the two is kept (by byte count).  Used by the
+  // client to union multiple view-window responses into one set before
+  // reassembly.
+  void merge_from(const DataBinSet &other);
+
   // (class, in_class_id) keys in deterministic ascending order.
   std::vector<std::pair<uint8_t, uint64_t>> keys() const;
 

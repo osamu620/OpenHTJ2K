@@ -39,6 +39,19 @@ std::vector<std::pair<uint8_t, uint64_t>> DataBinSet::keys() const {
   return out;
 }
 
+void DataBinSet::merge_from(const DataBinSet &other) {
+  for (const auto &kv : other.bins_) {
+    auto it = bins_.find(kv.first);
+    if (it == bins_.end()) {
+      bins_[kv.first] = kv.second;
+    } else if (kv.second.bytes.size() > it->second.bytes.size()) {
+      it->second = kv.second;
+    } else if (kv.second.is_last && !it->second.is_last) {
+      it->second.is_last = true;
+    }
+  }
+}
+
 bool DataBinSet::append(uint8_t class_id, uint64_t in_class_id, uint64_t msg_offset,
                         const uint8_t *payload, std::size_t payload_len, bool is_last) {
   const Key key{class_id, in_class_id};

@@ -191,6 +191,23 @@ uint64_t CodestreamIndex::I(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc) co
          + (static_cast<uint64_t>(c) + s_val * num_components_) * num_tiles();
 }
 
+std::unique_ptr<CodestreamIndex> CodestreamIndex::build_from_main_header_bin(
+    const std::vector<uint8_t> &bin) {
+  if (bin.empty()) return nullptr;
+  // The main-header data-bin is [SOC .. last-main-header-marker).  The
+  // internal parser (j2k_main_header::read) expects to stop at an SOT
+  // marker.  Appending a fake SOT (FF 90) + a valid Lsot (00 0A) +
+  // 8 zero bytes for the SOT body makes the parser terminate cleanly.
+  std::vector<uint8_t> buf;
+  buf.reserve(bin.size() + 12);
+  buf.insert(buf.end(), bin.begin(), bin.end());
+  // Fake SOT marker segment: FF90 000A 0000 00000000 00 00
+  const uint8_t fake_sot[] = {0xFF, 0x90, 0x00, 0x0A, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  buf.insert(buf.end(), fake_sot, fake_sot + sizeof(fake_sot));
+  return build(buf.data(), buf.size());
+}
+
 uint64_t CodestreamIndex::total_precincts() const {
   uint64_t sum = 0;
   for (const auto &info : tcinfo_) sum += info.total;

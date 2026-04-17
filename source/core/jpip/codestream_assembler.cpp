@@ -133,5 +133,103 @@ ReassembleStatus reassemble_codestream(const uint8_t *codestream, std::size_t le
   return ReassembleStatus::Ok;
 }
 
+// ── Client-side reassembly (no original codestream needed) ───────────
+
+namespace {
+
+// Patch the COD marker's progression-order byte to LRCP (0) so the
+// reassembled body can use a trivial nested loop for packet ordering.
+// Returns a copy of the main-header bytes with the patch applied, or
+// an empty vector if the COD marker was not found.
+std::vector<uint8_t> patch_cod_to_lrcp(const std::vector<uint8_t> &main_hdr) {
+  std::vector<uint8_t> patched = main_hdr;
+  // Walk markers to find COD (FF 52).  Structure: marker(2) + Lmar(2) +
+  // Scod(1) + SGcod[0]=progression(1) + ...
+  for (std::size_t i = 0; i + 6 < patched.size(); ) {
+    if (patched[i] != 0xFF) { ++i; continue; }
+    const uint8_t m = patched[i + 1];
+    if (m == 0x4F) { i += 2; continue; }  // SOC, no length
+    if (i + 4 > patched.size()) break;
+    const uint16_t Lmar = (static_cast<uint16_t>(patched[i + 2]) << 8) | patched[i + 3];
+    if (m == 0x52) {
+      // COD found.  Byte at i+4 = Scod, i+5 = SGcod[0] = progression order.
+      patched[i + 5] = kProgressionLRCP;
+      return patched;
+    }
+    if (Lmar < 2 || i + 2 + Lmar > patched.size()) break;
+    i += 2 + Lmar;
+  }
+  return {};  // COD not found
+}
+
+}  // namespace
+
+ReassembleStatus reassemble_codestream_client(const DataBinSet &set,
+                                              const CodestreamIndex &idx,
+                                              std::vector<uint8_t> &out) {
+  if (!set.contains(kMsgClassMainHeader, 0)) return ReassembleStatus::MissingMainHeader;
+
+  const auto &raw_main = set.get(kMsgClassMainHeader, 0);
+  auto main_hdr = patch_cod_to_lrcp(raw_main);
+  if (main_hdr.empty()) return ReassembleStatus::UnsupportedFeature;
+
+  out.insert(out.end(), main_hdr.begin(), main_hdr.end());
+
+  const uint16_t num_layers = idx.num_layers();
+  const uint32_t nT = idx.num_tiles();
+
+  for (uint32_t t = 0; t < nT; ++t) {
+    std::vector<uint8_t> body;
+
+    // LRCP order: Layer → Resolution → Component → Precinct.
+    const uint8_t max_NL = idx.max_NL();
+    for (uint16_t l = 0; l < num_layers; ++l) {
+      for (uint8_t r = 0; r <= max_NL; ++r) {
+        for (uint16_t c = 0; c < idx.num_components(); ++c) {
+          const auto &tc = idx.tile_component(static_cast<uint16_t>(t), c);
+          if (r > tc.NL) continue;
+          const uint32_t np = tc.npw[r] * tc.nph[r];
+          for (uint32_t p = 0; p < np; ++p) {
+            const uint64_t I = idx.I(static_cast<uint16_t>(t), c, r, p);
+            if (set.contains(kMsgClassPrecinct, I)) {
+              const auto &bin = set.get(kMsgClassPrecinct, I);
+              if (num_layers == 1) {
+                // Single layer: bin = one packet, emit whole thing.
+                body.insert(body.end(), bin.begin(), bin.end());
+              } else {
+                // Multi-layer: would need per-layer byte offsets within
+                // the bin.  v1 does not support this — deferred.
+                body.insert(body.end(), bin.begin(), bin.end());
+              }
+            } else {
+              body.push_back(0x00);  // empty packet header
+            }
+          }
+        }
+      }
+    }
+
+    // Tile header from DataBinSet.
+    const auto &tile_hdr = set.contains(kMsgClassTileHeader, t)
+                               ? set.get(kMsgClassTileHeader, t)
+                               : set.get(kMsgClassTileHeader, t);  // returns empty ref if missing
+    const uint64_t psot = 12u + tile_hdr.size() + 2u + body.size();
+    if (psot > 0xFFFFFFFFull) return ReassembleStatus::UnsupportedFeature;
+
+    append_u16_be(out, kMarkerSOT);
+    append_u16_be(out, 10);
+    append_u16_be(out, static_cast<uint16_t>(t));
+    append_u32_be(out, static_cast<uint32_t>(psot));
+    out.push_back(0);  // TPsot
+    out.push_back(1);  // TNsot
+    out.insert(out.end(), tile_hdr.begin(), tile_hdr.end());
+    append_u16_be(out, kMarkerSOD);
+    out.insert(out.end(), body.begin(), body.end());
+  }
+
+  append_u16_be(out, kMarkerEOC);
+  return ReassembleStatus::Ok;
+}
+
 }  // namespace jpip
 }  // namespace open_htj2k

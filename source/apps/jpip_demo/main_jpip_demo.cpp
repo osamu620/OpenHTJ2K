@@ -127,7 +127,7 @@ bool parse_args(int argc, char **argv, Options &opt) {
       return false;
     }
   }
-  return !opt.infile.empty();
+  return !opt.infile.empty() || !opt.server_host.empty();
 }
 
 std::vector<uint8_t> read_file(const char *path) {
@@ -205,21 +205,65 @@ int main(int argc, char **argv) {
   Options opt;
   if (!parse_args(argc, argv, opt)) {
     std::fprintf(stderr,
-                 "Usage: open_htj2k_jpip_demo <input.j2c> "
-                 "[--fovea-radius N] [--parafovea-radius N] "
-                 "[--decode-on-move-only] [--no-vsync]\n");
+                 "Usage: open_htj2k_jpip_demo [<input.j2c>] [options]\n"
+                 "\n"
+                 "Options:\n"
+                 "  --server host:port        Fetch from a JPIP server (no local file needed)\n"
+                 "  --fovea-radius N          Fovea radius in canvas px (default: auto)\n"
+                 "  --parafovea-radius N      Parafovea radius in canvas px (default: auto)\n"
+                 "  --parafovea-ratio F       fsiz ratio for parafovea (default: 0.5)\n"
+                 "  --periphery-ratio F       fsiz ratio for periphery (default: 0.125)\n"
+                 "  --window-size WxH         Window/texture size (default: 1920x1080)\n"
+                 "  --use-filter              Phase-1 direct filter (skip JPP round-trip)\n"
+                 "  --decode-on-move-only     Skip redecode when cursor is stationary\n"
+                 "  --no-vsync                Unlock frame rate\n"
+                 "\n"
+                 "When --server is given, no local codestream file is needed — the demo\n"
+                 "fetches everything from the server.  Without --server, <input.j2c> is\n"
+                 "required for the in-process JPP round-trip or --use-filter path.\n");
     return EXIT_FAILURE;
   }
 
-  auto bytes = read_file(opt.infile.c_str());
-  if (bytes.empty()) return EXIT_FAILURE;
+  // In --server mode, the local codestream is optional.
+  std::vector<uint8_t> bytes;
+  if (!opt.infile.empty()) {
+    bytes = read_file(opt.infile.c_str());
+    if (bytes.empty()) return EXIT_FAILURE;
+  } else if (opt.server_host.empty()) {
+    std::fprintf(stderr, "ERROR: either <input.j2c> or --server host:port is required\n");
+    return EXIT_FAILURE;
+  }
 
   std::unique_ptr<CodestreamIndex> idx;
-  try {
-    idx = CodestreamIndex::build(bytes.data(), bytes.size());
-  } catch (std::exception &e) {
-    std::fprintf(stderr, "CodestreamIndex build failed: %s\n", e.what());
-    return EXIT_FAILURE;
+  if (!bytes.empty()) {
+    try {
+      idx = CodestreamIndex::build(bytes.data(), bytes.size());
+    } catch (std::exception &e) {
+      std::fprintf(stderr, "CodestreamIndex build failed: %s\n", e.what());
+      return EXIT_FAILURE;
+    }
+  } else {
+    // Server-only mode: fetch an initial full-image request to get
+    // the main-header data-bin, then build the index from it.
+    open_htj2k::jpip::JpipClient client;
+    open_htj2k::jpip::DataBinSet init_set;
+    open_htj2k::jpip::ViewWindow init_vw;
+    init_vw.fx = 1; init_vw.fy = 1;  // minimal fsiz to get headers only
+    if (!client.fetch(opt.server_host, opt.server_port, init_vw, &init_set)) {
+      std::fprintf(stderr, "initial server fetch: %s\n", client.last_error().c_str());
+      return EXIT_FAILURE;
+    }
+    const auto &mh_bin = init_set.get(open_htj2k::jpip::kMsgClassMainHeader, 0);
+    if (mh_bin.empty()) {
+      std::fprintf(stderr, "server response missing main-header data-bin\n");
+      return EXIT_FAILURE;
+    }
+    idx = CodestreamIndex::build_from_main_header_bin(mh_bin);
+    if (!idx) {
+      std::fprintf(stderr, "CodestreamIndex build from main-header bin failed\n");
+      return EXIT_FAILURE;
+    }
+    std::printf("built index from server's main-header data-bin\n");
   }
   const uint32_t canvas_w = idx->geometry().canvas_size.x;
   const uint32_t canvas_h = idx->geometry().canvas_size.y;
@@ -248,9 +292,14 @@ int main(int argc, char **argv) {
   // JPP round-trip mode (default) needs a one-time PacketLocator build.
   // This drives the decoder once with a packet observer to learn per-
   // precinct byte ranges; on the 1920×1920 asset it costs ~25 ms.
+  // Build the packet locator + layout only for in-process modes (not for
+  // server mode — the client-side reassembler doesn't need them).
   open_htj2k::jpip::CodestreamLayout layout;
   std::unique_ptr<open_htj2k::jpip::PacketLocator> locator;
-  if (!opt.use_filter) {
+  if (!opt.server_host.empty()) {
+    std::printf("network mode: server %s:%u (no local codestream needed)\n",
+                opt.server_host.c_str(), opt.server_port);
+  } else if (!opt.use_filter && !bytes.empty()) {
     open_htj2k::jpip::walk_codestream(bytes.data(), bytes.size(), &layout);
     locator = open_htj2k::jpip::PacketLocator::build(bytes.data(), bytes.size(), *idx, layout);
     if (!locator) {
@@ -271,10 +320,7 @@ int main(int argc, char **argv) {
                   locator->size());
     }
   }
-  if (!opt.server_host.empty()) {
-    std::printf("network mode: server %s:%u\n", opt.server_host.c_str(), opt.server_port);
-    // Network mode doesn't need the locator (server has its own).
-  } else if (opt.use_filter) {
+  if (opt.use_filter) {
     std::printf("direct-filter mode enabled\n");
   }
 
@@ -348,26 +394,33 @@ int main(int argc, char **argv) {
     // JPP round-trip, or the legacy precinct-filter path.
     std::vector<uint8_t> frame_cs;
     if (!opt.server_host.empty()) {
-      // ── Network path: fetch from JPIP server ──
-      // Send a single foveal view-window; the server resolves precincts.
-      // For a proper foveation demo we'd send 3 requests (fovea/para/
-      // periphery) or a JPIP session with progressive refinement. v1
-      // just sends the fovea's fsiz + roff + rsiz.
+      // ── Network path: fetch 3 concentric view-windows from server ──
       open_htj2k::jpip::JpipClient client;
       open_htj2k::jpip::DataBinSet set;
-      // Build a combined view-window that covers the three-cone union.
-      // Simplest: send a full-image request at the periphery ratio (gets
-      // the coarse background) merged with the foveal RoI request.
-      // For v1 we just send the fovea at full res — precincts outside
-      // the fovea will be absent and decode as zero.
-      if (!client.fetch(opt.server_host, opt.server_port, frame_vw, &set)) {
-        std::fprintf(stderr, "server fetch: %s\n", client.last_error().c_str());
+      // Fovea: full resolution, tight RoI.
+      auto vw_fov = make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false);
+      if (!client.fetch(opt.server_host, opt.server_port, vw_fov, &set)) {
+        std::fprintf(stderr, "server fetch (fovea): %s\n", client.last_error().c_str());
         break;
       }
-      const auto rc = open_htj2k::jpip::reassemble_codestream(
-          bytes.data(), bytes.size(), set, *idx, layout, *locator, frame_cs);
+      // Parafovea: reduced resolution, wider RoI.
+      {
+        auto vw_para = make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false);
+        open_htj2k::jpip::DataBinSet tmp;
+        if (client.fetch(opt.server_host, opt.server_port, vw_para, &tmp)) set.merge_from(tmp);
+      }
+      // Periphery: aggressively reduced resolution, whole image.
+      {
+        auto vw_peri = make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true);
+        open_htj2k::jpip::DataBinSet tmp;
+        if (client.fetch(opt.server_host, opt.server_port, vw_peri, &tmp)) set.merge_from(tmp);
+      }
+      // Client-side reassembly — no original codestream or PacketLocator
+      // needed.  The reassembler patches the COD to LRCP and emits
+      // packets in simple nested-loop order.
+      const auto rc = open_htj2k::jpip::reassemble_codestream_client(set, *idx, frame_cs);
       if (rc != open_htj2k::jpip::ReassembleStatus::Ok) {
-        std::fprintf(stderr, "reassemble (server) failed status=%d\n", static_cast<int>(rc));
+        std::fprintf(stderr, "reassemble (client) failed status=%d\n", static_cast<int>(rc));
         break;
       }
     } else if (!opt.use_filter) {
