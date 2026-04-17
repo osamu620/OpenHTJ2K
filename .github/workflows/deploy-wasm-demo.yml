@@ -41,6 +41,7 @@ jobs:
           cp subprojects/build/html/libopen_htj2k*.wasm deploy/
           cp subprojects/index.html                     deploy/
           cp subprojects/rtp_demo.html                  deploy/
+          cp subprojects/jpip_demo.html                 deploy/
           cp subprojects/rtp_parser.js                  deploy/
           cp subprojects/coi-serviceworker.js           deploy/
           # Sample codestreams referenced by index.html's preset dropdown.
