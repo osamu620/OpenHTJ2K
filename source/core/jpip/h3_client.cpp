@@ -54,6 +54,11 @@ static QUIC_STATUS QUIC_API client_stream_cb(HQUIC, void *, QUIC_STREAM_EVENT *)
 
 // ── nghttp3 flush writes ────────────────────────────────────────────────────
 
+struct SendCtx {
+  QUIC_BUFFER qb;
+  uint8_t     data[];
+};
+
 static void h3_client_flush(ClientConn *c) {
   int rounds = 0;
   for (;;) {
@@ -78,20 +83,19 @@ static void h3_client_flush(ClientConn *c) {
     std::fprintf(stderr, "H3 client flush: sid=%lld %zu bytes fin=%d\n", (long long)sid, total, fin);
 
     if (total > 0 || fin) {
-      auto *buf = new uint8_t[total];
+      auto *sc = static_cast<SendCtx *>(std::malloc(sizeof(SendCtx) + total));
+      sc->qb.Length = static_cast<uint32_t>(total);
+      sc->qb.Buffer = sc->data;
       size_t off = 0;
       for (nghttp3_ssize i = 0; i < n; ++i) {
-        std::memcpy(buf + off, vec[i].base, vec[i].len);
+        std::memcpy(sc->data + off, vec[i].base, vec[i].len);
         off += vec[i].len;
       }
-      QUIC_BUFFER qb;
-      qb.Length = static_cast<uint32_t>(total);
-      qb.Buffer = buf;
       QUIC_SEND_FLAGS flags = fin ? QUIC_SEND_FLAG_FIN : QUIC_SEND_FLAG_NONE;
-      QUIC_STATUS s = c->q->StreamSend(stream, &qb, 1, flags, buf);
+      QUIC_STATUS s = c->q->StreamSend(stream, &sc->qb, 1, flags, sc);
       if (QUIC_FAILED(s)) {
         std::fprintf(stderr, "H3 client flush: StreamSend failed 0x%x sid=%lld\n", s, (long long)sid);
-        delete[] buf;
+        std::free(sc);
       }
       nghttp3_conn_add_write_offset(c->h3conn, sid, static_cast<int64_t>(total));
     }
@@ -230,7 +234,7 @@ static QUIC_STATUS QUIC_API client_stream_cb(HQUIC stream, void *context,
       break;
     }
     case QUIC_STREAM_EVENT_SEND_COMPLETE: {
-      delete[] static_cast<uint8_t *>(event->SEND_COMPLETE.ClientContext);
+      std::free(event->SEND_COMPLETE.ClientContext);
       break;
     }
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE: {

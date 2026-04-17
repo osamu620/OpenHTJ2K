@@ -49,7 +49,12 @@ static QUIC_STATUS QUIC_API listener_cb(HQUIC, void *, QUIC_LISTENER_EVENT *);
 static QUIC_STATUS QUIC_API connection_cb(HQUIC, void *, QUIC_CONNECTION_EVENT *);
 static QUIC_STATUS QUIC_API stream_cb(HQUIC, void *, QUIC_STREAM_EVENT *);
 
-// ── nghttp3 → MsQuic glue: flush pending writes ────────────────────────────
+// StreamSend context: both the QUIC_BUFFER and the data must remain valid
+// until QUIC_STREAM_EVENT_SEND_COMPLETE fires.
+struct SendCtx {
+  QUIC_BUFFER qb;
+  uint8_t     data[];
+};
 
 static void h3_flush_writes(H3ConnCtx *ctx) {
   int rounds = 0;
@@ -75,20 +80,19 @@ static void h3_flush_writes(H3ConnCtx *ctx) {
     std::fprintf(stderr, "H3 server flush: sid=%lld %zu bytes fin=%d\n", (long long)sid, total, fin);
 
     if (total > 0 || fin) {
-      auto *buf = new uint8_t[total];
+      auto *sc = static_cast<SendCtx *>(std::malloc(sizeof(SendCtx) + total));
+      sc->qb.Length = static_cast<uint32_t>(total);
+      sc->qb.Buffer = sc->data;
       size_t off = 0;
       for (nghttp3_ssize i = 0; i < n; ++i) {
-        std::memcpy(buf + off, vec[i].base, vec[i].len);
+        std::memcpy(sc->data + off, vec[i].base, vec[i].len);
         off += vec[i].len;
       }
-      QUIC_BUFFER qb;
-      qb.Length = static_cast<uint32_t>(total);
-      qb.Buffer = buf;
       QUIC_SEND_FLAGS flags = fin ? QUIC_SEND_FLAG_FIN : QUIC_SEND_FLAG_NONE;
-      QUIC_STATUS s = ctx->q->StreamSend(stream, &qb, 1, flags, buf);
+      QUIC_STATUS s = ctx->q->StreamSend(stream, &sc->qb, 1, flags, sc);
       if (QUIC_FAILED(s)) {
         std::fprintf(stderr, "H3 server flush: StreamSend FAILED 0x%x sid=%lld\n", s, (long long)sid);
-        delete[] buf;
+        std::free(sc);
       }
       nghttp3_conn_add_write_offset(ctx->h3conn, sid, static_cast<int64_t>(total));
     }
@@ -279,8 +283,7 @@ static QUIC_STATUS QUIC_API stream_cb(HQUIC stream, void *context, QUIC_STREAM_E
       break;
     }
     case QUIC_STREAM_EVENT_SEND_COMPLETE: {
-      auto *buf = static_cast<uint8_t *>(event->SEND_COMPLETE.ClientContext);
-      delete[] buf;
+      std::free(event->SEND_COMPLETE.ClientContext);
       break;
     }
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE: {
