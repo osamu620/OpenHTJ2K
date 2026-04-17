@@ -5,7 +5,6 @@
 
 #include "h3_client.hpp"
 
-#include <cstdio>
 #include <cstring>
 #include <condition_variable>
 #include <mutex>
@@ -60,27 +59,21 @@ struct SendCtx {
 };
 
 static void h3_client_flush(ClientConn *c) {
-  int rounds = 0;
   for (;;) {
     nghttp3_vec vec[16];
     int         fin = 0;
     int64_t     sid = -1;
     nghttp3_ssize n = nghttp3_conn_writev_stream(c->h3conn, &sid, &fin, vec, 16);
-    if (n < 0) { std::fprintf(stderr, "H3 client flush: writev error %lld\n", (long long)n); break; }
+    if (n < 0) break;
     if (sid < 0) break;
     if (n == 0 && !fin) break;
 
     auto it = c->id_to_stream.find(sid);
-    if (it == c->id_to_stream.end()) {
-      std::fprintf(stderr, "H3 client flush: no QUIC stream for nghttp3 sid=%lld\n", (long long)sid);
-      break;
-    }
+    if (it == c->id_to_stream.end()) break;
     HQUIC stream = it->second;
 
     size_t total = 0;
     for (nghttp3_ssize i = 0; i < n; ++i) total += vec[i].len;
-
-    std::fprintf(stderr, "H3 client flush: sid=%lld %zu bytes fin=%d\n", (long long)sid, total, fin);
 
     if (total > 0 || fin) {
       auto *sc = static_cast<SendCtx *>(std::malloc(sizeof(SendCtx) + total));
@@ -94,13 +87,11 @@ static void h3_client_flush(ClientConn *c) {
       QUIC_SEND_FLAGS flags = fin ? QUIC_SEND_FLAG_FIN : QUIC_SEND_FLAG_NONE;
       QUIC_STATUS s = c->q->StreamSend(stream, &sc->qb, 1, flags, sc);
       if (QUIC_FAILED(s)) {
-        std::fprintf(stderr, "H3 client flush: StreamSend failed 0x%x sid=%lld\n", s, (long long)sid);
         std::free(sc);
       }
       nghttp3_conn_add_write_offset(c->h3conn, sid, static_cast<int64_t>(total));
     }
     if (n == 0) break;
-    if (++rounds > 100) break;
   }
 }
 
@@ -110,9 +101,9 @@ static int64_t client_open_uni(ClientConn *c) {
   HQUIC stream = nullptr;
   QUIC_STATUS s = c->q->StreamOpen(c->conn, QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL,
                                    client_stream_cb, c, &stream);
-  if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 client: uni StreamOpen failed 0x%x\n", s); return -1; }
+  if (QUIC_FAILED(s)) return -1;
   s = c->q->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE);
-  if (QUIC_FAILED(s)) { std::fprintf(stderr, "H3 client: uni StreamStart failed 0x%x\n", s); c->q->StreamClose(stream); return -1; }
+  if (QUIC_FAILED(s)) { c->q->StreamClose(stream); return -1; }
 
   // Client-initiated unidirectional stream IDs: 0x02, 0x06, 0x0A, ...
   int64_t id = 0x02 + 4 * c->next_uni_id++;
@@ -123,12 +114,8 @@ static int64_t client_open_uni(ClientConn *c) {
 
 // ── nghttp3 client callbacks ────────────────────────────────────────────────
 
-static int h3c_recv_header(nghttp3_conn *, int64_t stream_id, int32_t,
-                           nghttp3_rcbuf *name, nghttp3_rcbuf *value, uint8_t, void *, void *) {
-  auto nv = nghttp3_rcbuf_get_buf(name);
-  auto vv = nghttp3_rcbuf_get_buf(value);
-  std::fprintf(stderr, "H3 client recv_header: sid=%lld %.*s: %.*s\n",
-               (long long)stream_id, (int)nv.len, nv.base, (int)vv.len, vv.base);
+static int h3c_recv_header(nghttp3_conn *, int64_t, int32_t,
+                           nghttp3_rcbuf *, nghttp3_rcbuf *, uint8_t, void *, void *) {
   return 0;
 }
 
@@ -174,22 +161,18 @@ static bool setup_h3_client(ClientConn *c) {
   nghttp3_settings_default(&settings);
 
   int rv = nghttp3_conn_client_new(&c->h3conn, &cb, &settings, nghttp3_mem_default(), c);
-  if (rv != 0) { std::fprintf(stderr, "H3 client: nghttp3_conn_client_new failed: %d\n", rv); return false; }
+  if (rv != 0) return false;
 
   int64_t ctrl = client_open_uni(c);
   int64_t qenc = client_open_uni(c);
   int64_t qdec = client_open_uni(c);
-  if (ctrl < 0 || qenc < 0 || qdec < 0) { std::fprintf(stderr, "H3 client: failed to open uni streams\n"); return false; }
-
-  std::fprintf(stderr, "H3 client: control=%lld qenc=%lld qdec=%lld\n",
-               (long long)ctrl, (long long)qenc, (long long)qdec);
+  if (ctrl < 0 || qenc < 0 || qdec < 0) return false;
 
   rv = nghttp3_conn_bind_control_stream(c->h3conn, ctrl);
-  if (rv != 0) { std::fprintf(stderr, "H3 client: bind_control_stream: %d\n", rv); return false; }
+  if (rv != 0) return false;
   rv = nghttp3_conn_bind_qpack_streams(c->h3conn, qenc, qdec);
-  if (rv != 0) { std::fprintf(stderr, "H3 client: bind_qpack_streams: %d\n", rv); return false; }
+  if (rv != 0) return false;
   h3_client_flush(c);
-  std::fprintf(stderr, "H3 client: HTTP/3 setup complete\n");
   return true;
 }
 
@@ -201,31 +184,12 @@ static QUIC_STATUS QUIC_API client_stream_cb(HQUIC stream, void *context,
   switch (event->Type) {
     case QUIC_STREAM_EVENT_RECEIVE: {
       auto it = c->stream_ids.find(stream);
-      if (it == c->stream_ids.end()) {
-        std::fprintf(stderr, "H3 client recv: unknown stream handle\n");
-        break;
-      }
+      if (it == c->stream_ids.end()) break;
       int64_t sid = it->second;
-      uint64_t total = 0;
-      for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) total += event->RECEIVE.Buffers[i].Length;
-      std::fprintf(stderr, "H3 client recv: sid=%lld %llu bytes fin=%d",
-                   (long long)sid, (unsigned long long)total,
-                   (event->RECEIVE.Flags & QUIC_RECEIVE_FLAG_FIN) ? 1 : 0);
-      if (total > 0 && total <= 32 && event->RECEIVE.BufferCount > 0) {
-        std::fprintf(stderr, " hex=");
-        const uint8_t *p = event->RECEIVE.Buffers[0].Buffer;
-        for (uint32_t j = 0; j < event->RECEIVE.Buffers[0].Length && j < 32; ++j)
-          std::fprintf(stderr, "%02x", p[j]);
-      }
-      std::fprintf(stderr, "\n");
       for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
-        nghttp3_ssize consumed = nghttp3_conn_read_stream(c->h3conn, sid,
+        nghttp3_conn_read_stream(c->h3conn, sid,
                                  event->RECEIVE.Buffers[i].Buffer,
                                  event->RECEIVE.Buffers[i].Length, 0);
-        if (consumed < 0) {
-          std::fprintf(stderr, "H3 client recv: read_stream error %lld sid=%lld\n",
-                       (long long)consumed, (long long)sid);
-        }
       }
       if (event->RECEIVE.Flags & QUIC_RECEIVE_FLAG_FIN) {
         nghttp3_conn_read_stream(c->h3conn, sid, nullptr, 0, 1);
@@ -359,23 +323,18 @@ bool H3Client::connect(const std::string &host, uint16_t port, bool validate_cer
     return false;
   }
 
-  std::fprintf(stderr, "H3 client: waiting for QUIC handshake...\n");
   {
     std::unique_lock<std::mutex> lk(c->mu);
     if (!c->cv.wait_for(lk, std::chrono::seconds(5),
                         [c] { return c->connected || c->conn_failed; })) {
       impl_->error = "QUIC handshake timed out (5s)";
-      std::fprintf(stderr, "H3 client: %s\n", impl_->error.c_str());
       return false;
     }
     if (c->conn_failed) {
       impl_->error = "QUIC handshake failed";
-      std::fprintf(stderr, "H3 client: %s\n", impl_->error.c_str());
       return false;
     }
   }
-  std::fprintf(stderr, "H3 client: QUIC connected\n");
-
   if (!setup_h3_client(c)) {
     impl_->error = "HTTP/3 setup failed";
     return false;
@@ -439,11 +398,8 @@ std::vector<uint8_t> H3Client::fetch(const std::string &path_and_query) {
     c->responses[sid] = {};
   }
 
-  std::fprintf(stderr, "H3 client: submit_request stream=%lld path=%s\n",
-               (long long)sid, path_and_query.c_str());
   int rv = nghttp3_conn_submit_request(c->h3conn, sid, nva, 4, nullptr, nullptr);
   if (rv != 0) {
-    std::fprintf(stderr, "H3 client: submit_request failed: %d\n", rv);
     impl_->error = "submit_request failed";
     return {};
   }
@@ -456,7 +412,6 @@ std::vector<uint8_t> H3Client::fetch(const std::string &path_and_query) {
           return it != c->responses.end() && it->second.done;
         })) {
       impl_->error = "H3 fetch timed out (10s)";
-      std::fprintf(stderr, "H3 client: %s for stream %lld\n", impl_->error.c_str(), (long long)sid);
       return {};
     }
   }
