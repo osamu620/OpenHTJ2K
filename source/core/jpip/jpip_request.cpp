@@ -102,6 +102,8 @@ RequestParseStatus parse_jpip_query(const std::string &query_in, JpipRequest *ou
         p = (c == std::string::npos) ? val.size() : c + 1;
       }
       out->has_comps = true;
+    } else if (key == "model") {
+      out->model = val;
     } else if (key == "type") {
       out->type = val;
       if (val != "jpp-stream") {

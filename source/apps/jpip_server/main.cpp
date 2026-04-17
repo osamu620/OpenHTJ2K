@@ -34,6 +34,7 @@
 #include "jpip_response.hpp"
 #include "packet_locator.hpp"
 #include "precinct_index.hpp"
+#include "cache_model.hpp"
 #include "tcp_socket.hpp"
 #include "view_window.hpp"
 #ifdef OPENHTJ2K_ENABLE_QUIC
@@ -65,8 +66,10 @@ struct ServerState {
   std::string                       target_id;
 };
 
-// Build the JPP-stream for a given ViewWindow.
-std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &vw) {
+// Build the JPP-stream for a given ViewWindow, skipping data-bins
+// the client already has (per the cache model from §C.9).
+std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &vw,
+                                      const CacheModel &client_cache = {}) {
   auto keys = resolve_view_window(*st.idx, vw);
   std::unordered_set<uint64_t> keep;
   keep.reserve(keys.size());
@@ -74,19 +77,23 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
 
   std::vector<uint8_t> stream;
   MessageHeaderContext ctx;
-  emit_main_header_databin(st.codestream.data(), st.codestream.size(), st.layout, ctx, stream);
+  if (!client_cache.has(kMsgClassMainHeader, 0))
+    emit_main_header_databin(st.codestream.data(), st.codestream.size(), st.layout, ctx, stream);
   for (uint32_t t = 0; t < st.idx->num_tiles(); ++t) {
-    emit_tile_header_databin(st.codestream.data(), st.codestream.size(),
-                             static_cast<uint16_t>(t), st.layout, ctx, stream);
+    if (!client_cache.has(kMsgClassTileHeader, t))
+      emit_tile_header_databin(st.codestream.data(), st.codestream.size(),
+                               static_cast<uint16_t>(t), st.layout, ctx, stream);
   }
-  emit_metadata_bin_zero(ctx, stream);
+  if (!client_cache.has(kMsgClassMetadata, 0))
+    emit_metadata_bin_zero(ctx, stream);
   for (uint32_t t = 0; t < st.idx->num_tiles(); ++t) {
     for (uint16_t c = 0; c < st.idx->num_components(); ++c) {
       const auto &info = st.idx->tile_component(static_cast<uint16_t>(t), c);
       for (uint8_t r = 0; r <= info.NL; ++r) {
         const uint32_t n = info.npw[r] * info.nph[r];
         for (uint32_t p = 0; p < n; ++p) {
-          if (keep.count(st.idx->I(static_cast<uint16_t>(t), c, r, p))) {
+          const uint64_t I = st.idx->I(static_cast<uint16_t>(t), c, r, p);
+          if (keep.count(I) && !client_cache.has(kMsgClassPrecinct, I)) {
             emit_precinct_databin(st.codestream.data(), st.codestream.size(),
                                   static_cast<uint16_t>(t), c, r, p,
                                   *st.idx, *st.locator, ctx, stream);
@@ -158,7 +165,9 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();
 
-  auto jpp = build_jpp_stream(st, req.view_window);
+  CacheModel client_cache;
+  if (!req.model.empty()) client_cache = CacheModel::parse(req.model);
+  auto jpp = build_jpp_stream(st, req.view_window, client_cache);
 
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -196,7 +205,9 @@ std::vector<uint8_t> handle_h3_request(const ServerState &st,
 
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();
-  auto jpp = build_jpp_stream(st, jpip_req.view_window);
+  CacheModel h3_cache;
+  if (!jpip_req.model.empty()) h3_cache = CacheModel::parse(jpip_req.model);
+  auto jpp = build_jpp_stream(st, jpip_req.view_window, h3_cache);
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 

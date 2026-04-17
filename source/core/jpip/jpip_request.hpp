@@ -36,6 +36,8 @@ struct JpipRequest {
   bool        has_comps  = false;
   // §C.4 Table C.4: image return type.  Must be "jpp-stream" for our use.
   std::string type;
+  // §C.9: client cache model — lists data-bins the client already has.
+  std::string model;
 };
 
 enum class RequestParseStatus : uint8_t {
