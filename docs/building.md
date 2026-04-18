@@ -38,7 +38,8 @@ on platform.
 |---|---|---|
 | `-DCMAKE_BUILD_TYPE=<Release\|Debug\|RelWithDebInfo>` | (none) | Optimization and debug info level. `RelWithDebInfo` is the recommended mode for profiling. |
 | `-DOPENHTJ2K_THREAD=ON` | `OFF` | Enable the built-in thread pool for multi-threaded encode and decode. Strongly recommended. |
-| `-DOPENHTJ2K_RTP=ON` | `OFF` | Build the experimental RFC 9828 RTP receiver (see below). Adds a GLFW + OpenGL dependency. |
+| `-DOPENHTJ2K_RTP=ON` | `OFF` | Build the experimental RFC 9828 RTP receiver (see below). Adds a GLFW + OpenGL dependency. Also builds the JPIP foveation demo. |
+| `-DOPENHTJ2K_QUIC=ON` | `OFF` | Enable HTTP/3 over QUIC for the JPIP server and demo. Requires MsQuic + nghttp3 (`brew install libmsquic libnghttp3` on macOS). |
 | `-DENABLE_AVX2=OFF` | auto | Force-disable AVX2 dispatch. Auto-detected via `-march=native` on x86-64. |
 | `-DENABLE_ARM_NEON=OFF` | auto | Force-disable NEON dispatch on AArch64. |
 | `-DBUILD_SHARED_LIBS=OFF` | `ON` | Build a static library instead of a shared one. |
