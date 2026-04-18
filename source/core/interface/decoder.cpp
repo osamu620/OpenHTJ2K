@@ -118,13 +118,6 @@ class openhtj2k_decoder_impl {
   void invoke_line_based_direct(PlanarOutputDesc *descs, uint16_t nc,
                                 std::vector<uint32_t> &, std::vector<uint32_t> &,
                                 std::vector<uint8_t> &, std::vector<bool> &);
-  void invoke_dual_resolution(
-      std::function<void(uint32_t, int32_t *const *, uint16_t)> ll_cb,
-      std::function<void(uint32_t, int32_t *const *, uint16_t)> foveal_cb,
-      uint8_t max_reduce,
-      std::vector<uint32_t> &ll_w, std::vector<uint32_t> &ll_h,
-      std::vector<uint32_t> &fov_w, std::vector<uint32_t> &fov_h,
-      std::vector<uint8_t> &depth, std::vector<bool> &is_signed);
   void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
                                     std::vector<uint32_t> &, std::vector<uint8_t> &,
                                     std::vector<bool> &);
@@ -1244,52 +1237,6 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
   cached_header_fingerprint_ = fp;
 }
 
-void openhtj2k_decoder_impl::invoke_dual_resolution(
-    std::function<void(uint32_t, int32_t *const *, uint16_t)> ll_cb,
-    std::function<void(uint32_t, int32_t *const *, uint16_t)> foveal_cb,
-    uint8_t max_reduce,
-    std::vector<uint32_t> &ll_w, std::vector<uint32_t> &ll_h,
-    std::vector<uint32_t> &fov_w, std::vector<uint32_t> &fov_h,
-    std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
-  if (!is_codestream_set || !is_parsed) {
-    throw std::runtime_error("invoke_dual_resolution: decoder not initialized");
-  }
-
-  // Clamp max_reduce to the safe maximum for this codestream.
-  const uint8_t safe_max = get_max_safe_reduce_NL();
-  if (max_reduce > safe_max) max_reduce = safe_max;
-
-  // Save the caller's precinct filter (used for foveal pass only).
-  auto foveal_filter = precinct_filter_;
-
-  // ── Pass 1: LL (coarse periphery) ────────────────────────────────────
-  // Decode at max reduction with no precinct filter → all precincts at
-  // the coarsest resolution.  Output is tiny (e.g., 120x68 for NL=5).
-  const uint8_t orig_reduce = reduce_NL;
-  reduce_NL = max_reduce;
-  precinct_filter_ = {};
-  in.set_position(0);
-  main_header = {};
-  main_header.read(in);
-  in.rewind_2bytes();
-  invoke_line_based_stream(ll_cb, ll_w, ll_h, depth, is_signed);
-
-  // ── Pass 2: Foveal (full resolution, filtered precincts) ─────────────
-  // Decode at full resolution with the caller's precinct filter.  Absent
-  // precincts produce zero rows via Phase 4A IDWT zero-skip.
-  reduce_NL = 0;
-  precinct_filter_ = std::move(foveal_filter);
-  in.set_position(0);
-  main_header = {};
-  main_header.read(in);
-  in.rewind_2bytes();
-  invoke_line_based_stream(foveal_cb, fov_w, fov_h, depth, is_signed);
-
-  // Restore original reduce_NL.
-  reduce_NL = orig_reduce;
-  precinct_filter_ = {};
-}
-
 void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
                                                           std::vector<uint32_t> &width,
                                                           std::vector<uint32_t> &height,
@@ -1367,17 +1314,6 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
     }
     tileSet[i].decode_line_based_predecoded(main_header, reduce_NL, buf);
   }
-}
-
-void openhtj2k_decoder::invoke_dual_resolution(
-    std::function<void(uint32_t, int32_t *const *, uint16_t)> ll_cb,
-    std::function<void(uint32_t, int32_t *const *, uint16_t)> foveal_cb,
-    uint8_t max_reduce,
-    std::vector<uint32_t> &ll_w, std::vector<uint32_t> &ll_h,
-    std::vector<uint32_t> &fov_w, std::vector<uint32_t> &fov_h,
-    std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
-  this->impl->invoke_dual_resolution(ll_cb, foveal_cb, max_reduce,
-                                     ll_w, ll_h, fov_w, fov_h, depth, is_signed);
 }
 
 void openhtj2k_decoder::invoke_line_based_predecoded(std::vector<int32_t *> &buf,

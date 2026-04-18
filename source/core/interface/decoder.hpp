@@ -135,28 +135,6 @@ class openhtj2k_decoder {
   OPENHTJ2K_EXPORT void set_packet_observer(
       std::function<void(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc,
                          uint16_t layer, uint64_t offset, uint64_t length)> f);
-  // Phase 4B dual-resolution decode for foveated rendering.
-  //
-  // Two sequential decode passes from the same codestream:
-  //   Pass 1: reduce_NL = max_reduce → coarse output (tiny periphery)
-  //   Pass 2: reduce_NL = 0 → full resolution (uses the currently set
-  //           precinct filter to limit to the foveal region)
-  //
-  // The LL callback gets the coarse image (e.g., 120x68 for max_reduce=5).
-  // The foveal callback gets full-canvas rows but only foveal rows have
-  // non-zero data (absent precincts → zero via Phase 4A IDWT zero-skip).
-  //
-  // Caller must call set_precinct_filter() before this to define the
-  // foveal region.  The filter is used only for the foveal pass; the
-  // LL pass decodes all precincts at the reduced resolution.
-  OPENHTJ2K_EXPORT void invoke_dual_resolution(
-      std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> ll_cb,
-      std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> foveal_cb,
-      uint8_t max_reduce,
-      std::vector<uint32_t> &ll_width, std::vector<uint32_t> &ll_height,
-      std::vector<uint32_t> &fov_width, std::vector<uint32_t> &fov_height,
-      std::vector<uint8_t> &depth, std::vector<bool> &is_signed);
-
   // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
   // the line-based IDWT using those pre-decoded values.  If this matches invoke()
   // but invoke_line_based() does not, the bug is in decode_strip(); otherwise
