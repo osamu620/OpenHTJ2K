@@ -113,6 +113,15 @@ class openhtj2k_decoder {
   // sequence for the stream you want to keep cached.  Passing false drops
   // any cached state and returns the decoder to the legacy per-frame path.
   OPENHTJ2K_EXPORT void enable_single_tile_reuse(bool on);
+  // Phase 4B spatial-region early exit.  When set, the line-based decode
+  // stops after this many luma rows instead of decoding the full canvas.
+  // The IDWT, MCT, and callback are skipped entirely for rows past the
+  // limit.  Default = UINT32_MAX (no limit, all rows decoded).
+  // Set to foveal_y1 for foveated rendering: rows 0..y0 benefit from
+  // Phase 4A zero-skip (absent precincts → near-zero cost), rows y0..y1
+  // are full decode, rows y1..H are skipped (zero cost).
+  OPENHTJ2K_EXPORT void set_row_limit(uint32_t limit);
+
   // JPIP partial-decode hook.  When set, every subsequent invoke*() call
   // consults this filter per-packet: precincts for which the filter returns
   // false have their body bytes dropped (not attached to codeblocks) while

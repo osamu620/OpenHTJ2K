@@ -807,9 +807,13 @@ class j2k_tile : public j2k_tile_base {
   // a callback instead of writing to a pre-allocated full-image buffer.
   // The callback receives (y, row_ptrs[NC], NC) where row_ptrs[c] points to one
   // decoded int32_t row for component c.  Allocates only per-row scratch buffers.
+  // row_limit: stop decoding after this many luma rows (default = all).
+  // Used by Phase 4B spatial-region skip to avoid IDWT work for rows
+  // past the foveal region.  Normal decode passes UINT32_MAX.
   void decode_line_based_stream(
       j2k_main_header &main_header, uint8_t reduce_NL,
-      const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb);
+      const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb,
+      uint32_t row_limit = UINT32_MAX);
   // Direct-to-planar streaming decode.  Reads float from IDWT ring buffers and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
   // the strip scratch, out_rows int32 intermediate, and callback overhead.
