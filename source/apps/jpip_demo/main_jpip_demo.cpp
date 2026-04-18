@@ -102,6 +102,7 @@ struct Options {
   bool        decode_on_move   = false;
   bool        vsync            = true;
   uint8_t     reduce           = 0;
+  bool        dual_res         = false;
   bool        use_filter       = false;
   // When non-empty, the demo fetches each frame's JPP-stream from the
   // given JPIP server instead of doing in-process round-trip.
@@ -130,6 +131,7 @@ bool parse_args(int argc, char **argv, Options &opt) {
     else if (a == "--parafovea-ratio" && i + 1 < argc) opt.parafovea_ratio = std::stof(argv[++i]);
     else if (a == "--periphery-ratio" && i + 1 < argc) opt.periphery_ratio = std::stof(argv[++i]);
     else if (a == "--reduce" && i + 1 < argc)        opt.reduce = static_cast<uint8_t>(std::stoul(argv[++i]));
+    else if (a == "--dual-res")                      opt.dual_res = true;
     else if (a == "--decode-on-move-only")          opt.decode_on_move = true;
     else if (a == "--use-filter")                   opt.use_filter = true;
     else if (a == "--no-vsync")                     opt.vsync = false;
@@ -597,41 +599,102 @@ int main(int argc, char **argv) {
           });
     }
 
-    // Line-based stream decode at full decoded resolution.
-    // The GPU texture scaler handles downsampling to window size with
-    // bilinear filtering — no CPU nearest-neighbour artifacts.
     std::vector<uint32_t> w, h;
     std::vector<uint8_t>  depth;
     std::vector<bool>     sgn;
     uint32_t tex_w = 0, tex_h = 0;
     bool ok      = true;
     bool dims_ok = true;
+
+    auto row_to_rgb = [](uint32_t y, int32_t *const *rows, uint16_t nc,
+                         int32_t shift, uint8_t *rgb_buf, uint32_t cw) {
+      uint8_t *dst = rgb_buf + static_cast<std::size_t>(y) * cw * 3u;
+      for (uint32_t x = 0; x < cw; ++x) {
+        auto to_u8 = [shift](int32_t v) -> uint8_t {
+          if (shift > 0) v >>= shift;
+          if (v < 0) return 0;
+          if (v > 255) return 255;
+          return static_cast<uint8_t>(v);
+        };
+        dst[3u * x + 0] = to_u8(rows[0][x]);
+        dst[3u * x + 1] = to_u8(rows[1][x]);
+        dst[3u * x + 2] = to_u8(rows[2][x]);
+      }
+    };
+
     try {
-      dec.invoke_line_based_stream(
-          [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
-            if (nc < 3 || w.empty() || h.empty()) { dims_ok = false; return; }
-            const uint32_t cw = w[0];
-            const uint32_t ch = h[0];
-            if (tex_w != cw || tex_h != ch) {
-              tex_w = cw; tex_h = ch;
-              rgb.assign(static_cast<std::size_t>(cw) * ch * 3u, 0);
-            }
-            if (y >= ch) return;
-            const int32_t shift = (depth.empty() ? 0 : static_cast<int32_t>(depth[0]) - 8);
-            uint8_t *dst = rgb.data() + static_cast<std::size_t>(y) * cw * 3u;
-            for (uint32_t x = 0; x < cw; ++x) {
-              auto to_u8 = [shift](int32_t v) -> uint8_t {
-                if (shift > 0) v >>= shift;
-                if (v < 0) return 0;
-                if (v > 255) return 255;
-                return static_cast<uint8_t>(v);
-              };
-              dst[3u * x + 0] = to_u8(rows[0][x]);
-              dst[3u * x + 1] = to_u8(rows[1][x]);
-              dst[3u * x + 2] = to_u8(rows[2][x]);
-            }
-          },
-          w, h, depth, sgn);
+      if (opt.dual_res) {
+        // ── Phase 4B dual-resolution decode ──────────────────────────
+        // Pass 1: LL at max reduce → tiny coarse background
+        // Pass 2: Full-res with precinct filter → sharp fovea overlay
+        const uint8_t max_red = dec.get_max_safe_reduce_NL();
+        std::vector<uint32_t> ll_w, ll_h, fov_w, fov_h;
+        std::vector<uint8_t> ll_rgb;
+        uint32_t ll_tw = 0, ll_th = 0;
+
+        dec.invoke_dual_resolution(
+            // LL callback: store coarse image
+            [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+              if (nc < 3 || ll_w.empty()) { dims_ok = false; return; }
+              const uint32_t cw = ll_w[0], ch = ll_h[0];
+              if (ll_tw != cw || ll_th != ch) {
+                ll_tw = cw; ll_th = ch;
+                ll_rgb.assign(static_cast<std::size_t>(cw) * ch * 3u, 0);
+              }
+              if (y >= ch) return;
+              const int32_t shift = (depth.empty() ? 0 : static_cast<int32_t>(depth[0]) - 8);
+              row_to_rgb(y, rows, nc, shift, ll_rgb.data(), cw);
+            },
+            // Foveal callback: overwrite onto upscaled LL
+            [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+              if (nc < 3 || fov_w.empty()) { dims_ok = false; return; }
+              const uint32_t cw = fov_w[0], ch = fov_h[0];
+              if (tex_w != cw || tex_h != ch) {
+                tex_w = cw; tex_h = ch;
+                // Upscale LL into the full-canvas RGB buffer
+                rgb.assign(static_cast<std::size_t>(cw) * ch * 3u, 0);
+                if (ll_tw > 0 && ll_th > 0) {
+                  for (uint32_t fy = 0; fy < ch; ++fy) {
+                    const uint32_t ly = static_cast<uint32_t>(
+                        static_cast<uint64_t>(fy) * ll_th / ch);
+                    const uint8_t *src = ll_rgb.data() + static_cast<size_t>(ly) * ll_tw * 3u;
+                    uint8_t *dst = rgb.data() + static_cast<size_t>(fy) * cw * 3u;
+                    for (uint32_t fx = 0; fx < cw; ++fx) {
+                      const uint32_t lx = static_cast<uint32_t>(
+                          static_cast<uint64_t>(fx) * ll_tw / cw);
+                      dst[3u * fx + 0] = src[3u * lx + 0];
+                      dst[3u * fx + 1] = src[3u * lx + 1];
+                      dst[3u * fx + 2] = src[3u * lx + 2];
+                    }
+                  }
+                }
+              }
+              if (y >= ch) return;
+              // Check if this row has data (non-zero from foveal precincts)
+              uint32_t acc = 0;
+              for (uint32_t x = 0; x < cw && acc == 0; ++x)
+                acc |= static_cast<uint32_t>(rows[0][x] | rows[1][x] | rows[2][x]);
+              if (acc == 0) return;  // absent-precinct row — keep LL background
+              const int32_t shift = (depth.empty() ? 0 : static_cast<int32_t>(depth[0]) - 8);
+              row_to_rgb(y, rows, nc, shift, rgb.data(), cw);
+            },
+            max_red, ll_w, ll_h, fov_w, fov_h, depth, sgn);
+      } else {
+        // ── Single-pass decode (original path) ──────────────────────
+        dec.invoke_line_based_stream(
+            [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+              if (nc < 3 || w.empty() || h.empty()) { dims_ok = false; return; }
+              const uint32_t cw = w[0], ch = h[0];
+              if (tex_w != cw || tex_h != ch) {
+                tex_w = cw; tex_h = ch;
+                rgb.assign(static_cast<std::size_t>(cw) * ch * 3u, 0);
+              }
+              if (y >= ch) return;
+              const int32_t shift = (depth.empty() ? 0 : static_cast<int32_t>(depth[0]) - 8);
+              row_to_rgb(y, rows, nc, shift, rgb.data(), cw);
+            },
+            w, h, depth, sgn);
+      }
     } catch (std::exception &e) {
       std::fprintf(stderr, "decode failed: %s\n", e.what());
       break;
