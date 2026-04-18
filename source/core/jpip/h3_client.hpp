@@ -29,6 +29,12 @@ class H3Client {
   // Sends an HTTP/3 GET request and blocks until the response body is received.
   std::vector<uint8_t> fetch(const std::string &path_and_query);
 
+  // Submit multiple HTTP/3 GET requests concurrently on separate QUIC
+  // streams and block until all responses are received.  Each request is
+  // a standard JPIP view-window query.  Returns one response body per
+  // input path, in the same order.
+  std::vector<std::vector<uint8_t>> fetch_multi(const std::vector<std::string> &paths);
+
   std::string last_error() const;
 
  private:

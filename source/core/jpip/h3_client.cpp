@@ -423,6 +423,79 @@ std::vector<uint8_t> H3Client::fetch(const std::string &path_and_query) {
   return body;
 }
 
+std::vector<std::vector<uint8_t>> H3Client::fetch_multi(const std::vector<std::string> &paths) {
+  auto *c = impl_->conn;
+  if (!c || !c->h3conn) { impl_->error = "not connected"; return {}; }
+
+  // Open all streams and submit all requests before flushing.
+  std::vector<int64_t> sids;
+  sids.reserve(paths.size());
+
+  for (const auto &path : paths) {
+    HQUIC stream = nullptr;
+    if (QUIC_FAILED(impl_->q->StreamOpen(c->conn, QUIC_STREAM_OPEN_FLAG_NONE,
+                                         client_stream_cb, c, &stream))) {
+      impl_->error = "StreamOpen failed";
+      return {};
+    }
+    if (QUIC_FAILED(impl_->q->StreamStart(stream, QUIC_STREAM_START_FLAG_IMMEDIATE))) {
+      impl_->q->StreamClose(stream);
+      impl_->error = "StreamStart failed";
+      return {};
+    }
+
+    int64_t sid = 4 * c->next_bidi_id++;
+    c->stream_ids[stream] = sid;
+    c->id_to_stream[sid]  = stream;
+    sids.push_back(sid);
+
+    nghttp3_nv nva[] = {
+      {(uint8_t *)":method", (uint8_t *)"GET", 7, 3, NGHTTP3_NV_FLAG_NONE},
+      {(uint8_t *)":scheme", (uint8_t *)"https", 7, 5, NGHTTP3_NV_FLAG_NONE},
+      {(uint8_t *)":authority", (uint8_t *)impl_->host.c_str(), 10,
+       impl_->host.size(), NGHTTP3_NV_FLAG_NO_COPY_VALUE},
+      {(uint8_t *)":path", (uint8_t *)path.c_str(), 5,
+       path.size(), NGHTTP3_NV_FLAG_NO_COPY_VALUE},
+    };
+
+    {
+      std::lock_guard<std::mutex> lk(c->mu);
+      c->responses[sid] = {};
+    }
+
+    nghttp3_conn_submit_request(c->h3conn, sid, nva, 4, nullptr, nullptr);
+  }
+
+  // Single flush sends all requests at once.
+  h3_client_flush(c);
+
+  // Wait for all responses.
+  {
+    std::unique_lock<std::mutex> lk(c->mu);
+    if (!c->cv.wait_for(lk, std::chrono::seconds(10), [c, &sids] {
+          for (int64_t sid : sids) {
+            auto it = c->responses.find(sid);
+            if (it == c->responses.end() || !it->second.done) return false;
+          }
+          return true;
+        })) {
+      impl_->error = "H3 fetch_multi timed out (10s)";
+      return {};
+    }
+  }
+
+  // Collect results in order.
+  std::vector<std::vector<uint8_t>> results;
+  results.reserve(sids.size());
+  std::lock_guard<std::mutex> lk(c->mu);
+  for (int64_t sid : sids) {
+    auto it = c->responses.find(sid);
+    results.push_back(std::move(it->second.body));
+    c->responses.erase(it);
+  }
+  return results;
+}
+
 std::string H3Client::last_error() const { return impl_->error; }
 
 }  // namespace jpip
