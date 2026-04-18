@@ -67,6 +67,7 @@ class j2c_src_memory {
   int get_N_byte(uint8_t *buf, uint32_t length);
   uint16_t get_word();
   uint8_t *get_buf_pos() { return (buf + pos); }
+  void set_position(uint32_t p) { pos = p; }
   int rewind_2bytes();
   int forward_Nbytes(uint32_t N);
   uint32_t get_remaining() const { return len - pos; }
