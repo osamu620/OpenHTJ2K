@@ -15,21 +15,19 @@
 </style>
 </head>
 <body>
-
 <div id="controls">
   <label>JPIP Server: <input id="server" value="http://localhost:8080" /></label>
   <button id="connectBtn">Connect</button>
   <span id="info"></span>
 </div>
 <canvas id="canvas"></canvas>
-<div id="stats">Scroll to zoom, drag to pan</div>
+<div id="stats">Arrows: pan (Shift=fast) | +/-: zoom | Home: reset | Trackpad: scroll=pan, pinch/Ctrl+scroll=zoom</div>
 <script>
   (function() {
     var p = new URLSearchParams(location.search);
     var s = p.get('server'); if (s) document.getElementById('server').value = s;
   })();
 </script>
-
 <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
 <script>
   if (!window.crossOriginIsolated && window.isSecureContext) {
@@ -55,36 +53,31 @@ const forceVariant = new URLSearchParams(location.search).get('variant');
 const useMt = forceVariant === 'mt' ? true : forceVariant === 'st' ? false : (hasSimd && hasMt);
 const wasmFile = useMt ? './libopen_htj2k_jpip_mt_simd.js' : './libopen_htj2k_jpip.js';
 const {default: createModule} = await import(wasmFile);
-
 const $ = id => document.getElementById(id);
 
-let M = null;
-let ctx = 0;
-let canvasW = 0, canvasH = 0;
-let rgbPtr = 0;
-let serverUrl = '';
-let busy = false;
+let M = null, ctx = 0, canvasW = 0, canvasH = 0;
+let serverUrl = '', busy = false;
+let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
+let decReduce = -1, rgbPtr = 0;
 
-function wasmWrite(data, ptr) {
-  new Uint8Array(M.HEAPU8.buffer).set(data, ptr);
-}
+function wasmWrite(data, ptr) { new Uint8Array(M.HEAPU8.buffer).set(data, ptr); }
 
-// Viewport state
-let vpW = 0, vpH = 0;
-let panX = 0, panY = 0;   // top-left in canvas coordinates
-let zoom = 1.0;           // display scale: 1.0 = fit width, >1 = zoom in
-
-// WebGL2
+// ── WebGL2 with aspect-ratio-correct quad ───────────────────────────────
 let gl = null, glTex = null, glProgram = null, texW = 0, texH = 0;
+let uUV0Loc, uUV1Loc, uScaleLoc;
 
-function initWebGL(canvas, w, h) {
+function initWebGL(canvas) {
   gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
   if (!gl) return false;
   const vs = `#version 300 es
+    uniform vec2 uUV0, uUV1, uScale;
     const vec2 pos[4] = vec2[](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(1,1));
-    const vec2 uv[4]  = vec2[](vec2(0,1),vec2(1,1),vec2(0,0),vec2(1,0));
     out vec2 vUV;
-    void main() { vUV = uv[gl_VertexID]; gl_Position = vec4(pos[gl_VertexID],0,1); }`;
+    void main() {
+      vec2 t = vec2(gl_VertexID & 1, gl_VertexID >> 1);
+      vUV = mix(vec2(uUV0.x, 1.0-uUV0.y), vec2(uUV1.x, 1.0-uUV1.y), t);
+      gl_Position = vec4(pos[gl_VertexID] * uScale, 0, 1);
+    }`;
   const fs = `#version 300 es
     precision mediump float;
     uniform sampler2D uTex;
@@ -101,51 +94,103 @@ function initWebGL(canvas, w, h) {
   gl.attachShader(glProgram, compile(gl.VERTEX_SHADER, vs));
   gl.attachShader(glProgram, compile(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(glProgram); gl.useProgram(glProgram);
+  uUV0Loc = gl.getUniformLocation(glProgram, 'uUV0');
+  uUV1Loc = gl.getUniformLocation(glProgram, 'uUV1');
+  uScaleLoc = gl.getUniformLocation(glProgram, 'uScale');
+  gl.uniform2f(uScaleLoc, 1, 1);
   glTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, glTex);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-  texW = w; texH = h;
   gl.bindVertexArray(gl.createVertexArray());
   gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.067, 0.067, 0.067, 1);
   return true;
 }
 
-function drawFrame(rgba, w, h) {
-  if (!gl) return;
-  if (w !== texW || h !== texH) {
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    texW = w; texH = h;
+function drawViewport() {
+  if (!gl || texW === 0) return;
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  const viewW = vpW / zoom;
+  const viewH = vpH / zoom;
+  const cx0 = Math.max(0, panX);
+  const cy0 = Math.max(0, panY);
+  const cx1 = Math.min(canvasW, panX + viewW);
+  const cy1 = Math.min(canvasH, panY + viewH);
+
+  gl.uniform2f(uUV0Loc, cx0 / canvasW, cy0 / canvasH);
+  gl.uniform2f(uUV1Loc, cx1 / canvasW, cy1 / canvasH);
+
+  // Scale the quad to maintain the visible region's aspect ratio
+  const visAspect = (cx1 - cx0) / (cy1 - cy0);
+  const vpAspect = vpW / vpH;
+  let sx = 1, sy = 1;
+  if (visAspect > vpAspect) {
+    sy = vpAspect / visAspect;  // image wider than viewport → shrink height
+  } else {
+    sx = visAspect / vpAspect;  // image taller than viewport → shrink width
   }
-  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  gl.uniform2f(uScaleLoc, sx, sy);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
-function buildQuery() {
-  const fW = Math.max(1, Math.round(canvasW * zoom));
-  const fH = Math.max(1, Math.round(canvasH * zoom));
-  const oX = Math.max(0, Math.round(panX * zoom));
-  const oY = Math.max(0, Math.round(panY * zoom));
-  const sW = Math.min(vpW, fW - oX);
-  const sH = Math.min(vpH, fH - oY);
-  let q = `fsiz=${fW},${fH}`;
-  if (oX > 0 || oY > 0) q += `&roff=${oX},${oY}`;
-  if (sW > 0 || sH > 0) q += `&rsiz=${sW},${sH}`;
-  q += '&type=jpp-stream';
-  return q;
+function computeReduce() {
+  if (zoom >= 0.5) return 0;
+  return Math.max(0, Math.min(5, Math.ceil(Math.log2(1.0 / zoom)) - 1));
 }
 
-async function fetchAndDecode() {
-  if (!M || !ctx || busy) return;
+// Track last fetch params to avoid redundant fetches
+let lastFetchKey = '';
+
+async function fetchView() {
+  const red = computeReduce();
+  const viewW = vpW / zoom;
+  const viewH = vpH / zoom;
+
+  // Build fetch key to detect if a refetch is needed
+  const key = `${red}:${Math.round(panX)}:${Math.round(panY)}:${Math.round(zoom*1000)}`;
+  if (key === lastFetchKey && texW > 0) { drawViewport(); return; }
+  if (busy) return;
   busy = true;
-  const q = buildQuery();
+  M._jpip_set_reduce(ctx, red);
+
+  // At high zoom (reduce <= 1): fetch only the viewport region → fast + hi-res
+  // At low zoom (reduce >= 2): fetch full image at reduced res → fast overview
+  const useViewport = (red <= 1);
+  let q, outW, outH;
+
+  if (useViewport) {
+    // Viewport-mode: request only the visible region at full(ish) resolution
+    const fW = canvasW;
+    const fH = canvasH;
+    const oX = Math.max(0, Math.round(panX));
+    const oY = Math.max(0, Math.round(panY));
+    const sW = Math.min(Math.round(viewW), canvasW - oX);
+    const sH = Math.min(Math.round(viewH), canvasH - oY);
+    q = `fsiz=${fW},${fH}&roff=${oX},${oY}&rsiz=${sW},${sH}&type=jpp-stream`;
+    // Output matches viewport (the decoded region maps 1:1)
+    outW = vpW;
+    outH = vpH;
+  } else {
+    // Full-image mode: request entire image at reduced resolution
+    const fW = Math.max(1, Math.round(canvasW * zoom));
+    const fH = Math.max(1, Math.round(canvasH * zoom));
+    q = `fsiz=${fW},${fH}&type=jpp-stream`;
+    const maxDim = 4096;
+    const rawW = Math.max(1, canvasW >> red);
+    const rawH = Math.max(1, canvasH >> red);
+    const scale = Math.min(1.0, maxDim / Math.max(rawW, rawH));
+    outW = Math.max(1, Math.round(rawW * scale));
+    outH = Math.max(1, Math.round(rawH * scale));
+  }
+
   try {
     const t0 = performance.now();
     const resp = await fetch(`${serverUrl}/jpip?${q}`);
-    if (!resp.ok) { $('stats').textContent = `HTTP ${resp.status}`; busy = false; return; }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const buf = new Uint8Array(await resp.arrayBuffer());
     const tFetch = performance.now();
 
@@ -154,22 +199,31 @@ async function fetchAndDecode() {
     wasmWrite(buf, ptr);
     M._jpip_add_response(ctx, ptr, buf.length);
     M._free(ptr);
-    const rc = M._jpip_end_frame(ctx, rgbPtr, vpW, vpH);
+
+    if (rgbPtr) M._free(rgbPtr);
+    rgbPtr = M._malloc(outW * outH * 4);
+    const rc = M._jpip_end_frame(ctx, rgbPtr, outW, outH);
     const tDecode = performance.now();
 
     if (rc === 0) {
-      const rgba = new Uint8Array(M.wasmMemory ? M.wasmMemory.buffer : M.HEAPU8.buffer, rgbPtr, vpW * vpH * 4);
-      drawFrame(rgba, vpW, vpH);
+      const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, outW * outH * 4);
+      gl.bindTexture(gl.TEXTURE_2D, glTex);
+      if (outW !== texW || outH !== texH) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, outW, outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+        texW = outW; texH = outH;
+      } else {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, outW, outH, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+      }
+      decReduce = red;
+      lastFetchKey = key;
+      drawViewport();
     }
-
-    const pct = (zoom * 100).toFixed(0);
+    const mode = useViewport ? 'viewport' : 'full';
     $('stats').textContent =
-      `${canvasW}×${canvasH} | zoom ${pct}% | pan (${Math.round(panX)}, ${Math.round(panY)}) | ` +
-      `fetch=${(tFetch - t0).toFixed(0)}ms decode=${(tDecode - tFetch).toFixed(0)}ms | ` +
-      `${(buf.length / 1024).toFixed(0)} KB`;
-  } catch (e) {
-    $('stats').textContent = `error: ${e.message}`;
-  }
+      `${canvasW}×${canvasH} | zoom ${(zoom*100).toFixed(0)}% reduce=${red} ${mode} (${outW}×${outH}) | ` +
+      `pan (${Math.round(panX)},${Math.round(panY)}) | ` +
+      `fetch=${(tFetch-t0).toFixed(0)}ms decode=${(tDecode-tFetch).toFixed(0)}ms | ${(buf.length/1024).toFixed(0)}KB`;
+  } catch (e) { $('stats').textContent = `error: ${e.message}`; }
   busy = false;
 }
 
@@ -177,18 +231,21 @@ async function init() {
   $('info').textContent = 'Loading WASM…';
   try {
     M = await createModule();
-    $('info').textContent = `WASM ready (${useMt ? 'MT+SIMD' : 'SIMD'}). Enter server URL and click Connect.`;
-  } catch (e) {
-    $('info').textContent = 'WASM load failed: ' + e.message;
-  }
+    $('info').textContent = `WASM ready (${useMt?'MT+SIMD':'SIMD'}). Enter server URL and click Connect.`;
+  } catch (e) { $('info').textContent = 'WASM load failed: ' + e.message; }
   $('connectBtn').onclick = connect;
 }
 
+function clampPan() {
+  const viewW = vpW / zoom, viewH = vpH / zoom;
+  panX = Math.max(0, Math.min(canvasW - viewW, panX));
+  panY = Math.max(0, Math.min(canvasH - viewH, panY));
+}
+
 async function connect() {
-  if (!M) { $('info').textContent = 'WASM not loaded yet'; return; }
+  if (!M) return;
   serverUrl = $('server').value.replace(/\/+$/, '');
   $('info').textContent = 'Connecting…';
-
   try {
     const resp = await fetch(`${serverUrl}/jpip?fsiz=1,1&type=jpp-stream`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -197,111 +254,102 @@ async function connect() {
     wasmWrite(buf, binPtr);
     ctx = M._jpip_create_context(binPtr, buf.length);
     M._free(binPtr);
-  } catch (e) {
-    $('info').textContent = `Connect failed: ${e.message}`;
-    return;
-  }
+  } catch (e) { $('info').textContent = `Connect failed: ${e.message}`; return; }
   if (!ctx) { $('info').textContent = 'Failed to build index'; return; }
 
   canvasW = M._jpip_get_canvas_width(ctx);
   canvasH = M._jpip_get_canvas_height(ctx);
-  const totalP = M._jpip_get_total_precincts(ctx);
 
   const c = $('canvas');
-  vpW = Math.min(window.innerWidth, 1920);
+  vpW = window.innerWidth;
   vpH = window.innerHeight - 40;
-  c.width = vpW;
-  c.height = vpH;
+  c.width = vpW; c.height = vpH;
+  initWebGL(c);
 
-  rgbPtr = M._malloc(vpW * vpH * 4);
-  initWebGL(c, vpW, vpH);
-
-  // Initial zoom: fit width
   zoom = vpW / canvasW;
-  panX = 0;
-  panY = 0;
+  panX = 0; panY = 0;
+  $('info').textContent = `${canvasW}×${canvasH}, ${M._jpip_get_total_precincts(ctx)} precincts`;
 
-  $('info').textContent = `${canvasW}×${canvasH}, ${totalP} precincts [WebGL2]`;
-
-  // Pan: mouse drag
-  let dragging = false, dragStartX = 0, dragStartY = 0, panStartX = 0, panStartY = 0;
-  c.addEventListener('mousedown', (e) => {
+  // ── Mouse drag = pan ──
+  let dragging = false, dsx = 0, dsy = 0, psx = 0, psy = 0;
+  c.addEventListener('mousedown', e => {
     dragging = true; c.classList.add('dragging');
-    dragStartX = e.clientX; dragStartY = e.clientY;
-    panStartX = panX; panStartY = panY;
+    dsx = e.clientX; dsy = e.clientY; psx = panX; psy = panY;
   });
-  window.addEventListener('mousemove', (e) => {
+  window.addEventListener('mousemove', e => {
     if (!dragging) return;
-    const dx = (e.clientX - dragStartX) / zoom;
-    const dy = (e.clientY - dragStartY) / zoom;
-    panX = Math.max(0, Math.min(canvasW - vpW / zoom, panStartX - dx));
-    panY = Math.max(0, Math.min(canvasH - vpH / zoom, panStartY - dy));
-    fetchAndDecode();
+    panX = psx - (e.clientX - dsx) / zoom;
+    panY = psy - (e.clientY - dsy) / zoom;
+    clampPan();
+    if (computeReduce() <= 1) fetchView(); else drawViewport();
   });
-  window.addEventListener('mouseup', () => {
-    dragging = false; c.classList.remove('dragging');
-  });
+  window.addEventListener('mouseup', () => { dragging = false; c.classList.remove('dragging'); });
 
-  // Zoom: scroll wheel (zoom toward cursor)
-  c.addEventListener('wheel', (e) => {
+  // ── Trackpad / wheel ──
+  // Mac trackpad: two-finger scroll = pan, pinch = zoom (ctrlKey set by browser)
+  // Mouse wheel: scroll = zoom
+  c.addEventListener('wheel', e => {
     e.preventDefault();
-    const rect = c.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) / vpW;
-    const my = (e.clientY - rect.top) / vpH;
-
-    const oldZoom = zoom;
-    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    zoom = Math.max(vpW / canvasW * 0.5, Math.min(4.0, zoom * factor));
-
-    // Adjust pan so the point under the cursor stays fixed
-    panX += (mx * vpW) * (1 / oldZoom - 1 / zoom);
-    panY += (my * vpH) * (1 / oldZoom - 1 / zoom);
-    panX = Math.max(0, panX);
-    panY = Math.max(0, panY);
-
-    fetchAndDecode();
+    if (e.ctrlKey) {
+      // Pinch-to-zoom (Mac) or Ctrl+scroll
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      const oldZoom = zoom;
+      zoom = Math.max(vpW / canvasW * 0.25, Math.min(8.0, zoom * factor));
+      const rect = c.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) / vpW;
+      const my = (e.clientY - rect.top) / vpH;
+      panX += (mx * vpW) * (1 / oldZoom - 1 / zoom);
+      panY += (my * vpH) * (1 / oldZoom - 1 / zoom);
+      clampPan();
+      if (computeReduce() !== decReduce) fetchView();
+      else drawViewport();
+    } else {
+      // Two-finger scroll = pan (Mac natural scrolling: flip Y)
+      panX += e.deltaX / zoom;
+      panY -= e.deltaY / zoom;
+      clampPan();
+      if (computeReduce() <= 1) fetchView(); else drawViewport();
+    }
   }, { passive: false });
 
-  // Touch: pinch to zoom, single-finger drag to pan
-  let lastTouchDist = 0, lastTouchMid = null;
-  c.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 1) {
-      dragging = true;
-      dragStartX = e.touches[0].clientX; dragStartY = e.touches[0].clientY;
-      panStartX = panX; panStartY = panY;
-    } else if (e.touches.length === 2) {
-      dragging = false;
-      const dx = e.touches[1].clientX - e.touches[0].clientX;
-      const dy = e.touches[1].clientY - e.touches[0].clientY;
-      lastTouchDist = Math.sqrt(dx * dx + dy * dy);
-      lastTouchMid = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-                        y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+  // ── Keyboard ──
+  window.addEventListener('keydown', e => {
+    const step = e.shiftKey ? 500 : 100;
+    let needRedraw = false, needRefetch = false;
+    switch (e.key) {
+      case 'ArrowLeft':  panX -= step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
+      case 'ArrowRight': panX += step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
+      case 'ArrowUp':    panY -= step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
+      case 'ArrowDown':  panY += step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
+      case '+': case '=': case 'PageUp': {
+        const old = zoom;
+        zoom = Math.min(8.0, zoom * 1.5);
+        panX += (vpW/2) * (1/old - 1/zoom);
+        panY += (vpH/2) * (1/old - 1/zoom);
+        if (computeReduce() !== decReduce) needRefetch = true; else needRedraw = true;
+        break;
+      }
+      case '-': case 'PageDown': {
+        const old = zoom;
+        zoom = Math.max(vpW/canvasW*0.25, zoom / 1.5);
+        panX += (vpW/2) * (1/old - 1/zoom);
+        panY += (vpH/2) * (1/old - 1/zoom);
+        if (computeReduce() !== decReduce) needRefetch = true; else needRedraw = true;
+        break;
+      }
+      case 'Home': case '0':
+        zoom = vpW/canvasW; panX=0; panY=0;
+        if (computeReduce() !== decReduce) needRefetch = true; else needRedraw = true;
+        break;
+      default: return;
     }
     e.preventDefault();
-  }, { passive: false });
-  c.addEventListener('touchmove', (e) => {
-    if (e.touches.length === 1 && dragging) {
-      const dx = (e.touches[0].clientX - dragStartX) / zoom;
-      const dy = (e.touches[0].clientY - dragStartY) / zoom;
-      panX = Math.max(0, panStartX - dx);
-      panY = Math.max(0, panStartY - dy);
-      fetchAndDecode();
-    } else if (e.touches.length === 2 && lastTouchDist > 0) {
-      const dx = e.touches[1].clientX - e.touches[0].clientX;
-      const dy = e.touches[1].clientY - e.touches[0].clientY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const factor = dist / lastTouchDist;
-      lastTouchDist = dist;
-      zoom = Math.max(vpW / canvasW * 0.5, Math.min(4.0, zoom * factor));
-      fetchAndDecode();
-    }
-    e.preventDefault();
-  }, { passive: false });
-  c.addEventListener('touchend', () => { dragging = false; lastTouchDist = 0; });
+    clampPan();
+    if (needRefetch) fetchView(); else if (needRedraw) drawViewport();
+  });
 
-  fetchAndDecode();
+  fetchView();
 }
-
 init();
 </script>
 </body>
