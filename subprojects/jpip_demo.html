@@ -16,21 +16,34 @@
 
 <div id="controls">
   <label>JPIP Server: <input id="server" value="http://localhost:8080" /></label>
-  <label>Reduce: <select id="reduce">
-    <option value="0">0 (full res)</option>
-    <option value="1" selected>1 (half res, 4x faster)</option>
-    <option value="2">2 (quarter res, 16x faster)</option>
-  </select></label>
   <button id="connectBtn">Connect</button>
   <span id="info"></span>
+  <br>
+  <label>Reduce: <select id="reduce">
+    <option value="0">0 (full res)</option>
+    <option value="1" selected>1 (half res)</option>
+    <option value="2">2 (quarter res)</option>
+  </select></label>
+  <label>Para ratio: <select id="para_ratio">
+    <option value="0.5" selected>0.5</option>
+    <option value="0.25">0.25</option>
+    <option value="0.125">0.125</option>
+  </select></label>
+  <label>Peri ratio: <select id="peri_ratio">
+    <option value="0.25">0.25</option>
+    <option value="0.125" selected>0.125</option>
+    <option value="0.0625">0.0625</option>
+  </select></label>
 </div>
 <canvas id="canvas"></canvas>
 <div id="stats"></div>
 <script>
   (function() {
     var p = new URLSearchParams(location.search);
-    var s = p.get('server');  if (s) document.getElementById('server').value = s;
-    var r = p.get('reduce');  if (r) document.getElementById('reduce').value = r;
+    var s = p.get('server');       if (s) document.getElementById('server').value = s;
+    var r = p.get('reduce');       if (r) document.getElementById('reduce').value = r;
+    var pr = p.get('para_ratio');  if (pr) document.getElementById('para_ratio').value = pr;
+    var pe = p.get('peri_ratio');  if (pe) document.getElementById('peri_ratio').value = pe;
   })();
 </script>
 
@@ -136,10 +149,9 @@ function drawFrame(rgba, w, h) {
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
-// Foveation params (match the native demo defaults).
 const FOVEA_RATIO = 1.0;
-const PARA_RATIO  = 0.5;
-const PERI_RATIO  = 0.125;
+function PARA_RATIO() { return parseFloat($('para_ratio').value) || 0.5; }
+function PERI_RATIO() { return parseFloat($('peri_ratio').value) || 0.125; }
 
 async function init() {
   $('info').textContent = 'Loading WASM…';
@@ -232,13 +244,13 @@ async function connect() {
 
     // Build 3 view-window queries.
     const foveaFx = canvasW, foveaFy = canvasH;
-    const paraFx = Math.round(canvasW * PARA_RATIO), paraFy = Math.round(canvasH * PARA_RATIO);
-    const periFx = Math.round(canvasW * PERI_RATIO), periFy = Math.round(canvasH * PERI_RATIO);
+    const paraFx = Math.round(canvasW * PARA_RATIO()), paraFy = Math.round(canvasH * PARA_RATIO());
+    const periFx = Math.round(canvasW * PERI_RATIO()), periFy = Math.round(canvasH * PERI_RATIO());
 
     const foveaQ = buildQuery(foveaFx, foveaFy,
         Math.max(0, gx - foveaR), Math.max(0, gy - foveaR), foveaR * 2, foveaR * 2);
-    const paraGx = Math.round(gx * PARA_RATIO), paraGy = Math.round(gy * PARA_RATIO);
-    const paraRf = Math.round(paraR * PARA_RATIO);
+    const paraGx = Math.round(gx * PARA_RATIO()), paraGy = Math.round(gy * PARA_RATIO());
+    const paraRf = Math.round(paraR * PARA_RATIO());
     const paraQ = buildQuery(paraFx, paraFy,
         Math.max(0, paraGx - paraRf), Math.max(0, paraGy - paraRf), paraRf * 2, paraRf * 2);
     const periQ = buildQuery(periFx, periFy, 0, 0, periFx, periFy);
