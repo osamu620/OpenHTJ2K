@@ -32,12 +32,13 @@ on modern x86-64**.
 
 **Deliverables**
 - Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs.
-- CLI tools: `open_htj2k_enc`, `open_htj2k_dec`, and the experimental
-  `open_htj2k_rtp_recv`.
+- CLI tools: `open_htj2k_enc`, `open_htj2k_dec`, `open_htj2k_rtp_recv`,
+  `open_htj2k_jpip_server`, `open_htj2k_jpip_demo`,
+  `open_htj2k_jpip_benchmark`.
 - WebAssembly build (scalar / SIMD / pthreads / SIMD+pthreads) +
-  Node.js CLI decoder + in-browser RTP replay demo (WebGL2 GPU
-  rendering, Display-P3, planar Y/Cb/Cr textures with hardware
-  chroma upsampling) — try both at **https://htj2k-demo.pages.dev/**.
+  Node.js CLI decoder + in-browser RTP replay and JPIP foveation
+  demos (WebGL2 GPU rendering) — try them at
+  **https://htj2k-demo.pages.dev/**.
 
 **Live streaming (experimental)**
 - `open_htj2k_rtp_recv` implements RFC 9828 (JPEG 2000 RTP with
@@ -48,6 +49,23 @@ on modern x86-64**.
   `--threads 4` on modern x86-64 (AVX2) and `--threads 2` on Apple
   Silicon (M3 Max NEON, v0.13.2+).
   Opt-in via `-DOPENHTJ2K_RTP=ON`.
+
+**JPIP foveated streaming (ISO/IEC 15444-9 3rd edition)**
+- `open_htj2k_jpip_server` serves a JPEG 2000 codestream over JPIP
+  (HTTP/1.1 or HTTP/3 over QUIC). Stateless view-window requests,
+  EOR messages, and client cache model support (§C.9).
+- `open_htj2k_jpip_demo` drives foveated rendering: three concentric
+  cones (fovea / parafovea / periphery) around the mouse cursor,
+  decoded at full / half / 1/8 resolution. Works in-process, over
+  HTTP/1.1, or over HTTP/3 with multiplexed QUIC streams.
+- `open_htj2k_jpip_benchmark` measures bandwidth reduction and decode
+  speedup for foveated vs full-image delivery across an NxN gaze grid.
+- Phase 4 IDWT zero-skip optimization: skips DWT lifting steps for
+  absent precincts, cutting decode time proportionally.
+- In-browser WASM demo with WebGL2 bilinear filtering — try it at
+  **https://htj2k-demo.pages.dev/jpip_demo.html**.
+- Opt-in H3 transport via `-DOPENHTJ2K_QUIC=ON` (requires MsQuic +
+  nghttp3).
 
 ## Quick build
 
@@ -130,6 +148,28 @@ Full reference, kernel `rmem_max` tuning, hardware requirements for
 4K @ 60 fps sustained, and known issues:
 [**docs/cli_rtp_recv.md**](docs/cli_rtp_recv.md).
 
+### JPIP server + demo
+
+Foveated JPEG 2000 streaming per ISO/IEC 15444-9.
+
+```bash
+# Server (HTTP/1.1)
+./build/bin/open_htj2k_jpip_server input.j2c --port 8080
+
+# Demo (fetches from server, renders with GLFW)
+./build/bin/open_htj2k_jpip_demo --server localhost:8080
+
+# With HTTP/3 over QUIC (requires -DOPENHTJ2K_QUIC=ON build)
+./build/bin/open_htj2k_jpip_server input.j2c --h3 --cert server.cert --key server.key
+./build/bin/open_htj2k_jpip_demo --server-h3 localhost:8080
+
+# Benchmark: foveated vs full-image bandwidth + decode time
+./build/bin/open_htj2k_jpip_benchmark input.j2c --gaze-grid 5 --csv results.csv
+```
+
+Key flags (demo): `--reduce N`, `--parafovea-ratio F`, `--periphery-ratio F`,
+`--window-size WxH`, `--fovea-radius N`, `--no-vsync`.
+
 ## Supported file formats
 
 ### Library (codestream / file format)
@@ -153,10 +193,11 @@ Full reference, kernel `rmem_max` tuning, hardware requirements for
 
 In-depth guides live under [`docs/`](docs/README.md):
 
-- [docs/building.md](docs/building.md) — full CMake flag reference, native build, WASM + Node.js CLI, RTP receiver prerequisites
+- [docs/building.md](docs/building.md) — full CMake flag reference, native build, WASM + Node.js CLI, RTP/JPIP prerequisites
 - [docs/cli_encoder.md](docs/cli_encoder.md) — `open_htj2k_enc` reference
 - [docs/cli_decoder.md](docs/cli_decoder.md) — `open_htj2k_dec` reference
 - [docs/cli_rtp_recv.md](docs/cli_rtp_recv.md) — `open_htj2k_rtp_recv` reference + operational guide
+- [deploy/README.md](deploy/README.md) — JPIP server deployment (Docker + Cloudflare Tunnel)
 
 See also [CHANGELOG](CHANGELOG) for release history.
 
