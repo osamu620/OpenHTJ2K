@@ -508,20 +508,27 @@ int main(int argc, char **argv) {
         }
         h3_connected = true;
       }
-      open_htj2k::jpip::DataBinSet set;
-      auto fetch_vw = [&](const open_htj2k::jpip::ViewWindow &vw) {
+      // Build 3 query paths and fetch concurrently on multiplexed QUIC streams.
+      auto make_query = [&](const open_htj2k::jpip::ViewWindow &vw) {
         std::string q = "/jpip?" + open_htj2k::jpip::format_view_window_query(vw);
         if (client_cache.size() > 0) q += "&model=" + client_cache.format();
-        auto body = h3c.fetch(q);
+        return q;
+      };
+      std::vector<std::string> paths = {
+        make_query(make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false)),
+        make_query(make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false)),
+        make_query(make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true)),
+      };
+      auto bodies = h3c.fetch_multi(paths);
+
+      open_htj2k::jpip::DataBinSet set;
+      for (const auto &body : bodies) {
         if (!body.empty()) {
           open_htj2k::jpip::DataBinSet tmp;
           open_htj2k::jpip::parse_jpp_stream(body.data(), body.size(), &tmp);
           set.merge_from(tmp);
         }
-      };
-      fetch_vw(make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false));
-      fetch_vw(make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false));
-      fetch_vw(make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true));
+      }
       merge_headers_only(header_cache, set);
       for (const auto &kv : set.keys()) {
         if (set.is_complete(kv.first, kv.second) && kv.first != open_htj2k::jpip::kMsgClassPrecinct)
