@@ -113,6 +113,10 @@ class openhtj2k_decoder {
   // sequence for the stream you want to keep cached.  Passing false drops
   // any cached state and returns the decoder to the legacy per-frame path.
   OPENHTJ2K_EXPORT void enable_single_tile_reuse(bool on);
+  // Phase 4B spatial-region early exit.  Stops line-based decode after
+  // this many luma rows.  Default = UINT32_MAX (no limit).
+  OPENHTJ2K_EXPORT void set_row_limit(uint32_t limit);
+
   // JPIP partial-decode hook.  When set, every subsequent invoke*() call
   // consults this filter per-packet: precincts for which the filter returns
   // false have their body bytes dropped (not attached to codeblocks) while
