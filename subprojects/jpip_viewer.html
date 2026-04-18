@@ -114,25 +114,21 @@ function drawViewport() {
   if (!gl || texW === 0) return;
   gl.clear(gl.COLOR_BUFFER_BIT);
 
+  // The texture IS the viewport — display fullscreen with correct aspect ratio
   const viewW = vpW / zoom;
   const viewH = vpH / zoom;
-  const cx0 = Math.max(0, panX);
-  const cy0 = Math.max(0, panY);
-  const cx1 = Math.min(canvasW, panX + viewW);
-  const cy1 = Math.min(canvasH, panY + viewH);
-
-  gl.uniform2f(uUV0Loc, cx0 / canvasW, cy0 / canvasH);
-  gl.uniform2f(uUV1Loc, cx1 / canvasW, cy1 / canvasH);
-
-  // Scale the quad to maintain the visible region's aspect ratio
-  const visAspect = (cx1 - cx0) / (cy1 - cy0);
+  const regionW = Math.min(viewW, canvasW - Math.max(0, panX));
+  const regionH = Math.min(viewH, canvasH - Math.max(0, panY));
+  const visAspect = regionW / regionH;
   const vpAspect = vpW / vpH;
   let sx = 1, sy = 1;
   if (visAspect > vpAspect) {
-    sy = vpAspect / visAspect;  // image wider than viewport → shrink height
+    sy = vpAspect / visAspect;
   } else {
-    sx = visAspect / vpAspect;  // image taller than viewport → shrink width
+    sx = visAspect / vpAspect;
   }
+  gl.uniform2f(uUV0Loc, 0, 0);
+  gl.uniform2f(uUV1Loc, 1, 1);
   gl.uniform2f(uScaleLoc, sx, sy);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
@@ -152,40 +148,22 @@ async function fetchView() {
 
   // Build fetch key to detect if a refetch is needed
   const key = `${red}:${Math.round(panX)}:${Math.round(panY)}:${Math.round(zoom*1000)}`;
-  if (key === lastFetchKey && texW > 0) { drawViewport(); return; }
+  if (key === lastFetchKey && texW > 0) { return; }
   if (busy) return;
   busy = true;
   M._jpip_set_reduce(ctx, red);
 
-  // At high zoom (reduce <= 1): fetch only the viewport region → fast + hi-res
-  // At low zoom (reduce >= 2): fetch full image at reduced res → fast overview
-  const useViewport = (red <= 1);
-  let q, outW, outH;
-
-  if (useViewport) {
-    // Viewport-mode: request only the visible region at full(ish) resolution
-    const fW = canvasW;
-    const fH = canvasH;
-    const oX = Math.max(0, Math.round(panX));
-    const oY = Math.max(0, Math.round(panY));
-    const sW = Math.min(Math.round(viewW), canvasW - oX);
-    const sH = Math.min(Math.round(viewH), canvasH - oY);
-    q = `fsiz=${fW},${fH}&roff=${oX},${oY}&rsiz=${sW},${sH}&type=jpp-stream`;
-    // Output matches viewport (the decoded region maps 1:1)
-    outW = vpW;
-    outH = vpH;
-  } else {
-    // Full-image mode: request entire image at reduced resolution
-    const fW = Math.max(1, Math.round(canvasW * zoom));
-    const fH = Math.max(1, Math.round(canvasH * zoom));
-    q = `fsiz=${fW},${fH}&type=jpp-stream`;
-    const maxDim = 4096;
-    const rawW = Math.max(1, canvasW >> red);
-    const rawH = Math.max(1, canvasH >> red);
-    const scale = Math.min(1.0, maxDim / Math.max(rawW, rawH));
-    outW = Math.max(1, Math.round(rawW * scale));
-    outH = Math.max(1, Math.round(rawH * scale));
-  }
+  // Always fetch the viewport region — server sends only visible precincts.
+  // jpip_end_frame_region extracts the viewport from the decoded canvas.
+  const regionX = Math.max(0, Math.round(panX));
+  const regionY = Math.max(0, Math.round(panY));
+  const regionW = Math.min(Math.round(viewW), canvasW - regionX);
+  const regionH = Math.min(Math.round(viewH), canvasH - regionY);
+  const fW = canvasW, fH = canvasH;
+  let q = `fsiz=${fW},${fH}`;
+  if (regionX > 0 || regionY > 0) q += `&roff=${regionX},${regionY}`;
+  q += `&rsiz=${regionW},${regionH}&type=jpp-stream`;
+  const outW = vpW, outH = vpH;
 
   try {
     const t0 = performance.now();
@@ -202,7 +180,8 @@ async function fetchView() {
 
     if (rgbPtr) M._free(rgbPtr);
     rgbPtr = M._malloc(outW * outH * 4);
-    const rc = M._jpip_end_frame(ctx, rgbPtr, outW, outH);
+    const rc = M._jpip_end_frame_region(ctx, rgbPtr, outW, outH,
+                                         regionX, regionY, regionW, regionH);
     const tDecode = performance.now();
 
     if (rc === 0) {
@@ -216,11 +195,9 @@ async function fetchView() {
       }
       decReduce = red;
       lastFetchKey = key;
-      drawViewport();
     }
-    const mode = useViewport ? 'viewport' : 'full';
     $('stats').textContent =
-      `${canvasW}×${canvasH} | zoom ${(zoom*100).toFixed(0)}% reduce=${red} ${mode} (${outW}×${outH}) | ` +
+      `${canvasW}×${canvasH} | zoom ${(zoom*100).toFixed(0)}% reduce=${red} region(${regionW}×${regionH}) | ` +
       `pan (${Math.round(panX)},${Math.round(panY)}) | ` +
       `fetch=${(tFetch-t0).toFixed(0)}ms decode=${(tDecode-tFetch).toFixed(0)}ms | ${(buf.length/1024).toFixed(0)}KB`;
   } catch (e) { $('stats').textContent = `error: ${e.message}`; }
@@ -281,7 +258,7 @@ async function connect() {
     panX = psx - (e.clientX - dsx) / zoom;
     panY = psy - (e.clientY - dsy) / zoom;
     clampPan();
-    if (computeReduce() <= 1) fetchView(); else drawViewport();
+    fetchView();
   });
   window.addEventListener('mouseup', () => { dragging = false; c.classList.remove('dragging'); });
 
@@ -301,14 +278,13 @@ async function connect() {
       panX += (mx * vpW) * (1 / oldZoom - 1 / zoom);
       panY += (my * vpH) * (1 / oldZoom - 1 / zoom);
       clampPan();
-      if (computeReduce() !== decReduce) fetchView();
-      else drawViewport();
+      fetchView();
     } else {
       // Two-finger scroll = pan (Mac natural scrolling: flip Y)
       panX += e.deltaX / zoom;
       panY -= e.deltaY / zoom;
       clampPan();
-      if (computeReduce() <= 1) fetchView(); else drawViewport();
+      fetchView();
     }
   }, { passive: false });
 
@@ -317,10 +293,10 @@ async function connect() {
     const step = e.shiftKey ? 500 : 100;
     let needRedraw = false, needRefetch = false;
     switch (e.key) {
-      case 'ArrowLeft':  panX -= step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
-      case 'ArrowRight': panX += step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
-      case 'ArrowUp':    panY -= step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
-      case 'ArrowDown':  panY += step; if (computeReduce()<=1) needRefetch=true; else needRedraw=true; break;
+      case 'ArrowLeft':  panX -= step; needRefetch = true; break;
+      case 'ArrowRight': panX += step; needRefetch = true; break;
+      case 'ArrowUp':    panY -= step; needRefetch = true; break;
+      case 'ArrowDown':  panY += step; needRefetch = true; break;
       case '+': case '=': case 'PageUp': {
         const old = zoom;
         zoom = Math.min(8.0, zoom * 1.5);
@@ -345,7 +321,7 @@ async function connect() {
     }
     e.preventDefault();
     clampPan();
-    if (needRefetch) fetchView(); else if (needRedraw) drawViewport();
+    if (needRefetch) fetchView();
   });
 
   fetchView();

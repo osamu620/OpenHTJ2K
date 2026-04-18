@@ -809,7 +809,8 @@ class j2k_tile : public j2k_tile_base {
   // decoded int32_t row for component c.  Allocates only per-row scratch buffers.
   void decode_line_based_stream(
       j2k_main_header &main_header, uint8_t reduce_NL,
-      const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb);
+      const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb,
+      uint32_t row_limit = UINT32_MAX);
   // Direct-to-planar streaming decode.  Reads float from IDWT ring buffers and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
   // the strip scratch, out_rows int32 intermediate, and callback overhead.

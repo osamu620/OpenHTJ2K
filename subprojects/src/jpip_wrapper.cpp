@@ -167,6 +167,79 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
   return 0;
 }
 
+// Viewport-region decode: decodes only the visible portion of the canvas
+// and outputs it at 1:1 to the output buffer.  The region is specified
+// in canvas coordinates (before reduce_NL scaling).
+EMSCRIPTEN_KEEPALIVE
+int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
+                          int region_x, int region_y, int region_w, int region_h) {
+  if (!handle || !rgb_out || out_w <= 0 || out_h <= 0) return -1;
+  if (region_w <= 0 || region_h <= 0) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+
+  std::vector<uint8_t> sparse_cs;
+  auto rc = open_htj2k::jpip::reassemble_codestream_client(ctx->set, *ctx->idx, sparse_cs);
+  if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
+
+  open_htj2k::openhtj2k_decoder dec;
+#ifdef OPENHTJ2K_THREAD
+  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 0);
+#else
+  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 1);
+#endif
+  dec.parse();
+
+  std::vector<uint32_t> widths, heights;
+  std::vector<uint8_t>  depths;
+  std::vector<bool>     signeds;
+  const uint32_t ow = static_cast<uint32_t>(out_w);
+  const uint32_t oh = static_cast<uint32_t>(out_h);
+  const uint32_t red = ctx->reduce_NL;
+  const uint32_t ry0 = static_cast<uint32_t>(region_y) >> red;
+  const uint32_t ry1 = (static_cast<uint32_t>(region_y + region_h) + ((1u << red) - 1)) >> red;
+  const uint32_t rx0 = static_cast<uint32_t>(region_x) >> red;
+  const uint32_t rx1 = (static_cast<uint32_t>(region_x + region_w) + ((1u << red) - 1)) >> red;
+
+  std::memset(rgb_out, 0, static_cast<size_t>(ow) * oh * 4);
+
+  dec.set_row_limit(ry1);
+  try {
+    dec.invoke_line_based_stream(
+        [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+          if (nc < 3 || widths.empty() || heights.empty()) return;
+          if (y < ry0 || y >= ry1) return;
+          const uint32_t cw = widths[0];
+          const int32_t shift = (depths.empty() ? 0 : static_cast<int32_t>(depths[0]) - 8);
+          const uint32_t rh = ry1 - ry0;
+          const uint32_t rw = rx1 - rx0;
+          const uint32_t ty = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0) * oh / (rh > 0 ? rh : 1));
+          if (ty >= oh) return;
+          uint8_t *dst = rgb_out + static_cast<size_t>(ty) * ow * 4;
+          for (uint32_t xw = 0; xw < ow; ++xw) {
+            const uint32_t xc = rx0 + static_cast<uint32_t>(static_cast<uint64_t>(xw) * rw / (ow > 0 ? ow : 1));
+            if (xc >= cw) break;
+            auto to_u8 = [shift](int32_t v) -> uint8_t {
+              if (shift > 0) v >>= shift;
+              if (v < 0) return 0;
+              if (v > 255) return 255;
+              return static_cast<uint8_t>(v);
+            };
+            dst[4 * xw + 0] = to_u8(rows[0][xc]);
+            dst[4 * xw + 1] = to_u8(rows[1][xc]);
+            dst[4 * xw + 2] = to_u8(rows[2][xc]);
+            dst[4 * xw + 3] = 255;
+          }
+          const uint32_t ty1_out = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0 + 1) * oh / (rh > 0 ? rh : 1));
+          for (uint32_t ty2 = ty + 1; ty2 < ty1_out && ty2 < oh; ++ty2)
+            std::memcpy(rgb_out + static_cast<size_t>(ty2) * ow * 4, dst, ow * 4);
+        },
+        widths, heights, depths, signeds);
+  } catch (...) {
+    return -3;
+  }
+  return 0;
+}
+
 EMSCRIPTEN_KEEPALIVE
 void jpip_destroy_context(void *handle) {
   delete static_cast<JpipContext *>(handle);
