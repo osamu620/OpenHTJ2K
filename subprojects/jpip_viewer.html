@@ -65,6 +65,10 @@ let rgbPtr = 0;
 let serverUrl = '';
 let busy = false;
 
+function wasmWrite(data, ptr) {
+  new Uint8Array(M.HEAPU8.buffer).set(data, ptr);
+}
+
 // Viewport state
 let vpW = 0, vpH = 0;
 let panX = 0, panY = 0;   // top-left in canvas coordinates
@@ -147,14 +151,14 @@ async function fetchAndDecode() {
 
     M._jpip_begin_frame(ctx);
     const ptr = M._malloc(buf.length);
-    M.HEAPU8.set(buf, ptr);
+    wasmWrite(buf, ptr);
     M._jpip_add_response(ctx, ptr, buf.length);
     M._free(ptr);
     const rc = M._jpip_end_frame(ctx, rgbPtr, vpW, vpH);
     const tDecode = performance.now();
 
     if (rc === 0) {
-      const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, vpW * vpH * 4);
+      const rgba = new Uint8Array(M.wasmMemory ? M.wasmMemory.buffer : M.HEAPU8.buffer, rgbPtr, vpW * vpH * 4);
       drawFrame(rgba, vpW, vpH);
     }
 
@@ -190,7 +194,7 @@ async function connect() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const buf = new Uint8Array(await resp.arrayBuffer());
     const binPtr = M._malloc(buf.length);
-    M.HEAPU8.set(buf, binPtr);
+    wasmWrite(buf, binPtr);
     ctx = M._jpip_create_context(binPtr, buf.length);
     M._free(binPtr);
   } catch (e) {
