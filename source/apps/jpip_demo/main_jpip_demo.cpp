@@ -408,6 +408,11 @@ int main(int argc, char **argv) {
               static_cast<double>(canvas_w) / opt.window_w,
               static_cast<double>(canvas_h) / opt.window_h);
 
+  if (opt.dual_res && bytes.empty()) {
+    std::fprintf(stderr, "WARNING: --dual-res requires a local codestream (not --server mode). Disabling.\n");
+    opt.dual_res = false;
+  }
+
   std::vector<uint8_t> rgb;
   open_htj2k::jpip::CacheModel client_cache;
   open_htj2k::jpip::DataBinSet header_cache;  // persistent: main header + tile headers + metadata
