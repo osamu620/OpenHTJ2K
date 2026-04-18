@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -456,26 +457,28 @@ int main(int argc, char **argv) {
     // JPP round-trip, or the legacy precinct-filter path.
     std::vector<uint8_t> frame_cs;
     if (!opt.server_host.empty()) {
-      // ── Network path: fetch 3 concentric view-windows from server ──
-      // The cache model tells the server which data-bins we already have
-      // so it can skip redundant data (§C.9).
-      open_htj2k::jpip::JpipClient client;
-      open_htj2k::jpip::DataBinSet set;
-      auto vw_fov = make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false);
-      if (!client.fetch(opt.server_host, opt.server_port, vw_fov, &set, &client_cache)) {
-        std::fprintf(stderr, "server fetch (fovea): %s\n", client.last_error().c_str());
-        break;
-      }
-      {
-        auto vw_para = make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false);
-        open_htj2k::jpip::DataBinSet tmp;
-        if (client.fetch(opt.server_host, opt.server_port, vw_para, &tmp, &client_cache)) set.merge_from(tmp);
-      }
-      {
-        auto vw_peri = make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true);
-        open_htj2k::jpip::DataBinSet tmp;
-        if (client.fetch(opt.server_host, opt.server_port, vw_peri, &tmp, &client_cache)) set.merge_from(tmp);
-      }
+      // ── Network path: 3 concurrent JPIP requests (pipelined) ──
+      // Each request is a standard-compliant view-window query sent on
+      // its own TCP connection.  Running them concurrently reduces the
+      // total latency from sum(3 RTTs) to max(3 RTTs).
+      auto vw_fov  = make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false);
+      auto vw_para = make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false);
+      auto vw_peri = make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true);
+
+      auto do_fetch = [&](const open_htj2k::jpip::ViewWindow &vw) {
+        open_htj2k::jpip::JpipClient c;
+        open_htj2k::jpip::DataBinSet s;
+        c.fetch(opt.server_host, opt.server_port, vw, &s, &client_cache);
+        return s;
+      };
+
+      auto f1 = std::async(std::launch::async, do_fetch, vw_fov);
+      auto f2 = std::async(std::launch::async, do_fetch, vw_para);
+      auto f3 = std::async(std::launch::async, do_fetch, vw_peri);
+
+      open_htj2k::jpip::DataBinSet set = f1.get();
+      set.merge_from(f2.get());
+      set.merge_from(f3.get());
       // Cache headers persistently; update model for all received bins.
       merge_headers_only(header_cache, set);
       for (const auto &kv : set.keys()) {
