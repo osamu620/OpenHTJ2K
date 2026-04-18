@@ -71,6 +71,18 @@ using open_htj2k::jpip::ViewWindow;
 
 namespace {
 
+void merge_headers_only(open_htj2k::jpip::DataBinSet &dst,
+                        const open_htj2k::jpip::DataBinSet &src) {
+  for (const auto &kv : src.keys()) {
+    if (kv.first == open_htj2k::jpip::kMsgClassPrecinct ||
+        kv.first == open_htj2k::jpip::kMsgClassExtPrecinct)
+      continue;
+    const auto &data = src.get(kv.first, kv.second);
+    dst.append(kv.first, kv.second, 0, data.data(), data.size(),
+               src.is_complete(kv.first, kv.second));
+  }
+}
+
 struct Options {
   std::string infile;
   // Foveation cone radii in canvas pixels.  0 = auto-scale from canvas
@@ -465,7 +477,7 @@ int main(int argc, char **argv) {
         if (client.fetch(opt.server_host, opt.server_port, vw_peri, &tmp, &client_cache)) set.merge_from(tmp);
       }
       // Cache headers persistently; update model for all received bins.
-      header_cache.merge_from(set);
+      merge_headers_only(header_cache, set);
       for (const auto &kv : set.keys()) {
         if (set.is_complete(kv.first, kv.second) && kv.first != open_htj2k::jpip::kMsgClassPrecinct)
           client_cache.mark(kv.first, kv.second);
@@ -507,7 +519,7 @@ int main(int argc, char **argv) {
       fetch_vw(make_view_window(*idx, gx, gy, opt.fovea_radius, 1.00f, false));
       fetch_vw(make_view_window(*idx, gx, gy, opt.parafovea_radius, opt.parafovea_ratio, false));
       fetch_vw(make_view_window(*idx, gx, gy, 0, opt.periphery_ratio, true));
-      header_cache.merge_from(set);
+      merge_headers_only(header_cache, set);
       for (const auto &kv : set.keys()) {
         if (set.is_complete(kv.first, kv.second) && kv.first != open_htj2k::jpip::kMsgClassPrecinct)
           client_cache.mark(kv.first, kv.second);
