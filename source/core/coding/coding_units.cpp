@@ -4799,7 +4799,8 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
 }
 
 void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_val,
-                                        const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb) {
+                                        const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb,
+                                        uint32_t row_limit) {
   const uint16_t NC = num_components;
 
   struct CInfo {
@@ -4862,6 +4863,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     tcomp[c].init_line_decode(/*ring_mode=*/true);
 
   const uint32_t H = ci[0].csize_y;
+  const uint32_t effective_H = std::min(H, row_limit);
 
   // ── Strip-granular pull driver ────────────────────────────────────────────
   // Batch row pulls for one outer strip per component at a time, then run
@@ -4917,10 +4919,10 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
 #endif
 
-  for (uint32_t strip_y0 = 0; strip_y0 < H; strip_y0 += strip_h_luma) {
-    const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, H);
+  for (uint32_t strip_y0 = 0; strip_y0 < effective_H; strip_y0 += strip_h_luma) {
+    const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, effective_H);
 
-    // Pre-compute per-component pull counts.
+    // Pre-compute per-component pull counts (clipped to effective_H).
     uint32_t counts[16] = {};
     for (uint16_t c = 0; c < NC && c < 16; ++c) {
       if (do_mct && c < 3) {
