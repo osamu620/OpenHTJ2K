@@ -80,6 +80,10 @@ const $ = id => document.getElementById(id);
 let M = null;   // WASM module
 let ctx = 0;    // jpip context handle (pointer)
 let canvasW = 0, canvasH = 0;
+
+function wasmWrite(data, ptr) {
+  new Uint8Array(M.HEAPU8.buffer).set(data, ptr);
+}
 let rgbPtr = 0; // WASM heap pointer for RGBA output
 let running = false;
 let serverUrl = '';
@@ -189,7 +193,7 @@ async function connect() {
     // jpip_create_context parses the JPP-stream response internally,
     // extracts the main-header data-bin, and builds the CodestreamIndex.
     const binPtr = M._malloc(buf.length);
-    M.HEAPU8.set(buf, binPtr);
+    wasmWrite(buf, binPtr);
     ctx = M._jpip_create_context(binPtr, buf.length);
     M._free(binPtr);
   } catch (e) {
@@ -269,7 +273,7 @@ async function connect() {
       for (const ab of [r1, r2, r3]) {
         const arr = new Uint8Array(ab);
         const ptr = M._malloc(arr.length);
-        M.HEAPU8.set(arr, ptr);
+        wasmWrite(arr, ptr);
         M._jpip_add_response(ctx, ptr, arr.length);
         M._free(ptr);
       }
