@@ -584,13 +584,16 @@ int main(int argc, char **argv) {
     }
 
     // Fresh decoder per frame — init() + parse() rewind the codestream cursor.
+    // dual-res mode needs the ORIGINAL codestream (not the sparse reassembled
+    // one) because the LL pass requires all precincts at the coarsest level.
     open_htj2k::openhtj2k_decoder dec;
-    const uint8_t *dec_buf = opt.use_filter ? bytes.data() : frame_cs.data();
-    const std::size_t dec_len = opt.use_filter ? bytes.size() : frame_cs.size();
+    const bool use_original = opt.use_filter || (opt.dual_res && !bytes.empty());
+    const uint8_t *dec_buf = use_original ? bytes.data() : frame_cs.data();
+    const std::size_t dec_len = use_original ? bytes.size() : frame_cs.size();
     dec.init(dec_buf, dec_len, opt.reduce, /*num_threads=*/1);
     dec.parse();
 
-    if (opt.use_filter) {
+    if (use_original) {
       auto *idx_ptr = idx.get();
       dec.set_precinct_filter(
           [idx_ptr, keep_moved = std::move(keep)](
