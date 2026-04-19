@@ -118,6 +118,15 @@ struct idwt_level_src_ctx {
   // PSE counts for in-place horizontal filter (precomputed at init).
   int32_t h_pse_left;   // left PSE samples for this level (function of u0%2, transformation)
   int32_t h_pse_right;  // right PSE samples for this level (function of u1%2, transformation)
+
+  // Horizontal IDWT output range (Phase 4B spatial-region decode).  Default
+  // = [u0, u1] → full-width horizontal lifting, byte-identical to pre-patch
+  // behaviour.  set_line_decode_col_range() can narrow this to the viewport
+  // range widened by per-level filter support, which routes the callback
+  // into a sub-range horizontal lifter that skips columns whose subband
+  // values are zero.
+  int32_t col_lo;
+  int32_t col_hi;
 };
 
 // Whole-sample symmetric extension: reflect idx into [0, len).
@@ -209,7 +218,8 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
       if ((c->u0 % 2 != 0) && (c->transformation == 1)) out[0] /= 2.0f;
       return;
     }
-    idwt_1d_row_inplace(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation);
+    idwt_1d_row_inplace_range(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation,
+                              c->col_lo, c->col_hi);
     return;
   }
 
@@ -366,7 +376,8 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
     if ((c->u0 % 2 != 0) && (c->transformation == 1)) out[0] /= 2.0f;
     return;
   }
-  idwt_1d_row_inplace(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation);
+  idwt_1d_row_inplace_range(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation,
+                            c->col_lo, c->col_hi);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2324,6 +2335,8 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     c.hh_y0          = (sb_HH != nullptr) ? static_cast<int32_t>(sb_HH->get_pos0().y) : 0;
     c.h_pse_left     = (u1 - u0 > 1) ? kHPseLeft[u0 % 2][eff]  : 0;
     c.h_pse_right    = (u1 - u0 > 1) ? kHPseRight[u1 % 2][eff] : 0;
+    c.col_lo         = u0;
+    c.col_hi         = u1;
 
     // lp_tmp only needed when has_child (child state writes output into it as fallback).
     // hp_tmp eliminated: HP data is read directly from subband row buffers.
@@ -2358,8 +2371,9 @@ void j2k_tile_component::set_line_decode_col_range(uint32_t col_lo, uint32_t col
   if (line_dec == nullptr) return;
   j2k_tcomp_line_dec *ld = line_dec.get();
   if (ld->NL_active <= 0) return;
-  idwt_2d_state *states = ld->states.get();
-  const int32_t NL_act  = ld->NL_active;
+  idwt_2d_state       *states = ld->states.get();
+  idwt_level_src_ctx  *ctxs   = ld->ctxs.get();
+  const int32_t NL_act        = ld->NL_active;
   // Seed with caller's finest-level range.  Coarser levels are derived by
   // halving and widening by the 9/7 filter support (4 samples each side,
   // conservative over-estimate that also covers 5/3 where support is 2).
@@ -2367,6 +2381,15 @@ void j2k_tile_component::set_line_decode_col_range(uint32_t col_lo, uint32_t col
   int32_t b = static_cast<int32_t>(col_hi);
   for (int32_t i = NL_act - 1; i >= 0; --i) {
     idwt_2d_state_set_col_range(&states[i], a, b);
+    // Mirror the same range onto the level's source ctx so the horizontal
+    // IDWT producer narrows its processing window to match.  Clamp to the
+    // level's [u0, u1].
+    int32_t ca = a, cb = b;
+    if (ca < ctxs[i].u0) ca = ctxs[i].u0;
+    if (cb > ctxs[i].u1) cb = ctxs[i].u1;
+    if (ca > cb) ca = cb;
+    ctxs[i].col_lo = ca;
+    ctxs[i].col_hi = cb;
     // Next coarser level's output feeds this level's horizontal IDWT, which
     // reads up to 4 samples beyond each output column.  In subband coords
     // (half-width) that maps to ±2 samples; we round up to 4 for safety.
