@@ -415,10 +415,12 @@ async function fetchView() {
     const tFetch = performance.now();
 
     M._jpip_begin_frame(ctx);
-    const ptr = M._malloc(buf.length);
+    // Reuse the WASM context's persistent response buffer (grow-only) so we
+    // don't pay a malloc/free round-trip on every pan.  The returned pointer
+    // is only valid until the next jpip_get_response_buffer() call.
+    const ptr = M._jpip_get_response_buffer(ctx, buf.length);
     wasmWrite(buf, ptr);
     M._jpip_add_response(ctx, ptr, buf.length);
-    M._free(ptr);
 
     // Grow-only: reuse the RGB buffer across frames.  Reallocating 14+ MB
     // on every pan event churns the WASM heap (which has ALLOW_MEMORY_GROWTH
