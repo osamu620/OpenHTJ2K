@@ -418,6 +418,9 @@
         </label>
         <label><input type="radio" name="pacing" value="paced"> Paced (RTP clock)</label>
         <label><input type="radio" name="pacing" value="max" checked> As-fast-as-possible</label>
+        <label id="drop-toggle-label" title="Drop frames whose RTP-clock target is already past by &gt; drop_periods frame periods. Only applies in Paced mode.">
+          <input type="checkbox" id="drop-toggle"> Drop late frames
+        </label>
       </div>
     </div>
     <div style="font-size:11px; color:var(--text-sub); margin-top:10px;">
@@ -538,7 +541,7 @@
           <td><code>?drop=1</code></td>
           <td>off</td>
           <td>presence toggle</td>
-          <td>Enable paced-mode frame dropping (skip frames whose RTP-clock target is too far past). Off by default — slow decoders play slow-motion rather than stall.</td>
+          <td>Pre-check the <b>Drop late frames</b> checkbox on page load. When on, paced mode skips frames whose RTP-clock target is already past. Off by default — slow decoders play slow-motion rather than stall.</td>
         </tr>
         <tr>
           <td><code>?drop_periods=</code></td>
@@ -687,6 +690,23 @@ async function loadModule() {
   });
 }
 
+// Pace-drop checkbox wiring: pre-check from ?drop=1, and gate enabled state
+// on the Paced radio (the flag is a no-op in ASAP mode).
+{
+  const cb = document.getElementById('drop-toggle');
+  const label = document.getElementById('drop-toggle-label');
+  if (new URLSearchParams(window.location.search).has('drop')) cb.checked = true;
+  const sync = () => {
+    const paced = document.querySelector('input[name="pacing"]:checked').value === 'paced';
+    cb.disabled = !paced;
+    label.style.opacity = paced ? '' : '0.5';
+  };
+  sync();
+  for (const r of document.querySelectorAll('input[name="pacing"]')) {
+    r.addEventListener('change', sync);
+  }
+}
+
 // Update SIMD / threads badges.
 wasmFeatureDetect.simd().then(ok => {
   const b = document.getElementById('simd_badge');
@@ -738,10 +758,14 @@ let ycbcrMode = 'auto';
 // more than PACE_DROP_PERIODS frame periods we skip decoding it and discard
 // the WASM reassembler's ready slot, keeping playback loosely aligned with
 // the RTP clock.  Off by default — slow decoders otherwise get stuck in a
-// burst-then-stall pattern that trips Cloudflare/NAT timeouts.  Opt in
-// with ?drop=1; tune the threshold via ?drop_periods=N.  ?nodrop=1 is
-// kept as a legacy synonym for the default (no-op).
-const PACE_DROP_ENABLED = new URLSearchParams(location.search).has('drop');
+// burst-then-stall pattern that trips Cloudflare/NAT timeouts.  Toggled via
+// the "Drop late frames" checkbox; ?drop=1 pre-checks it on page load.
+// Tune the threshold via ?drop_periods=N.  ?nodrop=1 is kept as a legacy
+// synonym for the default (no-op).
+function paceDropEnabled() {
+  const el = document.getElementById('drop-toggle');
+  return !!(el && el.checked);
+}
 const PACE_DROP_PERIODS = Math.max(1,
     Number(new URLSearchParams(location.search).get('drop_periods')) || 8);
 
@@ -1678,7 +1702,7 @@ function startDisplayLoop(myGen) {
       const period = entry.framePeriodMs || (1000 / 60);
 
       // Pace-drop: too far behind?  Discard and re-check next entry.
-      if (PACE_DROP_ENABLED && rafTimestamp - target > PACE_DROP_PERIODS * period) {
+      if (paceDropEnabled() && rafTimestamp - target > PACE_DROP_PERIODS * period) {
         ringPop();
         droppedByPace++;
         continue;
@@ -1894,7 +1918,7 @@ async function startPlayback(source) {
         // is already past by more than PACE_DROP_PERIODS periods, skip
         // decoding entirely (pop the reassembled bitstream from the ready
         // slot).  wallStart===0 during pre-roll → check is bypassed.
-        if (PACE_DROP_ENABLED && pacing === 'paced' && wallStart !== 0) {
+        if (paceDropEnabled() && pacing === 'paced' && wallStart !== 0) {
           const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
           const target  = wallStart + totalPausedMs + dtMs;
           const period  = framePeriodMs || (1000 / 60);
