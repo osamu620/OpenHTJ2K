@@ -290,7 +290,18 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   const uint32_t rx0 = static_cast<uint32_t>(region_x) >> red;
   const uint32_t rx1 = (static_cast<uint32_t>(region_x + region_w) + ((1u << red) - 1)) >> red;
 
-  std::memset(rgb_out, 0, static_cast<size_t>(ow) * oh * 4);
+  // The row callback below writes every output pixel when it fires for
+  // every y in [ry0, ry1) — which it does on the success path.  The
+  // memset is only a safety net for partial-region panning where the
+  // xw<ow loop can early-break on edge columns (xc >= cw).  For the
+  // common full-canvas case (viewer at fit-zoom, initial load) the
+  // entire buffer is overwritten, so skip the O(ow·oh·4) wipe.
+  const bool full_coverage =
+      (region_x == 0 && region_y == 0
+       && static_cast<uint32_t>(region_x + region_w) >= ctx->canvas_w
+       && static_cast<uint32_t>(region_y + region_h) >= ctx->canvas_h);
+  if (!full_coverage)
+    std::memset(rgb_out, 0, static_cast<size_t>(ow) * oh * 4);
 
   dec.set_row_limit(ry1);
   dec.set_col_range(rx0, rx1);
