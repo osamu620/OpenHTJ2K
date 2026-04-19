@@ -374,8 +374,11 @@ async function fetchView() {
   const viewW = vpW / zoom;
   const viewH = vpH / zoom;
 
-  // Build fetch key to detect if a refetch is needed
-  const key = `${red}:${Math.round(panX)}:${Math.round(panY)}:${Math.round(zoom*1000)}`;
+  // Build fetch key to detect if a refetch is needed.  `red` (from
+  // computeReduce()) already collapses zoom jitter within the same
+  // reduce level; including raw zoom here would trip on sub-pixel
+  // trackpad drift and re-fetch the same visible region.
+  const key = `${red}:${Math.round(panX)}:${Math.round(panY)}`;
   if (key === lastFetchKey && texW > 0) { return; }
   if (busy) return;
   busy = true;

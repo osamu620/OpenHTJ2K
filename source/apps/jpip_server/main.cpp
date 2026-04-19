@@ -67,10 +67,14 @@ struct ServerState {
 };
 
 // Build the JPP-stream for a given ViewWindow, skipping data-bins
-// the client already has (per the cache model from §C.9).
+// the client already has (per the cache model from §C.9).  When
+// `n_keys_out` is non-null the caller gets the precinct count back
+// without having to re-run resolve_view_window.
 std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &vw,
-                                      const CacheModel &client_cache = {}) {
+                                      const CacheModel &client_cache = {},
+                                      size_t *n_keys_out = nullptr) {
   auto keys = resolve_view_window(*st.idx, vw);
+  if (n_keys_out) *n_keys_out = keys.size();
   std::unordered_set<uint64_t> keep;
   keep.reserve(keys.size());
   for (const auto &k : keys) keep.insert(st.idx->I(k.t, k.c, k.r, k.p_rc));
@@ -167,16 +171,16 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
 
   CacheModel client_cache;
   if (!req.model.empty()) client_cache = CacheModel::parse(req.model);
-  auto jpp = build_jpp_stream(st, req.view_window, client_cache);
+  size_t n_keys = 0;
+  auto jpp = build_jpp_stream(st, req.view_window, client_cache, &n_keys);
 
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-  auto keys = resolve_view_window(*st.idx, req.view_window);
   std::printf("  → %zu precincts (%.1f%%), %zu bytes JPP-stream, %.1f ms\n",
-              keys.size(),
+              n_keys,
               st.idx->total_precincts()
-                  ? (100.0 * static_cast<double>(keys.size()) / static_cast<double>(st.idx->total_precincts()))
+                  ? (100.0 * static_cast<double>(n_keys) / static_cast<double>(st.idx->total_precincts()))
                   : 0.0,
               jpp.size(), ms);
   std::fflush(stdout);
@@ -207,15 +211,15 @@ std::vector<uint8_t> handle_h3_request(const ServerState &st,
   const auto t0 = Clock::now();
   CacheModel h3_cache;
   if (!jpip_req.model.empty()) h3_cache = CacheModel::parse(jpip_req.model);
-  auto jpp = build_jpp_stream(st, jpip_req.view_window, h3_cache);
+  size_t n_keys = 0;
+  auto jpp = build_jpp_stream(st, jpip_req.view_window, h3_cache, &n_keys);
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-  auto keys = resolve_view_window(*st.idx, jpip_req.view_window);
   std::printf("  [H3] → %zu precincts (%.1f%%), %zu bytes, %.1f ms\n",
-              keys.size(),
+              n_keys,
               st.idx->total_precincts()
-                  ? (100.0 * static_cast<double>(keys.size()) / static_cast<double>(st.idx->total_precincts()))
+                  ? (100.0 * static_cast<double>(n_keys) / static_cast<double>(st.idx->total_precincts()))
                   : 0.0,
               jpp.size(), ms);
   std::fflush(stdout);
