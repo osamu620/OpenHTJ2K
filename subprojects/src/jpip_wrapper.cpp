@@ -18,15 +18,23 @@
 //
 // Lifecycle:
 //   1. JS fetches the main-header data-bin from the JPIP server.
-//   2. jpip_create_context(bin, len) → opaque handle.
+//   2. jpip_create_context(bin, len) → opaque handle.  Enables single-tile
+//      decoder reuse so the parsed tile tree is cached across frames.
 //   3. Per frame:
-//      a. jpip_begin_frame(handle)              — clears the DataBinSet.
+//      a. jpip_begin_frame(handle)              — no-op (reserved; kept for
+//                                                  ABI compatibility).  The
+//                                                  DataBinSet accumulates
+//                                                  across frames so cached
+//                                                  precincts from prior
+//                                                  viewports are reused.
 //      b. jpip_add_response(handle, data, len)  — parse a JPP-stream
 //                                                  response and merge.
 //         (called 1–3 times: fovea / parafovea / periphery)
 //      c. jpip_end_frame(handle, rgb, w, h)     — reassemble + decode +
 //                                                  write RGB8.
-//   4. jpip_destroy_context(handle).
+//   4. jpip_reset_cache(handle)                 — explicit full cache reset
+//                                                  (e.g. on disconnect).
+//   5. jpip_destroy_context(handle).
 // ────────────────────────────────────────────────────────────────────────────
 
 struct JpipContext {
@@ -35,6 +43,21 @@ struct JpipContext {
   uint32_t canvas_w  = 0;
   uint32_t canvas_h  = 0;
   uint8_t  reduce_NL = 0;
+  // Persistent decoder.  enable_single_tile_reuse() caches the parsed tile
+  // tree (codeblock allocations, tagtrees, line-decode ring buffers) across
+  // init() calls whose main-header bytes (SIZ/COD/QCD) are byte-identical.
+  // Every sparse codestream reassembled from the same CodestreamIndex has
+  // the same main header, so the cache hits on every frame after the first.
+  open_htj2k::openhtj2k_decoder dec;
+  // Reassembled codestream kept alive between frames so the decoder's
+  // init() doesn't have to memcpy into its own buffer from a local each
+  // time; also lets us skip reassembly when no new data-bins arrived.
+  std::vector<uint8_t> sparse_cs;
+  bool dec_initialized = false;
+  // Set by add_response when new data-bins land; cleared after a successful
+  // decode.  Lets jpip_end_frame*() skip reassembly when nothing changed
+  // and the viewer's lastFetchKey guard was bypassed by an upstream resize.
+  bool dirty = false;
 };
 
 extern "C" {
@@ -55,6 +78,10 @@ void *jpip_create_context(const uint8_t *jpp_stream, size_t len) {
   ctx->canvas_w = idx->geometry().canvas_size.x;
   ctx->canvas_h = idx->geometry().canvas_size.y;
   ctx->idx      = std::move(idx);
+  ctx->dec.enable_single_tile_reuse(true);
+  // Seed the cache with the main-header data-bin that built the index.
+  ctx->set.merge_from(tmp);
+  ctx->dirty = true;
   return ctx;
 }
 
@@ -88,10 +115,25 @@ void jpip_set_reduce(void *handle, int n) {
   static_cast<JpipContext *>(handle)->reduce_NL = static_cast<uint8_t>(n);
 }
 
+// Kept as a no-op: the viewer calls it before every jpip_add_response() but
+// clearing the DataBinSet here would throw away everything JPIP has cached
+// for earlier viewports, forcing the server to resend main-header and
+// previously-delivered precincts on every pan.  Use jpip_reset_cache() if
+// you explicitly want to drop accumulated state (e.g. on disconnect).
 EMSCRIPTEN_KEEPALIVE
 void jpip_begin_frame(void *handle) {
+  (void)handle;
+}
+
+// Explicit cache reset — intended for disconnect / reconnect flows.
+EMSCRIPTEN_KEEPALIVE
+void jpip_reset_cache(void *handle) {
   if (!handle) return;
-  static_cast<JpipContext *>(handle)->set = {};
+  auto *ctx = static_cast<JpipContext *>(handle);
+  ctx->set = {};
+  ctx->sparse_cs.clear();
+  ctx->dec_initialized = false;
+  ctx->dirty = false;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -101,6 +143,7 @@ int jpip_add_response(void *handle, const uint8_t *jpp_stream, size_t len) {
   open_htj2k::jpip::DataBinSet tmp;
   if (!open_htj2k::jpip::parse_jpp_stream(jpp_stream, len, &tmp)) return -2;
   ctx->set.merge_from(tmp);
+  ctx->dirty = true;
   return 0;
 }
 
@@ -109,18 +152,30 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
   if (!handle || !rgb_out || out_w <= 0 || out_h <= 0) return -1;
   auto *ctx = static_cast<JpipContext *>(handle);
 
-  // Reassemble the sparse codestream from the accumulated DataBinSet.
-  std::vector<uint8_t> sparse_cs;
-  auto rc = open_htj2k::jpip::reassemble_codestream_client(ctx->set, *ctx->idx, sparse_cs);
-  if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
+  // Reassemble the sparse codestream from the accumulated DataBinSet.  Only
+  // rebuild when new data arrived since the last decode — otherwise the
+  // existing ctx->sparse_cs is already correct and the persistent decoder's
+  // cached tile tree is valid.
+  if (ctx->dirty || ctx->sparse_cs.empty()) {
+    ctx->sparse_cs.clear();
+    auto rc = open_htj2k::jpip::reassemble_codestream_client(ctx->set, *ctx->idx, ctx->sparse_cs);
+    if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
+  }
 
-  // Decode.
-  open_htj2k::openhtj2k_decoder dec;
+  // Decode.  First init after create_context uses build-default threading;
+  // subsequent inits pass num_threads=1 to preserve the ThreadPool that was
+  // spun up on the first call.
+  auto &dec = ctx->dec;
+  if (!ctx->dec_initialized) {
 #ifdef OPENHTJ2K_THREAD
-  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 0);
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
 #else
-  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 1);
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
 #endif
+    ctx->dec_initialized = true;
+  } else {
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
+  }
   dec.parse();
 
   std::vector<uint32_t> widths, heights;
@@ -130,7 +185,7 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
   const uint32_t oh = static_cast<uint32_t>(out_h);
 
   try {
-    dec.invoke_line_based_stream(
+    dec.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
           if (nc < 3 || widths.empty() || heights.empty()) return;
           const uint32_t cw = widths[0];
@@ -164,6 +219,7 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
   } catch (...) {
     return -3;
   }
+  ctx->dirty = false;
   return 0;
 }
 
@@ -177,16 +233,27 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   if (region_w <= 0 || region_h <= 0) return -1;
   auto *ctx = static_cast<JpipContext *>(handle);
 
-  std::vector<uint8_t> sparse_cs;
-  auto rc = open_htj2k::jpip::reassemble_codestream_client(ctx->set, *ctx->idx, sparse_cs);
-  if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
+  // Only rebuild the sparse codestream when new data-bins arrived.  When the
+  // user pans within cached precincts (dirty==false), ctx->sparse_cs is still
+  // valid and re-parsing the main header via the decoder's reuse cache is a
+  // no-op on the cache path.
+  if (ctx->dirty || ctx->sparse_cs.empty()) {
+    ctx->sparse_cs.clear();
+    auto rc = open_htj2k::jpip::reassemble_codestream_client(ctx->set, *ctx->idx, ctx->sparse_cs);
+    if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
+  }
 
-  open_htj2k::openhtj2k_decoder dec;
+  auto &dec = ctx->dec;
+  if (!ctx->dec_initialized) {
 #ifdef OPENHTJ2K_THREAD
-  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 0);
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
 #else
-  dec.init(sparse_cs.data(), sparse_cs.size(), ctx->reduce_NL, 1);
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
 #endif
+    ctx->dec_initialized = true;
+  } else {
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
+  }
   dec.parse();
 
   std::vector<uint32_t> widths, heights;
@@ -205,7 +272,7 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   dec.set_row_limit(ry1);
   dec.set_col_range(rx0, rx1);
   try {
-    dec.invoke_line_based_stream(
+    dec.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
           if (nc < 3 || widths.empty() || heights.empty()) return;
           if (y < ry0 || y >= ry1) return;
@@ -238,6 +305,7 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   } catch (...) {
     return -3;
   }
+  ctx->dirty = false;
   return 0;
 }
 
