@@ -501,12 +501,15 @@ async function connect() {
       // The JPIP large-image viewer wants the opposite (accumulate for pan
       // reuse) and calls jpip_begin_frame (a no-op) instead.
       M._jpip_reset_cache(ctx);
+      // Reuse the WASM context's persistent response buffer so the three
+      // fovea/para/peri responses don't each trigger a _malloc/_free cycle
+      // on every gaze move.  The pointer is only valid until the next
+      // jpip_get_response_buffer() call, so we re-request it per response.
       for (const ab of [r1, r2, r3]) {
         const arr = new Uint8Array(ab);
-        const ptr = M._malloc(arr.length);
+        const ptr = M._jpip_get_response_buffer(ctx, arr.length);
         wasmWrite(arr, ptr);
         M._jpip_add_response(ctx, ptr, arr.length);
-        M._free(ptr);
       }
       const rc = M._jpip_end_frame(ctx, rgbPtr, c.width, c.height);
       const tDecode = performance.now();

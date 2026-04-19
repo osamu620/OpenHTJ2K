@@ -64,6 +64,11 @@ struct JpipContext {
   // decode.  Lets jpip_end_frame*() skip reassembly when nothing changed
   // and the viewer's lastFetchKey guard was bypassed by an upstream resize.
   bool dirty = false;
+  // Grow-only staging buffer for JPIP server responses.  Exposed to JS via
+  // jpip_get_response_buffer() so the viewer and foveation demo can skip
+  // the per-frame _malloc / wasmWrite / _free triplet (3× per foveation
+  // frame) and the repeated WASM heap churn that came with it.
+  std::vector<uint8_t> response_buf;
 };
 
 // Flush the single-tile reuse cache when a parameter that isn't part of the
@@ -153,6 +158,22 @@ void jpip_reset_cache(void *handle) {
   ctx->dec_initialized = false;
   ctx->last_reduce_NL = 0xFF;
   ctx->dirty = false;
+}
+
+// Return a pointer to the context's grow-only response staging buffer,
+// resized to at least `min_size` bytes.  JS is expected to write the
+// next JPIP response body into [ptr, ptr + min_size) and then call
+// jpip_add_response(handle, ptr, actual_len) — no _malloc / _free
+// round-trip per frame.  The returned pointer is stable across calls
+// until a growth forces reallocation; callers MUST call this function
+// (and take its return value) before every write, never cache the
+// pointer across calls.
+EMSCRIPTEN_KEEPALIVE
+uint8_t *jpip_get_response_buffer(void *handle, size_t min_size) {
+  if (!handle) return nullptr;
+  auto *ctx = static_cast<JpipContext *>(handle);
+  if (ctx->response_buf.size() < min_size) ctx->response_buf.resize(min_size);
+  return ctx->response_buf.data();
 }
 
 EMSCRIPTEN_KEEPALIVE
