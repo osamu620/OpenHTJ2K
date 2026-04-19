@@ -54,11 +54,29 @@ struct JpipContext {
   // time; also lets us skip reassembly when no new data-bins arrived.
   std::vector<uint8_t> sparse_cs;
   bool dec_initialized = false;
+  // Tracks the reduce_NL value the persistent decoder was last initialized
+  // with.  reduce_NL is NOT part of the main-header bytes that the reuse
+  // cache fingerprints, so a reduce change (user zoom) would silently reuse
+  // a tile tree sized for a different resolution and corrupt the output.
+  // When this differs from ctx->reduce_NL we manually flush the cache.
+  uint8_t last_reduce_NL = 0xFF;
   // Set by add_response when new data-bins land; cleared after a successful
   // decode.  Lets jpip_end_frame*() skip reassembly when nothing changed
   // and the viewer's lastFetchKey guard was bypassed by an upstream resize.
   bool dirty = false;
 };
+
+// Flush the single-tile reuse cache when a parameter that isn't part of the
+// main-header fingerprint (currently: reduce_NL) has changed.  Toggling the
+// flag off and back on drops the cached tile tree so the next init+parse
+// builds a fresh one sized for the new resolution.
+static void jpip_maybe_invalidate_reuse(JpipContext *ctx) {
+  if (ctx->dec_initialized && ctx->last_reduce_NL != ctx->reduce_NL) {
+    ctx->dec.enable_single_tile_reuse(false);
+    ctx->dec.enable_single_tile_reuse(true);
+    ctx->dec_initialized = false;
+  }
+}
 
 extern "C" {
 
@@ -133,6 +151,7 @@ void jpip_reset_cache(void *handle) {
   ctx->set = {};
   ctx->sparse_cs.clear();
   ctx->dec_initialized = false;
+  ctx->last_reduce_NL = 0xFF;
   ctx->dirty = false;
 }
 
@@ -165,6 +184,7 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
   // Decode.  First init after create_context uses build-default threading;
   // subsequent inits pass num_threads=1 to preserve the ThreadPool that was
   // spun up on the first call.
+  jpip_maybe_invalidate_reuse(ctx);
   auto &dec = ctx->dec;
   if (!ctx->dec_initialized) {
 #ifdef OPENHTJ2K_THREAD
@@ -176,6 +196,7 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
   } else {
     dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
   }
+  ctx->last_reduce_NL = ctx->reduce_NL;
   dec.parse();
 
   std::vector<uint32_t> widths, heights;
@@ -243,6 +264,7 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
     if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
   }
 
+  jpip_maybe_invalidate_reuse(ctx);
   auto &dec = ctx->dec;
   if (!ctx->dec_initialized) {
 #ifdef OPENHTJ2K_THREAD
@@ -254,6 +276,7 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   } else {
     dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
   }
+  ctx->last_reduce_NL = ctx->reduce_NL;
   dec.parse();
 
   std::vector<uint32_t> widths, heights;
