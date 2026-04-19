@@ -808,6 +808,131 @@ void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right,
     idwt_1d_filtr_irrev53_fn(row - left, left, u0, u1);
 }
 
+// Sub-range 9/7 IDWT: runs only the 4-pass lifting on buffer positions
+// [buf_lo, buf_hi] (inclusive) of X.  The kernel's parity / offset logic is
+// inherited from u_i0 unchanged so the LP/HP identity of each column matches
+// the full-width kernel.  Caller guarantees samples at positions outside
+// [buf_lo, buf_hi] are zero on entry and remain zero on exit (so Pass 1
+// boundary reads of X[n - 1] / X[n + 1] give zero when n is at the lower
+// or upper edge, which matches the full-width result under a zero-padded
+// input — the JPIP-sparse invariant).  buf_lo / buf_hi are in the same
+// buffer-offset frame as the existing kernel's internal `n`.
+static void idwt_1d_filtr_irrev97_fixed_range(sprec_t *X, const int32_t left,
+                                              const int32_t u_i0, const int32_t u_i1,
+                                              const int32_t buf_lo, const int32_t buf_hi) {
+  const int32_t start  = u_i0 / 2;
+  const int32_t stop   = u_i1 / 2;
+  const int32_t offset = left - u_i0 % 2;
+
+  auto clip = [&](int32_t n_init, int32_t n_last_incl,
+                  int32_t &ns, int32_t &ne) {
+    // Return the first / last n in [buf_lo, buf_hi] that is reachable from
+    // n_init by step +2 and lies within [n_init, n_last_incl].
+    ns = (buf_lo > n_init) ? buf_lo : n_init;
+    if (((ns - n_init) & 1) != 0) ns += 1;
+    ne = (buf_hi < n_last_incl) ? buf_hi : n_last_incl;
+    if (((ne - n_init) & 1) != 0) ne -= 1;
+  };
+
+  int32_t ns, ne;
+  // Pass 1 (fD): writes X[n].  Original loop n = -2+offset .. -2+offset+2*(stop-start+1+1) step 2.
+  clip(-2 + offset, -2 + offset + 2 * (stop - start + 2), ns, ne);
+  for (int32_t n = ns; n <= ne; n += 2) {
+    X[n] = X[n] - fD * (X[n - 1] + X[n + 1]);
+  }
+  // Pass 2 (fC): writes X[n + 1].  Original n = -2+offset .. -2+offset+2*(stop-start+1) step 2.
+  clip(-2 + offset, -2 + offset + 2 * (stop - start + 1), ns, ne);
+  for (int32_t n = ns; n <= ne; n += 2) {
+    X[n + 1] = X[n + 1] - fC * (X[n] + X[n + 2]);
+  }
+  // Pass 3 (fB): writes X[n].  Original n = offset .. offset+2*(stop-start) step 2.
+  clip(offset, offset + 2 * (stop - start), ns, ne);
+  for (int32_t n = ns; n <= ne; n += 2) {
+    X[n] = X[n] - fB * (X[n - 1] + X[n + 1]);
+  }
+  // Pass 4 (fA): writes X[n + 1].  Original n = offset .. offset+2*(stop-start-1) step 2.
+  clip(offset, offset + 2 * (stop - start - 1), ns, ne);
+  for (int32_t n = ns; n <= ne; n += 2) {
+    X[n + 1] = X[n + 1] - fA * (X[n] + X[n + 2]);
+  }
+}
+
+// Sub-range 5/3 IDWT.  Same contract as idwt_1d_filtr_irrev97_fixed_range.
+static void idwt_1d_filtr_rev53_fixed_range(sprec_t *X, const int32_t left,
+                                            const int32_t u_i0, const int32_t u_i1,
+                                            const int32_t buf_lo, const int32_t buf_hi) {
+  const int32_t start  = u_i0 / 2;
+  const int32_t stop   = u_i1 / 2;
+  const int32_t offset = left - u_i0 % 2;
+
+  auto clip = [&](int32_t n_init, int32_t n_last_incl,
+                  int32_t &ns, int32_t &ne) {
+    ns = (buf_lo > n_init) ? buf_lo : n_init;
+    if (((ns - n_init) & 1) != 0) ns += 1;
+    ne = (buf_hi < n_last_incl) ? buf_hi : n_last_incl;
+    if (((ne - n_init) & 1) != 0) ne -= 1;
+  };
+
+  int32_t ns, ne;
+  // Pass 1: writes X[n].  Original n = offset .. offset + 2*(stop-start) step 2.
+  clip(offset, offset + 2 * (stop - start), ns, ne);
+  for (int32_t n = ns; n <= ne; n += 2) {
+    X[n] -= floorf((X[n - 1] + X[n + 1] + 2) * 0.25f);
+  }
+  // Pass 2: writes X[n + 1].  Original n = offset .. offset + 2*(stop-start-1) step 2.
+  clip(offset, offset + 2 * (stop - start - 1), ns, ne);
+  for (int32_t n = ns; n <= ne; n += 2) {
+    X[n + 1] += floorf((X[n] + X[n + 2]) * 0.5f);
+  }
+}
+
+void idwt_1d_row_inplace_range(sprec_t *row, const int32_t left, const int32_t right,
+                               const int32_t u0, const int32_t u1, const uint8_t transformation,
+                               const int32_t col_lo, const int32_t col_hi) {
+  const int32_t width = u1 - u0;
+  // Default / caller asked for full row → go through the existing fast path.
+  // Produces byte-identical output; zero regression risk for non-JPIP decode.
+  if (col_lo <= u0 && col_hi >= u1) {
+    idwt_1d_row_inplace(row, left, right, u0, u1, transformation);
+    return;
+  }
+  // PSE fill is still required at the row edges because the 1D lifter may
+  // read those positions during boundary work even when the target output
+  // window is entirely interior.  Keep the existing inplace PSE setup.
+  if (width >= 9) {
+    dwt_pse_fill_inplace_simd(row, width);
+  } else {
+    for (int32_t i = 1; i <= left; ++i)
+      row[-i] = row[PSEo(u0 - i, u0, u1)];
+    for (int32_t i = 1; i <= right; ++i)
+      row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+  }
+  // Translate target row cols [col_lo, col_hi] → buffer positions.
+  // X = row - left, so row col k lives at X[k - u0 + left].
+  // Widen by the filter support so the 4-pass (or 2-pass) lifter has valid
+  // neighbors at the target edges.
+  const int32_t widen = (transformation == 1) ? 2 : 4;
+  int32_t row_lo = col_lo - u0 - widen;
+  int32_t row_hi = col_hi - u0 - 1 + widen;  // inclusive row-col upper bound
+  if (row_lo < 0) row_lo = 0;
+  if (row_hi > width - 1) row_hi = width - 1;
+  const int32_t buf_lo = row_lo + left;
+  const int32_t buf_hi = row_hi + left;
+
+  sprec_t *X = row - left;
+  if (transformation == 1) {
+    idwt_1d_filtr_rev53_fixed_range(X, left, u0, u1, buf_lo, buf_hi);
+  } else if (transformation == 0) {
+    idwt_1d_filtr_irrev97_fixed_range(X, left, u0, u1, buf_lo, buf_hi);
+  } else {
+    // ATK irrev53 — rare; fall back to full-width path (no sub-range variant yet).
+    if (transformation < 2)
+      idwt_1d_filtr_fixed[transformation](X, left, u0, u1);
+    else
+      idwt_1d_filtr_irrev53_fn(X, left, u0, u1);
+  }
+}
+
 // =============================================================================
 // Streaming 2D IDWT — idwt_2d_state
 // =============================================================================

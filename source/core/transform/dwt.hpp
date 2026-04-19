@@ -435,6 +435,20 @@ void idwt_2d_state_free(idwt_2d_state *s);
 // any pull_row().  See idwt_2d_state::col_lo / col_hi comments.
 void idwt_2d_state_set_col_range(idwt_2d_state *s, int32_t col_lo, int32_t col_hi);
 
+// Sub-range horizontal 1D IDWT.  col_lo / col_hi are target-valid-output
+// columns in ROW coords [0, u1-u0].  When the caller passes the full range
+// (col_lo <= 0 && col_hi >= u1 - u0) this function is a thin wrapper around
+// idwt_1d_row_inplace() and produces byte-identical output — that is the
+// default JPIP-unaware path.  When a narrower range is requested, a scalar
+// sub-range lifter runs over [col_lo - pse, col_hi + pse] (clamped to
+// [0, u1 - u0]) and skips the columns outside that window.  The caller
+// guarantees the samples outside the processing range are zero on entry and
+// must remain zero on exit; for JPIP this is true because interleave zeros
+// all samples outside the precinct-populated region.
+void idwt_1d_row_inplace_range(sprec_t *row, int32_t left, int32_t right,
+                               int32_t u0, int32_t u1, uint8_t transformation,
+                               int32_t col_lo, int32_t col_hi);
+
 // Rewind streaming cursors (next_out / next_fetch / ring_origin / d_level /
 // top_dlevel / bot_dlevel) to the post-init state without freeing any
 // buffers.  Used by the single-tile reuse path; a subsequent pull_row
