@@ -494,7 +494,13 @@ async function connect() {
       ]);
       const tFetch = performance.now();
 
-      M._jpip_begin_frame(ctx);
+      // Foveation demo semantics: each frame is a fresh 3-cone RoI snapshot
+      // (fovea / parafovea / periphery at the current gaze point).  We want
+      // the previous gaze's high-res precincts to disappear when the mouse
+      // moves, so explicitly drop the accumulated DataBinSet + decoder state.
+      // The JPIP large-image viewer wants the opposite (accumulate for pan
+      // reuse) and calls jpip_begin_frame (a no-op) instead.
+      M._jpip_reset_cache(ctx);
       for (const ab of [r1, r2, r3]) {
         const arr = new Uint8Array(ab);
         const ptr = M._malloc(arr.length);

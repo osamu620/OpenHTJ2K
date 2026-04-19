@@ -176,7 +176,7 @@ target_link_libraries(libopen_htj2k_mt_simd PRIVATE open_htj2k_mt_simd_lib)
 # ── JPIP browser demo ────────────────────────────────────────────────────────
 # Exposes the JPIP client-side pipeline (parse → reassemble → decode) via
 # a thin C API that the JS side calls per frame.
-set(JPIP_EXPORTED_FUNCTIONS "[_malloc,_free,_jpip_create_context,_jpip_get_canvas_width,_jpip_get_canvas_height,_jpip_get_num_components,_jpip_get_total_precincts,_jpip_set_reduce,_jpip_begin_frame,_jpip_add_response,_jpip_end_frame,_jpip_end_frame_region,_jpip_destroy_context]")
+set(JPIP_EXPORTED_FUNCTIONS "[_malloc,_free,_jpip_create_context,_jpip_get_canvas_width,_jpip_get_canvas_height,_jpip_get_num_components,_jpip_get_total_precincts,_jpip_set_reduce,_jpip_begin_frame,_jpip_reset_cache,_jpip_add_response,_jpip_end_frame,_jpip_end_frame_region,_jpip_destroy_context]")
 set(JPIP_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../source/core/jpip
     ${CMAKE_CURRENT_SOURCE_DIR}/../source/core/interface
