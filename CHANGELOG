@@ -1,3 +1,354 @@
+# [0.15.0] - 2026-04-20
+
+## JPIP — foveated streaming and gigapixel browsing (new)
+
+Adds a complete client + server implementation of **JPIP**
+(ISO/IEC 15444-9, 3rd edition): on-demand delivery of JPEG 2000
+codestreams at the precinct level, over HTTP/1.1 or HTTP/3-over-QUIC.
+Two interactive demos ship with it — mouse-driven **foveation**
+(`open_htj2k_jpip_demo` + `jpip_demo.html`) and a pan-and-zoom
+**gigapixel viewer** (`jpip_viewer.html`) for images larger than the
+GPU texture limit — plus a foveation-vs-full-image `open_htj2k_jpip_benchmark`
+CLI.  Both browser demos decode entirely in-page via WebAssembly; no
+server-side decode, no plugin.
+
+Try them at:
+- **https://htj2k-demo.pages.dev/jpip_demo.html** — foveation
+- **https://htj2k-demo.pages.dev/jpip_viewer.html** — gigapixel viewer
+
+For architecture, wire format, and CLI usage, see the new
+[**docs/jpip.md**](docs/jpip.md).
+
+### Core library (`source/core/jpip/`)
+
+Sixteen modules, ~6K lines of new C++:
+
+* `precinct_index.{hpp,cpp}` — builds the `(t, c, r, p_rc) → s → I`
+  lookup from a parsed main header, per §A.3.2.1.  `CodestreamIndex`
+  carries per-(tile, component) precinct geometry, canvas geometry,
+  tile-component extents, and precinct-partition parameters.
+  `build_from_main_header_bin()` lets the client construct an index
+  from just the header data-bin (no full codestream needed).
+* `view_window.{hpp,cpp}` — §C.4 view-window resolver: maps
+  `(fsiz, roff, rsiz)` to the set of precinct keys that contribute.
+  Picks the discard level under round-direction "down" via
+  `CodestreamIndex::max_NL`.  Full-image view-window (no `roff`/`rsiz`)
+  gives the full precinct set.
+* `vbas.{hpp,cpp}` — VBAS (variable-length big-endian) encode / decode
+  per §A.2.1.  Used by every message header.
+* `jpp_message.{hpp,cpp}` — JPP-stream message header codec: class +
+  CSn + in-class id + msg-offset + msg-length + Aux (§A.2, Tables
+  A.1 + A.2).  Classes 0 (precinct), 2 (tile header), 6 (main header),
+  7 (EOR), 8 (metadata).
+* `data_bin_emitter.{hpp,cpp}` — emits main-header / tile-header /
+  metadata-bin-0 / precinct data-bin messages from a loaded codestream
+  and a `CodestreamLayout`.
+* `codestream_walker.{hpp,cpp}` — one-time pass over the source
+  codestream to locate each tile-part and each tile-header marker
+  segment (feeds the emitter).
+* `packet_locator.{hpp,cpp}` — builds a per-precinct byte-range table
+  by driving the decoder once with a packet observer.
+* `jpp_parser.{hpp,cpp}` — consumes a JPP-stream byte buffer, appends
+  every message body into a `DataBinSet` keyed by `(class, in_class_id)`.
+  Strict in-order assumption for v1 (no gaps, no duplicates).
+* `codestream_assembler.{hpp,cpp}` — two entry points:
+  `reassemble_codestream` (server side, using the original codestream +
+  `PacketLocator`) and `reassemble_codestream_client` (client side, no
+  original bytes needed — patches the COD marker to LRCP, walks
+  `(L, R, C, P)` with absent-packet 0x00 fill).
+* `cache_model.{hpp,cpp}` — §C.9 client cache model with range
+  compression (`Hm,Ht0-5,M0` instead of `Ht0,Ht1,Ht2,…`).  Parses
+  `&model=` request fields; formats the outgoing advertisement.
+* `jpip_request.{hpp,cpp}` — query parser (`fsiz`, `roff`, `rsiz`,
+  `type=jpp-stream`, `model=...`).
+* `jpip_response.{hpp,cpp}` — HTTP response framer with CORS headers
+  and EOR message trailer.
+* `jpip_client.{hpp,cpp}` — HTTP/1.1 client used by the native demo;
+  accepts an optional `CacheModel` so successive fetches carry
+  `&model=` without re-emitted headers.
+* `tcp_socket.{hpp,cpp}` — cross-platform `TcpStream` /
+  `TcpListener` (Winsock on Windows, BSD sockets elsewhere).
+* `h3_server.{hpp,cpp}` / `h3_client.{hpp,cpp}` — HTTP/3 over QUIC
+  via MsQuic + nghttp3.  `H3Client::fetch_multi` multiplexes N
+  concurrent requests on one QUIC connection; the foveation demo
+  uses it to send fovea + parafovea + periphery in a single RTT.
+
+Progression-order policy: the client reassembler patches the COD
+marker to LRCP so the `(L, R, C, P)` walk produces a well-formed
+codestream regardless of the source's original ordering.  v1 supports
+single-layer streams; multi-layer bins are re-emitted per layer
+as-is.  SOP / EPH markers are refused by the reassembler.
+
+### Native CLIs
+
+* **`open_htj2k_jpip_server`** — stateless HTTP/1.1 (or HTTP/3 with
+  `--h3 --cert ... --key ...`) server.  Loads one `.j2c`, builds the
+  index + packet locator once.  Each request: `resolve_view_window`
+  picks precinct keys, `build_jpp_stream` emits the complete
+  JPP-stream (headers it knows the client lacks, plus precincts),
+  sends with `Content-Type: application/jpp-stream`.  CORS preflight
+  (`OPTIONS`) handled for cross-origin browser access.
+* **`open_htj2k_jpip_demo`** — mouse-driven foveation over GLFW +
+  OpenGL.  Three concentric cones (fovea / parafovea / periphery)
+  follow the cursor; runs in-process (JPP round-trip), over HTTP/1.1
+  (`--server host:port`), or over HTTP/3 (`--server-h3 host:port`).
+  `--use-filter` bypasses the wire format via direct precinct
+  filtering for A/B comparison.  `--window-size WxH` decouples the
+  GPU texture size from the canvas; the Metal 16384-pixel cap is
+  honoured so 21600 × 10800 NASA Blue Marble-class canvases run on
+  Apple silicon.  `--reduce N` discards N DWT levels; foveation
+  radii and ratios are CLI-tunable.
+* **`open_htj2k_jpip_benchmark`** — sweeps an NxN gaze grid,
+  reporting bandwidth reduction and decode speedup for foveated vs
+  full-image delivery.  CSV export with `--csv`.
+
+### Browser demos
+
+* **`jpip_demo.html`** — mouse-over a canvas; three concurrent
+  `fetch()` requests per gaze move return the three cones'
+  JPP-streams, merged into a WASM-side `DataBinSet`, reassembled,
+  decoded in WebAssembly, painted via WebGL2 (bilinear filtering).
+  Multi-threaded SIMD WASM under cross-origin isolation; SIMD-only
+  fallback otherwise.  Per-frame cache semantics: precincts reset
+  each frame (periphery must decay when the gaze moves), headers
+  preserved so the outgoing `&model=Hm,…,M0` stays truthful and the
+  server stops re-sending tens of KB of headers.  Ratio controls
+  (parafovea + periphery), reduce control, URL parameter support,
+  URL-parameters + JPIP-query + cache-model reference tables inline.
+* **`jpip_viewer.html`** — pan + zoom for images larger than the
+  GPU texture cap.  Decoder's viewport-region path
+  (`jpip_end_frame_region`) runs the IDWT only on the rows in the
+  visible rectangle, with a column-limited horizontal 1D IDWT
+  dropping samples outside the visible columns.  Pan events
+  debounce + coalesce (trailing 60 ms window, in-flight latest-pending
+  slot) so rapid trackpad input doesn't fan out into N fetches.
+
+### Viewport-region decode (V2 — `jpip_end_frame_region`)
+
+* `decoder.hpp`: new `set_row_limit(uint32_t)` and
+  `set_col_range(uint32_t, uint32_t)` entries.  The line-based IDWT
+  stops iterating after `row_limit`; rows before the viewport
+  zero-skip for free via Phase 4's `adv_step` short-circuit; the
+  horizontal 1D IDWT only processes columns in `[col_lo, col_hi)`.
+* `subprojects/src/jpip_wrapper.cpp`: `jpip_end_frame_region(ctx,
+  rgb, w, h, region_x, region_y, region_w, region_h)` clamps the
+  region to the canvas at the active reduce level, precomputes an
+  `xc` column LUT once per frame, and decodes only the in-viewport
+  rows.  On a 42K × 10K canvas at `reduce=0`, a centred viewport
+  decodes in ~400 ms in WASM where the full canvas took ~3000 ms.
+
+### WASM C API (`subprojects/src/jpip_wrapper.cpp`)
+
+New or changed entry points exported from the JPIP variant:
+
+| Function | Purpose |
+|---|---|
+| `jpip_create_context(jpp, len)` | parse initial JPP-stream, build `CodestreamIndex` |
+| `jpip_set_reduce(n)` | discard N DWT levels |
+| `jpip_get_response_buffer(ctx, min_size)` | grow-only staging pointer; removes per-frame `_malloc` / `_free` |
+| `jpip_add_response(ctx, buf, len)` | parse JPP-stream, merge into `DataBinSet`, update cache model |
+| `jpip_get_cache_model(ctx)` | C-string for `&model=` advertisement (e.g. `Hm,Ht0,M0`) |
+| `jpip_reset_cache(ctx)` | soft reset — drops precinct bins, keeps headers |
+| `jpip_end_frame(ctx, rgb, w, h)` | full-canvas decode |
+| `jpip_end_frame_region(ctx, rgb, w, h, x, y, rw, rh)` | viewport-region decode |
+| `jpip_get_canvas_{width,height}` · `jpip_get_num_components` · `jpip_get_total_precincts` | asset metadata |
+
+`UTF8ToString` added to `EXPORTED_RUNTIME_METHODS` for the
+`jpip_get_cache_model` return value.
+
+### Performance
+
+* **Reassembler bucketing** — `reassemble_codestream_client` used to
+  nest Layer × Resolution × Component × Precinct inside each tile,
+  hash-probing the `DataBinSet` for every possible precinct ID.  Now
+  does a single pass over delivered bins, buckets by tile-component
+  pair, and emits touched (r, c) groups only.  On a 103K-precinct
+  asset with ~500-bin viewports (heic2501a), the 10–50 ms dirty-frame
+  cost drops to single milliseconds.
+* **Server keys-driven emission** — `build_jpp_stream` now iterates
+  the `keys` vector `resolve_view_window` already produces instead
+  of hash-probing the full T × C × R × P grid.  Drops complexity
+  from O(total_precincts) to O(|keys|); the foveation demo's 3×
+  concurrent requests no longer amplify the full grid walk 3×.
+* **Server: single `resolve_view_window` per request** — the HTTP/1.1
+  and HTTP/3 paths used to call it a second time just for the log
+  line.  Returns the count from `build_jpp_stream` instead.
+* **WASM row callback** — `jpip_end_frame` and
+  `jpip_end_frame_region` used to run a per-pixel 64-bit divide
+  (`xc = xw · cw / ow`) and a captured-lambda `to_u8` call per
+  channel.  Rewrite precomputes an `xc_lut[ow]` once per frame,
+  hoists the bit-depth shift to a branchless `>> shift_pos`, marks
+  the three row pointers and LUT `__restrict__`, and drops the
+  lambda for inline branchless clamps.  The region variant clamps
+  `rx1`/`ry1` to the canvas extent upfront so the per-pixel
+  `xc >= cw` guard goes with it.
+* **Persistent response buffer** — new `jpip_get_response_buffer`
+  entry point exposes a grow-only staging pointer on the
+  `JpipContext`.  Both demos now reuse it across every
+  `add_response` instead of `_malloc` / write / `_free` cycling —
+  3× per foveation frame eliminated.
+* **Client cache-model advertisement** — both demos advertise
+  `&model=Hm,Ht*,M0` so the server skips already-delivered headers
+  (tens of KB per request).  Headers survive
+  `jpip_reset_cache` as a soft reset; precincts do not.
+* **Persistent decoder + single-tile reuse cache** — the viewer
+  keeps one `openhtj2k_decoder` alive across frames with
+  `enable_single_tile_reuse()`.  A `reduce_NL` change is not
+  fingerprinted by the reuse cache, so the wrapper detects the
+  transition and manually invalidates.
+* **Debounced pan + in-flight coalescing** — viewer.  Trailing 60 ms
+  window collapses rapid trackpad events into one fetch; a
+  latest-pending slot guarantees the final viewport the user aimed
+  at is the one rendered.
+* **Viewer `lastFetchKey`** — drop `zoom × 1000` from the dedupe key
+  since `computeReduce()` already collapses zoom jitter within the
+  same reduce level.
+* **Full-canvas region memset elimination** — skip the per-frame
+  `O(ow · oh · 4)` zero-wipe in `jpip_end_frame_region` when the
+  region fully covers the canvas (initial viewer load, fit-to-screen
+  zoom).
+* **Concurrent JPIP fetches (native + H3)** — the native demo's
+  HTTP/1.1 path uses `std::async` on three `JpipClient::fetch`
+  calls; the HTTP/3 path uses `H3Client::fetch_multi`.  Latency
+  drops from sum(3 RTTs) to max(3 RTTs).
+
+### Deployment
+
+* `deploy/` — Dockerfile + Cloudflare Tunnel configuration for
+  hosting the JPIP server.  Static-library link so the container has
+  no `.so` dependency; `debian:bookworm-slim` base.
+* `subprojects/index.html` — "JPIP Foveation" tab added to the demo
+  navigation.
+* CORS: `open_htj2k_jpip_server` emits `Access-Control-Allow-Origin: *`
+  on both `OPTIONS` (preflight) and `GET` so the browser demos can
+  fetch cross-origin.
+
+### Fixes
+
+* Export `CodestreamIndex` / `resolve_view_window` for MSVC DLL
+  builds.
+* `>8-bit` codestreams render correctly in the native demo
+  (row-to-RGB uses `depth - 8` shift).
+* WASM: refresh `HEAPU8` view after `_malloc` to handle ALLOW_MEMORY_GROWTH
+  reallocation.
+* WASM row duplication on `reduce > 0` (upsampling).
+* WASM `?server=` URL parameter now fires before the module loads.
+* WASM: use the full canvas resolution for the WebGL texture
+  (bilinear filtering handles display downscale).
+* `reassemble_codestream_client` reassembles from the persistent
+  cache, not just the per-frame response, so headers from the
+  initial handshake aren't lost.
+* `header_cache` excludes precinct data-bins (foveation semantics).
+* `invalidate_reuse` on `reduce_NL` change — prevents the single-tile
+  reuse cache from returning a tile tree sized for the wrong
+  resolution after a zoom.
+* `jpip_demo.html`: reset cache per frame so the periphery decays
+  when the gaze moves.
+* `jpip_viewer.html`: invalidate single-tile reuse cache on
+  `reduce_NL` change; handles JS-side zoom transitions cleanly.
+
+### HTTP/3 transport fixes
+
+* `QUIC_STREAM_START_FLAG_IMMEDIATE` on new streams — avoids a race
+  where the peer sees the stream open before the header frame.
+* Heap-allocate `QUIC_BUFFER` for async `StreamSend` — stack
+  allocation would disappear before MsQuic read it.
+* Compute QUIC stream IDs from type + arrival order instead of
+  relying on MsQuic's `GetParam` (unreliable on macOS).
+* H3 client fetches main-header on first connect; `--server-h3` mode
+  guards against missing index before the first frame.
+
+## Encoder
+
+### TLM marker emission
+
+`open_htj2k_enc` now emits a TLM (Tile-part Length Main) marker in
+its output codestreams.  Downstream JPIP tools (packet locator,
+precinct index) consume `TLM` to avoid a full codestream scan when
+building the per-tile byte offset table.  Decoder surface exposes
+tile-part lengths via the `TLM_marker` accessors.
+
+### Fixes
+
+* `PnmStreamReader`: PPM rasters whose first pixel byte is a
+  whitespace character (0x20 / 0x0A / 0x0D / 0x09) were being
+  consumed as header whitespace, shifting the stream by one byte.
+  The reader now anchors on the single required delimiter after the
+  `maxval` field and treats the next byte as raster regardless of
+  value.
+* `invoke` / `invoke_line_based_stream` encoder paths now surface
+  exception messages from `std::exception::what()` instead of the
+  generic `"encode failed"` string.
+
+## Browser RTP demo polish (`rtp_demo.html`)
+
+Incremental work on the video-replay demo shipped in 0.14.0.
+
+### Sample hosting — Cloudflare R2 + edge caching
+
+* Moved the default `.rtp` samples from the deploy bundle to a
+  Cloudflare R2 bucket served through a custom domain with HTTP
+  cache headers set by a small Pages Function.  Smaller deploys
+  (the sample clips no longer ride along in every Pages build),
+  faster cold starts (R2 objects hit the CDN edge).
+* `.github/workflows/warm-rtp-cache.yml` — scheduled workflow that
+  pre-warms the Cloudflare edge from a US runner so first-visit
+  TTFB stays low after clip rotations.
+* Preset dropdown: Sollevante 1080p/2160p (Netflix Open Content) as
+  the new default, Spark part 6/8 and Chimera 4K as alternates.
+  Legacy CloudFront URL still supported.
+
+### Paced-mode frame dropping
+
+* Opt-in UI checkbox + `?drop=1` URL parameter.  When enabled,
+  paced mode skips frames whose RTP-clock target is already past —
+  useful on slow hardware; off by default so marginal decoders play
+  smoothly (slow-motion) rather than stuttering.
+* `?drop_periods=N` (default 8 frame-periods ≈ 267 ms at 29.97 fps)
+  controls the slack before dropping kicks in.
+* `?preroll=N` (default 3) — frames decoded back-to-back before the
+  paced wall clock anchors.  Absorbs cold-start decode spikes (SIMD
+  warmup, WASM JIT).
+
+### Paced display via `requestAnimationFrame`
+
+* Display pacing moved from `setTimeout` to `requestAnimationFrame`
+  so paint happens on the vsync boundary rather than chasing one.
+* Network reads run on a background pump decoupled from the consumer
+  rate, so a slow decoder can't stall the fetch pipeline.
+
+### 2 GB heap cap + auto-reduce
+
+* Raised `MAXIMUM_MEMORY` from 1 GB to 2 GB (Emscripten link flag)
+  for 4K content.
+* Auto-reduce starts at `reduce_NL=1` for 4K streams so typical
+  displays get a smooth 2K decode without the user having to flip
+  a knob.
+
+## Build / packaging
+
+### Shared library rename — `libopenhtj2k`
+
+The installed shared library is now `libopenhtj2k.so.<major>` (plain
+`libopenhtj2k` with no separator) instead of `libopen_htj2k`.  Matches
+Debian's shlib policy for version-sonamed libraries so downstream
+packaging is linear.  The CMake target name is unchanged; only the
+output filename moves.
+
+### Docker
+
+* `deploy/Dockerfile` — `debian:bookworm-slim` base, static-linked
+  server (no `.so` dependency), runs on a non-root user.
+
+## Documentation
+
+* [**docs/jpip.md**](docs/jpip.md) — complete reference for the JPIP
+  subsystem: server + demo CLIs, browser demos, benchmark tool,
+  core architecture, data-bin classes, JPIP sequence number /
+  identifier derivation, viewport-region decode (V2), cache-model
+  wire format (§C.9), WASM C API, deployment pointer, known
+  limitations.
+
 # [0.14.0] - 2026-04-14
 
 ## Browser-side HTJ2K video playback

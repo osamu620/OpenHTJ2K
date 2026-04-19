@@ -140,6 +140,42 @@
   }
   #help .close:hover { background: var(--surface); color: var(--text); }
   #help .row { margin: 2px 0; }
+  #help .callout {
+    margin: 8px 0 4px; padding: 8px 10px;
+    background: var(--bg); border-left: 3px solid var(--accent);
+    border-radius: 4px; color: var(--text-sub); line-height: 1.5;
+  }
+  #help .callout b { color: var(--text); }
+  #help { max-height: calc(100vh - 90px); overflow-y: auto; }
+  #help details { margin-top: 10px; }
+  #help details > summary {
+    cursor: pointer; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.7px;
+    color: var(--text-sub); opacity: 0.85; list-style: none;
+    user-select: none;
+  }
+  #help details > summary::-webkit-details-marker { display: none; }
+  #help details > summary::before {
+    content: "▸ "; color: var(--accent); display: inline-block;
+  }
+  #help details[open] > summary::before { content: "▾ "; }
+  #help details table {
+    width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 11px;
+  }
+  #help details th, #help details td {
+    text-align: left; padding: 3px 6px; vertical-align: top;
+    border-bottom: 1px solid var(--border);
+  }
+  #help details th {
+    color: var(--text-sub); font-weight: 600; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  #help details tr:last-child td { border-bottom: none; }
+  #help code {
+    background: var(--bg); padding: 1px 4px; border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px; color: var(--accent);
+  }
 
   /* Small-screen collapse of the top bar */
   @media (max-width: 780px) {
@@ -182,6 +218,13 @@
   Only the precincts that fall inside the current viewport are fetched and decoded,
   so pan-and-zoom on a 400+ MP image stays interactive.
 
+  <div class="callout">
+    <b>Runs entirely in your browser.</b>  HTJ2K decoding is
+    <b>WebAssembly</b> &mdash; no native binary, no plugin, no server-side
+    decode.  The JPIP server only returns JPP-stream bytes; reassembly and
+    IDWT happen on this page.
+  </div>
+
   <div class="section-h">Pan</div>
   <div class="row">Drag the image with the mouse.</div>
   <div class="row"><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>  (<kbd>Shift</kbd> = large step)</div>
@@ -196,6 +239,54 @@
 
   <div class="section-h">Related</div>
   <div class="row"><a href="jpip_demo.html">→ Foveated streaming demo</a></div>
+
+  <details>
+    <summary>URL parameters</summary>
+    <table>
+      <thead>
+        <tr><th>Param</th><th>Default</th><th>Effect</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>?server=</code></td><td>—</td><td>JPIP server (<code>host[:port]</code>).</td></tr>
+        <tr><td><code>?debounce=</code></td><td><code>60</code></td><td>Trailing-debounce window in ms; <code>0</code> disables. Coalesces rapid wheel / trackpad events into one fetch.</td></tr>
+        <tr><td><code>?debug</code></td><td>off</td><td>Per-frame timing dump to the browser console.</td></tr>
+        <tr><td><code>?variant=</code></td><td>auto</td><td><code>mt</code> or <code>st</code> — force multi- or single-threaded WASM.</td></tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details>
+    <summary>JPIP query (§C.4)</summary>
+    <div class="row" style="margin-top:6px">Each pan fires one GET:</div>
+    <div class="row"><code>/jpip?fsiz=W,H&amp;roff=X,Y&amp;rsiz=W,H&amp;type=jpp-stream&amp;model=…</code></div>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>fsiz</code></td><td>Resolution frame size — picks the discard level.</td></tr>
+        <tr><td><code>roff</code></td><td>Region offset within the frame.</td></tr>
+        <tr><td><code>rsiz</code></td><td>Region size (viewport at the active reduce level).</td></tr>
+        <tr><td><code>model</code></td><td>Cache-model advertisement (see below).</td></tr>
+      </tbody>
+    </table>
+  </details>
+
+  <details>
+    <summary>Cache-model format (§C.9)</summary>
+    <div class="row" style="margin-top:6px">After frame 1 the viewer appends <code>&amp;model=Hm,Ht0,M0</code> (single-tile) or <code>&amp;model=Hm,Ht0-<i>N</i>,M0</code> (multi-tile) so the server skips header data-bins already delivered.</div>
+    <table>
+      <thead>
+        <tr><th>Class</th><th>Prefix</th><th>Example</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Main header</td><td><code>Hm</code></td><td><code>Hm</code></td></tr>
+        <tr><td>Tile header</td><td><code>Ht</code></td><td><code>Ht0</code>, <code>Ht1-5</code></td></tr>
+        <tr><td>Metadata bin</td><td><code>M</code></td><td><code>M0</code></td></tr>
+        <tr><td>Precinct</td><td><code>Hp</code></td><td><b>not sent</b></td></tr>
+      </tbody>
+    </table>
+  </details>
 </div>
 
 <div id="stats"></div>

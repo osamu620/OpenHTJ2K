@@ -23,6 +23,14 @@ documents below are for offline browsing.
   option reference, operational guide (kernel `rmem_max`), hardware
   requirements for 4K @ 60 fps, and known issues.
 
+## JPIP (foveated streaming + gigapixel viewer)
+
+- [**jpip.md**](jpip.md) — end-to-end JPIP (ISO/IEC 15444-9)
+  reference: `open_htj2k_jpip_server`, `open_htj2k_jpip_demo`, and
+  `open_htj2k_jpip_benchmark` CLIs; the in-browser foveation and
+  pan-and-zoom viewer demos; core library architecture; wire-format
+  details (JPP-stream, §C.9 cache model); WASM C API.
+
 ## Other references
 
 - [CHANGELOG](../CHANGELOG) — release history.

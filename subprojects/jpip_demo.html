@@ -140,6 +140,50 @@
   .help-grid ol li { margin-bottom: 4px; }
   @media (max-width: 720px) { .help-grid { grid-template-columns: 1fr; } }
 
+  /* ── Collapsible URL-parameters / cache-model reference ── */
+  .url-params {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 20px; margin-bottom: 20px;
+    font-size: 13px;
+  }
+  .url-params > summary {
+    cursor: pointer; font-weight: 600; color: var(--text-sub);
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px;
+    list-style: none; user-select: none;
+  }
+  .url-params > summary::-webkit-details-marker { display: none; }
+  .url-params > summary::before {
+    content: "▸ "; color: var(--accent); display: inline-block;
+    transition: transform 0.15s;
+  }
+  .url-params[open] > summary::before { content: "▾ "; }
+  .url-params h4 {
+    font-size: 12px; font-weight: 700; color: var(--text);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin: 14px 0 6px;
+  }
+  .url-params h4:first-of-type { margin-top: 12px; }
+  .url-params table {
+    width: 100%; border-collapse: collapse;
+  }
+  .url-params th, .url-params td {
+    text-align: left; padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .url-params th {
+    color: var(--text-sub); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .url-params td code {
+    background: var(--bg); padding: 1px 5px; border-radius: 3px;
+    font-size: 12px; color: var(--accent);
+  }
+  .url-params tr:last-child td { border-bottom: none; }
+  .url-params p { color: var(--text-sub); line-height: 1.55; margin-top: 8px; }
+
   /* ── Footer ──────────────────────────────────────────── */
   .site-footer {
     margin-top: 40px;
@@ -226,8 +270,15 @@
       are sent per mouse move: a small sharp <b>fovea</b> around the cursor, a medium-resolution
       <b>parafovea</b>, and a coarse full-image <b>periphery</b>.  The server streams only the
       precincts each region needs; the client reassembles them and decodes the composite
-      JPEG 2000 / HTJ2K codestream in WebAssembly.  Bandwidth per frame is a small fraction
-      of a full-image decode.
+      JPEG 2000 / HTJ2K codestream.  Bandwidth per frame is a small fraction of a full-image
+      decode.
+      <p style="margin-top:10px; padding: 8px 12px; background: var(--bg); border-left: 3px solid var(--accent); border-radius: 4px;">
+        <b>Runs entirely in your browser.</b>  The HTJ2K decoder is
+        <b>WebAssembly</b> (compiled from the same C++ source as
+        <code>open_htj2k_dec</code>) &mdash; no native binary, no plugin, no
+        server-side decode.  The JPIP server returns raw JPP-stream bytes;
+        everything you see is assembled and decoded on this page.
+      </p>
     </div>
     <div>
       <h3>How to operate</h3>
@@ -243,6 +294,79 @@
     </div>
   </div>
 </div>
+
+<details class="url-params">
+  <summary>URL parameters &amp; wire-format reference</summary>
+
+  <h4>URL parameters</h4>
+  <table>
+    <thead>
+      <tr><th>Parameter</th><th>Default</th><th>Values</th><th>Effect</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>?server=</code></td>
+        <td>—</td>
+        <td><code>host[:port]</code></td>
+        <td>Override the JPIP server URL (same as the <b>Server</b> field in the top bar).</td>
+      </tr>
+      <tr>
+        <td><code>?reduce=</code></td>
+        <td><code>1</code></td>
+        <td><code>0</code> · <code>1</code> · <code>2</code></td>
+        <td>Discard N DWT resolution levels. <code>0</code> = full resolution; higher = faster decode, lower detail.</td>
+      </tr>
+      <tr>
+        <td><code>?para_ratio=</code></td>
+        <td><code>0.5</code></td>
+        <td><code>0.5</code> · <code>0.25</code> · <code>0.125</code></td>
+        <td>Parafovea <code>fsiz</code> ratio — the mid-resolution cone's frame size relative to the canvas.</td>
+      </tr>
+      <tr>
+        <td><code>?peri_ratio=</code></td>
+        <td><code>0.125</code></td>
+        <td><code>0.25</code> · <code>0.125</code> · <code>0.0625</code></td>
+        <td>Periphery <code>fsiz</code> ratio — lower values produce a more dramatic outside-the-fovea quality drop.</td>
+      </tr>
+      <tr>
+        <td><code>?variant=</code></td>
+        <td>auto</td>
+        <td><code>mt</code> · <code>st</code></td>
+        <td>Force multi- or single-threaded WASM. Auto picks <code>mt</code> when the page is cross-origin-isolated and SIMD is available.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>JPIP query (§C.4)</h4>
+  <p>Every frame fires three concurrent GETs — one per cone — of the form:</p>
+  <p><code>/jpip?fsiz=W,H&amp;roff=X,Y&amp;rsiz=W,H&amp;type=jpp-stream&amp;model=&lt;cache-model&gt;</code></p>
+  <table>
+    <thead>
+      <tr><th>Field</th><th>Meaning</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>fsiz</code></td><td>Target resolution-frame size. The server picks the smallest discard level whose decoded size ≥ <code>fsiz</code>.</td></tr>
+      <tr><td><code>roff</code></td><td>Region offset within the resolution frame.</td></tr>
+      <tr><td><code>rsiz</code></td><td>Region size. Omit <code>roff</code>/<code>rsiz</code> for the whole frame.</td></tr>
+      <tr><td><code>type=jpp-stream</code></td><td>The only wire format this server speaks.</td></tr>
+      <tr><td><code>model</code></td><td>§C.9 client cache-model advertisement — see below.</td></tr>
+    </tbody>
+  </table>
+
+  <h4>Cache-model format (§C.9)</h4>
+  <p>After the first frame the demo appends <code>&amp;model=Hm,Ht0,M0</code> (single-tile image) or <code>&amp;model=Hm,Ht0-<i>N</i>,M0</code> (<i>N</i>+1 tiles) so the server skips header data-bins the client already has. Precincts are intentionally NOT tracked — the foveation demo resets precinct state per frame so the periphery decays when the gaze moves.</p>
+  <table>
+    <thead>
+      <tr><th>Class</th><th>Prefix</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Main header</td><td><code>Hm</code></td><td><code>Hm</code> (id is always 0, so no digit)</td></tr>
+      <tr><td>Tile header</td><td><code>Ht</code></td><td><code>Ht0</code>, <code>Ht1-5</code> (range compression)</td></tr>
+      <tr><td>Metadata bin</td><td><code>M</code></td><td><code>M0</code></td></tr>
+      <tr><td>Precinct</td><td><code>Hp</code></td><td><b>not sent</b> by this demo</td></tr>
+    </tbody>
+  </table>
+</details>
 
 <footer class="site-footer">
   <a href="https://github.com/osamu620/OpenHTJ2K" target="_blank" rel="noopener">
