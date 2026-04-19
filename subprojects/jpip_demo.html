@@ -399,6 +399,18 @@ function buildQuery(fx, fy, ox, oy, sx, sy) {
   if (ox || oy) q += `&roff=${ox},${oy}`;
   if (sx || sy) q += `&rsiz=${sx},${sy}`;
   q += '&type=jpp-stream';
+  // Append the client cache-model (§C.9) so the server skips headers /
+  // tile-headers / metadata bins the WASM side already holds.  Precincts
+  // are intentionally NOT tracked — the demo's per-frame reset drops
+  // them so the periphery decays when the gaze moves (commit a6749fd).
+  if (ctx && M) {
+    const modelPtr = M._jpip_get_cache_model(ctx);
+    const model = modelPtr ? M.UTF8ToString(modelPtr) : '';
+    // Don't percent-encode — the server splits on ',' and on '=' /
+    // '&' without URL-decoding (see jpip_request.cpp), and commas are
+    // legal unencoded inside a query value.
+    if (model) q += `&model=${model}`;
+  }
   return q;
 }
 

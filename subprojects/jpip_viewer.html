@@ -405,6 +405,14 @@ async function fetchView() {
   let q = `fsiz=${fW},${fH}`;
   if (rx > 0 || ry > 0) q += `&roff=${rx},${ry}`;
   q += `&rsiz=${rw},${rh}&type=jpp-stream`;
+  // Advertise the header / tile-header / metadata bins WASM already holds
+  // so the server can skip them on every pan — not percent-encoded; the
+  // server splits on literal ',' and '=' inside the query value.
+  if (ctx && M) {
+    const modelPtr = M._jpip_get_cache_model(ctx);
+    const model = modelPtr ? M.UTF8ToString(modelPtr) : '';
+    if (model) q += `&model=${model}`;
+  }
   const outW = vpW, outH = vpH;
 
   try {
