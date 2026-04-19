@@ -60,6 +60,8 @@ class openhtj2k_decoder_impl {
   j2c_src_memory in;
   uint8_t reduce_NL;
   uint32_t row_limit_ = UINT32_MAX;
+  uint32_t col_lo_    = 0;
+  uint32_t col_hi_    = UINT32_MAX;
   bool is_codestream_set;
   bool is_parsed;
   j2k_main_header main_header;
@@ -124,6 +126,10 @@ class openhtj2k_decoder_impl {
                                     std::vector<bool> &);
   void enable_single_tile_reuse(bool on);
   void set_row_limit(uint32_t limit) { row_limit_ = limit; }
+  void set_col_range(uint32_t col_lo, uint32_t col_hi) {
+    col_lo_ = col_lo;
+    col_hi_ = col_hi;
+  }
   void set_precinct_filter(std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> f);
   void set_packet_observer(
       std::function<void(uint16_t, uint16_t, uint8_t, uint32_t, uint16_t, uint64_t, uint64_t)> f);
@@ -672,7 +678,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL,
           [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
             cb(global_y + y_local, rows, nc);
-          }, row_limit_);
+          }, row_limit_, col_lo_, col_hi_);
       tileSet[tile_idx].destroy();
       global_y += band_h0;
     }
@@ -734,7 +740,8 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         tileSet[tile_idx].destroy();
         throw std::runtime_error("Abort Decoding!");
       }
-      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_);
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_,
+                                                  col_lo_, col_hi_);
       tileSet[tile_idx].destroy();  // Release tile-internal buffers immediately
     }
 
@@ -784,6 +791,10 @@ void openhtj2k_decoder_impl::enable_single_tile_reuse(bool on) {
 
 void openhtj2k_decoder::set_row_limit(uint32_t limit) {
   this->impl->set_row_limit(limit);
+}
+
+void openhtj2k_decoder::set_col_range(uint32_t col_lo, uint32_t col_hi) {
+  this->impl->set_col_range(col_lo, col_hi);
 }
 
 void openhtj2k_decoder::set_precinct_filter(
@@ -1032,7 +1043,8 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     throw std::runtime_error("Abort Decoding!");
   }
 
-  cached_tileSet_[0].decode_line_based_stream(main_header, reduce_NL, cb, row_limit_);
+  cached_tileSet_[0].decode_line_based_stream(main_header, reduce_NL, cb, row_limit_,
+                                               col_lo_, col_hi_);
 
   cached_header_fingerprint_ = fp;
 }

@@ -117,6 +117,15 @@ class openhtj2k_decoder {
   // this many luma rows.  Default = UINT32_MAX (no limit).
   OPENHTJ2K_EXPORT void set_row_limit(uint32_t limit);
 
+  // Phase 4B spatial-region column range (horizontal viewport clipping).
+  // Restricts the vertical-IDWT lifting work to columns [col_lo, col_hi) in
+  // the finest-resolution output coordinates (after reduce_NL).  Coarser
+  // levels automatically receive a halved range widened by the filter
+  // support.  Default = [0, UINT32_MAX) → full-width lifting (same cost as
+  // before this API existed).  Columns outside the range produce
+  // indeterminate output; the caller must only read within [col_lo, col_hi).
+  OPENHTJ2K_EXPORT void set_col_range(uint32_t col_lo, uint32_t col_hi);
+
   // JPIP partial-decode hook.  When set, every subsequent invoke*() call
   // consults this filter per-packet: precincts for which the filter returns
   // false have their body bytes dropped (not attached to codeblocks) while

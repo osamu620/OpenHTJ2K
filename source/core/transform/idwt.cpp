@@ -863,19 +863,25 @@ static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
   sprec_t *tgt  = rptr(s, r);
   sprec_t *prev = rptr(s, r - 1);
   sprec_t *next = rptr(s, r + 1);
-  const int32_t w = s->u1 - s->u0;
+  // Vertical lifting is per-column-independent — restricting to [col_lo, col_hi]
+  // is safe.  Columns outside this range retain whatever value the fetch_one
+  // path wrote (typically zero from absent-precinct fast path), so only the
+  // caller's read range [col_lo, col_hi] is guaranteed valid.  Default range
+  // equals [u0, u1] → same work as before.
+  const int32_t col0 = s->col_lo - s->u0;
+  const int32_t w    = s->col_hi - s->col_lo;
 
   if (s->transformation == 0) {  // irrev 9/7
     const float coeff = lp ? (cur == 0 ? fD : fB) : (cur == 0 ? fC : fA);
-    adv_irrev_ver_step_fn(w, prev, next, tgt, coeff);
+    adv_irrev_ver_step_fn(w, prev + col0, next + col0, tgt + col0, coeff);
   } else if (s->transformation >= 2) {  // ATK irrev (e.g. irrev53): no floor, 2-step filter
     const float coeff = lp ? 0.25f : -0.5f;
-    adv_irrev_ver_step_fn(w, prev, next, tgt, coeff);
+    adv_irrev_ver_step_fn(w, prev + col0, next + col0, tgt + col0, coeff);
   } else {  // rev 5/3
     if (lp) {
-      adv_rev_ver_lp_step_fn(w, prev, next, tgt);
+      adv_rev_ver_lp_step_fn(w, prev + col0, next + col0, tgt + col0);
     } else {
-      adv_rev_ver_hp_step_fn(w, prev, next, tgt);
+      adv_rev_ver_hp_step_fn(w, prev + col0, next + col0, tgt + col0);
     }
   }
   set_dl(s, r, cur + 1);
@@ -1044,10 +1050,20 @@ void idwt_2d_state_init(idwt_2d_state *s,
   for (int32_t i = 0; i < 4;                     ++i) { s->top_dlevel[i] = -1; s->top_pse_zero[i] = true; }
   for (int32_t i = 0; i < 4;                     ++i) { s->bot_dlevel[i] = -1; s->bot_pse_zero[i] = true; }
 
+  s->col_lo      = u0;
+  s->col_hi      = u1;
   s->next_out    = v0;
   s->next_fetch  = v0;
   s->get_src_row = src_fn;
   s->src_ctx     = src_ctx;
+}
+
+void idwt_2d_state_set_col_range(idwt_2d_state *s, int32_t col_lo, int32_t col_hi) {
+  if (col_lo < s->u0) col_lo = s->u0;
+  if (col_hi > s->u1) col_hi = s->u1;
+  if (col_lo > col_hi) col_lo = col_hi;  // degenerate → empty range
+  s->col_lo = col_lo;
+  s->col_hi = col_hi;
 }
 
 void idwt_2d_state_free(idwt_2d_state *s) {

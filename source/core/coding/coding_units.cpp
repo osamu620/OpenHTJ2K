@@ -129,6 +129,28 @@ static inline int32_t pse_row_idx(int32_t idx, int32_t len) {
   return (idx < len) ? idx : period - idx;
 }
 
+// Early-exit check for LP+HP both-zero.  Scans 16 uint32 words at a time and
+// returns false the moment any non-zero bit pattern (including -0.0f) is seen.
+// For dense data the first block fails the test, so cost is O(64 B) per row.
+// For JPIP sparse frames the scan runs to completion and the caller skips the
+// full interleave + horizontal-IDWT path for this row.
+static inline bool lp_hp_both_zero(const sprec_t *lp, int32_t lp_w,
+                                   const sprec_t *hp, int32_t hp_w) {
+  auto scan = [](const sprec_t *row, int32_t w) -> bool {
+    const uint32_t *p = reinterpret_cast<const uint32_t *>(row);
+    int32_t i = 0;
+    for (; i + 16 <= w; i += 16) {
+      uint32_t acc = 0;
+      for (int32_t j = 0; j < 16; ++j) acc |= p[i + j];
+      if (acc) return false;
+    }
+    uint32_t acc = 0;
+    for (; i < w; ++i) acc |= p[i];
+    return acc == 0;
+  };
+  return scan(lp, lp_w) && scan(hp, hp_w);
+}
+
 // Callback invoked by idwt_2d_state::fetch_one() for each source row.
 static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   auto *c = static_cast<idwt_level_src_ctx *>(ctx);
@@ -164,6 +186,13 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
       lp_ptr = c->ll0_buf->row_ptr(c->ll_y0 + clamped);
     }
     const sprec_t *hp_ptr = c->hl_buf->row_ptr(c->hl_y0 + sub_idx);
+    const int32_t width = c->u1 - c->u0;
+    if (width <= 0) return;
+    // Fast path: both subbands all-zero → horizontal IDWT output is all-zero.
+    if (lp_hp_both_zero(lp_ptr, c->lp_width, hp_ptr, c->hp_width)) {
+      memset(out, 0, sizeof(sprec_t) * static_cast<size_t>(width));
+      return;
+    }
     // Fall through to shared interleave + horizontal IDWT code below.
     // Interleave: LP at u0%2, HP at 1-u0%2.
     const int32_t u_off  = c->u0 & 1;
@@ -176,8 +205,6 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
       for (int32_t j = 0; j < c->lp_width; ++j)  out[2 * j + 1] = lp_ptr[j];
     }
     (void)min_w;  // suppress unused-variable warning (used in BIDIR path below)
-    const int32_t width = c->u1 - c->u0;
-    if (width <= 0) return;
     if (width == 1) {
       if ((c->u0 % 2 != 0) && (c->transformation == 1)) out[0] /= 2.0f;
       return;
@@ -216,6 +243,18 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   } else {
     lp_ptr = c->lh_buf->row_ptr(c->lh_y0 + sub_idx);     // no copy
     hp_ptr = c->hh_buf->row_ptr(c->hh_y0 + sub_idx);     // no copy
+  }
+
+  // Fast path: both subbands all-zero → horizontal IDWT output is all-zero.
+  // For dense codestreams the early-exit scan returns false after ~1 cache
+  // line; for sparse JPIP frames this eliminates the per-row interleave +
+  // 1D-IDWT cost for absent precincts.
+  {
+    const int32_t width_z = c->u1 - c->u0;
+    if (width_z > 0 && lp_hp_both_zero(lp_ptr, c->lp_width, hp_ptr, c->hp_width)) {
+      memset(out, 0, sizeof(sprec_t) * static_cast<size_t>(width_z));
+      return;
+    }
   }
 
   // Interleave: LP always at u0%2 column-offset, HP at 1-u0%2.
@@ -2312,6 +2351,29 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
         }
       }
     }
+  }
+}
+
+void j2k_tile_component::set_line_decode_col_range(uint32_t col_lo, uint32_t col_hi) {
+  if (line_dec == nullptr) return;
+  j2k_tcomp_line_dec *ld = line_dec.get();
+  if (ld->NL_active <= 0) return;
+  idwt_2d_state *states = ld->states.get();
+  const int32_t NL_act  = ld->NL_active;
+  // Seed with caller's finest-level range.  Coarser levels are derived by
+  // halving and widening by the 9/7 filter support (4 samples each side,
+  // conservative over-estimate that also covers 5/3 where support is 2).
+  int32_t a = static_cast<int32_t>(col_lo);
+  int32_t b = static_cast<int32_t>(col_hi);
+  for (int32_t i = NL_act - 1; i >= 0; --i) {
+    idwt_2d_state_set_col_range(&states[i], a, b);
+    // Next coarser level's output feeds this level's horizontal IDWT, which
+    // reads up to 4 samples beyond each output column.  In subband coords
+    // (half-width) that maps to ±2 samples; we round up to 4 for safety.
+    const int32_t halved_lo = (a >> 1) - 4;
+    const int32_t halved_hi = ((b + 1) >> 1) + 4;
+    a = halved_lo;
+    b = halved_hi;
   }
 }
 
@@ -4800,8 +4862,20 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
 
 void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_val,
                                         const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb,
-                                        uint32_t row_limit) {
+                                        uint32_t row_limit,
+                                        uint32_t col_lo_in, uint32_t col_hi_in) {
   const uint16_t NC = num_components;
+
+  // Apply per-level column range to each component's IDWT state chain.
+  // col_lo_in / col_hi_in are in the finest active-level output coord space
+  // (= subsampled-tcomp coords after reduce).  When the caller uses the
+  // defaults [0, UINT32_MAX) every level's col range resolves to the full
+  // [u0, u1] → idwt kernel loops unchanged from pre-patch behaviour.
+  if (col_lo_in != 0 || col_hi_in != UINT32_MAX) {
+    for (uint16_t c = 0; c < NC; ++c) {
+      tcomp[c].set_line_decode_col_range(col_lo_in, col_hi_in);
+    }
+  }
 
   struct CInfo {
     int32_t DC_OFFSET, MAXVAL, MINVAL;
