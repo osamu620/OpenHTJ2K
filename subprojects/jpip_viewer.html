@@ -155,14 +155,25 @@ async function fetchView() {
 
   // Always fetch the viewport region — server sends only visible precincts.
   // jpip_end_frame_region extracts the viewport from the decoded canvas.
+  // fsiz tells the server which resolution frame we want: canvas / 2^reduce.
+  // Use ceil-divide so fsiz matches the server's fsiz_at(r) formula (which
+  // uses ceil_div_u); floor-divide trips Round::Down into picking the next
+  // coarser level when the height isn't a multiple of 2^reduce — that loses
+  // a full resolution level of detail and produces a blurry / broken frame.
   const regionX = Math.max(0, Math.round(panX));
   const regionY = Math.max(0, Math.round(panY));
   const regionW = Math.min(Math.round(viewW), canvasW - regionX);
   const regionH = Math.min(Math.round(viewH), canvasH - regionY);
-  const fW = canvasW, fH = canvasH;
+  const ceilShift = (v, s) => ((v + (1 << s) - 1) >> s);
+  const fW = Math.max(1, ceilShift(canvasW, red));
+  const fH = Math.max(1, ceilShift(canvasH, red));
+  const rx = regionX >> red;
+  const ry = regionY >> red;
+  const rw = Math.max(1, ceilShift(regionW, red));
+  const rh = Math.max(1, ceilShift(regionH, red));
   let q = `fsiz=${fW},${fH}`;
-  if (regionX > 0 || regionY > 0) q += `&roff=${regionX},${regionY}`;
-  q += `&rsiz=${regionW},${regionH}&type=jpp-stream`;
+  if (rx > 0 || ry > 0) q += `&roff=${rx},${ry}`;
+  q += `&rsiz=${rw},${rh}&type=jpp-stream`;
   const outW = vpW, outH = vpH;
 
   try {
@@ -195,6 +206,7 @@ async function fetchView() {
       }
       decReduce = red;
       lastFetchKey = key;
+      drawViewport();
     }
     $('stats').textContent =
       `${canvasW}×${canvasH} | zoom ${(zoom*100).toFixed(0)}% reduce=${red} region(${regionW}×${regionH}) | ` +

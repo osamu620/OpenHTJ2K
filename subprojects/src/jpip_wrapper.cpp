@@ -203,6 +203,7 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   std::memset(rgb_out, 0, static_cast<size_t>(ow) * oh * 4);
 
   dec.set_row_limit(ry1);
+  dec.set_col_range(rx0, rx1);
   try {
     dec.invoke_line_based_stream(
         [&](uint32_t y, int32_t *const *rows, uint16_t nc) {

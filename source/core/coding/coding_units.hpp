@@ -588,6 +588,12 @@ class j2k_tile_component : public j2k_tile_base {
   // false, both functions behave as before.  The destructor forces false
   // before calling finalize_line_decode to guarantee cleanup.
   void set_line_decode_persistent(bool on) { line_dec_persistent_ = on; }
+  // Apply a column range to this component's IDWT level chain.  col_lo / col_hi
+  // are in finest-active-level tile-component coords.  Each coarser level's
+  // range is derived by halving + widening for the 9/7 filter support.
+  // Must be called after init_line_decode() (states must exist).  Defaults
+  // (col_lo == 0, col_hi == UINT32_MAX) behave exactly like pre-patch code.
+  void set_line_decode_col_range(uint32_t col_lo, uint32_t col_hi);
 
   // ── Line-based encode API ─────────────────────────────────────────────────
   // init_line_encode():     allocates FDWT state chain; call after enc_init().
@@ -810,7 +816,8 @@ class j2k_tile : public j2k_tile_base {
   void decode_line_based_stream(
       j2k_main_header &main_header, uint8_t reduce_NL,
       const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb,
-      uint32_t row_limit = UINT32_MAX);
+      uint32_t row_limit = UINT32_MAX,
+      uint32_t col_lo = 0, uint32_t col_hi = UINT32_MAX);
   // Direct-to-planar streaming decode.  Reads float from IDWT ring buffers and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
   // the strip scratch, out_rows int32 intermediate, and callback overhead.

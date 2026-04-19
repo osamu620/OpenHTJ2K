@@ -403,6 +403,15 @@ struct idwt_2d_state {
   int32_t next_out;    // next output row (v0 ≤ next_out < v1)
   int32_t next_fetch;  // next real row to fetch from source (v0 ≤ next_fetch ≤ v1)
 
+  // ── column-range for vertical lifting (default = full [u0, u1]) ───────────
+  // When JPIP region decode restricts the horizontal span, vertical lifting
+  // is clipped to [col_lo, col_hi] — columns outside the range are left
+  // untouched in the ring buffer.  Only the caller's read range within
+  // [col_lo, col_hi] is guaranteed valid.  For default (full) decode the
+  // range equals [u0, u1] and kernels run unchanged.
+  int32_t col_lo;
+  int32_t col_hi;
+
   // ── source ────────────────────────────────────────────────────────────────
   idwt_row_src_fn get_src_row;
   void           *src_ctx;
@@ -420,6 +429,11 @@ void idwt_2d_state_init(idwt_2d_state *s,
 
 // Free buffers allocated by idwt_2d_state_init.
 void idwt_2d_state_free(idwt_2d_state *s);
+
+// Restrict vertical lifting to columns [col_lo, col_hi).  Passing the default
+// [u0, u1] restores full-width lifting.  Must be called after _init and before
+// any pull_row().  See idwt_2d_state::col_lo / col_hi comments.
+void idwt_2d_state_set_col_range(idwt_2d_state *s, int32_t col_lo, int32_t col_hi);
 
 // Rewind streaming cursors (next_out / next_fetch / ring_origin / d_level /
 // top_dlevel / bot_dlevel) to the post-init state without freeing any
