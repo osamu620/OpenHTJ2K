@@ -205,31 +205,50 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
   const uint32_t ow = static_cast<uint32_t>(out_w);
   const uint32_t oh = static_cast<uint32_t>(out_h);
 
+  // Column index LUT — xc[xw] = xw · cw / ow.  Built on the first row
+  // callback (cw only becomes known once the decoder populates `widths`).
+  // Hoisting this out of the pixel loop eliminates an O(ow · oh) worth of
+  // per-pixel 64-bit divides that WASM can't strength-reduce.
+  std::vector<uint32_t> xc_lut;
+  uint32_t last_ch = 0;
+
   try {
     dec.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
           if (nc < 3 || widths.empty() || heights.empty()) return;
           const uint32_t cw = widths[0];
           const uint32_t ch = heights[0];
+          if (xc_lut.size() != ow || last_ch != ch) {
+            xc_lut.resize(ow);
+            for (uint32_t xw = 0; xw < ow; ++xw) {
+              xc_lut[xw] = static_cast<uint32_t>(
+                  static_cast<uint64_t>(xw) * cw / (ow > 0 ? ow : 1));
+            }
+            last_ch = ch;
+          }
           const int32_t shift = (depths.empty() ? 0 : static_cast<int32_t>(depths[0]) - 8);
+          const int32_t shift_pos = shift > 0 ? shift : 0;  // no-op when bit-depth <= 8
           const uint32_t ty0 =
               static_cast<uint32_t>(static_cast<uint64_t>(y) * oh / (ch > 0 ? ch : 1));
           const uint32_t ty1 =
               static_cast<uint32_t>(static_cast<uint64_t>(y + 1) * oh / (ch > 0 ? ch : 1));
           if (ty0 >= oh) return;
           uint8_t *dst = rgb_out + static_cast<size_t>(ty0) * ow * 4;
+          const int32_t *__restrict__ r0 = rows[0];
+          const int32_t *__restrict__ r1 = rows[1];
+          const int32_t *__restrict__ r2 = rows[2];
+          const uint32_t *__restrict__ lut = xc_lut.data();
           for (uint32_t xw = 0; xw < ow; ++xw) {
-            const uint32_t xc =
-                static_cast<uint32_t>(static_cast<uint64_t>(xw) * cw / (ow > 0 ? ow : 1));
-            auto to_u8 = [shift](int32_t v) -> uint8_t {
-              if (shift > 0) v >>= shift;
-              if (v < 0) return 0;
-              if (v > 255) return 255;
-              return static_cast<uint8_t>(v);
-            };
-            dst[4 * xw + 0] = to_u8(rows[0][xc]);
-            dst[4 * xw + 1] = to_u8(rows[1][xc]);
-            dst[4 * xw + 2] = to_u8(rows[2][xc]);
+            const uint32_t xc = lut[xw];
+            int32_t v0 = r0[xc] >> shift_pos;
+            int32_t v1 = r1[xc] >> shift_pos;
+            int32_t v2 = r2[xc] >> shift_pos;
+            if (v0 < 0) v0 = 0; else if (v0 > 255) v0 = 255;
+            if (v1 < 0) v1 = 0; else if (v1 > 255) v1 = 255;
+            if (v2 < 0) v2 = 0; else if (v2 > 255) v2 = 255;
+            dst[4 * xw + 0] = static_cast<uint8_t>(v0);
+            dst[4 * xw + 1] = static_cast<uint8_t>(v1);
+            dst[4 * xw + 2] = static_cast<uint8_t>(v2);
             dst[4 * xw + 3] = 255;
           }
           for (uint32_t ty = ty0 + 1; ty < ty1 && ty < oh; ++ty) {
@@ -285,23 +304,44 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   const uint32_t ow = static_cast<uint32_t>(out_w);
   const uint32_t oh = static_cast<uint32_t>(out_h);
   const uint32_t red = ctx->reduce_NL;
-  const uint32_t ry0 = static_cast<uint32_t>(region_y) >> red;
-  const uint32_t ry1 = (static_cast<uint32_t>(region_y + region_h) + ((1u << red) - 1)) >> red;
-  const uint32_t rx0 = static_cast<uint32_t>(region_x) >> red;
-  const uint32_t rx1 = (static_cast<uint32_t>(region_x + region_w) + ((1u << red) - 1)) >> red;
+
+  // Canvas extent at the active reduce level — used to clamp the region
+  // bounds so the row callback's column LUT is guaranteed in-range and
+  // can drop its per-pixel `xc >= cw` guard.
+  const uint32_t cw_at_red = (ctx->canvas_w + ((1u << red) - 1)) >> red;
+  const uint32_t ch_at_red = (ctx->canvas_h + ((1u << red) - 1)) >> red;
+
+  const uint32_t ry0_u = static_cast<uint32_t>(region_y) >> red;
+  uint32_t ry1 = (static_cast<uint32_t>(region_y + region_h) + ((1u << red) - 1)) >> red;
+  const uint32_t rx0_u = static_cast<uint32_t>(region_x) >> red;
+  uint32_t rx1 = (static_cast<uint32_t>(region_x + region_w) + ((1u << red) - 1)) >> red;
+  if (ry1 > ch_at_red) ry1 = ch_at_red;
+  if (rx1 > cw_at_red) rx1 = cw_at_red;
+  const uint32_t ry0 = ry0_u;
+  const uint32_t rx0 = rx0_u;
+  if (rx1 <= rx0 || ry1 <= ry0) return -1;
+  const uint32_t rw = rx1 - rx0;
+  const uint32_t rh = ry1 - ry0;
 
   // The row callback below writes every output pixel when it fires for
   // every y in [ry0, ry1) — which it does on the success path.  The
-  // memset is only a safety net for partial-region panning where the
-  // xw<ow loop can early-break on edge columns (xc >= cw).  For the
-  // common full-canvas case (viewer at fit-zoom, initial load) the
-  // entire buffer is overwritten, so skip the O(ow·oh·4) wipe.
+  // memset is only a safety net for partial-region panning where not
+  // every output row is written.  For the common full-canvas case
+  // (viewer at fit-zoom, initial load) the entire buffer is overwritten,
+  // so skip the O(ow·oh·4) wipe.
   const bool full_coverage =
       (region_x == 0 && region_y == 0
        && static_cast<uint32_t>(region_x + region_w) >= ctx->canvas_w
        && static_cast<uint32_t>(region_y + region_h) >= ctx->canvas_h);
   if (!full_coverage)
     std::memset(rgb_out, 0, static_cast<size_t>(ow) * oh * 4);
+
+  // Precompute the column LUT upfront — xc depends only on (rx0, rw, ow),
+  // all of which are known before the decoder starts emitting rows.
+  std::vector<uint32_t> xc_lut(ow);
+  for (uint32_t xw = 0; xw < ow; ++xw) {
+    xc_lut[xw] = rx0 + static_cast<uint32_t>(static_cast<uint64_t>(xw) * rw / ow);
+  }
 
   dec.set_row_limit(ry1);
   dec.set_col_range(rx0, rx1);
@@ -310,28 +350,29 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
         [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
           if (nc < 3 || widths.empty() || heights.empty()) return;
           if (y < ry0 || y >= ry1) return;
-          const uint32_t cw = widths[0];
           const int32_t shift = (depths.empty() ? 0 : static_cast<int32_t>(depths[0]) - 8);
-          const uint32_t rh = ry1 - ry0;
-          const uint32_t rw = rx1 - rx0;
-          const uint32_t ty = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0) * oh / (rh > 0 ? rh : 1));
+          const int32_t shift_pos = shift > 0 ? shift : 0;  // no-op when bit-depth <= 8
+          const uint32_t ty = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0) * oh / rh);
           if (ty >= oh) return;
           uint8_t *dst = rgb_out + static_cast<size_t>(ty) * ow * 4;
+          const int32_t *__restrict__ r0 = rows[0];
+          const int32_t *__restrict__ r1 = rows[1];
+          const int32_t *__restrict__ r2 = rows[2];
+          const uint32_t *__restrict__ lut = xc_lut.data();
           for (uint32_t xw = 0; xw < ow; ++xw) {
-            const uint32_t xc = rx0 + static_cast<uint32_t>(static_cast<uint64_t>(xw) * rw / (ow > 0 ? ow : 1));
-            if (xc >= cw) break;
-            auto to_u8 = [shift](int32_t v) -> uint8_t {
-              if (shift > 0) v >>= shift;
-              if (v < 0) return 0;
-              if (v > 255) return 255;
-              return static_cast<uint8_t>(v);
-            };
-            dst[4 * xw + 0] = to_u8(rows[0][xc]);
-            dst[4 * xw + 1] = to_u8(rows[1][xc]);
-            dst[4 * xw + 2] = to_u8(rows[2][xc]);
+            const uint32_t xc = lut[xw];
+            int32_t v0 = r0[xc] >> shift_pos;
+            int32_t v1 = r1[xc] >> shift_pos;
+            int32_t v2 = r2[xc] >> shift_pos;
+            if (v0 < 0) v0 = 0; else if (v0 > 255) v0 = 255;
+            if (v1 < 0) v1 = 0; else if (v1 > 255) v1 = 255;
+            if (v2 < 0) v2 = 0; else if (v2 > 255) v2 = 255;
+            dst[4 * xw + 0] = static_cast<uint8_t>(v0);
+            dst[4 * xw + 1] = static_cast<uint8_t>(v1);
+            dst[4 * xw + 2] = static_cast<uint8_t>(v2);
             dst[4 * xw + 3] = 255;
           }
-          const uint32_t ty1_out = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0 + 1) * oh / (rh > 0 ? rh : 1));
+          const uint32_t ty1_out = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0 + 1) * oh / rh);
           for (uint32_t ty2 = ty + 1; ty2 < ty1_out && ty2 < oh; ++ty2)
             std::memcpy(rgb_out + static_cast<size_t>(ty2) * ow * 4, dst, ow * 4);
         },
