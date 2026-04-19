@@ -3,6 +3,8 @@
 
 #include "codestream_assembler.hpp"
 
+#include <algorithm>
+
 #include "jpp_message.hpp"
 
 namespace open_htj2k {
@@ -162,6 +164,32 @@ std::vector<uint8_t> patch_cod_to_lrcp(const std::vector<uint8_t> &main_hdr) {
   return {};  // COD not found
 }
 
+// Inverse of CodestreamIndex::I().  Recovers (t, c, r, p_rc) from a
+// precinct in-class identifier.  Returns false when the identifier does
+// not land inside a valid (r, p_rc) slot for the (t, c) pair — e.g. a
+// corrupt or spoofed server response.  tc_cache is an optional pointer
+// used to skip the tile_component(t, c) lookup when successive IDs share
+// the same (t, c); callers that don't care can pass nullptr.
+bool decompose_precinct_I(const CodestreamIndex &idx, uint64_t I, PrecinctKey *out) {
+  const uint32_t nT = idx.num_tiles();
+  const uint16_t nC = idx.num_components();
+  if (nT == 0 || nC == 0) return false;
+  out->t  = static_cast<uint16_t>(I % nT);
+  uint64_t tmp = I / nT;
+  out->c  = static_cast<uint16_t>(tmp % nC);
+  const uint32_t s = static_cast<uint32_t>(tmp / nC);
+  const auto &tc = idx.tile_component(out->t, out->c);
+  for (uint8_t r = 0; r <= tc.NL; ++r) {
+    const uint32_t n = tc.npw[r] * tc.nph[r];
+    if (s >= tc.s_offset[r] && s < tc.s_offset[r] + n) {
+      out->r    = r;
+      out->p_rc = s - tc.s_offset[r];
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 ReassembleStatus reassemble_codestream_client(const DataBinSet &set,
@@ -177,34 +205,68 @@ ReassembleStatus reassemble_codestream_client(const DataBinSet &set,
 
   const uint16_t num_layers = idx.num_layers();
   const uint32_t nT = idx.num_tiles();
+  const uint16_t nC = idx.num_components();
+  const uint8_t  max_NL = idx.max_NL();
+
+  // Bucket every delivered precinct bin by (t, c, r), storing (p_rc, bin*)
+  // pairs sorted by p_rc.  The LRCP emit pass below then iterates ragged
+  // buckets rather than the full T·L·R·C·P grid — on a 103K-precinct
+  // asset with only a few hundred bins delivered, the old set.contains()
+  // probe cost dominated every dirty frame.
+  //
+  // Layout: per_tile[t][c * (max_NL + 1) + r] is the sorted bin list.
+  // max_NL + 1 is the row stride; tile-components with tc.NL < max_NL
+  // simply leave the high-r rows empty (the LRCP walk skips them via the
+  // `r > tc.NL` guard, matching the old loop's behaviour).
+  using DeliveredList = std::vector<std::pair<uint32_t, const std::vector<uint8_t>*>>;
+  const std::size_t stride = static_cast<std::size_t>(nC) * (max_NL + 1);
+  std::vector<std::vector<DeliveredList>> per_tile(nT);
+  for (auto &v : per_tile) v.resize(stride);
+
+  for (const auto &kv : set.keys()) {
+    if (kv.first != kMsgClassPrecinct) continue;
+    PrecinctKey pk;
+    if (!decompose_precinct_I(idx, kv.second, &pk)) continue;
+    auto &slot = per_tile[pk.t][static_cast<std::size_t>(pk.c) * (max_NL + 1) + pk.r];
+    slot.emplace_back(pk.p_rc, &set.get(kMsgClassPrecinct, kv.second));
+  }
+  for (auto &tile_buckets : per_tile) {
+    for (auto &slot : tile_buckets) {
+      std::sort(slot.begin(), slot.end(),
+                [](const auto &a, const auto &b) { return a.first < b.first; });
+    }
+  }
 
   for (uint32_t t = 0; t < nT; ++t) {
     std::vector<uint8_t> body;
 
-    // LRCP order: Layer → Resolution → Component → Precinct.
-    const uint8_t max_NL = idx.max_NL();
+    // LRCP order: Layer → Resolution → Component → Precinct.  Multi-layer
+    // is a deferred feature — the body block is just repeated num_layers
+    // times here, matching the pre-refactor behaviour where both branches
+    // of the `num_layers == 1` check emitted the same bytes.
+    const auto &tile_buckets = per_tile[t];
     for (uint16_t l = 0; l < num_layers; ++l) {
       for (uint8_t r = 0; r <= max_NL; ++r) {
-        for (uint16_t c = 0; c < idx.num_components(); ++c) {
+        for (uint16_t c = 0; c < nC; ++c) {
           const auto &tc = idx.tile_component(static_cast<uint16_t>(t), c);
           if (r > tc.NL) continue;
           const uint32_t np = tc.npw[r] * tc.nph[r];
-          for (uint32_t p = 0; p < np; ++p) {
-            const uint64_t I = idx.I(static_cast<uint16_t>(t), c, r, p);
-            if (set.contains(kMsgClassPrecinct, I)) {
-              const auto &bin = set.get(kMsgClassPrecinct, I);
-              if (num_layers == 1) {
-                // Single layer: bin = one packet, emit whole thing.
-                body.insert(body.end(), bin.begin(), bin.end());
-              } else {
-                // Multi-layer: would need per-layer byte offsets within
-                // the bin.  v1 does not support this — deferred.
-                body.insert(body.end(), bin.begin(), bin.end());
-              }
-            } else {
-              body.push_back(0x00);  // empty packet header
-            }
+          const auto &delivered =
+              tile_buckets[static_cast<std::size_t>(c) * (max_NL + 1) + r];
+          if (delivered.empty()) {
+            // Whole (r, c) group absent — one 0x00 per precinct.
+            body.insert(body.end(), np, 0x00);
+            continue;
           }
+          uint32_t cursor = 0;
+          for (const auto &entry : delivered) {
+            const uint32_t p_rc = entry.first;
+            const std::vector<uint8_t> &bin = *entry.second;
+            if (p_rc > cursor) body.insert(body.end(), p_rc - cursor, 0x00);
+            body.insert(body.end(), bin.begin(), bin.end());
+            cursor = p_rc + 1;
+          }
+          if (cursor < np) body.insert(body.end(), np - cursor, 0x00);
         }
       }
     }
