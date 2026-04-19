@@ -24,7 +24,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "codestream_walker.hpp"
@@ -75,9 +74,6 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
                                       size_t *n_keys_out = nullptr) {
   auto keys = resolve_view_window(*st.idx, vw);
   if (n_keys_out) *n_keys_out = keys.size();
-  std::unordered_set<uint64_t> keep;
-  keep.reserve(keys.size());
-  for (const auto &k : keys) keep.insert(st.idx->I(k.t, k.c, k.r, k.p_rc));
 
   std::vector<uint8_t> stream;
   MessageHeaderContext ctx;
@@ -90,20 +86,20 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
   }
   if (!client_cache.has(kMsgClassMetadata, 0))
     emit_metadata_bin_zero(ctx, stream);
-  for (uint32_t t = 0; t < st.idx->num_tiles(); ++t) {
-    for (uint16_t c = 0; c < st.idx->num_components(); ++c) {
-      const auto &info = st.idx->tile_component(static_cast<uint16_t>(t), c);
-      for (uint8_t r = 0; r <= info.NL; ++r) {
-        const uint32_t n = info.npw[r] * info.nph[r];
-        for (uint32_t p = 0; p < n; ++p) {
-          const uint64_t I = st.idx->I(static_cast<uint16_t>(t), c, r, p);
-          if (keep.count(I) && !client_cache.has(kMsgClassPrecinct, I)) {
-            emit_precinct_databin(st.codestream.data(), st.codestream.size(),
-                                  static_cast<uint16_t>(t), c, r, p,
-                                  *st.idx, *st.locator, ctx, stream);
-          }
-        }
-      }
+
+  // Emit exactly the precincts resolve_view_window selected.  The old code
+  // walked the full T×C×R×P grid and tested every precinct ID against a
+  // hash set built from `keys`, which is O(total_precincts) per request.
+  // On heic2501a (103K precincts, ~500-precinct typical fovea), the walk
+  // dominated — especially under the foveation demo's 3× amplification.
+  // JPP-stream messages are order-agnostic (each carries class + id; the
+  // client reassembler sorts them), so emitting in `keys` order is fine.
+  for (const auto &k : keys) {
+    const uint64_t I = st.idx->I(k.t, k.c, k.r, k.p_rc);
+    if (!client_cache.has(kMsgClassPrecinct, I)) {
+      emit_precinct_databin(st.codestream.data(), st.codestream.size(),
+                            k.t, k.c, k.r, k.p_rc,
+                            *st.idx, *st.locator, ctx, stream);
     }
   }
   emit_eor(EorReason::WindowDone, ctx, stream);
