@@ -2,41 +2,266 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>OpenHTJ2K JPIP Foveation Demo</title>
+<title>OpenHTJ2K — JPIP Foveation Demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-  body { margin: 0; background: #111; color: #eee; font-family: monospace; }
-  #controls { padding: 8px; }
-  #controls label { margin-right: 12px; }
-  #controls input { width: 360px; }
-  canvas { display: block; margin: 8px auto; cursor: crosshair; }
-  #stats { padding: 4px 8px; font-size: 13px; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --surface2: #20233a;
+    --border:   #2d3040;
+    --accent:   #4f8ef7;
+    --text:     #e8eaf0;
+    --text-sub: #9aa0b8;
+    --radius:   10px;
+  }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    min-height: 100vh;
+    padding: 32px 28px;
+    max-width: 1300px;
+    margin: 0 auto;
+  }
+
+  .site-header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 28px; padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .site-header h1 { font-size: 20px; font-weight: 700; flex: 1; }
+  .nav-tabs {
+    display: flex; gap: 4px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-tabs a {
+    padding: 10px 18px;
+    color: var(--text-sub); text-decoration: none;
+    font-size: 13px; font-weight: 600;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-tabs a:hover { color: var(--text); }
+  .nav-tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 18px;
+  }
+  .card-label {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--text-sub);
+    margin-bottom: 10px;
+  }
+
+  /* ── Controls row ────────────────────────────────────── */
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .controls .ctrl { display: flex; flex-direction: column; gap: 4px; }
+  .controls .ctrl-label {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    color: var(--text-sub);
+  }
+  .controls input[type=text], .controls input:not([type]) {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 13px; width: 320px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .controls input:focus, .controls select:focus {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .controls select {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 30px 8px 10px; font-size: 13px;
+    cursor: pointer; appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239aa0b8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  .btn {
+    background: var(--accent); color: #fff;
+    border: none; border-radius: 6px;
+    padding: 9px 18px; font-size: 13px; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+    transition: filter 0.15s, transform 0.05s;
+  }
+  .btn:hover { filter: brightness(1.12); }
+  .btn:active { transform: translateY(1px); }
+
+  #info {
+    font-size: 12px; color: var(--text-sub);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin-left: 8px;
+  }
+
+  /* ── Canvas area ─────────────────────────────────────── */
+  .canvas-wrap {
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    display: flex; justify-content: center;
+    position: relative;
+  }
+  canvas { display: block; cursor: crosshair; max-width: 100%; height: auto; }
+
+  /* ── Stats + Help ────────────────────────────────────── */
+  #stats {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; color: var(--text);
+  }
+  #stats:empty::before {
+    content: 'Move the mouse over the image to start streaming.';
+    color: var(--text-sub); font-style: italic;
+  }
+  .help-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    font-size: 13px; line-height: 1.6; color: var(--text-sub);
+  }
+  .help-grid h3 {
+    font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--text); margin-bottom: 8px;
+  }
+  .help-grid b { color: var(--text); }
+  .help-grid a { color: var(--accent); text-decoration: none; }
+  .help-grid a:hover { text-decoration: underline; }
+  .help-grid ol { padding-left: 20px; }
+  .help-grid ol li { margin-bottom: 4px; }
+  @media (max-width: 720px) { .help-grid { grid-template-columns: 1fr; } }
+
+  /* ── Footer ──────────────────────────────────────────── */
+  .site-footer {
+    margin-top: 40px;
+    padding: 20px 0; border-top: 1px solid var(--border);
+    text-align: center; font-size: 13px; color: var(--text-sub);
+  }
+  .site-footer a {
+    color: var(--accent); text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .site-footer a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
-<div id="controls">
-  <label>JPIP Server: <input id="server" value="http://localhost:8080" /></label>
-  <button id="connectBtn">Connect</button>
-  <span id="info"></span>
-  <br>
-  <label>Reduce: <select id="reduce">
-    <option value="0">0 (full res)</option>
-    <option value="1" selected>1 (half res)</option>
-    <option value="2">2 (quarter res)</option>
-  </select></label>
-  <label>Para ratio: <select id="para_ratio">
-    <option value="0.5" selected>0.5</option>
-    <option value="0.25">0.25</option>
-    <option value="0.125">0.125</option>
-  </select></label>
-  <label>Peri ratio: <select id="peri_ratio">
-    <option value="0.25">0.25</option>
-    <option value="0.125" selected>0.125</option>
-    <option value="0.0625">0.0625</option>
-  </select></label>
+<header class="site-header">
+  <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="flex-shrink:0">
+    <rect width="38" height="38" rx="8" fill="#4f8ef7"/>
+    <rect x="6"  y="6"  width="11" height="11" rx="2" fill="white" opacity="1.0"/>
+    <rect x="21" y="6"  width="11" height="11" rx="2" fill="white" opacity="0.65"/>
+    <rect x="6"  y="21" width="11" height="11" rx="2" fill="white" opacity="0.4"/>
+    <rect x="21" y="21" width="11" height="11" rx="2" fill="white" opacity="0.2"/>
+  </svg>
+  <h1>HTJ2K / J2K-1 — JPIP Foveation Demo</h1>
+</header>
+
+<nav class="nav-tabs">
+  <a href="index.html">Still Image</a>
+  <a href="rtp_demo.html">RTP Replay</a>
+  <a href="jpip_demo.html" class="active">JPIP Foveation</a>
+  <a href="jpip_viewer.html">JPIP Viewer</a>
+</nav>
+
+<div class="card">
+  <div class="card-label">Connection &amp; foveation parameters</div>
+  <div class="controls">
+    <div class="ctrl">
+      <span class="ctrl-label">JPIP server</span>
+      <input id="server" type="text" value="https://jpip-fovea.osamu620.dev" />
+    </div>
+    <div class="ctrl">
+      <span class="ctrl-label">&nbsp;</span>
+      <button id="connectBtn" class="btn">Connect</button>
+    </div>
+    <div class="ctrl">
+      <span class="ctrl-label">Reduce (discard DWT levels)</span>
+      <select id="reduce">
+        <option value="0">0 — full resolution</option>
+        <option value="1" selected>1 — half resolution</option>
+        <option value="2">2 — quarter resolution</option>
+      </select>
+    </div>
+    <div class="ctrl">
+      <span class="ctrl-label">Parafovea ratio</span>
+      <select id="para_ratio">
+        <option value="0.5" selected>0.5</option>
+        <option value="0.25">0.25</option>
+        <option value="0.125">0.125</option>
+      </select>
+    </div>
+    <div class="ctrl">
+      <span class="ctrl-label">Periphery ratio</span>
+      <select id="peri_ratio">
+        <option value="0.25">0.25</option>
+        <option value="0.125" selected>0.125</option>
+        <option value="0.0625">0.0625</option>
+      </select>
+    </div>
+    <span id="info"></span>
+  </div>
 </div>
-<canvas id="canvas"></canvas>
-<div id="stats"></div>
+
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="card"><div id="stats"></div></div>
+
+<div class="card">
+  <div class="help-grid">
+    <div>
+      <h3>What is this?</h3>
+      A JPIP (ISO/IEC 15444-9) foveated-decode demo.  Three concentric view-window requests
+      are sent per mouse move: a small sharp <b>fovea</b> around the cursor, a medium-resolution
+      <b>parafovea</b>, and a coarse full-image <b>periphery</b>.  The server streams only the
+      precincts each region needs; the client reassembles them and decodes the composite
+      JPEG 2000 / HTJ2K codestream in WebAssembly.  Bandwidth per frame is a small fraction
+      of a full-image decode.
+    </div>
+    <div>
+      <h3>How to operate</h3>
+      <ol>
+        <li>Click <b>Connect</b> (the server URL is already filled in).</li>
+        <li>Move the mouse over the image — the sharp fovea follows the cursor.</li>
+        <li>Adjust <b>Reduce</b>, <b>Parafovea ratio</b>, <b>Periphery ratio</b> to trade
+            detail for bandwidth.</li>
+        <li>The stats line below the image reports fetched bytes, decode time and FPS.</li>
+      </ol>
+      <p style="margin-top:10px">Related: <a href="jpip_viewer.html">pan-and-zoom viewer</a> for
+      gigapixel images.</p>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <a href="https://github.com/osamu620/OpenHTJ2K" target="_blank" rel="noopener">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577
+        0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7
+        3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236
+        1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93
+        0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322
+        3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552
+        3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91
+        1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22
+        0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092
+        24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+    </svg>
+    osamu620/OpenHTJ2K
+  </a>
+</footer>
+
 <script>
   (function() {
     var p = new URLSearchParams(location.search);
@@ -161,7 +386,7 @@ async function init() {
   $('info').textContent = 'Loading WASM…';
   try {
     M = await createModule();
-    $('info').textContent = `WASM ready (${useMt ? 'MT+SIMD' : 'SIMD'}). Enter server URL and click Connect.`;
+    $('info').textContent = `WASM ready (${useMt ? 'MT+SIMD' : 'SIMD'}).`;
   } catch (e) {
     $('info').textContent = 'WASM load failed: ' + e.message;
     console.error('WASM load error:', e);

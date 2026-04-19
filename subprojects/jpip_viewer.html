@@ -2,26 +2,204 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>OpenHTJ2K JPIP Viewer — Large Image Browser</title>
+<title>OpenHTJ2K — JPIP Gigapixel Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-  body { margin: 0; background: #111; color: #eee; font-family: monospace; overflow: hidden; }
-  #controls { padding: 8px; }
-  #controls label { margin-right: 12px; }
-  #controls input { width: 360px; }
-  canvas { display: block; cursor: grab; }
-  canvas.dragging { cursor: grabbing; }
-  #stats { padding: 4px 8px; font-size: 13px; position: fixed; bottom: 0; left: 0; right: 0;
-           background: rgba(0,0,0,0.7); }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:        #0f1117;
+    --surface:   #1a1d27;
+    --surface2:  #20233a;
+    --border:    #2d3040;
+    --accent:    #4f8ef7;
+    --text:      #e8eaf0;
+    --text-sub:  #9aa0b8;
+  }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── Top bar ─────────────────────────────────────────── */
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; height: 56px;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 16px;
+    background: rgba(15, 17, 23, 0.85);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    z-index: 20;
+  }
+  #topbar .brand { display: flex; align-items: center; gap: 10px; }
+  #topbar .brand h1 { font-size: 13px; font-weight: 700; white-space: nowrap; }
+  #topbar .brand .sub {
+    font-size: 11px; color: var(--text-sub); font-weight: 500;
+    padding: 2px 8px; border: 1px solid var(--border); border-radius: 20px;
+  }
+  #topbar a.home {
+    color: var(--text-sub); text-decoration: none; font-size: 12px; font-weight: 600;
+    padding: 6px 10px; border-radius: 6px; transition: background 0.15s, color 0.15s;
+  }
+  #topbar a.home:hover { background: var(--surface); color: var(--text); }
+
+  #topbar label.field {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-sub);
+    font-weight: 600;
+  }
+  #topbar input#server {
+    width: 320px; min-width: 180px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #topbar input#server:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #topbar .btn {
+    background: var(--accent); color: #fff;
+    border: none; border-radius: 6px; padding: 7px 16px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: inherit; transition: filter 0.15s, transform 0.05s;
+  }
+  #topbar .btn:hover { filter: brightness(1.12); }
+  #topbar .btn:active { transform: translateY(1px); }
+  #topbar .btn.ghost {
+    background: transparent; color: var(--text-sub);
+    border: 1px solid var(--border);
+  }
+  #topbar .btn.ghost:hover { color: var(--text); border-color: var(--text-sub); }
+
+  #info {
+    flex: 1; min-width: 0;
+    font-size: 12px; color: var(--text-sub);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* ── Canvas ──────────────────────────────────────────── */
+  #canvas {
+    position: fixed; top: 56px; left: 0;
+    /* width/height set in JS from vpW/vpH */
+    display: block; cursor: grab;
+    background: #000;
+  }
+  #canvas.dragging { cursor: grabbing; }
+
+  /* ── Stats bar (bottom) ──────────────────────────────── */
+  #stats {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 8px 14px; font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: rgba(15, 17, 23, 0.85);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-top: 1px solid var(--border);
+    color: var(--text-sub);
+    z-index: 10;
+  }
+  #stats:empty::before {
+    content: 'Ready — enter the JPIP server URL above and click Connect.';
+    color: var(--text-sub); font-style: italic;
+  }
+
+  /* ── Help panel (floating) ───────────────────────────── */
+  #help {
+    position: fixed; top: 74px; right: 16px; max-width: 340px;
+    background: rgba(26, 29, 39, 0.95);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 12px; line-height: 1.55; color: var(--text-sub);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    z-index: 15;
+  }
+  #help h3 { font-size: 12px; color: var(--text); margin-bottom: 8px; }
+  #help .section-h {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px;
+    color: var(--text-sub); margin: 10px 0 4px; opacity: 0.8;
+  }
+  #help b { color: var(--text); }
+  #help a { color: var(--accent); text-decoration: none; }
+  #help a:hover { text-decoration: underline; }
+  #help kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 6px; margin: 0 1px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; color: var(--text);
+    display: inline-block; min-width: 18px; text-align: center;
+  }
+  #help .close {
+    float: right; cursor: pointer; color: var(--text-sub);
+    margin: -4px -4px 0 8px; padding: 4px 6px;
+    border-radius: 4px; font-size: 14px; line-height: 1;
+  }
+  #help .close:hover { background: var(--surface); color: var(--text); }
+  #help .row { margin: 2px 0; }
+
+  /* Small-screen collapse of the top bar */
+  @media (max-width: 780px) {
+    #topbar { height: auto; padding: 10px 12px; flex-wrap: wrap; gap: 8px; }
+    #canvas { top: 98px; }
+    #help { top: 116px; right: 12px; max-width: calc(100% - 24px); }
+    #topbar input#server { width: 100%; }
+  }
 </style>
 </head>
 <body>
-<div id="controls">
-  <label>JPIP Server: <input id="server" value="http://localhost:8080" /></label>
-  <button id="connectBtn">Connect</button>
+
+<div id="topbar">
+  <a href="index.html" class="home" title="Back to demo index">← Demos</a>
+  <div class="brand">
+    <svg width="24" height="24" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect width="38" height="38" rx="8" fill="#4f8ef7"/>
+      <rect x="6"  y="6"  width="11" height="11" rx="2" fill="white" opacity="1.0"/>
+      <rect x="21" y="6"  width="11" height="11" rx="2" fill="white" opacity="0.65"/>
+      <rect x="6"  y="21" width="11" height="11" rx="2" fill="white" opacity="0.4"/>
+      <rect x="21" y="21" width="11" height="11" rx="2" fill="white" opacity="0.2"/>
+    </svg>
+    <h1>JPIP Gigapixel Viewer</h1>
+    <span class="sub">OpenHTJ2K</span>
+  </div>
+  <label class="field">
+    Server
+    <input id="server" type="text" value="https://jpip-viewer.osamu620.dev" />
+  </label>
+  <button id="connectBtn" class="btn">Connect</button>
   <span id="info"></span>
+  <button class="btn ghost" id="helpBtn" title="Show help">?</button>
 </div>
+
 <canvas id="canvas"></canvas>
-<div id="stats">Arrows: pan (Shift=fast) | +/-: zoom | Home: reset | Trackpad: scroll=pan, pinch/Ctrl+scroll=zoom</div>
+
+<div id="help">
+  <span class="close" id="helpClose" title="Close">✕</span>
+  <h3>JPIP Gigapixel Viewer</h3>
+  Only the precincts that fall inside the current viewport are fetched and decoded,
+  so pan-and-zoom on a 400+ MP image stays interactive.
+
+  <div class="section-h">Pan</div>
+  <div class="row">Drag the image with the mouse.</div>
+  <div class="row"><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>  (<kbd>Shift</kbd> = large step)</div>
+  <div class="row">Trackpad: two-finger scroll.</div>
+
+  <div class="section-h">Zoom</div>
+  <div class="row"><kbd>+</kbd> / <kbd>−</kbd> in / out,&nbsp;<kbd>Home</kbd> reset.</div>
+  <div class="row">Trackpad: pinch.&nbsp;Mouse: <kbd>Ctrl</kbd>+wheel.</div>
+
+  <div class="section-h">Stats bar</div>
+  <div class="row">canvas size · zoom · reduce_NL · viewport region · pan · fetch/decode ms</div>
+
+  <div class="section-h">Related</div>
+  <div class="row"><a href="jpip_demo.html">→ Foveated streaming demo</a></div>
+</div>
+
+<div id="stats"></div>
+
 <script>
   (function() {
     var p = new URLSearchParams(location.search);
@@ -46,6 +224,16 @@
     );
   }
 </script>
+<script>
+  // Help panel show/hide.
+  (function() {
+    var help = document.getElementById('help');
+    document.getElementById('helpClose').onclick = function() { help.style.display = 'none'; };
+    document.getElementById('helpBtn').onclick    = function() {
+      help.style.display = (help.style.display === 'none') ? '' : 'none';
+    };
+  })();
+</script>
 <script type="module">
 const hasSimd = await wasmFeatureDetect.simd();
 const hasMt = window.crossOriginIsolated && (typeof SharedArrayBuffer !== 'undefined');
@@ -61,6 +249,13 @@ let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0;
 
 function wasmWrite(data, ptr) { new Uint8Array(M.HEAPU8.buffer).set(data, ptr); }
+
+// Compute the vertical space occupied by the fixed top bar at the current
+// viewport width.  Used to size the canvas below the bar.
+function topBarHeight() {
+  const tb = document.getElementById('topbar');
+  return tb ? tb.offsetHeight : 56;
+}
 
 // ── WebGL2 with aspect-ratio-correct quad ───────────────────────────────
 let gl = null, glTex = null, glProgram = null, texW = 0, texH = 0;
@@ -106,7 +301,7 @@ function initWebGL(canvas) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.bindVertexArray(gl.createVertexArray());
   gl.viewport(0, 0, canvas.width, canvas.height);
-  gl.clearColor(0.067, 0.067, 0.067, 1);
+  gl.clearColor(0.059, 0.066, 0.09, 1);
   return true;
 }
 
@@ -220,7 +415,7 @@ async function init() {
   $('info').textContent = 'Loading WASM…';
   try {
     M = await createModule();
-    $('info').textContent = `WASM ready (${useMt?'MT+SIMD':'SIMD'}). Enter server URL and click Connect.`;
+    $('info').textContent = `WASM ready (${useMt?'MT+SIMD':'SIMD'}).`;
   } catch (e) { $('info').textContent = 'WASM load failed: ' + e.message; }
   $('connectBtn').onclick = connect;
 }
@@ -251,8 +446,10 @@ async function connect() {
 
   const c = $('canvas');
   vpW = window.innerWidth;
-  vpH = window.innerHeight - 40;
+  vpH = window.innerHeight - topBarHeight();
   c.width = vpW; c.height = vpH;
+  c.style.width  = vpW + 'px';
+  c.style.height = vpH + 'px';
   initWebGL(c);
 
   zoom = vpW / canvasW;
@@ -302,6 +499,8 @@ async function connect() {
 
   // ── Keyboard ──
   window.addEventListener('keydown', e => {
+    // Don't hijack typing in inputs (the server URL field, etc.)
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
     const step = e.shiftKey ? 500 : 100;
     let needRedraw = false, needRefetch = false;
     switch (e.key) {
