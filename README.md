@@ -50,7 +50,7 @@ on modern x86-64**.
   Silicon (M3 Max NEON, v0.13.2+).
   Opt-in via `-DOPENHTJ2K_RTP=ON`.
 
-**JPIP foveated streaming (ISO/IEC 15444-9 3rd edition)**
+**JPIP foveated streaming + gigapixel viewer (ISO/IEC 15444-9 3rd edition)**
 - `open_htj2k_jpip_server` serves a JPEG 2000 codestream over JPIP
   (HTTP/1.1 or HTTP/3 over QUIC). Stateless view-window requests,
   EOR messages, and client cache model support (§C.9).
@@ -61,11 +61,16 @@ on modern x86-64**.
 - `open_htj2k_jpip_benchmark` measures bandwidth reduction and decode
   speedup for foveated vs full-image delivery across an NxN gaze grid.
 - Phase 4 IDWT zero-skip optimization: skips DWT lifting steps for
-  absent precincts, cutting decode time proportionally.
-- In-browser WASM demo with WebGL2 bilinear filtering — try it at
-  **https://htj2k-demo.pages.dev/jpip_demo.html**.
+  absent precincts, cutting decode time proportionally.  Viewport-region
+  decode (`jpip_end_frame_region`) adds row-limit + column-range IDWT
+  so zoomed-in viewports on 42K+ canvases stay interactive in WASM.
+- In-browser WASM demos (decode entirely in-page, no plugin, no
+  server-side decode): foveation at
+  **https://htj2k-demo.pages.dev/jpip_demo.html** and pan-and-zoom
+  gigapixel viewer at **https://htj2k-demo.pages.dev/jpip_viewer.html**.
 - Opt-in H3 transport via `-DOPENHTJ2K_QUIC=ON` (requires MsQuic +
   nghttp3).
+- Full reference: [**docs/jpip.md**](docs/jpip.md).
 
 ## Quick build
 
@@ -197,6 +202,7 @@ In-depth guides live under [`docs/`](docs/README.md):
 - [docs/cli_encoder.md](docs/cli_encoder.md) — `open_htj2k_enc` reference
 - [docs/cli_decoder.md](docs/cli_decoder.md) — `open_htj2k_dec` reference
 - [docs/cli_rtp_recv.md](docs/cli_rtp_recv.md) — `open_htj2k_rtp_recv` reference + operational guide
+- [docs/jpip.md](docs/jpip.md) — JPIP subsystem reference (server, native + browser demos, benchmark, cache model, WASM API)
 - [deploy/README.md](deploy/README.md) — JPIP server deployment (Docker + Cloudflare Tunnel)
 
 See also [CHANGELOG](CHANGELOG) for release history.
