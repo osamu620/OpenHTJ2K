@@ -7,11 +7,14 @@
 
 #include <emscripten.h>
 
+#include <string>
+
 #include "decoder.hpp"
 #include "precinct_index.hpp"
 #include "jpp_parser.hpp"
 #include "codestream_assembler.hpp"
 #include "jpp_message.hpp"
+#include "cache_model.hpp"
 
 // ────────────────────────────────────────────────────────────────────────────
 // JPIP WASM API — thin C-linkage entry points for the browser demo.
@@ -69,6 +72,15 @@ struct JpipContext {
   // the per-frame _malloc / wasmWrite / _free triplet (3× per foveation
   // frame) and the repeated WASM heap churn that came with it.
   std::vector<uint8_t> response_buf;
+  // Cache model the client has authoritatively received — headers, tile
+  // headers, metadata-bin-0.  Precincts are intentionally not tracked:
+  // the foveation demo drops precinct state per frame so the periphery
+  // decays when the gaze moves.  Exposed to JS via jpip_get_cache_model()
+  // so the outgoing query can carry `&model=` and the server skips
+  // redundant header bytes.  Rebuilt lazily into `cache_model_str` when
+  // the JS caller asks for it.
+  open_htj2k::jpip::CacheModel client_cache;
+  std::string cache_model_str;
 };
 
 // Flush the single-tile reuse cache when a parameter that isn't part of the
@@ -102,8 +114,17 @@ void *jpip_create_context(const uint8_t *jpp_stream, size_t len) {
   ctx->canvas_h = idx->geometry().canvas_size.y;
   ctx->idx      = std::move(idx);
   ctx->dec.enable_single_tile_reuse(true);
-  // Seed the cache with the main-header data-bin that built the index.
+  // Seed the cache with the main-header data-bin that built the index,
+  // and mark every non-precinct bin present in the client CacheModel so
+  // the very first follow-up request carries an accurate &model= header.
   ctx->set.merge_from(tmp);
+  for (const auto &kv : tmp.keys()) {
+    if (kv.first == open_htj2k::jpip::kMsgClassPrecinct
+        || kv.first == open_htj2k::jpip::kMsgClassExtPrecinct) continue;
+    if (tmp.is_complete(kv.first, kv.second))
+      ctx->client_cache.mark(kv.first, kv.second);
+  }
+  ctx->cache_model_str.clear();
   ctx->dirty = true;
   return ctx;
 }
@@ -138,6 +159,22 @@ void jpip_set_reduce(void *handle, int n) {
   static_cast<JpipContext *>(handle)->reduce_NL = static_cast<uint8_t>(n);
 }
 
+// Returns a C string the JS caller can hand straight to UTF8ToString().
+// The string is the client's current cache-model request-field body
+// (§C.9) — e.g. "Hm,Ht0,M0" — which JS appends as `&model=<string>`
+// to every JPIP query.  The returned pointer is owned by the context
+// and is invalidated by the next call to this function or any call
+// that marks new bins (jpip_add_response, jpip_create_context).
+EMSCRIPTEN_KEEPALIVE
+const char *jpip_get_cache_model(void *handle) {
+  if (!handle) return "";
+  auto *ctx = static_cast<JpipContext *>(handle);
+  if (ctx->cache_model_str.empty() && ctx->client_cache.size() > 0) {
+    ctx->cache_model_str = ctx->client_cache.format();
+  }
+  return ctx->cache_model_str.c_str();
+}
+
 // Kept as a no-op: the viewer calls it before every jpip_add_response() but
 // clearing the DataBinSet here would throw away everything JPIP has cached
 // for earlier viewports, forcing the server to resend main-header and
@@ -148,16 +185,31 @@ void jpip_begin_frame(void *handle) {
   (void)handle;
 }
 
-// Explicit cache reset — intended for disconnect / reconnect flows.
+// Drop accumulated precincts but keep headers / tile-headers / metadata
+// bins.  The foveation demo calls this every frame so the periphery
+// decays when the gaze moves (commit a6749fd); preserving the header
+// bins means the reassembler still has them and the &model= header we
+// advertise stays consistent with what WASM actually holds.  The
+// client_cache isn't touched for the same reason — the server will keep
+// skipping the headers it already sent.
 EMSCRIPTEN_KEEPALIVE
 void jpip_reset_cache(void *handle) {
   if (!handle) return;
   auto *ctx = static_cast<JpipContext *>(handle);
-  ctx->set = {};
+  open_htj2k::jpip::DataBinSet kept;
+  for (const auto &kv : ctx->set.keys()) {
+    if (kv.first == open_htj2k::jpip::kMsgClassPrecinct
+        || kv.first == open_htj2k::jpip::kMsgClassExtPrecinct) continue;
+    const auto &bin = ctx->set.get(kv.first, kv.second);
+    kept.append(kv.first, kv.second, 0, bin.data(), bin.size(),
+                ctx->set.is_complete(kv.first, kv.second));
+  }
+  ctx->set = std::move(kept);
   ctx->sparse_cs.clear();
   ctx->dec_initialized = false;
   ctx->last_reduce_NL = 0xFF;
-  ctx->dirty = false;
+  // We dropped precincts, so the next end_frame() has to reassemble.
+  ctx->dirty = true;
 }
 
 // Return a pointer to the context's grow-only response staging buffer,
@@ -183,6 +235,21 @@ int jpip_add_response(void *handle, const uint8_t *jpp_stream, size_t len) {
   open_htj2k::jpip::DataBinSet tmp;
   if (!open_htj2k::jpip::parse_jpp_stream(jpp_stream, len, &tmp)) return -2;
   ctx->set.merge_from(tmp);
+  // Track completed non-precinct bins (headers, tile-headers, metadata) in
+  // the client cache model so the next &model= advertisement lets the
+  // server skip them.  Precincts are intentionally omitted — the foveation
+  // demo's per-frame reset drops them anyway.
+  bool cache_changed = false;
+  for (const auto &kv : tmp.keys()) {
+    if (kv.first == open_htj2k::jpip::kMsgClassPrecinct
+        || kv.first == open_htj2k::jpip::kMsgClassExtPrecinct) continue;
+    if (!tmp.is_complete(kv.first, kv.second)) continue;
+    if (!ctx->client_cache.has(kv.first, kv.second)) {
+      ctx->client_cache.mark(kv.first, kv.second);
+      cache_changed = true;
+    }
+  }
+  if (cache_changed) ctx->cache_model_str.clear();
   ctx->dirty = true;
   return 0;
 }
