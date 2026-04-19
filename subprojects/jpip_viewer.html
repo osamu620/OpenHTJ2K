@@ -245,8 +245,22 @@ const $ = id => document.getElementById(id);
 
 let M = null, ctx = 0, canvasW = 0, canvasH = 0;
 let serverUrl = '', busy = false;
+// Latest-pending slot: while a fetch is in flight, new pan events flip this
+// instead of starting a second fetch.  When the in-flight call ends, it fires
+// one more fetchView() that re-reads panX/panY/zoom so the final viewport the
+// user aimed at is always what lands on screen.
+let pendingFetch = false;
+// Trailing debounce: rapid wheel / trackpad events coalesce to one fetch.
+// Tune via ?debounce=N (ms); 0 disables.  Default 60 ms covers trackpad fling
+// (~10–30 events/s) without being noticeable on deliberate clicks.
+let debounceTimer = 0;
+const DEBOUNCE_MS = (() => {
+  const v = Number(new URLSearchParams(location.search).get('debounce'));
+  return Number.isFinite(v) && v >= 0 ? v : 60;
+})();
+const DEBUG_TIMING = new URLSearchParams(location.search).has('debug');
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
-let decReduce = -1, rgbPtr = 0;
+let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 
 function wasmWrite(data, ptr) { new Uint8Array(M.HEAPU8.buffer).set(data, ptr); }
 
@@ -336,6 +350,25 @@ function computeReduce() {
 // Track last fetch params to avoid redundant fetches
 let lastFetchKey = '';
 
+// Public entry point for pan / zoom handlers.  Wraps fetchView() with:
+//   • a trailing debounce (coalesces rapid wheel / trackpad events)
+//   • a latest-pending slot (when a fetch is in flight, new events don't
+//     start a second fetch — they mark the need for one after the current
+//     finishes; fetchView() then re-reads panX/panY/zoom so the final
+//     viewport is always the one rendered).
+function scheduleFetch() {
+  if (busy) {
+    pendingFetch = true;
+    return;
+  }
+  if (debounceTimer) clearTimeout(debounceTimer);
+  if (DEBOUNCE_MS <= 0) { fetchView(); return; }
+  debounceTimer = setTimeout(() => {
+    debounceTimer = 0;
+    fetchView();
+  }, DEBOUNCE_MS);
+}
+
 async function fetchView() {
   const red = computeReduce();
   const viewW = vpW / zoom;
@@ -384,8 +417,15 @@ async function fetchView() {
     M._jpip_add_response(ctx, ptr, buf.length);
     M._free(ptr);
 
-    if (rgbPtr) M._free(rgbPtr);
-    rgbPtr = M._malloc(outW * outH * 4);
+    // Grow-only: reuse the RGB buffer across frames.  Reallocating 14+ MB
+    // on every pan event churns the WASM heap (which has ALLOW_MEMORY_GROWTH
+    // and fragments under repeated large malloc/free cycles).
+    const needBytes = outW * outH * 4;
+    if (needBytes > rgbBufSz) {
+      if (rgbPtr) M._free(rgbPtr);
+      rgbPtr = M._malloc(needBytes);
+      rgbBufSz = needBytes;
+    }
     const rc = M._jpip_end_frame_region(ctx, rgbPtr, outW, outH,
                                          regionX, regionY, regionW, regionH);
     const tDecode = performance.now();
@@ -407,8 +447,21 @@ async function fetchView() {
       `${canvasW}×${canvasH} | zoom ${(zoom*100).toFixed(0)}% reduce=${red} region(${regionW}×${regionH}) | ` +
       `pan (${Math.round(panX)},${Math.round(panY)}) | ` +
       `fetch=${(tFetch-t0).toFixed(0)}ms decode=${(tDecode-tFetch).toFixed(0)}ms | ${(buf.length/1024).toFixed(0)}KB`;
+    if (DEBUG_TIMING) {
+      console.log(`[jpip_viewer] red=${red} region=${regionW}x${regionH} ` +
+        `fetch=${(tFetch-t0).toFixed(1)}ms decode=${(tDecode-tFetch).toFixed(1)}ms ` +
+        `total=${(tDecode-t0).toFixed(1)}ms bytes=${buf.length}`);
+    }
   } catch (e) { $('stats').textContent = `error: ${e.message}`; }
   busy = false;
+  // Drain the latest-pending slot: if one or more scheduleFetch() calls
+  // arrived during the await above, fire one more fetch with the current
+  // (freshest) panX/panY/zoom.  No debounce — the user already waited the
+  // full network+decode round-trip, they don't need another 60 ms.
+  if (pendingFetch) {
+    pendingFetch = false;
+    queueMicrotask(fetchView);
+  }
 }
 
 async function init() {
@@ -467,7 +520,7 @@ async function connect() {
     panX = psx - (e.clientX - dsx) / zoom;
     panY = psy - (e.clientY - dsy) / zoom;
     clampPan();
-    fetchView();
+    scheduleFetch();
   });
   window.addEventListener('mouseup', () => { dragging = false; c.classList.remove('dragging'); });
 
@@ -487,13 +540,13 @@ async function connect() {
       panX += (mx * vpW) * (1 / oldZoom - 1 / zoom);
       panY += (my * vpH) * (1 / oldZoom - 1 / zoom);
       clampPan();
-      fetchView();
+      scheduleFetch();
     } else {
       // Two-finger scroll = pan (Mac natural scrolling: flip Y)
       panX += e.deltaX / zoom;
       panY -= e.deltaY / zoom;
       clampPan();
-      fetchView();
+      scheduleFetch();
     }
   }, { passive: false });
 
@@ -532,7 +585,7 @@ async function connect() {
     }
     e.preventDefault();
     clampPan();
-    if (needRefetch) fetchView();
+    if (needRefetch) scheduleFetch();
   });
 
   fetchView();
