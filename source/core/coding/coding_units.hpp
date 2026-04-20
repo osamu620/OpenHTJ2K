@@ -575,6 +575,13 @@ class j2k_tile_component : public j2k_tile_base {
   // copy is necessary because idwt_2d_state's ring is too shallow to keep a
   // whole outer strip pinned.
   sprec_t *pull_strip_into_buf(uint32_t count, uint32_t stride_floats);
+  // Overload that writes into a caller-owned destination instead of the
+  // per-component line_dec->strip_buf.  Used by the pipelined strip driver in
+  // decode_line_based_stream_planar to hold two strips in flight
+  // simultaneously (one being read by Phase 2, one being written by Phase 1's
+  // pool tasks).  Caller guarantees dst has capacity >= count * stride_floats
+  // sprec_t elements and 32-byte alignment.
+  sprec_t *pull_strip_into_buf(uint32_t count, uint32_t stride_floats, sprec_t *dst);
   void finalize_line_decode();
   // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
   void mark_line_dec_predecoded();
