@@ -34,6 +34,8 @@ using open_htj2k::jpip::kMsgClassTileHeader;
 using open_htj2k::jpip::MessageHeaderContext;
 using open_htj2k::jpip::parse_jpp_stream;
 using open_htj2k::jpip::walk_codestream;
+// EOR (§D.3) tests near the end of main() use emit_eor + EorReason
+// without qualifying — picked up via open_htj2k::jpip:: in situ.
 
 namespace {
 
@@ -161,6 +163,61 @@ int main(int argc, char **argv) {
     DataBinSet t;
     CHECK(!parse_jpp_stream(bad.data(), bad.size(), &t),
           "truncated stream should be rejected");
+  }
+
+  // ── EOR message (§D.3) ──────────────────────────────────────────────
+  // Wire form is `0x00 | reason | body-length(VBAS) | body`.  Minimum
+  // length is 3 bytes (zero body), which is exactly what emit_eor
+  // produces.
+  {
+    std::vector<uint8_t> s;
+    MessageHeaderContext ctx;
+    const std::size_t n = open_htj2k::jpip::emit_eor(
+        open_htj2k::jpip::EorReason::WindowDone, ctx, s);
+    CHECK(n == 3, "emit_eor wrote %zu bytes, expected 3", n);
+    CHECK(s.size() == 3 && s[0] == 0x00 && s[1] == 0x02 && s[2] == 0x00,
+          "emit_eor(WindowDone) wire bytes = %02x %02x %02x, expected 00 02 00",
+          s[0], s[1], s[2]);
+
+    DataBinSet t;
+    CHECK(parse_jpp_stream(s.data(), s.size(), &t),
+          "parse_jpp_stream must accept a 3-byte EOR-only stream");
+    CHECK(t.has_eor(), "DataBinSet should record EOR presence");
+    CHECK(t.eor_reason() == 2, "expected reason=2 (WindowDone), got %u",
+          t.eor_reason());
+    CHECK(t.size() == 0, "EOR-only stream should deposit 0 data-bins, got %zu",
+          t.size());
+  }
+
+  // EOR with a non-empty body.  A conformant server is allowed to attach
+  // implementation-defined bytes; the parser must skip them and still
+  // record the reason code.
+  {
+    std::vector<uint8_t> s = {0x00, static_cast<uint8_t>(
+                                        open_htj2k::jpip::EorReason::NonSpecified),
+                              0x03, 'h', 'i', '!'};
+    DataBinSet t;
+    CHECK(parse_jpp_stream(s.data(), s.size(), &t),
+          "parse_jpp_stream must accept an EOR with 3-byte body");
+    CHECK(t.has_eor(), "EOR flag");
+    CHECK(t.eor_reason() == 0xFF, "reason should be 0xFF (NonSpecified), got %u",
+          t.eor_reason());
+  }
+
+  // Rejection: truncated EOR (missing body-length VBAS).
+  {
+    std::vector<uint8_t> bad = {0x00, 0x02};  // no VBAS byte
+    DataBinSet t;
+    CHECK(!parse_jpp_stream(bad.data(), bad.size(), &t),
+          "2-byte EOR (missing VBAS length) must be rejected");
+  }
+
+  // Rejection: EOR claims a body larger than what remains in the stream.
+  {
+    std::vector<uint8_t> bad = {0x00, 0x02, 0x10, 0xAA, 0xBB};  // claims 16 body bytes, only 2 available
+    DataBinSet t;
+    CHECK(!parse_jpp_stream(bad.data(), bad.size(), &t),
+          "EOR with body-length > remaining bytes must be rejected");
   }
 
   if (failures == 0) {

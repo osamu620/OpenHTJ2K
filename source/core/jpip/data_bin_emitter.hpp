@@ -88,9 +88,12 @@ emit_precinct_databin(const uint8_t *codestream, std::size_t len,
                       MessageHeaderContext &ctx,
                       std::vector<uint8_t> &out);
 
-// Emit an End-of-Response (EOR) message (class 7, §A.3) with the given
-// reason code.  The EOR message signals the end of a server response and
-// carries a one-byte reason code as its body.
+// Emit an End-of-Response (EOR) message (§D.3) with the given reason
+// code.  EOR is not an Annex A message and not a class; the wire form
+// is `0x00 | reason | body-length(VBAS) | body`, and we never emit a
+// body, so this always appends exactly 3 bytes.  `ctx` is accepted for
+// API symmetry with the other emitters but is left untouched because
+// EOR does not participate in dependent-form class inheritance.
 OPENHTJ2K_JPIP_EXPORT std::size_t
 emit_eor(EorReason reason, MessageHeaderContext &ctx, std::vector<uint8_t> &out);
 
