@@ -30,23 +30,11 @@ set(_SEC_CRASH_RE
 # code, so we can't rely on WILL_FAIL.  Instead, require that the
 # specific guard printf from the patched code path fires (proof the
 # bounds check is in effect) and reject any crash-marker text.
-#
-# WIN32 skip: on the MSVC Windows CI runners (both x86_64 and ARM64)
-# the decoder hangs on this fixture before ever reaching the HT
-# codeblock code the fix patches — no output is produced inside a
-# 60 s timeout, despite Linux + macOS + WASM completing in <5 ms.
-# That's a separate pre-existing pathological-input hang in the
-# decoder, not caused by the guard we're regression-testing.  Left
-# out here so the security patch isn't held; tracked for a follow-up
-# release.  Coverage on Linux + macOS (both SIMD and scalar) is
-# sufficient to prove the guard fires.
-if(NOT WIN32)
-  add_test(NAME security_ht_segments_overflow
-           COMMAND open_htj2k_dec
-                   -i ${SECURITY_DATA_DIR}/security_ht_segments_overflow.j2k
-                   -o security_ht_segments_overflow.pgx)
-  set_tests_properties(security_ht_segments_overflow PROPERTIES
-      PASS_REGULAR_EXPRESSION "too many HT coding-pass segments"
-      FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
-      TIMEOUT 60)
-endif()
+add_test(NAME security_ht_segments_overflow
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_ht_segments_overflow.j2k
+                 -o security_ht_segments_overflow.pgx)
+set_tests_properties(security_ht_segments_overflow PROPERTIES
+    PASS_REGULAR_EXPRESSION "too many HT coding-pass segments"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 60)
