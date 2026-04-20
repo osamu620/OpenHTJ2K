@@ -60,8 +60,8 @@ on modern x86-64**.
   HTTP/1.1, or over HTTP/3 with multiplexed QUIC streams.
 - `open_htj2k_jpip_benchmark` measures bandwidth reduction and decode
   speedup for foveated vs full-image delivery across an NxN gaze grid.
-- Phase 4 IDWT zero-skip optimization: skips DWT lifting steps for
-  absent precincts, cutting decode time proportionally.  Viewport-region
+- IDWT zero-skip optimization: skips DWT lifting steps for absent
+  precincts, cutting decode time proportionally.  Viewport-region
   decode (`jpip_end_frame_region`) adds row-limit + column-range IDWT
   so zoomed-in viewports on 42K+ canvases stay interactive in WASM.
 - In-browser WASM demos (decode entirely in-page, no plugin, no

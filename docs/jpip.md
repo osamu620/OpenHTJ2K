@@ -100,7 +100,7 @@ open_htj2k_jpip_demo [<input.j2c>]
     [--reduce N=0]                # discard DWT levels
     [--server host:port]          # HTTP/1.1 server mode
     [--server-h3 host:port]       # HTTP/3 server mode (requires -DOPENHTJ2K_QUIC=ON)
-    [--use-filter]                # Phase-1 direct precinct filter (skip JPP round-trip)
+    [--use-filter]                # direct precinct filter (skip JPP round-trip)
     [--decode-on-move-only] [--no-vsync]
 ```
 
@@ -117,8 +117,8 @@ Three modes are always available:
   multiplexed on one QUIC connection via `H3Client::fetch_multi`.
 
 `--use-filter` bypasses the JPP round-trip and installs the precinct
-filter directly on the decoder — a Phase-1 A/B comparison path that
-still works against local files. The window size can exceed the
+filter directly on the decoder — an A/B comparison path that still
+works against local files. The window size can exceed the
 canvas (decouples the GPU texture scaler from the decoded resolution)
 or be smaller for cheap previews; Metal's 16384-pixel texture cap is
 honoured so 21600 × 10800 NASA Blue Marble-sized canvases run cleanly
@@ -258,7 +258,7 @@ short-circuits the lifting pass when both its neighbour rows are
 zero. The cost drops to ~10 % of a populated row (the counter
 increments and zero checks stay).
 
-### Viewport-region decode (V2)
+### Viewport-region decode
 
 `jpip_end_frame_region(handle, rgb, w, h, x, y, rw, rh)`:
 
