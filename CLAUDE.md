@@ -100,8 +100,8 @@ SIMD files are guarded at the top so they compile to nothing on wrong platforms.
 - `source/apps/jpip_server/` — stateless HTTP/1.1 + HTTP/3 server. Loads one J2C, builds index once, serves view-window requests.
 - `source/apps/jpip_demo/` — mouse-driven foveation demo. 3-cone RoI (fovea/para/periphery). Modes: in-process JPP round-trip, HTTP/1.1 `--server`, HTTP/3 `--server-h3`.
 - `source/apps/jpip_benchmark/` — bandwidth + decode workload comparison (foveated vs full-image) across an NxN gaze grid.
-- **Phase 4 IDWT zero-skip**: `idwt_2d_state` tracks per-row zero flags in ring buffer; `adv_step()` skips lifting when both neighbor rows are zero. Cascades through DWT levels.
-- **Phase 5 H3 transport**: MsQuic (QUIC) + nghttp3 (HTTP/3 framing). `H3Server`/`H3Client` wrappers in `h3_server.cpp`/`h3_client.cpp`. Build with `-DOPENHTJ2K_QUIC=ON`.
+- **IDWT zero-row skip**: `idwt_2d_state` tracks per-row zero flags in ring buffer; `adv_step()` skips lifting when both neighbor rows are zero. Cascades through DWT levels.
+- **HTTP/3 (QUIC) transport**: MsQuic (QUIC) + nghttp3 (HTTP/3 framing). `H3Server`/`H3Client` wrappers in `h3_server.cpp`/`h3_client.cpp`. Build with `-DOPENHTJ2K_QUIC=ON`.
 - **Data-bin classes**: 0=precinct, 2=tile-header, 6=main-header, 7=EOR, 8=metadata.
 - **Cache model** (`cache_model.{hpp,cpp}`): client tracks received data-bins, sends `model=Hm,Ht0,M0` so server skips known headers.
 - **TLM marker**: encoder emits tile-part lengths; decoder exposes via `TLM_marker` accessors.
