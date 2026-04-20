@@ -160,14 +160,12 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   try {
     file_size = std::filesystem::file_size(filename);
   } catch (std::filesystem::filesystem_error &err) {
-    printf("ERROR: input file %s is not found.\n", filename);
-    exit(EXIT_FAILURE);
+    throw std::runtime_error(std::string("input file not found: ") + filename);
   }
 #else
   struct stat st;
   if (stat(filename, &st) != 0) {
-    printf("ERROR: input file %s is not found.\n", filename);
-    exit(EXIT_FAILURE);
+    throw std::runtime_error(std::string("input file not found: ") + filename);
   }
   file_size = static_cast<uintmax_t>(st.st_size);
 #endif

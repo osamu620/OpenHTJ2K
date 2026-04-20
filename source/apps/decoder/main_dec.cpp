@@ -34,6 +34,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -560,8 +561,13 @@ int main(int argc, char *argv[]) {
   // For JPH inputs: probe the colorspace from the library (no app-level box parsing).
   uint32_t detected_cs = 0;
   if (is_jph) {
-    open_htj2k::openhtj2k_decoder probe(infile_name, 0, 0);
-    detected_cs = probe.get_colorspace();
+    try {
+      open_htj2k::openhtj2k_decoder probe(infile_name, 0, 0);
+      detected_cs = probe.get_colorspace();
+    } catch (std::exception &exc) {
+      printf("ERROR: %s\n", exc.what());
+      return EXIT_FAILURE;
+    }
     if (detected_cs == open_htj2k::ENUMCS_SRGB)
       printf("INFO: JPH colorspace: sRGB\n");
     else if (detected_cs == open_htj2k::ENUMCS_GRAYSCALE)
@@ -616,7 +622,6 @@ int main(int argc, char *argv[]) {
   if (use_batch) {
     std::vector<int32_t *> buf;
     for (int32_t i = 0; i < num_iterations; ++i) {
-      open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
       for (auto &p : buf) delete[] p;
       buf.clear();
       img_width.clear();
@@ -624,6 +629,7 @@ int main(int argc, char *argv[]) {
       img_depth.clear();
       img_signed.clear();
       try {
+        open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
         decoder.parse();
         decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
       } catch (std::exception &exc) {
@@ -673,13 +679,16 @@ int main(int argc, char *argv[]) {
   for (int32_t i = 0; i < num_iterations; ++i) {
     const bool is_last = (i == num_iterations - 1);
 
-    open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
+    std::unique_ptr<open_htj2k::openhtj2k_decoder> decoder_owner;
     try {
-      decoder.parse();
+      decoder_owner = std::unique_ptr<open_htj2k::openhtj2k_decoder>(
+          new open_htj2k::openhtj2k_decoder(infile_name, reduce_NL, num_threads));
+      decoder_owner->parse();
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
       return EXIT_FAILURE;
     }
+    auto &decoder = *decoder_owner;
 
     try {
       decoder.invoke_line_based_stream(

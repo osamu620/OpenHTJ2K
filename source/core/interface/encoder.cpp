@@ -67,8 +67,7 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
 #endif
 
     if (!is_pnm_pgx && !is_tiff) {
-      printf("ERROR: Unsupported output file type.\n");
-      exit(EXIT_FAILURE);
+      throw std::runtime_error("unsupported input file type (expected .pgm/.ppm/.pgx/.tif)");
     }
     if (is_pnm_pgx) {
       if (read_pnmpgx(fname, c)) {
@@ -205,8 +204,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       if (d == '#') {
         char *nouse = fgets(comment, sizeof(comment), fp);
         if (nouse == nullptr) {
-          printf("comment read error\n");
-          exit(EXIT_FAILURE);
+          throw std::runtime_error("PNM/PGX header comment read error");
         }
         d = fgetc(fp);
       }
@@ -263,8 +261,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     if (d == '#') {
       char *nouse = fgets(comment, sizeof(comment), fp);
       if (nouse == nullptr) {
-        printf("comment read error\n");
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("PNM/PGX header comment read error");
       }
       d = fgetc(fp);
     }
