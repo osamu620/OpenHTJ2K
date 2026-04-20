@@ -37,30 +37,35 @@
 namespace open_htj2k {
 namespace jpip {
 
-// Class identifiers per Table A.2.
+// Class identifiers per Table A.2.  EOR is intentionally absent here: per
+// §D.3, the EOR message is "not defined in Annex A and is not formally part
+// of the JPP- or JPT-stream media types" — it uses a special sentinel byte
+// (0x00) as its identifier, not a class.  See data_bin_emitter.cpp and
+// jpp_parser.cpp for the wire-format handling.
 constexpr uint8_t kMsgClassPrecinct    = 0;  // JPP-stream
 constexpr uint8_t kMsgClassExtPrecinct = 1;  // JPP-stream, has Aux
 constexpr uint8_t kMsgClassTileHeader  = 2;  // JPP-stream
 constexpr uint8_t kMsgClassTile        = 4;  // JPT-stream
 constexpr uint8_t kMsgClassExtTile     = 5;  // JPT-stream, has Aux
 constexpr uint8_t kMsgClassMainHeader  = 6;  // JPP- and JPT-stream
-constexpr uint8_t kMsgClassEOR         = 7;  // End of Response (§A.3)
 constexpr uint8_t kMsgClassMetadata    = 8;  // JPP- and JPT-stream
 
-// EOR reason codes (§A.3, Table A.3).
+// EOR reason codes (§D.3, Table D.2).
 enum class EorReason : uint8_t {
-  ImageDone     = 1,   // entire target image has been delivered
-  WindowDone    = 2,   // all data for the current view-window has been sent
-  WindowChange  = 3,   // server is changing window (preemption)
-  QualityLimit  = 4,   // response quality limit reached
-  ByteLimit     = 5,   // response byte limit reached
+  ImageDone     = 1,   // all available image information transferred
+  WindowDone    = 2,   // all information relevant to the view-window sent
+  WindowChange  = 3,   // server preempting to service a new request
+  ByteLimit     = 4,   // Maximum Response Length reached
+  QualityLimit  = 5,   // Quality request field limit reached
+  SessionLimit  = 6,   // session resource limit reached
+  ResponseLimit = 7,   // non-session response limit reached
   NonSpecified  = 0xFF
 };
 
 // Per §A.2.2: "Class identifiers are chosen such that an Aux VBAS is present
 // if and only if the identifier is odd."
 inline bool msg_class_has_aux(uint8_t class_id) {
-  return class_id != kMsgClassEOR && (class_id & 1u) != 0u;
+  return (class_id & 1u) != 0u;
 }
 
 struct MessageHeader {

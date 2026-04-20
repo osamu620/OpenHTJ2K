@@ -232,8 +232,11 @@ source/core/jpip/
 - 1 — extended precinct (JPP-stream, has Aux)
 - 2 — tile header
 - 6 — main header
-- 7 — EOR (End of Response)
 - 8 — metadata
+
+The End-of-Response (EOR) message is deliberately not a class. Per
+§D.3 it sits outside Annex A and uses a special 0x00 identifier byte
+rather than a Bin-ID VBAS; see the dedicated EOR handling below.
 
 ### JPIP sequence number / identifier
 

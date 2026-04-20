@@ -120,14 +120,18 @@ std::size_t emit_precinct_databin(const uint8_t *codestream, std::size_t len,
 }
 
 std::size_t emit_eor(EorReason reason, MessageHeaderContext &ctx, std::vector<uint8_t> &out) {
-  MessageHeader hdr;
-  hdr.class_id    = kMsgClassEOR;
-  hdr.in_class_id = 0;
-  hdr.msg_offset  = 0;
-  hdr.msg_length  = 1;
-  hdr.is_last     = true;
-  const uint8_t reason_byte = static_cast<uint8_t>(reason);
-  return append_message(hdr, &reason_byte, 1, ctx, out);
+  // §D.3: the EOR message is not an Annex A message and not a class.
+  // Wire format is:
+  //     0x00 (identifier) | reason (1 byte) | body-length (VBAS) | body
+  // We never emit a body, so the VBAS length is 0 — three bytes total.
+  // MessageHeaderContext is untouched because EOR does not participate in
+  // the dependent-form inheritance that Annex A message headers use.
+  (void)ctx;
+  const std::size_t before = out.size();
+  out.push_back(0x00);
+  out.push_back(static_cast<uint8_t>(reason));
+  out.push_back(0x00);
+  return out.size() - before;
 }
 
 }  // namespace jpip

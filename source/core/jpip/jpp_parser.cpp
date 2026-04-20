@@ -4,6 +4,7 @@
 #include "jpp_parser.hpp"
 
 #include "jpp_message.hpp"
+#include "vbas.hpp"
 
 namespace open_htj2k {
 namespace jpip {
@@ -76,18 +77,28 @@ bool parse_jpp_stream(const uint8_t *bytes, std::size_t len, DataBinSet *out) {
   MessageHeaderContext ctx;
   std::size_t pos = 0;
   while (pos < len) {
+    // §D.3: an EOR message's single-byte identifier is 0x00, followed by a
+    // reason byte and a VBAS body-length.  0x00 as the first byte of a
+    // Bin-ID VBAS would imply Table A.1's prohibited "bb=00" indicator, so
+    // there is no ambiguity — when the next byte is 0x00 we are at an EOR
+    // and Annex A header decoding does not apply.
+    if (bytes[pos] == 0x00) {
+      if (pos + 2 > len) return false;
+      const uint8_t reason = bytes[pos + 1];
+      uint64_t body_len = 0;
+      std::size_t vbas_adv = 0;
+      if (!vbas_decode(bytes + pos + 2, len - (pos + 2), &body_len, &vbas_adv)) return false;
+      const std::size_t total = 2 + vbas_adv + static_cast<std::size_t>(body_len);
+      if (body_len > len - (pos + 2 + vbas_adv)) return false;  // truncated body
+      out->set_eor(reason);
+      pos += total;
+      break;
+    }
     MessageHeader hdr;
     std::size_t hdr_bytes = 0;
     if (!decode_header(bytes + pos, len - pos, ctx, &hdr, &hdr_bytes)) return false;
     pos += hdr_bytes;
     if (hdr.msg_length > len - pos) return false;  // truncated payload
-    if (hdr.class_id == kMsgClassEOR) {
-      if (hdr.msg_length >= 1 && pos < len) {
-        out->set_eor(bytes[pos]);
-      }
-      pos += static_cast<std::size_t>(hdr.msg_length);
-      break;
-    }
     if (!out->append(hdr.class_id, hdr.in_class_id, hdr.msg_offset, bytes + pos,
                      static_cast<std::size_t>(hdr.msg_length), hdr.is_last)) {
       return false;

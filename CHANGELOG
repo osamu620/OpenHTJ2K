@@ -1,3 +1,81 @@
+# [0.16.0] - 2026-04-20
+
+## JPIP wire format — EOR encoding corrected to match §D.3
+
+The End-of-Response (EOR) message in our JPIP implementation was
+being emitted and parsed as a fictional "message class 7" of the
+Annex A header grammar.  Per ISO/IEC 15444-9:2023 §D.3, EOR is
+**explicitly not an Annex A message** and uses a dedicated wire
+format that starts with a special 0x00 identifier byte:
+
+```
+  0x00 | reason (1 byte) | body-length (VBAS) | body
+```
+
+Table A.2 lists only classes {0, 1, 2, 4, 5, 6, 8} — class 7 does
+not exist.  Our code carried a `kMsgClassEOR = 7` constant that
+dated back to an early draft.  On the wire this produced a
+multi-byte Annex A message header with class-VBAS = 7, which a
+conformant parser would either reject (Table A.1's `bb=00` EOR
+sentinel trips first) or misinterpret as a new data-bin.
+
+This release corrects both directions:
+
+* **Emit** (`emit_eor` in `source/core/jpip/data_bin_emitter.cpp`)
+  now writes exactly three bytes: `{0x00, reason, 0x00}`.  No
+  MessageHeaderContext update is performed because EOR does not
+  participate in Annex A's dependent-form class inheritance.
+
+* **Parse** (`parse_jpp_stream` in
+  `source/core/jpip/jpp_parser.cpp`) detects the 0x00 sentinel
+  before attempting Annex A header decoding.  Bin-ID first-byte
+  `bb=00` is already prohibited by Table A.1, so there is no
+  ambiguity between an EOR terminator and a legitimate data-bin
+  message.  The parser reads the reason byte, decodes the
+  body-length VBAS, skips the (optional) body, and records the
+  reason in the `DataBinSet`.
+
+* Secondary bug fixed in the `EorReason` enum in
+  `source/core/jpip/jpp_message.hpp`: Table D.2 reason codes
+  **4 = Byte limit reached** and **5 = Quality limit reached**
+  were swapped in our declaration.  Corrected, and added the
+  previously-missing codes **6 = Session limit reached** and
+  **7 = Response limit reached**.
+
+* `kMsgClassEOR` is removed.  `msg_class_has_aux()` simplifies
+  accordingly (the EOR exclusion is gone because EOR is no
+  longer treated as a class).
+
+### Regression coverage
+
+New tests in `source/apps/jpip_parser_check/main.cpp`:
+
+* Byte-exact assertion that `emit_eor(WindowDone)` produces
+  `{0x00, 0x02, 0x00}`.
+* Round-trip: parsing the emitted 3 bytes sets
+  `DataBinSet::has_eor()` and yields `eor_reason() == 2`.
+* Acceptance of an EOR with a non-empty body (skipped to the
+  right offset, reason captured).
+* Rejection of a truncated EOR (missing body-length VBAS) and of
+  an EOR whose body-length exceeds the remaining bytes.
+
+Full conformance suite: 615/615 pass on Linux + macOS + WASM +
+Windows MSVC.
+
+### Caller impact
+
+`openhtj2k_jpip_server`, `openhtj2k_jpip_demo`, and the WASM
+wrapper all call `emit_eor` and `DataBinSet::has_eor` /
+`eor_reason` — none of them introspect the wire bytes, so no
+caller changes were needed.  Binary compatibility: the symbol
+`kMsgClassEOR` is removed; any out-of-tree code that referenced
+it (unlikely — EOR is an internal protocol detail) must remove
+the reference.  The `emit_eor` signature is unchanged.
+
+This is a wire-format behaviour change for both our server's
+output and our client's input, which is why this is v0.16.0 and
+not v0.15.3.
+
 # [0.15.2] - 2026-04-20
 
 ## Security — companion hang on the v0.15.1 security fixture (Windows MSVC only)
