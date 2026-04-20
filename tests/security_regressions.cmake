@@ -36,4 +36,12 @@ add_test(NAME security_ht_segments_overflow
                  -o security_ht_segments_overflow.pgx)
 set_tests_properties(security_ht_segments_overflow PROPERTIES
     PASS_REGULAR_EXPRESSION "too many HT coding-pass segments"
-    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}")
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    # On Linux + macOS this fixture decodes in <5 ms once the guard
+    # short-circuits the bad codeblock.  Windows CI has been observed
+    # to hang for >10 minutes on the same input — cause unclear,
+    # probably an unrelated pathological path the malformed stream
+    # reaches downstream of the fixed overflow.  Cap the test at 60 s
+    # so CI fails fast; the separate investigation is tracked without
+    # blocking the v0.15.1 advisory.
+    TIMEOUT 60)
