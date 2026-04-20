@@ -1069,12 +1069,26 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   uint8_t *Dref;
 
   if (num_ht_passes > 0) {
+    // HT defines at most two segments per codeblock (Cleanup + optional
+    // Refinement); `all_segments[4]` is over-provisioned.  A malformed
+    // input with pass_length_count > 4 non-zero entries used to write
+    // past the array and smash the stack — guard the write and the
+    // later `all_segments[0]` read.  Reported by IM JUN SEO (KISIA) and
+    // OH HAN GUEL (SANGMYUNG UNIVERSITY).
     uint8_t  all_segments[4] = {};
     uint32_t num_segments = 0;
     for (uint32_t i = 0; i < block->pass_length_count; i++) {
       if (block->pass_length[i] != 0) {
+        if (num_segments >= 4) {
+          printf("WARNING: too many HT coding-pass segments (>4) — malformed input.\n");
+          return false;
+        }
         all_segments[num_segments++] = static_cast<uint8_t>(i);
       }
+    }
+    if (num_segments == 0) {
+      printf("WARNING: no non-empty HT coding-pass segments.\n");
+      return false;
     }
     Lcup += static_cast<int32_t>(block->pass_length[all_segments[0]]);
     if (Lcup < 2) {
