@@ -38,3 +38,19 @@ set_tests_properties(security_ht_segments_overflow PROPERTIES
     PASS_REGULAR_EXPRESSION "too many HT coding-pass segments"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 60)
+
+# API contract — the decoder's file-path constructor used to call
+# exit(EXIT_FAILURE) directly when the file was missing, terminating
+# the host process from inside the shared library.  v0.15.2 makes it
+# throw std::runtime_error instead.  This test runs open_htj2k_dec
+# against a nonexistent path and asserts the CLI exits cleanly with
+# the propagated "input file not found" message — no abort, no
+# signal, no orphan process.
+add_test(NAME api_decoder_throws_on_missing_file
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/path/that/does/not/exist.j2k
+                 -o api_decoder_missing_file.pgx)
+set_tests_properties(api_decoder_throws_on_missing_file PROPERTIES
+    PASS_REGULAR_EXPRESSION "input file not found"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)

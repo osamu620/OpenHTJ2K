@@ -46,6 +46,51 @@ exit code is 0, and the previously-skipped
 `tests/security_regressions.cmake`) passes on Windows alongside
 Linux and macOS.  Full conformance suite remains green.
 
+## API / library hygiene — remove `exit()` from the shared library
+
+Five `exit(EXIT_FAILURE)` sites in the public decoder / encoder
+API were terminating the host process from inside
+`libopenhtj2k` on error paths.  A shared library should never
+terminate for its embedder; long-running hosts (servers, daemons,
+the WASM runtime, the JPIP demos) can't recover from a forced
+process exit.
+
+Replaced each site with `throw std::runtime_error(...)` carrying
+a descriptive message.  The in-tree CLI wrappers
+(`open_htj2k_dec`, `open_htj2k_enc`) already catch `std::exception`
+around their decoder / encoder invocations; the two bare
+constructor call sites in `source/apps/decoder/main_dec.cpp` (the
+JPH colorspace probe and the line-based streaming path) are now
+wrapped in the same try/catch so a missing input file produces a
+single clean `ERROR: input file not found: <path>` line and
+`EXIT_FAILURE`, not a `printf` + process abort.
+
+Affected library sites:
+
+* `source/core/interface/decoder.cpp` — file-path constructor's
+  `std::filesystem::file_size()` / `stat()` failure branches.
+* `source/core/interface/encoder.cpp` — unsupported input file
+  extension rejection and two `read_pnmpgx` PPM/PGX header
+  comment-read failure branches.
+
+The library-side `printf("ERROR: …")` diagnostics that preceded
+each `exit()` are dropped too — the exception carries the same
+message, and catch blocks in the CLIs print it, so dual-reporting
+is gone.
+
+Regression test `api_decoder_throws_on_missing_file` in
+`tests/security_regressions.cmake` runs `open_htj2k_dec` against
+a nonexistent path and asserts a clean `"input file not found"`
+message with no crash markers.  Total suite: 615 tests (+1 vs
+v0.15.1), all green on Linux + macOS + WASM + (pending CI)
+Windows.
+
+No API header change — callers that were already expecting
+exceptions from other error paths (missing main header, malformed
+codestream, etc.) see no difference; callers that were relying on
+`exit()` to terminate the process on a bad input file will now
+get a catchable exception instead.
+
 # [0.15.1] - 2026-04-20
 
 ## Security
