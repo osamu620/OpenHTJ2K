@@ -864,6 +864,21 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
     layer_length += this->pass_length[static_cast<size_t>(i)];
   }
 
+  // Clamp layer_length to bytes remaining in the tile-part codestream.
+  // The packet-header-decoded pass_length[] is attacker-controllable on
+  // malformed inputs; without this clamp, a later copy_N_bytes/borrow_N_bytes
+  // call can read past the end of the tile_buf node (UB on Linux release
+  // where asserts are compiled out, or a CRT abort on Windows MSVC release
+  // where asserts remain enabled).
+  {
+    const uint32_t avail = tile_buf->get_remaining_bytes();
+    if (layer_length > avail) {
+      printf("WARNING: codeblock layer length %u exceeds %u remaining bytes — malformed input.\n",
+             (unsigned)layer_length, (unsigned)avail);
+      layer_length = avail;
+    }
+  }
+
   if (this->compressed_data == nullptr) {
     // First contributing layer for this codeblock.
     if (layer_length == 0) {
@@ -873,14 +888,6 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
       this->current_address = this->compressed_data;
     } else {
       // Zero-copy: borrow a direct pointer into the codestream buffer.
-      // Clamp layer_length to available data for truncated codestreams.
-      const uint32_t avail = tile_buf->get_remaining_bytes();
-      if (layer_length > avail) {
-        layer_length = avail;
-      }
-      if (layer_length == 0) {
-        return;
-      }
       // The codestream buffer outlives all codeblocks, and all decoders
       // (HT fwd/rev/MEL, and MQ) treat compressed_data as read-only.
       // compressed_is_pooled = true suppresses free() in the destructor.

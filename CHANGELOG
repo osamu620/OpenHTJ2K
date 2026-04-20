@@ -1,3 +1,51 @@
+# [0.15.2] - 2026-04-20
+
+## Security — companion hang on the v0.15.1 security fixture (Windows MSVC only)
+
+The same 231-byte fixture that exercised the v0.15.1 HT-block stack
+overflow also reached a second pathological code path: in
+`j2k_codeblock::create_compressed_buffer`
+(`source/core/coding/coding_units.cpp`), the sum of attacker-
+controlled `block->pass_length[i]` values (`layer_length`) was
+clamped to the bytes remaining in `tile_buf` only on the
+**first-layer** branch.  On any subsequent layer's append path, an
+un-clamped `layer_length` flowed into `buf_chain::copy_N_bytes`,
+whose `assert((pos + N) <= current_length)` precondition can be
+violated by a malformed stream.
+
+Platform asymmetry that hid this under v0.15.1:
+
+* **Linux / macOS release builds** compile with `-DNDEBUG`
+  (`CMakeLists.txt:141`), so `assert()` is a no-op.  The `memcpy`
+  in `copy_N_bytes` silently over-reads the `tile_buf` node;
+  HT-block decoding then rejects the resulting garbage with the
+  existing "cleanup pass suffix length … is invalid" and v0.15.1
+  "too many HT coding-pass segments" warnings and the process
+  exits cleanly in < 5 ms.
+* **Windows MSVC release builds** do not define `NDEBUG`
+  (`CMakeLists.txt:148` sets only `/Ox`), so `assert()` is live.
+  The assertion fires and the CRT invokes `abort()`, which on
+  GitHub Actions Windows runners surfaces as a Windows Error
+  Reporting dialog that waits for user input — producing the
+  "60 s CTest timeout with zero output" symptom on both
+  `windows-latest` (x86-64) and `windows-11-arm`.
+
+Fix: hoist the `layer_length > tile_buf->get_remaining_bytes()`
+clamp to the top of `create_compressed_buffer`, so it applies to
+both the first-layer zero-copy path and the subsequent-layer
+owned-buffer append path.  A `WARNING` printf matching the
+v0.15.1 wording pattern is emitted so the malformed-input
+rejection is observable in logs.  Platform-agnostic; no `#ifdef`
+involved.
+
+With the fix, the v0.15.1 regression fixture
+(`tests/data/security_ht_segments_overflow.j2k`) completes in
+~4 ms on Windows — the three downstream HT-block warnings fire,
+exit code is 0, and the previously-skipped
+`security_ht_segments_overflow` CTest case (un-skipped in
+`tests/security_regressions.cmake`) passes on Windows alongside
+Linux and macOS.  Full conformance suite remains green.
+
 # [0.15.1] - 2026-04-20
 
 ## Security
