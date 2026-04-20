@@ -2451,9 +2451,14 @@ sprec_t *j2k_tile_component::pull_strip_into_buf(uint32_t count, uint32_t stride
     ld->strip_buf_floats = needed;
   }
 
-  if (count == 0) return ld->strip_buf;
+  return pull_strip_into_buf(count, stride_floats, ld->strip_buf);
+}
 
-  sprec_t *dst = ld->strip_buf;
+sprec_t *j2k_tile_component::pull_strip_into_buf(uint32_t count, uint32_t stride_floats,
+                                                 sprec_t *dst) {
+  if (line_dec == nullptr || dst == nullptr) return nullptr;
+  if (count == 0) return dst;
+
   for (uint32_t r = 0; r < count; ++r) {
     const sprec_t *src = pull_line_ref();
     if (src == nullptr) {
@@ -2467,7 +2472,7 @@ sprec_t *j2k_tile_component::pull_strip_into_buf(uint32_t count, uint32_t stride
     std::memcpy(dst + static_cast<size_t>(r) * stride_floats, src,
                 sizeof(sprec_t) * stride_floats);
   }
-  return ld->strip_buf;
+  return dst;
 }
 
 void j2k_tile_component::finalize_line_decode() {
