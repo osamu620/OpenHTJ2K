@@ -31,6 +31,10 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part1_HF.cmake)
 # DFS + ATK
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/part2_dfs_atk.cmake)
 
+## Security regressions — each test exercises an input that used to
+## crash and must now be rejected cleanly (non-zero exit, no signal).
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/security_regressions.cmake)
+
 ## WASM conformance tests (require Node.js + WASM build output)
 find_program(NODE_EXECUTABLE NAMES node nodejs)
 if(NODE_EXECUTABLE)

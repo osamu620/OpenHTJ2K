@@ -1,3 +1,58 @@
+# [0.15.1] - 2026-04-20
+
+## Security
+
+### HT block decoding stack buffer overflow (all SIMD variants)
+
+Fixes a reproducible stack buffer overflow in `htj2k_decode()`
+reachable from a malformed JPEG 2000 / HTJ2K codestream.  A fixed
+four-entry stack array `uint8_t all_segments[4]` was written by a
+loop whose upper bound was `block->pass_length_count` (attacker-
+controlled) rather than the array capacity.  Five or more non-zero
+`pass_length[i]` entries wrote past the end and smashed the stack
+canary on hardened release builds; ASan reported a 1-byte stack
+buffer overflow on instrumented builds.  The same four variants
+(generic, AVX2, NEON, WASM) also read `all_segments[0]`
+uninitialised when `num_ht_passes > 0` but every `pass_length[i]`
+was zero.
+
+Impact: denial of service (crash) on every deployment exposed to
+decoder input.  No remote code execution demonstrated; the written
+byte is `static_cast<uint8_t>(i)`, not fully attacker-controlled.
+
+Fix: bound `num_segments` to the array capacity (`return false`
+when a sixth non-zero entry would overflow) and reject inputs
+with zero non-zero entries.  Applied identically across all four
+SIMD variants:
+
+* `source/core/coding/ht_block_decoding.cpp` (generic)
+* `source/core/coding/ht_block_decoding_avx2.cpp`
+* `source/core/coding/ht_block_decoding_neon.cpp`
+* `source/core/coding/ht_block_decoding_wasm.cpp`
+
+Regression fixture `tests/data/security_ht_segments_overflow.j2k`
+(231 bytes, SHA-256 `da756e7aa7421e1207b92b7651996ed4b328edb820bd30cdb5f4af953d1eb063`)
+and a new `tests/security_regressions.cmake` with a CTest case
+that asserts the patched guard fires and rejects any crash-marker
+text in the output.  The suite now runs 614 tests.
+
+Reported by:
+
+* **IM JUN SEO** (KISIA, [@Jseanxx](https://github.com/Jseanxx))
+* **OH HAN GUEL** (SANGMYUNG UNIVERSITY, [@5asever40-a11y](https://github.com/5asever40-a11y))
+
+Both reporters provided a reproducer, full ASan + stack-canary
+traces, root-cause analysis, and a correct suggested patch.
+
+GitHub Security Advisory: GHSA-xxxx-xxxx-xxxx (CVE pending).
+
+## Project
+
+Added [`SECURITY.md`](SECURITY.md) documenting the private-report-to-
+GitHub-advisory channel, report triage SLAs, the default fix-forward-
+publicly disclosure posture, CVE coordination, credit practice, and
+an in-scope / out-of-scope list.  Triggered by the report above.
+
 # [0.15.0] - 2026-04-20
 
 ## JPIP — foveated streaming and gigapixel browsing (new)
