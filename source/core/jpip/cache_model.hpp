@@ -23,6 +23,10 @@ namespace jpip {
 class OPENHTJ2K_JPIP_EXPORT CacheModel {
  public:
   void mark(uint8_t class_id, uint64_t in_class_id);
+  // Remove a previously marked bin from the cache model.  Used by the
+  // LRU precinct cache when a bin is evicted so the client stops
+  // advertising it in the `&model=` field.
+  void unmark(uint8_t class_id, uint64_t in_class_id);
   bool has(uint8_t class_id, uint64_t in_class_id) const;
   void clear();
   size_t size() const { return bins_.size(); }

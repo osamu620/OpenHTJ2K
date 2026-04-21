@@ -53,6 +53,10 @@ void DataBinSet::merge_from(const DataBinSet &other) {
   }
 }
 
+bool DataBinSet::erase(uint8_t class_id, uint64_t in_class_id) {
+  return bins_.erase({class_id, in_class_id}) > 0;
+}
+
 bool DataBinSet::append(uint8_t class_id, uint64_t in_class_id, uint64_t msg_offset,
                         const uint8_t *payload, std::size_t payload_len, bool is_last) {
   const Key key{class_id, in_class_id};

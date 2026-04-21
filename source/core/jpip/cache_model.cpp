@@ -16,6 +16,10 @@ void CacheModel::mark(uint8_t class_id, uint64_t in_class_id) {
   bins_.insert(key(class_id, in_class_id));
 }
 
+void CacheModel::unmark(uint8_t class_id, uint64_t in_class_id) {
+  bins_.erase(key(class_id, in_class_id));
+}
+
 bool CacheModel::has(uint8_t class_id, uint64_t in_class_id) const {
   return bins_.count(key(class_id, in_class_id)) > 0;
 }

@@ -265,6 +265,7 @@
         <tr><td><code>?variant=</code></td><td>auto</td><td><code>mt</code> or <code>st</code> — force multi- or single-threaded WASM.</td></tr>
         <tr><td><code>?maxSize=</code></td><td><code>1920x1080</code></td><td>Cap the WebGL render target to <code>WxH</code>. Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass <code>?maxSize=window</code> to disable the cap.</td></tr>
         <tr><td><code>?fit=</code></td><td><code>stretch</code></td><td><code>stretch</code> — CSS scales the render target up to fill the window, GPU upsamples via <code>GL_LINEAR</code>.<br><code>contain</code> — CSS size == render size, canvas is shown at native pixel scale centered in the window (like the foveation demo).</td></tr>
+        <tr><td><code>?precinctCacheMB=</code></td><td><code>64</code></td><td>LRU precinct cache budget in megabytes. Received precincts are tracked in the <code>&amp;model=</code> cache-model advertisement so the server skips ones already in the viewer's cache on subsequent pans (70–95% byte reduction typical). Set <code>0</code> to disable.</td></tr>
       </tbody>
     </table>
   </details>
@@ -689,6 +690,18 @@ async function connect() {
     M._free(binPtr);
   } catch (e) { $('info').textContent = `Connect failed: ${e.message}`; return; }
   if (!ctx) { $('info').textContent = 'Failed to build index'; return; }
+
+  // Enable the LRU precinct cache (viewer mode) so the server skips
+  // precincts already delivered on previous pans.  On typical in-window
+  // pans this drops per-request bytes + decode time by 70–95%.  Budget
+  // is configurable via `?precinctCacheMB=` (default 64 MB).
+  const cacheMB = Math.max(0, Number(new URLSearchParams(location.search).get('precinctCacheMB') || 64));
+  const budget = Math.round(cacheMB * 1024 * 1024);
+  if (M._jpip_set_precinct_cache_budget) {
+    M._jpip_set_precinct_cache_budget(ctx, budget & 0xffffffff,
+                                       Math.floor(budget / 0x100000000) & 0xffffffff);
+  }
+  if (M._jpip_track_precincts_in_cache) M._jpip_track_precincts_in_cache(ctx, 1);
 
   canvasW = M._jpip_get_canvas_width(ctx);
   canvasH = M._jpip_get_canvas_height(ctx);

@@ -269,6 +269,7 @@ URL parameters:
 | `variant={st,mt}` | force single- or multi-threaded WASM |
 | `maxSize=WxH` | cap the WebGL render target to `WxH` (default `1920x1080`). Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass `maxSize=window` to disable the cap and render at full window resolution. |
 | `fit={stretch,contain}` | `stretch` (default) scales the render target up to fill the window with GPU-side `GL_LINEAR`; `contain` shows the canvas at native pixel scale centered in the window — like the foveation demo — with the `maxSize` cap defining the centered rectangle. |
+| `precinctCacheMB=N` | LRU precinct cache budget in megabytes (v0.18.0); default `64`, pass `0` to disable. Received precincts are tracked in `&model=` so the server skips redelivery on subsequent pans (70–95% byte reduction typical). |
 
 Pan events are debounced + coalesced: during an in-flight fetch, new
 events flip a "pending" slot rather than queue a second request, so
@@ -394,8 +395,11 @@ Defined in `subprojects/src/jpip_wrapper.cpp`, exported via
 | `jpip_feed_stream_begin(ctx)` | progressive path: reset the per-context streaming parser before the first chunk of a new response (v0.17.0) |
 | `jpip_feed_stream(ctx, buf, len)` | feed the next HTTP chunk of a chunked response; incomplete messages are buffered internally until the next call supplies the rest |
 | `jpip_feed_stream_end(ctx)` | finalize the response; returns 0 if the stream ended at a clean JPP message boundary, nonzero if a partial message was still pending |
+| `jpip_track_precincts_in_cache(ctx, enabled)` | opt-in LRU precinct cache (v0.18.0) — when on, received precincts are tracked in the client cache model so the server skips redelivery on subsequent pans |
+| `jpip_set_precinct_cache_budget(ctx, lo, hi)` | LRU cache budget in bytes (64-bit value split lo/hi for Emscripten i32 calling convention); default 64 MB |
+| `jpip_get_precinct_cache_count(ctx)` | diagnostic: number of precinct bins currently in the LRU |
 | `jpip_get_cache_model(ctx)` | C-string for `&model=` advertisement |
-| `jpip_reset_cache(ctx)` | soft reset — drops precincts, keeps headers |
+| `jpip_reset_cache(ctx)` | soft reset — drops precincts, keeps headers; also clears the LRU when precinct tracking is on |
 | `jpip_end_frame(ctx, rgb, w, h)` | full-canvas decode |
 | `jpip_end_frame_region(ctx, rgb, w, h, x, y, rw, rh)` | viewport-region decode |
 | `jpip_destroy_context(ctx)` | release |
