@@ -5,8 +5,8 @@
 # OpenHTJ2K
 
 OpenHTJ2K is an open-source C++ implementation of **JPEG 2000 Part 1**
-(ITU-T Rec.800 | ISO/IEC 15444-1) and **High-Throughput JPEG 2000**
-(Part 15; ITU-T Rec.814 | ISO/IEC 15444-15), with SIMD acceleration
+(ITU-T Rec. T.800 | ISO/IEC 15444-1) and **High-Throughput JPEG 2000**
+(Part 15; ITU-T Rec. T.814 | ISO/IEC 15444-15), with SIMD acceleration
 across x86-64, AArch64, and WebAssembly, a built-in multi-threaded
 pipeline, and a live RFC 9828 RTP receiver that sustains **4K @ 60 fps
 on modern x86-64**.
@@ -16,7 +16,7 @@ on modern x86-64**.
 **Standards compliance**
 - Full HTJ2K encode + decode and Part 1 decode; partial Part 2
   (Downsampling Factor Structures, Arbitrary Transform Kernels).
-- Fully conformance-tested against ITU-T Rec.803 | ISO 15444-4; 582
+- Fully conformance-tested against ITU-T Rec. T.803 | ISO/IEC 15444-4; 582
   tests in CI.
 - JPH (`.jph`) file format, including colour specification box parsing
   for automatic YCbCr colorspace detection.
