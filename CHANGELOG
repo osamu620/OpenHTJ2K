@@ -1,3 +1,53 @@
+# [0.18.1] - 2026-04-21
+
+## JPIP gigapixel viewer — adjacent-viewport halo prefetch
+
+Builds on v0.18.0's LRU precinct cache: after each successful render,
+if the user holds still, prefetch a small halo of precincts just
+outside the viewport so a short follow-up pan lands in the cache and
+the per-pan fetch collapses to the 3-byte EOR.
+
+Purely client-side (viewer JS only) — no server, WASM, or library
+changes.  Gated by a user-driven idle period: continuous panning
+never triggers the prefetch, so bandwidth cost is paid only when
+the user actually pauses to examine the viewport.
+
+### Browser viewer
+
+* **After each successful render** `fetchView()` arms a 150 ms idle
+  timer.  If the user doesn't interact by the time it fires, the
+  viewer issues a `&rsiz=<halo>&model=…` fetch expanded by
+  `?prefetchMargin` canvas pixels on each side, pipes the response
+  through the WASM streaming parser, and skips the render (the
+  bytes just fill the LRU cache).
+
+* **`scheduleFetch()` cancels the pending prefetch** via
+  `AbortController` and `clearTimeout` so a new user pan always
+  pre-empts the halo.  In-flight halo bytes that already landed in
+  the LRU stay useful; everything past the abort point is dropped.
+
+### New URL parameters
+
+* **`?prefetchMargin=N`** — halo width in canvas pixels, applied to
+  all four sides.  Default `128`; `0` disables.  With the default
+  64 MB LRU, a 128 px halo adds ~40% overhead to the first pan
+  after load (fetching halo-exclusive precincts) and ≤15% on
+  subsequent pans once previous halos overlap with the fresh one.
+
+* **`?prefetchDelayMs=N`** — idle delay (ms) before the halo fires.
+  Default `150`; short enough to overlap typical pause-and-examine
+  behaviour, long enough that continuous panning never triggers it.
+
+### Measured (1920×1920 asset, live server)
+
+| Scenario | Response bytes |
+|---|---|
+| Main fetch (no cache) | 28863 |
+| Halo fetch (no cache — worst case) | 37206 |
+| Halo fetch (main's precincts cached) | **~10 KB of halo-exclusive precincts** |
+| Halo fetch (everything cached) | 3 |
+
+
 # [0.18.0] - 2026-04-21
 
 ## JPIP gigapixel viewer — client-side precinct LRU cache
