@@ -1,3 +1,64 @@
+# [0.17.1] - 2026-04-21
+
+## JPIP gigapixel viewer — render-target cap + layout polish
+
+Patch release refining the v0.17.0 browser demos based on real-
+display testing.  No wire-format, library, or server changes.
+
+### Gigapixel viewer (`subprojects/jpip_viewer.html`)
+
+* **`?maxSize=WxH`** (default `1920x1080`).  Caps the WebGL render
+  target and server-side precinct fetch so decode cost on 4K /
+  ultrawide displays doesn't scale with the window.  The GPU
+  upsamples the capped texture via `GL_LINEAR`.  Pass
+  `?maxSize=window` to disable the cap and render at full window
+  resolution.
+
+* **`?fit=stretch|contain`** (default `stretch`).  Companion knob for
+  `maxSize`: `stretch` CSS-scales the capped render target up to fill
+  the window (today's behaviour), `contain` shows the canvas at
+  native pixel scale centered in the window — matching how the
+  foveation demo frames its fixed-size output.  No scaling
+  artefacts at the cost of unused screen real estate around the
+  canvas on displays larger than the cap.
+
+* **Letterbox styling in `fit=contain`**.  A diagonal dark-stripe
+  pattern replaces the default near-black body background in
+  `fit=contain` mode so the margins around the centered canvas are
+  visible on a dark UI theme.  The canvas gains a thin accent-blue
+  outline + soft drop shadow so its edges are unambiguous.
+
+* **Window-resize handler** (100 ms debounce).  Drag-resizing the
+  browser window now re-centers the canvas, resets the GL viewport,
+  clamps pan, and refetches — before this, the canvas was sized once
+  at `connect()` and became stale on resize.  Pure CSS-only resizes
+  (render target unchanged) skip the refetch.
+
+### Demo cache-model help tables
+
+Both `jpip_demo.html` and `jpip_viewer.html` documented the precinct
+data-bin prefix as `Hp` (a pre-v0.16.1 misreading of the spec).  Per
+§C.9.3.1 it is `P`; the server + library have emitted / accepted `P`
+since v0.16.1.  The HTML help tables now match.  The `?fit=` help
+row also gains a line break so `stretch` and `contain` don't run
+together visually.
+
+### Chunked-streaming bug fixes in `JpipClient` (from v0.17.0)
+
+The v0.17.0 tag shipped with two portability issues that broke CI on
+every non-macOS runner:
+
+* **libstdc++ needs an explicit `#include <cstring>`** for `std::memchr`;
+  libc++ pulls it in transitively.
+* **MSVC's `<windows.h>`** defines a `min` macro that mangles
+  `std::min(a, b)` at two call sites.  Wrapping as `(std::min)(a, b)`
+  suppresses the macro expansion.
+
+Both fixes landed in the v0.17.0 tag commit (`e70e432`) but the
+release-notes text only called out the chunked-streaming work; noting
+them here for bisect purposes.
+
+
 # [0.17.0] - 2026-04-21
 
 ## JPIP — progressive HTTP-chunked delivery end-to-end (#297)
