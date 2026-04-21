@@ -469,11 +469,8 @@ void print_help(char *cmd) {
   printf("-batch: Use batch (full-image buffer) decode path instead of the default streaming path.\n");
   printf("-ycbcr bt601|bt709: [EXPERIMENTAL] Convert YCbCr to RGB (PPM output only).\n");
   printf("--timing: Print per-stage decode timing to stderr.  Requires a build with\n");
-  printf("          -DOPENHTJ2K_DECODE_TIMING=ON.  In -batch mode the full phase\n");
-  printf("          breakdown populates (parse / block_decode / idwt / color_transform /\n");
-  printf("          finalize).  In streaming mode only parse + pool_wait/work are\n");
-  printf("          reported — per-phase streaming timing is a follow-up.\n");
-  printf("          Without the build flag, counters report zero.\n");
+  printf("          -DOPENHTJ2K_DECODE_TIMING=ON and -batch (streaming-path timing\n");
+  printf("          is a follow-up).  Without the build flag, counters report zero.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -631,9 +628,8 @@ int main(int argc, char *argv[]) {
   const bool want_timing = command_option_exists(argc, argv, "--timing");
   if (want_timing && !use_batch) {
     fprintf(stderr,
-            "NOTE: streaming-mode --timing reports parse + pool_wait/work only;\n"
-            "      per-phase breakdown (block_decode / idwt / color / finalize) is\n"
-            "      still batch-only in this build.\n");
+            "WARNING: --timing only populates in batch mode; streaming-path timing\n"
+            "         is a follow-up.  Add -batch to see per-stage counters.\n");
   }
   // Per-stage accumulator across all iterations.  The library sink fires once
   // per parse() and once per invoke(), so we sum them here for the aggregate
@@ -747,7 +743,6 @@ int main(int argc, char *argv[]) {
     try {
       decoder_owner = std::unique_ptr<open_htj2k::openhtj2k_decoder>(
           new open_htj2k::openhtj2k_decoder(infile_name, reduce_NL, num_threads));
-      if (want_timing) decoder_owner->set_timing_sink(timing_sink);
       decoder_owner->parse();
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
@@ -935,26 +930,5 @@ int main(int argc, char *argv[]) {
          total_samples * static_cast<double>(num_iterations) / static_cast<double>(count));
   printf("throughput %lf [usec/sample]\n",
          static_cast<double>(count) / static_cast<double>(num_iterations) / total_samples);
-  if (want_timing) {
-    double denom = static_cast<double>(num_iterations);
-    if (denom < 1.0) denom = 1.0;
-    fprintf(stderr, "\n--- decode timing (averaged over %d iter, %" PRIu64 " reports) ---\n",
-            num_iterations, timing_num_reports);
-    for (unsigned i = 0; i < static_cast<unsigned>(open_htj2k::DecodeStage::kCount); ++i) {
-      const auto s = static_cast<open_htj2k::DecodeStage>(i);
-      fprintf(stderr, "  %-18s %10.3f ms  (%" PRIu64 " calls total)\n",
-              open_htj2k::decode_stage_name(s),
-              static_cast<double>(timing_total.stage_ns[i]) / 1e6 / denom,
-              timing_total.stage_count[i]);
-    }
-    fprintf(stderr, "  %-18s %10.3f ms\n  %-18s %10.3f ms  (%u workers)\n",
-            "pool_wait_ns (sum)", static_cast<double>(timing_total.pool_wait_ns) / 1e6 / denom,
-            "pool_work_ns (sum)", static_cast<double>(timing_total.pool_work_ns) / 1e6 / denom,
-            timing_pool_workers_last);
-#ifndef OPENHTJ2K_DECODE_TIMING
-    fprintf(stderr,
-            "  (all counters are zero — build with -DOPENHTJ2K_DECODE_TIMING=ON)\n");
-#endif
-  }
   return EXIT_SUCCESS;
 }
