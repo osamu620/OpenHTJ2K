@@ -66,6 +66,14 @@ class OPENHTJ2K_JPIP_EXPORT DataBinSet {
   bool append(uint8_t class_id, uint64_t in_class_id, uint64_t msg_offset,
               const uint8_t *payload, std::size_t payload_len, bool is_last);
 
+  // Remove a bin from the set.  Used by the browser viewer's LRU
+  // precinct cache to free bytes when the cache exceeds its budget —
+  // the next server response for the same view-window will re-fill
+  // the erased bin, so we must drop both the bytes and the is_last
+  // flag (append rejects further bytes on a closed bin).  Returns
+  // true if a bin was erased, false if the key was not present.
+  bool erase(uint8_t class_id, uint64_t in_class_id);
+
  private:
   struct Entry {
     std::vector<uint8_t> bytes;

@@ -2,7 +2,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <list>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <emscripten.h>
@@ -91,7 +93,103 @@ struct JpipContext {
   // merge_from-based re-send semantics still apply at end-of-response.
   open_htj2k::jpip::StreamingJppParser stream_parser;
   open_htj2k::jpip::DataBinSet         stream_tmp;
+
+  // LRU precinct cache (gigapixel viewer).  Off by default so the
+  // foveation demo — which intentionally decays the periphery each
+  // frame — continues to behave as before.  When enabled via
+  // jpip_track_precincts_in_cache(), each received complete precinct
+  // is marked in `client_cache` (so subsequent `&model=` queries
+  // advertise it and the server skips re-sending it) and tracked in
+  // `precinct_lru` (front = oldest, back = most recently touched).
+  // When `precinct_cache_bytes > precinct_cache_budget` the oldest
+  // entries are evicted from the LRU, from `client_cache`, and from
+  // `ctx->set` — dropping the bytes from `ctx->set` is essential
+  // because DataBinSet::append rejects further bytes on an already-
+  // closed bin, so a re-sent precinct after eviction would otherwise
+  // fail to land.
+  bool                                                 track_precincts_in_cache = false;
+  uint64_t                                             precinct_cache_budget    = 64ull * 1024 * 1024;
+  uint64_t                                             precinct_cache_bytes     = 0;
+  std::list<std::pair<uint64_t, std::size_t>>          precinct_lru;
+  std::unordered_map<uint64_t, std::list<std::pair<uint64_t, std::size_t>>::iterator>
+                                                       precinct_lru_idx;
 };
+
+// LRU precinct cache helpers — touch on hit, insert on first sight, evict
+// the oldest entries until `precinct_cache_bytes <= precinct_cache_budget`.
+// Dropped entries are removed from both `ctx->set` (so the DataBinSet's
+// is_last flag doesn't block a subsequent re-send) and `client_cache` (so
+// the next `&model=` advertisement correctly omits them).
+
+static void precinct_lru_remove_one(JpipContext *ctx,
+                                    std::list<std::pair<uint64_t, std::size_t>>::iterator it) {
+  const uint64_t I = it->first;
+  ctx->precinct_cache_bytes -= it->second;
+  ctx->precinct_lru_idx.erase(I);
+  ctx->precinct_lru.erase(it);
+  ctx->client_cache.unmark(open_htj2k::jpip::kMsgClassPrecinct, I);
+  ctx->set.erase(open_htj2k::jpip::kMsgClassPrecinct, I);
+}
+
+static void precinct_lru_evict_if_over_budget(JpipContext *ctx) {
+  while (ctx->precinct_cache_bytes > ctx->precinct_cache_budget
+         && !ctx->precinct_lru.empty()) {
+    precinct_lru_remove_one(ctx, ctx->precinct_lru.begin());
+  }
+}
+
+static void precinct_lru_touch_or_insert(JpipContext *ctx, uint64_t I, std::size_t bytes) {
+  auto it = ctx->precinct_lru_idx.find(I);
+  if (it != ctx->precinct_lru_idx.end()) {
+    // Existing entry: either a re-send (same bytes) or a grow (should not
+    // happen with our single-message precinct emitter, but cope by
+    // updating the byte accounting).  Move to the back (most recent).
+    const std::size_t prev_bytes = it->second->second;
+    ctx->precinct_cache_bytes = ctx->precinct_cache_bytes + bytes - prev_bytes;
+    ctx->precinct_lru.erase(it->second);
+    ctx->precinct_lru.push_back({I, bytes});
+    it->second = std::prev(ctx->precinct_lru.end());
+  } else {
+    ctx->precinct_lru.push_back({I, bytes});
+    ctx->precinct_lru_idx[I] = std::prev(ctx->precinct_lru.end());
+    ctx->precinct_cache_bytes += bytes;
+  }
+}
+
+static void precinct_lru_clear(JpipContext *ctx) {
+  for (const auto &kv : ctx->precinct_lru_idx) {
+    ctx->client_cache.unmark(open_htj2k::jpip::kMsgClassPrecinct, kv.first);
+  }
+  ctx->precinct_lru.clear();
+  ctx->precinct_lru_idx.clear();
+  ctx->precinct_cache_bytes = 0;
+}
+
+// Walk newly-complete precinct bins in `tmp` and add them to the LRU +
+// mark them in `client_cache`.  Called from both jpip_add_response() and
+// jpip_feed_stream() after the temp DataBinSet has been folded into
+// ctx->set.  Returns true iff any precinct was newly marked (so the
+// caller can invalidate the cached `&model=` string).
+static bool precinct_lru_ingest(JpipContext *ctx,
+                                const open_htj2k::jpip::DataBinSet &tmp) {
+  if (!ctx->track_precincts_in_cache) return false;
+  bool any_new = false;
+  for (const auto &kv : tmp.keys()) {
+    if (kv.first != open_htj2k::jpip::kMsgClassPrecinct
+        && kv.first != open_htj2k::jpip::kMsgClassExtPrecinct) continue;
+    if (!tmp.is_complete(kv.first, kv.second)) continue;
+    const uint64_t I = kv.second;
+    const auto &bytes = ctx->set.get(open_htj2k::jpip::kMsgClassPrecinct, I);
+    if (bytes.empty()) continue;  // defensive; shouldn't happen on a complete bin
+    if (!ctx->client_cache.has(open_htj2k::jpip::kMsgClassPrecinct, I)) {
+      ctx->client_cache.mark(open_htj2k::jpip::kMsgClassPrecinct, I);
+      any_new = true;
+    }
+    precinct_lru_touch_or_insert(ctx, I, bytes.size());
+  }
+  if (any_new) precinct_lru_evict_if_over_budget(ctx);
+  return any_new;
+}
 
 // Flush the single-tile reuse cache when a parameter that isn't part of the
 // main-header fingerprint (currently: reduce_NL) has changed.  Toggling the
@@ -218,6 +316,13 @@ void jpip_reset_cache(void *handle) {
   ctx->sparse_cs.clear();
   ctx->dec_initialized = false;
   ctx->last_reduce_NL = 0xFF;
+  // If precinct tracking is on, reset_cache also has to drop the LRU +
+  // the precinct entries in client_cache, otherwise we'd advertise
+  // bins we no longer hold and the server would skip them.
+  if (ctx->track_precincts_in_cache && !ctx->precinct_lru.empty()) {
+    precinct_lru_clear(ctx);
+    ctx->cache_model_str.clear();
+  }
   // We dropped precincts, so the next end_frame() has to reassemble.
   ctx->dirty = true;
 }
@@ -247,8 +352,9 @@ int jpip_add_response(void *handle, const uint8_t *jpp_stream, size_t len) {
   ctx->set.merge_from(tmp);
   // Track completed non-precinct bins (headers, tile-headers, metadata) in
   // the client cache model so the next &model= advertisement lets the
-  // server skip them.  Precincts are intentionally omitted — the foveation
-  // demo's per-frame reset drops them anyway.
+  // server skip them.  Precincts are intentionally omitted unless the
+  // caller has opted in via jpip_track_precincts_in_cache() (viewer mode)
+  // — the foveation demo's per-frame reset drops them anyway.
   bool cache_changed = false;
   for (const auto &kv : tmp.keys()) {
     if (kv.first == open_htj2k::jpip::kMsgClassPrecinct
@@ -259,6 +365,7 @@ int jpip_add_response(void *handle, const uint8_t *jpp_stream, size_t len) {
       cache_changed = true;
     }
   }
+  if (precinct_lru_ingest(ctx, tmp)) cache_changed = true;
   if (cache_changed) ctx->cache_model_str.clear();
   ctx->dirty = true;
   return 0;
@@ -306,9 +413,71 @@ int jpip_feed_stream(void *handle, const uint8_t *data, size_t len) {
       cache_changed = true;
     }
   }
+  if (precinct_lru_ingest(ctx, ctx->stream_tmp)) cache_changed = true;
   if (cache_changed) ctx->cache_model_str.clear();
   ctx->dirty = true;
   return 0;
+}
+
+// ── LRU precinct cache (gigapixel viewer) ───────────────────────────────────
+// Opt-in because the foveation demo deliberately drops precincts per frame.
+// When on, received complete precincts are marked in the client cache model
+// so subsequent `&model=` advertisements tell the server to skip them.
+EMSCRIPTEN_KEEPALIVE
+int jpip_track_precincts_in_cache(void *handle, int enabled) {
+  if (!handle) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+  const bool want = enabled != 0;
+  if (want == ctx->track_precincts_in_cache) return 0;
+  ctx->track_precincts_in_cache = want;
+  if (want) {
+    // Backfill the LRU + client_cache with every complete precinct the
+    // context already holds, so the first `&model=` after enable is
+    // accurate.  Without this a freshly enabled viewer would advertise
+    // "I don't have any precincts" and the server would re-send all
+    // of them on the very next request.
+    for (const auto &kv : ctx->set.keys()) {
+      if (kv.first != open_htj2k::jpip::kMsgClassPrecinct) continue;
+      if (!ctx->set.is_complete(kv.first, kv.second)) continue;
+      const uint64_t I = kv.second;
+      const auto &bytes = ctx->set.get(kv.first, I);
+      if (bytes.empty()) continue;
+      ctx->client_cache.mark(kv.first, I);
+      precinct_lru_touch_or_insert(ctx, I, bytes.size());
+    }
+    precinct_lru_evict_if_over_budget(ctx);
+  } else {
+    precinct_lru_clear(ctx);
+  }
+  ctx->cache_model_str.clear();
+  return 0;
+}
+
+// Set the LRU precinct cache budget in bytes.  0 disables the cache
+// (evicts everything); the default is 64 MB.  Returns 0 on success.
+EMSCRIPTEN_KEEPALIVE
+int jpip_set_precinct_cache_budget(void *handle, uint32_t budget_bytes_lo,
+                                   uint32_t budget_bytes_hi) {
+  if (!handle) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+  const uint64_t budget = (static_cast<uint64_t>(budget_bytes_hi) << 32)
+                          | static_cast<uint64_t>(budget_bytes_lo);
+  ctx->precinct_cache_budget = budget;
+  if (ctx->track_precincts_in_cache) {
+    const uint64_t was = ctx->precinct_cache_bytes;
+    precinct_lru_evict_if_over_budget(ctx);
+    if (ctx->precinct_cache_bytes != was) ctx->cache_model_str.clear();
+  }
+  return 0;
+}
+
+// Diagnostic: current number of precinct bins in the LRU cache.  Useful
+// for a status bar / the browser's DevTools console when bisecting.
+EMSCRIPTEN_KEEPALIVE
+int jpip_get_precinct_cache_count(void *handle) {
+  if (!handle) return 0;
+  auto *ctx = static_cast<JpipContext *>(handle);
+  return static_cast<int>(ctx->precinct_lru.size());
 }
 
 EMSCRIPTEN_KEEPALIVE

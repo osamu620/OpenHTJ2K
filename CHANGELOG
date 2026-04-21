@@ -1,3 +1,73 @@
+# [0.18.0] - 2026-04-21
+
+## JPIP gigapixel viewer — client-side precinct LRU cache
+
+The gigapixel viewer now tracks received precincts in the §C.9
+`&model=` cache-model advertisement so the server skips redelivery
+on subsequent pans.  On typical in-window pans this cuts per-request
+wire bytes by 70–95%; on a fully-cached view-window the entire
+response is the 3-byte EOR marker.
+
+The feature is opt-in: the foveation demo intentionally decays its
+periphery per frame and stays unchanged.
+
+### Library
+
+* **`DataBinSet::erase(class_id, in_class_id)`** (new).  Drops a
+  bin's bytes and its `is_last` flag so a subsequent server re-send
+  can legitimately re-fill it — this is the primitive the viewer's
+  LRU uses to evict old precincts while keeping the DataBinSet
+  consistent.
+
+* **`CacheModel::unmark(class_id, in_class_id)`** (new).  Removes a
+  previously-marked bin so the next `&model=` advertisement no
+  longer claims the client holds it.
+
+### WASM
+
+Three new exports in `subprojects/src/jpip_wrapper.cpp`:
+
+* `jpip_track_precincts_in_cache(ctx, enabled)` — toggle the LRU.
+  When turned on, every complete precinct already in `ctx->set` is
+  back-filled into the LRU + cache-model so the next request
+  accurately reflects what the client holds.  Turning it off clears
+  the LRU entirely.
+* `jpip_set_precinct_cache_budget(ctx, lo, hi)` — 64-bit budget in
+  bytes, split into lo/hi 32-bit halves for Emscripten's i32
+  calling convention.  Default 64 MB.
+* `jpip_get_precinct_cache_count(ctx)` — diagnostic: number of
+  precinct bins currently in the LRU.
+
+LRU semantics: insertion order = touch order (ties broken by last
+touch), eviction evicts from the front, re-hits move-to-back.
+Evictions remove the bin from both `ctx->set` (to make room + keep
+`append()`-rejects-on-is_last happy) and from `client_cache` (so
+the next `&model=` advertisement is accurate).
+
+### Browser viewer
+
+`subprojects/jpip_viewer.html` enables the LRU after
+`jpip_create_context()`.  New URL parameter:
+
+* **`?precinctCacheMB=`** — budget in megabytes; default `64`, pass
+  `0` to disable.  `&model=` assembly continues to range-compress
+  (`P0-99,P101,P103-...`) so dense hits stay short even on 40k+
+  precinct asset.
+
+The foveation demo (`jpip_demo.html`) is intentionally left with
+precinct tracking off so per-frame decay of the peripheral cones
+continues to work as before.
+
+### Migrating from v0.17.x
+
+External callers that call `jpip_add_response` / `jpip_feed_stream`
+directly are unchanged — precinct tracking stays off until the
+caller opts in.  The only observable difference in the viewer is
+that subsequent pans on the same region see 70–95% smaller
+responses and proportionally smaller server-side + client-side
+decode work.
+
+
 # [0.17.2] - 2026-04-21
 
 ## JPIP server — Content-Length is now the default, chunked is opt-in
