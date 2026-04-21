@@ -41,10 +41,6 @@
   #include <type_traits>
   #include <unordered_map>
 
-  #ifdef OPENHTJ2K_DECODE_TIMING
-    #include <chrono>
-  #endif
-
 // Thread-local flag: true when the current thread is running inside the pool worker loop.
 // Set once in worker() — avoids the hash-map lookup in decode_strip_core's in_worker check.
 inline thread_local bool g_in_worker_thread = false;
@@ -133,16 +129,8 @@ class ThreadPool {
       : stop(false), ring_head_(0), ring_tail_(0), thread_count_(thread_count) {
     ring_ = std::unique_ptr<InlineTask[]>(new InlineTask[RING_CAP]);
     threads = std::make_unique<std::thread[]>(thread_count_);
-  #ifdef OPENHTJ2K_DECODE_TIMING
-    wait_ns_ = std::unique_ptr<std::atomic<uint64_t>[]>(new std::atomic<uint64_t>[thread_count_]);
-    work_ns_ = std::unique_ptr<std::atomic<uint64_t>[]>(new std::atomic<uint64_t>[thread_count_]);
     for (size_t i = 0; i < thread_count_; ++i) {
-      wait_ns_[i].store(0, std::memory_order_relaxed);
-      work_ns_[i].store(0, std::memory_order_relaxed);
-    }
-  #endif
-    for (size_t i = 0; i < thread_count_; ++i) {
-      threads[i] = std::thread(&ThreadPool::worker, this, i);
+      threads[i] = std::thread(&ThreadPool::worker, this);
     }
   }
 
@@ -175,22 +163,6 @@ class ThreadPool {
   // Returns true when called from inside a pool worker thread.
   // Uses a thread-local flag set in worker() — no hash map lookup.
   static bool is_worker_thread() { return g_in_worker_thread; }
-
-  #ifdef OPENHTJ2K_DECODE_TIMING
-  // Sum of wall-clock ns each worker thread has spent blocked on the
-  // task-queue condvar (wait_ns) and executing tasks (work_ns), summed
-  // across all workers in this pool.  Lifetime counters — the caller
-  // is expected to snapshot at a known point and diff later.
-  void get_timing_counters(uint64_t &wait_ns, uint64_t &work_ns) const {
-    uint64_t w = 0, k = 0;
-    for (size_t i = 0; i < thread_count_; ++i) {
-      w += wait_ns_[i].load(std::memory_order_relaxed);
-      k += work_ns_[i].load(std::memory_order_relaxed);
-    }
-    wait_ns = w;
-    work_ns = k;
-  }
-  #endif
 
   #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   /**
@@ -357,28 +329,16 @@ class ThreadPool {
    *  Continuously pops tasks out of the queue and executes them, as long as the atomic variable running is
    * set to true.
    */
-  void worker(size_t worker_idx) {
+  void worker() {
     g_in_worker_thread = true;
     InlineTask batch[BATCH];
-    (void)worker_idx;  // unused unless OPENHTJ2K_DECODE_TIMING
 
     for (;;) {
       size_t n = 0;
 
       {
         std::unique_lock<std::mutex> lock(tasks_mutex);
-  #ifdef OPENHTJ2K_DECODE_TIMING
-        const auto t_wait_begin = std::chrono::steady_clock::now();
-  #endif
         condition.wait(lock, [&] { return !ring_empty_() || stop; });
-  #ifdef OPENHTJ2K_DECODE_TIMING
-        const auto t_wait_end = std::chrono::steady_clock::now();
-        wait_ns_[worker_idx].fetch_add(
-            static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(t_wait_end - t_wait_begin)
-                    .count()),
-            std::memory_order_relaxed);
-  #endif
 
         if (stop && ring_empty_()) {
           return;
@@ -391,20 +351,9 @@ class ThreadPool {
         }
       }
 
-  #ifdef OPENHTJ2K_DECODE_TIMING
-      const auto t_work_begin = std::chrono::steady_clock::now();
-  #endif
       for (size_t i = 0; i < n; ++i) {
         batch[i]();
       }
-  #ifdef OPENHTJ2K_DECODE_TIMING
-      const auto t_work_end = std::chrono::steady_clock::now();
-      work_ns_[worker_idx].fetch_add(
-          static_cast<uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(t_work_end - t_work_begin)
-                  .count()),
-          std::memory_order_relaxed);
-  #endif
     }
   }
 
@@ -452,14 +401,6 @@ class ThreadPool {
    * @brief A condition variable used to notify worker threads of state changes.
    */
   std::condition_variable condition;
-
-  #ifdef OPENHTJ2K_DECODE_TIMING
-  // Per-worker lifetime counters of time spent blocked on the condvar vs
-  // executing tasks.  One atomic per worker avoids cross-worker cache-line
-  // contention on the hot path.  Only allocated when timing is enabled.
-  std::unique_ptr<std::atomic<uint64_t>[]> wait_ns_;
-  std::unique_ptr<std::atomic<uint64_t>[]> work_ns_;
-  #endif
 
   /**
    * @brief An atomic singleton for the instance (lock-free read via get()).

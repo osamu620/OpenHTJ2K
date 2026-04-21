@@ -36,7 +36,6 @@
 #endif
 #include "coding_units.hpp"
 #include "block_decoding.hpp"
-#include "decode_timing.hpp"
 #include "dwt.hpp"
 #include "color.hpp"
 #include "finalize_narrow.hpp"
@@ -4085,8 +4084,6 @@ void j2k_tile::decode() {
   auto pool = ThreadPool::get();
   // std::vector<std::future<int>> results;
 #endif
-  {
-    OPENHTJ2K_TIME_SCOPE(BlockDecode);
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
     const uint8_t NL       = this->tcomp[c].get_dwt_levels();
@@ -4228,9 +4225,7 @@ void j2k_tile::decode() {
     aligned_mem_free(buf_for_states);
     aligned_mem_free(buf_for_samples);
   }
-  }  // end BlockDecode scope
 
-  OPENHTJ2K_TIME_SCOPE(IDWT);
   for (uint16_t c = 0; c < num_components; c++) {
     // const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
     const uint8_t NL             = this->tcomp[c].get_dwt_levels();
