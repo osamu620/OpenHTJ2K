@@ -110,10 +110,22 @@ class DecodeTimingAttach {
 }  // namespace open_htj2k
 
 // ─── Scope macros ───────────────────────────────────────────────────────────
-// OPENHTJ2K_TIME_SCOPE(Parse)         — expands to an RAII scope covering
-//                                        the remainder of the enclosing block
-// OPENHTJ2K_TIME_ATTACH(acc_ptr)      — attach an accumulator for the remainder
-//                                        of the enclosing block (decoder_impl use)
+// OPENHTJ2K_TIME_SCOPE(Parse)         — RAII scope ending at the enclosing
+//                                        block.  Use at the top of a function
+//                                        that has only one phase.
+// OPENHTJ2K_TIME_REGION_BEGIN(stage)  — paired with _END: scopes a region in
+// OPENHTJ2K_TIME_REGION_END              the middle of a function.  Emits
+//                                        `{` / `}` braces only when timing is
+//                                        compiled in, so the macro-off build
+//                                        is bitwise identical to stock code.
+//                                        Critical — on MSVC x64 even an empty
+//                                        `{ (void)0; ... }` around a hot FP
+//                                        loop perturbs the optimizer enough
+//                                        to shift decode-output rounding
+//                                        (observed: PAE 11 → 42 on
+//                                        comp_p1_ht_05_11).
+// OPENHTJ2K_TIME_ATTACH(acc_ptr)      — attach an accumulator to the current
+//                                        thread for the enclosing block.
 //
 // Concatenation of __LINE__ ensures multiple scopes within the same function
 // get distinct variable names.
@@ -124,10 +136,17 @@ class DecodeTimingAttach {
   #define OPENHTJ2K_TIME_SCOPE(stage)                                            \
     ::open_htj2k::internal::DecodeTimingScope OPENHTJ2K_TIMING_CONCAT(           \
         _ohtj2k_tscope_, __LINE__)(::open_htj2k::DecodeStage::stage)
+  #define OPENHTJ2K_TIME_REGION_BEGIN(stage)                                     \
+    {                                                                            \
+      ::open_htj2k::internal::DecodeTimingScope OPENHTJ2K_TIMING_CONCAT(         \
+          _ohtj2k_tregion_, __LINE__)(::open_htj2k::DecodeStage::stage);
+  #define OPENHTJ2K_TIME_REGION_END }
   #define OPENHTJ2K_TIME_ATTACH(acc_ptr)                                         \
     ::open_htj2k::internal::DecodeTimingAttach OPENHTJ2K_TIMING_CONCAT(          \
         _ohtj2k_tattach_, __LINE__)(acc_ptr)
 #else
-  #define OPENHTJ2K_TIME_SCOPE(stage)    ((void)0)
-  #define OPENHTJ2K_TIME_ATTACH(acc_ptr) ((void)0)
+  #define OPENHTJ2K_TIME_SCOPE(stage)        ((void)0)
+  #define OPENHTJ2K_TIME_REGION_BEGIN(stage) /* nothing — no braces in stock build */
+  #define OPENHTJ2K_TIME_REGION_END          /* nothing */
+  #define OPENHTJ2K_TIME_ATTACH(acc_ptr)     ((void)0)
 #endif

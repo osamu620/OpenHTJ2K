@@ -300,13 +300,12 @@ void openhtj2k_decoder_impl::parse() {
     pool->get_timing_counters(pool_wait_base, pool_work_base);
   }
 #endif
-  {
-    OPENHTJ2K_TIME_SCOPE(Parse);
-    // Read main header
-    main_header.read(in);
-    in.rewind_2bytes();
-    is_parsed = true;
-  }
+  OPENHTJ2K_TIME_REGION_BEGIN(Parse)
+  // Read main header
+  main_header.read(in);
+  in.rewind_2bytes();
+  is_parsed = true;
+  OPENHTJ2K_TIME_REGION_END
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
 }
 
@@ -489,14 +488,12 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
       throw std::runtime_error("Abort Decoding!");
     };
     tileSet[i].decode();
-    {
-      OPENHTJ2K_TIME_SCOPE(ColorTransform);
-      tileSet[i].ycbcr_to_rgb();
-    }
-    {
-      OPENHTJ2K_TIME_SCOPE(Finalize);
-      tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer
-    }
+    OPENHTJ2K_TIME_REGION_BEGIN(ColorTransform)
+    tileSet[i].ycbcr_to_rgb();
+    OPENHTJ2K_TIME_REGION_END
+    OPENHTJ2K_TIME_REGION_BEGIN(Finalize)
+    tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer
+    OPENHTJ2K_TIME_REGION_END
     tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
