@@ -104,12 +104,45 @@ RequestParseStatus parse_jpip_query(const std::string &query_in, JpipRequest *ou
       out->has_comps = true;
     } else if (key == "model") {
       out->model = val;
+    } else if (key == "len") {
+      // §C.6.1 Maximum Response Length — non-negative decimal byte cap.
+      char *end = nullptr;
+      const unsigned long long n = std::strtoull(val.c_str(), &end, 10);
+      if (end == val.c_str() || *end != '\0') {
+        status = RequestParseStatus::MalformedField;
+        return;
+      }
+      out->len     = static_cast<uint64_t>(n);
+      out->has_len = true;
+    } else if (key == "quality") {
+      // §C.6.x Quality — non-negative decimal quality-layer cap.
+      char *end = nullptr;
+      const unsigned long n = std::strtoul(val.c_str(), &end, 10);
+      if (end == val.c_str() || *end != '\0') {
+        status = RequestParseStatus::MalformedField;
+        return;
+      }
+      out->quality     = static_cast<uint32_t>(n);
+      out->has_quality = true;
     } else if (key == "type") {
       out->type = val;
       if (val != "jpp-stream") {
         status = RequestParseStatus::UnsupportedType;
         return;
       }
+    } else if (key == "cnew") {
+      // §C.3.3: client requests a new JPIP channel; value is the preferred
+      // transport (typically "http").  Server echoes a channel id back in
+      // the JPIP-cnew response header so the client can commit received
+      // data to a session-scoped cache.
+      out->cnew     = val;
+      out->has_cnew = true;
+    } else if (key == "cid") {
+      // §C.3.3: channel id from a previously issued JPIP-cnew.  Stateless
+      // servers need only trace this — the cache model field carries all
+      // information required for each response.
+      out->cid     = val;
+      out->has_cid = true;
     }
     // Unknown keys are silently ignored per §C.1.
   });

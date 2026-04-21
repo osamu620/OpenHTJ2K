@@ -1,3 +1,127 @@
+# [0.16.1] - 2026-04-21
+
+## JPIP server — interop-level spec fixes
+
+Nine corrections to the stateless JPIP server in
+`source/apps/jpip_server/` so that it reaches a level of spec
+compliance at which mainstream interactive JPIP clients can
+establish a session, cache received data, and drive a view-window
+sequence through to a decoded image.  All fixes are grounded in
+ISO/IEC 15444-9:2023 clauses; none are workarounds.
+
+### Request handling
+
+* **`len=` (§C.6.1) honoured.**  The client's "Maximum Response
+  Length" field was previously parsed but ignored; the server
+  would always emit the complete view-window response regardless
+  of the cap.  `build_jpp_stream` now rolls back whole messages
+  that would push the stream past `len`, and the terminating EOR
+  switches to reason=4 (`ByteLimit`) instead of reason=2
+  (`WindowDone`).  Clients that probe with small `len` values
+  before committing to a large transfer now get a correctly-sized
+  first response.
+
+* **POST accepted (§C.1).**  HTTP POST was previously rejected
+  with `405 Method Not Allowed`.  Interactive clients fall back
+  to POST when the query would exceed the GET URL-length limit —
+  for example when the cache-model field has grown to include
+  hundreds of `P<n>` precinct identifiers.  The server now reads
+  `Content-Length` (subject to a 16 MB cap), concatenates any
+  body bytes that arrived alongside the headers, drains the rest
+  from the socket, and hands the body to `parse_jpip_query` as
+  the effective query string.
+
+* **New request fields.**  `cnew`, `cid` (§C.3.3) and `len`,
+  `quality` (§C.6.1) are now parsed into the `JpipRequest`
+  struct; unknown fields remain silently ignored per §C.1.
+
+* **`JPIP-cnew` session header (§C.3.3, §D.2.5).**  When the
+  request carries `cnew=http`, the response now includes a
+  `JPIP-cnew: cid=C<n>,path=jpip,transport=http` header.  The
+  server is stateless — the `cid` is opaque to it and all cache
+  state still flows through the client's `model=` field — but
+  interactive clients will not commit received precincts to
+  their session cache until this header arrives on the
+  channel-establishment response, and without it they fall into
+  a silent retry loop.
+
+* **`target_id` basename.**  The `JPIP-tid` response header
+  previously echoed the full server-side filesystem path.  Some
+  clients then echo the TID back verbatim in `&tid=` on every
+  follow-up request, producing unusually long, slash-laden query
+  strings.  Strip to the basename so the TID is a short,
+  path-free identifier per §D.4's "opaque string" wording.
+
+### JPP-stream emission
+
+* **Metadata-bin 0 emitted first (§A.3.6.1).**  The spec states
+  that "servers should send metadata-bin 0 in advance of all
+  other bins", and interactive clients use its arrival (even as
+  an empty bin with `is_last=1`) as their session-binding
+  signal.  Previously we emitted it third, after main-header and
+  tile-headers; now it is the first message of every response.
+
+* **Precinct chunking at 987 bytes per message.**  Whole
+  multi-kB precinct payloads used to ship as a single Annex A
+  message with `is_last=1`.  Clients that allocate a fixed ~1 KB
+  cache-segment buffer and expect each message to fit alongside
+  the encoded header fail to bookkeep larger messages.  The
+  data-bin emitter now splits long payloads into 987-byte
+  contributions with monotonically increasing `msg_offset`; only
+  the final message carries `is_last=1`.  Data-bins smaller than
+  one chunk still emit as a single message, so nothing changes
+  for main-header, tile-header, or small precincts.
+
+* **Ascending in-class-id precinct order.**  `resolve_view_window`
+  returns keys in `(t, c, r, p_rc)` order.  Under the spec's
+  `I = t + (c + s·C)·T` formula this produces component-major
+  in-class-ids — 0, 3, 6, 9, … before 1, 4, 7, … — which clients
+  that iterate their cache by ascending bin-id read as a gap
+  they never fill.  They then refuse to advertise received
+  precincts in their outgoing cache model because, from their
+  perspective, the bins have not been "accepted" into the
+  contiguous portion of the cache.  `build_jpp_stream` now
+  sorts keys by `I` before emission so deliveries are gap-free.
+
+* **Tile-header scoped to the view-window (§A.3.3).**  The spec
+  requires the server to deliver the tile-header data-bin "for
+  every tile whose identifier is found in the result of the
+  view-window request".  Previously the server iterated every
+  tile in the image, which on multi-tile codestreams (tens of
+  thousands of tiles) crowded out precinct payload with empty
+  tile-headers.  `build_jpp_stream` now derives the set of
+  relevant tiles from `resolve_view_window`'s keys.
+
+### Cache-model wire format
+
+* **Precinct prefix corrected to `P` (§C.9.3.1).**  The server
+  read `Hp<n>` as the precinct cache-descriptor prefix, which no
+  spec-conformant client emits.  Clients use `P<n>`.  The
+  consequence of the mismatch was severe: every precinct the
+  client had already cached was silently dropped by our parser,
+  so the server resent it.  On a stateful session this filled
+  the client's cache with duplicates and wasted the bulk of the
+  response budget on data the client would discard.  The parser
+  now recognises both `P<n>` (spec form, accepted and emitted)
+  and the legacy `Hp<n>` form (accepted for forward/backward
+  compatibility).  `CacheModel::format` emits the canonical `P`
+  form so our own client-side cache advertisements are
+  spec-correct too.
+
+### Known-good interop status
+
+* Our own decoder round-trips the server's JPP-stream responses
+  to pixel-identical output (verified against `u01_Books_4K_12bit_fov.j2c`).
+* All 615 ctests pass.
+* Interactive JPIP clients built in debug configuration decode
+  and display imagery sourced from this server.
+* Interactive clients built with aggressive release-mode
+  optimisation remain subject to client-side undefined-behaviour
+  issues in their cache-segment bookkeeping code (reproducible
+  with any spec-conforming server including our own, and
+  documented by their own UBSan build); no server-side workaround
+  is possible.
+
 # [0.16.0] - 2026-04-20
 
 ## JPIP wire format — EOR encoding corrected to match §D.3

@@ -38,6 +38,31 @@ struct JpipRequest {
   std::string type;
   // §C.9: client cache model — lists data-bins the client already has.
   std::string model;
+  // §C.6.1 Maximum Response Length — byte cap on the response payload
+  // (the EOR message itself does not count per §D.3).  When honoured,
+  // the server emits messages up to the cap and terminates with
+  // EOR reason=4 (ByteLimit).
+  uint64_t    len         = 0;
+  bool        has_len     = false;
+  // §C.6.x Quality — cap on the number of quality layers in the
+  // response.  Not yet enforced; accepted and ignored.
+  uint32_t    quality     = 0;
+  bool        has_quality = false;
+  // §C.3.3 `cnew` — client requests a new session/channel.  Value is the
+  // requested transport (typically "http").  The server reserves a
+  // channel identifier and echoes it back in a `JPIP-cnew:` response
+  // header so the client can bind subsequent precinct data into a
+  // cacheable session.  Reference GUI clients refuse to commit precincts
+  // to their cache without this binding — without the header they loop
+  // re-requesting data and never advance the cache model.
+  std::string cnew;
+  bool        has_cnew    = false;
+  // §C.3.3 `cid` — channel identifier for follow-up requests on an
+  // existing session.  Our server is stateless (it re-derives the view
+  // window and honours the client's cache model on every request), so
+  // cid arrives for trace only; accept it without validation.
+  std::string cid;
+  bool        has_cid     = false;
 };
 
 enum class RequestParseStatus : uint8_t {

@@ -23,7 +23,8 @@ namespace jpip {
 // for v1 simplicity.
 OPENHTJ2K_JPIP_EXPORT std::vector<uint8_t>
 format_jpp_response(const uint8_t *body, std::size_t body_len,
-                    const std::string &target_id = "");
+                    const std::string &target_id = "",
+                    const std::string &cnew_header = "");
 
 // Format a simple error response (no body).
 OPENHTJ2K_JPIP_EXPORT std::vector<uint8_t>
