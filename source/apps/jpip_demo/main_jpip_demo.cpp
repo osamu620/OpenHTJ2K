@@ -310,7 +310,7 @@ int main(int argc, char **argv) {
     open_htj2k::jpip::DataBinSet init_set;
     open_htj2k::jpip::ViewWindow init_vw;
     init_vw.fx = 1; init_vw.fy = 1;  // minimal fsiz to get headers only
-    if (!client.fetch(opt.server_host, opt.server_port, init_vw, &init_set)) {
+    if (!client.fetch_streaming(opt.server_host, opt.server_port, init_vw, &init_set)) {
       std::fprintf(stderr, "initial server fetch: %s\n", client.last_error().c_str());
       return EXIT_FAILURE;
     }
@@ -468,7 +468,12 @@ int main(int argc, char **argv) {
       auto do_fetch = [&](const open_htj2k::jpip::ViewWindow &vw) {
         open_htj2k::jpip::JpipClient c;
         open_htj2k::jpip::DataBinSet s;
-        c.fetch(opt.server_host, opt.server_port, vw, &s, &client_cache);
+        // Stream the response so we start parsing as each HTTP chunk
+        // arrives (issue #297 + follow-up).  The on_progress callback
+        // is reserved for a future UI that wants to render the fovea
+        // bin-by-bin; today the demo just waits for the full set.
+        c.fetch_streaming(opt.server_host, opt.server_port, vw, &s,
+                          &client_cache, /*on_progress=*/{});
         return s;
       };
 

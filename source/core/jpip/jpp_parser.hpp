@@ -23,6 +23,8 @@
 #include <utility>
 #include <vector>
 
+#include "jpp_message.hpp"
+
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   #define OPENHTJ2K_JPIP_EXPORT __declspec(dllexport)
 #else
@@ -80,6 +82,49 @@ class OPENHTJ2K_JPIP_EXPORT DataBinSet {
 // consumed cleanly and every message obeyed the in-order assumption.
 OPENHTJ2K_JPIP_EXPORT bool parse_jpp_stream(const uint8_t *bytes, std::size_t len,
                                             DataBinSet *out);
+
+// Resumable JPP-stream parser for progressive delivery.  Unlike
+// `parse_jpp_stream`, which is one-shot and assumes the caller has the
+// full response buffered, StreamingJppParser can be called with
+// arbitrary-sized chunks — including chunk boundaries that fall
+// mid-message or mid-VBAS — and will buffer any incomplete tail until
+// the next `feed()` supplies the rest.  The MessageHeaderContext used to
+// honour dependent-form headers (§A.2.1 Table A.1: omitted Class/CSn)
+// is carried across calls.
+//
+// This is the primitive the HTTP-chunked clients (browser viewer, C++
+// foveation demo) use to start decoding while the response is still
+// arriving on the wire.
+class OPENHTJ2K_JPIP_EXPORT StreamingJppParser {
+ public:
+  // Feed `len` bytes into the parser.  Complete messages are appended to
+  // `*out`.  Returns true on success (including the case where only a
+  // partial message is buffered internally and the caller should feed
+  // more), and false iff a definitive protocol error was detected (bad
+  // VBAS, class-id out of range, out-of-order msg_offset, an already
+  // closed bin receiving more bytes, or a header that exceeds the
+  // worst-case header size without decoding).
+  bool feed(const uint8_t *bytes, std::size_t len, DataBinSet *out);
+
+  // Signal end-of-stream.  Returns true iff the parser has no partial
+  // message buffered — i.e. the response ended cleanly at a message
+  // boundary.  A false return indicates the peer closed the connection
+  // mid-message.
+  bool finish() const { return pending_.empty(); }
+
+  // Reset all state (drop pending bytes, reset MessageHeaderContext,
+  // clear EOR flag) so the parser can be reused for a fresh response.
+  void reset();
+
+  // Number of bytes currently buffered (waiting for the rest of an
+  // incomplete message).  Useful for tests and for back-pressure
+  // accounting; 0 means the parser is at a clean message boundary.
+  std::size_t pending() const { return pending_.size(); }
+
+ private:
+  std::vector<uint8_t> pending_;
+  MessageHeaderContext ctx_;
+};
 
 }  // namespace jpip
 }  // namespace open_htj2k

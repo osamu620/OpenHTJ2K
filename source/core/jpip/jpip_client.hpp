@@ -5,6 +5,7 @@
 // and feeds the JPP-stream response into a DataBinSet.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include "cache_model.hpp"
@@ -32,6 +33,24 @@ class OPENHTJ2K_JPIP_EXPORT JpipClient {
   bool fetch(const std::string &host, uint16_t port,
              const ViewWindow &vw, DataBinSet *out,
              const CacheModel *model = nullptr);
+
+  // Callback fired each time fetch_streaming() finishes folding a freshly
+  // decoded chunk of JPP-stream bytes into `*out`.  Suitable for demos
+  // that want to start rendering as soon as metadata-bin 0 and the
+  // main-header bin arrive, before the full precinct payload has
+  // landed.  The callback is invoked from inside fetch_streaming(); `out`
+  // is the same DataBinSet the caller passed in.
+  using OnProgressCallback = std::function<void(const DataBinSet &set)>;
+
+  // Same contract as fetch(), but feeds every chunk through a
+  // StreamingJppParser as it arrives rather than buffering the full
+  // response body before parsing.  `on_progress`, when non-null, is
+  // called after each chunk that produced at least one complete
+  // JPP-stream message.  The terminating EOR also triggers a callback.
+  bool fetch_streaming(const std::string &host, uint16_t port,
+                       const ViewWindow &vw, DataBinSet *out,
+                       const CacheModel *model = nullptr,
+                       const OnProgressCallback &on_progress = {});
 
   const std::string &last_error() const { return err_; }
 
