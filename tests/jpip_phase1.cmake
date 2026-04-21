@@ -23,6 +23,15 @@ add_test(NAME jpip_tcp_loopback COMMAND jpip_tcp_check)
 # recovers the JPP-stream bit-for-bit.
 add_test(NAME jpip_chunked_roundtrip COMMAND jpip_chunked_check)
 
+# ── StreamingJppParser split-at-every-offset stress (issue #297) ──
+# For every possible two-chunk split of a real JPP-stream, verifies that
+# StreamingJppParser reconstructs the same DataBinSet the one-shot parser
+# produces.  Covers byte-at-a-time feeding and reset() reuse too.
+add_test(NAME jpip_streaming_parser_p0_04
+         COMMAND jpip_streaming_parser_check ${CONFORMANCE_DATA_DIR}/p0_04.j2k)
+add_test(NAME jpip_streaming_parser_ht_01
+         COMMAND jpip_streaming_parser_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k)
+
 # ── JPP-stream message header codec (§A.2 + Tables A.1, A.2) ──
 # Self-contained: round-trip + spec §A.3.2.2 byte-identical interop +
 # dependent-form behaviour + rejection cases.

@@ -72,40 +72,126 @@ bool DataBinSet::append(uint8_t class_id, uint64_t in_class_id, uint64_t msg_off
   return true;
 }
 
+// Try to decode exactly one JPP-stream message (Annex A message or an EOR)
+// at the start of `src`.  On a clean decode, appends the payload to `*out`
+// (or flags EOR on the set), writes the consumed byte count to `*consumed`,
+// and returns Decoded::Ok.  Returns Decoded::NeedMore when the buffer is
+// truncated but may still be a valid message once more bytes arrive, and
+// Decoded::Malformed when no amount of additional bytes could make the
+// current position parseable.  `ctx` is only advanced on Ok.
+enum class Decoded { Ok, NeedMore, Malformed };
+namespace {
+Decoded try_decode_one_message(const uint8_t *src, std::size_t src_len,
+                               MessageHeaderContext &ctx, DataBinSet *out,
+                               std::size_t *consumed) {
+  if (src_len == 0) return Decoded::NeedMore;
+
+  // §D.3 EOR: identifier = 0x00, reason = 1 byte, body_length = VBAS, body.
+  if (src[0] == 0x00) {
+    if (src_len < 2) return Decoded::NeedMore;
+    const uint8_t reason = src[1];
+    uint64_t body_len = 0;
+    std::size_t vbas_adv = 0;
+    if (!vbas_decode(src + 2, src_len - 2, &body_len, &vbas_adv)) {
+      // VBAS failure could be truncation or overflow.  Truncation is only
+      // possible while fewer than kVbasMaxBytes bytes follow the reason
+      // byte.  Beyond that, the VBAS is definitively malformed.
+      return (src_len - 2 < kVbasMaxBytes) ? Decoded::NeedMore : Decoded::Malformed;
+    }
+    if (body_len > src_len - 2 - vbas_adv) return Decoded::NeedMore;
+    out->set_eor(reason);
+    *consumed = 2 + vbas_adv + static_cast<std::size_t>(body_len);
+    return Decoded::Ok;
+  }
+
+  // Annex A message.  decode_header only commits its writes to `ctx` at
+  // the very end (after all VBAS fields decode cleanly), so on failure
+  // `ctx` is left untouched — safe to retry once more bytes arrive.  We
+  // still snapshot before calling, because on the happy path we need to
+  // roll ctx back if the header decodes but the payload is truncated
+  // (otherwise the retry would see the wrong last_class_id / last_cs_n
+  // and mis-decode any dependent-form successor).
+  const MessageHeaderContext ctx_snap = ctx;
+  MessageHeader hdr;
+  std::size_t hdr_bytes = 0;
+  if (!decode_header(src, src_len, ctx, &hdr, &hdr_bytes)) {
+    // If we haven't yet seen a full worst-case header window we cannot
+    // distinguish truncation from a real header-format violation; assume
+    // truncation and wait for more bytes.
+    if (src_len < kMessageHeaderMaxBytes) return Decoded::NeedMore;
+    return Decoded::Malformed;
+  }
+  if (hdr.msg_length > src_len - hdr_bytes) {
+    ctx = ctx_snap;
+    return Decoded::NeedMore;
+  }
+  if (!out->append(hdr.class_id, hdr.in_class_id, hdr.msg_offset,
+                   src + hdr_bytes, static_cast<std::size_t>(hdr.msg_length),
+                   hdr.is_last)) {
+    ctx = ctx_snap;
+    return Decoded::Malformed;
+  }
+  *consumed = hdr_bytes + static_cast<std::size_t>(hdr.msg_length);
+  return Decoded::Ok;
+}
+}  // namespace
+
 bool parse_jpp_stream(const uint8_t *bytes, std::size_t len, DataBinSet *out) {
   if (out == nullptr) return false;
   MessageHeaderContext ctx;
   std::size_t pos = 0;
   while (pos < len) {
-    // §D.3: an EOR message's single-byte identifier is 0x00, followed by a
-    // reason byte and a VBAS body-length.  0x00 as the first byte of a
-    // Bin-ID VBAS would imply Table A.1's prohibited "bb=00" indicator, so
-    // there is no ambiguity — when the next byte is 0x00 we are at an EOR
-    // and Annex A header decoding does not apply.
-    if (bytes[pos] == 0x00) {
-      if (pos + 2 > len) return false;
-      const uint8_t reason = bytes[pos + 1];
-      uint64_t body_len = 0;
-      std::size_t vbas_adv = 0;
-      if (!vbas_decode(bytes + pos + 2, len - (pos + 2), &body_len, &vbas_adv)) return false;
-      const std::size_t total = 2 + vbas_adv + static_cast<std::size_t>(body_len);
-      if (body_len > len - (pos + 2 + vbas_adv)) return false;  // truncated body
-      out->set_eor(reason);
-      pos += total;
-      break;
-    }
-    MessageHeader hdr;
-    std::size_t hdr_bytes = 0;
-    if (!decode_header(bytes + pos, len - pos, ctx, &hdr, &hdr_bytes)) return false;
-    pos += hdr_bytes;
-    if (hdr.msg_length > len - pos) return false;  // truncated payload
-    if (!out->append(hdr.class_id, hdr.in_class_id, hdr.msg_offset, bytes + pos,
-                     static_cast<std::size_t>(hdr.msg_length), hdr.is_last)) {
-      return false;
-    }
-    pos += static_cast<std::size_t>(hdr.msg_length);
+    std::size_t consumed = 0;
+    const Decoded d = try_decode_one_message(bytes + pos, len - pos, ctx, out, &consumed);
+    if (d != Decoded::Ok) return false;  // NeedMore on a whole-buffer caller == truncated
+    pos += consumed;
+    if (out->has_eor()) break;  // §D.3 terminates the stream
   }
   return true;
+}
+
+// ── StreamingJppParser ────────────────────────────────────────────────────
+
+bool StreamingJppParser::feed(const uint8_t *bytes, std::size_t len, DataBinSet *out) {
+  if (out == nullptr) return false;
+  if (len == 0) return true;
+
+  // If we have leftover bytes from the previous chunk, join them with the
+  // new bytes into a scratch buffer and parse from there.  For the common
+  // steady-state case (pending_ is empty because each chunk ends on a
+  // message boundary) we parse straight from `bytes` with no copy.
+  const uint8_t *p = bytes;
+  std::size_t avail = len;
+  std::vector<uint8_t> joined;
+  if (!pending_.empty()) {
+    joined.reserve(pending_.size() + len);
+    joined.insert(joined.end(), pending_.begin(), pending_.end());
+    joined.insert(joined.end(), bytes, bytes + len);
+    p = joined.data();
+    avail = joined.size();
+    pending_.clear();
+  }
+
+  std::size_t pos = 0;
+  while (pos < avail) {
+    std::size_t consumed = 0;
+    const Decoded d =
+        try_decode_one_message(p + pos, avail - pos, ctx_, out, &consumed);
+    if (d == Decoded::Malformed) return false;
+    if (d == Decoded::NeedMore) break;
+    pos += consumed;
+    if (out->has_eor()) break;  // further bytes after EOR would be a protocol violation
+  }
+
+  if (pos < avail) {
+    pending_.assign(p + pos, p + avail);
+  }
+  return true;
+}
+
+void StreamingJppParser::reset() {
+  pending_.clear();
+  ctx_.clear();
 }
 
 }  // namespace jpip

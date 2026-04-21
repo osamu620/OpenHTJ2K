@@ -345,6 +345,11 @@ if(WIN32)
   target_link_libraries(jpip_chunked_check PUBLIC ws2_32)
 endif()
 
+# JPIP issue #297 StreamingJppParser split-at-every-offset self-test
+add_executable(jpip_streaming_parser_check)
+add_subdirectory(source/apps/jpip_streaming_parser_check)
+target_link_libraries(jpip_streaming_parser_check PUBLIC open_htj2k)
+
 # JPIP Phase-2 precinct data-bin + packet-locator self-test
 add_executable(jpip_precinct_check)
 add_subdirectory(source/apps/jpip_precinct_check)

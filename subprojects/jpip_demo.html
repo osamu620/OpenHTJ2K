@@ -623,12 +623,14 @@ async function connect() {
     busy = true;
     try {
       const t0 = performance.now();
-      const [r1, r2, r3] = await Promise.all([
-        fetch(`${serverUrl}/jpip?${foveaQ}`).then(r => r.arrayBuffer()),
-        fetch(`${serverUrl}/jpip?${paraQ}`).then(r => r.arrayBuffer()),
-        fetch(`${serverUrl}/jpip?${periQ}`).then(r => r.arrayBuffer()),
-      ]);
-      const tFetch = performance.now();
+      // Fire all 3 fetches in parallel so the server starts building the
+      // parafovea/periphery cones while the fovea's bytes are still in
+      // flight.  Chunked transfer (issue #297) makes the per-response
+      // time-to-first-byte ~ the latency of building metadata-bin 0,
+      // so this amortises network RTT across the three cones.
+      const resp1 = fetch(`${serverUrl}/jpip?${foveaQ}`);
+      const resp2 = fetch(`${serverUrl}/jpip?${paraQ}`);
+      const resp3 = fetch(`${serverUrl}/jpip?${periQ}`);
 
       // Foveation demo semantics: each frame is a fresh 3-cone RoI snapshot
       // (fovea / parafovea / periphery at the current gaze point).  We want
@@ -637,16 +639,30 @@ async function connect() {
       // The JPIP large-image viewer wants the opposite (accumulate for pan
       // reuse) and calls jpip_begin_frame (a no-op) instead.
       M._jpip_reset_cache(ctx);
-      // Reuse the WASM context's persistent response buffer so the three
-      // fovea/para/peri responses don't each trigger a _malloc/_free cycle
-      // on every gaze move.  The pointer is only valid until the next
-      // jpip_get_response_buffer() call, so we re-request it per response.
-      for (const ab of [r1, r2, r3]) {
-        const arr = new Uint8Array(ab);
-        const ptr = M._jpip_get_response_buffer(ctx, arr.length);
-        wasmWrite(arr, ptr);
-        M._jpip_add_response(ctx, ptr, arr.length);
+      // Drain each response via the WASM streaming parser so bytes flow
+      // into ctx->set as HTTP chunks land, not after arrayBuffer() has
+      // fully materialised.  We still process the three cones
+      // sequentially (await) because they share the context's
+      // StreamingJppParser state.
+      for (const respP of [resp1, resp2, resp3]) {
+        const resp = await respP;
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        M._jpip_feed_stream_begin(ctx);
+        const reader = resp.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const ptr = M._jpip_get_response_buffer(ctx, value.length);
+          wasmWrite(value, ptr);
+          const rc = M._jpip_feed_stream(ctx, ptr, value.length);
+          if (rc !== 0) throw new Error(`feed_stream rc=${rc}`);
+        }
+        if (M._jpip_feed_stream_end(ctx) !== 0) {
+          throw new Error('feed_stream_end: stream closed mid-message');
+        }
       }
+      const tFetch = performance.now();
+
       const rc = M._jpip_end_frame(ctx, rgbPtr, c.width, c.height);
       const tDecode = performance.now();
       if (rc !== 0) {

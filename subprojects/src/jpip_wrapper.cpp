@@ -81,6 +81,16 @@ struct JpipContext {
   // the JS caller asks for it.
   open_htj2k::jpip::CacheModel client_cache;
   std::string cache_model_str;
+
+  // State for the progressive HTTP-chunked delivery path (issue #297).
+  // Unlike jpip_add_response (which takes one complete response buffer
+  // per call), the streaming path can be called with arbitrary-size
+  // chunks as they arrive from the socket — including chunk boundaries
+  // that fall mid-JPP-message.  `stream_parser` buffers any partial tail
+  // across calls; `stream_tmp` accumulates the response's bins so that
+  // merge_from-based re-send semantics still apply at end-of-response.
+  open_htj2k::jpip::StreamingJppParser stream_parser;
+  open_htj2k::jpip::DataBinSet         stream_tmp;
 };
 
 // Flush the single-tile reuse cache when a parameter that isn't part of the
@@ -252,6 +262,63 @@ int jpip_add_response(void *handle, const uint8_t *jpp_stream, size_t len) {
   if (cache_changed) ctx->cache_model_str.clear();
   ctx->dirty = true;
   return 0;
+}
+
+// ── Progressive / streaming JPP-stream delivery (issue #297) ────────────────
+// JS calls jpip_feed_stream_begin() once per response, jpip_feed_stream() as
+// each Transfer-Encoding: chunked chunk arrives, and jpip_feed_stream_end()
+// after reader.read() reports done.  Unlike jpip_add_response (which requires
+// a complete response buffer), the streaming path tolerates chunk boundaries
+// anywhere inside the JPP-stream — the StreamingJppParser buffers any
+// incomplete tail until the next feed supplies the rest.  After every
+// feed(), newly-completed bins are merged into ctx->set so that an
+// intervening jpip_end_frame[_region]() call can render whatever has
+// arrived so far.
+EMSCRIPTEN_KEEPALIVE
+int jpip_feed_stream_begin(void *handle) {
+  if (!handle) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+  ctx->stream_parser.reset();
+  ctx->stream_tmp = {};
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int jpip_feed_stream(void *handle, const uint8_t *data, size_t len) {
+  if (!handle) return -1;
+  if (len == 0) return 0;
+  if (!data) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+  // `stream_tmp` persists across every feed() call in a single response so
+  // that a JPP message split across chunks (payload bytes in chunk N,
+  // continuation bytes in chunk N+1 with msg_offset == bin.size()) appends
+  // correctly.  A freshly-reset tmp per call would fail the §A.2 in-order
+  // msg_offset check the second time the bin grows.
+  if (!ctx->stream_parser.feed(data, len, &ctx->stream_tmp)) return -2;
+  ctx->set.merge_from(ctx->stream_tmp);
+  bool cache_changed = false;
+  for (const auto &kv : ctx->stream_tmp.keys()) {
+    if (kv.first == open_htj2k::jpip::kMsgClassPrecinct
+        || kv.first == open_htj2k::jpip::kMsgClassExtPrecinct) continue;
+    if (!ctx->stream_tmp.is_complete(kv.first, kv.second)) continue;
+    if (!ctx->client_cache.has(kv.first, kv.second)) {
+      ctx->client_cache.mark(kv.first, kv.second);
+      cache_changed = true;
+    }
+  }
+  if (cache_changed) ctx->cache_model_str.clear();
+  ctx->dirty = true;
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int jpip_feed_stream_end(void *handle) {
+  if (!handle) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+  const bool clean = ctx->stream_parser.finish();
+  ctx->stream_parser.reset();
+  ctx->stream_tmp = {};
+  return clean ? 0 : -2;
 }
 
 EMSCRIPTEN_KEEPALIVE

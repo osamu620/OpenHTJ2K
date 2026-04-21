@@ -168,8 +168,23 @@ int main() {
   vw.fx = 64; vw.fy = 64;
   vw.sx = 64; vw.sy = 64;
   DataBinSet bins;
-  const bool ok = client.fetch("127.0.0.1", kTestPort, vw, &bins);
-  CHECK(ok, "JpipClient::fetch failed: %s", client.last_error().c_str());
+  // Track how many times the progress callback fires and the bin-count
+  // sequence it reports.  The multi-chunk server above slices the JPP
+  // body into 3 wire chunks, and the fake JPP body contains 2 bins
+  // (metadata-bin 0 + main-header); the callback should observe the bin
+  // count grow monotonically from 0 to 2 across the streamed chunks.
+  std::size_t progress_fires = 0;
+  std::size_t max_bins_seen = 0;
+  auto on_progress = [&](const DataBinSet &s) {
+    ++progress_fires;
+    if (s.size() > max_bins_seen) max_bins_seen = s.size();
+  };
+  const bool ok = client.fetch_streaming("127.0.0.1", kTestPort, vw, &bins,
+                                         /*model=*/nullptr, on_progress);
+  CHECK(ok, "JpipClient::fetch_streaming failed: %s", client.last_error().c_str());
+  CHECK(progress_fires >= 1, "progress callback should fire at least once (fires=%zu)",
+        progress_fires);
+  CHECK(max_bins_seen == 2, "progress should see both bins (max=%zu)", max_bins_seen);
 
   // metadata-bin 0 must be present (empty) and is_last.
   CHECK(bins.contains(kMsgClassMetadata, 0), "metadata-bin 0 missing");
