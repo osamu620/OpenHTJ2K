@@ -41,9 +41,14 @@
 #ifdef _OPENMP
   #include <omp.h>
 #endif
-#if defined(__AVX2__)
+// App-level SIMD in this file is gated on the same CMake flags the library
+// uses (OPENHTJ2K_TRY_AVX2 / OPENHTJ2K_ENABLE_ARM_NEON).  Passing
+// -DENABLE_AVX2=OFF -DENABLE_ARM_NEON=OFF takes the scalar path everywhere,
+// so the library and app stay coherent in scalar-only builds.
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   #include <immintrin.h>
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    && (defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64))
   #include <arm_neon.h>
 #endif
 
@@ -55,7 +60,7 @@ namespace {
 
 // bpp==2, big-endian: int32 + offset → {hi, lo} byte pairs
 inline void pack_i32_to_be16(const int32_t *src, uint8_t *dst, uint32_t width, int32_t offset) {
-#if defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const __m256i voff = _mm256_set1_epi32(offset);
   const __m256i bswap =
       _mm256_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4,
@@ -74,7 +79,8 @@ inline void pack_i32_to_be16(const int32_t *src, uint8_t *dst, uint32_t width, i
     dst[n * 2]           = static_cast<uint8_t>(v >> 8);
     dst[n * 2 + 1]       = static_cast<uint8_t>(v);
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    && (defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64))
   const int32x4_t voff = vdupq_n_s32(offset);
   uint32_t n = 0;
   for (; n + 8 <= width; n += 8) {
@@ -104,7 +110,7 @@ inline void pack_i32_to_be16(const int32_t *src, uint8_t *dst, uint32_t width, i
 
 // bpp==2, little-endian (PGX): int32 → {lo, hi} byte pairs (no offset)
 inline void pack_i32_to_le16(const int32_t *src, uint8_t *dst, uint32_t width) {
-#if defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   uint32_t n = 0;
   for (; n + 16 <= width; n += 16) {
     __m256i v0     = _mm256_loadu_si256((const __m256i *)(src + n));
@@ -119,7 +125,8 @@ inline void pack_i32_to_le16(const int32_t *src, uint8_t *dst, uint32_t width) {
     dst[n * 2]           = static_cast<uint8_t>(v);
     dst[n * 2 + 1]       = static_cast<uint8_t>(v >> 8);
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    && (defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64))
   uint32_t n = 0;
   for (; n + 8 <= width; n += 8) {
     int32x4_t v0 = vld1q_s32(src + n);
@@ -145,7 +152,7 @@ inline void pack_i32_to_le16(const int32_t *src, uint8_t *dst, uint32_t width) {
 
 // bpp==1: int32 + offset → uint8
 inline void pack_i32_to_u8(const int32_t *src, uint8_t *dst, uint32_t width, int32_t offset) {
-#if defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
   const __m256i voff  = _mm256_set1_epi32(offset);
   const __m256i vmask = _mm256_set1_epi32(0xFF);
   // Permutation to fix the lane-crossing interleave of successive packs
@@ -165,7 +172,8 @@ inline void pack_i32_to_u8(const int32_t *src, uint8_t *dst, uint32_t width, int
   }
   for (; n < width; ++n)
     dst[n] = static_cast<uint8_t>(src[n] + offset);
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    && (defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64))
   const int32x4_t voff = vdupq_n_s32(offset);
   uint32_t n = 0;
   for (; n + 16 <= width; n += 16) {
@@ -194,7 +202,7 @@ inline void pack_i32_to_u8(const int32_t *src, uint8_t *dst, uint32_t width, int
 // Clamps each sample to [0, max_val], then packs to uint8.
 inline void ppm_interleave_8(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
                              uint8_t *dp, uint32_t width, uint32_t bit_depth) {
-#if defined(__SSE4_1__) || defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && (defined(__SSE4_1__) || defined(__AVX2__))
   const __m128i max_val = _mm_set1_epi32((1 << bit_depth) - 1);
   const __m128i zero    = _mm_setzero_si128();
   // Shuffle: pack 4 pixels of [R,G,B,0] → 12 bytes of [R,G,B,R,G,B,...].
@@ -273,7 +281,8 @@ inline void ppm_interleave_8(const int32_t *sp0, const int32_t *sp1, const int32
     v     = *sp2;
     *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    && (defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64))
   const int32x4_t vmax = vdupq_n_s32((1 << bit_depth) - 1);
   const int32x4_t zero = vdupq_n_s32(0);
   uint32_t n           = 0;
@@ -325,7 +334,7 @@ inline void ppm_interleave_8(const int32_t *sp0, const int32_t *sp1, const int32
 // Clamps each sample to [0, max_val], byte-swaps to big-endian, and interleaves R,G,B.
 inline void ppm_interleave_16be(const int32_t *sp0, const int32_t *sp1, const int32_t *sp2,
                                 uint8_t *dp, uint32_t width, uint32_t bit_depth) {
-#if defined(__SSE4_1__) || defined(__AVX2__)
+#if defined(OPENHTJ2K_TRY_AVX2) && (defined(__SSE4_1__) || defined(__AVX2__))
   const __m128i max_val = _mm_set1_epi32((1 << bit_depth) - 1);
   const __m128i zero    = _mm_setzero_si128();
   uint16_t *p           = reinterpret_cast<uint16_t *>(dp);
@@ -391,7 +400,8 @@ inline void ppm_interleave_16be(const int32_t *sp0, const int32_t *sp1, const in
     v    = v < 0 ? 0 : v > mv ? mv : v;
     *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
   }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64)
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    && (defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64))
   const int32x4_t vmax = vdupq_n_s32((1 << bit_depth) - 1);
   const int32x4_t vzero = vdupq_n_s32(0);
   uint16_t *p           = reinterpret_cast<uint16_t *>(dp);
@@ -427,7 +437,8 @@ inline void ppm_interleave_16be(const int32_t *sp0, const int32_t *sp1, const in
     *p++ = static_cast<uint16_t>((v >> 8) | (v << 8));
   }
 #else
-  int mv = (1 << bit_depth) - 1;
+  uint16_t *p = reinterpret_cast<uint16_t *>(dp);
+  int mv      = (1 << bit_depth) - 1;
   for (uint32_t n = 0; n < width; ++n, ++sp0, ++sp1, ++sp2) {
     int v;
     v    = *sp0;
