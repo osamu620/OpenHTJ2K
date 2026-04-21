@@ -149,6 +149,14 @@ static int h3_end_stream(nghttp3_conn *, int64_t stream_id, void *conn_data, voi
   }
   ctx->requests.erase(it);
 
+  // The HTTP/3 handler still builds the full JPP-stream before the data
+  // reader hands it to nghttp3 — progressive delivery over H3 would need
+  // the handler to produce JPP messages incrementally and feed them to
+  // `read_data` across multiple invocations.  That is a follow-up to
+  // issue #297 once the HTTP/1.1 chunked path is proven out.  On the
+  // wire the response still lands as one or more H3 DATA frames (nghttp3
+  // fragments the body by QUIC flow-control window), so gigapixel views
+  // are not penalised any worse than they already were.
   std::vector<uint8_t> body = ctx->handler(req);
 
   // Submit HTTP/3 response

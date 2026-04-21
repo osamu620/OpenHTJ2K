@@ -181,6 +181,25 @@ std::size_t TcpStream::recv_until_header_end(std::vector<uint8_t> &buf,
   return buf.size();
 }
 
+std::size_t TcpStream::recv_some(uint8_t *buf, std::size_t len) {
+  if (len == 0) return 0;
+  auto n = ::recv(fd_, reinterpret_cast<char *>(buf), static_cast<int>(len), 0);
+  if (n == 0) return 0;
+  if (n < 0) { err_ = sock_error_str(); return SIZE_MAX; }
+  return static_cast<std::size_t>(n);
+}
+
+std::size_t TcpStream::recv_to_eof(std::vector<uint8_t> &buf) {
+  std::size_t total = 0;
+  uint8_t tmp[16 * 1024];
+  while (true) {
+    std::size_t n = recv_some(tmp, sizeof(tmp));
+    if (n == 0 || n == SIZE_MAX) return total;
+    buf.insert(buf.end(), tmp, tmp + n);
+    total += n;
+  }
+}
+
 void TcpStream::close() {
   if (fd_ != kTcpInvalidSocket) { close_socket(fd_); fd_ = kTcpInvalidSocket; }
 }

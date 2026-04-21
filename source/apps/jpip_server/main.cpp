@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -66,39 +67,71 @@ struct ServerState {
   CodestreamLayout                  layout;
   std::unique_ptr<PacketLocator>    locator;
   std::string                       target_id;
+  // When true, HTTP/1.1 responses use `Transfer-Encoding: chunked` and
+  // flush each JPP message to the socket as it is produced — time-to-first-
+  // byte then equals the time to emit metadata-bin 0 rather than the time
+  // to build the full response.  `--no-chunked` forces the Content-Length
+  // path for clients that cannot handle chunked transfer.
+  bool                              chunked_responses = true;
 };
 
-// Build the JPP-stream for a given ViewWindow, skipping data-bins
-// the client already has (per the cache model from §C.9).  When
-// `n_keys_out` is non-null the caller gets the precinct count back
-// without having to re-run resolve_view_window.
+// Callback invoked once per completed JPP-stream message (including EOR).
+// Returning false aborts further emission; the caller is expected to have
+// flushed what it already received.  `is_eor` lets the transport treat the
+// final message differently (e.g. set FIN, stop accounting bytes against
+// the §C.6.1 cap).
+using JppMessageSink = std::function<bool(const uint8_t *data, std::size_t len, bool is_eor)>;
+
+// Stream the JPP-stream for a given ViewWindow, skipping data-bins the
+// client already has (per the cache model from §C.9).  Each completed
+// message is handed to `sink` as soon as it is built, so a chunked HTTP
+// transport can push it to the socket immediately.  When `n_keys_out` is
+// non-null the caller gets the precinct count back without having to
+// re-run resolve_view_window.  `total_bytes_out`, if non-null, receives
+// the cumulative payload size (excluding EOR, matching the §C.6.1 cap
+// accounting).
 //
 // `max_bytes`, when non-zero, is the §C.6.1 "Maximum Response Length"
 // cap: the cumulative payload size excluding the EOR message (the EOR
 // does not count per §D.3).  Messages are emitted in whole units —
 // if adding the next message would push the total past the cap, that
-// message is rolled back and emission stops.  EOR reason then becomes
-// `ByteLimit` (4) instead of `WindowDone` (2).  A `max_bytes` of 0
-// means no cap and preserves v0.16.0 behaviour.
-std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &vw,
-                                      const CacheModel &client_cache = {},
-                                      size_t *n_keys_out = nullptr,
-                                      uint64_t max_bytes = 0) {
+// message is dropped before flushing and emission stops.  EOR reason
+// then becomes `ByteLimit` (4) instead of `WindowDone` (2).  A
+// `max_bytes` of 0 means no cap.
+bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
+                         const CacheModel &client_cache, uint64_t max_bytes,
+                         const JppMessageSink &sink,
+                         size_t *n_keys_out = nullptr,
+                         std::size_t *total_bytes_out = nullptr) {
   auto keys = resolve_view_window(*st.idx, vw);
   if (n_keys_out) *n_keys_out = keys.size();
 
-  std::vector<uint8_t> stream;
   MessageHeaderContext ctx;
+  std::vector<uint8_t> scratch;
+  scratch.reserve(64 * 1024);
+  std::size_t total = 0;
+  bool aborted = false;
 
-  // Emit a single data-bin via `fn`, rolling back if the cap trips.
-  // Returns false when the cap is hit (caller stops emitting further
-  // messages; EOR still gets appended with reason=ByteLimit).
-  auto try_emit = [&](auto &&fn) -> bool {
-    const auto snap = stream.size();
+  // Build the next message into `scratch`; on §C.6.1 overflow drop it
+  // (so the context captured by `fn` must not have been consumed — since
+  // emitters only append, the rollback is a simple `scratch.clear()` plus
+  // restoring any MessageHeaderContext changes).  For correctness we
+  // snapshot `ctx` before each emission and restore on overflow.
+  auto try_emit = [&](auto &&fn, bool is_eor) -> bool {
+    const MessageHeaderContext ctx_snap = ctx;
+    scratch.clear();
     fn();
-    if (max_bytes > 0 && stream.size() > max_bytes) {
-      stream.resize(snap);
+    if (!is_eor && max_bytes > 0 && total + scratch.size() > max_bytes) {
+      ctx = ctx_snap;
+      scratch.clear();
       return false;
+    }
+    if (!scratch.empty()) {
+      if (!sink(scratch.data(), scratch.size(), is_eor)) {
+        aborted = true;
+        return false;
+      }
+      if (!is_eor) total += scratch.size();
     }
     return true;
   };
@@ -110,13 +143,17 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
   // data into their cache, so emit it first — before main-header — even
   // for bare J2C codestreams that have no JP2/JPX box structure to ship.
   if (!client_cache.has(kMsgClassMetadata, 0)) {
-    if (!try_emit([&] { emit_metadata_bin_zero(ctx, stream); })) truncated = true;
+    if (!try_emit([&] { emit_metadata_bin_zero(ctx, scratch); }, false)) {
+      if (!aborted) truncated = true;
+    }
   }
-  if (!truncated && !client_cache.has(kMsgClassMainHeader, 0)) {
+  if (!aborted && !truncated && !client_cache.has(kMsgClassMainHeader, 0)) {
     if (!try_emit([&] {
           emit_main_header_databin(st.codestream.data(), st.codestream.size(),
-                                    st.layout, ctx, stream);
-        })) truncated = true;
+                                    st.layout, ctx, scratch);
+        }, false)) {
+      if (!aborted) truncated = true;
+    }
   }
   // §A.3.3: deliver the tile-header data-bin for every tile whose index
   // appears in the view-window result — NOT for every tile in the image.
@@ -125,7 +162,7 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
   // tiles well outside the fovea, crowding out actual precinct payload.
   // Collect tile indices from `keys` in first-seen order so the resulting
   // tile-header messages are deterministic.
-  if (!truncated) {
+  if (!aborted && !truncated) {
     std::vector<uint16_t> window_tiles;
     {
       std::vector<bool> seen(st.idx->num_tiles(), false);
@@ -137,8 +174,11 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
       if (client_cache.has(kMsgClassTileHeader, t)) continue;
       if (!try_emit([&] {
             emit_tile_header_databin(st.codestream.data(), st.codestream.size(),
-                                      t, st.layout, ctx, stream);
-          })) { truncated = true; break; }
+                                      t, st.layout, ctx, scratch);
+          }, false)) {
+        if (!aborted) truncated = true;
+        break;
+      }
     }
   }
 
@@ -153,7 +193,7 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
   // they DID receive (because from their perspective those have not been
   // "accepted" into the contiguous portion of the cache).  Sort by I
   // before emission so deliveries are gap-free.
-  if (!truncated) {
+  if (!aborted && !truncated) {
     struct KeyWithId { PrecinctKey k; uint64_t I; };
     std::vector<KeyWithId> ordered;
     ordered.reserve(keys.size());
@@ -167,12 +207,39 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
       if (!try_emit([&] {
             emit_precinct_databin(st.codestream.data(), st.codestream.size(),
                                   e.k.t, e.k.c, e.k.r, e.k.p_rc,
-                                  *st.idx, *st.locator, ctx, stream);
-          })) { truncated = true; break; }
+                                  *st.idx, *st.locator, ctx, scratch);
+          }, false)) {
+        if (!aborted) truncated = true;
+        break;
+      }
     }
   }
 
-  emit_eor(truncated ? EorReason::ByteLimit : EorReason::WindowDone, ctx, stream);
+  if (!aborted) {
+    try_emit([&] {
+      emit_eor(truncated ? EorReason::ByteLimit : EorReason::WindowDone, ctx, scratch);
+    }, true);
+  }
+
+  if (total_bytes_out) *total_bytes_out = total;
+  return !aborted;
+}
+
+// Legacy buffered path: collect every JPP message into a single vector
+// (used by tests, benchmarks, and the `Content-Length:` transport).
+std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &vw,
+                                      const CacheModel &client_cache = {},
+                                      size_t *n_keys_out = nullptr,
+                                      uint64_t max_bytes = 0) {
+  std::vector<uint8_t> stream;
+  stream.reserve(64 * 1024);
+  stream_jpp_response(
+      st, vw, client_cache, max_bytes,
+      [&](const uint8_t *data, std::size_t len, bool /*is_eor*/) {
+        stream.insert(stream.end(), data, data + len);
+        return true;
+      },
+      n_keys_out, /*total_bytes_out=*/nullptr);
   return stream;
 }
 
@@ -327,20 +394,6 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
 
   CacheModel client_cache;
   if (!req.model.empty()) client_cache = CacheModel::parse(req.model);
-  size_t n_keys = 0;
-  auto jpp = build_jpp_stream(st, req.view_window, client_cache, &n_keys,
-                              req.has_len ? req.len : 0);
-
-  const auto t1 = Clock::now();
-  const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-  std::printf("  → %zu precincts (%.1f%%), %zu bytes JPP-stream, %.1f ms\n",
-              n_keys,
-              st.idx->total_precincts()
-                  ? (100.0 * static_cast<double>(n_keys) / static_cast<double>(st.idx->total_precincts()))
-                  : 0.0,
-              jpp.size(), ms);
-  std::fflush(stdout);
 
   // §C.3.3 / §D.2.5: when the client requests `cnew=http`, reply with
   // `JPIP-cnew: cid=…,path=…,transport=http`.  Our server is stateless,
@@ -363,8 +416,54 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
                   static_cast<unsigned long long>(cid));
     cnew_header.assign(buf);
   }
-  auto resp = format_jpp_response(jpp.data(), jpp.size(), st.target_id, cnew_header);
-  conn.send_all(resp);
+
+  const uint64_t max_bytes = req.has_len ? req.len : 0;
+  size_t n_keys = 0;
+  std::size_t body_bytes = 0;
+  if (st.chunked_responses) {
+    // Chunked path: emit the headers first so the client can start
+    // adjusting its UI (progress bar, fetch() stream), then flush each
+    // JPP message as its own HTTP chunk.  `sink` returning false on
+    // send_all failure aborts the emission early so we don't waste
+    // CPU building messages that can't be delivered.
+    auto hdrs = format_jpp_response_headers_chunked(st.target_id, cnew_header);
+    if (!conn.send_all(hdrs)) return;
+    bool send_ok = true;
+    stream_jpp_response(
+        st, req.view_window, client_cache, max_bytes,
+        [&](const uint8_t *data, std::size_t len, bool /*is_eor*/) {
+          if (len == 0) return true;  // empty chunk would terminate the stream
+          auto ch = format_chunk_header(len);
+          if (!conn.send_all(ch)) { send_ok = false; return false; }
+          if (!conn.send_all(data, len)) { send_ok = false; return false; }
+          static const uint8_t kCrLf[2] = {'\r', '\n'};
+          if (!conn.send_all(kCrLf, 2)) { send_ok = false; return false; }
+          body_bytes += len;
+          return true;
+        },
+        &n_keys, /*total_bytes_out=*/nullptr);
+    if (send_ok) {
+      auto last = format_last_chunk();
+      conn.send_all(last);
+    }
+  } else {
+    auto jpp = build_jpp_stream(st, req.view_window, client_cache, &n_keys, max_bytes);
+    body_bytes = jpp.size();
+    auto resp = format_jpp_response(jpp.data(), jpp.size(), st.target_id, cnew_header);
+    conn.send_all(resp);
+  }
+
+  const auto t1 = Clock::now();
+  const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+  std::printf("  → %zu precincts (%.1f%%), %zu bytes JPP-stream, %.1f ms%s\n",
+              n_keys,
+              st.idx->total_precincts()
+                  ? (100.0 * static_cast<double>(n_keys) / static_cast<double>(st.idx->total_precincts()))
+                  : 0.0,
+              body_bytes, ms,
+              st.chunked_responses ? " [chunked]" : "");
+  std::fflush(stdout);
 }
 
 #ifdef OPENHTJ2K_ENABLE_QUIC
@@ -412,12 +511,13 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::fprintf(stderr,
         "Usage: open_htj2k_jpip_server <input.j2c> [--port N=8080]\n"
-        "       [--h3 --cert server.cert --key server.key]\n");
+        "       [--h3 --cert server.cert --key server.key] [--no-chunked]\n");
     return EXIT_FAILURE;
   }
   std::string infile = argv[1];
   uint16_t port = 8080;
   bool use_h3 = false;
+  bool no_chunked = false;
   std::string cert_file, key_file;
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
@@ -428,10 +528,13 @@ int main(int argc, char **argv) {
       cert_file = argv[++i];
     } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
       key_file = argv[++i];
+    } else if (std::strcmp(argv[i], "--no-chunked") == 0) {
+      no_chunked = true;
     }
   }
 
   ServerState st;
+  st.chunked_responses = !no_chunked;
   st.codestream = read_file(infile.c_str());
   if (st.codestream.empty()) return EXIT_FAILURE;
 
@@ -500,7 +603,8 @@ int main(int argc, char **argv) {
     tcp_wsa_cleanup();
     return EXIT_FAILURE;
   }
-  std::printf("listening on http://localhost:%u/jpip\n", port);
+  std::printf("listening on http://localhost:%u/jpip%s\n", port,
+              st.chunked_responses ? " (Transfer-Encoding: chunked)" : " (Content-Length)");
   std::fflush(stdout);
 
   while (true) {

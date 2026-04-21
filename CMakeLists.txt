@@ -337,6 +337,14 @@ set_target_properties(
   PROPERTIES OUTPUT_NAME
              $<IF:$<CONFIG:Debug>,open_htj2k_jpip_server_dbg,open_htj2k_jpip_server>)
 
+# JPIP issue #297 chunked-transfer round-trip self-test
+add_executable(jpip_chunked_check)
+add_subdirectory(source/apps/jpip_chunked_check)
+target_link_libraries(jpip_chunked_check PUBLIC open_htj2k)
+if(WIN32)
+  target_link_libraries(jpip_chunked_check PUBLIC ws2_32)
+endif()
+
 # JPIP Phase-2 precinct data-bin + packet-locator self-test
 add_executable(jpip_precinct_check)
 add_subdirectory(source/apps/jpip_precinct_check)
