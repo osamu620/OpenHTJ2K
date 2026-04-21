@@ -1,3 +1,98 @@
+# [0.17.0] - 2026-04-21
+
+## JPIP — progressive HTTP-chunked delivery end-to-end (#297)
+
+Stateless JPIP server + every in-repo client now pipeline JPP-stream
+responses on the wire and through the parser, so large view-window
+responses start landing in the decoder before the server has finished
+building them.  Loopback time-to-first-byte for a 24 MB full-canvas
+response drops from **7.4 ms to 0.44 ms** (17×); the HTTP/1.1 bodies
+remain byte-identical between the chunked and Content-Length paths.
+
+### Server (`source/apps/jpip_server/`)
+
+* **HTTP/1.1 `Transfer-Encoding: chunked` by default.**  Each JPP
+  message emitted by `stream_jpp_response` (new callback-driven
+  primitive) is flushed to the socket as its own HTTP chunk.  The
+  §C.6.1 `len=` rollback still works — it happens inside a reusable
+  scratch buffer before each chunk is committed to the wire.
+  `--no-chunked` opts out for clients that can't parse chunked.
+  `build_jpp_stream` is preserved as a thin wrapper so benchmarks /
+  tests that want a single buffered response are unchanged.
+
+* **HTTP/1.1 `Transfer-Encoding: chunked` parsers** (`parse_http_chunked`,
+  `decode_chunked_body`) plus the chunked response writers
+  (`format_jpp_response_headers_chunked`, `format_chunk_header`,
+  `format_last_chunk`) are exposed from `jpip_response.hpp`.
+
+* **HTTP/3 path stays buffered** for now — progressive DATA-frame
+  delivery would need an nghttp3 data-reader refactor; status quo is
+  documented inline, QUIC connections behave identically to v0.16.1.
+
+### Library (`source/core/jpip/`)
+
+* **`StreamingJppParser`** (new, in `jpp_parser.hpp`).  Resumable JPP
+  parser that carries `MessageHeaderContext` across `feed()` calls and
+  buffers the tail bytes of an incomplete message until the next
+  chunk supplies the rest.  `parse_jpp_stream` refactored to share a
+  `try_decode_one_message` helper with the streaming parser so the two
+  paths can't drift — every existing `parse_jpp_stream` caller
+  behaves identically.
+
+* **`JpipClient::fetch_streaming(..., on_progress)`**.  Drives an
+  incremental chunked-transfer state machine straight into the new
+  streaming parser, so `*out` grows as each HTTP chunk lands.
+  `JpipClient::fetch(...)` now delegates to it — existing callers get
+  streaming for free.
+
+* `TcpStream::recv_some` and `TcpStream::recv_to_eof` added to support
+  non-blocking drains from the chunked client path.
+
+### WASM bindings (`subprojects/src/jpip_wrapper.cpp`)
+
+* New exports `jpip_feed_stream_begin / _feed_stream / _feed_stream_end`
+  alongside the existing `jpip_add_response` (preserved for one-shot
+  callers).  A per-context `StreamingJppParser` + persistent
+  `stream_tmp` `DataBinSet` keep the cache-model bookkeeping
+  identical to `jpip_add_response` while tolerating chunk boundaries
+  anywhere inside the stream.
+
+### Browser demos (`subprojects/jpip_{demo,viewer}.html`)
+
+* Swap `fetch().arrayBuffer()` for `response.body.getReader()` plus a
+  `_jpip_feed_stream` loop, so the WASM parser starts consuming bytes
+  as each chunk arrives.
+
+* Auto-prefix `http://` on bare `host:port` server inputs (fixes the
+  cryptic "URL scheme 'localhost' is not supported" `fetch()` error
+  surfaced while testing on a real browser).
+
+### Tests
+
+* **`jpip_streaming_parser_{p0_04,ht_01}`** (new).  For every
+  two-chunk split offset on a real JPP-stream, plus byte-at-a-time
+  feeding and a `reset()`-based reuse pass, the streaming parser
+  reconstructs an identical `DataBinSet` to the one-shot parser.
+  This is the regression guard that the browser + C++ clients
+  actually rely on.
+
+* **`jpip_chunked_roundtrip`** (new).  Hand-rolled chunked HTTP
+  responder drives `JpipClient::fetch_streaming` with a progress
+  callback; asserts progress fires and sees bins grow monotonically.
+
+* **`jpip_http_check`** extended to cover the chunked formatter,
+  `decode_chunked_body` round-trips, and malformed-input rejection.
+
+* **Node integration** (`tools/jpip_wasm_feed_test.mjs`).  Drives chunk
+  sizes {1, 7, 100, 1024, full} against a live server, asserts
+  `_jpip_feed_stream` state is byte-identical to `_jpip_add_response`
+  state (canvas dims, precinct total, cache-model string).
+
+* **Live browser**: both demos verified against the chunked server
+  (`jpip_demo.html` on the 1920 foveation asset, `jpip_viewer.html`
+  on the 21600 gigapixel asset).
+
+
 # [0.16.1] - 2026-04-21
 
 ## JPIP server — interop-level spec fixes

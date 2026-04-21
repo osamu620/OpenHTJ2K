@@ -3,7 +3,9 @@
 
 #include "jpip_client.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 #include "cache_model.hpp"
 #include "jpip_response.hpp"
@@ -79,7 +81,11 @@ struct ChunkedStreamDecoder {
       if (in_chunk) {
         const std::size_t available = buf.size() - consumed;
         if (available == 0) return true;
-        const std::size_t take = std::min(chunk_left, available);
+        // `(std::min)` parens disable Windows <windows.h>'s `min` macro
+        // expansion (winsock2.h is pulled in by tcp_socket.hpp on MSVC
+        // builds); without them the token stream becomes `std::(...)`
+        // and the compiler errors out with C2589/C2059.
+        const std::size_t take = (std::min)(chunk_left, available);
         if (take > 0) {
           if (!on_payload(buf.data() + consumed, take)) {
             *err = "jpp parse failed mid-chunk";
@@ -233,7 +239,7 @@ bool JpipClient::fetch_streaming(const std::string &host, uint16_t port,
     if (is_chunked) {
       return chunked.feed(p, n, feed_jpp, &err_);
     }
-    const std::size_t want = std::min(n, content_length - cl_received);
+    const std::size_t want = (std::min)(n, content_length - cl_received);
     if (!feed_jpp(p, want)) return false;
     cl_received += want;
     return true;
