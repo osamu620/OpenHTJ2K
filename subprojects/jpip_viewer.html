@@ -266,6 +266,8 @@
         <tr><td><code>?maxSize=</code></td><td><code>1920x1080</code></td><td>Cap the WebGL render target to <code>WxH</code>. Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass <code>?maxSize=window</code> to disable the cap.</td></tr>
         <tr><td><code>?fit=</code></td><td><code>stretch</code></td><td><code>stretch</code> — CSS scales the render target up to fill the window, GPU upsamples via <code>GL_LINEAR</code>.<br><code>contain</code> — CSS size == render size, canvas is shown at native pixel scale centered in the window (like the foveation demo).</td></tr>
         <tr><td><code>?precinctCacheMB=</code></td><td><code>64</code></td><td>LRU precinct cache budget in megabytes. Received precincts are tracked in the <code>&amp;model=</code> cache-model advertisement so the server skips ones already in the viewer's cache on subsequent pans (70–95% byte reduction typical). Set <code>0</code> to disable.</td></tr>
+        <tr><td><code>?prefetchMargin=</code></td><td><code>128</code></td><td>After each successful render, fetch an <i>N</i>-canvas-pixel halo of adjacent precincts into the LRU cache so short follow-up pans hit locally. Auto-cancelled when the user resumes interacting. Set <code>0</code> to disable.</td></tr>
+        <tr><td><code>?prefetchDelayMs=</code></td><td><code>150</code></td><td>Idle-delay before the halo prefetch fires (in milliseconds). Short enough to overlap typical pause-and-examine behaviour; long enough that continuous panning never triggers it.</td></tr>
       </tbody>
     </table>
   </details>
@@ -351,6 +353,16 @@ const $ = id => document.getElementById(id);
 
 let M = null, ctx = 0, canvasW = 0, canvasH = 0;
 let serverUrl = '', busy = false;
+// Adjacent-viewport prefetch state.  `prefetchAbort` is the AbortController
+// of the in-flight prefetch (null when idle); `prefetchTimer` is the
+// idle-delay timer that's cancelled when the user interacts.
+let prefetchAbort = null;
+let prefetchTimer = 0;
+
+function cancelPrefetch() {
+  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = 0; }
+  if (prefetchAbort) { prefetchAbort.abort(); prefetchAbort = null; }
+}
 // Latest-pending slot: while a fetch is in flight, new pan events flip this
 // instead of starting a second fetch.  When the in-flight call ends, it fires
 // one more fetchView() that re-reads panX/panY/zoom so the final viewport the
@@ -393,6 +405,22 @@ let maxRenderW = 1920, maxRenderH = 1080;
 const FIT_MODE = (() => {
   const v = new URLSearchParams(location.search).get('fit');
   return (v === 'contain' || v === 'stretch') ? v : 'stretch';
+})();
+
+// Adjacent-viewport prefetch (v0.18.1+).  After each successful pan/
+// zoom render we optionally fetch a small halo of precincts around the
+// viewport so a short follow-up pan hits in the LRU cache.  Cancelled
+// on the next user interaction so continuous panning doesn't waste
+// bandwidth.  `?prefetchMargin=0` disables; default 128 canvas px
+// (64 px of halo on each side).  `?prefetchDelayMs=N` controls the
+// idle-delay gate; default 150 ms.
+const PREFETCH_MARGIN_PX = (() => {
+  const v = Number(new URLSearchParams(location.search).get('prefetchMargin'));
+  return Number.isFinite(v) ? Math.max(0, v) : 128;
+})();
+const PREFETCH_DELAY_MS = (() => {
+  const v = Number(new URLSearchParams(location.search).get('prefetchDelayMs'));
+  return Number.isFinite(v) ? Math.max(0, v) : 150;
 })();
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
@@ -521,6 +549,12 @@ let lastFetchKey = '';
 //     finishes; fetchView() then re-reads panX/panY/zoom so the final
 //     viewport is always the one rendered).
 function scheduleFetch() {
+  // Any new user-driven fetch request invalidates any adjacent-viewport
+  // prefetch that's still in flight or queued: its bytes either land in
+  // the LRU cache and help the new query (if the user panned into the
+  // halo), or they're wasted.  Either way the prefetch must release
+  // its socket so the new main fetch can grab one.
+  cancelPrefetch();
   if (busy) {
     pendingFetch = true;
     return;
@@ -531,6 +565,75 @@ function scheduleFetch() {
     debounceTimer = 0;
     fetchView();
   }, DEBOUNCE_MS);
+}
+
+// Adjacent-viewport prefetch.  Builds a query for a region expanded by
+// PREFETCH_MARGIN_PX on each side of (regionX, regionY, regionW, regionH)
+// and pipes the response through jpip_feed_stream* so newly-received
+// precincts land in the LRU cache — without calling jpip_end_frame_region,
+// because there's no render to update.  Subsequent pans into the halo
+// then hit in the cache and the server-side query collapses to a few-byte
+// EOR.  Safe to call while busy=false (we don't set it) and self-cancels
+// via AbortController if the user interacts before the halo arrives.
+async function prefetchAdjacent(red, regionX, regionY, regionW, regionH) {
+  if (PREFETCH_MARGIN_PX <= 0 || !ctx || !M) return;
+  const margin = PREFETCH_MARGIN_PX;
+  const px0 = Math.max(0, regionX - margin);
+  const py0 = Math.max(0, regionY - margin);
+  const px1 = Math.min(canvasW, regionX + regionW + margin);
+  const py1 = Math.min(canvasH, regionY + regionH + margin);
+  const prw = px1 - px0;
+  const prh = py1 - py0;
+  // No halo available (viewport already at canvas edges or wider than
+  // the canvas).  Nothing to prefetch.
+  if (prw <= regionW && prh <= regionH) return;
+
+  const ceilShift = (v, s) => ((v + (1 << s) - 1) >> s);
+  const fW = Math.max(1, ceilShift(canvasW, red));
+  const fH = Math.max(1, ceilShift(canvasH, red));
+  const rx = px0 >> red;
+  const ry = py0 >> red;
+  const rw = Math.max(1, ceilShift(prw, red));
+  const rh = Math.max(1, ceilShift(prh, red));
+  let q = `fsiz=${fW},${fH}`;
+  if (rx > 0 || ry > 0) q += `&roff=${rx},${ry}`;
+  q += `&rsiz=${rw},${rh}&type=jpp-stream`;
+  const modelPtr = M._jpip_get_cache_model(ctx);
+  const model = modelPtr ? M.UTF8ToString(modelPtr) : '';
+  if (model) q += `&model=${model}`;
+
+  prefetchAbort = new AbortController();
+  const signal = prefetchAbort.signal;
+  const t0 = performance.now();
+  let bytes = 0;
+  let completed = false;
+  try {
+    const resp = await fetch(`${serverUrl}/jpip?${q}`, { signal });
+    if (!resp.ok) return;
+    M._jpip_feed_stream_begin(ctx);
+    const reader = resp.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const ptr = M._jpip_get_response_buffer(ctx, value.length);
+      wasmWrite(value, ptr);
+      if (M._jpip_feed_stream(ctx, ptr, value.length) !== 0) return;
+      bytes += value.length;
+    }
+    completed = M._jpip_feed_stream_end(ctx) === 0;
+    if (DEBUG_TIMING) {
+      console.log(`[jpip_viewer prefetch] halo=${prw}x${prh} ` +
+        `bytes=${bytes} ms=${(performance.now() - t0).toFixed(1)}`);
+    }
+  } catch (e) {
+    // AbortError from a new user interaction — silent.  Anything else is
+    // an unexpected failure but we'd rather not interrupt the UI.
+  } finally {
+    prefetchAbort = null;
+    // On abort mid-response the stream_parser holds partial state; the
+    // next main fetch's feed_stream_begin resets it, so no cleanup here.
+    void completed;
+  }
 }
 
 async function fetchView() {
@@ -654,6 +757,20 @@ async function fetchView() {
   if (pendingFetch) {
     pendingFetch = false;
     queueMicrotask(fetchView);
+    return;
+  }
+  // Otherwise: schedule an idle-delay prefetch of the adjacent halo.
+  // scheduleFetch() cancels this timer on the next user interaction, so
+  // continuous panning never triggers a prefetch (the halo would be
+  // stale anyway).  A user who stops moving for PREFETCH_DELAY_MS gets
+  // the neighbouring precincts pre-loaded into the LRU cache.
+  if (PREFETCH_MARGIN_PX > 0) {
+    cancelPrefetch();
+    const pred = red, prx = regionX, pry = regionY, prw = regionW, prh = regionH;
+    prefetchTimer = setTimeout(() => {
+      prefetchTimer = 0;
+      prefetchAdjacent(pred, prx, pry, prw, prh);
+    }, PREFETCH_DELAY_MS);
   }
 }
 

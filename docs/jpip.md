@@ -270,6 +270,8 @@ URL parameters:
 | `maxSize=WxH` | cap the WebGL render target to `WxH` (default `1920x1080`). Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass `maxSize=window` to disable the cap and render at full window resolution. |
 | `fit={stretch,contain}` | `stretch` (default) scales the render target up to fill the window with GPU-side `GL_LINEAR`; `contain` shows the canvas at native pixel scale centered in the window — like the foveation demo — with the `maxSize` cap defining the centered rectangle. |
 | `precinctCacheMB=N` | LRU precinct cache budget in megabytes (v0.18.0); default `64`, pass `0` to disable. Received precincts are tracked in `&model=` so the server skips redelivery on subsequent pans (70–95% byte reduction typical). |
+| `prefetchMargin=N` | Adjacent-viewport halo prefetch (v0.18.1) — fetches precincts up to `N` canvas pixels outside the visible viewport so short follow-up pans hit in the LRU cache. Default `128`, pass `0` to disable. Cancelled on the next user interaction so continuous panning never pays bandwidth for it. |
+| `prefetchDelayMs=N` | Idle delay in ms before the halo prefetch fires. Default `150`. |
 
 Pan events are debounced + coalesced: during an in-flight fetch, new
 events flip a "pending" slot rather than queue a second request, so
