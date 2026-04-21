@@ -290,7 +290,9 @@ void openhtj2k_decoder_impl::parse() {
         "openhtj2k_decoder_impl::parse().\n");
     throw std::exception();
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   timing_acc_.reset();
+#endif
   OPENHTJ2K_TIME_ATTACH(&timing_acc_);
   uint64_t pool_wait_base = 0, pool_work_base = 0;
   uint32_t pool_workers = 0;
@@ -306,7 +308,13 @@ void openhtj2k_decoder_impl::parse() {
   in.rewind_2bytes();
   is_parsed = true;
   OPENHTJ2K_TIME_REGION_END
+#ifdef OPENHTJ2K_DECODE_TIMING
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
 }
 
 void openhtj2k_decoder_impl::emit_timing_report(uint64_t pool_wait_base, uint64_t pool_work_base,
@@ -407,7 +415,9 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
         "openhtj2k_decoder_impl::invoke().\n");
     throw std::exception();
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   timing_acc_.reset();
+#endif
   OPENHTJ2K_TIME_ATTACH(&timing_acc_);
   uint64_t pool_wait_base = 0, pool_work_base = 0;
   uint32_t pool_workers = 0;
@@ -496,7 +506,13 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     OPENHTJ2K_TIME_REGION_END
     tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
 }
 
 openhtj2k_decoder_impl::~openhtj2k_decoder_impl() {
@@ -554,7 +570,9 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
         "openhtj2k_decoder_impl::invoke_line_based().\n");
     throw std::exception();
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   timing_acc_.reset();
+#endif
   OPENHTJ2K_TIME_ATTACH(&timing_acc_);
   uint64_t pool_wait_base = 0, pool_work_base = 0;
   uint32_t pool_workers = 0;
@@ -635,7 +653,13 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     tileSet[i].decode_line_based(main_header, reduce_NL, buf);
     tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
 }
 
 void openhtj2k_decoder::invoke_line_based(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
@@ -653,7 +677,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         "openhtj2k_decoder_impl::invoke_line_based_stream().\n");
     throw std::exception();
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   timing_acc_.reset();
+#endif
   OPENHTJ2K_TIME_ATTACH(&timing_acc_);
   uint64_t pool_wait_base = 0, pool_work_base = 0;
   uint32_t pool_workers = 0;
@@ -765,7 +791,13 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       tileSet[tile_idx].destroy();
       global_y += band_h0;
     }
-    emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+  #ifdef OPENHTJ2K_DECODE_TIMING
+  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
     return;
   }
 
@@ -840,7 +872,13 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     }
     global_y += band_h[0];
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
 }
 
 void openhtj2k_decoder::invoke_line_based_stream(
@@ -955,7 +993,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
     return;
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   timing_acc_.reset();
+#endif
   OPENHTJ2K_TIME_ATTACH(&timing_acc_);
   uint64_t pool_wait_base = 0, pool_work_base = 0;
   uint32_t pool_workers = 0;
@@ -1147,7 +1187,13 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
                                                col_lo_, col_hi_);
 
   cached_header_fingerprint_ = fp;
+#ifdef OPENHTJ2K_DECODE_TIMING
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
 }
 
 // ── Direct-to-planar decode ───────────────────────────────────────────────
@@ -1218,7 +1264,9 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     return;
   }
 
+#ifdef OPENHTJ2K_DECODE_TIMING
   timing_acc_.reset();
+#endif
   OPENHTJ2K_TIME_ATTACH(&timing_acc_);
   uint64_t pool_wait_base = 0, pool_work_base = 0;
   uint32_t pool_workers = 0;
@@ -1366,7 +1414,13 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
   cached_tileSet_[0].decode_line_based_stream_planar(main_header, reduce_NL, descs, nc);
 
   cached_header_fingerprint_ = fp;
+#ifdef OPENHTJ2K_DECODE_TIMING
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
 }
 
 void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
@@ -1380,7 +1434,9 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
         "openhtj2k_decoder_impl::invoke_line_based_predecoded().\n");
     throw std::exception();
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   timing_acc_.reset();
+#endif
   OPENHTJ2K_TIME_ATTACH(&timing_acc_);
   uint64_t pool_wait_base = 0, pool_work_base = 0;
   uint32_t pool_workers = 0;
@@ -1456,7 +1512,13 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
     }
     tileSet[i].decode_line_based_predecoded(main_header, reduce_NL, buf);
   }
+#ifdef OPENHTJ2K_DECODE_TIMING
   emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
 }
 
 void openhtj2k_decoder::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
