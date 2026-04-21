@@ -1,3 +1,45 @@
+# [0.18.2] - 2026-04-21
+
+## JPIP gigapixel viewer — mid-decode paint on slow fetches
+
+Third of the three small latency wins queued after v0.18.0's precinct
+cache.  During a response that's taking a long time to download, show
+the user whatever precincts have already arrived instead of holding
+the viewport stale until the final byte lands.
+
+Purely client-side (viewer JS only) — no server, WASM, or library
+changes.  Gated on wall-clock elapsed so fast fetches (cache hits,
+LAN round-trips) never trip it and don't pay the double-decode cost.
+
+### Browser viewer
+
+* **Mid-decode paint** fires at most once per response, after
+  `?midPaintMs` elapsed, from inside the `_jpip_feed_stream` read
+  loop.  It runs `jpip_end_frame_region` + `texSubImage2D` against
+  the partial `DataBinSet` so the user sees a progress frame with
+  whatever precincts have landed so far.
+* **Final paint** at end-of-response is unchanged — re-decodes with
+  the complete `DataBinSet` so the visible result is correct.
+* Stats bar now reports `mid-paint=<N>ms` when the branch fires so
+  the latency win is visible at a glance; `?debug=1` logs the same
+  to the console.
+
+### New URL parameter
+
+* **`?midPaintMs=N`** — wall-clock threshold in milliseconds.
+  Default `200`; set `0` to disable.  Chosen so the typical 1920
+  full-res response on LAN (~50 ms) never triggers, but a
+  multi-MB first-pan response over a home broadband link does.
+
+### Cost model
+
+Fast fetch (<200 ms): no mid-paint branch taken, no overhead.
+Slow fetch (>200 ms): one extra `jpip_end_frame_region` call
+(~20–50 ms CPU on a 1920 viewport) in exchange for seeing the
+partial image 150–500 ms earlier on a slow link.  Final paint
+always re-decodes so the on-screen result is correct.
+
+
 # [0.18.1] - 2026-04-21
 
 ## JPIP gigapixel viewer — adjacent-viewport halo prefetch
