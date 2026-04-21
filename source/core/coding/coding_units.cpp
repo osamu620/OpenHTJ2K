@@ -4085,8 +4085,7 @@ void j2k_tile::decode() {
   auto pool = ThreadPool::get();
   // std::vector<std::future<int>> results;
 #endif
-  {
-    OPENHTJ2K_TIME_SCOPE(BlockDecode);
+  OPENHTJ2K_TIME_REGION_BEGIN(BlockDecode)
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
     const uint8_t NL       = this->tcomp[c].get_dwt_levels();
@@ -4228,9 +4227,9 @@ void j2k_tile::decode() {
     aligned_mem_free(buf_for_states);
     aligned_mem_free(buf_for_samples);
   }
-  }  // end BlockDecode scope
+  OPENHTJ2K_TIME_REGION_END
 
-  OPENHTJ2K_TIME_SCOPE(IDWT);
+  OPENHTJ2K_TIME_REGION_BEGIN(IDWT)
   for (uint16_t c = 0; c < num_components; c++) {
     // const uint8_t ROIshift       = this->tcomp[c].get_ROIshift();
     const uint8_t NL             = this->tcomp[c].get_dwt_levels();
@@ -4312,6 +4311,7 @@ void j2k_tile::decode() {
     this->tcomp[c].set_pos1(cr->get_pos1());
 
   }  // end of component loop
+  OPENHTJ2K_TIME_REGION_END
 }
 void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band,
                            bool skip_body) {
