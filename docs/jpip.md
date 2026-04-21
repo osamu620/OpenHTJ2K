@@ -251,7 +251,8 @@ URL parameters:
 | `debounce=N` | trailing-debounce window in ms (default 60; `0` disables) |
 | `debug` | per-frame timing console dump |
 | `variant={st,mt}` | force single- or multi-threaded WASM |
-| `maxSize=WxH` | cap the WebGL render target to `WxH` (default `1920x1080`); CSS stretches to fill the window and `GL_LINEAR` upsamples on the GPU. Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass `maxSize=window` to disable the cap and render at full window resolution. |
+| `maxSize=WxH` | cap the WebGL render target to `WxH` (default `1920x1080`). Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass `maxSize=window` to disable the cap and render at full window resolution. |
+| `fit={stretch,contain}` | `stretch` (default) scales the render target up to fill the window with GPU-side `GL_LINEAR`; `contain` shows the canvas at native pixel scale centered in the window — like the foveation demo — with the `maxSize` cap defining the centered rectangle. |
 
 Pan events are debounced + coalesced: during an in-flight fetch, new
 events flip a "pending" slot rather than queue a second request, so
