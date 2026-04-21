@@ -136,6 +136,19 @@ if (NOT EMSCRIPTEN)
   endif()
 endif()
 
+# ── Decode-path per-stage timing instrumentation ────────────────────────────
+# Attaches lightweight wall-clock counters around parse / block-decode / IDWT /
+# color-transform / finalize, and per-worker idle/work counters in the thread
+# pool.  Default OFF — macros compile out to (void)0 so instrumented and stock
+# builds are binary-identical in the hot path.  Enable with
+#   -DOPENHTJ2K_DECODE_TIMING=ON
+# to drive a DecodeTimingReport through openhtj2k_decoder::set_timing_sink().
+option(OPENHTJ2K_DECODE_TIMING "Enable per-stage decode timing counters (default OFF)" OFF)
+if(OPENHTJ2K_DECODE_TIMING)
+  target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_DECODE_TIMING")
+  message(STATUS "OPENHTJ2K_DECODE_TIMING is set")
+endif()
+
 # ── QUIC / HTTP/3 support (Phase 5) ─────────────────────────────────────────
 # Requires MsQuic (QUIC transport) and nghttp3 (HTTP/3 framing).
 # On macOS: brew install libmsquic libnghttp3
