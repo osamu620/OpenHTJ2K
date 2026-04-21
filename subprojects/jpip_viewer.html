@@ -264,7 +264,7 @@
         <tr><td><code>?debug</code></td><td>off</td><td>Per-frame timing dump to the browser console.</td></tr>
         <tr><td><code>?variant=</code></td><td>auto</td><td><code>mt</code> or <code>st</code> — force multi- or single-threaded WASM.</td></tr>
         <tr><td><code>?maxSize=</code></td><td><code>1920x1080</code></td><td>Cap the WebGL render target to <code>WxH</code>. Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass <code>?maxSize=window</code> to disable the cap.</td></tr>
-        <tr><td><code>?fit=</code></td><td><code>stretch</code></td><td><code>stretch</code> — CSS scales the render target up to fill the window, GPU upsamples via <code>GL_LINEAR</code>. <code>contain</code> — CSS size == render size, canvas is shown at native pixel scale centered in the window (like the foveation demo).</td></tr>
+        <tr><td><code>?fit=</code></td><td><code>stretch</code></td><td><code>stretch</code> — CSS scales the render target up to fill the window, GPU upsamples via <code>GL_LINEAR</code>.<br><code>contain</code> — CSS size == render size, canvas is shown at native pixel scale centered in the window (like the foveation demo).</td></tr>
       </tbody>
     </table>
   </details>
@@ -297,7 +297,7 @@
         <tr><td>Main header</td><td><code>Hm</code></td><td><code>Hm</code></td></tr>
         <tr><td>Tile header</td><td><code>Ht</code></td><td><code>Ht0</code>, <code>Ht1-5</code></td></tr>
         <tr><td>Metadata bin</td><td><code>M</code></td><td><code>M0</code></td></tr>
-        <tr><td>Precinct</td><td><code>Hp</code></td><td><b>not sent</b></td></tr>
+        <tr><td>Precinct</td><td><code>P</code></td><td><b>not sent</b> by this demo</td></tr>
       </tbody>
     </table>
   </details>
