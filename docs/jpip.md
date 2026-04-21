@@ -272,6 +272,7 @@ URL parameters:
 | `precinctCacheMB=N` | LRU precinct cache budget in megabytes (v0.18.0); default `64`, pass `0` to disable. Received precincts are tracked in `&model=` so the server skips redelivery on subsequent pans (70–95% byte reduction typical). |
 | `prefetchMargin=N` | Adjacent-viewport halo prefetch (v0.18.1) — fetches precincts up to `N` canvas pixels outside the visible viewport so short follow-up pans hit in the LRU cache. Default `128`, pass `0` to disable. Cancelled on the next user interaction so continuous panning never pays bandwidth for it. |
 | `prefetchDelayMs=N` | Idle delay in ms before the halo prefetch fires. Default `150`. |
+| `midPaintMs=N` | Mid-decode paint (v0.18.2) — on slow fetches, render the partial DataBinSet after `N` ms so the user sees progress before the full response arrives. Default `200`; `0` disables. Fast fetches (LAN / cached) never trigger it. |
 
 Pan events are debounced + coalesced: during an in-flight fetch, new
 events flip a "pending" slot rather than queue a second request, so

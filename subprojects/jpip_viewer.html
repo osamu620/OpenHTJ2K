@@ -268,6 +268,7 @@
         <tr><td><code>?precinctCacheMB=</code></td><td><code>64</code></td><td>LRU precinct cache budget in megabytes. Received precincts are tracked in the <code>&amp;model=</code> cache-model advertisement so the server skips ones already in the viewer's cache on subsequent pans (70–95% byte reduction typical). Set <code>0</code> to disable.</td></tr>
         <tr><td><code>?prefetchMargin=</code></td><td><code>128</code></td><td>After each successful render, fetch an <i>N</i>-canvas-pixel halo of adjacent precincts into the LRU cache so short follow-up pans hit locally. Auto-cancelled when the user resumes interacting. Set <code>0</code> to disable.</td></tr>
         <tr><td><code>?prefetchDelayMs=</code></td><td><code>150</code></td><td>Idle-delay before the halo prefetch fires (in milliseconds). Short enough to overlap typical pause-and-examine behaviour; long enough that continuous panning never triggers it.</td></tr>
+        <tr><td><code>?midPaintMs=</code></td><td><code>200</code></td><td>Show a partial render (whatever precincts have arrived) if a fetch takes longer than <i>N</i> ms. Gives feedback on slow first-time loads; costs one extra decoder run. Fast (LAN / cached) fetches never trigger it. Set <code>0</code> to disable.</td></tr>
       </tbody>
     </table>
   </details>
@@ -422,6 +423,20 @@ const PREFETCH_DELAY_MS = (() => {
   const v = Number(new URLSearchParams(location.search).get('prefetchDelayMs'));
   return Number.isFinite(v) ? Math.max(0, v) : 150;
 })();
+
+// Mid-decode paint (v0.18.2+).  On slow fetches, show the viewer a
+// partial render (whatever precincts have arrived so far) before the
+// full response finishes downloading.  Cost: one extra decoder run
+// that the final paint will redo.  Gated on wall-clock elapsed so
+// fast fetches (cached regions, LAN / loopback) never trigger it and
+// don't pay the double-decode.  Default 200 ms chosen so the typical
+// 1920 full-res response on LAN (~50 ms) never trips it, but a
+// multi-MB first-pan response over a home broadband link does.
+// `?midPaintMs=0` disables; at most one mid-paint per response.
+const MID_PAINT_MS = (() => {
+  const v = Number(new URLSearchParams(location.search).get('midPaintMs'));
+  return Number.isFinite(v) ? Math.max(0, v) : 200;
+})();
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 
@@ -567,6 +582,32 @@ function scheduleFetch() {
   }, DEBOUNCE_MS);
 }
 
+// Decode the current DataBinSet into `rgbPtr` and upload to the WebGL
+// texture.  Shared between the mid-decode paint (fired during a slow
+// fetch to show the user something before the full response arrives)
+// and the final paint at end-of-response.  Returns true on success.
+function paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH) {
+  const needBytes = outW * outH * 4;
+  if (needBytes > rgbBufSz) {
+    if (rgbPtr) M._free(rgbPtr);
+    rgbPtr = M._malloc(needBytes);
+    rgbBufSz = needBytes;
+  }
+  const rc = M._jpip_end_frame_region(ctx, rgbPtr, outW, outH,
+                                       regionX, regionY, regionW, regionH);
+  if (rc !== 0) return false;
+  const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, outW * outH * 4);
+  gl.bindTexture(gl.TEXTURE_2D, glTex);
+  if (outW !== texW || outH !== texH) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, outW, outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    texW = outW; texH = outH;
+  } else {
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, outW, outH, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  }
+  drawViewport();
+  return true;
+}
+
 // Adjacent-viewport prefetch.  Builds a query for a region expanded by
 // PREFETCH_MARGIN_PX on each side of (regionX, regionY, regionW, regionH)
 // and pipes the response through jpip_feed_stream* so newly-received
@@ -699,6 +740,8 @@ async function fetchView() {
     M._jpip_feed_stream_begin(ctx);
     const reader = resp.body.getReader();
     let total = 0;
+    let midPaintFired = false;
+    let tMidPaint = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -707,46 +750,49 @@ async function fetchView() {
       const rc = M._jpip_feed_stream(ctx, ptr, value.length);
       if (rc !== 0) throw new Error(`feed_stream rc=${rc}`);
       total += value.length;
+      // Mid-decode paint: on genuinely slow fetches, render whatever
+      // precincts have landed in ctx->set so far so the user sees
+      // progress instead of a stale texture.  Fires at most once per
+      // response, only after MID_PAINT_MS of wall-clock elapsed —
+      // fast fetches (LAN, cache hit) never trip this branch.
+      if (!midPaintFired && MID_PAINT_MS > 0
+          && performance.now() - t0 >= MID_PAINT_MS) {
+        if (paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH)) {
+          midPaintFired = true;
+          tMidPaint = performance.now();
+          if (DEBUG_TIMING) {
+            console.log(`[jpip_viewer] mid-paint at ${(tMidPaint - t0).toFixed(1)}ms ` +
+              `(${(total/1024).toFixed(0)}KB received)`);
+          }
+        }
+      }
     }
     const tFetch = performance.now();
     if (M._jpip_feed_stream_end(ctx) !== 0) {
       throw new Error('feed_stream_end: stream closed mid-message');
     }
 
-    // Grow-only: reuse the RGB buffer across frames.  Reallocating 14+ MB
-    // on every pan event churns the WASM heap (which has ALLOW_MEMORY_GROWTH
-    // and fragments under repeated large malloc/free cycles).
-    const needBytes = outW * outH * 4;
-    if (needBytes > rgbBufSz) {
-      if (rgbPtr) M._free(rgbPtr);
-      rgbPtr = M._malloc(needBytes);
-      rgbBufSz = needBytes;
-    }
-    const rc = M._jpip_end_frame_region(ctx, rgbPtr, outW, outH,
-                                         regionX, regionY, regionW, regionH);
+    // Final paint: re-decodes with the full DataBinSet so the result is
+    // correct (not artefacted by missing precincts from a mid-paint).
+    const painted = paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH);
     const tDecode = performance.now();
-
-    if (rc === 0) {
-      const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, outW * outH * 4);
-      gl.bindTexture(gl.TEXTURE_2D, glTex);
-      if (outW !== texW || outH !== texH) {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, outW, outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-        texW = outW; texH = outH;
-      } else {
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, outW, outH, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-      }
+    if (painted) {
       decReduce = red;
       lastFetchKey = key;
-      drawViewport();
     }
+    const midSuffix = midPaintFired
+        ? ` | mid-paint=${(tMidPaint-t0).toFixed(0)}ms`
+        : '';
     $('stats').textContent =
       `${canvasW}×${canvasH} | zoom ${(zoom*100).toFixed(0)}% reduce=${red} region(${regionW}×${regionH}) | ` +
       `pan (${Math.round(panX)},${Math.round(panY)}) | ` +
-      `fetch=${(tFetch-t0).toFixed(0)}ms decode=${(tDecode-tFetch).toFixed(0)}ms | ${(total/1024).toFixed(0)}KB`;
+      `fetch=${(tFetch-t0).toFixed(0)}ms decode=${(tDecode-tFetch).toFixed(0)}ms | ${(total/1024).toFixed(0)}KB` +
+      midSuffix;
     if (DEBUG_TIMING) {
       console.log(`[jpip_viewer] red=${red} region=${regionW}x${regionH} ` +
         `fetch=${(tFetch-t0).toFixed(1)}ms decode=${(tDecode-tFetch).toFixed(1)}ms ` +
-        `total=${(tDecode-t0).toFixed(1)}ms bytes=${total}`);
+        `total=${(tDecode-t0).toFixed(1)}ms bytes=${total}` +
+        (midPaintFired ? ` mid=${(tMidPaint-t0).toFixed(1)}ms` : ''));
     }
   } catch (e) { $('stats').textContent = `error: ${e.message}`; }
   busy = false;
