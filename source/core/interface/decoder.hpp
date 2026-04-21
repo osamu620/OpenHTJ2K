@@ -31,7 +31,6 @@
 #include <functional>
 #include <memory>
 #include <vector>
-#include "decode_timing_report.hpp"
 #include "planar_output_desc.hpp"
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
   #define OPENHTJ2K_EXPORT __declspec(dllexport)
@@ -157,16 +156,6 @@ class openhtj2k_decoder {
                                                      std::vector<uint32_t> &, std::vector<uint8_t> &,
                                                      std::vector<bool> &);
   OPENHTJ2K_EXPORT void destroy();
-
-  // Per-stage decode timing sink.  When set, a DecodeTimingReport is
-  // emitted once at the end of each parse() and invoke*() call.  Only
-  // populated with non-zero counters in builds compiled with
-  // -DOPENHTJ2K_DECODE_TIMING=ON; the sink is invoked either way so
-  // that callers can rely on its lifecycle and detect at runtime
-  // whether the build is instrumented (all counters == 0 when not).
-  // Pass an empty std::function to clear.
-  OPENHTJ2K_EXPORT void set_timing_sink(std::function<void(const DecodeTimingReport &)> sink);
-
   OPENHTJ2K_EXPORT ~openhtj2k_decoder();
 };
 }  // namespace open_htj2k

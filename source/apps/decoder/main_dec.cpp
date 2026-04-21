@@ -32,7 +32,6 @@
 // (c) 2019 - 2021 Osamu Watanabe, Takushoku University, Vrije Universiteit Brussels
 
 #include <chrono>
-#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -468,9 +467,6 @@ void print_help(char *cmd) {
   printf("-num_threads n: Number of threads (0 = auto).\n");
   printf("-batch: Use batch (full-image buffer) decode path instead of the default streaming path.\n");
   printf("-ycbcr bt601|bt709: [EXPERIMENTAL] Convert YCbCr to RGB (PPM output only).\n");
-  printf("--timing: Print per-stage decode timing to stderr.  Requires a build with\n");
-  printf("          -DOPENHTJ2K_DECODE_TIMING=ON and -batch (streaming-path timing\n");
-  printf("          is a follow-up).  Without the build flag, counters report zero.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -559,7 +555,7 @@ int main(int argc, char *argv[]) {
   // Reject any unrecognised flags.
   {
     static const char *const known[] = {
-        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", "-batch", "-ycbcr", "--timing", nullptr};
+        "-h", "-i", "-o", "-reduce", "-iter", "-num_threads", "-batch", "-ycbcr", nullptr};
     for (int i = 1; i < argc; ++i) {
       if (argv[i][0] != '-') continue;
       bool recognised = false;
@@ -625,29 +621,6 @@ int main(int argc, char *argv[]) {
   }
 
   const bool use_batch = command_option_exists(argc, argv, "-batch");
-  const bool want_timing = command_option_exists(argc, argv, "--timing");
-  if (want_timing && !use_batch) {
-    fprintf(stderr,
-            "WARNING: --timing only populates in batch mode; streaming-path timing\n"
-            "         is a follow-up.  Add -batch to see per-stage counters.\n");
-  }
-  // Per-stage accumulator across all iterations.  The library sink fires once
-  // per parse() and once per invoke(), so we sum them here for the aggregate
-  // report at exit.  pool_wait/work counters come in already-diffed across
-  // each call, so summing is meaningful.
-  open_htj2k::DecodeTimingReport timing_total{};
-  uint32_t timing_pool_workers_last = 0;
-  uint64_t timing_num_reports       = 0;
-  auto timing_sink = [&](const open_htj2k::DecodeTimingReport &r) {
-    for (unsigned i = 0; i < static_cast<unsigned>(open_htj2k::DecodeStage::kCount); ++i) {
-      timing_total.stage_ns[i] += r.stage_ns[i];
-      timing_total.stage_count[i] += r.stage_count[i];
-    }
-    timing_total.pool_wait_ns += r.pool_wait_ns;
-    timing_total.pool_work_ns += r.pool_work_ns;
-    timing_pool_workers_last = r.pool_workers;
-    ++timing_num_reports;
-  };
 
   std::vector<uint32_t> img_width;
   std::vector<uint32_t> img_height;
@@ -668,7 +641,6 @@ int main(int argc, char *argv[]) {
       img_signed.clear();
       try {
         open_htj2k::openhtj2k_decoder decoder(infile_name, reduce_NL, num_threads);
-        if (want_timing) decoder.set_timing_sink(timing_sink);
         decoder.parse();
         decoder.invoke(buf, img_width, img_height, img_depth, img_signed);
       } catch (std::exception &exc) {
@@ -699,27 +671,6 @@ int main(int argc, char *argv[]) {
            total_samples * static_cast<double>(num_iterations) / static_cast<double>(count));
     printf("throughput %lf [usec/sample]\n",
            static_cast<double>(count) / static_cast<double>(num_iterations) / total_samples);
-    if (want_timing) {
-      double denom = static_cast<double>(num_iterations);
-      if (denom < 1.0) denom = 1.0;
-      fprintf(stderr, "\n--- decode timing (averaged over %d iter, %" PRIu64 " reports) ---\n",
-              num_iterations, timing_num_reports);
-      for (unsigned i = 0; i < static_cast<unsigned>(open_htj2k::DecodeStage::kCount); ++i) {
-        const auto s = static_cast<open_htj2k::DecodeStage>(i);
-        fprintf(stderr, "  %-18s %10.3f ms  (%" PRIu64 " calls total)\n",
-                open_htj2k::decode_stage_name(s),
-                static_cast<double>(timing_total.stage_ns[i]) / 1e6 / denom,
-                timing_total.stage_count[i]);
-      }
-      fprintf(stderr, "  %-18s %10.3f ms\n  %-18s %10.3f ms  (%u workers)\n",
-              "pool_wait_ns (sum)", static_cast<double>(timing_total.pool_wait_ns) / 1e6 / denom,
-              "pool_work_ns (sum)", static_cast<double>(timing_total.pool_work_ns) / 1e6 / denom,
-              timing_pool_workers_last);
-#ifndef OPENHTJ2K_DECODE_TIMING
-      fprintf(stderr,
-              "  (all counters are zero — build with -DOPENHTJ2K_DECODE_TIMING=ON)\n");
-#endif
-    }
     return EXIT_SUCCESS;
   }
 
