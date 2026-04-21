@@ -18,6 +18,9 @@
 // selected by the view-window resolver.  Stateless — no session, no
 // cache model, each request is self-contained.
 
+#include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -69,41 +72,145 @@ struct ServerState {
 // the client already has (per the cache model from §C.9).  When
 // `n_keys_out` is non-null the caller gets the precinct count back
 // without having to re-run resolve_view_window.
+//
+// `max_bytes`, when non-zero, is the §C.6.1 "Maximum Response Length"
+// cap: the cumulative payload size excluding the EOR message (the EOR
+// does not count per §D.3).  Messages are emitted in whole units —
+// if adding the next message would push the total past the cap, that
+// message is rolled back and emission stops.  EOR reason then becomes
+// `ByteLimit` (4) instead of `WindowDone` (2).  A `max_bytes` of 0
+// means no cap and preserves v0.16.0 behaviour.
 std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &vw,
                                       const CacheModel &client_cache = {},
-                                      size_t *n_keys_out = nullptr) {
+                                      size_t *n_keys_out = nullptr,
+                                      uint64_t max_bytes = 0) {
   auto keys = resolve_view_window(*st.idx, vw);
   if (n_keys_out) *n_keys_out = keys.size();
 
   std::vector<uint8_t> stream;
   MessageHeaderContext ctx;
-  if (!client_cache.has(kMsgClassMainHeader, 0))
-    emit_main_header_databin(st.codestream.data(), st.codestream.size(), st.layout, ctx, stream);
-  for (uint32_t t = 0; t < st.idx->num_tiles(); ++t) {
-    if (!client_cache.has(kMsgClassTileHeader, t))
-      emit_tile_header_databin(st.codestream.data(), st.codestream.size(),
-                               static_cast<uint16_t>(t), st.layout, ctx, stream);
-  }
-  if (!client_cache.has(kMsgClassMetadata, 0))
-    emit_metadata_bin_zero(ctx, stream);
 
-  // Emit exactly the precincts resolve_view_window selected.  The old code
-  // walked the full T×C×R×P grid and tested every precinct ID against a
-  // hash set built from `keys`, which is O(total_precincts) per request.
-  // On heic2501a (103K precincts, ~500-precinct typical fovea), the walk
-  // dominated — especially under the foveation demo's 3× amplification.
-  // JPP-stream messages are order-agnostic (each carries class + id; the
-  // client reassembler sorts them), so emitting in `keys` order is fine.
-  for (const auto &k : keys) {
-    const uint64_t I = st.idx->I(k.t, k.c, k.r, k.p_rc);
-    if (!client_cache.has(kMsgClassPrecinct, I)) {
-      emit_precinct_databin(st.codestream.data(), st.codestream.size(),
-                            k.t, k.c, k.r, k.p_rc,
-                            *st.idx, *st.locator, ctx, stream);
+  // Emit a single data-bin via `fn`, rolling back if the cap trips.
+  // Returns false when the cap is hit (caller stops emitting further
+  // messages; EOR still gets appended with reason=ByteLimit).
+  auto try_emit = [&](auto &&fn) -> bool {
+    const auto snap = stream.size();
+    fn();
+    if (max_bytes > 0 && stream.size() > max_bytes) {
+      stream.resize(snap);
+      return false;
+    }
+    return true;
+  };
+
+  bool truncated = false;
+  // §A.3.6.1: "servers should send metadata-bin 0 in advance of all other
+  // bins."  Interactive clients use its arrival (even as an empty bin with
+  // is_last=1) as the session-binding signal before they commit precinct
+  // data into their cache, so emit it first — before main-header — even
+  // for bare J2C codestreams that have no JP2/JPX box structure to ship.
+  if (!client_cache.has(kMsgClassMetadata, 0)) {
+    if (!try_emit([&] { emit_metadata_bin_zero(ctx, stream); })) truncated = true;
+  }
+  if (!truncated && !client_cache.has(kMsgClassMainHeader, 0)) {
+    if (!try_emit([&] {
+          emit_main_header_databin(st.codestream.data(), st.codestream.size(),
+                                    st.layout, ctx, stream);
+        })) truncated = true;
+  }
+  // §A.3.3: deliver the tile-header data-bin for every tile whose index
+  // appears in the view-window result — NOT for every tile in the image.
+  // On large multi-tile codestreams (heic2501a has ~41k tiles) iterating
+  // every tile also exploded the response with empty tile-headers for
+  // tiles well outside the fovea, crowding out actual precinct payload.
+  // Collect tile indices from `keys` in first-seen order so the resulting
+  // tile-header messages are deterministic.
+  if (!truncated) {
+    std::vector<uint16_t> window_tiles;
+    {
+      std::vector<bool> seen(st.idx->num_tiles(), false);
+      for (const auto &k : keys) {
+        if (!seen[k.t]) { seen[k.t] = true; window_tiles.push_back(k.t); }
+      }
+    }
+    for (uint16_t t : window_tiles) {
+      if (client_cache.has(kMsgClassTileHeader, t)) continue;
+      if (!try_emit([&] {
+            emit_tile_header_databin(st.codestream.data(), st.codestream.size(),
+                                      t, st.layout, ctx, stream);
+          })) { truncated = true; break; }
     }
   }
-  emit_eor(EorReason::WindowDone, ctx, stream);
+
+  // Emit exactly the precincts resolve_view_window selected, in ascending
+  // in-class-id (I) order.  resolve_view_window returns keys in
+  // (t, c, r, p_rc) order, which for our I = t + (c + s·C)·T formula gives
+  // IDs 0, 3, 6, … (step = C) before 1, 4, 7, … — i.e., component-major.
+  // Interactive clients iterating their cache by ascending bin-id expect
+  // id=1 and id=2 to arrive in the first response before id=3; if they see
+  // gaps they may refuse to treat the view-window as partially delivered
+  // and retry with the same cache model, never advertising the precincts
+  // they DID receive (because from their perspective those have not been
+  // "accepted" into the contiguous portion of the cache).  Sort by I
+  // before emission so deliveries are gap-free.
+  if (!truncated) {
+    struct KeyWithId { PrecinctKey k; uint64_t I; };
+    std::vector<KeyWithId> ordered;
+    ordered.reserve(keys.size());
+    for (const auto &k : keys) {
+      ordered.push_back({k, st.idx->I(k.t, k.c, k.r, k.p_rc)});
+    }
+    std::sort(ordered.begin(), ordered.end(),
+              [](const KeyWithId &a, const KeyWithId &b) { return a.I < b.I; });
+    for (const auto &e : ordered) {
+      if (client_cache.has(kMsgClassPrecinct, e.I)) continue;
+      if (!try_emit([&] {
+            emit_precinct_databin(st.codestream.data(), st.codestream.size(),
+                                  e.k.t, e.k.c, e.k.r, e.k.p_rc,
+                                  *st.idx, *st.locator, ctx, stream);
+          })) { truncated = true; break; }
+    }
+  }
+
+  emit_eor(truncated ? EorReason::ByteLimit : EorReason::WindowDone, ctx, stream);
   return stream;
+}
+
+// Find the "<Name>: <value>" header line for `name` (case-insensitive) in a
+// buffer holding the complete HTTP request headers up to the \r\n\r\n
+// terminator.  Returns the value with surrounding whitespace trimmed, or an
+// empty string if not found.  Used by the POST handler to read
+// Content-Length.
+std::string find_header(const uint8_t *buf, std::size_t len, const char *name) {
+  const std::size_t nlen = std::strlen(name);
+  const auto ieq = [](char a, char b) { return std::tolower(static_cast<unsigned char>(a))
+                                            == std::tolower(static_cast<unsigned char>(b)); };
+  // Skip the first line (request line).  Walk each subsequent CRLF-delimited
+  // header and try to match `name`.
+  std::size_t i = 0;
+  while (i < len && buf[i] != '\n') ++i;
+  if (i < len) ++i;  // past the \n of the first line
+  while (i + nlen + 1 < len) {
+    std::size_t end = i;
+    while (end < len && buf[end] != '\r' && buf[end] != '\n') ++end;
+    if (end - i >= nlen + 1 && buf[i + nlen] == ':') {
+      bool match = true;
+      for (std::size_t j = 0; j < nlen; ++j) {
+        if (!ieq(static_cast<char>(buf[i + j]), name[j])) { match = false; break; }
+      }
+      if (match) {
+        std::size_t v0 = i + nlen + 1;
+        while (v0 < end && (buf[v0] == ' ' || buf[v0] == '\t')) ++v0;
+        std::size_t v1 = end;
+        while (v1 > v0 && (buf[v1 - 1] == ' ' || buf[v1 - 1] == '\t')) --v1;
+        return std::string(reinterpret_cast<const char *>(buf + v0), v1 - v0);
+      }
+    }
+    while (end < len && (buf[end] == '\r' || buf[end] == '\n')) ++end;
+    if (end == i) break;
+    i = end;
+  }
+  return {};
 }
 
 void handle_connection(TcpStream &conn, const ServerState &st) {
@@ -112,12 +219,17 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
   if (hdr_bytes == 0) return;
 
   std::string request_line;
+  std::size_t body_offset = 0;  // index in `raw` of first byte past "\r\n\r\n"
   {
     const char *s = reinterpret_cast<const char *>(raw.data());
     const char *eol = static_cast<const char *>(std::memchr(s, '\r', hdr_bytes));
     if (!eol) eol = static_cast<const char *>(std::memchr(s, '\n', hdr_bytes));
     if (!eol) { conn.send_all(format_error_response(400, "Bad Request")); return; }
     request_line.assign(s, eol);
+    // Locate the \r\n\r\n boundary so we know where a POST body begins.
+    for (std::size_t i = 0; i + 4 <= hdr_bytes; ++i) {
+      if (std::memcmp(s + i, "\r\n\r\n", 4) == 0) { body_offset = i + 4; break; }
+    }
   }
 
   // Handle CORS preflight (OPTIONS) — browsers send this before cross-origin
@@ -126,7 +238,7 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
     const char *cors =
         "HTTP/1.1 204 No Content\r\n"
         "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
         "Access-Control-Allow-Headers: *\r\n"
         "Access-Control-Max-Age: 86400\r\n"
         "Connection: close\r\n"
@@ -136,7 +248,55 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
   }
 
   std::string path, query;
-  if (!split_http_get_line(request_line, &path, &query)) {
+  if (request_line.compare(0, 5, "POST ") == 0) {
+    // §C.1: clients MAY POST with the query string as the body when the
+    // request doesn't fit as a URL.  Parse path from the request line,
+    // then read Content-Length bytes of body and use them as the query.
+    const std::size_t sp1 = request_line.find(' ');
+    const std::size_t sp2 = (sp1 == std::string::npos) ? std::string::npos
+                                                       : request_line.find(' ', sp1 + 1);
+    if (sp1 == std::string::npos || sp2 == std::string::npos) {
+      conn.send_all(format_error_response(400, "Bad Request"));
+      return;
+    }
+    path = request_line.substr(sp1 + 1, sp2 - sp1 - 1);
+
+    const std::string clen_s = find_header(raw.data(), hdr_bytes, "Content-Length");
+    if (clen_s.empty()) {
+      conn.send_all(format_error_response(411, "Length Required"));
+      return;
+    }
+    char *clen_end = nullptr;
+    const unsigned long long clen = std::strtoull(clen_s.c_str(), &clen_end, 10);
+    if (clen_end == clen_s.c_str() || *clen_end != '\0') {
+      conn.send_all(format_error_response(400, "Bad Request"));
+      return;
+    }
+    constexpr std::size_t kMaxPostBody = 16u * 1024u * 1024u;  // 16 MB cap
+    if (clen > kMaxPostBody) {
+      conn.send_all(format_error_response(413, "Payload Too Large"));
+      return;
+    }
+
+    std::vector<uint8_t> body;
+    body.reserve(static_cast<std::size_t>(clen));
+    // Absorb any body bytes already captured alongside the headers.
+    if (body_offset < hdr_bytes) {
+      body.insert(body.end(), raw.begin() + body_offset, raw.begin() + hdr_bytes);
+    }
+    if (body.size() < clen) {
+      const std::size_t remaining = static_cast<std::size_t>(clen) - body.size();
+      const std::size_t prev = body.size();
+      body.resize(static_cast<std::size_t>(clen));
+      if (!conn.recv_all(body.data() + prev, remaining)) {
+        conn.send_all(format_error_response(400, "Bad Request"));
+        return;
+      }
+    } else if (body.size() > clen) {
+      body.resize(static_cast<std::size_t>(clen));
+    }
+    query.assign(reinterpret_cast<const char *>(body.data()), body.size());
+  } else if (!split_http_get_line(request_line, &path, &query)) {
     conn.send_all(format_error_response(405, "Method Not Allowed"));
     return;
   }
@@ -168,7 +328,8 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
   CacheModel client_cache;
   if (!req.model.empty()) client_cache = CacheModel::parse(req.model);
   size_t n_keys = 0;
-  auto jpp = build_jpp_stream(st, req.view_window, client_cache, &n_keys);
+  auto jpp = build_jpp_stream(st, req.view_window, client_cache, &n_keys,
+                              req.has_len ? req.len : 0);
 
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -181,7 +342,28 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
               jpp.size(), ms);
   std::fflush(stdout);
 
-  auto resp = format_jpp_response(jpp.data(), jpp.size(), st.target_id);
+  // §C.3.3 / §D.2.5: when the client requests `cnew=http`, reply with
+  // `JPIP-cnew: cid=…,path=…,transport=http`.  Our server is stateless,
+  // so the cid is effectively a token the client can echo in later
+  // requests without the server needing to validate it; the cache-model
+  // field carries all the state we actually need.  Interactive GUI
+  // clients will not commit received precincts to their persistent cache
+  // unless this header arrives on the channel-establishment response,
+  // leading to a silent retry loop.
+  std::string cnew_header;
+  if (req.has_cnew && (req.cnew.empty() || req.cnew.find("http") != std::string::npos)) {
+    // Monotonic cid counter — survives for the process lifetime.  Stateless
+    // so collisions across restarts are harmless; the client treats the
+    // cid as opaque.
+    static std::atomic<uint64_t> s_cid_counter{0};
+    const uint64_t cid = s_cid_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    char buf[192];
+    std::snprintf(buf, sizeof(buf),
+                  "cid=C%llu,path=jpip,transport=http",
+                  static_cast<unsigned long long>(cid));
+    cnew_header.assign(buf);
+  }
+  auto resp = format_jpp_response(jpp.data(), jpp.size(), st.target_id, cnew_header);
   conn.send_all(resp);
 }
 
@@ -208,7 +390,8 @@ std::vector<uint8_t> handle_h3_request(const ServerState &st,
   CacheModel h3_cache;
   if (!jpip_req.model.empty()) h3_cache = CacheModel::parse(jpip_req.model);
   size_t n_keys = 0;
-  auto jpp = build_jpp_stream(st, jpip_req.view_window, h3_cache, &n_keys);
+  auto jpp = build_jpp_stream(st, jpip_req.view_window, h3_cache, &n_keys,
+                              jpip_req.has_len ? jpip_req.len : 0);
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
@@ -260,7 +443,17 @@ int main(int argc, char **argv) {
   st.locator = PacketLocator::build(st.codestream.data(), st.codestream.size(), *st.idx, st.layout);
   if (!st.locator) { std::fprintf(stderr, "PacketLocator build failed\n"); return EXIT_FAILURE; }
 
-  st.target_id = infile;
+  // JPIP §D.4: the target identifier is an opaque string.  Emitting the
+  // full server-side filesystem path (as we did before) is legal but
+  // works poorly with clients that treat the TID as a token — some echo
+  // it back verbatim in `&tid=` on every follow-up request, producing
+  // unusually long, slash-laden query strings.  Strip down to the
+  // basename so the TID is a short, path-free identifier.
+  {
+    const auto last_slash = infile.find_last_of("/\\");
+    st.target_id = (last_slash == std::string::npos) ? infile
+                                                     : infile.substr(last_slash + 1);
+  }
 
   std::printf("JPIP server: %s (%u×%u, %llu precincts)\n",
               infile.c_str(),

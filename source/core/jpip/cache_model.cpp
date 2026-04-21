@@ -22,23 +22,32 @@ bool CacheModel::has(uint8_t class_id, uint64_t in_class_id) const {
 
 void CacheModel::clear() { bins_.clear(); }
 
-// Class descriptor prefix per §C.9.
+// Class descriptor prefix per §C.9.3.1.  Precinct data-bins use "P", NOT
+// "Hp" — "Hp" was an earlier misreading of the spec that made our server
+// silently discard every precinct entry clients put in their outgoing
+// cache model, so the server re-sent precincts the client already had.
+// On stateful clients this filled the session cache with duplicates.
 static const char *class_prefix(uint8_t cls) {
   switch (cls) {
     case kMsgClassMainHeader: return "Hm";
-    case kMsgClassTileHeader: return "Ht";
-    case kMsgClassPrecinct:   return "Hp";
+    case kMsgClassTileHeader: return "H";
+    case kMsgClassPrecinct:   return "P";
     case kMsgClassMetadata:   return "M";
     default:                  return nullptr;
   }
 }
 
 static uint8_t prefix_to_class(const std::string &s, size_t &pos) {
+  // Order matters — "Hm" and "Ht" must be tried before bare "H".  Accept
+  // legacy "Hp" / "Ht" forms too so old clients (and our own pre-fix
+  // serialiser output that may be cached anywhere) round-trip cleanly.
   if (pos + 2 <= s.size()) {
     if (s[pos] == 'H' && s[pos + 1] == 'm') { pos += 2; return kMsgClassMainHeader; }
     if (s[pos] == 'H' && s[pos + 1] == 't') { pos += 2; return kMsgClassTileHeader; }
     if (s[pos] == 'H' && s[pos + 1] == 'p') { pos += 2; return kMsgClassPrecinct; }
   }
+  if (pos < s.size() && s[pos] == 'P') { pos += 1; return kMsgClassPrecinct; }
+  if (pos < s.size() && s[pos] == 'H') { pos += 1; return kMsgClassTileHeader; }
   if (pos < s.size() && s[pos] == 'M') { pos += 1; return kMsgClassMetadata; }
   return 0xFF;
 }

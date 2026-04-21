@@ -63,7 +63,8 @@ open_htj2k_jpip_server <input.j2c>
 Query grammar (§C.4):
 
 ```
-GET /jpip?fsiz=<fx>,<fy>&roff=<ox>,<oy>&rsiz=<sx>,<sy>&type=jpp-stream[&model=...]
+GET /jpip?fsiz=<fx>,<fy>&roff=<ox>,<oy>&rsiz=<sx>,<sy>&type=jpp-stream
+          [&len=<N>][&model=...][&cnew=http]
 ```
 
 - `fsiz` — target resolution frame size; the server picks the
@@ -72,13 +73,36 @@ GET /jpip?fsiz=<fx>,<fy>&roff=<ox>,<oy>&rsiz=<sx>,<sy>&type=jpp-stream[&model=..
   full frame).
 - `type=jpp-stream` — JPP-stream response (the only wire format this
   server speaks).
+- `len=<N>` — §C.6.1 Maximum Response Length, in bytes.  The server
+  emits whole messages up to `N` bytes of JPP-stream payload (EOR
+  does not count) and terminates with EOR reason=4 (`ByteLimit`)
+  when it stops early, or reason=2 (`WindowDone`) when the entire
+  view-window fit.
 - `model` — §C.9 cache-model advertisement; see
   [cache-model field](#cache-model-field--c9).
+- `cnew=http` — §C.3.3 session/channel establishment.  The server
+  replies with a `JPIP-cnew:
+  cid=C<n>,path=jpip,transport=http` response header.  This server
+  is stateless — the `cid` is opaque and the cache-model field
+  carries all session state — but interactive clients require the
+  header before they will commit received data-bins to their
+  persistent cache.
 
-Responses are complete JPP-streams: main-header data-bin, tile-header
-data-bins, metadata-bin 0, the selected precinct data-bins (one per
-layer per precinct), and an EOR (End of Response) message. CORS
-preflight (`OPTIONS`) is handled for cross-origin browser access.
+HTTP **POST** is also accepted (§C.1): the query string moves into
+the request body when GET's URL-length limit would otherwise
+truncate large cache-model advertisements.  The server caps the
+body at 16 MB.
+
+Responses are complete JPP-streams.  Per §A.3.6.1, metadata-bin 0
+is emitted first — even empty, as a session-binding signal —
+followed by main-header (§A.3.6), one tile-header data-bin per
+tile whose index appears in the view-window result (§A.3.3),
+every precinct data-bin selected by the view-window resolver, and
+an EOR.  Large precinct data-bins are chunked into 987-byte
+messages (`is_last=0` on all but the final chunk).  Precincts are
+delivered in ascending in-class-id order so clients that iterate
+their cache by bin-id see no gaps.  CORS preflight (`OPTIONS`) is
+handled for cross-origin browser access.
 
 ## Native demo — `open_htj2k_jpip_demo`
 

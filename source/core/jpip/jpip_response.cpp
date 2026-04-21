@@ -10,7 +10,8 @@ namespace open_htj2k {
 namespace jpip {
 
 std::vector<uint8_t> format_jpp_response(const uint8_t *body, std::size_t body_len,
-                                         const std::string &target_id) {
+                                         const std::string &target_id,
+                                         const std::string &cnew_header) {
   char header[512];
   int n = std::snprintf(header, sizeof(header),
                         "HTTP/1.1 200 OK\r\n"
@@ -20,7 +21,7 @@ std::vector<uint8_t> format_jpp_response(const uint8_t *body, std::size_t body_l
                         "Connection: close\r\n",
                         body_len);
   std::vector<uint8_t> out;
-  out.reserve(static_cast<std::size_t>(n) + target_id.size() + 32 + body_len);
+  out.reserve(static_cast<std::size_t>(n) + target_id.size() + cnew_header.size() + 64 + body_len);
   out.insert(out.end(), reinterpret_cast<const uint8_t *>(header),
              reinterpret_cast<const uint8_t *>(header) + n);
   if (!target_id.empty()) {
@@ -28,6 +29,12 @@ std::vector<uint8_t> format_jpp_response(const uint8_t *body, std::size_t body_l
     int tn = std::snprintf(tid, sizeof(tid), "JPIP-tid: %s\r\n", target_id.c_str());
     out.insert(out.end(), reinterpret_cast<const uint8_t *>(tid),
                reinterpret_cast<const uint8_t *>(tid) + tn);
+  }
+  if (!cnew_header.empty()) {
+    char cn[512];
+    int cnn = std::snprintf(cn, sizeof(cn), "JPIP-cnew: %s\r\n", cnew_header.c_str());
+    out.insert(out.end(), reinterpret_cast<const uint8_t *>(cn),
+               reinterpret_cast<const uint8_t *>(cn) + cnn);
   }
   out.push_back('\r');
   out.push_back('\n');

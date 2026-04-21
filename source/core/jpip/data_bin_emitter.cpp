@@ -3,31 +3,57 @@
 
 #include "data_bin_emitter.hpp"
 
+#include <algorithm>
+
 namespace open_htj2k {
 namespace jpip {
 
 namespace {
 
-// Append a complete JPP-stream message (header + payload) covering
-// `payload_len` bytes from `payload`.  Reserves enough capacity in `out`
-// up front so the encoded header bytes don't trigger a reallocation
-// while we're still writing them.
+// Upper bound on per-message payload size.  Interop testing showed that
+// some external JPIP clients trip their own cache-segment bookkeeping
+// when a single message carries more than ~1 KB of payload.  987 bytes
+// is the chunk size other conforming servers use and fits inside a 1 KB
+// segment buffer together with the encoded message header.  Data-bin
+// contributions that fit in one chunk still emit a single `is_last=1`
+// message; larger contributions are split across multiple messages with
+// monotonically increasing `msg_offset`.
+constexpr std::size_t kMaxMessagePayload = 987;
+
+// Append a complete JPP-stream data-bin contribution.  For bins whose
+// payload fits in `kMaxMessagePayload` this is a single message with
+// `is_last=1`.  Larger bins are split into multiple messages with
+// monotonically increasing `msg_offset`; only the final message has
+// `is_last=1`.  The split is on byte boundaries — JPP messages do not
+// constrain split points within the payload.
 std::size_t append_message(MessageHeader hdr, const uint8_t *payload,
                            std::size_t payload_len,
                            MessageHeaderContext &ctx,
                            std::vector<uint8_t> &out) {
-  hdr.msg_offset = 0;
-  hdr.msg_length = payload_len;
-  hdr.is_last    = true;
+  std::size_t written = 0;
+  std::size_t offset  = 0;
+  // Always emit at least one message, even for empty bins (so callers can
+  // declare "empty and complete" via msg_length=0, is_last=1).
+  do {
+    const std::size_t remaining = payload_len - offset;
+    const std::size_t this_len  = std::min(remaining, kMaxMessagePayload);
+    const bool        is_last   = (offset + this_len == payload_len);
 
-  const std::size_t prev = out.size();
-  out.resize(prev + kMessageHeaderMaxBytes);
-  const std::size_t hdr_bytes = encode_header(hdr, ctx, out.data() + prev);
-  // Truncate the over-reservation back to the actual header length, then
-  // append the payload bytes.
-  out.resize(prev + hdr_bytes);
-  out.insert(out.end(), payload, payload + payload_len);
-  return hdr_bytes + payload_len;
+    hdr.msg_offset = offset;
+    hdr.msg_length = this_len;
+    hdr.is_last    = is_last;
+
+    const std::size_t prev = out.size();
+    out.resize(prev + kMessageHeaderMaxBytes);
+    const std::size_t hdr_bytes = encode_header(hdr, ctx, out.data() + prev);
+    out.resize(prev + hdr_bytes);
+    if (this_len > 0) {
+      out.insert(out.end(), payload + offset, payload + offset + this_len);
+    }
+    written += hdr_bytes + this_len;
+    offset  += this_len;
+  } while (offset < payload_len);
+  return written;
 }
 
 }  // namespace

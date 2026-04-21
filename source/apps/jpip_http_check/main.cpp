@@ -150,6 +150,37 @@ int main() {
     CHECK(s.find("Content-Length: 0") != std::string::npos, "empty body");
   }
 
+  // ── parse_jpip_query: len= + quality= (§C.6.1) ─────────────────────────
+  {
+    JpipRequest req;
+    auto s = parse_jpip_query("fsiz=1,1&type=jpp-stream&len=4096&quality=3", &req);
+    CHECK(s == RequestParseStatus::Ok, "status=%d", static_cast<int>(s));
+    CHECK(req.has_len, "has_len");
+    CHECK(req.len == 4096, "len=%llu", static_cast<unsigned long long>(req.len));
+    CHECK(req.has_quality, "has_quality");
+    CHECK(req.quality == 3, "quality=%u", req.quality);
+  }
+  {
+    JpipRequest req;
+    auto s = parse_jpip_query("fsiz=1,1&type=jpp-stream", &req);
+    CHECK(s == RequestParseStatus::Ok, "status");
+    CHECK(!req.has_len && req.len == 0, "no len");
+    CHECK(!req.has_quality && req.quality == 0, "no quality");
+  }
+  {
+    // Malformed len (non-numeric) -> MalformedField.
+    JpipRequest req;
+    auto s = parse_jpip_query("fsiz=1,1&len=abc", &req);
+    CHECK(s == RequestParseStatus::MalformedField, "reject non-numeric len");
+  }
+  {
+    // Large len value round-trips intact.
+    JpipRequest req;
+    auto s = parse_jpip_query("len=4294967296", &req);
+    CHECK(s == RequestParseStatus::Ok, "status");
+    CHECK(req.len == 4294967296ULL, "len=%llu", static_cast<unsigned long long>(req.len));
+  }
+
   if (failures == 0) {
     std::printf("OK http_check: request/response formatting all pass\n");
     return 0;
