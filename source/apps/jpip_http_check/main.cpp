@@ -11,9 +11,14 @@
 #include "jpip_request.hpp"
 #include "jpip_response.hpp"
 
+using open_htj2k::jpip::decode_chunked_body;
+using open_htj2k::jpip::format_chunk_header;
 using open_htj2k::jpip::format_error_response;
 using open_htj2k::jpip::format_jpp_response;
+using open_htj2k::jpip::format_jpp_response_headers_chunked;
+using open_htj2k::jpip::format_last_chunk;
 using open_htj2k::jpip::JpipRequest;
+using open_htj2k::jpip::parse_http_chunked;
 using open_htj2k::jpip::parse_http_content_length;
 using open_htj2k::jpip::parse_jpip_query;
 using open_htj2k::jpip::RequestParseStatus;
@@ -179,6 +184,81 @@ int main() {
     auto s = parse_jpip_query("len=4294967296", &req);
     CHECK(s == RequestParseStatus::Ok, "status");
     CHECK(req.len == 4294967296ULL, "len=%llu", static_cast<unsigned long long>(req.len));
+  }
+
+  // ── chunked headers + chunk framing round-trip ────────────────────────
+  {
+    auto hdrs = format_jpp_response_headers_chunked("tid-foo");
+    std::string hs(hdrs.begin(), hdrs.end());
+    CHECK(hs.find("Transfer-Encoding: chunked") != std::string::npos,
+          "chunked header missing");
+    CHECK(hs.find("Content-Length") == std::string::npos,
+          "chunked response must not carry Content-Length");
+    CHECK(hs.find("JPIP-tid: tid-foo") != std::string::npos, "JPIP-tid missing");
+    CHECK(hs.size() >= 4 && std::memcmp(hs.data() + hs.size() - 4, "\r\n\r\n", 4) == 0,
+          "chunked headers must end with CRLFCRLF");
+
+    // Assemble a complete chunked response: headers, three chunks, last chunk.
+    const uint8_t msg_a[] = {0x01, 0x02, 0x03};
+    const uint8_t msg_b[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE};
+    const uint8_t msg_c[] = {0x42};
+
+    std::vector<uint8_t> resp = hdrs;
+    for (const auto &m : {std::vector<uint8_t>(msg_a, msg_a + sizeof(msg_a)),
+                          std::vector<uint8_t>(msg_b, msg_b + sizeof(msg_b)),
+                          std::vector<uint8_t>(msg_c, msg_c + sizeof(msg_c))}) {
+      auto ch = format_chunk_header(m.size());
+      resp.insert(resp.end(), ch.begin(), ch.end());
+      resp.insert(resp.end(), m.begin(), m.end());
+      resp.push_back('\r');
+      resp.push_back('\n');
+    }
+    auto last = format_last_chunk();
+    resp.insert(resp.end(), last.begin(), last.end());
+
+    std::size_t hdr_end = 0;
+    CHECK(parse_http_chunked(resp.data(), resp.size(), &hdr_end),
+          "parse_http_chunked should detect chunked");
+
+    std::vector<uint8_t> decoded;
+    CHECK(decode_chunked_body(resp.data() + hdr_end, resp.size() - hdr_end, &decoded),
+          "decode_chunked_body");
+    const std::vector<uint8_t> expect = {
+        0x01, 0x02, 0x03, 0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0x42};
+    CHECK(decoded == expect, "decoded body mismatch (size=%zu)", decoded.size());
+  }
+
+  // ── decode_chunked_body rejects malformed inputs ───────────────────────
+  {
+    std::vector<uint8_t> out;
+    // Missing terminator.
+    const char *no_term = "3\r\nABC\r\n";
+    CHECK(!decode_chunked_body(reinterpret_cast<const uint8_t *>(no_term),
+                               std::strlen(no_term), &out),
+          "unterminated chunked body must fail");
+    // Non-hex size.
+    const char *bad_hex = "zz\r\n\r\n";
+    CHECK(!decode_chunked_body(reinterpret_cast<const uint8_t *>(bad_hex),
+                               std::strlen(bad_hex), &out),
+          "non-hex chunk size must fail");
+    // Terminating 0-chunk alone is a valid empty body.
+    const char *zero_only = "0\r\n\r\n";
+    std::vector<uint8_t> empty_out;
+    CHECK(decode_chunked_body(reinterpret_cast<const uint8_t *>(zero_only),
+                              std::strlen(zero_only), &empty_out),
+          "`0\\r\\n\\r\\n` is a legal empty body");
+    CHECK(empty_out.empty(), "empty body decodes to empty vector");
+  }
+
+  // ── Content-Length path unchanged by chunked additions ─────────────────
+  {
+    const uint8_t body[] = {0x11, 0x22};
+    auto resp = format_jpp_response(body, sizeof(body), "");
+    std::size_t hdr_end = 0;
+    CHECK(!parse_http_chunked(resp.data(), resp.size(), &hdr_end),
+          "Content-Length response must not be flagged as chunked");
+    const std::size_t cl = parse_http_content_length(resp.data(), resp.size(), &hdr_end);
+    CHECK(cl == 2, "Content-Length still parses on legacy path");
   }
 
   if (failures == 0) {

@@ -88,6 +88,13 @@ class OPENHTJ2K_JPIP_EXPORT TcpStream {
   // header terminator) or `max_bytes` have been read.  Returns the total
   // bytes accumulated in `buf`.  Returns 0 on EOF / error.
   std::size_t recv_until_header_end(std::vector<uint8_t> &buf, std::size_t max_bytes = 65536);
+  // Read whatever bytes are available (up to `len`) without blocking for
+  // more.  Returns the byte count on success, 0 on graceful EOF, SIZE_MAX
+  // on error.
+  std::size_t recv_some(uint8_t *buf, std::size_t len);
+  // Append bytes to `buf` until the peer closes the connection.  Returns
+  // total bytes read (0 if the connection was already closed on entry).
+  std::size_t recv_to_eof(std::vector<uint8_t> &buf);
   void close();
   bool is_open() const { return fd_ != kTcpInvalidSocket; }
   const std::string &last_error() const { return err_; }

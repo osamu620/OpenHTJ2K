@@ -17,6 +17,12 @@ add_test(NAME jpip_http_format COMMAND jpip_http_check)
 # ── TCP socket loopback (Phase 3 transport layer) ──
 add_test(NAME jpip_tcp_loopback COMMAND jpip_tcp_check)
 
+# ── Transfer-Encoding: chunked round-trip (issue #297) ──
+# Spawns a hand-rolled chunked HTTP responder on a localhost port,
+# drives JpipClient::fetch, and verifies the client's chunked decoder
+# recovers the JPP-stream bit-for-bit.
+add_test(NAME jpip_chunked_roundtrip COMMAND jpip_chunked_check)
+
 # ── JPP-stream message header codec (§A.2 + Tables A.1, A.2) ──
 # Self-contained: round-trip + spec §A.3.2.2 byte-identical interop +
 # dependent-form behaviour + rejection cases.

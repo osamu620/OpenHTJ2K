@@ -80,28 +80,46 @@ bool JpipClient::fetch(const std::string &host, uint16_t port,
     return false;
   }
 
-  // Parse Content-Length and find body start.
+  // Decide whether this is a chunked or Content-Length response.  We
+  // accept both because the server defaults to chunked (for progressive
+  // delivery of large view-windows) but honours `--no-chunked` for clients
+  // that can't parse the chunked wire format.
   std::size_t header_end = 0;
-  const std::size_t content_length = parse_http_content_length(raw.data(), raw.size(), &header_end);
-  if (content_length == SIZE_MAX) {
-    err_ = "missing Content-Length header";
-    return false;
-  }
-
-  // We may have already received part of the body in the header read.
-  const std::size_t body_already = raw.size() - header_end;
   std::vector<uint8_t> body;
-  body.reserve(content_length);
-  body.insert(body.end(), raw.data() + header_end, raw.data() + raw.size());
+  const bool is_chunked = parse_http_chunked(raw.data(), raw.size(), &header_end);
 
-  // Read the remaining body bytes.
-  if (body.size() < content_length) {
-    const std::size_t remaining = content_length - body.size();
-    const std::size_t prev = body.size();
-    body.resize(content_length);
-    if (!conn.recv_all(body.data() + prev, remaining)) {
-      err_ = "recv body: " + conn.last_error();
+  if (is_chunked) {
+    // The server uses `Connection: close` for every response, so the
+    // simplest and most robust client policy is to drain to EOF then
+    // decode the chunked body in one pass.  This still benefits from
+    // progressive delivery on the wire because the server has already
+    // flushed each JPP message to the socket as it was produced — the
+    // client just happens to hold the final decode until the last byte
+    // is in hand, which we can relax in a later refactor if we want to
+    // feed the JPP parser incrementally.
+    std::vector<uint8_t> encoded(raw.begin() + static_cast<std::ptrdiff_t>(header_end),
+                                  raw.end());
+    conn.recv_to_eof(encoded);
+    if (!decode_chunked_body(encoded.data(), encoded.size(), &body)) {
+      err_ = "decode_chunked_body failed";
       return false;
+    }
+  } else {
+    const std::size_t content_length = parse_http_content_length(raw.data(), raw.size(), &header_end);
+    if (content_length == SIZE_MAX) {
+      err_ = "missing Content-Length/Transfer-Encoding";
+      return false;
+    }
+    body.reserve(content_length);
+    body.insert(body.end(), raw.data() + header_end, raw.data() + raw.size());
+    if (body.size() < content_length) {
+      const std::size_t remaining = content_length - body.size();
+      const std::size_t prev = body.size();
+      body.resize(content_length);
+      if (!conn.recv_all(body.data() + prev, remaining)) {
+        err_ = "recv body: " + conn.last_error();
+        return false;
+      }
     }
   }
 
