@@ -50,6 +50,7 @@
   #include <sys/stat.h>
 #endif
 #include "coding_units.hpp"
+#include "decode_timing.hpp"
 #include "ThreadPool.hpp"
 #ifdef _OPENMP
   #include <omp.h>
@@ -90,6 +91,18 @@ class openhtj2k_decoder_impl {
   // each tile's tile_buf.  Empty std::function means "do not observe".
   std::function<void(uint16_t, uint16_t, uint8_t, uint32_t, uint16_t, uint64_t, uint64_t)>
       packet_observer_;
+
+  // Per-stage decode timing.  Accumulator is present in every build so the
+  // sink lifecycle is consistent; the scope macros are no-ops when the
+  // OPENHTJ2K_DECODE_TIMING macro is undefined, so no counters are written.
+  internal::DecodeTimingAccumulator timing_acc_;
+  std::function<void(const DecodeTimingReport &)> timing_sink_;
+
+  // Snapshot + emit the current accumulator state through the registered
+  // sink, then reset counters for the next public call.  Includes pool
+  // worker idle/work counters (diffed across the call).  No-op when no
+  // sink is installed.
+  void emit_timing_report(uint64_t pool_wait_base, uint64_t pool_work_base, uint32_t pool_workers);
 
  public:
   openhtj2k_decoder_impl();
@@ -133,6 +146,9 @@ class openhtj2k_decoder_impl {
   void set_precinct_filter(std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> f);
   void set_packet_observer(
       std::function<void(uint16_t, uint16_t, uint8_t, uint32_t, uint16_t, uint64_t, uint64_t)> f);
+  void set_timing_sink(std::function<void(const DecodeTimingReport &)> f) {
+    timing_sink_ = std::move(f);
+  }
 
   // Binds precinct_filter_'s (t, c, r, p_rc) signature into a (c, r, p_rc)
   // closure for the given tile and installs it on the tile (or clears it
@@ -274,10 +290,44 @@ void openhtj2k_decoder_impl::parse() {
         "openhtj2k_decoder_impl::parse().\n");
     throw std::exception();
   }
-  // Read main header
-  main_header.read(in);
-  in.rewind_2bytes();
-  is_parsed = true;
+  timing_acc_.reset();
+  OPENHTJ2K_TIME_ATTACH(&timing_acc_);
+  uint64_t pool_wait_base = 0, pool_work_base = 0;
+  uint32_t pool_workers = 0;
+#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
+  if (auto *pool = ThreadPool::get()) {
+    pool_workers = static_cast<uint32_t>(pool->num_threads());
+    pool->get_timing_counters(pool_wait_base, pool_work_base);
+  }
+#endif
+  {
+    OPENHTJ2K_TIME_SCOPE(Parse);
+    // Read main header
+    main_header.read(in);
+    in.rewind_2bytes();
+    is_parsed = true;
+  }
+  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
+}
+
+void openhtj2k_decoder_impl::emit_timing_report(uint64_t pool_wait_base, uint64_t pool_work_base,
+                                                uint32_t pool_workers) {
+  if (!timing_sink_) return;
+  DecodeTimingReport r = timing_acc_.snapshot();
+#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
+  if (auto *pool = ThreadPool::get()) {
+    uint64_t w = 0, k = 0;
+    pool->get_timing_counters(w, k);
+    r.pool_wait_ns = (w >= pool_wait_base) ? (w - pool_wait_base) : 0;
+    r.pool_work_ns = (k >= pool_work_base) ? (k - pool_work_base) : 0;
+    r.pool_workers = pool_workers;
+  }
+#else
+  (void)pool_wait_base;
+  (void)pool_work_base;
+  (void)pool_workers;
+#endif
+  timing_sink_(r);
 }
 
 uint16_t openhtj2k_decoder_impl::get_num_component() const { return main_header.SIZ->get_num_components(); }
@@ -358,6 +408,16 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
         "openhtj2k_decoder_impl::invoke().\n");
     throw std::exception();
   }
+  timing_acc_.reset();
+  OPENHTJ2K_TIME_ATTACH(&timing_acc_);
+  uint64_t pool_wait_base = 0, pool_work_base = 0;
+  uint32_t pool_workers = 0;
+#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
+  if (auto *pool = ThreadPool::get()) {
+    pool_workers = static_cast<uint32_t>(pool->num_threads());
+    pool->get_timing_counters(pool_wait_base, pool_work_base);
+  }
+#endif
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -429,10 +489,17 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
       throw std::runtime_error("Abort Decoding!");
     };
     tileSet[i].decode();
-    tileSet[i].ycbcr_to_rgb();
-    tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer
+    {
+      OPENHTJ2K_TIME_SCOPE(ColorTransform);
+      tileSet[i].ycbcr_to_rgb();
+    }
+    {
+      OPENHTJ2K_TIME_SCOPE(Finalize);
+      tileSet[i].finalize(main_header, reduce_NL, buf);  // Copy reconstructed image to output buffer
+    }
     tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
+  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
 }
 
 openhtj2k_decoder_impl::~openhtj2k_decoder_impl() {
@@ -785,6 +852,10 @@ void openhtj2k_decoder_impl::enable_single_tile_reuse(bool on) {
     cached_tileSet_.clear();
     cached_header_fingerprint_ = 0;
   }
+}
+
+void openhtj2k_decoder::set_timing_sink(std::function<void(const DecodeTimingReport &)> sink) {
+  this->impl->set_timing_sink(std::move(sink));
 }
 
 void openhtj2k_decoder::set_row_limit(uint32_t limit) {
