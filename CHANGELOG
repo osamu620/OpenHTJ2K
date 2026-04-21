@@ -1,3 +1,36 @@
+# [0.17.2] - 2026-04-21
+
+## JPIP server — Content-Length is now the default, chunked is opt-in
+
+Interop fix for reference interactive JPIP clients whose HTTP/1.1
+parsers do not support `Transfer-Encoding: chunked`.  When the
+server shipped chunked responses by default (v0.17.0 / v0.17.1)
+those clients reported "connection closed unexpectedly" immediately
+after the first small response, because they were sizing their
+receive buffer by the absent Content-Length header and treated the
+TCP FIN as truncation.
+
+### Flag
+
+* **`--chunked`** — opt-in to `Transfer-Encoding: chunked`.  Flushes
+  each JPP-stream message to the socket as it is produced; keeps the
+  ~17× loopback TTFB win on large responses where the client can
+  handle chunked transfer (browser demos, our C++ JpipClient).
+
+* **`--no-chunked`** — accepted for backward compatibility; it is now
+  the default, so the flag is a no-op.  Scripts that already pass it
+  continue to work unchanged.
+
+### No wire / library / test changes
+
+`stream_jpp_response`, `StreamingJppParser`, the `?chunked`
+detection in `JpipClient::fetch` / `fetch_streaming`, and the
+WASM `jpip_feed_stream_*` entry points are all unchanged — the
+server just no longer advertises chunked unless the operator asks
+for it.  616/616 ctests and the browser demos continue to pass in
+both modes.
+
+
 # [0.17.1] - 2026-04-21
 
 ## JPIP gigapixel viewer — render-target cap + layout polish

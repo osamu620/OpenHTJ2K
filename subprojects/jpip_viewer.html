@@ -582,12 +582,15 @@ async function fetchView() {
     const t0 = performance.now();
     const resp = await fetch(`${serverUrl}/jpip?${q}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    // Drain the response via the streaming parser path (issue #297) so
-    // we start feeding bytes into WASM as each HTTP chunk arrives
-    // instead of waiting for the full buffer to materialize.  On small
-    // responses the wall-clock win is modest, but on a full-canvas
-    // gigapixel pan (multi-MB) the WASM parse can overlap with network
-    // transfer, shaving tens of ms off end-to-end latency.
+    // Drain the response via getReader() + the WASM streaming parser
+    // path (issue #297) so bytes land in the decoder as they arrive
+    // instead of after a full arrayBuffer() buffer pass.  When the
+    // server is launched with `--chunked`, the browser surfaces one
+    // getReader() yield per HTTP chunk and the parse overlaps with
+    // network transfer (notable TTFB win on multi-MB responses).
+    // Against the default Content-Length server the browser typically
+    // yields the full body in one or a few chunks — same API, same
+    // correctness, just without the progressive win.
     M._jpip_begin_frame(ctx);
     M._jpip_feed_stream_begin(ctx);
     const reader = resp.body.getReader();

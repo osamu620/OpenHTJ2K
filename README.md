@@ -54,12 +54,13 @@ on modern x86-64**.
 - `open_htj2k_jpip_server` serves a JPEG 2000 codestream over JPIP
   (HTTP/1.1 or HTTP/3 over QUIC). Stateless view-window requests,
   EOR messages, and client cache model support (§C.9).
-- **Progressive HTTP/1.1 `Transfer-Encoding: chunked` delivery** (v0.17.0):
-  each JPP message is flushed to the socket as soon as the server
-  produces it, so clients (browser demos + `JpipClient`) start decoding
-  while the response is still in flight. Loopback time-to-first-byte on
-  a 24 MB full-canvas response drops from 7.4 ms to 0.44 ms (~17×).
-  `--no-chunked` opts out for clients that can't parse chunked transfer.
+- **Progressive HTTP/1.1 `Transfer-Encoding: chunked` delivery**
+  (v0.17.0; opt-in since v0.17.2): each JPP message is flushed to the
+  socket as soon as the server produces it, so clients (browser demos +
+  `JpipClient`) start decoding while the response is still in flight.
+  Loopback time-to-first-byte on a 24 MB full-canvas response drops
+  from 7.4 ms to 0.44 ms (~17×). The server defaults to `Content-Length`
+  for broad client compatibility; opt in to chunked with `--chunked`.
 - `open_htj2k_jpip_demo` drives foveated rendering: three concentric
   cones (fovea / parafovea / periphery) around the mouse cursor,
   decoded at full / half / 1/8 resolution. Works in-process, over

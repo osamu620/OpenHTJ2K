@@ -629,9 +629,12 @@ async function connect() {
       const t0 = performance.now();
       // Fire all 3 fetches in parallel so the server starts building the
       // parafovea/periphery cones while the fovea's bytes are still in
-      // flight.  Chunked transfer (issue #297) makes the per-response
-      // time-to-first-byte ~ the latency of building metadata-bin 0,
-      // so this amortises network RTT across the three cones.
+      // flight.  When the server is launched with `--chunked` (issue
+      // #297), per-response time-to-first-byte drops to roughly the
+      // latency of emitting metadata-bin 0, amortising network RTT
+      // across the three cones.  Against the default Content-Length
+      // server the three fetches still run in parallel — just without
+      // the per-response progressive delivery.
       const resp1 = fetch(`${serverUrl}/jpip?${foveaQ}`);
       const resp2 = fetch(`${serverUrl}/jpip?${paraQ}`);
       const resp3 = fetch(`${serverUrl}/jpip?${periQ}`);
@@ -643,11 +646,12 @@ async function connect() {
       // The JPIP large-image viewer wants the opposite (accumulate for pan
       // reuse) and calls jpip_begin_frame (a no-op) instead.
       M._jpip_reset_cache(ctx);
-      // Drain each response via the WASM streaming parser so bytes flow
-      // into ctx->set as HTTP chunks land, not after arrayBuffer() has
-      // fully materialised.  We still process the three cones
-      // sequentially (await) because they share the context's
-      // StreamingJppParser state.
+      // Drain each response through the WASM streaming parser.  On a
+      // `--chunked` server, bytes flow in as they arrive on the wire;
+      // on the default Content-Length server the browser yields a
+      // smaller number of larger chunks — same API, same correctness.
+      // We still process the three cones sequentially (await) because
+      // they share the context's StreamingJppParser state.
       for (const respP of [resp1, resp2, resp3]) {
         const resp = await respP;
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
