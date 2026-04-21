@@ -554,16 +554,6 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
         "openhtj2k_decoder_impl::invoke_line_based().\n");
     throw std::exception();
   }
-  timing_acc_.reset();
-  OPENHTJ2K_TIME_ATTACH(&timing_acc_);
-  uint64_t pool_wait_base = 0, pool_work_base = 0;
-  uint32_t pool_workers = 0;
-#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
-  if (auto *pool = ThreadPool::get()) {
-    pool_workers = static_cast<uint32_t>(pool->num_threads());
-    pool->get_timing_counters(pool_wait_base, pool_work_base);
-  }
-#endif
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -635,7 +625,6 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     tileSet[i].decode_line_based(main_header, reduce_NL, buf);
     tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
   }
-  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
 }
 
 void openhtj2k_decoder::invoke_line_based(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
@@ -653,16 +642,6 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         "openhtj2k_decoder_impl::invoke_line_based_stream().\n");
     throw std::exception();
   }
-  timing_acc_.reset();
-  OPENHTJ2K_TIME_ATTACH(&timing_acc_);
-  uint64_t pool_wait_base = 0, pool_work_base = 0;
-  uint32_t pool_workers = 0;
-#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
-  if (auto *pool = ThreadPool::get()) {
-    pool_workers = static_cast<uint32_t>(pool->num_threads());
-    pool->get_timing_counters(pool_wait_base, pool_work_base);
-  }
-#endif
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -765,7 +744,6 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       tileSet[tile_idx].destroy();
       global_y += band_h0;
     }
-    emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
     return;
   }
 
@@ -840,7 +818,6 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     }
     global_y += band_h[0];
   }
-  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
 }
 
 void openhtj2k_decoder::invoke_line_based_stream(
@@ -951,20 +928,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     throw std::exception();
   }
   if (!single_tile_reuse_enabled_) {
-    // Delegate; the inner call owns timing for this decode.
     invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
     return;
   }
-  timing_acc_.reset();
-  OPENHTJ2K_TIME_ATTACH(&timing_acc_);
-  uint64_t pool_wait_base = 0, pool_work_base = 0;
-  uint32_t pool_workers = 0;
-#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
-  if (auto *pool = ThreadPool::get()) {
-    pool_workers = static_cast<uint32_t>(pool->num_threads());
-    pool->get_timing_counters(pool_wait_base, pool_work_base);
-  }
-#endif
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -1147,7 +1113,6 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
                                                col_lo_, col_hi_);
 
   cached_header_fingerprint_ = fp;
-  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
 }
 
 // ── Direct-to-planar decode ───────────────────────────────────────────────
@@ -1209,25 +1174,13 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
   if (numTiles.x != 1 || numTiles.y != 1) {
     cached_tileSet_.clear();
     cached_header_fingerprint_ = 0;
-    // Multi-tile: fall back via recursive call with reuse disabled.  Inner
-    // call owns timing for this decode.
+    // Multi-tile: fall back via recursive call with reuse disabled.
     bool was_enabled = single_tile_reuse_enabled_;
     single_tile_reuse_enabled_ = false;
     invoke_line_based_direct(descs, nc, width, height, depth, is_signed);
     single_tile_reuse_enabled_ = was_enabled;
     return;
   }
-
-  timing_acc_.reset();
-  OPENHTJ2K_TIME_ATTACH(&timing_acc_);
-  uint64_t pool_wait_base = 0, pool_work_base = 0;
-  uint32_t pool_workers = 0;
-#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
-  if (auto *pool = ThreadPool::get()) {
-    pool_workers = static_cast<uint32_t>(pool->num_threads());
-    pool->get_timing_counters(pool_wait_base, pool_work_base);
-  }
-#endif
 
   // Fingerprint — identical to invoke_line_based_stream_reuse.
   auto fnv1a_u64 = [](uint64_t h, const void *data, size_t len) {
@@ -1366,7 +1319,6 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
   cached_tileSet_[0].decode_line_based_stream_planar(main_header, reduce_NL, descs, nc);
 
   cached_header_fingerprint_ = fp;
-  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
 }
 
 void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
@@ -1380,16 +1332,6 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
         "openhtj2k_decoder_impl::invoke_line_based_predecoded().\n");
     throw std::exception();
   }
-  timing_acc_.reset();
-  OPENHTJ2K_TIME_ATTACH(&timing_acc_);
-  uint64_t pool_wait_base = 0, pool_work_base = 0;
-  uint32_t pool_workers = 0;
-#if defined(OPENHTJ2K_THREAD) && defined(OPENHTJ2K_DECODE_TIMING)
-  if (auto *pool = ThreadPool::get()) {
-    pool_workers = static_cast<uint32_t>(pool->num_threads());
-    pool->get_timing_counters(pool_wait_base, pool_work_base);
-  }
-#endif
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -1456,7 +1398,6 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
     }
     tileSet[i].decode_line_based_predecoded(main_header, reduce_NL, buf);
   }
-  emit_timing_report(pool_wait_base, pool_work_base, pool_workers);
 }
 
 void openhtj2k_decoder::invoke_line_based_predecoded(std::vector<int32_t *> &buf,
