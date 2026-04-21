@@ -58,7 +58,8 @@ serves view-window requests.
 open_htj2k_jpip_server <input.j2c>
     [--port N=8080]
     [--h3 --cert server.cert --key server.key]   # HTTP/3 (requires -DOPENHTJ2K_QUIC=ON)
-    [--no-chunked]                               # force Content-Length instead of chunked
+    [--chunked]                                  # opt in to Transfer-Encoding: chunked
+    [--no-chunked]                               # accepted for back-compat (now the default)
 ```
 
 Query grammar (§C.4):
@@ -107,15 +108,27 @@ handled for cross-origin browser access.
 
 ### Progressive (chunked) delivery
 
-As of v0.17.0 the HTTP/1.1 path defaults to
-`Transfer-Encoding: chunked`: each completed JPP-stream message is
-flushed to the socket as soon as the server produces it, so chunked-
-aware clients can start decoding while later precincts are still being
-built.  On a 24 MB full-canvas response, loopback time-to-first-byte
-drops from ~7.4 ms (Content-Length path) to ~0.44 ms (~17×); chunked
-and Content-Length emit byte-identical bodies, so test harnesses that
-prefer to buffer the response can pass `--no-chunked` without any
-observable change in semantics.
+The server supports `Transfer-Encoding: chunked` progressive delivery:
+each completed JPP-stream message is flushed to the socket as soon as
+the server produces it, so chunked-aware clients can start decoding
+while later precincts are still being built.  On a 24 MB full-canvas
+response, loopback time-to-first-byte drops from ~7.4 ms
+(Content-Length path) to ~0.44 ms (~17×); chunked and Content-Length
+emit byte-identical bodies, so the mode swap has no effect on
+correctness.
+
+**Default is Content-Length.**  The server ships with
+`Transfer-Encoding: chunked` *off* because some interactive reference
+JPIP clients do not implement chunked transfer parsing and report
+"connection closed unexpectedly" when the Content-Length header they
+expect is absent.  Our browser demos + C++ `JpipClient` accept either
+format; the client-side chunked refactor that enabled the TTFB win
+stays useful wherever the server is started with `--chunked`.  Opt in
+with:
+
+```
+open_htj2k_jpip_server <input.j2c> --chunked
+```
 
 The §C.6.1 `len=` rollback still works in chunked mode — each message
 is built into a reusable scratch buffer and only committed to a wire
@@ -208,9 +221,12 @@ multi-threaded WASM variant (pthreads + SIMD) when the page is
 cross-origin-isolated, single-threaded SIMD otherwise.
 
 Each per-cone response is drained via `response.body.getReader()` and
-fed into the WASM `jpip_feed_stream*` API as chunks arrive, so the
-chunked server's progressive delivery round-trips all the way into
-the decoder without buffering the full body on the JS side first.
+fed into the WASM `jpip_feed_stream*` API as the browser yields bytes,
+so when the server is launched with `--chunked` the progressive
+delivery round-trips all the way into the decoder without buffering
+the full body on the JS side first.  Against the default
+Content-Length server the same code path still works — the browser
+just yields larger chunks.
 
 Per-frame cache semantics: the JS side calls `jpip_reset_cache` each
 frame so the previous gaze's high-res precincts decay — without it,
@@ -258,8 +274,10 @@ Pan events are debounced + coalesced: during an in-flight fetch, new
 events flip a "pending" slot rather than queue a second request, so
 the final viewport the user aimed at is always what lands on screen.
 Fetch responses are streamed into the WASM `jpip_feed_stream*` API
-per chunk, matching the chunked server's wire behaviour — the JS
-side no longer buffers the full response before parsing.
+per chunk.  Against a `--chunked` server this matches the wire-level
+chunked delivery; against the default Content-Length server the JS
+side still avoids the full-buffer `arrayBuffer()` round-trip, it just
+sees fewer/larger chunks from the browser.
 
 ## Core architecture
 

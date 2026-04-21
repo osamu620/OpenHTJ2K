@@ -70,9 +70,13 @@ struct ServerState {
   // When true, HTTP/1.1 responses use `Transfer-Encoding: chunked` and
   // flush each JPP message to the socket as it is produced — time-to-first-
   // byte then equals the time to emit metadata-bin 0 rather than the time
-  // to build the full response.  `--no-chunked` forces the Content-Length
-  // path for clients that cannot handle chunked transfer.
-  bool                              chunked_responses = true;
+  // to build the full response.  Opt-in via `--chunked` because some
+  // interactive reference JPIP clients lack chunked-transfer support in
+  // their HTTP/1.1 parsers and report "connection closed unexpectedly"
+  // when the Content-Length header they were expecting is absent.  Our
+  // browser demos + C++ JpipClient both accept either format, so the
+  // conservative default is Content-Length.
+  bool                              chunked_responses = false;
 };
 
 // Callback invoked once per completed JPP-stream message (including EOR).
@@ -511,13 +515,18 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::fprintf(stderr,
         "Usage: open_htj2k_jpip_server <input.j2c> [--port N=8080]\n"
-        "       [--h3 --cert server.cert --key server.key] [--no-chunked]\n");
+        "       [--h3 --cert server.cert --key server.key]\n"
+        "       [--chunked]      # opt in to Transfer-Encoding: chunked\n"
+        "       [--no-chunked]   # explicitly force Content-Length (default)\n");
     return EXIT_FAILURE;
   }
   std::string infile = argv[1];
   uint16_t port = 8080;
   bool use_h3 = false;
-  bool no_chunked = false;
+  // Default to Content-Length; chunked is opt-in because some reference
+  // JPIP clients fail to parse chunked responses and report "connection
+  // closed unexpectedly".
+  bool chunked = false;
   std::string cert_file, key_file;
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
@@ -528,13 +537,15 @@ int main(int argc, char **argv) {
       cert_file = argv[++i];
     } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
       key_file = argv[++i];
+    } else if (std::strcmp(argv[i], "--chunked") == 0) {
+      chunked = true;
     } else if (std::strcmp(argv[i], "--no-chunked") == 0) {
-      no_chunked = true;
+      chunked = false;  // accepted for backward compatibility; now the default
     }
   }
 
   ServerState st;
-  st.chunked_responses = !no_chunked;
+  st.chunked_responses = chunked;
   st.codestream = read_file(infile.c_str());
   if (st.codestream.empty()) return EXIT_FAILURE;
 
