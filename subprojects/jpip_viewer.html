@@ -87,6 +87,18 @@
     background: #000;
   }
   #canvas.dragging { cursor: grabbing; }
+  /* `?fit=contain` sets this class on <body> so the letterbox around the
+     centered canvas is visible against the default near-black body bg. */
+  body.fit-contain {
+    background:
+      linear-gradient(135deg, #1a1d26 25%, transparent 25%) 0 0 / 24px 24px,
+      linear-gradient(225deg, #1a1d26 25%, transparent 25%) 0 0 / 24px 24px,
+      var(--bg);
+  }
+  body.fit-contain #canvas {
+    outline: 1px solid rgba(82, 127, 194, 0.45);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 12px 40px rgba(0, 0, 0, 0.5);
+  }
 
   /* ── Stats bar (bottom) ──────────────────────────────── */
   #stats {
@@ -393,6 +405,35 @@ function topBarHeight() {
   return tb ? tb.offsetHeight : 56;
 }
 
+// Size the canvas element + WebGL render target from the current window
+// size and the `?maxSize` / `?fit` URL parameters.  Called from connect()
+// on first load and from the window.resize listener when the user grows
+// or shrinks the browser window — sets `vpW`, `vpH`, canvas.width/height
+// and the CSS left/top/width/height in one place so the two callers
+// can't disagree.
+function sizeCanvas(c) {
+  const cssW = window.innerWidth;
+  const cssH = window.innerHeight - topBarHeight();
+  if (FIT_MODE === 'contain') {
+    vpW = Math.max(1, Math.min(cssW, maxRenderW));
+    vpH = Math.max(1, Math.min(cssH, maxRenderH));
+    c.width = vpW; c.height = vpH;
+    c.style.width  = vpW + 'px';
+    c.style.height = vpH + 'px';
+    c.style.left = Math.max(0, (cssW - vpW) / 2) + 'px';
+    c.style.top  = (topBarHeight() + Math.max(0, (cssH - vpH) / 2)) + 'px';
+  } else {
+    const scale = Math.min(1, maxRenderW / cssW, maxRenderH / cssH);
+    vpW = Math.max(1, Math.round(cssW * scale));
+    vpH = Math.max(1, Math.round(cssH * scale));
+    c.width = vpW; c.height = vpH;
+    c.style.width  = cssW + 'px';
+    c.style.height = cssH + 'px';
+    c.style.left = '0px';
+    c.style.top  = topBarHeight() + 'px';
+  }
+}
+
 // ── WebGL2 with aspect-ratio-correct quad ───────────────────────────────
 let gl = null, glTex = null, glProgram = null, texW = 0, texH = 0;
 let uUV0Loc, uUV1Loc, uScaleLoc;
@@ -650,33 +691,9 @@ async function connect() {
   canvasH = M._jpip_get_canvas_height(ctx);
 
   const c = $('canvas');
-  const cssW = window.innerWidth;
-  const cssH = window.innerHeight - topBarHeight();
-  if (FIT_MODE === 'contain') {
-    // Render at up to maxRenderW × maxRenderH and display 1:1 — no CSS
-    // scaling, so pixel-accurate on the rendered portion.  The canvas
-    // is centered in the window (with the background colour showing
-    // around it on a display larger than the cap).
-    vpW = Math.min(cssW, maxRenderW);
-    vpH = Math.min(cssH, maxRenderH);
-    c.width = vpW; c.height = vpH;
-    c.style.width  = vpW + 'px';
-    c.style.height = vpH + 'px';
-    c.style.left = Math.max(0, (cssW - vpW) / 2) + 'px';
-    c.style.top  = (topBarHeight() + Math.max(0, (cssH - vpH) / 2)) + 'px';
-  } else {
-    // Stretch: fit (cssW, cssH) into (maxRenderW, maxRenderH) while
-    // preserving aspect, then let CSS upscale the smaller render target
-    // back up to the full window via GL_LINEAR.
-    const scale = Math.min(1, maxRenderW / cssW, maxRenderH / cssH);
-    vpW = Math.max(1, Math.round(cssW * scale));
-    vpH = Math.max(1, Math.round(cssH * scale));
-    c.width = vpW; c.height = vpH;
-    c.style.width  = cssW + 'px';
-    c.style.height = cssH + 'px';
-    c.style.left = '0px';
-    c.style.top  = topBarHeight() + 'px';
-  }
+  // Apply the fit-mode body class once; fit doesn't change at runtime.
+  if (FIT_MODE === 'contain') document.body.classList.add('fit-contain');
+  sizeCanvas(c);
   initWebGL(c);
 
   zoom = vpW / canvasW;
@@ -771,6 +788,28 @@ async function connect() {
     e.preventDefault();
     clampPan();
     if (needRefetch) scheduleFetch();
+  });
+
+  // ── Window resize ──
+  // Re-run the canvas sizing logic on resize so a grown/shrunk browser
+  // window centers + scales correctly.  Debounced because browsers fire
+  // resize 60+ times/sec during drag-resize, and each event would
+  // otherwise trigger a GL viewport reset + a server fetch.
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = 0;
+      const prevVpW = vpW, prevVpH = vpH;
+      sizeCanvas(c);
+      if (prevVpW === vpW && prevVpH === vpH) return;  // CSS-only change
+      if (gl) gl.viewport(0, 0, c.width, c.height);
+      clampPan();
+      // Zoom was fit-to-width at load; keep the same physical-size
+      // behaviour across resizes so a resized window doesn't silently
+      // blow up precinct fetch by a factor of window-ratio².
+      scheduleFetch();
+    }, 100);
   });
 
   fetchView();
