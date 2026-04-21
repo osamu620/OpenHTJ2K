@@ -58,6 +58,7 @@ serves view-window requests.
 open_htj2k_jpip_server <input.j2c>
     [--port N=8080]
     [--h3 --cert server.cert --key server.key]   # HTTP/3 (requires -DOPENHTJ2K_QUIC=ON)
+    [--no-chunked]                               # force Content-Length instead of chunked
 ```
 
 Query grammar (§C.4):
@@ -104,6 +105,25 @@ delivered in ascending in-class-id order so clients that iterate
 their cache by bin-id see no gaps.  CORS preflight (`OPTIONS`) is
 handled for cross-origin browser access.
 
+### Progressive (chunked) delivery
+
+As of v0.17.0 the HTTP/1.1 path defaults to
+`Transfer-Encoding: chunked`: each completed JPP-stream message is
+flushed to the socket as soon as the server produces it, so chunked-
+aware clients can start decoding while later precincts are still being
+built.  On a 24 MB full-canvas response, loopback time-to-first-byte
+drops from ~7.4 ms (Content-Length path) to ~0.44 ms (~17×); chunked
+and Content-Length emit byte-identical bodies, so test harnesses that
+prefer to buffer the response can pass `--no-chunked` without any
+observable change in semantics.
+
+The §C.6.1 `len=` rollback still works in chunked mode — each message
+is built into a reusable scratch buffer and only committed to a wire
+chunk once it fits under the cap.  HTTP/3 continues to use the
+buffered data-reader path; progressive DATA-frame delivery over H3
+would require an nghttp3 data-reader refactor and is tracked as a
+follow-up.
+
 ## Native demo — `open_htj2k_jpip_demo`
 
 Mouse-driven foveation. Three concentric cones follow the cursor:
@@ -135,8 +155,11 @@ Three modes are always available:
   codestream → decode. Exercises the full wire format locally; useful
   for benchmarking without networking.
 - **HTTP/1.1 client** (`--server host:port`): three concurrent
-  `JpipClient::fetch` calls per frame (one per cone), pipelined on
-  their own TCP connections.
+  `JpipClient::fetch_streaming` calls per frame (one per cone),
+  pipelined on their own TCP connections.  The client feeds each
+  HTTP chunk into the `StreamingJppParser` as it arrives, so the
+  `DataBinSet` fills up while later chunks are still in flight
+  rather than after a drain-to-EOF buffer pass.
 - **HTTP/3 client** (`--server-h3 host:port`): three requests
   multiplexed on one QUIC connection via `H3Client::fetch_multi`.
 
@@ -184,6 +207,11 @@ and painted via WebGL2 (with bilinear filtering). Uses the
 multi-threaded WASM variant (pthreads + SIMD) when the page is
 cross-origin-isolated, single-threaded SIMD otherwise.
 
+Each per-cone response is drained via `response.body.getReader()` and
+fed into the WASM `jpip_feed_stream*` API as chunks arrive, so the
+chunked server's progressive delivery round-trips all the way into
+the decoder without buffering the full body on the JS side first.
+
 Per-frame cache semantics: the JS side calls `jpip_reset_cache` each
 frame so the previous gaze's high-res precincts decay — without it,
 the periphery would freeze under the last foveal hit. Headers
@@ -223,10 +251,14 @@ URL parameters:
 | `debounce=N` | trailing-debounce window in ms (default 60; `0` disables) |
 | `debug` | per-frame timing console dump |
 | `variant={st,mt}` | force single- or multi-threaded WASM |
+| `maxSize=WxH` | cap the WebGL render target to `WxH` (default `1920x1080`); CSS stretches to fill the window and `GL_LINEAR` upsamples on the GPU. Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass `maxSize=window` to disable the cap and render at full window resolution. |
 
 Pan events are debounced + coalesced: during an in-flight fetch, new
 events flip a "pending" slot rather than queue a second request, so
 the final viewport the user aimed at is always what lands on screen.
+Fetch responses are streamed into the WASM `jpip_feed_stream*` API
+per chunk, matching the chunked server's wire behaviour — the JS
+side no longer buffers the full response before parsing.
 
 ## Core architecture
 
@@ -239,12 +271,19 @@ source/core/jpip/
   data_bin_emitter.{hpp,cpp}     — header + precinct data-bin emission
   packet_locator.{hpp,cpp}       — per-precinct byte ranges in the codestream
   codestream_walker.{hpp,cpp}    — one-time codestream layout pass
-  jpp_parser.{hpp,cpp}           — wire stream → DataBinSet
+  jpp_parser.{hpp,cpp}           — wire stream → DataBinSet (one-shot
+                                    `parse_jpp_stream` + resumable
+                                    `StreamingJppParser` for chunked
+                                    clients; they share a single
+                                    try_decode_one_message helper)
   codestream_assembler.{hpp,cpp} — DataBinSet → sparse codestream
   cache_model.{hpp,cpp}          — §C.9 client cache model
   jpip_request.{hpp,cpp}         — query parser
-  jpip_response.{hpp,cpp}        — HTTP framer
-  jpip_client.{hpp,cpp}          — HTTP/1.1 client
+  jpip_response.{hpp,cpp}        — HTTP framer; chunked + Content-Length
+                                    writers + parsers
+  jpip_client.{hpp,cpp}          — HTTP/1.1 client with incremental
+                                    chunked-transfer state machine
+                                    (fetch_streaming + progress callback)
   tcp_socket.{hpp,cpp}           — cross-platform TCP wrapper
   h3_server.{hpp,cpp}            — MsQuic + nghttp3 HTTP/3 server
   h3_client.{hpp,cpp}            — MsQuic + nghttp3 HTTP/3 client
@@ -332,12 +371,20 @@ Defined in `subprojects/src/jpip_wrapper.cpp`, exported via
 | `jpip_get_num_components`, `jpip_get_total_precincts` | asset metadata |
 | `jpip_set_reduce(n)` | discard N DWT levels |
 | `jpip_get_response_buffer(ctx, min_size)` | grow-only staging pointer; avoid per-frame `_malloc` |
-| `jpip_add_response(ctx, buf, len)` | parse JPP-stream, merge into the `DataBinSet` |
+| `jpip_add_response(ctx, buf, len)` | one-shot: parse a complete JPP-stream buffer and merge into the `DataBinSet` |
+| `jpip_feed_stream_begin(ctx)` | progressive path: reset the per-context streaming parser before the first chunk of a new response (v0.17.0) |
+| `jpip_feed_stream(ctx, buf, len)` | feed the next HTTP chunk of a chunked response; incomplete messages are buffered internally until the next call supplies the rest |
+| `jpip_feed_stream_end(ctx)` | finalize the response; returns 0 if the stream ended at a clean JPP message boundary, nonzero if a partial message was still pending |
 | `jpip_get_cache_model(ctx)` | C-string for `&model=` advertisement |
 | `jpip_reset_cache(ctx)` | soft reset — drops precincts, keeps headers |
 | `jpip_end_frame(ctx, rgb, w, h)` | full-canvas decode |
 | `jpip_end_frame_region(ctx, rgb, w, h, x, y, rw, rh)` | viewport-region decode |
 | `jpip_destroy_context(ctx)` | release |
+
+The browser demos use the `jpip_feed_stream*` trio (not
+`jpip_add_response`) so they can feed HTTP chunks into the decoder
+as `response.body.getReader()` yields them; `jpip_add_response` is
+preserved for one-shot callers that have the full body in hand.
 
 ## Deployment
 

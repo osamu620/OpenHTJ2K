@@ -54,10 +54,17 @@ on modern x86-64**.
 - `open_htj2k_jpip_server` serves a JPEG 2000 codestream over JPIP
   (HTTP/1.1 or HTTP/3 over QUIC). Stateless view-window requests,
   EOR messages, and client cache model support (§C.9).
+- **Progressive HTTP/1.1 `Transfer-Encoding: chunked` delivery** (v0.17.0):
+  each JPP message is flushed to the socket as soon as the server
+  produces it, so clients (browser demos + `JpipClient`) start decoding
+  while the response is still in flight. Loopback time-to-first-byte on
+  a 24 MB full-canvas response drops from 7.4 ms to 0.44 ms (~17×).
+  `--no-chunked` opts out for clients that can't parse chunked transfer.
 - `open_htj2k_jpip_demo` drives foveated rendering: three concentric
   cones (fovea / parafovea / periphery) around the mouse cursor,
   decoded at full / half / 1/8 resolution. Works in-process, over
-  HTTP/1.1, or over HTTP/3 with multiplexed QUIC streams.
+  HTTP/1.1 (chunked-streaming, via `JpipClient::fetch_streaming`), or
+  over HTTP/3 with multiplexed QUIC streams.
 - `open_htj2k_jpip_benchmark` measures bandwidth reduction and decode
   speedup for foveated vs full-image delivery across an NxN gaze grid.
 - IDWT zero-skip optimization: skips DWT lifting steps for absent
@@ -68,6 +75,9 @@ on modern x86-64**.
   server-side decode): foveation at
   **https://htj2k-demo.pages.dev/jpip_demo.html** and pan-and-zoom
   gigapixel viewer at **https://htj2k-demo.pages.dev/jpip_viewer.html**.
+  Both consume the server's chunked output via
+  `response.body.getReader()` + a resumable WASM JPP parser, so the
+  fovea bits start rendering before the periphery has arrived.
 - Opt-in H3 transport via `-DOPENHTJ2K_QUIC=ON` (requires MsQuic +
   nghttp3).
 - Full reference: [**docs/jpip.md**](docs/jpip.md).

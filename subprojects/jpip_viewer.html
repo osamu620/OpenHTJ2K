@@ -251,6 +251,7 @@
         <tr><td><code>?debounce=</code></td><td><code>60</code></td><td>Trailing-debounce window in ms; <code>0</code> disables. Coalesces rapid wheel / trackpad events into one fetch.</td></tr>
         <tr><td><code>?debug</code></td><td>off</td><td>Per-frame timing dump to the browser console.</td></tr>
         <tr><td><code>?variant=</code></td><td>auto</td><td><code>mt</code> or <code>st</code> — force multi- or single-threaded WASM.</td></tr>
+        <tr><td><code>?maxSize=</code></td><td><code>1920x1080</code></td><td>Cap the WebGL render target to <code>WxH</code>; CSS stretches to fill the window (GPU upsamples via <code>GL_LINEAR</code>). Bounds per-frame precinct fetch + decode work on 4K / ultrawide displays. Pass <code>?maxSize=window</code> to disable the cap.</td></tr>
       </tbody>
     </table>
   </details>
@@ -350,6 +351,24 @@ const DEBOUNCE_MS = (() => {
   return Number.isFinite(v) && v >= 0 ? v : 60;
 })();
 const DEBUG_TIMING = new URLSearchParams(location.search).has('debug');
+
+// Cap the WebGL render target at `?maxSize=WxH` (default 1920×1080) so
+// the per-frame decode + upload cost stays bounded on 4K / ultrawide
+// displays.  CSS still stretches the canvas to fill the window, and
+// GL_LINEAR on the texture gives a bilinear upsample that's visibly
+// close to native on most viewing distances.  `?maxSize=window` opts
+// out and restores the pre-v0.18 "render at full window resolution"
+// behaviour.
+let maxRenderW = 1920, maxRenderH = 1080;
+{
+  const mxs = new URLSearchParams(location.search).get('maxSize');
+  if (mxs === 'window') {
+    maxRenderW = Infinity; maxRenderH = Infinity;
+  } else if (mxs) {
+    const m = /^(\d+)x(\d+)$/.exec(mxs);
+    if (m) { maxRenderW = parseInt(m[1], 10); maxRenderH = parseInt(m[2], 10); }
+  }
+}
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 
@@ -619,11 +638,17 @@ async function connect() {
   canvasH = M._jpip_get_canvas_height(ctx);
 
   const c = $('canvas');
-  vpW = window.innerWidth;
-  vpH = window.innerHeight - topBarHeight();
+  const cssW = window.innerWidth;
+  const cssH = window.innerHeight - topBarHeight();
+  // Fit the (cssW, cssH) viewport into (maxRenderW, maxRenderH) while
+  // preserving aspect: scale = min(1, max/css) — i.e. never upscale past
+  // the CSS size, but shrink uniformly when the window exceeds the cap.
+  const scale = Math.min(1, maxRenderW / cssW, maxRenderH / cssH);
+  vpW = Math.max(1, Math.round(cssW * scale));
+  vpH = Math.max(1, Math.round(cssH * scale));
   c.width = vpW; c.height = vpH;
-  c.style.width  = vpW + 'px';
-  c.style.height = vpH + 'px';
+  c.style.width  = cssW + 'px';
+  c.style.height = cssH + 'px';
   initWebGL(c);
 
   zoom = vpW / canvasW;
@@ -638,8 +663,13 @@ async function connect() {
   });
   window.addEventListener('mousemove', e => {
     if (!dragging) return;
-    panX = psx - (e.clientX - dsx) / zoom;
-    panY = psy - (e.clientY - dsy) / zoom;
+    // Mouse movement is in CSS pixels; convert to viewport (render)
+    // pixels so pan speed matches visual cursor motion when `?maxSize`
+    // shrinks the render target below the CSS size.
+    const sx = vpW / c.clientWidth;
+    const sy = vpH / c.clientHeight;
+    panX = psx - (e.clientX - dsx) * sx / zoom;
+    panY = psy - (e.clientY - dsy) * sy / zoom;
     clampPan();
     scheduleFetch();
   });
@@ -656,16 +686,22 @@ async function connect() {
       const oldZoom = zoom;
       zoom = Math.max(vpW / canvasW * 0.25, Math.min(8.0, zoom * factor));
       const rect = c.getBoundingClientRect();
-      const mx = (e.clientX - rect.left) / vpW;
-      const my = (e.clientY - rect.top) / vpH;
+      // mx/my are 0..1 normalised over the canvas's CSS area; multiplying
+      // by vpW/vpH gives the mouse position in viewport (render) pixels.
+      // This stays correct even when `?maxSize` makes rect.width != vpW.
+      const mx = (e.clientX - rect.left) / rect.width;
+      const my = (e.clientY - rect.top)  / rect.height;
       panX += (mx * vpW) * (1 / oldZoom - 1 / zoom);
       panY += (my * vpH) * (1 / oldZoom - 1 / zoom);
       clampPan();
       scheduleFetch();
     } else {
-      // Two-finger scroll = pan (Mac natural scrolling: flip Y)
-      panX += e.deltaX / zoom;
-      panY -= e.deltaY / zoom;
+      // Two-finger scroll = pan (Mac natural scrolling: flip Y).
+      // deltaX/deltaY are CSS pixels; scale to viewport pixels.
+      const sx = vpW / c.clientWidth;
+      const sy = vpH / c.clientHeight;
+      panX += e.deltaX * sx / zoom;
+      panY -= e.deltaY * sy / zoom;
       clampPan();
       scheduleFetch();
     }
