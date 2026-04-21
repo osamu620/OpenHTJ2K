@@ -541,6 +541,10 @@ function buildQuery(fx, fy, ox, oy, sx, sy) {
 async function connect() {
   if (!M) { $('info').textContent = 'WASM not loaded yet'; return; }
   serverUrl = $('server').value.replace(/\/+$/, '');
+  // Browsers read `localhost:8094` as a URI scheme (`localhost:`) so the
+  // fetch fails with "URL scheme \"localhost\" is not supported".  Accept
+  // the common shorthand and prepend http:// when the user hasn't.
+  if (!/^https?:\/\//i.test(serverUrl)) serverUrl = 'http://' + serverUrl;
   $('info').textContent = 'Connecting to ' + serverUrl + '…';
 
   try {
