@@ -31,6 +31,13 @@ documents below are for offline browsing.
   pan-and-zoom viewer demos; core library architecture; wire-format
   details (JPP-stream, §C.9 cache model); WASM C API.
 
+## Developer tools
+
+- [**wasm_bench.md**](wasm_bench.md) — `subprojects/wasm_bench.mjs`
+  iteration-loop benchmark harness for the WebAssembly decoder
+  variants; byte-exact plane-dump mode for regression checks;
+  profiling recipes.
+
 ## Other references
 
 - [CHANGELOG](../CHANGELOG) — release history.
