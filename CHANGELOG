@@ -57,6 +57,16 @@ Measured on a 3840×2160 12-bit YCbCr codestream, Ryzen 9 9950X / Node 24:
   size overhead, zero runtime cost (verified: release vs profile
   builds are within run-to-run noise on both simd 1T and mt_simd 2T).
 
+### CLI
+
+* **`subprojects/open_htj2k_dec.mjs`** now calls `process.exit(0)` once
+  the output file has been written.  On multi-threaded WASM builds
+  (`-num_threads > 1`) Emscripten's pthreads layer keeps
+  `worker_threads` workers parked waiting for a teardown signal that
+  never comes, so the CLI appeared to hang indefinitely after a
+  successful decode.  The decoded output was always correct; only the
+  process lifetime was wrong.
+
 ### Tools
 
 * `subprojects/wasm_bench.mjs` — new iteration-loop bench harness.
@@ -65,6 +75,18 @@ Measured on a 3840×2160 12-bit YCbCr codestream, Ryzen 9 9950X / Node 24:
   `--mode stream|planar_u8`, `--dump-planes <prefix>` for byte-exact
   regression-checking, and `--build-dir` for A/B between two build
   outputs.
+
+### Documentation
+
+* **`docs/wasm_bench.md`** — prerequisites, synopsis, full option
+  table, worked examples (baseline throughput, thread sweep,
+  RTP-demo-shaped planar-u8 path, byte-exact regression check), and a
+  profiling section that covers both `node --cpu-prof` for
+  single-threaded variants and `perf record --perf-basic-prof` for the
+  multi-threaded variants (where `--cpu-prof` silently produces no
+  output because Emscripten's pthread teardown bypasses Node's
+  profile finalizer).  Linked from `docs/README.md` under a new
+  "Developer tools" section.
 
 # [0.18.2] - 2026-04-21
 
