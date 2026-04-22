@@ -347,3 +347,8 @@ if (isPGX) {
   const fmt     = C === 1 ? 'grayscale' : (doYcbcr ? 'YCbCr→RGB' : 'RGB');
   console.log(`Decoded ${Wd}×${Hd} ${fmt} ${depth}bpc in ${elapsed} ms → ${output}`);
 }
+
+// MT Wasm builds spawn pthread workers via worker_threads; those workers keep
+// Node's event loop alive after decode completes, so the CLI appears to hang
+// with all work already done.  Force-exit now that the output is written.
+process.exit(0);
