@@ -522,6 +522,57 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
           }
 #endif
         } else {
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+          // Fast SIMD path for the common case: 3 non-subsampled 16-bit BE channels.
+          // Processes 8 pixels at a time, producing 48 bytes (3 × v128_t stores).
+          // Mirrors the 8-bit 3-channel path above but operates on u16 byte-pairs.
+          if (nc == 3 && !subsamp) {
+            const v128_t vmx   = wasm_i32x4_splat(maxval);
+            const v128_t vzero = wasm_i32x4_const_splat(0);
+            const v128_t voff0 = wasm_i32x4_splat(dc_offset[0]);
+            const v128_t voff1 = wasm_i32x4_splat(dc_offset[1]);
+            const v128_t voff2 = wasm_i32x4_splat(dc_offset[2]);
+            uint32_t x = 0;
+            for (; x + 8 <= W; x += 8) {
+              // Clamp 8 samples per channel, narrow to u16, byte-swap to BE.
+              auto clamp_narrow_be8 = [&](const int32_t* src, v128_t voff) -> v128_t {
+                v128_t a = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(src),     voff), vzero), vmx);
+                v128_t b = wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(wasm_v128_load(src + 4), voff), vzero), vmx);
+                v128_t u16le = wasm_u16x8_narrow_i32x4(a, b);
+                return wasm_i8x16_shuffle(u16le, u16le, 1,0, 3,2, 5,4, 7,6, 9,8, 11,10, 13,12, 15,14);
+              };
+              v128_t R = clamp_narrow_be8(rows[0] + x, voff0);
+              v128_t G = clamp_narrow_be8(rows[1] + x, voff1);
+              v128_t B = clamp_narrow_be8(rows[2] + x, voff2);
+              // R/G/B each = [X0h,X0l, X1h,X1l, ..., X7h,X7l] (8 BE u16 pairs).
+              // Build RG-pair vectors for pixels 0-3 and 4-7.
+              v128_t rg0 = wasm_i8x16_shuffle(R, G, 0,1,16,17, 2,3,18,19, 4,5,20,21, 6,7,22,23);
+              v128_t rg1 = wasm_i8x16_shuffle(R, G, 8,9,24,25, 10,11,26,27, 12,13,28,29, 14,15,30,31);
+              // Bridge rg0/rg1 for pixels 3..6 used by out1.
+              v128_t mid = wasm_i8x16_shuffle(rg0, rg1, 12,13,14,15, 16,17,18,19, 20,21,22,23, 24,25,26,27);
+              // out0 = [R0 G0 B0 R1 G1 B1 R2 G2]  (each letter = 2 BE bytes; 16 bytes total)
+              v128_t out0 = wasm_i8x16_shuffle(rg0, B,
+                  0,1,2,3, 16,17, 4,5,6,7, 18,19, 8,9,10,11);
+              // out1 = [B2 R3 G3 B3 R4 G4 B4 R5]
+              v128_t out1 = wasm_i8x16_shuffle(mid, B,
+                  20,21, 0,1,2,3, 22,23, 4,5,6,7, 24,25, 8,9);
+              // out2 = [G5 B5 R6 G6 B6 R7 G7 B7]
+              v128_t out2 = wasm_i8x16_shuffle(rg1, B,
+                  6,7, 26,27, 8,9,10,11, 28,29, 12,13,14,15, 30,31);
+              wasm_v128_store(row_dst,      out0); row_dst += 16;
+              wasm_v128_store(row_dst,      out1); row_dst += 16;
+              wasm_v128_store(row_dst,      out2); row_dst += 16;
+            }
+            for (; x < W; ++x) {
+              int32_t rv = rows[0][x] + dc_offset[0]; if (rv < 0) rv = 0; else if (rv > maxval) rv = maxval;
+              int32_t gv = rows[1][x] + dc_offset[1]; if (gv < 0) gv = 0; else if (gv > maxval) gv = maxval;
+              int32_t bv = rows[2][x] + dc_offset[2]; if (bv < 0) bv = 0; else if (bv > maxval) bv = maxval;
+              *row_dst++ = static_cast<uint8_t>(rv >> 8); *row_dst++ = static_cast<uint8_t>(rv & 0xff);
+              *row_dst++ = static_cast<uint8_t>(gv >> 8); *row_dst++ = static_cast<uint8_t>(gv & 0xff);
+              *row_dst++ = static_cast<uint8_t>(bv >> 8); *row_dst++ = static_cast<uint8_t>(bv & 0xff);
+            }
+          } else {
+#endif
           for (uint32_t x = 0; x < W; ++x) {
             for (uint16_t c = 0; c < nc; ++c) {
               uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);
@@ -530,6 +581,9 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
               *row_dst++ = static_cast<uint8_t>(v & 0xff);
             }
           }
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+          }
+#endif
         }
       }
     },
