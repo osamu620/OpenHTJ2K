@@ -1174,7 +1174,23 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 
     // HT block decoding
     bool dequant_done = false;
-    if (num_ht_passes == 1 && ROIshift == 0) {
+    // The fused-dequant scalar/NEON/AVX2/WASM kernels process samples in
+    // 2-row quad pairs and write both rows of every pair unconditionally to
+    // `block->i_samples`.  When `block->size.y` is odd the last pair's
+    // second-row write lands `band_stride` bytes past the block's final
+    // row — into the NEXT block's i_samples region when codeblocks tile
+    // vertically inside the subband (e.g. 1×1 blocks stacked in a narrow
+    // subband from a horizontally-subsampled component).  Under single-
+    // threaded decode the overflow is harmlessly overwritten by the next
+    // block's legitimate row-0 write, but under multi-threaded dispatch
+    // the blocks finish out-of-order and the stale overflow clobbers
+    // adjacent blocks' output.  Fall back to the non-fused path (which
+    // writes into the block-local sample_buf scratch, not i_samples) when
+    // height is odd; the separate dequant pass below handles bounds
+    // correctly.
+    const bool fuseable = (num_ht_passes == 1) && (ROIshift == 0)
+                          && ((block->size.y & 1u) == 0u);
+    if (fuseable) {
       ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {
