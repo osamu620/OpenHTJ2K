@@ -360,11 +360,44 @@ void invoke_decoder_planar_u8(open_htj2k::openhtj2k_decoder* dec,
         const int32_t  bias     = half + offset;
         const uint32_t W        = width[c];
         uint8_t* __restrict__ dst = bufs[c] + (size_t)cy * W;
-        for (uint32_t x = 0; x < W; ++x) {
-          int32_t v = ((rows[c][x] + bias) >> down_sh) << up_sh;
+        const int32_t* __restrict__ src = rows[c];
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+        // Process 16 samples per iteration: 4 × v128_t loads of int32,
+        // add bias, shr-then-shl (correct rounding for 8-bit output),
+        // clamp to [0,255], narrow i32x4→i16x8→u8x16, one 16-byte store.
+        const v128_t vbias = wasm_i32x4_splat(bias);
+        const v128_t vzero = wasm_i32x4_const_splat(0);
+        const v128_t vmax  = wasm_i32x4_const_splat(255);
+        uint32_t x = 0;
+        for (; x + 16 <= W; x += 16) {
+          v128_t a = wasm_i32x4_add(wasm_v128_load(src + x),      vbias);
+          v128_t b = wasm_i32x4_add(wasm_v128_load(src + x +  4), vbias);
+          v128_t cc = wasm_i32x4_add(wasm_v128_load(src + x +  8), vbias);
+          v128_t dd = wasm_i32x4_add(wasm_v128_load(src + x + 12), vbias);
+          a  = wasm_i32x4_shl(wasm_i32x4_shr(a,  down_sh), up_sh);
+          b  = wasm_i32x4_shl(wasm_i32x4_shr(b,  down_sh), up_sh);
+          cc = wasm_i32x4_shl(wasm_i32x4_shr(cc, down_sh), up_sh);
+          dd = wasm_i32x4_shl(wasm_i32x4_shr(dd, down_sh), up_sh);
+          a  = wasm_i32x4_min(wasm_i32x4_max(a,  vzero), vmax);
+          b  = wasm_i32x4_min(wasm_i32x4_max(b,  vzero), vmax);
+          cc = wasm_i32x4_min(wasm_i32x4_max(cc, vzero), vmax);
+          dd = wasm_i32x4_min(wasm_i32x4_max(dd, vzero), vmax);
+          wasm_v128_store(dst + x,
+              wasm_u8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(a, b),
+                                      wasm_i16x8_narrow_i32x4(cc, dd)));
+        }
+        for (; x < W; ++x) {
+          int32_t v = ((src[x] + bias) >> down_sh) << up_sh;
           if (v < 0) v = 0; else if (v > 255) v = 255;
           dst[x] = static_cast<uint8_t>(v);
         }
+#else
+        for (uint32_t x = 0; x < W; ++x) {
+          int32_t v = ((src[x] + bias) >> down_sh) << up_sh;
+          if (v < 0) v = 0; else if (v > 255) v = 255;
+          dst[x] = static_cast<uint8_t>(v);
+        }
+#endif
       }
     },
     width, height, depth, is_signed);
