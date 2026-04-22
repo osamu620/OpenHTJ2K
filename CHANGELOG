@@ -1,3 +1,71 @@
+# [0.18.3] - 2026-04-22
+
+## WASM decoder — SIMD pack paths for 16-bit and planar-u8 output
+
+Two WASM-SIMD patches to the decoder wrapper, plus a CMake bug fix that
+was causing the non-threaded `libopen_htj2k_simd` variant to silently
+run scalar pack code.  Output is byte-exact with the previous builds
+on every file we tested; the change is pure perf.
+
+Measured on a 3840×2160 12-bit YCbCr codestream, Ryzen 9 9950X / Node 24:
+
+| Config | Before | After | Speedup |
+|---|---:|---:|---:|
+| `libopen_htj2k_simd`, PPM output | 105.0 ms | 81.0 ms | 1.30× |
+| `libopen_htj2k_mt_simd` 2T, PPM output | 63.8 ms | 42.1 ms | 1.52× |
+| `libopen_htj2k_mt_simd` 4T, PPM output | 64.9 ms | 36.9 ms | 1.76× |
+| `libopen_htj2k_simd`, planar-u8 output | 94.3 ms | 85.2 ms | 1.11× |
+| `libopen_htj2k_mt_simd` 2T, planar-u8 output | 52.1 ms | 45.2 ms | 1.15× |
+| `libopen_htj2k_mt_simd` 4T, planar-u8 output | 50.0 ms | 41.5 ms | 1.20× |
+
+### WASM
+
+* **`invoke_decoder_stream`** — new WASM-SIMD pack block for the
+  `nc==3 && !subsampled && 16-bit big-endian` case (12–16 bpc RGB
+  PPM output).  Processes 8 samples per iteration across R/G/B,
+  writing 48 output bytes per three v128 stores via an i32→u16 narrow,
+  per-pair byte-swap, and 3-way shuffle interleave.  The previous
+  code took the scalar fallback here even on the simd variant, so
+  this is the single biggest line-item in the stream-mode speedup.
+* **`invoke_decoder_planar_u8`** — new WASM-SIMD rescale for the
+  per-component inner loop (add DC-offset bias, right-shift for
+  depths ≥ 8, left-shift for depths < 8, clamp to [0,255], narrow
+  i32→u8, 16-byte store).  Used by `subprojects/rtp_demo.html` to
+  upload three R8 textures per frame; previously scalar.
+* **Byte-exact** against pre-patch output on all 137 `wasm_*`
+  conformance tests, plus explicit plane-level md5 checks on
+  8-bit 4:4:4, 12-bit 4:4:4, 12-bit 4:2:2, and 4-bit grayscale
+  fixtures for the planar-u8 path (which has no conformance-test
+  coverage).
+
+### Build
+
+* **Fixed** `libopen_htj2k_simd` target in `subprojects/CMakeLists.txt`
+  missing `OPENHTJ2K_ENABLE_WASM_SIMD`.  The target was being compiled
+  with `-msimd128` but without the macro, so every
+  `#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)` branch in `wrapper.cpp`
+  (grayscale pack, 8-bit RGB pack, YCbCr→RGBA) was compiled out and
+  the variant silently ran scalar wrapper code.  The mt_simd target
+  had the define and was unaffected.
+* **C++17** required for the subproject build — rtp_reassembly
+  object libraries use `std::optional`.
+* **Dropped** redundant `-s SHARED_MEMORY=1` from the MT link flags;
+  `-pthread` implies it, and Emscripten 3.1.x rejected it as unknown.
+* **New option** `OPENHTJ2K_WASM_PROFILE` (default `OFF`) passes
+  `--profiling-funcs` to the Wasm linker so `node --cpu-prof` and
+  `perf record --perf-basic-prof` resolve function names.  ~15% .wasm
+  size overhead, zero runtime cost (verified: release vs profile
+  builds are within run-to-run noise on both simd 1T and mt_simd 2T).
+
+### Tools
+
+* `subprojects/wasm_bench.mjs` — new iteration-loop bench harness.
+  Loads a chosen WASM variant once, runs N decode iterations, reports
+  min/median/p95/mean wall-clock plus Msamples/s and fps.  Supports
+  `--mode stream|planar_u8`, `--dump-planes <prefix>` for byte-exact
+  regression-checking, and `--build-dir` for A/B between two build
+  outputs.
+
 # [0.18.2] - 2026-04-21
 
 ## JPIP gigapixel viewer — mid-decode paint on slow fetches
