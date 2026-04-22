@@ -5,6 +5,12 @@ project (
     LANGUAGES CXX
 )
 
+# rtp_reassembly sources use std::optional → require C++17 for the wrapper +
+# RTP object libraries (the core open_htj2k library still auto-selects per its
+# own CMakeLists).
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 message(STATUS "**** WASM BUILD")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
@@ -33,7 +39,6 @@ set(WASM_MT_FLAGS "\
     -pthread \
     -s USE_PTHREADS=1 \
     -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency||4 \
-    -s SHARED_MEMORY=1 \
     "
 )
 # Pull in the open_htj2k library (compiled without SIMD or pthread flags → scalar single-threaded build).
@@ -114,6 +119,7 @@ endif()
 
 add_executable(libopen_htj2k_simd "src/wrapper.cpp" $<TARGET_OBJECTS:rtp_reassembly_simd_objs>)
 target_include_directories(libopen_htj2k_simd PRIVATE ${_RTP_RECV_DIR})
+target_compile_definitions(libopen_htj2k_simd PRIVATE "OPENHTJ2K_ENABLE_WASM_SIMD")
 set_target_properties(libopen_htj2k_simd PROPERTIES COMPILE_FLAGS "-O3 -flto -msimd128 -mnontrapping-fptoint -mbulk-memory")
 set_target_properties(libopen_htj2k_simd PROPERTIES SUFFIX ".js" LINK_FLAGS ${WASM_FLAGS})
 target_link_libraries(libopen_htj2k_simd PRIVATE open_htj2k_simd_lib)
