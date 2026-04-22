@@ -15,6 +15,17 @@ message(STATUS "**** WASM BUILD")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/html)
 
+# OPENHTJ2K_WASM_PROFILE: when ON, passes --profiling-funcs to the linker so
+# Wasm function names are preserved in the name section.  Lets `node --cpu-prof`
+# and `perf record --perf-basic-prof` show human-readable function names instead
+# of wasm-function[N].  Adds ~15% to .wasm size, no runtime impact.
+option(OPENHTJ2K_WASM_PROFILE "Preserve Wasm function names for profiling" OFF)
+if(OPENHTJ2K_WASM_PROFILE)
+  set(_WASM_PROFILING_LINK_FLAG " --profiling-funcs ")
+else()
+  set(_WASM_PROFILING_LINK_FLAG "")
+endif()
+
 set(WASM_FLAGS_COMMON "\
     -O3 -flto -mnontrapping-fptoint -mbulk-memory -s WASM=1 -s EXPORT_ES6=1 -s MODULARIZE=1 -s ENVIRONMENT=web,node \
     -s EXPORTED_FUNCTIONS=[_free,_malloc] \
@@ -25,6 +36,7 @@ set(WASM_FLAGS_COMMON "\
     -s ALLOW_MEMORY_GROWTH=1 \
     -s MAXIMUM_MEMORY=2GB \
     -sNO_DISABLE_EXCEPTION_CATCHING \
+    ${_WASM_PROFILING_LINK_FLAG} \
     "
 )
 
