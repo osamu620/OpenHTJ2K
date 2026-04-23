@@ -103,8 +103,10 @@
   /* ── Thumbnail overview (bottom-right corner) ────────── */
   /* Low-res preview of the full image with a rectangle showing the
      current viewport's position + size.  Enabled by default; disable
-     with `?thumbnail=0`.  pointer-events: none so it never steals
-     drag/wheel events from the main canvas below it. */
+     with `?thumbnail=0`.  The element is *created dynamically* in JS
+     only when the thumbnail fetch succeeds — if `?thumbnail=0` is set
+     or the fetch fails, the element never enters the DOM at all.
+     pointer-events: none keeps it from stealing drag/wheel events. */
   #thumbnail {
     position: fixed;
     right: 14px;
@@ -114,7 +116,6 @@
     border: 1px solid rgba(255, 255, 255, 0.55);
     border-radius: 4px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    display: none;           /* shown once the overview arrives */
     pointer-events: none;
   }
 
@@ -241,7 +242,6 @@
 </div>
 
 <canvas id="canvas"></canvas>
-<canvas id="thumbnail"></canvas>
 
 <div id="help">
   <span class="close" id="helpClose" title="Close">✕</span>
@@ -715,7 +715,11 @@ async function fetchThumbnail() {
       const copy = new Uint8ClampedArray(rgbaSz);
       copy.set(M.HEAPU8.subarray(thumbPtr, thumbPtr + rgbaSz));
       thumbImage = new ImageData(copy, fW, fH);
-      thumbCanvas = $('thumbnail');
+      // Create the thumbnail canvas dynamically — only when we have a
+      // real image to show.  Keeps the DOM empty when ?thumbnail=0 or
+      // on fetch failure, so no phantom placeholder can ever appear.
+      thumbCanvas = document.createElement('canvas');
+      thumbCanvas.id = 'thumbnail';
       thumbCanvas.width = fW;
       thumbCanvas.height = fH;
       thumbCtx = thumbCanvas.getContext('2d');
@@ -730,7 +734,7 @@ async function fetchThumbnail() {
       const scale = longSide > THUMBNAIL_MAX_PX ? THUMBNAIL_MAX_PX / longSide : 1;
       thumbCanvas.style.width  = `${Math.round(fW * scale)}px`;
       thumbCanvas.style.height = `${Math.round(fH * scale)}px`;
-      thumbCanvas.style.display = 'block';
+      document.body.appendChild(thumbCanvas);
       drawThumbnailOverlay();
       console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(total/1024).toFixed(1)}KB)`);
     } else {
