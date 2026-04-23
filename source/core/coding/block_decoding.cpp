@@ -127,9 +127,9 @@ inline void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_d
   for (uint16_t n = 0; n < num_v_stripe; n++) {
     for (j2 = 0; j2 < block->size.x; j2++) {
       for (j1 = j1_start; j1 < j1_start + 4; j1++) {
-        label_sig        = get_context_label_sig(block, j1, j2);
         uint8_t *state_p = block->block_states + (j1 + 1) * block->blkstate_stride + (j2 + 1);
-        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0
+            && (label_sig = get_context_label_sig(block, j1, j2)) > 0) {
           //            block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
@@ -155,10 +155,10 @@ inline void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_d
   if (block->size.y % 4) {
     for (j2 = 0; j2 < block->size.x; j2++) {
       for (j1 = j1_start; j1 < j1_start + block->size.y % 4; j1++) {
-        label_sig = get_context_label_sig(block, j1, j2);
         uint8_t *state_p =
             block->block_states + (static_cast<unsigned long>(j1 + 1)) * block->blkstate_stride + (j2 + 1);
-        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0
+            && (label_sig = get_context_label_sig(block, j1, j2)) > 0) {
           //            block->modify_state(decoded_bitplane_index, p, j1, j2);
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
@@ -201,9 +201,9 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
     for (uint32_t j2 = 0; j2 < width; j2++) {
       for (int ri = 0; ri < 4; ri++) {
         uint32_t j1      = j1_start + static_cast<uint32_t>(ri);
-        label_sig        = get_context_label_sig(block, j1, j2);
         uint8_t *state_p = row[ri + 1] + (j2 + 1);
-        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0
+            && (label_sig = get_context_label_sig(block, j1, j2)) > 0) {
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.decode(label_sig);
@@ -224,9 +224,9 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
   if (height % 4) {
     for (uint32_t j2 = 0; j2 < width; j2++) {
       for (uint32_t j1 = j1_start; j1 < j1_start + height % 4; j1++) {
-        label_sig        = get_context_label_sig(block, j1, j2);
         uint8_t *state_p = states + (j1 + 1) * stride + (j2 + 1);
-        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0 && label_sig > 0) {
+        if ((state_p[0] >> SHIFT_SIGMA & 1) == 0
+            && (label_sig = get_context_label_sig(block, j1, j2)) > 0) {
           state_p[0] &= 0x7;
           state_p[0] |= static_cast<uint8_t>(p << SHIFT_P);
           symbol = mq_dec.decode(label_sig);
