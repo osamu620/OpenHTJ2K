@@ -464,8 +464,15 @@ const MID_PAINT_MS = (() => {
 // rectangle marking the current viewport.  `?thumbnail=0` disables.
 const THUMBNAIL_ENABLED = new URLSearchParams(location.search).get('thumbnail') !== '0';
 const THUMBNAIL_MAX_PX = 256;
+// Cap matches computeReduce()'s own cap — servers can't be relied on to
+// accept reduce levels beyond what the viewer normally uses.
+const THUMBNAIL_MAX_REDUCE = 5;
 let thumbCanvas = null, thumbCtx = null, thumbImage = null;
 let thumbW = 0, thumbH = 0;
+// Set by connect() to request a thumbnail fetch; fetchView() clears it
+// after the first successful main-view paint and fires fetchThumbnail()
+// from idle, so the two never fight over the shared decoder state.
+let thumbnailPending = false;
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 
@@ -649,14 +656,18 @@ function paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH) {
 // thumbnail never breaks the main viewer.
 async function fetchThumbnail() {
   if (!THUMBNAIL_ENABLED || !ctx || !M || !canvasW || !canvasH) return;
+  if (busy) return;  // a main fetch is in flight; skip this attempt
   const longSide = Math.max(canvasW, canvasH);
   let red = 0;
   while ((longSide >> red) > THUMBNAIL_MAX_PX) red++;
+  if (red > THUMBNAIL_MAX_REDUCE) red = THUMBNAIL_MAX_REDUCE;
   const ceilShift = (v, s) => ((v + (1 << s) - 1) >> s);
   const fW = Math.max(1, ceilShift(canvasW, red));
   const fH = Math.max(1, ceilShift(canvasH, red));
   const q = `fsiz=${fW},${fH}&type=jpp-stream`;
+  busy = true;
   try {
+    console.log(`[jpip_viewer] thumbnail fetch: red=${red} fsiz=${fW}x${fH}`);
     M._jpip_set_reduce(ctx, red);
     const resp = await fetch(`${serverUrl}/jpip?${q}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -684,10 +695,21 @@ async function fetchThumbnail() {
       thumbH = fH;
       thumbCanvas.style.display = 'block';
       drawThumbnailOverlay();
+      console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(buf.length/1024).toFixed(1)}KB)`);
+    } else {
+      console.warn(`[jpip_viewer] thumbnail end_frame_region rc=${rc}`);
     }
     M._free(thumbPtr);
   } catch (e) {
     console.warn('[jpip_viewer] thumbnail fetch failed:', e.message);
+  } finally {
+    busy = false;
+    // Drain the latest-pending slot that may have built up while the
+    // thumbnail was in flight.
+    if (pendingFetch) {
+      pendingFetch = false;
+      queueMicrotask(fetchView);
+    }
   }
 }
 
@@ -910,6 +932,16 @@ async function fetchView() {
     queueMicrotask(fetchView);
     return;
   }
+  // Kick the one-time thumbnail fetch on idle, after the first successful
+  // main-view paint.  Uses its own busy-lock to coexist with any later
+  // user-driven fetch.  Skip the adjacent-halo prefetch this round —
+  // fetchThumbnail owns the decoder for the next hop; the next pan will
+  // set up a new prefetch anyway.
+  if (thumbnailPending) {
+    thumbnailPending = false;
+    queueMicrotask(fetchThumbnail);
+    return;
+  }
   // Otherwise: schedule an idle-delay prefetch of the adjacent halo.
   // scheduleFetch() cancels this timer on the next user interaction, so
   // continuous panning never triggers a prefetch (the halo would be
@@ -984,11 +1016,9 @@ async function connect() {
   panX = 0; panY = 0;
   $('info').textContent = `${canvasW}×${canvasH}, ${M._jpip_get_total_precincts(ctx)} precincts`;
 
-  // Fetch the overview thumbnail before wiring user-interaction handlers
-  // so there's no race between the one-time low-res fetch and the first
-  // viewport-driven fetch.  Swallows its own errors — a failed thumbnail
-  // must not block viewer startup.
-  await fetchThumbnail();
+  // Request a thumbnail overview — fetchView() fires it after its first
+  // successful paint so the main view is never blocked on the thumbnail.
+  thumbnailPending = THUMBNAIL_ENABLED;
 
   // ── Mouse drag = pan ──
   let dragging = false, dsx = 0, dsy = 0, psx = 0, psy = 0;
