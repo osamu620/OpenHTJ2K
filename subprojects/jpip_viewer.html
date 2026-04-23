@@ -100,6 +100,24 @@
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 12px 40px rgba(0, 0, 0, 0.5);
   }
 
+  /* ── Thumbnail overview (bottom-right corner) ────────── */
+  /* Low-res preview of the full image with a rectangle showing the
+     current viewport's position + size.  Enabled by default; disable
+     with `?thumbnail=0`.  pointer-events: none so it never steals
+     drag/wheel events from the main canvas below it. */
+  #thumbnail {
+    position: fixed;
+    right: 14px;
+    bottom: 44px;            /* sits just above the stats bar */
+    z-index: 9;
+    background: rgba(15, 17, 23, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    display: none;           /* shown once the overview arrives */
+    pointer-events: none;
+  }
+
   /* ── Stats bar (bottom) ──────────────────────────────── */
   #stats {
     position: fixed; bottom: 0; left: 0; right: 0;
@@ -223,6 +241,7 @@
 </div>
 
 <canvas id="canvas"></canvas>
+<canvas id="thumbnail"></canvas>
 
 <div id="help">
   <span class="close" id="helpClose" title="Close">✕</span>
@@ -269,6 +288,7 @@
         <tr><td><code>?prefetchMargin=</code></td><td><code>128</code></td><td>After each successful render, fetch an <i>N</i>-canvas-pixel halo of adjacent precincts into the LRU cache so short follow-up pans hit locally. Auto-cancelled when the user resumes interacting. Set <code>0</code> to disable.</td></tr>
         <tr><td><code>?prefetchDelayMs=</code></td><td><code>150</code></td><td>Idle-delay before the halo prefetch fires (in milliseconds). Short enough to overlap typical pause-and-examine behaviour; long enough that continuous panning never triggers it.</td></tr>
         <tr><td><code>?midPaintMs=</code></td><td><code>200</code></td><td>Show a partial render (whatever precincts have arrived) if a fetch takes longer than <i>N</i> ms. Gives feedback on slow first-time loads; costs one extra decoder run. Fast (LAN / cached) fetches never trigger it. Set <code>0</code> to disable.</td></tr>
+        <tr><td><code>?thumbnail=</code></td><td><code>1</code></td><td>Small bottom-right overview showing the full image (fetched once at connect time from the coarsest reduce level) with a rectangle marking the current viewport. Rectangle updates locally on every pan/zoom — no extra server round-trips. Set <code>0</code> to hide.</td></tr>
       </tbody>
     </table>
   </details>
@@ -437,6 +457,15 @@ const MID_PAINT_MS = (() => {
   const v = Number(new URLSearchParams(location.search).get('midPaintMs'));
   return Number.isFinite(v) ? Math.max(0, v) : 200;
 })();
+
+// Thumbnail overview: fetched once at connect time from the coarsest
+// reduce level that fits within THUMBNAIL_MAX_PX on the long side, then
+// redrawn locally (no server round-trip) on every pan/zoom with a
+// rectangle marking the current viewport.  `?thumbnail=0` disables.
+const THUMBNAIL_ENABLED = new URLSearchParams(location.search).get('thumbnail') !== '0';
+const THUMBNAIL_MAX_PX = 256;
+let thumbCanvas = null, thumbCtx = null, thumbImage = null;
+let thumbW = 0, thumbH = 0;
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 
@@ -564,6 +593,10 @@ let lastFetchKey = '';
 //     finishes; fetchView() then re-reads panX/panY/zoom so the final
 //     viewport is always the one rendered).
 function scheduleFetch() {
+  // Update the thumbnail viewport rectangle immediately — cheap local
+  // 2D-canvas redraw, no server round-trip, so the user gets instant
+  // feedback during drag / wheel even while a server fetch is pending.
+  drawThumbnailOverlay();
   // Any new user-driven fetch request invalidates any adjacent-viewport
   // prefetch that's still in flight or queued: its bytes either land in
   // the LRU cache and help the new query (if the user panned into the
@@ -606,6 +639,78 @@ function paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH) {
   }
   drawViewport();
   return true;
+}
+
+// Thumbnail overview: one-time JPIP fetch at the coarsest reduce level
+// that fits within THUMBNAIL_MAX_PX on the long side, decoded into a
+// 2D-canvas ImageData we can re-blit locally on every viewport change.
+// Called once from connect() after canvas dimensions are known.  No-op
+// if `?thumbnail=0`.  Errors are logged and swallowed — a failed
+// thumbnail never breaks the main viewer.
+async function fetchThumbnail() {
+  if (!THUMBNAIL_ENABLED || !ctx || !M || !canvasW || !canvasH) return;
+  const longSide = Math.max(canvasW, canvasH);
+  let red = 0;
+  while ((longSide >> red) > THUMBNAIL_MAX_PX) red++;
+  const ceilShift = (v, s) => ((v + (1 << s) - 1) >> s);
+  const fW = Math.max(1, ceilShift(canvasW, red));
+  const fH = Math.max(1, ceilShift(canvasH, red));
+  const q = `fsiz=${fW},${fH}&type=jpp-stream`;
+  try {
+    M._jpip_set_reduce(ctx, red);
+    const resp = await fetch(`${serverUrl}/jpip?${q}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    M._jpip_begin_frame(ctx);
+    M._jpip_feed_stream_begin(ctx);
+    const pptr = M._jpip_get_response_buffer(ctx, buf.length);
+    wasmWrite(buf, pptr);
+    if (M._jpip_feed_stream(ctx, pptr, buf.length) !== 0) throw new Error('feed_stream failed');
+    if (M._jpip_feed_stream_end(ctx) !== 0) throw new Error('feed_stream_end failed');
+    const rgbaSz = fW * fH * 4;
+    const thumbPtr = M._malloc(rgbaSz);
+    const rc = M._jpip_end_frame_region(ctx, thumbPtr, fW, fH, 0, 0, fW, fH);
+    if (rc === 0) {
+      // Copy RGBA bytes out of the WASM heap before it gets reused by
+      // the main fetch path.  new Uint8Array(...) over the heap gives
+      // a view; Uint8ClampedArray(view) copies.
+      const copy = new Uint8ClampedArray(new Uint8Array(M.HEAPU8.buffer, thumbPtr, rgbaSz));
+      thumbImage = new ImageData(copy, fW, fH);
+      thumbCanvas = $('thumbnail');
+      thumbCanvas.width = fW;
+      thumbCanvas.height = fH;
+      thumbCtx = thumbCanvas.getContext('2d');
+      thumbW = fW;
+      thumbH = fH;
+      thumbCanvas.style.display = 'block';
+      drawThumbnailOverlay();
+    }
+    M._free(thumbPtr);
+  } catch (e) {
+    console.warn('[jpip_viewer] thumbnail fetch failed:', e.message);
+  }
+}
+
+// Re-blit the cached thumbnail ImageData and stroke a rectangle over
+// the current viewport in image-space coordinates.  Cheap: one
+// putImageData + two strokeRect (dark halo + white outline for legibility
+// against both light and dark image content).  No-op until the thumbnail
+// has been fetched.
+function drawThumbnailOverlay() {
+  if (!thumbCtx || !thumbImage || !canvasW || !canvasH) return;
+  thumbCtx.putImageData(thumbImage, 0, 0);
+  const viewW = vpW / zoom, viewH = vpH / zoom;
+  const sx = thumbW / canvasW, sy = thumbH / canvasH;
+  const rx = Math.round(panX * sx);
+  const ry = Math.round(panY * sy);
+  const rw = Math.max(2, Math.round(viewW * sx));
+  const rh = Math.max(2, Math.round(viewH * sy));
+  thumbCtx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+  thumbCtx.lineWidth = 3;
+  thumbCtx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+  thumbCtx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  thumbCtx.lineWidth = 1;
+  thumbCtx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
 }
 
 // Adjacent-viewport prefetch.  Builds a query for a region expanded by
@@ -878,6 +983,12 @@ async function connect() {
   zoom = vpW / canvasW;
   panX = 0; panY = 0;
   $('info').textContent = `${canvasW}×${canvasH}, ${M._jpip_get_total_precincts(ctx)} precincts`;
+
+  // Fetch the overview thumbnail before wiring user-interaction handlers
+  // so there's no race between the one-time low-res fetch and the first
+  // viewport-driven fetch.  Swallows its own errors — a failed thumbnail
+  // must not block viewer startup.
+  await fetchThumbnail();
 
   // ── Mouse drag = pan ──
   let dragging = false, dsx = 0, dsy = 0, psx = 0, psy = 0;
