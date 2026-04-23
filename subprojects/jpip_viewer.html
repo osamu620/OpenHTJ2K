@@ -595,9 +595,18 @@ function drawViewport() {
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
+// Pick the server-side reduce_NL so the fetched region size scales smoothly
+// with the displayed zoom instead of staying pinned across a full 2× zoom
+// window.  Transitions at the √2 geometric midpoint between adjacent
+// power-of-2 reduce levels: upsampling stays ≤ 1.4× (barely perceptible)
+// and bandwidth scales smoothly instead of doubling in a single step.
+// Previously used ceil(log2(1/zoom)) - 1 which always downsampled but made
+// the lower half of each reduce window up to 2× slower than the upper half
+// — e.g. zoom 29 % and zoom 46 % both sat at reduce=1, yet 29 % fetched
+// ~2.5× more precincts per frame.
 function computeReduce() {
-  if (zoom >= 0.5) return 0;
-  return Math.max(0, Math.min(5, Math.ceil(Math.log2(1.0 / zoom)) - 1));
+  if (zoom >= 0.5) return 0;                  // full res at ≥ 50 %
+  return Math.max(0, Math.min(5, Math.round(Math.log2(1.0 / zoom))));
 }
 
 // Track last fetch params to avoid redundant fetches
