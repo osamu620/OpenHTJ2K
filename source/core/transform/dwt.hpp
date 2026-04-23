@@ -412,6 +412,16 @@ struct idwt_2d_state {
   int32_t col_lo;
   int32_t col_hi;
 
+  // ── row-range for vertical viewport (default = full [v0, v1]) ─────────────
+  // When the caller restricts the viewport's vertical extent (set_row_range
+  // on the decoder), pull_row_ref fast-forwards its cursors to row_lo and
+  // stops producing output once row_hi is reached.  The widen-by-halving
+  // margin for 9/7 cascade dependencies is applied by the caller (see
+  // j2k_tile_component::set_line_decode_row_range) before this state sees
+  // the range, so row_lo here is already shifted to cover filter support.
+  int32_t row_lo;
+  int32_t row_hi;
+
   // ── source ────────────────────────────────────────────────────────────────
   idwt_row_src_fn get_src_row;
   void           *src_ctx;
@@ -434,6 +444,13 @@ void idwt_2d_state_free(idwt_2d_state *s);
 // [u0, u1] restores full-width lifting.  Must be called after _init and before
 // any pull_row().  See idwt_2d_state::col_lo / col_hi comments.
 void idwt_2d_state_set_col_range(idwt_2d_state *s, int32_t col_lo, int32_t col_hi);
+
+// Restrict output row range to [row_lo, row_hi).  Passing the default [v0, v1]
+// restores full-height decoding.  Must be called after _init and before any
+// pull_row().  Caller is responsible for applying the 9/7 filter-support
+// margin (see j2k_tile_component::set_line_decode_row_range) so the cascade's
+// top-edge dependencies are preserved.
+void idwt_2d_state_set_row_range(idwt_2d_state *s, int32_t row_lo, int32_t row_hi);
 
 // Sub-range horizontal 1D IDWT.  col_lo / col_hi are target-valid-output
 // columns in ROW coords [0, u1-u0].  When the caller passes the full range

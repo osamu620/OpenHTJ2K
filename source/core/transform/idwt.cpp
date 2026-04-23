@@ -1177,6 +1177,8 @@ void idwt_2d_state_init(idwt_2d_state *s,
 
   s->col_lo      = u0;
   s->col_hi      = u1;
+  s->row_lo      = v0;
+  s->row_hi      = v1;
   s->next_out    = v0;
   s->next_fetch  = v0;
   s->get_src_row = src_fn;
@@ -1189,6 +1191,14 @@ void idwt_2d_state_set_col_range(idwt_2d_state *s, int32_t col_lo, int32_t col_h
   if (col_lo > col_hi) col_lo = col_hi;  // degenerate → empty range
   s->col_lo = col_lo;
   s->col_hi = col_hi;
+}
+
+void idwt_2d_state_set_row_range(idwt_2d_state *s, int32_t row_lo, int32_t row_hi) {
+  if (row_lo < s->v0) row_lo = s->v0;
+  if (row_hi > s->v1) row_hi = s->v1;
+  if (row_lo > row_hi) row_lo = row_hi;  // degenerate → empty range
+  s->row_lo = row_lo;
+  s->row_hi = row_hi;
 }
 
 void idwt_2d_state_free(idwt_2d_state *s) {
@@ -1208,6 +1218,8 @@ void idwt_2d_state_rewind(idwt_2d_state *s) {
   s->ring_origin = s->v0;
   s->next_out    = s->v0;
   s->next_fetch  = s->v0;
+  s->row_lo      = s->v0;
+  s->row_hi      = s->v1;
   for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) { s->d_level[i] = -1; s->row_zero[i] = true; }
   for (int32_t i = 0; i < 4;                     ++i) { s->top_dlevel[i] = -1; s->top_pse_zero[i] = true; }
   for (int32_t i = 0; i < 4;                     ++i) { s->bot_dlevel[i] = -1; s->bot_pse_zero[i] = true; }
