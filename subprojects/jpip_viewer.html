@@ -671,21 +671,34 @@ async function fetchThumbnail() {
     M._jpip_set_reduce(ctx, red);
     const resp = await fetch(`${serverUrl}/jpip?${q}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const buf = new Uint8Array(await resp.arrayBuffer());
+    // Stream the response body in chunks via the same getReader() path
+    // fetchView() uses.  Feeding a large buffer in one shot via
+    // _jpip_get_response_buffer can overflow the decoder's internal
+    // intake buffer; the chunked feed always fits.
     M._jpip_begin_frame(ctx);
     M._jpip_feed_stream_begin(ctx);
-    const pptr = M._jpip_get_response_buffer(ctx, buf.length);
-    wasmWrite(buf, pptr);
-    if (M._jpip_feed_stream(ctx, pptr, buf.length) !== 0) throw new Error('feed_stream failed');
+    const reader = resp.body.getReader();
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const ptr = M._jpip_get_response_buffer(ctx, value.length);
+      wasmWrite(value, ptr);
+      const rc = M._jpip_feed_stream(ctx, ptr, value.length);
+      if (rc !== 0) throw new Error(`feed_stream rc=${rc}`);
+      total += value.length;
+    }
     if (M._jpip_feed_stream_end(ctx) !== 0) throw new Error('feed_stream_end failed');
     const rgbaSz = fW * fH * 4;
     const thumbPtr = M._malloc(rgbaSz);
+    if (!thumbPtr) throw new Error('malloc failed');
     const rc = M._jpip_end_frame_region(ctx, thumbPtr, fW, fH, 0, 0, fW, fH);
     if (rc === 0) {
       // Copy RGBA bytes out of the WASM heap before it gets reused by
-      // the main fetch path.  new Uint8Array(...) over the heap gives
-      // a view; Uint8ClampedArray(view) copies.
-      const copy = new Uint8ClampedArray(new Uint8Array(M.HEAPU8.buffer, thumbPtr, rgbaSz));
+      // the main fetch path.  Re-read HEAPU8 after the WASM call in
+      // case ALLOW_MEMORY_GROWTH detached the previous view.
+      const copy = new Uint8ClampedArray(rgbaSz);
+      copy.set(M.HEAPU8.subarray(thumbPtr, thumbPtr + rgbaSz));
       thumbImage = new ImageData(copy, fW, fH);
       thumbCanvas = $('thumbnail');
       thumbCanvas.width = fW;
@@ -695,13 +708,13 @@ async function fetchThumbnail() {
       thumbH = fH;
       thumbCanvas.style.display = 'block';
       drawThumbnailOverlay();
-      console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(buf.length/1024).toFixed(1)}KB)`);
+      console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(total/1024).toFixed(1)}KB)`);
     } else {
       console.warn(`[jpip_viewer] thumbnail end_frame_region rc=${rc}`);
     }
     M._free(thumbPtr);
   } catch (e) {
-    console.warn('[jpip_viewer] thumbnail fetch failed:', e.message);
+    console.warn('[jpip_viewer] thumbnail fetch failed:', e.message, e.stack);
   } finally {
     busy = false;
     // Drain the latest-pending slot that may have built up while the
