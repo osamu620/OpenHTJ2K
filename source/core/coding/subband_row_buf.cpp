@@ -97,10 +97,12 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   combined_buf    = nullptr;
   prefetch_y0     = -1;
   prefetch_y1     = -1;
-  par_spool       = nullptr;
-  par_stpool      = nullptr;
-  par_spool_cap   = 0;
-  par_stpool_cap  = 0;
+  par_spool         = nullptr;
+  par_stpool        = nullptr;
+  par_ctxpool       = nullptr;
+  par_spool_cap     = 0;
+  par_stpool_cap    = 0;
+  par_ctxpool_cap   = 0;
   par_cnt.store(0, std::memory_order_relaxed);
 #endif
 
@@ -134,8 +136,11 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
   // 32-byte alignment allows _mm256_load_si256 in the dequantize hot path.
   cb_sample_cap  = static_cast<size_t>(round_up(64, 8) * round_up(64, 8));
   cb_state_cap   = static_cast<size_t>((round_up(64, 8) + 2) * (round_up(64, 8) + 2));
+  // block_contexts worst-case per codeblock: 1024×4 shape ⇒ (8/4+2)×(1024+2)=4104 uint32_t.
+  cb_ctx_cap     = 4104u;
   cb_sample_buf  = static_cast<int32_t *>(aligned_mem_alloc(cb_sample_cap * sizeof(int32_t), 32));
   cb_state_buf   = static_cast<uint8_t *>(aligned_mem_alloc(cb_state_cap, 16));
+  cb_ctx_buf     = static_cast<uint32_t *>(aligned_mem_alloc(cb_ctx_cap * sizeof(uint32_t), 32));
 
 #ifdef OPENHTJ2K_THREAD
   // par_spool / par_stpool start at zero capacity; decode_strip_core will
@@ -170,8 +175,9 @@ void j2k_subband_row_buf::free_resources() {
   aligned_mem_free(combined_buf);
   combined_buf = ring_buf = prefetch_buf = nullptr;
   ring_y0 = -1;
-  aligned_mem_free(par_spool);  par_spool  = nullptr;  par_spool_cap  = 0;
-  aligned_mem_free(par_stpool); par_stpool = nullptr;  par_stpool_cap = 0;
+  aligned_mem_free(par_spool);   par_spool   = nullptr;  par_spool_cap   = 0;
+  aligned_mem_free(par_stpool);  par_stpool  = nullptr;  par_stpool_cap  = 0;
+  aligned_mem_free(par_ctxpool); par_ctxpool = nullptr;  par_ctxpool_cap = 0;
   par_tasks.clear();
   par_tasks.shrink_to_fit();
   strip_cache_.clear();
@@ -180,6 +186,7 @@ void j2k_subband_row_buf::free_resources() {
   aligned_mem_free(ring_buf); ring_buf = nullptr; ring_y0 = -1;
   aligned_mem_free(cb_sample_buf); cb_sample_buf = nullptr; cb_sample_cap = 0;
   aligned_mem_free(cb_state_buf);  cb_state_buf  = nullptr; cb_state_cap  = 0;
+  aligned_mem_free(cb_ctx_buf);    cb_ctx_buf    = nullptr; cb_ctx_cap    = 0;
   strip_y0 = strip_y1 = -1;
 }
 
@@ -206,7 +213,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
     if (pool && pool->num_threads() > 1) {
       // ── Parallel path ──────────────────────────────────────────────────────
       par_tasks.clear();
-      size_t total_s = 0, total_st = 0;
+      size_t total_s = 0, total_st = 0, total_ctx = 0;
 
       for (uint32_t p = 0; p < np; ++p) {
         j2k_precinct         *cp  = res->access_precinct(p);
@@ -253,14 +260,16 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
             bt.QHx2       = QHx2;
             bt.sample_off = total_s;
             bt.state_off  = total_st;
+            bt.ctx_off    = total_ctx;
             bt.row_off    = (ring_mode && target_buf)
                                 ? (static_cast<int32_t>(block->get_pos0().y) - y0) * stride
                                 : 0;
             bt.col_off = (ring_mode && target_buf)
                              ? static_cast<int32_t>(block->get_pos0().x) - sb_x0
                              : 0;
-            total_s  += static_cast<size_t>(QWx2 * QHx2);
-            total_st += static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
+            total_s   += static_cast<size_t>(QWx2 * QHx2);
+            total_st  += static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
+            total_ctx += static_cast<size_t>((QHx2 / 4 + 2) * (QWx2 + 2));
             par_tasks.push_back(bt);
           }
         }
@@ -278,6 +287,11 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           par_stpool     = static_cast<uint8_t *>(aligned_mem_alloc(total_st, 16));
           par_stpool_cap = total_st;
         }
+        if (total_ctx > par_ctxpool_cap) {
+          aligned_mem_free(par_ctxpool);
+          par_ctxpool     = static_cast<uint32_t *>(aligned_mem_alloc(total_ctx * sizeof(uint32_t), 32));
+          par_ctxpool_cap = total_ctx;
+        }
         // Setup pass: assign scratch pointers and selectively zero buffers.
         // ht_cleanup_decode writes every sample_buf/block_states position before
         // reading, so HT single-pass blocks need no pre-zeroing. EBCOT and HT
@@ -286,16 +300,20 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         // the cleanup interior pass, leaving the border uninitialised).
         par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
         for (auto &bt : par_tasks) {
-          bt.block->sample_buf      = par_spool + bt.sample_off;
-          bt.block->blksampl_stride = bt.QWx2;
-          bt.block->block_states    = par_stpool + bt.state_off;
-          bt.block->blkstate_stride = bt.QWx2 + 2;
+          bt.block->sample_buf           = par_spool + bt.sample_off;
+          bt.block->blksampl_stride      = bt.QWx2;
+          bt.block->block_states         = par_stpool + bt.state_off;
+          bt.block->blkstate_stride      = bt.QWx2 + 2;
+          bt.block->block_contexts       = par_ctxpool + bt.ctx_off;
+          bt.block->block_contexts_stride = bt.QWx2 + 2;
           if (ring_mode && target_buf)
             bt.block->i_samples = target_buf + bt.row_off + bt.col_off;
           const bool is_ht = (bt.block->Cmodes & HT) >> 6;
           if (!is_ht) {
             std::memset(bt.block->sample_buf, 0, bt.QWx2 * bt.QHx2 * sizeof(int32_t));
             std::memset(bt.block->block_states, 0, (bt.QWx2 + 2) * (bt.QHx2 + 2));
+            std::memset(bt.block->block_contexts, 0,
+                        (bt.QHx2 / 4 + 2) * (bt.QWx2 + 2) * sizeof(uint32_t));
           } else if (bt.block->num_passes > 1) {
             std::memset(bt.block->block_states, 0, (bt.QWx2 + 2) * (bt.QHx2 + 2));
           }
@@ -360,10 +378,11 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           continue;
         }
 
-        const uint32_t QWx2    = round_up(block->size.x, 8U);
-        const uint32_t QHx2    = round_up(block->size.y, 8U);
-        const size_t   need_s  = static_cast<size_t>(QWx2 * QHx2);
-        const size_t   need_st = static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
+        const uint32_t QWx2     = round_up(block->size.x, 8U);
+        const uint32_t QHx2     = round_up(block->size.y, 8U);
+        const size_t   need_s   = static_cast<size_t>(QWx2 * QHx2);
+        const size_t   need_st  = static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
+        const size_t   need_ctx = static_cast<size_t>((QHx2 / 4 + 2) * (QWx2 + 2));
 
         if (need_s > cb_sample_cap) {
           aligned_mem_free(cb_sample_buf);
@@ -375,6 +394,11 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           cb_state_buf = static_cast<uint8_t *>(aligned_mem_alloc(need_st, 16));
           cb_state_cap = need_st;
         }
+        if (need_ctx > cb_ctx_cap) {
+          aligned_mem_free(cb_ctx_buf);
+          cb_ctx_buf = static_cast<uint32_t *>(aligned_mem_alloc(need_ctx * sizeof(uint32_t), 32));
+          cb_ctx_cap = need_ctx;
+        }
 
         // ht_cleanup_decode writes every position before reading, so no
         // pre-zeroing is needed for single-pass HT blocks. For EBCOT and
@@ -383,14 +407,17 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         if (!is_ht) {
           std::memset(cb_sample_buf, 0, need_s * sizeof(int32_t));
           std::memset(cb_state_buf, 0, need_st);
+          std::memset(cb_ctx_buf, 0, need_ctx * sizeof(uint32_t));
         } else if (block->num_passes > 1) {
           std::memset(cb_state_buf, 0, need_st);
         }
 
-        block->sample_buf      = cb_sample_buf;
-        block->blksampl_stride = QWx2;
-        block->block_states    = cb_state_buf;
-        block->blkstate_stride = QWx2 + 2;
+        block->sample_buf            = cb_sample_buf;
+        block->blksampl_stride       = QWx2;
+        block->block_states          = cb_state_buf;
+        block->blkstate_stride       = QWx2 + 2;
+        block->block_contexts        = cb_ctx_buf;
+        block->block_contexts_stride = QWx2 + 2;
 
         if (ring_mode && target_buf != nullptr) {
           const ptrdiff_t row_off =
@@ -517,7 +544,7 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   // we fall back to a tree walk that builds into a thread-local block list.
   // That path should not normally be taken.
   par_tasks.clear();
-  size_t total_s = 0, total_st = 0;
+  size_t total_s = 0, total_st = 0, total_ctx = 0;
   const ptrdiff_t stride = static_cast<ptrdiff_t>(sb->stride);
 
   auto process_block = [&](const CachedBlock &ce) {
@@ -540,10 +567,12 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     pb.QHx2       = ce.QHx2;
     pb.sample_off = total_s;
     pb.state_off  = total_st;
+    pb.ctx_off    = total_ctx;
     pb.row_off    = ce.row_off;
     pb.col_off    = ce.col_off;
-    total_s  += static_cast<size_t>(ce.QWx2 * ce.QHx2);
-    total_st += static_cast<size_t>((ce.QWx2 + 2) * (ce.QHx2 + 2));
+    total_s   += static_cast<size_t>(ce.QWx2 * ce.QHx2);
+    total_st  += static_cast<size_t>((ce.QWx2 + 2) * (ce.QHx2 + 2));
+    total_ctx += static_cast<size_t>((ce.QHx2 / 4 + 2) * (ce.QWx2 + 2));
     par_tasks.push_back(pb);
   };
 
@@ -604,6 +633,11 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     par_stpool     = static_cast<uint8_t *>(aligned_mem_alloc(total_st, 16));
     par_stpool_cap = total_st;
   }
+  if (total_ctx > par_ctxpool_cap) {
+    aligned_mem_free(par_ctxpool);
+    par_ctxpool     = static_cast<uint32_t *>(aligned_mem_alloc(total_ctx * sizeof(uint32_t), 32));
+    par_ctxpool_cap = total_ctx;
+  }
 
   par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
 
@@ -612,15 +646,19 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   // positions before reading). EBCOT and multi-pass HT blocks still need it.
   sprec_t *pbuf = prefetch_buf;
   for (auto &pb : par_tasks) {
-    pb.block->sample_buf      = par_spool + pb.sample_off;
-    pb.block->blksampl_stride = pb.QWx2;
-    pb.block->block_states    = par_stpool + pb.state_off;
-    pb.block->blkstate_stride = pb.QWx2 + 2;
-    pb.block->i_samples       = pbuf + pb.row_off + pb.col_off;
+    pb.block->sample_buf            = par_spool + pb.sample_off;
+    pb.block->blksampl_stride       = pb.QWx2;
+    pb.block->block_states          = par_stpool + pb.state_off;
+    pb.block->blkstate_stride       = pb.QWx2 + 2;
+    pb.block->block_contexts        = par_ctxpool + pb.ctx_off;
+    pb.block->block_contexts_stride = pb.QWx2 + 2;
+    pb.block->i_samples             = pbuf + pb.row_off + pb.col_off;
     const bool is_ht = (pb.block->Cmodes & HT) >> 6;
     if (!is_ht) {
       std::memset(pb.block->sample_buf, 0, pb.QWx2 * pb.QHx2 * sizeof(int32_t));
       std::memset(pb.block->block_states, 0, (pb.QWx2 + 2) * (pb.QHx2 + 2));
+      std::memset(pb.block->block_contexts, 0,
+                  (pb.QHx2 / 4 + 2) * (pb.QWx2 + 2) * sizeof(uint32_t));
     } else if (pb.block->num_passes > 1) {
       std::memset(pb.block->block_states, 0, (pb.QWx2 + 2) * (pb.QHx2 + 2));
     }
