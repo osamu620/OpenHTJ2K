@@ -289,6 +289,7 @@
         <tr><td><code>?prefetchDelayMs=</code></td><td><code>150</code></td><td>Idle-delay before the halo prefetch fires (in milliseconds). Short enough to overlap typical pause-and-examine behaviour; long enough that continuous panning never triggers it.</td></tr>
         <tr><td><code>?midPaintMs=</code></td><td><code>200</code></td><td>Show a partial render (whatever precincts have arrived) if a fetch takes longer than <i>N</i> ms. Gives feedback on slow first-time loads; costs one extra decoder run. Fast (LAN / cached) fetches never trigger it. Set <code>0</code> to disable.</td></tr>
         <tr><td><code>?thumbnail=</code></td><td><code>1</code></td><td>Small bottom-right overview showing the full image (fetched once at connect time from the coarsest reduce level) with a rectangle marking the current viewport. Rectangle updates locally on every pan/zoom — no extra server round-trips. Set <code>0</code> to hide.</td></tr>
+        <tr><td><code>?thumbnailSize=</code></td><td><code>160</code></td><td>CSS-pixel size of the thumbnail on its long side. Decoder output resolution is independent — only the displayed size changes.</td></tr>
       </tbody>
     </table>
   </details>
@@ -463,12 +464,21 @@ const MID_PAINT_MS = (() => {
 // redrawn locally (no server round-trip) on every pan/zoom with a
 // rectangle marking the current viewport.  `?thumbnail=0` disables.
 const THUMBNAIL_ENABLED = new URLSearchParams(location.search).get('thumbnail') !== '0';
-const THUMBNAIL_MAX_PX = 256;
+// Displayed CSS-pixel size on the long side.  Override with ?thumbnailSize=N.
+const THUMBNAIL_MAX_PX = (() => {
+  const v = Number(new URLSearchParams(location.search).get('thumbnailSize'));
+  return Number.isFinite(v) && v > 0 ? Math.round(v) : 160;
+})();
 // Cap matches computeReduce()'s own cap — servers can't be relied on to
 // accept reduce levels beyond what the viewer normally uses.
 const THUMBNAIL_MAX_REDUCE = 5;
 let thumbCanvas = null, thumbCtx = null, thumbImage = null;
 let thumbW = 0, thumbH = 0;
+// requestAnimationFrame throttle for overlay redraws.  scheduleFetch()
+// fires on every mousemove (~100 Hz during drag); coalescing to the
+// browser's paint cycle keeps the per-move cost down to one putImageData
+// + strokeRect per frame instead of per event.
+let thumbRafPending = false;
 // Set by connect() to request a thumbnail fetch; fetchView() clears it
 // after the first successful main-view paint and fires fetchThumbnail()
 // from idle, so the two never fight over the shared decoder state.
@@ -741,25 +751,32 @@ async function fetchThumbnail() {
 }
 
 // Re-blit the cached thumbnail ImageData and stroke a rectangle over
-// the current viewport in image-space coordinates.  Cheap: one
-// putImageData + two strokeRect (dark halo + white outline for legibility
-// against both light and dark image content).  No-op until the thumbnail
-// has been fetched.
+// the current viewport in image-space coordinates.  Coalesced to at
+// most one redraw per browser frame via requestAnimationFrame — without
+// this, panning (mousemove @ ~100 Hz) would trigger a 500×400
+// putImageData per event and noticeably lag the scroll.  No-op until
+// the thumbnail has been fetched.
 function drawThumbnailOverlay() {
   if (!thumbCtx || !thumbImage || !canvasW || !canvasH) return;
-  thumbCtx.putImageData(thumbImage, 0, 0);
-  const viewW = vpW / zoom, viewH = vpH / zoom;
-  const sx = thumbW / canvasW, sy = thumbH / canvasH;
-  const rx = Math.round(panX * sx);
-  const ry = Math.round(panY * sy);
-  const rw = Math.max(2, Math.round(viewW * sx));
-  const rh = Math.max(2, Math.round(viewH * sy));
-  thumbCtx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
-  thumbCtx.lineWidth = 3;
-  thumbCtx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
-  thumbCtx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
-  thumbCtx.lineWidth = 1;
-  thumbCtx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+  if (thumbRafPending) return;
+  thumbRafPending = true;
+  requestAnimationFrame(() => {
+    thumbRafPending = false;
+    if (!thumbCtx || !thumbImage) return;
+    thumbCtx.putImageData(thumbImage, 0, 0);
+    const viewW = vpW / zoom, viewH = vpH / zoom;
+    const sx = thumbW / canvasW, sy = thumbH / canvasH;
+    const rx = Math.round(panX * sx);
+    const ry = Math.round(panY * sy);
+    const rw = Math.max(2, Math.round(viewW * sx));
+    const rh = Math.max(2, Math.round(viewH * sy));
+    thumbCtx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+    thumbCtx.lineWidth = 3;
+    thumbCtx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+    thumbCtx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+    thumbCtx.lineWidth = 1;
+    thumbCtx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+  });
 }
 
 // Adjacent-viewport prefetch.  Builds a query for a region expanded by
