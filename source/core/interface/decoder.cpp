@@ -59,6 +59,7 @@ class openhtj2k_decoder_impl {
  private:
   j2c_src_memory in;
   uint8_t reduce_NL;
+  uint32_t row_lo_    = 0;
   uint32_t row_limit_ = UINT32_MAX;
   uint32_t col_lo_    = 0;
   uint32_t col_hi_    = UINT32_MAX;
@@ -126,6 +127,10 @@ class openhtj2k_decoder_impl {
                                     std::vector<bool> &);
   void enable_single_tile_reuse(bool on);
   void set_row_limit(uint32_t limit) { row_limit_ = limit; }
+  void set_row_range(uint32_t row_lo, uint32_t row_hi) {
+    row_lo_    = row_lo;
+    row_limit_ = row_hi;
+  }
   void set_col_range(uint32_t col_lo, uint32_t col_hi) {
     col_lo_ = col_lo;
     col_hi_ = col_hi;
@@ -676,7 +681,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL,
           [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
             cb(global_y + y_local, rows, nc);
-          }, row_limit_, col_lo_, col_hi_);
+          }, row_limit_, row_lo_, col_lo_, col_hi_);
       tileSet[tile_idx].destroy();
       global_y += band_h0;
     }
@@ -686,6 +691,14 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   // General path: multiple tile columns — scatter into per-band-row accumulators.
   // Hoist all per-iteration scratch vectors out of the loops so the heap allocations
   // happen once instead of (numTiles.y * (1 + numTiles.x + 1)) times.
+  // NOTE: set_row_range is applied here at the per-tile decode (row_lo/row_hi in
+  // global finest-active-level coords, re-interpreted as tile-local inside each
+  // tile's decode_line_based_stream because tile band-heights stack vertically).
+  // The final `cb(global_y + y, ...)` loop below does NOT filter by row_lo, so
+  // multi-tile row_range still delivers all rows above/below the window back to
+  // the user callback — the savings only reach the HT decode layer.  A future
+  // caller wanting a clean multi-tile row_range needs to translate global row_lo
+  // into tile-local coords for each ty iteration and filter this cb loop.
   std::vector<uint32_t>             band_h(num_components);
   std::vector<uint32_t>             tile_x_off(num_components);
   std::vector<uint32_t>             tile_w(num_components);
@@ -739,7 +752,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         throw std::runtime_error("Abort Decoding!");
       }
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_,
-                                                  col_lo_, col_hi_);
+                                                  row_lo_, col_lo_, col_hi_);
       tileSet[tile_idx].destroy();  // Release tile-internal buffers immediately
     }
 
@@ -789,6 +802,10 @@ void openhtj2k_decoder_impl::enable_single_tile_reuse(bool on) {
 
 void openhtj2k_decoder::set_row_limit(uint32_t limit) {
   this->impl->set_row_limit(limit);
+}
+
+void openhtj2k_decoder::set_row_range(uint32_t row_lo, uint32_t row_hi) {
+  this->impl->set_row_range(row_lo, row_hi);
 }
 
 void openhtj2k_decoder::set_col_range(uint32_t col_lo, uint32_t col_hi) {
@@ -1042,7 +1059,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
   }
 
   cached_tileSet_[0].decode_line_based_stream(main_header, reduce_NL, cb, row_limit_,
-                                               col_lo_, col_hi_);
+                                               row_lo_, col_lo_, col_hi_);
 
   cached_header_fingerprint_ = fp;
 }

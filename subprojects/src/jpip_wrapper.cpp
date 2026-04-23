@@ -667,13 +667,12 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
     xc_lut[xw] = rx0 + static_cast<uint32_t>(static_cast<uint64_t>(xw) * rw / ow);
   }
 
-  dec.set_row_limit(ry1);
+  dec.set_row_range(ry0, ry1);
   dec.set_col_range(rx0, rx1);
   try {
     dec.invoke_line_based_stream_reuse(
         [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
           if (nc < 3 || widths.empty() || heights.empty()) return;
-          if (y < ry0 || y >= ry1) return;
           const int32_t shift = (depths.empty() ? 0 : static_cast<int32_t>(depths[0]) - 8);
           const int32_t shift_pos = shift > 0 ? shift : 0;  // no-op when bit-depth <= 8
           const uint32_t ty = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0) * oh / rh);

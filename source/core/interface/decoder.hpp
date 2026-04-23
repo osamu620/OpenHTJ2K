@@ -117,6 +117,15 @@ class openhtj2k_decoder {
   // this many luma rows.  Default = UINT32_MAX (no limit).
   OPENHTJ2K_EXPORT void set_row_limit(uint32_t limit);
 
+  // Spatial-region vertical viewport.  Restricts line-based decode to rows
+  // [row_lo, row_hi) in the finest active-level output coord space.  Default
+  // = [0, UINT32_MAX) → full-height decode (same cost as before).  Coarser
+  // DWT levels automatically receive a halved range widened by the 9/7 filter
+  // support, mirroring set_col_range.  Rows outside [row_lo, row_hi) are not
+  // emitted via the callback.  Calling set_row_range overrides any prior
+  // set_row_limit call (row_hi replaces the limit).
+  OPENHTJ2K_EXPORT void set_row_range(uint32_t row_lo, uint32_t row_hi);
+
   // Phase 4B spatial-region column range (horizontal viewport clipping).
   // Restricts the vertical-IDWT lifting work to columns [col_lo, col_hi) in
   // the finest-resolution output coordinates (after reduce_NL).  Coarser

@@ -127,6 +127,14 @@ struct idwt_level_src_ctx {
   // values are zero.
   int32_t col_lo;
   int32_t col_hi;
+
+  // Vertical viewport clip (set_row_range).  Default = [v0, v1] → no change
+  // from pre-patch behaviour.  When the caller narrows the range, the
+  // halving-with-widen cascade in set_line_decode_row_range shifts these
+  // to include the 9/7 filter-support margin.  idwt_level_src_fn can short-
+  // circuit rows below row_lo with a zero-filled output.
+  int32_t row_lo;
+  int32_t row_hi;
 };
 
 // Whole-sample symmetric extension: reflect idx into [0, len).
@@ -163,6 +171,41 @@ static inline bool lp_hp_both_zero(const sprec_t *lp, int32_t lp_w,
 // Callback invoked by idwt_2d_state::fetch_one() for each source row.
 static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   auto *c = static_cast<idwt_level_src_ctx *>(ctx);
+
+  // Row-range skip (set_row_range).  When this source row is below the
+  // filter-widened row_lo for this level, emit zero and skip the subband
+  // fetches that would otherwise trigger HT codeblock decoding.  The child
+  // state's cursor must still advance in lockstep — each LP row (or every
+  // row in NO/HORZ levels) consumes exactly one child output — so we
+  // recurse into pull_row_ref and discard the result.  The recursion
+  // bottoms out at has_child == false; at that leaf the subband row-buffer
+  // fetches simply don't happen, which is the intended saving.
+  //
+  // Upper bound: the outer strip loop caps at effective_H = min(H, row_limit)
+  // so rows above row_hi are never emitted; the cascade may fetch a few
+  // rows beyond row_hi for lookahead but that's bounded by bottom_pse (<5),
+  // not worth a second compare in the hot path.
+  //
+  // For the full-range case (row_lo == v0) the branch is always false
+  // (abs_row is always ≥ v0 by fetch_one's invariant), predicted
+  // not-taken, and costs one load + one compare per fetch.
+  if (abs_row < c->row_lo) {
+    const int32_t width_z = c->u1 - c->u0;
+    if (width_z > 0) memset(out, 0, sizeof(sprec_t) * static_cast<size_t>(width_z));
+    bool pulls_child = false;
+    if (c->has_child) {
+      if (c->dir == DWT_NO || c->dir == DWT_HORZ) {
+        pulls_child = true;
+      } else {
+        // BIDIR: LP rows (even abs_row) consume one child output row.
+        pulls_child = ((abs_row & 1) == 0);
+      }
+    }
+    if (pulls_child) {
+      (void)idwt_2d_state_pull_row_ref(c->child_state);
+    }
+    return;
+  }
 
   // ── DWT_NO: passthrough — copy LL row directly ────────────────────────────
   if (c->dir == DWT_NO) {
@@ -2344,6 +2387,8 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     c.h_pse_right    = (u1 - u0 > 1) ? kHPseRight[u1 % 2][eff] : 0;
     c.col_lo         = u0;
     c.col_hi         = u1;
+    c.row_lo         = v0;
+    c.row_hi         = v1;
 
     // lp_tmp only needed when has_child (child state writes output into it as fallback).
     // hp_tmp eliminated: HP data is read directly from subband row buffers.
@@ -2400,6 +2445,47 @@ void j2k_tile_component::set_line_decode_col_range(uint32_t col_lo, uint32_t col
     // Next coarser level's output feeds this level's horizontal IDWT, which
     // reads up to 4 samples beyond each output column.  In subband coords
     // (half-width) that maps to ±2 samples; we round up to 4 for safety.
+    const int32_t halved_lo = (a >> 1) - 4;
+    const int32_t halved_hi = ((b + 1) >> 1) + 4;
+    a = halved_lo;
+    b = halved_hi;
+  }
+}
+
+void j2k_tile_component::set_line_decode_row_range(uint32_t row_lo, uint32_t row_hi) {
+  if (line_dec == nullptr) return;
+  j2k_tcomp_line_dec *ld = line_dec.get();
+  if (ld->NL_active <= 0) return;
+  idwt_2d_state      *states = ld->states.get();
+  idwt_level_src_ctx *ctxs   = ld->ctxs.get();
+  const int32_t NL_act       = ld->NL_active;
+  // Clamp caller's range to the finest-level tile bounds so UINT32_MAX
+  // (the "no limit" sentinel) doesn't sign-flip when widened below.
+  const int32_t fine_v1 = states[NL_act - 1].v1;
+  int32_t a = (row_lo >= static_cast<uint32_t>(fine_v1))
+                  ? fine_v1
+                  : static_cast<int32_t>(row_lo);
+  int32_t b = (row_hi >= static_cast<uint32_t>(fine_v1))
+                  ? fine_v1
+                  : static_cast<int32_t>(row_hi);
+  // Initial margin for the finest level's vertical 9/7 filter support.
+  // The cascade is 4 lift steps (max_dl=2 × 2 LP/HP phases) and damage from
+  // a zero row propagates ±4 rows per step in the worst case, compounded by
+  // the top_pse reflection range.  Vertical lifting has no row-direction
+  // counterpart to idwt_1d_row_inplace_range, so the cascade needs real
+  // (non-zero) source rows above and below the viewport.  Coarser levels
+  // halve + re-widen.  A generous 16-row margin covers 9/7 comfortably and
+  // reduces to a few per cent overhead on 4K-ish fixtures.
+  a -= 16;
+  b += 16;
+  for (int32_t i = NL_act - 1; i >= 0; --i) {
+    idwt_2d_state_set_row_range(&states[i], a, b);
+    int32_t ra = a, rb = b;
+    if (ra < states[i].v0) ra = states[i].v0;
+    if (rb > states[i].v1) rb = states[i].v1;
+    if (ra > rb) ra = rb;
+    ctxs[i].row_lo = ra;
+    ctxs[i].row_hi = rb;
     const int32_t halved_lo = (a >> 1) - 4;
     const int32_t halved_hi = ((b + 1) >> 1) + 4;
     a = halved_lo;
@@ -2578,6 +2664,15 @@ void j2k_tile_component::reset_line_decode_cursors() {
     idwt_2d_state *states = ld->states.get();
     for (int32_t i = 0; i < n; ++i) {
       idwt_2d_state_rewind(&states[i]);
+    }
+    // Restore ctxs' row_lo/row_hi to the full per-level extent so a narrow
+    // range left by a prior frame doesn't persist into a wide-range frame.
+    // (col_lo/col_hi have the same concern but are out of scope here; fix
+    //  alongside the col path when it's revisited.)
+    idwt_level_src_ctx *ctxs = ld->ctxs.get();
+    for (int32_t i = 0; i < n; ++i) {
+      ctxs[i].row_lo = states[i].v0;
+      ctxs[i].row_hi = states[i].v1;
     }
   }
 
@@ -4898,6 +4993,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val,
 void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_val,
                                         const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb,
                                         uint32_t row_limit,
+                                        uint32_t row_lo,
                                         uint32_t col_lo_in, uint32_t col_hi_in) {
   const uint16_t NC = num_components;
 
@@ -4970,6 +5066,28 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
   for (uint16_t c = 0; c < NC; ++c)
     tcomp[c].init_line_decode(/*ring_mode=*/true);
+
+  // Apply per-level row range only when row_lo narrows the lower bound, and
+  // only AFTER init_line_decode — on the reuse path init_line_decode calls
+  // reset_line_decode_cursors which clears ctx.row_lo/row_hi back to [v0, v1],
+  // so any narrowing applied earlier would be clobbered.  row_limit (row_hi)
+  // on its own does NOT need set_line_decode_row_range because the outer
+  // strip loop already caps at effective_H = min(H, row_limit) and the
+  // cascade's lookahead never exceeds that cap + bottom_pse.
+  //
+  // row_lo / row_limit are in luma-finest-active coords.  For subsampled
+  // components (SIZ YRsiz > 1) we must scale down so each tcomp's per-level
+  // row range lives in its own tile-component coord space.
+  if (row_lo != 0) {
+    for (uint16_t c = 0; c < NC; ++c) {
+      const uint32_t yr_c      = ci[c].yr;
+      const uint32_t row_lo_c  = row_lo / yr_c;
+      const uint32_t row_hi_c  = (row_limit == UINT32_MAX)
+                                   ? UINT32_MAX
+                                   : (row_limit + yr_c - 1) / yr_c;  // ceil-divide
+      tcomp[c].set_line_decode_row_range(row_lo_c, row_hi_c);
+    }
+  }
 
   const uint32_t H = ci[0].csize_y;
   const uint32_t effective_H = std::min(H, row_limit);
@@ -5074,8 +5192,11 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
     // Phase 2: finalize + callback inner loop — reads strip_ptrs[c] at the
     // subsampling-aware row offset.  Inner SIMD kernels and control flow
-    // are unchanged from the pre-strip driver.
-    for (uint32_t y = strip_y0; y < strip_y1; ++y) {
+    // are unchanged from the pre-strip driver.  Rows below the caller's
+    // row_lo were produced upstream (the state machines don't skip fetches
+    // unless the per-level row_lo zero-fill fires) but we don't emit them.
+    const uint32_t emit_y0 = std::max(strip_y0, row_lo);
+    for (uint32_t y = emit_y0; y < strip_y1; ++y) {
     if (do_mct) {
       // Fused path: read 3 MCT component rows from strip scratch, then
       // apply inverse MCT + float→int32 finalize in a single pass.
