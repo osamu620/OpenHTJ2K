@@ -692,37 +692,18 @@ async function fetchThumbnail() {
     const rgbaSz = fW * fH * 4;
     const thumbPtr = M._malloc(rgbaSz);
     if (!thumbPtr) throw new Error('malloc failed');
-    // Pre-fill the buffer with a recognisable sentinel so we can tell
-    // whether end_frame_region actually wrote anything.  If the decoder
-    // succeeds but leaves the buffer untouched, the thumbnail will be
-    // solid cyan (R=0, G=255, B=255, A=255) instead of invisible.
-    const SENT_R = 0, SENT_G = 255, SENT_B = 255;
-    {
-      const h = M.HEAPU8;
-      for (let i = 0; i < rgbaSz; i += 4) {
-        h[thumbPtr + i + 0] = SENT_R;
-        h[thumbPtr + i + 1] = SENT_G;
-        h[thumbPtr + i + 2] = SENT_B;
-        h[thumbPtr + i + 3] = 255;
-      }
-    }
-    const rc = M._jpip_end_frame_region(ctx, thumbPtr, fW, fH, 0, 0, fW, fH);
-    console.log(`[jpip_viewer] thumbnail end_frame_region rc=${rc}, bytes=${total}`);
+    // region_x / region_y / region_w / region_h are in canvas coordinates
+    // (pre-reduce) per jpip_end_frame_region's contract — for the overview
+    // we want the full canvas, not the reduced dims.  Output buffer size
+    // (fW × fH) is independent: the decoder scales the decoded region to
+    // the output rectangle.
+    const rc = M._jpip_end_frame_region(ctx, thumbPtr, fW, fH, 0, 0, canvasW, canvasH);
     if (rc === 0) {
-      // Copy RGBA bytes out of the WASM heap before it gets reused by
-      // the main fetch path.  Re-read HEAPU8 after the WASM call in
-      // case ALLOW_MEMORY_GROWTH detached the previous view.
+      // Copy RGBA bytes out of the WASM heap before the main fetch path
+      // reuses it.  subarray() reads the live HEAPU8 view so it is
+      // robust against ALLOW_MEMORY_GROWTH detachment.
       const copy = new Uint8ClampedArray(rgbaSz);
       copy.set(M.HEAPU8.subarray(thumbPtr, thumbPtr + rgbaSz));
-      // Diagnostic: log corner + middle pixels.  If these match the
-      // cyan sentinel, end_frame_region did not write.  If alpha is 0,
-      // the canvas renders invisible against the background.
-      const px = (x, y) => {
-        const o = (y * fW + x) * 4;
-        return `(${copy[o]},${copy[o+1]},${copy[o+2]},${copy[o+3]})`;
-      };
-      console.log(`[jpip_viewer] thumbnail pixels: TL=${px(0,0)} ` +
-        `MID=${px(fW>>1, fH>>1)} BR=${px(fW-1, fH-1)}`);
       thumbImage = new ImageData(copy, fW, fH);
       thumbCanvas = $('thumbnail');
       thumbCanvas.width = fW;
@@ -730,6 +711,15 @@ async function fetchThumbnail() {
       thumbCtx = thumbCanvas.getContext('2d');
       thumbW = fW;
       thumbH = fH;
+      // Scale the displayed CSS size down so the long side never exceeds
+      // THUMBNAIL_MAX_PX — the reduce-level cap (5) can leave fW at a
+      // few hundred pixels on medium images or several thousand on true
+      // gigapixel fixtures.  Drawing-buffer size stays at fW × fH so
+      // we don't throw away the resolution the decoder just gave us.
+      const longSide = Math.max(fW, fH);
+      const scale = longSide > THUMBNAIL_MAX_PX ? THUMBNAIL_MAX_PX / longSide : 1;
+      thumbCanvas.style.width  = `${Math.round(fW * scale)}px`;
+      thumbCanvas.style.height = `${Math.round(fH * scale)}px`;
       thumbCanvas.style.display = 'block';
       drawThumbnailOverlay();
       console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(total/1024).toFixed(1)}KB)`);
