@@ -73,10 +73,12 @@ struct j2k_subband_row_buf {
   int32_t  ring_y0;     // first row of current strip in ring_buf (= strip_y0)
 
   // Scratch buffers reused across codeblocks (serial decode; one block at a time).
-  int32_t *cb_sample_buf;
-  uint8_t *cb_state_buf;
-  size_t   cb_sample_cap;  // current capacity in elements
-  size_t   cb_state_cap;
+  int32_t  *cb_sample_buf;
+  uint8_t  *cb_state_buf;
+  uint32_t *cb_ctx_buf;
+  size_t    cb_sample_cap;  // current capacity in elements
+  size_t    cb_state_cap;
+  size_t    cb_ctx_cap;     // block_contexts capacity in uint32_t
 
 #ifdef OPENHTJ2K_THREAD
   // Double-buffer for strip prefetch: while IDWT consumes ring_buf (current strip),
@@ -96,16 +98,18 @@ struct j2k_subband_row_buf {
   struct CblkTask {
     j2k_codeblock *block;
     uint32_t       QWx2, QHx2;
-    size_t         sample_off, state_off;
+    size_t         sample_off, state_off, ctx_off;
     ptrdiff_t      row_off, col_off;  // ring/prefetch target offset; 0 in non-ring mode
   };
 
   // Grow-only scratch pools (never freed until free_resources()).
   // Sized at init() from a per-subband strip pre-scan; only realloc'd on growth.
-  int32_t *par_spool;
-  uint8_t *par_stpool;
-  size_t   par_spool_cap;
-  size_t   par_stpool_cap;
+  int32_t  *par_spool;
+  uint8_t  *par_stpool;
+  uint32_t *par_ctxpool;
+  size_t    par_spool_cap;
+  size_t    par_stpool_cap;
+  size_t    par_ctxpool_cap;
 
   // Task list pre-reserved to max codeblocks per strip (from init() pre-scan).
   std::vector<CblkTask> par_tasks;

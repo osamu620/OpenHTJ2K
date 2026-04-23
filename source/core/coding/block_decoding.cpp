@@ -32,6 +32,62 @@
 #include "EBCOTtables.hpp"
 #include "block_dequant.hpp"
 
+// 9-bit-indexed σ-context LUT for the packed stripe-column word (book §17.1.2 figure 17.2).
+// Built once at startup from the 8-bit sig_LUT by remapping the neighbourhood-bit layout:
+//   8-bit sig_LUT:  TL=0 TR=1 BL=2 BR=3 T=4 B=5 L=6 R=7
+//   9-bit window:   TL=0 T=1 TR=2 L=3 self=4 R=5 BL=6 B=7 BR=8
+// The self bit (bit 4) is a don't-care since κ^sig is only queried when σ=0; we still
+// populate all 512 entries so the index never needs masking.
+namespace {
+struct SigLUT9Init {
+  uint8_t data[4][512];
+  SigLUT9Init() {
+    for (uint32_t idx9 = 0; idx9 < 512; ++idx9) {
+      const uint8_t idx8 = static_cast<uint8_t>(
+          ((idx9 >> 0) & 1u)                 // TL bit 0 → bit 0
+          | (((idx9 >> 2) & 1u) << 1)        // TR bit 2 → bit 1
+          | (((idx9 >> 6) & 1u) << 2)        // BL bit 6 → bit 2
+          | (((idx9 >> 8) & 1u) << 3)        // BR bit 8 → bit 3
+          | (((idx9 >> 1) & 1u) << 4)        // T  bit 1 → bit 4
+          | (((idx9 >> 7) & 1u) << 5)        // B  bit 7 → bit 5
+          | (((idx9 >> 3) & 1u) << 6)        // L  bit 3 → bit 6
+          | (((idx9 >> 5) & 1u) << 7));      // R  bit 5 → bit 7
+      for (int o = 0; o < 4; ++o) data[o][idx9] = sig_LUT[o][idx8];
+    }
+  }
+};
+const SigLUT9Init sig_LUT9_table;
+}  // namespace
+
+// When sample (j1, j2) becomes significant, broadcast its σ bit into every context
+// word that references the 3×3 neighbourhood around it: 3 adjacent columns in the
+// owning stripe, plus up to 3 more words in the previous/next stripe if j1 is on
+// the stripe edge (book §17.1.2 state broadcasting).
+static inline void broadcast_sigma_context(j2k_codeblock *block, uint32_t j1, uint32_t j2) {
+  uint32_t *ctx     = block->block_contexts;
+  const size_t cs   = block->block_contexts_stride;
+  const uint32_t s0 = j1 >> 2;
+  const uint32_t sr = j1 & 3u;
+  const size_t xb   = static_cast<size_t>(j2) + 1;  // +1 for left border column
+  const size_t sb   = static_cast<size_t>(s0) + 1;  // +1 for top border stripe
+  uint32_t *row     = ctx + sb * cs;
+  const uint32_t bp = 3u * (sr + 1);
+  row[xb - 1] |= 1u << (bp + 2);    // σ(j1, j2) as right neighbour of column j2-1
+  row[xb    ] |= 1u << (bp + 1);    // σ(j1, j2) as self
+  row[xb + 1] |= 1u << (bp + 0);    // σ(j1, j2) as left neighbour of column j2+1
+  if (sr == 0) {
+    uint32_t *prev = row - cs;
+    prev[xb - 1] |= 1u << 17;        // "row below previous stripe"
+    prev[xb    ] |= 1u << 16;
+    prev[xb + 1] |= 1u << 15;
+  } else if (sr == 3) {
+    uint32_t *next = row + cs;
+    next[xb - 1] |= 1u << 2;         // "row above next stripe"
+    next[xb    ] |= 1u << 1;
+    next[xb + 1] |= 1u << 0;
+  }
+}
+
 // void j2k_codeblock::update_sample(const uint8_t &symbol, const uint8_t &p, const int16_t &j1,
 //                                   const int16_t &j2) const {
 //   sample_buf[static_cast<size_t>(j2) + static_cast<size_t>(j1) * blksampl_stride] |=
@@ -47,28 +103,19 @@
 //}
 
 static inline uint8_t get_context_label_sig(j2k_codeblock *block, const uint32_t &j1, const uint32_t &j2) {
-  int32_t idx;
-  int32_t idx0, idx1, idx2;
-  uint8_t *p          = block->block_states;
-  const size_t stride = block->blkstate_stride;
-
-  uint8_t *sigma_p0   = p + j1 * stride + j2;
-  uint8_t *sigma_p1   = p + (j1 + 1) * stride + j2;
-  uint8_t *sigma_p2   = p + (j1 + 2) * stride + j2;
-  const int32_t shift = 1 << SHIFT_SIGMA;
-  // one line above left, center, right
-  idx0 = (sigma_p0[0] & shift) + ((sigma_p0[1] & shift) << 4) + ((sigma_p0[2] & shift) << 1);
-  // current line left, right
-  idx1 = ((sigma_p1[0] & shift) << 6) + ((sigma_p1[2] & shift) << 7);
-  // one line below left, center, right
-  idx2 = ((sigma_p2[0] & shift) << 2) + ((sigma_p2[1] & shift) << 5) + ((sigma_p2[2] & shift) << 3);
-
-  idx = idx0 + idx1 + idx2;
-
-  if ((block->Cmodes & CAUSAL) && j1 % 4 == 3) {
-    idx &= 0xD3;
+  // Packed stripe-column word (book §17.1.2): one 32-bit load replaces 8 neighbour state loads.
+  const uint32_t *ctx = block->block_contexts;
+  const size_t cs     = block->block_contexts_stride;
+  const uint32_t s    = j1 >> 2;
+  const uint32_t sr   = j1 & 3u;
+  const uint32_t word = ctx[(static_cast<size_t>(s) + 1) * cs + (static_cast<size_t>(j2) + 1)];
+  uint32_t idx9       = (word >> (3u * sr)) & 0x1FFu;
+  if ((block->Cmodes & CAUSAL) && sr == 3u) {
+    // Clear the 3 "row below" bits (BL, B, BR at 9-bit positions 6,7,8) — same semantics
+    // as the old 0xD3 mask on the 8-bit index.
+    idx9 &= 0x03Fu;
   }
-  return sig_LUT[block->get_orientation()][idx];
+  return sig_LUT9_table.data[block->get_orientation()][idx9];
 }
 static inline uint8_t get_signLUT_index(j2k_codeblock *block, const uint32_t &j1, const uint32_t &j2) {
   int32_t idx          = 0;
@@ -139,6 +186,7 @@ inline void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_d
             block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
             //            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
             state_p[0] |= symbol;
+            broadcast_sigma_context(block, j1, j2);
             decode_j2k_sign_raw(block, mq_dec, j1, j2);
           }
           //          block->modify_state(pi_, 1, j1, j2);
@@ -168,6 +216,7 @@ inline void decode_sigprop_pass_raw(j2k_codeblock *block, const uint8_t &p, mq_d
             block->sample_buf[j1 * block->blksampl_stride + j2] |= 1 << p;
             //            block->modify_state(sigma, symbol, j1, j2);  // symbol shall be 1
             state_p[0] |= symbol;
+            broadcast_sigma_context(block, j1, j2);
             decode_j2k_sign_raw(block, mq_dec, j1, j2);
           }
           //          block->modify_state(pi_, 1, j1, j2);
@@ -210,6 +259,7 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
           if (symbol) {
             samples[j1 * sstride + j2] |= 1 << p;
             state_p[0] |= symbol;
+            broadcast_sigma_context(block, j1, j2);
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
           state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
@@ -233,6 +283,7 @@ inline void decode_sigprop_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
           if (symbol) {
             samples[j1 * sstride + j2] |= 1 << p;
             state_p[0] |= symbol;
+            broadcast_sigma_context(block, j1, j2);
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
           state_p[0] |= static_cast<uint8_t>(1 << SHIFT_PI_);
@@ -396,6 +447,7 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
           }
           if (samples[j2 + j1 * sstride] == static_cast<int32_t>(1) << p) {
             state_p[0] |= 1;
+            broadcast_sigma_context(block, j1, j2);
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
         }
@@ -417,6 +469,7 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
           samples[j1 * sstride + j2] |= symbol << p;
           if (symbol) {
             state_p[0] |= 1;
+            broadcast_sigma_context(block, j1, j2);
             decode_j2k_sign(block, mq_dec, j1, j2);
           }
         }

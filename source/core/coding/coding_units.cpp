@@ -860,6 +860,8 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
   const uint32_t QWx2 = round_up(size.x, 8U);
   blksampl_stride    = QWx2;
   blkstate_stride    = QWx2 + 2;
+  block_contexts       = nullptr;
+  block_contexts_stride = static_cast<size_t>(QWx2) + 2;  // 1-column left/right border
   memset(this->pass_length, 0, sizeof(this->pass_length));
   this->pass_length_count = 0;
   // layer_start and layer_passes are set by j2k_precinct_subband after construction
@@ -4207,10 +4209,12 @@ void j2k_tile::decode() {
     // Frees and re-allocates only on growth (never shrinks), so warm pages are preserved
     // for precincts within the same level. Coarse levels start with a tiny allocation
     // (better L2/L3 cache fit); the pool grows to full size only at the finest level.
-    size_t alloc_samples_bytes = 0;
-    size_t alloc_states_bytes  = 0;
-    int32_t *buf_for_samples   = nullptr;
-    uint8_t *buf_for_states    = nullptr;
+    size_t alloc_samples_bytes  = 0;
+    size_t alloc_states_bytes   = 0;
+    size_t alloc_contexts_bytes = 0;
+    int32_t  *buf_for_samples   = nullptr;
+    uint8_t  *buf_for_states    = nullptr;
+    uint32_t *buf_for_contexts  = nullptr;
 #ifdef OPENHTJ2K_THREAD
     // Hoist dec_task_args outside the level loop: clear()+reserve() per iteration
     // avoids one heap allocation per level (15 allocs saved for a 5-level 3-component tile).
@@ -4224,6 +4228,11 @@ void j2k_tile::decode() {
 
       const size_t need_samples = sizeof(int32_t) * lev_max * 4096;
       const size_t need_states  = sizeof(uint8_t) * lev_max * 6156;
+      // block_contexts per codeblock: (numStripes + 2) × (QWx2 + 2) uint32_t.
+      // Worst case under xcb+ycb≤8 is the widest/shortest shape 1024×4 ⇒ QHx2 = 8,
+      // QWx2 = 1024, (8/4+2)×(1024+2) = 4104. (The 4×1024 mirror shape is only 2580,
+      // because QHx2/4 still dominates when H is large.)
+      const size_t need_contexts = sizeof(uint32_t) * lev_max * 4104;
       if (need_samples > alloc_samples_bytes) {
         aligned_mem_free(buf_for_samples);
         buf_for_samples     = static_cast<int32_t *>(aligned_mem_alloc(need_samples, 32));
@@ -4233,6 +4242,11 @@ void j2k_tile::decode() {
         aligned_mem_free(buf_for_states);
         buf_for_states     = static_cast<uint8_t *>(aligned_mem_alloc(need_states, 32));
         alloc_states_bytes = need_states;
+      }
+      if (need_contexts > alloc_contexts_bytes) {
+        aligned_mem_free(buf_for_contexts);
+        buf_for_contexts     = static_cast<uint32_t *>(aligned_mem_alloc(need_contexts, 32));
+        alloc_contexts_bytes = need_contexts;
       }
 
       j2k_resolution *cr           = this->tcomp[c].access_resolution(static_cast<uint8_t>(NL - lev));
@@ -4245,10 +4259,11 @@ void j2k_tile::decode() {
       for (uint32_t p = 0; p < num_precincts; p++) {
         j2k_precinct *cp = cr->access_precinct(p);
 
-        int32_t *pbuf  = buf_for_samples;
-        uint8_t *spbuf = buf_for_states;
+        int32_t  *pbuf  = buf_for_samples;
+        uint8_t  *spbuf = buf_for_states;
+        uint32_t *cbuf  = buf_for_contexts;
 
-        // Pass 1: assign sample/state buffer pointers to all codeblocks in this precinct.
+        // Pass 1: assign sample/state/context buffer pointers to all codeblocks in this precinct.
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -4260,6 +4275,9 @@ void j2k_tile::decode() {
             pbuf += QWx2 * QHx2;
             block->block_states = spbuf;
             spbuf += (QWx2 + 2) * (QHx2 + 2);
+            block->block_contexts         = cbuf;
+            block->block_contexts_stride  = QWx2 + 2;
+            cbuf += (QHx2 / 4 + 2) * (QWx2 + 2);
           }
         }
 
@@ -4267,6 +4285,7 @@ void j2k_tile::decode() {
         // Replaces N per-codeblock memsets with 2 sequential writes for better cache streaming.
         memset(buf_for_samples, 0, static_cast<size_t>(pbuf - buf_for_samples) * sizeof(int32_t));
         memset(buf_for_states, 0, static_cast<size_t>(spbuf - buf_for_states));
+        memset(buf_for_contexts, 0, static_cast<size_t>(cbuf - buf_for_contexts) * sizeof(uint32_t));
 
         // Pass 2: decode all non-empty codeblocks (buffers are already zeroed above).
 #ifdef OPENHTJ2K_THREAD
@@ -4319,6 +4338,7 @@ void j2k_tile::decode() {
     }
     aligned_mem_free(buf_for_states);
     aligned_mem_free(buf_for_samples);
+    aligned_mem_free(buf_for_contexts);
   }
 
   for (uint16_t c = 0; c < num_components; c++) {
@@ -5612,9 +5632,10 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
   // Step 1: decode all codeblocks into sb->i_samples (same as decode() first loop).
   // Grow-only scratch buffers shared across all components and resolution levels —
   // avoids one heap allocation per level (previously std::vector per level).
-  size_t   dl_sample_cap = 0, dl_state_cap = 0;
-  int32_t *dl_sample_buf = nullptr;
-  uint8_t *dl_state_buf  = nullptr;
+  size_t    dl_sample_cap = 0, dl_state_cap = 0, dl_ctx_cap = 0;
+  int32_t  *dl_sample_buf = nullptr;
+  uint8_t  *dl_state_buf  = nullptr;
+  uint32_t *dl_ctx_buf    = nullptr;
 
   for (uint16_t c = 0; c < num_components; c++) {
     const uint8_t ROIshift = this->tcomp[c].get_ROIshift();
@@ -5636,8 +5657,10 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
       if (lev_max == 0) continue;
 
       // Grow-only: realloc only when capacity is insufficient.
-      const size_t need_s  = static_cast<size_t>(lev_max) * 4096;
-      const size_t need_st = static_cast<size_t>(lev_max) * 6156;
+      const size_t need_s   = static_cast<size_t>(lev_max) * 4096;
+      const size_t need_st  = static_cast<size_t>(lev_max) * 6156;
+      // block_contexts worst-case per codeblock: 1024×4 shape ⇒ (8/4+2)×(1024+2)=4104 uint32_t.
+      const size_t need_ctx = static_cast<size_t>(lev_max) * 4104;
       if (need_s > dl_sample_cap) {
         aligned_mem_free(dl_sample_buf);
         dl_sample_buf = static_cast<int32_t *>(aligned_mem_alloc(need_s * sizeof(int32_t), 32));
@@ -5648,11 +5671,17 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
         dl_state_buf = static_cast<uint8_t *>(std::malloc(need_st));
         dl_state_cap = need_st;
       }
+      if (need_ctx > dl_ctx_cap) {
+        aligned_mem_free(dl_ctx_buf);
+        dl_ctx_buf = static_cast<uint32_t *>(aligned_mem_alloc(need_ctx * sizeof(uint32_t), 32));
+        dl_ctx_cap = need_ctx;
+      }
 
       for (uint32_t p = 0; p < num_precincts; p++) {
         j2k_precinct *cp = cr->access_precinct(p);
-        int32_t *pbuf    = dl_sample_buf;
-        uint8_t *spbuf   = dl_state_buf;
+        int32_t  *pbuf  = dl_sample_buf;
+        uint8_t  *spbuf = dl_state_buf;
+        uint32_t *cbuf  = dl_ctx_buf;
 
         // Assign buffer pointers and decode in one pass.
         // ht_cleanup_decode writes every sample_buf and block_states position
@@ -5668,15 +5697,20 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
             const uint32_t QHx2  = round_up(block->size.y, 8U);
             block->sample_buf    = pbuf; pbuf += QWx2 * QHx2;
             block->block_states  = spbuf; spbuf += (QWx2 + 2) * (QHx2 + 2);
+            block->block_contexts        = cbuf;
+            block->block_contexts_stride = QWx2 + 2;
+            cbuf += (QHx2 / 4 + 2) * (QWx2 + 2);
             // Same JPIP precinct-filter guard as the tile decode path: a
             // masked codeblock has its packet header parsed (num_passes > 0)
             // but no compressed body attached.
             if (!block->num_passes || block->get_compressed_data() == nullptr) continue;
             const bool is_ht = (block->Cmodes & HT) >> 6;
             if (!is_ht) {
-              // EBCOT: both buffers must be pre-zeroed.
+              // EBCOT: all three buffers must be pre-zeroed.
               memset(block->sample_buf, 0, QWx2 * QHx2 * sizeof(int32_t));
               memset(block->block_states, 0, (QWx2 + 2) * (QHx2 + 2));
+              memset(block->block_contexts, 0,
+                     (QHx2 / 4 + 2) * (QWx2 + 2) * sizeof(uint32_t));
             } else if (block->num_passes > 1) {
               // HT multi-pass: sigprop/magref read the block_states border
               // (written by cleanup only for the interior). Zero block_states;
@@ -5696,6 +5730,7 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
   }
   aligned_mem_free(dl_sample_buf);
   std::free(dl_state_buf);
+  aligned_mem_free(dl_ctx_buf);
 
   // Step 2: run line-based path but bypass decode_strip (use pre-decoded sb->i_samples).
   const uint16_t NC = num_components;
