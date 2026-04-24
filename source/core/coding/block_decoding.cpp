@@ -414,11 +414,16 @@ inline void decode_cleanup_pass(j2k_codeblock *block, const uint8_t &p, mq_decod
         uint8_t *state_p = states + (j1 + 1) * stride + (j2 + 1);
         r                = -1;
         if (j1 % 4 == 0 && j1 <= height - 4) {
-          label_sig = 0;
-          for (uint32_t i = 0; i < 4; i++) {
-            label_sig = label_sig | static_cast<uint8_t>(get_context_label_sig(block, j1 + i, j2));
-          }
-          if (label_sig == 0) {
+          // Run-mode trigger: all 4 samples' κ^sig == 0 ⟺ every σ bit in the 6×3
+          // neighbourhood spanning the stripe column is zero — i.e. bits 0..17 of c[j].
+          // For CAUSAL mode the 4th sample's "row below" bits (c[j] bits 15..17) are
+          // don't-care; mask accordingly (book §17.1.2, last paragraph).
+          const uint32_t cword =
+              block->block_contexts[(static_cast<size_t>(j1_start >> 2) + 1)
+                                        * block->block_contexts_stride
+                                    + (static_cast<size_t>(j2) + 1)];
+          const uint32_t sig_mask = (block->Cmodes & CAUSAL) ? 0x07FFFu : 0x3FFFFu;
+          if ((cword & sig_mask) == 0) {
             symbol = mq_dec.decode(label_run);
             if (symbol == 0) {
               r = 4;
