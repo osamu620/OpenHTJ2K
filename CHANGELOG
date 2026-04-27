@@ -1,3 +1,31 @@
+# [0.18.4] - 2026-04-27
+
+## Security Fix - PPM Packet Header Heap Buffer Overflow (CVE-2026-TBD)
+
+**Critical security update**: Fixed heap buffer overflow vulnerability in PPM packet header parsing that could be exploited via malformed JPEG 2000 codestreams.
+
+### Security Impact
+- **CVE-2026-TBD**: Heap buffer overflow in `j2k_codeblock::pass_length[128]` array
+- **Attack vectors**: Malicious JPIP server responses, crafted J2K/JP2 files
+- **Affected components**: JPIP server/client, decoder processing PPM markers
+- **Credit**: Vulnerability discovered and responsibly disclosed by IM JUN SEO (KISIA, @Jseanxx) and OH HAN GUEL (SANGMYUNG UNIVERSITY, @5asever40-a11y)
+
+### Fix Details
+- Added `kMaxCodingPasses = 128` constant matching `pass_length` array size
+- Implemented bounds checking in three vulnerable code paths:
+  - General packet header parsing (`parse_packet_header`)
+  - HT mode with secondary passes
+  - Bypass mode with multiple segments
+- Fail-fast security model: throws `std::exception()` when bounds would be exceeded
+- Added security regression tests to prevent future occurrences
+
+### Migration Notes
+- No API changes - existing valid inputs continue to work
+- Malformed inputs now properly rejected instead of causing undefined behavior
+- Enhanced diagnostic output for debugging malformed codestreams
+
+**Recommendation**: All users should upgrade immediately to v0.18.4, especially those processing untrusted JPEG 2000 content or running JPIP servers.
+
 # [0.18.3] - 2026-04-22
 
 ## WASM decoder — SIMD pack paths for 16-bit and planar-u8 output
