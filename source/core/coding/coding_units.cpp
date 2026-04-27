@@ -45,6 +45,10 @@
 #endif
 
 namespace {
+
+// Maximum number of coding passes for j2k_codeblock::pass_length[] array
+constexpr uint8_t kMaxCodingPasses = 128;
+
 // RAII guard for placement-new array construction loops.
 //
 // Pattern:
@@ -1465,7 +1469,16 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         segment_bytes = packet_header->get_N_bits(bits_to_read);
       }
 
-      block->num_passes = static_cast<uint8_t>(block->num_passes + segment_passes);
+      // Security fix: Prevent heap buffer overflow in pass_length[128] array
+      if (segment_passes > kMaxCodingPasses) {
+        throw std::exception();
+      }
+      uint16_t next_num_passes = static_cast<uint16_t>(block->num_passes) + static_cast<uint16_t>(segment_passes);
+      if (next_num_passes > kMaxCodingPasses) {
+        throw std::exception();
+      }
+
+      block->num_passes = static_cast<uint8_t>(next_num_passes);
       while (block->pass_length_count < block->num_passes) {
         block->pass_length[block->pass_length_count++] = 0;
       }
@@ -1535,7 +1548,16 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             }
           }
 
-          block->num_passes = static_cast<uint8_t>(block->num_passes + segment_passes);
+          // Security fix: Prevent heap buffer overflow in pass_length[128] array
+          if (segment_passes > kMaxCodingPasses) {
+            throw std::exception();
+          }
+          uint16_t next_num_passes = static_cast<uint16_t>(block->num_passes) + static_cast<uint16_t>(segment_passes);
+          if (next_num_passes > kMaxCodingPasses) {
+            throw std::exception();
+          }
+
+          block->num_passes = static_cast<uint8_t>(next_num_passes);
           while (block->pass_length_count < block->num_passes) {
             block->pass_length[block->pass_length_count++] = 0;
           }
@@ -1561,7 +1583,17 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           }
           segment_bytes = packet_header->get_N_bits(bits_to_read);
           new_passes -= static_cast<uint8_t>(segment_passes);
-          block->num_passes = static_cast<uint8_t>(block->num_passes + segment_passes);
+
+          // Security fix: Prevent heap buffer overflow in pass_length[128] array
+          if (segment_passes > kMaxCodingPasses) {
+            throw std::exception();
+          }
+          uint16_t next_num_passes = static_cast<uint16_t>(block->num_passes) + static_cast<uint16_t>(segment_passes);
+          if (next_num_passes > kMaxCodingPasses) {
+            throw std::exception();
+          }
+
+          block->num_passes = static_cast<uint8_t>(next_num_passes);
           while (block->pass_length_count < block->num_passes) {
             block->pass_length[block->pass_length_count++] = 0;
           }
