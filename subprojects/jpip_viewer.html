@@ -294,6 +294,7 @@
         <tr><td><code>?midPaintMs=</code></td><td><code>200</code></td><td>Show a partial render (whatever precincts have arrived) if a fetch takes longer than <i>N</i> ms. Gives feedback on slow first-time loads; costs one extra decoder run. Fast (LAN / cached) fetches never trigger it. Set <code>0</code> to disable.</td></tr>
         <tr><td><code>?thumbnail=</code></td><td><code>1</code></td><td>Small bottom-right overview showing the full image (fetched once at connect time from the coarsest reduce level) with a rectangle marking the current viewport. Rectangle updates locally on every pan/zoom — no extra server round-trips. Set <code>0</code> to hide.</td></tr>
         <tr><td><code>?thumbnailSize=</code></td><td><code>160</code></td><td>CSS-pixel size of the thumbnail on its long side. Decoder output resolution is independent — only the displayed size changes.</td></tr>
+        <tr><td><code>?cb=</code></td><td>off</td><td>Cache-buster for dev iteration. <code>auto</code> or <code>1</code> appends <code>?v=&lt;Date.now()&gt;</code> to the WASM/JS fetches so the browser refetches after every rebuild. Any other value is used verbatim (snapshot at a build hash). Default (no <code>?cb</code>): full HTTP caching, identical to before.</td></tr>
       </tbody>
     </table>
   </details>
@@ -373,7 +374,21 @@ const hasSimd = await wasmFeatureDetect.simd();
 const hasMt = window.crossOriginIsolated && (typeof SharedArrayBuffer !== 'undefined');
 const forceVariant = new URLSearchParams(location.search).get('variant');
 const useMt = forceVariant === 'mt' ? true : forceVariant === 'st' ? false : (hasSimd && hasMt);
-const wasmFile = useMt ? './libopen_htj2k_jpip_mt_simd.js' : './libopen_htj2k_jpip.js';
+
+// Cache-buster for dev iteration.  `?cb=auto` or `?cb=1` appends Date.now()
+// to WASM/JS URLs so the browser refetches after every rebuild — bypasses
+// the (correct) HTTP caching that production relies on.  Default (no `?cb`):
+// no suffix, full caching, identical behaviour to before this knob existed.
+// `?cb=<arbitrary>`: uses the literal value, useful for "snapshot at this
+// build hash" scenarios.  The cache-buster is propagated to both the JS
+// shim import and the .wasm fetch (via Emscripten's locateFile hook).
+const _cbParam = new URLSearchParams(location.search).get('cb');
+const cacheBuster =
+    (_cbParam === 'auto' || _cbParam === '1') ? `?v=${Date.now()}`
+  : _cbParam ? `?v=${encodeURIComponent(_cbParam)}`
+  : '';
+const wasmFile = (useMt ? './libopen_htj2k_jpip_mt_simd.js'
+                        : './libopen_htj2k_jpip.js') + cacheBuster;
 const {default: createModule} = await import(wasmFile);
 const $ = id => document.getElementById(id);
 
@@ -1086,7 +1101,14 @@ async function fetchView() {
 async function init() {
   $('info').textContent = 'Loading WASM…';
   try {
-    M = await createModule();
+    // Propagate the cache-buster to the .wasm and worker fetches so a `?cb`
+    // dev iteration also picks up rebuilt WASM, not just the JS shim.
+    // Default (cacheBuster='') — locateFile returns prefix+path verbatim,
+    // matching Emscripten's built-in default.
+    const moduleArgs = cacheBuster
+      ? { locateFile: (path, prefix) => prefix + path + cacheBuster }
+      : {};
+    M = await createModule(moduleArgs);
     $('info').textContent = `WASM ready (${useMt?'MT+SIMD':'SIMD'}).`;
   } catch (e) { $('info').textContent = 'WASM load failed: ' + e.message; }
   $('connectBtn').onclick = connect;
