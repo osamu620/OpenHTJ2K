@@ -295,7 +295,8 @@
         <tr><td><code>?thumbnail=</code></td><td><code>1</code></td><td>Small bottom-right overview showing the full image (fetched once at connect time from the coarsest reduce level) with a rectangle marking the current viewport. Rectangle updates locally on every pan/zoom — no extra server round-trips. Set <code>0</code> to hide.</td></tr>
         <tr><td><code>?thumbnailSize=</code></td><td><code>160</code></td><td>CSS-pixel size of the thumbnail on its long side. Decoder output resolution is independent — only the displayed size changes.</td></tr>
         <tr><td><code>?cb=</code></td><td>off</td><td>Cache-buster for dev iteration. <code>auto</code> or <code>1</code> appends <code>?v=&lt;Date.now()&gt;</code> to the WASM/JS fetches so the browser refetches after every rebuild. Any other value is used verbatim (snapshot at a build hash). Default (no <code>?cb</code>): full HTTP caching, identical to before.</td></tr>
-        <tr><td><code>?carryForward=</code></td><td><code>1</code></td><td>While a JPIP fetch is in flight after a pan or zoom, redraw the previous frame's pixels at their image-coord position with the thumbnail filling any uncovered area — the image scrolls smoothly under your gesture instead of freezing until the new bytes arrive. Set <code>0</code> to disable (canvas stays as last drawn until the new fetch completes).</td></tr>
+        <tr><td><code>?carryForward=</code></td><td><code>1</code></td><td>While a JPIP fetch is in flight after a pan or zoom, redraw the previous frame's pixels at their image-coord position with the thumbnail filling any uncovered area — the image scrolls smoothly under your gesture instead of freezing until the new bytes arrive. Set <code>0</code> to disable (canvas stays as last drawn until the new fetch completes). Auto-suppressed on fast networks via <code>?carryForwardMinMs=</code>.</td></tr>
+        <tr><td><code>?carryForwardMinMs=</code></td><td><code>100</code></td><td>Minimum median fetch+decode latency (ms) before carry-forward redraws fire. On localhost / LAN where fetches typically finish in &lt;50&nbsp;ms, the previous-frame translate would be visible for ≤2 frames before the sharp final paint replaces it — and the brief blurry-stretched intermediate looks worse than waiting. Above this threshold the smoothing kicks in. Set <code>0</code> to force-enable regardless of measured latency.</td></tr>
       </tbody>
     </table>
   </details>
@@ -478,6 +479,39 @@ const MID_PAINT_MS = (() => {
   const v = Number(new URLSearchParams(location.search).get('midPaintMs'));
   return Number.isFinite(v) ? Math.max(0, v) : 200;
 })();
+
+// Latency threshold for the carry-forward render path.  When the median of
+// recent fetch+decode durations is BELOW this threshold, requestRedraw()
+// short-circuits — on local / LAN setups where fetches finish in <50 ms the
+// previous-frame translate would be visible for ≤2 frames before sharp
+// pixels arrive, and the brief blurry-stretched intermediate looks worse
+// than just waiting for the sharp frame.  Above the threshold the carry-
+// forward kicks in and the user sees smooth motion under their gesture.
+// Set to 0 to force-enable regardless of measured latency (useful for
+// demoing the effect on a fast network).  `?carryForward=0` still wins
+// over this knob — it disables redraws entirely.
+const CARRY_FORWARD_MIN_MS = (() => {
+  const v = Number(new URLSearchParams(location.search).get('carryForwardMinMs'));
+  return Number.isFinite(v) ? Math.max(0, v) : 100;
+})();
+
+// Sliding window of recent fetch+decode durations (ms).  Median over this
+// gates requestRedraw() when CARRY_FORWARD_MIN_MS > 0.  Median is more
+// robust than EWMA against the bimodal cache-hit / cache-miss distribution
+// JPIP exhibits — a single ~10 ms cached pan in a stream of slow fetches
+// shouldn't disable carry-forward for the next gesture.
+const FETCH_HISTORY_MAX = 5;
+const recentFetchMs = [];
+function recordFetchMs(ms) {
+  recentFetchMs.push(ms);
+  if (recentFetchMs.length > FETCH_HISTORY_MAX) recentFetchMs.shift();
+}
+function fetchMedianMs() {
+  const n = recentFetchMs.length;
+  if (n === 0) return 0;
+  const s = [...recentFetchMs].sort((a, b) => a - b);
+  return s[Math.floor(n / 2)];
+}
 
 // Thumbnail overview: fetched once at connect time from the coarsest
 // reduce level that fits within THUMBNAIL_MAX_PX on the long side, then
@@ -705,6 +739,12 @@ function initWebGL(canvas) {
 let rafRedraw = 0;
 function requestRedraw() {
   if (rafRedraw || !gl || !CARRY_FORWARD) return;
+  // Latency gate: skip when fetches are fast enough that the carry-forward
+  // intermediate would be visible for ≤2 frames before being replaced by
+  // the sharp final paint.  History needs to populate (first fetch always
+  // runs without carry-forward); after that the median tracks the user's
+  // network reality.  ?carryForwardMinMs=0 disables the gate.
+  if (CARRY_FORWARD_MIN_MS > 0 && fetchMedianMs() < CARRY_FORWARD_MIN_MS) return;
   rafRedraw = requestAnimationFrame(() => { rafRedraw = 0; drawViewport(); });
 }
 
@@ -890,8 +930,10 @@ async function fetchThumbnail() {
         gl.activeTexture(gl.TEXTURE0);  // restore default for paintDecodedRegion
         thumbImgW = canvasW; thumbImgH = canvasH;
         // First sign of life: redraw immediately so the thumbnail appears
-        // behind whatever (possibly empty) glTex content is there.
-        if (CARRY_FORWARD) requestRedraw();
+        // behind whatever (possibly empty) glTex content is there.  Bypass
+        // requestRedraw()'s latency gate — this is a one-time event, not
+        // part of the per-pan rendering cadence the gate is designed for.
+        if (CARRY_FORWARD) drawViewport();
       }
       // Create the thumbnail canvas dynamically — only when we have a
       // real image to show.  Keeps the DOM empty when ?thumbnail=0 or
@@ -1179,6 +1221,10 @@ async function fetchView() {
       decReduce = red;
       lastFetchKey = key;
     }
+    // Record total fetch+decode latency.  Drives the requestRedraw() gate
+    // so carry-forward only kicks in when fetches are slow enough that the
+    // smoothing is worth the brief blurry-stretched intermediate.
+    recordFetchMs(tDecode - t0);
     const midSuffix = midPaintFired
         ? ` | mid-paint=${(tMidPaint-t0).toFixed(0)}ms`
         : '';
