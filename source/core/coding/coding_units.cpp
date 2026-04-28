@@ -2595,6 +2595,18 @@ sprec_t *j2k_tile_component::pull_strip_into_buf(uint32_t count, uint32_t stride
   return dst;
 }
 
+void j2k_tile_component::pull_strip_advance(uint32_t count) {
+  if (line_dec == nullptr || count == 0) return;
+  // Skipping rows: the cascade still needs to consume one source row per call
+  // to keep child-state cursors in lockstep.  pull_line_ref does that and
+  // returns a (discarded) row pointer; the per-row work is dominated by
+  // idwt_level_src_fn's row_lo zero-fill (cheap memset + child recurse) plus
+  // the row_zero-aware vertical lifting in cascade(), both already cheap
+  // for sub-row_lo rows.  We just want to skip the strip_buf memcpy that
+  // pull_strip_into_buf would have done.
+  for (uint32_t r = 0; r < count; ++r) (void)pull_line_ref();
+}
+
 void j2k_tile_component::finalize_line_decode() {
   if (line_dec == nullptr) return;
   // Single-tile reuse: skip teardown so init_line_decode on the next frame
@@ -5198,7 +5210,45 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
 #endif
 
-  for (uint32_t strip_y0 = 0; strip_y0 < effective_H; strip_y0 += strip_h_luma) {
+  // ── Row-range fast-forward (set_row_range with row_lo > 0) ────────────────
+  // When the caller narrows the viewport's lower bound, strips entirely below
+  // row_lo carry no emit work — but the IDWT cascade still needs to consume
+  // their source rows so cursors stay in lockstep.  Instead of running each
+  // skipped strip through pull_strip_into_buf (per-row strip_buf memcpy +
+  // per-strip pool dispatch + barrier + grow-on-demand alloc check), pump
+  // them through pull_strip_advance which iterates pull_line_ref alone.
+  // The cascade's row_lo zero-fill (idwt_level_src_fn) and row_zero-aware
+  // vertical lifting handle the rest.
+  //
+  // Round start_strip_y0 DOWN to a strip_h_luma boundary so the boundary
+  // strip — the one containing row_lo — still flows through the normal
+  // pull-and-emit path.  set_line_decode_row_range widens the per-level
+  // row_lo by 16 rows for 9/7 filter support, and strip_h_luma is at least
+  // 64 (line 5188 above), so the widened-margin rows live well within the
+  // boundary strip and decode normally there.
+  //
+  // GATING: do nothing when row_lo == 0.  This is the path every CLI/RTP/
+  // encoder caller takes (they never call set_row_range), so full-canvas
+  // decode pays exactly one branch + one compare here and zero allocations.
+  uint32_t start_strip_y0 = 0;
+  if (row_lo > 0) {
+    start_strip_y0 = (row_lo / strip_h_luma) * strip_h_luma;
+    if (start_strip_y0 > effective_H) start_strip_y0 = effective_H;
+    if (start_strip_y0 > 0) {
+      // Per-component advance count mirrors the strip-loop counts[] formula:
+      // MCT main components consume one row per luma row regardless of yr,
+      // everything else divides by its own yr_c (subsampling factor).  Both
+      // start_strip_y0 and strip_h_luma are multiples of max_yr (line 5188)
+      // so the divide is exact for non-MCT components.
+      for (uint16_t c = 0; c < NC; ++c) {
+        const uint32_t advance =
+            (do_mct && c < 3) ? start_strip_y0 : (start_strip_y0 / ci[c].yr);
+        if (advance > 0) tcomp[c].pull_strip_advance(advance);
+      }
+    }
+  }
+
+  for (uint32_t strip_y0 = start_strip_y0; strip_y0 < effective_H; strip_y0 += strip_h_luma) {
     const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, effective_H);
 
     // Pre-compute per-component pull counts.
