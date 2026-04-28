@@ -106,7 +106,10 @@
      with `?thumbnail=0`.  The element is *created dynamically* in JS
      only when the thumbnail fetch succeeds — if `?thumbnail=0` is set
      or the fetch fails, the element never enters the DOM at all.
-     pointer-events: none keeps it from stealing drag/wheel events. */
+     The thumbnail receives its own mouse events: click-drag pans the
+     main view by mapping a CSS-pixel delta to a (canvasW/thumbCssW)×
+     larger image-space delta, which is much faster than 1:1 canvas
+     drag and is the natural gesture for crossing a gigapixel image. */
   #thumbnail {
     position: fixed;
     right: 14px;
@@ -116,8 +119,9 @@
     border: 1px solid rgba(255, 255, 255, 0.55);
     border-radius: 4px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    pointer-events: none;
+    cursor: crosshair;
   }
+  #thumbnail.dragging-rect { cursor: grabbing; }
 
   /* ── Stats bar (bottom) ──────────────────────────────── */
   #stats {
@@ -486,6 +490,25 @@ let thumbnailPending = false;
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 
+// Drag state shared between the canvas (set up in connect()) and the
+// thumbnail (set up in fetchThumbnail() once the overview decodes).
+// Lifted to module scope so the two handlers can share the same
+// mousemove/mouseup logic without re-wiring window listeners.
+//
+//   dragMode  null | 'canvas' | 'thumb-rect'
+//   dsx,dsy   mousedown clientX/Y (CSS pixels)
+//   psx,psy   panX/panY snapshot at mousedown (image-space pixels)
+//   dragRectW/H  cached thumbnail bounding-rect dims at mousedown so a
+//                window resize mid-drag can't change the CSS→image scale
+let dragMode = null;
+let dsx = 0, dsy = 0, psx = 0, psy = 0;
+let dragRectW = 0, dragRectH = 0;
+// Set by connect() once the wheel handler is constructed; consumed by
+// fetchThumbnail() to mirror canvas wheel/zoom behaviour over the
+// thumbnail.  Stays null until connect() runs, which guarantees ctx/M
+// are valid by the time the thumbnail can dispatch wheel events.
+let thumbWheelHandler = null;
+
 function wasmWrite(data, ptr) { new Uint8Array(M.HEAPU8.buffer).set(data, ptr); }
 
 // Compute the vertical space occupied by the fixed top bar at the current
@@ -744,6 +767,52 @@ async function fetchThumbnail() {
       thumbCanvas.style.width  = `${Math.round(fW * scale)}px`;
       thumbCanvas.style.height = `${Math.round(fH * scale)}px`;
       document.body.appendChild(thumbCanvas);
+
+      // Click-drag on the thumbnail pans the main view much faster than
+      // canvas drag (CSS-Δ × canvasW/thumbCssW).  Two flavours selected
+      // by hit-testing the live viewport rectangle:
+      //   inside  → grab-the-rect (preserves the offset where you grabbed)
+      //   outside → recenter on click, then grab from there
+      // Both fall through to dragMode='thumb-rect' so the shared window
+      // mousemove handler does the actual panning.
+      thumbCanvas.addEventListener('mousedown', e => {
+        const rect = thumbCanvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        // Viewport rectangle in the thumbnail's CSS-pixel space.  Same
+        // math as drawThumbnailOverlay() but scaled to rect.width/height
+        // (= the displayed CSS size) instead of the drawing-buffer size.
+        const sx = rect.width  / canvasW;
+        const sy = rect.height / canvasH;
+        const viewW = vpW / zoom, viewH = vpH / zoom;
+        const rx = panX * sx, ry = panY * sy;
+        const rw = viewW * sx, rh = viewH * sy;
+        const inside = cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh;
+        if (!inside) {
+          // Recenter the viewport on the click, then drag from there.
+          panX = (cx / rect.width)  * canvasW - viewW / 2;
+          panY = (cy / rect.height) * canvasH - viewH / 2;
+          clampPan();
+          scheduleFetch();
+        }
+        dragMode = 'thumb-rect';
+        dsx = e.clientX; dsy = e.clientY;
+        psx = panX; psy = panY;
+        dragRectW = rect.width;
+        dragRectH = rect.height;
+        thumbCanvas.classList.add('dragging-rect');
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      // Forward wheel events on the thumbnail to the canvas wheel
+      // handler so pinch-zoom + trackpad-pan keep working when the
+      // cursor happens to be parked over the overview.  The handler
+      // clamps the zoom anchor to the canvas rect so a wheel-over-
+      // thumbnail still produces a sensible anchor point.
+      if (thumbWheelHandler) {
+        thumbCanvas.addEventListener('wheel', thumbWheelHandler, { passive: false });
+      }
       drawThumbnailOverlay();
       console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(total/1024).toFixed(1)}KB)`);
     } else {
@@ -1078,29 +1147,52 @@ async function connect() {
   thumbnailPending = THUMBNAIL_ENABLED;
 
   // ── Mouse drag = pan ──
-  let dragging = false, dsx = 0, dsy = 0, psx = 0, psy = 0;
+  // Drag state (dragMode/dsx/dsy/psx/psy/dragRectW/H) lives at module
+  // scope so the thumbnail handlers in fetchThumbnail() can plug into
+  // the same mousemove/mouseup pipeline.
   c.addEventListener('mousedown', e => {
-    dragging = true; c.classList.add('dragging');
+    dragMode = 'canvas';
+    c.classList.add('dragging');
     dsx = e.clientX; dsy = e.clientY; psx = panX; psy = panY;
   });
   window.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    // Mouse movement is in CSS pixels; convert to viewport (render)
-    // pixels so pan speed matches visual cursor motion when `?maxSize`
-    // shrinks the render target below the CSS size.
-    const sx = vpW / c.clientWidth;
-    const sy = vpH / c.clientHeight;
-    panX = psx - (e.clientX - dsx) * sx / zoom;
-    panY = psy - (e.clientY - dsy) * sy / zoom;
-    clampPan();
-    scheduleFetch();
+    if (dragMode === 'canvas') {
+      // Mouse movement is in CSS pixels; convert to viewport (render)
+      // pixels so pan speed matches visual cursor motion when `?maxSize`
+      // shrinks the render target below the CSS size.
+      const sx = vpW / c.clientWidth;
+      const sy = vpH / c.clientHeight;
+      panX = psx - (e.clientX - dsx) * sx / zoom;
+      panY = psy - (e.clientY - dsy) * sy / zoom;
+      clampPan();
+      scheduleFetch();
+    } else if (dragMode === 'thumb-rect') {
+      // Thumbnail drag: CSS-pixel delta on the thumbnail maps to a
+      // (canvasW/dragRectW)× larger image-space delta — typically
+      // 100×–500× faster than canvas drag, so a single short stroke
+      // can cross a gigapixel image.  dragRectW/H are cached at
+      // mousedown so a window resize mid-drag keeps the conversion
+      // stable.
+      panX = psx + (e.clientX - dsx) * (canvasW / dragRectW);
+      panY = psy + (e.clientY - dsy) * (canvasH / dragRectH);
+      clampPan();
+      scheduleFetch();
+    }
   });
-  window.addEventListener('mouseup', () => { dragging = false; c.classList.remove('dragging'); });
+  window.addEventListener('mouseup', () => {
+    dragMode = null;
+    c.classList.remove('dragging');
+    if (thumbCanvas) thumbCanvas.classList.remove('dragging-rect');
+  });
 
   // ── Trackpad / wheel ──
   // Mac trackpad: two-finger scroll = pan, pinch = zoom (ctrlKey set by browser)
   // Mouse wheel: scroll = zoom
-  c.addEventListener('wheel', e => {
+  // Hoisted to a named handler + module-scope ref so fetchThumbnail()
+  // can re-attach the same logic on the thumbnail element (which would
+  // otherwise eat wheel events instead of letting them through to the
+  // canvas now that pointer-events:none is gone).
+  const wheelHandler = e => {
     e.preventDefault();
     if (e.ctrlKey) {
       // Pinch-to-zoom (Mac) or Ctrl+scroll
@@ -1111,8 +1203,12 @@ async function connect() {
       // mx/my are 0..1 normalised over the canvas's CSS area; multiplying
       // by vpW/vpH gives the mouse position in viewport (render) pixels.
       // This stays correct even when `?maxSize` makes rect.width != vpW.
-      const mx = (e.clientX - rect.left) / rect.width;
-      const my = (e.clientY - rect.top)  / rect.height;
+      // When the wheel event originated on the thumbnail the cursor is
+      // outside the canvas rect, which would push mx/my outside [0,1]
+      // and produce a far-off-screen anchor; clamp so thumbnail-wheel
+      // zooms anchor at the nearest canvas edge instead.
+      const mx = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      const my = Math.min(1, Math.max(0, (e.clientY - rect.top)  / rect.height));
       panX += (mx * vpW) * (1 / oldZoom - 1 / zoom);
       panY += (my * vpH) * (1 / oldZoom - 1 / zoom);
       clampPan();
@@ -1127,7 +1223,9 @@ async function connect() {
       clampPan();
       scheduleFetch();
     }
-  }, { passive: false });
+  };
+  c.addEventListener('wheel', wheelHandler, { passive: false });
+  thumbWheelHandler = wheelHandler;
 
   // ── Keyboard ──
   window.addEventListener('keydown', e => {
