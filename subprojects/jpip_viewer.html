@@ -737,19 +737,40 @@ function initWebGL(canvas) {
 // waiting on the JPIP fetch + decode round-trip.  No-op when carry-forward
 // is disabled.
 let rafRedraw = 0;
+// Decide whether the carry-forward render path is currently active.
+// Single source of truth: requestRedraw() and drawViewport() both consult
+// this so a gate-closed mid-fetch landing renders in legacy mode (texture
+// stretched across the current viewport) instead of the layered mode
+// (texture anchored to its decoded image-coord rect, thumbnail filling
+// the gap).  Without this, the gate suppresses the per-pan rAF redraws
+// but the final paintDecodedRegion still uses the layered shader — and
+// any pan the user did during the fetch leaves the new texture sitting
+// in its anchored position with the thumbnail filling the gap, which is
+// the exact "blurry-stretched" intermediate the gate is meant to hide
+// on local / LAN setups.
+function isCarryForwardActive() {
+  if (!CARRY_FORWARD) return false;
+  if (thumbImgW <= 0) return false;  // no thumbnail → no fallback layer
+  // Pre-fetch / first-connect: thumbnail is the only visible content, so
+  // layered mode is mandatory (legacy mode would stretch the 1×1 placeholder
+  // texture across the viewport and show black).  Once a real texture is
+  // uploaded, fall back to the latency gate.
+  if (texW === 0) return true;
+  if (CARRY_FORWARD_MIN_MS > 0 && fetchMedianMs() < CARRY_FORWARD_MIN_MS) return false;
+  return true;
+}
+
 function requestRedraw() {
-  if (rafRedraw || !gl || !CARRY_FORWARD) return;
-  // Latency gate: skip when fetches are fast enough that the carry-forward
-  // intermediate would be visible for ≤2 frames before being replaced by
-  // the sharp final paint.  History needs to populate (first fetch always
-  // runs without carry-forward); after that the median tracks the user's
-  // network reality.  ?carryForwardMinMs=0 disables the gate.
-  if (CARRY_FORWARD_MIN_MS > 0 && fetchMedianMs() < CARRY_FORWARD_MIN_MS) return;
+  if (rafRedraw || !gl || !isCarryForwardActive()) return;
   rafRedraw = requestAnimationFrame(() => { rafRedraw = 0; drawViewport(); });
 }
 
 function drawViewport() {
   if (!gl) return;
+  // Nothing to show yet — match pre-PR's "early return until first paint"
+  // behavior so the canvas isn't briefly cleared to bg between connect
+  // and the first fetch landing.
+  if (texW === 0 && thumbImgW === 0) return;
   gl.clear(gl.COLOR_BUFFER_BIT);
 
   // Quad shrink for aspect ratio: when the visible image region inside the
@@ -767,11 +788,28 @@ function drawViewport() {
   else                       sx = visAspect / vpAspect;
   gl.uniform2f(uScaleLoc, sx, sy);
 
-  // Viewport image-coord rect.  Read live panX/panY/zoom so pan/zoom
-  // events drag the previous-frame texture in real time.
-  gl.uniform4f(uViewportLoc, panX, panY, panX + viewW, panY + viewH);
-  gl.uniform4f(uTexRectLoc, texImgX, texImgY, texImgX + texImgW, texImgY + texImgH);
-  gl.uniform4f(uThumbRectLoc, 0, 0, thumbImgW, thumbImgH);
+  const vpX0 = panX, vpY0 = panY, vpX1 = panX + viewW, vpY1 = panY + viewH;
+  gl.uniform4f(uViewportLoc, vpX0, vpY0, vpX1, vpY1);
+
+  if (isCarryForwardActive()) {
+    // Layered mode: texture anchored to its decoded image rect; thumbnail
+    // fills any gap.  Reads live panX/panY/zoom so pan/zoom events drag
+    // the previous-frame texture in real time.
+    gl.uniform4f(uTexRectLoc, texImgX, texImgY, texImgX + texImgW, texImgY + texImgH);
+    gl.uniform4f(uThumbRectLoc, 0, 0, thumbImgW, thumbImgH);
+  } else {
+    // Legacy mode: stretch the texture across the current viewport (matches
+    // pre-PR behavior on local / LAN setups where fetches are fast enough
+    // that the layered carry-forward's brief blurry-stretched intermediate
+    // looks worse than the legacy "texture follows the user's pan exactly"
+    // behavior — even though the texture's pixels were decoded for a
+    // slightly older viewport, the user just submitted that fetch so the
+    // visual mismatch is imperceptible.  uTexRect == uViewport produces
+    // identity sampling (vT.x, 1 - vT.y), byte-identical to the pre-PR
+    // single-texture quad path.
+    gl.uniform4f(uTexRectLoc, vpX0, vpY0, vpX1, vpY1);
+    gl.uniform4f(uThumbRectLoc, 0, 0, 0, 0);  // disable thumbnail layer
+  }
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
