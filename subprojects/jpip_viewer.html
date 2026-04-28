@@ -295,6 +295,7 @@
         <tr><td><code>?thumbnail=</code></td><td><code>1</code></td><td>Small bottom-right overview showing the full image (fetched once at connect time from the coarsest reduce level) with a rectangle marking the current viewport. Rectangle updates locally on every pan/zoom — no extra server round-trips. Set <code>0</code> to hide.</td></tr>
         <tr><td><code>?thumbnailSize=</code></td><td><code>160</code></td><td>CSS-pixel size of the thumbnail on its long side. Decoder output resolution is independent — only the displayed size changes.</td></tr>
         <tr><td><code>?cb=</code></td><td>off</td><td>Cache-buster for dev iteration. <code>auto</code> or <code>1</code> appends <code>?v=&lt;Date.now()&gt;</code> to the WASM/JS fetches so the browser refetches after every rebuild. Any other value is used verbatim (snapshot at a build hash). Default (no <code>?cb</code>): full HTTP caching, identical to before.</td></tr>
+        <tr><td><code>?carryForward=</code></td><td><code>1</code></td><td>While a JPIP fetch is in flight after a pan or zoom, redraw the previous frame's pixels at their image-coord position with the thumbnail filling any uncovered area — the image scrolls smoothly under your gesture instead of freezing until the new bytes arrive. Set <code>0</code> to disable (canvas stays as last drawn until the new fetch completes).</td></tr>
       </tbody>
     </table>
   </details>
@@ -562,28 +563,86 @@ function sizeCanvas(c) {
   }
 }
 
-// ── WebGL2 with aspect-ratio-correct quad ───────────────────────────────
-let gl = null, glTex = null, glProgram = null, texW = 0, texH = 0;
-let uUV0Loc, uUV1Loc, uScaleLoc;
+// ── WebGL2: layered draw with previous-frame texture + thumbnail ────────
+// Two textures combine in one fragment-shader pass.  Sampling priority:
+//   (1) glTex   — last-decoded viewport pixels, mapped from texRect to
+//                 the *image-coord region* the texture was decoded for
+//                 (NOT the current viewport).  Stays anchored to image
+//                 position even as the user pans, so motion is smooth.
+//   (2) glThumb — coarse full-image overview, fills areas the previous
+//                 frame doesn't cover (typical when the user pans into
+//                 unseen regions or zooms out past the prior viewport).
+//   (3) bg      — background color for fragments outside the image
+//                 itself (zoom-out beyond canvasW × canvasH).
+//
+// Uniforms:
+//   uViewport   — image-coord (x0, y0, x1, y1) of the CURRENT viewport
+//                 (panX/panY/zoom-derived; updated every redraw).
+//   uTexRect    — image-coord rect of glTex's contents (set when a
+//                 paintDecodedRegion lands; persists across redraws).
+//   uThumbRect  — image-coord rect of glThumb (= 0,0,canvasW,canvasH).
+//   Empty rects (zero width/height) self-gate via NaN/Inf in the
+//   bounds-check division — neither texture sample is used.
+let gl = null, glTex = null, glThumb = null, glProgram = null, texW = 0, texH = 0;
+let uScaleLoc, uViewportLoc, uTexRectLoc, uThumbRectLoc;
+
+// Image-coord rect of glTex's CURRENT decoded contents.  Independent of
+// panX/panY/zoom so the previous frame's pixels stay anchored to their
+// image position when the user pans/zooms before the next fetch lands.
+let texImgX = 0, texImgY = 0, texImgW = 0, texImgH = 0;
+
+// Image-coord rect of glThumb (full canvas at thumbnail's reduce level).
+// Set once when fetchThumbnail() succeeds; remains constant thereafter.
+let thumbImgW = 0, thumbImgH = 0;
+
+// Carry-forward toggle (URL ?carryForward=0 to disable).  When off, the
+// extra rAF redraws on pan/zoom are skipped — drawViewport still runs
+// the layered shader, but only after fetches complete (= legacy behavior:
+// frozen previous frame during the fetch latency window).
+const CARRY_FORWARD = new URLSearchParams(location.search).get('carryForward') !== '0';
 
 function initWebGL(canvas) {
   gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
   if (!gl) return false;
   const vs = `#version 300 es
-    uniform vec2 uUV0, uUV1, uScale;
+    uniform vec2 uScale;
     const vec2 pos[4] = vec2[](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(1,1));
-    out vec2 vUV;
+    out vec2 vT;
     void main() {
-      vec2 t = vec2(gl_VertexID & 1, gl_VertexID >> 1);
-      vUV = mix(vec2(uUV0.x, 1.0-uUV0.y), vec2(uUV1.x, 1.0-uUV1.y), t);
+      // vT.x ∈ [0,1] left→right; vT.y ∈ [0,1] bottom→top (NDC y is up).
+      // Image y grows downward, so the fragment shader flips when computing
+      // imgPos from vT.
+      vT = vec2(gl_VertexID & 1, gl_VertexID >> 1);
       gl_Position = vec4(pos[gl_VertexID] * uScale, 0, 1);
     }`;
   const fs = `#version 300 es
     precision mediump float;
     uniform sampler2D uTex;
-    in vec2 vUV;
+    uniform sampler2D uThumb;
+    uniform vec4 uViewport;    // image coords (x0, y0, x1, y1) — y0 is top
+    uniform vec4 uTexRect;     // image coords of glTex contents
+    uniform vec4 uThumbRect;   // image coords of glThumb contents
+    in vec2 vT;
     out vec4 fragColor;
-    void main() { fragColor = texture(uTex, vUV); }`;
+    void main() {
+      // Map the (uScale-shrunk) quad position to image-space.  Y is flipped
+      // because vT.y = 0 is screen bottom but uViewport.y is image top.
+      vec2 imgPos = vec2(
+        mix(uViewport.x, uViewport.z, vT.x),
+        mix(uViewport.w, uViewport.y, vT.y)
+      );
+      vec4 col = vec4(0.059, 0.066, 0.09, 1.0);
+      // Thumbnail layer: covers full canvas.  Empty thumbRect (zero w/h)
+      // produces NaN/Inf in the divide → bounds check fails → skipped.
+      vec2 t = (imgPos - uThumbRect.xy) / (uThumbRect.zw - uThumbRect.xy);
+      if (all(greaterThanEqual(t, vec2(0.0))) && all(lessThanEqual(t, vec2(1.0))))
+        col = texture(uThumb, t);
+      // Previous-frame layer: overlays the thumbnail wherever it covers.
+      vec2 u = (imgPos - uTexRect.xy) / (uTexRect.zw - uTexRect.xy);
+      if (all(greaterThanEqual(u, vec2(0.0))) && all(lessThanEqual(u, vec2(1.0))))
+        col = texture(uTex, u);
+      fragColor = col;
+    }`;
   function compile(type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src); gl.compileShader(s);
@@ -594,42 +653,86 @@ function initWebGL(canvas) {
   gl.attachShader(glProgram, compile(gl.VERTEX_SHADER, vs));
   gl.attachShader(glProgram, compile(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(glProgram); gl.useProgram(glProgram);
-  uUV0Loc = gl.getUniformLocation(glProgram, 'uUV0');
-  uUV1Loc = gl.getUniformLocation(glProgram, 'uUV1');
-  uScaleLoc = gl.getUniformLocation(glProgram, 'uScale');
+  uScaleLoc     = gl.getUniformLocation(glProgram, 'uScale');
+  uViewportLoc  = gl.getUniformLocation(glProgram, 'uViewport');
+  uTexRectLoc   = gl.getUniformLocation(glProgram, 'uTexRect');
+  uThumbRectLoc = gl.getUniformLocation(glProgram, 'uThumbRect');
   gl.uniform2f(uScaleLoc, 1, 1);
-  glTex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, glTex);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.uniform4f(uViewportLoc,  0, 0, 0, 0);
+  gl.uniform4f(uTexRectLoc,   0, 0, 0, 0);
+  gl.uniform4f(uThumbRectLoc, 0, 0, 0, 0);
+
+  // Both textures share filtering / wrap settings.  Initialise each with a
+  // 1×1 placeholder so the samplers are complete (an unbound or incomplete
+  // texture sampler returns implementation-defined values; the shader's
+  // bounds check would still gate usage, but better to be explicit).
+  const placeholder = new Uint8Array([0, 0, 0, 255]);
+  function makeTex() {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, placeholder);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }
+  glTex   = makeTex();
+  glThumb = makeTex();
+  // Bind glTex to unit 0 (uTex), glThumb to unit 1 (uThumb).  Bindings are
+  // persistent in WebGL state, so we only set the sampler-uniform indices
+  // once here.  Subsequent texImage2D / texSubImage2D calls re-bind via
+  // gl.activeTexture before uploading.
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, glTex);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glThumb);
+  gl.uniform1i(gl.getUniformLocation(glProgram, 'uTex'),   0);
+  gl.uniform1i(gl.getUniformLocation(glProgram, 'uThumb'), 1);
+  // Restore active unit to TEXTURE0 so paintDecodedRegion's existing
+  // gl.bindTexture(glTex) targets the right unit.
+  gl.activeTexture(gl.TEXTURE0);
+
   gl.bindVertexArray(gl.createVertexArray());
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0.059, 0.066, 0.09, 1);
   return true;
 }
 
+// Single-flight rAF redraw.  Called from pan/zoom event handlers so the
+// user sees the previous-frame texture translate/scale to follow their
+// gesture, with the thumbnail filling any uncovered area, all without
+// waiting on the JPIP fetch + decode round-trip.  No-op when carry-forward
+// is disabled.
+let rafRedraw = 0;
+function requestRedraw() {
+  if (rafRedraw || !gl || !CARRY_FORWARD) return;
+  rafRedraw = requestAnimationFrame(() => { rafRedraw = 0; drawViewport(); });
+}
+
 function drawViewport() {
-  if (!gl || texW === 0) return;
+  if (!gl) return;
   gl.clear(gl.COLOR_BUFFER_BIT);
 
-  // The texture IS the viewport — display fullscreen with correct aspect ratio
+  // Quad shrink for aspect ratio: when the visible image region inside the
+  // viewport doesn't match the canvas aspect (common at zoom-out near image
+  // edges), shrink the quad so non-image areas show the background color
+  // instead of stretching the texture.
   const viewW = vpW / zoom;
   const viewH = vpH / zoom;
   const regionW = Math.min(viewW, canvasW - Math.max(0, panX));
   const regionH = Math.min(viewH, canvasH - Math.max(0, panY));
-  const visAspect = regionW / regionH;
+  const visAspect = regionW / Math.max(1e-6, regionH);
   const vpAspect = vpW / vpH;
   let sx = 1, sy = 1;
-  if (visAspect > vpAspect) {
-    sy = vpAspect / visAspect;
-  } else {
-    sx = visAspect / vpAspect;
-  }
-  gl.uniform2f(uUV0Loc, 0, 0);
-  gl.uniform2f(uUV1Loc, 1, 1);
+  if (visAspect > vpAspect) sy = vpAspect / visAspect;
+  else                       sx = visAspect / vpAspect;
   gl.uniform2f(uScaleLoc, sx, sy);
+
+  // Viewport image-coord rect.  Read live panX/panY/zoom so pan/zoom
+  // events drag the previous-frame texture in real time.
+  gl.uniform4f(uViewportLoc, panX, panY, panX + viewW, panY + viewH);
+  gl.uniform4f(uTexRectLoc, texImgX, texImgY, texImgX + texImgW, texImgY + texImgH);
+  gl.uniform4f(uThumbRectLoc, 0, 0, thumbImgW, thumbImgH);
+
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
@@ -661,6 +764,11 @@ function scheduleFetch() {
   // 2D-canvas redraw, no server round-trip, so the user gets instant
   // feedback during drag / wheel even while a server fetch is pending.
   drawThumbnailOverlay();
+  // Carry-forward redraw: the previous-frame texture stays anchored to its
+  // image-coord position via uTexRect, so updating uViewport with the
+  // freshest panX/panY/zoom translates/scales it under the user's gesture.
+  // No-op when ?carryForward=0 (legacy frozen-during-fetch behavior).
+  requestRedraw();
   // Any new user-driven fetch request invalidates any adjacent-viewport
   // prefetch that's still in flight or queued: its bytes either land in
   // the LRU cache and help the new query (if the user panned into the
@@ -694,6 +802,7 @@ function paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH) {
                                        regionX, regionY, regionW, regionH);
   if (rc !== 0) return false;
   const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, outW * outH * 4);
+  gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, glTex);
   if (outW !== texW || outH !== texH) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, outW, outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
@@ -701,6 +810,12 @@ function paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH) {
   } else {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, outW, outH, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
   }
+  // Record the IMAGE-COORD rect this texture represents.  drawViewport
+  // uses these to anchor the previous-frame pixels to their image position
+  // even after the user pans/zooms, so motion is smooth instead of frozen-
+  // and-jump on each fetch boundary.
+  texImgX = regionX; texImgY = regionY;
+  texImgW = regionW; texImgH = regionH;
   drawViewport();
   return true;
 }
@@ -762,6 +877,22 @@ async function fetchThumbnail() {
       const copy = new Uint8ClampedArray(rgbaSz);
       copy.set(M.HEAPU8.subarray(thumbPtr, thumbPtr + rgbaSz));
       thumbImage = new ImageData(copy, fW, fH);
+      // Mirror the thumbnail into a WebGL texture too, so the layered
+      // shader can sample it as the carry-forward fallback for areas the
+      // previous-frame texture doesn't cover.  uThumbRect is set to the
+      // FULL canvas image-coord rect — the thumbnail is the same image at
+      // a coarser resolution, not a sub-region.
+      if (gl && glThumb) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, glThumb);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, fW, fH, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                      new Uint8Array(copy.buffer));
+        gl.activeTexture(gl.TEXTURE0);  // restore default for paintDecodedRegion
+        thumbImgW = canvasW; thumbImgH = canvasH;
+        // First sign of life: redraw immediately so the thumbnail appears
+        // behind whatever (possibly empty) glTex content is there.
+        if (CARRY_FORWARD) requestRedraw();
+      }
       // Create the thumbnail canvas dynamically — only when we have a
       // real image to show.  Keeps the DOM empty when ?thumbnail=0 or
       // on fetch failure, so no phantom placeholder can ever appear.
@@ -1284,7 +1415,17 @@ async function connect() {
     }
     e.preventDefault();
     clampPan();
-    if (needRefetch) scheduleFetch();
+    if (needRefetch) {
+      scheduleFetch();
+    } else if (needRedraw) {
+      // Zoom-within-same-reduce: no refetch needed (the existing texture is
+      // at the right resolution), but the new viewport image-coords change
+      // sx/sy and the imgPos→texUV mapping, so redraw to show the zoom.
+      // Pre-existing UX gap: before the layered shader, this branch did
+      // nothing and the zoom only "took effect" on the next interaction.
+      drawThumbnailOverlay();
+      requestRedraw();
+    }
   });
 
   // ── Window resize ──
