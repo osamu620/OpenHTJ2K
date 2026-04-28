@@ -1412,7 +1412,16 @@ async function connect() {
   sizeCanvas(c);
   initWebGL(c);
 
-  zoom = vpW / canvasW;
+  // Initial zoom = fill viewport (Google Maps style), not fit-to-width.
+  // For aspect-mismatched fixtures (heic2501a 4.27:1, Blue Marble 2:1) the
+  // old `vpW / canvasW` left big near-black bars above and below the image
+  // because vpH/zoom extended past canvasH and the quad shrank to the
+  // image's aspect.  Using max() picks whichever axis would have produced
+  // the bars and zooms in to make the image edge-to-edge instead — the
+  // user starts on actual pixels and pans to see the rest, which is what
+  // every gigapixel-image viewer does (Google Maps, Zoomify, OpenSeadragon).
+  // Square-ish fixtures: max == min, behavior unchanged.
+  zoom = Math.max(vpW / canvasW, vpH / canvasH);
   panX = 0; panY = 0;
   $('info').textContent = `${canvasW}×${canvasH}, ${M._jpip_get_total_precincts(ctx)} precincts`;
 
@@ -1617,7 +1626,9 @@ async function connect() {
         break;
       }
       case 'Home': case '0':
-        zoom = vpW/canvasW; panX=0; panY=0;
+        // Reset to the same fill-viewport zoom that connect() picks, so
+        // Home goes back to the initial view exactly.
+        zoom = Math.max(vpW/canvasW, vpH/canvasH); panX=0; panY=0;
         if (computeReduce() !== decReduce) needRefetch = true; else needRedraw = true;
         break;
       default: return;
