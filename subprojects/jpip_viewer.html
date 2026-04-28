@@ -940,151 +940,204 @@ async function fetchThumbnail() {
   let red = 0;
   while ((longSide >> red) > THUMBNAIL_MAX_PX) red++;
   if (red > THUMBNAIL_MAX_REDUCE) red = THUMBNAIL_MAX_REDUCE;
-  const ceilShift = (v, s) => ((v + (1 << s) - 1) >> s);
-  const fW = Math.max(1, ceilShift(canvasW, red));
-  const fH = Math.max(1, ceilShift(canvasH, red));
-  const q = `fsiz=${fW},${fH}&type=jpp-stream`;
   busy = true;
+  let thumbPtr = 0, thumbPtrSize = 0;
+  let copy = null;       // RGBA bytes on success
+  let fW = 0, fH = 0;    // accepted thumbnail dims on success
+  let totalBytes = 0;    // accumulated across retries (for the success log)
   try {
-    console.log(`[jpip_viewer] thumbnail fetch: red=${red} fsiz=${fW}x${fH}`);
-    M._jpip_set_reduce(ctx, red);
-    const resp = await fetch(`${serverUrl}/jpip?${q}`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    // Stream the response body in chunks via the same getReader() path
-    // fetchView() uses.  Feeding a large buffer in one shot via
-    // _jpip_get_response_buffer can overflow the decoder's internal
-    // intake buffer; the chunked feed always fits.
-    M._jpip_begin_frame(ctx);
-    M._jpip_feed_stream_begin(ctx);
-    const reader = resp.body.getReader();
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const ptr = M._jpip_get_response_buffer(ctx, value.length);
-      wasmWrite(value, ptr);
-      const rc = M._jpip_feed_stream(ctx, ptr, value.length);
-      if (rc !== 0) throw new Error(`feed_stream rc=${rc}`);
-      total += value.length;
-    }
-    if (M._jpip_feed_stream_end(ctx) !== 0) throw new Error('feed_stream_end failed');
-    const rgbaSz = fW * fH * 4;
-    const thumbPtr = M._malloc(rgbaSz);
-    if (!thumbPtr) throw new Error('malloc failed');
-    // region_x / region_y / region_w / region_h are in canvas coordinates
-    // (pre-reduce) per jpip_end_frame_region's contract — for the overview
-    // we want the full canvas, not the reduced dims.  Output buffer size
-    // (fW × fH) is independent: the decoder scales the decoded region to
-    // the output rectangle.
-    const rc = M._jpip_end_frame_region(ctx, thumbPtr, fW, fH, 0, 0, canvasW, canvasH);
-    if (rc === 0) {
-      // Copy RGBA bytes out of the WASM heap before the main fetch path
-      // reuses it.  subarray() reads the live HEAPU8 view so it is
-      // robust against ALLOW_MEMORY_GROWTH detachment.
-      const copy = new Uint8ClampedArray(rgbaSz);
-      copy.set(M.HEAPU8.subarray(thumbPtr, thumbPtr + rgbaSz));
-      thumbImage = new ImageData(copy, fW, fH);
-      // Mirror the thumbnail into a WebGL texture too, so the layered
-      // shader can sample it as the carry-forward fallback for areas the
-      // previous-frame texture doesn't cover.  uThumbRect is set to the
-      // FULL canvas image-coord rect — the thumbnail is the same image at
-      // a coarser resolution, not a sub-region.
-      if (gl && glThumb) {
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, glThumb);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, fW, fH, 0, gl.RGBA, gl.UNSIGNED_BYTE,
-                      new Uint8Array(copy.buffer));
-        gl.activeTexture(gl.TEXTURE0);  // restore default for paintDecodedRegion
-        thumbImgW = canvasW; thumbImgH = canvasH;
-        // First sign of life: redraw immediately so the thumbnail appears
-        // behind whatever (possibly empty) glTex content is there.  Bypass
-        // requestRedraw()'s latency gate — this is a one-time event, not
-        // part of the per-pan rendering cadence the gate is designed for.
-        if (CARRY_FORWARD) drawViewport();
+    const ceilShift = (v, s) => ((v + (1 << s) - 1) >> s);
+    // Retry loop: some fixtures (e.g., land_shallow_topo_21600_fov.j2c —
+    // 57876 precincts with PCRL progression vs. 18 precincts LRCP for the
+    // non-fov version) produce an all-zero buffer at the highest reduce
+    // level despite the JPIP server returning a non-empty JPP-stream.
+    // Likely root cause: the server delivers only a subset of r0 precincts
+    // under PCRL progression, leaving the reassembled codestream with too
+    // few real precincts to decode the LL band.  Stepping reduce down by
+    // one fetches an additional resolution's worth of precincts; ctx->set
+    // accumulates across calls, so each retry feeds the decoder MORE data
+    // than the previous one.
+    for (let attempt = 0; attempt < 3 && red >= 0; ++attempt) {
+      fW = Math.max(1, ceilShift(canvasW, red));
+      fH = Math.max(1, ceilShift(canvasH, red));
+      const q = `fsiz=${fW},${fH}&type=jpp-stream`;
+      console.log(`[jpip_viewer] thumbnail fetch: red=${red} fsiz=${fW}x${fH}`
+                  + (attempt > 0 ? ` (retry ${attempt})` : ''));
+      M._jpip_set_reduce(ctx, red);
+      const resp = await fetch(`${serverUrl}/jpip?${q}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      // Stream the response body in chunks via the same getReader() path
+      // fetchView() uses.  Feeding a large buffer in one shot via
+      // _jpip_get_response_buffer can overflow the decoder's internal
+      // intake buffer; the chunked feed always fits.
+      M._jpip_begin_frame(ctx);
+      M._jpip_feed_stream_begin(ctx);
+      const reader = resp.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const ptr = M._jpip_get_response_buffer(ctx, value.length);
+        wasmWrite(value, ptr);
+        const rc = M._jpip_feed_stream(ctx, ptr, value.length);
+        if (rc !== 0) throw new Error(`feed_stream rc=${rc}`);
+        totalBytes += value.length;
       }
-      // Create the thumbnail canvas dynamically — only when we have a
-      // real image to show.  Keeps the DOM empty when ?thumbnail=0 or
-      // on fetch failure, so no phantom placeholder can ever appear.
-      thumbCanvas = document.createElement('canvas');
-      thumbCanvas.id = 'thumbnail';
-      thumbCanvas.width = fW;
-      thumbCanvas.height = fH;
-      thumbCtx = thumbCanvas.getContext('2d');
-      thumbW = fW;
-      thumbH = fH;
-      // Scale the displayed CSS size down so the long side never exceeds
-      // THUMBNAIL_MAX_PX — the reduce-level cap (5) can leave fW at a
-      // few hundred pixels on medium images or several thousand on true
-      // gigapixel fixtures.  Drawing-buffer size stays at fW × fH so
-      // we don't throw away the resolution the decoder just gave us.
-      const longSide = Math.max(fW, fH);
-      const scale = longSide > THUMBNAIL_MAX_PX ? THUMBNAIL_MAX_PX / longSide : 1;
-      thumbCanvas.style.width  = `${Math.round(fW * scale)}px`;
-      thumbCanvas.style.height = `${Math.round(fH * scale)}px`;
-      document.body.appendChild(thumbCanvas);
-
-      // Click-drag (mouse) or one-finger drag (touch) on the thumbnail pans
-      // the main view much faster than canvas drag (CSS-Δ × canvasW/
-      // thumbCssW).  Two flavours selected by hit-testing the live viewport
-      // rectangle:
-      //   inside  → grab-the-rect (preserves the offset where you grabbed)
-      //   outside → recenter on click, then grab from there
-      // Both fall through to dragMode='thumb-rect' so the shared window
-      // pointermove handler does the actual panning.  Multi-touch on the
-      // thumbnail is intentionally ignored — only the first pointer is
-      // tracked; a second finger doesn't switch into pinch mode here (the
-      // thumbnail isn't a zoom surface, and pinch would conflict with
-      // any in-progress canvas pinch on a touch device).
-      thumbCanvas.addEventListener('pointerdown', e => {
-        if (e.pointerType === 'mouse' && e.button !== 0) return;
-        if (activePointers.size > 0) return;  // already dragging — ignore
-        const rect = thumbCanvas.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return;
-        const cx = e.clientX - rect.left;
-        const cy = e.clientY - rect.top;
-        // Viewport rectangle in the thumbnail's CSS-pixel space.  Same
-        // math as drawThumbnailOverlay() but scaled to rect.width/height
-        // (= the displayed CSS size) instead of the drawing-buffer size.
-        const sx = rect.width  / canvasW;
-        const sy = rect.height / canvasH;
-        const viewW = vpW / zoom, viewH = vpH / zoom;
-        const rx = panX * sx, ry = panY * sy;
-        const rw = viewW * sx, rh = viewH * sy;
-        const inside = cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh;
-        if (!inside) {
-          // Recenter the viewport on the click, then drag from there.
-          panX = (cx / rect.width)  * canvasW - viewW / 2;
-          panY = (cy / rect.height) * canvasH - viewH / 2;
-          clampPan();
-          scheduleFetch();
+      if (M._jpip_feed_stream_end(ctx) !== 0) throw new Error('feed_stream_end failed');
+      const rgbaSz = fW * fH * 4;
+      // Reuse the WASM-heap buffer across retries; resize only when the
+      // dimensions actually grow (smaller red → larger buffer).
+      if (rgbaSz !== thumbPtrSize) {
+        if (thumbPtr) M._free(thumbPtr);
+        thumbPtr = M._malloc(rgbaSz);
+        if (!thumbPtr) throw new Error('malloc failed');
+        thumbPtrSize = rgbaSz;
+      }
+      // region_x / region_y / region_w / region_h are in canvas coordinates
+      // (pre-reduce) per jpip_end_frame_region's contract — for the overview
+      // we want the full canvas, not the reduced dims.  Output buffer size
+      // (fW × fH) is independent: the decoder scales the decoded region to
+      // the output rectangle.
+      const rc = M._jpip_end_frame_region(ctx, thumbPtr, fW, fH, 0, 0, canvasW, canvasH);
+      if (rc !== 0) {
+        console.warn(`[jpip_viewer] thumbnail end_frame_region rc=${rc} at red=${red}`
+                     + (red > 0 ? `, retrying at red=${red - 1}` : ', no further retries'));
+        red--;
+        continue;
+      }
+      // Sample-validate the decoded buffer.  Failure mode: every pixel is
+      // exactly zero RGB (the decoder fell back to its all-zero default
+      // because the sparse codestream had no real codeblock data).  We
+      // sample ~1024 evenly-spaced RGBA pixels and accept on ≥4 non-zero
+      // samples — enough to catch genuine decode failures without false-
+      // negatives on naturally-dark images (deep ocean, night sky, etc.,
+      // which still have a handful of bright pixels in any sample).
+      const HEAPU8 = M.HEAPU8;
+      const px = fW * fH;
+      const stepPx = Math.max(1, Math.floor(px / 1024));
+      let nonZero = 0;
+      for (let p = 0; p < px; p += stepPx) {
+        const i = p * 4;
+        if (HEAPU8[thumbPtr + i] | HEAPU8[thumbPtr + i + 1] | HEAPU8[thumbPtr + i + 2]) {
+          if (++nonZero >= 4) break;
         }
-        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        dragMode = 'thumb-rect';
-        dsx = e.clientX; dsy = e.clientY;
-        psx = panX; psy = panY;
-        dragRectW = rect.width;
-        dragRectH = rect.height;
-        thumbCanvas.classList.add('dragging-rect');
-        e.preventDefault();
-        e.stopPropagation();
-      });
-      // Forward wheel events on the thumbnail to the canvas wheel
-      // handler so pinch-zoom + trackpad-pan keep working when the
-      // cursor happens to be parked over the overview.  The handler
-      // clamps the zoom anchor to the canvas rect so a wheel-over-
-      // thumbnail still produces a sensible anchor point.
-      if (thumbWheelHandler) {
-        thumbCanvas.addEventListener('wheel', thumbWheelHandler, { passive: false });
       }
-      drawThumbnailOverlay();
-      console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(total/1024).toFixed(1)}KB)`);
-    } else {
-      console.warn(`[jpip_viewer] thumbnail end_frame_region rc=${rc}`);
+      if (nonZero >= 4) {
+        // Copy RGBA bytes out of the WASM heap before the main fetch path
+        // reuses it.  subarray() reads the live HEAPU8 view so it is
+        // robust against ALLOW_MEMORY_GROWTH detachment.
+        copy = new Uint8ClampedArray(rgbaSz);
+        copy.set(HEAPU8.subarray(thumbPtr, thumbPtr + rgbaSz));
+        break;
+      }
+      console.warn(`[jpip_viewer] thumbnail at red=${red} produced all-zero`
+                   + ` buffer (likely high-precinct PCRL fixture)`
+                   + (red > 0 ? `, retrying at red=${red - 1}` : ', no further retries'));
+      red--;
     }
-    M._free(thumbPtr);
+    if (!copy) {
+      console.warn('[jpip_viewer] thumbnail decode failed after all retries — no thumbnail');
+      return;
+    }
+    // ── Post-success: build ImageData, GL texture, DOM canvas ────────────
+    thumbImage = new ImageData(copy, fW, fH);
+    // Mirror the thumbnail into a WebGL texture too, so the layered
+    // shader can sample it as the carry-forward fallback for areas the
+    // previous-frame texture doesn't cover.  uThumbRect is set to the
+    // FULL canvas image-coord rect — the thumbnail is the same image at
+    // a coarser resolution, not a sub-region.
+    if (gl && glThumb) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, glThumb);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, fW, fH, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                    new Uint8Array(copy.buffer));
+      gl.activeTexture(gl.TEXTURE0);  // restore default for paintDecodedRegion
+      thumbImgW = canvasW; thumbImgH = canvasH;
+      // First sign of life: redraw immediately so the thumbnail appears
+      // behind whatever (possibly empty) glTex content is there.  Bypass
+      // requestRedraw()'s latency gate — this is a one-time event, not
+      // part of the per-pan rendering cadence the gate is designed for.
+      if (CARRY_FORWARD) drawViewport();
+    }
+    // Create the thumbnail canvas dynamically — only when we have a
+    // real image to show.  Keeps the DOM empty when ?thumbnail=0 or
+    // on fetch failure, so no phantom placeholder can ever appear.
+    thumbCanvas = document.createElement('canvas');
+    thumbCanvas.id = 'thumbnail';
+    thumbCanvas.width = fW;
+    thumbCanvas.height = fH;
+    thumbCtx = thumbCanvas.getContext('2d');
+    thumbW = fW;
+    thumbH = fH;
+    // Scale the displayed CSS size down so the long side never exceeds
+    // THUMBNAIL_MAX_PX — the reduce-level cap (5) can leave fW at a
+    // few hundred pixels on medium images or several thousand on true
+    // gigapixel fixtures.  Drawing-buffer size stays at fW × fH so
+    // we don't throw away the resolution the decoder just gave us.
+    const longSideOut = Math.max(fW, fH);
+    const scale = longSideOut > THUMBNAIL_MAX_PX ? THUMBNAIL_MAX_PX / longSideOut : 1;
+    thumbCanvas.style.width  = `${Math.round(fW * scale)}px`;
+    thumbCanvas.style.height = `${Math.round(fH * scale)}px`;
+    document.body.appendChild(thumbCanvas);
+
+    // Click-drag (mouse) or one-finger drag (touch) on the thumbnail pans
+    // the main view much faster than canvas drag (CSS-Δ × canvasW/
+    // thumbCssW).  Two flavours selected by hit-testing the live viewport
+    // rectangle:
+    //   inside  → grab-the-rect (preserves the offset where you grabbed)
+    //   outside → recenter on click, then grab from there
+    // Both fall through to dragMode='thumb-rect' so the shared window
+    // pointermove handler does the actual panning.  Multi-touch on the
+    // thumbnail is intentionally ignored — only the first pointer is
+    // tracked; a second finger doesn't switch into pinch mode here (the
+    // thumbnail isn't a zoom surface, and pinch would conflict with
+    // any in-progress canvas pinch on a touch device).
+    thumbCanvas.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (activePointers.size > 0) return;  // already dragging — ignore
+      const rect = thumbCanvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      // Viewport rectangle in the thumbnail's CSS-pixel space.  Same
+      // math as drawThumbnailOverlay() but scaled to rect.width/height
+      // (= the displayed CSS size) instead of the drawing-buffer size.
+      const sx = rect.width  / canvasW;
+      const sy = rect.height / canvasH;
+      const viewW = vpW / zoom, viewH = vpH / zoom;
+      const rx = panX * sx, ry = panY * sy;
+      const rw = viewW * sx, rh = viewH * sy;
+      const inside = cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh;
+      if (!inside) {
+        // Recenter the viewport on the click, then drag from there.
+        panX = (cx / rect.width)  * canvasW - viewW / 2;
+        panY = (cy / rect.height) * canvasH - viewH / 2;
+        clampPan();
+        scheduleFetch();
+      }
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      dragMode = 'thumb-rect';
+      dsx = e.clientX; dsy = e.clientY;
+      psx = panX; psy = panY;
+      dragRectW = rect.width;
+      dragRectH = rect.height;
+      thumbCanvas.classList.add('dragging-rect');
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    // Forward wheel events on the thumbnail to the canvas wheel
+    // handler so pinch-zoom + trackpad-pan keep working when the
+    // cursor happens to be parked over the overview.  The handler
+    // clamps the zoom anchor to the canvas rect so a wheel-over-
+    // thumbnail still produces a sensible anchor point.
+    if (thumbWheelHandler) {
+      thumbCanvas.addEventListener('wheel', thumbWheelHandler, { passive: false });
+    }
+    drawThumbnailOverlay();
+    console.log(`[jpip_viewer] thumbnail ready (${fW}×${fH}, ${(totalBytes/1024).toFixed(1)}KB)`);
   } catch (e) {
     console.warn('[jpip_viewer] thumbnail fetch failed:', e.message, e.stack);
   } finally {
+    if (thumbPtr) M._free(thumbPtr);
     busy = false;
     // Drain the latest-pending slot that may have built up while the
     // thumbnail was in flight.
