@@ -419,6 +419,11 @@ void openhtj2k_decoder_impl::invoke(std::vector<int32_t *> &buf, std::vector<uin
     }
     tmpSOT     = SOT_marker(in);
     tile_index = tmpSOT.get_tile_index();
+    if (tile_index >= tileSet.size()) {
+      printf("ERROR: SOT tile index %u is out of range (numTiles=%zu)\n",
+             tile_index, tileSet.size());
+      throw std::exception();
+    }
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
 
@@ -548,6 +553,11 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     }
     tmpSOT     = SOT_marker(in);
     tile_index = tmpSOT.get_tile_index();
+    if (tile_index >= tileSet.size()) {
+      printf("ERROR: SOT tile index %u is out of range (numTiles=%zu)\n",
+             tile_index, tileSet.size());
+      throw std::exception();
+    }
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
 
@@ -634,6 +644,11 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     }
     tmpSOT     = SOT_marker(in);
     tile_index = tmpSOT.get_tile_index();
+    if (tile_index >= tileSet.size()) {
+      printf("ERROR: SOT tile index %u is out of range (numTiles=%zu)\n",
+             tile_index, tileSet.size());
+      throw std::exception();
+    }
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
 
@@ -1332,6 +1347,11 @@ void openhtj2k_decoder_impl::invoke_line_based_predecoded(std::vector<int32_t *>
     }
     tmpSOT     = SOT_marker(in);
     tile_index = tmpSOT.get_tile_index();
+    if (tile_index >= tileSet.size()) {
+      printf("ERROR: SOT tile index %u is out of range (numTiles=%zu)\n",
+             tile_index, tileSet.size());
+      throw std::exception();
+    }
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
 
