@@ -1,3 +1,26 @@
+# [0.18.5] - 2026-04-28
+
+## Security Fix - SOT Out-of-Bounds Tile Index Heap Info Leak (CVE-2026-TBD)
+
+**Critical security update**: Fixed heap out-of-bounds access in tile-part dispatch that could be exploited via crafted SOT markers in malformed JPEG 2000 codestreams.
+
+### Security Impact
+- **CVE-2026-TBD**: Heap out-of-bounds read/write in `j2k_tile::add_tile_part()` reached via unchecked `Isot` (SOT tile index)
+- **Attack vectors**: Crafted J2K/JP2 files; reachable in the JPIP server's startup codestream load (`PacketLocator::build`) and in every decoder entry point (`invoke()`, `invoke_line_based()`, `invoke_line_based_stream()`, `invoke_line_based_predecoded()`)
+- **Confirmed primitive**: Server-surviving heap information leak — heap pointers written by `add_tile_part()` into memory adjacent to the `tileSet` allocation can be reflected back to the client through later JPIP tile-header data-bin responses
+- **Credit**: Vulnerability discovered and responsibly disclosed by KANG DAEUN (SANGMYUNG UNIVERSITY) and OH HAN GUEL (SANGMYUNG UNIVERSITY, @5asever40-a11y)
+
+### Fix Details
+- Added bounds check for `Isot` against `tileSet.size()` (i.e. `numTiles.x * numTiles.y`) at all four SOT-dispatch sites in `source/core/interface/decoder.cpp`
+- Out-of-range tile indices now throw `std::exception()` with a diagnostic before any write through the offending pointer
+- Verified under AddressSanitizer that the previously reported `heap-buffer-overflow` at `coding_units.cpp:3336` no longer triggers for the published PoCs (`poc_01_server_surviving_heap_info_leak_*.j2k`, `poc_02_server_heap_info_leak_*.j2k`)
+
+### Migration Notes
+- No API changes - existing valid inputs continue to work
+- Malformed inputs with `Isot >= numTiles` are now rejected at parse time instead of silently corrupting heap memory
+
+**Recommendation**: All users running JPIP servers or decoding untrusted JPEG 2000 content should upgrade to v0.18.5.
+
 # [0.18.4] - 2026-04-27
 
 ## Security Fix - PPM Packet Header Heap Buffer Overflow (CVE-2026-TBD)
@@ -8,7 +31,7 @@
 - **CVE-2026-TBD**: Heap buffer overflow in `j2k_codeblock::pass_length[128]` array
 - **Attack vectors**: Malicious JPIP server responses, crafted J2K/JP2 files
 - **Affected components**: JPIP server/client, decoder processing PPM markers
-- **Credit**: Vulnerability discovered and responsibly disclosed by IM JUN SEO (KISIA, @Jseanxx) and OH HAN GUEL (SANGMYUNG UNIVERSITY, @5asever40-a11y)
+- **Credit**: Vulnerability discovered and responsibly disclosed by KANG DAEUN (SANGMYUNG UNIVERSITY) and OH HAN GUEL (SANGMYUNG UNIVERSITY, @5asever40-a11y)
 
 ### Fix Details
 - Added `kMaxCodingPasses = 128` constant matching `pass_length` array size
