@@ -85,6 +85,16 @@
     /* width/height set in JS from vpW/vpH */
     display: block; cursor: grab;
     background: #000;
+    /* touch-action: none commits the browser to firing pointer events
+       instead of handling the gesture itself.  Without this, iOS Safari
+       takes one-finger drags as page scrolls and two-finger gestures as
+       page-level pinch-zoom — the demo never sees the events.  -webkit-
+       tap-highlight-color suppresses the gray flash on tap; user-select:
+       none stops the awkward selection-handle drag on long-press. */
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
   }
   #canvas.dragging { cursor: grabbing; }
   /* `?fit=contain` sets this class on <body> so the letterbox around the
@@ -120,6 +130,13 @@
     border-radius: 4px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     cursor: crosshair;
+    /* Same touch-action plumbing as #canvas — without this the thumbnail's
+       one-finger drag (the scrubber) gets swallowed by iOS Safari's page
+       scroll. */
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
   }
   #thumbnail.dragging-rect { cursor: grabbing; }
 
@@ -264,10 +281,12 @@
   <div class="row">Drag the image with the mouse.</div>
   <div class="row"><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>  (<kbd>Shift</kbd> = large step)</div>
   <div class="row">Trackpad: two-finger scroll.</div>
+  <div class="row">iPad / iPhone: one-finger drag.</div>
 
   <div class="section-h">Zoom</div>
   <div class="row"><kbd>+</kbd> / <kbd>−</kbd> in / out,&nbsp;<kbd>Home</kbd> reset.</div>
   <div class="row">Trackpad: pinch.&nbsp;Mouse: <kbd>Ctrl</kbd>+wheel.</div>
+  <div class="row">iPad / iPhone: two-finger pinch.</div>
 
   <div class="section-h">Stats bar</div>
   <div class="row">canvas size · zoom · reduce_NL · viewport region · pan · fetch/decode ms</div>
@@ -543,16 +562,26 @@ let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 // Drag state shared between the canvas (set up in connect()) and the
 // thumbnail (set up in fetchThumbnail() once the overview decodes).
 // Lifted to module scope so the two handlers can share the same
-// mousemove/mouseup logic without re-wiring window listeners.
+// pointermove/pointerup logic without re-wiring window listeners.
 //
-//   dragMode  null | 'canvas' | 'thumb-rect'
-//   dsx,dsy   mousedown clientX/Y (CSS pixels)
-//   psx,psy   panX/panY snapshot at mousedown (image-space pixels)
-//   dragRectW/H  cached thumbnail bounding-rect dims at mousedown so a
+//   dragMode  null | 'canvas' | 'thumb-rect' | 'pinch'
+//   dsx,dsy   pointerdown clientX/Y (CSS pixels)
+//   psx,psy   panX/panY snapshot at pointerdown (image-space pixels)
+//   dragRectW/H  cached thumbnail bounding-rect dims at pointerdown so a
 //                window resize mid-drag can't change the CSS→image scale
 let dragMode = null;
 let dsx = 0, dsy = 0, psx = 0, psy = 0;
 let dragRectW = 0, dragRectH = 0;
+// Active pointers (mouse + touch + pen) by pointerId.  Single-pointer drag
+// uses dsx/dsy/psx/psy above; two-pointer pinch reads from this map.
+const activePointers = new Map();
+// Pinch-zoom snapshot at the moment the second pointer landed.  D0 = initial
+// finger distance, Mx0/My0 = initial midpoint in clientX/Y, zoom0/panX0/panY0
+// = viewport state at pinch start.  All subsequent pinch updates derive from
+// these so the gesture's anchor point (the midpoint between the two fingers)
+// stays glued to its image-coord position throughout the pinch.
+let pinchD0 = 0, pinchMx0 = 0, pinchMy0 = 0;
+let pinchZoom0 = 1, pinchPanX0 = 0, pinchPanY0 = 0;
 // Set by connect() once the wheel handler is constructed; consumed by
 // fetchThumbnail() to mirror canvas wheel/zoom behaviour over the
 // thumbnail.  Stays null until connect() runs, which guarantees ctx/M
@@ -994,14 +1023,21 @@ async function fetchThumbnail() {
       thumbCanvas.style.height = `${Math.round(fH * scale)}px`;
       document.body.appendChild(thumbCanvas);
 
-      // Click-drag on the thumbnail pans the main view much faster than
-      // canvas drag (CSS-Δ × canvasW/thumbCssW).  Two flavours selected
-      // by hit-testing the live viewport rectangle:
+      // Click-drag (mouse) or one-finger drag (touch) on the thumbnail pans
+      // the main view much faster than canvas drag (CSS-Δ × canvasW/
+      // thumbCssW).  Two flavours selected by hit-testing the live viewport
+      // rectangle:
       //   inside  → grab-the-rect (preserves the offset where you grabbed)
       //   outside → recenter on click, then grab from there
       // Both fall through to dragMode='thumb-rect' so the shared window
-      // mousemove handler does the actual panning.
-      thumbCanvas.addEventListener('mousedown', e => {
+      // pointermove handler does the actual panning.  Multi-touch on the
+      // thumbnail is intentionally ignored — only the first pointer is
+      // tracked; a second finger doesn't switch into pinch mode here (the
+      // thumbnail isn't a zoom surface, and pinch would conflict with
+      // any in-progress canvas pinch on a touch device).
+      thumbCanvas.addEventListener('pointerdown', e => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        if (activePointers.size > 0) return;  // already dragging — ignore
         const rect = thumbCanvas.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) return;
         const cx = e.clientX - rect.left;
@@ -1022,6 +1058,7 @@ async function fetchThumbnail() {
           clampPan();
           scheduleFetch();
         }
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         dragMode = 'thumb-rect';
         dsx = e.clientX; dsy = e.clientY;
         psx = panX; psy = panY;
@@ -1383,20 +1420,54 @@ async function connect() {
   // successful paint so the main view is never blocked on the thumbnail.
   thumbnailPending = THUMBNAIL_ENABLED;
 
-  // ── Mouse drag = pan ──
-  // Drag state (dragMode/dsx/dsy/psx/psy/dragRectW/H) lives at module
-  // scope so the thumbnail handlers in fetchThumbnail() can plug into
-  // the same mousemove/mouseup pipeline.
-  c.addEventListener('mousedown', e => {
-    dragMode = 'canvas';
-    c.classList.add('dragging');
-    dsx = e.clientX; dsy = e.clientY; psx = panX; psy = panY;
+  // ── Pointer drag = pan; two pointers = pinch zoom (touch + mouse + pen) ──
+  // Pointer Events API unifies mouse, touch (iOS Safari, Chrome on Android),
+  // and pen.  The CSS `touch-action: none` on #canvas + #thumbnail commits
+  // the browser to firing pointer events instead of handling the gesture
+  // itself (otherwise iOS Safari swallows one-finger drags as page scroll
+  // and two-finger gestures as page-level pinch-zoom).
+  //
+  // Drag state (dragMode/dsx/dsy/psx/psy/dragRectW/H) lives at module scope
+  // so the thumbnail handlers in fetchThumbnail() can plug into the same
+  // window pointermove/pointerup pipeline.  activePointers tracks every
+  // currently-pressed pointer by id so we can demote pinch→pan when one
+  // finger lifts, and ignore stray window-level pointermoves that aren't
+  // ours.
+  c.addEventListener('pointerdown', e => {
+    // Mouse: only react to the primary (left) button.  Touch/pen: button
+    // is always 0, so the check naturally lets them through.
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size === 1) {
+      // Single-pointer pan.
+      dragMode = 'canvas';
+      c.classList.add('dragging');
+      dsx = e.clientX; dsy = e.clientY; psx = panX; psy = panY;
+    } else if (activePointers.size === 2) {
+      // Second pointer landed — switch to pinch zoom and cancel the pan
+      // gesture (otherwise the residual 'canvas' state would keep firing
+      // pan updates from the first pointer's pointermove events).
+      dragMode = 'pinch';
+      c.classList.remove('dragging');
+      const pts = [...activePointers.values()];
+      pinchD0 = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      pinchMx0 = (pts[0].x + pts[1].x) / 2;
+      pinchMy0 = (pts[0].y + pts[1].y) / 2;
+      pinchZoom0 = zoom;
+      pinchPanX0 = panX;
+      pinchPanY0 = panY;
+    }
+    e.preventDefault();
   });
-  window.addEventListener('mousemove', e => {
+
+  window.addEventListener('pointermove', e => {
+    if (!activePointers.has(e.pointerId)) return;  // not our gesture
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
     if (dragMode === 'canvas') {
-      // Mouse movement is in CSS pixels; convert to viewport (render)
-      // pixels so pan speed matches visual cursor motion when `?maxSize`
-      // shrinks the render target below the CSS size.
+      // Single-pointer pan.  Pointer movement is in CSS pixels; convert to
+      // viewport (render) pixels so pan speed matches visual cursor motion
+      // when `?maxSize` shrinks the render target below the CSS size.
       const sx = vpW / c.clientWidth;
       const sy = vpH / c.clientHeight;
       panX = psx - (e.clientX - dsx) * sx / zoom;
@@ -1404,23 +1475,73 @@ async function connect() {
       clampPan();
       scheduleFetch();
     } else if (dragMode === 'thumb-rect') {
-      // Thumbnail drag: CSS-pixel delta on the thumbnail maps to a
-      // (canvasW/dragRectW)× larger image-space delta — typically
-      // 100×–500× faster than canvas drag, so a single short stroke
-      // can cross a gigapixel image.  dragRectW/H are cached at
-      // mousedown so a window resize mid-drag keeps the conversion
-      // stable.
+      // Thumbnail scrubber drag: CSS-pixel delta on the thumbnail maps to
+      // a (canvasW/dragRectW)× larger image-space delta — typically
+      // 100×–500× faster than canvas drag, so a single short stroke can
+      // cross a gigapixel image.  dragRectW/H are cached at pointerdown
+      // so a window resize mid-drag keeps the conversion stable.
       panX = psx + (e.clientX - dsx) * (canvasW / dragRectW);
       panY = psy + (e.clientY - dsy) * (canvasH / dragRectH);
       clampPan();
       scheduleFetch();
+    } else if (dragMode === 'pinch' && activePointers.size === 2) {
+      // Two-pointer pinch zoom anchored at the gesture's midpoint.  The
+      // anchor invariant: the image-space point under the pinch midpoint
+      // at gesture start stays under the moving midpoint throughout the
+      // gesture (so the user feels like they're physically grabbing the
+      // image and stretching it about the pinch center).
+      //
+      // Math:
+      //   factor = D / D0
+      //   newZoom = pinchZoom0 * factor (clamped to the same range as
+      //                                  wheel/keyboard zoom).
+      //   image-coord at start under M0 = pinchPanX0 + (M0 - rect) * vpW
+      //                                                / rect.width / pinchZoom0
+      //   panX = imgX_start - (M_now - rect) * vpW / rect.width / newZoom
+      const pts = [...activePointers.values()];
+      const D = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      const Mx = (pts[0].x + pts[1].x) / 2;
+      const My = (pts[0].y + pts[1].y) / 2;
+      const factor = D / Math.max(1, pinchD0);
+      const newZoom = Math.max(vpW / canvasW * 0.25, Math.min(8.0, pinchZoom0 * factor));
+      const rect = c.getBoundingClientRect();
+      // Normalised midpoint position over the canvas's CSS area at gesture
+      // start.  Same trick as the wheel-zoom anchor (line ~1447): scale by
+      // vpW/vpH (not rect.width/rect.height) so `?maxSize` stays correct.
+      const mx0n = (pinchMx0 - rect.left) / rect.width;
+      const my0n = (pinchMy0 - rect.top)  / rect.height;
+      const mxn  = (Mx - rect.left) / rect.width;
+      const myn  = (My - rect.top)  / rect.height;
+      const imgX = pinchPanX0 + mx0n * vpW / pinchZoom0;
+      const imgY = pinchPanY0 + my0n * vpH / pinchZoom0;
+      panX = imgX - mxn * vpW / newZoom;
+      panY = imgY - myn * vpH / newZoom;
+      zoom = newZoom;
+      clampPan();
+      scheduleFetch();
     }
   });
-  window.addEventListener('mouseup', () => {
-    dragMode = null;
-    c.classList.remove('dragging');
-    if (thumbCanvas) thumbCanvas.classList.remove('dragging-rect');
-  });
+
+  const onPointerEnd = e => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.delete(e.pointerId);
+    if (activePointers.size === 0) {
+      dragMode = null;
+      c.classList.remove('dragging');
+      if (thumbCanvas) thumbCanvas.classList.remove('dragging-rect');
+    } else if (dragMode === 'pinch' && activePointers.size === 1) {
+      // One finger lifted during pinch — demote to single-pointer pan from
+      // the remaining pointer's current position so the gesture continues
+      // smoothly instead of snapping back.
+      const remaining = [...activePointers.values()][0];
+      dragMode = 'canvas';
+      c.classList.add('dragging');
+      dsx = remaining.x; dsy = remaining.y;
+      psx = panX; psy = panY;
+    }
+  };
+  window.addEventListener('pointerup',     onPointerEnd);
+  window.addEventListener('pointercancel', onPointerEnd);
 
   // ── Trackpad / wheel ──
   // Mac trackpad: two-finger scroll = pan, pinch = zoom (ctrlKey set by browser)
