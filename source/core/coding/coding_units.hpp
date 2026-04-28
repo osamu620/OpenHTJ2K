@@ -588,6 +588,14 @@ class j2k_tile_component : public j2k_tile_base {
   // pool tasks).  Caller guarantees dst has capacity >= count * stride_floats
   // sprec_t elements and 32-byte alignment.
   sprec_t *pull_strip_into_buf(uint32_t count, uint32_t stride_floats, sprec_t *dst);
+  // Advance the IDWT cascade by `count` rows without writing any output.
+  // Used by decode_line_based_stream's row_lo fast-forward: when the caller
+  // narrows the viewport with set_row_range, strips entirely below row_lo
+  // are pumped through pull_line_ref() solely to keep cursors in lockstep.
+  // Saves the per-row strip_buf memcpy and the per-strip pool dispatch +
+  // grow-on-demand alloc check that pull_strip_into_buf would otherwise pay.
+  // No-op when line_dec is null or count is 0.
+  void pull_strip_advance(uint32_t count);
   void finalize_line_decode();
   // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
   void mark_line_dec_predecoded();
