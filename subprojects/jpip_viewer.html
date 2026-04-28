@@ -1451,12 +1451,16 @@ async function connect() {
       clampPan();
       scheduleFetch();
     } else {
-      // Two-finger scroll = pan (Mac natural scrolling: flip Y).
+      // Two-finger scroll = pan.  Both axes use the same sign convention:
+      // positive delta → pan in that direction.  X and Y are coherent so a
+      // diagonal swipe feels predictable.  Whether that matches the user's
+      // OS-level "natural scrolling" preference depends on their system
+      // setting, but at least the two axes agree with each other.
       // deltaX/deltaY are CSS pixels; scale to viewport pixels.
       const sx = vpW / c.clientWidth;
       const sy = vpH / c.clientHeight;
       panX += e.deltaX * sx / zoom;
-      panY -= e.deltaY * sy / zoom;
+      panY += e.deltaY * sy / zoom;
       clampPan();
       scheduleFetch();
     }
