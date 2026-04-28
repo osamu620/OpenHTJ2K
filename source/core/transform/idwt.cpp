@@ -1129,7 +1129,20 @@ static void fetch_one(idwt_2d_state *s) {
   sprec_t *dst = rptr(s, r);
   s->get_src_row(s->src_ctx, r, dst);
   s->d_level[slot]   = 0;
-  s->row_zero[slot]  = row_all_zero(dst, s->u1 - s->u0);
+  // Skip the O(width) row_all_zero scan when the source callback is known
+  // to have zero-filled this row.  idwt_level_src_fn (coding_units.cpp:196)
+  // memsets `dst` to zero whenever abs_row < c->row_lo, where c->row_lo is
+  // the per-level row_lo set by set_line_decode_row_range.  s->row_lo holds
+  // the same per-level value (idwt_2d_state_set_row_range writes both), so
+  // we can elide the scan in that case — saving ~width × 4 B of L1 traffic
+  // and a per-row scalar reduce that costs ~width ns per skipped row.
+  // For the default (full-canvas) case s->row_lo == s->v0, so r < s->row_lo
+  // is always false and the scan runs unchanged.
+  if (r < s->row_lo) {
+    s->row_zero[slot] = true;
+  } else {
+    s->row_zero[slot] = row_all_zero(dst, s->u1 - s->u0);
+  }
   ++s->next_fetch;
   fill_pse(s, r);
   cascade(s);
@@ -1200,6 +1213,7 @@ void idwt_2d_state_set_row_range(idwt_2d_state *s, int32_t row_lo, int32_t row_h
   s->row_lo = row_lo;
   s->row_hi = row_hi;
 }
+
 
 void idwt_2d_state_free(idwt_2d_state *s) {
   aligned_mem_free(s->ring_buf);     s->ring_buf     = nullptr;
