@@ -264,6 +264,16 @@ set_target_properties(
              $<IF:$<CONFIG:Debug>,open_htj2k_dec_dbg,open_htj2k_dec>)
 target_link_libraries(open_htj2k_dec PUBLIC open_htj2k)
 
+# Image-I/O utility (static; in-tree apps only — not part of libopen_htj2k ABI)
+add_library(openhtj2k_imgio STATIC)
+target_include_directories(openhtj2k_imgio PUBLIC source/apps/imgio)
+add_subdirectory(source/apps/imgio)
+if (TIFF_FOUND)
+  target_compile_definitions(openhtj2k_imgio PRIVATE OPENHTJ2K_TIFF_SUPPORT)
+  target_include_directories(openhtj2k_imgio PRIVATE ${TIFF_INCLUDE_DIR})
+  target_link_libraries(openhtj2k_imgio PRIVATE ${TIFF_LIBRARIES})
+endif()
+
 # encoder target
 add_executable(open_htj2k_enc)
 target_include_directories(open_htj2k_enc PUBLIC source/core/interface)
@@ -272,12 +282,13 @@ set_target_properties(
   open_htj2k_enc
   PROPERTIES OUTPUT_NAME
              $<IF:$<CONFIG:Debug>,open_htj2k_enc_dbg,open_htj2k_enc>)
-target_link_libraries(open_htj2k_enc PUBLIC open_htj2k)
+target_link_libraries(open_htj2k_enc PUBLIC open_htj2k PRIVATE openhtj2k_imgio)
 
 # imgcmp target
 add_executable(imgcmp)
 add_subdirectory(source/apps/imgcmp)
 target_include_directories(imgcmp PUBLIC source/apps/imgcmp/)
+target_link_libraries(imgcmp PRIVATE openhtj2k_imgio)
 
 add_executable(lb_compare)
 add_subdirectory(source/apps/lb_compare)

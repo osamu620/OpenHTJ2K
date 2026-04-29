@@ -202,7 +202,7 @@ Key flags (demo): `--reduce N`, `--parafovea-ratio F`, `--periphery-ratio F`,
 | PGM (`P5`) | ✓ | ✓ | Single grayscale component. Bit depth is auto-detected from `maxval` (8-bit or 16-bit). Decoder writes one file per component with a `_NN` suffix. |
 | PPM (`P6`) | ✓ | ✓ | Packed RGB (3 equal-sized components). On decode, a subsampled YCbCr codestream is upsampled to luma resolution (nearest-neighbour for 4:2:2 / 4:2:0) before writing interleaved RGB — enable the YCbCr→RGB matrix with `-ycbcr bt601\|bt709`. |
 | PGX | ✓ | ✓ | One component per file. Multi-component input is a comma-separated file list (e.g. `Y.pgx,Cb.pgx,Cr.pgx`) and the encoder computes `XRsiz` / `YRsiz` from each file's dimensions, so 4:2:2 / 4:2:0 Y/Cb/Cr inputs encode with the right subsampling. Both batch and streaming encode paths support this. Decoder writes one file per component with a `_NN` suffix. |
-| TIFF | ✓ (batch only) | | Requires libtiff at build time. 8 or 16 bits **per sample**. TIFF input is supported on the batch (`-batch`) encode path only; the streaming encode path does not handle TIFF. Not a decoder output. |
+| TIFF | ✓ | | Requires libtiff at build time. 8 or 16 bits **per sample**, RGB or grayscale, both planar configurations (`PLANARCONFIG_CONTIG` and `PLANARCONFIG_SEPARATE`). Supported on both the streaming (default) and batch (`-batch`) encode paths; tiled TIFFs still require `-batch`. Not a decoder output. |
 | RAW | | ✓ | Decoder-only output. Packed samples, no header, one file per component with a `_NN` suffix. |
 
 ## Documentation

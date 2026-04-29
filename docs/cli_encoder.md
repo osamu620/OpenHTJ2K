@@ -2,8 +2,10 @@
 
 Part 15 (HTJ2K) compliant encoder. Produces either a raw codestream
 (`.j2c`, `.jhc`) or an HTJ2K JPH file (`.jph`). Accepts PGM, PPM,
-PGX, and TIFF (with libtiff) inputs. PGX streaming supports
-subsampled component sets (4:2:2, 4:2:0) without `-batch`.
+PGX, and TIFF (with libtiff) inputs. The default streaming path
+handles all four formats — PGX with subsampled component sets
+(4:2:2, 4:2:0) and basic TIFF (8/16-bit, RGB or grayscale,
+single-strip or strip-compressed). Tiled TIFFs require `-batch`.
 
 Full runtime help: `open_htj2k_enc -h`.
 

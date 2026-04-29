@@ -105,7 +105,6 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   int status = READ_WIDTH;
   int d;
   uint32_t val = 0;
-  char comment[256];
   d = fgetc(fp);
   if (d != 'P') {
     printf("ERROR: %s is not a PNM/PGX file.\n", filename.c_str());
@@ -202,8 +201,10 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     while (d == SP || d == LF || d == CR) {
       d = fgetc(fp);
       if (d == '#') {
-        char *nouse = fgets(comment, sizeof(comment), fp);
-        if (nouse == nullptr) {
+        // PNM comments run to end-of-line and have no length limit per the spec;
+        // consume byte-by-byte instead of through a fixed-size fgets buffer.
+        do { d = fgetc(fp); } while (d != EOF && d != LF && d != CR);
+        if (d == EOF) {
           throw std::runtime_error("PNM/PGX header comment read error");
         }
         d = fgetc(fp);
@@ -259,8 +260,8 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   while (d == SP || d == LF || d == CR) {
     d = fgetc(fp);
     if (d == '#') {
-      char *nouse = fgets(comment, sizeof(comment), fp);
-      if (nouse == nullptr) {
+      do { d = fgetc(fp); } while (d != EOF && d != LF && d != CR);
+      if (d == EOF) {
         throw std::runtime_error("PNM/PGX header comment read error");
       }
       d = fgetc(fp);
