@@ -14,6 +14,20 @@
   canvas { background: #000; max-width: 100%; image-rendering: pixelated; }
   #stats { font-size: 90%; color: #aaa; margin-top: 0.6em; min-height: 1.5em; white-space: pre-wrap; }
   #err   { color: #f99; }
+  /* Telemetry overlay — shown when ?debug=1 is set on the URL.  Sits on
+     top of the canvas with a translucent background so the live frame is
+     still visible behind it. */
+  #stage { position: relative; }
+  #overlay {
+    position: absolute; top: 8px; left: 8px;
+    padding: 6px 10px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    font: 11px/1.35 ui-monospace, monospace;
+    color: #ddd; pointer-events: none;
+    white-space: pre; user-select: none;
+  }
+  #overlay.bound  { color: #ffb74d; }
+  #overlay.severe { color: #ff7373; }
 </style>
 </head>
 <body>
@@ -25,7 +39,10 @@
   <span id="conn">idle</span>
 </header>
 <main>
-  <canvas id="cv" width="640" height="360"></canvas>
+  <div id="stage">
+    <canvas id="cv" width="640" height="360"></canvas>
+    <div id="overlay" hidden></div>
+  </div>
   <div id="stats">awaiting connection…</div>
   <div id="err"></div>
 </main>
@@ -38,13 +55,18 @@ const elStats= document.getElementById('stats');
 const elErr  = document.getElementById('err');
 const btnGo  = document.getElementById('connect');
 const btnStop= document.getElementById('stop');
-const cv     = document.getElementById('cv');
-const ctx    = cv.getContext('2d', { alpha: false });
+const cv      = document.getElementById('cv');
+const elOver  = document.getElementById('overlay');
+// Renderer is chosen lazily inside runViewer() — `?renderer=canvas2d`
+// forces the CPU path; default is WebGL2 with shader-side YCbCr→RGB.
 
 const qs = new URLSearchParams(location.search);
 if (qs.has('url'))      elURL.value  = qs.get('url');
 if (qs.has('certHash')) elHash.value = qs.get('certHash');
 if (qs.get('autorun') === '1') setTimeout(() => btnGo.click(), 100);
+// ?debug=1 — show the telemetry overlay (decode p50/p95, fps, drops, status).
+const DEBUG_OVERLAY = qs.get('debug') === '1';
+if (DEBUG_OVERLAY) elOver.hidden = false;
 // ?report=N — every N ms POST a progress snapshot to /report.  Lets a shell
 // driver verify end-to-end without screen-scraping.
 const REPORT_MS = parseInt(qs.get('report') || '0', 10);
@@ -118,6 +140,9 @@ async function runViewer(url, hash, signal) {
     rtp_peek:          M.cwrap('rtp_peek_frame_size',    'number', ['number']),
     rtp_pop:           M.cwrap('rtp_pop_frame',          'number', ['number','number','number']),
     rtp_pop_matrix:    M.cwrap('rtp_pop_frame_matrix',   'number', ['number']),
+    rtp_pop_range:     M.cwrap('rtp_pop_frame_range',    'number', ['number']),
+    rtp_pop_ts:        M.cwrap('rtp_pop_frame_timestamp','number', ['number']),
+    rtp_ready_count:   M.cwrap('rtp_ready_count',        'number', ['number']),
     rtp_drop_ready:    M.cwrap('rtp_drop_ready',         'number', ['number']),
     rtp_frames:        M.cwrap('rtp_frames_emitted',     'number', ['number']),
     rtp_drops:         M.cwrap('rtp_frames_dropped',     'number', ['number']),
@@ -127,6 +152,7 @@ async function runViewer(url, hash, signal) {
     reset_decoder:     M.cwrap('reset_decoder_with_bytes','void',  ['number','number','number','number']),
     parse_j2c:         M.cwrap('parse_j2c_data',         'void',   ['number']),
     invoke_to_rgba:    M.cwrap('invoke_decoder_to_rgba', 'void',   ['number','number']),
+    invoke_planar_u8:  M.cwrap('invoke_decoder_planar_u8','void',  ['number','number','number','number']),
     apply_bt709:       M.cwrap('apply_ycbcr_bt709_to_rgba','void', ['number','number']),
     apply_bt601:       M.cwrap('apply_ycbcr_bt601_to_rgba','void', ['number','number']),
     release_decoder:   M.cwrap('release_j2c_data',       'void',   ['number']),
@@ -138,62 +164,136 @@ async function runViewer(url, hash, signal) {
 
   const PACKET_BUF = 4096;
   const FRAME_BUF  = 16 << 20;
+  // Sized for 4K luma + 4K 4:4:4 chroma (worst case).  4:2:0 / 4:2:2 use less
+  // and we don't bother shrinking — saves one realloc on resolution change.
+  const PLANE_BUF  = 3840 * 2160;
   const RGBA_BUF   = 3840 * 2160 * 4;
   const packetPtr  = M._malloc(PACKET_BUF);
   const framePtr   = M._malloc(FRAME_BUF);
   const rgbaPtr    = M._malloc(RGBA_BUF);
+  const yPtr       = M._malloc(PLANE_BUF);
+  const cbPtr      = M._malloc(PLANE_BUF);
+  const crPtr      = M._malloc(PLANE_BUF);
   const session    = F.rtp_create();
   let decoder = 0;
   let lastW = 0, lastH = 0;
   let imageData = null;
 
+  // ?renderer=canvas2d forces the CPU path.  Default = webgl2 with shader-side
+  // YCbCr→RGB; falls back to canvas2d if WebGL2 isn't available.
+  const wantRenderer = qs.get('renderer') || 'webgl2';
+  const renderer = makeRenderer(wantRenderer, cv, M, { yPtr, cbPtr, crPtr, rgbaPtr });
+  // makeRenderer may have swapped the canvas DOM node when falling back from
+  // webgl2 to canvas2d (the original canvas's context type can no longer be
+  // reused).  Adopt the replacement so the decode loop's resize calls it.
+  const drawCanvas = renderer._replacementCanvas || cv;
+  ping('renderer.ready', { kind: renderer.kind });
+
   // 3. Decode pump: pulls completed codestreams from the WASM RTP session,
   // decodes via streaming line-based path, draws to canvas.  Backpressure
-  // comes from the page's render loop — if decode is slower than packets
-  // arrive, the C++ ready-queue caps at 2 (see wrapper.cpp:rtp_push_packet)
-  // and drops oldest, mirroring the producer's drop-then-keep semantics.
+  // comes from the C++ ready-queue cap (depth 2 per wrapper.cpp:rtp_push_packet)
+  // plus an explicit drop-old policy here: if more than one frame is ready
+  // when the pump runs, skip everything but the newest before decoding.
+  // That keeps display time close to the most recent codestream even when
+  // decode is below the source frame rate.
   const decode_p95 = new RollingP95(60);
   let decodedFrames = 0;
+  let droppedReady  = 0;     // frames we explicitly skipped here (newest-only)
   let lastStatsTick = performance.now();
+  // ?threads=N — number of WASM decoder workers.  Defaults to 4 (Phase A0
+  // showed 4-thread mt_simd handles FHD@30 at ~55 fps and 4K@30 at ~17 fps,
+  // both better than 2-thread).  Set lower on resource-constrained hosts.
+  const threadCount = parseInt(qs.get('threads') || '4', 10);
+  // ?source_fps=N — declared source frame rate; used to flag "decode-bound"
+  // when rolling p95 decode is above the inter-frame interval.  No
+  // functional effect on the decode path.
+  const sourceFps = parseFloat(qs.get('source_fps') || '30');
 
   function decodePending() {
+    // Drop-old policy: if multiple frames are ready (e.g. decode took
+    // longer than a frame interval), skip every one but the latest.
+    let dropped = 0;
+    while (F.rtp_peek(session) > 0 && F.rtp_ready_count(session) > 1) {
+      F.rtp_drop_ready(session);
+      dropped++;
+    }
+    droppedReady += dropped;
     while (true) {
-      // pop one ready frame, if any
       const fsz = F.rtp_peek(session);
       if (!fsz) return;
+      // Pop the H.273 metadata BEFORE the frame so the renderer can configure.
+      // (rtp_pop_frame snapshots the metadata into rtp_pop_frame_*.)
       F.rtp_pop(session, framePtr, FRAME_BUF);
+      const matrix = F.rtp_pop_matrix(session);   // 1=BT.709, 5/6=BT.601, 255=unset
+      const range  = F.rtp_pop_range(session);    // 0=narrow, 1=full, 2=unknown
+      const rtpTs  = F.rtp_pop_ts(session);       // 32-bit RTP timestamp, 90 kHz
       const t0 = performance.now();
-      if (!decoder) decoder = F.create_decoder_mt(framePtr, fsz, 0, 2);
+      if (!decoder) decoder = F.create_decoder_mt(framePtr, fsz, 0, threadCount);
       else          F.reset_decoder(decoder, framePtr, fsz, 0);
       F.parse_j2c(decoder);
-      const w = F.get_width(decoder, 0);
-      const h = F.get_height(decoder, 0);
-      const c = F.get_num_components(decoder);
-      F.invoke_to_rgba(decoder, rgbaPtr);
-      // get_colorspace: 0=RGB after MCT, 1=YCbCr no MCT, 2=other.
-      // For sYCC streams (typical from rpicam producer) MCT bit is off and
-      // we need to apply the matrix on the CPU.
-      if (c >= 3 && F.get_colorspace(decoder) === 1) {
-        const mat = F.rtp_pop_matrix(session);
-        if (mat === 1)              F.apply_bt709(rgbaPtr, w * h);
-        else if (mat === 5 || mat === 6 || mat === 255) F.apply_bt601(rgbaPtr, w * h);
-        // 0 (identity), 2 (unspec) → leave as RGB; uncommon
+      const w  = F.get_width(decoder, 0);
+      const h  = F.get_height(decoder, 0);
+      const cw = F.get_num_components(decoder) >= 2 ? F.get_width(decoder, 1)  : w;
+      const ch = F.get_num_components(decoder) >= 2 ? F.get_height(decoder, 1) : h;
+      const nc = F.get_num_components(decoder);
+      const isYCbCr = (nc >= 3 && F.get_colorspace(decoder) === 1);
+
+      // Resize before upload — Canvas2DRenderer's ImageData and GL2Renderer's
+      // textures are sized lazily here and the upload step expects them.
+      if (w !== lastW || h !== lastH) {
+        drawCanvas.width = w; drawCanvas.height = h;
+        renderer.resize(w, h);
+        lastW = w; lastH = h;
+      }
+
+      if (renderer.kind === 'webgl2' && isYCbCr) {
+        // GPU path — decode planar Y/Cb/Cr u8 (skipping chroma upsampling),
+        // upload three R8 textures, fragment shader handles matrix+range.
+        F.invoke_planar_u8(decoder, yPtr, cbPtr, crPtr);
+        renderer.uploadYCbCr({ w, h, cw, ch, matrix, range });
+      } else {
+        // CPU path — decode interleaved RGBA, optionally apply YCbCr matrix
+        // on the CPU, blit via Canvas2D.
+        F.invoke_to_rgba(decoder, rgbaPtr);
+        if (isYCbCr) {
+          if (matrix === 1)                                  F.apply_bt709(rgbaPtr, w * h);
+          else if (matrix === 5 || matrix === 6 || matrix === 255) F.apply_bt601(rgbaPtr, w * h);
+          // 0 (identity), 2 (unspec) → leave as RGB
+        }
+        renderer.uploadRGBA({ w, h });
       }
       const t1 = performance.now();
       decode_p95.push(t1 - t0);
       decodedFrames++;
-
-      // Resize canvas + ImageData on first frame or resolution change.
-      if (w !== lastW || h !== lastH) {
-        cv.width = w; cv.height = h;
-        imageData = ctx.createImageData(w, h);
-        lastW = w; lastH = h;
-      }
-      // Copy WASM HEAP slice into the ImageData backing store.  This is one
-      // allocation-free typedarray.set per frame — typically <1 ms.
-      imageData.data.set(M.HEAPU8.subarray(rgbaPtr, rgbaPtr + w * h * 4));
-      ctx.putImageData(imageData, 0, 0);
+      renderer.draw();
+      noteFrame();
+      noteRtpFrame(rtpTs);
     }
+  }
+
+  // Rolling render-rate sampler — counts decoded frames in the last ~1 s.
+  const recentFrameTimes = [];
+  function noteFrame() {
+    const t = performance.now();
+    recentFrameTimes.push(t);
+    while (recentFrameTimes.length && t - recentFrameTimes[0] > 1000) recentFrameTimes.shift();
+  }
+
+  // RTP-clock vs wall-clock drift tracker.  Anchored on the first decoded
+  // frame: walls = performance.now() - wallAnchor, rtps = (rtpTs - rtpAnchor) / 90.
+  // drift_ms = walls - rtps.  Positive → viewer is behind the source clock
+  // (decode-bound), negative → viewer is rendering ahead and could benefit
+  // from explicit pacing.  We only TRACK this; actual pacing would require a
+  // decoder web worker so render and decode can run independently.
+  let rtpAnchor = null;       // RTP timestamp of first decoded frame
+  let wallAnchor = null;      // performance.now() of first decoded frame
+  let lastDrift = 0;
+  function noteRtpFrame(rtpTs) {
+    if (rtpAnchor === null) { rtpAnchor = rtpTs >>> 0; wallAnchor = performance.now(); return; }
+    // Handle 32-bit wrap arithmetically.
+    const dRtp = ((rtpTs - rtpAnchor) | 0) >>> 0;
+    const rtpMs = dRtp / 90;
+    lastDrift = (performance.now() - wallAnchor) - rtpMs;
   }
 
   function tickStats() {
@@ -203,11 +303,30 @@ async function runViewer(url, hash, signal) {
       const fD = F.rtp_drops(session);
       const sg = F.rtp_gaps(session);
       const dp = decode_p95.read();
-      elStats.textContent =
-        `frames decoded ${decodedFrames} | reassembled ${fE} | reassembly drops ${fD} | seq gaps ${sg}\n` +
-        `decode p50/p95 ${dp.p50.toFixed(1)} / ${dp.p95.toFixed(1)} ms | resolution ${lastW}x${lastH}`;
+      const fps = recentFrameTimes.length;       // frames in the last ~1 s window
+      const frameInterval = 1000 / sourceFps;
+      const decodeBound = dp.p95 > frameInterval;
+      const dropPct = fE > 0 ? Math.round(100 * (fE - decodedFrames) / fE) : 0;
+      const status = decodeBound
+        ? `DECODE-BOUND, ${dropPct}% dropped`
+        : (dropPct > 0 ? `${dropPct}% dropped` : 'ok');
+      const headline = `${lastW}x${lastH} @ ${fps.toFixed(0)} fps | decode p50/p95 ${dp.p50.toFixed(1)}/${dp.p95.toFixed(1)} ms | ${status}`;
+      // Drift in milliseconds: positive = viewer behind RTP clock, negative = ahead.
+      const driftLabel = `drift ${lastDrift >= 0 ? '+' : ''}${lastDrift.toFixed(0)} ms`;
+      const breakdown = `decoded ${decodedFrames} | reassembled ${fE} | drops (queue/skip) ${fD}/${droppedReady} | seq gaps ${sg} | ${driftLabel}`;
+      elStats.textContent = headline + '\n' + breakdown;
+      if (DEBUG_OVERLAY) {
+        elOver.textContent = headline + '\n' + breakdown;
+        elOver.classList.toggle('bound',  decodeBound && dropPct < 30);
+        elOver.classList.toggle('severe', decodeBound && dropPct >= 30);
+      }
       lastStatsTick = now;
-      maybeReport({ decodedFrames, fE, fD, sg, p50: dp.p50, p95: dp.p95, w: lastW, h: lastH });
+      maybeReport({
+        decodedFrames, fE, fD, droppedReady, sg,
+        p50: dp.p50, p95: dp.p95, fps, decodeBound, dropPct,
+        drift: Math.round(lastDrift),
+        w: lastW, h: lastH,
+      });
     }
   }
 
@@ -285,6 +404,245 @@ class RollingP95 {
     const s = this.buf.slice().sort((a, b) => a - b);
     return { p50: s[Math.floor(s.length * 0.5)], p95: s[Math.floor(s.length * 0.95)] };
   }
+}
+
+// ── Renderers ───────────────────────────────────────────────────────────────
+// Two implementations: a WebGL2 renderer that uploads three R8 textures
+// (Y/Cb/Cr) and runs the H.273 matrix in the fragment shader, and a
+// Canvas2D fallback that takes the WASM-side `invoke_decoder_to_rgba`
+// output and blits via putImageData.  The GL path skips a CPU YCbCr→RGB
+// pass and lets the GPU do free bilinear chroma upsampling.
+
+function makeRenderer(kind, canvas, M, ptrs) {
+  if (kind !== 'canvas2d') {
+    // Probe WebGL2 availability on a throwaway canvas so a failed init doesn't
+    // claim the real canvas's context type (which would prevent getContext('2d')
+    // from succeeding on the same element later).
+    let probeOK = false;
+    try {
+      const probe = document.createElement('canvas');
+      probeOK = !!probe.getContext('webgl2');
+    } catch (_) {}
+    if (probeOK) {
+      try {
+        return new GL2Renderer(canvas, M, ptrs);
+      } catch (e) {
+        console.warn('GL2Renderer init failed, falling back to canvas2d:', e);
+        // The canvas is now poisoned (webgl2-bound).  Replace it with a fresh
+        // node so the Canvas2DRenderer can call getContext('2d').
+        const replacement = canvas.cloneNode(false);
+        canvas.parentNode.replaceChild(replacement, canvas);
+        const r = new Canvas2DRenderer(replacement, M, ptrs);
+        // Forward the new canvas back to runViewer via a side-channel; sizing
+        // calls in the decode loop dereference `cv` from the closure.
+        r._replacementCanvas = replacement;
+        return r;
+      }
+    }
+  }
+  return new Canvas2DRenderer(canvas, M, ptrs);
+}
+
+class Canvas2DRenderer {
+  constructor(canvas, M, ptrs) {
+    this.kind = 'canvas2d';
+    this.ctx  = canvas.getContext('2d', { alpha: false });
+    if (!this.ctx) {
+      // Diagnose poisoned canvas (already bound to a different context type).
+      const types = ['2d', 'webgl', 'webgl2', 'bitmaprenderer'];
+      const tried = types.map(t => `${t}=${!!canvas.getContext(t)}`).join(',');
+      throw new Error(`Canvas2DRenderer: getContext('2d') returned null (${tried})`);
+    }
+    this.M    = M;
+    this.rgbaPtr = ptrs.rgbaPtr;
+    this.w = 0; this.h = 0; this.imageData = null;
+  }
+  resize(w, h) { this.imageData = this.ctx.createImageData(w, h); this.w = w; this.h = h; }
+  uploadYCbCr() { /* unused — runViewer takes the RGBA path when kind==='canvas2d' */ }
+  uploadRGBA({ w, h }) {
+    this.imageData.data.set(this.M.HEAPU8.subarray(this.rgbaPtr, this.rgbaPtr + w * h * 4));
+  }
+  draw() { this.ctx.putImageData(this.imageData, 0, 0); }
+}
+
+// Matrix coefficients for H.273 MatrixCoefficients values used by RFC 9828
+// senders.  Full-range and narrow-range pairs.  Mirrored from
+// source/apps/rtp_recv/ycbcr_rgb.hpp.
+const YCBCR_COEFFS = {
+  // [cr_to_r, cb_to_g, cr_to_g, cb_to_b]
+  bt709_full:   [1.5748, 0.1873,   0.4681,   1.8556],
+  bt709_narrow: [1.5748, 0.1873,   0.4681,   1.8556],   // matrix same; range scaling differs
+  bt601_full:   [1.402,  0.344136, 0.714136, 1.772],
+  bt601_narrow: [1.596,  0.391,    0.813,    2.017],
+};
+
+class GL2Renderer {
+  constructor(canvas, M, ptrs) {
+    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false });
+    if (!gl) throw new Error('WebGL2 not available');
+    this.kind = 'webgl2';
+    this.gl   = gl;
+    this.M    = M;
+    this.yPtr = ptrs.yPtr;  this.cbPtr = ptrs.cbPtr;  this.crPtr = ptrs.crPtr;
+    this.tw = 0; this.th = 0; this.tcw = 0; this.tch = 0;
+
+    const vs = `#version 300 es
+      out vec2 vTex;
+      void main() {
+        // Full-screen triangle — no buffers needed; fed by gl_VertexID.
+        // Explicit float() casts required: GLSL ES forbids int*float without a cast.
+        float bx = float(gl_VertexID & 1);
+        float by = float((gl_VertexID >> 1) & 1);
+        vec2 p = vec2(bx * 4.0 - 1.0, by * 4.0 - 1.0);
+        gl_Position = vec4(p, 0.0, 1.0);
+        // Flip V so canvas pixel (0,0) is at the top-left.
+        vTex = vec2((p.x + 1.0) * 0.5, 1.0 - (p.y + 1.0) * 0.5);
+      }`;
+    const fs = `#version 300 es
+      precision highp float;
+      in  vec2 vTex;
+      out vec4 fragColor;
+      uniform sampler2D uY, uCb, uCr;
+      uniform mat3 uM;          // YCbCr (centered, normalized) → RGB
+      uniform vec3 uBias;       // subtract before matrix (Y bias, Cb bias, Cr bias)
+      uniform vec3 uScale;      // multiply after bias (range correction)
+      void main() {
+        vec3 ycc = vec3(
+          texture(uY,  vTex).r,
+          texture(uCb, vTex).r,
+          texture(uCr, vTex).r);
+        vec3 rgb = uM * ((ycc - uBias) * uScale);
+        fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+      }`;
+    this.prog = linkProgram(gl, vs, fs);
+    this.uY      = gl.getUniformLocation(this.prog, 'uY');
+    this.uCb     = gl.getUniformLocation(this.prog, 'uCb');
+    this.uCr     = gl.getUniformLocation(this.prog, 'uCr');
+    this.uM      = gl.getUniformLocation(this.prog, 'uM');
+    this.uBias   = gl.getUniformLocation(this.prog, 'uBias');
+    this.uScale  = gl.getUniformLocation(this.prog, 'uScale');
+
+    this.texY  = makeR8Texture(gl);
+    this.texCb = makeR8Texture(gl);
+    this.texCr = makeR8Texture(gl);
+    // Empty VAO — required by core-profile WebGL2 even for attribute-less draws.
+    this.vao = gl.createVertexArray();
+    // Sensible defaults: BT.709 full-range identity, so a draw() before any
+    // uploadYCbCr() doesn't crash on undefined uniforms.  An upload always
+    // overwrites these before the next draw on the live path.
+    const c = YCBCR_COEFFS.bt709_full;
+    this.matrix = new Float32Array([1.0, 1.0, 1.0,  0.0, -c[1], c[3],  c[0], -c[2], 0.0]);
+    this.bias   = new Float32Array([0, 128/255, 128/255]);
+    this.scale  = new Float32Array([1, 1, 1]);
+  }
+
+  resize(w, h) {
+    // Canvas size is set by the caller.  No-op here; texture reallocation is
+    // done in upload when (cw,ch) changes.
+  }
+
+  uploadYCbCr({ w, h, cw, ch, matrix, range }) {
+    const gl = this.gl;
+    // (Re)allocate textures only when dimensions change.
+    if (w !== this.tw || h !== this.th) {
+      gl.bindTexture(gl.TEXTURE_2D, this.texY);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+      this.tw = w; this.th = h;
+    }
+    if (cw !== this.tcw || ch !== this.tch) {
+      gl.bindTexture(gl.TEXTURE_2D, this.texCb);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cw, ch, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+      gl.bindTexture(gl.TEXTURE_2D, this.texCr);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cw, ch, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+      this.tcw = cw; this.tch = ch;
+    }
+    // Upload the three planes from WASM heap.  Subarray() here is a view —
+    // texSubImage2D copies into the texture, so the view's lifetime is fine.
+    const heap = this.M.HEAPU8;
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.bindTexture(gl.TEXTURE_2D, this.texY);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w,  h,  gl.RED, gl.UNSIGNED_BYTE,
+                     heap.subarray(this.yPtr,  this.yPtr  + w  * h));
+    gl.bindTexture(gl.TEXTURE_2D, this.texCb);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cw, ch, gl.RED, gl.UNSIGNED_BYTE,
+                     heap.subarray(this.cbPtr, this.cbPtr + cw * ch));
+    gl.bindTexture(gl.TEXTURE_2D, this.texCr);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cw, ch, gl.RED, gl.UNSIGNED_BYTE,
+                     heap.subarray(this.crPtr, this.crPtr + cw * ch));
+
+    // Pick coefficients + bias/scale.  matrix=1 → BT.709, 5/6/255 → BT.601;
+    // others (0=identity, 2=unspec) get BT.601 as a safe default for sYCC.
+    const isBT709 = matrix === 1;
+    const narrow  = range === 0;
+    const c = narrow
+      ? (isBT709 ? YCBCR_COEFFS.bt709_narrow : YCBCR_COEFFS.bt601_narrow)
+      : (isBT709 ? YCBCR_COEFFS.bt709_full   : YCBCR_COEFFS.bt601_full);
+
+    // YCbCr→RGB column-major (mat3 is column-major in WebGL):
+    //   R = 1*Y + 0*Cb + cr_to_r*Cr
+    //   G = 1*Y - cb_to_g*Cb - cr_to_g*Cr
+    //   B = 1*Y + cb_to_b*Cb + 0*Cr
+    const m = new Float32Array([
+      1.0, 1.0, 1.0,
+      0.0, -c[1], c[3],
+      c[0], -c[2], 0.0,
+    ]);
+    // Narrow: Y maps [16/255, 235/255] → [0,1], Cb/Cr [16/255, 240/255] → [-0.5,0.5]
+    // Full:   Y unchanged, chroma centered at 128/255 = 0.5.
+    const bias  = narrow ? new Float32Array([16/255, 128/255, 128/255])
+                         : new Float32Array([0,      128/255, 128/255]);
+    const scale = narrow ? new Float32Array([255/219, 255/224, 255/224])
+                         : new Float32Array([1, 1, 1]);
+    this.matrix = m; this.bias = bias; this.scale = scale;
+  }
+
+  uploadRGBA() { /* unused — runViewer takes the YCbCr path when kind==='webgl2' */ }
+
+  draw() {
+    const gl = this.gl;
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(this.prog);
+    gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texY);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texCb);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texCr);
+    gl.uniform1i(this.uY, 0); gl.uniform1i(this.uCb, 1); gl.uniform1i(this.uCr, 2);
+    gl.uniformMatrix3fv(this.uM, false, this.matrix);
+    gl.uniform3fv(this.uBias,  this.bias);
+    gl.uniform3fv(this.uScale, this.scale);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+}
+
+function makeR8Texture(gl) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  // LINEAR on chroma → free bilinear upsampling for 4:2:0 / 4:2:2.
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+function linkProgram(gl, vsSrc, fsSrc) {
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      throw new Error('shader compile: ' + gl.getShaderInfoLog(sh));
+    }
+    return sh;
+  }
+  const vs = compile(gl.VERTEX_SHADER,   vsSrc);
+  const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+  const p  = gl.createProgram();
+  gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    throw new Error('program link: ' + gl.getProgramInfoLog(p));
+  }
+  return p;
 }
 </script>
 </body>
