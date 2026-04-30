@@ -14,7 +14,7 @@
 // unblocks cross-LAN browsers without requiring a Chrome flag.
 
 import http  from 'http';
-import https from 'https';
+import http2 from 'http2';
 import { createReadStream, statSync, readFileSync } from 'fs';
 import { extname, join, normalize, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -114,10 +114,18 @@ const handler = (req, res) => {
 
 let server, scheme;
 if (CERT_PATH) {
-  // HTTPS — load the PEM bundle and let Node's TLS do the rest.
-  server = https.createServer({
+  // HTTPS via HTTP/2.  Critical for our use case: when the wt_viewer's
+  // shared decoder Web Worker spawns N pthread inner workers, each one
+  // independently fetches libopen_htj2k_mt_simd.{js,worker.js} during its
+  // bootstrap.  Chrome's HTTP/1.1 connection cap is 6 per host, so even a
+  // small worker pool can exceed it and silently lose half the inner
+  // fetches.  HTTP/2 multiplexes everything over one TLS connection,
+  // eliminating the cap entirely.  `allowHTTP1: true` keeps backward
+  // compatibility for anything that doesn't speak h2.
+  server = http2.createSecureServer({
     cert: readFileSync(CERT_PATH),
     key:  readFileSync(KEY_PATH),
+    allowHTTP1: true,
   }, handler);
   scheme = 'https';
 } else {
