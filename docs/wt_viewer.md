@@ -5,11 +5,15 @@ RTP/UDP feed via a small relay (`wt_bridge`), forwards it as a
 WebTransport stream to a Chromium-based browser, and decodes through
 the existing WebAssembly decoder.
 
+Any RFC 9828 compliant sender works on the producer side — Kakadu's
+`kdu_stream_send`, a Raspberry Pi running an HTJ2K-capable rpicam-apps
+fork, the in-repo `udp_replay.mjs` replayer for captured `.rtp` files,
+or any custom packetizer that follows the RFC. The bridge does not
+parse the payload.
+
 This is the LAN companion to [`open_htj2k_rtp_recv`](cli_rtp_recv.md):
 same wire format on the producer side, same WASM decoder on the receive
-side, but no native binary required on the viewing host. The Pi-side
-producer (e.g. [tackOlab/rpicam-apps](https://github.com/tackOlab/rpicam-apps))
-is unchanged.
+side, but no native binary required on the viewing host.
 
 The whole pipeline is experimental — wire format and CLI defaults may
 change.
@@ -17,7 +21,7 @@ change.
 ```
 ┌────────────┐ RFC 9828 RTP/UDP ┌────────────┐ WebTransport ┌─────────┐
 │  producer  │ ───────────────▶ │ wt_bridge  │ ───────────▶ │ browser │
-│ (rpicam,…) │                  │   (Go)     │  (uni-stream)│ (WASM)  │
+│ (any 9828) │                  │   (Go)     │  (uni-stream)│ (WASM)  │
 └────────────┘                  └────────────┘              └─────────┘
                                       │
                                   HTTP (static)
@@ -59,13 +63,13 @@ details):
 It prints something like:
 
 ```
- Bridge UDP listener:  0.0.0.0:6000        (point Pi producer here)
+ Bridge UDP listener:  0.0.0.0:6000        (point your RFC 9828 sender here)
  Bridge QUIC listener: 0.0.0.0:4433
  Static server:        http://0.0.0.0:8765/viewer/
  Cert SHA-256:
    ab:cd:ef:…
 
- ── Pi side ────────────────────────────────────────────────────────────
+ ── Producer side (one example: rpicam-apps HTJ2K fork) ───────────────
    rpicam-vid \
        --rtp-host 192.168.0.14 \
        --rtp-port 6000 \
@@ -73,12 +77,19 @@ It prints something like:
        --width 1920 --height 1080 --framerate 30 --inline \
        --output -
 
- ── Browser, on THIS host (recommended) ────────────────────────────────
-   http://localhost:8765/viewer/?autorun=1&url=…&certHash=ab:cd:…
+ ── Browser ───────────────────────────────────────────────────────────
+   https://192.168.0.14:8765/viewer/?autorun=1&url=…&certHash=ab:cd:…
 ```
 
-Run rpicam-vid (or any RFC 9828 sender) on the Pi with the printed
-command, then open the printed URL in Chromium on the bridge host.
+Point any RFC 9828 sender at `<bridge-host>:6000`, then open the
+printed URL in Chromium on any host on the LAN. With no producer
+running yet, use the in-repo replayer for a quick smoke:
+
+```bash
+node tools/wt_bridge/scripts/udp_replay.mjs \
+    tools/wt_bridge/fixtures/1080p2997_30frames.rtp \
+    --port 6000 --fps 30 --loop
+```
 
 The bridge log tails to stdout — you'll see `session accepted` when the
 browser connects, then `session N forwarded=1000/2000/…` as packets
@@ -122,8 +133,8 @@ cmake --build . -j -t libopen_htj2k_simd libopen_htj2k_mt_simd
   validity, `digitalSignature` + `serverAuth`) at startup and print its
   SHA-256 hash to stderr.
 - `--cert <path> --key <path>` — Use a real PEM certificate chain.
-  Currently unwired in the runtime; the production cert path is Phase C
-  work (Let's Encrypt + auto-rotation).
+  Currently unwired in the runtime; the production cert path (real CA
+  cert + auto-rotation) is a planned follow-up.
 
 The dev hash is what the browser pins via the WebTransport
 `serverCertificateHashes` API — the cert otherwise wouldn't validate

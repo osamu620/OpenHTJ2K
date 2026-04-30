@@ -32,17 +32,19 @@ Paste that hash into the viewer's `?certHash=…` URL parameter — Chromium's
 public CA. Cert constraints come from the WebTransport spec: ECDSA-P256,
 validity strictly less than two weeks.
 
-Producer side: point rpicam-apps at the bridge's UDP port:
+Producer side: point any RFC 9828 sender at the bridge's UDP port.
+Two examples:
 
 ```sh
+# 1. The rpicam-apps fork on a Raspberry Pi:
 rpicam-vid --rtp-host <bridge-ip> --rtp-port 6000 …
-```
 
-For dev without rpicam-apps, replay a captured `.rtp` fixture:
-
-```sh
+# 2. Replay a captured .rtp fixture (no live producer needed):
 node scripts/udp_replay.mjs <fixture.rtp> --port 6000 --fps 30 --loop
 ```
+
+Other RFC 9828 senders such as Kakadu's `kdu_stream_send` work the
+same way — the bridge is payload-agnostic.
 
 ## CLI
 
@@ -83,5 +85,5 @@ No `cgo`, no architecture-specific code. Single static binary; ~10 MB stripped.
   size). The relay is intended to share a host with the producer or sit on
   a small LAN node — host-level tuning is fine.
 - The bridge listens on QUIC + HTTP/3; CORS is wide open in dev mode.
-  Tighten `CheckOrigin` and lock down the cert path for any non-LAN
-  deployment (Phase C).
+  Tighten `CheckOrigin` and use a real CA-issued cert for any non-LAN
+  deployment.
