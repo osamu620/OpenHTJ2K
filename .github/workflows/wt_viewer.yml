@@ -1,6 +1,6 @@
 # CI for the WebTransport viewer track.
 #
-# Three guarantees:
+# Four guarantees:
 #  1. The Go bridge under tools/wt_bridge/ builds clean and passes `go vet`.
 #  2. The Emscripten/WASM build still emits the rtp_session_* + decoder API
 #     surface the viewer cwraps from web/viewer/index.html — a refactor of
@@ -8,9 +8,8 @@
 #     here instead of silently breaking the viewer.
 #  3. The static server (web/perf/serve.mjs) can serve the viewer page over
 #     HTTP with the COOP/COEP headers required for SharedArrayBuffer.
-#
-# End-to-end decode against a captured .rtp fixture is deferred until a
-# CI-friendly fixture (a few MB) is in the repo.
+#  4. End-to-end smoke: replay the in-repo .rtp fixture through the bridge
+#     into headless Chromium and verify the viewer reports a decoded frame.
 name: wt_viewer
 
 on:
@@ -174,3 +173,62 @@ jobs:
               http://127.0.0.1:8765/report | grep -q '^204$'
           grep -q '^REPORT' serve.log
           echo "static-server smoke OK"
+
+  e2e-smoke:
+    name: end-to-end (replay → bridge → viewer → decode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/wt_bridge/go.mod
+          cache: true
+          cache-dependency-path: tools/wt_bridge/go.sum
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.61
+          actions-cache-folder: emsdk-cache
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build bridge
+        working-directory: tools/wt_bridge
+        run: go build -o wt_bridge .
+
+      - name: Build WASM
+        run: |
+          cd subprojects
+          mkdir -p build_wt && cd build_wt
+          emcmake cmake -DCMAKE_BUILD_TYPE=Release ..
+          cmake --build . -j$(nproc) -t libopen_htj2k_simd libopen_htj2k_mt_simd
+
+      - name: Verify Chromium is available
+        run: google-chrome --version
+
+      - name: Run end-to-end smoke
+        # Drives the in-repo 1080p2997_30frames.rtp fixture through the bridge
+        # into headless Chromium and waits for the viewer to POST a stats
+        # report with a non-zero decoded-frame count.  EXIT_CODE=strict makes
+        # the smoke fail the job if no frame decodes within WAIT_SECS.
+        env:
+          EXIT_CODE: strict
+          WAIT_SECS: '30'
+        run: ./tools/wt_bridge/scripts/e2e_smoke.sh
+
+      - name: Upload smoke logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            /tmp/serve.log
+            /tmp/wtb.log
+            /tmp/replay.log
+            /tmp/chrome.log
