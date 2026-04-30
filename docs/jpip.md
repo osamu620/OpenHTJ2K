@@ -384,8 +384,8 @@ moves.
 
 ### WASM C API
 
-Defined in `subprojects/src/jpip_wrapper.cpp`, exported via
-`-sEXPORTED_FUNCTIONS` in `subprojects/CMakeLists.txt`:
+Defined in `web/src/jpip_wrapper.cpp`, exported via
+`-sEXPORTED_FUNCTIONS` in `web/CMakeLists.txt`:
 
 | Function | Purpose |
 |---|---|

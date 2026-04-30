@@ -134,8 +134,8 @@ jobs:
 
       - name: Build WASM (scalar + SIMD)
         run: |
-          emcmake cmake -B subprojects/build -S subprojects
-          cmake --build subprojects/build -j$(nproc)
+          emcmake cmake -B web/build -S web
+          cmake --build web/build -j$(nproc)
 
       - name: Build native (imgcmp + decoder for comparison tests)
         run: |

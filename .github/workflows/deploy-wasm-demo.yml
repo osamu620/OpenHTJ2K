@@ -8,7 +8,7 @@ on:
   push:
     branches: [main, feat/wasm-rtp-demo]
     paths:
-      - 'subprojects/**'
+      - 'web/**'
       - 'source/**'
       - 'functions/**'
       - 'CMakeLists.txt'
@@ -29,7 +29,7 @@ jobs:
 
       - name: Build WASM
         run: |
-          cd subprojects
+          cd web
           mkdir -p build && cd build
           emcmake cmake ..
           cmake --build . -j
@@ -37,14 +37,14 @@ jobs:
       - name: Stage deploy dir
         run: |
           mkdir -p deploy
-          cp subprojects/build/html/libopen_htj2k*.js   deploy/
-          cp subprojects/build/html/libopen_htj2k*.wasm deploy/
-          cp subprojects/index.html                     deploy/
-          cp subprojects/rtp_demo.html                  deploy/
-          cp subprojects/jpip_demo.html                 deploy/
-          cp subprojects/jpip_viewer.html                deploy/
-          cp subprojects/rtp_parser.js                  deploy/
-          cp subprojects/coi-serviceworker.js           deploy/
+          cp web/build/html/libopen_htj2k*.js   deploy/
+          cp web/build/html/libopen_htj2k*.wasm deploy/
+          cp web/index.html                     deploy/
+          cp web/rtp_demo.html                  deploy/
+          cp web/jpip_demo.html                 deploy/
+          cp web/jpip_viewer.html                deploy/
+          cp web/rtp_parser.js                  deploy/
+          cp web/coi-serviceworker.js           deploy/
           # Sample codestreams referenced by index.html's preset dropdown.
           # Only the files the UI actually lists are copied — adjust this
           # list if you add/remove presets.

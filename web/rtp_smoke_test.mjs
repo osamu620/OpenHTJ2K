@@ -4,7 +4,7 @@
 // Does NOT exercise the decoder end-to-end (no real .rtp fixture in the repo yet).
 //
 // Usage:
-//   node subprojects/rtp_smoke_test.mjs [path/to/sample.rtp]
+//   node web/rtp_smoke_test.mjs [path/to/sample.rtp]
 // If a .rtp file is given, also verifies packet parsing + frame reassembly.
 
 import { readFileSync } from 'fs';

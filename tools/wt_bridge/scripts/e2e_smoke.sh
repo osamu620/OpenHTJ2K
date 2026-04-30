@@ -59,7 +59,7 @@ node tools/wt_bridge/scripts/udp_replay.mjs "$FIXTURE" \
 REPLAY_PID=$!
 
 # 4. Headless Chrome — connect to viewer, run for 8 seconds, post stats every 1 s.
-URL="http://127.0.0.1:8765/viewer/?autorun=1&url=https%3A%2F%2F127.0.0.1%3A4433%2F&certHash=${HASH}&report=1000"
+URL="http://127.0.0.1:8765/wt_viewer/?autorun=1&url=https%3A%2F%2F127.0.0.1%3A4433%2F&certHash=${HASH}&report=1000"
 google-chrome --headless=new --no-sandbox --disable-gpu \
   --enable-features=SharedArrayBuffer \
   --user-data-dir=/tmp/chrome-e2e \
