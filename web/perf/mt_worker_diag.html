@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>mt_simd in worker — diagnostic</title>
+<style>
+  body { font-family: ui-monospace, monospace; max-width: 1100px; margin: 2em auto; padding: 0 1em; background: #111; color: #ddd; }
+  button { padding: 0.5em 1em; margin-right: 0.5em; }
+  pre { background: #1d1d1d; padding: 1em; overflow-x: auto; max-height: 70vh; border: 1px solid #333; white-space: pre-wrap; }
+  .ok   { color: #6c6; }
+  .err  { color: #f88; }
+  .info { color: #ccc; }
+  .warn { color: #fc6; }
+</style>
+</head>
+<body>
+<h1>mt_simd-in-worker diagnostic</h1>
+<p>Loads <code>libopen_htj2k_mt_simd.js</code> from inside a Web Worker
+and dumps every event the inner pthread workers emit. Reproduces the
+nested-Emscripten failure that affects the WT viewer's worker path
+and tells us what's actually failing under the hood.</p>
+
+<button id="run">Run diagnostic</button>
+<button id="clear">Clear log</button>
+<pre id="log"></pre>
+
+<script type="module">
+const elLog = document.getElementById('log');
+function log(level, msg) {
+  const ts = (performance.now() / 1000).toFixed(3);
+  const span = document.createElement('span');
+  span.className = level;
+  span.textContent = `[${ts}] [${level}] ${msg}\n`;
+  elLog.appendChild(span);
+  elLog.scrollTop = elLog.scrollHeight;
+}
+
+document.getElementById('clear').addEventListener('click', () => { elLog.innerHTML = ''; });
+
+document.getElementById('run').addEventListener('click', async () => {
+  log('info', '─── starting diagnostic ───');
+  log('info', `secure context: ${window.isSecureContext}`);
+  log('info', `cross-origin isolated: ${window.crossOriginIsolated}`);
+  log('info', `SharedArrayBuffer available: ${typeof SharedArrayBuffer !== 'undefined'}`);
+
+  const workerURL = new URL('./mt_worker_diag.worker.mjs', import.meta.url);
+  log('info', `spawning outer worker: ${workerURL.href}`);
+  const w = new Worker(workerURL, { type: 'module' });
+
+  w.addEventListener('message', (ev) => {
+    const { level, msg } = ev.data;
+    log(level, `[outer] ${msg}`);
+  });
+  w.addEventListener('error', (ev) => {
+    log('err', `[outer worker error] ${ev.message} (${ev.filename}:${ev.lineno})`);
+  });
+  w.addEventListener('messageerror', () => {
+    log('err', '[outer messageerror]');
+  });
+
+  w.postMessage({ type: 'init' });
+});
+</script>
+</body>
+</html>
