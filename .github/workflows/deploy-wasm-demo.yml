@@ -45,6 +45,11 @@ jobs:
           cp web/jpip_viewer.html                deploy/
           cp web/rtp_parser.js                  deploy/
           cp web/coi-serviceworker.js           deploy/
+          # Shared decoder Web Worker — rtp_demo loads this via
+          # /shared/decoder_client.mjs which in turn instantiates
+          # /shared/decoder_worker.mjs with wasmBase=./ pointing at the flat
+          # deploy root.
+          cp -r web/shared                      deploy/shared
           # Sample codestreams referenced by index.html's preset dropdown.
           # Only the files the UI actually lists are copied — adjust this
           # list if you add/remove presets.

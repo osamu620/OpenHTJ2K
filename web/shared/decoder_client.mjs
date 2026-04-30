@@ -6,23 +6,35 @@
 //
 // Usage:
 //   const dec = new DecoderClient({
-//     wasmBase: '/wasm/',         // where libopen_htj2k_mt_simd.{js,wasm} live
-//     threadCount: 4,             // WASM decoder workers (defaults to 4)
+//     wasmBase: '/wasm/',         // where libopen_htj2k_*.{js,wasm} live
+//     variant: 'mt_simd',         // mt_simd | simd | mt | scalar (default mt_simd)
+//     threadCount: 4,             // WASM decoder workers (MT builds only)
+//     reduceNL: 0,                // resolution reduce (0=full, 1=half, 2=quarter)
+//     output: 'planar',           // planar | rgba
 //     onFrame: ({ y, cb, cr, w, h, cw, ch, matrix, range, ... }) => {…},
 //     onStats: ({ framesEmitted, framesDropped, seqGaps, … }) => {…},
 //     onError: ({ msg, fatal }) => {…},
 //   });
 //   await dec.ready;            // resolves when the worker has loaded the WASM
+//   dec.variant;                 // string of the variant that actually loaded
 //   dec.pushPacket(uint8array); // send one RFC 9828 RTP packet
+//   dec.setReduceNL(n);          // change DWT resolution-reduce (rebuilds decoder)
 //   dec.reset();                 // discard in-flight state (e.g. on stream switch)
 //   dec.close();                 // tear the worker down
 
 export class DecoderClient {
-  constructor({ wasmBase = '/wasm/', threadCount = 4, output = 'planar',
+  constructor({ wasmBase = '/wasm/', variant = 'mt_simd', threadCount = 4,
+                reduceNL = 0, output = 'planar',
                 onFrame = () => {}, onStats = () => {}, onError = () => {} } = {}) {
     this.onFrame = onFrame;
     this.onStats = onStats;
     this.onError = onError;
+    this.variant = variant;
+    // Resolve wasmBase to absolute against the page so callers can pass a
+    // page-relative '/wasm/', a directory-relative './', or a full URL — and
+    // the worker (whose `self.location.href` is /shared/decoder_worker.mjs)
+    // doesn't end up resolving './' against itself.
+    const absBase = new URL(wasmBase, location.href).href;
 
     // The worker URL is resolved relative to this module so pages at
     // different paths (web/wt_viewer/index.html, web/rtp_demo.html) all
@@ -37,8 +49,9 @@ export class DecoderClient {
     this.ready = new Promise((resolve, reject) => {
       const handler = (ev) => {
         if (ev.data?.type === 'ready') {
+          if (ev.data.variant) this.variant = ev.data.variant;
           this.worker.removeEventListener('message', handler);
-          resolve();
+          resolve(this.variant);
         } else if (ev.data?.type === 'error' && ev.data.fatal) {
           this.worker.removeEventListener('message', handler);
           reject(new Error(ev.data.msg));
@@ -73,8 +86,14 @@ export class DecoderClient {
       }
     });
 
-    this.worker.postMessage({ type: 'init', wasmBase, threadCount, output });
+    this.worker.postMessage({
+      type: 'init',
+      wasmBase: absBase,
+      variant, threadCount, reduceNL, output,
+    });
   }
+
+  setReduceNL(n) { this.worker.postMessage({ type: 'setReduceNL', value: n | 0 }); }
 
   pushPacket(bytes) {
     // Transfer when possible (caller-owned buffer), else copy.  The worker

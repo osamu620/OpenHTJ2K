@@ -595,15 +595,24 @@
 
 <script type="module">
 import { parseRtpStream } from './rtp_parser.js';
+import { DecoderClient } from './shared/decoder_client.mjs';
 
 // ──────────────────────────────────────────────────────────────────────────
-// WASM module loading: prefer mt_simd > simd > mt > scalar, matching index.html.
+// Where to load libopen_htj2k_*.{js,wasm} from.  Default = page-relative
+// './' (works for the flat Cloudflare Pages deploy).  Override with
+// ?wasmBase=/wasm-full/ for local dev under web/perf/serve.mjs (which routes
+// /wasm-full/ to web/build/html/, the directory with all four variants).
+// ──────────────────────────────────────────────────────────────────────────
+const _wasmBaseQ = new URLSearchParams(location.search).get('wasmBase');
+const WASM_BASE  = _wasmBaseQ || new URL('./', location.href).href;
+
+// ──────────────────────────────────────────────────────────────────────────
+// Capability + Display-P3 detection.
 // ──────────────────────────────────────────────────────────────────────────
 function threadsSupported() {
   try { return typeof SharedArrayBuffer !== 'undefined'; } catch { return false; }
 }
 
-// ── Display-P3 capability detection (copied from index.html) ──────────────
 // True iff the user agent reports the display can render P3 colors.
 function displaySupportsP3Color() {
   try { return matchMedia('(color-gamut: p3)').matches; } catch { return false; }
@@ -618,46 +627,28 @@ function canvasSupportsDisplayP3() {
     return ctx && ctx.getContextAttributes().colorSpace === 'display-p3';
   } catch { return false; }
 }
-// Module-level cache so each renderer doesn't re-probe.
 const _USE_P3 = displaySupportsP3Color() && canvasSupportsDisplayP3();
 
-// Allow forcing a specific WASM build via `?variant=…` in the URL.  Useful
-// for A/B-testing single-threaded SIMD vs multi-threaded SIMD on the same
-// machine/file.  Accepted values:
+// Variant selection.  Returns a variant key ('mt_simd' | 'simd' | 'mt' |
+// 'scalar') the worker uses to pick the matching libopen_htj2k_*.js file.
 //   auto      (default)   — best available based on browser capabilities
-//   mt_simd               — libopen_htj2k_mt_simd.js
-//   simd                  — libopen_htj2k_simd.js (forces single-threaded)
-//   mt                    — libopen_htj2k_mt.js (no SIMD)
-//   scalar    / generic   — libopen_htj2k.js
+//   mt_simd               — multi-threaded + SIMD (production default)
+//   simd                  — single-threaded SIMD
+//   mt                    — multi-threaded, no SIMD
+//   scalar / generic      — single-threaded, no SIMD
 function chooseVariant(hasSimd, hasMt) {
   const q = new URLSearchParams(window.location.search).get('variant') || 'auto';
   const fallback =
-      (hasSimd && hasMt) ? 'libopen_htj2k_mt_simd'
-    : hasSimd            ? 'libopen_htj2k_simd'
-    : hasMt              ? 'libopen_htj2k_mt'
-    :                      'libopen_htj2k';
+      (hasSimd && hasMt) ? 'mt_simd'
+    : hasSimd            ? 'simd'
+    : hasMt              ? 'mt'
+    :                      'scalar';
   switch (q) {
-    case 'mt_simd':          return 'libopen_htj2k_mt_simd';
-    case 'simd':             return 'libopen_htj2k_simd';
-    case 'mt':               return 'libopen_htj2k_mt';
+    case 'mt_simd': case 'simd': case 'mt':  return q;
     case 'scalar':
-    case 'generic':          return 'libopen_htj2k';
-    default:                 return fallback;
+    case 'generic':                           return 'scalar';
+    default:                                  return fallback;
   }
-}
-
-async function loadModule() {
-  const hasSimd = await wasmFeatureDetect.simd();
-  const hasMt   = threadsSupported();
-  const variant = chooseVariant(hasSimd, hasMt);
-  console.log('[rtp_demo] loading variant:', variant, '(hasSimd=' + hasSimd + ', hasMt=' + hasMt + ')');
-  const mod = await import(`./${variant}.js`).catch(e => {
-    console.warn('failed to load', variant, '— trying non-MT fallback');
-    return import(`./${hasSimd ? 'libopen_htj2k_simd' : 'libopen_htj2k'}.js`);
-  });
-  const Module = await mod.default();
-  Module.__variant = variant;
-  return Module;
 }
 
 // Variant dropdown wiring: reflect current ?variant=… and reload on change.
@@ -723,8 +714,14 @@ wasmFeatureDetect.simd().then(ok => {
 // ──────────────────────────────────────────────────────────────────────────
 // Pipeline state
 // ──────────────────────────────────────────────────────────────────────────
-let Module = null;
-let F = {};             // cwrap'd functions
+// The decoder lives in a Web Worker (web/shared/decoder_worker.mjs).  We
+// keep a single DecoderClient instance per playback session — torn down on
+// Stop so a new Play can pick a different variant via the URL.
+let dec = null;
+let chosenVariant = '?';
+// Pacing mode of the active playback ('paced' | 'max').  Set in
+// startPlayback; read by onFrameFromWorker to decide ring vs inline render.
+let currentPacing = 'max';
 
 // Playback state.
 let running = false;        // full stop
@@ -748,20 +745,18 @@ let pauseStartedAt = 0;
 // Resolution selection (JPEG 2000 DWT resolution-reduce_NL).
 //   0 = full, 1 = half, 2 = quarter.  'auto' picks 1 when decoded W >= 2048.
 let reduceNLMode  = 'auto';
-let reduceNLValue = 0;      // effective value passed to create_decoder
+let reduceNLValue = 0;      // effective value sent to the worker
 let autoDecided   = false;  // have we measured the first frame?
 
 // YCbCr→RGB override.  'auto' uses RFC 9828 mat; explicit modes force a matrix.
 let ycbcrMode = 'auto';
 
-// Network-pacing frame drop: when wall-clock is past a frame's target by
-// more than PACE_DROP_PERIODS frame periods we skip decoding it and discard
-// the WASM reassembler's ready slot, keeping playback loosely aligned with
-// the RTP clock.  Off by default — slow decoders otherwise get stuck in a
-// burst-then-stall pattern that trips Cloudflare/NAT timeouts.  Toggled via
-// the "Drop late frames" checkbox; ?drop=1 pre-checks it on page load.
-// Tune the threshold via ?drop_periods=N.  ?nodrop=1 is kept as a legacy
-// synonym for the default (no-op).
+// Post-decode pace-drop: in the rAF tick, if the next ring entry's target
+// is already past by more than PACE_DROP_PERIODS frame periods we discard
+// it without rendering.  Off by default; toggled via the "Drop late frames"
+// checkbox; ?drop=1 pre-checks it on page load.  Tune via ?drop_periods=N.
+// (Pre-decode pace-drop is now handled inside the worker, which always
+// keeps only the latest frame in its reassembly ready-queue.)
 function paceDropEnabled() {
   const el = document.getElementById('drop-toggle');
   return !!(el && el.checked);
@@ -784,25 +779,13 @@ let framePeriodMs = 0;          // derived from inter-frame RTP Δts; 0 before s
 // Has the one-shot per-playback diagnostic dump been printed?
 let firstFrameDiagnosticsDumped = false;
 
-// WASM-side resources (allocated once on first Play, freed on Stop).
-let rtpSession   = 0;
-let decoder      = 0;
-let pktBuf       = 0;
-const PKT_BUF_SZ = 2048;
-let frameBuf     = 0;
-const MAX_FRAME  = 16 * 1024 * 1024;  // 16 MB: generous for 4K HTJ2K
-let rgbaBuf      = 0;
-let rgbaBufSz    = 0;
-// Per-component buffers for the planar render path (WebGL only).  Sized to
-// luma + chroma + chroma bytes; reallocated when the per-component sizes
-// change (e.g. on auto-reduce_NL switch after the first frame).
-let yBuf    = 0; let yBufSz    = 0;
-let cbBuf   = 0; let cbBufSz   = 0;
-let crBuf   = 0; let crBufSz   = 0;
+// Latest stats from the worker.  Refreshed on each onStats callback (~500 ms);
+// the on-page stats ticker reads from this.
+let workerStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0, readyCount: 0, lastError: '' };
 
 // Stats.
 let pktCount   = 0;
-let byteCount  = 0;           // bytes of RTP packet payload processed by WASM
+let byteCount  = 0;           // bytes of RTP packet payload pushed to the worker
 let chunkBytes = 0;           // bytes delivered by ReadableStream (disk/network)
 let byteCountStart = 0;
 let chunkBytesStart = 0;
@@ -811,9 +794,10 @@ let frameCount = 0;
 let lastDecodeTimes = [];  // ms, ring of last N
 const FPS_WIN = 30;
 let lastDecodeMs = 0;
-let lastFramePacketTs = null;  // previous frame's RTP timestamp for Δts logging
+let lastFrameRtpTs = null;     // previous frame's RTP timestamp for Δts derivation
+const PKT_BUF_SZ = 2048;       // oversize-packet drop threshold; matches the worker's PACKET_BUF
 // Most recently decoded output size — used by the on-video HUD.  Updated
-// each frame inside decodeAndRender so auto-reduce resolution changes
+// each frame inside onFrameFromWorker so auto-reduce resolution changes
 // show up in the HUD on the next ticker refresh.
 let lastDecodedW = 0;
 let lastDecodedH = 0;
@@ -892,49 +876,14 @@ function setStat(id, v) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Module init
+// Renderer init — must run AFTER the renderer class declarations below, so
+// we defer one microtask.  Eager init avoids the canvas-context-lock-in
+// problem: calling getContext() with one type prevents any other type on
+// the same element later.
 // ──────────────────────────────────────────────────────────────────────────
 (async () => {
+  await Promise.resolve();
   try {
-    Module = await loadModule();
-    F = {
-      // Decoder
-      create_decoder:        Module.cwrap('create_decoder',      'number', ['number','number','number']),
-      reset_decoder_bytes:   Module.cwrap('reset_decoder_with_bytes', 'void', ['number','number','number','number']),
-      enable_single_tile:    Module.cwrap('enable_single_tile_reuse', 'void', ['number','number']),
-      parse_j2c:             Module.cwrap('parse_j2c_data',      'void',   ['number']),
-      invoke_to_rgba:        Module.cwrap('invoke_decoder_to_rgba', 'void', ['number','number']),
-      invoke_planar_u8:      Module.cwrap('invoke_decoder_planar_u8', 'void', ['number','number','number','number']),
-      release_j2c:           Module.cwrap('release_j2c_data',    'void',   ['number']),
-      get_width:             Module.cwrap('get_width',           'number', ['number','number']),
-      get_height:            Module.cwrap('get_height',          'number', ['number','number']),
-      get_num_components:    Module.cwrap('get_num_components',  'number', ['number']),
-      get_depth:             Module.cwrap('get_depth',           'number', ['number','number']),
-      // YCbCr helpers
-      apply_bt601:           Module.cwrap('apply_ycbcr_bt601_to_rgba', 'void', ['number','number']),
-      apply_bt709:           Module.cwrap('apply_ycbcr_bt709_to_rgba', 'void', ['number','number']),
-      // RTP session
-      rtp_create:            Module.cwrap('rtp_session_create',  'number', []),
-      rtp_destroy:           Module.cwrap('rtp_session_destroy', 'void',   ['number']),
-      rtp_reset:             Module.cwrap('rtp_session_reset',   'void',   ['number']),
-      rtp_push:              Module.cwrap('rtp_push_packet',     'number', ['number','number','number']),
-      rtp_peek_size:         Module.cwrap('rtp_peek_frame_size', 'number', ['number']),
-      rtp_ready_count:       Module.cwrap('rtp_ready_count',     'number', ['number']),
-      rtp_pop:               Module.cwrap('rtp_pop_frame',       'number', ['number','number','number']),
-      rtp_drop_ready:        Module.cwrap('rtp_drop_ready',      'number', ['number']),
-      rtp_pop_matrix:        Module.cwrap('rtp_pop_frame_matrix',  'number', ['number']),
-      rtp_pop_range:         Module.cwrap('rtp_pop_frame_range',   'number', ['number']),
-      rtp_pop_primaries:     Module.cwrap('rtp_pop_frame_primaries','number', ['number']),
-      rtp_pop_transfer:      Module.cwrap('rtp_pop_frame_transfer','number', ['number']),
-      get_signed:            Module.cwrap('get_signed',             'number', ['number','number']),
-      rtp_frames:            Module.cwrap('rtp_frames_emitted',  'number', ['number']),
-      rtp_drops:             Module.cwrap('rtp_frames_dropped',  'number', ['number']),
-      rtp_gaps:              Module.cwrap('rtp_seq_gaps',        'number', ['number']),
-      rtp_last_error:        Module.cwrap('rtp_last_error',      'string', ['number']),
-    };
-    // Eager renderer init — must run before the first decodeAndRender so
-    // we don't get caught by canvas-context-lock-in (calling getContext()
-    // with one type prevents using any other on the same element).
     renderer = pickRenderer(document.getElementById('mycanvas'));
     console.log('[rtp_demo] renderer =', renderer.name(),
                 'colorspace =', renderer.colorSpaceLabel(),
@@ -943,40 +892,25 @@ function setStat(id, v) {
     document.getElementById('btn-play').disabled = false;
   } catch (e) {
     console.error(e);
-    setOverlay('Failed to load WASM decoder: ' + e, 'error');
+    setOverlay('Failed to initialise renderer: ' + e, 'error');
   }
 })();
-
-// ──────────────────────────────────────────────────────────────────────────
-// Decode + render one codestream
-// ──────────────────────────────────────────────────────────────────────────
-function ensureRgbaBuf(size) {
-  if (rgbaBufSz >= size) return;
-  if (rgbaBuf) Module._free(rgbaBuf);
-  rgbaBuf = Module._malloc(size);
-  rgbaBufSz = size;
-}
-
-// Reallocate the three planar buffers if the requested sizes don't fit.
-// Returns nothing; updates yBuf/cbBuf/crBuf module-level state.
-function ensurePlanarBufs(lumaSz, chromaSz) {
-  if (yBufSz < lumaSz)    { if (yBuf)  Module._free(yBuf);  yBuf  = Module._malloc(lumaSz);   yBufSz  = lumaSz;   }
-  if (cbBufSz < chromaSz) { if (cbBuf) Module._free(cbBuf); cbBuf = Module._malloc(chromaSz); cbBufSz = chromaSz; }
-  if (crBufSz < chromaSz) { if (crBuf) Module._free(crBuf); crBuf = Module._malloc(chromaSz); crBufSz = chromaSz; }
-}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Renderers
 // ──────────────────────────────────────────────────────────────────────────
 // Two implementations behind a small interface:
-//   render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) — paint one frame
-//   needsCpuYcbcr() — true if caller must run apply_bt*_to_rgba before render
+//   render(rgbaU8, W, H, matrix, range, ycbcrMode, NC)
+//       — paint one frame from a pre-matrixed RGBA Uint8Array
+//   renderPlanar(yU8, cbU8, crU8, lumaW, lumaH, chromaW, chromaH,
+//                matrix, range, ycbcrMode, NC)  (WebGL2 only)
+//       — paint from three R8 planes; shader does YCbCr→RGB
+//   needsCpuYcbcr() — true iff caller must request RGBA output from the
+//                     worker (the matrix gets applied in WASM, not GPU)
 //   name() — short label for diagnostics
 //
-// The active renderer is constructed once during module init (see eager init
-// near the bottom).  This avoids the canvas-context-lock-in problem: once
-// canvas.getContext('2d') has been called, the canvas can't be used for WebGL
-// (and vice versa) — so we choose at startup, not lazily.
+// The active renderer is constructed once during module init.  Inputs are
+// typed arrays owned by the caller — the WASM heap lives in the worker now.
 
 class Canvas2DRenderer {
   constructor(canvas) {
@@ -994,7 +928,7 @@ class Canvas2DRenderer {
   needsCpuYcbcr()  { return true; }
   supportsPlanar() { return false; }
   colorSpaceLabel(){ return this.activeColorSpace; }
-  render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
+  render(rgbaU8, W, H /*, matrix, range, ycbcrMode, NC */) {
     if (this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas.width  = W;
       this.canvas.height = H;
@@ -1003,7 +937,7 @@ class Canvas2DRenderer {
     // browser doesn't insert a sRGB→P3 conversion (we want the pixels we
     // wrote to land in the framebuffer 1:1).
     const img = this.ctx.createImageData(W, H, { colorSpace: this.activeColorSpace });
-    img.data.set(view.subarray(rgbaBufPtr, rgbaBufPtr + W * H * 4));
+    img.data.set(rgbaU8);
     this.ctx.putImageData(img, 0, 0);
   }
 }
@@ -1090,7 +1024,8 @@ const _OFF_ZERO     = new Float32Array([0, 0, 0]);
 const _OFF_FULL     = new Float32Array([0, _F_HALF, _F_HALF]);
 
 // Pick the matrix + offset + uniform-cache signature for the current frame.
-// Mirrors the JS-side decision in decodeAndRender's CPU path.  `range` is
+// Mirrors the worker's RGBA-path matrix decision so a Canvas2D snapshot
+// matches the WebGL2 shader path on a side-by-side renderer A/B.  `range` is
 // 0=narrow, 1=full, 2=unknown (treat as full).  Narrow-range support is
 // stubbed for now (deferred — current source files are full-range).
 function _pickYcbcrUniforms(matrix, range, ycbcrMode, NC) {
@@ -1241,7 +1176,7 @@ class WebGL2Renderer {
   supportsPlanar() { return true; }    // can render from 3 R8 textures
   colorSpaceLabel(){ return this.activeColorSpace; }
 
-  render(view, rgbaBufPtr, W, H, matrix, range, ycbcrMode, NC) {
+  render(rgbaU8, W, H, matrix, range, ycbcrMode, NC) {
     if (this.lost) return;
     const gl = this.gl;
 
@@ -1258,10 +1193,9 @@ class WebGL2Renderer {
       this.lastMatSig = null;          // force uniform re-upload after program switch
     }
 
-    // ArrayBufferView slice into the current WASM heap.  Pass directly to
-    // texImage2D / texSubImage2D — WebGL2 spec says the upload copies the
-    // bytes, so the view doesn't need to live past this call.
-    const pixels = view.subarray(rgbaBufPtr, rgbaBufPtr + W * H * 4);
+    // Caller-owned Uint8Array.  WebGL2 spec says texImage2D / texSubImage2D
+    // copy the bytes synchronously, so the array can be discarded after.
+    const pixels = rgbaU8;
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
@@ -1287,7 +1221,7 @@ class WebGL2Renderer {
   // Render from three planar uint8 buffers (Y at lumaW×lumaH, Cb/Cr at
   // chromaW×chromaH).  Hardware bilinear filtering on Cb/Cr does the chroma
   // upsampling for free.  Canvas size matches lumaW×lumaH.
-  renderPlanar(view, yPtr, cbPtr, crPtr, lumaW, lumaH, chromaW, chromaH,
+  renderPlanar(yU8, cbU8, crU8, lumaW, lumaH, chromaW, chromaH,
                matrix, range, ycbcrMode, NC) {
     if (this.lost) return;
     const gl = this.gl;
@@ -1305,36 +1239,32 @@ class WebGL2Renderer {
     }
 
     // Y plane (texture unit 0).
-    const yPx = view.subarray(yPtr, yPtr + lumaW * lumaH);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texY);
     if (this.lumaW !== lumaW || this.lumaH !== lumaH) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, lumaW, lumaH, 0, gl.RED, gl.UNSIGNED_BYTE, yPx);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, lumaW, lumaH, 0, gl.RED, gl.UNSIGNED_BYTE, yU8);
       this.lumaW = lumaW; this.lumaH = lumaH;
     } else {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, lumaW, lumaH, gl.RED, gl.UNSIGNED_BYTE, yPx);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, lumaW, lumaH, gl.RED, gl.UNSIGNED_BYTE, yU8);
     }
 
     // Cb plane (texture unit 1).
-    const chromaSz = chromaW * chromaH;
-    const cbPx = view.subarray(cbPtr, cbPtr + chromaSz);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.texCb);
     if (this.chromaW !== chromaW || this.chromaH !== chromaH) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, chromaW, chromaH, 0, gl.RED, gl.UNSIGNED_BYTE, cbPx);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, chromaW, chromaH, 0, gl.RED, gl.UNSIGNED_BYTE, cbU8);
     } else {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chromaW, chromaH, gl.RED, gl.UNSIGNED_BYTE, cbPx);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chromaW, chromaH, gl.RED, gl.UNSIGNED_BYTE, cbU8);
     }
 
     // Cr plane (texture unit 2).
-    const crPx = view.subarray(crPtr, crPtr + chromaSz);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.texCr);
     if (this.chromaW !== chromaW || this.chromaH !== chromaH) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, chromaW, chromaH, 0, gl.RED, gl.UNSIGNED_BYTE, crPx);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, chromaW, chromaH, 0, gl.RED, gl.UNSIGNED_BYTE, crU8);
       this.chromaW = chromaW; this.chromaH = chromaH;
     } else {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chromaW, chromaH, gl.RED, gl.UNSIGNED_BYTE, crPx);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chromaW, chromaH, gl.RED, gl.UNSIGNED_BYTE, crU8);
     }
 
     const u = _pickYcbcrUniforms(matrix, range, ycbcrMode, NC);
@@ -1370,234 +1300,131 @@ function pickRenderer(canvas) {
   return new Canvas2DRenderer(canvas);
 }
 
-// Decode one completed frame and snapshot the result into a ring-buffer
-// entry.  Does NOT render — the caller either hands the entry to the
-// rAF consumer (paced mode) or passes it to renderFrame() directly (ASAP).
-// Returns null if nothing was ready or a frame was skipped.
-// `rtpTs` is the RTP timestamp of the packet that completed this frame.
-function decodeFrame(rtpTs) {
-  const frameSize = F.rtp_peek_size(rtpSession);
-  if (frameSize === 0) return null;
-  if (frameSize > MAX_FRAME) {
-    console.warn('frame too large', frameSize, '— skipping');
-    // Drain so the queue doesn't back up.
-    F.rtp_pop(rtpSession, frameBuf, MAX_FRAME);
-    return null;
+// onFrame callback — called by DecoderClient for every decoded frame.  The
+// worker delivers planar Y/Cb/Cr (when output='planar') or RGBA (when
+// output='rgba') as transferred ArrayBuffers.  We build a ring-buffer entry
+// and either render it inline (ASAP) or push it for the rAF consumer (Paced).
+function onFrameFromWorker(frame) {
+  const { mode, w, h, fullW, fullH, nc, depth, compW, compH, compS, compD,
+          matrix, range, primaries, transfer, rtpTs, decodeMs } = frame;
+
+  // Track inter-frame Δts for the post-decode pace-drop period derivation.
+  if (lastFrameRtpTs !== null) {
+    const d = ((rtpTs - lastFrameRtpTs) >>> 0);
+    if (d > 0 && d < 90000) framePeriodMs = d * (1000 / 90000);
   }
-  const got = F.rtp_pop(rtpSession, frameBuf, MAX_FRAME);
-  if (got <= 0) return null;
+  lastFrameRtpTs = rtpTs >>> 0;
 
-  const matrix = F.rtp_pop_matrix(rtpSession);
-  const range  = F.rtp_pop_range(rtpSession);
-  const prims  = F.rtp_pop_primaries(rtpSession);
-  const trans  = F.rtp_pop_transfer(rtpSession);
-
-  // Per-frame create + release.  The wrapper's release_j2c_data() deletes
-  // the decoder, so we can't keep one alive across frames using the
-  // existing API.  Decoder reuse via init() on a live instance would
-  // require a separate "reset-but-don't-delete" export + verifying the
-  // underlying openhtj2k_decoder cleanly handles re-parse — v2 work.
-  const t0 = performance.now();
-  let dec = 0;
-  try {
-    dec = F.create_decoder(frameBuf, got, reduceNLValue);
-    if (dec === 0) throw new Error('create_decoder returned null');
-    F.parse_j2c(dec);
-
-    // get_width/get_height return FULL-RESOLUTION dimensions even after
-    // create_decoder(..., reduce_NL).  The JS side must divide by 2^reduce_NL
-    // to match what invoke_decoder_to_rgba actually writes — same pattern as
-    // index.html's display_image (lines 526-527).  Otherwise the reduced-size
-    // decoded bytes get painted into a full-size Canvas and the image is
-    // stitched/repeated incorrectly (users see ~2 subsampled copies in the
-    // upper quarter of the canvas).
-    const fullW = F.get_width(dec, 0)  | 0;
-    const fullH = F.get_height(dec, 0) | 0;
-    const NC    = F.get_num_components(dec) | 0;
-    const D     = F.get_depth(dec, 0) | 0;
-    const W     = Math.ceil(fullW / (1 << reduceNLValue));
-    const H     = Math.ceil(fullH / (1 << reduceNLValue));
-    // Cache for the on-video HUD.
-    lastDecodedW = W;
-    lastDecodedH = H;
-
-    // Gather per-component metadata for diagnostics + chroma-subsampling display.
-    // These also reflect full-resolution per-component dimensions.
-    const compW = [], compH = [], compS = [], compD = [];
-    for (let c = 0; c < Math.min(NC, 4); c++) {
-      compW.push(F.get_width(dec, c)  | 0);
-      compH.push(F.get_height(dec, c) | 0);
-      compS.push(F.get_signed(dec, c) | 0);
-      compD.push(F.get_depth(dec, c)  | 0);
+  // One-shot first-frame diagnostics + auto-reduce decision.
+  if (!firstFrameDiagnosticsDumped) {
+    firstFrameDiagnosticsDumped = true;
+    // Lock the player aspect-ratio to the full-res dimensions so a later
+    // auto-reduce flip doesn't change the page footprint.
+    const wrap = document.getElementById('canvas-wrap');
+    if (wrap) wrap.style.aspectRatio = `${fullW} / ${fullH}`;
+    console.log('[rtp_demo] ───── First-frame diagnostics ─────');
+    console.log(`[rtp_demo] full-res: ${fullW} x ${fullH}, decoded: ${w} x ${h} (reduce_NL=${reduceNLValue})`);
+    console.log(`[rtp_demo] NC=${nc}, depth=${depth} bpc`);
+    for (let c = 0; c < nc && c < compW.length; c++) {
+      console.log(`[rtp_demo]   comp[${c}]: ${compW[c]}x${compH[c]}  depth=${compD[c]}  signed=${compS[c]}`);
     }
+    console.log(`[rtp_demo] RFC 9828 metadata:`);
+    console.log(`[rtp_demo]   MatrixCoefficients (mat) = ${matrix}   [0=RGB, 1=BT.709, 5/6=BT.601, 255=unknown]`);
+    console.log(`[rtp_demo]   Range                    = ${range}   [0=narrow/TV, 1=full/PC, 2=unknown]`);
+    console.log(`[rtp_demo]   ColourPrimaries  (prims) = ${primaries}`);
+    console.log(`[rtp_demo]   TransferCharacteristics  = ${transfer}`);
+    console.log(`[rtp_demo] renderer = ${renderer.name()}  cpu_ycbcr=${renderer.needsCpuYcbcr()}  colorspace=${renderer.colorSpaceLabel()}`);
+    console.log(`[rtp_demo] worker variant = ${chosenVariant}`);
+    console.log(`[rtp_demo] ─────────────────────────────────────`);
 
-    // One-shot diagnostic dump on the very first frame decoded.
-    if (!firstFrameDiagnosticsDumped) {
-      firstFrameDiagnosticsDumped = true;
-      // Set the canvas wrap's aspect-ratio from the FULL-resolution
-      // dimensions (not the reduced decode size) so the player keeps its
-      // footprint steady even if auto-reduce kicks in mid-stream.
-      const wrap = document.getElementById('canvas-wrap');
-      if (wrap) wrap.style.aspectRatio = `${fullW} / ${fullH}`;
-      console.log('[rtp_demo] ───── First-frame diagnostics ─────');
-      console.log(`[rtp_demo] full-res: ${fullW} x ${fullH}, decoded: ${W} x ${H} (reduce_NL=${reduceNLValue})`);
-      console.log(`[rtp_demo] NC=${NC}, depth=${D} bpc`);
-      for (let c = 0; c < NC; c++) {
-        console.log(`[rtp_demo]   comp[${c}]: ${compW[c]}x${compH[c]}  depth=${compD[c]}  signed=${compS[c]}`);
-      }
-      console.log(`[rtp_demo] RFC 9828 metadata:`);
-      console.log(`[rtp_demo]   MatrixCoefficients (mat) = ${matrix}   [0=RGB, 1=BT.709, 5/6=BT.601, 255=unknown]`);
-      console.log(`[rtp_demo]   Range                    = ${range}   [0=narrow/TV, 1=full/PC, 2=unknown]`);
-      console.log(`[rtp_demo]   ColourPrimaries  (prims) = ${prims}`);
-      console.log(`[rtp_demo]   TransferCharacteristics  = ${trans}`);
-      console.log(`[rtp_demo] renderer = ${renderer.name()}  cpu_ycbcr=${renderer.needsCpuYcbcr()}  colorspace=${renderer.colorSpaceLabel()}`);
-      console.log(`[rtp_demo] ─────────────────────────────────────`);
+    const chromaInfo = nc < 2 ? 'mono'
+      : compW[1] === compW[0] && compH[1] === compH[0] ? '4:4:4'
+      : compW[1] * 2 === compW[0] && compH[1] === compH[0] ? '4:2:2'
+      : compW[1] * 2 === compW[0] && compH[1] * 2 === compH[0] ? '4:2:0'
+      : `${compW[0]}:${compW[1]}:${compW[2] ?? '?'}`;
+    setStat('chroma', chromaInfo);
+    setStat('signedness', compS.map(s => s ? 's' : 'u').join(''));
+    const matName  = matrix === 0 ? 'RGB' : matrix === 1 ? 'BT.709'
+                   : matrix === 5 || matrix === 6 ? 'BT.601' : `mat=${matrix}`;
+    const rangeName = range === 1 ? 'full' : range === 0 ? 'narrow' : '?';
+    setStat('colorInfo', `${matName} / ${rangeName}`);
 
-      // Populate stats panel too.
-      const chromaInfo = NC < 2 ? 'mono'
-        : compW[1] === compW[0] && compH[1] === compH[0] ? '4:4:4'
-        : compW[1] * 2 === compW[0] && compH[1] === compH[0] ? '4:2:2'
-        : compW[1] * 2 === compW[0] && compH[1] * 2 === compH[0] ? '4:2:0'
-        : `${compW[0]}:${compW[1]}:${compW[2] ?? '?'}`;
-      setStat('chroma', chromaInfo);
-      setStat('signedness', compS.map(s => s ? 's' : 'u').join(''));
-      const matName  = matrix === 0 ? 'RGB' : matrix === 1 ? 'BT.709'
-                     : matrix === 5 || matrix === 6 ? 'BT.601' : `mat=${matrix}`;
-      const rangeName = range === 1 ? 'full' : range === 0 ? 'narrow' : '?';
-      setStat('colorInfo', `${matName} / ${rangeName}`);
-    }
-
-    // Auto-resolution: we started at reduce_NL=1 as a safe default for the
-    // (unknown) first frame.  Now that we know the source's full-res width,
-    // decide what to do for subsequent frames:
-    //   - fullW < 2048 (1080p or smaller) → upgrade to reduce_NL=0 (full res)
-    //   - fullW >= 2048 (4K and up)       → stay at reduce_NL=1 (half res)
+    // Auto-reduce: started at reduce_NL=1 (safe default for an unknown first
+    // frame).  If full-res W < 2048 (1080p or smaller), upgrade to full
+    // resolution by telling the worker to re-create its decoder with
+    // reduce_NL=0.  Effective from the NEXT decoded frame.
     if (reduceNLMode === 'auto' && !autoDecided) {
       if (fullW < 2048 && reduceNLValue === 1) {
         reduceNLValue = 0;
         console.log(`[rtp_demo] auto: full-res W=${fullW} < 2048, upgrading to reduce_NL=0 (full) for subsequent frames`);
+        if (dec) dec.setReduceNL(0);
       } else {
         console.log(`[rtp_demo] auto: full-res W=${fullW} >= 2048, staying at reduce_NL=1 for subsequent frames`);
       }
       autoDecided = true;
     }
+  }
 
-    // Decode into WASM buffers, then snapshot the decoded pixels into JS
-    // Uint8Array copies so we can hold multiple frames in flight (the WASM
-    // heap reuses one set of buffers per decode call).  The copy cost is
-    // roughly the same order as the GPU upload that follows on render.
-    let entry;
-    if (renderer.supportsPlanar() && NC >= 3) {
-      const lumaW   = compW[0], lumaH   = compH[0];
-      const chromaW = compW[1], chromaH = compH[1];
-      const lumaW_r   = Math.ceil(lumaW   / (1 << reduceNLValue));
-      const lumaH_r   = Math.ceil(lumaH   / (1 << reduceNLValue));
-      const chromaW_r = Math.ceil(chromaW / (1 << reduceNLValue));
-      const chromaH_r = Math.ceil(chromaH / (1 << reduceNLValue));
-      const lumaSz    = lumaW_r   * lumaH_r;
-      const chromaSz  = chromaW_r * chromaH_r;
-      ensurePlanarBufs(lumaSz, chromaSz);
-      F.invoke_planar_u8(dec, yBuf, cbBuf, crBuf);
-      entry = {
-        planar: true,
-        yData:  Module.HEAPU8.slice(yBuf,  yBuf  + lumaSz),
-        cbData: Module.HEAPU8.slice(cbBuf, cbBuf + chromaSz),
-        crData: Module.HEAPU8.slice(crBuf, crBuf + chromaSz),
-        lumaW: lumaW_r, lumaH: lumaH_r,
-        chromaW: chromaW_r, chromaH: chromaH_r,
-        matrix, range, ycbcrMode, NC,
-        W, H, D,
-        rtpTimestamp: rtpTs >>> 0,
-        framePeriodMs,
-      };
-    } else {
-      ensureRgbaBuf(W * H * 4);
-      F.invoke_to_rgba(dec, rgbaBuf);
-      // Apply YCbCr→RGB conversion on CPU only when the active renderer can't
-      // do it in-shader (Canvas 2D path).  Mat=0/none = RGB passthrough.
-      // Done at decode time so the snapshot in the ring buffer is already
-      // in the final RGB colorspace — render-time stays identical to today.
-      if (NC >= 3 && renderer.needsCpuYcbcr()) {
-        let chosen = ycbcrMode;  // 'auto'|'none'|'bt601'|'bt709'
-        if (chosen === 'auto') {
-          if      (matrix === 1)                    chosen = 'bt709';
-          else if (matrix === 5 || matrix === 6)    chosen = 'bt601';
-          else if (matrix === 0)                    chosen = 'none';
-          else                                      chosen = 'bt709';
-        }
-        if      (chosen === 'bt709') F.apply_bt709(rgbaBuf, W * H);
-        else if (chosen === 'bt601') F.apply_bt601(rgbaBuf, W * H);
-      }
-      entry = {
-        planar: false,
-        rgbaData: Module.HEAPU8.slice(rgbaBuf, rgbaBuf + W * H * 4),
-        W, H, D,
-        matrix, range, ycbcrMode, NC,
-        rtpTimestamp: rtpTs >>> 0,
-        framePeriodMs,
-      };
-    }
+  lastDecodedW = w;
+  lastDecodedH = h;
+  lastDecodeMs = decodeMs;
+  lastDecodeTimes.push(decodeMs);
+  if (lastDecodeTimes.length > FPS_WIN) lastDecodeTimes.shift();
+  decodeCount++;
+  setStat('imgWidth',  w);
+  setStat('imgHeight', h);
+  setStat('imgDepth',  depth + ' bpc');
+  setStat('numComps',  nc);
 
-    const t1 = performance.now();
-    lastDecodeMs = t1 - t0;
-    lastDecodeTimes.push(lastDecodeMs);
-    if (lastDecodeTimes.length > FPS_WIN) lastDecodeTimes.shift();
-    decodeCount++;
-    setStat('imgWidth',  W);
-    setStat('imgHeight', H);
-    setStat('imgDepth',  D + ' bpc');
-    setStat('numComps',  NC);
-    return entry;
-  } catch (e) {
-    console.warn('frame decode failed:', e);
-    return null;
-  } finally {
-    if (dec !== 0) F.release_j2c(dec);
+  // Build the ring entry.  Worker-delivered ArrayBuffers were transferred,
+  // so wrapping them in Uint8Array doesn't copy.
+  let entry;
+  if (mode === 'planar') {
+    entry = {
+      planar: true,
+      yData:  new Uint8Array(frame.y),
+      cbData: new Uint8Array(frame.cb),
+      crData: new Uint8Array(frame.cr),
+      lumaW: w, lumaH: h,
+      chromaW: frame.cw, chromaH: frame.ch,
+      W: w, H: h, D: depth,
+      matrix, range, ycbcrMode, NC: nc,
+      rtpTimestamp: rtpTs >>> 0,
+      framePeriodMs,
+    };
+  } else {
+    entry = {
+      planar: false,
+      rgbaData: new Uint8Array(frame.rgba),
+      W: w, H: h, D: depth,
+      matrix, range, ycbcrMode, NC: nc,
+      rtpTimestamp: rtpTs >>> 0,
+      framePeriodMs,
+    };
+  }
+
+  if (currentPacing === 'paced') {
+    ringPush(entry);
+  } else {
+    try { renderEntry(entry); }
+    catch (e) { console.warn('frame render failed:', e); }
+    if (!firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
   }
 }
 
-// Render a ring-buffer entry produced by decodeFrame().  Copies the JS
-// Uint8Array snapshots back into the existing WASM heap buffers so the
-// renderers (Canvas2D / WebGL2) work against unchanged pointer-based APIs.
-// Counts toward frameCount (displayed).
-function renderFrame(entry) {
+// Render a ring-buffer entry by handing typed arrays to the active
+// renderer.  Counts toward frameCount (displayed).
+function renderEntry(entry) {
   if (entry.planar) {
-    // Make sure the WASM buffers are large enough (auto-reduce can change
-    // sizes between frames).
-    const lumaSz = entry.yData.length;
-    const chromaSz = entry.cbData.length;
-    ensurePlanarBufs(lumaSz, chromaSz);
-    Module.HEAPU8.set(entry.yData,  yBuf);
-    Module.HEAPU8.set(entry.cbData, cbBuf);
-    Module.HEAPU8.set(entry.crData, crBuf);
-    renderer.renderPlanar(Module.HEAPU8, yBuf, cbBuf, crBuf,
+    renderer.renderPlanar(entry.yData, entry.cbData, entry.crData,
                           entry.lumaW, entry.lumaH,
                           entry.chromaW, entry.chromaH,
                           entry.matrix, entry.range, entry.ycbcrMode, entry.NC);
   } else {
-    ensureRgbaBuf(entry.rgbaData.length);
-    Module.HEAPU8.set(entry.rgbaData, rgbaBuf);
-    renderer.render(Module.HEAPU8, rgbaBuf,
-                    entry.W, entry.H,
+    renderer.render(entry.rgbaData, entry.W, entry.H,
                     entry.matrix, entry.range, entry.ycbcrMode, entry.NC);
   }
   frameCount++;
-}
-
-// ASAP-mode convenience wrapper — decode + render inline, matching the
-// pre-rAF behaviour.  Returns true if a frame was rendered.
-// The RTP timestamp is recorded in the entry but the ASAP path doesn't
-// use it for pacing.
-function decodeAndRender(rtpTs = 0) {
-  const entry = decodeFrame(rtpTs);
-  if (!entry) return false;
-  try {
-    renderFrame(entry);
-    return true;
-  } catch (e) {
-    console.warn('frame render failed:', e);
-    return false;
-  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1685,7 +1512,7 @@ function startDisplayLoop(myGen) {
 
       // Pre-roll: render immediately, no timing.
       if (displayedPreRoll < PRE_ROLL_FRAMES) {
-        renderFrame(ringPop());
+        renderEntry(ringPop());
         displayedPreRoll++;
         if (!firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
         continue;                    // drain pre-roll frames if available
@@ -1714,7 +1541,7 @@ function startDisplayLoop(myGen) {
       // window, so targets up to ≈½ period past it are "due now").
       if (rafTimestamp < target - 0.5) break;
 
-      renderFrame(ringPop());
+      renderEntry(ringPop());
       if (!firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
       break;                          // one frame per VSync after pre-roll
     }
@@ -1780,12 +1607,11 @@ function startStatsTicker() {
 
     setStat('statPackets', pktCount);
     setStat('statFrames',  frameCount);                         // displayed
-    setStat('statDrops',   rtpSession ? F.rtp_drops(rtpSession) : 0);
+    setStat('statDrops',   workerStats.framesDropped);
     setStat('statDropsPace', droppedByPace);
-    setStat('statGaps',    rtpSession ? F.rtp_gaps(rtpSession) : 0);
-    // Pending = WASM reassembler ready queue + decoded-but-undisplayed ring.
-    setStat('statPending',
-      (rtpSession ? F.rtp_ready_count(rtpSession) : 0) + _ringCount);
+    setStat('statGaps',    workerStats.seqGaps);
+    // Pending = worker reassembler ready queue + decoded-but-undisplayed ring.
+    setStat('statPending', workerStats.readyCount + _ringCount);
     setStat('statLastDecode', lastDecodeMs ? lastDecodeMs.toFixed(0) + ' ms' : '—');
     if (lastDecodeTimes.length > 0) {
       const meanMs = lastDecodeTimes.reduce((a, b) => a + b, 0) / lastDecodeTimes.length;
@@ -1798,12 +1624,11 @@ function startStatsTicker() {
     // on-page stats panel updates regardless.
     tickN++;
     if (verboseLog) {
-      const v = Module && Module.__variant ? Module.__variant.replace('libopen_htj2k_', '') : '?';
       console.log(
-        `[rtp_demo t=${tickN}s build=${v}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
+        `[rtp_demo t=${tickN}s build=${chosenVariant}] chunk=${chunkMbps.toFixed(0)} Mbps  parsed=${pktMbps.toFixed(0)} Mbps  ` +
         `pkts=${pktCount} dec=${decodeCount} disp=${frameCount} (${dispFps.toFixed(1)} fps)  ` +
-        `drops=${rtpSession?F.rtp_drops(rtpSession):0} paceDrops=${droppedByPace}  ` +
-        `ring=${_ringCount} pending=${rtpSession?F.rtp_ready_count(rtpSession):0}  ` +
+        `drops=${workerStats.framesDropped} paceDrops=${droppedByPace}  ` +
+        `ring=${_ringCount} pending=${workerStats.readyCount}  ` +
         `lastDec=${lastDecodeMs.toFixed(0)}ms`);
     }
   }, 1000);
@@ -1813,16 +1638,10 @@ function startStatsTicker() {
 // Playback
 // ──────────────────────────────────────────────────────────────────────────
 async function startPlayback(source) {
-  if (!Module || running) return;
+  if (running) return;
   const myGen = ++playbackGen;   // claim a generation; older loops will see a mismatch and exit
   running = true;
   setPaused(false);  // defensive: ensure clean barrier state
-
-  // Allocate persistent buffers.
-  if (!rtpSession) rtpSession = F.rtp_create();
-  else             F.rtp_reset(rtpSession);
-  if (!pktBuf)   pktBuf   = Module._malloc(PKT_BUF_SZ);
-  if (!frameBuf) frameBuf = Module._malloc(MAX_FRAME);
 
   pktCount   = 0;
   byteCount  = 0;
@@ -1830,11 +1649,12 @@ async function startPlayback(source) {
   frameCount = 0;
   lastDecodeTimes = [];
   lastDecodeMs = 0;
-  lastFramePacketTs = null;
+  lastFrameRtpTs = null;
   lastDecodedW = 0; lastDecodedH = 0;
   totalPausedMs = 0; pauseStartedAt = 0;
   droppedByPace = 0;
   framePeriodMs = 0;
+  workerStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0, readyCount: 0, lastError: '' };
   // rAF-path state (see module-scope declarations).
   decodeCount = 0;
   decodeFinished = false;
@@ -1851,7 +1671,7 @@ async function startPlayback(source) {
     // Start at reduce_NL=1 (safer memory-wise — a 4K first frame at
     // full-res can overflow the 2GB WASM heap during HT decode).  If
     // the first frame turns out to be 1080p or smaller, we upgrade to
-    // full-res for subsequent frames.
+    // full-res for subsequent frames via dec.setReduceNL(0).
     reduceNLValue = 1;
     autoDecided   = false;
   } else {
@@ -1865,14 +1685,48 @@ async function startPlayback(source) {
   console.log(`[rtp_demo] ycbcr_mode=${ycbcrMode}`);
 
   const pacing = document.querySelector('input[name="pacing"]:checked').value;
+  currentPacing = pacing;
   ticker = startStatsTicker();
   setOverlay('Buffering first frame… (check console for disk-read + decode stats)', 'loading');
 
   // Paced mode: start the rAF display loop immediately.  It pulls frames
-  // from the ring as the decode loop below pushes them in.  ASAP mode
-  // keeps decode and render inline on the same task — no rAF needed.
+  // from the ring as the worker pushes them via onFrameFromWorker.  ASAP
+  // mode renders inline from inside onFrameFromWorker — no rAF needed.
   if (pacing === 'paced') {
     startDisplayLoop(myGen);
+  }
+
+  // Spin up the decoder worker.  Renderer was picked at module init.
+  const hasSimd = await wasmFeatureDetect.simd();
+  const hasMt   = threadsSupported();
+  const variantKey = chooseVariant(hasSimd, hasMt);
+  console.log(`[rtp_demo] starting worker variant=${variantKey} (hasSimd=${hasSimd}, hasMt=${hasMt})`);
+  const wantOutput = renderer.supportsPlanar() ? 'planar' : 'rgba';
+  dec = new DecoderClient({
+    wasmBase:    WASM_BASE,
+    variant:     variantKey,
+    threadCount: 4,
+    reduceNL:    reduceNLValue,
+    output:      wantOutput,
+    onFrame:     onFrameFromWorker,
+    onStats:     (s) => { workerStats = s; },
+    onError:     (e) => {
+      console.warn('[rtp_demo] worker:', e.msg);
+      if (e.fatal) {
+        decodeError = new Error(`worker: ${String(e.msg).slice(0, 200)}`);
+        if (pacing !== 'paced') setOverlay('Playback error: ' + decodeError.message, 'error');
+      }
+    },
+  });
+  try {
+    chosenVariant = await dec.ready;
+  } catch (e) {
+    setOverlay('Failed to load WASM decoder: ' + e.message, 'error');
+    running = false;
+    document.getElementById('btn-play').disabled  = false;
+    document.getElementById('btn-pause').disabled = true;
+    document.getElementById('btn-stop').disabled  = true;
+    return;
   }
 
   try {
@@ -1881,92 +1735,27 @@ async function startPlayback(source) {
       if (playbackGen !== myGen || !running) break;
       if (paused) await waitIfPaused();
 
-      // Copy packet into the shared scratch buffer.  Reallocate if a packet
-      // ever exceeds 2 KiB (jumbo frame or IPv6 extensions).
       const b = pkt.bytes;
       if (b.length > PKT_BUF_SZ) {
         console.warn('packet', b.length, 'bytes — exceeds PKT_BUF_SZ, skipping');
         continue;
       }
-      Module.HEAPU8.set(b, pktBuf);
       pktCount++;
       byteCount += b.length;
 
-      // Macrotask yield every 256 packets.  Without this the for-await loop
-      // only yields microtasks, which starves setInterval (stats ticker) and
-      // user click events for long periods when decode can't keep up.  This
-      // is critical for File.stream() sources where disk reads can sustain
-      // hundreds of thousands of packets/sec.
+      // Macrotask yield every 256 packets so setInterval/click handlers run
+      // promptly under bursty File.stream() reads.
       if ((pktCount & 0xFF) === 0) await fastYield();
 
-      const r = F.rtp_push(rtpSession, pktBuf, b.length);
-      if (r < 0) {
-        console.warn('rtp_push:', F.rtp_last_error(rtpSession));
-        continue;
-      }
-      if (r === 1) {
-        // Track inter-frame Δts on every completed frame so the pace-drop
-        // threshold self-adapts to the source framerate.  Sanity-clamp to
-        // (0, 1 s) to ignore wrap-around or out-of-order timestamps.
-        if (lastFramePacketTs !== null) {
-          const d = (pkt.timestamp - lastFramePacketTs) >>> 0;
-          if (d > 0 && d < 90000) framePeriodMs = d * (1000 / 90000);
-        }
-        lastFramePacketTs = pkt.timestamp;
-
-        // Pre-decode pace-drop: if the completed frame's wall-clock target
-        // is already past by more than PACE_DROP_PERIODS periods, skip
-        // decoding entirely (pop the reassembled bitstream from the ready
-        // slot).  wallStart===0 during pre-roll → check is bypassed.
-        if (paceDropEnabled() && pacing === 'paced' && wallStart !== 0) {
-          const dtMs    = ((pkt.timestamp - rtpStart) >>> 0) * (1000 / 90000);
-          const target  = wallStart + totalPausedMs + dtMs;
-          const period  = framePeriodMs || (1000 / 60);
-          if (performance.now() - target > PACE_DROP_PERIODS * period) {
-            F.rtp_drop_ready(rtpSession);
-            droppedByPace++;
-            continue;
-          }
-        }
-
-        if (pacing === 'paced') {
-          // Backpressure: wait for room in the ring before decoding.
-          // fastYield() lets rAF run and drain one frame.
-          while (_ringCount >= RING_CAPACITY && running && playbackGen === myGen && !paused) {
-            await fastYield();
-          }
-          if (playbackGen !== myGen || !running) break;
-          if (paused) await waitIfPaused();
-
-          const entry = decodeFrame(pkt.timestamp);
-          if (entry) {
-            ringPush(entry);
-            if (verboseLog && decodeCount <= 5) {
-              const d = framePeriodMs ? framePeriodMs.toFixed(2) : '—';
-              console.log(`[rtp_demo] frame ${decodeCount} RTP ts=${pkt.timestamp}  Δt=${d} ms`);
-            }
-          }
-        } else {
-          // ASAP mode: decode + render inline on the same task, as before.
-          const ok = decodeAndRender(pkt.timestamp);
-          if (ok && !firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
-          if (verboseLog && frameCount <= 5 && ok) {
-            const d = framePeriodMs ? framePeriodMs.toFixed(2) : '—';
-            console.log(`[rtp_demo] frame ${frameCount} RTP ts=${pkt.timestamp}  Δt=${d} ms`);
-          }
-          // Pump microtasks so the UI stays responsive.
-          await fastYield();
-        }
-      }
+      // Push to the worker.  Worker reassembles + decodes; frames arrive
+      // asynchronously via onFrameFromWorker.  Worker drops surplus frames
+      // (>1 ready) so a slow consumer can't backlog packets indefinitely.
+      dec.pushPacket(b);
     }
   } catch (e) {
-    // Only surface the error if we are still the current generation — a
-    // superseded loop may throw during its reader.cancel() teardown, and we
-    // don't want that to clobber the new playback's UI.
     if (playbackGen === myGen) {
       console.error('playback error:', e);
       if (pacing === 'paced') {
-        // Defer overlay to the rAF loop so in-flight ring frames still paint.
         decodeError = e;
       } else {
         setOverlay('Playback error: ' + e.message, 'error');
@@ -1982,7 +1771,7 @@ async function startPlayback(source) {
     return;
   }
 
-  // ASAP-mode cleanup (synchronous, same as pre-refactor behaviour).
+  // ASAP-mode cleanup (synchronous, same as pre-Phase-2 behaviour).
   if (ticker) { clearInterval(ticker); ticker = 0; }
   if (playbackGen !== myGen) {
     console.log(`[rtp_demo] gen ${myGen} superseded by ${playbackGen}; skipping UI cleanup`);
@@ -2082,6 +1871,9 @@ document.getElementById('btn-stop').addEventListener('click', () => {
   if (_rafId) { cancelAnimationFrame(_rafId); _rafId = 0; }
   ringClear();
   if (ticker) { clearInterval(ticker); ticker = 0; }
+  // Tear down the worker so the next Play can pick a different variant
+  // (and we don't leak workers across stop/start cycles).
+  if (dec) { try { dec.close(); } catch (e) { /* ignore */ } dec = null; }
   // Update UI directly — the superseded loop skips its own cleanup.
   document.getElementById('btn-play').disabled  = false;
   document.getElementById('btn-pause').disabled = true;

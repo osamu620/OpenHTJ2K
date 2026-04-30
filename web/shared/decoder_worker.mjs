@@ -33,14 +33,27 @@ const STATS_PERIOD_MS = 500;
 let lastStatsAt = 0;
 
 let threadCount = 4;
+let isMtBuild   = true;   // false for 'simd' / 'scalar' — disables create_decoder_mt path
+let reduceNL    = 0;      // resolution-reduce; 0 = full, 1 = half, 2 = quarter
 // 'planar' = post Y/Cb/Cr buffers (cheap; renderer applies matrix in shader)
 // 'rgba'   = post a single RGBA8 buffer with WASM-side matrix already applied
 //            (used by the Canvas2D fallback; ~2× the bytes but no main-thread work)
 let outputMode = 'planar';
 
-async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar' }) {
+const VARIANT_FILE = {
+  mt_simd: 'libopen_htj2k_mt_simd.js',
+  simd:    'libopen_htj2k_simd.js',
+  mt:      'libopen_htj2k_mt.js',
+  scalar:  'libopen_htj2k.js',
+};
+
+async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar',
+                      variant = 'mt_simd', reduceNL: rn = 0 }) {
   threadCount = tc;
   outputMode = output;
+  reduceNL   = rn | 0;
+  const file = VARIANT_FILE[variant] || VARIANT_FILE.mt_simd;
+  isMtBuild  = (variant === 'mt_simd' || variant === 'mt');
   // mt_simd works in a nested worker as long as Emscripten's pthread
   // bootstrap doesn't fall back to a relative `import('./libopen_htj2k_*.js')`
   // — that import resolves against the outer worker's URL in a nested
@@ -50,8 +63,8 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
   // workers as `urlOrBlob`, bypassing the relative import.  Verified
   // via web/perf/mt_worker_diag.html — without mainScriptUrlOrBlob the
   // inner workers fire "Uncaught [object Event]" storms; with it, all
-  // pthreads bootstrap cleanly.
-  const factoryURL = new URL(`${wasmBase}libopen_htj2k_mt_simd.js`, self.location.href);
+  // pthreads bootstrap cleanly.  Harmless on single-threaded builds.
+  const factoryURL = new URL(file, wasmBase);
   const factory = (await import(factoryURL.href)).default;
   M = await factory({
     locateFile:         (path) => new URL(path, factoryURL.href).href,
@@ -76,7 +89,10 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
     rtp_drops:         M.cwrap('rtp_frames_dropped',     'number', ['number']),
     rtp_gaps:          M.cwrap('rtp_seq_gaps',           'number', ['number']),
     rtp_last_error:    M.cwrap('rtp_last_error',         'string', ['number']),
-    create_decoder_mt: M.cwrap('create_decoder_mt',      'number', ['number','number','number','number']),
+    create_decoder:    M.cwrap('create_decoder',         'number', ['number','number','number']),
+    create_decoder_mt: isMtBuild
+      ? M.cwrap('create_decoder_mt',                     'number', ['number','number','number','number'])
+      : null,
     reset_decoder:     M.cwrap('reset_decoder_with_bytes','void',  ['number','number','number','number']),
     parse_j2c:         M.cwrap('parse_j2c_data',         'void',   ['number']),
     invoke_planar_u8:  M.cwrap('invoke_decoder_planar_u8','void',  ['number','number','number','number']),
@@ -87,6 +103,8 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
     get_width:         M.cwrap('get_width',              'number', ['number','number']),
     get_height:        M.cwrap('get_height',             'number', ['number','number']),
     get_num_components:M.cwrap('get_num_components',     'number', ['number']),
+    get_depth:         M.cwrap('get_depth',              'number', ['number','number']),
+    get_signed:        M.cwrap('get_signed',             'number', ['number','number']),
     get_colorspace:    M.cwrap('get_colorspace',         'number', ['number']),
   };
 
@@ -98,7 +116,7 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
   rgbaPtr   = M._malloc(RGBA_BUF);
   session   = F.rtp_create();
 
-  self.postMessage({ type: 'ready' });
+  self.postMessage({ type: 'ready', variant });
 }
 
 function reset() {
@@ -106,6 +124,21 @@ function reset() {
   if (decoder) { F.release_decoder(decoder); decoder = 0; }
   if (session) F.rtp_reset(session);
   lastStatsAt = 0;
+}
+
+// reduce_NL is set at decoder creation time and can't be changed on a live
+// instance — main thread calls this when its 'auto' resolution heuristic
+// flips between half and full after seeing the first frame.  We just drop
+// the current decoder; the next drainReady() rebuilds it with the new value.
+function setReduceNL(n) {
+  reduceNL = n | 0;
+  if (decoder) { F.release_decoder(decoder); decoder = 0; }
+}
+
+function makeDecoder(framePtr, fsz) {
+  return isMtBuild
+    ? F.create_decoder_mt(framePtr, fsz, reduceNL, threadCount)
+    : F.create_decoder(framePtr, fsz, reduceNL);
 }
 
 function pushPacket(bytes) {
@@ -141,14 +174,32 @@ function drainReady() {
     const rtpTs     = F.rtp_pop_ts(session);
 
     const t0 = performance.now();
-    if (!decoder) decoder = F.create_decoder_mt(framePtr, fsz, 0, threadCount);
-    else          F.reset_decoder(decoder, framePtr, fsz, 0);
+    if (!decoder) decoder = makeDecoder(framePtr, fsz);
+    else          F.reset_decoder(decoder, framePtr, fsz, reduceNL);
     F.parse_j2c(decoder);
-    const w  = F.get_width(decoder, 0);
-    const h  = F.get_height(decoder, 0);
-    const nc = F.get_num_components(decoder);
-    const cw = nc >= 2 ? F.get_width(decoder, 1)  : w;
-    const ch = nc >= 2 ? F.get_height(decoder, 1) : h;
+    // get_* return FULL-resolution dims regardless of reduce_NL.  invoke_*
+    // writes pixels at REDUCED dims = ceil(full / 2^reduce_NL).
+    const shift = reduceNL | 0;
+    const fullW = F.get_width(decoder, 0)  | 0;
+    const fullH = F.get_height(decoder, 0) | 0;
+    const w  = (fullW + (1 << shift) - 1) >> shift;
+    const h  = (fullH + (1 << shift) - 1) >> shift;
+    const nc = F.get_num_components(decoder) | 0;
+    const fullCW = nc >= 2 ? (F.get_width(decoder, 1)  | 0) : fullW;
+    const fullCH = nc >= 2 ? (F.get_height(decoder, 1) | 0) : fullH;
+    const cw = (fullCW + (1 << shift) - 1) >> shift;
+    const ch = (fullCH + (1 << shift) - 1) >> shift;
+    const depth = F.get_depth(decoder, 0) | 0;
+    // Per-component diagnostics (full-res dims, signedness, depth).  Capped
+    // at 4 components — RGB/RGBA/CMYK/YCbCrA cover everything we expect.
+    const compW = [], compH = [], compS = [], compD = [];
+    const ncMeta = Math.min(nc, 4);
+    for (let c = 0; c < ncMeta; c++) {
+      compW.push(F.get_width(decoder, c)  | 0);
+      compH.push(F.get_height(decoder, c) | 0);
+      compS.push(F.get_signed(decoder, c) | 0);
+      compD.push(F.get_depth(decoder, c)  | 0);
+    }
 
     const colorspace = F.get_colorspace(decoder);
     const isRGB    = (nc >= 3 && colorspace === 16);   // ENUMCS_SRGB
@@ -167,7 +218,8 @@ function drainReady() {
       const decodeMs = performance.now() - t0;
       const rgbaBuf = M.HEAPU8.slice(rgbaPtr, rgbaPtr + w * h * 4).buffer;
       self.postMessage(
-        { type: 'frame', mode: 'rgba', w, h, nc, colorspace,
+        { type: 'frame', mode: 'rgba', w, h, fullW, fullH, nc, colorspace, depth,
+          compW, compH, compS, compD,
           matrix, range, primaries, transfer, rtpTs, decodeMs,
           rgba: rgbaBuf },
         [rgbaBuf]
@@ -183,7 +235,8 @@ function drainReady() {
       const cbBuf = M.HEAPU8.slice(cbPtr, cbPtr + cw * ch).buffer;
       const crBuf = M.HEAPU8.slice(crPtr, crPtr + cw * ch).buffer;
       self.postMessage(
-        { type: 'frame', mode: 'planar', w, h, cw, ch, nc, colorspace,
+        { type: 'frame', mode: 'planar', w, h, cw, ch, fullW, fullH, nc, colorspace, depth,
+          compW, compH, compS, compD,
           isRGB, isYCbCr,
           matrix, range, primaries, transfer, rtpTs, decodeMs,
           y: yBuf, cb: cbBuf, cr: crBuf },
@@ -218,6 +271,9 @@ self.addEventListener('message', async ({ data }) => {
         break;
       case 'reset':
         reset();
+        break;
+      case 'setReduceNL':
+        setReduceNL(data.value);
         break;
       case 'close':
         if (decoder) { F.release_decoder(decoder); decoder = 0; }
