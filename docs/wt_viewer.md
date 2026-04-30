@@ -272,12 +272,6 @@ This is the same recommendation as in
 
 ## Troubleshooting
 
-**The launcher exits immediately with `terminated`.** Old launcher
-shipped a `pkill -f "wt_bridge"` whose `-f` form matched the script's
-own argv (which contains the string "wt_bridge" via its path),
-SIGTERM'ing the script before it could start. Fixed in commit
-26f3479; pull and re-run.
-
 **Browser shows nothing, no errors.** Most common cause: WebTransport
 isn't available because the page isn't a secure context. Use HTTPS
 (the launcher does so by default) or the Chrome flag workaround above.
@@ -289,12 +283,6 @@ proceed.** The static server's self-signed cert: click
 "Advanced → Proceed to … (unsafe)". If the option doesn't appear, the
 HSTS cache may have the host pinned — try a different port or run in
 incognito.
-
-**Browser shows green frames.** This was a colorspace-detection bug
-fixed in commit c150dee. If you somehow still see it on a current
-build, check the overlay (`?debug=1`) for the H.273 matrix value the
-producer is sending and confirm the viewer's
-`get_colorspace` returns `0` (raw codestream) for an RFC 9828 stream.
 
 **Bridge log: `failed to sufficiently increase receive buffer size`.**
 The kernel clamped `SO_RCVBUF`. Raise `net.core.rmem_max`; see above.
