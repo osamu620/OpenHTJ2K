@@ -46,11 +46,21 @@ set(WASM_FLAGS "${WASM_FLAGS_COMMON}")
 # Multi-threaded link flags — adds pthreads and SharedArrayBuffer support.
 # PTHREAD_POOL_SIZE is set at link time; the JS runtime pre-creates this many
 # Web Workers so that std::thread / ThreadPool do not block on worker creation.
+#
+# Capped at 4 deliberately — Phase A0 (reference_wasm_wt_viewer_perf) showed
+# the HT decoder saturates at 4 threads, so a larger pool gives no perf
+# benefit.  Critically, every pool worker fetches libopen_htj2k_mt_simd.js
+# in parallel at module-init, and Chrome's HTTP/1.1 connection cap is 6 per
+# host — a 32-worker pool (e.g. on a 32-thread CPU with the prior default
+# `navigator.hardwareConcurrency`) overruns the cap when serving over
+# self-signed HTTPS, causing roughly half the inner pthread workers to fail
+# their dynamic import with a silent "[object Event]" error.  4 fits
+# comfortably under the cap and matches the actual decode-time sweet spot.
 set(WASM_MT_FLAGS "\
     ${WASM_FLAGS_COMMON} \
     -pthread \
     -s USE_PTHREADS=1 \
-    -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency||4 \
+    -s PTHREAD_POOL_SIZE=4 \
     "
 )
 # Pull in the open_htj2k library (compiled without SIMD or pthread flags → scalar single-threaded build).
