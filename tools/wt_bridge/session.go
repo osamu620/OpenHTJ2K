@@ -64,7 +64,10 @@ func runSession(ctx context.Context, sess *webtransport.Session, fan *fanout) {
 				}
 				return
 			}
-			forwarded = atomic.AddUint64(&forwarded, 1)
+			// Local-only counter — this goroutine is the sole writer and
+			// reader, so no atomic dance is needed.  (Cross-session totals
+			// live on `fanout.stats` which uses atomics.)
+			forwarded++
 			if forwarded == 1 || forwarded%1000 == 0 {
 				log.Printf("session %d forwarded=%d", id, forwarded)
 			}
