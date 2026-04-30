@@ -41,6 +41,17 @@ export class DecoderClient {
         }
       };
       this.worker.addEventListener('message', handler);
+      // Surface load-time failures (404, syntax error, uncaught throw before
+      // the worker can postMessage) — otherwise the ready promise hangs
+      // forever and the page sits on "awaiting connection…".
+      this.worker.addEventListener('error', (ev) => {
+        this.worker.removeEventListener('message', handler);
+        reject(new Error(`worker load: ${ev.message || 'unknown'} (${ev.filename}:${ev.lineno})`));
+      });
+      this.worker.addEventListener('messageerror', () => {
+        this.worker.removeEventListener('message', handler);
+        reject(new Error('worker messageerror'));
+      });
     });
 
     this.worker.addEventListener('message', ({ data }) => {
