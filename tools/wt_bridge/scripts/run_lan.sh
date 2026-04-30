@@ -5,9 +5,13 @@
 # Ctrl-C.
 #
 # Layout:
-#   This host  → wt_bridge (UDP 6000  ← Pi)  +  static server (HTTP 8765)
+#   This host  → wt_bridge (UDP 6000 ← Pi)  +  static server (HTTPS 8765)
 #   Pi         → rpicam-vid --rtp-host <this-host-ip> --rtp-port 6000 …
-#   Browser    → http://<this-host-ip>:8765/viewer/?url=…&certHash=…
+#   Browser    → https://<this-host-ip>:8765/viewer/?url=…&certHash=…
+#
+# HTTP_NO_TLS=1 falls back to plain HTTP (useful for very-local testing
+# where openssl isn't available); WebTransport then only works from
+# http://localhost on the bridge host itself.
 set -e
 cd "$(dirname "$0")/../../.."     # repo root
 
@@ -18,6 +22,7 @@ LAN_IP=${LAN_IP:-$(ip -4 addr show | awk '/inet / && $2 !~ /127\./ {print $2}' |
 UDP_PORT=${UDP_PORT:-6000}
 QUIC_PORT=${QUIC_PORT:-4433}
 HTTP_PORT=${HTTP_PORT:-8765}
+CERT_DIR=${CERT_DIR:-/tmp/wt_static_cert}
 
 # Make sure the WT bridge is built.
 [ -x ./tools/wt_bridge/wt_bridge ] || (
@@ -34,8 +39,24 @@ sleep 0.5
 
 trap 'echo; echo "[run_lan] shutting down"; pkill -P $$ 2>/dev/null; exit 0' INT TERM
 
-# Static server bound to all interfaces (-bind), serves /viewer/, /wasm/, /perf/.
-node web/perf/serve.mjs "$HTTP_PORT" --bind > /tmp/wtb_lan_serve.log 2>&1 &
+# Generate or refresh the static-server cert (HTTPS).  Skipped when
+# HTTP_NO_TLS=1; in that case the static server runs HTTP-only and only a
+# browser at http://localhost:HTTP_PORT can use WebTransport (cross-LAN
+# browsers will see `WebTransport is undefined` due to the secure-context
+# requirement).
+if [ "${HTTP_NO_TLS:-}" = "1" ] || ! command -v openssl >/dev/null; then
+  SCHEME="http"
+  SERVER_TLS_ARGS=()
+else
+  ./tools/wt_bridge/scripts/gen_static_cert.sh "$CERT_DIR" "$LAN_IP"
+  SCHEME="https"
+  SERVER_TLS_ARGS=(--cert "$CERT_DIR/cert.pem" --key "$CERT_DIR/key.pem")
+fi
+
+# Static server bound to all interfaces (--bind), serves /viewer/, /wasm/,
+# /perf/.  HTTPS when a cert was generated above.
+node web/perf/serve.mjs "$HTTP_PORT" --bind "${SERVER_TLS_ARGS[@]}" \
+  > /tmp/wtb_lan_serve.log 2>&1 &
 SERVER_PID=$!
 sleep 0.3
 
@@ -50,21 +71,22 @@ sleep 1.0
 HASH=$(grep "viewer URL hint" /tmp/wtb_lan_bridge.log | sed -E 's/.*\?certHash=//' | tr -d '\r\n')
 [ -n "$HASH" ] || { echo "bridge failed to start; see /tmp/wtb_lan_bridge.log" >&2; cat /tmp/wtb_lan_bridge.log >&2; exit 2; }
 
-# URL-encode the QUIC URL for the browser query string.
+# URL-encode the WebTransport URL for the browser query string.
 QURL_ENC=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "https://${LAN_IP}:${QUIC_PORT}/")
 
-QURL_LOCAL_ENC=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "https://${LAN_IP}:${QUIC_PORT}/")
-
-cat <<EOF
+if [ "$SCHEME" = "https" ]; then
+  PAGE_URL_LAN="https://${LAN_IP}:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
+  cat <<EOF
 
 ========================================================================
  Stack is up.
 
  Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point Pi producer here)
  Bridge QUIC listener: 0.0.0.0:${QUIC_PORT}
- Static server:        http://0.0.0.0:${HTTP_PORT}/viewer/
- Cert SHA-256:
+ Static server:        ${SCHEME}://0.0.0.0:${HTTP_PORT}/viewer/
+ Cert SHA-256 (WebTransport):
    ${HASH}
+ Static-server cert: $CERT_DIR/cert.pem  (self-signed; click through once)
 
  ── Pi side ────────────────────────────────────────────────────────────
    rpicam-vid \\
@@ -74,23 +96,14 @@ cat <<EOF
        --width 1920 --height 1080 --framerate 30 --inline \\
        --output -
 
- ── Browser, on THIS host (recommended) ────────────────────────────────
-   Chrome here:
+ ── Browser (any LAN device) ───────────────────────────────────────────
+   ${PAGE_URL_LAN}
 
-     http://localhost:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_LOCAL_ENC}&certHash=${HASH}
-
- ── Browser, on another LAN device (needs a flag) ──────────────────────
-   WebTransport requires a secure context.  http://localhost is one;
-   http://${LAN_IP} is not.  Two workarounds for testing:
-
-   1. Launch Chrome with the LAN origin whitelisted (paste in another shell):
-        google-chrome \\
-            --user-data-dir=/tmp/chrome-wt-lan \\
-            --unsafely-treat-insecure-origin-as-secure="http://${LAN_IP}:${HTTP_PORT}" \\
-            "http://${LAN_IP}:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
-
-   2. Or run Chrome with chrome://flags/#unsafely-treat-insecure-origin-as-secure
-      and add http://${LAN_IP}:${HTTP_PORT} to the list.
+   First load: Chrome shows "Your connection is not private" because
+   the static server's cert is self-signed.  Click "Advanced → Proceed
+   to ${LAN_IP} (unsafe)".  The browser remembers the decision per-cert
+   for ~13 days; subsequent loads are silent.  WebTransport itself
+   does NOT trigger this prompt — its cert is hash-pinned.
 
  Logs:
    tail -f /tmp/wtb_lan_bridge.log
@@ -100,6 +113,43 @@ cat <<EOF
 ========================================================================
 
 EOF
+else
+  PAGE_URL_LOCAL="http://localhost:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
+  PAGE_URL_LAN="http://${LAN_IP}:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
+  cat <<EOF
+
+========================================================================
+ Stack is up — HTTP mode (HTTP_NO_TLS=1 or openssl unavailable).
+
+ Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point Pi producer here)
+ Bridge QUIC listener: 0.0.0.0:${QUIC_PORT}
+ Static server:        http://0.0.0.0:${HTTP_PORT}/viewer/
+ Cert SHA-256:
+   ${HASH}
+
+ ── Pi side ────────────────────────────────────────────────────────────
+   rpicam-vid --rtp-host ${LAN_IP} --rtp-port ${UDP_PORT} \\
+       --rtp-prims 1 --rtp-trans 13 --rtp-mat 5 --rtp-range 0 \\
+       --width 1920 --height 1080 --framerate 30 --inline --output -
+
+ ── Browser, on THIS host (recommended) ────────────────────────────────
+   ${PAGE_URL_LOCAL}
+
+ ── Browser, on another LAN device (needs a Chrome flag) ───────────────
+   google-chrome \\
+       --user-data-dir=/tmp/chrome-wt-lan \\
+       --unsafely-treat-insecure-origin-as-secure="http://${LAN_IP}:${HTTP_PORT}" \\
+       "${PAGE_URL_LAN}"
+
+ Logs:
+   tail -f /tmp/wtb_lan_bridge.log
+   tail -f /tmp/wtb_lan_serve.log
+
+ Ctrl-C to stop.
+========================================================================
+
+EOF
+fi
 
 # Tail the bridge log so the user sees session accept / per-thousand counters live.
 tail -f /tmp/wtb_lan_bridge.log

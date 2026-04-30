@@ -4,11 +4,18 @@
 // /fixtures/* (mapped to ~/Documents/data/videos).
 //
 // Usage:
-//   node web/perf/serve.mjs [port]            # default 8765
-//   node web/perf/serve.mjs --bind 0.0.0.0    # bind to all interfaces
+//   node web/perf/serve.mjs [port]                    # HTTP, default 8765
+//   node web/perf/serve.mjs --bind                    # listen on all interfaces
+//   node web/perf/serve.mjs --cert C --key K          # HTTPS (PEM paths)
+//
+// HTTPS rationale: WebTransport is only available on secure-context pages.
+// `http://localhost` qualifies; `http://<LAN-IP>` does not.  Serving over
+// HTTPS — even with a self-signed cert the user has to click through —
+// unblocks cross-LAN browsers without requiring a Chrome flag.
 
-import http from 'http';
-import { createReadStream, statSync } from 'fs';
+import http  from 'http';
+import https from 'https';
+import { createReadStream, statSync, readFileSync } from 'fs';
 import { extname, join, normalize, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
@@ -16,6 +23,17 @@ import os from 'os';
 const REPO     = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const PORT     = parseInt(process.argv.find(a => /^\d+$/.test(a)) || '8765', 10);
 const BIND_ALL = process.argv.includes('--bind');
+
+function flag(name) {
+  const i = process.argv.indexOf('--' + name);
+  return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
+}
+const CERT_PATH = flag('cert');
+const KEY_PATH  = flag('key');
+if ((CERT_PATH && !KEY_PATH) || (!CERT_PATH && KEY_PATH)) {
+  console.error('--cert and --key must both be provided');
+  process.exit(2);
+}
 
 const ROUTES = {
   '/perf/':    join(REPO, 'web', 'perf'),
@@ -33,7 +51,7 @@ const MIME = {
   '.rtp':  'application/octet-stream',
 };
 
-const server = http.createServer((req, res) => {
+const handler = (req, res) => {
   // Cross-origin isolation headers for SharedArrayBuffer.
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
@@ -91,9 +109,22 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(200, { 'Content-Length': st.size });
   createReadStream(filePath).pipe(res);
-});
+};
+
+let server, scheme;
+if (CERT_PATH) {
+  // HTTPS — load the PEM bundle and let Node's TLS do the rest.
+  server = https.createServer({
+    cert: readFileSync(CERT_PATH),
+    key:  readFileSync(KEY_PATH),
+  }, handler);
+  scheme = 'https';
+} else {
+  server = http.createServer(handler);
+  scheme = 'http';
+}
 
 const host = BIND_ALL ? '0.0.0.0' : '127.0.0.1';
 server.listen(PORT, host, () => {
-  console.log(`http://${host === '0.0.0.0' ? 'localhost' : host}:${PORT}/perf/`);
+  console.log(`${scheme}://${host === '0.0.0.0' ? 'localhost' : host}:${PORT}/perf/`);
 });

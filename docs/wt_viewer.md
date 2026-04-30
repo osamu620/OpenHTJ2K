@@ -201,19 +201,29 @@ resolution or frame rate at the producer.
 
 **Secure-context requirement.** Browsers expose the WebTransport API
 only on secure contexts. `http://localhost` qualifies; `http://<LAN-IP>`
-does not. A browser running on the bridge host works as-is. A browser
-running on a different LAN device needs a Chrome flag — the launcher
-prints the exact form:
+does not. The launcher (`run_lan.sh`) handles this by serving the page
+over HTTPS using a short-lived self-signed certificate
+(`tools/wt_bridge/scripts/gen_static_cert.sh`). Browsers will show
+"Your connection is not private" on first load — click
+"Advanced → Proceed". The decision is remembered per-cert for ~13 days,
+so subsequent loads are silent. The WebTransport session itself does not
+trigger this prompt because its cert is hash-pinned.
+
+The static server's `--cert/--key` flags can also be used standalone:
 
 ```bash
-google-chrome \
-    --user-data-dir=/tmp/chrome-wt-lan \
-    --unsafely-treat-insecure-origin-as-secure="http://192.168.0.14:8765" \
-    "http://192.168.0.14:8765/viewer/?…"
+./tools/wt_bridge/scripts/gen_static_cert.sh /tmp/wt_static_cert <LAN_IP>
+node web/perf/serve.mjs 8765 --bind \
+    --cert /tmp/wt_static_cert/cert.pem \
+    --key  /tmp/wt_static_cert/key.pem
 ```
 
-Phase C will replace this with HTTPS on the static server (using the
-same dev cert), removing the flag dependency.
+Set `HTTP_NO_TLS=1` on the launcher to fall back to plain HTTP (only
+useful when openssl isn't available); WebTransport then works only from
+`http://localhost:<port>` on the bridge host itself, and cross-LAN
+viewers need the
+`--unsafely-treat-insecure-origin-as-secure="http://<LAN-IP>:<port>"`
+Chrome flag.
 
 **Browser support.** Chromium-based browsers only as of 2026-04.
 Firefox WebTransport support is partial; Safari has no implementation.
@@ -249,9 +259,16 @@ SIGTERM'ing the script before it could start. Fixed in commit
 26f3479; pull and re-run.
 
 **Browser shows nothing, no errors.** Most common cause: WebTransport
-isn't available because the page isn't a secure context. See the
-flag workaround above. The page checks for `WebTransport in window`
-and throws a visible error if absent — open DevTools → Console.
+isn't available because the page isn't a secure context. Use HTTPS
+(the launcher does so by default) or the Chrome flag workaround above.
+The page checks for `WebTransport in window` and throws a visible
+error if absent — open DevTools → Console.
+
+**Chrome shows "Your connection is not private" and refuses to
+proceed.** The static server's self-signed cert: click
+"Advanced → Proceed to … (unsafe)". If the option doesn't appear, the
+HSTS cache may have the host pinned — try a different port or run in
+incognito.
 
 **Browser shows green frames.** This was a colorspace-detection bug
 fixed in commit c150dee. If you somehow still see it on a current
