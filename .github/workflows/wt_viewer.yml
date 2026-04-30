@@ -1,0 +1,176 @@
+# CI for the WebTransport viewer track.
+#
+# Three guarantees:
+#  1. The Go bridge under tools/wt_bridge/ builds clean and passes `go vet`.
+#  2. The Emscripten/WASM build still emits the rtp_session_* + decoder API
+#     surface the viewer cwraps from web/viewer/index.html — a refactor of
+#     subprojects/src/wrapper.cpp that drops or renames an export will fail
+#     here instead of silently breaking the viewer.
+#  3. The static server (web/perf/serve.mjs) can serve the viewer page over
+#     HTTP with the COOP/COEP headers required for SharedArrayBuffer.
+#
+# End-to-end decode against a captured .rtp fixture is deferred until a
+# CI-friendly fixture (a few MB) is in the repo.
+name: wt_viewer
+
+on:
+  push:
+    branches: [ main, "feat/webtransport-viewer" ]
+    paths:
+      - 'tools/wt_bridge/**'
+      - 'web/**'
+      - 'subprojects/src/wrapper.cpp'
+      - '.github/workflows/wt_viewer.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'tools/wt_bridge/**'
+      - 'web/**'
+      - 'subprojects/src/wrapper.cpp'
+      - '.github/workflows/wt_viewer.yml'
+  workflow_dispatch:
+
+jobs:
+  bridge:
+    name: bridge (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/wt_bridge
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/wt_bridge/go.mod
+          cache: true
+          cache-dependency-path: tools/wt_bridge/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build (linux/amd64)
+        run: go build -v -o wt_bridge .
+
+      - name: go build (linux/arm64, cross)
+        run: GOOS=linux GOARCH=arm64 go build -o wt_bridge_arm64 .
+
+      - name: --help smoke
+        run: ./wt_bridge -h | head -5
+
+      - name: --dev cert smoke (start, capture hash, exit)
+        # Verifies cert generation and the listener startup path.  We don't
+        # send traffic — just confirm the bridge can boot, print a hash, and
+        # bind both ports without errors.
+        run: |
+          set -e
+          # Background the bridge; capture stderr to a log; SIGTERM after 2 s.
+          ./wt_bridge --listen-udp 127.0.0.1:6000 --listen-quic 127.0.0.1:4433 --dev \
+            > bridge.log 2>&1 &
+          BRIDGE_PID=$!
+          sleep 2
+          kill $BRIDGE_PID 2>/dev/null || true
+          wait $BRIDGE_PID 2>/dev/null || true
+          # Cert hash printed?
+          grep -q '^\[wt_bridge\] dev cert SHA-256:' bridge.log
+          grep -E '^\[wt_bridge\]   [0-9a-f]{2}(:[0-9a-f]{2}){31}$' bridge.log
+          # UDP and QUIC listeners up?
+          grep -q 'webtransport listening' bridge.log
+          grep -q 'udp listening' bridge.log
+          echo '--- bridge.log (truncated) ---'
+          head -20 bridge.log
+
+  wasm-exports:
+    name: WASM build + viewer API surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.61
+          actions-cache-folder: emsdk-cache
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build WASM (mt_simd target only — what the viewer actually loads)
+        run: |
+          cd subprojects
+          mkdir -p build_wt && cd build_wt
+          emcmake cmake -DCMAKE_BUILD_TYPE=Release ..
+          cmake --build . -j$(nproc) -t libopen_htj2k_simd libopen_htj2k_mt_simd
+
+      - name: Verify the rtp_session_* API surface is exported
+        # The viewer cwraps these names from web/viewer/index.html.  If a
+        # refactor in wrapper.cpp drops EMSCRIPTEN_KEEPALIVE on any of them
+        # the JS module would link them to undefined and the viewer would
+        # silently no-op.  Catch that here.
+        run: |
+          set -e
+          JS=subprojects/build_wt/html/libopen_htj2k_mt_simd.js
+          [ -f "$JS" ] || { echo "missing $JS"; exit 1; }
+          required=(
+            _create_decoder_mt
+            _reset_decoder_with_bytes
+            _parse_j2c_data
+            _invoke_decoder_to_rgba
+            _invoke_decoder_planar_u8
+            _release_j2c_data
+            _get_width _get_height _get_num_components _get_colorspace
+            _apply_ycbcr_bt601_to_rgba _apply_ycbcr_bt709_to_rgba
+            _rtp_session_create _rtp_session_destroy _rtp_session_reset
+            _rtp_push_packet _rtp_peek_frame_size _rtp_pop_frame
+            _rtp_drop_ready _rtp_ready_count
+            _rtp_pop_frame_timestamp _rtp_pop_frame_matrix
+            _rtp_pop_frame_range _rtp_pop_frame_primaries
+            _rtp_pop_frame_transfer
+            _rtp_frames_emitted _rtp_frames_dropped _rtp_seq_gaps
+            _rtp_last_error
+          )
+          missing=0
+          for sym in "${required[@]}"; do
+            if ! grep -q "\b${sym}\b" "$JS"; then
+              echo "MISSING export: $sym"
+              missing=1
+            fi
+          done
+          [ $missing -eq 0 ] || exit 1
+          echo "all ${#required[@]} required exports present"
+
+      - name: Smoke-test the static server (COOP/COEP, viewer page, WASM, /report)
+        # serve.mjs is what the viewer page is loaded through.  Verify the
+        # COOP/COEP headers are present (SharedArrayBuffer requires them)
+        # and that the viewer.html, the WASM, and the /report POST endpoint
+        # all respond.
+        run: |
+          set -e
+          node web/perf/serve.mjs 8765 > serve.log 2>&1 &
+          SERVE_PID=$!
+          sleep 1
+          trap "kill $SERVE_PID 2>/dev/null || true" EXIT
+
+          # Headers
+          curl -sS -I http://127.0.0.1:8765/viewer/ \
+            | tee headers.txt
+          grep -qi '^Cross-Origin-Opener-Policy: same-origin' headers.txt
+          grep -qi '^Cross-Origin-Embedder-Policy: require-corp' headers.txt
+
+          # Viewer HTML loads
+          curl -sS http://127.0.0.1:8765/viewer/ | grep -q 'OpenHTJ2K WebTransport viewer'
+
+          # WASM module + binary served
+          curl -sSI http://127.0.0.1:8765/wasm/libopen_htj2k_mt_simd.js   | grep -q '^HTTP/1.1 200'
+          curl -sSI http://127.0.0.1:8765/wasm/libopen_htj2k_mt_simd.wasm | grep -q '^HTTP/1.1 200'
+
+          # /report POST
+          curl -sS -o /dev/null -w '%{http_code}' \
+              -X POST -H 'content-type: application/json' \
+              -d '{"ci":"smoke"}' \
+              http://127.0.0.1:8765/report | grep -q '^204$'
+          grep -q '^REPORT' serve.log
+          echo "static-server smoke OK"
