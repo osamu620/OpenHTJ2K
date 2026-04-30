@@ -39,8 +39,19 @@ const ROUTES = {
   '/perf/':      join(REPO, 'web', 'perf'),
   '/wt_viewer/': join(REPO, 'web', 'wt_viewer'),
   '/shared/':    join(REPO, 'web', 'shared'),
+  // `/wasm-full/` MUST come before `/wasm/` — startsWith matching takes the
+  // first hit, and `/wasm-full/...` would otherwise be routed to /wasm/'s
+  // build_wt directory.
+  // Full set of WASM variants (mt_simd, simd, mt, scalar) for rtp_demo's
+  // variant A/B selector — `web/build/html/` gets all four; build_wt only
+  // ships mt_simd + simd (smaller).  Local rtp_demo runs with
+  // ?wasmBase=/wasm-full/ to cover the scalar/mt buttons.
+  '/wasm-full/': join(REPO, 'web', 'build', 'html'),
   '/wasm/':      join(REPO, 'web', 'build_wt', 'html'),
   '/fixtures/':  resolve(os.homedir(), 'Documents', 'data', 'videos'),
+  // Catch-all for top-level web pages (rtp_demo.html, index.html, etc.).
+  // Last so the more-specific prefixes above win.
+  '/':           join(REPO, 'web'),
 };
 
 const MIME = {
@@ -53,9 +64,15 @@ const MIME = {
 };
 
 const handler = (req, res) => {
-  // Cross-origin isolation headers for SharedArrayBuffer.
+  // Cross-origin isolation headers for SharedArrayBuffer.  COEP is
+  // `credentialless` to match the production Cloudflare _headers file —
+  // strict `require-corp` would block cross-origin .rtp fetches (samples.
+  // osamu620.dev sets ACAO but not CORP), since under require-corp every
+  // cross-origin response must carry CORP.  Credentialless waives CORP at
+  // the cost of stripping credentials from cross-origin requests, which
+  // is fine for our public sample buckets.
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   res.setHeader('Cache-Control', 'no-store');
 
