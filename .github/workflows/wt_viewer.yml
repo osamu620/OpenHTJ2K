@@ -154,13 +154,13 @@ jobs:
           trap "kill $SERVE_PID 2>/dev/null || true" EXIT
 
           # Headers
-          curl -sS -I http://127.0.0.1:8765/viewer/ \
+          curl -sS -I http://127.0.0.1:8765/wt_viewer/ \
             | tee headers.txt
           grep -qi '^Cross-Origin-Opener-Policy: same-origin' headers.txt
           grep -qi '^Cross-Origin-Embedder-Policy: require-corp' headers.txt
 
           # Viewer HTML loads
-          curl -sS http://127.0.0.1:8765/viewer/ | grep -q 'OpenHTJ2K WebTransport viewer'
+          curl -sS http://127.0.0.1:8765/wt_viewer/ | grep -q 'OpenHTJ2K WebTransport viewer'
 
           # WASM module + binary served
           curl -sSI http://127.0.0.1:8765/wasm/libopen_htj2k_mt_simd.js   | grep -q '^HTTP/1.1 200'
