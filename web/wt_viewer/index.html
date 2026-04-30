@@ -172,6 +172,21 @@ function hexToBytes(s) {
   return new Uint8Array(parts.map(p => parseInt(p, 16)));
 }
 
+import { DecoderClient } from '/shared/decoder_client.mjs';
+
+// ?threads=N — number of WASM decoder workers used inside the worker.
+// Defaults to 4 (Phase A0 showed 4-thread mt_simd handles FHD@30 at
+// ~55 fps and 4K@30 at ~17 fps, both better than 2-thread).
+const THREAD_COUNT = parseInt(qs.get('threads') || '4', 10);
+// ?source_fps=N — declared source frame rate; used to flag "decode-bound"
+// when rolling p95 decode is above the inter-frame interval.  No
+// functional effect on the decode path.
+const SOURCE_FPS = parseFloat(qs.get('source_fps') || '30');
+// ?renderer=canvas2d forces the CPU path.  Default = webgl2 with
+// shader-side YCbCr→RGB; falls back to canvas2d if WebGL2 isn't available.
+const WANT_RENDERER = qs.get('renderer') || 'webgl2';
+const PACKET_BUF = 4096;
+
 async function runViewer(url, hash, signal) {
   // 1. Open the WebTransport session.
   if (!('WebTransport' in window)) throw new Error('WebTransport not supported in this browser');
@@ -182,189 +197,87 @@ async function runViewer(url, hash, signal) {
   signal.addEventListener('abort', () => wt.close());
   await wt.ready;
   ping('wt.ready');
-  elConn.textContent = 'open — loading WASM';
+  elConn.textContent = 'open — initialising renderer';
 
-  // 2. Load the multi-threaded SIMD WASM build.
-  const factory = (await import('/wasm/libopen_htj2k_mt_simd.js')).default;
-  const M = await factory();
-  ping('wasm.ready');
-
-  const F = {
-    rtp_create:        M.cwrap('rtp_session_create',     'number', []),
-    rtp_destroy:       M.cwrap('rtp_session_destroy',    'void',   ['number']),
-    rtp_push:          M.cwrap('rtp_push_packet',        'number', ['number','number','number']),
-    rtp_peek:          M.cwrap('rtp_peek_frame_size',    'number', ['number']),
-    rtp_pop:           M.cwrap('rtp_pop_frame',          'number', ['number','number','number']),
-    rtp_pop_matrix:    M.cwrap('rtp_pop_frame_matrix',   'number', ['number']),
-    rtp_pop_range:     M.cwrap('rtp_pop_frame_range',    'number', ['number']),
-    rtp_pop_ts:        M.cwrap('rtp_pop_frame_timestamp','number', ['number']),
-    rtp_ready_count:   M.cwrap('rtp_ready_count',        'number', ['number']),
-    rtp_drop_ready:    M.cwrap('rtp_drop_ready',         'number', ['number']),
-    rtp_frames:        M.cwrap('rtp_frames_emitted',     'number', ['number']),
-    rtp_drops:         M.cwrap('rtp_frames_dropped',     'number', ['number']),
-    rtp_gaps:          M.cwrap('rtp_seq_gaps',           'number', ['number']),
-    rtp_last_error:    M.cwrap('rtp_last_error',         'string', ['number']),
-    create_decoder_mt: M.cwrap('create_decoder_mt',      'number', ['number','number','number','number']),
-    reset_decoder:     M.cwrap('reset_decoder_with_bytes','void',  ['number','number','number','number']),
-    parse_j2c:         M.cwrap('parse_j2c_data',         'void',   ['number']),
-    invoke_to_rgba:    M.cwrap('invoke_decoder_to_rgba', 'void',   ['number','number']),
-    invoke_planar_u8:  M.cwrap('invoke_decoder_planar_u8','void',  ['number','number','number','number']),
-    apply_bt709:       M.cwrap('apply_ycbcr_bt709_to_rgba','void', ['number','number']),
-    apply_bt601:       M.cwrap('apply_ycbcr_bt601_to_rgba','void', ['number','number']),
-    release_decoder:   M.cwrap('release_j2c_data',       'void',   ['number']),
-    get_width:         M.cwrap('get_width',              'number', ['number','number']),
-    get_height:        M.cwrap('get_height',             'number', ['number','number']),
-    get_num_components:M.cwrap('get_num_components',     'number', ['number']),
-    get_colorspace:    M.cwrap('get_colorspace',         'number', ['number']),
-  };
-
-  const PACKET_BUF = 4096;
-  const FRAME_BUF  = 16 << 20;
-  // Sized for 4K luma + 4K 4:4:4 chroma (worst case).  4:2:0 / 4:2:2 use less
-  // and we don't bother shrinking — saves one realloc on resolution change.
-  const PLANE_BUF  = 3840 * 2160;
-  const RGBA_BUF   = 3840 * 2160 * 4;
-  const packetPtr  = M._malloc(PACKET_BUF);
-  const framePtr   = M._malloc(FRAME_BUF);
-  const rgbaPtr    = M._malloc(RGBA_BUF);
-  const yPtr       = M._malloc(PLANE_BUF);
-  const cbPtr      = M._malloc(PLANE_BUF);
-  const crPtr      = M._malloc(PLANE_BUF);
-  const session    = F.rtp_create();
-  let decoder = 0;
-  let lastW = 0, lastH = 0;
-  let imageData = null;
-
-  // ?renderer=canvas2d forces the CPU path.  Default = webgl2 with shader-side
-  // YCbCr→RGB; falls back to canvas2d if WebGL2 isn't available.
-  const wantRenderer = qs.get('renderer') || 'webgl2';
-  const renderer = makeRenderer(wantRenderer, cv, M, { yPtr, cbPtr, crPtr, rgbaPtr });
-  // makeRenderer may have swapped the canvas DOM node when falling back from
-  // webgl2 to canvas2d (the original canvas's context type can no longer be
-  // reused).  Adopt the replacement so the decode loop's resize calls it.
+  // 2. Pick the renderer.  WebGL2 wants planar Y/Cb/Cr from the worker;
+  // Canvas2D wants RGBA already-matrixed (cheaper to apply matrix in WASM
+  // than in JS on the main thread).
+  const renderer = makeRenderer(WANT_RENDERER, cv);
   const drawCanvas = renderer._replacementCanvas || cv;
   ping('renderer.ready', { kind: renderer.kind });
+  const wantOutput = renderer.kind === 'webgl2' ? 'planar' : 'rgba';
 
-  // 3. Decode pump: pulls completed codestreams from the WASM RTP session,
-  // decodes via streaming line-based path, draws to canvas.  Backpressure
-  // comes from the C++ ready-queue cap (depth 2 per wrapper.cpp:rtp_push_packet)
-  // plus an explicit drop-old policy here: if more than one frame is ready
-  // when the pump runs, skip everything but the newest before decoding.
-  // That keeps display time close to the most recent codestream even when
-  // decode is below the source frame rate.
+  // 3. Per-frame state shared between the worker callback and the rAF
+  // loop.  `pendingFrame` is the latest decoded frame waiting to draw;
+  // `framePending` flags the rAF tick that something changed.
   const decode_p95 = new RollingP95(60);
   let decodedFrames = 0;
-  let droppedReady  = 0;     // frames we explicitly skipped here (newest-only)
-  let lastStatsTick = performance.now();
-  // ?threads=N — number of WASM decoder workers.  Defaults to 4 (Phase A0
-  // showed 4-thread mt_simd handles FHD@30 at ~55 fps and 4K@30 at ~17 fps,
-  // both better than 2-thread).  Set lower on resource-constrained hosts.
-  const threadCount = parseInt(qs.get('threads') || '4', 10);
-  // ?source_fps=N — declared source frame rate; used to flag "decode-bound"
-  // when rolling p95 decode is above the inter-frame interval.  No
-  // functional effect on the decode path.
-  const sourceFps = parseFloat(qs.get('source_fps') || '30');
+  let pendingFrame  = null;       // { mode, w, h, ... } from the worker
+  let framePending  = false;
+  let lastW = 0, lastH = 0;
+  let lastStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0 };
+  let lastStatsTickMs = performance.now();
 
-  function decodePending() {
-    // Drop-old policy: if multiple frames are ready (e.g. decode took
-    // longer than a frame interval), skip every one but the latest.
-    let dropped = 0;
-    while (F.rtp_peek(session) > 0 && F.rtp_ready_count(session) > 1) {
-      F.rtp_drop_ready(session);
-      dropped++;
-    }
-    droppedReady += dropped;
-    while (true) {
-      const fsz = F.rtp_peek(session);
-      if (!fsz) return;
-      // Pop the H.273 metadata BEFORE the frame so the renderer can configure.
-      // (rtp_pop_frame snapshots the metadata into rtp_pop_frame_*.)
-      F.rtp_pop(session, framePtr, FRAME_BUF);
-      const matrix = F.rtp_pop_matrix(session);   // 1=BT.709, 5/6=BT.601, 255=unset
-      const range  = F.rtp_pop_range(session);    // 0=narrow, 1=full, 2=unknown
-      const rtpTs  = F.rtp_pop_ts(session);       // 32-bit RTP timestamp, 90 kHz
-      const t0 = performance.now();
-      if (!decoder) decoder = F.create_decoder_mt(framePtr, fsz, 0, threadCount);
-      else          F.reset_decoder(decoder, framePtr, fsz, 0);
-      F.parse_j2c(decoder);
-      const w  = F.get_width(decoder, 0);
-      const h  = F.get_height(decoder, 0);
-      const cw = F.get_num_components(decoder) >= 2 ? F.get_width(decoder, 1)  : w;
-      const ch = F.get_num_components(decoder) >= 2 ? F.get_height(decoder, 1) : h;
-      const nc = F.get_num_components(decoder);
-      // get_colorspace() returns EnumCS from the JP2 colour-spec box per
-      // ISO 15444-1 Annex I:
-      //   0  = raw codestream (no JP2 wrapper); RFC 9828 carries this case.
-      //   16 = sRGB (ENUMCS_SRGB)
-      //   17 = grayscale
-      //   18 = YCbCr (ENUMCS_YCBCR)
-      // For RFC 9828 streams the components are YCbCr by convention and the
-      // matrix is carried in the Main Packet header (H.273 MatrixCoefficients).
-      // Anything that isn't explicitly sRGB gets the YCbCr→RGB matrix path.
-      const colorspace = F.get_colorspace(decoder);
-      const isRGB   = (nc >= 3 && colorspace === 16);
-      const isYCbCr = (nc >= 3 && !isRGB);
+  // RTP-clock vs wall-clock drift tracker.  Anchored on the first decoded
+  // frame: drift_ms = (now - wallAnchor) - (rtpTs - rtpAnchor) / 90.
+  let rtpAnchor = null, wallAnchor = null, lastDrift = 0;
+  function noteRtpFrame(rtpTs) {
+    if (rtpAnchor === null) { rtpAnchor = rtpTs >>> 0; wallAnchor = performance.now(); return; }
+    const dRtp = ((rtpTs - rtpAnchor) | 0) >>> 0;
+    lastDrift = (performance.now() - wallAnchor) - dRtp / 90;
+  }
 
-      // Resize before upload — Canvas2DRenderer's ImageData and GL2Renderer's
-      // textures are sized lazily here and the upload step expects them.
-      if (w !== lastW || h !== lastH) {
-        drawCanvas.width = w; drawCanvas.height = h;
-        renderer.resize(w, h);
-        lastW = w; lastH = h;
-      }
-
-      if (renderer.kind === 'webgl2' && (isYCbCr || isRGB)) {
-        // GPU path — decode three planar u8 components (Y/Cb/Cr or R/G/B
-        // depending on the codestream's MCT bit), upload three R8 textures,
-        // fragment shader handles the matrix.
-        F.invoke_planar_u8(decoder, yPtr, cbPtr, crPtr);
-        renderer.uploadYCbCr({ w, h, cw, ch, matrix, range, mode: isRGB ? 'rgb' : 'ycbcr' });
-      } else {
-        // CPU path — decode interleaved RGBA, optionally apply YCbCr matrix
-        // on the CPU, blit via Canvas2D.
-        F.invoke_to_rgba(decoder, rgbaPtr);
-        if (isYCbCr) {
-          if (matrix === 1)                                  F.apply_bt709(rgbaPtr, w * h);
-          else if (matrix === 5 || matrix === 6 || matrix === 255) F.apply_bt601(rgbaPtr, w * h);
-          // 0 (identity), 2 (unspec) → leave as RGB
-        }
-        renderer.uploadRGBA({ w, h });
-      }
-      const t1 = performance.now();
-      decode_p95.push(t1 - t0);
-      decodedFrames++;
-      // Mark a new frame as ready; the rAF loop below will draw on the next
-      // vsync.  Decoupling decode from draw absorbs decode-time jitter and
-      // gates display on the monitor's refresh, eliminating the visible
-      // flicker that a decode-then-draw loop produces when decode times
-      // vary frame-to-frame.
+  // 4. Spin up the decoder worker.
+  ping('worker.starting');
+  const dec = new DecoderClient({
+    wasmBase:    '/wasm/',
+    threadCount: THREAD_COUNT,
+    output:      wantOutput,
+    onFrame: (frame) => {
+      // The worker already applied drop-on-overrun against its WASM
+      // ready-queue.  On main we just need to keep the LATEST frame as
+      // the next one to draw — if we're behind vsync, older frames in
+      // flight are simply replaced (the GC reclaims their buffers).
+      pendingFrame = frame;
       framePending = true;
-      noteRtpFrame(rtpTs);
-    }
-  }
+      decode_p95.push(frame.decodeMs);
+      decodedFrames++;
+      if (decodedFrames === 1) ping('first.frame.complete', { w: frame.w, h: frame.h });
+      noteRtpFrame(frame.rtpTs);
+    },
+    onStats: (s) => { lastStats = s; },
+    onError: (e) => {
+      ping('worker.error', { msg: e.msg, fatal: !!e.fatal });
+      if (e.fatal) elErr.textContent = `worker: ${String(e.msg).slice(0, 200)}`;
+    },
+  });
+  await dec.ready;
+  ping('worker.ready');
+  signal.addEventListener('abort', () => dec.close());
 
-  // Rolling display-rate sampler — counts vsync-aligned paints in the
-  // last ~1 s window.  This is the FPS users actually see.  noteFrame()
-  // fires from the rAF loop below, not from decodePending.
-  const recentFrameTimes = [];
-  function noteFrame() {
-    const t = performance.now();
-    recentFrameTimes.push(t);
-    while (recentFrameTimes.length && t - recentFrameTimes[0] > 1000) recentFrameTimes.shift();
-  }
-
-  // requestAnimationFrame-driven render loop.  Decoding uploads textures
-  // and shader uniforms, then sets `framePending`; this loop pulls the
-  // most recent decode and paints once per vsync.  If decode is slower
-  // than the display refresh, framePending stays true and we paint the
-  // same frame again — harmless and cheap.  If decode is faster, only
-  // the latest texture state is shown (the upload path overwrites).
-  let framePending = false;
+  // 5. rAF render loop.  Decoupled from packet ingest and decode — locks
+  // display to monitor refresh and absorbs per-frame jitter.
   let rafHandle = 0;
   function rafTick() {
     if (signal.aborted) { rafHandle = 0; return; }
-    if (framePending) {
+    if (framePending && pendingFrame) {
       framePending = false;
+      const f = pendingFrame;
+      if (f.w !== lastW || f.h !== lastH) {
+        drawCanvas.width = f.w; drawCanvas.height = f.h;
+        renderer.resize(f.w, f.h);
+        lastW = f.w; lastH = f.h;
+      }
+      if (f.mode === 'rgba') {
+        renderer.uploadRGBA(new Uint8Array(f.rgba), f.w, f.h);
+      } else {
+        renderer.uploadYCbCr({
+          y:  new Uint8Array(f.y),  cb: new Uint8Array(f.cb),  cr: new Uint8Array(f.cr),
+          w:  f.w,  h:  f.h,  cw: f.cw, ch: f.ch,
+          matrix: f.matrix, range: f.range,
+          mode:  f.colorspace === 16 ? 'rgb' : 'ycbcr',  // ENUMCS_SRGB
+        });
+      }
       renderer.draw();
       noteFrame();
     }
@@ -372,62 +285,52 @@ async function runViewer(url, hash, signal) {
   }
   rafHandle = requestAnimationFrame(rafTick);
 
-  // RTP-clock vs wall-clock drift tracker.  Anchored on the first decoded
-  // frame: walls = performance.now() - wallAnchor, rtps = (rtpTs - rtpAnchor) / 90.
-  // drift_ms = walls - rtps.  Positive → viewer is behind the source clock
-  // (decode-bound), negative → viewer is rendering ahead and could benefit
-  // from explicit pacing.  We only TRACK this; actual pacing would require a
-  // decoder web worker so render and decode can run independently.
-  let rtpAnchor = null;       // RTP timestamp of first decoded frame
-  let wallAnchor = null;      // performance.now() of first decoded frame
-  let lastDrift = 0;
-  function noteRtpFrame(rtpTs) {
-    if (rtpAnchor === null) { rtpAnchor = rtpTs >>> 0; wallAnchor = performance.now(); return; }
-    // Handle 32-bit wrap arithmetically.
-    const dRtp = ((rtpTs - rtpAnchor) | 0) >>> 0;
-    const rtpMs = dRtp / 90;
-    lastDrift = (performance.now() - wallAnchor) - rtpMs;
+  // Rolling display-rate sampler — counts vsync-aligned paints in the
+  // last ~1 s window.  This is the FPS users actually see.
+  const recentFrameTimes = [];
+  function noteFrame() {
+    const t = performance.now();
+    recentFrameTimes.push(t);
+    while (recentFrameTimes.length && t - recentFrameTimes[0] > 1000) recentFrameTimes.shift();
   }
 
   function tickStats() {
     const now = performance.now();
-    if (now - lastStatsTick > 500) {
-      const fE = F.rtp_frames(session);
-      const fD = F.rtp_drops(session);
-      const sg = F.rtp_gaps(session);
-      const dp = decode_p95.read();
-      const fps = recentFrameTimes.length;       // frames in the last ~1 s window
-      const frameInterval = 1000 / sourceFps;
-      const decodeBound = dp.p95 > frameInterval;
-      const dropPct = fE > 0 ? Math.round(100 * (fE - decodedFrames) / fE) : 0;
-      const status = decodeBound
-        ? `DECODE-BOUND, ${dropPct}% dropped`
-        : (dropPct > 0 ? `${dropPct}% dropped` : 'ok');
-      const headline = `${lastW}x${lastH} @ ${fps.toFixed(0)} fps | decode p50/p95 ${dp.p50.toFixed(1)}/${dp.p95.toFixed(1)} ms | ${status}`;
-      // Drift in milliseconds: positive = viewer behind RTP clock, negative = ahead.
-      const driftLabel = `drift ${lastDrift >= 0 ? '+' : ''}${lastDrift.toFixed(0)} ms`;
-      const breakdown = `decoded ${decodedFrames} | reassembled ${fE} | drops (queue/skip) ${fD}/${droppedReady} | seq gaps ${sg} | ${driftLabel}`;
-      elStats.textContent = headline + '\n' + breakdown;
-      if (DEBUG_OVERLAY) {
-        elOver.textContent = headline + '\n' + breakdown;
-        elOver.classList.toggle('bound',  decodeBound && dropPct < 30);
-        elOver.classList.toggle('severe', decodeBound && dropPct >= 30);
-      }
-      lastStatsTick = now;
-      maybeReport({
-        decodedFrames, fE, fD, droppedReady, sg,
-        p50: dp.p50, p95: dp.p95, fps, decodeBound, dropPct,
-        drift: Math.round(lastDrift),
-        w: lastW, h: lastH,
-      });
+    if (now - lastStatsTickMs <= 500) return;
+    lastStatsTickMs = now;
+    const fE = lastStats.framesEmitted;
+    const fD = lastStats.framesDropped;
+    const sg = lastStats.seqGaps;
+    const dp = decode_p95.read();
+    const fps = recentFrameTimes.length;
+    const frameInterval = 1000 / SOURCE_FPS;
+    const decodeBound = dp.p95 > frameInterval;
+    const dropPct = fE > 0 ? Math.round(100 * (fE - decodedFrames) / fE) : 0;
+    const status = decodeBound
+      ? `DECODE-BOUND, ${dropPct}% dropped`
+      : (dropPct > 0 ? `${dropPct}% dropped` : 'ok');
+    const headline = `${lastW}x${lastH} @ ${fps.toFixed(0)} fps | decode p50/p95 ${dp.p50.toFixed(1)}/${dp.p95.toFixed(1)} ms | ${status}`;
+    const driftLabel = `drift ${lastDrift >= 0 ? '+' : ''}${lastDrift.toFixed(0)} ms`;
+    const breakdown = `decoded ${decodedFrames} | reassembled ${fE} | reassembly drops ${fD} | seq gaps ${sg} | ${driftLabel}`;
+    elStats.textContent = headline + '\n' + breakdown;
+    if (DEBUG_OVERLAY) {
+      elOver.textContent = headline + '\n' + breakdown;
+      elOver.classList.toggle('bound',  decodeBound && dropPct < 30);
+      elOver.classList.toggle('severe', decodeBound && dropPct >= 30);
     }
+    maybeReport({
+      decodedFrames, fE, fD, sg,
+      p50: dp.p50, p95: dp.p95, fps, decodeBound, dropPct,
+      drift: Math.round(lastDrift),
+      w: lastW, h: lastH,
+    });
   }
 
-  // 4. Drain the bridge's first incoming unidirectional stream.  Format:
-  // [len:u16BE][packet bytes]…  The bridge uses a stream rather than
-  // datagrams because Chromium's negotiated WebTransport datagram cap
-  // (~1170 B) is below typical RFC 9828 packet sizes.  On LAN the
-  // head-of-line cost vs datagrams is negligible.
+  // 6. Drain the bridge's first incoming unidirectional stream.  Format:
+  // [len:u16BE][packet bytes]…  We push raw bytes into the worker; reassembly
+  // and decode happen there.  Streams (not datagrams) because Chromium's
+  // negotiated WebTransport datagram cap (~1170 B) is below typical RFC 9828
+  // packet sizes.
   ping('reader.starting');
   const inUni = wt.incomingUnidirectionalStreams.getReader();
   const { value: stream, done: noStream } = await inUni.read();
@@ -445,7 +348,7 @@ async function runViewer(url, hash, signal) {
     stash = merged;
   }
   function takeStash(n) {
-    const out = stash.subarray(0, n);
+    const out = new Uint8Array(stash.buffer, stash.byteOffset, n);
     stash = stash.subarray(n);
     return out;
   }
@@ -455,7 +358,6 @@ async function runViewer(url, hash, signal) {
   try {
     while (true) {
       if (signal.aborted) break;
-      // Need at least 2 header bytes to know packet length.
       while (stash.length < 2) {
         const { value, done } = await reader.read();
         if (done) { exitReason = 'eof-header'; return; }
@@ -471,23 +373,17 @@ async function runViewer(url, hash, signal) {
       const pkt = takeStash(len);
       if (++packetCount === 1) ping('first.packet', { len });
       if (len > PACKET_BUF) { console.warn(`oversized packet ${len}`); continue; }
-      M.HEAPU8.set(pkt, packetPtr);
-      const r = F.rtp_push(session, packetPtr, len);
-      if (r === 1) {
-        if (decodedFrames === 0) ping('first.frame.complete', { size: F.rtp_peek(session) });
-        decodePending();
-      } else if (r < 0) {
-        console.debug('rtp_push:', F.rtp_last_error(session));
-      }
+      // Copy out of the stash buffer — pushPacket may transfer the
+      // underlying ArrayBuffer to the worker.
+      const owned = new Uint8Array(len);
+      owned.set(pkt);
+      dec.pushPacket(owned);
       tickStats();
     }
   } finally {
     ping('reader.done', { packetCount, decodedFrames, reason: exitReason });
     if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = 0; }
-    if (decoder) F.release_decoder(decoder);
-    F.rtp_destroy(session);
-    M._free(packetPtr); M._free(framePtr); M._free(rgbaPtr);
-    M._free(yPtr); M._free(cbPtr); M._free(crPtr);
+    dec.close();
   }
 }
 
@@ -508,11 +404,15 @@ class RollingP95 {
 // ── Renderers ───────────────────────────────────────────────────────────────
 // Two implementations: a WebGL2 renderer that uploads three R8 textures
 // (Y/Cb/Cr) and runs the H.273 matrix in the fragment shader, and a
-// Canvas2D fallback that takes the WASM-side `invoke_decoder_to_rgba`
-// output and blits via putImageData.  The GL path skips a CPU YCbCr→RGB
-// pass and lets the GPU do free bilinear chroma upsampling.
+// Canvas2D fallback that takes RGBA bytes (matrix already applied in WASM)
+// and blits via putImageData.  The GL path skips a CPU YCbCr→RGB pass
+// and lets the GPU do free bilinear chroma upsampling.
+//
+// Both renderers consume typed arrays passed in by the caller; they no
+// longer hold any reference to the WASM heap (the decoder lives in a
+// Worker now).
 
-function makeRenderer(kind, canvas, M, ptrs) {
+function makeRenderer(kind, canvas) {
   if (kind !== 'canvas2d') {
     // Probe WebGL2 availability on a throwaway canvas so a failed init doesn't
     // claim the real canvas's context type (which would prevent getContext('2d')
@@ -524,14 +424,14 @@ function makeRenderer(kind, canvas, M, ptrs) {
     } catch (_) {}
     if (probeOK) {
       try {
-        return new GL2Renderer(canvas, M, ptrs);
+        return new GL2Renderer(canvas);
       } catch (e) {
         console.warn('GL2Renderer init failed, falling back to canvas2d:', e);
         // The canvas is now poisoned (webgl2-bound).  Replace it with a fresh
         // node so the Canvas2DRenderer can call getContext('2d').
         const replacement = canvas.cloneNode(false);
         canvas.parentNode.replaceChild(replacement, canvas);
-        const r = new Canvas2DRenderer(replacement, M, ptrs);
+        const r = new Canvas2DRenderer(replacement);
         // Forward the new canvas back to runViewer via a side-channel; sizing
         // calls in the decode loop dereference `cv` from the closure.
         r._replacementCanvas = replacement;
@@ -539,11 +439,11 @@ function makeRenderer(kind, canvas, M, ptrs) {
       }
     }
   }
-  return new Canvas2DRenderer(canvas, M, ptrs);
+  return new Canvas2DRenderer(canvas);
 }
 
 class Canvas2DRenderer {
-  constructor(canvas, M, ptrs) {
+  constructor(canvas) {
     this.kind = 'canvas2d';
     this.ctx  = canvas.getContext('2d', { alpha: false });
     if (!this.ctx) {
@@ -552,14 +452,12 @@ class Canvas2DRenderer {
       const tried = types.map(t => `${t}=${!!canvas.getContext(t)}`).join(',');
       throw new Error(`Canvas2DRenderer: getContext('2d') returned null (${tried})`);
     }
-    this.M    = M;
-    this.rgbaPtr = ptrs.rgbaPtr;
     this.w = 0; this.h = 0; this.imageData = null;
   }
   resize(w, h) { this.imageData = this.ctx.createImageData(w, h); this.w = w; this.h = h; }
-  uploadYCbCr() { /* unused — runViewer takes the RGBA path when kind==='canvas2d' */ }
-  uploadRGBA({ w, h }) {
-    this.imageData.data.set(this.M.HEAPU8.subarray(this.rgbaPtr, this.rgbaPtr + w * h * 4));
+  uploadYCbCr() { /* unused — caller selects the RGBA path when kind==='canvas2d' */ }
+  uploadRGBA(rgbaU8 /* Uint8Array, length w*h*4 */) {
+    this.imageData.data.set(rgbaU8);
   }
   draw() { this.ctx.putImageData(this.imageData, 0, 0); }
 }
@@ -576,13 +474,11 @@ const YCBCR_COEFFS = {
 };
 
 class GL2Renderer {
-  constructor(canvas, M, ptrs) {
+  constructor(canvas) {
     const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false });
     if (!gl) throw new Error('WebGL2 not available');
     this.kind = 'webgl2';
     this.gl   = gl;
-    this.M    = M;
-    this.yPtr = ptrs.yPtr;  this.cbPtr = ptrs.cbPtr;  this.crPtr = ptrs.crPtr;
     this.tw = 0; this.th = 0; this.tcw = 0; this.tch = 0;
 
     const vs = `#version 300 es
@@ -640,7 +536,7 @@ class GL2Renderer {
     // done in upload when (cw,ch) changes.
   }
 
-  uploadYCbCr({ w, h, cw, ch, matrix, range, mode }) {
+  uploadYCbCr({ y, cb, cr, w, h, cw, ch, matrix, range, mode }) {
     const gl = this.gl;
     // RGB mode: all three components are luma-sized planes (R/G/B post-MCT).
     // Override the chroma dims so the textures are reallocated to match.
@@ -659,19 +555,15 @@ class GL2Renderer {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cw, ch, 0, gl.RED, gl.UNSIGNED_BYTE, null);
       this.tcw = cw; this.tch = ch;
     }
-    // Upload the three planes from WASM heap.  Subarray() here is a view —
-    // texSubImage2D copies into the texture, so the view's lifetime is fine.
-    const heap = this.M.HEAPU8;
+    // Upload the three planes.  texSubImage2D copies; the source views can
+    // be discarded after this call returns.
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.bindTexture(gl.TEXTURE_2D, this.texY);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w,  h,  gl.RED, gl.UNSIGNED_BYTE,
-                     heap.subarray(this.yPtr,  this.yPtr  + w  * h));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w,  h,  gl.RED, gl.UNSIGNED_BYTE, y);
     gl.bindTexture(gl.TEXTURE_2D, this.texCb);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cw, ch, gl.RED, gl.UNSIGNED_BYTE,
-                     heap.subarray(this.cbPtr, this.cbPtr + cw * ch));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cw, ch, gl.RED, gl.UNSIGNED_BYTE, cb);
     gl.bindTexture(gl.TEXTURE_2D, this.texCr);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cw, ch, gl.RED, gl.UNSIGNED_BYTE,
-                     heap.subarray(this.crPtr, this.crPtr + cw * ch));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cw, ch, gl.RED, gl.UNSIGNED_BYTE, cr);
 
     if (mode === 'rgb') {
       // Identity matrix; sampler reads R/G/B directly from the three planes.
