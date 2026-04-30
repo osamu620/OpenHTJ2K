@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Tiny static server with COOP/COEP headers for SharedArrayBuffer (multi-
-// threaded WASM).  Serves /web/perf/* + /subprojects/build_wt/html/* +
-// /fixtures/* (mapped to ~/Documents/data/videos).
+// threaded WASM).  Serves web/perf/* + web/wt_viewer/* + web/build_wt/html/*
+// + fixture files under ~/Documents/data/videos (via /fixtures/).
 //
 // Usage:
 //   node web/perf/serve.mjs [port]                    # HTTP, default 8765
@@ -36,10 +36,10 @@ if ((CERT_PATH && !KEY_PATH) || (!CERT_PATH && KEY_PATH)) {
 }
 
 const ROUTES = {
-  '/perf/':    join(REPO, 'web', 'perf'),
-  '/viewer/':  join(REPO, 'web', 'viewer'),
-  '/wasm/':    join(REPO, 'subprojects', 'build_wt', 'html'),
-  '/fixtures/':resolve(os.homedir(), 'Documents', 'data', 'videos'),
+  '/perf/':      join(REPO, 'web', 'perf'),
+  '/wt_viewer/': join(REPO, 'web', 'wt_viewer'),
+  '/wasm/':      join(REPO, 'web', 'build_wt', 'html'),
+  '/fixtures/':  resolve(os.homedir(), 'Documents', 'data', 'videos'),
 };
 
 const MIME = {
@@ -73,7 +73,7 @@ const handler = (req, res) => {
 
   let url = decodeURIComponent(req.url.split('?')[0]);
   if (url === '/' || url === '/perf' || url === '/perf/')   url = '/perf/index.html';
-  if (url === '/viewer' || url === '/viewer/')              url = '/viewer/index.html';
+  if (url === '/wt_viewer' || url === '/wt_viewer/')        url = '/wt_viewer/index.html';
 
   let filePath = null;
   for (const [prefix, dir] of Object.entries(ROUTES)) {

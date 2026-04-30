@@ -3,8 +3,8 @@
 # Four guarantees:
 #  1. The Go bridge under tools/wt_bridge/ builds clean and passes `go vet`.
 #  2. The Emscripten/WASM build still emits the rtp_session_* + decoder API
-#     surface the viewer cwraps from web/viewer/index.html — a refactor of
-#     subprojects/src/wrapper.cpp that drops or renames an export will fail
+#     surface the viewer cwraps from web/wt_viewer/index.html — a refactor of
+#     web/src/wrapper.cpp that drops or renames an export will fail
 #     here instead of silently breaking the viewer.
 #  3. The static server (web/perf/serve.mjs) can serve the viewer page over
 #     HTTP with the COOP/COEP headers required for SharedArrayBuffer.
@@ -18,14 +18,14 @@ on:
     paths:
       - 'tools/wt_bridge/**'
       - 'web/**'
-      - 'subprojects/src/wrapper.cpp'
+      - 'web/src/wrapper.cpp'
       - '.github/workflows/wt_viewer.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'tools/wt_bridge/**'
       - 'web/**'
-      - 'subprojects/src/wrapper.cpp'
+      - 'web/src/wrapper.cpp'
       - '.github/workflows/wt_viewer.yml'
   workflow_dispatch:
 
@@ -99,19 +99,19 @@ jobs:
 
       - name: Build WASM (mt_simd target only — what the viewer actually loads)
         run: |
-          cd subprojects
+          cd web
           mkdir -p build_wt && cd build_wt
           emcmake cmake -DCMAKE_BUILD_TYPE=Release ..
           cmake --build . -j$(nproc) -t libopen_htj2k_simd libopen_htj2k_mt_simd
 
       - name: Verify the rtp_session_* API surface is exported
-        # The viewer cwraps these names from web/viewer/index.html.  If a
-        # refactor in wrapper.cpp drops EMSCRIPTEN_KEEPALIVE on any of them
+        # The viewer cwraps these names from web/wt_viewer/index.html.  If
+        # a refactor in wrapper.cpp drops EMSCRIPTEN_KEEPALIVE on any of them
         # the JS module would link them to undefined and the viewer would
         # silently no-op.  Catch that here.
         run: |
           set -e
-          JS=subprojects/build_wt/html/libopen_htj2k_mt_simd.js
+          JS=web/build_wt/html/libopen_htj2k_mt_simd.js
           [ -f "$JS" ] || { echo "missing $JS"; exit 1; }
           required=(
             _create_decoder_mt
@@ -204,7 +204,7 @@ jobs:
 
       - name: Build WASM
         run: |
-          cd subprojects
+          cd web
           mkdir -p build_wt && cd build_wt
           emcmake cmake -DCMAKE_BUILD_TYPE=Release ..
           cmake --build . -j$(nproc) -t libopen_htj2k_simd libopen_htj2k_mt_simd

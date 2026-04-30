@@ -32,7 +32,7 @@ if (!FIXTURE) {
   process.exit(2);
 }
 
-const buildDir = join(REPO, 'subprojects', 'build_wt', 'html');
+const buildDir = join(REPO, 'web', 'build_wt', 'html');
 const jsPath   = join(buildDir, `libopen_htj2k_${VARIANT}.js`);
 const wasmPath = join(buildDir, `libopen_htj2k_${VARIANT}.wasm`);
 

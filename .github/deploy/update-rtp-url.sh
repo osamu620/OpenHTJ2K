@@ -13,7 +13,7 @@ if [[ $# -ne 1 ]]; then
 fi
 NEW_URL="$1"
 
-TARGET="subprojects/rtp_demo.html"
+TARGET="web/rtp_demo.html"
 if [[ ! -f "$TARGET" ]]; then
   echo "ERROR: $TARGET not found (run from repo root)" >&2
   exit 1

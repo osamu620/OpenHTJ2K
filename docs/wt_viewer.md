@@ -39,10 +39,10 @@ change.
   socket for the producer, accepts WebTransport sessions from viewers,
   forwards every UDP datagram as one length-prefixed message on a
   server-initiated unidirectional stream.
-- [`web/viewer/index.html`](../web/viewer/index.html) — single-file
+- [`web/wt_viewer/index.html`](../web/wt_viewer/index.html) — single-file
   browser viewer. Opens the WebTransport session, parses the framing,
   feeds packets into the WASM `rtp_session_*` API exported by
-  [`subprojects/src/wrapper.cpp`](../subprojects/src/wrapper.cpp),
+  [`web/src/wrapper.cpp`](../web/src/wrapper.cpp),
   decodes via `mt_simd` build with worker threads, renders to Canvas2D
   or WebGL2.
 - [`web/perf/serve.mjs`](../web/perf/serve.mjs) — minimal HTTP/HTTPS
@@ -67,7 +67,7 @@ It prints something like:
 ```
  Bridge UDP listener:  0.0.0.0:6000        (point your RFC 9828 sender here)
  Bridge QUIC listener: 0.0.0.0:4433
- Static server:        https://0.0.0.0:8765/viewer/
+ Static server:        https://0.0.0.0:8765/wt_viewer/
  Cert SHA-256 (WebTransport):
    ab:cd:ef:…
  Static-server cert: /tmp/wt_static_cert/cert.pem  (self-signed; click through once)
@@ -84,7 +84,7 @@ It prints something like:
        --output -
 
  ── Browser (any LAN device) ───────────────────────────────────────────
-   https://192.168.0.14:8765/viewer/?autorun=1&url=…&certHash=ab:cd:…
+   https://192.168.0.14:8765/wt_viewer/?autorun=1&url=…&certHash=ab:cd:…
 
    First load: Chrome shows "Your connection is not private" because
    the static server's cert is self-signed.  Click "Advanced → Proceed".
@@ -118,11 +118,11 @@ architecture-specific code. Cross-compile to ARM64 with
 `GOOS=linux GOARCH=arm64 go build -o wt_bridge_arm64 .`.
 
 The WASM artefacts are produced by the existing Emscripten build under
-[`subprojects/`](../subprojects/) — the launcher expects
-`subprojects/build_wt/html/libopen_htj2k_mt_simd.{js,wasm}`. Build with:
+[`web/`](../web/) — the launcher expects
+`web/build_wt/html/libopen_htj2k_mt_simd.{js,wasm}`. Build with:
 
 ```bash
-cd subprojects && rm -rf build_wt && mkdir build_wt && cd build_wt
+cd web && rm -rf build_wt && mkdir build_wt && cd build_wt
 emcmake cmake ..
 cmake --build . -j -t libopen_htj2k_simd libopen_htj2k_mt_simd
 ```
@@ -197,7 +197,7 @@ codec-aware; HTJ2K isn't one of the codecs it understands. WebTransport
 is codec-opaque, so RFC 9828 packets pass through unchanged.
 
 **No TypeScript port of the RFC 9828 parser.**
-[`subprojects/src/wrapper.cpp`](../subprojects/src/wrapper.cpp) already
+[`web/src/wrapper.cpp`](../web/src/wrapper.cpp) already
 exports the full `rtp_session_*` API (`rtp_session_create`,
 `rtp_push_packet`, `rtp_peek_frame_size`, `rtp_pop_frame`, plus the
 H.273 metadata accessors and decoder-reuse helpers) via

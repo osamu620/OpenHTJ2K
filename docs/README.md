@@ -27,7 +27,7 @@ documents below are for offline browsing.
 
 - [**wt_viewer.md**](wt_viewer.md) — browser-native viewer for live
   RFC 9828 streams via WebTransport: `wt_bridge` Go relay,
-  `web/viewer/` page, LAN launcher, URL parameters, secure-context
+  `web/wt_viewer/` page, LAN launcher, URL parameters, secure-context
   constraint, and troubleshooting.
 
 ## JPIP (foveated streaming + gigapixel viewer)
@@ -40,7 +40,7 @@ documents below are for offline browsing.
 
 ## Developer tools
 
-- [**wasm_bench.md**](wasm_bench.md) — `subprojects/wasm_bench.mjs`
+- [**wasm_bench.md**](wasm_bench.md) — `web/wasm_bench.mjs`
   iteration-loop benchmark harness for the WebAssembly decoder
   variants; byte-exact plane-dump mode for regression checks;
   profiling recipes.

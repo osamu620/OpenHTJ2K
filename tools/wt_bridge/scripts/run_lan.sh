@@ -8,7 +8,7 @@
 # Layout:
 #   This host  → wt_bridge (UDP 6000 ← producer)  +  static server (HTTPS 8765)
 #   Producer   → <RFC 9828 sender> --rtp-host <this-host-ip> --rtp-port 6000 …
-#   Browser    → https://<this-host-ip>:8765/viewer/?url=…&certHash=…
+#   Browser    → https://<this-host-ip>:8765/wt_viewer/?url=…&certHash=…
 #
 # HTTP_NO_TLS=1 falls back to plain HTTP (useful for very-local testing
 # where openssl isn't available); WebTransport then only works from
@@ -54,7 +54,7 @@ else
   SERVER_TLS_ARGS=(--cert "$CERT_DIR/cert.pem" --key "$CERT_DIR/key.pem")
 fi
 
-# Static server bound to all interfaces (--bind), serves /viewer/, /wasm/,
+# Static server bound to all interfaces (--bind), serves /wt_viewer/, /wasm/,
 # /perf/.  HTTPS when a cert was generated above.
 node web/perf/serve.mjs "$HTTP_PORT" --bind "${SERVER_TLS_ARGS[@]}" \
   > /tmp/wtb_lan_serve.log 2>&1 &
@@ -76,7 +76,7 @@ HASH=$(grep "viewer URL hint" /tmp/wtb_lan_bridge.log | sed -E 's/.*\?certHash=/
 QURL_ENC=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "https://${LAN_IP}:${QUIC_PORT}/")
 
 if [ "$SCHEME" = "https" ]; then
-  PAGE_URL_LAN="https://${LAN_IP}:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
+  PAGE_URL_LAN="https://${LAN_IP}:${HTTP_PORT}/wt_viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
   cat <<EOF
 
 ========================================================================
@@ -84,7 +84,7 @@ if [ "$SCHEME" = "https" ]; then
 
  Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point your RFC 9828 sender here)
  Bridge QUIC listener: 0.0.0.0:${QUIC_PORT}
- Static server:        ${SCHEME}://0.0.0.0:${HTTP_PORT}/viewer/
+ Static server:        ${SCHEME}://0.0.0.0:${HTTP_PORT}/wt_viewer/
  Cert SHA-256 (WebTransport):
    ${HASH}
  Static-server cert: $CERT_DIR/cert.pem  (self-signed; click through once)
@@ -118,8 +118,8 @@ if [ "$SCHEME" = "https" ]; then
 
 EOF
 else
-  PAGE_URL_LOCAL="http://localhost:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
-  PAGE_URL_LAN="http://${LAN_IP}:${HTTP_PORT}/viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
+  PAGE_URL_LOCAL="http://localhost:${HTTP_PORT}/wt_viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
+  PAGE_URL_LAN="http://${LAN_IP}:${HTTP_PORT}/wt_viewer/?autorun=1&url=${QURL_ENC}&certHash=${HASH}"
   cat <<EOF
 
 ========================================================================
@@ -127,7 +127,7 @@ else
 
  Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point your RFC 9828 sender here)
  Bridge QUIC listener: 0.0.0.0:${QUIC_PORT}
- Static server:        http://0.0.0.0:${HTTP_PORT}/viewer/
+ Static server:        http://0.0.0.0:${HTTP_PORT}/wt_viewer/
  Cert SHA-256:
    ${HASH}
 

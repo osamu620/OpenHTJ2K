@@ -15,7 +15,7 @@
 // (default 8094).  Invoke:
 //   node tools/jpip_wasm_feed_test.mjs
 
-import Module from '../subprojects/build/html/libopen_htj2k_jpip.js';
+import Module from '../web/build/html/libopen_htj2k_jpip.js';
 
 const PORT = parseInt(process.env.JPIP_PORT || '8094', 10);
 const URL_BASE = `http://127.0.0.1:${PORT}/jpip`;

@@ -1,13 +1,13 @@
 # `wasm_bench.mjs` — WASM decoder benchmark harness
 
-`subprojects/wasm_bench.mjs` is an iteration-loop benchmark driver for
+`web/wasm_bench.mjs` is an iteration-loop benchmark driver for
 the WebAssembly build of the OpenHTJ2K decoder. It pays the WASM
 startup cost once, runs _N_ decodes of the same file in a loop, and
 reports min/median/p95/mean wall-clock together with Msamples/s and
 fps. It is the right tool for measuring steady-state decode throughput
 and for byte-exact regression testing during WASM-side perf work.
 
-For one-shot decode to a file, use `subprojects/open_htj2k_dec.mjs`
+For one-shot decode to a file, use `web/open_htj2k_dec.mjs`
 (documented under the WebAssembly section of
 [`building.md`](building.md)). The two scripts share the same WASM
 loader but serve different purposes: `open_htj2k_dec.mjs` writes a
@@ -17,11 +17,11 @@ decodes and optionally dumps planar buffers for comparison.
 ## Prerequisites
 
 Build at least one WASM variant first. The bench driver looks in
-`${SUBPROJECTS}/../build_wasm_prof/html/` by default; override with
+`${WEB_DIR}/../build_wasm_prof/html/` by default; override with
 `--build-dir` to point elsewhere.
 
 ```bash
-emcmake cmake -S subprojects -B build_wasm_prof -DCMAKE_BUILD_TYPE=Release
+emcmake cmake -S web -B build_wasm_prof -DCMAKE_BUILD_TYPE=Release
 cmake --build build_wasm_prof \
       --target libopen_htj2k_simd libopen_htj2k_mt_simd \
       -j$(nproc)
@@ -35,7 +35,7 @@ to collect CPU profiles; see [profiling](#profiling) below. The
 ## Synopsis
 
 ```bash
-node subprojects/wasm_bench.mjs -i <codestream> [options...]
+node web/wasm_bench.mjs -i <codestream> [options...]
 ```
 
 ## Options
@@ -72,7 +72,7 @@ The script prints a JSON object to stdout on completion:
 ### Baseline throughput check
 
 ```bash
-node subprojects/wasm_bench.mjs \
+node web/wasm_bench.mjs \
      -i build-f32/bin/u05Q90.j2c \
      --variant simd --iters 20 --warmup 3
 ```
@@ -82,7 +82,7 @@ node subprojects/wasm_bench.mjs \
 ```bash
 for t in 1 2 4 8; do
   echo "=== $t threads ==="
-  node subprojects/wasm_bench.mjs \
+  node web/wasm_bench.mjs \
        -i build-f32/bin/u05Q90.j2c \
        --variant mt_simd --threads $t --iters 15 --warmup 3
 done
@@ -92,11 +92,11 @@ done
 
 `invoke_decoder_planar_u8` writes per-component u8 buffers at native
 (per-component) resolution — the shape the browser RTP demo
-(`subprojects/rtp_demo.html`) uses to upload three R8 textures per
+(`web/rtp_demo.html`) uses to upload three R8 textures per
 frame for GPU-side YCbCr→RGB.
 
 ```bash
-node subprojects/wasm_bench.mjs \
+node web/wasm_bench.mjs \
      -i conformance_data/ATK_DFS_IRV.j2c \
      --variant mt_simd --threads 2 --iters 15 --warmup 3 \
      --mode planar_u8
@@ -109,14 +109,14 @@ that path record an explicit plane-level checksum:
 
 ```bash
 # Capture baseline BEFORE your code change.
-node subprojects/wasm_bench.mjs \
+node web/wasm_bench.mjs \
      -i some_file.j2c --variant simd --iters 1 \
      --mode planar_u8 --dump-planes /tmp/before/myfile
 
 # ...edit wrapper.cpp, rebuild WASM...
 
 # Capture AFTER and diff.
-node subprojects/wasm_bench.mjs \
+node web/wasm_bench.mjs \
      -i some_file.j2c --variant simd --iters 1 \
      --mode planar_u8 --dump-planes /tmp/after/myfile
 
@@ -140,7 +140,7 @@ For good coverage of the wrapper paths, diff at least:
 # Produces bench.cpuprofile in the current directory.
 # Load it via Chrome DevTools → Performance → "Load profile".
 node --cpu-prof --cpu-prof-name=bench.cpuprofile --cpu-prof-interval=100 \
-     subprojects/wasm_bench.mjs \
+     web/wasm_bench.mjs \
      -i build-f32/bin/u05Q90.j2c --variant simd --iters 30 --warmup 5
 ```
 
@@ -155,7 +155,7 @@ readable names:
 ```bash
 perf record -F 499 -g -o bench.perf.data --call-graph dwarf -- \
      node --perf-basic-prof-only-functions \
-          subprojects/wasm_bench.mjs \
+          web/wasm_bench.mjs \
           -i build-f32/bin/u05Q90.j2c \
           --variant mt_simd --threads 2 --iters 20 --warmup 3
 

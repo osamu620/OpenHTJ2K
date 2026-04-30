@@ -57,7 +57,7 @@ on platform.
 
 Requires [Emscripten](https://emscripten.org/) (tested with 3.x / 5.x).
 
-Four variants are produced under `subprojects/build/html/`:
+Four variants are produced under `web/build/html/`:
 
 - `libopen_htj2k.js`           — scalar, single-threaded
 - `libopen_htj2k_simd.js`      — WASM-SIMD 128-bit, single-threaded
@@ -67,7 +67,7 @@ Four variants are produced under `subprojects/build/html/`:
   available)
 
 ```bash
-cd subprojects
+cd web
 mkdir -p build && cd build
 emcmake cmake ..
 cmake --build . -j
@@ -109,7 +109,7 @@ target machine.
 
 **Usage:**
 ```bash
-cd subprojects
+cd web
 node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> \
      [-r <reduce_NL>] [-num_threads <N>] [-ycbcr bt601|bt709]
 ```

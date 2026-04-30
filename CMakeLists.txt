@@ -101,10 +101,10 @@ find_package(Threads)
 find_package(TIFF)
 
 if (EMSCRIPTEN)
-  # No automatic SIMD here — subprojects/CMakeLists.txt controls SIMD enablement
+  # No automatic SIMD here — web/CMakeLists.txt controls SIMD enablement
   # for the two WASM variants (libopen_htj2k = scalar, libopen_htj2k_simd = WASM-SIMD).
   # Threading: enabled when OPENHTJ2K_ENABLE_WASM_THREADS is set by the
-  # subprojects build (pthreads variant).
+  # web/ build (pthreads variant).
   if (OPENHTJ2K_ENABLE_WASM_THREADS)
     target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
     target_compile_options(open_htj2k PUBLIC "-pthread")
