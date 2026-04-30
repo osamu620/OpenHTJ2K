@@ -93,6 +93,33 @@ export class DecoderClient {
     this._closed         = false;
     this._pendingDrains  = new Set();
 
+    // Batched-packet ingest staging.  pushPacket() copies each packet into
+    // _batchBuf and records its end-offset in _batchOffs; the batch is
+    // flushed (one postMessage) when it hits BATCH_PACKETS or BATCH_BYTES,
+    // when drain()/reset()/close() is called, or by a deferred macrotask
+    // so a low-rate producer's trailing partial batch reaches the worker
+    // promptly.  Reduces postMessage overhead ~Nx for a high-bitrate stream
+    // where N == batch size.
+    //
+    // Deferred flush uses MessageChannel — like fastYield in rtp_demo, this
+    // is the cheapest macrotask we can schedule.  It must be a macrotask
+    // (not queueMicrotask): a tight `for await` loop hits a microtask
+    // boundary on every `await iter.next()`, so a microtask flush would
+    // fire between every packet push and destroy the batching.  Macrotasks
+    // wait until the loop yields control to the event loop, which is when
+    // we actually want a partial batch to drain.
+    this._BATCH_PACKETS = 16;
+    this._BATCH_BYTES   = 24 * 1024;     // 16 packets × ~1500 B headroom
+    this._batchBuf      = new Uint8Array(this._BATCH_BYTES);
+    this._batchOffs     = [];
+    this._batchLen      = 0;
+    this._flushScheduled = false;
+    this._flushChan     = new MessageChannel();
+    this._flushChan.port1.onmessage = () => {
+      this._flushScheduled = false;
+      if (this._batchOffs.length > 0) this._flushBatch();
+    };
+
     this.worker.postMessage({
       type: 'init',
       wasmBase: absBase,
@@ -100,22 +127,65 @@ export class DecoderClient {
     });
   }
 
-  setReduceNL(n) { this.worker.postMessage({ type: 'setReduceNL', value: n | 0 }); }
+  setReduceNL(n) {
+    this._flushBatch();
+    this.worker.postMessage({ type: 'setReduceNL', value: n | 0 });
+  }
 
   pushPacket(bytes) {
-    // Transfer when possible (caller-owned buffer), else copy.  The worker
-    // re-wraps into a Uint8Array at the receive side.
-    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-      this.worker.postMessage({ type: 'packet', bytes: bytes.buffer }, [bytes.buffer]);
-    } else {
-      // Sliced view of a larger buffer — copy, can't transfer a partial.
-      const copy = new Uint8Array(bytes.byteLength);
+    const len = bytes.byteLength;
+    // Defensive: an oversized packet shouldn't reach here (rtp_demo caps at
+    // 2048), but if it does, send it as its own batch rather than corrupting
+    // the staging buffer.
+    if (len > this._BATCH_BYTES) {
+      this._flushBatch();
+      const copy = new Uint8Array(len);
       copy.set(bytes);
-      this.worker.postMessage({ type: 'packet', bytes: copy.buffer }, [copy.buffer]);
+      this.worker.postMessage(
+        { type: 'packet_batch', bytes: copy.buffer, offsets: [len] },
+        [copy.buffer]
+      );
+      return;
+    }
+    // Flush before this packet would overflow the staging buffer.
+    if (this._batchLen + len > this._BATCH_BYTES ||
+        this._batchOffs.length >= this._BATCH_PACKETS) {
+      this._flushBatch();
+    }
+    this._batchBuf.set(bytes, this._batchLen);
+    this._batchLen += len;
+    this._batchOffs.push(this._batchLen);
+    if (this._batchOffs.length >= this._BATCH_PACKETS) {
+      this._flushBatch();
+    } else if (!this._flushScheduled) {
+      this._flushScheduled = true;
+      this._flushChan.port2.postMessage(0);   // macrotask deferred flush
     }
   }
 
-  reset() { this.worker.postMessage({ type: 'reset' }); }
+  _flushBatch() {
+    if (this._batchOffs.length === 0) return;
+    // Transfer the staging buffer as-is; the worker only reads up to the
+    // last entry in `offsets`, so trailing bytes don't matter.  Allocate a
+    // fresh staging buffer for the next batch (transferring detaches the
+    // old one).  Avoiding a trim-copy saves ~BATCH_BYTES of memcpy per
+    // flush — at sustained 30 000 packets/s that's tens of MB/s of memory
+    // traffic we don't have to do.
+    const buf     = this._batchBuf;
+    const offsets = this._batchOffs;
+    this._batchBuf  = new Uint8Array(this._BATCH_BYTES);
+    this._batchOffs = [];
+    this._batchLen  = 0;
+    this.worker.postMessage(
+      { type: 'packet_batch', bytes: buf.buffer, offsets },
+      [buf.buffer]
+    );
+  }
+
+  reset() {
+    this._flushBatch();
+    this.worker.postMessage({ type: 'reset' });
+  }
 
   // Wait for the worker to drain in-flight packets and emit any frames they
   // produce.  Resolves once the worker echoes 'drained' back.  postMessage
@@ -130,6 +200,10 @@ export class DecoderClient {
   drain() {
     return new Promise((resolve) => {
       if (this._closed) { resolve(); return; }
+      // Make sure any staged packets reach the worker before the 'drain'
+      // sentinel — otherwise the worker would echo 'drained' while still
+      // holding unprocessed packets in this client's batch buffer.
+      this._flushBatch();
       let finish;
       const handler = (ev) => {
         if (ev.data?.type === 'drained') finish();
@@ -152,6 +226,14 @@ export class DecoderClient {
     // (terminate() kills the worker; 'drained' replies in flight are lost).
     // Snapshot the Set first because each finish() removes itself.
     for (const finish of [...this._pendingDrains]) finish();
+    // Drop any staged packets — they'd be processed by a worker we're about
+    // to terminate.  Detach the flush MessageChannel so a pending notify
+    // doesn't fire after we're closed.
+    this._batchOffs = [];
+    this._batchLen  = 0;
+    this._flushChan.port1.onmessage = null;
+    this._flushChan.port1.close();
+    this._flushChan.port2.close();
     this.worker.postMessage({ type: 'close' });
     this.worker.terminate();
   }
