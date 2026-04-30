@@ -19,6 +19,8 @@
 # Fortran module files
 *.mod
 *.smod
+# …but Go's go.mod is not a Fortran artifact.
+!**/go.mod
 
 # Compiled Static libraries
 *.lai
@@ -64,3 +66,8 @@ CLAUDE.md
 # Generated TLS certificates for QUIC localhost testing
 server.key
 server.cert
+
+# wt_bridge build artifacts (compiled Go binary; legacy Rust target/ from earlier
+# prototype kept around so the cargo build cache doesn't get re-fetched).
+/tools/wt_bridge/wt_bridge
+/tools/wt_bridge/target/
