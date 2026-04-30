@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>OpenHTJ2K WebTransport viewer</title>
+<style>
+  body { font-family: ui-monospace, monospace; margin: 0; background: #111; color: #eee; }
+  header { padding: 0.5em 1em; background: #1d1d1d; border-bottom: 1px solid #333; }
+  header input { font-family: inherit; padding: 2px 6px; }
+  header input.url { width: 26em; }
+  header input.hash { width: 60ch; font-size: 90%; }
+  header button { padding: 4px 10px; }
+  main  { display: flex; flex-direction: column; align-items: center; padding: 1em; }
+  canvas { background: #000; max-width: 100%; image-rendering: pixelated; }
+  #stats { font-size: 90%; color: #aaa; margin-top: 0.6em; min-height: 1.5em; white-space: pre-wrap; }
+  #err   { color: #f99; }
+</style>
+</head>
+<body>
+<header>
+  <label>WT URL <input id="url" class="url" value="https://localhost:4433/"></label>
+  <label>certHash <input id="hash" class="hash" placeholder="paste from bridge stderr"></label>
+  <button id="connect">Connect</button>
+  <button id="stop" disabled>Stop</button>
+  <span id="conn">idle</span>
+</header>
+<main>
+  <canvas id="cv" width="640" height="360"></canvas>
+  <div id="stats">awaiting connection…</div>
+  <div id="err"></div>
+</main>
+
+<script type="module">
+const elURL  = document.getElementById('url');
+const elHash = document.getElementById('hash');
+const elConn = document.getElementById('conn');
+const elStats= document.getElementById('stats');
+const elErr  = document.getElementById('err');
+const btnGo  = document.getElementById('connect');
+const btnStop= document.getElementById('stop');
+const cv     = document.getElementById('cv');
+const ctx    = cv.getContext('2d', { alpha: false });
+
+const qs = new URLSearchParams(location.search);
+if (qs.has('url'))      elURL.value  = qs.get('url');
+if (qs.has('certHash')) elHash.value = qs.get('certHash');
+if (qs.get('autorun') === '1') setTimeout(() => btnGo.click(), 100);
+// ?report=N — every N ms POST a progress snapshot to /report.  Lets a shell
+// driver verify end-to-end without screen-scraping.
+const REPORT_MS = parseInt(qs.get('report') || '0', 10);
+let _lastReport = 0;
+function maybeReport(snap) {
+  if (!REPORT_MS) return;
+  const now = performance.now();
+  if (now - _lastReport < REPORT_MS) return;
+  _lastReport = now;
+  fetch('/report', { method: 'POST', headers: { 'content-type': 'application/json' },
+                     body: JSON.stringify(snap) }).catch(() => {});
+}
+window.maybeReport = maybeReport;
+
+// Always emit lifecycle pings + errors (independent of REPORT_MS).
+function ping(stage, extra = {}) {
+  if (!REPORT_MS) return;
+  fetch('/report', { method: 'POST', headers: { 'content-type': 'application/json' },
+                     body: JSON.stringify({ stage, ...extra }) }).catch(() => {});
+}
+window.addEventListener('error',          e => ping('window.error',          { msg: e.message }));
+window.addEventListener('unhandledrejection', e => ping('window.unhandledrejection', { msg: String(e.reason) }));
+window.ping = ping;
+
+let aborter = null;
+
+btnGo.addEventListener('click', async () => {
+  btnGo.disabled = true; btnStop.disabled = false; elErr.textContent = '';
+  aborter = new AbortController();
+  try {
+    elConn.textContent = 'connecting…';
+    await runViewer(elURL.value.trim(), elHash.value.trim(), aborter.signal);
+    elConn.textContent = 'closed';
+  } catch (e) {
+    elErr.textContent = e.stack || String(e);
+    elConn.textContent = 'error';
+  } finally {
+    btnGo.disabled = false; btnStop.disabled = true; aborter = null;
+  }
+});
+btnStop.addEventListener('click', () => aborter?.abort('user stop'));
+
+// Convert a colon-separated hex string to a Uint8Array, for serverCertificateHashes.
+function hexToBytes(s) {
+  const parts = s.split(/[:\s]+/).filter(Boolean);
+  if (parts.length !== 32) throw new Error(`certHash needs 32 bytes, got ${parts.length}`);
+  return new Uint8Array(parts.map(p => parseInt(p, 16)));
+}
+
+async function runViewer(url, hash, signal) {
+  // 1. Open the WebTransport session.
+  if (!('WebTransport' in window)) throw new Error('WebTransport not supported in this browser');
+  const opts = {};
+  if (hash) opts.serverCertificateHashes = [{ algorithm: 'sha-256', value: hexToBytes(hash) }];
+  ping('wt.opening', { url, hash_len: hash.length });
+  const wt = new WebTransport(url, opts);
+  signal.addEventListener('abort', () => wt.close());
+  await wt.ready;
+  ping('wt.ready');
+  elConn.textContent = 'open — loading WASM';
+
+  // 2. Load the multi-threaded SIMD WASM build.
+  const factory = (await import('/wasm/libopen_htj2k_mt_simd.js')).default;
+  const M = await factory();
+  ping('wasm.ready');
+
+  const F = {
+    rtp_create:        M.cwrap('rtp_session_create',     'number', []),
+    rtp_destroy:       M.cwrap('rtp_session_destroy',    'void',   ['number']),
+    rtp_push:          M.cwrap('rtp_push_packet',        'number', ['number','number','number']),
+    rtp_peek:          M.cwrap('rtp_peek_frame_size',    'number', ['number']),
+    rtp_pop:           M.cwrap('rtp_pop_frame',          'number', ['number','number','number']),
+    rtp_pop_matrix:    M.cwrap('rtp_pop_frame_matrix',   'number', ['number']),
+    rtp_drop_ready:    M.cwrap('rtp_drop_ready',         'number', ['number']),
+    rtp_frames:        M.cwrap('rtp_frames_emitted',     'number', ['number']),
+    rtp_drops:         M.cwrap('rtp_frames_dropped',     'number', ['number']),
+    rtp_gaps:          M.cwrap('rtp_seq_gaps',           'number', ['number']),
+    rtp_last_error:    M.cwrap('rtp_last_error',         'string', ['number']),
+    create_decoder_mt: M.cwrap('create_decoder_mt',      'number', ['number','number','number','number']),
+    reset_decoder:     M.cwrap('reset_decoder_with_bytes','void',  ['number','number','number','number']),
+    parse_j2c:         M.cwrap('parse_j2c_data',         'void',   ['number']),
+    invoke_to_rgba:    M.cwrap('invoke_decoder_to_rgba', 'void',   ['number','number']),
+    apply_bt709:       M.cwrap('apply_ycbcr_bt709_to_rgba','void', ['number','number']),
+    apply_bt601:       M.cwrap('apply_ycbcr_bt601_to_rgba','void', ['number','number']),
+    release_decoder:   M.cwrap('release_j2c_data',       'void',   ['number']),
+    get_width:         M.cwrap('get_width',              'number', ['number','number']),
+    get_height:        M.cwrap('get_height',             'number', ['number','number']),
+    get_num_components:M.cwrap('get_num_components',     'number', ['number']),
+    get_colorspace:    M.cwrap('get_colorspace',         'number', ['number']),
+  };
+
+  const PACKET_BUF = 4096;
+  const FRAME_BUF  = 16 << 20;
+  const RGBA_BUF   = 3840 * 2160 * 4;
+  const packetPtr  = M._malloc(PACKET_BUF);
+  const framePtr   = M._malloc(FRAME_BUF);
+  const rgbaPtr    = M._malloc(RGBA_BUF);
+  const session    = F.rtp_create();
+  let decoder = 0;
+  let lastW = 0, lastH = 0;
+  let imageData = null;
+
+  // 3. Decode pump: pulls completed codestreams from the WASM RTP session,
+  // decodes via streaming line-based path, draws to canvas.  Backpressure
+  // comes from the page's render loop — if decode is slower than packets
+  // arrive, the C++ ready-queue caps at 2 (see wrapper.cpp:rtp_push_packet)
+  // and drops oldest, mirroring the producer's drop-then-keep semantics.
+  const decode_p95 = new RollingP95(60);
+  let decodedFrames = 0;
+  let lastStatsTick = performance.now();
+
+  function decodePending() {
+    while (true) {
+      // pop one ready frame, if any
+      const fsz = F.rtp_peek(session);
+      if (!fsz) return;
+      F.rtp_pop(session, framePtr, FRAME_BUF);
+      const t0 = performance.now();
+      if (!decoder) decoder = F.create_decoder_mt(framePtr, fsz, 0, 2);
+      else          F.reset_decoder(decoder, framePtr, fsz, 0);
+      F.parse_j2c(decoder);
+      const w = F.get_width(decoder, 0);
+      const h = F.get_height(decoder, 0);
+      const c = F.get_num_components(decoder);
+      F.invoke_to_rgba(decoder, rgbaPtr);
+      // get_colorspace: 0=RGB after MCT, 1=YCbCr no MCT, 2=other.
+      // For sYCC streams (typical from rpicam producer) MCT bit is off and
+      // we need to apply the matrix on the CPU.
+      if (c >= 3 && F.get_colorspace(decoder) === 1) {
+        const mat = F.rtp_pop_matrix(session);
+        if (mat === 1)              F.apply_bt709(rgbaPtr, w * h);
+        else if (mat === 5 || mat === 6 || mat === 255) F.apply_bt601(rgbaPtr, w * h);
+        // 0 (identity), 2 (unspec) → leave as RGB; uncommon
+      }
+      const t1 = performance.now();
+      decode_p95.push(t1 - t0);
+      decodedFrames++;
+
+      // Resize canvas + ImageData on first frame or resolution change.
+      if (w !== lastW || h !== lastH) {
+        cv.width = w; cv.height = h;
+        imageData = ctx.createImageData(w, h);
+        lastW = w; lastH = h;
+      }
+      // Copy WASM HEAP slice into the ImageData backing store.  This is one
+      // allocation-free typedarray.set per frame — typically <1 ms.
+      imageData.data.set(M.HEAPU8.subarray(rgbaPtr, rgbaPtr + w * h * 4));
+      ctx.putImageData(imageData, 0, 0);
+    }
+  }
+
+  function tickStats() {
+    const now = performance.now();
+    if (now - lastStatsTick > 500) {
+      const fE = F.rtp_frames(session);
+      const fD = F.rtp_drops(session);
+      const sg = F.rtp_gaps(session);
+      const dp = decode_p95.read();
+      elStats.textContent =
+        `frames decoded ${decodedFrames} | reassembled ${fE} | reassembly drops ${fD} | seq gaps ${sg}\n` +
+        `decode p50/p95 ${dp.p50.toFixed(1)} / ${dp.p95.toFixed(1)} ms | resolution ${lastW}x${lastH}`;
+      lastStatsTick = now;
+      maybeReport({ decodedFrames, fE, fD, sg, p50: dp.p50, p95: dp.p95, w: lastW, h: lastH });
+    }
+  }
+
+  // 4. Drain the bridge's first incoming unidirectional stream.  Format:
+  // [len:u16BE][packet bytes]…  The bridge uses a stream rather than
+  // datagrams because Chromium's negotiated WebTransport datagram cap
+  // (~1170 B) is below typical RFC 9828 packet sizes.  On LAN the
+  // head-of-line cost vs datagrams is negligible.
+  ping('reader.starting');
+  const inUni = wt.incomingUnidirectionalStreams.getReader();
+  const { value: stream, done: noStream } = await inUni.read();
+  if (noStream) throw new Error('bridge closed before opening a stream');
+  ping('stream.opened');
+  const reader = stream.getReader();
+
+  // Streaming length-prefix parser.
+  let stash = new Uint8Array(0);
+  function appendStash(chunk) {
+    if (!chunk || !chunk.length) return;
+    if (stash.length === 0) { stash = chunk; return; }
+    const merged = new Uint8Array(stash.length + chunk.length);
+    merged.set(stash, 0); merged.set(chunk, stash.length);
+    stash = merged;
+  }
+  function takeStash(n) {
+    const out = stash.subarray(0, n);
+    stash = stash.subarray(n);
+    return out;
+  }
+
+  let packetCount = 0;
+  while (true) {
+    if (signal.aborted) break;
+    // Need at least 2 header bytes to know packet length.
+    while (stash.length < 2) {
+      const { value, done } = await reader.read();
+      if (done) { ping('reader.done', { packetCount, decodedFrames, reason: 'eof-header' }); return; }
+      appendStash(value);
+    }
+    const len = (stash[0] << 8) | stash[1];
+    while (stash.length < 2 + len) {
+      const { value, done } = await reader.read();
+      if (done) { ping('reader.done', { packetCount, decodedFrames, reason: 'eof-body' }); return; }
+      appendStash(value);
+    }
+    takeStash(2);
+    const pkt = takeStash(len);
+    if (++packetCount === 1) ping('first.packet', { len });
+    if (len > PACKET_BUF) { console.warn(`oversized packet ${len}`); continue; }
+    M.HEAPU8.set(pkt, packetPtr);
+    const r = F.rtp_push(session, packetPtr, len);
+    if (r === 1) {
+      if (decodedFrames === 0) ping('first.frame.complete', { size: F.rtp_peek(session) });
+      decodePending();
+    } else if (r < 0) {
+      console.debug('rtp_push:', F.rtp_last_error(session));
+    }
+    tickStats();
+  }
+  ping('reader.done', { packetCount, decodedFrames, reason: 'abort' });
+  if (decoder) F.release_decoder(decoder);
+  F.rtp_destroy(session);
+  M._free(packetPtr); M._free(framePtr); M._free(rgbaPtr);
+}
+
+// Tiny rolling p50/p95 for the stats overlay — a sorted-array model would
+// be simpler but hammering sort() per frame at 60 fps shows up.  This uses
+// a circular buffer of recent samples and re-sorts only when read().
+class RollingP95 {
+  constructor(n) { this.n = n; this.buf = []; this.i = 0; }
+  push(v) { if (this.buf.length < this.n) this.buf.push(v); else this.buf[this.i] = v;
+            this.i = (this.i + 1) % this.n; }
+  read() {
+    if (!this.buf.length) return { p50: 0, p95: 0 };
+    const s = this.buf.slice().sort((a, b) => a - b);
+    return { p50: s[Math.floor(s.length * 0.5)], p95: s[Math.floor(s.length * 0.95)] };
+  }
+}
+</script>
+</body>
+</html>
