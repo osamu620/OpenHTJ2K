@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>OpenHTJ2K WASM decode bench (Phase A0)</title>
+<style>
+  body { font-family: ui-monospace, monospace; max-width: 900px; margin: 2em auto; padding: 0 1em; }
+  fieldset { margin-bottom: 1em; }
+  label { display: inline-block; margin-right: 1em; }
+  pre { background: #f5f5f5; padding: 1em; overflow-x: auto; max-height: 60vh; }
+  button { padding: 0.5em 1em; margin-right: 0.5em; }
+  .row { margin-bottom: 0.5em; }
+</style>
+</head>
+<body>
+<h1>WASM decode benchmark</h1>
+<p>Measures per-frame decode latency (parse + invoke_decoder_to_rgba) for an .rtp fixture.</p>
+
+<fieldset>
+  <legend>Fixture</legend>
+  <div class="row">
+    <label><input type="radio" name="fix" value="1080p5994-1200frames.rtp" checked> FHD@59.94 <small>(1080p)</small></label>
+    <label><input type="radio" name="fix" value="sollevante_1080p_24_422_744frames_1.5bpp.rtp"> FHD@24 4:2:2 sollevante</label>
+  </div>
+  <div class="row">
+    <label><input type="radio" name="fix" value="Spark_4K_2997_422_1.7bpp.rtp"> 4K@29.97 4:2:2 Spark</label>
+    <label><input type="radio" name="fix" value="2160p5994-1200frames.rtp"> 4K@59.94</label>
+    <label><input type="radio" name="fix" value="2160p_5994fps_422_10bit.rtp"> 4K@59.94 4:2:2 10-bit</label>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Decoder</legend>
+  <label><input type="radio" name="var" value="simd"> Single-thread SIMD</label>
+  <label><input type="radio" name="var" value="mt_simd" checked> MT + SIMD <small>(<span id="cores">-</span> cores)</small></label>
+  <label>frames: <input type="number" id="frames" value="200" min="20" max="2000" style="width:6em"></label>
+  <label>threads (MT): <input type="number" id="threads" value="0" min="0" max="16" style="width:5em"> <small>(0=auto)</small></label>
+</fieldset>
+
+<button id="run">Run benchmark</button>
+<button id="copy">Copy JSON</button>
+<span id="status"></span>
+<p><small>?autorun=1&amp;fixture=...&amp;variant=...&amp;frames=N — runs once, POSTs result to /report, closes window.</small></p>
+
+<pre id="out">// results appear here</pre>
+
+<script type="module">
+const cores = navigator.hardwareConcurrency || 4;
+document.getElementById('cores').textContent = cores;
+
+const out    = document.getElementById('out');
+const status = document.getElementById('status');
+const run    = document.getElementById('run');
+const copy   = document.getElementById('copy');
+
+let lastResult = null;
+
+run.addEventListener('click', async () => {
+  run.disabled = true; status.textContent = ' loading WASM…';
+  try {
+    lastResult = await runOnce();
+    out.textContent = JSON.stringify(lastResult, null, 2);
+    status.textContent = ' done';
+  } catch (e) {
+    out.textContent = e.stack || String(e);
+    status.textContent = ' FAILED';
+  } finally {
+    run.disabled = false;
+  }
+});
+
+copy.addEventListener('click', () => {
+  if (lastResult) navigator.clipboard.writeText(JSON.stringify(lastResult, null, 2));
+});
+
+// Auto-run mode for headless Chrome: ?autorun=1&fixture=...&variant=...&frames=N&threads=N
+const qs = new URLSearchParams(location.search);
+if (qs.get('autorun') === '1') {
+  if (qs.has('fixture')) document.querySelector(`input[name=fix][value="${qs.get('fixture')}"]`)?.click();
+  if (qs.has('variant')) document.querySelector(`input[name=var][value="${qs.get('variant')}"]`)?.click();
+  if (qs.has('frames'))  document.getElementById('frames').value  = qs.get('frames');
+  if (qs.has('threads')) document.getElementById('threads').value = qs.get('threads');
+  setTimeout(async () => {
+    run.click();
+    while (run.disabled) await new Promise(r => setTimeout(r, 100));
+    if (lastResult) {
+      try {
+        await fetch('/report', { method: 'POST', headers: { 'content-type': 'application/json' },
+                                 body: JSON.stringify(lastResult) });
+      } catch {}
+    } else {
+      try {
+        await fetch('/report', { method: 'POST', headers: { 'content-type': 'application/json' },
+                                 body: JSON.stringify({ error: out.textContent }) });
+      } catch {}
+    }
+    window.close();
+  }, 200);
+}
+
+async function runOnce() {
+  const fixture = document.querySelector('input[name=fix]:checked').value;
+  const variant = document.querySelector('input[name=var]:checked').value;
+  const maxFrames = parseInt(document.getElementById('frames').value, 10);
+  const threadCnt = parseInt(document.getElementById('threads').value, 10);
+
+  status.textContent = ` loading WASM (${variant})…`;
+  const factory = (await import(`/wasm/libopen_htj2k_${variant}.js`)).default;
+  const M = await factory();
+
+  const F = {
+    rtp_create:        M.cwrap('rtp_session_create',     'number', []),
+    rtp_destroy:       M.cwrap('rtp_session_destroy',    'void',   ['number']),
+    rtp_push:          M.cwrap('rtp_push_packet',        'number', ['number','number','number']),
+    rtp_peek:          M.cwrap('rtp_peek_frame_size',    'number', ['number']),
+    rtp_pop:           M.cwrap('rtp_pop_frame',          'number', ['number','number','number']),
+    create_decoder:    M.cwrap('create_decoder',         'number', ['number','number','number']),
+    create_decoder_mt: variant.startsWith('mt') ? M.cwrap('create_decoder_mt', 'number', ['number','number','number','number']) : null,
+    reset_decoder:     M.cwrap('reset_decoder_with_bytes','void',  ['number','number','number','number']),
+    parse_j2c:         M.cwrap('parse_j2c_data',         'void',   ['number']),
+    invoke_to_rgba:    M.cwrap('invoke_decoder_to_rgba', 'void',   ['number','number']),
+    release_decoder:   M.cwrap('release_j2c_data',       'void',   ['number']),
+    get_width:         M.cwrap('get_width',              'number', ['number','number']),
+    get_height:        M.cwrap('get_height',             'number', ['number','number']),
+    get_num_components:M.cwrap('get_num_components',     'number', ['number']),
+  };
+
+  const PACKET_BUF = 4096;
+  const FRAME_BUF  = 16 << 20;
+  const RGBA_BUF   = 3840 * 2160 * 4;
+  const packetPtr = M._malloc(PACKET_BUF);
+  const framePtr  = M._malloc(FRAME_BUF);
+  const rgbaPtr   = M._malloc(RGBA_BUF);
+  const session   = F.rtp_create();
+
+  status.textContent = ` fetching ${fixture}…`;
+  const res = await fetch(`/fixtures/${fixture}`);
+  if (!res.ok) throw new Error(`fixture HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const buf = new Uint8Array(0);
+  let bufHead = 0, bufTail = 0;
+  let storage = new Uint8Array(8 << 20);
+  function ensure(n) { return bufTail - bufHead >= n; }
+  function append(chunk) {
+    const used = bufTail - bufHead;
+    // Compact in place if there's headroom at the front and we'd otherwise overflow.
+    if (bufHead > 0 && bufTail + chunk.length > storage.length) {
+      storage.copyWithin(0, bufHead, bufTail);
+      bufTail = used; bufHead = 0;
+    }
+    // Grow if still not enough.
+    if (bufTail + chunk.length > storage.length) {
+      let cap = storage.length;
+      while (cap < used + chunk.length) cap *= 2;
+      const grown = new Uint8Array(cap);
+      grown.set(storage.subarray(bufHead, bufTail));
+      storage = grown;
+      bufTail = used; bufHead = 0;
+    }
+    storage.set(chunk, bufTail); bufTail += chunk.length;
+  }
+
+  let firstW = 0, firstH = 0, firstC = 0;
+  const decodeMs = [];
+  let decoder = 0;
+  let frames = 0;
+  let pkts = 0;
+  let pktErrs = 0;
+  let eof = false;
+
+  const t_start = performance.now();
+  outer:
+  while (frames < maxFrames) {
+    while (!ensure(4)) {
+      if (eof) break outer;
+      const { value, done } = await reader.read();
+      if (done) { eof = true; break; }
+      append(value);
+    }
+    if (bufTail - bufHead < 4) break;
+    const m0 = storage[bufHead], m1 = storage[bufHead + 1];
+    if (m0 !== 0xFF || m1 !== 0xFF) {
+      throw new Error(`bad fixture marker 0x${m0.toString(16)}${m1.toString(16)}`);
+    }
+    const len = (storage[bufHead + 2] << 8) | storage[bufHead + 3];
+    while (!ensure(4 + len)) {
+      if (eof) break outer;
+      const { value, done } = await reader.read();
+      if (done) { eof = true; break; }
+      append(value);
+    }
+    if (bufTail - bufHead < 4 + len) break;
+    if (len > PACKET_BUF) throw new Error(`packet too big (${len})`);
+    M.HEAPU8.set(storage.subarray(bufHead + 4, bufHead + 4 + len), packetPtr);
+    const r = F.rtp_push(session, packetPtr, len);
+    bufHead += 4 + len;
+    pkts++;
+    if (r < 0) { pktErrs++; continue; }
+    if (r !== 1) continue;
+
+    const fsz = F.rtp_peek(session);
+    if (fsz > FRAME_BUF) throw new Error(`frame too big ${fsz}`);
+    F.rtp_pop(session, framePtr, FRAME_BUF);
+
+    const t0 = performance.now();
+    if (decoder === 0) {
+      if (F.create_decoder_mt) decoder = F.create_decoder_mt(framePtr, fsz, 0, threadCnt);
+      else                     decoder = F.create_decoder(framePtr, fsz, 0);
+    } else {
+      F.reset_decoder(decoder, framePtr, fsz, 0);
+    }
+    F.parse_j2c(decoder);
+    if (firstW === 0) {
+      firstW = F.get_width(decoder, 0);
+      firstH = F.get_height(decoder, 0);
+      firstC = F.get_num_components(decoder);
+    }
+    F.invoke_to_rgba(decoder, rgbaPtr);
+    const t1 = performance.now();
+    decodeMs.push(t1 - t0);
+    frames++;
+    if ((frames & 7) === 0) status.textContent = ` ${frames}/${maxFrames}…`;
+  }
+  const wall = (performance.now() - t_start) / 1000;
+
+  if (decoder) F.release_decoder(decoder);
+  F.rtp_destroy(session);
+  M._free(packetPtr); M._free(framePtr); M._free(rgbaPtr);
+
+  decodeMs.sort((a, b) => a - b);
+  const mean = decodeMs.reduce((s, v) => s + v, 0) / decodeMs.length;
+  const pct  = q => decodeMs[Math.min(decodeMs.length - 1, Math.floor(q * decodeMs.length))];
+  return {
+    fixture, variant,
+    threads_requested: threadCnt,
+    hw_cores: cores,
+    user_agent: navigator.userAgent,
+    resolution: `${firstW}x${firstH}`,
+    components: firstC,
+    frames, packets: pkts, packet_errors: pktErrs,
+    wall_s: +wall.toFixed(2),
+    decode_ms: {
+      min: +decodeMs[0].toFixed(2),
+      mean: +mean.toFixed(2),
+      p50: +pct(0.50).toFixed(2),
+      p95: +pct(0.95).toFixed(2),
+      p99: +pct(0.99).toFixed(2),
+      max: +decodeMs[decodeMs.length - 1].toFixed(2),
+    },
+    fps_ceiling_mean: +(1000 / mean).toFixed(1),
+    fps_ceiling_p95:  +(1000 / pct(0.95)).toFixed(1),
+  };
+}
+</script>
+</body>
+</html>
