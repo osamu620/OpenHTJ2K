@@ -93,19 +93,75 @@ window.ping = ping;
 
 let aborter = null;
 
+// Auto-reconnect: when a WebTransport session ends due to a producer
+// reboot, network blip, or transient bridge restart, the viewer
+// transparently retries with capped exponential back-off (1, 2, 4, 8,
+// 16, 30, 30, … seconds).  A session that lasted longer than RESET_AFTER_MS
+// resets the back-off counter; consecutive immediate failures (cert
+// rejection, bad URL) progressively delay the next attempt.  The Stop
+// button cleanly cancels the loop.  Disable with ?reconnect=0.
+const RECONNECT      = qs.get('reconnect') !== '0';
+const MAX_BACKOFF_MS = 30000;
+const RESET_AFTER_MS = 10000;
+const FATAL_PATTERN  = /WebTransport not supported/;   // don't bother retrying these
+
 btnGo.addEventListener('click', async () => {
   btnGo.disabled = true; btnStop.disabled = false; elErr.textContent = '';
-  aborter = new AbortController();
-  try {
-    elConn.textContent = 'connecting…';
-    await runViewer(elURL.value.trim(), elHash.value.trim(), aborter.signal);
-    elConn.textContent = 'closed';
-  } catch (e) {
-    elErr.textContent = e.stack || String(e);
-    elConn.textContent = 'error';
-  } finally {
-    btnGo.disabled = false; btnStop.disabled = true; aborter = null;
+  let attempt = 0;
+  while (true) {
+    aborter = new AbortController();
+    const sessionStart = performance.now();
+    let aborted = false;
+    let lastError = null;
+    try {
+      elConn.textContent = attempt === 0 ? 'connecting…' : `reconnect attempt ${attempt}…`;
+      await runViewer(elURL.value.trim(), elHash.value.trim(), aborter.signal);
+      if (aborter.signal.aborted) aborted = true;
+    } catch (e) {
+      lastError = e;
+      if (aborter.signal.aborted) aborted = true;
+    }
+
+    // Stop conditions: user clicked Stop, reconnect disabled, or the
+    // error is something we know retrying won't fix.
+    if (aborted || !RECONNECT ||
+        (lastError && FATAL_PATTERN.test(String(lastError)))) {
+      if (lastError) {
+        elErr.textContent = lastError.stack || String(lastError);
+        elConn.textContent = 'error';
+      } else {
+        elConn.textContent = aborted ? 'stopped' : 'closed';
+      }
+      break;
+    }
+
+    // Surface the failure but keep retrying.
+    if (lastError) {
+      elErr.textContent = `(reconnecting) ${String(lastError).slice(0, 200)}`;
+      ping('reconnect.error', { msg: String(lastError), attempt });
+    }
+
+    // A long-lived session means whatever just failed is transient —
+    // reset back-off so the next blip retries quickly.
+    const sessionMs = performance.now() - sessionStart;
+    if (sessionMs > RESET_AFTER_MS) attempt = 0;
+
+    attempt++;
+    const backoff = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(attempt - 1, 5));
+    elConn.textContent = `reconnecting in ${Math.round(backoff / 1000)}s…`;
+    ping('reconnect.scheduled', { attempt, backoff });
+
+    // Sleep, but cancellable by the Stop button.
+    await new Promise(resolve => {
+      const t = setTimeout(resolve, backoff);
+      aborter.signal.addEventListener('abort', () => { clearTimeout(t); resolve(); });
+    });
+    if (aborter.signal.aborted) {
+      elConn.textContent = 'stopped';
+      break;
+    }
   }
+  btnGo.disabled = false; btnStop.disabled = true; aborter = null;
 });
 btnStop.addEventListener('click', () => aborter?.abort('user stop'));
 
