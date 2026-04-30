@@ -44,7 +44,15 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
   // Emscripten ES module — relative URL imports under the worker's origin.
   const factoryURL = new URL(`${wasmBase}libopen_htj2k_mt_simd.js`, self.location.href);
   const factory = (await import(factoryURL.href)).default;
-  M = await factory();
+  // locateFile is called by Emscripten when it needs sibling files
+  // (libopen_htj2k_mt_simd.wasm, libopen_htj2k_mt_simd.worker.js for
+  // pthread bootstrap, etc.).  By default Emscripten resolves these
+  // against the script's own URL — but inside a nested worker context
+  // the resolution can pick up the outer worker's location instead, so
+  // we resolve explicitly relative to the factory URL we just imported.
+  M = await factory({
+    locateFile: (path) => new URL(path, factoryURL.href).href,
+  });
 
   F = {
     rtp_create:        M.cwrap('rtp_session_create',     'number', []),
