@@ -1,12 +1,13 @@
 #!/bin/bash
-# Bring up the WebTransport viewer stack for LAN testing against a real
-# RFC 9828 producer (rpicam-apps).  Prints the LAN IP, cert hash, and
-# ready-to-paste browser URL on stdout, then runs in the foreground until
-# Ctrl-C.
+# Bring up the WebTransport viewer stack for LAN testing against any
+# RFC 9828 sender (rpicam-apps fork, kdu_stream_send, the in-repo
+# udp_replay.mjs replayer, …).  Prints the LAN IP, cert hash, and
+# ready-to-paste browser URL on stdout, then runs in the foreground
+# until Ctrl-C.
 #
 # Layout:
-#   This host  → wt_bridge (UDP 6000 ← Pi)  +  static server (HTTPS 8765)
-#   Pi         → rpicam-vid --rtp-host <this-host-ip> --rtp-port 6000 …
+#   This host  → wt_bridge (UDP 6000 ← producer)  +  static server (HTTPS 8765)
+#   Producer   → <RFC 9828 sender> --rtp-host <this-host-ip> --rtp-port 6000 …
 #   Browser    → https://<this-host-ip>:8765/viewer/?url=…&certHash=…
 #
 # HTTP_NO_TLS=1 falls back to plain HTTP (useful for very-local testing
@@ -81,14 +82,17 @@ if [ "$SCHEME" = "https" ]; then
 ========================================================================
  Stack is up.
 
- Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point Pi producer here)
+ Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point your RFC 9828 sender here)
  Bridge QUIC listener: 0.0.0.0:${QUIC_PORT}
  Static server:        ${SCHEME}://0.0.0.0:${HTTP_PORT}/viewer/
  Cert SHA-256 (WebTransport):
    ${HASH}
  Static-server cert: $CERT_DIR/cert.pem  (self-signed; click through once)
 
- ── Pi side ────────────────────────────────────────────────────────────
+ ── Producer side ──────────────────────────────────────────────────────
+ Point any RFC 9828 sender at ${LAN_IP}:${UDP_PORT}.  One example
+ (rpicam-apps HTJ2K fork running on a Pi):
+
    rpicam-vid \\
        --rtp-host ${LAN_IP} \\
        --rtp-port ${UDP_PORT} \\
@@ -121,13 +125,16 @@ else
 ========================================================================
  Stack is up — HTTP mode (HTTP_NO_TLS=1 or openssl unavailable).
 
- Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point Pi producer here)
+ Bridge UDP listener:  0.0.0.0:${UDP_PORT}        (point your RFC 9828 sender here)
  Bridge QUIC listener: 0.0.0.0:${QUIC_PORT}
  Static server:        http://0.0.0.0:${HTTP_PORT}/viewer/
  Cert SHA-256:
    ${HASH}
 
- ── Pi side ────────────────────────────────────────────────────────────
+ ── Producer side ──────────────────────────────────────────────────────
+ Point any RFC 9828 sender at ${LAN_IP}:${UDP_PORT}.  One example
+ (rpicam-apps HTJ2K fork running on a Pi):
+
    rpicam-vid --rtp-host ${LAN_IP} --rtp-port ${UDP_PORT} \\
        --rtp-prims 1 --rtp-trans 13 --rtp-mat 5 --rtp-range 0 \\
        --width 1920 --height 1080 --framerate 30 --inline --output -
