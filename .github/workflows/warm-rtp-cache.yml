@@ -1,11 +1,27 @@
 name: warm-rtp-cache
+
+# Fires in three cases:
+#   1. workflow_dispatch       — manual run from the Actions tab.
+#   2. push to rtp-samples.txt — the URL list itself changed.
+#   3. workflow_run            — chained after a successful "Deploy WASM
+#                                demo" so freshly-deployed assets get
+#                                warmed without a separate trigger.
 on:
   workflow_dispatch:
   push:
     paths: [.github/deploy/rtp-samples.txt]
+  workflow_run:
+    workflows: ["Deploy WASM demo"]
+    types: [completed]
+
 jobs:
   warm:
     runs-on: ubuntu-latest
+    # On a workflow_run trigger only proceed if the upstream deploy succeeded.
+    # Other triggers (manual / push) bypass this guard.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
       - name: Warm each URL listed in rtp-samples.txt
