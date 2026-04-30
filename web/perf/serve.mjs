@@ -38,6 +38,7 @@ if ((CERT_PATH && !KEY_PATH) || (!CERT_PATH && KEY_PATH)) {
 const ROUTES = {
   '/perf/':      join(REPO, 'web', 'perf'),
   '/wt_viewer/': join(REPO, 'web', 'wt_viewer'),
+  '/shared/':    join(REPO, 'web', 'shared'),
   '/wasm/':      join(REPO, 'web', 'build_wt', 'html'),
   '/fixtures/':  resolve(os.homedir(), 'Documents', 'data', 'videos'),
 };
