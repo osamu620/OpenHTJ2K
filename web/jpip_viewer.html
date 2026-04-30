@@ -378,6 +378,15 @@
       },
       function (err) { console.warn("COI service worker failed:", err); }
     );
+  } else if (window.crossOriginIsolated && navigator.serviceWorker
+                                        && navigator.serviceWorker.controller) {
+    // Stale COI service worker from a pre-`_headers` visit is still
+    // controlling this page; its fetch proxy returns empty bodies for 304
+    // responses and breaks pthread Worker spawn.  Unregister and reload.
+    navigator.serviceWorker.getRegistrations().then(function (regs) {
+      Promise.all(regs.map(function (r) { return r.unregister(); }))
+             .then(function () { location.reload(); });
+    });
   }
 </script>
 <script>

@@ -6,7 +6,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Register a service worker that injects COOP/COEP headers to enable
-       SharedArrayBuffer (required for multi-threaded WASM). -->
+       SharedArrayBuffer (required for multi-threaded WASM).  The deployed
+       site sets COOP/COEP from Cloudflare Pages's `_headers` directly; the
+       SW only matters for `file://` / non-Pages-hosted use. -->
   <script>
     if (!window.crossOriginIsolated && window.isSecureContext) {
       navigator.serviceWorker.register("coi-serviceworker.js").then(
@@ -22,6 +24,17 @@
         },
         function (err) { console.warn("COI service worker failed:", err); }
       );
+    } else if (window.crossOriginIsolated && navigator.serviceWorker
+                                          && navigator.serviceWorker.controller) {
+      // Page is already cross-origin isolated via response headers, but a
+      // stale COI service worker from a pre-headers visit is still
+      // controlling it.  The SW's `new Response(res.body, …)` proxy gives
+      // the browser an empty body for 304 responses, which breaks pthread
+      // Worker spawn for mt_simd.  Unregister and reload once to recover.
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        Promise.all(regs.map(function (r) { return r.unregister(); }))
+               .then(function () { location.reload(); });
+      });
     }
   </script>
   <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
