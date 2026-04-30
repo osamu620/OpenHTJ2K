@@ -775,6 +775,12 @@ const PRE_ROLL_FRAMES = Math.max(0,
     Number(new URLSearchParams(location.search).get('preroll')) || 3);
 let droppedByPace = 0;
 let framePeriodMs = 0;          // derived from inter-frame RTP Δts; 0 before second frame arrives
+// Paced-mode backpressure counter: incremented for each marker packet pushed
+// to the worker; throttle holds the for-await loop while
+// (pacedFramesPushed - frameCount) >= RING_CAPACITY so the worker can't
+// buffer more in-flight frames than the rAF consumer can drain.  Reset per
+// playback in startPlayback().
+let pacedFramesPushed = 0;
 
 // Has the one-shot per-playback diagnostic dump been printed?
 let firstFrameDiagnosticsDumped = false;
@@ -1654,6 +1660,7 @@ async function startPlayback(source) {
   totalPausedMs = 0; pauseStartedAt = 0;
   droppedByPace = 0;
   framePeriodMs = 0;
+  pacedFramesPushed = 0;
   workerStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0, readyCount: 0, lastError: '' };
   // rAF-path state (see module-scope declarations).
   decodeCount = 0;
@@ -1740,6 +1747,29 @@ async function startPlayback(source) {
         console.warn('packet', b.length, 'bytes — exceeds PKT_BUF_SZ, skipping');
         continue;
       }
+
+      // Paced-mode backpressure: cap total pipeline depth (markers pushed
+      // minus frames rendered) at RING_CAPACITY.  Gating on the ring alone
+      // is insufficient because by the time the ring fills (~½ s in), main
+      // has already shovelled dozens of frames' worth of markers into the
+      // worker's postMessage queue; the decoder churns through that backlog
+      // at decoder rate, ringPush keeps overflowing on drop-oldest, the
+      // ring ends up holding only frames whose RTP-target is far in the
+      // future, target advances faster than wall time and playback freezes
+      // after pre-roll.  Throttling on (pushed - rendered) prevents the
+      // worker from ever buffering more than RING_CAPACITY frames worth of
+      // markers, so the decoder rate-matches the consumer end to end.
+      // ASAP mode skips the gate (user opted in to "as fast as possible").
+      if (pacing === 'paced' && pkt.marker) {
+        while (pacedFramesPushed - frameCount >= RING_CAPACITY) {
+          if (playbackGen !== myGen || !running) break;
+          if (paused) { await waitIfPaused(); continue; }
+          await new Promise(r => setTimeout(r, 8));   // ~½ vsync at 60 Hz
+        }
+        if (playbackGen !== myGen || !running) break;
+        pacedFramesPushed++;
+      }
+
       pktCount++;
       byteCount += b.length;
 
@@ -1748,8 +1778,8 @@ async function startPlayback(source) {
       if ((pktCount & 0xFF) === 0) await fastYield();
 
       // Push to the worker.  Worker reassembles + decodes; frames arrive
-      // asynchronously via onFrameFromWorker.  Worker drops surplus frames
-      // (>1 ready) so a slow consumer can't backlog packets indefinitely.
+      // asynchronously via onFrameFromWorker (ASAP renders inline; paced
+      // pushes onto the ring drained by the rAF tick).
       dec.pushPacket(b);
     }
   } catch (e) {
@@ -1762,6 +1792,22 @@ async function startPlayback(source) {
       }
     }
   }
+
+  // The for-await loop ends as soon as the packet stream is exhausted, but
+  // dec.pushPacket() is fire-and-forget across postMessage — the worker still
+  // holds queued packets and is decoding the tail.  Drain the worker so all
+  // resulting 'frame' messages have been delivered to onFrameFromWorker (and,
+  // in ASAP mode, rendered) before we tear playback down.  Without this:
+  //   • ASAP shows "Playback finished. N frames decoded." with N below the
+  //     real total (and the dark overlay covers frames still being painted).
+  //   • Paced sets decodeFinished prematurely, so the rAF tick can hit
+  //     "_ringCount === 0" between frame arrivals and run cleanup before
+  //     the rest of the stream lands — playback freezes after pre-roll.
+  if (dec) {
+    try { await dec.drain(); } catch (e) { /* ignore */ }
+  }
+  // Bail if a Stop / new Play landed during the drain.
+  if (playbackGen !== myGen) return;
 
   if (pacing === 'paced') {
     // Hand UI cleanup off to the rAF loop — it will run once the ring

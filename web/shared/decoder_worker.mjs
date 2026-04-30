@@ -275,6 +275,16 @@ self.addEventListener('message', async ({ data }) => {
       case 'setReduceNL':
         setReduceNL(data.value);
         break;
+      case 'drain':
+        // postMessage delivery is FIFO, and pushPacket()'s decode runs
+        // synchronously on this worker's thread.  By the time we handle
+        // 'drain', every prior 'packet' message has been processed and any
+        // resulting 'frame' message has already been posted to the main
+        // thread.  The reply lets the main thread wait for the tail of
+        // playback before tearing down (rtp_demo: avoids "Playback finished"
+        // appearing while frames are still in flight).
+        self.postMessage({ type: 'drained' });
+        break;
       case 'close':
         if (decoder) { F.release_decoder(decoder); decoder = 0; }
         if (session) { F.rtp_destroy(session); session = 0; }
