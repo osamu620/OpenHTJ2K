@@ -236,7 +236,18 @@ async function runViewer(url, hash, signal) {
       const cw = F.get_num_components(decoder) >= 2 ? F.get_width(decoder, 1)  : w;
       const ch = F.get_num_components(decoder) >= 2 ? F.get_height(decoder, 1) : h;
       const nc = F.get_num_components(decoder);
-      const isYCbCr = (nc >= 3 && F.get_colorspace(decoder) === 1);
+      // get_colorspace() returns EnumCS from the JP2 colour-spec box per
+      // ISO 15444-1 Annex I:
+      //   0  = raw codestream (no JP2 wrapper); RFC 9828 carries this case.
+      //   16 = sRGB (ENUMCS_SRGB)
+      //   17 = grayscale
+      //   18 = YCbCr (ENUMCS_YCBCR)
+      // For RFC 9828 streams the components are YCbCr by convention and the
+      // matrix is carried in the Main Packet header (H.273 MatrixCoefficients).
+      // Anything that isn't explicitly sRGB gets the YCbCr→RGB matrix path.
+      const colorspace = F.get_colorspace(decoder);
+      const isRGB   = (nc >= 3 && colorspace === 16);
+      const isYCbCr = (nc >= 3 && !isRGB);
 
       // Resize before upload — Canvas2DRenderer's ImageData and GL2Renderer's
       // textures are sized lazily here and the upload step expects them.
@@ -246,11 +257,12 @@ async function runViewer(url, hash, signal) {
         lastW = w; lastH = h;
       }
 
-      if (renderer.kind === 'webgl2' && isYCbCr) {
-        // GPU path — decode planar Y/Cb/Cr u8 (skipping chroma upsampling),
-        // upload three R8 textures, fragment shader handles matrix+range.
+      if (renderer.kind === 'webgl2' && (isYCbCr || isRGB)) {
+        // GPU path — decode three planar u8 components (Y/Cb/Cr or R/G/B
+        // depending on the codestream's MCT bit), upload three R8 textures,
+        // fragment shader handles the matrix.
         F.invoke_planar_u8(decoder, yPtr, cbPtr, crPtr);
-        renderer.uploadYCbCr({ w, h, cw, ch, matrix, range });
+        renderer.uploadYCbCr({ w, h, cw, ch, matrix, range, mode: isRGB ? 'rgb' : 'ycbcr' });
       } else {
         // CPU path — decode interleaved RGBA, optionally apply YCbCr matrix
         // on the CPU, blit via Canvas2D.
@@ -265,19 +277,44 @@ async function runViewer(url, hash, signal) {
       const t1 = performance.now();
       decode_p95.push(t1 - t0);
       decodedFrames++;
-      renderer.draw();
-      noteFrame();
+      // Mark a new frame as ready; the rAF loop below will draw on the next
+      // vsync.  Decoupling decode from draw absorbs decode-time jitter and
+      // gates display on the monitor's refresh, eliminating the visible
+      // flicker that a decode-then-draw loop produces when decode times
+      // vary frame-to-frame.
+      framePending = true;
       noteRtpFrame(rtpTs);
     }
   }
 
-  // Rolling render-rate sampler — counts decoded frames in the last ~1 s.
+  // Rolling display-rate sampler — counts vsync-aligned paints in the
+  // last ~1 s window.  This is the FPS users actually see.  noteFrame()
+  // fires from the rAF loop below, not from decodePending.
   const recentFrameTimes = [];
   function noteFrame() {
     const t = performance.now();
     recentFrameTimes.push(t);
     while (recentFrameTimes.length && t - recentFrameTimes[0] > 1000) recentFrameTimes.shift();
   }
+
+  // requestAnimationFrame-driven render loop.  Decoding uploads textures
+  // and shader uniforms, then sets `framePending`; this loop pulls the
+  // most recent decode and paints once per vsync.  If decode is slower
+  // than the display refresh, framePending stays true and we paint the
+  // same frame again — harmless and cheap.  If decode is faster, only
+  // the latest texture state is shown (the upload path overwrites).
+  let framePending = false;
+  let rafHandle = 0;
+  function rafTick() {
+    if (signal.aborted) { rafHandle = 0; return; }
+    if (framePending) {
+      framePending = false;
+      renderer.draw();
+      noteFrame();
+    }
+    rafHandle = requestAnimationFrame(rafTick);
+  }
+  rafHandle = requestAnimationFrame(rafTick);
 
   // RTP-clock vs wall-clock drift tracker.  Anchored on the first decoded
   // frame: walls = performance.now() - wallAnchor, rtps = (rtpTs - rtpAnchor) / 90.
@@ -358,38 +395,44 @@ async function runViewer(url, hash, signal) {
   }
 
   let packetCount = 0;
-  while (true) {
-    if (signal.aborted) break;
-    // Need at least 2 header bytes to know packet length.
-    while (stash.length < 2) {
-      const { value, done } = await reader.read();
-      if (done) { ping('reader.done', { packetCount, decodedFrames, reason: 'eof-header' }); return; }
-      appendStash(value);
+  let exitReason = 'abort';
+  try {
+    while (true) {
+      if (signal.aborted) break;
+      // Need at least 2 header bytes to know packet length.
+      while (stash.length < 2) {
+        const { value, done } = await reader.read();
+        if (done) { exitReason = 'eof-header'; return; }
+        appendStash(value);
+      }
+      const len = (stash[0] << 8) | stash[1];
+      while (stash.length < 2 + len) {
+        const { value, done } = await reader.read();
+        if (done) { exitReason = 'eof-body'; return; }
+        appendStash(value);
+      }
+      takeStash(2);
+      const pkt = takeStash(len);
+      if (++packetCount === 1) ping('first.packet', { len });
+      if (len > PACKET_BUF) { console.warn(`oversized packet ${len}`); continue; }
+      M.HEAPU8.set(pkt, packetPtr);
+      const r = F.rtp_push(session, packetPtr, len);
+      if (r === 1) {
+        if (decodedFrames === 0) ping('first.frame.complete', { size: F.rtp_peek(session) });
+        decodePending();
+      } else if (r < 0) {
+        console.debug('rtp_push:', F.rtp_last_error(session));
+      }
+      tickStats();
     }
-    const len = (stash[0] << 8) | stash[1];
-    while (stash.length < 2 + len) {
-      const { value, done } = await reader.read();
-      if (done) { ping('reader.done', { packetCount, decodedFrames, reason: 'eof-body' }); return; }
-      appendStash(value);
-    }
-    takeStash(2);
-    const pkt = takeStash(len);
-    if (++packetCount === 1) ping('first.packet', { len });
-    if (len > PACKET_BUF) { console.warn(`oversized packet ${len}`); continue; }
-    M.HEAPU8.set(pkt, packetPtr);
-    const r = F.rtp_push(session, packetPtr, len);
-    if (r === 1) {
-      if (decodedFrames === 0) ping('first.frame.complete', { size: F.rtp_peek(session) });
-      decodePending();
-    } else if (r < 0) {
-      console.debug('rtp_push:', F.rtp_last_error(session));
-    }
-    tickStats();
+  } finally {
+    ping('reader.done', { packetCount, decodedFrames, reason: exitReason });
+    if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = 0; }
+    if (decoder) F.release_decoder(decoder);
+    F.rtp_destroy(session);
+    M._free(packetPtr); M._free(framePtr); M._free(rgbaPtr);
+    M._free(yPtr); M._free(cbPtr); M._free(crPtr);
   }
-  ping('reader.done', { packetCount, decodedFrames, reason: 'abort' });
-  if (decoder) F.release_decoder(decoder);
-  F.rtp_destroy(session);
-  M._free(packetPtr); M._free(framePtr); M._free(rgbaPtr);
 }
 
 // Tiny rolling p50/p95 for the stats overlay — a sorted-array model would
@@ -541,8 +584,12 @@ class GL2Renderer {
     // done in upload when (cw,ch) changes.
   }
 
-  uploadYCbCr({ w, h, cw, ch, matrix, range }) {
+  uploadYCbCr({ w, h, cw, ch, matrix, range, mode }) {
     const gl = this.gl;
+    // RGB mode: all three components are luma-sized planes (R/G/B post-MCT).
+    // Override the chroma dims so the textures are reallocated to match.
+    if (mode === 'rgb') { cw = w; ch = h; }
+
     // (Re)allocate textures only when dimensions change.
     if (w !== this.tw || h !== this.th) {
       gl.bindTexture(gl.TEXTURE_2D, this.texY);
@@ -570,8 +617,18 @@ class GL2Renderer {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cw, ch, gl.RED, gl.UNSIGNED_BYTE,
                      heap.subarray(this.crPtr, this.crPtr + cw * ch));
 
-    // Pick coefficients + bias/scale.  matrix=1 → BT.709, 5/6/255 → BT.601;
-    // others (0=identity, 2=unspec) get BT.601 as a safe default for sYCC.
+    if (mode === 'rgb') {
+      // Identity matrix; sampler reads R/G/B directly from the three planes.
+      this.matrix = new Float32Array([1,0,0, 0,1,0, 0,0,1]);
+      this.bias   = new Float32Array([0, 0, 0]);
+      this.scale  = new Float32Array([1, 1, 1]);
+      return;
+    }
+
+    // YCbCr path: pick coefficients + bias/scale.  matrix=1 → BT.709,
+    // 5/6 → BT.601; 0 (identity) and 2/255 (unspecified) fall through to
+    // BT.601 as a safe sYCC default — the choice rpicam-apps and most
+    // RFC 9828 producers default to.
     const isBT709 = matrix === 1;
     const narrow  = range === 0;
     const c = narrow
@@ -582,18 +639,17 @@ class GL2Renderer {
     //   R = 1*Y + 0*Cb + cr_to_r*Cr
     //   G = 1*Y - cb_to_g*Cb - cr_to_g*Cr
     //   B = 1*Y + cb_to_b*Cb + 0*Cr
-    const m = new Float32Array([
+    this.matrix = new Float32Array([
       1.0, 1.0, 1.0,
       0.0, -c[1], c[3],
       c[0], -c[2], 0.0,
     ]);
     // Narrow: Y maps [16/255, 235/255] → [0,1], Cb/Cr [16/255, 240/255] → [-0.5,0.5]
     // Full:   Y unchanged, chroma centered at 128/255 = 0.5.
-    const bias  = narrow ? new Float32Array([16/255, 128/255, 128/255])
-                         : new Float32Array([0,      128/255, 128/255]);
-    const scale = narrow ? new Float32Array([255/219, 255/224, 255/224])
-                         : new Float32Array([1, 1, 1]);
-    this.matrix = m; this.bias = bias; this.scale = scale;
+    this.bias  = narrow ? new Float32Array([16/255, 128/255, 128/255])
+                        : new Float32Array([0,      128/255, 128/255]);
+    this.scale = narrow ? new Float32Array([255/219, 255/224, 255/224])
+                        : new Float32Array([1, 1, 1]);
   }
 
   uploadRGBA() { /* unused — runViewer takes the YCbCr path when kind==='webgl2' */ }
