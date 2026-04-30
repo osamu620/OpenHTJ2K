@@ -151,6 +151,34 @@ function pushPacket(bytes) {
   maybePostStats();
 }
 
+// Process N packets from a single ArrayBuffer in one message-handler turn.
+// `offsets[i]` is the exclusive end of packet i within `bytesBuf` (so
+// packet i spans [offsets[i-1] || 0, offsets[i])).  Reduces postMessage
+// cost ~Nx vs per-packet messages, which matters on high-bitrate streams
+// (>>10k packets/s where the IPC overhead saturates the main thread).
+//
+// drainReady() runs after every frame-completing push within the batch
+// (same as the per-packet path) — NOT just at end-of-batch.  The C++ ready
+// queue caps at 2 (wrapper.cpp:932) and silently pops the front when full;
+// if a batch contained two markers, deferring drainReady to the end would
+// silently drop the earlier frame.
+function pushPacketBatch(bytesBuf, offsets) {
+  if (!F || !session) return;
+  const u8 = new Uint8Array(bytesBuf);
+  let prev = 0;
+  for (let i = 0; i < offsets.length; i++) {
+    const end = offsets[i];
+    const len = end - prev;
+    if (len > 0 && len <= PACKET_BUF) {
+      M.HEAPU8.set(u8.subarray(prev, end), packetPtr);
+      const r = F.rtp_push(session, packetPtr, len);
+      if (r === 1) drainReady();
+    }
+    prev = end;
+  }
+  maybePostStats();
+}
+
 // Drop-old policy: when more than one frame is ready, skip everything but
 // the latest before decoding.  Mirrors the wt_viewer's behaviour pre-worker
 // (drop-on-overrun is essential for live streams under load).
@@ -268,6 +296,9 @@ self.addEventListener('message', async ({ data }) => {
         break;
       case 'packet':
         pushPacket(new Uint8Array(data.bytes));
+        break;
+      case 'packet_batch':
+        pushPacketBatch(data.bytes, data.offsets);
         break;
       case 'reset':
         reset();
