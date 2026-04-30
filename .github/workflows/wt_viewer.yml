@@ -157,7 +157,7 @@ jobs:
           curl -sS -I http://127.0.0.1:8765/wt_viewer/ \
             | tee headers.txt
           grep -qi '^Cross-Origin-Opener-Policy: same-origin' headers.txt
-          grep -qi '^Cross-Origin-Embedder-Policy: require-corp' headers.txt
+          grep -qi '^Cross-Origin-Embedder-Policy: credentialless' headers.txt
 
           # Viewer HTML loads
           curl -sS http://127.0.0.1:8765/wt_viewer/ | grep -q 'OpenHTJ2K WebTransport viewer'
