@@ -41,15 +41,17 @@ let outputMode = 'planar';
 async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar' }) {
   threadCount = tc;
   outputMode = output;
-  // Emscripten ES module — relative URL imports under the worker's origin.
-  const factoryURL = new URL(`${wasmBase}libopen_htj2k_mt_simd.js`, self.location.href);
+  // We deliberately load the *single-threaded* SIMD build here, not mt_simd.
+  // Emscripten's pthreads-enabled build spawns its own pool of inner Web
+  // Workers at module-init time, and that inner-worker bootstrap is fragile
+  // when invoked from a nested worker context (relative-URL resolution +
+  // dynamic-import-from-classic-worker semantics).  The single-threaded
+  // SIMD build avoids the pthread machinery entirely and runs cleanly in
+  // any worker.  Per Phase A0 this hits ~28 fps for FHD@30 in Chromium —
+  // borderline but enough for the production target.  4K@30 is not viable
+  // on this path; revisit when nested-pthread support stabilises.
+  const factoryURL = new URL(`${wasmBase}libopen_htj2k_simd.js`, self.location.href);
   const factory = (await import(factoryURL.href)).default;
-  // locateFile is called by Emscripten when it needs sibling files
-  // (libopen_htj2k_mt_simd.wasm, libopen_htj2k_mt_simd.worker.js for
-  // pthread bootstrap, etc.).  By default Emscripten resolves these
-  // against the script's own URL — but inside a nested worker context
-  // the resolution can pick up the outer worker's location instead, so
-  // we resolve explicitly relative to the factory URL we just imported.
   M = await factory({
     locateFile: (path) => new URL(path, factoryURL.href).href,
   });
@@ -72,7 +74,8 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
     rtp_drops:         M.cwrap('rtp_frames_dropped',     'number', ['number']),
     rtp_gaps:          M.cwrap('rtp_seq_gaps',           'number', ['number']),
     rtp_last_error:    M.cwrap('rtp_last_error',         'string', ['number']),
-    create_decoder_mt: M.cwrap('create_decoder_mt',      'number', ['number','number','number','number']),
+    // The non-mt build only exports `create_decoder` (3 args, no thread count).
+    create_decoder:    M.cwrap('create_decoder',         'number', ['number','number','number']),
     reset_decoder:     M.cwrap('reset_decoder_with_bytes','void',  ['number','number','number','number']),
     parse_j2c:         M.cwrap('parse_j2c_data',         'void',   ['number']),
     invoke_planar_u8:  M.cwrap('invoke_decoder_planar_u8','void',  ['number','number','number','number']),
@@ -137,7 +140,7 @@ function drainReady() {
     const rtpTs     = F.rtp_pop_ts(session);
 
     const t0 = performance.now();
-    if (!decoder) decoder = F.create_decoder_mt(framePtr, fsz, 0, threadCount);
+    if (!decoder) decoder = F.create_decoder(framePtr, fsz, 0);
     else          F.reset_decoder(decoder, framePtr, fsz, 0);
     F.parse_j2c(decoder);
     const w  = F.get_width(decoder, 0);
