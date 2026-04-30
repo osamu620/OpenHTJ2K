@@ -26,8 +26,12 @@ export class DecoderClient {
 
     // The worker URL is resolved relative to this module so pages at
     // different paths (web/wt_viewer/index.html, web/rtp_demo.html) all
-    // load the same file.
+    // load the same file.  A cache-bust query string forces a fresh fetch
+    // — Workers are sometimes cached more aggressively than the static
+    // server's `Cache-Control: no-store` header would suggest, especially
+    // across launcher restarts on the same browser session.
     const workerURL = new URL('./decoder_worker.mjs', import.meta.url);
+    workerURL.searchParams.set('v', String(Date.now()));
     this.worker = new Worker(workerURL, { type: 'module' });
 
     this.ready = new Promise((resolve, reject) => {
