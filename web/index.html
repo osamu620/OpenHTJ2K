@@ -7,7 +7,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Register a service worker that injects COOP/COEP headers to enable
        SharedArrayBuffer (required for multi-threaded WASM).  On first visit
-       the page reloads once after the worker activates. -->
+       the page reloads once after the worker activates.  The deployed site
+       sets COOP/COEP from Cloudflare Pages's `_headers` directly, so the SW
+       only matters for `file://` / non-Pages-hosted use. -->
   <script>
     if (!window.crossOriginIsolated && window.isSecureContext) {
       navigator.serviceWorker.register("coi-serviceworker.js").then(
@@ -26,6 +28,20 @@
         },
         function (err) { console.warn("COI service worker failed:", err); }
       );
+    } else if (window.crossOriginIsolated && navigator.serviceWorker
+                                          && navigator.serviceWorker.controller) {
+      // Page is already cross-origin isolated via response headers, but a
+      // stale COI service worker from a pre-headers visit is still
+      // controlling it.  The SW proxies every fetch via
+      // `new Response(res.body, …)`, which gives the browser an empty body
+      // for 304 responses (the SW's Response isn't paired with the disk
+      // cache).  pthread Worker scripts then load as empty content and the
+      // multi-threaded WASM module hangs at `default()` with no error.
+      // Unregister and reload once to recover.
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        Promise.all(regs.map(function (r) { return r.unregister(); }))
+               .then(function () { location.reload(); });
+      });
     }
   </script>
   <script src="https://unpkg.com/wasm-feature-detect/dist/umd/index.js"></script>
