@@ -20,6 +20,7 @@
 //   dec.pushPacket(uint8array); // send one RFC 9828 RTP packet
 //   dec.setReduceNL(n);          // change DWT resolution-reduce (rebuilds decoder)
 //   dec.reset();                 // discard in-flight state (e.g. on stream switch)
+//   await dec.drain();           // wait for queued packets/frames to finish
 //   dec.close();                 // tear the worker down
 
 export class DecoderClient {
@@ -86,6 +87,12 @@ export class DecoderClient {
       }
     });
 
+    // Tracks in-flight drain() resolvers so close() can flush them — once
+    // the worker is terminated, 'drained' replies never arrive and the
+    // promises would otherwise hang forever.
+    this._closed         = false;
+    this._pendingDrains  = new Set();
+
     this.worker.postMessage({
       type: 'init',
       wasmBase: absBase,
@@ -110,7 +117,41 @@ export class DecoderClient {
 
   reset() { this.worker.postMessage({ type: 'reset' }); }
 
+  // Wait for the worker to drain in-flight packets and emit any frames they
+  // produce.  Resolves once the worker echoes 'drained' back.  postMessage
+  // is FIFO, so all 'frame' messages posted before 'drained' have already
+  // been delivered to onFrame by the time this promise resolves.
+  //
+  // No internal timeout: the drain has to wait as long as the decoder needs
+  // to chew through the backlog (tens of seconds is normal for a multi-second
+  // 1080p+ clip).  An earlier 5 s default silently truncated playback.
+  // The Stop case is handled by close() below, which flushes any pending
+  // drain promises before terminating the worker.
+  drain() {
+    return new Promise((resolve) => {
+      if (this._closed) { resolve(); return; }
+      let finish;
+      const handler = (ev) => {
+        if (ev.data?.type === 'drained') finish();
+      };
+      finish = () => {
+        this.worker.removeEventListener('message', handler);
+        this._pendingDrains.delete(finish);
+        resolve();
+      };
+      this._pendingDrains.add(finish);
+      this.worker.addEventListener('message', handler);
+      this.worker.postMessage({ type: 'drain' });
+    });
+  }
+
   close() {
+    if (this._closed) return;
+    this._closed = true;
+    // Flush any drain() promises waiting on a 'drained' that won't arrive
+    // (terminate() kills the worker; 'drained' replies in flight are lost).
+    // Snapshot the Set first because each finish() removes itself.
+    for (const finish of [...this._pendingDrains]) finish();
     this.worker.postMessage({ type: 'close' });
     this.worker.terminate();
   }
