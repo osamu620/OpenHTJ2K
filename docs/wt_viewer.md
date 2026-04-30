@@ -163,6 +163,10 @@ controls (URL, certHash, Connect/Stop) are also wired and editable.
 - `report=<ms>` — Period in milliseconds to POST a JSON snapshot of the
   current stats to `/report`. Used by the headless smoke and benchmark
   scripts; leave unset for normal viewing.
+- `reconnect=0` — Disable auto-reconnect. Default behaviour retries on
+  session loss with capped exponential back-off; pass `0` for a
+  one-shot connection (useful when debugging initial-connection
+  failures that would otherwise loop).
 
 ## Architecture notes
 
@@ -230,9 +234,14 @@ Firefox WebTransport support is partial; Safari has no implementation.
 For wider reach, a future fallback path (HLS or WebSocket relay) will
 be needed; not in the current scope.
 
-**No reconnect.** A network blip or producer reboot leaves the page in
-a closed-session state. Reload to recover. Auto-reconnect is a
-deliberate omission for the experimental release.
+**Auto-reconnect.** When a WebTransport session ends due to a producer
+reboot, network blip, or transient bridge restart, the viewer retries
+transparently with capped exponential back-off (1, 2, 4, 8, 16, 30 s).
+A session that lasted longer than ~10 s resets the back-off counter,
+so a steady stream that occasionally hiccups recovers immediately. The
+Stop button cancels any pending retry. Set `?reconnect=0` on the URL
+to disable; useful when debugging an initial-connection failure that
+would otherwise loop.
 
 **4K is best-effort.** WASM decode of 4K@30 currently averages ~17 fps
 in `mt_simd` with 4 threads on x86_64. The viewer drops cleanly down
