@@ -23,14 +23,14 @@ change.
 │  producer  │ ───────────────▶ │ wt_bridge  │ ───────────▶ │ browser │
 │ (any 9828) │                  │   (Go)     │  (uni-stream)│ (WASM)  │
 └────────────┘                  └────────────┘              └─────────┘
-                                      │
-                                  HTTP (static)
-                                      │
-                              ┌───────▼────────┐
-                              │ web/perf/serve │
-                              │   (viewer +    │
-                              │    WASM)       │
-                              └────────────────┘
+                                                                  ▲
+                                                          HTTPS (static)
+                                                                  │
+                                                         ┌────────┴───────┐
+                                                         │ web/perf/serve │
+                                                         │   (viewer +    │
+                                                         │    WASM)       │
+                                                         └────────────────┘
 ```
 
 ## Components
@@ -45,10 +45,12 @@ change.
   [`subprojects/src/wrapper.cpp`](../subprojects/src/wrapper.cpp),
   decodes via `mt_simd` build with worker threads, renders to Canvas2D
   or WebGL2.
-- [`web/perf/serve.mjs`](../web/perf/serve.mjs) — minimal HTTP server
-  with the COOP/COEP headers required for `SharedArrayBuffer`
-  (multi-threaded WASM). Also serves the WASM artefacts under `/wasm/`
-  and any `.rtp` fixture under `/fixtures/`.
+- [`web/perf/serve.mjs`](../web/perf/serve.mjs) — minimal HTTP/HTTPS
+  server with the COOP/COEP headers required for `SharedArrayBuffer`
+  (multi-threaded WASM). HTTPS is the default in the LAN launcher and
+  removes WebTransport's secure-context restriction for cross-LAN
+  viewers. Also serves the WASM artefacts under `/wasm/` and any
+  `.rtp` fixture under `/fixtures/`.
 
 ## Quick start (LAN)
 
@@ -65,11 +67,15 @@ It prints something like:
 ```
  Bridge UDP listener:  0.0.0.0:6000        (point your RFC 9828 sender here)
  Bridge QUIC listener: 0.0.0.0:4433
- Static server:        http://0.0.0.0:8765/viewer/
- Cert SHA-256:
+ Static server:        https://0.0.0.0:8765/viewer/
+ Cert SHA-256 (WebTransport):
    ab:cd:ef:…
+ Static-server cert: /tmp/wt_static_cert/cert.pem  (self-signed; click through once)
 
- ── Producer side (one example: rpicam-apps HTJ2K fork) ───────────────
+ ── Producer side ──────────────────────────────────────────────────────
+ Point any RFC 9828 sender at 192.168.0.14:6000.  One example
+ (rpicam-apps HTJ2K fork running on a Pi):
+
    rpicam-vid \
        --rtp-host 192.168.0.14 \
        --rtp-port 6000 \
@@ -77,8 +83,11 @@ It prints something like:
        --width 1920 --height 1080 --framerate 30 --inline \
        --output -
 
- ── Browser ───────────────────────────────────────────────────────────
+ ── Browser (any LAN device) ───────────────────────────────────────────
    https://192.168.0.14:8765/viewer/?autorun=1&url=…&certHash=ab:cd:…
+
+   First load: Chrome shows "Your connection is not private" because
+   the static server's cert is self-signed.  Click "Advanced → Proceed".
 ```
 
 Point any RFC 9828 sender at `<bridge-host>:6000`, then open the
@@ -104,9 +113,9 @@ cd tools/wt_bridge
 go build -o wt_bridge .
 ```
 
-Binary lands at `tools/wt_bridge/wt_bridge` (gitignored). Pure-Rust-…
-sorry, pure-Go: no `cgo`, no architecture-specific code. Cross-compile
-to ARM64 with `GOOS=linux GOARCH=arm64 go build -o wt_bridge_arm64 .`.
+Binary lands at `tools/wt_bridge/wt_bridge` (gitignored). No `cgo`, no
+architecture-specific code. Cross-compile to ARM64 with
+`GOOS=linux GOARCH=arm64 go build -o wt_bridge_arm64 .`.
 
 The WASM artefacts are produced by the existing Emscripten build under
 [`subprojects/`](../subprojects/) — the launcher expects
@@ -132,9 +141,11 @@ cmake --build . -j -t libopen_htj2k_simd libopen_htj2k_mt_simd
 - `--dev` — Generate an ephemeral ECDSA-P256 certificate (13-day
   validity, `digitalSignature` + `serverAuth`) at startup and print its
   SHA-256 hash to stderr.
-- `--cert <path> --key <path>` — Use a real PEM certificate chain.
-  Currently unwired in the runtime; the production cert path (real CA
-  cert + auto-rotation) is a planned follow-up.
+- `--cert <path> --key <path>` — Use a real PEM certificate chain
+  instead of `--dev`. With a CA-issued cert, browsers validate
+  normally and viewers don't need a `certHash` query parameter.
+  Operational glue (auto-rotation, ACME integration) is a planned
+  follow-up — for now, refresh manually before expiry.
 
 The dev hash is what the browser pins via the WebTransport
 `serverCertificateHashes` API — the cert otherwise wouldn't validate
@@ -240,10 +251,10 @@ viewers need the
 `--unsafely-treat-insecure-origin-as-secure="http://<LAN-IP>:<port>"`
 Chrome flag.
 
-**Browser support.** Chromium-based browsers only as of 2026-04.
-Firefox WebTransport support is partial; Safari has no implementation.
-For wider reach, a future fallback path (HLS or WebSocket relay) will
-be needed; not in the current scope.
+**Browser support.** Chromium-based browsers only at the time of
+writing. Firefox WebTransport is partial / behind a flag; Safari has
+no implementation. For wider reach, a future fallback path (HLS or
+WebSocket relay) will be needed; not in the current scope.
 
 **Auto-reconnect.** When a WebTransport session ends due to a producer
 reboot, network blip, or transient bridge restart, the viewer retries
