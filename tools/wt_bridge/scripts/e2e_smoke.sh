@@ -4,10 +4,11 @@
 set +e
 cd /home/osamu/Documents/src/OpenHTJ2K
 
-# Cleanup any prior runs.
-pkill -f "web/perf/serve" 2>/dev/null
-pkill -f "wt_bridge"     2>/dev/null
-pkill -f "udp_replay"    2>/dev/null
+# Cleanup any prior runs.  Use -x so this script's own path (which contains
+# "wt_bridge") doesn't get matched by -f.
+pkill -f "node web/perf/serve"     2>/dev/null
+pkill -x "wt_bridge"               2>/dev/null
+pkill -f "node tools/wt_bridge/scripts/udp_replay" 2>/dev/null
 sleep 1
 
 > /tmp/serve.log
