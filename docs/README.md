@@ -23,6 +23,13 @@ documents below are for offline browsing.
   option reference, operational guide (kernel `rmem_max`), hardware
   requirements for 4K @ 60 fps, and known issues.
 
+## Browser viewer
+
+- [**wt_viewer.md**](wt_viewer.md) — browser-native viewer for live
+  RFC 9828 streams via WebTransport: `wt_bridge` Go relay,
+  `web/viewer/` page, LAN launcher, URL parameters, secure-context
+  constraint, and troubleshooting.
+
 ## JPIP (foveated streaming + gigapixel viewer)
 
 - [**jpip.md**](jpip.md) — end-to-end JPIP (ISO/IEC 15444-9)
