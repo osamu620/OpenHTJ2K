@@ -56,8 +56,8 @@ wt_bridge [flags]
   --max-clients  <N>      Max concurrent WT sessions                 [8]
   --queue-depth  <N>      Per-session packet queue depth             [8192]
                           Drop-oldest on overrun.
-  --cert <path>           PEM cert chain (production; not yet wired)
-  --key  <path>           PEM private key (production; not yet wired)
+  --cert <path>           PEM cert chain (use instead of --dev for a CA cert)
+  --key  <path>           PEM private key matching --cert
   --dev                   Ephemeral self-signed cert + hash printout
 ```
 
