@@ -1,51 +1,218 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenHTJ2K WebTransport viewer</title>
 <style>
-  body { font-family: ui-monospace, monospace; margin: 0; background: #111; color: #eee; }
-  header { padding: 0.5em 1em; background: #1d1d1d; border-bottom: 1px solid #333; }
-  header input { font-family: inherit; padding: 2px 6px; }
-  header input.url { width: 26em; }
-  header input.hash { width: 60ch; font-size: 90%; }
-  header button { padding: 4px 10px; }
-  main  { display: flex; flex-direction: column; align-items: center; padding: 1em; }
-  canvas { background: #000; max-width: 100%; image-rendering: pixelated; }
-  #stats { font-size: 90%; color: #aaa; margin-top: 0.6em; min-height: 1.5em; white-space: pre-wrap; }
-  #err   { color: #f99; }
-  /* Telemetry overlay — shown when ?debug=1 is set on the URL.  Sits on
-     top of the canvas with a translucent background so the live frame is
-     still visible behind it. */
-  #stage { position: relative; }
-  #overlay {
-    position: absolute; top: 8px; left: 8px;
-    padding: 6px 10px; border-radius: 4px;
-    background: rgba(0, 0, 0, 0.55);
-    font: 11px/1.35 ui-monospace, monospace;
-    color: #ddd; pointer-events: none;
-    white-space: pre; user-select: none;
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --surface2: #20233a;
+    --border:   #2d3040;
+    --accent:   #4f8ef7;
+    --ok:       #4caf7d;
+    --warn:     #ffb74d;
+    --err:      #e06060;
+    --text:     #e8eaf0;
+    --text-sub: #9aa0b8;
+    --radius:   10px;
   }
-  #overlay.bound  { color: #ffb74d; }
-  #overlay.severe { color: #ff7373; }
+  /* Root font-size scales gradually with viewport width so the whole UI
+     (which expresses font-sizes in rem below) feels appropriately sized
+     on HiDPI / wide displays without going wild on ultra-wide monitors:
+       - up to ~830 px viewport: 15 px (mobile / narrow window)
+       - between 830 px and ~1900 px: scales linearly with viewport width
+       - 1900 px and wider: capped at 19 px
+     Body width is also viewport-relative so the chrome grows with the
+     display rather than sitting in a fixed-px column. */
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    font-size: clamp(15px, 1vw, 19px);
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    min-height: 100vh;
+    padding: 2rem 1.75rem;
+    max-width: min(94vw, 1900px);
+    margin: 0 auto;
+  }
+
+  .site-header {
+    display: flex; align-items: baseline; gap: 0.875rem; flex-wrap: wrap;
+    margin-bottom: 1.5rem; padding-bottom: 1.125rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .site-header h1 { font-size: 1.25rem; font-weight: 700; }
+  .site-header .subtitle { color: var(--text-sub); font-size: 0.8125rem; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .card-label {
+    font-size: 0.6875rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-sub); margin-bottom: 0.625rem;
+  }
+
+  .field-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+    margin-bottom: 0.875rem;
+  }
+  @media (max-width: 700px) { .field-grid { grid-template-columns: 1fr; } }
+  .field label {
+    display: block; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-sub); margin-bottom: 0.375rem;
+  }
+  .field input {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.5rem 0.625rem; font-size: 0.8125rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .controls {
+    display: flex; gap: 0.625rem; flex-wrap: wrap; align-items: center;
+  }
+  .btn {
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 6px;
+    padding: 0.5rem 1.125rem; font-size: 0.8125rem; font-weight: 600;
+    font-family: inherit; cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  .btn:disabled { opacity: 0.3; cursor: default; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover:not(:disabled) { background: #6aa0ff; border-color: #6aa0ff; }
+
+  .conn-pill {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 0.375rem;
+    padding: 0.3125rem 0.75rem; border-radius: 999px;
+    font-size: 0.75rem; font-weight: 600; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text-sub); white-space: nowrap;
+  }
+  .conn-pill.connecting { color: var(--warn); border-color: var(--warn); }
+  .conn-pill.open       { color: var(--ok);   border-color: var(--ok); }
+  .conn-pill.error      { color: var(--err);  border-color: var(--err); }
+  .conn-pill::before {
+    content: ""; width: 0.4375rem; height: 0.4375rem; border-radius: 50%;
+    background: currentColor; opacity: 0.85;
+  }
+
+  /* Viewer.  The canvas's intrinsic dimensions (set by JS to the actual
+     decoded resolution on the first frame) drive its aspect ratio, but
+     `max-width: 100%` + `height: auto` constrain the rendered display
+     to the body's content column so the canvas always matches the
+     width of the cards above and below it.  When the frame is wider
+     than the column, the browser scales it down; `image-rendering:
+     pixelated` keeps the downscale crisp rather than blurry.  See the
+     `.scale-note` for a user-facing reminder that what they're seeing
+     may be scaled. */
+  .stage {
+    position: relative;     /* anchor for #overlay */
+    margin-bottom: 0.5rem;
+    text-align: center;
+  }
+  #cv {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #000;
+    border-radius: var(--radius);
+    image-rendering: pixelated;
+  }
+  .scale-note {
+    font-size: 0.6875rem; color: var(--text-sub);
+    text-align: center; margin-bottom: 1.125rem;
+    font-style: italic;
+  }
+  /* Telemetry overlay — shown when ?debug=1 is set.  Sits over the canvas
+     with a translucent background so the live frame stays visible. */
+  #overlay {
+    position: absolute; top: 0.625rem; left: 0.625rem;
+    padding: 0.375rem 0.625rem; border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    font: 0.6875rem/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #ddd; pointer-events: none; white-space: pre; user-select: none;
+  }
+  #overlay.bound  { color: var(--warn); }
+  #overlay.severe { color: var(--err); }
+
+  /* Stats — compact two-line format, styled into a card to match the rest
+     of the dark theme.  Easier to scan than a wrapping chip strip. */
+  #stats {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.875rem;
+    color: var(--text-sub);
+    font: 0.78rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: pre-wrap;
+    min-height: calc(2 * 1.55em + 1.5rem);   /* two text lines + padding */
+  }
+
+  #err {
+    color: var(--err); font-size: 0.8125rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap; min-height: 1.2em;
+    margin-bottom: 0.875rem;
+  }
+  #err:empty { display: none; }
+
+  .site-footer {
+    margin-top: 2rem; padding: 1.125rem 0;
+    border-top: 1px solid var(--border);
+    color: var(--text-sub); font-size: 0.75rem; text-align: center;
+  }
+  .site-footer a { color: var(--accent); text-decoration: none; }
+  .site-footer a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
-<header>
-  <label>WT URL <input id="url" class="url" value="https://localhost:4433/"></label>
-  <label>certHash <input id="hash" class="hash" placeholder="paste from bridge stderr"></label>
-  <button id="connect">Connect</button>
-  <button id="stop" disabled>Stop</button>
-  <span id="conn">idle</span>
+<header class="site-header">
+  <h1>OpenHTJ2K WebTransport viewer</h1>
+  <span class="subtitle">live RFC 9828 stream over WebTransport, decoded in-browser via WASM</span>
 </header>
-<main>
-  <div id="stage">
-    <canvas id="cv" width="640" height="360"></canvas>
-    <div id="overlay" hidden></div>
+
+<section class="card">
+  <div class="card-label">Connection</div>
+  <div class="field-grid">
+    <div class="field">
+      <label for="url">WebTransport URL</label>
+      <input id="url" type="text" value="https://localhost:4433/">
+    </div>
+    <div class="field">
+      <label for="hash">Server certificate hash (SHA-256)</label>
+      <input id="hash" type="text" placeholder="paste from bridge stderr">
+    </div>
   </div>
-  <div id="stats">awaiting connection…</div>
-  <div id="err"></div>
-</main>
+  <div class="controls">
+    <button id="connect" class="btn primary">Connect</button>
+    <button id="stop" class="btn" disabled>Stop</button>
+    <span id="conn" class="conn-pill">idle</span>
+  </div>
+</section>
+
+<div class="stage">
+  <canvas id="cv" width="640" height="360"></canvas>
+  <div id="overlay" hidden></div>
+</div>
+<p class="scale-note">Note: the frame above is fitted to the page width — what you see may be scaled down from the source resolution. The W×H value at the start of the stats line below reflects the true decoded size.</p>
+
+<div id="stats">awaiting connection…</div>
+
+<div id="err"></div>
+
+<footer class="site-footer">
+  See <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/wt_viewer.md">docs/wt_viewer.md</a> for URL parameters and architecture notes.
+</footer>
 
 <script type="module">
 const elURL  = document.getElementById('url');
@@ -53,6 +220,13 @@ const elHash = document.getElementById('hash');
 const elConn = document.getElementById('conn');
 const elStats= document.getElementById('stats');
 const elErr  = document.getElementById('err');
+// Connection-status pill helper.  `state` is one of '', 'connecting',
+// 'open', 'error' — the matching CSS class drives the pill's colour.
+function setConn(text, state) {
+  elConn.textContent = text;
+  elConn.classList.remove('connecting', 'open', 'error');
+  if (state) elConn.classList.add(state);
+}
 const btnGo  = document.getElementById('connect');
 const btnStop= document.getElementById('stop');
 const cv      = document.getElementById('cv');
@@ -114,7 +288,7 @@ btnGo.addEventListener('click', async () => {
     let aborted = false;
     let lastError = null;
     try {
-      elConn.textContent = attempt === 0 ? 'connecting…' : `reconnect attempt ${attempt}…`;
+      setConn(attempt === 0 ? 'connecting…' : `reconnect attempt ${attempt}…`, 'connecting');
       await runViewer(elURL.value.trim(), elHash.value.trim(), aborter.signal);
       if (aborter.signal.aborted) aborted = true;
     } catch (e) {
@@ -133,12 +307,12 @@ btnGo.addEventListener('click', async () => {
         // contract, not a real failure.  Suppress the error display so
         // the user sees "stopped", not a stack trace.
         elErr.textContent = '';
-        elConn.textContent = 'stopped';
+        setConn('stopped', '');
       } else if (lastError) {
         elErr.textContent = lastError.stack || String(lastError);
-        elConn.textContent = 'error';
+        setConn('error', 'error');
       } else {
-        elConn.textContent = 'closed';
+        setConn('closed', '');
       }
       break;
     }
@@ -156,7 +330,7 @@ btnGo.addEventListener('click', async () => {
 
     attempt++;
     const backoff = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(attempt - 1, 5));
-    elConn.textContent = `reconnecting in ${Math.round(backoff / 1000)}s…`;
+    setConn(`reconnecting in ${Math.round(backoff / 1000)}s…`, 'connecting');
     ping('reconnect.scheduled', { attempt, backoff });
 
     // Sleep, but cancellable by the Stop button.
@@ -165,7 +339,7 @@ btnGo.addEventListener('click', async () => {
       aborter.signal.addEventListener('abort', () => { clearTimeout(t); resolve(); });
     });
     if (aborter.signal.aborted) {
-      elConn.textContent = 'stopped';
+      setConn('stopped', '');
       break;
     }
   }
@@ -215,7 +389,7 @@ async function runViewer(url, hash, signal) {
   signal.addEventListener('abort', () => wt.close());
   await wt.ready;
   ping('wt.ready');
-  elConn.textContent = 'open — initialising renderer';
+  setConn('open — initialising renderer', 'open');
 
   // 2. Pick the renderer.  WebGL2 wants planar Y/Cb/Cr from the worker;
   // Canvas2D wants RGBA already-matrixed (cheaper to apply matrix in WASM
