@@ -580,8 +580,18 @@
       var buffer = Module._malloc(array.length);
       Module.writeArrayToMemory(array, buffer);
       // console.log("HTJ2K decoder creation start");
+      // num_threads = 4 (NOT 0 = auto = navigator.hardwareConcurrency).
+      // PTHREAD_POOL_SIZE in the WASM build is capped at 4; passing 0 here
+      // makes the C++ ThreadPool ask for hardwareConcurrency threads, and
+      // Emscripten then dynamically `new Worker(import.meta.url)`s the
+      // overflow.  On systems where hardwareConcurrency is high (≥ 16)
+      // those dynamic spawns stall — Network tab fills with dozens of
+      // pending fetches for libopen_htj2k_mt_simd.js, the decode never
+      // completes, no console error.  Match the prespawned pool size
+      // (other sites — rtp_demo, wt_viewer, shared decoder_worker — all
+      // pass 4 already).  Per profiling, 4 saturates the HT decoder.
       j2c = g_use_mt
-        ? create_decoder_mt(buffer, array.length, skip_res_for_data | 0, 0)
+        ? create_decoder_mt(buffer, array.length, skip_res_for_data | 0, 4)
         : create_decoder(buffer, array.length, skip_res_for_data | 0);
       // Query JPH colorspace before parsing (set in constructor; 0 for raw codestreams).
       // EnumCS: 16=sRGB, 17=Grayscale, 18=YCbCr
