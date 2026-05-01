@@ -126,11 +126,19 @@ btnGo.addEventListener('click', async () => {
     // error is something we know retrying won't fix.
     if (aborted || !RECONNECT ||
         (lastError && FATAL_PATTERN.test(String(lastError)))) {
-      if (lastError) {
+      if (aborted) {
+        // User-initiated abort always closes the WebTransport, which
+        // makes any in-flight `await reader.read()` reject with
+        // `WebTransportError: The session is closed.` — that's the API
+        // contract, not a real failure.  Suppress the error display so
+        // the user sees "stopped", not a stack trace.
+        elErr.textContent = '';
+        elConn.textContent = 'stopped';
+      } else if (lastError) {
         elErr.textContent = lastError.stack || String(lastError);
         elConn.textContent = 'error';
       } else {
-        elConn.textContent = aborted ? 'stopped' : 'closed';
+        elConn.textContent = 'closed';
       }
       break;
     }
