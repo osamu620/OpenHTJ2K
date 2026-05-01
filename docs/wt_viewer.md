@@ -182,6 +182,19 @@ controls (URL, certHash, Connect/Stop) are also wired and editable.
 - `source_fps=<N>` — Declared source frame rate. Used only to flag the
   "decode-bound" status when rolling decode `p95` exceeds the source
   frame interval. Default `30`.
+- `pace={live|rtp}` — Frame-display strategy. Default `live`: render the
+  most-recent decoded frame at every rAF tick (lowest latency, frames
+  silently overwritten if the producer outpaces vsync). `rtp` queues
+  frames in a small ring and times each render against its
+  RTP-timestamp-relative wall time after a brief pre-roll anchor —
+  smoother under network jitter at the cost of ~1 frame-period extra
+  latency. The stats line gains a `pace lag <ms> drops <N>` suffix in
+  `rtp` mode (`pace lag` is the most-recent `rafTimestamp − target`;
+  `drops` counts frames discarded on ring overflow).
+- `preroll=<N>` — In `pace=rtp` mode, render the first `N` decoded
+  frames immediately before taking the RTP-clock anchor. Defaults to
+  `1`; raise it (e.g. `?pace=rtp&preroll=3`) to absorb a longer initial
+  network burst before locking in the wall-clock anchor.
 - `report=<ms>` — Period in milliseconds to POST a JSON snapshot of the
   current stats to `/report`. Used by the headless smoke and benchmark
   scripts; leave unset for normal viewing.
