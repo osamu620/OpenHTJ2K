@@ -28,17 +28,17 @@
         },
         function (err) { console.warn("COI service worker failed:", err); }
       );
-    } else if (window.crossOriginIsolated && navigator.serviceWorker
-                                          && navigator.serviceWorker.controller) {
+    } else if (window.crossOriginIsolated && navigator.serviceWorker) {
       // Page is already cross-origin isolated via response headers, but a
-      // stale COI service worker from a pre-headers visit is still
-      // controlling it.  The SW proxies every fetch via
-      // `new Response(res.body, …)`, which gives the browser an empty body
-      // for 304 responses (the SW's Response isn't paired with the disk
-      // cache).  pthread Worker scripts then load as empty content and the
-      // multi-threaded WASM module hangs at `default()` with no error.
-      // Unregister and reload once to recover.
+      // COI service worker from a pre-headers visit may still be registered
+      // — and even if it isn't controlling the parent window, it can still
+      // intercept fetches initiated by pthread `new Worker(url)` calls,
+      // breaking multi-threaded WASM.  Unregister any leftover registration
+      // and reload once to recover.  (Don't gate on
+      // `navigator.serviceWorker.controller`: it can be null even while
+      // the SW is active for child workers.)
       navigator.serviceWorker.getRegistrations().then(function (regs) {
+        if (regs.length === 0) return;   // nothing to clean up
         Promise.all(regs.map(function (r) { return r.unregister(); }))
                .then(function () { location.reload(); });
       });
