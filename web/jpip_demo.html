@@ -412,12 +412,13 @@
       },
       function (err) { console.warn("COI service worker failed:", err); }
     );
-  } else if (window.crossOriginIsolated && navigator.serviceWorker
-                                        && navigator.serviceWorker.controller) {
-    // Stale COI service worker from a pre-`_headers` visit is still
-    // controlling this page; its fetch proxy returns empty bodies for 304
-    // responses and breaks pthread Worker spawn.  Unregister and reload.
+  } else if (window.crossOriginIsolated && navigator.serviceWorker) {
+    // Stale COI service worker from a pre-`_headers` visit may still be
+    // registered.  Even when it isn't controlling the parent window, it
+    // can still intercept pthread `new Worker(url)` fetches and break
+    // multi-threaded WASM.  Unregister and reload once if found.
     navigator.serviceWorker.getRegistrations().then(function (regs) {
+      if (regs.length === 0) return;
       Promise.all(regs.map(function (r) { return r.unregister(); }))
              .then(function () { location.reload(); });
     });
