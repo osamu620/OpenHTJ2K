@@ -173,6 +173,48 @@
   }
   .site-footer a { color: var(--accent); text-decoration: none; }
   .site-footer a:hover { text-decoration: underline; }
+
+  /* Collapsible URL-parameters reference.  docs/wt_viewer.md is the
+     canonical source — this block exists for convenience only.  Keep
+     the two in sync if either changes. */
+  .url-params {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 0.875rem 1.25rem;
+    margin-bottom: 1.25rem; font-size: 0.8125rem;
+  }
+  .url-params > summary {
+    cursor: pointer; font-weight: 600; color: var(--text-sub);
+    font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em;
+    list-style: none;          /* hide default marker */
+    user-select: none;
+  }
+  .url-params > summary::-webkit-details-marker { display: none; }
+  .url-params > summary::before {
+    content: "▸ "; color: var(--accent); display: inline-block;
+  }
+  .url-params[open] > summary::before { content: "▾ "; }
+  .url-params table {
+    width: 100%; border-collapse: collapse; margin-top: 0.75rem;
+  }
+  .url-params th, .url-params td {
+    text-align: left; padding: 0.375rem 0.625rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .url-params th {
+    color: var(--text-sub); font-weight: 600; font-size: 0.6875rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .url-params td code {
+    background: var(--bg); padding: 1px 5px; border-radius: 3px;
+    font-size: 0.75rem; color: var(--accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .url-params tr:last-child td { border-bottom: none; }
+  .url-params .docs-link { margin-top: 0.625rem; font-size: 0.75rem;
+    color: var(--text-sub); }
+  .url-params .docs-link a { color: var(--accent); text-decoration: none; }
+  .url-params .docs-link a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -210,8 +252,64 @@
 
 <div id="err"></div>
 
+<details class="url-params">
+  <summary>URL parameters</summary>
+  <table>
+    <thead>
+      <tr><th>Parameter</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>url=&lt;wt-url&gt;</code></td>
+        <td>WebTransport endpoint (e.g. <code>https://localhost:4433/</code>). Pre-fills the URL field.</td>
+      </tr>
+      <tr>
+        <td><code>certHash=&lt;hex&gt;</code></td>
+        <td>SHA-256 of the bridge's dev cert, colon-separated bytes. The launcher prints the exact value.</td>
+      </tr>
+      <tr>
+        <td><code>autorun=1</code></td>
+        <td>Click <em>Connect</em> automatically on page load.</td>
+      </tr>
+      <tr>
+        <td><code>renderer=webgl2|canvas2d</code></td>
+        <td>Force a renderer. Default tries WebGL2 first; falls back to Canvas2D when WebGL2 init fails.</td>
+      </tr>
+      <tr>
+        <td><code>threads=&lt;N&gt;</code></td>
+        <td>WASM decoder worker count. Default <code>4</code>. The HT block coder saturates around 2 threads, so larger values rarely help.</td>
+      </tr>
+      <tr>
+        <td><code>source_fps=&lt;N&gt;</code></td>
+        <td>Declared source frame rate. Used only to flag the “decode-bound” status when rolling decode <code>p95</code> exceeds the source frame interval. Default <code>30</code>.</td>
+      </tr>
+      <tr>
+        <td><code>pace=live|rtp</code></td>
+        <td>Frame display strategy. Default <code>live</code> renders the most-recent decoded frame at every rAF tick (lowest latency). <code>rtp</code> queues frames in a small ring and times each render against its RTP-timestamp wall time after a brief pre-roll — smoother under network jitter at the cost of ~1 frame-period extra latency.</td>
+      </tr>
+      <tr>
+        <td><code>preroll=&lt;N&gt;</code></td>
+        <td>In <code>pace=rtp</code> mode, render the first <code>N</code> frames immediately before taking the RTP-clock anchor. Default <code>1</code>.</td>
+      </tr>
+      <tr>
+        <td><code>debug=1</code></td>
+        <td>Show a translucent telemetry overlay on top of the canvas (FPS, decode <code>p50</code>/<code>p95</code>, drops, drift).</td>
+      </tr>
+      <tr>
+        <td><code>report=&lt;ms&gt;</code></td>
+        <td>POST a JSON snapshot of the current stats to <code>/report</code> every <code>N</code> ms. Used by headless smoke and benchmark scripts.</td>
+      </tr>
+      <tr>
+        <td><code>reconnect=0</code></td>
+        <td>Disable auto-reconnect. Default behaviour retries on session loss with capped exponential back-off; pass <code>0</code> for a one-shot connection.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="docs-link">Canonical reference: <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/wt_viewer.md#viewer-url-parameters">docs/wt_viewer.md</a>.</p>
+</details>
+
 <footer class="site-footer">
-  See <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/wt_viewer.md">docs/wt_viewer.md</a> for URL parameters and architecture notes.
+  See <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/wt_viewer.md">docs/wt_viewer.md</a> for architecture notes.
 </footer>
 
 <script type="module">
