@@ -300,6 +300,10 @@ add_subdirectory(source/apps/row_range_compare)
 target_include_directories(row_range_compare PUBLIC source/core/interface)
 target_link_libraries(row_range_compare PUBLIC open_htj2k)
 
+# Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
+add_executable(estimate_qfactor)
+add_subdirectory(source/apps/estimate_qfactor)
+
 # JPIP Phase-1 index-check harness (used by tests/jpip_phase1.cmake)
 add_executable(jpip_index_check)
 add_subdirectory(source/apps/jpip_index_check)
