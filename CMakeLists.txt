@@ -286,17 +286,17 @@ target_link_libraries(open_htj2k_enc PUBLIC open_htj2k PRIVATE openhtj2k_imgio)
 
 # imgcmp target
 add_executable(imgcmp)
-add_subdirectory(source/apps/imgcmp)
-target_include_directories(imgcmp PUBLIC source/apps/imgcmp/)
+add_subdirectory(tests/tools/imgcmp)
+target_include_directories(imgcmp PUBLIC tests/tools/imgcmp/)
 target_link_libraries(imgcmp PRIVATE openhtj2k_imgio)
 
 add_executable(lb_compare)
-add_subdirectory(source/apps/lb_compare)
+add_subdirectory(tests/tools/lb_compare)
 target_include_directories(lb_compare PUBLIC source/core/interface)
 target_link_libraries(lb_compare PUBLIC open_htj2k)
 
 add_executable(row_range_compare)
-add_subdirectory(source/apps/row_range_compare)
+add_subdirectory(tests/tools/row_range_compare)
 target_include_directories(row_range_compare PUBLIC source/core/interface)
 target_link_libraries(row_range_compare PUBLIC open_htj2k)
 
@@ -306,43 +306,43 @@ add_subdirectory(source/apps/estimate_qfactor)
 
 # JPIP Phase-1 index-check harness (used by tests/jpip_phase1.cmake)
 add_executable(jpip_index_check)
-add_subdirectory(source/apps/jpip_index_check)
+add_subdirectory(tests/tools/jpip_index_check)
 target_link_libraries(jpip_index_check PUBLIC open_htj2k)
 
 # JPIP Phase-1 partial-decode sanity harness (used by tests/jpip_phase1.cmake)
 add_executable(jpip_partial_decode_check)
-add_subdirectory(source/apps/jpip_partial_decode_check)
+add_subdirectory(tests/tools/jpip_partial_decode_check)
 target_include_directories(jpip_partial_decode_check PUBLIC source/core/interface)
 target_link_libraries(jpip_partial_decode_check PUBLIC open_htj2k)
 
 # JPIP Phase-2 VBAS codec self-test (used by tests/jpip_phase1.cmake)
 add_executable(jpip_vbas_check)
-add_subdirectory(source/apps/jpip_vbas_check)
+add_subdirectory(tests/tools/jpip_vbas_check)
 target_link_libraries(jpip_vbas_check PUBLIC open_htj2k)
 
 # JPIP Phase-2 message header codec self-test (used by tests/jpip_phase1.cmake)
 add_executable(jpip_message_check)
-add_subdirectory(source/apps/jpip_message_check)
+add_subdirectory(tests/tools/jpip_message_check)
 target_link_libraries(jpip_message_check PUBLIC open_htj2k)
 
 # JPIP Phase-2 header data-bin emitter self-test (used by tests/jpip_phase1.cmake)
 add_executable(jpip_emitter_check)
-add_subdirectory(source/apps/jpip_emitter_check)
+add_subdirectory(tests/tools/jpip_emitter_check)
 target_link_libraries(jpip_emitter_check PUBLIC open_htj2k)
 
 # JPIP Phase-2 JPP-stream parser self-test (used by tests/jpip_phase1.cmake)
 add_executable(jpip_parser_check)
-add_subdirectory(source/apps/jpip_parser_check)
+add_subdirectory(tests/tools/jpip_parser_check)
 target_link_libraries(jpip_parser_check PUBLIC open_htj2k)
 
 # JPIP Phase-3 HTTP request/response formatting self-test
 add_executable(jpip_http_check)
-add_subdirectory(source/apps/jpip_http_check)
+add_subdirectory(tests/tools/jpip_http_check)
 target_link_libraries(jpip_http_check PUBLIC open_htj2k)
 
 # JPIP Phase-3 TCP socket wrapper self-test
 add_executable(jpip_tcp_check)
-add_subdirectory(source/apps/jpip_tcp_check)
+add_subdirectory(tests/tools/jpip_tcp_check)
 target_link_libraries(jpip_tcp_check PUBLIC open_htj2k)
 if(WIN32)
   target_link_libraries(jpip_tcp_check PUBLIC ws2_32)
@@ -359,7 +359,7 @@ set_target_properties(
 
 # JPIP issue #297 chunked-transfer round-trip self-test
 add_executable(jpip_chunked_check)
-add_subdirectory(source/apps/jpip_chunked_check)
+add_subdirectory(tests/tools/jpip_chunked_check)
 target_link_libraries(jpip_chunked_check PUBLIC open_htj2k)
 if(WIN32)
   target_link_libraries(jpip_chunked_check PUBLIC ws2_32)
@@ -367,12 +367,12 @@ endif()
 
 # JPIP issue #297 StreamingJppParser split-at-every-offset self-test
 add_executable(jpip_streaming_parser_check)
-add_subdirectory(source/apps/jpip_streaming_parser_check)
+add_subdirectory(tests/tools/jpip_streaming_parser_check)
 target_link_libraries(jpip_streaming_parser_check PUBLIC open_htj2k)
 
 # JPIP Phase-2 precinct data-bin + packet-locator self-test
 add_executable(jpip_precinct_check)
-add_subdirectory(source/apps/jpip_precinct_check)
+add_subdirectory(tests/tools/jpip_precinct_check)
 target_link_libraries(jpip_precinct_check PUBLIC open_htj2k)
 
 # JPIP foveation benchmark (bandwidth + decode workload comparison)
@@ -386,7 +386,7 @@ set_target_properties(
 
 # JPIP Phase-2 full JPP-stream round-trip (emit → parse → reassemble → decode)
 add_executable(jpip_assembler_check)
-add_subdirectory(source/apps/jpip_assembler_check)
+add_subdirectory(tests/tools/jpip_assembler_check)
 target_link_libraries(jpip_assembler_check PUBLIC open_htj2k)
 
 # RFC 9828 RTP receiver (experimental, requires GLFW)
