@@ -47,20 +47,25 @@ set(WASM_FLAGS "${WASM_FLAGS_COMMON}")
 # PTHREAD_POOL_SIZE is set at link time; the JS runtime pre-creates this many
 # Web Workers so that std::thread / ThreadPool do not block on worker creation.
 #
-# Capped at 4 deliberately — Phase A0 (reference_wasm_wt_viewer_perf) showed
-# the HT decoder saturates at 4 threads, so a larger pool gives no perf
-# benefit.  Critically, every pool worker fetches libopen_htj2k_mt_simd.js
-# in parallel at module-init, and Chrome's HTTP/1.1 connection cap is 6 per
-# host — a 32-worker pool (e.g. on a 32-thread CPU with the prior default
-# `navigator.hardwareConcurrency`) overruns the cap when serving over
-# self-signed HTTPS, causing roughly half the inner pthread workers to fail
-# their dynamic import with a silent "[object Event]" error.  4 fits
-# comfortably under the cap and matches the actual decode-time sweet spot.
+# Sized dynamically to navigator.hardwareConcurrency (capped at 16) — Emscripten
+# evaluates this expression at module instantiation, so each visitor gets a
+# pool matched to their CPU.  Mobile (4 cores) → 4 prespawned, desktop
+# (16 cores) → 16 prespawned, no waste either way.  The 16-cap is a safety
+# net: the HT decoder saturates well before 16 threads, and beyond that the
+# memory overhead per prespawned worker (~1 MB JS runtime + stack) outweighs
+# any further perf gain.
+#
+# A previous build pinned this at 4 to stay under Chrome's HTTP/1.1
+# 6-connection-per-host cap during the worker bootstrap (every prespawned
+# worker fetches libopen_htj2k_mt_simd.js in parallel at module-init).  That
+# cap still bites on plain-HTTP local dev with hwc > 5; the workaround is to
+# run web/perf/serve.mjs with --cert/--key to enable HTTP/2.  Cloudflare
+# Pages always serves HTTP/2, so production is unaffected.
 set(WASM_MT_FLAGS "\
     ${WASM_FLAGS_COMMON} \
     -pthread \
     -s USE_PTHREADS=1 \
-    -s PTHREAD_POOL_SIZE=4 \
+    -s PTHREAD_POOL_SIZE=\"Math.min(navigator.hardwareConcurrency,16)\" \
     "
 )
 # Pull in the open_htj2k library (compiled without SIMD or pthread flags → scalar single-threaded build).
