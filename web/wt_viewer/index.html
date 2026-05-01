@@ -187,6 +187,16 @@ const SOURCE_FPS = parseFloat(qs.get('source_fps') || '30');
 const WANT_RENDERER = qs.get('renderer') || 'webgl2';
 const PACKET_BUF = 4096;
 
+// ?pace=rtp opts into RTP-timestamp pacing — frames render at their
+// RTP-clock-relative wall time after a brief pre-roll, absorbing network
+// jitter at the cost of ~1 frame-period extra latency.  Default is
+// 'live': render whatever frame is most recent at every rAF tick (lowest
+// latency, what the producer just sent).  ?preroll=N sets how many
+// initial frames render immediately before the anchor is taken.
+const PACE_MODE = qs.get('pace') === 'rtp' ? 'rtp' : 'live';
+const PACE_RING_CAPACITY = 2;
+const PACE_PREROLL       = Math.max(0, parseInt(qs.get('preroll') || '1', 10) || 0);
+
 async function runViewer(url, hash, signal) {
   // 1. Open the WebTransport session.
   if (!('WebTransport' in window)) throw new Error('WebTransport not supported in this browser');
@@ -208,18 +218,34 @@ async function runViewer(url, hash, signal) {
   const wantOutput = renderer.kind === 'webgl2' ? 'planar' : 'rgba';
 
   // 3. Per-frame state shared between the worker callback and the rAF
-  // loop.  `pendingFrame` is the latest decoded frame waiting to draw;
-  // `framePending` flags the rAF tick that something changed.
+  // loop.
+  //   live mode: `pendingFrame` is the latest decoded frame waiting to
+  //              draw; `framePending` flags the rAF tick that something
+  //              changed.  Lowest latency, frames quietly overwritten if
+  //              the producer outpaces vsync.
+  //   rtp mode:  `pendingRing` queues up to PACE_RING_CAPACITY frames;
+  //              the rAF tick consumes them in order at their
+  //              RTP-clock-relative target time after a brief pre-roll
+  //              anchor.  Absorbs network jitter at +1 frame-period
+  //              latency.  Ring overflow is counted as paceDrops.
   const decode_p95 = new RollingP95(60);
   let decodedFrames = 0;
-  let pendingFrame  = null;       // { mode, w, h, ... } from the worker
-  let framePending  = false;
+  let pendingFrame  = null;       // live mode
+  let framePending  = false;      // live mode
+  const pendingRing = [];         // rtp mode
+  let paceDrops     = 0;          // rtp mode: ring-overflow drops
+  let lastPaceLag   = 0;          // rtp mode: last (rafTs - target) for telemetry
+  let paceWallStart = 0;          // rtp mode: rafTimestamp at anchor
+  let paceRtpStart  = 0;          // rtp mode: entry.rtpTs at anchor (>>>0)
+  let pacePreRollLeft = PACE_PREROLL;   // rtp mode: counts down to anchor
   let lastW = 0, lastH = 0;
   let lastStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0 };
   let lastStatsTickMs = performance.now();
 
   // RTP-clock vs wall-clock drift tracker.  Anchored on the first decoded
   // frame: drift_ms = (now - wallAnchor) - (rtpTs - rtpAnchor) / 90.
+  // Independent of PACE_MODE — tracks producer/receiver clock skew over
+  // the whole session, used by both modes' stats line.
   let rtpAnchor = null, wallAnchor = null, lastDrift = 0;
   function noteRtpFrame(rtpTs) {
     if (rtpAnchor === null) { rtpAnchor = rtpTs >>> 0; wallAnchor = performance.now(); return; }
@@ -234,16 +260,25 @@ async function runViewer(url, hash, signal) {
     threadCount: THREAD_COUNT,
     output:      wantOutput,
     onFrame: (frame) => {
-      // The worker already applied drop-on-overrun against its WASM
-      // ready-queue.  On main we just need to keep the LATEST frame as
-      // the next one to draw — if we're behind vsync, older frames in
-      // flight are simply replaced (the GC reclaims their buffers).
-      pendingFrame = frame;
-      framePending = true;
       decode_p95.push(frame.decodeMs);
       decodedFrames++;
       if (decodedFrames === 1) ping('first.frame.complete', { w: frame.w, h: frame.h });
       noteRtpFrame(frame.rtpTs);
+      if (PACE_MODE === 'rtp') {
+        // Append; if the ring overflows, drop the OLDEST (FIFO).  Newer
+        // frames are more likely to match upcoming rAF targets.
+        pendingRing.push(frame);
+        while (pendingRing.length > PACE_RING_CAPACITY) {
+          pendingRing.shift();
+          paceDrops++;
+        }
+      } else {
+        // Live mode: keep only the LATEST frame.  Worker already applied
+        // drop-on-overrun against its WASM ready-queue; if we're behind
+        // vsync, in-flight frames are quietly replaced (GC reclaims).
+        pendingFrame = frame;
+        framePending = true;
+      }
     },
     onStats: (s) => { lastStats = s; },
     onError: (e) => {
@@ -257,30 +292,63 @@ async function runViewer(url, hash, signal) {
 
   // 5. rAF render loop.  Decoupled from packet ingest and decode — locks
   // display to monitor refresh and absorbs per-frame jitter.
-  let rafHandle = 0;
-  function rafTick() {
-    if (signal.aborted) { rafHandle = 0; return; }
-    if (framePending && pendingFrame) {
-      framePending = false;
-      const f = pendingFrame;
-      if (f.w !== lastW || f.h !== lastH) {
-        drawCanvas.width = f.w; drawCanvas.height = f.h;
-        renderer.resize(f.w, f.h);
-        lastW = f.w; lastH = f.h;
-      }
-      if (f.mode === 'rgba') {
-        renderer.uploadRGBA(new Uint8Array(f.rgba), f.w, f.h);
-      } else {
-        renderer.uploadYCbCr({
-          y:  new Uint8Array(f.y),  cb: new Uint8Array(f.cb),  cr: new Uint8Array(f.cr),
-          w:  f.w,  h:  f.h,  cw: f.cw, ch: f.ch,
-          matrix: f.matrix, range: f.range,
-          mode:  f.colorspace === 16 ? 'rgb' : 'ycbcr',  // ENUMCS_SRGB
-        });
-      }
-      renderer.draw();
-      noteFrame();
+  function uploadAndDraw(f) {
+    if (f.w !== lastW || f.h !== lastH) {
+      drawCanvas.width = f.w; drawCanvas.height = f.h;
+      renderer.resize(f.w, f.h);
+      lastW = f.w; lastH = f.h;
     }
+    if (f.mode === 'rgba') {
+      renderer.uploadRGBA(new Uint8Array(f.rgba), f.w, f.h);
+    } else {
+      renderer.uploadYCbCr({
+        y:  new Uint8Array(f.y),  cb: new Uint8Array(f.cb),  cr: new Uint8Array(f.cr),
+        w:  f.w,  h:  f.h,  cw: f.cw, ch: f.ch,
+        matrix: f.matrix, range: f.range,
+        mode:  f.colorspace === 16 ? 'rgb' : 'ycbcr',  // ENUMCS_SRGB
+      });
+    }
+    renderer.draw();
+    noteFrame();
+  }
+
+  let rafHandle = 0;
+  function rafTick(rafTimestamp) {
+    if (signal.aborted) { rafHandle = 0; return; }
+
+    if (PACE_MODE === 'rtp') {
+      // Pre-roll: render the first PACE_PREROLL frames immediately to
+      // hide initial network jitter, then anchor on the next one.  The
+      // ring acts as a tiny depth buffer; one frame per VSync after
+      // pre-roll keeps display rate ≤ monitor refresh.
+      while (pendingRing.length > 0) {
+        const entry = pendingRing[0];
+        if (pacePreRollLeft > 0) {
+          pendingRing.shift();
+          uploadAndDraw(entry);
+          pacePreRollLeft--;
+          continue;            // drain pre-roll if more frames are queued
+        }
+        if (paceWallStart === 0) {
+          paceWallStart = rafTimestamp;
+          paceRtpStart  = entry.rtpTs >>> 0;
+        }
+        // Unsigned subtraction handles the rare RTP-ts wraparound
+        // (32-bit @ 90 kHz wraps every ~13 hours).  Negative dt would
+        // wrap to a huge positive — same defensive pattern as rtp_demo.
+        const dtMs   = (((entry.rtpTs >>> 0) - paceRtpStart) >>> 0) / 90;
+        const target = paceWallStart + dtMs;
+        lastPaceLag  = rafTimestamp - target;
+        if (lastPaceLag < -0.5) break;        // not its turn yet
+        pendingRing.shift();
+        uploadAndDraw(entry);
+        break;                                // one frame per VSync
+      }
+    } else if (framePending && pendingFrame) {
+      framePending = false;
+      uploadAndDraw(pendingFrame);
+    }
+
     rafHandle = requestAnimationFrame(rafTick);
   }
   rafHandle = requestAnimationFrame(rafTick);
@@ -311,7 +379,10 @@ async function runViewer(url, hash, signal) {
       : (dropPct > 0 ? `${dropPct}% dropped` : 'ok');
     const headline = `${lastW}x${lastH} @ ${fps.toFixed(0)} fps | decode p50/p95 ${dp.p50.toFixed(1)}/${dp.p95.toFixed(1)} ms | ${status}`;
     const driftLabel = `drift ${lastDrift >= 0 ? '+' : ''}${lastDrift.toFixed(0)} ms`;
-    const breakdown = `decoded ${decodedFrames} | reassembled ${fE} | reassembly drops ${fD} | seq gaps ${sg} | ${driftLabel}`;
+    const paceLabel = PACE_MODE === 'rtp'
+      ? ` | pace lag ${lastPaceLag >= 0 ? '+' : ''}${lastPaceLag.toFixed(0)} ms drops ${paceDrops}`
+      : '';
+    const breakdown = `decoded ${decodedFrames} | reassembled ${fE} | reassembly drops ${fD} | seq gaps ${sg} | ${driftLabel}${paceLabel}`;
     elStats.textContent = headline + '\n' + breakdown;
     if (DEBUG_OVERLAY) {
       elOver.textContent = headline + '\n' + breakdown;
@@ -322,6 +393,8 @@ async function runViewer(url, hash, signal) {
       decodedFrames, fE, fD, sg,
       p50: dp.p50, p95: dp.p95, fps, decodeBound, dropPct,
       drift: Math.round(lastDrift),
+      paceMode: PACE_MODE,
+      paceDrops, paceLag: Math.round(lastPaceLag),
       w: lastW, h: lastH,
     });
   }
