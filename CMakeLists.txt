@@ -476,9 +476,33 @@ install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 ################################################################################################
 # Testing
 ################################################################################################
-# conformance testing
+# Snapshot the test list before any tests/*.cmake include so we can attach the
+# `test_artifacts` cleanup fixture to every test added below — without this,
+# tests added by sibling files (batch_validation, jpip_phase1, encoder_test,
+# row_range_validation) escaped the FIXTURES_REQUIRED loop that used to live
+# inside decoder_conformance.cmake, letting cleanup_artifacts race their
+# decoder output and produce intermittent "file X not found" failures under
+# `ctest -j`.
+get_property(_tests_before_conformance DIRECTORY PROPERTY TESTS)
+
+# conformance testing — declares the `test_artifacts` cleanup fixture and the
+# main HT/Part-1/Part-2/WASM test sets.
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/batch_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
+
+# Auto-attach the cleanup fixture to every test added by the includes above.
+# Skip cleanup_artifacts itself (it IS the fixture), and skip tests that
+# already declared FIXTURES_REQUIRED explicitly (encoder_test does this so
+# its DEPENDS chain is preserved).
+get_property(_tests_after_conformance DIRECTORY PROPERTY TESTS)
+foreach(_t IN LISTS _tests_after_conformance)
+  if(NOT _t IN_LIST _tests_before_conformance AND NOT _t STREQUAL "cleanup_artifacts")
+    get_test_property(${_t} FIXTURES_REQUIRED _existing)
+    if(NOT _existing OR NOT "test_artifacts" IN_LIST _existing)
+      set_tests_properties(${_t} PROPERTIES FIXTURES_REQUIRED test_artifacts)
+    endif()
+  endif()
+endforeach()
