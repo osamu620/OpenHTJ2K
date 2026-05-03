@@ -5789,15 +5789,15 @@ void j2k_tile::decode_line_based_predecoded(j2k_main_header &hdr, uint8_t reduce
             const bool is_ht = (block->Cmodes & HT) >> 6;
             if (!is_ht) {
               // EBCOT: all three buffers must be pre-zeroed.
-              memset(block->sample_buf, 0, QWx2 * QHx2 * sizeof(int32_t));
-              memset(block->block_states, 0, (QWx2 + 2) * (QHx2 + 2));
+              memset(block->sample_buf, 0, static_cast<size_t>(QWx2) * QHx2 * sizeof(int32_t));
+              memset(block->block_states, 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
               memset(block->block_contexts, 0,
-                     (QHx2 / 4 + 2) * (QWx2 + 2) * sizeof(uint32_t));
+                     static_cast<size_t>(QHx2 / 4 + 2) * (QWx2 + 2) * sizeof(uint32_t));
             } else if (block->num_passes > 1) {
               // HT multi-pass: sigprop/magref read the block_states border
               // (written by cleanup only for the interior). Zero block_states;
               // sample_buf is fully written by cleanup before sigprop reads it.
-              memset(block->block_states, 0, (QWx2 + 2) * (QHx2 + 2));
+              memset(block->block_states, 0, static_cast<size_t>(QWx2 + 2) * (QHx2 + 2));
             }
             // HT single-pass: ht_cleanup_decode initialises all positions
             // before reading — no pre-zeroing needed.
