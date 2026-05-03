@@ -86,9 +86,12 @@ on modern x86-64**.
 ## Quick build
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_THREAD=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
+
+The built-in thread pool is enabled automatically when CMake's
+`find_package(Threads)` succeeds (every supported platform).
 
 Executables land in `build/bin/`. For the full CMake flag reference,
 the WebAssembly build, and the experimental RTP receiver build (GLFW

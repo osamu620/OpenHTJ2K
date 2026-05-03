@@ -18,14 +18,36 @@ Three demos ship with the library:
 All three share the same [`open_htj2k_jpip_server`](#server-open_htj2k_jpip_server)
 and the core `source/core/jpip/` library.
 
+## Build prerequisites
+
+The three native binaries have different build-flag requirements:
+
+| Binary | Build flag | Native deps |
+|---|---|---|
+| `open_htj2k_jpip_server` | none (always built) | None beyond the core library |
+| `open_htj2k_jpip_benchmark` | none (always built) | None beyond the core library |
+| `open_htj2k_jpip_demo` | **`-DOPENHTJ2K_RTP=ON`** (shares the GLFW renderer with `open_htj2k_rtp_recv`) | GLFW 3.x; OpenGL 3.3 on Linux/Windows or Metal on macOS — see [building.md](building.md#building-the-experimental-rfc-9828-rtp-receiver) |
+
+For HTTP/3 over QUIC on either the server or the native demo, add
+`-DOPENHTJ2K_QUIC=ON`. Required libraries (MsQuic + nghttp3) and
+per-platform install commands are documented in
+[building.md → JPIP HTTP/3 prerequisites](building.md#jpip-http3-prerequisites-opt-in).
+The HTTP/1.1 transport is always available.
+
 ## Quick start
 
-Build the server, native demo, and benchmark:
+Build the server, benchmark, and native demo (the demo needs the
+extra `-DOPENHTJ2K_RTP=ON` flag because it shares its renderer with
+`open_htj2k_rtp_recv`):
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_THREAD=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_RTP=ON
 cmake --build build -j
 ```
+
+If you only need the server and benchmark (e.g. for CI or headless
+deployment), drop `-DOPENHTJ2K_RTP=ON` and the cmake step has no
+window-system or GPU dependencies.
 
 Serve a codestream and drive it from the native demo:
 
@@ -44,9 +66,11 @@ exercises every byte of the JPP-stream wire format):
 ./build/bin/open_htj2k_jpip_demo input.j2c
 ```
 
-Browser demos are deployed at `https://htj2k-demo.pages.dev/`; point
-them at your own server with the `?server=` URL parameter or the
-**Server** field in the top bar.
+Browser demos are deployed at `https://htj2k-demo.pages.dev/` and run
+in any current Chromium- or Firefox-based browser; point them at your
+own server with the `?server=` URL parameter or the **Server** field
+in the top bar. Building the browser demos locally requires
+Emscripten — see [building.md → Building for WebAssembly](building.md#building-for-webassembly-wasm).
 
 ## Server — `open_htj2k_jpip_server`
 

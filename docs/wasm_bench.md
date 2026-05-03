@@ -16,6 +16,12 @@ decodes and optionally dumps planar buffers for comparison.
 
 ## Prerequisites
 
+- **Node.js ≥ 18** to run the bench driver (uses modern ESM, top-level
+  await, and the `node:test` shape consistent with the rest of the
+  WASM tooling in this repo).
+- **Emscripten** to build the WASM artefacts the driver loads — see
+  [building.md → Building for WebAssembly](building.md#building-for-webassembly-wasm).
+
 Build at least one WASM variant first. The bench driver looks in
 `${WEB_DIR}/../build_wasm_prof/html/` by default; override with
 `--build-dir` to point elsewhere.
