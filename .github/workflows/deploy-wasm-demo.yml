@@ -19,19 +19,19 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Cloudflare's wrangler CLI now requires Node 22+; the runner's default
       # Node is still 20.x, which made `npm install -g wrangler@latest`
       # succeed but `wrangler pages deploy` fail with "requires at least
       # Node.js v22.0.0".  Pin Node 22 so the deploy step stays green even
       # as wrangler bumps its minimum.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
       - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v16
         with:
           version: 3.1.61
           actions-cache-folder: emsdk-cache
