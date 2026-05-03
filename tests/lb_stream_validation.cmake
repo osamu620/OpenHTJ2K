@@ -40,6 +40,10 @@ add_test(NAME lbs_p1_ht_03_11 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_
 add_test(NAME lbs_p1_ht_03_12 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b12.j2k --stream)
 add_test(NAME lbs_p1_ht_04_9  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_04_b9.j2k --stream)
 add_test(NAME lbs_p1_ht_05_11 COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_05_b11.j2k --stream)
+# MSVC-only divergence (1 pixel off-by-1 at comp 1 (21,80)): unrelated to the
+# NEON FMA fix; pre-fix Windows ARM64 produced the same single-pixel diff,
+# meaning MSVC already lowered vmlaq_f32 to FMLA. Tracked as a separate
+# investigation; keep gated until root cause is found.
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "ARM64")
   set_tests_properties(lbs_p1_ht_05_11 PROPERTIES WILL_FAIL TRUE)
 endif()
@@ -70,6 +74,7 @@ add_test(NAME lbs_p1_02  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_02.j2k --
 add_test(NAME lbs_p1_03  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_03.j2k --stream)
 add_test(NAME lbs_p1_04  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_04.j2k --stream)
 add_test(NAME lbs_p1_05  COMMAND lb_compare ${CONFORMANCE_DATA_DIR}/p1_05.j2k --stream)
+# Same MSVC-only divergence as lbs_p1_ht_05_11 above (comp 2 (468,188) off by 1).
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "ARM64")
   set_tests_properties(lbs_p1_05 PROPERTIES WILL_FAIL TRUE)
 endif()

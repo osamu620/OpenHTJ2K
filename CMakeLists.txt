@@ -492,6 +492,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/tests/batch_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/lb_stream_validation.cmake)
 
 # Auto-attach the cleanup fixture to every test added by the includes above.
 # Skip cleanup_artifacts itself (it IS the fixture), and skip tests that
