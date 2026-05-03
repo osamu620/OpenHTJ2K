@@ -10,6 +10,14 @@ Streams (not datagrams) because Chromium's negotiated WebTransport datagram
 size caps at ~1170 B, below typical RFC 9828 packet sizes (~1400 B). On LAN
 the head-of-line cost vs datagrams is negligible.
 
+## Prerequisites
+
+- **Go ≥ 1.22** — pinned by `go.mod`; older toolchains will refuse to build.
+- No `cgo`, no architecture-specific code — a Go toolchain is the only
+  build-time requirement.
+- For the end-to-end LAN viewer stack (browser, static server, dev cert),
+  see [`docs/wt_viewer.md`](../../docs/wt_viewer.md#prerequisites).
+
 ## Quick start (dev mode)
 
 ```sh

@@ -33,6 +33,18 @@ change.
                                                          └────────────────┘
 ```
 
+## Prerequisites
+
+| Component | Required for | Minimum version | Notes |
+|---|---|---|---|
+| **Go** | Building `wt_bridge` | **1.22** | Pinned by `tools/wt_bridge/go.mod`. `go build` will refuse older toolchains. |
+| **Node.js** | Static server (`web/perf/serve.mjs`), fixture replayer (`udp_replay.mjs`) | **18** | Modern ESM + WebCrypto APIs are used. |
+| **Emscripten** | WASM artefacts under `web/build_wt/` | 3.x or 5.x | See [building.md → Building for WebAssembly](building.md#building-for-webassembly-wasm). |
+| **OpenSSL** | HTTPS dev cert for the static server | any 1.1+ | Required by `gen_static_cert.sh`. Skip with `HTTP_NO_TLS=1` (then WebTransport works only from `http://localhost` on the bridge host). |
+| **Python 3** | URL-encoding inside `run_lan.sh` | 3.6+ | Any system `python3` works. |
+| **Chromium-based browser** | Viewer | latest stable | Firefox WebTransport is partial / behind a flag; Safari has no implementation. See [Browser support](#caveats-and-constraints). |
+| `iproute2` (`ip` command) | LAN-IP autodetect in `run_lan.sh` | — | Linux only. On macOS / BSD, set `LAN_IP=<addr>` before invoking the launcher. |
+
 ## Components
 
 - [`tools/wt_bridge/`](../tools/wt_bridge/) — Go relay. Binds a UDP
