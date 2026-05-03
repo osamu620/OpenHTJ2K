@@ -229,7 +229,10 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
         vst1q_f32(dst_row + x, v_out);
       }
 
-      // Scalar tail
+      // Scalar tail.  Match the SIMD path's modular 32-bit multiply via uint32_t
+      // arithmetic — `int32_t * int32_t` is signed-overflow UB and MSVC ARM64
+      // exploits it to produce different bits from vmulq_s32 in some inlining
+      // contexts, which surfaces as the lbs_p1_05 1-LSB drift.
       for (; x < width; x++) {
         int32_t *val = val_row + x;
         int32_t sign = *val & INT32_MIN;
@@ -249,7 +252,9 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
           *val |= r_val;
         }
         *val          = (*val + (1 << 15)) >> 16;
-        *val         *= scale;
+        // Modular 32-bit multiply, matching vmulq_s32 exactly (no signed-overflow UB).
+        *val          = static_cast<int32_t>(
+            static_cast<uint32_t>(*val) * static_cast<uint32_t>(scale));
         int32_t QF32  = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
         int32_t smask = sign >> 31;
         QF32          = (QF32 ^ smask) - smask;
