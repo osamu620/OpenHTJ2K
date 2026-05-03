@@ -1547,16 +1547,14 @@ function startDisplayLoop(myGen) {
       const target = wallStart + totalPausedMs + dtMs;
       const period = entry.framePeriodMs || (1000 / 60);
 
-      // Pace-drop: too far behind?  Discard and rebase the timeline
-      // anchor so the next surviving frame is scheduled relative to
-      // "now" — without this, every subsequent frame stays behind the
-      // stale anchor and gets pace-dropped too, stalling playback.
-      // Mirrors the "runaway rebase" in the native RTP receiver.
+      // Pace-drop: too far behind?  Discard and re-check next entry.
+      // If the ring drains completely, reset the anchor so the next
+      // decoded frame starts a fresh timeline instead of cascading
+      // into further drops that stall playback.
       if (paceDropEnabled() && rafTimestamp - target > PACE_DROP_PERIODS * period) {
         ringPop();
         droppedByPace++;
-        wallStart = rafTimestamp;
-        rtpStart  = (_ringCount > 0) ? ringPeek().rtpTimestamp : rtpStart;
+        if (_ringCount === 0) { wallStart = 0; totalPausedMs = 0; }
         continue;
       }
 
