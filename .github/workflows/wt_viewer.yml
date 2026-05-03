@@ -37,7 +37,7 @@ jobs:
       run:
         working-directory: tools/wt_bridge
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -84,18 +84,18 @@ jobs:
     name: WASM build + viewer API surface
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v16
         with:
           version: 3.1.61
           actions-cache-folder: emsdk-cache
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Build WASM (mt_simd target only — what the viewer actually loads)
         run: |
@@ -178,7 +178,7 @@ jobs:
     name: end-to-end (replay → bridge → viewer → decode)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -188,15 +188,15 @@ jobs:
           cache-dependency-path: tools/wt_bridge/go.sum
 
       - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v16
         with:
           version: 3.1.61
           actions-cache-folder: emsdk-cache
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Build bridge
         working-directory: tools/wt_bridge
