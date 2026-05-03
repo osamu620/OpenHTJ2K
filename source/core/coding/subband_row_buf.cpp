@@ -310,12 +310,12 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
             bt.block->i_samples = target_buf + bt.row_off + bt.col_off;
           const bool is_ht = (bt.block->Cmodes & HT) >> 6;
           if (!is_ht) {
-            std::memset(bt.block->sample_buf, 0, bt.QWx2 * bt.QHx2 * sizeof(int32_t));
-            std::memset(bt.block->block_states, 0, (bt.QWx2 + 2) * (bt.QHx2 + 2));
+            std::memset(bt.block->sample_buf, 0, static_cast<size_t>(bt.QWx2) * bt.QHx2 * sizeof(int32_t));
+            std::memset(bt.block->block_states, 0, static_cast<size_t>(bt.QWx2 + 2) * (bt.QHx2 + 2));
             std::memset(bt.block->block_contexts, 0,
-                        (bt.QHx2 / 4 + 2) * (bt.QWx2 + 2) * sizeof(uint32_t));
+                        static_cast<size_t>(bt.QHx2 / 4 + 2) * (bt.QWx2 + 2) * sizeof(uint32_t));
           } else if (bt.block->num_passes > 1) {
-            std::memset(bt.block->block_states, 0, (bt.QWx2 + 2) * (bt.QHx2 + 2));
+            std::memset(bt.block->block_states, 0, static_cast<size_t>(bt.QWx2 + 2) * (bt.QHx2 + 2));
           }
         }
         // Batch-push all tasks under a single mutex lock + notify_all.
@@ -655,12 +655,12 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     pb.block->i_samples             = pbuf + pb.row_off + pb.col_off;
     const bool is_ht = (pb.block->Cmodes & HT) >> 6;
     if (!is_ht) {
-      std::memset(pb.block->sample_buf, 0, pb.QWx2 * pb.QHx2 * sizeof(int32_t));
-      std::memset(pb.block->block_states, 0, (pb.QWx2 + 2) * (pb.QHx2 + 2));
+      std::memset(pb.block->sample_buf, 0, static_cast<size_t>(pb.QWx2) * pb.QHx2 * sizeof(int32_t));
+      std::memset(pb.block->block_states, 0, static_cast<size_t>(pb.QWx2 + 2) * (pb.QHx2 + 2));
       std::memset(pb.block->block_contexts, 0,
-                  (pb.QHx2 / 4 + 2) * (pb.QWx2 + 2) * sizeof(uint32_t));
+                  static_cast<size_t>(pb.QHx2 / 4 + 2) * (pb.QWx2 + 2) * sizeof(uint32_t));
     } else if (pb.block->num_passes > 1) {
-      std::memset(pb.block->block_states, 0, (pb.QWx2 + 2) * (pb.QHx2 + 2));
+      std::memset(pb.block->block_states, 0, static_cast<size_t>(pb.QWx2 + 2) * (pb.QHx2 + 2));
     }
   }
   // Batch-push all tasks under a single mutex lock + notify_all.
