@@ -5,11 +5,11 @@ RTP/UDP feed via a small relay (`wt_bridge`), forwards it as a
 WebTransport stream to a Chromium-based browser, and decodes through
 the existing WebAssembly decoder.
 
-Any RFC 9828 compliant sender works on the producer side — Kakadu's
-`kdu_stream_send`, a Raspberry Pi running an HTJ2K-capable rpicam-apps
-fork, the in-repo `udp_replay.mjs` replayer for captured `.rtp` files,
-or any custom packetizer that follows the RFC. The bridge does not
-parse the payload.
+Any RFC 9828 compliant sender works on the producer side — a
+commercial HTJ2K encoder, a Raspberry Pi running an HTJ2K-capable
+rpicam-apps fork, the in-repo `udp_replay.mjs` replayer for captured
+`.rtp` files, or any custom packetizer that follows the RFC. The
+bridge does not parse the payload.
 
 This is the LAN companion to [`open_htj2k_rtp_recv`](cli_rtp_recv.md):
 same wire format on the producer side, same WASM decoder on the receive
