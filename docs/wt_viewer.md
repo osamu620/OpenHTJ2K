@@ -116,6 +116,50 @@ The bridge log tails to stdout — you'll see `session accepted` when the
 browser connects, then `session N forwarded=1000/2000/…` as packets
 flow.
 
+## Split-host deployment
+
+When the hardware encoder can't send UDP across a router (common with
+low-level RTP producers that lack IP routing), place the bridge on the
+same L2 subnet as the encoder and serve the viewer page from a separate
+host:
+
+```
+┌──────────┐  RTP/UDP  ┌────────────┐  WebTransport  ┌─────────┐
+│ producer │ ────────▶ │  Machine A │ ──────────────▶│ browser │
+│  (9828)  │  (no hop) │ wt_bridge  │   (routable)   │ (WASM)  │
+└──────────┘           └────────────┘                └────┬────┘
+                                                   HTTPS │
+                                                  ┌──────┴──────┐
+                                                  │  Machine B  │
+                                                  │ static serv │
+                                                  └─────────────┘
+```
+
+**Machine A** (same subnet as the encoder):
+
+```bash
+./tools/wt_bridge/scripts/run_split.sh bridge
+```
+
+The script prints the WebTransport cert hash and a ready-to-paste
+command for the static side.
+
+**Machine B** (anywhere reachable from browsers):
+
+```bash
+BRIDGE_IP=<machine-A-ip> CERT_HASH=<hash> \
+    ./tools/wt_bridge/scripts/run_split.sh static
+```
+
+The script prints the browser URL with the page origin on Machine B
+and the WebTransport endpoint on Machine A. All the same environment
+variables as `run_lan.sh` apply (`UDP_PORT`, `QUIC_PORT`, `HTTP_PORT`,
+`LAN_IP`, `CERT_DIR`, `HTTP_NO_TLS`).
+
+The browser must be able to reach Machine A on QUIC port 4433 (TCP-like
+QUIC traverses routers and NAT; only raw UDP to the encoder is
+constrained to the same L2).
+
 ## Building the bridge
 
 The bridge is a self-contained Go module. Build once:
@@ -330,7 +374,9 @@ viewer can't keep up with the network rate. Check the overlay's
 ## Reproduction scripts
 
 - [`tools/wt_bridge/scripts/run_lan.sh`](../tools/wt_bridge/scripts/run_lan.sh)
-  — interactive LAN launcher.
+  — interactive LAN launcher (single-host).
+- [`tools/wt_bridge/scripts/run_split.sh`](../tools/wt_bridge/scripts/run_split.sh)
+  — split-host launcher; bridge and static server on separate machines.
 - [`tools/wt_bridge/scripts/e2e_smoke.sh`](../tools/wt_bridge/scripts/e2e_smoke.sh)
   — headless Chromium end-to-end smoke against an `.rtp` fixture.
 - [`tools/wt_bridge/scripts/udp_replay.mjs`](../tools/wt_bridge/scripts/udp_replay.mjs)
