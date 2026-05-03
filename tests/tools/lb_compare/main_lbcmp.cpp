@@ -87,6 +87,11 @@ int main(int argc, char *argv[]) {
     dec_lb.parse();
     if (stream_mode) {
       // Collect stream callback rows into flat per-component buffers.
+      // The callback fires per luma row.  For vertically subsampled components
+      // (Hc < H0), invoke_line_based_stream only refreshes the row every yr_c
+      // luma rows; otherwise rows[c] points at stale data from the previous
+      // emission.  Mirror main_dec.cpp's gating: write only when y % yr_c == 0
+      // and target the chroma row at y / yr_c.
       std::vector<std::vector<int32_t>> flat;
       auto stream_cb = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
         if (flat.empty()) {
@@ -94,10 +99,15 @@ int main(int argc, char *argv[]) {
           for (uint16_t c = 0; c < nc; ++c)
             flat[c].assign(static_cast<size_t>(lb_w[c]) * lb_h[c], 0);
         }
+        const uint32_t h0 = lb_h[0];
         for (uint16_t c = 0; c < nc; ++c) {
-          if (y < lb_h[c])
-            std::memcpy(flat[c].data() + static_cast<size_t>(y) * lb_w[c], rows[c],
-                        lb_w[c] * sizeof(int32_t));
+          const uint32_t hc   = lb_h[c];
+          const uint32_t yr_c = (hc > 0 && hc < h0) ? (h0 + hc - 1) / hc : 1u;
+          if (y % yr_c != 0) continue;
+          const uint32_t cy = y / yr_c;
+          if (cy >= hc) continue;
+          std::memcpy(flat[c].data() + static_cast<size_t>(cy) * lb_w[c], rows[c],
+                      lb_w[c] * sizeof(int32_t));
         }
       };
       dec_lb.invoke_line_based_stream(stream_cb, lb_w, lb_h, lb_depth, lb_signed);
