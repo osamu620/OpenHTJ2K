@@ -23,6 +23,19 @@ add_test(NAME jpip_tcp_loopback COMMAND jpip_tcp_check)
 # recovers the JPP-stream bit-for-bit.
 add_test(NAME jpip_chunked_roundtrip COMMAND jpip_chunked_check)
 
+# Both jpip_tcp_loopback and jpip_chunked_roundtrip bind a fixed TCP port
+# on 127.0.0.1 (kTestPort=19283 / 19285 in tests/tools/jpip_*_check/main.cpp).
+# RESOURCE_LOCK serializes them against each other under `ctest -j` so two
+# concurrent runs can't EADDRINUSE; RUN_SERIAL TRUE additionally pauses the
+# whole suite while these run, so a TIME_WAIT residue from a prior test in
+# the same `ctest` invocation can't collide.  Without these properties
+# `ctest -j` on a fast CI runner intermittently reports "bind: address
+# already in use" on the second test to start.
+set_tests_properties(jpip_tcp_loopback jpip_chunked_roundtrip
+  PROPERTIES
+    RESOURCE_LOCK jpip_loopback_ports
+    RUN_SERIAL    TRUE)
+
 # ── StreamingJppParser split-at-every-offset stress (issue #297) ──
 # For every possible two-chunk split of a real JPP-stream, verifies that
 # StreamingJppParser reconstructs the same DataBinSet the one-shot parser

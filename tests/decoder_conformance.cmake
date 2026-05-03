@@ -2,16 +2,15 @@
 enable_testing()
 set(CONFORMANCE_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/conformance_data")
 
-# Remove stale test artifacts (*.pgx, *.ppm, *.pgm, *.j2c) before tests run.
-# Attached via CTest fixtures so it executes once before the first decode test.
+# Remove stale test artifacts (*.pgx, *.ppm, *.pgm) before tests run.  Attached
+# via the CTest `test_artifacts` fixture so it executes once before any test
+# that depends on it.  The fixture is auto-attached to every other test by the
+# loop at the end of CMakeLists.txt — that loop runs AFTER every tests/*.cmake
+# include site, so it covers tests defined by sibling files (batch_validation,
+# jpip_phase1, row_range_validation, encoder_test) too.
 add_test(NAME cleanup_artifacts
   COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cleanup_artifacts.cmake)
 set_tests_properties(cleanup_artifacts PROPERTIES FIXTURES_SETUP test_artifacts)
-
-# Collect all test names added by included files so we can attach the cleanup
-# fixture to them after all includes.  We snapshot the test list before and
-# after to compute the delta.
-get_property(_tests_before DIRECTORY PROPERTY TESTS)
 
 ## Conformance tests for HT
 # PROFILE 0
@@ -54,11 +53,3 @@ if(NODE_EXECUTABLE)
 else()
   message(STATUS "Node.js not found -- skipping WASM conformance tests")
 endif()
-
-# Attach the cleanup fixture to every test added above.
-get_property(_tests_after DIRECTORY PROPERTY TESTS)
-foreach(_t IN LISTS _tests_after)
-  if(NOT _t IN_LIST _tests_before AND NOT _t STREQUAL "cleanup_artifacts")
-    set_tests_properties(${_t} PROPERTIES FIXTURES_REQUIRED test_artifacts)
-  endif()
-endforeach()
