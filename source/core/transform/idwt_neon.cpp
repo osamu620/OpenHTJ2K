@@ -29,9 +29,26 @@
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include "dwt.hpp"
   #include "utils.hpp"
+  #include <cstdint>
+  #include <cstdio>
+  #include <cstdlib>
   #include <cstring>
 #include <arm_neon.h>
 #include <cmath>
+
+// MSVC ARM64 perturbs IDWT FP codegen depending on the inlining context — the
+// same source compiles to slightly different machine code when inlined into a
+// caller (batch path) vs. invoked through a function pointer (stream path),
+// producing 7-9 ULP divergence on the post-IDWT floats for some pixels.
+// Forcing the lifting helpers to live as a single, non-inlined compiled
+// instance gives both paths identical machine code and resolves the lbs
+// failure on lbs_p1_ht_05_11 / lbs_p1_05.  Other compilers/platforms aren't
+// affected by the perturbation; keep them inlinable for performance.
+#if defined(_MSC_VER) && defined(_M_ARM64)
+#  define OPENHTJ2K_MSVC_ARM64_NOINLINE __declspec(noinline)
+#else
+#  define OPENHTJ2K_MSVC_ARM64_NOINLINE
+#endif
 
 /********************************************************************************
  * horizontal transforms
@@ -68,8 +85,9 @@ auto idwt_irrev97_fixed_neon_hor_step = [](const int32_t init_pos, const int32_t
   }
 };
 
-void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left, const int32_t u_i0,
-                                      const int32_t u_i1) {
+OPENHTJ2K_MSVC_ARM64_NOINLINE void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left,
+                                                                    const int32_t u_i0,
+                                                                    const int32_t u_i1) {
   const auto i0        = static_cast<int32_t>(u_i0);
   const auto i1        = static_cast<int32_t>(u_i1);
   const int32_t start  = i0 / 2;
@@ -219,49 +237,13 @@ void idwt_1d_filtr_irrev53_fixed_neon(sprec_t *X, const int32_t left, const int3
 /********************************************************************************
  * vertical transform
  *******************************************************************************/
-// irreversible IDWT
-auto idwt_irrev97_fixed_neon_ver_step = [](const int32_t simdlen, float *const Xin0, float *const Xin1,
-                                            float *const Xout, float coeff) {
-  auto vvv = vdupq_n_f32(coeff);
-  int32_t n = 0;
-#if defined(__APPLE__) && defined(__aarch64__)
-  // 4× unrolled: four independent FMS chains per iteration to fill Apple Silicon
-  // P-core's 8-wide issue window.  Guarded to Apple Silicon only; mainstream
-  // Cortex-A cores (A76 etc.) have narrower issue and the extra register
-  // pressure from 4× hurts more than the reduced loop overhead helps.
-  for (; n + 12 < simdlen; n += 16) {
-    auto x0a = vld1q_f32(Xin0 + n);      auto x2a = vld1q_f32(Xin1 + n);      auto x1a = vld1q_f32(Xout + n);
-    auto x0b = vld1q_f32(Xin0 + n + 4);  auto x2b = vld1q_f32(Xin1 + n + 4);  auto x1b = vld1q_f32(Xout + n + 4);
-    auto x0c = vld1q_f32(Xin0 + n + 8);  auto x2c = vld1q_f32(Xin1 + n + 8);  auto x1c = vld1q_f32(Xout + n + 8);
-    auto x0d = vld1q_f32(Xin0 + n + 12); auto x2d = vld1q_f32(Xin1 + n + 12); auto x1d = vld1q_f32(Xout + n + 12);
-    x1a = vfmsq_f32(x1a, vaddq_f32(x0a, x2a), vvv);
-    x1b = vfmsq_f32(x1b, vaddq_f32(x0b, x2b), vvv);
-    x1c = vfmsq_f32(x1c, vaddq_f32(x0c, x2c), vvv);
-    x1d = vfmsq_f32(x1d, vaddq_f32(x0d, x2d), vvv);
-    vst1q_f32(Xout + n, x1a);
-    vst1q_f32(Xout + n + 4, x1b);
-    vst1q_f32(Xout + n + 8, x1c);
-    vst1q_f32(Xout + n + 12, x1d);
-  }
-#else
-  // 2× unrolled for Cortex-A class cores.
-  for (; n + 4 < simdlen; n += 8) {
-    auto x0a = vld1q_f32(Xin0 + n);     auto x2a = vld1q_f32(Xin1 + n);     auto x1a = vld1q_f32(Xout + n);
-    auto x0b = vld1q_f32(Xin0 + n + 4); auto x2b = vld1q_f32(Xin1 + n + 4); auto x1b = vld1q_f32(Xout + n + 4);
-    x1a = vfmsq_f32(x1a, vaddq_f32(x0a, x2a), vvv);
-    x1b = vfmsq_f32(x1b, vaddq_f32(x0b, x2b), vvv);
-    vst1q_f32(Xout + n, x1a);
-    vst1q_f32(Xout + n + 4, x1b);
-  }
-#endif
-  for (; n < simdlen; n += 4) {
-    auto x0 = vld1q_f32(Xin0 + n);
-    auto x2 = vld1q_f32(Xin1 + n);
-    auto x1 = vld1q_f32(Xout + n);
-    x1 = vfmsq_f32(x1, vaddq_f32(x0, x2), vvv);
-    vst1q_f32(Xout + n, x1);
-  }
-};
+// The batch path's vertical lifting now routes through the same standalone
+// function that the streaming path calls (via idwt_irrev_ver_step_fixed_neon
+// below).  The previous file-scope lambda has been removed because it inlined
+// into idwt_irrev_ver_sr_fixed_neon under MSVC ARM64, producing different FMS
+// machine code than the function-pointer-dispatched stream call — a 7-9 ULP
+// post-IDWT divergence on lbs_p1_ht_05_11 / lbs_p1_05.  Sharing the noinline
+// function (defined below) keeps both paths bit-identical.
 
 // Single-row irreversible vertical lifting step for idwt_2d_state::adv_step().
 // Applies tgt[i] -= coeff*(prev[i]+next[i]) using FMS, matching the batch path exactly.
@@ -349,7 +331,8 @@ void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, 
     tgt[i] += floorf((prev[i] + next[i]) * 0.5f);
 }
 
-void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *tgt, float coeff) {
+OPENHTJ2K_MSVC_ARM64_NOINLINE void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next,
+                                                                  float *tgt, float coeff) {
   auto vvv  = vdupq_n_f32(coeff);
   int32_t i = 0;
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -425,31 +408,30 @@ void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u
 
     const int32_t width = u1 - u0;
     for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
-      const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
-      const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
+      const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
+      // Pass the full strip width (ce - cs) to the lifting helper; it handles
+      // multiples of 4 via NEON and any odd-tail columns via its scalar branch.
+      // Previously this caller had its own scalar tail using a C++
+      // `tgt -= a * (prev + next)` form, which MSVC ARM64 compiled with
+      // different FMA-contraction behaviour than the streaming path's call to
+      // the same helper — producing the 7-9 ULP post-IDWT drift on
+      // lbs_p1_ht_05_11 / lbs_p1_05.  Routing every column (including the odd
+      // tail) through the single noinline'd helper yields identical bits in
+      // batch and stream.  The helper's NEON main loop over-reads up to 3
+      // floats past `n`, but every caller (here and in cascade) supplies
+      // buffers with at least SIMD_PADDING float scratch beyond the data.
+      const int32_t w = ce - cs;
       for (int32_t n = -2 + offset, i = start - 1; i < stop + 2; i++, n += 2) {
-        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fD);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
-          buf[n][col] -= (buf[n - 1][col] + buf[n + 1][col]) * fD;
-        }
+        idwt_irrev_ver_step_fixed_neon(w, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fD);
       }
       for (int32_t n = -2 + offset, i = start - 1; i < stop + 1; i++, n += 2) {
-        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fC);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
-          buf[n + 1][col] -= (buf[n][col] + buf[n + 2][col]) * fC;
-        }
+        idwt_irrev_ver_step_fixed_neon(w, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fC);
       }
       for (int32_t n = 0 + offset, i = start; i < stop + 1; i++, n += 2) {
-        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fB);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
-          buf[n][col] -= (buf[n - 1][col] + buf[n + 1][col]) * fB;
-        }
+        idwt_irrev_ver_step_fixed_neon(w, buf[n - 1] + cs, buf[n + 1] + cs, buf[n] + cs, fB);
       }
       for (int32_t n = 0 + offset, i = start; i < stop; i++, n += 2) {
-        idwt_irrev97_fixed_neon_ver_step(simdlen_s, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fA);
-        for (int32_t col = cs + simdlen_s; col < ce; ++col) {
-          buf[n + 1][col] -= (buf[n][col] + buf[n + 2][col]) * fA;
-        }
+        idwt_irrev_ver_step_fixed_neon(w, buf[n] + cs, buf[n + 2] + cs, buf[n + 1] + cs, fA);
       }
     }
 
