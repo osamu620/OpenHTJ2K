@@ -295,6 +295,18 @@ void cvt_ycbcr_to_rgb_irrev_float_neon(float *sp0, float *sp1, float *sp2, uint3
       p1 += 8;
       p2 += 8;
     }
+    for (; len >= 4; len -= 4) {
+      float32x4_t Y0  = vld1q_f32(p0);
+      float32x4_t Cb0 = vld1q_f32(p1);
+      float32x4_t Cr0 = vld1q_f32(p2);
+      vst1q_f32(p0, vfmaq_f32(Y0, Cr0, fCR_FACT_R));
+      vst1q_f32(p2, vfmaq_f32(Y0, Cb0, fCB_FACT_B));
+      Y0 = vfmsq_f32(Y0, Cr0, fCR_FACT_G);
+      vst1q_f32(p1, vfmsq_f32(Y0, Cb0, fCB_FACT_G));
+      p0 += 4;
+      p1 += 4;
+      p2 += 4;
+    }
     for (; len > 0; --len) {
       float Y  = *p0;
       float Cb = *p1;
