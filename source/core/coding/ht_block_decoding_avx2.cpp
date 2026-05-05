@@ -1128,9 +1128,12 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // Fused dequant: the MagSgn SIMD stores write in units of 4 (128-bit) or 8 (256-bit)
     // elements.  When block width is not a multiple of 4, the extra elements overflow into
     // adjacent blocks' column range in the shared output buffer (subband or ring buffer).
-    // This is safe in single-threaded decode (sequential order overwrites correctly) but
-    // causes a data race in multi-threaded decode.  Gate on width % 4 == 0 to avoid this.
-    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0) {
+    // Additionally, the kernel processes rows in pairs and writes both rows of every pair
+    // unconditionally; when block height is odd the last pair overflows one full row into
+    // the next block's region.  Both overflows are benign in single-threaded decode
+    // (sequential order overwrites correctly) but cause data races in multi-threaded decode.
+    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
+        && (block->size.y & 1u) == 0) {
       ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {

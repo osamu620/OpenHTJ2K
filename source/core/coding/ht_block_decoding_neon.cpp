@@ -1009,7 +1009,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     bool dequant_done = false;
     // Fused dequant gate: NEON stores write 4 elements (128-bit); when block width
     // is not a multiple of 4, the overshoot corrupts adjacent blocks in parallel decode.
-    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0) {
+    // Also gate on even height: the kernel writes row-pairs unconditionally and odd
+    // height overflows one row into the next block's region.
+    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
+        && (block->size.y & 1u) == 0) {
       ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {
