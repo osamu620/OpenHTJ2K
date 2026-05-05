@@ -790,10 +790,22 @@ let droppedByPace = 0;
 let framePeriodMs = 0;          // derived from inter-frame RTP Δts; 0 before second frame arrives
 // Paced-mode backpressure counter: incremented for each marker packet pushed
 // to the worker; throttle holds the for-await loop while
-// (pacedFramesPushed - frameCount) >= RING_CAPACITY so the worker can't
-// buffer more in-flight frames than the rAF consumer can drain.  Reset per
-// playback in startPlayback().
+// (pacedFramesPushed - (frameCount + droppedByPace)) >= RING_CAPACITY so the
+// worker can't buffer more in-flight frames than the consumer can drain.
 let pacedFramesPushed = 0;
+
+// Event-driven backpressure: the feed loop awaits this instead of polling.
+// Resolved by the rAF tick or onFrameFromWorker when a frame is consumed.
+let _bpResolve = null;
+function notifyBackpressure() {
+  if (_bpResolve) { const r = _bpResolve; _bpResolve = null; r(); }
+}
+function waitBackpressure() {
+  return new Promise(resolve => {
+    _bpResolve = resolve;
+    setTimeout(resolve, 64);
+  });
+}
 
 // Has the one-shot per-playback diagnostic dump been printed?
 let firstFrameDiagnosticsDumped = false;
@@ -1533,6 +1545,7 @@ function startDisplayLoop(myGen) {
       if (displayedPreRoll < PRE_ROLL_FRAMES) {
         renderEntry(ringPop());
         displayedPreRoll++;
+        notifyBackpressure();
         if (!firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
         continue;                    // drain pre-roll frames if available
       }
@@ -1547,14 +1560,26 @@ function startDisplayLoop(myGen) {
       const target = wallStart + totalPausedMs + dtMs;
       const period = entry.framePeriodMs || (1000 / 60);
 
-      // Pace-drop: too far behind?  Discard and re-check next entry.
-      // If the ring drains completely, reset the anchor so the next
-      // decoded frame starts a fresh timeline instead of cascading
-      // into further drops that stall playback.
-      if (paceDropEnabled() && rafTimestamp - target > PACE_DROP_PERIODS * period) {
+      // Adaptive pace-drop: when decode throughput is below source rate,
+      // lower the threshold so drops fire earlier (smaller lateness jumps,
+      // more uniform cadence).  Per-drop timeline advance prevents cascade.
+      const decodeAvg = lastDecodeTimes.length >= 5
+          ? lastDecodeTimes.reduce((a, b) => a + b, 0) / lastDecodeTimes.length : 0;
+      const cantKeepUp = decodeAvg > 0 && period > 0 && decodeAvg > period * 1.05;
+      const dropThresholdMs = cantKeepUp ? 2 * period : PACE_DROP_PERIODS * period;
+
+      if (paceDropEnabled() && rafTimestamp - target > dropThresholdMs) {
         ringPop();
         droppedByPace++;
+        // Advance the timeline to absorb the lateness, leaving one period
+        // of margin.  This prevents the next frame from also exceeding the
+        // threshold (cascade) and distributes drops evenly over time.
+        const behindMs = rafTimestamp - target;
+        if (behindMs > period) {
+          wallStart += (behindMs - period);
+        }
         if (_ringCount === 0) { wallStart = 0; totalPausedMs = 0; }
+        notifyBackpressure();
         continue;
       }
 
@@ -1565,6 +1590,7 @@ function startDisplayLoop(myGen) {
       if (rafTimestamp < target - 0.5) break;
 
       renderEntry(ringPop());
+      notifyBackpressure();
       if (!firstFrameDrawn) { setOverlay(null); firstFrameDrawn = true; }
       break;                          // one frame per VSync after pre-roll
     }
@@ -1678,6 +1704,7 @@ async function startPlayback(source) {
   droppedByPace = 0;
   framePeriodMs = 0;
   pacedFramesPushed = 0;
+  _bpResolve = null;
   workerStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0, readyCount: 0, lastError: '' };
   // rAF-path state (see module-scope declarations).
   decodeCount = 0;
@@ -1766,22 +1793,16 @@ async function startPlayback(source) {
       }
 
       // Paced-mode backpressure: cap total pipeline depth (markers pushed
-      // minus frames rendered) at RING_CAPACITY.  Gating on the ring alone
-      // is insufficient because by the time the ring fills (~½ s in), main
-      // has already shovelled dozens of frames' worth of markers into the
-      // worker's postMessage queue; the decoder churns through that backlog
-      // at decoder rate, ringPush keeps overflowing on drop-oldest, the
-      // ring ends up holding only frames whose RTP-target is far in the
-      // future, target advances faster than wall time and playback freezes
-      // after pre-roll.  Throttling on (pushed - rendered) prevents the
-      // worker from ever buffering more than RING_CAPACITY frames worth of
-      // markers, so the decoder rate-matches the consumer end to end.
+      // minus frames consumed) at RING_CAPACITY.  "Consumed" = rendered +
+      // pace-dropped — both free a slot for new decode work.  Awaits an
+      // event-driven notification from the rAF display loop instead of
+      // polling, eliminating the 0–8 ms random wake delay.
       // ASAP mode skips the gate (user opted in to "as fast as possible").
       if (pacing === 'paced' && pkt.marker) {
-        while (pacedFramesPushed - frameCount >= RING_CAPACITY) {
+        while (pacedFramesPushed - (frameCount + droppedByPace) >= RING_CAPACITY) {
           if (playbackGen !== myGen || !running) break;
           if (paused) { await waitIfPaused(); continue; }
-          await new Promise(r => setTimeout(r, 8));   // ~½ vsync at 60 Hz
+          await waitBackpressure();
         }
         if (playbackGen !== myGen || !running) break;
         pacedFramesPushed++;
