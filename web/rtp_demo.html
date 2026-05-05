@@ -893,6 +893,7 @@ function ringPush(entry) {
   if (_ringCount >= RING_CAPACITY) {
     // Defensive: consumer fell behind despite the producer's backpressure
     // yield.  Drop the oldest so we never block indefinitely.
+    releaseSabSlot(_ring[_ringTail]);
     _ring[_ringTail] = null;
     _ringTail = (_ringTail + 1) % RING_CAPACITY;
     _ringCount--;
@@ -911,7 +912,10 @@ function ringPop() {
   return entry;
 }
 function ringClear() {
-  _ring.fill(null);
+  for (let i = 0; i < RING_CAPACITY; i++) {
+    if (_ring[i]) releaseSabSlot(_ring[i]);
+    _ring[i] = null;
+  }
   _ringHead = _ringTail = _ringCount = 0;
 }
 
@@ -1469,10 +1473,25 @@ function onFrameFromWorker(frame) {
   setStat('imgDepth',  depth + ' bpc');
   setStat('numComps',  nc);
 
-  // Build the ring entry.  Worker-delivered ArrayBuffers were transferred,
-  // so wrapping them in Uint8Array doesn't copy.
+  // Build the ring entry.
   let entry;
-  if (mode === 'planar') {
+  if (mode === 'sab') {
+    // SAB zero-copy path: planes live in the shared buffer at slot offset.
+    const base = frame.slot * dec.sabSlotSize + dec.sabFlagBytes;
+    entry = {
+      planar: true, sabSlot: frame.slot,
+      yData:  new Uint8Array(dec.sab, base, w * h),
+      cbData: new Uint8Array(dec.sab, base + dec.sabPlaneMax, frame.cw * frame.ch),
+      crData: new Uint8Array(dec.sab, base + 2 * dec.sabPlaneMax, frame.cw * frame.ch),
+      lumaW: w, lumaH: h,
+      chromaW: frame.cw, chromaH: frame.ch,
+      W: w, H: h, D: depth,
+      matrix, range, ycbcrMode, NC: nc,
+      rtpTimestamp: rtpTs >>> 0,
+      framePeriodMs,
+    };
+  } else if (mode === 'planar') {
+    // Transfer path: ArrayBuffers were transferred, wrapping doesn't copy.
     entry = {
       planar: true,
       yData:  new Uint8Array(frame.y),
@@ -1518,6 +1537,13 @@ function renderEntry(entry) {
                     entry.matrix, entry.range, entry.ycbcrMode, entry.NC);
   }
   frameCount++;
+  releaseSabSlot(entry);
+}
+
+function releaseSabSlot(entry) {
+  if (entry.sabSlot != null && dec && dec.sabFlags) {
+    Atomics.store(dec.sabFlags, entry.sabSlot, 0);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1656,7 +1682,7 @@ function startDisplayLoop(myGen) {
       const dropThresholdMs = cantKeepUp ? 2 * period : PACE_DROP_PERIODS * period;
 
       if (paceDropEnabled() && rafTimestamp - target > dropThresholdMs) {
-        ringPop();
+        releaseSabSlot(ringPop());
         droppedByPace++;
         // Advance the timeline to absorb the lateness, leaving one period
         // of margin.  This prevents the next frame from also exceeding the
