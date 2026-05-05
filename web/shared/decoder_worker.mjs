@@ -35,6 +35,9 @@ let lastStatsAt = 0;
 let threadCount = 4;
 let isMtBuild   = true;   // false for 'simd' / 'scalar' — disables create_decoder_mt path
 let reduceNL    = 0;      // resolution-reduce; 0 = full, 1 = half, 2 = quarter
+let skipInterval = 0;     // pre-decode cadence skip: drop every Nth frame (0 = disabled)
+let skipCounter  = 0;
+let skippedByPreDecode = 0;
 // 'planar' = post Y/Cb/Cr buffers (cheap; renderer applies matrix in shader)
 // 'rgba'   = post a single RGBA8 buffer with WASM-side matrix already applied
 //            (used by the Canvas2D fallback; ~2× the bytes but no main-thread work)
@@ -189,6 +192,15 @@ function drainReady() {
   while (true) {
     const fsz = F.rtp_peek(session);
     if (!fsz) return;
+    if (skipInterval > 0) {
+      skipCounter++;
+      if (skipCounter >= skipInterval) {
+        skipCounter = 0;
+        F.rtp_drop_ready(session);
+        skippedByPreDecode++;
+        continue;
+      }
+    }
     if (fsz > FRAME_BUF) {
       self.postMessage({ type: 'error', msg: `frame too large: ${fsz}`, fatal: false });
       F.rtp_drop_ready(session);
@@ -285,6 +297,7 @@ function maybePostStats() {
     seqGaps:       F.rtp_gaps(session),
     readyCount:    F.rtp_ready_count(session),
     lastError:     F.rtp_last_error(session) || '',
+    skippedByPreDecode,
   });
 }
 
@@ -305,6 +318,10 @@ self.addEventListener('message', async ({ data }) => {
         break;
       case 'setReduceNL':
         setReduceNL(data.value);
+        break;
+      case 'setSkipInterval':
+        skipInterval = Math.max(0, data.value | 0);
+        skipCounter = 0;
         break;
       case 'drain':
         // postMessage delivery is FIFO, and pushPacket()'s decode runs

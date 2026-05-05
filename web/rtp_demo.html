@@ -538,6 +538,18 @@
       <span id="statDropsPace">0</span>
     </div>
     <div class="stat-chip">
+      <label>Drop rate</label>
+      <span id="statDropRate">—</span>
+    </div>
+    <div class="stat-chip">
+      <label>Pre-skip</label>
+      <span id="statPreSkip">0</span>
+    </div>
+    <div class="stat-chip">
+      <label>Underruns</label>
+      <span id="statUnderruns">0</span>
+    </div>
+    <div class="stat-chip">
       <label>Seq gaps</label>
       <span id="statGaps">0</span>
     </div>
@@ -808,6 +820,9 @@ const PACE_DROP_PERIODS = Math.max(1,
 const PRE_ROLL_FRAMES = Math.max(0,
     Number(new URLSearchParams(location.search).get('preroll')) || 3);
 let droppedByPace = 0;
+let _prevDroppedByPace = 0;     // previous stats-tick value for drop-rate delta
+let _underrunCount = 0;         // cumulative rebuffer events
+let _lastSkipInterval = 0;      // last pre-decode skip interval sent to worker
 let framePeriodMs = 0;          // derived from inter-frame RTP Δts; 0 before second frame arrives
 // Paced-mode backpressure counter: incremented for each marker packet pushed
 // to the worker; throttle holds the for-await loop while
@@ -867,7 +882,8 @@ const verboseLog = new URLSearchParams(window.location.search).has('verbose');
 // can't hold multiple frames there) and pushed into this ring; the rAF
 // loop consumes them in order at VSync ticks.
 // ASAP mode bypasses the ring entirely and renders inline as before.
-const RING_CAPACITY = 4;
+const RING_CAPACITY = Math.max(2, Math.min(32,
+    Number(new URLSearchParams(location.search).get('ring')) || 4));
 const _ring = new Array(RING_CAPACITY).fill(null);
 let _ringHead = 0;   // next write index (producer)
 let _ringTail = 0;   // next read index (consumer)
@@ -1433,6 +1449,21 @@ function onFrameFromWorker(frame) {
   lastDecodeTimes.push(decodeMs);
   if (lastDecodeTimes.length > FPS_WIN) lastDecodeTimes.shift();
   decodeCount++;
+
+  // Pre-decode skip interval: when decode is consistently slower than source,
+  // tell the worker to skip every Nth frame before decoding.
+  if (currentPacing === 'paced' && lastDecodeTimes.length >= 10 && framePeriodMs > 0) {
+    const decodeAvg = lastDecodeTimes.reduce((a, b) => a + b, 0) / lastDecodeTimes.length;
+    let newInterval = 0;
+    if (decodeAvg > framePeriodMs * 1.05) {
+      newInterval = Math.max(2, Math.round(framePeriodMs / (decodeAvg - framePeriodMs)));
+    }
+    if (newInterval !== _lastSkipInterval) {
+      _lastSkipInterval = newInterval;
+      if (dec) dec.setSkipInterval(newInterval);
+    }
+  }
+
   setStat('imgWidth',  w);
   setStat('imgHeight', h);
   setStat('imgDepth',  depth + ' bpc');
@@ -1574,6 +1605,7 @@ function startDisplayLoop(myGen) {
       _starvedTicks++;
       if (_starvedTicks >= 2 && !_rebuffering) {
         _rebuffering = true;
+        _underrunCount++;
         setStarved(true);
       }
     } else {
@@ -1713,6 +1745,12 @@ function startStatsTicker() {
     setStat('statFrames',  frameCount);                         // displayed
     setStat('statDrops',   workerStats.framesDropped);
     setStat('statDropsPace', droppedByPace);
+    const dropDelta = droppedByPace - _prevDroppedByPace;
+    const dropRate = dt > 0 ? dropDelta / dt : 0;
+    _prevDroppedByPace = droppedByPace;
+    setStat('statDropRate', dropRate.toFixed(1) + ' /s');
+    setStat('statPreSkip', workerStats.skippedByPreDecode || 0);
+    setStat('statUnderruns', _underrunCount);
     setStat('statGaps',    workerStats.seqGaps);
     // Pending = worker reassembler ready queue + decoded-but-undisplayed ring.
     setStat('statPending', workerStats.readyCount + _ringCount);
@@ -1762,8 +1800,11 @@ async function startPlayback(source) {
   _bpResolve = null;
   _starvedTicks = 0;
   _rebuffering = false;
+  _prevDroppedByPace = 0;
+  _underrunCount = 0;
+  _lastSkipInterval = 0;
   setStarved(false);
-  workerStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0, readyCount: 0, lastError: '' };
+  workerStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0, readyCount: 0, lastError: '', skippedByPreDecode: 0 };
   // rAF-path state (see module-scope declarations).
   decodeCount = 0;
   decodeFinished = false;
