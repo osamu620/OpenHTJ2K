@@ -132,6 +132,11 @@ export class DecoderClient {
     this.worker.postMessage({ type: 'setReduceNL', value: n | 0 });
   }
 
+  setSkipInterval(n) {
+    this._flushBatch();
+    this.worker.postMessage({ type: 'setSkipInterval', value: n | 0 });
+  }
+
   pushPacket(bytes) {
     const len = bytes.byteLength;
     // Defensive: an oversized packet shouldn't reach here (rtp_demo caps at
