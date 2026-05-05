@@ -1130,7 +1130,8 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // adjacent blocks' column range in the shared output buffer (subband or ring buffer).
     // This is safe in single-threaded decode (sequential order overwrites correctly) but
     // causes a data race in multi-threaded decode.  Gate on width % 4 == 0 to avoid this.
-    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0) {
+    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
+        && (block->size.y & 1u) == 0) {
       ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {
