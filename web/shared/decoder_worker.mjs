@@ -28,6 +28,11 @@ const FRAME_BUF  = 16 << 20;
 const PLANE_BUF  = 3840 * 2160;
 const RGBA_BUF   = 3840 * 2160 * 4;
 
+const SAB_SLOTS      = 3;
+const SAB_PLANE_MAX  = PLANE_BUF;
+const SAB_SLOT_SIZE  = SAB_PLANE_MAX * 3;
+const SAB_FLAG_BYTES = SAB_SLOTS * 4;
+
 // Stats throttling: post a snapshot at most every STATS_PERIOD_MS.
 const STATS_PERIOD_MS = 500;
 let lastStatsAt = 0;
@@ -38,6 +43,8 @@ let reduceNL    = 0;      // resolution-reduce; 0 = full, 1 = half, 2 = quarter
 let skipInterval = 0;     // pre-decode cadence skip: drop every Nth frame (0 = disabled)
 let skipCounter  = 0;
 let skippedByPreDecode = 0;
+let sab = null, sabFlags = null, sabU8 = null;
+let sabWriteIdx = 0;
 // 'planar' = post Y/Cb/Cr buffers (cheap; renderer applies matrix in shader)
 // 'rgba'   = post a single RGBA8 buffer with WASM-side matrix already applied
 //            (used by the Canvas2D fallback; ~2× the bytes but no main-thread work)
@@ -51,10 +58,15 @@ const VARIANT_FILE = {
 };
 
 async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar',
-                      variant = 'mt_simd', reduceNL: rn = 0 }) {
+                      variant = 'mt_simd', reduceNL: rn = 0, sab: sabIn = null }) {
   threadCount = tc;
   outputMode = output;
   reduceNL   = rn | 0;
+  if (sabIn) {
+    sab      = sabIn;
+    sabFlags = new Int32Array(sab, 0, SAB_SLOTS);
+    sabU8    = new Uint8Array(sab, SAB_FLAG_BYTES);
+  }
   const file = VARIANT_FILE[variant] || VARIANT_FILE.mt_simd;
   isMtBuild  = (variant === 'mt_simd' || variant === 'mt');
   // mt_simd works in a nested worker as long as Emscripten's pthread
@@ -269,8 +281,32 @@ function drainReady() {
       // uploaded on main; the fragment shader does the matrix.
       F.invoke_planar_u8(decoder, yPtr, cbPtr, crPtr);
       const decodeMs = performance.now() - t0;
-      // .slice() copies; the result owns its buffer and is transferable.
-      // Subarray would share storage with the WASM heap and can't be transferred.
+
+      // SAB zero-copy path: write planes into a pre-allocated shared slot.
+      if (sab) {
+        let slot = -1;
+        for (let i = 0; i < SAB_SLOTS; i++) {
+          const idx = (sabWriteIdx + i) % SAB_SLOTS;
+          if (Atomics.load(sabFlags, idx) === 0) { slot = idx; break; }
+        }
+        if (slot >= 0) {
+          const base = slot * SAB_SLOT_SIZE;
+          sabU8.set(M.HEAPU8.subarray(yPtr,  yPtr  + w * h),   base);
+          sabU8.set(M.HEAPU8.subarray(cbPtr, cbPtr + cw * ch), base + SAB_PLANE_MAX);
+          sabU8.set(M.HEAPU8.subarray(crPtr, crPtr + cw * ch), base + 2 * SAB_PLANE_MAX);
+          Atomics.store(sabFlags, slot, 1);
+          sabWriteIdx = (slot + 1) % SAB_SLOTS;
+          self.postMessage(
+            { type: 'frame', mode: 'sab', slot, w, h, cw, ch, fullW, fullH, nc, colorspace, depth,
+              compW, compH, compS, compD,
+              isRGB, isYCbCr,
+              matrix, range, primaries, transfer, rtpTs, decodeMs });
+          maybePostStats();
+          continue;
+        }
+      }
+
+      // Fallback: .slice() + transfer (SAB unavailable or all slots busy).
       const yBuf  = M.HEAPU8.slice(yPtr,  yPtr  + w  * h ).buffer;
       const cbBuf = M.HEAPU8.slice(cbPtr, cbPtr + cw * ch).buffer;
       const crBuf = M.HEAPU8.slice(crPtr, crPtr + cw * ch).buffer;

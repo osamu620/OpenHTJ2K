@@ -120,12 +120,38 @@ export class DecoderClient {
       if (this._batchOffs.length > 0) this._flushBatch();
     };
 
+    // SharedArrayBuffer plane ring: eliminates per-frame allocation by
+    // reusing a fixed set of slots for decoded plane data.
+    const SAB_SLOTS     = 3;
+    const SAB_PLANE_MAX = 3840 * 2160;
+    const SAB_SLOT_SIZE = SAB_PLANE_MAX * 3;
+    const SAB_FLAG_BYTES = SAB_SLOTS * 4;
+    const SAB_TOTAL     = SAB_FLAG_BYTES + SAB_SLOTS * SAB_SLOT_SIZE;
+    if (typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated) {
+      this._sab      = new SharedArrayBuffer(SAB_TOTAL);
+      this._sabFlags = new Int32Array(this._sab, 0, SAB_SLOTS);
+      this._sabSlots = SAB_SLOTS;
+      this._sabPlaneMax = SAB_PLANE_MAX;
+      this._sabSlotSize = SAB_SLOT_SIZE;
+      this._sabFlagBytes = SAB_FLAG_BYTES;
+    } else {
+      this._sab = null;
+      this._sabFlags = null;
+    }
+
     this.worker.postMessage({
       type: 'init',
       wasmBase: absBase,
       variant, threadCount, reduceNL, output,
+      sab: this._sab,
     });
   }
+
+  get sab()      { return this._sab; }
+  get sabFlags() { return this._sabFlags; }
+  get sabSlotSize()  { return this._sabSlotSize; }
+  get sabPlaneMax()  { return this._sabPlaneMax; }
+  get sabFlagBytes() { return this._sabFlagBytes; }
 
   setReduceNL(n) {
     this._flushBatch();
