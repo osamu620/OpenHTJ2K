@@ -205,6 +205,26 @@
     .canvas-wrap:fullscreen .fps-hud {
       display: block;
     }
+    /* Buffering badge — shown when the ring drains mid-playback. */
+    .buffering-badge {
+      display: none;
+      position: absolute;
+      top: 12px; left: 14px;
+      z-index: 3;
+      padding: 4px 10px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #ffc;
+      font-size: 12px;
+      font-weight: 600;
+      pointer-events: none;
+      animation: badge-pulse 1.2s ease-in-out infinite;
+    }
+    .canvas-wrap.starved .buffering-badge { display: block; }
+    @keyframes badge-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
     /* Paused indicator: overlay a faint ▶ glyph when paused. */
     .canvas-wrap.paused::after {
       content: "▶";
@@ -452,6 +472,7 @@
       <!-- Always-visible Display-FPS HUD — stays over the video in both
            windowed and fullscreen modes because it lives inside .canvas-wrap. -->
       <div class="fps-hud" id="fps-hud" title="Display FPS (wall-clock)">— fps</div>
+      <div class="buffering-badge" id="buffering-badge">Buffering…</div>
       <div class="canvas-overlay loading" id="canvas-overlay">
         <div class="overlay-spinner"></div>
         <span id="overlay-text">Loading WASM decoder…</span>
@@ -890,6 +911,16 @@ let displayedPreRoll = 0;       // pre-roll frames rendered by rAF
 let firstFrameDrawn  = false;   // overlay dismissed
 let _rafId = 0;                 // current requestAnimationFrame handle
 let ticker = 0;                 // setInterval id for the stats ticker
+
+// Network underrun / rebuffer state.
+const REBUFFER_FILL = 2;        // frames to accumulate before resuming after underrun
+let _starvedTicks = 0;          // consecutive rAF ticks with empty ring
+let _rebuffering  = false;      // suppress render until ring refills
+
+function setStarved(starved) {
+  const wrap = document.getElementById('canvas-wrap');
+  if (wrap) wrap.classList.toggle('starved', starved);
+}
 
 function setOverlay(text, mode = 'loading') {
   const ov = document.getElementById('canvas-overlay');
@@ -1538,6 +1569,30 @@ function startDisplayLoop(myGen) {
     // Paused: keep the loop alive but don't consume frames.
     if (paused) { _rafId = requestAnimationFrame(tick); return; }
 
+    // Network underrun detection: ring empty mid-playback.
+    if (_ringCount === 0 && firstFrameDrawn && !decodeFinished) {
+      _starvedTicks++;
+      if (_starvedTicks >= 2 && !_rebuffering) {
+        _rebuffering = true;
+        setStarved(true);
+      }
+    } else {
+      _starvedTicks = 0;
+    }
+
+    // Rebuffer gate: wait for ring to fill before resuming.
+    if (_rebuffering) {
+      if (_ringCount >= REBUFFER_FILL) {
+        _rebuffering = false;
+        setStarved(false);
+        wallStart = 0;
+        totalPausedMs = 0;
+      } else {
+        _rafId = requestAnimationFrame(tick);
+        return;
+      }
+    }
+
     while (_ringCount > 0) {
       const entry = ringPeek();
 
@@ -1705,6 +1760,9 @@ async function startPlayback(source) {
   framePeriodMs = 0;
   pacedFramesPushed = 0;
   _bpResolve = null;
+  _starvedTicks = 0;
+  _rebuffering = false;
+  setStarved(false);
   workerStats = { framesEmitted: 0, framesDropped: 0, seqGaps: 0, readyCount: 0, lastError: '' };
   // rAF-path state (see module-scope declarations).
   decodeCount = 0;
