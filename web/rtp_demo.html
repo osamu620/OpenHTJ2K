@@ -608,10 +608,22 @@
           <td>Frames decoded back-to-back before the paced wall clock anchors. Absorbs cold-start decode spikes (SIMD warmup, WASM JIT).</td>
         </tr>
         <tr>
+          <td><code>?ring=</code></td>
+          <td><code>4</code></td>
+          <td>integer 2–32</td>
+          <td>Decode→display ring buffer depth. Larger values add latency but absorb decode jitter on slow or high-variance links.</td>
+        </tr>
+        <tr>
           <td><code>?verbose=1</code></td>
           <td>off</td>
           <td>presence toggle</td>
           <td>Emit one <code>[rtp_demo t=Ns …]</code> line per second to the browser console with full pipeline stats.</td>
+        </tr>
+        <tr>
+          <td><code>?wasmBase=</code></td>
+          <td><code>/wasm/</code></td>
+          <td>URL path</td>
+          <td>Override the directory where <code>libopen_htj2k_*.{js,wasm}</code> are served from.</td>
         </tr>
       </tbody>
     </table>
