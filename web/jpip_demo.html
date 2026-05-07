@@ -489,7 +489,7 @@ function initWebGL(canvas, w, h) {
     out vec2 vUV;
     void main() { vUV = uv[gl_VertexID]; gl_Position = vec4(pos[gl_VertexID],0,1); }`;
   const fsPassthrough = `#version 300 es
-    precision mediump float;
+    precision highp float;
     uniform sampler2D uTex;
     in vec2 vUV;
     out vec4 fragColor;
