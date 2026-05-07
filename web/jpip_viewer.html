@@ -709,7 +709,7 @@ function initWebGL(canvas) {
   // planar YCbCr→RGB (GPU color path).  The thumbnail layer is always RGBA
   // in both variants.
   const fsLegacy = `#version 300 es
-    precision mediump float;
+    precision highp float;
     uniform sampler2D uTex;
     uniform sampler2D uThumb;
     uniform vec4 uViewport;
