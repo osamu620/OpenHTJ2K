@@ -707,6 +707,243 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
   return 0;
 }
 
+// ── Planar YCbCr output variants ─────────────────────────────────────────
+// Same decode pipeline as jpip_end_frame / jpip_end_frame_region, but output
+// three separate uint8 planes (Y/Cb/Cr) and skip the inverse MCT so the GPU
+// fragment shader can apply the colour matrix instead.
+//
+// Return value:
+//   1  — planes contain raw YCbCr  (JS applies BT.601 matrix in shader)
+//   0  — planes contain RGB        (JS uses identity matrix)
+//  <0  — error (same codes as jpip_end_frame)
+
+static inline uint8_t clamp8(int32_t v) {
+  return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int jpip_end_frame_planar(void *handle, uint8_t *y_out, uint8_t *cb_out, uint8_t *cr_out,
+                          int out_w, int out_h) {
+  if (!handle || !y_out || !cb_out || !cr_out || out_w <= 0 || out_h <= 0) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+
+  if (ctx->dirty || ctx->sparse_cs.empty()) {
+    ctx->sparse_cs.clear();
+    auto rc = open_htj2k::jpip::reassemble_codestream_client(ctx->set, *ctx->idx, ctx->sparse_cs);
+    if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
+  }
+
+  jpip_maybe_invalidate_reuse(ctx);
+  auto &dec = ctx->dec;
+  if (!ctx->dec_initialized) {
+#ifdef OPENHTJ2K_THREAD
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
+#else
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
+#endif
+    ctx->dec_initialized = true;
+  } else {
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
+  }
+  ctx->last_reduce_NL = ctx->reduce_NL;
+  dec.parse();
+
+  const uint16_t nc = dec.get_num_component();
+  const uint32_t cs = dec.get_colorspace();
+  const bool is_ycbcr = (nc >= 3 && cs != open_htj2k::ENUMCS_SRGB
+                                  && cs != open_htj2k::ENUMCS_GRAYSCALE);
+  if (is_ycbcr) dec.set_skip_mct(true);
+
+  std::vector<uint32_t> widths, heights;
+  std::vector<uint8_t>  depths;
+  std::vector<bool>     signeds;
+  const uint32_t ow = static_cast<uint32_t>(out_w);
+  const uint32_t oh = static_cast<uint32_t>(out_h);
+
+  std::vector<uint32_t> xc_lut;
+  uint32_t last_ch = 0;
+
+  try {
+    dec.invoke_line_based_stream_reuse(
+        [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
+          if (nc_cb < 3 || widths.empty() || heights.empty()) return;
+          const uint32_t cw = widths[0];
+          const uint32_t ch = heights[0];
+          if (xc_lut.size() != ow || last_ch != ch) {
+            xc_lut.resize(ow);
+            for (uint32_t xw = 0; xw < ow; ++xw) {
+              xc_lut[xw] = static_cast<uint32_t>(
+                  static_cast<uint64_t>(xw) * cw / (ow > 0 ? ow : 1));
+            }
+            last_ch = ch;
+          }
+          int32_t shift[3], bias[3];
+          for (int c = 0; c < 3; ++c) {
+            const int32_t d = depths.size() > static_cast<size_t>(c) ? depths[c] : 8;
+            shift[c] = (d >= 8) ? (d - 8) : 0;
+            const int32_t half   = (d > 8) ? (1 << (shift[c] - 1)) : 0;
+            const int32_t offset = (signeds.size() > static_cast<size_t>(c) && signeds[c])
+                                       ? (1 << (d - 1))
+                                       : 0;
+            bias[c] = half + offset;
+          }
+          const uint32_t ty0 =
+              static_cast<uint32_t>(static_cast<uint64_t>(y) * oh / (ch > 0 ? ch : 1));
+          const uint32_t ty1 =
+              static_cast<uint32_t>(static_cast<uint64_t>(y + 1) * oh / (ch > 0 ? ch : 1));
+          if (ty0 >= oh) return;
+          uint8_t *dy = y_out  + static_cast<size_t>(ty0) * ow;
+          uint8_t *dc = cb_out + static_cast<size_t>(ty0) * ow;
+          uint8_t *dr = cr_out + static_cast<size_t>(ty0) * ow;
+          const int32_t *__restrict__ r0 = rows[0];
+          const int32_t *__restrict__ r1 = rows[1];
+          const int32_t *__restrict__ r2 = rows[2];
+          const uint32_t *__restrict__ lut = xc_lut.data();
+          for (uint32_t xw = 0; xw < ow; ++xw) {
+            const uint32_t xc = lut[xw];
+            dy[xw] = clamp8((r0[xc] + bias[0]) >> shift[0]);
+            dc[xw] = clamp8((r1[xc] + bias[1]) >> shift[1]);
+            dr[xw] = clamp8((r2[xc] + bias[2]) >> shift[2]);
+          }
+          for (uint32_t ty = ty0 + 1; ty < ty1 && ty < oh; ++ty) {
+            std::memcpy(y_out  + static_cast<size_t>(ty) * ow, dy, ow);
+            std::memcpy(cb_out + static_cast<size_t>(ty) * ow, dc, ow);
+            std::memcpy(cr_out + static_cast<size_t>(ty) * ow, dr, ow);
+          }
+        },
+        widths, heights, depths, signeds);
+  } catch (...) {
+    if (is_ycbcr) dec.set_skip_mct(false);
+    return -3;
+  }
+  if (is_ycbcr) dec.set_skip_mct(false);
+  ctx->dirty = false;
+  return is_ycbcr ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int jpip_end_frame_region_planar(void *handle, uint8_t *y_out, uint8_t *cb_out, uint8_t *cr_out,
+                                 int out_w, int out_h,
+                                 int region_x, int region_y, int region_w, int region_h) {
+  if (!handle || !y_out || !cb_out || !cr_out || out_w <= 0 || out_h <= 0) return -1;
+  if (region_w <= 0 || region_h <= 0) return -1;
+  auto *ctx = static_cast<JpipContext *>(handle);
+
+  if (ctx->dirty || ctx->sparse_cs.empty()) {
+    ctx->sparse_cs.clear();
+    auto rc = open_htj2k::jpip::reassemble_codestream_client(ctx->set, *ctx->idx, ctx->sparse_cs);
+    if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
+  }
+
+  jpip_maybe_invalidate_reuse(ctx);
+  auto &dec = ctx->dec;
+  if (!ctx->dec_initialized) {
+#ifdef OPENHTJ2K_THREAD
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
+#else
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
+#endif
+    ctx->dec_initialized = true;
+  } else {
+    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
+  }
+  ctx->last_reduce_NL = ctx->reduce_NL;
+  dec.parse();
+
+  const uint16_t nc = dec.get_num_component();
+  const uint32_t cs = dec.get_colorspace();
+  const bool is_ycbcr = (nc >= 3 && cs != open_htj2k::ENUMCS_SRGB
+                                  && cs != open_htj2k::ENUMCS_GRAYSCALE);
+  if (is_ycbcr) dec.set_skip_mct(true);
+
+  std::vector<uint32_t> widths, heights;
+  std::vector<uint8_t>  depths;
+  std::vector<bool>     signeds;
+  const uint32_t ow = static_cast<uint32_t>(out_w);
+  const uint32_t oh = static_cast<uint32_t>(out_h);
+  const uint32_t red = ctx->reduce_NL;
+
+  const uint32_t cw_at_red = (ctx->canvas_w + ((1u << red) - 1)) >> red;
+  const uint32_t ch_at_red = (ctx->canvas_h + ((1u << red) - 1)) >> red;
+
+  const uint32_t ry0_u = static_cast<uint32_t>(region_y) >> red;
+  uint32_t ry1 = (static_cast<uint32_t>(region_y + region_h) + ((1u << red) - 1)) >> red;
+  const uint32_t rx0_u = static_cast<uint32_t>(region_x) >> red;
+  uint32_t rx1 = (static_cast<uint32_t>(region_x + region_w) + ((1u << red) - 1)) >> red;
+  if (ry1 > ch_at_red) ry1 = ch_at_red;
+  if (rx1 > cw_at_red) rx1 = cw_at_red;
+  const uint32_t ry0 = ry0_u;
+  const uint32_t rx0 = rx0_u;
+  if (rx1 <= rx0 || ry1 <= ry0) {
+    if (is_ycbcr) dec.set_skip_mct(false);
+    return -1;
+  }
+  const uint32_t rw = rx1 - rx0;
+  const uint32_t rh = ry1 - ry0;
+
+  const bool full_coverage =
+      (region_x == 0 && region_y == 0
+       && static_cast<uint32_t>(region_x + region_w) >= ctx->canvas_w
+       && static_cast<uint32_t>(region_y + region_h) >= ctx->canvas_h);
+  if (!full_coverage) {
+    std::memset(y_out,  0, static_cast<size_t>(ow) * oh);
+    std::memset(cb_out, 0, static_cast<size_t>(ow) * oh);
+    std::memset(cr_out, 0, static_cast<size_t>(ow) * oh);
+  }
+
+  std::vector<uint32_t> xc_lut(ow);
+  for (uint32_t xw = 0; xw < ow; ++xw) {
+    xc_lut[xw] = rx0 + static_cast<uint32_t>(static_cast<uint64_t>(xw) * rw / ow);
+  }
+
+  dec.set_row_range(ry0, ry1);
+  dec.set_col_range(rx0, rx1);
+  try {
+    dec.invoke_line_based_stream_reuse(
+        [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
+          if (nc_cb < 3 || widths.empty() || heights.empty()) return;
+          int32_t shift[3], bias[3];
+          for (int c = 0; c < 3; ++c) {
+            const int32_t d = depths.size() > static_cast<size_t>(c) ? depths[c] : 8;
+            shift[c] = (d >= 8) ? (d - 8) : 0;
+            const int32_t half   = (d > 8) ? (1 << (shift[c] - 1)) : 0;
+            const int32_t offset = (signeds.size() > static_cast<size_t>(c) && signeds[c])
+                                       ? (1 << (d - 1))
+                                       : 0;
+            bias[c] = half + offset;
+          }
+          const uint32_t ty = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0) * oh / rh);
+          if (ty >= oh) return;
+          uint8_t *dy = y_out  + static_cast<size_t>(ty) * ow;
+          uint8_t *dc = cb_out + static_cast<size_t>(ty) * ow;
+          uint8_t *dr = cr_out + static_cast<size_t>(ty) * ow;
+          const int32_t *__restrict__ r0 = rows[0];
+          const int32_t *__restrict__ r1 = rows[1];
+          const int32_t *__restrict__ r2 = rows[2];
+          const uint32_t *__restrict__ lut = xc_lut.data();
+          for (uint32_t xw = 0; xw < ow; ++xw) {
+            const uint32_t xc = lut[xw];
+            dy[xw] = clamp8((r0[xc] + bias[0]) >> shift[0]);
+            dc[xw] = clamp8((r1[xc] + bias[1]) >> shift[1]);
+            dr[xw] = clamp8((r2[xc] + bias[2]) >> shift[2]);
+          }
+          const uint32_t ty1_out = static_cast<uint32_t>(static_cast<uint64_t>(y - ry0 + 1) * oh / rh);
+          for (uint32_t ty2 = ty + 1; ty2 < ty1_out && ty2 < oh; ++ty2) {
+            std::memcpy(y_out  + static_cast<size_t>(ty2) * ow, dy, ow);
+            std::memcpy(cb_out + static_cast<size_t>(ty2) * ow, dc, ow);
+            std::memcpy(cr_out + static_cast<size_t>(ty2) * ow, dr, ow);
+          }
+        },
+        widths, heights, depths, signeds);
+  } catch (...) {
+    if (is_ycbcr) dec.set_skip_mct(false);
+    return -3;
+  }
+  if (is_ycbcr) dec.set_skip_mct(false);
+  ctx->dirty = false;
+  return is_ycbcr ? 1 : 0;
+}
+
 EMSCRIPTEN_KEEPALIVE
 void jpip_destroy_context(void *handle) {
   delete static_cast<JpipContext *>(handle);
