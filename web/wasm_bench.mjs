@@ -36,7 +36,7 @@ function parseArgs() {
   if (!validVariants.includes(o.variant)) {
     console.error(`--variant must be one of ${validVariants.join(',')}`); process.exit(1);
   }
-  const validModes = ['stream', 'planar_u8'];
+  const validModes = ['stream', 'planar_u8', 'planar_ycbcr_u8'];
   if (!validModes.includes(o.mode)) {
     console.error(`--mode must be one of ${validModes.join(',')}`); process.exit(1);
   }
@@ -122,7 +122,10 @@ function runOne(capturePlanes) {
     const y  = ptrs[0] || 0;
     const cb = ptrs[1] || 0;
     const cr = ptrs[2] || 0;
-    M._invoke_decoder_planar_u8(dec, y, cb, cr);
+    if (opts.mode === 'planar_ycbcr_u8')
+      M._invoke_decoder_planar_ycbcr_u8(dec, y, cb, cr);
+    else
+      M._invoke_decoder_planar_u8(dec, y, cb, cr);
     tDec = performance.now();
     if (capturePlanes) {
       capturePlanes.widths  = compW;
