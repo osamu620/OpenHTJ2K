@@ -107,6 +107,9 @@ class openhtj2k_decoder_impl {
   OPENHTJ2K_NODISCARD uint8_t get_component_depth(uint16_t) const;
   OPENHTJ2K_NODISCARD bool get_component_signedness(uint16_t) const;
   OPENHTJ2K_NODISCARD uint32_t get_colorspace() const { return enum_cs; }
+  OPENHTJ2K_NODISCARD uint8_t get_mct() const {
+    return main_header.COD ? main_header.COD->use_color_trafo() : 0;
+  }
   uint8_t get_minimum_DWT_levels();
   uint8_t get_max_safe_reduce_NL();
 
@@ -483,6 +486,7 @@ bool openhtj2k_decoder::get_component_signedness(uint16_t c) {
 uint8_t openhtj2k_decoder::get_minumum_DWT_levels() { return this->impl->get_minimum_DWT_levels(); }
 uint8_t openhtj2k_decoder::get_max_safe_reduce_NL() { return this->impl->get_max_safe_reduce_NL(); }
 uint32_t openhtj2k_decoder::get_colorspace() { return this->impl->get_colorspace(); }
+uint8_t openhtj2k_decoder::get_mct() { return this->impl->get_mct(); }
 
 void openhtj2k_decoder::invoke(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                std::vector<uint32_t> &height, std::vector<uint8_t> &depth,

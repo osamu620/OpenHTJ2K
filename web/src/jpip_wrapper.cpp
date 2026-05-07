@@ -749,9 +749,7 @@ int jpip_end_frame_planar(void *handle, uint8_t *y_out, uint8_t *cb_out, uint8_t
   dec.parse();
 
   const uint16_t nc = dec.get_num_component();
-  const uint32_t cs = dec.get_colorspace();
-  const bool is_ycbcr = (nc >= 3 && cs != open_htj2k::ENUMCS_SRGB
-                                  && cs != open_htj2k::ENUMCS_GRAYSCALE);
+  const bool is_ycbcr = (nc >= 3 && dec.get_mct() != 0);
   if (is_ycbcr) dec.set_skip_mct(true);
 
   std::vector<uint32_t> widths, heights;
@@ -851,9 +849,7 @@ int jpip_end_frame_region_planar(void *handle, uint8_t *y_out, uint8_t *cb_out, 
   dec.parse();
 
   const uint16_t nc = dec.get_num_component();
-  const uint32_t cs = dec.get_colorspace();
-  const bool is_ycbcr = (nc >= 3 && cs != open_htj2k::ENUMCS_SRGB
-                                  && cs != open_htj2k::ENUMCS_GRAYSCALE);
+  const bool is_ycbcr = (nc >= 3 && dec.get_mct() != 0);
   if (is_ycbcr) dec.set_skip_mct(true);
 
   std::vector<uint32_t> widths, heights;

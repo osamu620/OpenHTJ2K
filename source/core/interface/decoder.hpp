@@ -69,6 +69,9 @@ class openhtj2k_decoder {
   // Returns the EnumCS value from the JPH/JP2 colour specification box, or 0 for raw codestreams.
   // Compare against open_htj2k::ENUMCS_SRGB / ENUMCS_GRAYSCALE / ENUMCS_YCBCR.
   OPENHTJ2K_EXPORT uint32_t get_colorspace();
+  // Returns the MCT byte from the COD marker (0 = no transform, 1 = ICT/RCT).
+  // Valid after parse().
+  OPENHTJ2K_EXPORT uint8_t get_mct();
   OPENHTJ2K_EXPORT void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
                                std::vector<uint8_t> &, std::vector<bool> &);
   // Line-based decode: same signature as invoke() but uses stateful row-pull
