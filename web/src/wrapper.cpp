@@ -403,6 +403,18 @@ void invoke_decoder_planar_u8(open_htj2k::openhtj2k_decoder* dec,
     width, height, depth, is_signed);
 }
 
+// invoke_decoder_planar_ycbcr_u8: same as invoke_decoder_planar_u8 but skips
+// the inverse MCT (ICT/RCT), outputting raw per-component Y/Cb/Cr samples.
+// Designed for WebGL2 renderers whose fragment shader applies the YCbCr→RGB
+// matrix on the GPU — avoids the CPU color transform (~40% of WASM decode).
+EMSCRIPTEN_KEEPALIVE
+void invoke_decoder_planar_ycbcr_u8(open_htj2k::openhtj2k_decoder *dec,
+                                    uint8_t *y_buf, uint8_t *cb_buf, uint8_t *cr_buf) {
+  dec->set_skip_mct(true);
+  invoke_decoder_planar_u8(dec, y_buf, cb_buf, cr_buf);
+  dec->set_skip_mct(false);
+}
+
 // invoke_decoder_stream: decode using invoke_line_based_stream() so that the
 // internal planar tile buffers and the full W×H×C int32 output buffer are
 // never simultaneously live.  Rows are interleaved and packed directly into

@@ -125,6 +125,11 @@ class openhtj2k_decoder {
   // emitted via the callback.  Calling set_row_range overrides any prior
   // set_row_limit call (row_hi replaces the limit).
   OPENHTJ2K_EXPORT void set_row_range(uint32_t row_lo, uint32_t row_hi);
+  // Skip the inverse Multi-Component Transform (MCT/ICT/RCT) and output raw
+  // per-component samples.  When set, YCbCr codestreams produce Y/Cb/Cr int32
+  // values instead of R/G/B.  Intended for GPU-accelerated renderers whose
+  // fragment shader applies the YCbCr→RGB matrix.  Default: false.
+  OPENHTJ2K_EXPORT void set_skip_mct(bool skip);
 
   // Phase 4B spatial-region column range (horizontal viewport clipping).
   // Restricts the vertical-IDWT lifting work to columns [col_lo, col_hi) in

@@ -5058,7 +5058,8 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
                                         const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb,
                                         uint32_t row_limit,
                                         uint32_t row_lo,
-                                        uint32_t col_lo_in, uint32_t col_hi_in) {
+                                        uint32_t col_lo_in, uint32_t col_hi_in,
+                                        bool skip_mct) {
   const uint16_t NC = num_components;
 
   // Apply per-level column range to each component's IDWT state chain.
@@ -5112,7 +5113,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   for (uint16_t c = 0; c < NC; ++c)
     out_ptrs[c] = out_rows[c].data();
 
-  const bool    do_mct = (NC >= 3 && MCT != 0);
+  const bool    do_mct = (NC >= 3 && MCT != 0 && !skip_mct);
   const uint8_t xform  = tcomp[0].get_transformation();
   // ATK (xform>=2) is irreversible; dispatch table has only 2 entries (0=irrev, 1=rev).
   const uint8_t xform_ct = (xform == 1) ? 1 : 0;
@@ -5120,12 +5121,14 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
   // Pre-build FinalizeParams for the fused MCT+finalize path.
   FinalizeParams fp[3] = {};
-  for (uint16_t c = 0; c < std::min(NC, static_cast<uint16_t>(3)); ++c) {
-    fp[c].ds     = ci[c].downshift;
-    fp[c].rnd    = ci[c].rnd;
-    fp[c].dc     = ci[c].DC_OFFSET;
-    fp[c].maxval = ci[c].MAXVAL;
-    fp[c].minval = ci[c].MINVAL;
+  if (do_mct) {
+    for (uint16_t c = 0; c < std::min(NC, static_cast<uint16_t>(3)); ++c) {
+      fp[c].ds     = ci[c].downshift;
+      fp[c].rnd    = ci[c].rnd;
+      fp[c].dc     = ci[c].DC_OFFSET;
+      fp[c].maxval = ci[c].MAXVAL;
+      fp[c].minval = ci[c].MINVAL;
+    }
   }
 
   for (uint16_t c = 0; c < NC; ++c)
@@ -5505,6 +5508,45 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
               int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
               vst1q_s32(dp + n,     vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
               vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
+            }
+          }
+          for (; n < I.csize_x; ++n) {
+            int32_t v = static_cast<int32_t>(spf[n]);
+            v = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v += I.DC_OFFSET;
+            if (v > I.MAXVAL) v = I.MAXVAL;
+            if (v < I.MINVAL) v = I.MINVAL;
+            dp[n] = v;
+          }
+        }
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+        {
+          const v128_t vdco = wasm_i32x4_splat(I.DC_OFFSET);
+          const v128_t vmx  = wasm_i32x4_splat(I.MAXVAL);
+          const v128_t vmn  = wasm_i32x4_splat(I.MINVAL);
+          uint32_t n = 0;
+          if (ds < 0) {
+            const int sh = -ds;
+            for (; n + 8 <= I.csize_x; n += 8) {
+              v128_t v0 = wasm_i32x4_shl(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), sh);
+              v128_t v1 = wasm_i32x4_shl(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), sh);
+              wasm_v128_store(dp + n,     wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v0, vdco), vmn), vmx));
+              wasm_v128_store(dp + n + 4, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v1, vdco), vmn), vmx));
+            }
+          } else if (ds > 0) {
+            const v128_t vrnd = wasm_i32x4_splat(ro);
+            for (; n + 8 <= I.csize_x; n += 8) {
+              v128_t v0 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vrnd), ds);
+              v128_t v1 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vrnd), ds);
+              wasm_v128_store(dp + n,     wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v0, vdco), vmn), vmx));
+              wasm_v128_store(dp + n + 4, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v1, vdco), vmn), vmx));
+            }
+          } else {
+            for (; n + 8 <= I.csize_x; n += 8) {
+              v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n));
+              v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4));
+              wasm_v128_store(dp + n,     wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v0, vdco), vmn), vmx));
+              wasm_v128_store(dp + n + 4, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v1, vdco), vmn), vmx));
             }
           }
           for (; n < I.csize_x; ++n) {

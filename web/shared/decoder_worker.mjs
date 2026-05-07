@@ -111,6 +111,7 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
     reset_decoder:     M.cwrap('reset_decoder_with_bytes','void',  ['number','number','number','number']),
     parse_j2c:         M.cwrap('parse_j2c_data',         'void',   ['number']),
     invoke_planar_u8:  M.cwrap('invoke_decoder_planar_u8','void',  ['number','number','number','number']),
+    invoke_planar_ycbcr_u8: M.cwrap('invoke_decoder_planar_ycbcr_u8','void', ['number','number','number','number']),
     invoke_to_rgba:    M.cwrap('invoke_decoder_to_rgba', 'void',   ['number','number']),
     apply_bt601:       M.cwrap('apply_ycbcr_bt601_to_rgba','void', ['number','number']),
     apply_bt709:       M.cwrap('apply_ycbcr_bt709_to_rgba','void', ['number','number']),
@@ -279,7 +280,12 @@ function drainReady() {
     } else {
       // Planar path — used by the WebGL2 renderer.  Three R8 textures get
       // uploaded on main; the fragment shader does the matrix.
-      F.invoke_planar_u8(decoder, yPtr, cbPtr, crPtr);
+      // For YCbCr codestreams, skip the CPU color transform and let the GPU
+      // shader handle YCbCr→RGB conversion — saves ~40% of decode time.
+      if (isYCbCr)
+        F.invoke_planar_ycbcr_u8(decoder, yPtr, cbPtr, crPtr);
+      else
+        F.invoke_planar_u8(decoder, yPtr, cbPtr, crPtr);
       const decodeMs = performance.now() - t0;
 
       // SAB zero-copy path: write planes into a pre-allocated shared slot.

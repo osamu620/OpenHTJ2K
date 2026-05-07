@@ -846,7 +846,8 @@ class j2k_tile : public j2k_tile_base {
       const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb,
       uint32_t row_limit = UINT32_MAX,
       uint32_t row_lo = 0,
-      uint32_t col_lo = 0, uint32_t col_hi = UINT32_MAX);
+      uint32_t col_lo = 0, uint32_t col_hi = UINT32_MAX,
+      bool skip_mct = false);
   // Direct-to-planar streaming decode.  Reads float from IDWT ring buffers and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
   // the strip scratch, out_rows int32 intermediate, and callback overhead.
