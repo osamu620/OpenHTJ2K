@@ -997,6 +997,7 @@ function paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH) {
     function uploadR8(tex, unit, data) {
       gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
       if (outW !== texW || outH !== texH)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, outW, outH, 0, gl.RED, gl.UNSIGNED_BYTE, data);
       else
