@@ -425,8 +425,10 @@
   }
 </script>
 <script type="module">
-// Auto-detect the best WASM variant: multi-threaded SIMD if available,
-// otherwise single-threaded SIMD.  ?variant=st forces single-threaded.
+// WASM variant selection.  Default: single-threaded SIMD.  The JPIP demos
+// decode on the main thread (no Web Worker), so MT would block on the
+// pthreads condition variable and trigger Emscripten's main-thread-blocking
+// warning.  ?variant=mt forces MT if you want to test it anyway.
 // ?wasmBase=/wasm-full/ for local dev under web/perf/serve.mjs (which
 // routes /wasm-full/ to web/build/html/).
 const _wasmBaseQ = new URLSearchParams(location.search).get('wasmBase');
@@ -434,7 +436,7 @@ const WASM_BASE  = _wasmBaseQ || new URL('./', location.href).href;
 const hasSimd = await wasmFeatureDetect.simd();
 const hasMt = window.crossOriginIsolated && (typeof SharedArrayBuffer !== 'undefined');
 const forceVariant = new URLSearchParams(location.search).get('variant');
-const useMt = forceVariant === 'mt' ? true : forceVariant === 'st' ? false : (hasSimd && hasMt);
+const useMt = forceVariant === 'mt' ? (hasSimd && hasMt) : false;
 const wasmName = useMt ? 'libopen_htj2k_jpip_mt_simd.js' : 'libopen_htj2k_jpip.js';
 const {default: createModule} = await import(WASM_BASE + wasmName);
 
@@ -526,15 +528,6 @@ function initWebGL(canvas, w, h) {
 
   glProgram = linkProg(vs, fsPassthrough);
 
-  glTex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, glTex);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-  texW = w; texH = h;
-
   if (useGpuColor) {
     glProgPlanar = linkProg(vs, fsPlanar);
     gl.useProgram(glProgPlanar);
@@ -556,6 +549,14 @@ function initWebGL(canvas, w, h) {
     texCb = mkR8();
     texCr = mkR8();
   } else {
+    glTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, glTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    texW = w; texH = h;
     gl.useProgram(glProgram);
   }
 
