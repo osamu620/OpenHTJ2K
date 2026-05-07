@@ -569,6 +569,20 @@ let thumbnailPending = false;
 let vpW = 0, vpH = 0, panX = 0, panY = 0, zoom = 1.0;
 let decReduce = -1, rgbPtr = 0, rgbBufSz = 0;
 
+// GPU color conversion (same as jpip_demo).
+const useGpuColor = new URLSearchParams(location.search).get('gpu') !== '0';
+const _MAT_BT601F = new Float32Array([
+  1, 1, 1,
+  0, -5638 / 16384, 29032 / 16384,
+  22970 / 16384, -11698 / 16384, 0,
+]);
+const _MAT_IDENTITY = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+const _OFF_HALF = 128.0 / 255.0;
+const _OFF_FULL = new Float32Array([0, _OFF_HALF, _OFF_HALF]);
+const _OFF_ZERO = new Float32Array([0, 0, 0]);
+let gpuIsYCbCr = true;  // updated on first decode
+let plYPtr = 0, plCbPtr = 0, plCrPtr = 0, plBufSz = 0;
+
 // Drag state shared between the canvas (set up in connect()) and the
 // thumbnail (set up in fetchThumbnail() once the overview decodes).
 // Lifted to module scope so the two handlers can share the same
@@ -637,16 +651,14 @@ function sizeCanvas(c) {
 }
 
 // ── WebGL2: layered draw with previous-frame texture + thumbnail ────────
-// Two textures combine in one fragment-shader pass.  Sampling priority:
-//   (1) glTex   — last-decoded viewport pixels, mapped from texRect to
-//                 the *image-coord region* the texture was decoded for
-//                 (NOT the current viewport).  Stays anchored to image
-//                 position even as the user pans, so motion is smooth.
-//   (2) glThumb — coarse full-image overview, fills areas the previous
-//                 frame doesn't cover (typical when the user pans into
-//                 unseen regions or zooms out past the prior viewport).
-//   (3) bg      — background color for fragments outside the image
-//                 itself (zoom-out beyond canvasW × canvasH).
+// Sampling priority (both legacy and GPU-color variants):
+//   (1) Main layer — last-decoded viewport pixels, anchored to image
+//       coordinates.  Legacy path: single RGBA texture (glTex).
+//       GPU-color path (?gpu=1, default): three R8 textures
+//       (glTexY/glTexCb/glTexCr) with YCbCr→RGB matrix in the shader.
+//   (2) glThumb — coarse full-image overview (always RGBA), fills areas
+//       the previous frame doesn't cover.
+//   (3) bg — background color for fragments outside the image.
 //
 // Uniforms:
 //   uViewport   — image-coord (x0, y0, x1, y1) of the CURRENT viewport
@@ -658,6 +670,9 @@ function sizeCanvas(c) {
 //   bounds-check division — neither texture sample is used.
 let gl = null, glTex = null, glThumb = null, glProgram = null, texW = 0, texH = 0;
 let uScaleLoc, uViewportLoc, uTexRectLoc, uThumbRectLoc;
+// Planar textures (GPU color path)
+let glTexY = null, glTexCb = null, glTexCr = null;
+let uMatrixLoc = null, uOffsetLoc = null;
 
 // Image-coord rect of glTex's CURRENT decoded contents.  Independent of
 // panX/panY/zoom so the previous frame's pixels stay anchored to their
@@ -682,38 +697,64 @@ function initWebGL(canvas) {
     const vec2 pos[4] = vec2[](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(1,1));
     out vec2 vT;
     void main() {
-      // vT.x ∈ [0,1] left→right; vT.y ∈ [0,1] bottom→top (NDC y is up).
-      // Image y grows downward, so the fragment shader flips when computing
-      // imgPos from vT.
       vT = vec2(gl_VertexID & 1, gl_VertexID >> 1);
       gl_Position = vec4(pos[gl_VertexID] * uScale, 0, 1);
     }`;
-  const fs = `#version 300 es
+  // Two fragment shader variants: passthrough RGBA (legacy / ?gpu=0) and
+  // planar YCbCr→RGB (GPU color path).  The thumbnail layer is always RGBA
+  // in both variants.
+  const fsLegacy = `#version 300 es
     precision mediump float;
     uniform sampler2D uTex;
     uniform sampler2D uThumb;
-    uniform vec4 uViewport;    // image coords (x0, y0, x1, y1) — y0 is top
-    uniform vec4 uTexRect;     // image coords of glTex contents
-    uniform vec4 uThumbRect;   // image coords of glThumb contents
+    uniform vec4 uViewport;
+    uniform vec4 uTexRect;
+    uniform vec4 uThumbRect;
     in vec2 vT;
     out vec4 fragColor;
     void main() {
-      // Map the (uScale-shrunk) quad position to image-space.  Y is flipped
-      // because vT.y = 0 is screen bottom but uViewport.y is image top.
       vec2 imgPos = vec2(
         mix(uViewport.x, uViewport.z, vT.x),
         mix(uViewport.w, uViewport.y, vT.y)
       );
       vec4 col = vec4(0.059, 0.066, 0.09, 1.0);
-      // Thumbnail layer: covers full canvas.  Empty thumbRect (zero w/h)
-      // produces NaN/Inf in the divide → bounds check fails → skipped.
       vec2 t = (imgPos - uThumbRect.xy) / (uThumbRect.zw - uThumbRect.xy);
       if (all(greaterThanEqual(t, vec2(0.0))) && all(lessThanEqual(t, vec2(1.0))))
         col = texture(uThumb, t);
-      // Previous-frame layer: overlays the thumbnail wherever it covers.
       vec2 u = (imgPos - uTexRect.xy) / (uTexRect.zw - uTexRect.xy);
       if (all(greaterThanEqual(u, vec2(0.0))) && all(lessThanEqual(u, vec2(1.0))))
         col = texture(uTex, u);
+      fragColor = col;
+    }`;
+  const fsPlanar = `#version 300 es
+    precision highp float;
+    uniform sampler2D uTexY;
+    uniform sampler2D uTexCb;
+    uniform sampler2D uTexCr;
+    uniform sampler2D uThumb;
+    uniform mat3      uMatrix;
+    uniform vec3      uOffset;
+    uniform vec4 uViewport;
+    uniform vec4 uTexRect;
+    uniform vec4 uThumbRect;
+    in vec2 vT;
+    out vec4 fragColor;
+    void main() {
+      vec2 imgPos = vec2(
+        mix(uViewport.x, uViewport.z, vT.x),
+        mix(uViewport.w, uViewport.y, vT.y)
+      );
+      vec4 col = vec4(0.059, 0.066, 0.09, 1.0);
+      vec2 t = (imgPos - uThumbRect.xy) / (uThumbRect.zw - uThumbRect.xy);
+      if (all(greaterThanEqual(t, vec2(0.0))) && all(lessThanEqual(t, vec2(1.0))))
+        col = texture(uThumb, t);
+      vec2 u = (imgPos - uTexRect.xy) / (uTexRect.zw - uTexRect.xy);
+      if (all(greaterThanEqual(u, vec2(0.0))) && all(lessThanEqual(u, vec2(1.0)))) {
+        vec3 ycc = vec3(texture(uTexY, u).r,
+                        texture(uTexCb, u).r,
+                        texture(uTexCr, u).r) - uOffset;
+        col = vec4(clamp(uMatrix * ycc, 0.0, 1.0), 1.0);
+      }
       fragColor = col;
     }`;
   function compile(type, src) {
@@ -722,9 +763,10 @@ function initWebGL(canvas) {
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
     return s;
   }
+  const usePlanar = useGpuColor;
   glProgram = gl.createProgram();
   gl.attachShader(glProgram, compile(gl.VERTEX_SHADER, vs));
-  gl.attachShader(glProgram, compile(gl.FRAGMENT_SHADER, fs));
+  gl.attachShader(glProgram, compile(gl.FRAGMENT_SHADER, usePlanar ? fsPlanar : fsLegacy));
   gl.linkProgram(glProgram); gl.useProgram(glProgram);
   uScaleLoc     = gl.getUniformLocation(glProgram, 'uScale');
   uViewportLoc  = gl.getUniformLocation(glProgram, 'uViewport');
@@ -735,12 +777,8 @@ function initWebGL(canvas) {
   gl.uniform4f(uTexRectLoc,   0, 0, 0, 0);
   gl.uniform4f(uThumbRectLoc, 0, 0, 0, 0);
 
-  // Both textures share filtering / wrap settings.  Initialise each with a
-  // 1×1 placeholder so the samplers are complete (an unbound or incomplete
-  // texture sampler returns implementation-defined values; the shader's
-  // bounds check would still gate usage, but better to be explicit).
   const placeholder = new Uint8Array([0, 0, 0, 255]);
-  function makeTex() {
+  function makeRGBATex() {
     const t = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, placeholder);
@@ -750,18 +788,44 @@ function initWebGL(canvas) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return t;
   }
-  glTex   = makeTex();
-  glThumb = makeTex();
-  // Bind glTex to unit 0 (uTex), glThumb to unit 1 (uThumb).  Bindings are
-  // persistent in WebGL state, so we only set the sampler-uniform indices
-  // once here.  Subsequent texImage2D / texSubImage2D calls re-bind via
-  // gl.activeTexture before uploading.
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, glTex);
-  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glThumb);
-  gl.uniform1i(gl.getUniformLocation(glProgram, 'uTex'),   0);
-  gl.uniform1i(gl.getUniformLocation(glProgram, 'uThumb'), 1);
-  // Restore active unit to TEXTURE0 so paintDecodedRegion's existing
-  // gl.bindTexture(glTex) targets the right unit.
+  function makeR8Tex() {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([0]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }
+
+  if (usePlanar) {
+    // Planar path: units 0-2 = Y/Cb/Cr (R8), unit 3 = thumbnail (RGBA).
+    glTexY  = makeR8Tex();
+    glTexCb = makeR8Tex();
+    glTexCr = makeR8Tex();
+    glThumb = makeRGBATex();
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, glTexY);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glTexCb);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, glTexCr);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, glThumb);
+    gl.uniform1i(gl.getUniformLocation(glProgram, 'uTexY'),  0);
+    gl.uniform1i(gl.getUniformLocation(glProgram, 'uTexCb'), 1);
+    gl.uniform1i(gl.getUniformLocation(glProgram, 'uTexCr'), 2);
+    gl.uniform1i(gl.getUniformLocation(glProgram, 'uThumb'), 3);
+    uMatrixLoc = gl.getUniformLocation(glProgram, 'uMatrix');
+    uOffsetLoc = gl.getUniformLocation(glProgram, 'uOffset');
+    gl.uniformMatrix3fv(uMatrixLoc, false, _MAT_BT601F);
+    gl.uniform3fv(uOffsetLoc, _OFF_FULL);
+  } else {
+    // Legacy path: unit 0 = RGBA main tex, unit 1 = RGBA thumbnail.
+    glTex   = makeRGBATex();
+    glThumb = makeRGBATex();
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, glTex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glThumb);
+    gl.uniform1i(gl.getUniformLocation(glProgram, 'uTex'),   0);
+    gl.uniform1i(gl.getUniformLocation(glProgram, 'uThumb'), 1);
+  }
   gl.activeTexture(gl.TEXTURE0);
 
   gl.bindVertexArray(gl.createVertexArray());
@@ -904,33 +968,61 @@ function scheduleFetch() {
   }, DEBOUNCE_MS);
 }
 
-// Decode the current DataBinSet into `rgbPtr` and upload to the WebGL
-// texture.  Shared between the mid-decode paint (fired during a slow
-// fetch to show the user something before the full response arrives)
-// and the final paint at end-of-response.  Returns true on success.
+// Decode the current DataBinSet and upload to WebGL textures.  When GPU
+// color is active, outputs 3 R8 planes and skips the CPU colour matrix;
+// otherwise falls back to the legacy packed-RGBA path.
 function paintDecodedRegion(regionX, regionY, regionW, regionH, outW, outH) {
-  const needBytes = outW * outH * 4;
-  if (needBytes > rgbBufSz) {
-    if (rgbPtr) M._free(rgbPtr);
-    rgbPtr = M._malloc(needBytes);
-    rgbBufSz = needBytes;
-  }
-  const rc = M._jpip_end_frame_region(ctx, rgbPtr, outW, outH,
-                                       regionX, regionY, regionW, regionH);
-  if (rc !== 0) return false;
-  const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, outW * outH * 4);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, glTex);
-  if (outW !== texW || outH !== texH) {
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, outW, outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  if (useGpuColor) {
+    const planeBytes = outW * outH;
+    if (planeBytes > plBufSz) {
+      if (plYPtr) { M._free(plYPtr); M._free(plCbPtr); M._free(plCrPtr); }
+      plYPtr  = M._malloc(planeBytes);
+      plCbPtr = M._malloc(planeBytes);
+      plCrPtr = M._malloc(planeBytes);
+      plBufSz = planeBytes;
+    }
+    const rc = M._jpip_end_frame_region_planar(ctx, plYPtr, plCbPtr, plCrPtr,
+                                                outW, outH,
+                                                regionX, regionY, regionW, regionH);
+    if (rc < 0) return false;
+    gpuIsYCbCr = (rc === 1);
+    const yData  = new Uint8Array(M.HEAPU8.buffer, plYPtr,  planeBytes);
+    const cbData = new Uint8Array(M.HEAPU8.buffer, plCbPtr, planeBytes);
+    const crData = new Uint8Array(M.HEAPU8.buffer, plCrPtr, planeBytes);
+    function uploadR8(tex, unit, data) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      if (outW !== texW || outH !== texH)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, outW, outH, 0, gl.RED, gl.UNSIGNED_BYTE, data);
+      else
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, outW, outH, gl.RED, gl.UNSIGNED_BYTE, data);
+    }
+    uploadR8(glTexY,  0, yData);
+    uploadR8(glTexCb, 1, cbData);
+    uploadR8(glTexCr, 2, crData);
     texW = outW; texH = outH;
+    gl.uniformMatrix3fv(uMatrixLoc, false, gpuIsYCbCr ? _MAT_BT601F : _MAT_IDENTITY);
+    gl.uniform3fv(uOffsetLoc, gpuIsYCbCr ? _OFF_FULL : _OFF_ZERO);
   } else {
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, outW, outH, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    const needBytes = outW * outH * 4;
+    if (needBytes > rgbBufSz) {
+      if (rgbPtr) M._free(rgbPtr);
+      rgbPtr = M._malloc(needBytes);
+      rgbBufSz = needBytes;
+    }
+    const rc = M._jpip_end_frame_region(ctx, rgbPtr, outW, outH,
+                                         regionX, regionY, regionW, regionH);
+    if (rc !== 0) return false;
+    const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, outW * outH * 4);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, glTex);
+    if (outW !== texW || outH !== texH) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, outW, outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+      texW = outW; texH = outH;
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, outW, outH, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    }
   }
-  // Record the IMAGE-COORD rect this texture represents.  drawViewport
-  // uses these to anchor the previous-frame pixels to their image position
-  // even after the user pans/zooms, so motion is smooth instead of frozen-
-  // and-jump on each fetch boundary.
   texImgX = regionX; texImgY = regionY;
   texImgW = regionW; texImgH = regionH;
   drawViewport();
@@ -1056,11 +1148,12 @@ async function fetchThumbnail() {
     // FULL canvas image-coord rect — the thumbnail is the same image at
     // a coarser resolution, not a sub-region.
     if (gl && glThumb) {
-      gl.activeTexture(gl.TEXTURE1);
+      const thumbUnit = useGpuColor ? gl.TEXTURE3 : gl.TEXTURE1;
+      gl.activeTexture(thumbUnit);
       gl.bindTexture(gl.TEXTURE_2D, glThumb);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, fW, fH, 0, gl.RGBA, gl.UNSIGNED_BYTE,
                     new Uint8Array(copy.buffer));
-      gl.activeTexture(gl.TEXTURE0);  // restore default for paintDecodedRegion
+      gl.activeTexture(gl.TEXTURE0);
       thumbImgW = canvasW; thumbImgH = canvasH;
       // First sign of life: redraw immediately so the thumbnail appears
       // behind whatever (possibly empty) glTex content is there.  Bypass

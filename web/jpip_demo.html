@@ -448,11 +448,30 @@ let running = false;
 let serverUrl = '';
 let busy = false;  // guard against overlapping fetch/decode
 
+// GPU color conversion — skip inverse MCT in WASM, apply BT.601 in shader.
+// Disable with ?gpu=0 to A/B test against the CPU colour path.
+const useGpuColor = new URLSearchParams(location.search).get('gpu') !== '0';
+
+const _MAT_BT601F = new Float32Array([
+  1, 1, 1,
+  0, -5638 / 16384, 29032 / 16384,
+  22970 / 16384, -11698 / 16384, 0,
+]);
+const _MAT_IDENTITY = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+const _OFF_HALF = 128.0 / 255.0;
+const _OFF_FULL = new Float32Array([0, _OFF_HALF, _OFF_HALF]);
+const _OFF_ZERO = new Float32Array([0, 0, 0]);
+
 // WebGL2 state
 let gl = null;
-let glTex = null;
-let glProgram = null;
+let glTex = null;     // RGBA passthrough texture (fallback path)
+let glProgram = null;  // passthrough program
 let texW = 0, texH = 0;
+// Planar path state
+let glProgPlanar = null;
+let texY = null, texCb = null, texCr = null;
+let uMatrixLoc = null, uOffsetLoc = null;
+let yPtr = 0, cbPtr = 0, crPtr = 0;
 
 function initWebGL(canvas, w, h) {
   gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
@@ -463,12 +482,27 @@ function initWebGL(canvas, w, h) {
     const vec2 uv[4]  = vec2[](vec2(0,1),vec2(1,1),vec2(0,0),vec2(1,0));
     out vec2 vUV;
     void main() { vUV = uv[gl_VertexID]; gl_Position = vec4(pos[gl_VertexID],0,1); }`;
-  const fs = `#version 300 es
+  const fsPassthrough = `#version 300 es
     precision mediump float;
     uniform sampler2D uTex;
     in vec2 vUV;
     out vec4 fragColor;
     void main() { fragColor = texture(uTex, vUV); }`;
+  const fsPlanar = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_y;
+    uniform sampler2D u_cb;
+    uniform sampler2D u_cr;
+    uniform mat3      u_matrix;
+    uniform vec3      u_offset;
+    in  vec2 vUV;
+    out vec4 fragColor;
+    void main() {
+      vec3 ycc = vec3(texture(u_y, vUV).r,
+                      texture(u_cb, vUV).r,
+                      texture(u_cr, vUV).r) - u_offset;
+      fragColor = vec4(clamp(u_matrix * ycc, 0.0, 1.0), 1.0);
+    }`;
 
   function compile(type, src) {
     const s = gl.createShader(type);
@@ -478,11 +512,15 @@ function initWebGL(canvas, w, h) {
       console.error(gl.getShaderInfoLog(s));
     return s;
   }
-  glProgram = gl.createProgram();
-  gl.attachShader(glProgram, compile(gl.VERTEX_SHADER, vs));
-  gl.attachShader(glProgram, compile(gl.FRAGMENT_SHADER, fs));
-  gl.linkProgram(glProgram);
-  gl.useProgram(glProgram);
+  function linkProg(vsSrc, fsSrc) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSrc));
+    gl.linkProgram(p);
+    return p;
+  }
+
+  glProgram = linkProg(vs, fsPassthrough);
 
   glTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, glTex);
@@ -493,6 +531,30 @@ function initWebGL(canvas, w, h) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
   texW = w; texH = h;
 
+  if (useGpuColor) {
+    glProgPlanar = linkProg(vs, fsPlanar);
+    gl.useProgram(glProgPlanar);
+    gl.uniform1i(gl.getUniformLocation(glProgPlanar, 'u_y'), 0);
+    gl.uniform1i(gl.getUniformLocation(glProgPlanar, 'u_cb'), 1);
+    gl.uniform1i(gl.getUniformLocation(glProgPlanar, 'u_cr'), 2);
+    uMatrixLoc = gl.getUniformLocation(glProgPlanar, 'u_matrix');
+    uOffsetLoc = gl.getUniformLocation(glProgPlanar, 'u_offset');
+    function mkR8() {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    }
+    texY  = mkR8();
+    texCb = mkR8();
+    texCr = mkR8();
+  } else {
+    gl.useProgram(glProgram);
+  }
+
   gl.bindVertexArray(gl.createVertexArray());
   gl.viewport(0, 0, canvas.width, canvas.height);
   return true;
@@ -500,15 +562,38 @@ function initWebGL(canvas, w, h) {
 
 function drawFrame(rgba, w, h) {
   if (!gl) {
-    // Canvas 2D fallback
     const c = $('canvas');
     const ctx2d = c.getContext('2d');
     const img = new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), w, h);
     ctx2d.putImageData(img, 0, 0);
     return;
   }
+  gl.useProgram(glProgram);
+  gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, glTex);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+function drawFramePlanar(w, h, isYCbCr) {
+  gl.useProgram(glProgPlanar);
+  const yData  = new Uint8Array(M.HEAPU8.buffer, yPtr,  w * h);
+  const cbData = new Uint8Array(M.HEAPU8.buffer, cbPtr, w * h);
+  const crData = new Uint8Array(M.HEAPU8.buffer, crPtr, w * h);
+  function uploadR8(tex, unit, data) {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (texW !== w || texH !== h)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, data);
+    else
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED, gl.UNSIGNED_BYTE, data);
+  }
+  uploadR8(texY,  0, yData);
+  uploadR8(texCb, 1, cbData);
+  uploadR8(texCr, 2, crData);
+  texW = w; texH = h;
+  gl.uniformMatrix3fv(uMatrixLoc, false, isYCbCr ? _MAT_BT601F : _MAT_IDENTITY);
+  gl.uniform3fv(uOffsetLoc, isYCbCr ? _OFF_FULL : _OFF_ZERO);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
@@ -601,10 +686,18 @@ async function connect() {
   c.style.width = '100%';
   c.style.height = 'auto';
 
-  rgbPtr = M._malloc(canvasW * canvasH * 4);
   initWebGL(c, canvasW, canvasH);
+  const gpuActive = gl && useGpuColor && glProgPlanar;
+  if (gpuActive) {
+    const planeSize = canvasW * canvasH;
+    yPtr  = M._malloc(planeSize);
+    cbPtr = M._malloc(planeSize);
+    crPtr = M._malloc(planeSize);
+  } else {
+    rgbPtr = M._malloc(canvasW * canvasH * 4);
+  }
   $('info').textContent = `${canvasW}×${canvasH}, ${totalP} precincts` +
-      (gl ? ' [WebGL2]' : ' [Canvas 2D]');
+      (gpuActive ? ' [WebGL2 GPU color]' : gl ? ' [WebGL2]' : ' [Canvas 2D]');
 
   running = true;
   let lastGx = -1, lastGy = -1;
@@ -681,15 +774,24 @@ async function connect() {
       }
       const tFetch = performance.now();
 
-      const rc = M._jpip_end_frame(ctx, rgbPtr, c.width, c.height);
+      let rc;
+      if (gpuActive) {
+        rc = M._jpip_end_frame_planar(ctx, yPtr, cbPtr, crPtr, c.width, c.height);
+      } else {
+        rc = M._jpip_end_frame(ctx, rgbPtr, c.width, c.height);
+      }
       const tDecode = performance.now();
-      if (rc !== 0) {
+      if (rc < 0) {
         $('stats').textContent = `decode error: ${rc}`;
         return;
       }
 
-      const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, c.width * c.height * 4);
-      drawFrame(rgba, c.width, c.height);
+      if (gpuActive) {
+        drawFramePlanar(c.width, c.height, rc === 1);
+      } else {
+        const rgba = new Uint8Array(M.HEAPU8.buffer, rgbPtr, c.width * c.height * 4);
+        drawFrame(rgba, c.width, c.height);
+      }
 
       frameCount++;
       const fetchMs = (tFetch - t0).toFixed(0);
