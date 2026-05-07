@@ -31,12 +31,14 @@
 //
 // (c) 2019 - 2021 Osamu Watanabe, Takushoku University, Vrije Universiteit Brussels
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #ifdef _OPENMP
   #include <omp.h>
@@ -538,7 +540,8 @@ int main(int argc, char *argv[]) {
 
   uint32_t num_threads;
   if (nullptr == (tmp_param = get_command_option(argc, argv, "-num_threads"))) {
-    num_threads = 0;
+    unsigned hwc = std::thread::hardware_concurrency();
+    num_threads  = (hwc > 0) ? std::min(hwc, 8u) : 0;
   } else {
     tmp_val = strtol(tmp_param, &endptr, 10);
     if (tmp_param == endptr) {
