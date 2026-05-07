@@ -427,12 +427,16 @@
 <script type="module">
 // Auto-detect the best WASM variant: multi-threaded SIMD if available,
 // otherwise single-threaded SIMD.  ?variant=st forces single-threaded.
+// ?wasmBase=/wasm-full/ for local dev under web/perf/serve.mjs (which
+// routes /wasm-full/ to web/build/html/).
+const _wasmBaseQ = new URLSearchParams(location.search).get('wasmBase');
+const WASM_BASE  = _wasmBaseQ || new URL('./', location.href).href;
 const hasSimd = await wasmFeatureDetect.simd();
 const hasMt = window.crossOriginIsolated && (typeof SharedArrayBuffer !== 'undefined');
 const forceVariant = new URLSearchParams(location.search).get('variant');
 const useMt = forceVariant === 'mt' ? true : forceVariant === 'st' ? false : (hasSimd && hasMt);
-const wasmFile = useMt ? './libopen_htj2k_jpip_mt_simd.js' : './libopen_htj2k_jpip.js';
-const {default: createModule} = await import(wasmFile);
+const wasmName = useMt ? 'libopen_htj2k_jpip_mt_simd.js' : 'libopen_htj2k_jpip.js';
+const {default: createModule} = await import(WASM_BASE + wasmName);
 
 const $ = id => document.getElementById(id);
 
