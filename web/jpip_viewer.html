@@ -406,6 +406,11 @@ const hasMt = window.crossOriginIsolated && (typeof SharedArrayBuffer !== 'undef
 const forceVariant = new URLSearchParams(location.search).get('variant');
 const useMt = forceVariant === 'mt' ? true : forceVariant === 'st' ? false : (hasSimd && hasMt);
 
+// ?wasmBase=/wasm-full/ for local dev under web/perf/serve.mjs (which
+// routes /wasm-full/ to web/build/html/).
+const _wasmBaseQ = new URLSearchParams(location.search).get('wasmBase');
+const WASM_BASE  = _wasmBaseQ || new URL('./', location.href).href;
+
 // Cache-buster for dev iteration.  `?cb=auto` or `?cb=1` appends Date.now()
 // to WASM/JS URLs so the browser refetches after every rebuild — bypasses
 // the (correct) HTTP caching that production relies on.  Default (no `?cb`):
@@ -418,9 +423,9 @@ const cacheBuster =
     (_cbParam === 'auto' || _cbParam === '1') ? `?v=${Date.now()}`
   : _cbParam ? `?v=${encodeURIComponent(_cbParam)}`
   : '';
-const wasmFile = (useMt ? './libopen_htj2k_jpip_mt_simd.js'
-                        : './libopen_htj2k_jpip.js') + cacheBuster;
-const {default: createModule} = await import(wasmFile);
+const wasmName = (useMt ? 'libopen_htj2k_jpip_mt_simd.js'
+                        : 'libopen_htj2k_jpip.js') + cacheBuster;
+const {default: createModule} = await import(WASM_BASE + wasmName);
 const $ = id => document.getElementById(id);
 
 let M = null, ctx = 0, canvasW = 0, canvasH = 0;
