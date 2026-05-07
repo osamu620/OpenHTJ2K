@@ -1481,19 +1481,18 @@ async function fetchView() {
   // arrived during the await above, fire one more fetch with the current
   // (freshest) panX/panY/zoom.  No debounce — the user already waited the
   // full network+decode round-trip, they don't need another 60 ms.
-  if (pendingFetch) {
-    pendingFetch = false;
-    queueMicrotask(fetchView);
-    return;
-  }
-  // Kick the one-time thumbnail fetch on idle, after the first successful
-  // main-view paint.  Uses its own busy-lock to coexist with any later
-  // user-driven fetch.  Skip the adjacent-halo prefetch this round —
-  // fetchThumbnail owns the decoder for the next hop; the next pan will
-  // set up a new prefetch anyway.
+  // Thumbnail takes priority over pending scrolls — it's a one-time fetch
+  // and on fast local servers the pendingFetch drain can indefinitely
+  // preempt it (user is still scrolling during the short decode window,
+  // setting pendingFetch every cycle).
   if (thumbnailPending) {
     thumbnailPending = false;
     queueMicrotask(fetchThumbnail);
+    return;
+  }
+  if (pendingFetch) {
+    pendingFetch = false;
+    queueMicrotask(fetchView);
     return;
   }
   // Otherwise: schedule an idle-delay prefetch of the adjacent halo.
