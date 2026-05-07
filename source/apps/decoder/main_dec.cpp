@@ -466,7 +466,7 @@ void print_help(char *cmd) {
   printf("-o: Output file. Supported formats are PPM, PGM, PGX and RAW.\n");
   printf("-reduce n: Number of DWT resolution reduction.\n");
   printf("-iter n: Repeat decoding n times (for benchmarking). Output is written once.\n");
-  printf("-num_threads n: Number of threads (0 = auto).\n");
+  printf("-num_threads n: Number of threads (0 = auto, capped at 8).\n");
   printf("-batch: Use batch (full-image buffer) decode path instead of the default streaming path.\n");
   printf("-ycbcr bt601|bt709: [EXPERIMENTAL] Convert YCbCr to RGB (PPM output only).\n");
 }
@@ -540,8 +540,7 @@ int main(int argc, char *argv[]) {
 
   uint32_t num_threads;
   if (nullptr == (tmp_param = get_command_option(argc, argv, "-num_threads"))) {
-    unsigned hwc = std::thread::hardware_concurrency();
-    num_threads  = (hwc > 0) ? std::min(hwc, 8u) : 0;
+    num_threads = 0;
   } else {
     tmp_val = strtol(tmp_param, &endptr, 10);
     if (tmp_param == endptr) {
@@ -552,8 +551,11 @@ int main(int argc, char *argv[]) {
       printf("ERROR: -num_threads takes non-negative integer ( < UINT32_MAX).\n");
       exit(EXIT_FAILURE);
     }
-    //    num_iterations = static_cast<int32_t>(tmp_val);
-    num_threads = static_cast<uint32_t>(tmp_val);  // strtoul(tmp_param, nullptr, 10);
+    num_threads = static_cast<uint32_t>(tmp_val);
+  }
+  if (num_threads == 0) {
+    unsigned hwc = std::thread::hardware_concurrency();
+    num_threads  = (hwc > 0) ? std::min(hwc, 8u) : 0;
   }
   // Reject any unrecognised flags.
   {
