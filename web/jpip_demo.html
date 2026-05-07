@@ -425,10 +425,10 @@
   }
 </script>
 <script type="module">
-// WASM variant selection.  Default: single-threaded SIMD.  The JPIP demos
-// decode on the main thread (no Web Worker), so MT would block on the
-// pthreads condition variable and trigger Emscripten's main-thread-blocking
-// warning.  ?variant=mt forces MT if you want to test it anyway.
+// Auto-detect the best WASM variant: multi-threaded SIMD if available,
+// otherwise single-threaded SIMD.  ?variant=st forces single-threaded.
+// The main-thread blocking warning from Emscripten is expected — the
+// thread pool workers finish quickly and the 30% MT speedup is worth it.
 // ?wasmBase=/wasm-full/ for local dev under web/perf/serve.mjs (which
 // routes /wasm-full/ to web/build/html/).
 const _wasmBaseQ = new URLSearchParams(location.search).get('wasmBase');
@@ -436,7 +436,7 @@ const WASM_BASE  = _wasmBaseQ || new URL('./', location.href).href;
 const hasSimd = await wasmFeatureDetect.simd();
 const hasMt = window.crossOriginIsolated && (typeof SharedArrayBuffer !== 'undefined');
 const forceVariant = new URLSearchParams(location.search).get('variant');
-const useMt = forceVariant === 'mt' ? (hasSimd && hasMt) : false;
+const useMt = forceVariant === 'mt' ? true : forceVariant === 'st' ? false : (hasSimd && hasMt);
 const wasmName = useMt ? 'libopen_htj2k_jpip_mt_simd.js' : 'libopen_htj2k_jpip.js';
 const {default: createModule} = await import(WASM_BASE + wasmName);
 
