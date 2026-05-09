@@ -353,7 +353,8 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
     body.reserve(static_cast<std::size_t>(clen));
     // Absorb any body bytes already captured alongside the headers.
     if (body_offset < hdr_bytes) {
-      body.insert(body.end(), raw.begin() + body_offset, raw.begin() + hdr_bytes);
+      body.insert(body.end(), raw.begin() + static_cast<std::ptrdiff_t>(body_offset),
+                  raw.begin() + static_cast<std::ptrdiff_t>(hdr_bytes));
     }
     if (body.size() < clen) {
       const std::size_t remaining = static_cast<std::size_t>(clen) - body.size();

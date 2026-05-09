@@ -652,7 +652,7 @@ int main(int argc, char **argv) {
     const auto now = Clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log).count() > 1000) {
       const double secs = std::chrono::duration<double>(now - last_log).count();
-      const double fps  = frames_since_log / std::max(secs, 1e-6);
+      const double fps  = static_cast<double>(frames_since_log) / std::max(secs, 1e-6);
       const uint64_t avg_precincts = frames_since_log ? (precincts_since_log / frames_since_log) : 0;
       const double coverage_pct =
           total_p ? (100.0 * static_cast<double>(avg_precincts) / static_cast<double>(total_p)) : 0.0;

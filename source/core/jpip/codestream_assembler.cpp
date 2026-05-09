@@ -152,7 +152,7 @@ std::vector<uint8_t> patch_cod_to_lrcp(const std::vector<uint8_t> &main_hdr) {
     const uint8_t m = patched[i + 1];
     if (m == 0x4F) { i += 2; continue; }  // SOC, no length
     if (i + 4 > patched.size()) break;
-    const uint16_t Lmar = (static_cast<uint16_t>(patched[i + 2]) << 8) | patched[i + 3];
+    const uint16_t Lmar = static_cast<uint16_t>((patched[i + 2] << 8) | patched[i + 3]);
     if (m == 0x52) {
       // COD found.  Byte at i+4 = Scod, i+5 = SGcod[0] = progression order.
       patched[i + 5] = kProgressionLRCP;

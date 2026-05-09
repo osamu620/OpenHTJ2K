@@ -34,6 +34,12 @@ std::string sock_error_str() { return std::strerror(errno); }
 inline void close_socket(tcp_socket_t fd) { ::close(fd); }
 #endif
 
+#ifdef _WIN32
+using sock_buf_len = int;
+#else
+using sock_buf_len = std::size_t;
+#endif
+
 }  // namespace
 
 bool tcp_wsa_init() {
@@ -139,7 +145,7 @@ bool TcpStream::send_all(const uint8_t *buf, std::size_t len) {
   std::size_t sent = 0;
   while (sent < len) {
     auto n = ::send(fd_, reinterpret_cast<const char *>(buf + sent),
-                    static_cast<int>(len - sent), 0);
+                    static_cast<sock_buf_len>(len - sent), 0);
     if (n <= 0) { err_ = sock_error_str(); return false; }
     sent += static_cast<std::size_t>(n);
   }
@@ -150,7 +156,7 @@ bool TcpStream::recv_all(uint8_t *buf, std::size_t len) {
   std::size_t got = 0;
   while (got < len) {
     auto n = ::recv(fd_, reinterpret_cast<char *>(buf + got),
-                    static_cast<int>(len - got), 0);
+                    static_cast<sock_buf_len>(len - got), 0);
     if (n <= 0) { err_ = (n == 0) ? "EOF" : sock_error_str(); return false; }
     got += static_cast<std::size_t>(n);
   }
@@ -163,7 +169,7 @@ std::size_t TcpStream::recv_until_header_end(std::vector<uint8_t> &buf,
   uint8_t tmp[4096];
   while (buf.size() < max_bytes) {
     auto chunk = std::min<std::size_t>(sizeof(tmp), max_bytes - buf.size());
-    auto n = ::recv(fd_, reinterpret_cast<char *>(tmp), static_cast<int>(chunk), 0);
+    auto n = ::recv(fd_, reinterpret_cast<char *>(tmp), static_cast<sock_buf_len>(chunk), 0);
     if (n <= 0) return buf.size();  // EOF or error
     buf.insert(buf.end(), tmp, tmp + n);
     // Check for "\r\n\r\n" in the last few bytes.
@@ -183,7 +189,7 @@ std::size_t TcpStream::recv_until_header_end(std::vector<uint8_t> &buf,
 
 std::size_t TcpStream::recv_some(uint8_t *buf, std::size_t len) {
   if (len == 0) return 0;
-  auto n = ::recv(fd_, reinterpret_cast<char *>(buf), static_cast<int>(len), 0);
+  auto n = ::recv(fd_, reinterpret_cast<char *>(buf), static_cast<sock_buf_len>(len), 0);
   if (n == 0) return 0;
   if (n < 0) { err_ = sock_error_str(); return SIZE_MAX; }
   return static_cast<std::size_t>(n);

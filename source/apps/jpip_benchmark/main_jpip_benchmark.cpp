@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
   double full_decode_ms = decode_jpp(full_jpp, *idx, reduce_NL);
 
   std::printf("Full image: %zu precincts, %zu bytes (%.1f KB), decode=%.1f ms\n\n",
-              full_set.size(), full_jpp.size(), full_jpp.size() / 1024.0, full_decode_ms);
+              full_set.size(), full_jpp.size(), static_cast<double>(full_jpp.size()) / 1024.0, full_decode_ms);
 
   // Header
   std::printf("%-10s %-10s │ %8s %10s %8s │ %8s %8s %8s │ %6s %6s\n",
@@ -219,8 +219,8 @@ int main(int argc, char **argv) {
 
   for (int yi = 0; yi < grid_n; ++yi) {
     for (int xi = 0; xi < grid_n; ++xi) {
-      uint32_t gx = (grid_n == 1) ? cw / 2 : static_cast<uint32_t>(static_cast<uint64_t>(xi) * (cw - 1) / (grid_n - 1));
-      uint32_t gy = (grid_n == 1) ? ch / 2 : static_cast<uint32_t>(static_cast<uint64_t>(yi) * (ch - 1) / (grid_n - 1));
+      uint32_t gx = (grid_n == 1) ? cw / 2 : static_cast<uint32_t>(static_cast<uint64_t>(xi) * (cw - 1) / static_cast<uint64_t>(grid_n - 1));
+      uint32_t gy = (grid_n == 1) ? ch / 2 : static_cast<uint32_t>(static_cast<uint64_t>(yi) * (ch - 1) / static_cast<uint64_t>(grid_n - 1));
 
       // Foveated I-set (union of 3 cones)
       std::unordered_set<uint64_t> fov_set;

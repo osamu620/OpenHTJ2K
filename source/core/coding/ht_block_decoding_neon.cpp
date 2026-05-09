@@ -118,14 +118,6 @@ static FORCE_INLINE void dequant_store_neon(int32_t *dst, int32x4_t val, uint8_t
   }
 }
 
-// Returns {max(a[0..3]), max(b[0..3])} as int32x2_t using NEON pairwise max.
-// Avoids the SIMD-to-scalar extraction that vmaxvq_s32 requires.
-static inline int32x2_t max4_pair(int32x4_t a, int32x4_t b) {
-  int32x2_t ra = vpmax_s32(vget_low_s32(a), vget_high_s32(a));
-  int32x2_t rb = vpmax_s32(vget_low_s32(b), vget_high_s32(b));
-  return vpmax_s32(ra, rb);
-}
-
 template <bool skip_sigma, bool fuse_dequant = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {

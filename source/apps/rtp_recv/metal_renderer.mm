@@ -446,7 +446,7 @@ void MetalRenderer::upload_and_draw(const uint8_t* rgb, int w, int h) {
   impl_->ensureRgbPlane(w, h);
 
   // Convert RGB → RGBA directly into the shared buffer (Metal has no RGB8).
-  const size_t npix = static_cast<size_t>(w) * h;
+  const size_t npix = static_cast<size_t>(w) * static_cast<size_t>(h);
   uint8_t* dst = static_cast<uint8_t*>(impl_->planeRgb.buffer.contents);
   for (size_t i = 0; i < npix; ++i) {
     dst[4 * i + 0] = rgb[3 * i + 0];
@@ -477,9 +477,9 @@ void MetalRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t
   impl_->ensurePlane(impl_->planeCr, w_c, h_c, 1, MTLPixelFormatR8Unorm);
 
   // Direct memcpy into shared GPU memory — no replaceRegion, no tiling.
-  std::memcpy(impl_->planeY.buffer.contents,  y_plane,  static_cast<size_t>(w_y) * h_y);
-  std::memcpy(impl_->planeCb.buffer.contents, cb_plane, static_cast<size_t>(w_c) * h_c);
-  std::memcpy(impl_->planeCr.buffer.contents, cr_plane, static_cast<size_t>(w_c) * h_c);
+  std::memcpy(impl_->planeY.buffer.contents,  y_plane,  static_cast<size_t>(w_y) * static_cast<size_t>(h_y));
+  std::memcpy(impl_->planeCb.buffer.contents, cb_plane, static_cast<size_t>(w_c) * static_cast<size_t>(h_c));
+  std::memcpy(impl_->planeCr.buffer.contents, cr_plane, static_cast<size_t>(w_c) * static_cast<size_t>(h_c));
 
   FragmentUniforms u = {};
   u.norm_scale = simd_make_float3(1.0f, 1.0f, 1.0f);
@@ -535,9 +535,9 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
   impl_->ensurePlane(impl_->planeCb, w_c, h_c, 2, MTLPixelFormatR16Unorm);
   impl_->ensurePlane(impl_->planeCr, w_c, h_c, 2, MTLPixelFormatR16Unorm);
 
-  std::memcpy(impl_->planeY.buffer.contents,  y_plane,  static_cast<size_t>(w_y) * h_y * 2);
-  std::memcpy(impl_->planeCb.buffer.contents, cb_plane, static_cast<size_t>(w_c) * h_c * 2);
-  std::memcpy(impl_->planeCr.buffer.contents, cr_plane, static_cast<size_t>(w_c) * h_c * 2);
+  std::memcpy(impl_->planeY.buffer.contents,  y_plane,  static_cast<size_t>(w_y) * static_cast<size_t>(h_y) * 2);
+  std::memcpy(impl_->planeCb.buffer.contents, cb_plane, static_cast<size_t>(w_c) * static_cast<size_t>(h_c) * 2);
+  std::memcpy(impl_->planeCr.buffer.contents, cr_plane, static_cast<size_t>(w_c) * static_cast<size_t>(h_c) * 2);
 
   const float native_max = static_cast<float>((1 << bit_depth) - 1);
   const float k = 65535.0f / native_max;
@@ -606,8 +606,8 @@ MetalRenderer::PlanePointers MetalRenderer::acquire_plane_buffers(
   return pp;
 }
 
-void MetalRenderer::draw_acquired_planes(int ring_index, int w_y, int h_y, int w_c, int h_c,
-                                         int bpp, int bit_depth,
+void MetalRenderer::draw_acquired_planes(int ring_index, int w_y, int h_y, int /*w_c*/, int /*h_c*/,
+                                         int /*bpp*/, int bit_depth,
                                          const ycbcr_coefficients* coeffs,
                                          bool components_are_rgb,
                                          const ColorPipelineParams& pipeline) {

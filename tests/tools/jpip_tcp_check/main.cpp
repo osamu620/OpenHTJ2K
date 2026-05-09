@@ -35,8 +35,6 @@ int failures = 0;
 int main() {
   tcp_wsa_init();
 
-  constexpr uint16_t kPort = 0;  // 0 = let OS pick an ephemeral port
-
   // Use a fixed port for simplicity (ephemeral port selection would
   // require getsockname).  Pick something unlikely to collide.
   constexpr uint16_t kTestPort = 19283;
