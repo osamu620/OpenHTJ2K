@@ -37,6 +37,17 @@ func (b *certBundle) sha256ColonHex() string {
 	return strings.Join(parts, ":")
 }
 
+func localNonLoopbackIPs() []net.IP {
+	var ips []net.IP
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() {
+			ips = append(ips, ipn.IP)
+		}
+	}
+	return ips
+}
+
 func generateDevCert() (*certBundle, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -59,7 +70,7 @@ func generateDevCert() (*certBundle, error) {
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		IPAddresses:           append([]net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}, localNonLoopbackIPs()...),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
 	if err != nil {
