@@ -33,6 +33,7 @@ func main() {
 		keyPath     = flag.String("key", "", "PEM private key matching --cert")
 		dev         = flag.Bool("dev", false, "Generate an ephemeral self-signed cert and print SHA-256 hash")
 		initialMTU  = flag.Int("initial-mtu", 1200, "Initial QUIC packet size in bytes (1200-1452); lower for VPN/tunnel paths")
+		logPath     = flag.String("log", "", "Log to file instead of stderr")
 	)
 	flag.Parse()
 
@@ -43,6 +44,14 @@ func main() {
 		log.Fatalf("--initial-mtu must be between 1200 and 1452")
 	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	if *logPath != "" {
+		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Fatalf("open log file: %v", err)
+		}
+		defer f.Close()
+		log.SetOutput(f)
+	}
 
 	udpAddr, err := net.ResolveUDPAddr("udp", *listenUDP)
 	if err != nil {
