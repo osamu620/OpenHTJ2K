@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	nhpprof "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -34,6 +35,7 @@ func main() {
 		dev         = flag.Bool("dev", false, "Generate an ephemeral self-signed cert and print SHA-256 hash")
 		initialMTU  = flag.Int("initial-mtu", 1200, "Initial QUIC packet size in bytes (1200-1452); lower for VPN/tunnel paths")
 		logPath     = flag.String("log", "", "Log to file instead of stderr")
+		pprofAddr   = flag.String("pprof", "", "Enable pprof HTTP server (e.g. :6060)")
 	)
 	flag.Parse()
 
@@ -51,6 +53,21 @@ func main() {
 		}
 		defer f.Close()
 		log.SetOutput(f)
+	}
+
+	if *pprofAddr != "" {
+		muxDbg := http.NewServeMux()
+		muxDbg.HandleFunc("/debug/pprof/", nhpprof.Index)
+		muxDbg.HandleFunc("/debug/pprof/cmdline", nhpprof.Cmdline)
+		muxDbg.HandleFunc("/debug/pprof/profile", nhpprof.Profile)
+		muxDbg.HandleFunc("/debug/pprof/symbol", nhpprof.Symbol)
+		muxDbg.HandleFunc("/debug/pprof/trace", nhpprof.Trace)
+		go func() {
+			log.Printf("pprof listening %s", *pprofAddr)
+			if err := http.ListenAndServe(*pprofAddr, muxDbg); err != nil {
+				log.Printf("pprof: %v", err)
+			}
+		}()
 	}
 
 	udpAddr, err := net.ResolveUDPAddr("udp", *listenUDP)
