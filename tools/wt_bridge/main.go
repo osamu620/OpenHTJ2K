@@ -32,11 +32,15 @@ func main() {
 		certPath    = flag.String("cert", "", "PEM cert chain (use instead of --dev for a CA-issued cert)")
 		keyPath     = flag.String("key", "", "PEM private key matching --cert")
 		dev         = flag.Bool("dev", false, "Generate an ephemeral self-signed cert and print SHA-256 hash")
+		initialMTU  = flag.Int("initial-mtu", 1200, "Initial QUIC packet size in bytes (1200-1452); lower for VPN/tunnel paths")
 	)
 	flag.Parse()
 
 	if !*dev && (*certPath == "" || *keyPath == "") {
 		log.Fatalf("either --dev or both --cert and --key are required")
+	}
+	if *initialMTU < 1200 || *initialMTU > 1452 {
+		log.Fatalf("--initial-mtu must be between 1200 and 1452")
 	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
@@ -83,11 +87,10 @@ func main() {
 		NextProtos:   []string{http3.NextProtoH3},
 	}
 	quicConf := &quic.Config{
-		// Generous datagram allowance — even though we use streams for the
-		// data path, control-plane flow benefits from a steady idle timeout.
 		MaxIdleTimeout:    30 * time.Second,
 		KeepAlivePeriod:   10 * time.Second,
 		EnableDatagrams:   true,
+		InitialPacketSize: uint16(*initialMTU),
 	}
 
 	wtServer := &webtransport.Server{
