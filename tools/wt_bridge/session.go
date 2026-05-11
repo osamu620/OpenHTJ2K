@@ -34,7 +34,7 @@ func runSession(ctx context.Context, sess *webtransport.Session, fan *fanout) {
 	defer fan.unsubscribe(sub)
 
 	var forwarded uint64
-	hdr := make([]byte, 2)
+	buf := make([]byte, 2+65536)
 
 	for {
 		select {
@@ -51,24 +51,16 @@ func runSession(ctx context.Context, sess *webtransport.Session, fan *fanout) {
 				log.Printf("session %d: oversized packet %d, dropping", id, len(pkt))
 				continue
 			}
-			binary.BigEndian.PutUint16(hdr, uint16(len(pkt)))
-			if _, err := stream.Write(hdr); err != nil {
+			binary.BigEndian.PutUint16(buf, uint16(len(pkt)))
+			copy(buf[2:], pkt)
+			if _, err := stream.Write(buf[:2+len(pkt)]); err != nil {
 				if !isClosedErr(err) {
-					log.Printf("session %d: write hdr: %v", id, err)
+					log.Printf("session %d: write: %v", id, err)
 				}
 				return
 			}
-			if _, err := stream.Write(pkt); err != nil {
-				if !isClosedErr(err) {
-					log.Printf("session %d: write body: %v", id, err)
-				}
-				return
-			}
-			// Local-only counter — this goroutine is the sole writer and
-			// reader, so no atomic dance is needed.  (Cross-session totals
-			// live on `fanout.stats` which uses atomics.)
 			forwarded++
-			if forwarded == 1 || forwarded%100000 == 0 {
+			if forwarded == 1 || forwarded%150000 == 0 {
 				log.Printf("session %d forwarded=%d", id, forwarded)
 			}
 		}
