@@ -60,10 +60,8 @@ func (f *fanout) subscriberCount() int {
 
 func (f *fanout) broadcast(pkt []byte) {
 	f.mu.Lock()
-	subs := make([]*subscriber, len(f.subscribers))
-	copy(subs, f.subscribers)
-	f.mu.Unlock()
-	for _, s := range subs {
+	defer f.mu.Unlock()
+	for _, s := range f.subscribers {
 		select {
 		case s.ch <- pkt:
 		default:
