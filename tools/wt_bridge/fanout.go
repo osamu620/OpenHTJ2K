@@ -11,6 +11,8 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+
+	"golang.org/x/net/ipv4"
 )
 
 type fanout struct {
@@ -86,15 +88,14 @@ func (f *fanout) broadcast(pkt []byte) {
 }
 
 // runUDPIn binds and drains a UDP socket into the fanout until ctx is done.
+// Uses recvmmsg (Linux) to batch up to 64 packets per syscall.
 func (f *fanout) runUDPIn(ctx context.Context, listen *net.UDPAddr) error {
-	conn, err := net.ListenUDP("udp", listen)
+	conn, err := net.ListenUDP("udp4", listen)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	// 8 MiB receive buffer — kernel may clamp to net.core.rmem_max.  README
-	// notes the sysctl knob.
 	if err := conn.SetReadBuffer(8 << 20); err != nil {
 		log.Printf("udp: SetReadBuffer: %v (kernel may clamp; check net.core.rmem_max)", err)
 	}
@@ -105,21 +106,28 @@ func (f *fanout) runUDPIn(ctx context.Context, listen *net.UDPAddr) error {
 		_ = conn.Close()
 	}()
 
-	buf := make([]byte, 65536)
+	const batch = 64
+	pc := ipv4.NewPacketConn(conn)
+	msgs := make([]ipv4.Message, batch)
+	for i := range msgs {
+		msgs[i].Buffers = [][]byte{make([]byte, 2048)}
+	}
+
 	for {
-		n, _, err := conn.ReadFromUDP(buf)
+		n, err := pc.ReadBatch(msgs, 0)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		f.packetsIn.Add(1)
-		f.bytesIn.Add(uint64(n))
-		// Copy: every subscriber shares the slice and may hold it past the
-		// next ReadFromUDP that would otherwise overwrite buf.
-		pkt := make([]byte, n)
-		copy(pkt, buf[:n])
-		f.broadcast(pkt)
+		for i := 0; i < n; i++ {
+			pktLen := msgs[i].N
+			f.packetsIn.Add(1)
+			f.bytesIn.Add(uint64(pktLen))
+			pkt := make([]byte, pktLen)
+			copy(pkt, msgs[i].Buffers[0][:pktLen])
+			f.broadcast(pkt)
+		}
 	}
 }
