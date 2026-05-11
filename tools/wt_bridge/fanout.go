@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"golang.org/x/net/ipv4"
 )
 
 type fanout struct {
@@ -88,9 +87,8 @@ func (f *fanout) broadcast(pkt []byte) {
 }
 
 // runUDPIn binds and drains a UDP socket into the fanout until ctx is done.
-// Uses recvmmsg (Linux) to batch up to 64 packets per syscall.
 func (f *fanout) runUDPIn(ctx context.Context, listen *net.UDPAddr) error {
-	conn, err := net.ListenUDP("udp4", listen)
+	conn, err := net.ListenUDP("udp", listen)
 	if err != nil {
 		return err
 	}
@@ -106,28 +104,19 @@ func (f *fanout) runUDPIn(ctx context.Context, listen *net.UDPAddr) error {
 		_ = conn.Close()
 	}()
 
-	const batch = 64
-	pc := ipv4.NewPacketConn(conn)
-	msgs := make([]ipv4.Message, batch)
-	for i := range msgs {
-		msgs[i].Buffers = [][]byte{make([]byte, 2048)}
-	}
-
+	buf := make([]byte, 65536)
 	for {
-		n, err := pc.ReadBatch(msgs, 0)
+		n, _, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		for i := 0; i < n; i++ {
-			pktLen := msgs[i].N
-			f.packetsIn.Add(1)
-			f.bytesIn.Add(uint64(pktLen))
-			pkt := make([]byte, pktLen)
-			copy(pkt, msgs[i].Buffers[0][:pktLen])
-			f.broadcast(pkt)
-		}
+		f.packetsIn.Add(1)
+		f.bytesIn.Add(uint64(n))
+		pkt := make([]byte, n)
+		copy(pkt, buf[:n])
+		f.broadcast(pkt)
 	}
 }
