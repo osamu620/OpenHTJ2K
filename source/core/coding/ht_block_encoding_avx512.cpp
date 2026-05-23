@@ -726,8 +726,26 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     }
 
     // ===== PHASE 4: Emit deferred MagSgn =====
-    for (int32_t i = 0; i < ms_count; i++)
-      MagSgn_encoder.emitBits(ms_v[i], ms_m[i], ms_k1[i]);
+    // Pre-extract to flat scalar arrays — eliminates SSE register pressure
+    // so the compiler can keep Creg/ctreg in GPRs during the emit loop.
+    {
+      alignas(32) uint32_t flat_v[512 * 4], flat_m[512 * 4];
+      int32_t flat_count = 0;
+      for (int32_t i = 0; i < ms_count; i++) {
+        __m128i tmp = _mm_sllv_epi32(ms_k1[i], ms_m[i]);
+        __m128i v = _mm_sub_epi32(ms_v[i], tmp);
+        __m128i m = ms_m[i];
+        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 0));
+        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 0));
+        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 1));
+        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 1));
+        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 2));
+        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 2));
+        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 3));
+        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 3));
+      }
+      MagSgn_encoder.emitFlat(flat_v, flat_m, flat_count);
+    }
   }
 
   Pcup = MagSgn_encoder.termMS();

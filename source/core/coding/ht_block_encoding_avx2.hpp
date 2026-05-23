@@ -197,6 +197,47 @@ class state_MS_enc {
     }
     return pos;  // return current position as Pcup
   }
+
+  __attribute__((noinline)) void emitFlat(const uint32_t *__restrict__ v,
+                                          const uint32_t *__restrict__ m, int32_t count) {
+    uint64_t cr = Creg;
+    uint32_t ct = ctreg;
+    uint8_t la = last;
+    int32_t po = pos;
+    for (int32_t i = 0; i < count; ++i) {
+      cr |= static_cast<uint64_t>(v[i]) << ct;
+      ct += m[i];
+      while (ct >= 32) {
+        uint32_t val = static_cast<uint32_t>(cr);
+        if (la < 0xFF && (val & 0xFF) < 0xFF && ((val >> 8) & 0xFF) < 0xFF
+            && ((val >> 16) & 0xFF) < 0xFF) {
+          la = static_cast<uint8_t>(val >> 24);
+          cr >>= 32;
+          ct -= 32;
+          *reinterpret_cast<uint32_t *>(buf + po) = val;
+          po += 4;
+        } else {
+          uint32_t bits_local = 0, t = 0;
+          uint32_t stuff = (la == 0xFF);
+          uint32_t tmp;
+          tmp = val & ((1U << (8U - stuff)) - 1U);
+          t |= tmp; bits_local += 8 - stuff; stuff = (tmp == 0xFF);
+          tmp = (val >> bits_local) & ((1U << (8U - stuff)) - 1U);
+          t |= tmp << 8; bits_local += 8 - stuff; stuff = (tmp == 0xFF);
+          tmp = (val >> bits_local) & ((1U << (8U - stuff)) - 1U);
+          t |= tmp << 16; bits_local += 8 - stuff; stuff = (tmp == 0xFF);
+          tmp = (val >> bits_local) & ((1U << (8U - stuff)) - 1U);
+          t |= tmp << 24; bits_local += 8 - stuff;
+          la = tmp & 0xFF;
+          cr >>= bits_local;
+          ct -= bits_local;
+          *reinterpret_cast<uint32_t *>(buf + po) = t;
+          po += 4;
+        }
+      }
+    }
+    Creg = cr; ctreg = ct; last = la; pos = po;
+  }
 };
 
 class state_MEL_enc;  // forward declaration for friend function "termMELandVLC()"
