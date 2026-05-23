@@ -6336,12 +6336,9 @@ uint8_t *j2k_tile::encode() {
           }
         }
 
-        // Bulk zero of the used pool region for this precinct.
-        // Reuses already-faulted pages after the first precinct, avoiding repeated mmap faults.
-        memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
+        // Zero block_states (border must be pre-zeroed); sample_buf is written by quantize.
         memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
 
-        // Pass 2: encode all codeblocks (buffers are zeroed above).
         enc_remaining.store(0, std::memory_order_relaxed);
         uint32_t task_idx = 0;
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -6354,7 +6351,6 @@ uint8_t *j2k_tile::encode() {
               *ea      = {epc, block, ROIshift, &enc_remaining};
               enc_remaining.fetch_add(1, std::memory_order_relaxed);
               pool->push([ea]() {
-                // Claim a per-thread pool slot once per tile encode (generation-guarded).
                 TlPoolSlot &ts = g_tl_pool_slot;
                 if (ts.gen != ea->epc->gen) {
                   const int slot = ea->epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
@@ -6379,8 +6375,6 @@ uint8_t *j2k_tile::encode() {
     };
 #else
     auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
-      // Pre-scan: find the largest codeblock count across all precincts at this resolution.
-      // Allocate once and reuse to avoid per-precinct mmap/munmap page-fault cycles on Linux.
       uint32_t max_total_cblks = 0;
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp     = cr->access_precinct(p);
@@ -6392,7 +6386,6 @@ uint8_t *j2k_tile::encode() {
         max_total_cblks = std::max(max_total_cblks, total_cblks);
       }
       if (max_total_cblks == 0) return;
-      // Use the tile-level grow-only scratch buffers to avoid per-resolution malloc/free.
       epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
                            static_cast<size_t>(max_total_cblks) * 6156);
       int32_t *gbuf  = epc->gbuf;
@@ -6403,7 +6396,6 @@ uint8_t *j2k_tile::encode() {
         int32_t *pbuf    = gbuf;
         uint8_t *spbuf   = sgbuf;
 
-        // Pass 1: assign buffer pointers to all codeblocks in this precinct.
         for (uint8_t b = 0; b < cr->num_bands; b++) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
           const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -6418,12 +6410,8 @@ uint8_t *j2k_tile::encode() {
           }
         }
 
-        // Bulk zero of the used pool region for this precinct.
-        // Reuses already-faulted pages after the first precinct, avoiding repeated mmap faults.
-        memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
         memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
 
-        // Pass 2: encode all codeblocks (buffers are zeroed above).
         g_cblk_pool = epc->pools[0].get();
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -6602,7 +6590,6 @@ uint8_t *j2k_tile::encode_line_based() {
           spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
       memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       enc_remaining.store(0, std::memory_order_relaxed);
       uint32_t task_idx = 0;
@@ -6672,7 +6659,6 @@ uint8_t *j2k_tile::encode_line_based() {
           spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
       memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       g_cblk_pool = epc->pools[0].get();
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -6871,7 +6857,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
           spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
       memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       enc_remaining.store(0, std::memory_order_relaxed);
       uint32_t task_idx = 0;
@@ -6941,7 +6926,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
           spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(gbuf, 0, static_cast<size_t>(pbuf - gbuf) * sizeof(int32_t));
       memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       g_cblk_pool = epc->pools[0].get();
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -7141,7 +7125,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
 
     int32_t *gbuf  = static_cast<int32_t *>(malloc(total_cbuf * sizeof(int32_t)));
     uint8_t *sgbuf = static_cast<uint8_t *>(malloc(total_sbuf));
-    memset(gbuf, 0, total_cbuf * sizeof(int32_t));
     memset(sgbuf, 0, total_sbuf);
 
     // Assign sample_buf/block_states pointers and set up per-level overlap state.

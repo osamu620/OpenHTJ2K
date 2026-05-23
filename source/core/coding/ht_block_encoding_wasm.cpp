@@ -87,12 +87,17 @@ static inline v128_t wasm_u32x4_clz(v128_t a) {
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
 void j2k_codeblock::quantize(uint32_t &or_val) {
-  float fscale = 1.0f / this->stepsize;
-  fscale /= (1 << (FRACBITS));
-  if (transformation) fscale = 1.0f;
-
   const uint32_t height = this->size.y;
+  const uint32_t width  = this->size.x;
   const uint32_t stride = this->band_stride;
+  const bool lossless   = (this->transformation != 0);
+
+  float fscale = 1.0f;
+  if (!lossless) {
+    fscale = 1.0f / this->stepsize;
+    fscale /= (1 << (FRACBITS));
+  }
+
   v128_t vscale         = wasm_f32x4_splat(fscale);
   v128_t vorval         = wasm_i32x4_const_splat(0);
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
@@ -100,20 +105,20 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states + block_index;
-    int16_t len        = static_cast<int16_t>(this->size.x);
+    int16_t len        = static_cast<int16_t>(width);
     for (; len >= 8; len -= 8) {
-      v128_t fv0 = wasm_v128_load(sp);
-      v128_t fv1 = wasm_v128_load(sp + 4);
-      // Quantization
-      v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_mul(fv0, vscale));
-      v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_mul(fv1, vscale));
-      // Take sign bit
+      v128_t v0, v1;
+      if (lossless) {
+        v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(sp));
+        v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(sp + 4));
+      } else {
+        v0 = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_mul(wasm_v128_load(sp), vscale));
+        v1 = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_mul(wasm_v128_load(sp + 4), vscale));
+      }
       v128_t s0 = wasm_u32x4_shr(v0, 31);
       v128_t s1 = wasm_u32x4_shr(v1, 31);
-      // Absolute value
       v0 = wasm_i32x4_abs(v0);
       v1 = wasm_i32x4_abs(v1);
-      // Block states
       v128_t narrow0     = wasm_i16x8_narrow_i32x4(v0, v0);
       v128_t narrow1     = wasm_i16x8_narrow_i32x4(v1, v1);
       v128_t combined16  = wasm_i8x16_shuffle(narrow0, narrow1, 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20,
@@ -123,28 +128,26 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       v128_t narrow8     = wasm_i8x16_narrow_i16x8(vblkstate_v, vblkstate_v);
       *(uint64_t *)dstblk = (uint64_t)wasm_i64x2_extract_lane(narrow8, 0);
       dstblk += 8;
-      // Check emptiness of a block
       vorval = wasm_v128_or(vorval, v0);
       vorval = wasm_v128_or(vorval, v1);
-      // Convert two's complement to MagSgn form
       v0 = wasm_u32x4_qsub(v0, wasm_i32x4_const_splat(1));
       v1 = wasm_u32x4_qsub(v1, wasm_i32x4_const_splat(1));
       v0 = wasm_i32x4_shl(v0, 1);
       v1 = wasm_i32x4_shl(v1, 1);
       v0 = wasm_i32x4_add(v0, s0);
       v1 = wasm_i32x4_add(v1, s1);
-      // Store
       wasm_v128_store(dp, v0);
       wasm_v128_store(dp + 4, v1);
       sp += 8;
       dp += 8;
     }
-    // Check emptiness of a block
     or_val |= static_cast<unsigned int>(wasm_i32x4_reduce_max(vorval));
-    // process leftover
     for (; len > 0; --len) {
       int32_t temp;
-      temp             = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
+      if (lossless)
+        temp = static_cast<int32_t>(sp[0]);
+      else
+        temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
       uint32_t sign    = static_cast<uint32_t>(temp) & 0x80000000;
       temp             = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
@@ -154,13 +157,18 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        dp[0] = temp;
       }
+      dp[0] = temp;
       ++sp;
       ++dp;
       ++dstblk;
     }
+    if (blksampl_stride > width)
+      memset(dp, 0, (blksampl_stride - width) * sizeof(int32_t));
   }
+  const uint32_t QHx2 = (height + 7U) & ~7U;
+  for (uint32_t i = height; i < QHx2; ++i)
+    memset(this->sample_buf + i * blksampl_stride, 0, blksampl_stride * sizeof(int32_t));
 }
 
 /********************************************************************************
