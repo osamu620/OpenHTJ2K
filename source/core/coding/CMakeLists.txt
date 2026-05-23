@@ -9,6 +9,7 @@ target_sources(open_htj2k
     ht_block_encoding.cpp
     ht_block_encoding_neon.cpp
     ht_block_encoding_avx2.cpp
+    ht_block_encoding_avx512.cpp
     ht_block_encoding_wasm.cpp
     block_decoding.cpp
     block_dequant.cpp
