@@ -527,9 +527,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   alignas(32) int32_t  emb1_a[512];
   alignas(32) uint32_t vlc_cwd_a[512];
   alignas(32) uint32_t vlc_lw_a[512];
-  alignas(32) __m128i  v_a[512];
-  alignas(32) __m128i  sig_a[512];
-  alignas(32) __m128i  E_a[512];
+  alignas(64) int32_t  v_flat[512 * 4];   // 4 MagSgn values per quad, interleaved [r0c0,r1c0,r0c1,r1c1]
+  alignas(64) int32_t  sig_flat[512 * 4]; // 4 significance flags per quad (0 or -1)
+  alignas(64) int32_t  E_flat[512 * 4];   // 4 E values per quad
+  // __m128i views for backward compatibility with Phase 2c/3 that use hMax/__m128i
+  auto v_a   = reinterpret_cast<__m128i *>(v_flat);
+  auto sig_a = reinterpret_cast<__m128i *>(sig_flat);
+  auto E_a   = reinterpret_cast<__m128i *>(E_flat);
 
   for (uint16_t qy = 1; qy < QH; qy++) {
     ms_count = 0;
@@ -541,11 +545,105 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     sp0  = block->sample_buf + 2U * (qy * block->blksampl_stride);
     sp1  = sp0 + block->blksampl_stride;
 
-    // ===== PHASE 1: Pre-compute rho/E/v/sig for ALL quads =====
+    // ===== PHASE 1: Pre-compute rho/E/v/sig for ALL quads (AVX-512, 8 quads/iter) =====
     {
       uint8_t *s0p = ssp0, *s1p = ssp1;
       int32_t *p0 = sp0, *p1 = sp1;
       int32_t q = 0;
+#ifdef __AVX512CD__
+      // Permutation index for interleaving two __m512i of 16 columns from row0/row1
+      // into quad order: [r0c0,r1c0,r0c1,r1c1] for 4 quads per output register.
+      // unpacklo gives: [r0[0],r1[0],r0[1],r1[1] | r0[4],r1[4],r0[5],r1[5] | ...]
+      // unpackhi gives: [r0[2],r1[2],r0[3],r1[3] | r0[6],r1[6],r0[7],r1[7] | ...]
+      // We need quads in order: q0=[c0,c1], q1=[c2,c3], q2=[c4,c5], ...
+      // So output0 = {lo_lane0, hi_lane0, lo_lane1, hi_lane1} = quads 0,1,2,3
+      // output1 = {lo_lane2, hi_lane2, lo_lane3, hi_lane3} = quads 4,5,6,7
+      const __m512i perm_lo = _mm512_setr_epi32(
+          0,1,2,3, 16,17,18,19, 4,5,6,7, 20,21,22,23);
+      const __m512i perm_hi = _mm512_setr_epi32(
+          8,9,10,11, 24,25,26,27, 12,13,14,15, 28,29,30,31);
+      const __m512i V32 = _mm512_set1_epi32(32);
+
+      for (; q + 7 < QW; q += 8) {
+        // --- Significance from block_states (16 bytes per row) ---
+        // Load 16 uint8 from each row, AND with 1 to extract sigma bit
+        __m128i st0_raw = _mm_loadu_si128(reinterpret_cast<const __m128i *>(s0p));
+        __m128i st1_raw = _mm_loadu_si128(reinterpret_cast<const __m128i *>(s1p));
+        __m128i ones_8  = _mm_set1_epi8(1);
+        __m128i st0     = _mm_and_si128(st0_raw, ones_8);  // sig row0[0..15]
+        __m128i st1     = _mm_and_si128(st1_raw, ones_8);  // sig row1[0..15]
+
+        // Compute rho for 8 quads from 16 columns:
+        // rho[q] = sig_r0[2q] | (sig_r1[2q] << 1) | (sig_r0[2q+1] << 2) | (sig_r1[2q+1] << 3)
+        // Deinterleave even/odd bytes:
+        // even: positions 0,2,4,...,14 → sig_r0_even[0..7], sig_r1_even[0..7]
+        // odd:  positions 1,3,5,...,15 → sig_r0_odd[0..7], sig_r1_odd[0..7]
+        const __m128i shuf_even = _mm_setr_epi8(0,2,4,6,8,10,12,14, -1,-1,-1,-1,-1,-1,-1,-1);
+        const __m128i shuf_odd  = _mm_setr_epi8(1,3,5,7,9,11,13,15, -1,-1,-1,-1,-1,-1,-1,-1);
+        __m128i s0_even = _mm_shuffle_epi8(st0, shuf_even);  // row0 even cols
+        __m128i s0_odd  = _mm_shuffle_epi8(st0, shuf_odd);   // row0 odd cols
+        __m128i s1_even = _mm_shuffle_epi8(st1, shuf_even);  // row1 even cols
+        __m128i s1_odd  = _mm_shuffle_epi8(st1, shuf_odd);   // row1 odd cols
+
+        // rho = s0_even | (s1_even << 1) | (s0_odd << 2) | (s1_odd << 3)
+        // All values are 0 or 1, so shifts within byte are safe
+        __m128i rho_bytes = _mm_or_si128(
+            _mm_or_si128(s0_even, _mm_slli_epi16(s1_even, 1)),
+            _mm_or_si128(_mm_slli_epi16(s0_odd, 2), _mm_slli_epi16(s1_odd, 3)));
+        // rho_bytes low 8 bytes contain rho[0..7] as uint8 (values 0-15)
+        // Zero-extend to int32 and store
+        __m256i rho_32 = _mm256_cvtepu8_epi32(rho_bytes);
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(rho_a + q), rho_32);
+
+        // --- Significance masks (int32, 0 or -1) in quad order ---
+        // Target per-quad: [r0c0, r1c0, r0c1, r1c1]
+        // Build pairs: even_pairs=[s0e[0],s1e[0], s0e[1],s1e[1],...] (16-bit chunks)
+        //              odd_pairs =[s0o[0],s1o[0], s0o[1],s1o[1],...]
+        // Then unpack at 16-bit to interleave pairs:
+        //   [s0e[0],s1e[0], s0o[0],s1o[0], ...] = [r0c0,r1c0,r0c1,r1c1, ...]
+        __m128i even_pairs = _mm_unpacklo_epi8(s0_even, s1_even);
+        __m128i odd_pairs  = _mm_unpacklo_epi8(s0_odd, s1_odd);
+        __m128i sig_lo_bytes = _mm_unpacklo_epi16(even_pairs, odd_pairs);  // quads 0-3
+        __m128i sig_hi_bytes = _mm_unpackhi_epi16(even_pairs, odd_pairs);  // quads 4-7
+
+        // Expand bytes (0 or 1) to int32 sign-extended masks (0 or -1)
+        __m512i sig_lo = _mm512_cvtepi8_epi32(sig_lo_bytes);
+        sig_lo = _mm512_srai_epi32(_mm512_slli_epi32(sig_lo, 31), 31);
+
+        __m512i sig_hi = _mm512_cvtepi8_epi32(sig_hi_bytes);
+        sig_hi = _mm512_srai_epi32(_mm512_slli_epi32(sig_hi, 31), 31);
+
+        _mm512_storeu_si512(sig_flat + q * 4, sig_lo);
+        _mm512_storeu_si512(sig_flat + q * 4 + 16, sig_hi);
+
+        // --- Sample values in quad order ---
+        __m512i row0 = _mm512_loadu_si512(p0);  // sp0[0..15]
+        __m512i row1 = _mm512_loadu_si512(p1);  // sp1[0..15]
+
+        // unpacklo/hi at 32-bit granularity (within 128-bit lanes):
+        __m512i lo = _mm512_unpacklo_epi32(row0, row1);
+        __m512i hi = _mm512_unpackhi_epi32(row0, row1);
+
+        // Permute to get consecutive quads:
+        __m512i v_q0123 = _mm512_permutex2var_epi32(lo, perm_lo, hi);  // quads 0-3
+        __m512i v_q4567 = _mm512_permutex2var_epi32(lo, perm_hi, hi);  // quads 4-7
+
+        _mm512_storeu_si512(v_flat + q * 4, v_q0123);
+        _mm512_storeu_si512(v_flat + q * 4 + 16, v_q4567);
+
+        // --- E = (32 - lzcnt(v)) & sig ---
+        __m512i lz_lo = _mm512_lzcnt_epi32(v_q0123);
+        __m512i lz_hi = _mm512_lzcnt_epi32(v_q4567);
+        __m512i E_lo = _mm512_and_epi32(_mm512_sub_epi32(V32, lz_lo), sig_lo);
+        __m512i E_hi = _mm512_and_epi32(_mm512_sub_epi32(V32, lz_hi), sig_hi);
+
+        _mm512_storeu_si512(E_flat + q * 4, E_lo);
+        _mm512_storeu_si512(E_flat + q * 4 + 16, E_hi);
+
+        s0p += 16; s1p += 16; p0 += 16; p1 += 16;
+      }
+#endif  // __AVX512CD__
+      // Scalar tail for remaining quads
       for (; q + 1 < QW; q += 2) {
         make_storage(s0p, s1p, p0, p1,
                      sig_a[q], sig_a[q + 1], v_a[q], v_a[q + 1],
@@ -557,8 +655,50 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
     }
 
-    // ===== PHASE 2a: Compute context for ALL quads (reads from unmodified rholine) =====
+    // ===== PHASE 2a: Compute context for ALL quads (AVX-512 vectorized) =====
     {
+#ifdef __AVX512CD__
+      int32_t q = 0;
+      // rho_west[q] = rho_a[q-1] with rho_a[-1] = 0
+      // rho_p[q-1], rho_p[q], rho_p[q+1] are from the previous line-pair's rholine
+      for (; q + 15 < QW; q += 16) {
+        // Load rho_a[q-1..q+14] as rho_west (shifted by 1)
+        __m512i rw;
+        if (q == 0) {
+          alignas(64) int32_t rw_tmp[16];
+          rw_tmp[0] = 0;
+          memcpy(rw_tmp + 1, rho_a, 15 * sizeof(int32_t));
+          rw = _mm512_load_si512(rw_tmp);
+        } else {
+          rw = _mm512_loadu_si512(rho_a + q - 1);
+        }
+        __m512i rp_m1 = _mm512_loadu_si512(rho_p + q - 1);
+        __m512i rp_0  = _mm512_loadu_si512(rho_p + q);
+        __m512i rp_p1 = _mm512_loadu_si512(rho_p + q + 1);
+
+        // ctx = ((rw & 0x4) << 7) | ((rw & 0x8) << 6)
+        //     | ((rp_m1 & 0x8) << 5) | ((rp_0 & 0xa) << 7)
+        //     | ((rp_p1 & 0x2) << 9)
+        __m512i ctx = _mm512_or_epi32(
+            _mm512_or_epi32(
+                _mm512_slli_epi32(_mm512_and_epi32(rw, _mm512_set1_epi32(0x4)), 7),
+                _mm512_slli_epi32(_mm512_and_epi32(rw, _mm512_set1_epi32(0x8)), 6)),
+            _mm512_or_epi32(
+                _mm512_or_epi32(
+                    _mm512_slli_epi32(_mm512_and_epi32(rp_m1, _mm512_set1_epi32(0x8)), 5),
+                    _mm512_slli_epi32(_mm512_and_epi32(rp_0, _mm512_set1_epi32(0xa)), 7)),
+                _mm512_slli_epi32(_mm512_and_epi32(rp_p1, _mm512_set1_epi32(0x2)), 9)));
+        _mm512_storeu_si512(ctx_a + q, ctx);
+      }
+      // Scalar tail
+      int32_t rho_west = (q > 0) ? rho_a[q - 1] : 0;
+      for (; q < QW; q++) {
+        ctx_a[q] = ((rho_west & 0x4) << 7) | ((rho_west & 0x8) << 6)
+                   | ((rho_p[q - 1] & 0x8) << 5) | ((rho_p[q] & 0xa) << 7)
+                   | ((rho_p[q + 1] & 0x2) << 9);
+        rho_west = rho_a[q];
+      }
+#else
       int32_t rho_west = 0;
       for (int32_t q = 0; q < QW; q++) {
         ctx_a[q] = ((rho_west & 0x4) << 7) | ((rho_west & 0x8) << 6)
@@ -566,6 +706,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
                    | ((rho_p[q + 1] & 0x2) << 9);
         rho_west = rho_a[q];
       }
+#endif
     }
 
     // ===== PHASE 2b: Read ALL Emax from old Eline before any updates =====
