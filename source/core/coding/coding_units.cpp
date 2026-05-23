@@ -471,6 +471,16 @@ struct fdwt_level_sink_ctx {
   uint32_t  ll0_stride;
   int32_t   ll0_y0;
 
+  // Sink-quantize: DWT sink writes directly to codeblock sample_buf,
+  // bypassing i_samples. Per-band flat array of codeblock pointers in
+  // raster (cy, cx) order with parallel x_start array.
+  std::vector<j2k_codeblock *> sink_cblks[3];  // HL=0, LH=1, HH=2
+  std::vector<int32_t>         sink_x_start[3];
+  int32_t sink_num_cblk_x[3] = {};
+  int32_t sink_num_cblk_y[3] = {};
+  float   fscale       = 1.0f;
+  bool    sink_quantize = false;
+
   // --- Overlap HT block encoding (populated by encode_line_based_stream) ---
   // cb_h == 0 means overlap is disabled for this level.
   int32_t   cb_h          = 0;
@@ -493,6 +503,94 @@ struct fdwt_level_sink_ctx {
 // Forward declaration; full definition is after the ThreadPool include below.
 static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br);
 
+// Quantize one DWT row and scatter into codeblock sample_buf + block_states.
+static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row,
+                                     int32_t band_idx, fdwt_level_sink_ctx *c) {
+  const int32_t ncx = c->sink_num_cblk_x[band_idx];
+  const int32_t cb_h = c->cb_h;
+  const int32_t cy = sub_row / cb_h;
+  const int32_t row_in_cblk = sub_row - cy * cb_h;
+  const auto &cblks = c->sink_cblks[band_idx];
+  const auto &xstarts = c->sink_x_start[band_idx];
+
+  for (int32_t xi = 0; xi < ncx; ++xi) {
+    j2k_codeblock *block = cblks[static_cast<size_t>(cy * ncx + xi)];
+    if (row_in_cblk >= static_cast<int32_t>(block->size.y)) continue;
+    // Use per-block stepsize for correct per-band quantization
+    float fs = 1.0f / block->stepsize;
+    fs /= (1 << FRACBITS);
+    if (block->transformation) fs = 1.0f;
+    int32_t *dp  = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
+    uint8_t *stp = block->block_states + (row_in_cblk + 1) * static_cast<int32_t>(block->blkstate_stride) + 1;
+    const sprec_t *s = src + xstarts[static_cast<size_t>(xi)];
+    const int32_t w = static_cast<int32_t>(block->size.x);
+    {
+#if defined(__AVX2__)
+      const __m256i vone = _mm256_set1_epi32(1);
+      const __m256 vscale = _mm256_set1_ps(fs);
+      __m256i vor = _mm256_setzero_si256();
+      int32_t col = 0;
+      for (; col + 15 < w; col += 16) {
+        __m256i v0, v1;
+        if (block->transformation) {
+          v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(s + col));
+          v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(s + col + 8));
+        } else {
+          v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_loadu_ps(s + col), vscale));
+          v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_loadu_ps(s + col + 8), vscale));
+        }
+        __m256i s0 = _mm256_srli_epi32(v0, 31);
+        __m256i s1 = _mm256_srli_epi32(v1, 31);
+        v0 = _mm256_abs_epi32(v0);
+        v1 = _mm256_abs_epi32(v1);
+        __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
+        __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
+        vor = _mm256_or_si256(vor, _mm256_or_si256(mask0, mask1));
+        __m256i vone0 = _mm256_and_si256(mask0, vone);
+        __m256i vone1 = _mm256_and_si256(mask1, vone);
+        v0 = _mm256_add_epi32(_mm256_slli_epi32(_mm256_sub_epi32(v0, vone0), 1),
+                               _mm256_and_si256(s0, mask0));
+        v1 = _mm256_add_epi32(_mm256_slli_epi32(_mm256_sub_epi32(v1, vone1), 1),
+                               _mm256_and_si256(s1, mask1));
+        _mm256_storeu_si256((__m256i *)(dp + col), v0);
+        _mm256_storeu_si256((__m256i *)(dp + col + 8), v1);
+        // block_states: pack sigma to bytes
+        v0 = _mm256_packs_epi32(vone0, vone1);
+        v0 = _mm256_permute4x64_epi64(v0, 0xD8);
+        v0 = _mm256_packs_epi16(v0, v0);
+        v0 = _mm256_permute4x64_epi64(v0, 0xD8);
+        __m128i vsig = _mm256_extracti128_si256(v0, 0);
+        __m128i old_states = _mm_loadu_si128((__m128i *)(stp + col));
+        _mm_storeu_si128((__m128i *)(stp + col), _mm_or_si128(old_states, vsig));
+      }
+      if (!_mm256_testz_si256(vor, vor)) block->pre_or_val |= 1;
+      for (; col < w; ++col) {
+#else
+      int32_t col = 0;
+      for (; col < w; ++col) {
+#endif
+        int32_t temp;
+        if (block->transformation)
+          temp = static_cast<int32_t>(s[col]);
+        else
+          temp = static_cast<int32_t>(static_cast<float>(s[col]) * fs);
+        uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+        temp = (temp < 0) ? -temp : temp;
+        if (temp) {
+          block->pre_or_val |= 1;
+          stp[col] |= 1;
+          temp--;
+          temp <<= 1;
+          temp += static_cast<uint8_t>(sign >> 31);
+        }
+        dp[col] = temp;
+      }
+    }
+    if (static_cast<int32_t>(block->blksampl_stride) > w)
+      memset(dp + w, 0, static_cast<size_t>(block->blksampl_stride - static_cast<size_t>(w)) * sizeof(int32_t));
+  }
+}
+
 // Sink callback invoked by fdwt_2d_state after each row has been through H-DWT.
 // The interleaved_row has u1-u0 samples: LP at u0%2 offsets, HP at (1-u0%2) offsets.
 static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
@@ -506,8 +604,11 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
   if (!is_hp) {
     // LP vertical row: HP-horiz → HL, LP-horiz → child/LL0
     const int32_t hl_sub = (abs_row >> 1) - c->hl_y0;
-    memcpy(c->hl_samples + static_cast<ptrdiff_t>(hl_sub) * static_cast<ptrdiff_t>(c->hl_stride), c->hp_tmp,
-           static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
+    if (c->sink_quantize)
+      sink_quantize_row(c->hp_tmp, hl_sub, 0, c);
+    else
+      memcpy(c->hl_samples + static_cast<ptrdiff_t>(hl_sub) * static_cast<ptrdiff_t>(c->hl_stride), c->hp_tmp,
+             static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
     if (c->has_child) {
       fdwt_2d_state_push_row(c->child_state, c->lp_tmp);
     } else {
@@ -527,10 +628,15 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
   } else {
     // HP vertical row: LP-horiz → LH, HP-horiz → HH
     const int32_t hp_sub = (abs_row >> 1) - c->lh_y0;
-    memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride), c->lp_tmp,
-           static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
-    memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride), c->hp_tmp,
-           static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
+    if (c->sink_quantize) {
+      sink_quantize_row(c->lp_tmp, hp_sub, 1, c);
+      sink_quantize_row(c->hp_tmp, hp_sub, 2, c);
+    } else {
+      memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride), c->lp_tmp,
+             static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
+      memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride), c->hp_tmp,
+             static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
+    }
     // Overlap: dispatch HT block encoding if this LH+HH row completes codeblock row br.
     if (c->cb_h > 0) {
       const int32_t br   = hp_sub / c->cb_h;
@@ -1908,7 +2014,6 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
         const size_t alloc_samples = sizeof(sprec_t) * this->stride * (pos1.y - pos0.y + 1)
                                      + sizeof(sprec_t) * (DWT_LEFT_SLACK + DWT_RIGHT_SLACK);
         sprec_t *base = static_cast<sprec_t *>(aligned_mem_alloc(alloc_samples, 32));
-        memset(base, 0, alloc_samples);
         i_samples = base + DWT_LEFT_SLACK;
       }
       // When no_alloc=true (ring-mode line-based decode), i_samples stays nullptr.
@@ -6129,7 +6234,7 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
 
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img, lb_enc);
-    this->tcomp[c].create_resolutions(1, false, lb_enc);  // enc_lb skips resolution[NL].i_samples
+    this->tcomp[c].create_resolutions(1, false, lb_enc);
   }
 
   // apply POC, if any
@@ -7123,9 +7228,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
     }
     if (total_cbuf == 0) continue;
 
-    int32_t *gbuf  = static_cast<int32_t *>(malloc(total_cbuf * sizeof(int32_t)));
-    uint8_t *sgbuf = static_cast<uint8_t *>(malloc(total_sbuf));
-    memset(sgbuf, 0, total_sbuf);
+    int32_t *gbuf  = static_cast<int32_t *>(calloc(total_cbuf, sizeof(int32_t)));
+    uint8_t *sgbuf = static_cast<uint8_t *>(calloc(total_sbuf, 1));
 
     // Assign sample_buf/block_states pointers and set up per-level overlap state.
     int32_t *pbuf  = gbuf;
@@ -7146,6 +7250,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
             const uint32_t QHx2  = round_up(block->size.y, 8U);
             block->sample_buf    = pbuf;
             block->block_states  = spbuf;
+            block->pre_quantized = true;
             pbuf  += QWx2 * QHx2;
             spbuf += (QWx2 + 2) * (QHx2 + 2);
           }
@@ -7168,6 +7273,38 @@ uint8_t *j2k_tile::encode_line_based_stream(
       cx.enc_pool      = pool;
       cx.enc_remaining = &enc_remaining;
 #endif
+
+      // Build per-band codeblock pointer tables for fused sink-quantize.
+      // Codeblocks are stored in raster (cy, cx) order per band.
+      for (uint8_t b = 0; b < cr->num_bands; ++b) {
+        // Collect codeblocks and their x-starts for each band.
+        // Assumes single precinct (default). For multiple precincts,
+        // all precincts' codeblocks at the same band are concatenated.
+        auto &vec = cx.sink_cblks[b];
+        auto &xvec = cx.sink_x_start[b];
+        vec.clear();
+        xvec.clear();
+        uint32_t ncx_total = 0, ncy_total = 0;
+        for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+          j2k_precinct *cp = cr->access_precinct(p);
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          if (!cpb->num_codeblock_x || !cpb->num_codeblock_y) continue;
+          ncx_total = cpb->num_codeblock_x;
+          ncy_total = cpb->num_codeblock_y;
+          const int32_t band_x0 = static_cast<int32_t>(cpb->pos0.x);
+          for (uint32_t cy_cb = 0; cy_cb < cpb->num_codeblock_y; ++cy_cb) {
+            int32_t x_acc = 0;
+            for (uint32_t cx_cb = 0; cx_cb < cpb->num_codeblock_x; ++cx_cb) {
+              j2k_codeblock *block = cpb->access_codeblock(cx_cb + cy_cb * cpb->num_codeblock_x);
+              vec.push_back(block);
+              xvec.push_back(static_cast<int32_t>(block->pos0.x) - band_x0);
+            }
+          }
+        }
+        cx.sink_num_cblk_x[b] = static_cast<int32_t>(ncx_total);
+        cx.sink_num_cblk_y[b] = static_cast<int32_t>(ncy_total);
+      }
+      cx.sink_quantize = true;
     }
 
     comp_gbuf[c]    = gbuf;

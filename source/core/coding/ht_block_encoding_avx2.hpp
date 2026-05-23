@@ -122,31 +122,6 @@ class state_MS_enc {
     pos += 4;
   }
 
-  /**  Internal function to emit 8 code words:
-   ***  - has a problem with finer quantization stepsize)
-   ***  - require 128bit precision of Creg
-   **/
-  // FORCE_INLINE void emit_qword() {
-  //   uint32_t bits_local = 0;
-  //   uint64_t val        = Creg & 0xFFFFFFFF'FFFFFFFF;
-  //   uint32_t stuff      = (last == 0xFF);
-  //   uint64_t tmp;
-
-  //   uint64_t t = 0;
-  //   for (int i = 0; i < 8; ++i) {
-  //     tmp = (val >> (bits_local)) & ((1U << (8 - stuff)) - 1);
-  //     t |= tmp << (8 * i);
-  //     bits_local += 8 - stuff;
-  //     stuff = (tmp == 0xFF);
-  //   }
-  //   last = tmp & 0xFF;
-
-  //   Creg >>= bits_local;
-  //   ctreg -= bits_local;
-  //   *reinterpret_cast<uint64_t *>(buf + pos) = t;
-  //   pos += 8;
-  // }
-
  public:
   explicit state_MS_enc(uint8_t *p) : Creg(0), ctreg(0), pos(0), last(0), buf(p) {}
 
