@@ -383,8 +383,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_0 = CxtVLC & 0xF;
     emb1_0 = emb_pattern & embk_0;
-    lw     = (CxtVLC >> 4) & 0x07;
-    cwd    = CxtVLC >> 7;
+    uint32_t lw0 = (CxtVLC >> 4) & 0x07;
+    uint32_t cwd0 = CxtVLC >> 7;
 
     // context for the next quad
     context = (rho0 >> 1) | (rho0 & 0x1);
@@ -403,19 +403,18 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     emb_pattern = _mm_movemask_epi8(
         _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
     n_q = emb_pattern + (rho1 << 4) + (context << 8);
-    // VLC encoding of quads 0 and 1
-    VLC_encoder.emitVLCBits(cwd, lw);
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_1 = CxtVLC & 0xF;
     emb1_1 = emb_pattern & embk_1;
     lw     = (CxtVLC >> 4) & 0x07;
     cwd    = CxtVLC >> 7;
-    VLC_encoder.emitVLCBits(cwd, lw);
-    // UVLC encoding
-    uint32_t tmp = enc_UVLC_table0[uvlc_idx];
-    lw           = tmp & 0xFF;
-    cwd          = tmp >> 8;
-    VLC_encoder.emitVLCBits(cwd, lw);
+    // Batched VLC + UVLC encoding
+    uint32_t uvlc_tmp = enc_UVLC_table0[uvlc_idx];
+    uint32_t uvlc_lw  = uvlc_tmp & 0xFF;
+    uint32_t uvlc_cwd = uvlc_tmp >> 8;
+    uint64_t vlc_all  = cwd0 | (static_cast<uint64_t>(cwd) << lw0)
+                        | (static_cast<uint64_t>(uvlc_cwd) << (lw0 + lw));
+    VLC_encoder.emitVLCBits(vlc_all, lw0 + lw + uvlc_lw);
 
     // MEL encoding of the second quad
     if (context == 0) {
@@ -480,18 +479,17 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     emb_pattern = _mm_movemask_epi8(
         _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
     n_q = emb_pattern + (rho0 << 4) + (context << 8);
-    // VLC encoding
     CxtVLC = enc_CxtVLC_table0[n_q];
     embk_0 = CxtVLC & 0xF;
     emb1_0 = emb_pattern & embk_0;
     lw     = (CxtVLC >> 4) & 0x07;
     cwd    = CxtVLC >> 7;
-    VLC_encoder.emitVLCBits(cwd, lw);
-    // UVLC encoding
-    uint32_t tmp = enc_UVLC_table0[uvlc_idx];
-    lw           = tmp & 0xFF;
-    cwd          = tmp >> 8;
-    VLC_encoder.emitVLCBits(cwd, lw);
+    {
+      uint32_t uvlc_tmp = enc_UVLC_table0[uvlc_idx];
+      uint32_t uvlc_lw  = uvlc_tmp & 0xFF;
+      uint32_t uvlc_cwd = uvlc_tmp >> 8;
+      VLC_encoder.emitVLCBits(cwd | (static_cast<uint64_t>(uvlc_cwd) << lw), lw + uvlc_lw);
+    }
 
     // MagSgn encoding
     m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
@@ -549,13 +547,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       emb_pattern = _mm_movemask_epi8(
           _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
       n_q = emb_pattern + (rho0 << 4) + (context << 0);
-      // prepare VLC encoding of quad 0
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_0 = CxtVLC & 0xF;
       emb1_0 = emb_pattern & embk_0;
-      lw     = (CxtVLC >> 4) & 0x07;
-      // lw  = _pext_u32(CxtVLC, 0x70);
-      cwd = CxtVLC >> 7;
+      uint32_t lw0 = (CxtVLC >> 4) & 0x07;
+      uint32_t cwd0 = CxtVLC >> 7;
 
       // calculate context for the next quad
       context = ((rho0 & 0x4) << 7) | ((rho0 & 0x8) << 6);           // (w | sw) << 9
@@ -579,20 +575,20 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       emb_pattern = _mm_movemask_epi8(
           _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
       n_q = emb_pattern + (rho1 << 4) + (context << 0);
-      // VLC encoding of quads 0 and 1
-      VLC_encoder.emitVLCBits(cwd, lw);
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_1 = CxtVLC & 0xF;
       emb1_1 = emb_pattern & embk_1;
       lw     = (CxtVLC >> 4) & 0x07;
-      // lw  = _pext_u32(CxtVLC, 0x70);
-      cwd = CxtVLC >> 7;
-      VLC_encoder.emitVLCBits(cwd, lw);
-      // UVLC encoding
-      uint32_t tmp = enc_UVLC_table1[uvlc_idx];
-      lw           = tmp & 0xFF;
-      cwd          = tmp >> 8;
-      VLC_encoder.emitVLCBits(cwd, lw);
+      cwd    = CxtVLC >> 7;
+      // Batched VLC + UVLC encoding
+      {
+        uint32_t uvlc_tmp = enc_UVLC_table1[uvlc_idx];
+        uint32_t uvlc_lw  = uvlc_tmp & 0xFF;
+        uint32_t uvlc_cwd = uvlc_tmp >> 8;
+        uint64_t vlc_all  = cwd0 | (static_cast<uint64_t>(cwd) << lw0)
+                            | (static_cast<uint64_t>(uvlc_cwd) << (lw0 + lw));
+        VLC_encoder.emitVLCBits(vlc_all, lw0 + lw + uvlc_lw);
+      }
 
       // MagSgn encoding
       m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
@@ -649,18 +645,17 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       emb_pattern = _mm_movemask_epi8(
           _mm_packus_epi16(_mm_packus_epi32(vtmp, _mm_setzero_si128()), _mm_setzero_si128()));
       n_q = emb_pattern + (rho0 << 4) + (context << 0);
-      // VLC encoding
       CxtVLC = enc_CxtVLC_table1[n_q];
       embk_0 = CxtVLC & 0xF;
       emb1_0 = emb_pattern & embk_0;
       lw     = (CxtVLC >> 4) & 0x07;
       cwd    = CxtVLC >> 7;
-      VLC_encoder.emitVLCBits(cwd, lw);
-      // UVLC encoding
-      uint32_t tmp = enc_UVLC_table1[uvlc_idx];
-      lw           = tmp & 0xFF;
-      cwd          = tmp >> 8;
-      VLC_encoder.emitVLCBits(cwd, lw);
+      {
+        uint32_t uvlc_tmp = enc_UVLC_table1[uvlc_idx];
+        uint32_t uvlc_lw  = uvlc_tmp & 0xFF;
+        uint32_t uvlc_cwd = uvlc_tmp >> 8;
+        VLC_encoder.emitVLCBits(cwd | (static_cast<uint64_t>(uvlc_cwd) << lw), lw + uvlc_lw);
+      }
 
       // MagSgn encoding
       m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
