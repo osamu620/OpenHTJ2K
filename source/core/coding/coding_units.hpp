@@ -171,6 +171,8 @@ class j2k_codeblock : public j2k_region {
   uint8_t *layer_passes;
   bool already_included;
   bool refsegment;
+  bool pre_quantized = false;
+  uint32_t pre_or_val = 0;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
                 float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
