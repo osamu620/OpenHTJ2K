@@ -43,15 +43,17 @@
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
 void j2k_codeblock::quantize(uint32_t &or_val) {
-  // TODO: check the way to quantize in terms of precision and reconstruction quality
-  float fscale = 1.0f / this->stepsize;
-  fscale /= (1 << (FRACBITS));
-  // Set fscale = 1.0 in lossless coding instead of skipping quantization
-  // to avoid if-branch in the following SIMD processing
-  if (transformation) fscale = 1.0f;
-
   const uint32_t height = this->size.y;
+  const uint32_t width  = this->size.x;
   const uint32_t stride = this->band_stride;
+  const bool lossless   = (this->transformation != 0);
+
+  float fscale = 1.0f;
+  if (!lossless) {
+    fscale = 1.0f / this->stepsize;
+    fscale /= (1 << (FRACBITS));
+  }
+
   #if defined(ENABLE_SP_MR)
   const int32_t pshift = (refsegment) ? 1 : 0;
   const int32_t pLSB   = (refsegment) ? 2 : 1;
@@ -62,10 +64,13 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states + block_index;
 
-    int16_t len = static_cast<int16_t>(this->size.x);
+    int16_t len = static_cast<int16_t>(width);
     for (; len > 0; --len) {
       int32_t temp;
-      temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
+      if (lossless)
+        temp = static_cast<int32_t>(sp[0]);
+      else
+        temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
   #if defined(ENABLE_SP_MR)
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
@@ -82,13 +87,18 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        dp[0] = temp;
       }
+      dp[0] = temp;
       ++sp;
       ++dp;
       ++dstblk;
     }
+    if (blksampl_stride > width)
+      memset(dp, 0, (blksampl_stride - width) * sizeof(int32_t));
   }
+  const uint32_t QHx2 = (height + 7U) & ~7U;
+  for (uint32_t i = height; i < QHx2; ++i)
+    memset(this->sample_buf + i * blksampl_stride, 0, blksampl_stride * sizeof(int32_t));
 }
 
   /********************************************************************************
