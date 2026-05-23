@@ -328,6 +328,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
   int32_t rho0, rho1, U0, U1;
 
+  // Deferred MagSgn: store v/m/known1 per quad, emit in a tight loop after all
+  // context/VLC/MEL work for the line pair is done.  This keeps the MagSgn
+  // accumulator hot in icache and improves branch-predictor utilization.
+  alignas(32) __m128i ms_v[512], ms_m[512], ms_k1[512];
+  int32_t ms_count;
+
   /*******************************************************************************************************************/
   // Initial line-pair
   /*******************************************************************************************************************/
@@ -356,6 +362,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   __m128i sig0, sig1, v0, v1, E0, E1, m0, m1, known1_0, known1_1;
   __m128i Etmp, vuoff, mask, vtmp;
 
+  ms_count  = 0;
   int32_t qx = QW;
   for (; qx >= 2; qx -= 2) {
     bool uoff_flag = true;
@@ -435,15 +442,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
     }
 
-    // MagSgn encoding
+    // Defer MagSgn encoding
     m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
                              _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
     m1       = _mm_sub_epi32(_mm_and_si128(sig1, _mm_set1_epi32(U1)),
                              _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_1), vshift), vone));
     known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
     known1_1 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_1), vshift), vone);
-    MagSgn_encoder.emitBits(v0, m0, known1_0);
-    MagSgn_encoder.emitBits(v1, m1, known1_1);
+    ms_v[ms_count] = v0; ms_m[ms_count] = m0; ms_k1[ms_count] = known1_0; ms_count++;
+    ms_v[ms_count] = v1; ms_m[ms_count] = m1; ms_k1[ms_count] = known1_1; ms_count++;
 
     // context for the next quad
     context = (rho1 >> 1) | (rho1 & 0x1);
@@ -491,23 +498,26 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       VLC_encoder.emitVLCBits(cwd | (static_cast<uint64_t>(uvlc_cwd) << lw), lw + uvlc_lw);
     }
 
-    // MagSgn encoding
     m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
                              _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
     known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
-    MagSgn_encoder.emitBits(v0, m0, known1_0);
+    ms_v[ms_count] = v0; ms_m[ms_count] = m0; ms_k1[ms_count] = known1_0; ms_count++;
 
     *E_p++ = _mm_extract_epi32(E0, 1);
     *E_p++ = _mm_extract_epi32(E0, 3);
     // update rho_line
     *rho_p++ = rho0;
   }
+  // Emit deferred MagSgn for initial line-pair
+  for (int32_t i = 0; i < ms_count; i++)
+    MagSgn_encoder.emitBits(ms_v[i], ms_m[i], ms_k1[i]);
 
   /*******************************************************************************************************************/
   // Non-initial line-pair
   /*******************************************************************************************************************/
   int32_t Emax0, Emax1;
   for (uint16_t qy = 1; qy < QH; qy++) {
+    ms_count = 0;
     E_p   = Eline + 1;
     rho_p = rholine + 1;
     rho1  = 0;
@@ -590,15 +600,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         VLC_encoder.emitVLCBits(vlc_all, lw0 + lw + uvlc_lw);
       }
 
-      // MagSgn encoding
+      // Defer MagSgn encoding
       m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
                                _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
       m1       = _mm_sub_epi32(_mm_and_si128(sig1, _mm_set1_epi32(U1)),
                                _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_1), vshift), vone));
       known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
       known1_1 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_1), vshift), vone);
-      MagSgn_encoder.emitBits(v0, m0, known1_0);
-      MagSgn_encoder.emitBits(v1, m1, known1_1);
+      ms_v[ms_count] = v0; ms_m[ms_count] = m0; ms_k1[ms_count] = known1_0; ms_count++;
+      ms_v[ms_count] = v1; ms_m[ms_count] = m1; ms_k1[ms_count] = known1_1; ms_count++;
 
       Emax0 = find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1 = find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
@@ -657,17 +667,19 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         VLC_encoder.emitVLCBits(cwd | (static_cast<uint64_t>(uvlc_cwd) << lw), lw + uvlc_lw);
       }
 
-      // MagSgn encoding
       m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
                                _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
       known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
-      MagSgn_encoder.emitBits(v0, m0, known1_0);
+      ms_v[ms_count] = v0; ms_m[ms_count] = m0; ms_k1[ms_count] = known1_0; ms_count++;
 
       *E_p++ = _mm_extract_epi32(E0, 1);
       *E_p++ = _mm_extract_epi32(E0, 3);
       // update rho_line
       *rho_p++ = rho0;
     }
+    // Emit deferred MagSgn for this line pair
+    for (int32_t i = 0; i < ms_count; i++)
+      MagSgn_encoder.emitBits(ms_v[i], ms_m[i], ms_k1[i]);
   }
 
   Pcup = MagSgn_encoder.termMS();
