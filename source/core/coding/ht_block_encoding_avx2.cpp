@@ -43,23 +43,23 @@
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
 void j2k_codeblock::quantize(uint32_t &or_val) {
-  // TODO: check the way to quantize in terms of precision and reconstruction quality
-  float fscale = 1.0f / this->stepsize;
-  fscale /= (1 << (FRACBITS));
-  // Set fscale = 1.0 in lossless coding instead of skipping quantization
-  // to avoid if-branch in the following SIMD processing
-  if (transformation) fscale = 1.0f;
+  const uint32_t height  = this->size.y;
+  const uint32_t width   = this->size.x;
+  const uint32_t stride  = this->band_stride;
+  const bool lossless    = (this->transformation != 0);
 
-  const uint32_t height = this->size.y;
-  const uint32_t stride = this->band_stride;
+  float fscale = 1.0f;
+  if (!lossless) {
+    fscale = 1.0f / this->stepsize;
+    fscale /= (1 << (FRACBITS));
+  }
+
   #if defined(ENABLE_SP_MR)
   const int32_t pshift = (refsegment) ? 1 : 0;
   const int32_t pLSB   = (refsegment) ? 1 : 1;
   #endif
-  // Hoist loop-invariant constants out of the row loop
   const __m256i vone  = _mm256_set1_epi32(1);
   const __m256 vscale = _mm256_set1_ps(fscale);
-  // Vector accumulator for or_val; scalar update only in leftover path
   __m256i vor_val = _mm256_setzero_si256();
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp        = this->i_samples + i * stride;
@@ -69,14 +69,16 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   #if defined(ENABLE_SP_MR)
     const __m256i vpLSB = _mm256_set1_epi32(pLSB);
   #endif
-    // simd
-    int32_t len = static_cast<int32_t>(this->size.x);
+    int32_t len = static_cast<int32_t>(width);
     for (; len >= 16; len -= 16) {
-      __m256 val0 = _mm256_loadu_ps(sp);
-      __m256 val1 = _mm256_loadu_ps(sp + 8);
-      // Quantization with cvt't'ps (truncates inexact values by rounding towards zero)
-      auto v0 = _mm256_cvttps_epi32(_mm256_mul_ps(val0, vscale));
-      auto v1 = _mm256_cvttps_epi32(_mm256_mul_ps(val1, vscale));
+      __m256i v0, v1;
+      if (lossless) {
+        v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(sp));
+        v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(sp + 8));
+      } else {
+        v0 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_loadu_ps(sp), vscale));
+        v1 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_loadu_ps(sp + 8), vscale));
+      }
       // Take sign bit
       __m256i s0 = _mm256_srli_epi32(v0, 31);
       __m256i s1 = _mm256_srli_epi32(v1, 31);
@@ -129,10 +131,12 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       _mm_storeu_si128((__m128i *)dstblk, v);
       dstblk += 16;
     }
-    // process leftover (writes dp[0] unconditionally so calloc pre-zero is sufficient)
     for (; len > 0; --len) {
       int32_t temp;
-      temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
+      if (lossless)
+        temp = static_cast<int32_t>(sp[0]);
+      else
+        temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
   #if defined(ENABLE_SP_MR)
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
@@ -150,13 +154,17 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
       }
-      dp[0] = temp;  // write 0 for zero samples; makes pre-zero memset unnecessary
+      dp[0] = temp;
       ++sp;
       ++dp;
       ++dstblk;
     }
+    if (blksampl_stride > width)
+      memset(dp, 0, (blksampl_stride - width) * sizeof(int32_t));
   }
-  // Reduce vector or_val accumulator once, after all rows
+  const uint32_t QHx2 = (height + 7U) & ~7U;
+  for (uint32_t i = height; i < QHx2; ++i)
+    memset(this->sample_buf + i * blksampl_stride, 0, blksampl_stride * sizeof(int32_t));
   if (!_mm256_testz_si256(vor_val, vor_val)) {
     or_val |= 1;
   }

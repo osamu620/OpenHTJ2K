@@ -38,15 +38,17 @@
 
 // Quantize DWT coefficients and transfer them to codeblock buffer in a form of MagSgn value
 void j2k_codeblock::quantize(uint32_t &or_val) {
-  // TODO: check the way to quantize in terms of precision and reconstruction quality
-  float fscale = 1.0f / this->stepsize;
-  fscale /= (1 << (FRACBITS));
-  // Set fscale = 1.0 in lossless coding instead of skipping quantization
-  // to avoid if-branch in the following SIMD processing
-  if (transformation) fscale = 1.0f;
-
   const uint32_t height = this->size.y;
+  const uint32_t width  = this->size.x;
   const uint32_t stride = this->band_stride;
+  const bool lossless   = (this->transformation != 0);
+
+  float fscale = 1.0f;
+  if (!lossless) {
+    fscale = 1.0f / this->stepsize;
+    fscale /= (1 << (FRACBITS));
+  }
+
   #if defined(ENABLE_SP_MR)
   const int32_t pshift = (refsegment) ? 1 : 0;
   const int32_t pLSB   = (refsegment) ? 1 : 1;
@@ -61,13 +63,16 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   #if defined(ENABLE_SP_MR)
     int32x4_t vpLSB = vdupq_n_s32(pLSB);
   #endif
-    int16_t len = static_cast<int16_t>(this->size.x);
+    int16_t len = static_cast<int16_t>(width);
     for (; len >= 8; len -= 8) {
-      auto fv0      = vld1q_f32(sp);
-      auto fv1      = vld1q_f32(sp + 4);
-      // Quantization
-      auto v0 = vcvtq_s32_f32(vmulq_f32(fv0, vscale));
-      auto v1 = vcvtq_s32_f32(vmulq_f32(fv1, vscale));
+      int32x4_t v0, v1;
+      if (lossless) {
+        v0 = vcvtq_s32_f32(vld1q_f32(sp));
+        v1 = vcvtq_s32_f32(vld1q_f32(sp + 4));
+      } else {
+        v0 = vcvtq_s32_f32(vmulq_f32(vld1q_f32(sp), vscale));
+        v1 = vcvtq_s32_f32(vmulq_f32(vld1q_f32(sp + 4), vscale));
+      }
       // Take sign bit
       int32x4_t s0 = vshrq_n_u32(v0, 31);
       int32x4_t s1 = vshrq_n_u32(v1, 31);
@@ -75,57 +80,45 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       v0 = vabsq_s32(v0);
       v1 = vabsq_s32(v1);
   #if defined(ENABLE_SP_MR)
-      int32x4_t z0 = vandq_s32(v0, vpLSB);  // only for SigProp and MagRef
-      int32x4_t z1 = vandq_s32(v1, vpLSB);  // only for SigProp and MagRef
-      // Down-shift if other than HT Cleanup pass exists
+      int32x4_t z0 = vandq_s32(v0, vpLSB);
+      int32x4_t z1 = vandq_s32(v1, vpLSB);
       v0 = v0 >> pshift;
       v1 = v1 >> pshift;
   #endif
-      // ------------- Block states related begin
       uint8x8_t vblkstate = vdup_n_u8(0);
-      // Signed saturating extract Narrow (qmovn) is important for very finer quantization stepsize
       vblkstate = vorr_u8(
           vblkstate,
           vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vqmovn_s32(v0), vqmovn_s32(v1))), vdupq_n_s16(1))));
-      //      vblkstate |=
-      //          vmovn_s16(vbicq_s16(vdupq_n_s16(1), vceqzq_s16(vcombine_s16(vqmovn_s32(v0),
-      //          vqmovn_s32(v1)))));
   #if defined(ENABLE_SP_MR)
-      // bits in lowest bitplane, only for SigProp and MagRef TODO: test this line
       vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), SHIFT_SMAG));
-      // sign-bits, only for SigProp and MagRef  TODO: test this line
       vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(s0), vmovn_s32(s1)), SHIFT_SSGN));
   #endif
       vst1_u8(dstblk, vblkstate);
       dstblk += 8;
-      // ------------- Block states related end
   #if defined(ENABLE_SP_MR)
-      // Modify sign if other than HT Cleanup pass exists
       s0 = vandq_s32(vcgtzq_s32(v0), s0);
       s1 = vandq_s32(vcgtzq_s32(v1), s1);
   #endif
-      // Check emptiness of a block
       vorval = vorrq_s32(vorval, v0);
       vorval = vorrq_s32(vorval, v1);
-      // Convert two's compliment to MagSgn form
       v0 = vqsubq_u32(v0, vdupq_n_u32(1));
       v1 = vqsubq_u32(v1, vdupq_n_u32(1));
       v0 = vshlq_n_s32(v0, 1);
       v1 = vshlq_n_s32(v1, 1);
       v0 = vaddq_s32(v0, s0);
       v1 = vaddq_s32(v1, s1);
-      // Store
       vst1q_s32(dp, v0);
       vst1q_s32(dp + 4, v1);
       sp += 8;
       dp += 8;
     }
-    // Check emptiness of a block
     or_val |= static_cast<unsigned int>(vmaxvq_s32(vorval));
-    // process leftover
     for (; len > 0; --len) {
       int32_t temp;
-      temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);  // needs to be rounded towards zero
+      if (lossless)
+        temp = static_cast<int32_t>(sp[0]);
+      else
+        temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
   #if defined(ENABLE_SP_MR)
       dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
@@ -143,13 +136,18 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        dp[0] = temp;
       }
+      dp[0] = temp;
       ++sp;
       ++dp;
       ++dstblk;
     }
+    if (blksampl_stride > width)
+      memset(dp, 0, (blksampl_stride - width) * sizeof(int32_t));
   }
+  const uint32_t QHx2 = (height + 7U) & ~7U;
+  for (uint32_t i = height; i < QHx2; ++i)
+    memset(this->sample_buf + i * blksampl_stride, 0, blksampl_stride * sizeof(int32_t));
 }
 
 /********************************************************************************
