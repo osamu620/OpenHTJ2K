@@ -598,8 +598,33 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
   auto *c = static_cast<fdwt_level_sink_ctx *>(ctx);
 
   const int32_t u_off = c->u0 & 1;
+#if defined(__AVX2__)
+  {
+    const sprec_t *lp_src = interleaved_row + u_off;
+    const sprec_t *hp_src = interleaved_row + (1 - u_off);
+    int32_t i = 0;
+    for (; i + 7 < c->lp_width; i += 8) {
+      __m256 a = _mm256_loadu_ps(lp_src + i * 2);
+      __m256 b = _mm256_loadu_ps(lp_src + i * 2 + 8);
+      __m256 lo = _mm256_shuffle_ps(a, b, 0x88);
+      lo = _mm256_permutevar8x32_ps(lo, _mm256_setr_epi32(0,1,4,5,2,3,6,7));
+      _mm256_storeu_ps(c->lp_tmp + i, lo);
+    }
+    for (; i < c->lp_width; ++i) c->lp_tmp[i] = lp_src[2 * i];
+    i = 0;
+    for (; i + 7 < c->hp_width; i += 8) {
+      __m256 a = _mm256_loadu_ps(hp_src + i * 2);
+      __m256 b = _mm256_loadu_ps(hp_src + i * 2 + 8);
+      __m256 lo = _mm256_shuffle_ps(a, b, 0x88);
+      lo = _mm256_permutevar8x32_ps(lo, _mm256_setr_epi32(0,1,4,5,2,3,6,7));
+      _mm256_storeu_ps(c->hp_tmp + i, lo);
+    }
+    for (; i < c->hp_width; ++i) c->hp_tmp[i] = hp_src[2 * i];
+  }
+#else
   for (int32_t i = 0; i < c->lp_width; ++i) c->lp_tmp[i] = interleaved_row[2 * i + u_off];
   for (int32_t i = 0; i < c->hp_width; ++i) c->hp_tmp[i] = interleaved_row[2 * i + (1 - u_off)];
+#endif
 
   if (!is_hp) {
     // LP vertical row: HP-horiz → HL, LP-horiz → child/LL0
