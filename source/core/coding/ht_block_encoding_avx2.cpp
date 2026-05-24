@@ -280,6 +280,17 @@ int32_t termSPandMR(SP_enc &SP, MR_enc &MR) {
   return static_cast<int32_t>(SP.pos + MAX_Lref - MR.pos);
 }
 
+// Append one quad's four MagSgn lanes (v_corr = v - (k1 << m), m) to flat_v/
+// flat_m via 128-bit unaligned stores.  Caller advances flat_count by 4.
+static inline void append_quad_to_flat(__m128i v, __m128i m, __m128i k1,
+                                       uint32_t *flat_v, uint32_t *flat_m,
+                                       int32_t fc) {
+  __m128i tmp    = _mm_sllv_epi32(k1, m);
+  __m128i v_corr = _mm_sub_epi32(v, tmp);
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(flat_v + fc), v_corr);
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(flat_m + fc), m);
+}
+
 /********************************************************************************
  * HT cleanup encoding
  *******************************************************************************/
@@ -331,11 +342,12 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
   int32_t rho0, rho1, U0, U1;
 
-  // Deferred MagSgn: store v/m/known1 per quad, emit in a tight loop after all
-  // context/VLC/MEL work for the line pair is done.  This keeps the MagSgn
-  // accumulator hot in icache and improves branch-predictor utilization.
-  alignas(32) __m128i ms_v[512], ms_m[512], ms_k1[512];
-  int32_t ms_count;
+  // Deferred MagSgn: append per-quad (v_corr, m) lane pairs into flat_v/flat_m
+  // during Phase 3, then drain once per line pair via emitFlat.  Each quad
+  // append is two 128-bit stores (no __m128i staging round-trip); emitFlat
+  // keeps its 4-wide prefix-sum batching when the line pair drains.
+  alignas(32) uint32_t flat_v[512 * 4], flat_m[512 * 4];
+  int32_t flat_count;
 
   /*******************************************************************************************************************/
   // Initial line-pair
@@ -365,7 +377,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   __m128i sig0, sig1, v0, v1, E0, E1, m0, m1, known1_0, known1_1;
   __m128i Etmp, vuoff, mask, vtmp;
 
-  ms_count  = 0;
+  flat_count = 0;
   int32_t qx = QW;
   for (; qx >= 2; qx -= 2) {
     bool uoff_flag = true;
@@ -452,8 +464,8 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
                              _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_1), vshift), vone));
     known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
     known1_1 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_1), vshift), vone);
-    ms_v[ms_count] = v0; ms_m[ms_count] = m0; ms_k1[ms_count] = known1_0; ms_count++;
-    ms_v[ms_count] = v1; ms_m[ms_count] = m1; ms_k1[ms_count] = known1_1; ms_count++;
+    append_quad_to_flat(v0, m0, known1_0, flat_v, flat_m, flat_count); flat_count += 4;
+    append_quad_to_flat(v1, m1, known1_1, flat_v, flat_m, flat_count); flat_count += 4;
 
     // context for the next quad
     context = (rho1 >> 1) | (rho1 & 0x1);
@@ -504,32 +516,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     m0       = _mm_sub_epi32(_mm_and_si128(sig0, _mm_set1_epi32(U0)),
                              _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_0), vshift), vone));
     known1_0 = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_0), vshift), vone);
-    ms_v[ms_count] = v0; ms_m[ms_count] = m0; ms_k1[ms_count] = known1_0; ms_count++;
+    append_quad_to_flat(v0, m0, known1_0, flat_v, flat_m, flat_count); flat_count += 4;
 
     *E_p++ = _mm_extract_epi32(E0, 1);
     *E_p++ = _mm_extract_epi32(E0, 3);
     // update rho_line
     *rho_p++ = rho0;
   }
-  // Emit deferred MagSgn for initial line-pair via emitFlat
-  {
-    alignas(32) uint32_t flat_v[512 * 4], flat_m[512 * 4];
-    int32_t flat_count = 0;
-    for (int32_t i = 0; i < ms_count; i++) {
-      __m128i tmp = _mm_sllv_epi32(ms_k1[i], ms_m[i]);
-      __m128i v = _mm_sub_epi32(ms_v[i], tmp);
-      __m128i m = ms_m[i];
-      flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 0));
-      flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 0));
-      flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 1));
-      flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 1));
-      flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 2));
-      flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 2));
-      flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 3));
-      flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 3));
-    }
-    MagSgn_encoder.emitFlat(flat_v, flat_m, flat_count);
-  }
+  // Drain initial line-pair MagSgn batch
+  MagSgn_encoder.emitFlat(flat_v, flat_m, flat_count);
 
   /*******************************************************************************************************************/
   // Non-initial line-pair (two-pass architecture)
@@ -552,7 +547,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   auto E_a   = reinterpret_cast<__m128i *>(E_flat);
 
   for (uint16_t qy = 1; qy < QH; qy++) {
-    ms_count = 0;
+    flat_count = 0;
     E_p   = Eline + 1;
     rho_p = rholine + 1;
 
@@ -712,7 +707,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         __m128i mq = _mm_sub_epi32(_mm_and_si128(sig_a[qi], _mm_set1_epi32(U_a[qi])),
                                    _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_a[qi]), vshift), vone));
         __m128i kq = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_a[qi]), vshift), vone);
-        ms_v[ms_count] = v_a[qi]; ms_m[ms_count] = mq; ms_k1[ms_count] = kq; ms_count++;
+        append_quad_to_flat(v_a[qi], mq, kq, flat_v, flat_m, flat_count); flat_count += 4;
       }
     }
     // Odd trailing quad (if QW is odd)
@@ -729,28 +724,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       __m128i mq = _mm_sub_epi32(_mm_and_si128(sig_a[q], _mm_set1_epi32(U_a[q])),
                                  _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(embk_a[q]), vshift), vone));
       __m128i kq = _mm_and_si128(_mm_srlv_epi32(_mm_set1_epi32(emb1_a[q]), vshift), vone);
-      ms_v[ms_count] = v_a[q]; ms_m[ms_count] = mq; ms_k1[ms_count] = kq; ms_count++;
+      append_quad_to_flat(v_a[q], mq, kq, flat_v, flat_m, flat_count); flat_count += 4;
     }
 
-    // ===== PHASE 4: Emit deferred MagSgn via emitFlat =====
-    {
-      alignas(32) uint32_t flat_v[512 * 4], flat_m[512 * 4];
-      int32_t flat_count = 0;
-      for (int32_t i = 0; i < ms_count; i++) {
-        __m128i tmp = _mm_sllv_epi32(ms_k1[i], ms_m[i]);
-        __m128i v = _mm_sub_epi32(ms_v[i], tmp);
-        __m128i m = ms_m[i];
-        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 0));
-        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 0));
-        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 1));
-        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 1));
-        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 2));
-        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 2));
-        flat_v[flat_count]   = static_cast<uint32_t>(_mm_extract_epi32(v, 3));
-        flat_m[flat_count++] = static_cast<uint32_t>(_mm_extract_epi32(m, 3));
-      }
-      MagSgn_encoder.emitFlat(flat_v, flat_m, flat_count);
-    }
+    // Drain MagSgn batch for this line pair
+    MagSgn_encoder.emitFlat(flat_v, flat_m, flat_count);
   }
 
   Pcup = MagSgn_encoder.termMS();
