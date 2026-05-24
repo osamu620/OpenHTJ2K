@@ -719,6 +719,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     {
       const __m512i VONE = _mm512_set1_epi32(1);
       const __m512i VZERO = _mm512_setzero_si512();
+#ifdef __AVX512CD__
+      // Stride-4 gather indices: pick element k from each of 16 consecutive quads in E_flat
+      const __m512i stride4 = _mm512_setr_epi32(0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60);
+      // Permutation for interleaving two __m512i into consecutive pairs (zip)
+      const __m512i zip_lo_idx = _mm512_setr_epi32(0,16, 1,17, 2,18, 3,19, 4,20, 5,21, 6,22, 7,23);
+      const __m512i zip_hi_idx = _mm512_setr_epi32(8,24, 9,25, 10,26, 11,27, 12,28, 13,29, 14,30, 15,31);
+#endif
       int32_t q = 0;
       for (; q + 15 < QW; q += 16) {
         __m512i rho_v = _mm512_loadu_si512(rho_a + q);
@@ -734,8 +741,63 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         __m512i kappa_v = _mm512_and_epi32(_mm512_sub_epi32(emax_line_v, VONE), gamma_v);
         kappa_v = _mm512_max_epi32(kappa_v, VONE);
 
-        // Emax_q = hMax(E_a[q]) for each quad — horizontal max of 4 elements
-        // E_a[q] is __m128i; extract and compute per-quad (scalar for now)
+#ifdef __AVX512CD__
+        // Gather E values in SoA order: slot k across 16 quads
+        const int32_t *E_base = E_flat + q * 4;
+        __m512i E_s0 = _mm512_i32gather_epi32(stride4, E_base, 4);
+        __m512i E_s1 = _mm512_i32gather_epi32(stride4, E_base + 1, 4);
+        __m512i E_s2 = _mm512_i32gather_epi32(stride4, E_base + 2, 4);
+        __m512i E_s3 = _mm512_i32gather_epi32(stride4, E_base + 3, 4);
+
+        // hMax per quad = max across 4 slots
+        __m512i emax_q_v = _mm512_max_epi32(_mm512_max_epi32(E_s0, E_s1),
+                                            _mm512_max_epi32(E_s2, E_s3));
+
+        // U = max(Emax_q, kappa)
+        __m512i U_v = _mm512_max_epi32(emax_q_v, kappa_v);
+        __m512i u_q_v = _mm512_sub_epi32(U_v, kappa_v);
+        _mm512_storeu_si512(U_a + q, U_v);
+        _mm512_storeu_si512(u_q_a + q, u_q_v);
+
+        // emb_pattern via AVX-512 masks: bit j set if E[j] == Emax_q AND u_q > 0
+        __mmask16 uoff_mask = _mm512_cmpgt_epi32_mask(u_q_v, VZERO);
+        __mmask16 eq0 = _mm512_mask_cmpeq_epi32_mask(uoff_mask, E_s0, emax_q_v);
+        __mmask16 eq1 = _mm512_mask_cmpeq_epi32_mask(uoff_mask, E_s1, emax_q_v);
+        __mmask16 eq2 = _mm512_mask_cmpeq_epi32_mask(uoff_mask, E_s2, emax_q_v);
+        __mmask16 eq3 = _mm512_mask_cmpeq_epi32_mask(uoff_mask, E_s3, emax_q_v);
+
+        // Expand 4 masks into per-quad 4-bit emb values
+        __m512i emb_v = _mm512_or_epi32(
+            _mm512_or_epi32(_mm512_maskz_set1_epi32(eq0, 1), _mm512_maskz_set1_epi32(eq1, 2)),
+            _mm512_or_epi32(_mm512_maskz_set1_epi32(eq2, 4), _mm512_maskz_set1_epi32(eq3, 8)));
+
+        // nq = emb + (rho << 4) + ctx
+        __m512i ctx_v = _mm512_loadu_si512(ctx_a + q);
+        __m512i nq_v = _mm512_add_epi32(emb_v, _mm512_add_epi32(_mm512_slli_epi32(rho_v, 4), ctx_v));
+
+        // AVX-512 GATHER: 16 VLC table lookups at once
+        __m512i cv_v = _mm512_and_epi32(
+            _mm512_i32gather_epi32(nq_v, enc_CxtVLC_table1, 2),
+            _mm512_set1_epi32(0xFFFF));
+
+        // Extract embk, emb1, vlc_cwd, vlc_lw
+        __m512i embk_v = _mm512_and_epi32(cv_v, _mm512_set1_epi32(0xF));
+        _mm512_storeu_si512(embk_a + q, embk_v);
+        _mm512_storeu_si512(emb1_a + q, _mm512_and_epi32(emb_v, embk_v));
+        _mm512_storeu_si512(vlc_cwd_a + q, _mm512_srli_epi32(cv_v, 7));
+        _mm512_storeu_si512(vlc_lw_a + q, _mm512_and_epi32(_mm512_srli_epi32(cv_v, 4),
+                                                           _mm512_set1_epi32(0x07)));
+
+        // Update Eline: E_p[2q+k] = E_r1ck for each quad (slots 1 and 3 = row1 values)
+        __m512i ep_zip_lo = _mm512_permutex2var_epi32(E_s1, zip_lo_idx, E_s3);
+        __m512i ep_zip_hi = _mm512_permutex2var_epi32(E_s1, zip_hi_idx, E_s3);
+        _mm512_storeu_si512(E_p + 2 * q, ep_zip_lo);
+        _mm512_storeu_si512(E_p + 2 * q + 16, ep_zip_hi);
+
+        // Update rholine
+        _mm512_storeu_si512(rho_p + q, rho_v);
+#else
+        // Emax_q = hMax(E_a[q]) for each quad
         alignas(64) int32_t emax_q_arr[16];
         for (int i = 0; i < 16; i++)
           emax_q_arr[i] = hMax(E_a[q + i]);
@@ -747,8 +809,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         _mm512_storeu_si512(U_a + q, U_v);
         _mm512_storeu_si512(u_q_a + q, u_q_v);
 
-        // emb_pattern: for each quad, check which E values == Emax_q AND uoff
-        // This is per-quad (4 elements each), done scalar
+        // emb_pattern: per-quad scalar
         alignas(64) int32_t emb_arr[16], nq_arr[16];
         for (int i = 0; i < 16; i++) {
           int32_t uoff_i = (u_q_a[q + i] > 0) ? 1 : 0;
@@ -761,31 +822,26 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
           nq_arr[i] = emb_arr[i] + (rho_a[q + i] << 4) + ctx_a[q + i];
         }
 
-        // AVX-512 GATHER: 16 VLC table lookups at once (uint16_t table → scale=2, mask to 16 bits)
         __m512i nq_v = _mm512_load_si512(nq_arr);
         __m512i cv_v = _mm512_and_epi32(
             _mm512_i32gather_epi32(nq_v, enc_CxtVLC_table1, 2),
             _mm512_set1_epi32(0xFFFF));
 
-        // Extract embk, emb1, vlc_cwd, vlc_lw from gathered CxtVLC values
         __m512i embk_v = _mm512_and_epi32(cv_v, _mm512_set1_epi32(0xF));
         _mm512_storeu_si512(embk_a + q, embk_v);
-
         __m512i emb_v = _mm512_load_si512(emb_arr);
         _mm512_storeu_si512(emb1_a + q, _mm512_and_epi32(emb_v, embk_v));
+        _mm512_storeu_si512(vlc_cwd_a + q, _mm512_srli_epi32(cv_v, 7));
+        _mm512_storeu_si512(vlc_lw_a + q, _mm512_and_epi32(_mm512_srli_epi32(cv_v, 4),
+                                                           _mm512_set1_epi32(0x07)));
 
-        __m512i vlc_cwd_v = _mm512_srli_epi32(cv_v, 7);
-        _mm512_storeu_si512(vlc_cwd_a + q, vlc_cwd_v);
-        __m512i vlc_lw_v = _mm512_and_epi32(_mm512_srli_epi32(cv_v, 4), _mm512_set1_epi32(0x07));
-        _mm512_storeu_si512(vlc_lw_a + q, vlc_lw_v);
-
-        // Update Eline + rholine
         for (int i = 0; i < 16; i++) {
           __m128i Es = _mm_shuffle_epi32(E_a[q + i], 0xD8);
           E_p[2 * (q + i)]     = _mm_extract_epi32(Es, 2);
           E_p[2 * (q + i) + 1] = _mm_extract_epi32(Es, 3);
           rho_p[q + i] = rho_a[q + i];
         }
+#endif
       }
       // Scalar tail for remaining quads
       for (; q < QW; q++) {
