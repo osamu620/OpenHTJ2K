@@ -63,8 +63,6 @@ struct j2k_subband_row_buf {
   int32_t strip_y0;   // y-start of the currently-decoded codeblock strip (-1 = none)
   int32_t strip_y1;   // y-end  of the currently-decoded codeblock strip (exclusive)
 
-  // When true, skip decode_strip() in row_ptr() — caller has pre-populated sb->i_samples.
-  bool    bypass_decode;
 
   // Ring buffer for line-based mode.
   // When ring_mode=true, decoded samples go here instead of sb->i_samples.

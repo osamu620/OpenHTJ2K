@@ -162,12 +162,6 @@ class openhtj2k_decoder {
   OPENHTJ2K_EXPORT void set_packet_observer(
       std::function<void(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc,
                          uint16_t layer, uint64_t offset, uint64_t length)> f);
-  // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
-  // the line-based IDWT using those pre-decoded values.  Used to isolate
-  // decode_strip() bugs from IDWT state machine bugs.
-  OPENHTJ2K_EXPORT void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
-                                                     std::vector<uint32_t> &, std::vector<uint8_t> &,
-                                                     std::vector<bool> &);
   OPENHTJ2K_EXPORT void destroy();
   OPENHTJ2K_EXPORT ~openhtj2k_decoder();
 };
