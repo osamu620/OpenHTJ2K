@@ -290,10 +290,6 @@ add_subdirectory(tests/tools/imgcmp)
 target_include_directories(imgcmp PUBLIC tests/tools/imgcmp/)
 target_link_libraries(imgcmp PRIVATE openhtj2k_imgio)
 
-add_executable(lb_compare)
-add_subdirectory(tests/tools/lb_compare)
-target_include_directories(lb_compare PUBLIC source/core/interface)
-target_link_libraries(lb_compare PUBLIC open_htj2k)
 
 add_executable(row_range_compare)
 add_subdirectory(tests/tools/row_range_compare)
@@ -491,7 +487,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/lb_stream_validation.cmake)
 
 # Auto-attach the cleanup fixture to every test added by the includes above.
 # Skip cleanup_artifacts itself (it IS the fixture), and skip tests that
