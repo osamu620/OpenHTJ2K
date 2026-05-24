@@ -198,8 +198,12 @@ class state_MS_enc {
     return pos;  // return current position as Pcup
   }
 
-  __attribute__((noinline)) void emitFlat(const uint32_t *__restrict__ v,
-                                          const uint32_t *__restrict__ m, int32_t count) {
+#ifdef _MSC_VER
+  __declspec(noinline)
+#else
+  __attribute__((noinline))
+#endif
+  void emitFlat(const uint32_t *v, const uint32_t *m, int32_t count) {
     uint64_t cr = Creg;
     uint32_t ct = ctreg;
     uint8_t la = last;
