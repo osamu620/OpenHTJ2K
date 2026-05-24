@@ -729,6 +729,52 @@ struct TlPoolSlot {
 static thread_local TlPoolSlot g_tl_pool_slot;
 #endif
 
+// Per-component scratch buffers for the streaming (overlap) encode path.
+// Previously these were calloc'd and freed per j2k_tile::encode_line_based_stream
+// invocation: for ED4K 4K 16-bit RGB that meant 3 components × ~100 MB calloc +
+// free per encode. The fresh mmap'd anon pages cost kernel clear_page_erms on
+// first touch (plus zap_present_ptes on munmap), visible as ~5% of total wall time.
+//
+// Hoisting these to a thread_local grow-only allocator keeps the pages mapped
+// and resident across encodes on the same thread. gbuf is fully overwritten by
+// sink_quantize_row so it does not need zero-init; sgbuf needs memset(0) at
+// start of each encode because sink_quantize_row reads-then-ORs the sigma bits.
+namespace {
+struct StreamingPerCompScratch {
+  std::vector<int32_t *> gbufs;
+  std::vector<uint8_t *> sgbufs;
+  std::vector<size_t>    gbuf_caps;   // in int32_t elements
+  std::vector<size_t>    sgbuf_caps;  // in bytes
+
+  ~StreamingPerCompScratch() {
+    for (auto *p : gbufs) std::free(p);
+    for (auto *p : sgbufs) std::free(p);
+  }
+  void reserve(size_t comp_idx, size_t need_g, size_t need_sg) {
+    while (gbufs.size() <= comp_idx) {
+      gbufs.push_back(nullptr);
+      sgbufs.push_back(nullptr);
+      gbuf_caps.push_back(0);
+      sgbuf_caps.push_back(0);
+    }
+    if (need_g > gbuf_caps[comp_idx]) {
+      std::free(gbufs[comp_idx]);
+      gbufs[comp_idx]     = static_cast<int32_t *>(std::malloc(need_g * sizeof(int32_t)));
+      gbuf_caps[comp_idx] = need_g;
+    }
+    if (need_sg > sgbuf_caps[comp_idx]) {
+      std::free(sgbufs[comp_idx]);
+      sgbufs[comp_idx]     = static_cast<uint8_t *>(std::malloc(need_sg));
+      sgbuf_caps[comp_idx] = need_sg;
+    }
+  }
+};
+}  // namespace
+static StreamingPerCompScratch &get_thread_streaming_scratch() {
+  static thread_local StreamingPerCompScratch s;
+  return s;
+}
+
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
 OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx512, cvt_rgb_to_ycbcr_rev_avx512};
@@ -6306,8 +6352,14 @@ uint8_t *j2k_tile::encode_line_based_stream(
     }
     if (total_cbuf == 0) continue;
 
-    int32_t *gbuf  = static_cast<int32_t *>(calloc(total_cbuf, sizeof(int32_t)));
-    uint8_t *sgbuf = static_cast<uint8_t *>(calloc(total_sbuf, 1));
+    // Reuse persistent thread_local per-component scratch instead of fresh
+    // calloc/free each encode. gbuf is fully overwritten downstream; only
+    // sgbuf needs zeroing because sink_quantize_row OR-aggregates sigma bits.
+    auto &streaming_scratch = get_thread_streaming_scratch();
+    streaming_scratch.reserve(c, total_cbuf, total_sbuf);
+    int32_t *gbuf  = streaming_scratch.gbufs[c];
+    uint8_t *sgbuf = streaming_scratch.sgbufs[c];
+    std::memset(sgbuf, 0, total_sbuf);
 
     // Assign sample_buf/block_states pointers and set up per-level overlap state.
     int32_t *pbuf  = gbuf;
@@ -6480,11 +6532,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
     t1_encode(tcomp[c].access_resolution(0), ROIshift);
   }
 
-  // Release pre-allocated codeblock slabs.
-  for (uint16_t c = 0; c < num_components; ++c) {
-    free(comp_gbuf[c]);
-    free(comp_sgbuf[c]);
-  }
+  // No per-encode free: streaming scratch is owned by the thread_local
+  // StreamingPerCompScratch (see get_thread_streaming_scratch) and retained
+  // across encodes so its pages remain mapped and resident.
 
   build_packet_headers();
   cleanup_rows();
