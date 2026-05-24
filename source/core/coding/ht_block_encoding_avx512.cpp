@@ -742,16 +742,80 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         kappa_v = _mm512_max_epi32(kappa_v, VONE);
 
 #ifdef __AVX512CD__
-        // Gather E values in SoA order: slot k across 16 quads
+        // Load E values contiguously (4 per quad × 16 quads = 64 values = 4 × __m512i)
+        // Each __m512i has 4 quads: [E0q0,E1q0,E2q0,E3q0, E0q1,E1q1,E2q1,E3q1, ...]
         const int32_t *E_base = E_flat + q * 4;
-        __m512i E_s0 = _mm512_i32gather_epi32(stride4, E_base, 4);
-        __m512i E_s1 = _mm512_i32gather_epi32(stride4, E_base + 1, 4);
-        __m512i E_s2 = _mm512_i32gather_epi32(stride4, E_base + 2, 4);
-        __m512i E_s3 = _mm512_i32gather_epi32(stride4, E_base + 3, 4);
+        __m512i Eq03  = _mm512_loadu_si512(E_base);       // quads 0-3
+        __m512i Eq47  = _mm512_loadu_si512(E_base + 16);  // quads 4-7
+        __m512i Eq811 = _mm512_loadu_si512(E_base + 32);  // quads 8-11
+        __m512i Eq1215= _mm512_loadu_si512(E_base + 48);  // quads 12-15
 
-        // hMax per quad = max across 4 slots
-        __m512i emax_q_v = _mm512_max_epi32(_mm512_max_epi32(E_s0, E_s1),
-                                            _mm512_max_epi32(E_s2, E_s3));
+        // Per-lane hMax: each 128-bit lane holds 4 E values for one quad
+        // Reduce within each lane: swap pairs then max, swap halves then max
+        __m512i t1, t2;
+        t1 = _mm512_shuffle_epi32(Eq03, _MM_PERM_CDAB); // swap pairs within lane
+        Eq03 = _mm512_max_epi32(Eq03, t1);
+        t1 = _mm512_shuffle_epi32(Eq03, _MM_PERM_BADC); // swap halves within lane
+        Eq03 = _mm512_max_epi32(Eq03, t1);              // all 4 positions = hMax
+
+        t1 = _mm512_shuffle_epi32(Eq47, _MM_PERM_CDAB);
+        Eq47 = _mm512_max_epi32(Eq47, t1);
+        t1 = _mm512_shuffle_epi32(Eq47, _MM_PERM_BADC);
+        Eq47 = _mm512_max_epi32(Eq47, t1);
+
+        t1 = _mm512_shuffle_epi32(Eq811, _MM_PERM_CDAB);
+        Eq811 = _mm512_max_epi32(Eq811, t1);
+        t1 = _mm512_shuffle_epi32(Eq811, _MM_PERM_BADC);
+        Eq811 = _mm512_max_epi32(Eq811, t1);
+
+        t1 = _mm512_shuffle_epi32(Eq1215, _MM_PERM_CDAB);
+        Eq1215 = _mm512_max_epi32(Eq1215, t1);
+        t1 = _mm512_shuffle_epi32(Eq1215, _MM_PERM_BADC);
+        Eq1215 = _mm512_max_epi32(Eq1215, t1);
+
+        // Extract one hMax per quad into a single __m512i (pick element 0 from each lane)
+        // Use permutex2var to gather element 0 from each 128-bit lane across 4 registers
+        const __m512i pick_lane0_lo = _mm512_setr_epi32(0,4,8,12, 16,20,24,28, 0,0,0,0,0,0,0,0);
+        const __m512i pick_lane0_hi = _mm512_setr_epi32(0,4,8,12, 16,20,24,28, 0,0,0,0,0,0,0,0);
+        __m512i emax_lo = _mm512_permutex2var_epi32(Eq03, pick_lane0_lo, Eq47);
+        __m512i emax_hi = _mm512_permutex2var_epi32(Eq811, pick_lane0_hi, Eq1215);
+        // Combine: emax_lo has quads 0-7 in elements 0-7, emax_hi has quads 8-15 in elements 0-7
+        __m512i emax_q_v = _mm512_inserti64x4(
+            _mm512_castsi256_si512(_mm512_castsi512_si256(emax_lo)),
+            _mm512_castsi512_si256(emax_hi), 1);
+
+        // Reconstruct E_s0..E_s3 for emb_pattern comparison (from the contiguous loads)
+        // E_s0 = element 0 from each quad, E_s1 = element 1, etc.
+        const __m512i deinterleave_0 = _mm512_setr_epi32(0,4,8,12, 16,20,24,28, 0,0,0,0,0,0,0,0);
+        const __m512i deinterleave_1 = _mm512_setr_epi32(1,5,9,13, 17,21,25,29, 0,0,0,0,0,0,0,0);
+        const __m512i deinterleave_2 = _mm512_setr_epi32(2,6,10,14, 18,22,26,30, 0,0,0,0,0,0,0,0);
+        const __m512i deinterleave_3 = _mm512_setr_epi32(3,7,11,15, 19,23,27,31, 0,0,0,0,0,0,0,0);
+
+        // Load original E values again for SoA extraction (needed for emb comparison + Eline)
+        __m512i E_raw0 = _mm512_loadu_si512(E_base);
+        __m512i E_raw1 = _mm512_loadu_si512(E_base + 16);
+        __m512i E_raw2 = _mm512_loadu_si512(E_base + 32);
+        __m512i E_raw3 = _mm512_loadu_si512(E_base + 48);
+
+        __m512i E_s0_lo = _mm512_permutex2var_epi32(E_raw0, deinterleave_0, E_raw1);
+        __m512i E_s0_hi = _mm512_permutex2var_epi32(E_raw2, deinterleave_0, E_raw3);
+        __m512i E_s0 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm512_castsi512_si256(E_s0_lo)),
+                                          _mm512_castsi512_si256(E_s0_hi), 1);
+
+        __m512i E_s1_lo = _mm512_permutex2var_epi32(E_raw0, deinterleave_1, E_raw1);
+        __m512i E_s1_hi = _mm512_permutex2var_epi32(E_raw2, deinterleave_1, E_raw3);
+        __m512i E_s1 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm512_castsi512_si256(E_s1_lo)),
+                                          _mm512_castsi512_si256(E_s1_hi), 1);
+
+        __m512i E_s2_lo = _mm512_permutex2var_epi32(E_raw0, deinterleave_2, E_raw1);
+        __m512i E_s2_hi = _mm512_permutex2var_epi32(E_raw2, deinterleave_2, E_raw3);
+        __m512i E_s2 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm512_castsi512_si256(E_s2_lo)),
+                                          _mm512_castsi512_si256(E_s2_hi), 1);
+
+        __m512i E_s3_lo = _mm512_permutex2var_epi32(E_raw0, deinterleave_3, E_raw1);
+        __m512i E_s3_hi = _mm512_permutex2var_epi32(E_raw2, deinterleave_3, E_raw3);
+        __m512i E_s3 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm512_castsi512_si256(E_s3_lo)),
+                                          _mm512_castsi512_si256(E_s3_hi), 1);
 
         // U = max(Emax_q, kappa)
         __m512i U_v = _mm512_max_epi32(emax_q_v, kappa_v);
