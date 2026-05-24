@@ -643,18 +643,26 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     tileSet[i].construct_packets(main_header);
   }
 
-  // Upper bound for codestream size — raw uncompressed image bytes + 1 MB slack,
-  // capped at 256 MB so very large but highly-compressible inputs cannot fail
-  // purely due to the pre-reserve. Above the cap the vector grows geometrically
-  // from 256 MB, which still saves the bulk of the zero-fill doublings vs
-  // growing from zero. Used to pre-reserve j2c_dst_memory buffers; avoids
-  // per-write vector growth (each reallocation zero-fills new pages before
-  // memcpy overwrites them).
+  // Pre-reserve hint for the output codestream buffer.  Sum raw uncompressed
+  // bytes per component (each component may have its own precision Ssiz[c] and
+  // subsampling XRsiz[c]/YRsiz[c]), add 1 MB header/slack, then cap at 256 MB
+  // so very large but highly-compressible inputs cannot fail purely due to the
+  // pre-reserve.  Above the cap the vector grows geometrically from 256 MB,
+  // which still saves the bulk of the zero-fill doublings vs growing from
+  // zero.  This is only a sizing hint; the codestream may exceed it (e.g.,
+  // high-entropy inputs + headers), in which case the vector grows normally.
   const size_t reserve_bytes_max = static_cast<size_t>(256) << 20;
-  const size_t reserve_bytes_raw =
-      static_cast<size_t>(siz->Xsiz - siz->XOsiz) * static_cast<size_t>(siz->Ysiz - siz->YOsiz)
-          * siz->Csiz * (((Ssiz[0] & 0x7F) + 1U + 7U) / 8U)
-      + (1U << 20);
+  const uint32_t img_w = static_cast<uint32_t>(siz->Xsiz - siz->XOsiz);
+  const uint32_t img_h = static_cast<uint32_t>(siz->Ysiz - siz->YOsiz);
+  size_t reserve_bytes_raw = 1U << 20;
+  for (uint16_t c = 0; c < siz->Csiz; ++c) {
+    const uint32_t xr = std::max<uint8_t>(XRsiz[c], 1U);
+    const uint32_t yr = std::max<uint8_t>(YRsiz[c], 1U);
+    const size_t cw = (img_w + xr - 1) / xr;
+    const size_t ch = (img_h + yr - 1) / yr;
+    const size_t bps = (((Ssiz[c] & 0x7F) + 1U + 7U) / 8U);
+    reserve_bytes_raw += cw * ch * bps;
+  }
   const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
 
   // Measure tile-part lengths to generate TLM marker.
@@ -821,12 +829,21 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     tileSet[i].construct_packets(main_header);
   }
 
-  // Upper bound for codestream size — see invoke_internal for rationale.
+  // Pre-reserve hint for the output codestream buffer — see invoke_internal
+  // for rationale.  Per-component raw bytes (Ssiz[c], XRsiz[c], YRsiz[c]) so
+  // subsampled or hetero-precision components are sized correctly.
   const size_t reserve_bytes_max = static_cast<size_t>(256) << 20;
-  const size_t reserve_bytes_raw =
-      static_cast<size_t>(siz->Xsiz - siz->XOsiz) * static_cast<size_t>(siz->Ysiz - siz->YOsiz)
-          * siz->Csiz * (((Ssiz[0] & 0x7F) + 1U + 7U) / 8U)
-      + (1U << 20);
+  const uint32_t img_w = static_cast<uint32_t>(siz->Xsiz - siz->XOsiz);
+  const uint32_t img_h = static_cast<uint32_t>(siz->Ysiz - siz->YOsiz);
+  size_t reserve_bytes_raw = 1U << 20;
+  for (uint16_t c = 0; c < siz->Csiz; ++c) {
+    const uint32_t xr = std::max<uint8_t>(XRsiz[c], 1U);
+    const uint32_t yr = std::max<uint8_t>(YRsiz[c], 1U);
+    const size_t cw = (img_w + xr - 1) / xr;
+    const size_t ch = (img_h + yr - 1) / yr;
+    const size_t bps = (((Ssiz[c] & 0x7F) + 1U + 7U) / 8U);
+    reserve_bytes_raw += cw * ch * bps;
+  }
   const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
 
   // Measure tile-part lengths to generate TLM marker.
