@@ -750,6 +750,9 @@ struct StreamingPerCompScratch {
     for (auto *p : gbufs) std::free(p);
     for (auto *p : sgbufs) std::free(p);
   }
+  // Allocate-then-swap pattern: if malloc fails the prior buffer is kept and
+  // std::bad_alloc is thrown (matching the encoder's existing exception
+  // discipline). The cap is updated only on success, so callers may retry.
   void reserve(size_t comp_idx, size_t need_g, size_t need_sg) {
     while (gbufs.size() <= comp_idx) {
       gbufs.push_back(nullptr);
@@ -758,13 +761,17 @@ struct StreamingPerCompScratch {
       sgbuf_caps.push_back(0);
     }
     if (need_g > gbuf_caps[comp_idx]) {
+      auto *p = static_cast<int32_t *>(std::malloc(need_g * sizeof(int32_t)));
+      if (p == nullptr) throw std::bad_alloc{};
       std::free(gbufs[comp_idx]);
-      gbufs[comp_idx]     = static_cast<int32_t *>(std::malloc(need_g * sizeof(int32_t)));
+      gbufs[comp_idx]     = p;
       gbuf_caps[comp_idx] = need_g;
     }
     if (need_sg > sgbuf_caps[comp_idx]) {
+      auto *p = static_cast<uint8_t *>(std::malloc(need_sg));
+      if (p == nullptr) throw std::bad_alloc{};
       std::free(sgbufs[comp_idx]);
-      sgbufs[comp_idx]     = static_cast<uint8_t *>(std::malloc(need_sg));
+      sgbufs[comp_idx]     = p;
       sgbuf_caps[comp_idx] = need_sg;
     }
   }
