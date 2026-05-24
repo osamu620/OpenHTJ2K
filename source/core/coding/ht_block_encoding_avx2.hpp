@@ -209,7 +209,7 @@ class state_MS_enc {
     uint8_t la = last;
     int32_t po = pos;
 
-    auto flush = [&]() __attribute__((always_inline)) {
+    auto flush = [&]() {
       uint32_t val = static_cast<uint32_t>(cr);
       if (la < 0xFF && (val & 0xFF) < 0xFF && ((val >> 8) & 0xFF) < 0xFF
           && ((val >> 16) & 0xFF) < 0xFF) {
