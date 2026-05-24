@@ -6,8 +6,8 @@ set(CONFORMANCE_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/conformance_data")
 # via the CTest `test_artifacts` fixture so it executes once before any test
 # that depends on it.  The fixture is auto-attached to every other test by the
 # loop at the end of CMakeLists.txt — that loop runs AFTER every tests/*.cmake
-# include site, so it covers tests defined by sibling files (batch_validation,
-# jpip_phase1, row_range_validation, encoder_test) too.
+# include site, so it covers tests defined by sibling files (jpip_phase1,
+# row_range_validation, encoder_test) too.
 add_test(NAME cleanup_artifacts
   COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cleanup_artifacts.cmake)
 set_tests_properties(cleanup_artifacts PROPERTIES FIXTURES_SETUP test_artifacts)

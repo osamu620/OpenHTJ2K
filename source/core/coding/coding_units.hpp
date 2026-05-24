@@ -828,8 +828,6 @@ class j2k_tile : public j2k_tile_base {
   // so finalize_line_decode() skips teardown and keeps line_dec alive for
   // the next call.  Calling it is idempotent.
   void set_line_decode_persistent_all(bool on);
-  // decoding (does block decoding and IDWT) function for a tile
-  void decode();
   // inverse color transform
   void ycbcr_to_rgb();
   // inverse DC offset and clipping
@@ -872,9 +870,7 @@ class j2k_tile : public j2k_tile_base {
   int perform_dc_offset(j2k_main_header &main_header);
   // forward color transform
   void rgb_to_ycbcr();
-  // encoding (does block encoding and FDWT) function for a tile
-  uint8_t *encode();
-  // line-based encoding: uses stateful FDWT instead of batch FDWT
+  // line-based encoding: uses stateful FDWT
   uint8_t *encode_line_based();
   // streaming line-based encoding: pulls rows via callback instead of pre-allocated buffer
   uint8_t *encode_line_based_stream(

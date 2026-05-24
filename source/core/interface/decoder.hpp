@@ -72,11 +72,8 @@ class openhtj2k_decoder {
   // Returns the MCT byte from the COD marker (0 = no transform, 1 = ICT/RCT).
   // Valid after parse().
   OPENHTJ2K_EXPORT uint8_t get_mct();
-  OPENHTJ2K_EXPORT void invoke(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
-                               std::vector<uint8_t> &, std::vector<bool> &);
-  // Line-based decode: same signature as invoke() but uses stateful row-pull
-  // instead of full-tile IDWT.  Peak memory proportional to DWT ring depth
-  // rather than image size.
+  // Line-based decode: uses stateful row-pull instead of full-tile IDWT.
+  // Peak memory proportional to DWT ring depth rather than image size.
   OPENHTJ2K_EXPORT void invoke_line_based(std::vector<int32_t *> &, std::vector<uint32_t> &,
                                           std::vector<uint32_t> &, std::vector<uint8_t> &,
                                           std::vector<bool> &);
@@ -166,9 +163,8 @@ class openhtj2k_decoder {
       std::function<void(uint16_t t, uint16_t c, uint8_t r, uint32_t p_rc,
                          uint16_t layer, uint64_t offset, uint64_t length)> f);
   // Diagnostic: pre-decodes codeblocks via the tile-at-a-time path, then runs
-  // the line-based IDWT using those pre-decoded values.  If this matches invoke()
-  // but invoke_line_based() does not, the bug is in decode_strip(); otherwise
-  // the bug is in idwt_2d_state.
+  // the line-based IDWT using those pre-decoded values.  Used to isolate
+  // decode_strip() bugs from IDWT state machine bugs.
   OPENHTJ2K_EXPORT void invoke_line_based_predecoded(std::vector<int32_t *> &, std::vector<uint32_t> &,
                                                      std::vector<uint32_t> &, std::vector<uint8_t> &,
                                                      std::vector<bool> &);

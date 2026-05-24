@@ -512,14 +512,13 @@ class openhtj2k_encoder_impl {
   bool isJPH;
   uint8_t color_space;
 
-  size_t invoke_internal(bool line_based);
+  size_t invoke_internal();
 
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
                          qcd_params &, uint8_t, bool, uint8_t);
   void set_output_buffer(std::vector<uint8_t> &);
   ~openhtj2k_encoder_impl();
-  size_t invoke();
   size_t invoke_line_based();
   size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
 };
@@ -539,7 +538,7 @@ void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf)
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
 
-size_t openhtj2k_encoder_impl::invoke_internal(bool line_based) {
+size_t openhtj2k_encoder_impl::invoke_internal() {
   std::vector<uint8_t> Ssiz;
   std::vector<uint8_t> XRsiz, YRsiz;
 
@@ -634,15 +633,12 @@ size_t openhtj2k_encoder_impl::invoke_internal(bool line_based) {
 
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
   for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
-    tileSet[i].enc_init(i, main_header, *buf, line_based);
+    tileSet[i].enc_init(i, main_header, *buf, true);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
     tileSet[i].perform_dc_offset(main_header);
     tileSet[i].rgb_to_ycbcr();
-    if (line_based)
-      tileSet[i].encode_line_based();
-    else
-      tileSet[i].encode();
+    tileSet[i].encode_line_based();
     tileSet[i].construct_packets(main_header);
   }
 
@@ -701,8 +697,7 @@ size_t openhtj2k_encoder_impl::invoke_internal(bool line_based) {
 }
 
 
-size_t openhtj2k_encoder_impl::invoke() { return invoke_internal(false); }
-size_t openhtj2k_encoder_impl::invoke_line_based() { return invoke_internal(true); }
+size_t openhtj2k_encoder_impl::invoke_line_based() { return invoke_internal(); }
 
 size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     std::function<void(uint32_t, int32_t **, uint16_t)> src_fn) {
@@ -882,8 +877,6 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
 void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
   this->impl->set_output_buffer(output_buf);
 }
-
-size_t openhtj2k_encoder::invoke() { return this->impl->invoke(); }
 
 size_t openhtj2k_encoder::invoke_line_based() { return this->impl->invoke_line_based(); }
 
