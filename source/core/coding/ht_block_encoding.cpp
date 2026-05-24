@@ -451,7 +451,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
-  block->quantize(or_val);
+  if (!block->pre_quantized)
+    block->quantize(or_val);
+  else
+    or_val = block->pre_or_val;
 
   if (!or_val) {
     // nothing to do here because this codeblock is empty
