@@ -27,6 +27,8 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <fstream>
+#include <ios>
+#include <limits>
 #include "codestream.hpp"
 
 // MARK: j2c_dst_memory -
@@ -53,7 +55,7 @@ int32_t j2c_dst_memory::put_dword(uint32_t dword) {
 }
 
 int32_t j2c_dst_memory::put_N_bytes(uint8_t *src, uint32_t length) {
-  ensure_capacity(static_cast<size_t>(pos) + length);
+  ensure_capacity(pos + length);
   memcpy(buf + pos, src, length);
   pos += length;
   return EXIT_SUCCESS;
@@ -64,8 +66,14 @@ int32_t j2c_dst_memory::flush(std::ofstream &dst) {
   // never written to).  std::ostream::write with a null pointer is UB on
   // some implementations even with count 0.
   if (pos == 0) return EXIT_SUCCESS;
-  dst.write(reinterpret_cast<const char *>(buf), static_cast<long>(pos));
-  return EXIT_SUCCESS;
+  // streamsize, not long: on Windows LLP64 `long` is 32-bit and would
+  // silently truncate codestreams >= 2 GiB.
+  if (pos > static_cast<size_t>(std::numeric_limits<std::streamsize>::max())) {
+    dst.setstate(std::ios::failbit);
+    return EXIT_FAILURE;
+  }
+  dst.write(reinterpret_cast<const char *>(buf), static_cast<std::streamsize>(pos));
+  return dst.good() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 int32_t j2c_dst_memory::flush(std::vector<uint8_t> *obuf) {
