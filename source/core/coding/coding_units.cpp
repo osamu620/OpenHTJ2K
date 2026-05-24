@@ -3209,16 +3209,15 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
       dfs_nb = 1;
     }
 
-    new (&raw[r]) j2k_resolution(r, respos0, respos1, npw, nph,
-                                 line_based || (enc_lb && r == this->NL && this->NL > 0),
-                                 dfs_nb, dir);
+    const bool skip_alloc = line_based || (enc_lb && r > 0 && this->NL > 0);
+    new (&raw[r]) j2k_resolution(r, respos0, respos1, npw, nph, skip_alloc, dfs_nb, dir);
     res_guard.commit_one();
     raw[r].set_nominal_ranges(child_ranges[r]);
     raw[r].normalizing_downshift = nshift[r];
     raw[r].normalizing_upshift   = nshift[r + 1];
     raw[r].create_subbands(this->pos0, this->pos1, this->NL, this->transformation, this->exponents,
                            this->mantissas, this->num_guard_bits, this->quantization_style,
-                           this->bitdepth, line_based, this->dfs_info);
+                           this->bitdepth, skip_alloc, this->dfs_info);
 #ifdef OPENHTJ2K_THREAD
     if (pool && pool->num_threads() > 1) {
       results.emplace_back(pool->enqueue([r, raw, numlayers, this] {
@@ -6384,6 +6383,16 @@ uint8_t *j2k_tile::encode_line_based_stream(
         cx.sink_num_cblk_y[b] = static_cast<int32_t>(ncy_total);
       }
       cx.sink_quantize = true;
+      for (uint8_t lv = 1; lv <= NL; ++lv) {
+        j2k_resolution *cr_lv = tcomp[c].access_resolution(lv);
+        for (uint8_t b = 0; b < cr_lv->num_bands; ++b) {
+          j2k_subband *sb = cr_lv->access_subband(b);
+          if (sb->orientation != BAND_LL && sb->i_samples != nullptr) {
+            aligned_mem_free(sb->i_samples - DWT_LEFT_SLACK);
+            sb->i_samples = nullptr;
+          }
+        }
+      }
     }
 
     comp_gbuf[c]    = gbuf;
