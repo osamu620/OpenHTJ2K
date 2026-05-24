@@ -81,6 +81,10 @@ class j2c_dst_memory {
  public:
   j2c_dst_memory() : pos(0), is_flushed(false) {}
   ~j2c_dst_memory() = default;
+  // Reserve capacity to avoid per-write geometric growth (each std::vector
+  // reallocation zero-fills the new range via clear_page_erms before memcpy
+  // overwrites it — visible as ~5% of total encode time on 4K 16-bit).
+  void reserve(size_t n) { buf.reserve(n); }
   int32_t put_byte(uint8_t byte);
   int32_t put_word(uint16_t word);
   int32_t put_dword(uint32_t dword);
