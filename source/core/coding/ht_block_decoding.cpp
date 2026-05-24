@@ -306,7 +306,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
     uint16_t *sp = scratch;
     uint32_t *vp = v_n_scratch;
-    int32_t *dp  = fuse_dequant ? reinterpret_cast<int32_t *>(block->i_samples) : block->sample_buf;
+    int32_t *dp  = fuse_dequant ? reinterpret_cast<int32_t *>(block->band_buf) : block->sample_buf;
 
     uint32_t prev_v_n = 0;
     for (uint32_t x = 0; x < block->size.x; sp += 2, ++vp) {
@@ -407,7 +407,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       uint16_t *sp = scratch + (y >> 1) * static_cast<uint32_t>(sstr);
       uint32_t *vp = v_n_scratch;
       int32_t *dp  = fuse_dequant
-                         ? reinterpret_cast<int32_t *>(block->i_samples) + y * block->band_stride
+                         ? reinterpret_cast<int32_t *>(block->band_buf) + y * block->band_stride
                          : block->sample_buf + y * block->blksampl_stride;
 
       prev_v_n = 0;
@@ -1024,7 +1024,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
+      sprec_t *dst = this->band_buf + i * this->band_stride;
       size_t len   = this->size.x;
       for (; len > 0; --len) {
         int32_t sign = *val & INT32_MIN;
@@ -1054,7 +1054,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     //    auto vROIshift = vdupq_n_s32(ROImask);
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
+      sprec_t *dst = this->band_buf + i * this->band_stride;
       size_t len   = this->size.x;
 
       for (; len > 0; --len) {
@@ -1176,16 +1176,16 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     bool dequant_done = false;
     // The fused-dequant scalar/NEON/AVX2/WASM kernels process samples in
     // 2-row quad pairs and write both rows of every pair unconditionally to
-    // `block->i_samples`.  When `block->size.y` is odd the last pair's
+    // `block->band_buf`.  When `block->size.y` is odd the last pair's
     // second-row write lands `band_stride` bytes past the block's final
-    // row — into the NEXT block's i_samples region when codeblocks tile
+    // row — into the NEXT block's band_buf region when codeblocks tile
     // vertically inside the subband (e.g. 1×1 blocks stacked in a narrow
     // subband from a horizontally-subsampled component).  Under single-
     // threaded decode the overflow is harmlessly overwritten by the next
     // block's legitimate row-0 write, but under multi-threaded dispatch
     // the blocks finish out-of-order and the stale overflow clobbers
     // adjacent blocks' output.  Fall back to the non-fused path (which
-    // writes into the block-local sample_buf scratch, not i_samples) when
+    // writes into the block-local sample_buf scratch, not band_buf) when
     // height is odd; the separate dequant pass below handles bounds
     // correctly.
     const bool fuseable = (num_ht_passes == 1) && (ROIshift == 0)

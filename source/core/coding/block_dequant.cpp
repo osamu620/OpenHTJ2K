@@ -32,7 +32,7 @@
 #include <cassert>
 
 void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
-                 size_t blkstate_stride, sprec_t *i_samples, uint32_t band_stride, uint32_t width,
+                 size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
                  uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
                  float stepsize) {
   int32_t N_b;
@@ -59,7 +59,7 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
         const uint32_t n = x + y * band_stride;
         int32_t *val     = &sample_buf[x + y * blksampl_stride];
         uint8_t state    = block_states[(x + 1) + (y + 1) * blkstate_stride];
-        sprec_t *dst     = i_samples + n;
+        sprec_t *dst     = band_buf + n;
         int32_t sign     = *val & INT32_MIN;
         *val &= INT32_MAX;
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
@@ -89,7 +89,7 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
         const uint32_t n = x + y * band_stride;
         int32_t *val     = &sample_buf[x + y * blksampl_stride];
         uint8_t state    = block_states[(x + 1) + (y + 1) * blkstate_stride];
-        sprec_t *dst     = i_samples + n;
+        sprec_t *dst     = band_buf + n;
         int32_t sign     = *val & INT32_MIN;
         *val &= INT32_MAX;
         if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {

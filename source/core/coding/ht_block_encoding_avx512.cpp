@@ -62,7 +62,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const __m256 vscale = _mm256_set1_ps(fscale);
   __m256i vor_val = _mm256_setzero_si256();
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
-    sprec_t *sp        = this->i_samples + i * stride;
+    sprec_t *sp        = this->band_buf + i * stride;
     int32_t *dp        = this->sample_buf + i * blksampl_stride;
     size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
     uint8_t *dstblk    = block_states + block_index;

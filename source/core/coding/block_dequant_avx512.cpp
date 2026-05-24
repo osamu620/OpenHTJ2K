@@ -37,7 +37,7 @@
 #include <cassert>
 
 void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
-                 size_t blkstate_stride, sprec_t *i_samples, uint32_t band_stride, uint32_t width,
+                 size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
                  uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
                  float stepsize) {
   int32_t N_b;
@@ -68,7 +68,7 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
     for (uint32_t y = 0; y < height; y++) {
       int32_t *val_row      = sample_buf + y * blksampl_stride;
       const uint8_t *st_row = block_states + (y + 1) * blkstate_stride + 1;
-      sprec_t *dst_row      = i_samples + y * band_stride;
+      sprec_t *dst_row      = band_buf + y * band_stride;
       uint32_t x            = 0;
 
       for (; x + 16 <= width; x += 16) {
@@ -166,7 +166,7 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
     for (uint32_t y = 0; y < height; y++) {
       int32_t *val_row      = sample_buf + y * blksampl_stride;
       const uint8_t *st_row = block_states + (y + 1) * blkstate_stride + 1;
-      sprec_t *dst_row      = i_samples + y * band_stride;
+      sprec_t *dst_row      = band_buf + y * band_stride;
       uint32_t x            = 0;
 
       for (; x + 16 <= width; x += 16) {

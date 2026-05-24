@@ -149,7 +149,7 @@ class j2k_codeblock : public j2k_region {
   // j2k_decode (HT decode leaves it nullptr).
   uint32_t *block_contexts;
   size_t block_contexts_stride;
-  sprec_t *i_samples;
+  sprec_t *band_buf;
   const uint32_t band_stride;
   OPENHTJ2K_MAYBE_UNUSED const uint8_t R_b;
   const uint8_t transformation;

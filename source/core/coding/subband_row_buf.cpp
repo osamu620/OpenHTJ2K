@@ -192,7 +192,7 @@ void j2k_subband_row_buf::free_resources() {
 // ─── decode_strip_core ────────────────────────────────────────────────────────
 // Decodes all non-empty codeblocks whose rows intersect [y0, y1) and writes
 // their samples into target_buf (ring/prefetch mode) or directly into
-// block->i_samples (non-ring mode, target_buf == nullptr).
+// block->band_buf (non-ring mode, target_buf == nullptr).
 
 void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int32_t y1) {
   const uint32_t np = res->npw * res->nph;
@@ -306,7 +306,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           bt.block->block_contexts       = par_ctxpool + bt.ctx_off;
           bt.block->block_contexts_stride = bt.QWx2 + 2;
           if (ring_mode && target_buf)
-            bt.block->i_samples = target_buf + bt.row_off + bt.col_off;
+            bt.block->band_buf = target_buf + bt.row_off + bt.col_off;
           const bool is_ht = (bt.block->Cmodes & HT) >> 6;
           if (!is_ht) {
             std::memset(bt.block->sample_buf, 0, static_cast<size_t>(bt.QWx2) * bt.QHx2 * sizeof(int32_t));
@@ -422,7 +422,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           const ptrdiff_t row_off =
               (static_cast<int32_t>(block->get_pos0().y) - y0) * stride;
           const ptrdiff_t col_off = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
-          block->i_samples        = target_buf + row_off + col_off;
+          block->band_buf        = target_buf + row_off + col_off;
         }
 
         if ((block->Cmodes & HT) >> 6)
@@ -651,7 +651,7 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     pb.block->blkstate_stride       = pb.QWx2 + 2;
     pb.block->block_contexts        = par_ctxpool + pb.ctx_off;
     pb.block->block_contexts_stride = pb.QWx2 + 2;
-    pb.block->i_samples             = pbuf + pb.row_off + pb.col_off;
+    pb.block->band_buf             = pbuf + pb.row_off + pb.col_off;
     const bool is_ht = (pb.block->Cmodes & HT) >> 6;
     if (!is_ht) {
       std::memset(pb.block->sample_buf, 0, static_cast<size_t>(pb.QWx2) * pb.QHx2 * sizeof(int32_t));

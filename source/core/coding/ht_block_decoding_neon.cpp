@@ -136,7 +136,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const int32x4_t vshift = vdupq_n_s32(pLSB - 1);
 
   // Fused dequantize setup: when fuse_dequant is true, we write dequantized float values
-  // directly to i_samples, eliminating the separate dequantize pass.
+  // directly to band_buf, eliminating the separate dequantize pass.
   // pLSB_dq is the dequantization shift (31 - M_b), distinct from the MagSgn pLSB.
   int32_t pLSB_dq         = 0;
   float32x4_t vfscale_dq  = vdupq_n_f32(0.0f);
@@ -160,7 +160,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   }
 
   int32_t *const sample_buf = block->sample_buf;
-  int32_t *mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->i_samples) : sample_buf;
+  int32_t *mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->band_buf) : sample_buf;
   int32_t *mp1 = mp0 + (fuse_dequant ? block->band_stride : block->blksampl_stride);
   auto sp0 = block->block_states + 1 + block->blkstate_stride;
   auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
@@ -362,7 +362,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     rho_p = rholine + 1;
     E_p   = Eline + 1;
     if constexpr (fuse_dequant) {
-      mp0 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U) * block->band_stride;
+      mp0 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U) * block->band_stride;
       mp1 = mp0 + block->band_stride;
     } else {
       mp0 = sample_buf + (row * 2U) * block->blksampl_stride;
@@ -754,7 +754,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
+      sprec_t *dst = this->band_buf + i * this->band_stride;
       size_t len   = this->size.x;
       for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
         v0 = vld1q_s32(val);
@@ -816,7 +816,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       const int32x4_t vsignmask  = vdupq_n_s32(INT32_MIN);
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->i_samples + i * this->band_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
         size_t len   = this->size.x;
         // 2× unrolled: 8 elements per iteration for better ILP.
         for (; len >= 8; len -= 8) {
@@ -852,7 +852,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       const auto scale = static_cast<int32_t>(fscale + 0.5f);
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->i_samples + i * this->band_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
         size_t len   = this->size.x;
         for (; len >= 8; len -= 8) {
           v0 = vld1q_s32(val);
