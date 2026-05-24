@@ -593,36 +593,101 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     for (int32_t q = 0; q < QW; q++)
       Emax_a[q] = find_max(E_p[2 * q - 1], E_p[2 * q], E_p[2 * q + 1], E_p[2 * q + 2]);
 
-    // ===== PHASE 2c: Compute kappa/U/emb/VLC; update Eline + rholine =====
-    for (int32_t q = 0; q < QW; q++) {
-      int32_t rq = rho_a[q];
-      int32_t gamma_q = ((rq & (rq - 1)) == 0) ? 0 : static_cast<int32_t>(0xFFFFFFFF);
-      int32_t kappa_q = std::max((Emax_a[q] - 1) & gamma_q, 1);
-      int32_t Emax_q_val = hMax(E_a[q]);
-      int32_t Uq = std::max(Emax_q_val, kappa_q);
-      int32_t uq = Uq - kappa_q;
-      U_a[q] = Uq;
-      u_q_a[q] = uq;
+    // ===== PHASE 2c: Compute kappa/U/emb/VLC; update Eline + rholine (8-wide AVX2) =====
+    {
+      const __m256i VONE_8 = _mm256_set1_epi32(1);
+      const __m256i VZERO_8 = _mm256_setzero_si256();
+      int32_t q = 0;
+      for (; q + 7 < QW; q += 8) {
+        __m256i rho_v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(rho_a + q));
+        __m256i emax_line_v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(Emax_a + q));
 
-      int32_t uoff_q = (uq > 0) ? 1 : 0;
-      __m128i Etmp_q = _mm_set1_epi32(Emax_q_val);
-      __m128i vuoff_q = _mm_set1_epi32(uoff_q << 7);
-      __m128i mask_q = _mm_cmpeq_epi32(E_a[q], Etmp_q);
-      __m128i vtmp_q = _mm_and_si128(vuoff_q, mask_q);
-      int32_t emb_p = _mm_movemask_epi8(
-          _mm_packus_epi16(_mm_packus_epi32(vtmp_q, _mm_setzero_si128()), _mm_setzero_si128()));
-      int32_t nq = emb_p + (rq << 4) + ctx_a[q];
-      uint32_t cv = enc_CxtVLC_table1[nq];
-      embk_a[q] = cv & 0xF;
-      emb1_a[q] = emb_p & embk_a[q];
-      vlc_cwd_a[q] = cv >> 7;
-      vlc_lw_a[q] = (cv >> 4) & 0x07;
+        // gamma = (popcount(rho) > 1) ? -1 : 0
+        __m256i rho_m1 = _mm256_sub_epi32(rho_v, VONE_8);
+        __m256i gamma_v = _mm256_and_si256(rho_v, rho_m1);
+        gamma_v = _mm256_cmpgt_epi32(gamma_v, VZERO_8);  // -1 where popcount>1
 
-      // Update Eline
-      __m128i Es = _mm_shuffle_epi32(E_a[q], 0xD8);
-      E_p[2 * q]     = _mm_extract_epi32(Es, 2);
-      E_p[2 * q + 1] = _mm_extract_epi32(Es, 3);
-      rho_p[q] = rq;
+        // kappa = max((Emax_line - 1) & gamma, 1)
+        __m256i kappa_v = _mm256_and_si256(_mm256_sub_epi32(emax_line_v, VONE_8), gamma_v);
+        kappa_v = _mm256_max_epi32(kappa_v, VONE_8);
+
+        // hMax + emb_pattern: per-quad (4 elements each), compute nq
+        alignas(32) int32_t emax_q_arr[8], nq_arr[8], emb_arr[8];
+        for (int i = 0; i < 8; i++) {
+          emax_q_arr[i] = hMax(E_a[q + i]);
+          int32_t uoff_i = 0;
+          int32_t Uq_i = std::max(emax_q_arr[i], reinterpret_cast<const int32_t *>(&kappa_v)[i]);
+          int32_t uq_i = Uq_i - reinterpret_cast<const int32_t *>(&kappa_v)[i];
+          if (uq_i > 0) uoff_i = 1;
+          __m128i Et = _mm_set1_epi32(emax_q_arr[i]);
+          __m128i vu = _mm_set1_epi32(uoff_i << 7);
+          __m128i mk = _mm_cmpeq_epi32(E_a[q + i], Et);
+          __m128i vt = _mm_and_si128(vu, mk);
+          emb_arr[i] = _mm_movemask_epi8(
+              _mm_packus_epi16(_mm_packus_epi32(vt, _mm_setzero_si128()), _mm_setzero_si128()));
+          nq_arr[i] = emb_arr[i] + (rho_a[q + i] << 4) + ctx_a[q + i];
+        }
+
+        // U/u_q via AVX2
+        __m256i emax_q_v = _mm256_load_si256(reinterpret_cast<const __m256i *>(emax_q_arr));
+        __m256i U_v = _mm256_max_epi32(emax_q_v, kappa_v);
+        __m256i u_q_v = _mm256_sub_epi32(U_v, kappa_v);
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(U_a + q), U_v);
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(u_q_a + q), u_q_v);
+
+        // AVX2 GATHER: 8 CxtVLC table lookups at once
+        __m256i nq_v = _mm256_load_si256(reinterpret_cast<const __m256i *>(nq_arr));
+        __m256i cv_v = _mm256_and_si256(
+            _mm256_i32gather_epi32(reinterpret_cast<const int *>(enc_CxtVLC_table1), nq_v, 2),
+            _mm256_set1_epi32(0xFFFF));
+
+        // Extract embk, emb1, vlc_cwd, vlc_lw
+        __m256i embk_v = _mm256_and_si256(cv_v, _mm256_set1_epi32(0xF));
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(embk_a + q), embk_v);
+        __m256i emb_v = _mm256_load_si256(reinterpret_cast<const __m256i *>(emb_arr));
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(emb1_a + q), _mm256_and_si256(emb_v, embk_v));
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(vlc_cwd_a + q), _mm256_srli_epi32(cv_v, 7));
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(vlc_lw_a + q),
+                            _mm256_and_si256(_mm256_srli_epi32(cv_v, 4), _mm256_set1_epi32(0x07)));
+
+        // Update Eline + rholine
+        for (int i = 0; i < 8; i++) {
+          __m128i Es = _mm_shuffle_epi32(E_a[q + i], 0xD8);
+          E_p[2 * (q + i)]     = _mm_extract_epi32(Es, 2);
+          E_p[2 * (q + i) + 1] = _mm_extract_epi32(Es, 3);
+        }
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(rho_p + q), rho_v);
+      }
+      // Scalar tail
+      for (; q < QW; q++) {
+        int32_t rq = rho_a[q];
+        int32_t gamma_q = ((rq & (rq - 1)) == 0) ? 0 : static_cast<int32_t>(0xFFFFFFFF);
+        int32_t kappa_q = std::max((Emax_a[q] - 1) & gamma_q, 1);
+        int32_t Emax_q_val = hMax(E_a[q]);
+        int32_t Uq = std::max(Emax_q_val, kappa_q);
+        int32_t uq = Uq - kappa_q;
+        U_a[q] = Uq;
+        u_q_a[q] = uq;
+
+        int32_t uoff_q = (uq > 0) ? 1 : 0;
+        __m128i Etmp_q = _mm_set1_epi32(Emax_q_val);
+        __m128i vuoff_q = _mm_set1_epi32(uoff_q << 7);
+        __m128i mask_q = _mm_cmpeq_epi32(E_a[q], Etmp_q);
+        __m128i vtmp_q = _mm_and_si128(vuoff_q, mask_q);
+        int32_t emb_p = _mm_movemask_epi8(
+            _mm_packus_epi16(_mm_packus_epi32(vtmp_q, _mm_setzero_si128()), _mm_setzero_si128()));
+        int32_t nq = emb_p + (rq << 4) + ctx_a[q];
+        uint32_t cv = enc_CxtVLC_table1[nq];
+        embk_a[q] = cv & 0xF;
+        emb1_a[q] = emb_p & embk_a[q];
+        vlc_cwd_a[q] = cv >> 7;
+        vlc_lw_a[q] = (cv >> 4) & 0x07;
+
+        __m128i Es = _mm_shuffle_epi32(E_a[q], 0xD8);
+        E_p[2 * q]     = _mm_extract_epi32(Es, 2);
+        E_p[2 * q + 1] = _mm_extract_epi32(Es, 3);
+        rho_p[q] = rq;
+      }
     }
 
     // ===== PHASE 3: Serial MEL + batched VLC + deferred MagSgn =====
