@@ -750,38 +750,41 @@ static thread_local TlPoolSlot g_tl_pool_slot;
 // start of each encode because sink_quantize_row reads-then-ORs the sigma bits.
 namespace {
 struct StreamingPerCompScratch {
-  std::vector<int32_t *> gbufs;
-  std::vector<uint8_t *> sgbufs;
-  std::vector<size_t>    gbuf_caps;   // in int32_t elements
-  std::vector<size_t>    sgbuf_caps;  // in bytes
+  struct Slot {
+    int32_t *gbuf      = nullptr;
+    uint8_t *sgbuf     = nullptr;
+    size_t   gbuf_cap  = 0;  // in int32_t elements
+    size_t   sgbuf_cap = 0;  // in bytes
+  };
+  std::vector<Slot> slots;
 
   ~StreamingPerCompScratch() {
-    for (auto *p : gbufs) std::free(p);
-    for (auto *p : sgbufs) std::free(p);
+    for (auto &s : slots) {
+      std::free(s.gbuf);
+      std::free(s.sgbuf);
+    }
   }
   // Allocate-then-swap pattern: if malloc fails the prior buffer is kept and
   // std::bad_alloc is thrown (matching the encoder's existing exception
   // discipline). The cap is updated only on success, so callers may retry.
+  // slots is a single vector so its grow step is transactional — a partial
+  // failure cannot leave parallel arrays of different sizes.
   void reserve(size_t comp_idx, size_t need_g, size_t need_sg) {
-    while (gbufs.size() <= comp_idx) {
-      gbufs.push_back(nullptr);
-      sgbufs.push_back(nullptr);
-      gbuf_caps.push_back(0);
-      sgbuf_caps.push_back(0);
-    }
-    if (need_g > gbuf_caps[comp_idx]) {
+    if (slots.size() <= comp_idx) slots.resize(comp_idx + 1);
+    Slot &s = slots[comp_idx];
+    if (need_g > s.gbuf_cap) {
       auto *p = static_cast<int32_t *>(std::malloc(need_g * sizeof(int32_t)));
       if (p == nullptr) throw std::bad_alloc{};
-      std::free(gbufs[comp_idx]);
-      gbufs[comp_idx]     = p;
-      gbuf_caps[comp_idx] = need_g;
+      std::free(s.gbuf);
+      s.gbuf     = p;
+      s.gbuf_cap = need_g;
     }
-    if (need_sg > sgbuf_caps[comp_idx]) {
+    if (need_sg > s.sgbuf_cap) {
       auto *p = static_cast<uint8_t *>(std::malloc(need_sg));
       if (p == nullptr) throw std::bad_alloc{};
-      std::free(sgbufs[comp_idx]);
-      sgbufs[comp_idx]     = p;
-      sgbuf_caps[comp_idx] = need_sg;
+      std::free(s.sgbuf);
+      s.sgbuf     = p;
+      s.sgbuf_cap = need_sg;
     }
   }
 };
@@ -6371,8 +6374,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
     // sgbuf needs zeroing because sink_quantize_row OR-aggregates sigma bits.
     auto &streaming_scratch = get_thread_streaming_scratch();
     streaming_scratch.reserve(c, total_cbuf, total_sbuf);
-    int32_t *gbuf  = streaming_scratch.gbufs[c];
-    uint8_t *sgbuf = streaming_scratch.sgbufs[c];
+    int32_t *gbuf  = streaming_scratch.slots[c].gbuf;
+    uint8_t *sgbuf = streaming_scratch.slots[c].sgbuf;
     std::memset(sgbuf, 0, total_sbuf);
 
     // Assign sample_buf/block_states pointers and set up per-level overlap state.
