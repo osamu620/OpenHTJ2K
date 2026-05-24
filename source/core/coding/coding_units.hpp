@@ -599,8 +599,6 @@ class j2k_tile_component : public j2k_tile_base {
   // No-op when line_dec is null or count is 0.
   void pull_strip_advance(uint32_t count);
   void finalize_line_decode();
-  // Mark all subband row bufs in line_dec as bypass (for pre-decoded diagnostic).
-  void mark_line_dec_predecoded();
   // Single-tile reuse: reset line-decode cursor state (next_row, strip_y0,
   // prefetch_y0, etc. on every subband_row_buf) without freeing ring buffers
   // or idwt states.  A subsequent init_line_decode() must detect that
@@ -856,11 +854,6 @@ class j2k_tile : public j2k_tile_base {
   void decode_line_based_stream_planar(
       j2k_main_header &main_header, uint8_t reduce_NL,
       open_htj2k::PlanarOutputDesc *descs, uint16_t nc);
-  // Diagnostic variant: decodes all codeblocks first (no IDWT), then uses
-  // the pre-decoded sb->i_samples to bypass decode_strip() in row_ptr().
-  // Used by lb_compare to isolate decode_strip bugs from IDWT state machine bugs.
-  void decode_line_based_predecoded(j2k_main_header &main_header, uint8_t reduce_NL,
-                                    std::vector<int32_t *> &dst);
 
   // Encoding
   // Initialization with tile-index
