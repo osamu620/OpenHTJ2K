@@ -26,6 +26,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <j2kmarkers.hpp>
@@ -642,13 +643,19 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     tileSet[i].construct_packets(main_header);
   }
 
-  // Upper bound for codestream size — raw uncompressed image bytes + 1 MB slack.
-  // Used to pre-reserve j2c_dst_memory buffers; avoids per-write vector growth
-  // (each reallocation zero-fills new pages before memcpy overwrites them).
-  const size_t reserve_bytes =
+  // Upper bound for codestream size — raw uncompressed image bytes + 1 MB slack,
+  // capped at 256 MB so very large but highly-compressible inputs cannot fail
+  // purely due to the pre-reserve. Above the cap the vector grows geometrically
+  // from 256 MB, which still saves the bulk of the zero-fill doublings vs
+  // growing from zero. Used to pre-reserve j2c_dst_memory buffers; avoids
+  // per-write vector growth (each reallocation zero-fills new pages before
+  // memcpy overwrites them).
+  const size_t reserve_bytes_max = static_cast<size_t>(256) << 20;
+  const size_t reserve_bytes_raw =
       static_cast<size_t>(siz->Xsiz - siz->XOsiz) * static_cast<size_t>(siz->Ysiz - siz->YOsiz)
           * siz->Csiz * (((Ssiz[0] & 0x7F) + 1U + 7U) / 8U)
       + (1U << 20);
+  const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
 
   // Measure tile-part lengths to generate TLM marker.
   const uint32_t num_tiles = numTiles.x * numTiles.y;
@@ -815,10 +822,12 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   }
 
   // Upper bound for codestream size — see invoke_internal for rationale.
-  const size_t reserve_bytes =
+  const size_t reserve_bytes_max = static_cast<size_t>(256) << 20;
+  const size_t reserve_bytes_raw =
       static_cast<size_t>(siz->Xsiz - siz->XOsiz) * static_cast<size_t>(siz->Ysiz - siz->YOsiz)
           * siz->Csiz * (((Ssiz[0] & 0x7F) + 1U + 7U) / 8U)
       + (1U << 20);
+  const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
 
   // Measure tile-part lengths to generate TLM marker.
   {
