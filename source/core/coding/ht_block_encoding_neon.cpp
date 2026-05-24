@@ -323,7 +323,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   const uint32_t QW = ceil_int(block->size.x, 2U);
   const uint32_t QH = ceil_int(block->size.y, 2U);
 
-  block->quantize(or_val);
+  if (!block->pre_quantized)
+    block->quantize(or_val);
+  else
+    or_val = block->pre_or_val;
 
   if (!or_val) {
     // nothing to do here because this codeblock is empty
