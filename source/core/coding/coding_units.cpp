@@ -588,6 +588,15 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row,
     }
     if (static_cast<int32_t>(block->blksampl_stride) > w)
       memset(dp + w, 0, static_cast<size_t>(block->blksampl_stride - static_cast<size_t>(w)) * sizeof(int32_t));
+    // Odd-height: zero the trailing sample row that make_storage will read at
+    // qy = QH-1.  Sigma bits at that row are already 0 (sgbuf is memset per
+    // encode), but gbuf is grow-only and may contain stale samples; without
+    // this, emitFlat ORs garbage v lanes into the bitstream accumulator.
+    if ((static_cast<uint32_t>(block->size.y) & 1u)
+        && row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
+      memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
+             static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+    }
   }
 }
 
@@ -6323,8 +6332,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
 #ifdef OPENHTJ2K_THREAD
   std::atomic<int> enc_remaining{0};
 #endif
-  std::vector<int32_t *> comp_gbuf(num_components, nullptr);
-  std::vector<uint8_t *> comp_sgbuf(num_components, nullptr);
   std::vector<bool>      comp_overlap(num_components, false);
 
   for (uint16_t c = 0; c < num_components; ++c) {
@@ -6454,8 +6461,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
       }
     }
 
-    comp_gbuf[c]    = gbuf;
-    comp_sgbuf[c]   = sgbuf;
     comp_overlap[c] = true;
   }
 
