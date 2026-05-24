@@ -82,7 +82,10 @@ class j2c_dst_memory {
   // The raw buffer skips zero-init entirely; writes go straight to memory.
   uint8_t *buf;
   size_t   capacity;
-  uint32_t pos;
+  // pos is size_t so it cannot wrap for codestreams >= 4 GiB (uint32_t would
+  // overflow when used as an index into buf for very large outputs, e.g.,
+  // cinema-grade 16K HDR encodes).
+  size_t   pos;
   bool     is_flushed;
 
   // Grow capacity to at least `need` bytes.  Geometric growth (×2) to amortize
