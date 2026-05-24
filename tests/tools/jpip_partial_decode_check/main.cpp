@@ -59,12 +59,12 @@ static int decode(const std::vector<uint8_t> &codestream,
   std::vector<uint8_t>    depth;
   std::vector<bool>       is_signed;
   try {
-    dec.invoke(buf, w, h, depth, is_signed);
+    dec.invoke_line_based(buf, w, h, depth, is_signed);
   } catch (std::exception &e) {
-    std::fprintf(stderr, "ERROR invoke: %s\n", e.what());
+    std::fprintf(stderr, "ERROR invoke_line_based: %s\n", e.what());
     return -1;
   }
-  // invoke() writes into caller-owned planes via its int32_t* vector.
+  // invoke_line_based() writes into caller-owned planes via its int32_t* vector.
   // buf[c] points into internal storage; copy it out so we can compare
   // across calls (the next invoke() may overwrite it).
   planes.resize(buf.size());

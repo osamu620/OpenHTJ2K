@@ -85,7 +85,7 @@ bool decode_into(const std::vector<uint8_t> &bytes, DecodedFrame &out) {
   std::vector<uint8_t>   depth;
   std::vector<bool>      is_signed;
   try {
-    dec.invoke(buf, out.width, out.height, depth, is_signed);
+    dec.invoke_line_based(buf, out.width, out.height, depth, is_signed);
   } catch (std::exception &e) {
     std::fprintf(stderr, "decode failed: %s\n", e.what());
     return false;

@@ -58,7 +58,7 @@ int main(int argc, char *argv[]) {
   std::vector<uint8_t> codestream = read_file(infile.c_str());
   if (codestream.empty()) return 1;
 
-  // ── Reference decode via invoke() ────────────────────────────────────────
+  // ── Reference decode via invoke_line_based_predecoded() ──────────────────
   std::vector<int32_t *> ref_buf;
   std::vector<uint32_t>  ref_w, ref_h;
   std::vector<uint8_t>   ref_depth;
@@ -67,9 +67,9 @@ int main(int argc, char *argv[]) {
     open_htj2k::openhtj2k_decoder dec_ref;
     dec_ref.init(codestream.data(), codestream.size(), reduce_NL, 1);
     dec_ref.parse();
-    dec_ref.invoke(ref_buf, ref_w, ref_h, ref_depth, ref_signed);
+    dec_ref.invoke_line_based_predecoded(ref_buf, ref_w, ref_h, ref_depth, ref_signed);
   } catch (std::exception &e) {
-    printf("ERROR invoke(): %s\n", e.what());
+    printf("ERROR invoke_line_based_predecoded(): %s\n", e.what());
     return 1;
   }
 

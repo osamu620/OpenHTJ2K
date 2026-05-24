@@ -280,7 +280,7 @@ class PgxStreamReader : public StreamReader {
 // ---------------------------------------------------------------------------
 // TiffStreamReader — reads a basic TIFF (8/16-bit, RGB or grayscale,
 // uncompressed or strip-compressed) one row at a time via libtiff's scanline
-// API. Tiled TIFFs are rejected; for those use the buffered (-batch) path.
+// API. Tiled TIFFs are rejected; for those use the buffered path.
 // Both PLANARCONFIG_CONTIG and PLANARCONFIG_SEPARATE are supported.
 // ---------------------------------------------------------------------------
 class TiffStreamReader : public StreamReader {
@@ -307,7 +307,7 @@ class TiffStreamReader : public StreamReader {
     if (!tif_) return -1;
 
     if (TIFFIsTiled(tif_)) {
-      printf("ERROR: tiled TIFF is not supported by the streaming reader; use -batch.\n");
+      printf("ERROR: tiled TIFF is not supported by the streaming reader.\n");
       return -1;
     }
 

@@ -478,7 +478,7 @@ install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
 ################################################################################################
 # Snapshot the test list before any tests/*.cmake include so we can attach the
 # `test_artifacts` cleanup fixture to every test added below — without this,
-# tests added by sibling files (batch_validation, jpip_phase1, encoder_test,
+# tests added by sibling files (jpip_phase1, encoder_test,
 # row_range_validation) escaped the FIXTURES_REQUIRED loop that used to live
 # inside decoder_conformance.cmake, letting cleanup_artifacts race their
 # decoder output and produce intermittent "file X not found" failures under
@@ -488,7 +488,6 @@ get_property(_tests_before_conformance DIRECTORY PROPERTY TESTS)
 # conformance testing — declares the `test_artifacts` cleanup fixture and the
 # main HT/Part-1/Part-2/WASM test sets.
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/batch_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)

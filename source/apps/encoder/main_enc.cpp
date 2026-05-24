@@ -264,9 +264,9 @@ int main(int argc, char *argv[]) {
                                             args.get_qfactor(), isJPH, color_space, args.num_threads);
       if (!toFile) encoder.set_output_buffer(outbuf);
       try {
-        total_size = encoder.invoke();
+        total_size = encoder.invoke_line_based();
       } catch (std::exception &exc) {
-        printf("ERROR: encoder.invoke() failed: %s\n", exc.what());
+        printf("ERROR: encoder.invoke_line_based() failed: %s\n", exc.what());
         return EXIT_FAILURE;
       }
     }

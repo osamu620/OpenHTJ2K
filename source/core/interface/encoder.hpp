@@ -153,7 +153,6 @@ OPENHTJ2K_EXPORT openhtj2k_encoder(const char *, const std::vector<int32_t *> &i
                     qcd_params &qcd, uint8_t qfactor, bool isJPH, uint8_t color_space,
                     uint32_t num_threads);
 OPENHTJ2K_EXPORT void set_output_buffer(std::vector<uint8_t> &output_buf);
-OPENHTJ2K_EXPORT size_t invoke();
 OPENHTJ2K_EXPORT size_t invoke_line_based();
 OPENHTJ2K_EXPORT size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
 OPENHTJ2K_EXPORT ~openhtj2k_encoder();

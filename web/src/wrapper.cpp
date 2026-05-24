@@ -62,7 +62,7 @@ void cpp_invoke_decoder(open_htj2k::openhtj2k_decoder* dec, int32_t* out) {
   std::vector<uint32_t> img_height;
   std::vector<uint8_t> img_depth;
   std::vector<bool> img_signed;
-  dec->invoke(buf, img_width, img_height, img_depth, img_signed);
+  dec->invoke_line_based(buf, img_width, img_height, img_depth, img_signed);
 
   const uint32_t W = img_width[0];
   const uint32_t H = img_height[0];
@@ -148,7 +148,7 @@ void invoke_decoder_planar(open_htj2k::openhtj2k_decoder* dec, int32_t** dst_ptr
   std::vector<uint32_t> img_width, img_height;
   std::vector<uint8_t> img_depth;
   std::vector<bool> img_signed;
-  dec->invoke(buf, img_width, img_height, img_depth, img_signed);
+  dec->invoke_line_based(buf, img_width, img_height, img_depth, img_signed);
   uint16_t nc = static_cast<uint16_t>(buf.size());
   for (uint16_t c = 0; c < nc; ++c) {
     std::memcpy(dst_ptrs[c], buf[c], (size_t)img_width[c] * img_height[c] * sizeof(int32_t));
