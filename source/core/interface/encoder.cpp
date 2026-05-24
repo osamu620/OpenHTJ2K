@@ -667,11 +667,18 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
 
   // Measure tile-part lengths to generate TLM marker.
   const uint32_t num_tiles = numTiles.x * numTiles.y;
+  // Thread-local + grow-only reuse of measurement and codestream buffers:
+  // calling encode multiple times from the same thread (batch mode, RTP
+  // streaming) keeps the ~20 MB output capacity mapped, eliminating the
+  // page-fault-during-write storm visible as memset-via-do_anonymous_page in
+  // perf annotate (~5-7 ms per 4K encode).
+  static thread_local j2c_dst_memory tmp;
+  static thread_local j2c_dst_memory j2c_dst, jph_dst;
   {
     std::vector<uint16_t> tile_indices(num_tiles);
     std::vector<uint32_t> tile_lengths(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-      j2c_dst_memory tmp;
+      tmp.clear();
       tmp.reserve(reserve_bytes / num_tiles + (1U << 16));
       tileSet[i].write_packets(tmp);
       tile_indices[i] = static_cast<uint16_t>(i);
@@ -680,7 +687,8 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
   }
 
-  j2c_dst_memory j2c_dst, jph_dst;
+  j2c_dst.clear();
+  jph_dst.clear();
   j2c_dst.reserve(reserve_bytes);
   j2c_dst.put_word(_SOC);
   main_header.flush(j2c_dst);
@@ -846,12 +854,15 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   }
   const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
 
+  // Thread-local + grow-only reuse — see invoke_internal for rationale.
+  static thread_local j2c_dst_memory tmp;
+  static thread_local j2c_dst_memory j2c_dst, jph_dst;
   // Measure tile-part lengths to generate TLM marker.
   {
     std::vector<uint16_t> tile_indices(num_tiles_lbs);
     std::vector<uint32_t> tile_lengths(num_tiles_lbs);
     for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
-      j2c_dst_memory tmp;
+      tmp.clear();
       tmp.reserve(reserve_bytes / num_tiles_lbs + (1U << 16));
       tileSet[i].write_packets(tmp);
       tile_indices[i] = static_cast<uint16_t>(i);
@@ -860,7 +871,8 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
   }
 
-  j2c_dst_memory j2c_dst, jph_dst;
+  j2c_dst.clear();
+  jph_dst.clear();
   j2c_dst.reserve(reserve_bytes);
   j2c_dst.put_word(_SOC);
   main_header.flush(j2c_dst);

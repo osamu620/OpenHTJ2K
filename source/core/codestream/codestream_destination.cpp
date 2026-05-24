@@ -31,8 +31,8 @@
 
 // MARK: j2c_dst_memory -
 int32_t j2c_dst_memory::put_byte(uint8_t byte) {
-  buf.push_back(byte);
-  pos++;
+  ensure_capacity(static_cast<size_t>(pos) + 1U);
+  buf[pos++] = byte;
   return EXIT_SUCCESS;
 }
 
@@ -53,17 +53,14 @@ int32_t j2c_dst_memory::put_dword(uint32_t dword) {
 }
 
 int32_t j2c_dst_memory::put_N_bytes(uint8_t *src, uint32_t length) {
-  buf.resize(pos + length);
-  memcpy(buf.data() + pos, src, length);
+  ensure_capacity(static_cast<size_t>(pos) + length);
+  memcpy(buf + pos, src, length);
   pos += length;
-  // for (unsigned long i = 0; i < length; i++) {
-  //   buf.push_back(src[i]);
-  // }
   return EXIT_SUCCESS;
 }
 
 int32_t j2c_dst_memory::flush(std::ofstream &dst) {
-  dst.write((char *)&buf[0], static_cast<long>(buf.size() * sizeof(buf[0])));
+  dst.write(reinterpret_cast<const char *>(buf), static_cast<long>(pos));
   return EXIT_SUCCESS;
 }
 
@@ -71,16 +68,13 @@ int32_t j2c_dst_memory::flush(std::vector<uint8_t> *obuf) {
   if (is_flushed) {
     return EXIT_FAILURE;
   }
-  obuf->resize(buf.size());
-  memcpy(obuf->data(), buf.data(), buf.size());
-  //  for (size_t i = 0; i < buf.size(); ++i) {
-  //    *(obuf->data() + i) = buf[i];
-  //  }
+  obuf->resize(pos);
+  memcpy(obuf->data(), buf, pos);
   is_flushed = true;
   return EXIT_SUCCESS;
 }
 
-size_t j2c_dst_memory::get_length() const { return buf.size(); }
+size_t j2c_dst_memory::get_length() const { return pos; }
 
 OPENHTJ2K_MAYBE_UNUSED [[deprecated]] void j2c_dst_memory::print_bytes() {
   for (uint32_t i = 0; i < pos; i++) {
