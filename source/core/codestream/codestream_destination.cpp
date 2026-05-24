@@ -60,6 +60,10 @@ int32_t j2c_dst_memory::put_N_bytes(uint8_t *src, uint32_t length) {
 }
 
 int32_t j2c_dst_memory::flush(std::ofstream &dst) {
+  // pos==0 ⇒ buf may still be nullptr (freshly-constructed or cleared and
+  // never written to).  std::ostream::write with a null pointer is UB on
+  // some implementations even with count 0.
+  if (pos == 0) return EXIT_SUCCESS;
   dst.write(reinterpret_cast<const char *>(buf), static_cast<long>(pos));
   return EXIT_SUCCESS;
 }
@@ -69,7 +73,9 @@ int32_t j2c_dst_memory::flush(std::vector<uint8_t> *obuf) {
     return EXIT_FAILURE;
   }
   obuf->resize(pos);
-  memcpy(obuf->data(), buf, pos);
+  if (pos != 0) {
+    memcpy(obuf->data(), buf, pos);
+  }
   is_flushed = true;
   return EXIT_SUCCESS;
 }
