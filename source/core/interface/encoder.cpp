@@ -41,6 +41,26 @@
 #define sYCC 1
 
 namespace open_htj2k {
+
+// Per-thread reusable output buffers shared by both encoder entry points
+// (`invoke_internal` and `invoke_line_based_stream`).  A single
+// thread_local instance keeps the ~22 MB output capacity mapped across
+// consecutive encodes on the same thread, eliminating the page-fault
+// storm that glibc's mmap-free of large allocations would otherwise
+// cause.  Function-local thread_locals were avoided so a thread that
+// calls both entry points doesn't retain two separate sets.
+namespace {
+struct EncoderThreadBuffers {
+  j2c_dst_memory tmp;       // per-tile measurement for the TLM marker
+  j2c_dst_memory j2c_dst;   // final codestream
+  j2c_dst_memory jph_dst;   // optional JPH wrapper
+};
+inline EncoderThreadBuffers &enc_thread_bufs() {
+  static thread_local EncoderThreadBuffers tbuf;
+  return tbuf;
+}
+}  // namespace
+
 image::image(const std::vector<std::string> &filenames) : width(0), height(0), buf(nullptr) {
   size_t num_files = filenames.size();
   if (num_files > 16384) {
@@ -667,13 +687,16 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
 
   // Measure tile-part lengths to generate TLM marker.
   const uint32_t num_tiles = numTiles.x * numTiles.y;
-  // Thread-local + grow-only reuse of measurement and codestream buffers:
-  // calling encode multiple times from the same thread (batch mode, RTP
+  // Thread-local + grow-only reuse of measurement and codestream buffers
+  // (shared with invoke_line_based_stream — see EncoderThreadBuffers).
+  // Calling encode multiple times from the same thread (batch mode, RTP
   // streaming) keeps the ~20 MB output capacity mapped, eliminating the
   // page-fault-during-write storm visible as memset-via-do_anonymous_page in
   // perf annotate (~5-7 ms per 4K encode).
-  static thread_local j2c_dst_memory tmp;
-  static thread_local j2c_dst_memory j2c_dst, jph_dst;
+  auto &tbuf      = enc_thread_bufs();
+  auto &tmp       = tbuf.tmp;
+  auto &j2c_dst   = tbuf.j2c_dst;
+  auto &jph_dst   = tbuf.jph_dst;
   {
     std::vector<uint16_t> tile_indices(num_tiles);
     std::vector<uint32_t> tile_lengths(num_tiles);
@@ -855,8 +878,12 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
 
   // Thread-local + grow-only reuse — see invoke_internal for rationale.
-  static thread_local j2c_dst_memory tmp;
-  static thread_local j2c_dst_memory j2c_dst, jph_dst;
+  // The same EncoderThreadBuffers instance is shared with invoke_internal so
+  // a thread calling both entry points retains only one set of buffers.
+  auto &tbuf      = enc_thread_bufs();
+  auto &tmp       = tbuf.tmp;
+  auto &j2c_dst   = tbuf.j2c_dst;
+  auto &jph_dst   = tbuf.jph_dst;
   // Measure tile-part lengths to generate TLM marker.
   {
     std::vector<uint16_t> tile_indices(num_tiles_lbs);

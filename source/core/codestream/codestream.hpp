@@ -89,8 +89,17 @@ class j2c_dst_memory {
   // realloc cost; allocate then memcpy + delete[] (no in-place grow).
   void ensure_capacity(size_t need) {
     if (need <= capacity) return;
+    // Overflow-safe geometric growth.  Once `new_cap >= SIZE_MAX/2` further
+    // doubling would wrap; clamp to `need` (which is itself <= SIZE_MAX) so
+    // the allocation either succeeds via operator new[] or throws bad_alloc.
     size_t new_cap = capacity ? capacity : 1024;
-    while (new_cap < need) new_cap *= 2;
+    while (new_cap < need) {
+      if (new_cap > SIZE_MAX / 2) {
+        new_cap = need;
+        break;
+      }
+      new_cap *= 2;
+    }
     auto *nb = new uint8_t[new_cap];
     if (pos) std::memcpy(nb, buf, pos);
     delete[] buf;
