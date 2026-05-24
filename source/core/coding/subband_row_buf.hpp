@@ -160,7 +160,7 @@ struct j2k_subband_row_buf {
 
  private:
   // Core per-strip codeblock decode. Writes decoded samples to target_buf
-  // (when ring_mode && target_buf != nullptr); otherwise leaves block->i_samples
+  // (when ring_mode && target_buf != nullptr); otherwise leaves block->band_buf
   // pointing into sb->i_samples (non-ring / bypass path).
   void decode_strip_core(sprec_t *target_buf, int32_t y0, int32_t y1);
 

@@ -968,7 +968,7 @@ j2k_codeblock::j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M
       M_b(M_b),
       index(idx),
       //  public
-      i_samples(ibuf ? ibuf + offset : nullptr),
+      band_buf(ibuf ? ibuf + offset : nullptr),
       band_stride(band_stride),
       R_b(R_b),
       transformation(transformation),
@@ -2032,9 +2032,9 @@ j2k_subband::j2k_subband(element_siz p0, element_siz p1, uint8_t orientation, ui
         i_samples = base + DWT_LEFT_SLACK;
       }
       // When no_alloc=true (ring-mode line-based decode), i_samples stays nullptr.
-      // decode_strip() will redirect block->i_samples to the ring buffer before decoding.
+      // decode_strip() will redirect block->band_buf to the ring buffer before decoding.
       // When no_alloc=true (ring-mode line-based decode), i_samples stays nullptr.
-      // decode_strip() will redirect block->i_samples to the ring buffer before decoding.
+      // decode_strip() will redirect block->band_buf to the ring buffer before decoding.
     } else {
       i_samples = ibuf;
     }

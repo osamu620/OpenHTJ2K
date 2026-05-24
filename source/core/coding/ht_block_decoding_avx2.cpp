@@ -340,7 +340,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   /*******************************************************************************************************************/
 
   // Fused dequantize setup: when fuse_dequant is true, we write dequantized float values
-  // directly to i_samples, eliminating the separate dequantize pass.
+  // directly to band_buf, eliminating the separate dequantize pass.
   // pLSB_dq is the dequantization shift (31 - M_b), distinct from the MagSgn pLSB.
   int32_t pLSB_dq        = 0;
   float fscale_direct     = 0.0f;
@@ -365,9 +365,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   }
 
   int32_t *const sample_buf = block->sample_buf;
-  // When fusing dequantize, output pointers target i_samples (float*) instead of sample_buf (int32_t*).
+  // When fusing dequantize, output pointers target band_buf (float*) instead of sample_buf (int32_t*).
   // Both are 32-bit wide so pointer arithmetic is identical.
-  int32_t *mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->i_samples) : sample_buf;
+  int32_t *mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->band_buf) : sample_buf;
   int32_t *mp1 = mp0 + (fuse_dequant ? block->band_stride : block->blksampl_stride);
 
   alignas(32) int32_t Eline[1040];  // 2 * QW_max + 16, QW_max = 512
@@ -454,7 +454,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     for (uint16_t row = 1; row < QH; row++) {
       E_p = Eline + 1;
       if constexpr (fuse_dequant) {
-        mp0 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U) * block->band_stride;
+        mp0 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U) * block->band_stride;
         mp1 = mp0 + block->band_stride;
       } else {
         mp0 = sample_buf + (row * 2U) * block->blksampl_stride;
@@ -596,7 +596,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     for (uint16_t row = 1; row < QH; row++) {
       E_p = Eline + 1;
       if constexpr (fuse_dequant) {
-        mp0 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U) * block->band_stride;
+        mp0 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U) * block->band_stride;
         mp1 = mp0 + block->band_stride;
       } else {
         mp0 = sample_buf + (row * 2U) * block->blksampl_stride;
@@ -838,7 +838,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
+      sprec_t *dst = this->band_buf + i * this->band_stride;
       size_t len   = this->size.x;
       if (ROIshift == 0) {
         // Common case: no ROI — skip the ROI upshift entirely.
@@ -928,7 +928,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       const __m256i vsignmask = _mm256_set1_epi32(INT32_MIN);
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->i_samples + i * this->band_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
         size_t len   = this->size.x;
         // 2× unrolled: 4 vectors (32 elements) per iteration for better ILP
         // val = sample_buf + i*blksampl_stride; 32-byte aligned → _mm256_load_si256 ok.
@@ -981,7 +981,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       const auto scale = static_cast<int32_t>(fscale + 0.5f);
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->i_samples + i * this->band_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
         size_t len   = this->size.x;
         for (; len >= 16; len -= 16) {
           v0 = _mm256_load_si256((__m256i *)val);

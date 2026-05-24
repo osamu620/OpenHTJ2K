@@ -174,7 +174,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const v128_t vtwo   = wasm_i32x4_const_splat(2);
   const v128_t vshift = wasm_i32x4_splat(pLSB - 1);
 
-  auto mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->i_samples) : block->sample_buf;
+  auto mp0 = fuse_dequant ? reinterpret_cast<int32_t *>(block->band_buf) : block->sample_buf;
   auto mp1 = mp0 + (fuse_dequant ? block->band_stride : block->blksampl_stride);
   auto sp0 = block->block_states + 1 + block->blkstate_stride;
   auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
@@ -378,8 +378,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     rho_p = rholine + 1;
     E_p   = Eline + 1;
     if constexpr (fuse_dequant) {
-      mp0 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U) * block->band_stride;
-      mp1 = reinterpret_cast<int32_t *>(block->i_samples) + (row * 2U + 1U) * block->band_stride;
+      mp0 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U) * block->band_stride;
+      mp1 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U + 1U) * block->band_stride;
     } else {
       mp0 = block->sample_buf + (row * 2U) * block->blksampl_stride;
       mp1 = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
@@ -703,7 +703,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     // lossless path
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->i_samples + i * this->band_stride;
+      sprec_t *dst = this->band_buf + i * this->band_stride;
       size_t len   = this->size.x;
       for (; len >= 8; len -= 8) {
         v0       = wasm_v128_load(val);
@@ -760,7 +760,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
 
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->i_samples + i * this->band_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
         size_t len   = this->size.x;
         for (; len >= 8; len -= 8) {
           v0 = wasm_v128_load(val);
@@ -792,7 +792,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
 
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->i_samples + i * this->band_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
         size_t len   = this->size.x;
 
         for (; len >= 8; len -= 8) {
