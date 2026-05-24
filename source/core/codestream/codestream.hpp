@@ -74,17 +74,44 @@ class j2c_src_memory {
 
 class j2c_dst_memory {
  private:
-  std::vector<uint8_t> buf;
+  // Raw allocation (not std::vector) because vector's growth path goes through
+  // _M_default_append which zero-fills the newly-resized range BEFORE memcpy
+  // overwrites it.  Even after reserve() pre-allocates capacity, each resize()
+  // for the next byte/word write still triggers that zero-fill, visible as
+  // ~1.9% of cumulative time on 4K-iter30 in the do_anonymous_page chain.
+  // The raw buffer skips zero-init entirely; writes go straight to memory.
+  uint8_t *buf;
+  size_t   capacity;
   uint32_t pos;
-  bool is_flushed;
+  bool     is_flushed;
+
+  // Grow capacity to at least `need` bytes.  Geometric growth (×2) to amortize
+  // realloc cost; allocate then memcpy + delete[] (no in-place grow).
+  void ensure_capacity(size_t need) {
+    if (need <= capacity) return;
+    size_t new_cap = capacity ? capacity : 1024;
+    while (new_cap < need) new_cap *= 2;
+    auto *nb = new uint8_t[new_cap];
+    if (pos) std::memcpy(nb, buf, pos);
+    delete[] buf;
+    buf      = nb;
+    capacity = new_cap;
+  }
 
  public:
-  j2c_dst_memory() : pos(0), is_flushed(false) {}
-  ~j2c_dst_memory() = default;
-  // Reserve capacity to avoid per-write geometric growth (each std::vector
-  // reallocation zero-fills the new range via clear_page_erms before memcpy
-  // overwrites it — visible as ~5% of total encode time on 4K 16-bit).
-  void reserve(size_t n) { buf.reserve(n); }
+  j2c_dst_memory() : buf(nullptr), capacity(0), pos(0), is_flushed(false) {}
+  ~j2c_dst_memory() { delete[] buf; }
+  j2c_dst_memory(const j2c_dst_memory &)            = delete;
+  j2c_dst_memory &operator=(const j2c_dst_memory &) = delete;
+  // Reserve capacity to avoid per-write geometric growth.
+  void reserve(size_t n) { ensure_capacity(n); }
+  // Reset for reuse without releasing the underlying allocation.  Used by the
+  // thread_local instances in encoder.cpp so consecutive encodes from the same
+  // thread keep the ~22 MB output capacity mapped (no re-fault, no zero-fill).
+  void clear() {
+    pos         = 0;
+    is_flushed  = false;
+  }
   int32_t put_byte(uint8_t byte);
   int32_t put_word(uint16_t word);
   int32_t put_dword(uint32_t dword);
