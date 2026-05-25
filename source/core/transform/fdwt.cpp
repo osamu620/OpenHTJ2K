@@ -147,6 +147,23 @@ void fdwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
   }
 };
 
+// int32 scalar variant of the reversible (5/3) 1D primitive.  Native integer
+// arithmetic: arithmetic shift right replaces the float `floor(sum * 0.5)`
+// emulation.
+void fdwt_1d_filtr_rev53_i32(int32_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
+  const int32_t i0     = u_i0;
+  const int32_t i1     = u_i1;
+  const int32_t start  = ceil_int(i0, 2);
+  const int32_t stop   = ceil_int(i1, 2);
+  const int32_t offset = left + i0 % 2;
+  for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {
+    X[n + 1] -= (X[n] + X[n + 2]) >> 1;
+  }
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) {
+    X[n] += (X[n - 1] + X[n + 1] + 2) >> 2;
+  }
+}
+
 // ATK irreversible 5/3 horizontal FDWT (analysis): 2-step without floor.
 // Step 1: HP[k] -= 0.5*(LP[k] + LP[k+1])   [predict using original LP]
 // Step 2: LP[k] += 0.25*(HP_mod[k-1] + HP_mod[k])  [update using modified HP]

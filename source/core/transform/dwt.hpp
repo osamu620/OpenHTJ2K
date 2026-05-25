@@ -195,6 +195,14 @@ void fdwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0,
 // Single-row reversible (5/3) FDWT vertical lifting steps.
 void fdwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, float *tgt);
+// int32 variants of the reversible (5/3) primitives — same algorithm operating
+// on native int32 storage instead of float-with-integer-values.  Skip the
+// mul-by-0.5 / floor / cast emulation of integer divide-by-2 in the float
+// versions; use a single arithmetic right shift.  See PR description for
+// rationale.  Currently unused — wired up by a follow-up commit.
+void fdwt_1d_filtr_rev53_i32_neon(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void fdwt_rev_ver_hp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void fdwt_rev_ver_lp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
@@ -209,11 +217,20 @@ void fdwt_rev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1,
 // Single-row reversible (5/3) FDWT vertical lifting steps.
 void fdwt_rev_ver_hp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt);
+// int32 variants of the reversible (5/3) primitives — see NEON block above.
+void fdwt_1d_filtr_rev53_i32_avx2(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void fdwt_rev_ver_hp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void fdwt_rev_ver_lp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 #else
 void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void fdwt_1d_filtr_rev53_fixed(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void fdwt_irrev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1, int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 void fdwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1, int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+// int32 scalar variant of the reversible (5/3) 1D primitive — see NEON block
+// above.  (No vertical-step scalar counterparts: the streaming line-based DWT
+// path requires SIMD step functions and the scalar fdwt build uses the batch
+// fdwt_rev_ver_sr_fixed instead.)
+void fdwt_1d_filtr_rev53_i32(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 #endif
 
 void fdwt_2d_sr_fixed(sprec_t *previousLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,
@@ -247,6 +264,10 @@ void idwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next
 // Single-row reversible (5/3) FDWT vertical lifting steps.
 void fdwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
+// int32 variants of the reversible (5/3) primitives — see NEON block above.
+void fdwt_1d_filtr_rev53_i32_avx512(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void fdwt_rev_ver_hp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void fdwt_rev_ver_lp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
@@ -309,6 +330,10 @@ void idwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, 
 // single-row vertical step (for streaming fdwt_2d_state)
 void fdwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
+// int32 variants of the reversible (5/3) primitives — see NEON block above.
+void fdwt_1d_filtr_rev53_i32_wasm(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void fdwt_rev_ver_hp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void fdwt_rev_ver_lp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 #endif
 
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, int32_t u0,

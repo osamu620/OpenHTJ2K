@@ -341,4 +341,101 @@ void fdwt_rev_ver_lp_step_avx2(int32_t n, const float *prev, const float *next, 
   for (; i < n; ++i)
     tgt[i] += floorf((prev[i] + next[i] + 2.0f) * 0.25f);
 }
+
+// ============================================================================
+// int32 5/3 reversible DWT primitives (lossless path).  See fdwt_avx512.cpp
+// for design rationale: same algorithm via srai_epi32 instead of
+// mul_ps + floor_ps emulation of integer divide-by-2/4.
+// ============================================================================
+
+void fdwt_1d_filtr_rev53_i32_avx2(int32_t *X, const int32_t left, const int32_t u_i0,
+                                  const int32_t u_i1) {
+  const int32_t i0     = u_i0;
+  const int32_t i1     = u_i1;
+  const int32_t start  = ceil_int(i0, 2);
+  const int32_t stop   = ceil_int(i1, 2);
+  const int32_t offset = left + i0 % 2;
+
+  // step 1: H[k] -= (L[k] + L[k+1]) >> 1
+  int32_t simdlen = stop - (start - 1);
+  int32_t i = 0, n = -2 + offset;
+  for (; i + 4 < simdlen; i += 8, n += 16) {
+    __m256i xin0a = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n));
+    __m256i xin2a = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 2));
+    __m256i xin0b = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 8));
+    __m256i xin2b = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 10));
+    __m256i xsuma = _mm256_slli_epi64(_mm256_add_epi32(xin0a, xin2a), 32);
+    __m256i xsumb = _mm256_slli_epi64(_mm256_add_epi32(xin0b, xin2b), 32);
+    xsuma = _mm256_srai_epi32(xsuma, 1);
+    xsumb = _mm256_srai_epi32(xsumb, 1);
+    xin0a = _mm256_sub_epi32(xin0a, xsuma);
+    xin0b = _mm256_sub_epi32(xin0b, xsumb);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(X + n), xin0a);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(X + n + 8), xin0b);
+  }
+  for (; i < simdlen; i += 4, n += 8) {
+    __m256i xin0 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n));
+    __m256i xin2 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 2));
+    __m256i xsum = _mm256_slli_epi64(_mm256_add_epi32(xin0, xin2), 32);
+    xsum = _mm256_srai_epi32(xsum, 1);
+    xin0 = _mm256_sub_epi32(xin0, xsum);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(X + n), xin0);
+  }
+
+  // step 2: L[k] += (H[k-1] + H[k] + 2) >> 2
+  simdlen = stop - start;
+  i = 0; n = 0 + offset;
+  const __m256i vtwo = _mm256_set1_epi32(2);
+  for (; i + 4 < simdlen; i += 8, n += 16) {
+    __m256i xin0a = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n - 1));
+    __m256i xin2a = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 1));
+    __m256i xin0b = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 7));
+    __m256i xin2b = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 9));
+    __m256i xsuma = _mm256_slli_epi64(
+        _mm256_add_epi32(_mm256_add_epi32(xin0a, xin2a), vtwo), 32);
+    __m256i xsumb = _mm256_slli_epi64(
+        _mm256_add_epi32(_mm256_add_epi32(xin0b, xin2b), vtwo), 32);
+    xsuma = _mm256_srai_epi32(xsuma, 2);
+    xsumb = _mm256_srai_epi32(xsumb, 2);
+    xin0a = _mm256_add_epi32(xin0a, xsuma);
+    xin0b = _mm256_add_epi32(xin0b, xsumb);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(X + n - 1), xin0a);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(X + n + 7), xin0b);
+  }
+  for (; i < simdlen; i += 4, n += 8) {
+    __m256i xin0 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n - 1));
+    __m256i xin2 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(X + n + 1));
+    __m256i xsum = _mm256_slli_epi64(
+        _mm256_add_epi32(_mm256_add_epi32(xin0, xin2), vtwo), 32);
+    xsum = _mm256_srai_epi32(xsum, 2);
+    xin0 = _mm256_add_epi32(xin0, xsum);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(X + n - 1), xin0);
+  }
+}
+
+void fdwt_rev_ver_hp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m256i a = _mm256_load_si256(reinterpret_cast<const __m256i *>(prev + i));
+    __m256i b = _mm256_load_si256(reinterpret_cast<const __m256i *>(next + i));
+    __m256i t = _mm256_load_si256(reinterpret_cast<const __m256i *>(tgt  + i));
+    t = _mm256_sub_epi32(t, _mm256_srai_epi32(_mm256_add_epi32(a, b), 1));
+    _mm256_store_si256(reinterpret_cast<__m256i *>(tgt + i), t);
+  }
+  for (; i < n; ++i) tgt[i] -= (prev[i] + next[i]) >> 1;
+}
+
+void fdwt_rev_ver_lp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  const __m256i vtwo = _mm256_set1_epi32(2);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m256i a = _mm256_load_si256(reinterpret_cast<const __m256i *>(prev + i));
+    __m256i b = _mm256_load_si256(reinterpret_cast<const __m256i *>(next + i));
+    __m256i t = _mm256_load_si256(reinterpret_cast<const __m256i *>(tgt  + i));
+    t = _mm256_add_epi32(t,
+        _mm256_srai_epi32(_mm256_add_epi32(_mm256_add_epi32(a, b), vtwo), 2));
+    _mm256_store_si256(reinterpret_cast<__m256i *>(tgt + i), t);
+  }
+  for (; i < n; ++i) tgt[i] += (prev[i] + next[i] + 2) >> 2;
+}
 #endif
