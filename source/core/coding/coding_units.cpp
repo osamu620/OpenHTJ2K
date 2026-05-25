@@ -496,6 +496,15 @@ struct fdwt_level_sink_ctx {
   // Dispatch fires when both bits are set (flags == 3).
   std::unique_ptr<std::atomic<uint8_t>[]> cblk_row_done;
 
+  // Per-strip scratch ring (PR1: N=1 slot per level).  strip_gbuf/strip_sgbuf
+  // point at this level's per-thread scratch slot; block->sample_buf and
+  // block->block_states are (re)stamped into this slot at the start of each
+  // new cblk-row strip by stamp_strip_pointers().  last_stamped_br tracks the
+  // most recent strip stamped so the sink-fn can detect a strip transition.
+  int32_t  *strip_gbuf      = nullptr;
+  uint8_t  *strip_sgbuf     = nullptr;
+  int32_t   last_stamped_br = -1;
+
   j2k_resolution *enc_cr      = nullptr;
   uint8_t         enc_ROIshift = 0;
   j2k_tile::EncodePoolCtx *enc_epc      = nullptr;
@@ -509,6 +518,42 @@ struct fdwt_level_sink_ctx {
 // (0-indexed relative to each band's subband-row origin) at the resolution
 // Forward declaration; full definition is after the ThreadPool include below.
 static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br);
+
+// Re-stamp block->sample_buf / block->block_states for every codeblock in
+// cblk-row strip `br` into this level's per-strip scratch slot, then zero the
+// sgbuf portion (sink_quantize_row OR-aggregates sigma bits, so the slot must
+// start zeroed each time it is reused).  Called by fdwt_level_sink_fn on the
+// first emitted row of each new strip — both legs (HL and LH+HH) of the same
+// strip share the slot, so the first leg to fire does the stamp and the second
+// short-circuits via cx->last_stamped_br == br.
+//
+// PR1: N=1 slot per (component, level).  Safe in single-threaded mode because
+// enc_overlap_dispatch runs htj2k_encode synchronously before the sink-fn
+// returns, so by the time the next row arrives, strip br has been fully
+// encoded and its storage is free to overwrite.  PR2 will add per-slot
+// in-flight tracking + barrier_wait for the MT path.
+static inline void stamp_strip_pointers(fdwt_level_sink_ctx *c, int32_t br) {
+  int32_t *pbuf  = c->strip_gbuf;
+  uint8_t *spbuf = c->strip_sgbuf;
+  for (uint8_t b = 0; b < 3; ++b) {
+    const int32_t ncx = c->sink_num_cblk_x[b];
+    if (ncx == 0) continue;
+    const int32_t ncy = c->sink_num_cblk_y[b];
+    if (br < 0 || br >= ncy) continue;
+    for (int32_t xi = 0; xi < ncx; ++xi) {
+      j2k_codeblock *block = c->sink_cblks[b][static_cast<size_t>(br * ncx + xi)];
+      const uint32_t QWx2  = round_up(block->size.x, 8U);
+      const uint32_t QHx2  = round_up(block->size.y, 8U);
+      block->sample_buf    = pbuf;
+      block->block_states  = spbuf;
+      block->pre_quantized = true;
+      pbuf  += QWx2 * QHx2;
+      spbuf += (QWx2 + 2) * (QHx2 + 2);
+    }
+  }
+  const size_t sg_used = static_cast<size_t>(spbuf - c->strip_sgbuf);
+  if (sg_used) std::memset(c->strip_sgbuf, 0, sg_used);
+}
 
 // Quantize one DWT row and scatter into codeblock sample_buf + block_states.
 static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row,
@@ -698,6 +743,23 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
   auto *c = static_cast<fdwt_level_sink_ctx *>(ctx);
 
   const int32_t u_off = c->u0 & 1;
+
+  // Strip-ring stamp: re-stamp block->sample_buf / block->block_states at the
+  // first emitted row of each new cblk-row strip.  In the overlap path,
+  // hl_y0 == lh_y0 (asserted at setup), so both legs compute the same strip
+  // index for the same vertical position.  Whichever leg fires first for
+  // strip br does the stamp; the other leg short-circuits via the equality
+  // check.  sink_quantize_row* reads block->sample_buf, so this must run
+  // BEFORE the sink_quantize_row calls below.
+  if (c->cb_h > 0 && c->sink_quantize) {
+    const int32_t band_y0 = is_hp ? c->lh_y0 : c->hl_y0;
+    const int32_t sub_row = (abs_row >> 1) - band_y0;
+    const int32_t br_curr = sub_row / c->cb_h;
+    if (br_curr != c->last_stamped_br) {
+      stamp_strip_pointers(c, br_curr);
+      c->last_stamped_br = br_curr;
+    }
+  }
 
   if (c->use_i32) {
     const int32_t *intr_i  = reinterpret_cast<const int32_t *>(interleaved_row);
@@ -934,33 +996,44 @@ static thread_local TlPoolSlot g_tl_pool_slot;
 // first touch (plus zap_present_ptes on munmap), visible as ~5% of total wall time.
 //
 // Hoisting these to a thread_local grow-only allocator keeps the pages mapped
-// and resident across encodes on the same thread. gbuf is fully overwritten by
-// sink_quantize_row so it does not need zero-init; sgbuf needs memset(0) at
-// start of each encode because sink_quantize_row reads-then-ORs the sigma bits.
+// and resident across encodes on the same thread.  PR1 of the strip-ring work
+// shrinks the per-component flat buffer to per-(component, level) slots, each
+// sized for the LARGEST cblk-row strip at that level instead of the sum across
+// all strips.  sample_buf/block_states are re-stamped per strip by
+// stamp_strip_pointers() in the sink-fn, and the sgbuf portion is zeroed at
+// strip-stamp time (not once per encode).  For 4K ED4K lossless this drops the
+// component-scratch RSS from ~132 MB to a few MB.  PR2 will turn slots[N=1]
+// into slots[N>1] for multi-threaded back-pressure; the per-level layout makes
+// that scale linearly in N rather than in (num_cblks × N).
 namespace {
 struct StreamingPerCompScratch {
-  struct Slot {
+  struct LevelSlot {
     int32_t *gbuf      = nullptr;
     uint8_t *sgbuf     = nullptr;
-    size_t   gbuf_cap  = 0;  // in int32_t elements
-    size_t   sgbuf_cap = 0;  // in bytes
+    size_t   gbuf_cap  = 0;  // in int32_t elements; sized for the largest strip
+    size_t   sgbuf_cap = 0;  // in bytes; sized for the largest strip
   };
-  std::vector<Slot> slots;
+
+  // comp_levels[c][lv] = per-strip scratch for level lv of component c.
+  // Vector-of-vectors so the grow step is transactional per (c, lv) pair.
+  std::vector<std::vector<LevelSlot>> comp_levels;
 
   ~StreamingPerCompScratch() {
-    for (auto &s : slots) {
-      std::free(s.gbuf);
-      std::free(s.sgbuf);
+    for (auto &lvs : comp_levels) {
+      for (auto &s : lvs) {
+        std::free(s.gbuf);
+        std::free(s.sgbuf);
+      }
     }
   }
-  // Allocate-then-swap pattern: if malloc fails the prior buffer is kept and
-  // std::bad_alloc is thrown (matching the encoder's existing exception
-  // discipline). The cap is updated only on success, so callers may retry.
-  // slots is a single vector so its grow step is transactional — a partial
-  // failure cannot leave parallel arrays of different sizes.
-  void reserve(size_t comp_idx, size_t need_g, size_t need_sg) {
-    if (slots.size() <= comp_idx) slots.resize(comp_idx + 1);
-    Slot &s = slots[comp_idx];
+
+  // Allocate-then-swap: prior buffer is kept and std::bad_alloc is thrown if
+  // malloc fails.  Cap is updated only on success.
+  void reserve(size_t comp_idx, size_t level_idx, size_t need_g, size_t need_sg) {
+    if (comp_levels.size() <= comp_idx) comp_levels.resize(comp_idx + 1);
+    auto &lvs = comp_levels[comp_idx];
+    if (lvs.size() <= level_idx) lvs.resize(level_idx + 1);
+    LevelSlot &s = lvs[level_idx];
     if (need_g > s.gbuf_cap) {
       auto *p = static_cast<int32_t *>(std::malloc(need_g * sizeof(int32_t)));
       if (p == nullptr) throw std::bad_alloc{};
@@ -975,6 +1048,10 @@ struct StreamingPerCompScratch {
       s.sgbuf     = p;
       s.sgbuf_cap = need_sg;
     }
+  }
+
+  LevelSlot &slot(size_t comp_idx, size_t level_idx) {
+    return comp_levels[comp_idx][level_idx];
   }
 };
 }  // namespace
@@ -1118,35 +1195,17 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
       for (uint32_t cx = 0; cx < cpb->num_codeblock_x; ++cx) {
         j2k_codeblock *block =
             cpb->access_codeblock(cx + static_cast<uint32_t>(cy_local) * cpb->num_codeblock_x);
-#ifdef OPENHTJ2K_THREAD
-        if (c->enc_pool && c->enc_pool->num_threads() > 1) {
-          using EPC = j2k_tile::EncodePoolCtx;
-          c->enc_remaining->fetch_add(1, std::memory_order_relaxed);
-          EPC              *epc       = c->enc_epc;
-          uint8_t           ROIshift  = c->enc_ROIshift;
-          std::atomic<int> *remaining = c->enc_remaining;
-          c->enc_pool->push([epc, block, ROIshift, remaining]() {
-            TlPoolSlot &ts = g_tl_pool_slot;
-            if (ts.gen != epc->gen) {
-              const int slot = epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
-              ts.slot        = std::min(slot, static_cast<int>(epc->pools.size()) - 1);
-              ts.gen         = epc->gen;
-            }
-            g_cblk_pool = epc->pools[static_cast<size_t>(ts.slot)].get();
-            htj2k_encode(block, ROIshift);
-            g_cblk_pool = nullptr;
-            remaining->fetch_sub(1, std::memory_order_release);
-          });
-        } else {
-          g_cblk_pool = c->enc_epc->pools[0].get();
-          htj2k_encode(block, c->enc_ROIshift);
-          g_cblk_pool = nullptr;
-        }
-#else
+        // PR1 of perf/streaming-strip-ring: htj2k_encode is run inline even
+        // when a thread pool is configured.  Reason: the per-(component,
+        // level) scratch slot is N=1, so the next strip's stamp_strip_pointers
+        // would overwrite block->sample_buf while a worker thread was still
+        // mid-cleanup.  Single-thread is naturally safe because sink-fn does
+        // not return until dispatch (and thus htj2k_encode) completes here.
+        // PR2 raises N to (1 + pool_size) and adds per-slot barrier_wait so
+        // the pool->push fast path can be safely re-enabled.
         g_cblk_pool = c->enc_epc->pools[0].get();
         htj2k_encode(block, c->enc_ROIshift);
         g_cblk_pool = nullptr;
-#endif
       }
     }
   }
@@ -6660,38 +6719,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       if (le_ctxs[i].hl_y0 != le_ctxs[i].lh_y0 || le_ctxs[i].hl_h == 0) ok = false;
     if (!ok) continue;
 
-    // Compute total flat buffer sizes for levels 1..NL (HL/LH/HH codeblocks).
-    uint32_t total_cbuf = 0, total_sbuf = 0;
-    for (uint8_t r = 1; r <= NL; ++r) {
-      j2k_resolution *cr = tcomp[c].access_resolution(r);
-      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-        j2k_precinct *cp = cr->access_precinct(p);
-        for (uint8_t b = 0; b < cr->num_bands; ++b) {
-          j2k_precinct_subband *cpb = cp->access_pband(b);
-          for (uint32_t cb = 0; cb < cpb->num_codeblock_x * cpb->num_codeblock_y; ++cb) {
-            j2k_codeblock *block = cpb->access_codeblock(cb);
-            const uint32_t QWx2 = round_up(block->size.x, 8U);
-            const uint32_t QHx2 = round_up(block->size.y, 8U);
-            total_cbuf += QWx2 * QHx2;
-            total_sbuf += (QWx2 + 2) * (QHx2 + 2);
-          }
-        }
-      }
-    }
-    if (total_cbuf == 0) continue;
-
-    // Reuse persistent thread_local per-component scratch instead of fresh
-    // calloc/free each encode. gbuf is fully overwritten downstream; only
-    // sgbuf needs zeroing because sink_quantize_row OR-aggregates sigma bits.
     auto &streaming_scratch = get_thread_streaming_scratch();
-    streaming_scratch.reserve(c, total_cbuf, total_sbuf);
-    int32_t *gbuf  = streaming_scratch.slots[c].gbuf;
-    uint8_t *sgbuf = streaming_scratch.slots[c].sgbuf;
-    std::memset(sgbuf, 0, total_sbuf);
-
-    // Assign sample_buf/block_states pointers and set up per-level overlap state.
-    int32_t *pbuf  = gbuf;
-    uint8_t *spbuf = sgbuf;
     const int32_t cb_h_val = static_cast<int32_t>(tcomp[c].get_codeblock_size().y);
     // Reversible 5/3 components in the overlap path use the int32 FDWT pipeline:
     // sink_quantize_row_i32 reads int32 directly (no cvttps/mul_ps per sample),
@@ -6700,30 +6728,53 @@ uint8_t *j2k_tile::encode_line_based_stream(
     // t1_encode reads subband i_samples as float.
     const bool use_i32_pipe = (tcomp[c].get_transformation() == 1);
     fdwt_2d_state *le_states = le->states.get();
+    bool any_level_allocated = false;
 
     for (int32_t i = 0; i < le->NL_active; ++i) {
       j2k_resolution *cr = tcomp[c].access_resolution(static_cast<uint8_t>(i + 1));
       auto &cx = le_ctxs[i];
 
+      cx.cb_h          = cb_h_val;
+      cx.num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_val - 1) / cb_h_val;
+      if (cx.num_cblk_rows <= 0) continue;
+
+      // Compute per-strip (sample, sigma) footprints; the scratch slot for
+      // this level needs to fit the LARGEST strip, not the sum across all
+      // strips.  Strips are indexed by br = (cblk_y_abs - band_y0) / cb_h.
+      std::vector<uint32_t> strip_g(static_cast<size_t>(cx.num_cblk_rows), 0);
+      std::vector<uint32_t> strip_sg(static_cast<size_t>(cx.num_cblk_rows), 0);
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
           j2k_precinct_subband *cpb = cp->access_pband(b);
+          const int32_t band_y0 = (b == 0) ? cx.hl_y0 : cx.lh_y0;
           for (uint32_t cb = 0; cb < cpb->num_codeblock_x * cpb->num_codeblock_y; ++cb) {
             j2k_codeblock *block = cpb->access_codeblock(cb);
             const uint32_t QWx2  = round_up(block->size.x, 8U);
             const uint32_t QHx2  = round_up(block->size.y, 8U);
-            block->sample_buf    = pbuf;
-            block->block_states  = spbuf;
-            block->pre_quantized = true;
-            pbuf  += QWx2 * QHx2;
-            spbuf += (QWx2 + 2) * (QHx2 + 2);
+            const int32_t cblk_y_abs = static_cast<int32_t>(block->pos0.y);
+            const int32_t br_idx     = (cblk_y_abs - band_y0) / cb_h_val;
+            if (br_idx < 0 || br_idx >= cx.num_cblk_rows) continue;
+            strip_g[static_cast<size_t>(br_idx)]  += QWx2 * QHx2;
+            strip_sg[static_cast<size_t>(br_idx)] += (QWx2 + 2) * (QHx2 + 2);
           }
         }
       }
+      uint32_t max_g = 0, max_sg = 0;
+      for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
+        const uint32_t g  = strip_g[static_cast<size_t>(br)];
+        const uint32_t sg = strip_sg[static_cast<size_t>(br)];
+        if (g  > max_g)  max_g  = g;
+        if (sg > max_sg) max_sg = sg;
+      }
+      if (max_g == 0) continue;  // level has no codeblocks (e.g. trivial extent)
 
-      cx.cb_h         = cb_h_val;
-      cx.num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_val - 1) / cb_h_val;
+      // Reserve per-(component, level) scratch sized for the largest strip
+      // only.  No memset(sgbuf, 0, ...) here: stamp_strip_pointers zeros the
+      // sgbuf prefix for whatever strip is being stamped, per-strip.
+      streaming_scratch.reserve(c, static_cast<size_t>(i), max_g, max_sg);
+      any_level_allocated = true;
+
       cx.cblk_row_done = std::make_unique<std::atomic<uint8_t>[]>(static_cast<size_t>(cx.num_cblk_rows));
       for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
         uint8_t init_flags = 0;
@@ -6775,6 +6826,17 @@ uint8_t *j2k_tile::encode_line_based_stream(
       // level i to level i-1 via fdwt_2d_state_push_row).
       cx.use_i32           = use_i32_pipe;
       le_states[i].use_i32 = use_i32_pipe;
+
+      // Wire per-strip scratch ring slot (PR1: N=1 slot per level).  Done
+      // AFTER the sink_cblks tables are built because stamp_strip_pointers
+      // walks sink_cblks[b][br * ncx + xi] for each new strip.  Setting
+      // last_stamped_br = -1 forces the first sink_fn call to trigger a
+      // stamp before sink_quantize_row reads block->sample_buf.
+      auto &slot         = streaming_scratch.slot(c, static_cast<size_t>(i));
+      cx.strip_gbuf      = slot.gbuf;
+      cx.strip_sgbuf     = slot.sgbuf;
+      cx.last_stamped_br = -1;
+
       for (uint8_t lv = 1; lv <= NL; ++lv) {
         j2k_resolution *cr_lv = tcomp[c].access_resolution(lv);
         for (uint8_t b = 0; b < cr_lv->num_bands; ++b) {
@@ -6787,6 +6849,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       }
     }
 
+    if (!any_level_allocated) continue;
     comp_overlap[c] = true;
     comp_use_i32[c] = use_i32_pipe;
   }
