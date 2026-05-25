@@ -736,6 +736,13 @@ class j2k_tile : public j2k_tile_base {
     std::vector<std::unique_ptr<cblk_data_pool>> pools;
     uint32_t gen = 0;
     std::atomic<int> slot_cnt{0};
+    // Per-encode tile-wide in-flight cblk counter; set by encode_line_based_stream
+    // at the start of an encode and consulted by its end-of-encode barrier wait.
+    // Stored here so the per-cblk pool->push lambda in enc_overlap_dispatch
+    // can find it via epc->tile_remaining instead of capturing it directly —
+    // every byte counts because InlineTask only holds 32 bytes of captures
+    // and we also need to capture the per-strip slot_remaining pointer.
+    std::atomic<int> *tile_remaining = nullptr;
     // Grow-only scratch buffers for codeblock sample/state data during HT block encoding.
     // Allocated once per tile (sized to the largest resolution's codeblock count) and
     // reused across all resolution levels and precincts — eliminating per-resolution
