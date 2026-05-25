@@ -983,6 +983,54 @@ static StreamingPerCompScratch &get_thread_streaming_scratch() {
   return s;
 }
 
+// Per-thread grow-only row scratch for j2k_tile::encode_line_based_stream's
+// src_fn input (int_rows, full image-width) and the float RCT output buffer
+// (float_rows, tile-width). Previously aligned_mem_alloc'd per encode at the
+// top of the function and free'd at the bottom; for ED4K 4K that's three
+// pairs of ~16-65 KB allocations per encode, each backed by a fresh mmap that
+// the kernel zero-fills on first write inside src_fn / the DC-offset loop.
+// Hoisting them mirrors the StreamingPerCompScratch fix in PR #385 — same
+// allocate-then-swap + transactional grow + per-component vector-of-slots.
+namespace {
+struct EncoderRowScratch {
+  struct Slot {
+    int32_t *int_row   = nullptr;  // full image width, aligned 32
+    int32_t  int_cap   = 0;        // in int32_t elements
+    sprec_t *float_row = nullptr;  // tile width, aligned 32
+    int32_t  float_cap = 0;        // in sprec_t (4-byte) elements
+  };
+  std::vector<Slot> slots;
+  ~EncoderRowScratch() {
+    for (auto &s : slots) {
+      aligned_mem_free(s.int_row);
+      aligned_mem_free(s.float_row);
+    }
+  }
+  void reserve(size_t comp_idx, int32_t need_int, int32_t need_float) {
+    if (slots.size() <= comp_idx) slots.resize(comp_idx + 1);
+    Slot &s = slots[comp_idx];
+    if (need_int > s.int_cap) {
+      auto *p = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * static_cast<size_t>(need_int), 32));
+      if (p == nullptr) throw std::bad_alloc{};
+      aligned_mem_free(s.int_row);
+      s.int_row = p;
+      s.int_cap = need_int;
+    }
+    if (need_float > s.float_cap) {
+      auto *p = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * static_cast<size_t>(need_float), 32));
+      if (p == nullptr) throw std::bad_alloc{};
+      aligned_mem_free(s.float_row);
+      s.float_row = p;
+      s.float_cap = need_float;
+    }
+  }
+};
+}  // namespace
+static EncoderRowScratch &get_thread_enc_row_scratch() {
+  static thread_local EncoderRowScratch s;
+  return s;
+}
+
 
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
 OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev_avx512, cvt_rgb_to_ycbcr_rev_avx512};
@@ -3210,6 +3258,40 @@ void j2k_tile_component::push_line_enc(const sprec_t *in) {
   }
 
   fdwt_2d_state_push_row(finest, in);
+}
+
+void j2k_tile_component::push_line_enc_i32(const int32_t *in) {
+  if (!line_enc) return;
+  auto *le = line_enc.get();
+  fdwt_2d_state *finest = &le->states.get()[le->NL_active - 1];
+
+  if (finest->use_i32) {
+    // FDWT ring expects int32 bytes; push_row's memcpy is byte-agnostic so we
+    // hand the int32 source through reinterpret_cast (avoids the float↔int
+    // round-trip the float entry would otherwise do).
+    fdwt_2d_state_push_row(finest, reinterpret_cast<const sprec_t *>(in));
+    return;
+  }
+
+  // Float pipeline still active for this component (irreversible / non-overlap):
+  // promote int32 row to float once into push_scratch, then push.
+  const int32_t w = finest->u1 - finest->u0;
+  if (le->push_scratch_cap < w) {
+    aligned_mem_free(le->push_scratch_i32);
+    le->push_scratch_i32 = static_cast<int32_t *>(
+        aligned_mem_alloc(sizeof(int32_t) * static_cast<size_t>(round_up(static_cast<uint32_t>(w), 32U)), 32));
+    le->push_scratch_cap = w;
+  }
+  sprec_t *dst = reinterpret_cast<sprec_t *>(le->push_scratch_i32);  // same buffer, used as float scratch
+  int32_t i = 0;
+#if defined(__AVX2__)
+  for (; i + 7 < w; i += 8) {
+    __m256 v = _mm256_cvtepi32_ps(_mm256_loadu_si256((const __m256i *)(in + i)));
+    _mm256_storeu_ps(dst + i, v);
+  }
+#endif
+  for (; i < w; ++i) dst[i] = static_cast<sprec_t>(in[i]);
+  fdwt_2d_state_push_row(finest, dst);
 }
 
 void j2k_tile_component::finalize_line_encode() {
@@ -6426,20 +6508,22 @@ uint8_t *j2k_tile::encode_line_based_stream(
   // int_rows[c] must hold the full image row so that src_fn (which provides
   // the full-width image row) can write into it without overflow.
   // float_rows[c] only needs tile width.
+  // Backed by a thread_local grow-only scratch so pages stay resident across
+  // encodes — same pattern as StreamingPerCompScratch (PR #385).
+  auto &row_scratch = get_thread_enc_row_scratch();
   std::vector<int32_t *> int_rows(num_components, nullptr);
   std::vector<sprec_t *> float_rows(num_components, nullptr);
   for (uint16_t c = 0; c < num_components; ++c) {
-    const uint32_t alloc_w = round_up(img_comp_widths[c], 32U);
-    int_rows[c]            = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * alloc_w, 32));
-    float_rows[c]          = static_cast<sprec_t *>(aligned_mem_alloc(sizeof(sprec_t) * stride, 32));
+    const int32_t alloc_w = static_cast<int32_t>(round_up(img_comp_widths[c], 32U));
+    const int32_t flt_w   = static_cast<int32_t>(stride);
+    row_scratch.reserve(c, alloc_w, flt_w);
+    int_rows[c]   = row_scratch.slots[c].int_row;
+    float_rows[c] = row_scratch.slots[c].float_row;
   }
 
-  auto cleanup_rows = [&]() {
-    for (uint16_t c = 0; c < num_components; ++c) {
-      aligned_mem_free(int_rows[c]);
-      aligned_mem_free(float_rows[c]);
-    }
-  };
+  // No-op kept for backward parity with the early-return paths below; rows are
+  // owned by the thread_local scratch and freed only at thread teardown.
+  auto cleanup_rows = []() {};
 
   // Packet-header builder (identical to encode_line_based)
   auto build_packet_headers = [&]() {
@@ -6558,6 +6642,11 @@ uint8_t *j2k_tile::encode_line_based_stream(
   std::atomic<int> enc_remaining{0};
 #endif
   std::vector<bool>      comp_overlap(num_components, false);
+  // Per-component "is the int32 FDWT pipeline active?".  Set true alongside
+  // comp_overlap when transformation == 1.  Read after the overlap-setup pass
+  // to choose between int RCT + push_line_enc_i32 (fast) and float RCT +
+  // push_line_enc (legacy).
+  std::vector<bool>      comp_use_i32(num_components, false);
 
   for (uint16_t c = 0; c < num_components; ++c) {
     const uint8_t NL = tcomp[c].get_dwt_levels();
@@ -6699,7 +6788,18 @@ uint8_t *j2k_tile::encode_line_based_stream(
     }
 
     comp_overlap[c] = true;
+    comp_use_i32[c] = use_i32_pipe;
   }
+
+  // MCT (RCT) is applied as a single 3-component transform on the R/G/B
+  // sources before per-component FDWT.  We can skip the float RCT entirely
+  // (saving the int→float pass) only when all three MCT components are on
+  // the int32 pipeline.  If any of the three falls back to float (e.g. mixed
+  // overlap eligibility), we keep the float RCT for the whole MCT bundle —
+  // splitting it would require a second per-component transform pass.
+  const bool mct_all_use_i32 =
+      MCT && num_components >= 3
+      && comp_use_i32[0] && comp_use_i32[1] && comp_use_i32[2];
 
   for (uint32_t y = 0; y < height; ++y) {
     src_fn(top0.y + y, int_rows.data(), num_components);
@@ -6715,11 +6815,22 @@ uint8_t *j2k_tile::encode_line_based_stream(
         else
           for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
       }
-      // Convert RGB→YCbCr float into scratch float rows
-      cvt_rgb_to_ycbcr_float[ct_idx](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
-                                             float_rows[0], float_rows[1], float_rows[2], width, 1, stride);
-      for (uint32_t c = 0; c < 3; ++c)
-        tcomp[c].push_line_enc(float_rows[c]);
+      if (mct_all_use_i32) {
+        // Reversible MCT (RCT) is exact integer; do it in place on int_rows,
+        // then hand the int32 rows directly to the FDWT pipeline.  Skips the
+        // float RCT (int→ycbcr→float scale) and the cvttps inside the float
+        // push_line_enc entry — two passes worth of work per sample.
+        cvt_rgb_to_ycbcr[1](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
+                            width, 1);
+        for (uint32_t c = 0; c < 3; ++c)
+          tcomp[c].push_line_enc_i32(int_rows[c] + x_off0);
+      } else {
+        // Convert RGB→YCbCr float into scratch float rows
+        cvt_rgb_to_ycbcr_float[ct_idx](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
+                                               float_rows[0], float_rows[1], float_rows[2], width, 1, stride);
+        for (uint32_t c = 0; c < 3; ++c)
+          tcomp[c].push_line_enc(float_rows[c]);
+      }
       // Extra components without MCT
       for (uint16_t c = 3; c < num_components; ++c) {
         const int32_t dco    = tcomp[c].lb_dc_offset;
@@ -6727,12 +6838,23 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
         const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
         const int32_t *sp    = int_rows[c] + x_off;
-        if (shu >= 0)
-          for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
-        else
-          for (uint32_t x = 0; x < wc; ++x)
-            float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
-        tcomp[c].push_line_enc(float_rows[c]);
+        if (comp_use_i32[c]) {
+          // Write DC-offset int row into float_rows reinterpreted as int32 scratch,
+          // then push int32 directly — avoids the int→float pass per sample.
+          int32_t *idst = reinterpret_cast<int32_t *>(float_rows[c]);
+          if (shu >= 0)
+            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] << shu) - dco;
+          else
+            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] >> (-shu)) - dco;
+          tcomp[c].push_line_enc_i32(idst);
+        } else {
+          if (shu >= 0)
+            for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+          else
+            for (uint32_t x = 0; x < wc; ++x)
+              float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+          tcomp[c].push_line_enc(float_rows[c]);
+        }
       }
     } else {
       for (uint16_t c = 0; c < num_components; ++c) {
@@ -6744,12 +6866,21 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
         const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
         const int32_t *sp    = int_rows[c] + x_off;
-        if (shu >= 0)
-          for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
-        else
-          for (uint32_t x = 0; x < wc; ++x)
-            float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
-        tcomp[c].push_line_enc(float_rows[c]);
+        if (comp_use_i32[c]) {
+          int32_t *idst = reinterpret_cast<int32_t *>(float_rows[c]);
+          if (shu >= 0)
+            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] << shu) - dco;
+          else
+            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] >> (-shu)) - dco;
+          tcomp[c].push_line_enc_i32(idst);
+        } else {
+          if (shu >= 0)
+            for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+          else
+            for (uint32_t x = 0; x < wc; ++x)
+              float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+          tcomp[c].push_line_enc(float_rows[c]);
+        }
       }
     }
   }
