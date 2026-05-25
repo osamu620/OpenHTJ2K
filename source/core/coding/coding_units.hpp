@@ -624,11 +624,18 @@ class j2k_tile_component : public j2k_tile_base {
   void set_line_decode_row_range(uint32_t row_lo, uint32_t row_hi);
 
   // ── Line-based encode API ─────────────────────────────────────────────────
-  // init_line_encode():     allocates FDWT state chain; call after enc_init().
-  // push_line_enc(in):      feeds one float input row into the FDWT chain.
-  // finalize_line_encode(): flushes states, fills subband buffers, frees state.
+  // init_line_encode():        allocates FDWT state chain; call after enc_init().
+  // push_line_enc(in):         feeds one float input row into the FDWT chain.
+  // push_line_enc_i32(in):     feeds one int32 input row.  Required path when
+  //                            the finest state's use_i32 is set (overlap +
+  //                            reversible) — bypasses the cvttps in the float
+  //                            entry.  Safe to call regardless: when use_i32
+  //                            is false, this overload promotes the int32 row
+  //                            back to float before pushing.
+  // finalize_line_encode():    flushes states, fills subband buffers, frees state.
   void init_line_encode();
   void push_line_enc(const sprec_t *in);
+  void push_line_enc_i32(const int32_t *in);
   void finalize_line_encode();
   struct j2k_tcomp_line_enc *get_line_enc() { return line_enc.get(); }
 
