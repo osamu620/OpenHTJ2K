@@ -10,27 +10,14 @@
 ;
 ; ABI: SysV AMD64 on Linux/macOS, Microsoft x64 on Windows.  Both calling
 ; conventions return ints in RAX/EAX, so the probe symbol below is portable
-; as-is.  Symbol-export syntax differs between object formats:
-;   * ELF: `global sym:function` (the :function suffix is ELF-only)
-;   * Win64 / Mach-O: `global sym`  (no decorations)
-; Mach-O additionally prepends an underscore to C identifiers — handle that
-; via the conditional rename below so the same C declaration links on all
-; three platforms.
+; as-is.
 
 default rel
 
-%ifidn __OUTPUT_FORMAT__, elf64
-  %define EXPORT(sym) global sym %+ :function
-%elifidn __OUTPUT_FORMAT__, macho64
-  %define EXPORT(sym) global _ %+ sym
-%else
+%ifdef WIN64
   %define EXPORT(sym) global sym
-%endif
-
-%ifidn __OUTPUT_FORMAT__, macho64
-  %define DEFINE_FUNC(sym) _ %+ sym
 %else
-  %define DEFINE_FUNC(sym) sym
+  %define EXPORT(sym) global sym:function
 %endif
 
 section .text
@@ -40,13 +27,13 @@ section .text
 ; Returns the PR scaffolding marker 0xA1.  Never called on the hot path —
 ; reserved for build-system smoke tests and PR A2's bring-up.
 EXPORT(openhtj2k_nasm_probe)
-DEFINE_FUNC(openhtj2k_nasm_probe):
+openhtj2k_nasm_probe:
         mov     eax, 0xA1
         ret
 
 ; Non-executable stack note (Linux): silences the GNU linker's
-; "missing .note.GNU-stack section implies executable stack" warning.
-; The section is only emitted for elf64 output; Win64/Mach-O ignore it.
+; "missing .note.GNU-stack section implies executable stack" warning
+; without affecting the Windows/macOS objects, which ignore the section.
 %ifidn __OUTPUT_FORMAT__, elf64
 section .note.GNU-stack noalloc noexec nowrite progbits
 %endif
