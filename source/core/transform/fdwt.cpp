@@ -34,6 +34,13 @@
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
 #endif
+// int32 lifting dispatch — parallel to the float ones below, selected at
+// runtime via `fdwt_2d_state::use_i32`.  Function-pointer types match the
+// _i32_ primitives in fdwt_{avx512,avx2,neon,wasm}.cpp and the scalar
+// `fdwt_1d_filtr_rev53_i32` in this file.
+typedef void (*fdwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
+typedef void (*adv_fdwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
+
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_wasm,
                                                            fdwt_1d_filtr_rev53_fixed_wasm};
@@ -46,6 +53,9 @@ static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fix
 typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_wasm;
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_wasm;
+static fdwt_1d_filtr_i32_fn_t      fdwt_1d_filtr_rev53_i32_fn = fdwt_1d_filtr_rev53_i32_wasm;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_hp_step_i32_fn = fdwt_rev_ver_hp_step_i32_wasm;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_lp_step_i32_fn = fdwt_rev_ver_lp_step_i32_wasm;
 #elif defined(OPENHTJ2K_ENABLE_AVX512)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx512,
                                                           fdwt_1d_filtr_rev53_fixed_avx512};
@@ -56,6 +66,9 @@ static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fix
 typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_avx512;
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_avx512;
+static fdwt_1d_filtr_i32_fn_t      fdwt_1d_filtr_rev53_i32_fn = fdwt_1d_filtr_rev53_i32_avx512;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_hp_step_i32_fn = fdwt_rev_ver_hp_step_i32_avx512;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_lp_step_i32_fn = fdwt_rev_ver_lp_step_i32_avx512;
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_neon,
                                                           fdwt_1d_filtr_rev53_fixed_neon};
@@ -66,6 +79,9 @@ static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fix
 typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_neon;
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_neon;
+static fdwt_1d_filtr_i32_fn_t      fdwt_1d_filtr_rev53_i32_fn = fdwt_1d_filtr_rev53_i32_neon;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_hp_step_i32_fn = fdwt_rev_ver_hp_step_i32_neon;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_lp_step_i32_fn = fdwt_rev_ver_lp_step_i32_neon;
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_avx2,
                                                           fdwt_1d_filtr_rev53_fixed_avx2};
@@ -76,6 +92,9 @@ static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = idwt_irrev_ver_step_fix
 typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = fdwt_rev_ver_hp_step_avx2;
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_avx2;
+static fdwt_1d_filtr_i32_fn_t      fdwt_1d_filtr_rev53_i32_fn = fdwt_1d_filtr_rev53_i32_avx2;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_hp_step_i32_fn = fdwt_rev_ver_hp_step_i32_avx2;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_lp_step_i32_fn = fdwt_rev_ver_lp_step_i32_avx2;
 #else
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed,
                                                           fdwt_1d_filtr_rev53_fixed};
@@ -91,9 +110,18 @@ static void adv_fdwt_rev_hp_step_scalar(int32_t n, const float *prev, const floa
 static void adv_fdwt_rev_lp_step_scalar(int32_t n, const float *prev, const float *next, float *tgt) {
   for (int32_t i = 0; i < n; ++i) tgt[i] += floorf((prev[i] + next[i] + 2.0f) * 0.25f);
 }
+static void adv_fdwt_rev_hp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] -= (prev[i] + next[i]) >> 1;
+}
+static void adv_fdwt_rev_lp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] += (prev[i] + next[i] + 2) >> 2;
+}
 typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn = adv_fdwt_rev_hp_step_scalar;
 static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = adv_fdwt_rev_lp_step_scalar;
+static fdwt_1d_filtr_i32_fn_t      fdwt_1d_filtr_rev53_i32_fn = fdwt_1d_filtr_rev53_i32;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_hp_step_i32_fn = adv_fdwt_rev_hp_step_i32_scalar;
+static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_lp_step_i32_fn = adv_fdwt_rev_lp_step_i32_scalar;
 #endif
 // irreversible FDWT
 void fdwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -819,10 +847,23 @@ static void adv_step_f(fdwt_2d_state *s, int32_t r) {
     const float coeff = lp ? -0.25f : 0.5f;
     adv_fdwt_irrev_step_fn(w, prev, next, tgt, coeff);
   } else {  // rev 5/3
-    if (!lp) {  // HP predict: HP -= floor((LP[r-1] + LP[r+1]) * 0.5f)
-      adv_fdwt_rev_hp_step_fn(w, prev, next, tgt);
-    } else {  // LP update: LP += floor((HP[r-1] + HP[r+1] + 2) * 0.25f)
-      adv_fdwt_rev_lp_step_fn(w, prev, next, tgt);
+    if (s->use_i32) {
+      // int32 storage: reinterpret_cast the sprec_t* (float*) pointers; the
+      // buffers were allocated as int32_t-sized and pushed as int32 values.
+      const int32_t *prev_i = reinterpret_cast<const int32_t *>(prev);
+      const int32_t *next_i = reinterpret_cast<const int32_t *>(next);
+      int32_t       *tgt_i  = reinterpret_cast<int32_t *>(tgt);
+      if (!lp) {  // HP predict: HP -= (LP[r-1] + LP[r+1]) >> 1
+        adv_fdwt_rev_hp_step_i32_fn(w, prev_i, next_i, tgt_i);
+      } else {    // LP update: LP += (HP[r-1] + HP[r+1] + 2) >> 2
+        adv_fdwt_rev_lp_step_i32_fn(w, prev_i, next_i, tgt_i);
+      }
+    } else {
+      if (!lp) {  // HP predict: HP -= floor((LP[r-1] + LP[r+1]) * 0.5f)
+        adv_fdwt_rev_hp_step_fn(w, prev, next, tgt);
+      } else {  // LP update: LP += floor((HP[r-1] + HP[r+1] + 2) * 0.25f)
+        adv_fdwt_rev_lp_step_fn(w, prev, next, tgt);
+      }
     }
   }
   set_dl_f(s, r, cur + 1);
@@ -908,9 +949,21 @@ static void emit_ready_f(fdwt_2d_state *s) {
     if (s->u1 == s->u0 + 1) {
       // Single-column: skip PSE/filter (PSEo has UB for length-1 signals).
       // Match fdwt_hor_sr_fixed: LP even u0 → no-op; HP odd u0 → *2 for 5/3.
-      sprec_t *out = s->horiz_tmp + s->horiz_left;
-      out[0] = ring_row[0];
-      if (s->transformation == 1 && (s->u0 % 2 != 0)) out[0] = floorf(out[0] * 2.0f);
+      if (s->use_i32) {
+        int32_t *out = reinterpret_cast<int32_t *>(s->horiz_tmp) + s->horiz_left;
+        out[0] = reinterpret_cast<const int32_t *>(ring_row)[0];
+        if (s->u0 % 2 != 0) out[0] <<= 1;  // floor(x*2.0) for an integer == x<<1
+      } else {
+        sprec_t *out = s->horiz_tmp + s->horiz_left;
+        out[0] = ring_row[0];
+        if (s->transformation == 1 && (s->u0 % 2 != 0)) out[0] = floorf(out[0] * 2.0f);
+      }
+    } else if (s->use_i32) {
+      // int32 lossless path
+      int32_t       *htmp_i = reinterpret_cast<int32_t *>(s->horiz_tmp);
+      int32_t       *row_i  = const_cast<int32_t *>(reinterpret_cast<const int32_t *>(ring_row));
+      dwt_1d_extr_fixed<int32_t>(htmp_i, row_i, s->horiz_left, s->horiz_right, s->u0, s->u1);
+      fdwt_1d_filtr_rev53_i32_fn(htmp_i, s->horiz_left, s->u0, s->u1);
     } else {
       dwt_1d_extr_fixed(s->horiz_tmp, const_cast<sprec_t *>(ring_row),
                         s->horiz_left, s->horiz_right, s->u0, s->u1);
@@ -937,12 +990,14 @@ static void emit_ready_f(fdwt_2d_state *s) {
 void fdwt_2d_state_init(fdwt_2d_state *s,
                         const int32_t u0, const int32_t u1,
                         const int32_t v0, const int32_t v1,
-                        const uint8_t transformation,
+                        const uint8_t transformation, const bool use_i32,
                         fdwt_row_sink_fn sink_fn, void *sink_ctx) {
   s->u0            = u0;  s->u1 = u1;
   s->v0            = v0;  s->v1 = v1;
   s->stride        = round_up(u1 - u0, SIMD_PADDING);
   s->transformation = transformation;
+  // int32 buffer interpretation only valid for rev 5/3 (transformation == 1).
+  s->use_i32       = use_i32 && (transformation == 1);
   const int32_t cls = (transformation == 0) ? 0 : 1;
   s->top_pse       = kPseFdwtTop[v0 % 2][cls];
   s->bottom_pse    = kPseFdwtBot[v1 % 2][cls];
@@ -1013,12 +1068,30 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
     if (s->u1 == s->u0 + 1) {
       // Single-column: PSEo has UB for length-1 — bypass filter entirely.
       // Match fdwt_hor_sr_fixed: even u0 (LP) → no-op; odd u0 (HP) → *2 for 5/3.
-      out[0] = src[0];
-      if (s->transformation == 1) {
-        if (s->v0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // vertical HP: match fdwt_rev_ver_sr_fixed
-        if (s->u0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);  // horizontal HP: match fdwt_hor_sr_fixed
+      if (s->use_i32) {
+        int32_t *out_i = reinterpret_cast<int32_t *>(out);
+        const int32_t *src_i = reinterpret_cast<const int32_t *>(src);
+        out_i[0] = src_i[0];
+        if (s->v0 % 2 != 0) out_i[0] <<= 1;  // vertical HP
+        if (s->u0 % 2 != 0) out_i[0] <<= 1;  // horizontal HP
+      } else {
+        out[0] = src[0];
+        if (s->transformation == 1) {
+          if (s->v0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);
+          if (s->u0 % 2 != 0) out[0] = floorf(out[0] * 2.0f);
+        }
       }
-      // ATK (transformation>=2) irrev53: no scaling needed for single-sample case.
+    } else if (s->use_i32) {
+      // int32 path: HP scaling + extract + i32 filter
+      int32_t *ms = reinterpret_cast<int32_t *>(
+          s->ring_buf + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride);
+      if (is_hp) {
+        const int32_t w = s->u1 - s->u0;
+        for (int32_t c = 0; c < w; ++c) ms[c] <<= 1;  // x*2 == x<<1 for integers
+      }
+      int32_t *htmp_i = reinterpret_cast<int32_t *>(s->horiz_tmp);
+      dwt_1d_extr_fixed<int32_t>(htmp_i, ms, s->horiz_left, s->horiz_right, s->u0, s->u1);
+      fdwt_1d_filtr_rev53_i32_fn(htmp_i, s->horiz_left, s->u0, s->u1);
     } else {
       // Match fdwt_rev_ver_sr_fixed: scale HP row by 2 BEFORE horizontal DWT.
       // (floorf makes 5/3 non-linear, so order matters.)
