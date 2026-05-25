@@ -697,7 +697,13 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   auto &tmp       = tbuf.tmp;
   auto &j2c_dst   = tbuf.j2c_dst;
   auto &jph_dst   = tbuf.jph_dst;
-  {
+  // TLM is an optional Part 1 marker used for random-access seek to specific
+  // tiles.  For single-tile codestreams it carries no information not already
+  // in the SOT, so skip the measurement pass and TLM emission entirely.  This
+  // avoids one extra write_packets memcpy of the entire tile (~20 MB on 4K
+  // lossless) plus the corresponding fresh-page faults on the `tmp` buffer in
+  // single-shot mode.
+  if (num_tiles > 1) {
     std::vector<uint16_t> tile_indices(num_tiles);
     std::vector<uint32_t> tile_lengths(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -884,8 +890,10 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   auto &tmp       = tbuf.tmp;
   auto &j2c_dst   = tbuf.j2c_dst;
   auto &jph_dst   = tbuf.jph_dst;
-  // Measure tile-part lengths to generate TLM marker.
-  {
+  // Measure tile-part lengths to generate TLM marker.  TLM is optional and
+  // useful only for multi-tile random access — skip for single-tile to save
+  // one extra ~20 MB write_packets pass per encode (matches invoke_internal).
+  if (num_tiles_lbs > 1) {
     std::vector<uint16_t> tile_indices(num_tiles_lbs);
     std::vector<uint32_t> tile_lengths(num_tiles_lbs);
     for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
