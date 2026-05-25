@@ -480,6 +480,13 @@ struct fdwt_level_sink_ctx {
   int32_t sink_num_cblk_y[3] = {};
   float   fscale       = 1.0f;
   bool    sink_quantize = false;
+  // When true, lp_tmp/hp_tmp and interleaved_row are read as int32_t bytes
+  // (reinterpret_cast on the existing sprec_t* buffers — both types are 4-byte
+  // and ring/PSE allocations are sized identically).  Mirrors the state's
+  // use_i32 and is set alongside it (encode_line_based_stream overlap setup
+  // only — never in the non-overlap fallback because t1_encode reads subband
+  // i_samples as float).
+  bool    use_i32      = false;
 
   // --- Overlap HT block encoding (populated by encode_line_based_stream) ---
   // cb_h == 0 means overlap is disabled for this level.
@@ -600,13 +607,188 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row,
   }
 }
 
+// int32 variant of sink_quantize_row: same scatter+sign-pack logic, but src is
+// already int32 (no cvttps/mul_ps).  Only reachable for reversible 5/3
+// codeblocks (transformation == 1) — the lossy stepsize branch is dropped.
+static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row,
+                                         int32_t band_idx, fdwt_level_sink_ctx *c) {
+  const int32_t ncx = c->sink_num_cblk_x[band_idx];
+  const int32_t cb_h = c->cb_h;
+  const int32_t cy = sub_row / cb_h;
+  const int32_t row_in_cblk = sub_row - cy * cb_h;
+  const auto &cblks = c->sink_cblks[band_idx];
+  const auto &xstarts = c->sink_x_start[band_idx];
+
+  for (int32_t xi = 0; xi < ncx; ++xi) {
+    j2k_codeblock *block = cblks[static_cast<size_t>(cy * ncx + xi)];
+    if (row_in_cblk >= static_cast<int32_t>(block->size.y)) continue;
+    int32_t *dp  = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
+    uint8_t *stp = block->block_states + (row_in_cblk + 1) * static_cast<int32_t>(block->blkstate_stride) + 1;
+    const int32_t *s = src + xstarts[static_cast<size_t>(xi)];
+    const int32_t w = static_cast<int32_t>(block->size.x);
+    {
+#if defined(__AVX2__)
+      const __m256i vone = _mm256_set1_epi32(1);
+      __m256i vor = _mm256_setzero_si256();
+      int32_t col = 0;
+      for (; col + 15 < w; col += 16) {
+        __m256i v0 = _mm256_loadu_si256((const __m256i *)(s + col));
+        __m256i v1 = _mm256_loadu_si256((const __m256i *)(s + col + 8));
+        __m256i s0 = _mm256_srli_epi32(v0, 31);
+        __m256i s1 = _mm256_srli_epi32(v1, 31);
+        v0 = _mm256_abs_epi32(v0);
+        v1 = _mm256_abs_epi32(v1);
+        __m256i mask0 = _mm256_cmpgt_epi32(v0, _mm256_setzero_si256());
+        __m256i mask1 = _mm256_cmpgt_epi32(v1, _mm256_setzero_si256());
+        vor = _mm256_or_si256(vor, _mm256_or_si256(mask0, mask1));
+        __m256i vone0 = _mm256_and_si256(mask0, vone);
+        __m256i vone1 = _mm256_and_si256(mask1, vone);
+        v0 = _mm256_add_epi32(_mm256_slli_epi32(_mm256_sub_epi32(v0, vone0), 1),
+                               _mm256_and_si256(s0, mask0));
+        v1 = _mm256_add_epi32(_mm256_slli_epi32(_mm256_sub_epi32(v1, vone1), 1),
+                               _mm256_and_si256(s1, mask1));
+        _mm256_storeu_si256((__m256i *)(dp + col), v0);
+        _mm256_storeu_si256((__m256i *)(dp + col + 8), v1);
+        v0 = _mm256_packs_epi32(vone0, vone1);
+        v0 = _mm256_permute4x64_epi64(v0, 0xD8);
+        v0 = _mm256_packs_epi16(v0, v0);
+        v0 = _mm256_permute4x64_epi64(v0, 0xD8);
+        __m128i vsig = _mm256_extracti128_si256(v0, 0);
+        __m128i old_states = _mm_loadu_si128((__m128i *)(stp + col));
+        _mm_storeu_si128((__m128i *)(stp + col), _mm_or_si128(old_states, vsig));
+      }
+      if (!_mm256_testz_si256(vor, vor)) block->pre_or_val |= 1;
+      for (; col < w; ++col) {
+#else
+      int32_t col = 0;
+      for (; col < w; ++col) {
+#endif
+        int32_t temp = s[col];
+        uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+        temp = (temp < 0) ? -temp : temp;
+        if (temp) {
+          block->pre_or_val |= 1;
+          stp[col] |= 1;
+          temp--;
+          temp <<= 1;
+          temp += static_cast<uint8_t>(sign >> 31);
+        }
+        dp[col] = temp;
+      }
+    }
+    if (static_cast<int32_t>(block->blksampl_stride) > w)
+      memset(dp + w, 0, static_cast<size_t>(block->blksampl_stride - static_cast<size_t>(w)) * sizeof(int32_t));
+    if ((static_cast<uint32_t>(block->size.y) & 1u)
+        && row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
+      memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
+             static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+    }
+  }
+}
+
 // Sink callback invoked by fdwt_2d_state after each row has been through H-DWT.
 // The interleaved_row has u1-u0 samples: LP at u0%2 offsets, HP at (1-u0%2) offsets.
+//
+// When c->use_i32 is true, interleaved_row's bytes are int32_t (storage type
+// switched at the state level for reversible 5/3); we reinterpret_cast and
+// deinterleave as int32, write int32 into lp_tmp/hp_tmp, and call the int32
+// sink/memcpy/push paths.
 static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row,
                                const sprec_t *interleaved_row) {
   auto *c = static_cast<fdwt_level_sink_ctx *>(ctx);
 
   const int32_t u_off = c->u0 & 1;
+
+  if (c->use_i32) {
+    const int32_t *intr_i  = reinterpret_cast<const int32_t *>(interleaved_row);
+    int32_t       *lp_i    = reinterpret_cast<int32_t *>(c->lp_tmp);
+    int32_t       *hp_i    = reinterpret_cast<int32_t *>(c->hp_tmp);
+    const int32_t *lp_src  = intr_i + u_off;
+    const int32_t *hp_src  = intr_i + (1 - u_off);
+#if defined(__AVX2__)
+    {
+      int32_t i = 0;
+      for (; i + 7 < c->lp_width; i += 8) {
+        __m256i a = _mm256_loadu_si256((const __m256i *)(lp_src + i * 2));
+        __m256i b = _mm256_loadu_si256((const __m256i *)(lp_src + i * 2 + 8));
+        __m256i lo = _mm256_castps_si256(_mm256_shuffle_ps(_mm256_castsi256_ps(a),
+                                                            _mm256_castsi256_ps(b), 0x88));
+        lo = _mm256_permutevar8x32_epi32(lo, _mm256_setr_epi32(0,1,4,5,2,3,6,7));
+        _mm256_storeu_si256((__m256i *)(lp_i + i), lo);
+      }
+      for (; i < c->lp_width; ++i) lp_i[i] = lp_src[2 * i];
+      i = 0;
+      for (; i + 7 < c->hp_width; i += 8) {
+        __m256i a = _mm256_loadu_si256((const __m256i *)(hp_src + i * 2));
+        __m256i b = _mm256_loadu_si256((const __m256i *)(hp_src + i * 2 + 8));
+        __m256i lo = _mm256_castps_si256(_mm256_shuffle_ps(_mm256_castsi256_ps(a),
+                                                            _mm256_castsi256_ps(b), 0x88));
+        lo = _mm256_permutevar8x32_epi32(lo, _mm256_setr_epi32(0,1,4,5,2,3,6,7));
+        _mm256_storeu_si256((__m256i *)(hp_i + i), lo);
+      }
+      for (; i < c->hp_width; ++i) hp_i[i] = hp_src[2 * i];
+    }
+#else
+    for (int32_t i = 0; i < c->lp_width; ++i) lp_i[i] = lp_src[2 * i];
+    for (int32_t i = 0; i < c->hp_width; ++i) hp_i[i] = hp_src[2 * i];
+#endif
+
+    if (!is_hp) {
+      const int32_t hl_sub = (abs_row >> 1) - c->hl_y0;
+      if (c->sink_quantize)
+        sink_quantize_row_i32(hp_i, hl_sub, 0, c);
+      else
+        memcpy(c->hl_samples + static_cast<ptrdiff_t>(hl_sub) * static_cast<ptrdiff_t>(c->hl_stride), hp_i,
+               static_cast<size_t>(c->hp_width) * sizeof(int32_t));
+      if (c->has_child) {
+        fdwt_2d_state_push_row(c->child_state, c->lp_tmp);  // lp_tmp bytes are int32; child use_i32 reads accordingly
+      } else {
+        // Coarsest level: LL0 is sequentially t1_encoded after finalize and
+        // expects float in i_samples.  Convert int32 → float on this small row
+        // (subsampled by 2^NL, runs ≪ once per pushed input row).
+        const int32_t ll_sub = (abs_row >> 1) - c->ll0_y0;
+        sprec_t *ll_dst = c->ll0_samples
+                          + static_cast<ptrdiff_t>(ll_sub) * static_cast<ptrdiff_t>(c->ll0_stride);
+        int32_t k = 0;
+#if defined(__AVX2__)
+        for (; k + 7 < c->lp_width; k += 8) {
+          __m256 v = _mm256_cvtepi32_ps(_mm256_loadu_si256((const __m256i *)(lp_i + k)));
+          _mm256_storeu_ps(ll_dst + k, v);
+        }
+#endif
+        for (; k < c->lp_width; ++k) ll_dst[k] = static_cast<sprec_t>(lp_i[k]);
+      }
+      if (c->cb_h > 0) {
+        const int32_t br   = hl_sub / c->cb_h;
+        const int32_t last = std::min((br + 1) * c->cb_h, c->hl_h) - 1;
+        if (hl_sub == last) {
+          const uint8_t old = c->cblk_row_done[static_cast<size_t>(br)].fetch_or(1, std::memory_order_acq_rel);
+          if ((old | 1) == 3) enc_overlap_dispatch(c, br);
+        }
+      }
+    } else {
+      const int32_t hp_sub = (abs_row >> 1) - c->lh_y0;
+      if (c->sink_quantize) {
+        sink_quantize_row_i32(lp_i, hp_sub, 1, c);
+        sink_quantize_row_i32(hp_i, hp_sub, 2, c);
+      } else {
+        memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride), lp_i,
+               static_cast<size_t>(c->lp_width) * sizeof(int32_t));
+        memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride), hp_i,
+               static_cast<size_t>(c->hp_width) * sizeof(int32_t));
+      }
+      if (c->cb_h > 0) {
+        const int32_t br   = hp_sub / c->cb_h;
+        const int32_t last = std::min((br + 1) * c->cb_h, c->lh_h) - 1;
+        if (hp_sub == last) {
+          const uint8_t old = c->cblk_row_done[static_cast<size_t>(br)].fetch_or(2, std::memory_order_acq_rel);
+          if ((old | 2) == 3) enc_overlap_dispatch(c, br);
+        }
+      }
+    }
+    return;
+  }
+
 #if defined(__AVX2__)
   {
     const sprec_t *lp_src = interleaved_row + u_off;
@@ -688,6 +870,13 @@ struct j2k_tcomp_line_enc {
   int32_t NL_active;                              // number of FDWT levels (== component NL for encoder)
   std::unique_ptr<fdwt_2d_state[]>       states;  // [NL_active]; states[NL_active-1] = finest
   std::unique_ptr<fdwt_level_sink_ctx[]> ctxs;    // [NL_active]
+
+  // Lazily-allocated int32 scratch for push_line_enc when the finest state's
+  // use_i32 is true: caller passes a float row, we cvtt into this buffer and
+  // hand its int32 bytes (reinterpret_cast to sprec_t*) to fdwt_2d_state_push_row.
+  // Sized for the finest level's row width; freed in finalize_line_encode.
+  int32_t *push_scratch_i32 = nullptr;
+  int32_t  push_scratch_cap = 0;  // capacity in int32_t elements
 };
 
 // Per-component line-decode state (definition; forward-declared in coding_units.hpp as opaque ptr).
@@ -2982,19 +3171,45 @@ void j2k_tile_component::init_line_encode() {
     cx->ll0_stride  = ncr->stride;
     cx->ll0_y0      = static_cast<int32_t>(ncr->get_pos0().y);
 
-    // Reversible (5/3) components are eligible for the int32 DWT pipeline,
-    // but the sink-side wiring (sink_quantize_row_i32 + fdwt_level_sink_fn
-    // int32 deinterleave) lands in a follow-up commit.  Until then, keep
-    // use_i32=false so behaviour matches main exactly.
-    const bool use_i32 = false;
-    fdwt_2d_state_init(&states[i], u0, u1, v0, v1, xform, use_i32,
+    // use_i32 stays false at init.  The overlap setup in
+    // encode_line_based_stream flips it to true (per state + ctx) for
+    // reversible 5/3 components, which is the only place where i_samples-as-
+    // float consumers (t1_encode on subbands) are bypassed via sink_quantize.
+    fdwt_2d_state_init(&states[i], u0, u1, v0, v1, xform, /*use_i32=*/false,
                        fdwt_level_sink_fn, cx);
   }
 }
 
 void j2k_tile_component::push_line_enc(const sprec_t *in) {
   if (!line_enc) return;
-  fdwt_2d_state_push_row(&line_enc->states.get()[line_enc->NL_active - 1], in);
+  auto *le = line_enc.get();
+  fdwt_2d_state *finest = &le->states.get()[le->NL_active - 1];
+
+  if (finest->use_i32) {
+    // Convert float row → int32 once; downstream FDWT (vertical lifting + horiz
+    // filter + sink deinterleave + sink_quantize) all stays in int32, skipping
+    // the per-sample cvttps/mul_ps that the float path requires.
+    const int32_t w = finest->u1 - finest->u0;
+    if (le->push_scratch_cap < w) {
+      aligned_mem_free(le->push_scratch_i32);
+      le->push_scratch_i32 = static_cast<int32_t *>(
+          aligned_mem_alloc(sizeof(int32_t) * static_cast<size_t>(round_up(static_cast<uint32_t>(w), 32U)), 32));
+      le->push_scratch_cap = w;
+    }
+    int32_t *dst = le->push_scratch_i32;
+    int32_t i = 0;
+#if defined(__AVX2__)
+    for (; i + 7 < w; i += 8) {
+      __m256i v = _mm256_cvttps_epi32(_mm256_loadu_ps(in + i));
+      _mm256_storeu_si256((__m256i *)(dst + i), v);
+    }
+#endif
+    for (; i < w; ++i) dst[i] = static_cast<int32_t>(in[i]);
+    fdwt_2d_state_push_row(finest, reinterpret_cast<const sprec_t *>(dst));
+    return;
+  }
+
+  fdwt_2d_state_push_row(finest, in);
 }
 
 void j2k_tile_component::finalize_line_encode() {
@@ -3016,6 +3231,7 @@ void j2k_tile_component::finalize_line_encode() {
     aligned_mem_free(ctxs[i].lp_tmp);
     aligned_mem_free(ctxs[i].hp_tmp);
   }
+  aligned_mem_free(le->push_scratch_i32);
   line_enc.reset();
 }
 
@@ -6388,6 +6604,13 @@ uint8_t *j2k_tile::encode_line_based_stream(
     int32_t *pbuf  = gbuf;
     uint8_t *spbuf = sgbuf;
     const int32_t cb_h_val = static_cast<int32_t>(tcomp[c].get_codeblock_size().y);
+    // Reversible 5/3 components in the overlap path use the int32 FDWT pipeline:
+    // sink_quantize_row_i32 reads int32 directly (no cvttps/mul_ps per sample),
+    // and adv_step_f / emit_ready_f dispatch through the int32 lifting primitives
+    // already wired by PR #389.  Non-overlap fallback stays float because
+    // t1_encode reads subband i_samples as float.
+    const bool use_i32_pipe = (tcomp[c].get_transformation() == 1);
+    fdwt_2d_state *le_states = le->states.get();
 
     for (int32_t i = 0; i < le->NL_active; ++i) {
       j2k_resolution *cr = tcomp[c].access_resolution(static_cast<uint8_t>(i + 1));
@@ -6458,6 +6681,11 @@ uint8_t *j2k_tile::encode_line_based_stream(
         cx.sink_num_cblk_y[b] = static_cast<int32_t>(ncy_total);
       }
       cx.sink_quantize = true;
+      // Flip int32 dispatch in lockstep with sink_quantize: ctx + state.
+      // Must be set for *every* level in the chain (cascade pushes LP from
+      // level i to level i-1 via fdwt_2d_state_push_row).
+      cx.use_i32           = use_i32_pipe;
+      le_states[i].use_i32 = use_i32_pipe;
       for (uint8_t lv = 1; lv <= NL; ++lv) {
         j2k_resolution *cr_lv = tcomp[c].access_resolution(lv);
         for (uint8_t b = 0; b < cr_lv->num_bands; ++b) {
