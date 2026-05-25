@@ -20,13 +20,6 @@ target_sources(open_htj2k
     subband_row_buf.cpp
 )
 
-# NASM hot-path translation units (cleanup encoder).  Added only when the
-# top-level NASM probe succeeded (see OPENHTJ2K_NASM_FOUND in the root
-# CMakeLists).  Each file should be self-contained with C-ABI exports.
-if (OPENHTJ2K_NASM_FOUND)
-  target_sources(open_htj2k PRIVATE ht_block_encoding_avx512.asm)
-endif()
-
 # clang-18 miscompiles NEON bitstream helper functions when they are inlined.
 # Disabling inlining for the affected files fixes the issue without changing
 # the source; -fno-inline still respects always_inline attributes.

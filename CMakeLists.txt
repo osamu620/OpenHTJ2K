@@ -9,17 +9,6 @@ if (NOT EMSCRIPTEN)
 else()
   option(BUILD_SHARED_LIBS "Shared Libraries" OFF)
 endif()
-# OPENHTJ2K_ENABLE_NASM: enable the NASM-based hot-path replacements for the
-# AVX-512 cleanup encoder.  Default ON on x86-64 (where AVX-512 is meaningful
-# and NASM is the canonical assembler), OFF on aarch64 NEON / WASM where the
-# AVX-512 path isn't built anyway.  If the user sets it ON but `nasm` is not
-# in PATH, we fall back to the C++ emitFlat silently — see the
-# find_program(NASM_EXECUTABLE) block below.
-if (NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-  option(OPENHTJ2K_ENABLE_NASM "Build NASM-based hot paths for AVX-512 cleanup encoder" ON)
-else()
-  option(OPENHTJ2K_ENABLE_NASM "Build NASM-based hot paths for AVX-512 cleanup encoder" OFF)
-endif()
 enable_language(CXX)
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -83,27 +72,6 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_library(open_htj2k)
-# NASM enablement (paired with the OPENHTJ2K_ENABLE_NASM option above).
-# Probe for `nasm` first instead of relying on enable_language(ASM_NASM) to
-# fatal-error: that lets us silently fall back to the C++ emitFlat path when
-# the user has the option ON but no NASM installed (common in fresh CI
-# images and developer machines that haven't built OpenJPH).  The
-# OPENHTJ2K_NASM_FOUND cache flag is consulted by source/core/coding to
-# decide whether to add ht_block_encoding_avx512.asm to the sources list.
-if (OPENHTJ2K_ENABLE_NASM)
-  find_program(NASM_EXECUTABLE nasm)
-  if (NASM_EXECUTABLE)
-    enable_language(ASM_NASM)
-    message(STATUS "OPENHTJ2K_ENABLE_NASM: NASM found at ${NASM_EXECUTABLE}")
-    target_compile_definitions(open_htj2k PRIVATE OPENHTJ2K_HAVE_NASM_EMITFLAT)
-    set(OPENHTJ2K_NASM_FOUND TRUE CACHE INTERNAL "")
-  else()
-    message(WARNING "OPENHTJ2K_ENABLE_NASM=ON but `nasm` not in PATH; falling back to C++ emitFlat")
-    set(OPENHTJ2K_NASM_FOUND FALSE CACHE INTERNAL "")
-  endif()
-else()
-  set(OPENHTJ2K_NASM_FOUND FALSE CACHE INTERNAL "")
-endif()
 add_subdirectory(source/core/codestream)
 add_subdirectory(source/core/coding)
 add_subdirectory(source/core/transform)
