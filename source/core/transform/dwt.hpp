@@ -591,10 +591,15 @@ struct fdwt_2d_state {
   uint8_t transformation;    // 0 = irrev 9/7, 1 = rev 5/3
   int8_t  top_pse;           // PSE rows above v0
   int8_t  bottom_pse;        // PSE rows below v1-1
+  // When true: ring_buf / top_pse_buf / bot_pse_buf / horiz_tmp contain
+  // int32_t (reinterpret_cast'd from sprec_t* storage).  Lifting dispatches
+  // to fdwt_{1d_filtr_rev53,rev_ver_{hp,lp}_step}_i32_* primitives instead of
+  // float ones.  Only valid for transformation == 1 (rev 5/3).  Set at init.
+  bool    use_i32;
 
   // ── PSE scratch ───────────────────────────────────────────────────────────
-  sprec_t *top_pse_buf;      // top_pse    × stride sprec_t
-  sprec_t *bot_pse_buf;      // bottom_pse × stride sprec_t
+  sprec_t *top_pse_buf;      // top_pse    × stride sprec_t (or int32_t if use_i32)
+  sprec_t *bot_pse_buf;      // bottom_pse × stride sprec_t (or int32_t if use_i32)
   int8_t   top_dlevel[4];    // d_level per top-PSE slot (-1 = unfilled)
   int8_t   bot_dlevel[4];    // d_level per bot-PSE slot (-1 = unfilled)
 
@@ -617,15 +622,20 @@ struct fdwt_2d_state {
 };
 
 // Initialise (allocates ring_buf, PSE buffers, horiz_tmp).
+// `use_i32`: pipe int32 storage through the state.  Only valid for
+// transformation == 1 (rev 5/3); ignored otherwise.  When true, callers
+// must pass int32_t* (reinterpret_cast'd) to push_row, and the sink
+// callback receives interleaved_row as int32_t* (reinterpret_cast back).
 void fdwt_2d_state_init(fdwt_2d_state *s,
                         int32_t u0, int32_t u1, int32_t v0, int32_t v1,
-                        uint8_t transformation,
+                        uint8_t transformation, bool use_i32,
                         fdwt_row_sink_fn sink_fn, void *sink_ctx);
 
 // Free buffers allocated by fdwt_2d_state_init.
 void fdwt_2d_state_free(fdwt_2d_state *s);
 
 // Push one input row in[0..u1-u0-1].  May trigger sink callbacks.
+// For use_i32 states, the caller reinterpret_casts an int32_t* row.
 void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in);
 
 // Finalise: fill bottom PSE, run remaining cascade, emit all pending rows.
