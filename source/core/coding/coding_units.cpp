@@ -2982,7 +2982,13 @@ void j2k_tile_component::init_line_encode() {
     cx->ll0_stride  = ncr->stride;
     cx->ll0_y0      = static_cast<int32_t>(ncr->get_pos0().y);
 
-    fdwt_2d_state_init(&states[i], u0, u1, v0, v1, xform, fdwt_level_sink_fn, cx);
+    // Reversible (5/3) components are eligible for the int32 DWT pipeline,
+    // but the sink-side wiring (sink_quantize_row_i32 + fdwt_level_sink_fn
+    // int32 deinterleave) lands in a follow-up commit.  Until then, keep
+    // use_i32=false so behaviour matches main exactly.
+    const bool use_i32 = false;
+    fdwt_2d_state_init(&states[i], u0, u1, v0, v1, xform, use_i32,
+                       fdwt_level_sink_fn, cx);
   }
 }
 
