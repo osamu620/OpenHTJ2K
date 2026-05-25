@@ -398,4 +398,128 @@ void fdwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next
   }
 }
 
+// ============================================================================
+// int32 5/3 reversible DWT primitives (lossless path).
+//
+// The reversible 5/3 lifting is integer arithmetic by spec:
+//   H[k] -= (L[k] + L[k+1]) >> 1                          // predict
+//   L[k] += (H[k-1] + H[k] + 2) >> 2                      // update
+// The existing fdwt_1d_filtr_rev53_fixed_avx512 emulates these in float via
+// mul-by-0.5/0.25 + floor_ps, which adds latency vs srai_epi32 (1 cycle).
+// These int32 variants are equivalent and intended to replace the float
+// versions on the lossless pipeline.  Currently dormant — no callers.
+//
+// Layout note: the same _mm512_slli_epi64(..., 32) lane-mask trick from the
+// float version works identically on the integer reinterpretation, since the
+// data layout interleaves L/H values at adjacent int32 positions.
+// ============================================================================
+
+void fdwt_1d_filtr_rev53_i32_avx512(int32_t *X, const int32_t left, const int32_t u_i0,
+                                    const int32_t u_i1) {
+  const int32_t i0     = u_i0;
+  const int32_t i1     = u_i1;
+  const int32_t start  = ceil_int(i0, 2);
+  const int32_t stop   = ceil_int(i1, 2);
+  const int32_t offset = left + i0 % 2;
+
+  // step 1: H[k] -= (L[k] + L[k+1]) >> 1
+  int32_t simdlen = stop - (start - 1);
+  int32_t i = 0, n = -2 + offset;
+  for (; i + 8 < simdlen; i += 16, n += 32) {
+    __m512i xin0a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n));
+    __m512i xin2a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 2));
+    __m512i xin0b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 16));
+    __m512i xin2b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 18));
+    __m512i xsuma = _mm512_slli_epi64(_mm512_add_epi32(xin0a, xin2a), 32);
+    __m512i xsumb = _mm512_slli_epi64(_mm512_add_epi32(xin0b, xin2b), 32);
+    xsuma = _mm512_srai_epi32(xsuma, 1);
+    xsumb = _mm512_srai_epi32(xsumb, 1);
+    xin0a = _mm512_sub_epi32(xin0a, xsuma);
+    xin0b = _mm512_sub_epi32(xin0b, xsumb);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n), xin0a);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n + 16), xin0b);
+  }
+  for (; i < simdlen; i += 8, n += 16) {
+    __m512i xin0 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n));
+    __m512i xin2 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 2));
+    __m512i xsum = _mm512_slli_epi64(_mm512_add_epi32(xin0, xin2), 32);
+    xsum = _mm512_srai_epi32(xsum, 1);
+    xin0 = _mm512_sub_epi32(xin0, xsum);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n), xin0);
+  }
+
+  // step 2: L[k] += (H[k-1] + H[k] + 2) >> 2
+  simdlen   = stop - start;
+  i = 0; n = 0 + offset;
+  const __m512i vtwo = _mm512_set1_epi32(2);
+  for (; i + 8 < simdlen; i += 16, n += 32) {
+    __m512i xin0a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n - 1));
+    __m512i xin2a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 1));
+    __m512i xin0b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 15));
+    __m512i xin2b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 17));
+    __m512i xsuma = _mm512_slli_epi64(
+        _mm512_add_epi32(_mm512_add_epi32(xin0a, xin2a), vtwo), 32);
+    __m512i xsumb = _mm512_slli_epi64(
+        _mm512_add_epi32(_mm512_add_epi32(xin0b, xin2b), vtwo), 32);
+    xsuma = _mm512_srai_epi32(xsuma, 2);
+    xsumb = _mm512_srai_epi32(xsumb, 2);
+    xin0a = _mm512_add_epi32(xin0a, xsuma);
+    xin0b = _mm512_add_epi32(xin0b, xsumb);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n - 1), xin0a);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n + 15), xin0b);
+  }
+  for (; i < simdlen; i += 8, n += 16) {
+    __m512i xin0 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n - 1));
+    __m512i xin2 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 1));
+    __m512i xsum = _mm512_slli_epi64(
+        _mm512_add_epi32(_mm512_add_epi32(xin0, xin2), vtwo), 32);
+    xsum = _mm512_srai_epi32(xsum, 2);
+    xin0 = _mm512_add_epi32(xin0, xsum);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n - 1), xin0);
+  }
+}
+
+// Single-row rev53 FDWT HP vertical lifting (int32): tgt[i] -= (prev[i]+next[i]) >> 1.
+void fdwt_rev_ver_hp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  int32_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m512i a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(prev + i));
+    __m512i b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(next + i));
+    __m512i t = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(tgt  + i));
+    t = _mm512_sub_epi32(t, _mm512_srai_epi32(_mm512_add_epi32(a, b), 1));
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(tgt + i), t);
+  }
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    __m512i a = _mm512_maskz_loadu_epi32(mask, prev + i);
+    __m512i b = _mm512_maskz_loadu_epi32(mask, next + i);
+    __m512i t = _mm512_maskz_loadu_epi32(mask, tgt  + i);
+    t = _mm512_sub_epi32(t, _mm512_srai_epi32(_mm512_add_epi32(a, b), 1));
+    _mm512_mask_storeu_epi32(tgt + i, mask, t);
+  }
+}
+
+// Single-row rev53 FDWT LP vertical lifting (int32): tgt[i] += (prev[i]+next[i]+2) >> 2.
+void fdwt_rev_ver_lp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  const __m512i vtwo = _mm512_set1_epi32(2);
+  int32_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m512i a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(prev + i));
+    __m512i b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(next + i));
+    __m512i t = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(tgt  + i));
+    t = _mm512_add_epi32(t,
+        _mm512_srai_epi32(_mm512_add_epi32(_mm512_add_epi32(a, b), vtwo), 2));
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(tgt + i), t);
+  }
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    __m512i a = _mm512_maskz_loadu_epi32(mask, prev + i);
+    __m512i b = _mm512_maskz_loadu_epi32(mask, next + i);
+    __m512i t = _mm512_maskz_loadu_epi32(mask, tgt  + i);
+    t = _mm512_add_epi32(t,
+        _mm512_srai_epi32(_mm512_add_epi32(_mm512_add_epi32(a, b), vtwo), 2));
+    _mm512_mask_storeu_epi32(tgt + i, mask, t);
+  }
+}
+
 #endif  // OPENHTJ2K_TRY_AVX2 && __AVX512F__
