@@ -33,6 +33,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -56,7 +57,7 @@ class cblk_data_pool {
 
  public:
   cblk_data_pool() { slabs.reserve(8); }
-  cblk_data_pool(const cblk_data_pool &)          = delete;
+  cblk_data_pool(const cblk_data_pool &)            = delete;
   cblk_data_pool &operator=(const cblk_data_pool &) = delete;
 
   ~cblk_data_pool() {
@@ -163,15 +164,16 @@ class j2k_codeblock : public j2k_region {
   uint8_t num_ZBP;
   uint8_t fast_skip_passes;
   uint8_t Lblock;
-  // length of a coding pass in bytes (fixed array, max 128 coding passes)
-  uint32_t pass_length[128];
+  static constexpr uint8_t PASS_LEN_INLINE = 4;
+  uint32_t pass_length_store[PASS_LEN_INLINE];
+  uint32_t *pass_length = pass_length_store;
   uint8_t pass_length_count;
   // non-owning: pooled by the owning j2k_precinct_subband
   uint8_t *layer_start;
   uint8_t *layer_passes;
   bool already_included;
   bool refsegment;
-  bool pre_quantized = false;
+  bool pre_quantized  = false;
   uint32_t pre_or_val = 0;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
@@ -182,6 +184,14 @@ class j2k_codeblock : public j2k_region {
     if (compressed_data != nullptr && !compressed_is_pooled) {
       free(compressed_data);
     }
+    if (pass_length != pass_length_store) delete[] pass_length;
+  }
+
+  void ensure_pass_capacity(uint8_t n) {
+    if (n <= PASS_LEN_INLINE || pass_length != pass_length_store) return;
+    auto *heap = new uint32_t[128]();
+    std::memcpy(heap, pass_length_store, PASS_LEN_INLINE * sizeof(uint32_t));
+    pass_length = heap;
   }
   //  void modify_state(const std::function<void(uint8_t &, uint8_t)> &callback, uint8_t val, int16_t j1,
   //                    int16_t j2) {
@@ -326,9 +336,8 @@ class j2k_precinct : public j2k_region {
 
  public:
   j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_siz &p0, const element_siz &p1,
-               const j2k_subband *subband, const uint16_t &num_layers,
-               const element_siz &codeblock_size, const uint8_t &Cmodes, uint8_t nb = 0,
-               dwt_type dfs_dir = DWT_BIDIR);
+               const j2k_subband *subband, const uint16_t &num_layers, const element_siz &codeblock_size,
+               const uint8_t &Cmodes, uint8_t nb = 0, dwt_type dfs_dir = DWT_BIDIR);
   ~j2k_precinct() {
     for (uint8_t i = 0; i < num_bands; ++i) {
       pband[i].~j2k_precinct_subband();
@@ -404,14 +413,13 @@ class j2k_resolution : public j2k_region {
   uint8_t normalizing_downshift;
   sprec_t *i_samples;
   j2k_resolution(const uint8_t &r, const element_siz &p0, const element_siz &p1, const uint32_t &npw,
-                 const uint32_t &nph, bool no_alloc = false, uint8_t nb = 0,
-                 dwt_type dir = DWT_BIDIR);
+                 const uint32_t &nph, bool no_alloc = false, uint8_t nb = 0, dwt_type dir = DWT_BIDIR);
   ~j2k_resolution();
   OPENHTJ2K_MAYBE_UNUSED uint8_t get_index() const { return index; }
   void create_subbands(element_siz &p0, element_siz &p1, uint8_t NL, uint8_t transformation,
                        std::vector<uint8_t> &exponents, std::vector<uint16_t> &mantissas,
-                       uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth,
-                       bool line_based = false, const DFS_marker *dfs = nullptr);
+                       uint8_t num_guard_bits, uint8_t qstyle, uint8_t bitdepth, bool line_based = false,
+                       const DFS_marker *dfs = nullptr);
   void create_precincts(element_siz PP, uint16_t num_layers, element_siz codeblock_size, uint8_t Cmodes);
 
   j2k_precinct *access_precinct(uint32_t p);
@@ -706,8 +714,8 @@ class j2k_tile : public j2k_tile_base {
   // and is_packet_read 4D vector are skipped entirely — the cached_crp_
   // vector is replayed with a flat loop calling read_packet() directly.
   struct CRP {
-    uint8_t  c;  // component index
-    uint8_t  r;  // resolution level
+    uint8_t c;   // component index
+    uint8_t r;   // resolution level
     uint16_t p;  // precinct index
   };
   std::vector<CRP> cached_crp_;
@@ -727,8 +735,9 @@ class j2k_tile : public j2k_tile_base {
   // Used by the JPIP packet locator to record per-precinct byte ranges
   // without re-implementing parse_packet_header.  Empty observer (default)
   // means "do not observe" — no extra work per packet.
-  std::function<void(uint16_t c, uint8_t r, uint32_t p_rc, uint16_t layer,
-                     uint64_t offset, uint64_t length)> packet_observer_;
+  std::function<void(uint16_t c, uint8_t r, uint32_t p_rc, uint16_t layer, uint64_t offset,
+                     uint64_t length)>
+      packet_observer_;
 
  public:
   // Bump-allocator pool for HTJ2K encode compressed bitstreams (one pool per thread).
@@ -747,10 +756,10 @@ class j2k_tile : public j2k_tile_base {
     // Allocated once per tile (sized to the largest resolution's codeblock count) and
     // reused across all resolution levels and precincts — eliminating per-resolution
     // malloc/free cycles that cause expensive mmap/munmap page-fault pressure on Linux.
-    int32_t *gbuf      = nullptr;
-    uint8_t *sgbuf     = nullptr;
-    size_t   gbuf_cap  = 0;  // capacity in int32_t elements
-    size_t   sgbuf_cap = 0;  // capacity in uint8_t elements
+    int32_t *gbuf    = nullptr;
+    uint8_t *sgbuf   = nullptr;
+    size_t gbuf_cap  = 0;  // capacity in int32_t elements
+    size_t sgbuf_cap = 0;  // capacity in uint8_t elements
 
     ~EncodePoolCtx() {
       std::free(gbuf);
@@ -771,8 +780,11 @@ class j2k_tile : public j2k_tile_base {
       }
     }
   };
+
  private:
   std::unique_ptr<EncodePoolCtx> encode_pool_ctx;
+  template <typename Sink>
+  void write_packets_direct_impl(j2k_main_header &main_header, Sink &sink);
   // return SOP is used or not
   OPENHTJ2K_NODISCARD bool is_use_SOP() const { return this->use_SOP; }
   // return EPH is used or not
@@ -786,8 +798,7 @@ class j2k_tile : public j2k_tile_base {
   // dropped without attaching to any codeblock — see §M.4.1.  The JPIP
   // precinct filter decides this per-precinct; callers that don't use the
   // mask path can leave skip_body at its default.
-  void read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band,
-                   bool skip_body = false);
+  void read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band, bool skip_body = false);
   // function to retrieve greatest common divisor of precinct size among resolution levels
   void find_gcd_of_precinct_size(element_siz &out);
 
@@ -830,9 +841,9 @@ class j2k_tile : public j2k_tile_base {
   // Install (or clear) a JPIP packet observer — see packet_observer_.
   // Called with the byte range each read_packet() consumes in this tile's
   // tile_buf.  Must be set before decode() / decode_line_based_*.
-  void set_packet_observer(
-      std::function<void(uint16_t c, uint8_t r, uint32_t p_rc, uint16_t layer,
-                         uint64_t offset, uint64_t length)> f) {
+  void set_packet_observer(std::function<void(uint16_t c, uint8_t r, uint32_t p_rc, uint16_t layer,
+                                              uint64_t offset, uint64_t length)>
+                               f) {
     packet_observer_ = std::move(f);
   }
   // Flip persistence on all tile_components of this tile.  Called by the
@@ -847,27 +858,22 @@ class j2k_tile : public j2k_tile_base {
   // Line-based decode: parses packets first (via create_tile_buf), then lazily
   // pulls float rows component-by-component, applies per-row YCbCr→RGB and
   // float→int32 conversion.  Does NOT call decode() / ycbcr_to_rgb() / finalize().
-  void decode_line_based(j2k_main_header &main_header, uint8_t reduce_NL,
-                         std::vector<int32_t *> &dst);
+  void decode_line_based(j2k_main_header &main_header, uint8_t reduce_NL, std::vector<int32_t *> &dst);
   // Streaming variant: same as decode_line_based() but outputs one row at a time via
   // a callback instead of writing to a pre-allocated full-image buffer.
   // The callback receives (y, row_ptrs[NC], NC) where row_ptrs[c] points to one
   // decoded int32_t row for component c.  Allocates only per-row scratch buffers.
-  void decode_line_based_stream(
-      j2k_main_header &main_header, uint8_t reduce_NL,
-      const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb,
-      uint32_t row_limit = UINT32_MAX,
-      uint32_t row_lo = 0,
-      uint32_t col_lo = 0, uint32_t col_hi = UINT32_MAX,
-      bool skip_mct = false);
+  void decode_line_based_stream(j2k_main_header &main_header, uint8_t reduce_NL,
+                                const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb,
+                                uint32_t row_limit = UINT32_MAX, uint32_t row_lo = 0, uint32_t col_lo = 0,
+                                uint32_t col_hi = UINT32_MAX, bool skip_mct = false);
   // Direct-to-planar streaming decode.  Reads float from IDWT ring buffers and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
   // the strip scratch, out_rows int32 intermediate, and callback overhead.
   // Only for single-tile, non-MCT codestreams; falls back to decode_line_based_stream()
   // with a synthesized callback when MCT is active.
-  void decode_line_based_stream_planar(
-      j2k_main_header &main_header, uint8_t reduce_NL,
-      open_htj2k::PlanarOutputDesc *descs, uint16_t nc);
+  void decode_line_based_stream_planar(j2k_main_header &main_header, uint8_t reduce_NL,
+                                       open_htj2k::PlanarOutputDesc *descs, uint16_t nc);
 
   // Encoding
   // Initialization with tile-index
@@ -880,13 +886,19 @@ class j2k_tile : public j2k_tile_base {
   // line-based encoding: uses stateful FDWT
   uint8_t *encode_line_based();
   // streaming line-based encoding: pulls rows via callback instead of pre-allocated buffer
-  uint8_t *encode_line_based_stream(
-      std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn,
-      const std::vector<uint32_t> &img_comp_widths);
+  uint8_t *encode_line_based_stream(std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn,
+                                    const std::vector<uint32_t> &img_comp_widths);
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination
   void write_packets(j2c_dst_memory &outbuf);
+  // write SOT + packet data directly from precinct headers and cblk pool,
+  // bypassing the j2c_packet[] intermediate.  Requires that packet headers
+  // have been built (build_packet_headers / t1_encode_packet) so that
+  // cp->packet_header and block->compressed_data are valid.
+  void write_packets_direct(j2k_main_header &main_header, j2c_dst_memory &outbuf);
+  void write_packets_direct(j2k_main_header &main_header, std::ofstream &outbuf);
+  size_t write_packets_direct(j2k_main_header &main_header, uint8_t *dst);
 
   // getters
   OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint16_t get_numlayers() const { return this->numlayers; }
@@ -895,6 +907,7 @@ class j2k_tile : public j2k_tile_base {
   OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_MAYBE_UNUSED uint8_t get_byte_from_tile_buf();
   OPENHTJ2K_MAYBE_UNUSED uint8_t get_bit_from_tile_buf();
   OPENHTJ2K_NODISCARD uint32_t get_length() const;
+  OPENHTJ2K_NODISCARD uint32_t get_tile_part_size() const;
   OPENHTJ2K_MAYBE_UNUSED uint32_t get_buf_length();
 };
 
