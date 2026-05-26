@@ -60,7 +60,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   #endif
   const __m256i vone      = _mm256_set1_epi32(1);
   const __m256 vscale     = _mm256_set1_ps(fscale);
-  const __m256i vsentinel = _mm256_set1_epi32(static_cast<int32_t>(0x80000000u));
+  const __m256i vsentinel = _mm256_set1_epi32(INT32_MIN);
   __m256i vor_val = _mm256_setzero_si256();
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp = this->band_buf + i * stride;
@@ -119,7 +119,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        temp |= static_cast<int32_t>(0x80000000u);
+        temp |= INT32_MIN;
       }
       dp[0] = temp;
       ++sp;

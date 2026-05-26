@@ -100,7 +100,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
 
   const v128_t vscale    = wasm_f32x4_splat(fscale);
   const v128_t vone      = wasm_i32x4_const_splat(1);
-  const v128_t vsentinel = wasm_i32x4_const_splat(static_cast<int32_t>(0x80000000u));
+  const v128_t vsentinel = wasm_i32x4_const_splat(INT32_MIN);
   v128_t vorval          = wasm_i32x4_const_splat(0);
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
     sprec_t *sp = this->band_buf + i * stride;
@@ -156,7 +156,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        temp |= static_cast<int32_t>(0x80000000u);
+        temp |= INT32_MIN;
       }
       dp[0] = temp;
       ++sp;
