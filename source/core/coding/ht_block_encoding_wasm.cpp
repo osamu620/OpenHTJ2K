@@ -168,7 +168,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const uint32_t QHx2 = (height + 7U) & ~7U;
   for (uint32_t i = height; i < QHx2; ++i)
     memset(this->sample_buf + i * blksampl_stride, 0, blksampl_stride * sizeof(int32_t));
-  if (wasm_i32x4_reduce_max(vorval) != 0) {
+  if (wasm_v128_any_true(vorval)) {
     or_val |= 1;
   }
 }

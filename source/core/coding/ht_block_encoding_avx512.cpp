@@ -556,8 +556,9 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
         // Compute rho from sigma masks (each lane is 0 or -1)
         // Extract per-quad rho: for each quad of 4 lanes, rho = sum of (sig>>31)&1 in positional bits
         // sig_lo has 16 int32 lanes = 4 quads; extract bit 0 of negated sig (i.e. 1 where significant)
-        __mmask16 sig_lo_mask = _mm512_movepi32_mask(raw_q0123);  // bit i set if lane i has bit 31 set
-        __mmask16 sig_hi_mask = _mm512_movepi32_mask(raw_q4567);
+        const __m512i vz = _mm512_setzero_si512();
+        __mmask16 sig_lo_mask = _mm512_cmpgt_epi32_mask(vz, raw_q0123);
+        __mmask16 sig_hi_mask = _mm512_cmpgt_epi32_mask(vz, raw_q4567);
         // Each quad occupies 4 consecutive bits: quad0 = bits[0..3], quad1 = bits[4..7], ...
         for (int i = 0; i < 4; ++i) {
           rho_a[q + i]     = (sig_lo_mask >> (i * 4)) & 0xF;
