@@ -51,9 +51,9 @@ namespace open_htj2k {
 // calls both entry points doesn't retain two separate sets.
 namespace {
 struct EncoderThreadBuffers {
-  j2c_dst_memory tmp;       // per-tile measurement for the TLM marker
-  j2c_dst_memory j2c_dst;   // final codestream
-  j2c_dst_memory jph_dst;   // optional JPH wrapper
+  j2c_dst_memory tmp;      // per-tile measurement for the TLM marker
+  j2c_dst_memory j2c_dst;  // final codestream
+  j2c_dst_memory jph_dst;  // optional JPH wrapper
 };
 inline EncoderThreadBuffers &enc_thread_bufs() {
   static thread_local EncoderThreadBuffers tbuf;
@@ -126,7 +126,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   int status = READ_WIDTH;
   int d;
   uint32_t val = 0;
-  d = fgetc(fp);
+  d            = fgetc(fp);
   if (d != 'P') {
     printf("ERROR: %s is not a PNM/PGX file.\n", filename.c_str());
     fclose(fp);
@@ -224,7 +224,9 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       if (d == '#') {
         // PNM comments run to end-of-line and have no length limit per the spec;
         // consume byte-by-byte instead of through a fixed-size fgets buffer.
-        do { d = fgetc(fp); } while (d != EOF && d != LF && d != CR);
+        do {
+          d = fgetc(fp);
+        } while (d != EOF && d != LF && d != CR);
         if (d == EOF) {
           throw std::runtime_error("PNM/PGX header comment read error");
         }
@@ -281,7 +283,9 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   while (d == SP || d == LF || d == CR) {
     d = fgetc(fp);
     if (d == '#') {
-      do { d = fgetc(fp); } while (d != EOF && d != LF && d != CR);
+      do {
+        d = fgetc(fp);
+      } while (d != EOF && d != LF && d != CR);
       if (d == EOF) {
         throw std::runtime_error("PNM/PGX header comment read error");
       }
@@ -660,104 +664,85 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     tileSet[i].perform_dc_offset(main_header);
     tileSet[i].rgb_to_ycbcr();
     tileSet[i].encode_line_based();
-    tileSet[i].construct_packets(main_header);
   }
 
-  // Pre-reserve hint for the output codestream buffer.  Sum raw uncompressed
-  // bytes per component (each component may have its own precision Ssiz[c] and
-  // subsampling XRsiz[c]/YRsiz[c]), add 1 MB header/slack, then cap at 256 MB
-  // so very large but highly-compressible inputs cannot fail purely due to the
-  // pre-reserve.  Above the cap the vector grows geometrically from 256 MB,
-  // which still saves the bulk of the zero-fill doublings vs growing from
-  // zero.  This is only a sizing hint; the codestream may exceed it (e.g.,
-  // high-entropy inputs + headers), in which case the vector grows normally.
-  const size_t reserve_bytes_max = static_cast<size_t>(256) << 20;
-  const uint32_t img_w = static_cast<uint32_t>(siz->Xsiz - siz->XOsiz);
-  const uint32_t img_h = static_cast<uint32_t>(siz->Ysiz - siz->YOsiz);
-  size_t reserve_bytes_raw = 1U << 20;
-  for (uint16_t c = 0; c < siz->Csiz; ++c) {
-    const uint32_t xr = std::max<uint8_t>(XRsiz[c], 1U);
-    const uint32_t yr = std::max<uint8_t>(YRsiz[c], 1U);
-    const size_t cw = (img_w + xr - 1) / xr;
-    const size_t ch = (img_h + yr - 1) / yr;
-    const size_t bps = (((Ssiz[c] & 0x7F) + 1U + 7U) / 8U);
-    reserve_bytes_raw += cw * ch * bps;
-  }
-  const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
-
-  // Measure tile-part lengths to generate TLM marker.
   const uint32_t num_tiles = numTiles.x * numTiles.y;
-  // Thread-local + grow-only reuse of measurement and codestream buffers
-  // (shared with invoke_line_based_stream — see EncoderThreadBuffers).
-  // Calling encode multiple times from the same thread (batch mode, RTP
-  // streaming) keeps the ~20 MB output capacity mapped, eliminating the
-  // page-fault-during-write storm visible as memset-via-do_anonymous_page in
-  // perf annotate (~5-7 ms per 4K encode).
-  auto &tbuf      = enc_thread_bufs();
-  auto &tmp       = tbuf.tmp;
-  auto &j2c_dst   = tbuf.j2c_dst;
-  auto &jph_dst   = tbuf.jph_dst;
-  // TLM is an optional Part 1 marker used for random-access seek to specific
-  // tiles.  For single-tile codestreams it carries no information not already
-  // in the SOT, so skip the measurement pass and TLM emission entirely.  This
-  // avoids one extra write_packets memcpy of the entire tile (~20 MB on 4K
-  // lossless) plus the corresponding fresh-page faults on the `tmp` buffer in
-  // single-shot mode.
+
+  // Multi-tile: generate TLM marker from computed tile-part lengths.
   if (num_tiles > 1) {
     std::vector<uint16_t> tile_indices(num_tiles);
     std::vector<uint32_t> tile_lengths(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-      tmp.clear();
-      tmp.reserve(reserve_bytes / num_tiles + (1U << 16));
-      tileSet[i].write_packets(tmp);
       tile_indices[i] = static_cast<uint16_t>(i);
-      tile_lengths[i] = static_cast<uint32_t>(tmp.get_length());
+      tile_lengths[i] = tileSet[i].get_tile_part_size();
     }
     main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
   }
 
-  j2c_dst.clear();
-  jph_dst.clear();
-  j2c_dst.reserve(reserve_bytes);
-  j2c_dst.put_word(_SOC);
-  main_header.flush(j2c_dst);
+  // Flush SOC + main header into a small buffer to measure its size and to
+  // have content ready for both the buffer and file output paths.
+  j2c_dst_memory hdr_buf;
+  hdr_buf.put_word(_SOC);
+  main_header.flush(hdr_buf);
 
-  for (uint32_t i = 0; i < num_tiles; ++i) {
-    tileSet[i].write_packets(j2c_dst);
-  }
-  j2c_dst.put_word(_EOC);
-  size_t codestream_size = j2c_dst.get_length();
+  // Compute total codestream size upfront (needed for JPH boxes and return).
+  size_t codestream_size = hdr_buf.get_length();  // SOC + main header
+  for (uint32_t i = 0; i < num_tiles; ++i) codestream_size += tileSet[i].get_tile_part_size();
+  codestream_size += 2;  // EOC
 
-  // prepare jph box-based format, if necessary
-  if (isJPH) {
-    bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
-    jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
-    size_t file_format_size = jph_info.write(jph_dst);
-    codestream_size += file_format_size - codestream_size;
-  }
   if (outbuf != nullptr) {
+    // Buffer output: write directly into the caller's vector.
+    // Extract header bytes via flush to a small temporary vector.
+    std::vector<uint8_t> hdr_bytes;
+    hdr_buf.flush(&hdr_bytes);
+
     if (isJPH) {
-      if (jph_dst.flush(outbuf)) {
-        printf("illegal attempt to flush empty buffer.\n");
-        throw std::exception();
-      }
-    }
-    if (j2c_dst.flush(outbuf)) {
-      printf("illegal attempt to flush empty buffer.\n");
-      throw std::exception();
+      bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
+      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      j2c_dst_memory jph_tmp;
+      size_t file_format_size = jph_info.write(jph_tmp);
+      std::vector<uint8_t> jph_bytes;
+      jph_tmp.flush(&jph_bytes);
+
+      outbuf->resize(jph_bytes.size() + codestream_size);
+      uint8_t *p = outbuf->data();
+      std::memcpy(p, jph_bytes.data(), jph_bytes.size());
+      p += jph_bytes.size();
+      std::memcpy(p, hdr_bytes.data(), hdr_bytes.size());
+      p += hdr_bytes.size();
+      for (uint32_t i = 0; i < num_tiles; ++i) p += tileSet[i].write_packets_direct(main_header, p);
+      p[0]            = 0xFF;
+      p[1]            = 0xD9;
+      codestream_size = file_format_size;
+    } else {
+      outbuf->resize(codestream_size);
+      uint8_t *p = outbuf->data();
+      std::memcpy(p, hdr_bytes.data(), hdr_bytes.size());
+      p += hdr_bytes.size();
+      for (uint32_t i = 0; i < num_tiles; ++i) p += tileSet[i].write_packets_direct(main_header, p);
+      p[0] = 0xFF;
+      p[1] = 0xD9;
     }
   } else {
-    std::ofstream dst;
-    dst.open(this->outfile, std::ios::out | std::ios::binary);
+    // File output: write directly to ofstream, bypassing j2c_dst entirely.
+    std::ofstream dst(this->outfile, std::ios::out | std::ios::binary);
     if (isJPH) {
+      bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
+      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      auto &jph_dst = enc_thread_bufs().jph_dst;
+      jph_dst.clear();
+      size_t file_format_size = jph_info.write(jph_dst);
       jph_dst.flush(dst);
+      codestream_size = file_format_size;
     }
-    j2c_dst.flush(dst);
+    hdr_buf.flush(dst);
+    for (uint32_t i = 0; i < num_tiles; ++i) tileSet[i].write_packets_direct(main_header, dst);
+    uint8_t eoc[2] = {0xFF, 0xD9};
+    dst.write(reinterpret_cast<const char *>(eoc), 2);
     dst.close();
   }
   return codestream_size;
 }
-
 
 size_t openhtj2k_encoder_impl::invoke_line_based() { return invoke_internal(); }
 
@@ -851,7 +836,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   // Empty input buffer for streaming (img is not used)
   std::vector<int32_t *> empty_buf;
   const uint32_t num_tiles_lbs = numTiles.x * numTiles.y;
-  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(num_tiles_lbs));
+  auto tileSet                 = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(num_tiles_lbs));
   for (uint16_t i = 0; i < static_cast<uint16_t>(num_tiles_lbs); ++i) {
     tileSet[i].enc_init(i, main_header, empty_buf, true, true);
   }
@@ -859,95 +844,87 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     std::vector<uint32_t> img_comp_widths(static_cast<size_t>(siz->Csiz));
     for (size_t c = 0; c < siz->Csiz; ++c) {
       const uint32_t xr = static_cast<uint32_t>(siz->XRsiz[c]);
-      img_comp_widths[c] = (static_cast<uint32_t>(siz->Xsiz) - static_cast<uint32_t>(siz->XOsiz) + xr - 1) / xr;
+      img_comp_widths[c] =
+          (static_cast<uint32_t>(siz->Xsiz) - static_cast<uint32_t>(siz->XOsiz) + xr - 1) / xr;
     }
     tileSet[i].perform_dc_offset(main_header);
     tileSet[i].encode_line_based_stream(src_fn, img_comp_widths);
-    tileSet[i].construct_packets(main_header);
   }
 
-  // Pre-reserve hint for the output codestream buffer — see invoke_internal
-  // for rationale.  Per-component raw bytes (Ssiz[c], XRsiz[c], YRsiz[c]) so
-  // subsampled or hetero-precision components are sized correctly.
-  const size_t reserve_bytes_max = static_cast<size_t>(256) << 20;
-  const uint32_t img_w = static_cast<uint32_t>(siz->Xsiz - siz->XOsiz);
-  const uint32_t img_h = static_cast<uint32_t>(siz->Ysiz - siz->YOsiz);
-  size_t reserve_bytes_raw = 1U << 20;
-  for (uint16_t c = 0; c < siz->Csiz; ++c) {
-    const uint32_t xr = std::max<uint8_t>(XRsiz[c], 1U);
-    const uint32_t yr = std::max<uint8_t>(YRsiz[c], 1U);
-    const size_t cw = (img_w + xr - 1) / xr;
-    const size_t ch = (img_h + yr - 1) / yr;
-    const size_t bps = (((Ssiz[c] & 0x7F) + 1U + 7U) / 8U);
-    reserve_bytes_raw += cw * ch * bps;
-  }
-  const size_t reserve_bytes = std::min(reserve_bytes_raw, reserve_bytes_max);
-
-  // Thread-local + grow-only reuse — see invoke_internal for rationale.
-  // The same EncoderThreadBuffers instance is shared with invoke_internal so
-  // a thread calling both entry points retains only one set of buffers.
-  auto &tbuf      = enc_thread_bufs();
-  auto &tmp       = tbuf.tmp;
-  auto &j2c_dst   = tbuf.j2c_dst;
-  auto &jph_dst   = tbuf.jph_dst;
-  // Measure tile-part lengths to generate TLM marker.  TLM is optional and
-  // useful only for multi-tile random access — skip for single-tile to save
-  // one extra ~20 MB write_packets pass per encode (matches invoke_internal).
+  // Multi-tile: generate TLM marker from computed tile-part lengths.
   if (num_tiles_lbs > 1) {
     std::vector<uint16_t> tile_indices(num_tiles_lbs);
     std::vector<uint32_t> tile_lengths(num_tiles_lbs);
     for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
-      tmp.clear();
-      tmp.reserve(reserve_bytes / num_tiles_lbs + (1U << 16));
-      tileSet[i].write_packets(tmp);
       tile_indices[i] = static_cast<uint16_t>(i);
-      tile_lengths[i] = static_cast<uint32_t>(tmp.get_length());
+      tile_lengths[i] = tileSet[i].get_tile_part_size();
     }
     main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
   }
 
-  j2c_dst.clear();
-  jph_dst.clear();
-  j2c_dst.reserve(reserve_bytes);
-  j2c_dst.put_word(_SOC);
-  main_header.flush(j2c_dst);
+  // Flush SOC + main header into a small buffer to measure its size and to
+  // have content ready for the file output path.
+  j2c_dst_memory hdr_buf;
+  hdr_buf.put_word(_SOC);
+  main_header.flush(hdr_buf);
 
-  for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
-    tileSet[i].write_packets(j2c_dst);
-  }
-  j2c_dst.put_word(_EOC);
-  size_t codestream_size = j2c_dst.get_length();
+  // Compute total codestream size upfront (needed for JPH boxes and return).
+  size_t codestream_size = hdr_buf.get_length();
+  for (uint32_t i = 0; i < num_tiles_lbs; ++i) codestream_size += tileSet[i].get_tile_part_size();
+  codestream_size += 2;  // EOC
 
-  if (isJPH) {
-    bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
-    jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
-    size_t file_format_size = jph_info.write(jph_dst);
-    codestream_size += file_format_size - codestream_size;
-  }
   if (outbuf != nullptr) {
+    // Buffer output: write directly into the caller's vector.
+    std::vector<uint8_t> hdr_bytes;
+    hdr_buf.flush(&hdr_bytes);
+
     if (isJPH) {
-      if (jph_dst.flush(outbuf)) {
-        printf("illegal attempt to flush empty buffer.\n");
-        throw std::exception();
-      }
-    }
-    if (j2c_dst.flush(outbuf)) {
-      printf("illegal attempt to flush empty buffer.\n");
-      throw std::exception();
+      bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
+      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      j2c_dst_memory jph_tmp;
+      size_t file_format_size = jph_info.write(jph_tmp);
+      std::vector<uint8_t> jph_bytes;
+      jph_tmp.flush(&jph_bytes);
+
+      outbuf->resize(jph_bytes.size() + codestream_size);
+      uint8_t *p = outbuf->data();
+      std::memcpy(p, jph_bytes.data(), jph_bytes.size());
+      p += jph_bytes.size();
+      std::memcpy(p, hdr_bytes.data(), hdr_bytes.size());
+      p += hdr_bytes.size();
+      for (uint32_t i = 0; i < num_tiles_lbs; ++i) p += tileSet[i].write_packets_direct(main_header, p);
+      p[0]            = 0xFF;
+      p[1]            = 0xD9;
+      codestream_size = file_format_size;
+    } else {
+      outbuf->resize(codestream_size);
+      uint8_t *p = outbuf->data();
+      std::memcpy(p, hdr_bytes.data(), hdr_bytes.size());
+      p += hdr_bytes.size();
+      for (uint32_t i = 0; i < num_tiles_lbs; ++i) p += tileSet[i].write_packets_direct(main_header, p);
+      p[0] = 0xFF;
+      p[1] = 0xD9;
     }
   } else {
-    std::ofstream dst;
-    dst.open(this->outfile, std::ios::out | std::ios::binary);
+    // File output: write directly to ofstream, bypassing j2c_dst entirely.
+    std::ofstream dst(this->outfile, std::ios::out | std::ios::binary);
     if (isJPH) {
+      bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
+      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      auto &jph_dst = enc_thread_bufs().jph_dst;
+      jph_dst.clear();
+      size_t file_format_size = jph_info.write(jph_dst);
       jph_dst.flush(dst);
+      codestream_size = file_format_size;
     }
-    j2c_dst.flush(dst);
+    hdr_buf.flush(dst);
+    for (uint32_t i = 0; i < num_tiles_lbs; ++i) tileSet[i].write_packets_direct(main_header, dst);
+    uint8_t eoc[2] = {0xFF, 0xD9};
+    dst.write(reinterpret_cast<const char *>(eoc), 2);
     dst.close();
   }
   return codestream_size;
 }
-
-
 
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
                                      siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
