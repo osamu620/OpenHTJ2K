@@ -59,10 +59,8 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const int32_t pLSB   = (refsegment) ? 2 : 1;
   #endif
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
-    sprec_t *sp        = this->band_buf + i * stride;
-    int32_t *dp        = this->sample_buf + i * blksampl_stride;
-    size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
-    uint8_t *dstblk    = block_states + block_index;
+    sprec_t *sp = this->band_buf + i * stride;
+    int32_t *dp = this->sample_buf + i * blksampl_stride;
 
     int16_t len = static_cast<int16_t>(width);
     for (; len > 0; --len) {
@@ -72,26 +70,18 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       else
         temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-  #if defined(ENABLE_SP_MR)
-      dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
-      dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
-  #endif
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
-  #if defined(ENABLE_SP_MR)
-      temp >>= pshift;
-  #endif
       if (temp) {
         or_val |= 1;
-        dstblk[0] |= 1;
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
+        temp |= static_cast<int32_t>(0x80000000u);
       }
       dp[0] = temp;
       ++sp;
       ++dp;
-      ++dstblk;
     }
     if (blksampl_stride > width)
       memset(dp, 0, (blksampl_stride - width) * sizeof(int32_t));
@@ -328,61 +318,71 @@ auto make_storage = [](const j2k_codeblock *const block, const uint16_t qy, cons
                        uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
                        uint8_t *const rho_q) {
   // This function shall be called on the assumption that there are two quads
-  uint8_t *const ssp0 = block->block_states + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf + 2U * (qx + qy * block->blksampl_stride);
-  int32_t *sp1        = sp0 + block->blksampl_stride;
+  int32_t *sp0 = block->sample_buf + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp1 = sp0 + block->blksampl_stride;
 
-  sigma_n[0] = ssp0[0] & 1;
-  sigma_n[1] = ssp1[0] & 1;
-  sigma_n[2] = ssp0[1] & 1;
-  sigma_n[3] = ssp1[1] & 1;
-  sigma_n[4] = ssp0[2] & 1;
-  sigma_n[5] = ssp1[2] & 1;
-  sigma_n[6] = ssp0[3] & 1;
-  sigma_n[7] = ssp1[3] & 1;
+  uint32_t s0 = static_cast<uint32_t>(sp0[0]);
+  uint32_t s1 = static_cast<uint32_t>(sp1[0]);
+  uint32_t s2 = static_cast<uint32_t>(sp0[1]);
+  uint32_t s3 = static_cast<uint32_t>(sp1[1]);
+  uint32_t s4 = static_cast<uint32_t>(sp0[2]);
+  uint32_t s5 = static_cast<uint32_t>(sp1[2]);
+  uint32_t s6 = static_cast<uint32_t>(sp0[3]);
+  uint32_t s7 = static_cast<uint32_t>(sp1[3]);
+
+  sigma_n[0] = static_cast<uint8_t>(s0 >> 31);
+  sigma_n[1] = static_cast<uint8_t>(s1 >> 31);
+  sigma_n[2] = static_cast<uint8_t>(s2 >> 31);
+  sigma_n[3] = static_cast<uint8_t>(s3 >> 31);
+  sigma_n[4] = static_cast<uint8_t>(s4 >> 31);
+  sigma_n[5] = static_cast<uint8_t>(s5 >> 31);
+  sigma_n[6] = static_cast<uint8_t>(s6 >> 31);
+  sigma_n[7] = static_cast<uint8_t>(s7 >> 31);
 
   rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
   rho_q[1] = static_cast<uint8_t>(sigma_n[4] + (sigma_n[5] << 1) + (sigma_n[6] << 2) + (sigma_n[7] << 3));
 
-  v_n[0] = static_cast<uint32_t>(sp0[0]);
-  v_n[1] = static_cast<uint32_t>(sp1[0]);
-  v_n[2] = static_cast<uint32_t>(sp0[1]);
-  v_n[3] = static_cast<uint32_t>(sp1[1]);
-  v_n[4] = static_cast<uint32_t>(sp0[2]);
-  v_n[5] = static_cast<uint32_t>(sp1[2]);
-  v_n[6] = static_cast<uint32_t>(sp0[3]);
-  v_n[7] = static_cast<uint32_t>(sp1[3]);
+  v_n[0] = s0 & 0x7FFFFFFFu;
+  v_n[1] = s1 & 0x7FFFFFFFu;
+  v_n[2] = s2 & 0x7FFFFFFFu;
+  v_n[3] = s3 & 0x7FFFFFFFu;
+  v_n[4] = s4 & 0x7FFFFFFFu;
+  v_n[5] = s5 & 0x7FFFFFFFu;
+  v_n[6] = s6 & 0x7FFFFFFFu;
+  v_n[7] = s7 & 0x7FFFFFFFu;
 
   for (int i = 0; i < 8; ++i) {
-    E_n[i] = static_cast<int32_t>((32 - count_leading_zeros(v_n[i])) * sigma_n[i]);
+    E_n[i] = static_cast<int32_t>(32 - count_leading_zeros(v_n[i])) * sigma_n[i];
   }
 };
 
 static inline void make_storage_one(const j2k_codeblock *const block, const uint16_t qy, const uint16_t qx,
                                     uint8_t *const sigma_n, uint32_t *const v_n, int32_t *const E_n,
                                     uint8_t *const rho_q) {
-  uint8_t *const ssp0 = block->block_states + (2U * qy + 1U) * (block->blkstate_stride) + 2U * qx + 1U;
-  uint8_t *const ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0        = block->sample_buf + 2U * (qx + qy * block->blksampl_stride);
-  int32_t *sp1        = sp0 + block->blksampl_stride;
+  int32_t *sp0 = block->sample_buf + 2U * (qx + qy * block->blksampl_stride);
+  int32_t *sp1 = sp0 + block->blksampl_stride;
 
-  sigma_n[0] = ssp0[0] & 1;
-  sigma_n[1] = ssp1[0] & 1;
-  sigma_n[2] = ssp0[1] & 1;
-  sigma_n[3] = ssp1[1] & 1;
+  uint32_t s0 = static_cast<uint32_t>(sp0[0]);
+  uint32_t s1 = static_cast<uint32_t>(sp1[0]);
+  uint32_t s2 = static_cast<uint32_t>(sp0[1]);
+  uint32_t s3 = static_cast<uint32_t>(sp1[1]);
+
+  sigma_n[0] = static_cast<uint8_t>(s0 >> 31);
+  sigma_n[1] = static_cast<uint8_t>(s1 >> 31);
+  sigma_n[2] = static_cast<uint8_t>(s2 >> 31);
+  sigma_n[3] = static_cast<uint8_t>(s3 >> 31);
 
   rho_q[0] = static_cast<uint8_t>(sigma_n[0] + (sigma_n[1] << 1) + (sigma_n[2] << 2) + (sigma_n[3] << 3));
 
-  v_n[0] = static_cast<uint32_t>(sp0[0]);
-  v_n[1] = static_cast<uint32_t>(sp1[0]);
-  v_n[2] = static_cast<uint32_t>(sp0[1]);
-  v_n[3] = static_cast<uint32_t>(sp1[1]);
+  v_n[0] = s0 & 0x7FFFFFFFu;
+  v_n[1] = s1 & 0x7FFFFFFFu;
+  v_n[2] = s2 & 0x7FFFFFFFu;
+  v_n[3] = s3 & 0x7FFFFFFFu;
 
-  E_n[0] = static_cast<int32_t>((32 - count_leading_zeros(v_n[0])) * sigma_n[0]);
-  E_n[1] = static_cast<int32_t>((32 - count_leading_zeros(v_n[1])) * sigma_n[1]);
-  E_n[2] = static_cast<int32_t>((32 - count_leading_zeros(v_n[2])) * sigma_n[2]);
-  E_n[3] = static_cast<int32_t>((32 - count_leading_zeros(v_n[3])) * sigma_n[3]);
+  E_n[0] = static_cast<int32_t>(32 - count_leading_zeros(v_n[0])) * sigma_n[0];
+  E_n[1] = static_cast<int32_t>(32 - count_leading_zeros(v_n[1])) * sigma_n[1];
+  E_n[2] = static_cast<int32_t>(32 - count_leading_zeros(v_n[2])) * sigma_n[2];
+  E_n[3] = static_cast<int32_t>(32 - count_leading_zeros(v_n[3])) * sigma_n[3];
 }
 
 // joint termination of MEL and VLC

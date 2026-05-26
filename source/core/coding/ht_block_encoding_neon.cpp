@@ -53,16 +53,13 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const int32_t pshift = (refsegment) ? 1 : 0;
   const int32_t pLSB   = (refsegment) ? 1 : 1;
   #endif
-  float32x4_t vscale = vdupq_n_f32(fscale);
-  int32x4_t vorval   = vdupq_n_s32(0);
+  const float32x4_t vscale    = vdupq_n_f32(fscale);
+  const int32x4_t vone        = vdupq_n_s32(1);
+  const int32x4_t vsentinel   = vdupq_n_s32(static_cast<int32_t>(0x80000000u));
+  int32x4_t vorval            = vdupq_n_s32(0);
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
-    sprec_t *sp        = this->band_buf + i * stride;
-    int32_t *dp        = this->sample_buf + i * blksampl_stride;
-    size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
-    uint8_t *dstblk    = block_states + block_index;
-  #if defined(ENABLE_SP_MR)
-    int32x4_t vpLSB = vdupq_n_s32(pLSB);
-  #endif
+    sprec_t *sp = this->band_buf + i * stride;
+    int32_t *dp = this->sample_buf + i * blksampl_stride;
     int16_t len = static_cast<int16_t>(width);
     for (; len >= 8; len -= 8) {
       int32x4_t v0, v1;
@@ -74,45 +71,34 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         v1 = vcvtq_s32_f32(vmulq_f32(vld1q_f32(sp + 4), vscale));
       }
       // Take sign bit
-      int32x4_t s0 = vshrq_n_u32(v0, 31);
-      int32x4_t s1 = vshrq_n_u32(v1, 31);
+      int32x4_t s0 = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(v0), 31));
+      int32x4_t s1 = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(v1), 31));
       // Absolute value
       v0 = vabsq_s32(v0);
       v1 = vabsq_s32(v1);
-  #if defined(ENABLE_SP_MR)
-      int32x4_t z0 = vandq_s32(v0, vpLSB);
-      int32x4_t z1 = vandq_s32(v1, vpLSB);
-      v0 = v0 >> pshift;
-      v1 = v1 >> pshift;
-  #endif
-      uint8x8_t vblkstate = vdup_n_u8(0);
-      vblkstate = vorr_u8(
-          vblkstate,
-          vmovn_s16(vandq_s16(vcgtzq_s16(vcombine_s16(vqmovn_s32(v0), vqmovn_s32(v1))), vdupq_n_s16(1))));
-  #if defined(ENABLE_SP_MR)
-      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(z0), vmovn_s32(z1)), SHIFT_SMAG));
-      vblkstate |= vmovn_s16(vshlq_n_s16(vcombine_s16(vmovn_s32(s0), vmovn_s32(s1)), SHIFT_SSGN));
-  #endif
-      vst1_u8(dstblk, vblkstate);
-      dstblk += 8;
-  #if defined(ENABLE_SP_MR)
-      s0 = vandq_s32(vcgtzq_s32(v0), s0);
-      s1 = vandq_s32(vcgtzq_s32(v1), s1);
-  #endif
-      vorval = vorrq_s32(vorval, v0);
-      vorval = vorrq_s32(vorval, v1);
-      v0 = vqsubq_u32(v0, vdupq_n_u32(1));
-      v1 = vqsubq_u32(v1, vdupq_n_u32(1));
+      // Generate nonzero masks
+      uint32x4_t mask0 = vcgtq_s32(v0, vdupq_n_s32(0));
+      uint32x4_t mask1 = vcgtq_s32(v1, vdupq_n_s32(0));
+      // Accumulate or_val
+      vorval = vorrq_s32(vorval, vreinterpretq_s32_u32(mask0));
+      vorval = vorrq_s32(vorval, vreinterpretq_s32_u32(mask1));
+      // Convert to MagSgn form: (abs-1)<<1 | sign, only for nonzero
+      int32x4_t vone0 = vandq_s32(vreinterpretq_s32_u32(mask0), vone);
+      int32x4_t vone1 = vandq_s32(vreinterpretq_s32_u32(mask1), vone);
+      v0 = vsubq_s32(v0, vone0);
+      v1 = vsubq_s32(v1, vone1);
       v0 = vshlq_n_s32(v0, 1);
       v1 = vshlq_n_s32(v1, 1);
-      v0 = vaddq_s32(v0, s0);
-      v1 = vaddq_s32(v1, s1);
+      v0 = vaddq_s32(v0, vandq_s32(s0, vreinterpretq_s32_u32(mask0)));
+      v1 = vaddq_s32(v1, vandq_s32(s1, vreinterpretq_s32_u32(mask1)));
+      // Set sentinel bit 31 for significant samples
+      v0 = vorrq_s32(v0, vandq_s32(vreinterpretq_s32_u32(mask0), vsentinel));
+      v1 = vorrq_s32(v1, vandq_s32(vreinterpretq_s32_u32(mask1), vsentinel));
       vst1q_s32(dp, v0);
       vst1q_s32(dp + 4, v1);
       sp += 8;
       dp += 8;
     }
-    or_val |= static_cast<unsigned int>(vmaxvq_s32(vorval));
     for (; len > 0; --len) {
       int32_t temp;
       if (lossless)
@@ -120,27 +106,18 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       else
         temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
       uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-  #if defined(ENABLE_SP_MR)
-      dstblk[0] |= static_cast<uint8_t>(((temp & pLSB) & 1) << SHIFT_SMAG);
-      dstblk[0] |= static_cast<uint8_t>((sign >> 31) << SHIFT_SSGN);
-  #endif
       temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
-  #if defined(ENABLE_SP_MR)
-      temp >>= pshift;
-      sign = (temp > 0) ? sign : 0;
-  #endif
       if (temp) {
         or_val |= 1;
-        dstblk[0] |= 1;
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
+        temp |= static_cast<int32_t>(0x80000000u);
       }
       dp[0] = temp;
       ++sp;
       ++dp;
-      ++dstblk;
     }
     if (blksampl_stride > width)
       memset(dp, 0, (blksampl_stride - width) * sizeof(int32_t));
@@ -148,6 +125,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const uint32_t QHx2 = (height + 7U) & ~7U;
   for (uint32_t i = height; i < QHx2; ++i)
     memset(this->sample_buf + i * blksampl_stride, 0, blksampl_stride * sizeof(int32_t));
+  if (vmaxvq_u32(vreinterpretq_u32_s32(vorval)) != 0) {
+    or_val |= 1;
+  }
 }
 
 /********************************************************************************
@@ -203,57 +183,54 @@ void state_MEL_enc::termMEL() {
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
-auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
-                       int32x4_t &sig1, int32x4_t &v0, int32x4_t &v1, int32x4_t &E0, int32x4_t &E1,
+auto make_storage = [](int32_t *sp0, int32_t *sp1, int32x4_t &sig0, int32x4_t &sig1,
+                       int32x4_t &v0, int32x4_t &v1, int32x4_t &E0, int32x4_t &E1,
                        int32_t &rho0, int32_t &rho1) {
   // This function shall be called on the assumption that there are two quads
-  int32x4_t t0 = vld1q_s32(sp0);
-  int32x4_t t1 = vld1q_s32(sp1);
-  v0           = vzip1q_s32(t0, t1);
-  v1           = vzip2q_s32(t0, t1);
-  //  int32x4x2_t v = vzipq_s32(vld1q_s32(sp0), vld1q_s32(sp1));
-  //  v0            = v.val[0];
-  //  v1            = v.val[1];
-
-  uint8x8_t sig01 = vand_u8(vzip1_u8(vld1_u8(ssp0), vld1_u8(ssp1)), vdup_n_u8(1));
-  sig0            = vcgtzq_s32(vmovl_u16(vget_low_u16(vmovl_u8(sig01))));
-  sig1            = vcgtzq_s32(vmovl_u16(vget_high_u16(vmovl_u8(sig01))));
-  // int8x8_t shift  = {0, 1, 2, 3, 4, 5, 6, 7};
-  int8x8_t shift = vcreate_s8(0x0706050403020100);
-  uint8_t rho01  = vaddv_u8(vshl_u8(sig01, shift));
-  rho0           = rho01 & 0xF;
-  rho1           = rho01 >> 4;
-
-  E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v0)), sig0);
-  E1 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v1)), sig1);
+  const int32x4_t mask31 = vdupq_n_s32(0x7FFFFFFF);
+  int32x4_t t0   = vld1q_s32(sp0);
+  int32x4_t t1   = vld1q_s32(sp1);
+  int32x4_t raw0 = vzip1q_s32(t0, t1);
+  int32x4_t raw1 = vzip2q_s32(t0, t1);
+  // Derive sigma from sentinel bit 31: arithmetic shift right gives -1 or 0
+  sig0 = vshrq_n_s32(raw0, 31);
+  sig1 = vshrq_n_s32(raw1, 31);
+  // Strip sentinel to get MagSgn value
+  v0 = vandq_s32(raw0, mask31);
+  v1 = vandq_s32(raw1, mask31);
+  // rho from sigma bits (negate -1→1, 0→0)
+  uint32x4_t sig0_u = vreinterpretq_u32_s32(vnegq_s32(sig0));
+  uint32x4_t sig1_u = vreinterpretq_u32_s32(vnegq_s32(sig1));
+  rho0 = vgetq_lane_u32(sig0_u, 0) | (vgetq_lane_u32(sig0_u, 1) << 1)
+       | (vgetq_lane_u32(sig0_u, 2) << 2) | (vgetq_lane_u32(sig0_u, 3) << 3);
+  rho1 = vgetq_lane_u32(sig1_u, 0) | (vgetq_lane_u32(sig1_u, 1) << 1)
+       | (vgetq_lane_u32(sig1_u, 2) << 2) | (vgetq_lane_u32(sig1_u, 3) << 3);
+  // E = (32 - clz(v)) & sig
+  E0 = vandq_s32(vsubq_s32(vdupq_n_s32(32), vreinterpretq_s32_u32(vclzq_u32(vreinterpretq_u32_s32(v0)))),
+                  sig0);
+  E1 = vandq_s32(vsubq_s32(vdupq_n_s32(32), vreinterpretq_s32_u32(vclzq_u32(vreinterpretq_u32_s32(v1)))),
+                  sig1);
 };
 
-auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
+auto make_storage_one = [](int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
                            int32x4_t &v0, int32x4_t &E0, int32_t &rho0) {
-  //  v0 = {sp0[0], sp1[0], sp0[1], sp1[1]};
-  v0 = vsetq_lane_s32(sp0[0], v0, 0);
-  v0 = vsetq_lane_s32(sp1[0], v0, 1);
-  v0 = vsetq_lane_s32(sp0[1], v0, 2);
-  v0 = vsetq_lane_s32(sp1[1], v0, 3);
-
-  //  int32x4_t sig   = {ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1};
-  //  int32x4_t shift = {0, 1, 2, 3};
-  int32x4_t sig   = {0};
-  sig             = vsetq_lane_s32(ssp0[0] & 1, sig, 0);
-  sig             = vsetq_lane_s32(ssp1[0] & 1, sig, 1);
-  sig             = vsetq_lane_s32(ssp0[1] & 1, sig, 2);
-  sig             = vsetq_lane_s32(ssp1[1] & 1, sig, 3);
-  int32x4_t shift = {0};
-  shift           = vsetq_lane_s32(0, shift, 0);
-  shift           = vsetq_lane_s32(1, shift, 1);
-  shift           = vsetq_lane_s32(2, shift, 2);
-  shift           = vsetq_lane_s32(3, shift, 3);
-
-  uint32x4_t vtmp = vshlq_s32(sig, shift);
-  rho0            = vaddvq_u32(vtmp) & 0xF;
-  sig0            = vcgtzq_s32(sig);
-
-  E0 = vandq_s32(vsubq_u32(vdupq_n_s32(32), vclzq_u32(v0)), sig0);
+  const int32x4_t mask31 = vdupq_n_s32(0x7FFFFFFF);
+  int32x4_t raw0 = {0};
+  raw0 = vsetq_lane_s32(sp0[0], raw0, 0);
+  raw0 = vsetq_lane_s32(sp1[0], raw0, 1);
+  raw0 = vsetq_lane_s32(sp0[1], raw0, 2);
+  raw0 = vsetq_lane_s32(sp1[1], raw0, 3);
+  // Derive sigma from sentinel bit 31
+  sig0 = vshrq_n_s32(raw0, 31);
+  // Strip sentinel
+  v0 = vandq_s32(raw0, mask31);
+  // rho from sigma
+  uint32x4_t sig0_u = vreinterpretq_u32_s32(vnegq_s32(sig0));
+  rho0 = vgetq_lane_u32(sig0_u, 0) | (vgetq_lane_u32(sig0_u, 1) << 1)
+       | (vgetq_lane_u32(sig0_u, 2) << 2) | (vgetq_lane_u32(sig0_u, 3) << 3);
+  // E = (32 - clz(v)) & sig
+  E0 = vandq_s32(
+      vsubq_s32(vdupq_n_s32(32), vreinterpretq_s32_u32(vclzq_u32(vreinterpretq_u32_s32(v0)))), sig0);
 };
 
 // joint termination of MEL and VLC
@@ -380,16 +357,14 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   // Initial line-pair
   /*******************************************************************************************************************/
-  uint8_t *ssp0 = block->block_states + 1U * (block->blkstate_stride) + 1U;
-  uint8_t *ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0  = block->sample_buf;
-  int32_t *sp1  = sp0 + block->blksampl_stride;
+  int32_t *sp0 = block->sample_buf;
+  int32_t *sp1 = sp0 + block->blksampl_stride;
   uint32_t qx;
   for (qx = QW; qx >= 2; qx -= 2) {
     bool uoff_flag = true;
 
     // MAKE_STORAGE()
-    make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
+    make_storage(sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
     // update Eline
     vst1q_s32(E_p, vuzp2q_s32(E0, E1));  // vzip2q_s32(vzip1q_s32(E0, E1), vzip2q_s32(E0, E1)));
     E_p += 4;
@@ -481,13 +456,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     *rho_p++ = rho0;
     *rho_p++ = rho1;
     // update pointer to line buffer
-    ssp0 += 4;
-    ssp1 += 4;
     sp0 += 4;
     sp1 += 4;
   }
   if (qx) {
-    make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
+    make_storage_one(sp0, sp1, sig0, v0, E0, rho0);
     *E_p++ = vgetq_lane_s32(E0, 1);
     *E_p++ = vgetq_lane_s32(E0, 3);
 
@@ -547,12 +520,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);  // (nw | n) << 8
     context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);   // (ne | nf) << 10
 
-    ssp0 = block->block_states + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
-    ssp1 = ssp0 + block->blkstate_stride;
-    sp0  = block->sample_buf + 2U * (qy * block->blksampl_stride);
-    sp1  = sp0 + block->blksampl_stride;
+    sp0 = block->sample_buf + 2U * (qy * block->blksampl_stride);
+    sp1 = sp0 + block->blksampl_stride;
     for (qx = QW; qx >= 2; qx -= 2) {
-      make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
+      make_storage(sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
       // MEL encoding of the first quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho0 != 0));
@@ -634,13 +605,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       *rho_p++ = rho0;
       *rho_p++ = rho1;
       // update pointer to line buffer
-      ssp0 += 4;
-      ssp1 += 4;
       sp0 += 4;
       sp1 += 4;
     }
     if (qx) {
-      make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
+      make_storage_one(sp0, sp1, sig0, v0, E0, rho0);
       *E_p++ = vgetq_lane_s32(E0, 1);
       *E_p++ = vgetq_lane_s32(E0, 3);
 

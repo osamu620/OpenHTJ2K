@@ -581,10 +581,8 @@ static inline void stamp_strip_pointers(fdwt_level_sink_ctx *c, int32_t br) {
   }
 #endif
 
-  int32_t *pbuf             = c->strip_gbufs[slot_idx];
-  uint8_t *spbuf            = c->strip_sgbufs[slot_idx];
-  uint8_t *const sgbuf_base = spbuf;
-  int32_t cblk_count        = 0;
+  int32_t *pbuf      = c->strip_gbufs[slot_idx];
+  int32_t cblk_count = 0;
   for (uint8_t b = 0; b < 3; ++b) {
     const int32_t ncx = c->sink_num_cblk_x[b];
     if (ncx == 0) continue;
@@ -595,15 +593,11 @@ static inline void stamp_strip_pointers(fdwt_level_sink_ctx *c, int32_t br) {
       const uint32_t QWx2  = round_up(block->size.x, 8U);
       const uint32_t QHx2  = round_up(block->size.y, 8U);
       block->sample_buf    = pbuf;
-      block->block_states  = spbuf;
       block->pre_quantized = true;
       pbuf += QWx2 * QHx2;
-      spbuf += (QWx2 + 2) * (QHx2 + 2);
       ++cblk_count;
     }
   }
-  const size_t sg_used = static_cast<size_t>(spbuf - sgbuf_base);
-  if (sg_used) std::memset(sgbuf_base, 0, sg_used);
 
   // Publish the dispatch count BEFORE enc_overlap_dispatch fires (which
   // happens later, on the strip's last row).  Workers will fetch_sub(1)
@@ -632,17 +626,16 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
     float fs = 1.0f / block->stepsize;
     fs /= (1 << FRACBITS);
     if (block->transformation) fs = 1.0f;
-    int32_t *dp = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
-    uint8_t *stp =
-        block->block_states + (row_in_cblk + 1) * static_cast<int32_t>(block->blkstate_stride) + 1;
+    int32_t *dp      = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
     const sprec_t *s = src + xstarts[static_cast<size_t>(xi)];
     const int32_t w  = static_cast<int32_t>(block->size.x);
     {
 #if defined(__AVX2__)
-      const __m256i vone  = _mm256_set1_epi32(1);
-      const __m256 vscale = _mm256_set1_ps(fs);
-      __m256i vor         = _mm256_setzero_si256();
-      int32_t col         = 0;
+      const __m256i vone      = _mm256_set1_epi32(1);
+      const __m256 vscale     = _mm256_set1_ps(fs);
+      const __m256i vsentinel = _mm256_set1_epi32(static_cast<int32_t>(0x80000000u));
+      __m256i vor             = _mm256_setzero_si256();
+      int32_t col             = 0;
       for (; col + 15 < w; col += 16) {
         __m256i v0, v1;
         if (block->transformation) {
@@ -665,16 +658,11 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
                                          _mm256_and_si256(s0, mask0));
         v1            = _mm256_add_epi32(_mm256_slli_epi32(_mm256_sub_epi32(v1, vone1), 1),
                                          _mm256_and_si256(s1, mask1));
+        // Set sentinel bit 31 for significant samples
+        v0 = _mm256_or_si256(v0, _mm256_and_si256(mask0, vsentinel));
+        v1 = _mm256_or_si256(v1, _mm256_and_si256(mask1, vsentinel));
         _mm256_storeu_si256((__m256i *)(dp + col), v0);
         _mm256_storeu_si256((__m256i *)(dp + col + 8), v1);
-        // block_states: pack sigma to bytes
-        v0                 = _mm256_packs_epi32(vone0, vone1);
-        v0                 = _mm256_permute4x64_epi64(v0, 0xD8);
-        v0                 = _mm256_packs_epi16(v0, v0);
-        v0                 = _mm256_permute4x64_epi64(v0, 0xD8);
-        __m128i vsig       = _mm256_extracti128_si256(v0, 0);
-        __m128i old_states = _mm_loadu_si128((__m128i *)(stp + col));
-        _mm_storeu_si128((__m128i *)(stp + col), _mm_or_si128(old_states, vsig));
       }
       if (!_mm256_testz_si256(vor, vor)) block->pre_or_val |= 1;
       for (; col < w; ++col) {
@@ -691,10 +679,10 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
         temp          = (temp < 0) ? -temp : temp;
         if (temp) {
           block->pre_or_val |= 1;
-          stp[col] |= 1;
           temp--;
           temp <<= 1;
           temp += static_cast<uint8_t>(sign >> 31);
+          temp |= static_cast<int32_t>(0x80000000u);
         }
         dp[col] = temp;
       }
@@ -702,14 +690,17 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
     if (static_cast<int32_t>(block->blksampl_stride) > w)
       memset(dp + w, 0,
              static_cast<size_t>(block->blksampl_stride - static_cast<size_t>(w)) * sizeof(int32_t));
-    // Odd-height: zero the trailing sample row that make_storage will read at
-    // qy = QH-1.  Sigma bits at that row are already 0 (sgbuf is memset per
-    // encode), but gbuf is grow-only and may contain stale samples; without
-    // this, emitFlat ORs garbage v lanes into the bitstream accumulator.
-    if ((static_cast<uint32_t>(block->size.y) & 1u)
-        && row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
-      memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
-             static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+    // Zero ALL trailing rows from size.y to QHx2 when this is the last row.
+    // With sentinel-in-sample, there is no separate sigma buffer; make_storage
+    // derives sigma from bit 31, so trailing rows must be zero to avoid
+    // garbage significance.
+    if (row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
+      const uint32_t QHx2 = (block->size.y + 7U) & ~7U;
+      const int32_t trail_rows = static_cast<int32_t>(QHx2) - static_cast<int32_t>(block->size.y);
+      if (trail_rows > 0) {
+        memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
+               static_cast<size_t>(trail_rows) * static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+      }
     }
   }
 }
@@ -729,16 +720,15 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
   for (int32_t xi = 0; xi < ncx; ++xi) {
     j2k_codeblock *block = cblks[static_cast<size_t>(cy * ncx + xi)];
     if (row_in_cblk >= static_cast<int32_t>(block->size.y)) continue;
-    int32_t *dp = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
-    uint8_t *stp =
-        block->block_states + (row_in_cblk + 1) * static_cast<int32_t>(block->blkstate_stride) + 1;
+    int32_t *dp      = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
     const int32_t *s = src + xstarts[static_cast<size_t>(xi)];
     const int32_t w  = static_cast<int32_t>(block->size.x);
     {
 #if defined(__AVX2__)
-      const __m256i vone = _mm256_set1_epi32(1);
-      __m256i vor        = _mm256_setzero_si256();
-      int32_t col        = 0;
+      const __m256i vone      = _mm256_set1_epi32(1);
+      const __m256i vsentinel = _mm256_set1_epi32(static_cast<int32_t>(0x80000000u));
+      __m256i vor             = _mm256_setzero_si256();
+      int32_t col             = 0;
       for (; col + 15 < w; col += 16) {
         __m256i v0    = _mm256_loadu_si256((const __m256i *)(s + col));
         __m256i v1    = _mm256_loadu_si256((const __m256i *)(s + col + 8));
@@ -755,15 +745,10 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
                                          _mm256_and_si256(s0, mask0));
         v1            = _mm256_add_epi32(_mm256_slli_epi32(_mm256_sub_epi32(v1, vone1), 1),
                                          _mm256_and_si256(s1, mask1));
+        v0 = _mm256_or_si256(v0, _mm256_and_si256(mask0, vsentinel));
+        v1 = _mm256_or_si256(v1, _mm256_and_si256(mask1, vsentinel));
         _mm256_storeu_si256((__m256i *)(dp + col), v0);
         _mm256_storeu_si256((__m256i *)(dp + col + 8), v1);
-        v0                 = _mm256_packs_epi32(vone0, vone1);
-        v0                 = _mm256_permute4x64_epi64(v0, 0xD8);
-        v0                 = _mm256_packs_epi16(v0, v0);
-        v0                 = _mm256_permute4x64_epi64(v0, 0xD8);
-        __m128i vsig       = _mm256_extracti128_si256(v0, 0);
-        __m128i old_states = _mm_loadu_si128((__m128i *)(stp + col));
-        _mm_storeu_si128((__m128i *)(stp + col), _mm_or_si128(old_states, vsig));
       }
       if (!_mm256_testz_si256(vor, vor)) block->pre_or_val |= 1;
       for (; col < w; ++col) {
@@ -776,10 +761,10 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
         temp          = (temp < 0) ? -temp : temp;
         if (temp) {
           block->pre_or_val |= 1;
-          stp[col] |= 1;
           temp--;
           temp <<= 1;
           temp += static_cast<uint8_t>(sign >> 31);
+          temp |= static_cast<int32_t>(0x80000000u);
         }
         dp[col] = temp;
       }
@@ -787,10 +772,13 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
     if (static_cast<int32_t>(block->blksampl_stride) > w)
       memset(dp + w, 0,
              static_cast<size_t>(block->blksampl_stride - static_cast<size_t>(w)) * sizeof(int32_t));
-    if ((static_cast<uint32_t>(block->size.y) & 1u)
-        && row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
-      memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
-             static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+    if (row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
+      const uint32_t QHx2 = (block->size.y + 7U) & ~7U;
+      const int32_t trail_rows = static_cast<int32_t>(QHx2) - static_cast<int32_t>(block->size.y);
+      if (trail_rows > 0) {
+        memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
+               static_cast<size_t>(trail_rows) * static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+      }
     }
   }
 }
@@ -807,7 +795,7 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row, const spr
 
   const int32_t u_off = c->u0 & 1;
 
-  // Strip-ring stamp: re-stamp block->sample_buf / block->block_states at the
+  // Strip-ring stamp: re-stamp block->sample_buf at the
   // first emitted row of each new cblk-row strip.  In the overlap path,
   // hl_y0 == lh_y0 (asserted at setup), so both legs compute the same strip
   // index for the same vertical position.  Whichever leg fires first for
@@ -3795,9 +3783,6 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
 
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
   const int32_t shiftup = (transformation == 1) ? 0 : FRACBITS - this->bitdepth;
-  if (shiftup < 0) {
-    printf("WARNING: Over 13 bpp precision will be down-shifted to 12 bpp.\n");
-  }
   // DC offset for signed input shall be 0
   const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
 
@@ -6652,13 +6637,11 @@ uint8_t *j2k_tile::encode_line_based() {
     epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
                          static_cast<size_t>(max_total_cblks) * 6156);
     int32_t *gbuf      = epc->gbuf;
-    uint8_t *sgbuf     = epc->sgbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
       int32_t *pbuf    = gbuf;
-      uint8_t *spbuf   = sgbuf;
       for (uint8_t b = 0; b < cr->num_bands; b++) {
         j2k_precinct_subband *cpb = cp->access_pband(b);
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -6668,11 +6651,8 @@ uint8_t *j2k_tile::encode_line_based() {
           const uint32_t QHx2 = round_up(block->size.y, 8U);
           block->sample_buf   = pbuf;
           pbuf += QWx2 * QHx2;
-          block->block_states = spbuf;
-          spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       enc_remaining.store(0, std::memory_order_relaxed);
       uint32_t task_idx = 0;
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -6721,12 +6701,10 @@ uint8_t *j2k_tile::encode_line_based() {
     if (max_total_cblks == 0) return;
     epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
                          static_cast<size_t>(max_total_cblks) * 6156);
-    int32_t *gbuf  = epc->gbuf;
-    uint8_t *sgbuf = epc->sgbuf;
+    int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
       int32_t *pbuf    = gbuf;
-      uint8_t *spbuf   = sgbuf;
       for (uint8_t b = 0; b < cr->num_bands; b++) {
         j2k_precinct_subband *cpb = cp->access_pband(b);
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -6736,11 +6714,8 @@ uint8_t *j2k_tile::encode_line_based() {
           const uint32_t QHx2 = round_up(block->size.y, 8U);
           block->sample_buf   = pbuf;
           pbuf += QWx2 * QHx2;
-          block->block_states = spbuf;
-          spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       g_cblk_pool = epc->pools[0].get();
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
         j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -6917,13 +6892,11 @@ uint8_t *j2k_tile::encode_line_based_stream(
     epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
                          static_cast<size_t>(max_total_cblks) * 6156);
     int32_t *gbuf      = epc->gbuf;
-    uint8_t *sgbuf     = epc->sgbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
       int32_t *pbuf    = gbuf;
-      uint8_t *spbuf   = sgbuf;
       for (uint8_t b = 0; b < cr->num_bands; b++) {
         j2k_precinct_subband *cpb = cp->access_pband(b);
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -6933,11 +6906,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const uint32_t QHx2 = round_up(block->size.y, 8U);
           block->sample_buf   = pbuf;
           pbuf += QWx2 * QHx2;
-          block->block_states = spbuf;
-          spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       enc_remaining.store(0, std::memory_order_relaxed);
       uint32_t task_idx = 0;
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -6986,12 +6956,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
     if (max_total_cblks == 0) return;
     epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
                          static_cast<size_t>(max_total_cblks) * 6156);
-    int32_t *gbuf  = epc->gbuf;
-    uint8_t *sgbuf = epc->sgbuf;
+    int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
       int32_t *pbuf    = gbuf;
-      uint8_t *spbuf   = sgbuf;
       for (uint8_t b = 0; b < cr->num_bands; b++) {
         j2k_precinct_subband *cpb = cp->access_pband(b);
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -7001,11 +6969,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const uint32_t QHx2 = round_up(block->size.y, 8U);
           block->sample_buf   = pbuf;
           pbuf += QWx2 * QHx2;
-          block->block_states = spbuf;
-          spbuf += (QWx2 + 2) * (QHx2 + 2);
         }
       }
-      memset(sgbuf, 0, static_cast<size_t>(spbuf - sgbuf));
       g_cblk_pool = epc->pools[0].get();
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
         j2k_precinct_subband *cpb = cp->access_pband(b);

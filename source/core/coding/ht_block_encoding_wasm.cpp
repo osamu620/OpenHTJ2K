@@ -98,14 +98,14 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
     fscale /= (1 << (FRACBITS));
   }
 
-  v128_t vscale         = wasm_f32x4_splat(fscale);
-  v128_t vorval         = wasm_i32x4_const_splat(0);
+  const v128_t vscale    = wasm_f32x4_splat(fscale);
+  const v128_t vone      = wasm_i32x4_const_splat(1);
+  const v128_t vsentinel = wasm_i32x4_const_splat(static_cast<int32_t>(0x80000000u));
+  v128_t vorval          = wasm_i32x4_const_splat(0);
   for (uint16_t i = 0; i < static_cast<uint16_t>(height); ++i) {
-    sprec_t *sp        = this->band_buf + i * stride;
-    int32_t *dp        = this->sample_buf + i * blksampl_stride;
-    size_t block_index = (i + 1U) * (blkstate_stride) + 1U;
-    uint8_t *dstblk    = block_states + block_index;
-    int16_t len        = static_cast<int16_t>(width);
+    sprec_t *sp = this->band_buf + i * stride;
+    int32_t *dp = this->sample_buf + i * blksampl_stride;
+    int16_t len = static_cast<int16_t>(width);
     for (; len >= 8; len -= 8) {
       v128_t v0, v1;
       if (lossless) {
@@ -119,49 +119,48 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
       v128_t s1 = wasm_u32x4_shr(v1, 31);
       v0 = wasm_i32x4_abs(v0);
       v1 = wasm_i32x4_abs(v1);
-      v128_t narrow0     = wasm_i16x8_narrow_i32x4(v0, v0);
-      v128_t narrow1     = wasm_i16x8_narrow_i32x4(v1, v1);
-      v128_t combined16  = wasm_i8x16_shuffle(narrow0, narrow1, 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20,
-                                             21, 22, 23);
-      v128_t gt0_mask    = wasm_i16x8_gt(combined16, wasm_i16x8_const_splat(0));
-      v128_t vblkstate_v = wasm_v128_and(gt0_mask, wasm_i16x8_const_splat(1));
-      v128_t narrow8     = wasm_i8x16_narrow_i16x8(vblkstate_v, vblkstate_v);
-      *(uint64_t *)dstblk = (uint64_t)wasm_i64x2_extract_lane(narrow8, 0);
-      dstblk += 8;
-      vorval = wasm_v128_or(vorval, v0);
-      vorval = wasm_v128_or(vorval, v1);
-      v0 = wasm_u32x4_qsub(v0, wasm_i32x4_const_splat(1));
-      v1 = wasm_u32x4_qsub(v1, wasm_i32x4_const_splat(1));
+      // Generate nonzero masks
+      v128_t mask0 = wasm_i32x4_gt(v0, wasm_i32x4_const_splat(0));
+      v128_t mask1 = wasm_i32x4_gt(v1, wasm_i32x4_const_splat(0));
+      // Accumulate or_val
+      vorval = wasm_v128_or(vorval, mask0);
+      vorval = wasm_v128_or(vorval, mask1);
+      // Convert to MagSgn form: (abs-1)<<1 | sign, only for nonzero
+      v128_t vone0 = wasm_v128_and(mask0, vone);
+      v128_t vone1 = wasm_v128_and(mask1, vone);
+      v0 = wasm_i32x4_sub(v0, vone0);
+      v1 = wasm_i32x4_sub(v1, vone1);
       v0 = wasm_i32x4_shl(v0, 1);
       v1 = wasm_i32x4_shl(v1, 1);
-      v0 = wasm_i32x4_add(v0, s0);
-      v1 = wasm_i32x4_add(v1, s1);
+      v0 = wasm_i32x4_add(v0, wasm_v128_and(s0, mask0));
+      v1 = wasm_i32x4_add(v1, wasm_v128_and(s1, mask1));
+      // Set sentinel bit 31 for significant samples
+      v0 = wasm_v128_or(v0, wasm_v128_and(mask0, vsentinel));
+      v1 = wasm_v128_or(v1, wasm_v128_and(mask1, vsentinel));
       wasm_v128_store(dp, v0);
       wasm_v128_store(dp + 4, v1);
       sp += 8;
       dp += 8;
     }
-    or_val |= static_cast<unsigned int>(wasm_i32x4_reduce_max(vorval));
     for (; len > 0; --len) {
       int32_t temp;
       if (lossless)
         temp = static_cast<int32_t>(sp[0]);
       else
         temp = static_cast<int32_t>(static_cast<float>(sp[0]) * fscale);
-      uint32_t sign    = static_cast<uint32_t>(temp) & 0x80000000;
-      temp             = (temp < 0) ? -temp : temp;
+      uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
+      temp = (temp < 0) ? -temp : temp;
       temp &= 0x7FFFFFFF;
       if (temp) {
         or_val |= 1;
-        dstblk[0] |= 1;
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
+        temp |= static_cast<int32_t>(0x80000000u);
       }
       dp[0] = temp;
       ++sp;
       ++dp;
-      ++dstblk;
     }
     if (blksampl_stride > width)
       memset(dp, 0, (blksampl_stride - width) * sizeof(int32_t));
@@ -169,6 +168,9 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
   const uint32_t QHx2 = (height + 7U) & ~7U;
   for (uint32_t i = height; i < QHx2; ++i)
     memset(this->sample_buf + i * blksampl_stride, 0, blksampl_stride * sizeof(int32_t));
+  if (wasm_i32x4_reduce_max(vorval) != 0) {
+    or_val |= 1;
+  }
 }
 
 /********************************************************************************
@@ -223,46 +225,46 @@ void state_MEL_enc::termMEL() {
 /********************************************************************************
  * HT cleanup encoding: helper functions
  *******************************************************************************/
-auto make_storage = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, v128_t &sig0,
-                       v128_t &sig1, v128_t &v0, v128_t &v1, v128_t &E0, v128_t &E1, int32_t &rho0,
+auto make_storage = [](int32_t *sp0, int32_t *sp1, v128_t &sig0, v128_t &sig1,
+                       v128_t &v0, v128_t &v1, v128_t &E0, v128_t &E1, int32_t &rho0,
                        int32_t &rho1) {
-  v128_t t0 = wasm_v128_load(sp0);
-  v128_t t1 = wasm_v128_load(sp1);
-  v0        = wasm_i32x4_shuffle(t0, t1, 0, 4, 1, 5);
-  v1        = wasm_i32x4_shuffle(t0, t1, 2, 6, 3, 7);
-
-  v128_t vssp0_l = wasm_v128_load64_zero(ssp0);
-  v128_t vssp1_l = wasm_v128_load64_zero(ssp1);
-  v128_t sig01_v = wasm_v128_and(
-      wasm_i8x16_shuffle(vssp0_l, vssp1_l, 0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23),
-      wasm_i8x16_const_splat(1));
-  // sig0 from bytes 0-3 of sig01_v
-  v128_t sig01_u16 = wasm_u16x8_extend_low_u8x16(sig01_v);
-  sig0             = wasm_i32x4_gt(wasm_u32x4_extend_low_u16x8(sig01_u16), wasm_i32x4_const_splat(0));
-  // sig1 from bytes 4-7 of sig01_v
-  v128_t sig01_hi     = wasm_i8x16_shuffle(sig01_v, sig01_v, 4, 5, 6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 4, 5,
-                                           6, 7);
-  v128_t sig01_hi_u16 = wasm_u16x8_extend_low_u8x16(sig01_hi);
-  sig1                = wasm_i32x4_gt(wasm_u32x4_extend_low_u16x8(sig01_hi_u16), wasm_i32x4_const_splat(0));
-  // rho computation
-  uint64_t sig_bits  = (uint64_t)wasm_i64x2_extract_lane(sig01_v, 0);
-  uint8_t rho01_byte = 0;
-  for (int k = 0; k < 8; k++) rho01_byte |= (uint8_t)(((sig_bits >> (8 * k)) & 1) << k);
-  rho0 = rho01_byte & 0xF;
-  rho1 = rho01_byte >> 4;
-
+  const v128_t mask31 = wasm_i32x4_const_splat(0x7FFFFFFF);
+  v128_t t0   = wasm_v128_load(sp0);
+  v128_t t1   = wasm_v128_load(sp1);
+  v128_t raw0 = wasm_i32x4_shuffle(t0, t1, 0, 4, 1, 5);
+  v128_t raw1 = wasm_i32x4_shuffle(t0, t1, 2, 6, 3, 7);
+  // Derive sigma from sentinel bit 31: arithmetic shift right gives -1 or 0
+  sig0 = wasm_i32x4_shr(raw0, 31);
+  sig1 = wasm_i32x4_shr(raw1, 31);
+  // Strip sentinel to get MagSgn value
+  v0 = wasm_v128_and(raw0, mask31);
+  v1 = wasm_v128_and(raw1, mask31);
+  // rho from sigma bits: sig is all-ones (-1) for significant, negate to get 0/1
+  v128_t sig0_01 = wasm_i32x4_neg(sig0);
+  v128_t sig1_01 = wasm_i32x4_neg(sig1);
+  rho0 = wasm_i32x4_extract_lane(sig0_01, 0) | (wasm_i32x4_extract_lane(sig0_01, 1) << 1)
+       | (wasm_i32x4_extract_lane(sig0_01, 2) << 2) | (wasm_i32x4_extract_lane(sig0_01, 3) << 3);
+  rho1 = wasm_i32x4_extract_lane(sig1_01, 0) | (wasm_i32x4_extract_lane(sig1_01, 1) << 1)
+       | (wasm_i32x4_extract_lane(sig1_01, 2) << 2) | (wasm_i32x4_extract_lane(sig1_01, 3) << 3);
+  // E = (32 - clz(v)) & sig
   E0 = wasm_v128_and(wasm_i32x4_sub(wasm_i32x4_const_splat(32), wasm_u32x4_clz(v0)), sig0);
   E1 = wasm_v128_and(wasm_i32x4_sub(wasm_i32x4_const_splat(32), wasm_u32x4_clz(v1)), sig1);
 };
 
-auto make_storage_one = [](uint8_t *ssp0, uint8_t *ssp1, int32_t *sp0, int32_t *sp1, v128_t &sig0,
+auto make_storage_one = [](int32_t *sp0, int32_t *sp1, v128_t &sig0,
                            v128_t &v0, v128_t &E0, int32_t &rho0) {
-  v0              = wasm_i32x4_make(sp0[0], sp1[0], sp0[1], sp1[1]);
-  v128_t sig      = wasm_i32x4_make(ssp0[0] & 1, ssp1[0] & 1, ssp0[1] & 1, ssp1[1] & 1);
-  const v128_t shift = wasm_i32x4_const(0, 1, 2, 3);
-  rho0  = (int32_t)((uint32_t)wasm_i32x4_reduce_add(wasm_i32x4_shlv(sig, shift))) & 0xF;
-  sig0  = wasm_i32x4_gt(sig, wasm_i32x4_const_splat(0));
-  E0    = wasm_v128_and(wasm_i32x4_sub(wasm_i32x4_const_splat(32), wasm_u32x4_clz(v0)), sig0);
+  const v128_t mask31 = wasm_i32x4_const_splat(0x7FFFFFFF);
+  v128_t raw0 = wasm_i32x4_make(sp0[0], sp1[0], sp0[1], sp1[1]);
+  // Derive sigma from sentinel bit 31
+  sig0 = wasm_i32x4_shr(raw0, 31);
+  // Strip sentinel
+  v0 = wasm_v128_and(raw0, mask31);
+  // rho from sigma
+  v128_t sig0_01 = wasm_i32x4_neg(sig0);
+  rho0 = wasm_i32x4_extract_lane(sig0_01, 0) | (wasm_i32x4_extract_lane(sig0_01, 1) << 1)
+       | (wasm_i32x4_extract_lane(sig0_01, 2) << 2) | (wasm_i32x4_extract_lane(sig0_01, 3) << 3);
+  // E = (32 - clz(v)) & sig
+  E0 = wasm_v128_and(wasm_i32x4_sub(wasm_i32x4_const_splat(32), wasm_u32x4_clz(v0)), sig0);
 };
 
 // joint termination of MEL and VLC
@@ -369,15 +371,13 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   /*******************************************************************************************************************/
   // Initial line-pair
   /*******************************************************************************************************************/
-  uint8_t *ssp0 = block->block_states + 1U * (block->blkstate_stride) + 1U;
-  uint8_t *ssp1 = ssp0 + block->blkstate_stride;
-  int32_t *sp0  = block->sample_buf;
-  int32_t *sp1  = sp0 + block->blksampl_stride;
+  int32_t *sp0 = block->sample_buf;
+  int32_t *sp1 = sp0 + block->blksampl_stride;
   uint32_t qx;
   for (qx = QW; qx >= 2; qx -= 2) {
     bool uoff_flag = true;
 
-    make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
+    make_storage(sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
     // update Eline
     wasm_v128_store(E_p, wasm_i32x4_shuffle(E0, E1, 1, 3, 5, 7));
     E_p += 4;
@@ -469,13 +469,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     *rho_p++ = rho0;
     *rho_p++ = rho1;
     // update pointer to line buffer
-    ssp0 += 4;
-    ssp1 += 4;
     sp0 += 4;
     sp1 += 4;
   }
   if (qx) {
-    make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
+    make_storage_one(sp0, sp1, sig0, v0, E0, rho0);
     *E_p++ = wasm_i32x4_extract_lane(E0, 1);
     *E_p++ = wasm_i32x4_extract_lane(E0, 3);
 
@@ -534,12 +532,10 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     context |= ((rho_p[-1] & 0x8) << 5) | ((rho_p[0] & 0x2) << 7);
     context |= ((rho_p[0] & 0x8) << 7) | ((rho_p[1] & 0x2) << 9);
 
-    ssp0 = block->block_states + (2U * qy + 1U) * (block->blkstate_stride) + 1U;
-    ssp1 = ssp0 + block->blkstate_stride;
-    sp0  = block->sample_buf + 2U * (qy * block->blksampl_stride);
-    sp1  = sp0 + block->blksampl_stride;
+    sp0 = block->sample_buf + 2U * (qy * block->blksampl_stride);
+    sp1 = sp0 + block->blksampl_stride;
     for (qx = QW; qx >= 2; qx -= 2) {
-      make_storage(ssp0, ssp1, sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
+      make_storage(sp0, sp1, sig0, sig1, v0, v1, E0, E1, rho0, rho1);
       // MEL encoding of the first quad
       if (context == 0) {
         MEL_encoder.encodeMEL((rho0 != 0));
@@ -621,13 +617,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       *rho_p++ = rho0;
       *rho_p++ = rho1;
       // update pointer to line buffer
-      ssp0 += 4;
-      ssp1 += 4;
       sp0 += 4;
       sp1 += 4;
     }
     if (qx) {
-      make_storage_one(ssp0, ssp1, sp0, sp1, sig0, v0, E0, rho0);
+      make_storage_one(sp0, sp1, sig0, v0, E0, rho0);
       *E_p++ = wasm_i32x4_extract_lane(E0, 1);
       *E_p++ = wasm_i32x4_extract_lane(E0, 3);
 
