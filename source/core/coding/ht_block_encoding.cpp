@@ -77,7 +77,7 @@ void j2k_codeblock::quantize(uint32_t &or_val) {
         temp--;
         temp <<= 1;
         temp += static_cast<uint8_t>(sign >> 31);
-        temp |= static_cast<int32_t>(0x80000000u);
+        temp |= INT32_MIN;
       }
       dp[0] = temp;
       ++sp;

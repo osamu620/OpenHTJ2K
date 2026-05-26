@@ -548,10 +548,8 @@ inline void dec_strip_barrier_wait(std::atomic<int> &cnt);
 }
 #endif
 
-// Re-stamp block->sample_buf / block->block_states for every codeblock in
-// cblk-row strip `br` into this level's per-strip scratch ring slot, then
-// zero the sgbuf portion (sink_quantize_row OR-aggregates sigma bits, so the
-// slot must start zeroed each time it is reused).  Called by
+// Re-stamp block->sample_buf for every codeblock in cblk-row strip `br`
+// into this level's per-strip scratch ring slot.  Called by
 // fdwt_level_sink_fn on the first emitted row of each new strip — both legs
 // (HL and LH+HH) of the same strip share the slot, so the first leg to fire
 // does the stamp and the second short-circuits via cx->last_stamped_br == br.
@@ -609,7 +607,7 @@ static inline void stamp_strip_pointers(fdwt_level_sink_ctx *c, int32_t br) {
   }
 }
 
-// Quantize one DWT row and scatter into codeblock sample_buf + block_states.
+// Quantize one DWT row and scatter into codeblock sample_buf.
 static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_t band_idx,
                                      fdwt_level_sink_ctx *c) {
   const int32_t ncx         = c->sink_num_cblk_x[band_idx];
@@ -633,7 +631,7 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
 #if defined(__AVX2__)
       const __m256i vone      = _mm256_set1_epi32(1);
       const __m256 vscale     = _mm256_set1_ps(fs);
-      const __m256i vsentinel = _mm256_set1_epi32(static_cast<int32_t>(0x80000000u));
+      const __m256i vsentinel = _mm256_set1_epi32(INT32_MIN);
       __m256i vor             = _mm256_setzero_si256();
       int32_t col             = 0;
       for (; col + 15 < w; col += 16) {
@@ -682,7 +680,7 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
           temp--;
           temp <<= 1;
           temp += static_cast<uint8_t>(sign >> 31);
-          temp |= static_cast<int32_t>(0x80000000u);
+          temp |= INT32_MIN;
         }
         dp[col] = temp;
       }
@@ -726,7 +724,7 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
     {
 #if defined(__AVX2__)
       const __m256i vone      = _mm256_set1_epi32(1);
-      const __m256i vsentinel = _mm256_set1_epi32(static_cast<int32_t>(0x80000000u));
+      const __m256i vsentinel = _mm256_set1_epi32(INT32_MIN);
       __m256i vor             = _mm256_setzero_si256();
       int32_t col             = 0;
       for (; col + 15 < w; col += 16) {
@@ -764,7 +762,7 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
           temp--;
           temp <<= 1;
           temp += static_cast<uint8_t>(sign >> 31);
-          temp |= static_cast<int32_t>(0x80000000u);
+          temp |= INT32_MIN;
         }
         dp[col] = temp;
       }
@@ -6634,8 +6632,7 @@ uint8_t *j2k_tile::encode_line_based() {
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
-                         static_cast<size_t>(max_total_cblks) * 6156);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
     int32_t *gbuf      = epc->gbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
@@ -6699,8 +6696,7 @@ uint8_t *j2k_tile::encode_line_based() {
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
-                         static_cast<size_t>(max_total_cblks) * 6156);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
     int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
@@ -6889,8 +6885,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
-                         static_cast<size_t>(max_total_cblks) * 6156);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
     int32_t *gbuf      = epc->gbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
@@ -6954,8 +6949,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096,
-                         static_cast<size_t>(max_total_cblks) * 6156);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
     int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
