@@ -49,7 +49,7 @@ std::vector<uint8_t> read_file(const char *path) {
   auto sz = static_cast<std::size_t>(std::ftell(f));
   std::fseek(f, 0, SEEK_SET);
   std::vector<uint8_t> buf(sz);
-  std::fread(buf.data(), 1, sz, f);
+  if (std::fread(buf.data(), 1, sz, f) != sz) { std::fclose(f); return {}; }
   std::fclose(f);
   return buf;
 }

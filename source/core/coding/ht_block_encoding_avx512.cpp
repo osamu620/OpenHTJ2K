@@ -654,9 +654,6 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       const __m512i VONE = _mm512_set1_epi32(1);
       const __m512i VZERO = _mm512_setzero_si512();
 #ifdef __AVX512CD__
-      // Stride-4 gather indices: pick element k from each of 16 consecutive quads in E_flat
-      const __m512i stride4 = _mm512_setr_epi32(0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60);
-      // Permutation for interleaving two __m512i into consecutive pairs (zip)
       const __m512i zip_lo_idx = _mm512_setr_epi32(0,16, 1,17, 2,18, 3,19, 4,20, 5,21, 6,22, 7,23);
       const __m512i zip_hi_idx = _mm512_setr_epi32(8,24, 9,25, 10,26, 11,27, 12,28, 13,29, 14,30, 15,31);
 #endif
@@ -686,7 +683,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
         // Per-lane hMax: each 128-bit lane holds 4 E values for one quad
         // Reduce within each lane: swap pairs then max, swap halves then max
-        __m512i t1, t2;
+        __m512i t1;
         t1 = _mm512_shuffle_epi32(Eq03, _MM_PERM_CDAB); // swap pairs within lane
         Eq03 = _mm512_max_epi32(Eq03, t1);
         t1 = _mm512_shuffle_epi32(Eq03, _MM_PERM_BADC); // swap halves within lane
