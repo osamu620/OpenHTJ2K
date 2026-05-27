@@ -752,31 +752,19 @@ class j2k_tile : public j2k_tile_base {
     // every byte counts because InlineTask only holds 32 bytes of captures
     // and we also need to capture the per-strip slot_remaining pointer.
     std::atomic<int> *tile_remaining = nullptr;
-    // Grow-only scratch buffers for codeblock sample/state data during HT block encoding.
+    // Grow-only scratch buffer for codeblock sample data during HT block encoding.
     // Allocated once per tile (sized to the largest resolution's codeblock count) and
-    // reused across all resolution levels and precincts — eliminating per-resolution
-    // malloc/free cycles that cause expensive mmap/munmap page-fault pressure on Linux.
-    int32_t *gbuf    = nullptr;
-    uint8_t *sgbuf   = nullptr;
-    size_t gbuf_cap  = 0;  // capacity in int32_t elements
-    size_t sgbuf_cap = 0;  // capacity in uint8_t elements
+    // reused across all resolution levels and precincts.
+    int32_t *gbuf   = nullptr;
+    size_t gbuf_cap = 0;  // capacity in int32_t elements
 
-    ~EncodePoolCtx() {
-      std::free(gbuf);
-      std::free(sgbuf);
-    }
+    ~EncodePoolCtx() { std::free(gbuf); }
 
-    // Ensure gbuf/sgbuf have at least the requested capacity (never shrink).
-    void reserve_scratch(size_t need_g, size_t need_sg) {
+    void reserve_scratch(size_t need_g) {
       if (need_g > gbuf_cap) {
         std::free(gbuf);
         gbuf     = static_cast<int32_t *>(std::malloc(need_g * sizeof(int32_t)));
         gbuf_cap = need_g;
-      }
-      if (need_sg > sgbuf_cap) {
-        std::free(sgbuf);
-        sgbuf     = static_cast<uint8_t *>(std::malloc(need_sg));
-        sgbuf_cap = need_sg;
       }
     }
   };
