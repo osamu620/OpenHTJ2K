@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
 
   // Malformed stream: truncated mid-message.
   {
-    std::vector<uint8_t> bad(stream.begin(), stream.begin() + stream.size() / 2);
+    std::vector<uint8_t> bad(stream.begin(), stream.begin() + static_cast<ptrdiff_t>(stream.size() / 2));
     DataBinSet t;
     CHECK(!parse_jpp_stream(bad.data(), bad.size(), &t),
           "truncated stream should be rejected");

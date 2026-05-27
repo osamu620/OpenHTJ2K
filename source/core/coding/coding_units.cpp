@@ -7220,7 +7220,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
           ncy_total             = cpb->num_codeblock_y;
           const int32_t band_x0 = static_cast<int32_t>(cpb->pos0.x);
           for (uint32_t cy_cb = 0; cy_cb < cpb->num_codeblock_y; ++cy_cb) {
-            int32_t x_acc = 0;
             for (uint32_t cx_cb = 0; cx_cb < cpb->num_codeblock_x; ++cx_cb) {
               j2k_codeblock *block = cpb->access_codeblock(cx_cb + cy_cb * cpb->num_codeblock_x);
               vec.push_back(block);

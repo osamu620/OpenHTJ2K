@@ -106,12 +106,18 @@ static bool parse_vw_spec(const char *spec, open_htj2k::jpip::ViewWindow &vw,
     return !out.empty();
   };
   std::string field;
-  if (!next(field)) return false; vw.fx = static_cast<uint32_t>(std::stoul(field));
-  if (!next(field)) return false; vw.fy = static_cast<uint32_t>(std::stoul(field));
-  if (!next(field)) return false; vw.ox = static_cast<uint32_t>(std::stoul(field));
-  if (!next(field)) return false; vw.oy = static_cast<uint32_t>(std::stoul(field));
-  if (!next(field)) return false; vw.sx = static_cast<uint32_t>(std::stoul(field));
-  if (!next(field)) return false; vw.sy = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false;
+  vw.fx = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false;
+  vw.fy = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false;
+  vw.ox = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false;
+  vw.oy = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false;
+  vw.sx = static_cast<uint32_t>(std::stoul(field));
+  if (!next(field)) return false;
+  vw.sy = static_cast<uint32_t>(std::stoul(field));
   while (next(field)) {
     if (field == "down")    vw.round = open_htj2k::jpip::ViewWindow::Round::Down;
     else if (field == "up") vw.round = open_htj2k::jpip::ViewWindow::Round::Up;

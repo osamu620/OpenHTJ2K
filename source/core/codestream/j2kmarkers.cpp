@@ -1440,7 +1440,7 @@ TLM_marker::TLM_marker(uint8_t ztlm, const std::vector<uint16_t> &tile_indices,
 void TLM_marker::write(j2c_dst_memory &buf) const {
   uint8_t ST = (Stlm >> 4) & 0x03;
   uint8_t SP = ((Stlm >> 4) & 0x0C) >> 2;
-  size_t entry_size = (ST == 0 ? 0 : (ST == 1 ? 1 : 2)) + (SP == 0 ? 2 : 4);
+  size_t entry_size = static_cast<size_t>((ST == 0 ? 0 : (ST == 1 ? 1 : 2)) + (SP == 0 ? 2 : 4));
   uint16_t Ltlm = static_cast<uint16_t>(4 + Ptlm.size() * entry_size);
   buf.put_word(_TLM);
   buf.put_word(Ltlm);
