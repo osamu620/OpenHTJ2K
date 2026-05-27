@@ -504,14 +504,14 @@ struct fdwt_level_sink_ctx {
   // Per-strip scratch ring.  PR1 used N=1; PR2 extends to N = 1 + pool_size
   // (capped at 8) so the FDWT main thread can stamp strip K+N while workers
   // are still cleanup-encoding strip K..K+N-1.  Slot index for strip br is
-  // (br % strip_N).  block->sample_buf and block->block_states are
-  // (re)stamped into the chosen slot at the start of each new cblk-row strip
-  // by stamp_strip_pointers().  last_stamped_br tracks the most recent strip
-  // stamped so the sink-fn can detect a strip transition.
+  // (br % strip_N).  block->sample_buf is (re)stamped into the chosen slot
+  // at the start of each new cblk-row strip by stamp_strip_pointers().
+  // last_stamped_br tracks the most recent strip stamped so the sink-fn can
+  // detect a strip transition.
   //
   // MAX_STRIP_N = 8 matches the cap chosen in encode_line_based_stream.
-  // strip_gbufs[i], strip_sgbufs[i] = gbuf/sgbuf for slot i (copied here
-  // from StreamingPerCompScratch::LevelRing.slots[i] at setup time so the
+  // strip_gbufs[i] = gbuf for slot i (copied from
+  // StreamingPerCompScratch::LevelRing.slots[i] at setup time so the
   // sink-fn hot path needs no indirection).  strip_remaining points at
   // LevelRing's atomic[N] array; stamp_strip_pointers waits on it before
   // reassigning the slot, and worker lambdas in enc_overlap_dispatch
@@ -519,7 +519,6 @@ struct fdwt_level_sink_ctx {
   enum { MAX_STRIP_N = 8 };
   int32_t strip_N                    = 1;
   int32_t *strip_gbufs[MAX_STRIP_N]  = {};
-  uint8_t *strip_sgbufs[MAX_STRIP_N] = {};
   std::atomic<int> *strip_remaining  = nullptr;
   int32_t last_stamped_br            = -1;
 
@@ -1042,34 +1041,21 @@ static thread_local TlPoolSlot g_tl_pool_slot;
 #endif
 
 // Per-component scratch buffers for the streaming (overlap) encode path.
-// Previously these were calloc'd and freed per j2k_tile::encode_line_based_stream
-// invocation: for ED4K 4K 16-bit RGB that meant 3 components × ~100 MB calloc +
-// free per encode. The fresh mmap'd anon pages cost kernel clear_page_erms on
-// first touch (plus zap_present_ptes on munmap), visible as ~5% of total wall time.
+// Each slot holds one strip's worth of sample data (gbuf); block_states was
+// eliminated by the bit-31 sentinel (PR #398), so only gbuf remains.
 //
-// Hoisting these to a thread_local grow-only allocator keeps the pages mapped
-// and resident across encodes on the same thread.  PR1 of the strip-ring work
-// shrinks the per-component flat buffer to per-(component, level) slots, each
-// sized for the LARGEST cblk-row strip at that level instead of the sum across
-// all strips.  sample_buf/block_states are re-stamped per strip by
-// stamp_strip_pointers() in the sink-fn, and the sgbuf portion is zeroed at
-// strip-stamp time (not once per encode).  For 4K ED4K lossless this drops the
-// component-scratch RSS from ~132 MB to a few MB.
+// Thread_local grow-only: pages stay mapped across encodes on the same thread.
+// Per-(component, level) slots, each sized for the LARGEST cblk-row strip at
+// that level.  sample_buf is re-stamped per strip by stamp_strip_pointers().
 //
-// PR2 extends slots from N=1 to N = 1 + pool_size (capped at 8) so the main
-// FDWT thread can stamp strip K+N while workers are still cleanup-encoding
-// strip K..K+N-1.  Slot reuse synchronizes via a per-slot atomic counter:
-// stamp_strip_pointers waits via dec_strip_barrier_wait() before reassigning
-// a slot whose remaining > 0; worker lambdas in enc_overlap_dispatch
-// fetch_sub when their cblk completes.  The total per-component RSS scales
-// linearly in N (vs the original quadratic in num_cblks).
+// N = 1 + pool_size (capped at 8) ring slots per level so the FDWT main
+// thread can stamp strip K+N while workers are still cleanup-encoding
+// strip K..K+N-1.  Slot reuse synchronizes via a per-slot atomic counter.
 namespace {
 struct StreamingPerCompScratch {
   struct LevelSlot {
-    int32_t *gbuf    = nullptr;
-    uint8_t *sgbuf   = nullptr;
-    size_t gbuf_cap  = 0;  // in int32_t elements; sized for the largest strip
-    size_t sgbuf_cap = 0;  // in bytes; sized for the largest strip
+    int32_t *gbuf   = nullptr;
+    size_t gbuf_cap = 0;  // in int32_t elements; sized for the largest strip
   };
 
   // LevelRing: per-(component, level) collection of N slots plus the matching
@@ -1090,7 +1076,6 @@ struct StreamingPerCompScratch {
       for (auto &ring : lvs) {
         for (auto &s : ring.slots) {
           std::free(s.gbuf);
-          std::free(s.sgbuf);
         }
       }
     }
@@ -1100,17 +1085,13 @@ struct StreamingPerCompScratch {
   // thrown if malloc fails.  Cap is updated only on success.  N may grow
   // across calls (e.g. user changes -num_threads between encodes); existing
   // slots keep their backing storage, newly added slots start with null.
-  void reserve(size_t comp_idx, size_t level_idx, size_t N, size_t need_g, size_t need_sg) {
+  void reserve(size_t comp_idx, size_t level_idx, size_t N, size_t need_g) {
     if (comp_levels.size() <= comp_idx) comp_levels.resize(comp_idx + 1);
     auto &lvs = comp_levels[comp_idx];
     if (lvs.size() <= level_idx) lvs.resize(level_idx + 1);
     LevelRing &ring = lvs[level_idx];
     if (static_cast<size_t>(ring.N) < N) {
       ring.slots.resize(N);
-      // Reallocate remaining[] to size N; preserve existing counter values
-      // (always 0 between encodes — workers drain to 0 before the encode
-      // ends, and the wait barrier at the start of the next encode is a
-      // no-op for slots that already have remaining == 0).
       std::unique_ptr<std::atomic<int>[]> new_remaining(new std::atomic<int>[N]);
       for (size_t i = 0; i < N; ++i) new_remaining[i].store(0, std::memory_order_relaxed);
       ring.remaining = std::move(new_remaining);
@@ -1124,13 +1105,6 @@ struct StreamingPerCompScratch {
         std::free(s.gbuf);
         s.gbuf     = p;
         s.gbuf_cap = need_g;
-      }
-      if (need_sg > s.sgbuf_cap) {
-        auto *p = static_cast<uint8_t *>(std::malloc(need_sg));
-        if (p == nullptr) throw std::bad_alloc{};
-        std::free(s.sgbuf);
-        s.sgbuf     = p;
-        s.sgbuf_cap = need_sg;
       }
     }
   }
@@ -6632,7 +6606,7 @@ uint8_t *j2k_tile::encode_line_based() {
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
     int32_t *gbuf      = epc->gbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
@@ -6696,7 +6670,7 @@ uint8_t *j2k_tile::encode_line_based() {
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
     int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
@@ -6885,7 +6859,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
     int32_t *gbuf      = epc->gbuf;
     auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
@@ -6949,7 +6923,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       max_total_cblks = std::max(max_total_cblks, total_cblks);
     }
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096, 0);
+    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
     int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
@@ -7183,11 +7157,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
       cx.num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_val - 1) / cb_h_val;
       if (cx.num_cblk_rows <= 0) continue;
 
-      // Compute per-strip (sample, sigma) footprints; the scratch slot for
-      // this level needs to fit the LARGEST strip, not the sum across all
-      // strips.  Strips are indexed by br = (cblk_y_abs - band_y0) / cb_h.
+      // Compute per-strip sample footprint; the scratch slot for this level
+      // needs to fit the LARGEST strip, not the sum across all strips.
       std::vector<uint32_t> strip_g(static_cast<size_t>(cx.num_cblk_rows), 0);
-      std::vector<uint32_t> strip_sg(static_cast<size_t>(cx.num_cblk_rows), 0);
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -7201,23 +7173,17 @@ uint8_t *j2k_tile::encode_line_based_stream(
             const int32_t br_idx     = (cblk_y_abs - band_y0) / cb_h_val;
             if (br_idx < 0 || br_idx >= cx.num_cblk_rows) continue;
             strip_g[static_cast<size_t>(br_idx)] += QWx2 * QHx2;
-            strip_sg[static_cast<size_t>(br_idx)] += (QWx2 + 2) * (QHx2 + 2);
           }
         }
       }
-      uint32_t max_g = 0, max_sg = 0;
+      uint32_t max_g = 0;
       for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
-        const uint32_t g  = strip_g[static_cast<size_t>(br)];
-        const uint32_t sg = strip_sg[static_cast<size_t>(br)];
+        const uint32_t g = strip_g[static_cast<size_t>(br)];
         if (g > max_g) max_g = g;
-        if (sg > max_sg) max_sg = sg;
       }
       if (max_g == 0) continue;  // level has no codeblocks (e.g. trivial extent)
 
-      // Reserve per-(component, level) ring of N slots, each sized for the
-      // largest strip only.  No memset(sgbuf, 0, ...) here: stamp_strip_pointers
-      // zeros the sgbuf prefix for whatever strip is being stamped, per-strip.
-      streaming_scratch.reserve(c, static_cast<size_t>(i), static_cast<size_t>(strip_N), max_g, max_sg);
+      streaming_scratch.reserve(c, static_cast<size_t>(i), static_cast<size_t>(strip_N), max_g);
       any_level_allocated = true;
 
       cx.cblk_row_done = std::make_unique<std::atomic<uint8_t>[]>(static_cast<size_t>(cx.num_cblk_rows));
@@ -7283,8 +7249,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       auto &ring = streaming_scratch.ring(c, static_cast<size_t>(i));
       cx.strip_N = strip_N;
       for (int32_t s = 0; s < strip_N; ++s) {
-        cx.strip_gbufs[s]  = ring.slots[static_cast<size_t>(s)].gbuf;
-        cx.strip_sgbufs[s] = ring.slots[static_cast<size_t>(s)].sgbuf;
+        cx.strip_gbufs[s] = ring.slots[static_cast<size_t>(s)].gbuf;
       }
       cx.strip_remaining = ring.remaining.get();
       cx.last_stamped_br = -1;
