@@ -139,6 +139,7 @@ struct idwt_level_src_ctx {
   // circuit rows below row_lo with a zero-filled output.
   int32_t row_lo;
   int32_t row_hi;
+  bool use_i32;
 };
 
 // Whole-sample symmetric extension: reflect idx into [0, len).
@@ -255,20 +256,43 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
     // Interleave: LP at u0%2, HP at 1-u0%2.
     const int32_t u_off = c->u0 & 1;
     const int32_t min_w = std::min(c->lp_width, c->hp_width);
-    if (u_off == 0) {
-      for (int32_t j = 0; j < c->lp_width; ++j) out[2 * j] = lp_ptr[j];
-      for (int32_t j = 0; j < c->hp_width; ++j) out[2 * j + 1] = hp_ptr[j];
+    if (c->use_i32) {
+      // int32 data stored in sprec_t (float) buffers — use int32 assignment
+      // to avoid strict-aliasing UB from float-typed loads/stores.
+      int32_t *out_i       = reinterpret_cast<int32_t *>(out);
+      const int32_t *lp_i  = reinterpret_cast<const int32_t *>(lp_ptr);
+      const int32_t *hp_i  = reinterpret_cast<const int32_t *>(hp_ptr);
+      if (u_off == 0) {
+        for (int32_t j = 0; j < c->lp_width; ++j) out_i[2 * j] = lp_i[j];
+        for (int32_t j = 0; j < c->hp_width; ++j) out_i[2 * j + 1] = hp_i[j];
+      } else {
+        for (int32_t j = 0; j < c->hp_width; ++j) out_i[2 * j] = hp_i[j];
+        for (int32_t j = 0; j < c->lp_width; ++j) out_i[2 * j + 1] = lp_i[j];
+      }
     } else {
-      for (int32_t j = 0; j < c->hp_width; ++j) out[2 * j] = hp_ptr[j];
-      for (int32_t j = 0; j < c->lp_width; ++j) out[2 * j + 1] = lp_ptr[j];
+      if (u_off == 0) {
+        for (int32_t j = 0; j < c->lp_width; ++j) out[2 * j] = lp_ptr[j];
+        for (int32_t j = 0; j < c->hp_width; ++j) out[2 * j + 1] = hp_ptr[j];
+      } else {
+        for (int32_t j = 0; j < c->hp_width; ++j) out[2 * j] = hp_ptr[j];
+        for (int32_t j = 0; j < c->lp_width; ++j) out[2 * j + 1] = lp_ptr[j];
+      }
     }
     (void)min_w;  // suppress unused-variable warning (used in BIDIR path below)
     if (width == 1) {
-      if ((c->u0 % 2 != 0) && (c->transformation == 1)) out[0] /= 2.0f;
+      if ((c->u0 % 2 != 0) && (c->transformation == 1)) {
+        if (c->use_i32)
+          reinterpret_cast<int32_t *>(out)[0] >>= 1;
+        else
+          out[0] /= 2.0f;
+      }
       return;
     }
-    idwt_1d_row_inplace_range(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation,
-                              c->col_lo, c->col_hi);
+    if (c->use_i32)
+      idwt_1d_row_inplace_i32(reinterpret_cast<int32_t *>(out), c->h_pse_left, c->h_pse_right, c->u0, c->u1);
+    else
+      idwt_1d_row_inplace_range(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation,
+                                c->col_lo, c->col_hi);
     return;
   }
 
@@ -319,7 +343,33 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   const int32_t u_off = c->u0 & 1;
   const int32_t min_w = std::min(c->lp_width, c->hp_width);
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  {
+  if (c->use_i32) {
+    // AVX2 int32 interleave — avoids strict-aliasing UB from float-typed
+    // SIMD on int32_t data.  Same algorithm as the float path below.
+    const int32_t *a_ptr = reinterpret_cast<const int32_t *>((u_off == 0) ? lp_ptr : hp_ptr);
+    const int32_t *b_ptr = reinterpret_cast<const int32_t *>((u_off == 0) ? hp_ptr : lp_ptr);
+    int32_t *out_i       = reinterpret_cast<int32_t *>(out);
+    int32_t i            = 0;
+    for (; i + 8 <= min_w; i += 8) {
+      __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(a_ptr + i));
+      __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(b_ptr + i));
+      __m256i lo = _mm256_unpacklo_epi32(va, vb);
+      __m256i hi = _mm256_unpackhi_epi32(va, vb);
+      __m256i r0 = _mm256_permute2x128_si256(lo, hi, 0x20);
+      __m256i r1 = _mm256_permute2x128_si256(lo, hi, 0x31);
+      _mm256_storeu_si256(reinterpret_cast<__m256i *>(out_i + 2 * i), r0);
+      _mm256_storeu_si256(reinterpret_cast<__m256i *>(out_i + 2 * i + 8), r1);
+    }
+    const int32_t *lp_i = reinterpret_cast<const int32_t *>(lp_ptr);
+    const int32_t *hp_i = reinterpret_cast<const int32_t *>(hp_ptr);
+    if (u_off == 0) {
+      for (int32_t j = i; j < c->lp_width; ++j) out_i[2 * j] = lp_i[j];
+      for (int32_t j = i; j < c->hp_width; ++j) out_i[2 * j + 1] = hp_i[j];
+    } else {
+      for (int32_t j = i; j < c->hp_width; ++j) out_i[2 * j] = hp_i[j];
+      for (int32_t j = i; j < c->lp_width; ++j) out_i[2 * j + 1] = lp_i[j];
+    }
+  } else {
     // AVX2: process 8 LP + 8 HP → 16 interleaved floats per iteration.
     // _mm256_unpacklo/hi_ps interleave lanes, permute2f128 reorders 128-bit halves.
     const sprec_t *a_ptr = (u_off == 0) ? lp_ptr : hp_ptr;  // → even slots
@@ -346,29 +396,87 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   }
 #elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   {
+    // WASM SIMD: wasm_v128_load / wasm_i8x16_shuffle / wasm_v128_store are
+    // type-agnostic (operate on v128_t), so the SIMD loop is shared.  Only
+    // the scalar tail needs separate int32 / float assignment.
     const sprec_t *a_ptr = (u_off == 0) ? lp_ptr : hp_ptr;
     const sprec_t *b_ptr = (u_off == 0) ? hp_ptr : lp_ptr;
     int32_t i            = 0;
     for (; i + 4 <= min_w; i += 4) {
       v128_t va = wasm_v128_load(a_ptr + i);
       v128_t vb = wasm_v128_load(b_ptr + i);
-      // Interleave 4 floats: lo=a0,b0,a1,b1  hi=a2,b2,a3,b3
       v128_t lo = wasm_i8x16_shuffle(va, vb, 0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
       v128_t hi = wasm_i8x16_shuffle(va, vb, 8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
       wasm_v128_store(out + 2 * i, lo);
       wasm_v128_store(out + 2 * i + 4, hi);
     }
-    if (u_off == 0) {
-      for (int32_t j = i; j < c->lp_width; ++j) out[2 * j] = lp_ptr[j];
-      for (int32_t j = i; j < c->hp_width; ++j) out[2 * j + 1] = hp_ptr[j];
+    if (c->use_i32) {
+      int32_t *out_i       = reinterpret_cast<int32_t *>(out);
+      const int32_t *lp_i  = reinterpret_cast<const int32_t *>(lp_ptr);
+      const int32_t *hp_i  = reinterpret_cast<const int32_t *>(hp_ptr);
+      if (u_off == 0) {
+        for (int32_t j = i; j < c->lp_width; ++j) out_i[2 * j] = lp_i[j];
+        for (int32_t j = i; j < c->hp_width; ++j) out_i[2 * j + 1] = hp_i[j];
+      } else {
+        for (int32_t j = i; j < c->hp_width; ++j) out_i[2 * j] = hp_i[j];
+        for (int32_t j = i; j < c->lp_width; ++j) out_i[2 * j + 1] = lp_i[j];
+      }
     } else {
-      for (int32_t j = i; j < c->hp_width; ++j) out[2 * j] = hp_ptr[j];
-      for (int32_t j = i; j < c->lp_width; ++j) out[2 * j + 1] = lp_ptr[j];
+      if (u_off == 0) {
+        for (int32_t j = i; j < c->lp_width; ++j) out[2 * j] = lp_ptr[j];
+        for (int32_t j = i; j < c->hp_width; ++j) out[2 * j + 1] = hp_ptr[j];
+      } else {
+        for (int32_t j = i; j < c->hp_width; ++j) out[2 * j] = hp_ptr[j];
+        for (int32_t j = i; j < c->lp_width; ++j) out[2 * j + 1] = lp_ptr[j];
+      }
     }
   }
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-  {
-    // NEON: vzipq_f32 interleaves two float32x4 vectors. 4× unrolled to process 16 pairs/iter.
+  if (c->use_i32) {
+    // NEON int32 interleave — avoids strict-aliasing UB from float-typed
+    // vzipq_f32 on int32_t data.  Same structure as the float path below.
+    const int32_t *a_ptr = reinterpret_cast<const int32_t *>((u_off == 0) ? lp_ptr : hp_ptr);
+    const int32_t *b_ptr = reinterpret_cast<const int32_t *>((u_off == 0) ? hp_ptr : lp_ptr);
+    int32_t *out_i       = reinterpret_cast<int32_t *>(out);
+    int32_t i            = 0;
+    for (; i + 16 <= min_w; i += 16) {
+      int32x4x2_t z0 = vzipq_s32(vld1q_s32(a_ptr + i), vld1q_s32(b_ptr + i));
+      int32x4x2_t z1 = vzipq_s32(vld1q_s32(a_ptr + i + 4), vld1q_s32(b_ptr + i + 4));
+      int32x4x2_t z2 = vzipq_s32(vld1q_s32(a_ptr + i + 8), vld1q_s32(b_ptr + i + 8));
+      int32x4x2_t z3 = vzipq_s32(vld1q_s32(a_ptr + i + 12), vld1q_s32(b_ptr + i + 12));
+      vst1q_s32(out_i + 2 * i, z0.val[0]);
+      vst1q_s32(out_i + 2 * i + 4, z0.val[1]);
+      vst1q_s32(out_i + 2 * i + 8, z1.val[0]);
+      vst1q_s32(out_i + 2 * i + 12, z1.val[1]);
+      vst1q_s32(out_i + 2 * i + 16, z2.val[0]);
+      vst1q_s32(out_i + 2 * i + 20, z2.val[1]);
+      vst1q_s32(out_i + 2 * i + 24, z3.val[0]);
+      vst1q_s32(out_i + 2 * i + 28, z3.val[1]);
+    }
+    for (; i + 8 <= min_w; i += 8) {
+      int32x4x2_t z0 = vzipq_s32(vld1q_s32(a_ptr + i), vld1q_s32(b_ptr + i));
+      int32x4x2_t z1 = vzipq_s32(vld1q_s32(a_ptr + i + 4), vld1q_s32(b_ptr + i + 4));
+      vst1q_s32(out_i + 2 * i, z0.val[0]);
+      vst1q_s32(out_i + 2 * i + 4, z0.val[1]);
+      vst1q_s32(out_i + 2 * i + 8, z1.val[0]);
+      vst1q_s32(out_i + 2 * i + 12, z1.val[1]);
+    }
+    for (; i + 4 <= min_w; i += 4) {
+      int32x4x2_t zipped = vzipq_s32(vld1q_s32(a_ptr + i), vld1q_s32(b_ptr + i));
+      vst1q_s32(out_i + 2 * i, zipped.val[0]);
+      vst1q_s32(out_i + 2 * i + 4, zipped.val[1]);
+    }
+    const int32_t *lp_i = reinterpret_cast<const int32_t *>(lp_ptr);
+    const int32_t *hp_i = reinterpret_cast<const int32_t *>(hp_ptr);
+    if (u_off == 0) {
+      for (int32_t j = i; j < c->lp_width; ++j) out_i[2 * j] = lp_i[j];
+      for (int32_t j = i; j < c->hp_width; ++j) out_i[2 * j + 1] = hp_i[j];
+    } else {
+      for (int32_t j = i; j < c->hp_width; ++j) out_i[2 * j] = hp_i[j];
+      for (int32_t j = i; j < c->lp_width; ++j) out_i[2 * j + 1] = lp_i[j];
+    }
+  } else {
+    // NEON: vzipq_f32 interleaves two float32x4 vectors. 4x unrolled to process 16 pairs/iter.
     const sprec_t *a_ptr = (u_off == 0) ? lp_ptr : hp_ptr;
     const sprec_t *b_ptr = (u_off == 0) ? hp_ptr : lp_ptr;
     int32_t i            = 0;
@@ -408,14 +516,27 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
     }
   }
 #else
-  (void)min_w;
-  if (u_off == 0) {
-    for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i] = lp_ptr[i];
-    for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i + 1] = hp_ptr[i];
+  if (c->use_i32) {
+    int32_t *out_i       = reinterpret_cast<int32_t *>(out);
+    const int32_t *lp_i  = reinterpret_cast<const int32_t *>(lp_ptr);
+    const int32_t *hp_i  = reinterpret_cast<const int32_t *>(hp_ptr);
+    if (u_off == 0) {
+      for (int32_t i = 0; i < c->lp_width; ++i) out_i[2 * i] = lp_i[i];
+      for (int32_t i = 0; i < c->hp_width; ++i) out_i[2 * i + 1] = hp_i[i];
+    } else {
+      for (int32_t i = 0; i < c->hp_width; ++i) out_i[2 * i] = hp_i[i];
+      for (int32_t i = 0; i < c->lp_width; ++i) out_i[2 * i + 1] = lp_i[i];
+    }
   } else {
-    for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i] = hp_ptr[i];
-    for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i + 1] = lp_ptr[i];
+    if (u_off == 0) {
+      for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i] = lp_ptr[i];
+      for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i + 1] = hp_ptr[i];
+    } else {
+      for (int32_t i = 0; i < c->hp_width; ++i) out[2 * i] = hp_ptr[i];
+      for (int32_t i = 0; i < c->lp_width; ++i) out[2 * i + 1] = lp_ptr[i];
+    }
   }
+  (void)min_w;
 #endif
 
   // In-place horizontal IDWT: the ring buffer slot has IDWT_RING_PSE_LEFT scratch floats
@@ -424,12 +545,19 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   const int32_t width = c->u1 - c->u0;
   if (width <= 0) return;
   if (width == 1) {
-    // Single-sample edge case (same as idwt_1d_row_fixed).
-    if ((c->u0 % 2 != 0) && (c->transformation == 1)) out[0] /= 2.0f;
+    if ((c->u0 % 2 != 0) && (c->transformation == 1)) {
+      if (c->use_i32)
+        reinterpret_cast<int32_t *>(out)[0] >>= 1;
+      else
+        out[0] /= 2.0f;
+    }
     return;
   }
-  idwt_1d_row_inplace_range(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation, c->col_lo,
-                            c->col_hi);
+  if (c->use_i32)
+    idwt_1d_row_inplace_i32(reinterpret_cast<int32_t *>(out), c->h_pse_left, c->h_pse_right, c->u0, c->u1);
+  else
+    idwt_1d_row_inplace_range(out, c->h_pse_left, c->h_pse_right, c->u0, c->u1, c->transformation, c->col_lo,
+                              c->col_hi);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2894,7 +3022,9 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
 
   // Coarsest active resolution: resolution[0] (always LL0 regardless of reduce_NL).
   j2k_resolution *r0 = access_resolution(0);
+  const bool use_i32_pipe = (transformation == 1);
   ld->ll0_buf.init(r0, 0, cb_h_val, ROIshift, ring_mode);
+  ld->ll0_buf.dequant_i32 = use_i32_pipe;
   ld->next_row = static_cast<int32_t>(r0->get_pos0().y);
 
   if (NL_act == 0) {
@@ -2947,9 +3077,13 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
       hl_bufs[i].init(cr, 0, cb_h_val, ROIshift, ring_mode);
       lh_bufs[i].init(cr, 1, cb_h_val, ROIshift, ring_mode);
       hh_bufs[i].init(cr, 2, cb_h_val, ROIshift, ring_mode);
+      hl_bufs[i].dequant_i32 = use_i32_pipe;
+      lh_bufs[i].dequant_i32 = use_i32_pipe;
+      hh_bufs[i].dequant_i32 = use_i32_pipe;
     } else if (level_dir == DWT_HORZ) {
       sb_HL = cr->access_subband(0);  // H band (horizontal high-pass)
       hl_bufs[i].init(cr, 0, cb_h_val, ROIshift, ring_mode);
+      hl_bufs[i].dequant_i32 = use_i32_pipe;
       // lh_bufs[i] and hh_bufs[i] left default-constructed (no high-freq vertical bands).
     }
     // DWT_NO: no high-freq subbands at all.
@@ -3000,6 +3134,7 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     c.col_hi              = u1;
     c.row_lo              = v0;
     c.row_hi              = v1;
+    c.use_i32             = use_i32_pipe;
 
     // lp_tmp only needed when has_child (child state writes output into it as fallback).
     // hp_tmp eliminated: HP data is read directly from subband row buffers.
@@ -3008,7 +3143,8 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
                              sizeof(sprec_t) * static_cast<size_t>(lp_width + SIMD_PADDING), 32))
                        : nullptr;
 
-    idwt_2d_state_init(&states[i], u0, u1, v0, v1, transformation, level_dir, idwt_level_src_fn, &ctxs[i]);
+    idwt_2d_state_init(&states[i], u0, u1, v0, v1, transformation, level_dir, idwt_level_src_fn, &ctxs[i],
+                       c.use_i32);
   }
 
   // In ring mode: free full-tile sample buffers — ring bufs are used instead.
@@ -3161,7 +3297,13 @@ sprec_t *j2k_tile_component::pull_strip_into_buf(uint32_t count, uint32_t stride
                   sizeof(sprec_t) * stride_floats * tail_rows);
       break;
     }
-    std::memcpy(dst + static_cast<size_t>(r) * stride_floats, src, sizeof(sprec_t) * stride_floats);
+    sprec_t *row_dst = dst + static_cast<size_t>(r) * stride_floats;
+    if (transformation == 1) {
+      const int32_t *ip = reinterpret_cast<const int32_t *>(src);
+      for (uint32_t n = 0; n < stride_floats; ++n) row_dst[n] = static_cast<sprec_t>(ip[n]);
+    } else {
+      std::memcpy(row_dst, src, sizeof(sprec_t) * stride_floats);
+    }
   }
   return dst;
 }
@@ -5629,6 +5771,13 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   // ATK (xform>=2) is irreversible; dispatch table has only 2 entries (0=irrev, 1=rev).
   const uint8_t xform_ct = (xform == 1) ? 1 : 0;
   const uint32_t mct_w   = ci[0].csize_x;
+  sprec_t *mct_scratch0 = nullptr, *mct_scratch1 = nullptr, *mct_scratch2 = nullptr;
+  if (do_mct && xform == 1) {
+    const size_t nb = sizeof(sprec_t) * static_cast<size_t>(mct_w + SIMD_PADDING);
+    mct_scratch0 = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
+    mct_scratch1 = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
+    mct_scratch2 = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
+  }
 
   // Pre-build FinalizeParams for the fused MCT+finalize path.
   FinalizeParams fp[3] = {};
@@ -5659,9 +5808,21 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
     if (do_mct) {
       // Fused: get read-only ring buffer pointers for the 3 MCT components, apply inverse
       // MCT + float→int32 finalize in a single pass (no scratch buffer, no memcpy).
-      const sprec_t *p0 = tcomp[0].pull_line_ref();
-      const sprec_t *p1 = tcomp[1].pull_line_ref();
-      const sprec_t *p2 = tcomp[2].pull_line_ref();
+      sprec_t *p0 = tcomp[0].pull_line_ref();
+      sprec_t *p1 = tcomp[1].pull_line_ref();
+      sprec_t *p2 = tcomp[2].pull_line_ref();
+      if (xform == 1) {
+        auto cvt_i32_to_f = [](sprec_t *dst, const sprec_t *src, uint32_t w) {
+          const int32_t *ip = reinterpret_cast<const int32_t *>(src);
+          for (uint32_t i = 0; i < w; ++i) dst[i] = static_cast<sprec_t>(ip[i]);
+        };
+        cvt_i32_to_f(mct_scratch0, p0, mct_w);
+        cvt_i32_to_f(mct_scratch1, p1, mct_w);
+        cvt_i32_to_f(mct_scratch2, p2, mct_w);
+        p0 = mct_scratch0;
+        p1 = mct_scratch1;
+        p2 = mct_scratch2;
+      }
       int32_t *dp0      = ci[0].cdst + ci[0].x_offset + (y + ci[0].y_offset) * ci[0].out_stride;
       int32_t *dp1      = ci[1].cdst + ci[1].x_offset + (y + ci[1].y_offset) * ci[1].out_stride;
       int32_t *dp2      = ci[2].cdst + ci[2].x_offset + (y + ci[2].y_offset) * ci[2].out_stride;
@@ -5671,10 +5832,11 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
         if (y >= ci[c].csize_y) continue;
         tcomp[c].pull_line(rows[c].data());
         const CInfo &I     = ci[c];
-        const sprec_t *spf = rows[c].data();
+        const bool is_i32  = (tcomp[c].get_transformation() == 1);
         int32_t *dp        = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
         for (uint32_t n = 0; n < I.csize_x; ++n) {
-          int32_t v = static_cast<int32_t>(spf[n]);
+          int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(rows[c].data())[n]
+                             : static_cast<int32_t>(rows[c][n]);
           v         = (I.downshift < 0)   ? (v + I.rnd) << -I.downshift
                       : (I.downshift > 0) ? (v + I.rnd) >> I.downshift
                                           : v;
@@ -5688,13 +5850,24 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
       // No MCT: each component is independent. Use pull_line_ref + per-component finalize.
       for (uint16_t c = 0; c < NC; ++c) {
         if (y >= ci[c].csize_y) continue;
-        const sprec_t *spf = tcomp[c].pull_line_ref();
+        sprec_t *spf_mut = tcomp[c].pull_line_ref();
+        const bool is_i32 = (tcomp[c].get_transformation() == 1);
+        if (!is_i32) {
+          // Float path: nothing to convert.
+        }
+        const sprec_t *spf = spf_mut;
         const CInfo &I     = ci[c];
         int32_t *dp        = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
         const int16_t ds   = I.downshift;
         const int16_t ro   = I.rnd;
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
         {
+          auto load_sample = [&](uint32_t n) -> __m256i {
+            if (is_i32)
+              return _mm256_loadu_si256(reinterpret_cast<const __m256i *>(spf + n));
+            else
+              return _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
+          };
           const __m256i vdco = _mm256_set1_epi32(I.DC_OFFSET);
           const __m256i vmx  = _mm256_set1_epi32(I.MAXVAL);
           const __m256i vmn  = _mm256_set1_epi32(I.MINVAL);
@@ -5703,10 +5876,8 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
             const __m128i vsh  = _mm_cvtsi32_si128(-ds);
             const __m256i vrnd = _mm256_set1_epi32(ro);
             for (; n + 16 <= I.csize_x; n += 16) {
-              __m256i v0 = _mm256_sll_epi32(
-                  _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n)), vrnd), vsh);
-              __m256i v1 = _mm256_sll_epi32(
-                  _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8)), vrnd), vsh);
+              __m256i v0 = _mm256_sll_epi32(_mm256_add_epi32(load_sample(n), vrnd), vsh);
+              __m256i v1 = _mm256_sll_epi32(_mm256_add_epi32(load_sample(n + 8), vrnd), vsh);
               _mm256_storeu_si256((__m256i *)(dp + n),
                                   _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
               _mm256_storeu_si256((__m256i *)(dp + n + 8),
@@ -5716,10 +5887,8 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
             const __m128i vsh  = _mm_cvtsi32_si128(ds);
             const __m256i vrnd = _mm256_set1_epi32(ro);
             for (; n + 16 <= I.csize_x; n += 16) {
-              __m256i v0 = _mm256_sra_epi32(
-                  _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n)), vrnd), vsh);
-              __m256i v1 = _mm256_sra_epi32(
-                  _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8)), vrnd), vsh);
+              __m256i v0 = _mm256_sra_epi32(_mm256_add_epi32(load_sample(n), vrnd), vsh);
+              __m256i v1 = _mm256_sra_epi32(_mm256_add_epi32(load_sample(n + 8), vrnd), vsh);
               _mm256_storeu_si256((__m256i *)(dp + n),
                                   _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
               _mm256_storeu_si256((__m256i *)(dp + n + 8),
@@ -5727,8 +5896,8 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
             }
           } else {
             for (; n + 16 <= I.csize_x; n += 16) {
-              __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
-              __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
+              __m256i v0 = load_sample(n);
+              __m256i v1 = load_sample(n + 8);
               _mm256_storeu_si256((__m256i *)(dp + n),
                                   _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
               _mm256_storeu_si256((__m256i *)(dp + n + 8),
@@ -5736,7 +5905,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
             }
           }
           for (; n < I.csize_x; ++n) {
-            int32_t v = static_cast<int32_t>(spf[n]);
+            int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(spf)[n] : static_cast<int32_t>(spf[n]);
             v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
             v += I.DC_OFFSET;
             if (v > I.MAXVAL) v = I.MAXVAL;
@@ -5745,19 +5914,34 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
           }
         }
 #else
-        for (uint32_t n = 0; n < I.csize_x; ++n) {
-          int32_t v = static_cast<int32_t>(spf[n]);
-          v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
-          v += I.DC_OFFSET;
-          if (v > I.MAXVAL) v = I.MAXVAL;
-          if (v < I.MINVAL) v = I.MINVAL;
-          dp[n] = v;
+        if (is_i32) {
+          const int32_t *ip = reinterpret_cast<const int32_t *>(spf);
+          for (uint32_t n = 0; n < I.csize_x; ++n) {
+            int32_t v = ip[n];
+            v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v += I.DC_OFFSET;
+            if (v > I.MAXVAL) v = I.MAXVAL;
+            if (v < I.MINVAL) v = I.MINVAL;
+            dp[n] = v;
+          }
+        } else {
+          for (uint32_t n = 0; n < I.csize_x; ++n) {
+            int32_t v = static_cast<int32_t>(spf[n]);
+            v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v += I.DC_OFFSET;
+            if (v > I.MAXVAL) v = I.MAXVAL;
+            if (v < I.MINVAL) v = I.MINVAL;
+            dp[n] = v;
+          }
         }
 #endif
       }
     }
   }
 
+  aligned_mem_free(mct_scratch0);
+  aligned_mem_free(mct_scratch1);
+  aligned_mem_free(mct_scratch2);
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].finalize_line_decode();
 }
 

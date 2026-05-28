@@ -636,4 +636,109 @@ void idwt_irrev53_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Int32 reversible 5/3 IDWT primitives — exact inverse of the FDWT int32 path.
+// Uses arithmetic right shift instead of float floor/multiply.
+// ─────────────────────────────────────────────────────────────────────────────
+
+void idwt_1d_filtr_rev53_i32_neon(int32_t *X, const int32_t left, const int32_t i0, const int32_t i1) {
+  const int32_t start  = i0 / 2;
+  const int32_t stop   = i1 / 2;
+  const int32_t offset = left - i0 % 2;
+
+  // step 1 (undo forward LP update): LP -= (HP_left + HP_right + 2) >> 2
+  const int32_t base1 = offset;
+  int32_t simdlen     = stop + 1 - start;
+  const int32x4_t vtwo = vdupq_n_s32(2);
+  int32_t k = 0;
+  for (; k + 8 <= simdlen; k += 8) {
+    int32_t *sp = X + base1 + k * 2;
+    int32x4x2_t xl0a = vld2q_s32(sp - 1);
+    int32x4x2_t xl1a = vld2q_s32(sp + 1);
+    int32x4x2_t xl0b = vld2q_s32(sp + 7);
+    int32x4x2_t xl1b = vld2q_s32(sp + 9);
+    xl0a.val[1] = vsubq_s32(xl0a.val[1],
+        vshrq_n_s32(vaddq_s32(vaddq_s32(xl0a.val[0], xl1a.val[0]), vtwo), 2));
+    xl0b.val[1] = vsubq_s32(xl0b.val[1],
+        vshrq_n_s32(vaddq_s32(vaddq_s32(xl0b.val[0], xl1b.val[0]), vtwo), 2));
+    vst2q_s32(sp - 1, xl0a);
+    vst2q_s32(sp + 7, xl0b);
+  }
+  for (; k < simdlen; k += 4) {
+    int32_t *sp = X + base1 + k * 2;
+    int32x4x2_t xl0 = vld2q_s32(sp - 1);
+    int32x4x2_t xl1 = vld2q_s32(sp + 1);
+    xl0.val[1] = vsubq_s32(xl0.val[1],
+        vshrq_n_s32(vaddq_s32(vaddq_s32(xl0.val[0], xl1.val[0]), vtwo), 2));
+    vst2q_s32(sp - 1, xl0);
+  }
+
+  // step 2 (undo forward HP predict): HP += (LP_mod_left + LP_mod_right) >> 1
+  const int32_t base2 = offset;
+  simdlen = stop - start;
+  k = 0;
+  for (; k + 8 <= simdlen; k += 8) {
+    int32_t *sp = X + base2 + k * 2;
+    int32x4x2_t xl0a = vld2q_s32(sp);
+    int32x4x2_t xl1a = vld2q_s32(sp + 2);
+    int32x4x2_t xl0b = vld2q_s32(sp + 8);
+    int32x4x2_t xl1b = vld2q_s32(sp + 10);
+    xl0a.val[1] = vaddq_s32(xl0a.val[1],
+        vshrq_n_s32(vaddq_s32(xl0a.val[0], xl1a.val[0]), 1));
+    xl0b.val[1] = vaddq_s32(xl0b.val[1],
+        vshrq_n_s32(vaddq_s32(xl0b.val[0], xl1b.val[0]), 1));
+    vst2q_s32(sp, xl0a);
+    vst2q_s32(sp + 8, xl0b);
+  }
+  for (; k < simdlen; k += 4) {
+    int32_t *sp = X + base2 + k * 2;
+    int32x4x2_t xl0 = vld2q_s32(sp);
+    int32x4x2_t xl1 = vld2q_s32(sp + 2);
+    xl0.val[1] = vaddq_s32(xl0.val[1],
+        vshrq_n_s32(vaddq_s32(xl0.val[0], xl1.val[0]), 1));
+    vst2q_s32(sp, xl0);
+  }
+}
+
+void idwt_rev_ver_lp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  const int32x4_t vtwo = vdupq_n_s32(2);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    int32x4_t a0 = vld1q_s32(prev + i);     int32x4_t b0 = vld1q_s32(next + i);     int32x4_t t0 = vld1q_s32(tgt + i);
+    int32x4_t a1 = vld1q_s32(prev + i + 4); int32x4_t b1 = vld1q_s32(next + i + 4); int32x4_t t1 = vld1q_s32(tgt + i + 4);
+    t0 = vsubq_s32(t0, vshrq_n_s32(vaddq_s32(vaddq_s32(a0, b0), vtwo), 2));
+    t1 = vsubq_s32(t1, vshrq_n_s32(vaddq_s32(vaddq_s32(a1, b1), vtwo), 2));
+    vst1q_s32(tgt + i, t0);
+    vst1q_s32(tgt + i + 4, t1);
+  }
+  for (; i + 4 <= n; i += 4) {
+    int32x4_t a = vld1q_s32(prev + i);
+    int32x4_t b = vld1q_s32(next + i);
+    int32x4_t t = vld1q_s32(tgt  + i);
+    t = vsubq_s32(t, vshrq_n_s32(vaddq_s32(vaddq_s32(a, b), vtwo), 2));
+    vst1q_s32(tgt + i, t);
+  }
+  for (; i < n; ++i) tgt[i] -= (prev[i] + next[i] + 2) >> 2;
+}
+
+void idwt_rev_ver_hp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    int32x4_t a0 = vld1q_s32(prev + i);     int32x4_t b0 = vld1q_s32(next + i);     int32x4_t t0 = vld1q_s32(tgt + i);
+    int32x4_t a1 = vld1q_s32(prev + i + 4); int32x4_t b1 = vld1q_s32(next + i + 4); int32x4_t t1 = vld1q_s32(tgt + i + 4);
+    t0 = vaddq_s32(t0, vshrq_n_s32(vaddq_s32(a0, b0), 1));
+    t1 = vaddq_s32(t1, vshrq_n_s32(vaddq_s32(a1, b1), 1));
+    vst1q_s32(tgt + i, t0);
+    vst1q_s32(tgt + i + 4, t1);
+  }
+  for (; i + 4 <= n; i += 4) {
+    int32x4_t a = vld1q_s32(prev + i);
+    int32x4_t b = vld1q_s32(next + i);
+    int32x4_t t = vld1q_s32(tgt  + i);
+    t = vaddq_s32(t, vshrq_n_s32(vaddq_s32(a, b), 1));
+    vst1q_s32(tgt + i, t);
+  }
+  for (; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
+}
+
 #endif

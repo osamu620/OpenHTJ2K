@@ -324,6 +324,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         pool->push_batch(par_tasks, [this](const CblkTask &bt) {
           auto *blk = bt.block;
           return [blk, this]() {
+            blk->dequant_i32 = this->dequant_i32;
             if ((blk->Cmodes & HT) >> 6)
               htj2k_decode(blk, ROIshift);
             else
@@ -425,6 +426,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           block->band_buf        = target_buf + row_off + col_off;
         }
 
+        block->dequant_i32 = this->dequant_i32;
         if ((block->Cmodes & HT) >> 6)
           htj2k_decode(block, ROIshift);
         else
@@ -667,6 +669,7 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   pool->push_batch(par_tasks, [this](const CblkTask &pb) {
     auto *blk = pb.block;
     return [blk, this]() {
+      blk->dequant_i32 = this->dequant_i32;
       if ((blk->Cmodes & HT) >> 6)
         htj2k_decode(blk, ROIshift);
       else

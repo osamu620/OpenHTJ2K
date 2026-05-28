@@ -108,13 +108,17 @@ static FORCE_INLINE __m256i expand_two_quads(__m128i qinf128) {
 // Fused dequantize-and-store for 8 × int32 MagSgn samples → 8 × float.
 // Lossless (transformation==1): sign-magnitude → two's-complement shift → float.
 // Lossy   (transformation==0): magnitude → float → scale → apply sign via XOR.
+template <bool StoreI32 = false>
 static FORCE_INLINE void dequant_store_256(int32_t *dst, __m256i val, uint8_t transformation,
                                            int32_t pLSB_dq, __m256 vfscale, __m256i vmagmask,
                                            __m256i vsignmask) {
   if (transformation == 1) {
     __m256i mag  = _mm256_and_si256(val, vmagmask);
     __m256i res  = _mm256_sign_epi32(_mm256_srai_epi32(mag, pLSB_dq), val);
-    _mm256_storeu_ps(reinterpret_cast<float *>(dst), _mm256_cvtepi32_ps(res));
+    if constexpr (StoreI32)
+      _mm256_storeu_si256(reinterpret_cast<__m256i *>(dst), res);
+    else
+      _mm256_storeu_ps(reinterpret_cast<float *>(dst), _mm256_cvtepi32_ps(res));
   } else {
     __m256i mag = _mm256_and_si256(val, vmagmask);
     __m256 f    = _mm256_mul_ps(_mm256_cvtepi32_ps(mag), vfscale);
@@ -123,14 +127,17 @@ static FORCE_INLINE void dequant_store_256(int32_t *dst, __m256i val, uint8_t tr
   }
 }
 
-// SSE 128-bit variant: 4 × int32 → 4 × float.
+template <bool StoreI32 = false>
 static FORCE_INLINE void dequant_store_128(int32_t *dst, __m128i val, uint8_t transformation,
                                            int32_t pLSB_dq, __m256 vfscale256, __m128i vmagmask,
                                            __m128i vsignmask) {
   if (transformation == 1) {
     __m128i mag = _mm_and_si128(val, vmagmask);
     __m128i res = _mm_sign_epi32(_mm_srai_epi32(mag, pLSB_dq), val);
-    _mm_storeu_ps(reinterpret_cast<float *>(dst), _mm_cvtepi32_ps(res));
+    if constexpr (StoreI32)
+      _mm_storeu_si128(reinterpret_cast<__m128i *>(dst), res);
+    else
+      _mm_storeu_ps(reinterpret_cast<float *>(dst), _mm_cvtepi32_ps(res));
   } else {
     __m128i mag = _mm_and_si128(val, vmagmask);
     __m128 f    = _mm_mul_ps(_mm_cvtepi32_ps(mag), _mm256_castps256_ps128(vfscale256));
@@ -139,7 +146,7 @@ static FORCE_INLINE void dequant_store_128(int32_t *dst, __m128i val, uint8_t tr
   }
 }
 
-template <bool skip_sigma, bool fuse_dequant = false>
+template <bool skip_sigma, bool fuse_dequant = false, bool store_i32 = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   uint8_t *compressed_data = block->get_compressed_data();
@@ -406,9 +413,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       __m256i row256   = MagSgn.decode_four_quads(qinf128, U_q128, pLSB_adj, v_n);
 
       if constexpr (fuse_dequant) {
-        dequant_store_256(mp0, _mm256_shuffle_epi8(row256, shuffle_r0), block->transformation, pLSB_dq,
+        dequant_store_256<store_i32>(mp0, _mm256_shuffle_epi8(row256, shuffle_r0), block->transformation, pLSB_dq,
                           vfscale, vmagmask_dq, vsignmask_dq);
-        dequant_store_256(mp1, _mm256_shuffle_epi8(row256, shuffle_r1), block->transformation, pLSB_dq,
+        dequant_store_256<store_i32>(mp1, _mm256_shuffle_epi8(row256, shuffle_r1), block->transformation, pLSB_dq,
                           vfscale, vmagmask_dq, vsignmask_dq);
       } else {
         _mm256_storeu_si256((__m256i *)mp0, _mm256_shuffle_epi8(row256, shuffle_r0));
@@ -436,9 +443,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu0_n   = _mm_unpacklo_epi32(t0, t1);
       mu1_n   = _mm_unpackhi_epi32(t0, t1);
       if constexpr (fuse_dequant) {
-        dequant_store_128(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
+        dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                           _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
-        dequant_store_128(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
+        dequant_store_128<store_i32>(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
                           _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
       } else {
         _mm_storeu_si128((__m128i *)mp0, mu0_n);
@@ -489,9 +496,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         __m256i row256 = MagSgn.decode_four_quads(qinf128, U_q128, pLSB_adj, v_n);
 
         if constexpr (fuse_dequant) {
-          dequant_store_256(mp0, _mm256_shuffle_epi8(row256, shuffle_r0), block->transformation, pLSB_dq,
+          dequant_store_256<store_i32>(mp0, _mm256_shuffle_epi8(row256, shuffle_r0), block->transformation, pLSB_dq,
                             vfscale, vmagmask_dq, vsignmask_dq);
-          dequant_store_256(mp1, _mm256_shuffle_epi8(row256, shuffle_r1), block->transformation, pLSB_dq,
+          dequant_store_256<store_i32>(mp1, _mm256_shuffle_epi8(row256, shuffle_r1), block->transformation, pLSB_dq,
                             vfscale, vmagmask_dq, vsignmask_dq);
         } else {
           _mm256_storeu_si256((__m256i *)mp0, _mm256_shuffle_epi8(row256, shuffle_r0));
@@ -541,9 +548,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu0_n   = _mm_unpacklo_epi32(t0, t1);
         mu1_n   = _mm_unpackhi_epi32(t0, t1);
         if constexpr (fuse_dequant) {
-          dequant_store_128(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
+          dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                             _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
-          dequant_store_128(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
+          dequant_store_128<store_i32>(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
                             _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
         } else {
           _mm_storeu_si128((__m128i *)mp0, mu0_n);
@@ -579,9 +586,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu0_n   = _mm_unpacklo_epi32(t0, t1);
       mu1_n   = _mm_unpackhi_epi32(t0, t1);
       if constexpr (fuse_dequant) {
-        dequant_store_128(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
+        dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                           _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
-        dequant_store_128(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
+        dequant_store_128<store_i32>(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
                           _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
       } else {
         _mm_storeu_si128((__m128i *)mp0, mu0_n);
@@ -636,9 +643,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu0_n          = _mm_unpacklo_epi32(t0, t1);
         mu1_n          = _mm_unpackhi_epi32(t0, t1);
         if constexpr (fuse_dequant) {
-          dequant_store_128(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
+          dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                             _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
-          dequant_store_128(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
+          dequant_store_128<store_i32>(mp1, mu1_n, block->transformation, pLSB_dq, vfscale,
                             _mm256_castsi256_si128(vmagmask_dq), _mm256_castsi256_si128(vsignmask_dq));
         } else {
           _mm_storeu_si128((__m128i *)mp0, mu0_n);
@@ -835,82 +842,77 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const __m256i shift   = _mm256_set1_epi32(ROIshift);
   __m256i v0, v1, s0, s1, vdst0, vdst1, vROImask;
   if (this->transformation == 1) {
-    // lossless path
-    for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->band_buf + i * this->band_stride;
-      size_t len   = this->size.x;
-      if (ROIshift == 0) {
-        // Common case: no ROI — skip the ROI upshift entirely.
-        // val = sample_buf + i * blksampl_stride; blksampl_stride = round_up(width,8) is a
-        // multiple of 8 int32 = 32 bytes, and sample_buf is 32-byte aligned → _mm256_load_si256 ok.
-        for (; len >= 16; len -= 16) {
-          v0    = _mm256_load_si256((__m256i *)val);
-          v1    = _mm256_load_si256((__m256i *)(val + 8));
-          s0    = v0;
-          s1    = v1;
-          v0    = _mm256_and_si256(v0, magmask);
-          v1    = _mm256_and_si256(v1, magmask);
-          vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
-          vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
-          _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(vdst0));
-          _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(vdst1));
-          val += 16;
-          dst += 16;
+    auto rev_dequant = [&](auto simd_store, auto scalar_store) {
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
+        size_t len   = this->size.x;
+        if (ROIshift == 0) {
+          for (; len >= 16; len -= 16) {
+            v0    = _mm256_load_si256((__m256i *)val);
+            v1    = _mm256_load_si256((__m256i *)(val + 8));
+            s0    = v0;
+            s1    = v1;
+            v0    = _mm256_and_si256(v0, magmask);
+            v1    = _mm256_and_si256(v1, magmask);
+            vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
+            vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
+            simd_store(dst, vdst0, vdst1);
+            val += 16;
+            dst += 16;
+          }
+        } else {
+          for (; len >= 16; len -= 16) {
+            v0 = _mm256_load_si256((__m256i *)val);
+            v1 = _mm256_load_si256((__m256i *)(val + 8));
+            s0 = v0;
+            s1 = v1;
+            v0 = _mm256_and_si256(v0, magmask);
+            v1 = _mm256_and_si256(v1, magmask);
+            vROImask = _mm256_and_si256(v0, vmask);
+            vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+            vROImask = _mm256_and_si256(vROImask, shift);
+            v0       = _mm256_sllv_epi32(v0, vROImask);
+            vROImask = _mm256_and_si256(v1, vmask);
+            vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+            vROImask = _mm256_and_si256(vROImask, shift);
+            v1       = _mm256_sllv_epi32(v1, vROImask);
+            vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
+            vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
+            simd_store(dst, vdst0, vdst1);
+            val += 16;
+            dst += 16;
+          }
         }
         for (; len > 0; --len) {
           int32_t sign = *val & INT32_MIN;
           *val &= INT32_MAX;
-          *val >>= pLSB;
-          if (sign) *val = -(*val & INT32_MAX);
-          *dst = static_cast<float>(*val);
-          val++;
-          dst++;
-        }
-      } else {
-        for (; len >= 16; len -= 16) {
-          v0 = _mm256_load_si256((__m256i *)val);
-          v1 = _mm256_load_si256((__m256i *)(val + 8));
-          s0 = v0;
-          s1 = v1;
-          v0 = _mm256_and_si256(v0, magmask);
-          v1 = _mm256_and_si256(v1, magmask);
-          // upshift background region, if necessary
-          vROImask = _mm256_and_si256(v0, vmask);
-          vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-          vROImask = _mm256_and_si256(vROImask, shift);
-          v0       = _mm256_sllv_epi32(v0, vROImask);
-          vROImask = _mm256_and_si256(v1, vmask);
-          vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-          vROImask = _mm256_and_si256(vROImask, shift);
-          v1       = _mm256_sllv_epi32(v1, vROImask);
-          // convert values from sign-magnitude form to two's complement one
-          vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
-          vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
-          _mm256_storeu_ps(dst, _mm256_cvtepi32_ps(vdst0));
-          _mm256_storeu_ps(dst + 8, _mm256_cvtepi32_ps(vdst1));
-          val += 16;
-          dst += 16;
-        }
-        for (; len > 0; --len) {
-          int32_t sign = *val & INT32_MIN;
-          *val &= INT32_MAX;
-          // detect background region and upshift it
           if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
             *val <<= ROIshift;
           }
           *val >>= pLSB;
-          // convert sign-magnitude to two's complement form
-          if (sign) {
-            *val = -(*val & INT32_MAX);
-          }
-
-          assert(pLSB >= 0);  // assure downshift is not negative
-          *dst = static_cast<float>(*val);
+          if (sign) *val = -(*val & INT32_MAX);
+          assert(pLSB >= 0);
+          scalar_store(dst, *val);
           val++;
           dst++;
         }
       }
+    };
+    if (this->dequant_i32) {
+      rev_dequant(
+          [](sprec_t *d, __m256i a, __m256i b) {
+            _mm256_storeu_si256(reinterpret_cast<__m256i *>(d), a);
+            _mm256_storeu_si256(reinterpret_cast<__m256i *>(d + 8), b);
+          },
+          [](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
+    } else {
+      rev_dequant(
+          [](sprec_t *d, __m256i a, __m256i b) {
+            _mm256_storeu_ps(d, _mm256_cvtepi32_ps(a));
+            _mm256_storeu_ps(d + 8, _mm256_cvtepi32_ps(b));
+          },
+          [](sprec_t *d, int32_t v) { *d = static_cast<float>(v); });
     }
   } else {
     // lossy path: compute the direct float scale factor
@@ -1132,7 +1134,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // causes a data race in multi-threaded decode.  Gate on width % 4 == 0 to avoid this.
     if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
         && (block->size.y & 1u) == 0) {
-      ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      if (block->dequant_i32)
+        ht_cleanup_decode<true, true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      else
+        ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {
       ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);

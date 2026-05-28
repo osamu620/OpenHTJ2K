@@ -35,4 +35,4 @@
 void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
                  size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
                  uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
-                 float stepsize);
+                 float stepsize, bool dequant_i32 = false);

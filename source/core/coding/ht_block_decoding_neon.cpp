@@ -100,6 +100,7 @@ uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_
 // Fused dequantize-and-store for 4 × int32 MagSgn samples → 4 × float.
 // Lossless (transformation==1): sign-magnitude → two's-complement shift → float.
 // Lossy   (transformation==0): magnitude → float → scale → apply sign via XOR.
+template <bool StoreI32 = false>
 static FORCE_INLINE void dequant_store_neon(int32_t *dst, int32x4_t val, uint8_t transformation,
                                             int32_t pLSB_dq, float32x4_t vfscale, int32x4_t vmagmask,
                                             int32x4_t vsignmask) {
@@ -108,7 +109,10 @@ static FORCE_INLINE void dequant_store_neon(int32_t *dst, int32x4_t val, uint8_t
     int32x4_t shifted = vshlq_s32(mag, vdupq_n_s32(-pLSB_dq));
     uint32x4_t neg    = vreinterpretq_u32_s32(vshrq_n_s32(val, 31));
     int32x4_t res     = vbslq_s32(neg, vnegq_s32(shifted), shifted);
-    vst1q_f32(reinterpret_cast<float *>(dst), vcvtq_f32_s32(res));
+    if constexpr (StoreI32)
+      vst1q_s32(dst, res);
+    else
+      vst1q_f32(reinterpret_cast<float *>(dst), vcvtq_f32_s32(res));
   } else {
     int32x4_t mag  = vandq_s32(val, vmagmask);
     float32x4_t f  = vmulq_f32(vcvtq_f32_s32(mag), vfscale);
@@ -118,7 +122,7 @@ static FORCE_INLINE void dequant_store_neon(int32_t *dst, int32x4_t val, uint8_t
   }
 }
 
-template <bool skip_sigma, bool fuse_dequant = false>
+template <bool skip_sigma, bool fuse_dequant = false, bool store_i32 = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   fwd_buf<0xFF> MagSgn(block->get_compressed_data(), Pcup);
@@ -285,9 +289,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       int16x4_t row0_16 = vuzp1_s16(lo, hi);
       int16x4_t row1_16 = vuzp2_s16(lo, hi);
       if constexpr (fuse_dequant) {
-        dequant_store_neon(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
+        dequant_store_neon<store_i32>(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
                            vfscale_dq, vmagmask_dq, vsignmask_dq);
-        dequant_store_neon(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
+        dequant_store_neon<store_i32>(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
                            vfscale_dq, vmagmask_dq, vsignmask_dq);
       } else {
         vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
@@ -336,9 +340,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu1    = vandq_u32(mu1, sig1);
 
       if constexpr (fuse_dequant) {
-        dequant_store_neon(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq,
+        dequant_store_neon<store_i32>(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq,
                            vfscale_dq, vmagmask_dq, vsignmask_dq);
-        dequant_store_neon(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq,
+        dequant_store_neon<store_i32>(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq,
                            vfscale_dq, vmagmask_dq, vsignmask_dq);
       } else {
         vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
@@ -497,9 +501,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         int16x4_t row0_16 = vuzp1_s16(lo, hi);
         int16x4_t row1_16 = vuzp2_s16(lo, hi);
         if constexpr (fuse_dequant) {
-          dequant_store_neon(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
+          dequant_store_neon<store_i32>(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
                              vfscale_dq, vmagmask_dq, vsignmask_dq);
-          dequant_store_neon(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
+          dequant_store_neon<store_i32>(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
                              vfscale_dq, vmagmask_dq, vsignmask_dq);
         } else {
           vst1q_s32(mp0, vshll_n_s16(row0_16, 16));
@@ -560,9 +564,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu1    = vandq_u32(mu1, sig1);
 
         if constexpr (fuse_dequant) {
-          dequant_store_neon(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq,
+          dequant_store_neon<store_i32>(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq,
                              vfscale_dq, vmagmask_dq, vsignmask_dq);
-          dequant_store_neon(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq,
+          dequant_store_neon<store_i32>(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq,
                              vfscale_dq, vmagmask_dq, vsignmask_dq);
         } else {
           vst1q_s32(mp0, vuzp1q_s32(mu0, mu1));
@@ -751,53 +755,63 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   vpLSB    = vdupq_n_s32(pLSB);
   vmagmask = vdupq_n_s32(INT32_MAX);
   if (this->transformation == 1) {
-    // lossless path
-    for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->band_buf + i * this->band_stride;
-      size_t len   = this->size.x;
-      for (; len >= 8; len -= 8) {  // dequantize two vectors at a time
-        v0 = vld1q_s32(val);
-        v1 = vld1q_s32(val + 4);
-        s0 = vshrq_n_s32(v0, 31);  // generate a mask for negative values
-        s1 = vshrq_n_s32(v1, 31);  // generate a mask for negative values
-        v0 = vandq_s32(v0, vmagmask);
-        v1 = vandq_s32(v1, vmagmask);
-        // upshift background region, if necessary
-        vROImask = vandq_s32(v0, vmask);
-        vROImask = vceqzq_s32(vROImask);
-        vROImask = vandq_s32(vROImask, vROIshift);
-        v0       = vshlq_s32(v0, vsubq_s32(vROImask, vpLSB));
-        vROImask = vandq_s32(v1, vmask);
-        vROImask = vceqzq_s32(vROImask);
-        vROImask = vandq_s32(vROImask, vROIshift);
-        v1       = vshlq_s32(v1, vsubq_s32(vROImask, vpLSB));
-        // convert values from sign-magnitude form to two's complement one
-        vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
-        vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
-        // vst1q_s16(dst, vcombine_s16(vmovn_s32(vdst0), vmovn_s32(vdst1)));
-        vst1q_f32(dst, vcvtq_f32_s32(vdst0));
-        vst1q_f32(dst + 4, vcvtq_f32_s32(vdst1));
-        val += 8;
-        dst += 8;
-      }
-      for (; len > 0; --len) {
-        int32_t sign = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        // upshift background region, if necessary
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
+    auto rev_dequant_neon = [&](auto simd_store, auto scalar_store) {
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
+        size_t len   = this->size.x;
+        for (; len >= 8; len -= 8) {
+          v0 = vld1q_s32(val);
+          v1 = vld1q_s32(val + 4);
+          s0 = vshrq_n_s32(v0, 31);
+          s1 = vshrq_n_s32(v1, 31);
+          v0 = vandq_s32(v0, vmagmask);
+          v1 = vandq_s32(v1, vmagmask);
+          vROImask = vandq_s32(v0, vmask);
+          vROImask = vceqzq_s32(vROImask);
+          vROImask = vandq_s32(vROImask, vROIshift);
+          v0       = vshlq_s32(v0, vsubq_s32(vROImask, vpLSB));
+          vROImask = vandq_s32(v1, vmask);
+          vROImask = vceqzq_s32(vROImask);
+          vROImask = vandq_s32(vROImask, vROIshift);
+          v1       = vshlq_s32(v1, vsubq_s32(vROImask, vpLSB));
+          vdst0 = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
+          vdst1 = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
+          simd_store(dst, vdst0, vdst1);
+          val += 8;
+          dst += 8;
         }
-        *val >>= pLSB;
-        // convert sign-magnitude to two's complement form
-        if (sign) {
-          *val = -(*val & INT32_MAX);
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          *val &= INT32_MAX;
+          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+            *val <<= ROIshift;
+          }
+          *val >>= pLSB;
+          if (sign) {
+            *val = -(*val & INT32_MAX);
+          }
+          assert(pLSB >= 0);
+          scalar_store(dst, *val);
+          val++;
+          dst++;
         }
-        assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<float>(*val);
-        val++;
-        dst++;
       }
+    };
+    if (this->dequant_i32) {
+      rev_dequant_neon(
+          [](sprec_t *d, int32x4_t a, int32x4_t b) {
+            vst1q_s32(reinterpret_cast<int32_t *>(d), a);
+            vst1q_s32(reinterpret_cast<int32_t *>(d + 4), b);
+          },
+          [](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
+    } else {
+      rev_dequant_neon(
+          [](sprec_t *d, int32x4_t a, int32x4_t b) {
+            vst1q_f32(d, vcvtq_f32_s32(a));
+            vst1q_f32(d + 4, vcvtq_f32_s32(b));
+          },
+          [](sprec_t *d, int32_t v) { *d = static_cast<float>(v); });
     }
   } else {
     // lossy path: compute the direct float scale factor.
@@ -1005,7 +1019,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // height overflows one row into the next block's region.
     if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
         && (block->size.y & 1u) == 0) {
-      ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      if (block->dequant_i32)
+        ht_cleanup_decode<true, true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      else
+        ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {
       ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);

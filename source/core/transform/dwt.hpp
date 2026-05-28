@@ -172,6 +172,50 @@ static inline void dwt_pse_fill_inplace_simd(sprec_t *row, int32_t width) {
   for (int32_t i = 0; i <  8; ++i) row[width + i]     = row[width - 2 - i];
 #endif
 }
+
+// Integer variant of dwt_pse_fill_inplace_simd for use_i32 buffers.
+// Identical algorithm but uses integer SIMD intrinsics — avoids strict-aliasing
+// UB from applying float-typed operations to int32_t data.
+static inline void dwt_pse_fill_inplace_i32(int32_t *row, int32_t width) {
+#if defined(OPENHTJ2K_ENABLE_AVX2)
+  const __m256i rev = _mm256_setr_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+  __m256i lv = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(row + 1));
+  __m256i lr = _mm256_permutevar8x32_epi32(lv, rev);
+  _mm256_storeu_si256(reinterpret_cast<__m256i *>(row - 8), lr);
+  __m256i rv = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(row + width - 9));
+  __m256i rr = _mm256_permutevar8x32_epi32(rv, rev);
+  _mm256_storeu_si256(reinterpret_cast<__m256i *>(row + width), rr);
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  int32x4_t lo = vld1q_s32(row + 1);
+  int32x4_t hi = vld1q_s32(row + 5);
+  int32x4_t lo_rev = vrev64q_s32(vextq_s32(lo, lo, 2));
+  int32x4_t hi_rev = vrev64q_s32(vextq_s32(hi, hi, 2));
+  vst1q_s32(row - 4, lo_rev);
+  vst1q_s32(row - 8, hi_rev);
+  int32x4_t r_lo = vld1q_s32(row + width - 9);
+  int32x4_t r_hi = vld1q_s32(row + width - 5);
+  int32x4_t r_hi_rev = vrev64q_s32(vextq_s32(r_hi, r_hi, 2));
+  int32x4_t r_lo_rev = vrev64q_s32(vextq_s32(r_lo, r_lo, 2));
+  vst1q_s32(row + width,     r_hi_rev);
+  vst1q_s32(row + width + 4, r_lo_rev);
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  v128_t lo = wasm_v128_load(row + 1);
+  v128_t hi = wasm_v128_load(row + 5);
+  v128_t lo_rev = wasm_i32x4_shuffle(lo, lo, 3, 2, 1, 0);
+  v128_t hi_rev = wasm_i32x4_shuffle(hi, hi, 3, 2, 1, 0);
+  wasm_v128_store(row - 4, lo_rev);
+  wasm_v128_store(row - 8, hi_rev);
+  v128_t r_lo = wasm_v128_load(row + width - 9);
+  v128_t r_hi = wasm_v128_load(row + width - 5);
+  v128_t r_hi_rev = wasm_i32x4_shuffle(r_hi, r_hi, 3, 2, 1, 0);
+  v128_t r_lo_rev = wasm_i32x4_shuffle(r_lo, r_lo, 3, 2, 1, 0);
+  wasm_v128_store(row + width,     r_hi_rev);
+  wasm_v128_store(row + width + 4, r_lo_rev);
+#else
+  for (int32_t i = 1; i <= 8; ++i) row[-i]        = row[i];
+  for (int32_t i = 0; i <  8; ++i) row[width + i] = row[width - 2 - i];
+#endif
+}
 template <class T>
 static inline void dwt_1d_extr_fixed(T *extbuf, T *buf, const int32_t left, const int32_t right,
                                      const int32_t i0, const int32_t i1) {
@@ -261,6 +305,9 @@ void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, int32_t u0, int32_t u1, int32
 void idwt_irrev_ver_step_fixed_avx512(int32_t n, float *prev, float *next, float *tgt, float coeff);
 void idwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
 void idwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_1d_filtr_rev53_i32_avx512(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_rev_ver_lp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void idwt_rev_ver_hp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 // Single-row reversible (5/3) FDWT vertical lifting steps.
 void fdwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
@@ -284,6 +331,9 @@ void idwt_irrev_ver_step_fixed_neon(int32_t n, float *prev, float *next, float *
 // Single-row reversible (5/3) vertical lifting steps.
 void idwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, float *tgt);
 void idwt_rev_ver_hp_step_neon(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_1d_filtr_rev53_i32_neon(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_rev_ver_lp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void idwt_rev_ver_hp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 void idwt_1d_filtr_rev53_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
@@ -300,6 +350,9 @@ void idwt_irrev_ver_step_fixed_avx2(int32_t n, float *prev, float *next, float *
 // Single-row reversible (5/3) vertical lifting steps.
 void idwt_rev_ver_lp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt);
 void idwt_rev_ver_hp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_1d_filtr_rev53_i32_avx2(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_rev_ver_lp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void idwt_rev_ver_hp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 #else
 void idwt_1d_filtr_rev53_fixed(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
@@ -327,6 +380,9 @@ void idwt_rev_ver_sr_fixed_wasm(sprec_t *in, int32_t u0, int32_t u1, int32_t v0,
 void idwt_irrev_ver_step_fixed_wasm(int32_t n, float *prev, float *next, float *tgt, float coeff);
 void idwt_rev_ver_lp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
 void idwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
+void idwt_1d_filtr_rev53_i32_wasm(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void idwt_rev_ver_lp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void idwt_rev_ver_hp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 // single-row vertical step (for streaming fdwt_2d_state)
 void fdwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
@@ -356,6 +412,8 @@ void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *
 // left and right are precomputed PSE counts (function of u0%2, u1%2, and transformation).
 void idwt_1d_row_inplace(sprec_t *row, int32_t left, int32_t right,
                          int32_t u0, int32_t u1, uint8_t transformation);
+void idwt_1d_row_inplace_i32(int32_t *row, int32_t left, int32_t right,
+                             int32_t u0, int32_t u1);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming 2D IDWT — produces one output row per call via pull_row().
@@ -391,14 +449,15 @@ struct idwt_2d_state {
   int32_t slot_stride;     // IDWT_RING_PSE_LEFT + round_up(u1-u0+SIMD_PADDING, SIMD_PADDING)
   uint8_t transformation;  // 0 = irrev 9/7, 1 = rev 5/3, 2+ = ATK irrev
   dwt_type dir;            // DWT_BIDIR (full 2D), DWT_HORZ (horizontal only), DWT_NO (passthrough)
+  bool    use_i32;         // when true, ring/PSE buffers hold int32_t (reinterpret_cast'd from sprec_t*)
   int8_t  top_pse;         // PSE rows above v0  (3 or 4 for 9/7; 1 or 2 for 5/3 / ATK)
   int8_t  bottom_pse;      // PSE rows below v1-1
 
   // ── PSE scratch (separate from the ring, BIDIR only) ──────────────────────
   // top_pse_buf[0] ↔ physical row v0-1, [1] ↔ v0-2, …
   // bot_pse_buf[0] ↔ physical row v1,   [1] ↔ v1+1, …
-  sprec_t *top_pse_buf;        // top_pse    × stride sprec_t (SIMD-aligned); nullptr for HORZ/NO
-  sprec_t *bot_pse_buf;        // bottom_pse × stride sprec_t; nullptr for HORZ/NO
+  void *top_pse_buf;           // top_pse    × stride sprec_t (SIMD-aligned); nullptr for HORZ/NO
+  void *bot_pse_buf;           // bottom_pse × stride sprec_t; nullptr for HORZ/NO
   int8_t   top_dlevel[4];      // d_level per top-PSE slot (-1 = unfilled)
   int8_t   bot_dlevel[4];      // d_level per bot-PSE slot (-1 = unfilled)
 
@@ -407,14 +466,14 @@ struct idwt_2d_state {
   // Each ring slot is slot_stride floats wide; the data portion (post-horizontal-IDWT)
   // starts at offset IDWT_RING_PSE_LEFT within the slot, providing scratch space
   // for the in-place horizontal PSE fill and filter (no separate ext_buf needed).
-  sprec_t *ring_buf;                           // IDWT_STATE_RING_DEPTH × slot_stride; nullptr for HORZ/NO
+  void *ring_buf;                              // IDWT_STATE_RING_DEPTH × slot_stride; nullptr for HORZ/NO
   int32_t  ring_origin;                         // abs row mapped to slot 0
   int8_t   d_level[IDWT_STATE_RING_DEPTH];     // 0=raw, 1=step1, 2=step2, -1=unused
 
   // ── single-row output buffer (HORZ and NO only) ───────────────────────────
   // Allocated with IDWT_RING_PSE_LEFT prefix for in-place horizontal IDWT.
   // Data area starts at horz_out_buf + IDWT_RING_PSE_LEFT.
-  sprec_t *horz_out_buf;   // nullptr for BIDIR
+  void *horz_out_buf;      // nullptr for BIDIR
 
   // ── zero-row tracking (Phase 4 IDWT skip for absent JPIP precincts) ──────
   // When a fetched source row is entirely zero (absent precinct), the zero
@@ -460,7 +519,8 @@ struct idwt_2d_state {
 void idwt_2d_state_init(idwt_2d_state *s,
                         int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                         uint8_t transformation, dwt_type dir,
-                        idwt_row_src_fn src_fn, void *src_ctx);
+                        idwt_row_src_fn src_fn, void *src_ctx,
+                        bool use_i32 = false);
 
 // Free buffers allocated by idwt_2d_state_init.
 void idwt_2d_state_free(idwt_2d_state *s);
@@ -514,11 +574,12 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s);
 // Pointer to the row buffer for physical row r (ring, top-PSE, or bot-PSE).
 static inline sprec_t *idwt_rptr(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1)
-    return s->ring_buf + static_cast<ptrdiff_t>(r & (IDWT_STATE_RING_DEPTH - 1)) * s->slot_stride
+    return static_cast<sprec_t *>(s->ring_buf)
+           + static_cast<ptrdiff_t>(r & (IDWT_STATE_RING_DEPTH - 1)) * s->slot_stride
            + IDWT_RING_PSE_LEFT;
   if (r < s->v0)
-    return s->top_pse_buf + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
-  return s->bot_pse_buf + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
+    return static_cast<sprec_t *>(s->top_pse_buf) + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
+  return static_cast<sprec_t *>(s->bot_pse_buf) + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
 }
 
 // d_level for physical row r (-1 = unfilled / out of range).
@@ -598,19 +659,19 @@ struct fdwt_2d_state {
   bool    use_i32;
 
   // ── PSE scratch ───────────────────────────────────────────────────────────
-  sprec_t *top_pse_buf;      // top_pse    × stride sprec_t (or int32_t if use_i32)
-  sprec_t *bot_pse_buf;      // bottom_pse × stride sprec_t (or int32_t if use_i32)
+  void *top_pse_buf;         // top_pse    × stride sprec_t (or int32_t if use_i32)
+  void *bot_pse_buf;         // bottom_pse × stride sprec_t (or int32_t if use_i32)
   int8_t   top_dlevel[4];    // d_level per top-PSE slot (-1 = unfilled)
   int8_t   bot_dlevel[4];    // d_level per bot-PSE slot (-1 = unfilled)
 
   // ── sliding ring ──────────────────────────────────────────────────────────
-  sprec_t *ring_buf;                          // FDWT_STATE_RING_DEPTH × stride
+  void *ring_buf;                             // FDWT_STATE_RING_DEPTH × stride
   int32_t  ring_origin;
   int8_t   d_level[FDWT_STATE_RING_DEPTH];   // 0=raw, 1=step1, 2=step2, -1=unused
 
   // ── horizontal-DWT temp buffer ────────────────────────────────────────────
   // Size: horiz_left + stride + horiz_right + SIMD_PADDING
-  sprec_t *horiz_tmp;
+  void *horiz_tmp;
 
   // ── cursors ───────────────────────────────────────────────────────────────
   int32_t next_in;    // next row to accept via push_row() [v0, v1]

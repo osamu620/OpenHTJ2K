@@ -525,4 +525,107 @@ void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32
   }
 }
 
+void idwt_1d_filtr_rev53_i32_avx512(int32_t *X, const int32_t left, const int32_t i0, const int32_t i1) {
+  const int32_t start  = i0 / 2;
+  const int32_t stop   = i1 / 2;
+  const int32_t offset = left - i0 % 2;
+
+  // step 1 (undo forward LP update): LP -= (HP_left + HP_right + 2) >> 2
+  int32_t simdlen = stop + 1 - start;
+  int32_t i = 0, n = offset;
+  const __m512i vtwo = _mm512_set1_epi32(2);
+  for (; i + 8 < simdlen; i += 16, n += 32) {
+    __m512i xin0a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n - 1));
+    __m512i xin2a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 1));
+    __m512i xin0b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 15));
+    __m512i xin2b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 17));
+    __m512i xsuma = _mm512_slli_epi64(
+        _mm512_add_epi32(_mm512_add_epi32(xin0a, xin2a), vtwo), 32);
+    __m512i xsumb = _mm512_slli_epi64(
+        _mm512_add_epi32(_mm512_add_epi32(xin0b, xin2b), vtwo), 32);
+    xsuma = _mm512_srai_epi32(xsuma, 2);
+    xsumb = _mm512_srai_epi32(xsumb, 2);
+    xin0a = _mm512_sub_epi32(xin0a, xsuma);
+    xin0b = _mm512_sub_epi32(xin0b, xsumb);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n - 1), xin0a);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n + 15), xin0b);
+  }
+  for (; i < simdlen; i += 8, n += 16) {
+    __m512i xin0 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n - 1));
+    __m512i xin2 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 1));
+    __m512i xsum = _mm512_slli_epi64(
+        _mm512_add_epi32(_mm512_add_epi32(xin0, xin2), vtwo), 32);
+    xsum = _mm512_srai_epi32(xsum, 2);
+    xin0 = _mm512_sub_epi32(xin0, xsum);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n - 1), xin0);
+  }
+
+  // step 2 (undo forward HP predict): HP += (LP_left + LP_right) >> 1
+  simdlen = stop - start;
+  i = 0; n = offset;
+  for (; i + 8 < simdlen; i += 16, n += 32) {
+    __m512i xin0a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n));
+    __m512i xin2a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 2));
+    __m512i xin0b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 16));
+    __m512i xin2b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 18));
+    __m512i xsuma = _mm512_slli_epi64(_mm512_add_epi32(xin0a, xin2a), 32);
+    __m512i xsumb = _mm512_slli_epi64(_mm512_add_epi32(xin0b, xin2b), 32);
+    xsuma = _mm512_srai_epi32(xsuma, 1);
+    xsumb = _mm512_srai_epi32(xsumb, 1);
+    xin0a = _mm512_add_epi32(xin0a, xsuma);
+    xin0b = _mm512_add_epi32(xin0b, xsumb);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n), xin0a);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n + 16), xin0b);
+  }
+  for (; i < simdlen; i += 8, n += 16) {
+    __m512i xin0 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n));
+    __m512i xin2 = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(X + n + 2));
+    __m512i xsum = _mm512_slli_epi64(_mm512_add_epi32(xin0, xin2), 32);
+    xsum = _mm512_srai_epi32(xsum, 1);
+    xin0 = _mm512_add_epi32(xin0, xsum);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(X + n), xin0);
+  }
+}
+
+void idwt_rev_ver_lp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  const __m512i vtwo = _mm512_set1_epi32(2);
+  int32_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m512i a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(prev + i));
+    __m512i b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(next + i));
+    __m512i t = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(tgt  + i));
+    t = _mm512_sub_epi32(t,
+        _mm512_srai_epi32(_mm512_add_epi32(_mm512_add_epi32(a, b), vtwo), 2));
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(tgt + i), t);
+  }
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    __m512i a = _mm512_maskz_loadu_epi32(mask, prev + i);
+    __m512i b = _mm512_maskz_loadu_epi32(mask, next + i);
+    __m512i t = _mm512_maskz_loadu_epi32(mask, tgt  + i);
+    t = _mm512_sub_epi32(t,
+        _mm512_srai_epi32(_mm512_add_epi32(_mm512_add_epi32(a, b), vtwo), 2));
+    _mm512_mask_storeu_epi32(tgt + i, mask, t);
+  }
+}
+
+void idwt_rev_ver_hp_step_i32_avx512(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  int32_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m512i a = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(prev + i));
+    __m512i b = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(next + i));
+    __m512i t = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(tgt  + i));
+    t = _mm512_add_epi32(t, _mm512_srai_epi32(_mm512_add_epi32(a, b), 1));
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(tgt + i), t);
+  }
+  if (i < n) {
+    __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    __m512i a = _mm512_maskz_loadu_epi32(mask, prev + i);
+    __m512i b = _mm512_maskz_loadu_epi32(mask, next + i);
+    __m512i t = _mm512_maskz_loadu_epi32(mask, tgt  + i);
+    t = _mm512_add_epi32(t, _mm512_srai_epi32(_mm512_add_epi32(a, b), 1));
+    _mm512_mask_storeu_epi32(tgt + i, mask, t);
+  }
+}
+
 #endif  // OPENHTJ2K_TRY_AVX2 && __AVX512F__
