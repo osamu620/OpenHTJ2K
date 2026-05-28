@@ -31,15 +31,53 @@
 #include "block_dequant.hpp"
 #include <cassert>
 
-void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
-                 size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
-                 uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
-                 float stepsize) {
+template <bool StoreI32>
+static void j2k_dequant_rev_scalar(int32_t *sample_buf, size_t blksampl_stride,
+                                   const uint8_t *block_states, size_t blkstate_stride,
+                                   sprec_t *band_buf, uint32_t band_stride, uint32_t width,
+                                   uint32_t height, int32_t M_b, uint8_t ROIshift) {
   int32_t N_b;
   const int32_t pLSB  = 31 - M_b;
   const uint32_t mask = UINT32_MAX >> (M_b + 1);
-  int32_t r_val;
-  int32_t offset = 0;
+
+  for (uint32_t y = 0; y < height; y++) {
+    for (uint32_t x = 0; x < width; x++) {
+      const uint32_t n = x + y * band_stride;
+      int32_t *val     = &sample_buf[x + y * blksampl_stride];
+      uint8_t state    = block_states[(x + 1) + (y + 1) * blkstate_stride];
+      sprec_t *dst     = band_buf + n;
+      int32_t sign     = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      if (ROIshift) {
+        N_b = 30 - pLSB + 1;
+      } else {
+        N_b = 30 - (state >> 3) + 1;
+      }
+      if (*val != 0 && N_b < M_b) {
+        *val |= 1 << (pLSB - 1 + M_b - N_b);
+      }
+      int32_t smask = sign >> 31;
+      *val          = (*val ^ smask) - smask;
+      assert(pLSB >= 0);
+      int32_t QF32 = *val >> pLSB;
+      if constexpr (StoreI32)
+        *reinterpret_cast<int32_t *>(dst) = QF32;
+      else
+        *dst = static_cast<float>(QF32);
+    }
+  }
+}
+
+void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
+                 size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
+                 uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
+                 float stepsize, bool dequant_i32) {
+  int32_t N_b;
+  const int32_t pLSB  = 31 - M_b;
+  const uint32_t mask = UINT32_MAX >> (M_b + 1);
 
   float fscale = stepsize;
   fscale *= (1 << FRACBITS);
@@ -53,35 +91,12 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
   const auto scale = (int32_t)(fscale + 0.5);
 
   if (transformation == 1) {
-    // reversible path
-    for (uint32_t y = 0; y < height; y++) {
-      for (uint32_t x = 0; x < width; x++) {
-        const uint32_t n = x + y * band_stride;
-        int32_t *val     = &sample_buf[x + y * blksampl_stride];
-        uint8_t state    = block_states[(x + 1) + (y + 1) * blkstate_stride];
-        sprec_t *dst     = band_buf + n;
-        int32_t sign     = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
-        }
-        if (ROIshift) {
-          N_b = 30 - pLSB + 1;
-        } else {
-          N_b = 30 - (state >> 3) + 1;
-        }
-        offset        = (M_b > N_b) ? M_b - N_b : 0;
-        r_val         = 1 << (pLSB - 1 + offset);
-        if (*val != 0 && N_b < M_b) {
-          *val |= r_val;
-        }
-        int32_t smask = sign >> 31;
-        *val          = (*val ^ smask) - smask;
-        assert(pLSB >= 0);
-        int32_t QF32 = *val >> pLSB;
-        *dst         = static_cast<float>(QF32);
-      }
-    }
+    if (dequant_i32)
+      j2k_dequant_rev_scalar<true>(sample_buf, blksampl_stride, block_states, blkstate_stride,
+                                   band_buf, band_stride, width, height, M_b, ROIshift);
+    else
+      j2k_dequant_rev_scalar<false>(sample_buf, blksampl_stride, block_states, blkstate_stride,
+                                    band_buf, band_stride, width, height, M_b, ROIshift);
   } else {
     // irreversible path
     for (uint32_t y = 0; y < height; y++) {
@@ -100,10 +115,12 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
         } else {
           N_b = 30 - (state >> 3) + 1;
         }
-        offset        = (M_b > N_b) ? M_b - N_b : 0;
-        r_val         = 1 << (pLSB - 1 + offset);
-        if (*val != 0) {
-          *val |= r_val;
+        {
+          int32_t offset = (M_b > N_b) ? M_b - N_b : 0;
+          int32_t r_val  = 1 << (pLSB - 1 + offset);
+          if (*val != 0) {
+            *val |= r_val;
+          }
         }
         *val          = (*val + (1 << 15)) >> 16;
         *val         *= scale;

@@ -52,6 +52,7 @@ uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_
 }
 
 // Scalar fused dequantize-and-store: convert sign-magnitude int32 to dequantized float.
+template <bool StoreI32 = false>
 static FORCE_INLINE void dequant_store_scalar(void *dst, int32_t val, uint8_t transformation,
                                               int32_t pLSB_dq, float fscale_direct) {
   if (transformation == 1) {
@@ -59,7 +60,10 @@ static FORCE_INLINE void dequant_store_scalar(void *dst, int32_t val, uint8_t tr
     val &= INT32_MAX;
     val >>= pLSB_dq;
     if (sign) val = -(val & INT32_MAX);
-    *reinterpret_cast<float *>(dst) = static_cast<float>(val);
+    if constexpr (StoreI32)
+      *reinterpret_cast<int32_t *>(dst) = val;
+    else
+      *reinterpret_cast<float *>(dst) = static_cast<float>(val);
   } else {
     int32_t sign = val & INT32_MIN;
     float f      = static_cast<float>(val & INT32_MAX) * fscale_direct;
@@ -68,7 +72,7 @@ static FORCE_INLINE void dequant_store_scalar(void *dst, int32_t val, uint8_t tr
   }
 }
 
-template <bool skip_sigma, bool fuse_dequant = false>
+template <bool skip_sigma, bool fuse_dequant = false, bool store_i32 = false>
 void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
                        const int32_t Scup) {
   uint8_t *compressed_data = block->get_compressed_data();
@@ -298,7 +302,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     // Helper to store a decoded sample, optionally fusing dequantize.
     auto store_sample = [&](int32_t *dst, int32_t ival) {
       if constexpr (fuse_dequant) {
-        dequant_store_scalar(dst, ival, block->transformation, pLSB_dq, fscale_direct);
+        dequant_store_scalar<store_i32>(dst, ival, block->transformation, pLSB_dq, fscale_direct);
       } else {
         *dst = ival;
       }
@@ -1021,30 +1025,32 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
   const auto scale = (int32_t)(fscale + 0.5);
   if (this->transformation == 1) {
-    // lossless path
-    for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-      int32_t *val = this->sample_buf + i * this->blksampl_stride;
-      sprec_t *dst = this->band_buf + i * this->band_stride;
-      size_t len   = this->size.x;
-      for (; len > 0; --len) {
-        int32_t sign = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        // detect background region and upshift it
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
+    auto rev_loop = [&](auto store_fn) {
+      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+        int32_t *val = this->sample_buf + i * this->blksampl_stride;
+        sprec_t *dst = this->band_buf + i * this->band_stride;
+        size_t len   = this->size.x;
+        for (; len > 0; --len) {
+          int32_t sign = *val & INT32_MIN;
+          *val &= INT32_MAX;
+          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+            *val <<= ROIshift;
+          }
+          *val >>= pLSB;
+          if (sign) {
+            *val = -(*val & INT32_MAX);
+          }
+          assert(pLSB >= 0);
+          store_fn(dst, *val);
+          val++;
+          dst++;
         }
-        *val >>= pLSB;
-        // convert sign-magnitude to two's complement form
-        if (sign) {
-          *val = -(*val & INT32_MAX);
-        }
-
-        assert(pLSB >= 0);  // assure downshift is not negative
-        *dst = static_cast<sprec_t>(*val);
-        val++;
-        dst++;
       }
-    }
+    };
+    if (this->dequant_i32)
+      rev_loop([](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
+    else
+      rev_loop([](sprec_t *d, int32_t v) { *d = static_cast<sprec_t>(v); });
   } else {
     // lossy path
     OPENHTJ2K_MAYBE_UNUSED int32_t ROImask = 0;
@@ -1191,7 +1197,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     const bool fuseable = (num_ht_passes == 1) && (ROIshift == 0)
                           && ((block->size.y & 1u) == 0u);
     if (fuseable) {
-      ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      if (block->dequant_i32)
+        ht_cleanup_decode<true, true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
+      else
+        ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       dequant_done = true;
     } else if (num_ht_passes == 1) {
       ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);

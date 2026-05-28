@@ -154,6 +154,7 @@ class j2k_codeblock : public j2k_region {
   const uint32_t band_stride;
   OPENHTJ2K_MAYBE_UNUSED const uint8_t R_b;
   const uint8_t transformation;
+  bool dequant_i32 = false;
   const float stepsize;
 
   const uint16_t num_layers;

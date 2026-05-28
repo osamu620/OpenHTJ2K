@@ -428,4 +428,120 @@ void idwt_rev_ver_sr_fixed_wasm(sprec_t *in, const int32_t u0, const int32_t u1,
   }
 }
 
+struct i32x4x2_idwt {
+  v128_t val[2];
+};
+
+static inline i32x4x2_idwt vld2q_i32_idwt(const int32_t *ptr) {
+  v128_t lo = wasm_v128_load(ptr);
+  v128_t hi = wasm_v128_load(ptr + 4);
+  i32x4x2_idwt r;
+  r.val[0] = wasm_i32x4_shuffle(lo, hi, 0, 2, 4, 6);
+  r.val[1] = wasm_i32x4_shuffle(lo, hi, 1, 3, 5, 7);
+  return r;
+}
+
+static inline void vst2q_i32_idwt(int32_t *ptr, i32x4x2_idwt x) {
+  v128_t lo = wasm_i32x4_shuffle(x.val[0], x.val[1], 0, 4, 1, 5);
+  v128_t hi = wasm_i32x4_shuffle(x.val[0], x.val[1], 2, 6, 3, 7);
+  wasm_v128_store(ptr, lo);
+  wasm_v128_store(ptr + 4, hi);
+}
+
+void idwt_1d_filtr_rev53_i32_wasm(int32_t *X, const int32_t left, const int32_t i0, const int32_t i1) {
+  const int32_t start  = i0 / 2;
+  const int32_t stop   = i1 / 2;
+  const int32_t offset = left - i0 % 2;
+
+  // step 1 (undo forward LP update): LP -= (HP_left + HP_right + 2) >> 2
+  int32_t simdlen = stop + 1 - start;
+  const v128_t vtwo = wasm_i32x4_splat(2);
+  int32_t n = offset, i = 0;
+  for (; i + 8 <= simdlen; i += 8, n += 16) {
+    i32x4x2_idwt xl0a = vld2q_i32_idwt(X + n - 1);
+    i32x4x2_idwt xl1a = vld2q_i32_idwt(X + n + 1);
+    i32x4x2_idwt xl0b = vld2q_i32_idwt(X + n + 7);
+    i32x4x2_idwt xl1b = vld2q_i32_idwt(X + n + 9);
+    xl0a.val[1] = wasm_i32x4_sub(xl0a.val[1],
+        wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(xl0a.val[0], xl1a.val[0]), vtwo), 2));
+    xl0b.val[1] = wasm_i32x4_sub(xl0b.val[1],
+        wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(xl0b.val[0], xl1b.val[0]), vtwo), 2));
+    vst2q_i32_idwt(X + n - 1, xl0a);
+    vst2q_i32_idwt(X + n + 7, xl0b);
+  }
+  for (; i < simdlen; i += 4, n += 8) {
+    i32x4x2_idwt xl0 = vld2q_i32_idwt(X + n - 1);
+    i32x4x2_idwt xl1 = vld2q_i32_idwt(X + n + 1);
+    xl0.val[1] = wasm_i32x4_sub(xl0.val[1],
+        wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(xl0.val[0], xl1.val[0]), vtwo), 2));
+    vst2q_i32_idwt(X + n - 1, xl0);
+  }
+
+  // step 2 (undo forward HP predict): HP += (LP_left + LP_right) >> 1
+  simdlen = stop - start;
+  n = offset; i = 0;
+  for (; i + 8 <= simdlen; i += 8, n += 16) {
+    i32x4x2_idwt xl0a = vld2q_i32_idwt(X + n);
+    i32x4x2_idwt xl1a = vld2q_i32_idwt(X + n + 2);
+    i32x4x2_idwt xl0b = vld2q_i32_idwt(X + n + 8);
+    i32x4x2_idwt xl1b = vld2q_i32_idwt(X + n + 10);
+    xl0a.val[1] = wasm_i32x4_add(xl0a.val[1],
+        wasm_i32x4_shr(wasm_i32x4_add(xl0a.val[0], xl1a.val[0]), 1));
+    xl0b.val[1] = wasm_i32x4_add(xl0b.val[1],
+        wasm_i32x4_shr(wasm_i32x4_add(xl0b.val[0], xl1b.val[0]), 1));
+    vst2q_i32_idwt(X + n, xl0a);
+    vst2q_i32_idwt(X + n + 8, xl0b);
+  }
+  for (; i < simdlen; i += 4, n += 8) {
+    i32x4x2_idwt xl0 = vld2q_i32_idwt(X + n);
+    i32x4x2_idwt xl1 = vld2q_i32_idwt(X + n + 2);
+    xl0.val[1] = wasm_i32x4_add(xl0.val[1],
+        wasm_i32x4_shr(wasm_i32x4_add(xl0.val[0], xl1.val[0]), 1));
+    vst2q_i32_idwt(X + n, xl0);
+  }
+}
+
+void idwt_rev_ver_lp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  const v128_t vtwo = wasm_i32x4_splat(2);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    v128_t a0 = wasm_v128_load(prev + i);     v128_t b0 = wasm_v128_load(next + i);     v128_t t0 = wasm_v128_load(tgt + i);
+    v128_t a1 = wasm_v128_load(prev + i + 4); v128_t b1 = wasm_v128_load(next + i + 4); v128_t t1 = wasm_v128_load(tgt + i + 4);
+    t0 = wasm_i32x4_sub(t0,
+         wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(a0, b0), vtwo), 2));
+    t1 = wasm_i32x4_sub(t1,
+         wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(a1, b1), vtwo), 2));
+    wasm_v128_store(tgt + i,     t0);
+    wasm_v128_store(tgt + i + 4, t1);
+  }
+  for (; i + 4 <= n; i += 4) {
+    v128_t a = wasm_v128_load(prev + i);
+    v128_t b = wasm_v128_load(next + i);
+    v128_t t = wasm_v128_load(tgt  + i);
+    t = wasm_i32x4_sub(t, wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(a, b), vtwo), 2));
+    wasm_v128_store(tgt + i, t);
+  }
+  for (; i < n; ++i) tgt[i] -= (prev[i] + next[i] + 2) >> 2;
+}
+
+void idwt_rev_ver_hp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    v128_t a0 = wasm_v128_load(prev + i);     v128_t b0 = wasm_v128_load(next + i);     v128_t t0 = wasm_v128_load(tgt + i);
+    v128_t a1 = wasm_v128_load(prev + i + 4); v128_t b1 = wasm_v128_load(next + i + 4); v128_t t1 = wasm_v128_load(tgt + i + 4);
+    t0 = wasm_i32x4_add(t0, wasm_i32x4_shr(wasm_i32x4_add(a0, b0), 1));
+    t1 = wasm_i32x4_add(t1, wasm_i32x4_shr(wasm_i32x4_add(a1, b1), 1));
+    wasm_v128_store(tgt + i,     t0);
+    wasm_v128_store(tgt + i + 4, t1);
+  }
+  for (; i + 4 <= n; i += 4) {
+    v128_t a = wasm_v128_load(prev + i);
+    v128_t b = wasm_v128_load(next + i);
+    v128_t t = wasm_v128_load(tgt  + i);
+    t = wasm_i32x4_add(t, wasm_i32x4_shr(wasm_i32x4_add(a, b), 1));
+    wasm_v128_store(tgt + i, t);
+  }
+  for (; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
+}
+
 #endif  // OPENHTJ2K_ENABLE_WASM_SIMD

@@ -592,6 +592,6 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 
   j2k_dequant(block->sample_buf, block->blksampl_stride, block->block_states, block->blkstate_stride,
               block->band_buf, block->band_stride, block->size.x, block->size.y, M_b, ROIshift,
-              block->transformation, block->stepsize);
+              block->transformation, block->stepsize, block->dequant_i32);
   // TODO: if k !=0
 }

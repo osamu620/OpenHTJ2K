@@ -58,6 +58,7 @@ struct j2k_subband_row_buf {
   j2k_resolution *res;        // to enumerate precincts
   uint8_t         band_idx;   // index within resolution's subbands (0=HL,1=LH,2=HH)
   uint8_t         ROIshift;
+  bool            dequant_i32 = false;
 
   int32_t cb_h;       // codeblock height for this resolution (max across precincts)
   int32_t strip_y0;   // y-start of the currently-decoded codeblock strip (-1 = none)

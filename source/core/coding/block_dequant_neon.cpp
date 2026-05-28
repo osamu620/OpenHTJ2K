@@ -33,16 +33,111 @@
 #include <cassert>
 #include <cstddef>
 
-void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
-                 size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
-                 uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
-                 float stepsize) {
+template <bool StoreI32>
+static void j2k_dequant_rev_neon(int32_t *sample_buf, size_t blksampl_stride,
+                                 const uint8_t *block_states, size_t blkstate_stride,
+                                 sprec_t *band_buf, uint32_t band_stride, uint32_t width,
+                                 uint32_t height, int32_t M_b, uint8_t ROIshift) {
   int32_t N_b;
   const int32_t pLSB    = 31 - M_b;
   const uint32_t mask   = UINT32_MAX >> (M_b + 1);
   const int32_t pLSB_m1 = pLSB - 1;
 
-  // Precompute irreversible scale
+  const int32x4_t v_M_b      = vdupq_n_s32(M_b);
+  const int32x4_t v_30       = vdupq_n_s32(30);
+  const int32x4_t v_1        = vdupq_n_s32(1);
+  const int32x4_t v_pLSB_m1  = vdupq_n_s32(pLSB_m1);
+  const int32x4_t v_neg_pLSB = vdupq_n_s32(-pLSB);
+
+  for (uint32_t y = 0; y < height; y++) {
+    int32_t *val_row        = sample_buf + y * blksampl_stride;
+    const uint8_t *st_row   = block_states + (y + 1) * blkstate_stride + 1;
+    sprec_t *dst_row        = band_buf + y * band_stride;
+    uint32_t x              = 0;
+
+    for (; x + 4 <= width; x += 4) {
+      int32x4_t v_val = vld1q_s32(val_row + x);
+
+      int32x4_t v_sign = vshrq_n_s32(v_val, 31);
+      v_val = vandq_s32(v_val, vdupq_n_s32(INT32_MAX));
+
+      if (ROIshift) {
+        int32_t tmp[4];
+        vst1q_s32(tmp, v_val);
+        for (int i = 0; i < 4; i++) {
+          if (((uint32_t)tmp[i] & ~mask) == 0) {
+            tmp[i] <<= ROIshift;
+          }
+        }
+        v_val = vld1q_s32(tmp);
+      }
+
+      uint8_t st_bytes[4] = {st_row[x], st_row[x + 1], st_row[x + 2], st_row[x + 3]};
+      int32x4_t v_state;
+      if (ROIshift) {
+        v_state = vdupq_n_s32(30 - pLSB + 1);
+      } else {
+        int32_t st_vals[4] = {st_bytes[0] >> 3, st_bytes[1] >> 3, st_bytes[2] >> 3,
+                              st_bytes[3] >> 3};
+        int32x4_t v_st = vld1q_s32(st_vals);
+        v_state        = vaddq_s32(vsubq_s32(v_30, v_st), v_1);
+      }
+
+      int32x4_t v_offset = vmaxq_s32(vsubq_s32(v_M_b, v_state), vdupq_n_s32(0));
+      int32x4_t v_shift  = vaddq_s32(v_pLSB_m1, v_offset);
+      int32x4_t v_rval   = vshlq_s32(v_1, v_shift);
+
+      uint32x4_t v_nonzero = vcgtq_s32(v_val, vdupq_n_s32(0));
+      uint32x4_t v_nb_lt   = vcltq_s32(v_state, v_M_b);
+      uint32x4_t v_cond    = vandq_u32(v_nonzero, v_nb_lt);
+      v_val = vorrq_s32(v_val, vandq_s32(v_rval, vreinterpretq_s32_u32(v_cond)));
+
+      v_val = vsubq_s32(veorq_s32(v_val, v_sign), v_sign);
+      int32x4_t v_qf32 = vshlq_s32(v_val, v_neg_pLSB);
+
+      if constexpr (StoreI32)
+        vst1q_s32(reinterpret_cast<int32_t *>(dst_row + x), v_qf32);
+      else
+        vst1q_f32(dst_row + x, vcvtq_f32_s32(v_qf32));
+    }
+
+    for (; x < width; x++) {
+      int32_t *val = val_row + x;
+      int32_t sign = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      uint8_t state = st_row[x];
+      if (ROIshift) {
+        N_b = 30 - pLSB + 1;
+      } else {
+        N_b = 30 - (state >> 3) + 1;
+      }
+      if (*val != 0 && N_b < M_b) {
+        *val |= 1 << (pLSB_m1 + M_b - N_b);
+      }
+      int32_t smask = sign >> 31;
+      *val          = (*val ^ smask) - smask;
+      assert(pLSB >= 0);
+      int32_t QF32 = *val >> pLSB;
+      if constexpr (StoreI32)
+        reinterpret_cast<int32_t *>(dst_row)[x] = QF32;
+      else
+        dst_row[x] = static_cast<float>(QF32);
+    }
+  }
+}
+
+void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
+                 size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
+                 uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
+                 float stepsize, bool dequant_i32) {
+  int32_t N_b;
+  const int32_t pLSB    = 31 - M_b;
+  const uint32_t mask   = UINT32_MAX >> (M_b + 1);
+  const int32_t pLSB_m1 = pLSB - 1;
+
   float fscale = stepsize;
   fscale *= (1 << FRACBITS);
   if (M_b <= 31) {
@@ -55,103 +150,12 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
   const auto scale = (int32_t)(fscale + 0.5);
 
   if (transformation == 1) {
-    // Reversible path
-    const int32x4_t v_M_b     = vdupq_n_s32(M_b);
-    const int32x4_t v_30      = vdupq_n_s32(30);
-    const int32x4_t v_1       = vdupq_n_s32(1);
-    const int32x4_t v_pLSB_m1 = vdupq_n_s32(pLSB_m1);
-    const int32x4_t v_neg_pLSB = vdupq_n_s32(-pLSB);
-
-    for (uint32_t y = 0; y < height; y++) {
-      int32_t *val_row        = sample_buf + y * blksampl_stride;
-      const uint8_t *st_row   = block_states + (y + 1) * blkstate_stride + 1;
-      sprec_t *dst_row        = band_buf + y * band_stride;
-      uint32_t x              = 0;
-
-      for (; x + 4 <= width; x += 4) {
-        // Load 4 samples
-        int32x4_t v_val = vld1q_s32(val_row + x);
-
-        // Extract sign (bit 31)
-        int32x4_t v_sign = vshrq_n_s32(v_val, 31);  // 0 or -1
-
-        // Clear sign bit
-        v_val = vandq_s32(v_val, vdupq_n_s32(INT32_MAX));
-
-        if (ROIshift) {
-          // ROI handling: scalar fallback for this rare case
-          int32_t tmp[4];
-          vst1q_s32(tmp, v_val);
-          for (int i = 0; i < 4; i++) {
-            if (((uint32_t)tmp[i] & ~mask) == 0) {
-              tmp[i] <<= ROIshift;
-            }
-          }
-          v_val = vld1q_s32(tmp);
-        }
-
-        // Load 4 state bytes and extract N_b = 31 - (state >> 3)
-        uint8_t st_bytes[4] = {st_row[x], st_row[x + 1], st_row[x + 2], st_row[x + 3]};
-        int32x4_t v_state;
-        if (ROIshift) {
-          v_state = vdupq_n_s32(30 - pLSB + 1);
-        } else {
-          int32_t st_vals[4] = {st_bytes[0] >> 3, st_bytes[1] >> 3, st_bytes[2] >> 3,
-                                st_bytes[3] >> 3};
-          int32x4_t v_st = vld1q_s32(st_vals);
-          v_state        = vaddq_s32(vsubq_s32(v_30, v_st), v_1);  // 30 - (state>>3) + 1
-        }
-
-        // offset = max(M_b - N_b, 0)
-        int32x4_t v_offset = vmaxq_s32(vsubq_s32(v_M_b, v_state), vdupq_n_s32(0));
-
-        // r_val = 1 << (pLSB - 1 + offset)
-        int32x4_t v_shift = vaddq_s32(v_pLSB_m1, v_offset);
-        int32x4_t v_rval  = vshlq_s32(v_1, v_shift);  // per-element variable shift
-
-        // Add r_val if val != 0 && N_b < M_b
-        uint32x4_t v_nonzero = vcgtq_s32(v_val, vdupq_n_s32(0));  // val > 0 (sign cleared)
-        uint32x4_t v_nb_lt   = vcltq_s32(v_state, v_M_b);         // N_b < M_b
-        uint32x4_t v_cond    = vandq_u32(v_nonzero, v_nb_lt);
-        v_val = vorrq_s32(v_val, vandq_s32(v_rval, vreinterpretq_s32_u32(v_cond)));
-
-        // Sign-magnitude to two's complement (branchless)
-        v_val = vsubq_s32(veorq_s32(v_val, v_sign), v_sign);
-
-        // Right shift by pLSB
-        int32x4_t v_qf32 = vshlq_s32(v_val, v_neg_pLSB);
-
-        // Convert to float and store
-        float32x4_t v_out = vcvtq_f32_s32(v_qf32);
-        vst1q_f32(dst_row + x, v_out);
-      }
-
-      // Scalar tail
-      for (; x < width; x++) {
-        int32_t *val = val_row + x;
-        int32_t sign = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
-        }
-        uint8_t state = st_row[x];
-        if (ROIshift) {
-          N_b = 30 - pLSB + 1;
-        } else {
-          N_b = 30 - (state >> 3) + 1;
-        }
-        int32_t offset = (M_b > N_b) ? M_b - N_b : 0;
-        int32_t r_val  = 1 << (pLSB_m1 + offset);
-        if (*val != 0 && N_b < M_b) {
-          *val |= r_val;
-        }
-        int32_t smask = sign >> 31;
-        *val          = (*val ^ smask) - smask;
-        assert(pLSB >= 0);
-        int32_t QF32       = *val >> pLSB;
-        dst_row[x]         = static_cast<float>(QF32);
-      }
-    }
+    if (dequant_i32)
+      j2k_dequant_rev_neon<true>(sample_buf, blksampl_stride, block_states, blkstate_stride,
+                                 band_buf, band_stride, width, height, M_b, ROIshift);
+    else
+      j2k_dequant_rev_neon<false>(sample_buf, blksampl_stride, block_states, blkstate_stride,
+                                  band_buf, band_stride, width, height, M_b, ROIshift);
   } else {
     // Irreversible path
     const int32x4_t v_M_b     = vdupq_n_s32(M_b);
@@ -246,10 +250,11 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
         } else {
           N_b = 30 - (state >> 3) + 1;
         }
-        int32_t offset = (M_b > N_b) ? M_b - N_b : 0;
-        int32_t r_val  = 1 << (pLSB_m1 + offset);
-        if (*val != 0) {
-          *val |= r_val;
+        {
+          int32_t offset = (M_b > N_b) ? M_b - N_b : 0;
+          if (*val != 0) {
+            *val |= 1 << (pLSB_m1 + offset);
+          }
         }
         *val          = (*val + (1 << 15)) >> 16;
         // Modular 32-bit multiply, matching vmulq_s32 exactly (no signed-overflow UB).

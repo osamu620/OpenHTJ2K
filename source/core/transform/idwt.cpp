@@ -31,6 +31,9 @@
 #include <utility>
 #include "dwt.hpp"
 #include "utils.hpp"
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #include <arm_neon.h>
+#endif
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
 #endif
@@ -52,6 +55,11 @@ static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_wasm;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
 static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_wasm;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_wasm;
+typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
+typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
+static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_wasm;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_wasm;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_wasm;
 #elif defined(OPENHTJ2K_ENABLE_AVX512)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx512,
                                                            idwt_1d_filtr_rev53_fixed_avx512};
@@ -64,6 +72,11 @@ static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_avx51
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
 static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_avx512;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_avx512;
+typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
+typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
+static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_avx512;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_avx512;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_avx512;
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
                                                           idwt_1d_filtr_rev53_fixed_neon};
@@ -76,6 +89,11 @@ static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_neon;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
 static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_neon;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_neon;
+typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
+typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
+static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_neon;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_neon;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_neon;
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
                                                           idwt_1d_filtr_rev53_fixed_avx2};
@@ -88,6 +106,11 @@ static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_avx2;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
 static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_avx2;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_avx2;
+typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
+typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
+static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_avx2;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_avx2;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_avx2;
 #else
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
                                                           idwt_1d_filtr_rev53_fixed};
@@ -108,6 +131,26 @@ static void adv_rev_ver_hp_step_scalar(int32_t n, const float *prev, const float
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
 static adv_rev_step_fn adv_rev_ver_lp_step_fn = adv_rev_ver_lp_step_scalar;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = adv_rev_ver_hp_step_scalar;
+typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
+typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
+static void idwt_1d_filtr_rev53_i32_scalar(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1) {
+  const int32_t start  = u_i0 / 2;
+  const int32_t stop   = u_i1 / 2;
+  const int32_t offset = left - u_i0 % 2;
+  for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2)
+    X[n] -= (X[n - 1] + X[n + 1] + 2) >> 2;
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2)
+    X[n + 1] += (X[n] + X[n + 2]) >> 1;
+}
+static void adv_idwt_rev_lp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] -= (prev[i] + next[i] + 2) >> 2;
+}
+static void adv_idwt_rev_hp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+  for (int32_t i = 0; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
+}
+static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_scalar;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = adv_idwt_rev_lp_step_i32_scalar;
+static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = adv_idwt_rev_hp_step_i32_scalar;
 #endif
 
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -808,6 +851,22 @@ void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right,
     idwt_1d_filtr_irrev53_fn(row - left, left, u0, u1);
 }
 
+void idwt_1d_row_inplace_i32(int32_t *row, const int32_t left, const int32_t right,
+                             const int32_t u0, const int32_t u1) {
+  const int32_t width = u1 - u0;
+  // PSE fill using integer intrinsics — avoids strict-aliasing UB from
+  // applying float-typed SIMD to int32_t data.
+  if (width >= 9) {
+    dwt_pse_fill_inplace_i32(row, width);
+  } else {
+    for (int32_t i = 1; i <= left; ++i)
+      row[-i] = row[PSEo(u0 - i, u0, u1)];
+    for (int32_t i = 1; i <= right; ++i)
+      row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+  }
+  idwt_1d_filtr_rev53_i32_fn(row - left, left, u0, u1);
+}
+
 // Sub-range 9/7 IDWT: runs only the 4-pass lifting on buffer positions
 // [buf_lo, buf_hi] (inclusive) of X.  The kernel's parity / offset logic is
 // inherited from u_i0 unchanged so the LP/HP identity of each column matches
@@ -1003,10 +1062,19 @@ static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
     const float coeff = lp ? 0.25f : -0.5f;
     adv_irrev_ver_step_fn(w, prev + col0, next + col0, tgt + col0, coeff);
   } else {  // rev 5/3
-    if (lp) {
-      adv_rev_ver_lp_step_fn(w, prev + col0, next + col0, tgt + col0);
+    if (s->use_i32) {
+      int32_t *tgt_i  = reinterpret_cast<int32_t *>(tgt);
+      const int32_t *prev_i = reinterpret_cast<const int32_t *>(prev);
+      const int32_t *next_i = reinterpret_cast<const int32_t *>(next);
+      if (lp)
+        adv_idwt_rev_lp_step_i32_fn(w, prev_i + col0, next_i + col0, tgt_i + col0);
+      else
+        adv_idwt_rev_hp_step_i32_fn(w, prev_i + col0, next_i + col0, tgt_i + col0);
     } else {
-      adv_rev_ver_hp_step_fn(w, prev + col0, next + col0, tgt + col0);
+      if (lp)
+        adv_rev_ver_lp_step_fn(w, prev + col0, next + col0, tgt + col0);
+      else
+        adv_rev_ver_hp_step_fn(w, prev + col0, next + col0, tgt + col0);
     }
   }
   set_dl(s, r, cur + 1);
@@ -1019,14 +1087,14 @@ static inline void fill_pse(idwt_2d_state *s, int32_t r) {
   const bool z = is_zero(s, r);
   for (int8_t i = 1; i <= s->top_pse; ++i) {
     if (s->top_dlevel[i - 1] < 0 && pse_source(s->v0 - i, s->v0, s->v1) == r) {
-      memcpy(s->top_pse_buf + static_cast<ptrdiff_t>(i - 1) * s->stride, src, nb);
+      memcpy(static_cast<sprec_t *>(s->top_pse_buf) + static_cast<ptrdiff_t>(i - 1) * s->stride, src, nb);
       s->top_dlevel[i - 1] = 0;
       s->top_pse_zero[i - 1] = z;
     }
   }
   for (int8_t i = 0; i < s->bottom_pse; ++i) {
     if (s->bot_dlevel[i] < 0 && pse_source(s->v1 + i, s->v0, s->v1) == r) {
-      memcpy(s->bot_pse_buf + static_cast<ptrdiff_t>(i) * s->stride, src, nb);
+      memcpy(static_cast<sprec_t *>(s->bot_pse_buf) + static_cast<ptrdiff_t>(i) * s->stride, src, nb);
       s->bot_dlevel[i] = 0;
       s->bot_pse_zero[i] = z;
     }
@@ -1154,13 +1222,15 @@ void idwt_2d_state_init(idwt_2d_state *s,
                         const int32_t u0, const int32_t u1,
                         const int32_t v0, const int32_t v1,
                         const uint8_t transformation, const dwt_type dir,
-                        idwt_row_src_fn src_fn, void *src_ctx) {
+                        idwt_row_src_fn src_fn, void *src_ctx,
+                        bool use_i32) {
   s->u0            = u0;  s->u1 = u1;
   s->v0            = v0;  s->v1 = v1;
   s->stride        = round_up(u1 - u0, SIMD_PADDING);
   s->slot_stride   = IDWT_RING_PSE_LEFT + round_up(u1 - u0 + SIMD_PADDING, SIMD_PADDING);
   s->transformation = transformation;
   s->dir           = dir;
+  s->use_i32       = use_i32 && (transformation == 1);
   // ATK (transformation>=2) is a 2-step filter like rev53 — use same PSE counts (eff=1).
   const uint8_t eff = (transformation < 2) ? transformation : 1;
   s->top_pse       = kPseTop[v0 % 2][eff];
@@ -1174,13 +1244,13 @@ void idwt_2d_state_init(idwt_2d_state *s,
   if (dir == DWT_BIDIR) {
     const size_t row_bytes  = sizeof(sprec_t) * static_cast<size_t>(s->stride);
     const size_t slot_bytes = sizeof(sprec_t) * static_cast<size_t>(s->slot_stride);
-    s->ring_buf    = static_cast<sprec_t *>(aligned_mem_alloc(IDWT_STATE_RING_DEPTH * slot_bytes, 32));
-    s->top_pse_buf = (s->top_pse    > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32)) : nullptr;
-    s->bot_pse_buf = (s->bottom_pse > 0) ? static_cast<sprec_t *>(aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32)) : nullptr;
+    s->ring_buf    = aligned_mem_alloc(IDWT_STATE_RING_DEPTH * slot_bytes, 32);
+    s->top_pse_buf = (s->top_pse    > 0) ? aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32) : nullptr;
+    s->bot_pse_buf = (s->bottom_pse > 0) ? aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32) : nullptr;
   } else {
     // HORZ or NO: one output row at a time — single scratch buffer with PSE prefix.
     const size_t slot_bytes = sizeof(sprec_t) * static_cast<size_t>(s->slot_stride);
-    s->horz_out_buf = static_cast<sprec_t *>(aligned_mem_alloc(slot_bytes, 32));
+    s->horz_out_buf = aligned_mem_alloc(slot_bytes, 32);
   }
 
   s->ring_origin = v0;
@@ -1253,7 +1323,7 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
   // The source callback interleaves LL and H and applies the horizontal IDWT.
   // horz_out_buf has IDWT_RING_PSE_LEFT prefix so the callback can fill PSE in-place.
   if (s->dir == DWT_HORZ) {
-    sprec_t *data = s->horz_out_buf + IDWT_RING_PSE_LEFT;
+    sprec_t *data = static_cast<sprec_t *>(s->horz_out_buf) + IDWT_RING_PSE_LEFT;
     s->get_src_row(s->src_ctx, s->next_out, data);
     ++s->next_out;
     return data;
@@ -1261,7 +1331,7 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
 
   // ── NO_DWT: pure passthrough — source callback copies LL row to scratch ───
   if (s->dir == DWT_NO) {
-    sprec_t *data = s->horz_out_buf + IDWT_RING_PSE_LEFT;
+    sprec_t *data = static_cast<sprec_t *>(s->horz_out_buf) + IDWT_RING_PSE_LEFT;
     s->get_src_row(s->src_ctx, s->next_out, data);
     ++s->next_out;
     return data;
@@ -1277,7 +1347,12 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
     sprec_t *dst = rptr(s, s->v0);
     s->get_src_row(s->src_ctx, s->v0, dst);
     if (s->transformation == 1 && (s->v0 % 2) == 1) {
-      for (int32_t c = 0; c < s->u1 - s->u0; ++c) dst[c] = floorf(dst[c] * 0.5f);
+      if (s->use_i32) {
+        int32_t *dst_i = reinterpret_cast<int32_t *>(dst);
+        for (int32_t c = 0; c < s->u1 - s->u0; ++c) dst_i[c] >>= 1;
+      } else {
+        for (int32_t c = 0; c < s->u1 - s->u0; ++c) dst[c] = floorf(dst[c] * 0.5f);
+      }
     }
     ++s->next_out;
     return dst;
