@@ -158,6 +158,68 @@ class state_MS_enc {
 #endif
   }
 
+#ifdef _MSC_VER
+  __declspec(noinline)
+#else
+  __attribute__((noinline))
+#endif
+  void emitFlat(const uint32_t *v, const uint32_t *m, int32_t count) {
+    uint64_t cr = Creg;
+    uint32_t ct = ctreg;
+    uint8_t la = last;
+    int32_t po = pos;
+
+    auto flush = [&]() {
+      uint32_t val = static_cast<uint32_t>(cr);
+      if (la < 0xFF && (val & 0xFF) < 0xFF && ((val >> 8) & 0xFF) < 0xFF
+          && ((val >> 16) & 0xFF) < 0xFF) {
+        la = static_cast<uint8_t>(val >> 24);
+        cr >>= 32; ct -= 32;
+        *reinterpret_cast<uint32_t *>(buf + po) = val; po += 4;
+      } else {
+        uint32_t bl = 0, t = 0, stuff = (la == 0xFF), tmp;
+        tmp = val & ((1U << (8U - stuff)) - 1U);
+        t |= tmp; bl += 8 - stuff; stuff = (tmp == 0xFF);
+        tmp = (val >> bl) & ((1U << (8U - stuff)) - 1U);
+        t |= tmp << 8; bl += 8 - stuff; stuff = (tmp == 0xFF);
+        tmp = (val >> bl) & ((1U << (8U - stuff)) - 1U);
+        t |= tmp << 16; bl += 8 - stuff; stuff = (tmp == 0xFF);
+        tmp = (val >> bl) & ((1U << (8U - stuff)) - 1U);
+        t |= tmp << 24; bl += 8 - stuff;
+        la = static_cast<uint8_t>(tmp); cr >>= bl; ct -= bl;
+        *reinterpret_cast<uint32_t *>(buf + po) = t; po += 4;
+      }
+    };
+
+    int32_t i = 0;
+    for (; i + 3 < count; i += 4) {
+      uint32_t m_sum = m[i] + m[i + 1] + m[i + 2] + m[i + 3];
+      if (ct + m_sum < 64) {
+        uint32_t s0 = ct;
+        cr |= static_cast<uint64_t>(v[i]) << s0; s0 += m[i];
+        cr |= static_cast<uint64_t>(v[i + 1]) << s0; s0 += m[i + 1];
+        cr |= static_cast<uint64_t>(v[i + 2]) << s0; s0 += m[i + 2];
+        cr |= static_cast<uint64_t>(v[i + 3]) << s0;
+        ct += m_sum;
+        if (ct >= 32) flush();
+      } else {
+        cr |= static_cast<uint64_t>(v[i]) << ct; ct += m[i];
+        if (ct >= 32) flush();
+        cr |= static_cast<uint64_t>(v[i + 1]) << ct; ct += m[i + 1];
+        if (ct >= 32) flush();
+        cr |= static_cast<uint64_t>(v[i + 2]) << ct; ct += m[i + 2];
+        if (ct >= 32) flush();
+        cr |= static_cast<uint64_t>(v[i + 3]) << ct; ct += m[i + 3];
+        if (ct >= 32) flush();
+      }
+    }
+    for (; i < count; ++i) {
+      cr |= static_cast<uint64_t>(v[i]) << ct; ct += m[i];
+      while (ct >= 32) flush();
+    }
+    Creg = cr; ctreg = ct; last = la; pos = po;
+  }
+
   FORCE_INLINE int32_t termMS() {
     while (true) {
       if (last == 0xFF) {

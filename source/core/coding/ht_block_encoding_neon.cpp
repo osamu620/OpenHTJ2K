@@ -233,6 +233,15 @@ auto make_storage_one = [](int32_t *sp0, int32_t *sp1, int32x4_t &sig0,
       vsubq_s32(vdupq_n_s32(32), vreinterpretq_s32_u32(vclzq_u32(vreinterpretq_u32_s32(v0)))), sig0);
 };
 
+static inline void append_quad_to_flat(int32x4_t v, int32x4_t m, int32x4_t k1,
+                                       uint32_t *flat_v, uint32_t *flat_m,
+                                       int32_t fc) {
+  int32x4_t tmp    = vshlq_s32(k1, m);
+  int32x4_t v_corr = vsubq_s32(v, tmp);
+  vst1q_u32(flat_v + fc, vreinterpretq_u32_s32(v_corr));
+  vst1q_u32(flat_m + fc, vreinterpretq_u32_s32(m));
+}
+
 // joint termination of MEL and VLC
 int32_t termMELandVLC(state_VLC_enc &VLC, state_MEL_enc &MEL) {
   VLC.termVLC();
@@ -346,6 +355,11 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t u_q, uoff, u_min, uvlc_idx, kappa = 1;
   int32_t emb_pattern, embk_0, embk_1, emb1_0, emb1_1;
 
+  // Deferred MagSgn: accumulate per-quad (v_corr, m) into flat arrays,
+  // drain once per line-pair via emitFlat.
+  alignas(32) uint32_t flat_v[512 * 4], flat_m[512 * 4];
+  int32_t flat_count;
+
   const int32x4_t lshift = vcombine_s32(vcreate_s32(0x0000000100000000),
                                         vcreate_s32(0x0000000300000002));  //{0, 1, 2, 3};
   const int32x4_t rshift = vcombine_s32(
@@ -360,6 +374,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t *sp0 = block->sample_buf;
   int32_t *sp1 = sp0 + block->blksampl_stride;
   uint32_t qx;
+  flat_count = 0;
   for (qx = QW; qx >= 2; qx -= 2) {
     bool uoff_flag = true;
 
@@ -440,15 +455,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       }
     }
 
-    // MagSgn encoding
+    // Defer MagSgn encoding
     m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                          vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
     m1       = vsubq_s32(vandq_s32(sig1, vdupq_n_s32(U1)),
                          vandq_s32(vshlq_s32(vdupq_n_s32(embk_1), rshift), vone));
     known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
     known1_1 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_1), rshift), vone);
-    MagSgn_encoder.emitBits(v0, m0, known1_0);
-    MagSgn_encoder.emitBits(v1, m1, known1_1);
+    append_quad_to_flat(v0, m0, known1_0, flat_v, flat_m, flat_count); flat_count += 4;
+    append_quad_to_flat(v1, m1, known1_1, flat_v, flat_m, flat_count); flat_count += 4;
 
     // context for the next quad
     context = (rho1 >> 1) | (rho1 & 0x1);
@@ -493,15 +508,17 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     cwd          = tmp >> 8;
     VLC_encoder.emitVLCBits(cwd, lw);
 
-    // MagSgn encoding
+    // Defer MagSgn encoding
     m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                          vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
     known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
-    MagSgn_encoder.emitBits(v0, m0, known1_0);
+    append_quad_to_flat(v0, m0, known1_0, flat_v, flat_m, flat_count); flat_count += 4;
 
     // update rho_line
     *rho_p++ = rho0;
   }
+  // Drain initial line-pair MagSgn batch
+  MagSgn_encoder.emitFlat(flat_v, flat_m, flat_count);
 
   /*******************************************************************************************************************/
   // Non-initial line-pair
@@ -511,6 +528,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     E_p   = Eline + 1;
     rho_p = rholine + 1;
     rho1  = 0;
+    flat_count = 0;
 
     Emax0 = find_max(E_p[-1], E_p[0], E_p[1], E_p[2]);
     Emax1 = find_max(E_p[1], E_p[2], E_p[3], E_p[4]);
@@ -581,15 +599,15 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       cwd          = tmp >> 8;
       VLC_encoder.emitVLCBits(cwd, lw);
 
-      // MagSgn encoding
+      // Defer MagSgn encoding
       m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                            vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
       m1       = vsubq_s32(vandq_s32(sig1, vdupq_n_s32(U1)),
                            vandq_s32(vshlq_s32(vdupq_n_s32(embk_1), rshift), vone));
       known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
       known1_1 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_1), rshift), vone);
-      MagSgn_encoder.emitBits(v0, m0, known1_0);
-      MagSgn_encoder.emitBits(v1, m1, known1_1);
+      append_quad_to_flat(v0, m0, known1_0, flat_v, flat_m, flat_count); flat_count += 4;
+      append_quad_to_flat(v1, m1, known1_1, flat_v, flat_m, flat_count); flat_count += 4;
 
       Emax0 = vmaxvq_s32(vld1q_s32(E_p + 3));  // find_max(E_p[3], E_p[4], E_p[5], E_p[6]);
       Emax1 = vmaxvq_s32(vld1q_s32(E_p + 5));  // find_max(E_p[5], E_p[6], E_p[7], E_p[8]);
@@ -644,15 +662,17 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
       cwd          = tmp >> 8;
       VLC_encoder.emitVLCBits(cwd, lw);
 
-      // MagSgn encoding
+      // Defer MagSgn encoding
       m0       = vsubq_s32(vandq_s32(sig0, vdupq_n_s32(U0)),
                            vandq_s32(vshlq_s32(vdupq_n_s32(embk_0), rshift), vone));
       known1_0 = vandq_s32(vshlq_s32(vdupq_n_s32(emb1_0), rshift), vone);
-      MagSgn_encoder.emitBits(v0, m0, known1_0);
+      append_quad_to_flat(v0, m0, known1_0, flat_v, flat_m, flat_count); flat_count += 4;
 
       // update rho_line
       *rho_p++ = rho0;
     }
+    // Drain MagSgn batch for this line pair
+    MagSgn_encoder.emitFlat(flat_v, flat_m, flat_count);
   }
 
   Pcup = MagSgn_encoder.termMS();
