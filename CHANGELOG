@@ -1,4 +1,4 @@
-# [0.19.0] - 2026-05-29
+# [0.19.0] - 2026-05-30
 
 First feature release since the 0.18.x security line (148 commits since
 0.18.5). Headlined by a new WebTransport browser viewer for live RFC 9828
@@ -54,8 +54,10 @@ WASM and JPIP-viewer improvements.
   on a 4K frame).
 - TLM measurement pass skipped for single-tile codestreams; thread-local
   output and scratch reused across encodes.
-- Net effect versus 0.18.5: encoder wall time down roughly 20% on batch
-  workloads and peak RSS roughly halved, with bit-identical output.
+- Measured against 0.18.5 on a 4K test image (x86-64): encoder wall time
+  down roughly 20% across repeated-encode runs (scratch reuse) and peak RSS
+  roughly halved, with bit-identical output verified by the conformance
+  suite.
 
 ### Decoder
 - int32 reversible 5/3 IDWT pipeline.
