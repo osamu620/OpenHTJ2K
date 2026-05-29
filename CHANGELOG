@@ -1,3 +1,91 @@
+# [0.19.0] - 2026-05-29
+
+First feature release since the 0.18.x security line (148 commits since
+0.18.5). Headlined by a new WebTransport browser viewer for live RFC 9828
+streams, substantial encoder and decoder performance gains, and broad
+WASM and JPIP-viewer improvements.
+
+## Added
+
+### WebTransport browser viewer
+- New browser-native viewer (`web/wt_viewer`) that decodes live RFC 9828
+  (`video/jpeg2000-scl`) streams in WebAssembly and renders them through a
+  WebGL2 pipeline. Includes overload and RTP-clock-drift telemetry, an
+  opt-in RTP-timestamp pacer (`?pace=rtp`), and automatic reconnect on
+  WebTransport session loss.
+- New `wt_bridge`: a Go UDP→WebTransport relay that forwards live RFC 9828
+  RTP to browser clients over QUIC. Ships with LAN and split-host launch
+  scripts, dev-certificate SAN handling, and `--initial-mtu`, `--log`, and
+  `--pprof` flags.
+- Shared decoder Web Worker used by both the WebTransport viewer and the
+  RTP demo, with batched packet delivery to reduce postMessage overhead.
+
+### WASM decoder
+- SharedArrayBuffer zero-copy plane delivery.
+- Optional skip of the CPU color transform when a GPU shader performs the
+  YCbCr→RGB conversion.
+- Configurable decode-ring depth, drop/underrun statistics, pre-decode
+  skip, and a network-underrun ("Low bandwidth") indicator that rebuffers
+  on recovery.
+
+### JPIP viewer
+- Touch support for iPad / iPhone, including coherent two-finger trackpad
+  scrolling.
+- Carry-forward of the previous frame during pan/zoom behind a latency
+  gate, for smoother interaction under load.
+- Scrubber-style drag on the thumbnail overview.
+- GPU YCbCr→RGB color conversion for the JPIP demos.
+
+### Tools
+- `estimate_qfactor` utility.
+- Shared image-I/O library (`openhtj2k_imgio`) for PNM/PGX/TIFF readers,
+  plus streaming TIFF input.
+
+## Performance
+
+### Encoder
+- HT cleanup encoder reworked around a two-pass architecture with deferred
+  MagSgn emission, batched VLC/UVLC emission, and AVX2 / AVX-512 / NEON
+  fast paths.
+- Quantization fused into the DWT sink, bypassing the intermediate sample
+  buffer; int32 5/3 reversible FDWT wired into the streaming encoder.
+- Streaming path rebuilt around a per-strip ring scratch that drops
+  intermediate buffers, roughly halving peak resident memory (~120 MB less
+  on a 4K frame).
+- TLM measurement pass skipped for single-tile codestreams; thread-local
+  output and scratch reused across encodes.
+- Net effect versus 0.18.5: encoder wall time down roughly 20% on batch
+  workloads and peak RSS roughly halved, with bit-identical output.
+
+### Decoder
+- int32 reversible 5/3 IDWT pipeline.
+- Below-viewport fast-forward and a skipped row-all-zero scan when the
+  source zero-fills.
+
+## Fixed
+- NEON: correct fused MCT+finalize (`vfmaq`/`vfmsq`), shared IDWT helpers
+  across batch and stream paths, and scalar-tail correctness in dequant
+  and ICT.
+- Coding: height-parity guards on the SIMD fused-dequant paths; 32-bit
+  multiplications widened to `size_t` before `memset`.
+- JPIP: `highp` floats in fragment shaders for Nvidia/Linux, R8 texture
+  upload alignment and init-race fixes, and MCT-flag-based YCbCr detection.
+- WASM: cwrap guarded against a stale module cache; adaptive pace-drop with
+  event-driven backpressure and timeline-rebasing fixes.
+- Web: stale service-worker cleanup, pthread-pool sizing for HTTP/1.1
+  connection limits, and HTTPS-over-HTTP/2 static serving.
+- Resolved all compiler warnings in Release builds.
+
+## Removed
+- Batch encode/decode mode, the dead predecoded decoder path and its
+  `bypass_decode` flag, and the `lb_compare` tool with its `lbs_*`
+  streaming comparison tests.
+
+## Changed
+- Consolidated the browser/WASM tree under `web/`.
+- Relocated test/check tools from `source/apps` to `tests/tools`.
+- CLI decoder default thread count capped at 8.
+
 # [0.18.5] - 2026-04-28
 
 ## Security Fix - SOT Out-of-Bounds Tile Index Heap Info Leak (CVE-2026-TBD)
