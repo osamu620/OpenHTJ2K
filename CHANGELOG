@@ -45,8 +45,8 @@ WASM and JPIP-viewer improvements.
 
 ### Encoder
 - HT cleanup encoder reworked around a two-pass architecture with deferred
-  MagSgn emission, batched VLC/UVLC emission, and AVX2 / AVX-512 / NEON
-  fast paths.
+  MagSgn emission and batched VLC/UVLC emission: full two-pass paths on
+  AVX2 and AVX-512, plus deferred-MagSgn (`emitFlat`) emission on NEON.
 - Quantization fused into the DWT sink, bypassing the intermediate sample
   buffer; int32 5/3 reversible FDWT wired into the streaming encoder.
 - Streaming path rebuilt around a per-strip ring scratch that drops
