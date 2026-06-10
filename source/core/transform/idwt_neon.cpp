@@ -222,15 +222,16 @@ void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, const int32_t left, const int32_
 // ATK irreversible 5/3 IDWT (horizontal)
 void idwt_1d_filtr_irrev53_fixed_neon(sprec_t *X, const int32_t left, const int32_t u_i0,
                                       const int32_t u_i1) {
-  const int32_t start    = u_i0 / 2;
-  const int32_t stop     = u_i1 / 2;
-  const int32_t offset   = left - u_i0 % 2;
-  const int32_t lp_offset = offset + (u_i0 % 2) * 2;
+  const int32_t start  = u_i0 / 2;
+  const int32_t stop   = u_i1 / 2;
+  const int32_t offset = left - u_i0 % 2;
 
   // Step 1: LP[k] -= 0.25*(HP[k-1]+HP[k])
+  // Starts at offset (not the first real LP sample): per-step extension semantics require the
+  // LP pass to lift the even PSE positions adjacent to the data, same bounds as the rev53 kernel.
   int32_t simdlen = stop + 1 - start;
   const auto x025 = vdupq_n_f32(0.25f);
-  sprec_t *sp     = X + lp_offset;
+  sprec_t *sp     = X + offset;
   int32_t k       = 0;
   if (k + 4 < simdlen) {
     auto x0a = vld2q_f32(sp - 1);
@@ -618,17 +619,18 @@ void idwt_irrev53_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
-    const int32_t lp_count = ceil_int(v1, 2) - ceil_int(v0, 2);
-    const int32_t hp_count = v1 / 2 - v0 / 2;
-    const int32_t offset   = top - v0 % 2;
-    const int32_t lp_n0    = top + v0 % 2;
+    // Per-step extension semantics: the LP pass also lifts the even PSE rows adjacent to the
+    // data (same bounds as the rev53 vertical kernel) so the HP pass reads post-LP values.
+    const int32_t lp_count = v1 / 2 - v0 / 2 + 1;  // LP rows incl. even PSE rows at the edges
+    const int32_t hp_count = v1 / 2 - v0 / 2;      // HP row count
+    const int32_t offset   = top - v0 % 2;         // first LP row (may be a PSE row)
     const int32_t width    = u1 - u0;
     for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
       const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       const int32_t simdlen_s = (ce - cs) - (ce - cs) % 4;
       // Step 1: LP[k] -= 0.25*(HP[k-1]+HP[k])
       const auto x025 = vdupq_n_f32(0.25f);
-      for (int32_t k = 0, n = lp_n0; k < lp_count; ++k, n += 2) {
+      for (int32_t k = 0, n = offset; k < lp_count; ++k, n += 2) {
         int32_t col = 0;
         for (; col + 4 < simdlen_s; col += 8) {
           auto x0a = vld1q_f32(buf[n - 1] + cs + col);

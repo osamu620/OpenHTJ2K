@@ -488,17 +488,18 @@ void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
-    const int32_t lp_count = ceil_int(v1, 2) - ceil_int(v0, 2);
-    const int32_t hp_count = v1 / 2 - v0 / 2;
-    const int32_t offset   = top - v0 % 2;
-    const int32_t lp_n0    = top + v0 % 2;
+    // Per-step extension semantics: the LP pass also lifts the even PSE rows adjacent to the
+    // data (same bounds as the rev53 vertical kernel) so the HP pass reads post-LP values.
+    const int32_t lp_count = v1 / 2 - v0 / 2 + 1;  // LP rows incl. even PSE rows at the edges
+    const int32_t hp_count = v1 / 2 - v0 / 2;      // HP row count
+    const int32_t offset   = top - v0 % 2;         // first LP row (may be a PSE row)
     const int32_t width    = u1 - u0;
     for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
       const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       const int32_t simdlen_s = (ce - cs) - (ce - cs) % 16;
       const int32_t tail      = ce - cs - simdlen_s;
       const __m512 x025       = _mm512_set1_ps(0.25f);
-      for (int32_t k = 0, n = lp_n0; k < lp_count; ++k, n += 2) {
+      for (int32_t k = 0, n = offset; k < lp_count; ++k, n += 2) {
         for (int32_t col = 0; col < simdlen_s; col += 16) {
           __m512 x0 = _mm512_loadu_ps(buf[n - 1] + cs + col);
           __m512 x2 = _mm512_loadu_ps(buf[n + 1] + cs + col);
