@@ -1,12 +1,12 @@
 # Porting the planar horizontal IDWT to AVX2 / AVX-512 / WASM
 
-Status: the streaming horizontal IDWT lifts directly from the planar LP/HP
-subband rows on **NEON** (PR #406), **AVX2** (PR #407), and **WASM SIMD**
-(9/7 float and int32 5/3 on all three).  The AVX2 kernels also serve AVX-512
-hosts (`OPENHTJ2K_ENABLE_AVX2` is defined there too); only a dedicated
-16-lane AVX-512 variant (§5.2) remains open.  Scalar builds keep the
-bit-identical fallback that interleaves into the ring slot and runs the
-historical in-place kernels, at unchanged cost.
+Status: **the port is complete on every SIMD platform** — NEON (PR #406),
+AVX2 (PR #407), WASM SIMD (PR #408), and a dedicated 16-lane AVX-512 variant
+for rows with N >= 32 (AVX-512 hosts use the AVX2 kernels for 16 <= N < 32).
+Scalar builds keep the bit-identical fallback that interleaves into the ring
+slot and runs the historical in-place kernels, at unchanged cost.  The only
+remaining planar work is the encoder mirror (§7).  This document stays as the
+reference for the kernels' structure and verification protocol.
 
 Measured upside (8K 12-bit, single thread, 30-iter mean, end-to-end decode):
 
@@ -15,12 +15,17 @@ Measured upside (8K 12-bit, single thread, 30-iter mean, end-to-end decode):
 | NEON (M3 Max) | −5.5% | −2.5% |
 | AVX2 (Ryzen 9 9950X, AVX-512 host) | −3.8% | −0.5% |
 | WASM SIMD (Node 24, same 9950X) | −5.6% | neutral (±, 8 reps) |
+| AVX-512 vs AVX2 planar (same 9950X) | −3.8% | neutral (±, 8 reps) |
 
 The AVX2 gain is smaller than NEON's despite §5.1's lane-utilisation argument
 because on an AVX-512 host the displaced in-place kernels are the 16-lane
 `_avx512` variants — the 8-lane planar kernel's own time roughly matches
 interleave + in-place; the net win comes from the deleted pass over the row.
-That is also why a dedicated AVX-512 planar variant is a plausible follow-up.
+The dedicated AVX-512 variant then recovers the lane-width gap: the 9/7
+planar kernel's decode self-time halves (12.5% → 5.6%) and lossy decode gains
+another −3.8% on top of the AVX2-planar baseline.  The i32 5/3 kernel's
+self-time also drops, but lossless wall time is HT-cleanup-bound and stays
+neutral; it ships for dispatch symmetry.
 
 ---
 
@@ -222,13 +227,17 @@ to ~20 elements; size the `s1t/s2t/s3t` staging arrays accordingly (NEON uses
 16 for 4-lane blocks; 8-lane needs 32 — re-derive from the loop-exit bound the
 way the NEON drain comment does, don't guess).
 
-### 5.2 AVX-512
+### 5.2 AVX-512 (shipped — kernels at the bottom of `idwt_avx512.cpp`)
 
-`idwt_avx512.cpp` exists for IDWT only. Don't start here: ship the AVX2
-planar kernels first (they run on AVX-512 hosts via `OPENHTJ2K_ENABLE_AVX2`),
-then evaluate whether 16-lane + `vpermt2ps` (single-instruction cross-lane
-shifts) pays for a dedicated variant. Keep the dispatch precedence consistent
-with the in-place tables (AVX-512 before AVX2) when adding it.
+The evaluation paid off for the 9/7 (see the status table).  The 16-lane
+kernels are a width-doubling of the AVX2 planar kernels with two
+simplifications: `_mm512_alignr_epi32` concatenates across the full register,
+so each pipeline-internal cross-element shift is a single `valignd` (no
+`permute2f128` pre-step), and the interleave-on-store is one `vpermt2ps` per
+half.  Guard is `N >= 32` (16-lane warmup loads j = 0..31); the dispatcher
+keeps the AVX2 planar kernels for 16 <= N < 32, which is sound because all
+planar kernels and the fallback are bit-identical.  Drain staging arrays are
+64 (loop exit m = 16n in [N-15, N], base = m-32, max stage index 48).
 
 ### 5.3 WASM (shipped — kernels at the bottom of `idwt_wasm.cpp`)
 
