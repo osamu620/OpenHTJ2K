@@ -735,6 +735,144 @@ void idwt_1d_filtr_rev53_i32_neon(int32_t *X, const int32_t left, const int32_t 
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Planar-input horizontal synthesis — the LP and HP subband rows are read
+// directly (E[j] = lp[j], O[j] = hp[j]) and the synthesised natural-domain row
+// is written to out[].  Same fused pipelines as the interleaved kernels above,
+// but every vld2q on the input side becomes a vld1q per plane and the caller's
+// interleave pass disappears.  Boundary taps outside the planes use WSSE
+// mirroring: positions u0-k and u0+k have equal parity, so each plane extends
+// within itself; PSEo() yields the mirrored in-range position, whose half is
+// the plane index.  These mirrored reads return exactly the values the
+// in-place kernels found in their PSE-filled margins, and every lifting stage
+// is the same single-rounded op on the same inputs — output is bit-identical.
+//
+// Contract (enforced by idwt_1d_row_from_planar): u0 even, N = u1/2 - u0/2
+// >= 12, lp has ceil(u1/2) - u0/2 valid samples, hp has N, out has >= 2
+// writable floats before index 0 and >= 8 after index u1-u0-1.
+// ─────────────────────────────────────────────────────────────────────────────
+
+OPENHTJ2K_MSVC_ARM64_NOINLINE void idwt_1d_filtr_irrev97_planar_neon(sprec_t *out, const sprec_t *lp,
+                                                                     const sprec_t *hp,
+                                                                     const int32_t u0,
+                                                                     const int32_t u1) {
+  const int32_t N = u1 / 2 - u0 / 2;
+  // Mirrored raw-plane accessors (used only for warmup/drain boundary taps).
+  auto E = [&](int32_t j) -> float { return lp[PSEo(u0 + 2 * j, u0, u1) >> 1]; };
+  auto O = [&](int32_t j) -> float { return hp[PSEo(u0 + 2 * j + 1, u0, u1) >> 1]; };
+
+  const float32x4_t vA = vdupq_n_f32(fA), vB = vdupq_n_f32(fB);
+  const float32x4_t vC = vdupq_n_f32(fC), vD = vdupq_n_f32(fD);
+
+  // Warmup: j = -1 scalars, then S1 of blocks 0 and 1, S2/S3 of block 0.
+  const float om1  = O(-1);
+  const float s1m1 = std::fmaf(-fD, O(-2) + om1, E(-1));  // S1[-1]
+  float32x4_t O_b0 = vld1q_f32(hp);
+  float32x4_t S1_b0 =
+      vfmsq_f32(vld1q_f32(lp), vaddq_f32(vextq_f32(vdupq_n_f32(om1), O_b0, 3), O_b0), vD);
+  const float s2m1 = std::fmaf(-fC, s1m1 + vgetq_lane_f32(S1_b0, 0), om1);  // S2[-1]
+  out[-2]          = s1m1;                                                  // final E[-1]
+  out[-1]          = s2m1;                                                  // final O[-1]
+
+  float32x4_t O_b1 = vld1q_f32(hp + 4);
+  float32x4_t S1_b1 =
+      vfmsq_f32(vld1q_f32(lp + 4), vaddq_f32(vextq_f32(O_b0, O_b1, 3), O_b1), vD);
+  float32x4_t S2_b0 = vfmsq_f32(O_b0, vaddq_f32(S1_b0, vextq_f32(S1_b0, S1_b1, 1)), vC);
+  float32x4_t S3_b0 =
+      vfmsq_f32(S1_b0, vaddq_f32(vextq_f32(vdupq_n_f32(s2m1), S2_b0, 3), S2_b0), vB);
+
+  // Steady state: iteration n loads input block n (j = 4n..4n+3) with one
+  // vld1q per plane and emits finished block n-2 with one vst2q.  The bound
+  // is 4n+3 <= N-1 (vs N+1 for the in-place kernel) because the planes have
+  // no PSE-filled margins to read past — the drain covers the rest scalar.
+  float32x4_t O_nm1 = O_b1, S1_nm1 = S1_b1, S2_nm2 = S2_b0, S3_nm2 = S3_b0;
+  int32_t n = 2;
+  for (; 4 * n + 3 <= N - 1; ++n) {
+    float32x4_t O_n  = vld1q_f32(hp + 4 * n);
+    float32x4_t S1_n = vfmsq_f32(vld1q_f32(lp + 4 * n), vaddq_f32(vextq_f32(O_nm1, O_n, 3), O_n), vD);
+    float32x4_t S2_nm1 = vfmsq_f32(O_nm1, vaddq_f32(S1_nm1, vextq_f32(S1_nm1, S1_n, 1)), vC);
+    float32x4_t S3_nm1 =
+        vfmsq_f32(S1_nm1, vaddq_f32(vextq_f32(S2_nm2, S2_nm1, 3), S2_nm1), vB);
+    float32x4x2_t o;
+    o.val[0] = S3_nm2;
+    o.val[1] = vfmsq_f32(S2_nm2, vaddq_f32(S3_nm2, vextq_f32(S3_nm2, S3_nm1, 1)), vA);
+    vst2q_f32(out + 8 * (n - 2), o);
+    O_nm1  = O_n;
+    S1_nm1 = S1_n;
+    S2_nm2 = S2_nm1;
+    S3_nm2 = S3_nm1;
+  }
+
+  // Drain: scalar finish for blocks n-2, n-1 (still in registers) and the
+  // ragged tail.  Loop exit bounds m = 4n to [N-3, N], so with base = m-8
+  // every stage index j-base fits in 16.  s1t/s2t/s3t[i] hold S1/S2/S3[base+i];
+  // s1t[0..3] are unused (block n-2's S1 was consumed).
+  {
+    const int32_t m    = 4 * n;
+    const int32_t base = m - 8;
+    float s1t[16], s2t[16], s3t[16];
+    vst1q_f32(s1t + 4, S1_nm1);  // S1[m-4..m-1]
+    vst1q_f32(s2t, S2_nm2);      // S2[m-8..m-5]
+    vst1q_f32(s3t, S3_nm2);      // S3[m-8..m-5]
+    for (int32_t j = m; j <= N + 1; ++j)
+      s1t[j - base] = std::fmaf(-fD, O(j - 1) + O(j), E(j));
+    for (int32_t j = m - 4; j <= N; ++j)
+      s2t[j - base] = std::fmaf(-fC, s1t[j - base] + s1t[j - base + 1], O(j));
+    for (int32_t j = m - 4; j <= N; ++j)
+      s3t[j - base] = std::fmaf(-fB, s2t[j - base - 1] + s2t[j - base], s1t[j - base]);
+    // Final row: E[j] = S3[j], O[j] = S4[j]; then O[N] = S2[N], E[N+1] = S1[N+1].
+    for (int32_t j = base; j <= N - 1; ++j) {
+      out[2 * j]     = s3t[j - base];
+      out[2 * j + 1] = std::fmaf(-fA, s3t[j - base] + s3t[j - base + 1], s2t[j - base]);
+    }
+    out[2 * N]       = s3t[N - base];
+    out[2 * N + 1]   = s2t[N - base];
+    out[2 * (N + 1)] = s1t[N + 1 - base];
+  }
+}
+
+void idwt_1d_filtr_rev53_planar_i32_neon(int32_t *out, const int32_t *lp, const int32_t *hp,
+                                         const int32_t u0, const int32_t u1) {
+  const int32_t N = u1 / 2 - u0 / 2;
+  auto E = [&](int32_t j) -> int32_t { return lp[PSEo(u0 + 2 * j, u0, u1) >> 1]; };
+  auto O = [&](int32_t j) -> int32_t { return hp[PSEo(u0 + 2 * j + 1, u0, u1) >> 1]; };
+
+  //   S1[j] = E[j] - ((O[j-1] + O[j] + 2) >> 2)   for j in [0, N]   (undo LP update)
+  //   S2[j] = O[j] + ((S1[j] + S1[j+1]) >> 1)     for j in [0, N)   (undo HP predict)
+  // Integer ops are exact, so this matches idwt_1d_filtr_rev53_i32_neon bit
+  // for bit.  Loop bound j+4 <= N-1 keeps every plane read in range (the
+  // s1_next lookahead reads lp[j+4] / hp[j+4]); the scalar tail mirrors.
+  const int32x4_t vtwo = vdupq_n_s32(2);
+  int32_t j       = 0;
+  int32_t o_carry = O(-1);  // raw O[j-1] entering the current position
+  for (; j + 4 <= N - 1; j += 4) {
+    int32x4_t Ob   = vld1q_s32(hp + j);
+    int32x4_t Ojm1 = vextq_s32(vdupq_n_s32(o_carry), Ob, 3);  // O[j-1..j+2]
+    int32x4_t S1b  = vsubq_s32(vld1q_s32(lp + j),
+                               vshrq_n_s32(vaddq_s32(vaddq_s32(Ojm1, Ob), vtwo), 2));
+    const int32_t o3      = vgetq_lane_s32(Ob, 3);  // raw O[j+3]
+    const int32_t s1_next = lp[j + 4] - ((o3 + hp[j + 4] + 2) >> 2);
+    int32x4_t S1n         = vextq_s32(S1b, vdupq_n_s32(s1_next), 1);  // S1[j+1..j+4]
+    int32x4x2_t o;
+    o.val[0] = S1b;
+    o.val[1] = vaddq_s32(Ob, vshrq_n_s32(vaddq_s32(S1b, S1n), 1));
+    vst2q_s32(out + 2 * j, o);
+    o_carry = o3;
+  }
+  // Scalar tail (at most 5 S1 values: loop exits with N - j <= 4).
+  {
+    int32_t s1t[8];
+    int32_t o_prev = o_carry;
+    for (int32_t t = j; t <= N; ++t) {
+      const int32_t o = O(t);
+      s1t[t - j]      = E(t) - ((o_prev + o + 2) >> 2);
+      o_prev          = o;
+    }
+    for (int32_t t = j; t <= N; ++t) out[2 * t] = s1t[t - j];
+    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = O(t) + ((s1t[t - j] + s1t[t - j + 1]) >> 1);
+  }
+}
+
 void idwt_rev_ver_lp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
   const int32x4_t vtwo = vdupq_n_s32(2);
   int32_t i = 0;

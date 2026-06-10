@@ -992,6 +992,156 @@ void idwt_1d_row_inplace_range(sprec_t *row, const int32_t left, const int32_t r
   }
 }
 
+// Interleave two planar subband rows into out: plane `a` lands at even offsets,
+// plane `b` at odd offsets (the caller resolves u0-parity by choosing which of
+// LP/HP is `a`).  a_width/b_width may differ by one (odd row width).
+static void interleave_row_planes(sprec_t *out, const sprec_t *a_ptr, const sprec_t *b_ptr,
+                                  const int32_t a_width, const int32_t b_width, const bool use_i32) {
+  [[maybe_unused]] const int32_t min_w = a_width < b_width ? a_width : b_width;
+  int32_t i                            = 0;
+#if defined(OPENHTJ2K_ENABLE_AVX2)
+  if (use_i32) {
+    // AVX2 int32 interleave — avoids strict-aliasing UB from float-typed
+    // SIMD on int32_t data.  Same algorithm as the float path below.
+    const int32_t *a_i = reinterpret_cast<const int32_t *>(a_ptr);
+    const int32_t *b_i = reinterpret_cast<const int32_t *>(b_ptr);
+    int32_t *out_i     = reinterpret_cast<int32_t *>(out);
+    for (; i + 8 <= min_w; i += 8) {
+      __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(a_i + i));
+      __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(b_i + i));
+      __m256i lo = _mm256_unpacklo_epi32(va, vb);
+      __m256i hi = _mm256_unpackhi_epi32(va, vb);
+      __m256i r0 = _mm256_permute2x128_si256(lo, hi, 0x20);
+      __m256i r1 = _mm256_permute2x128_si256(lo, hi, 0x31);
+      _mm256_storeu_si256(reinterpret_cast<__m256i *>(out_i + 2 * i), r0);
+      _mm256_storeu_si256(reinterpret_cast<__m256i *>(out_i + 2 * i + 8), r1);
+    }
+  } else {
+    // AVX2: process 8 even + 8 odd → 16 interleaved floats per iteration.
+    for (; i + 8 <= min_w; i += 8) {
+      __m256 va = _mm256_loadu_ps(a_ptr + i);
+      __m256 vb = _mm256_loadu_ps(b_ptr + i);
+      __m256 lo = _mm256_unpacklo_ps(va, vb);            // a0,b0,a1,b1, a4,b4,a5,b5
+      __m256 hi = _mm256_unpackhi_ps(va, vb);            // a2,b2,a3,b3, a6,b6,a7,b7
+      __m256 r0 = _mm256_permute2f128_ps(lo, hi, 0x20);  // a0..b3
+      __m256 r1 = _mm256_permute2f128_ps(lo, hi, 0x31);  // a4..b7
+      _mm256_storeu_ps(out + 2 * i, r0);
+      _mm256_storeu_ps(out + 2 * i + 8, r1);
+    }
+  }
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  // WASM SIMD: the byte shuffle is type-agnostic, so the loop is shared
+  // between the int32 and float layouts.
+  for (; i + 4 <= min_w; i += 4) {
+    v128_t va = wasm_v128_load(a_ptr + i);
+    v128_t vb = wasm_v128_load(b_ptr + i);
+    v128_t lo = wasm_i8x16_shuffle(va, vb, 0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+    v128_t hi = wasm_i8x16_shuffle(va, vb, 8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+    wasm_v128_store(out + 2 * i, lo);
+    wasm_v128_store(out + 2 * i + 4, hi);
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  if (use_i32) {
+    // NEON int32 interleave — avoids strict-aliasing UB from float-typed
+    // vzipq_f32 on int32_t data.  Same structure as the float path below.
+    const int32_t *a_i = reinterpret_cast<const int32_t *>(a_ptr);
+    const int32_t *b_i = reinterpret_cast<const int32_t *>(b_ptr);
+    int32_t *out_i     = reinterpret_cast<int32_t *>(out);
+    for (; i + 8 <= min_w; i += 8) {
+      int32x4x2_t z0 = vzipq_s32(vld1q_s32(a_i + i), vld1q_s32(b_i + i));
+      int32x4x2_t z1 = vzipq_s32(vld1q_s32(a_i + i + 4), vld1q_s32(b_i + i + 4));
+      vst1q_s32(out_i + 2 * i, z0.val[0]);
+      vst1q_s32(out_i + 2 * i + 4, z0.val[1]);
+      vst1q_s32(out_i + 2 * i + 8, z1.val[0]);
+      vst1q_s32(out_i + 2 * i + 12, z1.val[1]);
+    }
+    for (; i + 4 <= min_w; i += 4) {
+      int32x4x2_t z = vzipq_s32(vld1q_s32(a_i + i), vld1q_s32(b_i + i));
+      vst1q_s32(out_i + 2 * i, z.val[0]);
+      vst1q_s32(out_i + 2 * i + 4, z.val[1]);
+    }
+  } else {
+    for (; i + 8 <= min_w; i += 8) {
+      float32x4x2_t z0 = vzipq_f32(vld1q_f32(a_ptr + i), vld1q_f32(b_ptr + i));
+      float32x4x2_t z1 = vzipq_f32(vld1q_f32(a_ptr + i + 4), vld1q_f32(b_ptr + i + 4));
+      vst1q_f32(out + 2 * i, z0.val[0]);
+      vst1q_f32(out + 2 * i + 4, z0.val[1]);
+      vst1q_f32(out + 2 * i + 8, z1.val[0]);
+      vst1q_f32(out + 2 * i + 12, z1.val[1]);
+    }
+    for (; i + 4 <= min_w; i += 4) {
+      float32x4x2_t z = vzipq_f32(vld1q_f32(a_ptr + i), vld1q_f32(b_ptr + i));
+      vst1q_f32(out + 2 * i, z.val[0]);
+      vst1q_f32(out + 2 * i + 4, z.val[1]);
+    }
+  }
+#endif
+  // Scalar tail (and the whole row on scalar builds).
+  if (use_i32) {
+    const int32_t *a_i = reinterpret_cast<const int32_t *>(a_ptr);
+    const int32_t *b_i = reinterpret_cast<const int32_t *>(b_ptr);
+    int32_t *out_i     = reinterpret_cast<int32_t *>(out);
+    for (int32_t k = i; k < a_width; ++k) out_i[2 * k] = a_i[k];
+    for (int32_t k = i; k < b_width; ++k) out_i[2 * k + 1] = b_i[k];
+  } else {
+    for (int32_t k = i; k < a_width; ++k) out[2 * k] = a_ptr[k];
+    for (int32_t k = i; k < b_width; ++k) out[2 * k + 1] = b_ptr[k];
+  }
+}
+
+void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
+                             const int32_t lp_width, const int32_t hp_width,
+                             const int32_t u0, const int32_t u1, const uint8_t transformation,
+                             const bool use_i32, const int32_t h_pse_left, const int32_t h_pse_right,
+                             const int32_t col_lo, const int32_t col_hi) {
+  const int32_t width = u1 - u0;
+  if (width <= 0) return;
+  if (width == 1) {
+    // Single-column row: the lone sample is LP for even u0, HP for odd u0;
+    // odd-parity rev 5/3 rows carry a doubled sample.
+    if (use_i32) {
+      const int32_t v = reinterpret_cast<const int32_t *>((u0 & 1) == 0 ? lp : hp)[0];
+      reinterpret_cast<int32_t *>(out)[0] = ((u0 & 1) != 0 && transformation == 1) ? (v >> 1) : v;
+    } else {
+      const sprec_t v = ((u0 & 1) == 0 ? lp : hp)[0];
+      out[0]          = ((u0 & 1) != 0 && transformation == 1) ? v / 2.0f : v;
+    }
+    return;
+  }
+
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  // Planar fast path: lift straight from the subband planes — no interleave
+  // pass, vld1q instead of vld2q.  Geometry guards: even u0 keeps E[j]=lp[j] /
+  // O[j]=hp[j] aligned; N >= 12 guarantees the kernels' SIMD warmup reads are
+  // in range (short rows go through the fallback's scalar-friendly kernels).
+  const int32_t N = u1 / 2 - u0 / 2;
+  if ((u0 & 1) == 0 && N >= 12) {
+    if (transformation == 1 && use_i32) {
+      // i32 rev 5/3 has no sub-range variant — always full-width (see below).
+      idwt_1d_filtr_rev53_planar_i32_neon(reinterpret_cast<int32_t *>(out),
+                                          reinterpret_cast<const int32_t *>(lp),
+                                          reinterpret_cast<const int32_t *>(hp), u0, u1);
+      return;
+    }
+    if (transformation == 0 && !use_i32 && col_lo <= u0 && col_hi >= u1) {
+      idwt_1d_filtr_irrev97_planar_neon(out, lp, hp, u0, u1);
+      return;
+    }
+  }
+#endif
+
+  // Fallback: interleave into the ring slot (LP at u0%2, HP at 1-u0%2), then
+  // the existing in-place kernels — identical to the historical path.
+  if ((u0 & 1) == 0)
+    interleave_row_planes(out, lp, hp, lp_width, hp_width, use_i32);
+  else
+    interleave_row_planes(out, hp, lp, hp_width, lp_width, use_i32);
+  if (use_i32)
+    idwt_1d_row_inplace_i32(reinterpret_cast<int32_t *>(out), h_pse_left, h_pse_right, u0, u1);
+  else
+    idwt_1d_row_inplace_range(out, h_pse_left, h_pse_right, u0, u1, transformation, col_lo, col_hi);
+}
+
 // =============================================================================
 // Streaming 2D IDWT — idwt_2d_state
 // =============================================================================
