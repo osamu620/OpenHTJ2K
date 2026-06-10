@@ -28,6 +28,15 @@
   sizes, lossless and lossy). Measured on an 8K 12-bit image (Node 24,
   Ryzen 9 9950X, single thread, 30-iteration mean): lossy decode ~5.5%
   faster, lossless unchanged.
+- A dedicated 16-lane AVX-512 variant of the planar horizontal IDWT
+  kernels for rows with at least 32 LP/HP pairs (narrower rows keep the
+  AVX2 planar kernels — all variants are bit-identical, verified by the
+  conformance suite plus 8K `cmp` against a main-baseline decoder, even
+  and odd image sizes). Cross-element shifts become single `valignd`
+  instructions and the interleave-on-store one `vpermt2ps` per half.
+  Measured on an 8K 12-bit image (Ryzen 9 9950X, single thread,
+  30-iteration mean): lossy decode another ~4% faster on top of the AVX2
+  planar gain; lossless unchanged.
 
 ## Fixed
 
