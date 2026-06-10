@@ -54,37 +54,6 @@
  * horizontal transforms
  *******************************************************************************/
 // irreversible IDWT
-auto idwt_irrev97_fixed_neon_hor_step = [](const int32_t init_pos, const int32_t simdlen, float *const X,
-                                            const int32_t n0, const int32_t n1, float coeff) {
-  auto vvv = vdupq_n_f32(coeff);
-  int32_t n = init_pos, i = simdlen;
-  // 2× unrolled main loop. n1 == n0+2 always (all 4 irrev97 steps), so:
-  //   x1a.val[0] = vextq_f32(x0a.val[0], x0b.val[0], 1)
-  //   x1b.val[0] = vextq_f32(x0b.val[0], x0c.val[0], 1)
-  // x0c is a one-group look-ahead (safe: within SIMD_PADDING). Carrying x0c → x0a
-  // across iterations cuts LD2 count from 4 to 2 per 8-pair group.
-  if (i > 4) {
-    auto x0a = vld2q_f32(X + n + n0);  // prologue: preload first group
-    for (; i > 4; i -= 8, n += 16) {
-      auto x0b         = vld2q_f32(X + n + 8 + n0);
-      auto x0c         = vld2q_f32(X + n + 16 + n0);  // look-ahead for x1b and carry
-      float32x4_t x1a0 = vextq_f32(x0a.val[0], x0b.val[0], 1);
-      float32x4_t x1b0 = vextq_f32(x0b.val[0], x0c.val[0], 1);
-      x0a.val[1]        = vfmsq_f32(x0a.val[1], vaddq_f32(x0a.val[0], x1a0), vvv);
-      x0b.val[1]        = vfmsq_f32(x0b.val[1], vaddq_f32(x0b.val[0], x1b0), vvv);
-      vst2q_f32(X + n + n0, x0a);
-      vst2q_f32(X + n + 8 + n0, x0b);
-      x0a = x0c;  // carry: x0c is the next iteration's x0a (no re-load needed)
-    }
-  }
-  for (; i > 0; i -= 4, n += 8) {
-    auto x0   = vld2q_f32(X + n + n0);
-    auto x1   = vld2q_f32(X + n + n1);
-    x0.val[1] = vfmsq_f32(x0.val[1], vaddq_f32(x0.val[0], x1.val[0]), vvv);
-    vst2q_f32(X + n + n0, x0);
-  }
-};
-
 OPENHTJ2K_MSVC_ARM64_NOINLINE void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, const int32_t left,
                                                                     const int32_t u_i0,
                                                                     const int32_t u_i1) {
@@ -94,21 +63,98 @@ OPENHTJ2K_MSVC_ARM64_NOINLINE void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, 
   const int32_t stop   = i1 / 2;
   const int32_t offset = left - i0 % 2;
 
-  // step 1
-  int32_t simdlen = stop + 2 - (start - 1);
-  idwt_irrev97_fixed_neon_hor_step(offset - 2, simdlen, X, -1, 1, fD);
+  // Fused single pass over the interleaved row (was four passes, each
+  // re-loading and re-storing the full row through vld2q/vst2q).  With
+  // E[j] = X[offset+2j] and O[j] = X[offset+2j+1] and N = stop - start:
+  //   S1[j] = E[j]  - fD*(O[j-1]  + O[j])     j in [-1, N+1]
+  //   S2[j] = O[j]  - fC*(S1[j]   + S1[j+1])  j in [-1, N]
+  //   S3[j] = S1[j] - fB*(S2[j-1] + S2[j])    j in [ 0, N]
+  //   S4[j] = S2[j] - fA*(S3[j]   + S3[j+1])  j in [ 0, N-1]
+  // Final row: E[-1]=S1[-1], O[-1]=S2[-1], E[j]=S3[j], O[j]=S4[j],
+  // O[N]=S2[N], E[N+1]=S1[N+1].  Each stage is the same single-rounded FMA on
+  // the same inputs as the four-pass version (vfmsq in vectors, fmaf at the
+  // boundaries), so the result is bit-identical.
+  const int32_t N = stop - start;
+  float *const B  = X + offset;
 
-  // step 2
-  simdlen = stop + 1 - (start - 1);
-  idwt_irrev97_fixed_neon_hor_step(offset - 2, simdlen, X, 0, 2, fC);
+  if (N < 12) {
+    // Short rows: four in-place scalar passes (identical formulas/rounding).
+    for (int32_t j = -1; j <= N + 1; ++j) B[2 * j] = std::fmaf(-fD, B[2 * j - 1] + B[2 * j + 1], B[2 * j]);
+    for (int32_t j = -1; j <= N; ++j) B[2 * j + 1] = std::fmaf(-fC, B[2 * j] + B[2 * j + 2], B[2 * j + 1]);
+    for (int32_t j = 0; j <= N; ++j) B[2 * j] = std::fmaf(-fB, B[2 * j - 1] + B[2 * j + 1], B[2 * j]);
+    for (int32_t j = 0; j < N; ++j) B[2 * j + 1] = std::fmaf(-fA, B[2 * j] + B[2 * j + 2], B[2 * j + 1]);
+    return;
+  }
 
-  // step 3
-  simdlen = stop + 1 - start;
-  idwt_irrev97_fixed_neon_hor_step(offset, simdlen, X, -1, 1, fB);
+  const float32x4_t vA = vdupq_n_f32(fA), vB = vdupq_n_f32(fB);
+  const float32x4_t vC = vdupq_n_f32(fC), vD = vdupq_n_f32(fD);
 
-  // step 4
-  simdlen = stop - start;
-  idwt_irrev97_fixed_neon_hor_step(offset, simdlen, X, 0, 2, fA);
+  // Warmup: j = -1 scalars, then S1 of blocks 0 and 1, S2/S3 of block 0.
+  const float s1m1 = std::fmaf(-fD, B[-3] + B[-1], B[-2]);  // S1[-1]
+  float32x4x2_t x0 = vld2q_f32(B);
+  float32x4_t O_b0 = x0.val[1];
+  float32x4_t S1_b0 =
+      vfmsq_f32(x0.val[0], vaddq_f32(vextq_f32(vdupq_n_f32(B[-1]), O_b0, 3), O_b0), vD);
+  const float s2m1 = std::fmaf(-fC, s1m1 + vgetq_lane_f32(S1_b0, 0), B[-1]);  // S2[-1]
+  B[-2]            = s1m1;                                               // final E[-1]
+  B[-1]            = s2m1;                                               // final O[-1]
+
+  float32x4x2_t x1 = vld2q_f32(B + 8);
+  float32x4_t O_b1 = x1.val[1];
+  float32x4_t S1_b1 =
+      vfmsq_f32(x1.val[0], vaddq_f32(vextq_f32(O_b0, O_b1, 3), O_b1), vD);
+  float32x4_t S2_b0 = vfmsq_f32(O_b0, vaddq_f32(S1_b0, vextq_f32(S1_b0, S1_b1, 1)), vC);
+  float32x4_t S3_b0 =
+      vfmsq_f32(S1_b0, vaddq_f32(vextq_f32(vdupq_n_f32(s2m1), S2_b0, 3), S2_b0), vB);
+
+  // Steady state: iteration n loads input block n (j = 4n..4n+3) and emits
+  // finished block n-2 with one vld2q + one vst2q.
+  float32x4_t O_nm1 = O_b1, S1_nm1 = S1_b1, S2_nm2 = S2_b0, S3_nm2 = S3_b0;
+  int32_t n = 2;
+  for (; 4 * n + 3 <= N + 1; ++n) {
+    float32x4x2_t xn = vld2q_f32(B + 8 * n);
+    float32x4_t O_n  = xn.val[1];
+    float32x4_t S1_n = vfmsq_f32(xn.val[0], vaddq_f32(vextq_f32(O_nm1, O_n, 3), O_n), vD);
+    float32x4_t S2_nm1 = vfmsq_f32(O_nm1, vaddq_f32(S1_nm1, vextq_f32(S1_nm1, S1_n, 1)), vC);
+    float32x4_t S3_nm1 =
+        vfmsq_f32(S1_nm1, vaddq_f32(vextq_f32(S2_nm2, S2_nm1, 3), S2_nm1), vB);
+    float32x4x2_t out;
+    out.val[0] = S3_nm2;
+    out.val[1] = vfmsq_f32(S2_nm2, vaddq_f32(S3_nm2, vextq_f32(S3_nm2, S3_nm1, 1)), vA);
+    vst2q_f32(B + 8 * (n - 2), out);
+    O_nm1  = O_n;
+    S1_nm1 = S1_n;
+    S2_nm2 = S2_nm1;
+    S3_nm2 = S3_nm1;
+  }
+
+  // Drain: scalar finish for blocks n-2, n-1 (still in registers) and the
+  // ragged tail.  Loop exit bounds m = 4n to [N-1, N+2], so with base = m-8
+  // every stage index j-base fits comfortably in 16.  s1t/s2t/s3t[i] hold
+  // S1/S2/S3[base+i]; s1t[0..3] are unused (block n-2's S1 was consumed).
+  {
+    const int32_t m    = 4 * n;
+    const int32_t base = m - 8;
+    float s1t[16], s2t[16], s3t[16];
+    vst1q_f32(s1t + 4, S1_nm1);  // S1[m-4..m-1]
+    vst1q_f32(s2t, S2_nm2);      // S2[m-8..m-5]
+    vst1q_f32(s3t, S3_nm2);      // S3[m-8..m-5]
+    // Remaining S1 from raw memory (positions >= block n-1 are unwritten)
+    for (int32_t j = m; j <= N + 1; ++j)
+      s1t[j - base] = std::fmaf(-fD, B[2 * j - 1] + B[2 * j + 1], B[2 * j]);
+    for (int32_t j = m - 4; j <= N; ++j)
+      s2t[j - base] = std::fmaf(-fC, s1t[j - base] + s1t[j - base + 1], B[2 * j + 1]);
+    for (int32_t j = m - 4; j <= N; ++j)
+      s3t[j - base] = std::fmaf(-fB, s2t[j - base - 1] + s2t[j - base], s1t[j - base]);
+    // Final row: E[j] = S3[j], O[j] = S4[j]; then O[N] = S2[N], E[N+1] = S1[N+1].
+    for (int32_t j = base; j <= N - 1; ++j) {
+      B[2 * j]     = s3t[j - base];
+      B[2 * j + 1] = std::fmaf(-fA, s3t[j - base] + s3t[j - base + 1], s2t[j - base]);
+    }
+    B[2 * N]       = s3t[N - base];
+    B[2 * N + 1]   = s2t[N - base];
+    B[2 * (N + 1)] = s1t[N + 1 - base];
+  }
 }
 
 // reversible IDWT
@@ -646,57 +692,46 @@ void idwt_1d_filtr_rev53_i32_neon(int32_t *X, const int32_t left, const int32_t 
   const int32_t stop   = i1 / 2;
   const int32_t offset = left - i0 % 2;
 
-  // step 1 (undo forward LP update): LP -= (HP_left + HP_right + 2) >> 2
-  const int32_t base1 = offset;
-  int32_t simdlen     = stop + 1 - start;
+  // Fused single pass over the interleaved row (was two passes, each re-loading
+  // and re-storing the full row through vld2q/vst2q).  With E[j] = X[offset+2j]
+  // (LP) and O[j] = X[offset+2j+1] (HP):
+  //   S1[j] = E[j] - ((O[j-1] + O[j] + 2) >> 2)   for j in [0, N]   (undo LP update)
+  //   S2[j] = O[j] + ((S1[j] + S1[j+1]) >> 1)     for j in [0, N)   (undo HP predict)
+  // S2 of a block needs S1[j+4] of the next block; that one lane is computed
+  // scalar from the carried raw O[j+3] so the pipeline has no depth.  Integer
+  // ops are exact, so the fused pass is bit-identical to the two-pass version.
+  const int32_t N      = stop - start;
+  int32_t *const B     = X + offset;
   const int32x4_t vtwo = vdupq_n_s32(2);
-  int32_t k = 0;
-  for (; k + 8 <= simdlen; k += 8) {
-    int32_t *sp = X + base1 + k * 2;
-    int32x4x2_t xl0a = vld2q_s32(sp - 1);
-    int32x4x2_t xl1a = vld2q_s32(sp + 1);
-    int32x4x2_t xl0b = vld2q_s32(sp + 7);
-    int32x4x2_t xl1b = vld2q_s32(sp + 9);
-    xl0a.val[1] = vsubq_s32(xl0a.val[1],
-        vshrq_n_s32(vaddq_s32(vaddq_s32(xl0a.val[0], xl1a.val[0]), vtwo), 2));
-    xl0b.val[1] = vsubq_s32(xl0b.val[1],
-        vshrq_n_s32(vaddq_s32(vaddq_s32(xl0b.val[0], xl1b.val[0]), vtwo), 2));
-    vst2q_s32(sp - 1, xl0a);
-    vst2q_s32(sp + 7, xl0b);
-  }
-  for (; k < simdlen; k += 4) {
-    int32_t *sp = X + base1 + k * 2;
-    int32x4x2_t xl0 = vld2q_s32(sp - 1);
-    int32x4x2_t xl1 = vld2q_s32(sp + 1);
-    xl0.val[1] = vsubq_s32(xl0.val[1],
-        vshrq_n_s32(vaddq_s32(vaddq_s32(xl0.val[0], xl1.val[0]), vtwo), 2));
-    vst2q_s32(sp - 1, xl0);
-  }
 
-  // step 2 (undo forward HP predict): HP += (LP_mod_left + LP_mod_right) >> 1
-  const int32_t base2 = offset;
-  simdlen = stop - start;
-  k = 0;
-  for (; k + 8 <= simdlen; k += 8) {
-    int32_t *sp = X + base2 + k * 2;
-    int32x4x2_t xl0a = vld2q_s32(sp);
-    int32x4x2_t xl1a = vld2q_s32(sp + 2);
-    int32x4x2_t xl0b = vld2q_s32(sp + 8);
-    int32x4x2_t xl1b = vld2q_s32(sp + 10);
-    xl0a.val[1] = vaddq_s32(xl0a.val[1],
-        vshrq_n_s32(vaddq_s32(xl0a.val[0], xl1a.val[0]), 1));
-    xl0b.val[1] = vaddq_s32(xl0b.val[1],
-        vshrq_n_s32(vaddq_s32(xl0b.val[0], xl1b.val[0]), 1));
-    vst2q_s32(sp, xl0a);
-    vst2q_s32(sp + 8, xl0b);
+  int32_t j       = 0;
+  int32_t o_carry = B[-1];  // raw O[j-1] entering the current position
+  for (; j + 4 <= N; j += 4) {
+    int32x4x2_t xb   = vld2q_s32(B + 2 * j);                    // E[j..j+3], O[j..j+3]
+    int32x4_t Ojm1   = vextq_s32(vdupq_n_s32(o_carry), xb.val[1], 3);  // O[j-1..j+2]
+    int32x4_t S1b    = vsubq_s32(xb.val[0],
+                                 vshrq_n_s32(vaddq_s32(vaddq_s32(Ojm1, xb.val[1]), vtwo), 2));
+    // S1[j+4] from raw memory (those positions are not yet written this pass)
+    const int32_t o3 = vgetq_lane_s32(xb.val[1], 3);            // raw O[j+3]
+    const int32_t s1_next = B[2 * (j + 4)] - ((o3 + B[2 * (j + 4) + 1] + 2) >> 2);
+    int32x4_t S1n    = vextq_s32(S1b, vdupq_n_s32(s1_next), 1);  // S1[j+1..j+4]
+    int32x4x2_t out;
+    out.val[0] = S1b;
+    out.val[1] = vaddq_s32(xb.val[1], vshrq_n_s32(vaddq_s32(S1b, S1n), 1));
+    vst2q_s32(B + 2 * j, out);
+    o_carry = o3;
   }
-  for (; k < simdlen; k += 4) {
-    int32_t *sp = X + base2 + k * 2;
-    int32x4x2_t xl0 = vld2q_s32(sp);
-    int32x4x2_t xl1 = vld2q_s32(sp + 2);
-    xl0.val[1] = vaddq_s32(xl0.val[1],
-        vshrq_n_s32(vaddq_s32(xl0.val[0], xl1.val[0]), 1));
-    vst2q_s32(sp, xl0);
+  // Scalar tail: S1 for j..N (odd positions still hold raw O), then S2 for j..N-1.
+  {
+    int32_t o_prev = o_carry;
+    for (int32_t t = j; t <= N; ++t) {
+      const int32_t o = B[2 * t + 1];
+      B[2 * t] -= (o_prev + o + 2) >> 2;
+      o_prev = o;
+    }
+    for (int32_t t = j; t < N; ++t) {
+      B[2 * t + 1] += (B[2 * t] + B[2 * t + 2]) >> 1;
+    }
   }
 }
 
