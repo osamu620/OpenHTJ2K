@@ -66,10 +66,20 @@ set_tests_properties(api_decoder_throws_on_missing_file PROPERTIES
 # silently wrote a truncated image (with exit code 0) single-threaded.
 # The imgcmp steps catch both regressions: a reintroduced throw aborts the
 # decode test, and a truncated or corrupted plane fails the comparison.
+add_test(NAME security_sigprop_refinement_overlap_mt
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/sigprop_refinement_overlap.j2k
+                 -o sigprop_refinement_overlap_mt.pgx
+                 -num_threads 2)
+set_tests_properties(security_sigprop_refinement_overlap_mt PROPERTIES
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}|importSigPropBit"
+    TIMEOUT 60)
+
 add_test(NAME security_sigprop_refinement_overlap
          COMMAND open_htj2k_dec
                  -i ${SECURITY_DATA_DIR}/sigprop_refinement_overlap.j2k
-                 -o sigprop_refinement_overlap.pgx)
+                 -o sigprop_refinement_overlap.pgx
+                 -num_threads 1)
 set_tests_properties(security_sigprop_refinement_overlap PROPERTIES
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}|importSigPropBit"
     TIMEOUT 60)
