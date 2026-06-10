@@ -19,6 +19,15 @@
   against a main-baseline decoder, even and odd image sizes). Measured on
   an 8K 12-bit image (Ryzen 9 9950X, single thread, 30-iteration mean):
   lossy decode ~4% faster, lossless ~0.5%.
+- The same planar horizontal IDWT lifting on WASM SIMD, completing the
+  SIMD platforms (only scalar builds keep the interleave + in-place
+  fallback). The 9/7 kernel matches the in-place WASM rounding
+  (separately-rounded mul+sub — SIMD128 has no FMA), so output stays
+  bit-identical on this platform (verified by whole-image `cmp` against
+  a main-baseline WASM decoder under Node.js at 8K, even and odd image
+  sizes, lossless and lossy). Measured on an 8K 12-bit image (Node 24,
+  Ryzen 9 9950X, single thread, 30-iteration mean): lossy decode ~5.5%
+  faster, lossless unchanged.
 
 ## Fixed
 

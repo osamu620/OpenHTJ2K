@@ -410,6 +410,15 @@ void idwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, 
 void idwt_1d_filtr_rev53_i32_wasm(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_rev_ver_lp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 void idwt_rev_ver_hp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+// Planar-input horizontal synthesis — 4-lane transcription of the NEON planar
+// kernels (see the NEON declarations above for the full contract; same N >= 12
+// dispatch guard).  The 9/7 kernel uses separately-rounded mul+sub to match
+// the in-place WASM kernel (SIMD128 has no FMA) — bit-identical to the
+// fallback on this platform, not to NEON/AVX2 hosts.
+void idwt_1d_filtr_irrev97_planar_wasm(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                       int32_t u1);
+void idwt_1d_filtr_rev53_planar_i32_wasm(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
+                                         int32_t u1);
 // single-row vertical step (for streaming fdwt_2d_state)
 void fdwt_rev_ver_hp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_wasm(int32_t n, const float *prev, const float *next, float *tgt);

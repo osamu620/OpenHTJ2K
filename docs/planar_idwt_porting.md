@@ -1,12 +1,12 @@
 # Porting the planar horizontal IDWT to AVX2 / AVX-512 / WASM
 
 Status: the streaming horizontal IDWT lifts directly from the planar LP/HP
-subband rows on **NEON** (PR #406) and **AVX2** (9/7 float and int32 5/3 on
-both).  The AVX2 kernels also serve AVX-512 hosts (`OPENHTJ2K_ENABLE_AVX2` is
-defined there too); a dedicated 16-lane AVX-512 variant (§5.2) and the WASM
-port (§5.3) remain open.  WASM and scalar go through a bit-identical fallback
-that interleaves into the ring slot and runs the historical in-place kernels,
-at unchanged cost.  This document is the map for the remaining platforms.
+subband rows on **NEON** (PR #406), **AVX2** (PR #407), and **WASM SIMD**
+(9/7 float and int32 5/3 on all three).  The AVX2 kernels also serve AVX-512
+hosts (`OPENHTJ2K_ENABLE_AVX2` is defined there too); only a dedicated
+16-lane AVX-512 variant (§5.2) remains open.  Scalar builds keep the
+bit-identical fallback that interleaves into the ring slot and runs the
+historical in-place kernels, at unchanged cost.
 
 Measured upside (8K 12-bit, single thread, 30-iter mean, end-to-end decode):
 
@@ -14,6 +14,7 @@ Measured upside (8K 12-bit, single thread, 30-iter mean, end-to-end decode):
 |---|---|---|
 | NEON (M3 Max) | −5.5% | −2.5% |
 | AVX2 (Ryzen 9 9950X, AVX-512 host) | −3.8% | −0.5% |
+| WASM SIMD (Node 24, same 9950X) | −5.6% | neutral (±, 8 reps) |
 
 The AVX2 gain is smaller than NEON's despite §5.1's lane-utilisation argument
 because on an AVX-512 host the displaced in-place kernels are the 16-lane
@@ -31,7 +32,7 @@ idwt_level_src_fn (coding_units.cpp)          ← selects lp_ptr/hp_ptr, zero sc
         ▼
 idwt_1d_row_from_planar (idwt.cpp)            ← THE dispatcher; the only place
         │                                        that decides planar vs fallback
-        ├─ planar kernel        (NEON, AVX2)  ← lp/hp planes → natural row in
+        ├─ planar kernel  (NEON, AVX2, WASM)  ← lp/hp planes → natural row in
         │                                        the ring slot; no interleave
         └─ fallback: interleave_row_planes()  ← LP at u0%2, HP at 1-u0%2, then
            + idwt_1d_row_inplace[_range|_i32]    in-place PSE fill + lifting
@@ -45,7 +46,7 @@ zero-row tracking, PSE row copies, `pull_row_ref`, and the whole batch path
 
 The port therefore adds, per platform:
 
-1. Two kernels in `idwt_wasm.cpp` (and later `idwt_avx512.cpp`):
+1. Two kernels in `idwt_avx512.cpp`:
    - `idwt_1d_filtr_irrev97_planar_<isa>(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0, int32_t u1)`
    - `idwt_1d_filtr_rev53_planar_i32_<isa>(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0, int32_t u1)`
 2. Declarations in `dwt.hpp`.  Note the AVX2 planar declarations live in a
@@ -67,7 +68,7 @@ falls back (and must keep falling back):
 | Guard | Why |
 |---|---|
 | `(u0 & 1) == 0` | keeps `E[j] = lp[j]`, `O[j] = hp[j]` index-aligned; odd u0 shifts the LP plane by one and is rare (odd tile/precinct origins) |
-| `N = u1/2 - u0/2 >= 12` (NEON) / `>= 16` (AVX2) | the SIMD warmup loads blocks 0/1 unconditionally — j=0..7 at 4 lanes, j=0..15 at 8 lanes; short rows go through the fallback's scalar-friendly path |
+| `N = u1/2 - u0/2 >= 12` (NEON, WASM) / `>= 16` (AVX2) | the SIMD warmup loads blocks 0/1 unconditionally — j=0..7 at 4 lanes, j=0..15 at 8 lanes; short rows go through the fallback's scalar-friendly path |
 | 9/7 float: `col_lo <= u0 && col_hi >= u1` | narrow JPIP column ranges use the scalar sub-range lifter on the interleaved row; not worth porting |
 | 5/3: `use_i32 == true` | the float-5/3 streaming path is cold (lossless decode is i32); i32 ignores the column range by design, matching `idwt_1d_row_inplace_i32` |
 
@@ -229,7 +230,7 @@ then evaluate whether 16-lane + `vpermt2ps` (single-instruction cross-lane
 shifts) pays for a dedicated variant. Keep the dispatch precedence consistent
 with the in-place tables (AVX-512 before AVX2) when adding it.
 
-### 5.3 WASM
+### 5.3 WASM (shipped — kernels at the bottom of `idwt_wasm.cpp`)
 
 `idwt_wasm.cpp` currently emulates `vld2q/vst2q` with paired loads +
 `wasm_i32x4_shuffle` (helpers at the top of the file). The planar port is a
