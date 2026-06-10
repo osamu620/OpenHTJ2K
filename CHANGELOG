@@ -1,5 +1,17 @@
 # [Unreleased]
 
+## Performance
+
+### Decoder
+- Streaming horizontal IDWT lifts directly from the planar LP/HP subband
+  rows on NEON (9/7 float and int32 5/3): the per-row interleave pass into
+  the ring slot is gone and the kernels' interleaved `vld2q` input loads
+  become one `vld1q` per plane. Output is bit-identical (verified against
+  the conformance suite and an 8K `cmp`); platforms without a planar
+  kernel keep the interleave + in-place path unchanged. Measured on an 8K
+  12-bit image (M3 Max, single thread, 30-iteration mean): lossy decode
+  ~5% faster, lossless ~2.5%.
+
 ## Fixed
 
 - The HT SigProp bit reader rejected valid codestreams whose refinement

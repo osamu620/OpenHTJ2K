@@ -319,6 +319,17 @@ void fdwt_rev_ver_lp_step_i32_avx512(int32_t n, const int32_t *prev, const int32
 void idwt_1d_filtr_rev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev97_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void idwt_1d_filtr_irrev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+// Planar-input horizontal synthesis: read the LP plane (E[j] = lp[j]) and HP
+// plane (O[j] = hp[j]) directly and write the synthesised natural-domain row
+// to out[0..u1-u0-1] — no interleave pass, vld1q instead of vld2q.  Same fused
+// lifting pipeline and single-rounded ops as the interleaved kernels, so the
+// output is bit-identical.  Dispatched from idwt_1d_row_from_planar, which
+// guarantees: u0 even, u1/2 - u0/2 >= 12, out with >= IDWT_RING_PSE_LEFT
+// writable floats before index 0 and >= 8 after index u1-u0-1.
+void idwt_1d_filtr_irrev97_planar_neon(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                       int32_t u1);
+void idwt_1d_filtr_rev53_planar_i32_neon(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
+                                         int32_t u1);
 void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                                   int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 void idwt_rev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
@@ -414,6 +425,22 @@ void idwt_1d_row_inplace(sprec_t *row, int32_t left, int32_t right,
                          int32_t u0, int32_t u1, uint8_t transformation);
 void idwt_1d_row_inplace_i32(int32_t *row, int32_t left, int32_t right,
                              int32_t u0, int32_t u1);
+
+// Horizontal synthesis of one streaming row from planar LP/HP subband rows.
+// Writes the synthesised natural-domain row to out[0..u1-u0-1].  `out` must be
+// a ring-slot data pointer (IDWT_RING_PSE_LEFT writable floats before index 0,
+// >= SIMD_PADDING after index u1-u0-1) and must not alias lp/hp.  On platforms
+// with a planar kernel (NEON) and a supported geometry the LP/HP planes are
+// lifted directly — no interleave pass; otherwise the planes are interleaved
+// into `out` and the existing in-place kernels run.  Both paths produce
+// bit-identical rows.  For use_i32 the column range is ignored (full-width
+// lifting), matching the historical idwt_1d_row_inplace_i32 behaviour;
+// lp/hp/out are then reinterpret_cast'd int32_t buffers.
+void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
+                             int32_t lp_width, int32_t hp_width,
+                             int32_t u0, int32_t u1, uint8_t transformation, bool use_i32,
+                             int32_t h_pse_left, int32_t h_pse_right,
+                             int32_t col_lo, int32_t col_hi);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming 2D IDWT — produces one output row per call via pull_row().
