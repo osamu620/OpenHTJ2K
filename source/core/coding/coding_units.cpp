@@ -791,6 +791,41 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
       }
       if (!_mm256_testz_si256(vor, vor)) block->pre_or_val |= 1;
       for (; col < w; ++col) {
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      const float32x4_t vscale  = vdupq_n_f32(fs);
+      const int32x4_t vone      = vdupq_n_s32(1);
+      const int32x4_t vsentinel = vdupq_n_s32(INT32_MIN);
+      uint32x4_t vor            = vdupq_n_u32(0);
+      int32_t col               = 0;
+      for (; col + 7 < w; col += 8) {
+        int32x4_t v0, v1;
+        if (block->transformation) {
+          v0 = vcvtq_s32_f32(vld1q_f32(s + col));
+          v1 = vcvtq_s32_f32(vld1q_f32(s + col + 4));
+        } else {
+          v0 = vcvtq_s32_f32(vmulq_f32(vld1q_f32(s + col), vscale));
+          v1 = vcvtq_s32_f32(vmulq_f32(vld1q_f32(s + col + 4), vscale));
+        }
+        int32x4_t s0     = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(v0), 31));
+        int32x4_t s1     = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(v1), 31));
+        v0               = vabsq_s32(v0);
+        v1               = vabsq_s32(v1);
+        uint32x4_t mask0 = vcgtq_s32(v0, vdupq_n_s32(0));
+        uint32x4_t mask1 = vcgtq_s32(v1, vdupq_n_s32(0));
+        vor              = vorrq_u32(vor, vorrq_u32(mask0, mask1));
+        int32x4_t vone0  = vandq_s32(vreinterpretq_s32_u32(mask0), vone);
+        int32x4_t vone1  = vandq_s32(vreinterpretq_s32_u32(mask1), vone);
+        v0               = vaddq_s32(vshlq_n_s32(vsubq_s32(v0, vone0), 1),
+                                     vandq_s32(s0, vreinterpretq_s32_u32(mask0)));
+        v1               = vaddq_s32(vshlq_n_s32(vsubq_s32(v1, vone1), 1),
+                                     vandq_s32(s1, vreinterpretq_s32_u32(mask1)));
+        v0               = vorrq_s32(v0, vandq_s32(vreinterpretq_s32_u32(mask0), vsentinel));
+        v1               = vorrq_s32(v1, vandq_s32(vreinterpretq_s32_u32(mask1), vsentinel));
+        vst1q_s32(dp + col, v0);
+        vst1q_s32(dp + col + 4, v1);
+      }
+      if (vmaxvq_u32(vor) != 0) block->pre_or_val |= 1;
+      for (; col < w; ++col) {
 #else
       int32_t col = 0;
       for (; col < w; ++col) {
@@ -876,6 +911,34 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
         _mm256_storeu_si256((__m256i *)(dp + col + 8), v1);
       }
       if (!_mm256_testz_si256(vor, vor)) block->pre_or_val |= 1;
+      for (; col < w; ++col) {
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+      const int32x4_t vone      = vdupq_n_s32(1);
+      const int32x4_t vsentinel = vdupq_n_s32(INT32_MIN);
+      uint32x4_t vor            = vdupq_n_u32(0);
+      int32_t col               = 0;
+      for (; col + 7 < w; col += 8) {
+        int32x4_t v0     = vld1q_s32(s + col);
+        int32x4_t v1     = vld1q_s32(s + col + 4);
+        int32x4_t s0     = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(v0), 31));
+        int32x4_t s1     = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(v1), 31));
+        v0               = vabsq_s32(v0);
+        v1               = vabsq_s32(v1);
+        uint32x4_t mask0 = vcgtq_s32(v0, vdupq_n_s32(0));
+        uint32x4_t mask1 = vcgtq_s32(v1, vdupq_n_s32(0));
+        vor              = vorrq_u32(vor, vorrq_u32(mask0, mask1));
+        int32x4_t vone0  = vandq_s32(vreinterpretq_s32_u32(mask0), vone);
+        int32x4_t vone1  = vandq_s32(vreinterpretq_s32_u32(mask1), vone);
+        v0               = vaddq_s32(vshlq_n_s32(vsubq_s32(v0, vone0), 1),
+                                     vandq_s32(s0, vreinterpretq_s32_u32(mask0)));
+        v1               = vaddq_s32(vshlq_n_s32(vsubq_s32(v1, vone1), 1),
+                                     vandq_s32(s1, vreinterpretq_s32_u32(mask1)));
+        v0               = vorrq_s32(v0, vandq_s32(vreinterpretq_s32_u32(mask0), vsentinel));
+        v1               = vorrq_s32(v1, vandq_s32(vreinterpretq_s32_u32(mask1), vsentinel));
+        vst1q_s32(dp + col, v0);
+        vst1q_s32(dp + col + 4, v1);
+      }
+      if (vmaxvq_u32(vor) != 0) block->pre_or_val |= 1;
       for (; col < w; ++col) {
 #else
       int32_t col = 0;
@@ -966,6 +1029,19 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row, const spr
       }
       for (; i < c->hp_width; ++i) hp_i[i] = hp_src[2 * i];
     }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    {
+      // vld2q deinterleaves natively: one pass fills both LP and HP rows.
+      const int32_t min_w = std::min(c->lp_width, c->hp_width);
+      int32_t i           = 0;
+      for (; i + 3 < min_w; i += 4) {
+        int32x4x2_t t = vld2q_s32(intr_i + 2 * i);
+        vst1q_s32(lp_i + i, t.val[u_off]);
+        vst1q_s32(hp_i + i, t.val[1 - u_off]);
+      }
+      for (int32_t j = i; j < c->lp_width; ++j) lp_i[j] = lp_src[2 * j];
+      for (int32_t j = i; j < c->hp_width; ++j) hp_i[j] = hp_src[2 * j];
+    }
 #else
     for (int32_t i = 0; i < c->lp_width; ++i) lp_i[i] = lp_src[2 * i];
     for (int32_t i = 0; i < c->hp_width; ++i) hp_i[i] = hp_src[2 * i];
@@ -993,6 +1069,10 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row, const spr
         for (; k + 7 < c->lp_width; k += 8) {
           __m256 v = _mm256_cvtepi32_ps(_mm256_loadu_si256((const __m256i *)(lp_i + k)));
           _mm256_storeu_ps(ll_dst + k, v);
+        }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+        for (; k + 3 < c->lp_width; k += 4) {
+          vst1q_f32(ll_dst + k, vcvtq_f32_s32(vld1q_s32(lp_i + k)));
         }
 #endif
         for (; k < c->lp_width; ++k) ll_dst[k] = static_cast<sprec_t>(lp_i[k]);
@@ -1052,6 +1132,19 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row, const spr
       _mm256_storeu_ps(c->hp_tmp + i, lo);
     }
     for (; i < c->hp_width; ++i) c->hp_tmp[i] = hp_src[2 * i];
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  {
+    // vld2q deinterleaves natively: one pass fills both LP and HP rows.
+    const int32_t min_w = std::min(c->lp_width, c->hp_width);
+    int32_t i           = 0;
+    for (; i + 3 < min_w; i += 4) {
+      float32x4x2_t t = vld2q_f32(interleaved_row + 2 * i);
+      vst1q_f32(c->lp_tmp + i, t.val[u_off]);
+      vst1q_f32(c->hp_tmp + i, t.val[1 - u_off]);
+    }
+    for (int32_t j = i; j < c->lp_width; ++j) c->lp_tmp[j] = interleaved_row[2 * j + u_off];
+    for (int32_t j = i; j < c->hp_width; ++j) c->hp_tmp[j] = interleaved_row[2 * j + (1 - u_off)];
   }
 #else
   for (int32_t i = 0; i < c->lp_width; ++i) c->lp_tmp[i] = interleaved_row[2 * i + u_off];

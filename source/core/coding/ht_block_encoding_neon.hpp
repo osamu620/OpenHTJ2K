@@ -277,8 +277,8 @@ class state_VLC_enc {
     buf[pos + 1] = 0xFF;
   }
 
-  FORCE_INLINE void emitVLCBits(uint32_t cwd, uint32_t len) {
-    Creg |= static_cast<uint64_t>(cwd) << ctreg;
+  FORCE_INLINE void emitVLCBits(uint64_t cwd, uint32_t len) {
+    Creg |= cwd << ctreg;
     ctreg += len;
     while (ctreg >= 32) {
       emit_dword();
