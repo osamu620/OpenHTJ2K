@@ -1014,16 +1014,15 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const uint32_t mask = UINT32_MAX >> (M_b + 1);
   // reconstruction parameter defined in E.1.1.2 of the spec
 
-  float fscale = this->stepsize;
-  fscale *= (1 << FRACBITS);
+  // Direct float scale factor: decoded magnitude is in Q(31-M_b) fixed-point;
+  // the result must be in Q(FRACBITS).
+  float fscale_direct = this->stepsize;
+  fscale_direct *= static_cast<float>(1 << FRACBITS);
   if (M_b <= 31) {
-    fscale /= (static_cast<float>(1 << (31 - M_b)));
+    fscale_direct /= (static_cast<float>(1 << (31 - M_b)));
   } else {
-    fscale *= (static_cast<float>(1 << (M_b - 31)));
+    fscale_direct *= (static_cast<float>(1 << (M_b - 31)));
   }
-  constexpr int32_t downshift = 15;
-  fscale *= (float)(1 << 16) * (float)(1 << downshift);
-  const auto scale = (int32_t)(fscale + 0.5);
   if (this->transformation == 1) {
     auto rev_loop = [&](auto store_fn) {
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
@@ -1051,13 +1050,33 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       rev_loop([](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
     else
       rev_loop([](sprec_t *d, int32_t v) { *d = static_cast<sprec_t>(v); });
-  } else {
-    // lossy path
-    OPENHTJ2K_MAYBE_UNUSED int32_t ROImask = 0;
-    if (ROIshift) {
-      ROImask = static_cast<int32_t>(0xFFFFFFFF);
+  } else if (ROIshift == 0) {
+    // Lossy, no ROI (common case): direct float multiply, matching the fused
+    // dequant path (dequant_store_scalar) and the AVX2/NEON/WASM variants of
+    // this function bit-exactly.  The previous integer fixed-point pipeline
+    // here rounded every sample to an integer in the Q(FRACBITS) domain, so
+    // blocks taking this fallback (multiple HT passes, odd height) were
+    // dequantized with different precision than fused blocks and than SIMD
+    // builds, causing up to ±1 LSB divergence in decoded images.
+    for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
+      int32_t *val = this->sample_buf + i * this->blksampl_stride;
+      sprec_t *dst = this->band_buf + i * this->band_stride;
+      size_t len   = this->size.x;
+      for (; len > 0; --len) {
+        const int32_t sign = *val & INT32_MIN;
+        float f            = static_cast<float>(*val & INT32_MAX) * fscale_direct;
+        if (sign) f = -f;
+        *dst = f;
+        val++;
+        dst++;
+      }
     }
-    //    auto vROIshift = vdupq_n_s32(ROImask);
+  } else {
+    // Lossy ROI path — rarely used; keep the integer-arithmetic approach.
+    constexpr int32_t downshift = 15;
+    float fscale                = fscale_direct;
+    fscale *= static_cast<float>(1 << 16) * static_cast<float>(1 << downshift);
+    const auto scale = static_cast<int32_t>(fscale + 0.5f);
     for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
       int32_t *val = this->sample_buf + i * this->blksampl_stride;
       sprec_t *dst = this->band_buf + i * this->band_stride;
@@ -1067,7 +1086,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         int32_t sign = *val & INT32_MIN;
         *val &= INT32_MAX;
         // detect background region and upshift it
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        if (((uint32_t)*val & ~mask) == 0) {
           *val <<= ROIshift;
         }
         // to prevent overflow, truncate to int16_t
