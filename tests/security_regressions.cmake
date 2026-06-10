@@ -54,3 +54,29 @@ set_tests_properties(api_decoder_throws_on_missing_file PROPERTIES
     PASS_REGULAR_EXPRESSION "input file not found"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 30)
+
+# Valid-input regression (opposite polarity from the fixtures above: this
+# input is a CONFORMING codestream that must DECODE, not be rejected).
+# SP_dec::importSigPropBit used to validate the bit-stuffing position (the
+# MSB of a byte following 0xFF) and threw when it was 1.  T.814 F.4 permits
+# refinement-segment terminations that overlap the SigProp and MagRef
+# byte-streams (termSPandMRPackers NOTE), so a tail byte read by the SigProp
+# reader can legitimately carry a MagRef bit there (T.814 7.1.5 NOTE 2).
+# On this fixture the old code aborted under multi-threaded decode and
+# silently wrote a truncated image (with exit code 0) single-threaded.
+# The imgcmp steps catch both regressions: a reintroduced throw aborts the
+# decode test, and a truncated or corrupted plane fails the comparison.
+add_test(NAME security_sigprop_refinement_overlap
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/sigprop_refinement_overlap.j2k
+                 -o sigprop_refinement_overlap.pgx)
+set_tests_properties(security_sigprop_refinement_overlap PROPERTIES
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}|importSigPropBit"
+    TIMEOUT 60)
+foreach(_comp 00 01 02)
+  add_test(NAME comp_sigprop_refinement_overlap_${_comp}
+           COMMAND imgcmp sigprop_refinement_overlap_${_comp}.pgx
+                   ${SECURITY_DATA_DIR}/sigprop_refinement_overlap_ref_${_comp}.pgx 2 0.01)
+  set_tests_properties(comp_sigprop_refinement_overlap_${_comp} PROPERTIES
+      DEPENDS security_sigprop_refinement_overlap)
+endforeach()
