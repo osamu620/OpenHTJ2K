@@ -209,18 +209,20 @@ void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
 // Synthesis (steps in FORWARD order, negated, LP first, then HP using modified LP):
 //   Step 1 (undo step[0]): LP[k] -= 0.25*(HP[k-1]+HP[k])   [modifies LP using original HP]
 //   Step 2 (undo step[1]): HP[k] += 0.5*(LP_mod[k]+LP_mod[k+1])  [modifies HP using modified LP]
-[[maybe_unused]] static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, const int32_t left,
-                                                        const int32_t u_i0, const int32_t u_i1) {
-  const int32_t lp_count  = ceil_int(u_i1, 2) - ceil_int(u_i0, 2);  // LP sample count
-  const int32_t hp_count  = u_i1 / 2 - u_i0 / 2;                    // HP sample count
-  const int32_t offset    = left - u_i0 % 2;                         // base for HP step loop
-  const int32_t lp_offset = offset + (u_i0 % 2) * 2;                // first LP sample position
+// Per 15444-2 lifting with whole-sample symmetric extension, each step acts on the extended
+// signal: the LP pass must also lift the even extension positions adjacent to the data so the
+// HP pass reads post-LP values there.  Same loop bounds as idwt_1d_filtr_rev53_fixed above
+// (LP runs stop+1-start times from offset, one lift landing on the even PSE position when the
+// edge sample is HP).
+[[maybe_unused]] static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                                         const int32_t u_i1) {
+  const int32_t start  = u_i0 / 2;
+  const int32_t stop   = u_i1 / 2;
+  const int32_t offset = left - u_i0 % 2;
   // Step 1: LP -= 0.25*(HP_left + HP_right)  [using original HP values]
-  for (int32_t k = 0, n = lp_offset; k < lp_count; ++k, n += 2)
-    X[n] -= 0.25f * (X[n - 1] + X[n + 1]);
+  for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) X[n] -= 0.25f * (X[n - 1] + X[n + 1]);
   // Step 2: HP += 0.5*(LP_mod_left + LP_mod_right)  [using LP values modified in step 1]
-  for (int32_t k = 0, n = offset; k < hp_count; ++k, n += 2)
-    X[n + 1] += 0.5f * (X[n] + X[n + 2]);
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) X[n + 1] += 0.5f * (X[n] + X[n + 2]);
 }
 
 // In-place 1-D IDWT for all rows.
@@ -449,15 +451,16 @@ static void idwt_irrev53_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32
       memcpy(buf[top + (v1 - v0) + i - 1], &in[PSEo(v1 - v0 + i - 1 + v0, v0, v1) * stride],
              sizeof(sprec_t) * static_cast<size_t>(stride));
     }
-    const int32_t lp_count = ceil_int(v1, 2) - ceil_int(v0, 2);  // LP row count
-    const int32_t hp_count = v1 / 2 - v0 / 2;                    // HP row count
-    const int32_t offset   = top - v0 % 2;                        // base for HP step loop
-    const int32_t lp_n0    = top + v0 % 2;                        // first LP row index
+    // Per-step extension semantics: the LP pass also lifts the even PSE rows adjacent to the
+    // data (same bounds as idwt_rev_ver_sr_fixed above) so the HP pass reads post-LP values.
+    const int32_t lp_count = v1 / 2 - v0 / 2 + 1;  // LP rows incl. even PSE rows at the edges
+    const int32_t hp_count = v1 / 2 - v0 / 2;      // HP row count
+    const int32_t offset   = top - v0 % 2;         // first LP row (may be a PSE row)
     const int32_t width    = u1 - u0;
     for (int32_t cs = 0; cs < width; cs += DWT_VERT_STRIP) {
       const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       // Step 1: LP -= 0.25*(HP_above + HP_below)  [original HP values]
-      for (int32_t k = 0, n = lp_n0; k < lp_count; ++k, n += 2) {
+      for (int32_t k = 0, n = offset; k < lp_count; ++k, n += 2) {
         for (int32_t col = cs; col < ce; ++col)
           buf[n][col] -= 0.25f * (buf[n - 1][col] + buf[n + 1][col]);
       }
