@@ -371,6 +371,22 @@ void idwt_irrev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, in
 void idwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1, int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 #endif
 
+// Planar-input horizontal synthesis for AVX2 — 8-lane port of the NEON planar
+// kernels (see the NEON declarations above for the full contract).  Declared
+// outside the AVX-512/NEON/AVX2 #elif chain because OPENHTJ2K_ENABLE_AVX2 is
+// also defined on AVX-512 builds, where these kernels serve the planar fast
+// path until a dedicated _avx512 variant exists (the in-place dispatch tables
+// still prefer AVX-512).  Dispatched from idwt_1d_row_from_planar, which
+// guarantees: u0 even, u1/2 - u0/2 >= 16 (the 8-lane warmup loads j = 0..15
+// unconditionally), out with >= IDWT_RING_PSE_LEFT writable floats before
+// index 0 and >= 8 after index u1-u0-1.
+#if defined(OPENHTJ2K_ENABLE_AVX2)
+void idwt_1d_filtr_irrev97_planar_avx2(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                       int32_t u1);
+void idwt_1d_filtr_rev53_planar_i32_avx2(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
+                                         int32_t u1);
+#endif
+
 // WASM-SIMD DWT kernels (EMSCRIPTEN builds only, no NEON dependency).
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
 // horizontal

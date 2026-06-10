@@ -11,6 +11,14 @@
   kernel keep the interleave + in-place path unchanged. Measured on an 8K
   12-bit image (M3 Max, single thread, 30-iteration mean): lossy decode
   ~5% faster, lossless ~2.5%.
+- The same planar horizontal IDWT lifting on AVX2 (one unaligned load per
+  plane, fused single-pass 9/7 pipeline, interleave-on-store), replacing
+  the interleave pass plus four half-idle in-place lifting passes. The
+  AVX2 kernels also serve AVX-512 hosts; WASM and scalar keep the
+  fallback. Output is bit-identical (conformance suite plus 8K `cmp`
+  against a main-baseline decoder, even and odd image sizes). Measured on
+  an 8K 12-bit image (Ryzen 9 9950X, single thread, 30-iteration mean):
+  lossy decode ~4% faster, lossless ~0.5%.
 
 ## Fixed
 

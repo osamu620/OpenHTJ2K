@@ -1128,6 +1128,25 @@ void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
       return;
     }
   }
+#elif defined(OPENHTJ2K_ENABLE_AVX2)
+  // Planar fast path, 8-lane AVX2 (also serves AVX-512 hosts, where
+  // OPENHTJ2K_ENABLE_AVX2 is defined too; the in-place fallback below keeps
+  // its AVX-512 dispatch).  Same geometry guards as NEON except N >= 16: the
+  // 8-lane warmup loads blocks 0/1 (j = 0..15) unconditionally.
+  const int32_t N = u1 / 2 - u0 / 2;
+  if ((u0 & 1) == 0 && N >= 16) {
+    if (transformation == 1 && use_i32) {
+      // i32 rev 5/3 has no sub-range variant — always full-width (see below).
+      idwt_1d_filtr_rev53_planar_i32_avx2(reinterpret_cast<int32_t *>(out),
+                                          reinterpret_cast<const int32_t *>(lp),
+                                          reinterpret_cast<const int32_t *>(hp), u0, u1);
+      return;
+    }
+    if (transformation == 0 && !use_i32 && col_lo <= u0 && col_hi >= u1) {
+      idwt_1d_filtr_irrev97_planar_avx2(out, lp, hp, u0, u1);
+      return;
+    }
+  }
 #endif
 
   // Fallback: interleave into the ring slot (LP at u0%2, HP at 1-u0%2), then
