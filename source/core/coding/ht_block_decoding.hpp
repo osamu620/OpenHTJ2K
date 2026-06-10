@@ -2269,10 +2269,12 @@ FORCE_INLINE uint8_t SP_dec::importSigPropBit() {
     if (pos < Lref) {
       tmp = *(Dref + pos);
       pos++;
-      if ((tmp & (1 << bits)) != 0) {
-        printf("ERROR: importSigPropBit error\n");
-        throw std::exception();
-      }
+      // The MSB of a byte following 0xFF is a stuffing position and is skipped (bits == 7),
+      // but its VALUE must not be validated: T.814 F.4 permits termination schemes that
+      // overlap the SigProp and MagRef byte-streams inside the shared refinement segment
+      // (termSPandMRPackers NOTE), so a trailing byte read by SigProp may carry a MagRef
+      // bit — possibly 1 — in that position (T.814 7.1.5 NOTE 2). Encoders emit such
+      // streams in practice; rejecting them here broke decoding of valid codestreams.
     } else {
       tmp = 0;
     }

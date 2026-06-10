@@ -1,3 +1,18 @@
+# [Unreleased]
+
+## Fixed
+
+- The HT SigProp bit reader rejected valid codestreams whose refinement
+  segment uses the SigProp/MagRef overlap termination permitted by
+  T.814 F.4 (`termSPandMRPackers` NOTE): the bit-stuffing position (MSB of
+  a byte following 0xFF) can legitimately carry a MagRef bit, but
+  `SP_dec::importSigPropBit` treated a 1 there as an error and threw.
+  Multi-threaded decode aborted the process; single-threaded decode
+  silently produced a truncated image with exit code 0. The stuffing bit
+  is now skipped without validation, matching T.814 7.1.5 NOTE 2 and the
+  behavior of other HTJ2K decoders. A conforming trigger codestream is
+  added to the regression suite.
+
 # [0.19.0] - 2026-05-30
 
 First feature release since the 0.18.x security line (148 commits since
