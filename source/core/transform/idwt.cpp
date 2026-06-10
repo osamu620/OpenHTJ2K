@@ -1147,6 +1147,24 @@ void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
       return;
     }
   }
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  // Planar fast path, 4-lane WASM SIMD — same geometry guards as NEON.  The
+  // 9/7 kernel matches the in-place WASM rounding (mul+sub, no FMA), so both
+  // paths stay bit-identical on this platform.
+  const int32_t N = u1 / 2 - u0 / 2;
+  if ((u0 & 1) == 0 && N >= 12) {
+    if (transformation == 1 && use_i32) {
+      // i32 rev 5/3 has no sub-range variant — always full-width (see below).
+      idwt_1d_filtr_rev53_planar_i32_wasm(reinterpret_cast<int32_t *>(out),
+                                          reinterpret_cast<const int32_t *>(lp),
+                                          reinterpret_cast<const int32_t *>(hp), u0, u1);
+      return;
+    }
+    if (transformation == 0 && !use_i32 && col_lo <= u0 && col_hi >= u1) {
+      idwt_1d_filtr_irrev97_planar_wasm(out, lp, hp, u0, u1);
+      return;
+    }
+  }
 #endif
 
   // Fallback: interleave into the ring slot (LP at u0%2, HP at 1-u0%2), then
