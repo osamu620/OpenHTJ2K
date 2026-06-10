@@ -1,17 +1,25 @@
 # Porting the planar horizontal IDWT to AVX2 / AVX-512 / WASM
 
-Status as of PR #406 (June 2026): the streaming horizontal IDWT lifts directly
-from the planar LP/HP subband rows **on NEON only** (9/7 float and int32 5/3).
-All other platforms — AVX2, AVX-512, WASM, scalar — go through a bit-identical
-fallback that interleaves into the ring slot and runs the historical in-place
-kernels, at unchanged cost. This document is the map for converting those
-platforms. It assumes no access to the NEON machine; everything needed is in
-the tree.
+Status: the streaming horizontal IDWT lifts directly from the planar LP/HP
+subband rows on **NEON** (PR #406) and **AVX2** (9/7 float and int32 5/3 on
+both).  The AVX2 kernels also serve AVX-512 hosts (`OPENHTJ2K_ENABLE_AVX2` is
+defined there too); a dedicated 16-lane AVX-512 variant (§5.2) and the WASM
+port (§5.3) remain open.  WASM and scalar go through a bit-identical fallback
+that interleaves into the ring slot and runs the historical in-place kernels,
+at unchanged cost.  This document is the map for the remaining platforms.
 
-Measured upside on NEON (8K 12-bit, M3 Max, single thread, 30-iter mean):
-lossy 9/7 **−5.5%**, lossless 5/3 i32 **−2.5%** end-to-end decode. On AVX2 the
-upside is plausibly larger (see §5.1): the current in-place kernels waste half
-their lanes on pass-through elements, which the planar formulation does not.
+Measured upside (8K 12-bit, single thread, 30-iter mean, end-to-end decode):
+
+| Platform | lossy 9/7 | lossless 5/3 i32 |
+|---|---|---|
+| NEON (M3 Max) | −5.5% | −2.5% |
+| AVX2 (Ryzen 9 9950X, AVX-512 host) | −3.8% | −0.5% |
+
+The AVX2 gain is smaller than NEON's despite §5.1's lane-utilisation argument
+because on an AVX-512 host the displaced in-place kernels are the 16-lane
+`_avx512` variants — the 8-lane planar kernel's own time roughly matches
+interleave + in-place; the net win comes from the deleted pass over the row.
+That is also why a dedicated AVX-512 planar variant is a plausible follow-up.
 
 ---
 
@@ -23,7 +31,7 @@ idwt_level_src_fn (coding_units.cpp)          ← selects lp_ptr/hp_ptr, zero sc
         ▼
 idwt_1d_row_from_planar (idwt.cpp)            ← THE dispatcher; the only place
         │                                        that decides planar vs fallback
-        ├─ planar kernel        (NEON today)  ← lp/hp planes → natural row in
+        ├─ planar kernel        (NEON, AVX2)  ← lp/hp planes → natural row in
         │                                        the ring slot; no interleave
         └─ fallback: interleave_row_planes()  ← LP at u0%2, HP at 1-u0%2, then
            + idwt_1d_row_inplace[_range|_i32]    in-place PSE fill + lifting
@@ -37,16 +45,17 @@ zero-row tracking, PSE row copies, `pull_row_ref`, and the whole batch path
 
 The port therefore adds, per platform:
 
-1. Two kernels in `idwt_avx2.cpp` / `idwt_wasm.cpp` (and later `idwt_avx512.cpp`):
+1. Two kernels in `idwt_wasm.cpp` (and later `idwt_avx512.cpp`):
    - `idwt_1d_filtr_irrev97_planar_<isa>(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0, int32_t u1)`
    - `idwt_1d_filtr_rev53_planar_i32_<isa>(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0, int32_t u1)`
-2. Declarations in the matching `#elif` block of `dwt.hpp`.
+2. Declarations in `dwt.hpp`.  Note the AVX2 planar declarations live in a
+   standalone `#if defined(OPENHTJ2K_ENABLE_AVX2)` block *outside* the
+   AVX-512/NEON/AVX2 `#elif` chain: `OPENHTJ2K_ENABLE_AVX2` is also defined on
+   AVX-512 builds, so the AVX2 planar kernels serve AVX-512 hosts until a
+   dedicated `_avx512` variant exists (the in-place dispatch tables prefer
+   AVX-512; the planar dispatch starts with AVX2 only).
 3. An `#elif` branch in the planar fast path of `idwt_1d_row_from_planar`
-   (idwt.cpp), which today reads `#if defined(OPENHTJ2K_ENABLE_ARM_NEON)`.
-   Note `OPENHTJ2K_ENABLE_AVX2` is also defined on AVX-512 builds, so an AVX2
-   planar kernel automatically serves AVX-512 hosts until a dedicated
-   `_avx512` variant exists (the in-place dispatch tables prefer AVX-512; the
-   planar dispatch can start with AVX2 only).
+   (idwt.cpp), after the existing NEON and AVX2 branches.
 
 Nothing else changes. `coding_units.cpp` already calls the dispatcher.
 
@@ -58,7 +67,7 @@ falls back (and must keep falling back):
 | Guard | Why |
 |---|---|
 | `(u0 & 1) == 0` | keeps `E[j] = lp[j]`, `O[j] = hp[j]` index-aligned; odd u0 shifts the LP plane by one and is rare (odd tile/precinct origins) |
-| `N = u1/2 - u0/2 >= 12` | the kernels' SIMD warmup loads blocks j=0..7 unconditionally; short rows go through the fallback's scalar-friendly path |
+| `N = u1/2 - u0/2 >= 12` (NEON) / `>= 16` (AVX2) | the SIMD warmup loads blocks 0/1 unconditionally — j=0..7 at 4 lanes, j=0..15 at 8 lanes; short rows go through the fallback's scalar-friendly path |
 | 9/7 float: `col_lo <= u0 && col_hi >= u1` | narrow JPIP column ranges use the scalar sub-range lifter on the interleaved row; not worth porting |
 | 5/3: `use_i32 == true` | the float-5/3 streaming path is cold (lossless decode is i32); i32 ignores the column range by design, matching `idwt_1d_row_inplace_i32` |
 
@@ -129,8 +138,8 @@ loop: `j + 4 <= N - 1`, because the `s1_next` lookahead reads `lp[j+4]` /
 
 ### 3.4 Bit-exactness mandate
 
-`lbs_*` tests enforce batch == line-based bit-exact, and the dispatcher's
-fallback must equal the planar path. So a planar kernel must reproduce **the
+The `*_lb_*` conformance tests enforce line-based decode correctness, and the
+dispatcher's fallback must equal the planar path. So a planar kernel must reproduce **the
 same single-rounded operation sequence per element as the same platform's
 in-place kernel**:
 
@@ -170,7 +179,7 @@ interleave pass in the caller.
 
 ## 5. Platform notes
 
-### 5.1 AVX2 (do this one first)
+### 5.1 AVX2 (shipped — kernels at the bottom of `idwt_avx2.cpp`; notes kept for the AVX-512 port)
 
 The current in-place AVX2 kernels (`idwt_avx2.cpp`) do **not** deinterleave:
 each pass loads overlapping unaligned vectors over the interleaved row and
@@ -258,9 +267,11 @@ nothing natively, so native ctest only proves you didn't break the others).
 3. **A/B benchmark**: snapshotted `bin/` dirs (baseline = a worktree of main,
    built once), interleaved runs, `-iter 30 -num_threads 1`, ≥ 3 repetitions
    per config, both streams. Don't trust a single pair of runs.
-4. **lb_compare** on at least one stream (`lb_compare <codestream>`) — directly
-   exercises batch-vs-streaming equality, which is exactly the fallback-vs-
-   planar boundary.
+4. **Line-based conformance** (`ctest -R lb`, included in step 1) covers the
+   streaming path the dispatcher serves.  (The standalone `lb_compare` tool
+   and its `lbs_*` batch-vs-streaming tests were removed in 0.19.0 — step 2's
+   whole-image `cmp` against a main-baseline decoder is the replacement check
+   at 8K scale.)
 
 ## 7. Encoder mirror (separate work, not this port)
 
