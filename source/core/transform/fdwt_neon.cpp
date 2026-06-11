@@ -530,8 +530,8 @@ OPENHTJ2K_MSVC_ARM64_NOINLINE_F void fdwt_1d_filtr_irrev97_planar_neon(sprec_t *
                                                                        const int32_t u1) {
   const int32_t NH = u1 / 2 - u0 / 2;
   const int32_t NL = ceil_int(u1, 2) - u0 / 2;
-  auto E           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j, u0, u1) - u0]; };
-  auto O           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j + 1, u0, u1) - u0]; };
+  auto E           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j, u0, u1)]; };
+  auto O           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j + 1, u0, u1)]; };
 
   const float32x4_t vA = vdupq_n_f32(fA), vB = vdupq_n_f32(fB);
   const float32x4_t vC = vdupq_n_f32(fC), vD = vdupq_n_f32(fD);
@@ -597,8 +597,8 @@ void fdwt_1d_filtr_rev53_planar_i32_neon(int32_t *lp, int32_t *hp, const int32_t
                                          const int32_t u1) {
   const int32_t NH = u1 / 2 - u0 / 2;
   const int32_t NL = ceil_int(u1, 2) - u0 / 2;
-  auto E           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j, u0, u1) - u0]; };
-  auto O           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j + 1, u0, u1) - u0]; };
+  auto E           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j, u0, u1)]; };
+  auto O           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j + 1, u0, u1)]; };
 
   const int32x4_t vtwo = vdupq_n_s32(2);
 
