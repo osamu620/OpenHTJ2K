@@ -47,9 +47,11 @@ quick local testing without a live sender.
 - `--no-decode` — Capture-only; skip the HTJ2K decoder entirely.
 - `--threading {on,off}` — Multi-threaded pipeline. Default `on`;
   `off` falls back to a single-threaded loop.
-- `--color-path {shader|cpu}` — YCbCr→RGB via a GL 3.3 fragment
-  shader (default) or the AVX2 CPU path. Auto-forced to `cpu` if a
-  GL 3.3 core context cannot be created.
+- `--color-path {shader|cpu}` — YCbCr→RGB on the GPU (default) or the
+  AVX2 CPU path. The shader backend is OpenGL 3.3 GLSL on Linux and
+  Windows, and Metal (runtime-compiled MSL) on macOS — same pipeline
+  stages and coefficients on both. Auto-forced to `cpu` if no GPU
+  context can be created.
 
 ### HDR colour pipeline (shader path only)
 
@@ -103,7 +105,8 @@ slightly (max ~9/255 in the deep-grey region); pass
 **Tone mapping** for gamma and HLG content remains a hard
 `clamp(rgb, 0, 1)` in linear light, which is correct for
 display-referred signals. A proper HLG OOTF with tunable system gamma
-is a planned follow-up.
+is a planned follow-up. See [HDR (PQ) workflow](#hdr-pq-workflow--end-to-end)
+for the end-to-end recipe.
 
 ### Pacing and throughput
 
@@ -152,6 +155,75 @@ open_htj2k_rtp_recv --transfer gamma --display-encoding gamma22
 # Force a BT.2020 PQ source under S=0 (receiver has no TRANS/PRIMS to read)
 open_htj2k_rtp_recv --colorspace bt2020 --transfer pq
 ```
+
+## HDR (PQ) workflow — end to end
+
+The HTJ2K codestream itself carries no transfer or primaries
+metadata: HDR signalling rides in the RFC 9828 Main Packet, whose
+`S` flag gates the ITU-T H.273 `PRIMS` / `TRANS` / `MAT` fields. The
+receiver tone-maps PQ sources to an SDR (sRGB) framebuffer — there
+is no HDR display output path yet.
+
+**Self-describing sender (S=1).** When the sender signals BT.2020 PQ
+(`PRIMS = 9`, `TRANS = 16`, `MAT = 9`), the defaults resolve
+everything — no flags needed:
+
+```bash
+open_htj2k_rtp_recv
+```
+
+`--transfer auto` reads `TRANS = 16` → PQ, `PRIMS = 9` against the
+default `--display-primaries bt709` engages the BT.2020 → BT.709
+gamut matrix, and `--tonemap auto` applies the BT.2390 EETF. Confirm
+on stderr when the first frame arrives:
+
+```
+info: colour pipeline transfer=pq gamut=bt2020->bt709 tonemap=bt2390 display_encoding=srgb
+```
+
+**Bare sender (S=0).** With no colorspace metadata the receiver
+refuses to guess; supply the source description on the CLI:
+
+```bash
+open_htj2k_rtp_recv --colorspace bt2020 --transfer pq
+```
+
+**What the tone mapper does.** The BT.2390-9 EETF maps the assumed
+source range onto a 203-nit SDR target (BT.2408 reference white):
+PQ diffuse white lands at SDR display white instead of the
+near-black a hard clip produces, and highlights between the knee and
+the source peak roll off through a Hermite spline instead of
+clipping. Below the knee the curve is a pure brightness rescale, so
+graded midtones survive unchanged.
+
+**Tuning.**
+
+- RFC 9828 carries no MDCV/MaxCLL-style mastering metadata, so set
+  `--source-peak-nits` to the content's mastering peak (default
+  `1000`). Lower values brighten mid-tones at the cost of earlier
+  highlight roll-off.
+- `--tonemap clip` restores the previous hard-clip behaviour
+  (diagnostic; PQ content renders very dark).
+- `--display-encoding gamma22` swaps the final sRGB encode for a pure
+  2.2 power curve if the display chain expects it.
+
+**Quick local check (no live sender).** The loopback helper sends
+S=0, so pass the fallback flags:
+
+```bash
+open_htj2k_rtp_recv --port 6000 --bind 127.0.0.1 --frames 1 \
+    --transfer pq --colorspace bt2020 &
+python3 source/apps/rtp_recv/tools/rtp_loopback_send.py [your.j2c]
+```
+
+The receiver renders one frame, prints the
+`info: colour pipeline transfer=pq ... tonemap=bt2390` line above,
+and exits. Any codestream works for verifying the plumbing — the
+EETF maths itself is covered by `--smoke-test`.
+
+**Current limitations.** HLG is hard-clipped (no OOTF yet);
+`--display-primaries bt2020` is an identity stub for a future HDR
+output path; the source peak cannot be auto-detected.
 
 ## Kernel receive buffer
 
