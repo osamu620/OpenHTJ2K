@@ -317,6 +317,15 @@ void idwt_1d_filtr_irrev97_planar_avx512(sprec_t *out, const sprec_t *lp, const 
                                          int32_t u1);
 void idwt_1d_filtr_rev53_planar_i32_avx512(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
                                            int32_t u1);
+// Encoder mirror: 16-lane variants of the AVX2 planar FDWT kernels (see the
+// OPENHTJ2K_ENABLE_AVX2 block below).  Bit-identical to the AVX2 planar
+// kernels, so emit_ready_f picks per-state: these for N = u1/2 - u0/2 >= 32
+// (the 16-lane warmup loads j = 0..31 unconditionally), the AVX2 kernels for
+// 16 <= N < 32.
+void fdwt_1d_filtr_irrev97_planar_avx512(sprec_t *lp, sprec_t *hp, const sprec_t *in, int32_t u0,
+                                         int32_t u1);
+void fdwt_1d_filtr_rev53_planar_i32_avx512(int32_t *lp, int32_t *hp, const int32_t *in, int32_t u0,
+                                           int32_t u1);
 // Single-row reversible (5/3) FDWT vertical lifting steps.
 void fdwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
 void fdwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);

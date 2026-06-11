@@ -955,12 +955,32 @@ static void emit_ready_f(fdwt_2d_state *s) {
     // the int32 pipe: use_i32 flips after init, so a float rev53 state falls
     // through to the interleaved path below.
     if (s->put_planes != nullptr && s->planar_lp != nullptr && (s->transformation == 0 || s->use_i32)) {
+      // On AVX-512 hosts the 16-lane planar kernels take states with
+      // N = u1/2 - u0/2 >= 32 (their warmup loads j = 0..31); all planar
+      // kernels are bit-identical, so the per-state pick is invisible in the
+      // output.
       if (s->use_i32) {
-        fdwt_1d_filtr_rev53_planar_i32_avx2(reinterpret_cast<int32_t *>(s->planar_lp),
-                                            reinterpret_cast<int32_t *>(s->planar_hp),
-                                            reinterpret_cast<const int32_t *>(ring_row), s->u0, s->u1);
+  #if defined(OPENHTJ2K_ENABLE_AVX512)
+        if (s->u1 / 2 - s->u0 / 2 >= 32) {
+          fdwt_1d_filtr_rev53_planar_i32_avx512(reinterpret_cast<int32_t *>(s->planar_lp),
+                                                reinterpret_cast<int32_t *>(s->planar_hp),
+                                                reinterpret_cast<const int32_t *>(ring_row), s->u0, s->u1);
+        } else
+  #endif
+        {
+          fdwt_1d_filtr_rev53_planar_i32_avx2(reinterpret_cast<int32_t *>(s->planar_lp),
+                                              reinterpret_cast<int32_t *>(s->planar_hp),
+                                              reinterpret_cast<const int32_t *>(ring_row), s->u0, s->u1);
+        }
       } else {
-        fdwt_1d_filtr_irrev97_planar_avx2(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+  #if defined(OPENHTJ2K_ENABLE_AVX512)
+        if (s->u1 / 2 - s->u0 / 2 >= 32) {
+          fdwt_1d_filtr_irrev97_planar_avx512(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+        } else
+  #endif
+        {
+          fdwt_1d_filtr_irrev97_planar_avx2(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+        }
       }
       s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
       ++s->next_emit;

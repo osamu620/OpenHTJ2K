@@ -522,4 +522,169 @@ void fdwt_rev_ver_lp_step_i32_avx512(int32_t n, const int32_t *prev, const int32
   }
 }
 
+/********************************************************************************
+ * Planar horizontal FDWT — 16-lane variants of the AVX2 planar kernels
+ * (fdwt_avx2.cpp).  Same structure; the full-register valignd replaces the
+ * permute2f128+alignr pair for the cross-element shifts, and the
+ * deinterleaving load is one vpermt2ps per plane.  Every lifting stage is the
+ * same single-rounded _mm512_fmadd_ps / std::fmaf (or exact integer) sequence
+ * per element as the AVX2 planar kernels — output is bit-identical, which is
+ * what lets emit_ready_f pick per-state between this kernel (N >= 32, the
+ * 16-lane warmup loads j = 0..31 unconditionally) and the AVX2 one
+ * (16 <= N < 32).
+ *******************************************************************************/
+// Cross-element shifts with carry-in — full-register valignd.
+static inline __m512 fdwt_shl1_ps_512(__m512 a, __m512 b) {  // [a1..a15, b0]
+  return _mm512_castsi512_ps(_mm512_alignr_epi32(_mm512_castps_si512(b), _mm512_castps_si512(a), 1));
+}
+static inline __m512 fdwt_shr1_ps_512(__m512 p, __m512 a) {  // [p15, a0..a14]
+  return _mm512_castsi512_ps(_mm512_alignr_epi32(_mm512_castps_si512(a), _mm512_castps_si512(p), 15));
+}
+static inline __m512i fdwt_shl1_epi32_512(__m512i a, __m512i b) { return _mm512_alignr_epi32(b, a, 1); }
+static inline __m512i fdwt_shr1_epi32_512(__m512i p, __m512i a) { return _mm512_alignr_epi32(a, p, 15); }
+// Deinterleaving load of one block: e = even lanes in[2j..], o = odd lanes.
+static inline void fdwt_load_deint_ps_512(const float *p, __m512 &e, __m512 &o) {
+  const __m512i idx_e = _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30);
+  const __m512i idx_o = _mm512_setr_epi32(1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31);
+  __m512 a            = _mm512_loadu_ps(p);
+  __m512 b            = _mm512_loadu_ps(p + 16);
+  e                   = _mm512_permutex2var_ps(a, idx_e, b);
+  o                   = _mm512_permutex2var_ps(a, idx_o, b);
+}
+static inline void fdwt_load_deint_epi32_512(const int32_t *p, __m512i &e, __m512i &o) {
+  __m512 ef, of;
+  fdwt_load_deint_ps_512(reinterpret_cast<const float *>(p), ef, of);
+  e = _mm512_castps_si512(ef);
+  o = _mm512_castps_si512(of);
+}
+
+// Fused single-pass 9/7 analysis, planar output.  Stage recurrences as in the
+// AVX2 kernel (even u0, E[j] = in[2j], O[j] = in[2j+1], NL = ceil(u1/2)-u0/2,
+// NH = u1/2-u0/2):
+//   T1[j] = O[j]  + fA*(E[j]    + E[j+1])   j in [-2, NL]
+//   T2[j] = E[j]  + fB*(T1[j-1] + T1[j])    j in [-1, NL]
+//   T3[j] = T1[j] + fC*(T2[j]   + T2[j+1])  j in [-1, NL-1]
+//   T4[j] = T2[j] + fD*(T3[j-1] + T3[j])    j in [ 0, NL-1]
+//   hp[j] = T3[j] (j < NH),  lp[j] = T4[j] (j < NL)
+void fdwt_1d_filtr_irrev97_planar_avx512(sprec_t *lp, sprec_t *hp, const sprec_t *in, const int32_t u0,
+                                         const int32_t u1) {
+  const int32_t NH = u1 / 2 - u0 / 2;
+  const int32_t NL = ceil_int(u1, 2) - u0 / 2;
+  auto E           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j, u0, u1) - u0]; };
+  auto O           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j + 1, u0, u1) - u0]; };
+
+  const __m512 vA = _mm512_set1_ps(fA), vB = _mm512_set1_ps(fB);
+  const __m512 vC = _mm512_set1_ps(fC), vD = _mm512_set1_ps(fD);
+
+  // Warmup: boundary scalars, blocks 0/1 loads, T1/T2 of block 0.
+  const float t1m2 = std::fmaf(fA, E(-2) + E(-1), O(-2));  // T1[-2]
+  const float t1m1 = std::fmaf(fA, E(-1) + E(0), O(-1));   // T1[-1]
+  __m512 E0, O0, E1, O1;
+  fdwt_load_deint_ps_512(in, E0, O0);
+  fdwt_load_deint_ps_512(in + 32, E1, O1);
+  __m512 T1_0 = _mm512_fmadd_ps(_mm512_add_ps(E0, fdwt_shl1_ps_512(E0, E1)), vA, O0);
+  __m512 T2_0 = _mm512_fmadd_ps(_mm512_add_ps(fdwt_shr1_ps_512(_mm512_set1_ps(t1m1), T1_0), T1_0), vB, E0);
+  const float t2m1 = std::fmaf(fB, t1m2 + t1m1, E(-1));                   // T2[-1]
+  const float t3m1 = std::fmaf(fC, t2m1 + _mm512_cvtss_f32(T2_0), t1m1);  // T3[-1]
+
+  // Steady state: iteration n deinterleave-loads input block n and emits
+  // finished plane block n-2 with two plain stores.
+  __m512 E_nm1 = E1, O_nm1 = O1, T1_nm2 = T1_0, T2_nm2 = T2_0;
+  __m512 T3_nm3 = _mm512_set1_ps(t3m1);  // only its top lane is consumed (shr1)
+  int32_t n     = 2;
+  for (; 16 * n + 15 <= NH - 1; ++n) {
+    __m512 E_n, O_n;
+    fdwt_load_deint_ps_512(in + 32 * n, E_n, O_n);
+    __m512 T1_nm1 = _mm512_fmadd_ps(_mm512_add_ps(E_nm1, fdwt_shl1_ps_512(E_nm1, E_n)), vA, O_nm1);
+    __m512 T2_nm1 = _mm512_fmadd_ps(_mm512_add_ps(fdwt_shr1_ps_512(T1_nm2, T1_nm1), T1_nm1), vB, E_nm1);
+    __m512 T3_nm2 = _mm512_fmadd_ps(_mm512_add_ps(T2_nm2, fdwt_shl1_ps_512(T2_nm2, T2_nm1)), vC, T1_nm2);
+    __m512 T4_nm2 = _mm512_fmadd_ps(_mm512_add_ps(fdwt_shr1_ps_512(T3_nm3, T3_nm2), T3_nm2), vD, T2_nm2);
+    _mm512_storeu_ps(hp + 16 * (n - 2), T3_nm2);
+    _mm512_storeu_ps(lp + 16 * (n - 2), T4_nm2);
+    E_nm1  = E_n;
+    O_nm1  = O_n;
+    T1_nm2 = T1_nm1;
+    T2_nm2 = T2_nm1;
+    T3_nm3 = T3_nm2;
+  }
+
+  // Drain: scalar finish from the carried registers + mirrored accessors.
+  // P = 16*(n-2) is the first plane index not yet stored; the loop-exit bound
+  // gives NL - P <= 48, so with base = P - 16 every stage index stays within
+  // the arrays (max NL - base <= 64).
+  {
+    const int32_t P    = 16 * (n - 2);
+    const int32_t base = P - 16;
+    float t1[80], t2[80], t3[80];
+    _mm512_storeu_ps(t1 + (P - base), T1_nm2);  // T1[P..P+15]
+    _mm512_storeu_ps(t2 + (P - base), T2_nm2);  // T2[P..P+15]
+    _mm512_storeu_ps(t3, T3_nm3);               // T3[P-16..P-1] (top lane = T3[P-1])
+    for (int32_t j = P + 16; j <= NL; ++j) t1[j - base] = std::fmaf(fA, E(j) + E(j + 1), O(j));
+    for (int32_t j = P + 16; j <= NL; ++j)
+      t2[j - base] = std::fmaf(fB, t1[j - base - 1] + t1[j - base], E(j));
+    for (int32_t j = P; j <= NL - 1; ++j)
+      t3[j - base] = std::fmaf(fC, t2[j - base] + t2[j - base + 1], t1[j - base]);
+    for (int32_t j = P; j <= NL - 1; ++j)
+      lp[j] = std::fmaf(fD, t3[j - base - 1] + t3[j - base], t2[j - base]);
+    for (int32_t j = P; j <= NH - 1; ++j) hp[j] = t3[j - base];
+  }
+}
+
+// Fused single-pass reversible 5/3 analysis, planar int32 output — 16-lane
+// variant of fdwt_1d_filtr_rev53_planar_i32_avx2 (integer ops are exact, so
+// all variants match bit for bit):
+//   T1[j] = O[j] - ((E[j]    + E[j+1]) >> 1)      j in [-1, NL-1]
+//   T2[j] = E[j] + ((T1[j-1] + T1[j] + 2) >> 2)   j in [ 0, NL-1]
+//   hp[j] = T1[j] (j < NH),  lp[j] = T2[j] (j < NL)
+void fdwt_1d_filtr_rev53_planar_i32_avx512(int32_t *lp, int32_t *hp, const int32_t *in, const int32_t u0,
+                                           const int32_t u1) {
+  const int32_t NH = u1 / 2 - u0 / 2;
+  const int32_t NL = ceil_int(u1, 2) - u0 / 2;
+  auto E           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j, u0, u1) - u0]; };
+  auto O           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j + 1, u0, u1) - u0]; };
+
+  const __m512i vtwo = _mm512_set1_epi32(2);
+
+  // Warmup: boundary scalar T1[-1], block 0 load.
+  const int32_t t1m1 = O(-1) - ((E(-1) + E(0)) >> 1);
+  __m512i E_nm1, O_nm1;
+  fdwt_load_deint_epi32_512(in, E_nm1, O_nm1);
+  __m512i T1_nm2 = _mm512_set1_epi32(t1m1);  // only its top lane is consumed (shr1)
+
+  // Steady state: iteration n deinterleave-loads input block n and emits
+  // finished plane block n-1 with two plain stores.
+  int32_t n = 1;
+  for (; 16 * n + 15 <= NH - 1; ++n) {
+    __m512i E_n, O_n;
+    fdwt_load_deint_epi32_512(in + 32 * n, E_n, O_n);
+    __m512i T1_nm1 = _mm512_sub_epi32(
+        O_nm1, _mm512_srai_epi32(_mm512_add_epi32(E_nm1, fdwt_shl1_epi32_512(E_nm1, E_n)), 1));
+    __m512i T2_nm1 = _mm512_add_epi32(
+        E_nm1,
+        _mm512_srai_epi32(
+            _mm512_add_epi32(_mm512_add_epi32(fdwt_shr1_epi32_512(T1_nm2, T1_nm1), T1_nm1), vtwo), 2));
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(hp + 16 * (n - 1)), T1_nm1);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(lp + 16 * (n - 1)), T2_nm1);
+    E_nm1  = E_n;
+    O_nm1  = O_n;
+    T1_nm2 = T1_nm1;
+  }
+
+  // Drain: scalar finish from the carried boundary lane + mirrored accessors.
+  // P = 16*(n-1) is the first plane index not yet stored; the loop-exit bound
+  // gives NH - P <= 31, so NL - P <= 32 and t1buf stays within bounds.
+  {
+    const int32_t P = 16 * (n - 1);
+    // T1[P-1]: rotate lane 15 of the carried block into lane 0 (== t1m1 when P == 0).
+    const int32_t t1_prev = _mm512_cvtsi512_si32(_mm512_alignr_epi32(T1_nm2, T1_nm2, 15));
+    int32_t t1buf[32];
+    for (int32_t j = P; j <= NL - 1; ++j) t1buf[j - P] = O(j) - ((E(j) + E(j + 1)) >> 1);
+    for (int32_t j = P; j <= NH - 1; ++j) hp[j] = t1buf[j - P];
+    for (int32_t j = P; j <= NL - 1; ++j) {
+      const int32_t t1l = (j == P) ? t1_prev : t1buf[j - P - 1];
+      lp[j]             = E(j) + ((t1l + t1buf[j - P] + 2) >> 2);
+    }
+  }
+}
+
 #endif  // OPENHTJ2K_TRY_AVX2 && __AVX512F__
