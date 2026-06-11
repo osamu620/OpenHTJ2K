@@ -1,11 +1,11 @@
 # `open_htj2k_enc` — encoder CLI reference
 
 Part 15 (HTJ2K) compliant encoder. Produces either a raw codestream
-(`.j2c`, `.jhc`) or an HTJ2K JPH file (`.jph`). Accepts PGM, PPM,
-PGX, and TIFF (with libtiff) inputs. The default streaming path
+(`.j2c`, `.j2k`, `.jphc`) or an HTJ2K JPH file (`.jph`). Accepts PGM,
+PPM, PGX, and TIFF (with libtiff) inputs. The streaming path
 handles all four formats — PGX with subsampled component sets
 (4:2:2, 4:2:0) and basic TIFF (8/16-bit, RGB or grayscale,
-single-strip or strip-compressed). Tiled TIFFs require `-batch`.
+single-strip or strip-compressed). Tiled TIFFs are not supported.
 
 Full runtime help: `open_htj2k_enc -h`.
 
@@ -23,8 +23,8 @@ open_htj2k_enc -i inputY.pgx,inputCb.pgx,inputCr.pgx -o output
 ```
 
 `-o` takes the base name; the extension decides the container:
-`.j2c` / `.jhc` for raw HTJ2K codestream, `.jph` for the JPH file
-format.
+`.j2c` / `.j2k` / `.jphc` for raw HTJ2K codestream, `.jph` for the
+JPH file format.
 
 ## Options
 
@@ -61,7 +61,12 @@ format.
 - `Qstep=Float`
   - Base step size for quantization. Valid range: `0.0 < Qstep <= 2.0`.
 - `Qguard=Int`
-  - Number of guard bits. Valid range: 0–8. Default is **1**.
+  - Number of guard bits. Valid range: 0–7. Default is **1**.
+- `Qderived=yes|no`
+  - `yes` selects scalar-derived quantization: a single step size is
+    signalled for the LL band and the other subband step sizes are
+    derived from it. Default is **no** (scalar-expounded; each
+    subband's step size is signalled explicitly).
 - `Qfactor=Int`
   - Quality factor for lossy compression. Valid range: 0–100
     (100 = best quality).
@@ -77,9 +82,10 @@ format.
 
 - `-num_threads Int`
   - Number of threads. `0` (default) uses all available hardware threads.
-- `-batch`
-  - Use the batch (full-image) encode path. Loads the entire image into
-    memory before encoding. The default path is line-based (streaming).
+- `-iter n`
+  - Repeat encoding `n` times (benchmarking) and report the mean
+    elapsed time. The input image is read only once and the output is
+    written only once.
 
 ## Examples
 

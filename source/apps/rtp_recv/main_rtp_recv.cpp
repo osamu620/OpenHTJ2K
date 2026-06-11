@@ -5,7 +5,7 @@
 
 // RFC 9828 RTP receiver for HTJ2K video with a GLFW/OpenGL preview window.
 //
-// Typical usage (alongside a black-box kdu_stream_send sender):
+// Typical usage (alongside an external RFC 9828 sender):
 //
 //     build/bin/open_htj2k_rtp_recv --port 6000 --colorspace bt709 --range full
 //

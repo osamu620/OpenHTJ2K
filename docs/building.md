@@ -77,7 +77,7 @@ on platform.
 
 Requires [Emscripten](https://emscripten.org/) (tested with 3.x / 5.x).
 
-Four variants are produced under `web/build/html/`:
+Six variants are produced under `web/build/html/`:
 
 - `libopen_htj2k.js`           — scalar, single-threaded
 - `libopen_htj2k_simd.js`      — WASM-SIMD 128-bit, single-threaded
@@ -85,6 +85,13 @@ Four variants are produced under `web/build/html/`:
 - `libopen_htj2k_mt.js`        — scalar + pthreads (multi-threaded)
 - `libopen_htj2k_mt_simd.js`   — WASM-SIMD + pthreads (fastest where
   available)
+- `libopen_htj2k_jpip.js`      — JPIP client + decoder wrapper
+  (WASM-SIMD), used by the browser JPIP demos
+- `libopen_htj2k_jpip_mt_simd.js` — JPIP client + decoder wrapper
+  (WASM-SIMD + pthreads)
+
+Add `-DOPENHTJ2K_WASM_PROFILE=ON` at configure time to preserve Wasm
+function names for profiling (see [wasm_bench.md](wasm_bench.md)).
 
 ```bash
 cd web

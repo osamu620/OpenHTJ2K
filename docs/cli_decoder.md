@@ -1,8 +1,8 @@
 # `open_htj2k_dec` — decoder CLI reference
 
 Both Part 1 (JPEG 2000) and Part 15 (HTJ2K) compliant decoding are
-supported. Accepts `.j2c` / `.j2k` / `.jph` inputs and writes
-PGM / PPM / PGX / RAW outputs.
+supported. Accepts `.j2c` / `.j2k` / `.jhc` / `.jph` inputs and
+writes PGM / PPM / PGX / RAW outputs.
 
 Full runtime help: `open_htj2k_dec -h`.
 
@@ -30,12 +30,10 @@ output extension decides the writer:
     clamped to the number of consecutive bidirectional DWT levels,
     avoiding nonsensical HONLY / VONLY outputs.
 - `-num_threads n`
-  - Number of threads. `0` (default) uses all available hardware threads.
+  - Number of threads. `0` (default) uses the available hardware
+    threads, capped at 8.
 - `-iter n`
   - Repeat decoding `n` times (benchmarking). Output is written only once.
-- `-batch`
-  - Use the batch (full-image) decode path. The default path is
-    line-based (streaming).
 - `-ycbcr bt601|bt709` *(experimental)*
   - Convert YCbCr to RGB during PPM output using full-range
     ITU-R BT.601 or BT.709 coefficients. Handles 4:2:0 and 4:2:2

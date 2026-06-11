@@ -51,8 +51,8 @@ rpicam-vid --rtp-host <bridge-ip> --rtp-port 6000 …
 node scripts/udp_replay.mjs <fixture.rtp> --port 6000 --fps 30 --loop
 ```
 
-Other RFC 9828 senders such as Kakadu's `kdu_stream_send` work the
-same way — the bridge is payload-agnostic.
+Any other RFC 9828 sender works the same way — the bridge is
+payload-agnostic.
 
 ## CLI
 
