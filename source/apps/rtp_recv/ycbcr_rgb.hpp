@@ -54,7 +54,7 @@ struct ycbcr_coefficients {
 };
 
 // ITU-R BT.601 full-range (JPEG / JFIF convention)
-constexpr ycbcr_coefficients YCBCR_BT601_FULL = {
+inline constexpr ycbcr_coefficients YCBCR_BT601_FULL = {
     /*narrow_range*/ false,
     /*cr_to_r*/ 1.402f,
     /*cb_to_g*/ 0.344136f,
@@ -63,7 +63,7 @@ constexpr ycbcr_coefficients YCBCR_BT601_FULL = {
 };
 
 // ITU-R BT.709 full-range
-constexpr ycbcr_coefficients YCBCR_BT709_FULL = {
+inline constexpr ycbcr_coefficients YCBCR_BT709_FULL = {
     /*narrow_range*/ false,
     /*cr_to_r*/ 1.5748f,
     /*cb_to_g*/ 0.1873f,
@@ -72,7 +72,7 @@ constexpr ycbcr_coefficients YCBCR_BT709_FULL = {
 };
 
 // ITU-R BT.601 narrow-range (SMPTE 170M, studio-range 16..235 luma, 16..240 chroma)
-constexpr ycbcr_coefficients YCBCR_BT601_NARROW = {
+inline constexpr ycbcr_coefficients YCBCR_BT601_NARROW = {
     /*narrow_range*/ true,
     /*cr_to_r*/ 1.596f,
     /*cb_to_g*/ 0.391f,
@@ -81,7 +81,7 @@ constexpr ycbcr_coefficients YCBCR_BT601_NARROW = {
 };
 
 // ITU-R BT.709 narrow-range
-constexpr ycbcr_coefficients YCBCR_BT709_NARROW = {
+inline constexpr ycbcr_coefficients YCBCR_BT709_NARROW = {
     /*narrow_range*/ true,
     /*cr_to_r*/ 1.793f,
     /*cb_to_g*/ 0.213f,
@@ -95,7 +95,7 @@ constexpr ycbcr_coefficients YCBCR_BT709_NARROW = {
 //   cb_to_b = 2*(1 - Kb)                         = 1.8814
 //   cr_to_g = (2 * Kr * (1 - Kr)) / Kg           = 0.571353...
 //   cb_to_g = (2 * Kb * (1 - Kb)) / Kg           = 0.164553...
-constexpr ycbcr_coefficients YCBCR_BT2020_FULL = {
+inline constexpr ycbcr_coefficients YCBCR_BT2020_FULL = {
     /*narrow_range*/ false,
     /*cr_to_r*/ 1.4746f,
     /*cb_to_g*/ 0.16455313f,
@@ -110,7 +110,7 @@ constexpr ycbcr_coefficients YCBCR_BT2020_FULL = {
 // whether that convention is itself arithmetically correct under the
 // shader's `(s - uBias) * uScale` prelude is tracked as a separate
 // investigation rather than being fixed in this slice.
-constexpr ycbcr_coefficients YCBCR_BT2020_NARROW = {
+inline constexpr ycbcr_coefficients YCBCR_BT2020_NARROW = {
     /*narrow_range*/ true,
     /*cr_to_r*/ 1.67861f,    // 1.4746   * 255/224
     /*cb_to_g*/ 0.18732f,    // 0.164553 * 255/224

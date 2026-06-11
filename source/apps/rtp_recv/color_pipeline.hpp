@@ -60,7 +60,7 @@ constexpr float kTonemapDefaultSrcNits = 1000.0f;
 // passed straight to glUniformMatrix3fv(.., GL_FALSE, ..).
 //
 // Identity — used when the source primaries already match the display.
-constexpr float kIdentityMatrix3[9] = {
+inline constexpr float kIdentityMatrix3[9] = {
     1.0f, 0.0f, 0.0f,
     0.0f, 1.0f, 0.0f,
     0.0f, 0.0f, 1.0f,
@@ -74,7 +74,7 @@ constexpr float kIdentityMatrix3[9] = {
 //   [-0.018151  -0.100579   1.118730]
 //
 // Stored column-major below.  The values match the BT.2087-0 rounding.
-constexpr float kBt2020ToBt709[9] = {
+inline constexpr float kBt2020ToBt709[9] = {
      1.660491f, -0.124550f, -0.018151f,   // column 0
     -0.587641f,  1.132900f, -0.100579f,   // column 1
     -0.072850f, -0.008350f,  1.118730f,   // column 2
