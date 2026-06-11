@@ -1009,6 +1009,25 @@ static void emit_ready_f(fdwt_2d_state *s) {
       }
       continue;
     }
+#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+    // Planar fast path, 4-lane WASM SIMD — same structure and gating as the
+    // AVX2 block above (deinterleave via this platform's vld2q emulation).
+    if (s->put_planes != nullptr && s->planar_lp != nullptr && (s->transformation == 0 || s->use_i32)) {
+      if (s->use_i32) {
+        fdwt_1d_filtr_rev53_planar_i32_wasm(reinterpret_cast<int32_t *>(s->planar_lp),
+                                            reinterpret_cast<int32_t *>(s->planar_hp),
+                                            reinterpret_cast<const int32_t *>(ring_row), s->u0, s->u1);
+      } else {
+        fdwt_1d_filtr_irrev97_planar_wasm(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+      }
+      s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
+      ++s->next_emit;
+      while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
+        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        ++s->ring_origin;
+      }
+      continue;
+    }
 #endif
 
     if (s->u1 == s->u0 + 1) {
@@ -1097,10 +1116,11 @@ void fdwt_2d_state_init(fdwt_2d_state *s,
   s->put_planes = nullptr;
   s->planar_lp  = nullptr;
   s->planar_hp  = nullptr;
-#if defined(OPENHTJ2K_ENABLE_AVX2) || defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_ENABLE_AVX2) || defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    || defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   // Minimum N = u1/2 - u0/2: 16 on AVX2 (the 8-lane 9/7 warmup loads
-  // j = 0..15), 12 on NEON (4-lane warmup loads j = 0..7; same guard as the
-  // decoder's planar dispatch).
+  // j = 0..15), 12 on NEON/WASM (4-lane warmup loads j = 0..7; same guard as
+  // the decoder's planar dispatch).
   #if defined(OPENHTJ2K_ENABLE_AVX2)
   constexpr int32_t planar_min_n = 16;
   #else

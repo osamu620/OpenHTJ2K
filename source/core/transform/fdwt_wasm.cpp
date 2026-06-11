@@ -537,4 +537,149 @@ void fdwt_rev_ver_lp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t
   for (; i < n; ++i) tgt[i] += (prev[i] + next[i] + 2) >> 2;
 }
 
+/********************************************************************************
+ * Planar horizontal FDWT — encoder mirror of the planar IDWT kernels
+ * (idwt_wasm.cpp).  The natural-domain ring row is read with this file's
+ * vld2q helpers (E[j] = in[2j], O[j] = in[2j+1]) and the LP/HP planes are
+ * written with plain wasm_v128_store — the interleaved in-place filter, its
+ * PSE extension copy, and the sink-side deinterleave all disappear.
+ *
+ * Rounding: SIMD128 has no FMA, and the in-place WASM 9/7 kernel computes
+ * wasm_f32x4_add(x, wasm_f32x4_mul(sum, coeff)) — separately-rounded
+ * mul+add.  The planar kernel must match it per element, so the scalar
+ * warmup/drain uses plain  x + coeff*(a + b)  float expressions, NOT
+ * std::fmaf.  The 5/3 i32 kernel is integer adds/shifts — exact regardless.
+ *******************************************************************************/
+
+// Fused single-pass 9/7 analysis, planar output.  Stage recurrences (even u0,
+// NL = ceil(u1/2)-u0/2, NH = u1/2-u0/2):
+//   T1[j] = O[j]  + fA*(E[j]    + E[j+1])   j in [-2, NL]
+//   T2[j] = E[j]  + fB*(T1[j-1] + T1[j])    j in [-1, NL]
+//   T3[j] = T1[j] + fC*(T2[j]   + T2[j+1])  j in [-1, NL-1]
+//   T4[j] = T2[j] + fD*(T3[j-1] + T3[j])    j in [ 0, NL-1]
+//   hp[j] = T3[j] (j < NH),  lp[j] = T4[j] (j < NL)
+void fdwt_1d_filtr_irrev97_planar_wasm(sprec_t *lp, sprec_t *hp, const sprec_t *in, const int32_t u0,
+                                       const int32_t u1) {
+  const int32_t NH = u1 / 2 - u0 / 2;
+  const int32_t NL = ceil_int(u1, 2) - u0 / 2;
+  auto E           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j, u0, u1)]; };
+  auto O           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j + 1, u0, u1)]; };
+
+  const v128_t vA = wasm_f32x4_splat(fA), vB = wasm_f32x4_splat(fB);
+  const v128_t vC = wasm_f32x4_splat(fC), vD = wasm_f32x4_splat(fD);
+
+  // Warmup: boundary scalars, blocks 0/1 loads, T1/T2 of block 0.
+  const float t1m2 = O(-2) + fA * (E(-2) + E(-1));  // T1[-2]
+  const float t1m1 = O(-1) + fA * (E(-1) + E(0));   // T1[-1]
+  f32x4x2 b0       = vld2q(in);                     // E/O block 0
+  f32x4x2 b1       = vld2q(in + 8);                 // E/O block 1
+  v128_t T1_0      = wasm_f32x4_add(
+      b0.val[1],
+      wasm_f32x4_mul(wasm_f32x4_add(b0.val[0], wasm_i32x4_shuffle(b0.val[0], b1.val[0], 1, 2, 3, 4)), vA));
+  v128_t T2_0 = wasm_f32x4_add(
+      b0.val[0],
+      wasm_f32x4_mul(wasm_f32x4_add(wasm_i32x4_shuffle(wasm_f32x4_splat(t1m1), T1_0, 3, 4, 5, 6), T1_0),
+                     vB));
+  const float t2m1 = E(-1) + fB * (t1m2 + t1m1);                             // T2[-1]
+  const float t3m1 = t1m1 + fC * (t2m1 + wasm_f32x4_extract_lane(T2_0, 0));  // T3[-1]
+
+  // Steady state: iteration n vld2q-loads input block n and emits finished
+  // plane block n-2 with two plain stores.
+  v128_t E_nm1 = b1.val[0], O_nm1 = b1.val[1], T1_nm2 = T1_0, T2_nm2 = T2_0;
+  v128_t T3_nm3 = wasm_f32x4_splat(t3m1);  // only its top lane is consumed (shr1)
+  int32_t n     = 2;
+  for (; 4 * n + 3 <= NH - 1; ++n) {
+    f32x4x2 bn    = vld2q(in + 8 * n);
+    v128_t T1_nm1 = wasm_f32x4_add(
+        O_nm1, wasm_f32x4_mul(wasm_f32x4_add(E_nm1, wasm_i32x4_shuffle(E_nm1, bn.val[0], 1, 2, 3, 4)), vA));
+    v128_t T2_nm1 = wasm_f32x4_add(
+        E_nm1, wasm_f32x4_mul(wasm_f32x4_add(wasm_i32x4_shuffle(T1_nm2, T1_nm1, 3, 4, 5, 6), T1_nm1), vB));
+    v128_t T3_nm2 = wasm_f32x4_add(
+        T1_nm2, wasm_f32x4_mul(wasm_f32x4_add(T2_nm2, wasm_i32x4_shuffle(T2_nm2, T2_nm1, 1, 2, 3, 4)), vC));
+    v128_t T4_nm2 = wasm_f32x4_add(
+        T2_nm2, wasm_f32x4_mul(wasm_f32x4_add(wasm_i32x4_shuffle(T3_nm3, T3_nm2, 3, 4, 5, 6), T3_nm2), vD));
+    wasm_v128_store(hp + 4 * (n - 2), T3_nm2);
+    wasm_v128_store(lp + 4 * (n - 2), T4_nm2);
+    E_nm1  = bn.val[0];
+    O_nm1  = bn.val[1];
+    T1_nm2 = T1_nm1;
+    T2_nm2 = T2_nm1;
+    T3_nm3 = T3_nm2;
+  }
+
+  // Drain: scalar finish from the carried registers + mirrored accessors.
+  // P = 4*(n-2) is the first plane index not yet stored; the loop-exit bound
+  // gives NL - P <= 12, so with base = P - 4 every stage index fits in 24.
+  {
+    const int32_t P    = 4 * (n - 2);
+    const int32_t base = P - 4;
+    float t1[24], t2[24], t3[24];
+    wasm_v128_store(t1 + (P - base), T1_nm2);  // T1[P..P+3]
+    wasm_v128_store(t2 + (P - base), T2_nm2);  // T2[P..P+3]
+    wasm_v128_store(t3, T3_nm3);               // T3[P-4..P-1] (top lane = T3[P-1])
+    for (int32_t j = P + 4; j <= NL; ++j) t1[j - base] = O(j) + fA * (E(j) + E(j + 1));
+    for (int32_t j = P + 4; j <= NL; ++j) t2[j - base] = E(j) + fB * (t1[j - base - 1] + t1[j - base]);
+    for (int32_t j = P; j <= NL - 1; ++j)
+      t3[j - base] = t1[j - base] + fC * (t2[j - base] + t2[j - base + 1]);
+    for (int32_t j = P; j <= NL - 1; ++j) lp[j] = t2[j - base] + fD * (t3[j - base - 1] + t3[j - base]);
+    for (int32_t j = P; j <= NH - 1; ++j) hp[j] = t3[j - base];
+  }
+}
+
+// Fused single-pass reversible 5/3 analysis, planar int32 output (lossless
+// pipe).  All shifts arithmetic — exact match to the interleaved
+// fdwt_1d_filtr_rev53_i32_wasm lifting:
+//   T1[j] = O[j] - ((E[j]    + E[j+1]) >> 1)      j in [-1, NL-1]
+//   T2[j] = E[j] + ((T1[j-1] + T1[j] + 2) >> 2)   j in [ 0, NL-1]
+//   hp[j] = T1[j] (j < NH),  lp[j] = T2[j] (j < NL)
+void fdwt_1d_filtr_rev53_planar_i32_wasm(int32_t *lp, int32_t *hp, const int32_t *in, const int32_t u0,
+                                         const int32_t u1) {
+  const int32_t NH = u1 / 2 - u0 / 2;
+  const int32_t NL = ceil_int(u1, 2) - u0 / 2;
+  auto E           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j, u0, u1)]; };
+  auto O           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j + 1, u0, u1)]; };
+
+  const v128_t vtwo = wasm_i32x4_splat(2);
+
+  // Warmup: boundary scalar T1[-1], block 0 load.
+  const int32_t t1m1 = O(-1) - ((E(-1) + E(0)) >> 1);
+  i32x4x2 b0         = vld2q_i32(in);  // E/O block 0
+  v128_t E_nm1 = b0.val[0], O_nm1 = b0.val[1];
+  v128_t T1_nm2 = wasm_i32x4_splat(t1m1);  // only its top lane is consumed (shr1)
+
+  // Steady state: iteration n vld2q-loads input block n and emits finished
+  // plane block n-1 with two plain stores.
+  int32_t n = 1;
+  for (; 4 * n + 3 <= NH - 1; ++n) {
+    i32x4x2 bn    = vld2q_i32(in + 8 * n);
+    v128_t T1_nm1 = wasm_i32x4_sub(
+        O_nm1, wasm_i32x4_shr(wasm_i32x4_add(E_nm1, wasm_i32x4_shuffle(E_nm1, bn.val[0], 1, 2, 3, 4)), 1));
+    v128_t T2_nm1 = wasm_i32x4_add(
+        E_nm1,
+        wasm_i32x4_shr(
+            wasm_i32x4_add(wasm_i32x4_add(wasm_i32x4_shuffle(T1_nm2, T1_nm1, 3, 4, 5, 6), T1_nm1), vtwo),
+            2));
+    wasm_v128_store(hp + 4 * (n - 1), T1_nm1);
+    wasm_v128_store(lp + 4 * (n - 1), T2_nm1);
+    E_nm1  = bn.val[0];
+    O_nm1  = bn.val[1];
+    T1_nm2 = T1_nm1;
+  }
+
+  // Drain: scalar finish from the carried boundary lane + mirrored accessors.
+  // P = 4*(n-1) is the first plane index not yet stored; the loop-exit bound
+  // gives NH - P <= 7, so NL - P <= 8 and t1buf stays within bounds.
+  {
+    const int32_t P       = 4 * (n - 1);
+    const int32_t t1_prev = wasm_i32x4_extract_lane(T1_nm2, 3);  // T1[P-1] (== t1m1 when P == 0)
+    int32_t t1buf[8];
+    for (int32_t j = P; j <= NL - 1; ++j) t1buf[j - P] = O(j) - ((E(j) + E(j + 1)) >> 1);
+    for (int32_t j = P; j <= NH - 1; ++j) hp[j] = t1buf[j - P];
+    for (int32_t j = P; j <= NL - 1; ++j) {
+      const int32_t t1l = (j == P) ? t1_prev : t1buf[j - P - 1];
+      lp[j]             = E(j) + ((t1l + t1buf[j - P] + 2) >> 2);
+    }
+  }
+}
+
 #endif  // OPENHTJ2K_ENABLE_WASM_SIMD
