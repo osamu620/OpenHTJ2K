@@ -438,4 +438,103 @@ void fdwt_rev_ver_lp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t
   }
   for (; i < n; ++i) tgt[i] += (prev[i] + next[i] + 2) >> 2;
 }
+
+/********************************************************************************
+ * Planar horizontal FDWT — encoder mirror of the planar IDWT kernels.
+ *******************************************************************************/
+// Cross-element shifts with carry-in (same pattern as idwt_avx2.cpp; file-local).
+static inline __m256 fdwt_shl1_ps(__m256 a, __m256 b) {
+  __m256 t = _mm256_permute2f128_ps(a, b, 0x21);  // [a4..a7, b0..b3]
+  return _mm256_castsi256_ps(_mm256_alignr_epi8(_mm256_castps_si256(t), _mm256_castps_si256(a), 4));
+}
+static inline __m256 fdwt_shr1_ps(__m256 p, __m256 a) {
+  __m256 t = _mm256_permute2f128_ps(p, a, 0x21);  // [p4..p7, a0..a3]
+  return _mm256_castsi256_ps(_mm256_alignr_epi8(_mm256_castps_si256(a), _mm256_castps_si256(t), 12));
+}
+// Deinterleaving load of one block: e = even lanes in[2j..], o = odd lanes.
+// Same shuffle pattern as the float deinterleave in fdwt_level_sink_fn.
+static inline void fdwt_load_deint_ps(const float *p, __m256 &e, __m256 &o) {
+  const __m256i perm = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+  __m256 a           = _mm256_loadu_ps(p);
+  __m256 b           = _mm256_loadu_ps(p + 8);
+  e                  = _mm256_permutevar8x32_ps(_mm256_shuffle_ps(a, b, 0x88), perm);
+  o                  = _mm256_permutevar8x32_ps(_mm256_shuffle_ps(a, b, 0xDD), perm);
+}
+
+// Fused single-pass 9/7 analysis, planar output.  Stage recurrences (even u0,
+// E[j] = in[2j], O[j] = in[2j+1], NL = ceil(u1/2)-u0/2, NH = u1/2-u0/2):
+//   T1[j] = O[j]  + fA*(E[j]    + E[j+1])   j in [-2, NL]
+//   T2[j] = E[j]  + fB*(T1[j-1] + T1[j])    j in [-1, NL]
+//   T3[j] = T1[j] + fC*(T2[j]   + T2[j+1])  j in [-1, NL-1]
+//   T4[j] = T2[j] + fD*(T3[j-1] + T3[j])    j in [ 0, NL-1]
+//   hp[j] = T3[j] (j < NH),  lp[j] = T4[j] (j < NL)
+// Each stage is the same single-rounded op as the in-place kernels: sum of
+// the two raw neighbors (left + right), then one fmadd — so the planar output
+// is bit-identical to filtering an extended copy with fdwt_1d_filtr_irrev97_*.
+// Boundary taps mirror within the row via PSEo, scalar warmup/drain only.
+// The input row is read-only (a live vertical-lifting ring row) and has no
+// PSE margins: the SIMD loop loads block n only while all raw lanes are in
+// range (8n+7 <= NH-1); the drain covers the rest with mirrored accessors.
+void fdwt_1d_filtr_irrev97_planar_avx2(sprec_t *lp, sprec_t *hp, const sprec_t *in, const int32_t u0,
+                                       const int32_t u1) {
+  const int32_t NH = u1 / 2 - u0 / 2;
+  const int32_t NL = ceil_int(u1, 2) - u0 / 2;
+  auto E           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j, u0, u1) - u0]; };
+  auto O           = [&](int32_t j) -> float { return in[PSEo(u0 + 2 * j + 1, u0, u1) - u0]; };
+
+  const __m256 vA = _mm256_set1_ps(fA), vB = _mm256_set1_ps(fB);
+  const __m256 vC = _mm256_set1_ps(fC), vD = _mm256_set1_ps(fD);
+
+  // Warmup: boundary scalars, blocks 0/1 loads, T1/T2 of block 0.
+  const float t1m2 = std::fmaf(fA, E(-2) + E(-1), O(-2));  // T1[-2]
+  const float t1m1 = std::fmaf(fA, E(-1) + E(0), O(-1));   // T1[-1]
+  __m256 E0, O0, E1, O1;
+  fdwt_load_deint_ps(in, E0, O0);
+  fdwt_load_deint_ps(in + 16, E1, O1);
+  __m256 T1_0      = _mm256_fmadd_ps(_mm256_add_ps(E0, fdwt_shl1_ps(E0, E1)), vA, O0);
+  __m256 T2_0      = _mm256_fmadd_ps(_mm256_add_ps(fdwt_shr1_ps(_mm256_set1_ps(t1m1), T1_0), T1_0), vB, E0);
+  const float t2m1 = std::fmaf(fB, t1m2 + t1m1, E(-1));                   // T2[-1]
+  const float t3m1 = std::fmaf(fC, t2m1 + _mm256_cvtss_f32(T2_0), t1m1);  // T3[-1]
+
+  // Steady state: iteration n deinterleave-loads input block n and emits
+  // finished plane block n-2 with two plain stores.
+  __m256 E_nm1 = E1, O_nm1 = O1, T1_nm2 = T1_0, T2_nm2 = T2_0;
+  __m256 T3_nm3 = _mm256_set1_ps(t3m1);  // only its top lane is consumed (shr1)
+  int32_t n     = 2;
+  for (; 8 * n + 7 <= NH - 1; ++n) {
+    __m256 E_n, O_n;
+    fdwt_load_deint_ps(in + 16 * n, E_n, O_n);
+    __m256 T1_nm1 = _mm256_fmadd_ps(_mm256_add_ps(E_nm1, fdwt_shl1_ps(E_nm1, E_n)), vA, O_nm1);
+    __m256 T2_nm1 = _mm256_fmadd_ps(_mm256_add_ps(fdwt_shr1_ps(T1_nm2, T1_nm1), T1_nm1), vB, E_nm1);
+    __m256 T3_nm2 = _mm256_fmadd_ps(_mm256_add_ps(T2_nm2, fdwt_shl1_ps(T2_nm2, T2_nm1)), vC, T1_nm2);
+    __m256 T4_nm2 = _mm256_fmadd_ps(_mm256_add_ps(fdwt_shr1_ps(T3_nm3, T3_nm2), T3_nm2), vD, T2_nm2);
+    _mm256_storeu_ps(hp + 8 * (n - 2), T3_nm2);
+    _mm256_storeu_ps(lp + 8 * (n - 2), T4_nm2);
+    E_nm1  = E_n;
+    O_nm1  = O_n;
+    T1_nm2 = T1_nm1;
+    T2_nm2 = T2_nm1;
+    T3_nm3 = T3_nm2;
+  }
+
+  // Drain: scalar finish from the carried registers + mirrored accessors.
+  // P = 8*(n-2) is the first plane index not yet stored; the loop-exit bound
+  // gives NL - P <= 24, so window indices stay within the arrays.
+  {
+    const int32_t P    = 8 * (n - 2);
+    const int32_t base = P - 8;
+    float t1[48], t2[48], t3[48];
+    _mm256_storeu_ps(t1 + (P - base), T1_nm2);  // T1[P..P+7]
+    _mm256_storeu_ps(t2 + (P - base), T2_nm2);  // T2[P..P+7]
+    _mm256_storeu_ps(t3, T3_nm3);               // T3[P-8..P-1] (top lane = T3[P-1])
+    for (int32_t j = P + 8; j <= NL; ++j) t1[j - base] = std::fmaf(fA, E(j) + E(j + 1), O(j));
+    for (int32_t j = P + 8; j <= NL; ++j)
+      t2[j - base] = std::fmaf(fB, t1[j - base - 1] + t1[j - base], E(j));
+    for (int32_t j = P; j <= NL - 1; ++j)
+      t3[j - base] = std::fmaf(fC, t2[j - base] + t2[j - base + 1], t1[j - base]);
+    for (int32_t j = P; j <= NL - 1; ++j)
+      lp[j] = std::fmaf(fD, t3[j - base - 1] + t3[j - base], t2[j - base]);
+    for (int32_t j = P; j <= NH - 1; ++j) hp[j] = t3[j - base];
+  }
+}
 #endif

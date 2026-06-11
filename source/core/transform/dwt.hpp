@@ -394,6 +394,13 @@ void idwt_1d_filtr_irrev97_planar_avx2(sprec_t *out, const sprec_t *lp, const sp
                                        int32_t u1);
 void idwt_1d_filtr_rev53_planar_i32_avx2(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
                                          int32_t u1);
+// Encoder mirror: fused 9/7 horizontal FDWT reading the natural-domain row
+// (read-only, no PSE margins — boundary taps mirror within the row) and
+// writing LP/HP planes with plain stores.  Dispatched from emit_ready_f,
+// which guarantees: u0 even, u1/2 - u0/2 >= 16 (the 8-lane warmup loads
+// j = 0..15 unconditionally), lp/hp with >= 8 writable floats of slack past
+// their plane widths.
+void fdwt_1d_filtr_irrev97_planar_avx2(sprec_t *lp, sprec_t *hp, const sprec_t *in, int32_t u0, int32_t u1);
 #endif
 
 // WASM-SIMD DWT kernels (EMSCRIPTEN builds only, no NEON dependency).
@@ -702,6 +709,13 @@ static inline int32_t idwt_pse_source(int32_t p, int32_t v0, int32_t v1) {
 typedef void (*fdwt_row_sink_fn)(void *ctx, bool is_hp, int32_t abs_phys_row,
                                  const sprec_t *interleaved_row);
 
+// Planar variant: receives the horizontally-filtered row as separate LP/HP
+// planes (lp_row[j] = LP sample j, hp_row[j] = HP sample j), skipping the
+// interleave→deinterleave round trip.  Optional — only called when the state
+// owner sets fdwt_2d_state::put_planes and the planar kernel guards hold.
+typedef void (*fdwt_row_sink_planes_fn)(void *ctx, bool is_hp, int32_t abs_phys_row, const sprec_t *lp_row,
+                                        const sprec_t *hp_row);
+
 constexpr int32_t FDWT_STATE_RING_DEPTH = 12;
 
 struct fdwt_2d_state {
@@ -741,6 +755,15 @@ struct fdwt_2d_state {
   // ── sink ──────────────────────────────────────────────────────────────────
   fdwt_row_sink_fn put_row;
   void            *sink_ctx;
+
+  // ── planar horizontal fast path (9/7 float only) ──────────────────────────
+  // put_planes: optional planes sink set by the state owner (nullptr = off).
+  // planar_lp/planar_hp: per-state plane scratch (allocated by init when the
+  // geometry is planar-eligible; views into one allocation).  emit_ready_f
+  // takes the planar path only when put_planes and planar_lp are non-null.
+  fdwt_row_sink_planes_fn put_planes;
+  sprec_t *planar_lp;
+  sprec_t *planar_hp;
 };
 
 // Initialise (allocates ring_buf, PSE buffers, horiz_tmp).

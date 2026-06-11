@@ -728,6 +728,73 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
 // switched at the state level for reversible 5/3); we reinterpret_cast and
 // deinterleave as int32, write int32 into lp_tmp/hp_tmp, and call the int32
 // sink/memcpy/push paths.
+// Planar sink: same routing as the float path of fdwt_level_sink_fn below,
+// but receives the horizontal output as LP/HP planes straight from the planar
+// FDWT kernel — the interleave→deinterleave round trip is skipped entirely.
+static void fdwt_level_sink_planes_fn(void *ctx, bool is_hp, int32_t abs_row, const sprec_t *lp_row,
+                                      const sprec_t *hp_row) {
+  auto *c = static_cast<fdwt_level_sink_ctx *>(ctx);
+
+  // Strip-ring stamp (same contract as in fdwt_level_sink_fn; the equality
+  // guard makes a duplicate stamp from the other leg a no-op).
+  if (c->cb_h > 0 && c->sink_quantize) {
+    const int32_t band_y0 = is_hp ? c->lh_y0 : c->hl_y0;
+    const int32_t sub_row = (abs_row >> 1) - band_y0;
+    const int32_t br_curr = sub_row / c->cb_h;
+    if (br_curr != c->last_stamped_br) {
+      stamp_strip_pointers(c, br_curr);
+      c->last_stamped_br = br_curr;
+    }
+  }
+
+  if (!is_hp) {
+    // LP vertical row: HP-horiz → HL, LP-horiz → child/LL0
+    const int32_t hl_sub = (abs_row >> 1) - c->hl_y0;
+    if (c->sink_quantize)
+      sink_quantize_row(hp_row, hl_sub, 0, c);
+    else
+      memcpy(c->hl_samples + static_cast<ptrdiff_t>(hl_sub) * static_cast<ptrdiff_t>(c->hl_stride), hp_row,
+             static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
+    if (c->has_child) {
+      fdwt_2d_state_push_row(c->child_state, lp_row);
+    } else {
+      const int32_t ll_sub = (abs_row >> 1) - c->ll0_y0;
+      memcpy(c->ll0_samples + static_cast<ptrdiff_t>(ll_sub) * static_cast<ptrdiff_t>(c->ll0_stride),
+             lp_row, static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
+    }
+    if (c->cb_h > 0) {
+      const int32_t br   = hl_sub / c->cb_h;
+      const int32_t last = std::min((br + 1) * c->cb_h, c->hl_h) - 1;
+      if (hl_sub == last) {
+        const uint8_t old =
+            c->cblk_row_done[static_cast<size_t>(br)].fetch_or(1, std::memory_order_acq_rel);
+        if ((old | 1) == 3) enc_overlap_dispatch(c, br);
+      }
+    }
+  } else {
+    // HP vertical row: LP-horiz → LH, HP-horiz → HH
+    const int32_t hp_sub = (abs_row >> 1) - c->lh_y0;
+    if (c->sink_quantize) {
+      sink_quantize_row(lp_row, hp_sub, 1, c);
+      sink_quantize_row(hp_row, hp_sub, 2, c);
+    } else {
+      memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride), lp_row,
+             static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
+      memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride), hp_row,
+             static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
+    }
+    if (c->cb_h > 0) {
+      const int32_t br   = hp_sub / c->cb_h;
+      const int32_t last = std::min((br + 1) * c->cb_h, c->lh_h) - 1;
+      if (hp_sub == last) {
+        const uint8_t old =
+            c->cblk_row_done[static_cast<size_t>(br)].fetch_or(2, std::memory_order_acq_rel);
+        if ((old | 2) == 3) enc_overlap_dispatch(c, br);
+      }
+    }
+  }
+}
+
 static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row, const sprec_t *interleaved_row) {
   auto *c = static_cast<fdwt_level_sink_ctx *>(ctx);
 
@@ -901,54 +968,9 @@ static void fdwt_level_sink_fn(void *ctx, bool is_hp, int32_t abs_row, const spr
   for (int32_t i = 0; i < c->hp_width; ++i) c->hp_tmp[i] = interleaved_row[2 * i + (1 - u_off)];
 #endif
 
-  if (!is_hp) {
-    // LP vertical row: HP-horiz → HL, LP-horiz → child/LL0
-    const int32_t hl_sub = (abs_row >> 1) - c->hl_y0;
-    if (c->sink_quantize)
-      sink_quantize_row(c->hp_tmp, hl_sub, 0, c);
-    else
-      memcpy(c->hl_samples + static_cast<ptrdiff_t>(hl_sub) * static_cast<ptrdiff_t>(c->hl_stride),
-             c->hp_tmp, static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
-    if (c->has_child) {
-      fdwt_2d_state_push_row(c->child_state, c->lp_tmp);
-    } else {
-      const int32_t ll_sub = (abs_row >> 1) - c->ll0_y0;
-      memcpy(c->ll0_samples + static_cast<ptrdiff_t>(ll_sub) * static_cast<ptrdiff_t>(c->ll0_stride),
-             c->lp_tmp, static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
-    }
-    // Overlap: dispatch HT block encoding if this HL row completes codeblock row br.
-    if (c->cb_h > 0) {
-      const int32_t br   = hl_sub / c->cb_h;
-      const int32_t last = std::min((br + 1) * c->cb_h, c->hl_h) - 1;
-      if (hl_sub == last) {
-        const uint8_t old =
-            c->cblk_row_done[static_cast<size_t>(br)].fetch_or(1, std::memory_order_acq_rel);
-        if ((old | 1) == 3) enc_overlap_dispatch(c, br);
-      }
-    }
-  } else {
-    // HP vertical row: LP-horiz → LH, HP-horiz → HH
-    const int32_t hp_sub = (abs_row >> 1) - c->lh_y0;
-    if (c->sink_quantize) {
-      sink_quantize_row(c->lp_tmp, hp_sub, 1, c);
-      sink_quantize_row(c->hp_tmp, hp_sub, 2, c);
-    } else {
-      memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride),
-             c->lp_tmp, static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
-      memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride),
-             c->hp_tmp, static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
-    }
-    // Overlap: dispatch HT block encoding if this LH+HH row completes codeblock row br.
-    if (c->cb_h > 0) {
-      const int32_t br   = hp_sub / c->cb_h;
-      const int32_t last = std::min((br + 1) * c->cb_h, c->lh_h) - 1;
-      if (hp_sub == last) {
-        const uint8_t old =
-            c->cblk_row_done[static_cast<size_t>(br)].fetch_or(2, std::memory_order_acq_rel);
-        if ((old | 2) == 3) enc_overlap_dispatch(c, br);
-      }
-    }
-  }
+  // Route through the planes sink (identical logic; lp_tmp/hp_tmp now hold
+  // the deinterleaved planes).  The duplicate strip stamp is a guarded no-op.
+  fdwt_level_sink_planes_fn(ctx, is_hp, abs_row, c->lp_tmp, c->hp_tmp);
 }
 
 // Per-component line-encode state.
@@ -3354,6 +3376,9 @@ void j2k_tile_component::init_line_encode() {
     // reversible 5/3 components, which is the only place where i_samples-as-
     // float consumers (t1_encode on subbands) are bypassed via sink_quantize.
     fdwt_2d_state_init(&states[i], u0, u1, v0, v1, xform, /*use_i32=*/false, fdwt_level_sink_fn, cx);
+    // Opt in to the planar horizontal fast path (taken only where the state
+    // allocated plane scratch: 9/7 float, even u0, full-warmup width).
+    states[i].put_planes = fdwt_level_sink_planes_fn;
   }
 }
 
