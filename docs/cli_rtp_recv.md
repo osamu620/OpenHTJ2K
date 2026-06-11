@@ -114,7 +114,8 @@ for the end-to-end recipe.
   disables. Active only with `--no-vsync`. Uses RTP timestamp deltas
   when available.
 - `--threads <N>` — Decoder thread count. Default `4`, optimal on
-  4K with component-parallel IDWT dispatch (v0.13.0+).
+  4K with component-parallel IDWT dispatch (v0.13.0+). `0` uses the
+  hardware concurrency.
 
 ### Color fallback (when the Main Packet declares S=0)
 
@@ -240,6 +241,15 @@ To persist across reboots:
 
 ```bash
 echo 'net.core.rmem_max = 33554432' | sudo tee /etc/sysctl.d/99-openhtj2k-rtp.conf
+```
+
+On macOS the grant is capped by `kern.ipc.maxsockbuf` (8 MB by
+default, so the receiver typically reports `granted 8192 KB` — above
+the 4 MB warning threshold and fine for loopback testing). For
+sustained high-bitrate network capture, raise it:
+
+```bash
+sudo sysctl -w kern.ipc.maxsockbuf=33554432
 ```
 
 ## Hardware requirements (4K @ 60 fps sustained)
