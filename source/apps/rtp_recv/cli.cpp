@@ -94,6 +94,11 @@ void print_usage(const char* argv0) {
       "                           Target primaries for gamut stage (default bt709)\n"
       "  --display-encoding {srgb|gamma22|linear}\n"
       "                           Framebuffer encoding (default srgb)\n"
+      "  --tonemap {auto|clip|bt2390}\n"
+      "                           PQ highlight handling (default auto = BT.2390\n"
+      "                           EETF for PQ sources, hard clip otherwise)\n"
+      "  --source-peak-nits <N>   Assumed PQ mastering peak for the EETF\n"
+      "                           (default 1000, clamped to [250, 10000])\n"
       "  --pace-fps <N>           Frame-pacing target (default 30; 0 = disabled)\n"
       "                           Only active when vsync is off\n"
       "  --smoke-test             Run internal unit smoke tests and exit\n",
@@ -168,6 +173,24 @@ bool parse_cli(int argc, char* argv[], CliOptions& opt) {
       std::fprintf(stderr, "ERROR: --display-encoding must be srgb|gamma22|linear\n");
       return false;
     }
+  }
+  if (const char* v = get_arg(argc, argv, "--tonemap")) {
+    if (std::strcmp(v, "auto") == 0)        opt.tonemap = CliOptions::TonemapMode::Auto;
+    else if (std::strcmp(v, "clip") == 0)   opt.tonemap = CliOptions::TonemapMode::Clip;
+    else if (std::strcmp(v, "bt2390") == 0) opt.tonemap = CliOptions::TonemapMode::Bt2390;
+    else {
+      std::fprintf(stderr, "ERROR: --tonemap must be auto|clip|bt2390\n");
+      return false;
+    }
+  }
+  if (const char* v = get_arg(argc, argv, "--source-peak-nits")) {
+    char*        end = nullptr;
+    const double d   = std::strtod(v, &end);
+    if (end == v || d < 250.0 || d > 10000.0) {
+      std::fprintf(stderr, "ERROR: --source-peak-nits must be in [250, 10000]\n");
+      return false;
+    }
+    opt.source_peak_nits = static_cast<float>(d);
   }
   if (const char* v = get_arg(argc, argv, "--pace-fps")) {
     char*        end = nullptr;

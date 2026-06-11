@@ -152,6 +152,10 @@ class GlRenderer {
   int          u_yc_transfer_    = -1;
   int          u_yc_gamut_       = -1;
   int          u_yc_display_enc_ = -1;
+  int          u_yc_tonemap_     = -1;
+  int          u_yc_tm_src_pq_   = -1;
+  int          u_yc_tm_ks_       = -1;
+  int          u_yc_tm_max_lum_  = -1;
 
   // Planar RGB passthrough program — no matrix/bias/scale, just HDR pipeline.
   unsigned int prog_planar_rgb_       = 0;
@@ -162,6 +166,10 @@ class GlRenderer {
   int          u_pr_transfer_         = -1;
   int          u_pr_gamut_            = -1;
   int          u_pr_display_enc_      = -1;
+  int          u_pr_tonemap_          = -1;
+  int          u_pr_tm_src_pq_        = -1;
+  int          u_pr_tm_ks_            = -1;
+  int          u_pr_tm_max_lum_       = -1;
   unsigned int tex_y_            = 0;
   unsigned int tex_cb_           = 0;
   unsigned int tex_cr_           = 0;

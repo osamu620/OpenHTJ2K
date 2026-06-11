@@ -71,9 +71,10 @@ void log_coefficients_choice_once(const CliOptions& opts, const ycbcr_coefficien
                                                         : "?"));
   }
   std::fprintf(stderr,
-               "info: colour pipeline transfer=%s gamut=%s display_encoding=%s\n",
+               "info: colour pipeline transfer=%s gamut=%s tonemap=%s display_encoding=%s\n",
                transfer_label(pipeline.transfer),
                gamut_matrix_label(pipeline.gamut_matrix),
+               tonemap_label(pipeline.tonemap),
                display_encoding_label(pipeline.display_encoding));
 }
 
@@ -137,6 +138,17 @@ ColorPipelineParams select_color_pipeline_for_frame(const AssembledFrame& frame,
     case CliOptions::DisplayEncoding::Linear:  p.display_encoding = DISPLAY_ENCODING_LINEAR;  break;
     case CliOptions::DisplayEncoding::Srgb:
     default:                                   p.display_encoding = DISPLAY_ENCODING_SRGB;    break;
+  }
+
+  // Tone mapping.  The BT.2390 EETF only has absolute-luminance semantics
+  // for PQ, so it engages exactly when the resolved transfer is PQ and the
+  // CLI does not force the pre-v2 hard clip.  Gamma and HLG sources are
+  // display-referred and keep the hard clip regardless of the CLI value.
+  if (p.transfer == TRANSFER_PQ && opts.tonemap != CliOptions::TonemapMode::Clip) {
+    p.tonemap = TONEMAP_BT2390;
+    compute_bt2390_params(opts.source_peak_nits, p);
+  } else {
+    p.tonemap = TONEMAP_CLIP;
   }
 
   return p;

@@ -77,6 +77,11 @@ vec3 pq_to_linear(vec3 e) {
   return pow(num / den, vec3(1.0 / kPqM1));
 }
 
+vec3 linear_to_pq(vec3 l) {
+  vec3 v = pow(max(l, vec3(0.0)), vec3(kPqM1));
+  return pow((vec3(kPqC1) + kPqC2 * v) / (vec3(1.0) + kPqC3 * v), vec3(kPqM2));
+}
+
 vec3 hlg_inverse(vec3 e) {
   const float a = 0.17883277;
   const float b = 0.28466892;
@@ -84,6 +89,28 @@ vec3 hlg_inverse(vec3 e) {
   vec3 lo = (e * e) / 3.0;
   vec3 hi = (exp((e - vec3(c)) / a) + vec3(b)) / 12.0;
   return mix(lo, hi, vec3(greaterThan(e, vec3(0.5))));
+}
+
+// ITU-R BT.2390-9 EETF, per channel.  Input: linear light, 1.0 == 10 000
+// nits.  Output: display-relative linear in [0, 1] where 1.0 == 203 nits
+// (BT.2408 reference white).  uTmSrcPq / uTmKs / uTmMaxLum are
+// precomputed on the CPU (compute_bt2390_params in color_pipeline.hpp,
+// which also documents the math).
+vec3 bt2390_eetf(vec3 lin) {
+  const float kDstLinear = 0.0203;  // 203 / 10000
+  vec3 e1 = min(linear_to_pq(lin) / uTmSrcPq, vec3(1.0));
+  vec3 t  = (e1 - vec3(uTmKs)) / (1.0 - uTmKs);
+  vec3 t2 = t * t;
+  vec3 t3 = t2 * t;
+  vec3 p  = (2.0 * t3 - 3.0 * t2 + 1.0) * uTmKs + (t3 - 2.0 * t2 + t) * (1.0 - uTmKs)
+           + (-2.0 * t3 + 3.0 * t2) * uTmMaxLum;
+  vec3 e2 = mix(p, e1, vec3(lessThan(e1, vec3(uTmKs))));
+  return clamp(pq_to_linear(e2 * uTmSrcPq) / kDstLinear, 0.0, 1.0);
+}
+
+vec3 apply_tonemap(vec3 lin) {
+  if (uTonemap == 1) return bt2390_eetf(lin);
+  return clamp(lin, 0.0, 1.0);
 }
 
 vec3 apply_inverse_transfer(vec3 e) {
@@ -122,6 +149,10 @@ uniform vec3      uNormScale;
 uniform int  uTransfer;
 uniform mat3 uGamutMatrix;
 uniform int  uDisplayEncoding;
+uniform int   uTonemap;
+uniform float uTmSrcPq;
+uniform float uTmKs;
+uniform float uTmMaxLum;
 )glsl";
 
 constexpr const char* kFragmentShaderYcbcrMain = R"glsl(
@@ -135,7 +166,7 @@ void main() {
   rgb_nl      = clamp(rgb_nl, 0.0, 1.0);
   vec3 lin_s  = apply_inverse_transfer(rgb_nl);
   vec3 lin_d  = uGamutMatrix * lin_s;
-  lin_d       = clamp(lin_d, 0.0, 1.0);
+  lin_d       = apply_tonemap(lin_d);
   vec3 out_nl = apply_display_encoding(lin_d);
   fragColor   = vec4(clamp(out_nl, 0.0, 1.0), 1.0);
 }
@@ -154,6 +185,10 @@ uniform vec3      uNormScale;
 uniform int  uTransfer;
 uniform mat3 uGamutMatrix;
 uniform int  uDisplayEncoding;
+uniform int   uTonemap;
+uniform float uTmSrcPq;
+uniform float uTmKs;
+uniform float uTmMaxLum;
 )glsl";
 
 constexpr const char* kFragmentShaderPlanarRgbMain = R"glsl(
@@ -166,7 +201,7 @@ void main() {
   rgb_nl      = clamp(rgb_nl, 0.0, 1.0);
   vec3 lin_s  = apply_inverse_transfer(rgb_nl);
   vec3 lin_d  = uGamutMatrix * lin_s;
-  lin_d       = clamp(lin_d, 0.0, 1.0);
+  lin_d       = apply_tonemap(lin_d);
   vec3 out_nl = apply_display_encoding(lin_d);
   fragColor   = vec4(clamp(out_nl, 0.0, 1.0), 1.0);
 }
@@ -317,6 +352,10 @@ bool GlRenderer::compile_shader_programs() {
   u_yc_transfer_   = gl::GetUniformLocation(prog_ycbcr_, "uTransfer");
   u_yc_gamut_      = gl::GetUniformLocation(prog_ycbcr_, "uGamutMatrix");
   u_yc_display_enc_ = gl::GetUniformLocation(prog_ycbcr_, "uDisplayEncoding");
+  u_yc_tonemap_    = gl::GetUniformLocation(prog_ycbcr_, "uTonemap");
+  u_yc_tm_src_pq_  = gl::GetUniformLocation(prog_ycbcr_, "uTmSrcPq");
+  u_yc_tm_ks_      = gl::GetUniformLocation(prog_ycbcr_, "uTmKs");
+  u_yc_tm_max_lum_ = gl::GetUniformLocation(prog_ycbcr_, "uTmMaxLum");
 
   // Planar RGB passthrough program: preamble + helpers + main.
   const char* fs_pr_srcs[] = {kFragmentShaderPlanarRgbSrc, kFragmentPlanarHelpers,
@@ -349,6 +388,10 @@ bool GlRenderer::compile_shader_programs() {
   u_pr_transfer_         = gl::GetUniformLocation(prog_planar_rgb_, "uTransfer");
   u_pr_gamut_            = gl::GetUniformLocation(prog_planar_rgb_, "uGamutMatrix");
   u_pr_display_enc_      = gl::GetUniformLocation(prog_planar_rgb_, "uDisplayEncoding");
+  u_pr_tonemap_          = gl::GetUniformLocation(prog_planar_rgb_, "uTonemap");
+  u_pr_tm_src_pq_        = gl::GetUniformLocation(prog_planar_rgb_, "uTmSrcPq");
+  u_pr_tm_ks_            = gl::GetUniformLocation(prog_planar_rgb_, "uTmKs");
+  u_pr_tm_max_lum_       = gl::GetUniformLocation(prog_planar_rgb_, "uTmMaxLum");
 
   check_gl_error("compile_shader_programs");
   return true;
@@ -642,6 +685,10 @@ void GlRenderer::draw_ycbcr_program(int w_y, int h_y, const ycbcr_coefficients* 
   gl::Uniform1i(u_yc_transfer_, pipeline.transfer);
   gl::UniformMatrix3fv(u_yc_gamut_, 1, GL_FALSE, pipeline.gamut_matrix);
   gl::Uniform1i(u_yc_display_enc_, pipeline.display_encoding);
+  gl::Uniform1i(u_yc_tonemap_, pipeline.tonemap);
+  gl::Uniform1f(u_yc_tm_src_pq_, pipeline.tm_src_pq);
+  gl::Uniform1f(u_yc_tm_ks_, pipeline.tm_ks);
+  gl::Uniform1f(u_yc_tm_max_lum_, pipeline.tm_max_lum);
 
   if (coeffs != nullptr) {
     const float mat[9] = {
@@ -698,6 +745,10 @@ void GlRenderer::draw_planar_rgb_program(int w_y, int h_y, const float* norm_sca
   gl::Uniform1i(u_pr_transfer_, pipeline.transfer);
   gl::UniformMatrix3fv(u_pr_gamut_, 1, GL_FALSE, pipeline.gamut_matrix);
   gl::Uniform1i(u_pr_display_enc_, pipeline.display_encoding);
+  gl::Uniform1i(u_pr_tonemap_, pipeline.tonemap);
+  gl::Uniform1f(u_pr_tm_src_pq_, pipeline.tm_src_pq);
+  gl::Uniform1f(u_pr_tm_ks_, pipeline.tm_ks);
+  gl::Uniform1f(u_pr_tm_max_lum_, pipeline.tm_max_lum);
 
   int fb_w = 0;
   int fb_h = 0;

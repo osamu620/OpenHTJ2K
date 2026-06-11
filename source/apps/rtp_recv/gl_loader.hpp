@@ -106,6 +106,7 @@ extern PFNGLDELETEPROGRAMPROC           DeleteProgram;
 
 extern PFNGLGETUNIFORMLOCATIONPROC      GetUniformLocation;
 extern PFNGLUNIFORM1IPROC               Uniform1i;
+extern PFNGLUNIFORM1FPROC               Uniform1f;
 extern PFNGLUNIFORM3FVPROC              Uniform3fv;
 extern PFNGLUNIFORMMATRIX3FVPROC        UniformMatrix3fv;
 

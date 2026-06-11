@@ -53,10 +53,19 @@ struct CliOptions {
   enum class TransferMode : uint8_t { Auto, Gamma, Pq, Hlg };
   enum class DisplayPrimaries : uint8_t { Bt709, Bt2020 };
   enum class DisplayEncoding : uint8_t { Srgb, Gamma22, Linear };
+  // Tone mapping is only meaningful for PQ sources (the only transfer
+  // with absolute-luminance semantics).  `Auto` and `Bt2390` both select
+  // the BT.2390 EETF when the resolved transfer is PQ and fall back to
+  // hard clipping otherwise; `Clip` forces the pre-v2 hard clip even for
+  // PQ.  `source_peak_nits` is the assumed mastering peak for the EETF
+  // (RFC 9828 carries no MDCV/MaxCLL metadata); clamped to [250, 10000].
+  enum class TonemapMode : uint8_t { Auto, Clip, Bt2390 };
   TransferMode     transfer          = TransferMode::Auto;
   int              transfer_fallback = TRANSFER_GAMMA22;  // used when Auto + S=0 or unknown TRANS
   DisplayPrimaries display_primaries = DisplayPrimaries::Bt709;
   DisplayEncoding  display_encoding  = DisplayEncoding::Srgb;
+  TonemapMode      tonemap           = TonemapMode::Auto;
+  float            source_peak_nits  = kTonemapDefaultSrcNits;
   // Frame-pacing target in fps, active only when vsync is off.  A 30 fps
   // source on a 60 Hz display without pacing shows 3:2 pulldown judder
   // because decoded frames are presented as soon as they're ready, which

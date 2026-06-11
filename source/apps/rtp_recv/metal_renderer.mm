@@ -47,6 +47,10 @@ struct FragmentUniforms {
   float3x3 gamut_matrix;
   int      transfer;
   int      display_encoding;
+  int      tonemap;
+  float    tm_src_pq;
+  float    tm_ks;
+  float    tm_max_lum;
 };
 
 vertex VertexOut vertex_main(VertexIn in [[stage_in]]) {
@@ -87,6 +91,34 @@ static float3 apply_inverse_transfer(float3 e, int transfer) {
   return pow(max(e, float3(0.0)), float3(2.2));
 }
 
+static float3 linear_to_pq(float3 l) {
+  float3 v = pow(max(l, float3(0.0)), float3(kPqM1));
+  return pow((float3(kPqC1) + kPqC2 * v) / (float3(1.0) + kPqC3 * v), float3(kPqM2));
+}
+
+// ITU-R BT.2390-9 EETF, per channel.  Direct port of bt2390_eetf from
+// gl_renderer.cpp; the parameter math is documented in
+// color_pipeline.hpp (compute_bt2390_params).
+static float3 bt2390_eetf(float3 lin, float src_pq, float ks, float max_lum) {
+  const float kDstLinear = 0.0203;  // 203 / 10000
+  float3 e1 = min(linear_to_pq(lin) / src_pq, float3(1.0));
+  float3 t  = (e1 - float3(ks)) / (1.0 - ks);
+  float3 t2 = t * t;
+  float3 t3 = t2 * t;
+  float3 p  = (2.0 * t3 - 3.0 * t2 + 1.0) * ks + (t3 - 2.0 * t2 + t) * (1.0 - ks)
+            + (-2.0 * t3 + 3.0 * t2) * max_lum;
+  float3 sel = float3(e1.x < ks ? 1.0 : 0.0,
+                      e1.y < ks ? 1.0 : 0.0,
+                      e1.z < ks ? 1.0 : 0.0);
+  float3 e2 = mix(p, e1, sel);
+  return saturate(pq_to_linear(e2 * src_pq) / kDstLinear);
+}
+
+static float3 apply_tonemap(float3 lin, int tonemap, float src_pq, float ks, float max_lum) {
+  if (tonemap == 1) return bt2390_eetf(lin, src_pq, ks, max_lum);
+  return saturate(lin);
+}
+
 static float3 linear_to_srgb(float3 l) {
   float3 lo  = l * 12.92;
   float3 hi  = 1.055 * pow(l, float3(1.0 / 2.4)) - 0.055;
@@ -122,7 +154,7 @@ fragment float4 fragment_ycbcr(VertexOut in [[stage_in]],
   rgb_nl        = saturate(rgb_nl);
   float3 lin_s  = apply_inverse_transfer(rgb_nl, u.transfer);
   float3 lin_d  = u.gamut_matrix * lin_s;
-  lin_d         = saturate(lin_d);
+  lin_d         = apply_tonemap(lin_d, u.tonemap, u.tm_src_pq, u.tm_ks, u.tm_max_lum);
   float3 out_nl = apply_display_encoding(lin_d, u.display_encoding);
   return float4(saturate(out_nl), 1.0);
 }
@@ -140,7 +172,7 @@ fragment float4 fragment_planar_rgb(VertexOut in [[stage_in]],
   rgb_nl        = saturate(rgb_nl);
   float3 lin_s  = apply_inverse_transfer(rgb_nl, u.transfer);
   float3 lin_d  = u.gamut_matrix * lin_s;
-  lin_d         = saturate(lin_d);
+  lin_d         = apply_tonemap(lin_d, u.tonemap, u.tm_src_pq, u.tm_ks, u.tm_max_lum);
   float3 out_nl = apply_display_encoding(lin_d, u.display_encoding);
   return float4(saturate(out_nl), 1.0);
 }
@@ -155,6 +187,10 @@ struct FragmentUniforms {
   simd_float3x3 gamut_matrix;
   int32_t       transfer;
   int32_t       display_encoding;
+  int32_t       tonemap;
+  float         tm_src_pq;
+  float         tm_ks;
+  float         tm_max_lum;
 };
 
 // Copy 9 packed floats (column-major) into a padded simd_float3x3.
@@ -486,6 +522,10 @@ void MetalRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t
   u.transfer = pipeline.transfer;
   u.display_encoding = pipeline.display_encoding;
   u.gamut_matrix = mat3_from_packed(pipeline.gamut_matrix);
+  u.tonemap = pipeline.tonemap;
+  u.tm_src_pq = pipeline.tm_src_pq;
+  u.tm_ks = pipeline.tm_ks;
+  u.tm_max_lum = pipeline.tm_max_lum;
 
   if (!components_are_rgb && coeffs) {
     // Column-major 3x3 YCbCr→RGB matrix (same layout as the GLSL version).
@@ -547,6 +587,10 @@ void MetalRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uin
   u.transfer = pipeline.transfer;
   u.display_encoding = pipeline.display_encoding;
   u.gamut_matrix = mat3_from_packed(pipeline.gamut_matrix);
+  u.tonemap = pipeline.tonemap;
+  u.tm_src_pq = pipeline.tm_src_pq;
+  u.tm_ks = pipeline.tm_ks;
+  u.tm_max_lum = pipeline.tm_max_lum;
 
   if (!components_are_rgb && coeffs) {
     float mat[9] = {
@@ -626,6 +670,10 @@ void MetalRenderer::draw_acquired_planes(int ring_index, int w_y, int h_y, int /
   u.transfer = pipeline.transfer;
   u.display_encoding = pipeline.display_encoding;
   u.gamut_matrix = mat3_from_packed(pipeline.gamut_matrix);
+  u.tonemap = pipeline.tonemap;
+  u.tm_src_pq = pipeline.tm_src_pq;
+  u.tm_ks = pipeline.tm_ks;
+  u.tm_max_lum = pipeline.tm_max_lum;
 
   if (!components_are_rgb && coeffs) {
     float mat[9] = {
