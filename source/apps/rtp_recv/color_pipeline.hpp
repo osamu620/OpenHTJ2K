@@ -18,8 +18,8 @@
 //   2. Gamut matrix to linear light in display primaries
 //      (uGamutMatrix: identity for matched primaries, BT.2020 -> BT.709
 //      otherwise).
-//   3. Hard clipping to [0, 1] (tone mapping v1 — BT.2390 EETF is a
-//      follow-up).
+//   3. Tone mapping (uTonemap: hard clipping to [0, 1], or the ITU-R
+//      BT.2390-9 EETF Hermite soft-knee for PQ sources).
 //   4. Display encoding to non-linear framebuffer values
 //      (uDisplayEncoding: sRGB / gamma2.2 / linear).
 //
@@ -42,6 +42,19 @@ constexpr int TRANSFER_HLG     = 2;
 constexpr int DISPLAY_ENCODING_SRGB    = 0;
 constexpr int DISPLAY_ENCODING_GAMMA22 = 1;
 constexpr int DISPLAY_ENCODING_LINEAR  = 2;
+
+// Tone-mapping selector (uTonemap in the fragment shader).
+constexpr int TONEMAP_CLIP   = 0;
+constexpr int TONEMAP_BT2390 = 1;
+
+// SDR target peak for the BT.2390 EETF, anchored to the BT.2408 HDR
+// reference white so PQ diffuse white lands on SDR display white.
+constexpr float kTonemapDstNits      = 203.0f;
+// The same target in PQ linear-light units (1.0 == 10 000 nits).
+constexpr float kTonemapDstLinear    = kTonemapDstNits / 10000.0f;
+// Default assumed mastering peak when the stream carries no metadata
+// (RFC 9828 Main Packets have no MDCV/MaxCLL equivalent).
+constexpr float kTonemapDefaultSrcNits = 1000.0f;
 
 // 3x3 matrices in GL column-major layout so the same float[9] can be
 // passed straight to glUniformMatrix3fv(.., GL_FALSE, ..).
@@ -70,10 +83,19 @@ constexpr float kBt2020ToBt709[9] = {
 // Per-frame colour-pipeline state pushed from the decode thread to the
 // renderer.  `gamut_matrix` aliases immortal constexpr data (one of the
 // two arrays above); never owns.
+//
+// The three tm_* floats are the precomputed BT.2390 EETF parameters and
+// are only meaningful when tonemap == TONEMAP_BT2390 (see
+// compute_bt2390_params below); they default to the 1 000-nit source
+// values so a zero-initialized struct stays well-formed.
 struct ColorPipelineParams {
   int          transfer         = TRANSFER_GAMMA22;
   int          display_encoding = DISPLAY_ENCODING_SRGB;
   const float* gamut_matrix     = kIdentityMatrix3;
+  int          tonemap          = TONEMAP_CLIP;
+  float        tm_src_pq        = 0.751827f;  // PQ encoding of the assumed source peak
+  float        tm_max_lum       = 0.772370f;  // dst peak in source-normalized PQ space
+  float        tm_ks            = 0.658555f;  // Hermite knee start: 1.5*max_lum - 0.5
 };
 
 // ----- Host-side reference mirrors of the GLSL stages -----
@@ -104,6 +126,60 @@ inline float pq_to_linear(float e) {
   const float den = c2 - c3 * v;
   if (den <= 0.0f) return 1.0f;
   return std::pow(num / den, 1.0f / m1);
+}
+
+// SMPTE ST 2084 PQ inverse EOTF (linear -> PQ-encoded).  Input: linear
+// light in [0, 1] where 1.0 corresponds to the 10 000 nit reference
+// peak.  Exact inverse of pq_to_linear (same BT.2100 Table 4 constants).
+inline float linear_to_pq(float l) {
+  constexpr float m1 = 0.1593017578125f;
+  constexpr float m2 = 78.84375f;
+  constexpr float c1 = 0.8359375f;
+  constexpr float c2 = 18.8515625f;
+  constexpr float c3 = 18.6875f;
+  const float v = std::pow(std::max(l, 0.0f), m1);
+  return std::pow((c1 + c2 * v) / (1.0f + c3 * v), m2);
+}
+
+// Fill the BT.2390 EETF parameters on `p` for a source mastered at
+// `source_peak_nits` (clamped to [250, 10000]) and the fixed
+// kTonemapDstNits SDR target.  The EETF runs in PQ space normalized to
+// the source range (source black assumed 0, so the normalization is a
+// plain divide by the source peak's PQ encoding):
+//   max_lum — the display peak inside that normalized range
+//   ks      — knee start, 1.5 * max_lum - 0.5 (BT.2390-9 §5.4.1)
+// The 250-nit floor keeps ks comfortably below 1 so the Hermite span
+// (1 - ks) never degenerates.
+inline void compute_bt2390_params(float source_peak_nits, ColorPipelineParams& p) {
+  const float peak = std::max(250.0f, std::min(10000.0f, source_peak_nits));
+  const float dst_pq = linear_to_pq(kTonemapDstLinear);
+  p.tm_src_pq  = linear_to_pq(peak / 10000.0f);
+  p.tm_max_lum = dst_pq / p.tm_src_pq;
+  p.tm_ks      = 1.5f * p.tm_max_lum - 0.5f;
+}
+
+// ITU-R BT.2390-9 §5.4.1 EETF, per channel.  Input: linear light in
+// display primaries, 1.0 == 10 000 nits.  Output: display-relative
+// linear light in [0, 1] where 1.0 == kTonemapDstNits.
+//
+// Chain: PQ-encode -> normalize to the source range -> Hermite
+// soft-knee above ks (identity below) -> de-normalize -> PQ-decode ->
+// rescale so the display peak is 1.0.  Below the knee this reduces to
+// a pure brightness rescale (linear * 10000 / kTonemapDstNits), which
+// is what makes PQ diffuse white land on SDR display white instead of
+// the near-black the hard-clip path produced.
+inline float bt2390_eetf(const ColorPipelineParams& p, float lin) {
+  const float e1 = std::min(linear_to_pq(lin) / p.tm_src_pq, 1.0f);
+  float e2 = e1;
+  if (e1 >= p.tm_ks) {
+    const float t  = (e1 - p.tm_ks) / (1.0f - p.tm_ks);
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    e2 = (2.0f * t3 - 3.0f * t2 + 1.0f) * p.tm_ks + (t3 - 2.0f * t2 + t) * (1.0f - p.tm_ks)
+         + (-2.0f * t3 + 3.0f * t2) * p.tm_max_lum;
+  }
+  const float lin_mapped = pq_to_linear(e2 * p.tm_src_pq);
+  return std::max(0.0f, std::min(1.0f, lin_mapped / kTonemapDstLinear));
 }
 
 // ITU-R BT.2100 HLG inverse OETF.  Input: HLG-encoded e in [0, 1].
@@ -172,18 +248,33 @@ inline void apply_color_pipeline(const ColorPipelineParams& p, float r_in,
   const float lb = apply_transfer(p.transfer, b_in);
   float mr, mg, mb;
   apply_gamut_matrix(p.gamut_matrix, lr, lg, lb, mr, mg, mb);
-  // Stage 3 is hard-clipping.  sRGB encoding already clamps internally;
-  // the other encodings need the explicit clamp so out-of-range PQ
-  // highlights do not blow up in pow().
-  mr = std::max(0.0f, std::min(1.0f, mr));
-  mg = std::max(0.0f, std::min(1.0f, mg));
-  mb = std::max(0.0f, std::min(1.0f, mb));
+  // Stage 3: tone mapping.  BT.2390 EETF for PQ sources when selected
+  // (clamps internally); hard clipping otherwise.  sRGB encoding already
+  // clamps too, but the other encodings need the explicit clamp so
+  // out-of-range PQ highlights do not blow up in pow().
+  if (p.tonemap == TONEMAP_BT2390) {
+    mr = bt2390_eetf(p, mr);
+    mg = bt2390_eetf(p, mg);
+    mb = bt2390_eetf(p, mb);
+  } else {
+    mr = std::max(0.0f, std::min(1.0f, mr));
+    mg = std::max(0.0f, std::min(1.0f, mg));
+    mb = std::max(0.0f, std::min(1.0f, mb));
+  }
   r_out = apply_display_encoding(p.display_encoding, mr);
   g_out = apply_display_encoding(p.display_encoding, mg);
   b_out = apply_display_encoding(p.display_encoding, mb);
 }
 
 // Human-readable labels used by log_coefficients_choice_once.
+inline const char* tonemap_label(int t) {
+  switch (t) {
+    case TONEMAP_BT2390: return "bt2390";
+    case TONEMAP_CLIP:
+    default:             return "clip";
+  }
+}
+
 inline const char* transfer_label(int t) {
   switch (t) {
     case TRANSFER_PQ:  return "pq";

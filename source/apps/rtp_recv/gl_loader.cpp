@@ -28,6 +28,7 @@ PFNGLDELETEPROGRAMPROC           DeleteProgram           = nullptr;
 
 PFNGLGETUNIFORMLOCATIONPROC      GetUniformLocation      = nullptr;
 PFNGLUNIFORM1IPROC               Uniform1i               = nullptr;
+PFNGLUNIFORM1FPROC               Uniform1f               = nullptr;
 PFNGLUNIFORM3FVPROC              Uniform3fv              = nullptr;
 PFNGLUNIFORMMATRIX3FVPROC        UniformMatrix3fv        = nullptr;
 
@@ -80,6 +81,7 @@ bool load_functions() {
 
   LOAD(GetUniformLocation,      "glGetUniformLocation");
   LOAD(Uniform1i,               "glUniform1i");
+  LOAD(Uniform1f,               "glUniform1f");
   LOAD(Uniform3fv,              "glUniform3fv");
   LOAD(UniformMatrix3fv,        "glUniformMatrix3fv");
 

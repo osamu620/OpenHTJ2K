@@ -85,11 +85,25 @@ the two paths are visually indistinguishable. Byte values diverge
 slightly (max ~9/255 in the deep-grey region); pass
 `--display-encoding gamma22` for a bit-identical round-trip.
 
-**Tone mapping** is currently a hard `clamp(rgb, 0, 1)` in linear
-light, which is correct for any source below the display peak
-(including all HLG content treated as display-referred) but clips
-highlights on above-peak PQ content. The ITU-R BT.2390 EETF soft-knee
-curve is a planned follow-up.
+- `--tonemap {auto|clip|bt2390}` — Highlight handling for PQ sources.
+  Default `auto` applies the ITU-R BT.2390-9 EETF soft-knee whenever the
+  resolved transfer is PQ, and hard-clips otherwise; `bt2390` behaves
+  identically (the EETF has no meaning for display-referred gamma / HLG
+  signals, which always hard-clip); `clip` forces the previous behaviour
+  even for PQ. The EETF maps the assumed source range onto a 203-nit SDR
+  target (BT.2408 reference white), so PQ diffuse white lands near SDR
+  display white instead of the near-black the hard clip produced, with
+  highlights rolling off through a Hermite knee instead of clipping.
+- `--source-peak-nits <N>` — Assumed mastering peak for the EETF
+  (default `1000`, clamped to `[250, 10000]`). RFC 9828 Main Packets
+  carry no MDCV/MaxCLL-style metadata, so the source peak cannot be
+  auto-detected; lower values brighten mid-tones at the cost of earlier
+  highlight roll-off.
+
+**Tone mapping** for gamma and HLG content remains a hard
+`clamp(rgb, 0, 1)` in linear light, which is correct for
+display-referred signals. A proper HLG OOTF with tunable system gamma
+is a planned follow-up.
 
 ### Pacing and throughput
 

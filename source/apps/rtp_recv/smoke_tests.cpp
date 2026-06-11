@@ -264,7 +264,71 @@ int smoke_test_color_pipeline() {
   if (!approx(pg, 0.0947f, 2e-3f)) return 1;
   if (!approx(pb, 0.0947f, 2e-3f)) return 1;
 
+  // --- linear_to_pq is the exact inverse of pq_to_linear. ---
+  for (int i = 1; i <= 10; ++i) {
+    const float e = static_cast<float>(i) / 10.0f;
+    if (!approx(linear_to_pq(pq_to_linear(e)), e, 1e-3f)) return 1;
+  }
+  // PQ(1000 nits) = 0.751827 and PQ(203 nits) = 0.580689 are tabulated
+  // reference points (BT.2408 uses the latter as HDR reference white).
+  if (!approx(linear_to_pq(0.1f), 0.751827f, 1e-3f)) return 1;
+  if (!approx(linear_to_pq(kTonemapDstLinear), 0.580689f, 1e-3f)) return 1;
+
+  // --- BT.2390 EETF parameter derivation for the 1 000-nit default. ---
+  // max_lum = PQ(203 nits) / PQ(1000 nits) = 0.772370;
+  // ks = 1.5 * max_lum - 0.5 = 0.658555.
+  ColorPipelineParams tm;
+  tm.tonemap = TONEMAP_BT2390;
+  compute_bt2390_params(1000.0f, tm);
+  if (!approx(tm.tm_src_pq, 0.751827f, 1e-3f)) return 1;
+  if (!approx(tm.tm_max_lum, 0.772370f, 2e-3f)) return 1;
+  if (!approx(tm.tm_ks, 0.658555f, 3e-3f)) return 1;
+
+  // --- EETF endpoints and below-knee linearity. ---
+  // Zero stays zero; the source peak (0.1 linear == 1000 nits) maps to
+  // display peak; anything above the assumed source peak clamps there too.
+  if (!approx(bt2390_eetf(tm, 0.0f), 0.0f, 1e-5f)) return 1;
+  if (!approx(bt2390_eetf(tm, 0.1f), 1.0f, 2e-3f)) return 1;
+  if (!approx(bt2390_eetf(tm, 0.5f), 1.0f, 2e-3f)) return 1;
+  // Below the knee (~88 nits for the default parameters) the EETF is a
+  // pure rescale by 10000/203, so 50 nits -> 0.005 / 0.0203 = 0.246305.
+  if (!approx(bt2390_eetf(tm, 0.005f), 0.005f / kTonemapDstLinear, 1e-3f)) return 1;
+
+  // --- EETF is monotonic and bounded over the full input sweep. ---
+  {
+    float prev = -1.0f;
+    for (int i = 0; i <= 256; ++i) {
+      const float out = bt2390_eetf(tm, static_cast<float>(i) / 256.0f);
+      if (out < 0.0f || out > 1.0f) return 1;
+      if (out < prev - 1e-5f) return 1;
+      prev = out;
+    }
+  }
+
+  // --- Full PQ pipeline with the EETF: BT.2408 reference white. ---
+  // A PQ-encoded 203-nit grey lands in the Hermite knee (the knee starts
+  // at ~88 nits with a 1 000-nit source) and comes out at ~0.784 linear
+  // -> ~0.898 sRGB.  The hard-clip path renders the same input at ~0.153
+  // sRGB, so this also locks in the headline fix: PQ diffuse white now
+  // lands near SDR display white instead of near-black.
+  ColorPipelineParams pq_tm_pipeline;
+  pq_tm_pipeline.transfer         = TRANSFER_PQ;
+  pq_tm_pipeline.display_encoding = DISPLAY_ENCODING_SRGB;
+  pq_tm_pipeline.gamut_matrix     = kIdentityMatrix3;
+  pq_tm_pipeline.tonemap          = TONEMAP_BT2390;
+  compute_bt2390_params(1000.0f, pq_tm_pipeline);
+  {
+    const float ref_white_pq = linear_to_pq(kTonemapDstLinear);
+    float tr, tg, tb;
+    apply_color_pipeline(pq_tm_pipeline, ref_white_pq, ref_white_pq, ref_white_pq, tr, tg, tb);
+    if (!approx(tr, 0.898f, 5e-3f)) return 1;
+    if (!approx(tg, tr, 1e-5f)) return 1;
+    if (!approx(tb, tr, 1e-5f)) return 1;
+  }
+
   // Pipeline label helpers.
+  if (std::strcmp(tonemap_label(TONEMAP_BT2390), "bt2390") != 0) return 1;
+  if (std::strcmp(tonemap_label(TONEMAP_CLIP), "clip") != 0) return 1;
   if (std::strcmp(transfer_label(TRANSFER_PQ), "pq") != 0) return 1;
   if (std::strcmp(transfer_label(TRANSFER_HLG), "hlg") != 0) return 1;
   if (std::strcmp(transfer_label(TRANSFER_GAMMA22), "gamma2.2") != 0) return 1;
