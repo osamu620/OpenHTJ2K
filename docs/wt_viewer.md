@@ -18,19 +18,11 @@ side, but no native binary required on the viewing host.
 The whole pipeline is experimental — wire format and CLI defaults may
 change.
 
-```
-┌────────────┐ RFC 9828 RTP/UDP ┌────────────┐ WebTransport ┌─────────┐
-│  producer  │ ───────────────▶ │ wt_bridge  │ ───────────▶ │ browser │
-│ (any 9828) │                  │   (Go)     │  (uni-stream)│ (WASM)  │
-└────────────┘                  └────────────┘              └─────────┘
-                                                                  ▲
-                                                          HTTPS (static)
-                                                                  │
-                                                         ┌────────┴───────┐
-                                                         │ web/perf/serve │
-                                                         │   (viewer +    │
-                                                         │    WASM)       │
-                                                         └────────────────┘
+```mermaid
+flowchart LR
+    serve["web/perf/serve<br>(static server)"] -- "① HTTPS: viewer page + WASM<br>(once, at load)" --> browser["browser"]
+    producer["producer<br>(any RFC 9828 sender)"] -- "RFC 9828 RTP/UDP" --> bridge["wt_bridge<br>(Go)"]
+    bridge -- "② WebTransport uni-stream: live RTP<br>(continuous)" --> browser
 ```
 
 ## Prerequisites
@@ -123,16 +115,11 @@ low-level RTP producers that lack IP routing), place the bridge on the
 same L2 subnet as the encoder and serve the viewer page from a separate
 host:
 
-```
-┌──────────┐  RTP/UDP  ┌────────────┐  WebTransport  ┌─────────┐
-│ producer │ ────────▶ │  Machine A │ ──────────────▶│ browser │
-│  (9828)  │  (no hop) │ wt_bridge  │   (routable)   │ (WASM)  │
-└──────────┘           └────────────┘                └────┬────┘
-                                                   HTTPS │
-                                                  ┌──────┴──────┐
-                                                  │  Machine B  │
-                                                  │ static serv │
-                                                  └─────────────┘
+```mermaid
+flowchart LR
+    machineB["Machine B<br>(static server)"] -- "① HTTPS: viewer page + WASM<br>(once, at load)" --> browser["browser"]
+    producer["producer<br>(RFC 9828)"] -- "RTP/UDP<br>(no hop, same L2)" --> machineA["Machine A<br>wt_bridge"]
+    machineA -- "② WebTransport: live RTP<br>(routable, continuous)" --> browser
 ```
 
 **Machine A** (same subnet as the encoder):
