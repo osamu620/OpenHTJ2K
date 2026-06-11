@@ -946,6 +946,23 @@ static void emit_ready_f(fdwt_2d_state *s) {
     // still reference r as a vertical-lifting neighbour).
     const sprec_t *ring_row = rptr_f(s, r);
 
+#if defined(OPENHTJ2K_ENABLE_AVX2)
+    // Planar 9/7 fast path: lift straight from the (read-only) ring row into
+    // LP/HP planes — no extension copy, no interleaved stores, and the sink
+    // consumes the planes without deinterleaving.  Eligibility was baked into
+    // the planar_lp allocation at init; put_planes is the owner's opt-in.
+    if (s->put_planes != nullptr && s->planar_lp != nullptr) {
+      fdwt_1d_filtr_irrev97_planar_avx2(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+      s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
+      ++s->next_emit;
+      while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
+        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        ++s->ring_origin;
+      }
+      continue;
+    }
+#endif
+
     if (s->u1 == s->u0 + 1) {
       // Single-column: skip PSE/filter (PSEo has UB for length-1 signals).
       // Match fdwt_hor_sr_fixed: LP even u0 → no-op; HP odd u0 → *2 for 5/3.
@@ -1022,6 +1039,21 @@ void fdwt_2d_state_init(fdwt_2d_state *s,
   s->next_emit = v0;
   s->put_row   = sink_fn;
   s->sink_ctx  = sink_ctx;
+
+  // Planar horizontal fast path: plane scratch, allocated only when the
+  // geometry is eligible (9/7 float, even u0, wide enough for the 8-lane
+  // warmup).  put_planes stays null until the state owner opts in.
+  s->put_planes = nullptr;
+  s->planar_lp  = nullptr;
+  s->planar_hp  = nullptr;
+#if defined(OPENHTJ2K_ENABLE_AVX2)
+  if (transformation == 0 && !s->use_i32 && (u0 & 1) == 0 && (u1 / 2 - u0 / 2) >= 16) {
+    const int32_t plane_cap = s->stride / 2 + SIMD_PADDING;  // NL <= stride/2 + 1, + SIMD slack
+    s->planar_lp            = static_cast<sprec_t *>(
+        aligned_mem_alloc(2U * sizeof(sprec_t) * static_cast<size_t>(plane_cap), 32));
+    s->planar_hp = s->planar_lp + plane_cap;
+  }
+#endif
 }
 
 void fdwt_2d_state_free(fdwt_2d_state *s) {
@@ -1029,6 +1061,11 @@ void fdwt_2d_state_free(fdwt_2d_state *s) {
   aligned_mem_free(s->top_pse_buf); s->top_pse_buf = nullptr;
   aligned_mem_free(s->bot_pse_buf); s->bot_pse_buf = nullptr;
   aligned_mem_free(s->horiz_tmp);   s->horiz_tmp   = nullptr;
+  if (s->planar_lp != nullptr) {
+    aligned_mem_free(s->planar_lp);
+    s->planar_lp = nullptr;
+    s->planar_hp = nullptr;
+  }
 }
 
 void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in) {
