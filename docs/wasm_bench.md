@@ -53,7 +53,7 @@ node web/wasm_bench.mjs -i <codestream> [options...]
 | `--threads N` | `1` | Number of decode threads. Ignored by `scalar` / `simd`. `0` = auto (uses `navigator.hardwareConcurrency`). |
 | `--iters N` | `20` | Number of measured iterations. |
 | `--warmup N` | `3` | Number of unmeasured iterations before measurement. |
-| `--mode stream\|planar_u8` | `stream` | Which decoder entry point to call. `stream` uses `invoke_decoder_stream` (PPM/PGM path); `planar_u8` uses `invoke_decoder_planar_u8` (WASM RTP demo path). |
+| `--mode stream\|planar_u8\|planar_ycbcr_u8` | `stream` | Which decoder entry point to call. `stream` uses `invoke_decoder_stream` (PPM/PGM path); `planar_u8` uses `invoke_decoder_planar_u8` (WASM RTP demo path); `planar_ycbcr_u8` uses `invoke_decoder_planar_ycbcr_u8` (raw YCbCr planes, no RGB conversion — the GPU-conversion path). |
 | `--reduce N` | `0` | Resolution reduction level (0 = full resolution). |
 | `--build-dir <path>` | `../build_wasm_prof/html` | Override WASM binary directory. |
 | `--dump-planes <prefix>` | off | `planar_u8` only: on the final iteration write each component plane as `<prefix>_{Y,Cb,Cr}.pgm`. Used for byte-exact diff checks. |

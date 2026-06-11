@@ -34,7 +34,9 @@ on modern x86-64**.
 - Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs.
 - CLI tools: `open_htj2k_enc`, `open_htj2k_dec`, `open_htj2k_rtp_recv`,
   `open_htj2k_jpip_server`, `open_htj2k_jpip_demo`,
-  `open_htj2k_jpip_benchmark`.
+  `open_htj2k_jpip_benchmark`, plus validation / benchmark utilities
+  (`imgcmp`, `row_range_compare`, `estimate_qfactor`,
+  `open_htj2k_rtp_decode_profile`).
 - WebAssembly build (scalar / SIMD / pthreads / SIMD+pthreads) +
   Node.js CLI decoder + in-browser RTP replay and JPIP foveation
   demos (WebGL2 GPU rendering) — try them at

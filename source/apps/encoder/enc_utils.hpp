@@ -74,7 +74,7 @@ void print_help(char *cmd) {
   printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n  Default is no.\n");
   printf("Cuse_eph=yes or no:\n  yes to use EPH (End of Packet Header) marker.\n  Default is no.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
-  printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 8 (Default is 1.)\n");
+  printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 7 (Default is 1.)\n");
   printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
   printf("  Note: If this option is present, Qstep is ignored and Cycc is set to `yes`.\n");
   printf(

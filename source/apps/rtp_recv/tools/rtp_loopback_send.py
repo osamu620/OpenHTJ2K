@@ -8,8 +8,8 @@
 #
 # Wraps a single JPEG 2000 codestream (.j2k) in one RFC 9828 Main Packet and
 # sends it as a single UDP datagram to the receiver.  Used to regression-test
-# the depacketizer + decoder wiring without needing an external sender like
-# kdu_stream_send.
+# the depacketizer + decoder wiring without needing an external RFC 9828
+# sender.
 #
 # Usage:
 #   python3 rtp_loopback_send.py [CODESTREAM] [DST_HOST] [DST_PORT]

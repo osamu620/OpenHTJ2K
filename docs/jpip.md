@@ -341,6 +341,8 @@ source/core/jpip/
 - 0 — precinct (JPP-stream)
 - 1 — extended precinct (JPP-stream, has Aux)
 - 2 — tile header
+- 4 — tile (JPT-stream only; not emitted by this server)
+- 5 — extended tile (JPT-stream only, has Aux; not emitted by this server)
 - 6 — main header
 - 8 — metadata
 
