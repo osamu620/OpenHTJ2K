@@ -947,12 +947,21 @@ static void emit_ready_f(fdwt_2d_state *s) {
     const sprec_t *ring_row = rptr_f(s, r);
 
 #if defined(OPENHTJ2K_ENABLE_AVX2)
-    // Planar 9/7 fast path: lift straight from the (read-only) ring row into
-    // LP/HP planes — no extension copy, no interleaved stores, and the sink
-    // consumes the planes without deinterleaving.  Eligibility was baked into
-    // the planar_lp allocation at init; put_planes is the owner's opt-in.
-    if (s->put_planes != nullptr && s->planar_lp != nullptr) {
-      fdwt_1d_filtr_irrev97_planar_avx2(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+    // Planar fast path (9/7 float + rev53 int32): lift straight from the
+    // (read-only) ring row into LP/HP planes — no extension copy, no
+    // interleaved stores, and the sink consumes the planes without
+    // deinterleaving.  Eligibility was baked into the planar_lp allocation at
+    // init; put_planes is the owner's opt-in.  rev53 additionally requires
+    // the int32 pipe: use_i32 flips after init, so a float rev53 state falls
+    // through to the interleaved path below.
+    if (s->put_planes != nullptr && s->planar_lp != nullptr && (s->transformation == 0 || s->use_i32)) {
+      if (s->use_i32) {
+        fdwt_1d_filtr_rev53_planar_i32_avx2(reinterpret_cast<int32_t *>(s->planar_lp),
+                                            reinterpret_cast<int32_t *>(s->planar_hp),
+                                            reinterpret_cast<const int32_t *>(ring_row), s->u0, s->u1);
+      } else {
+        fdwt_1d_filtr_irrev97_planar_avx2(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+      }
       s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
       ++s->next_emit;
       while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
@@ -1041,13 +1050,15 @@ void fdwt_2d_state_init(fdwt_2d_state *s,
   s->sink_ctx  = sink_ctx;
 
   // Planar horizontal fast path: plane scratch, allocated only when the
-  // geometry is eligible (9/7 float, even u0, wide enough for the 8-lane
-  // warmup).  put_planes stays null until the state owner opts in.
+  // geometry is eligible (9/7 float or rev53, even u0, wide enough for the
+  // 8-lane warmup).  put_planes stays null until the state owner opts in.
+  // For rev53 the allocation is eager: the int32 opt-in (use_i32) flips after
+  // init, so emit_ready_f gates the rev53 leg on use_i32 at emit time.
   s->put_planes = nullptr;
   s->planar_lp  = nullptr;
   s->planar_hp  = nullptr;
 #if defined(OPENHTJ2K_ENABLE_AVX2)
-  if (transformation == 0 && !s->use_i32 && (u0 & 1) == 0 && (u1 / 2 - u0 / 2) >= 16) {
+  if (transformation <= 1 && (u0 & 1) == 0 && (u1 / 2 - u0 / 2) >= 16) {
     const int32_t plane_cap = s->stride / 2 + SIMD_PADDING;  // NL <= stride/2 + 1, + SIMD slack
     s->planar_lp            = static_cast<sprec_t *>(
         aligned_mem_alloc(2U * sizeof(sprec_t) * static_cast<size_t>(plane_cap), 32));
