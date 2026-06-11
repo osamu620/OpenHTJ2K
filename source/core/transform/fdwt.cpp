@@ -990,6 +990,25 @@ static void emit_ready_f(fdwt_2d_state *s) {
       }
       continue;
     }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    // Planar fast path, 4-lane NEON — same structure and gating as the AVX2
+    // block above (vld2q gives the deinterleaved E/O planes natively).
+    if (s->put_planes != nullptr && s->planar_lp != nullptr && (s->transformation == 0 || s->use_i32)) {
+      if (s->use_i32) {
+        fdwt_1d_filtr_rev53_planar_i32_neon(reinterpret_cast<int32_t *>(s->planar_lp),
+                                            reinterpret_cast<int32_t *>(s->planar_hp),
+                                            reinterpret_cast<const int32_t *>(ring_row), s->u0, s->u1);
+      } else {
+        fdwt_1d_filtr_irrev97_planar_neon(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+      }
+      s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
+      ++s->next_emit;
+      while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
+        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        ++s->ring_origin;
+      }
+      continue;
+    }
 #endif
 
     if (s->u1 == s->u0 + 1) {
@@ -1071,14 +1090,23 @@ void fdwt_2d_state_init(fdwt_2d_state *s,
 
   // Planar horizontal fast path: plane scratch, allocated only when the
   // geometry is eligible (9/7 float or rev53, even u0, wide enough for the
-  // 8-lane warmup).  put_planes stays null until the state owner opts in.
-  // For rev53 the allocation is eager: the int32 opt-in (use_i32) flips after
-  // init, so emit_ready_f gates the rev53 leg on use_i32 at emit time.
+  // kernels' unconditional warmup loads).  put_planes stays null until the
+  // state owner opts in.  For rev53 the allocation is eager: the int32
+  // opt-in (use_i32) flips after init, so emit_ready_f gates the rev53 leg
+  // on use_i32 at emit time.
   s->put_planes = nullptr;
   s->planar_lp  = nullptr;
   s->planar_hp  = nullptr;
-#if defined(OPENHTJ2K_ENABLE_AVX2)
-  if (transformation <= 1 && (u0 & 1) == 0 && (u1 / 2 - u0 / 2) >= 16) {
+#if defined(OPENHTJ2K_ENABLE_AVX2) || defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  // Minimum N = u1/2 - u0/2: 16 on AVX2 (the 8-lane 9/7 warmup loads
+  // j = 0..15), 12 on NEON (4-lane warmup loads j = 0..7; same guard as the
+  // decoder's planar dispatch).
+  #if defined(OPENHTJ2K_ENABLE_AVX2)
+  constexpr int32_t planar_min_n = 16;
+  #else
+  constexpr int32_t planar_min_n = 12;
+  #endif
+  if (transformation <= 1 && (u0 & 1) == 0 && (u1 / 2 - u0 / 2) >= planar_min_n) {
     const int32_t plane_cap = s->stride / 2 + SIMD_PADDING;  // NL <= stride/2 + 1, + SIMD slack
     s->planar_lp            = static_cast<sprec_t *>(
         aligned_mem_alloc(2U * sizeof(sprec_t) * static_cast<size_t>(plane_cap), 32));

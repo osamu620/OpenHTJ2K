@@ -247,6 +247,13 @@ void fdwt_rev_ver_lp_step_neon(int32_t n, const float *prev, const float *next, 
 void fdwt_1d_filtr_rev53_i32_neon(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
 void fdwt_rev_ver_hp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
 void fdwt_rev_ver_lp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+// Encoder planar mirror (see the AVX2 declarations below for the contract):
+// fused horizontal FDWT reading the natural-domain ring row, writing LP/HP
+// planes.  Dispatched from emit_ready_f, which guarantees u0 even and
+// u1/2 - u0/2 >= 12 (the 4-lane 9/7 warmup loads j = 0..7 unconditionally).
+void fdwt_1d_filtr_irrev97_planar_neon(sprec_t *lp, sprec_t *hp, const sprec_t *in, int32_t u0, int32_t u1);
+void fdwt_1d_filtr_rev53_planar_i32_neon(int32_t *lp, int32_t *hp, const int32_t *in, int32_t u0,
+                                         int32_t u1);
 
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
 void fdwt_1d_filtr_irrev97_fixed_avx2(sprec_t *X, const int32_t left, const int32_t u_i0,
