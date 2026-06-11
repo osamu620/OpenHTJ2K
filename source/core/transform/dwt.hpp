@@ -401,6 +401,11 @@ void idwt_1d_filtr_rev53_planar_i32_avx2(int32_t *out, const int32_t *lp, const 
 // j = 0..15 unconditionally), lp/hp with >= 8 writable floats of slack past
 // their plane widths.
 void fdwt_1d_filtr_irrev97_planar_avx2(sprec_t *lp, sprec_t *hp, const sprec_t *in, int32_t u0, int32_t u1);
+// Reversible 5/3 int32 variant (lossless pipe), same dispatch guarantees as
+// the 9/7 planar kernel.  All shifts arithmetic — bit-exact vs the
+// interleaved fdwt_1d_filtr_rev53_i32_avx2 + sink-deinterleave path.
+void fdwt_1d_filtr_rev53_planar_i32_avx2(int32_t *lp, int32_t *hp, const int32_t *in, int32_t u0,
+                                         int32_t u1);
 #endif
 
 // WASM-SIMD DWT kernels (EMSCRIPTEN builds only, no NEON dependency).
@@ -713,6 +718,8 @@ typedef void (*fdwt_row_sink_fn)(void *ctx, bool is_hp, int32_t abs_phys_row,
 // planes (lp_row[j] = LP sample j, hp_row[j] = HP sample j), skipping the
 // interleave→deinterleave round trip.  Optional — only called when the state
 // owner sets fdwt_2d_state::put_planes and the planar kernel guards hold.
+// On the int32 pipe (use_i32) the plane bytes are int32_t behind the sprec_t
+// pointers, same as fdwt_row_sink_fn's interleaved_row.
 typedef void (*fdwt_row_sink_planes_fn)(void *ctx, bool is_hp, int32_t abs_phys_row, const sprec_t *lp_row,
                                         const sprec_t *hp_row);
 
@@ -756,11 +763,13 @@ struct fdwt_2d_state {
   fdwt_row_sink_fn put_row;
   void            *sink_ctx;
 
-  // ── planar horizontal fast path (9/7 float only) ──────────────────────────
+  // ── planar horizontal fast path (9/7 float + rev53 int32) ─────────────────
   // put_planes: optional planes sink set by the state owner (nullptr = off).
   // planar_lp/planar_hp: per-state plane scratch (allocated by init when the
   // geometry is planar-eligible; views into one allocation).  emit_ready_f
-  // takes the planar path only when put_planes and planar_lp are non-null.
+  // takes the planar path only when put_planes and planar_lp are non-null,
+  // and additionally requires use_i32 for rev53 (the int32 opt-in happens
+  // after init; a float rev53 state keeps the interleaved path).
   fdwt_row_sink_planes_fn put_planes;
   sprec_t *planar_lp;
   sprec_t *planar_hp;

@@ -537,4 +537,78 @@ void fdwt_1d_filtr_irrev97_planar_avx2(sprec_t *lp, sprec_t *hp, const sprec_t *
     for (int32_t j = P; j <= NH - 1; ++j) hp[j] = t3[j - base];
   }
 }
+
+// Integer counterparts of the cross-element shift / deinterleave helpers
+// (same lane movement; alignr is byte-granular so the epi32 versions are the
+// identical shuffle sequence on integer registers).
+static inline __m256i fdwt_shl1_epi32(__m256i a, __m256i b) {
+  __m256i t = _mm256_permute2x128_si256(a, b, 0x21);  // [a4..a7, b0..b3]
+  return _mm256_alignr_epi8(t, a, 4);
+}
+static inline __m256i fdwt_shr1_epi32(__m256i p, __m256i a) {
+  __m256i t = _mm256_permute2x128_si256(p, a, 0x21);  // [p4..p7, a0..a3]
+  return _mm256_alignr_epi8(a, t, 12);
+}
+static inline void fdwt_load_deint_epi32(const int32_t *p, __m256i &e, __m256i &o) {
+  __m256 ef, of;
+  fdwt_load_deint_ps(reinterpret_cast<const float *>(p), ef, of);
+  e = _mm256_castps_si256(ef);
+  o = _mm256_castps_si256(of);
+}
+
+// Fused single-pass reversible 5/3 analysis, planar int32 output (lossless
+// pipe).  Stage recurrences (even u0, E[j] = in[2j], O[j] = in[2j+1],
+// NL = ceil(u1/2)-u0/2, NH = u1/2-u0/2, all shifts arithmetic — exact match
+// to the interleaved fdwt_1d_filtr_rev53_i32_avx2 lifting):
+//   T1[j] = O[j] - ((E[j]    + E[j+1]) >> 1)      j in [-1, NL-1]
+//   T2[j] = E[j] + ((T1[j-1] + T1[j] + 2) >> 2)   j in [ 0, NL-1]
+//   hp[j] = T1[j] (j < NH),  lp[j] = T2[j] (j < NL)
+void fdwt_1d_filtr_rev53_planar_i32_avx2(int32_t *lp, int32_t *hp, const int32_t *in, const int32_t u0,
+                                         const int32_t u1) {
+  const int32_t NH = u1 / 2 - u0 / 2;
+  const int32_t NL = ceil_int(u1, 2) - u0 / 2;
+  auto E           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j, u0, u1) - u0]; };
+  auto O           = [&](int32_t j) -> int32_t { return in[PSEo(u0 + 2 * j + 1, u0, u1) - u0]; };
+
+  const __m256i vtwo = _mm256_set1_epi32(2);
+
+  // Warmup: boundary scalar T1[-1], block 0 load.
+  const int32_t t1m1 = O(-1) - ((E(-1) + E(0)) >> 1);
+  __m256i E_nm1, O_nm1;
+  fdwt_load_deint_epi32(in, E_nm1, O_nm1);
+  __m256i T1_nm2 = _mm256_set1_epi32(t1m1);  // only its top lane is consumed (shr1)
+
+  // Steady state: iteration n deinterleave-loads input block n and emits
+  // finished plane block n-1 with two plain stores.
+  int32_t n = 1;
+  for (; 8 * n + 7 <= NH - 1; ++n) {
+    __m256i E_n, O_n;
+    fdwt_load_deint_epi32(in + 16 * n, E_n, O_n);
+    __m256i T1_nm1 =
+        _mm256_sub_epi32(O_nm1, _mm256_srai_epi32(_mm256_add_epi32(E_nm1, fdwt_shl1_epi32(E_nm1, E_n)), 1));
+    __m256i T2_nm1 = _mm256_add_epi32(
+        E_nm1, _mm256_srai_epi32(
+                   _mm256_add_epi32(_mm256_add_epi32(fdwt_shr1_epi32(T1_nm2, T1_nm1), T1_nm1), vtwo), 2));
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(hp + 8 * (n - 1)), T1_nm1);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(lp + 8 * (n - 1)), T2_nm1);
+    E_nm1  = E_n;
+    O_nm1  = O_n;
+    T1_nm2 = T1_nm1;
+  }
+
+  // Drain: scalar finish from the carried boundary lane + mirrored accessors.
+  // P = 8*(n-1) is the first plane index not yet stored; the loop-exit bound
+  // gives NH - P <= 15, so NL - P <= 16 and t1buf stays within bounds.
+  {
+    const int32_t P       = 8 * (n - 1);
+    const int32_t t1_prev = _mm256_extract_epi32(T1_nm2, 7);  // T1[P-1] (== t1m1 when P == 0)
+    int32_t t1buf[16];
+    for (int32_t j = P; j <= NL - 1; ++j) t1buf[j - P] = O(j) - ((E(j) + E(j + 1)) >> 1);
+    for (int32_t j = P; j <= NH - 1; ++j) hp[j] = t1buf[j - P];
+    for (int32_t j = P; j <= NL - 1; ++j) {
+      const int32_t t1l = (j == P) ? t1_prev : t1buf[j - P - 1];
+      lp[j]             = E(j) + ((t1l + t1buf[j - P] + 2) >> 2);
+    }
+  }
+}
 #endif
