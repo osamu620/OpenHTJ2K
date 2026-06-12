@@ -691,17 +691,36 @@ async function runViewer(url, hash, signal) {
   ping('stream.opened');
   const reader = stream.getReader();
 
-  // Streaming length-prefix parser.
-  let stash = new Uint8Array(0);
+  // Streaming length-prefix parser.  `stash` is the window of unread
+  // bytes — normally a zero-copy view straight into the incoming chunk
+  // (packets rarely straddle chunk boundaries).  When one does straddle,
+  // the unread tail and follow-up chunks accumulate in a persistent
+  // grow-only buffer; the old merge-into-a-fresh-Uint8Array approach
+  // allocated once per read() at high bitrates, which showed up as GC
+  // pressure on the main thread.
+  let stashBuf = new Uint8Array(16 * 1024);
+  let stash = stashBuf.subarray(0, 0);
   function appendStash(chunk) {
     if (!chunk || !chunk.length) return;
     if (stash.length === 0) { stash = chunk; return; }
-    const merged = new Uint8Array(stash.length + chunk.length);
-    merged.set(stash, 0); merged.set(chunk, stash.length);
-    stash = merged;
+    const need = stash.length + chunk.length;
+    if (need > stashBuf.length) {
+      const next = new Uint8Array(Math.max(stashBuf.length * 2, need));
+      next.set(stash, 0);
+      stashBuf = next;
+      stash = stashBuf.subarray(0, stash.length);
+    } else if (stash.buffer !== stashBuf.buffer) {
+      stashBuf.set(stash, 0);
+      stash = stashBuf.subarray(0, stash.length);
+    } else if (stash.byteOffset + need > stashBuf.length) {
+      stashBuf.copyWithin(0, stash.byteOffset, stash.byteOffset + stash.length);
+      stash = stashBuf.subarray(0, stash.length);
+    }
+    stashBuf.set(chunk, stash.byteOffset + stash.length);
+    stash = stashBuf.subarray(stash.byteOffset, stash.byteOffset + need);
   }
   function takeStash(n) {
-    const out = new Uint8Array(stash.buffer, stash.byteOffset, n);
+    const out = stash.subarray(0, n);
     stash = stash.subarray(n);
     return out;
   }
@@ -726,11 +745,10 @@ async function runViewer(url, hash, signal) {
       const pkt = takeStash(len);
       if (++packetCount === 1) ping('first.packet', { len });
       if (len > PACKET_BUF) { console.warn(`oversized packet ${len}`); continue; }
-      // Copy out of the stash buffer — pushPacket may transfer the
-      // underlying ArrayBuffer to the worker.
-      const owned = new Uint8Array(len);
-      owned.set(pkt);
-      dec.pushPacket(owned);
+      // pushPacket copies the bytes into its staging batch buffer
+      // synchronously (it never transfers the caller's buffer), so a
+      // view into the stash / network chunk is safe to hand over.
+      dec.pushPacket(pkt);
       tickStats();
     }
   } finally {
