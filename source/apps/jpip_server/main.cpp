@@ -15,11 +15,15 @@
 //
 // The server responds with a complete JPP-stream containing the
 // main-header, tile-header, metadata-bin-0, and every precinct data-bin
-// selected by the view-window resolver.  Stateless — no session, no
-// cache model, each request is self-contained.
+// selected by the view-window resolver.
+//
+// Requests are served statelessly (the client's `model=` field carries
+// its cache state) unless the client establishes a session with
+// `cnew=http`: the server then issues a channel-id (JPIP-cnew, §D.2.3)
+// and keeps a per-channel cache model so bins already delivered on that
+// channel are never re-sent (§B.2).
 
 #include <algorithm>
-#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -28,6 +32,7 @@
 #include <cstring>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "codestream_walker.hpp"
@@ -38,6 +43,7 @@
 #include "packet_locator.hpp"
 #include "precinct_index.hpp"
 #include "cache_model.hpp"
+#include "channel_manager.hpp"
 #include "tcp_socket.hpp"
 #include "view_window.hpp"
 #ifdef OPENHTJ2K_ENABLE_QUIC
@@ -77,6 +83,10 @@ struct ServerState {
   // browser demos + C++ JpipClient both accept either format, so the
   // conservative default is Content-Length.
   bool                              chunked_responses = false;
+  // §B.2 sessions: per-channel cache models, keyed by the cid issued in
+  // JPIP-cnew.  Granting a channel commits the server to never re-sending
+  // bins already delivered on it; ChannelManager carries that state.
+  ChannelManager                    channels;
 };
 
 // Callback invoked once per completed JPP-stream message (including EOR).
@@ -95,18 +105,25 @@ using JppMessageSink = std::function<bool(const uint8_t *data, std::size_t len, 
 // the cumulative payload size (excluding EOR, matching the §C.6.1 cap
 // accounting).
 //
-// `max_bytes`, when non-zero, is the §C.6.1 "Maximum Response Length"
-// cap: the cumulative payload size excluding the EOR message (the EOR
-// does not count per §D.3).  Messages are emitted in whole units —
-// if adding the next message would push the total past the cap, that
-// message is dropped before flushing and emission stops.  EOR reason
-// then becomes `ByteLimit` (4) instead of `WindowDone` (2).  A
-// `max_bytes` of 0 means no cap.
+// `max_bytes` is the §C.6.1 "Maximum Response Length" cap: the cumulative
+// response size excluding the EOR message (the EOR does not count per
+// §D.3).  Bins are delivered through resumable byte windows (BinWindow):
+// a bin larger than the remaining budget contributes a prefix now and
+// resumes at that byte offset on the next request, so byte-limited
+// clients always make forward progress.  EOR reason becomes `ByteLimit`
+// (4) instead of `WindowDone` (2) when the cap interrupted delivery.
+// Pass UINT64_MAX for "no cap"; `len=0` is a legal request meaning "EOR
+// only", so 0 is a real cap value here.
+//
+// `sent_out`, when non-null, receives one SentBin per data-bin that
+// contributed bytes to the response — what a session server must commit
+// to the channel's cache model afterwards.
 bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
                          const CacheModel &client_cache, uint64_t max_bytes,
                          const JppMessageSink &sink,
                          size_t *n_keys_out = nullptr,
-                         std::size_t *total_bytes_out = nullptr) {
+                         std::size_t *total_bytes_out = nullptr,
+                         std::vector<SentBin> *sent_out = nullptr) {
   auto keys = resolve_view_window(*st.idx, vw);
   if (n_keys_out) *n_keys_out = keys.size();
 
@@ -114,50 +131,54 @@ bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
   std::vector<uint8_t> scratch;
   scratch.reserve(64 * 1024);
   std::size_t total = 0;
-  bool aborted = false;
+  bool aborted   = false;
+  bool truncated = false;
 
-  // Build the next message into `scratch`; on §C.6.1 overflow drop it
-  // (so the context captured by `fn` must not have been consumed — since
-  // emitters only append, the rollback is a simple `scratch.clear()` plus
-  // restoring any MessageHeaderContext changes).  For correctness we
-  // snapshot `ctx` before each emission and restore on overflow.
-  auto try_emit = [&](auto &&fn, bool is_eor) -> bool {
-    const MessageHeaderContext ctx_snap = ctx;
+  // Deliver one data-bin (or the part of it the remaining budget allows)
+  // to `sink`.  A bin the client holds in full is skipped; a partial
+  // holding resumes at its recorded byte offset (§C.9.2).  Returns false
+  // when emission of further bins must stop — budget exhausted
+  // (`truncated`) or sink failure (`aborted`).  The emitter only encodes
+  // message headers for messages it actually appends, so `ctx` needs no
+  // rollback handling here.
+  auto emit_bin = [&](uint8_t cls, uint64_t id, auto &&fn) -> bool {
+    if (client_cache.has(cls, id)) return true;
+    BinWindow win;
+    win.skip   = static_cast<std::size_t>(client_cache.received_bytes(cls, id));
+    win.budget = (max_bytes > total)
+                     ? static_cast<std::size_t>(std::min<uint64_t>(max_bytes - total, SIZE_MAX))
+                     : 0;
     scratch.clear();
-    fn();
-    if (!is_eor && max_bytes > 0 && total + scratch.size() > max_bytes) {
-      ctx = ctx_snap;
-      scratch.clear();
-      return false;
-    }
+    fn(&win);
     if (!scratch.empty()) {
-      if (!sink(scratch.data(), scratch.size(), is_eor)) {
+      if (!sink(scratch.data(), scratch.size(), false)) {
         aborted = true;
         return false;
       }
-      if (!is_eor) total += scratch.size();
+      total += scratch.size();
+      if (sent_out) {
+        sent_out->push_back({cls, id, win.skip + win.payload_sent, win.complete});
+      }
+    }
+    if (win.budget_blocked) {
+      truncated = true;
+      return false;
     }
     return true;
   };
 
-  bool truncated = false;
   // §A.3.6.1: "servers should send metadata-bin 0 in advance of all other
   // bins."  Interactive clients use its arrival (even as an empty bin with
   // is_last=1) as the session-binding signal before they commit precinct
   // data into their cache, so emit it first — before main-header — even
   // for bare J2C codestreams that have no JP2/JPX box structure to ship.
-  if (!client_cache.has(kMsgClassMetadata, 0)) {
-    if (!try_emit([&] { emit_metadata_bin_zero(ctx, scratch); }, false)) {
-      if (!aborted) truncated = true;
-    }
-  }
-  if (!aborted && !truncated && !client_cache.has(kMsgClassMainHeader, 0)) {
-    if (!try_emit([&] {
-          emit_main_header_databin(st.codestream.data(), st.codestream.size(),
-                                    st.layout, ctx, scratch);
-        }, false)) {
-      if (!aborted) truncated = true;
-    }
+  bool emitting = emit_bin(kMsgClassMetadata, 0,
+                           [&](BinWindow *w) { emit_metadata_bin_zero(ctx, scratch, w); });
+  if (emitting) {
+    emitting = emit_bin(kMsgClassMainHeader, 0, [&](BinWindow *w) {
+      emit_main_header_databin(st.codestream.data(), st.codestream.size(),
+                               st.layout, ctx, scratch, w);
+    });
   }
   // §A.3.3: deliver the tile-header data-bin for every tile whose index
   // appears in the view-window result — NOT for every tile in the image.
@@ -166,7 +187,7 @@ bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
   // tiles well outside the fovea, crowding out actual precinct payload.
   // Collect tile indices from `keys` in first-seen order so the resulting
   // tile-header messages are deterministic.
-  if (!aborted && !truncated) {
+  if (emitting) {
     std::vector<uint16_t> window_tiles;
     {
       std::vector<bool> seen(st.idx->num_tiles(), false);
@@ -175,14 +196,11 @@ bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
       }
     }
     for (uint16_t t : window_tiles) {
-      if (client_cache.has(kMsgClassTileHeader, t)) continue;
-      if (!try_emit([&] {
-            emit_tile_header_databin(st.codestream.data(), st.codestream.size(),
-                                      t, st.layout, ctx, scratch);
-          }, false)) {
-        if (!aborted) truncated = true;
-        break;
-      }
+      emitting = emit_bin(kMsgClassTileHeader, t, [&](BinWindow *w) {
+        emit_tile_header_databin(st.codestream.data(), st.codestream.size(),
+                                 t, st.layout, ctx, scratch, w);
+      });
+      if (!emitting) break;
     }
   }
 
@@ -197,7 +215,7 @@ bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
   // they DID receive (because from their perspective those have not been
   // "accepted" into the contiguous portion of the cache).  Sort by I
   // before emission so deliveries are gap-free.
-  if (!aborted && !truncated) {
+  if (emitting) {
     struct KeyWithId { PrecinctKey k; uint64_t I; };
     std::vector<KeyWithId> ordered;
     ordered.reserve(keys.size());
@@ -207,22 +225,19 @@ bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
     std::sort(ordered.begin(), ordered.end(),
               [](const KeyWithId &a, const KeyWithId &b) { return a.I < b.I; });
     for (const auto &e : ordered) {
-      if (client_cache.has(kMsgClassPrecinct, e.I)) continue;
-      if (!try_emit([&] {
-            emit_precinct_databin(st.codestream.data(), st.codestream.size(),
-                                  e.k.t, e.k.c, e.k.r, e.k.p_rc,
-                                  *st.idx, *st.locator, ctx, scratch);
-          }, false)) {
-        if (!aborted) truncated = true;
-        break;
-      }
+      emitting = emit_bin(kMsgClassPrecinct, e.I, [&](BinWindow *w) {
+        emit_precinct_databin(st.codestream.data(), st.codestream.size(),
+                              e.k.t, e.k.c, e.k.r, e.k.p_rc,
+                              *st.idx, *st.locator, ctx, scratch, w);
+      });
+      if (!emitting) break;
     }
   }
 
   if (!aborted) {
-    try_emit([&] {
-      emit_eor(truncated ? EorReason::ByteLimit : EorReason::WindowDone, ctx, scratch);
-    }, true);
+    scratch.clear();
+    emit_eor(truncated ? EorReason::ByteLimit : EorReason::WindowDone, ctx, scratch);
+    if (!sink(scratch.data(), scratch.size(), /*is_eor=*/true)) aborted = true;
   }
 
   if (total_bytes_out) *total_bytes_out = total;
@@ -234,7 +249,8 @@ bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
 std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &vw,
                                       const CacheModel &client_cache = {},
                                       size_t *n_keys_out = nullptr,
-                                      uint64_t max_bytes = 0) {
+                                      uint64_t max_bytes = UINT64_MAX,
+                                      std::vector<SentBin> *sent_out = nullptr) {
   std::vector<uint8_t> stream;
   stream.reserve(64 * 1024);
   stream_jpp_response(
@@ -243,7 +259,7 @@ std::vector<uint8_t> build_jpp_stream(const ServerState &st, const ViewWindow &v
         stream.insert(stream.end(), data, data + len);
         return true;
       },
-      n_keys_out, /*total_bytes_out=*/nullptr);
+      n_keys_out, /*total_bytes_out=*/nullptr, sent_out);
   return stream;
 }
 
@@ -284,7 +300,7 @@ std::string find_header(const uint8_t *buf, std::size_t len, const char *name) {
   return {};
 }
 
-void handle_connection(TcpStream &conn, const ServerState &st) {
+void handle_connection(TcpStream &conn, ServerState &st) {
   std::vector<uint8_t> raw;
   const std::size_t hdr_bytes = conn.recv_until_header_end(raw, 65536);
   if (hdr_bytes == 0) return;
@@ -397,32 +413,58 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();
 
-  CacheModel client_cache;
-  if (!req.model.empty()) client_cache = CacheModel::parse(req.model);
-
-  // §C.3.3 / §D.2.5: when the client requests `cnew=http`, reply with
-  // `JPIP-cnew: cid=…,path=…,transport=http`.  Our server is stateless,
-  // so the cid is effectively a token the client can echo in later
-  // requests without the server needing to validate it; the cache-model
-  // field carries all the state we actually need.  Interactive GUI
-  // clients will not commit received precincts to their persistent cache
-  // unless this header arrives on the channel-establishment response,
-  // leading to a silent retry loop.
-  std::string cnew_header;
-  if (req.has_cnew && (req.cnew.empty() || req.cnew.find("http") != std::string::npos)) {
-    // Monotonic cid counter — survives for the process lifetime.  Stateless
-    // so collisions across restarts are harmless; the client treats the
-    // cid as opaque.
-    static std::atomic<uint64_t> s_cid_counter{0};
-    const uint64_t cid = s_cid_counter.fetch_add(1, std::memory_order_relaxed) + 1;
-    char buf[192];
-    std::snprintf(buf, sizeof(buf),
-                  "cid=C%llu,path=jpip,transport=http",
-                  static_cast<unsigned long long>(cid));
-    cnew_header.assign(buf);
+  // §D.2.4: when the request carries a qid, the response shall echo it.
+  std::string extra_headers;
+  if (req.has_qid) {
+    extra_headers += "JPIP-qid: " + std::to_string(req.qid) + "\r\n";
   }
 
-  const uint64_t max_bytes = req.has_len ? req.len : 0;
+  // ── Session resolution (§B.2, §C.3) ──────────────────────────────────
+  // Three modes:
+  //   cid present  → request within an existing channel: serve against the
+  //                  channel's server-side cache model (the client does NOT
+  //                  send `model=` in sessions, §B.3); unknown cid → 404 so
+  //                  the client re-establishes instead of silently looping
+  //                  on stateless duplicates.
+  //   cnew present → channel-establishment request: grant only when a
+  //                  transport we actually support is in the client's list
+  //                  (Table D.1: the granted transport shall be one the
+  //                  client offered).  Otherwise §C.3.3: serve statelessly
+  //                  with NO JPIP-cnew header.
+  //   neither      → stateless: the `model=` field carries the client state.
+  CacheModel  client_cache;
+  std::string session_cid;
+  std::string cnew_header;
+  if (req.has_cid) {
+    if (!st.channels.snapshot(req.cid, &client_cache)) {
+      conn.send_all(format_error_response(404, "Channel Not Found"));
+      return;
+    }
+    session_cid = req.cid;
+    // Sessions still accept client-initiated model updates (e.g. the
+    // client discarded cached bins): fold them into the channel's model
+    // and into this response's view of it.
+    if (!req.model.empty()) {
+      st.channels.apply_model(session_cid, req.model);
+      client_cache.apply(req.model);
+    }
+  } else {
+    if (!req.model.empty()) client_cache = CacheModel::parse(req.model);
+    if (req.has_cnew) {
+      const std::string transport = ChannelManager::negotiate_transport(req.cnew);
+      if (!transport.empty()) {
+        session_cid = st.channels.open();
+        if (!req.model.empty()) st.channels.apply_model(session_cid, req.model);
+        cnew_header = "cid=" + session_cid + ",path=jpip,transport=" + transport;
+      }
+    }
+  }
+  // Session responses must not be cached by intermediaries (Annex F).
+  if (!session_cid.empty()) extra_headers += "Cache-Control: no-cache\r\n";
+
+  const uint64_t max_bytes = req.has_len ? req.len : UINT64_MAX;
+  std::vector<SentBin> sent_bins;
+  auto *sent_out = session_cid.empty() ? nullptr : &sent_bins;
   size_t n_keys = 0;
   std::size_t body_bytes = 0;
   if (st.chunked_responses) {
@@ -431,7 +473,7 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
     // JPP message as its own HTTP chunk.  `sink` returning false on
     // send_all failure aborts the emission early so we don't waste
     // CPU building messages that can't be delivered.
-    auto hdrs = format_jpp_response_headers_chunked(st.target_id, cnew_header);
+    auto hdrs = format_jpp_response_headers_chunked(st.target_id, cnew_header, extra_headers);
     if (!conn.send_all(hdrs)) return;
     bool send_ok = true;
     stream_jpp_response(
@@ -446,28 +488,51 @@ void handle_connection(TcpStream &conn, const ServerState &st) {
           body_bytes += len;
           return true;
         },
-        &n_keys, /*total_bytes_out=*/nullptr);
+        &n_keys, /*total_bytes_out=*/nullptr, sent_out);
     if (send_ok) {
       auto last = format_last_chunk();
       conn.send_all(last);
     }
   } else {
-    auto jpp = build_jpp_stream(st, req.view_window, client_cache, &n_keys, max_bytes);
+    auto jpp = build_jpp_stream(st, req.view_window, client_cache, &n_keys, max_bytes, sent_out);
     body_bytes = jpp.size();
-    auto resp = format_jpp_response(jpp.data(), jpp.size(), st.target_id, cnew_header);
+    auto resp = format_jpp_response(jpp.data(), jpp.size(), st.target_id, cnew_header, extra_headers);
     conn.send_all(resp);
+  }
+
+  // Bins handed to the transport are now part of the channel's history —
+  // the next request on this cid must not receive them again.  Aborted
+  // sends never reach `sent_bins`, so a dropped connection re-sends.
+  if (!session_cid.empty()) st.channels.commit(session_cid, sent_bins);
+
+  // §C.3.4 cclose: close channels only after the response completes.
+  if (req.has_cclose) {
+    if (req.cclose == "*") {
+      if (!session_cid.empty()) st.channels.close(session_cid);
+    } else {
+      std::size_t p = 0;
+      while (p <= req.cclose.size()) {
+        std::size_t c = req.cclose.find(',', p);
+        if (c == std::string::npos) c = req.cclose.size();
+        const std::string one = req.cclose.substr(p, c - p);
+        if (!one.empty()) st.channels.close(one);
+        p = c + 1;
+      }
+    }
   }
 
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-  std::printf("  → %zu precincts (%.1f%%), %zu bytes JPP-stream, %.1f ms%s\n",
+  std::printf("  → %zu precincts (%.1f%%), %zu bytes JPP-stream, %.1f ms%s%s%s\n",
               n_keys,
               st.idx->total_precincts()
                   ? (100.0 * static_cast<double>(n_keys) / static_cast<double>(st.idx->total_precincts()))
                   : 0.0,
               body_bytes, ms,
-              st.chunked_responses ? " [chunked]" : "");
+              st.chunked_responses ? " [chunked]" : "",
+              session_cid.empty() ? "" : " cid=",
+              session_cid.c_str());
   std::fflush(stdout);
 }
 
@@ -495,7 +560,7 @@ std::vector<uint8_t> handle_h3_request(const ServerState &st,
   if (!jpip_req.model.empty()) h3_cache = CacheModel::parse(jpip_req.model);
   size_t n_keys = 0;
   auto jpp = build_jpp_stream(st, jpip_req.view_window, h3_cache, &n_keys,
-                              jpip_req.has_len ? jpip_req.len : 0);
+                              jpip_req.has_len ? jpip_req.len : UINT64_MAX);
   const auto t1 = Clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 

@@ -41,6 +41,20 @@ bool parse_pair(const std::string &val, uint32_t &a, uint32_t &b) {
   return true;
 }
 
+// §C.4: one image-return-type element, either the reserved short token
+// ("jpp-stream") or the media-type form ("image/jpp-stream"), optionally
+// followed by ";parameter" suffixes which we ignore.
+bool is_acceptable_return_type(const std::string &item) {
+  std::size_t b = 0, e = item.size();
+  while (b < e && (item[b] == ' ' || item[b] == '\t')) ++b;
+  while (e > b && (item[e - 1] == ' ' || item[e - 1] == '\t')) --e;
+  const std::size_t semi = item.find(';', b);
+  if (semi != std::string::npos && semi < e) e = semi;
+  const std::size_t n = e - b;
+  return (n == 10 && item.compare(b, n, "jpp-stream") == 0) ||
+         (n == 16 && item.compare(b, n, "image/jpp-stream") == 0);
+}
+
 }  // namespace
 
 RequestParseStatus parse_jpip_query(const std::string &query_in, JpipRequest *out) {
@@ -89,15 +103,30 @@ RequestParseStatus parse_jpip_query(const std::string &query_in, JpipRequest *ou
       }
       out->has_rsiz = true;
     } else if (key == "comps") {
-      // Comma-separated uint16 list, e.g. "0,1,2" or "0-2".
-      // v1: only comma-separated individual indices.
+      // §C.4.6: comma-separated list of indices or ranges, e.g. "0,2" or
+      // "0-2" or "0,3-5".
       out->view_window.comps.clear();
       std::size_t p = 0;
       while (p < val.size()) {
         const std::size_t c = val.find(',', p);
         const std::string item = val.substr(p, c == std::string::npos ? std::string::npos : c - p);
         if (!item.empty()) {
-          out->view_window.comps.push_back(static_cast<uint16_t>(std::strtoul(item.c_str(), nullptr, 10)));
+          char *end = nullptr;
+          const unsigned long lo = std::strtoul(item.c_str(), &end, 10);
+          unsigned long hi = lo;
+          if (end == item.c_str()) { status = RequestParseStatus::MalformedField; return; }
+          if (*end == '-') {
+            const char *hs = end + 1;
+            hi = std::strtoul(hs, &end, 10);
+            if (end == hs || *end != '\0' || hi < lo) {
+              status = RequestParseStatus::MalformedField; return;
+            }
+          } else if (*end != '\0') {
+            status = RequestParseStatus::MalformedField; return;
+          }
+          for (unsigned long v = lo; v <= hi; ++v) {
+            out->view_window.comps.push_back(static_cast<uint16_t>(v));
+          }
         }
         p = (c == std::string::npos) ? val.size() : c + 1;
       }
@@ -125,11 +154,23 @@ RequestParseStatus parse_jpip_query(const std::string &query_in, JpipRequest *ou
       out->quality     = static_cast<uint32_t>(n);
       out->has_quality = true;
     } else if (key == "type") {
-      out->type = val;
-      if (val != "jpp-stream") {
+      // §C.4: comma-separated preference list; accept the request if ANY
+      // element is a jpp-stream form.  We always serve jpp-stream, so the
+      // stored type is the token we will put on the wire.
+      bool acceptable = false;
+      std::size_t p = 0;
+      while (p <= val.size()) {
+        std::size_t c = val.find(',', p);
+        if (c == std::string::npos) c = val.size();
+        if (is_acceptable_return_type(val.substr(p, c - p))) { acceptable = true; break; }
+        p = c + 1;
+      }
+      if (!acceptable) {
+        out->type = val;
         status = RequestParseStatus::UnsupportedType;
         return;
       }
+      out->type = "jpp-stream";
     } else if (key == "cnew") {
       // §C.3.3: client requests a new JPIP channel; value is the preferred
       // transport (typically "http").  Server echoes a channel id back in
@@ -143,6 +184,20 @@ RequestParseStatus parse_jpip_query(const std::string &query_in, JpipRequest *ou
       // information required for each response.
       out->cid     = val;
       out->has_cid = true;
+    } else if (key == "cclose") {
+      // §C.3.4: "*" or a comma-separated list of channel-ids.
+      out->cclose     = val;
+      out->has_cclose = true;
+    } else if (key == "qid") {
+      // §C.3.5: non-negative decimal request ID.
+      char *end = nullptr;
+      const unsigned long long n = std::strtoull(val.c_str(), &end, 10);
+      if (end == val.c_str() || *end != '\0') {
+        status = RequestParseStatus::MalformedField;
+        return;
+      }
+      out->qid     = static_cast<uint64_t>(n);
+      out->has_qid = true;
     }
     // Unknown keys are silently ignored per §C.1.
   });

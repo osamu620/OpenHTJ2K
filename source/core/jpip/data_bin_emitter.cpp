@@ -20,24 +20,47 @@ namespace {
 // monotonically increasing `msg_offset`.
 constexpr std::size_t kMaxMessagePayload = 987;
 
-// Append a complete JPP-stream data-bin contribution.  For bins whose
-// payload fits in `kMaxMessagePayload` this is a single message with
-// `is_last=1`.  Larger bins are split into multiple messages with
+// Append a data-bin contribution as one or more JPP-stream messages.  For
+// bins whose payload fits in `kMaxMessagePayload` this is a single message
+// with `is_last=1`.  Larger bins are split into multiple messages with
 // monotonically increasing `msg_offset`; only the final message has
 // `is_last=1`.  The split is on byte boundaries — JPP messages do not
 // constrain split points within the payload.
+//
+// When `win` is non-null, emission starts at payload offset `win->skip`
+// and appends at most `win->budget` bytes (headers + payload).  The
+// header-size reservation is conservative (kMessageHeaderMaxBytes), so a
+// few bytes of budget can go unused at the response tail; the §C.6.1 cap
+// is an upper bound, never an entitlement, so under-filling is safe.
+// Empty bins (and `skip == payload_len` resumptions) emit the zero-length
+// `is_last=1` message that declares the bin complete.
 std::size_t append_message(MessageHeader hdr, const uint8_t *payload,
                            std::size_t payload_len,
                            MessageHeaderContext &ctx,
-                           std::vector<uint8_t> &out) {
+                           std::vector<uint8_t> &out,
+                           BinWindow *win = nullptr) {
   std::size_t written = 0;
-  std::size_t offset  = 0;
-  // Always emit at least one message, even for empty bins (so callers can
-  // declare "empty and complete" via msg_length=0, is_last=1).
-  do {
+  std::size_t offset  = win ? std::min(win->skip, payload_len) : 0;
+  const std::size_t budget = win ? win->budget : SIZE_MAX;
+  const std::size_t first_offset = offset;
+  bool complete = false;
+
+  // Always try to emit at least one message, even for empty bins (so
+  // callers can declare "empty and complete" via msg_length=0, is_last=1).
+  for (;;) {
     const std::size_t remaining = payload_len - offset;
-    const std::size_t this_len  = std::min(remaining, kMaxMessagePayload);
-    const bool        is_last   = (offset + this_len == payload_len);
+    const std::size_t avail     = (budget > written) ? budget - written : 0;
+    if (avail <= kMessageHeaderMaxBytes) {
+      if (win) win->budget_blocked = true;
+      break;
+    }
+    const std::size_t this_len =
+        std::min(std::min(remaining, kMaxMessagePayload), avail - kMessageHeaderMaxBytes);
+    if (remaining > 0 && this_len == 0) {
+      if (win) win->budget_blocked = true;
+      break;
+    }
+    const bool is_last = (offset + this_len == payload_len);
 
     hdr.msg_offset = offset;
     hdr.msg_length = this_len;
@@ -52,7 +75,13 @@ std::size_t append_message(MessageHeader hdr, const uint8_t *payload,
     }
     written += hdr_bytes + this_len;
     offset  += this_len;
-  } while (offset < payload_len);
+    if (is_last) { complete = true; break; }
+  }
+
+  if (win) {
+    win->payload_sent = offset - first_offset;
+    win->complete     = complete;
+  }
   return written;
 }
 
@@ -61,7 +90,8 @@ std::size_t append_message(MessageHeader hdr, const uint8_t *payload,
 std::size_t emit_main_header_databin(const uint8_t *codestream, std::size_t len,
                                      const CodestreamLayout &layout,
                                      MessageHeaderContext &ctx,
-                                     std::vector<uint8_t> &out) {
+                                     std::vector<uint8_t> &out,
+                                     BinWindow *win) {
   if (codestream == nullptr || layout.main_header_end == 0) return 0;
   if (layout.main_header_end > len) return 0;
   MessageHeader hdr{};
@@ -69,14 +99,15 @@ std::size_t emit_main_header_databin(const uint8_t *codestream, std::size_t len,
   hdr.cs_n        = 0;
   hdr.in_class_id = 0;
   return append_message(hdr, codestream + layout.soc_offset,
-                        layout.main_header_end - layout.soc_offset, ctx, out);
+                        layout.main_header_end - layout.soc_offset, ctx, out, win);
 }
 
 std::size_t emit_tile_header_databin(const uint8_t *codestream, std::size_t len,
                                      uint16_t tile_index,
                                      const CodestreamLayout &layout,
                                      MessageHeaderContext &ctx,
-                                     std::vector<uint8_t> &out) {
+                                     std::vector<uint8_t> &out,
+                                     BinWindow *win) {
   if (codestream == nullptr) return 0;
   // Per §A.3.3, the server "is required to send a tile header data bin for
   // a tile even if the tile header is empty" — so we emit the message
@@ -103,16 +134,17 @@ std::size_t emit_tile_header_databin(const uint8_t *codestream, std::size_t len,
   hdr.class_id    = kMsgClassTileHeader;
   hdr.cs_n        = 0;
   hdr.in_class_id = tile_index;
-  return append_message(hdr, payload.data(), payload.size(), ctx, out);
+  return append_message(hdr, payload.data(), payload.size(), ctx, out, win);
 }
 
 std::size_t emit_metadata_bin_zero(MessageHeaderContext &ctx,
-                                   std::vector<uint8_t> &out) {
+                                   std::vector<uint8_t> &out,
+                                   BinWindow *win) {
   MessageHeader hdr{};
   hdr.class_id    = kMsgClassMetadata;
   hdr.cs_n        = 0;
   hdr.in_class_id = 0;
-  return append_message(hdr, /*payload=*/nullptr, 0, ctx, out);
+  return append_message(hdr, /*payload=*/nullptr, 0, ctx, out, win);
 }
 
 std::size_t emit_precinct_databin(const uint8_t *codestream, std::size_t len,
@@ -120,7 +152,8 @@ std::size_t emit_precinct_databin(const uint8_t *codestream, std::size_t len,
                                   const CodestreamIndex &idx,
                                   const PacketLocator &locator,
                                   MessageHeaderContext &ctx,
-                                  std::vector<uint8_t> &out) {
+                                  std::vector<uint8_t> &out,
+                                  BinWindow *win) {
   if (codestream == nullptr) return 0;
   const auto &ranges = locator.packets_of(t, c, r, p_rc);
   if (ranges.empty()) return 0;
@@ -142,7 +175,7 @@ std::size_t emit_precinct_databin(const uint8_t *codestream, std::size_t len,
   hdr.class_id    = kMsgClassPrecinct;
   hdr.cs_n        = 0;
   hdr.in_class_id = idx.I(t, c, r, p_rc);
-  return append_message(hdr, payload.data(), payload.size(), ctx, out);
+  return append_message(hdr, payload.data(), payload.size(), ctx, out, win);
 }
 
 std::size_t emit_eor(EorReason reason, MessageHeaderContext &ctx, std::vector<uint8_t> &out) {

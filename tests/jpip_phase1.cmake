@@ -14,6 +14,10 @@ add_test(NAME jpip_vbas_codec COMMAND jpip_vbas_check)
 # ── JPIP HTTP request/response formatting (§C.1–C.4, §D.2) ──
 add_test(NAME jpip_http_format COMMAND jpip_http_check)
 
+# ── JPIP sessions/channels: per-cid cache model, transport negotiation,
+#    type lists, qid echo, cclose, comps ranges (§B.2, §C.3, §C.9) ──
+add_test(NAME jpip_session COMMAND jpip_session_check)
+
 # ── TCP socket loopback (Phase 3 transport layer) ──
 add_test(NAME jpip_tcp_loopback COMMAND jpip_tcp_check)
 

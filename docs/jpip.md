@@ -74,9 +74,13 @@ Emscripten — see [building.md → Building for WebAssembly](building.md#buildi
 
 ## Server — `open_htj2k_jpip_server`
 
-Stateless HTTP/1.1 (optionally HTTP/3) server. Loads one `.j2c`
-codestream, builds the precinct index + packet locator once, then
-serves view-window requests.
+HTTP/1.1 (optionally HTTP/3) server. Loads one `.j2c` codestream,
+builds the precinct index + packet locator once, then serves
+view-window requests — statelessly by default (the client's `model`
+field carries its cache state), or within §B.2 sessions when the
+client establishes a channel with `cnew=http` (the server then keeps
+a per-channel cache model; see `cnew`/`cid` below).  The HTTP/3 path
+is stateless only.
 
 ```
 open_htj2k_jpip_server <input.j2c>
@@ -100,19 +104,39 @@ GET /jpip?fsiz=<fx>,<fy>&roff=<ox>,<oy>&rsiz=<sx>,<sy>&type=jpp-stream
 - `type=jpp-stream` — JPP-stream response (the only wire format this
   server speaks).
 - `len=<N>` — §C.6.1 Maximum Response Length, in bytes.  The server
-  emits whole messages up to `N` bytes of JPP-stream payload (EOR
-  does not count) and terminates with EOR reason=4 (`ByteLimit`)
-  when it stops early, or reason=2 (`WindowDone`) when the entire
-  view-window fit.
+  fills the response up to `N` bytes (EOR does not count) and
+  terminates with EOR reason=4 (`ByteLimit`) when it stops early,
+  or reason=2 (`WindowDone`) when the entire view-window fit.
+  Delivery is resumable at byte granularity: a data-bin larger than
+  the remaining budget contributes a prefix now and continues from
+  that byte offset on the next request (tracked per-session, or via
+  the `model` field's `:bytes` qualifier in stateless mode), so
+  byte-limited clients always make forward progress.  `len=0` is
+  legal and yields an EOR-only response.
 - `model` — §C.9 cache-model advertisement; see
   [cache-model field](#cache-model-field--c9).
-- `cnew=http` — §C.3.3 session/channel establishment.  The server
-  replies with a `JPIP-cnew:
-  cid=C<n>,path=jpip,transport=http` response header.  This server
-  is stateless — the `cid` is opaque and the cache-model field
-  carries all session state — but interactive clients require the
-  header before they will commit received data-bins to their
-  persistent cache.
+- `cnew=<transports>` — §C.3.3 session/channel establishment.  When
+  the comma-separated list contains `http` (the only transport this
+  server grants), the reply carries `JPIP-cnew:
+  cid=<token>,path=jpip,transport=http` and the server creates a
+  session: a per-channel cache model remembers every data-bin (and
+  partial-bin byte offset) delivered on that `cid`, so follow-up
+  requests — which session clients send *without* a `model` field —
+  never receive the same bytes twice (§B.2).  Once a window
+  completes, repeating the request returns an empty body with EOR
+  reason=2, as Table D.2 requires.  If no offered transport is
+  supported (e.g. `cnew=http-tcp` alone), no `JPIP-cnew` header is
+  returned and the request is served statelessly per §C.3.3 —
+  never a transport the client did not offer (Table D.1).
+- `cid=<token>` — request within an existing channel.  Unknown or
+  expired cids get HTTP 404 so the client re-establishes rather
+  than looping on stateless duplicates.  Channels are evicted LRU
+  beyond 64 concurrent sessions.
+- `cclose=*` (or a cid list) — §C.3.4 channel close, honoured after
+  the response completes.
+- `qid=<N>` — §C.3.5 request ID; echoed back verbatim in a
+  `JPIP-qid` response header (§D.2.4).  Session responses also
+  carry `Cache-Control: no-cache`.
 
 HTTP **POST** is also accepted (§C.1): the query string moves into
 the request body when GET's URL-length limit would otherwise
@@ -391,18 +415,25 @@ in WASM at `reduce=0` instead of ~3000 ms for the full canvas.
 
 ### Cache-model field (§C.9)
 
-A client-side `CacheModel` tracks which non-precinct data-bins have
-been received. Its `format()` method emits the §C.9 model field body
-used as `&model=` — for example `Hm,Ht0,Ht1-5,M0`. Range compression
-(`Ht1-5` instead of `Ht1,Ht2,Ht3,Ht4,Ht5`) keeps the query short on
-multi-tile images.
+`CacheModel` tracks the data-bins a client holds — completely, or up
+to a byte offset. Its `format()` method emits the §C.9 model field
+body used as `&model=` — for example `Hm,Ht0,Ht1-5,M0,P7:987`. Range
+compression (`Ht1-5` instead of `Ht1,Ht2,Ht3,Ht4,Ht5`) keeps the
+query short on multi-tile images; partial holdings carry the §C.9.2
+`:bytes` qualifier and are never range-compressed.
 
 | Class | Prefix | Example |
 |---|---|---|
 | Main header (6) | `Hm` | `Hm` (id always 0) |
 | Tile header (2) | `Ht` | `Ht0`, `Ht1-5` |
-| Precinct (0) | `Hp` | *not sent by the demos* |
+| Precinct (0) | `P` | `P7`, `P7:987` (first 987 bytes) |
 | Metadata (8) | `M` | `M0` |
+
+`parse()`/`apply()` accept the legacy `Hp` precinct prefix, the
+`:bytes` partial qualifier (the server resumes delivery from that
+offset), and `-`-prefixed subtractive statements (`-P5` — the client
+discarded the bin; the server forgets it was sent). The same model
+statements work in stateless requests and as session-mode updates.
 
 The browser demos track only headers — precincts are intentionally
 excluded so the foveation demo's periphery decays when the gaze

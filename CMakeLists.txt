@@ -353,6 +353,11 @@ set_target_properties(
   PROPERTIES OUTPUT_NAME
              $<IF:$<CONFIG:Debug>,open_htj2k_jpip_server_dbg,open_htj2k_jpip_server>)
 
+# JPIP session/channel management self-test (§B.2, §C.3, §C.9, §D.2)
+add_executable(jpip_session_check)
+add_subdirectory(tests/tools/jpip_session_check)
+target_link_libraries(jpip_session_check PUBLIC open_htj2k)
+
 # JPIP issue #297 chunked-transfer round-trip self-test
 add_executable(jpip_chunked_check)
 add_subdirectory(tests/tools/jpip_chunked_check)

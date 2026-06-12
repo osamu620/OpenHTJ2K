@@ -34,7 +34,12 @@ struct JpipRequest {
   bool        has_roff   = false;
   bool        has_rsiz   = false;
   bool        has_comps  = false;
-  // §C.4 Table C.4: image return type.  Must be "jpp-stream" for our use.
+  // §C.4: image return type.  The request field is a comma-separated
+  // preference list (`type = "type" "=" 1#image-return-type`) and each
+  // element may be the short token ("jpp-stream") or the equivalent
+  // media-type form ("image/jpp-stream").  The parser stores the type the
+  // server will actually serve — always "jpp-stream" — and fails with
+  // UnsupportedType only when no element of the list is acceptable.
   std::string type;
   // §C.9: client cache model — lists data-bins the client already has.
   std::string model;
@@ -63,6 +68,14 @@ struct JpipRequest {
   // cid arrives for trace only; accept it without validation.
   std::string cid;
   bool        has_cid     = false;
+  // §C.3.4 `cclose` — close channels.  Value is "*" (all channels of the
+  // session named by cid) or a comma-separated list of channel-ids.
+  std::string cclose;
+  bool        has_cclose  = false;
+  // §C.3.5 `qid` — request ID.  §D.2.4: when present the server shall
+  // echo it back verbatim in a `JPIP-qid:` response header.
+  uint64_t    qid         = 0;
+  bool        has_qid     = false;
 };
 
 enum class RequestParseStatus : uint8_t {
