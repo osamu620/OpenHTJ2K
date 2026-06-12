@@ -90,6 +90,13 @@ open_htj2k_jpip_server <input.j2c>
     [--no-chunked]                               # accepted for back-compat (now the default)
 ```
 
+> **Warning** — `--chunked` is for the browser/WASM streaming demos
+> only.  Some interactive reference JPIP clients (native desktop
+> viewers) cannot parse chunked responses and fail with "connection
+> closed unexpectedly"; serve those clients with the default
+> `Content-Length` mode.  See
+> [Progressive (chunked) delivery](#progressive-chunked-delivery).
+
 Query grammar (§C.4):
 
 ```
@@ -169,18 +176,23 @@ correctness.
 `Transfer-Encoding: chunked` *off* because some interactive reference
 JPIP clients do not implement chunked transfer parsing and report
 "connection closed unexpectedly" when the Content-Length header they
-expect is absent.  Our browser demos + C++ `JpipClient` accept either
-format; the client-side chunked refactor that enabled the TTFB win
-stays useful wherever the server is started with `--chunked`.  Opt in
-with:
+expect is absent — a session that otherwise negotiates perfectly
+(`JPIP-cnew` granted, image data flowing) fails at the HTTP layer with
+no JPIP-level error to point at the cause.  Use the default mode for
+native desktop viewers; reserve `--chunked` for the browser demos and
+`JpipClient`, which accept either format.  The client-side chunked
+refactor that enabled the TTFB win stays useful wherever the server
+is started with `--chunked`.  Opt in with:
 
 ```
 open_htj2k_jpip_server <input.j2c> --chunked
 ```
 
-The §C.6.1 `len=` rollback still works in chunked mode — each message
-is built into a reusable scratch buffer and only committed to a wire
-chunk once it fits under the cap.  HTTP/3 continues to use the
+The §C.6.1 `len=` cap works identically in chunked mode — data-bins
+are emitted through budget-aware byte windows, so each wire chunk is
+already guaranteed to fit under the cap when it is flushed, and a bin
+interrupted by the cap resumes from its recorded byte offset on the
+next request.  HTTP/3 continues to use the
 buffered data-reader path; progressive DATA-frame delivery over H3
 would require an nghttp3 data-reader refactor and is tracked as a
 follow-up.
