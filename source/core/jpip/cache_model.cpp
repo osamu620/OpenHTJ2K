@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <sstream>
+#include <cstring>
 #include <vector>
 
 namespace open_htj2k {
@@ -52,18 +52,18 @@ static const char *class_prefix(uint8_t cls) {
   }
 }
 
-static uint8_t prefix_to_class(const std::string &s, size_t &pos) {
+static uint8_t prefix_to_class(const char *&p, const char *end) {
   // Order matters — "Hm" and "Ht" must be tried before bare "H".  Accept
   // legacy "Hp" / "Ht" forms too so old clients (and our own pre-fix
   // serialiser output that may be cached anywhere) round-trip cleanly.
-  if (pos + 2 <= s.size()) {
-    if (s[pos] == 'H' && s[pos + 1] == 'm') { pos += 2; return kMsgClassMainHeader; }
-    if (s[pos] == 'H' && s[pos + 1] == 't') { pos += 2; return kMsgClassTileHeader; }
-    if (s[pos] == 'H' && s[pos + 1] == 'p') { pos += 2; return kMsgClassPrecinct; }
+  if (p + 2 <= end) {
+    if (p[0] == 'H' && p[1] == 'm') { p += 2; return kMsgClassMainHeader; }
+    if (p[0] == 'H' && p[1] == 't') { p += 2; return kMsgClassTileHeader; }
+    if (p[0] == 'H' && p[1] == 'p') { p += 2; return kMsgClassPrecinct; }
   }
-  if (pos < s.size() && s[pos] == 'P') { pos += 1; return kMsgClassPrecinct; }
-  if (pos < s.size() && s[pos] == 'H') { pos += 1; return kMsgClassTileHeader; }
-  if (pos < s.size() && s[pos] == 'M') { pos += 1; return kMsgClassMetadata; }
+  if (p < end && *p == 'P') { p += 1; return kMsgClassPrecinct; }
+  if (p < end && *p == 'H') { p += 1; return kMsgClassTileHeader; }
+  if (p < end && *p == 'M') { p += 1; return kMsgClassMetadata; }
   return 0xFF;
 }
 
@@ -148,26 +148,37 @@ void CacheModel::apply(const std::string &model_str) {
   CacheModel &m = *this;
   if (model_str.empty()) return;
 
-  // Split by comma
-  std::istringstream ss(model_str);
-  std::string token;
-  while (std::getline(ss, token, ',')) {
-    size_t pos = 0;
+  // Walk comma-separated tokens in place.  Viewers on gigapixel sessions
+  // send model strings that grow with their cache, so this runs on every
+  // stateless request with potentially long input — no per-token string
+  // or stringstream allocations.  strtoull naturally stops at ',' / '\0',
+  // so number parses never need a bounded copy; only character searches
+  // (memchr) are clamped to the token.
+  const char *p         = model_str.c_str();
+  const char *const end = p + model_str.size();
+  while (p < end) {
+    const char *tok_end =
+        static_cast<const char *>(std::memchr(p, ',', static_cast<size_t>(end - p)));
+    if (tok_end == nullptr) tok_end = end;
+    const char *q = p;
+    p             = (tok_end < end) ? tok_end + 1 : end;  // advance for next iteration
+
     // §C.9.2: a "-" prefix makes the statement subtractive — the client
     // has discarded the bin and the server must forget it was sent.
     bool subtractive = false;
-    if (pos < token.size() && token[pos] == '-') { subtractive = true; ++pos; }
-    uint8_t cls = prefix_to_class(token, pos);
+    if (q < tok_end && *q == '-') { subtractive = true; ++q; }
+    uint8_t cls = prefix_to_class(q, tok_end);
     if (cls == 0xFF) continue;
 
     // Main header: just "Hm" with no ID.  A ":bytes" qualifier (§C.9.2,
     // partial holding) can still follow.
     if (cls == kMsgClassMainHeader) {
-      const std::size_t colon = token.find(':', pos);
+      const char *colon =
+          static_cast<const char *>(std::memchr(q, ':', static_cast<size_t>(tok_end - q)));
       if (subtractive) {
         m.unmark(cls, 0);
-      } else if (colon != std::string::npos) {
-        m.mark_partial(cls, 0, std::strtoull(token.c_str() + colon + 1, nullptr, 10));
+      } else if (colon != nullptr) {
+        m.mark_partial(cls, 0, std::strtoull(colon + 1, nullptr, 10));
       } else {
         m.mark(cls, 0);
       }
@@ -180,21 +191,20 @@ void CacheModel::apply(const std::string &model_str) {
     // delivery (BinWindow skip).  Subtractive statements discard the
     // holding entirely — conservative for "-P5:1234" too, so the whole
     // bin is re-sent rather than risking a withheld tail.
-    if (pos >= token.size()) continue;
-    const char *numstart = token.c_str() + pos;
-    char *numend = nullptr;
-    uint64_t start = std::strtoull(numstart, &numend, 10);
-    if (numend == numstart) continue;
-    uint64_t end = start;
-    if (numend && *numend == '-') {
+    if (q >= tok_end) continue;
+    char *numend   = nullptr;
+    uint64_t start = std::strtoull(q, &numend, 10);
+    if (numend == q) continue;
+    uint64_t end_id = start;
+    if (numend < tok_end && *numend == '-') {
       const char *hs = numend + 1;
-      end = std::strtoull(hs, &numend, 10);
-      if (numend == hs || end < start) continue;
+      end_id = std::strtoull(hs, &numend, 10);
+      if (numend == hs || end_id < start) continue;
     }
     uint64_t partial_bytes = 0;
-    const bool partial = (numend && *numend == ':');
+    const bool partial     = (numend < tok_end && *numend == ':');
     if (partial) partial_bytes = std::strtoull(numend + 1, nullptr, 10);
-    for (uint64_t id = start; id <= end; ++id) {
+    for (uint64_t id = start; id <= end_id; ++id) {
       if (subtractive) m.unmark(cls, id);
       else if (partial) m.mark_partial(cls, id, partial_bytes);
       else m.mark(cls, id);

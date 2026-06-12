@@ -77,7 +77,7 @@ ReassembleStatus reassemble_codestream(const uint8_t *codestream, std::size_t le
     std::vector<uint8_t> body;
 
     // Walk precincts in the order the source codestream visited them.
-    const auto order = locator.precincts_of_tile(static_cast<uint16_t>(t));
+    const auto &order = locator.precincts_of_tile(static_cast<uint16_t>(t));
     for (const auto &pk : order) {
       const uint64_t I = idx.I(pk.t, pk.c, pk.r, pk.p_rc);
       if (set.contains(kMsgClassPrecinct, I)) {
