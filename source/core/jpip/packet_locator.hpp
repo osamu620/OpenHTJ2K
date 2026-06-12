@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 #include "codestream_walker.hpp"
@@ -68,17 +69,18 @@ class OPENHTJ2K_JPIP_EXPORT PacketLocator {
   // form a contiguous run in the codestream.  The returned keys all
   // share the requested tile index; an unknown tile returns an empty
   // vector.
-  std::vector<PrecinctKey> precincts_of_tile(uint16_t t) const;
+  const std::vector<PrecinctKey> &precincts_of_tile(uint16_t t) const;
 
  private:
   PacketLocator() = default;
 
   using Key = std::tuple<uint16_t, uint16_t, uint8_t, uint32_t>;
   std::map<Key, std::vector<PacketByteRange>> packets_;
-  // Precincts in first-appearance order, flat across all tiles.  The
-  // tile index on each PrecinctKey distinguishes them; precincts_of_tile()
-  // applies the obvious per-tile filter.
-  std::vector<PrecinctKey> precinct_visit_order_;
+  // Precincts in first-appearance order, bucketed by tile so per-tile
+  // lookups don't scan every precinct in the image (the reassembler
+  // walks tiles in declaration order, which on multi-tile codestreams
+  // made the flat-vector filter O(num_tiles × total_precincts)).
+  std::unordered_map<uint16_t, std::vector<PrecinctKey>> precincts_by_tile_;
   std::size_t total_packets_ = 0;
 };
 

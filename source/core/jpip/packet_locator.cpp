@@ -22,6 +22,11 @@ const std::vector<PacketByteRange> &empty_ranges() {
   return v;
 }
 
+const std::vector<PrecinctKey> &empty_keys() {
+  static const std::vector<PrecinctKey> v;
+  return v;
+}
+
 // Translate a tile_buf-relative offset to an absolute codestream offset,
 // given the tile-part bodies that make up this tile's concatenated data.
 // Returns UINT64_MAX if the offset does not map into any tile-part body
@@ -84,7 +89,7 @@ std::unique_ptr<PacketLocator> PacketLocator::build(const uint8_t *codestream,
       pk.c    = c;
       pk.r    = r;
       pk.p_rc = p_rc;
-      self_raw->precinct_visit_order_.push_back(pk);
+      self_raw->precincts_by_tile_[t].push_back(pk);
     }
     entry.push_back(PacketByteRange{abs_off, length});
     ++self_raw->total_packets_;
@@ -124,12 +129,10 @@ const std::vector<PacketByteRange> &PacketLocator::packets_of(uint16_t t, uint16
   return it->second;
 }
 
-std::vector<PrecinctKey> PacketLocator::precincts_of_tile(uint16_t t) const {
-  std::vector<PrecinctKey> out;
-  for (const auto &pk : precinct_visit_order_) {
-    if (pk.t == t) out.push_back(pk);
-  }
-  return out;
+const std::vector<PrecinctKey> &PacketLocator::precincts_of_tile(uint16_t t) const {
+  auto it = precincts_by_tile_.find(t);
+  if (it == precincts_by_tile_.end()) return empty_keys();
+  return it->second;
 }
 
 }  // namespace jpip
