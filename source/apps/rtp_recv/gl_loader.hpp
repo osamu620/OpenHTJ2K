@@ -43,7 +43,9 @@
 #    define GL_LINK_STATUS            0x8B82
 #    define GL_INFO_LOG_LENGTH        0x8B84
 #    define GL_ARRAY_BUFFER           0x8892
+#    define GL_PIXEL_UNPACK_BUFFER    0x88EC
 #    define GL_STATIC_DRAW            0x88E4
+#    define GL_STREAM_DRAW            0x88E0
 #    define GL_TEXTURE0               0x84C0
 #    define GL_TEXTURE1               0x84C1
 #    define GL_TEXTURE2               0x84C2
@@ -78,6 +80,7 @@
   typedef void    (APIENTRY *PFNGLGENBUFFERSPROC)(GLsizei n, GLuint *buffers);
   typedef void    (APIENTRY *PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
   typedef void    (APIENTRY *PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+  typedef void    (APIENTRY *PFNGLBUFFERSUBDATAPROC)(GLenum target, GLintptr offset, GLsizeiptr size, const void *data);
   typedef void    (APIENTRY *PFNGLDELETEBUFFERSPROC)(GLsizei n, const GLuint *buffers);
   typedef void    (APIENTRY *PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
   typedef void    (APIENTRY *PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
@@ -117,6 +120,7 @@ extern PFNGLDELETEVERTEXARRAYSPROC      DeleteVertexArrays;
 extern PFNGLGENBUFFERSPROC              GenBuffers;
 extern PFNGLBINDBUFFERPROC              BindBuffer;
 extern PFNGLBUFFERDATAPROC              BufferData;
+extern PFNGLBUFFERSUBDATAPROC           BufferSubData;
 extern PFNGLDELETEBUFFERSPROC           DeleteBuffers;
 
 extern PFNGLVERTEXATTRIBPOINTERPROC     VertexAttribPointer;

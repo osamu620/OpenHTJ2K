@@ -31,12 +31,53 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <vector>
 
 #include "rfc9828_parser.hpp"
 
 namespace open_htj2k::rtp_recv {
+
+// Recycles codestream byte buffers across threads.  Without it the
+// receive side re-reserves a fresh multi-MB accumulator for every frame
+// it emits (finalize_frame std::moves the old one out), and the decode
+// thread frees that buffer one frame later — a 4 MB malloc/free pair per
+// frame, 60/s at 4K60, with allocation and deallocation on different
+// threads.  The pool is two uncontended lock acquisitions per frame.
+class BufferPool {
+ public:
+  // Returns an empty vector whose capacity is recycled from a previously
+  // released buffer when one is available, else freshly reserved to
+  // `reserve_hint`.
+  std::vector<uint8_t> acquire(size_t reserve_hint) {
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      if (!bufs_.empty()) {
+        std::vector<uint8_t> v = std::move(bufs_.back());
+        bufs_.pop_back();
+        v.clear();  // keeps capacity
+        return v;
+      }
+    }
+    std::vector<uint8_t> v;
+    v.reserve(reserve_hint);
+    return v;
+  }
+
+  // Hands a spent buffer back for reuse.  Bounded so a burst can't pin
+  // an unbounded number of multi-MB buffers.
+  void release(std::vector<uint8_t>&& v) {
+    if (v.capacity() == 0) return;
+    std::lock_guard<std::mutex> lk(mu_);
+    if (bufs_.size() < kMaxPooled) bufs_.emplace_back(std::move(v));
+  }
+
+ private:
+  static constexpr size_t kMaxPooled = 4;
+  std::mutex mu_;
+  std::vector<std::vector<uint8_t>> bufs_;
+};
 
 struct AssembledFrame {
   std::vector<uint8_t> bytes;       // complete JPEG 2000 codestream ready for openhtj2k_decoder
@@ -74,6 +115,13 @@ class FrameHandler {
   // Reserve capacity for a worst-case 4K HTJ2K frame.  Optional; resize-on-
   // push handles it regardless.
   void reserve_frame_capacity(size_t bytes);
+
+  // Optional buffer recycling: when set, finalize_frame() draws the next
+  // accumulator from `pool` instead of reserving a fresh one, and the
+  // consumer is expected to release() spent AssembledFrame::bytes back.
+  // The pool must outlive this handler.  Null (default) keeps the
+  // allocate-per-frame behaviour.
+  void set_buffer_pool(BufferPool* pool) { pool_ = pool; }
 
   // Reset every piece of state — invoked when the caller detects an RTP SSRC
   // change, or when it wants to discard a partially-assembled frame.
@@ -117,6 +165,9 @@ class FrameHandler {
 
   // Codestream accumulator.
   std::vector<uint8_t> accum_;
+
+  // Optional recycler for emitted frame buffers (see set_buffer_pool).
+  BufferPool* pool_ = nullptr;
 
   // Cached main header from the last R=1 Main Packet.
   std::vector<uint8_t> cached_main_;

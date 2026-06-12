@@ -3,6 +3,12 @@
 //
 // Licensed under the same BSD 3-Clause terms as the rest of OpenHTJ2K.
 
+// recvmmsg(2) is a GNU extension; the feature-test macro must precede the
+// first libc include.
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+  #define _GNU_SOURCE
+#endif
+
 #include "rtp_socket.hpp"
 
 #ifdef _WIN32
@@ -241,6 +247,42 @@ ptrdiff_t UdpSocket::recv(void* buf, size_t buf_size) {
   }
 #endif
   return static_cast<ptrdiff_t>(n);
+}
+
+int UdpSocket::recv_batch(uint8_t* bufs, size_t buf_stride, int max_msgs, size_t* lengths) {
+#if defined(__linux__)
+  if (fd_ == kInvalidSocket) {
+    last_error_ = "recv_batch(): socket not open";
+    return kError;
+  }
+  if (max_msgs < 1) return kAgain;
+  if (max_msgs > kMaxBatch) max_msgs = kMaxBatch;
+  mmsghdr msgs[kMaxBatch];
+  iovec   iovs[kMaxBatch];
+  std::memset(msgs, 0, sizeof(mmsghdr) * static_cast<size_t>(max_msgs));
+  for (int i = 0; i < max_msgs; ++i) {
+    iovs[i].iov_base           = bufs + static_cast<size_t>(i) * buf_stride;
+    iovs[i].iov_len            = buf_stride;
+    msgs[i].msg_hdr.msg_iov    = &iovs[i];
+    msgs[i].msg_hdr.msg_iovlen = 1;
+  }
+  const int n = ::recvmmsg(fd_, msgs, static_cast<unsigned>(max_msgs), 0, nullptr);
+  if (n < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return kAgain;
+    last_error_ = socket_error_message("recvmmsg()");
+    return kError;
+  }
+  if (n == 0) return kAgain;
+  for (int i = 0; i < n; ++i) lengths[i] = msgs[i].msg_len;
+  return n;
+#else
+  // No batched receive on this platform — deliver one datagram per call.
+  (void)max_msgs;
+  const ptrdiff_t n = recv(bufs, buf_stride);
+  if (n == kAgain || n == kError) return static_cast<int>(n);
+  lengths[0] = static_cast<size_t>(n);
+  return 1;
+#endif
 }
 
 }  // namespace open_htj2k::rtp_recv

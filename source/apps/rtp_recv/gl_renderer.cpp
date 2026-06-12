@@ -423,6 +423,13 @@ void GlRenderer::shutdown() {
     gl::DeleteBuffers(1, &b);
     vbo_ = 0;
   }
+  if (pbo_[0] != 0 && gl::DeleteBuffers != nullptr) {
+    const GLuint b[2] = {pbo_[0], pbo_[1]};
+    gl::DeleteBuffers(2, b);
+    pbo_[0] = pbo_[1] = 0;
+  }
+  pbo_next_     = 0;
+  pbo_disabled_ = false;
   if (vao_ != 0 && gl::DeleteVertexArrays != nullptr) {
     const GLuint a = vao_;
     gl::DeleteVertexArrays(1, &a);
@@ -605,6 +612,64 @@ void GlRenderer::upload_and_draw(const uint8_t* rgb, int w, int h) {
   glfwSwapBuffers(window_);
 }
 
+void GlRenderer::upload_planar_textures(const void* y_plane, const void* cb_plane,
+                                        const void* cr_plane, int w_y, int h_y, int w_c,
+                                        int h_c, unsigned int type, int bpp) {
+  const size_t y_bytes = static_cast<size_t>(w_y) * static_cast<size_t>(h_y)
+                         * static_cast<size_t>(bpp);
+  const size_t c_bytes = static_cast<size_t>(w_c) * static_cast<size_t>(h_c)
+                         * static_cast<size_t>(bpp);
+
+  glPixelStorei(GL_UNPACK_ALIGNMENT, bpp);
+
+  if (!pbo_disabled_ && pbo_[0] == 0) {
+    gl::GenBuffers(2, pbo_);
+    if (pbo_[0] == 0 || pbo_[1] == 0) {
+      check_gl_error("glGenBuffers(pbo ring)");
+      pbo_[0] = pbo_[1] = 0;
+      pbo_disabled_     = true;
+    }
+  }
+
+  if (!pbo_disabled_) {
+    const size_t total = y_bytes + 2 * c_bytes;
+    pbo_next_ ^= 1;
+    gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_[pbo_next_]);
+    // Orphan, then stage all three planes into the fresh store.  The
+    // subsequent glTexSubImage2D calls source from the PBO (offset in
+    // place of a client pointer) and return without waiting for the
+    // transfer to the textures to complete.
+    gl::BufferData(GL_PIXEL_UNPACK_BUFFER, static_cast<GLsizeiptr>(total), nullptr,
+                   GL_STREAM_DRAW);
+    gl::BufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, static_cast<GLsizeiptr>(y_bytes), y_plane);
+    gl::BufferSubData(GL_PIXEL_UNPACK_BUFFER, static_cast<GLintptr>(y_bytes),
+                      static_cast<GLsizeiptr>(c_bytes), cb_plane);
+    gl::BufferSubData(GL_PIXEL_UNPACK_BUFFER, static_cast<GLintptr>(y_bytes + c_bytes),
+                      static_cast<GLsizeiptr>(c_bytes), cr_plane);
+    glBindTexture(GL_TEXTURE_2D, tex_y_);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, type,
+                    reinterpret_cast<const void*>(static_cast<uintptr_t>(0)));
+    glBindTexture(GL_TEXTURE_2D, tex_cb_);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type,
+                    reinterpret_cast<const void*>(static_cast<uintptr_t>(y_bytes)));
+    glBindTexture(GL_TEXTURE_2D, tex_cr_);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type,
+                    reinterpret_cast<const void*>(static_cast<uintptr_t>(y_bytes + c_bytes)));
+    // Unbind so later glTexSubImage2D calls with client pointers (RGB
+    // fallback path) aren't misread as PBO offsets.
+    gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    return;
+  }
+
+  // Direct client-memory uploads (PBO unavailable).
+  glBindTexture(GL_TEXTURE_2D, tex_y_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, type, y_plane);
+  glBindTexture(GL_TEXTURE_2D, tex_cb_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type, cb_plane);
+  glBindTexture(GL_TEXTURE_2D, tex_cr_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type, cr_plane);
+}
+
 void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* cb_plane,
                                         const uint8_t* cr_plane, int w_y, int h_y, int w_c,
                                         int h_c, const ycbcr_coefficients* coeffs,
@@ -614,16 +679,8 @@ void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* c
 
   if (!ensure_planar_textures(w_y, h_y, w_c, h_c, /*bpp=*/1)) return;
 
-  // Upload Y.
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glBindTexture(GL_TEXTURE_2D, tex_y_);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, GL_UNSIGNED_BYTE, y_plane);
-  // Upload Cb.
-  glBindTexture(GL_TEXTURE_2D, tex_cb_);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, GL_UNSIGNED_BYTE, cb_plane);
-  // Upload Cr.
-  glBindTexture(GL_TEXTURE_2D, tex_cr_);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, GL_UNSIGNED_BYTE, cr_plane);
+  upload_planar_textures(y_plane, cb_plane, cr_plane, w_y, h_y, w_c, h_c,
+                         GL_UNSIGNED_BYTE, /*bpp=*/1);
 
   // 8-bit source: the texture value already lives in the sample's native
   // [0, 1] range, so uNormScale is the identity.
@@ -645,14 +702,8 @@ void GlRenderer::upload_planar_16_and_draw(const uint16_t* y_plane, const uint16
 
   if (!ensure_planar_textures(w_y, h_y, w_c, h_c, /*bpp=*/2)) return;
 
-  // R16 row pitch is 2-byte aligned.
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
-  glBindTexture(GL_TEXTURE_2D, tex_y_);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, GL_UNSIGNED_SHORT, y_plane);
-  glBindTexture(GL_TEXTURE_2D, tex_cb_);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, GL_UNSIGNED_SHORT, cb_plane);
-  glBindTexture(GL_TEXTURE_2D, tex_cr_);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, GL_UNSIGNED_SHORT, cr_plane);
+  upload_planar_textures(y_plane, cb_plane, cr_plane, w_y, h_y, w_c, h_c,
+                         GL_UNSIGNED_SHORT, /*bpp=*/2);
 
   // GL_R16 reads back as (sample / 65535).  Multiply by this factor in the
   // shader to restore the sample's native [0, 1] range so the bias/scale/

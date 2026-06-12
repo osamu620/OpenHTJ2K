@@ -39,6 +39,7 @@ PFNGLDELETEVERTEXARRAYSPROC      DeleteVertexArrays      = nullptr;
 PFNGLGENBUFFERSPROC              GenBuffers              = nullptr;
 PFNGLBINDBUFFERPROC              BindBuffer              = nullptr;
 PFNGLBUFFERDATAPROC              BufferData              = nullptr;
+PFNGLBUFFERSUBDATAPROC           BufferSubData           = nullptr;
 PFNGLDELETEBUFFERSPROC           DeleteBuffers           = nullptr;
 
 PFNGLVERTEXATTRIBPOINTERPROC     VertexAttribPointer     = nullptr;
@@ -92,6 +93,7 @@ bool load_functions() {
   LOAD(GenBuffers,              "glGenBuffers");
   LOAD(BindBuffer,              "glBindBuffer");
   LOAD(BufferData,              "glBufferData");
+  LOAD(BufferSubData,           "glBufferSubData");
   LOAD(DeleteBuffers,           "glDeleteBuffers");
 
   LOAD(VertexAttribPointer,     "glVertexAttribPointer");
