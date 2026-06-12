@@ -15,6 +15,7 @@ target_sources(open_htj2k
     tcp_socket.cpp
     jpip_client.cpp
     cache_model.cpp
+    channel_manager.cpp
     h3_server.cpp
     h3_client.cpp
 )

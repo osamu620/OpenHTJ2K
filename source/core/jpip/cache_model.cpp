@@ -13,7 +13,12 @@ namespace open_htj2k {
 namespace jpip {
 
 void CacheModel::mark(uint8_t class_id, uint64_t in_class_id) {
-  bins_.insert(key(class_id, in_class_id));
+  bins_[key(class_id, in_class_id)].complete = true;
+}
+
+void CacheModel::mark_partial(uint8_t class_id, uint64_t in_class_id, uint64_t bytes) {
+  Entry &e = bins_[key(class_id, in_class_id)];
+  if (!e.complete && bytes > e.bytes) e.bytes = bytes;
 }
 
 void CacheModel::unmark(uint8_t class_id, uint64_t in_class_id) {
@@ -21,7 +26,13 @@ void CacheModel::unmark(uint8_t class_id, uint64_t in_class_id) {
 }
 
 bool CacheModel::has(uint8_t class_id, uint64_t in_class_id) const {
-  return bins_.count(key(class_id, in_class_id)) > 0;
+  auto it = bins_.find(key(class_id, in_class_id));
+  return it != bins_.end() && it->second.complete;
+}
+
+uint64_t CacheModel::received_bytes(uint8_t class_id, uint64_t in_class_id) const {
+  auto it = bins_.find(key(class_id, in_class_id));
+  return it == bins_.end() ? 0 : it->second.bytes;
 }
 
 void CacheModel::clear() { bins_.clear(); }
@@ -57,18 +68,28 @@ static uint8_t prefix_to_class(const std::string &s, size_t &pos) {
 }
 
 std::string CacheModel::format() const {
-  // Group bins by class, sort IDs, compress into ranges.
-  struct ClassGroup { uint8_t cls; std::vector<uint64_t> ids; };
+  // Group bins by class, sort IDs, compress complete bins into ranges.
+  // Partial holdings are emitted individually with the §C.9.2 ":bytes"
+  // qualifier and never participate in range compression.
+  struct ClassGroup {
+    uint8_t cls;
+    std::vector<uint64_t> complete_ids;
+    std::vector<std::pair<uint64_t, uint64_t>> partial;  // (id, bytes)
+  };
   std::vector<ClassGroup> groups;
-  for (uint64_t k : bins_) {
-    uint8_t cls = static_cast<uint8_t>(k >> 56);
-    uint64_t id = k & 0x00FFFFFFFFFFFFFF;
+  for (const auto &kv : bins_) {
+    uint8_t cls = static_cast<uint8_t>(kv.first >> 56);
+    uint64_t id = kv.first & 0x00FFFFFFFFFFFFFF;
     auto it = std::find_if(groups.begin(), groups.end(),
                            [cls](const ClassGroup &g) { return g.cls == cls; });
     if (it == groups.end()) {
-      groups.push_back({cls, {id}});
-    } else {
-      it->ids.push_back(id);
+      groups.push_back({cls, {}, {}});
+      it = groups.end() - 1;
+    }
+    if (kv.second.complete) {
+      it->complete_ids.push_back(id);
+    } else if (kv.second.bytes > 0) {
+      it->partial.emplace_back(id, kv.second.bytes);
     }
   }
 
@@ -76,26 +97,42 @@ std::string CacheModel::format() const {
   for (auto &g : groups) {
     const char *pfx = class_prefix(g.cls);
     if (!pfx) continue;
-    std::sort(g.ids.begin(), g.ids.end());
+    std::sort(g.complete_ids.begin(), g.complete_ids.end());
+    std::sort(g.partial.begin(), g.partial.end());
 
-    // Main header (class 6) has only id=0 — emit just "Hm"
+    // Main header (class 6) has only id=0 — emit just "Hm" when complete.
     if (g.cls == kMsgClassMainHeader) {
-      if (!out.empty()) out += ',';
-      out += pfx;
+      if (!g.complete_ids.empty()) {
+        if (!out.empty()) out += ',';
+        out += pfx;
+      }
+      for (const auto &p : g.partial) {
+        if (!out.empty()) out += ',';
+        out += pfx;
+        out += ':';
+        out += std::to_string(p.second);
+      }
       continue;
     }
 
-    // Compress into ranges: 0-3,5,7-10
+    // Compress complete bins into ranges: 0-3,5,7-10
     size_t i = 0;
-    while (i < g.ids.size()) {
+    while (i < g.complete_ids.size()) {
       if (!out.empty()) out += ',';
       out += pfx;
-      uint64_t start = g.ids[i];
+      uint64_t start = g.complete_ids[i];
       uint64_t end = start;
-      while (i + 1 < g.ids.size() && g.ids[i + 1] == end + 1) { ++end; ++i; }
+      while (i + 1 < g.complete_ids.size() && g.complete_ids[i + 1] == end + 1) { ++end; ++i; }
       out += std::to_string(start);
       if (end != start) { out += '-'; out += std::to_string(end); }
       ++i;
+    }
+    for (const auto &p : g.partial) {
+      if (!out.empty()) out += ',';
+      out += pfx;
+      out += std::to_string(p.first);
+      out += ':';
+      out += std::to_string(p.second);
     }
   }
   return out;
@@ -103,36 +140,66 @@ std::string CacheModel::format() const {
 
 CacheModel CacheModel::parse(const std::string &model_str) {
   CacheModel m;
-  if (model_str.empty()) return m;
+  m.apply(model_str);
+  return m;
+}
+
+void CacheModel::apply(const std::string &model_str) {
+  CacheModel &m = *this;
+  if (model_str.empty()) return;
 
   // Split by comma
   std::istringstream ss(model_str);
   std::string token;
   while (std::getline(ss, token, ',')) {
     size_t pos = 0;
+    // §C.9.2: a "-" prefix makes the statement subtractive — the client
+    // has discarded the bin and the server must forget it was sent.
+    bool subtractive = false;
+    if (pos < token.size() && token[pos] == '-') { subtractive = true; ++pos; }
     uint8_t cls = prefix_to_class(token, pos);
     if (cls == 0xFF) continue;
 
-    // Main header: just "Hm" with no ID
+    // Main header: just "Hm" with no ID.  A ":bytes" qualifier (§C.9.2,
+    // partial holding) can still follow.
     if (cls == kMsgClassMainHeader) {
-      m.mark(cls, 0);
+      const std::size_t colon = token.find(':', pos);
+      if (subtractive) {
+        m.unmark(cls, 0);
+      } else if (colon != std::string::npos) {
+        m.mark_partial(cls, 0, std::strtoull(token.c_str() + colon + 1, nullptr, 10));
+      } else {
+        m.mark(cls, 0);
+      }
       continue;
     }
 
-    // Parse ID or range: "5" or "5-10"
+    // Parse ID or range: "5" or "5-10", optionally with a ":bytes"
+    // qualifier (§C.9.2 explicit-bin-descriptor) recording a partial
+    // holding.  Partial bins resume from their byte offset on the next
+    // delivery (BinWindow skip).  Subtractive statements discard the
+    // holding entirely — conservative for "-P5:1234" too, so the whole
+    // bin is re-sent rather than risking a withheld tail.
     if (pos >= token.size()) continue;
     const char *numstart = token.c_str() + pos;
     char *numend = nullptr;
     uint64_t start = std::strtoull(numstart, &numend, 10);
+    if (numend == numstart) continue;
     uint64_t end = start;
     if (numend && *numend == '-') {
-      end = std::strtoull(numend + 1, nullptr, 10);
+      const char *hs = numend + 1;
+      end = std::strtoull(hs, &numend, 10);
+      if (numend == hs || end < start) continue;
     }
+    uint64_t partial_bytes = 0;
+    const bool partial = (numend && *numend == ':');
+    if (partial) partial_bytes = std::strtoull(numend + 1, nullptr, 10);
     for (uint64_t id = start; id <= end; ++id) {
-      m.mark(cls, id);
+      if (subtractive) m.unmark(cls, id);
+      else if (partial) m.mark_partial(cls, id, partial_bytes);
+      else m.mark(cls, id);
     }
   }
-  return m;
 }
 
 }  // namespace jpip

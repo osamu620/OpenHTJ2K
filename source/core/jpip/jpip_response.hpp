@@ -21,10 +21,14 @@ namespace jpip {
 // payload.  `target_id` is the JPIP-tid response header (§D.2.3); an
 // empty string omits the header.  The response uses Connection: close
 // for v1 simplicity.
+// `extra_headers`, when non-empty, is a block of pre-formatted header
+// lines each terminated by CRLF (e.g. "JPIP-qid: 7\r\nCache-Control:
+// no-cache\r\n") inserted verbatim before the blank line.
 OPENHTJ2K_JPIP_EXPORT std::vector<uint8_t>
 format_jpp_response(const uint8_t *body, std::size_t body_len,
                     const std::string &target_id = "",
-                    const std::string &cnew_header = "");
+                    const std::string &cnew_header = "",
+                    const std::string &extra_headers = "");
 
 // Format only the HTTP/1.1 response headers for a chunked (`Transfer-Encoding:
 // chunked`) JPP-stream delivery.  The body bytes are written separately as
@@ -34,7 +38,8 @@ format_jpp_response(const uint8_t *body, std::size_t body_len,
 // headers from body.
 OPENHTJ2K_JPIP_EXPORT std::vector<uint8_t>
 format_jpp_response_headers_chunked(const std::string &target_id = "",
-                                    const std::string &cnew_header = "");
+                                    const std::string &cnew_header = "",
+                                    const std::string &extra_headers = "");
 
 // Build the HTTP/1.1 chunk header for a payload of `n` bytes: the hex length
 // followed by CRLF.  The caller writes this, then the `n` bytes of payload,

@@ -11,7 +11,8 @@ namespace jpip {
 
 std::vector<uint8_t> format_jpp_response(const uint8_t *body, std::size_t body_len,
                                          const std::string &target_id,
-                                         const std::string &cnew_header) {
+                                         const std::string &cnew_header,
+                                         const std::string &extra_headers) {
   char header[512];
   int n = std::snprintf(header, sizeof(header),
                         "HTTP/1.1 200 OK\r\n"
@@ -36,6 +37,7 @@ std::vector<uint8_t> format_jpp_response(const uint8_t *body, std::size_t body_l
     out.insert(out.end(), reinterpret_cast<const uint8_t *>(cn),
                reinterpret_cast<const uint8_t *>(cn) + cnn);
   }
+  out.insert(out.end(), extra_headers.begin(), extra_headers.end());
   out.push_back('\r');
   out.push_back('\n');
   if (body != nullptr && body_len > 0) {
@@ -45,7 +47,8 @@ std::vector<uint8_t> format_jpp_response(const uint8_t *body, std::size_t body_l
 }
 
 std::vector<uint8_t> format_jpp_response_headers_chunked(const std::string &target_id,
-                                                         const std::string &cnew_header) {
+                                                         const std::string &cnew_header,
+                                                         const std::string &extra_headers) {
   // Same status line + JPIP response headers as the buffered path but with
   // `Transfer-Encoding: chunked` in place of `Content-Length`.  HTTP/1.1
   // §4.1: a message MUST NOT carry both Content-Length and Transfer-Encoding.
@@ -72,6 +75,7 @@ std::vector<uint8_t> format_jpp_response_headers_chunked(const std::string &targ
     out.insert(out.end(), reinterpret_cast<const uint8_t *>(cn),
                reinterpret_cast<const uint8_t *>(cn) + cnn);
   }
+  out.insert(out.end(), extra_headers.begin(), extra_headers.end());
   out.push_back('\r');
   out.push_back('\n');
   return out;

@@ -8,15 +8,15 @@
 // through so dependent-form headers (Class/CSn omission) work across
 // successive data-bins.
 //
-// The v1 emitters always pack each data-bin into a single message — i.e.
-// msg_offset = 0, msg_length = (bin size), is_last = true.  Splitting a
-// bin across multiple messages is allowed by the spec (and useful for
-// flow-control and progressive delivery) but unnecessary for the local
-// round-trip use case in PHASE2_PLAN.md.
+// Bins whose payload exceeds kMaxMessagePayload are split across multiple
+// messages with monotonically increasing msg_offset; only the final
+// message carries is_last = 1.
 //
-// Precinct data-bins (class 0/1) are not emitted by this header — they
-// require packet-header parsing and live in a follow-up commit; see
-// PHASE2_PLAN.md item B3-precincts.
+// Every emitter accepts an optional BinWindow for resumable, byte-capped
+// delivery (§C.6.1 Maximum Response Length): `skip` payload bytes the
+// client already holds are not re-sent (messages start at msg_offset =
+// skip), and no more than `budget` bytes (headers + payload) are appended.
+// Without a BinWindow the whole bin is emitted unconditionally.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +36,26 @@
 namespace open_htj2k {
 namespace jpip {
 
+// Byte-window control for resumable, budget-capped bin delivery.
+//
+// In:  `skip`   — payload bytes of this bin the client already holds (from
+//                 its cache model); emission resumes at msg_offset = skip.
+//      `budget` — maximum bytes (message headers + payload) the emitter
+//                 may append to `out` in this call.
+// Out: `payload_sent`   — payload bytes emitted (excludes headers); the
+//                 client now holds skip + payload_sent bytes of the bin.
+//      `complete`       — the is_last message was emitted: the bin is done.
+//      `budget_blocked` — emission stopped (or never started) because the
+//                 budget could not fit the next message.  Distinguishes
+//                 "response is full" from "bin had nothing to send".
+struct BinWindow {
+  std::size_t skip           = 0;
+  std::size_t budget         = SIZE_MAX;
+  std::size_t payload_sent   = 0;
+  bool        complete       = false;
+  bool        budget_blocked = false;
+};
+
 // Emit the main-header data-bin (class 6, in-class id 0).  Payload is the
 // codestream bytes from the SOC marker (inclusive) up to the first SOT
 // marker (exclusive).  Returns the number of bytes appended to `out`, or 0
@@ -44,7 +64,8 @@ OPENHTJ2K_JPIP_EXPORT std::size_t
 emit_main_header_databin(const uint8_t *codestream, std::size_t len,
                          const CodestreamLayout &layout,
                          MessageHeaderContext &ctx,
-                         std::vector<uint8_t> &out);
+                         std::vector<uint8_t> &out,
+                         BinWindow *win = nullptr);
 
 // Emit the tile-header data-bin (class 2, in-class id = `tile_index`).
 // Per §A.3.3, the bin contains all tile-part-header marker segments for
@@ -58,14 +79,16 @@ emit_tile_header_databin(const uint8_t *codestream, std::size_t len,
                          uint16_t tile_index,
                          const CodestreamLayout &layout,
                          MessageHeaderContext &ctx,
-                         std::vector<uint8_t> &out);
+                         std::vector<uint8_t> &out,
+                         BinWindow *win = nullptr);
 
 // Emit metadata-bin 0 (class 8, in-class id 0).  Per §A.3.6.1 the server
 // must always send this bin; for raw .j2c codestreams (no JP2/JPH boxes)
 // it is empty.  This implementation emits a single zero-length, is_last
 // message.
 OPENHTJ2K_JPIP_EXPORT std::size_t
-emit_metadata_bin_zero(MessageHeaderContext &ctx, std::vector<uint8_t> &out);
+emit_metadata_bin_zero(MessageHeaderContext &ctx, std::vector<uint8_t> &out,
+                       BinWindow *win = nullptr);
 
 // Emit a precinct data-bin (class 0, in-class id = `I` per §A.3.2.1
 // Eq. A-1) covering every packet of this precinct across every layer.
@@ -86,7 +109,8 @@ emit_precinct_databin(const uint8_t *codestream, std::size_t len,
                       const CodestreamIndex &idx,
                       const PacketLocator &locator,
                       MessageHeaderContext &ctx,
-                      std::vector<uint8_t> &out);
+                      std::vector<uint8_t> &out,
+                      BinWindow *win = nullptr);
 
 // Emit an End-of-Response (EOR) message (§D.3) with the given reason
 // code.  EOR is not an Annex A message and not a class; the wire form
