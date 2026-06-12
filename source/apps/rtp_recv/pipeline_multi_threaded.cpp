@@ -30,7 +30,16 @@ namespace {
 
 void recv_thread_main(const CliOptions& opts, UdpSocket& sock, FrameHandler& frame_handler,
                       ReceiverState& st) {
-  std::vector<uint8_t> packet_buf(65536);
+  // Batched receive: one buffer slab, one datagram per 64 KB stride (the
+  // UDP maximum, so nothing truncates).  On Linux recv_batch drains up to
+  // kBatch datagrams per recvmmsg syscall — at broadcast packet rates the
+  // receive thread otherwise spends a measurable share of its budget on
+  // syscall entry/exit.  Elsewhere recv_batch degrades to one datagram
+  // per call, identical to the previous loop.
+  constexpr int    kBatch  = 16;
+  constexpr size_t kStride = 65536;
+  std::vector<uint8_t> packet_buf(kBatch * kStride);
+  size_t               pkt_lengths[kBatch];
 
   while (!st.stop_flag.load(std::memory_order_acquire)) {
     const int ready = sock.wait_readable(/*timeout_ms=*/5);
@@ -47,53 +56,59 @@ void recv_thread_main(const CliOptions& opts, UdpSocket& sock, FrameHandler& fra
     // socket never falls behind real time.  No upper bound: with the
     // 32 MB SO_RCVBUF and the dedicated thread, this loop empties the
     // kernel buffer faster than it can fill at 30 fps × 4K.  The socket
-    // is non-blocking (set in run_receiver_threaded), so recv() returns
-    // kAgain immediately when the kernel buffer empties.
+    // is non-blocking (set in run_receiver_threaded), so recv_batch
+    // returns kAgain immediately when the kernel buffer empties.
     while (true) {
-      auto n = sock.recv(packet_buf.data(), packet_buf.size());
-      if (n == UdpSocket::kAgain) break;
-      if (n == UdpSocket::kError) {
+      const int n_msgs = sock.recv_batch(packet_buf.data(), kStride, kBatch, pkt_lengths);
+      if (n_msgs == UdpSocket::kAgain) break;
+      if (n_msgs == UdpSocket::kError) {
         std::fprintf(stderr, "recv error: %s\n", sock.last_error().c_str());
         st.stop_flag.store(true, std::memory_order_release);
         st.decode_slot.notify();
         st.render_slot.notify();
         return;
       }
-      if (n < 12) continue;
-      const auto pkt_len = static_cast<size_t>(n);
 
-      RtpHeader   rtp{};
-      std::string err;
-      if (!parse_rtp_header(packet_buf.data(), pkt_len, rtp, err)) continue;
-      if (rtp.payload_offset >= pkt_len) continue;
+      for (int m = 0; m < n_msgs; ++m) {
+        const uint8_t* pkt     = packet_buf.data() + static_cast<size_t>(m) * kStride;
+        const size_t   pkt_len = pkt_lengths[m];
+        if (pkt_len < 12) continue;
 
-      const uint8_t* payload    = packet_buf.data() + rtp.payload_offset;
-      const size_t   payload_sz = pkt_len - rtp.payload_offset;
-      if (payload_sz < 8) continue;
+        RtpHeader   rtp{};
+        std::string err;
+        if (!parse_rtp_header(pkt, pkt_len, rtp, err)) continue;
+        if (rtp.payload_offset >= pkt_len) continue;
 
-      const uint8_t                  mh = static_cast<uint8_t>(payload[0] >> 6);
-      std::optional<AssembledFrame>  emitted;
+        const uint8_t* payload    = pkt + rtp.payload_offset;
+        const size_t   payload_sz = pkt_len - rtp.payload_offset;
+        if (payload_sz < 8) continue;
 
-      if (mh == MH_BODY) {
-        BodyPacketHeader body{};
-        if (!parse_body_packet_header(payload, payload_sz, body, err)) continue;
-        const uint8_t* cs_bytes = payload + body.codestream_offset;
-        const size_t   cs_len   = payload_sz - body.codestream_offset;
-        frame_handler.push_body_packet(rtp, body, cs_bytes, cs_len, emitted);
-      } else {
-        MainPacketHeader main{};
-        if (!parse_main_packet_header(payload, payload_sz, main, err)) continue;
-        const uint8_t* cs_bytes = payload + main.codestream_offset;
-        const size_t   cs_len   = payload_sz - main.codestream_offset;
-        frame_handler.push_main_packet(rtp, main, cs_bytes, cs_len, emitted);
-      }
+        const uint8_t                  mh = static_cast<uint8_t>(payload[0] >> 6);
+        std::optional<AssembledFrame>  emitted;
 
-      if (emitted.has_value()) {
-        const uint64_t idx = st.frames_emitted_to_decode.fetch_add(1, std::memory_order_relaxed);
-        dump_frame_if_requested(opts, *emitted, idx);
-        // Latest-wins: if the decoder is busy and a previous frame is still
-        // queued, the previous frame is dropped.  Counter inside the slot.
-        st.decode_slot.push(std::move(*emitted));
+        if (mh == MH_BODY) {
+          BodyPacketHeader body{};
+          if (!parse_body_packet_header(payload, payload_sz, body, err)) continue;
+          const uint8_t* cs_bytes = payload + body.codestream_offset;
+          const size_t   cs_len   = payload_sz - body.codestream_offset;
+          frame_handler.push_body_packet(rtp, body, cs_bytes, cs_len, emitted);
+        } else {
+          MainPacketHeader main{};
+          if (!parse_main_packet_header(payload, payload_sz, main, err)) continue;
+          const uint8_t* cs_bytes = payload + main.codestream_offset;
+          const size_t   cs_len   = payload_sz - main.codestream_offset;
+          frame_handler.push_main_packet(rtp, main, cs_bytes, cs_len, emitted);
+        }
+
+        if (emitted.has_value()) {
+          const uint64_t idx = st.frames_emitted_to_decode.fetch_add(1, std::memory_order_relaxed);
+          dump_frame_if_requested(opts, *emitted, idx);
+          // Latest-wins: if the decoder is busy and a previous frame is still
+          // queued, the previous frame is dropped.  Counter inside the slot.
+          // Its buffer goes back to the pool instead of the heap.
+          auto evicted = st.decode_slot.push(std::move(*emitted));
+          if (evicted.has_value()) st.frame_buf_pool.release(std::move(evicted->bytes));
+        }
       }
     }
   }
@@ -277,6 +292,12 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
         st.frames_decoded.fetch_add(1, std::memory_order_relaxed) + 1;
     first_frame = false;
 
+    // Decode is finished with the borrowed codestream bytes — recycle the
+    // buffer so the receive thread's next finalize_frame() reuses its
+    // capacity instead of allocating a fresh multi-MB vector.  (Failure
+    // paths above skip this and just free; drops are rare.)
+    st.frame_buf_pool.release(std::move(frame.bytes));
+
     // Hand the decoded RGB to the renderer.  If main hasn't picked up the
     // previous decoded frame yet (e.g. blocked in vsync), it gets dropped
     // here — latest-wins keeps motion-to-photon minimal.
@@ -357,6 +378,7 @@ int run_receiver_threaded(const CliOptions& opts) {
 
   FrameHandler  frame_handler;
   ReceiverState state;
+  frame_handler.set_buffer_pool(&state.frame_buf_pool);
 #ifdef OPENHTJ2K_USE_METAL
   state.renderer_ptr = renderer_ptr;
 #endif

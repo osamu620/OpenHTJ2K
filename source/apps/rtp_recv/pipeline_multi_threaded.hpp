@@ -23,6 +23,12 @@ struct ReceiverState {
   LatestSlot<AssembledFrame>  decode_slot;
   LatestSlot<DecodedFrame>    render_slot;
 
+  // Recycles AssembledFrame codestream buffers: the decode thread (and
+  // the receive thread, on decode_slot eviction) releases spent buffers;
+  // the FrameHandler acquires its next accumulator from here.  Removes a
+  // per-frame multi-MB malloc/free pair split across the two threads.
+  BufferPool frame_buf_pool;
+
   // Counters (atomic for thread-safe summary at exit).
   std::atomic<uint64_t> frames_emitted_to_decode{0};  // dump index, increments per frame_handler emission
   std::atomic<uint64_t> frames_decoded{0};

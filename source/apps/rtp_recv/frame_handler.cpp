@@ -116,8 +116,14 @@ void FrameHandler::finalize_frame(std::optional<AssembledFrame>& out_frame) {
     f.mat           = frame_mat_;
     out_frame       = std::move(f);
     ++stats_.frames_emitted;
-    accum_.clear();  // std::move left us in a valid but empty state
-    accum_.reserve(kDefaultFrameCapacity);
+    // std::move left accum_ valid but capacity-less; draw the replacement
+    // from the pool when one is wired up so steady state allocates nothing.
+    if (pool_ != nullptr) {
+      accum_ = pool_->acquire(kDefaultFrameCapacity);
+    } else {
+      accum_.clear();
+      accum_.reserve(kDefaultFrameCapacity);
+    }
   } else {
     ++stats_.frames_dropped;
     accum_.clear();

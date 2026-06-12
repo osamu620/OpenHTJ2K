@@ -72,6 +72,19 @@ class UdpSocket {
   // Safe to call in a tight receive loop; no allocation.
   ptrdiff_t recv(void* buf, size_t buf_size);
 
+  // Receive up to `max_msgs` datagrams in one call.  Datagram i lands at
+  // bufs + i * buf_stride (each truncated to buf_stride bytes, like recv)
+  // and its length is written to lengths[i].  Returns the number of
+  // datagrams received (>= 1), kAgain, or kError.
+  //
+  // On Linux this is one recvmmsg(2) syscall — at broadcast packet rates
+  // (thousands of packets/sec) batching cuts the receive thread's syscall
+  // count by the batch factor.  Other platforms have no batched receive,
+  // so the fallback delivers a single datagram per call; callers need no
+  // platform-specific handling.  max_msgs is clamped to kMaxBatch.
+  static constexpr int kMaxBatch = 32;
+  int recv_batch(uint8_t* bufs, size_t buf_stride, int max_msgs, size_t* lengths);
+
   // Set SO_RCVBUF hint (best-effort).  Useful for 4K streams at high bitrate.
   // On Linux the kernel doubles the value and clamps to net.core.rmem_max;
   // on Windows the default limit is typically generous (8 MB+).

@@ -44,31 +44,31 @@ class LatestSlot {
   LatestSlot& operator=(const LatestSlot&) = delete;
 
   // Producer-side. Atomically replaces any existing item with `value`.
-  // Returns true if a previous item was discarded (and increments
-  // evictions()), false if the slot was empty. Wakes any waiting consumer.
+  // Returns the evicted previous item if the slot was occupied (and
+  // increments evictions()), std::nullopt if it was empty. Wakes any
+  // waiting consumer.
   //
   // The evicted item (if any) is moved out of the slot under the lock
-  // and destroyed *after* the lock is released.  For T = DecodedFrame
-  // that destructor frees multi-megabyte plane buffers, and holding the
-  // mutex across those free() calls would serialize the producer and
-  // consumer for the duration of the deallocation.  Moving the destroy
-  // outside the critical section keeps lock hold time proportional to
-  // the pointer swap, not to T's destructor cost.
-  bool push(T value) {
-    bool             evicted = false;
+  // and returned, so it is destroyed (or recycled — the receive thread
+  // returns evicted AssembledFrame buffers to the BufferPool) *after*
+  // the lock is released.  For T = DecodedFrame that destructor frees
+  // multi-megabyte plane buffers, and holding the mutex across those
+  // free() calls would serialize the producer and consumer for the
+  // duration of the deallocation.  Keeping the destroy outside the
+  // critical section keeps lock hold time proportional to the pointer
+  // swap, not to T's destructor cost.
+  std::optional<T> push(T value) {
     std::optional<T> stale;
     {
       std::lock_guard<std::mutex> lk(mu_);
       if (slot_.has_value()) {
-        evicted = true;
         ++evictions_;
         stale.swap(slot_);
       }
       slot_.emplace(std::move(value));
     }
-    // `stale` destructor runs here, outside the mutex.
     cv_.notify_one();
-    return evicted;
+    return stale;
   }
 
   // Consumer-side. Blocks until an item is available or `stop` becomes
