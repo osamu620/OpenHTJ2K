@@ -423,13 +423,6 @@ void GlRenderer::shutdown() {
     gl::DeleteBuffers(1, &b);
     vbo_ = 0;
   }
-  if (pbo_[0] != 0 && gl::DeleteBuffers != nullptr) {
-    const GLuint b[2] = {pbo_[0], pbo_[1]};
-    gl::DeleteBuffers(2, b);
-    pbo_[0] = pbo_[1] = 0;
-  }
-  pbo_next_     = 0;
-  pbo_disabled_ = false;
   if (vao_ != 0 && gl::DeleteVertexArrays != nullptr) {
     const GLuint a = vao_;
     gl::DeleteVertexArrays(1, &a);
@@ -615,53 +608,18 @@ void GlRenderer::upload_and_draw(const uint8_t* rgb, int w, int h) {
 void GlRenderer::upload_planar_textures(const void* y_plane, const void* cb_plane,
                                         const void* cr_plane, int w_y, int h_y, int w_c,
                                         int h_c, unsigned int type, int bpp) {
-  const size_t y_bytes = static_cast<size_t>(w_y) * static_cast<size_t>(h_y)
-                         * static_cast<size_t>(bpp);
-  const size_t c_bytes = static_cast<size_t>(w_c) * static_cast<size_t>(h_c)
-                         * static_cast<size_t>(bpp);
-
+  // Deliberately direct client-memory uploads, NOT a pixel-unpack-buffer
+  // ring.  A glBufferData(orphan) + glBufferSubData PBO ring was A/B
+  // tested on the 4K59.94 4:2:2 1.7 bpp reference stream (Ryzen 9 9950X
+  // + RTX 4070 SUPER, driver 595.71.05, 2026-06-13) and lost decisively:
+  // 46.7 vs 54.0 fps, main-thread CPU 55% vs 33%, and the extra ~17
+  // MB/frame staging memcpy slowed the decode threads too (avg 10.8 ms
+  // vs 8.0 ms).  The driver's direct glTexSubImage2D path already does
+  // pinned-buffer DMA; staging through BufferSubData just adds a copy.
+  // A PBO design can only win here if the decoder writes straight into
+  // a persistently-mapped buffer (as the Metal path does) — anything
+  // that re-copies an existing client buffer is net negative.
   glPixelStorei(GL_UNPACK_ALIGNMENT, bpp);
-
-  if (!pbo_disabled_ && pbo_[0] == 0) {
-    gl::GenBuffers(2, pbo_);
-    if (pbo_[0] == 0 || pbo_[1] == 0) {
-      check_gl_error("glGenBuffers(pbo ring)");
-      pbo_[0] = pbo_[1] = 0;
-      pbo_disabled_     = true;
-    }
-  }
-
-  if (!pbo_disabled_) {
-    const size_t total = y_bytes + 2 * c_bytes;
-    pbo_next_ ^= 1;
-    gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_[pbo_next_]);
-    // Orphan, then stage all three planes into the fresh store.  The
-    // subsequent glTexSubImage2D calls source from the PBO (offset in
-    // place of a client pointer) and return without waiting for the
-    // transfer to the textures to complete.
-    gl::BufferData(GL_PIXEL_UNPACK_BUFFER, static_cast<GLsizeiptr>(total), nullptr,
-                   GL_STREAM_DRAW);
-    gl::BufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, static_cast<GLsizeiptr>(y_bytes), y_plane);
-    gl::BufferSubData(GL_PIXEL_UNPACK_BUFFER, static_cast<GLintptr>(y_bytes),
-                      static_cast<GLsizeiptr>(c_bytes), cb_plane);
-    gl::BufferSubData(GL_PIXEL_UNPACK_BUFFER, static_cast<GLintptr>(y_bytes + c_bytes),
-                      static_cast<GLsizeiptr>(c_bytes), cr_plane);
-    glBindTexture(GL_TEXTURE_2D, tex_y_);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, type,
-                    reinterpret_cast<const void*>(static_cast<uintptr_t>(0)));
-    glBindTexture(GL_TEXTURE_2D, tex_cb_);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type,
-                    reinterpret_cast<const void*>(static_cast<uintptr_t>(y_bytes)));
-    glBindTexture(GL_TEXTURE_2D, tex_cr_);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type,
-                    reinterpret_cast<const void*>(static_cast<uintptr_t>(y_bytes + c_bytes)));
-    // Unbind so later glTexSubImage2D calls with client pointers (RGB
-    // fallback path) aren't misread as PBO offsets.
-    gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-    return;
-  }
-
-  // Direct client-memory uploads (PBO unavailable).
   glBindTexture(GL_TEXTURE_2D, tex_y_);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, type, y_plane);
   glBindTexture(GL_TEXTURE_2D, tex_cb_);
