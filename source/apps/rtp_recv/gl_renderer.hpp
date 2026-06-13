@@ -114,13 +114,9 @@ class GlRenderer {
   // silently skip reallocation on the others (same class of bug that
   // bit us when Cb/Cr shared (w, h) tracking in the initial draft).
   bool ensure_planar_textures(int w_y, int h_y, int w_c, int h_c, int bpp);
-  // Upload all three planes into tex_y_/tex_cb_/tex_cr_.  Goes through a
-  // double-buffered GL_PIXEL_UNPACK_BUFFER ring so glTexSubImage2D
-  // returns as soon as the driver has queued the DMA, instead of
-  // synchronously walking client memory three times per frame; the
-  // ping-pong plus per-frame orphaning keeps frame N+1's staging write
-  // from waiting on frame N's in-flight transfer.  Falls back to direct
-  // client-memory uploads if PBO setup fails.  `type` is
+  // Upload all three planes into tex_y_/tex_cb_/tex_cr_ via direct
+  // client-memory glTexSubImage2D (see the comment in the definition for
+  // why a PBO staging ring was tried and rejected).  `type` is
   // GL_UNSIGNED_BYTE or GL_UNSIGNED_SHORT, matching `bpp` 1 or 2.
   void upload_planar_textures(const void* y_plane, const void* cb_plane, const void* cr_plane,
                               int w_y, int h_y, int w_c, int h_c, unsigned int type, int bpp);
@@ -196,13 +192,6 @@ class GlRenderer {
   int          tex_cr_w_         = 0;
   int          tex_cr_h_         = 0;
   int          tex_cr_bpp_       = 0;
-
-  // Pixel-unpack buffer ring for the planar upload path (see
-  // upload_planar_textures).  pbo_disabled_ latches on if buffer
-  // creation ever fails so we don't retry every frame.
-  unsigned int pbo_[2]       = {0, 0};
-  int          pbo_next_     = 0;
-  bool         pbo_disabled_ = false;
 };
 
 }  // namespace open_htj2k::rtp_recv
