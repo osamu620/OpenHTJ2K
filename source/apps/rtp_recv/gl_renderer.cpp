@@ -11,6 +11,7 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace open_htj2k::rtp_recv {
@@ -207,6 +208,18 @@ void main() {
 }
 )glsl";
 
+bool has_gl_extension(const char* name) {
+  if (gl::GetStringi == nullptr) return false;
+  GLint n = 0;
+  glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+  for (GLint i = 0; i < n; ++i) {
+    const char* e =
+        reinterpret_cast<const char*>(gl::GetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+    if (e != nullptr && std::strcmp(e, name) == 0) return true;
+  }
+  return false;
+}
+
 GLuint compile_one_shader(GLenum kind, const char* const* srcs, int count, const char* label) {
   GLuint sh = gl::CreateShader(kind);
   gl::ShaderSource(sh, count, srcs, nullptr);
@@ -273,6 +286,19 @@ bool GlRenderer::init(int window_w, int window_h, const char* title, bool vsync)
     shutdown();
     return false;
   }
+
+  // Optional zero-copy upload capability (ARB_buffer_storage).  Absence
+  // is normal — macOS GL stops at 4.1 — and only means uploads go through
+  // the plane-vector path instead of decoder-written persistent buffers.
+  // OPENHTJ2K_GL_NO_ZEROCOPY=1 forces the vector path; kept as a runtime
+  // escape hatch and for single-binary A/B measurements.
+  const char* no_zc    = std::getenv("OPENHTJ2K_GL_NO_ZEROCOPY");
+  const bool  disabled = (no_zc != nullptr && no_zc[0] != '\0' && no_zc[0] != '0');
+  zero_copy_supported_ =
+      !disabled && gl::load_zero_copy_functions() && has_gl_extension("GL_ARB_buffer_storage");
+  std::fprintf(stderr, "gl_renderer: zero-copy plane upload %s%s\n",
+               zero_copy_supported_ ? "available" : "unavailable",
+               disabled ? " (disabled by OPENHTJ2K_GL_NO_ZEROCOPY)" : " (ARB_buffer_storage)");
 
   if (!compile_shader_programs()) {
     shutdown();
@@ -398,6 +424,10 @@ bool GlRenderer::compile_shader_programs() {
 }
 
 void GlRenderer::shutdown() {
+  // Ring teardown needs the context (still current — the window is
+  // destroyed at the end of this function).  Threads using the ring are
+  // joined before shutdown() per run_receiver_threaded's ordering.
+  destroy_ring();
   if (tex_rgb_ != 0) {
     const GLuint t = tex_rgb_;
     glDeleteTextures(1, &t);
@@ -473,7 +503,14 @@ bool GlRenderer::should_close() const {
 }
 
 void GlRenderer::poll_events() {
-  if (window_) glfwPollEvents();
+  if (!window_) return;
+  glfwPollEvents();
+  // Ring housekeeping runs here because poll_events() is the one renderer
+  // entry point the main loop hits every iteration with the GL context
+  // current — buffer creation and fence retirement both need GL calls,
+  // which the decode-thread side of the ring API must never make.
+  service_ring_request();
+  poll_ring_fences();
 }
 
 bool GlRenderer::ensure_rgb_texture(int w, int h) {
@@ -626,6 +663,225 @@ void GlRenderer::upload_planar_textures(const void* y_plane, const void* cb_plan
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type, cb_plane);
   glBindTexture(GL_TEXTURE_2D, tex_cr_);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type, cr_plane);
+}
+
+// ── Zero-copy ring ──────────────────────────────────────────────────────
+
+GlRenderer::PlanePointers GlRenderer::acquire_plane_buffers(uint32_t w_y, uint32_t h_y,
+                                                            uint32_t w_c, uint32_t h_c,
+                                                            int bpp) {
+  PlanePointers pp;
+  if (!zero_copy_supported_ || window_ == nullptr) return pp;
+  if (w_y == 0 || h_y == 0 || w_c == 0 || h_c == 0 || (bpp != 1 && bpp != 2)) return pp;
+
+  if (!ring_ready_.load(std::memory_order_acquire) || w_y != ring_w_y_ || h_y != ring_h_y_ ||
+      w_c != ring_w_c_ || h_c != ring_h_c_ || bpp != ring_bpp_) {
+    // Ring absent or built for different geometry.  Publish a build
+    // request for the main thread and use the vector path this frame.
+    std::lock_guard<std::mutex> lk(ring_req_mu_);
+    req_w_y_ = w_y;
+    req_h_y_ = h_y;
+    req_w_c_ = w_c;
+    req_h_c_ = h_c;
+    req_bpp_ = bpp;
+    return pp;
+  }
+
+  for (int i = 0; i < kRingDepth; ++i) {
+    int expected = kSlotFree;
+    if (ring_[i].state.compare_exchange_strong(expected, kSlotInUse,
+                                               std::memory_order_acq_rel)) {
+      pp.y          = ring_[i].mapped;
+      pp.cb         = ring_[i].mapped + ring_y_bytes_;
+      pp.cr         = ring_[i].mapped + ring_y_bytes_ + ring_c_bytes_;
+      pp.stride_y   = w_y;
+      pp.stride_c   = w_c;
+      pp.ring_index = i;
+      return pp;
+    }
+  }
+  return pp;  // every slot busy (GPU behind) — vector path this frame
+}
+
+void GlRenderer::release_plane_buffers(int ring_index) {
+  if (ring_index < 0 || ring_index >= kRingDepth) return;
+  // Only an acquired-but-never-drawn slot may be freed from off-thread;
+  // AwaitFence slots belong to the fence poller.
+  int expected = kSlotInUse;
+  ring_[ring_index].state.compare_exchange_strong(expected, kSlotFree,
+                                                  std::memory_order_acq_rel);
+}
+
+void GlRenderer::draw_acquired_planes(int ring_index, int w_y, int h_y, int w_c, int h_c,
+                                      int bpp, int bit_depth,
+                                      const ycbcr_coefficients* coeffs,
+                                      bool components_are_rgb,
+                                      const ColorPipelineParams& pipeline) {
+  if (!window_ || ring_index < 0 || ring_index >= kRingDepth) return;
+  RingSlot& slot = ring_[ring_index];
+  if (slot.state.load(std::memory_order_acquire) != kSlotInUse) return;
+  if (!ensure_planar_textures(w_y, h_y, w_c, h_c, bpp)) {
+    slot.state.store(kSlotFree, std::memory_order_release);
+    return;
+  }
+
+  // Texture uploads source from the slot's buffer — offsets, not client
+  // pointers — so the only CPU write of the plane bytes was the decoder's.
+  const GLenum type = (bpp == 2) ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
+  glPixelStorei(GL_UNPACK_ALIGNMENT, bpp);
+  gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, slot.pbo);
+  glBindTexture(GL_TEXTURE_2D, tex_y_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_y, h_y, GL_RED, type,
+                  reinterpret_cast<const void*>(static_cast<uintptr_t>(0)));
+  glBindTexture(GL_TEXTURE_2D, tex_cb_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type,
+                  reinterpret_cast<const void*>(static_cast<uintptr_t>(ring_y_bytes_)));
+  glBindTexture(GL_TEXTURE_2D, tex_cr_);
+  glTexSubImage2D(
+      GL_TEXTURE_2D, 0, 0, 0, w_c, h_c, GL_RED, type,
+      reinterpret_cast<const void*>(static_cast<uintptr_t>(ring_y_bytes_ + ring_c_bytes_)));
+  gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+  // The slot is reusable once the GPU has copied buffer → textures; the
+  // fence covers exactly that.  poll_ring_fences() retires it to Free.
+  slot.fence = gl::FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+  slot.state.store(kSlotAwaitFence, std::memory_order_release);
+
+  const float k = (bpp == 2 && bit_depth >= 9 && bit_depth <= 16)
+                      ? 65535.0f / static_cast<float>((1 << bit_depth) - 1)
+                      : 1.0f;
+  const float norm_scale[3] = {k, k, k};
+  if (components_are_rgb)
+    draw_planar_rgb_program(w_y, h_y, norm_scale, pipeline);
+  else
+    draw_ycbcr_program(w_y, h_y, coeffs, norm_scale, pipeline);
+}
+
+void GlRenderer::service_ring_request() {
+  if (!zero_copy_supported_) return;
+  uint32_t w_y = 0, h_y = 0, w_c = 0, h_c = 0;
+  int      bpp = 0;
+  {
+    std::lock_guard<std::mutex> lk(ring_req_mu_);
+    if (req_w_y_ == 0) return;  // no pending request
+    w_y = req_w_y_;
+    h_y = req_h_y_;
+    w_c = req_w_c_;
+    h_c = req_h_c_;
+    bpp = req_bpp_;
+  }
+  if (ring_ready_.load(std::memory_order_relaxed) && w_y == ring_w_y_ && h_y == ring_h_y_ &&
+      w_c == ring_w_c_ && h_c == ring_h_c_ && bpp == ring_bpp_) {
+    // Duplicate request raced with the build — nothing to do.
+    std::lock_guard<std::mutex> lk(ring_req_mu_);
+    req_w_y_ = 0;
+    return;
+  }
+
+  // Block new acquires, then wait until in-flight slots drain.  A slot
+  // claimed in the acquire/ready race stays valid — we simply retry on a
+  // later poll_events() tick; the old buffers are not touched until every
+  // slot is Free again.
+  ring_ready_.store(false, std::memory_order_release);
+  for (int i = 0; i < kRingDepth; ++i) {
+    if (ring_[i].state.load(std::memory_order_acquire) != kSlotFree) return;
+  }
+  destroy_ring();
+
+  const size_t y_bytes = static_cast<size_t>(w_y) * h_y * static_cast<size_t>(bpp);
+  const size_t c_bytes = static_cast<size_t>(w_c) * h_c * static_cast<size_t>(bpp);
+  const size_t total   = y_bytes + 2 * c_bytes;
+  const GLbitfield storage_flags =
+      GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+  bool ok = true;
+  for (int i = 0; i < kRingDepth && ok; ++i) {
+    GLuint pbo = 0;
+    gl::GenBuffers(1, &pbo);
+    if (pbo == 0) {
+      ok = false;
+      break;
+    }
+    ring_[i].pbo = pbo;
+    gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
+    gl::BufferStorage(GL_PIXEL_UNPACK_BUFFER, static_cast<GLsizeiptr>(total), nullptr,
+                      storage_flags);
+    void* mapped = gl::MapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0,
+                                      static_cast<GLsizeiptr>(total), storage_flags);
+    ring_[i].mapped = static_cast<uint8_t*>(mapped);
+    if (mapped == nullptr || !check_gl_error("zero-copy ring slot")) ok = false;
+  }
+  gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+  if (!ok) {
+    // Driver said no — permanently fall back to the vector upload path.
+    destroy_ring();
+    zero_copy_supported_ = false;
+    std::fprintf(stderr, "gl_renderer: zero-copy ring allocation failed; using vector path\n");
+    std::lock_guard<std::mutex> lk(ring_req_mu_);
+    req_w_y_ = 0;
+    return;
+  }
+
+  ring_w_y_     = w_y;
+  ring_h_y_     = h_y;
+  ring_w_c_     = w_c;
+  ring_h_c_     = h_c;
+  ring_bpp_     = bpp;
+  ring_y_bytes_ = y_bytes;
+  ring_c_bytes_ = c_bytes;
+  {
+    std::lock_guard<std::mutex> lk(ring_req_mu_);
+    req_w_y_ = 0;
+  }
+  ring_ready_.store(true, std::memory_order_release);
+  std::fprintf(stderr,
+               "gl_renderer: zero-copy ring ready (%d x %.1f MB persistent-mapped, "
+               "%ux%u Y / %ux%u C, %d bpp)\n",
+               kRingDepth, static_cast<double>(total) / (1024.0 * 1024.0), w_y, h_y, w_c, h_c,
+               bpp);
+}
+
+void GlRenderer::poll_ring_fences() {
+  for (int i = 0; i < kRingDepth; ++i) {
+    RingSlot& slot = ring_[i];
+    if (slot.state.load(std::memory_order_acquire) != kSlotAwaitFence) continue;
+    if (slot.fence == nullptr) {  // FenceSync failed at draw time — free defensively
+      slot.state.store(kSlotFree, std::memory_order_release);
+      continue;
+    }
+    const GLenum r =
+        gl::ClientWaitSync(static_cast<GLsync>(slot.fence), 0, /*timeout_ns=*/0);
+    if (r == GL_ALREADY_SIGNALED || r == GL_CONDITION_SATISFIED || r == GL_WAIT_FAILED) {
+      gl::DeleteSync(static_cast<GLsync>(slot.fence));
+      slot.fence = nullptr;
+      slot.state.store(kSlotFree, std::memory_order_release);
+    }
+    // GL_TIMEOUT_EXPIRED: still in flight — try again next tick.
+  }
+}
+
+void GlRenderer::destroy_ring() {
+  ring_ready_.store(false, std::memory_order_release);
+  for (int i = 0; i < kRingDepth; ++i) {
+    RingSlot& slot = ring_[i];
+    if (slot.fence != nullptr && gl::DeleteSync != nullptr) {
+      gl::DeleteSync(static_cast<GLsync>(slot.fence));
+      slot.fence = nullptr;
+    }
+    if (slot.pbo != 0) {
+      if (slot.mapped != nullptr && gl::UnmapBuffer != nullptr) {
+        gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, slot.pbo);
+        gl::UnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+        gl::BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+      }
+      if (gl::DeleteBuffers != nullptr) {
+        const GLuint b = slot.pbo;
+        gl::DeleteBuffers(1, &b);
+      }
+      slot.pbo = 0;
+    }
+    slot.mapped = nullptr;
+    slot.state.store(kSlotFree, std::memory_order_release);
+  }
 }
 
 void GlRenderer::upload_planar_and_draw(const uint8_t* y_plane, const uint8_t* cb_plane,

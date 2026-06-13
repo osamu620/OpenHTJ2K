@@ -178,13 +178,14 @@ struct DecodedFrame {
   // "reference established" flag rather than on source_rtp_ts != 0.
   uint32_t                  source_rtp_ts      = 0;
 
-#ifdef OPENHTJ2K_USE_METAL
-  // Zero-copy Metal path: ring buffer index into MetalRenderer's internal
-  // buffer pool.  When >= 0, the plane data lives in GPU-visible shared
-  // memory and the renderer skips the memcpy upload.  -1 = not used (CPU
-  // vector path).  This field is harmless on non-Metal builds (never set).
-  int                       metal_ring_index   = -1;
-#endif
+  // Zero-copy path: ring buffer index into the renderer's internal buffer
+  // pool (MetalRenderer's MTLBuffer ring on macOS, GlRenderer's
+  // persistently-mapped GL_PIXEL_UNPACK_BUFFER ring elsewhere).  When
+  // >= 0, the plane data already lives in GPU-visible memory: the decoder
+  // wrote it there directly, the plane vectors above are empty, and the
+  // renderer draws via draw_acquired_planes() with no upload memcpy.
+  // -1 = plane-vector path.
+  int                       ring_index         = -1;
 };
 
 }  // namespace open_htj2k::rtp_recv

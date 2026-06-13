@@ -33,17 +33,22 @@ struct ReceiverState {
   std::atomic<uint64_t> frames_emitted_to_decode{0};  // dump index, increments per frame_handler emission
   std::atomic<uint64_t> frames_decoded{0};
   std::atomic<uint64_t> frames_failed{0};
+  // Frames that decoded straight into a renderer-owned GPU buffer (the
+  // zero-copy path).  The gap to frames_decoded is frames that fell back
+  // to the plane-vector upload (ring not yet built, all slots in flight,
+  // or zero-copy unsupported).  Proves the path is actually exercised.
+  std::atomic<uint64_t> frames_zero_copy{0};
 
   // Decode timing — written only by the decode thread, read by main at exit.
   std::atomic<uint64_t> decode_us_sum{0};
   std::atomic<uint64_t> decode_us_min{UINT64_MAX};
   std::atomic<uint64_t> decode_us_max{0};
 
-#ifdef OPENHTJ2K_USE_METAL
-  // Renderer pointer for zero-copy Metal decode.  Set before the decode
-  // thread is launched; read (not written) by the decode thread.
+  // Renderer pointer for the zero-copy decode path (Metal on macOS, the
+  // persistently-mapped GL ring elsewhere).  Set before the decode thread
+  // is launched; the decode thread only calls the renderer's thread-safe
+  // acquire/release_plane_buffers entry points through it.
   Renderer* renderer_ptr = nullptr;
-#endif
 };
 
 // v2 multi-threaded main loop (--threading=on, default).

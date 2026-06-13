@@ -29,7 +29,10 @@
 // --no-render.  load_functions() resolves GL >=2.0 entry points via
 // glfwGetProcAddress in gl_loader.cpp.
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 struct GLFWwindow;
 
@@ -103,6 +106,46 @@ class GlRenderer {
                                  int bit_depth, const ycbcr_coefficients* coeffs,
                                  bool components_are_rgb,
                                  const ColorPipelineParams& pipeline);
+
+  // ── Zero-copy plane buffer API (mirrors MetalRenderer) ─────────────────
+  // The decode thread calls acquire_plane_buffers() to get raw pointers
+  // into a persistently-mapped GL buffer (ARB_buffer_storage, GL 4.4) and
+  // writes decoded samples straight into it via PlanarOutputDesc.  The
+  // main thread then calls draw_acquired_planes(), whose glTexSubImage2D
+  // sources from the bound buffer — a driver-side DMA with no CPU copy on
+  // either thread.  This is the staging-free design the BufferSubData PBO
+  // ring (reverted in PR #428) was not: the decoder's plane write, which
+  // must happen anyway, IS the upload write.
+  //
+  // Ring discipline (3 slots): acquire() claims a Free slot (atomic CAS,
+  // no GL calls — safe on the decode thread).  draw_acquired_planes()
+  // inserts a fence after the texture uploads; poll_events() retires
+  // signalled fences back to Free.  If no slot is free, or the ring is
+  // not built yet (buffer creation needs the GL context, so the first
+  // acquire only *requests* dimensions and poll_events() builds the ring
+  // on the main thread), acquire returns null pointers and the caller
+  // falls back to the plane-vector upload path for that frame.
+  struct PlanePointers {
+    void    *y = nullptr, *cb = nullptr, *cr = nullptr;
+    uint32_t stride_y   = 0;  // row stride in samples (= width, packed)
+    uint32_t stride_c   = 0;
+    int      ring_index = -1;  // opaque — pass back to draw_acquired_planes
+  };
+
+  // Thread-safe: may be called from the decode thread.  Null .y => use
+  // the vector fallback for this frame.
+  PlanePointers acquire_plane_buffers(uint32_t w_y, uint32_t h_y, uint32_t w_c, uint32_t h_c,
+                                      int bpp);
+
+  // Thread-safe, no GL calls: returns an acquired-but-never-drawn slot
+  // (e.g. its DecodedFrame was evicted from the render slot, or decode
+  // failed mid-frame) to the Free state.
+  void release_plane_buffers(int ring_index);
+
+  // Must be called from the main (render) thread.
+  void draw_acquired_planes(int ring_index, int w_y, int h_y, int w_c, int h_c, int bpp,
+                            int bit_depth, const ycbcr_coefficients* coeffs,
+                            bool components_are_rgb, const ColorPipelineParams& pipeline);
 
  private:
   bool compile_shader_programs();
@@ -192,6 +235,40 @@ class GlRenderer {
   int          tex_cr_w_         = 0;
   int          tex_cr_h_         = 0;
   int          tex_cr_bpp_       = 0;
+
+  // ── Zero-copy ring state ────────────────────────────────────────────────
+  // Slot lifecycle: Free → (acquire, decode thread) InUse → (draw, main
+  // thread) AwaitFence → (fence signalled, poll_events) Free.  InUse slots
+  // whose frame never reaches the renderer go back to Free via
+  // release_plane_buffers.  All GL calls stay on the main thread; the
+  // decode thread only touches the mapped pointer and the atomics.
+  static constexpr int kRingDepth = 3;
+  enum SlotState : int { kSlotFree = 0, kSlotInUse = 1, kSlotAwaitFence = 2 };
+  struct RingSlot {
+    unsigned int     pbo    = 0;
+    uint8_t*         mapped = nullptr;
+    void*            fence  = nullptr;  // GLsync, opaque here
+    std::atomic<int> state{kSlotFree};
+  };
+  RingSlot ring_[kRingDepth];
+  // Geometry the ring was built for (main thread writes, decode thread
+  // reads only when ring_ready_ is true — release/acquire ordering below).
+  uint32_t ring_w_y_ = 0, ring_h_y_ = 0, ring_w_c_ = 0, ring_h_c_ = 0;
+  int      ring_bpp_     = 0;
+  size_t   ring_y_bytes_ = 0;
+  size_t   ring_c_bytes_ = 0;
+  std::atomic<bool> ring_ready_{false};
+  // Pending build/rebuild request from the decode thread (guarded by
+  // ring_req_mu_): zero w_y means "no request".
+  std::mutex ring_req_mu_;
+  uint32_t   req_w_y_ = 0, req_h_y_ = 0, req_w_c_ = 0, req_h_c_ = 0;
+  int        req_bpp_ = 0;
+  bool zero_copy_supported_ = false;  // ARB_buffer_storage present at init
+
+  // Main-thread ring plumbing.
+  void service_ring_request();  // called from poll_events()
+  void poll_ring_fences();      // called from poll_events()
+  void destroy_ring();          // shutdown / rebuild
 };
 
 }  // namespace open_htj2k::rtp_recv
