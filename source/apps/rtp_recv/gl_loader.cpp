@@ -46,6 +46,14 @@ PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray = nullptr;
 
 PFNGLACTIVETEXTUREPROC           ActiveTexture           = nullptr;
 
+const GLubyte* (APIENTRY *GetStringi)(GLenum, GLuint)                                  = nullptr;
+void           (APIENTRY *BufferStorage)(GLenum, GLsizeiptr, const void*, GLbitfield)  = nullptr;
+void*          (APIENTRY *MapBufferRange)(GLenum, GLintptr, GLsizeiptr, GLbitfield)    = nullptr;
+GLboolean      (APIENTRY *UnmapBuffer)(GLenum)                                         = nullptr;
+GLsync         (APIENTRY *FenceSync)(GLenum, GLbitfield)                               = nullptr;
+GLenum         (APIENTRY *ClientWaitSync)(GLsync, GLbitfield, GLuint64)                = nullptr;
+void           (APIENTRY *DeleteSync)(GLsync)                                          = nullptr;
+
 namespace {
 template <typename T>
 bool resolve(T& out, const char* name) {
@@ -100,6 +108,24 @@ bool load_functions() {
   LOAD(ActiveTexture,           "glActiveTexture");
 #undef LOAD
   return true;
+}
+
+bool load_zero_copy_functions() {
+  // Quiet resolution: nulls are an expected outcome on GL < 4.4 (macOS).
+  auto get = [](const char* name) { return glfwGetProcAddress(name); };
+  GetStringi     = reinterpret_cast<const GLubyte* (APIENTRY*)(GLenum, GLuint)>(get("glGetStringi"));
+  BufferStorage  = reinterpret_cast<void (APIENTRY*)(GLenum, GLsizeiptr, const void*, GLbitfield)>(
+      get("glBufferStorage"));
+  MapBufferRange = reinterpret_cast<void* (APIENTRY*)(GLenum, GLintptr, GLsizeiptr, GLbitfield)>(
+      get("glMapBufferRange"));
+  UnmapBuffer    = reinterpret_cast<GLboolean (APIENTRY*)(GLenum)>(get("glUnmapBuffer"));
+  FenceSync      = reinterpret_cast<GLsync (APIENTRY*)(GLenum, GLbitfield)>(get("glFenceSync"));
+  ClientWaitSync = reinterpret_cast<GLenum (APIENTRY*)(GLsync, GLbitfield, GLuint64)>(
+      get("glClientWaitSync"));
+  DeleteSync     = reinterpret_cast<void (APIENTRY*)(GLsync)>(get("glDeleteSync"));
+  return GetStringi != nullptr && BufferStorage != nullptr && MapBufferRange != nullptr &&
+         UnmapBuffer != nullptr && FenceSync != nullptr && ClientWaitSync != nullptr &&
+         DeleteSync != nullptr;
 }
 
 }  // namespace open_htj2k::rtp_recv::gl

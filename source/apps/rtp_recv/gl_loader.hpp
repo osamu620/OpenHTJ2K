@@ -34,6 +34,8 @@
   typedef char         GLchar;
   typedef ptrdiff_t    GLsizeiptr;
   typedef ptrdiff_t    GLintptr;
+  typedef struct __GLsync* GLsync;
+  typedef unsigned long long GLuint64;
 
   // GL constants not in Windows GL 1.1 headers:
 #  ifndef GL_FRAGMENT_SHADER
@@ -51,6 +53,13 @@
 #    define GL_R16                    0x822A
 #    define GL_RED                    0x1903
 #    define GL_CLAMP_TO_EDGE          0x812F
+#    define GL_NUM_EXTENSIONS         0x821D
+#    define GL_MAP_WRITE_BIT          0x0002
+#    define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#    define GL_ALREADY_SIGNALED       0x911A
+#    define GL_TIMEOUT_EXPIRED        0x911B
+#    define GL_CONDITION_SATISFIED    0x911C
+#    define GL_WAIT_FAILED            0x911D
 #  endif
 
   // GL 2.0+ function-pointer typedefs:
@@ -85,6 +94,20 @@
 #else
 #  include <GL/gl.h>
 #  include <GL/glext.h>
+#endif
+
+// ARB_buffer_storage (GL 4.4) tokens are absent from the macOS headers
+// (Apple GL stops at 4.1) and from our minimal Windows block above.
+#ifndef GL_PIXEL_UNPACK_BUFFER
+#  define GL_PIXEL_UNPACK_BUFFER     0x88EC
+#endif
+#ifndef GL_MAP_PERSISTENT_BIT
+#  define GL_MAP_PERSISTENT_BIT      0x0040
+#  define GL_MAP_COHERENT_BIT        0x0080
+#endif
+
+#ifndef APIENTRY
+#  define APIENTRY
 #endif
 
 namespace open_htj2k::rtp_recv::gl {
@@ -124,10 +147,30 @@ extern PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray;
 
 extern PFNGLACTIVETEXTUREPROC           ActiveTexture;
 
+// ── Optional zero-copy upload symbols ───────────────────────────────────
+// GetStringi is GL 3.0, the sync trio is GL 3.2, MapBufferRange/UnmapBuffer
+// are GL 3.0, and BufferStorage is GL 4.4 / ARB_buffer_storage.  Declared
+// with inline function-pointer types (not PFNGL*PROC names) because the
+// macOS headers don't ship typedefs past 4.1.  Resolved separately by
+// load_zero_copy_functions(); any of these may legitimately stay null
+// (the renderer then keeps its plane-vector upload path).
+extern const GLubyte* (APIENTRY *GetStringi)(GLenum name, GLuint index);
+extern void           (APIENTRY *BufferStorage)(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags);
+extern void*          (APIENTRY *MapBufferRange)(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access);
+extern GLboolean      (APIENTRY *UnmapBuffer)(GLenum target);
+extern GLsync         (APIENTRY *FenceSync)(GLenum condition, GLbitfield flags);
+extern GLenum         (APIENTRY *ClientWaitSync)(GLsync sync, GLbitfield flags, GLuint64 timeout);
+extern void           (APIENTRY *DeleteSync)(GLsync sync);
+
 // Resolve every pointer above via glfwGetProcAddress.  On success returns
 // true; on the first failure logs the missing symbol to stderr and returns
 // false (leaving the already-resolved pointers populated, since the caller
 // is expected to treat this as fatal for the shader path).
 bool load_functions();
+
+// Resolve the optional zero-copy symbols.  Returns true only if ALL of
+// them resolved; never fatal — callers treat false as "feature absent".
+// Does not log: missing 4.4 entry points are expected on macOS.
+bool load_zero_copy_functions();
 
 }  // namespace open_htj2k::rtp_recv::gl

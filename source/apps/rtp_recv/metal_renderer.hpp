@@ -83,6 +83,11 @@ class MetalRenderer {
   PlanePointers acquire_plane_buffers(uint32_t w_y, uint32_t h_y,
                                       uint32_t w_c, uint32_t h_c, int bpp);
 
+  // Interface parity with GlRenderer's slot-tracked ring: the Metal ring
+  // is plain round-robin (no per-slot ownership), so an undrawn frame
+  // needs no explicit release.  No-op.
+  void release_plane_buffers(int /*ring_index*/) {}
+
   // Must be called from the main (render) thread.
   void draw_acquired_planes(int ring_index, int w_y, int h_y, int w_c, int h_c,
                             int bpp, int bit_depth,

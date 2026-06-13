@@ -195,8 +195,11 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
     df.pipeline           = pipeline;
     df.source_rtp_ts      = frame.rtp_timestamp;
     if (opts.color_path == CliOptions::ColorPath::Shader) {
-#ifdef OPENHTJ2K_USE_METAL
-      // Zero-copy Metal path: decode directly into GPU-visible shared memory.
+      // Zero-copy path: decode directly into GPU-visible memory (Metal
+      // shared buffers on macOS, persistently-mapped GL buffers
+      // elsewhere).  acquire_plane_buffers returns null pointers when the
+      // backend can't do it (ring not built yet, GL < 4.4, all slots in
+      // flight) and the plane-vector fallback below handles the frame.
       if (st.renderer_ptr != nullptr) {
         const uint16_t nc = decoder.get_num_component();
         if (nc < 1) { st.frames_failed.fetch_add(1, std::memory_order_relaxed); continue; }
@@ -211,7 +214,7 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
 
         auto pp = st.renderer_ptr->acquire_plane_buffers(luma_w, luma_h, chroma_w, chroma_h, bpp);
         if (pp.y) {
-          // Build PlanarOutputDesc pointing at Metal shared memory.
+          // Build PlanarOutputDesc pointing at the GPU-visible buffers.
           const uint16_t desc_nc = std::min(nc, static_cast<uint16_t>(3));
           open_htj2k::PlanarOutputDesc descs[3] = {};
           for (uint16_t c = 0; c < desc_nc; ++c) {
@@ -237,8 +240,12 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
           try {
             decoder.invoke_line_based_direct(descs, desc_nc, widths, heights, depths, signeds);
           } catch (std::exception& e) {
-            std::fprintf(stderr, "decoder.invoke_line_based_direct (metal) failed: %s\n", e.what());
+            std::fprintf(stderr, "decoder.invoke_line_based_direct (zero-copy) failed: %s\n",
+                         e.what());
             st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+            // The slot was claimed but its frame will never be drawn —
+            // hand it back so the ring doesn't leak down to zero slots.
+            st.renderer_ptr->release_plane_buffers(pp.ring_index);
             continue;
           }
           df.width         = luma_w;
@@ -247,7 +254,8 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
           df.chroma_height = chroma_h;
           df.bit_depth     = depth_y;
           df.kind          = components_are_rgb ? DecodedFrame::PLANAR_RGB : DecodedFrame::PLANAR_YCBCR;
-          df.metal_ring_index = pp.ring_index;
+          df.ring_index    = pp.ring_index;
+          st.frames_zero_copy.fetch_add(1, std::memory_order_relaxed);
         } else {
           // Fallback: renderer not ready or alloc failed.
           if (!decode_to_planar_buffers_direct(decoder, components_are_rgb, df)) {
@@ -255,9 +263,7 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
             continue;
           }
         }
-      } else
-#endif
-      if (!decode_to_planar_buffers_direct(decoder, components_are_rgb, df)) {
+      } else if (!decode_to_planar_buffers_direct(decoder, components_are_rgb, df)) {
         std::fprintf(stderr, "frame: unable to determine dimensions; dropping\n");
         st.frames_failed.fetch_add(1, std::memory_order_relaxed);
         continue;
@@ -300,9 +306,14 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
 
     // Hand the decoded RGB to the renderer.  If main hasn't picked up the
     // previous decoded frame yet (e.g. blocked in vsync), it gets dropped
-    // here — latest-wins keeps motion-to-photon minimal.
+    // here — latest-wins keeps motion-to-photon minimal.  An evicted
+    // zero-copy frame holds a ring slot that will never be drawn; return
+    // it so acquire doesn't run out of slots.
     t_prev_end = Clock::now();
-    st.render_slot.push(std::move(df));
+    auto evicted_df = st.render_slot.push(std::move(df));
+    if (evicted_df.has_value() && evicted_df->ring_index >= 0 && st.renderer_ptr != nullptr) {
+      st.renderer_ptr->release_plane_buffers(evicted_df->ring_index);
+    }
 
     if (opts.max_frames > 0 && decoded >= static_cast<uint64_t>(opts.max_frames)) {
       st.stop_flag.store(true, std::memory_order_release);
@@ -379,9 +390,7 @@ int run_receiver_threaded(const CliOptions& opts) {
   FrameHandler  frame_handler;
   ReceiverState state;
   frame_handler.set_buffer_pool(&state.frame_buf_pool);
-#ifdef OPENHTJ2K_USE_METAL
   state.renderer_ptr = renderer_ptr;
-#endif
 
   using Clock         = std::chrono::steady_clock;
   const auto run_start_tp = Clock::now();
@@ -485,17 +494,15 @@ int run_receiver_threaded(const CliOptions& opts) {
         renderer_ptr->upload_and_draw(df->rgb.data(), static_cast<int>(df->width),
                                       static_cast<int>(df->height));
       }
-#ifdef OPENHTJ2K_USE_METAL
-      else if (df->metal_ring_index >= 0) {
-        // Zero-copy Metal path: data is already in GPU-visible shared memory.
+      else if (df->ring_index >= 0) {
+        // Zero-copy path: data is already in GPU-visible memory.
         renderer_ptr->draw_acquired_planes(
-            df->metal_ring_index,
+            df->ring_index,
             static_cast<int>(df->width), static_cast<int>(df->height),
             static_cast<int>(df->chroma_width), static_cast<int>(df->chroma_height),
             df->bit_depth > 8 ? 2 : 1, static_cast<int>(df->bit_depth),
             df->shader_coeffs, df->components_are_rgb, df->pipeline);
       }
-#endif
       else if (df->bit_depth > 8) {
         renderer_ptr->upload_planar_16_and_draw(
             df->plane_y_16.data(), df->plane_cb_16.data(), df->plane_cr_16.data(),
@@ -547,6 +554,7 @@ int run_receiver_threaded(const CliOptions& opts) {
 
   const uint64_t decoded         = state.frames_decoded.load();
   const uint64_t failed          = state.frames_failed.load();
+  const uint64_t zero_copy       = state.frames_zero_copy.load();
   const uint64_t emitted_to_dec  = state.frames_emitted_to_decode.load();
   const double   avg_fps         = decoded > 0 ? static_cast<double>(decoded) / run_secs : 0.0;
   const uint64_t us_sum          = state.decode_us_sum.load();
@@ -565,6 +573,7 @@ int run_receiver_threaded(const CliOptions& opts) {
                "  frames emitted:      %llu (frame_handler)\n"
                "  frames pushed:       %llu (to decode slot)\n"
                "  frames decoded:      %llu\n"
+               "  frames zero-copy:    %llu (decoded into GPU buffer; rest used vector upload)\n"
                "  frames failed:       %llu\n"
                "  frames dropped:      %llu (mid-frame seq gap)\n"
                "  tail-loss drops:     %llu (frame ended w/o RTP M=1)\n"
@@ -579,6 +588,7 @@ int run_receiver_threaded(const CliOptions& opts) {
                static_cast<unsigned long long>(s.frames_emitted),
                static_cast<unsigned long long>(emitted_to_dec),
                static_cast<unsigned long long>(decoded),
+               static_cast<unsigned long long>(zero_copy),
                static_cast<unsigned long long>(failed),
                static_cast<unsigned long long>(s.frames_dropped),
                static_cast<unsigned long long>(s.tail_loss_drops),
