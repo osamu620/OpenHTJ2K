@@ -643,6 +643,11 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
                                       + (bit5 << 5) + bits0_4);
   CAP_marker main_CAP;
   main_CAP.set_Ccap(Ccap15, 15);
+  if (cod->progression_order == 5) {
+    // ISO/IEC 15444-2, Table A.49: the position-resolution level-component-layer progression
+    // order (PRCL) is a Part-2 extension; signal it via bit-14 of Ccap2.
+    main_CAP.set_Ccap(static_cast<uint16_t>(1U << 14), 2);
+  }
 
   // create main header
   j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor);
@@ -821,6 +826,11 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
                                       + (bit5 << 5) + bits0_4);
   CAP_marker main_CAP;
   main_CAP.set_Ccap(Ccap15, 15);
+  if (cod->progression_order == 5) {
+    // ISO/IEC 15444-2, Table A.49: the position-resolution level-component-layer progression
+    // order (PRCL) is a Part-2 extension; signal it via bit-14 of Ccap2.
+    main_CAP.set_Ccap(static_cast<uint16_t>(1U << 14), 2);
+  }
 
   j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor);
   COM_marker main_COM("OpenHTJ2K version 0", true);

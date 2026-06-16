@@ -70,7 +70,9 @@ void print_help(char *cmd) {
   printf("Cblk=Size:\n  Code-block size.\n  Default is {64,64}]\n");
   printf("Cprecincts=Size:\n  Precinct size. Shall be power of two.\n");
   printf("Cycc=yes or no:\n  yes to use RGB->YCbCr color space conversion.\n");
-  printf("Corder:\n  Progression order. Valid entry is one of LRCP, RLCP, RPCL, PCRL, CPRL.\n");
+  printf(
+      "Corder:\n  Progression order. Valid entry is one of LRCP, RLCP, RPCL, PCRL, CPRL, PRCL.\n"
+      "  PRCL (position-resolution level-component-layer) is an ISO/IEC 15444-2 (Part 2) order.\n");
   printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n  Default is no.\n");
   printf("Cuse_eph=yes or no:\n  yes to use EPH (End of Packet Header) marker.\n  Default is no.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
@@ -520,7 +522,7 @@ class j2k_argset {
         } else if (param == "order") {
           pos0 = arg.find_first_of('=');
           if (pos0 == std::string::npos) {
-            printf("ERROR: Corder needs progression order =(LRCP, RLCP, RPCL, PCRL, CPRL)\n");
+            printf("ERROR: Corder needs progression order =(LRCP, RLCP, RPCL, PCRL, CPRL, PRCL)\n");
             exit(EXIT_FAILURE);
           }
           val = arg.substr(pos0 + 1, 4);
@@ -534,6 +536,9 @@ class j2k_argset {
             Porder = 3;
           } else if (val == "CPRL") {
             Porder = 4;
+          } else if (val == "PRCL") {
+            // ISO/IEC 15444-2 (Part 2) position-resolution level-component-layer progression.
+            Porder = 5;
           } else {
             printf("ERROR: unknown progression order %s\n", val.c_str());
             exit(EXIT_FAILURE);

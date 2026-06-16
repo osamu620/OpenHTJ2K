@@ -35,6 +35,9 @@ constexpr uint8_t kProgressionRLCP = 1;
 constexpr uint8_t kProgressionRPCL = 2;
 constexpr uint8_t kProgressionPCRL = 3;
 constexpr uint8_t kProgressionCPRL = 4;
+// ISO/IEC 15444-2, Table A.7bis (Part 2): position-resolution level-component-layer.
+// Layer is the innermost loop, so each precinct's packets are contiguous, like PCRL/RPCL/CPRL.
+constexpr uint8_t kProgressionPRCL = 5;
 
 }  // namespace
 
@@ -53,7 +56,8 @@ ReassembleStatus reassemble_codestream(const uint8_t *codestream, std::size_t le
   if (po == kProgressionLRCP || po == kProgressionRLCP) {
     return ReassembleStatus::UnsupportedProgression;
   }
-  if (po != kProgressionPCRL && po != kProgressionRPCL && po != kProgressionCPRL) {
+  if (po != kProgressionPCRL && po != kProgressionRPCL && po != kProgressionCPRL
+      && po != kProgressionPRCL) {
     return ReassembleStatus::UnsupportedProgression;
   }
   if (idx.use_SOP() || idx.use_EPH()) {
