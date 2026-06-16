@@ -293,6 +293,29 @@ CPF_marker::CPF_marker(j2c_src_memory &in) : j2k_marker_io_base(_CPF) {
 }
 
 /********************************************************************************
+ * PRF_marker
+ *******************************************************************************/
+PRF_marker::PRF_marker() : j2k_marker_io_base(_PRF), PRFnum(0) {}
+
+PRF_marker::PRF_marker(j2c_src_memory &in) : j2k_marker_io_base(_PRF), PRFnum(0) {
+  Lmar = in.get_word();
+  this->set_buf(in.get_buf_pos());
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
+  // Lprf = 2 + 2N; N 16-bit Pprf words follow.  PRFnum is informational only
+  // (no codec processing) — see Rec. ITU-T T.800 | ISO/IEC 15444-1, A.5.3:
+  //   PRFnum = 4095 + sum_{i=1..N} Pprf_i * 2^(16*(i-1)).
+  const size_t n      = static_cast<size_t>(Lmar - 2U) / 2U;
+  uint64_t prfnum     = 4095;
+  for (size_t i = 0; i < n; ++i) {
+    const uint16_t w = get_word();
+    Pprf.push_back(w);
+    if (16U * i < 64U) prfnum += static_cast<uint64_t>(w) << (16U * i);
+  }
+  PRFnum = prfnum;
+  is_set = true;
+}
+
+/********************************************************************************
  * COD_marker
  *******************************************************************************/
 COD_marker::COD_marker(j2c_src_memory &in)
@@ -1780,6 +1803,9 @@ int j2k_main_header::read(j2c_src_memory &in) {
         break;
       case _CAP:
         CAP = MAKE_UNIQUE<CAP_marker>(in);
+        break;
+      case _PRF:
+        PRF = MAKE_UNIQUE<PRF_marker>(in);
         break;
       case _COD:
         COD = MAKE_UNIQUE<COD_marker>(in);

@@ -134,6 +134,26 @@ class CPF_marker : public j2k_marker_io_base {
 };
 
 /********************************************************************************
+ * PRF_marker
+ *******************************************************************************/
+// Profile marker (Rec. ITU-T T.800 | ISO/IEC 15444-1, A.5.3).  Purely
+// informational: it signals the profile number (PRFnum) the codestream claims
+// to conform to and requires no codec processing.  Parsed here so the main
+// header is consumed correctly (a 15444-2 / 15444-18 codestream may carry it
+// after SIZ/CAP) instead of being skipped byte-by-byte as "unknown markers".
+class PRF_marker : public j2k_marker_io_base {
+ private:
+  std::vector<uint16_t> Pprf;
+  uint64_t PRFnum;
+
+ public:
+  PRF_marker();
+  explicit PRF_marker(j2c_src_memory &in);
+  // Signalled profile number (>= 4096), or 0 if no PRF marker was present.
+  uint64_t get_PRFnum() const { return PRFnum; }
+};
+
+/********************************************************************************
  * COD_marker
  *******************************************************************************/
 class COD_marker : public j2k_marker_io_base {
@@ -469,6 +489,7 @@ class j2k_main_header {
  public:
   std::unique_ptr<SIZ_marker> SIZ;
   std::unique_ptr<CAP_marker> CAP;
+  std::unique_ptr<PRF_marker> PRF;
   std::unique_ptr<COD_marker> COD;
   std::vector<std::unique_ptr<COC_marker>> COC;
   std::unique_ptr<CPF_marker> CPF;
