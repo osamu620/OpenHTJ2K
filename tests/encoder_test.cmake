@@ -30,6 +30,47 @@ set_tests_properties(dec_prcl PROPERTIES DEPENDS enc_prcl)
 add_test(NAME comp_prcl COMMAND imgcmp kodim23prcl.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
 set_tests_properties(comp_prcl PROPERTIES DEPENDS dec_prcl)
 
+# Regression: explicit precincts that GROUP codeblocks (precinct >= codeblock).
+# The streaming encoder used to build per-strip codeblock tables assuming a
+# single precinct per subband and segfaulted on any multi-precinct config; it
+# now stamps codeblocks on the full band-raster grid. Validate a lossless
+# round-trip for a Part 1 order with several precinct sizes per level, each
+# holding multiple codeblocks.
+add_test(NAME enc_precincts COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23prec.j2c Creversible=yes Corder=RPCL "Cprecincts={256,256}{128,128}")
+add_test(NAME dec_precincts COMMAND open_htj2k_dec -i kodim23prec.j2c -o kodim23prec.ppm)
+set_tests_properties(dec_precincts PROPERTIES DEPENDS enc_precincts)
+add_test(NAME comp_precincts COMMAND imgcmp kodim23prec.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_precincts PROPERTIES DEPENDS dec_precincts)
+
+# Small precincts are supported when paired with a code-block that fits inside
+# them (precinct >= codeblock): many precincts, one codeblock each.
+add_test(NAME enc_precincts_small COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23precsm.j2c Creversible=yes Corder=PCRL "Cblk={32,32}" "Cprecincts={128,128}{64,64}")
+add_test(NAME dec_precincts_small COMMAND open_htj2k_dec -i kodim23precsm.j2c -o kodim23precsm.ppm)
+set_tests_properties(dec_precincts_small PROPERTIES DEPENDS enc_precincts_small)
+add_test(NAME comp_precincts_small COMMAND imgcmp kodim23precsm.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_precincts_small PROPERTIES DEPENDS dec_precincts_small)
+
+# Precinct SMALLER than the code-block: Rec. ITU-T T.800 B.7 clamps the
+# code-block to the precinct-subband (ycb' = min(ycb, PPy-1)), giving the
+# single-code-block-per-precinct layout used by the ISO/IEC 15444-18 profiles.
+# The streaming encoder strips at the effective (clamped) code-block height, so
+# this round-trips losslessly. Two precinct sizes per level exercise both the
+# vertical-clamp (CBH/2) and finer-clamp levels.
+add_test(NAME enc_precincts_clamped COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23clamp.j2c Creversible=yes Corder=PCRL "Cprecincts={64,64}{32,32}")
+add_test(NAME dec_precincts_clamped COMMAND open_htj2k_dec -i kodim23clamp.j2c -o kodim23clamp.ppm)
+set_tests_properties(dec_precincts_clamped PROPERTIES DEPENDS enc_precincts_clamped)
+add_test(NAME comp_precincts_clamped COMMAND imgcmp kodim23clamp.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_precincts_clamped PROPERTIES DEPENDS dec_precincts_clamped)
+
+# PRCL with explicit precincts: now that multi-precinct encoding works, this
+# exercises PRCL's multi-position packet ordering (the y/x examination loops and
+# per-(component,resolution) precinct advancement) end to end.
+add_test(NAME enc_prcl_prec COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23prclprec.j2c Creversible=yes Corder=PRCL "Cprecincts={128,128}")
+add_test(NAME dec_prcl_prec COMMAND open_htj2k_dec -i kodim23prclprec.j2c -o kodim23prclprec.ppm)
+set_tests_properties(dec_prcl_prec PROPERTIES DEPENDS enc_prcl_prec)
+add_test(NAME comp_prcl_prec COMMAND imgcmp kodim23prclprec.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_prcl_prec PROPERTIES DEPENDS dec_prcl_prec)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -47,4 +88,8 @@ set_tests_properties(
   enc_lossy    dec_lossy    comp_lossy
   enc_lossless_odd dec_lossless_odd comp_lossless_odd
   enc_prcl         dec_prcl         comp_prcl
+  enc_precincts    dec_precincts    comp_precincts
+  enc_precincts_small dec_precincts_small comp_precincts_small
+  enc_precincts_clamped dec_precincts_clamped comp_precincts_clamped
+  enc_prcl_prec    dec_prcl_prec    comp_prcl_prec
   PROPERTIES FIXTURES_REQUIRED test_artifacts)

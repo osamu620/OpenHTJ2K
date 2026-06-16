@@ -7361,8 +7361,18 @@ uint8_t *j2k_tile::encode_line_based_stream(
       j2k_resolution *cr = tcomp[c].access_resolution(static_cast<uint8_t>(i + 1));
       auto &cx           = le_ctxs[i];
 
-      cx.cb_h          = cb_h_val;
-      cx.num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_val - 1) / cb_h_val;
+      // Effective code-block height = the code-block-row pitch this subband is
+      // actually striped at.  When a precinct is smaller than the code-block,
+      // Rec. ITU-T T.800 B.7 clamps the code-block to the precinct-subband
+      // (ycb' = min(ycb, PPy-1)), shrinking that pitch.  Striping at the
+      // effective pitch lets precincts that hold a single (clamped) code-block
+      // per subband — e.g. the ISO/IEC 15444-18 profiles — encode correctly,
+      // while default (max) precincts keep the nominal pitch unchanged.
+      const element_siz log2PP = tcomp[c].get_precinct_size(static_cast<uint8_t>(i + 1));
+      const int32_t cb_h_eff =
+          (log2PP.y >= 1) ? std::min(cb_h_val, static_cast<int32_t>(1) << (log2PP.y - 1)) : cb_h_val;
+      cx.cb_h          = cb_h_eff;
+      cx.num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_eff - 1) / cb_h_eff;
       if (cx.num_cblk_rows <= 0) continue;
 
       // Compute per-strip sample footprint; the scratch slot for this level
@@ -7378,7 +7388,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
             const uint32_t QWx2      = round_up(block->size.x, 8U);
             const uint32_t QHx2      = round_up(block->size.y, 8U);
             const int32_t cblk_y_abs = static_cast<int32_t>(block->pos0.y);
-            const int32_t br_idx     = (cblk_y_abs - band_y0) / cb_h_val;
+            const int32_t br_idx     = (cblk_y_abs - band_y0) / cb_h_eff;
             if (br_idx < 0 || br_idx >= cx.num_cblk_rows) continue;
             strip_g[static_cast<size_t>(br_idx)] += QWx2 * QHx2;
           }
@@ -7397,8 +7407,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
       cx.cblk_row_done = std::make_unique<std::atomic<uint8_t>[]>(static_cast<size_t>(cx.num_cblk_rows));
       for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
         uint8_t init_flags = 0;
-        if (br * cb_h_val >= cx.hl_h) init_flags |= 1;  // no HL codeblocks in this row
-        if (br * cb_h_val >= cx.lh_h) init_flags |= 2;  // no LH/HH codeblocks in this row
+        if (br * cb_h_eff >= cx.hl_h) init_flags |= 1;  // no HL codeblocks in this row
+        if (br * cb_h_eff >= cx.lh_h) init_flags |= 2;  // no LH/HH codeblocks in this row
         cx.cblk_row_done[static_cast<size_t>(br)].store(init_flags, std::memory_order_relaxed);
       }
       cx.enc_cr       = cr;
@@ -7410,28 +7420,66 @@ uint8_t *j2k_tile::encode_line_based_stream(
 #endif
 
       // Build per-band codeblock pointer tables for fused sink-quantize.
-      // Codeblocks are stored in raster (cy, cx) order per band.
+      // Codeblocks are stored in band-raster (cy, cx) order so the streaming
+      // sink can address any codeblock as sink_cblks[b][cy * ncx + cx],
+      // independent of the precinct partition.  Precincts tile the subband on
+      // a regular grid (precinct dimensions are whole multiples of the
+      // codeblock size), so each precinct's codeblocks are placed at their
+      // global (row, column) offset within the subband.  x_start holds one
+      // band-relative x offset per codeblock column (sink_quantize_row indexes
+      // it by column only).
+      const uint32_t npw = cr->npw, nph = cr->nph;
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
-        // Collect codeblocks and their x-starts for each band.
-        // Assumes single precinct (default). For multiple precincts,
-        // all precincts' codeblocks at the same band are concatenated.
         auto &vec  = cx.sink_cblks[b];
         auto &xvec = cx.sink_x_start[b];
         vec.clear();
         xvec.clear();
+
+        // Codeblock width per precinct column and height per precinct row
+        // (uniform within a column/row; empty precinct-subbands contribute 0),
+        // plus the band's left coefficient origin for band-relative x offsets.
+        std::vector<uint32_t> col_ncx(npw, 0), row_ncy(nph, 0);
+        int32_t band_x0 = INT32_MAX;
+        for (uint32_t ppy = 0; ppy < nph; ++ppy) {
+          for (uint32_t ppx = 0; ppx < npw; ++ppx) {
+            j2k_precinct_subband *cpb = cr->access_precinct(ppy * npw + ppx)->access_pband(b);
+            if (!cpb->num_codeblock_x || !cpb->num_codeblock_y) continue;
+            col_ncx[ppx] = std::max(col_ncx[ppx], cpb->num_codeblock_x);
+            row_ncy[ppy] = std::max(row_ncy[ppy], cpb->num_codeblock_y);
+            band_x0      = std::min(band_x0, static_cast<int32_t>(cpb->pos0.x));
+          }
+        }
+        // Prefix offsets and totals over the precinct grid.
+        std::vector<uint32_t> col_off(npw, 0), row_off(nph, 0);
         uint32_t ncx_total = 0, ncy_total = 0;
-        for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-          j2k_precinct *cp          = cr->access_precinct(p);
-          j2k_precinct_subband *cpb = cp->access_pband(b);
-          if (!cpb->num_codeblock_x || !cpb->num_codeblock_y) continue;
-          ncx_total             = cpb->num_codeblock_x;
-          ncy_total             = cpb->num_codeblock_y;
-          const int32_t band_x0 = static_cast<int32_t>(cpb->pos0.x);
-          for (uint32_t cy_cb = 0; cy_cb < cpb->num_codeblock_y; ++cy_cb) {
-            for (uint32_t cx_cb = 0; cx_cb < cpb->num_codeblock_x; ++cx_cb) {
-              j2k_codeblock *block = cpb->access_codeblock(cx_cb + cy_cb * cpb->num_codeblock_x);
-              vec.push_back(block);
-              xvec.push_back(static_cast<int32_t>(block->pos0.x) - band_x0);
+        for (uint32_t ppx = 0; ppx < npw; ++ppx) {
+          col_off[ppx] = ncx_total;
+          ncx_total += col_ncx[ppx];
+        }
+        for (uint32_t ppy = 0; ppy < nph; ++ppy) {
+          row_off[ppy] = ncy_total;
+          ncy_total += row_ncy[ppy];
+        }
+        if (ncx_total == 0 || ncy_total == 0) {
+          cx.sink_num_cblk_x[b] = 0;
+          cx.sink_num_cblk_y[b] = 0;
+          continue;
+        }
+
+        vec.assign(static_cast<size_t>(ncx_total) * ncy_total, nullptr);
+        xvec.assign(ncx_total, 0);
+        for (uint32_t ppy = 0; ppy < nph; ++ppy) {
+          for (uint32_t ppx = 0; ppx < npw; ++ppx) {
+            j2k_precinct_subband *cpb = cr->access_precinct(ppy * npw + ppx)->access_pband(b);
+            if (!cpb->num_codeblock_x || !cpb->num_codeblock_y) continue;
+            for (uint32_t cy_cb = 0; cy_cb < cpb->num_codeblock_y; ++cy_cb) {
+              for (uint32_t cx_cb = 0; cx_cb < cpb->num_codeblock_x; ++cx_cb) {
+                j2k_codeblock *block = cpb->access_codeblock(cx_cb + cy_cb * cpb->num_codeblock_x);
+                const uint32_t g_cx  = col_off[ppx] + cx_cb;
+                const uint32_t g_cy  = row_off[ppy] + cy_cb;
+                vec[static_cast<size_t>(g_cy) * ncx_total + g_cx] = block;
+                xvec[g_cx] = static_cast<int32_t>(block->pos0.x) - band_x0;
+              }
             }
           }
         }
