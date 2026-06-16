@@ -4424,11 +4424,86 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
             }
           }
           break;
+        case 5:  // PRCL (ISO/IEC 15444-2, I.2.6): position-resolution level-component-layer.
+                 // Identical body to RPCL (case 2), but the resolution loop is nested inside
+                 // the spatial (y, x) loops instead of outermost.
+          this->find_gcd_of_precinct_size(PP);
+          x_examin.push_back(pos0.x);
+          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
+            if (x > pos0.x) {
+              x_examin.push_back(x);
+            }
+          }
+          y_examin.push_back(pos0.y);
+          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
+            if (y > pos0.y) {
+              y_examin.push_back(y);
+            }
+          }
+          for (uint32_t y : y_examin) {
+            for (uint32_t x : x_examin) {
+              for (r = RS; r < RE; r++) {
+                for (c = CS; c < CE; c++) {
+                  c_NL = this->tcomp[c].NL;
+                  if (r <= c_NL) {
+                    cPP = this->tcomp[c].get_precinct_size(r);
+                    cr  = this->tcomp[c].access_resolution(r);
+                    if (!cr->is_empty) {
+                      element_siz tr0 = cr->get_pos0();
+                      x_cond          = false;
+                      y_cond          = false;
+                      main_header.SIZ->get_subsampling_factor(csub, c);
+                      {
+                        const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                        const uint8_t hd =
+                            cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                        const uint8_t vd =
+                            cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                        x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                                 || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                        y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                                 || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      }
+                      if (x_cond && y_cond) {
+                        p  = p_x[c][r] + p_y[c][r] * cr->npw;
+                        cp = cr->access_precinct(p);
+                        for (l = 0; l < LYE; l++) {
+                          if (!is_packet_read[l][r][c][p]) {
+                            cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                            this->packet[packet_count++] =
+                                j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                            {
+                              const uint64_t _pk_off =
+                                  packet_observer_ ? tile_buf->get_total_position() : 0u;
+                              this->read_packet(
+                                  cp, l, cr->num_bands,
+                                  precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
+                              if (packet_observer_) {
+                                packet_observer_(static_cast<uint16_t>(c), r, p, l, _pk_off,
+                                                 tile_buf->get_total_position() - _pk_off);
+                              }
+                            }
+                            is_packet_read[l][r][c][p] = true;
+                          }
+                        }
+                        p_x[c][r] += 1;
+                        if (p_x[c][r] == cr->npw) {
+                          p_x[c][r] = 0;
+                          p_y[c][r] += 1;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          break;
 
         default:
           printf(
               "ERROR: Progression order number shall be in the range from 0 "
-              "to 4\n");
+              "to 5\n");
           throw std::exception();
           // break;
       }
@@ -4765,10 +4840,69 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
           }
         }
         break;
+      case 5:  // PRCL (ISO/IEC 15444-2, I.2.6): position-resolution level-component-layer.
+               // RPCL body with the resolution loop nested inside the spatial (y, x) loops.
+        this->find_gcd_of_precinct_size(PP);
+        x_examin.push_back(pos0.x);
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
+          if (x > pos0.x) {
+            x_examin.push_back(x);
+          }
+        }
+        y_examin.push_back(pos0.y);
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
+          if (y > pos0.y) {
+            y_examin.push_back(y);
+          }
+        }
+        for (uint32_t y : y_examin) {
+          for (uint32_t x : x_examin) {
+            for (r = RS; r < RE; r++) {
+              for (c = CS; c < CE; c++) {
+                c_NL = this->tcomp[c].NL;
+                if (r <= c_NL) {
+                  cPP = this->tcomp[c].get_precinct_size(r);
+                  cr  = this->tcomp[c].access_resolution(r);
+                  if (!cr->is_empty) {
+                    element_siz tr0 = cr->get_pos0();
+                    x_cond          = false;
+                    y_cond          = false;
+                    main_header.SIZ->get_subsampling_factor(csub, c);
+                    {
+                      const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                      const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    }
+                    if (x_cond && y_cond) {
+                      p  = p_x[c][r] + p_y[c][r] * cr->npw;
+                      cp = cr->access_precinct(p);
+                      for (l = 0; l < LYE; l++) {
+                        if (!is_packet_created[l][r][c][p]) {
+                          this->packet[packet_count++]  = j2c_packet(l, r, c, p, cp, cr->num_bands);
+                          is_packet_created[l][r][c][p] = true;
+                        }
+                      }
+                      p_x[c][r] += 1;
+                      if (p_x[c][r] == cr->npw) {
+                        p_x[c][r] = 0;
+                        p_y[c][r] += 1;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        break;
       default:
         printf(
             "ERROR: Progression order number shall be in the range from 0 "
-            "to 4\n");
+            "to 5\n");
         throw std::exception();
     }
   }
@@ -5120,10 +5254,67 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
         }
         break;
       }
+      case 5: {  // PRCL (ISO/IEC 15444-2, I.2.6): position-resolution level-component-layer.
+                 // RPCL body with the resolution loop nested inside the spatial (y, x) loops.
+        this->find_gcd_of_precinct_size(PP);
+        x_examin.push_back(pos0.x);
+        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
+          if (x > pos0.x) x_examin.push_back(x);
+        }
+        y_examin.push_back(pos0.y);
+        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
+          if (y > pos0.y) y_examin.push_back(y);
+        }
+        for (uint32_t y : y_examin) {
+          for (uint32_t x : x_examin) {
+            for (r = RS; r < RE; r++) {
+              for (c = CS; c < CE; c++) {
+                c_NL = this->tcomp[c].NL;
+                if (r <= c_NL) {
+                  cPP = this->tcomp[c].get_precinct_size(r);
+                  cr  = this->tcomp[c].access_resolution(r);
+                  if (!cr->is_empty) {
+                    element_siz tr0 = cr->get_pos0();
+                    x_cond          = false;
+                    y_cond          = false;
+                    main_header.SIZ->get_subsampling_factor(csub, c);
+                    {
+                      const DFS_marker *cdfs = this->tcomp[c].dfs_info;
+                      const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
+                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
+                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
+                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
+                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    }
+                    if (x_cond && y_cond) {
+                      p  = p_x[c][r] + p_y[c][r] * cr->npw;
+                      cp = cr->access_precinct(p);
+                      for (l = 0; l < LYE; l++) {
+                        if (!is_packet_done[l][r][c][p]) {
+                          emit_sop(sink);
+                          write_precinct_data(sink, cp, cr->num_bands);
+                          is_packet_done[l][r][c][p] = true;
+                        }
+                      }
+                      p_x[c][r] += 1;
+                      if (p_x[c][r] == cr->npw) {
+                        p_x[c][r] = 0;
+                        p_y[c][r] += 1;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        break;
+      }
       default:
         printf(
             "ERROR: Progression order number shall be in the range from 0 "
-            "to 4\n");
+            "to 5\n");
         throw std::exception();
     }
   }

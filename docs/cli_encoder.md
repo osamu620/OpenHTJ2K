@@ -49,8 +49,10 @@ JPH file format.
   - Precinct size. Must be a power of two.
 - `Cycc=yes|no`
   - `yes` to apply RGB→YCbCr color space conversion. Default is **yes**.
-- `Corder=<LRCP|RLCP|RPCL|PCRL|CPRL>`
+- `Corder=<LRCP|RLCP|RPCL|PCRL|CPRL|PRCL>`
   - Progression order. Default is **LRCP**.
+  - `PRCL` (position-resolution level-component-layer) is an ISO/IEC 15444-2 (Part 2) extension;
+    selecting it sets bit-14 of `Ccap2` in the CAP marker (Table A.49).
 - `Cuse_sop=yes|no`
   - `yes` to insert SOP (Start Of Packet) marker segments. Default is **no**.
 - `Cuse_eph=yes|no`

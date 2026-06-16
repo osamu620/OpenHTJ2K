@@ -20,6 +20,16 @@ set_tests_properties(dec_lossless_odd PROPERTIES DEPENDS enc_lossless_odd)
 add_test(NAME comp_lossless_odd COMMAND imgcmp kodim23odd_lossless.ppm ${ENCODER_REF_DIR}/kodim23odd.ppm 0 0)
 set_tests_properties(comp_lossless_odd PROPERTIES DEPENDS dec_lossless_odd)
 
+# ISO/IEC 15444-2 (Part 2) PRCL progression order. kodim23 is RGB with 5 DWT levels (3 components
+# x 6 resolutions), so the PRCL resolution-then-component packet interleaving differs from every
+# Part 1 order. The lossless round-trip must reproduce the input exactly (PAE=0), which proves the
+# encoder write order and decoder read order agree and map packets to the correct subbands.
+add_test(NAME enc_prcl COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23prcl.j2c Creversible=yes Corder=PRCL)
+add_test(NAME dec_prcl COMMAND open_htj2k_dec -i kodim23prcl.j2c -o kodim23prcl.ppm)
+set_tests_properties(dec_prcl PROPERTIES DEPENDS enc_prcl)
+add_test(NAME comp_prcl COMMAND imgcmp kodim23prcl.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_prcl PROPERTIES DEPENDS dec_prcl)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -36,4 +46,5 @@ set_tests_properties(
   enc_lossless dec_lossless comp_lossless
   enc_lossy    dec_lossy    comp_lossy
   enc_lossless_odd dec_lossless_odd comp_lossless_odd
+  enc_prcl         dec_prcl         comp_prcl
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
