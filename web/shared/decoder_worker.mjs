@@ -43,6 +43,16 @@ let reduceNL    = 0;      // resolution-reduce; 0 = full, 1 = half, 2 = quarter
 let skipInterval = 0;     // pre-decode cadence skip: drop every Nth frame (0 = disabled)
 let skipCounter  = 0;
 let skippedByPreDecode = 0;
+// Glass-to-glass latency marks — absolute epoch ms (performance.timeOrigin +
+// performance.now()), comparable to the sender's capture clock once PTP/NTP
+// synced.  first-byte is stamped at each frame boundary (detected by RTP
+// timestamp change, see g2gMarkFirstByte); reassembled when rtp_push reports a
+// completed frame.  Consumed in drainReady and forwarded to the page; see
+// g2g_latency/aggregate_latency.py.
+let lastFirstByteMs   = 0;
+let lastReassembledMs = 0;
+let g2gFirstByteMs    = 0;     // first-byte mark of the frame currently assembling
+let g2gLastRtpTs      = -1;    // RTP timestamp of the previous packet; -1 = none seen yet
 let sab = null, sabFlags = null, sabU8 = null;
 let sabWriteIdx = 0;
 // 'planar' = post Y/Cb/Cr buffers (cheap; renderer applies matrix in shader)
@@ -100,6 +110,8 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
     rtp_pop_range:     M.cwrap('rtp_pop_frame_range',    'number', ['number']),
     rtp_pop_primaries: M.cwrap('rtp_pop_frame_primaries','number', ['number']),
     rtp_pop_transfer:  M.cwrap('rtp_pop_frame_transfer', 'number', ['number']),
+    rtp_pop_capture_ns_hi: M.cwrap('rtp_pop_frame_capture_ns_hi', 'number', ['number']),
+    rtp_pop_capture_ns_lo: M.cwrap('rtp_pop_frame_capture_ns_lo', 'number', ['number']),
     rtp_frames:        M.cwrap('rtp_frames_emitted',     'number', ['number']),
     rtp_drops:         M.cwrap('rtp_frames_dropped',     'number', ['number']),
     rtp_gaps:          M.cwrap('rtp_seq_gaps',           'number', ['number']),
@@ -142,6 +154,8 @@ function reset() {
   if (decoder) { F.release_decoder(decoder); decoder = 0; }
   if (session) F.rtp_reset(session);
   lastStatsAt = 0;
+  // Reset the g2g first-byte tracker: the next packet begins a fresh frame.
+  g2gLastRtpTs = -1;
 }
 
 // reduce_NL is set at decoder creation time and can't be changed on a live
@@ -159,13 +173,34 @@ function makeDecoder(framePtr, fsz) {
     : F.create_decoder(framePtr, fsz, reduceNL);
 }
 
+// Stamp the g2g first-byte mark at frame boundaries.  Each RTP frame carries a
+// distinct 90 kHz timestamp (bytes 4-7, big-endian), so a timestamp change marks
+// the first packet of a new frame.  Detecting boundaries this way — rather than
+// re-arming off rtp_push's emit return — stays correct across dropped frames and
+// SSRC switches, where no frame is emitted and the emit-return latch would leave
+// a stale first-byte mark (inflating the reassembly stage).
+function g2gMarkFirstByte(u8, off, len) {
+  if (len < 12) return;  // shorter than the RTP fixed header
+  const ts = ((u8[off + 4] << 24) | (u8[off + 5] << 16)
+              | (u8[off + 6] << 8) | u8[off + 7]) >>> 0;
+  if (ts !== g2gLastRtpTs) {
+    g2gFirstByteMs = performance.timeOrigin + performance.now();
+    g2gLastRtpTs   = ts;
+  }
+}
+
 function pushPacket(bytes) {
   if (!F || !session) return;
   const len = bytes.length;
   if (len > PACKET_BUF) return;       // oversized — drop silently (caller logs)
+  g2gMarkFirstByte(bytes, 0, len);
   M.HEAPU8.set(bytes, packetPtr);
   const r = F.rtp_push(session, packetPtr, len);
-  if (r === 1) drainReady();
+  if (r === 1) {
+    lastFirstByteMs   = g2gFirstByteMs;
+    lastReassembledMs = performance.timeOrigin + performance.now();
+    drainReady();
+  }
   maybePostStats();
 }
 
@@ -188,9 +223,14 @@ function pushPacketBatch(bytesBuf, offsets) {
     const end = offsets[i];
     const len = end - prev;
     if (len > 0 && len <= PACKET_BUF) {
+      g2gMarkFirstByte(u8, prev, len);
       M.HEAPU8.set(u8.subarray(prev, end), packetPtr);
       const r = F.rtp_push(session, packetPtr, len);
-      if (r === 1) drainReady();
+      if (r === 1) {
+        lastFirstByteMs   = g2gFirstByteMs;
+        lastReassembledMs = performance.timeOrigin + performance.now();
+        drainReady();
+      }
     }
     prev = end;
   }
@@ -227,6 +267,12 @@ function drainReady() {
     const primaries = F.rtp_pop_primaries(session);
     const transfer  = F.rtp_pop_transfer(session);
     const rtpTs     = F.rtp_pop_ts(session);
+    const captureHi = F.rtp_pop_capture_ns_hi(session);
+    const captureLo = F.rtp_pop_capture_ns_lo(session);
+    const captureNs = (BigInt(captureHi >>> 0) << 32n) | BigInt(captureLo >>> 0);
+    const captureMs = Number(captureNs) / 1e6;          // epoch ms (double precise at ms scale)
+    const tFirstByte   = lastFirstByteMs;               // first packet of this frame arrived
+    const tReassembled = lastReassembledMs;             // frame completed in rtp_push
 
     const t0 = performance.now();
     if (!decoder) decoder = makeDecoder(framePtr, fsz);
@@ -271,11 +317,13 @@ function drainReady() {
         // 0 (identity), 2 (unspec), or sRGB → leave as-is
       }
       const decodeMs = performance.now() - t0;
+      const tDecoded = performance.timeOrigin + performance.now();
       const rgbaBuf = M.HEAPU8.slice(rgbaPtr, rgbaPtr + w * h * 4).buffer;
       self.postMessage(
         { type: 'frame', mode: 'rgba', w, h, fullW, fullH, nc, colorspace, depth,
           compW, compH, compS, compD,
           matrix, range, primaries, transfer, rtpTs, decodeMs,
+          captureMs, tFirstByte, tReassembled, tDecoded,
           rgba: rgbaBuf },
         [rgbaBuf]
       );
@@ -289,6 +337,7 @@ function drainReady() {
       else
         F.invoke_planar_u8(decoder, yPtr, cbPtr, crPtr);
       const decodeMs = performance.now() - t0;
+      const tDecoded = performance.timeOrigin + performance.now();
 
       // SAB zero-copy path: write planes into a pre-allocated shared slot.
       if (sab) {
@@ -308,7 +357,8 @@ function drainReady() {
             { type: 'frame', mode: 'sab', slot, w, h, cw, ch, fullW, fullH, nc, colorspace, depth,
               compW, compH, compS, compD,
               isRGB, isYCbCr,
-              matrix, range, primaries, transfer, rtpTs, decodeMs });
+              matrix, range, primaries, transfer, rtpTs, decodeMs,
+              captureMs, tFirstByte, tReassembled, tDecoded });
           maybePostStats();
           continue;
         }
@@ -323,6 +373,7 @@ function drainReady() {
           compW, compH, compS, compD,
           isRGB, isYCbCr,
           matrix, range, primaries, transfer, rtpTs, decodeMs,
+          captureMs, tFirstByte, tReassembled, tDecoded,
           y: yBuf, cb: cbBuf, cr: crBuf },
         [yBuf, cbBuf, crBuf]
       );

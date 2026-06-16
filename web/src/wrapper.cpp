@@ -30,6 +30,7 @@ struct RtpSession {
   uint32_t last_ssrc         = 0;
   bool     ssrc_seen         = false;
   uint32_t last_popped_ts    = 0;  // RTP timestamp of most recently popped frame
+  uint64_t last_popped_capture_ns = 0;  // sender capture time (UNIX epoch ns); 0 if absent
   uint8_t  last_popped_mat   = 0;  // H.273 matrix coeffs of most recently popped frame
   uint8_t  last_popped_prims = 0;  // H.273 colour primaries
   uint8_t  last_popped_trans = 0;  // H.273 transfer characteristics
@@ -970,6 +971,7 @@ int32_t rtp_pop_frame(RtpSession* s, uint8_t* out, uint32_t max_len) {
   std::memcpy(out, f.bytes.data(), f.bytes.size());
   uint32_t copied           = static_cast<uint32_t>(f.bytes.size());
   s->last_popped_ts         = f.rtp_timestamp;
+  s->last_popped_capture_ns = f.capture_ns;
   s->last_popped_mat        = f.mat;
   s->last_popped_prims      = f.prims;
   s->last_popped_trans      = f.trans;
@@ -992,6 +994,18 @@ int32_t rtp_drop_ready(RtpSession* s) {
 
 EMSCRIPTEN_KEEPALIVE
 uint32_t rtp_pop_frame_timestamp(RtpSession* s) { return s ? s->last_popped_ts : 0u; }
+
+// Sender capture time (UNIX epoch nanoseconds) of the last popped frame, split
+// into hi/lo 32-bit halves because a JS `number` cannot carry a full u64.
+// Returns 0 when the frame carried no RFC 8285 capture-time extension.
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_pop_frame_capture_ns_hi(RtpSession* s) {
+  return s ? static_cast<uint32_t>(s->last_popped_capture_ns >> 32) : 0u;
+}
+EMSCRIPTEN_KEEPALIVE
+uint32_t rtp_pop_frame_capture_ns_lo(RtpSession* s) {
+  return s ? static_cast<uint32_t>(s->last_popped_capture_ns & 0xFFFFFFFFu) : 0u;
+}
 
 // H.273 MatrixCoefficients of the last popped frame (1 = BT.709, 5/6 = BT.601).
 // 255 if the frame had no Main Packet metadata.

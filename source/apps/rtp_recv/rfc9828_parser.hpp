@@ -33,6 +33,11 @@ struct RtpHeader {
   uint16_t sequence       = 0;
   uint32_t timestamp      = 0;
   uint32_t ssrc           = 0;
+  // Absolute capture time carried in an RFC 8285 header extension (UNIX epoch
+  // nanoseconds), used for glass-to-glass latency measurement.  has_capture_ns
+  // is false when the packet carries no such extension.
+  uint64_t capture_ns     = 0;
+  bool     has_capture_ns = false;
   // Offset within the input buffer where the RTP payload begins
   // (past fixed header + CSRCs + optional extension).
   size_t payload_offset = 0;

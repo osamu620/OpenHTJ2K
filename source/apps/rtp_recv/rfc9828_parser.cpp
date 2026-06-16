@@ -51,11 +51,38 @@ bool parse_rtp_header(const uint8_t* data, size_t len, RtpHeader& out, std::stri
       error = "rtp header: extension header overruns buffer";
       return false;
     }
+    const uint16_t profile   = rd_u16_be(data + offset);
     const uint16_t ext_words = rd_u16_be(data + offset + 2);
-    const size_t ext_bytes  = 4u + static_cast<size_t>(ext_words) * 4u;
+    const size_t   ext_bytes = 4u + static_cast<size_t>(ext_words) * 4u;
     if (len < offset + ext_bytes) {
       error = "rtp header: extension body overruns buffer";
       return false;
+    }
+    if (profile == 0xBEDE) {
+      // RFC 8285 one-byte header extensions.  Each element header byte packs
+      // ID(4) | (data_len - 1)(4); ID=1 carries the sender's absolute capture
+      // time (8-byte big-endian UNIX epoch ns) for glass-to-glass latency.
+      size_t       p   = offset + 4;
+      const size_t end = offset + ext_bytes;
+      while (p < end) {
+        const uint8_t b = data[p];
+        if (b == 0x00) {  // padding between elements
+          ++p;
+          continue;
+        }
+        const uint8_t id = static_cast<uint8_t>(b >> 4);
+        const uint8_t l  = static_cast<uint8_t>((b & 0x0F) + 1);  // element data length
+        ++p;
+        if (id == 15) break;     // reserved one-byte terminator
+        if (p + l > end) break;  // malformed: element data overruns the extension
+        if (id == 1 && l == 8) {
+          uint64_t v = 0;
+          for (int i = 0; i < 8; ++i) v = (v << 8) | data[p + i];
+          out.capture_ns     = v;
+          out.has_capture_ns = true;
+        }
+        p += l;
+      }
     }
     offset += ext_bytes;
   }

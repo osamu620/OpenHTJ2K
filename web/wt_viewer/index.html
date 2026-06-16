@@ -533,6 +533,41 @@ async function runViewer(url, hash, signal) {
     lastDrift = (performance.now() - wallAnchor) - dRtp / 90;
   }
 
+  // ── Glass-to-glass latency log ───────────────────────────────────────────
+  // Per-frame stage marks, all absolute epoch ms; time_origin_ms = 0 tells
+  // g2g_latency/aggregate_latency.py the t_* values are already absolute.
+  // Keyed by rtpTs (the frame id used throughout this pipeline).  After a run,
+  // call g2gDownload('name.jsonl') from the DevTools console and feed the file
+  // to aggregate_latency.py.
+  const g2gLog = new Map();
+  function g2gNote(frame) {
+    g2gLog.set(frame.rtpTs, {
+      frame:          frame.rtpTs,
+      time_origin_ms: 0,
+      capture_ms:     frame.captureMs,
+      t_first_byte:   frame.tFirstByte,
+      t_reassembled:  frame.tReassembled,
+      t_decoded:      frame.tDecoded,
+    });
+  }
+  function g2gPaint(frame) {
+    const rec = g2gLog.get(frame.rtpTs);
+    if (rec) rec.t_painted = performance.timeOrigin + performance.now();
+  }
+  window.g2gDownload = function (name = 'g2g_log.jsonl') {
+    const lines = [];
+    for (const r of g2gLog.values())
+      if (r.t_painted != null && r.capture_ms) lines.push(JSON.stringify(r));
+    const blob = new Blob([lines.join('\n')], { type: 'application/x-ndjson' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return lines.length;
+  };
+
   // 4. Spin up the decoder worker.
   ping('worker.starting');
   const dec = new DecoderClient({
@@ -540,6 +575,7 @@ async function runViewer(url, hash, signal) {
     threadCount: THREAD_COUNT,
     output:      wantOutput,
     onFrame: (frame) => {
+      g2gNote(frame);
       decode_p95.push(frame.decodeMs);
       decodedFrames++;
       if (decodedFrames === 1) ping('first.frame.complete', { w: frame.w, h: frame.h });
@@ -589,6 +625,7 @@ async function runViewer(url, hash, signal) {
       });
     }
     renderer.draw();
+    g2gPaint(f);
     noteFrame();
   }
 

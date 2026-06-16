@@ -82,6 +82,7 @@ class BufferPool {
 struct AssembledFrame {
   std::vector<uint8_t> bytes;       // complete JPEG 2000 codestream ready for openhtj2k_decoder
   uint32_t rtp_timestamp   = 0;
+  uint64_t capture_ns      = 0;     // sender capture time (UNIX epoch ns); 0 if absent
   uint32_t eseq_first      = 0;     // 24-bit extended seq of first packet in frame
   uint32_t eseq_last       = 0;     // 24-bit extended seq of last packet in frame
   size_t   packet_count    = 0;
@@ -176,6 +177,7 @@ class FrameHandler {
   // Per-frame state.
   bool     have_frame_        = false;
   uint32_t current_ts_        = 0;
+  uint64_t frame_capture_ns_  = 0;
   uint32_t frame_eseq_first_  = 0;
   uint32_t frame_eseq_last_   = 0;
   size_t   frame_packet_count_ = 0;

@@ -26,6 +26,7 @@ void FrameHandler::reset() {
   have_cached_main_     = false;
   have_frame_           = false;
   current_ts_           = 0;
+  frame_capture_ns_     = 0;
   frame_eseq_first_     = 0;
   frame_eseq_last_      = 0;
   frame_packet_count_   = 0;
@@ -101,6 +102,7 @@ void FrameHandler::finalize_frame(std::optional<AssembledFrame>& out_frame) {
     AssembledFrame f;
     f.bytes         = std::move(accum_);
     f.rtp_timestamp = current_ts_;
+    f.capture_ns    = frame_capture_ns_;
     f.eseq_first    = frame_eseq_first_;
     f.eseq_last     = frame_eseq_last_;
     f.packet_count  = frame_packet_count_;
@@ -150,6 +152,7 @@ bool FrameHandler::push_main_packet(const RtpHeader& rtp, const MainPacketHeader
 
   if (!have_frame_) {
     current_ts_       = rtp.timestamp;
+    frame_capture_ns_ = rtp.capture_ns;
     frame_eseq_first_ = ext_seq;
     start_frame_empty();
   }
@@ -210,6 +213,7 @@ bool FrameHandler::push_body_packet(const RtpHeader& rtp, const BodyPacketHeader
 
   if (!have_frame_) {
     current_ts_       = rtp.timestamp;
+    frame_capture_ns_ = rtp.capture_ns;
     frame_eseq_first_ = ext_seq;
     // Body-first frame start: prepend cached main header (if any).  If no
     // cache is available, start_frame_with_main_prepend marks the frame
