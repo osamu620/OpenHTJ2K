@@ -89,6 +89,14 @@ set_tests_properties(dec_p18_rt PROPERTIES DEPENDS enc_p18_rt)
 add_test(NAME comp_p18_rt COMMAND imgcmp arri_p18_rt.ppm arri_p18.ppm 0 0)
 set_tests_properties(comp_p18_rt PROPERTIES DEPENDS dec_p18_rt)
 
+# Unknown marker segments must be skipped by their length (Lmar), not scanned
+# byte-by-byte. kodim23_unknown_marker.j2c is a lossless kodim23 codestream with
+# an unknown marker (0xFF6F, a 6-byte segment) injected into the main header;
+# decoding it must skip that marker cleanly and reproduce kodim23 exactly (PAE=0).
+add_test(NAME dec_unknown_marker COMMAND open_htj2k_dec -i ${CMAKE_CURRENT_SOURCE_DIR}/conformance_data/kodim23_unknown_marker.j2c -o kodim23_um.ppm)
+add_test(NAME comp_unknown_marker COMMAND imgcmp kodim23_um.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_unknown_marker PROPERTIES DEPENDS dec_unknown_marker)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -111,4 +119,5 @@ set_tests_properties(
   enc_precincts_clamped dec_precincts_clamped comp_precincts_clamped
   enc_prcl_prec    dec_prcl_prec    comp_prcl_prec
   dec_p18_arri     enc_p18_rt       dec_p18_rt       comp_p18_rt
+  dec_unknown_marker comp_unknown_marker
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
