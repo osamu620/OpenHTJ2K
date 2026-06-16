@@ -110,8 +110,14 @@ async function init({ wasmBase = '/wasm/', threadCount: tc = 4, output = 'planar
     rtp_pop_range:     M.cwrap('rtp_pop_frame_range',    'number', ['number']),
     rtp_pop_primaries: M.cwrap('rtp_pop_frame_primaries','number', ['number']),
     rtp_pop_transfer:  M.cwrap('rtp_pop_frame_transfer', 'number', ['number']),
-    rtp_pop_capture_ns_hi: M.cwrap('rtp_pop_frame_capture_ns_hi', 'number', ['number']),
-    rtp_pop_capture_ns_lo: M.cwrap('rtp_pop_frame_capture_ns_lo', 'number', ['number']),
+    // Optional: only present in wasm rebuilt with the g2g capture-time exports.
+    // Guarded so an older wasm module still decodes (capture marks fall back to
+    // 0); cwrap resolves eagerly to undefined for a missing export, which would
+    // otherwise throw in drainReady and stall the whole pipeline.
+    rtp_pop_capture_ns_hi: M['_rtp_pop_frame_capture_ns_hi']
+      ? M.cwrap('rtp_pop_frame_capture_ns_hi', 'number', ['number']) : null,
+    rtp_pop_capture_ns_lo: M['_rtp_pop_frame_capture_ns_lo']
+      ? M.cwrap('rtp_pop_frame_capture_ns_lo', 'number', ['number']) : null,
     rtp_frames:        M.cwrap('rtp_frames_emitted',     'number', ['number']),
     rtp_drops:         M.cwrap('rtp_frames_dropped',     'number', ['number']),
     rtp_gaps:          M.cwrap('rtp_seq_gaps',           'number', ['number']),
@@ -267,8 +273,8 @@ function drainReady() {
     const primaries = F.rtp_pop_primaries(session);
     const transfer  = F.rtp_pop_transfer(session);
     const rtpTs     = F.rtp_pop_ts(session);
-    const captureHi = F.rtp_pop_capture_ns_hi(session);
-    const captureLo = F.rtp_pop_capture_ns_lo(session);
+    const captureHi = F.rtp_pop_capture_ns_hi ? F.rtp_pop_capture_ns_hi(session) : 0;
+    const captureLo = F.rtp_pop_capture_ns_lo ? F.rtp_pop_capture_ns_lo(session) : 0;
     const captureNs = (BigInt(captureHi >>> 0) << 32n) | BigInt(captureLo >>> 0);
     const captureMs = Number(captureNs) / 1e6;          // epoch ms (double precise at ms scale)
     const tFirstByte   = lastFirstByteMs;               // first packet of this frame arrived
