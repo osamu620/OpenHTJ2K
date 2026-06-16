@@ -71,6 +71,24 @@ set_tests_properties(dec_prcl_prec PROPERTIES DEPENDS enc_prcl_prec)
 add_test(NAME comp_prcl_prec COMMAND imgcmp kodim23prclprec.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
 set_tests_properties(comp_prcl_prec PROPERTIES DEPENDS dec_prcl_prec)
 
+# ISO/IEC 15444-18 (Profiles) round-trip on a real Part 18 codestream.
+# conformance_data/4KuF_H0L1_arri_1bpp.j2c is a 3968x2160 ARRI codestream in
+# profile H0 / Level 1: PRCL progression (signalled via CAP Ccap2 bit-14),
+# an ATK wavelet kernel, and one code-block per precinct. Decoding it exercises
+# the Part 18 decode path (PRCL + ATK + clamped precincts). Re-encoding the
+# decoded image losslessly with PRCL and a single-code-block-per-precinct layout
+# ({64,64} precincts < 64x64 code-block) and decoding again must reproduce it
+# exactly (PAE=0) -- exercising the PRCL progression order (Part 2) and the
+# clamped streaming-encode path on real 4K Part 18 content.
+set(P18_J2C ${CMAKE_CURRENT_SOURCE_DIR}/conformance_data/4KuF_H0L1_arri_1bpp.j2c)
+add_test(NAME dec_p18_arri COMMAND open_htj2k_dec -i ${P18_J2C} -o arri_p18.ppm)
+add_test(NAME enc_p18_rt COMMAND open_htj2k_enc -i arri_p18.ppm -o arri_p18_rt.j2c Creversible=yes Corder=PRCL "Cprecincts={64,64}")
+set_tests_properties(enc_p18_rt PROPERTIES DEPENDS dec_p18_arri)
+add_test(NAME dec_p18_rt COMMAND open_htj2k_dec -i arri_p18_rt.j2c -o arri_p18_rt.ppm)
+set_tests_properties(dec_p18_rt PROPERTIES DEPENDS enc_p18_rt)
+add_test(NAME comp_p18_rt COMMAND imgcmp arri_p18_rt.ppm arri_p18.ppm 0 0)
+set_tests_properties(comp_p18_rt PROPERTIES DEPENDS dec_p18_rt)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -92,4 +110,5 @@ set_tests_properties(
   enc_precincts_small dec_precincts_small comp_precincts_small
   enc_precincts_clamped dec_precincts_clamped comp_precincts_clamped
   enc_prcl_prec    dec_prcl_prec    comp_prcl_prec
+  dec_p18_arri     enc_p18_rt       dec_p18_rt       comp_p18_rt
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
