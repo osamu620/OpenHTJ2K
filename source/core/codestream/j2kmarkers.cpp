@@ -1851,6 +1851,14 @@ int j2k_main_header::read(j2c_src_memory &in) {
         break;
       default:
         printf("WARNING: unknown marker %04X is found in main header\n", word);
+        // Skip the marker segment by its length (Lmar) so parsing resumes at
+        // the next marker instead of scanning byte-by-byte.  Reserved
+        // delimiting markers 0xFF30-0xFF3F carry no segment (Rec. ITU-T T.800
+        // | ISO/IEC 15444-1, Annex A) and are left as-is.
+        if (word < 0xFF30 || word > 0xFF3F) {
+          const uint16_t Lunk = in.get_word();
+          if (Lunk >= 2U) in.forward_Nbytes(static_cast<uint32_t>(Lunk - 2U));
+        }
         break;
     }
   }
@@ -1964,6 +1972,15 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
       default:
         printf("WARNING: unknown marker %04X is found in tile-part header of tile %d and tile-part %d.\n",
                word, this->SOT.get_tile_index(), this->SOT.get_tile_part_index());
+        // Skip the marker segment by its length (Lmar), accounting for the
+        // bytes consumed; reserved delimiting markers 0xFF30-0xFF3F carry no
+        // segment (Rec. ITU-T T.800 | ISO/IEC 15444-1, Annex A).
+        length_of_tilepart_markers += 2U;  // the 2-byte marker code itself
+        if (word < 0xFF30 || word > 0xFF3F) {
+          const uint16_t Lunk = in.get_word();
+          if (Lunk >= 2U) in.forward_Nbytes(static_cast<uint32_t>(Lunk - 2U));
+          length_of_tilepart_markers += Lunk;  // Lmar = length field + body
+        }
         break;
     }
   }
