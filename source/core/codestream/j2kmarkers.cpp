@@ -835,14 +835,15 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
       }
 
       const double eps0 = sqrt(0.5) / static_cast<double>(1 << RI);
-      double delta_Q    = alpha_Q * M_Q;
-      double delta_ref  = delta_Q * G_c_sqrt[0] + eps0;
+      double delta_Q    = alpha_Q * M_Q + eps0;
+      double delta_ref  = delta_Q * G_c_sqrt[0];
       double G_c        = G_c_sqrt[0];  // gain of color transform
       for (size_t i = 0; i < epsilon.size(); ++i) {
         int32_t exponent, mantissa;
         double w_b;
-        // w_b for LL band shall be 1.0
-        w_b = (i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
+        // w_b for the LL band (always the last entry) shall be 1.0, as must any extra
+        // low-frequency bands beyond the 5-level table when dwt_levels > 5.
+        w_b = (i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
 
         double fval = (qfactor != 0xFF) ? delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c)
                                         : basestep / sqrt(wmse_or_BIBO[i]);
@@ -1139,15 +1140,17 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
     }
 
     const double eps0 = sqrt(0.5) / static_cast<double>(1 << RI);
-    double delta_Q    = alpha_Q * M_Q;
-    double delta_ref  = delta_Q * G_c_sqrt[0] + eps0;
+    double delta_Q    = alpha_Q * M_Q + eps0;
+    double delta_ref  = delta_Q * G_c_sqrt[0];
     double G_c        = G_c_sqrt[Cqcc];  // gain of color transform
 
     for (size_t i = 0; i < epsilon.size(); ++i) {
       int32_t exponent, mantissa;
       double w_b;
-      // w_b for LL band shall be 1.0
-      w_b = (i >= W_b_sqrt[Cqcc].size()) ? 1.0 : pow(W_b_sqrt[Cqcc][i], qfactor_power);
+      // w_b for the LL band (always the last entry) shall be 1.0, as must any extra
+      // low-frequency bands beyond the 5-level table when dwt_levels > 5.
+      w_b = (i == epsilon.size() - 1 || i >= W_b_sqrt[Cqcc].size()) ? 1.0
+                                                                    : pow(W_b_sqrt[Cqcc][i], qfactor_power);
 
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
       for (exponent = 0; fval < 1.0; exponent++) {

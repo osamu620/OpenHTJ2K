@@ -282,13 +282,14 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
     alpha_Q = alpha_T1 * std::pow(alpha_T0 / alpha_T1, qpower);
   }
   const double eps0 = std::sqrt(0.5) / static_cast<double>(1u << RI);
-  const double delta_Q = alpha_Q * M_Q;
-  const double delta_ref = delta_Q * G_c_sqrt[0] + eps0;
+  const double delta_Q = alpha_Q * M_Q + eps0;
+  const double delta_ref = delta_Q * G_c_sqrt[0];
   const double G_c = G_c_sqrt[Cqcc];
 
   std::vector<Band> out(num_bands);
   for (size_t i = 0; i < num_bands; ++i) {
-    double w_b = (i >= weights.size()) ? 1.0 : std::pow(weights[i], qpower);
+    // LL band (last entry, always weight 1.0) and any extra low-freq bands beyond the 5-level table
+    double w_b = (i == num_bands - 1 || i >= weights.size()) ? 1.0 : std::pow(weights[i], qpower);
     double fval = delta_ref / (std::sqrt(wmse[i]) * w_b * G_c);
     int32_t exponent = 0;
     while (fval < 1.0) {
