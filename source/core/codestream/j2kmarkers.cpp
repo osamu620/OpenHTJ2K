@@ -845,8 +845,8 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
         // low-frequency bands beyond the 5-level table when dwt_levels > 5.
         w_b = (i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
 
-        double fval = (qfactor != 0xFF) ? delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c)
-                                        : basestep / sqrt(wmse_or_BIBO[i]);
+        // qfactor == 0xFF is handled by the branch above, so it is always != 0xFF here.
+        double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
         for (exponent = 0; fval < 1.0; exponent++) {
           fval *= 2.0;
         }
