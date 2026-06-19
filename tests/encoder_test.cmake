@@ -112,12 +112,23 @@ set_tests_properties(qfest_legacy PROPERTIES DEPENDS enc_lossy)
 # Pin the legacy Qfactor output to its historical bytes. qfest_legacy alone
 # cannot catch a change to the legacy tables/gains -- the encoder and
 # estimate_qfactor read the same shared code, so they stay in agreement at
-# residual 0 even if both shift. This byte-compare against a committed reference
-# is what actually guards the "default Qfactor output is bit-identical" contract
-# against future drift in visual_weighting.hpp.
+# residual 0 even if both shift. This golden compare against a committed
+# reference is what guards the "default Qfactor output is bit-identical"
+# contract against future drift in visual_weighting.hpp.
+#
+# We pin only the QCD/QCC *marker* bytes (dumped by estimate_qfactor
+# --dump-quant), NOT the whole codestream. Those marker bytes are a pure
+# function of (Qfactor, bit-depth, the visual_weighting.hpp tables) and carry no
+# sample data, so they are byte-identical on every platform. The entropy-coded
+# payload is not: the lossy 9/7 DWT runs in float, and -march=native codegen
+# (x86 FMA/AVX2 vs ARM NEON) makes those coefficients -- and thus the packet
+# bytes -- diverge bit-for-bit across architectures. A full-file compare
+# therefore failed on x86 CI while passing on ARM; the marker dump is portable.
+add_test(NAME qfest_legacy_dump COMMAND estimate_qfactor kodim23lossy.j2c --dump-quant kodim23lossy.quant.txt)
+set_tests_properties(qfest_legacy_dump PROPERTIES DEPENDS enc_lossy)
 add_test(NAME qfest_legacy_golden COMMAND ${CMAKE_COMMAND} -E compare_files
-         kodim23lossy.j2c ${CMAKE_CURRENT_SOURCE_DIR}/conformance_data/kodim23_q90_legacy.j2c)
-set_tests_properties(qfest_legacy_golden PROPERTIES DEPENDS enc_lossy)
+         kodim23lossy.quant.txt ${CMAKE_CURRENT_SOURCE_DIR}/conformance_data/kodim23_q90_legacy.quant.txt)
+set_tests_properties(qfest_legacy_golden PROPERTIES DEPENDS qfest_legacy_dump)
 
 # Analytic Mannos-Sakrison (EXPERIMENTAL).
 add_test(NAME enc_qf_mannos COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qfmannos.j2c Qfactor=90 Qcsf=mannos)
@@ -164,7 +175,7 @@ set_tests_properties(
   enc_prcl_prec    dec_prcl_prec    comp_prcl_prec
   dec_p18_arri     enc_p18_rt       dec_p18_rt       comp_p18_rt
   dec_unknown_marker comp_unknown_marker
-  qfest_legacy        qfest_legacy_golden
+  qfest_legacy        qfest_legacy_dump      qfest_legacy_golden
   enc_qf_mannos       qfest_mannos
   enc_qf_mannos_zoom  qfest_mannos_zoom
   enc_qf_daly         qfest_daly
