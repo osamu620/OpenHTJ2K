@@ -23,6 +23,14 @@ documents below are for offline browsing.
   option reference, operational guide (kernel `rmem_max`), hardware
   requirements for 4K @ 60 fps, and known issues.
 
+## Encoding
+
+- [**qfactor.md**](qfactor.md) — the `Qfactor` quality knob: how it
+  maps to quantization step sizes, the legacy visual-weighting tables,
+  the experimental analytic CSF weighting (`Qcsf`/`Qppd`/`Qzoom`),
+  the colour-transform gains, the `estimate_qfactor` inverter, and the
+  calibration scripts.
+
 ## Browser viewer
 
 - [**wt_viewer.md**](wt_viewer.md) — browser-native viewer for live

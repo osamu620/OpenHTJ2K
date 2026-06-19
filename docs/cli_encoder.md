@@ -72,7 +72,21 @@ JPH file format.
 - `Qfactor=Int`
   - Quality factor for lossy compression. Valid range: 0–100
     (100 = best quality).
-  - When specified, `Qstep` is ignored and `Cycc` is set to `yes`.
+  - When specified, `Qstep` is ignored. `Cycc` defaults to `yes`; disabling
+    it on 3-component input only warns (Qfactor assumes YCbCr input).
+  - See [`qfactor.md`](qfactor.md) for how the factor maps to step sizes.
+- `Qcsf=legacy|mannos|daly` *(experimental)*
+  - Visual-weighting model for the `Qfactor` path. Default **legacy**
+    (the historical fixed tables; output is bit-identical). `mannos` /
+    `daly` derive per-subband weights from an analytic contrast
+    sensitivity function. Requires `Qfactor`.
+- `Qppd=Float` *(experimental)*
+  - Reference pixels-per-degree at zoom 1.0 for the analytic CSF.
+    Default **72**.
+- `Qzoom=Float` *(experimental)*
+  - Display magnification; `> 1` is zoom-in, which flattens the
+    weighting toward flat MSE-optimal quantization. Default **1.0**.
+  - See [`qfactor.md`](qfactor.md) for the analytic visual-weighting model.
 
 ### JPH and component layout
 

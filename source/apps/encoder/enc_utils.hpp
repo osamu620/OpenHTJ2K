@@ -78,7 +78,17 @@ void print_help(char *cmd) {
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
   printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 7 (Default is 1.)\n");
   printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
-  printf("  Note: If this option is present, Qstep is ignored and Cycc is set to `yes`.\n");
+  printf(
+      "  Note: If this option is present, Qstep is ignored. Cycc defaults to `yes`;\n"
+      "  disabling it on 3-component input only warns (Qfactor assumes YCbCr input).\n");
+  printf(
+      "Qcsf=legacy|mannos|daly  (EXPERIMENTAL, requires Qfactor)\n"
+      "  Visual-weighting model. legacy (default) keeps the historical tables and is\n"
+      "  bit-identical; mannos/daly derive per-subband weights from an analytic CSF.\n");
+  printf(
+      "Qppd=Float  (EXPERIMENTAL)  reference pixels-per-degree at zoom 1.0 (default 72).\n"
+      "Qzoom=Float (EXPERIMENTAL)  display magnification, >1 = zoom-in (default 1.0);\n"
+      "  zoom-in flattens the weighting toward flat MSE-optimal quantization.\n");
   printf(
       "-jph_color_space\n"
       "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
@@ -143,6 +153,10 @@ class j2k_argset {
   uint8_t num_guard;
   bool qderived;
   uint8_t qfactor;
+  // EXPERIMENTAL analytic visual (CSF) weighting for the Qfactor path.
+  uint8_t csf_model;  // 0 = legacy table (default), 1 = Mannos-Sakrison, 2 = Daly
+  double csf_ppd;     // reference pixels-per-degree at zoom 1.0
+  double csf_zoom;    // display magnification (> 1 = zoom-in)
 
   static void get_coordinate(const std::string &param_name, std::string &arg, element_siz_local &dims) {
     size_t pos0, pos1;
@@ -394,6 +408,9 @@ class j2k_argset {
         num_guard(1),
         qderived(false),
         qfactor(NO_QFACTOR),
+        csf_model(0),
+        csf_ppd(72.0),
+        csf_zoom(1.0),
         ifnames{},
         num_iteration(1),
         num_threads(0),
@@ -562,6 +579,23 @@ class j2k_argset {
           get_bool(param, arg, qderived);
         } else if (param == "factor") {
           qfactor = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 100));
+        } else if (param == "csf") {
+          // EXPERIMENTAL: analytic visual weighting model for the Qfactor path.
+          std::string val = arg.substr(arg.find_first_of('=') + 1);
+          if (val == "legacy") {
+            csf_model = 0;
+          } else if (val == "mannos") {
+            csf_model = 1;
+          } else if (val == "daly") {
+            csf_model = 2;
+          } else {
+            printf("ERROR: unknown Qcsf model '%s' (use legacy|mannos|daly)\n", val.c_str());
+            exit(EXIT_FAILURE);
+          }
+        } else if (param == "ppd") {
+          csf_ppd = get_numerical_param(c, param, arg, 1.0, 100000.0);
+        } else if (param == "zoom") {
+          csf_zoom = get_numerical_param(c, param, arg, 0.01, 1000.0);
         } else {
           printf("ERROR: unknown parameter Q%s\n", param.c_str());
           exit(EXIT_FAILURE);
@@ -596,4 +630,7 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD uint8_t get_num_guard() const { return num_guard; }
   OPENHTJ2K_NODISCARD bool is_derived() const { return qderived; }
   OPENHTJ2K_NODISCARD uint8_t get_qfactor() const { return qfactor; }
+  OPENHTJ2K_NODISCARD uint8_t get_csf_model() const { return csf_model; }
+  OPENHTJ2K_NODISCARD double get_csf_ppd() const { return csf_ppd; }
+  OPENHTJ2K_NODISCARD double get_csf_zoom() const { return csf_zoom; }
 };

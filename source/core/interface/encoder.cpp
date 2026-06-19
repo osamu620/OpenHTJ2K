@@ -536,6 +536,9 @@ class openhtj2k_encoder_impl {
   uint8_t qfactor;
   bool isJPH;
   uint8_t color_space;
+  // EXPERIMENTAL: analytic visual (CSF) weighting. Default-constructed selects
+  // the legacy table, so output is unchanged unless set_visual_weighting() is called.
+  visual_weighting_params vw{};
 
   size_t invoke_internal();
 
@@ -543,6 +546,7 @@ class openhtj2k_encoder_impl {
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
                          qcd_params &, uint8_t, bool, uint8_t);
   void set_output_buffer(std::vector<uint8_t> &);
+  void set_visual_weighting(uint8_t model, double ref_ppd, double zoom);
   ~openhtj2k_encoder_impl();
   size_t invoke_line_based();
   size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
@@ -559,6 +563,27 @@ openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
 
 void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf) {
   this->outbuf = &output_buf;
+}
+
+void openhtj2k_encoder_impl::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
+  // model: 0 = legacy table (default, bit-identical), 1 = Mannos-Sakrison, 2 = Daly.
+  switch (model) {
+    case 1:  vw.model = csf_model::mannos_sakrison; break;
+    case 2:  vw.model = csf_model::daly; break;
+    default: vw.model = csf_model::legacy_table; break;
+  }
+  if (ref_ppd > 0.0) vw.ref_ppd = ref_ppd;
+  if (zoom > 0.0) vw.zoom = zoom;
+
+  // EXPERIMENTAL status / guard (qfactor is already set by the constructor).
+  if (vw.model != csf_model::legacy_table) {
+    if (qfactor == NO_QFACTOR) {
+      printf("WARNING: analytic visual weighting (Qcsf) has no effect without Qfactor.\n");
+    } else {
+      printf("EXPERIMENTAL: analytic visual weighting (model=%d, ref_ppd=%.1f, zoom=%.2f).\n",
+             static_cast<int>(vw.model), vw.ref_ppd, vw.zoom);
+    }
+  }
 }
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
@@ -602,7 +627,8 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     cod->use_color_trafo = 0;
     printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
   }
-  // force RGB->YCbCr when Qfactor feature is enabled
+  // Qfactor assumes a YCbCr (luma/chroma) decomposition; warn (do not force) if
+  // the color transform is off or the component count is unsupported.
   if (qfactor != NO_QFACTOR) {
     if (siz->Csiz == 3) {
       if (cod->use_color_trafo == 0) {
@@ -623,7 +649,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
                       cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
   QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
                       static_cast<uint8_t>((Ssiz[0] & 0x7F) + 1U), cod->use_color_trafo, qcd->base_step,
-                      qfactor);
+                      qfactor, vw);
   // parameters for CAP marker
   uint16_t bits14_15 = 0;                     // 0: HTONLY, 2: HTDECLARED, 3: MIXED
   uint16_t bit13     = 0;                     // 0: SINGLEHT, 1: MULTIHT
@@ -650,7 +676,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   }
 
   // create main header
-  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor);
+  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor, vw);
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
@@ -807,7 +833,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
                       cod->codeblock_style, cod->transformation, cod->PPx, cod->PPy);
   QCD_marker main_QCD(qcd->number_of_guardbits, cod->dwt_levels, cod->transformation, qcd->is_derived,
                       static_cast<uint8_t>((Ssiz[0] & 0x7F) + 1U), cod->use_color_trafo, qcd->base_step,
-                      qfactor);
+                      qfactor, vw);
   uint16_t bits14_15 = 0;
   uint16_t bit13     = 0;
   uint16_t bit12     = 0;
@@ -832,7 +858,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     main_CAP.set_Ccap(static_cast<uint16_t>(1U << 14), 2);
   }
 
-  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor);
+  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor, vw);
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
@@ -954,6 +980,10 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
 
 void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
   this->impl->set_output_buffer(output_buf);
+}
+
+void openhtj2k_encoder::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
+  this->impl->set_visual_weighting(model, ref_ppd, zoom);
 }
 
 size_t openhtj2k_encoder::invoke_line_based() { return this->impl->invoke_line_based(); }

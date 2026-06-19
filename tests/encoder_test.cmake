@@ -97,6 +97,40 @@ add_test(NAME dec_unknown_marker COMMAND open_htj2k_dec -i ${CMAKE_CURRENT_SOURC
 add_test(NAME comp_unknown_marker COMMAND imgcmp kodim23_um.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
 set_tests_properties(comp_unknown_marker PROPERTIES DEPENDS dec_unknown_marker)
 
+# --- Qfactor estimate round-trip (encoder <-> estimate_qfactor consistency) ----
+# estimate_qfactor recomputes the QCD/QCC step formula from the SAME
+# visual_weighting.hpp the encoder uses, so inverting a file encoded with a given
+# (Qfactor, Qcsf, Qppd, Qzoom) must recover that Qfactor with ~0 residual. The
+# checks are exit-code based (--expect-q / --max-residual) with no output
+# parsing, so they are portable across platforms. The visual-weighting model is
+# not signalled in the codestream, so each estimate is told the encode-time model.
+
+# Legacy weighting (default path): reuse enc_lossy's Qfactor=90 output.
+add_test(NAME qfest_legacy COMMAND estimate_qfactor kodim23lossy.j2c --expect-q 90 --max-residual 0.01)
+set_tests_properties(qfest_legacy PROPERTIES DEPENDS enc_lossy)
+
+# Analytic Mannos-Sakrison (EXPERIMENTAL).
+add_test(NAME enc_qf_mannos COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qfmannos.j2c Qfactor=90 Qcsf=mannos)
+add_test(NAME qfest_mannos COMMAND estimate_qfactor kodim23_qfmannos.j2c --csf mannos --expect-q 90 --max-residual 0.01)
+set_tests_properties(qfest_mannos PROPERTIES DEPENDS enc_qf_mannos)
+
+# Analytic Mannos-Sakrison with zoom (the viewing-condition axis).
+add_test(NAME enc_qf_mannos_zoom COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qfmz.j2c Qfactor=85 Qcsf=mannos Qzoom=2)
+add_test(NAME qfest_mannos_zoom COMMAND estimate_qfactor kodim23_qfmz.j2c --csf mannos --zoom 2 --expect-q 85 --max-residual 0.01)
+set_tests_properties(qfest_mannos_zoom PROPERTIES DEPENDS enc_qf_mannos_zoom)
+
+# Analytic Daly with an explicit reference ppd.
+add_test(NAME enc_qf_daly COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qfdaly.j2c Qfactor=80 Qcsf=daly Qppd=39)
+add_test(NAME qfest_daly COMMAND estimate_qfactor kodim23_qfdaly.j2c --csf daly --ppd 39 --expect-q 80 --max-residual 0.01)
+set_tests_properties(qfest_daly PROPERTIES DEPENDS enc_qf_daly)
+
+# Negative test: inverting the Mannos file under the (wrong) legacy assumption
+# must exceed the residual ceiling. Assert on the printed "CHECK FAIL" rather
+# than WILL_FAIL, so a missing/unreadable file (which exits non-zero WITHOUT
+# reaching the residual check) fails the test instead of passing it spuriously.
+add_test(NAME qfest_mismatch COMMAND estimate_qfactor kodim23_qfmannos.j2c --max-residual 0.01)
+set_tests_properties(qfest_mismatch PROPERTIES DEPENDS enc_qf_mannos PASS_REGULAR_EXPRESSION "CHECK FAIL")
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -120,4 +154,9 @@ set_tests_properties(
   enc_prcl_prec    dec_prcl_prec    comp_prcl_prec
   dec_p18_arri     enc_p18_rt       dec_p18_rt       comp_p18_rt
   dec_unknown_marker comp_unknown_marker
+  qfest_legacy
+  enc_qf_mannos       qfest_mannos
+  enc_qf_mannos_zoom  qfest_mannos_zoom
+  enc_qf_daly         qfest_daly
+  qfest_mismatch
   PROPERTIES FIXTURES_REQUIRED test_artifacts)

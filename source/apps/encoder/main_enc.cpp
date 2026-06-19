@@ -179,6 +179,8 @@ int main(int argc, char *argv[]) {
       open_htj2k::openhtj2k_encoder encoder(out_filename.c_str(), empty_input, siz_s, cod_s, qcd_s,
                                             args.get_qfactor(), isJPH, color_space_s, args.num_threads);
       if (!toFile) encoder.set_output_buffer(outbuf);
+      // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
+      encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       try {
         total_size = encoder.invoke_line_based_stream(
             [&reader](uint32_t y, int32_t **rows, uint16_t nc) { reader->get_row(y, rows, nc); });
@@ -263,6 +265,8 @@ int main(int argc, char *argv[]) {
       open_htj2k::openhtj2k_encoder encoder(out_filename.c_str(), input_buf, siz, cod, qcd,
                                             args.get_qfactor(), isJPH, color_space, args.num_threads);
       if (!toFile) encoder.set_output_buffer(outbuf);
+      // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
+      encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       try {
         total_size = encoder.invoke_line_based();
       } catch (std::exception &exc) {
