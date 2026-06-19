@@ -15,3 +15,11 @@
 *.pgx binary
 *.j2k binary
 *.ppm binary
+
+# Qfactor golden marker dumps are byte-exact references consumed by
+# `cmake -E compare_files`. estimate_qfactor --dump-quant writes LF in binary
+# mode on every OS, so disable EOL conversion to keep the committed reference
+# byte-identical to the tool's output on Windows checkouts (where core.autocrlf
+# would otherwise rewrite the committed LF reference to CRLF and break the
+# compare). Left diffable (-text, not binary) since the dump is readable hex.
+*.quant.txt -text
