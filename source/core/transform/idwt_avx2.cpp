@@ -32,6 +32,7 @@
   #include "dwt.hpp"
   #include <cstring>
   #include <cmath>
+  #include <vector>
 /********************************************************************************
  * horizontal transforms
  *******************************************************************************/
@@ -676,6 +677,101 @@ void idwt_1d_filtr_irrev97_planar_avx2(sprec_t *out, const sprec_t *lp, const sp
     out[2 * N]       = s3t[N - base];
     out[2 * N + 1]   = s2t[N - base];
     out[2 * (N + 1)] = s1t[N + 1 - base];
+  }
+}
+
+// Sub-range 9/7 planar synthesis (JPIP column window).  Lifts straight from the
+// LP/HP planes over the widened column window and writes the natural-domain row
+// in place — eliminating the full-width interleave_row_planes pass the in-place
+// fallback pays per row (it interleaves the whole row even for a tiny window).
+// Bit-identical to interleave + idwt_1d_row_inplace_range (fixed_range) for
+// every column the caller reads: the §3.1 recurrences are the same
+// single-rounded fnmadd/fmaf sequence as the full planar kernel, and boundary
+// taps mirror within the plane via PSEo exactly as the in-place kernel's
+// PSE-filled margins do (= idwt_1d_filtr_irrev97_planar_avx2 restricted).
+//
+// Strategy: stage S1/S2/S3 into thread-local scratch over [J0-1, J1+2] in four
+// passes.  When the window (widened) is strictly interior to the row, every
+// plane read is in-bounds, so the passes are pure 8-lane SIMD with direct
+// unaligned plane loads (the common centred-zoom case).  Edge-touching windows
+// fall to the PSEo-mirrored scalar path — correct but rarer.
+void idwt_1d_filtr_irrev97_planar_sr_avx2(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
+                                          const int32_t u0, const int32_t u1, const int32_t col_lo,
+                                          const int32_t col_hi) {
+  const int32_t N     = u1 / 2 - u0 / 2;
+  const int32_t width = u1 - u0;
+  // Output columns the caller reads, widened by the 9/7 filter support (4) and
+  // clamped to the row — identical to idwt_1d_row_inplace_range's row_lo/row_hi.
+  int32_t row_lo = col_lo - u0 - 4;
+  int32_t row_hi = col_hi - u0 - 1 + 4;
+  if (row_lo < 0) row_lo = 0;
+  if (row_hi > width - 1) row_hi = width - 1;
+  if (row_lo > row_hi) return;
+  const int32_t J0 = row_lo >> 1;  // first subband index produced
+  const int32_t J1 = row_hi >> 1;  // last  subband index produced
+
+  // S1[J0-1 .. J1+2], S2[J0-1 .. J1+1], S3[J0 .. J1+1] staged in thread-local
+  // scratch indexed by absolute j (offset by `base`).
+  const int32_t base = J0 - 1;
+  const int32_t M    = (J1 + 2) - base + 1;
+  thread_local std::vector<float> s1v, s2v, s3v;
+  if (static_cast<int32_t>(s1v.size()) < M) {
+    s1v.resize(M);
+    s2v.resize(M);
+    s3v.resize(M);
+  }
+  float *const s1 = s1v.data() - base;  // valid for j in [base, J1+2]
+  float *const s2 = s2v.data() - base;
+  float *const s3 = s3v.data() - base;
+
+  if (J0 >= 2 && J1 <= N - 3) {
+    // Interior fast path: hp[J0-2 .. J1+2] and lp[J0-1 .. J1+2] are all in range
+    // (PSEo would be the identity here), so read the planes directly.  fnmadd is
+    // single-rounded and equal to fmaf(-coeff, sum, x), so vector lanes and the
+    // scalar remainders below are bit-identical.
+    const __m256 vA = _mm256_set1_ps(fA), vB = _mm256_set1_ps(fB);
+    const __m256 vC = _mm256_set1_ps(fC), vD = _mm256_set1_ps(fD);
+    int32_t j;
+    // Pass 1: S1[j] = E[j] - fD*(O[j-1] + O[j]),  j in [J0-1, J1+2]
+    for (j = J0 - 1; j + 8 <= J1 + 3; j += 8)
+      _mm256_storeu_ps(
+          s1 + j, _mm256_fnmadd_ps(_mm256_add_ps(_mm256_loadu_ps(hp + j - 1), _mm256_loadu_ps(hp + j)), vD,
+                                   _mm256_loadu_ps(lp + j)));
+    for (; j <= J1 + 2; ++j) s1[j] = std::fmaf(-fD, hp[j - 1] + hp[j], lp[j]);
+    // Pass 2: S2[j] = O[j] - fC*(S1[j] + S1[j+1]),  j in [J0-1, J1+1]
+    for (j = J0 - 1; j + 8 <= J1 + 2; j += 8)
+      _mm256_storeu_ps(
+          s2 + j, _mm256_fnmadd_ps(_mm256_add_ps(_mm256_loadu_ps(s1 + j), _mm256_loadu_ps(s1 + j + 1)), vC,
+                                   _mm256_loadu_ps(hp + j)));
+    for (; j <= J1 + 1; ++j) s2[j] = std::fmaf(-fC, s1[j] + s1[j + 1], hp[j]);
+    // Pass 3: S3[j] = S1[j] - fB*(S2[j-1] + S2[j]),  j in [J0, J1+1]
+    for (j = J0; j + 8 <= J1 + 2; j += 8)
+      _mm256_storeu_ps(
+          s3 + j, _mm256_fnmadd_ps(_mm256_add_ps(_mm256_loadu_ps(s2 + j - 1), _mm256_loadu_ps(s2 + j)), vB,
+                                   _mm256_loadu_ps(s1 + j)));
+    for (; j <= J1 + 1; ++j) s3[j] = std::fmaf(-fB, s2[j - 1] + s2[j], s1[j]);
+    // Pass 4 + interleaved store: out[2j]=S3[j], out[2j+1]=S2[j]-fA*(S3[j]+S3[j+1])
+    for (j = J0; j + 8 <= J1 + 1; j += 8) {
+      __m256 s3j = _mm256_loadu_ps(s3 + j);
+      __m256 s4j =
+          _mm256_fnmadd_ps(_mm256_add_ps(s3j, _mm256_loadu_ps(s3 + j + 1)), vA, _mm256_loadu_ps(s2 + j));
+      avx2_store_interleaved_ps(out + 2 * j, s3j, s4j);
+    }
+    for (; j <= J1; ++j) {
+      out[2 * j]     = s3[j];
+      out[2 * j + 1] = std::fmaf(-fA, s3[j] + s3[j + 1], s2[j]);
+    }
+  } else {
+    // Edge path: window touches an image boundary → mirror via PSEo (scalar).
+    auto E = [&](int32_t j) -> float { return lp[PSEo(u0 + 2 * j, u0, u1) >> 1]; };
+    auto O = [&](int32_t j) -> float { return hp[PSEo(u0 + 2 * j + 1, u0, u1) >> 1]; };
+    for (int32_t j = J0 - 1; j <= J1 + 2; ++j) s1[j] = std::fmaf(-fD, O(j - 1) + O(j), E(j));
+    for (int32_t j = J0 - 1; j <= J1 + 1; ++j) s2[j] = std::fmaf(-fC, s1[j] + s1[j + 1], O(j));
+    for (int32_t j = J0; j <= J1 + 1; ++j) s3[j] = std::fmaf(-fB, s2[j - 1] + s2[j], s1[j]);
+    for (int32_t j = J0; j <= J1; ++j) {
+      out[2 * j]     = s3[j];
+      out[2 * j + 1] = std::fmaf(-fA, s3[j] + s3[j + 1], s2[j]);
+    }
   }
 }
 

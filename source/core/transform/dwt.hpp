@@ -322,6 +322,10 @@ void idwt_rev_ver_hp_step_i32_avx512(int32_t n, const int32_t *prev, const int32
 // warmup loads j = 0..31 unconditionally), the AVX2 kernels for 16 <= N < 32.
 void idwt_1d_filtr_irrev97_planar_avx512(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
                                          int32_t u1);
+// 16-lane sub-range variant (see the AVX2 sub-range kernel for the contract);
+// dispatched for N >= 32, AVX2 for 16 <= N < 32.  Bit-identical to both.
+void idwt_1d_filtr_irrev97_planar_sr_avx512(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                            int32_t u1, int32_t col_lo, int32_t col_hi);
 void idwt_1d_filtr_rev53_planar_i32_avx512(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
                                            int32_t u1);
 // Encoder mirror: 16-lane variants of the AVX2 planar FDWT kernels (see the
@@ -353,6 +357,9 @@ void idwt_1d_filtr_irrev53_fixed_neon(sprec_t *X, int32_t left, int32_t u_i0, in
 // writable floats before index 0 and >= 8 after index u1-u0-1.
 void idwt_1d_filtr_irrev97_planar_neon(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
                                        int32_t u1);
+// 4-lane sub-range variant (see the AVX2 sub-range kernel for the contract).
+void idwt_1d_filtr_irrev97_planar_sr_neon(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                          int32_t u1, int32_t col_lo, int32_t col_hi);
 void idwt_1d_filtr_rev53_planar_i32_neon(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
                                          int32_t u1);
 void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
@@ -408,6 +415,15 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int3
 #if defined(OPENHTJ2K_ENABLE_AVX2)
 void idwt_1d_filtr_irrev97_planar_avx2(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
                                        int32_t u1);
+// Sub-range (JPIP column-window) variant of the 9/7 planar kernel.  Lifts
+// straight from the LP/HP planes over the column window, producing output that
+// is bit-identical to the interleave + scalar fixed_range fallback for the
+// columns the caller reads — but without the full-width interleave pass, and
+// vectorized.  col_lo/col_hi are absolute column bounds (same frame as u0/u1);
+// the dispatcher calls this only when the planar geometry guards hold AND the
+// range is a strict sub-range (i.e. NOT col_lo <= u0 && col_hi >= u1).
+void idwt_1d_filtr_irrev97_planar_sr_avx2(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                          int32_t u1, int32_t col_lo, int32_t col_hi);
 void idwt_1d_filtr_rev53_planar_i32_avx2(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
                                          int32_t u1);
 // Encoder mirror: fused 9/7 horizontal FDWT reading the natural-domain row
@@ -454,6 +470,10 @@ void idwt_rev_ver_hp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t
 // fallback on this platform, not to NEON/AVX2 hosts.
 void idwt_1d_filtr_irrev97_planar_wasm(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
                                        int32_t u1);
+// 4-lane sub-range variant (see the AVX2 sub-range kernel for the contract);
+// WASM uses separately-rounded mul+sub (no FMA), matching the in-place kernel.
+void idwt_1d_filtr_irrev97_planar_sr_wasm(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                          int32_t u1, int32_t col_lo, int32_t col_hi);
 void idwt_1d_filtr_rev53_planar_i32_wasm(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
                                          int32_t u1);
 // single-row vertical step (for streaming fdwt_2d_state)
