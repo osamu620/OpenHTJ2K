@@ -22,6 +22,9 @@
 #include <string>
 #include <vector>
 #include "decoder.hpp"
+#ifdef __EMSCRIPTEN__
+  #include <emscripten/emscripten.h>
+#endif
 
 struct Args {
   std::string infile;
@@ -170,6 +173,60 @@ static bool compare_col_window(const std::vector<std::vector<int32_t>> &ref,
   }
   return true;
 }
+
+#ifdef __EMSCRIPTEN__
+// JS-callable entry point for the WASM runtime test.  The native main() does
+// not run under Node for this Emscripten build (it drives exported functions
+// via ccall instead, like web/open_htj2k_dec.mjs), so the bit-exact check is
+// exposed as a function the runner calls with the codestream bytes.  reuse != 0
+// drives the single-tile reuse path — the path that actually exercises the SIMD
+// sub-range kernels.  Returns 0 on bit-exact match (or a benign reuse-skip),
+// 1 on mismatch or decode error.
+extern "C" EMSCRIPTEN_KEEPALIVE int crc_validate(const uint8_t *data, int len, int reuse, int reduce_NL) {
+  const std::vector<uint8_t> codestream(data, data + len);
+  std::vector<std::vector<int32_t>> ref;
+  std::vector<uint32_t> w, h;
+  std::vector<uint8_t> d;
+  std::vector<bool> s;
+  if (reuse) {
+    open_htj2k::openhtj2k_decoder rdec;
+    rdec.enable_single_tile_reuse(true);
+    decode_reuse(rdec, codestream, static_cast<uint8_t>(reduce_NL), false, 0, 0, ref, w, h, d, s);
+    ref.clear();
+    decode_reuse(rdec, codestream, static_cast<uint8_t>(reduce_NL), false, 0, 0, ref, w, h, d, s);
+    if (ref.empty() || w.empty()) return 0;  // reuse-ineligible fixture → skip
+    const uint32_t W  = w[0];
+    const uint32_t lo = (W / 2 > 200) ? W / 2 - 200 : 0;
+    const uint32_t hi = std::min(W / 2 + 200, W);
+    std::vector<std::vector<int32_t>> got;
+    std::vector<uint32_t> gw, gh;
+    std::vector<uint8_t> gd;
+    std::vector<bool> gs;
+    decode_reuse(rdec, codestream, static_cast<uint8_t>(reduce_NL), true, lo, hi, got, gw, gh, gd, gs);
+    return compare_col_window(ref, got, w, h, lo, hi, "wasm_reuse", "wasm") ? 0 : 1;
+  }
+  if (!decode_with_col_range(codestream, static_cast<uint8_t>(reduce_NL), false, 0, 0, ref, w, h, d, s))
+    return 1;
+  if (ref.empty() || w.empty()) return 1;
+  const uint32_t W = w[0];
+  if (W < 16) return 0;
+  const uint32_t half = W / 2, off = 37;
+  const uint32_t lo[4] = {half, 0, std::min(half + off, W), half};
+  const uint32_t hi[4] = {W, half, W, std::min(half + off, W)};
+  for (int k = 0; k < 4; ++k) {
+    if (lo[k] >= hi[k]) continue;
+    std::vector<std::vector<int32_t>> got;
+    std::vector<uint32_t> gw, gh;
+    std::vector<uint8_t> gd;
+    std::vector<bool> gs;
+    if (!decode_with_col_range(codestream, static_cast<uint8_t>(reduce_NL), true, lo[k], hi[k], got, gw, gh,
+                               gd, gs))
+      return 1;
+    if (!compare_col_window(ref, got, w, h, lo[k], hi[k], "wasm", "wasm")) return 1;
+  }
+  return 0;
+}
+#endif  // __EMSCRIPTEN__
 
 int main(int argc, char *argv[]) {
   Args a;
