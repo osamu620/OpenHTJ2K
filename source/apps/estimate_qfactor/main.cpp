@@ -43,6 +43,7 @@ struct QuantMarker {
   uint8_t style;            // Sq & 0x1F (0=lossless, 1=derived, 2=expounded)
   uint8_t guardbits;        // Sq >> 5
   std::vector<Band> bands;  // signaling order: LL_N, HL_N, LH_N, HH_N, HL_{N-1}, ...
+  std::vector<uint8_t> raw; // verbatim segment bytes (marker..end), for --dump-quant
 };
 
 struct Header {
@@ -124,6 +125,10 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
       case QCD:
       case QCC: {
         QuantMarker qm{};
+        // Verbatim segment bytes (marker + Lmar + payload). The marker began at
+        // p-2 (we advanced p past it above); the whole segment is 2 + Lmar bytes.
+        const uint8_t* seg = buf.data() + (p - 2);
+        qm.raw.assign(seg, seg + 2u + Lmar);
         size_t off = 0;
         if (marker == QCC) {
           if (out.Csiz < 257) {
@@ -334,13 +339,19 @@ int main(int argc, char** argv) {
             "  QCD/QCC step-size formula. The visual-weighting model is NOT signaled in the\n"
             "  codestream, so for an analytic (EXPERIMENTAL) encode pass the same --csf/--ppd/\n"
             "  --zoom used at encode time; a low residual confirms the assumption was right.\n"
-            "  --expect-q N / --max-residual F: exit non-zero if violated (for scripts/CI).\n",
+            "  --expect-q N / --max-residual F: exit non-zero if violated (for scripts/CI).\n"
+            "  --dump-quant FILE: write the verbatim QCD/QCC marker bytes to FILE and exit.\n"
+            "    These bytes are a function of Qfactor + bit-depth + the visual-weighting\n"
+            "    tables only (never of sample data), so they are identical on every platform\n"
+            "    -- unlike the entropy-coded payload -- which makes them a portable golden\n"
+            "    anchor for the \"default Qfactor output is bit-identical\" contract.\n",
             argv[0]);
     return 1;
   }
   bool verbose = false;
   int expect_q = -1;           // >= 0 enables an exit-code check on the recovered Q
   double max_residual = -1.0;  // >= 0 enables an exit-code check on the per-band residual
+  const char* dump_quant = nullptr;        // != null: dump verbatim QCD/QCC bytes and exit
   open_htj2k::visual_weighting_params vp;  // default: legacy table (bit-identical inversion)
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--verbose") == 0) {
@@ -381,6 +392,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "ERROR: --max-residual must be >= 0\n");
         return 1;
       }
+    } else if (std::strcmp(argv[i], "--dump-quant") == 0 && i + 1 < argc) {
+      dump_quant = argv[++i];
     } else {
       // Reject unknown flags (and flags missing their value) so a typo in a
       // CI/script invocation fails loudly instead of silently checking nothing.
@@ -399,6 +412,37 @@ int main(int argc, char** argv) {
 
   Header h;
   if (!parse_main_header(buf, h)) return 1;
+
+  // --dump-quant: emit the verbatim QCD/QCC marker segment bytes (a portable,
+  // architecture-independent golden anchor) and exit before any Q inversion.
+  if (dump_quant) {
+    std::ofstream df(dump_quant, std::ios::binary | std::ios::trunc);
+    if (!df) {
+      fprintf(stderr, "ERROR: cannot write '%s'\n", dump_quant);
+      return 1;
+    }
+    df << "# OpenHTJ2K Qfactor QCD/QCC golden dump -- verbatim marker bytes.\n"
+          "# These derive only from Qfactor + bit-depth + visual_weighting.hpp\n"
+          "# tables, never from sample data, so they are byte-identical on every\n"
+          "# platform (unlike the entropy-coded payload). A change here means the\n"
+          "# default Qfactor quantization output drifted.\n";
+    for (const auto& qm : h.qmarkers) {
+      char label[24];
+      if (qm.component_index == 0xFFFF) {
+        std::snprintf(label, sizeof label, "QCD     :");
+      } else {
+        std::snprintf(label, sizeof label, "QCC c=%u :", qm.component_index);
+      }
+      df << label;
+      char hb[4];
+      for (uint8_t b : qm.raw) {
+        std::snprintf(hb, sizeof hb, " %02x", b);
+        df << hb;
+      }
+      df << "\n";
+    }
+    return df.good() ? 0 : 1;
+  }
 
   uint8_t chroma_format = infer_chroma_format(h);
   const char* cf_name = (chroma_format == YCC444) ? "4:4:4"

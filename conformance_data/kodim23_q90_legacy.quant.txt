@@ -1,0 +1,8 @@
+# OpenHTJ2K Qfactor QCD/QCC golden dump -- verbatim marker bytes.
+# These derive only from Qfactor + bit-depth + visual_weighting.hpp
+# tables, never from sample data, so they are byte-identical on every
+# platform (unlike the entropy-coded payload). A change here means the
+# default Qfactor quantization output drifted.
+QCD     : ff 5c 00 23 22 66 ff 66 d2 66 d2 66 a5 5e e8 5e e8 5e ca 57 34 57 34 57 4b 40 af 40 af 41 c7 3e c7 3e c7 34 6d
+QCC c=1 : ff 5d 00 24 01 22 66 64 58 08 58 08 58 52 50 d1 50 d1 51 8f 4a 92 4a 92 4c 8c 46 e3 46 e3 3a 7a 34 88 34 88 2a e7
+QCC c=2 : ff 5d 00 24 02 22 58 41 58 66 58 66 58 98 51 03 51 03 51 8d 4a 5d 4a 5d 4b c7 45 85 45 85 38 c2 31 ef 31 ef 36 bf
