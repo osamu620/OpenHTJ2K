@@ -4104,11 +4104,11 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       j2k_resolution *cr           = this->tcomp[e.c].access_resolution(e.r);
       j2k_precinct *cp             = cr->access_precinct(e.p);
       const bool skip              = precinct_filter_ && !precinct_filter_(e.c, e.r, e.p);
-      this->packet[packet_count++] = j2c_packet(0, e.r, e.c, e.p, packet_header, tile_buf.get());
+      this->packet[packet_count++] = j2c_packet(e.l, e.r, e.c, e.p, packet_header, tile_buf.get());
       const uint64_t _pk_off       = packet_observer_ ? tile_buf->get_total_position() : 0u;
-      this->read_packet(cp, 0, cr->num_bands, skip);
+      this->read_packet(cp, e.l, cr->num_bands, skip);
       if (packet_observer_) {
-        packet_observer_(static_cast<uint16_t>(e.c), e.r, e.p, /*layer=*/0, _pk_off,
+        packet_observer_(static_cast<uint16_t>(e.c), e.r, e.p, /*layer=*/e.l, _pk_off,
                          tile_buf->get_total_position() - _pk_off);
       }
     }
@@ -4158,7 +4158,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                     for (p = 0; p < cr->npw * cr->nph; p++) {
                       cp = cr->access_precinct(p);
                       if (!is_packet_read[l][r][c][p]) {
-                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                         this->packet[packet_count++] =
                             j2c_packet(l, r, c, p, packet_header, tile_buf.get());
                         {
@@ -4191,7 +4191,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                     for (p = 0; p < cr->npw * cr->nph; p++) {
                       cp = cr->access_precinct(p);
                       if (!is_packet_read[l][r][c][p]) {
-                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                         this->packet[packet_count++] =
                             j2c_packet(l, r, c, p, packet_header, tile_buf.get());
                         {
@@ -4256,7 +4256,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                         cp = cr->access_precinct(p);
                         for (l = 0; l < LYE; l++) {
                           if (!is_packet_read[l][r][c][p]) {
-                            cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                            cached_crp_.push_back(
+                                {static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                             this->packet[packet_count++] =
                                 j2c_packet(l, r, c, p, packet_header, tile_buf.get());
                             {
@@ -4327,7 +4328,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       cp = cr->access_precinct(p);
                       for (l = 0; l < LYE; l++) {
                         if (!is_packet_read[l][r][c][p]) {
-                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                           this->packet[packet_count++] =
                               j2c_packet(l, r, c, p, packet_header, tile_buf.get());
                           {
@@ -4396,7 +4397,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       cp = cr->access_precinct(p);
                       for (l = 0; l < LYE; l++) {
                         if (!is_packet_read[l][r][c][p]) {
-                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                           this->packet[packet_count++] =
                               j2c_packet(l, r, c, p, packet_header, tile_buf.get());
                           {
@@ -4469,7 +4470,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                         cp = cr->access_precinct(p);
                         for (l = 0; l < LYE; l++) {
                           if (!is_packet_read[l][r][c][p]) {
-                            cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p)});
+                            cached_crp_.push_back(
+                                {static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                             this->packet[packet_count++] =
                                 j2c_packet(l, r, c, p, packet_header, tile_buf.get());
                             {

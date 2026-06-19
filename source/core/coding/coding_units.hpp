@@ -718,6 +718,7 @@ class j2k_tile : public j2k_tile_base {
     uint8_t c;   // component index
     uint8_t r;   // resolution level
     uint16_t p;  // precinct index
+    uint16_t l;  // quality layer (packets of the same precinct differ by layer)
   };
   std::vector<CRP> cached_crp_;
   bool crp_cached_ = false;

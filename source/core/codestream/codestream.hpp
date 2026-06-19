@@ -146,9 +146,11 @@ class buf_chain {
 
   uint8_t *current_buf;
   uint32_t current_length;
-  uint8_t tmp_byte;
-  uint8_t last_byte;
-  uint8_t bits;
+  // Default-initialised so a default-constructed buf_chain (e.g. the PPT
+  // packet_header chain) never bit-reads from uninitialised state.
+  uint8_t tmp_byte  = 0;
+  uint8_t last_byte = 0;
+  uint8_t bits      = 0;
 
  public:
   buf_chain() = default;
@@ -234,6 +236,7 @@ class buf_chain {
     node_pos       = 0;
     current_buf    = node_buf[0];
     current_length = node_length[0];
+    reset_bit_state();
   }
   void activate(size_t n) {
     assert(n < this->node_buf.size());
@@ -241,6 +244,18 @@ class buf_chain {
     node_pos       = n;
     current_buf    = node_buf[node_pos];
     current_length = node_length[node_pos];
+    reset_bit_state();
+  }
+  // Reset the bit-reader accumulator.  activate() begins a fresh read at a byte
+  // boundary, so any partial-byte / 0xFF-stuffing state left over from a
+  // previous decode must be cleared — otherwise the single-tile reuse path
+  // re-reads packet headers from a stale bit position (the PPM/PPT packet_header
+  // buf_chains are only positioned via activate(), and the PPT one is built with
+  // the default ctor, so its bit state would otherwise be uninitialized).
+  void reset_bit_state() {
+    tmp_byte  = 0;
+    last_byte = 0;
+    bits      = 0;
   }
   void flush_bits() { bits = 0; }
   void check_last_FF() {
