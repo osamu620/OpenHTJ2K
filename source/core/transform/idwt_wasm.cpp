@@ -30,6 +30,7 @@
   #include <wasm_simd128.h>
   #include <cmath>
   #include <cstring>
+  #include <vector>
   #include "dwt.hpp"
   #include "utils.hpp"
 
@@ -647,6 +648,91 @@ void idwt_1d_filtr_irrev97_planar_wasm(sprec_t *out, const sprec_t *lp, const sp
     out[2 * N]       = s3t[N - base];
     out[2 * N + 1]   = s2t[N - base];
     out[2 * (N + 1)] = s1t[N + 1 - base];
+  }
+}
+
+// Sub-range 9/7 planar synthesis — 4-lane WASM-SIMD port of the AVX2
+// idwt_1d_filtr_irrev97_planar_sr_avx2.  WASM has no fused multiply-add, so the
+// lift is separately-rounded mul+sub in the vectors AND plain x - coeff*(a+b)
+// in the scalar drains — matching the in-place WASM kernel's rounding (clang
+// cannot contract scalar f32 mul+sub on WASM), so this is bit-identical to the
+// WASM fallback for the columns the caller reads.
+void idwt_1d_filtr_irrev97_planar_sr_wasm(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
+                                          const int32_t u0, const int32_t u1, const int32_t col_lo,
+                                          const int32_t col_hi) {
+  const int32_t N     = u1 / 2 - u0 / 2;
+  const int32_t width = u1 - u0;
+  int32_t row_lo      = col_lo - u0 - 4;
+  int32_t row_hi      = col_hi - u0 - 1 + 4;
+  if (row_lo < 0) row_lo = 0;
+  if (row_hi > width - 1) row_hi = width - 1;
+  if (row_lo > row_hi) return;
+  const int32_t J0 = row_lo >> 1;
+  const int32_t J1 = row_hi >> 1;
+
+  const int32_t base = J0 - 1;
+  const int32_t M    = (J1 + 2) - base + 1;
+  thread_local std::vector<float> s1v, s2v, s3v;
+  if (static_cast<int32_t>(s1v.size()) < M) {
+    s1v.resize(M);
+    s2v.resize(M);
+    s3v.resize(M);
+  }
+  float *const s1 = s1v.data() - base;
+  float *const s2 = s2v.data() - base;
+  float *const s3 = s3v.data() - base;
+
+  if (J0 >= 2 && J1 <= N - 3) {
+    const v128_t vA = wasm_f32x4_splat(fA), vB = wasm_f32x4_splat(fB);
+    const v128_t vC = wasm_f32x4_splat(fC), vD = wasm_f32x4_splat(fD);
+    int32_t j;
+    // Pass 1: S1[j] = E[j] - fD*(O[j-1] + O[j])   (mul+sub, no FMA)
+    for (j = J0 - 1; j + 4 <= J1 + 3; j += 4)
+      wasm_v128_store(
+          s1 + j,
+          wasm_f32x4_sub(
+              wasm_v128_load(lp + j),
+              wasm_f32x4_mul(wasm_f32x4_add(wasm_v128_load(hp + j - 1), wasm_v128_load(hp + j)), vD)));
+    for (; j <= J1 + 2; ++j) s1[j] = lp[j] - fD * (hp[j - 1] + hp[j]);
+    // Pass 2: S2[j] = O[j] - fC*(S1[j] + S1[j+1])
+    for (j = J0 - 1; j + 4 <= J1 + 2; j += 4)
+      wasm_v128_store(
+          s2 + j,
+          wasm_f32x4_sub(
+              wasm_v128_load(hp + j),
+              wasm_f32x4_mul(wasm_f32x4_add(wasm_v128_load(s1 + j), wasm_v128_load(s1 + j + 1)), vC)));
+    for (; j <= J1 + 1; ++j) s2[j] = hp[j] - fC * (s1[j] + s1[j + 1]);
+    // Pass 3: S3[j] = S1[j] - fB*(S2[j-1] + S2[j])
+    for (j = J0; j + 4 <= J1 + 2; j += 4)
+      wasm_v128_store(
+          s3 + j,
+          wasm_f32x4_sub(
+              wasm_v128_load(s1 + j),
+              wasm_f32x4_mul(wasm_f32x4_add(wasm_v128_load(s2 + j - 1), wasm_v128_load(s2 + j)), vB)));
+    for (; j <= J1 + 1; ++j) s3[j] = s1[j] - fB * (s2[j - 1] + s2[j]);
+    // Pass 4 + interleaved store: out[2j]=S3[j], out[2j+1]=S2[j]-fA*(S3[j]+S3[j+1])
+    for (j = J0; j + 4 <= J1 + 1; j += 4) {
+      v128_t s3j = wasm_v128_load(s3 + j);
+      f32x4x2 o;
+      o.val[0] = s3j;
+      o.val[1] = wasm_f32x4_sub(wasm_v128_load(s2 + j),
+                                wasm_f32x4_mul(wasm_f32x4_add(s3j, wasm_v128_load(s3 + j + 1)), vA));
+      vst2q(out + 2 * j, o);
+    }
+    for (; j <= J1; ++j) {
+      out[2 * j]     = s3[j];
+      out[2 * j + 1] = s2[j] - fA * (s3[j] + s3[j + 1]);
+    }
+  } else {
+    auto E = [&](int32_t j) -> float { return lp[PSEo(u0 + 2 * j, u0, u1) >> 1]; };
+    auto O = [&](int32_t j) -> float { return hp[PSEo(u0 + 2 * j + 1, u0, u1) >> 1]; };
+    for (int32_t j = J0 - 1; j <= J1 + 2; ++j) s1[j] = E(j) - fD * (O(j - 1) + O(j));
+    for (int32_t j = J0 - 1; j <= J1 + 1; ++j) s2[j] = O(j) - fC * (s1[j] + s1[j + 1]);
+    for (int32_t j = J0; j <= J1 + 1; ++j) s3[j] = s1[j] - fB * (s2[j - 1] + s2[j]);
+    for (int32_t j = J0; j <= J1; ++j) {
+      out[2 * j]     = s3[j];
+      out[2 * j + 1] = s2[j] - fA * (s3[j] + s3[j + 1]);
+    }
   }
 }
 

@@ -296,6 +296,11 @@ add_subdirectory(tests/tools/row_range_compare)
 target_include_directories(row_range_compare PUBLIC source/core/interface)
 target_link_libraries(row_range_compare PUBLIC open_htj2k)
 
+add_executable(col_range_compare)
+add_subdirectory(tests/tools/col_range_compare)
+target_include_directories(col_range_compare PUBLIC source/core/interface)
+target_link_libraries(col_range_compare PUBLIC open_htj2k)
+
 # Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
 add_executable(estimate_qfactor)
 add_subdirectory(source/apps/estimate_qfactor)
@@ -492,6 +497,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/col_range_validation.cmake)
 
 # Auto-attach the cleanup fixture to every test added by the includes above.
 # Skip cleanup_artifacts itself (it IS the fixture), and skip tests that

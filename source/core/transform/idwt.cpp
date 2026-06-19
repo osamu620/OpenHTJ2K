@@ -1126,8 +1126,14 @@ void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
                                           reinterpret_cast<const int32_t *>(hp), u0, u1);
       return;
     }
-    if (transformation == 0 && !use_i32 && col_lo <= u0 && col_hi >= u1) {
-      idwt_1d_filtr_irrev97_planar_neon(out, lp, hp, u0, u1);
+    if (transformation == 0 && !use_i32) {
+      if (col_lo <= u0 && col_hi >= u1) {
+        idwt_1d_filtr_irrev97_planar_neon(out, lp, hp, u0, u1);
+        return;
+      }
+      // Strict column sub-range (JPIP zoom): lift from the planes over the
+      // window instead of the full-width interleave + scalar fixed_range.
+      idwt_1d_filtr_irrev97_planar_sr_neon(out, lp, hp, u0, u1, col_lo, col_hi);
       return;
     }
   }
@@ -1156,14 +1162,27 @@ void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
                                           reinterpret_cast<const int32_t *>(hp), u0, u1);
       return;
     }
-    if (transformation == 0 && !use_i32 && col_lo <= u0 && col_hi >= u1) {
+    if (transformation == 0 && !use_i32) {
+      if (col_lo <= u0 && col_hi >= u1) {
+  #if defined(OPENHTJ2K_ENABLE_AVX512)
+        if (N >= 32) {
+          idwt_1d_filtr_irrev97_planar_avx512(out, lp, hp, u0, u1);
+          return;
+        }
+  #endif
+        idwt_1d_filtr_irrev97_planar_avx2(out, lp, hp, u0, u1);
+        return;
+      }
+      // Strict column sub-range (JPIP zoom on the reuse path): lift straight
+      // from the planes over the window instead of the full-width interleave +
+      // scalar fixed_range fallback.  Bit-identical for the columns read.
   #if defined(OPENHTJ2K_ENABLE_AVX512)
       if (N >= 32) {
-        idwt_1d_filtr_irrev97_planar_avx512(out, lp, hp, u0, u1);
+        idwt_1d_filtr_irrev97_planar_sr_avx512(out, lp, hp, u0, u1, col_lo, col_hi);
         return;
       }
   #endif
-      idwt_1d_filtr_irrev97_planar_avx2(out, lp, hp, u0, u1);
+      idwt_1d_filtr_irrev97_planar_sr_avx2(out, lp, hp, u0, u1, col_lo, col_hi);
       return;
     }
   }
@@ -1180,8 +1199,14 @@ void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
                                           reinterpret_cast<const int32_t *>(hp), u0, u1);
       return;
     }
-    if (transformation == 0 && !use_i32 && col_lo <= u0 && col_hi >= u1) {
-      idwt_1d_filtr_irrev97_planar_wasm(out, lp, hp, u0, u1);
+    if (transformation == 0 && !use_i32) {
+      if (col_lo <= u0 && col_hi >= u1) {
+        idwt_1d_filtr_irrev97_planar_wasm(out, lp, hp, u0, u1);
+        return;
+      }
+      // Strict column sub-range (JPIP zoom): lift from the planes over the
+      // window instead of the full-width interleave + scalar fixed_range.
+      idwt_1d_filtr_irrev97_planar_sr_wasm(out, lp, hp, u0, u1, col_lo, col_hi);
       return;
     }
   }
