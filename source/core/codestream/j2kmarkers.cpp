@@ -675,7 +675,8 @@ QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
 }
 
 QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t transformation,
-                       bool is_derived, uint8_t RI, uint8_t use_ycc, double basestep, uint8_t qfactor)
+                       bool is_derived, uint8_t RI, uint8_t use_ycc, double basestep, uint8_t qfactor,
+                       const open_htj2k::visual_weighting_params &vp)
     : j2k_marker_io_base(_QCD), Sqcd(0), is_reversible(transformation == 1) {
   const size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
   std::vector<double> wmse_or_BIBO;
@@ -711,12 +712,11 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
                                       -0.156446533057980, 0.033728236885750,
                                       0.053497514821622};  // gain is doubled(x2)
 
-  // Square roots of the visual weighting factors for Y content
-  const std::vector<double> W_b_Y = {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
-                                     1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000};
-  // The squared Euclidean norm of the multi-component synthesis operator that represents the contribution
-  // of component 𝑐 (e.g., Y, Cb or Cr) to reconstructed image samples (usually R, G and B)
-  const double G_c_sqrt[3] = {1.7321, 1.8051, 1.5734};
+  // Square roots of the visual weighting factors for Y content. The default
+  // (legacy_table) reproduces the historical Zeng et al. Table 2 values verbatim
+  // so the emitted QCD is bit-identical; an analytic CSF model in `vp` instead
+  // follows the requested viewing distance / zoom.
+  const std::vector<double> W_b_Y = open_htj2k::luma_visual_weights(dwt_levels, vp);
 
   double gain_low = 0.0, gain_high = 0.0;
 
@@ -809,35 +809,14 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
         mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
       }
     } else {
-      // lossy with qfactor: The detail of Qfactor feature is described in HTJ2K white paper at
+      // lossy with qfactor. The Q->step mapping is shared with QCC and
+      // estimate_qfactor via q_to_delta(). Detail: HTJ2K white paper at
       // https://htj2k.com/wp-content/uploads/white-paper.pdf
-      double M_Q;
-      uint8_t t0 = 65, t1 = 97;
-      const double alpha_T0 = 0.04;
-      const double alpha_T1 = 0.10;
-      const double M_T0     = 2.0 * (1.0 - t0 / 100.0);
-      const double M_T1     = 2.0 * (1.0 - t1 / 100.0);
-      double alpha_Q        = alpha_T0;
-      double qfactor_power  = 1.0;
-
-      if (qfactor < 50) {
-        M_Q = 50.0 / qfactor;
-      } else {
-        M_Q = 2.0 * (1.0 - qfactor / 100.0);
-      }
-      // adjust the scaling
-      if (qfactor >= t1) {
-        qfactor_power = 0.0;
-        alpha_Q       = alpha_T1;
-      } else if (qfactor > t0) {
-        qfactor_power = (log(M_T1) - log(M_Q)) / (log(M_T1) - log(M_T0));
-        alpha_Q       = alpha_T1 * pow(alpha_T0 / alpha_T1, qfactor_power);
-      }
-
-      const double eps0 = sqrt(0.5) / static_cast<double>(1 << RI);
-      double delta_Q    = alpha_Q * M_Q + eps0;
-      double delta_ref  = delta_Q * G_c_sqrt[0];
-      double G_c        = G_c_sqrt[0];  // gain of color transform
+      const open_htj2k::q_scaling qs       = open_htj2k::q_to_delta(qfactor, RI);
+      const double qfactor_power           = qs.qfactor_power;
+      const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, use_ycc != 0);
+      double delta_ref                     = qs.delta_Q * open_htj2k::color_gain(ct, 0);
+      double G_c                           = open_htj2k::color_gain(ct, 0);  // luma reference (cancels)
       for (size_t i = 0; i < epsilon.size(); ++i) {
         int32_t exponent, mantissa;
         double w_b;
@@ -958,7 +937,8 @@ uint8_t QCD_marker::get_MAGB() {
  *******************************************************************************/
 QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, uint8_t dwt_levels,
                        uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc,
-                       uint8_t qfactor, uint8_t chroma_format)
+                       uint8_t qfactor, uint8_t chroma_format,
+                       const open_htj2k::visual_weighting_params &vp)
     : j2k_marker_io_base(_QCC), max_components(Csiz), Cqcc(c), Sqcc(0), is_reversible(transformation == 1) {
   size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
   std::vector<double> wmse_or_BIBO;
@@ -997,56 +977,21 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
                                       -0.156446533057980, 0.033728236885750,
                                       0.053497514821622};  // gain is doubled(x2)
 
-  // Square roots of the visual weighting factors for 4:4:4 YCbCr content
-  const std::vector<std::vector<double>> W_b_444 = {
-      {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
-       1.0000, 1.0000, 1.0000},
-      {0.0263, 0.0863, 0.0863, 0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691, 0.5444, 0.6523, 0.6523,
-       0.7078, 0.7797, 0.7797},
-      {0.0773, 0.1835, 0.1835, 0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464, 0.7220, 0.8254, 0.8254,
-       0.8769, 0.9424, 0.9424}};
-  // Square roots of the visual weighting factors for 4:2:0 YCbCr content
-  const std::vector<std::vector<double>> W_b_420 = {
-      {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
-       1.0000, 1.0000, 1.0000},
-      {0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691, 0.5444, 0.6523, 0.6523, 0.7078, 0.7797, 0.7797,
-       1.0000, 1.0000, 1.0000},
-      {0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464, 0.7220, 0.8254, 0.8254, 0.8769, 0.9424, 0.9424,
-       1.0000, 1.0000, 1.0000}};
-  // Square roots of the visual weighting factors for 4:2:2 YCbCr content
-  const std::vector<std::vector<double>> W_b_422 = {
-      {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
-       1.0000, 1.0000, 1.0000},
-      {0.0863, 0.0863, 0.2564, 0.2564, 0.2564, 0.4691, 0.4691, 0.4691, 0.6523, 0.6523, 0.6523, 0.7797,
-       0.7797, 0.7797, 1.0000},
-      {0.1835, 0.1835, 0.4130, 0.4130, 0.4130, 0.6464, 0.6464, 0.6464, 0.8254, 0.8254, 0.8254, 0.9424,
-       0.9424, 0.9424, 1.0000}};
-  std::vector<std::vector<double>> W_b_sqrt;
-
-  switch (chroma_format) {
-    case YCC444:
-      W_b_sqrt.emplace_back(W_b_444[0]);
-      W_b_sqrt.emplace_back(W_b_444[1]);
-      W_b_sqrt.emplace_back(W_b_444[2]);
-      break;
-    case YCC420:
-      W_b_sqrt.emplace_back(W_b_420[0]);
-      W_b_sqrt.emplace_back(W_b_420[1]);
-      W_b_sqrt.emplace_back(W_b_420[2]);
-      break;
-    case YCC422:
-      W_b_sqrt.emplace_back(W_b_422[0]);
-      W_b_sqrt.emplace_back(W_b_422[1]);
-      W_b_sqrt.emplace_back(W_b_422[2]);
-      break;
-    default:
-      printf("ERROR: chroma format for QCC_marker is invalid.\n");
-      throw std::exception();
+  if (chroma_format != YCC444 && chroma_format != YCC420 && chroma_format != YCC422) {
+    printf("ERROR: chroma format for QCC_marker is invalid.\n");
+    throw std::exception();
   }
+  // Effective color transform: legacy mode assumes ICT (historical behavior);
+  // analytic modes honor the real MCT, so an undecorrelated (no-MCT) component
+  // gets unit synthesis gain and the luminance CSF instead of the chroma table.
+  const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, use_ycc != 0);
 
-  // The squared Euclidean norm of the multi-component synthesis operator that represents the
-  // contribution of component 𝑐 (e.g., Y, Cb or Cr) to reconstructed image samples (usually R, G and B)
-  const double G_c_sqrt[3] = {1.7321, 1.8051, 1.5734};
+  // Square-root-domain chroma visual weights for this component. Default
+  // (legacy_table) returns the historical 4:4:4/4:2:0/4:2:2 QCC table verbatim
+  // (bit-identical); an analytic CSF model in `vp` instead follows the viewing
+  // distance / zoom, deriving 4:2:0 & 4:2:2 from one chroma CSF via subsampling.
+  const std::vector<double> W_b =
+      open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct);
 
   double gain_low = 0.0, gain_high = 0.0;
 
@@ -1114,43 +1059,20 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
       }
     }
   } else {
-    // lossy with qfactor: The detail of Qfactor feature is described in HTJ2K white paper at
+    // lossy with qfactor. The Q->step mapping is shared with QCD and
+    // estimate_qfactor via q_to_delta(). Detail: HTJ2K white paper at
     // https://htj2k.com/wp-content/uploads/white-paper.pdf
-    double M_Q;
-    uint8_t t0 = 65, t1 = 97;
-    const double alpha_T0 = 0.04;
-    const double alpha_T1 = 0.10;
-    const double M_T0     = 2.0 * (1.0 - t0 / 100.0);
-    const double M_T1     = 2.0 * (1.0 - t1 / 100.0);
-    double alpha_Q        = alpha_T0;
-    double qfactor_power  = 1.0;
-
-    if (qfactor < 50) {
-      M_Q = 50.0 / qfactor;
-    } else {
-      M_Q = 2.0 * (1.0 - qfactor / 100.0);
-    }
-    // adjust the scaling
-    if (qfactor >= t1) {
-      qfactor_power = 0.0;
-      alpha_Q       = alpha_T1;
-    } else if (qfactor > t0) {
-      qfactor_power = (log(M_T1) - log(M_Q)) / (log(M_T1) - log(M_T0));
-      alpha_Q       = alpha_T1 * pow(alpha_T0 / alpha_T1, qfactor_power);
-    }
-
-    const double eps0 = sqrt(0.5) / static_cast<double>(1 << RI);
-    double delta_Q    = alpha_Q * M_Q + eps0;
-    double delta_ref  = delta_Q * G_c_sqrt[0];
-    double G_c        = G_c_sqrt[Cqcc];  // gain of color transform
+    const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
+    const double qfactor_power     = qs.qfactor_power;
+    double delta_ref               = qs.delta_Q * open_htj2k::color_gain(ct, 0);
+    double G_c                     = open_htj2k::color_gain(ct, Cqcc);  // component synthesis gain
 
     for (size_t i = 0; i < epsilon.size(); ++i) {
       int32_t exponent, mantissa;
       double w_b;
       // w_b for the LL band (always the last entry) shall be 1.0, as must any extra
       // low-frequency bands beyond the 5-level table when dwt_levels > 5.
-      w_b = (i == epsilon.size() - 1 || i >= W_b_sqrt[Cqcc].size()) ? 1.0
-                                                                    : pow(W_b_sqrt[Cqcc][i], qfactor_power);
+      w_b = (i == epsilon.size() - 1 || i >= W_b.size()) ? 1.0 : pow(W_b[i], qfactor_power);
 
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
       for (exponent = 0; fval < 1.0; exponent++) {
@@ -1696,7 +1618,8 @@ j2k_main_header::j2k_main_header() {
 }
 
 j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *qcd, CAP_marker *cap,
-                                 uint8_t qfactor, CPF_marker *cpf, POC_marker *poc, CRG_marker *crg) {
+                                 uint8_t qfactor, const open_htj2k::visual_weighting_params &vw,
+                                 CPF_marker *cpf, POC_marker *poc, CRG_marker *crg) {
   SIZ = MAKE_UNIQUE<SIZ_marker>(*siz);
   COD = MAKE_UNIQUE<COD_marker>(*cod);
   QCD = MAKE_UNIQUE<QCD_marker>(*qcd);
@@ -1710,7 +1633,7 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
       QCC.push_back(MAKE_UNIQUE<QCC_marker>(siz->get_num_components(), c, qcd->get_number_of_guardbits(),
                                             cod->get_dwt_levels(), cod->get_transformation(), false,
                                             siz->get_bitdepth(c), cod->use_color_trafo(), qfactor,
-                                            SIZ->get_chroma_format()));
+                                            SIZ->get_chroma_format(), vw));
     }
   }
 

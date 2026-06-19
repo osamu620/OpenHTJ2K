@@ -34,6 +34,7 @@
 #include "open_htj2k_typedef.hpp"
 #include "codestream.hpp"
 #include "marker_def.hpp"
+#include "visual_weighting.hpp"
 
 /********************************************************************************
  * j2k_marker_io_base
@@ -293,7 +294,8 @@ class QCD_marker : public j2k_marker_io_base {
  public:
   explicit QCD_marker(j2c_src_memory &in);
   QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t transformation, bool is_derived,
-             uint8_t RI, uint8_t use_ycc, double basestep = 1.0 / 256.0, uint8_t qfactor = 0xFF);
+             uint8_t RI, uint8_t use_ycc, double basestep = 1.0 / 256.0, uint8_t qfactor = 0xFF,
+             const open_htj2k::visual_weighting_params &vp = {});
   int write(j2c_dst_memory &dst);
   uint8_t get_quantization_style() const;
   uint8_t get_exponents(uint8_t nb);
@@ -319,7 +321,7 @@ class QCC_marker : public j2k_marker_io_base {
  public:
   QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, uint8_t dwt_levels,
              uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc, uint8_t qfactor,
-             uint8_t chroma_format);
+             uint8_t chroma_format, const open_htj2k::visual_weighting_params &vp = {});
   QCC_marker(j2c_src_memory &in, uint16_t Csiz);
   int write(j2c_dst_memory &dst);
   uint16_t get_component_index() const;
@@ -511,8 +513,8 @@ class j2k_main_header {
  public:
   j2k_main_header();
   j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *qcd, CAP_marker *cap = nullptr,
-                  uint8_t qfactor = 0xFF, CPF_marker *cpf = nullptr, POC_marker *poc = nullptr,
-                  CRG_marker *crg = nullptr);
+                  uint8_t qfactor = 0xFF, const open_htj2k::visual_weighting_params &vw = {},
+                  CPF_marker *cpf = nullptr, POC_marker *poc = nullptr, CRG_marker *crg = nullptr);
   void add_COM_marker(const COM_marker &com);
   void flush(j2c_dst_memory &buf);
   int read(j2c_src_memory &);

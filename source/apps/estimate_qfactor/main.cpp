@@ -17,6 +17,8 @@
 #include <limits>
 #include <vector>
 
+#include "visual_weighting.hpp"  // shared encoder weighting (single source of truth)
+
 namespace {
 
 constexpr uint16_t SOC = 0xFF4F;
@@ -185,7 +187,8 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
 // Returns predicted (epsilon, mantissa) per band in QCD signaling order
 // (LL_N, HL_N, LH_N, HH_N, HL_{N-1}, ..., HL_1, LH_1, HH_1).
 std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
-                                uint8_t Cqcc, uint8_t chroma_format) {
+                                uint8_t Cqcc, uint8_t chroma_format,
+                                const open_htj2k::visual_weighting_params& vp, bool mct_on) {
   const std::vector<double> D97SL = {-0.091271763114250, -0.057543526228500, 0.591271763114250,
                                      1.115087052457000,  0.5912717631142500, -0.05754352622850,
                                      -0.091271763114250};
@@ -195,36 +198,13 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
                                      -0.156446533057980, 0.033728236885750,
                                      0.053497514821622};
 
-  // Visual weight tables — must match j2kmarkers.cpp exactly.
-  static const std::vector<double> W_b_Y = {
-      0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
-      1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000};
-  static const std::vector<std::vector<std::vector<double>>> W_b = {
-      // YCC444
-      {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000},
-       {0.0263, 0.0863, 0.0863, 0.1362, 0.2564, 0.2564, 0.3346, 0.4691,
-        0.4691, 0.5444, 0.6523, 0.6523, 0.7078, 0.7797, 0.7797},
-       {0.0773, 0.1835, 0.1835, 0.2598, 0.4130, 0.4130, 0.5040, 0.6464,
-        0.6464, 0.7220, 0.8254, 0.8254, 0.8769, 0.9424, 0.9424}},
-      // YCC420
-      {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000},
-       {0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691, 0.5444, 0.6523,
-        0.6523, 0.7078, 0.7797, 0.7797, 1.0000, 1.0000, 1.0000},
-       {0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464, 0.7220, 0.8254,
-        0.8254, 0.8769, 0.9424, 0.9424, 1.0000, 1.0000, 1.0000}},
-      // YCC422
-      {{0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
-        1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000},
-       {0.0863, 0.0863, 0.2564, 0.2564, 0.2564, 0.4691, 0.4691, 0.4691,
-        0.6523, 0.6523, 0.6523, 0.7797, 0.7797, 0.7797, 1.0000},
-       {0.1835, 0.1835, 0.4130, 0.4130, 0.4130, 0.6464, 0.6464, 0.6464,
-        0.8254, 0.8254, 0.8254, 0.9424, 0.9424, 0.9424, 1.0000}}};
-  const std::vector<double>& weights =
-      (Cqcc == 0) ? W_b_Y : W_b[chroma_format][Cqcc];
-
-  const double G_c_sqrt[3] = {1.7321, 1.8051, 1.5734};
+  // Visual weights from the shared encoder header (single source of truth), so the
+  // inversion tracks whatever model produced the file. Component 0 is luma (QCD);
+  // components 1/2 are chroma (QCC) under a luma/chroma transform.
+  const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, mct_on);
+  const std::vector<double> weights =
+      (Cqcc == 0) ? open_htj2k::luma_visual_weights(dwt_levels, vp)
+                  : open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct);
 
   // Build wmse in the encoder's accumulation order: HH_1, LH_1, HL_1, ..., LL_N.
   const size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
@@ -266,25 +246,12 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
     wmse.push_back(gain_low * gain_low); // LL_N
   }
 
-  // Compute Q-dependent scalars.
-  const uint8_t t0 = 65, t1 = 97;
-  const double alpha_T0 = 0.04, alpha_T1 = 0.10;
-  const double M_T0 = 2.0 * (1.0 - t0 / 100.0);
-  const double M_T1 = 2.0 * (1.0 - t1 / 100.0);
-  double M_Q = (qfactor < 50) ? 50.0 / qfactor : 2.0 * (1.0 - qfactor / 100.0);
-  double alpha_Q = alpha_T0;
-  double qpower = 1.0;
-  if (qfactor >= t1) {
-    qpower = 0.0;
-    alpha_Q = alpha_T1;
-  } else if (qfactor > t0) {
-    qpower = (std::log(M_T1) - std::log(M_Q)) / (std::log(M_T1) - std::log(M_T0));
-    alpha_Q = alpha_T1 * std::pow(alpha_T0 / alpha_T1, qpower);
-  }
-  const double eps0 = std::sqrt(0.5) / static_cast<double>(1u << RI);
-  const double delta_Q = alpha_Q * M_Q + eps0;
-  const double delta_ref = delta_Q * G_c_sqrt[0];
-  const double G_c = G_c_sqrt[Cqcc];
+  // Q-dependent scalars from the shared encoder header (same q_to_delta() the
+  // encoder uses), so the inversion matches the encoder's step exactly.
+  const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
+  const double qpower    = qs.qfactor_power;
+  const double delta_ref = qs.delta_Q * open_htj2k::color_gain(ct, 0);
+  const double G_c       = open_htj2k::color_gain(ct, Cqcc);
 
   std::vector<Band> out(num_bands);
   for (size_t i = 0; i < num_bands; ++i) {
@@ -326,10 +293,11 @@ struct ScoreResult {
 };
 
 ScoreResult find_best_q(const std::vector<Band>& observed, uint8_t dwt_levels, uint8_t RI,
-                        uint8_t Cqcc, uint8_t chroma_format) {
+                        uint8_t Cqcc, uint8_t chroma_format,
+                        const open_htj2k::visual_weighting_params& vp, bool mct_on) {
   ScoreResult best{0, std::numeric_limits<double>::infinity(), 0.0};
   for (int q = 1; q <= 100; ++q) {
-    auto pred = predict_bands(static_cast<uint8_t>(q), dwt_levels, RI, Cqcc, chroma_format);
+    auto pred = predict_bands(static_cast<uint8_t>(q), dwt_levels, RI, Cqcc, chroma_format, vp, mct_on);
     if (pred.size() != observed.size()) continue;
     double sumsq = 0;
     for (size_t i = 0; i < pred.size(); ++i) {
@@ -361,15 +329,64 @@ void print_band_table(const std::vector<Band>& obs, const std::vector<Band>& pre
 int main(int argc, char** argv) {
   if (argc < 2) {
     fprintf(stderr,
-            "Usage: %s <codestream.j2c> [--verbose]\n"
-            "  Estimates the OpenHTJ2K Qfactor [0..100] used at encode time\n"
-            "  by inverting the QCD/QCC step-size formula.\n",
+            "Usage: %s <codestream.j2c> [--verbose] [--csf legacy|mannos|daly] [--ppd F] [--zoom F]\n"
+            "  Estimates the OpenHTJ2K Qfactor [0..100] used at encode time by inverting the\n"
+            "  QCD/QCC step-size formula. The visual-weighting model is NOT signaled in the\n"
+            "  codestream, so for an analytic (EXPERIMENTAL) encode pass the same --csf/--ppd/\n"
+            "  --zoom used at encode time; a low residual confirms the assumption was right.\n"
+            "  --expect-q N / --max-residual F: exit non-zero if violated (for scripts/CI).\n",
             argv[0]);
     return 1;
   }
   bool verbose = false;
+  int expect_q = -1;           // >= 0 enables an exit-code check on the recovered Q
+  double max_residual = -1.0;  // >= 0 enables an exit-code check on the per-band residual
+  open_htj2k::visual_weighting_params vp;  // default: legacy table (bit-identical inversion)
   for (int i = 2; i < argc; ++i) {
-    if (std::strcmp(argv[i], "--verbose") == 0) verbose = true;
+    if (std::strcmp(argv[i], "--verbose") == 0) {
+      verbose = true;
+    } else if (std::strcmp(argv[i], "--csf") == 0 && i + 1 < argc) {
+      const char* m = argv[++i];
+      if (std::strcmp(m, "legacy") == 0) {
+        vp.model = open_htj2k::csf_model::legacy_table;
+      } else if (std::strcmp(m, "mannos") == 0) {
+        vp.model = open_htj2k::csf_model::mannos_sakrison;
+      } else if (std::strcmp(m, "daly") == 0) {
+        vp.model = open_htj2k::csf_model::daly;
+      } else {
+        fprintf(stderr, "ERROR: unknown --csf '%s' (use legacy|mannos|daly)\n", m);
+        return 1;
+      }
+    } else if (std::strcmp(argv[i], "--ppd") == 0 && i + 1 < argc) {
+      vp.ref_ppd = std::atof(argv[++i]);
+      if (vp.ref_ppd <= 0.0) {
+        fprintf(stderr, "ERROR: --ppd must be > 0\n");
+        return 1;
+      }
+    } else if (std::strcmp(argv[i], "--zoom") == 0 && i + 1 < argc) {
+      vp.zoom = std::atof(argv[++i]);
+      if (vp.zoom <= 0.0) {
+        fprintf(stderr, "ERROR: --zoom must be > 0\n");
+        return 1;
+      }
+    } else if (std::strcmp(argv[i], "--expect-q") == 0 && i + 1 < argc) {
+      expect_q = std::atoi(argv[++i]);
+      if (expect_q < 0 || expect_q > 100) {
+        fprintf(stderr, "ERROR: --expect-q must be in [0, 100]\n");
+        return 1;
+      }
+    } else if (std::strcmp(argv[i], "--max-residual") == 0 && i + 1 < argc) {
+      max_residual = std::atof(argv[++i]);
+      if (max_residual < 0.0) {
+        fprintf(stderr, "ERROR: --max-residual must be >= 0\n");
+        return 1;
+      }
+    } else {
+      // Reject unknown flags (and flags missing their value) so a typo in a
+      // CI/script invocation fails loudly instead of silently checking nothing.
+      fprintf(stderr, "ERROR: unrecognized argument '%s'\n", argv[i]);
+      return 1;
+    }
   }
 
   std::ifstream in(argv[1], std::ios::binary);
@@ -392,9 +409,23 @@ int main(int argc, char** argv) {
   printf("DWT levels:  %u\n", h.dwt_levels);
   printf("Transform:   %s\n", h.transformation == 1 ? "5/3 (reversible)" : "9/7 (irreversible)");
   printf("MCT:         %s\n", h.use_color_trafo ? "ON (RGB->YCbCr)" : "OFF");
+  {
+    const char* csf_name = (vp.model == open_htj2k::csf_model::legacy_table)      ? "legacy table"
+                           : (vp.model == open_htj2k::csf_model::mannos_sakrison) ? "Mannos-Sakrison"
+                                                                                  : "Daly";
+    printf("Weighting:   %s", csf_name);
+    if (vp.model != open_htj2k::csf_model::legacy_table) {
+      printf(" (ref_ppd=%.1f, zoom=%.2f)", vp.ref_ppd, vp.zoom);
+    }
+    printf("\n");
+  }
 
   if (h.transformation == 1) {
     printf("\nVerdict: lossless (5/3) — Qfactor does not apply.\n");
+    if (expect_q >= 0 || max_residual >= 0.0) {
+      printf("CHECK SKIP: no Qfactor to evaluate (lossless input)\n");
+      return 3;  // check requested but not evaluable
+    }
     return 0;
   }
 
@@ -415,6 +446,10 @@ int main(int argc, char** argv) {
     printf("\nVerdict: QCD uses scalar-derived signaling (Sqcd & 0x1F = 1).\n");
     printf("         OpenHTJ2K's encoder forces expounded signaling whenever Qfactor\n");
     printf("         is enabled, so this stream was NOT produced with a Qfactor.\n");
+    if (expect_q >= 0 || max_residual >= 0.0) {
+      printf("CHECK SKIP: not a Qfactor stream (scalar-derived quantization)\n");
+      return 3;  // check requested but not evaluable
+    }
     return 0;
   }
 
@@ -434,7 +469,7 @@ int main(int argc, char** argv) {
     }
     uint8_t RI = static_cast<uint8_t>((h.Ssiz[c] & 0x7F) + 1);
     auto score = find_best_q(qm->bands, h.dwt_levels, RI,
-                             static_cast<uint8_t>(c), chroma_format);
+                             static_cast<uint8_t>(c), chroma_format, vp, h.use_color_trafo);
     per_component.emplace_back(c, score);
     printf("\nComponent %u  (RI=%u, %s)\n", c, RI,
            qm->component_index == 0xFFFF ? "QCD" : "QCC");
@@ -444,7 +479,7 @@ int main(int argc, char** argv) {
            score.median_per_band, std::pow(2.0, score.median_per_band));
     if (verbose) {
       auto pred = predict_bands(score.best_q, h.dwt_levels, RI,
-                                static_cast<uint8_t>(c), chroma_format);
+                                static_cast<uint8_t>(c), chroma_format, vp, h.use_color_trafo);
       print_band_table(qm->bands, pred);
     }
   }
@@ -468,6 +503,23 @@ int main(int argc, char** argv) {
     printf("  No Qfactor match (per-band residual %.4f log2).\n", max_per_band);
     printf("  This stream was probably encoded with an explicit base step size,\n");
     printf("  a different encoder, or a non-Qfactor rate-control scheme.\n");
+  }
+
+  // Scriptable / CI check mode: non-zero exit if any component violates the
+  // expected Q or the per-band residual ceiling. Enabled by --expect-q / --max-residual.
+  if (expect_q >= 0 || max_residual >= 0.0) {
+    bool ok = true;
+    for (const auto& kv : per_component) {
+      if (expect_q >= 0 && kv.second.best_q != expect_q) ok = false;
+      if (max_residual >= 0.0 && kv.second.median_per_band > max_residual) ok = false;
+    }
+    printf("\nCHECK %s:", ok ? "PASS" : "FAIL");
+    if (expect_q >= 0) printf(" expect-q=%d", expect_q);
+    if (max_residual >= 0.0) printf(" max-residual=%.4f", max_residual);
+    for (const auto& kv : per_component)
+      printf("  [c%u Q=%u r=%.4f]", kv.first, kv.second.best_q, kv.second.median_per_band);
+    printf("\n");
+    if (!ok) return 2;
   }
   return 0;
 }
