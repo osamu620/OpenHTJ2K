@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OpenHTJ2K — Open-source High-Throughput JPEG 2000</title>
+<meta name="description" content="OpenHTJ2K is an open-source C++ implementation of JPEG 2000 Part 1 and High-Throughput JPEG 2000 (Part 15): SIMD-accelerated, multi-threaded encode and decode." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#11151f; --panel2:#0e121b; --line:#1e2533;
+    --ink:#ccd3df; --ink2:#8b95a7; --ink3:#5a6478; --acc:#3d7dff; --acc2:#7aa2ff; --ok:#7fd1a0;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:16px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1440px; margin:0 auto; border-left:1px solid var(--line); border-right:1px solid var(--line);}
+  a{color:inherit;}
+  .mono{font-family:"IBM Plex Mono",monospace;}
+
+  /* nav */
+  .nav{
+    display:flex; align-items:center; justify-content:space-between; gap:20px;
+    padding:18px clamp(20px,4vw,56px); border-bottom:1px solid var(--line);
+    position:sticky; top:0; background:rgba(11,14,20,.88); backdrop-filter:blur(8px); z-index:10;
+  }
+  .brand{display:flex; align-items:center; gap:12px; font-weight:600; font-size:17px; letter-spacing:-.01em; text-decoration:none; color:#fff;}
+  .logo{width:26px; height:26px; border:1.5px solid var(--acc); border-radius:5px;
+    display:grid; place-items:center; color:var(--acc); font-family:"IBM Plex Mono",monospace; font-size:13px; font-weight:600;}
+  .navlinks{display:flex; gap:clamp(16px,2.4vw,30px); font-size:14px; color:var(--ink2);}
+  .navlinks a{text-decoration:none;}
+  .navlinks a:hover{color:var(--ink);}
+  .ghbtn{display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line);
+    border-radius:7px; padding:8px 14px; font-size:13px; font-family:"IBM Plex Mono",monospace; color:var(--ink); text-decoration:none; white-space:nowrap;}
+  .ghbtn:hover{border-color:var(--acc); color:#fff;}
+
+  /* hero */
+  .hero{display:grid; grid-template-columns:1fr 1fr; border-bottom:1px solid var(--line);}
+  .hero-l{padding:clamp(44px,6vw,72px) clamp(20px,4vw,56px); border-right:1px solid var(--line);}
+  .badges{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:28px;}
+  .badge{font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--ink2);
+    border:1px solid var(--line); border-radius:5px; padding:5px 9px;}
+  .h1{font-size:clamp(34px,4.6vw,54px); line-height:1.04; font-weight:600; letter-spacing:-.025em; color:#fff; margin:0 0 22px;}
+  .h1 em{font-style:normal; color:var(--acc2);}
+  .lede{font-size:clamp(16px,1.7vw,18px); color:var(--ink2); max-width:520px; margin:0 0 32px;}
+  .lede b{color:var(--ink); font-weight:500;}
+  .cta{display:flex; gap:12px; align-items:center; flex-wrap:wrap;}
+  .btn{padding:12px 20px; border-radius:8px; font-size:14px; font-weight:500; text-decoration:none; display:inline-block;}
+  .btn-pri{background:var(--acc); color:#fff;}
+  .btn-pri:hover{background:#3570e6;}
+  .btn-sec{background:transparent; color:var(--ink); border:1px solid var(--line);}
+  .btn-sec:hover{border-color:var(--acc2); color:#fff;}
+  .hero-r{padding:clamp(24px,3vw,40px); display:flex; align-items:center;
+    background:radial-gradient(120% 80% at 80% 0%,rgba(61,125,255,.07),transparent 60%);}
+
+  /* terminal */
+  .term{width:100%; background:var(--panel2); border:1px solid var(--line); border-radius:10px; overflow:hidden;
+    box-shadow:0 24px 60px rgba(0,0,0,.45);}
+  .termbar{display:flex; align-items:center; gap:8px; padding:11px 14px; border-bottom:1px solid var(--line); background:var(--panel);}
+  .dot{width:11px; height:11px; border-radius:50%;}
+  .termtitle{margin-left:8px; font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink3);}
+  .termbody{padding:20px 22px; font-family:"IBM Plex Mono",monospace; font-size:clamp(12px,1.2vw,13.5px); line-height:1.85; overflow-x:auto;}
+  .termbody .row{white-space:nowrap;}
+  .pr{color:var(--acc);} .cm{color:var(--ink3);} .fn{color:var(--ink);} .st{color:var(--ok);} .arg{color:var(--acc2);}
+  .sp{height:10px;}
+
+  /* section frame */
+  .sec{padding:clamp(44px,5vw,64px) clamp(20px,4vw,56px); border-bottom:1px solid var(--line);}
+  .sechead{display:flex; align-items:baseline; gap:16px; margin-bottom:36px;}
+  .sechead h2{font-size:13px; font-family:"IBM Plex Mono",monospace; letter-spacing:.1em; text-transform:uppercase; color:var(--ink2); font-weight:500; margin:0;}
+  .secline{flex:1; height:1px; background:var(--line);}
+  .secidx{font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--ink3);}
+
+  /* highlights grid */
+  .grid{display:grid; grid-template-columns:repeat(2,1fr); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  .cell{background:var(--bg); padding:30px;}
+  .cell h3{font-size:18px; font-weight:600; color:#fff; margin:0 0 6px; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .tag{font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--acc2); border:1px solid var(--line); border-radius:4px; padding:2px 7px; font-weight:400;}
+  .cell p{color:var(--ink2); font-size:14.5px; margin:0 0 16px;}
+  .ul{list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:9px;}
+  .ul li{font-size:13.5px; color:var(--ink2); padding-left:18px; position:relative;}
+  .ul li::before{content:"\203A"; position:absolute; left:0; color:var(--acc); font-family:"IBM Plex Mono",monospace;}
+  .ul li b{color:var(--ink); font-weight:500;}
+  .ul code{font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--acc2); background:var(--panel); padding:1px 5px; border-radius:4px;}
+
+  /* stat strip */
+  .stats{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line); border-bottom:1px solid var(--line);}
+  .stat{background:var(--bg); padding:clamp(26px,3vw,34px) clamp(20px,2.4vw,30px);}
+  .stat .n{font-family:"IBM Plex Mono",monospace; font-size:clamp(28px,3.2vw,34px); font-weight:500; color:#fff; letter-spacing:-.02em;}
+  .stat .n em{font-style:normal; color:var(--acc);}
+  .stat .l{font-size:13px; color:var(--ink2); margin-top:6px;}
+
+  /* formats table */
+  .tablewrap{overflow-x:auto;}
+  .table{width:100%; border-collapse:collapse; font-size:14px; min-width:560px;}
+  .table th{text-align:left; font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); font-weight:500; padding:0 16px 14px; border-bottom:1px solid var(--line);}
+  .table td{padding:15px 16px; border-bottom:1px solid var(--line); color:var(--ink2); vertical-align:top;}
+  .table td:first-child{font-family:"IBM Plex Mono",monospace; color:var(--acc2);}
+  .yes{color:var(--ok); font-family:"IBM Plex Mono",monospace;}
+  .no{color:var(--ink3);}
+
+  /* footer */
+  .foot{padding:clamp(36px,4vw,48px) clamp(20px,4vw,56px); display:flex; justify-content:space-between; align-items:flex-start; gap:40px; flex-wrap:wrap;}
+  .foot .lic{font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--ink2);}
+  .foot .lic b{color:var(--ink);}
+  .footcols{display:flex; gap:clamp(32px,5vw,64px); flex-wrap:wrap;}
+  .footcol h4{font-size:12px; font-family:"IBM Plex Mono",monospace; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); margin:0 0 14px; font-weight:500;}
+  .footcol a{display:block; font-size:14px; color:var(--ink2); text-decoration:none; margin-bottom:9px;}
+  .footcol a:hover{color:var(--ink);}
+
+  /* responsive */
+  @media (max-width:920px){
+    .hero{grid-template-columns:1fr;}
+    .hero-l{border-right:none; border-bottom:1px solid var(--line);}
+    .stats{grid-template-columns:repeat(2,1fr);}
+  }
+  @media (max-width:760px){
+    .grid{grid-template-columns:1fr;}
+    .navlinks{display:none;}
+  }
+  @media (max-width:460px){
+    .stats{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- NAV -->
+  <nav class="nav">
+    <a class="brand" href="#top"><span class="logo">HT</span>OpenHTJ2K</a>
+    <div class="navlinks">
+      <a href="#highlights">Overview</a>
+      <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/README.md">Docs</a>
+      <a href="https://github.com/osamu620/OpenHTJ2K#cli-quick-start">CLI</a>
+      <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/jpip.md">JPIP</a>
+      <a href="https://htj2k-demo.pages.dev/">Live demo</a>
+      <a href="#formats">Formats</a>
+    </div>
+    <a class="ghbtn" href="https://github.com/osamu620/OpenHTJ2K">View on GitHub &rarr;</a>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero" id="top">
+    <div class="hero-l">
+      <div class="badges">
+        <span class="badge">ITU-T T.814 &middot; ISO/IEC 15444-15</span>
+        <span class="badge">BSD-3-Clause</span>
+        <span class="badge">C++11 &middot; CMake 3.14+</span>
+        <span class="badge">v0.19.0</span>
+      </div>
+      <h1 class="h1">High-Throughput<br/>JPEG 2000, <em>open source.</em></h1>
+      <p class="lede">A complete <b>C++</b> implementation of JPEG 2000 Part 1 and
+        High-Throughput JPEG 2000 (Part 15) &mdash; SIMD-accelerated across x86-64, AArch64 and
+        WebAssembly, with a multi-threaded encode/decode pipeline.</p>
+      <div class="cta">
+        <a class="btn btn-pri" href="https://github.com/osamu620/OpenHTJ2K#quick-build">Quick build</a>
+        <a class="btn btn-sec" href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/README.md">Read the docs &rarr;</a>
+      </div>
+    </div>
+    <div class="hero-r">
+      <div class="term">
+        <div class="termbar">
+          <span class="dot" style="background:#ff5f56;"></span>
+          <span class="dot" style="background:#ffbd2e;"></span>
+          <span class="dot" style="background:#27c93f;"></span>
+          <span class="termtitle">build &middot; open_htj2k</span>
+        </div>
+        <div class="termbody">
+          <div class="row"><span class="cm"># clone &amp; build (CMake 3.14+, C++11)</span></div>
+          <div class="row"><span class="pr">$</span> <span class="fn">cmake</span> -B build -DCMAKE_BUILD_TYPE=<span class="arg">Release</span></div>
+          <div class="row"><span class="pr">$</span> <span class="fn">cmake</span> --build build -j</div>
+          <div class="sp"></div>
+          <div class="row"><span class="cm"># lossy encode @ quality 90</span></div>
+          <div class="row"><span class="pr">$</span> <span class="fn">open_htj2k_enc</span> -i in.ppm -o <span class="st">out.jph</span> Qfactor=<span class="arg">90</span></div>
+          <div class="sp"></div>
+          <div class="row"><span class="cm"># decode to RGB</span></div>
+          <div class="row"><span class="pr">$</span> <span class="fn">open_htj2k_dec</span> -i in.j2c -o <span class="st">out.ppm</span></div>
+          <div class="row st">&#10003; 582 conformance tests passing</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATS -->
+  <section class="stats">
+    <div class="stat"><div class="n">4K<em>@</em>60</div><div class="l">fps sustained, RFC 9828 RTP receiver</div></div>
+    <div class="stat"><div class="n">582</div><div class="l">conformance tests green in CI</div></div>
+    <div class="stat"><div class="n">4<em>&times;</em></div><div class="l">SIMD targets: AVX2 &middot; AVX-512 &middot; NEON &middot; WASM</div></div>
+    <div class="stat"><div class="n">Qfactor</div><div class="l">single-knob quality control for lossy encode, like JPEG</div></div>
+  </section>
+
+  <!-- HIGHLIGHTS -->
+  <section class="sec" id="highlights">
+    <div class="sechead"><span class="secidx">01</span><h2>Highlights</h2><div class="secline"></div></div>
+    <div class="grid">
+      <div class="cell">
+        <h3>Standards compliance <span class="tag">Part 1 + Part 15</span></h3>
+        <p>Full HTJ2K encode + decode and Part 1 decode; partial Part 2.</p>
+        <ul class="ul">
+          <li>Conformance-tested against <b>ITU-T T.803 | ISO/IEC 15444-4</b></li>
+          <li>JPH <code>.jph</code> format with colour-spec box parsing</li>
+          <li>Automatic YCbCr colorspace detection on decode</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Performance <span class="tag">SIMD + threads</span></h3>
+        <p>Vectorized hot paths for color transform, DWT and HT block coding.</p>
+        <ul class="ul">
+          <li><b>AVX2 / AVX-512</b> (x86-64), <b>NEON</b> (AArch64), <b>WASM SIMD</b></li>
+          <li>Built-in thread pool for encode and decode</li>
+          <li>Three decode APIs: <code>invoke()</code> &middot; <code>line_based()</code> &middot; <code>stream()</code></li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Live streaming <span class="tag">experimental</span></h3>
+        <p>RFC 9828 JPEG 2000 over RTP with sub-codestream latency.</p>
+        <ul class="ul">
+          <li>New <b>WebTransport</b> browser viewer &mdash; live streams decoded in WASM, WebGL2 rendering</li>
+          <li>Three-thread native pipeline: receive &rarr; decode &rarr; render</li>
+          <li>HDR colour: <b>PQ / HLG</b> + BT.2020 gamut mapping</li>
+          <li>Sustains <b>4K @ 60 fps</b> on modern x86-64 (AVX2)</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>JPIP gigapixel viewer <span class="tag">15444-9</span></h3>
+        <p>Stream and explore 42K+ canvases in the browser &mdash; pan and zoom with viewport-region decode.</p>
+        <ul class="ul">
+          <li>In-browser <b>WASM</b> viewer, WebGL2 GPU rendering</li>
+          <li>Resolution-progressive delivery over HTTP/1.1 or HTTP/3</li>
+          <li>IDWT zero-skip + region-of-interest decode for fast navigation</li>
+          <li><b>Foveated rendering</b> &mdash; gaze-driven LOD cones <code>experimental</code></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- FORMATS -->
+  <section class="sec" id="formats">
+    <div class="sechead"><span class="secidx">02</span><h2>Supported formats</h2><div class="secline"></div></div>
+    <div class="tablewrap">
+      <table class="table">
+        <thead><tr><th>Format</th><th>Encode</th><th>Decode</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>.jhc / .j2c / .j2k</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td>HTJ2K / JPEG 2000 Part 1 codestream</td></tr>
+          <tr><td>.jph</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td>JPH file format; colour-spec box auto-detects YCbCr</td></tr>
+          <tr><td>PGM / PPM / PGX</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td>Grayscale, packed RGB, per-component files</td></tr>
+          <tr><td>TIFF</td><td class="yes">&#10003;</td><td class="no">&mdash;</td><td>8/16-bit per sample via libtiff; encode input only</td></tr>
+          <tr><td>RAW</td><td class="no">&mdash;</td><td class="yes">&#10003;</td><td>Packed samples, decoder output only</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="foot">
+    <div>
+      <div class="brand" style="margin-bottom:14px;"><span class="logo">HT</span>OpenHTJ2K</div>
+      <div class="lic">Licensed under <b>BSD 3-Clause</b>.</div>
+    </div>
+    <div class="footcols">
+      <div class="footcol"><h4>Docs</h4>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/building.md">Building</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_encoder.md">CLI encoder</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_decoder.md">CLI decoder</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/jpip.md">JPIP</a>
+      </div>
+      <div class="footcol"><h4>Tools</h4>
+        <a href="https://github.com/osamu620/OpenHTJ2K#encoder--open_htj2k_enc">open_htj2k_enc</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K#decoder--open_htj2k_dec">open_htj2k_dec</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K#rfc-9828-rtp-receiver--open_htj2k_rtp_recv-experimental">rtp_recv</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K#jpip-server--demo">jpip_server</a>
+      </div>
+      <div class="footcol"><h4>Project</h4>
+        <a href="https://github.com/osamu620/OpenHTJ2K">GitHub</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/releases">Releases</a>
+        <a href="https://htj2k-demo.pages.dev/">Live demo &#8599;</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/CHANGELOG">Changelog</a>
+      </div>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>
