@@ -307,6 +307,13 @@ add_subdirectory(tests/tools/region_decode_bench)
 target_include_directories(region_decode_bench PUBLIC source/core/interface)
 target_link_libraries(region_decode_bench PUBLIC open_htj2k)
 
+# m2_precinct_bench: M2 precinct-filter spike — how much of the M1 per-tile tax
+# the JPIP precinct filter removes (OSD-integration eval).
+add_executable(m2_precinct_bench)
+add_subdirectory(tests/tools/m2_precinct_bench)
+target_include_directories(m2_precinct_bench PUBLIC source/core/interface)
+target_link_libraries(m2_precinct_bench PUBLIC open_htj2k)
+
 # Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
 add_executable(estimate_qfactor)
 add_subdirectory(source/apps/estimate_qfactor)
