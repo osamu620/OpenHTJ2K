@@ -152,6 +152,14 @@ struct j2k_subband_row_buf {
   // Release scratch buffers.
   void free_resources();
 
+  // Drain any in-flight strip-prefetch tasks (spin-wait on par_cnt) and clear
+  // the pending-prefetch cursor.  Their htj2k_decode workers modDcup-mutate
+  // bytes borrowed directly from the codestream buffer, so they MUST complete
+  // before that buffer is overwritten or freed.  free_resources() calls this;
+  // the single-tile reuse frame boundary (which bypasses free_resources) must
+  // call it too, or a straggler races the next frame's init() memcpy.
+  void drain_prefetch();
+
   // Return pointer into sb->i_samples for abs_row.
   // Decodes the containing codeblock strip if not yet decoded.
   const sprec_t *row_ptr(int32_t abs_row);
