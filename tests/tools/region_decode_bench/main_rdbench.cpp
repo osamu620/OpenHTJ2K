@@ -54,6 +54,22 @@
 #include <string>
 #include <vector>
 #include "decoder.hpp"
+#ifdef __EMSCRIPTEN__
+  #include <emscripten/emscripten.h>
+#endif
+
+// Monotonic wall clock in milliseconds.  Under Emscripten use
+// emscripten_get_now() (= performance.now(), high-resolution) instead of
+// std::chrono::steady_clock, which can be coarse / zero-resolution in a
+// non-threaded Wasm build.  Keeps the timed code path identical native/Wasm.
+static inline double now_ms() {
+#ifdef __EMSCRIPTEN__
+  return emscripten_get_now();
+#else
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+#endif
+}
 
 struct Args {
   std::string infile;
@@ -150,15 +166,15 @@ struct Timing {
 static Timing decode_region(open_htj2k::openhtj2k_decoder &dec, const uint8_t *data, size_t len,
                             uint8_t reduce_NL, uint32_t threads, bool restrict_region, uint32_t x0,
                             uint32_t y0, uint32_t w, uint32_t h, bool store, DecodeBufs &b) {
-  auto t0 = std::chrono::steady_clock::now();
+  const double t0 = now_ms();
   dec.init(data, len, reduce_NL, threads);
   dec.parse();
   if (restrict_region) {
     dec.set_col_range(x0, x0 + w);
     dec.set_row_range(y0, y0 + h);
   }
-  auto t1 = std::chrono::steady_clock::now();
-  auto cb = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+  const double t1 = now_ms();
+  auto cb         = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
     if (!store) return;
     if (y < y0 || y >= y0 + h) return;  // row_range should already clip; guard anyway
     if (b.out.size() < nc) b.out.resize(nc);
@@ -170,45 +186,59 @@ static Timing decode_region(open_htj2k::openhtj2k_decoder &dec, const uint8_t *d
       const uint32_t xe = std::min(x0 + w, cw);
       if (xe > xs)
         std::memcpy(b.out[c].data() + static_cast<size_t>(ly) * w, rows[c] + xs,
-                    (xe - xs) * sizeof(int32_t));
+                            (xe - xs) * sizeof(int32_t));
     }
   };
   dec.invoke_line_based_stream_reuse(cb, b.widths, b.heights, b.depths, b.is_signed);
-  auto t2 = std::chrono::steady_clock::now();
+  const double t2 = now_ms();
   Timing tm;
-  tm.setup  = std::chrono::duration<double, std::milli>(t1 - t0).count();
-  tm.decode = std::chrono::duration<double, std::milli>(t2 - t1).count();
+  tm.setup  = t1 - t0;
+  tm.decode = t2 - t1;
   return tm;
 }
 
+// Full non-reuse decode that retains ONLY the [x0,x0+w) x [y0,y0+h) window of
+// each component (windowed reference).  Storing just the window — not the whole
+// canvas — keeps memory at window size, so this works at level 0 of a gigapixel
+// image even under the 2 GB Wasm cap (a full int32 canvas there is multi-GB).
+// The decode itself is full-width/full-work, so the retained window is the true
+// reference for that region.  Returns false on decode error / no output.
+static bool decode_full_reference_window(const uint8_t *data, size_t len, uint8_t reduce_NL,
+                                         uint32_t threads, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
+                                         std::vector<std::vector<int32_t>> &refwin,
+                                         std::vector<uint32_t> &rw, std::vector<uint32_t> &rh) {
+  std::vector<uint8_t> rd;
+  std::vector<bool> rs;
+  open_htj2k::openhtj2k_decoder dec;  // reuse disabled (independent reference)
+  dec.init(data, len, reduce_NL, threads);
+  dec.parse();
+  auto cb = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
+    if (y < y0 || y >= y0 + h) return;
+    if (refwin.size() < nc) refwin.resize(nc);
+    const uint32_t ly = y - y0;
+    for (uint16_t c = 0; c < nc; ++c) {
+      const uint32_t cw = rw[c];
+      if (refwin[c].size() < static_cast<size_t>(w) * h) refwin[c].assign(static_cast<size_t>(w) * h, 0);
+      const uint32_t xs = std::min(x0, cw), xe = std::min(x0 + w, cw);
+      if (xe > xs)
+        std::memcpy(refwin[c].data() + static_cast<size_t>(ly) * w, rows[c] + xs,
+                    (xe - xs) * sizeof(int32_t));
+    }
+  };
+  dec.invoke_line_based_stream(cb, rw, rh, rd, rs);
+  return !refwin.empty() && !rw.empty();
+}
+
 // Byte-exact check of the timed path: decode the centred window through the
-// reuse path (col_range + row_range together) and compare against a full-level
-// reference produced by the independent, reuse-disabled non-reuse line-based
-// path.  col_range_compare and row_range_compare each validate only one axis;
-// this is the only check of the 2D combination the benchmark actually times.
-// Returns true on exact match within the window.
+// reuse path (col_range + row_range together) and compare against an
+// independent full non-reuse decode of the same window.  col_range_compare and
+// row_range_compare each validate only one axis; this is the only check of the
+// 2D combination the benchmark actually times.  Returns true on exact match.
 static bool verify_window(const uint8_t *data, size_t len, uint8_t reduce_NL, uint32_t threads, uint32_t x0,
                           uint32_t y0, uint32_t w, uint32_t h) {
   std::vector<std::vector<int32_t>> ref;
   std::vector<uint32_t> rw, rh;
-  std::vector<uint8_t> rd;
-  std::vector<bool> rs;
-  {
-    open_htj2k::openhtj2k_decoder dec;  // reuse disabled (independent reference)
-    dec.init(data, len, reduce_NL, threads);
-    dec.parse();
-    auto cb = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
-      if (ref.empty()) {
-        ref.resize(nc);
-        for (uint16_t c = 0; c < nc; ++c) ref[c].assign(static_cast<size_t>(rw[c]) * rh[c], 0);
-      }
-      for (uint16_t c = 0; c < nc; ++c)
-        if (y < rh[c])
-          std::memcpy(ref[c].data() + static_cast<size_t>(y) * rw[c], rows[c], rw[c] * sizeof(int32_t));
-    };
-    dec.invoke_line_based_stream(cb, rw, rh, rd, rs);
-  }
-  if (ref.empty()) return false;
+  if (!decode_full_reference_window(data, len, reduce_NL, threads, x0, y0, w, h, ref, rw, rh)) return false;
 
   DecodeBufs b;
   open_htj2k::openhtj2k_decoder dec;
@@ -222,7 +252,7 @@ static bool verify_window(const uint8_t *data, size_t len, uint8_t reduce_NL, ui
       for (uint32_t lx = 0; lx < w; ++lx) {
         const uint32_t gx = x0 + lx, gy = y0 + ly;
         if (gx >= cw || gy >= rh[c]) continue;
-        const int32_t r = ref[c][static_cast<size_t>(gy) * cw + gx];
+        const int32_t r = ref[c][static_cast<size_t>(ly) * w + lx];
         const int32_t g = b.out[c][static_cast<size_t>(ly) * w + lx];
         if (r != g) {
           printf("# VERIFY FAIL level %u comp %zu pixel (%u,%u): ref=%d got=%d\n", reduce_NL, c, gx, gy, r,
@@ -260,6 +290,138 @@ static void print_row(const Args &a, int li, uint32_t W, uint32_t H, const char 
   }
   fflush(stdout);
 }
+
+#ifdef __EMSCRIPTEN__
+// JS-callable benchmark entry point for the Wasm runtime (the native main()
+// does not run under Node for this build; the runner drives this via ccall,
+// like web/open_htj2k_dec.mjs and col_range_compare's crc_validate).
+//
+// Times `iter` centred-window reuse decodes at one reduce level / window edge,
+// after `warmup` untimed decodes.  The window is min(win,levelW) x
+// min(win,levelH), centred — identical geometry to the native sweep.  Writes
+// six doubles to out[0..5]:
+//   [0]=median total ms  [1]=median decode ms  [2]=median setup ms
+//   [3]=min total ms     [4]=level width       [5]=level height
+// Returns 0 on success, 1 on decode error / empty output.
+extern "C" EMSCRIPTEN_KEEPALIVE int rdbench_region(const uint8_t *data, int len, int reduce_NL, int win,
+                                                   int threads, int iter, int warmup, double *out) {
+  for (int i = 0; i < 6; ++i) out[i] = 0.0;
+  try {
+    open_htj2k::openhtj2k_decoder dec;
+    dec.enable_single_tile_reuse(true);
+    DecodeBufs b;
+    // Probe reduced-level dims via a 1x1 decode (also warms the reuse cache);
+    // get_component_width() ignores reduce_NL, so dims must come from the cb.
+    decode_region(dec, data, static_cast<size_t>(len), static_cast<uint8_t>(reduce_NL),
+                  static_cast<uint32_t>(threads), true, 0, 0, 1, 1, false, b);
+    if (b.widths.empty() || b.widths[0] == 0 || b.heights[0] == 0) return 1;
+    const uint32_t W = b.widths[0], H = b.heights[0];
+    const uint32_t w = std::min<uint32_t>(win, W), h = std::min<uint32_t>(win, H);
+    const uint32_t x0 = (W > w) ? (W - w) / 2 : 0, y0 = (H > h) ? (H - h) / 2 : 0;
+
+    b.out.clear();
+    for (int i = 0; i < warmup; ++i)
+      decode_region(dec, data, static_cast<size_t>(len), static_cast<uint8_t>(reduce_NL),
+                    static_cast<uint32_t>(threads), true, x0, y0, w, h, true, b);
+    std::vector<double> tot, dc, st;
+    tot.reserve(iter);
+    dc.reserve(iter);
+    st.reserve(iter);
+    for (int i = 0; i < iter; ++i) {
+      Timing t = decode_region(dec, data, static_cast<size_t>(len), static_cast<uint8_t>(reduce_NL),
+                               static_cast<uint32_t>(threads), true, x0, y0, w, h, true, b);
+      tot.push_back(t.total());
+      dc.push_back(t.decode);
+      st.push_back(t.setup);
+    }
+    if (tot.empty()) return 1;
+    out[0] = median(tot);
+    out[1] = median(dc);
+    out[2] = median(st);
+    out[3] = minimum(tot);
+    out[4] = static_cast<double>(W);
+    out[5] = static_cast<double>(H);
+    return 0;
+  } catch (std::exception &e) {
+    printf("rdbench_region error: %s\n", e.what());
+    return 1;
+  }
+}
+
+// JS-callable correctness gate for the Wasm timing path.  Decodes the centred
+// window through the reuse + col_range + row_range path (what rdbench_region
+// times) and compares it, within the window, against an independent full
+// non-reuse decode.  This is the Wasm analogue of the native -verify, and the
+// only at-scale runtime check of the Wasm SIMD sub-range IDWT (its runtime test
+// was deferred when the kernel landed).  Writes six doubles to out[0..5]:
+//   [0]=mismatch count  [1]=first mismatch x  [2]=first mismatch y
+//   [3]=max |ref-got|   [4]=level width        [5]=level height
+// Returns 0 if byte-exact, 1 if any mismatch, 2 on decode error.
+extern "C" EMSCRIPTEN_KEEPALIVE int rdbench_verify(const uint8_t *data, int len, int reduce_NL, int win,
+                                                   int threads, double *out) {
+  for (int i = 0; i < 6; ++i) out[i] = 0.0;
+  try {
+    const size_t L   = static_cast<size_t>(len);
+    const uint8_t r  = static_cast<uint8_t>(reduce_NL);
+    const uint32_t t = static_cast<uint32_t>(threads);
+
+    // First learn the level dims via a cheap 1x1 windowed reference.
+    std::vector<std::vector<int32_t>> probe;
+    std::vector<uint32_t> rw, rh;
+    if (!decode_full_reference_window(data, L, r, t, 0, 0, 1, 1, probe, rw, rh)) return 2;
+    const uint32_t W = rw[0], H = rh[0];
+    const uint32_t w = std::min<uint32_t>(win, W), h = std::min<uint32_t>(win, H);
+    const uint32_t x0 = (W > w) ? (W - w) / 2 : 0, y0 = (H > h) ? (H - h) / 2 : 0;
+    out[4] = static_cast<double>(W);
+    out[5] = static_cast<double>(H);
+
+    // Independent full-work reference, retaining only the window (memory-safe at
+    // level 0 of a gigapixel image under the 2 GB Wasm cap).
+    std::vector<std::vector<int32_t>> ref;
+    std::vector<uint32_t> rw2, rh2;
+    if (!decode_full_reference_window(data, L, r, t, x0, y0, w, h, ref, rw2, rh2)) return 2;
+
+    // Windowed reuse decode (the timed path).
+    open_htj2k::openhtj2k_decoder dec;
+    dec.enable_single_tile_reuse(true);
+    DecodeBufs b;
+    decode_region(dec, data, L, r, t, true, x0, y0, w, h, true, b);  // warm
+    b.out.clear();
+    decode_region(dec, data, L, r, t, true, x0, y0, w, h, true, b);  // compared
+
+    uint64_t nmis  = 0;
+    int32_t maxabs = 0;
+    uint32_t fx = 0, fy = 0;
+    for (size_t c = 0; c < ref.size() && c < b.out.size(); ++c) {
+      const uint32_t cw = rw2[c];
+      for (uint32_t ly = 0; ly < h; ++ly)
+        for (uint32_t lx = 0; lx < w; ++lx) {
+          const uint32_t gx = x0 + lx, gy = y0 + ly;
+          if (gx >= cw || gy >= rh2[c]) continue;
+          const int32_t rr = ref[c][static_cast<size_t>(ly) * w + lx];
+          const int32_t gg = b.out[c][static_cast<size_t>(ly) * w + lx];
+          if (rr != gg) {
+            if (nmis == 0) {
+              fx = gx;
+              fy = gy;
+            }
+            const int32_t d = rr > gg ? rr - gg : gg - rr;
+            if (d > maxabs) maxabs = d;
+            ++nmis;
+          }
+        }
+    }
+    out[0] = static_cast<double>(nmis);
+    out[1] = static_cast<double>(fx);
+    out[2] = static_cast<double>(fy);
+    out[3] = static_cast<double>(maxabs);
+    return nmis ? 1 : 0;
+  } catch (std::exception &e) {
+    printf("rdbench_verify error: %s\n", e.what());
+    return 2;
+  }
+}
+#endif  // __EMSCRIPTEN__
 
 int main(int argc, char *argv[]) {
   Args a;
