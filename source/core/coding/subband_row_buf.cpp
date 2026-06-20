@@ -164,11 +164,21 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
 #endif
 }
 
+void j2k_subband_row_buf::drain_prefetch() {
+#ifdef OPENHTJ2K_THREAD
+  // spin_wait drains the queue by running pending tasks on the calling thread,
+  // so the in-flight htj2k_decode workers (which modDcup-mutate the borrowed
+  // codestream bytes) finish before the caller overwrites/frees that memory.
+  // A no-op when par_cnt is already 0.
+  spin_wait(par_cnt);
+  prefetch_y0 = prefetch_y1 = -1;
+#endif
+}
+
 void j2k_subband_row_buf::free_resources() {
 #ifdef OPENHTJ2K_THREAD
   // Drain any in-flight tasks before touching the scratch buffers.
-  spin_wait(par_cnt);
-  prefetch_y0 = prefetch_y1 = -1;
+  drain_prefetch();
   // Free combined allocation via its stable base pointer — ring_buf may have been
   // swapped with prefetch_buf and could be an interior pointer after prefetch hits.
   aligned_mem_free(combined_buf);

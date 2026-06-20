@@ -3151,12 +3151,40 @@ void j2k_tile_component::pull_strip_advance(uint32_t count) {
 
 void j2k_tile_component::finalize_line_decode() {
   if (line_dec == nullptr) return;
+  j2k_tcomp_line_dec *ld = line_dec.get();
+
+#ifdef OPENHTJ2K_THREAD
+  // Drain all in-flight strip-prefetch tasks at the frame boundary.  Their
+  // htj2k_decode workers modDcup-mutate bytes borrowed directly from the
+  // codestream buffer (subband_row_buf borrow path); the next reuse frame's
+  // init() overwrites that same buffer, so a straggler left running across the
+  // boundary races it — corrupt tiles and nondeterministic "cleanup pass
+  // suffix length 4095 is invalid" warnings at threads >= 3.  The non-reuse
+  // path drains via free_resources() below, but the reuse path early-returns
+  // before that, so this must run for both.  Only ll0_buf and hl_bufs are
+  // initialised at every active level; lh/hh exist only for BIDIR levels
+  // (mirrors the free loop below) and draining an uninitialised buf would
+  // touch an indeterminate par_cnt.
+  {
+    j2k_subband_row_buf *hl = ld->hl_bufs.get();
+    j2k_subband_row_buf *lh = ld->lh_bufs.get();
+    j2k_subband_row_buf *hh = ld->hh_bufs.get();
+    ld->ll0_buf.drain_prefetch();
+    for (int32_t i = 0; i < ld->NL_active; ++i) {
+      hl[i].drain_prefetch();
+      if (access_resolution(static_cast<uint8_t>(i + 1))->transform_direction == DWT_BIDIR) {
+        lh[i].drain_prefetch();
+        hh[i].drain_prefetch();
+      }
+    }
+  }
+#endif
+
   // Single-tile reuse: skip teardown so init_line_decode on the next frame
   // can reuse every allocation.  The j2k_tile_component destructor clears
   // line_dec_persistent_ before calling us, so final cleanup still happens
   // when the tile_component itself is destroyed.
   if (line_dec_persistent_) return;
-  j2k_tcomp_line_dec *ld = line_dec.get();
 
   idwt_2d_state *states        = ld->states.get();
   idwt_level_src_ctx *ctxs     = ld->ctxs.get();
