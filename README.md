@@ -11,6 +11,8 @@ across x86-64, AArch64, and WebAssembly, a built-in multi-threaded
 pipeline, and a live RFC 9828 RTP receiver that sustains **4K @ 60 fps
 on modern x86-64**.
 
+**Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k-demo.pages.dev/) · [📖 Docs](docs/README.md)
+
 ## Highlights
 
 **Standards compliance**
