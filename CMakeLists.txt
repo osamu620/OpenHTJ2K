@@ -301,6 +301,12 @@ add_subdirectory(tests/tools/col_range_compare)
 target_include_directories(col_range_compare PUBLIC source/core/interface)
 target_link_libraries(col_range_compare PUBLIC open_htj2k)
 
+# region_decode_bench: M1 region-decode latency/throughput benchmark (OSD eval)
+add_executable(region_decode_bench)
+add_subdirectory(tests/tools/region_decode_bench)
+target_include_directories(region_decode_bench PUBLIC source/core/interface)
+target_link_libraries(region_decode_bench PUBLIC open_htj2k)
+
 # Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
 add_executable(estimate_qfactor)
 add_subdirectory(source/apps/estimate_qfactor)
