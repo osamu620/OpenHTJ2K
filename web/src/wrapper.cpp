@@ -311,6 +311,86 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
     width, height, depth, is_signed);
 }
 
+// ── OpenSeadragon HTJ2KTileSource primitives (M3) ─────────────────────────
+// Region decode → tight RGBA tile, for an OSD tile source that maps each
+// (level, x, y) tile request onto a windowed HTJ2K region decode.
+
+// Create a decoder for repeated region decode: single-tile reuse ON, so the
+// tile tree built on the first decode is reused across tiles of the same
+// codestream + reduce level.  No codestream is bound yet — decode_region_to_rgba
+// (re)initialises it per tile.  Use one decoder per reduce level (the reuse
+// fingerprint is the main header, which does not encode reduce_NL).
+EMSCRIPTEN_KEEPALIVE
+open_htj2k::openhtj2k_decoder* create_region_decoder() {
+  auto* dec = new open_htj2k::openhtj2k_decoder();
+  dec->enable_single_tile_reuse(true);
+  return dec;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void destroy_region_decoder(open_htj2k::openhtj2k_decoder* dec) { delete dec; }
+
+// Decode the [x0,x0+w) x [y0,y0+h) window of `data` (a whole HTJ2K codestream)
+// at reduce level `reduce_NL`, packing a TIGHT w x h x 4 RGBA tile into rgba_dst
+// (which must be w*h*4 bytes).  Coordinates are in the reduced-level output
+// grid.  Uses the reuse path + col/row range so only the tile's strip is
+// reconstructed (Lever A); pixels past the image edge are zero-filled (opaque)
+// for edge tiles.  Returns 0 on success, non-zero on error.
+EMSCRIPTEN_KEEPALIVE
+int decode_region_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* data, size_t len,
+                          uint8_t reduce_NL, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h,
+                          uint8_t* rgba_dst) {
+  std::vector<uint32_t> width, height;
+  std::vector<uint8_t>  depth;
+  std::vector<bool>     is_signed;
+  try {
+    dec->init(data, len, reduce_NL, 1);
+    dec->parse();
+    dec->set_col_range(x0, x0 + w);
+    dec->set_row_range(y0, y0 + h);
+    dec->invoke_line_based_stream_reuse(
+      [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+        if (y < y0 || y >= y0 + h) return;
+        const uint32_t W       = width[0];
+        const uint32_t chromaW = (nc >= 2) ? width[1] : W;
+        const bool     subsamp = (chromaW < W);
+        const uint8_t  d       = depth[0];
+        const int32_t  down_sh = (d >= 8) ? (d - 8) : 0;
+        const int32_t  up_sh   = (d < 8)  ? (8 - d) : 0;
+        const int32_t  half    = (d > 8)  ? (1 << (down_sh - 1)) : 0;
+        const int32_t  offset  = is_signed[0] ? (1 << (d - 1)) : 0;
+        const int32_t  bias    = half + offset;
+        uint8_t* __restrict__ row = rgba_dst + (size_t)(y - y0) * w * 4;
+        for (uint32_t lx = 0; lx < w; ++lx) {
+          const uint32_t x = x0 + lx;
+          if (x >= W) {  // edge tile padding
+            row[lx*4+0] = row[lx*4+1] = row[lx*4+2] = 0; row[lx*4+3] = 255;
+            continue;
+          }
+          if (nc == 1) {
+            int32_t v = ((rows[0][x] + bias) >> down_sh) << up_sh;
+            if (v < 0) v = 0; else if (v > 255) v = 255;
+            uint8_t u = static_cast<uint8_t>(v);
+            row[lx*4+0] = row[lx*4+1] = row[lx*4+2] = u; row[lx*4+3] = 255;
+          } else {
+            for (uint16_t c = 0; c < 3 && c < nc; ++c) {
+              uint32_t sx = (c == 0 || !subsamp) ? x : (x >> 1);
+              int32_t v = ((rows[c][sx] + bias) >> down_sh) << up_sh;
+              if (v < 0) v = 0; else if (v > 255) v = 255;
+              row[lx*4+c] = static_cast<uint8_t>(v);
+            }
+            row[lx*4+3] = 255;
+          }
+        }
+      },
+      width, height, depth, is_signed);
+    return 0;
+  } catch (std::exception& e) {
+    printf("decode_region_to_rgba error: %s\n", e.what());
+    return 1;
+  }
+}
+
 // invoke_decoder_planar_u8: streaming decode that writes Y/Cb/Cr to three
 // caller-provided uint8 buffers at NATIVE per-component sizes (no chroma
 // upsampling, no packing into RGBA).  Designed for the WebGL renderer to
