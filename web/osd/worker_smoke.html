@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>HTJ2K OSD worker smoke</title></head>
+<body><pre id="out">running…</pre>
+<script type="module">
+// Headless browser smoke for the decode Web Worker — the part the Node test
+// cannot cover: spawning htj2k_tile_worker.mjs as a real module Worker and
+// dynamic-import()ing the EXPORT_ES6 WASM module from inside it (the Emscripten
+// nested-worker bootstrap path). Validates tile dimensions, byte length and
+// that decoded tiles carry real (non-zero) image content. POSTs a REPORT line
+// the runner greps from the server log. No OpenSeadragon / CDN / internet.
+
+const params   = new URLSearchParams(location.search);
+const src      = params.get('src')      || '/osd/carina.j2c';
+const wasmBase = params.get('wasmBase') || '/wasm-full/';
+const out = document.getElementById('out');
+
+const report = async (obj) => {
+  out.textContent = JSON.stringify(obj, null, 2);
+  try { await fetch('/report', { method: 'POST', body: JSON.stringify(obj) }); } catch (_) {}
+};
+
+(async () => {
+  try {
+    const codestream = await (await fetch(src)).arrayBuffer();
+    const worker = new Worker(new URL('./htj2k_tile_worker.mjs', import.meta.url), { type: 'module' });
+
+    const pending = new Map();
+    let nextId = 1;
+    worker.addEventListener('message', (e) => {
+      if (e.data.type === 'tile') {
+        const r = pending.get(e.data.id);
+        if (r) { pending.delete(e.data.id); r(e.data); }
+      }
+    });
+    worker.addEventListener('error', (e) =>
+      report({ pass: false, stage: 'worker-onerror', msg: e.message || String(e) }));
+
+    const ready = await new Promise((resolve, reject) => {
+      const h = (e) => {
+        if (e.data.type === 'ready') { worker.removeEventListener('message', h); resolve(e.data); }
+        else if (e.data.type === 'error' && e.data.fatal) { worker.removeEventListener('message', h); reject(new Error(e.data.msg)); }
+      };
+      worker.addEventListener('message', h);
+      worker.postMessage({ type: 'init', wasmBase: location.origin + wasmBase, codestream }, [codestream]);
+    });
+
+    const ask = (level, x, y) => {
+      const id = nextId++;
+      const p = new Promise((r) => pending.set(id, r));
+      worker.postMessage({ type: 'decodeTile', id, level, x, y });
+      return p;
+    };
+
+    // Sample tiles across coarse / mid / fine levels, incl. (0,0) and an
+    // interior tile, plus one deliberately out-of-range tile (expect empty).
+    const mid = (ready.minLevel + ready.maxLevel) >> 1;
+    const levels = [ready.minLevel, mid, ready.maxLevel];
+    const results = [];
+    for (const level of levels) {
+      results.push(await ask(level, 0, 0));
+      results.push(await ask(level, 1, 1));
+    }
+    const oob = await ask(ready.maxLevel, 1 << 20, 1 << 20); // far off image
+
+    let validated = 0, dimOK = true, nonzeroOK = true;
+    const ms = [];
+    for (const t of results) {
+      if (t.empty || t.error) { dimOK = false; continue; }
+      validated++;
+      if (t.rgba.byteLength !== t.w * t.h * 4) dimOK = false;
+      const u8 = new Uint8Array(t.rgba);
+      let nz = false;
+      for (let i = 0; i < u8.length; i += 4) { if (u8[i] | u8[i + 1] | u8[i + 2]) { nz = true; break; } }
+      if (!nz) nonzeroOK = false;
+      if (typeof t.decodeMs === 'number') ms.push(+t.decodeMs.toFixed(1));
+    }
+    const oobOK = !!oob.empty;
+    const pass = validated === results.length && dimOK && nonzeroOK && oobOK;
+    await report({ pass, stage: 'done', ready, validated, dimOK, nonzeroOK, oobOK, sampleMs: ms });
+  } catch (e) {
+    await report({ pass: false, stage: 'exception', msg: e?.stack || String(e) });
+  }
+})();
+</script>
+</body>
+</html>

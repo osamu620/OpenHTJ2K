@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenSeadragon &times; HTJ2K — region-decode tile source</title>
+<!-- OpenSeadragon 6.0.x: the downloadTileStart / context.finish data-type graph
+     this plugin targets landed in 6.0. -->
+<script src="https://cdn.jsdelivr.net/npm/openseadragon@6.0.2/build/openseadragon/openseadragon.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd;
+               font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #osd { position: absolute; inset: 0; }
+  #hud { position: absolute; top: 8px; left: 8px; z-index: 10; padding: 8px 10px;
+         background: rgba(0,0,0,.6); border: 1px solid #333; border-radius: 6px;
+         white-space: pre; pointer-events: none; }
+  #err { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 20; padding: 10px;
+         background: #501; border: 1px solid #a33; border-radius: 6px; display: none; }
+  b { color: #6cf; }
+</style>
+</head>
+<body>
+<div id="osd"></div>
+<div id="hud">loading…</div>
+<div id="err"></div>
+
+<script type="module">
+import { HTJ2KTileSource } from './htj2k_tilesource.mjs';
+
+const params   = new URLSearchParams(location.search);
+const src      = params.get('src')      || './carina.j2c';
+const wasmBase = params.get('wasmBase') || '../build/html/';
+const tileSize = parseInt(params.get('tile') || '256', 10);
+
+const hud = document.getElementById('hud');
+const errBox = document.getElementById('err');
+const fail = (msg) => { errBox.style.display = 'block'; errBox.textContent = String(msg); hud.textContent = 'failed'; };
+
+(async () => {
+  try {
+    hud.textContent = `fetching ${src} …`;
+    const t0 = performance.now();
+    const tileSource = await HTJ2KTileSource.fromUrl(src, { wasmBase, tileSize });
+    const info = tileSource._info;
+    const loadMs = (performance.now() - t0).toFixed(0);
+
+    const viewer = OpenSeadragon({
+      id: 'osd',
+      prefixUrl: 'https://cdn.jsdelivr.net/npm/openseadragon@6.0.2/build/openseadragon/images/',
+      tileSources: tileSource,
+      showNavigator: true,
+      navigatorPosition: 'BOTTOM_RIGHT',
+      maxZoomPixelRatio: 2,
+      crossOriginPolicy: false,
+    });
+    viewer.addHandler('open-failed', (e) => fail('OSD open-failed: ' + (e.message || e)));
+
+    const render = () => {
+      const s = tileSource.getStats();
+      hud.textContent =
+        `HTJ2K ${info.fullW}×${info.fullH}  nc=${info.nc}  reduce 0..${info.maxReduce}\n` +
+        `OSD levels ${info.minLevel}..${info.maxLevel}  tile ${tileSize}\n` +
+        `codestream loaded in ${loadMs} ms (whole-file / Lever A)\n` +
+        `\n` +
+        `tiles decoded : ${s.tiles}\n` +
+        `last / avg ms : ${s.lastMs.toFixed(1)} / ${s.avgMs.toFixed(1)}\n` +
+        `max ms        : ${s.maxMs.toFixed(1)}`;
+    };
+    setInterval(render, 250);
+    render();
+  } catch (e) {
+    fail(e?.stack || e);
+  }
+})();
+</script>
+</body>
+</html>
