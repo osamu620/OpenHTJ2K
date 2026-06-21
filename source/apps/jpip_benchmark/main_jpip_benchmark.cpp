@@ -99,6 +99,8 @@ struct BenchResult {
   size_t full_precincts;
   size_t full_bytes;
   double full_decode_ms;
+  // Per-cone region decode (sum of 3 cones at their own discard level + window)
+  double cone_decode_ms;
 };
 
 std::vector<uint8_t> build_jpp(const std::vector<uint8_t> &cs, const CodestreamIndex &idx,
@@ -168,6 +170,54 @@ double decode_jpp(const std::vector<uint8_t> &jpp, const CodestreamIndex &idx, u
   open_htj2k::openhtj2k_decoder dec;
   dec.init(sparse_cs.data(), sparse_cs.size(), reduce_NL, 1);
   dec.parse();
+  const auto t0 = Clock::now();
+  try {
+    dec.invoke_line_based_stream(cb, w, h, d, s);
+  } catch (...) {
+    return -1.0;
+  }
+  const auto t1 = Clock::now();
+  return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+// Decode ONE foveation cone as its own region: reassemble only this cone's
+// precincts, decode at the cone's discard level (so the IDWT runs on the
+// reduced canvas, not the full one) with col/row range = the cone's window
+// (a no-op for whole-image cones).  Returns the invoke ms (the comparable
+// quantity to decode_jpp), or -1 on failure.
+//
+// This is the efficient foveated path: instead of one full-resolution decode
+// of the union of all cones (where the full-canvas IDWT dominates), each cone
+// pays only its own reduced-canvas / windowed IDWT.  A real viewer composites
+// the three into the final image; the bench just sums their decode times.
+double decode_cone(const std::vector<uint8_t> &cs, const CodestreamIndex &idx,
+                   const CodestreamLayout &layout, const PacketLocator &loc, const ViewWindow &vw,
+                   uint8_t global_reduce) {
+  // The cone's intrinsic discard level (from its fsiz_ratio), clamped so a cone
+  // is never decoded FINER than the globally requested resolution — at
+  // --reduce R a "full-res" fovea is still only viewed at R.  `shift` rescales
+  // the cone window from the fsiz(r_cone) grid onto the coarser decode grid.
+  const uint8_t r_cone = pick_discard_level(idx, vw);
+  const uint8_t r_eff  = std::max(r_cone, global_reduce);
+  const uint8_t shift  = static_cast<uint8_t>(r_eff - r_cone);
+  std::unordered_set<uint64_t> keep;
+  for (const auto &k : resolve_view_window(idx, vw)) keep.insert(idx.I(k.t, k.c, k.r, k.p_rc));
+  auto jpp = build_jpp(cs, idx, layout, loc, keep);
+  DataBinSet set;
+  parse_jpp_stream(jpp.data(), jpp.size(), &set);
+  std::vector<uint8_t> sparse;
+  if (reassemble_codestream_client(set, idx, sparse) != ReassembleStatus::Ok) return -1.0;
+
+  open_htj2k::openhtj2k_decoder dec;
+  dec.init(sparse.data(), sparse.size(), r_eff, 1);
+  dec.parse();
+  // vw.{ox,sx} are on the fsiz(r_cone) grid; >> shift maps them to fsiz(r_eff).
+  dec.set_col_range(vw.ox >> shift, ((vw.ox + vw.sx) >> shift) + 1u);
+  dec.set_row_range(vw.oy >> shift, ((vw.oy + vw.sy) >> shift) + 1u);
+  std::vector<uint32_t> w, h;
+  std::vector<uint8_t> d;
+  std::vector<bool> s;
+  auto cb       = [](uint32_t, int32_t *const *, uint16_t) {};
   const auto t0 = Clock::now();
   try {
     dec.invoke_line_based_stream(cb, w, h, d, s);
@@ -265,11 +315,14 @@ int main(int argc, char **argv) {
   std::printf("Full image: %zu precincts, %zu bytes (%.1f KB), decode=%.1f ms\n\n", full_set.size(),
               full_jpp.size(), static_cast<double>(full_jpp.size()) / 1024.0, full_decode_ms);
 
-  // Header
-  std::printf("%-10s %-10s │ %8s %10s %8s │ %8s %8s %8s │ %6s %6s\n", "gaze_x", "gaze_y", "precincts",
-              "bytes", "decode", "fovea_B", "para_B", "peri_B", "bw_%", "dec_%");
+  // Header.  "union" = current path (cones merged, decoded full-res at reduce 0);
+  // "per-cone" = each cone decoded at its own discard level + window, summed.
+  std::printf("%-10s %-10s │ %8s %10s %8s │ %8s %8s %8s │ %6s %6s │ %8s %6s\n", "gaze_x", "gaze_y",
+              "precincts", "bytes", "union", "fovea_B", "para_B", "peri_B", "bw_%", "dec_%", "per-cone",
+              "speedup");
   std::printf(
-      "──────────────────────┼──────────────────────────────┼──────────────────────────┼──────────────\n");
+      "──────────────────────┼──────────────────────────────┼──────────────────────────┼─────────"
+      "─────┼──────────────────\n");
 
   std::vector<BenchResult> results;
 
@@ -282,40 +335,40 @@ int main(int argc, char **argv) {
                                   : static_cast<uint32_t>(static_cast<uint64_t>(yi) * (ch - 1)
                                                           / static_cast<uint64_t>(grid_n - 1));
 
+      // The 3 foveation cones (fovea full-res, parafovea half-res, periphery
+      // whole-image 1/8-res).
+      const ViewWindow vw_fovea = make_view_window(*idx, gx, gy, fovea_r, 1.00f, false);
+      const ViewWindow vw_para  = make_view_window(*idx, gx, gy, para_r, para_ratio, false);
+      const ViewWindow vw_peri  = make_view_window(*idx, gx, gy, 0, peri_ratio, true);
+
       // Foveated I-set (union of 3 cones)
       std::unordered_set<uint64_t> fov_set;
       auto add = [&](const std::vector<PrecinctKey> &keys) {
         for (const auto &k : keys) fov_set.insert(idx->I(k.t, k.c, k.r, k.p_rc));
       };
-      add(resolve_view_window(*idx, make_view_window(*idx, gx, gy, fovea_r, 1.00f, false)));
-      add(resolve_view_window(*idx, make_view_window(*idx, gx, gy, para_r, para_ratio, false)));
-      add(resolve_view_window(*idx, make_view_window(*idx, gx, gy, 0, peri_ratio, true)));
+      add(resolve_view_window(*idx, vw_fovea));
+      add(resolve_view_window(*idx, vw_para));
+      add(resolve_view_window(*idx, vw_peri));
 
       // Per-cone byte counts
-      auto jpp_fovea = build_jpp(cs, *idx, layout, *locator, [&] {
+      auto cone_jpp = [&](const ViewWindow &vw) {
         std::unordered_set<uint64_t> s;
-        for (const auto &k :
-             resolve_view_window(*idx, make_view_window(*idx, gx, gy, fovea_r, 1.00f, false)))
-          s.insert(idx->I(k.t, k.c, k.r, k.p_rc));
-        return s;
-      }());
-      auto jpp_para  = build_jpp(cs, *idx, layout, *locator, [&] {
-        std::unordered_set<uint64_t> s;
-        for (const auto &k :
-             resolve_view_window(*idx, make_view_window(*idx, gx, gy, para_r, para_ratio, false)))
-          s.insert(idx->I(k.t, k.c, k.r, k.p_rc));
-        return s;
-      }());
-      auto jpp_peri  = build_jpp(cs, *idx, layout, *locator, [&] {
-        std::unordered_set<uint64_t> s;
-        for (const auto &k : resolve_view_window(*idx, make_view_window(*idx, gx, gy, 0, peri_ratio, true)))
-          s.insert(idx->I(k.t, k.c, k.r, k.p_rc));
-        return s;
-      }());
+        for (const auto &k : resolve_view_window(*idx, vw)) s.insert(idx->I(k.t, k.c, k.r, k.p_rc));
+        return build_jpp(cs, *idx, layout, *locator, s);
+      };
+      auto jpp_fovea = cone_jpp(vw_fovea);
+      auto jpp_para  = cone_jpp(vw_para);
+      auto jpp_peri  = cone_jpp(vw_peri);
 
-      // Combined foveated JPP for decode timing
+      // Combined foveated JPP for decode timing (union @ reduce 0 — the current path)
       auto fov_jpp         = build_jpp(cs, *idx, layout, *locator, fov_set);
       double fov_decode_ms = decode_jpp(fov_jpp, *idx, reduce_NL, rd);
+
+      // Per-cone region decode: each cone at its OWN discard level + window, summed
+      // (the efficient path — the full-canvas IDWT of the union is avoided).
+      double cone_decode_ms = decode_cone(cs, *idx, layout, *locator, vw_fovea, reduce_NL)
+                              + decode_cone(cs, *idx, layout, *locator, vw_para, reduce_NL)
+                              + decode_cone(cs, *idx, layout, *locator, vw_peri, reduce_NL);
 
       BenchResult r;
       r.gx             = gx;
@@ -329,36 +382,48 @@ int main(int argc, char **argv) {
       r.full_precincts = full_set.size();
       r.full_bytes     = full_jpp.size();
       r.full_decode_ms = full_decode_ms;
+      r.cone_decode_ms = cone_decode_ms;
       results.push_back(r);
 
-      double bw_pct  = 100.0 * static_cast<double>(r.fov_bytes) / static_cast<double>(r.full_bytes);
-      double dec_pct = 100.0 * r.fov_decode_ms / full_decode_ms;
+      double bw_pct       = 100.0 * static_cast<double>(r.fov_bytes) / static_cast<double>(r.full_bytes);
+      double dec_pct      = 100.0 * r.fov_decode_ms / full_decode_ms;
+      double cone_speedup = (cone_decode_ms > 0) ? r.fov_decode_ms / cone_decode_ms : 0.0;
 
-      std::printf("%-10u %-10u │ %8zu %10zu %7.1fms │ %8zu %8zu %8zu │ %5.1f%% %5.1f%%\n", gx, gy,
-                  r.fov_precincts, r.fov_bytes, r.fov_decode_ms, r.fovea_bytes, r.para_bytes, r.peri_bytes,
-                  bw_pct, dec_pct);
+      std::printf("%-10u %-10u │ %8zu %10zu %7.1fms │ %8zu %8zu %8zu │ %5.1f%% %5.1f%% │ %7.1fms %5.1fx\n",
+                  gx, gy, r.fov_precincts, r.fov_bytes, r.fov_decode_ms, r.fovea_bytes, r.para_bytes,
+                  r.peri_bytes, bw_pct, dec_pct, r.cone_decode_ms, cone_speedup);
     }
   }
 
   // Summary
   double avg_bw_pct = 0, avg_dec_pct = 0;
   size_t avg_precincts = 0;
+  double avg_union_ms = 0, avg_cone_ms = 0;
   for (const auto &r : results) {
     avg_bw_pct += 100.0 * static_cast<double>(r.fov_bytes) / static_cast<double>(r.full_bytes);
     avg_dec_pct += 100.0 * r.fov_decode_ms / full_decode_ms;
     avg_precincts += r.fov_precincts;
+    avg_union_ms += r.fov_decode_ms;
+    avg_cone_ms += r.cone_decode_ms;
   }
   const size_t n = results.size();
   avg_bw_pct /= static_cast<double>(n);
   avg_dec_pct /= static_cast<double>(n);
   avg_precincts /= n;
+  avg_union_ms /= static_cast<double>(n);
+  avg_cone_ms /= static_cast<double>(n);
 
   std::printf(
-      "──────────────────────┼──────────────────────────────┼──────────────────────────┼──────────────\n");
-  std::printf("AVERAGE    %-10s │ %8zu %10s %8s │ %8s %8s %8s │ %5.1f%% %5.1f%%\n", "", avg_precincts, "",
-              "", "", "", "", avg_bw_pct, avg_dec_pct);
-  std::printf("\nBandwidth reduction: %.1f%%  |  Decode speedup: %.1fx\n", 100.0 - avg_bw_pct,
-              full_decode_ms / (avg_dec_pct * full_decode_ms / 100.0));
+      "──────────────────────┼──────────────────────────────┼──────────────────────────┼─────────"
+      "─────┼──────────────────\n");
+  std::printf("AVERAGE    %-10s │ %8zu %10s %7.1fms │ %8s %8s %8s │ %5.1f%% %5.1f%% │ %7.1fms %5.1fx\n", "",
+              avg_precincts, "", avg_union_ms, "", "", "", avg_bw_pct, avg_dec_pct, avg_cone_ms,
+              avg_cone_ms > 0 ? avg_union_ms / avg_cone_ms : 0.0);
+  std::printf(
+      "\nBandwidth reduction: %.1f%%  |  Decode (union vs full): %.1fx  |  "
+      "Per-cone vs union decode: %.1fx (%.1f ms -> %.1f ms)\n",
+      100.0 - avg_bw_pct, full_decode_ms / (avg_dec_pct * full_decode_ms / 100.0),
+      avg_cone_ms > 0 ? avg_union_ms / avg_cone_ms : 0.0, avg_union_ms, avg_cone_ms);
 
   // CSV output
   if (!csv_path.empty()) {
