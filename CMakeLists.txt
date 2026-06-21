@@ -314,6 +314,13 @@ add_subdirectory(tests/tools/m2_precinct_bench)
 target_include_directories(m2_precinct_bench PUBLIC source/core/interface)
 target_link_libraries(m2_precinct_bench PUBLIC open_htj2k)
 
+# m2_leverb_bench: M2 Lever B spike — precinct-indexed byte-range region decode
+# (sparse-codestream reassembly) vs the Lever-A precinct filter (OSD eval).
+add_executable(m2_leverb_bench)
+add_subdirectory(tests/tools/m2_leverb_bench)
+target_include_directories(m2_leverb_bench PUBLIC source/core/interface)
+target_link_libraries(m2_leverb_bench PUBLIC open_htj2k)
+
 # Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
 add_executable(estimate_qfactor)
 add_subdirectory(source/apps/estimate_qfactor)
