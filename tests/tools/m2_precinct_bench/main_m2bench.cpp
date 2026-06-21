@@ -42,14 +42,25 @@
 #include "decoder.hpp"
 #include "precinct_index.hpp"
 #include "view_window.hpp"
+#ifdef __EMSCRIPTEN__
+  #include <emscripten/emscripten.h>
+#endif
 
 using open_htj2k::jpip::CodestreamIndex;
 using open_htj2k::jpip::PrecinctKey;
 using open_htj2k::jpip::ViewWindow;
 
+// Monotonic wall clock in ms.  Under Emscripten use emscripten_get_now()
+// (= performance.now(), high-resolution) — std::chrono::steady_clock can be
+// coarse / zero-resolution in a non-threaded Wasm build.  Keeps the timed code
+// path identical native/Wasm.
 static double now_ms() {
+#ifdef __EMSCRIPTEN__
+  return emscripten_get_now();
+#else
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch())
       .count();
+#endif
 }
 
 struct Args {
@@ -280,6 +291,68 @@ static bool verify_window(const uint8_t *data, size_t len, uint8_t li, uint32_t 
   }
   return true;
 }
+
+#ifdef __EMSCRIPTEN__
+// JS-callable entry point for the Wasm runtime (main() is not auto-run under
+// -sINVOKE_RUN=0; the runner drives this via ccall, like region_decode_bench).
+//
+// Times the three precinct-filter modes (A keep-all, B drop-all, C keep-window)
+// for one reduce level / window edge, after `warmup` untimed decodes, and
+// optionally byte-exact-verifies C vs A within the window.  Writes 11 doubles:
+//   [0]=A.total [1]=A.dec  [2]=B.total [3]=B.dec  [4]=C.total [5]=C.dec
+//   [6]=kept_precincts [7]=total_precincts [8]=level W [9]=level H
+//   [10]=verify (1=byte-exact pass, 0=fail; 1 when do_verify==0)
+// Returns 0 on success, 1 on probe/decode error, 2 on exception.
+extern "C" EMSCRIPTEN_KEEPALIVE int m2bench_modes(const uint8_t *data, int len, int reduce, int win,
+                                                  int threads, int iter, int warmup, int do_verify,
+                                                  double *out) {
+  for (int i = 0; i < 11; ++i) out[i] = 0.0;
+  try {
+    const size_t L   = static_cast<size_t>(len);
+    const uint8_t r  = static_cast<uint8_t>(reduce);
+    const uint32_t t = static_cast<uint32_t>(threads);
+    auto idx         = CodestreamIndex::build(data, L);
+
+    open_htj2k::openhtj2k_decoder dec;
+    dec.enable_single_tile_reuse(true);
+    DecodeBufs probe;
+    PFilter none;
+    decode_region(dec, data, L, r, t, 0, 0, 1, 1, false, none, probe);  // probe dims + warm reuse cache
+    if (probe.widths.empty() || probe.widths[0] == 0 || probe.heights[0] == 0) return 1;
+    const uint32_t W = probe.widths[0], H = probe.heights[0];
+    const uint32_t w = std::min<uint32_t>(win, W), h = std::min<uint32_t>(win, H);
+    const uint32_t x0 = (W > w) ? (W - w) / 2 : 0, y0 = (H > h) ? (H - h) / 2 : 0;
+
+    uint64_t kept = 0, total = 0;
+    PFilter fwin  = build_window_filter(*idx, W, H, x0, y0, w, h, kept, total);
+    PFilter fdrop = [](uint16_t, uint16_t, uint8_t, uint32_t) { return false; };
+
+    int verify = 1;
+    if (do_verify) verify = verify_window(data, L, r, t, x0, y0, w, h, fwin) ? 1 : 0;
+
+    double At, Ad, As, Bt, Bd, Bs, Ct, Cd, Cs;
+    measure(dec, data, L, r, t, x0, y0, w, h, none, warmup, iter, At, Ad, As);
+    measure(dec, data, L, r, t, x0, y0, w, h, fdrop, warmup, iter, Bt, Bd, Bs);
+    measure(dec, data, L, r, t, x0, y0, w, h, fwin, warmup, iter, Ct, Cd, Cs);
+
+    out[0]  = At;
+    out[1]  = Ad;
+    out[2]  = Bt;
+    out[3]  = Bd;
+    out[4]  = Ct;
+    out[5]  = Cd;
+    out[6]  = static_cast<double>(kept);
+    out[7]  = static_cast<double>(total);
+    out[8]  = static_cast<double>(W);
+    out[9]  = static_cast<double>(H);
+    out[10] = static_cast<double>(verify);
+    return 0;
+  } catch (std::exception &e) {
+    printf("m2bench_modes error: %s\n", e.what());
+    return 2;
+  }
+}
+#endif  // __EMSCRIPTEN__
 
 int main(int argc, char *argv[]) {
   Args a;
