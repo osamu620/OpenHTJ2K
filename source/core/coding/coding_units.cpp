@@ -254,9 +254,8 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
     }
     // Horizontal synthesis straight from the planar subband rows (planar
     // kernel where available, interleave + in-place kernels otherwise).
-    idwt_1d_row_from_planar(out, lp_ptr, hp_ptr, c->lp_width, c->hp_width, c->u0, c->u1,
-                            c->transformation, c->use_i32, c->h_pse_left, c->h_pse_right, c->col_lo,
-                            c->col_hi);
+    idwt_1d_row_from_planar(out, lp_ptr, hp_ptr, c->lp_width, c->hp_width, c->u0, c->u1, c->transformation,
+                            c->use_i32, c->h_pse_left, c->h_pse_right, c->col_lo, c->col_hi);
     return;
   }
 
@@ -305,9 +304,8 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
 
   // Horizontal synthesis straight from the planar subband rows (planar
   // kernel where available, interleave + in-place kernels otherwise).
-  idwt_1d_row_from_planar(out, lp_ptr, hp_ptr, c->lp_width, c->hp_width, c->u0, c->u1,
-                          c->transformation, c->use_i32, c->h_pse_left, c->h_pse_right, c->col_lo,
-                          c->col_hi);
+  idwt_1d_row_from_planar(out, lp_ptr, hp_ptr, c->lp_width, c->hp_width, c->u0, c->u1, c->transformation,
+                          c->use_i32, c->h_pse_left, c->h_pse_right, c->col_lo, c->col_hi);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -395,10 +393,10 @@ struct fdwt_level_sink_ctx {
   // reassigning the slot, and worker lambdas in enc_overlap_dispatch
   // fetch_sub when done.
   enum { MAX_STRIP_N = 8 };
-  int32_t strip_N                    = 1;
-  int32_t *strip_gbufs[MAX_STRIP_N]  = {};
-  std::atomic<int> *strip_remaining  = nullptr;
-  int32_t last_stamped_br            = -1;
+  int32_t strip_N                   = 1;
+  int32_t *strip_gbufs[MAX_STRIP_N] = {};
+  std::atomic<int> *strip_remaining = nullptr;
+  int32_t last_stamped_br           = -1;
 
   j2k_resolution *enc_cr           = nullptr;
   uint8_t enc_ROIshift             = 0;
@@ -565,12 +563,10 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
         vor              = vorrq_u32(vor, vorrq_u32(mask0, mask1));
         int32x4_t vone0  = vandq_s32(vreinterpretq_s32_u32(mask0), vone);
         int32x4_t vone1  = vandq_s32(vreinterpretq_s32_u32(mask1), vone);
-        v0               = vaddq_s32(vshlq_n_s32(vsubq_s32(v0, vone0), 1),
-                                     vandq_s32(s0, vreinterpretq_s32_u32(mask0)));
-        v1               = vaddq_s32(vshlq_n_s32(vsubq_s32(v1, vone1), 1),
-                                     vandq_s32(s1, vreinterpretq_s32_u32(mask1)));
-        v0               = vorrq_s32(v0, vandq_s32(vreinterpretq_s32_u32(mask0), vsentinel));
-        v1               = vorrq_s32(v1, vandq_s32(vreinterpretq_s32_u32(mask1), vsentinel));
+        v0 = vaddq_s32(vshlq_n_s32(vsubq_s32(v0, vone0), 1), vandq_s32(s0, vreinterpretq_s32_u32(mask0)));
+        v1 = vaddq_s32(vshlq_n_s32(vsubq_s32(v1, vone1), 1), vandq_s32(s1, vreinterpretq_s32_u32(mask1)));
+        v0 = vorrq_s32(v0, vandq_s32(vreinterpretq_s32_u32(mask0), vsentinel));
+        v1 = vorrq_s32(v1, vandq_s32(vreinterpretq_s32_u32(mask1), vsentinel));
         vst1q_s32(dp + col, v0);
         vst1q_s32(dp + col + 4, v1);
       }
@@ -605,11 +601,12 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
     // derives sigma from bit 31, so trailing rows must be zero to avoid
     // garbage significance.
     if (row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
-      const uint32_t QHx2 = (block->size.y + 7U) & ~7U;
+      const uint32_t QHx2      = (block->size.y + 7U) & ~7U;
       const int32_t trail_rows = static_cast<int32_t>(QHx2) - static_cast<int32_t>(block->size.y);
       if (trail_rows > 0) {
         memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
-               static_cast<size_t>(trail_rows) * static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+               static_cast<size_t>(trail_rows) * static_cast<size_t>(block->blksampl_stride)
+                   * sizeof(int32_t));
       }
     }
   }
@@ -655,8 +652,8 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
                                          _mm256_and_si256(s0, mask0));
         v1            = _mm256_add_epi32(_mm256_slli_epi32(_mm256_sub_epi32(v1, vone1), 1),
                                          _mm256_and_si256(s1, mask1));
-        v0 = _mm256_or_si256(v0, _mm256_and_si256(mask0, vsentinel));
-        v1 = _mm256_or_si256(v1, _mm256_and_si256(mask1, vsentinel));
+        v0            = _mm256_or_si256(v0, _mm256_and_si256(mask0, vsentinel));
+        v1            = _mm256_or_si256(v1, _mm256_and_si256(mask1, vsentinel));
         _mm256_storeu_si256((__m256i *)(dp + col), v0);
         _mm256_storeu_si256((__m256i *)(dp + col + 8), v1);
       }
@@ -679,12 +676,10 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
         vor              = vorrq_u32(vor, vorrq_u32(mask0, mask1));
         int32x4_t vone0  = vandq_s32(vreinterpretq_s32_u32(mask0), vone);
         int32x4_t vone1  = vandq_s32(vreinterpretq_s32_u32(mask1), vone);
-        v0               = vaddq_s32(vshlq_n_s32(vsubq_s32(v0, vone0), 1),
-                                     vandq_s32(s0, vreinterpretq_s32_u32(mask0)));
-        v1               = vaddq_s32(vshlq_n_s32(vsubq_s32(v1, vone1), 1),
-                                     vandq_s32(s1, vreinterpretq_s32_u32(mask1)));
-        v0               = vorrq_s32(v0, vandq_s32(vreinterpretq_s32_u32(mask0), vsentinel));
-        v1               = vorrq_s32(v1, vandq_s32(vreinterpretq_s32_u32(mask1), vsentinel));
+        v0 = vaddq_s32(vshlq_n_s32(vsubq_s32(v0, vone0), 1), vandq_s32(s0, vreinterpretq_s32_u32(mask0)));
+        v1 = vaddq_s32(vshlq_n_s32(vsubq_s32(v1, vone1), 1), vandq_s32(s1, vreinterpretq_s32_u32(mask1)));
+        v0 = vorrq_s32(v0, vandq_s32(vreinterpretq_s32_u32(mask0), vsentinel));
+        v1 = vorrq_s32(v1, vandq_s32(vreinterpretq_s32_u32(mask1), vsentinel));
         vst1q_s32(dp + col, v0);
         vst1q_s32(dp + col + 4, v1);
       }
@@ -711,11 +706,12 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
       memset(dp + w, 0,
              static_cast<size_t>(block->blksampl_stride - static_cast<size_t>(w)) * sizeof(int32_t));
     if (row_in_cblk == static_cast<int32_t>(block->size.y) - 1) {
-      const uint32_t QHx2 = (block->size.y + 7U) & ~7U;
+      const uint32_t QHx2      = (block->size.y + 7U) & ~7U;
       const int32_t trail_rows = static_cast<int32_t>(QHx2) - static_cast<int32_t>(block->size.y);
       if (trail_rows > 0) {
         memset(dp + static_cast<ptrdiff_t>(block->blksampl_stride), 0,
-               static_cast<size_t>(trail_rows) * static_cast<size_t>(block->blksampl_stride) * sizeof(int32_t));
+               static_cast<size_t>(trail_rows) * static_cast<size_t>(block->blksampl_stride)
+                   * sizeof(int32_t));
       }
     }
   }
@@ -2850,11 +2846,11 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
   ld->next_row  = 0;
 
   // Coarsest active resolution: resolution[0] (always LL0 regardless of reduce_NL).
-  j2k_resolution *r0 = access_resolution(0);
+  j2k_resolution *r0      = access_resolution(0);
   const bool use_i32_pipe = (transformation == 1);
   ld->ll0_buf.init(r0, 0, cb_h_val, ROIshift, ring_mode);
   ld->ll0_buf.dequant_i32 = use_i32_pipe;
-  ld->next_row = static_cast<int32_t>(r0->get_pos0().y);
+  ld->next_row            = static_cast<int32_t>(r0->get_pos0().y);
 
   if (NL_act == 0) {
     // Free full-tile sample buffers when ring mode is active (no IDWT needed).
@@ -3277,14 +3273,17 @@ void j2k_tile_component::reset_line_decode_cursors() {
     for (int32_t i = 0; i < n; ++i) {
       idwt_2d_state_rewind(&states[i]);
     }
-    // Restore ctxs' row_lo/row_hi to the full per-level extent so a narrow
-    // range left by a prior frame doesn't persist into a wide-range frame.
-    // (col_lo/col_hi have the same concern but are out of scope here; fix
-    //  alongside the col path when it's revisited.)
+    // Restore ctxs' row_lo/row_hi AND col_lo/col_hi to the full per-level
+    // extent so a narrow range left by a prior frame doesn't persist into a
+    // wide-range frame.  set_line_decode_{row,col}_range is re-applied after
+    // init_line_decode when the caller narrows the viewport.
     idwt_level_src_ctx *ctxs = ld->ctxs.get();
     for (int32_t i = 0; i < n; ++i) {
       ctxs[i].row_lo = states[i].v0;
       ctxs[i].row_hi = states[i].v1;
+      ctxs[i].col_lo = ctxs[i].u0;
+      ctxs[i].col_hi = ctxs[i].u1;
+      idwt_2d_state_set_col_range(&states[i], states[i].u0, states[i].u1);
     }
   }
 
@@ -5828,9 +5827,9 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   sprec_t *mct_scratch0 = nullptr, *mct_scratch1 = nullptr, *mct_scratch2 = nullptr;
   if (do_mct && xform == 1) {
     const size_t nb = sizeof(sprec_t) * static_cast<size_t>(mct_w + SIMD_PADDING);
-    mct_scratch0 = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
-    mct_scratch1 = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
-    mct_scratch2 = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
+    mct_scratch0    = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
+    mct_scratch1    = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
+    mct_scratch2    = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
   }
 
   // Pre-build FinalizeParams for the fused MCT+finalize path.
@@ -5877,17 +5876,17 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
         p1 = mct_scratch1;
         p2 = mct_scratch2;
       }
-      int32_t *dp0      = ci[0].cdst + ci[0].x_offset + (y + ci[0].y_offset) * ci[0].out_stride;
-      int32_t *dp1      = ci[1].cdst + ci[1].x_offset + (y + ci[1].y_offset) * ci[1].out_stride;
-      int32_t *dp2      = ci[2].cdst + ci[2].x_offset + (y + ci[2].y_offset) * ci[2].out_stride;
+      int32_t *dp0 = ci[0].cdst + ci[0].x_offset + (y + ci[0].y_offset) * ci[0].out_stride;
+      int32_t *dp1 = ci[1].cdst + ci[1].x_offset + (y + ci[1].y_offset) * ci[1].out_stride;
+      int32_t *dp2 = ci[2].cdst + ci[2].x_offset + (y + ci[2].y_offset) * ci[2].out_stride;
       fused_mct_finalize[xform_ct](p0, p1, p2, dp0, dp1, dp2, mct_w, fp);
       // Extra components beyond 3 (no MCT applied); finalize individually.
       for (uint16_t c = 3; c < NC; ++c) {
         if (y >= ci[c].csize_y) continue;
         tcomp[c].pull_line(rows[c].data());
-        const CInfo &I     = ci[c];
-        const bool is_i32  = (tcomp[c].get_transformation() == 1);
-        int32_t *dp        = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
+        const CInfo &I    = ci[c];
+        const bool is_i32 = (tcomp[c].get_transformation() == 1);
+        int32_t *dp       = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
         for (uint32_t n = 0; n < I.csize_x; ++n) {
           int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(rows[c].data())[n]
                              : static_cast<int32_t>(rows[c][n]);
@@ -5904,7 +5903,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
       // No MCT: each component is independent. Use pull_line_ref + per-component finalize.
       for (uint16_t c = 0; c < NC; ++c) {
         if (y >= ci[c].csize_y) continue;
-        sprec_t *spf_mut = tcomp[c].pull_line_ref();
+        sprec_t *spf_mut  = tcomp[c].pull_line_ref();
         const bool is_i32 = (tcomp[c].get_transformation() == 1);
         if (!is_i32) {
           // Float path: nothing to convert.
@@ -6005,16 +6004,9 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
                                         uint32_t col_hi_in, bool skip_mct) {
   const uint16_t NC = num_components;
 
-  // Apply per-level column range to each component's IDWT state chain.
-  // col_lo_in / col_hi_in are in the finest active-level output coord space
-  // (= subsampled-tcomp coords after reduce).  When the caller uses the
-  // defaults [0, UINT32_MAX) every level's col range resolves to the full
-  // [u0, u1] → idwt kernel loops unchanged from pre-patch behaviour.
-  if (col_lo_in != 0 || col_hi_in != UINT32_MAX) {
-    for (uint16_t c = 0; c < NC; ++c) {
-      tcomp[c].set_line_decode_col_range(col_lo_in, col_hi_in);
-    }
-  }
+  // (Per-level column range is applied AFTER init_line_decode, below — see the
+  // note there.  Applying it here was a silent no-op on a fresh decoder, where
+  // line_dec does not exist yet.)
 
   struct CInfo {
     int32_t DC_OFFSET, MAXVAL, MINVAL;
@@ -6072,6 +6064,20 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   }
 
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].init_line_decode(/*ring_mode=*/true);
+
+  // Apply per-level column range AFTER init_line_decode.  On a fresh decoder
+  // line_dec is built by init_line_decode (it does not exist before), and on
+  // the reuse path init_line_decode's reset_line_decode_cursors restores every
+  // level's col range to full — so the narrowing must be applied here or it is
+  // a silent no-op (fresh) / clobbered (reuse).  col_lo_in / col_hi_in are in
+  // the finest active-level output coord space; set_line_decode_col_range
+  // clamps per level to [u0, u1].  Defaults [0, UINT32_MAX) leave every level
+  // full (the reset above already guarantees that), so skip the call.
+  if (col_lo_in != 0 || col_hi_in != UINT32_MAX) {
+    for (uint16_t c = 0; c < NC; ++c) {
+      tcomp[c].set_line_decode_col_range(col_lo_in, col_hi_in);
+    }
+  }
 
   // Apply per-level row range only when row_lo narrows the lower bound, and
   // only AFTER init_line_decode — on the reuse path init_line_decode calls
