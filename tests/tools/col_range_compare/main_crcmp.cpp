@@ -196,14 +196,22 @@ extern "C" EMSCRIPTEN_KEEPALIVE int crc_validate(const uint8_t *data, int len, i
     decode_reuse(rdec, codestream, static_cast<uint8_t>(reduce_NL), false, 0, 0, ref, w, h, d, s);
     if (ref.empty() || w.empty()) return 0;  // reuse-ineligible fixture → skip
     const uint32_t W  = w[0];
-    const uint32_t lo = (W / 2 > 200) ? W / 2 - 200 : 0;
-    const uint32_t hi = std::min(W / 2 + 200, W);
-    std::vector<std::vector<int32_t>> got;
-    std::vector<uint32_t> gw, gh;
-    std::vector<uint8_t> gd;
-    std::vector<bool> gs;
-    decode_reuse(rdec, codestream, static_cast<uint8_t>(reduce_NL), true, lo, hi, got, gw, gh, gd, gs);
-    return compare_col_window(ref, got, w, h, lo, hi, "wasm_reuse", "wasm") ? 0 : 1;
+    const uint32_t hf = W / 2, qt = W / 4;
+    // Sweep component edges + interior + narrow (same set as the native probe)
+    // so the SIMD sub-range kernels' boundary handling is exercised under WASM.
+    const uint32_t lo[6] = {(hf > 200) ? hf - 200 : 0, 0, hf, (W > 50) ? W - 50 : 0, 0, hf};
+    const uint32_t hi[6] = {std::min(hf + 200, W), hf, W, W, qt + 1, std::min(hf + 37, W)};
+    for (int k = 0; k < 6; ++k) {
+      if (lo[k] >= hi[k]) continue;
+      std::vector<std::vector<int32_t>> got;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
+      decode_reuse(rdec, codestream, static_cast<uint8_t>(reduce_NL), true, lo[k], hi[k], got, gw, gh, gd,
+                   gs);
+      if (!compare_col_window(ref, got, w, h, lo[k], hi[k], "wasm_reuse", "wasm")) return 1;
+    }
+    return 0;
   }
   if (!decode_with_col_range(codestream, static_cast<uint8_t>(reduce_NL), false, 0, 0, ref, w, h, d, s))
     return 1;
@@ -260,25 +268,58 @@ int main(int argc, char *argv[]) {
       return 0;
     }
     const uint32_t W2 = rw[0];
-    const uint32_t lo = a.have_col ? a.col_lo : (W2 / 2 > 200 ? W2 / 2 - 200 : 0);
-    const uint32_t hi = a.have_col ? std::min(a.col_hi, W2) : std::min(W2 / 2 + 200, W2);
-    std::vector<std::vector<int32_t>> rgot;
-    std::vector<uint32_t> gw, gh;
-    std::vector<uint8_t> gd;
-    std::vector<bool> gs;
-    // 3rd call: windowed decode on the warm reuse path.
-    decode_reuse(rdec, codestream, a.reduce_NL, true, lo, hi, rgot, gw, gh, gd, gs);
-    const bool rok = compare_col_window(rref, rgot, rw, rh, lo, hi, "reuse_window", a.infile.c_str());
-    printf("%s: %s reuse-path window [%u,%u) of W=%u\n", rok ? "PASS" : "FAIL", a.infile.c_str(), lo, hi,
+    // Window set.  With an explicit -col, test just that window.  Otherwise
+    // sweep component edges + interior + narrow: the sub-range horizontal IDWT
+    // must be byte-exact at the COMPONENT boundary (col_lo==u0 / col_hi==u1) as
+    // well as for interior windows.  A single centered window does not exercise
+    // the boundary case and lets edge-only regressions slip through.
+    struct CW {
+      const char *label;
+      uint32_t lo, hi;
+    };
+    std::vector<CW> wins;
+    if (a.have_col) {
+      wins.push_back({"explicit", a.col_lo, std::min(a.col_hi, W2)});
+    } else {
+      const uint32_t h = W2 / 2, q = W2 / 4;
+      wins = {
+          {"centered", (h > 200) ? h - 200 : 0, std::min(h + 200, W2)},
+          {"left_edge", 0, h},
+          {"right_edge", h, W2},
+          {"to_right_edge", (W2 > 50) ? W2 - 50 : 0, W2},
+          {"from_left_edge", 0, q + 1},
+          {"narrow", h, std::min(h + 37, W2)},
+      };
+    }
+    bool rok = true;
+    for (const CW &cw : wins) {
+      if (cw.lo >= cw.hi) continue;  // degenerate window
+      std::vector<std::vector<int32_t>> rgot;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
+      // Windowed decode on the warm reuse path (each call re-inits the cache).
+      decode_reuse(rdec, codestream, a.reduce_NL, true, cw.lo, cw.hi, rgot, gw, gh, gd, gs);
+      if (!compare_col_window(rref, rgot, rw, rh, cw.lo, cw.hi, cw.label, a.infile.c_str())) {
+        rok = false;
+        break;
+      }
+    }
+    printf("%s: %s reuse-path %zu windows of W=%u\n", rok ? "PASS" : "FAIL", a.infile.c_str(), wins.size(),
            W2);
     if (rok && a.iter > 0) {
+      const uint32_t tlo = wins.empty() ? 0 : wins[0].lo, thi = wins.empty() ? 0 : wins[0].hi;
+      std::vector<std::vector<int32_t>> rgot;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
       auto t0 = std::chrono::steady_clock::now();
       for (int i = 0; i < a.iter; ++i) {
-        decode_reuse(rdec, codestream, a.reduce_NL, true, lo, hi, rgot, gw, gh, gd, gs);
+        decode_reuse(rdec, codestream, a.reduce_NL, true, tlo, thi, rgot, gw, gh, gd, gs);
       }
       auto t1         = std::chrono::steady_clock::now();
       const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / a.iter;
-      printf("TIMING(reuse): window [%u,%u) of W=%u, %d iters, %.3f ms/iter\n", lo, hi, W2, a.iter, ms);
+      printf("TIMING(reuse): window [%u,%u) of W=%u, %d iters, %.3f ms/iter\n", tlo, thi, W2, a.iter, ms);
     }
     return rok ? 0 : 1;
   }

@@ -40,16 +40,16 @@
 // Forward declarations for static ATK filter functions defined later in this file.
 [[maybe_unused]] static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, int32_t left, int32_t u_i0,
                                                          int32_t u_i1);
-[[maybe_unused]] static void idwt_irrev53_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1,
-                                                       int32_t v0, int32_t v1, int32_t stride,
-                                                       sprec_t *pse_scratch, sprec_t **buf_scratch);
+[[maybe_unused]] static void idwt_irrev53_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0,
+                                                       int32_t v1, int32_t stride, sprec_t *pse_scratch,
+                                                       sprec_t **buf_scratch);
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
-static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_wasm,
-                                                           idwt_1d_filtr_rev53_fixed_wasm};
-static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_wasm,
-                                                           idwt_rev_ver_sr_fixed_wasm};
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2]   = {idwt_1d_filtr_irrev97_fixed_wasm,
+                                                            idwt_1d_filtr_rev53_fixed_wasm};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]    = {idwt_irrev_ver_sr_fixed_wasm,
+                                                            idwt_rev_ver_sr_fixed_wasm};
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_irrev53_fn = idwt_1d_filtr_irrev53_fixed;
-static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn    = idwt_irrev53_ver_sr_fixed;
+static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn     = idwt_irrev53_ver_sr_fixed;
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
 static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_wasm;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
@@ -57,16 +57,16 @@ static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_wasm;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_wasm;
 typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
 typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
-static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_wasm;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_wasm;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_wasm;
+static idwt_1d_filtr_i32_fn_t idwt_1d_filtr_rev53_i32_fn      = idwt_1d_filtr_rev53_i32_wasm;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_wasm;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_wasm;
 #elif defined(OPENHTJ2K_ENABLE_AVX512)
-static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx512,
-                                                           idwt_1d_filtr_rev53_fixed_avx512};
-static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_avx512,
-                                                           idwt_rev_ver_sr_fixed_avx512};
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2]   = {idwt_1d_filtr_irrev97_fixed_avx512,
+                                                            idwt_1d_filtr_rev53_fixed_avx512};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]    = {idwt_irrev_ver_sr_fixed_avx512,
+                                                            idwt_rev_ver_sr_fixed_avx512};
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_irrev53_fn = idwt_1d_filtr_irrev53_fixed_avx512;
-static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn    = idwt_irrev53_ver_sr_fixed_avx512;
+static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn     = idwt_irrev53_ver_sr_fixed_avx512;
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
 static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_avx512;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
@@ -74,16 +74,16 @@ static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_avx512;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_avx512;
 typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
 typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
-static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_avx512;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_avx512;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_avx512;
+static idwt_1d_filtr_i32_fn_t idwt_1d_filtr_rev53_i32_fn      = idwt_1d_filtr_rev53_i32_avx512;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_avx512;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_avx512;
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_neon,
-                                                          idwt_1d_filtr_rev53_fixed_neon};
-static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_neon,
-                                                          idwt_rev_ver_sr_fixed_neon};
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2]   = {idwt_1d_filtr_irrev97_fixed_neon,
+                                                            idwt_1d_filtr_rev53_fixed_neon};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]    = {idwt_irrev_ver_sr_fixed_neon,
+                                                            idwt_rev_ver_sr_fixed_neon};
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_irrev53_fn = idwt_1d_filtr_irrev53_fixed_neon;
-static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn    = idwt_irrev53_ver_sr_fixed_neon;
+static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn     = idwt_irrev53_ver_sr_fixed_neon;
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
 static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_neon;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
@@ -91,16 +91,16 @@ static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_neon;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_neon;
 typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
 typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
-static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_neon;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_neon;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_neon;
+static idwt_1d_filtr_i32_fn_t idwt_1d_filtr_rev53_i32_fn      = idwt_1d_filtr_rev53_i32_neon;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_neon;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_neon;
 #elif defined(OPENHTJ2K_ENABLE_AVX2)
-static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_avx2,
-                                                          idwt_1d_filtr_rev53_fixed_avx2};
-static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed_avx2,
-                                                          idwt_rev_ver_sr_fixed_avx2};
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2]   = {idwt_1d_filtr_irrev97_fixed_avx2,
+                                                            idwt_1d_filtr_rev53_fixed_avx2};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]    = {idwt_irrev_ver_sr_fixed_avx2,
+                                                            idwt_rev_ver_sr_fixed_avx2};
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_irrev53_fn = idwt_1d_filtr_irrev53_fixed_avx2;
-static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn    = idwt_irrev53_ver_sr_fixed_avx2;
+static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn     = idwt_irrev53_ver_sr_fixed_avx2;
 typedef void (*adv_irrev_step_fn)(int32_t, float *, float *, float *, float);
 static adv_irrev_step_fn adv_irrev_ver_step_fn = idwt_irrev_ver_step_fixed_avx2;
 typedef void (*adv_rev_step_fn)(int32_t, const float *, const float *, float *);
@@ -108,15 +108,15 @@ static adv_rev_step_fn adv_rev_ver_lp_step_fn = idwt_rev_ver_lp_step_avx2;
 static adv_rev_step_fn adv_rev_ver_hp_step_fn = idwt_rev_ver_hp_step_avx2;
 typedef void (*idwt_1d_filtr_i32_fn_t)(int32_t *, int32_t, int32_t, int32_t);
 typedef void (*adv_idwt_rev_step_i32_fn_t)(int32_t, const int32_t *, const int32_t *, int32_t *);
-static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_avx2;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_avx2;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_avx2;
+static idwt_1d_filtr_i32_fn_t idwt_1d_filtr_rev53_i32_fn      = idwt_1d_filtr_rev53_i32_avx2;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_lp_step_i32_fn = idwt_rev_ver_lp_step_i32_avx2;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_hp_step_i32_fn = idwt_rev_ver_hp_step_i32_avx2;
 #else
-static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed,
-                                                          idwt_1d_filtr_rev53_fixed};
-static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]  = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
+static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2]   = {idwt_1d_filtr_irrev97_fixed,
+                                                            idwt_1d_filtr_rev53_fixed};
+static idwt_ver_filtd_func_fixed idwt_ver_sr_fixed[2]    = {idwt_irrev_ver_sr_fixed, idwt_rev_ver_sr_fixed};
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_irrev53_fn = idwt_1d_filtr_irrev53_fixed;
-static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn    = idwt_irrev53_ver_sr_fixed;
+static idwt_ver_filtd_func_fixed idwt_ver_irrev53_fn     = idwt_irrev53_ver_sr_fixed;
 static void adv_irrev_ver_step_scalar(int32_t n, float *prev, float *next, float *tgt, float coeff) {
   for (int32_t i = 0; i < n; ++i) tgt[i] -= coeff * (prev[i] + next[i]);
 }
@@ -137,20 +137,20 @@ static void idwt_1d_filtr_rev53_i32_scalar(int32_t *X, int32_t left, int32_t u_i
   const int32_t start  = u_i0 / 2;
   const int32_t stop   = u_i1 / 2;
   const int32_t offset = left - u_i0 % 2;
-  for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2)
-    X[n] -= (X[n - 1] + X[n + 1] + 2) >> 2;
-  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2)
-    X[n + 1] += (X[n] + X[n + 2]) >> 1;
+  for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) X[n] -= (X[n - 1] + X[n + 1] + 2) >> 2;
+  for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2) X[n + 1] += (X[n] + X[n + 2]) >> 1;
 }
-static void adv_idwt_rev_lp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+static void adv_idwt_rev_lp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next,
+                                            int32_t *tgt) {
   for (int32_t i = 0; i < n; ++i) tgt[i] -= (prev[i] + next[i] + 2) >> 2;
 }
-static void adv_idwt_rev_hp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
+static void adv_idwt_rev_hp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next,
+                                            int32_t *tgt) {
   for (int32_t i = 0; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
 }
-static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_scalar;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = adv_idwt_rev_lp_step_i32_scalar;
-static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_hp_step_i32_fn = adv_idwt_rev_hp_step_i32_scalar;
+static idwt_1d_filtr_i32_fn_t idwt_1d_filtr_rev53_i32_fn      = idwt_1d_filtr_rev53_i32_scalar;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_lp_step_i32_fn = adv_idwt_rev_lp_step_i32_scalar;
+static adv_idwt_rev_step_i32_fn_t adv_idwt_rev_hp_step_i32_fn = adv_idwt_rev_hp_step_i32_scalar;
 #endif
 
 void idwt_1d_filtr_irrev97_fixed(sprec_t *X, const int32_t left, const int32_t u_i0, const int32_t u_i1) {
@@ -233,8 +233,7 @@ void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
 // hold for the first/last rows of a tile. Interior rows always satisfied it because the slack
 // regions overlap adjacent rows' data — save/restore below preserves them.
 static inline void idwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int32_t right,
-                                      const int32_t i0, const int32_t i1,
-                                      const uint8_t transformation) {
+                                      const int32_t i0, const int32_t i1, const uint8_t transformation) {
   const int32_t width = i1 - i0;
   // Save regions that the filter will temporarily overwrite with PSE data or SIMD tail writes.
   // left_save[8] covers the dwt_pse_fill_inplace_simd write window (8 floats per side).
@@ -248,10 +247,8 @@ static inline void idwt_1d_sr_inplace(sprec_t *in, const int32_t left, const int
   if (width >= 9) {
     dwt_pse_fill_inplace_simd(in, width);
   } else {
-    for (int32_t i = 1; i <= left; ++i)
-      in[-i] = in[PSEo(i0 - i, i0, i1)];
-    for (int32_t i = 1; i <= right; ++i)
-      in[width + i - 1] = in[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
+    for (int32_t i = 1; i <= left; ++i) in[-i] = in[PSEo(i0 - i, i0, i1)];
+    for (int32_t i = 1; i <= right; ++i) in[width + i - 1] = in[PSEo(i1 - i0 + i - 1 + i0, i0, i1)];
   }
   // Filter in-place: in-left is the extended buffer (left PSE | data | right PSE).
   if (transformation < 2)
@@ -268,7 +265,7 @@ static void idwt_hor_sr_fixed(sprec_t *in, const int32_t u0, const int32_t u1, c
   constexpr int32_t num_pse_i0[2][2] = {{3, 1}, {4, 2}};
   constexpr int32_t num_pse_i1[2][2] = {{4, 2}, {3, 1}};
   // ATK (transformation>=2) uses same PSE lengths as rev53 (CDF 5/3, 2-step filter)
-  const uint8_t eff = (transformation < 2) ? transformation : 1;
+  const uint8_t eff   = (transformation < 2) ? transformation : 1;
   const int32_t left  = num_pse_i0[u0 % 2][eff];
   const int32_t right = num_pse_i1[u1 % 2][eff];
 
@@ -461,13 +458,11 @@ static void idwt_irrev53_ver_sr_fixed(sprec_t *in, const int32_t u0, const int32
       const int32_t ce = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       // Step 1: LP -= 0.25*(HP_above + HP_below)  [original HP values]
       for (int32_t k = 0, n = offset; k < lp_count; ++k, n += 2) {
-        for (int32_t col = cs; col < ce; ++col)
-          buf[n][col] -= 0.25f * (buf[n - 1][col] + buf[n + 1][col]);
+        for (int32_t col = cs; col < ce; ++col) buf[n][col] -= 0.25f * (buf[n - 1][col] + buf[n + 1][col]);
       }
       // Step 2: HP += 0.5*(LP_mod_above + LP_mod_below)  [modified LP from step 1]
       for (int32_t k = 0, n = offset; k < hp_count; ++k, n += 2) {
-        for (int32_t col = cs; col < ce; ++col)
-          buf[n + 1][col] += 0.5f * (buf[n][col] + buf[n + 2][col]);
+        for (int32_t col = cs; col < ce; ++col) buf[n + 1][col] += 0.5f * (buf[n][col] + buf[n + 2][col]);
       }
     }
   }
@@ -490,30 +485,42 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   // WASM-SIMD interleave: use wasm_i32x4_shuffle instead of vzip1q/vzip2q.
   auto wasm_interleave_pair = [](sprec_t *buf, sprec_t *bp0, sprec_t *bp1, int32_t s0, int32_t s1,
-                                  int32_t common_len, int32_t vstart_b, int32_t vstop_b, int32_t voffset_b,
-                                  int32_t stride) {
+                                 int32_t common_len, int32_t vstart_b, int32_t vstop_b, int32_t voffset_b,
+                                 int32_t stride) {
     for (int32_t v = 0, vb = vstart_b; vb < vstop_b; ++vb, ++v) {
       sprec_t *dp    = buf + (2 * v + voffset_b) * stride;
       size_t len     = static_cast<size_t>(common_len);
       sprec_t *line0 = bp0 + static_cast<ptrdiff_t>(v) * s0;
       sprec_t *line1 = bp1 + static_cast<ptrdiff_t>(v) * s1;
       for (; len >= 8; len -= 8) {
-        v128_t a0 = wasm_v128_load(line0);     v128_t b0 = wasm_v128_load(line1);
-        v128_t a1 = wasm_v128_load(line0 + 4); v128_t b1 = wasm_v128_load(line1 + 4);
-        wasm_v128_store(dp,      wasm_i32x4_shuffle(a0, b0, 0, 4, 1, 5));
-        wasm_v128_store(dp + 4,  wasm_i32x4_shuffle(a0, b0, 2, 6, 3, 7));
-        wasm_v128_store(dp + 8,  wasm_i32x4_shuffle(a1, b1, 0, 4, 1, 5));
+        v128_t a0 = wasm_v128_load(line0);
+        v128_t b0 = wasm_v128_load(line1);
+        v128_t a1 = wasm_v128_load(line0 + 4);
+        v128_t b1 = wasm_v128_load(line1 + 4);
+        wasm_v128_store(dp, wasm_i32x4_shuffle(a0, b0, 0, 4, 1, 5));
+        wasm_v128_store(dp + 4, wasm_i32x4_shuffle(a0, b0, 2, 6, 3, 7));
+        wasm_v128_store(dp + 8, wasm_i32x4_shuffle(a1, b1, 0, 4, 1, 5));
         wasm_v128_store(dp + 12, wasm_i32x4_shuffle(a1, b1, 2, 6, 3, 7));
-        line0 += 8; line1 += 8; dp += 16;
+        line0 += 8;
+        line1 += 8;
+        dp += 16;
       }
-      for (; len > 0; --len) { *dp++ = *line0++; *dp++ = *line1++; }
+      for (; len > 0; --len) {
+        *dp++ = *line0++;
+        *dp++ = *line1++;
+      }
     }
   };
   {
     const int32_t len0 = ustop[0] - ustart[0], len1 = ustop[1] - ustart[1];
     const int32_t common_len = len0 < len1 ? len0 : len1;
-    sprec_t *bp0 = sp[0]; sprec_t *bp1 = sp[1]; int32_t s0 = stride2[0], s1 = stride2[1];
-    if (uoffset[0] > uoffset[1]) { std::swap(bp0, bp1); std::swap(s0, s1); }
+    sprec_t *bp0             = sp[0];
+    sprec_t *bp1             = sp[1];
+    int32_t s0 = stride2[0], s1 = stride2[1];
+    if (uoffset[0] > uoffset[1]) {
+      std::swap(bp0, bp1);
+      std::swap(s0, s1);
+    }
     wasm_interleave_pair(buf, bp0, bp1, s0, s1, common_len, vstart[0], vstop[0], voffset[0], stride);
     for (uint8_t b = 0; b < 2; ++b) {
       if ((ustop[b] - ustart[b]) > common_len) {
@@ -527,8 +534,13 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
   {
     const int32_t len2 = ustop[2] - ustart[2], len3 = ustop[3] - ustart[3];
     const int32_t common_len = len2 < len3 ? len2 : len3;
-    sprec_t *bp2 = sp[2]; sprec_t *bp3 = sp[3]; int32_t s2 = stride2[2], s3 = stride2[3];
-    if (uoffset[2] > uoffset[3]) { std::swap(bp2, bp3); std::swap(s2, s3); }
+    sprec_t *bp2             = sp[2];
+    sprec_t *bp3             = sp[3];
+    int32_t s2 = stride2[2], s3 = stride2[3];
+    if (uoffset[2] > uoffset[3]) {
+      std::swap(bp2, bp3);
+      std::swap(s2, s3);
+    }
     wasm_interleave_pair(buf, bp2, bp3, s2, s3, common_len, vstart[2], vstop[2], voffset[2], stride);
     for (uint8_t b = 2; b < 4; ++b) {
       if ((ustop[b] - ustart[b]) > common_len) {
@@ -768,8 +780,8 @@ static void idwt_2d_interleave_fixed(sprec_t *buf, sprec_t *LL, sprec_t *HL, spr
 void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sprec_t *HH, const int32_t u0,
                       const int32_t u1, const int32_t v0, const int32_t v1, const uint8_t transformation,
                       sprec_t *pse_scratch, sprec_t **buf_scratch) {
-  const int32_t stride     = round_up(u1 - u0, 32);
-  sprec_t *src             = nextLL;
+  const int32_t stride = round_up(u1 - u0, 32);
+  sprec_t *src         = nextLL;
   idwt_2d_interleave_fixed(src, LL, HL, LH, HH, u0, u1, v0, v1, stride);
   idwt_hor_sr_fixed(src, u0, u1, v0, v1, transformation, stride);
 
@@ -781,8 +793,8 @@ void idwt_2d_sr_fixed(sprec_t *nextLL, sprec_t *LL, sprec_t *HL, sprec_t *LH, sp
 }
 
 void idwt_horz_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *H, const int32_t u0,
-                              const int32_t u1, const int32_t v0, const int32_t v1,
-                              const uint8_t transformation) {
+                             const int32_t u1, const int32_t v0, const int32_t v1,
+                             const uint8_t transformation) {
   if (u0 >= u1 || v0 >= v1) return;
   const int32_t width     = u1 - u0;
   const int32_t stride    = round_up(width, 32);
@@ -807,8 +819,8 @@ void idwt_horz_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *
 }
 
 void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *H, const int32_t u0,
-                              const int32_t u1, const int32_t v0, const int32_t v1,
-                              const uint8_t transformation, sprec_t *pse_scratch, sprec_t **buf_scratch) {
+                             const int32_t u1, const int32_t v0, const int32_t v1,
+                             const uint8_t transformation, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   if (u0 >= u1 || v0 >= v1) return;
   const int32_t width  = u1 - u0;
   const int32_t stride = round_up(width, 32);
@@ -818,9 +830,11 @@ void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *
   for (int32_t b = 0, il = 0, ih = 0; b < height; ++b) {
     sprec_t *out_row = nextLL + static_cast<ptrdiff_t>(b) * stride;
     if (b % 2 == v_par)
-      memcpy(out_row, LL + static_cast<ptrdiff_t>(il++) * stride, sizeof(sprec_t) * static_cast<size_t>(width));
+      memcpy(out_row, LL + static_cast<ptrdiff_t>(il++) * stride,
+             sizeof(sprec_t) * static_cast<size_t>(width));
     else
-      memcpy(out_row, H + static_cast<ptrdiff_t>(ih++) * stride, sizeof(sprec_t) * static_cast<size_t>(width));
+      memcpy(out_row, H + static_cast<ptrdiff_t>(ih++) * stride,
+             sizeof(sprec_t) * static_cast<size_t>(width));
   }
   if (transformation < 2)
     idwt_ver_sr_fixed[transformation](nextLL, u0, u1, v0, v1, stride, pse_scratch, buf_scratch);
@@ -832,8 +846,8 @@ void idwt_vert_only_sr_fixed(sprec_t *nextLL, const sprec_t *LL, const sprec_t *
 // after the data area (ring buffer slots with IDWT_RING_PSE_LEFT prefix).
 // row[-left..-1] and row[width..width+right-1] must be writable (within the slot's PSE areas).
 // After this call, row[0..u1-u0-1] holds the filtered output.
-void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right,
-                         const int32_t u0, const int32_t u1, const uint8_t transformation) {
+void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right, const int32_t u0,
+                         const int32_t u1, const uint8_t transformation) {
   const int32_t width = u1 - u0;
   if (width >= 9) {
     // Constant-pattern SIMD reflection — see dwt_pse_fill_inplace_simd in dwt.hpp.
@@ -842,10 +856,8 @@ void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right,
     dwt_pse_fill_inplace_simd(row, width);
   } else {
     // Narrow-row scalar fallback (rare in practice; widths < 9 only at small subbands).
-    for (int32_t i = 1; i <= left; ++i)
-      row[-i] = row[PSEo(u0 - i, u0, u1)];
-    for (int32_t i = 1; i <= right; ++i)
-      row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+    for (int32_t i = 1; i <= left; ++i) row[-i] = row[PSEo(u0 - i, u0, u1)];
+    for (int32_t i = 1; i <= right; ++i) row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
   }
   // Apply horizontal IDWT filter in-place (X = row - left, data at X[left..left+width-1]).
   if (transformation < 2)
@@ -854,18 +866,16 @@ void idwt_1d_row_inplace(sprec_t *row, const int32_t left, const int32_t right,
     idwt_1d_filtr_irrev53_fn(row - left, left, u0, u1);
 }
 
-void idwt_1d_row_inplace_i32(int32_t *row, const int32_t left, const int32_t right,
-                             const int32_t u0, const int32_t u1) {
+void idwt_1d_row_inplace_i32(int32_t *row, const int32_t left, const int32_t right, const int32_t u0,
+                             const int32_t u1) {
   const int32_t width = u1 - u0;
   // PSE fill using integer intrinsics — avoids strict-aliasing UB from
   // applying float-typed SIMD to int32_t data.
   if (width >= 9) {
     dwt_pse_fill_inplace_i32(row, width);
   } else {
-    for (int32_t i = 1; i <= left; ++i)
-      row[-i] = row[PSEo(u0 - i, u0, u1)];
-    for (int32_t i = 1; i <= right; ++i)
-      row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+    for (int32_t i = 1; i <= left; ++i) row[-i] = row[PSEo(u0 - i, u0, u1)];
+    for (int32_t i = 1; i <= right; ++i) row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
   }
   idwt_1d_filtr_rev53_i32_fn(row - left, left, u0, u1);
 }
@@ -879,15 +889,14 @@ void idwt_1d_row_inplace_i32(int32_t *row, const int32_t left, const int32_t rig
 // or upper edge, which matches the full-width result under a zero-padded
 // input — the JPIP-sparse invariant).  buf_lo / buf_hi are in the same
 // buffer-offset frame as the existing kernel's internal `n`.
-static void idwt_1d_filtr_irrev97_fixed_range(sprec_t *X, const int32_t left,
-                                              const int32_t u_i0, const int32_t u_i1,
-                                              const int32_t buf_lo, const int32_t buf_hi) {
+static void idwt_1d_filtr_irrev97_fixed_range(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                              const int32_t u_i1, const int32_t buf_lo,
+                                              const int32_t buf_hi) {
   const int32_t start  = u_i0 / 2;
   const int32_t stop   = u_i1 / 2;
   const int32_t offset = left - u_i0 % 2;
 
-  auto clip = [&](int32_t n_init, int32_t n_last_incl,
-                  int32_t &ns, int32_t &ne) {
+  auto clip = [&](int32_t n_init, int32_t n_last_incl, int32_t &ns, int32_t &ne) {
     // Return the first / last n in [buf_lo, buf_hi] that is reachable from
     // n_init by step +2 and lies within [n_init, n_last_incl].
     ns = (buf_lo > n_init) ? buf_lo : n_init;
@@ -920,15 +929,14 @@ static void idwt_1d_filtr_irrev97_fixed_range(sprec_t *X, const int32_t left,
 }
 
 // Sub-range 5/3 IDWT.  Same contract as idwt_1d_filtr_irrev97_fixed_range.
-static void idwt_1d_filtr_rev53_fixed_range(sprec_t *X, const int32_t left,
-                                            const int32_t u_i0, const int32_t u_i1,
-                                            const int32_t buf_lo, const int32_t buf_hi) {
+static void idwt_1d_filtr_rev53_fixed_range(sprec_t *X, const int32_t left, const int32_t u_i0,
+                                            const int32_t u_i1, const int32_t buf_lo,
+                                            const int32_t buf_hi) {
   const int32_t start  = u_i0 / 2;
   const int32_t stop   = u_i1 / 2;
   const int32_t offset = left - u_i0 % 2;
 
-  auto clip = [&](int32_t n_init, int32_t n_last_incl,
-                  int32_t &ns, int32_t &ne) {
+  auto clip = [&](int32_t n_init, int32_t n_last_incl, int32_t &ns, int32_t &ne) {
     ns = (buf_lo > n_init) ? buf_lo : n_init;
     if (((ns - n_init) & 1) != 0) ns += 1;
     ne = (buf_hi < n_last_incl) ? buf_hi : n_last_incl;
@@ -948,9 +956,9 @@ static void idwt_1d_filtr_rev53_fixed_range(sprec_t *X, const int32_t left,
   }
 }
 
-void idwt_1d_row_inplace_range(sprec_t *row, const int32_t left, const int32_t right,
-                               const int32_t u0, const int32_t u1, const uint8_t transformation,
-                               const int32_t col_lo, const int32_t col_hi) {
+void idwt_1d_row_inplace_range(sprec_t *row, const int32_t left, const int32_t right, const int32_t u0,
+                               const int32_t u1, const uint8_t transformation, const int32_t col_lo,
+                               const int32_t col_hi) {
   const int32_t width = u1 - u0;
   // Default / caller asked for full row → go through the existing fast path.
   // Produces byte-identical output; zero regression risk for non-JPIP decode.
@@ -964,22 +972,22 @@ void idwt_1d_row_inplace_range(sprec_t *row, const int32_t left, const int32_t r
   if (width >= 9) {
     dwt_pse_fill_inplace_simd(row, width);
   } else {
-    for (int32_t i = 1; i <= left; ++i)
-      row[-i] = row[PSEo(u0 - i, u0, u1)];
-    for (int32_t i = 1; i <= right; ++i)
-      row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
+    for (int32_t i = 1; i <= left; ++i) row[-i] = row[PSEo(u0 - i, u0, u1)];
+    for (int32_t i = 1; i <= right; ++i) row[width + i - 1] = row[PSEo(u1 - u0 + i - 1 + u0, u0, u1)];
   }
   // Translate target row cols [col_lo, col_hi] → buffer positions.
   // X = row - left, so row col k lives at X[k - u0 + left].
-  // Widen by the filter support so the 4-pass (or 2-pass) lifter has valid
-  // neighbors at the target edges.
-  const int32_t widen = (transformation == 1) ? 2 : 4;
-  int32_t row_lo = col_lo - u0 - widen;
-  int32_t row_hi = col_hi - u0 - 1 + widen;  // inclusive row-col upper bound
-  if (row_lo < 0) row_lo = 0;
-  if (row_hi > width - 1) row_hi = width - 1;
-  const int32_t buf_lo = row_lo + left;
-  const int32_t buf_hi = row_hi + left;
+  // An interior window edge gets a finite `widen` margin of real neighbours so
+  // the lifter is byte-exact there.  But when the window edge is within `widen`
+  // of a COMPONENT boundary, the boundary PSE lifting is involved: clamping the
+  // pass to [0, width-1] would drop the PSE-region writes the full-width kernel
+  // makes, leaving the last/first ~2-3 columns wrong.  In that case run the
+  // pass to its natural extent (INT32_MIN/MAX make the kernel's clip resolve to
+  // the natural start/end, which writes into the row's PSE prefix/suffix slack
+  // exactly as the full-width kernel does).
+  const int32_t widen  = (transformation == 1) ? 2 : 4;
+  const int32_t buf_lo = (col_lo - widen < u0) ? INT32_MIN : (col_lo - u0 - widen + left);
+  const int32_t buf_hi = (col_hi + widen > u1) ? INT32_MAX : (col_hi - u0 - 1 + widen + left);
 
   sprec_t *X = row - left;
   if (transformation == 1) {
@@ -1092,18 +1100,17 @@ static void interleave_row_planes(sprec_t *out, const sprec_t *a_ptr, const spre
   }
 }
 
-void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp,
-                             const int32_t lp_width, const int32_t hp_width,
-                             const int32_t u0, const int32_t u1, const uint8_t transformation,
-                             const bool use_i32, const int32_t h_pse_left, const int32_t h_pse_right,
-                             const int32_t col_lo, const int32_t col_hi) {
+void idwt_1d_row_from_planar(sprec_t *out, const sprec_t *lp, const sprec_t *hp, const int32_t lp_width,
+                             const int32_t hp_width, const int32_t u0, const int32_t u1,
+                             const uint8_t transformation, const bool use_i32, const int32_t h_pse_left,
+                             const int32_t h_pse_right, const int32_t col_lo, const int32_t col_hi) {
   const int32_t width = u1 - u0;
   if (width <= 0) return;
   if (width == 1) {
     // Single-column row: the lone sample is LP for even u0, HP for odd u0;
     // odd-parity rev 5/3 rows carry a doubled sample.
     if (use_i32) {
-      const int32_t v = reinterpret_cast<const int32_t *>((u0 & 1) == 0 ? lp : hp)[0];
+      const int32_t v                     = reinterpret_cast<const int32_t *>((u0 & 1) == 0 ? lp : hp)[0];
       reinterpret_cast<int32_t *>(out)[0] = ((u0 & 1) != 0 && transformation == 1) ? (v >> 1) : v;
     } else {
       const sprec_t v = ((u0 & 1) == 0 ? lp : hp)[0];
@@ -1243,15 +1250,15 @@ static inline bool is_lp(int32_t r) { return (r & 1) == 0; }
 // rptr, get_dl, set_dl, pse_source are now inline in dwt.hpp as
 // idwt_rptr, idwt_get_dl, idwt_set_dl, idwt_pse_source.
 // Local aliases for brevity in this file:
-#define rptr       idwt_rptr
-#define get_dl     idwt_get_dl
-#define set_dl     idwt_set_dl
+#define rptr idwt_rptr
+#define get_dl idwt_get_dl
+#define set_dl idwt_set_dl
 #define pse_source idwt_pse_source
-#define is_zero    idwt_is_zero
-#define set_zero   idwt_set_zero
+#define is_zero idwt_is_zero
+#define set_zero idwt_set_zero
 
 static inline bool row_all_zero(const sprec_t *row, int32_t width) {
-  uint32_t acc = 0;
+  uint32_t acc      = 0;
   const uint32_t *p = reinterpret_cast<const uint32_t *>(row);
   for (int32_t i = 0; i < width; ++i) acc |= p[i];
   return acc == 0;
@@ -1275,7 +1282,7 @@ static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
   }
   set_zero(s, r, false);
 
-  const bool    lp   = is_lp(r);
+  const bool lp = is_lp(r);
   sprec_t *tgt  = rptr(s, r);
   sprec_t *prev = rptr(s, r - 1);
   sprec_t *next = rptr(s, r + 1);
@@ -1295,7 +1302,7 @@ static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
     adv_irrev_ver_step_fn(w, prev + col0, next + col0, tgt + col0, coeff);
   } else {  // rev 5/3
     if (s->use_i32) {
-      int32_t *tgt_i  = reinterpret_cast<int32_t *>(tgt);
+      int32_t *tgt_i        = reinterpret_cast<int32_t *>(tgt);
       const int32_t *prev_i = reinterpret_cast<const int32_t *>(prev);
       const int32_t *next_i = reinterpret_cast<const int32_t *>(next);
       if (lp)
@@ -1314,20 +1321,20 @@ static inline void adv_step(idwt_2d_state *s, int32_t r, int8_t cur) {
 
 // Fill any PSE slots whose source is physical row r (called after row r is fetched).
 static inline void fill_pse(idwt_2d_state *s, int32_t r) {
-  const size_t nb = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+  const size_t nb    = sizeof(sprec_t) * static_cast<size_t>(s->stride);
   const sprec_t *src = rptr(s, r);
-  const bool z = is_zero(s, r);
+  const bool z       = is_zero(s, r);
   for (int8_t i = 1; i <= s->top_pse; ++i) {
     if (s->top_dlevel[i - 1] < 0 && pse_source(s->v0 - i, s->v0, s->v1) == r) {
       memcpy(static_cast<sprec_t *>(s->top_pse_buf) + static_cast<ptrdiff_t>(i - 1) * s->stride, src, nb);
-      s->top_dlevel[i - 1] = 0;
+      s->top_dlevel[i - 1]   = 0;
       s->top_pse_zero[i - 1] = z;
     }
   }
   for (int8_t i = 0; i < s->bottom_pse; ++i) {
     if (s->bot_dlevel[i] < 0 && pse_source(s->v1 + i, s->v0, s->v1) == r) {
       memcpy(static_cast<sprec_t *>(s->bot_pse_buf) + static_cast<ptrdiff_t>(i) * s->stride, src, nb);
-      s->bot_dlevel[i] = 0;
+      s->bot_dlevel[i]   = 0;
       s->bot_pse_zero[i] = z;
     }
   }
@@ -1355,27 +1362,23 @@ static void cascade(idwt_2d_state *s) {
   // 9/7: top_pse≤4, propagation=4  → margin=10
   const int32_t margin  = (int32_t)s->top_pse + max_dl(s->transformation) * 2 + 2;
   const int32_t lo_full = s->v0 - (int32_t)s->top_pse;
-  const int32_t lo      = (s->ring_origin - margin > lo_full)
-                          ? s->ring_origin - margin : lo_full;
-  const int32_t hi      = (s->next_fetch < s->v1) ? s->next_fetch + s->bottom_pse
-                                                   : s->v1 + s->bottom_pse;
+  const int32_t lo      = (s->ring_origin - margin > lo_full) ? s->ring_origin - margin : lo_full;
+  const int32_t hi      = (s->next_fetch < s->v1) ? s->next_fetch + s->bottom_pse : s->v1 + s->bottom_pse;
 
   if (s->transformation != 0) {  // 2-step filters: rev53 and ATK irrev53 (max_dl=1)
     // Rev 5/3: exactly two phases — LP Update then HP Predict. No while(progress) needed.
     // All rows that advance start at dl=0, so cur=0 is known.
 
     // Phase 1: Update LP rows (even absolute index) — need HP neighbors at dl >= 0.
-    const int32_t lp0 = lo + (lo & 1);   // first even row >= lo  (works for negative lo)
+    const int32_t lp0 = lo + (lo & 1);  // first even row >= lo  (works for negative lo)
     for (int32_t r = lp0; r < hi; r += 2) {
-      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 0 && get_dl(s, r + 1) >= 0)
-        adv_step(s, r, 0);
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 0 && get_dl(s, r + 1) >= 0) adv_step(s, r, 0);
     }
 
     // Phase 2: Predict HP rows (odd absolute index) — need LP neighbors at dl >= 1.
-    const int32_t hp0 = lo + (1 - (lo & 1));   // first odd row >= lo
+    const int32_t hp0 = lo + (1 - (lo & 1));  // first odd row >= lo
     for (int32_t r = hp0; r < hi; r += 2) {
-      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1)
-        adv_step(s, r, 0);
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1) adv_step(s, r, 0);
     }
   } else {
     // Irrev 9/7: 4 dedicated phases replace the generic while(progress) loop.
@@ -1385,27 +1388,23 @@ static void cascade(idwt_2d_state *s) {
     //   Phase 3 (B): LP rows dl=1, need HP neighbors @1 → advance to dl=2
     //   Phase 4 (A): HP rows dl=1, need LP neighbors @2 → advance to dl=2
     const int32_t lp0 = lo + (lo & 1);        // first even row >= lo
-    const int32_t hp0 = lo + (1 - (lo & 1));   // first odd row >= lo
+    const int32_t hp0 = lo + (1 - (lo & 1));  // first odd row >= lo
 
     // Phase 1 (D): LP dl=0 → dl=1
     for (int32_t r = lp0; r < hi; r += 2) {
-      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 0 && get_dl(s, r + 1) >= 0)
-        adv_step(s, r, 0);
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 0 && get_dl(s, r + 1) >= 0) adv_step(s, r, 0);
     }
     // Phase 2 (C): HP dl=0 → dl=1
     for (int32_t r = hp0; r < hi; r += 2) {
-      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1)
-        adv_step(s, r, 0);
+      if (get_dl(s, r) == 0 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1) adv_step(s, r, 0);
     }
     // Phase 3 (B): LP dl=1 → dl=2
     for (int32_t r = lp0; r < hi; r += 2) {
-      if (get_dl(s, r) == 1 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1)
-        adv_step(s, r, 1);
+      if (get_dl(s, r) == 1 && get_dl(s, r - 1) >= 1 && get_dl(s, r + 1) >= 1) adv_step(s, r, 1);
     }
     // Phase 4 (A): HP dl=1 → dl=2
     for (int32_t r = hp0; r < hi; r += 2) {
-      if (get_dl(s, r) == 1 && get_dl(s, r - 1) >= 2 && get_dl(s, r + 1) >= 2)
-        adv_step(s, r, 1);
+      if (get_dl(s, r) == 1 && get_dl(s, r - 1) >= 2 && get_dl(s, r + 1) >= 2) adv_step(s, r, 1);
     }
   }
 }
@@ -1426,9 +1425,9 @@ static void fetch_one(idwt_2d_state *s) {
 
   const int32_t slot = r % IDWT_STATE_RING_DEPTH;
   s->d_level[slot]   = -1;
-  sprec_t *dst = rptr(s, r);
+  sprec_t *dst       = rptr(s, r);
   s->get_src_row(s->src_ctx, r, dst);
-  s->d_level[slot]   = 0;
+  s->d_level[slot] = 0;
   // Skip the O(width) row_all_zero scan when the source callback is known
   // to have zero-filled this row.  idwt_level_src_fn (coding_units.cpp:196)
   // memsets `dst` to zero whenever abs_row < c->row_lo, where c->row_lo is
@@ -1450,45 +1449,56 @@ static void fetch_one(idwt_2d_state *s) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-void idwt_2d_state_init(idwt_2d_state *s,
-                        const int32_t u0, const int32_t u1,
-                        const int32_t v0, const int32_t v1,
-                        const uint8_t transformation, const dwt_type dir,
-                        idwt_row_src_fn src_fn, void *src_ctx,
-                        bool use_i32) {
-  s->u0            = u0;  s->u1 = u1;
-  s->v0            = v0;  s->v1 = v1;
-  s->stride        = round_up(u1 - u0, SIMD_PADDING);
-  s->slot_stride   = IDWT_RING_PSE_LEFT + round_up(u1 - u0 + SIMD_PADDING, SIMD_PADDING);
+void idwt_2d_state_init(idwt_2d_state *s, const int32_t u0, const int32_t u1, const int32_t v0,
+                        const int32_t v1, const uint8_t transformation, const dwt_type dir,
+                        idwt_row_src_fn src_fn, void *src_ctx, bool use_i32) {
+  s->u0             = u0;
+  s->u1             = u1;
+  s->v0             = v0;
+  s->v1             = v1;
+  s->stride         = round_up(u1 - u0, SIMD_PADDING);
+  s->slot_stride    = IDWT_RING_PSE_LEFT + round_up(u1 - u0 + SIMD_PADDING, SIMD_PADDING);
   s->transformation = transformation;
-  s->dir           = dir;
-  s->use_i32       = use_i32 && (transformation == 1);
+  s->dir            = dir;
+  s->use_i32        = use_i32 && (transformation == 1);
   // ATK (transformation>=2) is a 2-step filter like rev53 — use same PSE counts (eff=1).
   const uint8_t eff = (transformation < 2) ? transformation : 1;
-  s->top_pse       = kPseTop[v0 % 2][eff];
-  s->bottom_pse    = kPseBot[v1 % 2][eff];
+  s->top_pse        = kPseTop[v0 % 2][eff];
+  s->bottom_pse     = kPseBot[v1 % 2][eff];
 
-  s->ring_buf      = nullptr;
-  s->top_pse_buf   = nullptr;
-  s->bot_pse_buf   = nullptr;
-  s->horz_out_buf  = nullptr;
+  s->ring_buf     = nullptr;
+  s->top_pse_buf  = nullptr;
+  s->bot_pse_buf  = nullptr;
+  s->horz_out_buf = nullptr;
 
   if (dir == DWT_BIDIR) {
     const size_t row_bytes  = sizeof(sprec_t) * static_cast<size_t>(s->stride);
     const size_t slot_bytes = sizeof(sprec_t) * static_cast<size_t>(s->slot_stride);
-    s->ring_buf    = aligned_mem_alloc(IDWT_STATE_RING_DEPTH * slot_bytes, 32);
-    s->top_pse_buf = (s->top_pse    > 0) ? aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32) : nullptr;
-    s->bot_pse_buf = (s->bottom_pse > 0) ? aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32) : nullptr;
+    s->ring_buf             = aligned_mem_alloc(IDWT_STATE_RING_DEPTH * slot_bytes, 32);
+    s->top_pse_buf =
+        (s->top_pse > 0) ? aligned_mem_alloc(static_cast<size_t>(s->top_pse) * row_bytes, 32) : nullptr;
+    s->bot_pse_buf = (s->bottom_pse > 0)
+                         ? aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32)
+                         : nullptr;
   } else {
     // HORZ or NO: one output row at a time — single scratch buffer with PSE prefix.
     const size_t slot_bytes = sizeof(sprec_t) * static_cast<size_t>(s->slot_stride);
-    s->horz_out_buf = aligned_mem_alloc(slot_bytes, 32);
+    s->horz_out_buf         = aligned_mem_alloc(slot_bytes, 32);
   }
 
   s->ring_origin = v0;
-  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) { s->d_level[i] = -1; s->row_zero[i] = true; }
-  for (int32_t i = 0; i < 4;                     ++i) { s->top_dlevel[i] = -1; s->top_pse_zero[i] = true; }
-  for (int32_t i = 0; i < 4;                     ++i) { s->bot_dlevel[i] = -1; s->bot_pse_zero[i] = true; }
+  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) {
+    s->d_level[i]  = -1;
+    s->row_zero[i] = true;
+  }
+  for (int32_t i = 0; i < 4; ++i) {
+    s->top_dlevel[i]   = -1;
+    s->top_pse_zero[i] = true;
+  }
+  for (int32_t i = 0; i < 4; ++i) {
+    s->bot_dlevel[i]   = -1;
+    s->bot_pse_zero[i] = true;
+  }
 
   s->col_lo      = u0;
   s->col_hi      = u1;
@@ -1516,12 +1526,15 @@ void idwt_2d_state_set_row_range(idwt_2d_state *s, int32_t row_lo, int32_t row_h
   s->row_hi = row_hi;
 }
 
-
 void idwt_2d_state_free(idwt_2d_state *s) {
-  aligned_mem_free(s->ring_buf);     s->ring_buf     = nullptr;
-  aligned_mem_free(s->top_pse_buf);  s->top_pse_buf  = nullptr;
-  aligned_mem_free(s->bot_pse_buf);  s->bot_pse_buf  = nullptr;
-  aligned_mem_free(s->horz_out_buf); s->horz_out_buf = nullptr;
+  aligned_mem_free(s->ring_buf);
+  s->ring_buf = nullptr;
+  aligned_mem_free(s->top_pse_buf);
+  s->top_pse_buf = nullptr;
+  aligned_mem_free(s->bot_pse_buf);
+  s->bot_pse_buf = nullptr;
+  aligned_mem_free(s->horz_out_buf);
+  s->horz_out_buf = nullptr;
 }
 
 // Rewind the streaming cursors to their post-init state without touching
@@ -1536,9 +1549,18 @@ void idwt_2d_state_rewind(idwt_2d_state *s) {
   s->next_fetch  = s->v0;
   s->row_lo      = s->v0;
   s->row_hi      = s->v1;
-  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) { s->d_level[i] = -1; s->row_zero[i] = true; }
-  for (int32_t i = 0; i < 4;                     ++i) { s->top_dlevel[i] = -1; s->top_pse_zero[i] = true; }
-  for (int32_t i = 0; i < 4;                     ++i) { s->bot_dlevel[i] = -1; s->bot_pse_zero[i] = true; }
+  for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) {
+    s->d_level[i]  = -1;
+    s->row_zero[i] = true;
+  }
+  for (int32_t i = 0; i < 4; ++i) {
+    s->top_dlevel[i]   = -1;
+    s->top_pse_zero[i] = true;
+  }
+  for (int32_t i = 0; i < 4; ++i) {
+    s->bot_dlevel[i]   = -1;
+    s->bot_pse_zero[i] = true;
+  }
 }
 
 bool idwt_2d_state_pull_row(idwt_2d_state *s, sprec_t *out) {
@@ -1599,8 +1621,7 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
       break;
     }
     // Advance ring_origin past already-output rows to make room for new fetches.
-    while (s->ring_origin < s->next_out &&
-           s->next_fetch >= s->ring_origin + IDWT_STATE_RING_DEPTH) {
+    while (s->ring_origin < s->next_out && s->next_fetch >= s->ring_origin + IDWT_STATE_RING_DEPTH) {
       s->d_level[s->ring_origin % IDWT_STATE_RING_DEPTH] = -1;
       ++s->ring_origin;
     }
