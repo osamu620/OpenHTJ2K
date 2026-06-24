@@ -28,6 +28,7 @@
 
 #include <cstring>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 #include "dwt.hpp"
 #include "utils.hpp"
@@ -971,15 +972,17 @@ void idwt_1d_row_inplace_range(sprec_t *row, const int32_t left, const int32_t r
   }
   // Translate target row cols [col_lo, col_hi] → buffer positions.
   // X = row - left, so row col k lives at X[k - u0 + left].
-  // Widen by the filter support so the 4-pass (or 2-pass) lifter has valid
-  // neighbors at the target edges.
-  const int32_t widen = (transformation == 1) ? 2 : 4;
-  int32_t row_lo = col_lo - u0 - widen;
-  int32_t row_hi = col_hi - u0 - 1 + widen;  // inclusive row-col upper bound
-  if (row_lo < 0) row_lo = 0;
-  if (row_hi > width - 1) row_hi = width - 1;
-  const int32_t buf_lo = row_lo + left;
-  const int32_t buf_hi = row_hi + left;
+  // An interior window edge gets a finite `widen` margin of real neighbours so
+  // the lifter is byte-exact there.  But when the window edge is within `widen`
+  // of a COMPONENT boundary, the boundary PSE lifting is involved: clamping the
+  // pass to [0, width-1] would drop the PSE-region writes the full-width kernel
+  // makes, leaving the first/last ~2-3 columns wrong.  In that case run the
+  // pass to its natural extent (INT32_MIN/MAX make the kernel's clip resolve to
+  // the natural start/end, which writes into the row's PSE prefix/suffix slack
+  // exactly as the full-width kernel does).
+  const int32_t widen  = (transformation == 1) ? 2 : 4;
+  const int32_t buf_lo = (col_lo - widen < u0) ? INT32_MIN : (col_lo - u0 - widen + left);
+  const int32_t buf_hi = (col_hi + widen > u1) ? INT32_MAX : (col_hi - u0 - 1 + widen + left);
 
   sprec_t *X = row - left;
   if (transformation == 1) {
