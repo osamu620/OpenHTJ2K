@@ -282,14 +282,12 @@ int main(int argc, char *argv[]) {
       wins.push_back({"explicit", a.col_lo, std::min(a.col_hi, W2)});
     } else {
       const uint32_t h = W2 / 2, q = W2 / 4;
-      wins = {
-          {"centered", (h > 200) ? h - 200 : 0, std::min(h + 200, W2)},
-          {"left_edge", 0, h},
-          {"right_edge", h, W2},
-          {"to_right_edge", (W2 > 50) ? W2 - 50 : 0, W2},
-          {"from_left_edge", 0, q + 1},
-          {"narrow", h, std::min(h + 37, W2)},
-      };
+      wins.push_back({"centered", (h > 200) ? h - 200 : 0, std::min(h + 200, W2)});
+      wins.push_back({"left_edge", 0, h});
+      wins.push_back({"right_edge", h, W2});
+      wins.push_back({"to_right_edge", (W2 > 50) ? W2 - 50 : 0, W2});
+      wins.push_back({"from_left_edge", 0, q + 1});
+      wins.push_back({"narrow", h, std::min(h + 37, W2)});
     }
     bool rok = true;
     for (const CW &cw : wins) {
@@ -354,12 +352,10 @@ int main(int argc, char *argv[]) {
   } else {
     const uint32_t half   = W / 2;
     const uint32_t offset = 37;  // deliberately not codeblock-aligned
-    cases                 = {
-        {"right_half", half, W},
-        {"left_half", 0, half},
-        {"offset_to_end", std::min(half + offset, W), W},
-        {"narrow_window", half, std::min(half + offset, W)},
-    };
+    cases.push_back({"right_half", half, W});
+    cases.push_back({"left_half", 0, half});
+    cases.push_back({"offset_to_end", std::min(half + offset, W), W});
+    cases.push_back({"narrow_window", half, std::min(half + offset, W)});
   }
 
   bool ok = true;
