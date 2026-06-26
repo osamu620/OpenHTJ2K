@@ -785,66 +785,42 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
     }
   } else {
     // lossy
+    double qfactor_power;
+    double delta_ref;
+    double G_c;
     if (qfactor == 0xFF) {
-      for (size_t i = 0; i < epsilon.size(); ++i) {
-        int32_t exponent, mantissa;
-        double fval = basestep / sqrt(wmse_or_BIBO[i]);
-        for (exponent = 0; fval < 1.0; exponent++) {
-          fval *= 2.0;
-        }
-        mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
-        if (mantissa >= (1 << 11)) {
-          mantissa = 0;
-          exponent--;
-        }
-        if (exponent > 31) {
-          exponent = 31;
-          mantissa = 0;
-        }
-        if (exponent < 0) {
-          exponent = 0;
-          mantissa = (1 << 11) - 1;
-        }
-        epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
-        mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
-      }
+      qfactor_power = 0.0;
+      delta_ref     = basestep;
+      G_c           = 1.0;
     } else {
-      // lossy with qfactor. The Q->step mapping is shared with QCC and
-      // estimate_qfactor via q_to_delta(). Detail: HTJ2K white paper at
-      // https://htj2k.com/wp-content/uploads/white-paper.pdf
       const open_htj2k::q_scaling qs       = open_htj2k::q_to_delta(qfactor, RI);
-      const double qfactor_power           = qs.qfactor_power;
+      qfactor_power                        = qs.qfactor_power;
       const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, use_ycc != 0);
-      double delta_ref                     = qs.delta_Q * open_htj2k::color_gain(ct, 0);
-      double G_c                           = open_htj2k::color_gain(ct, 0);  // luma reference (cancels)
-      for (size_t i = 0; i < epsilon.size(); ++i) {
-        int32_t exponent, mantissa;
-        double w_b;
-        // w_b for the LL band (always the last entry) shall be 1.0, as must any extra
-        // low-frequency bands beyond the 5-level table when dwt_levels > 5.
-        w_b = (i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
-
-        // qfactor == 0xFF is handled by the branch above, so it is always != 0xFF here.
-        double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
-        for (exponent = 0; fval < 1.0; exponent++) {
-          fval *= 2.0;
-        }
-        mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
-        if (mantissa >= (1 << 11)) {
-          mantissa = 0;
-          exponent--;
-        }
-        if (exponent > 31) {
-          exponent = 31;
-          mantissa = 0;
-        }
-        if (exponent < 0) {
-          exponent = 0;
-          mantissa = (1 << 11) - 1;
-        }
-        epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
-        mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
+      delta_ref                            = qs.delta_Q * open_htj2k::color_gain(ct, 0);
+      G_c                                  = open_htj2k::color_gain(ct, 0);
+    }
+    for (size_t i = 0; i < epsilon.size(); ++i) {
+      int32_t exponent, mantissa;
+      double w_b = (i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
+      double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
+      for (exponent = 0; fval < 1.0; exponent++) {
+        fval *= 2.0;
       }
+      mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
+      if (mantissa >= (1 << 11)) {
+        mantissa = 0;
+        exponent--;
+      }
+      if (exponent > 31) {
+        exponent = 31;
+        mantissa = 0;
+      }
+      if (exponent < 0) {
+        exponent = 0;
+        mantissa = (1 << 11) - 1;
+      }
+      epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
+      mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
     }
   }
 
