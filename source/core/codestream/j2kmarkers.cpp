@@ -784,7 +784,33 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
       }
     }
   } else {
-    // lossy
+    // Lossy quantization step-size computation (ISO/IEC 15444-1 Annex E).
+    //
+    // Each subband b gets a step size Δ_b encoded as a (exponent, mantissa)
+    // pair stored in epsilon[] and mu[]:
+    //
+    //   Δ_b = delta_ref / (sqrt(G_b) · w_b · G_c)
+    //
+    // where
+    //   G_b        – energy gain of synthesis basis vector for subband b,
+    //                precomputed in wmse_or_BIBO[] above;
+    //   w_b        – perceptual weight from W_b_Y[], raised to qfactor_power
+    //                (1.0 for the LL band and any band beyond the weight table);
+    //   G_c        – colour-component gain (1.0 for luma / single-component);
+    //   delta_ref  – reference step size: `basestep` when no Qfactor is active
+    //                (qfactor == 0xFF), otherwise derived from q_to_delta().
+    //
+    // The Qfactor pathway (https://jpeg.org/jpeg2000/documentation.html) maps a
+    // quality index Qfactor ∈ [1,100] to delta_ref and qfactor_power via q_to_delta(); when Qfactor is
+    // absent (0xFF) the formula degenerates to the plain basestep case (qfactor_power=0 ⇒ w_b=1, G_c=1).
+    //
+    // The floating-point step size is then quantised into the 5+11 bit
+    // representation (epsilon, mu) per Eq. E-3:
+    //
+    //   Δ_b = 2^{R_b − epsilon} · (1 + mu / 2^{11})
+    //
+    // with clamping: epsilon ∈ [0,31], mu ∈ [0,2047].
+    // Subbands are stored in reverse order (LL first in the marker segment).
     double qfactor_power;
     double delta_ref;
     double G_c;
@@ -801,7 +827,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
     }
     for (size_t i = 0; i < epsilon.size(); ++i) {
       int32_t exponent, mantissa;
-      double w_b = (i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
+      double w_b = (qfactor == 0xFF || i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
       for (exponent = 0; fval < 1.0; exponent++) {
         fval *= 2.0;
