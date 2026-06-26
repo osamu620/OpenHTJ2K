@@ -647,6 +647,31 @@ uint8_t ATK_marker::get_num_steps() const { return Natk; }
 
 const atk_step &ATK_marker::get_step(uint8_t k) const { return steps[k]; }
 
+// Quantise a floating-point subband step size into the JPEG 2000 (epsilon, mu)
+// pair of Eq. E-3 (ISO/IEC 15444-1 Annex E): Δ = 2^{-epsilon} · (1 + mu/2^11),
+// clamped to epsilon ∈ [0,31] and mu ∈ [0,2047]. Shared by the QCD and QCC
+// marker builders so the clamp/rounding logic lives in exactly one place.
+static void pack_quant_step(double fval, uint8_t &epsilon_out, uint16_t &mu_out) {
+  int32_t exponent, mantissa;
+  for (exponent = 0; fval < 1.0; exponent++) {
+    fval *= 2.0;
+  }
+  mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
+  if (mantissa >= (1 << 11)) {
+    mantissa = 0;
+    exponent--;
+  }
+  if (exponent > 31) {
+    exponent = 31;
+    mantissa = 0;
+  }
+  if (exponent < 0) {
+    exponent = 0;
+    mantissa = (1 << 11) - 1;
+  }
+  epsilon_out = static_cast<uint8_t>(exponent);
+  mu_out      = static_cast<uint16_t>(mantissa);
+}
 
 QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
   Lmar = in.get_word();
@@ -826,27 +851,10 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
       G_c                                  = open_htj2k::color_gain(ct, 0);
     }
     for (size_t i = 0; i < epsilon.size(); ++i) {
-      int32_t exponent, mantissa;
-      double w_b = (qfactor == 0xFF || i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
+      double w_b =
+          (qfactor == 0xFF || i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
-      for (exponent = 0; fval < 1.0; exponent++) {
-        fval *= 2.0;
-      }
-      mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
-      if (mantissa >= (1 << 11)) {
-        mantissa = 0;
-        exponent--;
-      }
-      if (exponent > 31) {
-        exponent = 31;
-        mantissa = 0;
-      }
-      if (exponent < 0) {
-        exponent = 0;
-        mantissa = (1 << 11) - 1;
-      }
-      epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
-      mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
+      pack_quant_step(fval, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
     }
   }
 
@@ -1070,31 +1078,11 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
     double G_c                     = open_htj2k::color_gain(ct, Cqcc);  // component synthesis gain
 
     for (size_t i = 0; i < epsilon.size(); ++i) {
-      int32_t exponent, mantissa;
-      double w_b;
       // w_b for the LL band (always the last entry) shall be 1.0, as must any extra
       // low-frequency bands beyond the 5-level table when dwt_levels > 5.
-      w_b = (i == epsilon.size() - 1 || i >= W_b.size()) ? 1.0 : pow(W_b[i], qfactor_power);
-
+      double w_b = (i == epsilon.size() - 1 || i >= W_b.size()) ? 1.0 : pow(W_b[i], qfactor_power);
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
-      for (exponent = 0; fval < 1.0; exponent++) {
-        fval *= 2.0;
-      }
-      mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
-      if (mantissa >= (1 << 11)) {
-        mantissa = 0;
-        exponent--;
-      }
-      if (exponent > 31) {
-        exponent = 31;
-        mantissa = 0;
-      }
-      if (exponent < 0) {
-        exponent = 0;
-        mantissa = (1 << 11) - 1;
-      }
-      epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(exponent);
-      mu[epsilon.size() - i - 1]      = static_cast<uint16_t>(mantissa);
+      pack_quant_step(fval, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
     }
   }
 
