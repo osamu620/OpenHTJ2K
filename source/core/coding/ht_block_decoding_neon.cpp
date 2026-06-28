@@ -624,6 +624,7 @@ static void pack_sigma(const uint8_t *states, size_t bstride, uint32_t width, ui
 
 void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t magref_length,
                        const uint8_t &pLSB, uint16_t *sigma, uint32_t mstr) {
+  if (pLSB == 0) return;  // no plane below the LSB; mirrors ht_magref_decode (avoids 1 << (pLSB-1) UB)
   SP_dec SigProp(HT_magref_segment, magref_length);
   const uint32_t height       = block->size.y;
   const uint32_t width        = block->size.x;
@@ -987,6 +988,13 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
       return false;
     }
+    // Bound the attacker-controlled cleanup length by the (already clamped)
+    // codeblock byte count before the Dcup[Lcup-1] access / modDcup write below.
+    if (static_cast<uint32_t>(Lcup) > block->length) {
+      printf("WARNING: HT cleanup pass length %d exceeds codeblock bytes %u — malformed input.\n", Lcup,
+             block->length);
+      return false;
+    }
     Dcup = block->get_compressed_data();
     // Suffix length (=MEL + VLC) of HT Cleanup pass
     const auto Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
@@ -1003,6 +1011,12 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 
     for (uint32_t i = 1; i < num_segments; i++) {
       Lref += block->pass_length[all_segments[i]];
+    }
+    // The refinement segments are read from Dcup + Lcup; keep them in the buffer.
+    if (static_cast<uint32_t>(Lref) > block->length - static_cast<uint32_t>(Lcup)) {
+      printf("WARNING: HT refinement length exceeds remaining codeblock bytes %u — malformed input.\n",
+             block->length - static_cast<uint32_t>(Lcup));
+      return false;
     }
     if (block->num_passes > 1 && num_segments > 1) {
       Dref = block->get_compressed_data() + Lcup;
