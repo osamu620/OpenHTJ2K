@@ -84,10 +84,30 @@ SIZ_marker::SIZ_marker(j2c_src_memory &in) : j2k_marker_io_base(_SIZ) {
   XTOsiz = get_dword();
   YTOsiz = get_dword();
   Csiz   = get_word();
+  // Csiz and Lmar are attacker-controlled; validate before the read loop so an
+  // out-of-range component count cannot drive an over-read of the marker buffer
+  // or oversized downstream allocations.
+  if (Csiz < 1 || Csiz > 16384) {
+    printf("ERROR: SIZ number of components %u is out of range [1, 16384].\n", static_cast<unsigned>(Csiz));
+    throw std::exception();
+  }
+  if (Lmar < static_cast<uint16_t>(38 + 3 * Csiz)) {
+    printf("ERROR: SIZ marker length %u is too short for %u components.\n", static_cast<unsigned>(Lmar),
+           static_cast<unsigned>(Csiz));
+    throw std::exception();
+  }
   for (unsigned long i = 0; i < Csiz; ++i) {
     Ssiz.push_back(get_byte());
-    XRsiz.push_back(get_byte());
-    YRsiz.push_back(get_byte());
+    const uint8_t xr = get_byte();
+    const uint8_t yr = get_byte();
+    // Subsampling factors are used as divisors (e.g. Xsiz / XRsiz); a zero would
+    // later trigger a division-by-zero (SIGFPE).
+    if (xr == 0 || yr == 0) {
+      printf("ERROR: SIZ subsampling factor must be non-zero (component %lu).\n", i);
+      throw std::exception();
+    }
+    XRsiz.push_back(xr);
+    YRsiz.push_back(yr);
   }
   is_set = true;
 }
@@ -419,6 +439,15 @@ uint8_t COD_marker::use_color_trafo() const { return static_cast<uint8_t>(SGcod 
 uint8_t COD_marker::get_dwt_levels() { return SPcod[0]; }
 
 void COD_marker::get_codeblock_size(element_siz &out) {
+  // SPcod[1]/[2] are attacker-controlled exponents; the spec limits each to [0,8]
+  // with their sum <= 8 (code-block area <= 4096). Out-of-range values make
+  // 1 << (x + 2) undefined and can size a code-block past the HT decoder's
+  // fixed-size stack scratch buffers.
+  if (SPcod[1] > 8 || SPcod[2] > 8 || (SPcod[1] + SPcod[2]) > 8) {
+    printf("ERROR: COD code-block size exponents (%u,%u) are out of range.\n",
+           static_cast<unsigned>(SPcod[1]), static_cast<unsigned>(SPcod[2]));
+    throw std::exception();
+  }
   out.x = static_cast<uint32_t>(1 << (SPcod[1] + 2));
   out.y = static_cast<uint32_t>(1 << (SPcod[2] + 2));
 }
@@ -485,6 +514,12 @@ uint8_t COC_marker::get_dfs_index() const { return SPcoc[0] & 0x0F; }
 uint8_t COC_marker::get_dwt_levels() { return SPcoc[0] & 0x1F; }
 
 void COC_marker::get_codeblock_size(element_siz &out) {
+  // See COD_marker::get_codeblock_size — same spec bound on the size exponents.
+  if (SPcoc[1] > 8 || SPcoc[2] > 8 || (SPcoc[1] + SPcoc[2]) > 8) {
+    printf("ERROR: COC code-block size exponents (%u,%u) are out of range.\n",
+           static_cast<unsigned>(SPcoc[1]), static_cast<unsigned>(SPcoc[2]));
+    throw std::exception();
+  }
   out.x = static_cast<uint32_t>(1 << (SPcoc[1] + 2));
   out.y = static_cast<uint32_t>(1 << (SPcoc[2] + 2));
 }
@@ -547,6 +582,12 @@ DFS_marker::DFS_marker(j2c_src_memory &in) : j2k_marker_io_base(_DFS) {
   in.get_N_byte(this->get_buf(), Lmar - 2U);
   Sdfs = get_word();
   Ids  = get_byte();
+  // Ids bounds the writes into the fixed-size members hor_depth[33]/ver_depth[33]/
+  // qcd_offset[33] below; a value > 32 (the maximum DWT level count) overflows them.
+  if (Ids > 32) {
+    printf("ERROR: DFS number of levels %u exceeds maximum 32.\n", static_cast<unsigned>(Ids));
+    throw std::exception();
+  }
   // Ddfs: 2 bits per level, packed MSB-first, ceil(Ids/4) bytes
   const uint8_t nbytes = static_cast<uint8_t>((Ids + 3) / 4);
   Ddfs.resize(Ids, DWT_BIDIR);
@@ -1727,6 +1768,10 @@ int j2k_main_header::read(j2c_src_memory &in) {
         COD = MAKE_UNIQUE<COD_marker>(in);
         break;
       case _COC:
+        if (SIZ == nullptr) {
+          printf("ERROR: COC marker encountered before SIZ.\n");
+          throw std::exception();
+        }
         COC.push_back(MAKE_UNIQUE<COC_marker>(in, SIZ->get_num_components()));
         break;
       case _TLM:
@@ -1742,12 +1787,24 @@ int j2k_main_header::read(j2c_src_memory &in) {
         QCD = MAKE_UNIQUE<QCD_marker>(in);
         break;
       case _QCC:
+        if (SIZ == nullptr) {
+          printf("ERROR: QCC marker encountered before SIZ.\n");
+          throw std::exception();
+        }
         QCC.push_back(MAKE_UNIQUE<QCC_marker>(in, SIZ->get_num_components()));
         break;
       case _RGN:
+        if (SIZ == nullptr) {
+          printf("ERROR: RGN marker encountered before SIZ.\n");
+          throw std::exception();
+        }
         RGN.push_back(MAKE_UNIQUE<RGN_marker>(in, SIZ->get_num_components()));
         break;
       case _POC:
+        if (SIZ == nullptr) {
+          printf("ERROR: POC marker encountered before SIZ.\n");
+          throw std::exception();
+        }
         POC = MAKE_UNIQUE<POC_marker>(in, SIZ->get_num_components());
         break;
       case _PPM:
@@ -1793,10 +1850,17 @@ int j2k_main_header::read(j2c_src_memory &in) {
     p             = ppm_buf.get();
     uint32_t Nppm = 0;
     ppm_header    = MAKE_UNIQUE<buf_chain>();
-    while (len > 0) {
+    while (len >= 4) {
       for (int i = 0; i < 4; ++i, len--) {
         Nppm <<= 8;
         Nppm += *p++;
+      }
+      // Nppm is attacker-controlled; without this bound `len -= Nppm` underflows
+      // (unsigned) and `p += Nppm` walks past ppm_buf on malformed input.
+      if (Nppm > len) {
+        printf("ERROR: PPM packet-header length %u exceeds %u remaining bytes — malformed input.\n",
+               static_cast<unsigned>(Nppm), static_cast<unsigned>(len));
+        throw std::exception();
       }
       ppm_header->add_buf_node(p, Nppm);
       len -= Nppm;

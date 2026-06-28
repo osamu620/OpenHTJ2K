@@ -72,6 +72,13 @@ uint8_t j2c_src_memory::get_byte() {
 }
 
 int j2c_src_memory::get_N_byte(uint8_t *out, uint32_t length) {
+  // `length` derives from an attacker-controlled marker length (Lmar - 2); a
+  // too-large value (or an Lmar < 2 underflow wrapping to ~4 GB) would otherwise
+  // memmove past the end of the codestream buffer.
+  if (pos > len || length > len - pos) {
+    printf("Codestream is shorter than the expected marker length\n");
+    throw std::exception();
+  }
   memmove(out, buf + pos, length);  // memcpy is not valid because src and dst may overlap
   pos += length;
   //  for (unsigned long i = 0; i < length; i++) {
