@@ -5999,11 +5999,30 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].finalize_line_decode();
 }
 
+namespace {
+// RAII guard: drains every component's in-flight strip/prefetch decode tasks
+// (finalize_line_decode, a no-op once par_cnt is 0 / line_dec is gone) on scope
+// exit, so a decode error unwinding out of a streaming driver cannot leave a
+// straggler racing the next single-tile reuse frame's buffer init().
+struct LineDecodeFinalizeGuard {
+  j2k_tile_component *tc;
+  uint16_t            nc;
+  ~LineDecodeFinalizeGuard() {
+    for (uint16_t c = 0; c < nc; ++c) tc[c].finalize_line_decode();
+  }
+};
+}  // namespace
+
 void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_val,
                                         const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb,
                                         uint32_t row_limit, uint32_t row_lo, uint32_t col_lo_in,
                                         uint32_t col_hi_in, bool skip_mct) {
   const uint16_t NC = num_components;
+
+  // Drain every component's in-flight strip/prefetch decode tasks on both normal
+  // return and exception unwind (e.g. a code-block decode error surfaced by the
+  // streaming barrier), so a straggler cannot race the next reuse frame's init().
+  LineDecodeFinalizeGuard finalize_guard{tcomp.get(), NC};
 
   // Apply per-level column range to each component's IDWT state chain.
   // col_lo_in / col_hi_in are in the finest active-level output coord space
@@ -6532,8 +6551,8 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       cb(y, out_ptrs.data(), NC);
     }  // end of inner y-loop
   }  // end of outer strip loop
-
-  for (uint16_t c = 0; c < NC; ++c) tcomp[c].finalize_line_decode();
+  // finalize_line_decode() for every component runs via finalize_guard's
+  // destructor (covers both normal return and exception unwind).
 }
 
 // ── Direct-to-planar streaming decode ─────────────────────────────────────
@@ -6544,6 +6563,9 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
                                                open_htj2k::PlanarOutputDesc *descs, uint16_t nc) {
   const uint16_t NC = num_components;
   const uint8_t MCT = hdr.COD->use_color_trafo();
+  // Drain in-flight decode tasks on normal return and exception unwind
+  // (see decode_line_based_stream).
+  LineDecodeFinalizeGuard finalize_guard{tcomp.get(), NC};
 
   // MCT fallback: synthesize a callback that does the two-stage path.  This
   // keeps the initial implementation simple; a fused MCT+narrow NEON kernel
@@ -6694,7 +6716,8 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
     }
   }
 
-  for (uint16_t c = 0; c < NC; ++c) tcomp[c].finalize_line_decode();
+  // finalize_line_decode() for every component runs via finalize_guard's
+  // destructor (covers both normal return and exception unwind).
 }
 
 void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,

@@ -117,6 +117,13 @@ struct j2k_subband_row_buf {
   // Replaces both the local 'remaining' atomic and the old shared_ptr<atomic> prefetch_cnt.
   std::atomic<int> par_cnt;
 
+  // Sticky error flag: a decode task sets this (instead of throwing) when
+  // htj2k_decode/j2k_decode throws on malformed input, so the exception cannot
+  // escape a pool worker (std::terminate) or unwind through try_run_one.  Reset
+  // before each batch push; the driver thread re-throws after the spin_wait
+  // barrier that consumes the batch's output.
+  std::atomic<bool> par_error{false};
+
   // Per-strip cached codeblock enumeration.  Populated lazily on the first
   // trigger_prefetch() call for each strip; reused on every subsequent frame
   // under single-tile reuse because the codeblock *tree* (positions, sizes,
