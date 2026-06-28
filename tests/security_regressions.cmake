@@ -90,3 +90,35 @@ foreach(_comp 00 01 02)
   set_tests_properties(comp_sigprop_refinement_overlap_${_comp} PROPERTIES
       DEPENDS security_sigprop_refinement_overlap)
 endforeach()
+
+# Threaded decode of malformed input must fail safely.
+# The fixture is a synthetic 64x64 HT codestream with one byte corrupted in a
+# code-block's MagSgn region.  In the line-based streaming path each code-block
+# decode runs as a task on a thread-pool worker.  ThreadPool::worker() used to
+# invoke tasks with no try/catch, so a throw from htj2k_decode either reached
+# std::terminate() or escaped before the in-flight task counter was decremented,
+# leaving the streaming driver spinning on its completion barrier forever (a
+# hang).  The fix catches the throw in the task, records a sticky par_error and
+# always decrements the counter, then re-throws on the driver thread after the
+# barrier — matching the clean single-threaded error path.
+#
+# This regression is registered on x86 only.  Reaching the worker exception path
+# the fix protects requires the corrupted code-block to actually throw, which it
+# does on x86 (the AVX2 reader throws unconditionally on the over-read).  Other
+# ISAs respond to the same bytes differently — the NEON reader clamps the
+# over-read in a Release build (decode finishes with garbage), so the fixture
+# would neither exercise the fix nor reproduce the failure there.  On x86 the
+# patched decoder prints its worker-catch log line and exits cleanly; a reverted
+# fix hangs (caught by TIMEOUT) or aborts (caught by the crash regex).
+# Single-threaded decode was always clean, so the threaded run is what matters.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  add_test(NAME security_threaded_decode_abort_mt
+           COMMAND open_htj2k_dec
+                   -i ${SECURITY_DATA_DIR}/security_threaded_decode_abort.j2k
+                   -o security_threaded_decode_abort_mt.pgx
+                   -num_threads 4)
+  set_tests_properties(security_threaded_decode_abort_mt PROPERTIES
+      PASS_REGULAR_EXPRESSION "code-block decode task failed"
+      FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+      TIMEOUT 60)
+endif()
