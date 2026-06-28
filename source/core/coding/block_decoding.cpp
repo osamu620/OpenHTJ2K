@@ -548,6 +548,12 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       for (uint8_t n = 0; n < current_segment_pass; n++) {
         segment_bytes += block->pass_length[static_cast<size_t>(z + n)];
       }
+      // pass_length[] is attacker-controlled; keep the MQ segment inside the
+      // (already clamped) codeblock buffer to avoid an over-read.
+      if (static_cast<uint64_t>(segment_pos) + segment_bytes > block->length) {
+        printf("WARNING: MQ segment length exceeds codeblock bytes — malformed input.\n");
+        throw std::exception();
+      }
       mq_dec.init(segment_pos, segment_bytes, is_bypass);
       segment_pos += segment_bytes;
     }
