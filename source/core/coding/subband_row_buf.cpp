@@ -307,6 +307,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         // multi-pass blocks still require it (EBCOT reads before writing; HT
         // multi-pass sigprop/magref read the block_states border written only by
         // the cleanup interior pass, leaving the border uninitialised).
+        par_error.store(false, std::memory_order_relaxed);
         par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
         for (auto &bt : par_tasks) {
           bt.block->sample_buf           = par_spool + bt.sample_off;
@@ -335,14 +336,25 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           auto *blk = bt.block;
           return [blk, this]() {
             blk->dequant_i32 = this->dequant_i32;
-            if ((blk->Cmodes & HT) >> 6)
-              htj2k_decode(blk, ROIshift);
-            else
-              j2k_decode(blk, ROIshift);
+            try {
+              if ((blk->Cmodes & HT) >> 6)
+                htj2k_decode(blk, ROIshift);
+              else
+                j2k_decode(blk, ROIshift);
+            } catch (...) {
+              // Never let a decode error escape the task: it would std::terminate
+              // the pool worker or unwind through try_run_one.  Record it; the
+              // driver thread re-throws after spin_wait below.
+              par_error.store(true, std::memory_order_relaxed);
+            }
             par_cnt.fetch_sub(1, std::memory_order_release);
           };
         });
         spin_wait(par_cnt);
+        if (par_error.load(std::memory_order_relaxed)) {
+          printf("WARNING: a code-block decode task failed — malformed input.\n");
+          throw std::exception();
+        }
       }
       return;
     }
@@ -650,6 +662,7 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     par_ctxpool_cap = total_ctx;
   }
 
+  par_error.store(false, std::memory_order_relaxed);
   par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
 
   // Setup pass: assign scratch/output pointers and selectively zero buffers.
@@ -680,10 +693,16 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     auto *blk = pb.block;
     return [blk, this]() {
       blk->dequant_i32 = this->dequant_i32;
-      if ((blk->Cmodes & HT) >> 6)
-        htj2k_decode(blk, ROIshift);
-      else
-        j2k_decode(blk, ROIshift);
+      try {
+        if ((blk->Cmodes & HT) >> 6)
+          htj2k_decode(blk, ROIshift);
+        else
+          j2k_decode(blk, ROIshift);
+      } catch (...) {
+        // See decode_strip_core: record decode errors instead of throwing out of
+        // the task; the prefetch-consume barrier (row_ptr) re-throws on the driver.
+        par_error.store(true, std::memory_order_relaxed);
+      }
       par_cnt.fetch_sub(1, std::memory_order_release);
     };
   });
@@ -703,6 +722,10 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
       if (prefetch_y0 != -1 && abs_row >= prefetch_y0 && abs_row < prefetch_y1) {
         // Prefetch hit: wait for all in-flight tasks to finish, then swap buffers.
         spin_wait(par_cnt);
+        if (par_error.load(std::memory_order_relaxed)) {
+          printf("WARNING: a prefetched code-block decode task failed — malformed input.\n");
+          throw std::exception();
+        }
         std::swap(ring_buf, prefetch_buf);
         strip_y0 = ring_y0 = prefetch_y0;
         strip_y1            = prefetch_y1;
