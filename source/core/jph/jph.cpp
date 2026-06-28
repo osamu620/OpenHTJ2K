@@ -44,7 +44,11 @@ static constexpr uint32_t BOX_JP2H = 0x6A703268u;  // "jp2h"
 static constexpr uint32_t BOX_COLR = 0x636F6C72u;  // "colr"
 static constexpr uint32_t BOX_JP2C = 0x6A703263u;  // "jp2c"
 
-static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &out) {
+// JP2/JPH superbox nesting is shallow in practice; cap recursion so a crafted
+// chain of zero-length jp2h superboxes cannot exhaust the stack.
+static constexpr int JPH_MAX_BOX_DEPTH = 16;
+static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &out, int depth = 0) {
+  if (depth > JPH_MAX_BOX_DEPTH) return;
   const uint8_t *p = begin;
   while (p + 8 <= end) {
     uint32_t lbox = jph_read_be32(p);
@@ -53,7 +57,9 @@ static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &o
     if (lbox == 1) {
       if (p + 16 > end) return;
       uint64_t xlen = jph_read_be64(p + 8);
-      if (xlen < 16 || p + xlen > end) return;
+      // Compare against the remaining byte count in the integer domain; `p + xlen`
+      // overflows the pointer for a large attacker-supplied xlen.
+      if (xlen < 16 || xlen > static_cast<uint64_t>(end - p)) return;
       payload = p + 16;
       box_end = p + xlen;
     } else if (lbox == 0) {
@@ -65,10 +71,10 @@ static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &o
       // larger lbox; the codestream ends at EOF via its own EOC marker).
       if (lbox < 8) return;
       payload  = p + 8;
-      box_end  = (p + lbox <= end) ? (p + lbox) : end;
+      box_end  = (lbox <= static_cast<uint64_t>(end - p)) ? (p + lbox) : end;
     }
     if (tbox == BOX_JP2H) {
-      jph_scan_boxes(payload, box_end, out);
+      jph_scan_boxes(payload, box_end, out, depth + 1);
     } else if (tbox == BOX_COLR) {
       // METH(1) PREC(1) APPROX(1) EnumCS(4) — only for Enumerated Colourspace (METH==1)
       if (payload + 7 <= box_end && payload[0] == 1)
