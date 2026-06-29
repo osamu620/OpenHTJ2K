@@ -169,6 +169,16 @@ int main() {
           "descending range rejected");
     CHECK(parse_jpip_query("comps=x", &req) == RequestParseStatus::MalformedField,
           "non-numeric rejected");
+    // A range wider than the 16384-component maximum must be rejected, not
+    // expanded into a multi-billion-entry push loop (DoS).
+    CHECK(parse_jpip_query("comps=0-4294967295", &req) == RequestParseStatus::MalformedField,
+          "huge comps range rejected");
+    CHECK(parse_jpip_query("comps=0-16383", &req) == RequestParseStatus::Ok,
+          "full 16384-component range still accepted");
+    CHECK(req.view_window.comps.size() == 16384, "full range expands to 16384, got %zu",
+          req.view_window.comps.size());
+    CHECK(parse_jpip_query("comps=0-16384", &req) == RequestParseStatus::MalformedField,
+          "one past the component cap rejected");
   }
 
   // ── CacheModel: partial-bin qualifier + subtractive statements (§C.9.2) ─
@@ -209,6 +219,15 @@ int main() {
     CHECK(!m.has(kMsgClassPrecinct, 1), "apply subtractive");
     CHECK(m.has(kMsgClassPrecinct, 9), "apply additive");
     CHECK(m.has(kMsgClassPrecinct, 0), "prior state kept");
+
+    // A maximal range must not spin ~2^64 iterations: apply() stops at its
+    // bin-operation budget (kMaxModelBinOps = 1<<22) and returns with a
+    // bounded model.  Reaching this CHECK at all proves it terminated.
+    CacheModel big;
+    big.apply("P0-18446744073709551615");
+    CHECK(big.size() == (static_cast<std::size_t>(1) << 22),
+          "huge model range bounded to the budget, got %zu", big.size());
+    CHECK(big.has(kMsgClassPrecinct, 0), "low end of the range still applied");
   }
 
   // ── BinWindow: budget-blocked vs complete (empty metadata bin) ────────

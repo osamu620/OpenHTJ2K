@@ -10,6 +10,13 @@ namespace jpip {
 
 namespace {
 
+// A codestream has at most 16384 components (Csiz range, ISO/IEC 15444-1
+// Table A.9), so a component selection can never name more than that many.
+// We cap the expanded `comps` list here so a tiny query such as
+// "comps=0-4294967295" (or a long run of repeated ranges) cannot expand
+// into a multi-billion-entry push loop — a memory/CPU DoS on the server.
+constexpr std::size_t kJpipMaxComponents = 16384;
+
 // Split "key=val" pairs from a '&'-delimited query string.  Calls fn
 // with each (key, val) pair; val may be empty.
 template <typename Fn>
@@ -125,6 +132,12 @@ RequestParseStatus parse_jpip_query(const std::string &query_in, JpipRequest *ou
             status = RequestParseStatus::MalformedField; return;
           }
           for (unsigned long v = lo; v <= hi; ++v) {
+            if (out->view_window.comps.size() >= kJpipMaxComponents) {
+              // More components named than can possibly exist — reject
+              // rather than keep expanding an attacker-controlled range.
+              status = RequestParseStatus::MalformedField;
+              return;
+            }
             out->view_window.comps.push_back(static_cast<uint16_t>(v));
           }
         }
