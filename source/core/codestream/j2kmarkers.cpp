@@ -48,7 +48,16 @@ uint16_t j2k_marker_io_base::get_length() const { return this->Lmar; }
 uint8_t *j2k_marker_io_base::get_buf() { return buf + pos; }
 
 uint8_t j2k_marker_io_base::get_byte() {
-  assert(pos < Lmar);
+  // Enforce the marker's declared length as a hard bound, not just a debug
+  // assert (compiled out in release).  A malformed marker whose variable-length
+  // field count underflows — e.g. Lmar smaller than the fixed fields, so a
+  // `for (i < Lmar - len)` loop wraps to a huge count — would otherwise spin
+  // get_byte past the end of the buffer.  get_word()/get_dword() read through
+  // get_byte(), so bounding here bounds every marker read.
+  if (pos >= Lmar) {
+    printf("ERROR: marker field read past its declared length — malformed input.\n");
+    throw std::exception();
+  }
   uint8_t out = buf[pos];
   pos++;
   return out;
@@ -355,6 +364,15 @@ COD_marker::COD_marker(j2c_src_memory &in)
       SPcod[i] = get_byte();
     }
   }
+  // SPcod[0] is the decomposition-level count, capped at 32 by the spec.  An
+  // out-of-range value drives setCODparams' `for (uint8_t r = 0; r <= NL; r++)`
+  // precinct loop — NL = 255 never terminates for the uint8_t counter and grows
+  // precinct_size without bound — and indexes SPcod[5 + r] out of range.
+  if (SPcod[0] > 32) {
+    printf("ERROR: COD number of decomposition levels %u exceeds 32.\n",
+           static_cast<unsigned>(SPcod[0]));
+    throw std::exception();
+  }
   is_set = true;
 }
 
@@ -457,6 +475,14 @@ void COD_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
     out.x = 15;
     out.y = 15;
   } else {
+    // User-defined precincts carry one size byte per resolution after the 5
+    // fixed SPcod bytes.  Reject a resolution beyond what the (possibly
+    // truncated) marker actually holds instead of reading out of bounds.
+    if (static_cast<size_t>(5U) + resolution >= SPcod.size()) {
+      printf("ERROR: COD precinct-size index for resolution %u is out of range.\n",
+             static_cast<unsigned>(resolution));
+      throw std::exception();
+    }
     out.x = (SPcod[5U + resolution] & 0x0F);
     out.y = (SPcod[5U + resolution] & 0xF0) >> 4;
   }
@@ -529,6 +555,13 @@ void COC_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
     out.x = 15;
     out.y = 15;
   } else {
+    // See COD_marker::get_precinct_size — bound the per-resolution index to the
+    // bytes the marker actually carries.
+    if (static_cast<size_t>(5U) + resolution >= SPcoc.size()) {
+      printf("ERROR: COC precinct-size index for resolution %u is out of range.\n",
+             static_cast<unsigned>(resolution));
+      throw std::exception();
+    }
     out.x = (SPcoc[5U + resolution] & 0x0F);
     out.y = (SPcoc[5U + resolution] & 0xF0) >> 4;
   }
