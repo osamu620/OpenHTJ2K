@@ -155,3 +155,37 @@ set_tests_properties(security_codestream_alloc_bound PROPERTIES
     PASS_REGULAR_EXPRESSION "all cases passed"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 30)
+
+# Marker-segment length underflow.  A variable-length marker whose declared
+# length (Lmar) is smaller than its fixed fields makes a `for (i < Lmar - len)`
+# loop (Lmar/len are uint16_t) wrap to a ~1.8e19 count; the marker readers
+# (get_byte/get_word) then run off the end of the buffer.  The fixture is a
+# codestream whose COM marker carries Lmar=3 (< its 4-byte fixed length); the
+# patched reader rejects the over-long read instead of crashing/looping.
+# Marker parsing is platform-independent scalar code, so the positive check is
+# not arch-gated.  A reverted fix runs off the buffer (crash) or spins (TIMEOUT).
+add_test(NAME security_marker_length_underflow
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_marker_com_underflow.j2k
+                 -o security_marker_com_underflow.pgx
+                 -num_threads 1)
+set_tests_properties(security_marker_length_underflow PROPERTIES
+    PASS_REGULAR_EXPRESSION "past its declared length"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)
+
+# COD decomposition-level count out of range.  SPcod[0] (NL) is capped at 32 by
+# the spec, but was read unmasked (0-255); NL>=33 indexes SPcod[5+r] out of
+# bounds and NL=255 makes setCODparams' `for (uint8_t r=0; r<=NL; r++)` loop
+# never terminate (growing precinct_size without bound).  The fixture sets a
+# COD's NL byte to 255; the patched parser rejects it at parse time.  A reverted
+# fix loops/OOMs (TIMEOUT) or reads out of bounds (crash regex).
+add_test(NAME security_marker_cod_levels
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_marker_cod_levels.j2k
+                 -o security_marker_cod_levels.pgx
+                 -num_threads 1)
+set_tests_properties(security_marker_cod_levels PROPERTIES
+    PASS_REGULAR_EXPRESSION "decomposition levels 255 exceeds 32"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)
