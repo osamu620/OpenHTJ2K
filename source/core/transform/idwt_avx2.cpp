@@ -246,35 +246,36 @@ auto idwt_irrev97_fixed_avx2_ver_step = [](const int32_t simdlen, float *const X
 };
 
 // Single-row reversible (5/3) LP vertical lifting: tgt[i] -= floor((prev[i]+next[i]+2)*0.25)
-// Single-row reversible (5/3) LP vertical lifting: tgt[i] -= floor((prev[i]+next[i]+2)*0.25)
-// Called only from adv_step() with ring-buffer row pointers; those rows are 32-byte aligned
-// (slot_stride is a multiple of 8 floats and ring_buf is 32-byte aligned), so _mm256_load_ps is safe.
+// Called from adv_step() with ring-buffer row pointers.  On a column-windowed
+// decode the pointers are offset by col0 = col_lo - u0, which is NOT necessarily
+// a multiple of 8, so the rows are not 32-byte aligned and the loads/stores must
+// be unaligned (an aligned _mm256_load_ps faults at a non-8-aligned col0).
 void idwt_rev_ver_lp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt) {
   const __m256 k025 = _mm256_set1_ps(0.25f);
   const __m256 k2   = _mm256_set1_ps(2.0f);
   int32_t i = 0;
   for (; i + 8 <= n; i += 8) {
-    __m256 a = _mm256_load_ps(prev + i);
-    __m256 b = _mm256_load_ps(next + i);
-    __m256 t = _mm256_load_ps(tgt  + i);
+    __m256 a = _mm256_loadu_ps(prev + i);
+    __m256 b = _mm256_loadu_ps(next + i);
+    __m256 t = _mm256_loadu_ps(tgt  + i);
     t = _mm256_sub_ps(t, _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(_mm256_add_ps(a, b), k2), k025)));
-    _mm256_store_ps(tgt + i, t);
+    _mm256_storeu_ps(tgt + i, t);
   }
   for (; i < n; ++i)
     tgt[i] -= floorf((prev[i] + next[i] + 2.0f) * 0.25f);
 }
 
 // Single-row reversible (5/3) HP vertical lifting: tgt[i] += floor((prev[i]+next[i])*0.5)
-// Same alignment guarantee as idwt_rev_ver_lp_step_avx2 above.
+// Unaligned for the same reason as idwt_rev_ver_lp_step_avx2 above (windowed col0).
 void idwt_rev_ver_hp_step_avx2(int32_t n, const float *prev, const float *next, float *tgt) {
   const __m256 k05 = _mm256_set1_ps(0.5f);
   int32_t i = 0;
   for (; i + 8 <= n; i += 8) {
-    __m256 a = _mm256_load_ps(prev + i);
-    __m256 b = _mm256_load_ps(next + i);
-    __m256 t = _mm256_load_ps(tgt  + i);
+    __m256 a = _mm256_loadu_ps(prev + i);
+    __m256 b = _mm256_loadu_ps(next + i);
+    __m256 t = _mm256_loadu_ps(tgt  + i);
     t = _mm256_add_ps(t, _mm256_floor_ps(_mm256_mul_ps(_mm256_add_ps(a, b), k05)));
-    _mm256_store_ps(tgt + i, t);
+    _mm256_storeu_ps(tgt + i, t);
   }
   for (; i < n; ++i)
     tgt[i] += floorf((prev[i] + next[i]) * 0.5f);
@@ -282,16 +283,18 @@ void idwt_rev_ver_hp_step_avx2(int32_t n, const float *prev, const float *next, 
 
 // Single-row irreversible vertical lifting step for idwt_2d_state::adv_step().
 // Applies tgt[i] -= coeff*(prev[i]+next[i]) using FMA, matching the batch path exactly.
-// n is the row width; the ring-buffer rows are 32-byte aligned so load_ps is safe.
+// Unaligned loads/stores: on a windowed decode the row pointers are offset by
+// col0 = col_lo - u0 (not necessarily 8-aligned), so an aligned _mm256_load_ps
+// would fault — this is the col-range crash fixed here.
 void idwt_irrev_ver_step_fixed_avx2(int32_t n, float *prev, float *next, float *tgt, float coeff) {
   auto vcoeff = _mm256_set1_ps(coeff);
   int32_t i   = 0;
   for (; i + 8 <= n; i += 8) {
-    auto xin0 = _mm256_load_ps(prev + i);
-    auto xin1 = _mm256_load_ps(next + i);
-    auto xout = _mm256_load_ps(tgt  + i);
+    auto xin0 = _mm256_loadu_ps(prev + i);
+    auto xin1 = _mm256_loadu_ps(next + i);
+    auto xout = _mm256_loadu_ps(tgt  + i);
     xout = _mm256_fnmadd_ps(_mm256_add_ps(xin0, xin1), vcoeff, xout);
-    _mm256_store_ps(tgt + i, xout);
+    _mm256_storeu_ps(tgt + i, xout);
   }
   for (; i < n; ++i)
     tgt[i] -= coeff * (prev[i] + next[i]);

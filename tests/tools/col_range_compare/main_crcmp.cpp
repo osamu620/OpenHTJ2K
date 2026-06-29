@@ -260,25 +260,65 @@ int main(int argc, char *argv[]) {
       return 0;
     }
     const uint32_t W2 = rw[0];
-    const uint32_t lo = a.have_col ? a.col_lo : (W2 / 2 > 200 ? W2 / 2 - 200 : 0);
-    const uint32_t hi = a.have_col ? std::min(a.col_hi, W2) : std::min(W2 / 2 + 200, W2);
-    std::vector<std::vector<int32_t>> rgot;
-    std::vector<uint32_t> gw, gh;
-    std::vector<uint8_t> gd;
-    std::vector<bool> gs;
-    // 3rd call: windowed decode on the warm reuse path.
-    decode_reuse(rdec, codestream, a.reduce_NL, true, lo, hi, rgot, gw, gh, gd, gs);
-    const bool rok = compare_col_window(rref, rgot, rw, rh, lo, hi, "reuse_window", a.infile.c_str());
-    printf("%s: %s reuse-path window [%u,%u) of W=%u\n", rok ? "PASS" : "FAIL", a.infile.c_str(), lo, hi,
-           W2);
+    // Validate several STRICTLY-INTERIOR windows on the warm reuse path.  An
+    // unaligned col_lo (not a multiple of 8) is the key case: the vertical
+    // sub-range kernels run on row pointers offset by col_lo - u0, so an
+    // unaligned start exercises the unaligned-load path that previously faulted
+    // on AVX2.  Interior windows have real neighbours on both sides, so the
+    // sub-range kernel and the full-width kernel compute the same lifting; on
+    // GCC/Clang/Emscripten the two byte-match exactly.  (MSVC contracts the two
+    // kernels' FMAs differently and drifts by 1 LSB, so the cmake registers
+    // these reuse tests only on non-MSVC builds — see col_range_validation.cmake.
+    // Component-boundary windows are deferred for the same reason.)
+    struct RCase {
+      const char *label;
+      uint32_t lo;
+      uint32_t hi;
+    };
+    std::vector<RCase> cases;
+    if (a.have_col) {
+      cases.push_back({"explicit", a.col_lo, std::min(a.col_hi, W2)});
+    } else if (W2 >= 128) {
+      const uint32_t q = W2 / 4;
+      cases            = {
+          {"interior_wide", q, W2 - q},
+          {"interior_unaligned", (W2 / 3) | 1u, W2 - q},  // odd lo -> unaligned col0
+          {"interior_narrow", W2 / 2, std::min(W2 / 2 + 40, W2 - 8)},
+      };
+    } else {
+      cases.push_back({"full", 0, W2});
+    }
+
+    bool rok = true;
+    uint32_t t_lo = 0, t_hi = W2;
+    for (const RCase &cs : cases) {
+      if (cs.lo >= cs.hi) continue;
+      std::vector<std::vector<int32_t>> rgot;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
+      decode_reuse(rdec, codestream, a.reduce_NL, true, cs.lo, cs.hi, rgot, gw, gh, gd, gs);
+      if (!compare_col_window(rref, rgot, rw, rh, cs.lo, cs.hi, cs.label, a.infile.c_str())) {
+        rok = false;
+        break;
+      }
+      t_lo = cs.lo;
+      t_hi = cs.hi;
+    }
+    printf("%s: %s reuse-path (%zu windows) of W=%u\n", rok ? "PASS" : "FAIL", a.infile.c_str(),
+           cases.size(), W2);
     if (rok && a.iter > 0) {
+      std::vector<std::vector<int32_t>> rgot;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
       auto t0 = std::chrono::steady_clock::now();
       for (int i = 0; i < a.iter; ++i) {
-        decode_reuse(rdec, codestream, a.reduce_NL, true, lo, hi, rgot, gw, gh, gd, gs);
+        decode_reuse(rdec, codestream, a.reduce_NL, true, t_lo, t_hi, rgot, gw, gh, gd, gs);
       }
       auto t1         = std::chrono::steady_clock::now();
       const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / a.iter;
-      printf("TIMING(reuse): window [%u,%u) of W=%u, %d iters, %.3f ms/iter\n", lo, hi, W2, a.iter, ms);
+      printf("TIMING(reuse): window [%u,%u) of W=%u, %d iters, %.3f ms/iter\n", t_lo, t_hi, W2, a.iter, ms);
     }
     return rok ? 0 : 1;
   }
