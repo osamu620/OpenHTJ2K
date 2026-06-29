@@ -1450,16 +1450,24 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
     layer_length += this->pass_length[static_cast<size_t>(i)];
   }
 
-  // Clamp layer_length to bytes remaining in the tile-part codestream.
+  // Clamp layer_length to the bytes remaining in the CURRENT tile-part node.
   // The packet-header-decoded pass_length[] is attacker-controllable on
-  // malformed inputs; without this clamp, a later copy_N_bytes/borrow_N_bytes
-  // call can read past the end of the tile_buf node (UB on Linux release
-  // where asserts are compiled out, or a CRT abort on Windows MSVC release
-  // where asserts remain enabled).
+  // malformed inputs, and borrow_N_bytes / copy_N_bytes return a contiguous
+  // span from the current buf_chain node only (one node == one tile-part):
+  //   - Single tile-part: the node spans the whole tile body, so an unclamped
+  //     length reads past the codestream buffer (UB on Linux release where the
+  //     borrow/copy asserts are compiled out, or a CRT abort on Windows MSVC).
+  //   - Multiple tile-parts: the node is one tile-part's body, so an unclamped
+  //     length reads the following SOT/SOD + next tile-part bytes (in-bounds of
+  //     the codestream buffer but wrong) and lets the HT modDcup write 0xFF
+  //     across the node boundary.
+  // Bounding by the current node's remainder — not the cross-node total —
+  // covers both.  On a conformant stream a code-block's body lies wholly within
+  // one tile-part, so this clamp never fires.
   {
-    const uint32_t avail = tile_buf->get_remaining_bytes();
+    const uint32_t avail = tile_buf->get_current_node_remaining_bytes();
     if (layer_length > avail) {
-      printf("WARNING: codeblock layer length %u exceeds %u remaining bytes — malformed input.\n",
+      printf("WARNING: codeblock layer length %u exceeds %u byte(s) left in tile-part — malformed input.\n",
              (unsigned)layer_length, (unsigned)avail);
       layer_length = avail;
     }
@@ -1536,7 +1544,10 @@ void j2k_codeblock::skip_compressed_buffer(buf_chain *tile_buf, const uint16_t &
   }
   if (layer_length == 0) return;
 
-  const uint32_t avail = tile_buf->get_remaining_bytes();
+  // Same current-node clamp as create_compressed_buffer (see the note there):
+  // borrow_N_bytes advances within the current tile-part node only, so the skip
+  // amount must mirror the attach amount or the read cursor desyncs.
+  const uint32_t avail = tile_buf->get_current_node_remaining_bytes();
   if (layer_length > avail) layer_length = avail;
   if (layer_length == 0) return;
 

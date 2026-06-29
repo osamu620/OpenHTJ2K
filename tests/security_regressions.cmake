@@ -189,3 +189,33 @@ set_tests_properties(security_marker_cod_levels PROPERTIES
     PASS_REGULAR_EXPRESSION "decomposition levels 255 exceeds 32"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 30)
+
+# Code-block length spanning a tile-part (buf_chain node) boundary.
+# create_compressed_buffer clamps a code-block's borrowed byte count, but the
+# bound used the cross-node total (get_remaining_bytes summed every later
+# tile-part) while the borrow/copy hand back a contiguous span from the current
+# node only.  On a tile split into multiple tile-parts an inflated packet-header
+# length therefore slipped the clamp and the code-block read the following
+# tile-part's SOT/SOD + body bytes as its own (in-bounds of the single
+# contiguous codestream buffer, so not an out-of-bounds access, but wrong) and
+# let the HT modDcup write 0xFF across the node boundary.  The fix bounds the
+# length by the current tile-part's remaining bytes, matching the single-node
+# invariant the borrow/copy asserts already document; malformed input now fails
+# fast at the clamp on every platform instead of decoding cross-tile-part bytes.
+#
+# The fixture is a single-resolution (one-packet) stream whose tile is split so
+# the lone code-block straddles the tile-part boundary.  The clamp is scalar, so
+# its warning is platform-independent (not arch-gated), and the one packet ends
+# right after the clamped block — the HT cleanup-length guard (present in every
+# decoder variant) rejects the truncated block without entropy-decoding garbage,
+# so there is no platform-divergent tail.  A reverted fix prints no warning
+# (PASS regex absent) and, on other ISAs, decodes the cross-tile-part bytes.
+add_test(NAME security_multitilepart_cblk_length
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_multitilepart_cblk_length.j2k
+                 -o security_multitilepart_cblk_length.pgm
+                 -num_threads 1)
+set_tests_properties(security_multitilepart_cblk_length PROPERTIES
+    PASS_REGULAR_EXPRESSION "left in tile-part"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)
