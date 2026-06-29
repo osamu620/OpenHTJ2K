@@ -202,6 +202,9 @@ bool decode_chunked_body(const uint8_t *data, std::size_t len,
       else if (c >= 'a' && c <= 'f') v = 10 + (c - 'a');
       else if (c >= 'A' && c <= 'F') v = 10 + (c - 'A');
       else return false;
+      // Reject before the shift can drop high bits — an over-long hex size
+      // would otherwise wrap chunk_size around and defeat the bound check.
+      if (chunk_size > (SIZE_MAX >> 4)) return false;
       chunk_size = (chunk_size << 4) | static_cast<std::size_t>(v);
       any_digit = true;
     }
@@ -218,7 +221,12 @@ bool decode_chunked_body(const uint8_t *data, std::size_t len,
       }
       return false;
     }
-    if (i + chunk_size + 2 > len) return false;
+    // i <= len here (i = line_end + 2, and line_end + 1 < len was checked
+    // above), so `len - i` cannot underflow.  Comparing by subtraction
+    // avoids the `i + chunk_size + 2` overflow that would let a huge chunk
+    // size slip past the bound into an out-of-bounds read.  The `< 2` term
+    // reserves room for the chunk's trailing CRLF.
+    if (chunk_size > len - i || len - i - chunk_size < 2) return false;
     out->insert(out->end(), data + i, data + i + chunk_size);
     i += chunk_size;
     if (data[i] != '\r' || data[i + 1] != '\n') return false;
