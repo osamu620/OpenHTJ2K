@@ -279,13 +279,15 @@ class buf_chain {
   }
 
   OPENHTJ2K_MAYBE_UNUSED uint8_t get_specific_byte(uint32_t bufpos) { return *(current_buf + bufpos); }
-  // Returns the number of bytes remaining across all nodes from the current position.
-  uint32_t get_remaining_bytes() const {
-    uint32_t remaining = (pos < current_length) ? (current_length - static_cast<uint32_t>(pos)) : 0;
-    for (size_t i = node_pos + 1; i < num_nodes; ++i) {
-      remaining += node_length[i];
-    }
-    return remaining;
+  // Returns the number of bytes remaining in the CURRENT node only.  The
+  // zero-copy code-block body readers (borrow_N_bytes / copy_N_bytes) hand back
+  // a contiguous span from the current node and cannot cross a node boundary —
+  // each tile-part is its own node and a packet (hence a code-block's body)
+  // lies wholly within one tile-part — so the current node's remainder, not a
+  // cross-node total, is the correct bound when clamping a code-block's borrowed
+  // length against malformed input.
+  uint32_t get_current_node_remaining_bytes() const {
+    return (pos < current_length) ? (current_length - static_cast<uint32_t>(pos)) : 0;
   }
 
   uint8_t get_byte() {
@@ -329,7 +331,8 @@ class buf_chain {
   // Returns a direct pointer into the current node's buffer and advances pos by N.
   // The caller must NOT free this pointer (it belongs to j2c_src_memory).
   // N bytes must lie within the current node (same guarantee as copy_N_bytes).
-  // Callers should check get_remaining_bytes() and clamp N for truncated streams.
+  // Callers should check get_current_node_remaining_bytes() and clamp N for
+  // truncated or malformed multi-tile-part streams.
   uint8_t *borrow_N_bytes(uint32_t N) {
     assert((pos + N) <= current_length);
     uint8_t *ptr = current_buf + pos;
