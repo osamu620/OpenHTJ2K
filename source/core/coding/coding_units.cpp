@@ -3104,7 +3104,27 @@ sprec_t *j2k_tile_component::pull_line_ref() {
     return const_cast<sprec_t *>(ld->ll0_buf.row_ptr(ld->next_row++));
   }
 
-  return idwt_2d_state_pull_row_ref(&ld->states.get()[ld->NL_active - 1]);
+  idwt_2d_state *fs = &ld->states.get()[ld->NL_active - 1];
+  sprec_t *row      = idwt_2d_state_pull_row_ref(fs);
+  // Windowed (sub-range) decode: the finest level's IDWT writes only the
+  // [col_lo, col_hi) columns of this row (vertical lifting into the ring slot
+  // for BIDIR levels, the horizontal kernel for HORZ/NO levels).  Its consumers
+  // — pull_strip_into_buf and the finalize/colour loop — process the FULL row
+  // width, so zero the out-of-window columns instead of leaving the recycled
+  // ring slot's stale/uninitialised memory there: reading it is UB, and once
+  // the reuse pool hands back a slot holding garbage the finalize float->int
+  // conversion turns it into out-of-range values (and can fault) — the
+  // non-deterministic crash seen only in windowed decodes.  A full-width decode
+  // (col_lo == u0 && col_hi == u1) writes every column and skips this, so it
+  // stays byte-identical.
+  if (row != nullptr && (fs->col_lo > fs->u0 || fs->col_hi < fs->u1)) {
+    const int32_t w  = fs->u1 - fs->u0;
+    const int32_t lo = fs->col_lo - fs->u0;
+    const int32_t hi = fs->col_hi - fs->u0;
+    if (lo > 0) memset(row, 0, sizeof(sprec_t) * static_cast<size_t>(lo));
+    if (hi < w) memset(row + hi, 0, sizeof(sprec_t) * static_cast<size_t>(w - hi));
+  }
+  return row;
 }
 
 sprec_t *j2k_tile_component::pull_strip_into_buf(uint32_t count, uint32_t stride_floats) {
