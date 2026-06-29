@@ -6160,11 +6160,16 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     j2k_tile_component *tc;
     sprec_t **slot;
     std::atomic<int> *cnt;
+    std::atomic<bool> *err;
     uint32_t count;
     uint32_t stride;
   };
   std::vector<StripPullCtx> strip_tasks(NC);
   std::atomic<int> pull_cnt(0);
+  // Sticky error flag for the strip-pull tasks (mirrors j2k_subband_row_buf's
+  // par_error one level up): a pull task records a code-block decode throw here
+  // instead of letting it escape the pool worker.  Reset before each batch push.
+  std::atomic<bool> pull_error(false);
   auto *pool                   = ThreadPool::get();
   const bool can_parallel_pull = (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
 #endif
@@ -6227,8 +6232,9 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 #ifdef OPENHTJ2K_THREAD
     if (can_parallel_pull) {
       for (uint16_t c = 0; c < NC; ++c) {
-        strip_tasks[c] = {&tcomp[c], &strip_ptrs[c], &pull_cnt, counts[c], ci[c].csize_x};
+        strip_tasks[c] = {&tcomp[c], &strip_ptrs[c], &pull_cnt, &pull_error, counts[c], ci[c].csize_x};
       }
+      pull_error.store(false, std::memory_order_relaxed);
       pull_cnt.store(static_cast<int>(NC), std::memory_order_relaxed);
       // Batch-push all NC pull tasks in one mutex acquire to minimise
       // contention with the nested codeblock dispatch running inside
@@ -6236,11 +6242,27 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       pool->push_batch(strip_tasks, [](const StripPullCtx &ctx) {
         const StripPullCtx *t = &ctx;
         return [t]() {
-          *t->slot = t->tc->pull_strip_into_buf(t->count, t->stride);
+          // A code-block decode error surfaces here as a throw out of
+          // pull_strip_into_buf (the nested strip/prefetch barrier re-throws on
+          // malformed input).  This task runs on a pool worker — and on the
+          // calling thread via try_run_one — so an escaping throw would reach
+          // std::terminate().  Record it and ALWAYS decrement; the driver
+          // re-throws after the barrier, on a thread inside the decoder's catch.
+          try {
+            *t->slot = t->tc->pull_strip_into_buf(t->count, t->stride);
+          } catch (...) {
+            t->err->store(true, std::memory_order_relaxed);
+          }
           t->cnt->fetch_sub(1, std::memory_order_release);
         };
       });
       dec_strip_barrier_wait(pull_cnt);
+      // All pull tasks have completed (counter drained), so no straggler is
+      // running when we re-throw and the LineDecodeFinalizeGuard drains.
+      if (pull_error.load(std::memory_order_relaxed)) {
+        printf("WARNING: a strip-pull decode task failed — malformed input.\n");
+        throw std::exception();
+      }
     } else
 #endif
     {
@@ -6647,11 +6669,16 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
     j2k_tile_component *tc;
     sprec_t **slot;
     std::atomic<int> *cnt;
+    std::atomic<bool> *err;
     uint32_t count;
     uint32_t stride;
   };
   std::vector<StripPullCtx> strip_tasks(NC);
   std::atomic<int> pull_cnt(0);
+  // Sticky error flag for the strip-pull tasks (mirrors j2k_subband_row_buf's
+  // par_error one level up): a pull task records a code-block decode throw here
+  // instead of letting it escape the pool worker.  Reset before each batch push.
+  std::atomic<bool> pull_error(false);
   auto *pool                   = ThreadPool::get();
   const bool can_parallel_pull = (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
 #endif
@@ -6672,17 +6699,34 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
 #ifdef OPENHTJ2K_THREAD
     if (can_parallel_pull) {
       for (uint16_t c = 0; c < NC; ++c) {
-        strip_tasks[c] = {&tcomp[c], &strip_ptrs[c], &pull_cnt, counts[c], ci[c].csize_x};
+        strip_tasks[c] = {&tcomp[c], &strip_ptrs[c], &pull_cnt, &pull_error, counts[c], ci[c].csize_x};
       }
+      pull_error.store(false, std::memory_order_relaxed);
       pull_cnt.store(static_cast<int>(NC), std::memory_order_relaxed);
       pool->push_batch(strip_tasks, [](const StripPullCtx &ctx) {
         const StripPullCtx *t = &ctx;
         return [t]() {
-          *t->slot = t->tc->pull_strip_into_buf(t->count, t->stride);
+          // A code-block decode error surfaces here as a throw out of
+          // pull_strip_into_buf (the nested strip/prefetch barrier re-throws on
+          // malformed input).  This task runs on a pool worker — and on the
+          // calling thread via try_run_one — so an escaping throw would reach
+          // std::terminate().  Record it and ALWAYS decrement; the driver
+          // re-throws after the barrier, on a thread inside the decoder's catch.
+          try {
+            *t->slot = t->tc->pull_strip_into_buf(t->count, t->stride);
+          } catch (...) {
+            t->err->store(true, std::memory_order_relaxed);
+          }
           t->cnt->fetch_sub(1, std::memory_order_release);
         };
       });
       dec_strip_barrier_wait(pull_cnt);
+      // All pull tasks have completed (counter drained), so no straggler is
+      // running when we re-throw and the LineDecodeFinalizeGuard drains.
+      if (pull_error.load(std::memory_order_relaxed)) {
+        printf("WARNING: a strip-pull decode task failed — malformed input.\n");
+        throw std::exception();
+      }
     } else
 #endif
     {
