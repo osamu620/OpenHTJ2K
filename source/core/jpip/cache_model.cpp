@@ -12,6 +12,16 @@
 namespace open_htj2k {
 namespace jpip {
 
+// Upper bound on the number of data-bin operations a single apply() call may
+// perform.  A malformed range such as "P0-18446744073709551615" would
+// otherwise spin ~2^64 iterations, each inserting a map entry — unbounded
+// memory and CPU.  The cache model is advisory: under-applying it only makes
+// the server re-send data the client already holds (correct, just not
+// optimal), so stopping early is always safe.  The cap sits far above the
+// data-bin count of any realistic gigapixel session (~10^5–10^6) while
+// keeping worst-case memory bounded (~40 bytes per map entry).
+static constexpr uint64_t kMaxModelBinOps = 1u << 22;  // 4,194,304
+
 void CacheModel::mark(uint8_t class_id, uint64_t in_class_id) {
   bins_[key(class_id, in_class_id)].complete = true;
 }
@@ -156,6 +166,7 @@ void CacheModel::apply(const std::string &model_str) {
   // (memchr) are clamped to the token.
   const char *p         = model_str.c_str();
   const char *const end = p + model_str.size();
+  uint64_t budget       = kMaxModelBinOps;
   while (p < end) {
     const char *tok_end =
         static_cast<const char *>(std::memchr(p, ',', static_cast<size_t>(end - p)));
@@ -205,6 +216,8 @@ void CacheModel::apply(const std::string &model_str) {
     const bool partial     = (numend < tok_end && *numend == ':');
     if (partial) partial_bytes = std::strtoull(numend + 1, nullptr, 10);
     for (uint64_t id = start; id <= end_id; ++id) {
+      if (budget == 0) return;  // bin-operation budget spent — ignore the rest
+      --budget;
       if (subtractive) m.unmark(cls, id);
       else if (partial) m.mark_partial(cls, id, partial_bytes);
       else m.mark(cls, id);
