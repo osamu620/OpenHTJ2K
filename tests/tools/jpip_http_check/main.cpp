@@ -250,6 +250,31 @@ int main() {
     CHECK(empty_out.empty(), "empty body decodes to empty vector");
   }
 
+  // ── decode_chunked_body rejects integer-overflowing chunk sizes ────────
+  {
+    std::vector<uint8_t> out;
+    // Chunk size = SIZE_MAX (sixteen hex F's).  The old `i + chunk_size + 2
+    // > len` bound check wrapped around and admitted a multi-exabyte
+    // out-of-bounds read; it must now be rejected.
+    const char *huge = "ffffffffffffffff\r\nABC\r\n0\r\n\r\n";
+    CHECK(!decode_chunked_body(reinterpret_cast<const uint8_t *>(huge),
+                               std::strlen(huge), &out),
+          "SIZE_MAX chunk size must be rejected, not over-read");
+    // More hex digits than fit in size_t — the accumulator itself would
+    // overflow; reject before the shift drops high bits.
+    const char *acc = "1ffffffffffffffff\r\nABC\r\n0\r\n\r\n";
+    CHECK(!decode_chunked_body(reinterpret_cast<const uint8_t *>(acc),
+                               std::strlen(acc), &out),
+          "over-long hex chunk size must be rejected");
+    // A representable size that simply exceeds the available bytes: says
+    // 0x100 (256) bytes but supplies two.  Still rejected by the new
+    // subtraction-based bound.
+    const char *toobig = "100\r\nAB\r\n0\r\n\r\n";
+    CHECK(!decode_chunked_body(reinterpret_cast<const uint8_t *>(toobig),
+                               std::strlen(toobig), &out),
+          "chunk size exceeding available bytes must be rejected");
+  }
+
   // ── Content-Length path unchanged by chunked additions ─────────────────
   {
     const uint8_t body[] = {0x11, 0x22};
