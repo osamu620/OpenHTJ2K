@@ -190,17 +190,15 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   jph_info info;
   if (jph_parse_buffer(jph_file_buf.data(), jph_file_buf.size(), info)) {
     enum_cs = info.enum_cs;
-    if (info.cs_size > UINT32_MAX) {
-      printf("ERROR: embedded codestream length exceeds the 4 GiB decoder limit.\n");
-      throw std::exception();
-    }
-    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    // alloc_memory bounds info.cs_size (size_t) against the 4 GiB limit and
+    // throws on overflow, so the memcpy below cannot exceed the allocation.
+    in.alloc_memory(info.cs_size);
     memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
     jph_file_buf.clear();  // no longer needed; codestream is copied into `in`
     jph_file_buf.shrink_to_fit();
   } else {
     // Raw codestream: transfer directly.
-    in.alloc_memory(static_cast<uint32_t>(file_size));
+    in.alloc_memory(static_cast<size_t>(file_size));
     memcpy(in.get_buf_pos(), jph_file_buf.data(), static_cast<size_t>(file_size));
     jph_file_buf.clear();
     jph_file_buf.shrink_to_fit();
@@ -220,14 +218,12 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
   jph_info info;
   if (jph_parse_buffer(buf, length, info)) {
     enum_cs = info.enum_cs;
-    if (info.cs_size > UINT32_MAX) {
-      printf("ERROR: embedded codestream length exceeds the 4 GiB decoder limit.\n");
-      throw std::exception();
-    }
-    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    // alloc_memory bounds info.cs_size (size_t) against the 4 GiB limit and
+    // throws on overflow, so the memcpy below cannot exceed the allocation.
+    in.alloc_memory(info.cs_size);
     memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
   } else {
-    in.alloc_memory(static_cast<uint32_t>(length));
+    in.alloc_memory(length);
     memcpy(in.get_buf_pos(), buf, length);
   }
   is_codestream_set = true;
@@ -245,14 +241,12 @@ void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const
   jph_info info;
   if (jph_parse_buffer(buf, length, info)) {
     enum_cs = info.enum_cs;
-    if (info.cs_size > UINT32_MAX) {
-      printf("ERROR: embedded codestream length exceeds the 4 GiB decoder limit.\n");
-      throw std::exception();
-    }
-    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    // alloc_memory bounds info.cs_size (size_t) against the 4 GiB limit and
+    // throws on overflow, so the memcpy below cannot exceed the allocation.
+    in.alloc_memory(info.cs_size);
     memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
   } else {
-    in.alloc_memory(static_cast<uint32_t>(length));
+    in.alloc_memory(length);
     memcpy(in.get_buf_pos(), buf, length);
   }
   is_codestream_set = true;
@@ -276,14 +270,12 @@ void openhtj2k_decoder_impl::init_borrow(uint8_t *buf, const size_t length, cons
   if (jph_parse_buffer(buf, length, info)) {
     // JPH container detected — must copy the embedded codestream.
     enum_cs = info.enum_cs;
-    if (info.cs_size > UINT32_MAX) {
-      printf("ERROR: embedded codestream length exceeds the 4 GiB decoder limit.\n");
-      throw std::exception();
-    }
-    in.alloc_memory(static_cast<uint32_t>(info.cs_size));
+    // alloc_memory bounds info.cs_size (size_t) against the 4 GiB limit and
+    // throws on overflow, so the memcpy below cannot exceed the allocation.
+    in.alloc_memory(info.cs_size);
     memcpy(in.get_buf_pos(), info.cs_data, info.cs_size);
   } else {
-    in.borrow_memory(buf, static_cast<uint32_t>(length));
+    in.borrow_memory(buf, length);
   }
   is_codestream_set = true;
 }
