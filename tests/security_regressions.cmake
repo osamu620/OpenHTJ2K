@@ -121,4 +121,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
       PASS_REGULAR_EXPRESSION "code-block decode task failed"
       FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
       TIMEOUT 60)
+
+  # Multi-component (color) counterpart.  The grayscale case above is decoded
+  # with a serial strip pull, so its code-block throw unwinds straight to the
+  # interface catch.  With NC>1 the streaming driver pulls each component's
+  # strip on a thread-pool worker (can_parallel_pull), so the throw must also be
+  # caught at that strip-pull boundary — otherwise it escapes the worker and
+  # reaches std::terminate().  This fixture is a 3-component HT stream with one
+  # corrupted code-block byte; the patched driver prints the strip-pull
+  # worker-catch line and exits cleanly, while a decoder missing that catch
+  # aborts (crash regex) or hangs (TIMEOUT).  x86-only for the same reason as
+  # the grayscale case (the over-read only throws on the AVX2 reader).
+  add_test(NAME security_threaded_decode_abort_color_mt
+           COMMAND open_htj2k_dec
+                   -i ${SECURITY_DATA_DIR}/security_threaded_decode_abort_color.j2k
+                   -o security_threaded_decode_abort_color_mt.pgx
+                   -num_threads 4)
+  set_tests_properties(security_threaded_decode_abort_color_mt PROPERTIES
+      PASS_REGULAR_EXPRESSION "strip-pull decode task failed"
+      FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+      TIMEOUT 60)
 endif()
