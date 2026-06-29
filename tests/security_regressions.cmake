@@ -142,3 +142,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
       FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
       TIMEOUT 60)
 endif()
+
+# Codestream allocation bound (j2c_src_memory::alloc_memory / borrow_memory).
+# A codestream length that cannot be represented by the uint32_t buffer
+# accounting once the 16-byte over-read pad is added must be rejected, not
+# wrapped to a tiny allocation (heap overflow on the following copy).  This is
+# pure integer-bound logic, so it runs on every platform with no large input
+# (rejected lengths throw before any allocation).  The tool returns non-zero
+# on any unguarded case.
+add_test(NAME security_codestream_alloc_bound COMMAND codestream_bounds_check)
+set_tests_properties(security_codestream_alloc_bound PROPERTIES
+    PASS_REGULAR_EXPRESSION "all cases passed"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)

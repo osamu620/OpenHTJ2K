@@ -109,7 +109,7 @@ std::unique_ptr<CodestreamIndex> CodestreamIndex::build(const uint8_t *codestrea
   // does not over-read the buffer end.  We copy into a fresh j2c_src_memory
   // when the caller-supplied buffer is too tight (no padding contract).
   j2c_src_memory in;
-  in.alloc_memory(static_cast<uint32_t>(len));
+  in.alloc_memory(len);
   // alloc_memory zero-pads internally; copy the codestream bytes in.
   std::copy_n(codestream, len, in.get_buf_pos());
 

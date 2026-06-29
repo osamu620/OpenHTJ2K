@@ -301,6 +301,11 @@ add_subdirectory(tests/tools/col_range_compare)
 target_include_directories(col_range_compare PUBLIC source/core/interface)
 target_link_libraries(col_range_compare PUBLIC open_htj2k)
 
+# codestream_bounds_check: unit test for j2c_src_memory's 4 GiB allocation bound
+add_executable(codestream_bounds_check)
+add_subdirectory(tests/tools/codestream_bounds_check)
+target_link_libraries(codestream_bounds_check PUBLIC open_htj2k)
+
 # region_decode_bench: M1 region-decode latency/throughput benchmark (OSD eval)
 add_executable(region_decode_bench)
 add_subdirectory(tests/tools/region_decode_bench)

@@ -57,12 +57,15 @@ class j2c_src_memory {
     if (buf != nullptr && !borrowed) aligned_mem_free(buf);
     cap = 0;
   }
-  void alloc_memory(uint32_t length);
+  // `length` is size_t (not uint32_t) so an attacker-supplied codestream size
+  // larger than the uint32_t buffer accounting can be rejected here rather than
+  // silently truncated by the cast at the call site.
+  void alloc_memory(size_t length);
   // Borrow an external buffer without copying.  The caller must keep the
   // data alive until the next alloc_memory / borrow_memory / destructor.
   // 16 bytes of readable padding past `data + length` are required (the
   // same SIMD over-read guarantee as alloc_memory provides).
-  void borrow_memory(uint8_t *data, uint32_t length);
+  void borrow_memory(uint8_t *data, size_t length);
   uint8_t get_byte();
   int get_N_byte(uint8_t *buf, uint32_t length);
   uint16_t get_word();
