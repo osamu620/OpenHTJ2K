@@ -219,3 +219,47 @@ set_tests_properties(security_multitilepart_cblk_length PROPERTIES
     PASS_REGULAR_EXPRESSION "left in tile-part"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 30)
+
+# Line-based streaming setup throwing mid-init must not crash the finalize guard.
+# init_line_decode() builds each component's IDWT state: it allocates j2k_tcomp_line_dec,
+# sets NL_active, then validates the per-level DWT directions and allocates the
+# per-level state arrays (states/ctxs/hl/lh/hh).  decode_line_based_stream() guards
+# the whole decode with a LineDecodeFinalizeGuard whose destructor runs
+# finalize_line_decode() on every unwind, including when init_line_decode() throws.
+# finalize_line_decode() drains/frees those per-level arrays for each index
+# < NL_active -- so when init_line_decode() threw AFTER publishing NL_active but
+# BEFORE the arrays existed (the DWT_VERT rejection, or a std::bad_alloc), the guard
+# dereferenced still-null arrays and the process crashed (SIGSEGV) while unwinding.
+# The fix publishes NL_active only after the arrays are allocated, so a throw before
+# then leaves NL_active==0 and finalize touches nothing.
+#
+# The fixture is a 115-byte Part-2 codestream: a 32x32 single-component image whose
+# COC marks the component as DFS-driven and whose DFS marker declares the sole
+# decomposition level VERTICAL (HONLY/VONLY).  The line-based path does not support
+# DWT_VERT and rejects it in init_line_decode().  The tile body is two empty packets
+# (0x00), so packet parsing succeeds and the decode reaches the IDWT setup that
+# throws.  This is platform-independent scalar marker/IDWT-setup logic (no entropy
+# decoding), so it is not arch-gated and runs both single- and multi-threaded -- the
+# guard's drain path is compiled in whenever threads are available, so both runs hit
+# it.  The patched decoder prints the rejection and exits cleanly; a reverted fix
+# crashes while unwinding (before the message is printed), failing the PASS regex and
+# tripping the crash regex.
+add_test(NAME security_line_decode_dfs_vert
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_line_decode_dfs_vert.j2k
+                 -o security_line_decode_dfs_vert.pgx
+                 -num_threads 1)
+set_tests_properties(security_line_decode_dfs_vert PROPERTIES
+    PASS_REGULAR_EXPRESSION "does not support DWT_VERT"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)
+
+add_test(NAME security_line_decode_dfs_vert_mt
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_line_decode_dfs_vert.j2k
+                 -o security_line_decode_dfs_vert_mt.pgx
+                 -num_threads 4)
+set_tests_properties(security_line_decode_dfs_vert_mt PROPERTIES
+    PASS_REGULAR_EXPRESSION "does not support DWT_VERT"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)
