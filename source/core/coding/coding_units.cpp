@@ -2855,10 +2855,15 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
   const int32_t NL_act   = static_cast<int32_t>(NL) - static_cast<int32_t>(reduce_NL);
   const int32_t cb_h_val = static_cast<int32_t>(codeblock_size.y);
 
-  line_dec      = std::make_unique<j2k_tcomp_line_dec>();
-  auto *ld      = line_dec.get();
-  ld->NL_active = NL_act;
-  ld->next_row  = 0;
+  line_dec     = std::make_unique<j2k_tcomp_line_dec>();
+  auto *ld     = line_dec.get();
+  ld->next_row = 0;
+  // NL_active is published only after the per-level state arrays are allocated
+  // (further below).  init_line_decode() can throw before then — on the DWT_VERT
+  // rejection or a std::bad_alloc — and LineDecodeFinalizeGuard runs
+  // finalize_line_decode() while unwinding; that drains/frees hl/lh/hh/states/ctxs
+  // for every index < NL_active, so a non-zero count here would dereference the
+  // still-null arrays.  make_unique value-initialised NL_active to 0.
 
   // Coarsest active resolution: resolution[0] (always LL0 regardless of reduce_NL).
   j2k_resolution *r0 = access_resolution(0);
@@ -2890,6 +2895,10 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
   ld->hl_bufs = std::make_unique<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
   ld->lh_bufs = std::make_unique<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
   ld->hh_bufs = std::make_unique<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
+
+  // Per-level arrays now exist — safe to publish the active level count to
+  // finalize_line_decode() (see the note where line_dec is created above).
+  ld->NL_active = NL_act;
 
   // Cache raw pointers for index-by-int loops below (avoids size_t conversion warnings).
   idwt_2d_state *states        = ld->states.get();
