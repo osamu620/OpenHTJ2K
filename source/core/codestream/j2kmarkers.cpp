@@ -747,58 +747,26 @@ static void pack_quant_step(double fval, uint8_t &epsilon_out, uint16_t &mu_out)
   mu_out      = static_cast<uint16_t>(mantissa);
 }
 
-QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
-  Lmar = in.get_word();
-  this->set_buf(in.get_buf_pos());
-  in.get_N_byte(this->get_buf(), Lmar - 2U);
-  uint16_t len = 2;  // tmp length including Lqcd
-  Sqcd         = get_byte();
-  len++;
-  if ((Sqcd & 0x1F) == 0) {
-    // reversible transform
-    const size_t splen = static_cast<size_t>(Lmar - len);
-    if (splen > SPqcd.size()) SPqcd.resize(splen);
-    for (size_t i = 0; i < splen; ++i) {
-      SPqcd[i] = get_byte();
-    }
-  } else {
-    // irreversible transformation
-    assert((Lmar - len) % 2 == 0);
-    const size_t splen = static_cast<size_t>(Lmar - len) / 2U;
-    if (splen > SPqcd.size()) SPqcd.resize(splen);
-    for (size_t i = 0; i < splen; ++i) {
-      SPqcd[i] = get_word();
-    }
-  }
-  is_set = true;
-}
-
-QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t transformation,
-                       bool is_derived, uint8_t RI, uint8_t use_ycc, double basestep, uint8_t qfactor,
-                       const open_htj2k::visual_weighting_params &vp)
-    : j2k_marker_io_base(_QCD), Sqcd(0), is_reversible(transformation == 1) {
+// Build the SPqcd / SPqcc quantization-step word(s) shared by the QCD (luma) and
+// QCC (chroma) marker builders. The synthesis basis-gain derivation (BIBO for
+// the reversible transform, weighted-MSE for the irreversible one) and the
+// (epsilon, mu) packing per ISO/IEC 15444-1 Annex E are identical between the
+// two markers; the only per-component-class inputs are the visual-weight table
+// `W_b` and the {delta_ref, G_c, qfactor_power} triple, which each caller derives
+// from its own luma/chroma weights and gain (and, for QCD, the basestep-vs-Qfactor
+// reference step). `have_qfactor` is false only on the QCD plain-basestep path,
+// where every w_b collapses to 1.0. Subbands are stored in reverse order (LL
+// first) and the caller has already downgraded `is_derived` when a Qfactor is set.
+static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint8_t dwt_levels,
+                                               bool is_reversible, bool is_derived, uint8_t RI,
+                                               uint8_t use_ycc, const std::vector<double> &W_b,
+                                               bool have_qfactor, double delta_ref, double G_c,
+                                               double qfactor_power) {
   const size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
   std::vector<double> wmse_or_BIBO;
   wmse_or_BIBO.reserve(num_bands);
   std::vector<uint8_t> epsilon(num_bands, 0);
   std::vector<uint16_t> mu(num_bands, 0);
-
-  if (is_derived && qfactor != 0xFF) {
-    is_derived = false;
-    // TODO: show warning??
-  }
-  if (is_reversible) {
-    Lmar = static_cast<uint16_t>(4 + 3 * dwt_levels);
-  } else if (is_derived) {
-    Lmar = 5;
-    Sqcd = 0x01;
-  } else {
-    Lmar = static_cast<uint16_t>(5 + 6 * dwt_levels);
-    Sqcd = 0x02;
-  }
-
-  assert(number_of_guardbits < 8 && number_of_guardbits >= 0);
-  Sqcd = static_cast<uint8_t>(Sqcd + (number_of_guardbits << 5U));
 
   const std::vector<double> CDF53L = {-0.125, 0.25, 0.75, 0.25, -0.125};
   const std::vector<double> CDF53H = {-0.5, 1, -0.5};  // gain is doubled(x2)
@@ -810,12 +778,6 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
                                       1.205898036472720,  -0.533728236885750,
                                       -0.156446533057980, 0.033728236885750,
                                       0.053497514821622};  // gain is doubled(x2)
-
-  // Square roots of the visual weighting factors for Y content. The default
-  // (legacy_table) reproduces the historical Zeng et al. Table 2 values verbatim
-  // so the emitted QCD is bit-identical; an analytic CSF model in `vp` instead
-  // follows the requested viewing distance / zoom.
-  const std::vector<double> W_b_Y = open_htj2k::luma_visual_weights(dwt_levels, vp);
 
   double gain_low = 0.0, gain_high = 0.0;
 
@@ -883,74 +845,115 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
       }
     }
   } else {
-    // Lossy quantization step-size computation (ISO/IEC 15444-1 Annex E).
+    // Lossy quantization step-size computation (ISO/IEC 15444-1 Annex E):
     //
-    // Each subband b gets a step size Δ_b encoded as a (exponent, mantissa)
-    // pair stored in epsilon[] and mu[]:
+    //   Delta_b = delta_ref / (sqrt(G_b) * w_b * G_c)
     //
-    //   Δ_b = delta_ref / (sqrt(G_b) · w_b · G_c)
-    //
-    // where
-    //   G_b        – energy gain of synthesis basis vector for subband b,
-    //                precomputed in wmse_or_BIBO[] above;
-    //   w_b        – perceptual weight from W_b_Y[], raised to qfactor_power
-    //                (1.0 for the LL band and any band beyond the weight table);
-    //   G_c        – colour-component gain (1.0 for luma / single-component);
-    //   delta_ref  – reference step size: `basestep` when no Qfactor is active
-    //                (qfactor == 0xFF), otherwise derived from q_to_delta().
-    //
-    // The Qfactor pathway (https://jpeg.org/jpeg2000/documentation.html) maps a
-    // quality index Qfactor ∈ [1,100] to delta_ref and qfactor_power via q_to_delta(); when Qfactor is
-    // absent (0xFF) the formula degenerates to the plain basestep case (qfactor_power=0 ⇒ w_b=1, G_c=1).
-    //
-    // The floating-point step size is then quantised into the 5+11 bit
-    // representation (epsilon, mu) per Eq. E-3:
-    //
-    //   Δ_b = 2^{R_b − epsilon} · (1 + mu / 2^{11})
-    //
-    // with clamping: epsilon ∈ [0,31], mu ∈ [0,2047].
-    // Subbands are stored in reverse order (LL first in the marker segment).
-    double qfactor_power;
-    double delta_ref;
-    double G_c;
-    if (qfactor == 0xFF) {
-      qfactor_power = 0.0;
-      delta_ref     = basestep;
-      G_c           = 1.0;
-    } else {
-      const open_htj2k::q_scaling qs       = open_htj2k::q_to_delta(qfactor, RI);
-      qfactor_power                        = qs.qfactor_power;
-      const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, use_ycc != 0);
-      delta_ref                            = qs.delta_Q * open_htj2k::color_gain(ct, 0);
-      G_c                                  = open_htj2k::color_gain(ct, 0);
-    }
+    // where G_b is the precomputed synthesis basis-energy gain (wmse_or_BIBO[]),
+    // w_b is the perceptual weight raised to qfactor_power (1.0 for the LL band,
+    // any band beyond the weight table, or when no Qfactor is active), and G_c is
+    // the colour-component gain. The float step is packed into (epsilon, mu) per
+    // Eq. E-3, with clamping epsilon in [0,31], mu in [0,2047].
     for (size_t i = 0; i < epsilon.size(); ++i) {
-      double w_b =
-          (qfactor == 0xFF || i == epsilon.size() - 1 || i >= W_b_Y.size()) ? 1.0 : pow(W_b_Y[i], qfactor_power);
+      double w_b = (!have_qfactor || i == epsilon.size() - 1 || i >= W_b.size())
+                       ? 1.0
+                       : pow(W_b[i], qfactor_power);
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
       pack_quant_step(fval, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
     }
   }
 
-  // set SPqcd from epsilon and mu
+  // pack epsilon / mu into the SP step word(s)
+  std::vector<uint16_t> SP;
   if (is_derived) {
     if (is_reversible) {
       printf("ERROR: Derived quantization stepsize is not valid for reversible transform.\n");
       throw std::exception();
     }
     // Quantization style -> Scalar derived (values signalled for LL subband only)
-    SPqcd.push_back(static_cast<uint16_t>((epsilon[0] << 11) + mu[0]));
+    SP.push_back(static_cast<uint16_t>((epsilon[0] << 11) + mu[0]));
   } else {
     for (size_t i = 0; i < num_bands; ++i) {
       if (is_reversible) {
-        SPqcd.push_back(static_cast<uint16_t>(epsilon[i] << 3));
+        SP.push_back(static_cast<uint16_t>(epsilon[i] << 3));
       } else {
         // Quantization style -> Scalar expounded (values signalled for each sub-band)
-        SPqcd.push_back(static_cast<uint16_t>((epsilon[i] << 11) + mu[i]));
+        SP.push_back(static_cast<uint16_t>((epsilon[i] << 11) + mu[i]));
       }
     }
   }
+  return SP;
+}
 
+QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
+  Lmar = in.get_word();
+  this->set_buf(in.get_buf_pos());
+  in.get_N_byte(this->get_buf(), Lmar - 2U);
+  uint16_t len = 2;  // tmp length including Lqcd
+  Sqcd         = get_byte();
+  len++;
+  if ((Sqcd & 0x1F) == 0) {
+    // reversible transform
+    const size_t splen = static_cast<size_t>(Lmar - len);
+    if (splen > SPqcd.size()) SPqcd.resize(splen);
+    for (size_t i = 0; i < splen; ++i) {
+      SPqcd[i] = get_byte();
+    }
+  } else {
+    // irreversible transformation
+    assert((Lmar - len) % 2 == 0);
+    const size_t splen = static_cast<size_t>(Lmar - len) / 2U;
+    if (splen > SPqcd.size()) SPqcd.resize(splen);
+    for (size_t i = 0; i < splen; ++i) {
+      SPqcd[i] = get_word();
+    }
+  }
+  is_set = true;
+}
+
+QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t transformation,
+                       bool is_derived, uint8_t RI, uint8_t use_ycc, double basestep, uint8_t qfactor,
+                       const open_htj2k::visual_weighting_params &vp)
+    : j2k_marker_io_base(_QCD), Sqcd(0), is_reversible(transformation == 1) {
+  if (is_derived && qfactor != 0xFF) {
+    is_derived = false;
+    // TODO: show warning??
+  }
+  if (is_reversible) {
+    Lmar = static_cast<uint16_t>(4 + 3 * dwt_levels);
+  } else if (is_derived) {
+    Lmar = 5;
+    Sqcd = 0x01;
+  } else {
+    Lmar = static_cast<uint16_t>(5 + 6 * dwt_levels);
+    Sqcd = 0x02;
+  }
+
+  assert(number_of_guardbits < 8 && number_of_guardbits >= 0);
+  Sqcd = static_cast<uint8_t>(Sqcd + (number_of_guardbits << 5U));
+
+  // Square roots of the visual weighting factors for Y content. The default
+  // (legacy_table) reproduces the historical Zeng et al. Table 2 values verbatim
+  // so the emitted QCD is bit-identical; an analytic CSF model in `vp` instead
+  // follows the requested viewing distance / zoom. Luma is a single component, so
+  // the colour-component gain G_c is 1.0; the reference step delta_ref is the plain
+  // `basestep` when no Qfactor is active (qfactor == 0xFF, in which case every w_b
+  // collapses to 1.0), otherwise it follows the Qfactor pathway via q_to_delta()
+  // (https://jpeg.org/jpeg2000/documentation.html). The basis-gain derivation and
+  // (epsilon, mu) packing are shared with QCC through build_quant_steps().
+  const std::vector<double> W_b = open_htj2k::luma_visual_weights(dwt_levels, vp);
+  const bool have_qfactor       = (qfactor != 0xFF);
+  double qfactor_power = 0.0, delta_ref = basestep, G_c = 1.0;
+  if (!is_reversible && have_qfactor) {
+    const open_htj2k::q_scaling qs       = open_htj2k::q_to_delta(qfactor, RI);
+    const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, use_ycc != 0);
+    qfactor_power                        = qs.qfactor_power;
+    delta_ref                            = qs.delta_Q * open_htj2k::color_gain(ct, 0);
+    G_c                                  = open_htj2k::color_gain(ct, 0);
+  }
+
+  SPqcd = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
+                            have_qfactor, delta_ref, G_c, qfactor_power);
   is_set = true;
 }
 
@@ -1024,12 +1027,6 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
                        uint8_t qfactor, uint8_t chroma_format,
                        const open_htj2k::visual_weighting_params &vp)
     : j2k_marker_io_base(_QCC), max_components(Csiz), Cqcc(c), Sqcc(0), is_reversible(transformation == 1) {
-  size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
-  std::vector<double> wmse_or_BIBO;
-  wmse_or_BIBO.reserve(num_bands);
-  std::vector<uint8_t> epsilon(num_bands, 0);
-  std::vector<uint16_t> mu(num_bands, 0);
-
   if (is_derived && qfactor != 0xFF) {
     is_derived = false;
     // TODO: show warning??
@@ -1050,17 +1047,6 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   assert(number_of_guardbits < 8 && number_of_guardbits >= 0);
   Sqcc = static_cast<uint8_t>(Sqcc + (number_of_guardbits << 5));
 
-  const std::vector<double> CDF53L = {-0.125, 0.25, 0.75, 0.25, -0.125};
-  const std::vector<double> CDF53H = {-0.5, 1, -0.5};  // gain is doubled(x2)
-  const std::vector<double> D97SL  = {-0.091271763114250, -0.057543526228500, 0.591271763114250,
-                                      1.115087052457000,  0.5912717631142500, -0.05754352622850,
-                                      -0.091271763114250};
-  const std::vector<double> D97SH  = {0.053497514821622,  0.033728236885750,
-                                      -0.156446533057980, -0.533728236885750,
-                                      1.205898036472720,  -0.533728236885750,
-                                      -0.156446533057980, 0.033728236885750,
-                                      0.053497514821622};  // gain is doubled(x2)
-
   if (chroma_format != YCC444 && chroma_format != YCC420 && chroma_format != YCC422) {
     printf("ERROR: chroma format for QCC_marker is invalid.\n");
     throw std::exception();
@@ -1074,111 +1060,23 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   // (legacy_table) returns the historical 4:4:4/4:2:0/4:2:2 QCC table verbatim
   // (bit-identical); an analytic CSF model in `vp` instead follows the viewing
   // distance / zoom, deriving 4:2:0 & 4:2:2 from one chroma CSF via subsampling.
+  // delta_ref / qfactor_power follow the Q->step mapping (q_to_delta(), shared with
+  // QCD and estimate_qfactor; HTJ2K white paper); G_c is this component's synthesis
+  // gain. The basis-gain derivation and (epsilon, mu) packing are shared with QCD
+  // through build_quant_steps(). QCC is only emitted on the Qfactor path, so the
+  // lossy perceptual weights always apply (have_qfactor is true).
   const std::vector<double> W_b =
       open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct);
-
-  double gain_low = 0.0, gain_high = 0.0;
-
-  std::vector<double> L, H;
-  L = (is_reversible) ? CDF53L : D97SL;
-  H = (is_reversible) ? CDF53H : D97SH;
-  std::vector<double> outL(L);
-  std::vector<double> outH(H);
-
-  // derive BIBO gain for lossless, or
-  // derive weighted mse for lossy
-  if (dwt_levels == 0) {
-    wmse_or_BIBO.push_back(1.0);
-  } else {
-    for (uint8_t level = 0; level < dwt_levels; ++level) {
-      gain_low  = 0.0;
-      gain_high = 0.0;
-      for (const auto &e : outL) {
-        gain_low += (is_reversible) ? fabs(e) : e * e;
-      }
-      for (const auto &e : outH) {
-        gain_high += (is_reversible) ? fabs(e) : e * e;
-      }
-
-      wmse_or_BIBO.push_back(gain_high * gain_high);  // HH
-      wmse_or_BIBO.push_back(gain_low * gain_high);   // LH
-      wmse_or_BIBO.push_back(gain_high * gain_low);   // HL
-
-      std::vector<double> L2, H2;
-      // upsampling
-      for (auto &i : outL) {
-        L2.push_back(i);
-        L2.push_back(0.0);
-      }
-      for (auto &i : outH) {
-        H2.push_back(i);
-        H2.push_back(0.0);
-      }
-      std::vector<double> tmpL(L.size() + L2.size() - 1, 0.0);
-      for (size_t i = 0; i < L.size(); ++i) {
-        for (size_t j = 0; j < L2.size(); ++j) {
-          tmpL[i + j] += L[i] * L2[j];
-        }
-      }
-      std::vector<double> tmpH(L.size() + H2.size() - 1, 0.0);
-      for (size_t i = 0; i < L.size(); ++i) {
-        for (size_t j = 0; j < H2.size(); ++j) {
-          tmpH[i + j] += L[i] * H2[j];
-        }
-      }
-      outL = tmpL;
-      outH = tmpH;
-    }
-    wmse_or_BIBO.push_back(gain_low * gain_low);
-  }
-
-  // construct epsilon and mu
-  if (is_reversible) {
-    // lossless
-    for (size_t i = 0; i < epsilon.size(); ++i) {
-      epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(RI - number_of_guardbits + use_ycc);
-      while (wmse_or_BIBO[i] > 0.9) {
-        epsilon[epsilon.size() - i - 1]++;
-        wmse_or_BIBO[i] *= 0.5;
-      }
-    }
-  } else {
-    // lossy with qfactor. The Q->step mapping is shared with QCD and
-    // estimate_qfactor via q_to_delta(). Detail: HTJ2K white paper at
-    // https://htj2k.com/wp-content/uploads/white-paper.pdf
+  double qfactor_power = 0.0, delta_ref = 0.0, G_c = 1.0;
+  if (!is_reversible) {
     const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
-    const double qfactor_power     = qs.qfactor_power;
-    double delta_ref               = qs.delta_Q * open_htj2k::color_gain(ct, 0);
-    double G_c                     = open_htj2k::color_gain(ct, Cqcc);  // component synthesis gain
-
-    for (size_t i = 0; i < epsilon.size(); ++i) {
-      // w_b for the LL band (always the last entry) shall be 1.0, as must any extra
-      // low-frequency bands beyond the 5-level table when dwt_levels > 5.
-      double w_b = (i == epsilon.size() - 1 || i >= W_b.size()) ? 1.0 : pow(W_b[i], qfactor_power);
-      double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
-      pack_quant_step(fval, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
-    }
+    qfactor_power                  = qs.qfactor_power;
+    delta_ref                      = qs.delta_Q * open_htj2k::color_gain(ct, 0);
+    G_c                            = open_htj2k::color_gain(ct, Cqcc);  // component synthesis gain
   }
 
-  // set SPqcc from epsilon and mu
-  if (is_derived) {
-    if (is_reversible) {
-      printf("ERROR: Derived quantization stepsize is not valid for reversible transform.\n");
-      throw std::exception();
-    }
-    // Quantization style -> Scalar derived (values signalled for LL subband only)
-    SPqcc.push_back(static_cast<unsigned short>((epsilon[0] << 11) + mu[0]));
-  } else {
-    for (size_t i = 0; i < num_bands; ++i) {
-      if (is_reversible) {
-        SPqcc.push_back(static_cast<unsigned short>(epsilon[i] << 3));
-      } else {
-        // Quantization style -> Scalar expounded (values signalled for each sub-band)
-        SPqcc.push_back(static_cast<unsigned short>((epsilon[i] << 11) + mu[i]));
-      }
-    }
-  }
-
+  SPqcc = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
+                            /*have_qfactor=*/true, delta_ref, G_c, qfactor_power);
   is_set = true;
 }
 
