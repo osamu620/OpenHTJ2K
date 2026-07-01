@@ -25,17 +25,46 @@ set(_SEC_CRASH_RE
 # (SANGMYUNG UNIVERSITY, @5asever40-a11y).
 # SHA-256: da756e7aa7421e1207b92b7651996ed4b328edb820bd30cdb5f4af953d1eb063
 #
-# Assertion model: codeblock-level decode failures are logged as
-# warnings and do NOT propagate to the decoder's top-level exit
-# code, so we can't rely on WILL_FAIL.  Instead, require that the
-# specific guard printf from the patched code path fires (proof the
-# bounds check is in effect) and reject any crash-marker text.
+# The fixture is a grab-bag of several malformed code-blocks, each of which
+# trips a different htj2k_decode bounds/segment guard (the >4-segment stack
+# write among them).  Those guards return false rather than throwing; the
+# streaming decoder used to ignore that return and keep decoding, so a
+# malformed block silently produced a garbage (or uninitialised) plane while
+# the process exited 0.  The decoder now treats a false return like a thrown
+# error and fails fast at the first rejected block: the serial path throws from
+# decode_strip_core and the threaded path records par_error and re-throws at the
+# strip barrier.  These are scalar prologue guards, so the propagation is
+# platform-independent (not arch-gated).
+#
+# Assertion model: the CLI catches the decode exception and still exits 0, so
+# WILL_FAIL is not usable; instead require the fail-fast propagation message
+# (which appears only once the false return is honoured — a reverted fix prints
+# neither) and reject any crash marker.  The FAIL regex is the load-bearing
+# security assertion — the reported PoC must never stack-smash — and it holds
+# because the block is now rejected instead of decoded.
 add_test(NAME security_ht_segments_overflow
          COMMAND open_htj2k_dec
                  -i ${SECURITY_DATA_DIR}/security_ht_segments_overflow.j2k
-                 -o security_ht_segments_overflow.pgx)
+                 -o security_ht_segments_overflow.pgx
+                 -num_threads 1)
 set_tests_properties(security_ht_segments_overflow PROPERTIES
-    PASS_REGULAR_EXPRESSION "too many HT coding-pass segments"
+    PASS_REGULAR_EXPRESSION "HT code-block decoding reported failure"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 60)
+
+# Threaded counterpart: the same fixture under -num_threads 4 exercises the
+# pool-worker path, where a code-block decode failure is recorded as par_error
+# and re-thrown at the completion barrier (decode_strip_core / trigger_prefetch)
+# rather than thrown inline.  A tiny image may still fall back to the serial
+# decode, so the PASS regex accepts either the barrier message or the inline
+# throw; either way a reverted fix prints neither and the test fails.
+add_test(NAME security_ht_segments_overflow_mt
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_ht_segments_overflow.j2k
+                 -o security_ht_segments_overflow_mt.pgx
+                 -num_threads 4)
+set_tests_properties(security_ht_segments_overflow_mt PROPERTIES
+    PASS_REGULAR_EXPRESSION "code-block decode task failed|HT code-block decoding reported failure"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 60)
 

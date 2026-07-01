@@ -337,10 +337,16 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           return [blk, this]() {
             blk->dequant_i32 = this->dequant_i32;
             try {
-              if ((blk->Cmodes & HT) >> 6)
-                htj2k_decode(blk, ROIshift);
-              else
+              if ((blk->Cmodes & HT) >> 6) {
+                // htj2k_decode returns false (rather than throwing) when it
+                // rejects malformed input at a bounds/segment guard.  Treat that
+                // like a thrown error so the driver re-throws after the barrier
+                // instead of silently emitting a garbage (or uninitialised) block.
+                if (!htj2k_decode(blk, ROIshift))
+                  par_error.store(true, std::memory_order_relaxed);
+              } else {
                 j2k_decode(blk, ROIshift);
+              }
             } catch (...) {
               // Never let a decode error escape the task: it would std::terminate
               // the pool worker or unwind through try_run_one.  Record it; the
@@ -449,10 +455,17 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         }
 
         block->dequant_i32 = this->dequant_i32;
-        if ((block->Cmodes & HT) >> 6)
-          htj2k_decode(block, ROIshift);
-        else
+        if ((block->Cmodes & HT) >> 6) {
+          // A false return means htj2k_decode rejected malformed input at a
+          // bounds/segment guard; fail fast like the threaded path (and like
+          // j2k_decode, which throws) rather than continue with a garbage block.
+          if (!htj2k_decode(block, ROIshift)) {
+            printf("ERROR: HT code-block decoding reported failure — malformed input.\n");
+            throw std::exception();
+          }
+        } else {
           j2k_decode(block, ROIshift);
+        }
       }
     }
   }
@@ -694,10 +707,14 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     return [blk, this]() {
       blk->dequant_i32 = this->dequant_i32;
       try {
-        if ((blk->Cmodes & HT) >> 6)
-          htj2k_decode(blk, ROIshift);
-        else
+        if ((blk->Cmodes & HT) >> 6) {
+          // A false return is htj2k_decode's non-throwing malformed-input signal;
+          // record it like a thrown error so the prefetch-consume barrier re-throws.
+          if (!htj2k_decode(blk, ROIshift))
+            par_error.store(true, std::memory_order_relaxed);
+        } else {
           j2k_decode(blk, ROIshift);
+        }
       } catch (...) {
         // See decode_strip_core: record decode errors instead of throwing out of
         // the task; the prefetch-consume barrier (row_ptr) re-throws on the driver.
