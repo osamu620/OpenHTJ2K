@@ -78,30 +78,29 @@ static inline void spin_wait(std::atomic_int &cnt) {
 
 // ─── init / free ──────────────────────────────────────────────────────────────
 
-
-void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
-                               int32_t codeblock_height, uint8_t roi_shift, bool use_ring) {
-  res            = resolution;
-  band_idx       = b_idx;
-  ROIshift       = roi_shift;
-  cb_h           = codeblock_height;
-  strip_y0       = -1;
-  strip_y1       = -1;
-  ring_mode      = use_ring;
-  ring_buf       = nullptr;
-  ring_y0        = -1;
+void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx, int32_t codeblock_height,
+                               uint8_t roi_shift, bool use_ring) {
+  res       = resolution;
+  band_idx  = b_idx;
+  ROIshift  = roi_shift;
+  cb_h      = codeblock_height;
+  strip_y0  = -1;
+  strip_y1  = -1;
+  ring_mode = use_ring;
+  ring_buf  = nullptr;
+  ring_y0   = -1;
 
 #ifdef OPENHTJ2K_THREAD
   prefetch_buf    = nullptr;
   combined_buf    = nullptr;
   prefetch_y0     = -1;
   prefetch_y1     = -1;
-  par_spool         = nullptr;
-  par_stpool        = nullptr;
-  par_ctxpool       = nullptr;
-  par_spool_cap     = 0;
-  par_stpool_cap    = 0;
-  par_ctxpool_cap   = 0;
+  par_spool       = nullptr;
+  par_stpool      = nullptr;
+  par_ctxpool     = nullptr;
+  par_spool_cap   = 0;
+  par_stpool_cap  = 0;
+  par_ctxpool_cap = 0;
   par_cnt.store(0, std::memory_order_relaxed);
 #endif
 
@@ -122,9 +121,9 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
       // combined_buf holds the base pointer (ring_buf/prefetch_buf swap on prefetch hit,
       // so ring_buf may become an interior pointer — always free combined_buf).
       sprec_t *combined = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes * 2, 32));
-      combined_buf = combined;
-      ring_buf     = combined;
-      prefetch_buf = combined + buf_floats;
+      combined_buf      = combined;
+      ring_buf          = combined;
+      prefetch_buf      = combined + buf_floats;
 #else
       ring_buf = static_cast<sprec_t *>(aligned_mem_alloc(buf_bytes, 32));
 #endif
@@ -133,13 +132,13 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx,
 
   // Pre-allocate scratch for a 64×64 codeblock (grow-on-demand).
   // 32-byte alignment allows _mm256_load_si256 in the dequantize hot path.
-  cb_sample_cap  = static_cast<size_t>(round_up(64, 8) * round_up(64, 8));
-  cb_state_cap   = static_cast<size_t>((round_up(64, 8) + 2) * (round_up(64, 8) + 2));
+  cb_sample_cap = static_cast<size_t>(round_up(64, 8) * round_up(64, 8));
+  cb_state_cap  = static_cast<size_t>((round_up(64, 8) + 2) * (round_up(64, 8) + 2));
   // block_contexts worst-case per codeblock: 1024×4 shape ⇒ (8/4+2)×(1024+2)=4104 uint32_t.
-  cb_ctx_cap     = 4104u;
-  cb_sample_buf  = static_cast<int32_t *>(aligned_mem_alloc(cb_sample_cap * sizeof(int32_t), 32));
-  cb_state_buf   = static_cast<uint8_t *>(aligned_mem_alloc(cb_state_cap, 16));
-  cb_ctx_buf     = static_cast<uint32_t *>(aligned_mem_alloc(cb_ctx_cap * sizeof(uint32_t), 32));
+  cb_ctx_cap    = 4104u;
+  cb_sample_buf = static_cast<int32_t *>(aligned_mem_alloc(cb_sample_cap * sizeof(int32_t), 32));
+  cb_state_buf  = static_cast<uint8_t *>(aligned_mem_alloc(cb_state_cap, 16));
+  cb_ctx_buf    = static_cast<uint32_t *>(aligned_mem_alloc(cb_ctx_cap * sizeof(uint32_t), 32));
 
 #ifdef OPENHTJ2K_THREAD
   // par_spool / par_stpool start at zero capacity; decode_strip_core will
@@ -183,19 +182,33 @@ void j2k_subband_row_buf::free_resources() {
   // swapped with prefetch_buf and could be an interior pointer after prefetch hits.
   aligned_mem_free(combined_buf);
   combined_buf = ring_buf = prefetch_buf = nullptr;
-  ring_y0 = -1;
-  aligned_mem_free(par_spool);   par_spool   = nullptr;  par_spool_cap   = 0;
-  aligned_mem_free(par_stpool);  par_stpool  = nullptr;  par_stpool_cap  = 0;
-  aligned_mem_free(par_ctxpool); par_ctxpool = nullptr;  par_ctxpool_cap = 0;
+  ring_y0                                = -1;
+  aligned_mem_free(par_spool);
+  par_spool     = nullptr;
+  par_spool_cap = 0;
+  aligned_mem_free(par_stpool);
+  par_stpool     = nullptr;
+  par_stpool_cap = 0;
+  aligned_mem_free(par_ctxpool);
+  par_ctxpool     = nullptr;
+  par_ctxpool_cap = 0;
   par_tasks.clear();
   par_tasks.shrink_to_fit();
   strip_cache_.clear();
   strip_cache_.shrink_to_fit();
 #endif
-  aligned_mem_free(ring_buf); ring_buf = nullptr; ring_y0 = -1;
-  aligned_mem_free(cb_sample_buf); cb_sample_buf = nullptr; cb_sample_cap = 0;
-  aligned_mem_free(cb_state_buf);  cb_state_buf  = nullptr; cb_state_cap  = 0;
-  aligned_mem_free(cb_ctx_buf);    cb_ctx_buf    = nullptr; cb_ctx_cap    = 0;
+  aligned_mem_free(ring_buf);
+  ring_buf = nullptr;
+  ring_y0  = -1;
+  aligned_mem_free(cb_sample_buf);
+  cb_sample_buf = nullptr;
+  cb_sample_cap = 0;
+  aligned_mem_free(cb_state_buf);
+  cb_state_buf = nullptr;
+  cb_state_cap = 0;
+  aligned_mem_free(cb_ctx_buf);
+  cb_ctx_buf = nullptr;
+  cb_ctx_cap = 0;
   strip_y0 = strip_y1 = -1;
 }
 
@@ -208,7 +221,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
   const uint32_t np = res->npw * res->nph;
   // Precompute constant used to offset into ring/prefetch buffer.
   const int32_t sb_x0 = static_cast<int32_t>(sb->get_pos0().x);
-  const auto    stride = static_cast<ptrdiff_t>(sb->stride);
+  const auto stride   = static_cast<ptrdiff_t>(sb->stride);
 
 #ifdef OPENHTJ2K_THREAD
   {
@@ -225,19 +238,18 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
       size_t total_s = 0, total_st = 0, total_ctx = 0;
 
       for (uint32_t p = 0; p < np; ++p) {
-        j2k_precinct         *cp  = res->access_precinct(p);
+        j2k_precinct *cp          = res->access_precinct(p);
         j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-        const uint32_t        ncx = cpb->num_codeblock_x;
-        const uint32_t        ncy = cpb->num_codeblock_y;
+        const uint32_t ncx        = cpb->num_codeblock_x;
+        const uint32_t ncy        = cpb->num_codeblock_y;
         if (ncx == 0 || ncy == 0) continue;
         // Skip precincts that don't overlap with [y0, y1).
         const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
         const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
         if (cpb_y1_i <= y0 || cpb_y0_i >= y1) continue;
         // Jump directly to the first potentially-overlapping codeblock row.
-        const uint32_t r0 = (y0 > cpb_y0_i)
-                                ? static_cast<uint32_t>((y0 - cpb_y0_i) / static_cast<int32_t>(cb_h))
-                                : 0u;
+        const uint32_t r0 =
+            (y0 > cpb_y0_i) ? static_cast<uint32_t>((y0 - cpb_y0_i) / static_cast<int32_t>(cb_h)) : 0u;
         for (uint32_t r = r0; r < ncy; ++r) {
           j2k_codeblock *row_first = cpb->access_codeblock(r * ncx);
           if (static_cast<int32_t>(row_first->get_pos1().y) <= y0) continue;
@@ -252,10 +264,9 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
               // Empty block: dequantize never runs, so zero its region in target_buf
               // explicitly (replaces the bulk ring_buf pre-zero in decode_strip).
               if (ring_mode && target_buf) {
-                const ptrdiff_t roff =
-                    (static_cast<int32_t>(block->get_pos0().y) - y0) * stride;
+                const ptrdiff_t roff = (static_cast<int32_t>(block->get_pos0().y) - y0) * stride;
                 const ptrdiff_t coff = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
-                sprec_t *dst = target_buf + roff + coff;
+                sprec_t *dst         = target_buf + roff + coff;
                 for (uint32_t row = 0; row < block->size.y; row++)
                   std::memset(dst + row * stride, 0, block->size.x * sizeof(sprec_t));
               }
@@ -270,14 +281,11 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
             bt.sample_off = total_s;
             bt.state_off  = total_st;
             bt.ctx_off    = total_ctx;
-            bt.row_off    = (ring_mode && target_buf)
-                                ? (static_cast<int32_t>(block->get_pos0().y) - y0) * stride
-                                : 0;
-            bt.col_off = (ring_mode && target_buf)
-                             ? static_cast<int32_t>(block->get_pos0().x) - sb_x0
-                             : 0;
-            total_s   += static_cast<size_t>(QWx2 * QHx2);
-            total_st  += static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
+            bt.row_off =
+                (ring_mode && target_buf) ? (static_cast<int32_t>(block->get_pos0().y) - y0) * stride : 0;
+            bt.col_off = (ring_mode && target_buf) ? static_cast<int32_t>(block->get_pos0().x) - sb_x0 : 0;
+            total_s += static_cast<size_t>(QWx2 * QHx2);
+            total_st += static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
             total_ctx += static_cast<size_t>((QHx2 / 4 + 2) * (QWx2 + 2));
             par_tasks.push_back(bt);
           }
@@ -310,14 +318,13 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         par_error.store(false, std::memory_order_relaxed);
         par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
         for (auto &bt : par_tasks) {
-          bt.block->sample_buf           = par_spool + bt.sample_off;
-          bt.block->blksampl_stride      = bt.QWx2;
-          bt.block->block_states         = par_stpool + bt.state_off;
-          bt.block->blkstate_stride      = bt.QWx2 + 2;
-          bt.block->block_contexts       = par_ctxpool + bt.ctx_off;
+          bt.block->sample_buf            = par_spool + bt.sample_off;
+          bt.block->blksampl_stride       = bt.QWx2;
+          bt.block->block_states          = par_stpool + bt.state_off;
+          bt.block->blkstate_stride       = bt.QWx2 + 2;
+          bt.block->block_contexts        = par_ctxpool + bt.ctx_off;
           bt.block->block_contexts_stride = bt.QWx2 + 2;
-          if (ring_mode && target_buf)
-            bt.block->band_buf = target_buf + bt.row_off + bt.col_off;
+          if (ring_mode && target_buf) bt.block->band_buf = target_buf + bt.row_off + bt.col_off;
           const bool is_ht = (bt.block->Cmodes & HT) >> 6;
           if (!is_ht) {
             std::memset(bt.block->sample_buf, 0, static_cast<size_t>(bt.QWx2) * bt.QHx2 * sizeof(int32_t));
@@ -342,8 +349,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
                 // rejects malformed input at a bounds/segment guard.  Treat that
                 // like a thrown error so the driver re-throws after the barrier
                 // instead of silently emitting a garbage (or uninitialised) block.
-                if (!htj2k_decode(blk, ROIshift))
-                  par_error.store(true, std::memory_order_relaxed);
+                if (!htj2k_decode(blk, ROIshift)) par_error.store(true, std::memory_order_relaxed);
               } else {
                 j2k_decode(blk, ROIshift);
               }
@@ -369,10 +375,10 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
 
   // ── Serial path ────────────────────────────────────────────────────────────
   for (uint32_t p = 0; p < np; ++p) {
-    j2k_precinct         *cp  = res->access_precinct(p);
+    j2k_precinct *cp          = res->access_precinct(p);
     j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-    const uint32_t        ncx = cpb->num_codeblock_x;
-    const uint32_t        ncy = cpb->num_codeblock_y;
+    const uint32_t ncx        = cpb->num_codeblock_x;
+    const uint32_t ncy        = cpb->num_codeblock_y;
     if (ncx == 0 || ncy == 0) continue;
 
     // Skip precincts that don't overlap with [y0, y1).
@@ -380,15 +386,14 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
     const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
     if (cpb_y1_i <= y0 || cpb_y0_i >= y1) continue;
     // Jump directly to the first potentially-overlapping codeblock row.
-    const uint32_t r0 = (y0 > cpb_y0_i)
-                            ? static_cast<uint32_t>((y0 - cpb_y0_i) / static_cast<int32_t>(cb_h))
-                            : 0u;
+    const uint32_t r0 =
+        (y0 > cpb_y0_i) ? static_cast<uint32_t>((y0 - cpb_y0_i) / static_cast<int32_t>(cb_h)) : 0u;
     for (uint32_t r = r0; r < ncy; ++r) {
       j2k_codeblock *row_first = cpb->access_codeblock(r * ncx);
       if (static_cast<int32_t>(row_first->get_pos1().y) <= y0) continue;
       if (static_cast<int32_t>(row_first->get_pos0().y) >= y1) break;
 
-      for (uint32_t c = 0; c < ncx; ++c) {
+      for (uint32_t c = 0; c < ncx;) {
         j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
 
         // JPIP-masked codeblocks (num_passes > 0 but no compressed data) take
@@ -396,76 +401,105 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         if (!block->num_passes || block->get_compressed_data() == nullptr) {
           // Empty block: zero its region in target_buf (replaces bulk pre-zero).
           if (ring_mode && target_buf) {
-            const ptrdiff_t roff =
-                (static_cast<int32_t>(block->get_pos0().y) - y0) * stride;
+            const ptrdiff_t roff = (static_cast<int32_t>(block->get_pos0().y) - y0) * stride;
             const ptrdiff_t coff = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
-            sprec_t *dst = target_buf + roff + coff;
+            sprec_t *dst         = target_buf + roff + coff;
             for (uint32_t row = 0; row < block->size.y; row++)
               std::memset(dst + static_cast<ptrdiff_t>(row) * stride, 0, block->size.x * sizeof(sprec_t));
           }
+          ++c;
           continue;
         }
 
-        const uint32_t QWx2     = round_up(block->size.x, 8U);
-        const uint32_t QHx2     = round_up(block->size.y, 8U);
-        const size_t   need_s   = static_cast<size_t>(QWx2 * QHx2);
-        const size_t   need_st  = static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
-        const size_t   need_ctx = static_cast<size_t>((QHx2 / 4 + 2) * (QWx2 + 2));
-
-        if (need_s > cb_sample_cap) {
-          aligned_mem_free(cb_sample_buf);
-          cb_sample_buf = static_cast<int32_t *>(aligned_mem_alloc(need_s * sizeof(int32_t), 32));
-          cb_sample_cap = need_s;
-        }
-        if (need_st > cb_state_cap) {
-          aligned_mem_free(cb_state_buf);
-          cb_state_buf = static_cast<uint8_t *>(aligned_mem_alloc(need_st, 16));
-          cb_state_cap = need_st;
-        }
-        if (need_ctx > cb_ctx_cap) {
-          aligned_mem_free(cb_ctx_buf);
-          cb_ctx_buf = static_cast<uint32_t *>(aligned_mem_alloc(need_ctx * sizeof(uint32_t), 32));
-          cb_ctx_cap = need_ctx;
-        }
-
-        // ht_cleanup_decode writes every position before reading, so no
-        // pre-zeroing is needed for single-pass HT blocks. For EBCOT and
-        // multi-pass HT blocks, zero the necessary regions.
         const bool is_ht = (block->Cmodes & HT) >> 6;
-        if (!is_ht) {
-          std::memset(cb_sample_buf, 0, need_s * sizeof(int32_t));
-          std::memset(cb_state_buf, 0, need_st);
-          std::memset(cb_ctx_buf, 0, need_ctx * sizeof(uint32_t));
-        } else if (block->num_passes > 1) {
-          std::memset(cb_state_buf, 0, need_st);
+
+        // Greedy run formation for the batched HT decoder: extend over the
+        // following decodable HT codeblocks of identical dimensions (equal
+        // dims ⇒ equal scratch needs, so lanes can share the grow-on-demand
+        // buffers at fixed offsets).  htj2k_dec_batch_lanes is 1 on ISAs
+        // without an N-way step-1 kernel, keeping this path per-block there.
+        uint32_t run = 1;
+        if (is_ht && htj2k_dec_batch_lanes > 1) {
+          const uint32_t max_run = htj2k_dec_batch_lanes < 8u ? htj2k_dec_batch_lanes : 8u;
+          while (run < max_run && c + run < ncx) {
+            j2k_codeblock *nb = cpb->access_codeblock(r * ncx + c + run);
+            if (!nb->num_passes || nb->get_compressed_data() == nullptr) break;
+            if (!((nb->Cmodes & HT) >> 6)) break;
+            if (nb->size.x != block->size.x || nb->size.y != block->size.y) break;
+            ++run;
+          }
         }
 
-        block->sample_buf            = cb_sample_buf;
-        block->blksampl_stride       = QWx2;
-        block->block_states          = cb_state_buf;
-        block->blkstate_stride       = QWx2 + 2;
-        block->block_contexts        = cb_ctx_buf;
-        block->block_contexts_stride = QWx2 + 2;
+        const uint32_t QWx2   = round_up(block->size.x, 8U);
+        const uint32_t QHx2   = round_up(block->size.y, 8U);
+        const size_t need_s   = static_cast<size_t>(QWx2 * QHx2);
+        const size_t need_st  = static_cast<size_t>((QWx2 + 2) * (QHx2 + 2));
+        const size_t need_ctx = static_cast<size_t>((QHx2 / 4 + 2) * (QWx2 + 2));
 
-        if (ring_mode && target_buf != nullptr) {
-          const ptrdiff_t row_off =
-              (static_cast<int32_t>(block->get_pos0().y) - y0) * stride;
-          const ptrdiff_t col_off = static_cast<int32_t>(block->get_pos0().x) - sb_x0;
-          block->band_buf        = target_buf + row_off + col_off;
+        if (need_s * run > cb_sample_cap) {
+          aligned_mem_free(cb_sample_buf);
+          cb_sample_buf = static_cast<int32_t *>(aligned_mem_alloc(need_s * run * sizeof(int32_t), 32));
+          cb_sample_cap = need_s * run;
+        }
+        if (need_st * run > cb_state_cap) {
+          aligned_mem_free(cb_state_buf);
+          cb_state_buf = static_cast<uint8_t *>(aligned_mem_alloc(need_st * run, 16));
+          cb_state_cap = need_st * run;
+        }
+        if (need_ctx * run > cb_ctx_cap) {
+          aligned_mem_free(cb_ctx_buf);
+          cb_ctx_buf = static_cast<uint32_t *>(aligned_mem_alloc(need_ctx * run * sizeof(uint32_t), 32));
+          cb_ctx_cap = need_ctx * run;
         }
 
-        block->dequant_i32 = this->dequant_i32;
-        if ((block->Cmodes & HT) >> 6) {
-          // A false return means htj2k_decode rejected malformed input at a
+        j2k_codeblock *grp[8];  // run ≤ htj2k_dec_batch_lanes ≤ 8
+        for (uint32_t k = 0; k < run; ++k) {
+          j2k_codeblock *bk = cpb->access_codeblock(r * ncx + c + k);
+          grp[k]            = bk;
+
+          // ht_cleanup_decode writes every position before reading, so no
+          // pre-zeroing is needed for single-pass HT blocks. For EBCOT and
+          // multi-pass HT blocks, zero the necessary regions.
+          if (!is_ht) {
+            std::memset(cb_sample_buf, 0, need_s * sizeof(int32_t));
+            std::memset(cb_state_buf, 0, need_st);
+            std::memset(cb_ctx_buf, 0, need_ctx * sizeof(uint32_t));
+          } else if (bk->num_passes > 1) {
+            std::memset(cb_state_buf + k * need_st, 0, need_st);
+          }
+
+          bk->sample_buf            = cb_sample_buf + k * need_s;
+          bk->blksampl_stride       = QWx2;
+          bk->block_states          = cb_state_buf + k * need_st;
+          bk->blkstate_stride       = QWx2 + 2;
+          bk->block_contexts        = cb_ctx_buf + k * need_ctx;
+          bk->block_contexts_stride = QWx2 + 2;
+
+          if (ring_mode && target_buf != nullptr) {
+            const ptrdiff_t row_off = (static_cast<int32_t>(bk->get_pos0().y) - y0) * stride;
+            const ptrdiff_t col_off = static_cast<int32_t>(bk->get_pos0().x) - sb_x0;
+            bk->band_buf            = target_buf + row_off + col_off;
+          }
+
+          bk->dequant_i32 = this->dequant_i32;
+        }
+
+        if (is_ht) {
+          // A false result means htj2k_decode rejected malformed input at a
           // bounds/segment guard; fail fast like the threaded path (and like
           // j2k_decode, which throws) rather than continue with a garbage block.
-          if (!htj2k_decode(block, ROIshift)) {
-            printf("ERROR: HT code-block decoding reported failure — malformed input.\n");
-            throw std::exception();
+          bool results[8];
+          htj2k_decode_batch(grp, run, ROIshift, results);
+          for (uint32_t k = 0; k < run; ++k) {
+            if (!results[k]) {
+              printf("ERROR: HT code-block decoding reported failure — malformed input.\n");
+              throw std::exception();
+            }
           }
         } else {
           j2k_decode(block, ROIshift);
         }
+        c += run;
       }
     }
   }
@@ -529,24 +563,23 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
 
   const int32_t sb_y0     = static_cast<int32_t>(sb->get_pos0().y);
   const int32_t strip_idx = (prefetch_y0 - sb_y0) / cb_h;
-  StripCacheEntry *entry = (strip_idx >= 0
-                            && static_cast<size_t>(strip_idx) < strip_cache_.size())
-                               ? &strip_cache_[static_cast<size_t>(strip_idx)]
-                               : nullptr;
+  StripCacheEntry *entry  = (strip_idx >= 0 && static_cast<size_t>(strip_idx) < strip_cache_.size())
+                                ? &strip_cache_[static_cast<size_t>(strip_idx)]
+                                : nullptr;
 
   // ── Cold miss: walk the tree once and capture the per-strip block list ──
   if (entry != nullptr && !entry->built) {
-    const uint32_t np     = res->npw * res->nph;
-    const int32_t  sb_x0  = static_cast<int32_t>(sb->get_pos0().x);
-    const auto     stride_cold = static_cast<ptrdiff_t>(sb->stride);
+    const uint32_t np      = res->npw * res->nph;
+    const int32_t sb_x0    = static_cast<int32_t>(sb->get_pos0().x);
+    const auto stride_cold = static_cast<ptrdiff_t>(sb->stride);
 
     entry->blocks.clear();
 
     for (uint32_t p = 0; p < np; ++p) {
-      j2k_precinct         *cp  = res->access_precinct(p);
+      j2k_precinct *cp          = res->access_precinct(p);
       j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-      const uint32_t        ncx = cpb->num_codeblock_x;
-      const uint32_t        ncy = cpb->num_codeblock_y;
+      const uint32_t ncx        = cpb->num_codeblock_x;
+      const uint32_t ncy        = cpb->num_codeblock_y;
       if (ncx == 0 || ncy == 0) continue;
       const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
       const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
@@ -591,8 +624,7 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
       if (prefetch_buf != nullptr) {
         sprec_t *dst = prefetch_buf + ce.row_off + ce.col_off;
         for (uint32_t row = 0; row < ce.size_y; ++row) {
-          std::memset(dst + static_cast<ptrdiff_t>(row) * stride, 0,
-                      ce.size_x * sizeof(sprec_t));
+          std::memset(dst + static_cast<ptrdiff_t>(row) * stride, 0, ce.size_x * sizeof(sprec_t));
         }
       }
       return;
@@ -606,8 +638,8 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     pb.ctx_off    = total_ctx;
     pb.row_off    = ce.row_off;
     pb.col_off    = ce.col_off;
-    total_s   += static_cast<size_t>(ce.QWx2 * ce.QHx2);
-    total_st  += static_cast<size_t>((ce.QWx2 + 2) * (ce.QHx2 + 2));
+    total_s += static_cast<size_t>(ce.QWx2 * ce.QHx2);
+    total_st += static_cast<size_t>((ce.QWx2 + 2) * (ce.QHx2 + 2));
     total_ctx += static_cast<size_t>((ce.QHx2 / 4 + 2) * (ce.QWx2 + 2));
     par_tasks.push_back(pb);
   };
@@ -618,13 +650,13 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     // Fallback tree walk: populate a thread-local list then process it.
     static thread_local std::vector<CachedBlock> fb_blocks;
     fb_blocks.clear();
-    const uint32_t np    = res->npw * res->nph;
-    const int32_t  sb_x0 = static_cast<int32_t>(sb->get_pos0().x);
+    const uint32_t np   = res->npw * res->nph;
+    const int32_t sb_x0 = static_cast<int32_t>(sb->get_pos0().x);
     for (uint32_t p = 0; p < np; ++p) {
-      j2k_precinct         *cp  = res->access_precinct(p);
+      j2k_precinct *cp          = res->access_precinct(p);
       j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-      const uint32_t        ncx = cpb->num_codeblock_x;
-      const uint32_t        ncy = cpb->num_codeblock_y;
+      const uint32_t ncx        = cpb->num_codeblock_x;
+      const uint32_t ncy        = cpb->num_codeblock_y;
       if (ncx == 0 || ncy == 0) continue;
       const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
       const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
@@ -689,8 +721,8 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     pb.block->blkstate_stride       = pb.QWx2 + 2;
     pb.block->block_contexts        = par_ctxpool + pb.ctx_off;
     pb.block->block_contexts_stride = pb.QWx2 + 2;
-    pb.block->band_buf             = pbuf + pb.row_off + pb.col_off;
-    const bool is_ht = (pb.block->Cmodes & HT) >> 6;
+    pb.block->band_buf              = pbuf + pb.row_off + pb.col_off;
+    const bool is_ht                = (pb.block->Cmodes & HT) >> 6;
     if (!is_ht) {
       std::memset(pb.block->sample_buf, 0, static_cast<size_t>(pb.QWx2) * pb.QHx2 * sizeof(int32_t));
       std::memset(pb.block->block_states, 0, static_cast<size_t>(pb.QWx2 + 2) * (pb.QHx2 + 2));
@@ -710,8 +742,7 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
         if ((blk->Cmodes & HT) >> 6) {
           // A false return is htj2k_decode's non-throwing malformed-input signal;
           // record it like a thrown error so the prefetch-consume barrier re-throws.
-          if (!htj2k_decode(blk, ROIshift))
-            par_error.store(true, std::memory_order_relaxed);
+          if (!htj2k_decode(blk, ROIshift)) par_error.store(true, std::memory_order_relaxed);
         } else {
           j2k_decode(blk, ROIshift);
         }
@@ -745,7 +776,7 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
         }
         std::swap(ring_buf, prefetch_buf);
         strip_y0 = ring_y0 = prefetch_y0;
-        strip_y1            = prefetch_y1;
+        strip_y1           = prefetch_y1;
         prefetch_y0 = prefetch_y1 = -1;
         trigger_prefetch(strip_y1);
       } else {
