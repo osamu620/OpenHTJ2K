@@ -33,3 +33,17 @@
 
 void j2k_decode(j2k_codeblock *block, uint8_t ROIshift);
 bool htj2k_decode(j2k_codeblock *block, uint8_t ROIshift);
+
+// Decode n HT codeblocks, interleaving the serial step-1 (MEL/VLC/UVLC)
+// dependency chains of same-sized neighbours when the active ISA provides a
+// batched kernel (htj2k_dec_batch_lanes > 1).  Caller guarantees every block
+// is an HT block with num_passes > 0 and non-null compressed data.
+// results[i] receives what htj2k_decode(blocks[i], ROIshift) would have
+// returned; the decoded output is byte-identical to per-block decoding.
+// Returns true iff every block decoded successfully.
+bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshift, bool *results);
+
+// Number of step-1 lanes the active ISA's batched kernel interleaves;
+// 1 means htj2k_decode_batch is a plain per-block loop (link-time constant —
+// SIMD dispatch is compile-time in this project).
+extern const uint32_t htj2k_dec_batch_lanes;
