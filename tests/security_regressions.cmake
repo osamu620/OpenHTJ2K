@@ -131,16 +131,27 @@ endforeach()
 # always decrements the counter, then re-throws on the driver thread after the
 # barrier — matching the clean single-threaded error path.
 #
-# This regression is registered on x86 only.  Reaching the worker exception path
-# the fix protects requires the corrupted code-block to actually throw, which it
-# does on x86 (the AVX2 reader throws unconditionally on the over-read).  Other
-# ISAs respond to the same bytes differently — the NEON reader clamps the
-# over-read in a Release build (decode finishes with garbage), so the fixture
-# would neither exercise the fix nor reproduce the failure there.  On x86 the
-# patched decoder prints its worker-catch log line and exits cleanly; a reverted
-# fix hangs (caught by TIMEOUT) or aborts (caught by the crash regex).
-# Single-threaded decode was always clean, so the threaded run is what matters.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+# This regression is registered only when the AVX2 block-decoder is compiled
+# in.  Reaching the worker exception path the fix protects requires the
+# corrupted code-block to actually throw, which only the AVX2 reader does
+# (unconditionally, on the over-read).  Every other reader responds to the
+# same bytes differently — the NEON and scalar readers clamp the over-read in
+# a Release build (decode finishes with garbage), so the fixture would
+# neither exercise the fix nor reproduce the failure there.  That makes a
+# processor check the wrong gate: an x86_64 build with -DENABLE_AVX2=OFF
+# clamps like NEON and used to fail these tests.  Gate on the AVX2 reader
+# actually being built instead (ENABLE_AVX2 plus __AVX2__ under the active
+# compile flags, mirroring the OPENHTJ2K_TRY_AVX2 && __AVX2__ source gate).
+# With the AVX2 reader, the patched decoder prints its worker-catch log line
+# and exits cleanly; a reverted fix hangs (caught by TIMEOUT) or aborts
+# (caught by the crash regex).  Single-threaded decode was always clean, so
+# the threaded run is what matters.
+if(ENABLE_AVX2)
+  include(CheckCXXSourceCompiles)
+  check_cxx_source_compiles("#ifndef __AVX2__\n#error \"AVX2 not enabled\"\n#endif\nint main() { return 0; }"
+                            OPENHTJ2K_TESTS_HAVE_AVX2_READER)
+endif()
+if(OPENHTJ2K_TESTS_HAVE_AVX2_READER)
   add_test(NAME security_threaded_decode_abort_mt
            COMMAND open_htj2k_dec
                    -i ${SECURITY_DATA_DIR}/security_threaded_decode_abort.j2k
@@ -159,8 +170,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
   # reaches std::terminate().  This fixture is a 3-component HT stream with one
   # corrupted code-block byte; the patched driver prints the strip-pull
   # worker-catch line and exits cleanly, while a decoder missing that catch
-  # aborts (crash regex) or hangs (TIMEOUT).  x86-only for the same reason as
-  # the grayscale case (the over-read only throws on the AVX2 reader).
+  # aborts (crash regex) or hangs (TIMEOUT).  AVX2-reader-only for the same
+  # reason as the grayscale case (the over-read only throws on that reader).
   add_test(NAME security_threaded_decode_abort_color_mt
            COMMAND open_htj2k_dec
                    -i ${SECURITY_DATA_DIR}/security_threaded_decode_abort_color.j2k
