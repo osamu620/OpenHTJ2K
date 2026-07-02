@@ -30,6 +30,7 @@
   #include "coding_units.hpp"
   #include "dec_CxtVLC_tables.hpp"
   #include "ht_block_decoding.hpp"
+  #include "block_decoding.hpp"
   #include "coding_local.hpp"
   #include "utils.hpp"
 
