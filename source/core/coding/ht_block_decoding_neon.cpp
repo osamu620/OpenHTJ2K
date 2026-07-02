@@ -1063,8 +1063,5 @@ bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshi
   return all_ok;
 }
 
-// Commit 1 keeps the driver on the per-block path (lanes = 1): this TU's
-// restructure to the two-phase shape must first prove byte-identical and
-// wall-neutral before the 2-way lockstep is enabled.
-const uint32_t htj2k_dec_batch_lanes = 1;
+const uint32_t htj2k_dec_batch_lanes = OPENHTJ2K_HT_DEC_BATCH_N;
 #endif
