@@ -1097,8 +1097,10 @@ static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const
   return true;
 }
 
-bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
-  const ht_dec_setup su = htj2k_dec_setup(block);
+// Decode one block from an already-computed setup.  htj2k_dec_setup is NOT
+// idempotent (modDcup mutates the compressed buffer, so a re-run reads a
+// corrupted Scup) — every setup must be consumed by exactly one decode.
+static bool htj2k_decode_su(j2k_codeblock *block, const ht_dec_setup &su, const uint8_t ROIshift) {
   if (!su.ok) return false;
   if (su.empty) return true;
 
@@ -1123,16 +1125,108 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   return htj2k_dec_finish(block, su, ROIshift, scratch, sstr);
 }
 
-// Batched entry point (see block_decoding.hpp).  The scalar build has no
-// N-way step-1 kernel wired yet: plain per-block loop.
+bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+  return htj2k_decode_su(block, htj2k_dec_setup(block), ROIshift);
+}
+
+// Number of codeblocks whose step-1 chains are decoded in lockstep.
+  #ifndef OPENHTJ2K_HT_DEC_BATCH_N
+    #define OPENHTJ2K_HT_DEC_BATCH_N 2
+  #endif
+
+// Batched entry point (see block_decoding.hpp).  Walks the block list and
+// decodes OPENHTJ2K_HT_DEC_BATCH_N consecutive blocks with the N-way
+// lockstep step-1 kernel whenever they share dimensions and pass-class and
+// all validate; everything else falls back to the 1-way path.  Output is
+// byte-identical to per-block decoding (the lockstep kernel preserves each
+// lane's operation sequence, and step-2 runs per block in list order).
 bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshift, bool *results) {
-  bool all_ok = true;
-  for (uint32_t i = 0; i < n; ++i) {
-    results[i] = htj2k_decode(blocks[i], ROIshift);
-    all_ok &= results[i];
+  constexpr uint32_t BN = OPENHTJ2K_HT_DEC_BATCH_N;
+  bool all_ok           = true;
+  uint32_t i            = 0;
+  while (i < n) {
+    // A group needs BN consecutive blocks of equal dimensions (⇒ shared
+    // QW/QH/sstr) — check the cheap key before running any setup.
+    bool key = (i + BN <= n);
+    for (uint32_t k = 1; key && k < BN; ++k) {
+      key = blocks[i + k]->size.x == blocks[i]->size.x && blocks[i + k]->size.y == blocks[i]->size.y;
+    }
+    if (!key) {
+      results[i] = htj2k_decode(blocks[i], ROIshift);
+      all_ok &= results[i];
+      ++i;
+      continue;
+    }
+
+    // Setup mutates each block's buffer (modDcup): from here on, every one
+    // of the BN setups is consumed below, batched or not.
+    ht_dec_setup su[BN];
+    bool group = true;
+    for (uint32_t k = 0; k < BN; ++k) {
+      su[k] = htj2k_dec_setup(blocks[i + k]);
+      group &= su[k].ok && !su[k].empty;
+    }
+    // skip_sigma is a step-1 template parameter: lanes must share pass-class.
+    for (uint32_t k = 1; group && k < BN; ++k) {
+      group &= (su[k].num_ht_passes == 1) == (su[0].num_ht_passes == 1);
+    }
+    if (!group) {
+      for (uint32_t k = 0; k < BN; ++k) {
+        results[i + k] = htj2k_decode_su(blocks[i + k], su[k], ROIshift);
+        all_ok &= results[i + k];
+      }
+      i += BN;
+      continue;
+    }
+
+    const j2k_codeblock *b0 = blocks[i];
+    const uint16_t QW       = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(b0->size.x), 2));
+    const uint16_t QH       = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(b0->size.y), 2));
+    const int32_t sstr      = static_cast<int32_t>(((b0->size.x + 2) + 7u) & ~7u);  // multiples of 8
+    const bool skip_sigma   = su[0].num_ht_passes == 1;
+
+    uint16_t scratch[BN][8 * 513];
+    ht_step1_lane ln[BN];
+    for (uint32_t k = 0; k < BN; ++k) {
+      ln[k].Dcup            = blocks[i + k]->get_compressed_data();
+      ln[k].Lcup            = su[k].Lcup;
+      ln[k].Scup            = su[k].Scup;
+      ln[k].scratch         = scratch[k];
+      ln[k].block_states    = blocks[i + k]->block_states;
+      ln[k].blkstate_stride = blocks[i + k]->blkstate_stride;
+    }
+
+    bool step1_done = true;
+    try {
+      if (skip_sigma) {
+        ht_cleanup_step1_nway<BN, true>(ln, QW, QH, sstr);
+      } else {
+        ht_cleanup_step1_nway<BN, false>(ln, QW, QH, sstr);
+      }
+    } catch (...) {
+      // Malformed input: one lane's rev_buf underflowed mid-lockstep.  Redo
+      // every lane 1-way from its saved setup so per-block results and
+      // exceptions match the non-batched path exactly (per-lane step-1 work
+      // is idempotent: scratch is fully rewritten, sigma stores are pure
+      // assignments).  This path never runs on valid streams.
+      step1_done = false;
+    }
+    for (uint32_t k = 0; k < BN; ++k) {
+      if (!step1_done) {
+        ht_step1_lane l1 = ln[k];
+        if (skip_sigma) {
+          ht_cleanup_step1_nway<1, true>(&l1, QW, QH, sstr);  // may throw, like the 1-way path
+        } else {
+          ht_cleanup_step1_nway<1, false>(&l1, QW, QH, sstr);
+        }
+      }
+      results[i + k] = htj2k_dec_finish(blocks[i + k], su[k], ROIshift, scratch[k], sstr);
+      all_ok &= results[i + k];
+    }
+    i += BN;
   }
   return all_ok;
 }
 
-const uint32_t htj2k_dec_batch_lanes = 1;
+const uint32_t htj2k_dec_batch_lanes = OPENHTJ2K_HT_DEC_BATCH_N;
 #endif
