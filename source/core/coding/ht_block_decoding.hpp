@@ -367,6 +367,84 @@ class rev_buf {
 /********************************************************************************
  * fwd_buf:
  *******************************************************************************/
+//************************************************************************/
+/** @brief Destuff a forward-growing bitstream segment once, up front
+ *
+ *  Portable scalar implementation shared by the NEON and WASM readers
+ *  (the x86 reader has an SSE fast path of the same algorithm).  Removes
+ *  the stuffing bit that follows every 0xFF byte — sequences greater
+ *  than 0xFF7F cannot appear in the compressed segment — and pads the
+ *  output with X bytes so that positional reads past the end of the
+ *  stream see the exhaustion fill value.  dst must have room for
+ *  size + 66 bytes.
+ *
+ *  @tparam       X is the value fed in when the bitstream is exhausted
+ *  @param  [in]  src is a pointer to the start of the segment
+ *  @param  [in]  size is the number of bytes in the segment
+ *  @param  [out] dst receives the destuffed, X-padded bits
+ *  @return       clamp offset: bytes at or beyond it hold no stream bits
+ */
+template <int X>
+static inline uint32_t destuff_fwd_portable(const uint8_t *src, int size, uint8_t *dst) {
+  if (size < 0) size = 0;
+  uint8_t *o                 = dst;
+  uint8_t *const o_end       = dst + size;  // destuffing only removes bits: out <= size bytes
+  const uint8_t *s           = src;
+  const uint8_t *const s_end = src + size;
+  uint64_t acc               = 0;  // partial output byte; low nb bits are valid
+  uint32_t nb                = 0;  // number of valid bits in acc; always < 8
+  bool prev_ff               = false;
+
+  // fast path: 16 source bytes at a time when they contain no 0xFF
+  // (0xFF detection per 8 bytes via the branch-free has-value bit trick)
+  while (s + 16 <= s_end && o + 24 <= o_end) {
+    uint64_t v0, v1;
+    std::memcpy(&v0, s, 8);
+    std::memcpy(&v1, s + 8, 8);
+    const uint64_t ff0 = (~v0 - 0x0101010101010101ULL) & v0 & 0x8080808080808080ULL;
+    const uint64_t ff1 = (~v1 - 0x0101010101010101ULL) & v1 & 0x8080808080808080ULL;
+    if ((ff0 | ff1) != 0 || prev_ff) {
+      // process these 16 bytes one at a time through the bit accumulator
+      for (int i = 0; i < 16; ++i) {
+        const uint8_t b = *s++;
+        acc |= static_cast<uint64_t>(b & (prev_ff ? 0x7FU : 0xFFU)) << nb;
+        nb += prev_ff ? 7U : 8U;
+        prev_ff = (b == 0xFFU);
+        if (nb >= 8) {
+          *o++ = static_cast<uint8_t>(acc);
+          acc >>= 8;
+          nb -= 8;
+        }
+      }
+      continue;
+    }
+    const uint64_t w0 = acc | (v0 << nb);
+    const uint64_t w1 = (v1 << nb) | (nb ? (v0 >> (64 - nb)) : 0);
+    std::memcpy(o, &w0, 8);
+    std::memcpy(o + 8, &w1, 8);
+    acc = nb ? (v1 >> (64 - nb)) : 0;
+    o += 16;
+    s += 16;
+  }
+  // tail: one byte at a time
+  while (s < s_end && o < o_end) {
+    const uint8_t b = *s++;
+    acc |= static_cast<uint64_t>(b & (prev_ff ? 0x7FU : 0xFFU)) << nb;
+    nb += prev_ff ? 7U : 8U;
+    prev_ff = (b == 0xFFU);
+    if (nb >= 8) {
+      *o++ = static_cast<uint8_t>(acc);
+      acc >>= 8;
+      nb -= 8;
+    }
+  }
+  // fill the bits above nb with X and pad with X bytes
+  const uint32_t fill = (X == 0xFF) ? (0xFFU << nb) : 0U;
+  *o                  = static_cast<uint8_t>(static_cast<uint32_t>(acc) | fill);
+  std::memset(o + 1, X, 65);
+  return static_cast<uint32_t>(o - dst) + 1;
+}
+
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
 // NEON does not provide a version of this function, here is an article about
@@ -496,128 +574,31 @@ FORCE_INLINE int32x4_t aarch64_srl_epi64(int32x4_t a, uint8_t b) {
 template <int X>
 class fwd_buf {
  private:
-  const uint8_t *data;  //!< pointer to bitstream
-  uint8_t tmp[48];      //!< temporary buffer of read data + 16 extra
-  uint32_t bits;        //!< number of bits stored in tmp
-  uint32_t unstuff;     //!< 1 if a bit needs to be unstuffed from next byte
-  int size;             //!< size of data
- public:
-  fwd_buf(const uint8_t *data, int size) : data(data), bits(0), unstuff(0), size(size) {
-    //    this->data = data;
-    vst1q_u8(this->tmp, vdupq_n_u8(0));
-    vst1q_u8(this->tmp + 16, vdupq_n_u8(0));
-    vst1q_u8(this->tmp + 32, vdupq_n_u8(0));
-
-    //    this->bits    = 0;
-    //    this->unstuff = 0;
-    //    this->size    = size;
-
-    read();  // read 128 bits more
-  }
+  const uint8_t *dbuf;  //!< pointer to the destuffed bitstream
+  uint32_t limit;       //!< clamp offset; bytes at or beyond it hold no stream bits (read as X)
+  uint32_t pos;         //!< absolute bit position of the next unread bit
 
   //************************************************************************/
-  /** @brief Read and unstuffs 16 bytes from forward-growing bitstream
-   *
-   *  A template is used to accommodate a different requirement for
-   *  MagSgn and SPP bitstreams; in particular, when MagSgn bitstream is
-   *  consumed, 0xFF's are fed, while when SPP is exhausted 0's are fed in.
-   *  X controls this value.
-   *
-   *  Unstuffing prevent sequences that are more than 0xFF7F from appearing
-   *  in the conpressed sequence.  So whenever a value of 0xFF is coded, the
-   *  MSB of the next byte is set 0 and must be ignored during decoding.
-   *
-   *  Reading can go beyond the end of buffer by up to 16 bytes.
-   *
-   *
+  /** @brief Per-thread scratch holding the destuffed bitstream; grows
+   *         monotonically and is reused across code-blocks
    */
+  static uint8_t *destuff_scratch(size_t need) {
+    static thread_local std::vector<uint8_t> buf;
+    if (buf.size() < need) buf.resize(need);
+    return buf.data();
+  }
 
-  inline void read() {
-    assert(this->bits <= 128);
-
-    uint8x16_t offset, val, validity, all_xff;
-    val       = vld1q_u8(this->data);
-    int bytes = this->size >= 16 ? 16 : this->size;
-    validity  = vdupq_n_s8((char)bytes);
-    this->data += bytes;
-    this->size -= bytes;
-    uint32_t bits_local = 128;
-    // offset = _mm_set_epi64x(0x0F0E0D0C0B0A0908, 0x0706050403020100);
-    int64_t local_tmp[2] = {0x0706050403020100, 0x0F0E0D0C0B0A0908};
-    offset               = vreinterpretq_u8_s64(vld1q_s64(local_tmp));
-    validity             = vcgtq_s8(validity, offset);
-    all_xff              = vdupq_n_s8(-1);
-    if (X == 0xFF)  // the compiler should remove this if statement
-    {
-      auto t = veorq_u8(validity, all_xff);  // complement
-      val    = vorrq_u8(t, val);             // fill with 0xFF
-    } else if (X == 0)
-      val = vandq_u8(validity, val);  // fill with zeros
-    else
-      assert(0);
-
-    uint16x8_t ff_bytes = vceqq_u8(val, all_xff);
-
-    // movemask: SEE BELOW
-    // https://community.arm.com/arm-community-blogs/b/infrastructure-solutions-blog/posts/porting-x86-vector-bitmask-optimizations-to-arm-neon
-    uint64_t flags_arm =
-        vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(ff_bytes), 4)), 0);  // movemask
-    uint32_t next_unstuff_arm = flags_arm >> 63;
-    flags_arm <<= 4;  // unstuff following byte
-    flags_arm |= this->unstuff << 3;
-    flags_arm |= this->unstuff << 2;
-    flags_arm |= this->unstuff << 1;
-    flags_arm |= this->unstuff;
-
-    while (flags_arm) {  // bit unstuffing occurs on average once every 256 bytes
-      // therefore it is not an issue if it is a bit slow
-      // here we process 16 bytes
-      --bits_local;  // consuming one stuffing bit
-
-      int32_t loc_arm = static_cast<int32_t>(15 - (openhtj2k_arm_clzll(flags_arm) >> 2));
-      flags_arm ^= (uint64_t)0xF << (loc_arm << 2);
-      uint8x16_t m, t, c;
-      t = vdupq_n_s8(static_cast<int8_t>(loc_arm));
-      m = vcgtq_s8(offset, t);
-
-      t = vandq_u8(m, val);  // keep bits_local at locations larger than loc
-      // c = aarch64_srli_epi64(t, 1);  // 1 bits_local left
-      c = vreinterpretq_s32_u64(vshrq_n_u64(vreinterpretq_u64_s32(t), 1));  // 1 bits_local left
-      // t = aarch64_srli_si128(t, 8);   // 8 bytes left
-      t = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(t), vdupq_n_s8(0), 8));  // 8 bytes left
-      // t = aarch64_slli_epi64(t, 63);                                          // keep the MSB only
-      t = vreinterpretq_s32_s64(vshlq_n_s64(vreinterpretq_s64_s32(t), 63));  // keep the MSB only
-      t = vorrq_u8(t, c);                                                    // combine the above 3 steps
-
-      val = vorrq_u8(t, vbicq_s8(val, m));
-    }
-
-    // combine with earlier data
-    assert(this->bits >= 0 && this->bits <= 128);
-    uint32_t cur_bytes = this->bits >> 3;
-    uint32_t cur_bits  = this->bits & 7;
-    uint8x16_t b1, b2;
-    b1 = aarch64_sll_epi64(val, vdupq_n_s64(cur_bits));
-
-    //    b2 = aarch64_slli_si128(val, 8);  // 8 bytes right
-    b2 = vreinterpretq_s32_s8(vextq_s8(vdupq_n_s8(0), vreinterpretq_s8_s32(val), 16 - 8));  // 8 bytes left
-    b2 = aarch64_srl_epi64(b2, static_cast<uint8_t>(64 - cur_bits));
-    b1 = vorrq_u8(b1, b2);
-    b2 = vld1q_u8(tmp + cur_bytes);
-    b2 = vorrq_u8(b1, b2);
-    vst1q_u8(tmp + cur_bytes, b2);
-
-    uint32_t consumed_bits = bits_local < 128 - cur_bits ? bits_local : 128 - cur_bits;
-    cur_bytes              = (this->bits + (uint32_t)consumed_bits + 7) >> 3;  // round up
-    // int upper = aarch64_extract_epi16(val, 7);
-    int upper = vgetq_lane_s16(vreinterpretq_s16_s32(val), 7) & 0x0000ffff;
-
-    upper >>= consumed_bits - 128 + 16;
-    this->tmp[cur_bytes] = (uint8_t)upper;  // copy byte
-
-    this->bits += (uint32_t)bits_local;
-    this->unstuff = next_unstuff_arm;  // next unstuff
-    assert(this->unstuff == 0 || this->unstuff == 1);
+ public:
+  //************************************************************************/
+  /** @brief Initialize fwd_buf: destuff the whole segment once up front,
+   *         then read it at absolute bit positions with no serial state
+   */
+  fwd_buf(const uint8_t *data, int size) {
+    if (size < 0) size = 0;
+    uint8_t *dst = destuff_scratch(static_cast<size_t>(size) + 80);
+    this->dbuf   = dst;
+    this->limit  = destuff_fwd_portable<X>(data, size, dst);
+    this->pos    = 0;
   }
 
   //************************************************************************/
@@ -625,38 +606,12 @@ class fwd_buf {
    *
    *  @param [in]  num_bits is the number of bit to consume
    */
-  inline void advance(uint32_t num_bits) {
-    if (!num_bits) return;
-    assert(num_bits > 0 && num_bits <= this->bits && num_bits < 128);
-    this->bits -= num_bits;
-
-    auto *p = (this->tmp + ((num_bits >> 3) & 0x18));
-    num_bits &= 63;
-
-    uint16x8_t v0, v1, c0, c1, t;
-    v0 = vld1q_u8(p);
-    v1 = vld1q_u8(p + 16);
-
-    // shift right by num_bits
-    c0 = aarch64_srl_epi64(v0, static_cast<uint8_t>(num_bits));
-    //    t  = aarch64_srli_si128(v0, 8);
-    t  = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(v0), vdupq_n_s8(0), 8));
-    t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
-    c0 = vorrq_u8(c0, t);
-    //    t  = aarch64_slli_si128(v1, 8);
-    t  = vreinterpretq_s32_s8(vextq_s8(vdupq_n_s8(0), vreinterpretq_s8_s32(v1), 16 - 8));
-    t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
-    c0 = vorrq_u8(c0, t);
-
-    vst1q_u8(this->tmp, c0);
-
-    c1 = aarch64_srl_epi64(v1, static_cast<uint8_t>(num_bits));
-    //    t  = aarch64_srli_si128(v1, 8);
-    t  = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(v1), vdupq_n_s8(0), 8));
-    t  = aarch64_sll_epi64(t, vdupq_n_s64(64 - num_bits));
-    c1 = vorrq_u8(c1, t);
-
-    vst1q_u8(this->tmp + 16, c1);
+  FORCE_INLINE void advance(uint32_t num_bits) {
+    if (num_bits >= 128) {
+      printf("Value of numbits = %d is out of range.\n", num_bits);
+      throw std::exception();
+    }
+    this->pos += num_bits;
   }
 
   //************************************************************************/
@@ -665,12 +620,7 @@ class fwd_buf {
    *  @param [in]  m is a reference to a vector of m_n bits
    */
   FORCE_INLINE int32x4_t fetch(const int32x4_t &m) {
-    if (this->bits <= 128) {
-      read();
-      if (this->bits <= 128)  // need to test
-        read();
-    }
-    auto t = vld1q_u8(this->tmp);
+    auto t = fetch_raw();
   #if defined(_MSC_VER)
     int32x4_t msvec, c, v;
     msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 0);
@@ -721,13 +671,18 @@ class fwd_buf {
    *         per-lane extraction.  Caller handles bit-level extraction
    *         (e.g. via vqtbl1q_u8).
    */
-  FORCE_INLINE uint8x16_t fetch_raw() {
-    if (this->bits <= 128) {
-      read();
-      if (this->bits <= 128)
-        read();
-    }
-    return vld1q_u8(this->tmp);
+  FORCE_INLINE uint8x16_t fetch_raw() const {
+    uint32_t off       = this->pos >> 3;
+    off                = off < this->limit ? off : this->limit;
+    const uint8_t *p   = this->dbuf + off;
+    const uint64x2_t v = vreinterpretq_u64_u8(vld1q_u8(p));
+    const uint64x2_t w = vreinterpretq_u64_u8(vld1q_u8(p + 8));
+    // 128-bit window starting at bit pos: NEON USHL yields 0 for
+    // out-of-range shift counts, so (pos & 7) == 0 needs no special case.
+    const int64_t k    = static_cast<int64_t>(this->pos & 7);
+    const uint64x2_t r = vshlq_u64(v, vdupq_n_s64(-k));
+    const uint64x2_t c = vshlq_u64(w, vdupq_n_s64(64 - k));
+    return vreinterpretq_u8_u64(vorrq_u64(r, c));
   }
 
   //************************************************************************/
@@ -885,138 +840,69 @@ class fwd_buf {
 template <int X>
 class fwd_buf {
  private:
-  const uint8_t *data;
-  uint8_t tmp[48];
-  uint32_t bits;
-  uint32_t unstuff;
-  int size;
+  const uint8_t *dbuf;  //!< pointer to the destuffed bitstream
+  uint32_t limit;       //!< clamp offset; bytes at or beyond it hold no stream bits (read as X)
+  uint32_t pos;         //!< absolute bit position of the next unread bit
 
-  static inline v128_t srli_si128_8(v128_t a) {
-    return wasm_i8x16_shuffle(a, wasm_i32x4_const_splat(0),
-                              8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
-  }
-  static inline v128_t slli_si128_8(v128_t a) {
-    return wasm_i8x16_shuffle(wasm_i32x4_const_splat(0), a,
-                              0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+  //************************************************************************/
+  /** @brief Per-thread scratch holding the destuffed bitstream; grows
+   *         monotonically and is reused across code-blocks
+   */
+  static uint8_t *destuff_scratch(size_t need) {
+    static thread_local std::vector<uint8_t> buf;
+    if (buf.size() < need) buf.resize(need);
+    return buf.data();
   }
 
  public:
-  fwd_buf(const uint8_t *data, int size) : data(data), bits(0), unstuff(0), size(size) {
-    wasm_v128_store(this->tmp,      wasm_i32x4_const_splat(0));
-    wasm_v128_store(this->tmp + 16, wasm_i32x4_const_splat(0));
-    wasm_v128_store(this->tmp + 32, wasm_i32x4_const_splat(0));
-    read();
+  //************************************************************************/
+  /** @brief Initialize fwd_buf: destuff the whole segment once up front,
+   *         then read it at absolute bit positions with no serial state
+   */
+  fwd_buf(const uint8_t *data, int size) {
+    if (size < 0) size = 0;
+    uint8_t *dst = destuff_scratch(static_cast<size_t>(size) + 80);
+    this->dbuf   = dst;
+    this->limit  = destuff_fwd_portable<X>(data, size, dst);
+    this->pos    = 0;
   }
 
-  inline void read() {
-    assert(this->bits <= 128);
-    v128_t offset, val, validity, all_xff;
-    val       = wasm_v128_load(this->data);
-    int bytes = this->size >= 16 ? 16 : this->size;
-    validity  = wasm_i8x16_splat((char)bytes);
-    this->data += bytes;
-    this->size -= bytes;
-    int bits = 128;
-    offset   = wasm_i8x16_const(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
-    validity = wasm_i8x16_gt(validity, offset);
-    all_xff  = wasm_i8x16_const_splat(-1);
-    if (X == 0xFF) {
-      v128_t t = wasm_v128_xor(validity, all_xff);
-      val      = wasm_v128_or(t, val);
-    } else if (X == 0)
-      val = wasm_v128_and(validity, val);
-    else
-      assert(0);
-
-    v128_t ff_bytes;
-    ff_bytes       = wasm_i8x16_eq(val, all_xff);
-    ff_bytes       = wasm_v128_and(ff_bytes, validity);
-    uint32_t flags = (uint32_t)wasm_i8x16_bitmask(ff_bytes);
-    flags <<= 1;
-    uint32_t next_unstuff = flags >> 16;
-    flags |= this->unstuff;
-    flags &= 0xFFFF;
-
-    while (flags) {
-      --bits;
-      uint32_t loc = 31 - __builtin_clz(flags);
-      flags ^= 1U << loc;
-      v128_t m, t, c;
-      t = wasm_i8x16_splat((char)loc);
-      m = wasm_i8x16_gt(offset, t);
-      t = wasm_v128_and(m, val);
-      c = wasm_u64x2_shr(t, 1);
-      t = srli_si128_8(t);
-      t = wasm_i64x2_shl(t, 63);
-      t = wasm_v128_or(t, c);
-      val = wasm_v128_or(t, wasm_v128_andnot(val, m));
-    }
-
-    assert(this->bits >= 0 && this->bits <= 128);
-    uint32_t cur_bytes = this->bits >> 3;
-    int cur_bits       = this->bits & 7;
-    v128_t b1, b2;
-    b1 = wasm_i64x2_shl(val, cur_bits);
-    if (cur_bits > 0) {
-      b2 = slli_si128_8(val);
-      b2 = wasm_u64x2_shr(b2, 64 - cur_bits);
-      b1 = wasm_v128_or(b1, b2);
-    }
-    b2 = wasm_v128_load(this->tmp + cur_bytes);
-    b2 = wasm_v128_or(b1, b2);
-    wasm_v128_store(this->tmp + cur_bytes, b2);
-
-    int consumed_bits = bits < 128 - cur_bits ? bits : 128 - cur_bits;
-    cur_bytes         = (this->bits + (uint32_t)consumed_bits + 7) >> 3;
-    int upper         = wasm_i16x8_extract_lane(val, 7) & 0xFFFF;
-    upper >>= consumed_bits - 128 + 16;
-    this->tmp[cur_bytes] = (uint8_t)upper;
-
-    this->bits += (uint32_t)bits;
-    this->unstuff = next_unstuff;
-    assert(this->unstuff == 0 || this->unstuff == 1);
-  }
-
+  //************************************************************************/
+  /** @brief Consume num_bits bits from the destuffed bitstream
+   *
+   *  A valid stream never consumes more than 128 bits per fetch window;
+   *  exceeding it means a malformed U_q / MagSgn segment, so fail fast.
+   */
   FORCE_INLINE void advance(uint32_t num_bits) {
-    if (!(num_bits <= this->bits && num_bits < 128)) {
+    if (num_bits >= 128) {
       printf("Value of numbits = %d is out of range.\n", num_bits);
       throw std::exception();
     }
-    this->bits -= num_bits;
-    v128_t *p = (v128_t *)(this->tmp + ((num_bits >> 3) & 0x18));
-    num_bits &= 63;
+    this->pos += num_bits;
+  }
 
-    v128_t v0, v1, c0, c1, t;
-    v0 = wasm_v128_load(p);
-    v1 = wasm_v128_load(p + 1);
-
-    c0 = wasm_u64x2_shr(v0, num_bits);
-    if (num_bits > 0) {
-      t  = srli_si128_8(v0);
-      t  = wasm_i64x2_shl(t, 64 - num_bits);
-      c0 = wasm_v128_or(c0, t);
-      t  = slli_si128_8(v1);
-      t  = wasm_i64x2_shl(t, 64 - num_bits);
-      c0 = wasm_v128_or(c0, t);
-    }
-    wasm_v128_store(this->tmp, c0);
-
-    c1 = wasm_u64x2_shr(v1, num_bits);
-    if (num_bits > 0) {
-      t  = srli_si128_8(v1);
-      t  = wasm_i64x2_shl(t, 64 - num_bits);
-      c1 = wasm_v128_or(c1, t);
-    }
-    wasm_v128_store(this->tmp + 16, c1);
+  //************************************************************************/
+  /** @brief Fetches the 128 bits starting at bit position pos
+   *
+   *  WASM shift counts are taken modulo 64, so the carry lanes are
+   *  masked out when (pos & 7) == 0.  The byte offset is clamped to
+   *  limit so overruns read the exhaustion fill value.
+   */
+  FORCE_INLINE v128_t fetch_raw() const {
+    uint32_t off     = this->pos >> 3;
+    off              = off < this->limit ? off : this->limit;
+    const uint8_t *p = this->dbuf + off;
+    const v128_t v   = wasm_v128_load(p);
+    const v128_t w   = wasm_v128_load(p + 8);
+    const uint32_t k = this->pos & 7;
+    v128_t r         = wasm_u64x2_shr(v, k);
+    v128_t c         = wasm_i64x2_shl(w, (64 - k) & 63);
+    c                = wasm_v128_and(c, wasm_i64x2_splat(-static_cast<int64_t>(k != 0)));
+    return wasm_v128_or(r, c);
   }
 
   FORCE_INLINE v128_t fetch(const v128_t &m) {
-    if (this->bits <= 128) {
-      read();
-      if (this->bits <= 128)
-        read();
-    }
-    v128_t t = wasm_v128_load(this->tmp);
+    v128_t t          = fetch_raw();
     uint64_t lo = (uint64_t)wasm_i64x2_extract_lane(t, 0);
     uint64_t hi = (uint64_t)wasm_i64x2_extract_lane(t, 1);
     __uint128_t v128i = ((__uint128_t)hi << 64) | lo;
@@ -1032,16 +918,6 @@ class fwd_buf {
     vtmp = wasm_i32x4_make(r0, r1, r2, r3);
     advance((uint32_t)(m0 + m1 + m2 + m3));
     return vtmp;
-  }
-
-  /** @brief Fetch 16 raw bytes from the current bit position for batch bit extraction. */
-  FORCE_INLINE v128_t fetch_raw() {
-    if (this->bits <= 128) {
-      read();
-      if (this->bits <= 128)
-        read();
-    }
-    return wasm_v128_load(this->tmp);
   }
 
   /** @brief Decode 2 quads (8 samples) using 16-bit arithmetic.
