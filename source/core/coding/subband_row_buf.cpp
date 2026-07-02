@@ -76,6 +76,66 @@ static inline void spin_wait(std::atomic_int &cnt) {
 }
 #endif
 
+#ifdef OPENHTJ2K_THREAD
+// Fill par_groups from par_tasks: adjacent equal-sized HT tasks are grouped
+// (up to htj2k_dec_batch_lanes, which is 1 on ISAs without an N-way step-1
+// kernel) so one pool task decodes the whole group with htj2k_decode_batch.
+// Scratch offsets are per-block and already disjoint, so grouping only
+// changes task granularity, not memory layout.
+void j2k_subband_row_buf::build_par_groups() {
+  par_groups.clear();
+  const size_t n = par_tasks.size();
+  for (size_t idx = 0; idx < n;) {
+    uint32_t cnt            = 1;
+    const j2k_codeblock *b0 = par_tasks[idx].block;
+    if (((b0->Cmodes & HT) >> 6) && htj2k_dec_batch_lanes > 1) {
+      const uint32_t max_run = htj2k_dec_batch_lanes < 8u ? htj2k_dec_batch_lanes : 8u;
+      while (cnt < max_run && idx + cnt < n) {
+        const j2k_codeblock *nb = par_tasks[idx + cnt].block;
+        if (!((nb->Cmodes & HT) >> 6)) break;
+        if (nb->size.x != b0->size.x || nb->size.y != b0->size.y) break;
+        ++cnt;
+      }
+    }
+    par_groups.push_back((static_cast<uint64_t>(idx) << 8) | cnt);
+    idx += cnt;
+  }
+}
+
+// Pool-task body shared by decode_strip_core's parallel path and
+// trigger_prefetch: decode one group, record failures, decrement par_cnt.
+void j2k_subband_row_buf::run_par_group(uint64_t packed) {
+  const size_t idx   = static_cast<size_t>(packed >> 8);
+  const uint32_t cnt = static_cast<uint32_t>(packed & 0xFF);
+  j2k_codeblock *grp[8];
+  bool results[8];
+  for (uint32_t k = 0; k < cnt; ++k) {
+    grp[k]              = par_tasks[idx + k].block;
+    grp[k]->dequant_i32 = this->dequant_i32;
+  }
+  try {
+    if ((grp[0]->Cmodes & HT) >> 6) {
+      // htj2k_decode returns false (rather than throwing) when it rejects
+      // malformed input at a bounds/segment guard.  Treat that like a thrown
+      // error so the driver re-throws after the barrier instead of silently
+      // emitting a garbage (or uninitialised) block.
+      htj2k_decode_batch(grp, cnt, ROIshift, results);
+      for (uint32_t k = 0; k < cnt; ++k) {
+        if (!results[k]) par_error.store(true, std::memory_order_relaxed);
+      }
+    } else {
+      j2k_decode(grp[0], ROIshift);
+    }
+  } catch (...) {
+    // Never let a decode error escape the task: it would std::terminate the
+    // pool worker or unwind through try_run_one.  Record it; the driver
+    // thread re-throws after the barrier that consumes this batch's output.
+    par_error.store(true, std::memory_order_relaxed);
+  }
+  par_cnt.fetch_sub(1, std::memory_order_release);
+}
+#endif
+
 // ─── init / free ──────────────────────────────────────────────────────────────
 
 void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx, int32_t codeblock_height,
@@ -316,7 +376,6 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         // multi-pass sigprop/magref read the block_states border written only by
         // the cleanup interior pass, leaving the border uninitialised).
         par_error.store(false, std::memory_order_relaxed);
-        par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
         for (auto &bt : par_tasks) {
           bt.block->sample_buf            = par_spool + bt.sample_off;
           bt.block->blksampl_stride       = bt.QWx2;
@@ -335,32 +394,15 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
             std::memset(bt.block->block_states, 0, static_cast<size_t>(bt.QWx2 + 2) * (bt.QHx2 + 2));
           }
         }
-        // Batch-push all tasks under a single mutex lock + notify_all.
-        // Use [blk, this] (16 bytes) instead of [blk, roi, this] (≥24 bytes) so the
-        // closure fits within std::function's 16-byte small-buffer optimisation and
-        // avoids a heap allocation per task.
-        pool->push_batch(par_tasks, [this](const CblkTask &bt) {
-          auto *blk = bt.block;
-          return [blk, this]() {
-            blk->dequant_i32 = this->dequant_i32;
-            try {
-              if ((blk->Cmodes & HT) >> 6) {
-                // htj2k_decode returns false (rather than throwing) when it
-                // rejects malformed input at a bounds/segment guard.  Treat that
-                // like a thrown error so the driver re-throws after the barrier
-                // instead of silently emitting a garbage (or uninitialised) block.
-                if (!htj2k_decode(blk, ROIshift)) par_error.store(true, std::memory_order_relaxed);
-              } else {
-                j2k_decode(blk, ROIshift);
-              }
-            } catch (...) {
-              // Never let a decode error escape the task: it would std::terminate
-              // the pool worker or unwind through try_run_one.  Record it; the
-              // driver thread re-throws after spin_wait below.
-              par_error.store(true, std::memory_order_relaxed);
-            }
-            par_cnt.fetch_sub(1, std::memory_order_release);
-          };
+        // Group adjacent equal-sized HT tasks for the batched decoder (one
+        // pool task per group; scratch offsets are already disjoint per block).
+        build_par_groups();
+        par_cnt.store(static_cast<int>(par_groups.size()), std::memory_order_relaxed);
+        // Batch-push all group tasks under a single mutex lock + notify_all.
+        // [this, packed] captures 16 bytes total — fits std::function's
+        // small-buffer optimisation, no heap allocation per task.
+        pool->push_batch(par_groups, [this](const uint64_t &packed) {
+          return [this, packed]() { run_par_group(packed); };
         });
         spin_wait(par_cnt);
         if (par_error.load(std::memory_order_relaxed)) {
@@ -708,7 +750,6 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   }
 
   par_error.store(false, std::memory_order_relaxed);
-  par_cnt.store(static_cast<int>(par_tasks.size()), std::memory_order_relaxed);
 
   // Setup pass: assign scratch/output pointers and selectively zero buffers.
   // HT single-pass blocks need no pre-zeroing (ht_cleanup_decode writes all
@@ -732,28 +773,15 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
       std::memset(pb.block->block_states, 0, static_cast<size_t>(pb.QWx2 + 2) * (pb.QHx2 + 2));
     }
   }
-  // Batch-push all tasks under a single mutex lock + notify_all.
-  // [blk, this] captures 16 bytes total — fits std::function's SBO, no heap alloc.
-  pool->push_batch(par_tasks, [this](const CblkTask &pb) {
-    auto *blk = pb.block;
-    return [blk, this]() {
-      blk->dequant_i32 = this->dequant_i32;
-      try {
-        if ((blk->Cmodes & HT) >> 6) {
-          // A false return is htj2k_decode's non-throwing malformed-input signal;
-          // record it like a thrown error so the prefetch-consume barrier re-throws.
-          if (!htj2k_decode(blk, ROIshift)) par_error.store(true, std::memory_order_relaxed);
-        } else {
-          j2k_decode(blk, ROIshift);
-        }
-      } catch (...) {
-        // See decode_strip_core: record decode errors instead of throwing out of
-        // the task; the prefetch-consume barrier (row_ptr) re-throws on the driver.
-        par_error.store(true, std::memory_order_relaxed);
-      }
-      par_cnt.fetch_sub(1, std::memory_order_release);
-    };
-  });
+  // Group adjacent equal-sized HT tasks for the batched decoder, then
+  // batch-push one task per group under a single mutex lock + notify_all.
+  // [this, packed] captures 16 bytes total — fits std::function's SBO, no
+  // heap alloc.  Groups are counted in par_cnt and drained by spin_wait /
+  // drain_prefetch exactly as the per-block tasks were.
+  build_par_groups();
+  par_cnt.store(static_cast<int>(par_groups.size()), std::memory_order_relaxed);
+  pool->push_batch(par_groups,
+                   [this](const uint64_t &packed) { return [this, packed]() { run_par_group(packed); }; });
 }
 #endif
 
