@@ -54,30 +54,29 @@
 //   const sprec_t *p = rb.row_ptr(abs_row);   // decode strip if needed
 // ─────────────────────────────────────────────────────────────────────────────
 struct j2k_subband_row_buf {
-  j2k_subband    *sb;         // geometry, i_samples, decode params
-  j2k_resolution *res;        // to enumerate precincts
-  uint8_t         band_idx;   // index within resolution's subbands (0=HL,1=LH,2=HH)
-  uint8_t         ROIshift;
-  bool            dequant_i32 = false;
+  j2k_subband *sb;      // geometry, i_samples, decode params
+  j2k_resolution *res;  // to enumerate precincts
+  uint8_t band_idx;     // index within resolution's subbands (0=HL,1=LH,2=HH)
+  uint8_t ROIshift;
+  bool dequant_i32 = false;
 
-  int32_t cb_h;       // codeblock height for this resolution (max across precincts)
-  int32_t strip_y0;   // y-start of the currently-decoded codeblock strip (-1 = none)
-  int32_t strip_y1;   // y-end  of the currently-decoded codeblock strip (exclusive)
-
+  int32_t cb_h;      // codeblock height for this resolution (max across precincts)
+  int32_t strip_y0;  // y-start of the currently-decoded codeblock strip (-1 = none)
+  int32_t strip_y1;  // y-end  of the currently-decoded codeblock strip (exclusive)
 
   // Ring buffer for line-based mode.
   // When ring_mode=true, decoded samples go here instead of sb->i_samples.
-  bool     ring_mode;   // use ring buffer instead of sb->i_samples
-  sprec_t *ring_buf;    // cb_h × sb->stride floats (one strip wide)
-  int32_t  ring_y0;     // first row of current strip in ring_buf (= strip_y0)
+  bool ring_mode;     // use ring buffer instead of sb->i_samples
+  sprec_t *ring_buf;  // cb_h × sb->stride floats (one strip wide)
+  int32_t ring_y0;    // first row of current strip in ring_buf (= strip_y0)
 
   // Scratch buffers reused across codeblocks (serial decode; one block at a time).
-  int32_t  *cb_sample_buf;
-  uint8_t  *cb_state_buf;
+  int32_t *cb_sample_buf;
+  uint8_t *cb_state_buf;
   uint32_t *cb_ctx_buf;
-  size_t    cb_sample_cap;  // current capacity in elements
-  size_t    cb_state_cap;
-  size_t    cb_ctx_cap;     // block_contexts capacity in uint32_t
+  size_t cb_sample_cap;  // current capacity in elements
+  size_t cb_state_cap;
+  size_t cb_ctx_cap;  // block_contexts capacity in uint32_t
 
 #ifdef OPENHTJ2K_THREAD
   // Double-buffer for strip prefetch: while IDWT consumes ring_buf (current strip),
@@ -85,10 +84,10 @@ struct j2k_subband_row_buf {
   // ring_buf and prefetch_buf are the two halves of a single combined aligned allocation
   // (combined_buf).  std::swap(ring_buf, prefetch_buf) happens on prefetch hit, so after
   // a swap ring_buf may point to the upper half.  Always free combined_buf, not ring_buf.
-  sprec_t *prefetch_buf;   // decode target for next strip (upper half of combined alloc)
-  sprec_t *combined_buf;   // base pointer of the ring+prefetch combined allocation
-  int32_t  prefetch_y0;    // strip bounds of pending prefetch task (-1 = none)
-  int32_t  prefetch_y1;
+  sprec_t *prefetch_buf;  // decode target for next strip (upper half of combined alloc)
+  sprec_t *combined_buf;  // base pointer of the ring+prefetch combined allocation
+  int32_t prefetch_y0;    // strip bounds of pending prefetch task (-1 = none)
+  int32_t prefetch_y1;
 
   // Unified codeblock task descriptor used by both decode_strip_core() (parallel path)
   // and trigger_prefetch().  The two paths are mutually exclusive — decode_strip_core
@@ -96,22 +95,28 @@ struct j2k_subband_row_buf {
   // only after that — so a single set of scratch resources serves both.
   struct CblkTask {
     j2k_codeblock *block;
-    uint32_t       QWx2, QHx2;
-    size_t         sample_off, state_off, ctx_off;
-    ptrdiff_t      row_off, col_off;  // ring/prefetch target offset; 0 in non-ring mode
+    uint32_t QWx2, QHx2;
+    size_t sample_off, state_off, ctx_off;
+    ptrdiff_t row_off, col_off;  // ring/prefetch target offset; 0 in non-ring mode
   };
 
   // Grow-only scratch pools (never freed until free_resources()).
   // Sized at init() from a per-subband strip pre-scan; only realloc'd on growth.
-  int32_t  *par_spool;
-  uint8_t  *par_stpool;
+  int32_t *par_spool;
+  uint8_t *par_stpool;
   uint32_t *par_ctxpool;
-  size_t    par_spool_cap;
-  size_t    par_stpool_cap;
-  size_t    par_ctxpool_cap;
+  size_t par_spool_cap;
+  size_t par_stpool_cap;
+  size_t par_ctxpool_cap;
 
   // Task list pre-reserved to max codeblocks per strip (from init() pre-scan).
   std::vector<CblkTask> par_tasks;
+
+  // Group descriptors for the batched HT decoder: each entry packs
+  // (index into par_tasks << 8) | block count, so a [this, packed] closure
+  // stays within std::function's 16-byte small-buffer optimisation.  One
+  // pool task is pushed per group; par_cnt counts groups.
+  std::vector<uint64_t> par_groups;
 
   // In-flight counter shared by decode_strip_core and trigger_prefetch.
   // Replaces both the local 'remaining' atomic and the old shared_ptr<atomic> prefetch_cnt.
@@ -140,21 +145,20 @@ struct j2k_subband_row_buf {
   // Indexed by strip_idx = (next_y0 - sb_y0) / cb_h.
   struct CachedBlock {
     j2k_codeblock *block;
-    uint32_t       QWx2, QHx2;      // round_up(size.x, 8), round_up(size.y, 8)
-    ptrdiff_t      row_off, col_off; // strip-relative offsets into prefetch_buf
-    uint32_t       size_x, size_y;   // block->size, captured for empty memset
+    uint32_t QWx2, QHx2;         // round_up(size.x, 8), round_up(size.y, 8)
+    ptrdiff_t row_off, col_off;  // strip-relative offsets into prefetch_buf
+    uint32_t size_x, size_y;     // block->size, captured for empty memset
   };
   struct StripCacheEntry {
-    bool                      built = false;
-    std::vector<CachedBlock>  blocks;
+    bool built = false;
+    std::vector<CachedBlock> blocks;
   };
   std::vector<StripCacheEntry> strip_cache_;
 #endif
 
   // Initialise. cb_h is the maximum codeblock height for this resolution level.
   // When use_ring=true, allocates a ring buffer (cb_h rows) instead of using sb->i_samples.
-  void init(j2k_resolution *res, uint8_t band_idx, int32_t cb_h, uint8_t ROIshift,
-            bool use_ring = false);
+  void init(j2k_resolution *res, uint8_t band_idx, int32_t cb_h, uint8_t ROIshift, bool use_ring = false);
 
   // Release scratch buffers.
   void free_resources();
@@ -187,5 +191,14 @@ struct j2k_subband_row_buf {
 #ifdef OPENHTJ2K_THREAD
   // Submit a background task to decode the strip starting at next_y0 into prefetch_buf.
   void trigger_prefetch(int32_t next_y0);
+
+  // Fill par_groups from par_tasks: adjacent equal-sized HT tasks are grouped
+  // (up to htj2k_dec_batch_lanes) for the batched decoder; everything else is
+  // a group of one.
+  void build_par_groups();
+
+  // Pool-task body: decode one par_groups entry (packed = (index << 8) | count),
+  // recording failures in par_error and decrementing par_cnt exactly once.
+  void run_par_group(uint64_t packed);
 #endif
 };
