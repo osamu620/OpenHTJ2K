@@ -46,14 +46,11 @@ static inline v128_t wasm_i32x4_shlv(v128_t a, v128_t b) {
 }
 
 static inline v128_t wasm_i32x4_vshl(v128_t a, v128_t b) {
-  auto shift_lane = [](int32_t val, int32_t n) -> int32_t {
-    return n >= 0 ? val << n : val >> (-n);
-  };
-  return wasm_i32x4_make(
-      shift_lane(wasm_i32x4_extract_lane(a, 0), wasm_i32x4_extract_lane(b, 0)),
-      shift_lane(wasm_i32x4_extract_lane(a, 1), wasm_i32x4_extract_lane(b, 1)),
-      shift_lane(wasm_i32x4_extract_lane(a, 2), wasm_i32x4_extract_lane(b, 2)),
-      shift_lane(wasm_i32x4_extract_lane(a, 3), wasm_i32x4_extract_lane(b, 3)));
+  auto shift_lane = [](int32_t val, int32_t n) -> int32_t { return n >= 0 ? val << n : val >> (-n); };
+  return wasm_i32x4_make(shift_lane(wasm_i32x4_extract_lane(a, 0), wasm_i32x4_extract_lane(b, 0)),
+                         shift_lane(wasm_i32x4_extract_lane(a, 1), wasm_i32x4_extract_lane(b, 1)),
+                         shift_lane(wasm_i32x4_extract_lane(a, 2), wasm_i32x4_extract_lane(b, 2)),
+                         shift_lane(wasm_i32x4_extract_lane(a, 3), wasm_i32x4_extract_lane(b, 3)));
 }
 
 static inline int32_t wasm_i32x4_reduce_max(v128_t a) {
@@ -65,10 +62,10 @@ static inline int32_t wasm_i32x4_reduce_max(v128_t a) {
 // Branchless vectorized CLZ via float exponent: clz32(a) = min(158 - (float_bits(a) >> 23), 32).
 // Valid for non-negative int32 inputs; correctly returns 32 for a == 0.
 static inline v128_t wasm_u32x4_clz(v128_t a) {
-  v128_t vf  = wasm_f32x4_convert_i32x4(a);                             // int32 → float (non-negative)
-  v128_t exp = wasm_u32x4_shr(vf, 23);                                  // extract biased exponent
-  v128_t clz = wasm_i32x4_sub(wasm_i32x4_const_splat(158), exp);        // 158 - biased_exp = clz
-  return wasm_i32x4_min(clz, wasm_i32x4_const_splat(32));               // clamp: handles a == 0
+  v128_t vf  = wasm_f32x4_convert_i32x4(a);                       // int32 → float (non-negative)
+  v128_t exp = wasm_u32x4_shr(vf, 23);                            // extract biased exponent
+  v128_t clz = wasm_i32x4_sub(wasm_i32x4_const_splat(158), exp);  // 158 - biased_exp = clz
+  return wasm_i32x4_min(clz, wasm_i32x4_const_splat(32));         // clamp: handles a == 0
 }
 
 uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_t causal_cond) const {
@@ -134,7 +131,7 @@ static inline void dequant_store_wasm(int32_t *dst, v128_t val, uint8_t transfor
   } else {
     v128_t mag = wasm_v128_and(val, vmagmask);
     v128_t f   = wasm_f32x4_mul(wasm_f32x4_convert_i32x4(mag), vfscale);
-    f = wasm_v128_xor(f, wasm_v128_and(val, vsignmask));
+    f          = wasm_v128_xor(f, wasm_v128_and(val, vsignmask));
     wasm_v128_store(dst, f);
   }
 }
@@ -150,15 +147,15 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   const uint16_t QH = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
 
   // Fused dequantize setup
-  int32_t pLSB_dq  = 0;
-  v128_t vfscale_dq  = wasm_f32x4_const_splat(0.0f);
-  v128_t vmagmask_dq = wasm_i32x4_const_splat(0);
+  int32_t pLSB_dq     = 0;
+  v128_t vfscale_dq   = wasm_f32x4_const_splat(0.0f);
+  v128_t vmagmask_dq  = wasm_i32x4_const_splat(0);
   v128_t vsignmask_dq = wasm_i32x4_const_splat(0);
   if constexpr (fuse_dequant) {
     const int32_t M_b_val = block->get_Mb();
     pLSB_dq               = 31 - M_b_val;
-    vmagmask_dq            = wasm_i32x4_const_splat(0x7FFFFFFF);
-    vsignmask_dq           = wasm_i32x4_const_splat((int32_t)0x80000000u);
+    vmagmask_dq           = wasm_i32x4_const_splat(0x7FFFFFFF);
+    vsignmask_dq          = wasm_i32x4_const_splat((int32_t)0x80000000u);
     if (block->transformation != 1) {
       float fscale_direct = block->stepsize;
       fscale_direct *= static_cast<float>(1 << FRACBITS);
@@ -196,10 +193,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
   alignas(32) uint32_t rholine[516];  // QW_max + 4, QW_max = 512
   std::memset(rholine, 0, (QW + 4U) * sizeof(uint32_t));
-  uint32_t *rho_p    = rholine + 1;
-  alignas(32) int32_t Eline[1032];   // 2 * QW_max + 8, QW_max = 512
+  uint32_t *rho_p = rholine + 1;
+  alignas(32) int32_t Eline[1032];  // 2 * QW_max + 8, QW_max = 512
   std::memset(Eline, 0, (2U * QW + 8U) * sizeof(int32_t));
-  int32_t *E_p       = Eline + 1;
+  int32_t *E_p = Eline + 1;
 
   uint32_t context = 0;
   uint32_t vlcval;
@@ -283,17 +280,19 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       const uint8_t pLSB_adj = static_cast<uint8_t>(pLSB - 16);
       const v128_t zero16    = wasm_i32x4_const_splat(0);
       v128_t vn_16           = zero16;
-      v128_t row16           = MagSgn.decode_two_quads_16bit_wasm(
-          tv0, tv1, static_cast<uint16_t>(U0), static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+      v128_t row16           = MagSgn.decode_two_quads_16bit_wasm(tv0, tv1, static_cast<uint16_t>(U0),
+                                                                  static_cast<uint16_t>(U1), pLSB_adj, vn_16);
       // Deinterleave: even lanes → row0, odd lanes → row1
       v128_t row0_16 = wasm_i16x8_shuffle(row16, zero16, 0, 2, 4, 6, 8, 8, 8, 8);
       v128_t row1_16 = wasm_i16x8_shuffle(row16, zero16, 1, 3, 5, 7, 8, 8, 8, 8);
       // Expand int16 → int32 in sign-magnitude format (sign at bit 31)
-      v128_t mu0_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row0_16), 16);
-      v128_t mu1_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row1_16), 16);
+      v128_t mu0_32 = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row0_16), 16);
+      v128_t mu1_32 = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row1_16), 16);
       if constexpr (fuse_dequant) {
-        dequant_store_wasm<store_i32>(mp0, mu0_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
-        dequant_store_wasm<store_i32>(mp1, mu1_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_wasm<store_i32>(mp0, mu0_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq,
+                                      vsignmask_dq);
+        dequant_store_wasm<store_i32>(mp1, mu1_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq,
+                                      vsignmask_dq);
       } else {
         wasm_v128_store(mp0, mu0_32);
         wasm_v128_store(mp1, mu1_32);
@@ -309,26 +308,25 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       // 32-bit path
       v128_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
 
-      sig0  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
+      sig0 = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
+      vtmp = wasm_v128_and(
+          wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm), wasm_i32x4_const_splat(0)),
+          vone);
       m_n_0 = wasm_i32x4_sub(wasm_v128_and(sig0, wasm_i32x4_splat((int32_t)U0)), vtmp);
       sig1  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho1), vm), wasm_i32x4_const_splat(0));
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
+      vtmp  = wasm_v128_and(
+          wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm), wasm_i32x4_const_splat(0)),
+          vone);
       m_n_1 = wasm_i32x4_sub(wasm_v128_and(sig1, wasm_i32x4_splat((int32_t)U1)), vtmp);
 
-      vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
+      vmask1 = wasm_i32x4_make(
+          (1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1, (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
+          (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1, (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
       msvec = MagSgn.fetch(m_n_0);
       v_n_0 = wasm_v128_and(msvec, vmask1);
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
+      vtmp  = wasm_v128_and(
+          wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm), wasm_i32x4_const_splat(0)),
+          vone);
       v_n_0 = wasm_v128_or(v_n_0, wasm_i32x4_shlv(vtmp, m_n_0));
       mu0   = wasm_i32x4_add(v_n_0, vtwo);
       mu0   = wasm_v128_or(mu0, vone);
@@ -336,15 +334,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu0   = wasm_v128_or(mu0, wasm_i32x4_shl(v_n_0, 31));
       mu0   = wasm_v128_and(mu0, sig0);
 
-      vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1,
-                               (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
+      vmask1 = wasm_i32x4_make(
+          (1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1, (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
+          (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1, (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
       msvec = MagSgn.fetch(m_n_1);
       v_n_1 = wasm_v128_and(msvec, vmask1);
-      vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm),
-                                         wasm_i32x4_const_splat(0)),
-                           vone);
+      vtmp  = wasm_v128_and(
+          wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm), wasm_i32x4_const_splat(0)),
+          vone);
       v_n_1 = wasm_v128_or(v_n_1, wasm_i32x4_shlv(vtmp, m_n_1));
       mu1   = wasm_i32x4_add(v_n_1, vtwo);
       mu1   = wasm_v128_or(mu1, vone);
@@ -353,10 +350,10 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu1   = wasm_v128_and(mu1, sig1);
 
       if constexpr (fuse_dequant) {
-        dequant_store_wasm<store_i32>(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation, pLSB_dq,
-                           vfscale_dq, vmagmask_dq, vsignmask_dq);
-        dequant_store_wasm<store_i32>(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation, pLSB_dq,
-                           vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_wasm<store_i32>(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation,
+                                      pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+        dequant_store_wasm<store_i32>(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation,
+                                      pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
       } else {
         wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
         wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
@@ -386,9 +383,9 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mp0 = block->sample_buf + (row * 2U) * block->blksampl_stride;
       mp1 = block->sample_buf + (row * 2U + 1U) * block->blksampl_stride;
     }
-    sp0   = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
-    sp1   = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
-    rho1  = 0;
+    sp0  = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
+    sp1  = block->block_states + (row * 2U + 2U) * block->blkstate_stride + 1U;
+    rho1 = 0;
 
     int32_t Emax0, Emax1;
     Emax0 = wasm_i32x4_reduce_max(wasm_v128_load(E_p - 1));
@@ -451,14 +448,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
 
       vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
 
-      u_off0          = tv0 & 1;
-      u_off1          = tv1 & 1;
-      uint32_t idx    = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U);
+      u_off0               = tv0 & 1;
+      u_off1               = tv1 & 1;
+      uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U);
       uint32_t uvlc_result = uvlc_dec_1[idx];
-      vlcval          = VLC_dec.advance(uvlc_result & 0x7);
+      vlcval               = VLC_dec.advance(uvlc_result & 0x7);
       uvlc_result >>= 3;
-      uint32_t len    = uvlc_result & 0xF;
-      uint32_t tmp    = vlcval & ((1U << len) - 1U);
+      uint32_t len = uvlc_result & 0xF;
+      uint32_t tmp = vlcval & ((1U << len) - 1U);
       VLC_dec.advance(len);
       uvlc_result >>= 4;
       len = uvlc_result & 0x7;
@@ -479,15 +476,17 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         const uint8_t pLSB_adj = static_cast<uint8_t>(pLSB - 16);
         const v128_t zero16    = wasm_i32x4_const_splat(0);
         v128_t vn_16           = zero16;
-        v128_t row16           = MagSgn.decode_two_quads_16bit_wasm(
-            tv0, tv1, static_cast<uint16_t>(U0), static_cast<uint16_t>(U1), pLSB_adj, vn_16);
-        v128_t row0_16 = wasm_i16x8_shuffle(row16, zero16, 0, 2, 4, 6, 8, 8, 8, 8);
-        v128_t row1_16 = wasm_i16x8_shuffle(row16, zero16, 1, 3, 5, 7, 8, 8, 8, 8);
-        v128_t mu0_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row0_16), 16);
-        v128_t mu1_32  = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row1_16), 16);
+        v128_t row16           = MagSgn.decode_two_quads_16bit_wasm(tv0, tv1, static_cast<uint16_t>(U0),
+                                                                    static_cast<uint16_t>(U1), pLSB_adj, vn_16);
+        v128_t row0_16         = wasm_i16x8_shuffle(row16, zero16, 0, 2, 4, 6, 8, 8, 8, 8);
+        v128_t row1_16         = wasm_i16x8_shuffle(row16, zero16, 1, 3, 5, 7, 8, 8, 8, 8);
+        v128_t mu0_32          = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row0_16), 16);
+        v128_t mu1_32          = wasm_i32x4_shl(wasm_i32x4_extend_low_i16x8(row1_16), 16);
         if constexpr (fuse_dequant) {
-          dequant_store_wasm<store_i32>(mp0, mu0_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
-          dequant_store_wasm<store_i32>(mp1, mu1_32, block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+          dequant_store_wasm<store_i32>(mp0, mu0_32, block->transformation, pLSB_dq, vfscale_dq,
+                                        vmagmask_dq, vsignmask_dq);
+          dequant_store_wasm<store_i32>(mp1, mu1_32, block->transformation, pLSB_dq, vfscale_dq,
+                                        vmagmask_dq, vsignmask_dq);
         } else {
           wasm_v128_store(mp0, mu0_32);
           wasm_v128_store(mp1, mu1_32);
@@ -505,26 +504,25 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         // 32-bit path
         v128_t vmask1, sig0, sig1, vtmp, m_n_0, m_n_1, msvec, v_n_0, v_n_1, mu0, mu1;
 
-        sig0  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
-        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm),
-                                           wasm_i32x4_const_splat(0)),
-                             vone);
+        sig0 = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho0), vm), wasm_i32x4_const_splat(0));
+        vtmp = wasm_v128_and(
+            wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_0), vm), wasm_i32x4_const_splat(0)),
+            vone);
         m_n_0 = wasm_i32x4_sub(wasm_v128_and(sig0, wasm_i32x4_splat((int32_t)U0)), vtmp);
-        sig1  = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho1), vm), wasm_i32x4_const_splat(0));
-        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm),
-                                           wasm_i32x4_const_splat(0)),
-                             vone);
+        sig1 = wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)rho1), vm), wasm_i32x4_const_splat(0));
+        vtmp = wasm_v128_and(
+            wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_k_1), vm), wasm_i32x4_const_splat(0)),
+            vone);
         m_n_1 = wasm_i32x4_sub(wasm_v128_and(sig1, wasm_i32x4_splat((int32_t)U1)), vtmp);
 
-        vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1,
-                                 (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
-                                 (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1,
-                                 (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
+        vmask1 = wasm_i32x4_make(
+            (1 << wasm_i32x4_extract_lane(m_n_0, 0)) - 1, (1 << wasm_i32x4_extract_lane(m_n_0, 1)) - 1,
+            (1 << wasm_i32x4_extract_lane(m_n_0, 2)) - 1, (1 << wasm_i32x4_extract_lane(m_n_0, 3)) - 1);
         msvec = MagSgn.fetch(m_n_0);
         v_n_0 = wasm_v128_and(msvec, vmask1);
-        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm),
-                                           wasm_i32x4_const_splat(0)),
-                             vone);
+        vtmp  = wasm_v128_and(
+            wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_0), vm), wasm_i32x4_const_splat(0)),
+            vone);
         v_n_0 = wasm_v128_or(v_n_0, wasm_i32x4_shlv(vtmp, m_n_0));
         mu0   = wasm_i32x4_add(v_n_0, vtwo);
         mu0   = wasm_v128_or(mu0, vone);
@@ -532,15 +530,14 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu0   = wasm_v128_or(mu0, wasm_i32x4_shl(v_n_0, 31));
         mu0   = wasm_v128_and(mu0, sig0);
 
-        vmask1 = wasm_i32x4_make((1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1,
-                                 (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
-                                 (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1,
-                                 (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
+        vmask1 = wasm_i32x4_make(
+            (1 << wasm_i32x4_extract_lane(m_n_1, 0)) - 1, (1 << wasm_i32x4_extract_lane(m_n_1, 1)) - 1,
+            (1 << wasm_i32x4_extract_lane(m_n_1, 2)) - 1, (1 << wasm_i32x4_extract_lane(m_n_1, 3)) - 1);
         msvec = MagSgn.fetch(m_n_1);
         v_n_1 = wasm_v128_and(msvec, vmask1);
-        vtmp  = wasm_v128_and(wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm),
-                                           wasm_i32x4_const_splat(0)),
-                             vone);
+        vtmp  = wasm_v128_and(
+            wasm_i32x4_ne(wasm_v128_and(wasm_i32x4_splat((int32_t)emb_1_1), vm), wasm_i32x4_const_splat(0)),
+            vone);
         v_n_1 = wasm_v128_or(v_n_1, wasm_i32x4_shlv(vtmp, m_n_1));
         mu1   = wasm_i32x4_add(v_n_1, vtwo);
         mu1   = wasm_v128_or(mu1, vone);
@@ -549,10 +546,12 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu1   = wasm_v128_and(mu1, sig1);
 
         if constexpr (fuse_dequant) {
-          dequant_store_wasm<store_i32>(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6), block->transformation,
-                             pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
-          dequant_store_wasm<store_i32>(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7), block->transformation,
-                             pLSB_dq, vfscale_dq, vmagmask_dq, vsignmask_dq);
+          dequant_store_wasm<store_i32>(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6),
+                                        block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq,
+                                        vsignmask_dq);
+          dequant_store_wasm<store_i32>(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7),
+                                        block->transformation, pLSB_dq, vfscale_dq, vmagmask_dq,
+                                        vsignmask_dq);
         } else {
           wasm_v128_store(mp0, wasm_i32x4_shuffle(mu0, mu1, 0, 2, 4, 6));
           wasm_v128_store(mp1, wasm_i32x4_shuffle(mu0, mu1, 1, 3, 5, 7));
@@ -575,12 +574,12 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
                        const uint8_t &pLSB, uint16_t *sigma, uint32_t mstr) {
   if (pLSB == 0) return;  // no plane below the LSB; mirrors ht_magref_decode (avoids 1 << (pLSB-1) UB)
   SP_dec SigProp(HT_magref_segment, magref_length);
-  const uint32_t height       = block->size.y;
-  const uint32_t width        = block->size.x;
-  const size_t sstride        = block->blksampl_stride;
-  int32_t *samples            = block->sample_buf;
-  const bool non_causal       = (block->Cmodes & CAUSAL) == 0;
-  const int32_t spp_mask      = 3 << (pLSB - 1);
+  const uint32_t height  = block->size.y;
+  const uint32_t width   = block->size.x;
+  const size_t sstride   = block->blksampl_stride;
+  int32_t *samples       = block->sample_buf;
+  const bool non_causal  = (block->Cmodes & CAUSAL) == 0;
+  const int32_t spp_mask = 3 << (pLSB - 1);
   uint16_t prev_row_sig[264];
   memset(prev_row_sig, 0, sizeof(prev_row_sig));
 
@@ -620,7 +619,7 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
       uint32_t new_sig = 0;
       if (mbr) {
         static const uint32_t row_masks[4] = {0x33u, 0x76u, 0xECu, 0xC8u};
-        uint32_t inv_sig = ~cs & pat;
+        uint32_t inv_sig                   = ~cs & pat;
         while (mbr) {
           uint32_t pos   = static_cast<uint32_t>(openhtj2k_ctz32(mbr));
           uint32_t smask = 1u << pos;
@@ -671,7 +670,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   int32_t *samples      = block->sample_buf;
 
   for (uint32_t y = 0; y < height; y += 4) {
-    const uint16_t *csig  = sigma + (y >> 2) * mstr;
+    const uint16_t *csig = sigma + (y >> 2) * mstr;
 
     for (uint32_t x = 0; x < width; x += 4) {
       uint16_t sig = csig[x >> 2];
@@ -695,8 +694,8 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
 void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const int32_t pLSB = 31 - M_b;
 
-  const uint32_t mask  = UINT32_MAX >> (M_b + 1);
-  const v128_t vmask   = wasm_i32x4_splat(static_cast<int32_t>(~mask));
+  const uint32_t mask    = UINT32_MAX >> (M_b + 1);
+  const v128_t vmask     = wasm_i32x4_splat(static_cast<int32_t>(~mask));
   const v128_t vROIshift = wasm_i32x4_splat(ROIshift);
 
   v128_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1, vpLSB;
@@ -789,7 +788,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
           v128_t f0 = wasm_f32x4_mul(wasm_f32x4_convert_i32x4(m0), vfscale);
           v128_t f1 = wasm_f32x4_mul(wasm_f32x4_convert_i32x4(m1), vfscale);
           // apply sign via XOR of sign bit into float sign bit
-          wasm_v128_store(dst,     wasm_v128_xor(f0, wasm_v128_and(v0, vsignmask)));
+          wasm_v128_store(dst, wasm_v128_xor(f0, wasm_v128_and(v0, vsignmask)));
           wasm_v128_store(dst + 4, wasm_v128_xor(f1, wasm_v128_and(v1, vsignmask)));
           val += 8;
           dst += 8;
@@ -829,11 +828,11 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
           vROImask = wasm_v128_and(vROImask, vROIshift);
           v1       = wasm_i32x4_vshl(v1, vROImask);
           // to prevent overflow, truncate to int16_t range
-          v0       = wasm_i32x4_shr(wasm_i32x4_add(v0, wasm_i32x4_const_splat(1 << 15)), 16);
-          v1       = wasm_i32x4_shr(wasm_i32x4_add(v1, wasm_i32x4_const_splat(1 << 15)), 16);
+          v0 = wasm_i32x4_shr(wasm_i32x4_add(v0, wasm_i32x4_const_splat(1 << 15)), 16);
+          v1 = wasm_i32x4_shr(wasm_i32x4_add(v1, wasm_i32x4_const_splat(1 << 15)), 16);
           // dequantization
-          v0       = wasm_i32x4_mul(v0, wasm_i32x4_splat(scale));
-          v1       = wasm_i32x4_mul(v1, wasm_i32x4_splat(scale));
+          v0 = wasm_i32x4_mul(v0, wasm_i32x4_splat(scale));
+          v1 = wasm_i32x4_mul(v1, wasm_i32x4_splat(scale));
           // downshift
           v0 = wasm_i32x4_shr(wasm_i32x4_add(v0, wasm_i32x4_const_splat(1 << (downshift - 1))), downshift);
           v1 = wasm_i32x4_shr(wasm_i32x4_add(v1, wasm_i32x4_const_splat(1 << (downshift - 1))), downshift);
@@ -866,9 +865,9 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
 }
 
 bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
-  uint8_t P0     = 0;
-  int32_t Lcup   = 0;
-  uint32_t Lref  = 0;
+  uint8_t P0           = 0;
+  int32_t Lcup         = 0;
+  uint32_t Lref        = 0;
   const uint8_t S_skip = 0;
 
   if (block->num_passes > 3) {
@@ -907,7 +906,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // past the array and smash the stack — guard the write and the
     // later `all_segments[0]` read.  Reported by IM JUN SEO (KISIA) and
     // OH HAN GUEL (SANGMYUNG UNIVERSITY).
-    uint8_t  all_segments[4];
+    uint8_t all_segments[4];
     uint32_t num_segments = 0;
     for (uint32_t i = 0; i < block->pass_length_count; i++) {
       if (block->pass_length[i] != 0) {
@@ -934,10 +933,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
              block->length);
       return false;
     }
-    Dcup                 = block->get_compressed_data();
-    const auto Scup      = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
-    Dcup[Lcup - 1]       = 0xFF;
-    Dcup[Lcup - 2]      |= 0x0F;
+    Dcup            = block->get_compressed_data();
+    const auto Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
+    Dcup[Lcup - 1]  = 0xFF;
+    Dcup[Lcup - 2] |= 0x0F;
 
     if (Scup < 2 || Scup > Lcup || Scup > 4079) {
       printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
@@ -965,8 +964,7 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // is not a multiple of 4, the overshoot corrupts adjacent blocks in parallel decode.
     // Also gate on even height: the kernel writes row-pairs unconditionally and odd
     // height overflows one row into the next block's region.
-    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
-        && (block->size.y & 1u) == 0) {
+    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0 && (block->size.y & 1u) == 0) {
       if (block->dequant_i32)
         ht_cleanup_decode<true, true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       else
@@ -978,11 +976,11 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
 
       // Pack block_states SIGMA bits into nibble-packed sigma array
-      const uint32_t qw   = (block->size.x + 3) >> 2;
-      const uint32_t mstr = ((qw + 2) + 7u) & ~7u;
+      const uint32_t qw                 = (block->size.x + 3) >> 2;
+      const uint32_t mstr               = ((qw + 2) + 7u) & ~7u;
       uint16_t sigma_buf[(17 + 1) * 24] = {};
-      pack_sigma(block->block_states, block->blkstate_stride, block->size.x, block->size.y,
-                 sigma_buf, mstr);
+      pack_sigma(block->block_states, block->blkstate_stride, block->size.x, block->size.y, sigma_buf,
+                 mstr);
 
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)), sigma_buf, mstr);
       if (num_ht_passes > 2) {
@@ -998,4 +996,18 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
 
   return true;
 }
+
+// Batched entry point (see block_decoding.hpp).  The WASM decoder is a fused
+// single-pass kernel with no separate step-1, so no N-way interleave is wired
+// yet: plain per-block loop.
+bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshift, bool *results) {
+  bool all_ok = true;
+  for (uint32_t i = 0; i < n; ++i) {
+    results[i] = htj2k_decode(blocks[i], ROIshift);
+    all_ok &= results[i];
+  }
+  return all_ok;
+}
+
+const uint32_t htj2k_dec_batch_lanes = 1;
 #endif

@@ -34,6 +34,8 @@
 #include <exception>
 #include <vector>
 
+#include "dec_CxtVLC_tables.hpp"
+
 #if __GNUC__ || __has_attribute(always_inline)
   #define FORCE_INLINE inline __attribute__((always_inline))
   #define openhtj2k_arm_clzll(x) __builtin_clzll((x))
@@ -43,6 +45,20 @@
 #else
   #define FORCE_INLINE inline
   #define openhtj2k_arm_clzll(x) __builtin_clzll((x))
+#endif
+
+#if defined(__clang__)
+  #define OPENHTJ2K_UNROLL _Pragma("clang loop unroll(full)")
+#elif defined(__GNUC__)
+  #define OPENHTJ2K_UNROLL _Pragma("GCC unroll 8")
+#else
+  #define OPENHTJ2K_UNROLL
+#endif
+
+#if defined(_MSC_VER) && !defined(__clang__)
+  #define OPENHTJ2K_NOINLINE __declspec(noinline)
+#else
+  #define OPENHTJ2K_NOINLINE __attribute__((noinline))
 #endif
 
 // LUT for UVLC decoding in initial line-pair
@@ -128,16 +144,22 @@ class MEL_dec {
   uint64_t runs;
 
  public:
-  MEL_dec(const uint8_t *Dcup, int32_t Lcup, int32_t Scup)
-      : buf(Dcup + Lcup - Scup),
-        tmp(0),
-        bits(0),
-        length(Scup - 1),  // length is the length of MEL+VLC-1
-        unstuff(false),
-        MEL_k(0),
-        num_runs(0),
-        runs(0) {
-    int num = 4 - static_cast<int>(reinterpret_cast<intptr_t>(buf) & 0x3);
+  // Default ctor leaves the state uninitialized; init() must be called
+  // before use.  Needed for per-lane arrays in the N-way step-1 kernel.
+  MEL_dec() {}
+
+  MEL_dec(const uint8_t *Dcup, int32_t Lcup, int32_t Scup) { init(Dcup, Lcup, Scup); }
+
+  void init(const uint8_t *Dcup, int32_t Lcup, int32_t Scup) {
+    buf      = Dcup + Lcup - Scup;
+    tmp      = 0;
+    bits     = 0;
+    length   = Scup - 1;  // length is the length of MEL+VLC-1
+    unstuff  = false;
+    MEL_k    = 0;
+    num_runs = 0;
+    runs     = 0;
+    int num  = 4 - static_cast<int>(reinterpret_cast<intptr_t>(buf) & 0x3);
     for (int32_t i = 0; i < num; ++i) {
       uint64_t d = (length > 0) ? *buf : 0xFF;  // if buffer is exhausted, set data to 0xFF
       if (length == 1) {
@@ -270,8 +292,15 @@ class rev_buf {
   uint32_t unstuff;
 
  public:
-  rev_buf(uint8_t *Dcup, int32_t Lcup, int32_t Scup)
-      : buf(Dcup + Lcup - 2), Creg(0), bits(0), length(Scup - 2), unstuff(0) {
+  // Default ctor leaves the state uninitialized; init() must be called
+  // before use.  Needed for per-lane arrays in the N-way step-1 kernel.
+  rev_buf() {}
+
+  rev_buf(uint8_t *Dcup, int32_t Lcup, int32_t Scup) { init(Dcup, Lcup, Scup); }
+
+  void init(uint8_t *Dcup, int32_t Lcup, int32_t Scup) {
+    buf        = Dcup + Lcup - 2;
+    length     = Scup - 2;
     uint32_t d = *buf--;  // read a byte (only use it's half byte)
     Creg       = d >> 4;
     bits       = 4 - ((Creg & 0x07) == 0x07);
@@ -363,6 +392,259 @@ class rev_buf {
     return static_cast<uint32_t>(Creg);
   }
 };
+
+/********************************************************************************
+ * ht_cleanup_step1_nway: N-way lockstep step-1 (MEL + CxtVLC + UVLC) decoding
+ *******************************************************************************/
+// Per-lane inputs for the N-way step-1 kernel; all fields are computed by the
+// per-block decode setup (including the modDcup buffer mutation) before the call.
+struct ht_step1_lane {
+  uint8_t *Dcup;          // block->get_compressed_data()
+  int32_t Lcup;           // HT cleanup segment length
+  int32_t Scup;           // MEL + VLC suffix length
+  uint16_t *scratch;      // this lane's uint16_t[8 * 513] (tv, u) output
+  uint8_t *block_states;  // written only when !skip_sigma
+  size_t blkstate_stride;
+};
+
+// Step-1 of the HT cleanup pass for N codeblocks in lockstep: the serial
+// MEL + CxtVLC + UVLC dependency chains of the N blocks are interleaved
+// sub-step by sub-step so the out-of-order engine can overlap them
+// (codeblocks are independent).  All lanes must share the same codeblock
+// dimensions (QW, QH, sstr).  The per-lane operation sequence is identical
+// to the former single-block phase-1 loop — only the cross-lane instruction
+// scheduling differs — so the decoded output is byte-identical to N
+// sequential single-block decodes.
+// Deliberately not inlined: keeps the kernel's register allocation isolated
+// from the caller's step-2 code.
+template <int N, bool skip_sigma>
+OPENHTJ2K_NOINLINE void ht_cleanup_step1_nway(const ht_step1_lane *ln, const uint16_t QW, const uint16_t QH,
+                                              const int32_t sstr) {
+  constexpr size_t NL = static_cast<size_t>(N);
+  MEL_dec MEL[NL];
+  rev_buf VLC_dec[NL];
+  int32_t mel_run[NL];
+  uint32_t context[NL];
+  uint32_t vlcval[NL];
+  uint16_t tv0[NL], tv1[NL];
+  uint16_t *sp[NL];
+  uint8_t *sp0[NL], *sp1[NL];
+
+  OPENHTJ2K_UNROLL
+  for (size_t s = 0; s < NL; ++s) {
+    MEL[s].init(ln[s].Dcup, ln[s].Lcup, ln[s].Scup);
+    VLC_dec[s].init(ln[s].Dcup, ln[s].Lcup, ln[s].Scup);
+    mel_run[s] = MEL[s].get_run();
+    context[s] = 0;
+    sp[s]      = ln[s].scratch;
+    if (!skip_sigma) {
+      sp0[s] = ln[s].block_states + 1 + ln[s].blkstate_stride;
+      sp1[s] = ln[s].block_states + 1 + 2 * ln[s].blkstate_stride;
+    }
+  }
+
+  // Initial line-pair
+  for (int32_t qx = QW; qx > 0; qx -= 2) {
+    OPENHTJ2K_UNROLL
+    for (size_t s = 0; s < NL; ++s) {
+      // Decoding of significance and EMB patterns and unsigned residual offsets
+      vlcval[s]   = VLC_dec[s].fetch();
+      uint16_t t0 = dec_CxtVLC_table0_fast_16[(vlcval[s] & 0x7F) + context[s]];
+      {
+        // Branchless context-0 MEL handling: replace unpredictable branch with mask
+        int32_t cm = -static_cast<int32_t>(context[s] == 0);
+        mel_run[s] -= cm & 2;
+        t0 &= static_cast<uint16_t>(-(mel_run[s] == -1) | ~cm);
+        if (mel_run[s] < 0) mel_run[s] = MEL[s].get_run();
+      }
+      sp[s][0] = t0;
+      tv0[s]   = t0;
+
+      // calculate context for the next quad, Eq. (1) in the spec
+      context[s] = ((t0 & 0xE0U) << 2) | ((t0 & 0x10U) << 3);  // = context << 7
+
+      vlcval[s] = VLC_dec[s].advance((t0 & 0x000F) >> 1);
+    }
+    OPENHTJ2K_UNROLL
+    for (size_t s = 0; s < NL; ++s) {
+      // Decoding of significance and EMB patterns and unsigned residual offsets
+      uint16_t t1 = dec_CxtVLC_table0_fast_16[(vlcval[s] & 0x7F) + context[s]];
+      {
+        int32_t cm = -static_cast<int32_t>((context[s] == 0) & (qx > 1));
+        mel_run[s] -= cm & 2;
+        t1 &= static_cast<uint16_t>(-(mel_run[s] == -1) | ~cm);
+        if (mel_run[s] < 0) mel_run[s] = MEL[s].get_run();
+      }
+      t1       = (qx > 1) ? t1 : 0;
+      sp[s][2] = t1;
+      tv1[s]   = t1;
+
+      // store sigma
+      if (!skip_sigma) {
+        uint16_t t0s = tv0[s];
+        *sp0[s]++    = ((t0s >> 4) >> 0) & 1;
+        *sp0[s]++    = ((t0s >> 4) >> 2) & 1;
+        *sp0[s]++    = ((t1 >> 4) >> 0) & 1;
+        *sp0[s]++    = ((t1 >> 4) >> 2) & 1;
+        *sp1[s]++    = ((t0s >> 4) >> 1) & 1;
+        *sp1[s]++    = ((t0s >> 4) >> 3) & 1;
+        *sp1[s]++    = ((t1 >> 4) >> 1) & 1;
+        *sp1[s]++    = ((t1 >> 4) >> 3) & 1;
+      }
+
+      // calculate context for the next quad, Eq. (1) in the spec
+      context[s] = ((t1 & 0xE0U) << 2) | ((t1 & 0x10U) << 3);  // = context << 7
+
+      vlcval[s] = VLC_dec[s].advance((t1 & 0x000F) >> 1);
+    }
+    OPENHTJ2K_UNROLL
+    for (size_t s = 0; s < NL; ++s) {
+      uint32_t u_off0 = tv0[s] & 1;
+      uint32_t u_off1 = tv1[s] & 1;
+
+      // Branchless MEL offset: replace compound branch with mask
+      uint32_t both_off = u_off0 & u_off1;
+      int32_t om        = -static_cast<int32_t>(both_off);
+      mel_run[s] -= om & 2;
+      uint32_t mel_offset = static_cast<uint32_t>(-(mel_run[s] == -1) & om) & 0x40;
+      if (mel_run[s] < 0) mel_run[s] = MEL[s].get_run();
+
+      // UVLC decoding
+      uint32_t idx         = (vlcval[s] & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
+      uint32_t uvlc_result = uvlc_dec_0[idx];
+      // remove total prefix length
+      vlcval[s] = VLC_dec[s].advance(uvlc_result & 0x7);
+      uvlc_result >>= 3;
+      // extract suffixes for quad 0 and 1
+      uint32_t len = uvlc_result & 0xF;               // suffix length for 2 quads (up to 10 = 5 + 5)
+      uint32_t tmp = vlcval[s] & ((1U << len) - 1U);  // suffix value for 2 quads
+      vlcval[s]    = VLC_dec[s].advance(len);
+      uvlc_result >>= 4;
+      // quad 0 length
+      len = uvlc_result & 0x7;  // quad 0 suffix length
+      uvlc_result >>= 3;
+      // U = 1 + u; always kappa = 1 in initial line pair
+      uint32_t u0 = 1 + (uvlc_result & 7) + (tmp & ~(0xFFU << len));
+      uint32_t u1 = 1 + (uvlc_result >> 3) + (tmp >> len);
+
+      sp[s][1] = static_cast<uint16_t>(u0);
+      sp[s][3] = static_cast<uint16_t>(u1);
+      sp[s] += 4;
+    }
+  }
+  OPENHTJ2K_UNROLL
+  for (size_t s = 0; s < NL; ++s) {
+    // Zero the 8-byte guard past the last VLC row: the MagSgn step-2 reads
+    // up to 4 extra uint16_t beyond the written region in each row.
+    std::memset(sp[s], 0, sizeof(uint16_t) * 4);
+  }
+
+  // Non-initial line-pairs
+  for (uint16_t row = 1; row < QH; row++) {
+    OPENHTJ2K_UNROLL
+    for (size_t s = 0; s < NL; ++s) {
+      if (!skip_sigma) {
+        sp0[s] = ln[s].block_states + (row * 2U + 1U) * ln[s].blkstate_stride + 1U;
+        sp1[s] = sp0[s] + ln[s].blkstate_stride;
+      }
+      sp[s] = ln[s].scratch + row * sstr;
+      // calculate context for the next quad: w, sw, nw are always 0 at the head of a row
+      context[s] = ((sp[s][0 - sstr] & 0xA0U) << 2) | ((sp[s][2 - sstr] & 0x20U) << 4);
+    }
+    for (int32_t qx = QW; qx > 0; qx -= 2) {
+      OPENHTJ2K_UNROLL
+      for (size_t s = 0; s < NL; ++s) {
+        // Decoding of significance and EMB patterns and unsigned residual offsets
+        vlcval[s]   = VLC_dec[s].fetch();
+        uint16_t t0 = dec_CxtVLC_table1_fast_16[(vlcval[s] & 0x7F) + context[s]];
+        if (context[s] == 0) {
+          mel_run[s] -= 2;
+          t0 = (mel_run[s] == -1) ? t0 : 0;
+          if (mel_run[s] < 0) {
+            mel_run[s] = MEL[s].get_run();
+          }
+        }
+        // calculate context for the next quad, Eq. (2) in the spec
+        context[s] = ((t0 & 0x40U) << 2) | ((t0 & 0x80U) << 1);  // (w | sw) << 8
+        context[s] |=
+            (sp[s][0 - sstr] & 0x80U) | ((sp[s][2 - sstr] & 0xA0U) << 2);  // ((nw | n) << 7) | (ne << 9)
+        context[s] |= (sp[s][4 - sstr] & 0x20U) << 4;                      // ( nf) << 9
+
+        sp[s][0] = t0;
+        tv0[s]   = t0;
+
+        vlcval[s] = VLC_dec[s].advance((t0 & 0x000F) >> 1);
+      }
+      OPENHTJ2K_UNROLL
+      for (size_t s = 0; s < NL; ++s) {
+        // Decoding of significance and EMB patterns and unsigned residual offsets
+        uint16_t t1 = dec_CxtVLC_table1_fast_16[(vlcval[s] & 0x7F) + context[s]];
+        if (context[s] == 0 && qx > 1) {
+          mel_run[s] -= 2;
+          t1 = (mel_run[s] == -1) ? t1 : 0;
+          if (mel_run[s] < 0) {
+            mel_run[s] = MEL[s].get_run();
+          }
+        }
+        t1 = (qx > 1) ? t1 : 0;
+        // calculate context for the next quad, Eq. (2) in the spec
+        context[s] = ((t1 & 0x40U) << 2) | ((t1 & 0x80U) << 1);  // (w | sw) << 8
+        context[s] |=
+            (sp[s][2 - sstr] & 0x80U) | ((sp[s][4 - sstr] & 0xA0U) << 2);  // ((nw | n) << 7) | (ne << 9)
+        context[s] |= (sp[s][6 - sstr] & 0x20U) << 4;                      // ( nf) << 9
+
+        sp[s][2] = t1;
+        tv1[s]   = t1;
+
+        // store sigma
+        if (!skip_sigma) {
+          uint16_t t0s = tv0[s];
+          *sp0[s]++    = ((t0s >> 4) >> 0) & 1;
+          *sp0[s]++    = ((t0s >> 4) >> 2) & 1;
+          *sp0[s]++    = ((t1 >> 4) >> 0) & 1;
+          *sp0[s]++    = ((t1 >> 4) >> 2) & 1;
+          *sp1[s]++    = ((t0s >> 4) >> 1) & 1;
+          *sp1[s]++    = ((t0s >> 4) >> 3) & 1;
+          *sp1[s]++    = ((t1 >> 4) >> 1) & 1;
+          *sp1[s]++    = ((t1 >> 4) >> 3) & 1;
+        }
+
+        vlcval[s] = VLC_dec[s].advance((t1 & 0x000F) >> 1);
+      }
+      OPENHTJ2K_UNROLL
+      for (size_t s = 0; s < NL; ++s) {
+        // UVLC decoding
+        uint32_t u_off0 = tv0[s] & 1;
+        uint32_t u_off1 = tv1[s] & 1;
+        uint32_t idx    = (vlcval[s] & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U);
+
+        uint32_t uvlc_result = uvlc_dec_1[idx];
+        // remove total prefix length
+        vlcval[s] = VLC_dec[s].advance(uvlc_result & 0x7);
+        uvlc_result >>= 3;
+        // extract suffixes for quad 0 and 1
+        uint32_t len = uvlc_result & 0xF;               // suffix length for 2 quads (up to 10 = 5 + 5)
+        uint32_t tmp = vlcval[s] & ((1U << len) - 1U);  // suffix value for 2 quads
+        vlcval[s]    = VLC_dec[s].advance(len);
+        uvlc_result >>= 4;
+        // quad 0 length
+        len = uvlc_result & 0x7;  // quad 0 suffix length
+        uvlc_result >>= 3;
+        uint32_t u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
+        uint32_t u1 = (uvlc_result >> 3) + (tmp >> len);
+
+        sp[s][1] = static_cast<uint16_t>(u0);
+        sp[s][3] = static_cast<uint16_t>(u1);
+        sp[s] += 4;
+      }
+    }
+    OPENHTJ2K_UNROLL
+    for (size_t s = 0; s < NL; ++s) {
+      // Zero the 8-byte guard: same reason as initial row.
+      std::memset(sp[s], 0, sizeof(uint16_t) * 4);
+    }
+  }
+}
 
 /********************************************************************************
  * fwd_buf:
@@ -705,47 +987,43 @@ class fwd_buf {
   // once per codeblock (or per row) and passed by reference to avoid
   // per-call L1 cache loads.
   struct DecodeConstants {
-    int16x8_t  flag_mask;
-    int16x8_t  mul_mask;
+    int16x8_t flag_mask;
+    int16x8_t mul_mask;
     uint8x16_t dup_lo;
     uint8x16_t add_01;
     uint8x16_t bit_tab;
 
     DecodeConstants() {
-      alignas(16) static const int16_t fm[8] = {
-          (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880,
-          (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880};
-      alignas(16) static const int16_t mm[8] = {8, 4, 2, 1, 8, 4, 2, 1};
-      alignas(16) static const uint8_t dl[16] = {
-          0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14};
-      alignas(16) static const uint8_t a01[16] = {
-          0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
-      alignas(16) static const uint8_t bt[16] = {
-          0xFF, 127, 63, 31, 15, 7, 3, 1, 0xFF, 127, 63, 31, 15, 7, 3, 1};
-      flag_mask = vld1q_s16(fm);
-      mul_mask  = vld1q_s16(mm);
-      dup_lo    = vld1q_u8(dl);
-      add_01    = vld1q_u8(a01);
-      bit_tab   = vld1q_u8(bt);
+      alignas(16) static const int16_t fm[8]   = {(int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880,
+                                                  (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880};
+      alignas(16) static const int16_t mm[8]   = {8, 4, 2, 1, 8, 4, 2, 1};
+      alignas(16) static const uint8_t dl[16]  = {0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14};
+      alignas(16) static const uint8_t a01[16] = {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+      alignas(16) static const uint8_t bt[16]  = {0xFF, 127, 63, 31, 15, 7, 3, 1,
+                                                  0xFF, 127, 63, 31, 15, 7, 3, 1};
+      flag_mask                                = vld1q_s16(fm);
+      mul_mask                                 = vld1q_s16(mm);
+      dup_lo                                   = vld1q_u8(dl);
+      add_01                                   = vld1q_u8(a01);
+      bit_tab                                  = vld1q_u8(bt);
     }
   };
 
-  FORCE_INLINE int16x8_t decode_two_quads_16bit(uint16_t tv0, uint16_t tv1,
-                                                  uint16_t U0, uint16_t U1,
-                                                  uint8_t pLSB_adj, int16x4_t &v_n,
-                                                  const DecodeConstants &c) {
+  FORCE_INLINE int16x8_t decode_two_quads_16bit(uint16_t tv0, uint16_t tv1, uint16_t U0, uint16_t U1,
+                                                uint8_t pLSB_adj, int16x4_t &v_n,
+                                                const DecodeConstants &c) {
     const int16x8_t vone16  = vdupq_n_s16(1);
     const int16x8_t vtwo16  = vdupq_n_s16(2);
     const int16x8_t vzero16 = vdupq_n_s16(0);
     int16x8_t row           = vzero16;
 
     // Broadcast inf words: tv0 to lanes 0-3, tv1 to lanes 4-7.
-    int16x8_t w0 = vcombine_s16(vdup_n_s16(static_cast<int16_t>(tv0)),
-                                 vdup_n_s16(static_cast<int16_t>(tv1)));
+    int16x8_t w0 =
+        vcombine_s16(vdup_n_s16(static_cast<int16_t>(tv0)), vdup_n_s16(static_cast<int16_t>(tv1)));
 
     // Extract per-sample significance/EMB flags.
-    int16x8_t flags    = vandq_s16(w0, c.flag_mask);
-    uint16x8_t insig   = vceqq_s16(flags, vzero16);
+    int16x8_t flags  = vandq_s16(w0, c.flag_mask);
+    uint16x8_t insig = vceqq_s16(flags, vzero16);
 
     // Early exit if all 8 samples are insignificant.
     if (vmaxvq_u16(vreinterpretq_u16_s16(flags)) == 0) {
@@ -753,8 +1031,8 @@ class fwd_buf {
     }
 
     // Broadcast U values: U0 to lanes 0-3, U1 to lanes 4-7.
-    int16x8_t U_vec = vcombine_s16(vdup_n_s16(static_cast<int16_t>(U0)),
-                                    vdup_n_s16(static_cast<int16_t>(U1)));
+    int16x8_t U_vec =
+        vcombine_s16(vdup_n_s16(static_cast<int16_t>(U0)), vdup_n_s16(static_cast<int16_t>(U1)));
 
     // Normalize flags: multiply by {8,4,2,1}.
     flags = vmulq_s16(flags, c.mul_mask);
@@ -766,10 +1044,10 @@ class fwd_buf {
 
     // Inclusive prefix sum of m_n (8 x 16-bit).
     int16x8_t inc_sum = m_n;
-    inc_sum = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 7));
-    inc_sum = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 6));
-    inc_sum = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 4));
-    int total_mn = vgetq_lane_s16(inc_sum, 7);
+    inc_sum           = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 7));
+    inc_sum           = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 6));
+    inc_sum           = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 4));
+    int total_mn      = vgetq_lane_s16(inc_sum, 7);
 
     // Fetch raw MagSgn bits (gated on total_mn > 0).
     uint8x16_t ms_raw = vdupq_n_u8(0);
@@ -798,33 +1076,33 @@ class fwd_buf {
     // bit_shift is ready by now (computed in parallel above).
     uint16x8_t bit_shift16 = vaddq_u16(vreinterpretq_u16_u8(bit_shift), vdupq_n_u16(0x0101));
 
-    uint16x8_t d0_16 = vmulq_u16(vreinterpretq_u16_u8(d0), bit_shift16);
-    d0_16            = vshrq_n_u16(d0_16, 8);
-    uint16x8_t d1_16 = vmulq_u16(vreinterpretq_u16_u8(d1), bit_shift16);
-    d1_16            = vandq_u16(d1_16, vdupq_n_u16(0xFF00));
+    uint16x8_t d0_16  = vmulq_u16(vreinterpretq_u16_u8(d0), bit_shift16);
+    d0_16             = vshrq_n_u16(d0_16, 8);
+    uint16x8_t d1_16  = vmulq_u16(vreinterpretq_u16_u8(d1), bit_shift16);
+    d1_16             = vandq_u16(d1_16, vdupq_n_u16(0xFF00));
     uint16x8_t ms_vec = vorrq_u16(d0_16, d1_16);
 
     // Compute 2^m_n = (2 - e_k) << (U_q - 1).  NEON per-lane variable shift.
-    int16x8_t w0_val  = vsubq_s16(vtwo16, vreinterpretq_s16_u16(emb_k));
-    int16x8_t Uq_m1   = vsubq_s16(U_vec, vone16);
+    int16x8_t w0_val   = vsubq_s16(vtwo16, vreinterpretq_s16_u16(emb_k));
+    int16x8_t Uq_m1    = vsubq_s16(U_vec, vone16);
     uint16x8_t shift_v = vshlq_u16(vreinterpretq_u16_s16(w0_val), Uq_m1);
 
     // Mask ms_vec to m_n magnitude bits.
     ms_vec = vandq_u16(ms_vec, vsubq_u16(shift_v, vreinterpretq_u16_s16(vone16)));
 
     // Place e_1 at bit position m_n: OR shift where e_1 flag is set.
-    uint16x8_t emb1_absent = vceqq_u16(
-        vandq_u16(vreinterpretq_u16_s16(flags), vdupq_n_u16(0x800)), vdupq_n_u16(0));
+    uint16x8_t emb1_absent =
+        vceqq_u16(vandq_u16(vreinterpretq_u16_s16(flags), vdupq_n_u16(0x800)), vdupq_n_u16(0));
     ms_vec = vorrq_u16(ms_vec, vbicq_u16(shift_v, emb1_absent));
 
     // Build final sample: sign at bit 15, magnitude at pLSB_adj - 1.
-    uint16x8_t tvn    = vbicq_u16(ms_vec, insig);                         // save for v_n
-    uint16x8_t w_sign = vshlq_n_u16(ms_vec, 15);                          // sign bit -> bit 15
+    uint16x8_t tvn    = vbicq_u16(ms_vec, insig);                          // save for v_n
+    uint16x8_t w_sign = vshlq_n_u16(ms_vec, 15);                           // sign bit -> bit 15
     ms_vec            = vorrq_u16(ms_vec, vreinterpretq_u16_s16(vone16));  // bin center
     ms_vec            = vaddq_u16(ms_vec, vreinterpretq_u16_s16(vtwo16));  // + 2
-    ms_vec = vshlq_u16(ms_vec, vdupq_n_s16(pLSB_adj - 1));               // runtime shift
-    ms_vec = vorrq_u16(ms_vec, w_sign);                                    // sign
-    row    = vreinterpretq_s16_u16(vbicq_u16(ms_vec, insig));
+    ms_vec            = vshlq_u16(ms_vec, vdupq_n_s16(pLSB_adj - 1));      // runtime shift
+    ms_vec            = vorrq_u16(ms_vec, w_sign);                         // sign
+    row               = vreinterpretq_s16_u16(vbicq_u16(ms_vec, insig));
 
     // Update v_n: extract row-1 magnitudes (odd elements) per column.
     int16x4_t tvn_lo = vget_low_s16(vreinterpretq_s16_u16(tvn));
@@ -903,19 +1181,22 @@ class fwd_buf {
 
   FORCE_INLINE v128_t fetch(const v128_t &m) {
     v128_t t          = fetch_raw();
-    uint64_t lo = (uint64_t)wasm_i64x2_extract_lane(t, 0);
-    uint64_t hi = (uint64_t)wasm_i64x2_extract_lane(t, 1);
+    uint64_t lo       = (uint64_t)wasm_i64x2_extract_lane(t, 0);
+    uint64_t hi       = (uint64_t)wasm_i64x2_extract_lane(t, 1);
     __uint128_t v128i = ((__uint128_t)hi << 64) | lo;
     v128_t vtmp;
     int32_t m0 = wasm_i32x4_extract_lane(m, 0);
     int32_t m1 = wasm_i32x4_extract_lane(m, 1);
     int32_t m2 = wasm_i32x4_extract_lane(m, 2);
     int32_t m3 = wasm_i32x4_extract_lane(m, 3);
-    int32_t r0 = (int32_t)(v128i & 0xFFFFFFFFU); v128i >>= m0;
-    int32_t r1 = (int32_t)(v128i & 0xFFFFFFFFU); v128i >>= m1;
-    int32_t r2 = (int32_t)(v128i & 0xFFFFFFFFU); v128i >>= m2;
+    int32_t r0 = (int32_t)(v128i & 0xFFFFFFFFU);
+    v128i >>= m0;
+    int32_t r1 = (int32_t)(v128i & 0xFFFFFFFFU);
+    v128i >>= m1;
+    int32_t r2 = (int32_t)(v128i & 0xFFFFFFFFU);
+    v128i >>= m2;
     int32_t r3 = (int32_t)(v128i & 0xFFFFFFFFU);
-    vtmp = wasm_i32x4_make(r0, r1, r2, r3);
+    vtmp       = wasm_i32x4_make(r0, r1, r2, r3);
     advance((uint32_t)(m0 + m1 + m2 + m3));
     return vtmp;
   }
@@ -930,40 +1211,38 @@ class fwd_buf {
    *  @return v128_t     [r0c0,r1c0,r0c1,r1c1,r0c2,r1c2,r0c3,r1c3] as int16
    *                     sign at bit 15; expand to int32 via shl 16 + extend
    */
-  FORCE_INLINE v128_t decode_two_quads_16bit_wasm(uint16_t tv0, uint16_t tv1,
-                                                    uint16_t U0, uint16_t U1,
-                                                    uint8_t pLSB_adj, v128_t &v_n) {
+  FORCE_INLINE v128_t decode_two_quads_16bit_wasm(uint16_t tv0, uint16_t tv1, uint16_t U0, uint16_t U1,
+                                                  uint8_t pLSB_adj, v128_t &v_n) {
     const v128_t vone16  = wasm_i16x8_const_splat(1);
     const v128_t vtwo16  = wasm_i16x8_const_splat(2);
     const v128_t vzero16 = wasm_i16x8_const_splat(0);
     v128_t row           = vzero16;
 
     // Broadcast tv0 to lanes 0-3, tv1 to lanes 4-7.
-    v128_t w0 = wasm_i16x8_shuffle(wasm_i16x8_splat((int16_t)tv0),
-                                    wasm_i16x8_splat((int16_t)tv1), 0, 1, 2, 3, 8, 9, 10, 11);
+    v128_t w0 = wasm_i16x8_shuffle(wasm_i16x8_splat((int16_t)tv0), wasm_i16x8_splat((int16_t)tv1), 0, 1, 2,
+                                   3, 8, 9, 10, 11);
 
     // Extract per-sample significance/EMB flags.
-    alignas(16) static const int16_t flag_mask_arr[8] = {
-        (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880,
-        (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880};
-    v128_t flags = wasm_v128_and(w0, wasm_v128_load(flag_mask_arr));
+    alignas(16) static const int16_t flag_mask_arr[8] = {(int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880,
+                                                         (int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880};
+    v128_t flags                                      = wasm_v128_and(w0, wasm_v128_load(flag_mask_arr));
     v128_t insig = wasm_i16x8_eq(flags, vzero16);  // all-1 where insignificant
 
     // Early exit if all 8 samples are insignificant.
     if (!wasm_v128_any_true(flags)) return row;
 
     // Broadcast U values: U0 to lanes 0-3, U1 to lanes 4-7.
-    v128_t U_vec = wasm_i16x8_shuffle(wasm_i16x8_splat((int16_t)U0),
-                                       wasm_i16x8_splat((int16_t)U1), 0, 1, 2, 3, 8, 9, 10, 11);
+    v128_t U_vec = wasm_i16x8_shuffle(wasm_i16x8_splat((int16_t)U0), wasm_i16x8_splat((int16_t)U1), 0, 1, 2,
+                                      3, 8, 9, 10, 11);
 
     // Normalize flags: emb_k → bit 15, emb_1 → bit 11, rho → bit 7.
     alignas(16) static const int16_t mul_arr[8] = {8, 4, 2, 1, 8, 4, 2, 1};
-    flags = wasm_i16x8_mul(flags, wasm_v128_load(mul_arr));
+    flags                                       = wasm_i16x8_mul(flags, wasm_v128_load(mul_arr));
 
     // m_n = U - e_k; zero inactive lanes.
-    v128_t emb_k = wasm_u16x8_shr(flags, 15);          // 0 or 1
+    v128_t emb_k = wasm_u16x8_shr(flags, 15);  // 0 or 1
     v128_t m_n   = wasm_i16x8_sub(U_vec, emb_k);
-    m_n          = wasm_v128_andnot(m_n, insig);        // zero where insignificant
+    m_n          = wasm_v128_andnot(m_n, insig);  // zero where insignificant
 
     // Inclusive prefix sum of m_n (8 × int16).
     v128_t inc_sum = m_n;
@@ -987,25 +1266,22 @@ class fwd_buf {
     v128_t bit_idx  = wasm_v128_and(ex_sum, wasm_i16x8_const_splat(7));
 
     // Duplicate low byte of each 16-bit byte_idx to both bytes of the pair.
-    alignas(16) static const uint8_t dup_lo[16] = {
-        0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14};
-    v128_t bidx = wasm_i8x16_swizzle(byte_idx, wasm_v128_load(dup_lo));
-    alignas(16) static const uint8_t add_01[16] = {
-        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
-    bidx       = wasm_i8x16_add(bidx, wasm_v128_load(add_01));
-    v128_t d0  = wasm_i8x16_swizzle(ms_raw, bidx);
-    bidx       = wasm_i8x16_add(bidx, wasm_i8x16_const_splat(1));
-    v128_t d1  = wasm_i8x16_swizzle(ms_raw, bidx);
+    alignas(16) static const uint8_t dup_lo[16] = {0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14};
+    v128_t bidx                                 = wasm_i8x16_swizzle(byte_idx, wasm_v128_load(dup_lo));
+    alignas(16) static const uint8_t add_01[16] = {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    bidx                                        = wasm_i8x16_add(bidx, wasm_v128_load(add_01));
+    v128_t d0                                   = wasm_i8x16_swizzle(ms_raw, bidx);
+    bidx                                        = wasm_i8x16_add(bidx, wasm_i8x16_const_splat(1));
+    v128_t d1                                   = wasm_i8x16_swizzle(ms_raw, bidx);
 
     // Bit-level alignment: multiply-shift to align bits to bit 0.
-    alignas(16) static const uint8_t bit_tab[16] = {
-        0xFF, 127, 63, 31, 15, 7, 3, 1, 0xFF, 127, 63, 31, 15, 7, 3, 1};
-    v128_t bit_shift   = wasm_i8x16_swizzle(wasm_v128_load(bit_tab), bit_idx);
+    alignas(16) static const uint8_t bit_tab[16] = {0xFF, 127, 63, 31, 15, 7, 3, 1,
+                                                    0xFF, 127, 63, 31, 15, 7, 3, 1};
+    v128_t bit_shift                             = wasm_i8x16_swizzle(wasm_v128_load(bit_tab), bit_idx);
     v128_t bit_shift16 = wasm_i16x8_add(bit_shift, wasm_i16x8_const_splat(0x0101));
 
     v128_t d0_16  = wasm_u16x8_shr(wasm_i16x8_mul(d0, bit_shift16), 8);
-    v128_t d1_16  = wasm_v128_and(wasm_i16x8_mul(d1, bit_shift16),
-                                   wasm_i16x8_const_splat((int16_t)0xFF00));
+    v128_t d1_16  = wasm_v128_and(wasm_i16x8_mul(d1, bit_shift16), wasm_i16x8_const_splat((int16_t)0xFF00));
     v128_t ms_vec = wasm_v128_or(d0_16, d1_16);
 
     // shift_v = (2 - e_k) << (U - 1): U0 for lanes 0-3, U1 for lanes 4-7.
@@ -1018,22 +1294,22 @@ class fwd_buf {
     ms_vec = wasm_v128_and(ms_vec, wasm_i16x8_sub(shift_v, vone16));
 
     // Place e_1 at bit position m_n.
-    v128_t emb1_absent = wasm_i16x8_eq(
-        wasm_v128_and(flags, wasm_i16x8_const_splat((int16_t)0x800)), vzero16);
+    v128_t emb1_absent =
+        wasm_i16x8_eq(wasm_v128_and(flags, wasm_i16x8_const_splat((int16_t)0x800)), vzero16);
     ms_vec = wasm_v128_or(ms_vec, wasm_v128_andnot(shift_v, emb1_absent));
 
     // Build final sample: sign at bit 15, magnitude at pLSB_adj-1.
-    v128_t tvn    = wasm_v128_andnot(ms_vec, insig);        // save pre-shift for v_n
-    v128_t w_sign = wasm_i16x8_shl(ms_vec, 15);             // sign bit → bit 15
-    ms_vec        = wasm_v128_or(ms_vec, vone16);            // bin center
-    ms_vec        = wasm_i16x8_add(ms_vec, vtwo16);          // +2
-    ms_vec        = wasm_i16x8_shl(ms_vec, pLSB_adj - 1);   // runtime shift
-    ms_vec        = wasm_v128_or(ms_vec, w_sign);            // apply sign
-    row           = wasm_v128_andnot(ms_vec, insig);         // zero inactive
+    v128_t tvn    = wasm_v128_andnot(ms_vec, insig);       // save pre-shift for v_n
+    v128_t w_sign = wasm_i16x8_shl(ms_vec, 15);            // sign bit → bit 15
+    ms_vec        = wasm_v128_or(ms_vec, vone16);          // bin center
+    ms_vec        = wasm_i16x8_add(ms_vec, vtwo16);        // +2
+    ms_vec        = wasm_i16x8_shl(ms_vec, pLSB_adj - 1);  // runtime shift
+    ms_vec        = wasm_v128_or(ms_vec, w_sign);          // apply sign
+    row           = wasm_v128_andnot(ms_vec, insig);       // zero inactive
 
     // Update v_n: odd lanes (1,3,5,7) → low 4 lanes of v_n.
     v128_t tvn_odd = wasm_i16x8_shuffle(tvn, vzero16, 1, 3, 5, 7, 8, 8, 8, 8);
-    v_n = wasm_v128_or(v_n, tvn_odd);
+    v_n            = wasm_v128_or(v_n, tvn_odd);
 
     return row;
   }
@@ -1281,21 +1557,18 @@ class fwd_buf {
   // Returns __m256i: lower 128 = mu for quad 0, upper 128 = mu for quad 1.
   // v_n is updated with the magnitude-bit positions of both quads.
   // Fetches and advances the MagSgn bit-stream sequentially (one call per quad).
-#if defined(__AVX2__)
-  FORCE_INLINE __m256i decode_two_quads(__m256i qinf256, __m256i U_q256, uint8_t pLSB,
-                                        __m128i &v_n) {
+  #if defined(__AVX2__)
+  FORCE_INLINE __m256i decode_two_quads(__m256i qinf256, __m256i U_q256, uint8_t pLSB, __m128i &v_n) {
     const __m256i vone256 = _mm256_set1_epi32(1);
     __m256i row256        = _mm256_setzero_si256();
 
     // Significance flags for all 8 samples (both quads) at once.
     __m256i flags = _mm256_and_si256(
-        qinf256, _mm256_set_epi32(0x8880, 0x4440, 0x2220, 0x1110,
-                                   0x8880, 0x4440, 0x2220, 0x1110));
+        qinf256, _mm256_set_epi32(0x8880, 0x4440, 0x2220, 0x1110, 0x8880, 0x4440, 0x2220, 0x1110));
     __m256i insig = _mm256_cmpeq_epi32(flags, _mm256_setzero_si256());
 
     if ((uint32_t)_mm256_movemask_epi8(insig) != 0xFFFFFFFFu) {
-      flags = _mm256_mullo_epi16(
-          flags, _mm256_set_epi16(1, 1, 2, 2, 4, 4, 8, 8, 1, 1, 2, 2, 4, 4, 8, 8));
+      flags = _mm256_mullo_epi16(flags, _mm256_set_epi16(1, 1, 2, 2, 4, 4, 8, 8, 1, 1, 2, 2, 4, 4, 8, 8));
 
       __m256i emb_k = _mm256_srli_epi32(flags, 15);
       __m256i m_n   = _mm256_andnot_si256(insig, _mm256_sub_epi32(U_q256, emb_k));
@@ -1326,13 +1599,13 @@ class fwd_buf {
       // quad 0 reads from ms_vec0 and quad 1 from ms_vec1 independently.
       __m256i byte_idx = _mm256_srli_epi32(ex_sum, 3);
       __m256i bit_idx  = _mm256_and_si256(ex_sum, _mm256_set1_epi32(7));
-      byte_idx         = _mm256_shuffle_epi8(
-          byte_idx, _mm256_set_epi32(0x0C0C0C0C, 0x08080808, 0x04040404, 0x00000000,
-                                      0x0C0C0C0C, 0x08080808, 0x04040404, 0x00000000));
-      byte_idx      = _mm256_add_epi32(byte_idx, _mm256_set1_epi32(0x03020100));
-      __m256i d0    = _mm256_shuffle_epi8(ms_vec, byte_idx);
-      byte_idx      = _mm256_add_epi32(byte_idx, _mm256_set1_epi32(0x01010101));
-      __m256i d1    = _mm256_shuffle_epi8(ms_vec, byte_idx);
+      byte_idx =
+          _mm256_shuffle_epi8(byte_idx, _mm256_set_epi32(0x0C0C0C0C, 0x08080808, 0x04040404, 0x00000000,
+                                                         0x0C0C0C0C, 0x08080808, 0x04040404, 0x00000000));
+      byte_idx   = _mm256_add_epi32(byte_idx, _mm256_set1_epi32(0x03020100));
+      __m256i d0 = _mm256_shuffle_epi8(ms_vec, byte_idx);
+      byte_idx   = _mm256_add_epi32(byte_idx, _mm256_set1_epi32(0x01010101));
+      __m256i d1 = _mm256_shuffle_epi8(ms_vec, byte_idx);
 
       bit_idx           = _mm256_or_si256(bit_idx, _mm256_slli_epi32(bit_idx, 16));
       __m128i tab128    = _mm_set_epi8(1, 3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1);
@@ -1360,13 +1633,10 @@ class fwd_buf {
       tvn         = _mm256_shuffle_epi8(
           tvn, _mm256_set_epi8(
                    // Upper lane (quad 1, N=1): lanes 1,3 → offsets 8..15
-                   0x0F, 0x0E, 0x0D, 0x0C, 0x07, 0x06, 0x05, 0x04,
-                   -1, -1, -1, -1, -1, -1, -1, -1,
+                   0x0F, 0x0E, 0x0D, 0x0C, 0x07, 0x06, 0x05, 0x04, -1, -1, -1, -1, -1, -1, -1, -1,
                    // Lower lane (quad 0, N=0): lanes 1,3 → offsets 0..7
-                   -1, -1, -1, -1, -1, -1, -1, -1,
-                   0x0F, 0x0E, 0x0D, 0x0C, 0x07, 0x06, 0x05, 0x04));
-      v_n = _mm_or_si128(v_n, _mm_or_si128(_mm256_castsi256_si128(tvn),
-                                            _mm256_extracti128_si256(tvn, 1)));
+                   -1, -1, -1, -1, -1, -1, -1, -1, 0x0F, 0x0E, 0x0D, 0x0C, 0x07, 0x06, 0x05, 0x04));
+      v_n = _mm_or_si128(v_n, _mm_or_si128(_mm256_castsi256_si128(tvn), _mm256_extracti128_si256(tvn, 1)));
     }
     return row256;
   }
@@ -1381,8 +1651,7 @@ class fwd_buf {
   // Returns __m256i of 16 × int16_t: interleaved row0/row1 per quad column.
   // Sign bit is in bit 15 of each int16_t.
   // Caller must expand to int32_t via zero-extend then slli_epi32(x, 16).
-  FORCE_INLINE __m256i decode_four_quads(__m128i inf_u_q, __m128i U_q, uint8_t pLSB_adj,
-                                          __m128i &v_n) {
+  FORCE_INLINE __m256i decode_four_quads(__m128i inf_u_q, __m128i U_q, uint8_t pLSB_adj, __m128i &v_n) {
     const __m256i vone16 = _mm256_set1_epi16(1);
     const __m256i vtwo16 = _mm256_set1_epi16(2);
     __m256i row256       = _mm256_setzero_si256();
@@ -1390,31 +1659,28 @@ class fwd_buf {
     // Broadcast each quad's inf word to all 4 sample slots in its 64-bit group.
     // inf_u_q = [inf0(16b), u0(16b), inf1(16b), u1(16b), inf2(16b), u2(16b), inf3(16b), u3(16b)]
     // Step 1: duplicate each inf to both 16-bit positions of its 32-bit slot.
-    __m128i ddd = _mm_shuffle_epi8(
-        inf_u_q, _mm_set_epi32(0x0D0C0D0C, 0x09080908, 0x05040504, 0x01000100));
+    __m128i ddd = _mm_shuffle_epi8(inf_u_q, _mm_set_epi32(0x0D0C0D0C, 0x09080908, 0x05040504, 0x01000100));
     // ddd (8 × 16-bit): [inf0,inf0, inf1,inf1, inf2,inf2, inf3,inf3]
     // Step 2: broadcast each 32-bit pair to two 32-bit slots in the 256-bit register.
-    __m256i w0 = _mm256_permutevar8x32_epi32(
-        _mm256_castsi128_si256(ddd), _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3));
+    __m256i w0 =
+        _mm256_permutevar8x32_epi32(_mm256_castsi128_si256(ddd), _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3));
     // w0 (16 × 16-bit): [inf0 ×4, inf1 ×4, inf2 ×4, inf3 ×4]
 
     // Extract significance/EMB flags per sample.
-    __m256i flags = _mm256_and_si256(
-        w0, _mm256_set_epi16((int16_t)0x8880, 0x4440, 0x2220, 0x1110,
-                              (int16_t)0x8880, 0x4440, 0x2220, 0x1110,
-                              (int16_t)0x8880, 0x4440, 0x2220, 0x1110,
-                              (int16_t)0x8880, 0x4440, 0x2220, 0x1110));
+    __m256i flags =
+        _mm256_and_si256(w0, _mm256_set_epi16((int16_t)0x8880, 0x4440, 0x2220, 0x1110, (int16_t)0x8880,
+                                              0x4440, 0x2220, 0x1110, (int16_t)0x8880, 0x4440, 0x2220,
+                                              0x1110, (int16_t)0x8880, 0x4440, 0x2220, 0x1110));
     __m256i insig = _mm256_cmpeq_epi16(flags, _mm256_setzero_si256());
 
     if ((uint32_t)_mm256_movemask_epi8(insig) != 0xFFFFFFFFu) {
       // Broadcast each U_q value (uint32_t → uint16_t pair) to 4 samples per quad.
-      ddd          = _mm_or_si128(_mm_bslli_si128(U_q, 2), U_q);
-      __m256i U_q_avx = _mm256_permutevar8x32_epi32(
-          _mm256_castsi128_si256(ddd), _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3));
+      ddd             = _mm_or_si128(_mm_bslli_si128(U_q, 2), U_q);
+      __m256i U_q_avx = _mm256_permutevar8x32_epi32(_mm256_castsi128_si256(ddd),
+                                                    _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3));
       // U_q_avx (16 × 16-bit): [U0 ×4, U1 ×4, U2 ×4, U3 ×4]
 
-      flags = _mm256_mullo_epi16(
-          flags, _mm256_set_epi16(1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8));
+      flags = _mm256_mullo_epi16(flags, _mm256_set_epi16(1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8));
       // After mullo: e_k at bit 15, e_1 at bit 11, rho at bit 7.
 
       __m256i emb_k = _mm256_srli_epi16(flags, 15);
@@ -1423,11 +1689,11 @@ class fwd_buf {
 
       // Inclusive prefix sum of m_n within each 128-bit lane (= one quad-pair).
       __m256i inc_sum = m_n;
-      inc_sum = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 2));
-      inc_sum = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 4));
-      inc_sum = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 8));
-      int total_mn0 = _mm256_extract_epi16(inc_sum, 7);   // quads 0+1 total bits
-      int total_mn1 = _mm256_extract_epi16(inc_sum, 15);  // quads 2+3 total bits
+      inc_sum         = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 2));
+      inc_sum         = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 4));
+      inc_sum         = _mm256_add_epi16(inc_sum, _mm256_bslli_epi128(inc_sum, 8));
+      int total_mn0   = _mm256_extract_epi16(inc_sum, 7);   // quads 0+1 total bits
+      int total_mn1   = _mm256_extract_epi16(inc_sum, 15);  // quads 2+3 total bits
 
       __m128i ms_vec0 = _mm_setzero_si128();
       __m128i ms_vec1 = _mm_setzero_si128();
@@ -1447,22 +1713,21 @@ class fwd_buf {
       __m256i byte_idx = _mm256_srli_epi16(ex_sum, 3);
       __m256i bit_idx  = _mm256_and_si256(ex_sum, _mm256_set1_epi16(7));
       byte_idx         = _mm256_shuffle_epi8(
-          byte_idx, _mm256_set_epi16(0x0E0E, 0x0C0C, 0x0A0A, 0x0808, 0x0606, 0x0404,
-                                      0x0202, 0x0000, 0x0E0E, 0x0C0C, 0x0A0A, 0x0808,
-                                      0x0606, 0x0404, 0x0202, 0x0000));
-      byte_idx      = _mm256_add_epi16(byte_idx, _mm256_set1_epi16(0x0100));
-      __m256i d0    = _mm256_shuffle_epi8(ms_vec, byte_idx);
-      byte_idx      = _mm256_add_epi16(byte_idx, _mm256_set1_epi16(0x0101));
-      __m256i d1    = _mm256_shuffle_epi8(ms_vec, byte_idx);
+          byte_idx, _mm256_set_epi16(0x0E0E, 0x0C0C, 0x0A0A, 0x0808, 0x0606, 0x0404, 0x0202, 0x0000, 0x0E0E,
+                                             0x0C0C, 0x0A0A, 0x0808, 0x0606, 0x0404, 0x0202, 0x0000));
+      byte_idx   = _mm256_add_epi16(byte_idx, _mm256_set1_epi16(0x0100));
+      __m256i d0 = _mm256_shuffle_epi8(ms_vec, byte_idx);
+      byte_idx   = _mm256_add_epi16(byte_idx, _mm256_set1_epi16(0x0101));
+      __m256i d1 = _mm256_shuffle_epi8(ms_vec, byte_idx);
 
       // For 16-bit elements, bit_idx high byte must stay 0 so vpshufb maps it to
       // table[0]=0xFF; after +0x0101 the high byte wraps to 0x00, giving the correct
       // single-byte multiplier for mullo_epi16.  (The 32-bit decode_two_quads path
       // duplicates across 16-bit halves of a 32-bit element, which is different.)
-      __m256i bit_shift = _mm256_shuffle_epi8(
-          _mm256_set_epi8(1, 3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1,
-                          1, 3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1),
-          bit_idx);
+      __m256i bit_shift =
+          _mm256_shuffle_epi8(_mm256_set_epi8(1, 3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1, 1,
+                                              3, 7, 15, 31, 63, 127, -1, 1, 3, 7, 15, 31, 63, 127, -1),
+                              bit_idx);
       bit_shift = _mm256_add_epi16(bit_shift, _mm256_set1_epi16(0x0101));
       d0        = _mm256_mullo_epi16(d0, bit_shift);
       d0        = _mm256_srli_epi16(d0, 8);
@@ -1474,23 +1739,21 @@ class fwd_buf {
       // AVX2 has no _mm256_sllv_epi16; split into four _mm_sll_epi16 calls,
       // one per quad (each quad has a uniform shift = U_q - 1).
       // w0 = (2 - e_k): 1 when e_k=1, 2 when e_k=0.
-      w0              = _mm256_sub_epi16(vtwo16, emb_k);
-      __m256i Uq_m1   = _mm256_sub_epi16(U_q_avx, vone16);
+      w0            = _mm256_sub_epi16(vtwo16, emb_k);
+      __m256i Uq_m1 = _mm256_sub_epi16(U_q_avx, vone16);
       // Shift count for even quads (0 and 2) within each 128-bit lane.
-      __m256i Uq_evn  = _mm256_and_si256(Uq_m1, _mm256_set_epi32(0, 0, 0, 0x1F, 0, 0, 0, 0x1F));
+      __m256i Uq_evn = _mm256_and_si256(Uq_m1, _mm256_set_epi32(0, 0, 0, 0x1F, 0, 0, 0, 0x1F));
       // Shift count for odd quads (1 and 3) — move to element 0 of each lane.
-      __m256i Uq_odd  = _mm256_bsrli_epi128(Uq_m1, 14);
-      __m256i t_evn   = _mm256_and_si256(w0, _mm256_set_epi64x(0, -1, 0, -1));
-      __m256i t_odd   = _mm256_and_si256(w0, _mm256_set_epi64x(-1, 0, -1, 0));
+      __m256i Uq_odd = _mm256_bsrli_epi128(Uq_m1, 14);
+      __m256i t_evn  = _mm256_and_si256(w0, _mm256_set_epi64x(0, -1, 0, -1));
+      __m256i t_odd  = _mm256_and_si256(w0, _mm256_set_epi64x(-1, 0, -1, 0));
       {  // no _mm256_sllv_epi16 in AVX2 — use four _mm_sll_epi16 calls instead
         __m128i lo, hi;
         lo    = _mm_sll_epi16(_mm256_castsi256_si128(t_evn), _mm256_castsi256_si128(Uq_evn));
-        hi    = _mm_sll_epi16(_mm256_extracti128_si256(t_evn, 1),
-                               _mm256_extracti128_si256(Uq_evn, 1));
+        hi    = _mm_sll_epi16(_mm256_extracti128_si256(t_evn, 1), _mm256_extracti128_si256(Uq_evn, 1));
         t_evn = _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1);
         lo    = _mm_sll_epi16(_mm256_castsi256_si128(t_odd), _mm256_castsi256_si128(Uq_odd));
-        hi    = _mm_sll_epi16(_mm256_extracti128_si256(t_odd, 1),
-                               _mm256_extracti128_si256(Uq_odd, 1));
+        hi    = _mm_sll_epi16(_mm256_extracti128_si256(t_odd, 1), _mm256_extracti128_si256(Uq_odd, 1));
         t_odd = _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1);
       }
       __m256i shift = _mm256_or_si256(t_evn, t_odd);  // = (2 - e_k) << (U_q - 1) = 2^m_n
@@ -1498,34 +1761,33 @@ class fwd_buf {
       ms_vec = _mm256_and_si256(ms_vec, _mm256_sub_epi16(shift, vone16));  // m_n magnitude bits
 
       // Place e_1 at bit position m_n.
-      __m256i emb1_mask = _mm256_cmpeq_epi16(
-          _mm256_and_si256(flags, _mm256_set1_epi16(0x800)), _mm256_setzero_si256());
+      __m256i emb1_mask =
+          _mm256_cmpeq_epi16(_mm256_and_si256(flags, _mm256_set1_epi16(0x800)), _mm256_setzero_si256());
       ms_vec = _mm256_or_si256(ms_vec, _mm256_andnot_si256(emb1_mask, shift));
 
       // Build decoded sample: sign at bit 15, magnitude shifted by (pLSB_adj - 1).
-      __m256i tvn    = ms_vec;                                 // save for v_n update (before |=1)
-      __m256i w_sign = _mm256_slli_epi16(ms_vec, 15);        // sign bit → bit 15
-      ms_vec         = _mm256_or_si256(ms_vec, vone16);       // bin center
-      ms_vec         = _mm256_add_epi16(ms_vec, vtwo16);      // + 2
+      __m256i tvn    = ms_vec;                            // save for v_n update (before |=1)
+      __m256i w_sign = _mm256_slli_epi16(ms_vec, 15);     // sign bit → bit 15
+      ms_vec         = _mm256_or_si256(ms_vec, vone16);   // bin center
+      ms_vec         = _mm256_add_epi16(ms_vec, vtwo16);  // + 2
       ms_vec         = _mm256_slli_epi16(ms_vec, pLSB_adj - 1);
-      ms_vec         = _mm256_or_si256(ms_vec, w_sign);       // sign
+      ms_vec         = _mm256_or_si256(ms_vec, w_sign);  // sign
       row256         = _mm256_andnot_si256(insig, ms_vec);
 
       // Update v_n (8 × int16_t): pairwise OR of row-0 and row-1 magnitudes per column.
       // Gather odd-indexed 16-bit elements (row 1 only) into lower 64 bits of each 128-bit lane.
       tvn = _mm256_andnot_si256(insig, tvn);
-      __m256i vn256 = _mm256_shuffle_epi8(
-          tvn, _mm256_set_epi8(-1,-1,-1,-1,-1,-1,-1,-1,
-                                0x0F,0x0E,0x0B,0x0A,0x07,0x06,0x03,0x02,
-                                -1,-1,-1,-1,-1,-1,-1,-1,
-                                0x0F,0x0E,0x0B,0x0A,0x07,0x06,0x03,0x02));
+      __m256i vn256 =
+          _mm256_shuffle_epi8(tvn, _mm256_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, 0x0F, 0x0E, 0x0B, 0x0A,
+                                                   0x07, 0x06, 0x03, 0x02, -1, -1, -1, -1, -1, -1, -1, -1,
+                                                   0x0F, 0x0E, 0x0B, 0x0A, 0x07, 0x06, 0x03, 0x02));
       // Combine: lower 64 bits of each lane into the lower 128 bits.
       vn256 = _mm256_permute4x64_epi64(vn256, _MM_SHUFFLE(2, 0, 2, 0));
       v_n   = _mm_or_si128(v_n, _mm256_castsi256_si128(vn256));
     }
     return row256;
   }
-#endif  // defined(__AVX2__)
+  #endif  // defined(__AVX2__)
 };
 #else
 template <int X>
@@ -1817,7 +2079,7 @@ class MR_dec {
 //  }
 //}
 //
-//OPENHTJ2K_MAYBE_UNUSED uint8_t state_MS_dec::importMagSgnBit() {
+// OPENHTJ2K_MAYBE_UNUSED uint8_t state_MS_dec::importMagSgnBit() {
 //  uint8_t val;
 //  if (bits == 0) {
 //    bits = (last == 0xFF) ? 7 : 8;
@@ -1842,7 +2104,7 @@ class MR_dec {
 //  return val;
 //}
 //
-//OPENHTJ2K_MAYBE_UNUSED int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
+// OPENHTJ2K_MAYBE_UNUSED int32_t state_MS_dec::decodeMagSgnValue(int32_t m_n, int32_t i_n) {
 //  int32_t val = 0;
 //  // uint8_t bit;
 //  if (m_n > 0) {
@@ -1997,7 +2259,7 @@ class MR_dec {
 //}
 // #endif
 //
-//OPENHTJ2K_MAYBE_UNUSED void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2],
+// OPENHTJ2K_MAYBE_UNUSED void state_VLC_dec::decodeCxtVLC(const uint16_t &context, uint8_t (&u_off)[2],
 //                                                  uint8_t (&rho)[2], uint8_t (&emb_k)[2],
 //                                                  uint8_t (&emb_1)[2], const uint8_t &first_or_second,
 //                                                  const uint16_t *dec_CxtVLC_table) {
@@ -2034,7 +2296,7 @@ class MR_dec {
 // #endif
 //}
 //
-//OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUPrefix() {
+// OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUPrefix() {
 //  if (getbitfunc == 1) {
 //    return 1;
 //  }
@@ -2048,7 +2310,7 @@ class MR_dec {
 //  }
 //}
 //
-//OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
+// OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUSuffix(const uint32_t &u_pfx) {
 //  uint8_t bit, val;
 //  if (u_pfx < 3) {
 //    return 0;
@@ -2063,7 +2325,7 @@ class MR_dec {
 //  }
 //  return val;
 //}
-//OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
+// OPENHTJ2K_MAYBE_UNUSED uint8_t state_VLC_dec::decodeUExtension(const uint32_t &u_sfx) {
 //  uint8_t bit, val;
 //  if (u_sfx < 28) {
 //    return 0;
@@ -2096,7 +2358,7 @@ FORCE_INLINE uint8_t SP_dec::importSigPropBit() {
     last = tmp;
   }
   uint8_t val = tmp & 1;
-  tmp = static_cast<uint8_t>(tmp >> 1);
+  tmp         = static_cast<uint8_t>(tmp >> 1);
   bits--;
   return val;
 }
@@ -2119,31 +2381,31 @@ FORCE_INLINE uint8_t MR_dec::importMagRefBit() {
     last = tmp;
   }
   uint8_t val = tmp & 1;
-  tmp = static_cast<uint8_t>(tmp >> 1);
+  tmp         = static_cast<uint8_t>(tmp >> 1);
   bits--;
   return val;
 }
 
-//OPENHTJ2K_MAYBE_UNUSED auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec,
-//                                        const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
-//                                        uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
-//                                        const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table)
-//                                        {
-//  uint8_t sym;
-//  if (context == 0) {
-//    sym = MEL_decoder.decodeMELSym();
-//    if (sym == 0) {
-//      rho[first_or_second] = u_off[first_or_second] = emb_k[first_or_second] = emb_1[first_or_second] = 0;
-//      return;
-//    }
-//  }
-//  uint32_t vlcval        = VLC_dec.fetch();
-//  uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
-//  u_off[first_or_second] = value & 1;
-//  uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
-//  rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
-//  emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
-//  emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
-//  VLC_dec.advance(len);
-//  //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
-//};
+// OPENHTJ2K_MAYBE_UNUSED auto decodeSigEMB = [](state_MEL_decoder &MEL_decoder, rev_buf &VLC_dec,
+//                                         const uint16_t &context, uint8_t (&u_off)[2], uint8_t (&rho)[2],
+//                                         uint8_t (&emb_k)[2], uint8_t (&emb_1)[2],
+//                                         const uint8_t &first_or_second, const uint16_t *dec_CxtVLC_table)
+//                                         {
+//   uint8_t sym;
+//   if (context == 0) {
+//     sym = MEL_decoder.decodeMELSym();
+//     if (sym == 0) {
+//       rho[first_or_second] = u_off[first_or_second] = emb_k[first_or_second] = emb_1[first_or_second] =
+//       0; return;
+//     }
+//   }
+//   uint32_t vlcval        = VLC_dec.fetch();
+//   uint16_t value         = dec_CxtVLC_table[(vlcval & 0x7F) + (context << 7)];
+//   u_off[first_or_second] = value & 1;
+//   uint32_t len           = static_cast<uint8_t>((value & 0x000F) >> 1);
+//   rho[first_or_second]   = static_cast<uint8_t>((value & 0x00F0) >> 4);
+//   emb_k[first_or_second] = static_cast<uint8_t>((value & 0x0F00) >> 8);
+//   emb_1[first_or_second] = static_cast<uint8_t>((value & 0xF000) >> 12);
+//   VLC_dec.advance(len);
+//   //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
+// };

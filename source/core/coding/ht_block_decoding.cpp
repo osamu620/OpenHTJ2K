@@ -26,7 +26,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2)) && !defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+#if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2)) \
+    && !defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include "coding_units.hpp"
   #include "dec_CxtVLC_tables.hpp"
   #include "ht_block_decoding.hpp"
@@ -67,216 +68,32 @@ static FORCE_INLINE void dequant_store_scalar(void *dst, int32_t val, uint8_t tr
   } else {
     int32_t sign = val & INT32_MIN;
     float f      = static_cast<float>(val & INT32_MAX) * fscale_direct;
-    if (sign) f  = -f;
+    if (sign) f = -f;
     *reinterpret_cast<float *>(dst) = f;
   }
 }
 
-template <bool skip_sigma, bool fuse_dequant = false, bool store_i32 = false>
-void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t Lcup, const int32_t Pcup,
-                       const int32_t Scup) {
+// Step-2 of the HT cleanup pass: MagSgn decoding over the (tv, u) scratch
+// written by ht_cleanup_step1_nway (the former phase 1 of this function).
+// Kept per-block: the fwd_buf destuff scratch is thread-local (constructing a
+// second fwd_buf on the same thread invalidates the first), and step-2 is
+// throughput-bound — there is nothing to gain from interleaving it.
+template <bool fuse_dequant = false, bool store_i32 = false>
+static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int32_t Pcup,
+                             uint16_t *scratch, const int32_t sstr) {
   uint8_t *compressed_data = block->get_compressed_data();
-  const uint16_t QW        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
-  const uint16_t QH        = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
-
-  uint16_t scratch[8 * 513];
-  int32_t sstr              = static_cast<int32_t>(((block->size.x + 2) + 7u) & ~7u);  // multiples of 8
-  uint16_t *sp;
-  int32_t qx;
-  /*******************************************************************************************************************/
-  // VLC, UVLC and MEL decoding
-  /*******************************************************************************************************************/
-  MEL_dec MEL(compressed_data, Lcup, Scup);
-  rev_buf VLC_dec(compressed_data, Lcup, Scup);
-  auto sp0 = block->block_states + 1 + block->blkstate_stride;
-  auto sp1 = block->block_states + 1 + 2 * block->blkstate_stride;
-  uint32_t u_off0, u_off1;
-  uint32_t u0, u1;
-  uint32_t context = 0;
-  uint32_t vlcval;
-
-  const uint16_t *dec_table;
-  // Initial line-pair
-  dec_table       = dec_CxtVLC_table0_fast_16;
-  sp              = scratch;
-  int32_t mel_run = MEL.get_run();
-  for (qx = QW; qx > 0; qx -= 2, sp += 4) {
-    // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.fetch();
-    uint16_t tv0 = dec_table[(vlcval & 0x7F) + context];
-    {
-      // Branchless context-0 MEL handling: replace unpredictable branch with mask
-      int32_t cm = -static_cast<int32_t>(context == 0);
-      mel_run -= cm & 2;
-      tv0 &= static_cast<uint16_t>(-(mel_run == -1) | ~cm);
-      if (mel_run < 0) mel_run = MEL.get_run();
-    }
-    sp[0] = tv0;
-
-    // calculate context for the next quad, Eq. (1) in the spec
-    context = ((tv0 & 0xE0U) << 2) | ((tv0 & 0x10U) << 3);  // = context << 7
-
-    // Decoding of significance and EMB patterns and unsigned residual offsets
-    vlcval       = VLC_dec.advance((tv0 & 0x000F) >> 1);
-    uint16_t tv1 = dec_table[(vlcval & 0x7F) + context];
-    {
-      int32_t cm = -static_cast<int32_t>((context == 0) & (qx > 1));
-      mel_run -= cm & 2;
-      tv1 &= static_cast<uint16_t>(-(mel_run == -1) | ~cm);
-      if (mel_run < 0) mel_run = MEL.get_run();
-    }
-    tv1   = (qx > 1) ? tv1 : 0;
-    sp[2] = tv1;
-
-    // store sigma
-    if (!skip_sigma) {
-      *sp0++ = ((tv0 >> 4) >> 0) & 1;
-      *sp0++ = ((tv0 >> 4) >> 2) & 1;
-      *sp0++ = ((tv1 >> 4) >> 0) & 1;
-      *sp0++ = ((tv1 >> 4) >> 2) & 1;
-      *sp1++ = ((tv0 >> 4) >> 1) & 1;
-      *sp1++ = ((tv0 >> 4) >> 3) & 1;
-      *sp1++ = ((tv1 >> 4) >> 1) & 1;
-      *sp1++ = ((tv1 >> 4) >> 3) & 1;
-    }
-
-    // calculate context for the next quad, Eq. (1) in the spec
-    context = ((tv1 & 0xE0U) << 2) | ((tv1 & 0x10U) << 3);  // = context << 7
-
-    vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
-    u_off0 = tv0 & 1;
-    u_off1 = tv1 & 1;
-
-    // Branchless MEL offset: replace compound branch with mask
-    uint32_t both_off = u_off0 & u_off1;
-    int32_t om        = -static_cast<int32_t>(both_off);
-    mel_run -= om & 2;
-    uint32_t mel_offset = static_cast<uint32_t>(-(mel_run == -1) & om) & 0x40;
-    if (mel_run < 0) mel_run = MEL.get_run();
-
-    // UVLC decoding
-    uint32_t idx         = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U) + mel_offset;
-    uint32_t uvlc_result = uvlc_dec_0[idx];
-    // remove total prefix length
-    vlcval = VLC_dec.advance(uvlc_result & 0x7);
-    uvlc_result >>= 3;
-    // extract suffixes for quad 0 and 1
-    uint32_t len = uvlc_result & 0xF;  // suffix length for 2 quads (up to 10 = 5 + 5)
-    //  ((1U << len) - 1U) can be replaced with _bzhi_u32(UINT32_MAX, len); not fast
-    uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-    vlcval       = VLC_dec.advance(len);
-    uvlc_result >>= 4;
-    // quad 0 length
-    len = uvlc_result & 0x7;  // quad 0 suffix length
-    uvlc_result >>= 3;
-    // U = 1+ u
-    u0 = 1 + (uvlc_result & 7) + (tmp & ~(0xFFU << len));  // always kappa = 1 in initial line pair
-    u1 = 1 + (uvlc_result >> 3) + (tmp >> len);            // always kappa = 1 in initial line pair
-
-    sp[1] = static_cast<uint16_t>(u0);
-    sp[3] = static_cast<uint16_t>(u1);
-  }
-  std::memset(sp, 0, sizeof(uint16_t) * 4);  // zero 8-byte guard for MagSgn context reads
-
-  // Non-initial line-pair
-  dec_table = dec_CxtVLC_table1_fast_16;
-  for (uint16_t row = 1; row < QH; row++) {
-    sp0 = block->block_states + (row * 2U + 1U) * block->blkstate_stride + 1U;
-    sp1 = sp0 + block->blkstate_stride;
-
-    sp = scratch + row * sstr;
-    // calculate context for the next quad: w, sw, nw are always 0 at the head of a row
-    context = ((sp[0 - sstr] & 0xA0U) << 2) | ((sp[2 - sstr] & 0x20U) << 4);
-    for (qx = QW; qx > 0; qx -= 2, sp += 4) {
-      // Decoding of significance and EMB patterns and unsigned residual offsets
-      vlcval       = VLC_dec.fetch();
-      uint16_t tv0 = dec_table[(vlcval & 0x7F) + context];
-      if (context == 0) {
-        mel_run -= 2;
-        tv0 = (mel_run == -1) ? tv0 : 0;
-        if (mel_run < 0) {
-          mel_run = MEL.get_run();
-        }
-      }
-      // calculate context for the next quad, Eq. (2) in the spec
-      context = ((tv0 & 0x40U) << 2) | ((tv0 & 0x80U) << 1);              // (w | sw) << 8
-      context |= (sp[0 - sstr] & 0x80U) | ((sp[2 - sstr] & 0xA0U) << 2);  // ((nw | n) << 7) | (ne << 9)
-      context |= (sp[4 - sstr] & 0x20U) << 4;                             // ( nf) << 9
-
-      sp[0] = tv0;
-
-      vlcval = VLC_dec.advance((tv0 & 0x000F) >> 1);
-
-      // Decoding of significance and EMB patterns and unsigned residual offsets
-      uint16_t tv1 = dec_table[(vlcval & 0x7F) + context];
-      if (context == 0 && qx > 1) {
-        mel_run -= 2;
-        tv1 = (mel_run == -1) ? tv1 : 0;
-        if (mel_run < 0) {
-          mel_run = MEL.get_run();
-        }
-      }
-      tv1 = (qx > 1) ? tv1 : 0;
-      // calculate context for the next quad, Eq. (2) in the spec
-      context = ((tv1 & 0x40U) << 2) | ((tv1 & 0x80U) << 1);              // (w | sw) << 8
-      context |= (sp[2 - sstr] & 0x80U) | ((sp[4 - sstr] & 0xA0U) << 2);  // ((nw | n) << 7) | (ne << 9)
-      context |= (sp[6 - sstr] & 0x20U) << 4;                             // ( nf) << 9
-
-      sp[2] = tv1;
-
-      // store sigma
-      if (!skip_sigma) {
-        *sp0++ = ((tv0 >> 4) >> 0) & 1;
-        *sp0++ = ((tv0 >> 4) >> 2) & 1;
-        *sp0++ = ((tv1 >> 4) >> 0) & 1;
-        *sp0++ = ((tv1 >> 4) >> 2) & 1;
-        *sp1++ = ((tv0 >> 4) >> 1) & 1;
-        *sp1++ = ((tv0 >> 4) >> 3) & 1;
-        *sp1++ = ((tv1 >> 4) >> 1) & 1;
-        *sp1++ = ((tv1 >> 4) >> 3) & 1;
-      }
-
-      vlcval = VLC_dec.advance((tv1 & 0x000F) >> 1);
-
-      // UVLC decoding
-      u_off0       = tv0 & 1;
-      u_off1       = tv1 & 1;
-      uint32_t idx = (vlcval & 0x3F) + (u_off0 << 6U) + (u_off1 << 7U);
-
-      uint32_t uvlc_result = uvlc_dec_1[idx];
-      // remove total prefix length
-      vlcval = VLC_dec.advance(uvlc_result & 0x7);
-      uvlc_result >>= 3;
-      // extract suffixes for quad 0 and 1
-      uint32_t len = uvlc_result & 0xF;  // suffix length for 2 quads (up to 10 = 5 + 5)
-      //  ((1U << len) - 1U) can be replaced with _bzhi_u32(UINT32_MAX, len); not fast
-      uint32_t tmp = vlcval & ((1U << len) - 1U);  // suffix value for 2 quads
-      vlcval       = VLC_dec.advance(len);
-      uvlc_result >>= 4;
-      // quad 0 length
-      len = uvlc_result & 0x7;  // quad 0 suffix length
-      uvlc_result >>= 3;
-      u0 = (uvlc_result & 7) + (tmp & ~(0xFFU << len));
-      u1 = (uvlc_result >> 3) + (tmp >> len);
-
-      sp[1] = static_cast<uint16_t>(u0);
-      sp[3] = static_cast<uint16_t>(u1);
-    }
-    std::memset(sp, 0, sizeof(uint16_t) * 4);  // zero 8-byte guard per row
-  }
-
   /*******************************************************************************************************************/
   // MagSgn decoding
   /*******************************************************************************************************************/
   {
     // Fused dequantize setup
-    int32_t pLSB_dq    = 0;
+    int32_t pLSB_dq     = 0;
     float fscale_direct = 0.0f;
     uint32_t out_stride = block->blksampl_stride;
     if constexpr (fuse_dequant) {
       const int32_t M_b_val = block->get_Mb();
       pLSB_dq               = 31 - M_b_val;
-      out_stride             = block->band_stride;
+      out_stride            = block->band_stride;
       if (block->transformation != 1) {
         // lossy path (transformation==0 for irrev97, transformation>=2 for ATK irrev)
         fscale_direct = block->stepsize;
@@ -410,9 +227,8 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     for (uint32_t y = 2; y < block->size.y; y += 2) {
       uint16_t *sp = scratch + (y >> 1) * static_cast<uint32_t>(sstr);
       uint32_t *vp = v_n_scratch;
-      int32_t *dp  = fuse_dequant
-                         ? reinterpret_cast<int32_t *>(block->band_buf) + y * block->band_stride
-                         : block->sample_buf + y * block->blksampl_stride;
+      int32_t *dp  = fuse_dequant ? reinterpret_cast<int32_t *>(block->band_buf) + y * block->band_stride
+                                  : block->sample_buf + y * block->blksampl_stride;
 
       prev_v_n = 0;
       for (uint32_t x = 0; x < block->size.x; sp += 2, ++vp) {
@@ -555,10 +371,10 @@ void ht_cleanup_decode2(j2k_codeblock *block, const uint8_t &pLSB, const int32_t
 
   alignas(32) uint32_t rholine[516];  // QW_max + 4, QW_max = 512
   std::memset(rholine, 0, (QW + 4U) * sizeof(uint32_t));
-  uint32_t *rho_p    = rholine + 1;
-  alignas(32) int32_t Eline[1032];   // 2 * QW_max + 8, QW_max = 512
+  uint32_t *rho_p = rholine + 1;
+  alignas(32) int32_t Eline[1032];  // 2 * QW_max + 8, QW_max = 512
   std::memset(Eline, 0, (2U * QW + 8U) * sizeof(int32_t));
-  int32_t *E_p       = Eline + 1;
+  int32_t *E_p = Eline + 1;
 
   uint32_t context = 0;
   uint32_t vlcval;
@@ -1108,13 +924,32 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   }
 }
 
-bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+// Per-block decode setup: segment validation, Lcup/Lref/Scup/Pcup derivation
+// and the modDcup buffer mutation.  Factored out of htj2k_decode so the
+// 1-way and batched entries share one source of truth.
+struct ht_dec_setup {
+  int32_t Lcup, Pcup, Scup;
+  uint32_t Lref;
+  uint8_t *Dref;  // nullptr when single-segment
+  uint8_t S_blk;
+  uint8_t num_ht_passes;
+  bool ok;     // false → htj2k_decode returns false
+  bool empty;  // num_ht_passes == 0 → success with no work
+};
+
+static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
+  ht_dec_setup su;
+  su.Lcup  = 0;
+  su.Pcup  = 0;
+  su.Scup  = 0;
+  su.Lref  = 0;
+  su.Dref  = nullptr;
+  su.S_blk = 0;
+  su.ok    = false;
+  su.empty = false;
+
   // number of placeholder pass
   uint8_t P0 = 0;
-  // length of HT Cleanup segment
-  int32_t Lcup = 0;
-  // length of HT Refinement segment
-  uint32_t Lref = 0;
   // number of HT Sets preceding the given(this) HT Set
   const uint8_t S_skip = 0;
 
@@ -1135,125 +970,168 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   if (block->num_passes < empty_passes) {
     printf("WARNING: number of passes %d exceeds number of empty passes %d", block->num_passes,
            empty_passes);
-    return false;
+    return su;
   }
   // number of ht coding pass (Z_blk in the spec)
-  const uint8_t num_ht_passes = static_cast<uint8_t>(block->num_passes - empty_passes);
-  // pointer to buffer for HT Cleanup segment
-  uint8_t *Dcup;
-  // pointer to buffer for HT Refinement segment
-  uint8_t *Dref;
+  su.num_ht_passes = static_cast<uint8_t>(block->num_passes - empty_passes);
+  if (su.num_ht_passes == 0) {
+    su.ok    = true;
+    su.empty = true;
+    return su;
+  }
 
-  if (num_ht_passes > 0) {
-    // HT defines at most two segments per codeblock (Cleanup + optional
-    // Refinement); `all_segments[4]` is over-provisioned.  A malformed
-    // input with pass_length_count > 4 non-zero entries used to write
-    // past the array and smash the stack — guard the write and the
-    // later `all_segments[0]` read.  Reported by IM JUN SEO (KISIA) and
-    // OH HAN GUEL (SANGMYUNG UNIVERSITY).
-    uint8_t  all_segments[4];
-    uint32_t num_segments = 0;
-    for (uint32_t i = 0; i < block->pass_length_count; i++) {
-      if (block->pass_length[i] != 0) {
-        if (num_segments >= 4) {
-          printf("WARNING: too many HT coding-pass segments (>4) — malformed input.\n");
-          return false;
-        }
-        all_segments[num_segments++] = static_cast<uint8_t>(i);
+  // HT defines at most two segments per codeblock (Cleanup + optional
+  // Refinement); `all_segments[4]` is over-provisioned.  A malformed
+  // input with pass_length_count > 4 non-zero entries used to write
+  // past the array and smash the stack — guard the write and the
+  // later `all_segments[0]` read.  Reported by IM JUN SEO (KISIA) and
+  // OH HAN GUEL (SANGMYUNG UNIVERSITY).
+  uint8_t all_segments[4];
+  uint32_t num_segments = 0;
+  for (uint32_t i = 0; i < block->pass_length_count; i++) {
+    if (block->pass_length[i] != 0) {
+      if (num_segments >= 4) {
+        printf("WARNING: too many HT coding-pass segments (>4) — malformed input.\n");
+        return su;
       }
+      all_segments[num_segments++] = static_cast<uint8_t>(i);
     }
-    if (num_segments == 0) {
-      printf("WARNING: no non-empty HT coding-pass segments.\n");
-      return false;
-    }
-    Lcup += static_cast<int32_t>(block->pass_length[all_segments[0]]);
-    if (Lcup < 2) {
-      printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
-      return false;
-    }
-    // Bound the attacker-controlled cleanup length by the (already clamped)
-    // codeblock byte count before any Dcup[Lcup-1] access / modDcup write.
-    if (static_cast<uint32_t>(Lcup) > block->length) {
-      printf("WARNING: HT cleanup pass length %d exceeds codeblock bytes %u — malformed input.\n", Lcup,
-             block->length);
-      return false;
-    }
-    for (uint32_t i = 1; i < num_segments; i++) {
-      Lref += block->pass_length[all_segments[i]];
-    }
-    // The refinement segments are read from Dcup + Lcup; keep them in the buffer.
-    if (static_cast<uint32_t>(Lref) > block->length - static_cast<uint32_t>(Lcup)) {
-      printf("WARNING: HT refinement length exceeds remaining codeblock bytes %u — malformed input.\n",
-             block->length - static_cast<uint32_t>(Lcup));
-      return false;
-    }
-    Dcup = block->get_compressed_data();
+  }
+  if (num_segments == 0) {
+    printf("WARNING: no non-empty HT coding-pass segments.\n");
+    return su;
+  }
+  su.Lcup += static_cast<int32_t>(block->pass_length[all_segments[0]]);
+  if (su.Lcup < 2) {
+    printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
+    return su;
+  }
+  // Bound the attacker-controlled cleanup length by the (already clamped)
+  // codeblock byte count before any Dcup[Lcup-1] access / modDcup write.
+  if (static_cast<uint32_t>(su.Lcup) > block->length) {
+    printf("WARNING: HT cleanup pass length %d exceeds codeblock bytes %u — malformed input.\n", su.Lcup,
+           block->length);
+    return su;
+  }
+  for (uint32_t i = 1; i < num_segments; i++) {
+    su.Lref += block->pass_length[all_segments[i]];
+  }
+  // The refinement segments are read from Dcup + Lcup; keep them in the buffer.
+  if (static_cast<uint32_t>(su.Lref) > block->length - static_cast<uint32_t>(su.Lcup)) {
+    printf("WARNING: HT refinement length exceeds remaining codeblock bytes %u — malformed input.\n",
+           block->length - static_cast<uint32_t>(su.Lcup));
+    return su;
+  }
+  uint8_t *Dcup = block->get_compressed_data();
 
-    if (block->num_passes > 1 && num_segments > 1) {
-      Dref = block->get_compressed_data() + Lcup;
-    } else {
-      Dref = nullptr;
-    }
-    // number of (skipped) magnitude bitplanes
-    const uint8_t S_blk = static_cast<uint8_t>(P0 + block->num_ZBP + S_skip);
-    if (S_blk >= 30) {
-      printf("WARNING: Number of skipped mag bitplanes %d is too large.\n", S_blk);
-      return false;
-    }
-    // Suffix length (=MEL + VLC) of HT Cleanup pass
-    const int32_t Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
-    if (Scup < 2 || Scup > Lcup || Scup > 4079) {
-      printf("WARNING: cleanup pass suffix length %d is invalid.\n", Scup);
-      return false;
-    }
-    // modDcup (shall be done before the creation of state_VLC instance)
-    Dcup[Lcup - 1] = 0xFF;
-    Dcup[Lcup - 2] |= 0x0F;
-    const int32_t Pcup = static_cast<int32_t>(Lcup - Scup);
+  if (block->num_passes > 1 && num_segments > 1) {
+    su.Dref = block->get_compressed_data() + su.Lcup;
+  } else {
+    su.Dref = nullptr;
+  }
+  // number of (skipped) magnitude bitplanes
+  su.S_blk = static_cast<uint8_t>(P0 + block->num_ZBP + S_skip);
+  if (su.S_blk >= 30) {
+    printf("WARNING: Number of skipped mag bitplanes %d is too large.\n", su.S_blk);
+    return su;
+  }
+  // Suffix length (=MEL + VLC) of HT Cleanup pass
+  su.Scup = static_cast<int32_t>((Dcup[su.Lcup - 1] << 4) + (Dcup[su.Lcup - 2] & 0x0F));
+  if (su.Scup < 2 || su.Scup > su.Lcup || su.Scup > 4079) {
+    printf("WARNING: cleanup pass suffix length %d is invalid.\n", su.Scup);
+    return su;
+  }
+  // modDcup (shall be done before the creation of state_VLC instance)
+  Dcup[su.Lcup - 1] = 0xFF;
+  Dcup[su.Lcup - 2] |= 0x0F;
+  su.Pcup = static_cast<int32_t>(su.Lcup - su.Scup);
+  su.ok   = true;
+  return su;
+}
 
-    // HT block decoding
-    bool dequant_done = false;
-    // The fused-dequant scalar/NEON/AVX2/WASM kernels process samples in
-    // 2-row quad pairs and write both rows of every pair unconditionally to
-    // `block->band_buf`.  When `block->size.y` is odd the last pair's
-    // second-row write lands `band_stride` bytes past the block's final
-    // row — into the NEXT block's band_buf region when codeblocks tile
-    // vertically inside the subband (e.g. 1×1 blocks stacked in a narrow
-    // subband from a horizontally-subsampled component).  Under single-
-    // threaded decode the overflow is harmlessly overwritten by the next
-    // block's legitimate row-0 write, but under multi-threaded dispatch
-    // the blocks finish out-of-order and the stale overflow clobbers
-    // adjacent blocks' output.  Fall back to the non-fused path (which
-    // writes into the block-local sample_buf scratch, not band_buf) when
-    // height is odd; the separate dequant pass below handles bounds
-    // correctly.
-    const bool fuseable = (num_ht_passes == 1) && (ROIshift == 0)
-                          && ((block->size.y & 1u) == 0u);
-    if (fuseable) {
-      if (block->dequant_i32)
-        ht_cleanup_decode<true, true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
-      else
-        ht_cleanup_decode<true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
-      dequant_done = true;
-    } else if (num_ht_passes == 1) {
-      ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
-    } else {
-      ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
-    }
-    if (num_ht_passes > 1) {
-      ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
-    }
-    if (num_ht_passes > 2) {
-      ht_magref_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)));
-    }
+// Everything after step-1: step-2 (MagSgn) variant dispatch, SigProp/MagRef
+// refinement passes, and dequantization.  scratch/sstr hold the step-1 output.
+static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const uint8_t ROIshift,
+                             uint16_t *scratch, const int32_t sstr) {
+  const uint8_t pLSB = static_cast<uint8_t>(30 - su.S_blk);
 
-    // dequantization (skipped when already fused into MagSgn output)
-    if (!dequant_done) {
-      block->dequantize(ROIshift);
-    }
+  // HT block decoding
+  bool dequant_done = false;
+  // The fused-dequant scalar/NEON/AVX2/WASM kernels process samples in
+  // 2-row quad pairs and write both rows of every pair unconditionally to
+  // `block->band_buf`.  When `block->size.y` is odd the last pair's
+  // second-row write lands `band_stride` bytes past the block's final
+  // row — into the NEXT block's band_buf region when codeblocks tile
+  // vertically inside the subband (e.g. 1×1 blocks stacked in a narrow
+  // subband from a horizontally-subsampled component).  Under single-
+  // threaded decode the overflow is harmlessly overwritten by the next
+  // block's legitimate row-0 write, but under multi-threaded dispatch
+  // the blocks finish out-of-order and the stale overflow clobbers
+  // adjacent blocks' output.  Fall back to the non-fused path (which
+  // writes into the block-local sample_buf scratch, not band_buf) when
+  // height is odd; the separate dequant pass below handles bounds
+  // correctly.
+  const bool fuseable = (su.num_ht_passes == 1) && (ROIshift == 0) && ((block->size.y & 1u) == 0u);
+  if (fuseable) {
+    if (block->dequant_i32)
+      ht_cleanup_step2<true, true>(block, pLSB, su.Pcup, scratch, sstr);
+    else
+      ht_cleanup_step2<true>(block, pLSB, su.Pcup, scratch, sstr);
+    dequant_done = true;
+  } else {
+    ht_cleanup_step2<>(block, pLSB, su.Pcup, scratch, sstr);
+  }
+  if (su.num_ht_passes > 1) {
+    ht_sigprop_decode(block, su.Dref, su.Lref, static_cast<uint8_t>(30 - (su.S_blk + 1)));
+  }
+  if (su.num_ht_passes > 2) {
+    ht_magref_decode(block, su.Dref, su.Lref, static_cast<uint8_t>(30 - (su.S_blk + 1)));
+  }
 
-  }  // block decoding end
+  // dequantization (skipped when already fused into MagSgn output)
+  if (!dequant_done) {
+    block->dequantize(ROIshift);
+  }
 
   return true;
 }
+
+bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+  const ht_dec_setup su = htj2k_dec_setup(block);
+  if (!su.ok) return false;
+  if (su.empty) return true;
+
+  const uint16_t QW  = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
+  const uint16_t QH  = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
+  const int32_t sstr = static_cast<int32_t>(((block->size.x + 2) + 7u) & ~7u);  // multiples of 8
+
+  uint16_t scratch[8 * 513];
+  ht_step1_lane ln;
+  ln.Dcup            = block->get_compressed_data();
+  ln.Lcup            = su.Lcup;
+  ln.Scup            = su.Scup;
+  ln.scratch         = scratch;
+  ln.block_states    = block->block_states;
+  ln.blkstate_stride = block->blkstate_stride;
+  if (su.num_ht_passes == 1) {
+    ht_cleanup_step1_nway<1, true>(&ln, QW, QH, sstr);
+  } else {
+    ht_cleanup_step1_nway<1, false>(&ln, QW, QH, sstr);
+  }
+
+  return htj2k_dec_finish(block, su, ROIshift, scratch, sstr);
+}
+
+// Batched entry point (see block_decoding.hpp).  The scalar build has no
+// N-way step-1 kernel wired yet: plain per-block loop.
+bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshift, bool *results) {
+  bool all_ok = true;
+  for (uint32_t i = 0; i < n; ++i) {
+    results[i] = htj2k_decode(blocks[i], ROIshift);
+    all_ok &= results[i];
+  }
+  return all_ok;
+}
+
+const uint32_t htj2k_dec_batch_lanes = 1;
 #endif
