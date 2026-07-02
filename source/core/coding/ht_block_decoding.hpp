@@ -30,7 +30,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <exception>
+#include <vector>
 
 #if __GNUC__ || __has_attribute(always_inline)
   #define FORCE_INLINE inline __attribute__((always_inline))
@@ -1190,201 +1192,138 @@ FORCE_INLINE __m128i mm_bitshift_right(__m128i x, unsigned count) {
 template <int X>
 class fwd_buf {
  private:
-  const uint8_t *data;  //!< pointer to bitstream
-  uint8_t tmp[48];      //!< temporary buffer of read data + 16 extra
-  uint32_t bits;        //!< number of bits stored in tmp
-  uint32_t unstuff;     //!< 1 if a bit needs to be unstuffed from next byte
-  int size;             //!< size of data
+  const uint8_t *dbuf;  //!< pointer to the destuffed bitstream
+  uint32_t limit;       //!< clamp offset; bytes at or beyond it hold no stream bits (read as X)
+  uint32_t pos;         //!< absolute bit position of the next unread bit
+
+  //************************************************************************/
+  /** @brief Per-thread scratch holding the destuffed bitstream; grows
+   *         monotonically and is reused across code-blocks
+   */
+  static uint8_t *destuff_scratch(size_t need) {
+    static thread_local std::vector<uint8_t> buf;
+    if (buf.size() < need) buf.resize(need);
+    return buf.data();
+  }
+
  public:
   //************************************************************************/
-  /** @brief Initialize frwd_struct struct and reads some bytes
+  /** @brief Initialize fwd_buf: destuff the whole segment once up front
    *
-   *  @tparam      X is the value fed in when the bitstream is exhausted.
-   *               See frwd_read regarding the template
+   *  Bit-unstuffing is hoisted out of the fetch path: the segment is
+   *  destuffed once into a per-thread scratch buffer, and fetch() then
+   *  reads it at absolute bit positions with no serial reader state.
+   *  Sequences greater than 0xFF7F cannot appear in the compressed
+   *  segment, so whenever 0xFF is coded the MSB of the following byte is
+   *  a stuffing bit and is dropped here.
+   *
+   *  @tparam      X is the value fed in when the bitstream is exhausted
    *  @param [in]  data is a pointer to the start of data
-   *  @param [in]  size is the number of byte in the bitstream
+   *  @param [in]  size is the number of bytes in the bitstream
    */
-  fwd_buf(const uint8_t *data, int size) : data(data), bits(0), unstuff(0), size(size) {
-    _mm_storeu_si128((__m128i *)this->tmp, _mm_setzero_si128());
-    _mm_storeu_si128((__m128i *)this->tmp + 1, _mm_setzero_si128());
-    _mm_storeu_si128((__m128i *)this->tmp + 2, _mm_setzero_si128());
+  fwd_buf(const uint8_t *data, int size) {
+    if (size < 0) size = 0;
+    uint8_t *dst               = destuff_scratch(static_cast<size_t>(size) + 80);
+    uint8_t *o                 = dst;
+    uint8_t *const o_end       = dst + size;  // destuffing only removes bits: out <= size bytes
+    const uint8_t *s           = data;
+    const uint8_t *const s_end = data + size;
+    uint64_t acc               = 0;  // partial output byte; low nb bits are valid
+    uint32_t nb                = 0;  // number of valid bits in acc; always < 8
+    bool prev_ff               = false;
 
-    read();  // read 128 bits more
-  }
-
-  //************************************************************************/
-  /** @brief Read and unstuffs 16 bytes from forward-growing bitstream
-   *
-   *  A template is used to accommodate a different requirement for
-   *  MagSgn and SPP bitstreams; in particular, when MagSgn bitstream is
-   *  consumed, 0xFF's are fed, while when SPP is exhausted 0's are fed in.
-   *  X controls this value.
-   *
-   *  Unstuffing prevent sequences that are more than 0xFF7F from appearing
-   *  in the conpressed sequence.  So whenever a value of 0xFF is coded, the
-   *  MSB of the next byte is set 0 and must be ignored during decoding.
-   *
-   *  Reading can go beyond the end of buffer by up to 16 bytes.
-   *
-   *  @tparam       X is the value fed in when the bitstream is exhausted
-   *  @param  [in]  msp is a pointer to frwd_struct structure
-   *
-   */
-
-  FORCE_INLINE void read() {
-    assert(this->bits <= 128);
-
-    __m128i offset, val, validity, all_xff;
-    val       = _mm_loadu_si128((__m128i *)this->data);
-    int bytes = this->size >= 16 ? 16 : this->size;
-    validity  = _mm_set1_epi8((char)bytes);
-    this->data += bytes;
-    this->size -= bytes;
-    int bits = 128;
-    offset   = _mm_set_epi64x(0x0F0E0D0C0B0A0908, 0x0706050403020100);
-    validity = _mm_cmpgt_epi8(validity, offset);
-    all_xff  = _mm_set1_epi8(-1);
-    if (X == 0xFF)  // the compiler should remove this if statement
-    {
-      __m128i t = _mm_xor_si128(validity, all_xff);  // complement
-      val       = _mm_or_si128(t, val);              // fill with 0xFF
-    } else if (X == 0)
-      val = _mm_and_si128(validity, val);  // fill with zeros
-    else
-      assert(0);
-
-    __m128i ff_bytes;
-    ff_bytes       = _mm_cmpeq_epi8(val, all_xff);
-    ff_bytes       = _mm_and_si128(ff_bytes, validity);
-    uint32_t flags = (uint32_t)_mm_movemask_epi8(ff_bytes);
-    flags <<= 1;  // unstuff following byte
-    uint32_t next_unstuff = flags >> 16;
-    flags |= this->unstuff;
-    flags &= 0xFFFF;
-    while (flags) {  // bit unstuffing occurs on average once every 256 bytes
-      // therefore it is not an issue if it is a bit slow
-      // here we process 16 bytes
-      --bits;  // consuming one stuffing bit
-
-      uint32_t loc = 31 - count_leading_zeros(flags);
-      flags ^= 1U << loc;
-
-      __m128i m, t, c;
-      t = _mm_set1_epi8((char)loc);
-      m = _mm_cmpgt_epi8(offset, t);
-
-      t = _mm_and_si128(m, val);  // keep bits at locations larger than loc
-      c = _mm_srli_epi64(t, 1);   // 1 bits left
-      t = _mm_srli_si128(t, 8);   // 8 bytes left
-      t = _mm_slli_epi64(t, 63);  // keep the MSB only
-      t = _mm_or_si128(t, c);     // combine the above 3 steps
-
-      val = _mm_or_si128(t, _mm_andnot_si128(m, val));
+    // fast path: 16 source bytes at a time when they contain no 0xFF
+    while (s + 16 <= s_end && o + 24 <= o_end) {
+      __m128i v = _mm_loadu_si128((const __m128i *)s);
+      int ff    = _mm_movemask_epi8(_mm_cmpeq_epi8(v, _mm_set1_epi8(-1)));
+      if (ff != 0 || prev_ff) {
+        // process these 16 bytes one at a time through the bit accumulator
+        for (int i = 0; i < 16; ++i) {
+          const uint8_t b = *s++;
+          acc |= static_cast<uint64_t>(b & (prev_ff ? 0x7FU : 0xFFU)) << nb;
+          nb += prev_ff ? 7U : 8U;
+          prev_ff = (b == 0xFFU);
+          if (nb >= 8) {
+            *o++ = static_cast<uint8_t>(acc);
+            acc >>= 8;
+            nb -= 8;
+          }
+        }
+        continue;
+      }
+      uint64_t v0, v1;
+      std::memcpy(&v0, s, 8);
+      std::memcpy(&v1, s + 8, 8);
+      const uint64_t w0 = acc | (v0 << nb);
+      const uint64_t w1 = (v1 << nb) | (nb ? (v0 >> (64 - nb)) : 0);
+      std::memcpy(o, &w0, 8);
+      std::memcpy(o + 8, &w1, 8);
+      acc = nb ? (v1 >> (64 - nb)) : 0;
+      o += 16;
+      s += 16;
     }
-
-    // combine with earlier data
-    assert(this->bits >= 0 && this->bits <= 128);
-    uint32_t cur_bytes = this->bits >> 3;
-    int cur_bits       = this->bits & 7;
-    __m128i b1, b2;
-    b1 = _mm_sll_epi64(val, _mm_set1_epi64x(cur_bits));
-    b2 = _mm_slli_si128(val, 8);  // 8 bytes right
-    b2 = _mm_srl_epi64(b2, _mm_set1_epi64x(64 - cur_bits));
-    b1 = _mm_or_si128(b1, b2);
-    b2 = _mm_loadu_si128((__m128i *)(this->tmp + cur_bytes));
-    b2 = _mm_or_si128(b1, b2);
-    _mm_storeu_si128((__m128i *)(this->tmp + cur_bytes), b2);
-
-    int consumed_bits = bits < 128 - cur_bits ? bits : 128 - cur_bits;
-    cur_bytes         = (this->bits + (uint32_t)consumed_bits + 7) >> 3;  // round up
-    int upper         = _mm_extract_epi16(val, 7);
-    upper >>= consumed_bits - 128 + 16;
-    this->tmp[cur_bytes] = (uint8_t)upper;  // copy byte
-
-    this->bits += (uint32_t)bits;
-    this->unstuff = next_unstuff;  // next unstuff
-    assert(this->unstuff == 0 || this->unstuff == 1);
+    // tail: one byte at a time
+    while (s < s_end && o < o_end) {
+      const uint8_t b = *s++;
+      acc |= static_cast<uint64_t>(b & (prev_ff ? 0x7FU : 0xFFU)) << nb;
+      nb += prev_ff ? 7U : 8U;
+      prev_ff = (b == 0xFFU);
+      if (nb >= 8) {
+        *o++ = static_cast<uint8_t>(acc);
+        acc >>= 8;
+        nb -= 8;
+      }
+    }
+    // fill the bits above nb with X and pad with X bytes so reads past
+    // the end of the stream see the exhaustion fill value
+    const uint32_t fill = (X == 0xFF) ? (0xFFU << nb) : 0U;
+    *o                  = static_cast<uint8_t>(static_cast<uint32_t>(acc) | fill);
+    const __m128i pad   = _mm_set1_epi8(static_cast<char>(X));
+    _mm_storeu_si128((__m128i *)(o + 1), pad);
+    _mm_storeu_si128((__m128i *)(o + 17), pad);
+    _mm_storeu_si128((__m128i *)(o + 33), pad);
+    _mm_storeu_si128((__m128i *)(o + 49), pad);
+    this->dbuf  = dst;
+    this->limit = static_cast<uint32_t>(o - dst) + 1;
+    this->pos   = 0;
   }
 
   //************************************************************************/
-  /** @brief Consume num_bits bits from the bitstream of frwd_struct
+  /** @brief Consume num_bits bits from the destuffed bitstream
+   *
+   *  A valid stream never consumes more than 128 bits per fetch window;
+   *  exceeding that means a malformed U_q / MagSgn segment, so fail fast
+   *  (mirroring the bounds check of the former windowed reader).
    *
    *  @param [in]  num_bits is the number of bit to consume
    */
   FORCE_INLINE void advance(uint32_t num_bits) {
-    // if (!num_bits) return;
-    if (!(num_bits <= this->bits && num_bits < 128)) {
+    if (num_bits >= 128) {
       printf("Value of numbits = %d is out of range.\n", num_bits);
       throw std::exception();
     }
-    this->bits -= num_bits;
-
-    __m128i *p = (__m128i *)(this->tmp + ((num_bits >> 3) & 0x18));
-    num_bits &= 63;
-
-    __m128i v0, v1, c0, c1, t;
-    v0 = _mm_loadu_si128(p);
-    v1 = _mm_loadu_si128(p + 1);
-
-    // shift right by num_bits
-    c0 = _mm_srli_epi64(v0, static_cast<int32_t>(num_bits));
-    t  = _mm_srli_si128(v0, 8);
-    t  = _mm_slli_epi64(t, 64 - static_cast<int32_t>(num_bits));
-    c0 = _mm_or_si128(c0, t);
-    t  = _mm_slli_si128(v1, 8);
-    t  = _mm_slli_epi64(t, 64 - static_cast<int32_t>(num_bits));
-    c0 = _mm_or_si128(c0, t);
-
-    _mm_storeu_si128((__m128i *)this->tmp, c0);
-
-    c1 = _mm_srli_epi64(v1, static_cast<int32_t>(num_bits));
-    t  = _mm_srli_si128(v1, 8);
-    t  = _mm_slli_epi64(t, 64 - static_cast<int32_t>(num_bits));
-    c1 = _mm_or_si128(c1, t);
-
-    _mm_storeu_si128((__m128i *)this->tmp + 1, c1);
+    this->pos += num_bits;
   }
 
   //************************************************************************/
-  /** @brief Fetches 32 bits from the frwd_struct bitstream
+  /** @brief Fetches the 128 bits starting at bit position pos
    *
-   *  @tparam      X is the value fed in when the bitstream is exhausted.
-   *               See frwd_read regarding the template
+   *  Two 8-byte-staggered loads shifted into alignment; carries no serial
+   *  reader state.  The byte offset is clamped to limit so that positions
+   *  past the end of the stream read as X without leaving the buffer.
+   *
+   *  @tparam      X is the value fed in when the bitstream is exhausted
    */
-  FORCE_INLINE __m128i fetch() {
-    if (this->bits <= 128) {
-      read();
-      if (this->bits <= 128)  // need to test
-        read();
-    }
-    const __m128i t = _mm_loadu_si128((__m128i *)this->tmp);
-
-    return t;
-    //   //_mm_extract_epi32(m, 0)
-    //   const uint32_t m0 = static_cast<uint32_t>(_mm_cvtsi128_si32(m));
-    //   //_mm_extract_epi32(m, 1)
-    //   const uint32_t m1 = m0 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 4)));
-    //   //_mm_extract_epi32(m, 2)
-    //   const uint32_t m2 = m1 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 8)));
-    //   //_mm_extract_epi32(m, 3)
-    //   const uint32_t m3 = m2 + static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_srli_si128(m, 12)));
-
-    //   uint32_t vtmp[4];
-    // #if defined(_MSC_VER)
-    //   vtmp[0] = _mm_extract_epi32(t, 0);
-    //   vtmp[1] = _mm_extract_epi32(mm_bitshift_right(t, m0), 0);
-    //   vtmp[2] = _mm_extract_epi32(mm_bitshift_right(t, m1), 0);
-    //   vtmp[3] = _mm_extract_epi32(mm_bitshift_right(t, m2), 0);
-    // #else
-    //   const __uint128_t v128i = (__uint128_t)t;
-
-    //   vtmp[0] = v128i & 0xFFFFFFFFU;
-    //   vtmp[1] = (v128i >> m0) & 0xFFFFFFFFU;
-    //   vtmp[2] = (v128i >> m1) & 0xFFFFFFFFU;
-    //   vtmp[3] = (v128i >> m2) & 0xFFFFFFFFU;
-    // #endif
-    //   advance(m3);
-    //   return *(__m128i *)vtmp;
+  FORCE_INLINE __m128i fetch() const {
+    uint32_t off     = this->pos >> 3;
+    off              = off < this->limit ? off : this->limit;
+    const uint8_t *p = this->dbuf + off;
+    const __m128i v  = _mm_loadu_si128((const __m128i *)p);
+    const __m128i w  = _mm_loadu_si128((const __m128i *)(p + 8));
+    const int k      = static_cast<int>(this->pos & 7);
+    const __m128i r  = _mm_srl_epi64(v, _mm_cvtsi32_si128(k));
+    const __m128i c  = _mm_sll_epi64(w, _mm_cvtsi32_si128(64 - k));
+    return _mm_or_si128(r, c);
   }
 
   template <int N>
