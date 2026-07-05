@@ -306,6 +306,11 @@ add_executable(codestream_bounds_check)
 add_subdirectory(tests/tools/codestream_bounds_check)
 target_link_libraries(codestream_bounds_check PUBLIC open_htj2k)
 
+# visual_weight_check: dump + invariant self-check for the analytic per-subband
+# visual (CSF) weighting (header-only, no library dependency)
+add_executable(visual_weight_check)
+add_subdirectory(tests/tools/visual_weight_check)
+
 # region_decode_bench: M1 region-decode latency/throughput benchmark (OSD eval)
 add_executable(region_decode_bench)
 add_subdirectory(tests/tools/region_decode_bench)

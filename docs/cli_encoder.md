@@ -86,6 +86,17 @@ JPH file format.
 - `Qzoom=Float` *(experimental)*
   - Display magnification; `> 1` is zoom-in, which flattens the
     weighting toward flat MSE-optimal quantization. Default **1.0**.
+- `Qctype=T,T,T` *(experimental)*
+  - Per-component role hints (`Y|Cb|Cr|generic`) for the analytic models
+    when the input is pre-decorrelated YCbCr **without** an MCT — the
+    sub-sampled 4:2:0 / 4:2:2 configuration, where the codestream cannot
+    label channels itself. `Qctype=Y,Cb,Cr` selects the chroma CSF (with
+    the component's sub-sampling frequency shift) for components 1 and 2.
+    Default **generic** (luminance CSF).
+- `Qchromacsf=chroma|luma` *(experimental)*
+  - CSF shape used for `Cb`/`Cr` components: the low-pass chroma CSF
+    (default) or the luminance CSF (`luma`), keeping the sub-sampling
+    frequency mapping — an A/B switch separating shape from mapping.
   - See [`qfactor.md`](qfactor.md) for the analytic visual-weighting model.
 
 ### JPH and component layout

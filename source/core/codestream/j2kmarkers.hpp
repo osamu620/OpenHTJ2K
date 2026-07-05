@@ -197,7 +197,7 @@ class COC_marker : public j2k_marker_io_base {
   COC_marker(j2c_src_memory &in, uint16_t Csiz);
   uint16_t get_component_index() const;
   bool is_maximum_precincts() const;
-  bool is_dfs_defined() const;  // bit 7 of SPcoc[0] set → DFS active for this component
+  bool is_dfs_defined() const;    // bit 7 of SPcoc[0] set → DFS active for this component
   uint8_t get_dfs_index() const;  // bits[3:0] of SPcoc[0] when DFS active
   uint8_t get_dwt_levels();
   void get_codeblock_size(element_siz &out);
@@ -230,8 +230,8 @@ enum dwt_type : uint8_t { DWT_NO = 0, DWT_BIDIR = 1, DWT_HORZ = 2, DWT_VERT = 3 
 
 class DFS_marker : public j2k_marker_io_base {
  private:
-  uint16_t Sdfs;  // DFS descriptor word; bits[3:0] = DFS index (1-15)
-  uint8_t Ids;    // number of DWT levels described
+  uint16_t Sdfs;               // DFS descriptor word; bits[3:0] = DFS index (1-15)
+  uint8_t Ids;                 // number of DWT levels described
   std::vector<dwt_type> Ddfs;  // per-level DWT type (index 0 = finest, i.e. Ddfs[0]=type of level 1)
 
  public:
@@ -248,7 +248,7 @@ class DFS_marker : public j2k_marker_io_base {
   explicit DFS_marker(j2c_src_memory &in);
   uint8_t get_index() const;
   uint8_t get_num_levels() const;
-  dwt_type get_dwt_type(uint8_t level) const;  // level 1..Ids (1=finest); DWT_BIDIR if out of range
+  dwt_type get_dwt_type(uint8_t level) const;          // level 1..Ids (1=finest); DWT_BIDIR if out of range
   uint8_t get_num_bands(uint8_t r, uint8_t NL) const;  // num subbands for resolution r (0=LL)
   // Returns count of consecutive DWT_BIDIR levels from the finest level onward.
   // This is the maximum -reduce value that produces a valid 2D reduced image for
@@ -262,8 +262,8 @@ class DFS_marker : public j2k_marker_io_base {
  * Defines an arbitrary lifting kernel (irreversible only for our implementation).
  *******************************************************************************/
 struct atk_step {
-  uint8_t mk;    // step offset parameter
-  float Aatk;    // lifting coefficient (irreversible)
+  uint8_t mk;  // step offset parameter
+  float Aatk;  // lifting coefficient (irreversible)
 };
 
 class ATK_marker : public j2k_marker_io_base {
@@ -319,9 +319,13 @@ class QCC_marker : public j2k_marker_io_base {
   bool is_reversible;
 
  public:
+  // (sub_x, sub_y) are this component's SIZ sub-sampling factors (XRsiz, YRsiz);
+  // analytic CSF models fold them into the per-axis visual-frequency mapping.
+  // 0 keeps the historical chroma_format-derived factors.
   QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, uint8_t dwt_levels,
              uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc, uint8_t qfactor,
-             uint8_t chroma_format, const open_htj2k::visual_weighting_params &vp = {});
+             uint8_t chroma_format, const open_htj2k::visual_weighting_params &vp = {}, uint8_t sub_x = 0,
+             uint8_t sub_y = 0);
   QCC_marker(j2c_src_memory &in, uint16_t Csiz);
   int write(j2c_dst_memory &dst);
   uint16_t get_component_index() const;
@@ -372,8 +376,8 @@ class TLM_marker : public j2k_marker_io_base {
   void write(j2c_dst_memory &buf) const;
 
   uint8_t index() const { return Ztlm; }
-  size_t  num_entries() const { return Ptlm.size(); }
-  bool    has_tile_indices() const { return !Ttlm.empty() && ((Stlm >> 4) & 0x03) != 0; }
+  size_t num_entries() const { return Ptlm.size(); }
+  bool has_tile_indices() const { return !Ttlm.empty() && ((Stlm >> 4) & 0x03) != 0; }
   const std::vector<uint16_t> &tile_indices() const { return Ttlm; }
   const std::vector<uint32_t> &tile_part_lengths() const { return Ptlm; }
 };

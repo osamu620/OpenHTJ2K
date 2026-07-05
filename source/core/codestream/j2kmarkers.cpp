@@ -333,8 +333,8 @@ PRF_marker::PRF_marker(j2c_src_memory &in) : j2k_marker_io_base(_PRF), PRFnum(0)
   // Lprf = 2 + 2N; N 16-bit Pprf words follow.  PRFnum is informational only
   // (no codec processing) — see Rec. ITU-T T.800 | ISO/IEC 15444-1, A.5.3:
   //   PRFnum = 4095 + sum_{i=1..N} Pprf_i * 2^(16*(i-1)).
-  const size_t n      = static_cast<size_t>(Lmar - 2U) / 2U;
-  uint64_t prfnum     = 4095;
+  const size_t n  = static_cast<size_t>(Lmar - 2U) / 2U;
+  uint64_t prfnum = 4095;
   for (size_t i = 0; i < n; ++i) {
     const uint16_t w = get_word();
     Pprf.push_back(w);
@@ -369,8 +369,7 @@ COD_marker::COD_marker(j2c_src_memory &in)
   // precinct loop — NL = 255 never terminates for the uint8_t counter and grows
   // precinct_size without bound — and indexes SPcod[5 + r] out of range.
   if (SPcod[0] > 32) {
-    printf("ERROR: COD number of decomposition levels %u exceeds 32.\n",
-           static_cast<unsigned>(SPcod[0]));
+    printf("ERROR: COD number of decomposition levels %u exceeds 32.\n", static_cast<unsigned>(SPcod[0]));
     throw std::exception();
   }
   is_set = true;
@@ -649,7 +648,7 @@ DFS_marker::DFS_marker(j2c_src_memory &in) : j2k_marker_io_base(_DFS) {
     uint8_t dfs_lev = static_cast<uint8_t>(Ids - r + 1);  // coarsest first
     qcd_offset[r]   = flat;
     dwt_type t      = Ddfs[dfs_lev - 1];
-    flat = static_cast<uint8_t>(flat + ((t == DWT_BIDIR) ? 3 : (t == DWT_NO) ? 0 : 1));
+    flat            = static_cast<uint8_t>(flat + ((t == DWT_BIDIR) ? 3 : (t == DWT_NO) ? 0 : 1));
   }
   is_set = true;
 }
@@ -703,7 +702,7 @@ ATK_marker::ATK_marker(j2c_src_memory &in) : j2k_marker_io_base(_ATK), Katk(1.0f
   } else {
     steps.resize(Natk);
     for (uint8_t k = 0; k < Natk; ++k) {
-      steps[k].mk = get_byte();
+      steps[k].mk   = get_byte();
       uint32_t bits = get_dword();
       memcpy(&steps[k].Aatk, &bits, sizeof(float));
     }
@@ -855,9 +854,8 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
     // the colour-component gain. The float step is packed into (epsilon, mu) per
     // Eq. E-3, with clamping epsilon in [0,31], mu in [0,2047].
     for (size_t i = 0; i < epsilon.size(); ++i) {
-      double w_b = (!have_qfactor || i == epsilon.size() - 1 || i >= W_b.size())
-                       ? 1.0
-                       : pow(W_b[i], qfactor_power);
+      double w_b =
+          (!have_qfactor || i == epsilon.size() - 1 || i >= W_b.size()) ? 1.0 : pow(W_b[i], qfactor_power);
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
       pack_quant_step(fval, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
     }
@@ -952,8 +950,8 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
     G_c                                  = open_htj2k::color_gain(ct, 0);
   }
 
-  SPqcd = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
-                            have_qfactor, delta_ref, G_c, qfactor_power);
+  SPqcd  = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
+                             have_qfactor, delta_ref, G_c, qfactor_power);
   is_set = true;
 }
 
@@ -1025,7 +1023,7 @@ uint8_t QCD_marker::get_MAGB() {
 QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, uint8_t dwt_levels,
                        uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc,
                        uint8_t qfactor, uint8_t chroma_format,
-                       const open_htj2k::visual_weighting_params &vp)
+                       const open_htj2k::visual_weighting_params &vp, uint8_t sub_x, uint8_t sub_y)
     : j2k_marker_io_base(_QCC), max_components(Csiz), Cqcc(c), Sqcc(0), is_reversible(transformation == 1) {
   if (is_derived && qfactor != 0xFF) {
     is_derived = false;
@@ -1059,14 +1057,18 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   // Square-root-domain chroma visual weights for this component. Default
   // (legacy_table) returns the historical 4:4:4/4:2:0/4:2:2 QCC table verbatim
   // (bit-identical); an analytic CSF model in `vp` instead follows the viewing
-  // distance / zoom, deriving 4:2:0 & 4:2:2 from one chroma CSF via subsampling.
+  // distance / zoom, deriving 4:2:0 & 4:2:2 from one chroma CSF via the
+  // component's SIZ sub-sampling factors (sub_x, sub_y). Without an MCT the
+  // channel role comes from vp.ctype_hint (default generic = luminance CSF).
   // delta_ref / qfactor_power follow the Q->step mapping (q_to_delta(), shared with
   // QCD and estimate_qfactor; HTJ2K white paper); G_c is this component's synthesis
   // gain. The basis-gain derivation and (epsilon, mu) packing are shared with QCD
   // through build_quant_steps(). QCC is only emitted on the Qfactor path, so the
   // lossy perceptual weights always apply (have_qfactor is true).
+  const open_htj2k::component_type ctype =
+      (Cqcc < 3) ? vp.ctype_hint[Cqcc] : open_htj2k::component_type::generic;
   const std::vector<double> W_b =
-      open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct);
+      open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct, ctype, sub_x, sub_y);
   double qfactor_power = 0.0, delta_ref = 0.0, G_c = 1.0;
   if (!is_reversible) {
     const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
@@ -1075,8 +1077,8 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
     G_c                            = open_htj2k::color_gain(ct, Cqcc);  // component synthesis gain
   }
 
-  SPqcc = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
-                            /*have_qfactor=*/true, delta_ref, G_c, qfactor_power);
+  SPqcc  = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
+                             /*have_qfactor=*/true, delta_ref, G_c, qfactor_power);
   is_set = true;
 }
 
@@ -1343,24 +1345,28 @@ TLM_marker::TLM_marker(uint8_t ztlm, const std::vector<uint16_t> &tile_indices,
   // If tile indices are provided, use ST=2 (16-bit Ttlm).
   uint8_t ST = tile_indices.empty() ? 0 : 2;
   uint8_t SP = 1;
-  Stlm = static_cast<uint8_t>((ST << 4) | (SP << 6));
-  is_set = true;
+  Stlm       = static_cast<uint8_t>((ST << 4) | (SP << 6));
+  is_set     = true;
 }
 
 void TLM_marker::write(j2c_dst_memory &buf) const {
-  uint8_t ST = (Stlm >> 4) & 0x03;
-  uint8_t SP = ((Stlm >> 4) & 0x0C) >> 2;
+  uint8_t ST        = (Stlm >> 4) & 0x03;
+  uint8_t SP        = ((Stlm >> 4) & 0x0C) >> 2;
   size_t entry_size = static_cast<size_t>((ST == 0 ? 0 : (ST == 1 ? 1 : 2)) + (SP == 0 ? 2 : 4));
-  uint16_t Ltlm = static_cast<uint16_t>(4 + Ptlm.size() * entry_size);
+  uint16_t Ltlm     = static_cast<uint16_t>(4 + Ptlm.size() * entry_size);
   buf.put_word(_TLM);
   buf.put_word(Ltlm);
   buf.put_byte(Ztlm);
   buf.put_byte(Stlm);
   for (size_t i = 0; i < Ptlm.size(); ++i) {
-    if (ST == 1)      buf.put_byte(static_cast<uint8_t>(Ttlm[i]));
-    else if (ST == 2) buf.put_word(Ttlm[i]);
-    if (SP == 0)      buf.put_word(static_cast<uint16_t>(Ptlm[i]));
-    else              buf.put_dword(Ptlm[i]);
+    if (ST == 1)
+      buf.put_byte(static_cast<uint8_t>(Ttlm[i]));
+    else if (ST == 2)
+      buf.put_word(Ttlm[i]);
+    if (SP == 0)
+      buf.put_word(static_cast<uint16_t>(Ptlm[i]));
+    else
+      buf.put_dword(Ptlm[i]);
   }
 }
 
@@ -1592,10 +1598,12 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
       throw std::exception();
     }
     for (uint16_t c = 1; c < siz->get_num_components(); ++c) {
-      QCC.push_back(MAKE_UNIQUE<QCC_marker>(siz->get_num_components(), c, qcd->get_number_of_guardbits(),
-                                            cod->get_dwt_levels(), cod->get_transformation(), false,
-                                            siz->get_bitdepth(c), cod->use_color_trafo(), qfactor,
-                                            SIZ->get_chroma_format(), vw));
+      element_siz sub;
+      siz->get_subsampling_factor(sub, c);
+      QCC.push_back(MAKE_UNIQUE<QCC_marker>(
+          siz->get_num_components(), c, qcd->get_number_of_guardbits(), cod->get_dwt_levels(),
+          cod->get_transformation(), false, siz->get_bitdepth(c), cod->use_color_trafo(), qfactor,
+          SIZ->get_chroma_format(), vw, static_cast<uint8_t>(sub.x), static_cast<uint8_t>(sub.y)));
     }
   }
 

@@ -58,6 +58,19 @@ enum class csf_model {
   daly              // analytic Daly CSF (light-adaptation form)
 };
 
+// Perceptual role of a codestream component. With the built-in ICT the roles
+// are implied by component order (Y, Cb, Cr). Without an MCT -- the only
+// configuration in which chroma sub-sampling is possible (T.800 J.13) -- the
+// codestream does not label channels, so the role must be hinted by the caller
+// (CLI `Qctype=`). `generic` takes the luminance CSF but still applies the
+// component's (sx, sy) sub-sampling frequency shift.
+enum class component_type : uint8_t {
+  generic = 0,  // unlabelled: luminance CSF + sub-sampling mapping
+  Y       = 1,
+  Cb      = 2,
+  Cr      = 3
+};
+
 // Color decorrelation actually in force, which drives BOTH the per-component
 // synthesis gain and whether a QCC component is treated as chroma (opponent) or
 // luma (e.g. undecorrelated RGB). Quantization error in component c is amplified
@@ -84,6 +97,16 @@ struct visual_weighting_params {
   // horizontal/vertical (LH/HL) center. Geometric value is sqrt(2); the legacy
   // table behaves closer to ~1.25 (no oblique-effect penalty).
   double hh_factor = 1.4142135623730951;
+  // A/B switch: evaluate the luminance CSF (instead of the low-pass chroma CSF)
+  // for Cb/Cr components, keeping the (sx, sy) sub-sampling frequency mapping.
+  // Separates the effect of the CSF *shape* from the frequency *mapping*.
+  bool chroma_reuse_luma_csf = false;
+  // Per-component role hints, used only when no MCT labels the channels (the
+  // sub-sampled-chroma configuration). Default `generic` keeps the historical
+  // luminance-CSF treatment; the CLI `Qctype=Y,Cb,Cr` maps to {Y, Cb, Cr}.
+  // Qfactor is restricted to 1- or 3-component images, so 3 entries suffice.
+  component_type ctype_hint[3] = {component_type::generic, component_type::generic,
+                                  component_type::generic};
 };
 
 // --- color synthesis gain --------------------------------------------------
@@ -124,11 +147,11 @@ struct q_scaling {
 inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI) {
   const uint8_t t0 = 65, t1 = 97;
   const double alpha_T0 = 0.04, alpha_T1 = 0.10;
-  const double M_T0     = 2.0 * (1.0 - t0 / 100.0);
-  const double M_T1     = 2.0 * (1.0 - t1 / 100.0);
-  const double M_Q      = (qfactor < 50) ? 50.0 / qfactor : 2.0 * (1.0 - qfactor / 100.0);
-  double alpha_Q        = alpha_T0;
-  double qfactor_power  = 1.0;
+  const double M_T0    = 2.0 * (1.0 - t0 / 100.0);
+  const double M_T1    = 2.0 * (1.0 - t1 / 100.0);
+  const double M_Q     = (qfactor < 50) ? 50.0 / qfactor : 2.0 * (1.0 - qfactor / 100.0);
+  double alpha_Q       = alpha_T0;
+  double qfactor_power = 1.0;
   if (qfactor >= t1) {
     qfactor_power = 0.0;
     alpha_Q       = alpha_T1;
@@ -168,9 +191,7 @@ inline double csf_value(double f, csf_model m) {
 // would make the step `delta/(basis*w*G)` divide by zero / propagate NaN and
 // emit a corrupt QCD/QCC. Replaces only non-finite or non-positive values, so it
 // is a no-op for every realistic weight (bit-identical normal output).
-inline double finite_weight(double w) {
-  return (std::isfinite(w) && w > 0.0) ? w : 1e-300;
-}
+inline double finite_weight(double w) { return (std::isfinite(w) && w > 0.0) ? w : 1e-300; }
 
 // Peak (frequency, amplitude) of a CSF, found once by a coarse scan. Used to
 // normalize the weight to <= 1 and to clamp the band-pass low side to flat.
@@ -209,8 +230,15 @@ inline double csf_weight(double f, csf_model m, const csf_peak_t &pk) {
 // is 3 * dwt_levels for analytic models; the LL band is handled by the caller
 // (weight 1.0). In legacy mode the historical 15-entry table is returned
 // verbatim, so the caller's existing out-of-range guard still applies.
-inline std::vector<double> luma_visual_weights(uint8_t dwt_levels,
-                                               const visual_weighting_params &vp) {
+//
+// (sub_x, sub_y) are the component's SIZ sub-sampling factors (XRsiz, YRsiz).
+// A sub-sampled grid is coarser, so each axis's angular frequency divides by
+// its factor; per-axis evaluation (LH from the vertical axis, HL from the
+// horizontal) lets anisotropic sub-sampling (4:2:2) split LH and HL. At
+// (1, 1) -- every luma/QCD call site -- the output is bit-identical to the
+// historical single-radial form by construction.
+inline std::vector<double> luma_visual_weights(uint8_t dwt_levels, const visual_weighting_params &vp,
+                                               int sub_x = 1, int sub_y = 1) {
   if (vp.model == csf_model::legacy_table) {
     // Zeng et al., Table 2, Y column (= sqrt of the MSE-domain weights).
     return {0.0901, 0.2758, 0.2758, 0.7018, 0.8378, 0.8378, 1.0000, 1.0000,
@@ -218,19 +246,28 @@ inline std::vector<double> luma_visual_weights(uint8_t dwt_levels,
   }
 
   const csf_peak_t pk = csf_peak(vp.model);
-  const double zoom    = (vp.zoom > 0.0) ? vp.zoom : 1.0;
-  const double ppd     = vp.ref_ppd / zoom;  // zoom-in lowers effective ppd
-  const double f_N     = ppd / 2.0;          // Nyquist in cycles/degree
+  const double zoom   = (vp.zoom > 0.0) ? vp.zoom : 1.0;
+  const double ppd    = vp.ref_ppd / zoom;  // zoom-in lowers effective ppd
+  const double f_N    = ppd / 2.0;          // full-resolution Nyquist (cycles/degree)
+  const double sx     = (sub_x > 0) ? sub_x : 1;
+  const double sy     = (sub_y > 0) ? sub_y : 1;
+  const double f_Nx   = f_N / sx;  // per-axis Nyquist on this component's grid
+  const double f_Ny   = f_N / sy;
 
   std::vector<double> w;
   w.reserve(static_cast<size_t>(3) * dwt_levels);
   for (uint8_t lvl = 1; lvl <= dwt_levels; ++lvl) {
-    // Geometric-mean radial center of octave band [f_N/2^lvl, f_N/2^(lvl-1)].
-    const double f_r  = f_N * std::pow(2.0, -static_cast<double>(lvl)) * std::sqrt(2.0);
-    const double f_hh = f_r * vp.hh_factor;
+    // Geometric-mean per-axis center of octave band [f_N/2^lvl, f_N/2^(lvl-1)].
+    const double dx = f_Nx * std::pow(2.0, -static_cast<double>(lvl)) * std::sqrt(2.0);
+    const double dy = f_Ny * std::pow(2.0, -static_cast<double>(lvl)) * std::sqrt(2.0);
+    // Isotropic grids keep the exact historical HH expression (dx * hh_factor);
+    // the general form is the per-axis diagonal scaled so hh_factor = sqrt(2)
+    // is the geometric (no oblique-penalty) value, as in the chroma path.
+    const double f_hh =
+        (dx == dy) ? dx * vp.hh_factor : (vp.hh_factor / std::sqrt(2.0)) * std::sqrt(dx * dx + dy * dy);
     w.push_back(csf_weight(f_hh, vp.model, pk));  // HH
-    w.push_back(csf_weight(f_r, vp.model, pk));   // LH
-    w.push_back(csf_weight(f_r, vp.model, pk));   // HL
+    w.push_back(csf_weight(dy, vp.model, pk));    // LH (vertical detail)
+    w.push_back(csf_weight(dx, vp.model, pk));    // HL (horizontal detail)
   }
   return w;
 }
@@ -275,9 +312,15 @@ inline std::vector<double> legacy_chroma_row(int comp_index, int chroma_format) 
                                    0.8254, 0.8254, 0.8254, 0.9424, 0.9424, 0.9424, 1.0000};
   const double *r;
   switch (chroma_format) {
-    case 1:  r = (comp_index == 1) ? Cb420 : Cr420; break;  // 4:2:0
-    case 2:  r = (comp_index == 1) ? Cb422 : Cr422; break;  // 4:2:2
-    default: r = (comp_index == 1) ? Cb444 : Cr444; break;  // 4:4:4
+    case 1:
+      r = (comp_index == 1) ? Cb420 : Cr420;
+      break;  // 4:2:0
+    case 2:
+      r = (comp_index == 1) ? Cb422 : Cr422;
+      break;  // 4:2:2
+    default:
+      r = (comp_index == 1) ? Cb444 : Cr444;
+      break;  // 4:4:4
   }
   return std::vector<double>(r, r + 15);
 }
@@ -287,22 +330,29 @@ inline std::vector<double> legacy_chroma_row(int comp_index, int chroma_format) 
 // historical row verbatim (bit-identical). Analytic models fold chroma
 // subsampling into the effective horizontal/vertical ppd, so LH (vertical
 // detail) and HL (horizontal detail) diverge under 4:2:2 as they should.
-inline std::vector<double> chroma_visual_weights(uint8_t dwt_levels,
-                                                 const visual_weighting_params &vp, int comp_index,
-                                                 int chroma_format,
-                                                 color_transform ct = color_transform::ict) {
+//
+// Component role: with the ICT in force the roles are positional (comp 1 = Cb,
+// comp 2 = Cr) as always. Without an MCT the codestream does not label channels
+// (and only then can chroma be sub-sampled, T.800 J.13), so `ctype_hint`
+// decides: Cb/Cr take the chroma CSF, Y/generic take the luminance CSF -- in
+// every case with this component's (sub_x, sub_y) frequency mapping applied.
+// (sub_x, sub_y) are the SIZ XRsiz/YRsiz factors; pass 0 to derive them from
+// `chroma_format` (444/420/422) for callers without SIZ access.
+inline std::vector<double> chroma_visual_weights(uint8_t dwt_levels, const visual_weighting_params &vp,
+                                                 int comp_index, int chroma_format,
+                                                 color_transform ct   = color_transform::ict,
+                                                 component_type ctype = component_type::generic,
+                                                 int sub_x = 0, int sub_y = 0) {
   if (vp.model == csf_model::legacy_table) {
     return legacy_chroma_row(comp_index, chroma_format);
   }
-  // Without a luma/chroma decorrelating transform this component carries
-  // luminance (e.g. a raw RGB channel), so it takes the luminance CSF, never
-  // the chroma roll-off. Such components are not subsampled (full resolution).
-  if (ct == color_transform::none) {
-    return luma_visual_weights(dwt_levels, vp);
-  }
 
+  // Resolve (sx, sy): SIZ factors when supplied, else the chroma_format legacy mapping.
   double sx = 1.0, sy = 1.0;  // horizontal/vertical chroma subsampling factors
-  if (chroma_format == 1) {   // 4:2:0
+  if (sub_x > 0 && sub_y > 0) {
+    sx = sub_x;
+    sy = sub_y;
+  } else if (chroma_format == 1) {  // 4:2:0
     sx = 2.0;
     sy = 2.0;
   } else if (chroma_format == 2) {  // 4:2:2
@@ -310,7 +360,17 @@ inline std::vector<double> chroma_visual_weights(uint8_t dwt_levels,
     sy = 1.0;
   }
 
-  const chroma_csf_params cp = chroma_params_for(comp_index);
+  // Resolve the perceptual role of this component.
+  const component_type role =
+      (ct == color_transform::ict) ? ((comp_index == 1) ? component_type::Cb : component_type::Cr) : ctype;
+  // Luminance-CSF cases: an unlabelled / luma component (e.g. a raw RGB channel
+  // or unhinted YCbCr), or the reuse-luma A/B switch. The (sx, sy) sub-sampling
+  // mapping still applies; at (1, 1) this is the historical no-MCT behavior.
+  if (role == component_type::generic || role == component_type::Y || vp.chroma_reuse_luma_csf) {
+    return luma_visual_weights(dwt_levels, vp, static_cast<int>(sx), static_cast<int>(sy));
+  }
+
+  const chroma_csf_params cp = chroma_params_for(role == component_type::Cb ? 1 : 2);
   const double zoom          = (vp.zoom > 0.0) ? vp.zoom : 1.0;
   const double f_N           = (vp.ref_ppd / zoom) / 2.0;  // luma Nyquist (cpd)
   const double f_Nx          = f_N / sx;                   // chroma horizontal Nyquist

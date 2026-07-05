@@ -61,7 +61,6 @@
 // Stream readers (PNM / PGX / TIFF) live in the openhtj2k_imgio static lib;
 // see source/apps/imgio/imgio.hpp.
 
-
 int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
   std::vector<std::string> fnames = args.ifnames;
@@ -98,8 +97,8 @@ int main(int argc, char *argv[]) {
       std::string fext = out_filename.substr(pos, 4);
       if (fext == ".jph" || fext == ".JPH") {
         isJPH = true;
-      } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc") && fext.compare(".J2C")
-                 && fext.compare(".J2K") && fext.compare(".JPHC")) {
+      } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc")
+                 && fext.compare(".J2C") && fext.compare(".J2K") && fext.compare(".JPHC")) {
         printf("ERROR: invalid extension for output file\n");
         exit(EXIT_FAILURE);
       }
@@ -119,8 +118,8 @@ int main(int argc, char *argv[]) {
     if (!reader) return EXIT_FAILURE;
     element_siz_local image_origin_s = args.get_origin();
     element_siz_local image_size_s(reader->get_width(), reader->get_height());
-    stat_width  = reader->get_width();
-    stat_height = reader->get_height();
+    stat_width    = reader->get_width();
+    stat_height   = reader->get_height();
     uint16_t nc_s = reader->get_num_components();
     uint8_t bd_s  = reader->get_bitdepth(0);
 
@@ -181,6 +180,8 @@ int main(int argc, char *argv[]) {
       if (!toFile) encoder.set_output_buffer(outbuf);
       // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
+      encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
+      encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based_stream(
             [&reader](uint32_t y, int32_t **rows, uint16_t nc) { reader->get_row(y, rows, nc); });
@@ -267,6 +268,8 @@ int main(int argc, char *argv[]) {
       if (!toFile) encoder.set_output_buffer(outbuf);
       // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
+      encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
+      encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based();
       } catch (std::exception &exc) {

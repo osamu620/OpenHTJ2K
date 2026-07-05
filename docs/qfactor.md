@@ -139,8 +139,36 @@ parameter pair per opponent channel calibrated at `Qppd=72`:
 
 Chroma subsampling is **not** a separate model: 4:2:0 / 4:2:2 are the same CSF
 sampled at frequencies shifted by the horizontal / vertical subsampling factors
-`(sx, sy)`. A 4:2:2 channel therefore gets different `LH` (vertical detail) and
-`HL` (horizontal detail) weights for free.
+`(sx, sy)` — taken per component from the SIZ `XRsiz`/`YRsiz` fields. A
+component sub-sampled by `s` on an axis sits on a grid `s×` coarser, so that
+axis's angular frequency divides by `s`. Two consequences fall out of the
+mapping with no special-casing:
+
+- **Isotropic 4:2:0 is exactly a one-level shift.** Halving both axes halves
+  every subband's radial frequency, which is identical to moving one
+  decomposition level coarser — the classic "weight chroma like luma one level
+  down" rule. Do not add a manual level offset on top; the `(sx, sy)` scaling
+  already subsumes it (this equivalence is asserted bit-for-bit by
+  `visual_weight_check check`).
+- **4:2:2 is anisotropic.** Only the horizontal axis is halved, so a 4:2:2
+  channel gets different `LH` (vertical detail) and `HL` (horizontal detail)
+  weights — something no scalar per-subband table can represent.
+
+**Component roles need a hint when chroma is sub-sampled.** Sub-sampled
+components rule out the built-in MCT (it needs identically-sized components),
+and without an MCT the codestream does not label channels — the encoder cannot
+know component 1 is `Cb`. Pass `Qctype=Y,Cb,Cr` to select the chroma CSF;
+unhinted components default to `generic` (luminance CSF, still with the
+`(sx, sy)` frequency shift). `Qchromacsf=luma` is an A/B switch that keeps the
+mapping but swaps the chroma shape for the luminance CSF.
+
+The `visual_weight_check` test tool (built with the test suite) dumps the
+derived table for any configuration, e.g. for a 4:2:2 `Cb` channel:
+
+```bash
+visual_weight_check dump --ctype Cb --sx 2 --sy 1          # analytic
+visual_weight_check dump --ctype Cb --legacy-format 422    # legacy table row
+```
 
 ### Colour transform and gains
 
@@ -155,16 +183,24 @@ reconstructed RGB. The model in force is resolved per encode:
 
 Legacy mode always assumes `ict` (reproducing historical behaviour); analytic
 modes honour the MCT actually applied, so an undecorrelated RGB encode gets unit
-gains and the **luminance** CSF on every channel (never the chroma roll-off).
+gains and the **luminance** CSF on every channel. The one exception is a
+`Qctype` hint: a no-MCT component labelled `Cb`/`Cr` (pre-decorrelated,
+typically sub-sampled YCbCr input) takes the chroma CSF while keeping unit
+colour gain — there is no inverse transform amplifying its error, but its
+content is still chrominance.
 
 ## CLI reference
 
-All three are encoder options and require `Qfactor`:
+All of these are encoder options and require `Qfactor`:
 
 - `Qcsf=legacy|mannos|daly` — visual-weighting model. Default **legacy**
   (bit-identical). `mannos` / `daly` are experimental.
 - `Qppd=Float` — reference pixels-per-degree at zoom 1.0. Default **72**.
 - `Qzoom=Float` — display magnification; `> 1` is zoom-in. Default **1.0**.
+- `Qctype=T,T,T` — per-component role hints (`Y|Cb|Cr|generic`) for analytic
+  models on no-MCT (e.g. sub-sampled YCbCr) input. Default **generic**.
+- `Qchromacsf=chroma|luma` — CSF shape for `Cb`/`Cr` components. Default
+  **chroma** (the low-pass chroma CSF).
 
 When an analytic model is selected the encoder prints an `EXPERIMENTAL:` status
 line; selecting one without `Qfactor` prints a warning and has no effect.
@@ -177,6 +213,10 @@ encoder.set_output_buffer(out);
 // EXPERIMENTAL: model 0 = legacy (default), 1 = Mannos–Sakrison, 2 = Daly.
 // ref_ppd / zoom ≤ 0 keep their defaults. Call before invoke_*.
 encoder.set_visual_weighting(/*model=*/1, /*ref_ppd=*/72.0, /*zoom=*/2.0);
+// EXPERIMENTAL: component roles for no-MCT input (0 generic, 1 Y, 2 Cb, 3 Cr)
+// and the chroma-CSF A/B switch — the Qctype= / Qchromacsf= equivalents.
+encoder.set_component_types(1, 2, 3);
+encoder.set_chroma_csf_reuse_luma(false);
 encoder.invoke_line_based();
 ```
 
@@ -197,6 +237,9 @@ estimate_qfactor out.j2c
 
 # Analytic encode — pass the same model / viewing condition used at encode time
 estimate_qfactor out.j2c --csf mannos --zoom 2
+
+# Sub-sampled YCbCr analytic encode — pass the same role hints too
+estimate_qfactor out420.j2c --csf mannos --ctype Y,Cb,Cr
 
 # Scriptable check mode (CI): assert the recovered Q and a residual ceiling
 estimate_qfactor out.j2c --csf mannos --expect-q 90 --max-residual 0.01
