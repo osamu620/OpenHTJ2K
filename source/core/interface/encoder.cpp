@@ -616,8 +616,11 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   }
 
   // check component size
-  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2])
-      && (YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
+  // The MCT requires identically-sized components: a mismatch on EITHER axis
+  // (e.g. 4:2:2, which differs only horizontally) must force it off, or the
+  // color transform runs across differently-sized buffers and corrupts memory.
+  if (siz->Csiz == 3 && cod->use_color_trafo == 1
+      && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2] || YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
     cod->use_color_trafo = 0;
     printf("WARNING: Cycc is set to 'no' because size of each component is not identical.\n");
   }
@@ -805,8 +808,11 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     YRsiz.push_back(siz->YRsiz[c]);
   }
 
-  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2])
-      && (YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
+  // The MCT requires identically-sized components: a mismatch on EITHER axis
+  // (e.g. 4:2:2, which differs only horizontally) must force it off, or the
+  // color transform runs across differently-sized buffers and corrupts memory.
+  if (siz->Csiz == 3 && cod->use_color_trafo == 1
+      && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2] || YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
     cod->use_color_trafo = 0;
     printf("WARNING: Cycc is set to 'no' because size of each component is not identical.\n");
   }
