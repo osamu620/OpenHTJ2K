@@ -90,6 +90,13 @@ void print_help(char *cmd) {
       "Qzoom=Float (EXPERIMENTAL)  display magnification, >1 = zoom-in (default 1.0);\n"
       "  zoom-in flattens the weighting toward flat MSE-optimal quantization.\n");
   printf(
+      "Qctype=T,T,T (EXPERIMENTAL)  per-component role hints (Y|Cb|Cr|generic) for the\n"
+      "  analytic models when input is pre-decorrelated YCbCr (no MCT), e.g. sub-sampled\n"
+      "  4:2:0/4:2:2: the codestream cannot label channels, so Qctype=Y,Cb,Cr selects the\n"
+      "  chroma CSF for components 1 and 2. Default generic (luminance CSF).\n"
+      "Qchromacsf=chroma|luma (EXPERIMENTAL)  CSF shape for Cb/Cr: low-pass chroma CSF\n"
+      "  (default) or reuse the luminance CSF (A/B-tests shape vs sub-sampling mapping).\n");
+  printf(
       "-jph_color_space\n"
       "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
       "YCbCr, use YCC.\n");
@@ -154,9 +161,11 @@ class j2k_argset {
   bool qderived;
   uint8_t qfactor;
   // EXPERIMENTAL analytic visual (CSF) weighting for the Qfactor path.
-  uint8_t csf_model;  // 0 = legacy table (default), 1 = Mannos-Sakrison, 2 = Daly
-  double csf_ppd;     // reference pixels-per-degree at zoom 1.0
-  double csf_zoom;    // display magnification (> 1 = zoom-in)
+  uint8_t csf_model;           // 0 = legacy table (default), 1 = Mannos-Sakrison, 2 = Daly
+  double csf_ppd;              // reference pixels-per-degree at zoom 1.0
+  double csf_zoom;             // display magnification (> 1 = zoom-in)
+  uint8_t csf_ctype[3];        // per-component role hints: 0 generic, 1 Y, 2 Cb, 3 Cr
+  bool csf_chroma_reuse_luma;  // A/B: luminance CSF shape for Cb/Cr components
 
   static void get_coordinate(const std::string &param_name, std::string &arg, element_siz_local &dims) {
     size_t pos0, pos1;
@@ -411,6 +420,8 @@ class j2k_argset {
         csf_model(0),
         csf_ppd(72.0),
         csf_zoom(1.0),
+        csf_ctype{0, 0, 0},
+        csf_chroma_reuse_luma(false),
         ifnames{},
         num_iteration(1),
         num_threads(0),
@@ -427,7 +438,7 @@ class j2k_argset {
         is_i_found  = true;
       } else if ((tmp.front() == '-' || tmp.front() == 'C' || tmp.front() == 'S' || tmp.front() == 'Q')
                  && is_i_found) {
-        if (tmp[1] == ':') continue; // for Windows
+        if (tmp[1] == ':') continue;  // for Windows
         fname_stop = i;
         is_i_found = false;
       }
@@ -596,6 +607,41 @@ class j2k_argset {
           csf_ppd = get_numerical_param(c, param, arg, 1.0, 100000.0);
         } else if (param == "zoom") {
           csf_zoom = get_numerical_param(c, param, arg, 0.01, 1000.0);
+        } else if (param == "ctype") {
+          // EXPERIMENTAL: comma-separated per-component role hints for analytic
+          // weighting of sub-sampled (no-MCT) input, e.g. Qctype=Y,Cb,Cr.
+          std::string val = arg.substr(arg.find_first_of('=') + 1);
+          size_t idx = 0, pos = 0;
+          while (idx < 3 && pos <= val.size()) {
+            size_t comma      = val.find(',', pos);
+            std::string token = val.substr(pos, (comma == std::string::npos) ? comma : comma - pos);
+            if (token == "Y" || token == "y") {
+              csf_ctype[idx] = 1;
+            } else if (token == "Cb" || token == "cb" || token == "CB") {
+              csf_ctype[idx] = 2;
+            } else if (token == "Cr" || token == "cr" || token == "CR") {
+              csf_ctype[idx] = 3;
+            } else if (token == "generic" || token == "-") {
+              csf_ctype[idx] = 0;
+            } else {
+              printf("ERROR: unknown Qctype entry '%s' (use Y|Cb|Cr|generic)\n", token.c_str());
+              exit(EXIT_FAILURE);
+            }
+            ++idx;
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+          }
+        } else if (param == "chromacsf") {
+          // EXPERIMENTAL: chroma CSF shape selection (A/B vs the frequency mapping).
+          std::string val = arg.substr(arg.find_first_of('=') + 1);
+          if (val == "chroma") {
+            csf_chroma_reuse_luma = false;
+          } else if (val == "luma") {
+            csf_chroma_reuse_luma = true;
+          } else {
+            printf("ERROR: unknown Qchromacsf value '%s' (use chroma|luma)\n", val.c_str());
+            exit(EXIT_FAILURE);
+          }
         } else {
           printf("ERROR: unknown parameter Q%s\n", param.c_str());
           exit(EXIT_FAILURE);
@@ -633,4 +679,6 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD uint8_t get_csf_model() const { return csf_model; }
   OPENHTJ2K_NODISCARD double get_csf_ppd() const { return csf_ppd; }
   OPENHTJ2K_NODISCARD double get_csf_zoom() const { return csf_zoom; }
+  OPENHTJ2K_NODISCARD uint8_t get_csf_ctype(size_t c) const { return (c < 3) ? csf_ctype[c] : 0; }
+  OPENHTJ2K_NODISCARD bool get_csf_chroma_reuse_luma() const { return csf_chroma_reuse_luma; }
 };

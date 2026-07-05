@@ -33,29 +33,29 @@ constexpr uint8_t YCC420 = 1;
 constexpr uint8_t YCC422 = 2;
 
 struct Band {
-  uint8_t epsilon;   // 0..31
-  uint16_t mantissa; // 0..2047
+  uint8_t epsilon;    // 0..31
+  uint16_t mantissa;  // 0..2047
 };
 
 struct QuantMarker {
-  uint16_t component_index; // 0xFFFF for QCD, otherwise QCC's Cqcc
-  uint8_t Sq;               // raw Sqcd/Sqcc
-  uint8_t style;            // Sq & 0x1F (0=lossless, 1=derived, 2=expounded)
-  uint8_t guardbits;        // Sq >> 5
-  std::vector<Band> bands;  // signaling order: LL_N, HL_N, LH_N, HH_N, HL_{N-1}, ...
-  std::vector<uint8_t> raw; // verbatim segment bytes (marker..end), for --dump-quant
+  uint16_t component_index;  // 0xFFFF for QCD, otherwise QCC's Cqcc
+  uint8_t Sq;                // raw Sqcd/Sqcc
+  uint8_t style;             // Sq & 0x1F (0=lossless, 1=derived, 2=expounded)
+  uint8_t guardbits;         // Sq >> 5
+  std::vector<Band> bands;   // signaling order: LL_N, HL_N, LH_N, HH_N, HL_{N-1}, ...
+  std::vector<uint8_t> raw;  // verbatim segment bytes (marker..end), for --dump-quant
 };
 
 struct Header {
   // SIZ
   uint16_t Csiz = 0;
-  std::vector<uint8_t> Ssiz;     // bit-depth byte (top bit = signed)
+  std::vector<uint8_t> Ssiz;  // bit-depth byte (top bit = signed)
   std::vector<uint8_t> XRsiz;
   std::vector<uint8_t> YRsiz;
   // COD
-  uint8_t dwt_levels = 5;
-  uint8_t transformation = 0;    // 0 = 9/7 (irreversible), 1 = 5/3 (reversible)
-  bool use_color_trafo = false;  // SGcod MCT byte != 0
+  uint8_t dwt_levels     = 5;
+  uint8_t transformation = 0;      // 0 = 9/7 (irreversible), 1 = 5/3 (reversible)
+  bool use_color_trafo   = false;  // SGcod MCT byte != 0
   // Quantization
   std::vector<QuantMarker> qmarkers;
 };
@@ -76,11 +76,11 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
     fprintf(stderr, "ERROR: input does not start with SOC marker (0xFF4F)\n");
     return false;
   }
-  size_t p = 2;
+  size_t p     = 2;
   bool got_siz = false, got_cod = false, got_qcd = false;
   while (p + 4 <= buf.size()) {
     uint16_t marker = rd_u16(&buf[p]);
-    if (marker == SOT) break; // end of main header
+    if (marker == SOT) break;  // end of main header
     if ((marker & 0xFF00) != 0xFF00) {
       fprintf(stderr, "ERROR: invalid marker 0x%04X at offset %zu\n", marker, p);
       return false;
@@ -93,7 +93,7 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
       return false;
     }
     const uint8_t* body = &buf[p + 2];
-    size_t body_len = static_cast<size_t>(Lmar) - 2;
+    size_t body_len     = static_cast<size_t>(Lmar) - 2;
 
     switch (marker) {
       case SIZ: {
@@ -116,7 +116,7 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
         // SGcod (4 bytes): progression, layers (2), MCT (1)
         out.use_color_trafo = body[1 + 3] != 0;
         // SPcod: NLevels, cblkW, cblkH, style, transformation
-        out.dwt_levels = body[1 + 4 + 0];
+        out.dwt_levels     = body[1 + 4 + 0];
         out.transformation = body[1 + 4 + 4];
         (void)Scod;
         got_cod = true;
@@ -133,29 +133,29 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
         if (marker == QCC) {
           if (out.Csiz < 257) {
             qm.component_index = body[0];
-            off = 1;
+            off                = 1;
           } else {
             qm.component_index = rd_u16(&body[0]);
-            off = 2;
+            off                = 2;
           }
         } else {
           qm.component_index = 0xFFFF;
         }
         if (off + 1 > body_len) return false;
-        qm.Sq = body[off++];
-        qm.style = static_cast<uint8_t>(qm.Sq & 0x1F);
+        qm.Sq        = body[off++];
+        qm.style     = static_cast<uint8_t>(qm.Sq & 0x1F);
         qm.guardbits = static_cast<uint8_t>(qm.Sq >> 5);
 
-        size_t band_count = 0;
+        size_t band_count     = 0;
         size_t bytes_per_band = 0;
-        if (qm.style == 0) {           // no-quant (lossless): 1 byte per band, ε in upper 5 bits
-          band_count = (body_len - off);
+        if (qm.style == 0) {  // no-quant (lossless): 1 byte per band, ε in upper 5 bits
+          band_count     = (body_len - off);
           bytes_per_band = 1;
-        } else if (qm.style == 1) {    // scalar-derived: one (ε, μ) for LL only
-          band_count = 1;
+        } else if (qm.style == 1) {  // scalar-derived: one (ε, μ) for LL only
+          band_count     = 1;
           bytes_per_band = 2;
-        } else if (qm.style == 2) {    // scalar-expounded: 2 bytes per band
-          band_count = (body_len - off) / 2;
+        } else if (qm.style == 2) {  // scalar-expounded: 2 bytes per band
+          band_count     = (body_len - off) / 2;
           bytes_per_band = 2;
         } else {
           fprintf(stderr, "ERROR: unknown quant style %u\n", qm.style);
@@ -167,8 +167,7 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
             qm.bands.push_back({static_cast<uint8_t>(body[off] >> 3), 0});
           } else {
             uint16_t v = rd_u16(&body[off]);
-            qm.bands.push_back({static_cast<uint8_t>(v >> 11),
-                                static_cast<uint16_t>(v & 0x7FF)});
+            qm.bands.push_back({static_cast<uint8_t>(v >> 11), static_cast<uint16_t>(v & 0x7FF)});
           }
           off += bytes_per_band;
         }
@@ -191,25 +190,28 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
 // Forward step-size predictor — mirrors QCD_marker / QCC_marker exactly.
 // Returns predicted (epsilon, mantissa) per band in QCD signaling order
 // (LL_N, HL_N, LH_N, HH_N, HL_{N-1}, ..., HL_1, LH_1, HH_1).
-std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
-                                uint8_t Cqcc, uint8_t chroma_format,
-                                const open_htj2k::visual_weighting_params& vp, bool mct_on) {
+std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI, uint8_t Cqcc,
+                                uint8_t chroma_format, const open_htj2k::visual_weighting_params& vp,
+                                bool mct_on, uint8_t sub_x = 0, uint8_t sub_y = 0) {
   const std::vector<double> D97SL = {-0.091271763114250, -0.057543526228500, 0.591271763114250,
                                      1.115087052457000,  0.5912717631142500, -0.05754352622850,
                                      -0.091271763114250};
-  const std::vector<double> D97SH = {0.053497514821622,  0.033728236885750,
-                                     -0.156446533057980, -0.533728236885750,
-                                     1.205898036472720,  -0.533728236885750,
-                                     -0.156446533057980, 0.033728236885750,
-                                     0.053497514821622};
+  const std::vector<double> D97SH = {0.053497514821622,  0.033728236885750, -0.156446533057980,
+                                     -0.533728236885750, 1.205898036472720, -0.533728236885750,
+                                     -0.156446533057980, 0.033728236885750, 0.053497514821622};
 
   // Visual weights from the shared encoder header (single source of truth), so the
   // inversion tracks whatever model produced the file. Component 0 is luma (QCD);
-  // components 1/2 are chroma (QCC) under a luma/chroma transform.
+  // components 1/2 are chroma (QCC) under a luma/chroma transform, otherwise their
+  // role comes from vp.ctype_hint (--ctype) with the component's SIZ sub-sampling
+  // factors folded into the analytic frequency mapping -- mirroring QCC_marker.
   const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, mct_on);
+  const open_htj2k::component_type ctype =
+      (Cqcc < 3) ? vp.ctype_hint[Cqcc] : open_htj2k::component_type::generic;
   const std::vector<double> weights =
-      (Cqcc == 0) ? open_htj2k::luma_visual_weights(dwt_levels, vp)
-                  : open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct);
+      (Cqcc == 0)
+          ? open_htj2k::luma_visual_weights(dwt_levels, vp)
+          : open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct, ctype, sub_x, sub_y);
 
   // Build wmse in the encoder's accumulation order: HH_1, LH_1, HL_1, ..., LL_N.
   const size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
@@ -221,13 +223,13 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
     wmse.push_back(1.0);
   } else {
     for (uint8_t lvl = 0; lvl < dwt_levels; ++lvl) {
-      gain_low = 0;
+      gain_low  = 0;
       gain_high = 0;
       for (double e : outL) gain_low += e * e;
       for (double e : outH) gain_high += e * e;
-      wmse.push_back(gain_high * gain_high); // HH
-      wmse.push_back(gain_low * gain_high);  // LH
-      wmse.push_back(gain_high * gain_low);  // HL
+      wmse.push_back(gain_high * gain_high);  // HH
+      wmse.push_back(gain_low * gain_high);   // LH
+      wmse.push_back(gain_high * gain_low);   // HL
       auto upsample = [](const std::vector<double>& v) {
         std::vector<double> r;
         r.reserve(v.size() * 2);
@@ -248,28 +250,27 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
       outL = tmpL;
       outH = tmpH;
     }
-    wmse.push_back(gain_low * gain_low); // LL_N
+    wmse.push_back(gain_low * gain_low);  // LL_N
   }
 
   // Q-dependent scalars from the shared encoder header (same q_to_delta() the
   // encoder uses), so the inversion matches the encoder's step exactly.
   const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
-  const double qpower    = qs.qfactor_power;
-  const double delta_ref = qs.delta_Q * open_htj2k::color_gain(ct, 0);
-  const double G_c       = open_htj2k::color_gain(ct, Cqcc);
+  const double qpower            = qs.qfactor_power;
+  const double delta_ref         = qs.delta_Q * open_htj2k::color_gain(ct, 0);
+  const double G_c               = open_htj2k::color_gain(ct, Cqcc);
 
   std::vector<Band> out(num_bands);
   for (size_t i = 0; i < num_bands; ++i) {
     // LL band (last entry, always weight 1.0) and any extra low-freq bands beyond the 5-level table
-    double w_b = (i == num_bands - 1 || i >= weights.size()) ? 1.0 : std::pow(weights[i], qpower);
-    double fval = delta_ref / (std::sqrt(wmse[i]) * w_b * G_c);
+    double w_b       = (i == num_bands - 1 || i >= weights.size()) ? 1.0 : std::pow(weights[i], qpower);
+    double fval      = delta_ref / (std::sqrt(wmse[i]) * w_b * G_c);
     int32_t exponent = 0;
     while (fval < 1.0) {
       fval *= 2.0;
       exponent++;
     }
-    int32_t mantissa =
-        static_cast<int32_t>(std::floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
+    int32_t mantissa = static_cast<int32_t>(std::floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
     if (mantissa >= (1 << 11)) {
       mantissa = 0;
       exponent--;
@@ -293,16 +294,17 @@ double step_value(const Band& b) {
 
 struct ScoreResult {
   uint8_t best_q;
-  double best_residual; // sum of (log2 step_obs - log2 step_pred)^2 over bands
+  double best_residual;  // sum of (log2 step_obs - log2 step_pred)^2 over bands
   double median_per_band;
 };
 
-ScoreResult find_best_q(const std::vector<Band>& observed, uint8_t dwt_levels, uint8_t RI,
-                        uint8_t Cqcc, uint8_t chroma_format,
-                        const open_htj2k::visual_weighting_params& vp, bool mct_on) {
+ScoreResult find_best_q(const std::vector<Band>& observed, uint8_t dwt_levels, uint8_t RI, uint8_t Cqcc,
+                        uint8_t chroma_format, const open_htj2k::visual_weighting_params& vp, bool mct_on,
+                        uint8_t sub_x = 0, uint8_t sub_y = 0) {
   ScoreResult best{0, std::numeric_limits<double>::infinity(), 0.0};
   for (int q = 1; q <= 100; ++q) {
-    auto pred = predict_bands(static_cast<uint8_t>(q), dwt_levels, RI, Cqcc, chroma_format, vp, mct_on);
+    auto pred = predict_bands(static_cast<uint8_t>(q), dwt_levels, RI, Cqcc, chroma_format, vp, mct_on,
+                              sub_x, sub_y);
     if (pred.size() != observed.size()) continue;
     double sumsq = 0;
     for (size_t i = 0; i < pred.size(); ++i) {
@@ -311,7 +313,7 @@ ScoreResult find_best_q(const std::vector<Band>& observed, uint8_t dwt_levels, u
     }
     if (sumsq < best.best_residual) {
       best.best_residual = sumsq;
-      best.best_q = static_cast<uint8_t>(q);
+      best.best_q        = static_cast<uint8_t>(q);
     }
   }
   best.median_per_band =
@@ -324,21 +326,24 @@ void print_band_table(const std::vector<Band>& obs, const std::vector<Band>& pre
   printf("    band  observed (eps, mu)   predicted (eps, mu)   step_obs/step_pred\n");
   for (size_t i = 0; i < n; ++i) {
     double ratio = step_value(obs[i]) / step_value(pred[i]);
-    printf("    %3zu   (%2u, %4u)            (%2u, %4u)             %.4f\n",
-           i, obs[i].epsilon, obs[i].mantissa, pred[i].epsilon, pred[i].mantissa, ratio);
+    printf("    %3zu   (%2u, %4u)            (%2u, %4u)             %.4f\n", i, obs[i].epsilon,
+           obs[i].mantissa, pred[i].epsilon, pred[i].mantissa, ratio);
   }
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 2) {
     fprintf(stderr,
             "Usage: %s <codestream.j2c> [--verbose] [--csf legacy|mannos|daly] [--ppd F] [--zoom F]\n"
+            "         [--ctype Y,Cb,Cr] [--chroma-csf chroma|luma]\n"
             "  Estimates the OpenHTJ2K Qfactor [0..100] used at encode time by inverting the\n"
             "  QCD/QCC step-size formula. The visual-weighting model is NOT signaled in the\n"
             "  codestream, so for an analytic (EXPERIMENTAL) encode pass the same --csf/--ppd/\n"
             "  --zoom used at encode time; a low residual confirms the assumption was right.\n"
+            "  --ctype / --chroma-csf mirror the encoder's Qctype= / Qchromacsf= hints for\n"
+            "  no-MCT (e.g. sub-sampled YCbCr) streams; pass the values used at encode time.\n"
             "  --expect-q N / --max-residual F: exit non-zero if violated (for scripts/CI).\n"
             "  --dump-quant FILE: write the verbatim QCD/QCC marker bytes to FILE and exit.\n"
             "    These bytes are a function of Qfactor + bit-depth + the visual-weighting\n"
@@ -348,9 +353,9 @@ int main(int argc, char** argv) {
             argv[0]);
     return 1;
   }
-  bool verbose = false;
-  int expect_q = -1;           // >= 0 enables an exit-code check on the recovered Q
-  double max_residual = -1.0;  // >= 0 enables an exit-code check on the per-band residual
+  bool verbose           = false;
+  int expect_q           = -1;             // >= 0 enables an exit-code check on the recovered Q
+  double max_residual    = -1.0;           // >= 0 enables an exit-code check on the per-band residual
   const char* dump_quant = nullptr;        // != null: dump verbatim QCD/QCC bytes and exit
   open_htj2k::visual_weighting_params vp;  // default: legacy table (bit-identical inversion)
   for (int i = 2; i < argc; ++i) {
@@ -380,6 +385,40 @@ int main(int argc, char** argv) {
         fprintf(stderr, "ERROR: --zoom must be > 0\n");
         return 1;
       }
+    } else if (std::strcmp(argv[i], "--ctype") == 0 && i + 1 < argc) {
+      // Comma-separated per-component role hints, mirroring the encoder's Qctype=.
+      const char* v = argv[++i];
+      size_t idx    = 0;
+      while (idx < 3 && *v != '\0') {
+        const char* comma = std::strchr(v, ',');
+        const size_t len  = (comma != nullptr) ? static_cast<size_t>(comma - v) : std::strlen(v);
+        if ((len == 1 && (v[0] == 'Y' || v[0] == 'y'))) {
+          vp.ctype_hint[idx] = open_htj2k::component_type::Y;
+        } else if (len == 2 && (v[0] == 'C' || v[0] == 'c') && (v[1] == 'b' || v[1] == 'B')) {
+          vp.ctype_hint[idx] = open_htj2k::component_type::Cb;
+        } else if (len == 2 && (v[0] == 'C' || v[0] == 'c') && (v[1] == 'r' || v[1] == 'R')) {
+          vp.ctype_hint[idx] = open_htj2k::component_type::Cr;
+        } else if ((len == 7 && std::strncmp(v, "generic", 7) == 0) || (len == 1 && v[0] == '-')) {
+          vp.ctype_hint[idx] = open_htj2k::component_type::generic;
+        } else {
+          fprintf(stderr, "ERROR: unknown --ctype entry '%.*s' (use Y|Cb|Cr|generic)\n",
+                  static_cast<int>(len), v);
+          return 1;
+        }
+        ++idx;
+        if (comma == nullptr) break;
+        v = comma + 1;
+      }
+    } else if (std::strcmp(argv[i], "--chroma-csf") == 0 && i + 1 < argc) {
+      const char* m = argv[++i];
+      if (std::strcmp(m, "chroma") == 0) {
+        vp.chroma_reuse_luma_csf = false;
+      } else if (std::strcmp(m, "luma") == 0) {
+        vp.chroma_reuse_luma_csf = true;
+      } else {
+        fprintf(stderr, "ERROR: unknown --chroma-csf '%s' (use chroma|luma)\n", m);
+        return 1;
+      }
     } else if (std::strcmp(argv[i], "--expect-q") == 0 && i + 1 < argc) {
       expect_q = std::atoi(argv[++i]);
       if (expect_q < 0 || expect_q > 100) {
@@ -407,8 +446,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "ERROR: cannot open '%s'\n", argv[1]);
     return 1;
   }
-  std::vector<uint8_t> buf((std::istreambuf_iterator<char>(in)),
-                           std::istreambuf_iterator<char>());
+  std::vector<uint8_t> buf((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
   Header h;
   if (!parse_main_header(buf, h)) return 1;
@@ -445,8 +483,7 @@ int main(int argc, char** argv) {
   }
 
   uint8_t chroma_format = infer_chroma_format(h);
-  const char* cf_name = (chroma_format == YCC444) ? "4:4:4"
-                        : (chroma_format == YCC420) ? "4:2:0" : "4:2:2";
+  const char* cf_name = (chroma_format == YCC444) ? "4:4:4" : (chroma_format == YCC420) ? "4:2:0" : "4:2:2";
 
   printf("File:        %s\n", argv[1]);
   printf("Components:  %u (chroma format %s)\n", h.Csiz, cf_name);
@@ -499,7 +536,9 @@ int main(int argc, char** argv) {
 
   printf("\nGuard bits:  %u\n", qcd->guardbits);
   printf("Qstyle:      %u (%s)\n", qcd->style,
-         qcd->style == 0 ? "no-quant" : qcd->style == 2 ? "scalar-expounded" : "scalar-derived");
+         qcd->style == 0   ? "no-quant"
+         : qcd->style == 2 ? "scalar-expounded"
+                           : "scalar-derived");
 
   // Score per component.
   std::vector<std::pair<uint16_t, ScoreResult>> per_component;
@@ -512,18 +551,17 @@ int main(int argc, char** argv) {
       }
     }
     uint8_t RI = static_cast<uint8_t>((h.Ssiz[c] & 0x7F) + 1);
-    auto score = find_best_q(qm->bands, h.dwt_levels, RI,
-                             static_cast<uint8_t>(c), chroma_format, vp, h.use_color_trafo);
+    auto score = find_best_q(qm->bands, h.dwt_levels, RI, static_cast<uint8_t>(c), chroma_format, vp,
+                             h.use_color_trafo, h.XRsiz[c], h.YRsiz[c]);
     per_component.emplace_back(c, score);
-    printf("\nComponent %u  (RI=%u, %s)\n", c, RI,
-           qm->component_index == 0xFFFF ? "QCD" : "QCC");
+    printf("\nComponent %u  (RI=%u, %s)\n", c, RI, qm->component_index == 0xFFFF ? "QCD" : "QCC");
     printf("  best Q     : %u\n", score.best_q);
     printf("  residual   : %.4f (sum log2 step^2)\n", score.best_residual);
-    printf("  per-band   : %.4f log2 (~ factor %.4fx)\n",
-           score.median_per_band, std::pow(2.0, score.median_per_band));
+    printf("  per-band   : %.4f log2 (~ factor %.4fx)\n", score.median_per_band,
+           std::pow(2.0, score.median_per_band));
     if (verbose) {
-      auto pred = predict_bands(score.best_q, h.dwt_levels, RI,
-                                static_cast<uint8_t>(c), chroma_format, vp, h.use_color_trafo);
+      auto pred = predict_bands(score.best_q, h.dwt_levels, RI, static_cast<uint8_t>(c), chroma_format, vp,
+                                h.use_color_trafo, h.XRsiz[c], h.YRsiz[c]);
       print_band_table(qm->bands, pred);
     }
   }

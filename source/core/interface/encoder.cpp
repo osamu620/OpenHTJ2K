@@ -547,6 +547,8 @@ class openhtj2k_encoder_impl {
                          qcd_params &, uint8_t, bool, uint8_t);
   void set_output_buffer(std::vector<uint8_t> &);
   void set_visual_weighting(uint8_t model, double ref_ppd, double zoom);
+  void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
+  void set_chroma_csf_reuse_luma(bool reuse_luma);
   ~openhtj2k_encoder_impl();
   size_t invoke_line_based();
   size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
@@ -568,9 +570,15 @@ void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf)
 void openhtj2k_encoder_impl::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
   // model: 0 = legacy table (default, bit-identical), 1 = Mannos-Sakrison, 2 = Daly.
   switch (model) {
-    case 1:  vw.model = csf_model::mannos_sakrison; break;
-    case 2:  vw.model = csf_model::daly; break;
-    default: vw.model = csf_model::legacy_table; break;
+    case 1:
+      vw.model = csf_model::mannos_sakrison;
+      break;
+    case 2:
+      vw.model = csf_model::daly;
+      break;
+    default:
+      vw.model = csf_model::legacy_table;
+      break;
   }
   if (ref_ppd > 0.0) vw.ref_ppd = ref_ppd;
   if (zoom > 0.0) vw.zoom = zoom;
@@ -584,6 +592,18 @@ void openhtj2k_encoder_impl::set_visual_weighting(uint8_t model, double ref_ppd,
              static_cast<int>(vw.model), vw.ref_ppd, vw.zoom);
     }
   }
+}
+
+void openhtj2k_encoder_impl::set_component_types(uint8_t c0, uint8_t c1, uint8_t c2) {
+  const uint8_t t[3] = {c0, c1, c2};
+  for (int i = 0; i < 3; ++i) {
+    // 0 = generic, 1 = Y, 2 = Cb, 3 = Cr; anything else falls back to generic.
+    vw.ctype_hint[i] = (t[i] <= 3) ? static_cast<component_type>(t[i]) : component_type::generic;
+  }
+}
+
+void openhtj2k_encoder_impl::set_chroma_csf_reuse_luma(bool reuse_luma) {
+  vw.chroma_reuse_luma_csf = reuse_luma;
 }
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
@@ -990,6 +1010,14 @@ void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
 
 void openhtj2k_encoder::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
   this->impl->set_visual_weighting(model, ref_ppd, zoom);
+}
+
+void openhtj2k_encoder::set_component_types(uint8_t c0, uint8_t c1, uint8_t c2) {
+  this->impl->set_component_types(c0, c1, c2);
+}
+
+void openhtj2k_encoder::set_chroma_csf_reuse_luma(bool reuse_luma) {
+  this->impl->set_chroma_csf_reuse_luma(reuse_luma);
 }
 
 size_t openhtj2k_encoder::invoke_line_based() { return this->impl->invoke_line_based(); }

@@ -152,6 +152,48 @@ set_tests_properties(qfest_daly PROPERTIES DEPENDS enc_qf_daly)
 add_test(NAME qfest_mismatch COMMAND estimate_qfactor kodim23_qfmannos.j2c --max-residual 0.01)
 set_tests_properties(qfest_mismatch PROPERTIES DEPENDS enc_qf_mannos PASS_REGULAR_EXPRESSION "CHECK FAIL")
 
+# --- Sub-sampling-aware analytic weighting (per-axis frequency mapping) --------
+# visual_weight_check pins the mapping invariants directly on the shared header:
+# (1,1) bit-identity with the pre-generalization output, the exact one-level
+# shift at (2,2), the 4:2:2 HL>LH anisotropy, and the generic default role.
+add_test(NAME qf_vw_invariants COMMAND visual_weight_check check)
+
+# End-to-end 4:2:0: a 3-component input with half-size components 1/2 (any PGX
+# trio with those shapes will do -- QCD/QCC bytes never depend on sample data).
+# Sub-sampled input forces the MCT off, so the codestream cannot label channels;
+# Qctype=Y,Cb,Cr selects the chroma CSF and the estimator must be told the same
+# hints to invert exactly. The residual-0 round-trip proves encoder and
+# estimator agree on the XRsiz/YRsiz-driven frequency mapping.
+set(QF420_INPUT "${ENCODER_REF_DIR}/c1p0_05-0.pgx,${ENCODER_REF_DIR}/c1p0_05-2.pgx,${ENCODER_REF_DIR}/c1p0_05-3.pgx")
+add_test(NAME enc_qf_420_ctype COMMAND open_htj2k_enc -i ${QF420_INPUT} -o kodim_qf420ct.j2c Qfactor=88 Qcsf=mannos Qctype=Y,Cb,Cr)
+add_test(NAME qfest_420_ctype COMMAND estimate_qfactor kodim_qf420ct.j2c --csf mannos --ctype Y,Cb,Cr --expect-q 88 --max-residual 0.01)
+set_tests_properties(qfest_420_ctype PROPERTIES DEPENDS enc_qf_420_ctype)
+
+# Negative control: without the ctype hints the estimator assumes generic
+# (luminance-CSF) chroma and must NOT match -- proof the chroma CSF actually
+# reached the emitted QCC bytes (the path was dead code before Qctype existed).
+add_test(NAME qfest_420_ctype_required COMMAND estimate_qfactor kodim_qf420ct.j2c --csf mannos --max-residual 0.01)
+set_tests_properties(qfest_420_ctype_required PROPERTIES DEPENDS enc_qf_420_ctype PASS_REGULAR_EXPRESSION "CHECK FAIL")
+
+# Reuse-luma A/B switch round-trip (luminance CSF shape + sub-sampling mapping).
+add_test(NAME enc_qf_420_reuseluma COMMAND open_htj2k_enc -i ${QF420_INPUT} -o kodim_qf420rl.j2c Qfactor=88 Qcsf=mannos Qctype=Y,Cb,Cr Qchromacsf=luma)
+add_test(NAME qfest_420_reuseluma COMMAND estimate_qfactor kodim_qf420rl.j2c --csf mannos --ctype Y,Cb,Cr --chroma-csf luma --expect-q 88 --max-residual 0.01)
+set_tests_properties(qfest_420_reuseluma PROPERTIES DEPENDS enc_qf_420_reuseluma)
+
+# End-to-end 4:2:2 on tiny synthetic fixtures (Y 64x64, Cb/Cr 32x64). Also a
+# regression guard for the Cycc guard fix: 4:2:2 differs in size only
+# horizontally, which used to leave the MCT enabled across differently-sized
+# component buffers and corrupt the heap. The legacy encode exercises exactly
+# that path (default Cycc=yes + Qfactor); the analytic pair round-trips the
+# anisotropic (2,1) mapping through the emitted QCC bytes.
+set(QF422_INPUT "${ENCODER_REF_DIR}/synth422_y.pgx,${ENCODER_REF_DIR}/synth422_cb.pgx,${ENCODER_REF_DIR}/synth422_cr.pgx")
+add_test(NAME enc_qf_422_legacy COMMAND open_htj2k_enc -i ${QF422_INPUT} -o synth_qf422lg.j2c Qfactor=85)
+add_test(NAME qfest_422_legacy COMMAND estimate_qfactor synth_qf422lg.j2c --expect-q 85 --max-residual 0.01)
+set_tests_properties(qfest_422_legacy PROPERTIES DEPENDS enc_qf_422_legacy)
+add_test(NAME enc_qf_422_ctype COMMAND open_htj2k_enc -i ${QF422_INPUT} -o synth_qf422ct.j2c Qfactor=85 Qcsf=mannos Qctype=Y,Cb,Cr)
+add_test(NAME qfest_422_ctype COMMAND estimate_qfactor synth_qf422ct.j2c --csf mannos --ctype Y,Cb,Cr --expect-q 85 --max-residual 0.01)
+set_tests_properties(qfest_422_ctype PROPERTIES DEPENDS enc_qf_422_ctype)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -180,4 +222,9 @@ set_tests_properties(
   enc_qf_mannos_zoom  qfest_mannos_zoom
   enc_qf_daly         qfest_daly
   qfest_mismatch
+  qf_vw_invariants
+  enc_qf_420_ctype    qfest_420_ctype   qfest_420_ctype_required
+  enc_qf_420_reuseluma qfest_420_reuseluma
+  enc_qf_422_legacy   qfest_422_legacy
+  enc_qf_422_ctype    qfest_422_ctype
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
