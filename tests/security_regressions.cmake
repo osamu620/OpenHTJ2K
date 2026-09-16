@@ -303,3 +303,42 @@ set_tests_properties(security_line_decode_dfs_vert_mt PROPERTIES
     PASS_REGULAR_EXPRESSION "does not support DWT_VERT"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 30)
+
+# Codestream truncated inside a packet header (issue #462, reported by
+# @rafaelhutter).  buf_chain::get_byte() pads a short codestream with 0x00 so
+# partial decoding still works, but the packet-header tag trees leave their
+# loop only on a 1 bit: on the padding, j2k_precinct_subband::parse_packet_header
+# spun forever in the zero-bitplane loop (current_value counting up with nothing
+# to stop it) and the decoder never returned -- a hang inside the library, on
+# the caller's thread.  The reader now records that it went past the end
+# (buf_chain::is_past_end) and the parser stops there, dropping the code-blocks
+# whose signalling is missing so the tile decodes from the packets that did
+# arrive.
+#
+# The fixture is the first 152 bytes of conformance_data/ds0_ht_09_b11.j2k --
+# a cut that lands inside the first packet header.  Any such cut reproduces it;
+# this is just the shortest.  Packet-header parsing is platform-independent
+# scalar code (no entropy decoding), so the test is not arch-gated, and the
+# parse runs on the calling thread either way -- the threaded run additionally
+# covers the strip-pull path decoding a tile with dropped code-blocks.  The
+# patched decoder prints the truncation warning and exits cleanly; a reverted
+# fix never prints it and is caught by TIMEOUT.
+add_test(NAME security_truncated_packet_header
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_truncated_packet_header.j2k
+                 -o security_truncated_packet_header.pgx
+                 -num_threads 1)
+set_tests_properties(security_truncated_packet_header PROPERTIES
+    PASS_REGULAR_EXPRESSION "ends inside a packet header"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)
+
+add_test(NAME security_truncated_packet_header_mt
+         COMMAND open_htj2k_dec
+                 -i ${SECURITY_DATA_DIR}/security_truncated_packet_header.j2k
+                 -o security_truncated_packet_header_mt.pgx
+                 -num_threads 4)
+set_tests_properties(security_truncated_packet_header_mt PROPERTIES
+    PASS_REGULAR_EXPRESSION "ends inside a packet header"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)

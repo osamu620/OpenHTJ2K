@@ -154,6 +154,12 @@ class buf_chain {
   uint8_t tmp_byte  = 0;
   uint8_t last_byte = 0;
   uint8_t bits      = 0;
+  // Sticky: set the first time a read has to pad past the last byte of the
+  // last node (a truncated codestream).  get_byte() keeps returning 0x00 so
+  // partial decoding still works, but a reader that needs a 1 bit to stop
+  // (the packet-header tag trees) must be able to tell padding from data --
+  // otherwise it spins forever.  Cleared by activate()/reset().
+  bool past_end = false;
 
  public:
   buf_chain() = default;
@@ -177,7 +183,8 @@ class buf_chain {
         current_length(0),
         tmp_byte(0),
         last_byte(0),
-        bits(0) {
+        bits(0),
+        past_end(false) {
     for (uint32_t i = 0; i < num; ++i) {
       node_buf.push_back(nullptr);
       node_length.push_back(0);
@@ -195,6 +202,7 @@ class buf_chain {
       this->tmp_byte       = bc.tmp_byte;
       this->last_byte      = bc.last_byte;
       this->bits           = bc.bits;
+      this->past_end       = bc.past_end;
       this->node_buf.reserve(bc.node_buf.size());
       for (size_t i = 0; i < bc.node_buf.size(); ++i) {
         this->node_buf.push_back(bc.node_buf[i]);
@@ -215,6 +223,7 @@ class buf_chain {
     tmp_byte       = 0;
     last_byte      = 0;
     bits           = 0;
+    past_end       = false;
     node_buf.resize(num);
     node_length.resize(num);
     for (uint32_t i = 0; i < num; ++i) {
@@ -255,10 +264,12 @@ class buf_chain {
   // re-reads packet headers from a stale bit position (the PPM/PPT packet_header
   // buf_chains are only positioned via activate(), and the PPT one is built with
   // the default ctor, so its bit state would otherwise be uninitialized).
+  // Also clears the past-the-end flag, since the new position is in range.
   void reset_bit_state() {
     tmp_byte  = 0;
     last_byte = 0;
     bits      = 0;
+    past_end  = false;
   }
   void flush_bits() { bits = 0; }
   void check_last_FF() {
@@ -290,10 +301,19 @@ class buf_chain {
     return (pos < current_length) ? (current_length - static_cast<uint32_t>(pos)) : 0;
   }
 
+  // True once a read has run off the end of the last node, i.e. the padding
+  // below has been handed out at least once.  Readers whose loop terminates
+  // only on a set bit must consult this: the padding is all zeros, so such a
+  // loop never ends on a truncated codestream.
+  OPENHTJ2K_NODISCARD bool is_past_end() const { return past_end; }
+
   uint8_t get_byte() {
-    if (pos > current_length - 1) {
+    // `pos >= current_length` rather than `pos > current_length - 1`: the
+    // latter wraps for a zero-length node and reads past its buffer.
+    if (pos >= current_length) {
       if (node_pos + 1 >= num_nodes) {
         // Truncated codestream: return 0x00 as safe padding.
+        past_end = true;
         return 0;
       }
       node_pos++;
@@ -305,10 +325,11 @@ class buf_chain {
   }
 
   OPENHTJ2K_MAYBE_UNUSED uint8_t *get_current_address() {
-    if (pos > current_length - 1) {
+    if (pos >= current_length) {
       if (node_pos + 1 >= num_nodes) {
         // Truncated codestream: return pointer to zero byte (safe read-only sentinel).
         static const uint8_t zero = 0;
+        past_end                  = true;
         return const_cast<uint8_t *>(&zero);
       }
       node_pos++;

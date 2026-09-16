@@ -48,6 +48,15 @@ namespace {
 
 // Maximum number of coding passes for j2k_codeblock::pass_length[] array
 constexpr uint8_t kMaxCodingPasses = 128;
+// Upper bound on Lblock, the number of bits used to signal a code-block
+// segment length.  A segment length never needs more than 32 bits.
+constexpr uint8_t kMaxLblock = 32;
+
+// Reported once per tile: parse_packet_header stops at the first code-block
+// whose signalling is missing, and every later call returns before reading.
+void warn_truncated_packet_header() {
+  printf("WARNING: codestream ends inside a packet header — decoding the partial data.\n");
+}
 
 // RAII guard for placement-new array construction loops.
 //
@@ -1470,6 +1479,21 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
       printf("WARNING: codeblock layer length %u exceeds %u byte(s) left in tile-part — malformed input.\n",
              (unsigned)layer_length, (unsigned)avail);
       layer_length = avail;
+      if (layer_length == 0) {
+        // Not one byte of this layer is present (a codestream truncated inside
+        // the tile body).  Roll the layer back to "no contribution" rather than
+        // keep passes with no data: the block decoders reject a code-block whose
+        // passes are all empty, which would fail the whole tile instead of
+        // dropping this one block.  layer_start[] holds the pass count before
+        // this layer, so it is the state to restore.
+        const uint8_t passes_before = this->layer_start[layer];
+        for (uint8_t i = passes_before; i < this->pass_length_count; ++i) {
+          this->pass_length[i] = 0;
+        }
+        this->num_passes          = passes_before;
+        this->layer_passes[layer] = 0;
+        return;
+      }
     }
   }
 
@@ -1687,8 +1711,19 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
   std::vector<uint32_t> tree_path;
 
   for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
+    // The codestream ended inside this packet header: everything from here on
+    // would be read from buf_chain's zero padding, not from data.  Stop.  The
+    // remaining code-blocks keep their zeroed layer_passes[] and so contribute
+    // nothing to this layer -- the same state a packet that is missing
+    // altogether leaves behind, which the partial-decode path already handles.
+    if (packet_header->is_past_end()) {
+      return;
+    }
     j2k_codeblock *block  = this->access_codeblock(idx);
     uint8_t cumsum_layers = 0;
+    // Saved so a header that ends part-way through this code-block's signalling
+    // can put it back the way it was.
+    const bool was_already_included = block->already_included;
     for (uint32_t i = 0; i < block->num_layers; ++i) {
       cumsum_layers = static_cast<uint8_t>(cumsum_layers + block->layer_passes[i]);
     }
@@ -1808,6 +1843,14 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
               }
             }
             while (current_node->get_state() == 0) {
+              // This loop leaves only on a 1 bit, so the zero padding of a
+              // truncated codestream would spin it forever (issue #462).
+              if (packet_header->is_past_end()) {
+                warn_truncated_packet_header();
+                block->already_included        = was_already_included;
+                block->layer_passes[layer_idx] = 0;
+                return;
+              }
               bit = packet_header->get_bit();
               if (bit == 0) {
                 current_node->set_current_value(
@@ -1851,8 +1894,25 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         }
       }
       block->layer_passes[layer_idx] = static_cast<uint8_t>(new_passes);
+      // The pass count above came out of the padding rather than the
+      // codestream: drop the contribution instead of registering a pass whose
+      // body bytes do not exist.  num_passes is only updated further below, so
+      // clearing this layer is enough to undo the parse.
+      if (packet_header->is_past_end()) {
+        warn_truncated_packet_header();
+        block->already_included        = was_already_included;
+        block->layer_passes[layer_idx] = 0;
+        return;
+      }
       // Retrieve Lblock
       while ((bit = packet_header->get_bit()) == 1) {
+        // Lblock counts the bits used to signal a segment length; a segment
+        // length is at most 32 bits, so a longer run of 1s is malformed (and
+        // would wrap this uint8_t counter).
+        if (block->Lblock >= kMaxLblock) {
+          printf("ERROR: Lblock exceeds %u bits — malformed packet header.\n", (unsigned)kMaxLblock);
+          throw std::exception();
+        }
         block->Lblock++;
       }
       uint8_t bypass_term_threshold = 0;
@@ -5409,7 +5469,10 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
                            bool skip_body) {
   OPENHTJ2K_MAYBE_UNUSED uint16_t Nsop = 0;
   uint16_t Lsop;
-  if (use_SOP) {
+  // On a truncated codestream the reader hands out zero padding, so the
+  // delimiters below are absent rather than wrong: reporting them as corrupt
+  // markers would turn a partial decode into a hard failure.
+  if (use_SOP && !this->tile_buf->is_past_end()) {
     uint16_t word = this->tile_buf->get_word();
     if (word != _SOP) {
       printf("ERROR: Expected SOP marker but %04X is found\n", word);
@@ -5426,7 +5489,7 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   uint8_t bit = this->packet_header->get_bit();
   if (bit == 0) {                       // if 0, empty packet
     this->packet_header->flush_bits();  // flushing remaining bits of packet header
-    if (use_EPH) {
+    if (use_EPH && !this->packet_header->is_past_end()) {
       uint16_t word = this->packet_header->get_word();
       if (word != _EPH) {
         printf("ERROR: Expected EPH marker but %04X is found\n", word);
@@ -5445,7 +5508,7 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   this->packet_header->check_last_FF();
   this->packet_header->flush_bits();
   // check EPH
-  if (use_EPH) {
+  if (use_EPH && !this->packet_header->is_past_end()) {
     uint16_t word = this->packet_header->get_word();
     if (word != _EPH) {
       printf("ERROR: Expected EPH marker but %04X is found\n", word);
