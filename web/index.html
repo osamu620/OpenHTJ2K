@@ -476,8 +476,10 @@
   <section class="prog-section">
     <h2 class="section-title">Progressive Resolution Decoding</h2>
     <p class="section-desc">
-      The same compressed stream decoded at multiple resolutions.
-      The client chooses how many bytes to load depending on the display size.
+      The same codestream decoded six times, discarding 0&ndash;5 DWT resolution levels.
+      Each discarded level halves the width and height and cuts block-decoding and inverse-DWT work
+      to roughly a quarter; the whole file is still downloaded and passed to every decode.
+      &ldquo;N/A&rdquo; means the codestream has fewer DWT levels than requested.
     </p>
     <div class="prog-scroll">
       <table class="prog-table">
