@@ -32,13 +32,22 @@ set(OPENHTJ2K_VERSION_PATCH ${CMAKE_MATCH_1})
 
 set(PROJECT_VERSION "${OPENHTJ2K_VERSION_MAJOR}.${OPENHTJ2K_VERSION_MINOR}.${OPENHTJ2K_VERSION_PATCH}")
 
-if(NOT MSVC)
-  include(GNUInstallDirs)
-  set(PKG_CONFIG_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
-  set(PKG_CONFIG_INCLUDEDIR "${CMAKE_INSTALL_PREFIX}/include/open_htj2k")
-  set(PKG_CONFIG_LIBS "-L${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/open_htj2k")
-  set(PKG_CONFIG_CFLAGS "-I${PKG_CONFIG_INCLUDEDIR}/interface")
-endif()
+# Standard install layout (lib/, lib64/, include/, bin/) on every platform; the
+# install() rules and the pkg-config file below rely on these variables.
+include(GNUInstallDirs)
+# pkg-config paths are written relative to ${prefix} so the installed tree can
+# be relocated (pkg-config --define-variable=prefix=...).  Absolute
+# CMAKE_INSTALL_<dir> values are used as given.
+foreach(_dir LIBDIR INCLUDEDIR)
+  if(IS_ABSOLUTE "${CMAKE_INSTALL_${_dir}}")
+    set(PKG_CONFIG_${_dir} "${CMAKE_INSTALL_${_dir}}")
+  else()
+    set(PKG_CONFIG_${_dir} "\${prefix}/${CMAKE_INSTALL_${_dir}}")
+  endif()
+endforeach()
+# Only needed when linking the static library (pkg-config --static).
+set(PKG_CONFIG_REQUIRES_PRIVATE "")
+set(PKG_CONFIG_LIBS_PRIVATE "")
 # Check C++ version supported by compiler
 include(CheckCXXCompilerFlag)
 if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
@@ -118,6 +127,7 @@ if (NOT EMSCRIPTEN)
     target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
     target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
     message(STATUS "OPENHTJ2K_THREAD is set")
+    set(PKG_CONFIG_LIBS_PRIVATE "${CMAKE_THREAD_LIBS_INIT}")
   endif()
   # Check TIFF support
   if (TIFF_FOUND)
@@ -128,7 +138,9 @@ if (NOT EMSCRIPTEN)
     target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
     target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
     message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
-    set(PKG_CONFIG_REQUIRES "libtiff")
+    # libtiff's pkg-config module is "libtiff-4".  The public headers only use
+    # TIFF behind OPENHTJ2K_TIFF_SUPPORT, so it matters for static linking only.
+    set(PKG_CONFIG_REQUIRES_PRIVATE "libtiff-4")
   endif()
   # JPIP TCP socket wrapper (source/core/jpip/tcp_socket.cpp) uses Winsock2.
   if(WIN32)
@@ -242,6 +254,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/source/pkg-config.pc.cmake"
   "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
+  @ONLY
 )
 
 if (NOT EMSCRIPTEN)
@@ -490,16 +503,24 @@ endif()
 # Install
 ################################################################################################
 install(TARGETS open_htj2k_dec
-  DESTINATION bin)
+  DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(TARGETS open_htj2k_enc
-  DESTINATION bin)
-install(TARGETS open_htj2k LIBRARY
-  DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS open_htj2k
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-install (DIRECTORY source/core/interface
-  DESTINATION include/open_htj2k
+# Public headers.  Consumers add <prefix>/include/open_htj2k/interface to their
+# include path (see the pkg-config Cflags), so every header the public API
+# includes must be installed there — tests/install_check.cmake builds a
+# program against the installed tree to keep it that way.
+install(DIRECTORY source/core/interface
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/open_htj2k
   FILES_MATCHING
   PATTERN "*.hpp")
+install(FILES source/core/common/planar_output_desc.hpp  # used by decoder.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/open_htj2k/interface)
 
 install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
@@ -524,6 +545,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/col_range_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/concurrency.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 
 # Auto-attach the cleanup fixture to every test added by the includes above.
 # Skip cleanup_artifacts itself (it IS the fixture), and skip tests that

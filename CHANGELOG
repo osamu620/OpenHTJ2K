@@ -61,6 +61,20 @@
   thread now gets its own allocator (or plain `malloc` when none is
   free). Output for a single instance is unchanged. A concurrency
   regression test (`concurrent_instances`) is added.
+- The installed package could not be used by other projects:
+  `decoder.hpp` includes `planar_output_desc.hpp`, which was not
+  installed, and `open_htj2k.pc` had no `-lopenhtj2k`, pointed `-L` at a
+  non-existent `lib/open_htj2k` directory and required a `libtiff`
+  module that does not exist under that name (libtiff's module is
+  `libtiff-4`), so `pkg-config --cflags --libs open_htj2k` failed outright
+  on systems with TIFF support. The header is now installed with the
+  others, and the `.pc` file is relocatable (paths relative to `prefix=`),
+  links the library, and lists libtiff and the thread library as private
+  dependencies for static linking. `GNUInstallDirs` is now included on
+  every platform (MSVC builds left the `CMAKE_INSTALL_LIBDIR` used by the
+  install rules undefined), and the library's archive/runtime destinations
+  are explicit. A new `install_consumer` test installs the build and compiles
+  and runs a program against it using only the installed files.
 
 # [0.19.0] - 2026-05-30
 
