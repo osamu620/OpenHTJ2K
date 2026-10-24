@@ -50,7 +50,7 @@ cmake --build ${BUILD_DIR} --config Release -j
 ```
 
 Executables are placed in `${BUILD_DIR}/bin`. The shared library is
-`libopen_htj2k.so` / `libopen_htj2k.dylib` / `open_htj2k.dll` depending
+`libopenhtj2k.so` / `libopenhtj2k.dylib` / `openhtj2k.dll` depending
 on platform.
 
 ### Common CMake flags
@@ -72,6 +72,32 @@ on platform.
   for other versions.
 - `-G "Ninja"` is the fastest generator on Linux/macOS if Ninja is
   installed.
+
+### Installing and using the library
+
+```bash
+cmake --install ${BUILD_DIR} --prefix /usr/local
+```
+
+| Installed | Location |
+|---|---|
+| `open_htj2k_dec`, `open_htj2k_enc` | `<prefix>/bin` |
+| `libopenhtj2k` (`.so` / `.dylib` / `.a`; on Windows the `.dll` goes to `bin` and the import library to `lib`) | `<prefix>/lib` (or `lib64`, following `GNUInstallDirs`) |
+| Public headers `decoder.hpp`, `encoder.hpp`, `planar_output_desc.hpp` | `<prefix>/include/open_htj2k/interface` |
+| `open_htj2k.pc` | `<prefix>/lib/pkgconfig` |
+
+To build another program against the installed library:
+
+```bash
+c++ my_app.cpp $(pkg-config --cflags --libs open_htj2k) -o my_app
+# static library: pkg-config --static --cflags --libs open_htj2k
+```
+
+and include the API as `#include "decoder.hpp"` / `#include "encoder.hpp"`.
+The paths in `open_htj2k.pc` are relative to its `prefix=` line, so a
+relocated install only needs that line changed. `ctest -R install_consumer`
+installs the build into a scratch prefix and builds and runs a small program
+this way.
 
 ## Building for WebAssembly (WASM)
 
