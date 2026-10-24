@@ -159,6 +159,44 @@ jobs:
           fi
           echo "no UBSan reports"
 
+  portable-x86:
+    # Distributable x86-64 builds (no -march=native).  Besides running the
+    # tests, check that the library has no instructions above the requested
+    # level, so it runs on any CPU of that level.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target_cpu: [x86-64-v3, generic]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_TARGET_CPU=${{ matrix.target_cpu }}
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Check instruction set
+        shell: bash
+        run: |
+          lib=$(ls build/bin/libopenhtj2k.so.*.*.* | head -1)
+          objdump -d --no-show-raw-insn "$lib" > disasm.txt
+          if [ "${{ matrix.target_cpu }}" = generic ]; then
+            # any VEX/EVEX-encoded instruction (AVX and up)
+            pattern='^\s+[0-9a-f]+:\s+v[a-z0-9]+'
+          else
+            # AVX-512: zmm, mask and upper-16 vector registers, EVEX-only ops
+            pattern='%zmm|%k[0-7]|%[xy]mm(1[6-9]|2[0-9]|3[01])\b|vpternlog|vpermt2|vpermi2|vpcompress|vpexpand'
+          fi
+          n=$(grep -cE "$pattern" disasm.txt || true)
+          echo "instructions above ${{ matrix.target_cpu }} in $lib: $n"
+          test "$n" -eq 0
+
+      - name: Test
+        working-directory: build
+        run: ctest -j$(nproc) --output-on-failure
+
   wasm:
     runs-on: ubuntu-latest
     steps:

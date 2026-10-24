@@ -38,6 +38,26 @@
   30-iteration mean): lossy decode another ~4% faster on top of the AVX2
   planar gain; lossless unchanged.
 
+## Build
+
+- New `OPENHTJ2K_TARGET_CPU` CMake option for x86-64: `native` (default,
+  `-march=native`, unchanged behaviour), `x86-64-v3` (runs on any AVX2
+  CPU), `x86-64-v4` (any AVX-512 CPU) or `generic` (any x86-64 CPU). Until
+  now every GCC/Clang x86-64 build used `-march=native`, so packages and
+  copied binaries could crash with an illegal instruction on other CPUs.
+  On a Ryzen 9 9950X, `x86-64-v3` costs 1–12% on decode and 5–20% on
+  encode compared with `native`; see `docs/building.md`.
+- `-DENABLE_AVX2=OFF` now builds without any AVX2 code. It used to keep
+  `-march=native` (GCC/Clang) or `/arch:AVX2` (MSVC), so the code paths that
+  test `__AVX2__` directly, and the compiler's own vectorization, still
+  produced AVX2 (and, on AVX-512 hosts, AVX-512) instructions.
+- The SIMD flags are chosen from the target processor
+  (`CMAKE_SYSTEM_PROCESSOR`) instead of the build host, so cross builds no
+  longer get the host's flags (for example x86 `-march=native` when
+  building for arm64 on an x86 machine).
+- CI builds and tests the `x86-64-v3` and `generic` targets and checks that
+  their library contains no instructions above that level.
+
 ## Fixed
 
 - The HT SigProp bit reader rejected valid codestreams whose refinement

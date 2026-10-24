@@ -72,7 +72,7 @@ else()
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
 
-message(STATUS "${CMAKE_HOST_SYSTEM_PROCESSOR} ${CMAKE_CXX_COMPILER_ID}")
+message(STATUS "${CMAKE_SYSTEM_PROCESSOR} ${CMAKE_CXX_COMPILER_ID}")
 
 # Default BUILD_TYPE is "Release"
 if(NOT CMAKE_BUILD_TYPE)
@@ -212,17 +212,63 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Intel$") # Intel Compiler Classic
 endif()
 
 if(NOT EMSCRIPTEN)
-  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
+  # SIMD code paths are selected at compile time from the compiler's target
+  # macros (__AVX2__, __AVX512F__, ...), so the flags below decide which CPUs
+  # the resulting binaries run on.  Match on the target processor, not the
+  # build host, so cross builds get the right flags.
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
     option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-      set(CMAKE_CXX_FLAGS
-          "${CMAKE_CXX_FLAGS} /arch:AVX2 /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM|Intel")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mtune=native")
+    set(OPENHTJ2K_TARGET_CPU "native" CACHE STRING
+        "x86-64 code generation: native (build machine; binaries may not run elsewhere), x86-64-v3 (any AVX2 CPU), x86-64-v4 (any AVX-512 CPU), generic (no AVX2)")
+    set_property(CACHE OPENHTJ2K_TARGET_CPU PROPERTY STRINGS native x86-64-v3 x86-64-v4 generic)
+    if(NOT OPENHTJ2K_TARGET_CPU MATCHES "^(native|x86-64-v3|x86-64-v4|generic)$")
+      message(FATAL_ERROR
+              "OPENHTJ2K_TARGET_CPU must be native, x86-64-v3, x86-64-v4 or generic (got '${OPENHTJ2K_TARGET_CPU}')")
     endif()
+    set(_ohtj2k_cpu "${OPENHTJ2K_TARGET_CPU}")
+    if(NOT ENABLE_AVX2)
+      # ENABLE_AVX2=OFF means no AVX2 (or wider) code at all, not just no
+      # hand-written AVX2 kernels: -march=native would still let __AVX2__ code
+      # and compiler auto-vectorization in.
+      set(_ohtj2k_cpu "generic")
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc /D \"_CRT_SECURE_NO_WARNINGS\"")
+      # MSVC has no "native"; AVX2 is its closest equivalent.
+      if(_ohtj2k_cpu STREQUAL "x86-64-v4")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX512")
+      elseif(NOT _ohtj2k_cpu STREQUAL "generic")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
+      endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM|Intel")
+      if(_ohtj2k_cpu STREQUAL "native")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mtune=native")
+      elseif(_ohtj2k_cpu STREQUAL "generic")
+        # Spell out the baseline: a compiler's default target can be higher
+        # (the GCC 15 on the Ubuntu 26.04 CI runners emits AVX code without
+        # -march).
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=x86-64 -mtune=generic")
+      else()
+        # Microarchitecture levels need GCC 11 / Clang 12; spell the feature
+        # set out for older compilers.
+        string(REPLACE "-" "_" _ohtj2k_level_var "OPENHTJ2K_CXX_HAS_MARCH_${_ohtj2k_cpu}")
+        check_cxx_compiler_flag("-march=${_ohtj2k_cpu}" ${_ohtj2k_level_var})
+        if(${_ohtj2k_level_var})
+          set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=${_ohtj2k_cpu}")
+        else()
+          set(_ohtj2k_isa "-mavx2 -mfma -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mmovbe")
+          if(_ohtj2k_cpu STREQUAL "x86-64-v4")
+            string(APPEND _ohtj2k_isa " -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl")
+          endif()
+          set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${_ohtj2k_isa}")
+        endif()
+      endif()
+    endif()
+    message(STATUS "x86-64 target CPU: ${_ohtj2k_cpu}")
   endif()
 
-  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]64$") # aarch64
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]64$") # aarch64
     option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics" ON)
     if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
       set(CMAKE_CXX_FLAGS
