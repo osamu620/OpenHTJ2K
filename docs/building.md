@@ -60,9 +60,38 @@ on platform.
 | `-DCMAKE_BUILD_TYPE=<Release\|Debug\|RelWithDebInfo>` | (none) | Optimization and debug info level. `RelWithDebInfo` is the recommended mode for profiling. |
 | `-DOPENHTJ2K_RTP=ON` | `OFF` | Build the experimental RFC 9828 RTP receiver (see below). Adds a GLFW dependency on every platform; uses native Metal on macOS and OpenGL 3.3 elsewhere. Also gates `open_htj2k_jpip_demo`. |
 | `-DOPENHTJ2K_QUIC=ON` | `OFF` | Enable HTTP/3 over QUIC for the JPIP server and demo. Requires MsQuic + nghttp3; see [JPIP HTTP/3 prerequisites](#jpip-http3-prerequisites-opt-in) below. |
-| `-DENABLE_AVX2=OFF` | auto | Force-disable AVX2 dispatch. Auto-detected via `-march=native` on x86-64. |
+| `-DOPENHTJ2K_TARGET_CPU=<native\|x86-64-v3\|x86-64-v4\|generic>` | `native` | x86-64 code generation target; see [Portable x86-64 builds](#portable-x86-64-builds). |
+| `-DENABLE_AVX2=OFF` | `ON` | Build x86-64 code without any AVX2 (or wider) instructions; same as `-DOPENHTJ2K_TARGET_CPU=generic`. |
 | `-DENABLE_ARM_NEON=OFF` | auto | Force-disable NEON dispatch on AArch64. |
 | `-DBUILD_SHARED_LIBS=OFF` | `ON` | Build a static library instead of a shared one. |
+
+### Portable x86-64 builds
+
+SIMD code paths are chosen at compile time, so the x86-64 target decides
+which CPUs the binaries run on. The default, `native`, compiles with
+`-march=native`: the fastest code for the build machine, but binaries can
+stop with an illegal-instruction error on other CPUs. Use one of the other
+targets for packages, containers, CI artifacts or anything copied to
+another machine:
+
+| `OPENHTJ2K_TARGET_CPU` | Runs on | GCC/Clang flags | MSVC |
+|---|---|---|---|
+| `native` (default) | the build machine (and identical CPUs) | `-march=native -mtune=native` | `/arch:AVX2` |
+| `x86-64-v3` | any CPU with AVX2 (Intel Haswell, AMD Zen and newer) | `-march=x86-64-v3` | `/arch:AVX2` |
+| `x86-64-v4` | any CPU with AVX-512 (F/BW/CD/DQ/VL) | `-march=x86-64-v4` | `/arch:AVX512` |
+| `generic` | any x86-64 CPU (no AVX2; scalar code paths) | `-march=x86-64 -mtune=generic` | none |
+
+Compilers without `-march=x86-64-v3`/`-v4` (GCC < 11, Clang < 12) get the
+equivalent `-mavx2 -mfma -mbmi ...` feature flags instead.
+
+Cost of portability, measured on a Ryzen 9 9950X (AVX-512 capable;
+3968×2160 4:4:4 image, best of 5, relative to `native`):
+
+| Target | Decode, 1 / 8 threads | Encode (`Qfactor=90`), 1 / 8 threads |
+|---|---|---|
+| `x86-64-v4` | 1.00× / 1.05× | 1.00× / 1.00× |
+| `x86-64-v3` | 1.01× / 1.12× | 1.20× / 1.05× |
+| `generic` | 1.52× / 1.54× | 2.53× / 1.87× |
 
 ### Generator notes
 
