@@ -333,6 +333,13 @@ target_link_libraries(codestream_bounds_check PUBLIC open_htj2k)
 add_executable(visual_weight_check)
 add_subdirectory(tests/tools/visual_weight_check)
 
+# encode_entry_points: buffered vs streaming encoder API over a matrix of
+# component counts / MCT / transforms / DWT levels / bit depths
+add_executable(encode_entry_points)
+add_subdirectory(tests/tools/encode_entry_points)
+target_include_directories(encode_entry_points PUBLIC source/core/interface)
+target_link_libraries(encode_entry_points PUBLIC open_htj2k)
+
 # region_decode_bench: M1 region-decode latency/throughput benchmark (OSD eval)
 add_executable(region_decode_bench)
 add_subdirectory(tests/tools/region_decode_bench)

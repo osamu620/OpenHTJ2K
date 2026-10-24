@@ -228,3 +228,9 @@ set_tests_properties(
   enc_qf_422_legacy   qfest_422_legacy
   enc_qf_422_ctype    qfest_422_ctype
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
+
+# Library-API encodes: the buffered entry point (invoke_line_based), which the
+# CLI never uses, must accept every image the streaming one does and produce
+# the same codestream.  It used to crash for any component encoded without the
+# MCT (grayscale, MCT off, or more than three components).
+add_test(NAME enc_entry_points COMMAND encode_entry_points)

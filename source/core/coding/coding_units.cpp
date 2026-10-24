@@ -6932,7 +6932,13 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   // create tile components
   this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
 
-  const bool lb_enc = line_based && (streaming || !(MCT && num_components >= 3));
+  // Line-based (LB) encode mode reads rows straight from the caller's input and
+  // leaves every subband i_samples buffer above LL0 unallocated, so it is only
+  // valid for the streaming encoder, whose sink_quantize path writes FDWT
+  // output directly into the code-block buffers.  The buffered encoder
+  // (encode_line_based) still writes HL/LH/HH rows into i_samples, so it keeps
+  // the regular allocation for every component, with or without the MCT.
+  const bool lb_enc = line_based && streaming;
 
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img, lb_enc);

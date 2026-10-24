@@ -75,6 +75,18 @@
   install rules undefined), and the library's archive/runtime destinations
   are explicit. A new `install_consumer` test installs the build and compiles
   and runs a program against it using only the installed files.
+- The buffered encoder entry point, `openhtj2k_encoder::invoke_line_based()`,
+  crashed (null-pointer write) for every component encoded without the
+  MCT: grayscale images, colour images with `use_color_trafo = 0`, and
+  any component beyond the third, at any image size and DWT level. Such
+  components were put in the streaming encoder's direct-read mode, which
+  has not allocated subband buffers since the streaming RSS reduction, but
+  the buffered encoder still writes into them. The direct-read mode is now
+  used by the streaming entry point only. The command-line encoder (which
+  always streams) and MCT encodes are unchanged. A new test
+  (`enc_entry_points`) encodes 180 combinations of component count, MCT,
+  transform, DWT levels, bit depth and image size through both entry
+  points and requires byte-identical codestreams.
 
 # [0.19.0] - 2026-05-30
 
