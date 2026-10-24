@@ -527,6 +527,10 @@ int image::read_tiff(const std::string &filename) {
 // openhtj2k_encoder_impl shall not be public
 class openhtj2k_encoder_impl {
  private:
+#ifdef OPENHTJ2K_THREAD
+  // First member: keeps the shared pool alive until everything below is gone.
+  ThreadPoolLease pool_lease_;
+#endif
   std::string outfile;
   const std::vector<int32_t *> *buf;
   std::vector<uint8_t> *outbuf;
@@ -997,11 +1001,13 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
       throw std::exception();
     }
   }
+  // The impl takes a pool reference on construction, so create it before
+  // asking for the pool.
+  this->impl =
+      MAKE_UNIQUE<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor, isJPH, color_space);
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
-  this->impl =
-      MAKE_UNIQUE<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor, isJPH, color_space);
 }
 
 void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
@@ -1027,9 +1033,6 @@ size_t openhtj2k_encoder::invoke_line_based_stream(
   return this->impl->invoke_line_based_stream(src_fn);
 }
 
-openhtj2k_encoder::~openhtj2k_encoder() {
-#ifdef OPENHTJ2K_THREAD
-  ThreadPool::release();
-#endif
-}
+// The pool reference is dropped by the impl's ThreadPoolLease.
+openhtj2k_encoder::~openhtj2k_encoder() = default;
 }  // namespace open_htj2k

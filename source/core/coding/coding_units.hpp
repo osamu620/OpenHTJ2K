@@ -745,7 +745,7 @@ class j2k_tile : public j2k_tile_base {
   // Bump-allocator pool for HTJ2K encode compressed bitstreams (one pool per thread).
   struct EncodePoolCtx {
     std::vector<std::unique_ptr<cblk_data_pool>> pools;
-    uint32_t gen = 0;
+    uint64_t gen = 0;  // process-wide unique per tile encode (see claim_cblk_pool)
     std::atomic<int> slot_cnt{0};
     // Per-encode tile-wide in-flight cblk counter; set by encode_line_based_stream
     // at the start of an encode and consulted by its end-of-encode barrier wait.
