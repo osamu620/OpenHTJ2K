@@ -266,6 +266,24 @@ class ThreadPool {
     return true;
   }
 
+  // ── Pool lifetime ──────────────────────────────────────────────────────────
+  // The pool is process-wide and shared by every decoder and encoder in the
+  // process.  Each of them holds one reference for its whole lifetime
+  // (retain() when constructed, release() when destroyed; see
+  // ThreadPoolLease).  instance() creates the pool on the first request for
+  // more than one thread, and the pool is destroyed when the last reference
+  // is dropped.  A caller holding a reference can therefore keep using get()
+  // while other instances in other threads come and go.
+  //
+  // The thread count is set by whichever instance() call creates the pool;
+  // while any reference is held, later calls reuse that pool unchanged.
+  static void retain() {
+    std::lock_guard<std::mutex> lock(singleton_mutex);
+    ++users_;
+  }
+
+  // Creates the pool if it does not exist yet.  The caller must hold a
+  // reference (retain()), otherwise the pool may be destroyed under it.
   static ThreadPool* instance(size_t numthreads) {
     // Fast path: pool already created.
     auto *p = singleton_.load(std::memory_order_acquire);
@@ -283,10 +301,19 @@ class ThreadPool {
     return singleton_.load(std::memory_order_relaxed);
   }
 
+  // Drops one reference; destroys the pool when it was the last one.
   static void release() {
-    std::unique_lock<std::mutex> lock(singleton_mutex);
-    delete singleton_.load(std::memory_order_relaxed);
-    singleton_.store(nullptr, std::memory_order_release);
+    ThreadPool *dead = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(singleton_mutex);
+      if (users_ == 0) return;  // unbalanced release: nothing to drop
+      if (--users_ != 0) return;
+      dead = singleton_.load(std::memory_order_relaxed);
+      singleton_.store(nullptr, std::memory_order_release);
+    }
+    // Join the workers outside the lock so a new instance() elsewhere is not
+    // blocked behind the shutdown of the old pool.
+    delete dead;
   }
 
  private:
@@ -411,6 +438,22 @@ class ThreadPool {
    * @brief A mutex to synchronize access to the instance.
    */
   static std::mutex singleton_mutex;
+
+  /**
+   * @brief Number of live references (see retain()); guarded by singleton_mutex.
+   */
+  static size_t users_;
+};
+
+// Holds one pool reference for the lifetime of the owning object.  Declare it
+// as the first data member so it is released after every other member (and
+// any pool work those members wait for) has been torn down.
+class ThreadPoolLease {
+ public:
+  ThreadPoolLease() { ThreadPool::retain(); }
+  ~ThreadPoolLease() { ThreadPool::release(); }
+  ThreadPoolLease(const ThreadPoolLease &)            = delete;
+  ThreadPoolLease &operator=(const ThreadPoolLease &) = delete;
 };
 
 #endif

@@ -57,6 +57,10 @@
 namespace open_htj2k {
 class openhtj2k_decoder_impl {
  private:
+#ifdef OPENHTJ2K_THREAD
+  // First member: keeps the shared pool alive until everything below is gone.
+  ThreadPoolLease pool_lease_;
+#endif
   j2c_src_memory in;
   uint8_t reduce_NL;
   uint32_t row_lo_    = 0;
@@ -363,11 +367,8 @@ uint8_t openhtj2k_decoder_impl::get_max_safe_reduce_NL() {
 
 void openhtj2k_decoder_impl::destroy() {}
 
-openhtj2k_decoder_impl::~openhtj2k_decoder_impl() {
-#ifdef OPENHTJ2K_THREAD
-  ThreadPool::release();
-#endif
-}
+// The pool reference is dropped by pool_lease_, after the other members.
+openhtj2k_decoder_impl::~openhtj2k_decoder_impl() {}
 
 // public interface
 openhtj2k_decoder::openhtj2k_decoder() { this->impl = MAKE_UNIQUE<openhtj2k_decoder_impl>(); }

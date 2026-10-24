@@ -301,6 +301,15 @@ add_subdirectory(tests/tools/col_range_compare)
 target_include_directories(col_range_compare PUBLIC source/core/interface)
 target_link_libraries(col_range_compare PUBLIC open_htj2k)
 
+# concurrent_instances: many decoder/encoder instances running at once on the
+# shared worker pool (instance lifetime + per-thread encoder scratch)
+if(Threads_FOUND AND NOT EMSCRIPTEN)
+  add_executable(concurrent_instances)
+  add_subdirectory(tests/tools/concurrent_instances)
+  target_include_directories(concurrent_instances PUBLIC source/core/interface)
+  target_link_libraries(concurrent_instances PUBLIC open_htj2k PRIVATE Threads::Threads)
+endif()
+
 # codestream_bounds_check: unit test for j2c_src_memory's 4 GiB allocation bound
 add_executable(codestream_bounds_check)
 add_subdirectory(tests/tools/codestream_bounds_check)
@@ -514,6 +523,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/tests/col_range_validation.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/concurrency.cmake)
 
 # Auto-attach the cleanup fixture to every test added by the includes above.
 # Skip cleanup_artifacts itself (it IS the fixture), and skip tests that

@@ -1000,10 +1000,30 @@ static thread_local cblk_data_pool *g_cblk_pool = nullptr;
 namespace {
 struct TlPoolSlot {
   int slot     = -1;
-  uint32_t gen = ~uint32_t{0};
+  uint64_t gen = 0;  // 0 = no slot claimed yet; generations start at 1
 };
+// Source of tile-encode generations.  A generation has to be unique across
+// the whole process, not just within one EncodePoolCtx: the pool workers are
+// shared by every encoder (and by every tile of one encoder), so a slot a
+// worker cached is only valid for the exact tile encode that handed it out.
+std::atomic<uint64_t> g_enc_gen{0};
 }  // namespace
 static thread_local TlPoolSlot g_tl_pool_slot;
+
+// This thread's bump allocator for the current tile encode of `epc`, claiming
+// a slot on first use.  A thread that runs tasks for several concurrent
+// encodes can claim more slots than an encode has; it then gets nullptr and
+// the codeblock falls back to malloc() instead of sharing another thread's
+// allocator (cblk_data_pool is not thread-safe).
+static inline cblk_data_pool *claim_cblk_pool(j2k_tile::EncodePoolCtx *epc) {
+  TlPoolSlot &ts = g_tl_pool_slot;
+  if (ts.gen != epc->gen) {
+    ts.slot = epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
+    ts.gen  = epc->gen;
+  }
+  return (ts.slot < static_cast<int>(epc->pools.size())) ? epc->pools[static_cast<size_t>(ts.slot)].get()
+                                                         : nullptr;
+}
 #endif
 
 // Per-component scratch buffers for the streaming (overlap) encode path.
@@ -1186,6 +1206,7 @@ static fused_mct_finalize_func fused_mct_finalize[2]             = {fused_ycbcr_
   #include "ThreadPool.hpp"
 std::atomic<ThreadPool *> ThreadPool::singleton_{nullptr};
 std::mutex ThreadPool::singleton_mutex;
+size_t ThreadPool::users_ = 0;
 
 // Local "wait for N outstanding worker tasks" helper used by
 // j2k_tile::decode_line_based_stream to barrier the per-component
@@ -1243,13 +1264,7 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
           // counter is reached via epc->tile_remaining instead of being
           // captured directly — see EncodePoolCtx::tile_remaining.
           c->enc_pool->push([epc, block, ROIshift, slot_remaining]() {
-            TlPoolSlot &ts = g_tl_pool_slot;
-            if (ts.gen != epc->gen) {
-              const int slot = epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
-              ts.slot        = std::min(slot, static_cast<int>(epc->pools.size()) - 1);
-              ts.gen         = epc->gen;
-            }
-            g_cblk_pool = epc->pools[static_cast<size_t>(ts.slot)].get();
+            g_cblk_pool = claim_cblk_pool(epc);
             htj2k_encode(block, ROIshift);
             g_cblk_pool = nullptr;
             // Per-slot decrement: pairs with stamp_strip_pointers's
@@ -6982,7 +6997,9 @@ uint8_t *j2k_tile::encode_line_based() {
   if (!this->encode_pool_ctx) this->encode_pool_ctx = std::make_unique<EncodePoolCtx>();
   {
     auto *epc = this->encode_pool_ctx.get();
-    ++epc->gen;
+#ifdef OPENHTJ2K_THREAD
+    epc->gen = g_enc_gen.fetch_add(1, std::memory_order_relaxed) + 1;
+#endif
     epc->slot_cnt.store(0, std::memory_order_relaxed);
 #ifdef OPENHTJ2K_THREAD
     const int nslots = (pool ? static_cast<int>(pool->num_threads()) : 0) + 1;
@@ -7044,13 +7061,7 @@ uint8_t *j2k_tile::encode_line_based() {
             *ea      = {epc, block, ROIshift, &enc_remaining};
             enc_remaining.fetch_add(1, std::memory_order_relaxed);
             pool->push([ea]() {
-              TlPoolSlot &ts = g_tl_pool_slot;
-              if (ts.gen != ea->epc->gen) {
-                const int slot = ea->epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
-                ts.slot        = std::min(slot, static_cast<int>(ea->epc->pools.size()) - 1);
-                ts.gen         = ea->epc->gen;
-              }
-              g_cblk_pool = ea->epc->pools[static_cast<size_t>(ts.slot)].get();
+              g_cblk_pool = claim_cblk_pool(ea->epc);
               htj2k_encode(ea->block, ea->ROIshift);
               g_cblk_pool = nullptr;
               ea->remaining->fetch_sub(1, std::memory_order_release);
@@ -7235,7 +7246,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
   if (!this->encode_pool_ctx) this->encode_pool_ctx = std::make_unique<EncodePoolCtx>();
   {
     auto *epc = this->encode_pool_ctx.get();
-    ++epc->gen;
+#ifdef OPENHTJ2K_THREAD
+    epc->gen = g_enc_gen.fetch_add(1, std::memory_order_relaxed) + 1;
+#endif
     epc->slot_cnt.store(0, std::memory_order_relaxed);
 #ifdef OPENHTJ2K_THREAD
     const int nslots = (pool ? static_cast<int>(pool->num_threads()) : 0) + 1;
@@ -7297,13 +7310,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
             *ea      = {epc, block, ROIshift, &enc_remaining};
             enc_remaining.fetch_add(1, std::memory_order_relaxed);
             pool->push([ea]() {
-              TlPoolSlot &ts = g_tl_pool_slot;
-              if (ts.gen != ea->epc->gen) {
-                const int slot = ea->epc->slot_cnt.fetch_add(1, std::memory_order_relaxed);
-                ts.slot        = std::min(slot, static_cast<int>(ea->epc->pools.size()) - 1);
-                ts.gen         = ea->epc->gen;
-              }
-              g_cblk_pool = ea->epc->pools[static_cast<size_t>(ts.slot)].get();
+              g_cblk_pool = claim_cblk_pool(ea->epc);
               htj2k_encode(ea->block, ea->ROIshift);
               g_cblk_pool = nullptr;
               ea->remaining->fetch_sub(1, std::memory_order_release);
