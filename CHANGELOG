@@ -102,6 +102,12 @@
   instruction runs as BSR and returns wrong counts). A new CI job runs the
   test suite under UBSan, with and without the SIMD code paths, and fails on
   any report.
+- Built with GCC 15 (the default compiler on Ubuntu 26.04), the encoder
+  produced codestreams the decoder rejects on CPUs without AVX-512: the AVX2
+  HT block encoder read the lanes of a `__m256i` through an `int32_t`
+  pointer, which breaks strict aliasing, and GCC 15 used stale values. The
+  lanes are now stored to an `int32_t` array first. UBSan, ASan and valgrind
+  do not detect this kind of error.
 
 # [0.19.0] - 2026-05-30
 

@@ -564,11 +564,16 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
 
         // hMax + emb_pattern: per-quad (4 elements each), compute nq
         alignas(32) int32_t emax_q_arr[8], nq_arr[8], emb_arr[8];
+        // Read kappa through an int32_t array: reading the __m256i (a vector of
+        // 64-bit lanes) through an int32_t pointer breaks strict aliasing, and
+        // GCC 15 then used stale values, corrupting every AVX2 encode.
+        alignas(32) int32_t kappa_arr[8];
+        _mm256_store_si256(reinterpret_cast<__m256i *>(kappa_arr), kappa_v);
         for (int i = 0; i < 8; i++) {
           emax_q_arr[i] = hMax(E_a[q + i]);
           int32_t uoff_i = 0;
-          int32_t Uq_i = std::max(emax_q_arr[i], reinterpret_cast<const int32_t *>(&kappa_v)[i]);
-          int32_t uq_i = Uq_i - reinterpret_cast<const int32_t *>(&kappa_v)[i];
+          int32_t Uq_i   = std::max(emax_q_arr[i], kappa_arr[i]);
+          int32_t uq_i   = Uq_i - kappa_arr[i];
           if (uq_i > 0) uoff_i = 1;
           __m128i Et = _mm_set1_epi32(emax_q_arr[i]);
           __m128i vu = _mm_set1_epi32(uoff_i << 7);
