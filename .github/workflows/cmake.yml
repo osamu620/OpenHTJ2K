@@ -197,6 +197,32 @@ jobs:
         working-directory: build
         run: ctest -j$(nproc) --output-on-failure
 
+  cxx11:
+    # The library, tools and tests must build and pass as C++11 (see
+    # docs/building.md).  Clang reports C++14/17/20 features used in C++11
+    # mode as errors, and -Wover-aligned catches `new` of over-aligned types,
+    # which `new` aligns correctly only from C++17 on.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=11
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          "-DCMAKE_CXX_FLAGS=-Werror=c++14-extensions -Werror=c++17-extensions -Werror=c++20-extensions -Werror=over-aligned"
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        working-directory: build
+        run: ctest -j 4 --output-on-failure
+
   wasm:
     runs-on: ubuntu-latest
     steps:

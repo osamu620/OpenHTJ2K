@@ -8,3 +8,5 @@ ColumnLimit: 108
 SortIncludes: Never
 BreakBeforeBinaryOperators: NonAssignment
 IndentPPDirectives: BeforeHash
+# Format the C++11-compatible `if constexpr` wrapper like an if statement.
+IfMacros: [OPENHTJ2K_IF_CONSTEXPR]

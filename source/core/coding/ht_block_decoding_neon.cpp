@@ -110,7 +110,7 @@ static FORCE_INLINE void dequant_store_neon(int32_t *dst, int32x4_t val, uint8_t
     int32x4_t shifted = vshlq_s32(mag, vdupq_n_s32(-pLSB_dq));
     uint32x4_t neg    = vreinterpretq_u32_s32(vshrq_n_s32(val, 31));
     int32x4_t res     = vbslq_s32(neg, vnegq_s32(shifted), shifted);
-    if constexpr (StoreI32)
+    OPENHTJ2K_IF_CONSTEXPR (StoreI32)
       vst1q_s32(dst, res);
     else
       vst1q_f32(reinterpret_cast<float *>(dst), vcvtq_f32_s32(res));
@@ -146,7 +146,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   float32x4_t vfscale_dq = vdupq_n_f32(0.0f);
   int32x4_t vmagmask_dq  = vdupq_n_s32(0);
   int32x4_t vsignmask_dq = vdupq_n_s32(0);
-  if constexpr (fuse_dequant) {
+  OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
     const int32_t M_b_val = block->get_Mb();
     pLSB_dq               = 31 - M_b_val;
     vmagmask_dq           = vdupq_n_s32(0x7FFFFFFF);
@@ -287,7 +287,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       int16x4_t hi      = vget_high_s16(row16);
       int16x4_t row0_16 = vuzp1_s16(lo, hi);
       int16x4_t row1_16 = vuzp2_s16(lo, hi);
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         dequant_store_neon<store_i32>(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
                                       vfscale_dq, vmagmask_dq, vsignmask_dq);
         dequant_store_neon<store_i32>(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
@@ -338,7 +338,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
       mu1    = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
       mu1    = vandq_u32(mu1, sig1);
 
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         dequant_store_neon<store_i32>(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq, vfscale_dq,
                                       vmagmask_dq, vsignmask_dq);
         dequant_store_neon<store_i32>(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq, vfscale_dq,
@@ -364,7 +364,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
   for (uint16_t row = 1; row < QH; row++) {
     rho_p = rholine + 1;
     E_p   = Eline + 1;
-    if constexpr (fuse_dequant) {
+    OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
       mp0 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U) * block->band_stride;
       mp1 = mp0 + block->band_stride;
     } else {
@@ -498,7 +498,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         int16x4_t hi           = vget_high_s16(row16);
         int16x4_t row0_16      = vuzp1_s16(lo, hi);
         int16x4_t row1_16      = vuzp2_s16(lo, hi);
-        if constexpr (fuse_dequant) {
+        OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
           dequant_store_neon<store_i32>(mp0, vshll_n_s16(row0_16, 16), block->transformation, pLSB_dq,
                                         vfscale_dq, vmagmask_dq, vsignmask_dq);
           dequant_store_neon<store_i32>(mp1, vshll_n_s16(row1_16, 16), block->transformation, pLSB_dq,
@@ -561,7 +561,7 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
         mu1    = vorrq_u32(mu1, vshlq_n_u32(v_n_1, 31));
         mu1    = vandq_u32(mu1, sig1);
 
-        if constexpr (fuse_dequant) {
+        OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
           dequant_store_neon<store_i32>(mp0, vuzp1q_s32(mu0, mu1), block->transformation, pLSB_dq,
                                         vfscale_dq, vmagmask_dq, vsignmask_dq);
           dequant_store_neon<store_i32>(mp1, vuzp2q_s32(mu0, mu1), block->transformation, pLSB_dq,
@@ -739,6 +739,62 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
+// Reversible-path dequantization: undo the ROI up-shift and the binary point,
+// restore the sign, and write each sample through the store callables (int32
+// for the integer 5/3 IDWT, float otherwise).  A function template rather than
+// a generic lambda so that the library builds as C++11.
+template <class SimdStore, class ScalarStore>
+static inline void rev_dequant_neon_impl(const j2k_codeblock *cb, uint8_t ROIshift, int32_t pLSB,
+                                         uint32_t mask, SimdStore simd_store, ScalarStore scalar_store) {
+  const auto vmask     = vdupq_n_s32(static_cast<int32_t>(~mask));
+  const auto vROIshift = vdupq_n_s32(ROIshift);
+  // vdst0, vdst1 cannot be auto for gcc
+  int32x4_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1, vpLSB;
+  vpLSB    = vdupq_n_s32(pLSB);
+  vmagmask = vdupq_n_s32(INT32_MAX);
+  for (size_t i = 0; i < static_cast<size_t>(cb->size.y); i++) {
+    int32_t *val = cb->sample_buf + i * cb->blksampl_stride;
+    sprec_t *dst = cb->band_buf + i * cb->band_stride;
+    size_t len   = cb->size.x;
+    for (; len >= 8; len -= 8) {
+      v0       = vld1q_s32(val);
+      v1       = vld1q_s32(val + 4);
+      s0       = vshrq_n_s32(v0, 31);
+      s1       = vshrq_n_s32(v1, 31);
+      v0       = vandq_s32(v0, vmagmask);
+      v1       = vandq_s32(v1, vmagmask);
+      vROImask = vandq_s32(v0, vmask);
+      vROImask = vceqzq_s32(vROImask);
+      vROImask = vandq_s32(vROImask, vROIshift);
+      v0       = vshlq_s32(v0, vsubq_s32(vROImask, vpLSB));
+      vROImask = vandq_s32(v1, vmask);
+      vROImask = vceqzq_s32(vROImask);
+      vROImask = vandq_s32(vROImask, vROIshift);
+      v1       = vshlq_s32(v1, vsubq_s32(vROImask, vpLSB));
+      vdst0    = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
+      vdst1    = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
+      simd_store(dst, vdst0, vdst1);
+      val += 8;
+      dst += 8;
+    }
+    for (; len > 0; --len) {
+      int32_t sign = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      *val >>= pLSB;
+      if (sign) {
+        *val = -(*val & INT32_MAX);
+      }
+      assert(pLSB >= 0);
+      scalar_store(dst, *val);
+      val++;
+      dst++;
+    }
+  }
+}
+
 void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   // number of decoded magnitude bit‐planes
   const int32_t pLSB = 31 - M_b;  // indicates binary point;
@@ -753,58 +809,17 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   vpLSB    = vdupq_n_s32(pLSB);
   vmagmask = vdupq_n_s32(INT32_MAX);
   if (this->transformation == 1) {
-    auto rev_dequant_neon = [&](auto simd_store, auto scalar_store) {
-      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-        int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->band_buf + i * this->band_stride;
-        size_t len   = this->size.x;
-        for (; len >= 8; len -= 8) {
-          v0       = vld1q_s32(val);
-          v1       = vld1q_s32(val + 4);
-          s0       = vshrq_n_s32(v0, 31);
-          s1       = vshrq_n_s32(v1, 31);
-          v0       = vandq_s32(v0, vmagmask);
-          v1       = vandq_s32(v1, vmagmask);
-          vROImask = vandq_s32(v0, vmask);
-          vROImask = vceqzq_s32(vROImask);
-          vROImask = vandq_s32(vROImask, vROIshift);
-          v0       = vshlq_s32(v0, vsubq_s32(vROImask, vpLSB));
-          vROImask = vandq_s32(v1, vmask);
-          vROImask = vceqzq_s32(vROImask);
-          vROImask = vandq_s32(vROImask, vROIshift);
-          v1       = vshlq_s32(v1, vsubq_s32(vROImask, vpLSB));
-          vdst0    = vbslq_s32(vreinterpretq_u32_s32(s0), vnegq_s32(v0), v0);
-          vdst1    = vbslq_s32(vreinterpretq_u32_s32(s1), vnegq_s32(v1), v1);
-          simd_store(dst, vdst0, vdst1);
-          val += 8;
-          dst += 8;
-        }
-        for (; len > 0; --len) {
-          int32_t sign = *val & INT32_MIN;
-          *val &= INT32_MAX;
-          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-            *val <<= ROIshift;
-          }
-          *val >>= pLSB;
-          if (sign) {
-            *val = -(*val & INT32_MAX);
-          }
-          assert(pLSB >= 0);
-          scalar_store(dst, *val);
-          val++;
-          dst++;
-        }
-      }
-    };
     if (this->dequant_i32) {
-      rev_dequant_neon(
+      rev_dequant_neon_impl(
+          this, ROIshift, pLSB, mask,
           [](sprec_t *d, int32x4_t a, int32x4_t b) {
             vst1q_s32(reinterpret_cast<int32_t *>(d), a);
             vst1q_s32(reinterpret_cast<int32_t *>(d + 4), b);
           },
           [](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
     } else {
-      rev_dequant_neon(
+      rev_dequant_neon_impl(
+          this, ROIshift, pLSB, mask,
           [](sprec_t *d, int32x4_t a, int32x4_t b) {
             vst1q_f32(d, vcvtq_f32_s32(a));
             vst1q_f32(d + 4, vcvtq_f32_s32(b));

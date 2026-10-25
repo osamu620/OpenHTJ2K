@@ -39,11 +39,11 @@
   #include <wasm_simd128.h>
 #endif
 // Forward declarations for static ATK filter functions defined later in this file.
-[[maybe_unused]] static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, int32_t left, int32_t u_i0,
-                                                         int32_t u_i1);
-[[maybe_unused]] static void idwt_irrev53_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1,
-                                                       int32_t v0, int32_t v1, int32_t stride,
-                                                       sprec_t *pse_scratch, sprec_t **buf_scratch);
+OPENHTJ2K_MAYBE_UNUSED static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, int32_t left, int32_t u_i0,
+                                                               int32_t u_i1);
+OPENHTJ2K_MAYBE_UNUSED static void idwt_irrev53_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1,
+                                                             int32_t v0, int32_t v1, int32_t stride,
+                                                             sprec_t *pse_scratch, sprec_t **buf_scratch);
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
 static idwt_1d_filtd_func_fixed idwt_1d_filtr_fixed[2] = {idwt_1d_filtr_irrev97_fixed_wasm,
                                                            idwt_1d_filtr_rev53_fixed_wasm};
@@ -215,8 +215,8 @@ void idwt_1d_filtr_rev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i
 // HP pass reads post-LP values there.  Same loop bounds as idwt_1d_filtr_rev53_fixed above
 // (LP runs stop+1-start times from offset, one lift landing on the even PSE position when the
 // edge sample is HP).
-[[maybe_unused]] static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, const int32_t left, const int32_t u_i0,
-                                                         const int32_t u_i1) {
+OPENHTJ2K_MAYBE_UNUSED static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, const int32_t left,
+                                                               const int32_t u_i0, const int32_t u_i1) {
   const int32_t start  = u_i0 / 2;
   const int32_t stop   = u_i1 / 2;
   const int32_t offset = left - u_i0 % 2;
@@ -1003,7 +1003,7 @@ void idwt_1d_row_inplace_range(sprec_t *row, const int32_t left, const int32_t r
 // LP/HP is `a`).  a_width/b_width may differ by one (odd row width).
 static void interleave_row_planes(sprec_t *out, const sprec_t *a_ptr, const sprec_t *b_ptr,
                                   const int32_t a_width, const int32_t b_width, const bool use_i32) {
-  [[maybe_unused]] const int32_t min_w = a_width < b_width ? a_width : b_width;
+  OPENHTJ2K_MAYBE_UNUSED const int32_t min_w = a_width < b_width ? a_width : b_width;
   int32_t i                            = 0;
 #if defined(OPENHTJ2K_ENABLE_AVX2)
   if (use_i32) {

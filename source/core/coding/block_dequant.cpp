@@ -63,7 +63,7 @@ static void j2k_dequant_rev_scalar(int32_t *sample_buf, size_t blksampl_stride,
       *val          = (*val ^ smask) - smask;
       assert(pLSB >= 0);
       int32_t QF32 = *val >> pLSB;
-      if constexpr (StoreI32)
+      OPENHTJ2K_IF_CONSTEXPR (StoreI32)
         *reinterpret_cast<int32_t *>(dst) = QF32;
       else
         *dst = static_cast<float>(QF32);

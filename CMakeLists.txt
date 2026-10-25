@@ -60,17 +60,19 @@ else()
   check_cxx_compiler_flag("-std=c++17" COMPILER_SUPPORTS_CXX17)
 endif()
 
-# Compiler settings
-if(COMPILER_SUPPORTS_CXX17)
-  set(CMAKE_CXX_STANDARD 17)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-elseif(COMPILER_SUPPORTS_CXX14)
-  set(CMAKE_CXX_STANDARD 14)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-else()
-  set(CMAKE_CXX_STANDARD 11)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Compiler settings: the newest of C++17 / 14 / 11 the compiler supports,
+# unless the standard is chosen with -DCMAKE_CXX_STANDARD=11|14|17|...
+if(NOT DEFINED CMAKE_CXX_STANDARD)
+  if(COMPILER_SUPPORTS_CXX17)
+    set(CMAKE_CXX_STANDARD 17)
+  elseif(COMPILER_SUPPORTS_CXX14)
+    set(CMAKE_CXX_STANDARD 14)
+  else()
+    set(CMAKE_CXX_STANDARD 11)
+  endif()
 endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 
 message(STATUS "${CMAKE_SYSTEM_PROCESSOR} ${CMAKE_CXX_COMPILER_ID}")
 

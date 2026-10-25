@@ -237,7 +237,9 @@ ReassembleStatus reassemble_codestream_client(const DataBinSet &set,
   for (auto &tile_buckets : per_tile) {
     for (auto &slot : tile_buckets) {
       std::sort(slot.begin(), slot.end(),
-                [](const auto &a, const auto &b) { return a.first < b.first; });
+                [](const DeliveredList::value_type &a, const DeliveredList::value_type &b) {
+                  return a.first < b.first;
+                });
     }
   }
 

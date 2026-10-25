@@ -94,7 +94,7 @@ static void j2k_dequant_rev_avx2(int32_t *sample_buf, size_t blksampl_stride,
       v_val = _mm256_sub_epi32(_mm256_xor_si256(v_val, v_sign), v_sign);
       __m256i v_qf32 = _mm256_srai_epi32(v_val, pLSB);
 
-      if constexpr (StoreI32)
+      OPENHTJ2K_IF_CONSTEXPR (StoreI32)
         _mm256_storeu_si256((__m256i *)(dst_row + x), v_qf32);
       else
         _mm256_storeu_ps(dst_row + x, _mm256_cvtepi32_ps(v_qf32));
@@ -120,7 +120,7 @@ static void j2k_dequant_rev_avx2(int32_t *sample_buf, size_t blksampl_stride,
       *val          = (*val ^ smask) - smask;
       assert(pLSB >= 0);
       int32_t QF32 = *val >> pLSB;
-      if constexpr (StoreI32)
+      OPENHTJ2K_IF_CONSTEXPR (StoreI32)
         reinterpret_cast<int32_t *>(dst_row)[x] = QF32;
       else
         dst_row[x] = static_cast<float>(QF32);

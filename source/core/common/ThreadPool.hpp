@@ -33,17 +33,27 @@
   #include <atomic>
   #include <cassert>
   #include <cstdint>
+  #include <cstdlib>
   #include <cstring>
   #include <future>
   #include <memory>
   #include <mutex>
+  #include <new>
   #include <thread>
   #include <type_traits>
   #include <unordered_map>
+  #if defined(_WIN32)
+    #include <malloc.h>
+  #endif
 
 // Thread-local flag: true when the current thread is running inside the pool worker loop.
 // Set once in worker() — avoids the hash-map lookup in decode_strip_core's in_worker check.
-inline thread_local bool g_in_worker_thread = false;
+// A function-local thread_local rather than an inline variable (C++17) so this
+// header also builds as C++11.
+inline bool &in_worker_thread_flag() {
+  static thread_local bool flag = false;
+  return flag;
+}
 
 // ─── InlineTask ──────────────────────────────────────────────────────────────
 // Type-erased callable with fixed inline storage — replaces std::function<void()>
@@ -128,7 +138,7 @@ class ThreadPool {
   inline explicit ThreadPool(size_t thread_count)
       : stop(false), ring_head_(0), ring_tail_(0), thread_count_(thread_count) {
     ring_ = std::unique_ptr<InlineTask[]>(new InlineTask[RING_CAP]);
-    threads = std::make_unique<std::thread[]>(thread_count_);
+    threads = std::unique_ptr<std::thread[]>(new std::thread[thread_count_]);
     for (size_t i = 0; i < thread_count_; ++i) {
       threads[i] = std::thread(&ThreadPool::worker, this);
     }
@@ -158,11 +168,34 @@ class ThreadPool {
     return -1;
   }
 
+  // ring_head_ and ring_tail_ are alignas(64) to keep them on separate cache
+  // lines.  `new` honours alignment above alignof(std::max_align_t) only from
+  // C++17 on (aligned operator new); in C++11/14 builds the pool could land on
+  // a 16-byte boundary, and the aligned vector stores the compiler emits when
+  // constructing it faulted.  Allocate it with explicit alignment instead.
+  static void *operator new(size_t size) {
+    void *p = nullptr;
+  #if defined(_WIN32)
+    p = _aligned_malloc(size, alignof(ThreadPool));
+  #else
+    if (posix_memalign(&p, alignof(ThreadPool), size) != 0) p = nullptr;
+  #endif
+    if (p == nullptr) throw std::bad_alloc();
+    return p;
+  }
+  static void operator delete(void *p) noexcept {
+  #if defined(_WIN32)
+    _aligned_free(p);
+  #else
+    free(p);
+  #endif
+  }
+
   size_t num_threads() const { return thread_count_; }
 
   // Returns true when called from inside a pool worker thread.
   // Uses a thread-local flag set in worker() — no hash map lookup.
-  static bool is_worker_thread() { return g_in_worker_thread; }
+  static bool is_worker_thread() { return in_worker_thread_flag(); }
 
   #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   /**
@@ -357,7 +390,7 @@ class ThreadPool {
    * set to true.
    */
   void worker() {
-    g_in_worker_thread = true;
+    in_worker_thread_flag() = true;
     InlineTask batch[BATCH];
 
     for (;;) {

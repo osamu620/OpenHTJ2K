@@ -116,7 +116,7 @@ static FORCE_INLINE void dequant_store_256(int32_t *dst, __m256i val, uint8_t tr
   if (transformation == 1) {
     __m256i mag = _mm256_and_si256(val, vmagmask);
     __m256i res = _mm256_sign_epi32(_mm256_srai_epi32(mag, pLSB_dq), val);
-    if constexpr (StoreI32)
+    OPENHTJ2K_IF_CONSTEXPR (StoreI32)
       _mm256_storeu_si256(reinterpret_cast<__m256i *>(dst), res);
     else
       _mm256_storeu_ps(reinterpret_cast<float *>(dst), _mm256_cvtepi32_ps(res));
@@ -135,7 +135,7 @@ static FORCE_INLINE void dequant_store_128(int32_t *dst, __m128i val, uint8_t tr
   if (transformation == 1) {
     __m128i mag = _mm_and_si128(val, vmagmask);
     __m128i res = _mm_sign_epi32(_mm_srai_epi32(mag, pLSB_dq), val);
-    if constexpr (StoreI32)
+    OPENHTJ2K_IF_CONSTEXPR (StoreI32)
       _mm_storeu_si128(reinterpret_cast<__m128i *>(dst), res);
     else
       _mm_storeu_ps(reinterpret_cast<float *>(dst), _mm_cvtepi32_ps(res));
@@ -172,7 +172,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
   __m256 vfscale       = _mm256_setzero_ps();
   __m256i vsignmask_dq = _mm256_setzero_si256();
   __m256i vmagmask_dq  = _mm256_setzero_si256();
-  if constexpr (fuse_dequant) {
+  OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
     const int32_t M_b_val = block->get_Mb();
     pLSB_dq               = 31 - M_b_val;
     vmagmask_dq           = _mm256_set1_epi32(0x7FFFFFFF);
@@ -230,7 +230,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
       __m128i U_q128  = _mm_srli_epi32(qinf128, 16);
       __m256i row256  = MagSgn.decode_four_quads(qinf128, U_q128, pLSB_adj, v_n);
 
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         dequant_store_256<store_i32>(mp0, _mm256_shuffle_epi8(row256, shuffle_r0), block->transformation,
                                      pLSB_dq, vfscale, vmagmask_dq, vsignmask_dq);
         dequant_store_256<store_i32>(mp1, _mm256_shuffle_epi8(row256, shuffle_r1), block->transformation,
@@ -260,7 +260,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
       auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
       mu0_n   = _mm_unpacklo_epi32(t0, t1);
       mu1_n   = _mm_unpackhi_epi32(t0, t1);
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                                      _mm256_castsi256_si128(vmagmask_dq),
                                      _mm256_castsi256_si128(vsignmask_dq));
@@ -280,7 +280,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
     // Non-initial line-pairs
     for (uint16_t row = 1; row < QH; row++) {
       E_p = Eline + 1;
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         mp0 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U) * block->band_stride;
         mp1 = mp0 + block->band_stride;
       } else {
@@ -314,7 +314,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
 
         __m256i row256 = MagSgn.decode_four_quads(qinf128, U_q128, pLSB_adj, v_n);
 
-        if constexpr (fuse_dequant) {
+        OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
           dequant_store_256<store_i32>(mp0, _mm256_shuffle_epi8(row256, shuffle_r0), block->transformation,
                                        pLSB_dq, vfscale, vmagmask_dq, vsignmask_dq);
           dequant_store_256<store_i32>(mp1, _mm256_shuffle_epi8(row256, shuffle_r1), block->transformation,
@@ -365,7 +365,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
         auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
         mu0_n   = _mm_unpacklo_epi32(t0, t1);
         mu1_n   = _mm_unpackhi_epi32(t0, t1);
-        if constexpr (fuse_dequant) {
+        OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
           dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                                        _mm256_castsi256_si128(vmagmask_dq),
                                        _mm256_castsi256_si128(vsignmask_dq));
@@ -405,7 +405,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
       auto t1 = _mm_unpackhi_epi32(mu0_n, mu1_n);
       mu0_n   = _mm_unpacklo_epi32(t0, t1);
       mu1_n   = _mm_unpackhi_epi32(t0, t1);
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                                      _mm256_castsi256_si128(vmagmask_dq),
                                      _mm256_castsi256_si128(vsignmask_dq));
@@ -424,7 +424,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
     // Non-initial line-pairs
     for (uint16_t row = 1; row < QH; row++) {
       E_p = Eline + 1;
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         mp0 = reinterpret_cast<int32_t *>(block->band_buf) + (row * 2U) * block->band_stride;
         mp1 = mp0 + block->band_stride;
       } else {
@@ -464,7 +464,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
         auto t1        = _mm_unpackhi_epi32(mu0_n, mu1_n);
         mu0_n          = _mm_unpacklo_epi32(t0, t1);
         mu1_n          = _mm_unpackhi_epi32(t0, t1);
-        if constexpr (fuse_dequant) {
+        OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
           dequant_store_128<store_i32>(mp0, mu0_n, block->transformation, pLSB_dq, vfscale,
                                        _mm256_castsi256_si128(vmagmask_dq),
                                        _mm256_castsi256_si128(vsignmask_dq));
@@ -654,6 +654,75 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
+// Reversible-path dequantization: undo the ROI up-shift and the binary point,
+// restore the sign, and write each sample through the store callables (int32
+// for the integer 5/3 IDWT, float otherwise).  A function template rather than
+// a generic lambda so that the library builds as C++11.
+template <class SimdStore, class ScalarStore>
+static inline void rev_dequant_avx2(const j2k_codeblock *cb, uint8_t ROIshift, int32_t pLSB, uint32_t mask,
+                                    SimdStore simd_store, ScalarStore scalar_store) {
+  const __m256i magmask = _mm256_set1_epi32(0x7FFFFFFF);
+  const __m256i vmask   = _mm256_set1_epi32(static_cast<int32_t>(~mask));
+  const __m256i zero    = _mm256_setzero_si256();
+  const __m256i shift   = _mm256_set1_epi32(ROIshift);
+  __m256i v0, v1, s0, s1, vdst0, vdst1, vROImask;
+  for (size_t i = 0; i < static_cast<size_t>(cb->size.y); i++) {
+    int32_t *val = cb->sample_buf + i * cb->blksampl_stride;
+    sprec_t *dst = cb->band_buf + i * cb->band_stride;
+    size_t len   = cb->size.x;
+    if (ROIshift == 0) {
+      for (; len >= 16; len -= 16) {
+        v0    = _mm256_load_si256((__m256i *)val);
+        v1    = _mm256_load_si256((__m256i *)(val + 8));
+        s0    = v0;
+        s1    = v1;
+        v0    = _mm256_and_si256(v0, magmask);
+        v1    = _mm256_and_si256(v1, magmask);
+        vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
+        vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
+        simd_store(dst, vdst0, vdst1);
+        val += 16;
+        dst += 16;
+      }
+    } else {
+      for (; len >= 16; len -= 16) {
+        v0       = _mm256_load_si256((__m256i *)val);
+        v1       = _mm256_load_si256((__m256i *)(val + 8));
+        s0       = v0;
+        s1       = v1;
+        v0       = _mm256_and_si256(v0, magmask);
+        v1       = _mm256_and_si256(v1, magmask);
+        vROImask = _mm256_and_si256(v0, vmask);
+        vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+        vROImask = _mm256_and_si256(vROImask, shift);
+        v0       = _mm256_sllv_epi32(v0, vROImask);
+        vROImask = _mm256_and_si256(v1, vmask);
+        vROImask = _mm256_cmpeq_epi32(vROImask, zero);
+        vROImask = _mm256_and_si256(vROImask, shift);
+        v1       = _mm256_sllv_epi32(v1, vROImask);
+        vdst0    = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
+        vdst1    = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
+        simd_store(dst, vdst0, vdst1);
+        val += 16;
+        dst += 16;
+      }
+    }
+    for (; len > 0; --len) {
+      int32_t sign = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      *val >>= pLSB;
+      if (sign) *val = -(*val & INT32_MAX);
+      assert(pLSB >= 0);
+      scalar_store(dst, *val);
+      val++;
+      dst++;
+    }
+  }
+}
+
 void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   // number of decoded magnitude bit‐planes
   const int32_t pLSB = 31 - M_b;  // indicates binary point;
@@ -664,74 +733,19 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const __m256i vmask   = _mm256_set1_epi32(static_cast<int32_t>(~mask));
   const __m256i zero    = _mm256_setzero_si256();
   const __m256i shift   = _mm256_set1_epi32(ROIshift);
-  __m256i v0, v1, s0, s1, vdst0, vdst1, vROImask;
+  __m256i v0, v1, s0, s1, vROImask;
   if (this->transformation == 1) {
-    auto rev_dequant = [&](auto simd_store, auto scalar_store) {
-      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-        int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->band_buf + i * this->band_stride;
-        size_t len   = this->size.x;
-        if (ROIshift == 0) {
-          for (; len >= 16; len -= 16) {
-            v0    = _mm256_load_si256((__m256i *)val);
-            v1    = _mm256_load_si256((__m256i *)(val + 8));
-            s0    = v0;
-            s1    = v1;
-            v0    = _mm256_and_si256(v0, magmask);
-            v1    = _mm256_and_si256(v1, magmask);
-            vdst0 = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
-            vdst1 = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
-            simd_store(dst, vdst0, vdst1);
-            val += 16;
-            dst += 16;
-          }
-        } else {
-          for (; len >= 16; len -= 16) {
-            v0       = _mm256_load_si256((__m256i *)val);
-            v1       = _mm256_load_si256((__m256i *)(val + 8));
-            s0       = v0;
-            s1       = v1;
-            v0       = _mm256_and_si256(v0, magmask);
-            v1       = _mm256_and_si256(v1, magmask);
-            vROImask = _mm256_and_si256(v0, vmask);
-            vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-            vROImask = _mm256_and_si256(vROImask, shift);
-            v0       = _mm256_sllv_epi32(v0, vROImask);
-            vROImask = _mm256_and_si256(v1, vmask);
-            vROImask = _mm256_cmpeq_epi32(vROImask, zero);
-            vROImask = _mm256_and_si256(vROImask, shift);
-            v1       = _mm256_sllv_epi32(v1, vROImask);
-            vdst0    = _mm256_sign_epi32(_mm256_srai_epi32(v0, pLSB), s0);
-            vdst1    = _mm256_sign_epi32(_mm256_srai_epi32(v1, pLSB), s1);
-            simd_store(dst, vdst0, vdst1);
-            val += 16;
-            dst += 16;
-          }
-        }
-        for (; len > 0; --len) {
-          int32_t sign = *val & INT32_MIN;
-          *val &= INT32_MAX;
-          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-            *val <<= ROIshift;
-          }
-          *val >>= pLSB;
-          if (sign) *val = -(*val & INT32_MAX);
-          assert(pLSB >= 0);
-          scalar_store(dst, *val);
-          val++;
-          dst++;
-        }
-      }
-    };
     if (this->dequant_i32) {
-      rev_dequant(
+      rev_dequant_avx2(
+          this, ROIshift, pLSB, mask,
           [](sprec_t *d, __m256i a, __m256i b) {
             _mm256_storeu_si256(reinterpret_cast<__m256i *>(d), a);
             _mm256_storeu_si256(reinterpret_cast<__m256i *>(d + 8), b);
           },
           [](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
     } else {
-      rev_dequant(
+      rev_dequant_avx2(
+          this, ROIshift, pLSB, mask,
           [](sprec_t *d, __m256i a, __m256i b) {
             _mm256_storeu_ps(d, _mm256_cvtepi32_ps(a));
             _mm256_storeu_ps(d + 8, _mm256_cvtepi32_ps(b));

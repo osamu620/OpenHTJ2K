@@ -141,7 +141,7 @@ bool stream_jpp_response(const ServerState &st, const ViewWindow &vw,
   // (`truncated`) or sink failure (`aborted`).  The emitter only encodes
   // message headers for messages it actually appends, so `ctx` needs no
   // rollback handling here.
-  auto emit_bin = [&](uint8_t cls, uint64_t id, auto &&fn) -> bool {
+  auto emit_bin = [&](uint8_t cls, uint64_t id, const std::function<void(BinWindow *)> &fn) -> bool {
     if (client_cache.has(cls, id)) return true;
     BinWindow win;
     win.skip   = static_cast<std::size_t>(client_cache.received_bytes(cls, id));

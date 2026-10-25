@@ -2930,7 +2930,7 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
   const int32_t NL_act   = static_cast<int32_t>(NL) - static_cast<int32_t>(reduce_NL);
   const int32_t cb_h_val = static_cast<int32_t>(codeblock_size.y);
 
-  line_dec     = std::make_unique<j2k_tcomp_line_dec>();
+  line_dec     = MAKE_UNIQUE<j2k_tcomp_line_dec>();
   auto *ld     = line_dec.get();
   ld->next_row = 0;
   // NL_active is published only after the per-level state arrays are allocated
@@ -2965,11 +2965,11 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     }
   }
 
-  ld->states  = std::make_unique<idwt_2d_state[]>(static_cast<size_t>(NL_act));
-  ld->ctxs    = std::make_unique<idwt_level_src_ctx[]>(static_cast<size_t>(NL_act));
-  ld->hl_bufs = std::make_unique<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
-  ld->lh_bufs = std::make_unique<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
-  ld->hh_bufs = std::make_unique<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
+  ld->states  = MAKE_UNIQUE<idwt_2d_state[]>(static_cast<size_t>(NL_act));
+  ld->ctxs    = MAKE_UNIQUE<idwt_level_src_ctx[]>(static_cast<size_t>(NL_act));
+  ld->hl_bufs = MAKE_UNIQUE<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
+  ld->lh_bufs = MAKE_UNIQUE<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
+  ld->hh_bufs = MAKE_UNIQUE<j2k_subband_row_buf[]>(static_cast<size_t>(NL_act));
 
   // Per-level arrays now exist — safe to publish the active level count to
   // finalize_line_decode() (see the note where line_dec is created above).
@@ -3420,11 +3420,11 @@ void j2k_tile_component::init_line_encode() {
   }
   const uint8_t xform = get_transformation();
 
-  line_enc      = std::make_unique<j2k_tcomp_line_enc>();
+  line_enc      = MAKE_UNIQUE<j2k_tcomp_line_enc>();
   auto *le      = line_enc.get();
   le->NL_active = static_cast<int32_t>(NL_enc);
-  le->states    = std::make_unique<fdwt_2d_state[]>(NL_enc);
-  le->ctxs      = std::make_unique<fdwt_level_sink_ctx[]>(NL_enc);
+  le->states    = MAKE_UNIQUE<fdwt_2d_state[]>(NL_enc);
+  le->ctxs      = MAKE_UNIQUE<fdwt_level_sink_ctx[]>(NL_enc);
 
   // Cache raw pointers for index-by-int loops below.
   fdwt_2d_state *states     = le->states.get();
@@ -7002,7 +7002,7 @@ uint8_t *j2k_tile::encode_line_based() {
 #ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
 #endif
-  if (!this->encode_pool_ctx) this->encode_pool_ctx = std::make_unique<EncodePoolCtx>();
+  if (!this->encode_pool_ctx) this->encode_pool_ctx = MAKE_UNIQUE<EncodePoolCtx>();
   {
     auto *epc = this->encode_pool_ctx.get();
 #ifdef OPENHTJ2K_THREAD
@@ -7015,7 +7015,7 @@ uint8_t *j2k_tile::encode_line_based() {
     const int nslots = 1;
 #endif
     while (static_cast<int>(epc->pools.size()) < nslots)
-      epc->pools.emplace_back(std::make_unique<cblk_data_pool>());
+      epc->pools.emplace_back(MAKE_UNIQUE<cblk_data_pool>());
     for (auto &ep : epc->pools) ep->reset();
   }
   auto *epc = this->encode_pool_ctx.get();
@@ -7041,7 +7041,7 @@ uint8_t *j2k_tile::encode_line_based() {
     if (max_total_cblks == 0) return;
     epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
     int32_t *gbuf      = epc->gbuf;
-    auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
+    auto enc_task_args = MAKE_UNIQUE<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
@@ -7251,7 +7251,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
 #ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
 #endif
-  if (!this->encode_pool_ctx) this->encode_pool_ctx = std::make_unique<EncodePoolCtx>();
+  if (!this->encode_pool_ctx) this->encode_pool_ctx = MAKE_UNIQUE<EncodePoolCtx>();
   {
     auto *epc = this->encode_pool_ctx.get();
 #ifdef OPENHTJ2K_THREAD
@@ -7264,7 +7264,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
     const int nslots = 1;
 #endif
     while (static_cast<int>(epc->pools.size()) < nslots)
-      epc->pools.emplace_back(std::make_unique<cblk_data_pool>());
+      epc->pools.emplace_back(MAKE_UNIQUE<cblk_data_pool>());
     for (auto &ep : epc->pools) ep->reset();
   }
   auto *epc = this->encode_pool_ctx.get();
@@ -7290,7 +7290,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
     if (max_total_cblks == 0) return;
     epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
     int32_t *gbuf      = epc->gbuf;
-    auto enc_task_args = std::make_unique<EncTaskArgs[]>(max_total_cblks);
+    auto enc_task_args = MAKE_UNIQUE<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
@@ -7619,7 +7619,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       streaming_scratch.reserve(c, static_cast<size_t>(i), static_cast<size_t>(strip_N), max_g);
       any_level_allocated = true;
 
-      cx.cblk_row_done = std::make_unique<std::atomic<uint8_t>[]>(static_cast<size_t>(cx.num_cblk_rows));
+      cx.cblk_row_done = MAKE_UNIQUE<std::atomic<uint8_t>[]>(static_cast<size_t>(cx.num_cblk_rows));
       for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
         uint8_t init_flags = 0;
         if (br * cb_h_eff >= cx.hl_h) init_flags |= 1;  // no HL codeblocks in this row
