@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "dec_CxtVLC_tables.hpp"
+#include "utils.hpp"
 
 #if __GNUC__ || __has_attribute(always_inline)
   #define FORCE_INLINE inline __attribute__((always_inline))
@@ -181,7 +182,7 @@ class MEL_dec {
 
     uint32_t val = 0xFFFFFFFF;  // feed in 0xFF if buffer is exhausted
     if (length > 4) {           // if there is data in the MEL segment
-      val = *reinterpret_cast<uint32_t *>(const_cast<uint8_t *>(buf));  // read 32 bits from MEL data
+      val = load_u32_unaligned(buf);                                    // read 32 bits from MEL data
       buf += 4;                                                         // advance pointer
       length -= 4;                                                      // reduce counter
     } else if (length > 0) {
@@ -330,7 +331,7 @@ class rev_buf {
     }
     uint32_t val = 0;
     if (length > 3) {  // Common case; we have at least 4 bytes available
-      val = *reinterpret_cast<uint32_t *>(buf - 3);
+      val = load_u32_unaligned(buf - 3);
       buf -= 4;
       length -= 4;
     } else if (length > 0) {  // we have less than 4 bytes
@@ -1830,7 +1831,7 @@ class fwd_buf {
 
     uint32_t val = 0;
     if (length > 3) {
-      val = *(uint32_t *)(buf);
+      val = load_u32_unaligned(buf);
       buf += 4;
       pos += 4;
       length -= 4;

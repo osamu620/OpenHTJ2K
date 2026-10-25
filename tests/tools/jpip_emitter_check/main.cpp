@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
     CHECK(m.msg_length == expected.size(),
           "tile msg_length=%llu expected %zu",
           static_cast<unsigned long long>(m.msg_length), expected.size());
-    CHECK(std::memcmp(stream.data() + pos, expected.data(), expected.size()) == 0,
+    CHECK(expected.empty() || std::memcmp(stream.data() + pos, expected.data(), expected.size()) == 0,
           "tile header payload not byte-identical to expected concatenation");
     pos += expected.size();
   }

@@ -647,9 +647,9 @@ void ht_sigprop_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_
       int32_t excess    = static_cast<int32_t>(x + 4) - static_cast<int32_t>(width);
       if (excess > 0) pat >>= (excess * 4);
 
-      uint32_t cs = *reinterpret_cast<const uint32_t *>(cur_sig + qx);
-      uint32_t ps = *reinterpret_cast<const uint32_t *>(prev_row_sig + qx);
-      uint32_t ns = *reinterpret_cast<const uint32_t *>(cur_sig + mstr + qx);
+      uint32_t cs = load_u32_unaligned(cur_sig + qx);
+      uint32_t ps = load_u32_unaligned(prev_row_sig + qx);
+      uint32_t ns = load_u32_unaligned(cur_sig + mstr + qx);
 
       uint32_t u = (ps & 0x88888888u) >> 3;
       if (non_causal) u |= (ns & 0x11111111u) << 3;
@@ -731,8 +731,7 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
         s &= s - 1;
         int32_t *sp  = samples + (y + (pos & 3)) * sstride + (x + (pos >> 2));
         int32_t bit  = MagRef.importMagRefBit();
-        int32_t mask = static_cast<int32_t>(0xFFFFFFFE | static_cast<unsigned int>(bit));
-        mask <<= pLSB;
+        int32_t mask = static_cast<int32_t>((0xFFFFFFFEu | static_cast<unsigned int>(bit)) << pLSB);
         sp[0] &= mask;
         sp[0] |= 1 << (pLSB - 1);
       }

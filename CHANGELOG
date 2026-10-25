@@ -87,6 +87,21 @@
   (`enc_entry_points`) encodes 180 combinations of component count, MCT,
   transform, DWT levels, bit depth and image size through both entry
   points and requires byte-identical codestreams.
+- Undefined behaviour found by UndefinedBehaviorSanitizer, which compilers
+  are free to miscompile: 32-bit loads and stores through cast pointers at
+  unaligned addresses in the HT block decoder and encoder (all SIMD
+  variants), left shifts of negative values in the encoder's DC offset and
+  in the MagRef decoders, and `__builtin_clz(0)` in `count_leading_zeros()`
+  and `int_log2()` (reached by the scalar encoder). These now use `memcpy`,
+  unsigned shifts and an explicit zero check. Codestreams are
+  byte-identical and speed is unchanged. Two related bugs are fixed with
+  them: on AArch64 the buffered encoder's DC offset shifted the last (up to
+  7) samples of each row by a negative count for lossy input deeper than
+  13 bits, corrupting them; and MSVC builds without `/arch:AVX2` used the
+  LZCNT and POPCNT instructions unconditionally (on a CPU without LZCNT the
+  instruction runs as BSR and returns wrong counts). A new CI job runs the
+  test suite under UBSan, with and without the SIMD code paths, and fails on
+  any report.
 
 # [0.19.0] - 2026-05-30
 

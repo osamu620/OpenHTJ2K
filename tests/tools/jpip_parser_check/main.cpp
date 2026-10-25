@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
     }
     CHECK(got.size() == expected.size(), "tile-0 len=%zu expected %zu",
           got.size(), expected.size());
-    CHECK(std::memcmp(got.data(), expected.data(), expected.size()) == 0,
+    CHECK(expected.empty() || std::memcmp(got.data(), expected.data(), expected.size()) == 0,
           "tile-0 header bytes not byte-identical");
   }
 
