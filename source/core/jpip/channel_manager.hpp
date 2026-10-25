@@ -49,6 +49,9 @@ struct SentBin {
   uint64_t in_class_id = 0;
   uint64_t end_bytes   = 0;
   bool     complete    = false;
+  SentBin()            = default;
+  SentBin(uint8_t class_id_, uint64_t in_class_id_, uint64_t end_bytes_, bool complete_)  // C++11
+      : class_id(class_id_), in_class_id(in_class_id_), end_bytes(end_bytes_), complete(complete_) {}
 };
 
 class OPENHTJ2K_JPIP_EXPORT ChannelManager {

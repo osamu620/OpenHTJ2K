@@ -76,6 +76,17 @@ struct MessageHeader {
   uint64_t msg_length  = 0;
   uint64_t aux         = 0;     // ignored unless msg_class_has_aux(class_id)
   bool     is_last     = false; // bit 4 of the first Bin-ID byte
+  MessageHeader()      = default;
+  // C++11: a struct with default member initializers is not an aggregate.
+  MessageHeader(uint8_t class_id_, uint16_t cs_n_, uint64_t in_class_id_, uint64_t msg_offset_,
+                uint64_t msg_length_, uint64_t aux_, bool is_last_)
+      : class_id(class_id_),
+        cs_n(cs_n_),
+        in_class_id(in_class_id_),
+        msg_offset(msg_offset_),
+        msg_length(msg_length_),
+        aux(aux_),
+        is_last(is_last_) {}
 };
 
 // Carries the most recently emitted/decoded class and codestream index

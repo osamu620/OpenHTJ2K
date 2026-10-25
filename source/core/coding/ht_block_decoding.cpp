@@ -62,7 +62,7 @@ static FORCE_INLINE void dequant_store_scalar(void *dst, int32_t val, uint8_t tr
     val &= INT32_MAX;
     val >>= pLSB_dq;
     if (sign) val = -(val & INT32_MAX);
-    if constexpr (StoreI32)
+    OPENHTJ2K_IF_CONSTEXPR (StoreI32)
       *reinterpret_cast<int32_t *>(dst) = val;
     else
       *reinterpret_cast<float *>(dst) = static_cast<float>(val);
@@ -91,7 +91,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
     int32_t pLSB_dq     = 0;
     float fscale_direct = 0.0f;
     uint32_t out_stride = block->blksampl_stride;
-    if constexpr (fuse_dequant) {
+    OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
       const int32_t M_b_val = block->get_Mb();
       pLSB_dq               = 31 - M_b_val;
       out_stride            = block->band_stride;
@@ -119,7 +119,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
 
     // Helper to store a decoded sample, optionally fusing dequantize.
     auto store_sample = [&](int32_t *dst, int32_t ival) {
-      if constexpr (fuse_dequant) {
+      OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
         dequant_store_scalar<store_i32>(dst, ival, block->transformation, pLSB_dq, fscale_direct);
       } else {
         *dst = ival;
@@ -822,6 +822,35 @@ void ht_magref_decode(j2k_codeblock *block, uint8_t *HT_magref_segment, uint32_t
   }
 }
 
+// Reversible-path dequantization: undo the ROI up-shift and the binary point,
+// restore the sign, and write each sample through the store callables (int32
+// for the integer 5/3 IDWT, float otherwise).  A function template rather than
+// a generic lambda so that the library builds as C++11.
+template <class Store>
+static inline void rev_dequant_scalar(const j2k_codeblock *cb, uint8_t ROIshift, int32_t pLSB,
+                                      uint32_t mask, Store store_fn) {
+  for (size_t i = 0; i < static_cast<size_t>(cb->size.y); i++) {
+    int32_t *val = cb->sample_buf + i * cb->blksampl_stride;
+    sprec_t *dst = cb->band_buf + i * cb->band_stride;
+    size_t len   = cb->size.x;
+    for (; len > 0; --len) {
+      int32_t sign = *val & INT32_MIN;
+      *val &= INT32_MAX;
+      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
+        *val <<= ROIshift;
+      }
+      *val >>= pLSB;
+      if (sign) {
+        *val = -(*val & INT32_MAX);
+      }
+      assert(pLSB >= 0);
+      store_fn(dst, *val);
+      val++;
+      dst++;
+    }
+  }
+}
+
 void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   /* ready for ROI adjustment and dequantization */
 
@@ -842,32 +871,12 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
     fscale_direct *= (static_cast<float>(1 << (M_b - 31)));
   }
   if (this->transformation == 1) {
-    auto rev_loop = [&](auto store_fn) {
-      for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
-        int32_t *val = this->sample_buf + i * this->blksampl_stride;
-        sprec_t *dst = this->band_buf + i * this->band_stride;
-        size_t len   = this->size.x;
-        for (; len > 0; --len) {
-          int32_t sign = *val & INT32_MIN;
-          *val &= INT32_MAX;
-          if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-            *val <<= ROIshift;
-          }
-          *val >>= pLSB;
-          if (sign) {
-            *val = -(*val & INT32_MAX);
-          }
-          assert(pLSB >= 0);
-          store_fn(dst, *val);
-          val++;
-          dst++;
-        }
-      }
-    };
     if (this->dequant_i32)
-      rev_loop([](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
+      rev_dequant_scalar(this, ROIshift, pLSB, mask,
+                         [](sprec_t *d, int32_t v) { *reinterpret_cast<int32_t *>(d) = v; });
     else
-      rev_loop([](sprec_t *d, int32_t v) { *d = static_cast<sprec_t>(v); });
+      rev_dequant_scalar(this, ROIshift, pLSB, mask,
+                         [](sprec_t *d, int32_t v) { *d = static_cast<sprec_t>(v); });
   } else if (ROIshift == 0) {
     // Lossy, no ROI (common case): direct float multiply, matching the fused
     // dequant path (dequant_store_scalar) and the AVX2/NEON/WASM variants of

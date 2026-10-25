@@ -12,13 +12,15 @@ receiver.
 - A compiler supporting **C++11 or later** (GCC 4.8+, Clang 3.3+, MSVC 2015+, Apple Clang 6+)
 
 CMake automatically selects the highest standard supported by the
-compiler (C++17 → C++14 → C++11). All three modes have been verified to
-produce a correct build and pass the full conformance test suite.
+compiler (C++17 → C++14 → C++11); pass `-DCMAKE_CXX_STANDARD=11` (or `14`,
+`17`) to choose one. All three modes produce a correct build and pass the
+full conformance test suite; CI builds and tests C++11 on Linux (x86-64)
+and macOS (ARM64) to keep it that way.
 
 | Standard | Behaviour |
 |---|---|
 | C++17 (recommended) | `[[nodiscard]]` and `[[maybe_unused]]` attributes are active; `std::filesystem` used for path handling |
-| C++14 | Attributes expand to nothing (no diagnostics lost at runtime); `stat()` fallback for path handling |
+| C++14 | Attributes expand to nothing (no diagnostics lost at runtime); `stat()` fallback for path handling; `if constexpr` on template parameters becomes a plain `if` (the optimizer removes the dead branch) |
 | C++11 | Same as C++14; additionally uses a built-in `make_unique` shim and `std::result_of` instead of `std::invoke_result_t` |
 
 **Optional (auto-detected):**

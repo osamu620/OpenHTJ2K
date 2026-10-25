@@ -95,7 +95,7 @@ static void j2k_dequant_rev_neon(int32_t *sample_buf, size_t blksampl_stride,
       v_val = vsubq_s32(veorq_s32(v_val, v_sign), v_sign);
       int32x4_t v_qf32 = vshlq_s32(v_val, v_neg_pLSB);
 
-      if constexpr (StoreI32)
+      OPENHTJ2K_IF_CONSTEXPR (StoreI32)
         vst1q_s32(reinterpret_cast<int32_t *>(dst_row + x), v_qf32);
       else
         vst1q_f32(dst_row + x, vcvtq_f32_s32(v_qf32));
@@ -121,7 +121,7 @@ static void j2k_dequant_rev_neon(int32_t *sample_buf, size_t blksampl_stride,
       *val          = (*val ^ smask) - smask;
       assert(pLSB >= 0);
       int32_t QF32 = *val >> pLSB;
-      if constexpr (StoreI32)
+      OPENHTJ2K_IF_CONSTEXPR (StoreI32)
         reinterpret_cast<int32_t *>(dst_row)[x] = QF32;
       else
         dst_row[x] = static_cast<float>(QF32);

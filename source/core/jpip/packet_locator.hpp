@@ -38,6 +38,9 @@ namespace jpip {
 struct PacketByteRange {
   uint64_t offset = 0;  // absolute offset into the codestream
   uint64_t length = 0;
+  PacketByteRange() = default;
+  PacketByteRange(uint64_t offset_, uint64_t length_)  // C++11: not an aggregate
+      : offset(offset_), length(length_) {}
 };
 
 class OPENHTJ2K_JPIP_EXPORT PacketLocator {

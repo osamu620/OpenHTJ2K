@@ -128,6 +128,21 @@
   pointer, which breaks strict aliasing, and GCC 15 used stale values. The
   lanes are now stored to an `int32_t` array first. UBSan, ASan and valgrind
   do not detect this kind of error.
+- The library, tools and tests no longer built as C++11, although C++11 is
+  the documented minimum and the standard CMake falls back to: newer code
+  used `std::make_unique`, generic lambdas, brace initialisation of structs
+  with default member initializers and a C++17 inline variable, and relied
+  on compilers accepting `if constexpr` and `[[maybe_unused]]` as
+  extensions. These now use C++11 forms; `if constexpr` is kept for C++17
+  builds through a guarded `OPENHTJ2K_IF_CONSTEXPR` macro, so the default
+  build's output and speed are unchanged. C++11 and C++14 builds also
+  crashed in multi-threaded encode and decode: the worker pool has
+  64-byte-aligned members, `new` honours that alignment only from C++17 on,
+  and the aligned stores that construct the pool faulted when it landed on
+  a 16-byte boundary. The pool is now allocated with explicit alignment.
+  CMake now respects `-DCMAKE_CXX_STANDARD`, and a new CI job builds and
+  tests C++11 with Clang on Linux and macOS, treating C++14/17/20 features
+  and over-aligned `new` as errors.
 
 # [0.19.0] - 2026-05-30
 

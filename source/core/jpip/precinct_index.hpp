@@ -32,6 +32,8 @@ namespace jpip {
 struct Point2 {
   uint32_t x = 0;
   uint32_t y = 0;
+  Point2()   = default;
+  Point2(uint32_t x_, uint32_t y_) : x(x_), y(y_) {}  // C++11: not an aggregate
 };
 
 // Wire-level identity of a precinct: tile index, component index, resolution
