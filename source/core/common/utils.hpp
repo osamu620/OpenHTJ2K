@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include "open_htj2k_typedef.hpp"
 
 #define round_up(x, n) (((x) + (n) - 1) & (-n))
@@ -137,6 +138,24 @@ static inline int32_t hMax(__m128i v) {
 #define openhtj2k_bswap32(x) __builtin_bswap32(x)
 #endif
 
+// 32-bit load/store at any address (byte streams, uint16_t arrays).  Reading
+// or writing through a cast uint32_t pointer is undefined behaviour when the
+// address is not 4-byte aligned; memcpy is the portable form, and compilers
+// turn it into a single load or store.
+static inline uint32_t load_u32_unaligned(const void* p) {
+  uint32_t v;
+  memcpy(&v, p, sizeof(v));
+  return v;
+}
+static inline void store_u32_unaligned(void* p, uint32_t v) { memcpy(p, &v, sizeof(v)); }
+
+// v << s for a signed v.  Shifting a negative value left is undefined before
+// C++20; shifting the same bits as unsigned is defined and compiles to the
+// same instruction.
+static inline int32_t shl_i32(int32_t v, int32_t s) {
+  return static_cast<int32_t>(static_cast<uint32_t>(v) << s);
+}
+
 // Portable count-trailing-zeros for uint32_t (input must be non-zero).
 static inline uint32_t openhtj2k_ctz32(uint32_t x) {
 #if defined(_MSC_VER)
@@ -150,9 +169,11 @@ static inline uint32_t openhtj2k_ctz32(uint32_t x) {
 
 static inline size_t popcount32(uint32_t num) {
   size_t precision = 0;
-#if defined(_MSC_VER) && !defined(_M_ARM64)
+#if defined(_MSC_VER) && !defined(_M_ARM64) && defined(__AVX__)
+  // MSVC emits POPCNT unconditionally; every CPU with AVX has it.  Builds for
+  // older CPUs (no /arch:AVX) use the loop below.
   precision = __popcnt(static_cast<uint32_t>(num));
-#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#elif !defined(_MSC_VER) && (defined(__x86_64__) || defined(__i386__))
   precision = static_cast<size_t>(_popcnt32(num));
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   uint32x2_t val = vld1_dup_u32(static_cast<const uint32_t*>(&num));
@@ -169,38 +190,32 @@ static inline size_t popcount32(uint32_t num) {
   return precision;
 }
 
+// floor(log2(x)); 0 for x == 0.
 static inline uint32_t int_log2(const uint32_t x) {
-  uint32_t y;
 #if defined(_MSC_VER)
   unsigned long tmp;
-  _BitScanReverse(&tmp, x);
-  y = tmp;
+  return _BitScanReverse(&tmp, x) ? static_cast<uint32_t>(tmp) : 0;
 #else
-  y = static_cast<uint32_t>(31 - __builtin_clz(x));
+  // __builtin_clz(0) is undefined; x | 1 gives the same result for every x
+  // (int_log2(0) and int_log2(1) are both 0).
+  return static_cast<uint32_t>(31 - __builtin_clz(x | 1));
 #endif
-  return (x == 0) ? 0 : y;
 }
 
+// Number of leading zero bits; 32 for x == 0.
 static inline uint32_t count_leading_zeros(const uint32_t x) {
-  uint32_t y;
-#if defined(_MSC_VER) && !defined(_M_ARM64)
-  y = __lzcnt(x);
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && defined(_MSC_VER) && defined(_WIN32)
-  y = _lzcnt_u32(x);
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__) && defined(__MINGW32__)
-  y = __builtin_ia32_lzcnt_u32(x);
-#elif defined(__MINGW32__) || defined(__MINGW64__)
-  y = __builtin_clz(x);
-#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) && !defined(_M_ARM64)
-  y = static_cast<uint32_t>(__builtin_clz(x));
-#elif defined(OPENHTJ2K_ENABLE_ARM_NEON) && defined(_M_ARM64)
+#if defined(_MSC_VER) && !defined(_M_ARM64) && defined(__AVX2__)
+  // MSVC emits LZCNT unconditionally; CPUs without it run the opcode as BSR
+  // and return a wrong count.  Every CPU with AVX2 has LZCNT.
+  return __lzcnt(x);
+#elif defined(_MSC_VER)
   unsigned long tmp;
-  _BitScanReverse(&tmp, x);
-  y = 31 - tmp;
+  return _BitScanReverse(&tmp, x) ? 31 - static_cast<uint32_t>(tmp) : 32;
 #else
-  y = 31 - int_log2(x);
+  // __builtin_clz(0) is undefined.  With LZCNT (x86) or on AArch64 the
+  // compiler folds this into the single instruction, which yields 32 for 0.
+  return x ? static_cast<uint32_t>(__builtin_clz(x)) : 32;
 #endif
-  return (x == 0) ? 32 : y;
 }
 
 // Large-buffer reuse pool (Linux/glibc and Apple platforms).

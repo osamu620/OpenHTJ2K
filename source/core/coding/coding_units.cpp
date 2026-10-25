@@ -3917,7 +3917,7 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
           wasm_v128_store(sp + i + 4, wasm_i32x4_sub(wasm_i32x4_shl(v1, shiftup), vdoff));
         }
         for (int32_t i = round_down(len, 8); i < len; ++i) {
-          sp[i] <<= shiftup;
+          sp[i] = shl_i32(sp[i], shiftup);
           sp[i] -= DC_OFFSET;
         }
       }
@@ -3935,8 +3935,10 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
       vst1q_s32(sp + i, vsubq_s32(vshlq_s32(v0, vshiftup), doff));
       vst1q_s32(sp + i + 4, vsubq_s32(vshlq_s32(v1, vshiftup), doff));
     }
+    // vshlq_s32 shifts right for a negative count (bit depth > FRACBITS);
+    // the scalar tail must do the same.
     for (int32_t i = round_down(len, 8); i < len; ++i) {
-      sp[i] <<= shiftup;
+      sp[i] = (shiftup < 0) ? (sp[i] >> -shiftup) : shl_i32(sp[i], shiftup);
       sp[i] -= DC_OFFSET;
     }
   }
@@ -3965,7 +3967,7 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
           *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_slli_epi32(v, shiftup), doff);
         }
         for (int32_t i = round_down(len, 8); i < len; ++i) {
-          sp[i] <<= shiftup;
+          sp[i] = shl_i32(sp[i], shiftup);
           sp[i] -= DC_OFFSET;
         }
       }
@@ -3985,7 +3987,7 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
         int32_t *sp = src + y * stride;
         int32_t len = width;
         for (int32_t i = 0; i < len; ++i) {
-          sp[i] <<= shiftup;
+          sp[i] = shl_i32(sp[i], shiftup);
           sp[i] -= DC_OFFSET;
         }
       }
@@ -7456,7 +7458,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const int32_t shu = tcomp[c].lb_dc_shiftup;
           int32_t *row      = int_rows[c] + x_off0;
           if (shu >= 0)
-            for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] << shu) - dco;
+            for (uint32_t x = 0; x < width; ++x) row[x] = shl_i32(row[x], shu) - dco;
           else
             for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
         }
@@ -7477,7 +7479,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const uint32_t sc    = round_up(wc, 32U);
           sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + y * sc;
           if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
           else
             for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
         }
@@ -7495,7 +7497,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const uint32_t sc    = round_up(wc, 32U);
           sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + cy * sc;
           if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
           else
             for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
         }
@@ -7758,7 +7760,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const int32_t shu = tcomp[c].lb_dc_shiftup;
         int32_t *row      = int_rows[c] + x_off0;
         if (shu >= 0)
-          for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] << shu) - dco;
+          for (uint32_t x = 0; x < width; ++x) row[x] = shl_i32(row[x], shu) - dco;
         else
           for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
       }
@@ -7787,13 +7789,14 @@ uint8_t *j2k_tile::encode_line_based_stream(
           // then push int32 directly — avoids the int→float pass per sample.
           int32_t *idst = reinterpret_cast<int32_t *>(float_rows[c]);
           if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] << shu) - dco;
+            for (uint32_t x = 0; x < wc; ++x) idst[x] = shl_i32(sp[x], shu) - dco;
           else
             for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] >> (-shu)) - dco;
           tcomp[c].push_line_enc_i32(idst);
         } else {
           if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+            for (uint32_t x = 0; x < wc; ++x)
+              float_rows[c][x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
           else
             for (uint32_t x = 0; x < wc; ++x)
               float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
@@ -7813,13 +7816,14 @@ uint8_t *j2k_tile::encode_line_based_stream(
         if (comp_use_i32[c]) {
           int32_t *idst = reinterpret_cast<int32_t *>(float_rows[c]);
           if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] << shu) - dco;
+            for (uint32_t x = 0; x < wc; ++x) idst[x] = shl_i32(sp[x], shu) - dco;
           else
             for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] >> (-shu)) - dco;
           tcomp[c].push_line_enc_i32(idst);
         } else {
           if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) float_rows[c][x] = static_cast<sprec_t>((sp[x] << shu) - dco);
+            for (uint32_t x = 0; x < wc; ++x)
+              float_rows[c][x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
           else
             for (uint32_t x = 0; x < wc; ++x)
               float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);

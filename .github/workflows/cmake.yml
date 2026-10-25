@@ -119,6 +119,46 @@ jobs:
         # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
         run: ctest --build-config ${{ matrix.build_type }} -VV
 
+  ubsan:
+    # Run the test suite under UndefinedBehaviorSanitizer, with and without the
+    # SIMD code paths, and fail on any report -- including reports from tests
+    # that are expected to fail, which ctest alone would not catch.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        simd: [ON, OFF]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX2=${{ matrix.simd }}
+          "-DCMAKE_CXX_FLAGS=-fsanitize=undefined -fno-omit-frame-pointer -g"
+          "-DCMAKE_C_FLAGS=-fsanitize=undefined -g"
+          -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=undefined
+          -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=undefined
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        working-directory: build
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:log_path=${{ github.workspace }}/ubsan/ub
+        run: |
+          mkdir -p "${{ github.workspace }}/ubsan"
+          ctest -j$(nproc) --output-on-failure
+
+      - name: Check for UBSan reports
+        if: always()
+        shell: bash
+        run: |
+          if grep -rh 'runtime error' ubsan/ 2>/dev/null | sort | uniq -c | sort -rn | head -50 | grep .; then
+            exit 1
+          fi
+          echo "no UBSan reports"
+
   wasm:
     runs-on: ubuntu-latest
     steps:

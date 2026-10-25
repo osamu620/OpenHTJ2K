@@ -90,7 +90,7 @@ class state_MS_enc {
       last = static_cast<uint8_t>(val >> 24);
       Creg >>= 32;
       ctreg -= 32;
-      *reinterpret_cast<uint32_t *>(buf + pos) = val;
+      store_u32_unaligned(buf + pos, val);
       pos += 4;
       return;
     }
@@ -110,7 +110,7 @@ class state_MS_enc {
 
     Creg >>= bits_local;
     ctreg -= bits_local;
-    *reinterpret_cast<uint32_t *>(buf + pos) = t;
+    store_u32_unaligned(buf + pos, t);
     pos += 4;
   }
 
@@ -175,7 +175,8 @@ class state_MS_enc {
           && ((val >> 16) & 0xFF) < 0xFF) {
         la = static_cast<uint8_t>(val >> 24);
         cr >>= 32; ct -= 32;
-        *reinterpret_cast<uint32_t *>(buf + po) = val; po += 4;
+        store_u32_unaligned(buf + po, val);
+        po += 4;
       } else {
         uint32_t bl = 0, t = 0, stuff = (la == 0xFF), tmp;
         tmp = val & ((1U << (8U - stuff)) - 1U);
@@ -187,7 +188,8 @@ class state_MS_enc {
         tmp = (val >> bl) & ((1U << (8U - stuff)) - 1U);
         t |= tmp << 24; bl += 8 - stuff;
         la = static_cast<uint8_t>(tmp); cr >>= bl; ct -= bl;
-        *reinterpret_cast<uint32_t *>(buf + po) = t; po += 4;
+        store_u32_unaligned(buf + po, t);
+        po += 4;
       }
     };
 
@@ -294,7 +296,7 @@ class state_VLC_enc {
       last = static_cast<uint8_t>(val >> 24);
       Creg >>= 32;
       ctreg -= 32;
-      *reinterpret_cast<uint32_t *>(buf + pos - 3) = openhtj2k_bswap32(val);
+      store_u32_unaligned(buf + pos - 3, openhtj2k_bswap32(val));
       pos -= 4;
       return;
     }
@@ -331,7 +333,7 @@ class state_VLC_enc {
     Creg >>= bits_local;
     ctreg -= bits_local;
 
-    *reinterpret_cast<uint32_t *>(buf + pos - 3) = t;
+    store_u32_unaligned(buf + pos - 3, t);
     pos -= 4;
   }
 
