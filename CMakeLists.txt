@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.13)
 
+# MSVC: choose the C runtime through CMAKE_MSVC_RUNTIME_LIBRARY (default /MD,
+# /MDd for Debug), as package managers and consuming projects expect.  The
+# compiler flags set below replace CMAKE_CXX_FLAGS_<CONFIG>, where the runtime
+# flag lived under the old policy, leaving the runtime to the build tool (the
+# static CRT for Ninja and other command-line generators).
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
+
 project(
   open_htj2k
   LANGUAGES CXX
@@ -100,12 +109,27 @@ target_include_directories(
     source/core/jpip
     # ${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
 )
-target_include_directories(open_htj2k INTERFACE source/core/interface source/core/common)
+# In-tree code also sees source/core/common; installed consumers get only the
+# public headers (see "Install" below).
+target_include_directories(
+    open_htj2k
+    INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/source/core/interface>
+              $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/source/core/common>
+              $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/open_htj2k/interface>)
 set_target_properties(
         open_htj2k PROPERTIES
         OUTPUT_NAME openhtj2k
+        EXPORT_NAME openhtj2k
         VERSION ${PROJECT_VERSION}
         SOVERSION ${OPENHTJ2K_VERSION_MAJOR})
+# Same name as the installed CMake package's target, for add_subdirectory().
+add_library(openhtj2k::openhtj2k ALIAS open_htj2k)
+set(PKG_CONFIG_CFLAGS_EXTRA "")
+if(NOT BUILD_SHARED_LIBS)
+  # Tells the public headers not to use __declspec(dllimport) (MSVC).
+  target_compile_definitions(open_htj2k PUBLIC OHTJ2K_STATIC)
+  set(PKG_CONFIG_CFLAGS_EXTRA " -DOHTJ2K_STATIC")
+endif()
 # target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
 
 find_package(Threads)
@@ -126,7 +150,7 @@ if (NOT EMSCRIPTEN)
   # Check Thread support
   if (Threads_FOUND)
     message(STATUS "Thread library found")
-    target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+    target_link_libraries(open_htj2k PUBLIC Threads::Threads)
     target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
     message(STATUS "OPENHTJ2K_THREAD is set")
     set(PKG_CONFIG_LIBS_PRIVATE "${CMAKE_THREAD_LIBS_INIT}")
@@ -137,11 +161,11 @@ if (NOT EMSCRIPTEN)
     message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
     message(STATUS "tiff library = ${TIFF_LIBRARIES}")
     target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TIFF_SUPPORT")
-    target_include_directories(open_htj2k PUBLIC ${TIFF_INCLUDE_DIR})
-    target_link_libraries(open_htj2k PUBLIC ${TIFF_LIBRARIES})
+    # The public headers do not include tiffio.h, so libtiff is a private
+    # dependency: it matters to consumers only when linking the static library.
+    target_link_libraries(open_htj2k PRIVATE TIFF::TIFF)
     message(STATUS "OPENHTJ2K_TIFF_SUPPORT is set ")
-    # libtiff's pkg-config module is "libtiff-4".  The public headers only use
-    # TIFF behind OPENHTJ2K_TIFF_SUPPORT, so it matters for static linking only.
+    # libtiff's pkg-config module is "libtiff-4".
     set(PKG_CONFIG_REQUIRES_PRIVATE "libtiff-4")
   endif()
   # JPIP TCP socket wrapper (source/core/jpip/tcp_socket.cpp) uses Winsock2.
@@ -217,8 +241,10 @@ if(NOT EMSCRIPTEN)
   # SIMD code paths are selected at compile time from the compiler's target
   # macros (__AVX2__, __AVX512F__, ...), so the flags below decide which CPUs
   # the resulting binaries run on.  Match on the target processor, not the
-  # build host, so cross builds get the right flags.
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$") # x86_64
+  # build host, so cross builds get the right flags.  The pointer-size check
+  # keeps 32-bit builds on a 64-bit host (for example Visual Studio -A Win32,
+  # where CMAKE_SYSTEM_PROCESSOR still names the host) on the scalar code.
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$" AND CMAKE_SIZEOF_VOID_P EQUAL 8) # x86_64
     option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
     set(OPENHTJ2K_TARGET_CPU "native" CACHE STRING
         "x86-64 code generation: native (build machine; binaries may not run elsewhere), x86-64-v3 (any AVX2 CPU), x86-64-v4 (any AVX-512 CPU), generic (no AVX2)")
@@ -270,7 +296,7 @@ if(NOT EMSCRIPTEN)
     message(STATUS "x86-64 target CPU: ${_ohtj2k_cpu}")
   endif()
 
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]64$") # aarch64
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[aA][rR][mM]64$|^[aA][aA][rR][cC][hH]64$" AND CMAKE_SIZEOF_VOID_P EQUAL 8) # aarch64
     option(ENABLE_ARM_NEON "Enable the use of ARM NEON intrinsics" ON)
     if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
       set(CMAKE_CXX_FLAGS
@@ -315,182 +341,73 @@ if (NOT EMSCRIPTEN)
   endif()
 endif()
 
-# decoder target
-add_executable(open_htj2k_dec)
-target_include_directories(open_htj2k_dec PUBLIC source/core/interface)
-add_subdirectory(source/apps/decoder)
-set_target_properties(
-  open_htj2k_dec
-  PROPERTIES OUTPUT_NAME
-             $<IF:$<CONFIG:Debug>,open_htj2k_dec_dbg,open_htj2k_dec>)
-target_link_libraries(open_htj2k_dec PUBLIC open_htj2k)
-
-# Image-I/O utility (static; in-tree apps only — not part of libopen_htj2k ABI)
-add_library(openhtj2k_imgio STATIC)
-target_include_directories(openhtj2k_imgio PUBLIC source/apps/imgio)
-add_subdirectory(source/apps/imgio)
-if (TIFF_FOUND)
-  target_compile_definitions(openhtj2k_imgio PRIVATE OPENHTJ2K_TIFF_SUPPORT)
-  target_include_directories(openhtj2k_imgio PRIVATE ${TIFF_INCLUDE_DIR})
-  target_link_libraries(openhtj2k_imgio PRIVATE ${TIFF_LIBRARIES})
+# Command-line tools.  Turn off with -DOPENHTJ2K_BUILD_APPS=OFF to build only
+# the library (the test suite needs the tools, so it is skipped as well).
+option(OPENHTJ2K_BUILD_APPS "Build the command-line tools (decoder, encoder, JPIP server, ...)" ON)
+option(OPENHTJ2K_BUILD_TESTS "Build the test tools and register the test suite (needs OPENHTJ2K_BUILD_APPS)" ON)
+set(_ohtj2k_build_tests ${OPENHTJ2K_BUILD_TESTS})
+if(OPENHTJ2K_BUILD_TESTS AND NOT OPENHTJ2K_BUILD_APPS)
+  message(STATUS "OPENHTJ2K_BUILD_APPS is OFF: the test suite is not built")
+  set(_ohtj2k_build_tests OFF)
 endif()
 
-# encoder target
-add_executable(open_htj2k_enc)
-target_include_directories(open_htj2k_enc PUBLIC source/core/interface)
-add_subdirectory(source/apps/encoder)
-set_target_properties(
-  open_htj2k_enc
-  PROPERTIES OUTPUT_NAME
-             $<IF:$<CONFIG:Debug>,open_htj2k_enc_dbg,open_htj2k_enc>)
-target_link_libraries(open_htj2k_enc PUBLIC open_htj2k PRIVATE openhtj2k_imgio)
+if(OPENHTJ2K_BUILD_APPS)
+  # decoder target
+  add_executable(open_htj2k_dec)
+  target_include_directories(open_htj2k_dec PUBLIC source/core/interface)
+  add_subdirectory(source/apps/decoder)
+  set_target_properties(
+    open_htj2k_dec
+    PROPERTIES OUTPUT_NAME
+               $<IF:$<CONFIG:Debug>,open_htj2k_dec_dbg,open_htj2k_dec>)
+  target_link_libraries(open_htj2k_dec PUBLIC open_htj2k)
 
-# imgcmp target
-add_executable(imgcmp)
-add_subdirectory(tests/tools/imgcmp)
-target_include_directories(imgcmp PUBLIC tests/tools/imgcmp/)
-target_link_libraries(imgcmp PRIVATE openhtj2k_imgio)
+  # Image-I/O utility (static; in-tree apps only — not part of libopen_htj2k ABI)
+  add_library(openhtj2k_imgio STATIC)
+  target_include_directories(openhtj2k_imgio PUBLIC source/apps/imgio)
+  add_subdirectory(source/apps/imgio)
+  if (TIFF_FOUND)
+    target_compile_definitions(openhtj2k_imgio PRIVATE OPENHTJ2K_TIFF_SUPPORT)
+    target_include_directories(openhtj2k_imgio PRIVATE ${TIFF_INCLUDE_DIR})
+    target_link_libraries(openhtj2k_imgio PRIVATE ${TIFF_LIBRARIES})
+  endif()
 
+  # encoder target
+  add_executable(open_htj2k_enc)
+  target_include_directories(open_htj2k_enc PUBLIC source/core/interface)
+  add_subdirectory(source/apps/encoder)
+  set_target_properties(
+    open_htj2k_enc
+    PROPERTIES OUTPUT_NAME
+               $<IF:$<CONFIG:Debug>,open_htj2k_enc_dbg,open_htj2k_enc>)
+  target_link_libraries(open_htj2k_enc PUBLIC open_htj2k PRIVATE openhtj2k_imgio)
 
-add_executable(row_range_compare)
-add_subdirectory(tests/tools/row_range_compare)
-target_include_directories(row_range_compare PUBLIC source/core/interface)
-target_link_libraries(row_range_compare PUBLIC open_htj2k)
+  # Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
+  add_executable(estimate_qfactor)
+  add_subdirectory(source/apps/estimate_qfactor)
 
-add_executable(col_range_compare)
-add_subdirectory(tests/tools/col_range_compare)
-target_include_directories(col_range_compare PUBLIC source/core/interface)
-target_link_libraries(col_range_compare PUBLIC open_htj2k)
+  # JPIP Phase-3 standalone HTTP/1.1 server
+  add_executable(open_htj2k_jpip_server)
+  add_subdirectory(source/apps/jpip_server)
+  target_link_libraries(open_htj2k_jpip_server PUBLIC open_htj2k)
+  set_target_properties(
+    open_htj2k_jpip_server
+    PROPERTIES OUTPUT_NAME
+               $<IF:$<CONFIG:Debug>,open_htj2k_jpip_server_dbg,open_htj2k_jpip_server>)
 
-# concurrent_instances: many decoder/encoder instances running at once on the
-# shared worker pool (instance lifetime + per-thread encoder scratch)
-if(Threads_FOUND AND NOT EMSCRIPTEN)
-  add_executable(concurrent_instances)
-  add_subdirectory(tests/tools/concurrent_instances)
-  target_include_directories(concurrent_instances PUBLIC source/core/interface)
-  target_link_libraries(concurrent_instances PUBLIC open_htj2k PRIVATE Threads::Threads)
+  # JPIP foveation benchmark (bandwidth + decode workload comparison)
+  add_executable(open_htj2k_jpip_benchmark)
+  add_subdirectory(source/apps/jpip_benchmark)
+  target_link_libraries(open_htj2k_jpip_benchmark PUBLIC open_htj2k)
+  set_target_properties(
+    open_htj2k_jpip_benchmark
+    PROPERTIES OUTPUT_NAME
+               $<IF:$<CONFIG:Debug>,open_htj2k_jpip_benchmark_dbg,open_htj2k_jpip_benchmark>)
 endif()
-
-# codestream_bounds_check: unit test for j2c_src_memory's 4 GiB allocation bound
-add_executable(codestream_bounds_check)
-add_subdirectory(tests/tools/codestream_bounds_check)
-target_link_libraries(codestream_bounds_check PUBLIC open_htj2k)
-
-# visual_weight_check: dump + invariant self-check for the analytic per-subband
-# visual (CSF) weighting (header-only, no library dependency)
-add_executable(visual_weight_check)
-add_subdirectory(tests/tools/visual_weight_check)
-
-# encode_entry_points: buffered vs streaming encoder API over a matrix of
-# component counts / MCT / transforms / DWT levels / bit depths
-add_executable(encode_entry_points)
-add_subdirectory(tests/tools/encode_entry_points)
-target_include_directories(encode_entry_points PUBLIC source/core/interface)
-target_link_libraries(encode_entry_points PUBLIC open_htj2k)
-
-# region_decode_bench: M1 region-decode latency/throughput benchmark (OSD eval)
-add_executable(region_decode_bench)
-add_subdirectory(tests/tools/region_decode_bench)
-target_include_directories(region_decode_bench PUBLIC source/core/interface)
-target_link_libraries(region_decode_bench PUBLIC open_htj2k)
-
-# Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
-add_executable(estimate_qfactor)
-add_subdirectory(source/apps/estimate_qfactor)
-
-# JPIP Phase-1 index-check harness (used by tests/jpip_phase1.cmake)
-add_executable(jpip_index_check)
-add_subdirectory(tests/tools/jpip_index_check)
-target_link_libraries(jpip_index_check PUBLIC open_htj2k)
-
-# JPIP Phase-1 partial-decode sanity harness (used by tests/jpip_phase1.cmake)
-add_executable(jpip_partial_decode_check)
-add_subdirectory(tests/tools/jpip_partial_decode_check)
-target_include_directories(jpip_partial_decode_check PUBLIC source/core/interface)
-target_link_libraries(jpip_partial_decode_check PUBLIC open_htj2k)
-
-# JPIP Phase-2 VBAS codec self-test (used by tests/jpip_phase1.cmake)
-add_executable(jpip_vbas_check)
-add_subdirectory(tests/tools/jpip_vbas_check)
-target_link_libraries(jpip_vbas_check PUBLIC open_htj2k)
-
-# JPIP Phase-2 message header codec self-test (used by tests/jpip_phase1.cmake)
-add_executable(jpip_message_check)
-add_subdirectory(tests/tools/jpip_message_check)
-target_link_libraries(jpip_message_check PUBLIC open_htj2k)
-
-# JPIP Phase-2 header data-bin emitter self-test (used by tests/jpip_phase1.cmake)
-add_executable(jpip_emitter_check)
-add_subdirectory(tests/tools/jpip_emitter_check)
-target_link_libraries(jpip_emitter_check PUBLIC open_htj2k)
-
-# JPIP Phase-2 JPP-stream parser self-test (used by tests/jpip_phase1.cmake)
-add_executable(jpip_parser_check)
-add_subdirectory(tests/tools/jpip_parser_check)
-target_link_libraries(jpip_parser_check PUBLIC open_htj2k)
-
-# JPIP Phase-3 HTTP request/response formatting self-test
-add_executable(jpip_http_check)
-add_subdirectory(tests/tools/jpip_http_check)
-target_link_libraries(jpip_http_check PUBLIC open_htj2k)
-
-# JPIP Phase-3 TCP socket wrapper self-test
-add_executable(jpip_tcp_check)
-add_subdirectory(tests/tools/jpip_tcp_check)
-target_link_libraries(jpip_tcp_check PUBLIC open_htj2k)
-if(WIN32)
-  target_link_libraries(jpip_tcp_check PUBLIC ws2_32)
-endif()
-
-# JPIP Phase-3 standalone HTTP/1.1 server
-add_executable(open_htj2k_jpip_server)
-add_subdirectory(source/apps/jpip_server)
-target_link_libraries(open_htj2k_jpip_server PUBLIC open_htj2k)
-set_target_properties(
-  open_htj2k_jpip_server
-  PROPERTIES OUTPUT_NAME
-             $<IF:$<CONFIG:Debug>,open_htj2k_jpip_server_dbg,open_htj2k_jpip_server>)
-
-# JPIP session/channel management self-test (§B.2, §C.3, §C.9, §D.2)
-add_executable(jpip_session_check)
-add_subdirectory(tests/tools/jpip_session_check)
-target_link_libraries(jpip_session_check PUBLIC open_htj2k)
-
-# JPIP issue #297 chunked-transfer round-trip self-test
-add_executable(jpip_chunked_check)
-add_subdirectory(tests/tools/jpip_chunked_check)
-target_link_libraries(jpip_chunked_check PUBLIC open_htj2k)
-if(WIN32)
-  target_link_libraries(jpip_chunked_check PUBLIC ws2_32)
-endif()
-
-# JPIP issue #297 StreamingJppParser split-at-every-offset self-test
-add_executable(jpip_streaming_parser_check)
-add_subdirectory(tests/tools/jpip_streaming_parser_check)
-target_link_libraries(jpip_streaming_parser_check PUBLIC open_htj2k)
-
-# JPIP Phase-2 precinct data-bin + packet-locator self-test
-add_executable(jpip_precinct_check)
-add_subdirectory(tests/tools/jpip_precinct_check)
-target_link_libraries(jpip_precinct_check PUBLIC open_htj2k)
-
-# JPIP foveation benchmark (bandwidth + decode workload comparison)
-add_executable(open_htj2k_jpip_benchmark)
-add_subdirectory(source/apps/jpip_benchmark)
-target_link_libraries(open_htj2k_jpip_benchmark PUBLIC open_htj2k)
-set_target_properties(
-  open_htj2k_jpip_benchmark
-  PROPERTIES OUTPUT_NAME
-             $<IF:$<CONFIG:Debug>,open_htj2k_jpip_benchmark_dbg,open_htj2k_jpip_benchmark>)
-
-# JPIP Phase-2 full JPP-stream round-trip (emit → parse → reassemble → decode)
-add_executable(jpip_assembler_check)
-add_subdirectory(tests/tools/jpip_assembler_check)
-target_link_libraries(jpip_assembler_check PUBLIC open_htj2k)
 
 # RFC 9828 RTP receiver (experimental, requires GLFW)
 option(OPENHTJ2K_RTP "Build experimental RFC 9828 RTP receiver (requires GLFW)" OFF)
-if (OPENHTJ2K_RTP AND NOT EMSCRIPTEN)
+if (OPENHTJ2K_RTP AND OPENHTJ2K_BUILD_APPS AND NOT EMSCRIPTEN)
   find_package(glfw3 QUIET)
   if (glfw3_FOUND)
     # On Apple: native Metal renderer (no OpenGL dependency).
@@ -557,19 +474,21 @@ endif()
 ################################################################################################
 # Install
 ################################################################################################
-install(TARGETS open_htj2k_dec
-  DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(TARGETS open_htj2k_enc
-  DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(OPENHTJ2K_BUILD_APPS)
+  install(TARGETS open_htj2k_dec open_htj2k_enc
+    DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(TARGETS open_htj2k
+  EXPORT openhtj2k-targets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # Public headers.  Consumers add <prefix>/include/open_htj2k/interface to their
-# include path (see the pkg-config Cflags), so every header the public API
-# includes must be installed there — tests/install_check.cmake builds a
-# program against the installed tree to keep it that way.
+# include path (see the pkg-config Cflags and the CMake package's target), so
+# every header the public API includes must be installed there —
+# tests/install_check.cmake builds a program against the installed tree to
+# keep it that way.
 install(DIRECTORY source/core/interface
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/open_htj2k
   FILES_MATCHING
@@ -580,38 +499,73 @@ install(FILES source/core/common/planar_output_desc.hpp  # used by decoder.hpp
 install(FILES "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pc"
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
+# CMake package: find_package(openhtj2k CONFIG) gives the imported target
+# openhtj2k::openhtj2k.
+include(CMakePackageConfigHelpers)
+set(OPENHTJ2K_CMAKE_PACKAGE_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/openhtj2k")
+# Dependencies the installed target refers to: the thread library is linked
+# publicly; libtiff is private, so only the static library needs it.
+set(OPENHTJ2K_CONFIG_FIND_THREADS FALSE)
+if(Threads_FOUND AND NOT EMSCRIPTEN)
+  set(OPENHTJ2K_CONFIG_FIND_THREADS TRUE)
+endif()
+set(OPENHTJ2K_CONFIG_FIND_TIFF FALSE)
+if(TIFF_FOUND AND NOT EMSCRIPTEN AND NOT BUILD_SHARED_LIBS)
+  set(OPENHTJ2K_CONFIG_FIND_TIFF TRUE)
+endif()
+configure_package_config_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/source/openhtj2k-config.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/openhtj2k-config.cmake"
+  INSTALL_DESTINATION "${OPENHTJ2K_CMAKE_PACKAGE_DIR}")
+# 0.x releases may change the API in any minor version.
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/openhtj2k-config-version.cmake"
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMinorVersion)
+install(EXPORT openhtj2k-targets
+  NAMESPACE openhtj2k::
+  DESTINATION "${OPENHTJ2K_CMAKE_PACKAGE_DIR}")
+install(FILES
+  "${CMAKE_CURRENT_BINARY_DIR}/openhtj2k-config.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/openhtj2k-config-version.cmake"
+  DESTINATION "${OPENHTJ2K_CMAKE_PACKAGE_DIR}")
+
 ################################################################################################
 # Testing
 ################################################################################################
-# Snapshot the test list before any tests/*.cmake include so we can attach the
-# `test_artifacts` cleanup fixture to every test added below — without this,
-# tests added by sibling files (jpip_phase1, encoder_test,
-# row_range_validation) escaped the FIXTURES_REQUIRED loop that used to live
-# inside decoder_conformance.cmake, letting cleanup_artifacts race their
-# decoder output and produce intermittent "file X not found" failures under
-# `ctest -j`.
-get_property(_tests_before_conformance DIRECTORY PROPERTY TESTS)
+if(_ohtj2k_build_tests)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/test_tools.cmake)
 
-# conformance testing — declares the `test_artifacts` cleanup fixture and the
-# main HT/Part-1/Part-2/WASM test sets.
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/col_range_validation.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/concurrency.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
+  # Snapshot the test list before any tests/*.cmake include so we can attach the
+  # `test_artifacts` cleanup fixture to every test added below — without this,
+  # tests added by sibling files (jpip_phase1, encoder_test,
+  # row_range_validation) escaped the FIXTURES_REQUIRED loop that used to live
+  # inside decoder_conformance.cmake, letting cleanup_artifacts race their
+  # decoder output and produce intermittent "file X not found" failures under
+  # `ctest -j`.
+  get_property(_tests_before_conformance DIRECTORY PROPERTY TESTS)
 
-# Auto-attach the cleanup fixture to every test added by the includes above.
-# Skip cleanup_artifacts itself (it IS the fixture), and skip tests that
-# already declared FIXTURES_REQUIRED explicitly (encoder_test does this so
-# its DEPENDS chain is preserved).
-get_property(_tests_after_conformance DIRECTORY PROPERTY TESTS)
-foreach(_t IN LISTS _tests_after_conformance)
-  if(NOT _t IN_LIST _tests_before_conformance AND NOT _t STREQUAL "cleanup_artifacts")
-    get_test_property(${_t} FIXTURES_REQUIRED _existing)
-    if(NOT _existing OR NOT "test_artifacts" IN_LIST _existing)
-      set_tests_properties(${_t} PROPERTIES FIXTURES_REQUIRED test_artifacts)
+  # conformance testing — declares the `test_artifacts` cleanup fixture and the
+  # main HT/Part-1/Part-2/WASM test sets.
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/col_range_validation.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/concurrency.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
+
+  # Auto-attach the cleanup fixture to every test added by the includes above.
+  # Skip cleanup_artifacts itself (it IS the fixture), and skip tests that
+  # already declared FIXTURES_REQUIRED explicitly (encoder_test does this so
+  # its DEPENDS chain is preserved).
+  get_property(_tests_after_conformance DIRECTORY PROPERTY TESTS)
+  foreach(_t IN LISTS _tests_after_conformance)
+    if(NOT _t IN_LIST _tests_before_conformance AND NOT _t STREQUAL "cleanup_artifacts")
+      get_test_property(${_t} FIXTURES_REQUIRED _existing)
+      if(NOT _existing OR NOT "test_artifacts" IN_LIST _existing)
+        set_tests_properties(${_t} PROPERTIES FIXTURES_REQUIRED test_artifacts)
+      endif()
     endif()
-  endif()
-endforeach()
+  endforeach()
+endif()

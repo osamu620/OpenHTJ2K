@@ -1,0 +1,17 @@
+# CMake package configuration for OpenHTJ2K.
+#
+#   find_package(openhtj2k CONFIG REQUIRED)
+#   target_link_libraries(app PRIVATE openhtj2k::openhtj2k)
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+if(@OPENHTJ2K_CONFIG_FIND_THREADS@)
+  find_dependency(Threads)
+endif()
+if(@OPENHTJ2K_CONFIG_FIND_TIFF@)
+  find_dependency(TIFF)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/openhtj2k-targets.cmake")
+check_required_components(openhtj2k)

@@ -57,6 +57,25 @@
   building for arm64 on an x86 machine).
 - CI builds and tests the `x86-64-v3` and `generic` targets and checks that
   their library contains no instructions above that level.
+- The install now includes a CMake package: `find_package(openhtj2k CONFIG)`
+  provides the imported target `openhtj2k::openhtj2k` (the same name works
+  after `add_subdirectory()`). The `install_consumer` test builds a program
+  against the installed tree through it, on Windows as well.
+- New `OPENHTJ2K_BUILD_APPS` and `OPENHTJ2K_BUILD_TESTS` options (both `ON`)
+  to build only the library, for example in package builds.
+- MSVC builds now pick the C runtime through `CMAKE_MSVC_RUNTIME_LIBRARY`
+  (default `/MD`, `/MDd`). The project's compiler flags replaced the
+  per-configuration flags that carried the runtime option, so the runtime was
+  left to the build tool: the static runtime with Ninja and other
+  command-line generators, which package builds such as vcpkg use.
+- On Windows, code that uses the DLL now sees the API declared
+  `__declspec(dllimport)` instead of `dllexport`, and the static library
+  (`OHTJ2K_STATIC`, now set by the CMake target and the `.pc` file of a static
+  build) no longer exports its symbols from the program that links it.
+- `encoder.hpp` no longer includes `tiffio.h`, so libtiff is a private
+  dependency of the shared library.
+- 32-bit builds on a 64-bit host (for example Visual Studio `-A Win32`) no
+  longer get the x86-64 / AArch64 SIMD flags; they build the scalar code.
 
 ## Fixed
 
