@@ -34,6 +34,9 @@
 #include "coding_units.hpp"
 #include "jph.hpp"
 #include "ThreadPool.hpp"
+#if defined(OPENHTJ2K_TIFF_SUPPORT)
+  #include <tiffio.h>
+#endif
 
 #define NO_QFACTOR 0xFF
 

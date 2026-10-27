@@ -32,8 +32,15 @@
 #include <memory>
 #include <vector>
 #include "planar_output_desc.hpp"
+// Windows DLL linkage: export while building the library (CMake defines
+// open_htj2k_EXPORTS for its sources), import in code that uses it, and
+// nothing when linking the static library (OHTJ2K_STATIC).
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
-  #define OPENHTJ2K_EXPORT __declspec(dllexport)
+  #if defined(open_htj2k_EXPORTS)
+    #define OPENHTJ2K_EXPORT __declspec(dllexport)
+  #else
+    #define OPENHTJ2K_EXPORT __declspec(dllimport)
+  #endif
 #else
   #define OPENHTJ2K_EXPORT
 #endif

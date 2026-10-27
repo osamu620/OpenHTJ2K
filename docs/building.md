@@ -66,6 +66,8 @@ on platform.
 | `-DENABLE_AVX2=OFF` | `ON` | Build x86-64 code without any AVX2 (or wider) instructions; same as `-DOPENHTJ2K_TARGET_CPU=generic`. |
 | `-DENABLE_ARM_NEON=OFF` | auto | Force-disable NEON dispatch on AArch64. |
 | `-DBUILD_SHARED_LIBS=OFF` | `ON` | Build a static library instead of a shared one. |
+| `-DOPENHTJ2K_BUILD_APPS=OFF` | `ON` | Build only the library, without the command-line tools (and therefore without the test suite). |
+| `-DOPENHTJ2K_BUILD_TESTS=OFF` | `ON` | Skip the test tools and the CTest suite. |
 
 ### Portable x86-64 builds
 
@@ -116,19 +118,35 @@ cmake --install ${BUILD_DIR} --prefix /usr/local
 | `libopenhtj2k` (`.so` / `.dylib` / `.a`; on Windows the `.dll` goes to `bin` and the import library to `lib`) | `<prefix>/lib` (or `lib64`, following `GNUInstallDirs`) |
 | Public headers `decoder.hpp`, `encoder.hpp`, `planar_output_desc.hpp` | `<prefix>/include/open_htj2k/interface` |
 | `open_htj2k.pc` | `<prefix>/lib/pkgconfig` |
+| CMake package (`openhtj2k-config.cmake` and friends) | `<prefix>/lib/cmake/openhtj2k` |
 
-To build another program against the installed library:
+To use the installed library from a CMake project:
+
+```cmake
+find_package(openhtj2k CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE openhtj2k::openhtj2k)
+```
+
+(add the install prefix to `CMAKE_PREFIX_PATH` if it is not a standard
+location). A project that includes OpenHTJ2K with `add_subdirectory()` can
+link the same `openhtj2k::openhtj2k` name. Without CMake, use pkg-config:
 
 ```bash
 c++ my_app.cpp $(pkg-config --cflags --libs open_htj2k) -o my_app
 # static library: pkg-config --static --cflags --libs open_htj2k
 ```
 
-and include the API as `#include "decoder.hpp"` / `#include "encoder.hpp"`.
-The paths in `open_htj2k.pc` are relative to its `prefix=` line, so a
-relocated install only needs that line changed. `ctest -R install_consumer`
-installs the build into a scratch prefix and builds and runs a small program
-this way.
+Either way, include the API as `#include "decoder.hpp"` /
+`#include "encoder.hpp"`. The paths in `open_htj2k.pc` are relative to its
+`prefix=` line, so a relocated install only needs that line changed.
+`ctest -R install_consumer` installs the build into a scratch prefix and
+builds and runs a small program against it both ways.
+
+On Windows, code using the DLL sees the API declared `__declspec(dllimport)`;
+when linking the static library, define `OHTJ2K_STATIC` (the CMake target
+and the `.pc` file of a static build do this for you). MSVC builds use the
+DLL C runtime (`/MD`, `/MDd`) unless `CMAKE_MSVC_RUNTIME_LIBRARY` says
+otherwise.
 
 ## Building for WebAssembly (WASM)
 

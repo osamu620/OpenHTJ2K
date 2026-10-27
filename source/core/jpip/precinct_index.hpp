@@ -12,13 +12,18 @@
 #include <memory>
 #include <vector>
 
-// Mirrors the OPENHTJ2K_EXPORT pattern in source/core/interface/decoder.hpp:
-// MSVC needs __declspec(dllexport) on out-of-line definitions reachable from
-// other DLLs / executables; everywhere else the macro is empty and ELF/Mach-O
-// default visibility takes care of it.  Defined inline here so this header
-// doesn't have to include the existing public ABI surface.
+// Mirrors the OPENHTJ2K_EXPORT pattern in source/core/interface/decoder.hpp,
+// defined here so this header doesn't have to include the public API headers.
+// Off MSVC the macro is empty and ELF/Mach-O default visibility applies.
+// Windows DLL linkage: export while building the library (CMake defines
+// open_htj2k_EXPORTS for its sources), import in code that uses it, and
+// nothing when linking the static library (OHTJ2K_STATIC).
 #if defined(_MSC_VER) && !defined(OHTJ2K_STATIC)
-  #define OPENHTJ2K_JPIP_EXPORT __declspec(dllexport)
+  #if defined(open_htj2k_EXPORTS)
+    #define OPENHTJ2K_JPIP_EXPORT __declspec(dllexport)
+  #else
+    #define OPENHTJ2K_JPIP_EXPORT __declspec(dllimport)
+  #endif
 #else
   #define OPENHTJ2K_JPIP_EXPORT
 #endif
