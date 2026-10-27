@@ -38,6 +38,19 @@
 #include <memory>
 #include <mutex>
 
+// HT encoder sample form of a quantized coefficient t: 0 when t == 0,
+// otherwise ((|t| - 1) << 1) + sign with bit 31 set as the significance flag.
+// ORs |t| into or_acc.  Branchless, so the scalar loops calling it vectorize.
+// INT32_MIN (what an out-of-range float converts to) becomes 0, as in the
+// SIMD versions.
+static inline int32_t htj2k_magsgn(int32_t t, uint32_t &or_acc) {
+  const uint32_t neg = static_cast<uint32_t>(t) >> 31;
+  const uint32_t mag = (neg ? 0U - static_cast<uint32_t>(t) : static_cast<uint32_t>(t)) & 0x7FFFFFFFU;
+  or_acc |= mag;
+  const uint32_t nz = (mag != 0) ? 0xFFFFFFFFU : 0U;
+  return static_cast<int32_t>(((((mag - 1U) << 1) + neg) | 0x80000000U) & nz);
+}
+
 /********************************************************************************
  * cblk_data_pool — monotonic bump allocator for HTJ2K codeblock bitstreams
  *
