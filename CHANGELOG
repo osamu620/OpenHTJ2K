@@ -1,3 +1,17 @@
+# [Unreleased]
+
+## Performance
+
+### Encoder
+- Builds without a SIMD encoder (`OPENHTJ2K_TARGET_CPU=generic` on x86-64,
+  and other targets without AVX2, NEON or WASM SIMD) now use the AVX2
+  encoder's design in plain C++: 64-bit VLC and MagSgn bit writers, one VLC
+  write per quad pair, MagSgn codewords written once per line pair, and a
+  context/exponent pass before the serial MEL/VLC pass. The scalar
+  quantization loops are branchless, so the compiler vectorizes them.
+  Ryzen 9 9950X, `generic` build, 3840×2160 RGB, one thread: 33% fewer
+  cycles lossless and 31% fewer lossy. Output is byte-identical.
+
 # [0.20.1] - 2026-10-27
 
 Patch release: the command-line decoder builds for x86-64 targets with

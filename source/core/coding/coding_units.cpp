@@ -513,6 +513,10 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
     int32_t *dp      = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
     const sprec_t *s = src + xstarts[static_cast<size_t>(xi)];
     const int32_t w  = static_cast<int32_t>(block->size.x);
+    // Locals, not block members: dp stores may alias them, which would stop
+    // the scalar loop from vectorizing.
+    const bool reversible = block->transformation != 0;
+    uint32_t or_acc       = 0;
     {
 #if defined(__AVX2__)
       const __m256i vone      = _mm256_set1_epi32(1);
@@ -589,22 +593,11 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
       int32_t col = 0;
       for (; col < w; ++col) {
 #endif
-        int32_t temp;
-        if (block->transformation)
-          temp = static_cast<int32_t>(s[col]);
-        else
-          temp = static_cast<int32_t>(static_cast<float>(s[col]) * fs);
-        uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-        temp          = (temp < 0) ? -temp : temp;
-        if (temp) {
-          block->pre_or_val |= 1;
-          temp--;
-          temp <<= 1;
-          temp += static_cast<uint8_t>(sign >> 31);
-          temp |= INT32_MIN;
-        }
-        dp[col] = temp;
+        const int32_t temp = reversible ? static_cast<int32_t>(s[col])
+                                        : static_cast<int32_t>(static_cast<float>(s[col]) * fs);
+        dp[col]            = htj2k_magsgn(temp, or_acc);
       }
+      if (or_acc) block->pre_or_val |= 1;
     }
     if (static_cast<int32_t>(block->blksampl_stride) > w)
       memset(dp + w, 0,
@@ -642,6 +635,7 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
     int32_t *dp      = block->sample_buf + row_in_cblk * static_cast<int32_t>(block->blksampl_stride);
     const int32_t *s = src + xstarts[static_cast<size_t>(xi)];
     const int32_t w  = static_cast<int32_t>(block->size.x);
+    uint32_t or_acc  = 0;  // a local: dp stores may alias block members
     {
 #if defined(__AVX2__)
       const __m256i vone      = _mm256_set1_epi32(1);
@@ -703,18 +697,9 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
       int32_t col = 0;
       for (; col < w; ++col) {
 #endif
-        int32_t temp  = s[col];
-        uint32_t sign = static_cast<uint32_t>(temp) & 0x80000000;
-        temp          = (temp < 0) ? -temp : temp;
-        if (temp) {
-          block->pre_or_val |= 1;
-          temp--;
-          temp <<= 1;
-          temp += static_cast<uint8_t>(sign >> 31);
-          temp |= INT32_MIN;
-        }
-        dp[col] = temp;
+        dp[col] = htj2k_magsgn(s[col], or_acc);
       }
+      if (or_acc) block->pre_or_val |= 1;
     }
     if (static_cast<int32_t>(block->blksampl_stride) > w)
       memset(dp + w, 0,
