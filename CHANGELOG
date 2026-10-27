@@ -1,3 +1,15 @@
+# [Unreleased]
+
+## Fixed
+- `open_htj2k_dec` did not compile for x86-64 targets that have SSE4.1 but
+  not AVX2, such as x86-64 Android or `-march=x86-64-v2`: its SSE4.1
+  packing helpers were enabled by `__SSE4_1__`, but `<immintrin.h>` was
+  included only with `__AVX2__`.
+- `LICENSE` now also carries the copyright notice of
+  `source/core/common/ThreadPool.hpp` (Aaron Boxer), which is compiled into
+  the library, so that binary distributions reproduce it as the BSD 3-Clause
+  terms require.
+
 # [0.20.0] - 2026-10-27
 
 First release since 0.19.0 (92 commits). It makes the library easier to
