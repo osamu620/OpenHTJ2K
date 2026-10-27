@@ -1,8 +1,104 @@
-# [Unreleased]
+# [0.20.0] - 2026-10-27
+
+First release since 0.19.0 (92 commits). It makes the library easier to
+embed in other software (a CMake package, portable x86-64 builds, working
+C++11 builds, safe concurrent use of several decoder/encoder instances, a
+usable installed tree), hardens decoding of malformed and truncated input,
+and speeds up HT decoding. It also adds the Part 2 PRCL progression order,
+analytic Qfactor visual weighting and JPIP session channels, and fixes
+corrupt encoder output from GCC 15 builds (the default compiler on Ubuntu
+26.04).
+
+## Security
+
+Decoding of malformed or truncated input was reviewed and hardened. Every
+check fires only on non-conformant input; valid codestreams decode
+byte-identically (conformance and regression suites).
+
+- Marker segments: header fields are range-checked when parsed. SIZ
+  (`Csiz`, `Lsiz`, zero sub-sampling factors), DFS (`Ids` > 32 wrote past
+  fixed-size arrays), COD/COC (code-block size exponents; more than 32
+  decomposition levels read out of bounds or looped forever), PPM (`Nppm`
+  walked past the packet-header buffer) and COC/QCC/RGN/POC before SIZ (null
+  dereference). Every marker read is now bounded by the segment's declared
+  length.
+- JP2/JPH boxes: a 64-bit box length could wrap the bounds check, nested
+  `jp2h` superboxes could exhaust the stack, and an embedded codestream
+  length could overflow the decoder buffer's size accounting and overflow the
+  heap. Box lengths are checked as integers, nesting is limited, and
+  codestreams above the 4 GiB decoder limit are rejected at every entry
+  point.
+- Code-block data: entropy-pass lengths are bounded by the code-block's
+  buffer in the HT decoder (all SIMD variants) and the MQ decoder, and a
+  code-block's byte count is clamped to its own tile-part.
+- Threaded decode of malformed input now ends with the same exception as
+  single-threaded decode. It used to abort the process (or hang) when a
+  worker thread hit the error, and some HT code-block errors were ignored,
+  producing a garbage plane with a success status. An exception during
+  line-based decoder setup no longer crashes while unwinding.
+- A codestream cut off inside a packet header hung the decoder; it now
+  decodes the data that is present (issue #462, reported by @rafaelhutter).
+- Column-windowed decode (`set_col_range`): an aligned AVX2 load crashed
+  for windows not starting on a multiple of 8 columns, and columns outside
+  the window were read from uninitialised memory.
+- JPIP: the server caps the `comps=` and `model=` ranges of a request (a
+  20-byte request could exhaust its memory), and the client rejects
+  chunked-transfer chunk sizes that overflow.
+
+## Added
+
+### Codestream and encoder
+- ISO/IEC 15444-2 PRCL progression order (`Corder=PRCL`) for encoding and
+  decoding; the encoder signals it in the CAP marker, and the JPIP
+  reassembler accepts it.
+- The PRF (profile) marker is parsed instead of being reported as unknown,
+  and unknown marker segments are skipped by their length instead of being
+  re-read byte by byte.
+- A round-trip test on a real ISO/IEC 15444-18 (Part 18) codestream (PRCL,
+  ATK, one code-block per precinct).
+
+### Qfactor
+- Analytic contrast-sensitivity weighting for different viewing conditions
+  and colour spaces: `Qcsf=legacy|mannos|daly`, `Qppd`, `Qzoom` (API
+  `set_visual_weighting()`). The default (`legacy`) is byte-identical to the
+  previous tables. See `docs/qfactor.md`.
+- Sub-sampling-aware chroma weighting for input encoded without the MCT,
+  through component-type hints: `Qctype=Y,Cb,Cr` and `Qchromacsf=luma`
+  (APIs `set_component_types()`, `set_chroma_csf_reuse_luma()`).
+- `estimate_qfactor` follows the same options (`--csf`, `--ppd`, `--zoom`,
+  `--ctype`, `--chroma-csf`) and has a check mode (`--expect-q`,
+  `--max-residual`) for scripts.
+
+### JPIP
+- Session-mode channels (ISO/IEC 15444-9 B.2, C.3). The server used to
+  grant `cnew` while staying stateless, so session-mode clients stopped
+  sending `model=` and received the same response forever. Granted channels
+  now keep a per-channel cache model and never re-send delivered data;
+  `cclose` is honoured, the transport is negotiated per Table D.1, data bins
+  larger than the `len=` budget are delivered in resumable pieces, and
+  `JPIP-qid` is echoed.
+
+### RTP receiver
+- ITU-R BT.2390 tone mapping for PQ sources in `open_htj2k_rtp_recv`
+  (`--tonemap auto|clip|bt2390`, `--source-peak-nits`). Diffuse white in PQ
+  content used to render near-black, with highlights clipped.
+
+### Tools
+- `col_range_compare` and a `cr_` test suite check column-windowed decode
+  byte for byte against a full decode; `region_decode_bench` measures
+  viewport (region) decode latency.
 
 ## Performance
 
 ### Decoder
+- HT cleanup decoding reads the MagSgn segment through a reader that
+  removes bit stuffing once per code-block. Zen 5, single thread, 4K images:
+  6–9% fewer cycles per decode on AVX2; WASM SIMD 7% faster lossless and
+  12% faster lossy. NEON uses the same design (not benchmarked).
+- Pairs of equal-sized code-blocks have their serial MEL/VLC decoding
+  interleaved. Zen 5, single thread: 7.7% fewer cycles on 8-bit lossless and
+  6.6% on 8-bit lossy (AVX2), 2–4% on scalar builds; 3–10% faster wall clock
+  at 2–6 threads.
 - Streaming horizontal IDWT lifts directly from the planar LP/HP subband
   rows on NEON (9/7 float and int32 5/3): the per-row interleave pass into
   the ring slot is gone and the kernels' interleaved `vld2q` input loads
@@ -37,9 +133,36 @@
   Measured on an 8K 12-bit image (Ryzen 9 9950X, single thread,
   30-iteration mean): lossy decode another ~4% faster on top of the AVX2
   planar gain; lossless unchanged.
+- The NEON 9/7 and 5/3 horizontal lifting passes are fused into one pass
+  (M3 Max, 8K 12-bit, single thread: lossy ~1.3% faster, lossless ~0.7%).
+- Column-windowed decode lifts directly from the subband planes with SIMD
+  instead of a full-width scalar fallback (AVX2, AVX-512, NEON, WASM).
+  Ryzen 9 9950X, 4K HT lossy, half-width window: 7.5% faster.
 
-## Build
+### Encoder
+- The streaming FDWT lifts each row straight into separate low- and
+  high-pass planes, skipping the extension copy and the deinterleave. Ryzen 9
+  9950X, 8K 12-bit, single thread: lossy encode 2.2% faster on AVX2 and
+  another 3.7% with AVX-512; lossless 3.2% faster. NEON and WASM SIMD
+  versions are included. Codestreams are byte-identical.
+- The NEON HT cleanup encoder uses the same two-pass structure as the AVX2
+  and AVX-512 encoders, and the line-based encoder's quantize/deinterleave
+  steps have NEON code. Speed is unchanged with Apple Clang, which already
+  vectorized these loops; the explicit code helps compilers that do not
+  (for example MSVC on ARM64). Codestreams are byte-identical.
 
+### JPIP, RTP and the WebTransport viewer
+- JPIP: per-tile precinct lookups are constant-time (the reassembler's tile
+  walk was quadratic on many-tile images), and `model=` is parsed without
+  allocating.
+- `open_htj2k_rtp_recv`: batched `recvmmsg` receive on Linux, recycled
+  frame buffers, and zero-copy GL texture upload from persistently mapped
+  buffers (4K59.94 4:2:2 on an RTX 4070 SUPER: same frame rate, decode
+  time −21%, CPU −22%).
+- `wt_viewer`: the WebTransport packet parser no longer allocates per chunk
+  and per packet.
+
+## Build and packaging
 - New `OPENHTJ2K_TARGET_CPU` CMake option for x86-64: `native` (default,
   `-march=native`, unchanged behaviour), `x86-64-v3` (runs on any AVX2
   CPU), `x86-64-v4` (any AVX-512 CPU) or `generic` (any x86-64 CPU). Until
@@ -78,7 +201,6 @@
   longer get the x86-64 / AArch64 SIMD flags; they build the scalar code.
 
 ## Fixed
-
 - The HT SigProp bit reader rejected valid codestreams whose refinement
   segment uses the SigProp/MagRef overlap termination permitted by
   T.814 F.4 (`termSPandMRPackers` NOTE): the bit-stuffing position (MSB of
@@ -162,6 +284,40 @@
   CMake now respects `-DCMAKE_CXX_STANDARD`, and a new CI job builds and
   tests C++11 with Clang on Linux and macOS, treating C++14/17/20 features
   and over-aligned `new` as errors.
+- ATK irreversible 5/3 synthesis skipped the low-pass lifting step on a
+  symmetric-extension sample, giving errors up to 23/255 in the right-edge
+  columns of such codestreams (scalar and NEON kernels, and the AVX2/AVX-512
+  vertical kernels).
+- Scalar builds dequantized some HT code-blocks (multiple passes, ROI or odd
+  height) with integer fixed point, while SIMD builds use floating point;
+  scalar output differed by up to ±1 from SIMD builds. Both now agree.
+- Decoding with the single-tile reuse path (`enable_single_tile_reuse`):
+  - with 3 or more threads, a background prefetch from one frame could
+    still be running when the next frame was loaded, corrupting tiles at
+    random (with "suffix length 4095" warnings);
+  - multi-layer codestreams decoded every packet as layer 0, corrupting
+    the output;
+  - column-windowed decode was not byte-exact for windows touching a
+    component edge.
+- The streaming encoder crashed for any `Cprecincts` setting and could not
+  encode precincts smaller than the code-block (as ISO/IEC 15444-18 profiles
+  use). Every precinct layout now encodes, in all progression orders.
+- The encoder kept the colour transform enabled when the components'
+  sub-sampling differed on only one axis (4:2:2-shaped input), corrupting
+  the heap with the default `Cycc=yes`.
+- `open_htj2k_rtp_recv` never applied the BT.2020 to BT.709 gamut mapping
+  requested with `--colorspace bt2020` for streams with S=0.
+
+## Changed
+- Qfactor step sizes follow the WG1 guideline (N100430): the 1/√2 offset
+  was applied after the luma gain instead of before, making it about 1.7×
+  too small, and with fewer than 5 DWT levels the LL band got a detail-band
+  weight. At the same Qfactor, codestreams are therefore smaller than with
+  0.19.0, most at high Qfactor (kodim23: 2% at Q=50, 6% at Q=90, 13% at
+  Q=97). `estimate_qfactor` matches the corrected formula.
+- The plain step-size and Qfactor paths of the QCD/QCC step computation
+  share one implementation (#448, contributed by Pierre-Anthony Lemieux).
+  Output is unchanged.
 
 # [0.19.0] - 2026-05-30
 
