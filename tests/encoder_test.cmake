@@ -105,6 +105,22 @@ set_tests_properties(dec_gray16_rt_pgx PROPERTIES DEPENDS enc_gray16_rt)
 add_test(NAME comp_gray16_rt_pgx COMMAND imgcmp gray16_rt_00.pgx ${GRAY16_PGM} 0 0)
 set_tests_properties(comp_gray16_rt_pgx PROPERTIES DEPENDS dec_gray16_rt_pgx)
 
+# Lossy decoding of more than 13-bit samples scales them up (downshift =
+# FRACBITS - bit depth < 0) in every finalize path.  Decode a 16-bit Qfactor 90
+# codestream through the command-line decoder and the row- and column-window
+# APIs; the UBSan CI job checks those shifts.  The error bound is loose on
+# purpose (measured: PAE 2458, MSE 3.7e5 on x86-64): it catches broken output,
+# not floating-point differences between builds.
+add_test(NAME enc_gray16_q90 COMMAND open_htj2k_enc -i ${GRAY16_PGM} -o gray16_q90.j2c Qfactor=90)
+add_test(NAME dec_gray16_q90 COMMAND open_htj2k_dec -i gray16_q90.j2c -o gray16_q90.pgm)
+set_tests_properties(dec_gray16_q90 PROPERTIES DEPENDS enc_gray16_q90)
+add_test(NAME comp_gray16_q90 COMMAND imgcmp gray16_q90_00.pgm ${GRAY16_PGM} 4096 600000)
+set_tests_properties(comp_gray16_q90 PROPERTIES DEPENDS dec_gray16_q90)
+add_test(NAME rr_gray16_q90 COMMAND row_range_compare gray16_q90.j2c)
+set_tests_properties(rr_gray16_q90 PROPERTIES DEPENDS enc_gray16_q90)
+add_test(NAME cr_gray16_q90 COMMAND col_range_compare gray16_q90.j2c)
+set_tests_properties(cr_gray16_q90 PROPERTIES DEPENDS enc_gray16_q90)
+
 # Unknown marker segments must be skipped by their length (Lmar), not scanned
 # byte-by-byte. kodim23_unknown_marker.j2c is a lossless kodim23 codestream with
 # an unknown marker (0xFF6F, a 6-byte segment) injected into the main header;
