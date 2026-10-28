@@ -169,40 +169,51 @@ int main(int argc, char *argv[]) {
   const Depth depths[] = {{8, false}, {12, true}};
 
   int total = 0, failed = 0;
+  auto run = [&](const Case &k) {
+    ++total;
+    std::string err;
+    try {
+      const auto planes   = make_planes(k);
+      const auto buffered = encode(k, planes, false);
+      const auto stream   = encode(k, planes, true);
+      const long e        = max_error(k, buffered, planes);
+      // 9/7 (with or without the ICT) at a step of 1/2^depth stays within a
+      // few code values; the byte comparison above is the main check.
+      const long tol = k.transformation ? 0 : 8;
+      if (buffered != stream) {
+        err = "buffered and streaming codestreams differ";
+      } else if (e < 0) {
+        err = "decoded shape does not match the input";
+      } else if (e > tol) {
+        err = "decoded samples off by " + std::to_string(e) + " (tolerance " + std::to_string(tol) + ")";
+      }
+    } catch (std::exception &ex) {
+      err = std::string("exception: ") + ex.what();
+    }
+    if (!err.empty()) {
+      ++failed;
+      printf("FAIL %s: %s\n", k.name().c_str(), err.c_str());
+    } else if (verbose) {
+      printf("ok   %s\n", k.name().c_str());
+    }
+  };
+
   for (auto &sz : sizes)
     for (auto &cp : comps)
       for (uint8_t xf = 0; xf < 2; ++xf)
         for (uint8_t lv : lvls)
-          for (auto &dp : depths) {
-            const Case k{sz[0], sz[1], cp.nc, cp.mct, xf, lv, dp.bits, dp.is_signed};
-            ++total;
-            std::string err;
-            try {
-              const auto planes   = make_planes(k);
-              const auto buffered = encode(k, planes, false);
-              const auto stream   = encode(k, planes, true);
-              const long e        = max_error(k, buffered, planes);
-              // 9/7 (with or without the ICT) at a step of 1/2^depth stays within a
-              // few code values; the byte comparison above is the main check.
-              const long tol = k.transformation ? 0 : 8;
-              if (buffered != stream) {
-                err = "buffered and streaming codestreams differ";
-              } else if (e < 0) {
-                err = "decoded shape does not match the input";
-              } else if (e > tol) {
-                err = "decoded samples off by " + std::to_string(e) + " (tolerance " + std::to_string(tol)
-                      + ")";
-              }
-            } catch (std::exception &ex) {
-              err = std::string("exception: ") + ex.what();
-            }
-            if (!err.empty()) {
-              ++failed;
-              printf("FAIL %s: %s\n", k.name().c_str(), err.c_str());
-            } else if (verbose) {
-              printf("ok   %s\n", k.name().c_str());
-            }
-          }
+          for (auto &dp : depths) run(Case{sz[0], sz[1], cp.nc, cp.mct, xf, lv, dp.bits, dp.is_signed});
+
+  // Images smaller than the DWT levels need: the coarsest levels then have
+  // empty subbands (no code-blocks at all), which the encoder must handle.
+  const uint32_t tiny_sizes[][2] = {{1, 1}, {2, 2}, {3, 5}, {1, 9}, {9, 1}, {17, 33}};
+  const uint8_t tiny_lvls[]      = {1, 2, 5, 7};
+  const Comp tiny_comps[]        = {{1, 0}, {3, 1}};
+  for (auto &sz : tiny_sizes)
+    for (auto &cp : tiny_comps)
+      for (uint8_t xf = 0; xf < 2; ++xf)
+        for (uint8_t lv : tiny_lvls) run(Case{sz[0], sz[1], cp.nc, cp.mct, xf, lv, 8, false});
+
   printf("encode_entry_points: %d cases, %d failed\n", total, failed);
   return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
