@@ -12,6 +12,17 @@
   Ryzen 9 9950X, `generic` build, 3840×2160 RGB, one thread: 33% fewer
   cycles lossless and 31% fewer lossy. Output is byte-identical.
 
+## Fixed
+- The encoder crashed (null dereference) on images smaller than the number
+  of DWT levels needs, such as 1×1 or 3×5 at the default 5 levels, or
+  17×33 at 7. The coarsest levels then have no code-blocks, and the
+  streaming encoder still treated them as having code-block rows to track.
+  Such levels now skip that bookkeeping and keep the same sample type
+  (int32 or float) as the rest of the DWT chain; without the latter,
+  reversible encodes of these images would have been corrupt. Both encoder
+  entry points are covered by a new tiny-image matrix in
+  `encode_entry_points`.
+
 # [0.20.1] - 2026-10-27
 
 Patch release: the command-line decoder builds for x86-64 targets with

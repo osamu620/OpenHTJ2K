@@ -757,7 +757,7 @@ static void fdwt_level_sink_planes_fn(void *ctx, bool is_hp, int32_t abs_row, co
         sink_quantize_row_i32(reinterpret_cast<const int32_t *>(hp_row), hl_sub, 0, c);
       else
         sink_quantize_row(hp_row, hl_sub, 0, c);
-    } else {
+    } else if (c->hp_width > 0) {  // an empty subband may have no buffer
       memcpy(c->hl_samples + static_cast<ptrdiff_t>(hl_sub) * static_cast<ptrdiff_t>(c->hl_stride), hp_row,
              static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
     }
@@ -808,11 +808,13 @@ static void fdwt_level_sink_planes_fn(void *ctx, bool is_hp, int32_t abs_row, co
         sink_quantize_row(lp_row, hp_sub, 1, c);
         sink_quantize_row(hp_row, hp_sub, 2, c);
       }
-    } else {
-      memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride), lp_row,
-             static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
-      memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride), hp_row,
-             static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
+    } else {  // an empty subband may have no buffer
+      if (c->lp_width > 0)
+        memcpy(c->lh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->lh_stride),
+               lp_row, static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
+      if (c->hp_width > 0)
+        memcpy(c->hh_samples + static_cast<ptrdiff_t>(hp_sub) * static_cast<ptrdiff_t>(c->hh_stride),
+               hp_row, static_cast<size_t>(c->hp_width) * sizeof(sprec_t));
     }
     if (c->cb_h > 0) {
       const int32_t br   = hp_sub / c->cb_h;
@@ -7571,13 +7573,15 @@ uint8_t *j2k_tile::encode_line_based_stream(
       const element_siz log2PP = tcomp[c].get_precinct_size(static_cast<uint8_t>(i + 1));
       const int32_t cb_h_eff =
           (log2PP.y >= 1) ? std::min(cb_h_val, static_cast<int32_t>(1) << (log2PP.y - 1)) : cb_h_val;
-      cx.cb_h          = cb_h_eff;
-      cx.num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_eff - 1) / cb_h_eff;
-      if (cx.num_cblk_rows <= 0) continue;
+      // cx.cb_h and cx.num_cblk_rows are set only once this level's overlap
+      // state (cblk_row_done, strip ring) exists: the sink callback treats
+      // cb_h > 0 as "overlap active".  A level skipped below keeps cb_h == 0.
+      const int32_t num_cblk_rows = (std::max(cx.hl_h, cx.lh_h) + cb_h_eff - 1) / cb_h_eff;
+      if (num_cblk_rows <= 0) continue;
 
       // Compute per-strip sample footprint; the scratch slot for this level
       // needs to fit the LARGEST strip, not the sum across all strips.
-      std::vector<uint32_t> strip_g(static_cast<size_t>(cx.num_cblk_rows), 0);
+      std::vector<uint32_t> strip_g(static_cast<size_t>(num_cblk_rows), 0);
       for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
         j2k_precinct *cp = cr->access_precinct(p);
         for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -7589,23 +7593,27 @@ uint8_t *j2k_tile::encode_line_based_stream(
             const uint32_t QHx2      = round_up(block->size.y, 8U);
             const int32_t cblk_y_abs = static_cast<int32_t>(block->pos0.y);
             const int32_t br_idx     = (cblk_y_abs - band_y0) / cb_h_eff;
-            if (br_idx < 0 || br_idx >= cx.num_cblk_rows) continue;
+            if (br_idx < 0 || br_idx >= num_cblk_rows) continue;
             strip_g[static_cast<size_t>(br_idx)] += QWx2 * QHx2;
           }
         }
       }
       uint32_t max_g = 0;
-      for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
+      for (int32_t br = 0; br < num_cblk_rows; ++br) {
         const uint32_t g = strip_g[static_cast<size_t>(br)];
         if (g > max_g) max_g = g;
       }
-      if (max_g == 0) continue;  // level has no codeblocks (e.g. trivial extent)
+      // No code-blocks: the subbands of this level are empty (the image is
+      // smaller than the DWT levels need; then so are all coarser levels).
+      if (max_g == 0) continue;
 
       streaming_scratch.reserve(c, static_cast<size_t>(i), static_cast<size_t>(strip_N), max_g);
       any_level_allocated = true;
 
-      cx.cblk_row_done = MAKE_UNIQUE<std::atomic<uint8_t>[]>(static_cast<size_t>(cx.num_cblk_rows));
-      for (int32_t br = 0; br < cx.num_cblk_rows; ++br) {
+      cx.cb_h          = cb_h_eff;
+      cx.num_cblk_rows = num_cblk_rows;
+      cx.cblk_row_done = MAKE_UNIQUE<std::atomic<uint8_t>[]>(static_cast<size_t>(num_cblk_rows));
+      for (int32_t br = 0; br < num_cblk_rows; ++br) {
         uint8_t init_flags = 0;
         if (br * cb_h_eff >= cx.hl_h) init_flags |= 1;  // no HL codeblocks in this row
         if (br * cb_h_eff >= cx.lh_h) init_flags |= 2;  // no LH/HH codeblocks in this row
@@ -7687,11 +7695,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
         cx.sink_num_cblk_y[b] = static_cast<int32_t>(ncy_total);
       }
       cx.sink_quantize = true;
-      // Flip int32 dispatch in lockstep with sink_quantize: ctx + state.
-      // Must be set for *every* level in the chain (cascade pushes LP from
-      // level i to level i-1 via fdwt_2d_state_push_row).
-      cx.use_i32           = use_i32_pipe;
-      le_states[i].use_i32 = use_i32_pipe;
 
       // Wire per-strip scratch ring (N slots per level).  Done AFTER the
       // sink_cblks tables are built because stamp_strip_pointers walks
@@ -7722,6 +7725,14 @@ uint8_t *j2k_tile::encode_line_based_stream(
     }
 
     if (!any_level_allocated) continue;
+    // Flip int32 dispatch (ctx + state) for *every* level in the chain,
+    // including levels skipped above for having no code-blocks: each level
+    // pushes its LP rows to the next coarser one via fdwt_2d_state_push_row,
+    // so they must all agree on the sample type.
+    for (int32_t i = 0; i < le->NL_active; ++i) {
+      le_ctxs[i].use_i32   = use_i32_pipe;
+      le_states[i].use_i32 = use_i32_pipe;
+    }
     comp_overlap[c] = true;
     comp_use_i32[c] = use_i32_pipe;
   }
