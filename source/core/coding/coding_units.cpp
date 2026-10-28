@@ -5667,7 +5667,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
             dp += 8;
           }
           for (; len > 0; --len) {
-            int32_t ival = (static_cast<int32_t>(*spf++) + offset) << -downshift;
+            int32_t ival = shl_i32(static_cast<int32_t>(*spf++) + offset, -downshift);
             ival += DC_OFFSET;
             ival  = (ival > MAXVAL) ? MAXVAL : ival;
             ival  = (ival < MINVAL) ? MINVAL : ival;
@@ -5748,7 +5748,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
             dp += 8;
           }
           for (; len > 0; --len) {
-            int32_t ival = (static_cast<int32_t>(*spf++) + offset) << -downshift;
+            int32_t ival = shl_i32(static_cast<int32_t>(*spf++) + offset, -downshift);
             ival += DC_OFFSET;
             ival  = (ival > MAXVAL) ? MAXVAL : ival;
             ival  = (ival < MINVAL) ? MINVAL : ival;
@@ -5805,7 +5805,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           }
           for (; len > 0; --len) {
             int32_t ival = static_cast<int32_t>(*spf++);
-            ival         = (ival + offset) << -downshift;
+            ival         = shl_i32(ival + offset, -downshift);
             ival += DC_OFFSET;
             ival  = (ival > MAXVAL) ? MAXVAL : ival;
             ival  = (ival < MINVAL) ? MINVAL : ival;
@@ -5850,7 +5850,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
           dp           = cdst + x_offset + (y + y_offset) * out_stride;
           for (uint32_t n = 0; n < len; ++n) {
             int32_t ival = static_cast<int32_t>(spf[n]);
-            ival         = (ival + offset) << -downshift;
+            ival         = shl_i32(ival + offset, -downshift);
             ival += DC_OFFSET;
             ival  = (ival > MAXVAL) ? MAXVAL : ival;
             ival  = (ival < MINVAL) ? MINVAL : ival;
@@ -5998,7 +5998,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
         for (uint32_t n = 0; n < I.csize_x; ++n) {
           int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(rows[c].data())[n]
                              : static_cast<int32_t>(rows[c][n]);
-          v         = (I.downshift < 0)   ? (v + I.rnd) << -I.downshift
+          v         = (I.downshift < 0)   ? shl_i32(v + I.rnd, -I.downshift)
                       : (I.downshift > 0) ? (v + I.rnd) >> I.downshift
                                           : v;
           v += I.DC_OFFSET;
@@ -6067,7 +6067,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
           }
           for (; n < I.csize_x; ++n) {
             int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(spf)[n] : static_cast<int32_t>(spf[n]);
-            v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
             v += I.DC_OFFSET;
             if (v > I.MAXVAL) v = I.MAXVAL;
             if (v < I.MINVAL) v = I.MINVAL;
@@ -6079,7 +6079,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
           const int32_t *ip = reinterpret_cast<const int32_t *>(spf);
           for (uint32_t n = 0; n < I.csize_x; ++n) {
             int32_t v = ip[n];
-            v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
             v += I.DC_OFFSET;
             if (v > I.MAXVAL) v = I.MAXVAL;
             if (v < I.MINVAL) v = I.MINVAL;
@@ -6088,7 +6088,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
         } else {
           for (uint32_t n = 0; n < I.csize_x; ++n) {
             int32_t v = static_cast<int32_t>(spf[n]);
-            v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+            v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
             v += I.DC_OFFSET;
             if (v > I.MAXVAL) v = I.MAXVAL;
             if (v < I.MINVAL) v = I.MINVAL;
@@ -6452,7 +6452,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
             }
             for (; n < I.csize_x; ++n) {
               int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
               v += I.DC_OFFSET;
               if (v > I.MAXVAL) v = I.MAXVAL;
               if (v < I.MINVAL) v = I.MINVAL;
@@ -6492,7 +6492,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
             }
             for (; n < I.csize_x; ++n) {
               int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
               v += I.DC_OFFSET;
               if (v > I.MAXVAL) v = I.MAXVAL;
               if (v < I.MINVAL) v = I.MINVAL;
@@ -6502,7 +6502,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 #else
             for (uint32_t n = 0; n < I.csize_x; ++n) {
               int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
               v += I.DC_OFFSET;
               if (v > I.MAXVAL) v = I.MAXVAL;
               if (v < I.MINVAL) v = I.MINVAL;
@@ -6570,7 +6570,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
             }
             for (; n < I.csize_x; ++n) {
               int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
               v += I.DC_OFFSET;
               if (v > I.MAXVAL) v = I.MAXVAL;
               if (v < I.MINVAL) v = I.MINVAL;
@@ -6610,7 +6610,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
             }
             for (; n < I.csize_x; ++n) {
               int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
               v += I.DC_OFFSET;
               if (v > I.MAXVAL) v = I.MAXVAL;
               if (v < I.MINVAL) v = I.MINVAL;
@@ -6657,7 +6657,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
               }
               for (; n < I.csize_x; ++n) {
                 int32_t v = static_cast<int32_t>(spf[n]);
-                v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+                v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
                 v += I.DC_OFFSET;
                 if (v > I.MAXVAL) v = I.MAXVAL;
                 if (v < I.MINVAL) v = I.MINVAL;
@@ -6667,7 +6667,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 #else
             for (uint32_t n = 0; n < I.csize_x; ++n) {
               int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? (v + ro) << -ds : (ds > 0) ? (v + ro) >> ds : v;
+              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
               v += I.DC_OFFSET;
               if (v > I.MAXVAL) v = I.MAXVAL;
               if (v < I.MINVAL) v = I.MINVAL;

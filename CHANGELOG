@@ -27,6 +27,12 @@
   last `width % 16` samples of each row were correct). The decoded samples
   themselves were right; only the command-line tool's file output was
   wrong. New tests round-trip a full-range 16-bit image through PGM and PGX.
+- Lossy decoding of images deeper than 13 bits shifted possibly negative
+  samples left (`(v + rnd) << -downshift`, 19 places in the finalize
+  paths), which is undefined behaviour in C++ before C++20. They now use
+  `shl_i32()`, which compiles to the same instruction. New tests decode a
+  16-bit Qfactor 90 codestream through the command-line decoder and the
+  row- and column-window APIs, so the UBSan CI job covers these shifts.
 
 # [0.20.1] - 2026-10-27
 

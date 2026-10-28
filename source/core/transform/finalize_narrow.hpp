@@ -39,6 +39,7 @@
 // read+write round-trips).  NEON inner loops process 16 samples per iteration.
 
 #include <cstdint>
+#include "utils.hpp"
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #  include <arm_neon.h>
@@ -64,7 +65,7 @@ inline void finalize_f32_to_u8_scalar(const float *src, uint8_t *dst, uint32_t w
   for (uint32_t x = 0; x < width; ++x) {
     int32_t v = static_cast<int32_t>(src[x]);
     if (downshift < 0)
-      v = (v + rnd) << -downshift;
+      v = shl_i32(v + rnd, -downshift);
     else if (downshift > 0)
       v = (v + rnd) >> downshift;
     v += dc;
@@ -81,7 +82,7 @@ inline void finalize_f32_to_u16_scalar(const float *src, uint16_t *dst, uint32_t
   for (uint32_t x = 0; x < width; ++x) {
     int32_t v = static_cast<int32_t>(src[x]);
     if (downshift < 0)
-      v = (v + rnd) << -downshift;
+      v = shl_i32(v + rnd, -downshift);
     else if (downshift > 0)
       v = (v + rnd) >> downshift;
     v += dc;
@@ -220,7 +221,7 @@ inline void finalize_f32_to_u8(const float *src, uint8_t *dst, uint32_t width,
   for (; x < width; ++x) {
     int32_t v = static_cast<int32_t>(src[x]);
     if (downshift < 0)
-      v = (v + rnd) << -downshift;
+      v = shl_i32(v + rnd, -downshift);
     else if (downshift > 0)
       v = (v + rnd) >> downshift;
     v += dc;
@@ -289,7 +290,7 @@ inline void finalize_f32_to_u16(const float *src, uint16_t *dst, uint32_t width,
   for (; x < width; ++x) {
     int32_t v = static_cast<int32_t>(src[x]);
     if (downshift < 0)
-      v = (v + rnd) << -downshift;
+      v = shl_i32(v + rnd, -downshift);
     else if (downshift > 0)
       v = (v + rnd) >> downshift;
     v += dc;
