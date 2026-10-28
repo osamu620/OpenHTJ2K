@@ -1,4 +1,11 @@
-# [Unreleased]
+# [0.20.2] - 2026-10-28
+
+Patch release: the encoder no longer crashes on images smaller than its
+DWT levels need, builds without a SIMD encoder (such as
+`OPENHTJ2K_TARGET_CPU=generic` on x86-64) encode about a third faster,
+and lossy decoding of 14- to 16-bit images no longer relies on undefined
+behaviour. The command-line decoder's 16-bit PGM/PGX output is also
+fixed. The API is unchanged.
 
 ## Performance
 
