@@ -89,6 +89,22 @@ set_tests_properties(dec_p18_rt PROPERTIES DEPENDS enc_p18_rt)
 add_test(NAME comp_p18_rt COMMAND imgcmp arri_p18_rt.ppm arri_p18.ppm 0 0)
 set_tests_properties(comp_p18_rt PROPERTIES DEPENDS dec_p18_rt)
 
+# 16-bit samples >= 32768 must survive the decoder's PGM and PGX writers.
+# tests/data/gray16_full_range.pgm is 67x37, 16-bit, with about half its samples
+# >= 32768 (full-range ramps plus 0 and 65535); width 67 exercises both the
+# vectorized row packing and its scalar tail.  A lossless round trip written as
+# PGM (big-endian) and as PGX (little-endian) must reproduce it exactly.
+set(GRAY16_PGM ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/gray16_full_range.pgm)
+add_test(NAME enc_gray16_rt COMMAND open_htj2k_enc -i ${GRAY16_PGM} -o gray16_rt.j2c Creversible=yes)
+add_test(NAME dec_gray16_rt_pgm COMMAND open_htj2k_dec -i gray16_rt.j2c -o gray16_rt.pgm)
+set_tests_properties(dec_gray16_rt_pgm PROPERTIES DEPENDS enc_gray16_rt)
+add_test(NAME comp_gray16_rt_pgm COMMAND imgcmp gray16_rt_00.pgm ${GRAY16_PGM} 0 0)
+set_tests_properties(comp_gray16_rt_pgm PROPERTIES DEPENDS dec_gray16_rt_pgm)
+add_test(NAME dec_gray16_rt_pgx COMMAND open_htj2k_dec -i gray16_rt.j2c -o gray16_rt.pgx)
+set_tests_properties(dec_gray16_rt_pgx PROPERTIES DEPENDS enc_gray16_rt)
+add_test(NAME comp_gray16_rt_pgx COMMAND imgcmp gray16_rt_00.pgx ${GRAY16_PGM} 0 0)
+set_tests_properties(comp_gray16_rt_pgx PROPERTIES DEPENDS dec_gray16_rt_pgx)
+
 # Unknown marker segments must be skipped by their length (Lmar), not scanned
 # byte-by-byte. kodim23_unknown_marker.j2c is a lossless kodim23 codestream with
 # an unknown marker (0xFF6F, a 6-byte segment) injected into the main header;

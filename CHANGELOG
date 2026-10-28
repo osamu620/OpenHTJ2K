@@ -22,6 +22,11 @@
   reversible encodes of these images would have been corrupt. Both encoder
   entry points are covered by a new tiny-image matrix in
   `encode_entry_points`.
+- `open_htj2k_dec` on AVX2 builds wrote 16-bit PGM and PGX output with a
+  signed-saturating pack, so every sample >= 32768 came out as 32767 (the
+  last `width % 16` samples of each row were correct). The decoded samples
+  themselves were right; only the command-line tool's file output was
+  wrong. New tests round-trip a full-range 16-bit image through PGM and PGX.
 
 # [0.20.1] - 2026-10-27
 
