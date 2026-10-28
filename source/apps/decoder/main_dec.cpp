@@ -65,15 +65,20 @@ namespace {
 // bpp==2, big-endian: int32 + offset → {hi, lo} byte pairs
 inline void pack_i32_to_be16(const int32_t *src, uint8_t *dst, uint32_t width, int32_t offset) {
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  const __m256i voff = _mm256_set1_epi32(offset);
+  const __m256i voff  = _mm256_set1_epi32(offset);
+  const __m256i vmask = _mm256_set1_epi32(0xFFFF);
   const __m256i bswap =
       _mm256_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4,
                        7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
   uint32_t n = 0;
   for (; n + 16 <= width; n += 16) {
-    __m256i v0 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n)), voff);
-    __m256i v1 = _mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 8)), voff);
-    __m256i packed = _mm256_packs_epi32(v0, v1);
+    // Keep the low 16 bits, as the scalar tail does, then pack without
+    // saturating: a signed-saturating pack turned samples >= 32768 into 32767.
+    __m256i v0 =
+        _mm256_and_si256(_mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n)), voff), vmask);
+    __m256i v1 =
+        _mm256_and_si256(_mm256_add_epi32(_mm256_loadu_si256((const __m256i *)(src + n + 8)), voff), vmask);
+    __m256i packed = _mm256_packus_epi32(v0, v1);
     packed         = _mm256_permute4x64_epi64(packed, 0xD8);
     packed         = _mm256_shuffle_epi8(packed, bswap);
     _mm256_storeu_si256((__m256i *)(dst + n * 2), packed);
@@ -115,11 +120,13 @@ inline void pack_i32_to_be16(const int32_t *src, uint8_t *dst, uint32_t width, i
 // bpp==2, little-endian (PGX): int32 → {lo, hi} byte pairs (no offset)
 inline void pack_i32_to_le16(const int32_t *src, uint8_t *dst, uint32_t width) {
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-  uint32_t n = 0;
+  const __m256i vmask = _mm256_set1_epi32(0xFFFF);
+  uint32_t n          = 0;
   for (; n + 16 <= width; n += 16) {
-    __m256i v0     = _mm256_loadu_si256((const __m256i *)(src + n));
-    __m256i v1     = _mm256_loadu_si256((const __m256i *)(src + n + 8));
-    __m256i packed = _mm256_packs_epi32(v0, v1);
+    // Low 16 bits, as the scalar tail writes them (see pack_i32_to_be16).
+    __m256i v0     = _mm256_and_si256(_mm256_loadu_si256((const __m256i *)(src + n)), vmask);
+    __m256i v1     = _mm256_and_si256(_mm256_loadu_si256((const __m256i *)(src + n + 8)), vmask);
+    __m256i packed = _mm256_packus_epi32(v0, v1);
     packed         = _mm256_permute4x64_epi64(packed, 0xD8);
     // Already little-endian on x86
     _mm256_storeu_si256((__m256i *)(dst + n * 2), packed);
