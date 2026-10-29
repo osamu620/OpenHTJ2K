@@ -6257,6 +6257,9 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   // Per-component base pointers into the strip scratch buffers; refreshed
   // at the top of every strip.  Row stride is ci[c].csize_x floats.
   std::vector<sprec_t *> strip_ptrs(NC, nullptr);
+  // Per-component pull counts for the current strip, recomputed at the top
+  // of every strip.  Sized by the component count (Csiz may be up to 16384).
+  std::vector<uint32_t> counts(NC, 0);
 
 #ifdef OPENHTJ2K_THREAD
   // Scratch records for the per-component worker tasks.  The array lives
@@ -6322,8 +6325,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, effective_H);
 
     // Pre-compute per-component pull counts.
-    uint32_t counts[16] = {};
-    for (uint16_t c = 0; c < NC && c < 16; ++c) {
+    for (uint16_t c = 0; c < NC; ++c) {
       if (do_mct && c < 3) {
         counts[c] = strip_y1 - strip_y0;
       } else {
@@ -6741,8 +6743,8 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
     uint32_t csize_x, csize_y, yr;
     int16_t downshift, rnd;
   };
-  CInfo ci[16] = {};
-  for (uint16_t c = 0; c < NC && c < 16; ++c) {
+  std::vector<CInfo> ci(NC);
+  for (uint16_t c = 0; c < NC; ++c) {
     element_siz Rsiz;
     hdr.SIZ->get_subsampling_factor(Rsiz, c);
     ci[c].yr               = Rsiz.y;
@@ -6770,6 +6772,9 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
   strip_h_luma = ((strip_h_luma + max_yr - 1) / max_yr) * max_yr;
 
   std::vector<sprec_t *> strip_ptrs(NC, nullptr);
+  // Per-component pull counts for the current strip, recomputed at the top
+  // of every strip.  Sized by the component count (Csiz may be up to 16384).
+  std::vector<uint32_t> counts(NC, 0);
 
 #ifdef OPENHTJ2K_THREAD
   struct StripPullCtx {
@@ -6794,8 +6799,7 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
     const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, H);
 
     // Pre-compute per-component pull counts.
-    uint32_t counts[16] = {};
-    for (uint16_t c = 0; c < NC && c < 16; ++c) {
+    for (uint16_t c = 0; c < NC; ++c) {
       const uint32_t yr_c = ci[c].yr;
       const uint32_t c_y0 = strip_y0 / yr_c;
       const uint32_t c_y1 = std::min((strip_y1 + yr_c - 1) / yr_c, ci[c].csize_y);
