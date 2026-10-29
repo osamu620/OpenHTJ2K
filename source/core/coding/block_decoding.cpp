@@ -31,36 +31,8 @@
 #include "coding_local.hpp"
 #include "EBCOTtables.hpp"
 #include "ebcot_context.hpp"
+#include "ebcot_sig_lut9.hpp"
 #include "block_dequant.hpp"
-
-// 9-bit-indexed σ-context LUT for the packed stripe-column word (book §17.1.2 figure 17.2).
-// Built once at startup from the 8-bit sig_LUT by remapping the neighbourhood-bit layout:
-//   8-bit sig_LUT:  TL=0 TR=1 BL=2 BR=3 T=4 B=5 L=6 R=7
-//   9-bit window:   TL=0 T=1 TR=2 L=3 self=4 R=5 BL=6 B=7 BR=8
-// The self bit (bit 4) is a don't-care since κ^sig is only queried when σ=0; we still
-// populate all 512 entries so the index never needs masking.
-namespace {
-// clang-format off
-struct SigLUT9Init {
-  uint8_t data[4][512];
-  SigLUT9Init() {
-    for (uint32_t idx9 = 0; idx9 < 512; ++idx9) {
-      const uint8_t idx8 = static_cast<uint8_t>(
-          ((idx9 >> 0) & 1u)                 // TL bit 0 → bit 0
-          | (((idx9 >> 2) & 1u) << 1)        // TR bit 2 → bit 1
-          | (((idx9 >> 6) & 1u) << 2)        // BL bit 6 → bit 2
-          | (((idx9 >> 8) & 1u) << 3)        // BR bit 8 → bit 3
-          | (((idx9 >> 1) & 1u) << 4)        // T  bit 1 → bit 4
-          | (((idx9 >> 7) & 1u) << 5)        // B  bit 7 → bit 5
-          | (((idx9 >> 3) & 1u) << 6)        // L  bit 3 → bit 6
-          | (((idx9 >> 5) & 1u) << 7));      // R  bit 5 → bit 7
-      for (int o = 0; o < 4; ++o) data[o][idx9] = sig_LUT[o][idx8];
-    }
-  }
-};
-// clang-format on
-const SigLUT9Init sig_LUT9_table;
-}  // namespace
 
 // The coding passes below keep all per-sample state in the packed stripe-column
 // words (see ebcot_context.hpp).  Each pass loads a column's word once, works on a
