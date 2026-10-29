@@ -13,6 +13,27 @@
   decoding no longer uses a per-sample state array. Output is
   byte-identical.
 
+## Fixed
+
+### Decoder
+- Codestreams with more than 16 components crashed or exhausted memory in
+  the line-based decoder (the row-callback path the command-line decoder
+  uses, and the planar paths), a regression since 0.13.0. Two per-component
+  tables in the strip driver were fixed 16-entry stack arrays indexed by
+  the component count, so from the 17th component on the strip row count
+  and row stride came from uninitialised stack memory; on the 257-component
+  conformance file `p0_13.j2k` this allocated more than 90 GB before the
+  kernel killed the process. The tables are now sized by the component
+  count.
+- Main-header COC markers are matched by their component index instead of
+  being assumed to come one per component in ascending order. The loop
+  that computes the minimum DWT level count read past the end of the COC
+  list when the last COC was not for the last component (a crash on
+  `p0_13.j2k` and `ds0_ht_13_b11.j2k`, #483), and out-of-order COCs were
+  skipped when computing both that minimum and the maximum safe `reduce`.
+  Both files are now decoded by the test suite and checked against the
+  conformance references for their first four components.
+
 # [0.20.2] - 2026-10-28
 
 Patch release: the encoder no longer crashes on images smaller than its
