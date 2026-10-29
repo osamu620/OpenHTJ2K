@@ -1,3 +1,18 @@
+# [Unreleased]
+
+## Performance
+
+### Decoder
+- Part 1 (EBCOT) code-blocks decode about 30% faster: 28-38% fewer cycles
+  on four Part 1 conformance files and on 3840×2160 RGB lossless, lossy and
+  BYPASS codestreams (Ryzen 9 9950X, one thread, native, x86-64-v3 and
+  generic builds). The coding passes keep each 4-sample stripe column's
+  significance, sign, refinement and visited flags in one 32-bit word,
+  the MQ decoder is inlined into the passes, and the reconstruction
+  mid-point is written into each sample as it is decoded, so Part 1
+  decoding no longer uses a per-sample state array. Output is
+  byte-identical.
+
 # [0.20.2] - 2026-10-28
 
 Patch release: the encoder no longer crashes on images smaller than its
