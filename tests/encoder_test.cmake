@@ -266,3 +266,38 @@ set_tests_properties(
 # the same codestream.  It used to crash for any component encoded without the
 # MCT (grayscale, MCT off, or more than three components).
 add_test(NAME enc_entry_points COMMAND encode_entry_points)
+
+# ISO/IEC 15444-1 (Part 1) block coder, selected with Cmodes=0: EBCOT/MQ in its
+# default mode, one codeword segment per code-block.  The lossless round-trips
+# must be exact.  The lossy stream carries the same quantisation indices as the
+# HT stream of the same Qfactor, so it is held to the same tolerance as enc_lossy.
+add_test(NAME enc_part1_lossless COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23part1.j2c Creversible=yes Cmodes=0)
+add_test(NAME dec_part1_lossless COMMAND open_htj2k_dec -i kodim23part1.j2c -o kodim23part1.ppm)
+set_tests_properties(dec_part1_lossless PROPERTIES DEPENDS enc_part1_lossless)
+add_test(NAME comp_part1_lossless COMMAND imgcmp kodim23part1.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_part1_lossless PROPERTIES DEPENDS dec_part1_lossless)
+
+add_test(NAME enc_part1_lossy COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23part1lossy.j2c Qfactor=90 Cmodes=0)
+add_test(NAME dec_part1_lossy COMMAND open_htj2k_dec -i kodim23part1lossy.j2c -o kodim23part1lossy.ppm)
+set_tests_properties(dec_part1_lossy PROPERTIES DEPENDS enc_part1_lossy)
+add_test(NAME comp_part1_lossy COMMAND imgcmp kodim23part1lossy.ppm ${ENCODER_REF_DIR}/kodim23.ppm 23 6)
+set_tests_properties(comp_part1_lossy PROPERTIES DEPENDS dec_part1_lossy)
+
+# Odd image size with 32x32 code-blocks: partial stripes and partial blocks.
+add_test(NAME enc_part1_lossless_odd COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23odd.ppm -o kodim23odd_part1.j2c Creversible=yes Cmodes=0 "Cblk={32,32}")
+add_test(NAME dec_part1_lossless_odd COMMAND open_htj2k_dec -i kodim23odd_part1.j2c -o kodim23odd_part1.ppm)
+set_tests_properties(dec_part1_lossless_odd PROPERTIES DEPENDS enc_part1_lossless_odd)
+add_test(NAME comp_part1_lossless_odd COMMAND imgcmp kodim23odd_part1.ppm ${ENCODER_REF_DIR}/kodim23odd.ppm 0 0)
+set_tests_properties(comp_part1_lossless_odd PROPERTIES DEPENDS dec_part1_lossless_odd)
+
+# Several precincts per resolution in RPCL order: the single-segment pass-length
+# signalling of Part 1 code-blocks across many packets.
+add_test(NAME enc_part1_precincts COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23part1prec.j2c Creversible=yes Cmodes=0 Corder=RPCL "Cprecincts={256,256}{128,128}")
+add_test(NAME dec_part1_precincts COMMAND open_htj2k_dec -i kodim23part1prec.j2c -o kodim23part1prec.ppm)
+set_tests_properties(dec_part1_precincts PROPERTIES DEPENDS enc_part1_precincts)
+add_test(NAME comp_part1_precincts COMMAND imgcmp kodim23part1prec.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_part1_precincts PROPERTIES DEPENDS dec_part1_precincts)
+
+# The JPH file format requires HT block coding: Part 1 output into .jph is refused.
+add_test(NAME enc_part1_jph_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23part1.jph Cmodes=0)
+set_tests_properties(enc_part1_jph_rejected PROPERTIES WILL_FAIL TRUE)

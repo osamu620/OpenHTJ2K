@@ -1,5 +1,24 @@
 # [Unreleased]
 
+## Added
+
+### Encoder
+- ISO/IEC 15444-1 (Part 1) block coding. `Cmodes=0` on the command line, or
+  `cod_params::codeblock_style = 0` through the API, codes every code-block
+  with the EBCOT/MQ coder of Part 1 instead of the HT coder, so the codestream
+  can be read by any JPEG 2000 decoder: Rsiz carries no HT flag and no CAP
+  marker is written. The coder runs in the default mode with one codeword
+  segment per code-block and one quality layer; the mode switches BYPASS,
+  RESET, RESTART, CAUSAL, ERTERM and SEGMARK are rejected for now, and `.jph`
+  output still requires HT. Lossless output is the same size as OpenJPEG's
+  (within 0.02% on kodim23) and about 9% smaller than the HT coder's, and a
+  lossy stream carries exactly the quantisation indices of the HT stream made
+  with the same Qfactor. The passes and the MQ coder are new code
+  (`block_encoding.cpp`, `mq_encoder.hpp`) on the packed stripe-column state
+  the Part 1 decoder uses, and the 9-bit zero-coding context table is now
+  shared by both. New round-trip tests cover lossless, lossy, odd sizes,
+  multi-precinct RPCL output and the `.jph` refusal.
+
 ## Performance
 
 ### Decoder
