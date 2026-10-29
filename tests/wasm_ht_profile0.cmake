@@ -22,6 +22,7 @@ add_test(NAME wasm_dec_p0_ht_09_11 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i
 add_test(NAME wasm_dec_p0_ht_10_11 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i ${CONFORMANCE_DATA_DIR}/ds0_ht_10_b11.j2k -o wasm_ht_p0_10_b11.pgx)
 add_test(NAME wasm_dec_p0_ht_11_10 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i ${CONFORMANCE_DATA_DIR}/ds0_ht_11_b10.j2k -o wasm_ht_p0_11_b10.pgx)
 add_test(NAME wasm_dec_p0_ht_12_11 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i ${CONFORMANCE_DATA_DIR}/ds0_ht_12_b11.j2k -o wasm_ht_p0_12_b11.pgx)
+add_test(NAME wasm_dec_p0_ht_13_11 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i ${CONFORMANCE_DATA_DIR}/ds0_ht_13_b11.j2k -o wasm_ht_p0_13_b11.pgx)
 add_test(NAME wasm_dec_p0_ht_14_11 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i ${CONFORMANCE_DATA_DIR}/ds0_ht_14_b11.j2k -o wasm_ht_p0_14_b11.pgx)
 add_test(NAME wasm_dec_p0_ht_15_11 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i ${CONFORMANCE_DATA_DIR}/ds0_ht_15_b11.j2k -o wasm_ht_p0_15_b11.pgx)
 add_test(NAME wasm_dec_p0_ht_15_14 COMMAND ${NODE_EXECUTABLE} ${WASM_DEC_MJS} -i ${CONFORMANCE_DATA_DIR}/ds0_ht_15_b14.j2k -o wasm_ht_p0_15_b14.pgx)
@@ -126,6 +127,12 @@ set_tests_properties(wasm_comp_p0_ht_11_10 PROPERTIES DEPENDS wasm_dec_p0_ht_11_
 # 12
 add_test(NAME wasm_comp_p0_ht_12_11 COMMAND imgcmp wasm_ht_p0_12_b11_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_12-0.pgx 0 0)
 set_tests_properties(wasm_comp_p0_ht_12_11 PROPERTIES DEPENDS wasm_dec_p0_ht_12_11)
+# 13 (257 components; the reference set covers components 0-3)
+add_test(NAME wasm_comp_p0_ht_13_11_0 COMMAND imgcmp wasm_ht_p0_13_b11_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_13-0.pgx 0 0)
+add_test(NAME wasm_comp_p0_ht_13_11_1 COMMAND imgcmp wasm_ht_p0_13_b11_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_13-1.pgx 0 0)
+add_test(NAME wasm_comp_p0_ht_13_11_2 COMMAND imgcmp wasm_ht_p0_13_b11_02.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_13-2.pgx 0 0)
+add_test(NAME wasm_comp_p0_ht_13_11_3 COMMAND imgcmp wasm_ht_p0_13_b11_03.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_13-3.pgx 0 0)
+set_tests_properties(wasm_comp_p0_ht_13_11_0 wasm_comp_p0_ht_13_11_1 wasm_comp_p0_ht_13_11_2 wasm_comp_p0_ht_13_11_3 PROPERTIES DEPENDS wasm_dec_p0_ht_13_11)
 # 14
 add_test(NAME wasm_comp_p0_ht_14_11r COMMAND imgcmp wasm_ht_p0_14_b11_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_14-0.pgx 0 0)
 add_test(NAME wasm_comp_p0_ht_14_11g COMMAND imgcmp wasm_ht_p0_14_b11_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p0_14-1.pgx 0 0)
