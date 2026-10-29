@@ -173,7 +173,8 @@ template <bool Raw, bool Full>
 EBCOT_FORCE_INLINE void sigprop_stripe(mq_decoder &mq, const pass_setup &st, uint32_t *wp, int32_t *sp,
                                        uint32_t rows, int32_t one_half) {
   for (uint32_t x = 0; x < st.width; ++x, ++wp) {
-    uint32_t w   = *wp;
+    uint32_t w = *wp;
+    if ((w & ebcot::SIGMA_WINDOW) == 0) continue;  // no significant neighbour: nothing to code
     int32_t *col = sp + x;
     if (Full) {
       sigprop_sample<Raw>(mq, st, wp, w, col, 0, one_half);
@@ -211,7 +212,8 @@ EBCOT_FORCE_INLINE void magref_stripe(mq_decoder &mq, const pass_setup &st, uint
     uint32_t w = *wp;
     // Samples that were significant before this bit-plane: σ = 1 and π = 0.
     const uint32_t todo = w & ebcot::SIGMA_SELF_ALL & ~(w >> ebcot::PI_TO_SIGMA_SHIFT);
-    int32_t *col        = sp + x;
+    if (todo == 0) continue;  // nothing to refine in this column
+    int32_t *col = sp + x;
     if (Full) {
       magref_sample<Raw>(mq, st, w, todo, col, 0, p, half, old_marker);
       magref_sample<Raw>(mq, st, w, todo, col, 1, p, half, old_marker);
