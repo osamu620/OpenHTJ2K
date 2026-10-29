@@ -28,54 +28,43 @@
 
 #if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2))
 
-#include "block_dequant.hpp"
-#include <cassert>
+  #include "block_dequant.hpp"
+  #include <cassert>
 
 template <bool StoreI32>
-static void j2k_dequant_rev_scalar(int32_t *sample_buf, size_t blksampl_stride,
-                                   const uint8_t *block_states, size_t blkstate_stride,
-                                   sprec_t *band_buf, uint32_t band_stride, uint32_t width,
-                                   uint32_t height, int32_t M_b, uint8_t ROIshift) {
-  int32_t N_b;
+static void j2k_dequant_rev_scalar(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *band_buf,
+                                   uint32_t band_stride, uint32_t width, uint32_t height, int32_t M_b,
+                                   uint8_t ROIshift) {
   const int32_t pLSB  = 31 - M_b;
   const uint32_t mask = UINT32_MAX >> (M_b + 1);
+  assert(pLSB >= 0);
 
   for (uint32_t y = 0; y < height; y++) {
+    const int32_t *val_row = sample_buf + y * blksampl_stride;
+    sprec_t *dst_row       = band_buf + y * band_stride;
     for (uint32_t x = 0; x < width; x++) {
-      const uint32_t n = x + y * band_stride;
-      int32_t *val     = &sample_buf[x + y * blksampl_stride];
-      uint8_t state    = block_states[(x + 1) + (y + 1) * blkstate_stride];
-      sprec_t *dst     = band_buf + n;
-      int32_t sign     = *val & INT32_MIN;
-      *val &= INT32_MAX;
-      if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-        *val <<= ROIshift;
-      }
+      const int32_t smask = val_row[x] >> 31;
+      int32_t mag         = val_row[x] & INT32_MAX;
+      int32_t QF32;
       if (ROIshift) {
-        N_b = 30 - pLSB + 1;
+        // All bit-planes count as decoded, so no mid-point is added.
+        if (((uint32_t)mag & ~mask) == 0) mag <<= ROIshift;
+        QF32 = ((mag ^ smask) - smask) >> pLSB;
       } else {
-        N_b = 30 - (state >> 3) + 1;
+        // A marker at or above pLSB is the mid-point; one below pLSB is shifted out.
+        QF32 = ((mag >> pLSB) ^ smask) - smask;
       }
-      if (*val != 0 && N_b < M_b) {
-        *val |= 1 << (pLSB - 1 + M_b - N_b);
-      }
-      int32_t smask = sign >> 31;
-      *val          = (*val ^ smask) - smask;
-      assert(pLSB >= 0);
-      int32_t QF32 = *val >> pLSB;
       OPENHTJ2K_IF_CONSTEXPR (StoreI32)
-        *reinterpret_cast<int32_t *>(dst) = QF32;
+        reinterpret_cast<int32_t *>(dst_row)[x] = QF32;
       else
-        *dst = static_cast<float>(QF32);
+        dst_row[x] = static_cast<float>(QF32);
     }
   }
 }
 
-void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *block_states,
-                 size_t blkstate_stride, sprec_t *band_buf, uint32_t band_stride, uint32_t width,
-                 uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
+void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *band_buf, uint32_t band_stride,
+                 uint32_t width, uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
                  float stepsize, bool dequant_i32) {
-  int32_t N_b;
   const int32_t pLSB  = 31 - M_b;
   const uint32_t mask = UINT32_MAX >> (M_b + 1);
 
@@ -92,42 +81,33 @@ void j2k_dequant(int32_t *sample_buf, size_t blksampl_stride, const uint8_t *blo
 
   if (transformation == 1) {
     if (dequant_i32)
-      j2k_dequant_rev_scalar<true>(sample_buf, blksampl_stride, block_states, blkstate_stride,
-                                   band_buf, band_stride, width, height, M_b, ROIshift);
+      j2k_dequant_rev_scalar<true>(sample_buf, blksampl_stride, band_buf, band_stride, width, height, M_b,
+                                   ROIshift);
     else
-      j2k_dequant_rev_scalar<false>(sample_buf, blksampl_stride, block_states, blkstate_stride,
-                                    band_buf, band_stride, width, height, M_b, ROIshift);
+      j2k_dequant_rev_scalar<false>(sample_buf, blksampl_stride, band_buf, band_stride, width, height, M_b,
+                                    ROIshift);
   } else {
     // irreversible path
     for (uint32_t y = 0; y < height; y++) {
+      const int32_t *val_row = sample_buf + y * blksampl_stride;
+      sprec_t *dst_row       = band_buf + y * band_stride;
       for (uint32_t x = 0; x < width; x++) {
-        const uint32_t n = x + y * band_stride;
-        int32_t *val     = &sample_buf[x + y * blksampl_stride];
-        uint8_t state    = block_states[(x + 1) + (y + 1) * blkstate_stride];
-        sprec_t *dst     = band_buf + n;
-        int32_t sign     = *val & INT32_MIN;
-        *val &= INT32_MAX;
-        if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-          *val <<= ROIshift;
-        }
+        const int32_t smask = val_row[x] >> 31;
+        int32_t val         = val_row[x] & INT32_MAX;
         if (ROIshift) {
-          N_b = 30 - pLSB + 1;
-        } else {
-          N_b = 30 - (state >> 3) + 1;
-        }
-        {
-          int32_t offset = (M_b > N_b) ? M_b - N_b : 0;
-          int32_t r_val  = 1 << (pLSB - 1 + offset);
-          if (*val != 0) {
-            *val |= r_val;
+          if (((uint32_t)val & ~mask) == 0) {
+            val <<= ROIshift;
           }
-        }
-        *val          = (*val + (1 << 15)) >> 16;
-        *val         *= scale;
-        int32_t QF32  = (int32_t)((*val + (1 << (downshift - 1))) >> downshift);
-        int32_t smask = sign >> 31;
-        QF32          = (QF32 ^ smask) - smask;
-        *dst          = static_cast<float>(QF32);
+          // All bit-planes count as decoded: the mid-point is half the LSB.
+          if (val != 0) {
+            val |= 1 << (pLSB - 1);
+          }
+        }  // otherwise the reconstruction marker is the mid-point already
+        val = (val + (1 << 15)) >> 16;
+        val *= scale;
+        int32_t QF32 = (int32_t)((val + (1 << (downshift - 1))) >> downshift);
+        QF32         = (QF32 ^ smask) - smask;
+        dst_row[x]   = static_cast<float>(QF32);
       }
     }
   }
