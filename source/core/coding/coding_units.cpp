@@ -1252,7 +1252,7 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
           // captured directly — see EncodePoolCtx::tile_remaining.
           c->enc_pool->push([epc, block, ROIshift, slot_remaining]() {
             g_cblk_pool = claim_cblk_pool(epc);
-            htj2k_encode(block, ROIshift);
+            encode_codeblock(block, ROIshift);
             g_cblk_pool = nullptr;
             // Per-slot decrement: pairs with stamp_strip_pointers's
             // release-store of cblk_count.  When this hits 0 the slot is
@@ -1262,13 +1262,13 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
           });
         } else {
           g_cblk_pool = c->enc_epc->pools[0].get();
-          htj2k_encode(block, c->enc_ROIshift);
+          encode_codeblock(block, c->enc_ROIshift);
           g_cblk_pool = nullptr;
           if (slot_remaining) slot_remaining->fetch_sub(1, std::memory_order_release);
         }
 #else
         g_cblk_pool = c->enc_epc->pools[0].get();
-        htj2k_encode(block, c->enc_ROIshift);
+        encode_codeblock(block, c->enc_ROIshift);
         g_cblk_pool = nullptr;
         if (slot_remaining) slot_remaining->fetch_sub(1, std::memory_order_release);
 #endif
@@ -2221,6 +2221,16 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
   }
 }
 
+// Number of coding passes in the codeword segment that starts at pass_idx, out of
+// the new_passes still to signal.  HT: the cleanup pass is its own segment and the
+// SigProp/MagRef passes form a second one.  Part 1 without BYPASS or RESTART: all
+// passes share one segment.
+static uint8_t codeword_segment_passes(const j2k_codeblock *blk, uint8_t pass_idx, uint8_t new_passes) {
+  if (blk->Cmodes & HT) return (pass_idx == 0) ? 1 : new_passes;
+  assert((blk->Cmodes & (BYPASS | RESTART)) == 0);
+  return new_passes;
+}
+
 void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, uint16_t layer_idx) {
   // if no codeblock exists, nothing to do is left
   if (this->num_codeblock_x * this->num_codeblock_y == 0) {
@@ -2373,8 +2383,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       uint8_t length_bits                         = 0;
 
       while (new_passes > 0) {
-        assert(blk->Cmodes & HT);
-        segment_passes = (pass_idx == 0) ? 1 : static_cast<uint8_t>(new_passes);
+        segment_passes = codeword_segment_passes(blk, pass_idx, static_cast<uint8_t>(new_passes));
 
         length_bits = 0;
         // length_bits = floor(log2(segment_passes))
@@ -2409,8 +2418,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       total_bytes    = 0;
 
       while (new_passes > 0) {
-        assert(blk->Cmodes & HT);
-        segment_passes = (pass_idx == 0) ? 1 : static_cast<uint8_t>(new_passes);
+        segment_passes = codeword_segment_passes(blk, pass_idx, static_cast<uint8_t>(new_passes));
 
         length_bits = 0;
         // length_bits = floor(log2(segment_passes))
@@ -7061,13 +7069,13 @@ uint8_t *j2k_tile::encode_line_based() {
             enc_remaining.fetch_add(1, std::memory_order_relaxed);
             pool->push([ea]() {
               g_cblk_pool = claim_cblk_pool(ea->epc);
-              htj2k_encode(ea->block, ea->ROIshift);
+              encode_codeblock(ea->block, ea->ROIshift);
               g_cblk_pool = nullptr;
               ea->remaining->fetch_sub(1, std::memory_order_release);
             });
           } else {
             g_cblk_pool = epc->pools[0].get();
-            htj2k_encode(block, ROIshift);
+            encode_codeblock(block, ROIshift);
             g_cblk_pool = nullptr;
           }
         }
@@ -7110,7 +7118,7 @@ uint8_t *j2k_tile::encode_line_based() {
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
         for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
           auto block = cpb->access_codeblock(block_index);
-          htj2k_encode(block, ROIshift);
+          encode_codeblock(block, ROIshift);
         }
       }
       g_cblk_pool = nullptr;
@@ -7310,13 +7318,13 @@ uint8_t *j2k_tile::encode_line_based_stream(
             enc_remaining.fetch_add(1, std::memory_order_relaxed);
             pool->push([ea]() {
               g_cblk_pool = claim_cblk_pool(ea->epc);
-              htj2k_encode(ea->block, ea->ROIshift);
+              encode_codeblock(ea->block, ea->ROIshift);
               g_cblk_pool = nullptr;
               ea->remaining->fetch_sub(1, std::memory_order_release);
             });
           } else {
             g_cblk_pool = epc->pools[0].get();
-            htj2k_encode(block, ROIshift);
+            encode_codeblock(block, ROIshift);
             g_cblk_pool = nullptr;
           }
         }
@@ -7359,7 +7367,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
         for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
           auto block = cpb->access_codeblock(block_index);
-          htj2k_encode(block, ROIshift);
+          encode_codeblock(block, ROIshift);
         }
       }
       g_cblk_pool = nullptr;

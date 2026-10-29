@@ -917,3 +917,8 @@ class j2k_tile : public j2k_tile_base {
 };
 
 int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
+int32_t ebcot_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
+// Block-coder dispatch on the code-block style: HT (Part 15) or EBCOT (Part 1).
+inline int32_t encode_codeblock(j2k_codeblock *block, uint8_t ROIshift) noexcept {
+  return (block->Cmodes & HT) ? htj2k_encode(block, ROIshift) : ebcot_encode(block, ROIshift);
+}
