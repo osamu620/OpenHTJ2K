@@ -371,10 +371,10 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         }
         // Setup pass: assign scratch pointers and selectively zero buffers.
         // ht_cleanup_decode writes every sample_buf/block_states position before
-        // reading, so HT single-pass blocks need no pre-zeroing. EBCOT and HT
-        // multi-pass blocks still require it (EBCOT reads before writing; HT
-        // multi-pass sigprop/magref read the block_states border written only by
-        // the cleanup interior pass, leaving the border uninitialised).
+        // reading, so HT single-pass blocks need no pre-zeroing. EBCOT blocks need
+        // zeroed samples and context words (block_states is unused by EBCOT); HT
+        // multi-pass blocks need zeroed block_states (sigprop/magref read the border
+        // written only by the cleanup interior pass, leaving it uninitialised).
         par_error.store(false, std::memory_order_relaxed);
         for (auto &bt : par_tasks) {
           bt.block->sample_buf            = par_spool + bt.sample_off;
@@ -387,7 +387,6 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           const bool is_ht = (bt.block->Cmodes & HT) >> 6;
           if (!is_ht) {
             std::memset(bt.block->sample_buf, 0, static_cast<size_t>(bt.QWx2) * bt.QHx2 * sizeof(int32_t));
-            std::memset(bt.block->block_states, 0, static_cast<size_t>(bt.QWx2 + 2) * (bt.QHx2 + 2));
             std::memset(bt.block->block_contexts, 0,
                         static_cast<size_t>(bt.QHx2 / 4 + 2) * (bt.QWx2 + 2) * sizeof(uint32_t));
           } else if (bt.block->num_passes > 1) {
@@ -504,7 +503,6 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           // multi-pass HT blocks, zero the necessary regions.
           if (!is_ht) {
             std::memset(cb_sample_buf, 0, need_s * sizeof(int32_t));
-            std::memset(cb_state_buf, 0, need_st);
             std::memset(cb_ctx_buf, 0, need_ctx * sizeof(uint32_t));
           } else if (bk->num_passes > 1) {
             std::memset(cb_state_buf + k * need_st, 0, need_st);
@@ -766,7 +764,6 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     const bool is_ht                = (pb.block->Cmodes & HT) >> 6;
     if (!is_ht) {
       std::memset(pb.block->sample_buf, 0, static_cast<size_t>(pb.QWx2) * pb.QHx2 * sizeof(int32_t));
-      std::memset(pb.block->block_states, 0, static_cast<size_t>(pb.QWx2 + 2) * (pb.QHx2 + 2));
       std::memset(pb.block->block_contexts, 0,
                   static_cast<size_t>(pb.QHx2 / 4 + 2) * (pb.QWx2 + 2) * sizeof(uint32_t));
     } else if (pb.block->num_passes > 1) {

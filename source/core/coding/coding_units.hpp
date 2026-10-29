@@ -155,12 +155,14 @@ class j2k_codeblock : public j2k_region {
  public:
   int32_t *sample_buf;
   size_t blksampl_stride;
+  // Per-sample state of the HT block decoder and encoder.  Part 1 (EBCOT) decoding
+  // does not use it; its state lives in block_contexts.
   uint8_t *block_states;
   size_t blkstate_stride;
   // Part 1 EBCOT: packed 32-bit context word per stripe column (book §17.1.2).
   // One uint32_t per stripe column (4 rows × 1 col) of σ/χ̂/μ/π state, with a
-  // 1-stripe border above/below and a 1-column border left/right. Used only by
-  // j2k_decode (HT decode leaves it nullptr).
+  // 1-stripe border above/below and a 1-column border left/right; see
+  // ebcot_context.hpp. Used only by j2k_decode (HT decode leaves it nullptr).
   uint32_t *block_contexts;
   size_t block_contexts_stride;
   sprec_t *band_buf;
