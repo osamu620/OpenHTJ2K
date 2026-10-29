@@ -321,21 +321,17 @@ bool openhtj2k_decoder_impl::get_component_signedness(uint16_t c) const {
   return main_header.SIZ->is_signed(c);
 }
 
+// Main-header COC markers may appear in any component order, so both functions
+// below look at every COC marker rather than walking the components.  A COC for a
+// component index the image does not have is ignored.
 uint8_t openhtj2k_decoder_impl::get_minimum_DWT_levels() {
   uint8_t NL = main_header.COD->get_dwt_levels();
-  if (main_header.COC.empty() == false) {
-    size_t i = 0;
-    for (uint16_t c = 0; c < this->get_num_component(); ++c) {
-      if (main_header.COC[i]->get_component_index() == c) {
-        // When DFS is active, SPcoc[0] encodes the DFS index, not level count.
-        // Skip this COC for minimum level calculation; use COD's NL instead.
-        if (!main_header.COC[i]->is_dfs_defined()) {
-          if (NL > main_header.COC[i]->get_dwt_levels()) {
-            NL = main_header.COC[i]->get_dwt_levels();
-          }
-        }
-        ++i;
-      }
+  for (const auto &coc : main_header.COC) {
+    if (coc->get_component_index() >= this->get_num_component()) continue;
+    // When DFS is active, SPcoc[0] encodes the DFS index, not level count.
+    // Skip this COC for minimum level calculation; use COD's NL instead.
+    if (!coc->is_dfs_defined() && NL > coc->get_dwt_levels()) {
+      NL = coc->get_dwt_levels();
     }
   }
   return NL;
@@ -347,19 +343,12 @@ uint8_t openhtj2k_decoder_impl::get_max_safe_reduce_NL() {
   // For each DFS-active component, further limit to consecutive BIDIR levels from
   // the finest: reducing through a HONLY or VONLY level produces an image that
   // only has half the resolution in one spatial dimension, which is meaningless.
-  if (!main_header.COC.empty()) {
-    size_t i = 0;
-    for (uint16_t c = 0; c < this->get_num_component(); ++c) {
-      if (i < main_header.COC.size() && main_header.COC[i]->get_component_index() == c) {
-        if (main_header.COC[i]->is_dfs_defined()) {
-          const DFS_marker *dfs = main_header.get_dfs_marker(main_header.COC[i]->get_dfs_index());
-          if (dfs != nullptr) {
-            uint8_t dfs_safe = dfs->get_max_safe_reduce();
-            if (max_r > dfs_safe) max_r = dfs_safe;
-          }
-        }
-        ++i;
-      }
+  for (const auto &coc : main_header.COC) {
+    if (coc->get_component_index() >= this->get_num_component() || !coc->is_dfs_defined()) continue;
+    const DFS_marker *dfs = main_header.get_dfs_marker(coc->get_dfs_index());
+    if (dfs != nullptr) {
+      uint8_t dfs_safe = dfs->get_max_safe_reduce();
+      if (max_r > dfs_safe) max_r = dfs_safe;
     }
   }
   return max_r;
