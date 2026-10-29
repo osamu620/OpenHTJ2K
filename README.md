@@ -28,9 +28,10 @@ on modern x86-64**.
   **WASM SIMD** 128-bit — for color transform, DWT, and HT block coding.
 - Built-in thread pool for both encode and decode.
 - Three decode APIs so callers can pick their memory/latency tradeoff:
-  `invoke()` (batch), `invoke_line_based()` (streaming IDWT into a
-  caller buffer), and `invoke_line_based_stream()` (row-callback;
-  no intermediate W×H buffer).
+  `invoke_line_based()` (streaming IDWT into a caller buffer),
+  `invoke_line_based_stream()` (row-callback; no intermediate W×H
+  buffer), and `invoke_line_based_direct()` (8/16-bit planes written
+  straight into caller buffers).
 
 **Deliverables**
 - Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs.
@@ -144,8 +145,8 @@ Outputs: PPM / PGM / PGX / RAW.
 ./build/bin/open_htj2k_dec -i input.j2c -o out.ppm -ycbcr bt709
 ```
 
-Key flags: `-reduce n`, `-num_threads n`, `-ycbcr {bt601|bt709}`,
-`-batch`. Full reference:
+Key flags: `-reduce n`, `-num_threads n`, `-ycbcr {bt601|bt709}`.
+Full reference:
 [**docs/cli_decoder.md**](docs/cli_decoder.md).
 
 ### RFC 9828 RTP receiver — `open_htj2k_rtp_recv` (experimental)
@@ -208,8 +209,8 @@ Key flags (demo): `--reduce N`, `--parafovea-ratio F`, `--periphery-ratio F`,
 |--------|:---:|:---:|-------|
 | PGM (`P5`) | ✓ | ✓ | Single grayscale component. Bit depth is auto-detected from `maxval` (8-bit or 16-bit). Decoder writes one file per component with a `_NN` suffix. |
 | PPM (`P6`) | ✓ | ✓ | Packed RGB (3 equal-sized components). On decode, a subsampled YCbCr codestream is upsampled to luma resolution (nearest-neighbour for 4:2:2 / 4:2:0) before writing interleaved RGB — enable the YCbCr→RGB matrix with `-ycbcr bt601\|bt709`. |
-| PGX | ✓ | ✓ | One component per file. Multi-component input is a comma-separated file list (e.g. `Y.pgx,Cb.pgx,Cr.pgx`) and the encoder computes `XRsiz` / `YRsiz` from each file's dimensions, so 4:2:2 / 4:2:0 Y/Cb/Cr inputs encode with the right subsampling. Both batch and streaming encode paths support this. Decoder writes one file per component with a `_NN` suffix. |
-| TIFF | ✓ | | Requires libtiff at build time. 8 or 16 bits **per sample**, RGB or grayscale, both planar configurations (`PLANARCONFIG_CONTIG` and `PLANARCONFIG_SEPARATE`). Supported on both the streaming (default) and batch (`-batch`) encode paths; tiled TIFFs still require `-batch`. Not a decoder output. |
+| PGX | ✓ | ✓ | One component per file. Multi-component input is a comma-separated file list (e.g. `Y.pgx,Cb.pgx,Cr.pgx`) and the encoder computes `XRsiz` / `YRsiz` from each file's dimensions, so 4:2:2 / 4:2:0 Y/Cb/Cr inputs encode with the right subsampling. Decoder writes one file per component with a `_NN` suffix. |
+| TIFF | ✓ | | Requires libtiff at build time. 8 or 16 bits **per sample**, RGB or grayscale, both planar configurations (`PLANARCONFIG_CONTIG` and `PLANARCONFIG_SEPARATE`). Tiled TIFFs are not supported. Not a decoder output. |
 | RAW | | ✓ | Decoder-only output. Packed samples, no header, one file per component with a `_NN` suffix. |
 
 ## Documentation

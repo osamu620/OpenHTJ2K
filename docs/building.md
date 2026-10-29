@@ -27,7 +27,7 @@ and macOS (ARM64) to keep it that way.
 
 | Dependency | Enables | Install |
 |---|---|---|
-| **libtiff** | TIFF input in `open_htj2k_enc` (8/16-bit, RGB or grayscale, both planar configurations; tiled TIFFs require `-batch`) | Debian/Ubuntu: `libtiff-dev`; Fedora: `libtiff-devel`; macOS (Homebrew): `brew install libtiff`; vcpkg: `vcpkg install tiff` |
+| **libtiff** | TIFF input in `open_htj2k_enc` (8/16-bit, RGB or grayscale, both planar configurations; tiled TIFFs are not supported) | Debian/Ubuntu: `libtiff-dev`; Fedora: `libtiff-devel`; macOS (Homebrew): `brew install libtiff`; vcpkg: `vcpkg install tiff` |
 
 When libtiff is not detected at configure time the build proceeds without
 TIFF support; the encoder will reject `.tif` / `.tiff` inputs at runtime.
@@ -234,7 +234,7 @@ The script auto-selects the SIMD build (`libopen_htj2k_simd.js`) when
 available, falling back to the scalar build. Decoding uses the
 streaming `invoke_decoder_stream` path, keeping peak WASM heap well
 below the full-image `int32` buffer approach (~52 MB peak for a 4K RGB
-image versus ~486 MB with the batch path).
+image).
 
 ## Building the experimental RFC 9828 RTP receiver
 
