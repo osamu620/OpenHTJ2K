@@ -75,6 +75,9 @@ void print_help(char *cmd) {
       "  PRCL (position-resolution level-component-layer) is an ISO/IEC 15444-2 (Part 2) order.\n");
   printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n  Default is no.\n");
   printf("Cuse_eph=yes or no:\n  yes to use EPH (End of Packet Header) marker.\n  Default is no.\n");
+  printf(
+      "Cmodes=HT or 0:\n  Code-block coder. HT (default) is the Part 15 block coder; 0 selects the Part 1\n"
+      "  (ISO/IEC 15444-1) block coder, readable by any JPEG 2000 decoder.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
   printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 7 (Default is 1.)\n");
   printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
@@ -156,6 +159,7 @@ class j2k_argset {
   uint8_t Porder;
   bool use_sop;
   bool use_eph;
+  uint8_t cblk_modes;  // SPcod code-block style: 0x40 (HT) or 0 (Part 1 EBCOT, default mode)
   double base_step_size;
   uint8_t num_guard;
   bool qderived;
@@ -413,6 +417,7 @@ class j2k_argset {
         Porder(0),
         use_sop(false),
         use_eph(false),
+        cblk_modes(0x40),
         base_step_size(0.0),
         num_guard(1),
         qderived(false),
@@ -575,6 +580,16 @@ class j2k_argset {
           get_bool(param, arg, use_sop);
         } else if (param == "use_eph") {
           get_bool(param, arg, use_eph);
+        } else if (param == "modes") {
+          std::string val = arg.substr(arg.find_first_of('=') + 1);
+          if (val == "HT") {
+            cblk_modes = 0x40;
+          } else if (val == "0") {
+            cblk_modes = 0;
+          } else {
+            printf("ERROR: Cmodes accepts HT (default) or 0 (ISO/IEC 15444-1 block coder).\n");
+            exit(EXIT_FAILURE);
+          }
         } else {
           printf("ERROR: unknown parameter C%s\n", param.c_str());
           exit(EXIT_FAILURE);
@@ -672,6 +687,7 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD uint8_t get_progression() const { return Porder; }
   OPENHTJ2K_NODISCARD bool is_use_sop() const { return use_sop; }
   OPENHTJ2K_NODISCARD bool is_use_eph() const { return use_eph; }
+  OPENHTJ2K_NODISCARD uint8_t get_cblk_modes() const { return cblk_modes; }
   OPENHTJ2K_NODISCARD double get_basestep_size() const { return base_step_size; }
   OPENHTJ2K_NODISCARD uint8_t get_num_guard() const { return num_guard; }
   OPENHTJ2K_NODISCARD bool is_derived() const { return qderived; }

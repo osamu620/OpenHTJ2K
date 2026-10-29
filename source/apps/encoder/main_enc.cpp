@@ -97,6 +97,12 @@ int main(int argc, char *argv[]) {
       std::string fext = out_filename.substr(pos, 4);
       if (fext == ".jph" || fext == ".JPH") {
         isJPH = true;
+        if (args.get_cblk_modes() != 0x40) {
+          printf(
+              "ERROR: the JPH file format requires the HT block coder (Cmodes=HT); write a .j2c codestream "
+              "instead.\n");
+          return EXIT_FAILURE;
+        }
       } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc")
                  && fext.compare(".J2C") && fext.compare(".J2K") && fext.compare(".JPHC")) {
         printf("ERROR: invalid extension for output file\n");
@@ -156,7 +162,7 @@ int main(int argc, char *argv[]) {
     cod_s.number_of_layers              = 1;
     cod_s.use_color_trafo               = args.get_ycc();
     cod_s.dwt_levels                    = args.get_dwt_levels();
-    cod_s.codeblock_style               = 0x040;
+    cod_s.codeblock_style               = args.get_cblk_modes();
     cod_s.transformation                = args.get_transformation();
     std::vector<element_siz_local> PP_s = args.get_prct_size();
     for (auto &i : PP_s) {
@@ -245,7 +251,7 @@ int main(int argc, char *argv[]) {
     cod.number_of_layers              = 1;
     cod.use_color_trafo               = args.get_ycc();
     cod.dwt_levels                    = args.get_dwt_levels();
-    cod.codeblock_style               = 0x040;
+    cod.codeblock_style               = args.get_cblk_modes();
     cod.transformation                = args.get_transformation();
     std::vector<element_siz_local> PP = args.get_prct_size();
     for (auto &i : PP) {

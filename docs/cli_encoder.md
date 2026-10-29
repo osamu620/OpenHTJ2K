@@ -57,6 +57,12 @@ JPH file format.
   - `yes` to insert SOP (Start Of Packet) marker segments. Default is **no**.
 - `Cuse_eph=yes|no`
   - `yes` to insert EPH (End of Packet Header) markers. Default is **no**.
+- `Cmodes=HT|0`
+  - Code-block coder. `HT` (default) is the ISO/IEC 15444-15 (HTJ2K) block coder. `0` selects the
+    ISO/IEC 15444-1 (Part 1, EBCOT/MQ) block coder in its default mode, so the codestream can be read
+    by any JPEG 2000 decoder; Rsiz then carries no HT flag and no CAP marker is written. Part 1 mode
+    switches (BYPASS, RESET, RESTART, CAUSAL, ERTERM, SEGMARK) are not supported yet, and `.jph` output
+    requires `HT`.
 
 ### Quantization and quality
 

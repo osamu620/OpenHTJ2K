@@ -671,8 +671,17 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   }
 
   // create required marker segments
+  // Part 15 (HT) block coding is signalled by Rsiz bit 14 and a CAP marker, Part 1
+  // (EBCOT) block coding by neither.  Part 1 mode switches are not supported yet.
+  const bool is_ht = (cod->codeblock_style & HT) != 0;
+  if (!is_ht && cod->codeblock_style != 0) {
+    printf(
+        "ERROR: Part 1 code-block mode switches (BYPASS, RESET, RESTART, CAUSAL, ERTERM, SEGMARK) are not "
+        "supported.\n");
+    throw std::exception();
+  }
   SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
-                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, true);
+                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, is_ht);
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
                       cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels,
                       static_cast<uint8_t>(cod->blkwidth), static_cast<uint8_t>(cod->blkheight),
@@ -698,15 +707,17 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12) + (bit11 << 11)
                                       + (bit5 << 5) + bits0_4);
   CAP_marker main_CAP;
-  main_CAP.set_Ccap(Ccap15, 15);
+  bool need_CAP = is_ht;
+  if (is_ht) main_CAP.set_Ccap(Ccap15, 15);
   if (cod->progression_order == 5) {
+    need_CAP = true;
     // ISO/IEC 15444-2, Table A.49: the position-resolution level-component-layer progression
     // order (PRCL) is a Part-2 extension; signal it via bit-14 of Ccap2.
     main_CAP.set_Ccap(static_cast<uint16_t>(1U << 14), 2);
   }
 
   // create main header
-  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor, vw);
+  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, need_CAP ? &main_CAP : nullptr, qfactor, vw);
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
@@ -858,8 +869,17 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     }
   }
 
+  // Part 15 (HT) block coding is signalled by Rsiz bit 14 and a CAP marker, Part 1
+  // (EBCOT) block coding by neither.  Part 1 mode switches are not supported yet.
+  const bool is_ht = (cod->codeblock_style & HT) != 0;
+  if (!is_ht && cod->codeblock_style != 0) {
+    printf(
+        "ERROR: Part 1 code-block mode switches (BYPASS, RESET, RESTART, CAUSAL, ERTERM, SEGMARK) are not "
+        "supported.\n");
+    throw std::exception();
+  }
   SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
-                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, true);
+                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, is_ht);
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
                       cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels,
                       static_cast<uint8_t>(cod->blkwidth), static_cast<uint8_t>(cod->blkheight),
@@ -884,14 +904,16 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12) + (bit11 << 11)
                                       + (bit5 << 5) + bits0_4);
   CAP_marker main_CAP;
-  main_CAP.set_Ccap(Ccap15, 15);
+  bool need_CAP = is_ht;
+  if (is_ht) main_CAP.set_Ccap(Ccap15, 15);
   if (cod->progression_order == 5) {
+    need_CAP = true;
     // ISO/IEC 15444-2, Table A.49: the position-resolution level-component-layer progression
     // order (PRCL) is a Part-2 extension; signal it via bit-14 of Ccap2.
     main_CAP.set_Ccap(static_cast<uint16_t>(1U << 14), 2);
   }
 
-  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, &main_CAP, qfactor, vw);
+  j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, need_CAP ? &main_CAP : nullptr, qfactor, vw);
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
