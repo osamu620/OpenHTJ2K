@@ -143,6 +143,30 @@ add_test(NAME dec_gray16_fine COMMAND open_htj2k_dec -i gray16_fine.j2c -o gray1
 set_tests_properties(dec_gray16_fine PROPERTIES DEPENDS enc_gray16_fine)
 add_test(NAME comp_gray16_fine COMMAND imgcmp gray16_fine_00.pgm ${GRAY16_PGM} 2 0.5)
 set_tests_properties(comp_gray16_fine PROPERTIES DEPENDS dec_gray16_fine)
+# Code-blocks 4 samples wide or high.  The encoder gives each code-block
+# round_up(W, 8) x round_up(H, 8) samples of scratch, so a 4 x 1024 or 1024 x 4
+# code-block takes 8192 samples, twice its area.  The scratch for resolutions
+# coded outside the strip pipeline was sized at 4096 samples per code-block and
+# overflowed on the heap (a crash).  Clevels=0 puts the whole image in such a
+# resolution; each image is one full-size code-block.  Lossless round trips
+# with both block coders.
+foreach(_shape tall wide)
+  if(_shape STREQUAL "tall")
+    set(_cblk "Cblk={1024,4}")
+  else()
+    set(_cblk "Cblk={4,1024}")
+  endif()
+  set(_src ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/narrow_cblk_${_shape}.pgm)
+  foreach(_coder HT 0)
+    set(_t narrow_cblk_${_shape}_${_coder})
+    add_test(NAME enc_${_t} COMMAND open_htj2k_enc -i ${_src} -o ${_t}.j2c Clevels=0 ${_cblk} Cmodes=${_coder} Creversible=yes)
+    add_test(NAME dec_${_t} COMMAND open_htj2k_dec -i ${_t}.j2c -o ${_t}.pgm)
+    set_tests_properties(dec_${_t} PROPERTIES DEPENDS enc_${_t})
+    add_test(NAME comp_${_t} COMMAND imgcmp ${_t}_00.pgm ${_src} 0 0)
+    set_tests_properties(comp_${_t} PROPERTIES DEPENDS dec_${_t})
+  endforeach()
+endforeach()
+
 set(RGB16_PPM ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/rgb16_full_range.ppm)
 add_test(NAME enc_rgb16_fine COMMAND open_htj2k_enc -i ${RGB16_PPM} -o rgb16_fine.j2c Qstep=0.00001)
 add_test(NAME dec_rgb16_fine COMMAND open_htj2k_dec -i rgb16_fine.j2c -o rgb16_fine.ppm)

@@ -12,6 +12,15 @@
   controls the values written. The array is now sized for the largest allowed
   code-block. Present since 0.9.0.
 
+### Encoder
+- Encoding with code-blocks 4 samples wide or high (`Cblk={1024,4}` or
+  `Cblk={4,1024}`) could overflow a heap buffer and crash. The sample scratch
+  for code-blocks coded outside the strip pipeline (at least the lowest
+  resolution, which with `Clevels=0` is the whole image) allowed 4096 samples
+  per code-block, but a code-block is padded to a multiple of 8 in both
+  directions, so a 4 x 1024 one takes 8192. The scratch is now sized from the
+  padded code-blocks. Present since 0.5.0.
+
 # [0.21.1] - 2026-10-30
 
 Patch release: 32-bit ARM builds with NEON (for example Android
