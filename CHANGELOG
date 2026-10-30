@@ -1,3 +1,17 @@
+# [Unreleased]
+
+## Fixed
+
+### Security
+- Decoding the HT SigProp and HT MagRef passes of a tall or wide code-block
+  (width x height 32 x 128, 16 x 256, 4 x 1024 or 1024 x 4, for example) wrote
+  past a stack array in the AVX2, NEON and WASM decoders; the scalar decoder
+  is not affected. The array that holds the code-block's significance was
+  sized for 64 x 64 code-blocks, and a 4 x 1024 code-block needs almost five
+  times as many entries. Valid codestreams trigger it, and a crafted one
+  controls the values written. The array is now sized for the largest allowed
+  code-block. Present since 0.9.0.
+
 # [0.21.1] - 2026-10-30
 
 Patch release: 32-bit ARM builds with NEON (for example Android

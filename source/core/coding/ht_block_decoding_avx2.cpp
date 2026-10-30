@@ -1023,9 +1023,11 @@ static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const
     ht_cleanup_step2<>(block, pLSB, su.Pcup, scratch, sstr);
 
     // Pack block_states SIGMA bits into nibble-packed sigma array
-    const uint32_t qw                 = (block->size.x + 3) >> 2;
-    const uint32_t mstr               = ((qw + 2) + 7u) & ~7u;
-    uint16_t sigma_buf[(17 + 1) * 24] = {};
+    const uint32_t qw   = (block->size.x + 3) >> 2;
+    const uint32_t qh   = (block->size.y + 3) >> 2;
+    const uint32_t mstr = ((qw + 2) + 7u) & ~7u;
+    uint16_t sigma_buf[HT_SIGMA_BUF_SIZE];
+    memset(sigma_buf, 0, (qh + 1) * mstr * sizeof(uint16_t));
     pack_sigma(block->block_states, block->blkstate_stride, block->size.x, block->size.y, sigma_buf, mstr);
 
     ht_sigprop_decode(block, su.Dref, su.Lref, static_cast<uint8_t>(30 - (su.S_blk + 1)), sigma_buf, mstr);

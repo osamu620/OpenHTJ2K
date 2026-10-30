@@ -15,6 +15,7 @@
 *.pgx binary
 *.j2k binary
 *.ppm binary
+*.pgm binary
 
 # Qfactor golden marker dumps are byte-exact references consumed by
 # `cmake -E compare_files`. estimate_qfactor --dump-quant writes LF in binary
