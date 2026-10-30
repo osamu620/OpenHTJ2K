@@ -20,9 +20,9 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
   Part 1 (EBCOT/MQ block coder, `Cmodes=0`); partial Part 2
   (Downsampling Factor Structures, Arbitrary Transform Kernels). A Part 1
   codestream from `open_htj2k_enc` is readable by any JPEG 2000 decoder;
-  its block coder runs in the default mode (the BYPASS, RESET, RESTART,
-  CAUSAL, ERTERM and SEGMARK switches are not supported yet) and the
-  `.jph` file format stays HT-only.
+  its block coder supports all six mode switches (BYPASS, RESET,
+  RESTART, CAUSAL, ERTERM, SEGMARK), and the `.jph` file format stays
+  HT-only.
 - Conformance-tested against ITU-T Rec. T.803 | ISO/IEC 15444-4; 529
   tests in the full suite.
 - JPH (`.jph`) file format, including colour specification box parsing
@@ -150,7 +150,7 @@ file format, HT only).
 ./build/bin/open_htj2k_enc -i input.ppm -o out.j2c Cmodes=0 Qfactor=90
 ```
 
-Key flags: `Cmodes={HT|0}`, `Creversible={yes|no}`, `Qfactor=0..100`,
+Key flags: `Cmodes={HT|0|BYPASS|...}`, `Creversible={yes|no}`, `Qfactor=0..100`,
 `Clevels=0..32`, `Cblk={H,W}`, `Corder={LRCP|RLCP|RPCL|PCRL|CPRL}`,
 `-num_threads N`. Full reference:
 [**docs/cli_encoder.md**](docs/cli_encoder.md).

@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
       std::string fext = out_filename.substr(pos, 4);
       if (fext == ".jph" || fext == ".JPH") {
         isJPH = true;
-        if (args.get_cblk_modes() != 0x40) {
+        if ((args.get_cblk_modes() & 0x40) == 0) {
           printf(
               "ERROR: the JPH file format requires the HT block coder (Cmodes=HT); write a .j2c codestream "
               "instead.\n");

@@ -137,6 +137,11 @@ struct cod_params {
   uint16_t number_of_layers;
   uint8_t use_color_trafo;
   uint8_t dwt_levels;
+  // SPcod code-block style.  0x40 selects the HT block coder (ISO/IEC 15444-15),
+  // optionally with 0x08 (vertically causal contexts).  Without 0x40 the Part 1
+  // block coder (ISO/IEC 15444-1) is used, with any of the mode switches of
+  // Table A.19: 0x01 BYPASS, 0x02 RESET, 0x04 RESTART, 0x08 CAUSAL, 0x10 ERTERM,
+  // 0x20 SEGMARK.  Other values are rejected.
   uint8_t codeblock_style;
   uint8_t transformation;
   std::vector<uint8_t> PPx, PPy;
