@@ -2223,12 +2223,25 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
 }
 
 // Number of coding passes in the codeword segment that starts at pass_idx, out of
-// the new_passes still to signal.  HT: the cleanup pass is its own segment and the
-// SigProp/MagRef passes form a second one.  Part 1 without BYPASS or RESTART: all
-// passes share one segment.
+// the new_passes still to signal (B.10.7.1).  HT: the cleanup pass is its own
+// segment and the SigProp/MagRef passes form a second one.  Part 1: one pass per
+// segment with RESTART; with BYPASS, the first ten passes share a segment, then
+// each raw SigProp/MagRef pair and each cleanup pass is its own (Table D.9); with
+// neither, all passes share one segment.
 static uint8_t codeword_segment_passes(const j2k_codeblock *blk, uint8_t pass_idx, uint8_t new_passes) {
   if (blk->Cmodes & HT) return (pass_idx == 0) ? 1 : new_passes;
-  assert((blk->Cmodes & (BYPASS | RESTART)) == 0);
+  if (blk->Cmodes & RESTART) return 1;
+  if (blk->Cmodes & BYPASS) {
+    constexpr uint8_t first_raw_pass = 10;
+    uint8_t n;
+    if (pass_idx < first_raw_pass)
+      n = static_cast<uint8_t>(first_raw_pass - pass_idx);
+    else if ((pass_idx - first_raw_pass) % 3 == 0)
+      n = 2;  // a raw SigProp pass and the MagRef pass that ends its segment
+    else
+      n = 1;  // a MagRef pass whose segment began in an earlier layer, or a cleanup pass
+    return (n < new_passes) ? n : new_passes;
+  }
   return new_passes;
 }
 
