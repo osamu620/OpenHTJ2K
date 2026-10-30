@@ -1,4 +1,9 @@
-# [Unreleased]
+# [0.21.1] - 2026-10-30
+
+Patch release: 32-bit ARM builds with NEON (for example Android
+armeabi-v7a or Linux armhf) compile again; 0.21.0 does not build there.
+Nothing else changes: x86 and AArch64 builds compile the same code as
+0.21.0, so their output is byte-identical, and the API is unchanged.
 
 ## Fixed
 
