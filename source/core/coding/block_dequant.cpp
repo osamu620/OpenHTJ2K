@@ -62,20 +62,38 @@ static void j2k_dequant_rev_scalar(const int32_t *sample_buf, size_t blksampl_st
   }
 }
 
+static void j2k_dequant_irrev_scalar(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *band_buf,
+                                     uint32_t band_stride, uint32_t width, uint32_t height,
+                                     float fscale_direct) {
+  for (uint32_t y = 0; y < height; y++) {
+    const int32_t *val_row = sample_buf + y * blksampl_stride;
+    sprec_t *dst_row       = band_buf + y * band_stride;
+    for (uint32_t x = 0; x < width; x++) {
+      const int32_t v = val_row[x];
+      const float f   = static_cast<float>(v & INT32_MAX) * fscale_direct;
+      dst_row[x]      = (v < 0) ? -f : f;
+    }
+  }
+}
+
 void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *band_buf, uint32_t band_stride,
                  uint32_t width, uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
                  float stepsize, bool dequant_i32) {
   const int32_t pLSB  = 31 - M_b;
   const uint32_t mask = UINT32_MAX >> (M_b + 1);
 
-  float fscale = stepsize;
-  fscale *= (1 << FRACBITS);
+  // Direct float scale factor: the decoded magnitude is in Q(31-M_b) fixed-point
+  // and the subband sample must be in Q(FRACBITS).
+  float fscale_direct = stepsize;
+  fscale_direct *= static_cast<float>(1 << FRACBITS);
   if (M_b <= 31) {
-    fscale /= (static_cast<float>(1 << (31 - M_b)));
+    fscale_direct /= (static_cast<float>(1 << (31 - M_b)));
   } else {
-    fscale *= (static_cast<float>(1 << (M_b - 31)));
+    fscale_direct *= (static_cast<float>(1 << (M_b - 31)));
   }
+  // Integer scale for the ROI path below.
   constexpr int32_t downshift = 15;
+  float fscale                = fscale_direct;
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
   const auto scale = (int32_t)(fscale + 0.5);
 
@@ -86,8 +104,18 @@ void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *ban
     else
       j2k_dequant_rev_scalar<false>(sample_buf, blksampl_stride, band_buf, band_stride, width, height, M_b,
                                     ROIshift);
+  } else if (ROIshift == 0) {
+    // Lossy, no ROI (the common case): one float multiply per sample, the same
+    // arithmetic as the HT decoder's dequantize, so Part 1 and HT code-blocks that
+    // hold the same quantization indices reconstruct to the same values.  The
+    // integer pipeline of the ROI path rounds every sample to the Q(FRACBITS) grid
+    // and drops the index bits below bit 16 when M_b > 15, which cost up to 1 LSB
+    // at 8-bit and tens of LSBs at 16-bit depth against the HT path.
+    j2k_dequant_irrev_scalar(sample_buf, blksampl_stride, band_buf, band_stride, width, height,
+                             fscale_direct);
   } else {
-    // irreversible path
+    // Irreversible path with an ROI shift: all bit-planes count as decoded and the
+    // mid-point is half the LSB.
     for (uint32_t y = 0; y < height; y++) {
       const int32_t *val_row = sample_buf + y * blksampl_stride;
       sprec_t *dst_row       = band_buf + y * band_stride;
