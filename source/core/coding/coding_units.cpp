@@ -6424,6 +6424,32 @@ void j2k_tile::rgb_to_ycbcr() {
   }
 }
 
+// Sample scratch for encoding the code-blocks of one precinct of cr, for the
+// largest precinct: each code-block takes round_up(W, 8) x round_up(H, 8) samples,
+// which is more than its W x H area when a side is not a multiple of 8 (a 4 x 1024
+// code-block takes 8192).  max_cblks receives the largest code-block count.
+static size_t precinct_sample_scratch(j2k_resolution *cr, uint32_t &max_cblks) {
+  size_t max_samples = 0;
+  max_cblks          = 0;
+  for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+    j2k_precinct *cp     = cr->access_precinct(p);
+    uint32_t total_cblks = 0;
+    size_t samples       = 0;
+    for (uint8_t b = 0; b < cr->num_bands; b++) {
+      j2k_precinct_subband *cpb = cp->access_pband(b);
+      const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+      for (uint32_t i = 0; i < num_cblks; ++i) {
+        const j2k_codeblock *block = cpb->access_codeblock(i);
+        samples += static_cast<size_t>(round_up(block->size.x, 8U)) * round_up(block->size.y, 8U);
+      }
+      total_cblks += num_cblks;
+    }
+    max_cblks   = std::max(max_cblks, total_cblks);
+    max_samples = std::max(max_samples, samples);
+  }
+  return max_samples;
+}
+
 uint8_t *j2k_tile::encode_line_based() {
 #ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
@@ -6455,17 +6481,9 @@ uint8_t *j2k_tile::encode_line_based() {
       std::atomic<int> *remaining;
     };
     uint32_t max_total_cblks = 0;
-    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-      j2k_precinct *cp     = cr->access_precinct(p);
-      uint32_t total_cblks = 0;
-      for (uint8_t b = 0; b < cr->num_bands; b++) {
-        j2k_precinct_subband *cpb = cp->access_pband(b);
-        total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
-      }
-      max_total_cblks = std::max(max_total_cblks, total_cblks);
-    }
+    const size_t max_samples = precinct_sample_scratch(cr, max_total_cblks);
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
+    epc->reserve_scratch(max_samples);
     int32_t *gbuf      = epc->gbuf;
     auto enc_task_args = MAKE_UNIQUE<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
@@ -6513,17 +6531,9 @@ uint8_t *j2k_tile::encode_line_based() {
 #else
   auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
     uint32_t max_total_cblks = 0;
-    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-      j2k_precinct *cp     = cr->access_precinct(p);
-      uint32_t total_cblks = 0;
-      for (uint8_t b = 0; b < cr->num_bands; b++) {
-        j2k_precinct_subband *cpb = cp->access_pband(b);
-        total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
-      }
-      max_total_cblks = std::max(max_total_cblks, total_cblks);
-    }
+    const size_t max_samples = precinct_sample_scratch(cr, max_total_cblks);
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
+    epc->reserve_scratch(max_samples);
     int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
@@ -6695,17 +6705,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
       std::atomic<int> *remaining;
     };
     uint32_t max_total_cblks = 0;
-    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-      j2k_precinct *cp     = cr->access_precinct(p);
-      uint32_t total_cblks = 0;
-      for (uint8_t b = 0; b < cr->num_bands; b++) {
-        j2k_precinct_subband *cpb = cp->access_pband(b);
-        total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
-      }
-      max_total_cblks = std::max(max_total_cblks, total_cblks);
-    }
+    const size_t max_samples = precinct_sample_scratch(cr, max_total_cblks);
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
+    epc->reserve_scratch(max_samples);
     int32_t *gbuf      = epc->gbuf;
     auto enc_task_args = MAKE_UNIQUE<EncTaskArgs[]>(max_total_cblks);
     std::atomic<int> enc_remaining{0};
@@ -6753,17 +6755,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
 #else
   auto t1_encode = [epc](j2k_resolution *cr, uint8_t ROIshift) {
     uint32_t max_total_cblks = 0;
-    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-      j2k_precinct *cp     = cr->access_precinct(p);
-      uint32_t total_cblks = 0;
-      for (uint8_t b = 0; b < cr->num_bands; b++) {
-        j2k_precinct_subband *cpb = cp->access_pband(b);
-        total_cblks += cpb->num_codeblock_x * cpb->num_codeblock_y;
-      }
-      max_total_cblks = std::max(max_total_cblks, total_cblks);
-    }
+    const size_t max_samples = precinct_sample_scratch(cr, max_total_cblks);
     if (max_total_cblks == 0) return;
-    epc->reserve_scratch(static_cast<size_t>(max_total_cblks) * 4096);
+    epc->reserve_scratch(max_samples);
     int32_t *gbuf = epc->gbuf;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       j2k_precinct *cp = cr->access_precinct(p);
