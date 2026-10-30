@@ -52,6 +52,10 @@ documents below are for offline browsing.
   iteration-loop benchmark harness for the WebAssembly decoder
   variants; byte-exact plane-dump mode for regression checks;
   profiling recipes.
+- [**benchmarks.md**](benchmarks.md) — lossless encode/decode speed
+  against OpenJPEG (Part 1 and HT block coders, one thread, x86-64):
+  results, method, fixtures, and `tools/bench/lossless_vs_openjpeg.py`,
+  the script that regenerates the README table.
 
 ## Other references
 

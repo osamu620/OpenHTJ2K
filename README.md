@@ -37,6 +37,16 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
   `invoke_line_based_stream()` (row-callback; no intermediate W×H
   buffer), and `invoke_line_based_direct()` (8/16-bit planes written
   straight into caller buffers).
+- Lossless coding speed against OpenJPEG 2.5.4 on a 4096×2160 8-bit RGB
+  frame, one thread, Ryzen 9 9950X, both built with GCC 14 `-O3
+  -march=native` (codec time each tool reports, medians of 10 runs,
+  2026-10-30; method, fixture and the script that regenerates the table in
+  [docs/benchmarks.md](docs/benchmarks.md)):
+
+  | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
+  |---|---:|---:|---:|
+  | Encode | 811 ms | 551 ms (1.5×) | 69 ms (11.8×) |
+  | Decode | 594 ms | 553 ms (1.1×) | 65 ms (9.1×) |
 
 **Deliverables**
 - Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs.
@@ -231,6 +241,7 @@ In-depth guides live under [`docs/`](docs/README.md):
 - [docs/cli_decoder.md](docs/cli_decoder.md) — `open_htj2k_dec` reference
 - [docs/cli_rtp_recv.md](docs/cli_rtp_recv.md) — `open_htj2k_rtp_recv` reference + operational guide
 - [docs/jpip.md](docs/jpip.md) — JPIP subsystem reference (server, native + browser demos, benchmark, cache model, WASM API)
+- [docs/benchmarks.md](docs/benchmarks.md) — lossless speed against OpenJPEG: results, method, fixtures, the script
 - [deploy/README.md](deploy/README.md) — JPIP server deployment (Docker + Cloudflare Tunnel)
 
 See also [CHANGELOG](CHANGELOG) for release history.
