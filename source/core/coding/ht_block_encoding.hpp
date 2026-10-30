@@ -49,7 +49,6 @@
 
   #define MAX_Lcup 16384
   #define MAX_Scup 4079
-  #define MAX_Lref 2046
 
 /********************************************************************************
  * state_MS_enc: state class for MagSgn encoding
@@ -332,73 +331,4 @@ class state_MEL_enc {
   }
 };
 
-class MR_enc;  // forward declaration for friend function termSPandMR()
-/********************************************************************************
- * SP_enc: state class for HT SigProp encoding
- *******************************************************************************/
-class SP_enc {
- private:
-  uint32_t pos;
-  uint8_t bits;
-  uint8_t max;
-  uint8_t tmp;
-  uint8_t *const buf;
-  friend int32_t termSPandMR(SP_enc &, MR_enc &);
-
- public:
-  explicit SP_enc(uint8_t *Dref) : pos(0), bits(0), max(8), tmp(0), buf(Dref) {}
-  void emitSPBit(uint8_t bit) {
-    tmp |= static_cast<uint8_t>(bit << bits);
-    bits++;
-    if (bits == max) {
-      buf[pos] = tmp;
-      pos++;
-      max  = (tmp == 0xFF) ? 7 : 8;
-      tmp  = 0;
-      bits = 0;
-    }
-  }
-  void termSP() {
-    if (tmp != 0) {
-      buf[pos] = tmp;
-      pos++;
-      max = (tmp == 0xFF) ? 7 : 8;
-    }
-    if (max == 7) {
-      buf[pos] = 0x00;
-      pos++;  // this prevents the appearance of a terminal 0xFF
-    }
-  }
-  OPENHTJ2K_NODISCARD uint32_t get_length() const { return pos; }
-};
-/********************************************************************************
- * MR_enc: state class for HT MagRef encoding
- *******************************************************************************/
-class MR_enc {
- private:
-  uint32_t pos;
-  uint8_t bits;
-  uint8_t tmp;
-  uint8_t last;
-  uint8_t *const buf;
-  friend int32_t termSPandMR(SP_enc &, MR_enc &);
-
- public:
-  explicit MR_enc(uint8_t *Dref) : pos(MAX_Lref), bits(0), tmp(0), last(255), buf(Dref) {}
-  void emitMRBit(uint8_t bit) {
-    tmp |= static_cast<uint8_t>(bit << bits);
-    bits++;
-    if ((last > 0x8F) && (tmp == 0x7F)) {
-      bits++;  // this must leave MR_bits equal to 8
-    }
-    if (bits == 8) {
-      buf[pos] = tmp;
-      pos--;  // MR buf gorws reverse order
-      last = tmp;
-      tmp  = 0;
-      bits = 0;
-    }
-  }
-  OPENHTJ2K_NODISCARD uint32_t get_length() const { return MAX_Lref - pos; }
-};
 #endif

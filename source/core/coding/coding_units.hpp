@@ -916,6 +916,11 @@ class j2k_tile : public j2k_tile_base {
   OPENHTJ2K_MAYBE_UNUSED uint32_t get_buf_length();
 };
 
+// Largest HT refinement segment (ISO/IEC 15444-15 B.2: Lref < 2047).  The HT
+// cleanup coders reserve this much after the cleanup segment when refsegment is set.
+constexpr uint32_t HT_MAX_LREF = 2046;
+
+int32_t htj2k_cleanup_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 int32_t ebcot_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 // Block-coder dispatch on the code-block style: HT (Part 15) or EBCOT (Part 1).
