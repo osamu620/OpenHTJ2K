@@ -1424,6 +1424,18 @@ uint8_t j2k_codeblock::get_Mb() const { return this->M_b; }
 
 uint8_t *j2k_codeblock::get_compressed_data() { return this->compressed_data; }
 
+void j2k_codeblock::append_refinement_segment(const uint8_t *buf, const uint32_t Lref,
+                                              const uint32_t reserved) {
+  memcpy(this->compressed_data + this->length, buf, Lref);
+  // set_compressed_data() bump-allocated length + reserved bytes, rounded up to 8,
+  // and nothing has been allocated from this thread's pool since.
+  if (this->compressed_is_pooled && g_cblk_pool != nullptr) {
+    const size_t used   = (static_cast<size_t>(this->length) + reserved + 7u) & ~static_cast<size_t>(7);
+    const size_t needed = (static_cast<size_t>(this->length) + Lref + 7u) & ~static_cast<size_t>(7);
+    g_cblk_pool->trim(used - needed);
+  }
+}
+
 void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsize, const uint16_t Lref) {
   if (this->compressed_data != nullptr) {
     if (!refsegment) {
@@ -6373,6 +6385,26 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img, lb_enc);
     this->tcomp[c].create_resolutions(1, false, lb_enc);
+  }
+
+  if (enc_ht_refine) {
+    for (uint16_t c = 0; c < num_components; c++) {
+      for (uint8_t r = 0; r <= this->tcomp[c].get_dwt_levels(); r++) {
+        j2k_resolution *cr = this->tcomp[c].access_resolution(r);
+        if (cr->is_empty) continue;
+        for (uint32_t pi = 0; pi < cr->npw * cr->nph; pi++) {
+          j2k_precinct *cp = cr->access_precinct(pi);
+          for (uint8_t b = 0; b < cr->num_bands; b++) {
+            j2k_precinct_subband *cpb = cp->access_pband(b);
+            const uint32_t n          = cpb->num_codeblock_x * cpb->num_codeblock_y;
+            for (uint32_t i = 0; i < n; i++) {
+              j2k_codeblock *block = cpb->access_codeblock(i);
+              if (block->Cmodes & HT) block->ht_refine_planes = enc_ht_refine;
+            }
+          }
+        }
+      }
+    }
   }
 
   // apply POC, if any

@@ -75,6 +75,13 @@ JPH file format.
 
     Example: `Cmodes="BYPASS|ERTERM"`. With `HT`, only `CAUSAL` may be added (`Cmodes="HT|CAUSAL"`).
     `.jph` output requires `HT`.
+- `Cht_refine=Int` (experimental, HT only)
+  - Codes each HT code-block as one HT set of three passes: the HT cleanup pass `Int` bit-planes above
+    the LSB, then the HT SigProp and HT MagRef passes of the plane below it (ISO/IEC 15444-15). Valid
+    range: 0–30. Default is **0** (cleanup pass only). The planes below the refined one are not coded,
+    and SigProp only reaches samples next to a significant one, so the result is not lossless, even with
+    `Creversible=yes`. The value is lowered per code-block so that its cleanup pass keeps at least one
+    significant sample; a code-block with no magnitude above 1 is coded with the cleanup pass alone.
 
 ### Quantization and quality
 

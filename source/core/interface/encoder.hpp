@@ -176,6 +176,14 @@ class openhtj2k_encoder {
   // EXPERIMENTAL: A/B switch -- evaluate the luminance CSF for Cb/Cr components
   // instead of the low-pass chroma CSF, keeping the sub-sampling frequency mapping.
   OPENHTJ2K_EXPORT void set_chroma_csf_reuse_luma(bool reuse_luma);
+  // EXPERIMENTAL: code each HT code-block as one HT set of three passes: the HT
+  // cleanup pass `planes` bit-planes above the LSB, then the HT SigProp and HT
+  // MagRef passes of the plane below it (ISO/IEC 15444-15).  0 (default) codes
+  // the cleanup pass only.  SigProp only reaches samples next to a significant
+  // one, so the refined plane is not coded completely and any planes below it are
+  // dropped: the result is not lossless.  The value is clamped per code-block so
+  // that the cleanup pass keeps a significant sample.  HT block coding only.
+  OPENHTJ2K_EXPORT void set_ht_refinement(uint8_t planes);
   OPENHTJ2K_EXPORT size_t invoke_line_based();
   OPENHTJ2K_EXPORT size_t
   invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);

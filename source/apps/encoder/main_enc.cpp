@@ -187,6 +187,7 @@ int main(int argc, char *argv[]) {
       // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
+      encoder.set_ht_refinement(args.get_ht_refine());
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based_stream(
@@ -275,6 +276,7 @@ int main(int argc, char *argv[]) {
       // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
+      encoder.set_ht_refinement(args.get_ht_refine());
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based();

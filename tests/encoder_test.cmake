@@ -400,3 +400,72 @@ add_test(NAME enc_ht_bypass_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR
 set_tests_properties(enc_ht_bypass_rejected PROPERTIES WILL_FAIL TRUE)
 add_test(NAME enc_cmodes_unknown_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23cmodes.j2c "Cmodes=BYPASS|TERMALL")
 set_tests_properties(enc_cmodes_unknown_rejected PROPERTIES WILL_FAIL TRUE)
+
+# HT SigProp and HT MagRef encoding (Cht_refine=N, experimental): each HT
+# code-block is coded as one HT set, a cleanup pass N bit-planes above the LSB
+# followed by the SigProp and MagRef passes of the plane below.  The planes under
+# the refined one are not coded and SigProp only reaches samples next to a
+# significant one, so the round trips are bounded rather than exact.  The bounds
+# sit just above the errors measured on x86-64 (PAE/MSE): 3/0.043 for one plane
+# reversible, 4/0.073 with 16x16 code-blocks on the odd-size image, 10/2.13 for
+# three planes at a fine step with 32x32 code-blocks, and 55/12.9 for two planes
+# at Qfactor 90.
+add_test(NAME enc_ht_refine1 COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23refine1.j2c Creversible=yes Cht_refine=1)
+add_test(NAME dec_ht_refine1 COMMAND open_htj2k_dec -i kodim23refine1.j2c -o kodim23refine1.ppm)
+set_tests_properties(dec_ht_refine1 PROPERTIES DEPENDS enc_ht_refine1)
+add_test(NAME comp_ht_refine1 COMMAND imgcmp kodim23refine1.ppm ${ENCODER_REF_DIR}/kodim23.ppm 3 0.05)
+set_tests_properties(comp_ht_refine1 PROPERTIES DEPENDS dec_ht_refine1)
+
+add_test(NAME enc_ht_refine1_odd COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23odd.ppm -o kodim23odd_refine1.j2c Creversible=yes Cht_refine=1 "Cblk={16,16}")
+add_test(NAME dec_ht_refine1_odd COMMAND open_htj2k_dec -i kodim23odd_refine1.j2c -o kodim23odd_refine1.ppm)
+set_tests_properties(dec_ht_refine1_odd PROPERTIES DEPENDS enc_ht_refine1_odd)
+add_test(NAME comp_ht_refine1_odd COMMAND imgcmp kodim23odd_refine1.ppm ${ENCODER_REF_DIR}/kodim23odd.ppm 4 0.08)
+set_tests_properties(comp_ht_refine1_odd PROPERTIES DEPENDS dec_ht_refine1_odd)
+
+add_test(NAME enc_ht_refine3_odd COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23odd.ppm -o kodim23odd_refine3.j2c Qstep=0.002 Cht_refine=3 "Cblk={32,32}")
+add_test(NAME dec_ht_refine3_odd COMMAND open_htj2k_dec -i kodim23odd_refine3.j2c -o kodim23odd_refine3.ppm)
+set_tests_properties(dec_ht_refine3_odd PROPERTIES DEPENDS enc_ht_refine3_odd)
+add_test(NAME comp_ht_refine3_odd COMMAND imgcmp kodim23odd_refine3.ppm ${ENCODER_REF_DIR}/kodim23odd.ppm 12 2.5)
+set_tests_properties(comp_ht_refine3_odd PROPERTIES DEPENDS dec_ht_refine3_odd)
+
+add_test(NAME enc_ht_refine2_lossy COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23refine2lossy.j2c Qfactor=90 Cht_refine=2)
+add_test(NAME dec_ht_refine2_lossy COMMAND open_htj2k_dec -i kodim23refine2lossy.j2c -o kodim23refine2lossy.ppm)
+set_tests_properties(dec_ht_refine2_lossy PROPERTIES DEPENDS enc_ht_refine2_lossy)
+add_test(NAME comp_ht_refine2_lossy COMMAND imgcmp kodim23refine2lossy.ppm ${ENCODER_REF_DIR}/kodim23.ppm 60 14)
+set_tests_properties(comp_ht_refine2_lossy PROPERTIES DEPENDS dec_ht_refine2_lossy)
+
+# CAUSAL keeps SigProp from looking at the stripe below: measured 3/0.052.
+add_test(NAME enc_ht_refine1_causal COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23refine1causal.j2c Creversible=yes Cht_refine=1 "Cmodes=HT|CAUSAL")
+add_test(NAME dec_ht_refine1_causal COMMAND open_htj2k_dec -i kodim23refine1causal.j2c -o kodim23refine1causal.ppm)
+set_tests_properties(dec_ht_refine1_causal PROPERTIES DEPENDS enc_ht_refine1_causal)
+add_test(NAME comp_ht_refine1_causal COMMAND imgcmp kodim23refine1causal.ppm ${ENCODER_REF_DIR}/kodim23.ppm 3 0.06)
+set_tests_properties(comp_ht_refine1_causal PROPERTIES DEPENDS dec_ht_refine1_causal)
+
+# Code-blocks 4 samples wide (256 stripes of four rows, each a single coding
+# group) or 4 high (one stripe of 1024 columns, the widest a code-block can be).
+# The images are dense noise, so every sample of the refined plane is next to a
+# significant one and the round trip is exact.
+foreach(_shape tall wide)
+  if(_shape STREQUAL "tall")
+    set(_cblk "Cblk={1024,4}")
+  else()
+    set(_cblk "Cblk={4,1024}")
+  endif()
+  set(_src ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/narrow_cblk_${_shape}.pgm)
+  set(_t ht_refine1_${_shape})
+  add_test(NAME enc_${_t} COMMAND open_htj2k_enc -i ${_src} -o ${_t}.j2c Clevels=0 ${_cblk} Creversible=yes Cht_refine=1)
+  add_test(NAME dec_${_t} COMMAND open_htj2k_dec -i ${_t}.j2c -o ${_t}.pgm)
+  set_tests_properties(dec_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME comp_${_t} COMMAND imgcmp ${_t}_00.pgm ${_src} 0 0)
+  set_tests_properties(comp_${_t} PROPERTIES DEPENDS dec_${_t})
+endforeach()
+
+# The refinement passes are coded on the encoder's worker threads: a single-
+# threaded encode must give the same codestream.
+add_test(NAME enc_ht_refine1_st COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23refine1_st.j2c Creversible=yes Cht_refine=1 -num_threads 1)
+add_test(NAME cmp_ht_refine1_st COMMAND ${CMAKE_COMMAND} -E compare_files kodim23refine1.j2c kodim23refine1_st.j2c)
+set_tests_properties(cmp_ht_refine1_st PROPERTIES DEPENDS "enc_ht_refine1;enc_ht_refine1_st")
+
+# Refinement passes exist only in the HT block coder: Cht_refine with Cmodes=0 is refused.
+add_test(NAME enc_ht_refine_part1_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23refine_part1.j2c Cmodes=0 Cht_refine=1)
+set_tests_properties(enc_ht_refine_part1_rejected PROPERTIES WILL_FAIL TRUE)
