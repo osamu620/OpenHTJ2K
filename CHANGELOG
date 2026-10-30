@@ -35,6 +35,19 @@
 ## Fixed
 
 ### Decoder
+- Lossy (9/7) Part 1 code-blocks were dequantized through an integer
+  fixed-point pipeline that rounded every subband sample to the 13-bit
+  fractional grid and discarded quantization-index bits below bit 16 whenever
+  M_b exceeded 15, while HT code-blocks were dequantized with one float
+  multiply. The same quantization indices therefore decoded to different
+  images depending on the block coder: by up to 1 LSB at 8-bit depth, and at
+  16-bit depth by up to 16 LSB on our own Qfactor 90 output and 39 LSB on a
+  fine-step codestream from another encoder, measured against an independent
+  decoder. Part 1 code-blocks without an ROI shift now use the same float
+  multiply as HT code-blocks in the scalar, AVX2, AVX-512 and NEON builds, so
+  a Part 1 and an HT codestream carrying the same indices decode to
+  byte-identical images. Decoding of codestreams with an RGN marker is
+  unchanged.
 - Codestreams with more than 16 components crashed or exhausted memory in
   the line-based decoder (the row-callback path the command-line decoder
   uses, and the planar paths), a regression since 0.13.0. Two per-component
