@@ -4,12 +4,12 @@
 
 # OpenHTJ2K
 
-OpenHTJ2K is an open-source C++ encoder and decoder for **JPEG 2000
-Part 1** (ITU-T Rec. T.800 | ISO/IEC 15444-1) and **High-Throughput
-JPEG 2000** (Part 15; ITU-T Rec. T.814 | ISO/IEC 15444-15), with SIMD
-acceleration across x86-64, AArch64, and WebAssembly, a built-in
-multi-threaded pipeline, and a live RFC 9828 RTP receiver that sustains
-**4K @ 60 fps on modern x86-64**.
+OpenHTJ2K is an open-source C++ library for encoding and decoding
+**JPEG 2000 Part 1** (ITU-T Rec. T.800 | ISO/IEC 15444-1) and
+**High-Throughput JPEG 2000** (Part 15; ITU-T Rec. T.814 | ISO/IEC
+15444-15), with SIMD acceleration across x86-64, AArch64, and
+WebAssembly, a built-in multi-threaded pipeline, and a live RFC 9828
+RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
 
 **Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k-demo.pages.dev/) · [📖 Docs](docs/README.md)
 
