@@ -39,8 +39,12 @@
 // Part 1 (EBCOT) block encoder: the significance propagation, magnitude
 // refinement and cleanup passes of ISO/IEC 15444-1 Annex D on the packed
 // stripe-column state of ebcot_context.hpp, mirroring block_decoding.cpp pass
-// for pass.  Default mode only: one MQ codeword segment for all passes, no
-// BYPASS, RESET, RESTART, CAUSAL, ERTERM or SEGMARK.
+// for pass.  All six code-block mode switches of Table A.19 are supported:
+// BYPASS (raw significance propagation and magnitude refinement passes from the
+// fifth bit-plane, D.6), RESET (context states reset at every pass, D.4),
+// RESTART (every pass terminated, D.4), CAUSAL (vertically causal contexts,
+// D.7), ERTERM (predictable termination, D.4.2 and D.6) and SEGMARK (a
+// segmentation symbol after every cleanup pass, D.5).
 //
 // Input: block->sample_buf in the HT encoder's sample format produced by
 // j2k_codeblock::quantize() (bit 31 set for a non-zero sample, whose quantised
@@ -58,10 +62,15 @@ namespace {
 
 constexpr uint8_t LABEL_RUN = 17;
 constexpr uint8_t LABEL_UNI = 18;
-// Largest MQ codeword segment a code-block may produce: set_compressed_data()
+// Most bytes a code-block's codeword segments may total: set_compressed_data()
 // takes a 16-bit length.  A 4096-sample block with 31 magnitude bit-planes
-// codes about 17 KB; this leaves ample room for the MQ coder's worst case.
+// codes about 17 KB; this leaves ample room for the MQ coder's worst case and
+// the extra bytes of per-pass terminations.
 constexpr uint32_t MAX_SEGMENT_BYTES = 65535;
+// With BYPASS, passes from this index on (the fifth bit-plane's significance
+// propagation pass) code their significance propagation and magnitude
+// refinement passes raw.
+constexpr uint32_t BYPASS_FIRST_RAW_PASS = 10;
 
 struct enc_setup {
   uint32_t *ctx;
@@ -73,91 +82,126 @@ struct enc_setup {
   const uint8_t *sig_lut;
 };
 
+// Causal selects vertically causal context formation (the CAUSAL mode switch).
+// It is a template parameter so that the context lookups of the other modes
+// carry no run-time test for it.
+//
+// The coded symbols of the significance propagation and magnitude refinement
+// passes, through the MQ coder or, in the raw passes of BYPASS, straight into
+// the bit stream (the sign is coded as is, D-2).
+EBCOT_ENC_INLINE void code_significance(mq_encoder &mq, const enc_setup &st, uint32_t nb, uint32_t bit) {
+  mq.encode(st.sig_lut[nb], bit);
+}
+EBCOT_ENC_INLINE void code_significance(raw_encoder &raw, const enc_setup &, uint32_t, uint32_t bit) {
+  raw.put(bit);
+}
+template <bool Causal>
+EBCOT_ENC_INLINE void code_sign(mq_encoder &mq, const uint32_t *wp, uint32_t w, uint32_t i, uint32_t sign) {
+  const uint32_t idx = ebcot::sign_context_index(w, wp[-1], wp[1], i, Causal);
+  mq.encode(sign_LUT[0][idx], sign ^ sign_LUT[1][idx]);
+}
+template <bool Causal>
+EBCOT_ENC_INLINE void code_sign(raw_encoder &raw, const uint32_t *, uint32_t, uint32_t, uint32_t sign) {
+  raw.put(sign);
+}
+template <bool Causal>
+EBCOT_ENC_INLINE void code_refinement(mq_encoder &mq, uint32_t w, uint32_t i, uint32_t bit) {
+  uint8_t label = 16;  // later refinements
+  if ((w & ebcot::sigma_bar_bit(i)) == 0) {
+    label = (ebcot::sigma_neighbourhood(w, i, Causal) & ~0x10u) ? 15 : 14;
+  }
+  mq.encode(label, bit);
+}
+template <bool Causal>
+EBCOT_ENC_INLINE void code_refinement(raw_encoder &raw, uint32_t, uint32_t, uint32_t bit) {
+  raw.put(bit);
+}
+
 // Stripe row i of the column at wp becomes significant in this bit-plane: codes
 // its sign, sets σ and χ in the column's register word w and updates the
 // neighbouring words.
-EBCOT_ENC_INLINE void encode_new_significance(mq_encoder &mq, const enc_setup &st, uint32_t *wp,
-                                              uint32_t &w, uint32_t i, uint32_t sign) {
-  const uint32_t idx = ebcot::sign_context_index(w, wp[-1], wp[1], i, false);
-  mq.encode(sign_LUT[0][idx], sign ^ sign_LUT[1][idx]);
+template <bool Causal, class Coder>
+EBCOT_ENC_INLINE void encode_new_significance(Coder &coder, const enc_setup &st, uint32_t *wp, uint32_t &w,
+                                              uint32_t i, uint32_t sign) {
+  code_sign<Causal>(coder, wp, w, i, sign);
   w |= ebcot::sigma_bit(i) | (sign << (3 * i + 19));
   ebcot::broadcast_significance(wp, st.ctx_stride, i, sign);
 }
 
 // One sample of the significance propagation pass: coded if insignificant with a
 // significant neighbour.
-EBCOT_ENC_INLINE void sigprop_sample(mq_encoder &mq, const enc_setup &st, uint32_t *wp, uint32_t &w,
+template <bool Causal, class Coder>
+EBCOT_ENC_INLINE void sigprop_sample(Coder &coder, const enc_setup &st, uint32_t *wp, uint32_t &w,
                                      const int32_t *col, uint32_t i, uint32_t p) {
   if (w & ebcot::sigma_bit(i)) return;
-  const uint32_t nb = ebcot::sigma_neighbourhood(w, i, false);
+  const uint32_t nb = ebcot::sigma_neighbourhood(w, i, Causal);
   if (nb == 0) return;
   w |= ebcot::pi_bit(i);
   const uint32_t s   = static_cast<uint32_t>(col[i * st.sample_stride]);
   const uint32_t bit = (s >> p) & 1u;
-  mq.encode(st.sig_lut[nb], bit);
-  if (bit) encode_new_significance(mq, st, wp, w, i, s >> 31);
+  code_significance(coder, st, nb, bit);
+  if (bit) encode_new_significance<Causal>(coder, st, wp, w, i, s >> 31);
 }
 
 // One sample of the magnitude refinement pass: coded if it was significant before
 // this bit-plane (σ = 1, π = 0).
-EBCOT_ENC_INLINE void magref_sample(mq_encoder &mq, const enc_setup &st, uint32_t &w, uint32_t todo,
+template <bool Causal, class Coder>
+EBCOT_ENC_INLINE void magref_sample(Coder &coder, const enc_setup &st, uint32_t &w, uint32_t todo,
                                     const int32_t *col, uint32_t i, uint32_t p) {
   if ((todo & ebcot::sigma_bit(i)) == 0) return;
-  uint8_t label = 16;  // later refinements
-  if ((w & ebcot::sigma_bar_bit(i)) == 0) {
-    label = (ebcot::sigma_neighbourhood(w, i, false) & ~0x10u) ? 15 : 14;
-  }
-  mq.encode(label, (static_cast<uint32_t>(col[i * st.sample_stride]) >> p) & 1u);
+  code_refinement<Causal>(coder, w, i, (static_cast<uint32_t>(col[i * st.sample_stride]) >> p) & 1u);
   w |= ebcot::sigma_bar_bit(i);
 }
 
 // One sample of the cleanup pass: coded if neither significant nor coded by this
 // bit-plane's significance propagation pass.
+template <bool Causal>
 EBCOT_ENC_INLINE void cleanup_sample(mq_encoder &mq, const enc_setup &st, uint32_t *wp, uint32_t &w,
                                      const int32_t *col, uint32_t i, uint32_t p) {
   if (w & (ebcot::sigma_bit(i) | ebcot::pi_bit(i))) return;
   const uint32_t s   = static_cast<uint32_t>(col[i * st.sample_stride]);
   const uint32_t bit = (s >> p) & 1u;
-  mq.encode(st.sig_lut[ebcot::sigma_neighbourhood(w, i, false)], bit);
-  if (bit) encode_new_significance(mq, st, wp, w, i, s >> 31);
+  mq.encode(st.sig_lut[ebcot::sigma_neighbourhood(w, i, Causal)], bit);
+  if (bit) encode_new_significance<Causal>(mq, st, wp, w, i, s >> 31);
 }
 
 // Each pass walks the stripes; a full stripe (4 rows) is unrolled so that every
 // row's bit positions are constants, and a final partial stripe takes a loop.
-template <bool Full>
-EBCOT_ENC_INLINE void sigprop_stripe(mq_encoder &mq, const enc_setup &st, uint32_t *wp, const int32_t *sp,
+template <bool Causal, class Coder, bool Full>
+EBCOT_ENC_INLINE void sigprop_stripe(Coder &coder, const enc_setup &st, uint32_t *wp, const int32_t *sp,
                                      uint32_t rows, uint32_t p) {
   for (uint32_t x = 0; x < st.width; ++x, ++wp) {
     uint32_t w = *wp;
     if ((w & ebcot::SIGMA_WINDOW) == 0) continue;  // no significant neighbour: nothing to code
     const int32_t *col = sp + x;
     if (Full) {
-      sigprop_sample(mq, st, wp, w, col, 0, p);
-      sigprop_sample(mq, st, wp, w, col, 1, p);
-      sigprop_sample(mq, st, wp, w, col, 2, p);
-      sigprop_sample(mq, st, wp, w, col, 3, p);
+      sigprop_sample<Causal>(coder, st, wp, w, col, 0, p);
+      sigprop_sample<Causal>(coder, st, wp, w, col, 1, p);
+      sigprop_sample<Causal>(coder, st, wp, w, col, 2, p);
+      sigprop_sample<Causal>(coder, st, wp, w, col, 3, p);
     } else {
-      for (uint32_t i = 0; i < rows; ++i) sigprop_sample(mq, st, wp, w, col, i, p);
+      for (uint32_t i = 0; i < rows; ++i) sigprop_sample<Causal>(coder, st, wp, w, col, i, p);
     }
     *wp = w;
   }
 }
 
-EBCOT_ENC_NOINLINE void encode_sigprop(const enc_setup &st, uint32_t p, mq_encoder &mq_io) {
-  mq_encoder mq = mq_io;  // the coder state stays in registers for the whole pass
+template <bool Causal, class Coder>
+EBCOT_ENC_NOINLINE void encode_sigprop(const enc_setup &st, uint32_t p, Coder &coder_io) {
+  Coder coder = coder_io;  // the coder state stays in registers for the whole pass
   for (uint32_t y0 = 0, s = 0; y0 < st.height; y0 += 4, ++s) {
     uint32_t *wp      = st.ctx + (s + 1) * st.ctx_stride + 1;
     const int32_t *sp = st.samples + y0 * st.sample_stride;
     if (st.height - y0 >= 4)
-      sigprop_stripe<true>(mq, st, wp, sp, 4, p);
+      sigprop_stripe<Causal, Coder, true>(coder, st, wp, sp, 4, p);
     else
-      sigprop_stripe<false>(mq, st, wp, sp, st.height - y0, p);
+      sigprop_stripe<Causal, Coder, false>(coder, st, wp, sp, st.height - y0, p);
   }
-  mq_io = mq;
+  coder_io = coder;
 }
 
-template <bool Full>
-EBCOT_ENC_INLINE void magref_stripe(mq_encoder &mq, const enc_setup &st, uint32_t *wp, const int32_t *sp,
+template <bool Causal, class Coder, bool Full>
+EBCOT_ENC_INLINE void magref_stripe(Coder &coder, const enc_setup &st, uint32_t *wp, const int32_t *sp,
                                     uint32_t rows, uint32_t p) {
   for (uint32_t x = 0; x < st.width; ++x, ++wp) {
     uint32_t w = *wp;
@@ -166,32 +210,37 @@ EBCOT_ENC_INLINE void magref_stripe(mq_encoder &mq, const enc_setup &st, uint32_
     if (todo == 0) continue;
     const int32_t *col = sp + x;
     if (Full) {
-      magref_sample(mq, st, w, todo, col, 0, p);
-      magref_sample(mq, st, w, todo, col, 1, p);
-      magref_sample(mq, st, w, todo, col, 2, p);
-      magref_sample(mq, st, w, todo, col, 3, p);
+      magref_sample<Causal>(coder, st, w, todo, col, 0, p);
+      magref_sample<Causal>(coder, st, w, todo, col, 1, p);
+      magref_sample<Causal>(coder, st, w, todo, col, 2, p);
+      magref_sample<Causal>(coder, st, w, todo, col, 3, p);
     } else {
-      for (uint32_t i = 0; i < rows; ++i) magref_sample(mq, st, w, todo, col, i, p);
+      for (uint32_t i = 0; i < rows; ++i) magref_sample<Causal>(coder, st, w, todo, col, i, p);
     }
     *wp = w;
   }
 }
 
-EBCOT_ENC_NOINLINE void encode_magref(const enc_setup &st, uint32_t p, mq_encoder &mq_io) {
-  mq_encoder mq = mq_io;
+template <bool Causal, class Coder>
+EBCOT_ENC_NOINLINE void encode_magref(const enc_setup &st, uint32_t p, Coder &coder_io) {
+  Coder coder = coder_io;
   for (uint32_t y0 = 0, s = 0; y0 < st.height; y0 += 4, ++s) {
     uint32_t *wp      = st.ctx + (s + 1) * st.ctx_stride + 1;
     const int32_t *sp = st.samples + y0 * st.sample_stride;
     if (st.height - y0 >= 4)
-      magref_stripe<true>(mq, st, wp, sp, 4, p);
+      magref_stripe<Causal, Coder, true>(coder, st, wp, sp, 4, p);
     else
-      magref_stripe<false>(mq, st, wp, sp, st.height - y0, p);
+      magref_stripe<Causal, Coder, false>(coder, st, wp, sp, st.height - y0, p);
   }
-  mq_io = mq;
+  coder_io = coder;
 }
 
+template <bool Causal>
 EBCOT_ENC_NOINLINE void encode_cleanup(const enc_setup &st, uint32_t p, mq_encoder &mq_io) {
-  mq_encoder mq = mq_io;
+  // Run mode needs all four samples' neighbourhoods insignificant; a vertically
+  // causal neighbourhood does not see the row below the stripe.
+  constexpr uint32_t run_mask = Causal ? ebcot::SIGMA_RUN_CAUSAL : ebcot::SIGMA_WINDOW;
+  mq_encoder mq               = mq_io;
   for (uint32_t y0 = 0, s = 0; y0 < st.height; y0 += 4, ++s) {
     uint32_t *wp      = st.ctx + (s + 1) * st.ctx_stride + 1;
     const int32_t *sp = st.samples + y0 * st.sample_stride;
@@ -200,7 +249,7 @@ EBCOT_ENC_NOINLINE void encode_cleanup(const enc_setup &st, uint32_t p, mq_encod
         uint32_t w         = *wp;
         const int32_t *col = sp + x;
         uint32_t r         = 0;  // first row still to code
-        if ((w & ebcot::SIGMA_WINDOW) == 0) {
+        if ((w & run_mask) == 0) {
           // Run mode: all four samples are insignificant with insignificant
           // neighbours.  Code whether any of them becomes significant and, if so,
           // the index of the first one (two UNIFORM bits, MSB first).
@@ -218,14 +267,14 @@ EBCOT_ENC_NOINLINE void encode_cleanup(const enc_setup &st, uint32_t p, mq_encod
           mq.encode(LABEL_RUN, 1);
           mq.encode(LABEL_UNI, first >> 1);
           mq.encode(LABEL_UNI, first & 1u);
-          encode_new_significance(mq, st, wp, w, first,
-                                  static_cast<uint32_t>(col[first * st.sample_stride]) >> 31);
+          encode_new_significance<Causal>(mq, st, wp, w, first,
+                                          static_cast<uint32_t>(col[first * st.sample_stride]) >> 31);
           r = first + 1;
         }
-        if (r == 0) cleanup_sample(mq, st, wp, w, col, 0, p);
-        if (r <= 1) cleanup_sample(mq, st, wp, w, col, 1, p);
-        if (r <= 2) cleanup_sample(mq, st, wp, w, col, 2, p);
-        if (r <= 3) cleanup_sample(mq, st, wp, w, col, 3, p);
+        if (r == 0) cleanup_sample<Causal>(mq, st, wp, w, col, 0, p);
+        if (r <= 1) cleanup_sample<Causal>(mq, st, wp, w, col, 1, p);
+        if (r <= 2) cleanup_sample<Causal>(mq, st, wp, w, col, 2, p);
+        if (r <= 3) cleanup_sample<Causal>(mq, st, wp, w, col, 3, p);
         *wp = w & ~ebcot::PI_ALL;
       }
     } else {
@@ -233,12 +282,31 @@ EBCOT_ENC_NOINLINE void encode_cleanup(const enc_setup &st, uint32_t p, mq_encod
       for (uint32_t x = 0; x < st.width; ++x, ++wp) {
         uint32_t w         = *wp;
         const int32_t *col = sp + x;
-        for (uint32_t i = 0; i < rows; ++i) cleanup_sample(mq, st, wp, w, col, i, p);
+        for (uint32_t i = 0; i < rows; ++i) cleanup_sample<Causal>(mq, st, wp, w, col, i, p);
         *wp = w & ~ebcot::PI_ALL;
       }
     }
   }
   mq_io = mq;
+}
+
+// Codes pass k (0 SPP, 1 MRP, 2 cleanup) of bit-plane p.
+template <bool Causal>
+void encode_pass(const enc_setup &st, uint32_t k, uint32_t p, bool is_raw, mq_encoder &mq,
+                 raw_encoder &raw) {
+  if (k == 0) {
+    if (is_raw)
+      encode_sigprop<Causal>(st, p, raw);
+    else
+      encode_sigprop<Causal>(st, p, mq);
+  } else if (k == 1) {
+    if (is_raw)
+      encode_magref<Causal>(st, p, raw);
+    else
+      encode_magref<Causal>(st, p, mq);
+  } else {
+    encode_cleanup<Causal>(st, p, mq);
+  }
 }
 
 }  // namespace
@@ -303,40 +371,82 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
   std::memset(ctx_words.data(), 0, nwords * sizeof(uint32_t));
   static thread_local uint8_t out_buf[MAX_SEGMENT_BYTES + 16];
 
-  const enc_setup st = {ctx_words.data(),
-                        ctx_stride,
-                        block->sample_buf,
-                        stride,
-                        width,
-                        height,
-                        sig_LUT9_table.data[block->get_orientation()]};
+  const enc_setup st   = {ctx_words.data(),
+                          ctx_stride,
+                          block->sample_buf,
+                          stride,
+                          width,
+                          height,
+                          sig_LUT9_table.data[block->get_orientation()]};
+  const uint32_t modes = block->Cmodes;
+  const bool causal    = (modes & CAUSAL) != 0;
+  const bool bypass    = (modes & BYPASS) != 0;
+  const bool reset     = (modes & RESET) != 0;
+  const bool restart   = (modes & RESTART) != 0;
+  const bool erterm    = (modes & ERTERM) != 0;
+  const bool segmark   = (modes & SEGMARK) != 0;
+
+  // The most significant bit-plane has a cleanup pass only.
+  const uint32_t num_passes = 3 * msb_len - 2;
+  block->ensure_pass_capacity(static_cast<uint8_t>(num_passes));
   mq_encoder mq(out_buf);
   mq.init_states_for_all_contexts();
-  // The most significant bit-plane has a cleanup pass only.
+  raw_encoder raw;
+  uint32_t len      = 0;     // bytes of the segments terminated so far
+  bool segment_open = true;  // the MQ coder above has started the first segment
+  uint32_t z        = 0;     // pass index
   for (uint32_t p = msb_len; p-- > 0;) {
-    if (p != msb_len - 1) {
-      encode_sigprop(st, p, mq);
-      encode_magref(st, p, mq);
-    }
-    encode_cleanup(st, p, mq);
-  }
-  const uint32_t len = mq.flush();
-  if (len > MAX_SEGMENT_BYTES) {
-    printf("ERROR: Part 1 code-block codeword segment of %u bytes exceeds the 16-bit limit.\n", len);
-    return -1;
-  }
-  const uint8_t num_passes = static_cast<uint8_t>(3 * msb_len - 2);
+    for (uint32_t k = (p == msb_len - 1) ? 2 : 0; k < 3; ++k, ++z) {  // 0 SPP, 1 MRP, 2 cleanup
+      const bool is_raw = bypass && k < 2 && z >= BYPASS_FIRST_RAW_PASS;
+      if (!segment_open) {
+        if (is_raw)
+          raw.init(out_buf + len);
+        else
+          mq.init(out_buf + len);
+        segment_open = true;
+      }
+      if (reset && z > 0) mq.init_states_for_all_contexts();
+      if (causal)
+        encode_pass<true>(st, k, p, is_raw, mq, raw);
+      else
+        encode_pass<false>(st, k, p, is_raw, mq, raw);
+      if (k == 2 && segmark) {  // the segmentation symbol 1010 (D.5)
+        mq.encode(LABEL_UNI, 1);
+        mq.encode(LABEL_UNI, 0);
+        mq.encode(LABEL_UNI, 1);
+        mq.encode(LABEL_UNI, 0);
+      }
 
-  // One codeword segment for every pass: the packet header signals their total
-  // length, so only pass_length[0] carries bytes.
-  block->ensure_pass_capacity(num_passes);
-  block->pass_length[0] = len;
-  for (uint8_t i = 1; i < num_passes; ++i) block->pass_length[i] = 0;
-  block->pass_length_count = num_passes;
+      // Codeword segment boundaries (Tables D.8 and D.9): every pass with
+      // RESTART; with BYPASS, the fourth cleanup pass, each raw magnitude
+      // refinement pass and each later cleanup pass; and always the last pass.
+      const bool terminate =
+          restart || z == num_passes - 1
+          || (bypass && (z == BYPASS_FIRST_RAW_PASS - 1 || (z >= BYPASS_FIRST_RAW_PASS && k != 0)));
+      uint32_t seg_len = 0;
+      if (terminate) {
+        if (is_raw)
+          seg_len = raw.terminate(erterm);
+        else
+          seg_len = erterm ? mq.erterm() : mq.flush();
+        len += seg_len;
+        segment_open = false;
+        if (len > MAX_SEGMENT_BYTES) {
+          printf("ERROR: Part 1 code-block of %u bytes exceeds the 16-bit limit.\n", len);
+          return -1;
+        }
+      }
+      // A segment's length sits on its last pass; the packet header signals the
+      // sum over each segment's passes.
+      block->pass_length[z] = seg_len;
+    }
+  }
+
+  block->pass_length_count = static_cast<uint8_t>(num_passes);
   block->set_compressed_data(out_buf, static_cast<uint16_t>(len), 0);
   block->length          = len;
-  block->num_passes      = num_passes;
-  block->layer_passes[0] = num_passes;
+  block->num_passes      = static_cast<uint8_t>(num_passes);
+  block->layer_passes[0] = static_cast<uint8_t>(num_passes);
   block->layer_start[0]  = 0;
   block->num_ZBP         = static_cast<uint8_t>(Mb - msb_len);
   return static_cast<int32_t>(len);

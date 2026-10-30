@@ -33,15 +33,26 @@
 
 // MQ arithmetic encoder of ISO/IEC 15444-1 Annex C (the CODEMPS / CODELPS /
 // RENORME / BYTEOUT / FLUSH procedures of C.2).  The coding passes call
-// encode() once per decision; flush() terminates the codeword segment and
-// returns its length in bytes.
+// encode() once per decision; flush() or erterm() terminates the codeword
+// segment and returns its length in bytes.
 //
 // The byte "before the start" of the standard's BYTEOUT (B at BP = BPST) is kept
 // in a register, never in the buffer: a carry into it is simply discarded, and
 // the output buffer is never written before its first byte.
 class mq_encoder {
  public:
-  explicit mq_encoder(uint8_t *out) : A(0x8000), C(0), CT(12), B(0), BP(-1), buf(out) {}
+  explicit mq_encoder(uint8_t *out) { init(out); }
+
+  // INITENC (C.2.8): start a new codeword segment at out.  The context states are
+  // kept, so a segment that follows a termination continues with them.
+  void init(uint8_t *out) {
+    A   = 0x8000;
+    C   = 0;
+    CT  = 12;
+    B   = 0;
+    BP  = -1;
+    buf = out;
+  }
 
   // Table D.7 initial states: all contexts at state 0 except the all-insignificant
   // zero-coding context (4), run-length (3) and uniform (46).
@@ -100,6 +111,21 @@ class mq_encoder {
     return static_cast<uint32_t>(BP);
   }
 
+  // Predictable termination (D.4.2), required when ERTERM is signalled: push out
+  // only the k = (11 - CT) + 1 bits of C the decoder needs, then the byte buffer
+  // unless it holds 0xFF.  The bytes are fixed by the coded symbols alone.
+  inline uint32_t erterm() {
+    int32_t k = 12 - CT;
+    while (k > 0) {
+      C <<= CT;
+      CT = 0;
+      byteout();
+      k -= CT;
+    }
+    if (B != 0xFFu) byteout();
+    return static_cast<uint32_t>(BP);
+  }
+
  private:
   uint32_t A;  // interval
   uint32_t C;  // code register: bits 0..15 active, 16..18 spacer, 19..26 byte out, 27 carry
@@ -152,4 +178,50 @@ class mq_encoder {
       --CT;
     } while ((A & 0x8000u) == 0);
   }
+};
+
+// Raw bit packer for the passes the selective arithmetic coding bypass (D.6)
+// takes out of the MQ coder: bits go into bytes MSB first, and the byte after an
+// 0xFF carries only 7 bits under a stuffed 0 MSB.
+class raw_encoder {
+ public:
+  void init(uint8_t *out) {
+    buf = out;
+    pos = 0;
+    c   = 0;
+    ct  = 8;
+  }
+
+  inline void put(uint32_t bit) {
+    c = (c << 1) | bit;
+    if (--ct == 0) {
+      buf[pos++] = static_cast<uint8_t>(c);
+      ct         = (c == 0xFFu) ? 7 : 8;
+      c          = 0;
+    }
+  }
+
+  // Pads the last byte to the byte boundary and returns the segment length; the
+  // segment never ends in 0xFF.  With ERTERM the padding is 0101... (D.6).
+  // Otherwise it is all 1s and a final 0xFF is dropped: the decoder extends the
+  // segment with 0xFF bytes (D.4.1), so it reads the same bits.
+  inline uint32_t terminate(bool erterm) {
+    const bool after_ff = pos > 0 && buf[pos - 1] == 0xFFu;
+    if (ct < (after_ff ? 7 : 8)) {  // a partial byte is pending
+      c = (c << ct) | (erterm ? (0x55u >> (8 - ct)) : ((1u << ct) - 1));
+      if (erterm || c != 0xFFu) buf[pos++] = static_cast<uint8_t>(c);
+    } else if (after_ff) {
+      if (erterm)
+        buf[pos++] = 0x2A;  // the stuffed 0, then 0101010
+      else
+        --pos;
+    }
+    return pos;
+  }
+
+ private:
+  uint8_t *buf = nullptr;
+  uint32_t pos = 0;
+  uint32_t c   = 0;  // bits of the byte being assembled
+  int32_t ct   = 8;  // bits still free in that byte
 };
