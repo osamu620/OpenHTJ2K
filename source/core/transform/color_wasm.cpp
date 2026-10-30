@@ -294,58 +294,40 @@ void fused_ycbcr_irrev_to_rgb_i32_wasm(const float *y, const float *cb, const fl
   const v128_t fCB_FACT_B = wasm_f32x4_splat(static_cast<float>(CB_FACT_B));
   const v128_t fCB_FACT_G = wasm_f32x4_splat(static_cast<float>(CB_FACT_G));
 
-  const v128_t vrnd0 = wasm_i32x4_splat(fp[0].rnd);
+  const v128_t vhalf = wasm_f32x4_splat(0.5f);
+  const v128_t vsc0  = wasm_f32x4_splat(fp[0].scale);
+  const v128_t vsc1  = wasm_f32x4_splat(fp[1].scale);
+  const v128_t vsc2  = wasm_f32x4_splat(fp[2].scale);
   const v128_t vdc0  = wasm_i32x4_splat(fp[0].dc);
   const v128_t vmx0  = wasm_i32x4_splat(fp[0].maxval);
   const v128_t vmn0  = wasm_i32x4_splat(fp[0].minval);
-  const v128_t vrnd1 = wasm_i32x4_splat(fp[1].rnd);
   const v128_t vdc1  = wasm_i32x4_splat(fp[1].dc);
   const v128_t vmx1  = wasm_i32x4_splat(fp[1].maxval);
   const v128_t vmn1  = wasm_i32x4_splat(fp[1].minval);
-  const v128_t vrnd2 = wasm_i32x4_splat(fp[2].rnd);
   const v128_t vdc2  = wasm_i32x4_splat(fp[2].dc);
   const v128_t vmx2  = wasm_i32x4_splat(fp[2].maxval);
   const v128_t vmn2  = wasm_i32x4_splat(fp[2].minval);
 
+  // One loop for every bit depth: finalize_round_wasm scales by 2^-ds and rounds half
+  // up, so the sign of ds no longer selects a code path (finalize_round, color.hpp).
   uint32_t n = 0;
-  if (fp[0].ds > 0 && fp[1].ds > 0 && fp[2].ds > 0) {
-    const int ds0 = fp[0].ds, ds1 = fp[1].ds, ds2 = fp[2].ds;
-    for (; n + 4 <= width; n += 4) {
-      v128_t fY  = wasm_v128_load(y + n);
-      v128_t fCb = wasm_v128_load(cb + n);
-      v128_t fCr = wasm_v128_load(cr + n);
-      v128_t fR  = wasm_f32x4_add(fY, wasm_f32x4_mul(fCr, fCR_FACT_R));
-      v128_t fB  = wasm_f32x4_add(fY, wasm_f32x4_mul(fCb, fCB_FACT_B));
-      v128_t fG  = wasm_f32x4_sub(wasm_f32x4_sub(fY, wasm_f32x4_mul(fCr, fCR_FACT_G)),
-                                   wasm_f32x4_mul(fCb, fCB_FACT_G));
-      v128_t vR  = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(fR), vrnd0), ds0);
-      v128_t vG  = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(fG), vrnd1), ds1);
-      v128_t vB  = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(fB), vrnd2), ds2);
-      wasm_v128_store(r + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vR, vdc0), vmn0), vmx0));
-      wasm_v128_store(g + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vG, vdc1), vmn1), vmx1));
-      wasm_v128_store(b + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vB, vdc2), vmn2), vmx2));
-    }
-  } else if (fp[0].ds == 0 && fp[1].ds == 0 && fp[2].ds == 0) {
-    for (; n + 4 <= width; n += 4) {
-      v128_t fY  = wasm_v128_load(y + n);
-      v128_t fCb = wasm_v128_load(cb + n);
-      v128_t fCr = wasm_v128_load(cr + n);
-      v128_t vR  = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_add(fY, wasm_f32x4_mul(fCr, fCR_FACT_R)));
-      v128_t vB  = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_add(fY, wasm_f32x4_mul(fCb, fCB_FACT_B)));
-      v128_t vG  = wasm_i32x4_trunc_sat_f32x4(
-          wasm_f32x4_sub(wasm_f32x4_sub(fY, wasm_f32x4_mul(fCr, fCR_FACT_G)),
-                         wasm_f32x4_mul(fCb, fCB_FACT_G)));
-      wasm_v128_store(r + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vR, vdc0), vmn0), vmx0));
-      wasm_v128_store(g + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vG, vdc1), vmn1), vmx1));
-      wasm_v128_store(b + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vB, vdc2), vmn2), vmx2));
-    }
+  for (; n + 4 <= width; n += 4) {
+    v128_t fY  = wasm_v128_load(y + n);
+    v128_t fCb = wasm_v128_load(cb + n);
+    v128_t fCr = wasm_v128_load(cr + n);
+    v128_t fR  = wasm_f32x4_add(fY, wasm_f32x4_mul(fCr, fCR_FACT_R));
+    v128_t fB  = wasm_f32x4_add(fY, wasm_f32x4_mul(fCb, fCB_FACT_B));
+    v128_t fG  = wasm_f32x4_sub(wasm_f32x4_sub(fY, wasm_f32x4_mul(fCr, fCR_FACT_G)),
+                                wasm_f32x4_mul(fCb, fCB_FACT_G));
+    v128_t vR  = finalize_round_wasm(fR, vsc0, vhalf);
+    v128_t vG  = finalize_round_wasm(fG, vsc1, vhalf);
+    v128_t vB  = finalize_round_wasm(fB, vsc2, vhalf);
+    wasm_v128_store(r + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vR, vdc0), vmn0), vmx0));
+    wasm_v128_store(g + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vG, vdc1), vmn1), vmx1));
+    wasm_v128_store(b + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vB, vdc2), vmn2), vmx2));
   }
-  // Scalar tail (also handles ds < 0 edge case for high-bitdepth images).
   auto finalize_scalar = [](float v, const FinalizeParams &p) -> int32_t {
-    int32_t x = static_cast<int32_t>(v);
-    if (p.ds > 0) x = (x + p.rnd) >> p.ds;
-    else if (p.ds < 0) x <<= -p.ds;
-    x += p.dc;
+    int32_t x = finalize_round(v, p.scale) + p.dc;
     if (x > p.maxval) x = p.maxval;
     if (x < p.minval) x = p.minval;
     return x;

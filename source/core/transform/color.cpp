@@ -194,10 +194,7 @@ void cvt_rgb_to_ycbcr_irrev_float(const int32_t *sp0, const int32_t *sp1, const 
 }
 
 static int32_t finalize_one(float v, const FinalizeParams &p) {
-  int32_t x = static_cast<int32_t>(v);
-  if (p.ds > 0) x = (x + p.rnd) >> p.ds;
-  else if (p.ds < 0) x <<= -p.ds;
-  x += p.dc;
+  int32_t x = finalize_round(v, p.scale) + p.dc;
   if (x > p.maxval) x = p.maxval;
   if (x < p.minval) x = p.minval;
   return x;

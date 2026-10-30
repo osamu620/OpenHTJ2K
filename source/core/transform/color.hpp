@@ -52,12 +52,48 @@ typedef void (*cvt_color_i32_to_f_func)(const int32_t *, const int32_t *, const 
 
 // Per-component parameters for the float→int32 finalization step.
 struct FinalizeParams {
-  int16_t ds;      // downshift: > 0 → right shift, < 0 → left shift, 0 → no shift
-  int16_t rnd;     // rounding offset added before right shift (= (1<<ds)>>1); 0 when ds <= 0
-  int32_t dc;      // DC offset added after shift (e.g. 128 for 8-bit unsigned)
+  int16_t ds;      // FRACBITS - bit depth for an irreversible transform, 0 for a reversible one
+  float scale;     // 2^-ds, one output LSB in Q(FRACBITS) units (finalize_scale(ds))
+  int32_t dc;      // DC offset added after rounding (e.g. 128 for 8-bit unsigned)
   int32_t maxval;  // clamp upper bound
   int32_t minval;  // clamp lower bound
 };
+
+// Lossy finalize rounding.  An irreversible sample v is in Q(FRACBITS) units, so one
+// output LSB is 2^ds of them, ds = FRACBITS - bit depth (negative above 13 bits).  The
+// output is the nearest integer with ties rounded up, floor(v * 2^-ds + 0.5): for an
+// integer v and ds > 0 that is exactly (v + 2^(ds-1)) >> ds, the fixed-point
+// convention, and the same formula serves every sign of ds, so one loop covers every
+// bit depth.  A reversible transform leaves integer-valued floats, which scale 1
+// reproduces exactly.  The vector forms below compute the same thing (multiply, add
+// 0.5, floor, convert); keep every variant identical.
+inline float finalize_scale(int32_t ds) { return std::ldexp(1.0f, -ds); }
+inline int32_t finalize_round(float v, float scale) {
+  return static_cast<int32_t>(std::floor(v * scale + 0.5f));
+}
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
+static inline __m512i finalize_round_avx512(__m512 v, __m512 vscale, __m512 vhalf) {
+  return _mm512_cvt_roundps_epi32(_mm512_fmadd_ps(v, vscale, vhalf),
+                                  _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC);
+}
+#endif
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+static inline __m256i finalize_round_avx2(__m256 v, __m256 vscale, __m256 vhalf) {
+  return _mm256_cvttps_epi32(_mm256_floor_ps(_mm256_add_ps(_mm256_mul_ps(v, vscale), vhalf)));
+}
+#endif
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+  #include <arm_neon.h>
+static inline int32x4_t finalize_round_neon(float32x4_t v, float32x4_t vscale, float32x4_t vhalf) {
+  return vcvtmq_s32_f32(vfmaq_f32(vhalf, v, vscale));
+}
+#endif
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  #include <wasm_simd128.h>
+static inline v128_t finalize_round_wasm(v128_t v, v128_t vscale, v128_t vhalf) {
+  return wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_floor(wasm_f32x4_add(wasm_f32x4_mul(v, vscale), vhalf)));
+}
+#endif
 
 // Fused inverse color transform (float-domain) + float→int32 finalize.
 // Reads Y/Cb/Cr from ring buffer (read-only), applies inverse MCT, applies per-component
