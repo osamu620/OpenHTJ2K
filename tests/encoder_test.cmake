@@ -121,14 +121,17 @@ set_tests_properties(rr_gray16_q90 PROPERTIES DEPENDS enc_gray16_q90)
 add_test(NAME cr_gray16_q90 COMMAND col_range_compare gray16_q90.j2c)
 set_tests_properties(cr_gray16_q90 PROPERTIES DEPENDS enc_gray16_q90)
 
-# Lossy finalize rounding.  The decoder rounds each float sample half up to the
-# nearest output LSB, round(v * 2^-ds); it used to truncate toward zero to the
-# 13-bit grid first, which left samples below mid-grey 1 LSB too bright (half
-# of them at 12 bits) and capped output above 13 bits at 13-bit precision.  A
-# 12-bit round trip at a fine step is now exact (PAE 1, MSE 0.24 before); a
-# 16-bit round trip keeps only the encoder's truncation of its input to 13 bits
-# (PAE 8, MSE 19 now; PAE 15, MSE 56 before).  The bounds leave room for
-# floating-point differences between builds.
+# Lossy precision above and below 13 bits.  The decoder rounds each float sample
+# half up to the nearest output LSB, round(v * 2^-ds); it used to truncate toward
+# zero to the 13-bit grid first, which left samples below mid-grey 1 LSB too
+# bright (half of them at 12 bits) and capped output above 13 bits at 13-bit
+# precision.  The encoder used to right-shift input above 13 bits in integer
+# arithmetic before the transform, dropping its low bits as well.  A 12-bit
+# round trip at a fine step is now exact (PAE 1, MSE 0.24 before); a 16-bit grey
+# round trip has MSE 0.005 (PAE 15, MSE 56 before both fixes; PAE 8, MSE 19 with
+# the decoder fix alone), and a 16-bit RGB round trip MSE 0.1 through the colour
+# transform (0.005 without it), against PAE 8, MSE 20 before.  The bounds leave
+# room for floating-point differences between builds.
 set(GRAY12_PGM ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/gray12_full_range.pgm)
 add_test(NAME enc_gray12_fine COMMAND open_htj2k_enc -i ${GRAY12_PGM} -o gray12_fine.j2c Qstep=0.0001)
 add_test(NAME dec_gray12_fine COMMAND open_htj2k_dec -i gray12_fine.j2c -o gray12_fine.pgm)
@@ -138,8 +141,19 @@ set_tests_properties(comp_gray12_fine PROPERTIES DEPENDS dec_gray12_fine)
 add_test(NAME enc_gray16_fine COMMAND open_htj2k_enc -i ${GRAY16_PGM} -o gray16_fine.j2c Qstep=0.00001)
 add_test(NAME dec_gray16_fine COMMAND open_htj2k_dec -i gray16_fine.j2c -o gray16_fine.pgm)
 set_tests_properties(dec_gray16_fine PROPERTIES DEPENDS enc_gray16_fine)
-add_test(NAME comp_gray16_fine COMMAND imgcmp gray16_fine_00.pgm ${GRAY16_PGM} 10 28)
+add_test(NAME comp_gray16_fine COMMAND imgcmp gray16_fine_00.pgm ${GRAY16_PGM} 2 0.5)
 set_tests_properties(comp_gray16_fine PROPERTIES DEPENDS dec_gray16_fine)
+set(RGB16_PPM ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/rgb16_full_range.ppm)
+add_test(NAME enc_rgb16_fine COMMAND open_htj2k_enc -i ${RGB16_PPM} -o rgb16_fine.j2c Qstep=0.00001)
+add_test(NAME dec_rgb16_fine COMMAND open_htj2k_dec -i rgb16_fine.j2c -o rgb16_fine.ppm)
+set_tests_properties(dec_rgb16_fine PROPERTIES DEPENDS enc_rgb16_fine)
+add_test(NAME comp_rgb16_fine COMMAND imgcmp rgb16_fine.ppm ${RGB16_PPM} 2 1.0)
+set_tests_properties(comp_rgb16_fine PROPERTIES DEPENDS dec_rgb16_fine)
+add_test(NAME enc_rgb16_fine_noycc COMMAND open_htj2k_enc -i ${RGB16_PPM} -o rgb16_fine_noycc.j2c Qstep=0.00001 Cycc=no)
+add_test(NAME dec_rgb16_fine_noycc COMMAND open_htj2k_dec -i rgb16_fine_noycc.j2c -o rgb16_fine_noycc.ppm)
+set_tests_properties(dec_rgb16_fine_noycc PROPERTIES DEPENDS enc_rgb16_fine_noycc)
+add_test(NAME comp_rgb16_fine_noycc COMMAND imgcmp rgb16_fine_noycc.ppm ${RGB16_PPM} 2 0.5)
+set_tests_properties(comp_rgb16_fine_noycc PROPERTIES DEPENDS dec_rgb16_fine_noycc)
 
 # Unknown marker segments must be skipped by their length (Lmar), not scanned
 # byte-by-byte. kodim23_unknown_marker.j2c is a lossless kodim23 codestream with
