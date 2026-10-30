@@ -34,6 +34,20 @@
 
 ## Fixed
 
+### Encoder
+- Lossy encoding of samples above 13 bits truncated the input: each sample
+  was right-shifted by (bit depth - 13) in integer arithmetic before the
+  forward transform, so a 16-bit image lost its three low bits before coding
+  (up to 7 LSB of error, MSE about 19 on a fine-step round trip even with the
+  decoder fix below). The DC offset is now subtracted in the input domain and
+  the 2^(13 - bit depth) scale is applied in float, which is exact, in both
+  the streaming and the whole-image encoder, with and without the colour
+  transform. A 16-bit fine-step round trip now has MSE 0.005 (grey) and 0.1
+  (RGB through the ICT); codestreams for 8- to 13-bit input are byte-identical
+  to before, and encode time is unchanged (within noise at 8 and 16 bits,
+  Ryzen 9 9950X, one thread). New 16-bit RGB round-trip tests
+  (`tests/data/rgb16_full_range.ppm`) cover the colour-transform path.
+
 ### Decoder
 - Lossy output was rounded wrongly. The float sample was truncated toward
   zero to the 13-bit fractional grid before the shift to the output bit
@@ -53,9 +67,7 @@
   results. Native decode time is unchanged (within noise on 8-, 12- and
   16-bit 4K streams, Ryzen 9 9950X, one thread); the WASM SIMD build decodes
   8-bit 4K 3% faster and 16-bit 4K 31-33% faster, since its fused kernel no
-  longer falls back to scalar code above 13 bits. The encoder still truncates
-  input above 13 bits to 13-bit precision before the transform, so a 16-bit
-  lossy round trip keeps that error (follow-up).
+  longer falls back to scalar code above 13 bits.
 - Lossy (9/7) Part 1 code-blocks were dequantized through an integer
   fixed-point pipeline that rounded every subband sample to the 13-bit
   fractional grid and discarded quantization-index bits below bit 16 whenever

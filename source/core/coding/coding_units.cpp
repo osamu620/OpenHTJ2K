@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -3866,55 +3867,69 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
   num_resolutions = total_res;
 }
 
+// Input samples to Q(FRACBITS) for an irreversible transform: (x - DC) * 2^shiftup with
+// shiftup = FRACBITS - bit depth.  Up to 13 bits that is an exact int32 left shift with
+// dco already scaled by 2^shiftup; above 13 bits (shiftup < 0) the scale is applied in
+// float so that no input bits are lost, and dco is in the input domain
+// (j2k_tile_component::perform_dc_offset).  A reversible transform has shiftup 0.
+static inline float dc_shift_scale(int32_t shiftup) { return std::ldexp(1.0f, std::min(shiftup, 0)); }
+
+static inline void dc_shift_row_f(const int32_t *sp, sprec_t *dp, uint32_t w, int32_t shiftup,
+                                  int32_t dco) {
+  if (shiftup >= 0) {
+    for (uint32_t x = 0; x < w; ++x) dp[x] = static_cast<sprec_t>(shl_i32(sp[x], shiftup) - dco);
+  } else {
+    const float scale = dc_shift_scale(shiftup);
+    for (uint32_t x = 0; x < w; ++x) dp[x] = static_cast<sprec_t>(sp[x] - dco) * scale;
+  }
+}
+
+static inline void scale_row_f(sprec_t *p, uint32_t w, float scale) {
+  for (uint32_t x = 0; x < w; ++x) p[x] *= scale;
+}
+
 void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const bool is_signed) {
   const int32_t shiftup = (transformation == 1) ? 0 : FRACBITS - this->bitdepth;
-  // DC offset for signed input shall be 0
-  const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + shiftup);
+  // DC offset for signed input shall be 0.  It is subtracted in the domain where the
+  // integer arithmetic happens: after the left shift up to FRACBITS bits; in the input
+  // domain above (shiftup < 0), where the 2^shiftup scale is applied in float when the
+  // rows are converted (dc_shift_row_f, dc_shift_scale) so that no input bits are lost.
+  const int32_t DC_OFFSET = (is_signed) ? 0 : 1 << (this->bitdepth - 1 + std::max(shiftup, 0));
+  lb_dc_offset            = DC_OFFSET;
+  lb_dc_shiftup           = shiftup;
 
-  // In LB encode mode (lb_enc_mode), samples was not allocated.
-  // Store parameters for row-by-row application during encode_line_based().
-  if (lb_enc_mode) {
-    lb_dc_offset  = DC_OFFSET;
-    lb_dc_shiftup = shiftup;
-    return;
-  }
+  // In LB encode mode (lb_enc_mode), samples was not allocated: the parameters above
+  // are applied row-by-row during encode_line_based_stream().
+  if (lb_enc_mode) return;
 
   const int32_t stride = round_up(static_cast<int32_t>(this->pos1.x - this->pos0.x), 32);
   const int32_t width  = static_cast<int32_t>(this->pos1.x - this->pos0.x);
   const int32_t height = static_cast<int32_t>(this->pos1.y - this->pos0.y);
   int32_t *src         = this->samples;
+  if (shiftup < 0) {
+    // Above FRACBITS bits: DC offset only.  rgb_to_ycbcr() and encode_line_based()
+    // scale the float conversion by 2^shiftup.
+    for (int32_t y = 0; y < height; ++y) {
+      int32_t *sp = src + y * stride;
+      for (int32_t i = 0; i < width; ++i) sp[i] -= DC_OFFSET;
+    }
+    return;
+  }
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   {
     const v128_t vdoff = wasm_i32x4_splat(DC_OFFSET);
-    if (shiftup < 0) {
-      for (int32_t y = 0; y < height; ++y) {
-        int32_t *sp = src + y * stride;
-        int32_t len = width;
-        for (int32_t i = 0; i < round_down(len, 8); i += 8) {
-          v128_t v0 = wasm_v128_load(sp + i);
-          v128_t v1 = wasm_v128_load(sp + i + 4);
-          wasm_v128_store(sp + i, wasm_i32x4_sub(wasm_i32x4_shr(v0, -shiftup), vdoff));
-          wasm_v128_store(sp + i + 4, wasm_i32x4_sub(wasm_i32x4_shr(v1, -shiftup), vdoff));
-        }
-        for (int32_t i = round_down(len, 8); i < len; ++i) {
-          sp[i] >>= -shiftup;
-          sp[i] -= DC_OFFSET;
-        }
+    for (int32_t y = 0; y < height; ++y) {
+      int32_t *sp = src + y * stride;
+      int32_t len = width;
+      for (int32_t i = 0; i < round_down(len, 8); i += 8) {
+        v128_t v0 = wasm_v128_load(sp + i);
+        v128_t v1 = wasm_v128_load(sp + i + 4);
+        wasm_v128_store(sp + i, wasm_i32x4_sub(wasm_i32x4_shl(v0, shiftup), vdoff));
+        wasm_v128_store(sp + i + 4, wasm_i32x4_sub(wasm_i32x4_shl(v1, shiftup), vdoff));
       }
-    } else {
-      for (int32_t y = 0; y < height; ++y) {
-        int32_t *sp = src + y * stride;
-        int32_t len = width;
-        for (int32_t i = 0; i < round_down(len, 8); i += 8) {
-          v128_t v0 = wasm_v128_load(sp + i);
-          v128_t v1 = wasm_v128_load(sp + i + 4);
-          wasm_v128_store(sp + i, wasm_i32x4_sub(wasm_i32x4_shl(v0, shiftup), vdoff));
-          wasm_v128_store(sp + i + 4, wasm_i32x4_sub(wasm_i32x4_shl(v1, shiftup), vdoff));
-        }
-        for (int32_t i = round_down(len, 8); i < len; ++i) {
-          sp[i] = shl_i32(sp[i], shiftup);
-          sp[i] -= DC_OFFSET;
-        }
+      for (int32_t i = round_down(len, 8); i < len; ++i) {
+        sp[i] = shl_i32(sp[i], shiftup);
+        sp[i] -= DC_OFFSET;
       }
     }
   }
@@ -3930,63 +3945,33 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
       vst1q_s32(sp + i, vsubq_s32(vshlq_s32(v0, vshiftup), doff));
       vst1q_s32(sp + i + 4, vsubq_s32(vshlq_s32(v1, vshiftup), doff));
     }
-    // vshlq_s32 shifts right for a negative count (bit depth > FRACBITS);
-    // the scalar tail must do the same.
     for (int32_t i = round_down(len, 8); i < len; ++i) {
-      sp[i] = (shiftup < 0) ? (sp[i] >> -shiftup) : shl_i32(sp[i], shiftup);
+      sp[i] = shl_i32(sp[i], shiftup);
       sp[i] -= DC_OFFSET;
     }
   }
 #elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-    if (shiftup < 0) {
-      const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
-      for (int32_t y = 0; y < height; ++y) {
-        int32_t *sp = src + y * stride;
-        int32_t len = width;
-        for (int32_t i = 0; i < round_down(len, 8); i += 8) {
-          __m256i v            = *(__m256i *)(sp + i);
-          *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_srai_epi32(v, -shiftup), doff);
-        }
-        for (int32_t i = round_down(len, 8); i < len; ++i) {
-          sp[i] >>= -shiftup;
-          sp[i] -= DC_OFFSET;
-        }
-      }
-    } else {
-      const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
-      for (int32_t y = 0; y < height; ++y) {
-        int32_t *sp = src + y * stride;
-        int32_t len = width;
-        for (int32_t i = 0; i < round_down(len, 8); i += 8) {
-          __m256i v            = *(__m256i *)(sp + i);
-          *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_slli_epi32(v, shiftup), doff);
-        }
-        for (int32_t i = round_down(len, 8); i < len; ++i) {
-          sp[i] = shl_i32(sp[i], shiftup);
-          sp[i] -= DC_OFFSET;
-        }
-      }
+  const __m256i doff = _mm256_set1_epi32(DC_OFFSET);
+  for (int32_t y = 0; y < height; ++y) {
+    int32_t *sp = src + y * stride;
+    int32_t len = width;
+    for (int32_t i = 0; i < round_down(len, 8); i += 8) {
+      __m256i v            = *(__m256i *)(sp + i);
+      *(__m256i *)(sp + i) = _mm256_sub_epi32(_mm256_slli_epi32(v, shiftup), doff);
     }
+    for (int32_t i = round_down(len, 8); i < len; ++i) {
+      sp[i] = shl_i32(sp[i], shiftup);
+      sp[i] -= DC_OFFSET;
+    }
+  }
 #else
-    if (shiftup < 0) {
-      for (int32_t y = 0; y < height; ++y) {
-        int32_t *sp = src + y * stride;
-        int32_t len = width;
-        for (int32_t i = 0; i < len; ++i) {
-          sp[i] >>= -shiftup;
-          sp[i] -= DC_OFFSET;
-        }
-      }
-    } else {
-      for (int32_t y = 0; y < height; ++y) {
-        int32_t *sp = src + y * stride;
-        int32_t len = width;
-        for (int32_t i = 0; i < len; ++i) {
-          sp[i] = shl_i32(sp[i], shiftup);
-          sp[i] -= DC_OFFSET;
-        }
-      }
+  for (int32_t y = 0; y < height; ++y) {
+    int32_t *sp = src + y * stride;
+    for (int32_t i = 0; i < width; ++i) {
+      sp[i] = shl_i32(sp[i], shiftup);
+      sp[i] -= DC_OFFSET;
     }
+  }
 #endif
 }
 
@@ -6425,6 +6410,17 @@ void j2k_tile::rgb_to_ycbcr() {
     j2k_resolution *cr2 = this->tcomp[2].access_resolution(this->tcomp[2].get_dwt_levels());
     cvt_rgb_to_ycbcr_float[ct_idx](sp0, sp1, sp2, cr0->i_samples, cr1->i_samples, cr2->i_samples, width,
                                    height, stride);
+    // Above FRACBITS bits the samples carry only the DC offset (perform_dc_offset); the
+    // colour transform is linear, so its float output takes the 2^shiftup scale.
+    const int32_t shiftup = this->tcomp[0].lb_dc_shiftup;
+    if (shiftup < 0) {
+      const float scale = dc_shift_scale(shiftup);
+      for (uint32_t y = 0; y < height; ++y) {
+        scale_row_f(cr0->i_samples + y * stride, width, scale);
+        scale_row_f(cr1->i_samples + y * stride, width, scale);
+        scale_row_f(cr2->i_samples + y * stride, width, scale);
+      }
+    }
   }
 }
 
@@ -6569,11 +6565,12 @@ uint8_t *j2k_tile::encode_line_based() {
     if (NL == 0) {
       // No FDWT: copy int32 → float to res[0]->i_samples (if not already done by MCT).
       if (!(MCT && num_components >= 3 && c < 3)) {
-        int32_t *src = tcomp[c].get_sample_address(0, 0);
+        int32_t *src      = tcomp[c].get_sample_address(0, 0);
+        const float scale = dc_shift_scale(tcomp[c].lb_dc_shiftup);  // 1 up to FRACBITS bits
         for (uint32_t y = 0; y < height; ++y) {
           const int32_t *sp = src + y * stride;
           sprec_t *dp       = cr->i_samples + y * stride;
-          for (uint32_t x = 0; x < width; ++x) dp[x] = static_cast<sprec_t>(sp[x]);
+          for (uint32_t x = 0; x < width; ++x) dp[x] = static_cast<sprec_t>(sp[x]) * scale;
         }
       }
       t1_encode(cr, ROIshift);
@@ -6594,26 +6591,16 @@ uint8_t *j2k_tile::encode_line_based() {
         const uint32_t isrc   = tcomp[c].lb_src_stride;
         const int32_t dco     = tcomp[c].lb_dc_offset;
         const int32_t shiftup = tcomp[c].lb_dc_shiftup;
-        if (shiftup >= 0) {
-          for (uint32_t y = 0; y < height; ++y) {
-            const int32_t *sp = src + y * isrc;
-            for (uint32_t x = 0; x < width; ++x)
-              scratch[x] = static_cast<sprec_t>((sp[x] << shiftup) - dco);
-            tcomp[c].push_line_enc(scratch);
-          }
-        } else {
-          for (uint32_t y = 0; y < height; ++y) {
-            const int32_t *sp = src + y * isrc;
-            for (uint32_t x = 0; x < width; ++x)
-              scratch[x] = static_cast<sprec_t>((sp[x] >> (-shiftup)) - dco);
-            tcomp[c].push_line_enc(scratch);
-          }
+        for (uint32_t y = 0; y < height; ++y) {
+          dc_shift_row_f(src + y * isrc, scratch, width, shiftup, dco);
+          tcomp[c].push_line_enc(scratch);
         }
       } else {
-        int32_t *src = tcomp[c].get_sample_address(0, 0);
+        int32_t *src      = tcomp[c].get_sample_address(0, 0);
+        const float scale = dc_shift_scale(tcomp[c].lb_dc_shiftup);  // 1 up to FRACBITS bits
         for (uint32_t y = 0; y < height; ++y) {
           const int32_t *sp = src + y * stride;
-          for (uint32_t x = 0; x < width; ++x) scratch[x] = static_cast<sprec_t>(sp[x]);
+          for (uint32_t x = 0; x < width; ++x) scratch[x] = static_cast<sprec_t>(sp[x]) * scale;
           tcomp[c].push_line_enc(scratch);
         }
       }
@@ -6889,8 +6876,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
           int32_t *row      = int_rows[c] + x_off0;
           if (shu >= 0)
             for (uint32_t x = 0; x < width; ++x) row[x] = shl_i32(row[x], shu) - dco;
-          else
-            for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
+          else  // above FRACBITS bits: DC only; the ICT output is scaled below
+            for (uint32_t x = 0; x < width; ++x) row[x] -= dco;
         }
         // Convert RGB→YCbCr float directly into i_samples
         j2k_resolution *cr0 = tcomp[0].access_resolution(0);
@@ -6899,6 +6886,12 @@ uint8_t *j2k_tile::encode_line_based_stream(
         cvt_rgb_to_ycbcr_float[ct_idx](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
                                        cr0->i_samples + y * stride, cr1->i_samples + y * stride,
                                        cr2->i_samples + y * stride, width, 1, stride);
+        if (tcomp[0].lb_dc_shiftup < 0) {
+          const float scale = dc_shift_scale(tcomp[0].lb_dc_shiftup);
+          scale_row_f(cr0->i_samples + y * stride, width, scale);
+          scale_row_f(cr1->i_samples + y * stride, width, scale);
+          scale_row_f(cr2->i_samples + y * stride, width, scale);
+        }
         // Extra components (c >= 3): non-MCT
         for (uint16_t c = 3; c < num_components; ++c) {
           const int32_t dco    = tcomp[c].lb_dc_offset;
@@ -6908,10 +6901,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const int32_t *sp    = int_rows[c] + x_off;
           const uint32_t sc    = round_up(wc, 32U);
           sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + y * sc;
-          if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
-          else
-            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+          dc_shift_row_f(sp, dp, wc, shu, dco);
         }
       } else {
         for (uint16_t c = 0; c < num_components; ++c) {
@@ -6926,10 +6916,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const int32_t *sp    = int_rows[c] + x_off;
           const uint32_t sc    = round_up(wc, 32U);
           sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + cy * sc;
-          if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
-          else
-            for (uint32_t x = 0; x < wc; ++x) dp[x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+          dc_shift_row_f(sp, dp, wc, shu, dco);
         }
       }
     }
@@ -7200,8 +7187,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
         int32_t *row      = int_rows[c] + x_off0;
         if (shu >= 0)
           for (uint32_t x = 0; x < width; ++x) row[x] = shl_i32(row[x], shu) - dco;
-        else
-          for (uint32_t x = 0; x < width; ++x) row[x] = (row[x] >> (-shu)) - dco;
+        else  // above FRACBITS bits: DC only; the ICT output is scaled below
+          for (uint32_t x = 0; x < width; ++x) row[x] -= dco;
       }
       if (mct_all_use_i32) {
         // Reversible MCT (RCT) is exact integer; do it in place on int_rows,
@@ -7214,6 +7201,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
         // Convert RGB→YCbCr float into scratch float rows
         cvt_rgb_to_ycbcr_float[ct_idx](int_rows[0] + x_off0, int_rows[1] + x_off0, int_rows[2] + x_off0,
                                        float_rows[0], float_rows[1], float_rows[2], width, 1, stride);
+        if (tcomp[0].lb_dc_shiftup < 0) {
+          const float scale = dc_shift_scale(tcomp[0].lb_dc_shiftup);
+          for (uint32_t c = 0; c < 3; ++c) scale_row_f(float_rows[c], width, scale);
+        }
         for (uint32_t c = 0; c < 3; ++c) tcomp[c].push_line_enc(float_rows[c]);
       }
       // Extra components without MCT
@@ -7227,18 +7218,11 @@ uint8_t *j2k_tile::encode_line_based_stream(
           // Write DC-offset int row into float_rows reinterpreted as int32 scratch,
           // then push int32 directly — avoids the int→float pass per sample.
           int32_t *idst = reinterpret_cast<int32_t *>(float_rows[c]);
-          if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) idst[x] = shl_i32(sp[x], shu) - dco;
-          else
-            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] >> (-shu)) - dco;
+          assert(shu >= 0);  // the int32 pipeline is reversible only, so shu is 0
+          for (uint32_t x = 0; x < wc; ++x) idst[x] = shl_i32(sp[x], shu) - dco;
           tcomp[c].push_line_enc_i32(idst);
         } else {
-          if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x)
-              float_rows[c][x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
-          else
-            for (uint32_t x = 0; x < wc; ++x)
-              float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+          dc_shift_row_f(sp, float_rows[c], wc, shu, dco);
           tcomp[c].push_line_enc(float_rows[c]);
         }
       }
@@ -7254,18 +7238,11 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const int32_t *sp    = int_rows[c] + x_off;
         if (comp_use_i32[c]) {
           int32_t *idst = reinterpret_cast<int32_t *>(float_rows[c]);
-          if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x) idst[x] = shl_i32(sp[x], shu) - dco;
-          else
-            for (uint32_t x = 0; x < wc; ++x) idst[x] = (sp[x] >> (-shu)) - dco;
+          assert(shu >= 0);  // the int32 pipeline is reversible only, so shu is 0
+          for (uint32_t x = 0; x < wc; ++x) idst[x] = shl_i32(sp[x], shu) - dco;
           tcomp[c].push_line_enc_i32(idst);
         } else {
-          if (shu >= 0)
-            for (uint32_t x = 0; x < wc; ++x)
-              float_rows[c][x] = static_cast<sprec_t>(shl_i32(sp[x], shu) - dco);
-          else
-            for (uint32_t x = 0; x < wc; ++x)
-              float_rows[c][x] = static_cast<sprec_t>((sp[x] >> (-shu)) - dco);
+          dc_shift_row_f(sp, float_rows[c], wc, shu, dco);
           tcomp[c].push_line_enc(float_rows[c]);
         }
       }

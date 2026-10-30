@@ -166,7 +166,9 @@ int main(int argc, char *argv[]) {
     uint8_t bits;
     bool is_signed;
   };
-  const Depth depths[] = {{8, false}, {12, true}};
+  // 14 and 16 bits exceed FRACBITS (13): the irreversible input is scaled in
+  // float instead of shifted, and the two entry points must still agree.
+  const Depth depths[] = {{8, false}, {12, true}, {14, true}, {16, false}};
 
   int total = 0, failed = 0;
   auto run = [&](const Case &k) {
