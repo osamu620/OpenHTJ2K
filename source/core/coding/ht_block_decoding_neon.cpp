@@ -1054,9 +1054,11 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     } else {
       ht_cleanup_decode<false>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
 
-      const uint32_t qw                 = (block->size.x + 3) >> 2;
-      const uint32_t mstr               = ((qw + 2) + 7u) & ~7u;
-      uint16_t sigma_buf[(17 + 1) * 24] = {};
+      const uint32_t qw   = (block->size.x + 3) >> 2;
+      const uint32_t qh   = (block->size.y + 3) >> 2;
+      const uint32_t mstr = ((qw + 2) + 7u) & ~7u;
+      uint16_t sigma_buf[HT_SIGMA_BUF_SIZE];
+      memset(sigma_buf, 0, (qh + 1) * mstr * sizeof(uint16_t));
       pack_sigma(block->block_states, block->blkstate_stride, block->size.x, block->size.y, sigma_buf,
                  mstr);
       ht_sigprop_decode(block, Dref, Lref, static_cast<uint8_t>(30 - (S_blk + 1)), sigma_buf, mstr);

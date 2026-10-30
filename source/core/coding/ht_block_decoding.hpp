@@ -62,6 +62,12 @@
   #define OPENHTJ2K_NOINLINE __attribute__((noinline))
 #endif
 
+// Entries in the nibble-packed significance array of the HT SigProp and MagRef
+// decoders: (ceil(H/4) + 1) rows of round_up_8(ceil(W/4) + 2) entries.  Code-block
+// sides are 4..1024 samples with at most 4096 samples (checked when COD/COC are
+// read), so the largest need is a 4-wide, 1024-tall block: 257 rows x 8 entries.
+constexpr uint32_t HT_SIGMA_BUF_SIZE = (1024 / 4 + 1) * 8;
+
 // LUT for UVLC decoding in initial line-pair
 //   index (8bits) : [bit   7] u_off_1 (1bit)
 //                   [bit   6] u_off_0 (1bit)

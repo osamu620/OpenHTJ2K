@@ -342,3 +342,32 @@ set_tests_properties(security_truncated_packet_header_mt PROPERTIES
     PASS_REGULAR_EXPRESSION "ends inside a packet header"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 30)
+
+# HT refinement decoding of code-blocks 4 samples wide or high.  The AVX2, NEON
+# and WASM decoders pack a code-block's significance into a fixed stack array
+# before decoding its HT SigProp and HT MagRef passes.  The array was sized for
+# 64 x 64 code-blocks, but a code-block may be up to 1024 samples high or wide
+# (4096 samples in all): a 4 x 1024 (width x height) code-block needs 2056
+# entries and a 1024 x 4 one 528, against 432, so decoding their refinement
+# passes wrote past the array on the stack.  The codestreams are valid.
+#
+# Each fixture is a 4 x 1024 or 1024 x 4 8-bit grey image coded reversibly as a
+# single code-block with no wavelet levels: an HT cleanup pass one bit-plane up,
+# then HT SigProp and HT MagRef passes for the LSB, which here reach every
+# sample, so the decode equals the source image.  A release build does not show
+# the overflow (its output is still right); the UBSan CI job reports it.
+foreach(_shape tall wide)
+  add_test(NAME security_ht_refine_${_shape}_cblk
+           COMMAND open_htj2k_dec
+                   -i ${SECURITY_DATA_DIR}/ht_refine_${_shape}_cblk.j2k
+                   -o ht_refine_${_shape}_cblk.pgm
+                   -num_threads 1)
+  set_tests_properties(security_ht_refine_${_shape}_cblk PROPERTIES
+      FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+      TIMEOUT 30)
+  add_test(NAME comp_ht_refine_${_shape}_cblk
+           COMMAND imgcmp ht_refine_${_shape}_cblk_00.pgm
+                   ${SECURITY_DATA_DIR}/narrow_cblk_${_shape}.pgm 0 0)
+  set_tests_properties(comp_ht_refine_${_shape}_cblk PROPERTIES
+      DEPENDS security_ht_refine_${_shape}_cblk)
+endforeach()
