@@ -1,3 +1,15 @@
+# [Unreleased]
+
+## Fixed
+
+### Build
+- 32-bit ARM builds with NEON (for example Android armeabi-v7a or Linux armhf)
+  compile again. 0.21.0 rounds decoded samples with two AArch64-only NEON
+  instructions (fused multiply-add and the round-toward-minus-infinity
+  conversion) in a helper that is also compiled for 32-bit ARM. There it now
+  uses a separate multiply-add and a truncate-and-correct floor, which round
+  exactly the same way. AArch64 builds are unchanged.
+
 # [0.21.0] - 2026-10-30
 
 Minor release: OpenHTJ2K now encodes JPEG 2000 Part 1 as well as HTJ2K.

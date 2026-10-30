@@ -85,7 +85,16 @@ static inline __m256i finalize_round_avx2(__m256 v, __m256 vscale, __m256 vhalf)
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON) || defined(__ARM_NEON) || defined(__ARM_NEON__)
   #include <arm_neon.h>
 static inline int32x4_t finalize_round_neon(float32x4_t v, float32x4_t vscale, float32x4_t vhalf) {
+  #if defined(__aarch64__) || defined(_M_ARM64)
   return vcvtmq_s32_f32(vfmaq_f32(vhalf, v, vscale));
+  #else
+  // 32-bit ARM NEON (ARMv7) has neither FMA nor a round-down conversion.  vscale is
+  // a power of two, so v * vscale is exact and a separate multiply-add rounds like
+  // the FMA; floor() is the truncation minus 1 wherever it lies above the value.
+  const float32x4_t x = vmlaq_f32(vhalf, v, vscale);
+  const int32x4_t t   = vcvtq_s32_f32(x);
+  return vaddq_s32(t, vreinterpretq_s32_u32(vcgtq_f32(vcvtq_f32_s32(t), x)));
+  #endif
 }
 #endif
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
