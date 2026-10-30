@@ -292,7 +292,7 @@ void cvt_rgb_to_ycbcr_irrev_float_avx512(const int32_t *sp0, const int32_t *sp1,
 
 // Fused inverse ICT (lossy, float-domain) + float->int32 finalize.
 // Reads Y/Cb/Cr from ring buffer (read-only), applies ICT coefficients, then applies per-component
-// finalize (rounding right-shift + DC_OFFSET + clamp), writing R/G/B as int32.
+// finalize (round to the nearest output LSB + DC_OFFSET + clamp), writing R/G/B as int32.
 // fp[3]: FinalizeParams for component 0 (R), 1 (G), 2 (B).
 void fused_ycbcr_irrev_to_rgb_i32_avx512(const float *y, const float *cb, const float *cr,
                                           int32_t *r, int32_t *g, int32_t *b, uint32_t width,
@@ -302,70 +302,43 @@ void fused_ycbcr_irrev_to_rgb_i32_avx512(const float *y, const float *cb, const 
   const __m512 mCB_FACT_B = _mm512_set1_ps(static_cast<float>(CB_FACT_B));
   const __m512 mCB_FACT_G = _mm512_set1_ps(static_cast<float>(CB_FACT_G));
 
-  const __m512i vrnd0 = _mm512_set1_epi32(fp[0].rnd);
-  const __m512i vdc0  = _mm512_set1_epi32(fp[0].dc);
-  const __m512i vmx0  = _mm512_set1_epi32(fp[0].maxval);
-  const __m512i vmn0  = _mm512_set1_epi32(fp[0].minval);
-  const __m512i vrnd1 = _mm512_set1_epi32(fp[1].rnd);
-  const __m512i vdc1  = _mm512_set1_epi32(fp[1].dc);
-  const __m512i vmx1  = _mm512_set1_epi32(fp[1].maxval);
-  const __m512i vmn1  = _mm512_set1_epi32(fp[1].minval);
-  const __m512i vrnd2 = _mm512_set1_epi32(fp[2].rnd);
-  const __m512i vdc2  = _mm512_set1_epi32(fp[2].dc);
-  const __m512i vmx2  = _mm512_set1_epi32(fp[2].maxval);
-  const __m512i vmn2  = _mm512_set1_epi32(fp[2].minval);
+  const __m512 vhalf = _mm512_set1_ps(0.5f);
+  const __m512 vsc0  = _mm512_set1_ps(fp[0].scale);
+  const __m512 vsc1  = _mm512_set1_ps(fp[1].scale);
+  const __m512 vsc2  = _mm512_set1_ps(fp[2].scale);
+  const __m512i vdc0 = _mm512_set1_epi32(fp[0].dc);
+  const __m512i vmx0 = _mm512_set1_epi32(fp[0].maxval);
+  const __m512i vmn0 = _mm512_set1_epi32(fp[0].minval);
+  const __m512i vdc1 = _mm512_set1_epi32(fp[1].dc);
+  const __m512i vmx1 = _mm512_set1_epi32(fp[1].maxval);
+  const __m512i vmn1 = _mm512_set1_epi32(fp[1].minval);
+  const __m512i vdc2 = _mm512_set1_epi32(fp[2].dc);
+  const __m512i vmx2 = _mm512_set1_epi32(fp[2].maxval);
+  const __m512i vmn2 = _mm512_set1_epi32(fp[2].minval);
 
+  // One loop for every bit depth: finalize_round_avx512 scales by 2^-ds and rounds half
+  // up, so the sign of ds no longer selects a code path (finalize_round, color.hpp).
   uint32_t n = 0;
-  // Common case: all three components have a positive downshift (standard lossy decode).
-  if (fp[0].ds > 0 && fp[1].ds > 0 && fp[2].ds > 0) {
-    const __m128i vsh0 = _mm_cvtsi32_si128(fp[0].ds);
-    const __m128i vsh1 = _mm_cvtsi32_si128(fp[1].ds);
-    const __m128i vsh2 = _mm_cvtsi32_si128(fp[2].ds);
-    for (; n + 16 <= width; n += 16) {
-      __m512 mY  = _mm512_loadu_ps(y + n);
-      __m512 mCb = _mm512_loadu_ps(cb + n);
-      __m512 mCr = _mm512_loadu_ps(cr + n);
-      __m512 mR  = _mm512_fmadd_ps(mCr, mCR_FACT_R, mY);
-      __m512 mB  = _mm512_fmadd_ps(mCb, mCB_FACT_B, mY);
-      __m512 mG  = _mm512_fnmadd_ps(mCr, mCR_FACT_G, mY);
-      mG         = _mm512_fnmadd_ps(mCb, mCB_FACT_G, mG);
-      __m512i vR = _mm512_sra_epi32(_mm512_add_epi32(_mm512_cvttps_epi32(mR), vrnd0), vsh0);
-      __m512i vG = _mm512_sra_epi32(_mm512_add_epi32(_mm512_cvttps_epi32(mG), vrnd1), vsh1);
-      __m512i vB = _mm512_sra_epi32(_mm512_add_epi32(_mm512_cvttps_epi32(mB), vrnd2), vsh2);
-      vR = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vR, vdc0), vmn0), vmx0);
-      vG = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vG, vdc1), vmn1), vmx1);
-      vB = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vB, vdc2), vmn2), vmx2);
-      _mm512_storeu_si512((__m512i *)(r + n), vR);
-      _mm512_storeu_si512((__m512i *)(g + n), vG);
-      _mm512_storeu_si512((__m512i *)(b + n), vB);
-    }
-  } else if (fp[0].ds == 0 && fp[1].ds == 0 && fp[2].ds == 0) {
-    // Lossless-like path: no shift (ds == 0 for all components).
-    for (; n + 16 <= width; n += 16) {
-      __m512 mY  = _mm512_loadu_ps(y + n);
-      __m512 mCb = _mm512_loadu_ps(cb + n);
-      __m512 mCr = _mm512_loadu_ps(cr + n);
-      __m512 mR  = _mm512_fmadd_ps(mCr, mCR_FACT_R, mY);
-      __m512 mB  = _mm512_fmadd_ps(mCb, mCB_FACT_B, mY);
-      __m512 mG  = _mm512_fnmadd_ps(mCr, mCR_FACT_G, mY);
-      mG         = _mm512_fnmadd_ps(mCb, mCB_FACT_G, mG);
-      __m512i vR = _mm512_cvttps_epi32(mR);
-      __m512i vG = _mm512_cvttps_epi32(mG);
-      __m512i vB = _mm512_cvttps_epi32(mB);
-      vR = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vR, vdc0), vmn0), vmx0);
-      vG = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vG, vdc1), vmn1), vmx1);
-      vB = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vB, vdc2), vmn2), vmx2);
-      _mm512_storeu_si512((__m512i *)(r + n), vR);
-      _mm512_storeu_si512((__m512i *)(g + n), vG);
-      _mm512_storeu_si512((__m512i *)(b + n), vB);
-    }
+  for (; n + 16 <= width; n += 16) {
+    __m512 mY  = _mm512_loadu_ps(y + n);
+    __m512 mCb = _mm512_loadu_ps(cb + n);
+    __m512 mCr = _mm512_loadu_ps(cr + n);
+    __m512 mR  = _mm512_fmadd_ps(mCr, mCR_FACT_R, mY);
+    __m512 mB  = _mm512_fmadd_ps(mCb, mCB_FACT_B, mY);
+    __m512 mG  = _mm512_fnmadd_ps(mCr, mCR_FACT_G, mY);
+    mG         = _mm512_fnmadd_ps(mCb, mCB_FACT_G, mG);
+    __m512i vR = finalize_round_avx512(mR, vsc0, vhalf);
+    __m512i vG = finalize_round_avx512(mG, vsc1, vhalf);
+    __m512i vB = finalize_round_avx512(mB, vsc2, vhalf);
+    vR         = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vR, vdc0), vmn0), vmx0);
+    vG         = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vG, vdc1), vmn1), vmx1);
+    vB         = _mm512_min_epi32(_mm512_max_epi32(_mm512_add_epi32(vB, vdc2), vmn2), vmx2);
+    _mm512_storeu_si512((__m512i *)(r + n), vR);
+    _mm512_storeu_si512((__m512i *)(g + n), vG);
+    _mm512_storeu_si512((__m512i *)(b + n), vB);
   }
-  // Scalar tail (also handles ds < 0 edge case for high-bitdepth images).
   auto finalize_scalar = [](float v, const FinalizeParams &p) -> int32_t {
-    int32_t x = static_cast<int32_t>(v);
-    if (p.ds > 0) x = (x + p.rnd) >> p.ds;
-    else if (p.ds < 0) x <<= -p.ds;
-    x += p.dc;
+    int32_t x = finalize_round(v, p.scale) + p.dc;
     if (x > p.maxval) x = p.maxval;
     if (x < p.minval) x = p.minval;
     return x;

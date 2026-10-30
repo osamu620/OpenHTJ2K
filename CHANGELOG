@@ -35,6 +35,27 @@
 ## Fixed
 
 ### Decoder
+- Lossy output was rounded wrongly. The float sample was truncated toward
+  zero to the 13-bit fractional grid before the shift to the output bit
+  depth, so samples below mid-grey came out 1 LSB too bright on part of the
+  image (2.2% of all samples at 8 bits, 44% at 12 bits), and above 13 bits
+  the output kept only 13 bits of precision (up to 8 LSB of error on 16-bit
+  images). Every finalize path (line-based, streaming, planar uint8/uint16
+  and the fused colour-transform kernels on every ISA) now rounds
+  v * 2^-ds half up in one step, the fixed-point convention
+  (x + 2^(ds-1)) >> ds extended to every sign of ds, which also retires the
+  whole-row scalar fall-back the fused kernels took above 13 bits. Against
+  an independent decoder's float reference the MSE drops from 0.0197 to
+  0.0027 (8-bit, Qfactor 90), 0.44 to 0.0006 (12-bit) and 20.7 to 0.013
+  (16-bit). **Lossy decodes change** from earlier releases by at most 1 LSB
+  at 8 and 12 bits and by up to 8 LSB at 16 bits; lossless output is
+  byte-identical. New fine-step round-trip tests pin the 12-bit and 16-bit
+  results. Native decode time is unchanged (within noise on 8-, 12- and
+  16-bit 4K streams, Ryzen 9 9950X, one thread); the WASM SIMD build decodes
+  8-bit 4K 3% faster and 16-bit 4K 31-33% faster, since its fused kernel no
+  longer falls back to scalar code above 13 bits. The encoder still truncates
+  input above 13 bits to 13-bit precision before the transform, so a 16-bit
+  lossy round trip keeps that error (follow-up).
 - Lossy (9/7) Part 1 code-blocks were dequantized through an integer
   fixed-point pipeline that rounded every subband sample to the 13-bit
   fractional grid and discarded quantization-index bits below bit 16 whenever

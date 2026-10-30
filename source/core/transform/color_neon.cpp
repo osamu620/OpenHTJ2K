@@ -410,117 +410,81 @@ void fused_ycbcr_irrev_to_rgb_i32_neon(const float *y, const float *cb, const fl
   const float32x4_t mCB_FACT_B = vdupq_n_f32(static_cast<float>(CB_FACT_B));
   const float32x4_t mCB_FACT_G = vdupq_n_f32(static_cast<float>(CB_FACT_G));
 
-  const int32x4_t vrnd0 = vdupq_n_s32(fp[0].rnd);
-  const int32x4_t vdc0  = vdupq_n_s32(fp[0].dc);
-  const int32x4_t vmx0  = vdupq_n_s32(fp[0].maxval);
-  const int32x4_t vmn0  = vdupq_n_s32(fp[0].minval);
-  const int32x4_t vrnd1 = vdupq_n_s32(fp[1].rnd);
-  const int32x4_t vdc1  = vdupq_n_s32(fp[1].dc);
-  const int32x4_t vmx1  = vdupq_n_s32(fp[1].maxval);
-  const int32x4_t vmn1  = vdupq_n_s32(fp[1].minval);
-  const int32x4_t vrnd2 = vdupq_n_s32(fp[2].rnd);
-  const int32x4_t vdc2  = vdupq_n_s32(fp[2].dc);
-  const int32x4_t vmx2  = vdupq_n_s32(fp[2].maxval);
-  const int32x4_t vmn2  = vdupq_n_s32(fp[2].minval);
+  const float32x4_t vhalf = vdupq_n_f32(0.5f);
+  const float32x4_t vsc0  = vdupq_n_f32(fp[0].scale);
+  const float32x4_t vsc1  = vdupq_n_f32(fp[1].scale);
+  const float32x4_t vsc2  = vdupq_n_f32(fp[2].scale);
+  const int32x4_t vdc0    = vdupq_n_s32(fp[0].dc);
+  const int32x4_t vmx0    = vdupq_n_s32(fp[0].maxval);
+  const int32x4_t vmn0    = vdupq_n_s32(fp[0].minval);
+  const int32x4_t vdc1    = vdupq_n_s32(fp[1].dc);
+  const int32x4_t vmx1    = vdupq_n_s32(fp[1].maxval);
+  const int32x4_t vmn1    = vdupq_n_s32(fp[1].minval);
+  const int32x4_t vdc2    = vdupq_n_s32(fp[2].dc);
+  const int32x4_t vmx2    = vdupq_n_s32(fp[2].maxval);
+  const int32x4_t vmn2    = vdupq_n_s32(fp[2].minval);
 
+  // One loop for every bit depth: finalize_round_neon scales by 2^-ds and rounds half
+  // up, so the sign of ds no longer selects a code path (finalize_round, color.hpp).
   uint32_t n = 0;
-  if (fp[0].ds > 0 && fp[1].ds > 0 && fp[2].ds > 0) {
-    const int32x4_t vs0 = vdupq_n_s32(-fp[0].ds);
-    const int32x4_t vs1 = vdupq_n_s32(-fp[1].ds);
-    const int32x4_t vs2 = vdupq_n_s32(-fp[2].ds);
 #if defined(__APPLE__) && defined(__aarch64__)
-    // 8-wide: two float32x4 groups per iteration for Apple Silicon's wide issue.
-    for (; n + 8 <= width; n += 8) {
-      float32x4_t mY0  = vld1q_f32(y + n);       float32x4_t mY1  = vld1q_f32(y + n + 4);
-      float32x4_t mCb0 = vld1q_f32(cb + n);      float32x4_t mCb1 = vld1q_f32(cb + n + 4);
-      float32x4_t mCr0 = vld1q_f32(cr + n);      float32x4_t mCr1 = vld1q_f32(cr + n + 4);
-      float32x4_t mR0  = vfmaq_f32(mY0, mCr0, mCR_FACT_R);
-      float32x4_t mR1  = vfmaq_f32(mY1, mCr1, mCR_FACT_R);
-      float32x4_t mB0  = vfmaq_f32(mY0, mCb0, mCB_FACT_B);
-      float32x4_t mB1  = vfmaq_f32(mY1, mCb1, mCB_FACT_B);
-      float32x4_t mG0  = vfmsq_f32(mY0, mCr0, mCR_FACT_G);
-      mG0              = vfmsq_f32(mG0, mCb0, mCB_FACT_G);
-      float32x4_t mG1  = vfmsq_f32(mY1, mCr1, mCR_FACT_G);
-      mG1              = vfmsq_f32(mG1, mCb1, mCB_FACT_G);
-      int32x4_t vR0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mR0), vrnd0), vs0);
-      int32x4_t vR1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mR1), vrnd0), vs0);
-      int32x4_t vG0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mG0), vrnd1), vs1);
-      int32x4_t vG1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mG1), vrnd1), vs1);
-      int32x4_t vB0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mB0), vrnd2), vs2);
-      int32x4_t vB1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mB1), vrnd2), vs2);
-      vst1q_s32(r + n,     vmaxq_s32(vminq_s32(vaddq_s32(vR0, vdc0), vmx0), vmn0));
-      vst1q_s32(r + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vR1, vdc0), vmx0), vmn0));
-      vst1q_s32(g + n,     vmaxq_s32(vminq_s32(vaddq_s32(vG0, vdc1), vmx1), vmn1));
-      vst1q_s32(g + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vG1, vdc1), vmx1), vmn1));
-      vst1q_s32(b + n,     vmaxq_s32(vminq_s32(vaddq_s32(vB0, vdc2), vmx2), vmn2));
-      vst1q_s32(b + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vB1, vdc2), vmx2), vmn2));
-    }
-#endif
-    for (; n + 4 <= width; n += 4) {
-      float32x4_t mY  = vld1q_f32(y + n);
-      float32x4_t mCb = vld1q_f32(cb + n);
-      float32x4_t mCr = vld1q_f32(cr + n);
-      float32x4_t mR  = vfmaq_f32(mY, mCr, mCR_FACT_R);
-      float32x4_t mB  = vfmaq_f32(mY, mCb, mCB_FACT_B);
-      float32x4_t mG  = vfmsq_f32(mY, mCr, mCR_FACT_G);
-      mG              = vfmsq_f32(mG, mCb, mCB_FACT_G);
-      int32x4_t vR    = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mR), vrnd0), vs0);
-      int32x4_t vG    = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mG), vrnd1), vs1);
-      int32x4_t vB    = vshlq_s32(vaddq_s32(vcvtq_s32_f32(mB), vrnd2), vs2);
-      vst1q_s32(r + n, vmaxq_s32(vminq_s32(vaddq_s32(vR, vdc0), vmx0), vmn0));
-      vst1q_s32(g + n, vmaxq_s32(vminq_s32(vaddq_s32(vG, vdc1), vmx1), vmn1));
-      vst1q_s32(b + n, vmaxq_s32(vminq_s32(vaddq_s32(vB, vdc2), vmx2), vmn2));
-    }
-  } else if (fp[0].ds == 0 && fp[1].ds == 0 && fp[2].ds == 0) {
-#if defined(__APPLE__) && defined(__aarch64__)
-    for (; n + 8 <= width; n += 8) {
-      float32x4_t mY0  = vld1q_f32(y + n);       float32x4_t mY1  = vld1q_f32(y + n + 4);
-      float32x4_t mCb0 = vld1q_f32(cb + n);      float32x4_t mCb1 = vld1q_f32(cb + n + 4);
-      float32x4_t mCr0 = vld1q_f32(cr + n);      float32x4_t mCr1 = vld1q_f32(cr + n + 4);
-      float32x4_t mR0  = vfmaq_f32(mY0, mCr0, mCR_FACT_R);
-      float32x4_t mR1  = vfmaq_f32(mY1, mCr1, mCR_FACT_R);
-      float32x4_t mB0  = vfmaq_f32(mY0, mCb0, mCB_FACT_B);
-      float32x4_t mB1  = vfmaq_f32(mY1, mCb1, mCB_FACT_B);
-      float32x4_t mG0  = vfmsq_f32(mY0, mCr0, mCR_FACT_G);
-      mG0              = vfmsq_f32(mG0, mCb0, mCB_FACT_G);
-      float32x4_t mG1  = vfmsq_f32(mY1, mCr1, mCR_FACT_G);
-      mG1              = vfmsq_f32(mG1, mCb1, mCB_FACT_G);
-      vst1q_s32(r + n,     vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mR0), vdc0), vmx0), vmn0));
-      vst1q_s32(r + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mR1), vdc0), vmx0), vmn0));
-      vst1q_s32(g + n,     vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mG0), vdc1), vmx1), vmn1));
-      vst1q_s32(g + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mG1), vdc1), vmx1), vmn1));
-      vst1q_s32(b + n,     vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mB0), vdc2), vmx2), vmn2));
-      vst1q_s32(b + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mB1), vdc2), vmx2), vmn2));
-    }
-#endif
-    for (; n + 4 <= width; n += 4) {
-      float32x4_t mY  = vld1q_f32(y + n);
-      float32x4_t mCb = vld1q_f32(cb + n);
-      float32x4_t mCr = vld1q_f32(cr + n);
-      float32x4_t mR  = vfmaq_f32(mY, mCr, mCR_FACT_R);
-      float32x4_t mB  = vfmaq_f32(mY, mCb, mCB_FACT_B);
-      float32x4_t mG  = vfmsq_f32(mY, mCr, mCR_FACT_G);
-      mG              = vfmsq_f32(mG, mCb, mCB_FACT_G);
-      vst1q_s32(r + n, vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mR), vdc0), vmx0), vmn0));
-      vst1q_s32(g + n, vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mG), vdc1), vmx1), vmn1));
-      vst1q_s32(b + n, vmaxq_s32(vminq_s32(vaddq_s32(vcvtq_s32_f32(mB), vdc2), vmx2), vmn2));
-    }
+  // 8-wide: two float32x4 groups per iteration for Apple Silicon's wide issue.
+  for (; n + 8 <= width; n += 8) {
+    float32x4_t mY0  = vld1q_f32(y + n);
+    float32x4_t mY1  = vld1q_f32(y + n + 4);
+    float32x4_t mCb0 = vld1q_f32(cb + n);
+    float32x4_t mCb1 = vld1q_f32(cb + n + 4);
+    float32x4_t mCr0 = vld1q_f32(cr + n);
+    float32x4_t mCr1 = vld1q_f32(cr + n + 4);
+    float32x4_t mR0  = vfmaq_f32(mY0, mCr0, mCR_FACT_R);
+    float32x4_t mR1  = vfmaq_f32(mY1, mCr1, mCR_FACT_R);
+    float32x4_t mB0  = vfmaq_f32(mY0, mCb0, mCB_FACT_B);
+    float32x4_t mB1  = vfmaq_f32(mY1, mCb1, mCB_FACT_B);
+    float32x4_t mG0  = vfmsq_f32(mY0, mCr0, mCR_FACT_G);
+    mG0              = vfmsq_f32(mG0, mCb0, mCB_FACT_G);
+    float32x4_t mG1  = vfmsq_f32(mY1, mCr1, mCR_FACT_G);
+    mG1              = vfmsq_f32(mG1, mCb1, mCB_FACT_G);
+    int32x4_t vR0    = finalize_round_neon(mR0, vsc0, vhalf);
+    int32x4_t vR1    = finalize_round_neon(mR1, vsc0, vhalf);
+    int32x4_t vG0    = finalize_round_neon(mG0, vsc1, vhalf);
+    int32x4_t vG1    = finalize_round_neon(mG1, vsc1, vhalf);
+    int32x4_t vB0    = finalize_round_neon(mB0, vsc2, vhalf);
+    int32x4_t vB1    = finalize_round_neon(mB1, vsc2, vhalf);
+    vst1q_s32(r + n, vmaxq_s32(vminq_s32(vaddq_s32(vR0, vdc0), vmx0), vmn0));
+    vst1q_s32(r + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vR1, vdc0), vmx0), vmn0));
+    vst1q_s32(g + n, vmaxq_s32(vminq_s32(vaddq_s32(vG0, vdc1), vmx1), vmn1));
+    vst1q_s32(g + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vG1, vdc1), vmx1), vmn1));
+    vst1q_s32(b + n, vmaxq_s32(vminq_s32(vaddq_s32(vB0, vdc2), vmx2), vmn2));
+    vst1q_s32(b + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(vB1, vdc2), vmx2), vmn2));
   }
-  auto finalize_one = [](float v, const FinalizeParams &p) -> int32_t {
-    int32_t x = static_cast<int32_t>(v);
-    if (p.ds > 0) x = (x + p.rnd) >> p.ds;
-    else if (p.ds < 0) x <<= -p.ds;
-    x += p.dc;
+#endif
+  for (; n + 4 <= width; n += 4) {
+    float32x4_t mY  = vld1q_f32(y + n);
+    float32x4_t mCb = vld1q_f32(cb + n);
+    float32x4_t mCr = vld1q_f32(cr + n);
+    float32x4_t mR  = vfmaq_f32(mY, mCr, mCR_FACT_R);
+    float32x4_t mB  = vfmaq_f32(mY, mCb, mCB_FACT_B);
+    float32x4_t mG  = vfmsq_f32(mY, mCr, mCR_FACT_G);
+    mG              = vfmsq_f32(mG, mCb, mCB_FACT_G);
+    int32x4_t vR    = finalize_round_neon(mR, vsc0, vhalf);
+    int32x4_t vG    = finalize_round_neon(mG, vsc1, vhalf);
+    int32x4_t vB    = finalize_round_neon(mB, vsc2, vhalf);
+    vst1q_s32(r + n, vmaxq_s32(vminq_s32(vaddq_s32(vR, vdc0), vmx0), vmn0));
+    vst1q_s32(g + n, vmaxq_s32(vminq_s32(vaddq_s32(vG, vdc1), vmx1), vmn1));
+    vst1q_s32(b + n, vmaxq_s32(vminq_s32(vaddq_s32(vB, vdc2), vmx2), vmn2));
+  }
+  auto finalize_scalar = [](float v, const FinalizeParams &p) -> int32_t {
+    int32_t x = finalize_round(v, p.scale) + p.dc;
     if (x > p.maxval) x = p.maxval;
     if (x < p.minval) x = p.minval;
     return x;
   };
   for (; n < width; ++n) {
     float Y = y[n], Cb = cb[n], Cr = cr[n];
-    r[n] = finalize_one(Y + static_cast<float>(CR_FACT_R) * Cr, fp[0]);
-    g[n] = finalize_one(
-        Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb, fp[1]);
-    b[n] = finalize_one(Y + static_cast<float>(CB_FACT_B) * Cb, fp[2]);
+    r[n] = finalize_scalar(Y + static_cast<float>(CR_FACT_R) * Cr, fp[0]);
+    g[n] =
+        finalize_scalar(Y - static_cast<float>(CR_FACT_G) * Cr - static_cast<float>(CB_FACT_G) * Cb, fp[1]);
+    b[n] = finalize_scalar(Y + static_cast<float>(CB_FACT_B) * Cb, fp[2]);
   }
 }
 

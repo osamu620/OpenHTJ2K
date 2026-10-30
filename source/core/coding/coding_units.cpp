@@ -5612,275 +5612,21 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
 
     const uint32_t out_stride = ceil_int(x1 - x0, (1U << reduce_NL));
 
-    // downshift value for lossy path
-    // Reversible (transformation==1) uses downshift=0 (lossless, no scaling).
-    // All irreversible paths (irrev97=0, ATK irrev>=2) use downshift = FRACBITS - bitdepth.
-    int16_t downshift =
+    // Lossy samples are in Q(FRACBITS) units; finalize_f32_to_i32 rounds them to the
+    // nearest output LSB (finalize_round, color.hpp).  A reversible transform leaves
+    // integer-valued floats, which the same formula with scale 1 reproduces exactly.
+    const int16_t downshift =
         (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
-    // For bitdepth > FRACBITS (e.g., 16-bit): downshift < 0, meaning the internal representation
-    // was right-shifted during encoding and must be left-shifted back during reconstruction.
-    // No rounding offset is applied for a left shift (it would introduce a constant bias).
-    // For bitdepth <= FRACBITS: downshift >= 0 (right shift), use (1<<downshift)>>1 for rounding.
-    int16_t offset = (downshift <= 0) ? 0 : static_cast<int16_t>((1 << downshift) >> 1);
+    const float scale = finalize_scale(downshift);
     // Read directly from the float resolution buffer (avoiding the int32 intermediate copy)
     const uint8_t NL_c  = tcomp[c].get_dwt_levels();
     j2k_resolution *cr  = tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL));
     sprec_t *const src  = cr->i_samples;
     int32_t *const cdst = dst[c];
-    const sprec_t *spf;
-    int32_t *dp;
-#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
-    {
-      const v128_t vdco = wasm_i32x4_splat(DC_OFFSET);
-      const v128_t vmx  = wasm_i32x4_splat(MAXVAL);
-      const v128_t vmn  = wasm_i32x4_splat(MINVAL);
-      if (downshift == 0) {
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf));
-            v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + 4));
-            v0        = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
-            v1        = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
-            wasm_v128_store(dp, v0);
-            wasm_v128_store(dp + 4, v1);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = static_cast<int32_t>(*spf++) + DC_OFFSET;
-            ival         = (ival > MAXVAL) ? MAXVAL : ival;
-            ival         = (ival < MINVAL) ? MINVAL : ival;
-            *dp++        = ival;
-          }
-        }
-      } else if (downshift < 0) {
-        const v128_t vo = wasm_i32x4_splat(offset);
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            v128_t v0 = wasm_i32x4_shl(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf)), vo),
-                                       (int)-downshift);
-            v128_t v1 = wasm_i32x4_shl(
-                wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + 4)), vo), (int)-downshift);
-            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
-            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
-            wasm_v128_store(dp, v0);
-            wasm_v128_store(dp + 4, v1);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = shl_i32(static_cast<int32_t>(*spf++) + offset, -downshift);
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            *dp++ = ival;
-          }
-        }
-      } else {
-        const v128_t vo = wasm_i32x4_splat(offset);
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            v128_t v0 = wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf)), vo),
-                                       (int)downshift);
-            v128_t v1 = wasm_i32x4_shr(
-                wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + 4)), vo), (int)downshift);
-            v0 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v0, vdco), vmx), vmn);
-            v1 = wasm_i32x4_max(wasm_i32x4_min(wasm_i32x4_add(v1, vdco), vmx), vmn);
-            wasm_v128_store(dp, v0);
-            wasm_v128_store(dp + 4, v1);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = (static_cast<int32_t>(*spf++) + offset) >> downshift;
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            *dp++ = ival;
-          }
-        }
-      }
+    for (uint32_t y = 0; y < in_height; ++y) {
+      open_htj2k::finalize_f32_to_i32(src + y * in_stride, cdst + x_offset + (y + y_offset) * out_stride,
+                                      csize.x, scale, DC_OFFSET, MAXVAL, MINVAL);
     }
-#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-    {
-      const int32x4_t dco  = vdupq_n_s32(DC_OFFSET);
-      const int32x4_t vmax = vdupq_n_s32(MAXVAL);
-      const int32x4_t vmin = vdupq_n_s32(MINVAL);
-      if (downshift == 0) {
-        // Lossless: no rounding offset (offset=0), no shift — just convert and clamp.
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf));
-            int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + 4));
-            v0           = vmaxq_s32(vminq_s32(vaddq_s32(v0, dco), vmax), vmin);
-            v1           = vmaxq_s32(vminq_s32(vaddq_s32(v1, dco), vmax), vmin);
-            vst1q_s32(dp, v0);
-            vst1q_s32(dp + 4, v1);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = static_cast<int32_t>(*spf++) + DC_OFFSET;
-            ival         = (ival > MAXVAL) ? MAXVAL : ival;
-            ival         = (ival < MINVAL) ? MINVAL : ival;
-            *dp++        = ival;
-          }
-        }
-      } else if (downshift < 0) {
-        const int32x4_t o      = vdupq_n_s32(offset);
-        const int32x4_t vshift = vdupq_n_s32(-downshift);  // positive → left shift
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            int32x4_t v0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf)), o), vshift);
-            int32x4_t v1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + 4)), o), vshift);
-            v0           = vmaxq_s32(vminq_s32(vaddq_s32(v0, dco), vmax), vmin);
-            v1           = vmaxq_s32(vminq_s32(vaddq_s32(v1, dco), vmax), vmin);
-            vst1q_s32(dp, v0);
-            vst1q_s32(dp + 4, v1);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = shl_i32(static_cast<int32_t>(*spf++) + offset, -downshift);
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            *dp++ = ival;
-          }
-        }
-      } else {
-        const int32x4_t o      = vdupq_n_s32(offset);
-        const int32x4_t vshift = vdupq_n_s32(-downshift);  // negative → right shift
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            int32x4_t v0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf)), o), vshift);
-            int32x4_t v1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + 4)), o), vshift);
-            v0           = vmaxq_s32(vminq_s32(vaddq_s32(v0, dco), vmax), vmin);
-            v1           = vmaxq_s32(vminq_s32(vaddq_s32(v1, dco), vmax), vmin);
-            vst1q_s32(dp, v0);
-            vst1q_s32(dp + 4, v1);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = (static_cast<int32_t>(*spf++) + offset) >> downshift;
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            *dp++ = ival;
-          }
-        }
-      }
-    }
-#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-      if (downshift < 0) {
-        __m256i v, o, dco, vmax, vmin;
-        o    = _mm256_set1_epi32(offset);
-        dco  = _mm256_set1_epi32(DC_OFFSET);
-        vmax = _mm256_set1_epi32(MAXVAL);
-        vmin = _mm256_set1_epi32(MINVAL);
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            v = _mm256_cvttps_epi32(_mm256_load_ps(spf));
-            v = _mm256_slli_epi32(_mm256_add_epi32(v, o), -downshift);
-            v = _mm256_add_epi32(v, dco);
-            v = _mm256_min_epi32(v, vmax);
-            v = _mm256_max_epi32(v, vmin);
-            _mm256_storeu_si256((__m256i *)dp, v);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = static_cast<int32_t>(*spf++);
-            ival         = shl_i32(ival + offset, -downshift);
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            *dp++ = ival;
-          }
-        }
-      } else {
-        __m256i v, o, dco, vmax, vmin;
-        o    = _mm256_set1_epi32(offset);
-        dco  = _mm256_set1_epi32(DC_OFFSET);
-        vmax = _mm256_set1_epi32(MAXVAL);
-        vmin = _mm256_set1_epi32(MINVAL);
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (; len >= 8; len -= 8) {
-            v = _mm256_cvttps_epi32(_mm256_load_ps(spf));
-            v = _mm256_srai_epi32(_mm256_add_epi32(v, o), downshift);
-            v = _mm256_add_epi32(v, dco);
-            v = _mm256_min_epi32(v, vmax);
-            v = _mm256_max_epi32(v, vmin);
-            _mm256_storeu_si256((__m256i *)dp, v);
-            spf += 8;
-            dp += 8;
-          }
-          for (; len > 0; --len) {
-            int32_t ival = static_cast<int32_t>(*spf++);
-            ival         = (ival + offset) >> downshift;
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            *dp++ = ival;
-          }
-        }
-      }
-#else
-      if (downshift < 0) {
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (uint32_t n = 0; n < len; ++n) {
-            int32_t ival = static_cast<int32_t>(spf[n]);
-            ival         = shl_i32(ival + offset, -downshift);
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            dp[n] = ival;
-          }
-        }
-      } else {
-        for (uint32_t y = 0; y < in_height; ++y) {
-          uint32_t len = csize.x;
-          spf          = src + y * in_stride;
-          dp           = cdst + x_offset + (y + y_offset) * out_stride;
-          for (uint32_t n = 0; n < len; ++n) {
-            int32_t ival = static_cast<int32_t>(spf[n]);
-            ival         = (ival + offset) >> downshift;
-            ival += DC_OFFSET;
-            ival  = (ival > MAXVAL) ? MAXVAL : ival;
-            ival  = (ival < MINVAL) ? MINVAL : ival;
-            dp[n] = ival;
-          }
-        }
-      }
-#endif
   }
 }
 
@@ -5895,7 +5641,8 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   // Pre-compute per-component output mapping parameters (same logic as finalize()).
   struct CInfo {
     int32_t DC_OFFSET, MAXVAL, MINVAL;
-    int16_t downshift, rnd;
+    int16_t downshift;
+    float scale;
     uint32_t csize_x, csize_y;
     uint32_t x_offset, y_offset, out_stride;
     int32_t *cdst;
@@ -5927,7 +5674,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
     I.y_offset             = tc0.y - ceil_int(y0, (1U << reduce_NL_val));
     I.out_stride           = ceil_int(x1 - x0, (1U << reduce_NL_val));
     I.downshift            = (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - bd);
-    I.rnd                  = (I.downshift <= 0) ? 0 : static_cast<int16_t>((1 << I.downshift) >> 1);
+    I.scale                = finalize_scale(I.downshift);
     I.cdst                 = dst[c];
   }
 
@@ -5952,7 +5699,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   FinalizeParams fp[3] = {};
   for (uint16_t c = 0; c < std::min(NC, static_cast<uint16_t>(3)); ++c) {
     fp[c].ds     = ci[c].downshift;
-    fp[c].rnd    = ci[c].rnd;
+    fp[c].scale  = ci[c].scale;
     fp[c].dc     = ci[c].DC_OFFSET;
     fp[c].maxval = ci[c].MAXVAL;
     fp[c].minval = ci[c].MINVAL;
@@ -6005,10 +5752,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
         int32_t *dp        = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
         for (uint32_t n = 0; n < I.csize_x; ++n) {
           int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(rows[c].data())[n]
-                             : static_cast<int32_t>(rows[c][n]);
-          v         = (I.downshift < 0)   ? shl_i32(v + I.rnd, -I.downshift)
-                      : (I.downshift > 0) ? (v + I.rnd) >> I.downshift
-                                          : v;
+                             : finalize_round(rows[c][n], I.scale);
           v += I.DC_OFFSET;
           if (v > I.MAXVAL) v = I.MAXVAL;
           if (v < I.MINVAL) v = I.MINVAL;
@@ -6020,90 +5764,33 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
       for (uint16_t c = 0; c < NC; ++c) {
         if (y >= ci[c].csize_y) continue;
         sprec_t *spf_mut = tcomp[c].pull_line_ref();
-        const bool is_i32 = (tcomp[c].get_transformation() == 1);
-        if (!is_i32) {
-          // Float path: nothing to convert.
-        }
+        const bool is_i32  = (tcomp[c].get_transformation() == 1);
         const sprec_t *spf = spf_mut;
         const CInfo &I     = ci[c];
         int32_t *dp        = I.cdst + I.x_offset + (y + I.y_offset) * I.out_stride;
-        const int16_t ds   = I.downshift;
-        const int16_t ro   = I.rnd;
+        if (is_i32) {
+          // Reversible: the row holds int32 samples; DC offset and clamp only.
+          const int32_t *ip = reinterpret_cast<const int32_t *>(spf);
+          uint32_t n        = 0;
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-        {
-          auto load_sample = [&](uint32_t n) -> __m256i {
-            if (is_i32)
-              return _mm256_loadu_si256(reinterpret_cast<const __m256i *>(spf + n));
-            else
-              return _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
-          };
           const __m256i vdco = _mm256_set1_epi32(I.DC_OFFSET);
           const __m256i vmx  = _mm256_set1_epi32(I.MAXVAL);
           const __m256i vmn  = _mm256_set1_epi32(I.MINVAL);
-          uint32_t n         = 0;
-          if (ds < 0) {
-            const __m128i vsh  = _mm_cvtsi32_si128(-ds);
-            const __m256i vrnd = _mm256_set1_epi32(ro);
-            for (; n + 16 <= I.csize_x; n += 16) {
-              __m256i v0 = _mm256_sll_epi32(_mm256_add_epi32(load_sample(n), vrnd), vsh);
-              __m256i v1 = _mm256_sll_epi32(_mm256_add_epi32(load_sample(n + 8), vrnd), vsh);
-              _mm256_storeu_si256((__m256i *)(dp + n),
-                                  _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-              _mm256_storeu_si256((__m256i *)(dp + n + 8),
-                                  _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-            }
-          } else if (ds > 0) {
-            const __m128i vsh  = _mm_cvtsi32_si128(ds);
-            const __m256i vrnd = _mm256_set1_epi32(ro);
-            for (; n + 16 <= I.csize_x; n += 16) {
-              __m256i v0 = _mm256_sra_epi32(_mm256_add_epi32(load_sample(n), vrnd), vsh);
-              __m256i v1 = _mm256_sra_epi32(_mm256_add_epi32(load_sample(n + 8), vrnd), vsh);
-              _mm256_storeu_si256((__m256i *)(dp + n),
-                                  _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-              _mm256_storeu_si256((__m256i *)(dp + n + 8),
-                                  _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-            }
-          } else {
-            for (; n + 16 <= I.csize_x; n += 16) {
-              __m256i v0 = load_sample(n);
-              __m256i v1 = load_sample(n + 8);
-              _mm256_storeu_si256((__m256i *)(dp + n),
-                                  _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-              _mm256_storeu_si256((__m256i *)(dp + n + 8),
-                                  _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-            }
+          for (; n + 8 <= I.csize_x; n += 8) {
+            __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(ip + n));
+            _mm256_storeu_si256((__m256i *)(dp + n),
+                                _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v, vdco), vmn), vmx));
           }
+#endif
           for (; n < I.csize_x; ++n) {
-            int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(spf)[n] : static_cast<int32_t>(spf[n]);
-            v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-            v += I.DC_OFFSET;
-            if (v > I.MAXVAL) v = I.MAXVAL;
-            if (v < I.MINVAL) v = I.MINVAL;
-            dp[n] = v;
-          }
-        }
-#else
-        if (is_i32) {
-          const int32_t *ip = reinterpret_cast<const int32_t *>(spf);
-          for (uint32_t n = 0; n < I.csize_x; ++n) {
-            int32_t v = ip[n];
-            v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-            v += I.DC_OFFSET;
+            int32_t v = ip[n] + I.DC_OFFSET;
             if (v > I.MAXVAL) v = I.MAXVAL;
             if (v < I.MINVAL) v = I.MINVAL;
             dp[n] = v;
           }
         } else {
-          for (uint32_t n = 0; n < I.csize_x; ++n) {
-            int32_t v = static_cast<int32_t>(spf[n]);
-            v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-            v += I.DC_OFFSET;
-            if (v > I.MAXVAL) v = I.MAXVAL;
-            if (v < I.MINVAL) v = I.MINVAL;
-            dp[n] = v;
-          }
+          open_htj2k::finalize_f32_to_i32(spf, dp, I.csize_x, I.scale, I.DC_OFFSET, I.MAXVAL, I.MINVAL);
         }
-#endif
       }
     }
   }
@@ -6152,7 +5839,8 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
   struct CInfo {
     int32_t DC_OFFSET, MAXVAL, MINVAL;
-    int16_t downshift, rnd;
+    int16_t downshift;
+    float scale;
     uint32_t csize_x, csize_y;
     uint32_t yr;  // SIZ YRsiz: vertical subsampling factor (1 = no subsampling)
   };
@@ -6176,7 +5864,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     I.csize_x              = tc1.x - tc0.x;
     I.csize_y              = tc1.y - tc0.y;
     I.downshift            = (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - bd);
-    I.rnd                  = (I.downshift <= 0) ? 0 : static_cast<int16_t>((1 << I.downshift) >> 1);
+    I.scale                = finalize_scale(I.downshift);
   }
 
   // Per-component int32 output row scratch (one row each, reused per y).
@@ -6198,7 +5886,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   if (do_mct) {
     for (uint16_t c = 0; c < std::min(NC, static_cast<uint16_t>(3)); ++c) {
       fp[c].ds     = ci[c].downshift;
-      fp[c].rnd    = ci[c].rnd;
+      fp[c].scale  = ci[c].scale;
       fp[c].dc     = ci[c].DC_OFFSET;
       fp[c].maxval = ci[c].MAXVAL;
       fp[c].minval = ci[c].MINVAL;
@@ -6413,112 +6101,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
           const sprec_t *spf = strip_ptrs[c] + rs_c * ci[c].csize_x;
           int32_t *dp        = out_rows[c].data();
           const CInfo &I     = ci[c];
-          const int16_t ds   = I.downshift;
-          const int16_t ro   = I.rnd;
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-          {
-            const __m256i vdco = _mm256_set1_epi32(I.DC_OFFSET);
-            const __m256i vmx  = _mm256_set1_epi32(I.MAXVAL);
-            const __m256i vmn  = _mm256_set1_epi32(I.MINVAL);
-            uint32_t n         = 0;
-            if (ds < 0) {
-              const __m128i vsh = _mm_cvtsi32_si128(-ds);
-              for (; n + 16 <= I.csize_x; n += 16) {
-                __m256i v0 = _mm256_sll_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n)), vsh);
-                __m256i v1 = _mm256_sll_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8)), vsh);
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n + 8),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-              }
-            } else if (ds > 0) {
-              const __m128i vsh  = _mm_cvtsi32_si128(ds);
-              const __m256i vrnd = _mm256_set1_epi32(ro);
-              for (; n + 16 <= I.csize_x; n += 16) {
-                __m256i v0 = _mm256_sra_epi32(
-                    _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n)), vrnd), vsh);
-                __m256i v1 = _mm256_sra_epi32(
-                    _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8)), vrnd), vsh);
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n + 8),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-              }
-            } else {
-              for (; n + 16 <= I.csize_x; n += 16) {
-                __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
-                __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n + 8),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-              }
-            }
-            for (; n < I.csize_x; ++n) {
-              int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-              v += I.DC_OFFSET;
-              if (v > I.MAXVAL) v = I.MAXVAL;
-              if (v < I.MINVAL) v = I.MINVAL;
-              dp[n] = v;
-            }
-          }
-#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-          {
-            const int32x4_t vdco = vdupq_n_s32(I.DC_OFFSET);
-            const int32x4_t vmx  = vdupq_n_s32(I.MAXVAL);
-            const int32x4_t vmn  = vdupq_n_s32(I.MINVAL);
-            uint32_t n           = 0;
-            if (ds < 0) {
-              const int32x4_t vsh = vdupq_n_s32(-ds);
-              for (; n + 8 <= I.csize_x; n += 8) {
-                int32x4_t v0 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vsh);
-                int32x4_t v1 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vsh);
-                vst1q_s32(dp + n, vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
-                vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
-              }
-            } else if (ds > 0) {
-              const int32x4_t vsh  = vdupq_n_s32(-ds);  // negative = right-shift
-              const int32x4_t vrnd = vdupq_n_s32(ro);
-              for (; n + 8 <= I.csize_x; n += 8) {
-                int32x4_t v0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vrnd), vsh);
-                int32x4_t v1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vrnd), vsh);
-                vst1q_s32(dp + n, vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
-                vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
-              }
-            } else {
-              for (; n + 8 <= I.csize_x; n += 8) {
-                int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
-                int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
-                vst1q_s32(dp + n, vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
-                vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
-              }
-            }
-            for (; n < I.csize_x; ++n) {
-              int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-              v += I.DC_OFFSET;
-              if (v > I.MAXVAL) v = I.MAXVAL;
-              if (v < I.MINVAL) v = I.MINVAL;
-              dp[n] = v;
-            }
-          }
-#else
-            for (uint32_t n = 0; n < I.csize_x; ++n) {
-              int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-              v += I.DC_OFFSET;
-              if (v > I.MAXVAL) v = I.MAXVAL;
-              if (v < I.MINVAL) v = I.MINVAL;
-              dp[n] = v;
-            }
-#endif
+          open_htj2k::finalize_f32_to_i32(spf, dp, I.csize_x, I.scale, I.DC_OFFSET, I.MAXVAL, I.MINVAL);
         }
       } else {
         // No MCT: each component is independent.  Read from its strip scratch
@@ -6531,159 +6114,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
           const sprec_t *spf = strip_ptrs[c] + rs_c * ci[c].csize_x;
           int32_t *dp        = out_rows[c].data();
           const CInfo &I     = ci[c];
-          const int16_t ds   = I.downshift;
-          const int16_t ro   = I.rnd;
-#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
-          {
-            const __m256i vdco = _mm256_set1_epi32(I.DC_OFFSET);
-            const __m256i vmx  = _mm256_set1_epi32(I.MAXVAL);
-            const __m256i vmn  = _mm256_set1_epi32(I.MINVAL);
-            uint32_t n         = 0;
-            if (ds < 0) {
-              const __m128i vsh = _mm_cvtsi32_si128(-ds);
-              for (; n + 16 <= I.csize_x; n += 16) {
-                __m256i v0 = _mm256_sll_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n)), vsh);
-                __m256i v1 = _mm256_sll_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8)), vsh);
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n + 8),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-              }
-            } else if (ds > 0) {
-              const __m128i vsh  = _mm_cvtsi32_si128(ds);
-              const __m256i vrnd = _mm256_set1_epi32(ro);
-              for (; n + 16 <= I.csize_x; n += 16) {
-                __m256i v0 = _mm256_sra_epi32(
-                    _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n)), vrnd), vsh);
-                __m256i v1 = _mm256_sra_epi32(
-                    _mm256_add_epi32(_mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8)), vrnd), vsh);
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n + 8),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-              }
-            } else {
-              for (; n + 16 <= I.csize_x; n += 16) {
-                __m256i v0 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n));
-                __m256i v1 = _mm256_cvttps_epi32(_mm256_loadu_ps(spf + n + 8));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v0, vdco), vmn), vmx));
-                _mm256_storeu_si256(
-                    (__m256i *)(dp + n + 8),
-                    _mm256_min_epi32(_mm256_max_epi32(_mm256_add_epi32(v1, vdco), vmn), vmx));
-              }
-            }
-            for (; n < I.csize_x; ++n) {
-              int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-              v += I.DC_OFFSET;
-              if (v > I.MAXVAL) v = I.MAXVAL;
-              if (v < I.MINVAL) v = I.MINVAL;
-              dp[n] = v;
-            }
-          }
-#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
-          {
-            const int32x4_t vdco = vdupq_n_s32(I.DC_OFFSET);
-            const int32x4_t vmx  = vdupq_n_s32(I.MAXVAL);
-            const int32x4_t vmn  = vdupq_n_s32(I.MINVAL);
-            uint32_t n           = 0;
-            if (ds < 0) {
-              const int32x4_t vsh = vdupq_n_s32(-ds);
-              for (; n + 8 <= I.csize_x; n += 8) {
-                int32x4_t v0 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vsh);
-                int32x4_t v1 = vshlq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vsh);
-                vst1q_s32(dp + n, vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
-                vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
-              }
-            } else if (ds > 0) {
-              const int32x4_t vsh  = vdupq_n_s32(-ds);  // negative = right-shift
-              const int32x4_t vrnd = vdupq_n_s32(ro);
-              for (; n + 8 <= I.csize_x; n += 8) {
-                int32x4_t v0 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n)), vrnd), vsh);
-                int32x4_t v1 = vshlq_s32(vaddq_s32(vcvtq_s32_f32(vld1q_f32(spf + n + 4)), vrnd), vsh);
-                vst1q_s32(dp + n, vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
-                vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
-              }
-            } else {
-              for (; n + 8 <= I.csize_x; n += 8) {
-                int32x4_t v0 = vcvtq_s32_f32(vld1q_f32(spf + n));
-                int32x4_t v1 = vcvtq_s32_f32(vld1q_f32(spf + n + 4));
-                vst1q_s32(dp + n, vmaxq_s32(vminq_s32(vaddq_s32(v0, vdco), vmx), vmn));
-                vst1q_s32(dp + n + 4, vmaxq_s32(vminq_s32(vaddq_s32(v1, vdco), vmx), vmn));
-              }
-            }
-            for (; n < I.csize_x; ++n) {
-              int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-              v += I.DC_OFFSET;
-              if (v > I.MAXVAL) v = I.MAXVAL;
-              if (v < I.MINVAL) v = I.MINVAL;
-              dp[n] = v;
-            }
-          }
-#elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
-            {
-              const v128_t vdco = wasm_i32x4_splat(I.DC_OFFSET);
-              const v128_t vmx  = wasm_i32x4_splat(I.MAXVAL);
-              const v128_t vmn  = wasm_i32x4_splat(I.MINVAL);
-              uint32_t n        = 0;
-              if (ds < 0) {
-                const int sh = -ds;
-                for (; n + 8 <= I.csize_x; n += 8) {
-                  v128_t v0 = wasm_i32x4_shl(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), sh);
-                  v128_t v1 = wasm_i32x4_shl(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), sh);
-                  wasm_v128_store(dp + n,
-                                  wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v0, vdco), vmn), vmx));
-                  wasm_v128_store(dp + n + 4,
-                                  wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v1, vdco), vmn), vmx));
-                }
-              } else if (ds > 0) {
-                const v128_t vrnd = wasm_i32x4_splat(ro);
-                for (; n + 8 <= I.csize_x; n += 8) {
-                  v128_t v0 = wasm_i32x4_shr(
-                      wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n)), vrnd), ds);
-                  v128_t v1 = wasm_i32x4_shr(
-                      wasm_i32x4_add(wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4)), vrnd), ds);
-                  wasm_v128_store(dp + n,
-                                  wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v0, vdco), vmn), vmx));
-                  wasm_v128_store(dp + n + 4,
-                                  wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v1, vdco), vmn), vmx));
-                }
-              } else {
-                for (; n + 8 <= I.csize_x; n += 8) {
-                  v128_t v0 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n));
-                  v128_t v1 = wasm_i32x4_trunc_sat_f32x4(wasm_v128_load(spf + n + 4));
-                  wasm_v128_store(dp + n,
-                                  wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v0, vdco), vmn), vmx));
-                  wasm_v128_store(dp + n + 4,
-                                  wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v1, vdco), vmn), vmx));
-                }
-              }
-              for (; n < I.csize_x; ++n) {
-                int32_t v = static_cast<int32_t>(spf[n]);
-                v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-                v += I.DC_OFFSET;
-                if (v > I.MAXVAL) v = I.MAXVAL;
-                if (v < I.MINVAL) v = I.MINVAL;
-                dp[n] = v;
-              }
-            }
-#else
-            for (uint32_t n = 0; n < I.csize_x; ++n) {
-              int32_t v = static_cast<int32_t>(spf[n]);
-              v         = (ds < 0) ? shl_i32(v + ro, -ds) : (ds > 0) ? (v + ro) >> ds : v;
-              v += I.DC_OFFSET;
-              if (v > I.MAXVAL) v = I.MAXVAL;
-              if (v < I.MINVAL) v = I.MINVAL;
-              dp[n] = v;
-            }
-#endif
+          open_htj2k::finalize_f32_to_i32(spf, dp, I.csize_x, I.scale, I.DC_OFFSET, I.MAXVAL, I.MINVAL);
         }
       }
 
@@ -6749,7 +6180,8 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
   // Compute CInfo (same as decode_line_based_stream).
   struct CInfo {
     uint32_t csize_x, csize_y, yr;
-    int16_t downshift, rnd;
+    int16_t downshift;
+    float scale;
   };
   std::vector<CInfo> ci(NC);
   for (uint16_t c = 0; c < NC; ++c) {
@@ -6762,7 +6194,7 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
     ci[c].csize_y          = cr_act->get_pos1().y - cr_act->get_pos0().y;
     ci[c].downshift =
         (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
-    ci[c].rnd = (ci[c].downshift <= 0) ? 0 : static_cast<int16_t>((1 << ci[c].downshift) >> 1);
+    ci[c].scale = finalize_scale(ci[c].downshift);
   }
 
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].init_line_decode(/*ring_mode=*/true);
@@ -6868,12 +6300,11 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
 
         if (d.is_16bit) {
           auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
-          open_htj2k::finalize_f32_to_u16(spf, dst, d.width, ci[c].downshift, ci[c].rnd, d.dc, d.maxval,
-                                          d.minval);
+          open_htj2k::finalize_f32_to_u16(spf, dst, d.width, ci[c].scale, d.dc, d.maxval, d.minval);
         } else {
           auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
-          open_htj2k::finalize_f32_to_u8(spf, dst, d.width, ci[c].downshift, ci[c].rnd, d.dc, d.maxval,
-                                         d.minval, d.depth_shift);
+          open_htj2k::finalize_f32_to_u8(spf, dst, d.width, ci[c].scale, d.dc, d.maxval, d.minval,
+                                         d.depth_shift);
         }
       }
     }
