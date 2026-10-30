@@ -12,9 +12,17 @@ lossy-precision fixes of that day) against OpenJPEG v2.5.4.
 ## Results
 
 4096×2160 8-bit RGB frame (see *Fixtures*). Medians of 10 interleaved
-repetitions, one thread, one core.
+repetitions, single-threaded (`-threads 1` / `-num_threads 1`), one core.
 
-Codec time as reported by each tool (PPM file I/O excluded):
+**The two decoders' timers do not cover the same work.** OpenHTJ2K's decoder
+streams rows to the output file while it decodes, so its reported time
+includes writing the 26 MB PPM; OpenJPEG's `decode time` excludes its PPM
+writer, which costs it about 230 ms at this size (compare the two tables
+below). The codec-time decode row is therefore conservative for OpenHTJ2K.
+The encode timers are comparable: both include writing the codestream and
+exclude reading the PPM.
+
+Codec time as reported by each tool:
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
@@ -46,10 +54,8 @@ Reading the numbers:
 - The Part 1 decode rows decode the same codestream, the one OpenJPEG wrote.
 - The HT columns are the same images through the HT block coder; the
   codestream is 15% larger, which is the usual price of HT's lossless mode.
-- The two decode tables differ for OpenJPEG because its reported decode time
-  excludes writing the PPM, while OpenHTJ2K's decoder streams rows to the
-  file as it decodes, so its reported time includes the write. The codec-time
-  table is therefore conservative for OpenHTJ2K on decode.
+- The two decode tables differ for OpenJPEG because of the timer scopes
+  described above.
 - Run-to-run spread is small: minimum and median differ by less than 2% in
   every cell.
 
