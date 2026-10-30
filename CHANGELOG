@@ -1,4 +1,19 @@
-# [Unreleased]
+# [0.21.0] - 2026-10-30
+
+Minor release: OpenHTJ2K now encodes JPEG 2000 Part 1 as well as HTJ2K.
+`Cmodes=0` on the command line, or `cod_params::codeblock_style = 0`
+through the API, codes every code-block with the Part 1 EBCOT/MQ coder
+in its default mode, so the codestream is readable by any JPEG 2000
+decoder, and lossless output is the same size as OpenJPEG's. Part 1
+decoding is about 30% faster. Lossy precision is fixed on both sides:
+the decoder rounds every output sample to the nearest LSB, so lossy
+decodes change from earlier releases by up to 1 LSB at 8 and 12 bits and
+up to 8 LSB at 16 bits (lossless output is byte-identical); the encoder
+keeps every input bit above 13 bits; and Part 1 and HT code-blocks that
+carry the same quantization indices now decode identically. Codestreams
+with more than 16 components, or with out-of-order COC markers, no
+longer crash the decoder. The API is unchanged apart from the new
+accepted value `codeblock_style = 0`.
 
 ## Added
 

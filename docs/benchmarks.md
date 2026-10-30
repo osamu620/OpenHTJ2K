@@ -6,8 +6,8 @@ coder, against OpenJPEG, single-threaded, on x86-64. Everything here is
 produced by one script, `tools/bench/lossless_vs_openjpeg.py`, so the numbers
 can be regenerated on any machine and refreshed at each release.
 
-Measured 2026-10-30 on OpenHTJ2K `main` at 66e4ca7 (release 0.20.2 plus the
-lossy-precision fixes of that day) against OpenJPEG v2.5.4.
+Measured 2026-10-30 on OpenHTJ2K 0.21.0 (code at 66e4ca7) against OpenJPEG
+v2.5.4.
 
 ## Results
 
