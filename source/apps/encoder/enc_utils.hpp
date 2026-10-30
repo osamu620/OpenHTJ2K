@@ -71,6 +71,10 @@ void print_help(char *cmd) {
   printf("Cprecincts=Size:\n  Precinct size. Shall be power of two.\n");
   printf("Cycc=yes or no:\n  yes to use RGB->YCbCr color space conversion.\n");
   printf(
+      "Cht_refine=Int  (EXPERIMENTAL, HT only)\n"
+      "  Code each HT code-block's cleanup pass this many bit-planes above the LSB, followed by\n"
+      "  HT SigProp and MagRef passes for the plane below. Not lossless. Default is 0 (off).\n");
+  printf(
       "Corder:\n  Progression order. Valid entry is one of LRCP, RLCP, RPCL, PCRL, CPRL, PRCL.\n"
       "  PRCL (position-resolution level-component-layer) is an ISO/IEC 15444-2 (Part 2) order.\n");
   printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n  Default is no.\n");
@@ -168,6 +172,7 @@ class j2k_argset {
   bool qderived;
   uint8_t qfactor;
   // EXPERIMENTAL analytic visual (CSF) weighting for the Qfactor path.
+  uint8_t ht_refine;           // EXPERIMENTAL: HT cleanup plane for SigProp/MagRef (0 = off)
   uint8_t csf_model;           // 0 = legacy table (default), 1 = Mannos-Sakrison, 2 = Daly
   double csf_ppd;              // reference pixels-per-degree at zoom 1.0
   double csf_zoom;             // display magnification (> 1 = zoom-in)
@@ -425,6 +430,7 @@ class j2k_argset {
         num_guard(1),
         qderived(false),
         qfactor(NO_QFACTOR),
+        ht_refine(0),
         csf_model(0),
         csf_ppd(72.0),
         csf_zoom(1.0),
@@ -579,6 +585,15 @@ class j2k_argset {
             printf("ERROR: unknown progression order %s\n", val.c_str());
             exit(EXIT_FAILURE);
           }
+        } else if (param == "ht_refine") {
+          const std::string val = arg.substr(arg.find_first_of('=') + 1);
+          char *end             = nullptr;
+          const long n          = strtol(val.c_str(), &end, 10);
+          if (val.empty() || *end != '\0' || n < 0 || n > 30) {
+            printf("ERROR: Cht_refine takes a number of bit-planes from 0 to 30.\n");
+            exit(EXIT_FAILURE);
+          }
+          ht_refine = static_cast<uint8_t>(n);
         } else if (param == "use_sop") {
           get_bool(param, arg, use_sop);
         } else if (param == "use_eph") {
@@ -725,6 +740,7 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD uint8_t get_num_guard() const { return num_guard; }
   OPENHTJ2K_NODISCARD bool is_derived() const { return qderived; }
   OPENHTJ2K_NODISCARD uint8_t get_qfactor() const { return qfactor; }
+  OPENHTJ2K_NODISCARD uint8_t get_ht_refine() const { return ht_refine; }
   OPENHTJ2K_NODISCARD uint8_t get_csf_model() const { return csf_model; }
   OPENHTJ2K_NODISCARD double get_csf_ppd() const { return csf_ppd; }
   OPENHTJ2K_NODISCARD double get_csf_zoom() const { return csf_zoom; }

@@ -189,8 +189,12 @@ class j2k_codeblock : public j2k_region {
   uint8_t *layer_passes;
   bool already_included;
   bool refsegment;
-  bool pre_quantized  = false;
-  uint32_t pre_or_val = 0;
+  bool pre_quantized = false;
+  // HT only: code the cleanup pass this many bit-planes above the LSB and refine
+  // the plane below it with the HT SigProp and MagRef passes (0 = cleanup only).
+  // Clamped per block so that the cleanup pass keeps a significant sample.
+  uint8_t ht_refine_planes = 0;
+  uint32_t pre_or_val      = 0;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
                 float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
@@ -227,6 +231,10 @@ class j2k_codeblock : public j2k_region {
   OPENHTJ2K_NODISCARD uint8_t get_Mb() const;
   uint8_t *get_compressed_data();
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
+  // Copies an HT refinement segment of Lref bytes after the cleanup segment of
+  // `length` bytes, into the space set_compressed_data() reserved for it, and
+  // returns the unused part of that reservation to the code-block data pool.
+  void append_refinement_segment(const uint8_t *buf, uint32_t Lref, uint32_t reserved);
   void create_compressed_buffer(buf_chain *tile_buf, int32_t buf_limit, const uint16_t &layer);
   // JPIP precinct-mask path: consume the packet body bytes belonging to this
   // layer from tile_buf (keeping the byte stream in sync with the next
@@ -881,6 +889,10 @@ class j2k_tile : public j2k_tile_base {
                                        open_htj2k::PlanarOutputDesc *descs, uint16_t nc);
 
   // Encoding
+  // HT code-blocks of this tile code their cleanup pass this many bit-planes above
+  // the LSB, followed by HT SigProp and MagRef passes (j2k_codeblock::
+  // ht_refine_planes).  Set before enc_init(); 0 = cleanup pass only.
+  uint8_t enc_ht_refine = 0;
   // Initialization with tile-index
   void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
                 bool line_based = false, bool streaming = false);
@@ -922,8 +934,11 @@ constexpr uint32_t HT_MAX_LREF = 2046;
 
 int32_t htj2k_cleanup_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
+int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 int32_t ebcot_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 // Block-coder dispatch on the code-block style: HT (Part 15) or EBCOT (Part 1).
 inline int32_t encode_codeblock(j2k_codeblock *block, uint8_t ROIshift) noexcept {
-  return (block->Cmodes & HT) ? htj2k_encode(block, ROIshift) : ebcot_encode(block, ROIshift);
+  if (block->Cmodes & HT)
+    return block->ht_refine_planes ? htj2k_encode_refined(block, ROIshift) : htj2k_encode(block, ROIshift);
+  return ebcot_encode(block, ROIshift);
 }

@@ -18,6 +18,18 @@
   flag for HT code-blocks; the other switches are refused with HT, as are
   mixed HT/Part 1 tile-components. Default-mode output is byte-identical to
   0.21.2 and runs at the same speed.
+- Experimental HT SigProp and HT MagRef encoding: `Cht_refine=N` on the
+  command line, `openhtj2k_encoder::set_ht_refinement(N)` in the API. Each
+  HT code-block is coded as one HT set of ISO/IEC 15444-15: the cleanup pass
+  N bit-planes above the LSB, then the SigProp and MagRef passes of the plane
+  below it. The planes under that one are not coded, and SigProp only reaches
+  samples next to a significant one, so the result is not lossless, even with
+  `Creversible=yes`. `Cmodes="HT|CAUSAL"` applies to the refinement passes
+  too, and the Part 1 block coder refuses the option. It is groundwork for HT
+  rate control. On one thread, `Cht_refine=1` adds 17% to a 4096x2160 16-bit
+  lossless encode with AVX-512 (18% with AVX2, 27% on an Apple M1 Max) and
+  4-5% at Qfactor 90 (10% on the M1 Max). The default, 0, leaves the output
+  unchanged.
 
 # [0.21.2] - 2026-10-31
 

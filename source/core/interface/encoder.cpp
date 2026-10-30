@@ -563,8 +563,12 @@ class openhtj2k_encoder_impl {
   // EXPERIMENTAL: analytic visual (CSF) weighting. Default-constructed selects
   // the legacy table, so output is unchanged unless set_visual_weighting() is called.
   visual_weighting_params vw{};
+  // EXPERIMENTAL: HT cleanup pass this many bit-planes above the LSB, followed by
+  // HT SigProp and MagRef passes (0 = cleanup pass only).  See set_ht_refinement().
+  uint8_t ht_refine = 0;
 
   size_t invoke_internal();
+  void check_ht_refinement() const;
 
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
@@ -573,6 +577,7 @@ class openhtj2k_encoder_impl {
   void set_visual_weighting(uint8_t model, double ref_ppd, double zoom);
   void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
   void set_chroma_csf_reuse_luma(bool reuse_luma);
+  void set_ht_refinement(uint8_t planes) { ht_refine = planes; }
   ~openhtj2k_encoder_impl();
   size_t invoke_line_based();
   size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
@@ -589,6 +594,13 @@ openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
 
 void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf) {
   this->outbuf = &output_buf;
+}
+
+void openhtj2k_encoder_impl::check_ht_refinement() const {
+  if (ht_refine && (cod->codeblock_style & HT) == 0) {
+    printf("ERROR: HT SigProp/MagRef refinement requires the HT block coder.\n");
+    throw std::exception();
+  }
 }
 
 void openhtj2k_encoder_impl::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
@@ -740,8 +752,10 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     throw std::exception();
   }
 
+  check_ht_refinement();
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
   for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
+    tileSet[i].enc_ht_refine = ht_refine;
     tileSet[i].enc_init(i, main_header, *buf, true);
   }
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
@@ -934,8 +948,10 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   // Empty input buffer for streaming (img is not used)
   std::vector<int32_t *> empty_buf;
   const uint32_t num_tiles_lbs = numTiles.x * numTiles.y;
-  auto tileSet                 = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(num_tiles_lbs));
+  check_ht_refinement();
+  auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(num_tiles_lbs));
   for (uint16_t i = 0; i < static_cast<uint16_t>(num_tiles_lbs); ++i) {
+    tileSet[i].enc_ht_refine = ht_refine;
     tileSet[i].enc_init(i, main_header, empty_buf, true, true);
   }
   for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
@@ -1045,6 +1061,8 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
 void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
   this->impl->set_output_buffer(output_buf);
 }
+
+void openhtj2k_encoder::set_ht_refinement(uint8_t planes) { this->impl->set_ht_refinement(planes); }
 
 void openhtj2k_encoder::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
   this->impl->set_visual_weighting(model, ref_ppd, zoom);
