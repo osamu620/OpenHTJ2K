@@ -1,3 +1,24 @@
+# [Unreleased]
+
+## Added
+
+### Encoder
+- The Part 1 block coder supports all six code-block mode switches of
+  ISO/IEC 15444-1 Table A.19: BYPASS (raw significance propagation and
+  magnitude refinement passes from the fifth bit-plane), RESET, RESTART
+  (every pass terminated), CAUSAL (vertically causal contexts), ERTERM
+  (predictable termination) and SEGMARK (segmentation symbols), in any
+  combination. On the command line `Cmodes` now takes flags joined by `|`,
+  e.g. `Cmodes="BYPASS|ERTERM"`; through the API they are the usual SPcod bits
+  of `cod_params::codeblock_style`. BYPASS speeds up lossless encoding by
+  about 20% at 12 bits and 50% at 16 bits (3840x2160, one thread) for a few
+  percent more bytes. For every mode combination on kodim23 the lossless
+  codestream is within 0.03% of OpenJPEG 2.4's size, and OpenJPEG decodes
+  every combination exactly. `Cmodes="HT|CAUSAL"` sets the vertically causal
+  flag for HT code-blocks; the other switches are refused with HT, as are
+  mixed HT/Part 1 tile-components. Default-mode output is byte-identical to
+  0.21.2 and runs at the same speed.
+
 # [0.21.2] - 2026-10-31
 
 Patch release: two memory-safety fixes for tall or wide code-blocks. The

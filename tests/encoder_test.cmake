@@ -359,3 +359,44 @@ set_tests_properties(comp_part1_precincts PROPERTIES DEPENDS dec_part1_precincts
 # The JPH file format requires HT block coding: Part 1 output into .jph is refused.
 add_test(NAME enc_part1_jph_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23part1.jph Cmodes=0)
 set_tests_properties(enc_part1_jph_rejected PROPERTIES WILL_FAIL TRUE)
+
+# Part 1 code-block mode switches.  Each lossless round-trip must be exact.
+#   bypass:  raw SigProp/MagRef passes from the fifth bit-plane, so several
+#            codeword segments per code-block (Table D.9).
+#   restart: every pass terminated with the predictable (ERTERM) procedure.
+#   all:     all six switches at once on the odd-size image with 32x32 blocks.
+#   causal:  vertically causal contexts and segmentation symbols, 4x1024 blocks
+#            (every stripe of the block is its last).
+foreach(P1MODE IN ITEMS "bypass;BYPASS;kodim23;{64,64}"
+                        "restart;RESTART|ERTERM;kodim23;{64,64}"
+                        "all;BYPASS|RESET|RESTART|CAUSAL|ERTERM|SEGMARK;kodim23odd;{32,32}"
+                        "causal;CAUSAL|SEGMARK;kodim23;{4,1024}")
+  list(GET P1MODE 0 P1NAME)
+  list(GET P1MODE 1 P1FLAGS)
+  list(GET P1MODE 2 P1IMG)
+  list(GET P1MODE 3 P1CBLK)
+  add_test(NAME enc_part1_mode_${P1NAME} COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/${P1IMG}.ppm -o part1_mode_${P1NAME}.j2c Creversible=yes "Cmodes=${P1FLAGS}" "Cblk=${P1CBLK}")
+  add_test(NAME dec_part1_mode_${P1NAME} COMMAND open_htj2k_dec -i part1_mode_${P1NAME}.j2c -o part1_mode_${P1NAME}.ppm)
+  set_tests_properties(dec_part1_mode_${P1NAME} PROPERTIES DEPENDS enc_part1_mode_${P1NAME})
+  add_test(NAME comp_part1_mode_${P1NAME} COMMAND imgcmp part1_mode_${P1NAME}.ppm ${ENCODER_REF_DIR}/${P1IMG}.ppm 0 0)
+  set_tests_properties(comp_part1_mode_${P1NAME} PROPERTIES DEPENDS dec_part1_mode_${P1NAME})
+endforeach()
+
+# Mode switches change how the quantisation indices are coded, not the indices:
+# the lossy stream with all six switches is held to the enc_part1_lossy tolerance.
+add_test(NAME enc_part1_mode_lossy COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o part1_mode_lossy.j2c Qfactor=90 "Cmodes=BYPASS|RESET|RESTART|CAUSAL|ERTERM|SEGMARK")
+add_test(NAME dec_part1_mode_lossy COMMAND open_htj2k_dec -i part1_mode_lossy.j2c -o part1_mode_lossy.ppm)
+set_tests_properties(dec_part1_mode_lossy PROPERTIES DEPENDS enc_part1_mode_lossy)
+add_test(NAME comp_part1_mode_lossy COMMAND imgcmp part1_mode_lossy.ppm ${ENCODER_REF_DIR}/kodim23.ppm 23 6)
+set_tests_properties(comp_part1_mode_lossy PROPERTIES DEPENDS dec_part1_mode_lossy)
+
+# HT code-blocks take the CAUSAL switch (ISO/IEC 15444-15 Table A.3) and no other.
+add_test(NAME enc_ht_causal COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23htcausal.j2c Creversible=yes "Cmodes=HT|CAUSAL")
+add_test(NAME dec_ht_causal COMMAND open_htj2k_dec -i kodim23htcausal.j2c -o kodim23htcausal.ppm)
+set_tests_properties(dec_ht_causal PROPERTIES DEPENDS enc_ht_causal)
+add_test(NAME comp_ht_causal COMMAND imgcmp kodim23htcausal.ppm ${ENCODER_REF_DIR}/kodim23.ppm 0 0)
+set_tests_properties(comp_ht_causal PROPERTIES DEPENDS dec_ht_causal)
+add_test(NAME enc_ht_bypass_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23htbypass.j2c "Cmodes=HT|BYPASS")
+set_tests_properties(enc_ht_bypass_rejected PROPERTIES WILL_FAIL TRUE)
+add_test(NAME enc_cmodes_unknown_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23cmodes.j2c "Cmodes=BYPASS|TERMALL")
+set_tests_properties(enc_cmodes_unknown_rejected PROPERTIES WILL_FAIL TRUE)
