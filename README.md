@@ -38,15 +38,22 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
   buffer), and `invoke_line_based_direct()` (8/16-bit planes written
   straight into caller buffers).
 - Lossless coding speed against OpenJPEG 2.5.4 on a 4096×2160 8-bit RGB
-  frame, one thread, Ryzen 9 9950X, both built with GCC 14 `-O3
-  -march=native` (codec time each tool reports, medians of 10 runs,
-  2026-10-30; method, fixture and the script that regenerates the table in
-  [docs/benchmarks.md](docs/benchmarks.md)):
+  frame, single-threaded (`-threads 1` / `-num_threads 1`, one core),
+  Ryzen 9 9950X, both built with GCC 14 `-O3 -march=native`; codec time
+  as each tool reports it, medians of 10 runs, 2026-10-30:
 
   | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
   |---|---:|---:|---:|
   | Encode | 811 ms | 551 ms (1.5×) | 69 ms (11.8×) |
   | Decode | 594 ms | 553 ms (1.1×) | 65 ms (9.1×) |
+
+  The two decoder timers do not cover the same work: OpenHTJ2K's decoder
+  streams rows to the output file while it decodes, so its time includes
+  writing the 26 MB PPM; OpenJPEG's `decode time` excludes its PPM writer
+  (about 230 ms of its 829 ms process time). The decode row is therefore
+  conservative for OpenHTJ2K. Method, fixture, whole-process wall times
+  and the script that regenerates the table:
+  [docs/benchmarks.md](docs/benchmarks.md).
 
 **Deliverables**
 - Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs.
