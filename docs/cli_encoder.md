@@ -58,12 +58,23 @@ JPH file format.
   - `yes` to insert SOP (Start Of Packet) marker segments. Default is **no**.
 - `Cuse_eph=yes|no`
   - `yes` to insert EPH (End of Packet Header) markers. Default is **no**.
-- `Cmodes=HT|0`
-  - Code-block coder. `HT` (default) is the ISO/IEC 15444-15 (HTJ2K) block coder. `0` selects the
-    ISO/IEC 15444-1 (Part 1, EBCOT/MQ) block coder in its default mode, so the codestream can be read
-    by any JPEG 2000 decoder; Rsiz then carries no HT flag and no CAP marker is written. Part 1 mode
-    switches (BYPASS, RESET, RESTART, CAUSAL, ERTERM, SEGMARK) are not supported yet, and `.jph` output
-    requires `HT`.
+- `Cmodes=HT|0|<flags>`
+  - Code-block coder and mode switches, as flags joined by `|` (quote the argument in a shell).
+    `HT` (default) is the ISO/IEC 15444-15 (HTJ2K) block coder. Without `HT`, the ISO/IEC 15444-1
+    (Part 1, EBCOT/MQ) block coder is used, so the codestream can be read by any JPEG 2000 decoder;
+    Rsiz then carries no HT flag and no CAP marker is written. `0` is the Part 1 coder in its default
+    mode. The Part 1 mode switches (ISO/IEC 15444-1 Table A.19) are:
+    - `BYPASS` — the significance propagation and magnitude refinement passes from the fifth bit-plane
+      on are written raw instead of through the MQ coder. Faster (about 20% at 12 bits and 50% at
+      16 bits for lossless encoding) and a few percent larger.
+    - `RESET` — the MQ context states are reset at the start of every coding pass.
+    - `RESTART` — every coding pass is terminated, so each pass is its own codeword segment.
+    - `CAUSAL` — vertically causal context formation: no context looks at the stripe below.
+    - `ERTERM` — predictable termination, which lets a decoder detect corrupted segments.
+    - `SEGMARK` — a segmentation symbol after every cleanup pass, for error detection.
+
+    Example: `Cmodes="BYPASS|ERTERM"`. With `HT`, only `CAUSAL` may be added (`Cmodes="HT|CAUSAL"`).
+    `.jph` output requires `HT`.
 
 ### Quantization and quality
 

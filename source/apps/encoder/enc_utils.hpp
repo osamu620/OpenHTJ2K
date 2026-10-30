@@ -76,8 +76,11 @@ void print_help(char *cmd) {
   printf("Cuse_sop=yes or no:\n  yes to use SOP (Start Of Packet) marker segment.\n  Default is no.\n");
   printf("Cuse_eph=yes or no:\n  yes to use EPH (End of Packet Header) marker.\n  Default is no.\n");
   printf(
-      "Cmodes=HT or 0:\n  Code-block coder. HT (default) is the Part 15 block coder; 0 selects the Part 1\n"
-      "  (ISO/IEC 15444-1) block coder, readable by any JPEG 2000 decoder.\n");
+      "Cmodes=HT or 0 or flags joined by '|':\n  Code-block coder and mode switches. HT (default) is the "
+      "Part 15\n"
+      "  block coder; without HT the Part 1 (ISO/IEC 15444-1) block coder is used, readable by any\n"
+      "  JPEG 2000 decoder. 0 is Part 1 in its default mode. Part 1 mode switches: BYPASS, RESET,\n"
+      "  RESTART, CAUSAL, ERTERM, SEGMARK (e.g. Cmodes=BYPASS|ERTERM). HT accepts only CAUSAL.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
   printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 7 (Default is 1.)\n");
   printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
@@ -159,7 +162,7 @@ class j2k_argset {
   uint8_t Porder;
   bool use_sop;
   bool use_eph;
-  uint8_t cblk_modes;  // SPcod code-block style: 0x40 (HT) or 0 (Part 1 EBCOT, default mode)
+  uint8_t cblk_modes;  // SPcod code-block style: HT (0x40) or Part 1 (EBCOT), plus mode switches
   double base_step_size;
   uint8_t num_guard;
   bool qderived;
@@ -581,13 +584,43 @@ class j2k_argset {
         } else if (param == "use_eph") {
           get_bool(param, arg, use_eph);
         } else if (param == "modes") {
+          // "0", or flags joined by '|': HT and the code-block mode switches.
           std::string val = arg.substr(arg.find_first_of('=') + 1);
-          if (val == "HT") {
-            cblk_modes = 0x40;
-          } else if (val == "0") {
-            cblk_modes = 0;
-          } else {
-            printf("ERROR: Cmodes accepts HT (default) or 0 (ISO/IEC 15444-1 block coder).\n");
+          cblk_modes      = 0;
+          if (val != "0") {
+            size_t pos = 0;
+            while (true) {
+              const size_t bar = val.find('|', pos);
+              const std::string token =
+                  val.substr(pos, bar == std::string::npos ? std::string::npos : bar - pos);
+              if (token == "HT") {
+                cblk_modes |= 0x40;
+              } else if (token == "BYPASS") {
+                cblk_modes |= 0x01;
+              } else if (token == "RESET") {
+                cblk_modes |= 0x02;
+              } else if (token == "RESTART") {
+                cblk_modes |= 0x04;
+              } else if (token == "CAUSAL") {
+                cblk_modes |= 0x08;
+              } else if (token == "ERTERM") {
+                cblk_modes |= 0x10;
+              } else if (token == "SEGMARK") {
+                cblk_modes |= 0x20;
+              } else {
+                printf(
+                    "ERROR: unknown Cmodes flag '%s'; use 0, or HT, BYPASS, RESET, RESTART, CAUSAL, "
+                    "ERTERM, "
+                    "SEGMARK joined by '|'.\n",
+                    token.c_str());
+                exit(EXIT_FAILURE);
+              }
+              if (bar == std::string::npos) break;
+              pos = bar + 1;
+            }
+          }
+          if ((cblk_modes & 0x40) && (cblk_modes & ~0x48)) {
+            printf("ERROR: CAUSAL is the only Cmodes flag that can be combined with HT.\n");
             exit(EXIT_FAILURE);
           }
         } else {

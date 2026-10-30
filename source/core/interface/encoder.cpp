@@ -62,6 +62,23 @@ inline EncoderThreadBuffers &enc_thread_bufs() {
   static thread_local EncoderThreadBuffers tbuf;
   return tbuf;
 }
+
+// SPcod code-block style.  Part 1 code-blocks take any of the six mode switches
+// of ISO/IEC 15444-1 Table A.19; HT code-blocks only the vertically causal one
+// (ISO/IEC 15444-15 Table A.3).  Mixed HT/Part 1 tile-components (bit 7) are not
+// supported.
+void check_codeblock_style(uint8_t style) {
+  const bool is_ht       = (style & HT) != 0;
+  const unsigned allowed = is_ht ? (HT | CAUSAL) : (BYPASS | RESET | RESTART | CAUSAL | ERTERM | SEGMARK);
+  if (style & ~allowed) {
+    if (is_ht)
+      printf("ERROR: HT code-blocks accept only the CAUSAL mode switch (code-block style 0x%02X).\n",
+             style);
+    else
+      printf("ERROR: unsupported code-block style 0x%02X.\n", style);
+    throw std::exception();
+  }
+}
 }  // namespace
 
 image::image(const std::vector<std::string> &filenames) : width(0), height(0), buf(nullptr) {
@@ -672,14 +689,9 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
 
   // create required marker segments
   // Part 15 (HT) block coding is signalled by Rsiz bit 14 and a CAP marker, Part 1
-  // (EBCOT) block coding by neither.  Part 1 mode switches are not supported yet.
+  // (EBCOT) block coding by neither.
   const bool is_ht = (cod->codeblock_style & HT) != 0;
-  if (!is_ht && cod->codeblock_style != 0) {
-    printf(
-        "ERROR: Part 1 code-block mode switches (BYPASS, RESET, RESTART, CAUSAL, ERTERM, SEGMARK) are not "
-        "supported.\n");
-    throw std::exception();
-  }
+  check_codeblock_style(cod->codeblock_style);
   SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
                       siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, is_ht);
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
@@ -870,14 +882,9 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   }
 
   // Part 15 (HT) block coding is signalled by Rsiz bit 14 and a CAP marker, Part 1
-  // (EBCOT) block coding by neither.  Part 1 mode switches are not supported yet.
+  // (EBCOT) block coding by neither.
   const bool is_ht = (cod->codeblock_style & HT) != 0;
-  if (!is_ht && cod->codeblock_style != 0) {
-    printf(
-        "ERROR: Part 1 code-block mode switches (BYPASS, RESET, RESTART, CAUSAL, ERTERM, SEGMARK) are not "
-        "supported.\n");
-    throw std::exception();
-  }
+  check_codeblock_style(cod->codeblock_style);
   SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
                       siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, is_ht);
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
