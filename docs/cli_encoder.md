@@ -1,7 +1,8 @@
 # `open_htj2k_enc` — encoder CLI reference
 
-Part 15 (HTJ2K) compliant encoder. Produces either a raw codestream
-(`.j2c`, `.j2k`, `.jphc`) or an HTJ2K JPH file (`.jph`). Accepts PGM,
+Part 15 (HTJ2K) and Part 1 (JPEG 2000) encoder; `Cmodes` selects the
+block coder. Produces either a raw codestream (`.j2c`, `.j2k`, `.jphc`)
+or an HTJ2K JPH file (`.jph`, HT only). Accepts PGM,
 PPM, PGX, and TIFF (with libtiff) inputs. The streaming path
 handles all four formats — PGX with subsampled component sets
 (4:2:2, 4:2:0) and basic TIFF (8/16-bit, RGB or grayscale,

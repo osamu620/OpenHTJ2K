@@ -4,22 +4,27 @@
 
 # OpenHTJ2K
 
-OpenHTJ2K is an open-source C++ implementation of **JPEG 2000 Part 1**
-(ITU-T Rec. T.800 | ISO/IEC 15444-1) and **High-Throughput JPEG 2000**
-(Part 15; ITU-T Rec. T.814 | ISO/IEC 15444-15), with SIMD acceleration
-across x86-64, AArch64, and WebAssembly, a built-in multi-threaded
-pipeline, and a live RFC 9828 RTP receiver that sustains **4K @ 60 fps
-on modern x86-64**.
+OpenHTJ2K is an open-source C++ encoder and decoder for **JPEG 2000
+Part 1** (ITU-T Rec. T.800 | ISO/IEC 15444-1) and **High-Throughput
+JPEG 2000** (Part 15; ITU-T Rec. T.814 | ISO/IEC 15444-15), with SIMD
+acceleration across x86-64, AArch64, and WebAssembly, a built-in
+multi-threaded pipeline, and a live RFC 9828 RTP receiver that sustains
+**4K @ 60 fps on modern x86-64**.
 
 **Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k-demo.pages.dev/) · [📖 Docs](docs/README.md)
 
 ## Highlights
 
 **Standards compliance**
-- Full HTJ2K encode + decode and Part 1 decode; partial Part 2
-  (Downsampling Factor Structures, Arbitrary Transform Kernels).
-- Fully conformance-tested against ITU-T Rec. T.803 | ISO/IEC 15444-4; 582
-  tests in CI.
+- Encode and decode for both Part 15 (HT block coder, the default) and
+  Part 1 (EBCOT/MQ block coder, `Cmodes=0`); partial Part 2
+  (Downsampling Factor Structures, Arbitrary Transform Kernels). A Part 1
+  codestream from `open_htj2k_enc` is readable by any JPEG 2000 decoder;
+  its block coder runs in the default mode (the BYPASS, RESET, RESTART,
+  CAUSAL, ERTERM and SEGMARK switches are not supported yet) and the
+  `.jph` file format stays HT-only.
+- Conformance-tested against ITU-T Rec. T.803 | ISO/IEC 15444-4; 529
+  tests in the full suite.
 - JPH (`.jph`) file format, including colour specification box parsing
   for automatic YCbCr colorspace detection.
 
@@ -110,8 +115,9 @@ examples live under [`docs/`](docs/).
 
 ### Encoder — `open_htj2k_enc`
 
-Part 15 HTJ2K encoder. Inputs: PGM, PPM, PGX, TIFF (libtiff).
-Outputs: `.j2c` / `.jhc` (raw codestream) or `.jph` (JPH file format).
+Part 15 (HTJ2K) and Part 1 encoder. Inputs: PGM, PPM, PGX, TIFF
+(libtiff). Outputs: `.j2c` / `.jhc` (raw codestream) or `.jph` (JPH
+file format, HT only).
 
 ```bash
 # Lossless encode
@@ -122,10 +128,13 @@ Outputs: `.j2c` / `.jhc` (raw codestream) or `.jph` (JPH file format).
 
 # Encode separate YCbCr component files
 ./build/bin/open_htj2k_enc -i Y.pgx,Cb.pgx,Cr.pgx -o out.jph -jph_color_space YCC
+
+# Part 1 (EBCOT/MQ) codestream, readable by any JPEG 2000 decoder
+./build/bin/open_htj2k_enc -i input.ppm -o out.j2c Cmodes=0 Qfactor=90
 ```
 
-Key flags: `Creversible={yes|no}`, `Qfactor=0..100`, `Clevels=0..32`,
-`Cblk={H,W}`, `Corder={LRCP|RLCP|RPCL|PCRL|CPRL}`,
+Key flags: `Cmodes={HT|0}`, `Creversible={yes|no}`, `Qfactor=0..100`,
+`Clevels=0..32`, `Cblk={H,W}`, `Corder={LRCP|RLCP|RPCL|PCRL|CPRL}`,
 `-num_threads N`. Full reference:
 [**docs/cli_encoder.md**](docs/cli_encoder.md).
 
@@ -200,8 +209,8 @@ Key flags (demo): `--reduce N`, `--parafovea-ratio F`, `--periphery-ratio F`,
 
 | Extension | Encode | Decode | Description |
 |-----------|:---:|:---:|-------------|
-| `.jhc`, `.j2c`, `.j2k` | ✓ | ✓ | HTJ2K / JPEG 2000 Part 1 codestream |
-| `.jph` | ✓ | ✓ | HTJ2K file format (JPH); colour specification box auto-detects YCbCr on decode |
+| `.jhc`, `.j2c`, `.j2k` | ✓ | ✓ | JPEG 2000 Part 1 or HTJ2K (Part 15) codestream; the encoder writes either (`Cmodes`) |
+| `.jph` | ✓ | ✓ | HTJ2K file format (JPH), HT codestreams only; colour specification box auto-detects YCbCr on decode |
 
 ### CLI I/O
 
