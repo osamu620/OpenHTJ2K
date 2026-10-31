@@ -17,8 +17,9 @@
 // Part 1 one: each entry point's codestream must fit the target and decode.
 // (They need not agree: the rate control estimates its threshold from the
 // code-blocks in the order they are coded, which differs between the entry
-// points.)  The three-component offset and tile cases also run in three quality
-// layers without a target, with both block coders.
+// points.)  The offset and tile cases also run the Part 1 one in three quality
+// layers (a quarter, a half and all of the target), and the three-component ones
+// in three layers without a target, with both block coders.
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
@@ -84,7 +85,8 @@ struct Layout {
   uint32_t ox, oy, tw, th;
 };
 
-// part1: the Part 1 block coder instead of HT; layers: quality layers (without a target).
+// part1: the Part 1 block coder instead of HT; layers: quality layers of a target size,
+// at target / 2^(layers - 1 - l) bytes for layer l.
 std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t>> &src, bool streaming,
                             const Layout &lay, uint64_t target, bool part1, uint16_t layers) {
   open_htj2k::siz_params siz;
@@ -130,7 +132,9 @@ std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t
   std::vector<uint8_t> out;
   open_htj2k::openhtj2k_encoder enc("", input, siz, cod, qcd, NO_QFACTOR, false, 0, 1);
   enc.set_output_buffer(out);
-  enc.set_target_size(target);
+  std::vector<uint64_t> targets;
+  for (uint16_t l = 0; target && l < layers; ++l) targets.push_back(target >> (layers - 1 - l));
+  enc.set_target_sizes(targets);
   if (streaming) {
     enc.invoke_line_based_stream([&planes, &k](uint32_t y, int32_t **rows, uint16_t nc) {
       for (uint16_t c = 0; c < nc; ++c)
@@ -189,7 +193,7 @@ int main(int argc, char *argv[]) {
 
   int total = 0, failed = 0;
   // target: codestream bytes for rate control, 0 for none; part1: the Part 1 block coder;
-  // layers: quality layers.
+  // layers: quality layers (with a target).
   auto run = [&](const Case &k, const Layout &lay, uint64_t target, bool part1, uint16_t layers = 1) {
     ++total;
     std::string err;
@@ -270,6 +274,7 @@ int main(int argc, char *argv[]) {
         if (xf == 0) {
           run(k, lay, uint64_t{k.width} * k.height * k.nc / 8, false);
           run(k, lay, uint64_t{k.width} * k.height * k.nc / 8, true);
+          run(k, lay, uint64_t{k.width} * k.height * k.nc / 8, true, 3);
         }
         // Three quality layers without a target: all the data goes in the first one.
         if (cp.nc == 3) {

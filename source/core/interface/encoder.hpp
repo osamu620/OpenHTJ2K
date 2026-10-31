@@ -184,12 +184,18 @@ class openhtj2k_encoder {
   // dropped: the result is not lossless.  The value is clamped per code-block so
   // that the cleanup pass keeps a significant sample.  HT block coding only.
   OPENHTJ2K_EXPORT void set_ht_refinement(uint8_t planes);
-  // EXPERIMENTAL: truncate the HT code-blocks so that the codestream (SOC to EOC, without
+  // EXPERIMENTAL: truncate the code-blocks so that the codestream (SOC to EOC, without
   // any JPH file-format boxes) takes at most `bytes` bytes, at the least squared error
-  // (PCRD optimisation over HT SigProp/MagRef truncation points).  0 (default) disables
-  // it.  The base step size (qcd_params) bounds the highest quality.  Requires the HT
-  // block coder, the irreversible 9/7 wavelet, one quality layer and no Qfactor.
+  // (PCRD optimisation over the HT SigProp/MagRef truncation points, or the coding passes
+  // of the Part 1 block coder).  0 (default) disables it.  The base step size
+  // (qcd_params) bounds the highest quality.  Requires the irreversible 9/7 wavelet, one
+  // quality layer and no Qfactor.
   OPENHTJ2K_EXPORT void set_target_size(uint64_t bytes);
+  // EXPERIMENTAL: the same with quality layers, Part 1 block coder only: one target per
+  // layer (cod_params::number_of_layers of them, none decreasing), layer l and the layers
+  // below it taking at most bytes[l] bytes of the codestream.  The last target bounds
+  // the codestream.  An empty list disables it.
+  OPENHTJ2K_EXPORT void set_target_sizes(const std::vector<uint64_t> &bytes);
   OPENHTJ2K_EXPORT size_t invoke_line_based();
   OPENHTJ2K_EXPORT size_t
   invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);

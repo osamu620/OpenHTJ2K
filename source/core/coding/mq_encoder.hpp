@@ -101,6 +101,30 @@ class mq_encoder {
   // held in B (a carry can still reach B, never the bytes before it).
   uint32_t settled_bytes() const { return BP > 0 ? static_cast<uint32_t>(BP) : 0u; }
 
+  // Writes the upper end of the current interval, C + A, as segment bytes from
+  // settled_bytes() on (the bytes the coder has yet to write) and returns where they
+  // end.  Returns 0 when the upper end carries out of the segment's first byte (it is
+  // then 1, above every codeword).  Used on a copy of the coder.
+  //
+  // A codeword segment cut after L bytes is decoded as if 1 bits followed (D.4.1), so a
+  // cut decodes every symbol coded so far iff the cut bytes followed by 1s stay below
+  // that upper end.  With the codeword's own bytes, the shortest such cut ends one byte
+  // after the first byte where the codeword is below the upper end's bytes (a 0xFF
+  // followed by a byte above 0x7F encodes a carry into the 0xFF; the cut can then be a
+  // byte longer than needed, never too short).
+  uint32_t upper_end() {
+    C += A;
+    C <<= CT;
+    if (BP < 0 && C >= 0x8000000u) return 0;  // a carry into the byte before the start
+    byteout();
+    while (C != 0) {
+      C <<= CT;
+      byteout();
+    }
+    emit();
+    return static_cast<uint32_t>(BP);
+  }
+
   // FLUSH (C.2.9).  The optional trailing 0xFF (and the 0xFFAC marker) are not
   // written: a decoder reading past the end of the segment sees 0xFF bytes.
   inline uint32_t flush() {
@@ -207,6 +231,11 @@ class raw_encoder {
 
   // Bytes written so far; later bits never change them.
   uint32_t settled_bytes() const { return pos; }
+  // Bytes that hold every bit put so far: the written ones and a partial byte.
+  uint32_t needed_bytes() const {
+    const bool after_ff = pos > 0 && buf[pos - 1] == 0xFFu;
+    return pos + ((ct < (after_ff ? 7 : 8)) ? 1u : 0u);
+  }
 
   // Pads the last byte to the byte boundary and returns the segment length; the
   // segment never ends in 0xFF.  With ERTERM the padding is 0101... (D.6).

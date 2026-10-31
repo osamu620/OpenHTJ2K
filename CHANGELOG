@@ -26,6 +26,30 @@
   against 86.5 dB (fixed step) and 86.7 dB (HT). Coding every pass instead
   gives the same PSNR within 0.01 dB on the images measured, except 0.1 dB
   more on that frame at 2 bpp. Without a target, Part 1 output is unchanged.
+- Experimental quality layers for the Part 1 block coder: `-rate R0,R1,...`
+  (and the new `openhtj2k_encoder::set_target_sizes()`, with
+  `cod_params::number_of_layers` set to the number of targets) makes one
+  quality layer per rate, in increasing order: layer l and the layers below
+  it take at most the l-th lowest rate's bytes. The layers are placed from the
+  lowest, each at one slope threshold over the coding passes above the layer
+  below. A cut that a later layer continues cannot be terminated, because the
+  later layer's bytes follow it, so the encoder also records for every pass
+  the shortest prefix of the codeword that decodes it. A decoder reads past
+  the end of a codeword segment as 1 bits, so a prefix decodes every symbol
+  coded so far exactly when, followed by 1 bits, it stays below the upper end
+  of the arithmetic coder's interval at the end of the pass; comparing the
+  final codeword with the bytes of that upper end gives the shortest such
+  prefix. Each code-block's last cut is terminated, as with one layer, and
+  never over bytes that a lower layer keeps. Decoding any number of layers
+  with OpenJPEG (`-l`) gives exactly the image of an encode terminated at that
+  layer's cuts, in every mode-switch combination tested, with tiles,
+  precincts, every progression order and SOP/EPH markers. Each layer of a
+  five-layer codestream (0.125 to 2 bpp) is within 0.05 dB of a one-layer
+  encode at its rate, and 0.02 to 0.05 dB above OpenJPEG's five-layer encode
+  of kodim23 at the same rates. On a 3840x2160 12-bit image, five layers take
+  1.04 times the time of one layer at the top rate on one thread and 1.3
+  times with all threads (placing the layers runs on one thread). With HT, a
+  list of rates is rejected.
 
 ## Fixed
 

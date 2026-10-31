@@ -55,12 +55,17 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
   35.23 dB (HT: 34.32 dB), on the *Elephants Dream* frame at 2 bpp
   92.1 dB, at about 2.4× the time of a fixed-step Part 1 encode on one
   thread and 1.1× with all threads.
+- Quality layers with the Part 1 coder: `-rate 0.25,0.5,1` makes three
+  layers, each within its own rate, so a decoder that stops after any
+  layer gets an image at that rate. Each layer of a five-layer codestream
+  is within 0.05 dB of a separate one-layer encode at its rate, and 0.02
+  to 0.05 dB above OpenJPEG's five-layer encode of the same image.
 - Deterministic: the codestream does not depend on the number of
   threads, and AVX2 and AVX-512 builds give identical output.
 - Works with tiles and image offsets, in the streaming encoder: no
   wavelet samples are kept for the final cut.
-- Current limits: irreversible 9/7 wavelet, one quality layer, not with
-  `Qfactor`. Reference: [docs/cli_encoder.md](docs/cli_encoder.md#rate-control).
+- Current limits: irreversible 9/7 wavelet, one quality layer with HT,
+  not with `Qfactor`. Reference: [docs/cli_encoder.md](docs/cli_encoder.md#rate-control).
 
 **Performance**
 - SIMD: **AVX2**, **AVX-512** (x86-64), **NEON** (AArch64), and
