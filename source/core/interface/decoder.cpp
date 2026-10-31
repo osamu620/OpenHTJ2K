@@ -304,7 +304,7 @@ uint32_t openhtj2k_decoder_impl::get_component_width(uint16_t c) const {
   main_header.SIZ->get_image_origin(origin);
   main_header.SIZ->get_subsampling_factor(subsampling_factor, c);
 
-  return ceil_int(size.x - origin.x, subsampling_factor.x);
+  return ceil_int(size.x, subsampling_factor.x) - ceil_int(origin.x, subsampling_factor.x);
 }
 uint32_t openhtj2k_decoder_impl::get_component_height(uint16_t c) const {
   element_siz size, origin, subsampling_factor;
@@ -312,7 +312,7 @@ uint32_t openhtj2k_decoder_impl::get_component_height(uint16_t c) const {
   main_header.SIZ->get_image_origin(origin);
   main_header.SIZ->get_subsampling_factor(subsampling_factor, c);
 
-  return ceil_int(size.y - origin.y, subsampling_factor.y);
+  return ceil_int(size.y, subsampling_factor.y) - ceil_int(origin.y, subsampling_factor.y);
 }
 uint8_t openhtj2k_decoder_impl::get_component_depth(uint16_t c) const {
   return main_header.SIZ->get_bitdepth(c);
@@ -433,8 +433,8 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
     const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
     const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
-    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
-    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    width.push_back(reduced_extent(x0, x1, reduce_NL));
+    height.push_back(reduced_extent(y0, y1, reduce_NL));
     buf.emplace_back(new int32_t[width[c] * height[c]]);
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
@@ -525,8 +525,8 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
     const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
     const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
-    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
-    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    width.push_back(reduced_extent(x0, x1, reduce_NL));
+    height.push_back(reduced_extent(y0, y1, reduce_NL));
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }
@@ -917,8 +917,8 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
     const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
     const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
-    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
-    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    width.push_back(reduced_extent(x0, x1, reduce_NL));
+    height.push_back(reduced_extent(y0, y1, reduce_NL));
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }
@@ -1137,8 +1137,8 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     const uint32_t x1 = ceil_int(siz.x, Rsiz.x);
     const uint32_t y0 = ceil_int(Osiz.y, Rsiz.y);
     const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
-    width.push_back(ceil_int(x1 - x0, (1U << reduce_NL)));
-    height.push_back(ceil_int(y1 - y0, (1U << reduce_NL)));
+    width.push_back(reduced_extent(x0, x1, reduce_NL));
+    height.push_back(reduced_extent(y0, y1, reduce_NL));
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }

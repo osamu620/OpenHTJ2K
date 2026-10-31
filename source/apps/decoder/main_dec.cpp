@@ -800,7 +800,9 @@ int main(int argc, char *argv[]) {
                   }
                 }
               }
-              fwrite(row_buf.data(), 1, row_buf.size(), fps[0]);
+              // A reduced resolution can have no columns (e.g. a 1-wide image at an odd x
+              // origin): nothing to write, and row_buf.data() may be null.
+              if (!row_buf.empty()) fwrite(row_buf.data(), 1, row_buf.size(), fps[0]);
             } else {
               // Per-component files.
               // For vertically subsampled components (yr_c > 1, e.g. 4:2:0 chroma):
@@ -826,7 +828,8 @@ int main(int argc, char *argv[]) {
                 } else {
                   pack_i32_to_be16(rows[c], out, img_width[c], pnm_offset);
                 }
-                fwrite(row_buf.data(), 1, static_cast<size_t>(img_width[c]) * bpp, fps[c]);
+                const size_t row_bytes = static_cast<size_t>(img_width[c]) * bpp;
+                if (row_bytes != 0) fwrite(row_buf.data(), 1, row_bytes, fps[c]);
               }
             }
           },
