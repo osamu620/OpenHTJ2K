@@ -458,6 +458,15 @@ void fdwt_rev_ver_lp_step_i32_sse2(int32_t n, const int32_t *prev, const int32_t
 void fdwt_1d_filtr_irrev97_planar_sse2(sprec_t *lp, sprec_t *hp, const sprec_t *in, int32_t u0, int32_t u1);
 void fdwt_1d_filtr_rev53_planar_i32_sse2(int32_t *lp, int32_t *hp, const int32_t *in, int32_t u0,
                                          int32_t u1);
+// Planar-input horizontal synthesis (idwt_sse2.cpp): the WASM planar kernels in SSE2,
+// bit-identical to the scalar in-place kernels.  Same contract and N >= 12 guard as
+// the WASM ones (idwt_1d_row_from_planar).
+void idwt_1d_filtr_irrev97_planar_sse2(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                       int32_t u1);
+void idwt_1d_filtr_irrev97_planar_sr_sse2(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
+                                          int32_t u1, int32_t col_lo, int32_t col_hi);
+void idwt_1d_filtr_rev53_planar_i32_sse2(int32_t *out, const int32_t *lp, const int32_t *hp, int32_t u0,
+                                         int32_t u1);
 #endif
 
 // WASM-SIMD DWT kernels (EMSCRIPTEN builds only, no NEON dependency).
