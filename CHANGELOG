@@ -1,4 +1,11 @@
-# [Unreleased]
+# [0.21.2] - 2026-10-31
+
+Patch release: two memory-safety fixes for tall or wide code-blocks. The
+AVX2, NEON and WASM decoders wrote past a stack array when decoding the HT
+SigProp and HT MagRef passes of code-blocks such as 32 x 128 or 4 x 1024
+(security), and the encoder overflowed a heap buffer with `Cblk={1024,4}` or
+`Cblk={4,1024}`. Nothing else changes: encoded and decoded output is otherwise
+byte-identical to 0.21.1, and the API is unchanged.
 
 ## Fixed
 
