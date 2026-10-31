@@ -275,12 +275,18 @@ struct mr_packer {
 
 // F.4 termSPandMRPackers: the refinement segment is the SigProp bytes followed by the
 // MagRef bytes in reverse order.  The two final partial bytes share one byte when
-// their bits agree.  sp.buf is the output; returns the segment length Lref.
-uint32_t terminate_refinement(sp_packer &sp, mr_packer &mr) {
+// their bits agree.  sp.buf is the output; returns the segment length Lref.  info, when
+// given, receives the segment that termination gives with no MagRef bits (the set cut
+// after SigProp): the same bytes up to the partial one, which then stands alone.
+uint32_t terminate_refinement(sp_packer &sp, mr_packer &mr, ht_refinement_info *info) {
   sp.finish();
   mr.finish();
   uint32_t sp_mask = 0xFFu >> (8 - sp.bits);  // 0 when no SigProp bit is pending
   sp_mask |= (1u << sp.max) & 0x80u;          // a pending byte after 0xFF keeps its MSB 0
+  if (info != nullptr) {
+    info->Lsp     = sp.pos + (sp_mask != 0);
+    info->sp_tail = static_cast<uint8_t>((sp_mask != 0) ? sp.tmp : (sp.pos ? sp.buf[sp.pos - 1] : 0));
+  }
   const uint32_t mr_mask = 0xFFu >> (8 - mr.bits);
   if ((sp_mask | mr_mask) != 0) {
     const uint32_t fuse = sp.tmp | mr.tmp;
@@ -333,8 +339,11 @@ inline uint64_t reached(uint64_t n, uint64_t left) {
 
 // Codes the SigProp and MagRef passes of plane q = p - 1 after a cleanup pass at
 // plane p into out (at least HT_MAX_LREF bytes) and returns Lref.  The samples are
-// left with their magnitudes shifted down by p, ready for the cleanup pass.
-uint32_t encode_refinement_passes(j2k_codeblock *block, uint32_t p, uint8_t *out) {
+// left with their magnitudes shifted down by p, ready for the cleanup pass.  info, when
+// given, receives the segment cut after SigProp and, if info->newly is set, the samples
+// SigProp makes significant (stripe s, word k at newly[s * ((W + 15) / 16) + k]).
+uint32_t encode_refinement_passes(j2k_codeblock *block, uint32_t p, uint8_t *out,
+                                  ht_refinement_info *info) {
   const uint32_t W         = block->size.x;
   const uint32_t H         = block->size.y;
   const size_t stride      = block->blksampl_stride;
@@ -470,6 +479,8 @@ uint32_t encode_refinement_passes(j2k_codeblock *block, uint32_t p, uint8_t *out
       if (more == 0) break;
     }
 
+    if (info != nullptr && info->newly != nullptr)
+      std::memcpy(info->newly + s * nk, newly, nk * sizeof(uint64_t));
     left = 0;
     for (uint32_t k = 0; k < nk; ++k) {
       const uint64_t n    = newly[k];
@@ -532,12 +543,12 @@ uint32_t encode_refinement_passes(j2k_codeblock *block, uint32_t p, uint8_t *out
     const uint32_t ms = sample_magnitude(u) >> p;
     samples[k]        = (0x80000000u | ((ms - 1) << 1) | (u & 1)) & (0u - static_cast<uint32_t>(ms != 0));
   }
-  return terminate_refinement(sp, mr);
+  return terminate_refinement(sp, mr, info);
 }
 
 }  // namespace
 
-int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift) noexcept {
+int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift, ht_refinement_info *info) noexcept {
   uint32_t or_val = 0;
   if (!block->pre_quantized)
     block->quantize(or_val);
@@ -562,12 +573,15 @@ int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift) noexcept {
   // Keep at least one significant sample in the cleanup pass.
   const uint32_t msb = max_mag ? 32 - count_leading_zeros(max_mag) : 0;
   const uint32_t p   = (msb == 0) ? 0 : std::min<uint32_t>(block->ht_refine_planes, msb - 1);
-  if (p == 0) return htj2k_encode(block, ROIshift);  // cleanup pass only
+  if (p == 0) {  // cleanup pass only
+    if (info != nullptr) info->Lsp = 0;
+    return htj2k_encode(block, ROIshift);
+  }
 
   // The refinement passes read the samples and leave their magnitudes shifted down by
   // p for the cleanup pass, in place: nothing reads them after this block is coded.
   alignas(16) uint8_t ref[HT_MAX_LREF];
-  const uint32_t Lref = encode_refinement_passes(block, p, ref);
+  const uint32_t Lref = encode_refinement_passes(block, p, ref, info);
   block->refsegment   = true;  // the cleanup coder reserves HT_MAX_LREF bytes after its segment
   htj2k_cleanup_encode(block, ROIshift);
 

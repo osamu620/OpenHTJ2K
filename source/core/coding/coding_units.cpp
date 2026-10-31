@@ -37,6 +37,7 @@
 #endif
 #include "coding_units.hpp"
 #include "block_decoding.hpp"
+#include "ht_rate_control.hpp"
 #include "dwt.hpp"
 #include "color.hpp"
 #include "finalize_narrow.hpp"
@@ -423,6 +424,9 @@ struct fdwt_level_sink_ctx {
 // (0-indexed relative to each band's subband-row origin) at the resolution
 // Forward declaration; full definition is after the ThreadPool include below.
 static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br);
+// Rate control (EXPERIMENTAL): codes the code-blocks measured so far (definitions below).
+static void rc_flush(j2k_tile::EncodePoolCtx *epc, size_t upto = SIZE_MAX);
+static size_t rc_strip_prefix(const j2k_tile::EncodePoolCtx *epc, const void *strip, int32_t br);
 
 // Forward-declared: drain-via-pool spin wait until counter hits zero.  Used
 // by stamp_strip_pointers below to back-pressure when a ring slot we want to
@@ -456,6 +460,14 @@ inline void dec_strip_barrier_wait(std::atomic<int> &cnt);
 // fetch_load(acquire) gives happens-before on the prior block writes.
 static inline void stamp_strip_pointers(fdwt_level_sink_ctx *c, int32_t br) {
   const int32_t slot_idx = (c->strip_N <= 1) ? 0 : (br % c->strip_N);
+  // Rate control: a new strip br of a level codes the code-blocks measured up to the
+  // level's strip br - 2, whose slot it may reuse (the rate control has at least two
+  // slots); strip br - 1 waits a strip, so that its measuring is done by then.  The rule
+  // does not depend on the number of slots, so neither does the output.
+  if (c->enc_epc != nullptr && c->enc_epc->rc != nullptr) {
+    const size_t upto = rc_strip_prefix(c->enc_epc, c, br - 2);
+    if (upto) rc_flush(c->enc_epc, upto);
+  }
   // Back-pressure: wait until the prior occupant of this slot has fully
   // drained.  In single-threaded mode the load returns 0 immediately
   // (cleanup ran inline before the previous stamp returned).  In MT mode
@@ -981,6 +993,12 @@ struct j2k_tcomp_line_dec {
 // cleared after. When null, set_compressed_data falls back to malloc().
 static thread_local cblk_data_pool *g_cblk_pool = nullptr;
 
+cblk_data_pool *swap_thread_cblk_pool(cblk_data_pool *pool) {
+  cblk_data_pool *old = g_cblk_pool;
+  g_cblk_pool         = pool;
+  return old;
+}
+
 // Per-thread pool slot for encoder pool assignment.
 // gen tracks the tile-encode generation; when it differs from EncodePoolCtx::gen,
 // the thread claims a new slot (one atomic fetch_add per thread per tile encode).
@@ -1214,6 +1232,136 @@ inline void dec_strip_barrier_wait(std::atomic<int> &cnt) {
 #endif
 // #include <hwy/highway.h>
 
+// Rate control (EXPERIMENTAL).  A code-block is measured as soon as its samples are ready
+// (rc_measure, on the pool) and coded by a later rc_flush(), which first folds the
+// measurements of the code-blocks it codes into the threshold estimate, in the order the
+// code-blocks were measured.  The encoding thread calls it at fixed points (a new strip of
+// a level, the end of a precinct or of the strips), so the output does not depend on the
+// number of threads.  slot and done are counters the coding decrements (and done is
+// incremented when the coding is queued); either may be nullptr.
+// Queues the measuring of the code-blocks added since `from` (rc_add), in one batch.
+static void rc_measure(j2k_tile::EncodePoolCtx *epc, size_t from) {
+  const double lam = epc->rc->lambda();
+#ifdef OPENHTJ2K_THREAD
+  ThreadPool *pool = ThreadPool::get();
+  if (pool && pool->num_threads() > 1) {
+    static thread_local std::vector<j2k_codeblock *> batch;
+    batch.clear();
+    for (size_t i = from; i < epc->rc_pending.size(); ++i) batch.push_back(epc->rc_pending[i].block);
+    for (size_t i = 0; i < batch.size(); i += 1024) {
+      const std::vector<j2k_codeblock *> part(
+          batch.begin() + static_cast<std::ptrdiff_t>(i),
+          batch.begin() + static_cast<std::ptrdiff_t>(std::min(batch.size(), i + 1024)));
+      pool->push_batch(part, [lam](j2k_codeblock *block) {
+        return [block, lam]() {
+          ht_rd_stats(block, lam);
+          block->rd->measured.store(true, std::memory_order_release);
+        };
+      });
+    }
+    return;
+  }
+#endif
+  for (size_t i = from; i < epc->rc_pending.size(); ++i) {
+    ht_rd_stats(epc->rc_pending[i].block, lam);
+    epc->rc_pending[i].block->rd->measured.store(true, std::memory_order_relaxed);
+  }
+}
+
+// Adds a code-block to measure (by the next rc_measure) and code (by a later rc_flush).
+static void rc_add(j2k_tile::EncodePoolCtx *epc, j2k_codeblock *block, uint8_t ROIshift, const void *strip,
+                   int32_t br, std::atomic<int> *slot, std::atomic<int> *done) {
+  block->rd->slot_cnt = slot;
+  block->rd->done_cnt = done;
+  block->rd->measured.store(false, std::memory_order_relaxed);
+  epc->rc_pending.push_back({block, strip, br, ROIshift});
+}
+
+// The pending code-blocks up to and including the last one a level measured in strips up to
+// br (0: none).
+static size_t rc_strip_prefix(const j2k_tile::EncodePoolCtx *epc, const void *strip, int32_t br) {
+  for (size_t i = epc->rc_pending.size(); i > 0; --i) {
+    const auto &e = epc->rc_pending[i - 1];
+    if (e.strip == strip && e.br <= br) return i;
+  }
+  return 0;
+}
+
+// Codes the first `upto` pending code-blocks (all by default).
+static void rc_flush(j2k_tile::EncodePoolCtx *epc, size_t upto) {
+  upto = std::min(upto, epc->rc_pending.size());
+  if (upto == 0) return;
+#ifdef OPENHTJ2K_THREAD
+  // Measuring tasks finish in any order: wait for each code-block's own.
+  ThreadPool *pool = ThreadPool::get();
+  for (size_t i = 0; i < upto; ++i) {
+    while (!epc->rc_pending[i].block->rd->measured.load(std::memory_order_acquire)) {
+      if (pool == nullptr || !pool->try_run_one()) std::this_thread::yield();
+    }
+  }
+#endif
+  for (size_t i = 0; i < upto; ++i) epc->rc->fold(epc->rc_pending[i].block);
+  epc->rc->solve();
+  const double lam = epc->rc->lambda();
+  for (size_t i = 0; i < upto; ++i) epc->rc_pending[i].block->rd->lambda = lam;
+#ifdef OPENHTJ2K_THREAD
+  if (pool && pool->num_threads() > 1) {
+    for (size_t i = 0; i < upto; ++i) {
+      std::atomic<int> *done = epc->rc_pending[i].block->rd->done_cnt;
+      if (done) done->fetch_add(1, std::memory_order_relaxed);
+    }
+    for (size_t i = 0; i < upto; i += 1024) {
+      const std::vector<j2k_tile::EncodePoolCtx::RcPending> part(
+          epc->rc_pending.begin() + static_cast<std::ptrdiff_t>(i),
+          epc->rc_pending.begin() + static_cast<std::ptrdiff_t>(std::min(upto, i + 1024)));
+      pool->push_batch(part, [epc](const j2k_tile::EncodePoolCtx::RcPending &e) {
+        j2k_codeblock *block   = e.block;
+        const uint8_t ROIshift = e.ROIshift;
+        return [epc, block, ROIshift]() {
+          g_cblk_pool = claim_cblk_pool(epc);
+          ht_rd_code(block, ROIshift);
+          g_cblk_pool = nullptr;
+          if (block->rd->slot_cnt) block->rd->slot_cnt->fetch_sub(1, std::memory_order_release);
+          if (block->rd->done_cnt) block->rd->done_cnt->fetch_sub(1, std::memory_order_release);
+        };
+      });
+    }
+  } else
+#endif
+  {
+    for (size_t i = 0; i < upto; ++i) {
+      j2k_codeblock *block = epc->rc_pending[i].block;
+      g_cblk_pool          = epc->pools[0].get();
+      ht_rd_code(block, epc->rc_pending[i].ROIshift);
+      g_cblk_pool = nullptr;
+      if (block->rd->slot_cnt) block->rd->slot_cnt->fetch_sub(1, std::memory_order_release);
+    }
+  }
+  epc->rc_pending.erase(epc->rc_pending.begin(),
+                        epc->rc_pending.begin() + static_cast<std::ptrdiff_t>(upto));
+}
+
+// Rate control: measures, then codes, the code-blocks of one precinct, and waits for them.
+static void rc_code_precinct(j2k_tile::EncodePoolCtx *epc, j2k_precinct *cp, uint8_t num_bands,
+                             uint8_t ROIshift) {
+  std::atomic<int> done{0};
+  const size_t from = epc->rc_pending.size();
+  for (uint8_t b = 0; b < num_bands; ++b) {
+    j2k_precinct_subband *cpb = cp->access_pband(b);
+    const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+    for (uint32_t i = 0; i < num_cblks; ++i)
+      rc_add(epc, cpb->access_codeblock(i), ROIshift, nullptr, 0, nullptr, &done);
+  }
+  rc_measure(epc, from);
+  rc_flush(epc);
+#ifdef OPENHTJ2K_THREAD
+  ThreadPool *pool = ThreadPool::get();
+  while (done.load(std::memory_order_acquire) > 0) {
+    if (pool == nullptr || !pool->try_run_one()) std::this_thread::yield();
+  }
+#endif
+}
+
 // Full definition of enc_overlap_dispatch (declared earlier).
 // Placed here so ThreadPool, g_cblk_pool, TlPoolSlot, and htj2k_encode are
 // visible.  PR2 restores the pool->push fast path; each pushed lambda also
@@ -1227,6 +1375,7 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
   const int32_t slot_idx = (c->strip_N <= 1) ? 0 : (br % c->strip_N);
   std::atomic<int> *slot_remaining =
       (c->strip_remaining != nullptr) ? &c->strip_remaining[slot_idx] : nullptr;
+  const size_t rc_from = (c->enc_epc->rc != nullptr) ? c->enc_epc->rc_pending.size() : 0;
   for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
     j2k_precinct *cp = cr->access_precinct(p);
     for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -1241,6 +1390,10 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
       for (uint32_t cx = 0; cx < cpb->num_codeblock_x; ++cx) {
         j2k_codeblock *block =
             cpb->access_codeblock(cx + static_cast<uint32_t>(cy_local) * cpb->num_codeblock_x);
+        if (c->enc_epc->rc != nullptr) {
+          rc_add(c->enc_epc, block, c->enc_ROIshift, c, br, slot_remaining, c->enc_epc->tile_remaining);
+          continue;
+        }
 #ifdef OPENHTJ2K_THREAD
         if (c->enc_pool && c->enc_pool->num_threads() > 1) {
           using EPC = j2k_tile::EncodePoolCtx;
@@ -1276,6 +1429,7 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
       }
     }
   }
+  if (c->enc_epc->rc != nullptr) rc_measure(c->enc_epc, rc_from);
 }
 
 float bibo_step_gains[32][5] = {{1.00000000F, 4.17226868F, 1.44209458F, 2.10966980F, 1.69807026F},
@@ -2266,6 +2420,14 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
   uint16_t threshold;
   j2k_codeblock *blk;
   std::vector<int32_t> tree_path;
+
+  // The first layer starts from fresh tag trees, so that the headers can be built again
+  // after the code-blocks change (rate control): build() keeps every value already set.
+  if (layer_idx == 0) {
+    for (uint32_t i = 0; i < this->inclusion_info.num_nodes; ++i)
+      this->inclusion_info.node[i].reset_for_next_frame();
+    for (uint32_t i = 0; i < this->ZBP_info.num_nodes; ++i) this->ZBP_info.node[i].reset_for_next_frame();
+  }
 
   // set value for each leaf node
   for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
@@ -6416,22 +6578,34 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
     this->tcomp[c].create_resolutions(1, false, lb_enc);
   }
 
-  if (enc_ht_refine) {
-    for (uint16_t c = 0; c < num_components; c++) {
-      for (uint8_t r = 0; r <= this->tcomp[c].get_dwt_levels(); r++) {
-        j2k_resolution *cr = this->tcomp[c].access_resolution(r);
-        if (cr->is_empty) continue;
-        for (uint32_t pi = 0; pi < cr->npw * cr->nph; pi++) {
-          j2k_precinct *cp = cr->access_precinct(pi);
-          for (uint8_t b = 0; b < cr->num_bands; b++) {
-            j2k_precinct_subband *cpb = cp->access_pband(b);
-            const uint32_t n          = cpb->num_codeblock_x * cpb->num_codeblock_y;
-            for (uint32_t i = 0; i < n; i++) {
-              j2k_codeblock *block = cpb->access_codeblock(i);
-              if (block->Cmodes & HT) block->ht_refine_planes = enc_ht_refine;
+  if (enc_ht_refine || enc_rate_control) {
+    // Two rounds: count the HT code-blocks, then hand each its truncation-point record.
+    for (int round = 0; round < 2; ++round) {
+      size_t n_ht = 0;
+      for (uint16_t c = 0; c < num_components; c++) {
+        for (uint8_t r = 0; r <= this->tcomp[c].get_dwt_levels(); r++) {
+          j2k_resolution *cr = this->tcomp[c].access_resolution(r);
+          if (cr->is_empty) continue;
+          for (uint32_t pi = 0; pi < cr->npw * cr->nph; pi++) {
+            j2k_precinct *cp = cr->access_precinct(pi);
+            for (uint8_t b = 0; b < cr->num_bands; b++) {
+              j2k_precinct_subband *cpb = cp->access_pband(b);
+              const uint32_t n          = cpb->num_codeblock_x * cpb->num_codeblock_y;
+              for (uint32_t i = 0; i < n; i++) {
+                j2k_codeblock *block = cpb->access_codeblock(i);
+                if ((block->Cmodes & HT) == 0) continue;
+                if (round == 1) {
+                  block->ht_refine_planes = enc_ht_refine;
+                  if (enc_rate_control) block->rd = &enc_rd[n_ht];
+                }
+                ++n_ht;
+              }
             }
           }
         }
+      }
+      if (round == 0) {
+        if (enc_rate_control) enc_rd = std::vector<ht_rd_info>(n_ht);
       }
     }
   }
@@ -6524,6 +6698,44 @@ static size_t precinct_sample_scratch(j2k_resolution *cr, uint32_t &max_cblks) {
   return max_samples;
 }
 
+void j2k_tile::build_packet_headers() {
+  auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
+    uint32_t length = 0;
+    for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+      uint32_t packet_length = 0;
+      j2k_precinct *cp       = cr->access_precinct(p);
+      packet_header_writer pckt_hdr;
+      for (uint8_t b = 0; b < cr->num_bands; ++b) {
+        j2k_precinct_subband *cpb = cp->access_pband(b);
+        const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+        for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+          auto block = cpb->access_codeblock(block_index);
+          packet_length += block->length;
+        }
+        cpb->generate_packet_header(pckt_hdr, static_cast<uint16_t>(numlayers_local - 1));
+      }
+      pckt_hdr.flush(use_EPH_local);
+      cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
+      cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
+      pckt_hdr.copy_buf(cp->packet_header.get());
+      packet_length += pckt_hdr.get_length();
+      cp->set_length(packet_length);
+      length += packet_length;
+    }
+    return length;
+  };
+  this->length = 0;
+  for (uint16_t c = 0; c < num_components; ++c) {
+    const uint8_t NL   = tcomp[c].get_dwt_levels();
+    j2k_resolution *cr = tcomp[c].access_resolution(NL);
+    for (uint8_t r = NL; r > 0; --r) {
+      this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
+      cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
+    }
+    this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
+  }
+}
+
 uint8_t *j2k_tile::encode_line_based() {
 #ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
@@ -6545,6 +6757,8 @@ uint8_t *j2k_tile::encode_line_based() {
     for (auto &ep : epc->pools) ep->reset();
   }
   auto *epc = this->encode_pool_ctx.get();
+  epc->rc   = this->enc_rc;
+  epc->rc_pending.clear();
 
 #ifdef OPENHTJ2K_THREAD
   auto t1_encode = [epc, pool](j2k_resolution *cr, uint8_t ROIshift) {
@@ -6574,6 +6788,10 @@ uint8_t *j2k_tile::encode_line_based() {
           block->sample_buf   = pbuf;
           pbuf += QWx2 * QHx2;
         }
+      }
+      if (epc->rc != nullptr) {
+        rc_code_precinct(epc, cp, cr->num_bands, ROIshift);
+        continue;
       }
       enc_remaining.store(0, std::memory_order_relaxed);
       uint32_t task_idx = 0;
@@ -6622,6 +6840,10 @@ uint8_t *j2k_tile::encode_line_based() {
           block->sample_buf   = pbuf;
           pbuf += QWx2 * QHx2;
         }
+      }
+      if (epc->rc != nullptr) {
+        rc_code_precinct(epc, cp, cr->num_bands, ROIshift);
+        continue;
       }
       g_cblk_pool = epc->pools[0].get();
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
@@ -6703,42 +6925,7 @@ uint8_t *j2k_tile::encode_line_based() {
     t1_encode(cr, ROIshift);  // LL subband
   }
 
-  // Build packet headers (identical to encode()).
-  for (uint16_t c = 0; c < num_components; c++) {
-    const uint8_t NL   = tcomp[c].get_dwt_levels();
-    j2k_resolution *cr = tcomp[c].access_resolution(NL);
-
-    auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
-      uint32_t length = 0;
-      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-        uint32_t packet_length = 0;
-        j2k_precinct *cp       = cr->access_precinct(p);
-        packet_header_writer pckt_hdr;
-        for (uint8_t b = 0; b < cr->num_bands; ++b) {
-          j2k_precinct_subband *cpb = cp->access_pband(b);
-          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
-          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
-            auto block = cpb->access_codeblock(block_index);
-            packet_length += block->length;
-          }
-          cpb->generate_packet_header(pckt_hdr, static_cast<uint16_t>(numlayers_local - 1));
-        }
-        pckt_hdr.flush(use_EPH_local);
-        cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
-        cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
-        pckt_hdr.copy_buf(cp->packet_header.get());
-        packet_length += pckt_hdr.get_length();
-        cp->set_length(packet_length);
-        length += packet_length;
-      }
-      return length;
-    };
-    for (uint8_t r = NL; r > 0; --r) {
-      length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
-      cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
-    }
-    length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
-  }
+  if (!enc_rate_control) build_packet_headers();
 
   tile_part[0]->set_tile_index(this->index);
   tile_part[0]->set_tile_part_index(0);
@@ -6769,6 +6956,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
     for (auto &ep : epc->pools) ep->reset();
   }
   auto *epc = this->encode_pool_ctx.get();
+  epc->rc   = this->enc_rc;
+  epc->rc_pending.clear();
 
 #ifdef OPENHTJ2K_THREAD
   auto t1_encode = [epc, pool](j2k_resolution *cr, uint8_t ROIshift) {
@@ -6798,6 +6987,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
           block->sample_buf   = pbuf;
           pbuf += QWx2 * QHx2;
         }
+      }
+      if (epc->rc != nullptr) {
+        rc_code_precinct(epc, cp, cr->num_bands, ROIshift);
+        continue;
       }
       enc_remaining.store(0, std::memory_order_relaxed);
       uint32_t task_idx = 0;
@@ -6847,6 +7040,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
           pbuf += QWx2 * QHx2;
         }
       }
+      if (epc->rc != nullptr) {
+        rc_code_precinct(epc, cp, cr->num_bands, ROIshift);
+        continue;
+      }
       g_cblk_pool = epc->pools[0].get();
       for (uint8_t b = 0; b < cr->num_bands; ++b) {
         j2k_precinct_subband *cpb = cp->access_pband(b);
@@ -6894,44 +7091,6 @@ uint8_t *j2k_tile::encode_line_based_stream(
   // No-op kept for backward parity with the early-return paths below; rows are
   // owned by the thread_local scratch and freed only at thread teardown.
   auto cleanup_rows = []() {};
-
-  // Packet-header builder (identical to encode_line_based)
-  auto build_packet_headers = [&]() {
-    auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
-      uint32_t length = 0;
-      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
-        uint32_t packet_length = 0;
-        j2k_precinct *cp       = cr->access_precinct(p);
-        packet_header_writer pckt_hdr;
-        for (uint8_t b = 0; b < cr->num_bands; ++b) {
-          j2k_precinct_subband *cpb = cp->access_pband(b);
-          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
-          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
-            auto block = cpb->access_codeblock(block_index);
-            packet_length += block->length;
-          }
-          cpb->generate_packet_header(pckt_hdr, static_cast<uint16_t>(numlayers_local - 1));
-        }
-        pckt_hdr.flush(use_EPH_local);
-        cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
-        cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
-        pckt_hdr.copy_buf(cp->packet_header.get());
-        packet_length += pckt_hdr.get_length();
-        cp->set_length(packet_length);
-        length += packet_length;
-      }
-      return length;
-    };
-    for (uint16_t c = 0; c < num_components; ++c) {
-      const uint8_t NL   = tcomp[c].get_dwt_levels();
-      j2k_resolution *cr = tcomp[c].access_resolution(NL);
-      for (uint8_t r = NL; r > 0; --r) {
-        this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
-        cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
-      }
-      this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
-    }
-  };
 
   if (NL0 == 0) {
     // No DWT: fill i_samples row by row then encode.
@@ -6992,7 +7151,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
     }
     for (uint16_t c = 0; c < num_components; ++c)
       t1_encode(tcomp[c].access_resolution(0), tcomp[c].get_ROIshift());
-    build_packet_headers();
+    if (!enc_rate_control) build_packet_headers();
     cleanup_rows();
     tile_part[0]->set_tile_index(this->index);
     tile_part[0]->set_tile_part_index(0);
@@ -7062,6 +7221,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
       strip_N           = std::min<int32_t>(cap, 1 + static_cast<int32_t>(pool->num_threads()));
     }
 #endif
+    // Rate control codes a strip two strips later (stamp_strip_pointers): two slots at least.
+    if (enc_rate_control) strip_N = std::max<int32_t>(strip_N, 2);
 
     for (int32_t i = 0; i < le->NL_active; ++i) {
       j2k_resolution *cr = tcomp[c].access_resolution(static_cast<uint8_t>(i + 1));
@@ -7324,6 +7485,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
   }
 
   for (uint16_t c = 0; c < num_components; ++c) tcomp[c].finalize_line_encode();
+  if (epc->rc != nullptr) rc_flush(epc);  // rate control: code what the strips measured
 
     // Wait for all overlapped HT block encoder tasks dispatched from the DWT sink.
 #ifdef OPENHTJ2K_THREAD
@@ -7352,7 +7514,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
   // StreamingPerCompScratch (see get_thread_streaming_scratch) and retained
   // across encodes so its pages remain mapped and resident.
 
-  build_packet_headers();
+  if (!enc_rate_control) build_packet_headers();
   cleanup_rows();
 
   tile_part[0]->set_tile_index(this->index);
@@ -7365,6 +7527,8 @@ OPENHTJ2K_MAYBE_UNUSED uint8_t j2k_tile::get_byte_from_tile_buf() { return this-
 OPENHTJ2K_MAYBE_UNUSED uint8_t j2k_tile::get_bit_from_tile_buf() { return this->tile_buf->get_bit(); }
 
 OPENHTJ2K_MAYBE_UNUSED uint32_t j2k_tile::get_length() const { return length; }
+
+j2k_tile_component *j2k_tile::get_tile_component(uint16_t c) { return &this->tcomp[c]; }
 
 uint32_t j2k_tile::get_tile_part_size() const {
   uint32_t np = 0;

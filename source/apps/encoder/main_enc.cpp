@@ -61,6 +61,13 @@
 // Stream readers (PNM / PGX / TIFF) live in the openhtj2k_imgio static lib;
 // see source/apps/imgio/imgio.hpp.
 
+// Codestream bytes for a rate in bits per pixel of a w x h image (0 for no rate).
+static uint64_t target_bytes(double bpp, uint32_t w, uint32_t h) {
+  if (bpp <= 0.0) return 0;
+  const double bytes = bpp * static_cast<double>(w) * static_cast<double>(h) / 8.0;
+  return (bytes < 1.0) ? 1 : static_cast<uint64_t>(bytes);
+}
+
 int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
   std::vector<std::string> fnames = args.ifnames;
@@ -175,8 +182,11 @@ int main(int argc, char *argv[]) {
     qcd_s.number_of_guardbits = args.get_num_guard();
     qcd_s.base_step           = args.get_basestep_size();
     if (qcd_s.base_step == 0.0) {
-      qcd_s.base_step = 1.0f / static_cast<float>(1 << bd_s);
+      // A target rate truncates from a finer step than the default.
+      const int extra = (args.get_target_rate() > 0.0) ? 3 : 0;
+      qcd_s.base_step = 1.0f / static_cast<float>(1u << (bd_s + extra));
     }
+    const uint64_t target_s = target_bytes(args.get_target_rate(), image_size_s.x, image_size_s.y);
 
     std::vector<int32_t *> empty_input;
     uint8_t color_space_s = args.jph_color_space;
@@ -188,6 +198,7 @@ int main(int argc, char *argv[]) {
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
       encoder.set_ht_refinement(args.get_ht_refine());
+      encoder.set_target_size(target_s);
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based_stream(
@@ -265,9 +276,11 @@ int main(int argc, char *argv[]) {
     qcd.number_of_guardbits = args.get_num_guard();
     qcd.base_step           = args.get_basestep_size();
     if (qcd.base_step == 0.0) {
-      qcd.base_step = 1.0f / static_cast<float>(1 << img.get_max_bpp());
+      const int extra = (args.get_target_rate() > 0.0) ? 3 : 0;
+      qcd.base_step   = 1.0f / static_cast<float>(1u << (img.get_max_bpp() + extra));
     }
-    uint8_t color_space = args.jph_color_space;
+    const uint64_t target = target_bytes(args.get_target_rate(), image_size.x, image_size.y);
+    uint8_t color_space   = args.jph_color_space;
 
     for (int i = 0; i < num_iterations; ++i) {
       open_htj2k::openhtj2k_encoder encoder(out_filename.c_str(), input_buf, siz, cod, qcd,
@@ -277,6 +290,7 @@ int main(int argc, char *argv[]) {
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
       encoder.set_ht_refinement(args.get_ht_refine());
+      encoder.set_target_size(target);
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based();

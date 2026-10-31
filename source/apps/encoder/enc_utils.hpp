@@ -28,6 +28,7 @@
 
 #pragma once
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
 #include <string>
 
@@ -111,6 +112,11 @@ void print_help(char *cmd) {
       "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
       "YCbCr, use YCC.\n");
   printf(
+      "-rate Float  (EXPERIMENTAL, HT only, irreversible)\n"
+      "  Target bit rate of the codestream in bits per pixel (one quality layer). The HT\n"
+      "  code-blocks are cut to fit it at the least squared error. Qstep is the finest step\n"
+      "  size it can reach; its default with -rate is 1/2^(bit depth + 3). Not with Qfactor.\n");
+  printf(
       "-num_threads Int\n"
       "  number of threads to use in encode or decode\n"
       "  0, which is the default, indicates usage of all threads.\n");
@@ -173,6 +179,7 @@ class j2k_argset {
   uint8_t qfactor;
   // EXPERIMENTAL analytic visual (CSF) weighting for the Qfactor path.
   uint8_t ht_refine;           // EXPERIMENTAL: HT cleanup plane for SigProp/MagRef (0 = off)
+  double target_rate;          // EXPERIMENTAL: codestream bits per pixel (0 = off)
   uint8_t csf_model;           // 0 = legacy table (default), 1 = Mannos-Sakrison, 2 = Daly
   double csf_ppd;              // reference pixels-per-degree at zoom 1.0
   double csf_zoom;             // display magnification (> 1 = zoom-in)
@@ -385,6 +392,31 @@ class j2k_argset {
     return static_cast<uint32_t>(tmp);
   }
 
+  // EXPERIMENTAL: the target bit rate in bits per pixel (0: none).
+  double get_rate() {
+    auto p = std::find(args.begin(), args.end(), "-rate");
+    if (p == args.end()) {
+      return 0.0;
+    }
+    auto idx = static_cast<size_t>(std::distance(args.begin(), p));
+    if (idx + 1 > args.size() - 1) {
+      printf("ERROR: -rate requires a bit rate in bits per pixel\n");
+      exit(EXIT_FAILURE);
+    }
+    const std::string &val = args[idx + 1];
+    if (val.find(',') != std::string::npos) {
+      printf("ERROR: -rate takes a single bit rate (one quality layer)\n");
+      exit(EXIT_FAILURE);
+    }
+    char *end      = nullptr;
+    const double r = strtod(val.c_str(), &end);
+    if (end == val.c_str() || *end != '\0' || !(r > 0.0) || r > 1000.0) {
+      printf("ERROR: -rate requires a positive number of bits per pixel (at most 1000)\n");
+      exit(EXIT_FAILURE);
+    }
+    return r;
+  }
+
   uint8_t get_jph_color_space() {
     uint8_t val = 0;
     auto p      = std::find(args.begin(), args.end(), "-jph_color_space");
@@ -431,6 +463,7 @@ class j2k_argset {
         qderived(false),
         qfactor(NO_QFACTOR),
         ht_refine(0),
+        target_rate(0.0),
         csf_model(0),
         csf_ppd(72.0),
         csf_zoom(1.0),
@@ -477,6 +510,7 @@ class j2k_argset {
     num_threads     = get_num_threads();
     num_iteration   = get_num_iteration();
     jph_color_space = get_jph_color_space();
+    target_rate     = get_rate();
     line_based      = true;
 
     for (auto &arg : args) {
@@ -484,7 +518,7 @@ class j2k_argset {
       if (c == '-') {
         std::string optname = arg.substr(1);
         if (optname != "i" && optname != "o" && optname != "num_threads" && optname != "jph_color_space"
-            && optname != "iter") {
+            && optname != "iter" && optname != "rate") {
           printf("ERROR: unknown option %s\n", arg.c_str());
           exit(EXIT_FAILURE);
         }
@@ -741,6 +775,7 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD bool is_derived() const { return qderived; }
   OPENHTJ2K_NODISCARD uint8_t get_qfactor() const { return qfactor; }
   OPENHTJ2K_NODISCARD uint8_t get_ht_refine() const { return ht_refine; }
+  OPENHTJ2K_NODISCARD double get_target_rate() const { return target_rate; }
   OPENHTJ2K_NODISCARD uint8_t get_csf_model() const { return csf_model; }
   OPENHTJ2K_NODISCARD double get_csf_ppd() const { return csf_ppd; }
   OPENHTJ2K_NODISCARD double get_csf_zoom() const { return csf_zoom; }

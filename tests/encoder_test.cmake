@@ -495,3 +495,46 @@ foreach(_case "tiles96;Stiles={96,256};Creversible=yes;0;0" "tiles96_lossy;Stile
   add_test(NAME comp_${_t} COMMAND imgcmp kodim23_${_t}.ppm ${ENCODER_REF_DIR}/kodim23.ppm ${_pae} ${_mse})
   set_tests_properties(comp_${_t} PROPERTIES DEPENDS dec_${_t})
 endforeach()
+
+# Rate control (EXPERIMENTAL): -rate cuts the HT code-blocks so that the codestream
+# takes at most rate x image area / 8 bytes.  The search for the budget lands within a
+# few bytes of the target; the size checks allow 0.5% below it.  Measured PAE/MSE:
+# 18/4.44 at 1 bpp, 73/23.7 at 0.25 bpp, 43/11.2 at 0.5 bpp with 256x256 tiles and
+# 28/6.97 at 0.7 bpp on the odd-size image; the thresholds leave room for the small
+# floating-point differences between instruction sets.
+set(_size_check ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_size.cmake)
+foreach(_case "rate1;kodim23;1;49152;48906;25;5.3" "rate025;kodim23;0.25;12288;12226;95;28"
+              "rate05_tiles;kodim23;0.5;24576;24453;70;13.5" "rate07_odd;kodim23odd;0.7;34204;34033;42;8.4")
+  list(GET _case 0 _t)
+  list(GET _case 1 _img)
+  list(GET _case 2 _rate)
+  list(GET _case 3 _max)
+  list(GET _case 4 _min)
+  list(GET _case 5 _pae)
+  list(GET _case 6 _mse)
+  set(_extra "")
+  if(_t STREQUAL "rate05_tiles")
+    set(_extra "Stiles={256,256}")
+  endif()
+  add_test(NAME enc_${_t} COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/${_img}.ppm -o ${_t}.j2c -rate ${_rate} ${_extra})
+  add_test(NAME size_${_t} COMMAND ${CMAKE_COMMAND} -DFILE=${_t}.j2c -DMAX=${_max} -DMIN=${_min} -P ${_size_check})
+  set_tests_properties(size_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME dec_${_t} COMMAND open_htj2k_dec -i ${_t}.j2c -o ${_t}.ppm)
+  set_tests_properties(dec_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME comp_${_t} COMMAND imgcmp ${_t}.ppm ${ENCODER_REF_DIR}/${_img}.ppm ${_pae} ${_mse})
+  set_tests_properties(comp_${_t} PROPERTIES DEPENDS dec_${_t})
+endforeach()
+
+# The cut does not depend on the number of threads.
+add_test(NAME enc_rate1_st COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate1_st.j2c -rate 1 -num_threads 1)
+add_test(NAME cmp_rate1_st COMMAND ${CMAKE_COMMAND} -E compare_files rate1.j2c rate1_st.j2c)
+set_tests_properties(cmp_rate1_st PROPERTIES DEPENDS "enc_rate1;enc_rate1_st")
+
+# A target size needs the irreversible wavelet and a base step size.
+add_test(NAME enc_rate_reversible_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate_rev.j2c -rate 1 Creversible=yes)
+set_tests_properties(enc_rate_reversible_rejected PROPERTIES WILL_FAIL TRUE)
+add_test(NAME enc_rate_qfactor_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate_qf.j2c -rate 1 Qfactor=80)
+set_tests_properties(enc_rate_qfactor_rejected PROPERTIES WILL_FAIL TRUE)
+# One quality layer: a list of rates is rejected.
+add_test(NAME enc_rate_list_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate_list.j2c -rate 1,0.5)
+set_tests_properties(enc_rate_list_rejected PROPERTIES WILL_FAIL TRUE)

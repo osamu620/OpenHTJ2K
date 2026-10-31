@@ -33,6 +33,10 @@
 
 void j2k_decode(j2k_codeblock *block, uint8_t ROIshift);
 bool htj2k_decode(j2k_codeblock *block, uint8_t ROIshift);
+// Decodes the HT cleanup pass of a code-block with num_passes == 1 into block->sample_buf,
+// without dequantisation: each sample holds its sign in bit 31 and, below, its magnitude
+// at bit 30 - num_ZBP and up, with the bin centre in the bit under it.
+bool htj2k_decode_cleanup_raw(j2k_codeblock *block);
 
 // Decode n HT codeblocks, interleaving the serial step-1 (MEL/VLC/UVLC)
 // dependency chains of same-sized neighbours when the active ISA provides a
