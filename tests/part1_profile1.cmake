@@ -41,3 +41,17 @@ set_tests_properties(comp_p1_06_r comp_p1_06_g comp_p1_06_b PROPERTIES DEPENDS d
 add_test(NAME comp_p1_07_a COMMAND imgcmp p1_07_00.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_07-0.pgx 0 0)
 add_test(NAME comp_p1_07_b COMMAND imgcmp p1_07_01.pgx ${CONFORMANCE_DATA_DIR}/references/c1p1_07-1.pgx 0 0)
 set_tests_properties(comp_p1_07_a comp_p1_07_b PROPERTIES DEPENDS dec_p1_07)
+
+# Reduced resolution of an image whose origin is not a multiple of 2^r: each
+# component is ceil(x1 / 2^r) - ceil(x0 / 2^r) wide (ISO/IEC 15444-1, B.5),
+# 30 x 50 for p1_01 at -reduce 1 and 7 x 13 at -reduce 3, as OpenJPEG gives.
+# The decoder reported ceil((x1 - x0) / 2^r), one column more, and the command-
+# line tool read past each row.  The PGX size pins both dimensions.
+set(_size_check ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_size.cmake)
+foreach(_case "1;1516" "3;106")
+  list(GET _case 0 _r)
+  list(GET _case 1 _bytes)
+  add_test(NAME dec_p1_01_r${_r} COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/p1_01.j2k -o p1_01_r${_r}.pgx -reduce ${_r})
+  add_test(NAME size_p1_01_r${_r} COMMAND ${CMAKE_COMMAND} -DFILE=p1_01_r${_r}_00.pgx -DMAX=${_bytes} -DMIN=${_bytes} -P ${_size_check})
+  set_tests_properties(size_p1_01_r${_r} PROPERTIES DEPENDS dec_p1_01_r${_r})
+endforeach()

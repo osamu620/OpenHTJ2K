@@ -93,6 +93,18 @@
   writes one packet per layer; without a target size, all the data goes in the
   first layer and the others are empty.
 
+### Decoder
+- Decoding at a reduced resolution (`-reduce`, the `reduce_NL` argument) an
+  image whose origin is not a multiple of 2^r reported each component as
+  ceil((x1 - x0) / 2^r) samples wide and high instead of ceil(x1 / 2^r) -
+  ceil(x0 / 2^r) (ISO/IEC 15444-1, B.5): one column or row too many, by which
+  the buffered decode laid out its output and the command-line decoder read
+  past the end of every row (a heap overflow, or a crash where the reduced
+  width is 0). This affects conformance codestream `p1_01` and tiled images
+  with an image offset. All decode APIs now report the size the samples have,
+  which matches OpenJPEG. `get_component_width()`/`get_component_height()`
+  had the same mistake for subsampled components.
+
 # [0.22.0] - 2026-10-31
 
 Feature release. The encoder gains rate control for HTJ2K: `-rate R` cuts the

@@ -5877,7 +5877,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
     const uint32_t x_offset  = tc0.x - ceil_int(x0, (1U << reduce_NL));
     const uint32_t y_offset  = tc0.y - ceil_int(y0, (1U << reduce_NL));
 
-    const uint32_t out_stride = ceil_int(x1 - x0, (1U << reduce_NL));
+    const uint32_t out_stride = reduced_extent(x0, x1, reduce_NL);
 
     // Lossy samples are in Q(FRACBITS) units; finalize_f32_to_i32 rounds them to the
     // nearest output LSB (finalize_round, color.hpp).  A reversible transform leaves
@@ -5939,7 +5939,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
     I.csize_y              = tc1.y - tc0.y;
     I.x_offset             = tc0.x - ceil_int(x0, (1U << reduce_NL_val));
     I.y_offset             = tc0.y - ceil_int(y0, (1U << reduce_NL_val));
-    I.out_stride           = ceil_int(x1 - x0, (1U << reduce_NL_val));
+    I.out_stride           = reduced_extent(x0, x1, reduce_NL_val);
     I.downshift            = (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - bd);
     I.scale                = finalize_scale(I.downshift);
     I.cdst                 = dst[c];
