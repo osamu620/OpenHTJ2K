@@ -17,7 +17,8 @@
 // Part 1 one: each entry point's codestream must fit the target and decode.
 // (They need not agree: the rate control estimates its threshold from the
 // code-blocks in the order they are coded, which differs between the entry
-// points.)
+// points.)  The three-component offset and tile cases also run in three quality
+// layers without a target, with both block coders.
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
@@ -83,9 +84,9 @@ struct Layout {
   uint32_t ox, oy, tw, th;
 };
 
-// part1: the Part 1 block coder instead of HT.
+// part1: the Part 1 block coder instead of HT; layers: quality layers (without a target).
 std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t>> &src, bool streaming,
-                            const Layout &lay, uint64_t target, bool part1) {
+                            const Layout &lay, uint64_t target, bool part1, uint16_t layers) {
   open_htj2k::siz_params siz;
   siz.Rsiz   = 0;
   siz.Xsiz   = k.width + lay.ox;
@@ -109,7 +110,7 @@ std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t
   cod.use_SOP           = false;
   cod.use_EPH           = false;
   cod.progression_order = 0;
-  cod.number_of_layers  = 1;
+  cod.number_of_layers  = layers;
   cod.use_color_trafo   = k.mct;
   cod.dwt_levels        = k.levels;
   cod.codeblock_style   = part1 ? 0x000 : 0x040;  // Part 1 default mode or HT
@@ -187,14 +188,15 @@ int main(int argc, char *argv[]) {
   const Depth depths[] = {{8, false}, {12, true}, {14, true}, {16, false}};
 
   int total = 0, failed = 0;
-  // target: codestream bytes for rate control, 0 for none; part1: the Part 1 block coder.
-  auto run = [&](const Case &k, const Layout &lay, uint64_t target, bool part1) {
+  // target: codestream bytes for rate control, 0 for none; part1: the Part 1 block coder;
+  // layers: quality layers.
+  auto run = [&](const Case &k, const Layout &lay, uint64_t target, bool part1, uint16_t layers = 1) {
     ++total;
     std::string err;
     try {
       const auto planes   = make_planes(k);
-      const auto buffered = encode(k, planes, false, lay, target, part1);
-      const auto stream   = encode(k, planes, true, lay, target, part1);
+      const auto buffered = encode(k, planes, false, lay, target, part1, layers);
+      const auto stream   = encode(k, planes, true, lay, target, part1, layers);
       const long e        = max_error(k, buffered, planes);
       // 9/7 (with or without the ICT) at a step of 1/2^depth stays within a
       // few code values; the byte comparison above is the main check.  A target
@@ -216,11 +218,11 @@ int main(int argc, char *argv[]) {
     }
     if (!err.empty()) {
       ++failed;
-      printf("FAIL %s offset %u,%u tiles %ux%u%s%s: %s\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th,
-             part1 ? " Part 1" : "", target ? " (target size)" : "", err.c_str());
+      printf("FAIL %s offset %u,%u tiles %ux%u%s%s, %u layer(s): %s\n", k.name().c_str(), lay.ox, lay.oy,
+             lay.tw, lay.th, part1 ? " Part 1" : "", target ? " (target size)" : "", layers, err.c_str());
     } else if (verbose) {
-      printf("ok   %s offset %u,%u tiles %ux%u%s%s\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th,
-             part1 ? " Part 1" : "", target ? " (target size)" : "");
+      printf("ok   %s offset %u,%u tiles %ux%u%s%s, %u layer(s)\n", k.name().c_str(), lay.ox, lay.oy,
+             lay.tw, lay.th, part1 ? " Part 1" : "", target ? " (target size)" : "", layers);
     }
   };
 
@@ -268,6 +270,11 @@ int main(int argc, char *argv[]) {
         if (xf == 0) {
           run(k, lay, uint64_t{k.width} * k.height * k.nc / 8, false);
           run(k, lay, uint64_t{k.width} * k.height * k.nc / 8, true);
+        }
+        // Three quality layers without a target: all the data goes in the first one.
+        if (cp.nc == 3) {
+          run(k, lay, 0, false, 3);
+          run(k, lay, 0, true, 3);
         }
       }
 

@@ -1579,6 +1579,23 @@ uint8_t j2k_codeblock::get_Mb() const { return this->M_b; }
 
 uint8_t *j2k_codeblock::get_compressed_data() { return this->compressed_data; }
 
+void j2k_codeblock::layer_bytes(uint16_t l, uint32_t &start, uint32_t &len) const {
+  if (num_layers == 1) {
+    start = 0;
+    len   = length;
+    return;
+  }
+  uint32_t z0 = 0;
+  for (uint16_t i = 0; i < l; ++i) z0 += layer_passes[i];
+  const uint32_t z1 = z0 + layer_passes[l];
+  uint32_t s        = 0;
+  for (uint32_t z = 0; z < z0; ++z) s += pass_length[z];
+  uint32_t e = s;
+  for (uint32_t z = z0; z < z1; ++z) e += pass_length[z];
+  start = s;
+  len   = e - s;
+}
+
 void j2k_codeblock::append_refinement_segment(const uint8_t *buf, const uint32_t Lref,
                                               const uint32_t reserved) {
   memcpy(this->compressed_data + this->length, buf, Lref);
@@ -2423,26 +2440,27 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
   std::vector<int32_t> tree_path;
 
   // The first layer starts from fresh tag trees, so that the headers can be built again
-  // after the code-blocks change (rate control): build() keeps every value already set.
+  // after the code-blocks change (rate control); the later layers continue their state.
+  // A leaf's inclusion value is the first layer with passes of the code-block (the
+  // number of layers if none).
   if (layer_idx == 0) {
     for (uint32_t i = 0; i < this->inclusion_info.num_nodes; ++i)
       this->inclusion_info.node[i].reset_for_next_frame();
     for (uint32_t i = 0; i < this->ZBP_info.num_nodes; ++i) this->ZBP_info.node[i].reset_for_next_frame();
-  }
-
-  // set value for each leaf node
-  for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
-    blk = this->access_codeblock(idx);
-    if (blk->length) {
-      this->inclusion_info.node[idx].set_value(blk->layer_start[0]);
-    } else {
-      this->inclusion_info.node[idx].set_value(1);
+    for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
+      blk            = this->access_codeblock(idx);
+      uint16_t first = 0;
+      if (blk->num_layers == 1) {
+        first = blk->length ? 0 : 1;
+      } else {
+        while (first < blk->num_layers && blk->layer_passes[first] == 0) ++first;
+      }
+      this->inclusion_info.node[idx].set_value(first);
+      this->ZBP_info.node[idx].set_value(blk->num_ZBP);
     }
-    this->ZBP_info.node[idx].set_value(blk->num_ZBP);
+    this->inclusion_info.build();
+    this->ZBP_info.build();
   }
-  // Building tagtree structures
-  this->inclusion_info.build();
-  this->ZBP_info.build();
 
   tagtree_node *current_node, *parent_node;
 
@@ -2452,6 +2470,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
     for (size_t i = 0; i < layer_idx; ++i) {
       preceding_layer_passes = static_cast<uint8_t>(preceding_layer_passes + blk->layer_passes[i]);
     }
+    blk->layer_start[layer_idx] = preceding_layer_passes;
 
     if (preceding_layer_passes == 0) {
       // this is the first contribution
@@ -5301,14 +5320,30 @@ struct mem_sink {
 }  // namespace
 
 template <typename Sink>
-static void write_precinct_data(Sink &sink, j2k_precinct *cp, uint8_t num_bands) {
-  sink.put_N_bytes(cp->packet_header.get(), cp->packet_header_length);
+static void write_precinct_data(Sink &sink, j2k_precinct *cp, uint8_t num_bands, uint16_t layer,
+                                uint16_t num_layers) {
+  if (num_layers == 1) {
+    sink.put_N_bytes(cp->packet_header.get(), cp->packet_header_length);
+    for (uint8_t b = 0; b < num_bands; ++b) {
+      j2k_precinct_subband *cpb = cp->access_pband(b);
+      const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+      for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+        j2k_codeblock *block = cpb->access_codeblock(block_index);
+        if (block->length > 0) sink.put_N_bytes(block->get_compressed_data(), block->length);
+      }
+    }
+    return;
+  }
+  const uint32_t h0 = layer ? cp->layer_header_end[layer - 1U] : 0;
+  sink.put_N_bytes(cp->packet_header.get() + h0, cp->layer_header_end[layer] - h0);
   for (uint8_t b = 0; b < num_bands; ++b) {
     j2k_precinct_subband *cpb = cp->access_pband(b);
     const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
     for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
       j2k_codeblock *block = cpb->access_codeblock(block_index);
-      if (block->length > 0) sink.put_N_bytes(block->get_compressed_data(), block->length);
+      uint32_t start = 0, len = 0;
+      block->layer_bytes(layer, start, len);
+      if (len > 0) sink.put_N_bytes(block->get_compressed_data() + start, len);
     }
   }
 }
@@ -5393,7 +5428,7 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     if (!is_packet_done[l][r][c][p]) {
                       cp = cr->access_precinct(p);
                       emit_sop(sink);
-                      write_precinct_data(sink, cp, cr->num_bands);
+                      write_precinct_data(sink, cp, cr->num_bands, l, numlayers);
                       is_packet_done[l][r][c][p] = true;
                     }
                   }
@@ -5415,7 +5450,7 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     if (!is_packet_done[l][r][c][p]) {
                       cp = cr->access_precinct(p);
                       emit_sop(sink);
-                      write_precinct_data(sink, cp, cr->num_bands);
+                      write_precinct_data(sink, cp, cr->num_bands, l, numlayers);
                       is_packet_done[l][r][c][p] = true;
                     }
                   }
@@ -5463,7 +5498,7 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                       for (l = 0; l < LYE; l++) {
                         if (!is_packet_done[l][r][c][p]) {
                           emit_sop(sink);
-                          write_precinct_data(sink, cp, cr->num_bands);
+                          write_precinct_data(sink, cp, cr->num_bands, l, numlayers);
                           is_packet_done[l][r][c][p] = true;
                         }
                       }
@@ -5519,7 +5554,7 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     for (l = 0; l < LYE; l++) {
                       if (!is_packet_done[l][r][c][p]) {
                         emit_sop(sink);
-                        write_precinct_data(sink, cp, cr->num_bands);
+                        write_precinct_data(sink, cp, cr->num_bands, l, numlayers);
                         is_packet_done[l][r][c][p] = true;
                       }
                     }
@@ -5574,7 +5609,7 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     for (l = 0; l < LYE; l++) {
                       if (!is_packet_done[l][r][c][p]) {
                         emit_sop(sink);
-                        write_precinct_data(sink, cp, cr->num_bands);
+                        write_precinct_data(sink, cp, cr->num_bands, l, numlayers);
                         is_packet_done[l][r][c][p] = true;
                       }
                     }
@@ -5630,7 +5665,7 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                       for (l = 0; l < LYE; l++) {
                         if (!is_packet_done[l][r][c][p]) {
                           emit_sop(sink);
-                          write_precinct_data(sink, cp, cr->num_bands);
+                          write_precinct_data(sink, cp, cr->num_bands, l, numlayers);
                           is_packet_done[l][r][c][p] = true;
                         }
                       }
@@ -6576,7 +6611,7 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
 
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img, lb_enc);
-    this->tcomp[c].create_resolutions(1, false, lb_enc);
+    this->tcomp[c].create_resolutions(numlayers, false, lb_enc);
   }
 
   if (enc_ht_refine || enc_rate_control) {
@@ -6702,26 +6737,62 @@ static size_t precinct_sample_scratch(j2k_resolution *cr, uint32_t &max_cblks) {
 }
 
 void j2k_tile::build_packet_headers() {
-  auto t1_encode_packet = [](uint16_t numlayers_local, bool use_EPH_local, j2k_resolution *cr) {
+  const uint16_t L = numlayers;
+  layer_length.assign(L, 0);
+  std::vector<uint8_t> headers;  // with several layers: the precinct's headers, in order
+  auto t1_encode_packet = [&](j2k_resolution *cr) {
     uint32_t length = 0;
     for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
       uint32_t packet_length = 0;
       j2k_precinct *cp       = cr->access_precinct(p);
-      packet_header_writer pckt_hdr;
-      for (uint8_t b = 0; b < cr->num_bands; ++b) {
-        j2k_precinct_subband *cpb = cp->access_pband(b);
-        const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
-        for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
-          auto block = cpb->access_codeblock(block_index);
-          packet_length += block->length;
+      if (L == 1) {
+        packet_header_writer pckt_hdr;
+        for (uint8_t b = 0; b < cr->num_bands; ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+            auto block = cpb->access_codeblock(block_index);
+            packet_length += block->length;
+          }
+          cpb->generate_packet_header(pckt_hdr, 0);
         }
-        cpb->generate_packet_header(pckt_hdr, static_cast<uint16_t>(numlayers_local - 1));
+        pckt_hdr.flush(use_EPH);
+        cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
+        cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
+        pckt_hdr.copy_buf(cp->packet_header.get());
+        packet_length += pckt_hdr.get_length();
+        layer_length[0] += packet_length;
+      } else {
+        // One packet per layer; the tag trees and each code-block's Lblock carry over
+        // from layer to layer.
+        headers.clear();
+        cp->layer_header_end.resize(L);
+        for (uint16_t l = 0; l < L; ++l) {
+          packet_header_writer pckt_hdr;
+          uint32_t body = 0;
+          for (uint8_t b = 0; b < cr->num_bands; ++b) {
+            j2k_precinct_subband *cpb = cp->access_pband(b);
+            cpb->generate_packet_header(pckt_hdr, l);
+            const uint32_t num_cblks = cpb->num_codeblock_x * cpb->num_codeblock_y;
+            for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
+              uint32_t start = 0, len = 0;
+              cpb->access_codeblock(block_index)->layer_bytes(l, start, len);
+              body += len;
+            }
+          }
+          pckt_hdr.flush(use_EPH);
+          const size_t at = headers.size();
+          headers.resize(at + pckt_hdr.get_length());
+          pckt_hdr.copy_buf(headers.data() + at);
+          cp->layer_header_end[l] = static_cast<uint32_t>(headers.size());
+          const uint32_t packet   = static_cast<uint32_t>(pckt_hdr.get_length()) + body;
+          layer_length[l] += packet;
+          packet_length += packet;
+        }
+        cp->packet_header_length = static_cast<uint32_t>(headers.size());
+        cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(headers.size());
+        if (!headers.empty()) std::memcpy(cp->packet_header.get(), headers.data(), headers.size());
       }
-      pckt_hdr.flush(use_EPH_local);
-      cp->packet_header_length = static_cast<uint32_t>(pckt_hdr.get_length());
-      cp->packet_header        = MAKE_UNIQUE<uint8_t[]>(cp->packet_header_length);
-      pckt_hdr.copy_buf(cp->packet_header.get());
-      packet_length += pckt_hdr.get_length();
       cp->set_length(packet_length);
       length += packet_length;
     }
@@ -6732,11 +6803,27 @@ void j2k_tile::build_packet_headers() {
     const uint8_t NL   = tcomp[c].get_dwt_levels();
     j2k_resolution *cr = tcomp[c].access_resolution(NL);
     for (uint8_t r = NL; r > 0; --r) {
-      this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
+      this->length += static_cast<uint32_t>(t1_encode_packet(cr));
       cr = tcomp[c].access_resolution(static_cast<uint8_t>(r - 1));
     }
-    this->length += static_cast<uint32_t>(t1_encode_packet(numlayers, use_EPH, cr));
+    this->length += static_cast<uint32_t>(t1_encode_packet(cr));
   }
+}
+
+uint64_t j2k_tile::get_layers_size(uint16_t last) const {
+  uint64_t np = 0;
+  for (uint16_t c = 0; c < num_components; c++) {
+    for (uint8_t r = 0; r <= tcomp[c].NL; r++) {
+      j2k_resolution *cr = tcomp[c].access_resolution(r);
+      np += cr->npw * cr->nph;
+    }
+  }
+  uint64_t size = 14;  // SOT (12) and SOD (2)
+  for (uint16_t l = 0; l <= last && l < numlayers; ++l) {
+    size += layer_length[l];
+    if (use_SOP) size += 6 * np;
+  }
+  return size;
 }
 
 uint8_t *j2k_tile::encode_line_based() {

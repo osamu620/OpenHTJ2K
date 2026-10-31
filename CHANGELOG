@@ -27,6 +27,16 @@
   gives the same PSNR within 0.01 dB on the images measured, except 0.1 dB
   more on that frame at 2 bpp. Without a target, Part 1 output is unchanged.
 
+## Fixed
+
+### Encoder
+- A `cod_params::number_of_layers` above 1 made broken codestreams through
+  the library (the command-line encoder always wrote one layer): every
+  layer's packet repeated the same packet header and all of the precinct's
+  data, and a Part 1 encode could fail with `std::bad_alloc`. The encoder now
+  writes one packet per layer; without a target size, all the data goes in the
+  first layer and the others are empty.
+
 # [0.22.0] - 2026-10-31
 
 Feature release. The encoder gains rate control for HTJ2K: `-rate R` cuts the
