@@ -1797,107 +1797,101 @@ class fwd_buf {
   #endif  // defined(__AVX2__)
 };
 #else
+// Scalar MagSgn reader: the segment is destuffed once into a per-thread scratch buffer
+// (as the SIMD readers do), so fetch() is a load and a shift at an absolute bit
+// position, with no refill branches.  Byte order is little-endian, as everywhere in
+// the scalar decoder.
 template <int X>
 class fwd_buf {
  private:
-  const uint8_t *buf;
-  uint64_t Creg;
-  uint32_t bits;
-  uint32_t unstuff;
-  int32_t length;
-  uint32_t pos;
+  const uint8_t *dbuf;  //!< pointer to the destuffed bitstream
+  uint32_t limit;       //!< clamp offset; bytes at or beyond it hold no stream bits (read as X)
+  uint32_t pos;         //!< absolute bit position of the next unread bit
+
+  static uint8_t *destuff_scratch(size_t need) {
+    static thread_local std::vector<uint8_t> buf;
+    if (buf.size() < need) buf.resize(need);
+    return buf.data();
+  }
+  static uint64_t load_u64(const uint8_t *p) {
+    uint64_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+  }
 
  public:
-  fwd_buf(const uint8_t *Dcup, int32_t Pcup)
-      : buf(Dcup), Creg(0), bits(0), unstuff(0), length(Pcup), pos(0) {
-    // for alignment
-    auto p = reinterpret_cast<intptr_t>(buf);
-    p &= 0x03;
-    auto num = 4 - p;
-    for (auto i = 0; i < num; ++i) {
-      uint64_t d;
-      if (length-- > 0) {
-        d = *buf++;
-        pos++;
-      } else {
-        d = (uint64_t)X;
+  //  Whenever 0xFF is coded, the MSB of the following byte is a stuffing bit (sequences
+  //  greater than 0xFF7F cannot appear in the segment); it is dropped here.
+  fwd_buf(const uint8_t *data, int size) {
+    if (size < 0) size = 0;
+    uint8_t *dst               = destuff_scratch(static_cast<size_t>(size) + 80);
+    uint8_t *o                 = dst;
+    uint8_t *const o_end       = dst + size;  // destuffing only removes bits: out <= size bytes
+    const uint8_t *s           = data;
+    const uint8_t *const s_end = data + size;
+    uint64_t acc               = 0;  // partial output byte; low nb bits are valid
+    uint32_t nb                = 0;  // number of valid bits in acc; always < 8
+    bool prev_ff               = false;
+
+    // fast path: 8 source bytes at a time when they contain no 0xFF
+    while (s + 8 <= s_end && o + 16 <= o_end) {
+      const uint64_t v = load_u64(s);
+      const uint64_t z = ~v;  // a 0xFF byte becomes a zero byte
+      if (((z - 0x0101010101010101ULL) & ~z & 0x8080808080808080ULL) != 0 || prev_ff) {
+        for (int i = 0; i < 8; ++i) {
+          const uint8_t b = *s++;
+          acc |= static_cast<uint64_t>(b & (prev_ff ? 0x7FU : 0xFFU)) << nb;
+          nb += prev_ff ? 7U : 8U;
+          prev_ff = (b == 0xFFU);
+          if (nb >= 8) {
+            *o++ = static_cast<uint8_t>(acc);
+            acc >>= 8;
+            nb -= 8;
+          }
+        }
+        continue;
       }
-      Creg |= (d << bits);
-      bits += 8 - unstuff;
-      unstuff = ((d & 0xFF) == 0xFF);  // bit-unstuffing for next byte
+      const uint64_t w = acc | (v << nb);
+      memcpy(o, &w, 8);
+      acc = nb ? (v >> (64 - nb)) : 0;
+      o += 8;
+      s += 8;
     }
-    read();
-  }
-
-  inline void read() {
-    if (bits > 32) {
-      printf("ERROR: in MagSgn reading\n");
-      throw std::exception();
-    }
-
-    uint32_t val = 0;
-    if (length > 3) {
-      val = load_u32_unaligned(buf);
-      buf += 4;
-      pos += 4;
-      length -= 4;
-    } else if (length > 0) {
-      int i = 0;
-      val   = (X != 0) ? 0xFFFFFFFFU : 0;
-      while (length > 0) {
-        uint32_t v = *buf++;
-        pos++;
-        uint32_t m = ~(0xFFU << i);
-        val        = (val & m) | (v << i);  // put one byte in its correct location
-        --length;
-        i += 8;
+    // tail: one byte at a time
+    while (s < s_end && o < o_end) {
+      const uint8_t b = *s++;
+      acc |= static_cast<uint64_t>(b & (prev_ff ? 0x7FU : 0xFFU)) << nb;
+      nb += prev_ff ? 7U : 8U;
+      prev_ff = (b == 0xFFU);
+      if (nb >= 8) {
+        *o++ = static_cast<uint8_t>(acc);
+        acc >>= 8;
+        nb -= 8;
       }
-    } else {
-      val = (X != 0) ? 0xFFFFFFFFU : 0;
     }
-
-    // we accumulate in t and keep a count of the number of bits_local in bits_local
-    uint32_t bits_local   = 8 - unstuff;
-    uint32_t t            = val & 0xFF;
-    uint32_t unstuff_flag = ((val & 0xFF) == 0xFF);  // Do we need unstuffing next?
-
-    t |= ((val >> 8) & 0xFF) << bits_local;
-    bits_local += 8 - unstuff_flag;
-    unstuff_flag = (((val >> 8) & 0xFF) == 0xFF);
-
-    t |= ((val >> 16) & 0xFF) << bits_local;
-    bits_local += 8 - unstuff_flag;
-    unstuff_flag = (((val >> 16) & 0xFF) == 0xFF);
-
-    t |= ((val >> 24) & 0xFF) << bits_local;
-    bits_local += 8 - unstuff_flag;
-    unstuff = (((val >> 24) & 0xFF) == 0xFF);  // for next byte
-
-    Creg |= ((uint64_t)t) << bits;  // move data to this->tmp
-    bits += bits_local;
+    // fill the bits above nb with X and pad with X bytes so reads past the end of the
+    // stream see the exhaustion fill value
+    const uint32_t fill = (X == 0xFF) ? (0xFFU << nb) : 0U;
+    *o                  = static_cast<uint8_t>(static_cast<uint32_t>(acc) | fill);
+    memset(o + 1, X, 64);
+    this->dbuf  = dst;
+    this->limit = static_cast<uint32_t>(o - dst) + 1;
+    this->pos   = 0;
   }
 
-  inline void advance(uint32_t n) {
-    if (n > bits) {
-      printf("ERROR: illegal attempt to advance %d bits but there are %d bits left in MagSgn advance\n", n,
-             bits);
-  #if defined(__clang__)
-      // the following code might be problem with GCC, TODO: to be investigated
-      throw std::exception();
-  #endif
-    }
-    Creg >>= n;  // consume n bits
-    bits -= n;
-  }
+  inline void advance(uint32_t n) { this->pos += n; }
+  inline uint32_t position() const { return this->pos; }
 
-  inline uint32_t fetch() {
-    if (bits < 32) {
-      read();
-      if (bits < 32)  // need to test
-        read();
-    }
-    return (uint32_t)Creg;
+  //  The 32 bits starting at bit position p.  The byte offset is clamped to limit, so
+  //  positions past the end of the stream read as X without leaving the buffer.
+  //  The 57 or more bits starting at bit position p (in the low bits of the result).
+  inline uint64_t fetch64_at(uint32_t p) const {
+    uint32_t off = p >> 3;
+    off          = off < this->limit ? off : this->limit;
+    return load_u64(this->dbuf + off) >> (p & 7);
   }
+  inline uint32_t fetch_at(uint32_t p) const { return static_cast<uint32_t>(fetch64_at(p)); }
+  inline uint32_t fetch() const { return fetch_at(this->pos); }
 };
 #endif
 
