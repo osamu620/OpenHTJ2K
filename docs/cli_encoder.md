@@ -139,8 +139,8 @@ JPH file format.
   - The output does not depend on the number of threads. AVX2 and AVX-512 builds
     give the same codestream.
   - On a 3840x2160 12-bit image at 0.96 bpp, an encode with `-rate` takes about
-    1.1 times as long as one with a fixed step size of the same size on all
-    threads, 1.8 times on one.
+    1.2 times as long as one with a fixed step size of the same size on all
+    threads, 2.1 times on one.
 
 ### JPH and component layout
 

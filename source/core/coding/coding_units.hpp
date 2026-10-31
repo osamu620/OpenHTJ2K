@@ -145,8 +145,11 @@ class ht_rc_state;
 // holding one; E2 sums (2m + 1)^2 over the samples with 0 < m < 2^j (twice their error when
 // left out); R2 sums the square of 2(m mod 2^j) + 1 - 2^j (twice the error after a cleanup
 // pass at plane j) over the samples with m >= 2^j, and R2up the same over m >= 2^(j + 1).
+// For the HT set at cleanup plane j (j >= 1), Nsp counts the samples its SigProp pass codes
+// a bit for and Nnew the samples it makes significant.
 struct ht_rd_plane {
   uint32_t C, CQ;
+  uint32_t Nsp, Nnew;
   double E2, R2, R2up;
 };
 
