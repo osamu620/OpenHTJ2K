@@ -440,6 +440,26 @@ void fdwt_1d_filtr_rev53_planar_i32_avx2(int32_t *lp, int32_t *hp, const int32_t
                                          int32_t u1);
 #endif
 
+// SSE2 FDWT kernels (x86-64 builds without AVX2, fdwt_sse2.cpp): the WASM SIMD set in
+// SSE2, bit-identical to the scalar kernels.
+#if defined(OPENHTJ2K_ENABLE_SSE2)
+void fdwt_1d_filtr_irrev97_fixed_sse2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void fdwt_1d_filtr_rev53_fixed_sse2(sprec_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void fdwt_irrev_ver_sr_fixed_sse2(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
+                                  int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
+void fdwt_rev_ver_sr_fixed_sse2(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1, int32_t stride,
+                                sprec_t *pse_scratch, sprec_t **buf_scratch);
+void fdwt_irrev_ver_step_sse2(int32_t n, float *prev, float *next, float *tgt, float coeff);
+void fdwt_rev_ver_hp_step_sse2(int32_t n, const float *prev, const float *next, float *tgt);
+void fdwt_rev_ver_lp_step_sse2(int32_t n, const float *prev, const float *next, float *tgt);
+void fdwt_1d_filtr_rev53_i32_sse2(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
+void fdwt_rev_ver_hp_step_i32_sse2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void fdwt_rev_ver_lp_step_i32_sse2(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt);
+void fdwt_1d_filtr_irrev97_planar_sse2(sprec_t *lp, sprec_t *hp, const sprec_t *in, int32_t u0, int32_t u1);
+void fdwt_1d_filtr_rev53_planar_i32_sse2(int32_t *lp, int32_t *hp, const int32_t *in, int32_t u0,
+                                         int32_t u1);
+#endif
+
 // WASM-SIMD DWT kernels (EMSCRIPTEN builds only, no NEON dependency).
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
 // horizontal

@@ -95,6 +95,19 @@ static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn = fdwt_rev_ver_lp_step_avx
 static fdwt_1d_filtr_i32_fn_t      fdwt_1d_filtr_rev53_i32_fn = fdwt_1d_filtr_rev53_i32_avx2;
 static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_hp_step_i32_fn = fdwt_rev_ver_hp_step_i32_avx2;
 static adv_fdwt_rev_step_i32_fn_t  adv_fdwt_rev_lp_step_i32_fn = fdwt_rev_ver_lp_step_i32_avx2;
+#elif defined(OPENHTJ2K_ENABLE_SSE2)
+static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed_sse2,
+                                                          fdwt_1d_filtr_rev53_fixed_sse2};
+static fdwt_ver_filtr_func_fixed fdwt_ver_sr_fixed[2]  = {fdwt_irrev_ver_sr_fixed_sse2,
+                                                          fdwt_rev_ver_sr_fixed_sse2};
+typedef void (*adv_fdwt_irrev_step_fn_t)(int32_t, float *, float *, float *, float);
+static adv_fdwt_irrev_step_fn_t adv_fdwt_irrev_step_fn = fdwt_irrev_ver_step_sse2;
+typedef void (*adv_fdwt_rev_step_fn_t)(int32_t, const float *, const float *, float *);
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_hp_step_fn         = fdwt_rev_ver_hp_step_sse2;
+static adv_fdwt_rev_step_fn_t adv_fdwt_rev_lp_step_fn         = fdwt_rev_ver_lp_step_sse2;
+static fdwt_1d_filtr_i32_fn_t fdwt_1d_filtr_rev53_i32_fn      = fdwt_1d_filtr_rev53_i32_sse2;
+static adv_fdwt_rev_step_i32_fn_t adv_fdwt_rev_hp_step_i32_fn = fdwt_rev_ver_hp_step_i32_sse2;
+static adv_fdwt_rev_step_i32_fn_t adv_fdwt_rev_lp_step_i32_fn = fdwt_rev_ver_lp_step_i32_sse2;
 #else
 static fdwt_1d_filtr_func_fixed fdwt_1d_filtr_fixed[2] = {fdwt_1d_filtr_irrev97_fixed,
                                                           fdwt_1d_filtr_rev53_fixed};
@@ -723,6 +736,81 @@ static void fdwt_2d_deinterleave_fixed(sprec_t *buf, sprec_t *const LL, sprec_t 
       }
     }
   }
+#elif defined(OPENHTJ2K_ENABLE_SSE2)
+  // SSE2 deinterleave: the WASM one with _mm_shuffle_ps.
+  auto sse2_deinterleave_pair = [](sprec_t *buf, sprec_t *bdp0, sprec_t *bdp1, int32_t s0, int32_t s1,
+                                   int32_t common_len, int32_t vstart_b, int32_t vstop_b, int32_t voffset_b,
+                                   int32_t stride) {
+    for (int32_t v = 0, vb = vstart_b; vb < vstop_b; ++vb, ++v) {
+      sprec_t *sp    = buf + (2 * v + voffset_b) * stride;
+      size_t len     = static_cast<size_t>(common_len);
+      sprec_t *line0 = bdp0 + static_cast<ptrdiff_t>(v) * s0;
+      sprec_t *line1 = bdp1 + static_cast<ptrdiff_t>(v) * s1;
+      for (; len >= 8; len -= 8) {
+        const __m128 lo0 = _mm_loadu_ps(sp), hi0 = _mm_loadu_ps(sp + 4);
+        const __m128 lo1 = _mm_loadu_ps(sp + 8), hi1 = _mm_loadu_ps(sp + 12);
+        _mm_storeu_ps(line0, _mm_shuffle_ps(lo0, hi0, _MM_SHUFFLE(2, 0, 2, 0)));
+        _mm_storeu_ps(line1, _mm_shuffle_ps(lo0, hi0, _MM_SHUFFLE(3, 1, 3, 1)));
+        _mm_storeu_ps(line0 + 4, _mm_shuffle_ps(lo1, hi1, _MM_SHUFFLE(2, 0, 2, 0)));
+        _mm_storeu_ps(line1 + 4, _mm_shuffle_ps(lo1, hi1, _MM_SHUFFLE(3, 1, 3, 1)));
+        line0 += 8;
+        line1 += 8;
+        sp += 16;
+      }
+      for (; len >= 4; len -= 4) {
+        const __m128 lo = _mm_loadu_ps(sp), hi = _mm_loadu_ps(sp + 4);
+        _mm_storeu_ps(line0, _mm_shuffle_ps(lo, hi, _MM_SHUFFLE(2, 0, 2, 0)));
+        _mm_storeu_ps(line1, _mm_shuffle_ps(lo, hi, _MM_SHUFFLE(3, 1, 3, 1)));
+        line0 += 4;
+        line1 += 4;
+        sp += 8;
+      }
+      for (; len > 0; --len) {
+        *line0++ = *sp++;
+        *line1++ = *sp++;
+      }
+    }
+  };
+  {
+    const int32_t len0 = ustop[0] - ustart[0], len1 = ustop[1] - ustart[1];
+    const int32_t common_len = len0 < len1 ? len0 : len1;
+    sprec_t *bdp0            = dp[0];
+    sprec_t *bdp1            = dp[1];
+    int32_t s0 = stride2[0], s1 = stride2[1];
+    if (uoffset[0] > uoffset[1]) {
+      std::swap(bdp0, bdp1);
+      std::swap(s0, s1);
+    }
+    sse2_deinterleave_pair(buf, bdp0, bdp1, s0, s1, common_len, vstart[0], vstop[0], voffset[0], stride);
+    for (uint8_t b = 0; b < 2; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v)
+          dp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len] =
+              buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride];
+        break;
+      }
+    }
+  }
+  {
+    const int32_t len2 = ustop[2] - ustart[2], len3 = ustop[3] - ustart[3];
+    const int32_t common_len = len2 < len3 ? len2 : len3;
+    sprec_t *bdp2            = dp[2];
+    sprec_t *bdp3            = dp[3];
+    int32_t s2 = stride2[2], s3 = stride2[3];
+    if (uoffset[2] > uoffset[3]) {
+      std::swap(bdp2, bdp3);
+      std::swap(s2, s3);
+    }
+    sse2_deinterleave_pair(buf, bdp2, bdp3, s2, s3, common_len, vstart[2], vstop[2], voffset[2], stride);
+    for (uint8_t b = 2; b < 4; ++b) {
+      if ((ustop[b] - ustart[b]) > common_len) {
+        for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v)
+          dp[b][static_cast<ptrdiff_t>(v) * stride2[b] + common_len] =
+              buf[2 * common_len + uoffset[b] + (2 * v + voffset[b]) * stride];
+        break;
+      }
+    }
+  }
 #else
   for (uint8_t b = 0; b < 4; ++b) {
     for (int32_t v = 0, vb = vstart[b]; vb < vstop[b]; ++vb, ++v) {
@@ -1028,6 +1116,25 @@ static void emit_ready_f(fdwt_2d_state *s) {
       }
       continue;
     }
+#elif defined(OPENHTJ2K_ENABLE_SSE2)
+    // Planar fast path, 4-lane SSE2 — same structure and gating as the AVX2
+    // block above.
+    if (s->put_planes != nullptr && s->planar_lp != nullptr && (s->transformation == 0 || s->use_i32)) {
+      if (s->use_i32) {
+        fdwt_1d_filtr_rev53_planar_i32_sse2(reinterpret_cast<int32_t *>(s->planar_lp),
+                                            reinterpret_cast<int32_t *>(s->planar_hp),
+                                            reinterpret_cast<const int32_t *>(ring_row), s->u0, s->u1);
+      } else {
+        fdwt_1d_filtr_irrev97_planar_sse2(s->planar_lp, s->planar_hp, ring_row, s->u0, s->u1);
+      }
+      s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
+      ++s->next_emit;
+      while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
+        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        ++s->ring_origin;
+      }
+      continue;
+    }
 #endif
 
     if (s->u1 == s->u0 + 1) {
@@ -1117,10 +1224,10 @@ void fdwt_2d_state_init(fdwt_2d_state *s,
   s->planar_lp  = nullptr;
   s->planar_hp  = nullptr;
 #if defined(OPENHTJ2K_ENABLE_AVX2) || defined(OPENHTJ2K_ENABLE_ARM_NEON) \
-    || defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+    || defined(OPENHTJ2K_ENABLE_WASM_SIMD) || defined(OPENHTJ2K_ENABLE_SSE2)
   // Minimum N = u1/2 - u0/2: 16 on AVX2 (the 8-lane 9/7 warmup loads
-  // j = 0..15), 12 on NEON/WASM (4-lane warmup loads j = 0..7; same guard as
-  // the decoder's planar dispatch).
+  // j = 0..15), 12 on NEON/WASM/SSE2 (4-lane warmup loads j = 0..7; same guard
+  // as the decoder's planar dispatch).
   #if defined(OPENHTJ2K_ENABLE_AVX2)
   constexpr int32_t planar_min_n = 16;
   #else
