@@ -1225,6 +1225,15 @@ static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2]         = {cvt_rgb_to_y
                                                                     cvt_rgb_to_ycbcr_rev_float_neon};
 static fused_mct_finalize_func fused_mct_finalize[2]             = {fused_ycbcr_irrev_to_rgb_i32_neon,
                                                                     fused_ycbcr_rev_to_rgb_i32_neon};
+#elif defined(OPENHTJ2K_ENABLE_SSE2)
+OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev,
+                                                                    cvt_rgb_to_ycbcr_rev};
+static cvt_color_float_func cvt_ycbcr_to_rgb_float[2]            = {cvt_ycbcr_to_rgb_irrev_float,
+                                                                    cvt_ycbcr_to_rgb_rev_float};
+static cvt_color_i32_to_f_func cvt_rgb_to_ycbcr_float[2]         = {cvt_rgb_to_ycbcr_irrev_float,
+                                                                    cvt_rgb_to_ycbcr_rev_float};
+static fused_mct_finalize_func fused_mct_finalize[2]             = {fused_ycbcr_irrev_to_rgb_i32_sse2,
+                                                                    fused_ycbcr_rev_to_rgb_i32};
 #else
 OPENHTJ2K_MAYBE_UNUSED static cvt_color_func cvt_rgb_to_ycbcr[2] = {cvt_rgb_to_ycbcr_irrev,
                                                                     cvt_rgb_to_ycbcr_rev};
