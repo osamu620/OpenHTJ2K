@@ -64,6 +64,7 @@ on platform.
 | `-DOPENHTJ2K_QUIC=ON` | `OFF` | Enable HTTP/3 over QUIC for the JPIP server and demo. Requires MsQuic + nghttp3; see [JPIP HTTP/3 prerequisites](#jpip-http3-prerequisites-opt-in) below. |
 | `-DOPENHTJ2K_TARGET_CPU=<native\|x86-64-v3\|x86-64-v4\|generic>` | `native` | x86-64 code generation target; see [Portable x86-64 builds](#portable-x86-64-builds). |
 | `-DENABLE_AVX2=OFF` | `ON` | Build x86-64 code without any AVX2 (or wider) instructions; same as `-DOPENHTJ2K_TARGET_CPU=generic`. |
+| `-DENABLE_SSE2=OFF` | `ON` | In x86-64 builds without AVX2, use the scalar code paths instead of the SSE2 ones (as other architectures do). |
 | `-DENABLE_ARM_NEON=OFF` | auto | Force-disable NEON dispatch on AArch64. |
 | `-DBUILD_SHARED_LIBS=OFF` | `ON` | Build a static library instead of a shared one. |
 | `-DOPENHTJ2K_BUILD_APPS=OFF` | `ON` | Build only the library, without the command-line tools (and therefore without the test suite). |
@@ -83,19 +84,20 @@ another machine:
 | `native` (default) | the build machine (and identical CPUs) | `-march=native -mtune=native` | `/arch:AVX2` |
 | `x86-64-v3` | any CPU with AVX2 (Intel Haswell, AMD Zen and newer) | `-march=x86-64-v3` | `/arch:AVX2` |
 | `x86-64-v4` | any CPU with AVX-512 (F/BW/CD/DQ/VL) | `-march=x86-64-v4` | `/arch:AVX512` |
-| `generic` | any x86-64 CPU (no AVX2; scalar code paths) | `-march=x86-64 -mtune=generic` | none |
+| `generic` | any x86-64 CPU (no AVX2; SSE2 code paths for the HT block encoder and the forward DWT, scalar ones elsewhere) | `-march=x86-64 -mtune=generic` | none |
 
 Compilers without `-march=x86-64-v3`/`-v4` (GCC < 11, Clang < 12) get the
 equivalent `-mavx2 -mfma -mbmi ...` feature flags instead.
 
 Cost of portability, measured on a Ryzen 9 9950X (AVX-512 capable;
-3968×2160 4:4:4 image, best of 5, relative to `native`):
+3840×2160 8-bit RGB image, `Qfactor=90`, command-line tools including file
+I/O, best of 5, relative to `native`):
 
-| Target | Decode, 1 / 8 threads | Encode (`Qfactor=90`), 1 / 8 threads |
+| Target | Decode, 1 / 8 threads | Encode, 1 / 8 threads |
 |---|---|---|
-| `x86-64-v4` | 1.00× / 1.05× | 1.00× / 1.00× |
-| `x86-64-v3` | 1.01× / 1.12× | 1.20× / 1.05× |
-| `generic` | 1.52× / 1.54× | 2.53× / 1.87× |
+| `x86-64-v4` | 1.05× / 0.97× | 1.01× / 1.01× |
+| `x86-64-v3` | 1.14× / 1.02× | 1.20× / 1.07× |
+| `generic` | 2.83× / 2.93× | 1.51× / 1.34× |
 
 ### Generator notes
 
