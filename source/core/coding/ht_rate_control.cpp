@@ -59,6 +59,15 @@
 // terminate the codeword there.  p1_rate_control() picks every code-block's last pass at
 // one threshold over all of them; no transcoding is needed.
 //
+// Part 1 code-blocks can also be cut into quality layers, one target per layer: the
+// layers are placed from the lowest, each at one threshold over the passes above the
+// layer below.  A cut that a later layer continues cannot be terminated (the later bytes
+// follow it), so ebcot_encode() also records the shortest prefix of the codeword that
+// decodes up to each pass: the decoder reads past the end of a segment as 1 bits, and
+// such a prefix decodes every symbol iff, followed by 1s, it stays below the upper end of
+// the coder's interval at the end of the pass (mq_encoder::upper_end()).  Only the last
+// cut of a code-block is terminated, and never over bytes a lower layer's prefix keeps.
+//
 // Distortion is the squared error of the reconstructed image: a code-block's error in
 // steps of its base step, weighted by the step size squared, by the energy of its subband's
 // synthesis basis and, with the irreversible colour transform, by that of the inverse
@@ -87,6 +96,7 @@
 #include "block_decoding.hpp"
 #include "coding_units.hpp"
 #include "ht_sigprop.hpp"
+#include "mq_encoder.hpp"
 #include "utils.hpp"
 
 #if defined(OPENHTJ2K_TRY_AVX2) && (defined(__AVX512F__) || defined(__AVX2__))
@@ -944,6 +954,8 @@ void ht_rc_state::add_tile(j2k_tile &tile) {
     const double step = block->stepsize;
     const double gc   = (ict && c < 3) ? gc_ict[c] : 1.0;
     block->rd->w      = step * step * gb * gc;
+    // Part 1 code-blocks in quality layers: cuts that later layers continue.
+    block->rd->p1_prefix = (block->Cmodes & HT) == 0 && tile.get_numlayers() > 1;
     // Classes by component, resolution and band, across tiles.
     const auto key = std::make_tuple(c, r, band);
     auto it        = index.find(key);
@@ -1383,17 +1395,106 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
 }
 
 /********************************************************************************
+ * Part 1 prefixes (quality layers)
+ *******************************************************************************/
+p1_prefix_probe *p1_probe_buffer(uint32_t n) {
+  static thread_local std::vector<p1_prefix_probe> probes;
+  if (probes.size() < n) probes.resize(n);
+  return probes.data();
+}
+
+bool p1_take_probe(p1_prefix_probe &pr, uint32_t seg_start, uint8_t *seg, bool raw_pass,
+                   const mq_encoder &mq, const raw_encoder &raw) {
+  pr.seg_start = seg_start;
+  if (raw_pass) {
+    pr.kind = p1_prefix_probe::RAW;
+    pr.at   = seg_start + raw.needed_bytes();
+    return true;
+  }
+  mq_encoder t        = mq;  // writes where the coder has yet to
+  const uint32_t from = t.settled_bytes();
+  const uint32_t to   = t.upper_end();
+  if (to == 0) {
+    pr.kind = p1_prefix_probe::MQ_ANY;
+    return true;
+  }
+  if (to - from > sizeof(pr.b)) {
+    printf("ERROR: Part 1 rate control: a %u-byte interval end.\n", to - from);
+    return false;
+  }
+  pr.kind = p1_prefix_probe::MQ;
+  pr.at   = seg_start + from;
+  pr.n    = static_cast<uint8_t>(to - from);
+  std::memcpy(pr.b, seg + from, pr.n);
+  return true;
+}
+
+// A segment cut after L bytes decodes as if 0xFF bytes followed (D.4.1); see
+// mq_encoder::upper_end().
+void p1_find_prefixes(p1_rd_pass *passes, const p1_prefix_probe *probes, uint32_t num_passes,
+                      const uint8_t *data, uint32_t len) {
+  uint32_t seg_end = len;  // end of the segment of the passes below
+  for (uint32_t q = num_passes; q-- > 0;) {
+    p1_rd_pass &pt = passes[q];
+    if (pt.ends_segment) {
+      seg_end = pt.pre = pt.keep;
+      continue;
+    }
+    const p1_prefix_probe &pr = probes[q];
+    uint32_t pre              = seg_end;
+    if (pr.kind == p1_prefix_probe::MQ_ANY) {
+      pre = std::min(pr.seg_start + 1, seg_end);  // any cut decodes; keep one byte
+    } else if (pr.kind == p1_prefix_probe::RAW) {
+      // The bytes that hold the pass's bits, less a final 0xFF, which reads as the fill.
+      pre = std::min(pr.at, seg_end);
+      if (pre > pr.seg_start && data[pre - 1] == 0xFFu) --pre;
+    } else {
+      for (uint32_t j = 0; j < pr.n; ++j) {
+        const uint32_t i = pr.at + j;
+        const uint8_t v  = (i < seg_end) ? data[i] : 0xFFu;
+        if (v != pr.b[j]) {
+          pre = std::min(i + 1, seg_end);
+          break;
+        }
+      }
+    }
+    pt.pre = pre;
+  }
+}
+
+/********************************************************************************
  * Part 1 code-blocks
  *******************************************************************************/
 namespace {
 
-// Sets a Part 1 code-block to its first n coding passes (0: left out).  The passes before
-// the last keep the segment lengths the encoder gave them; the last ends the segment it is
-// in, terminated there unless the encoder did.
-void set_p1_point(j2k_codeblock *b, const ht_rd_info &rd, uint32_t n) {
-  b->layer_start[0] = 0;
+// The bytes of a Part 1 code-block cut after its first n passes (n > 0).  A cut that a
+// later quality layer continues keeps the shortest prefix that decodes it; the
+// code-block's last cut is terminated there.  While a layer is placed, the cuts at its top
+// may still be continued by a later one, so they count the longer of the two.
+enum class p1_cut { inner, top, last };
+uint32_t p1_cut_bytes(const ht_rd_info &rd, uint32_t n, p1_cut kind) {
+  const p1_rd_pass &pt = rd.p1[n - 1];
+  const uint32_t term  = pt.keep + pt.tail_len;
+  if (kind == p1_cut::inner) return pt.pre;
+  return (kind == p1_cut::last) ? term : std::max(pt.pre, term);
+}
+
+// Sets a Part 1 code-block to its cuts for layers 0 to top (cut[l]: its passes up to
+// layer l, nondecreasing), with no passes in the layers above: the passes of each layer,
+// and in pass_length[] the bytes from one boundary to the next, a boundary being the end
+// of a layer's passes or of a codeword segment.  `last`: top is the final layer, so the
+// code-block's highest cut is its last.
+void set_p1_cuts(j2k_codeblock *b, const ht_rd_info &rd, const uint8_t *cut, uint16_t top, bool last) {
+  const uint16_t K = b->num_layers;
+  const uint32_t n = cut[top];
+  uint8_t prev     = 0;
+  for (uint16_t l = 0; l < K; ++l) {
+    const uint8_t c    = (l <= top) ? cut[l] : static_cast<uint8_t>(n);
+    b->layer_passes[l] = static_cast<uint8_t>(c - prev);
+    b->layer_start[l]  = prev;
+    prev               = c;
+  }
   if (n == 0) {
-    b->layer_passes[0]   = 0;
     b->num_passes        = 0;
     b->pass_length_count = 0;
     b->length            = 0;
@@ -1401,65 +1502,106 @@ void set_p1_point(j2k_codeblock *b, const ht_rd_info &rd, uint32_t n) {
     b->num_ZBP = static_cast<uint8_t>(b->get_Mb() - 1);
     return;
   }
-  uint32_t seg_start = 0;  // where the last pass's segment starts
-  for (uint32_t z = 0; z + 1 < n; ++z) {
-    b->pass_length[z] = rd.p1[z].seg_len;
-    if (rd.p1[z].ends_segment) seg_start = rd.p1[z].keep;
+  uint32_t done = 0;  // bytes up to the last boundary
+  uint16_t li   = 0;
+  for (uint32_t z = 0; z < n; ++z) {
+    while (li <= top && cut[li] < z + 1) ++li;
+    uint32_t at = 0;
+    if (li <= top && cut[li] == z + 1)
+      at = p1_cut_bytes(rd, z + 1, (z + 1 < n) ? p1_cut::inner : (last ? p1_cut::last : p1_cut::top));
+    else if (rd.p1[z].ends_segment)
+      at = rd.p1[z].keep;
+    else {
+      b->pass_length[z] = 0;
+      continue;
+    }
+    b->pass_length[z] = at - done;
+    done              = at;
   }
-  const p1_rd_pass &last = rd.p1[n - 1];
-  const uint32_t L       = last.keep + last.tail_len;
-  b->pass_length[n - 1]  = L - seg_start;
-  b->pass_length_count   = static_cast<uint8_t>(n);
-  b->num_passes          = static_cast<uint8_t>(n);
-  b->layer_passes[0]     = static_cast<uint8_t>(n);
-  b->length              = L;
-  b->num_ZBP             = rd.p1_zbp;
+  b->pass_length_count = static_cast<uint8_t>(n);
+  b->num_passes        = static_cast<uint8_t>(n);
+  b->length            = done;
+  b->num_ZBP           = rd.p1_zbp;
 }
 
 }  // namespace
 
-uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes, uint64_t target_bytes) {
+uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes,
+                         const std::vector<uint64_t> &targets) {
   std::vector<j2k_codeblock *> blocks;
   for (uint32_t t = 0; t < num_tiles; ++t)
     for_each_rd_block(tiles[t], [&](j2k_codeblock *b, uint16_t, uint8_t, uint8_t) { blocks.push_back(b); });
+  const uint16_t K = static_cast<uint16_t>(targets.size());
 
-  // Every code-block's convex hull: leaving it out and the end of every coding pass (a cut
-  // that would not be shorter than the whole code-block is no use).
-  rd_cutter cutter(blocks.size());
+  // The layers are placed in turn, each by one threshold over the code-blocks' convex
+  // hulls from the cuts of the layer below: leaving a code-block where it is, and the end
+  // of each later coding pass (a cut that would not be shorter than the whole code-block
+  // is no use).  A cut that continues one below must not end before it, and if it ends
+  // in termination bytes, they must not overwrite bytes a cut below keeps.
+  std::vector<uint8_t> cuts(blocks.size() * K, 0);
   std::vector<rd_point> pts;
-  for (uint32_t i = 0; i < blocks.size(); ++i) {
-    const ht_rd_info &rd = *blocks[i]->rd;
-    const double w       = rd.w;
-    pts.clear();
-    pts.push_back({0, w * rd.D2zero * 0.25, 0, 0});
-    if (rd.p1_passes > 0) {
-      const uint32_t full = rd.p1[rd.p1_passes - 1].keep;
-      for (uint32_t z = 0; z < rd.p1_passes; ++z) {
-        const p1_rd_pass &pt = rd.p1[z];
-        const uint32_t L     = pt.keep + pt.tail_len;
-        if (L > full || (L == full && z + 1 < rd.p1_passes)) continue;
-        pts.push_back({static_cast<double>(L), w * pt.D * 0.25, 0, static_cast<uint8_t>(z + 1)});
+  for (uint16_t k = 0; k < K; ++k) {
+    const bool last = (k + 1 == K);
+    rd_cutter cutter(blocks.size());
+    double base_bytes = 0;
+    for (uint32_t i = 0; i < blocks.size(); ++i) {
+      const ht_rd_info &rd = *blocks[i]->rd;
+      const double w       = rd.w;
+      const uint8_t *cut   = &cuts[static_cast<size_t>(i) * K];
+      const uint32_t floor = k ? cut[k - 1] : 0;
+      uint32_t below       = 0;  // longest prefix a cut below keeps
+      for (uint16_t j = 0; j < k; ++j)
+        if (cut[j] > 0) below = std::max(below, rd.p1[cut[j] - 1].pre);
+      pts.clear();
+      if (floor == 0) {
+        pts.push_back({0, w * rd.D2zero * 0.25, 0, 0});
+      } else {
+        const double R = p1_cut_bytes(rd, floor, last ? p1_cut::last : p1_cut::top);
+        pts.push_back({R, w * rd.p1[floor - 1].D * 0.25, 0, static_cast<uint8_t>(floor)});
+        base_bytes += R;
       }
+      if (rd.p1_passes > 0) {
+        const uint32_t full = rd.p1[rd.p1_passes - 1].keep;
+        for (uint32_t z = floor; z < rd.p1_passes; ++z) {
+          const p1_rd_pass &pt = rd.p1[z];
+          if (k > 0 && ((!last && pt.pre < below) || (pt.tail_len && pt.keep < below))) continue;
+          const uint32_t L = p1_cut_bytes(rd, z + 1, last ? p1_cut::last : p1_cut::top);
+          if (L > full || (L == full && z + 1 < rd.p1_passes)) continue;
+          pts.push_back({static_cast<double>(L), w * pt.D * 0.25, 0, static_cast<uint8_t>(z + 1)});
+        }
+      }
+      cutter.add(i, pts);
     }
-    cutter.add(i, pts);
-  }
-  cutter.sort_steps();
-  cutter.start = (target_bytes > fixed_bytes) ? static_cast<double>(target_bytes - fixed_bytes) : 0;
-  cutter.search(target_bytes, [&]() {
+    cutter.sort_steps();
+    const double room = static_cast<double>(targets[k]) - static_cast<double>(fixed_bytes) - base_bytes;
+    cutter.start      = std::max(room, 0.0);
+    cutter.search(targets[k], [&]() {
+      uint64_t total = fixed_bytes;
+      for (uint32_t i = 0; i < blocks.size(); ++i) {
+        uint8_t *cut = &cuts[static_cast<size_t>(i) * K];
+        cut[k]       = cutter.point(i).passes;
+        set_p1_cuts(blocks[i], *blocks[i]->rd, cut, k, last);
+      }
+      for (uint32_t t = 0; t < num_tiles; ++t) {
+        tiles[t].build_packet_headers();
+        total += tiles[t].get_layers_size(k);
+      }
+      return total;
+    });
     for (uint32_t i = 0; i < blocks.size(); ++i)
-      set_p1_point(blocks[i], *blocks[i]->rd, cutter.point(i).passes);
-    return codestream_length(tiles, num_tiles, fixed_bytes);
-  });
+      cuts[static_cast<size_t>(i) * K + k] = cutter.point(i).passes;
+  }
 
-  // Cut the data: a last pass the encoder did not terminate gets its termination bytes.
+  // Cut the data: a last cut the encoder did not terminate gets its termination bytes.
   for (uint32_t i = 0; i < blocks.size(); ++i) {
     j2k_codeblock *block = blocks[i];
     ht_rd_info &rd       = *block->rd;
-    const uint32_t n     = cutter.point(i).passes;
-    set_p1_point(block, rd, n);
+    const uint8_t *cut   = &cuts[static_cast<size_t>(i) * K];
+    set_p1_cuts(block, rd, cut, static_cast<uint16_t>(K - 1), true);
+    const uint32_t n = cut[K - 1];
     if (n > 0) {
-      const p1_rd_pass &last = rd.p1[n - 1];
-      if (last.tail_len) std::memcpy(block->get_compressed_data() + last.keep, last.tail, last.tail_len);
+      const p1_rd_pass &pt = rd.p1[n - 1];
+      if (pt.tail_len) std::memcpy(block->get_compressed_data() + pt.keep, pt.tail, pt.tail_len);
     }
     rd.p1.reset();
   }

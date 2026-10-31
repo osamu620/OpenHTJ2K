@@ -33,6 +33,7 @@
 #include "coding_units.hpp"
 #include "coding_local.hpp"
 #include "mq_encoder.hpp"
+#include "ht_rate_control.hpp"
 #include "EBCOTtables.hpp"
 #include "ebcot_context.hpp"
 #include "ebcot_sig_lut9.hpp"
@@ -428,6 +429,7 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
     rd->p1_passes = static_cast<uint8_t>(num_passes);
     rd->p1_zbp    = static_cast<uint8_t>(Mb - msb_len);
   }
+  p1_prefix_probe *const probes = (rd != nullptr && rd->p1_prefix) ? p1_probe_buffer(num_passes) : nullptr;
   mq_encoder mq(out_buf);
   mq.init_states_for_all_contexts();
   raw_encoder raw;
@@ -487,7 +489,6 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
       // bytes the real coder has yet to write, and the bytes it changes are kept.
       if (rd != nullptr) {
         p1_rd_pass &pt  = rd->p1[z];
-        pt.seg_len      = seg_len;
         pt.D            = D;
         pt.ends_segment = terminate;
         if (terminate) {
@@ -513,10 +514,13 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
             return -1;
           }
           std::memcpy(pt.tail, seg + settled, pt.tail_len);
+          if (probes != nullptr && !p1_take_probe(probes[z], len, seg, is_raw, mq, raw)) return -1;
         }
       }
     }
   }
+
+  if (probes != nullptr) p1_find_prefixes(rd->p1.get(), probes, num_passes, out_buf, len);
 
   block->pass_length_count = static_cast<uint8_t>(num_passes);
   block->set_compressed_data(out_buf, static_cast<uint16_t>(len), 0);

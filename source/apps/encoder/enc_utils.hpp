@@ -112,11 +112,13 @@ void print_help(char *cmd) {
       "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
       "YCbCr, use YCC.\n");
   printf(
-      "-rate Float  (EXPERIMENTAL, irreversible)\n"
-      "  Target bit rate of the codestream in bits per pixel (one quality layer). The\n"
-      "  code-blocks, HT or Part 1 (Cmodes=0 and its mode switches), are cut to fit it at\n"
-      "  the least squared error. Qstep is the finest step size it can reach; its default\n"
-      "  with -rate is 1/2^(bit depth + 3). Not with Qfactor.\n");
+      "-rate Float[,Float...]  (EXPERIMENTAL, irreversible)\n"
+      "  Target bit rate of the codestream in bits per pixel. The code-blocks, HT or\n"
+      "  Part 1 (Cmodes=0 and its mode switches), are cut to fit it at the least squared\n"
+      "  error. Qstep is the finest step size it can reach; its default with -rate is\n"
+      "  1/2^(bit depth + 3). Not with Qfactor. Several rates (Part 1 only) make one\n"
+      "  quality layer each, in increasing order: layer l and the layers below it take\n"
+      "  the l-th lowest rate.\n");
   printf(
       "-num_threads Int\n"
       "  number of threads to use in encode or decode\n"
@@ -180,7 +182,7 @@ class j2k_argset {
   uint8_t qfactor;
   // EXPERIMENTAL analytic visual (CSF) weighting for the Qfactor path.
   uint8_t ht_refine;           // EXPERIMENTAL: HT cleanup plane for SigProp/MagRef (0 = off)
-  double target_rate;          // EXPERIMENTAL: codestream bits per pixel (0 = off)
+  std::vector<double> target_rates;  // EXPERIMENTAL: bits per pixel per quality layer, increasing
   uint8_t csf_model;           // 0 = legacy table (default), 1 = Mannos-Sakrison, 2 = Daly
   double csf_ppd;              // reference pixels-per-degree at zoom 1.0
   double csf_zoom;             // display magnification (> 1 = zoom-in)
@@ -393,11 +395,13 @@ class j2k_argset {
     return static_cast<uint32_t>(tmp);
   }
 
-  // EXPERIMENTAL: the target bit rate in bits per pixel (0: none).
-  double get_rate() {
+  // EXPERIMENTAL: the target bit rates in bits per pixel, one per quality layer, in
+  // increasing order (empty: none).
+  std::vector<double> get_rate() {
+    std::vector<double> rates;
     auto p = std::find(args.begin(), args.end(), "-rate");
     if (p == args.end()) {
-      return 0.0;
+      return rates;
     }
     auto idx = static_cast<size_t>(std::distance(args.begin(), p));
     if (idx + 1 > args.size() - 1) {
@@ -405,17 +409,28 @@ class j2k_argset {
       exit(EXIT_FAILURE);
     }
     const std::string &val = args[idx + 1];
-    if (val.find(',') != std::string::npos) {
-      printf("ERROR: -rate takes a single bit rate (one quality layer)\n");
+    size_t pos             = 0;
+    for (;;) {
+      const size_t comma = val.find(',', pos);
+      const std::string item =
+          val.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+      char *end      = nullptr;
+      const double r = strtod(item.c_str(), &end);
+      if (item.empty() || end == item.c_str() || *end != '\0' || !(r > 0.0) || r > 1000.0) {
+        printf(
+            "ERROR: -rate requires positive numbers of bits per pixel (at most 1000), comma-separated\n");
+        exit(EXIT_FAILURE);
+      }
+      rates.push_back(r);
+      if (comma == std::string::npos) break;
+      pos = comma + 1;
+    }
+    if (rates.size() > 255) {
+      printf("ERROR: -rate takes at most 255 rates (quality layers)\n");
       exit(EXIT_FAILURE);
     }
-    char *end      = nullptr;
-    const double r = strtod(val.c_str(), &end);
-    if (end == val.c_str() || *end != '\0' || !(r > 0.0) || r > 1000.0) {
-      printf("ERROR: -rate requires a positive number of bits per pixel (at most 1000)\n");
-      exit(EXIT_FAILURE);
-    }
-    return r;
+    std::sort(rates.begin(), rates.end());
+    return rates;
   }
 
   uint8_t get_jph_color_space() {
@@ -464,7 +479,7 @@ class j2k_argset {
         qderived(false),
         qfactor(NO_QFACTOR),
         ht_refine(0),
-        target_rate(0.0),
+        target_rates(),
         csf_model(0),
         csf_ppd(72.0),
         csf_zoom(1.0),
@@ -511,7 +526,7 @@ class j2k_argset {
     num_threads     = get_num_threads();
     num_iteration   = get_num_iteration();
     jph_color_space = get_jph_color_space();
-    target_rate     = get_rate();
+    target_rates    = get_rate();
     line_based      = true;
 
     for (auto &arg : args) {
@@ -776,7 +791,12 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD bool is_derived() const { return qderived; }
   OPENHTJ2K_NODISCARD uint8_t get_qfactor() const { return qfactor; }
   OPENHTJ2K_NODISCARD uint8_t get_ht_refine() const { return ht_refine; }
-  OPENHTJ2K_NODISCARD double get_target_rate() const { return target_rate; }
+  // The codestream's target rate (the highest layer's), 0 for none.
+  OPENHTJ2K_NODISCARD double get_target_rate() const {
+    return target_rates.empty() ? 0.0 : target_rates.back();
+  }
+  // One target rate per quality layer, increasing (empty for none).
+  OPENHTJ2K_NODISCARD const std::vector<double> &get_target_rates() const { return target_rates; }
   OPENHTJ2K_NODISCARD uint8_t get_csf_model() const { return csf_model; }
   OPENHTJ2K_NODISCARD double get_csf_ppd() const { return csf_ppd; }
   OPENHTJ2K_NODISCARD double get_csf_zoom() const { return csf_zoom; }

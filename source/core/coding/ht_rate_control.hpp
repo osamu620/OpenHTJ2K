@@ -33,6 +33,7 @@
 
 class j2k_tile;
 class j2k_codeblock;
+struct p1_rd_pass;
 
 // Rate control (EXPERIMENTAL) for HT code-blocks: the codestream is cut to a target size at
 // the least squared error.  See ht_rate_control.cpp for the method.
@@ -74,6 +75,30 @@ class ht_rc_state {
   std::vector<sb_class> classes_;
 };
 
+// Part 1 code-blocks in quality layers (ebcot_encode()): a cut that a later layer continues
+// keeps the shortest prefix of the coded data that decodes it, p1_rd_pass::pre.  At the end
+// of every pass that does not end its codeword segment, the encoder takes a probe of its
+// coder; once the code-block's data are final, the probes give the prefixes.
+struct p1_prefix_probe {
+  enum : uint8_t { MQ, MQ_ANY, RAW } kind = MQ;
+  uint8_t n                               = 0;   // MQ: bytes of the interval's upper end, from `at`
+  uint8_t b[8]                            = {};  // MQ: those bytes
+  uint32_t seg_start                      = 0;   // where the pass's segment starts
+  uint32_t at = 0;  // MQ: first byte the upper end can differ in; RAW: bytes needed
+};
+class mq_encoder;
+class raw_encoder;
+// Scratch (per thread) for the probes of n passes.
+p1_prefix_probe *p1_probe_buffer(uint32_t n);
+// Takes the probe of a pass that does not end its segment, which starts at seg_start in the
+// code-block's data and at seg in the coder's buffer, from the coder of the pass (raw:
+// BYPASS).  False if the probe does not fit.
+bool p1_take_probe(p1_prefix_probe &pr, uint32_t seg_start, uint8_t *seg, bool raw_pass,
+                   const mq_encoder &mq, const raw_encoder &raw);
+// Sets pre of every pass from the probes, once the code-block's data (len bytes) are final.
+void p1_find_prefixes(p1_rd_pass *passes, const p1_prefix_probe *probes, uint32_t num_passes,
+                      const uint8_t *data, uint32_t len);
+
 // Measures a code-block (its samples quantised in block->sample_buf, or quantised here).
 // lambda: the current threshold estimate (0: none yet), which bounds the planes measured.
 void ht_rd_stats(j2k_codeblock *block, double lambda);
@@ -91,7 +116,9 @@ int32_t p1_rd_code(j2k_codeblock *block, uint8_t ROIshift);
 uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes, uint64_t target_bytes);
 
 // The same for Part 1 (EBCOT) code-blocks, whose coded passes ebcot_encode() records as
-// truncation points (p1_rd_code()): picks every code-block's last pass so that the
-// codestream takes at most target_bytes, cuts its data there, terminated, and builds the
-// packet headers of every tile.  Returns the codestream length.
-uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes, uint64_t target_bytes);
+// truncation points (p1_rd_code()), with one target per quality layer: targets[l] bounds
+// the bytes of layers 0 to l (nondecreasing; the last bounds the codestream).  Picks every
+// code-block's passes in each layer, cuts its data, terminated after its last pass, and
+// builds the packet headers of every tile.  Returns the codestream length.
+uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes,
+                         const std::vector<uint64_t> &targets);

@@ -566,6 +566,40 @@ add_test(NAME enc_p1rate1_st COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim2
 add_test(NAME cmp_p1rate1_st COMMAND ${CMAKE_COMMAND} -E compare_files p1rate1.j2c p1rate1_st.j2c)
 set_tests_properties(cmp_p1rate1_st PROPERTIES DEPENDS "enc_p1rate1;enc_p1rate1_st")
 
-# One quality layer: a list of rates is rejected.
+# Quality layers (Part 1): one rate per layer, layer l and the layers below it within the
+# l-th lowest.  The codestream takes at most the highest rate's bytes, and the encoder
+# warns if a lower layer takes more than its own target, which fails the test.  Decodes
+# that stop at a lower layer were checked against other decoders outside this suite.
+# Measured PAE/MSE (all layers): 15/4.03 at 0.25,0.5,1 bpp; 11/2.64 at five rates up to
+# 1.6 bpp with BYPASS|ERTERM and 256x256 tiles; 29/8.15 at 0.2,0.4,0.7 bpp with
+# RESTART|CAUSAL, RPCL, precincts and SOP/EPH markers on the odd-size image.
+foreach(_case "p1layers3;kodim23;0.25,0.5,1;49152;48906;22;5;0;"
+              "p1layers5_bypass_tiles;kodim23;0.1,0.2,0.4,0.8,1.6;78643;78250;20;3.5;BYPASS|ERTERM;Stiles={256,256}"
+              "p1layers3_odd_rpcl;kodim23odd;0.2,0.4,0.7;34204;34033;40;9.5;RESTART|CAUSAL;Corder=RPCL Cprecincts={128,128},{64,64} Cuse_sop=yes Cuse_eph=yes")
+  list(GET _case 0 _t)
+  list(GET _case 1 _img)
+  list(GET _case 2 _rate)
+  list(GET _case 3 _max)
+  list(GET _case 4 _min)
+  list(GET _case 5 _pae)
+  list(GET _case 6 _mse)
+  list(GET _case 7 _modes)
+  list(GET _case 8 _extra)
+  separate_arguments(_extra)
+  add_test(NAME enc_${_t} COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/${_img}.ppm -o ${_t}.j2c -rate ${_rate} Cmodes=${_modes} ${_extra})
+  set_tests_properties(enc_${_t} PROPERTIES FAIL_REGULAR_EXPRESSION "WARNING")
+  add_test(NAME size_${_t} COMMAND ${CMAKE_COMMAND} -DFILE=${_t}.j2c -DMAX=${_max} -DMIN=${_min} -P ${_size_check})
+  set_tests_properties(size_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME dec_${_t} COMMAND open_htj2k_dec -i ${_t}.j2c -o ${_t}.ppm)
+  set_tests_properties(dec_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME comp_${_t} COMMAND imgcmp ${_t}.ppm ${ENCODER_REF_DIR}/${_img}.ppm ${_pae} ${_mse})
+  set_tests_properties(comp_${_t} PROPERTIES DEPENDS dec_${_t})
+  # The cut does not depend on the number of threads.
+  add_test(NAME enc_${_t}_st COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/${_img}.ppm -o ${_t}_st.j2c -rate ${_rate} Cmodes=${_modes} ${_extra} -num_threads 1)
+  add_test(NAME cmp_${_t}_st COMMAND ${CMAKE_COMMAND} -E compare_files ${_t}.j2c ${_t}_st.j2c)
+  set_tests_properties(cmp_${_t}_st PROPERTIES DEPENDS "enc_${_t};enc_${_t}_st")
+endforeach()
+
+# Several quality layers need the Part 1 block coder: with HT, a list of rates is rejected.
 add_test(NAME enc_rate_list_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate_list.j2c -rate 1,0.5)
 set_tests_properties(enc_rate_list_rejected PROPERTIES WILL_FAIL TRUE)

@@ -567,8 +567,10 @@ class openhtj2k_encoder_impl {
   // EXPERIMENTAL: HT cleanup pass this many bit-planes above the LSB, followed by
   // HT SigProp and MagRef passes (0 = cleanup pass only).  See set_ht_refinement().
   uint8_t ht_refine = 0;
-  // EXPERIMENTAL: codestream size the HT code-blocks are truncated to (0 = off).
+  // EXPERIMENTAL: codestream size the code-blocks are truncated to (0 = off), and the
+  // size of each quality layer with the layers below it (the last is target_size).
   uint64_t target_size = 0;
+  std::vector<uint64_t> layer_targets;
 
   size_t invoke_internal();
   void check_ht_refinement() const;
@@ -591,7 +593,14 @@ class openhtj2k_encoder_impl {
   void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
   void set_chroma_csf_reuse_luma(bool reuse_luma);
   void set_ht_refinement(uint8_t planes) { ht_refine = planes; }
-  void set_target_size(uint64_t bytes) { target_size = bytes; }
+  void set_target_size(uint64_t bytes) {
+    target_size = bytes;
+    layer_targets.assign(bytes ? 1 : 0, bytes);
+  }
+  void set_target_sizes(const std::vector<uint64_t> &bytes) {
+    layer_targets = bytes;
+    target_size   = bytes.empty() ? 0 : bytes.back();
+  }
   ~openhtj2k_encoder_impl();
   size_t invoke_line_based();
   size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
@@ -620,10 +629,17 @@ void openhtj2k_encoder_impl::check_ht_refinement() const {
 void openhtj2k_encoder_impl::check_rate_control() const {
   if (target_size == 0) return;
   const char *why = nullptr;
+  bool rising     = true;
+  for (size_t l = 0; l < layer_targets.size(); ++l)
+    if (layer_targets[l] == 0 || (l > 0 && layer_targets[l] < layer_targets[l - 1])) rising = false;
   if (cod->transformation != 0)
     why = "the irreversible 9/7 wavelet (Creversible=no)";
-  else if (cod->number_of_layers != 1)
-    why = "one quality layer";
+  else if (layer_targets.size() != cod->number_of_layers)
+    why = "one target per quality layer";
+  else if (!rising)
+    why = "positive targets that do not decrease from layer to layer";
+  else if (layer_targets.size() > 1 && (cod->codeblock_style & HT))
+    why = "the Part 1 block coder (Cmodes without HT) for more than one quality layer";
   else if (qfactor != NO_QFACTOR)
     why = "a base step size instead of Qfactor";
   else if (ht_refine != 0)
@@ -665,10 +681,20 @@ void openhtj2k_encoder_impl::apply_rate_control(j2k_tile *tiles, uint32_t num_ti
   const uint64_t fixed = fixed_bytes(main_header, num_tiles);
   const uint64_t total = (cod->codeblock_style & HT)
                              ? ht_rate_control(tiles, num_tiles, fixed, target_size)
-                             : p1_rate_control(tiles, num_tiles, fixed, target_size);
+                             : p1_rate_control(tiles, num_tiles, fixed, layer_targets);
   if (total > target_size)
     printf("WARNING: the codestream takes %llu bytes, more than the target %llu.\n",
            static_cast<unsigned long long>(total), static_cast<unsigned long long>(target_size));
+  // The lower quality layers (the packet headers are built).
+  for (size_t l = 0; l + 1 < layer_targets.size(); ++l) {
+    uint64_t bytes = fixed;
+    for (uint32_t t = 0; t < num_tiles; ++t) bytes += tiles[t].get_layers_size(static_cast<uint16_t>(l));
+    if (bytes > layer_targets[l])
+      printf(
+          "WARNING: quality layer %zu and the layers below it take %llu bytes, more than the target "
+          "%llu.\n",
+          l, static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(layer_targets[l]));
+  }
 }
 
 void openhtj2k_encoder_impl::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
@@ -1143,6 +1169,10 @@ void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
 void openhtj2k_encoder::set_ht_refinement(uint8_t planes) { this->impl->set_ht_refinement(planes); }
 
 void openhtj2k_encoder::set_target_size(uint64_t bytes) { this->impl->set_target_size(bytes); }
+
+void openhtj2k_encoder::set_target_sizes(const std::vector<uint64_t> &bytes) {
+  this->impl->set_target_sizes(bytes);
+}
 
 void openhtj2k_encoder::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
   this->impl->set_visual_weighting(model, ref_ppd, zoom);

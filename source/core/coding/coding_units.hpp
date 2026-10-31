@@ -159,14 +159,15 @@ struct ht_rd_plane {
 // the planes above (ht_rate_control.cpp).  Distortions are sums of squared errors in steps.
 // A truncation point of a Part 1 (EBCOT) code-block: the end of one coding pass.  Cut
 // there, the code-block keeps the first `keep` bytes of its codeword segments and ends
-// the last one with the tail_len bytes in tail, which terminate it at that pass; seg_len
-// is what the encoder put in pass_length[] for the pass (a segment's length on its last
-// pass, otherwise 0), and ends_segment tells whether the encoder terminated a segment
-// there.  D is the squared error left after the pass, in the units of ht_rd_plane
-// (doubled errors).
+// the last one with the tail_len bytes in tail, which terminate it at that pass;
+// ends_segment tells whether the encoder terminated a segment there (keep is then the
+// segment's end).  D is the squared error left after the pass, in the units of
+// ht_rd_plane (doubled errors).  With quality layers, a cut that later layers continue
+// cannot be terminated: `pre` is the length of the shortest prefix of the coded data that
+// decodes every pass up to this one (keep when the pass ends a segment).
 struct p1_rd_pass {
   uint32_t keep     = 0;
-  uint32_t seg_len  = 0;
+  uint32_t pre      = 0;
   double D          = 0;
   uint8_t tail_len  = 0;
   bool ends_segment = false;
@@ -183,6 +184,7 @@ struct ht_rd_info {
   std::unique_ptr<p1_rd_pass[]> p1;
   uint8_t p1_passes = 0;
   uint8_t p1_zbp    = 0;
+  bool p1_prefix    = false;  // record the prefix lengths (quality layers)
   // Measurement (ht_rd_stats).
   uint8_t msb     = 0;  // magnitude bit-planes (0: nothing significant)
   uint8_t j0      = 0;  // first plane measured; planes[j - j0] for j0 <= j < msb

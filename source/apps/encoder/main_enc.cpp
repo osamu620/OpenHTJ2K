@@ -68,6 +68,13 @@ static uint64_t target_bytes(double bpp, uint32_t w, uint32_t h) {
   return (bytes < 1.0) ? 1 : static_cast<uint64_t>(bytes);
 }
 
+// The bytes of each quality layer's target rate.
+static std::vector<uint64_t> target_bytes(const std::vector<double> &bpp, uint32_t w, uint32_t h) {
+  std::vector<uint64_t> bytes;
+  for (double r : bpp) bytes.push_back(target_bytes(r, w, h));
+  return bytes;
+}
+
 int main(int argc, char *argv[]) {
   j2k_argset args(argc, argv);  // parsed command line
   std::vector<std::string> fnames = args.ifnames;
@@ -166,7 +173,8 @@ int main(int argc, char *argv[]) {
     cod_s.use_SOP                       = args.is_use_sop();
     cod_s.use_EPH                       = args.is_use_eph();
     cod_s.progression_order             = args.get_progression();
-    cod_s.number_of_layers              = 1;
+    cod_s.number_of_layers =
+        static_cast<uint16_t>(args.get_target_rates().empty() ? 1 : args.get_target_rates().size());
     cod_s.use_color_trafo               = args.get_ycc();
     cod_s.dwt_levels                    = args.get_dwt_levels();
     cod_s.codeblock_style               = args.get_cblk_modes();
@@ -186,7 +194,8 @@ int main(int argc, char *argv[]) {
       const int extra = (args.get_target_rate() > 0.0) ? 3 : 0;
       qcd_s.base_step = 1.0f / static_cast<float>(1u << (bd_s + extra));
     }
-    const uint64_t target_s = target_bytes(args.get_target_rate(), image_size_s.x, image_size_s.y);
+    const std::vector<uint64_t> target_s =
+        target_bytes(args.get_target_rates(), image_size_s.x, image_size_s.y);
 
     std::vector<int32_t *> empty_input;
     uint8_t color_space_s = args.jph_color_space;
@@ -198,7 +207,7 @@ int main(int argc, char *argv[]) {
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
       encoder.set_ht_refinement(args.get_ht_refine());
-      encoder.set_target_size(target_s);
+      encoder.set_target_sizes(target_s);
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based_stream(
@@ -260,7 +269,8 @@ int main(int argc, char *argv[]) {
     cod.use_SOP                       = args.is_use_sop();
     cod.use_EPH                       = args.is_use_eph();
     cod.progression_order             = args.get_progression();
-    cod.number_of_layers              = 1;
+    cod.number_of_layers =
+        static_cast<uint16_t>(args.get_target_rates().empty() ? 1 : args.get_target_rates().size());
     cod.use_color_trafo               = args.get_ycc();
     cod.dwt_levels                    = args.get_dwt_levels();
     cod.codeblock_style               = args.get_cblk_modes();
@@ -279,7 +289,7 @@ int main(int argc, char *argv[]) {
       const int extra = (args.get_target_rate() > 0.0) ? 3 : 0;
       qcd.base_step   = 1.0f / static_cast<float>(1u << (img.get_max_bpp() + extra));
     }
-    const uint64_t target = target_bytes(args.get_target_rate(), image_size.x, image_size.y);
+    const std::vector<uint64_t> target = target_bytes(args.get_target_rates(), image_size.x, image_size.y);
     uint8_t color_space   = args.jph_color_space;
 
     for (int i = 0; i < num_iterations; ++i) {
@@ -290,7 +300,7 @@ int main(int argc, char *argv[]) {
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
       encoder.set_component_types(args.get_csf_ctype(0), args.get_csf_ctype(1), args.get_csf_ctype(2));
       encoder.set_ht_refinement(args.get_ht_refine());
-      encoder.set_target_size(target);
+      encoder.set_target_sizes(target);
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       try {
         total_size = encoder.invoke_line_based();

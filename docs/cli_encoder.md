@@ -126,7 +126,7 @@ JPH file format.
 
 ### Rate control
 
-- `-rate Float` *(experimental)*
+- `-rate Float[,Float...]` *(experimental)*
   - Target bit rate in bits per pixel of the image area: the codestream (without
     any JPH boxes) takes at most `rate × width × height / 8` bytes, usually within
     a few bytes of it. Every code-block is cut at the truncation point that gives
@@ -136,10 +136,19 @@ JPH file format.
     - Part 1 block coder (`Cmodes=0` or its mode switches, all of which work):
       after any of its coding passes. The codeword is terminated there, so the
       codestream is one any JPEG 2000 decoder reads.
-  - One quality layer: it takes a single rate, not a list.
-  - Requires `Creversible=no` (the default) and one quality layer; not with
-    `Qfactor` or `Cht_refine`. `Qstep` is the finest step size it can reach;
-    without it, `-rate` uses `1/2^(bit depth + 3)`.
+  - Quality layers (Part 1 block coder only): a comma-separated list of rates
+    makes one quality layer per rate, in increasing order of rate whatever the
+    order given. Layer `l` and the layers below it take at most the `l`-th lowest
+    rate's bytes, so a decoder that stops after a layer (OpenJPEG `-l`, for
+    example) gets an image at that rate. The layers are placed from the lowest,
+    each at the least squared error given the layers below it. A code-block cut
+    that a later layer continues ends at the shortest prefix of its codeword that
+    decodes the passes so far; its last cut is terminated, as with one rate. On
+    the images measured, each layer of a five-layer codestream is within 0.05 dB
+    of a one-layer codestream at the same rate.
+  - Requires `Creversible=no` (the default); not with `Qfactor` or
+    `Cht_refine`. `Qstep` is the finest step size it can reach; without it,
+    `-rate` uses `1/2^(bit depth + 3)`.
   - The output does not depend on the number of threads. AVX2 and AVX-512 builds
     give the same codestream.
   - On a 3840x2160 12-bit image, compared with an encode at the fixed step size
@@ -172,6 +181,9 @@ open_htj2k_enc -i input.ppm -o out.jph Qfactor=90
 
 # Lossy encode to 1 bit per pixel (experimental rate control)
 open_htj2k_enc -i input.ppm -o out.j2c -rate 1
+
+# Part 1 codestream in three quality layers: 0.25, 0.5 and 1 bit per pixel
+open_htj2k_enc -i input.ppm -o out.j2c Cmodes=0 -rate 0.25,0.5,1
 
 # Encode YCbCr components into a JPH file with explicit color space
 open_htj2k_enc -i Y.pgx,Cb.pgx,Cr.pgx -o out.jph -jph_color_space YCC
