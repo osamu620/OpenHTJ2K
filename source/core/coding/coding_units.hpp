@@ -135,6 +135,59 @@ class j2k_region {
   j2k_region(element_siz p0, element_siz p1) : pos0(p0), pos1(p1), stride(round_up(pos1.x - pos0.x, 32U)) {}
 };
 
+class ht_rc_state;
+
+/********************************************************************************
+ * Rate control (EXPERIMENTAL): measurements and coded set of an HT code-block
+ *******************************************************************************/
+// One bit-plane j of an HT code-block, over the magnitudes m of its samples (in steps of
+// the code-block's base step): C counts the samples with m >= 2^j and CQ the quads (2 x 2)
+// holding one; E2 sums (2m + 1)^2 over the samples with 0 < m < 2^j (twice their error when
+// left out); R2 sums the square of 2(m mod 2^j) + 1 - 2^j (twice the error after a cleanup
+// pass at plane j) over the samples with m >= 2^j, and R2up the same over m >= 2^(j + 1).
+struct ht_rd_plane {
+  uint32_t C, CQ;
+  double E2, R2, R2up;
+};
+
+// An HT set coded at cleanup plane p has three truncation points: the cleanup pass alone,
+// with the SigProp pass of plane p - 1, and with SigProp and MagRef.  The rate control
+// keeps their exact lengths and distortions, and the measurements that model the sets at
+// the planes above (ht_rate_control.cpp).  Distortions are sums of squared errors in steps.
+struct ht_rd_info {
+  // Set when the code-blocks are registered.
+  double w     = 0;  // weight of a squared error in the image
+  uint16_t cls = 0;  // subband class of the threshold estimate
+  // Measurement (ht_rd_stats).
+  uint8_t msb     = 0;  // magnitude bit-planes (0: nothing significant)
+  uint8_t j0      = 0;  // first plane measured; planes[j - j0] for j0 <= j < msb
+  uint32_t nquads = 0;
+  double D2zero   = 0;  // sum of (2m + 1)^2 over the samples with m > 0
+  std::unique_ptr<ht_rd_plane[]> planes;
+  // The model's convex hull for the threshold estimate: (slope bin, rate) of each step.
+  std::unique_ptr<std::pair<uint16_t, double>[]> steps;
+  uint8_t nsteps = 0;
+  // The coded set (ht_rd_code; replaced when the set is transcoded).
+  double lambda   = 0;  // threshold the set is coded for
+  uint8_t p_coded = 0;
+  uint8_t sp_tail = 0;      // last byte of the refinement segment cut after SigProp
+  bool refined    = false;  // the coded set has its SigProp and MagRef passes
+  bool skipped    = false;  // not coded at all: left out at any threshold near the estimate
+  uint32_t Lcup = 0, Lsp = 0, Lref = 0;
+  double Dcup = 0, Dsp = 0, Dmr = 0;
+  // Scheduling: counters the coding of the code-block decrements (nullptr: none), and
+  // whether its measuring is done.
+  std::atomic<int> *slot_cnt = nullptr, *done_cnt = nullptr;
+  std::atomic<bool> measured{false};
+};
+
+// Lengths an HT set's refinement passes report to the rate control.
+struct ht_refinement_info {
+  uint32_t Lsp    = 0;        // refinement segment cut after SigProp
+  uint8_t sp_tail = 0;        // its last byte, which differs from the full segment's
+  uint64_t *newly = nullptr;  // optional: per stripe word, the samples SigProp made significant
+};
+
 /********************************************************************************
  * j2k_codeblock
  *******************************************************************************/
@@ -195,6 +248,9 @@ class j2k_codeblock : public j2k_region {
   // Clamped per block so that the cleanup pass keeps a significant sample.
   uint8_t ht_refine_planes = 0;
   uint32_t pre_or_val      = 0;
+  // Rate control (EXPERIMENTAL): the truncation points of this HT code-block, or nullptr
+  // when the encoder does not truncate to a target size.
+  ht_rd_info *rd = nullptr;
 
   j2k_codeblock(const uint32_t &idx, uint8_t orientation, uint8_t M_b, uint8_t R_b, uint8_t transformation,
                 float stepsize, uint32_t band_stride, sprec_t *ibuf, uint32_t offset,
@@ -230,6 +286,21 @@ class j2k_codeblock : public j2k_region {
   //  OPENHTJ2K_NODISCARD uint8_t get_signLUT_index(const uint32_t &j1, const uint32_t &j2) const;
   OPENHTJ2K_NODISCARD uint8_t get_Mb() const;
   uint8_t *get_compressed_data();
+  // Rate control: take the compressed data out of the code-block (pooled: owned by a
+  // cblk_data_pool, otherwise malloc'ed and now the caller's), or put data in.
+  uint8_t *detach_compressed_data(bool &pooled) {
+    uint8_t *p           = compressed_data;
+    pooled               = compressed_is_pooled;
+    compressed_data      = nullptr;
+    current_address      = nullptr;
+    compressed_is_pooled = false;
+    return p;
+  }
+  void attach_compressed_data(uint8_t *buf, bool pooled) {
+    compressed_data      = buf;
+    current_address      = buf;
+    compressed_is_pooled = pooled;
+  }
   void set_compressed_data(uint8_t *buf, uint16_t size, uint16_t Lref = 0);
   // Copies an HT refinement segment of Lref bytes after the cleanup segment of
   // `length` bytes, into the space set_compressed_data() reserved for it, and
@@ -781,6 +852,16 @@ class j2k_tile : public j2k_tile_base {
     // every byte counts because InlineTask only holds 32 bytes of captures
     // and we also need to capture the per-strip slot_remaining pointer.
     std::atomic<int> *tile_remaining = nullptr;
+    // Rate control (EXPERIMENTAL): the threshold estimate and the code-blocks measured but
+    // not coded yet, in the order measured (rc_flush()).
+    struct RcPending {
+      j2k_codeblock *block;
+      const void *strip;  // the strip pipeline level that measured it (nullptr: a precinct)
+      int32_t br;         // and the strip
+      uint8_t ROIshift;
+    };
+    ht_rc_state *rc = nullptr;
+    std::vector<RcPending> rc_pending;
     // Grow-only scratch buffer for codeblock sample data during HT block encoding.
     // Allocated once per tile (sized to the largest resolution's codeblock count) and
     // reused across all resolution levels and precincts.
@@ -901,6 +982,13 @@ class j2k_tile : public j2k_tile_base {
   // in component 0's rows (enc_img_y0), which the row source counts from.
   std::vector<uint32_t> enc_img_x0;
   uint32_t enc_img_y0 = 0;
+  // Rate control (EXPERIMENTAL): when enc_rate_control is set before enc_init(), every HT
+  // code-block keeps its measurements and coded set in enc_rd, the encode codes them for
+  // the threshold estimate in enc_rc (set before the encode), and leaves the packet headers
+  // to the rate control, which truncates the code-blocks first (ht_rate_control.hpp).
+  bool enc_rate_control = false;
+  std::vector<ht_rd_info> enc_rd;
+  ht_rc_state *enc_rc = nullptr;
   // Initialization with tile-index
   void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
                 bool line_based = false, bool streaming = false);
@@ -913,6 +1001,9 @@ class j2k_tile : public j2k_tile_base {
   // streaming line-based encoding: pulls rows via callback instead of pre-allocated buffer
   uint8_t *encode_line_based_stream(std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn,
                                     const std::vector<uint32_t> &img_comp_widths);
+  // Builds the packet header of every precinct from its code-blocks' passes and lengths,
+  // and sets the tile length.  Can be called again after the code-blocks change.
+  void build_packet_headers();
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination
@@ -928,6 +1019,8 @@ class j2k_tile : public j2k_tile_base {
   // getters
   OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint16_t get_numlayers() const { return this->numlayers; }
   j2k_tile_component *get_tile_component(uint16_t c);
+  OPENHTJ2K_NODISCARD uint16_t get_num_components() const { return this->num_components; }
+  OPENHTJ2K_NODISCARD bool uses_MCT() const { return this->MCT != 0; }
 
   OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_MAYBE_UNUSED uint8_t get_byte_from_tile_buf();
   OPENHTJ2K_MAYBE_UNUSED uint8_t get_bit_from_tile_buf();
@@ -940,9 +1033,15 @@ class j2k_tile : public j2k_tile_base {
 // cleanup coders reserve this much after the cleanup segment when refsegment is set.
 constexpr uint32_t HT_MAX_LREF = 2046;
 
+// Sets the code-block data pool of the calling thread (nullptr: code-block data is
+// malloc'ed) and returns the previous one.
+cblk_data_pool *swap_thread_cblk_pool(cblk_data_pool *pool);
+
 int32_t htj2k_cleanup_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
-int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift) noexcept;
+// info, when given, receives the lengths needed to cut the refinement segment after SigProp.
+int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift,
+                             ht_refinement_info *info = nullptr) noexcept;
 int32_t ebcot_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept;
 // Block-coder dispatch on the code-block style: HT (Part 15) or EBCOT (Part 1).
 inline int32_t encode_codeblock(j2k_codeblock *block, uint8_t ROIshift) noexcept {

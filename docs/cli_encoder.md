@@ -124,6 +124,24 @@ JPH file format.
     frequency mapping — an A/B switch separating shape from mapping.
   - See [`qfactor.md`](qfactor.md) for the analytic visual-weighting model.
 
+### Rate control
+
+- `-rate Float` *(experimental, HT only)*
+  - Target bit rate in bits per pixel of the image area: the codestream (without
+    any JPH boxes) takes at most `rate × width × height / 8` bytes, usually within
+    a few bytes of it. Each HT code-block is cut to the truncation point of an HT
+    set (cleanup pass, with SigProp, or with SigProp and MagRef, at any bit-plane)
+    that gives the least squared error over the whole image.
+  - One quality layer: it takes a single rate, not a list.
+  - Requires `Creversible=no` (the default), the HT block coder and one quality
+    layer; not with `Qfactor` or `Cht_refine`. `Qstep` is the finest step size it
+    can reach; without it, `-rate` uses `1/2^(bit depth + 3)`.
+  - The output does not depend on the number of threads. AVX2 and AVX-512 builds
+    give the same codestream.
+  - On a 3840x2160 12-bit image at 0.96 bpp, an encode with `-rate` takes about
+    1.1 times as long as one with a fixed step size of the same size on all
+    threads, 1.8 times on one.
+
 ### JPH and component layout
 
 - `-jph_color_space RGB|YCC`
@@ -147,6 +165,9 @@ open_htj2k_enc -i input.ppm -o out.j2c Creversible=yes
 
 # Lossy encode at quality 90, write to JPH file format
 open_htj2k_enc -i input.ppm -o out.jph Qfactor=90
+
+# Lossy encode to 1 bit per pixel (experimental rate control)
+open_htj2k_enc -i input.ppm -o out.j2c -rate 1
 
 # Encode YCbCr components into a JPH file with explicit color space
 open_htj2k_enc -i Y.pgx,Cb.pgx,Cr.pgx -o out.jph -jph_color_space YCC

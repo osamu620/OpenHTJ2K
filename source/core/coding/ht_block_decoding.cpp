@@ -1138,6 +1138,28 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   return htj2k_decode_su(block, htj2k_dec_setup(block), ROIshift);
 }
 
+bool htj2k_decode_cleanup_raw(j2k_codeblock *block) {
+  const ht_dec_setup su = htj2k_dec_setup(block);
+  if (!su.ok) return false;
+  if (su.empty) return true;
+
+  const uint16_t QW  = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
+  const uint16_t QH  = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));
+  const int32_t sstr = static_cast<int32_t>(((block->size.x + 2) + 7u) & ~7u);  // multiples of 8
+
+  uint16_t scratch[8 * 513];
+  ht_step1_lane ln;
+  ln.Dcup            = block->get_compressed_data();
+  ln.Lcup            = su.Lcup;
+  ln.Scup            = su.Scup;
+  ln.scratch         = scratch;
+  ln.block_states    = block->block_states;
+  ln.blkstate_stride = block->blkstate_stride;
+  ht_cleanup_step1_nway<1, true>(&ln, QW, QH, sstr);
+  ht_cleanup_step2<>(block, static_cast<uint8_t>(30 - su.S_blk), su.Pcup, scratch, sstr);
+  return true;
+}
+
 // Number of codeblocks whose step-1 chains are decoded in lockstep.
   #ifndef OPENHTJ2K_HT_DEC_BATCH_N
     #define OPENHTJ2K_HT_DEC_BATCH_N 2

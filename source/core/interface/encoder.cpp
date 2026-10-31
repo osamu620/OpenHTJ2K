@@ -32,6 +32,7 @@
 #include <j2kmarkers.hpp>
 #include "encoder.hpp"
 #include "coding_units.hpp"
+#include "ht_rate_control.hpp"
 #include "jph.hpp"
 #include "ThreadPool.hpp"
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
@@ -566,9 +567,21 @@ class openhtj2k_encoder_impl {
   // EXPERIMENTAL: HT cleanup pass this many bit-planes above the LSB, followed by
   // HT SigProp and MagRef passes (0 = cleanup pass only).  See set_ht_refinement().
   uint8_t ht_refine = 0;
+  // EXPERIMENTAL: codestream size the HT code-blocks are truncated to (0 = off).
+  uint64_t target_size = 0;
 
   size_t invoke_internal();
   void check_ht_refinement() const;
+  void check_rate_control() const;
+  // Codestream bytes outside the tile-parts (SOC, main header with the TLM marker that
+  // multi-tile codestreams get, EOC); main_header is complete except for the TLM marker.
+  static uint64_t fixed_bytes(j2k_main_header &main_header, uint32_t num_tiles);
+  // The threshold estimate the code-blocks are coded for, with every tile's code-blocks.
+  std::unique_ptr<ht_rc_state> start_rate_control(j2k_tile *tiles, uint32_t num_tiles,
+                                                  j2k_main_header &main_header) const;
+  // Truncates the code-blocks of every tile to the target size and builds their packet
+  // headers.
+  void apply_rate_control(j2k_tile *tiles, uint32_t num_tiles, j2k_main_header &main_header) const;
 
  public:
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
@@ -578,6 +591,7 @@ class openhtj2k_encoder_impl {
   void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
   void set_chroma_csf_reuse_luma(bool reuse_luma);
   void set_ht_refinement(uint8_t planes) { ht_refine = planes; }
+  void set_target_size(uint64_t bytes) { target_size = bytes; }
   ~openhtj2k_encoder_impl();
   size_t invoke_line_based();
   size_t invoke_line_based_stream(std::function<void(uint32_t, int32_t **, uint16_t)> src_fn);
@@ -601,6 +615,58 @@ void openhtj2k_encoder_impl::check_ht_refinement() const {
     printf("ERROR: HT SigProp/MagRef refinement requires the HT block coder.\n");
     throw std::exception();
   }
+}
+
+void openhtj2k_encoder_impl::check_rate_control() const {
+  if (target_size == 0) return;
+  const char *why = nullptr;
+  if ((cod->codeblock_style & HT) == 0)
+    why = "the HT block coder";
+  else if (cod->transformation != 0)
+    why = "the irreversible 9/7 wavelet (Creversible=no)";
+  else if (cod->number_of_layers != 1)
+    why = "one quality layer";
+  else if (qfactor != NO_QFACTOR)
+    why = "a base step size instead of Qfactor";
+  else if (ht_refine != 0)
+    why = "Cht_refine=0";
+  if (why != nullptr) {
+    printf("ERROR: a target size requires %s.\n", why);
+    throw std::exception();
+  }
+}
+
+uint64_t openhtj2k_encoder_impl::fixed_bytes(j2k_main_header &main_header, uint32_t num_tiles) {
+  // The TLM marker takes 6 bytes and 6 per tile.
+  j2c_dst_memory hdr;
+  hdr.put_word(_SOC);
+  main_header.flush(hdr);
+  uint64_t fixed = hdr.get_length() + 2;
+  if (num_tiles > 1) fixed += 6 + 6 * static_cast<uint64_t>(num_tiles);
+  return fixed;
+}
+
+std::unique_ptr<ht_rc_state> openhtj2k_encoder_impl::start_rate_control(
+    j2k_tile *tiles, uint32_t num_tiles, j2k_main_header &main_header) const {
+  // The code-blocks' share: the target less the fixed bytes, the tile-part markers and
+  // (a guess, for the estimate only) 1.5% for the packet headers.
+  const uint64_t fixed = fixed_bytes(main_header, num_tiles) + 14 * static_cast<uint64_t>(num_tiles);
+  const double room    = (target_size > fixed) ? static_cast<double>(target_size - fixed) : 0.0;
+  auto rc              = MAKE_UNIQUE<ht_rc_state>(static_cast<uint64_t>(room * 0.985));
+  for (uint32_t i = 0; i < num_tiles; ++i) {
+    rc->add_tile(tiles[i]);
+    tiles[i].enc_rc = rc.get();
+  }
+  return rc;
+}
+
+void openhtj2k_encoder_impl::apply_rate_control(j2k_tile *tiles, uint32_t num_tiles,
+                                                j2k_main_header &main_header) const {
+  const uint64_t total =
+      ht_rate_control(tiles, num_tiles, fixed_bytes(main_header, num_tiles), target_size);
+  if (total > target_size)
+    printf("WARNING: the codestream takes %llu bytes, more than the target %llu.\n",
+           static_cast<unsigned long long>(total), static_cast<unsigned long long>(target_size));
 }
 
 void openhtj2k_encoder_impl::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
@@ -753,11 +819,15 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   }
 
   check_ht_refinement();
+  check_rate_control();
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
   for (uint16_t i = 0; i < static_cast<uint16_t>(numTiles.x * numTiles.y); ++i) {
-    tileSet[i].enc_ht_refine = ht_refine;
+    tileSet[i].enc_ht_refine    = ht_refine;
+    tileSet[i].enc_rate_control = (target_size != 0);
     tileSet[i].enc_init(i, main_header, *buf, true);
   }
+  std::unique_ptr<ht_rc_state> rc;
+  if (target_size != 0) rc = start_rate_control(tileSet.get(), numTiles.x * numTiles.y, main_header);
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; ++i) {
     tileSet[i].perform_dc_offset(main_header);
     tileSet[i].rgb_to_ycbcr();
@@ -765,6 +835,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   }
 
   const uint32_t num_tiles = numTiles.x * numTiles.y;
+  if (target_size != 0) apply_rate_control(tileSet.get(), num_tiles, main_header);
 
   // Multi-tile: generate TLM marker from computed tile-part lengths.
   if (num_tiles > 1) {
@@ -949,11 +1020,15 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   std::vector<int32_t *> empty_buf;
   const uint32_t num_tiles_lbs = numTiles.x * numTiles.y;
   check_ht_refinement();
+  check_rate_control();
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(num_tiles_lbs));
   for (uint16_t i = 0; i < static_cast<uint16_t>(num_tiles_lbs); ++i) {
-    tileSet[i].enc_ht_refine = ht_refine;
+    tileSet[i].enc_ht_refine    = ht_refine;
+    tileSet[i].enc_rate_control = (target_size != 0);
     tileSet[i].enc_init(i, main_header, empty_buf, true, true);
   }
+  std::unique_ptr<ht_rc_state> rc;
+  if (target_size != 0) rc = start_rate_control(tileSet.get(), num_tiles_lbs, main_header);
   for (uint32_t i = 0; i < num_tiles_lbs; ++i) {
     std::vector<uint32_t> img_comp_widths(static_cast<size_t>(siz->Csiz));
     for (size_t c = 0; c < siz->Csiz; ++c) {
@@ -964,6 +1039,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     tileSet[i].perform_dc_offset(main_header);
     tileSet[i].encode_line_based_stream(src_fn, img_comp_widths);
   }
+  if (target_size != 0) apply_rate_control(tileSet.get(), num_tiles_lbs, main_header);
 
   // Multi-tile: generate TLM marker from computed tile-part lengths.
   if (num_tiles_lbs > 1) {
@@ -1063,6 +1139,8 @@ void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
 }
 
 void openhtj2k_encoder::set_ht_refinement(uint8_t planes) { this->impl->set_ht_refinement(planes); }
+
+void openhtj2k_encoder::set_target_size(uint64_t bytes) { this->impl->set_target_size(bytes); }
 
 void openhtj2k_encoder::set_visual_weighting(uint8_t model, double ref_ppd, double zoom) {
   this->impl->set_visual_weighting(model, ref_ppd, zoom);

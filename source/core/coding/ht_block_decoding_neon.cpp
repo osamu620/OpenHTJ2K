@@ -930,6 +930,20 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   }
 }
 
+bool htj2k_decode_cleanup_raw(j2k_codeblock *block) {
+  // The encoder's own data: one cleanup segment of pass_length[0] bytes.
+  const auto Lcup = static_cast<int32_t>(block->pass_length[0]);
+  if (Lcup < 2 || static_cast<uint32_t>(Lcup) > block->length || block->num_ZBP >= 30) return false;
+  uint8_t *Dcup   = block->get_compressed_data();
+  const auto Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
+  if (Scup < 2 || Scup > Lcup || Scup > 4079) return false;
+  // modDcup
+  Dcup[Lcup - 1] = 0xFF;
+  Dcup[Lcup - 2] |= 0x0F;
+  ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - block->num_ZBP), Lcup, Lcup - Scup, Scup);
+  return true;
+}
+
 bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   // number of placeholder pass
   uint8_t P0 = 0;
