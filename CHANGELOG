@@ -1,3 +1,32 @@
+# [Unreleased]
+
+## Added
+
+### Encoder
+- Experimental rate control for the Part 1 block coder: `-rate R` (and
+  `openhtj2k_encoder::set_target_size()`) now also works with `Cmodes=0` and
+  any combination of the Part 1 mode switches. Every coding pass is a
+  truncation point: while a code-block is coded, the encoder records the
+  squared error each pass removes (exactly, per sample) and where a cut after
+  it would end. That is the coded bytes so far plus the few bytes that
+  terminate the codeword there, which a copy of the arithmetic coder (or of
+  the raw coder, with BYPASS) computes. The final cut picks every code-block's
+  last pass at one slope threshold over the image, with the packet headers
+  measured, and terminates the code-block there, so the codestream is valid
+  for any JPEG 2000 decoder. OpenJPEG decodes the result to within 1 code
+  value of our decoder in every mode combination tested, including with tiles,
+  odd image sizes and 4 x 1024 code-blocks. Each code-block is coded only down
+  to the bit-plane under the one the running threshold estimate of the HT rate
+  control points to. That estimate uses the HT models, whose rates are 8-30%
+  above Part 1's, so it gets 1.4 times the budget. On a 3840x2160 12-bit image
+  at 1 bpp the encode takes 2.4 times as long as a fixed-step Part 1 encode of
+  the same size on one thread and about 1.1 times with all threads. It gives
+  35.23 dB, against 35.25 dB for that fixed step size and 34.32 dB for HT with
+  `-rate`; on a 16-bit 4096x2160 frame of Elephants Dream at 2 bpp, 92.1 dB
+  against 86.5 dB (fixed step) and 86.7 dB (HT). Coding every pass instead
+  gives the same PSNR within 0.01 dB on the images measured, except 0.1 dB
+  more on that frame at 2 bpp. Without a target, Part 1 output is unchanged.
+
 # [0.22.0] - 2026-10-31
 
 Feature release. The encoder gains rate control for HTJ2K: `-rate R` cuts the

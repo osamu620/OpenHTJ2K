@@ -112,10 +112,11 @@ void print_help(char *cmd) {
       "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
       "YCbCr, use YCC.\n");
   printf(
-      "-rate Float  (EXPERIMENTAL, HT only, irreversible)\n"
-      "  Target bit rate of the codestream in bits per pixel (one quality layer). The HT\n"
-      "  code-blocks are cut to fit it at the least squared error. Qstep is the finest step\n"
-      "  size it can reach; its default with -rate is 1/2^(bit depth + 3). Not with Qfactor.\n");
+      "-rate Float  (EXPERIMENTAL, irreversible)\n"
+      "  Target bit rate of the codestream in bits per pixel (one quality layer). The\n"
+      "  code-blocks, HT or Part 1 (Cmodes=0 and its mode switches), are cut to fit it at\n"
+      "  the least squared error. Qstep is the finest step size it can reach; its default\n"
+      "  with -rate is 1/2^(bit depth + 3). Not with Qfactor.\n");
   printf(
       "-num_threads Int\n"
       "  number of threads to use in encode or decode\n"

@@ -1319,7 +1319,7 @@ static void rc_flush(j2k_tile::EncodePoolCtx *epc, size_t upto) {
         const uint8_t ROIshift = e.ROIshift;
         return [epc, block, ROIshift]() {
           g_cblk_pool = claim_cblk_pool(epc);
-          ht_rd_code(block, ROIshift);
+          (block->Cmodes & HT) ? ht_rd_code(block, ROIshift) : p1_rd_code(block, ROIshift);
           g_cblk_pool = nullptr;
           if (block->rd->slot_cnt) block->rd->slot_cnt->fetch_sub(1, std::memory_order_release);
           if (block->rd->done_cnt) block->rd->done_cnt->fetch_sub(1, std::memory_order_release);
@@ -1332,7 +1332,8 @@ static void rc_flush(j2k_tile::EncodePoolCtx *epc, size_t upto) {
     for (size_t i = 0; i < upto; ++i) {
       j2k_codeblock *block = epc->rc_pending[i].block;
       g_cblk_pool          = epc->pools[0].get();
-      ht_rd_code(block, epc->rc_pending[i].ROIshift);
+      (block->Cmodes & HT) ? ht_rd_code(block, epc->rc_pending[i].ROIshift)
+                           : p1_rd_code(block, epc->rc_pending[i].ROIshift);
       g_cblk_pool = nullptr;
       if (block->rd->slot_cnt) block->rd->slot_cnt->fetch_sub(1, std::memory_order_release);
     }
@@ -6579,7 +6580,8 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   }
 
   if (enc_ht_refine || enc_rate_control) {
-    // Two rounds: count the HT code-blocks, then hand each its truncation-point record.
+    // Two rounds: count the code-blocks, then hand each its truncation-point record (rate
+    // control, HT and Part 1 alike) and each HT one its refinement planes.
     for (int round = 0; round < 2; ++round) {
       size_t n_ht = 0;
       for (uint16_t c = 0; c < num_components; c++) {
@@ -6593,9 +6595,10 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
               const uint32_t n          = cpb->num_codeblock_x * cpb->num_codeblock_y;
               for (uint32_t i = 0; i < n; i++) {
                 j2k_codeblock *block = cpb->access_codeblock(i);
-                if ((block->Cmodes & HT) == 0) continue;
+                const bool is_ht     = (block->Cmodes & HT) != 0;
+                if (!is_ht && !enc_rate_control) continue;
                 if (round == 1) {
-                  block->ht_refine_planes = enc_ht_refine;
+                  if (is_ht) block->ht_refine_planes = enc_ht_refine;
                   if (enc_rate_control) block->rd = &enc_rd[n_ht];
                 }
                 ++n_ht;

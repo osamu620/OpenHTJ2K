@@ -13,10 +13,11 @@
 // irreversible ones within a small tolerance.  Some cases also place the image
 // at an offset on the reference grid and split it into tiles, which moves the
 // subbands off the code-block grid.  The irreversible cases run again with a
-// target codestream size (rate control): each entry point's codestream must fit
-// the target and decode.  (They need not agree: the rate control estimates its
-// threshold from the code-blocks in the order they are coded, which differs
-// between the entry points.)
+// target codestream size (rate control), with the HT block coder and with the
+// Part 1 one: each entry point's codestream must fit the target and decode.
+// (They need not agree: the rate control estimates its threshold from the
+// code-blocks in the order they are coded, which differs between the entry
+// points.)
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
@@ -82,8 +83,9 @@ struct Layout {
   uint32_t ox, oy, tw, th;
 };
 
+// part1: the Part 1 block coder instead of HT.
 std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t>> &src, bool streaming,
-                            const Layout &lay, uint64_t target) {
+                            const Layout &lay, uint64_t target, bool part1) {
   open_htj2k::siz_params siz;
   siz.Rsiz   = 0;
   siz.Xsiz   = k.width + lay.ox;
@@ -110,7 +112,7 @@ std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t
   cod.number_of_layers  = 1;
   cod.use_color_trafo   = k.mct;
   cod.dwt_levels        = k.levels;
-  cod.codeblock_style   = 0x040;  // HT
+  cod.codeblock_style   = part1 ? 0x000 : 0x040;  // Part 1 default mode or HT
   cod.transformation    = k.transformation;
   open_htj2k::qcd_params qcd;
   qcd.is_derived          = false;
@@ -185,14 +187,14 @@ int main(int argc, char *argv[]) {
   const Depth depths[] = {{8, false}, {12, true}, {14, true}, {16, false}};
 
   int total = 0, failed = 0;
-  // target: codestream bytes for rate control, 0 for none.
-  auto run = [&](const Case &k, const Layout &lay, uint64_t target) {
+  // target: codestream bytes for rate control, 0 for none; part1: the Part 1 block coder.
+  auto run = [&](const Case &k, const Layout &lay, uint64_t target, bool part1) {
     ++total;
     std::string err;
     try {
       const auto planes   = make_planes(k);
-      const auto buffered = encode(k, planes, false, lay, target);
-      const auto stream   = encode(k, planes, true, lay, target);
+      const auto buffered = encode(k, planes, false, lay, target, part1);
+      const auto stream   = encode(k, planes, true, lay, target, part1);
       const long e        = max_error(k, buffered, planes);
       // 9/7 (with or without the ICT) at a step of 1/2^depth stays within a
       // few code values; the byte comparison above is the main check.  A target
@@ -214,11 +216,11 @@ int main(int argc, char *argv[]) {
     }
     if (!err.empty()) {
       ++failed;
-      printf("FAIL %s offset %u,%u tiles %ux%u%s: %s\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th,
-             target ? " (target size)" : "", err.c_str());
+      printf("FAIL %s offset %u,%u tiles %ux%u%s%s: %s\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th,
+             part1 ? " Part 1" : "", target ? " (target size)" : "", err.c_str());
     } else if (verbose) {
-      printf("ok   %s offset %u,%u tiles %ux%u%s\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th,
-             target ? " (target size)" : "");
+      printf("ok   %s offset %u,%u tiles %ux%u%s%s\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th,
+             part1 ? " Part 1" : "", target ? " (target size)" : "");
     }
   };
 
@@ -228,10 +230,13 @@ int main(int argc, char *argv[]) {
         for (uint8_t lv : lvls)
           for (auto &dp : depths) {
             const Case k{sz[0], sz[1], cp.nc, cp.mct, xf, lv, dp.bits, dp.is_signed};
-            run(k, Layout{0, 0, 0, 0}, 0);
+            run(k, Layout{0, 0, 0, 0}, 0, false);
             // One bit per sample, above what the headers take.
-            if (xf == 0)
-              run(k, Layout{0, 0, 0, 0}, std::max<uint64_t>(600, uint64_t{sz[0]} * sz[1] * cp.nc / 8));
+            const uint64_t target = std::max<uint64_t>(600, uint64_t{sz[0]} * sz[1] * cp.nc / 8);
+            if (xf == 0) {
+              run(k, Layout{0, 0, 0, 0}, target, false);
+              run(k, Layout{0, 0, 0, 0}, target, true);
+            }
           }
 
   // Images smaller than the DWT levels need: the coarsest levels then have
@@ -244,8 +249,11 @@ int main(int argc, char *argv[]) {
       for (uint8_t xf = 0; xf < 2; ++xf)
         for (uint8_t lv : tiny_lvls) {
           const Case k{sz[0], sz[1], cp.nc, cp.mct, xf, lv, 8, false};
-          run(k, Layout{0, 0, 0, 0}, 0);
-          if (xf == 0) run(k, Layout{0, 0, 0, 0}, 2000);
+          run(k, Layout{0, 0, 0, 0}, 0, false);
+          if (xf == 0) {
+            run(k, Layout{0, 0, 0, 0}, 2000, false);
+            run(k, Layout{0, 0, 0, 0}, 2000, true);
+          }
         }
 
   // Offsets and tiles that start subbands on odd rows or between code-block rows.
@@ -256,8 +264,11 @@ int main(int argc, char *argv[]) {
     for (auto &cp : lay_comps)
       for (uint8_t xf = 0; xf < 2; ++xf) {
         const Case k{517, 383, cp.nc, cp.mct, xf, 5, 8, false};
-        run(k, lay, 0);
-        if (xf == 0) run(k, lay, uint64_t{k.width} * k.height * k.nc / 8);
+        run(k, lay, 0, false);
+        if (xf == 0) {
+          run(k, lay, uint64_t{k.width} * k.height * k.nc / 8, false);
+          run(k, lay, uint64_t{k.width} * k.height * k.nc / 8, true);
+        }
       }
 
   printf("encode_entry_points: %d cases, %d failed\n", total, failed);
