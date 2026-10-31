@@ -8,8 +8,9 @@ OpenHTJ2K is an open-source C++ library for encoding and decoding
 **JPEG 2000 Part 1** (ITU-T Rec. T.800 | ISO/IEC 15444-1) and
 **High-Throughput JPEG 2000** (Part 15; ITU-T Rec. T.814 | ISO/IEC
 15444-15), with SIMD acceleration across x86-64, AArch64, and
-WebAssembly, a built-in multi-threaded pipeline, and a live RFC 9828
-RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
+WebAssembly, a built-in multi-threaded pipeline, **rate control that
+cuts an HTJ2K codestream to a target size**, and a live RFC 9828 RTP
+receiver that sustains **4K @ 60 fps on modern x86-64**.
 
 **Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k-demo.pages.dev/) · [📖 Docs](docs/README.md)
 
@@ -27,6 +28,29 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
   tests in the full suite.
 - JPH (`.jph`) file format, including colour specification box parsing
   for automatic YCbCr colorspace detection.
+
+**Rate control: HTJ2K at a target size (new, experimental)**
+- `open_htj2k_enc -i in.ppm -o out.j2c -rate 1` makes a codestream of
+  at most 1 bit per pixel, usually within a few bytes of it. Hitting a
+  size no longer means searching for a step size by trial encodes.
+- Post-compression rate-distortion optimisation (PCRD-opt) over the HT
+  coding passes: each HT code-block is cut after the cleanup, SigProp or
+  MagRef pass of any bit-plane, at one slope threshold over the whole
+  image, with the packet headers counted.
+- Low overhead: each code-block is measured as soon as its wavelet
+  coefficients are ready and coded once, at the passes a running
+  threshold estimate picks; only the code-blocks that the final cut moves
+  to a higher bit-plane are transcoded, from their coded passes. On a
+  3840×2160 12-bit RGB image, `-rate 0.96` takes 1.11× the time of a
+  fixed-step encode of the same size with all threads and 1.80× on one
+  (whole-process time, best of 7 runs, Ryzen 9 9950X), within 0.03 dB
+  of that step size's PSNR (34.06 vs 34.09 dB).
+- Deterministic: the codestream does not depend on the number of
+  threads, and AVX2 and AVX-512 builds give identical output.
+- Works with tiles and image offsets, in the streaming encoder: no
+  wavelet samples are kept for the final cut.
+- Current limits: irreversible 9/7 wavelet, one quality layer, not with
+  `Qfactor`. Reference: [docs/cli_encoder.md](docs/cli_encoder.md#rate-control).
 
 **Performance**
 - SIMD: **AVX2**, **AVX-512** (x86-64), **NEON** (AArch64), and
@@ -143,6 +167,9 @@ file format, HT only).
 # Lossy encode at quality 90
 ./build/bin/open_htj2k_enc -i input.ppm -o out.jph Qfactor=90
 
+# Lossy encode to a target size: 1 bit per pixel (experimental)
+./build/bin/open_htj2k_enc -i input.ppm -o out.j2c -rate 1
+
 # Encode separate YCbCr component files
 ./build/bin/open_htj2k_enc -i Y.pgx,Cb.pgx,Cr.pgx -o out.jph -jph_color_space YCC
 
@@ -151,7 +178,7 @@ file format, HT only).
 ```
 
 Key flags: `Cmodes={HT|0|BYPASS|...}`, `Creversible={yes|no}`, `Qfactor=0..100`,
-`Clevels=0..32`, `Cblk={H,W}`, `Corder={LRCP|RLCP|RPCL|PCRL|CPRL}`,
+`-rate bpp`, `Clevels=0..32`, `Cblk={H,W}`, `Corder={LRCP|RLCP|RPCL|PCRL|CPRL}`,
 `-num_threads N`. Full reference:
 [**docs/cli_encoder.md**](docs/cli_encoder.md).
 
