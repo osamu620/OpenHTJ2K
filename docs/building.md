@@ -84,7 +84,7 @@ another machine:
 | `native` (default) | the build machine (and identical CPUs) | `-march=native -mtune=native` | `/arch:AVX2` |
 | `x86-64-v3` | any CPU with AVX2 (Intel Haswell, AMD Zen and newer) | `-march=x86-64-v3` | `/arch:AVX2` |
 | `x86-64-v4` | any CPU with AVX-512 (F/BW/CD/DQ/VL) | `-march=x86-64-v4` | `/arch:AVX512` |
-| `generic` | any x86-64 CPU (no AVX2; SSE2 code paths for the HT block encoder and the forward DWT, scalar ones elsewhere) | `-march=x86-64 -mtune=generic` | none |
+| `generic` | any x86-64 CPU (no AVX2; SSE2 code paths for the HT block encoder, HT MagSgn decoding, the DWT and the decoder's color transform, scalar ones elsewhere) | `-march=x86-64 -mtune=generic` | none |
 
 Compilers without `-march=x86-64-v3`/`-v4` (GCC < 11, Clang < 12) get the
 equivalent `-mavx2 -mfma -mbmi ...` feature flags instead.
@@ -97,7 +97,7 @@ I/O, best of 5, relative to `native`):
 |---|---|---|
 | `x86-64-v4` | 1.05× / 0.97× | 1.01× / 1.01× |
 | `x86-64-v3` | 1.14× / 1.02× | 1.20× / 1.07× |
-| `generic` | 2.83× / 2.93× | 1.51× / 1.34× |
+| `generic` | 1.53× / 1.67× | 1.51× / 1.34× |
 
 ### Generator notes
 

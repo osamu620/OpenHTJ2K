@@ -69,6 +69,20 @@
   `Qfactor=90` (8-bit), 24-26% (12-bit); the encoder takes 1.37 times the
   cycles of the AVX2 build lossless, from 2.0 times.
 
+### Decoder
+- x86-64 builds without AVX2 now use SSE2 in the decoder too: the inverse ICT
+  with the float-to-integer finalize (round down emulated without SSE4.1, the
+  clamp done in 16 bits when the output range fits), the planar horizontal
+  inverse DWT (the 4-lane WASM SIMD kernels in SSE2), and the HT MagSgn
+  decoding, which takes the four samples of a quad in the lanes of a register.
+  The scalar HT MagSgn decoding, which other architectures and
+  `-DENABLE_SSE2=OFF` use, reads a segment destuffed once and no longer
+  branches on each sample's significance. The output is byte-identical to the
+  scalar code. Ryzen 9 9950X, `generic` build, 3840×2160 8-bit RGB, one
+  thread: 50% fewer cycles at `Qfactor=90` and 29% lossless; the command-line
+  decoder takes 1.53 times the time of the `native` build on one thread and
+  1.67 times on eight.
+
 ## Fixed
 
 ### Encoder
