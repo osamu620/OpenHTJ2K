@@ -68,6 +68,17 @@ constexpr int32_t DWT_RIGHT_SLACK = 32;
   #define __INTEL_COMPILER
 #endif
 
+// Every x86-64 CPU has SSE2: builds for x86-64 without AVX2 (a portable target, for
+// example -DOPENHTJ2K_TARGET_CPU=generic) take 128-bit SSE2 paths instead of the scalar
+// ones, unless configured with -DENABLE_SSE2=OFF.  The AVX2 and AVX-512 builds keep their
+// own.
+#if (defined(__x86_64__) || (defined(_M_X64) && !defined(_M_ARM64EC)))             \
+    && !defined(OPENHTJ2K_ENABLE_ARM_NEON) && !defined(OPENHTJ2K_ENABLE_WASM_SIMD) \
+    && !(defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)) && !defined(OPENHTJ2K_DISABLE_SSE2)
+  #define OPENHTJ2K_ENABLE_SSE2
+  #include <emmintrin.h>
+#endif
+
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   // #include <arm_acle.h>
   #include <arm_neon.h>

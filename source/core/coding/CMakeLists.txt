@@ -11,6 +11,7 @@ target_sources(open_htj2k
     ht_block_encoding_avx2.cpp
     ht_block_encoding_avx512.cpp
     ht_block_encoding_wasm.cpp
+    ht_block_encoding_sse2.cpp
     ht_refinement_encoding.cpp
     ht_rate_control.cpp
     block_decoding.cpp

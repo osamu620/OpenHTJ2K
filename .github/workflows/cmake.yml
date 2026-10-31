@@ -133,7 +133,7 @@ jobs:
 
       - name: Configure
         run: >
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX2=${{ matrix.simd }}
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX2=${{ matrix.simd }} -DENABLE_SSE2=${{ matrix.simd }}
           "-DCMAKE_CXX_FLAGS=-fsanitize=undefined -fno-omit-frame-pointer -g"
           "-DCMAKE_C_FLAGS=-fsanitize=undefined -g"
           -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=undefined
@@ -163,16 +163,24 @@ jobs:
     # Distributable x86-64 builds (no -march=native).  Besides running the
     # tests, check that the library has no instructions above the requested
     # level, so it runs on any CPU of that level.
+    # generic takes the SSE2 paths; with sse2 OFF it takes the scalar ones that
+    # other architectures use.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         target_cpu: [x86-64-v3, generic]
+        sse2: [ON]
+        include:
+          - target_cpu: generic
+            sse2: OFF
     steps:
       - uses: actions/checkout@v5
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_TARGET_CPU=${{ matrix.target_cpu }}
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_TARGET_CPU=${{ matrix.target_cpu }}
+          -DENABLE_SSE2=${{ matrix.sse2 }}
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -196,6 +204,23 @@ jobs:
       - name: Test
         working-directory: build
         run: ctest -j$(nproc) --output-on-failure
+
+  portable-x86-msvc:
+    # The SSE2 paths with MSVC, which accepts intrinsics above the target
+    # instruction set (the GCC generic build above rejects them).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B build -DOPENHTJ2K_TARGET_CPU=generic
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        working-directory: build
+        run: ctest --build-config Release --output-on-failure
 
   cxx11:
     # The library, tools and tests must build and pass as C++11 (see

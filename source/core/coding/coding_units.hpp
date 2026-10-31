@@ -50,6 +50,23 @@ static inline int32_t htj2k_magsgn(int32_t t, uint32_t &or_acc) {
   const uint32_t nz = (mag != 0) ? 0xFFFFFFFFU : 0U;
   return static_cast<int32_t>(((((mag - 1U) << 1) + neg) | 0x80000000U) & nz);
 }
+#if defined(OPENHTJ2K_ENABLE_SSE2)
+// htj2k_magsgn() in the four lanes of an SSE2 register (utils.hpp); ORs the magnitudes
+// into vor.
+static inline __m128i htj2k_magsgn_sse2(__m128i t, __m128i &vor) {
+  const __m128i s = _mm_srai_epi32(t, 31);
+  const __m128i m = _mm_and_si128(_mm_sub_epi32(_mm_xor_si128(t, s), s), _mm_set1_epi32(0x7FFFFFFF));
+  vor             = _mm_or_si128(vor, m);
+  const __m128i v =
+      _mm_add_epi32(_mm_slli_epi32(_mm_sub_epi32(m, _mm_set1_epi32(1)), 1), _mm_srli_epi32(t, 31));
+  return _mm_andnot_si128(_mm_cmpeq_epi32(m, _mm_setzero_si128()),
+                          _mm_or_si128(v, _mm_set1_epi32(INT32_MIN)));
+}
+// Whether a lane of v is not zero.
+static inline bool any_nonzero_sse2(__m128i v) {
+  return _mm_movemask_epi8(_mm_cmpeq_epi32(v, _mm_setzero_si128())) != 0xFFFF;
+}
+#endif
 
 /********************************************************************************
  * cblk_data_pool — monotonic bump allocator for HTJ2K codeblock bitstreams

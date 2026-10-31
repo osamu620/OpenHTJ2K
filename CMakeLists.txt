@@ -246,6 +246,11 @@ if(NOT EMSCRIPTEN)
   # where CMAKE_SYSTEM_PROCESSOR still names the host) on the scalar code.
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[xX]86_64$|^[aA][mM][dD]64$" AND CMAKE_SIZEOF_VOID_P EQUAL 8) # x86_64
     option(ENABLE_AVX2 "Enable the use of Intel AVX2 intrinsics" ON)
+    # SSE2 is part of x86-64: builds without AVX2 use 128-bit SSE2 paths unless this is off.
+    option(ENABLE_SSE2 "Use SSE2 intrinsics in x86-64 builds without AVX2" ON)
+    if(NOT ENABLE_SSE2)
+      target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_DISABLE_SSE2")
+    endif()
     set(OPENHTJ2K_TARGET_CPU "native" CACHE STRING
         "x86-64 code generation: native (build machine; binaries may not run elsewhere), x86-64-v3 (any AVX2 CPU), x86-64-v4 (any AVX-512 CPU), generic (no AVX2)")
     set_property(CACHE OPENHTJ2K_TARGET_CPU PROPERTY STRINGS native x86-64-v3 x86-64-v4 generic)

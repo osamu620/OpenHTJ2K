@@ -602,6 +602,23 @@ static inline void sink_quantize_row(const sprec_t *src, int32_t sub_row, int32_
       }
       if (vmaxvq_u32(vor) != 0) block->pre_or_val |= 1;
       for (; col < w; ++col) {
+#elif defined(OPENHTJ2K_ENABLE_SSE2)
+      const __m128 vscale = _mm_set1_ps(fs);
+      __m128i vor         = _mm_setzero_si128();
+      int32_t col         = 0;
+      for (; col + 7 < w; col += 8) {
+        __m128 f0 = _mm_loadu_ps(s + col), f1 = _mm_loadu_ps(s + col + 4);
+        if (!reversible) {
+          f0 = _mm_mul_ps(f0, vscale);
+          f1 = _mm_mul_ps(f1, vscale);
+        }
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dp + col),
+                         htj2k_magsgn_sse2(_mm_cvttps_epi32(f0), vor));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dp + col + 4),
+                         htj2k_magsgn_sse2(_mm_cvttps_epi32(f1), vor));
+      }
+      if (any_nonzero_sse2(vor)) block->pre_or_val |= 1;
+      for (; col < w; ++col) {
 #else
       int32_t col = 0;
       for (; col < w; ++col) {
@@ -705,6 +722,17 @@ static inline void sink_quantize_row_i32(const int32_t *src, int32_t sub_row, in
         vst1q_s32(dp + col + 4, v1);
       }
       if (vmaxvq_u32(vor) != 0) block->pre_or_val |= 1;
+      for (; col < w; ++col) {
+#elif defined(OPENHTJ2K_ENABLE_SSE2)
+      __m128i vor = _mm_setzero_si128();
+      int32_t col = 0;
+      for (; col + 7 < w; col += 8) {
+        const __m128i v0 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(s + col));
+        const __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(s + col + 4));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dp + col), htj2k_magsgn_sse2(v0, vor));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dp + col + 4), htj2k_magsgn_sse2(v1, vor));
+      }
+      if (any_nonzero_sse2(vor)) block->pre_or_val |= 1;
       for (; col < w; ++col) {
 #else
       int32_t col = 0;
