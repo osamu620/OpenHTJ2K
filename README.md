@@ -9,8 +9,8 @@ OpenHTJ2K is an open-source C++ library for encoding and decoding
 **High-Throughput JPEG 2000** (Part 15; ITU-T Rec. T.814 | ISO/IEC
 15444-15), with SIMD acceleration across x86-64, AArch64, and
 WebAssembly, a built-in multi-threaded pipeline, **rate control that
-cuts an HTJ2K codestream to a target size**, and a live RFC 9828 RTP
-receiver that sustains **4K @ 60 fps on modern x86-64**.
+cuts an HTJ2K or Part 1 codestream to a target size**, and a live RFC 9828
+RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
 
 **Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k-demo.pages.dev/) · [📖 Docs](docs/README.md)
 
@@ -29,7 +29,7 @@ receiver that sustains **4K @ 60 fps on modern x86-64**.
 - JPH (`.jph`) file format, including colour specification box parsing
   for automatic YCbCr colorspace detection.
 
-**Rate control: HTJ2K at a target size (new, experimental)**
+**Rate control: HTJ2K or Part 1 at a target size (new, experimental)**
 - `open_htj2k_enc -i in.ppm -o out.j2c -rate 1` makes a codestream of
   at most 1 bit per pixel, usually within a few bytes of it. Hitting a
   size no longer means searching for a step size by trial encodes.
@@ -48,6 +48,13 @@ receiver that sustains **4K @ 60 fps on modern x86-64**.
 - The cut pays off most on content with large flat areas: on a 16-bit
   4096×2160 frame of *Elephants Dream* at 2 bpp, 86.7 dB PSNR against
   74.1 dB for the fixed step size of the same size.
+- Both block coders: with the Part 1 coder (`Cmodes=0`, any mode
+  switches) every coding pass is a truncation point and the codeword is
+  terminated at the cut, so `-rate` also makes codestreams that any
+  JPEG 2000 decoder reads. On the 12-bit image above at 1 bpp it gives
+  35.23 dB (HT: 34.32 dB), on the *Elephants Dream* frame at 2 bpp
+  92.1 dB, at about 2.4× the time of a fixed-step Part 1 encode on one
+  thread and 1.1× with all threads.
 - Deterministic: the codestream does not depend on the number of
   threads, and AVX2 and AVX-512 builds give identical output.
 - Works with tiles and image offsets, in the streaming encoder: no
