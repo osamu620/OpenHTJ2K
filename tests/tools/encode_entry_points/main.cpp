@@ -10,7 +10,9 @@
 // 9/7, DWT levels, bit depth / signedness and (odd) image size, this tool
 // encodes through both entry points, requires byte-identical codestreams, and
 // decodes the result: reversible cases must reproduce the input exactly,
-// irreversible ones within a small tolerance.
+// irreversible ones within a small tolerance.  Some cases also place the image
+// at an offset on the reference grid and split it into tiles, which moves the
+// subbands off the code-block grid.
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
@@ -70,15 +72,21 @@ std::vector<std::vector<int32_t>> make_planes(const Case &k) {
   return planes;
 }
 
-std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t>> &src, bool streaming) {
+// Image offset on the reference grid and tile size (0: one tile).
+struct Layout {
+  uint32_t ox, oy, tw, th;
+};
+
+std::vector<uint8_t> encode(const Case &k, const std::vector<std::vector<int32_t>> &src, bool streaming,
+                            const Layout &lay) {
   open_htj2k::siz_params siz;
   siz.Rsiz   = 0;
-  siz.Xsiz   = k.width;
-  siz.Ysiz   = k.height;
-  siz.XOsiz  = 0;
-  siz.YOsiz  = 0;
-  siz.XTsiz  = k.width;
-  siz.YTsiz  = k.height;
+  siz.Xsiz   = k.width + lay.ox;
+  siz.Ysiz   = k.height + lay.oy;
+  siz.XOsiz  = lay.ox;
+  siz.YOsiz  = lay.oy;
+  siz.XTsiz  = lay.tw ? lay.tw : k.width + lay.ox;
+  siz.YTsiz  = lay.th ? lay.th : k.height + lay.oy;
   siz.XTOsiz = 0;
   siz.YTOsiz = 0;
   siz.Csiz   = k.nc;
@@ -171,13 +179,13 @@ int main(int argc, char *argv[]) {
   const Depth depths[] = {{8, false}, {12, true}, {14, true}, {16, false}};
 
   int total = 0, failed = 0;
-  auto run = [&](const Case &k) {
+  auto run = [&](const Case &k, const Layout &lay) {
     ++total;
     std::string err;
     try {
       const auto planes   = make_planes(k);
-      const auto buffered = encode(k, planes, false);
-      const auto stream   = encode(k, planes, true);
+      const auto buffered = encode(k, planes, false, lay);
+      const auto stream   = encode(k, planes, true, lay);
       const long e        = max_error(k, buffered, planes);
       // 9/7 (with or without the ICT) at a step of 1/2^depth stays within a
       // few code values; the byte comparison above is the main check.
@@ -194,9 +202,10 @@ int main(int argc, char *argv[]) {
     }
     if (!err.empty()) {
       ++failed;
-      printf("FAIL %s: %s\n", k.name().c_str(), err.c_str());
+      printf("FAIL %s offset %u,%u tiles %ux%u: %s\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th,
+             err.c_str());
     } else if (verbose) {
-      printf("ok   %s\n", k.name().c_str());
+      printf("ok   %s offset %u,%u tiles %ux%u\n", k.name().c_str(), lay.ox, lay.oy, lay.tw, lay.th);
     }
   };
 
@@ -204,7 +213,8 @@ int main(int argc, char *argv[]) {
     for (auto &cp : comps)
       for (uint8_t xf = 0; xf < 2; ++xf)
         for (uint8_t lv : lvls)
-          for (auto &dp : depths) run(Case{sz[0], sz[1], cp.nc, cp.mct, xf, lv, dp.bits, dp.is_signed});
+          for (auto &dp : depths)
+            run(Case{sz[0], sz[1], cp.nc, cp.mct, xf, lv, dp.bits, dp.is_signed}, Layout{0, 0, 0, 0});
 
   // Images smaller than the DWT levels need: the coarsest levels then have
   // empty subbands (no code-blocks at all), which the encoder must handle.
@@ -214,7 +224,15 @@ int main(int argc, char *argv[]) {
   for (auto &sz : tiny_sizes)
     for (auto &cp : tiny_comps)
       for (uint8_t xf = 0; xf < 2; ++xf)
-        for (uint8_t lv : tiny_lvls) run(Case{sz[0], sz[1], cp.nc, cp.mct, xf, lv, 8, false});
+        for (uint8_t lv : tiny_lvls)
+          run(Case{sz[0], sz[1], cp.nc, cp.mct, xf, lv, 8, false}, Layout{0, 0, 0, 0});
+
+  // Offsets and tiles that start subbands on odd rows or between code-block rows.
+  const Layout layouts[] = {{3, 0, 0, 0}, {5, 3, 100, 77}, {0, 0, 96, 96}, {33, 17, 64, 64}};
+  const Comp lay_comps[] = {{1, 0}, {3, 1}};
+  for (auto &lay : layouts)
+    for (auto &cp : lay_comps)
+      for (uint8_t xf = 0; xf < 2; ++xf) run(Case{517, 383, cp.nc, cp.mct, xf, 5, 8, false}, lay);
 
   printf("encode_entry_points: %d cases, %d failed\n", total, failed);
   return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

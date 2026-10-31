@@ -3829,6 +3829,28 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
   nshift[0]          = 0;
   child_ranges[0][0] = tmp_ranges[0];
 
+  // The streaming encoder's strip pipeline (encode_line_based_stream) codes the HL, LH
+  // and HH bands of each resolution above the lowest in strips of one code-block row,
+  // counted from the bands' first row.  That needs the resolution to be non-empty and to
+  // start on an even row (HL and LH then start on the same row), and the code-block rows
+  // to start at the bands' first row, unless the bands lie within one code-block row.
+  // Otherwise the encoder writes the subbands to their sample buffers, which must then
+  // exist.
+  bool strips_fit = (dfs_info == nullptr);
+  for (r = 1; r <= NL && strips_fit; ++r) {
+    dy                = static_cast<uint32_t>(1 << (NL - r));
+    const uint32_t y0 = static_cast<uint32_t>(ceil_int(pos0.y, dy));
+    const uint32_t y1 = static_cast<uint32_t>(ceil_int(pos1.y, dy));
+    log2PP            = get_precinct_size(r);
+    // Code-blocks do not cross precincts: their height is at most half a precinct's.
+    const uint32_t cb_h =
+        (log2PP.y >= 1) ? std::min(codeblock_size.y, 1U << (log2PP.y - 1)) : codeblock_size.y;
+    const uint32_t b0 = y0 / 2;        // first row of HL, LH and HH
+    const uint32_t b1 = (y1 + 1) / 2;  // end of HL; LH and HH end no later
+    if ((y0 & 1) != 0 || y1 <= y0 || (b0 % cb_h != 0 && b0 / cb_h != (b1 - 1) / cb_h)) strips_fit = false;
+  }
+  enc_no_subband_buffers = enc_lb && strips_fit && NL > 0;
+
 #ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
@@ -3861,7 +3883,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
       dfs_nb = 1;
     }
 
-    const bool skip_alloc = line_based || (enc_lb && r > 0 && this->NL > 0);
+    const bool skip_alloc = line_based || (enc_no_subband_buffers && r > 0);
     new (&raw[r]) j2k_resolution(r, respos0, respos1, npw, nph, skip_alloc, dfs_nb, dir);
     res_guard.commit_one();
     raw[r].set_nominal_ranges(child_ranges[r]);
@@ -6373,6 +6395,13 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
 
   // create tile components
   this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
+  enc_img_x0.assign(num_components, 0);
+  for (uint16_t c = 0; c < num_components; c++) {
+    element_siz sub;
+    main_header.SIZ->get_subsampling_factor(sub, c);
+    enc_img_x0[c] = ceil_int(Osiz.x, sub.x);
+    if (c == 0) enc_img_y0 = ceil_int(Osiz.y, sub.y);
+  }
 
   // Line-based (LB) encode mode reads rows straight from the caller's input and
   // leaves every subband i_samples buffer above LL0 unallocated, so it is only
@@ -6853,7 +6882,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
   std::vector<int32_t *> int_rows(num_components, nullptr);
   std::vector<sprec_t *> float_rows(num_components, nullptr);
   for (uint16_t c = 0; c < num_components; ++c) {
-    const int32_t alloc_w = static_cast<int32_t>(round_up(img_comp_widths[c], 32U));
+    // The colour transforms run in whole vectors from a tile's first column, so they
+    // can reach past the image's last column: 32 samples of room.
+    const int32_t alloc_w = static_cast<int32_t>(round_up(img_comp_widths[c], 32U) + 32U);
     const int32_t flt_w   = static_cast<int32_t>(stride);
     row_scratch.reserve(c, alloc_w, flt_w);
     int_rows[c]   = row_scratch.slots[c].int_row;
@@ -6905,10 +6936,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
   if (NL0 == 0) {
     // No DWT: fill i_samples row by row then encode.
     for (uint32_t y = 0; y < height; ++y) {
-      src_fn(top0.y + y, int_rows.data(), num_components);
+      src_fn(top0.y + y - enc_img_y0, int_rows.data(), num_components);
       if (MCT && num_components >= 3) {
         // Apply DC offset in-place for tile-local portion of each MCT component.
-        const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x);
+        const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x) - enc_img_x0[0];
         for (uint32_t c = 0; c < 3; ++c) {
           const int32_t dco = tcomp[c].lb_dc_offset;
           const int32_t shu = tcomp[c].lb_dc_shiftup;
@@ -6936,7 +6967,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const int32_t dco    = tcomp[c].lb_dc_offset;
           const int32_t shu    = tcomp[c].lb_dc_shiftup;
           const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
-          const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+          const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x) - enc_img_x0[c];
           const int32_t *sp    = int_rows[c] + x_off;
           const uint32_t sc    = round_up(wc, 32U);
           sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + y * sc;
@@ -6951,7 +6982,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
           const int32_t dco    = tcomp[c].lb_dc_offset;
           const int32_t shu    = tcomp[c].lb_dc_shiftup;
           const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
-          const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+          const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x) - enc_img_x0[c];
           const int32_t *sp    = int_rows[c] + x_off;
           const uint32_t sc    = round_up(wc, 32U);
           sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + cy * sc;
@@ -6995,12 +7026,16 @@ uint8_t *j2k_tile::encode_line_based_stream(
     auto *le         = tcomp[c].get_line_enc();
     if (!le || le->NL_active == 0) continue;
 
-    // Overlap requires hl_y0 == lh_y0 for all levels (true for y0=0 tiles).
+    // create_resolutions() decided whether the strip pipeline applies (see there) and
+    // left out the subband buffers only where it does; the fallback writes to them.
     fdwt_level_sink_ctx *le_ctxs = le->ctxs.get();
-    bool ok                      = true;
-    for (int32_t i = 0; i < le->NL_active && ok; ++i)
-      if (le_ctxs[i].hl_y0 != le_ctxs[i].lh_y0 || le_ctxs[i].hl_h == 0) ok = false;
-    if (!ok) continue;
+    if (!tcomp[c].enc_no_subband_buffers) continue;
+    for (int32_t i = 0; i < le->NL_active; ++i) {
+      if (le_ctxs[i].hl_y0 != le_ctxs[i].lh_y0 || le_ctxs[i].hl_h == 0) {
+        printf("ERROR: streaming encoder: tile-component %u does not fit the strip pipeline.\n", c);
+        throw std::exception();
+      }
+    }
 
     auto &streaming_scratch = get_thread_streaming_scratch();
     const int32_t cb_h_val  = static_cast<int32_t>(tcomp[c].get_codeblock_size().y);
@@ -7216,10 +7251,10 @@ uint8_t *j2k_tile::encode_line_based_stream(
       MCT && num_components >= 3 && comp_use_i32[0] && comp_use_i32[1] && comp_use_i32[2];
 
   for (uint32_t y = 0; y < height; ++y) {
-    src_fn(top0.y + y, int_rows.data(), num_components);
+    src_fn(top0.y + y - enc_img_y0, int_rows.data(), num_components);
     if (MCT && num_components >= 3) {
       // Apply DC offset to tile-local portion of components 0,1,2 in-place.
-      const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x);
+      const uint32_t x_off0 = static_cast<uint32_t>(tcomp[0].get_pos0().x) - enc_img_x0[0];
       for (uint32_t c = 0; c < 3; ++c) {
         const int32_t dco = tcomp[c].lb_dc_offset;
         const int32_t shu = tcomp[c].lb_dc_shiftup;
@@ -7251,7 +7286,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const int32_t dco    = tcomp[c].lb_dc_offset;
         const int32_t shu    = tcomp[c].lb_dc_shiftup;
         const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
-        const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+        const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x) - enc_img_x0[c];
         const int32_t *sp    = int_rows[c] + x_off;
         if (comp_use_i32[c]) {
           // Write DC-offset int row into float_rows reinterpreted as int32 scratch,
@@ -7273,7 +7308,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
         const int32_t dco    = tcomp[c].lb_dc_offset;
         const int32_t shu    = tcomp[c].lb_dc_shiftup;
         const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
-        const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x);
+        const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x) - enc_img_x0[c];
         const int32_t *sp    = int_rows[c] + x_off;
         if (comp_use_i32[c]) {
           int32_t *idst = reinterpret_cast<int32_t *>(float_rows[c]);
