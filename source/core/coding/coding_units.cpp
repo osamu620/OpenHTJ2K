@@ -784,7 +784,7 @@ static void fdwt_level_sink_planes_fn(void *ctx, bool is_hp, int32_t abs_row, co
       }
 #endif
       for (; k < c->lp_width; ++k) ll_dst[k] = static_cast<sprec_t>(lp_i[k]);
-    } else {
+    } else if (c->lp_width > 0) {  // an empty LL band may have no buffer
       const int32_t ll_sub = (abs_row >> 1) - c->ll0_y0;
       memcpy(c->ll0_samples + static_cast<ptrdiff_t>(ll_sub) * static_cast<ptrdiff_t>(c->ll0_stride),
              lp_row, static_cast<size_t>(c->lp_width) * sizeof(sprec_t));
