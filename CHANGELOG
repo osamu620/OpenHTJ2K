@@ -34,22 +34,27 @@
   quality layer) on the command line,
   `openhtj2k_encoder::set_target_size(bytes)` in the API. The codestream takes
   at most the target, usually within a few bytes of it. Each HT code-block is
-  measured as soon as its wavelet samples are ready and coded as one HT set
-  (cleanup, SigProp and MagRef passes) chosen for a slope threshold estimated
-  from the code-blocks measured so far. Once all are coded, every code-block's
+  measured as soon as its wavelet samples are ready (at every bit-plane that
+  can matter: the squared error after a cleanup pass there, and exactly which
+  samples the SigProp pass below it would code and make significant, which
+  gives the SigProp and MagRef lengths) and coded as one HT set (cleanup,
+  SigProp and MagRef passes) chosen for a slope threshold estimated from the
+  code-blocks measured so far. Once all are coded, every code-block's
   truncation point is picked at one threshold over the whole image (PCRD
   optimisation, with the packet headers measured), and a code-block whose
   point lies above its coded set is transcoded: its cleanup pass is decoded
   and coded again from the higher plane. The output does not depend on the
   number of threads; AVX2 and AVX-512 give the same codestream, and so does
   NEON where its fixed-step output matches theirs (kodim23, with and without
-  tiles). On a 3840x2160 12-bit image at 0.96 bpp the encode takes 1.11 times
+  tiles). On a 3840x2160 12-bit image at 0.96 bpp the encode takes 1.16 times
   as long as one with a fixed step size that gives the same size with all
-  threads, and 1.80 times on one thread (whole-process time), for nearly the
-  same PSNR (34.06 vs 34.09 dB). It needs the irreversible 9/7 wavelet, one
-  quality layer and a base step size (not `Qfactor`); with `-rate`, `Qstep`
-  defaults to 1/2^(bit depth + 3), and it bounds the highest quality. Output
-  without a target is unchanged.
+  threads, and 2.13 times on one thread (whole-process time), for a slightly
+  higher PSNR (34.10 vs 34.09 dB). Content with large flat areas gains much
+  more: on a 16-bit 4096x2160 frame of the animation Elephants Dream at 2 bpp,
+  86.7 dB against 74.1 dB. It needs the irreversible 9/7 wavelet, one quality
+  layer and a base step size (not `Qfactor`); with `-rate`, `Qstep` defaults
+  to 1/2^(bit depth + 3), and it bounds the highest quality. Output without a
+  target is unchanged.
 
 ## Fixed
 

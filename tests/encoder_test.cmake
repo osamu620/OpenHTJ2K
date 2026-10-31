@@ -499,8 +499,8 @@ endforeach()
 # Rate control (EXPERIMENTAL): -rate cuts the HT code-blocks so that the codestream
 # takes at most rate x image area / 8 bytes.  The search for the budget lands within a
 # few bytes of the target; the size checks allow 0.5% below it.  Measured PAE/MSE:
-# 18/4.44 at 1 bpp, 73/23.7 at 0.25 bpp, 43/11.2 at 0.5 bpp with 256x256 tiles and
-# 28/6.97 at 0.7 bpp on the odd-size image; the thresholds leave room for the small
+# 18/4.38 at 1 bpp, 70/23.3 at 0.25 bpp, 41/11.1 at 0.5 bpp with 256x256 tiles and
+# 32/6.93 at 0.7 bpp on the odd-size image; the thresholds leave room for the small
 # floating-point differences between instruction sets.
 set(_size_check ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_size.cmake)
 foreach(_case "rate1;kodim23;1;49152;48906;25;5.3" "rate025;kodim23;0.25;12288;12226;95;28"

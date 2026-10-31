@@ -34,16 +34,17 @@
 // of the whole image is known, so:
 //
 // 1. ht_rd_stats() measures each code-block over the planes that can matter: how many
-//    samples and quads are significant at each plane and the exact squared error after a
-//    cleanup pass there.  A linear model of the cleanup segment length in those counts
-//    gives every plane's rate.
+//    samples and quads are significant at each plane, the exact squared error after a
+//    cleanup pass there, and which samples the SigProp pass below it would code and make
+//    significant.  A linear model of the cleanup segment length in those counts gives every
+//    plane's rate; the SigProp and MagRef passes write raw bits, so their lengths follow
+//    from the counts.
 // 2. ht_rc_state folds the measured code-blocks' curves into a threshold estimate for the
 //    whole image: each subband class's measured code-blocks stand for its others, and a
 //    class not reached yet borrows the next finer level's curve.
-// 3. ht_rd_code() codes the set that holds the code-block's best point at the estimate
-//    (with models of the SigProp and MagRef points), and keeps its three points' exact
-//    lengths and their distortions.  A code-block left out even at a quarter of the
-//    estimate is not coded at all.
+// 3. ht_rd_code() codes the set that holds the code-block's best point at the estimate,
+//    and keeps its three points' exact lengths and their distortions.  A code-block left out even at a
+//    quarter of the estimate is not coded at all.
 // 4. Once every code-block is coded, ht_rate_control() picks every code-block's point at
 //    one threshold over all of them (PCRD optimisation, with the packet headers measured).
 //    A point above the coded set is reached by transcoding: the cleanup pass at p holds
@@ -78,6 +79,7 @@
 
 #include "block_decoding.hpp"
 #include "coding_units.hpp"
+#include "ht_sigprop.hpp"
 #include "utils.hpp"
 
 #if defined(OPENHTJ2K_TRY_AVX2) && (defined(__AVX512F__) || defined(__AVX2__))
@@ -281,6 +283,100 @@ void residual_plane(const uint32_t *m, size_t n, uint32_t t, float *r2, float *r
 #endif
 }
 
+// Bit i of the result is set when v[i] >= t (i < 64; v[i] < 2^31, t >= 1).
+inline uint64_t mask_ge64(const uint32_t *v, uint32_t t) {
+  uint64_t r = 0;
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
+  const __m512i T = _mm512_set1_epi32(static_cast<int32_t>(t));
+  for (int q = 0; q < 4; ++q)
+    r |= static_cast<uint64_t>(_mm512_cmpge_epu32_mask(_mm512_loadu_si512(v + 16 * q), T)) << (16 * q);
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  const __m256i T1 = _mm256_set1_epi32(static_cast<int32_t>(t - 1));
+  for (int q = 0; q < 8; ++q) {
+    const __m256i c =
+        _mm256_cmpgt_epi32(_mm256_loadu_si256(reinterpret_cast<const __m256i *>(v + 8 * q)), T1);
+    r |= static_cast<uint64_t>(static_cast<uint32_t>(_mm256_movemask_ps(_mm256_castsi256_ps(c))))
+         << (8 * q);
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  // Eight compares at a time narrowed to bytes, weighted by their bit and summed in pairs
+  // (no AArch64-only instructions: this also builds for 32-bit ARM).
+  const uint32x4_t T     = vdupq_n_u32(t);
+  const uint8_t wts[8]   = {1, 2, 4, 8, 16, 32, 64, 128};
+  const uint8x8_t weight = vld1_u8(wts);
+  for (int q = 0; q < 8; ++q) {
+    const uint16x4_t a = vmovn_u32(vcgeq_u32(vld1q_u32(v + 8 * q), T));
+    const uint16x4_t b = vmovn_u32(vcgeq_u32(vld1q_u32(v + 8 * q + 4), T));
+    uint8x8_t x        = vand_u8(vmovn_u16(vcombine_u16(a, b)), weight);
+    x                  = vpadd_u8(x, x);
+    x                  = vpadd_u8(x, x);
+    x                  = vpadd_u8(x, x);
+    r |= static_cast<uint64_t>(vget_lane_u8(x, 0)) << (8 * q);
+  }
+#else
+  for (int i = 0; i < 64; ++i) r |= static_cast<uint64_t>(v[i] >= t) << i;
+#endif
+  return r;
+}
+
+// Four rows of 16 magnitudes (r[0..3], each from its own row) into one stripe word's 64
+// values: dst[4c + r] = rows[r][c].
+inline void stripe_word(const uint32_t *r0, const uint32_t *r1, const uint32_t *r2, const uint32_t *r3,
+                        uint32_t *dst) {
+#if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
+  const __m512i a0 = _mm512_loadu_si512(r0), a1 = _mm512_loadu_si512(r1);
+  const __m512i a2 = _mm512_loadu_si512(r2), a3 = _mm512_loadu_si512(r3);
+  const __m512i t0 = _mm512_unpacklo_epi32(a0, a1), t1 = _mm512_unpackhi_epi32(a0, a1);
+  const __m512i t2 = _mm512_unpacklo_epi32(a2, a3), t3 = _mm512_unpackhi_epi32(a2, a3);
+  // Per 128-bit lane L: column 4L + i, rows 0..3, in u[i].
+  const __m512i u0 = _mm512_unpacklo_epi64(t0, t2), u1 = _mm512_unpackhi_epi64(t0, t2);
+  const __m512i u2 = _mm512_unpacklo_epi64(t1, t3), u3 = _mm512_unpackhi_epi64(t1, t3);
+  const __m512i x0 = _mm512_shuffle_i32x4(u0, u1, 0x44), x1 = _mm512_shuffle_i32x4(u2, u3, 0x44);
+  const __m512i x2 = _mm512_shuffle_i32x4(u0, u1, 0xEE), x3 = _mm512_shuffle_i32x4(u2, u3, 0xEE);
+  _mm512_storeu_si512(dst, _mm512_shuffle_i32x4(x0, x1, 0x88));
+  _mm512_storeu_si512(dst + 16, _mm512_shuffle_i32x4(x0, x1, 0xDD));
+  _mm512_storeu_si512(dst + 32, _mm512_shuffle_i32x4(x2, x3, 0x88));
+  _mm512_storeu_si512(dst + 48, _mm512_shuffle_i32x4(x2, x3, 0xDD));
+#elif defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)
+  for (int h = 0; h < 2; ++h) {  // eight columns at a time
+    const __m256i a0 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(r0 + 8 * h));
+    const __m256i a1 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(r1 + 8 * h));
+    const __m256i a2 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(r2 + 8 * h));
+    const __m256i a3 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(r3 + 8 * h));
+    const __m256i t0 = _mm256_unpacklo_epi32(a0, a1), t1 = _mm256_unpackhi_epi32(a0, a1);
+    const __m256i t2 = _mm256_unpacklo_epi32(a2, a3), t3 = _mm256_unpackhi_epi32(a2, a3);
+    const __m256i u0 = _mm256_unpacklo_epi64(t0, t2), u1 = _mm256_unpackhi_epi64(t0, t2);
+    const __m256i u2 = _mm256_unpacklo_epi64(t1, t3), u3 = _mm256_unpackhi_epi64(t1, t3);
+    __m256i *d = reinterpret_cast<__m256i *>(dst + 32 * h);
+    _mm256_storeu_si256(d, _mm256_permute2x128_si256(u0, u1, 0x20));
+    _mm256_storeu_si256(d + 1, _mm256_permute2x128_si256(u2, u3, 0x20));
+    _mm256_storeu_si256(d + 2, _mm256_permute2x128_si256(u0, u1, 0x31));
+    _mm256_storeu_si256(d + 3, _mm256_permute2x128_si256(u2, u3, 0x31));
+  }
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  for (int c = 0; c < 16; c += 4) {
+    uint32x4x4_t v;
+    v.val[0] = vld1q_u32(r0 + c);
+    v.val[1] = vld1q_u32(r1 + c);
+    v.val[2] = vld1q_u32(r2 + c);
+    v.val[3] = vld1q_u32(r3 + c);
+    vst4q_u32(dst + 4 * c, v);
+  }
+#else
+  for (int c = 0; c < 16; ++c) {
+    dst[4 * c]     = r0[c];
+    dst[4 * c + 1] = r1[c];
+    dst[4 * c + 2] = r2[c];
+    dst[4 * c + 3] = r3[c];
+  }
+#endif
+}
+
+inline uint32_t popcount64(uint64_t x) {
+  return static_cast<uint32_t>(popcount32(static_cast<uint32_t>(x))
+                               + popcount32(static_cast<uint32_t>(x >> 32)));
+}
+
 // The magnitudes of a code-block's W x H samples, row after row, into m (then zeros up to
 // a multiple of 16); returns their OR.
 uint32_t magnitudes(const uint32_t *smp, uint32_t W, uint32_t H, size_t stride, std::vector<uint32_t> &m) {
@@ -349,39 +445,46 @@ void refined_distortion(const ht_rd_info &rd, uint32_t p, double newly, double &
   Dmr                   = (hi.E2 - gain + lo.R2up) * 0.25;
 }
 
+// Marks a plane whose SigProp pass the measuring did not count.
+constexpr uint32_t NO_COUNT = 0xFFFFFFFFu;
+
 // Model of an HT set at plane p (max(1, rd.j0 + 1) <= p < rd.msb): its three points' rates
-// (bytes) and distortions (steps).  SigProp makes a share 1 - exp(-15 rho) of the samples
-// with m in [2^(p-1), 2^p) significant, rho the share of significant samples; the
-// refinement segment lengths are linear in the counts (fitted like LCUP_COEF; median error
-// 20-25%, enough to choose a set).
+// (bytes) and distortions (steps).  Only the cleanup length is a model: the refinement
+// passes write raw bits, SigProp one per sample it codes and a sign per sample it makes
+// significant, MagRef one per significant sample, which the measuring counts.
 struct set_model {
   double R[3], D[3];
 };
-set_model model_set(const ht_rd_info &rd, uint32_t p, uint32_t samples) {
+set_model model_set(const ht_rd_info &rd, uint32_t p) {
   set_model s;
   const double Lc       = model_lcup(rd, p);
   const ht_rd_plane &hi = plane_of(rd, p);
-  const double nsig     = hi.C;
-  const double band     = static_cast<double>(plane_of(rd, p - 1).C - hi.C);
-  const double newly    = (1.0 - std::exp(-15.0 * nsig / samples)) * band;
-  s.R[0]                = Lc;
-  s.D[0]                = cleanup_distortion(rd, p);
-  s.R[1]                = Lc + std::max(1.0, -0.00714 * nsig + 0.03674 * band + 0.40828 * newly + 3.75526);
-  s.R[2]                = Lc + std::max(2.0, 0.10855 * nsig + 0.03289 * band + 0.4383 * newly + 3.91029);
-  refined_distortion(rd, p, newly, s.D[1], s.D[2]);
+  if (hi.Nsp == NO_COUNT) {  // not counted: the cleanup point alone
+    s.R[0] = s.R[1] = s.R[2] = Lc;
+    s.D[0] = s.D[1] = s.D[2] = cleanup_distortion(rd, p);
+    return s;
+  }
+  const double sp_bits = static_cast<double>(hi.Nsp) + hi.Nnew;
+  s.R[0]               = Lc;
+  s.D[0]               = cleanup_distortion(rd, p);
+  s.R[1]               = Lc + std::ceil(sp_bits / 8);
+  s.R[2]               = Lc + std::ceil((sp_bits + hi.C) / 8);
+  refined_distortion(rd, p, hi.Nnew, s.D[1], s.D[2]);
   return s;
 }
 
 // Per-thread scratch of the measuring, coding and transcoding.
 struct rd_scratch {
-  std::vector<uint32_t> qmax;   // quad maxima
-  std::vector<uint32_t> all;    // all magnitudes, W x H
-  std::vector<float> sq;        // (2m + 1)^2
-  std::vector<uint64_t> newly;  // SigProp's newly significant samples
-  std::vector<int32_t> dec;     // decoded cleanup samples
-  std::vector<uint8_t> states;  // decoder states
-  std::vector<int32_t> enc;     // samples for the re-coding
-  std::vector<uint8_t> data;    // a copy of the coded data, with room past it
+  std::vector<uint32_t> qmax;    // quad maxima
+  std::vector<uint32_t> all;     // all magnitudes, W x H
+  std::vector<uint32_t> zs;      // all magnitudes in stripe-word order (ht_sigprop.hpp)
+  std::vector<uint64_t> sig[2];  // stripe words: the samples significant at a plane
+  std::vector<float> sq;         // (2m + 1)^2
+  std::vector<uint64_t> newly;   // SigProp's newly significant samples
+  std::vector<int32_t> dec;      // decoded cleanup samples
+  std::vector<uint8_t> states;   // decoder states
+  std::vector<int32_t> enc;      // samples for the re-coding
+  std::vector<uint8_t> data;     // a copy of the coded data, with room past it
 };
 rd_scratch &thread_scratch() {
   static thread_local rd_scratch s;
@@ -498,6 +601,89 @@ void ht_rd_stats(j2k_codeblock *block, double lambda) {
     ht_rd_plane &pl = rd.planes[j - j0];
     pl.R2           = lane_sum(r2);
     pl.R2up         = lane_sum(r2u);
+    pl.Nsp = pl.Nnew = 0;
+  }
+
+  // The SigProp pass of the set at each plane j > j0: the samples it codes and those it
+  // makes significant.  A sample below 2^j has bit j - 1 set when it is significant at
+  // plane j - 1, so the significance at the two planes is all it needs.
+  {
+    using ht_sigprop::MAX_WORDS;
+    const uint32_t ns        = (H + 3) / 4;
+    const uint32_t nk        = (W + 15) / 16;
+    const size_t nw          = static_cast<size_t>(ns) * nk;
+    const uint64_t last_cols = (W & 15) ? (1ull << (4 * (W & 15))) - 1 : ~0ull;
+    const bool causal        = (block->Cmodes & CAUSAL) != 0;
+    if (sc.zs.size() < 64 * nw) sc.zs.resize(64 * nw);
+    uint32_t *zs = sc.zs.data();
+    // Whole words four at a time; the rest (a last stripe or word only partly inside the
+    // code-block) sample by sample, over zeros.
+    const uint32_t full_s = H / 4, full_k = W / 16;
+    if (full_s < ns || full_k < nk) std::fill(zs, zs + 64 * nw, 0u);
+    for (uint32_t st = 0; st < ns; ++st) {
+      const uint32_t *row = mg + static_cast<size_t>(4 * st) * W;
+      uint32_t *dst       = zs + static_cast<size_t>(st) * nk * 64;
+      if (st < full_s)
+        for (uint32_t k = 0; k < full_k; ++k)
+          stripe_word(row + 16 * k, row + W + 16 * k, row + 2 * W + 16 * k, row + 3 * W + 16 * k,
+                      dst + 64 * k);
+      for (uint32_t y = 4 * st; y < std::min(H, 4 * st + 4); ++y)
+        for (uint32_t x = (st < full_s) ? 16 * full_k : 0; x < W; ++x)
+          dst[(x >> 4) * 64 + 4 * (x & 15) + (y & 3)] = mg[static_cast<size_t>(y) * W + x];
+    }
+    for (auto &v : sc.sig)
+      if (v.size() < nw) v.resize(nw);
+    // Below the plane under the estimate's (j0 + 2), a set's refinement points matter only
+    // when the estimate is 16 times too large: those sets keep their cleanup point alone.
+    const uint32_t jc = (lambda > 0 && j0 > 0) ? std::min(j0 + 2, msb) : j0 + 1;
+    for (uint32_t j = j0 + 1; j < jc; ++j) rd.planes[j - j0].Nsp = NO_COUNT;
+    uint64_t *lo = sc.sig[0].data(), *hi = sc.sig[1].data();
+    for (size_t w = 0; w < nw; ++w) lo[w] = mask_ge64(sc.zs.data() + 64 * w, 1u << (jc - 1));
+    static const uint64_t none[MAX_WORDS] = {};
+    for (uint32_t j = jc; j < msb; ++j) {
+      for (size_t w = 0; w < nw; ++w) hi[w] = mask_ge64(sc.zs.data() + 64 * w, 1u << j);
+      uint64_t above[MAX_WORDS] = {}, newly[MAX_WORDS], coded[MAX_WORDS];
+      uint32_t nsp = 0, nnew = 0;
+      bool above_any = false;  // a sample in above[] is set
+      for (uint32_t st = 0; st < ns; ++st) {
+        const uint64_t *sig  = hi + static_cast<size_t>(st) * nk;
+        const uint64_t *next = (st + 1 < ns) ? hi + static_cast<size_t>(st + 1) * nk : none;
+        const uint32_t rows  = std::min(4u, H - 4 * st);
+        const uint64_t live  = ht_sigprop::ROW0 * ((1u << rows) - 1);
+        // SigProp codes nothing in a stripe with nothing significant in or next to it, nor
+        // in one where every sample is significant already.
+        uint64_t any_sig = 0, any_open = 0, next_row0 = 0;
+        for (uint32_t k = 0; k < nk; ++k) {
+          any_sig |= sig[k];
+          any_open |= ~sig[k] & live & ((k + 1 == nk) ? last_cols : ~0ull);
+          next_row0 |= next[k] & ht_sigprop::ROW0;
+        }
+        if (any_sig == 0 && !above_any && (causal || next_row0 == 0)) continue;  // above[] stays zero
+        if (any_open == 0) {
+          above_any = false;
+          for (uint32_t k = 0; k < nk; ++k) {
+            above[k] = sig[k] & ht_sigprop::ROW3;
+            above_any |= above[k] != 0;
+          }
+          continue;
+        }
+        if (nk == 4)  // 64 samples wide, the usual
+          ht_sigprop::solve_stripe<4>(sig, lo + static_cast<size_t>(st) * nk, next, above, nk, rows,
+                                      last_cols, causal, newly, coded);
+        else
+          ht_sigprop::solve_stripe<>(sig, lo + static_cast<size_t>(st) * nk, next, above, nk, rows,
+                                     last_cols, causal, newly, coded);
+        above_any = false;
+        for (uint32_t k = 0; k < nk; ++k) {
+          nsp += popcount64(coded[k]);
+          nnew += popcount64(newly[k]);
+          above_any |= above[k] != 0;
+        }
+      }
+      rd.planes[j - j0].Nsp  = nsp;
+      rd.planes[j - j0].Nnew = nnew;
+      std::swap(lo, hi);
+    }
   }
 
   // The steps of the convex hull of the model points, for the threshold estimate: rate by
@@ -512,7 +698,7 @@ void ht_rd_stats(j2k_codeblock *block, double lambda) {
       cand[nc++] = {model_lcup(rd, j), rd.w * cleanup_distortion(rd, j)};
       continue;
     }
-    const set_model sm = model_set(rd, j, W * H);
+    const set_model sm = model_set(rd, j);
     for (int k = 0; k < 3; ++k) cand[nc++] = {sm.R[k], rd.w * sm.D[k]};
   }
   std::sort(cand, cand + nc,
@@ -544,7 +730,7 @@ void ht_rd_stats(j2k_codeblock *block, double lambda) {
 // The plane of the HT set holding a measured code-block's best model point at slope L
 // (cleanup, SigProp or MagRef); false when leaving the code-block out is best.  A set's
 // SigProp and MagRef points need the plane under it measured.
-static bool best_set(const ht_rd_info &rd, uint32_t samples, double L, uint32_t &p) {
+static bool best_set(const ht_rd_info &rd, double L, uint32_t &p) {
   double best = rd.w * rd.D2zero * 0.25;
   bool found  = false;
   for (uint32_t j = rd.j0; j < rd.msb; ++j) {
@@ -558,7 +744,7 @@ static bool best_set(const ht_rd_info &rd, uint32_t samples, double L, uint32_t 
       continue;
     }
     if (j == rd.j0) continue;
-    const set_model m = model_set(rd, j, samples);
+    const set_model m = model_set(rd, j);
     for (int k = 0; k < 3; ++k) {
       const double c = rd.w * m.D[k] + L * m.R[k];
       if (c < best) {
@@ -583,16 +769,15 @@ int32_t ht_rd_code(j2k_codeblock *block, const uint8_t ROIshift) {
   }
 
   // The set holding the best point at the estimate (cleanup, SigProp or MagRef).
-  const uint32_t samples = block->size.x * block->size.y;
-  uint32_t p             = 0;
-  const bool pred_none   = !best_set(rd, samples, rd.lambda, p);
+  uint32_t p           = 0;
+  const bool pred_none = !best_set(rd, rd.lambda, p);
   if (pred_none) {
     // Left out at the estimate.  Unless it stays out at a quarter of it (two planes'
     // worth), code the coarsest set, which costs little and may still be needed;
     // otherwise code nothing: a code-block with something significant still takes a full
     // pass of the cleanup coder, and most of these would be coded for nothing.
     uint32_t q = 0;
-    if (!best_set(rd, samples, 0.25 * rd.lambda, q)) {
+    if (!best_set(rd, 0.25 * rd.lambda, q)) {
       rd.p_coded = 0;
       rd.refined = false;
       rd.skipped = true;
@@ -971,7 +1156,7 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
   auto point_of = [&](uint32_t i) -> const rd_point & { return hull[cblks[i].first + choice[i]]; };
 
   // Every code-block's convex hull: leaving it out, the three points of its coded set, and
-  // the model cleanup points of the sets above.
+  // the model points of the sets above.
   bool with_model = true;
   auto build      = [&]() {
     hull.clear();
@@ -988,8 +1173,11 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
           pts.push_back({static_cast<double>(rd.Lcup + rd.Lref), w * rd.Dmr, rd.p_coded, 3});
         }
         if (with_model)
-          for (uint32_t p = rd.p_coded + 1u; p < rd.msb; ++p)
-            pts.push_back({model_lcup(rd, p), w * cleanup_distortion(rd, p), static_cast<uint8_t>(p), 1});
+          for (uint32_t p = rd.p_coded + 1u; p < rd.msb; ++p) {
+            const set_model sm = model_set(rd, p);
+            for (uint8_t k = 0; k < 3; ++k)
+              pts.push_back({sm.R[k], w * sm.D[k], static_cast<uint8_t>(p), static_cast<uint8_t>(k + 1)});
+          }
       }
       // Ties go to the plane nearest the coded one (fewer transcodes).
       std::sort(pts.begin(), pts.end(), [](const rd_point &a, const rd_point &b) {
