@@ -472,12 +472,17 @@ set_tests_properties(enc_ht_refine_part1_rejected PROPERTIES WILL_FAIL TRUE)
 
 # Tiles and image offsets that move subbands off the strip pipeline of the streaming
 # encoder: subbands starting on an odd row (they used to crash), or between code-block rows
-# (they used to be coded wrong, even lossless).  Lossless round trips must be exact; the
-# lossy one measured 2/0.164.
+# (they used to be coded wrong, even lossless, and the decoder rejected such codestreams:
+# its strips did not follow the code-block grid either).  Lossless round trips must be
+# exact; the lossy ones measured 2/0.164 and 2/0.163.
 foreach(_case "tiles96;Stiles={96,256};Creversible=yes;0;0" "tiles96_lossy;Stiles={96,256};Qstep=0.002;4;0.25"
+              "tiles200;Stiles={200,300};Creversible=yes;0;0" "tiles200_lossy;Stiles={200,300};Qstep=0.002;4;0.25"
+              "tiles136;Stiles={136,768};Creversible=yes;0;0"
+              "origin_y;Sorigin={1,0};Creversible=yes;0;0"
               "origin_tiles;Sorigin={5,3} Stiles={100,77};Creversible=yes;0;0"
               "origin_x;Sorigin={0,1};Creversible=yes;0;0"
-              "origin_tiles64;Sorigin={33,17} Stiles={64,64};Creversible=yes;0;0")
+              "origin_tiles64;Sorigin={33,17} Stiles={64,64};Creversible=yes;0;0"
+              "origin_precincts;Sorigin={7,0} Cprecincts={64,64};Creversible=yes;0;0")
   list(GET _case 0 _t)
   list(GET _case 1 _layout)
   list(GET _case 2 _mode)

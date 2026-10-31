@@ -214,7 +214,8 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx, int32_
     const int32_t sb_y0 = static_cast<int32_t>(sb->get_pos0().y);
     const int32_t sb_y1 = static_cast<int32_t>(sb->get_pos1().y);
     if (sb_y1 > sb_y0) {
-      const int32_t num_strips = (sb_y1 - sb_y0 + codeblock_height - 1) / codeblock_height;
+      // Strips follow the code-block grid (see decode_strip), so the first may be short.
+      const int32_t num_strips = (sb_y1 - 1) / codeblock_height - sb_y0 / codeblock_height + 1;
       if (num_strips > 0) {
         strip_cache_.resize(static_cast<size_t>(num_strips));
       }
@@ -550,9 +551,12 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
 void j2k_subband_row_buf::decode_strip(int32_t abs_row) {
   const int32_t sb_y0 = static_cast<int32_t>(sb->get_pos0().y);
   const int32_t sb_y1 = static_cast<int32_t>(sb->get_pos1().y);
-  const int32_t rel   = abs_row - sb_y0;
-  const int32_t s_y0  = sb_y0 + (rel / cb_h) * cb_h;
-  const int32_t s_y1  = std::min(s_y0 + cb_h, sb_y1);
+  // A strip is one row of the code-block grid, which starts at row 0 of the subband
+  // coordinates, not at the subband's first row: a subband that starts between grid
+  // rows (tiles or image offsets) has a short first strip.  Every code-block then lies
+  // within one strip (precincts only split the grid further).
+  const int32_t s_y0 = std::max(sb_y0, (abs_row / cb_h) * cb_h);
+  const int32_t s_y1 = std::min((abs_row / cb_h + 1) * cb_h, sb_y1);
 
   strip_y0 = s_y0;
   strip_y1 = s_y1;
@@ -599,10 +603,10 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   if (!pool || pool->num_threads() <= 1) return;
 
   prefetch_y0 = next_y0;
-  prefetch_y1 = std::min(next_y0 + cb_h, sb_y1);
+  prefetch_y1 = std::min((next_y0 / cb_h + 1) * cb_h, sb_y1);  // one code-block grid row (decode_strip)
 
   const int32_t sb_y0     = static_cast<int32_t>(sb->get_pos0().y);
-  const int32_t strip_idx = (prefetch_y0 - sb_y0) / cb_h;
+  const int32_t strip_idx = next_y0 / cb_h - sb_y0 / cb_h;
   StripCacheEntry *entry  = (strip_idx >= 0 && static_cast<size_t>(strip_idx) < strip_cache_.size())
                                 ? &strip_cache_[static_cast<size_t>(strip_idx)]
                                 : nullptr;
