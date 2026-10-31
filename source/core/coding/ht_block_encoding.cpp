@@ -26,15 +26,17 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Portable HT block encoder (no SIMD).  It mirrors the AVX2 version
+// Portable HT block encoder (no SIMD; x86-64 builds without AVX2 use the SSE2 one,
+// ht_block_encoding_sse2.cpp).  It mirrors the AVX2 version
 // (ht_block_encoding_avx2.cpp) in plain C++ and writes the same bytes:
 // VLC and UVLC codewords of a quad pair are emitted together, MagSgn
 // codewords are collected per line pair and written in one batch, and in
 // line pairs after the first every per-quad value is computed before the
 // serial MEL/VLC pass.
 
+#include "utils.hpp"  // OPENHTJ2K_ENABLE_SSE2
 #if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2)) \
-    && !defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+    && !defined(OPENHTJ2K_ENABLE_WASM_SIMD) && !defined(OPENHTJ2K_ENABLE_SSE2)
   #include <algorithm>
   #include <cmath>
   #include "coding_units.hpp"
