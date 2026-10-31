@@ -49,7 +49,9 @@
     columns.
   - With the reversible colour transform and several tiles across, it wrote up
     to 15 samples past a row buffer (a heap overflow) for every tile that does
-    not start at the image's left edge. Present since 0.19.0.
+    not start at the image's left edge, and with AVX2 (not AVX-512) it crashed
+    on such tiles: the colour transform used aligned loads and stores on rows
+    that start at the tile's first column. Present since 0.19.0.
 
   Output is unchanged for tiles and offsets the strip pipeline already handled.
 

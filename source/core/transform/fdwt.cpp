@@ -1036,7 +1036,7 @@ static void emit_ready_f(fdwt_2d_state *s) {
       if (s->use_i32) {
         int32_t *out = static_cast<int32_t *>(s->horiz_tmp) + s->horiz_left;
         out[0] = reinterpret_cast<const int32_t *>(ring_row)[0];
-        if (s->u0 % 2 != 0) out[0] <<= 1;  // floor(x*2.0) for an integer == x<<1
+        if (s->u0 % 2 != 0) out[0] *= 2;  // floor(x*2.0) for an integer (a shift is undefined for x < 0)
       } else {
         sprec_t *out = static_cast<sprec_t *>(s->horiz_tmp) + s->horiz_left;
         out[0] = ring_row[0];
@@ -1188,8 +1188,8 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
         int32_t *out_i = reinterpret_cast<int32_t *>(out);
         const int32_t *src_i = reinterpret_cast<const int32_t *>(src);
         out_i[0] = src_i[0];
-        if (s->v0 % 2 != 0) out_i[0] <<= 1;  // vertical HP
-        if (s->u0 % 2 != 0) out_i[0] <<= 1;  // horizontal HP
+        if (s->v0 % 2 != 0) out_i[0] *= 2;  // vertical HP (a shift is undefined for x < 0)
+        if (s->u0 % 2 != 0) out_i[0] *= 2;  // horizontal HP
       } else {
         out[0] = src[0];
         if (s->transformation == 1) {
@@ -1203,7 +1203,7 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
           + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
       if (is_hp) {
         const int32_t w = s->u1 - s->u0;
-        for (int32_t c = 0; c < w; ++c) ms[c] <<= 1;  // x*2 == x<<1 for integers
+        for (int32_t c = 0; c < w; ++c) ms[c] *= 2;  // a shift is undefined for x < 0
       }
       int32_t *htmp_i = static_cast<int32_t *>(s->horiz_tmp);
       dwt_1d_extr_fixed<int32_t>(htmp_i, ms, s->horiz_left, s->horiz_right, s->u0, s->u1);
