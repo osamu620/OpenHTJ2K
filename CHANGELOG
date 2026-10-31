@@ -31,6 +31,28 @@
   4-5% at Qfactor 90 (10% on the M1 Max). The default, 0, leaves the output
   unchanged.
 
+## Fixed
+
+### Encoder
+- The streaming encoder (the one the command-line encoder uses) mishandled
+  tiles and image offsets that do not start the subbands of every resolution
+  on its code-block grid:
+  - A resolution starting on an odd row (for example `Stiles={200,300}` with 5
+    DWT levels, or `Sorigin={1,0}`) crashed it: such components are coded from
+    whole-subband buffers, which it no longer allocated. Present since 0.19.0.
+  - A subband starting between code-block rows (for example `Stiles={96,256}`
+    or `Stiles={192,768}`) was cut into code-blocks at the wrong rows, without
+    any error: even `Creversible=yes` gave 38 dB on kodim23 instead of a
+    lossless result. Present at least since 0.18.0. Such components now take
+    the whole-subband path too.
+  - With an image offset (`Sorigin`), it read the input from the wrong rows and
+    columns.
+  - With the reversible colour transform and several tiles across, it wrote up
+    to 15 samples past a row buffer (a heap overflow) for every tile that does
+    not start at the image's left edge. Present since 0.19.0.
+
+  Output is unchanged for tiles and offsets the strip pipeline already handled.
+
 # [0.21.2] - 2026-10-31
 
 Patch release: two memory-safety fixes for tall or wide code-blocks. The

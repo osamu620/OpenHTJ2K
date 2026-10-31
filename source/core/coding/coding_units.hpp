@@ -568,6 +568,10 @@ class j2k_tile_component : public j2k_tile_base {
   int32_t lb_dc_offset      = 0;
   int32_t lb_dc_shiftup     = 0;
   bool lb_enc_mode          = false;  // true in any LB encode path (streaming or buffered)
+  // Streaming encode: the subbands above the lowest resolution have no sample buffers,
+  // because the strip pipeline quantises the wavelet output straight into the
+  // code-blocks.  Set by create_resolutions() only where that pipeline applies.
+  bool enc_no_subband_buffers = false;
   // default constructor
   j2k_tile_component();
   // destructor
@@ -893,6 +897,10 @@ class j2k_tile : public j2k_tile_base {
   // the LSB, followed by HT SigProp and MagRef passes (j2k_codeblock::
   // ht_refine_planes).  Set before enc_init(); 0 = cleanup pass only.
   uint8_t enc_ht_refine = 0;
+  // Streaming encode: the image origin in each component's coordinates (enc_img_x0) and
+  // in component 0's rows (enc_img_y0), which the row source counts from.
+  std::vector<uint32_t> enc_img_x0;
+  uint32_t enc_img_y0 = 0;
   // Initialization with tile-index
   void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
                 bool line_based = false, bool streaming = false);

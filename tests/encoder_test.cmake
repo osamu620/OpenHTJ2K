@@ -469,3 +469,24 @@ set_tests_properties(cmp_ht_refine1_st PROPERTIES DEPENDS "enc_ht_refine1;enc_ht
 # Refinement passes exist only in the HT block coder: Cht_refine with Cmodes=0 is refused.
 add_test(NAME enc_ht_refine_part1_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23refine_part1.j2c Cmodes=0 Cht_refine=1)
 set_tests_properties(enc_ht_refine_part1_rejected PROPERTIES WILL_FAIL TRUE)
+
+# Tiles and image offsets that move subbands off the strip pipeline of the streaming
+# encoder: subbands starting on an odd row (they used to crash), or between code-block rows
+# (they used to be coded wrong, even lossless).  Lossless round trips must be exact; the
+# lossy one measured 2/0.164.
+foreach(_case "tiles96;Stiles={96,256};Creversible=yes;0;0" "tiles96_lossy;Stiles={96,256};Qstep=0.002;4;0.25"
+              "origin_tiles;Sorigin={5,3} Stiles={100,77};Creversible=yes;0;0"
+              "origin_x;Sorigin={0,1};Creversible=yes;0;0"
+              "origin_tiles64;Sorigin={33,17} Stiles={64,64};Creversible=yes;0;0")
+  list(GET _case 0 _t)
+  list(GET _case 1 _layout)
+  list(GET _case 2 _mode)
+  list(GET _case 3 _pae)
+  list(GET _case 4 _mse)
+  separate_arguments(_layout)
+  add_test(NAME enc_${_t} COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_${_t}.j2c ${_layout} ${_mode})
+  add_test(NAME dec_${_t} COMMAND open_htj2k_dec -i kodim23_${_t}.j2c -o kodim23_${_t}.ppm)
+  set_tests_properties(dec_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME comp_${_t} COMMAND imgcmp kodim23_${_t}.ppm ${ENCODER_REF_DIR}/kodim23.ppm ${_pae} ${_mse})
+  set_tests_properties(comp_${_t} PROPERTIES DEPENDS dec_${_t})
+endforeach()
