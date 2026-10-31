@@ -46,6 +46,7 @@
 #include <cstring>
 
 #include "coding_units.hpp"
+#include "ht_sigprop.hpp"
 #include "utils.hpp"
 
 // With BMI2, PEXT extracts a coding group's bits in one instruction.  Zen 1 and Zen 2
@@ -302,11 +303,7 @@ uint32_t terminate_refinement(sp_packer &sp, mr_packer &mr, ht_refinement_info *
   return sp.pos + mr.pos;
 }
 
-// Stripe words: bit 4c + r of word k is the sample in row r and column 16k + c of a
-// stripe, so each 16-bit field is one coding group of four columns in scan order.
-constexpr uint64_t ROW0      = 0x1111111111111111ull;  // row 0 of every column
-constexpr uint64_t ROW3      = ROW0 << 3;
-constexpr uint32_t MAX_WORDS = 1024 / 16;
+using ht_sigprop::MAX_WORDS;
 
 struct stripe_words {
   uint64_t sig[MAX_WORDS];   // significant after the cleanup pass: magnitude at least 2^p
@@ -328,13 +325,6 @@ inline uint64_t pack_nibbles(const uint8_t *b) {
   lo = (lo | (lo >> 16)) & 0x00000000FFFFFFFFull;
   hi = (hi | (hi >> 16)) & 0x00000000FFFFFFFFull;
   return lo | (hi << 32);
-}
-
-// The samples that a newly significant sample n makes SigProp candidates, other than
-// the next one along its own row: the sample below it, and the samples above and
-// below that one in the next column.  left is the word before n.
-inline uint64_t reached(uint64_t n, uint64_t left) {
-  return (((n << 1) | (n << 5) | (left >> 59)) & ~ROW0) | (((n << 3) | (left >> 61)) & ~ROW3);
 }
 
 // Codes the SigProp and MagRef passes of plane q = p - 1 after a cleanup pass at
@@ -362,11 +352,8 @@ uint32_t encode_refinement_passes(j2k_codeblock *block, uint32_t p, uint8_t *out
   uint8_t sg[1024], bt[1024], sn[1024];  // a stripe per column (bit r = row r), packed below
   stripe_words words[2];                 // the stripe being coded and the next one
   uint64_t above[MAX_WORDS] = {};        // at row 3: the stripe above's last row after SigProp
-  uint64_t vert[MAX_WORDS + 1];          // a significant sample in the same column, rows -1..+1
-  uint64_t near_sig[MAX_WORDS];          // a significant sample among the eight neighbours
-  uint64_t open[MAX_WORDS];              // not significant after the cleanup pass
-  uint64_t grow[MAX_WORDS];              // open with bit q set: becomes significant once coded
   uint64_t newly[MAX_WORDS];             // became significant in this SigProp pass
+  uint64_t coded[MAX_WORDS];             // coded by this SigProp pass
   // Each step reads stripe t, then codes the stripe before it, whose SigProp
   // neighbourhood reaches the first row of stripe t.
   for (uint32_t t = 0; t <= ns; ++t) {
@@ -403,89 +390,14 @@ uint32_t encode_refinement_passes(j2k_codeblock *block, uint32_t p, uint8_t *out
     const uint32_t s        = t - 1;
     const stripe_words &cur = words[s & 1];
     const uint32_t rows     = std::min(4u, H - 4 * s);
-    const uint64_t live     = ROW0 * ((1u << rows) - 1);
-
-    // SigProp (7.4): stripes of four rows scanned column by column, in groups of four
-    // columns; the magnitude bits of a group come before its sign bits.  A sample is
-    // coded when it is not significant and one of its eight neighbours is significant
-    // or became significant earlier in this pass.  Earlier means the stripe above,
-    // the column to the left, and the rows above in the same column.  With CAUSAL the
-    // last row of a stripe does not look at the row below.
-    for (uint32_t k = 0; k < nk; ++k) {
-      const uint64_t g = cur.sig[k];
-      uint64_t v       = g | ((g << 1) & ~ROW0) | ((g >> 1) & ~ROW3) | ((above[k] >> 3) & ROW0);
-      if (!causal) v |= (next.sig[k] & ROW0) << 3;
-      vert[k] = v;
-    }
-    vert[nk] = 0;
-    // The newly significant samples solve, in scan order,
-    //   newly(r, j) = grow(r, j) & (near_sig(r, j) | newly(r, j - 1) | reached(r, j)).
-    // Most of them are next to a sample that the cleanup pass made significant; the
-    // rest are solved only where those can spread.
-    uint64_t left = 0, left_new = 0, spread = 0;
-    for (uint32_t k = 0; k < nk; ++k) {
-      const uint64_t v = vert[k];
-      near_sig[k]      = v | (v << 4) | (left >> 60) | (v >> 4) | (vert[k + 1] << 60);
-      left             = v;
-      open[k]          = ~cur.sig[k] & live;
-      grow[k]          = open[k] & cur.bit[k];
-      const uint64_t n = grow[k] & near_sig[k];
-      spread |= grow[k] & ~n & (reached(n, left_new) | (n << 4) | (left_new >> 60));
-      newly[k] = n;
-      left_new = n;
-    }
-    open[nk - 1] &= last_cols;
-
-    // Short spreads settle after a step or two over all rows at once.
-    for (uint32_t step = 0; step < 2 && spread; ++step) {
-      spread = 0;
-      left   = 0;
-      for (uint32_t k = 0; k < nk; ++k) {
-        const uint64_t n   = newly[k];
-        const uint64_t add = grow[k] & ~n & (reached(n, left) | (n << 4) | (left >> 60));
-        newly[k]           = n | add;
-        spread |= add;
-        left = n | add;
-      }
-    }
-    // Otherwise, row by row, newly(r, j - 1) is a run along the row: adding the seeds to
-    // the row's grow bits (other bits set, so carries pass them) clears each run from
-    // its first seed on.  The row below is known only from the previous round, so the
-    // rows are repeated while it adds a seed to the row above.
-    while (spread) {
-      for (uint32_t r = 0; r < rows; ++r) {
-        const uint64_t rr = ROW0 << r;
-        uint64_t carry    = 0;
-        left              = 0;
-        for (uint32_t k = 0; k < nk; ++k) {
-          const uint64_t n    = newly[k];
-          const uint64_t gr   = grow[k] & rr;
-          const uint64_t seed = (near_sig[k] | reached(n, left)) & gr;
-          const uint64_t run  = gr | ~rr;
-          const uint64_t t    = run + seed;
-          const uint64_t sum  = t + carry;
-          carry               = static_cast<uint64_t>(t < run) | static_cast<uint64_t>(sum < t);
-          newly[k]            = (n & ~rr) | (((run & ~sum) | seed) & gr);
-          left                = n;
-        }
-      }
-      uint64_t more = 0;
-      left          = 0;
-      for (uint32_t k = 0; k < nk; ++k) {
-        const uint64_t n = newly[k];
-        more |= (((n << 3) | (left >> 61)) & ~ROW3) & grow[k] & ~n;
-        left = n;
-      }
-      if (more == 0) break;
-    }
+    ht_sigprop::solve_stripe<>(cur.sig, cur.bit, next.sig, above, nk, rows, last_cols, causal, newly,
+                               coded);
 
     if (info != nullptr && info->newly != nullptr)
       std::memcpy(info->newly + s * nk, newly, nk * sizeof(uint64_t));
-    left = 0;
     for (uint32_t k = 0; k < nk; ++k) {
       const uint64_t n    = newly[k];
-      const uint64_t cand = open[k] & (near_sig[k] | reached(n, left) | (n << 4) | (left >> 60));
-      left                = n;
+      const uint64_t cand = coded[k];
       const uint64_t b    = cur.bit[k];
       const uint64_t sgn  = cur.sign[k];
       const uint64_t g    = cur.sig[k];
@@ -531,7 +443,6 @@ uint32_t encode_refinement_passes(j2k_codeblock *block, uint32_t p, uint8_t *out
       ref = extract_bits(static_cast<uint32_t>(b >> 32), static_cast<uint32_t>(g >> 32), nref);
       mr.emit(ref, nref);
 #endif
-      above[k] = (g | n) & ROW3;
     }
   }
 
