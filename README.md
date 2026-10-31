@@ -41,9 +41,9 @@ receiver that sustains **4K @ 60 fps on modern x86-64**.
   coefficients are ready and coded once, at the passes a running
   threshold estimate picks; only the code-blocks that the final cut moves
   to a higher bit-plane are transcoded, from their coded passes. On a
-  3840×2160 12-bit RGB image, `-rate 0.96` takes 1.16× the time of a
-  fixed-step encode of the same size with all threads and 2.13× on one
-  (whole-process time, best of 7 runs, Ryzen 9 9950X), at a slightly
+  3840×2160 12-bit RGB image, `-rate 0.96` takes 1.18× the time of a
+  fixed-step encode of the same size with all threads and 2.07× on one
+  (whole-process time, Ryzen 9 9950X), at a slightly
   higher PSNR than that step size (34.10 vs 34.09 dB).
 - The cut pays off most on content with large flat areas: on a 16-bit
   4096×2160 frame of *Elephants Dream* at 2 bpp, 86.7 dB PSNR against
