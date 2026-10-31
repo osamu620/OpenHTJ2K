@@ -1,4 +1,16 @@
-# [Unreleased]
+# [0.22.0] - 2026-10-31
+
+Feature release. The encoder gains rate control for HTJ2K: `-rate R` cuts the
+codestream to R bits per pixel at the least squared error (PCRD optimisation
+over the HT cleanup, SigProp and MagRef passes), at about 1.2 times the time of
+a fixed-step encode with all threads (experimental). It builds on the new HT
+SigProp and HT MagRef encoding (`Cht_refine`, experimental). The Part 1 block
+coder supports all six code-block mode switches. Fixes: the streaming encoder's
+handling of tiles and image offsets (crashes, wrong output and a heap
+overflow), and decoding of codestreams whose tiles or image offset start a
+subband between code-block rows. Without the new options, encoded output is
+byte-identical to 0.21.2 except for the tile and offset cases fixed here; the
+API only gains functions.
 
 ## Added
 
