@@ -288,6 +288,10 @@ class j2k_codeblock : public j2k_region {
     if (pass_length != pass_length_store) delete[] pass_length;
   }
 
+  // Encoder: the bytes of the compressed data that quality layer l carries, from the
+  // passes of each layer (layer_passes[]) and the lengths in pass_length[].
+  void layer_bytes(uint16_t l, uint32_t &start, uint32_t &len) const;
+
   void ensure_pass_capacity(uint8_t n) {
     if (n <= PASS_LEN_INLINE || pass_length != pass_length_store) return;
     auto *heap = new uint32_t[128]();
@@ -453,6 +457,9 @@ class j2k_precinct : public j2k_region {
   std::unique_ptr<uint8_t[]> packet_header;
   // length of packet header
   uint32_t packet_header_length;
+  // With more than one quality layer, packet_header holds the headers of all the layers'
+  // packets, in order; layer_header_end[l] is where layer l's ends.
+  std::vector<uint32_t> layer_header_end;
 
  public:
   j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_siz &p0, const element_siz &p1,
@@ -799,6 +806,8 @@ class j2k_tile : public j2k_tile_base {
   uint8_t progression_order;
   // number of layers (Table A.14)
   uint16_t numlayers;
+  // Encoder: bytes of each quality layer's packets (build_packet_headers()).
+  std::vector<uint32_t> layer_length;
   // multiple component transform (Table A.17)
   uint8_t MCT;
 
@@ -1026,9 +1035,13 @@ class j2k_tile : public j2k_tile_base {
   // streaming line-based encoding: pulls rows via callback instead of pre-allocated buffer
   uint8_t *encode_line_based_stream(std::function<void(uint32_t y, int32_t **rows, uint16_t nc)> src_fn,
                                     const std::vector<uint32_t> &img_comp_widths);
-  // Builds the packet header of every precinct from its code-blocks' passes and lengths,
-  // and sets the tile length.  Can be called again after the code-blocks change.
+  // Builds the packet headers of every precinct, one per quality layer, from its
+  // code-blocks' passes and lengths, and sets the tile length and the length of each
+  // layer's packets.  Can be called again after the code-blocks change.
   void build_packet_headers();
+  // Tile-part bytes (SOT and SOD markers, SOP markers and packets) of quality layers 0 to
+  // last; the tile-part size for the last layer.  After build_packet_headers().
+  OPENHTJ2K_NODISCARD uint64_t get_layers_size(uint16_t last) const;
   // create packets in encoding
   void construct_packets(j2k_main_header &main_header);
   // write packets into destination
