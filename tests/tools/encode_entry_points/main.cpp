@@ -228,7 +228,8 @@ int main(int argc, char *argv[]) {
           run(Case{sz[0], sz[1], cp.nc, cp.mct, xf, lv, 8, false}, Layout{0, 0, 0, 0});
 
   // Offsets and tiles that start subbands on odd rows or between code-block rows.
-  const Layout layouts[] = {{3, 0, 0, 0}, {5, 3, 100, 77}, {0, 0, 96, 96}, {33, 17, 64, 64}};
+  const Layout layouts[] = {{3, 0, 0, 0},   {0, 1, 0, 0},     {0, 2, 0, 0},     {5, 3, 100, 77},
+                            {0, 0, 96, 96}, {33, 17, 64, 64}, {0, 0, 300, 200}, {0, 0, 768, 136}};
   const Comp lay_comps[] = {{1, 0}, {3, 1}};
   for (auto &lay : layouts)
     for (auto &cp : lay_comps)
