@@ -123,6 +123,22 @@ inline void finalize_f32_to_i32(const float *src, int32_t *dst, uint32_t width, 
       wasm_v128_store(dst + x + 4, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(v1, vdc), vmn), vmx));
     }
   }
+#elif defined(OPENHTJ2K_ENABLE_SSE2)
+  {
+    const __m128 vsc   = _mm_set1_ps(scale);
+    const __m128 vhalf = _mm_set1_ps(0.5f);
+    const __m128i vdc  = _mm_set1_epi32(dc);
+    const __m128i vmx  = _mm_set1_epi32(maxval);
+    const __m128i vmn  = _mm_set1_epi32(minval);
+    for (; x + 8 <= width; x += 8) {
+      __m128i v0 = finalize_round_sse2(_mm_loadu_ps(src + x), vsc, vhalf);
+      __m128i v1 = finalize_round_sse2(_mm_loadu_ps(src + x + 4), vsc, vhalf);
+      _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x),
+                       clamp_epi32_sse2(_mm_add_epi32(v0, vdc), vmn, vmx));
+      _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x + 4),
+                       clamp_epi32_sse2(_mm_add_epi32(v1, vdc), vmn, vmx));
+    }
+  }
 #endif
   for (; x < width; ++x) dst[x] = finalize_sample(src[x], scale, dc, maxval, minval);
 }

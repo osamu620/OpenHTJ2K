@@ -103,6 +103,24 @@ static inline v128_t finalize_round_wasm(v128_t v, v128_t vscale, v128_t vhalf) 
   return wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_floor(wasm_f32x4_add(wasm_f32x4_mul(v, vscale), vhalf)));
 }
 #endif
+#if defined(OPENHTJ2K_ENABLE_SSE2)
+// SSE2 has no floor: truncate, convert back and step down where that went up.  Raising
+// the input to -2^31 first keeps every result out of int32 range (and NaN, for which
+// maxps returns its second operand) at INT32_MIN, which the scalar conversion
+// (cvttss2si) gives too, instead of stepping it down to INT32_MAX.
+static inline __m128i finalize_round_sse2(__m128 v, __m128 vscale, __m128 vhalf) {
+  const __m128 x  = _mm_max_ps(_mm_add_ps(_mm_mul_ps(v, vscale), vhalf), _mm_set1_ps(-2147483648.0f));
+  const __m128i t = _mm_cvttps_epi32(x);
+  return _mm_add_epi32(t, _mm_castps_si128(_mm_cmpgt_ps(_mm_cvtepi32_ps(t), x)));
+}
+// min(max(x, lo), hi) per int32 lane; SSE2 has no pmaxsd/pminsd, so select by mask.
+static inline __m128i clamp_epi32_sse2(__m128i x, __m128i lo, __m128i hi) {
+  __m128i m = _mm_cmplt_epi32(x, lo);
+  x         = _mm_or_si128(_mm_and_si128(m, lo), _mm_andnot_si128(m, x));
+  m         = _mm_cmpgt_epi32(x, hi);
+  return _mm_or_si128(_mm_and_si128(m, hi), _mm_andnot_si128(m, x));
+}
+#endif
 
 // Fused inverse color transform (float-domain) + float→int32 finalize.
 // Reads Y/Cb/Cr from ring buffer (read-only), applies inverse MCT, applies per-component
@@ -273,6 +291,10 @@ void fused_ycbcr_irrev_to_rgb_i32(const float *y, const float *cb, const float *
 void fused_ycbcr_rev_to_rgb_i32(const float *y, const float *cb, const float *cr,
                                  int32_t *r, int32_t *g, int32_t *b, uint32_t width,
                                  const FinalizeParams *fp);
+  #if defined(OPENHTJ2K_ENABLE_SSE2)
+void fused_ycbcr_irrev_to_rgb_i32_sse2(const float *y, const float *cb, const float *cr, int32_t *r,
+                                       int32_t *g, int32_t *b, uint32_t width, const FinalizeParams *fp);
+  #endif
 #endif
 
 inline int32_t round_d(double val) {
