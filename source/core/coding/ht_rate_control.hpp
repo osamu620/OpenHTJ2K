@@ -47,7 +47,10 @@ class j2k_codeblock;
 // code-blocks whose point lies above their coded set.
 
 // The slope threshold estimate: the measured code-blocks' rate-distortion curves, by
-// subband class, extrapolated to the code-blocks not yet measured.
+// subband class, extrapolated to the code-blocks not yet measured.  For Part 1 code-blocks
+// it is given P1_ESTIMATE_BUDGET times their budget: its models are HT's, whose rates are
+// 8-30% above Part 1's on the images measured.
+constexpr double P1_ESTIMATE_BUDGET = 1.4;
 class ht_rc_state {
  public:
   // budget: bytes the code-blocks may take (the target less an estimate of everything else).
@@ -76,6 +79,9 @@ class ht_rc_state {
 void ht_rd_stats(j2k_codeblock *block, double lambda);
 // Codes the HT set of a measured code-block for block->rd->lambda.
 int32_t ht_rd_code(j2k_codeblock *block, uint8_t ROIshift);
+// Codes a measured Part 1 code-block's passes down to the bit-plane that the cut can need
+// at block->rd->lambda, recording every pass as a truncation point.
+int32_t p1_rd_code(j2k_codeblock *block, uint8_t ROIshift);
 
 // Picks every HT code-block's truncation point so that the codestream takes at most
 // target_bytes, transcodes the code-blocks whose point lies above their coded set, and
@@ -83,3 +89,9 @@ int32_t ht_rd_code(j2k_codeblock *block, uint8_t ROIshift);
 // the tile-parts (SOC, main header, EOC).  Returns the codestream length; it exceeds
 // target_bytes only when even empty code-blocks do not fit.
 uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes, uint64_t target_bytes);
+
+// The same for Part 1 (EBCOT) code-blocks, whose coded passes ebcot_encode() records as
+// truncation points (p1_rd_code()): picks every code-block's last pass so that the
+// codestream takes at most target_bytes, cuts its data there, terminated, and builds the
+// packet headers of every tile.  Returns the codestream length.
+uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes, uint64_t target_bytes);

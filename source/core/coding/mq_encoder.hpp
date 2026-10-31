@@ -97,6 +97,10 @@ class mq_encoder {
     }
   }
 
+  // Bytes of the segment that later coding cannot change: those before the byte still
+  // held in B (a carry can still reach B, never the bytes before it).
+  uint32_t settled_bytes() const { return BP > 0 ? static_cast<uint32_t>(BP) : 0u; }
+
   // FLUSH (C.2.9).  The optional trailing 0xFF (and the 0xFFAC marker) are not
   // written: a decoder reading past the end of the segment sees 0xFF bytes.
   inline uint32_t flush() {
@@ -200,6 +204,9 @@ class raw_encoder {
       c          = 0;
     }
   }
+
+  // Bytes written so far; later bits never change them.
+  uint32_t settled_bytes() const { return pos; }
 
   // Pads the last byte to the byte boundary and returns the segment length; the
   // segment never ends in 0xFF.  With ERTERM the padding is 0101... (D.6).

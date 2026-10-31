@@ -126,21 +126,25 @@ JPH file format.
 
 ### Rate control
 
-- `-rate Float` *(experimental, HT only)*
+- `-rate Float` *(experimental)*
   - Target bit rate in bits per pixel of the image area: the codestream (without
     any JPH boxes) takes at most `rate × width × height / 8` bytes, usually within
-    a few bytes of it. Each HT code-block is cut to the truncation point of an HT
-    set (cleanup pass, with SigProp, or with SigProp and MagRef, at any bit-plane)
-    that gives the least squared error over the whole image.
+    a few bytes of it. Every code-block is cut at the truncation point that gives
+    the least squared error over the whole image:
+    - HT block coder (the default): after the cleanup pass of an HT set, its
+      SigProp pass or its MagRef pass, at any bit-plane.
+    - Part 1 block coder (`Cmodes=0` or its mode switches, all of which work):
+      after any of its coding passes. The codeword is terminated there, so the
+      codestream is one any JPEG 2000 decoder reads.
   - One quality layer: it takes a single rate, not a list.
-  - Requires `Creversible=no` (the default), the HT block coder and one quality
-    layer; not with `Qfactor` or `Cht_refine`. `Qstep` is the finest step size it
-    can reach; without it, `-rate` uses `1/2^(bit depth + 3)`.
+  - Requires `Creversible=no` (the default) and one quality layer; not with
+    `Qfactor` or `Cht_refine`. `Qstep` is the finest step size it can reach;
+    without it, `-rate` uses `1/2^(bit depth + 3)`.
   - The output does not depend on the number of threads. AVX2 and AVX-512 builds
     give the same codestream.
-  - On a 3840x2160 12-bit image at 0.96 bpp, an encode with `-rate` takes about
-    1.2 times as long as one with a fixed step size of the same size on all
-    threads, 2.1 times on one.
+  - On a 3840x2160 12-bit image, compared with an encode at the fixed step size
+    that gives the same size: HT at 0.96 bpp takes about 1.2 times as long on all
+    threads and 2.1 times on one; Part 1 at 1 bpp about 1.1 and 2.4 times.
 
 ### JPH and component layout
 

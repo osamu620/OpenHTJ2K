@@ -52,6 +52,13 @@
 //    gives exactly the set the encoder would have coded there.  The choice is made once
 //    more with the transcoded sets' exact lengths.
 //
+// Part 1 (EBCOT) code-blocks go through steps 1 and 2 the same way, with the HT models.
+// p1_rd_code() then codes a code-block's passes down to the plane under the one the
+// estimate points to, and ebcot_encode() records every pass as a truncation point: the
+// squared error it leaves (exact) and where a cut after it ends, with the bytes that
+// terminate the codeword there.  p1_rate_control() picks every code-block's last pass at
+// one threshold over all of them; no transcoding is needed.
+//
 // Distortion is the squared error of the reconstructed image: a code-block's error in
 // steps of its base step, weighted by the step size squared, by the energy of its subband's
 // synthesis basis and, with the irreversible colour transform, by that of the inverse
@@ -817,6 +824,35 @@ int32_t ht_rd_code(j2k_codeblock *block, const uint8_t ROIshift) {
   return EXIT_SUCCESS;
 }
 
+// Part 1: the passes go down to the plane under the best HT set's at the estimate (the HT
+// set at p holds the bits a Part 1 code-block codes down to plane p - 1).  The estimate is
+// made with the HT models, whose rates exceed Part 1's (the arithmetic coder codes what HT
+// writes raw), so it is given a larger budget than the code-blocks have
+// (P1_ESTIMATE_BUDGET in ht_rate_control.hpp), which makes it lower.
+int32_t p1_rd_code(j2k_codeblock *block, const uint8_t ROIshift) {
+  ht_rd_info &rd = *block->rd;
+  rd.p1.reset();
+  rd.p1_passes = 0;
+  rd.skipped   = false;
+  rd.p_coded   = 0;
+  if (rd.msb == 0) return ebcot_encode(block, ROIshift);  // nothing significant
+  uint32_t p = 0;
+  if (!best_set(rd, rd.lambda, p)) {
+    uint32_t q = 0;
+    if (!best_set(rd, 0.25 * rd.lambda, q)) {  // left out even at a quarter of it: not coded
+      rd.skipped             = true;
+      block->length          = 0;
+      block->num_passes      = 0;
+      block->layer_passes[0] = 0;
+      block->pass_length[0]  = 0;
+      return EXIT_SUCCESS;
+    }
+    p = rd.msb - 1;
+  }
+  rd.p_coded = static_cast<uint8_t>(p > 0 ? p - 1 : 0);
+  return ebcot_encode(block, ROIshift);
+}
+
 /********************************************************************************
  * Threshold estimate
  *******************************************************************************/
@@ -988,19 +1024,130 @@ struct rd_point {
   uint8_t passes;
 };
 
-struct cblk_ref {
-  j2k_codeblock *block;
-  uint32_t first;  // its hull points: hull[first .. first + n)
-  uint32_t n;
+// The cut at one threshold over code-blocks with truncation points: every code-block's
+// convex hull, the steps of all of them in decreasing slope, and the search for the byte
+// budget that makes the codestream, packet headers included, fill a target.
+class rd_cutter {
+ public:
+  explicit rd_cutter(size_t n) : cblks_(n), choice_(n, 0) {}
+
+  void clear() {
+    hull_.clear();
+    steps_.clear();
+  }
+  // Adds code-block i's hull of the points pts (pts[0]: the code-block left out), which it
+  // sorts.  Ties go to the lower plane, then to fewer passes.
+  void add(uint32_t i, std::vector<rd_point> &pts) {
+    std::sort(pts.begin(), pts.end(), [](const rd_point &a, const rd_point &b) {
+      if (a.R != b.R) return a.R < b.R;
+      if (a.D != b.D) return a.D < b.D;
+      if (a.p != b.p) return a.p < b.p;
+      return a.passes < b.passes;
+    });
+    cblk_ref ref{static_cast<uint32_t>(hull_.size()), 0};
+    hull_.push_back(pts[0]);
+    for (size_t k = 1; k < pts.size(); ++k) {
+      const rd_point &q = pts[k];
+      if (q.D >= hull_.back().D || q.R <= hull_.back().R) continue;
+      while (hull_.size() - ref.first >= 2) {
+        const rd_point &a = hull_[hull_.size() - 2];
+        const rd_point &b = hull_.back();
+        if ((b.D - q.D) * (b.R - a.R) >= (a.D - b.D) * (q.R - b.R))
+          hull_.pop_back();
+        else
+          break;
+      }
+      hull_.push_back(q);
+    }
+    ref.n     = static_cast<uint32_t>(hull_.size()) - ref.first;
+    cblks_[i] = ref;
+    for (uint32_t k = 1; k < ref.n; ++k) {
+      const rd_point &a = hull_[ref.first + k - 1];
+      const rd_point &b = hull_[ref.first + k];
+      steps_.push_back({(a.D - b.D) / (b.R - a.R), b.R - a.R, i, k});
+    }
+  }
+  // After the last add().
+  void sort_steps() {
+    std::sort(steps_.begin(), steps_.end(), [](const hull_step &a, const hull_step &b) {
+      if (a.slope != b.slope) return a.slope > b.slope;
+      if (a.cblk != b.cblk) return a.cblk < b.cblk;
+      return a.k < b.k;
+    });
+  }
+  // The points for a byte budget of the code-blocks: the steps in decreasing slope while
+  // they fit, then any later step that still fits and continues its code-block's hull.
+  void cut(double budget) {
+    std::fill(choice_.begin(), choice_.end(), 0);
+    double used = 0;
+    for (const hull_step &st : steps_) {
+      if (choice_[st.cblk] + 1 != st.k || used + st.dR > budget) continue;
+      choice_[st.cblk] = st.k;
+      used += st.dR;
+    }
+  }
+  const rd_point &point(uint32_t i) const { return hull_[cblks_[i].first + choice_[i]]; }
+  // The packet headers depend on the points: searches the budget that fills target_bytes,
+  // from the last search's result (initially start), and leaves the code-blocks at its
+  // points.  apply() sets every code-block to point(i) and returns the codestream length.
+  template <class A>
+  uint64_t search(uint64_t target_bytes, A &&apply) {
+    double budget       = start;
+    double best         = -1;
+    uint64_t best_total = 0, total = 0;
+    for (int iter = 0; iter < 8; ++iter) {
+      cut(budget);
+      total = apply();
+      if (total <= target_bytes) {
+        if (budget > best) {
+          best       = budget;
+          best_total = total;
+        }
+        if (target_bytes - total < 16) break;
+        budget += static_cast<double>(target_bytes - total);
+      } else {
+        budget -= static_cast<double>(total - target_bytes) * (iter < 4 ? 1 : 2);
+        if (budget < 0) budget = 0;
+      }
+      if (best >= 0 && budget <= best) break;
+    }
+    if (best < 0) best = 0;
+    if (total != best_total || budget != best) {
+      cut(best);
+      total = apply();
+    }
+    start = best;
+    return total;
+  }
+  double start = 0;  // the budget the next search starts from
+
+ private:
+  struct cblk_ref {
+    uint32_t first;  // its hull points: hull_[first .. first + n)
+    uint32_t n;
+  };
+  // A step along a code-block's hull, from point k - 1 to point k.
+  struct hull_step {
+    double slope;  // distortion decrease per byte
+    double dR;
+    uint32_t cblk;
+    uint32_t k;
+  };
+  std::vector<cblk_ref> cblks_;
+  std::vector<rd_point> hull_;
+  std::vector<hull_step> steps_;
+  std::vector<uint32_t> choice_;
 };
 
-// A step along a code-block's hull, from point k - 1 to point k.
-struct hull_step {
-  double slope;  // distortion decrease per byte
-  double dR;
-  uint32_t cblk;
-  uint32_t k;
-};
+// The codestream length with every tile's packet headers built.
+uint64_t codestream_length(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes) {
+  uint64_t total = fixed_bytes;
+  for (uint32_t t = 0; t < num_tiles; ++t) {
+    tiles[t].build_packet_headers();
+    total += tiles[t].get_tile_part_size();
+  }
+  return total;
+}
 
 // The code-block's passes and lengths for a point of the HT set at cleanup plane p.
 void set_point(j2k_codeblock *b, uint8_t p, uint8_t passes, uint32_t Lcup, uint32_t Lsp, uint32_t Lref) {
@@ -1149,18 +1296,13 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
   for (uint32_t t = 0; t < num_tiles; ++t)
     for_each_rd_block(tiles[t], [&](j2k_codeblock *b, uint16_t, uint8_t, uint8_t) { blocks.push_back(b); });
 
-  std::vector<cblk_ref> cblks(blocks.size());
-  std::vector<rd_point> hull, pts;
-  std::vector<hull_step> steps;
-  std::vector<uint32_t> choice(blocks.size(), 0);
-  auto point_of = [&](uint32_t i) -> const rd_point & { return hull[cblks[i].first + choice[i]]; };
-
+  rd_cutter cutter(blocks.size());
+  std::vector<rd_point> pts;
   // Every code-block's convex hull: leaving it out, the three points of its coded set, and
   // the model points of the sets above.
   bool with_model = true;
   auto build      = [&]() {
-    hull.clear();
-    steps.clear();
+    cutter.clear();
     for (uint32_t i = 0; i < blocks.size(); ++i) {
       const ht_rd_info &rd = *blocks[i]->rd;
       const double w       = rd.w;
@@ -1179,58 +1321,15 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
               pts.push_back({sm.R[k], w * sm.D[k], static_cast<uint8_t>(p), static_cast<uint8_t>(k + 1)});
           }
       }
-      // Ties go to the plane nearest the coded one (fewer transcodes).
-      std::sort(pts.begin(), pts.end(), [](const rd_point &a, const rd_point &b) {
-        if (a.R != b.R) return a.R < b.R;
-        if (a.D != b.D) return a.D < b.D;
-        if (a.p != b.p) return a.p < b.p;
-        return a.passes < b.passes;
-      });
-      cblk_ref ref{blocks[i], static_cast<uint32_t>(hull.size()), 0};
-      hull.push_back(pts[0]);
-      for (size_t k = 1; k < pts.size(); ++k) {
-        const rd_point &q = pts[k];
-        if (q.D >= hull.back().D || q.R <= hull.back().R) continue;
-        while (hull.size() - ref.first >= 2) {
-          const rd_point &a = hull[hull.size() - 2];
-          const rd_point &b = hull.back();
-          if ((b.D - q.D) * (b.R - a.R) >= (a.D - b.D) * (q.R - b.R))
-            hull.pop_back();
-          else
-            break;
-        }
-        hull.push_back(q);
-      }
-      ref.n    = static_cast<uint32_t>(hull.size()) - ref.first;
-      cblks[i] = ref;
-      for (uint32_t k = 1; k < ref.n; ++k) {
-        const rd_point &a = hull[ref.first + k - 1];
-        const rd_point &b = hull[ref.first + k];
-        steps.push_back({(a.D - b.D) / (b.R - a.R), b.R - a.R, i, k});
-      }
+      cutter.add(i, pts);
     }
-    std::sort(steps.begin(), steps.end(), [](const hull_step &a, const hull_step &b) {
-      if (a.slope != b.slope) return a.slope > b.slope;
-      if (a.cblk != b.cblk) return a.cblk < b.cblk;
-      return a.k < b.k;
-    });
+    cutter.sort_steps();
   };
-  // The points for a byte budget of the code-blocks: the steps in decreasing slope while
-  // they fit, then any later step that still fits and continues its code-block's hull.
-  auto cut = [&](double budget) {
-    std::fill(choice.begin(), choice.end(), 0);
-    double used = 0;
-    for (const hull_step &s : steps) {
-      if (choice[s.cblk] + 1 != s.k || used + s.dR > budget) continue;
-      choice[s.cblk] = s.k;
-      used += s.dR;
-    }
-  };
-  // Sets every code-block to its chosen point (model lengths above the coded set), builds
-  // the packet headers and returns the codestream length.
+  // Sets every code-block to its chosen point (model lengths above the coded set) and
+  // returns the codestream length.
   auto apply = [&]() {
     for (uint32_t i = 0; i < blocks.size(); ++i) {
-      const rd_point &pt   = point_of(i);
+      const rd_point &pt   = cutter.point(i);
       const ht_rd_info &rd = *blocks[i]->rd;
       if (pt.passes == 0)
         set_point(blocks[i], 0, 0, 0, 0, 0);
@@ -1239,59 +1338,24 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
       else
         set_point(blocks[i], pt.p, 1, static_cast<uint32_t>(std::ceil(pt.R)), 0, 0);
     }
-    uint64_t total = fixed_bytes;
-    for (uint32_t t = 0; t < num_tiles; ++t) {
-      tiles[t].build_packet_headers();
-      total += tiles[t].get_tile_part_size();
-    }
-    return total;
+    return codestream_length(tiles, num_tiles, fixed_bytes);
   };
-  // The packet headers depend on the points: search the budget that fills the target.
-  double start = (target_bytes > fixed_bytes) ? static_cast<double>(target_bytes - fixed_bytes) : 0;
-  auto search  = [&]() {
-    double budget       = start;
-    double best         = -1;
-    uint64_t best_total = 0, total = 0;
-    for (int iter = 0; iter < 8; ++iter) {
-      cut(budget);
-      total = apply();
-      if (total <= target_bytes) {
-        if (budget > best) {
-          best       = budget;
-          best_total = total;
-        }
-        if (target_bytes - total < 16) break;
-        budget += static_cast<double>(target_bytes - total);
-      } else {
-        budget -= static_cast<double>(total - target_bytes) * (iter < 4 ? 1 : 2);
-        if (budget < 0) budget = 0;
-      }
-      if (best >= 0 && budget <= best) break;
-    }
-    if (best < 0) best = 0;
-    if (total != best_total || budget != best) {
-      cut(best);
-      total = apply();
-    }
-    start = best;
-    return total;
-  };
+  cutter.start = (target_bytes > fixed_bytes) ? static_cast<double>(target_bytes - fixed_bytes) : 0;
 
   // Cut, transcode the code-blocks whose point lies above their coded set, and cut again
   // with their exact lengths.
-  uint64_t total = 0;
   for (;;) {
     build();
-    total = search();
+    cutter.search(target_bytes, apply);
     std::vector<uint32_t> moved;
     for (uint32_t i = 0; i < blocks.size(); ++i) {
-      const rd_point &pt = point_of(i);
+      const rd_point &pt = cutter.point(i);
       if (pt.passes != 0 && pt.p != blocks[i]->rd->p_coded) moved.push_back(i);
     }
     if (moved.empty()) break;
     std::atomic<bool> failed{false};
     parallel_for(moved.size(), [&](size_t j) {
-      if (!transcode(blocks[moved[j]], point_of(moved[j]).p)) failed.store(true);
+      if (!transcode(blocks[moved[j]], cutter.point(static_cast<uint32_t>(moved[j])).p)) failed.store(true);
     });
     if (failed.load()) {
       printf("ERROR: rate control could not transcode an HT code-block.\n");
@@ -1304,7 +1368,7 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
 
   // Final points from the data held: the cut after SigProp ends in its own byte.
   for (uint32_t i = 0; i < blocks.size(); ++i) {
-    const rd_point &pt   = point_of(i);
+    const rd_point &pt   = cutter.point(i);
     j2k_codeblock *block = blocks[i];
     ht_rd_info &rd       = *block->rd;
     if (pt.passes == 0) {
@@ -1315,10 +1379,89 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
     }
     rd.planes.reset();
   }
-  total = fixed_bytes;
-  for (uint32_t t = 0; t < num_tiles; ++t) {
-    tiles[t].build_packet_headers();
-    total += tiles[t].get_tile_part_size();
+  return codestream_length(tiles, num_tiles, fixed_bytes);
+}
+
+/********************************************************************************
+ * Part 1 code-blocks
+ *******************************************************************************/
+namespace {
+
+// Sets a Part 1 code-block to its first n coding passes (0: left out).  The passes before
+// the last keep the segment lengths the encoder gave them; the last ends the segment it is
+// in, terminated there unless the encoder did.
+void set_p1_point(j2k_codeblock *b, const ht_rd_info &rd, uint32_t n) {
+  b->layer_start[0] = 0;
+  if (n == 0) {
+    b->layer_passes[0]   = 0;
+    b->num_passes        = 0;
+    b->pass_length_count = 0;
+    b->length            = 0;
+    // A code-block left out keeps the largest value, so that its tag-tree parents do not drop.
+    b->num_ZBP = static_cast<uint8_t>(b->get_Mb() - 1);
+    return;
   }
-  return total;
+  uint32_t seg_start = 0;  // where the last pass's segment starts
+  for (uint32_t z = 0; z + 1 < n; ++z) {
+    b->pass_length[z] = rd.p1[z].seg_len;
+    if (rd.p1[z].ends_segment) seg_start = rd.p1[z].keep;
+  }
+  const p1_rd_pass &last = rd.p1[n - 1];
+  const uint32_t L       = last.keep + last.tail_len;
+  b->pass_length[n - 1]  = L - seg_start;
+  b->pass_length_count   = static_cast<uint8_t>(n);
+  b->num_passes          = static_cast<uint8_t>(n);
+  b->layer_passes[0]     = static_cast<uint8_t>(n);
+  b->length              = L;
+  b->num_ZBP             = rd.p1_zbp;
+}
+
+}  // namespace
+
+uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes, uint64_t target_bytes) {
+  std::vector<j2k_codeblock *> blocks;
+  for (uint32_t t = 0; t < num_tiles; ++t)
+    for_each_rd_block(tiles[t], [&](j2k_codeblock *b, uint16_t, uint8_t, uint8_t) { blocks.push_back(b); });
+
+  // Every code-block's convex hull: leaving it out and the end of every coding pass (a cut
+  // that would not be shorter than the whole code-block is no use).
+  rd_cutter cutter(blocks.size());
+  std::vector<rd_point> pts;
+  for (uint32_t i = 0; i < blocks.size(); ++i) {
+    const ht_rd_info &rd = *blocks[i]->rd;
+    const double w       = rd.w;
+    pts.clear();
+    pts.push_back({0, w * rd.D2zero * 0.25, 0, 0});
+    if (rd.p1_passes > 0) {
+      const uint32_t full = rd.p1[rd.p1_passes - 1].keep;
+      for (uint32_t z = 0; z < rd.p1_passes; ++z) {
+        const p1_rd_pass &pt = rd.p1[z];
+        const uint32_t L     = pt.keep + pt.tail_len;
+        if (L > full || (L == full && z + 1 < rd.p1_passes)) continue;
+        pts.push_back({static_cast<double>(L), w * pt.D * 0.25, 0, static_cast<uint8_t>(z + 1)});
+      }
+    }
+    cutter.add(i, pts);
+  }
+  cutter.sort_steps();
+  cutter.start = (target_bytes > fixed_bytes) ? static_cast<double>(target_bytes - fixed_bytes) : 0;
+  cutter.search(target_bytes, [&]() {
+    for (uint32_t i = 0; i < blocks.size(); ++i)
+      set_p1_point(blocks[i], *blocks[i]->rd, cutter.point(i).passes);
+    return codestream_length(tiles, num_tiles, fixed_bytes);
+  });
+
+  // Cut the data: a last pass the encoder did not terminate gets its termination bytes.
+  for (uint32_t i = 0; i < blocks.size(); ++i) {
+    j2k_codeblock *block = blocks[i];
+    ht_rd_info &rd       = *block->rd;
+    const uint32_t n     = cutter.point(i).passes;
+    set_p1_point(block, rd, n);
+    if (n > 0) {
+      const p1_rd_pass &last = rd.p1[n - 1];
+      if (last.tail_len) std::memcpy(block->get_compressed_data() + last.keep, last.tail, last.tail_len);
+    }
+    rd.p1.reset();
+  }
+  return codestream_length(tiles, num_tiles, fixed_bytes);
 }

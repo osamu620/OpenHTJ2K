@@ -535,6 +535,37 @@ add_test(NAME enc_rate_reversible_rejected COMMAND open_htj2k_enc -i ${ENCODER_R
 set_tests_properties(enc_rate_reversible_rejected PROPERTIES WILL_FAIL TRUE)
 add_test(NAME enc_rate_qfactor_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate_qf.j2c -rate 1 Qfactor=80)
 set_tests_properties(enc_rate_qfactor_rejected PROPERTIES WILL_FAIL TRUE)
+# Rate control with the Part 1 block coder: every coding pass is a truncation point, in any
+# mode.  Measured PAE/MSE: 15/4.00 at 1 bpp, 59/20.2 at 0.25 bpp, 30/9.91 at 0.5 bpp with
+# BYPASS|ERTERM and 256x256 tiles, 26/6.63 at 0.7 bpp with RESTART|CAUSAL on the odd-size
+# image.
+foreach(_case "p1rate1;kodim23;1;49152;48906;22;5;0" "p1rate025;kodim23;0.25;12288;12226;80;24;0"
+              "p1rate05_bypass_tiles;kodim23;0.5;24576;24453;45;12;BYPASS|ERTERM"
+              "p1rate07_odd;kodim23odd;0.7;34204;34033;38;8;RESTART|CAUSAL")
+  list(GET _case 0 _t)
+  list(GET _case 1 _img)
+  list(GET _case 2 _rate)
+  list(GET _case 3 _max)
+  list(GET _case 4 _min)
+  list(GET _case 5 _pae)
+  list(GET _case 6 _mse)
+  list(GET _case 7 _modes)
+  set(_extra "")
+  if(_t STREQUAL "p1rate05_bypass_tiles")
+    set(_extra "Stiles={256,256}")
+  endif()
+  add_test(NAME enc_${_t} COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/${_img}.ppm -o ${_t}.j2c -rate ${_rate} Cmodes=${_modes} ${_extra})
+  add_test(NAME size_${_t} COMMAND ${CMAKE_COMMAND} -DFILE=${_t}.j2c -DMAX=${_max} -DMIN=${_min} -P ${_size_check})
+  set_tests_properties(size_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME dec_${_t} COMMAND open_htj2k_dec -i ${_t}.j2c -o ${_t}.ppm)
+  set_tests_properties(dec_${_t} PROPERTIES DEPENDS enc_${_t})
+  add_test(NAME comp_${_t} COMMAND imgcmp ${_t}.ppm ${ENCODER_REF_DIR}/${_img}.ppm ${_pae} ${_mse})
+  set_tests_properties(comp_${_t} PROPERTIES DEPENDS dec_${_t})
+endforeach()
+add_test(NAME enc_p1rate1_st COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o p1rate1_st.j2c -rate 1 Cmodes=0 -num_threads 1)
+add_test(NAME cmp_p1rate1_st COMMAND ${CMAKE_COMMAND} -E compare_files p1rate1.j2c p1rate1_st.j2c)
+set_tests_properties(cmp_p1rate1_st PROPERTIES DEPENDS "enc_p1rate1;enc_p1rate1_st")
+
 # One quality layer: a list of rates is rejected.
 add_test(NAME enc_rate_list_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate_list.j2c -rate 1,0.5)
 set_tests_properties(enc_rate_list_rejected PROPERTIES WILL_FAIL TRUE)

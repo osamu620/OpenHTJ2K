@@ -157,10 +157,32 @@ struct ht_rd_plane {
 // with the SigProp pass of plane p - 1, and with SigProp and MagRef.  The rate control
 // keeps their exact lengths and distortions, and the measurements that model the sets at
 // the planes above (ht_rate_control.cpp).  Distortions are sums of squared errors in steps.
+// A truncation point of a Part 1 (EBCOT) code-block: the end of one coding pass.  Cut
+// there, the code-block keeps the first `keep` bytes of its codeword segments and ends
+// the last one with the tail_len bytes in tail, which terminate it at that pass; seg_len
+// is what the encoder put in pass_length[] for the pass (a segment's length on its last
+// pass, otherwise 0), and ends_segment tells whether the encoder terminated a segment
+// there.  D is the squared error left after the pass, in the units of ht_rd_plane
+// (doubled errors).
+struct p1_rd_pass {
+  uint32_t keep     = 0;
+  uint32_t seg_len  = 0;
+  double D          = 0;
+  uint8_t tail_len  = 0;
+  bool ends_segment = false;
+  uint8_t tail[6]   = {};
+};
+
 struct ht_rd_info {
   // Set when the code-blocks are registered.
   double w     = 0;  // weight of a squared error in the image
   uint16_t cls = 0;  // subband class of the threshold estimate
+  // A Part 1 code-block: its truncation points, one per coding pass (ebcot_encode), and
+  // D2zero holds the squared error left with none.  Its passes are coded down to the
+  // cleanup pass of bit-plane p_coded; p1_zbp is its number of missing bit-planes.
+  std::unique_ptr<p1_rd_pass[]> p1;
+  uint8_t p1_passes = 0;
+  uint8_t p1_zbp    = 0;
   // Measurement (ht_rd_stats).
   uint8_t msb     = 0;  // magnitude bit-planes (0: nothing significant)
   uint8_t j0      = 0;  // first plane measured; planes[j - j0] for j0 <= j < msb

@@ -620,9 +620,7 @@ void openhtj2k_encoder_impl::check_ht_refinement() const {
 void openhtj2k_encoder_impl::check_rate_control() const {
   if (target_size == 0) return;
   const char *why = nullptr;
-  if ((cod->codeblock_style & HT) == 0)
-    why = "the HT block coder";
-  else if (cod->transformation != 0)
+  if (cod->transformation != 0)
     why = "the irreversible 9/7 wavelet (Creversible=no)";
   else if (cod->number_of_layers != 1)
     why = "one quality layer";
@@ -652,7 +650,9 @@ std::unique_ptr<ht_rc_state> openhtj2k_encoder_impl::start_rate_control(
   // (a guess, for the estimate only) 1.5% for the packet headers.
   const uint64_t fixed = fixed_bytes(main_header, num_tiles) + 14 * static_cast<uint64_t>(num_tiles);
   const double room    = (target_size > fixed) ? static_cast<double>(target_size - fixed) : 0.0;
-  auto rc              = MAKE_UNIQUE<ht_rc_state>(static_cast<uint64_t>(room * 0.985));
+  // Part 1 code-blocks: a larger budget for the estimate, whose models are HT's.
+  const double scale = (cod->codeblock_style & HT) ? 1.0 : P1_ESTIMATE_BUDGET;
+  auto rc            = MAKE_UNIQUE<ht_rc_state>(static_cast<uint64_t>(room * 0.985 * scale));
   for (uint32_t i = 0; i < num_tiles; ++i) {
     rc->add_tile(tiles[i]);
     tiles[i].enc_rc = rc.get();
@@ -662,8 +662,10 @@ std::unique_ptr<ht_rc_state> openhtj2k_encoder_impl::start_rate_control(
 
 void openhtj2k_encoder_impl::apply_rate_control(j2k_tile *tiles, uint32_t num_tiles,
                                                 j2k_main_header &main_header) const {
-  const uint64_t total =
-      ht_rate_control(tiles, num_tiles, fixed_bytes(main_header, num_tiles), target_size);
+  const uint64_t fixed = fixed_bytes(main_header, num_tiles);
+  const uint64_t total = (cod->codeblock_style & HT)
+                             ? ht_rate_control(tiles, num_tiles, fixed, target_size)
+                             : p1_rate_control(tiles, num_tiles, fixed, target_size);
   if (total > target_size)
     printf("WARNING: the codestream takes %llu bytes, more than the target %llu.\n",
            static_cast<unsigned long long>(total), static_cast<unsigned long long>(target_size));
