@@ -130,6 +130,20 @@ inline void finalize_f32_to_i32(const float *src, int32_t *dst, uint32_t width, 
     const __m128i vdc  = _mm_set1_epi32(dc);
     const __m128i vmx  = _mm_set1_epi32(maxval);
     const __m128i vmn  = _mm_set1_epi32(minval);
+    if (minval >= -32768 && maxval <= 32767) {
+      // Clamp in int16 after saturating (monotonic, keeps every value of the range).
+      const __m128i wmn = _mm_set1_epi16(static_cast<int16_t>(minval));
+      const __m128i wmx = _mm_set1_epi16(static_cast<int16_t>(maxval));
+      for (; x + 8 <= width; x += 8) {
+        __m128i v0 = _mm_add_epi32(finalize_round_sse2(_mm_loadu_ps(src + x), vsc, vhalf), vdc);
+        __m128i v1 = _mm_add_epi32(finalize_round_sse2(_mm_loadu_ps(src + x + 4), vsc, vhalf), vdc);
+        __m128i w  = _mm_min_epi16(_mm_max_epi16(_mm_packs_epi32(v0, v1), wmn), wmx);
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x),
+                         _mm_srai_epi32(_mm_unpacklo_epi16(w, w), 16));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x + 4),
+                         _mm_srai_epi32(_mm_unpackhi_epi16(w, w), 16));
+      }
+    }
     for (; x + 8 <= width; x += 8) {
       __m128i v0 = finalize_round_sse2(_mm_loadu_ps(src + x), vsc, vhalf);
       __m128i v1 = finalize_round_sse2(_mm_loadu_ps(src + x + 4), vsc, vhalf);
