@@ -1880,14 +1880,18 @@ class fwd_buf {
   }
 
   inline void advance(uint32_t n) { this->pos += n; }
+  inline uint32_t position() const { return this->pos; }
 
-  //  The 32 bits starting at bit position pos.  The byte offset is clamped to limit, so
+  //  The 32 bits starting at bit position p.  The byte offset is clamped to limit, so
   //  positions past the end of the stream read as X without leaving the buffer.
-  inline uint32_t fetch() const {
-    uint32_t off = this->pos >> 3;
+  //  The 57 or more bits starting at bit position p (in the low bits of the result).
+  inline uint64_t fetch64_at(uint32_t p) const {
+    uint32_t off = p >> 3;
     off          = off < this->limit ? off : this->limit;
-    return static_cast<uint32_t>(load_u64(this->dbuf + off) >> (this->pos & 7));
+    return load_u64(this->dbuf + off) >> (p & 7);
   }
+  inline uint32_t fetch_at(uint32_t p) const { return static_cast<uint32_t>(fetch64_at(p)); }
+  inline uint32_t fetch() const { return fetch_at(this->pos); }
 };
 #endif
 

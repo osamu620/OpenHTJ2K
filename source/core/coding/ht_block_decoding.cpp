@@ -95,6 +95,64 @@ static FORCE_INLINE uint32_t ms_decode_sample(fwd_buf<0xFF> &MagSgn, const uint3
   return ((ms_val << 31) | ((v + 2) << (pLSB - 1))) & sig;
 }
 
+  #if defined(OPENHTJ2K_ENABLE_SSE2)
+// The four ms_decode_sample calls of a quad in SSE2 lanes (x86-64 builds without AVX2):
+// significance, m_n and the bit offsets in vectors, the four 32-bit windows read with
+// scalar loads (SSE2 has no byte shuffle to gather them from one fetch), then the value
+// assembly in vectors.  Lane i is sample i.  Same arithmetic as ms_decode_sample, so the
+// output is bit-identical.
+static FORCE_INLINE __m128i ms_decode_quad_sse2(fwd_buf<0xFF> &MagSgn, const uint32_t inf,
+                                                const uint32_t U_q, const __m128i shift_pLSB,
+                                                __m128i &v_n) {
+  const __m128i one = _mm_set1_epi32(1);
+  // lane i: inf bits 4+i (rho), 8+i (e_1), 12+i (e_k), moved to bits 7, 11, 15
+  const __m128i flags = _mm_mullo_epi16(_mm_and_si128(_mm_set1_epi32(static_cast<int32_t>(inf)),
+                                                      _mm_set_epi32(0x8880, 0x4440, 0x2220, 0x1110)),
+                                        _mm_set_epi16(0, 1, 0, 2, 0, 4, 0, 8));
+  const __m128i insig = _mm_cmpeq_epi32(_mm_and_si128(flags, _mm_set1_epi32(0x80)), _mm_setzero_si128());
+  const __m128i emb_k = _mm_srli_epi32(flags, 15);
+  const __m128i emb_1 = _mm_and_si128(_mm_srli_epi32(flags, 11), one);
+  const __m128i m_n =
+      _mm_andnot_si128(insig, _mm_sub_epi32(_mm_set1_epi32(static_cast<int32_t>(U_q)), emb_k));
+  // bit offset of each sample from the current position: exclusive prefix sum of m_n
+  __m128i inc = _mm_add_epi32(m_n, _mm_slli_si128(m_n, 4));
+  inc         = _mm_add_epi32(inc, _mm_slli_si128(inc, 8));
+  alignas(16) uint32_t ex[4];
+  _mm_store_si128(reinterpret_cast<__m128i *>(ex), _mm_slli_si128(inc, 4));
+  const uint32_t pos   = MagSgn.position();
+  const uint32_t total = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_shuffle_epi32(inc, 0xFF)));
+  uint32_t ms0, ms1, ms2, ms3;
+  if (total <= 56) {
+    // one fetch holds all four: sample i needs bits ex[i] .. ex[i] + max(m_n, 1) - 1
+    const uint64_t win = MagSgn.fetch64_at(pos);
+    ms0                = static_cast<uint32_t>(win);
+    ms1                = static_cast<uint32_t>(win >> ex[1]);
+    ms2                = static_cast<uint32_t>(win >> ex[2]);
+    ms3                = static_cast<uint32_t>(win >> ex[3]);
+  } else {
+    ms0 = MagSgn.fetch_at(pos);
+    ms1 = MagSgn.fetch_at(pos + ex[1]);
+    ms2 = MagSgn.fetch_at(pos + ex[2]);
+    ms3 = MagSgn.fetch_at(pos + ex[3]);
+  }
+  const __m128i ms = _mm_unpacklo_epi64(_mm_unpacklo_epi32(_mm_cvtsi32_si128(static_cast<int32_t>(ms0)),
+                                                           _mm_cvtsi32_si128(static_cast<int32_t>(ms1))),
+                                        _mm_unpacklo_epi32(_mm_cvtsi32_si128(static_cast<int32_t>(ms2)),
+                                                           _mm_cvtsi32_si128(static_cast<int32_t>(ms3))));
+  MagSgn.advance(total);
+  // 2^m_n through the float exponent (the float 2^31 converts to 0x80000000 = 1 << 31)
+  const __m128i pow2 =
+      _mm_cvttps_epi32(_mm_castsi128_ps(_mm_add_epi32(_mm_slli_epi32(m_n, 23), _mm_set1_epi32(127 << 23))));
+  __m128i v = _mm_and_si128(ms, _mm_sub_epi32(pow2, one));                                // keep m_n bits
+  v   = _mm_or_si128(v, _mm_and_si128(pow2, _mm_sub_epi32(_mm_setzero_si128(), emb_1)));  // e_1 as MSB
+  v   = _mm_or_si128(v, one);                                                             // center of bin
+  v_n = _mm_andnot_si128(insig, v);
+  const __m128i val =
+      _mm_or_si128(_mm_slli_epi32(ms, 31), _mm_sll_epi32(_mm_add_epi32(v, _mm_set1_epi32(2)), shift_pLSB));
+  return _mm_andnot_si128(insig, val);
+}
+  #endif
+
 // Step-2 of the HT cleanup pass: MagSgn decoding over the (tv, u) scratch
 // written by ht_cleanup_step1_nway (the former phase 1 of this function).
 // Kept per-block: the fwd_buf destuff scratch is thread-local (constructing a
@@ -141,6 +199,12 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
   uint32_t v_n_scratch[v_n_size] = {0};  // 2+ kB
 
   fwd_buf<0xFF> MagSgn(compressed_data, Pcup);
+  #if defined(OPENHTJ2K_ENABLE_SSE2)
+  const __m128i shift_pLSB = _mm_cvtsi32_si128(pLSB - 1);
+  const __m128i shift_dq   = _mm_cvtsi32_si128(pLSB_dq);
+  const __m128i vmag       = _mm_set1_epi32(INT32_MAX);
+  const __m128 vfscale     = _mm_set1_ps(fscale_direct);
+  #endif
 
   const uint32_t width = block->size.x;
   for (uint32_t y = 0; y < block->size.y; y += 2) {
@@ -163,7 +227,38 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
         printf("ERROR\n");
       }
       const bool two_columns = x + 1 < width;
-      uint32_t v1 = 0, v3 = 0, vx;
+      uint32_t v1 = 0, v3 = 0;
+  #if defined(OPENHTJ2K_ENABLE_SSE2)
+      if (inf & 0xF0) {
+        __m128i vn;
+        // a one-column quad decodes only samples 0 and 1
+        const __m128i val =
+            ms_decode_quad_sse2(MagSgn, two_columns ? inf : (inf & 0x3333U), U_q, shift_pLSB, vn);
+        __m128i res = val;
+        OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
+          if (transformation == 1) {
+            const __m128i s   = _mm_srai_epi32(val, 31);
+            const __m128i mag = _mm_srl_epi32(_mm_and_si128(val, vmag), shift_dq);
+            res               = _mm_sub_epi32(_mm_xor_si128(mag, s), s);
+            OPENHTJ2K_IF_CONSTEXPR (!store_i32) res = _mm_castps_si128(_mm_cvtepi32_ps(res));
+          } else {
+            const __m128 f = _mm_mul_ps(_mm_cvtepi32_ps(_mm_and_si128(val, vmag)), vfscale);
+            res            = _mm_or_si128(_mm_castps_si128(f), _mm_andnot_si128(vmag, val));
+          }
+        }
+        if (two_columns) {
+          const __m128i o = _mm_shuffle_epi32(res, _MM_SHUFFLE(3, 1, 2, 0));  // row 0, then row 1
+          _mm_storel_epi64(reinterpret_cast<__m128i *>(dp), o);
+          _mm_storel_epi64(reinterpret_cast<__m128i *>(dp + out_stride), _mm_unpackhi_epi64(o, o));
+          v3 = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_shuffle_epi32(vn, 0xFF)));
+        } else {
+          dp[0]          = _mm_cvtsi128_si32(res);
+          dp[out_stride] = _mm_cvtsi128_si32(_mm_shuffle_epi32(res, 0x55));
+        }
+        v1 = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_shuffle_epi32(vn, 0x55)));
+      } else {
+  #else
+      uint32_t vx;
       if (inf & 0xF0) {
         store_sample(&dp[0], ms_decode_sample(MagSgn, inf, U_q, 0, pLSB, vx));
         store_sample(&dp[out_stride], ms_decode_sample(MagSgn, inf, U_q, 1, pLSB, v1));
@@ -172,6 +267,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
           store_sample(&dp[1 + out_stride], ms_decode_sample(MagSgn, inf, U_q, 3, pLSB, v3));
         }
       } else {
+  #endif
         store_sample(&dp[0], 0);
         store_sample(&dp[out_stride], 0);
         if (two_columns) {
