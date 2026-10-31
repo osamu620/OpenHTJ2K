@@ -69,7 +69,9 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
 
 **Performance**
 - SIMD: **AVX2**, **AVX-512** (x86-64), **NEON** (AArch64), and
-  **WASM SIMD** 128-bit — for color transform, DWT, and HT block coding.
+  **WASM SIMD** 128-bit — for color transform, DWT, and HT block coding;
+  portable x86-64 builds (no AVX2) use **SSE2** for HT block encoding
+  and the forward DWT.
 - Built-in thread pool for both encode and decode.
 - Three decode APIs so callers can pick their memory/latency tradeoff:
   `invoke_line_based()` (streaming IDWT into a caller buffer),

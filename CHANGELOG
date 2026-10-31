@@ -51,6 +51,24 @@
   times with all threads (placing the layers runs on one thread). With HT, a
   list of rates is rejected.
 
+## Performance
+
+### Encoder
+- x86-64 builds without AVX2 (`OPENHTJ2K_TARGET_CPU=generic`, as packaged
+  builds use) now use SSE2, which every x86-64 CPU has, in the HT block
+  encoder and the forward DWT. The block encoder computes each quad's
+  exponents, significance and EMB patterns and MagSgn codewords in the four
+  lanes of a register (the bit length of a sample from the exponent of its
+  float conversion, 2^m from building the float 2^m, as SSE2 has neither a
+  leading-zero count nor per-lane shifts); the DWT is the 4-lane WASM SIMD
+  one (planar horizontal 9/7 and 5/3 kernels, vertical lifting steps) in
+  SSE2, and the code-block quantization is vectorized. The output is
+  byte-identical to the scalar code, which other architectures still use and
+  `-DENABLE_SSE2=OFF` (new option) selects. Ryzen 9 9950X, `generic` build,
+  3840×2160 RGB, one thread: 32% fewer cycles lossless, 28% lossy and 27% at
+  `Qfactor=90` (8-bit), 24-26% (12-bit); the encoder takes 1.37 times the
+  cycles of the AVX2 build lossless, from 2.0 times.
+
 ## Fixed
 
 ### Encoder
