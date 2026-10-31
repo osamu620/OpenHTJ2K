@@ -11,6 +11,7 @@ target_sources(open_htj2k
     fdwt_avx512.cpp
     fdwt_neon.cpp
     fdwt_wasm.cpp
+    fdwt_sse2.cpp
     color.cpp
     color_avx2.cpp
     color_avx512.cpp
