@@ -62,6 +62,41 @@ void fused_ycbcr_irrev_to_rgb_i32_sse2(const float *y, const float *cb, const fl
   const __m128i vmx0 = _mm_set1_epi32(fp[0].maxval), vmx1 = _mm_set1_epi32(fp[1].maxval),
                 vmx2 = _mm_set1_epi32(fp[2].maxval);
   uint32_t n         = 0;
+  // Output range within int16 (bit depths up to 15 unsigned / 16 signed): saturate to
+  // int16 and clamp there, 8 samples at a time.  Saturation is monotonic and keeps
+  // every value of the range, so the result equals the int32 clamp for every input.
+  bool narrow = true;
+  for (int c = 0; c < 3; ++c) narrow = narrow && fp[c].minval >= -32768 && fp[c].maxval <= 32767;
+  if (narrow) {
+    const __m128i wmn0 = _mm_set1_epi16(static_cast<int16_t>(fp[0].minval));
+    const __m128i wmn1 = _mm_set1_epi16(static_cast<int16_t>(fp[1].minval));
+    const __m128i wmn2 = _mm_set1_epi16(static_cast<int16_t>(fp[2].minval));
+    const __m128i wmx0 = _mm_set1_epi16(static_cast<int16_t>(fp[0].maxval));
+    const __m128i wmx1 = _mm_set1_epi16(static_cast<int16_t>(fp[1].maxval));
+    const __m128i wmx2 = _mm_set1_epi16(static_cast<int16_t>(fp[2].maxval));
+    auto store8        = [](int32_t *dst, __m128i lo, __m128i hi, __m128i wmn, __m128i wmx) {
+      __m128i w = _mm_min_epi16(_mm_max_epi16(_mm_packs_epi32(lo, hi), wmn), wmx);
+      _mm_storeu_si128(reinterpret_cast<__m128i *>(dst), _mm_srai_epi32(_mm_unpacklo_epi16(w, w), 16));
+      _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 4), _mm_srai_epi32(_mm_unpackhi_epi16(w, w), 16));
+    };
+    for (; n + 8 <= width; n += 8) {
+      __m128i iR[2], iG[2], iB[2];
+      for (int k = 0; k < 2; ++k) {
+        const __m128 vY  = _mm_loadu_ps(y + n + 4 * k);
+        const __m128 vCb = _mm_loadu_ps(cb + n + 4 * k);
+        const __m128 vCr = _mm_loadu_ps(cr + n + 4 * k);
+        const __m128 vR  = _mm_add_ps(vY, _mm_mul_ps(kCrR, vCr));
+        const __m128 vG  = _mm_sub_ps(_mm_sub_ps(vY, _mm_mul_ps(kCrG, vCr)), _mm_mul_ps(kCbG, vCb));
+        const __m128 vB  = _mm_add_ps(vY, _mm_mul_ps(kCbB, vCb));
+        iR[k]            = _mm_add_epi32(finalize_round_sse2(vR, vsc0, vhalf), vdc0);
+        iG[k]            = _mm_add_epi32(finalize_round_sse2(vG, vsc1, vhalf), vdc1);
+        iB[k]            = _mm_add_epi32(finalize_round_sse2(vB, vsc2, vhalf), vdc2);
+      }
+      store8(r + n, iR[0], iR[1], wmn0, wmx0);
+      store8(g + n, iG[0], iG[1], wmn1, wmx1);
+      store8(b + n, iB[0], iB[1], wmn2, wmx2);
+    }
+  }
   for (; n + 4 <= width; n += 4) {
     const __m128 vY  = _mm_loadu_ps(y + n);
     const __m128 vCb = _mm_loadu_ps(cb + n);
