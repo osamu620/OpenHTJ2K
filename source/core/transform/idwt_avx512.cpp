@@ -422,7 +422,7 @@ void idwt_rev_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32_t u
       const int32_t tail      = ce - cs - simdlen_s;
       const __m512 xtwo = _mm512_set1_ps(2.0f);
       const __m512 x025 = _mm512_set1_ps(0.25f);
-      const __mmask16 tmask = tail > 0 ? static_cast<__mmask16>((1U << tail) - 1U) : 0;
+      const __mmask16 tmask = static_cast<__mmask16>(tail > 0 ? (1U << tail) - 1U : 0U);
       for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2) {
         for (int32_t col = 0; col < simdlen_s; col += 16) {
           __m512 x0     = _mm512_loadu_ps(buf[n - 1] + cs + col);
