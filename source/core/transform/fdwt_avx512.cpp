@@ -311,7 +311,7 @@ void fdwt_rev_ver_sr_fixed_avx512(sprec_t *in, const int32_t u0, const int32_t u
       const int32_t ce        = (cs + DWT_VERT_STRIP < width) ? cs + DWT_VERT_STRIP : width;
       const int32_t simdlen_s = (ce - cs) - (ce - cs) % 16;
       const int32_t tail      = ce - cs - simdlen_s;
-      const __mmask16 tmask   = tail > 0 ? static_cast<__mmask16>((1U << tail) - 1U) : 0;
+      const __mmask16 tmask   = static_cast<__mmask16>(tail > 0 ? (1U << tail) - 1U : 0U);
       const __m512 x05 = _mm512_set1_ps(0.5f);
       // step 1: H[k] -= floor((L[k] + L[k+1]) * 0.5)
       for (int32_t n = -2 + offset, i = start - 1; i < stop; ++i, n += 2) {

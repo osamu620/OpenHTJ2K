@@ -47,9 +47,9 @@ uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_
   uint8_t mbr1 = state_p1[0] | state_p1[2];
   uint8_t mbr2 = state_p2[0] | state_p2[1] | state_p2[2];
   uint8_t mbr  = mbr0 | mbr1 | (mbr2 & causal_cond);
-  mbr |= (mbr0 >> SHIFT_REF) & (mbr0 >> SHIFT_SCAN);
-  mbr |= (mbr1 >> SHIFT_REF) & (mbr1 >> SHIFT_SCAN);
-  mbr |= (mbr2 >> SHIFT_REF) & (mbr2 >> SHIFT_SCAN) & causal_cond;
+  mbr |= static_cast<uint8_t>((mbr0 >> SHIFT_REF) & (mbr0 >> SHIFT_SCAN));
+  mbr |= static_cast<uint8_t>((mbr1 >> SHIFT_REF) & (mbr1 >> SHIFT_SCAN));
+  mbr |= static_cast<uint8_t>((mbr2 >> SHIFT_REF) & (mbr2 >> SHIFT_SCAN) & causal_cond);
   return mbr & 1;
 }
 
@@ -661,7 +661,7 @@ auto process_stripes_block_dec = [](SP_dec &SigProp, j2k_codeblock *block, const
         state_p[0] |= 1 << SHIFT_PI_;
         bit = SigProp.importSigPropBit();
         //        block->modify_state(refinement_value, bit, i, j);
-        state_p[0] |= bit << SHIFT_REF;
+        state_p[0] |= static_cast<uint8_t>(bit << SHIFT_REF);
         *sp |= bit << pLSB;
         *sp |= bit << (pLSB - 1);  // new bin center ( = 0.5)
       }
