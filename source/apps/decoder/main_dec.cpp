@@ -54,6 +54,11 @@
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON) \
     && (defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64))
   #include <arm_neon.h>
+#elif (defined(__x86_64__) || (defined(_M_X64) && !defined(_M_ARM64EC))) && !defined(OPENHTJ2K_DISABLE_SSE2)
+  // Portable x86-64 builds (no SSE4.1): SSE2, which every x86-64 CPU has, for the
+  // 8-bit PPM interleave (as the library does, unless -DENABLE_SSE2=OFF).
+  #define OPENHTJ2K_APP_SSE2
+  #include <emmintrin.h>
 #endif
 
 #include "decoder.hpp"
@@ -281,6 +286,54 @@ inline void ppm_interleave_8(const int32_t *sp0, const int32_t *sp1, const int32
                      _mm_or_si128(_mm_bsrli_si128(u, 4), _mm_bslli_si128(v, 8)));
     _mm_storeu_si128((__m128i *)(dp + 32),
                      _mm_or_si128(_mm_bsrli_si128(v, 8), _mm_bslli_si128(w, 4)));
+  }
+  int mv = (1 << bit_depth) - 1;
+  for (; n < width; ++n, ++sp0, ++sp1, ++sp2) {
+    int v;
+    v     = *sp0;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp1;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+    v     = *sp2;
+    *dp++ = static_cast<uint8_t>(v < 0 ? 0 : v > mv ? mv : v);
+  }
+#elif defined(OPENHTJ2K_APP_SSE2)
+  // 16 pixels at a time.  packs + packus saturate each sample to [0, 255], the clamp
+  // for 8-bit samples (min_epu8 narrows it for fewer bits).  SSE2 has no byte
+  // shuffle, so R, G, B are unpacked into 32-bit RGB0 words and each 64-bit lane
+  // drops its two zero bytes; the four 12-byte groups are stored overlapping.
+  const __m128i vmax = _mm_set1_epi8(static_cast<char>((1 << bit_depth) - 1));
+  const __m128i zero = _mm_setzero_si128();
+  const int32_t ff3  = static_cast<int32_t>(0xFF000000u);
+  const __m128i lo3  = _mm_set_epi32(0, 0x00FFFFFF, 0, 0x00FFFFFF);                 // bytes 0..2 of a lane
+  const __m128i hi3  = _mm_set_epi32(0x0000FFFF, ff3, 0x0000FFFF, ff3);             // bytes 3..5 of a lane
+  const __m128i mid6 = _mm_set_epi32(0, -1, static_cast<int32_t>(0xFFFF0000u), 0);  // bytes 6..11
+  auto pack16        = [&](const int32_t *p) {
+    __m128i a = _mm_packs_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i *>(p)),
+                                       _mm_loadu_si128(reinterpret_cast<const __m128i *>(p + 4)));
+    __m128i b = _mm_packs_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i *>(p + 8)),
+                                       _mm_loadu_si128(reinterpret_cast<const __m128i *>(p + 12)));
+    return _mm_min_epu8(_mm_packus_epi16(a, b), vmax);
+  };
+  // 4 RGB0 words -> 12 bytes RGB RGB RGB RGB in bytes 0..11 (bytes 12..15 zero)
+  auto squeeze = [&](__m128i w) {
+    w = _mm_or_si128(_mm_and_si128(w, lo3), _mm_and_si128(_mm_srli_epi64(w, 8), hi3));
+    return _mm_or_si128(_mm_move_epi64(w), _mm_and_si128(_mm_srli_si128(w, 2), mid6));
+  };
+  uint32_t n = 0;
+  for (; n + 16 <= width; n += 16, sp0 += 16, sp1 += 16, sp2 += 16, dp += 48) {
+    const __m128i r    = pack16(sp0);
+    const __m128i g    = pack16(sp1);
+    const __m128i b    = pack16(sp2);
+    const __m128i rg_l = _mm_unpacklo_epi8(r, g), rg_h = _mm_unpackhi_epi8(r, g);
+    const __m128i b0_l = _mm_unpacklo_epi8(b, zero), b0_h = _mm_unpackhi_epi8(b, zero);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(dp), squeeze(_mm_unpacklo_epi16(rg_l, b0_l)));
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(dp + 12), squeeze(_mm_unpackhi_epi16(rg_l, b0_l)));
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(dp + 24), squeeze(_mm_unpacklo_epi16(rg_h, b0_h)));
+    const __m128i last = squeeze(_mm_unpackhi_epi16(rg_h, b0_h));  // no store past the row
+    _mm_storel_epi64(reinterpret_cast<__m128i *>(dp + 36), last);
+    const int32_t tail = _mm_cvtsi128_si32(_mm_srli_si128(last, 8));
+    memcpy(dp + 44, &tail, 4);
   }
   int mv = (1 << bit_depth) - 1;
   for (; n < width; ++n, ++sp0, ++sp1, ++sp2) {
