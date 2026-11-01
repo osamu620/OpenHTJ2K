@@ -1,4 +1,18 @@
-# [Unreleased]
+# [0.23.0] - 2026-11-01
+
+Feature release. The Part 1 block coder gains rate control (`-rate R`) and
+quality layers (`-rate R0,R1,...`), both experimental. Portable x86-64 builds
+(`OPENHTJ2K_TARGET_CPU=generic`, as packaged builds use) take SSE2 paths in
+the HT block encoder and the forward DWT, and in the decoder's HT MagSgn
+decoding, inverse DWT and color conversion: encoding takes about 30% fewer
+cycles, and decoding 50% fewer at `Qfactor=90` and 29% fewer lossless. Their
+command-line decoder takes 1.43 times the time of a `native` build on one
+thread, from 2.83. Fixes: a `cod_params::number_of_layers` above 1 made broken
+codestreams through the library, and decoding at a reduced resolution an image
+whose origin is not a multiple of 2^r reported a size one sample too large,
+which made the command-line decoder read past the end of its rows. Without the
+new options, output is byte-identical to 0.22.0 except for those fixes; the
+API only gains functions.
 
 ## Added
 
