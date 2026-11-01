@@ -82,6 +82,15 @@
   thread: 50% fewer cycles at `Qfactor=90` and 29% lossless; the command-line
   decoder takes 1.53 times the time of the `native` build on one thread and
   1.67 times on eight.
+- In the same builds (and other builds without AVX2, NEON or WASM SIMD), the
+  streaming decode converts each strip's rows (inverse ICT/RCT and finalize)
+  on the thread pool instead of the calling thread, which the callback still
+  runs on in row order: 9-10% less decode time with 8 or 16 threads. The
+  command-line decoder interleaves 8-bit PPM output with SSE2 in portable
+  x86-64 builds (its vector version needed SSE4.1): writing a 4K PPM takes
+  about 10 ms instead of 15-18, as in the `native` build. With both, the
+  `generic` command-line decoder takes 1.43 times the time of the `native`
+  build on one thread and 1.44 times on eight.
 
 ## Fixed
 
