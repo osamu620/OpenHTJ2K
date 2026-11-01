@@ -40,6 +40,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+#if !defined(_WIN32)
+  #include <climits>  // OPEN_MAX (macOS)
+  #include <sys/resource.h>
+#endif
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -518,6 +522,31 @@ inline void ppm_interleave_16be(const int32_t *sp0, const int32_t *sp1, const in
 #endif
 }
 
+// The per-component writer keeps one output file open per component while rows
+// arrive, and a codestream may have up to 16384 components.  Raise the limit on
+// open files toward what that needs: macOS allows 256 by default, so a
+// 257-component image (conformance p0_13) failed after 253 files, and the
+// Windows C runtime allows 512 streams.  Best effort; a file that still cannot
+// be opened fails the decode.
+void reserve_open_files(size_t n) {
+#if defined(_WIN32)
+  if (n + 16 > 512) _setmaxstdio(static_cast<int>(std::min<size_t>(n + 16, 8192)));
+#else
+  struct rlimit rl;
+  if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return;
+  const rlim_t want = static_cast<rlim_t>(n) + 32;  // stdio, the input, the pool
+  if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur >= want) return;
+  rlim_t target = want;
+  if (rl.rlim_max != RLIM_INFINITY && target > rl.rlim_max) target = rl.rlim_max;
+  #if defined(__APPLE__) && defined(OPEN_MAX)
+  if (target > OPEN_MAX) target = OPEN_MAX;  // macOS rejects a larger soft limit
+  #endif
+  if (rl.rlim_cur != RLIM_INFINITY && target <= rl.rlim_cur) return;
+  rl.rlim_cur = target;
+  setrlimit(RLIMIT_NOFILE, &rl);
+#endif
+}
+
 }  // namespace
 
 void print_help(char *cmd) {
@@ -699,6 +728,7 @@ int main(int argc, char *argv[]) {
 
   // Output file handles (opened lazily on the last iteration's first row).
   std::vector<FILE *> fps;
+  bool output_failed = false;  // an output file could not be opened
   std::vector<uint8_t> row_buf;
   uint8_t bpp            = 0;
   int32_t pnm_offset     = 0;
@@ -744,6 +774,7 @@ int main(int argc, char *argv[]) {
                 FILE *fp = fopen(fname, "wb");
                 if (fp == nullptr) {
                   printf("ERROR: Failed to open output file: %s\n", fname);
+                  output_failed = true;
                   throw std::runtime_error("fopen failed");
                 }
                 fprintf(fp, "P6 %d %d %d\n", img_width[0], img_height[0],
@@ -754,6 +785,7 @@ int main(int argc, char *argv[]) {
                 row_buf.resize(static_cast<size_t>(img_width[0]) * 3 * bpp);
               } else {
                 // One file per component (PGM, PGX, or RAW)
+                reserve_open_files(nc);
                 fps.resize(nc, nullptr);
                 for (uint16_t c = 0; c < nc; ++c) {
                   char fname[256], base[256];
@@ -764,6 +796,7 @@ int main(int argc, char *argv[]) {
                   fps[c] = fopen(fname, "wb");
                   if (fps[c] == nullptr) {
                     printf("ERROR: Failed to open output file: %s\n", fname);
+                    output_failed = true;
                     throw std::runtime_error("fopen failed");
                   }
                   if (want_pgm)
@@ -894,6 +927,7 @@ int main(int argc, char *argv[]) {
 
   for (FILE *fp : fps)
     if (fp) fclose(fp);
+  if (output_failed) return EXIT_FAILURE;
 
   auto duration = std::chrono::high_resolution_clock::now() - start;
   auto count    = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
