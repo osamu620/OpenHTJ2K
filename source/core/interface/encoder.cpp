@@ -873,7 +873,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
       tile_indices[i] = static_cast<uint16_t>(i);
       tile_lengths[i] = tileSet[i].get_tile_part_size();
     }
-    main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
+    main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(static_cast<uint8_t>(0), tile_indices, tile_lengths));
   }
 
   // Flush SOC + main header into a small buffer to measure its size and to
@@ -1077,7 +1077,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
       tile_indices[i] = static_cast<uint16_t>(i);
       tile_lengths[i] = tileSet[i].get_tile_part_size();
     }
-    main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(0, tile_indices, tile_lengths));
+    main_header.TLM.push_back(MAKE_UNIQUE<TLM_marker>(static_cast<uint8_t>(0), tile_indices, tile_lengths));
   }
 
   // Flush SOC + main header into a small buffer to measure its size and to
@@ -1147,6 +1147,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
                                      siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
                                      bool isJPH, uint8_t color_space, uint32_t num_threads) {
+  (void)num_threads;  // only the thread pool uses it
   if (qfactor != NO_QFACTOR) {
     if (qfactor > 100) {
       printf("Value of Qfactor shall be in the range [0, 100]\n");

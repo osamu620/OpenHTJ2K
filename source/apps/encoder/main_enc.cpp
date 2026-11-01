@@ -93,7 +93,7 @@ int main(int argc, char *argv[]) {
       }
     }
 #endif
-    catch (std::exception &exc) {
+    catch (std::exception &) {
       printf("ERROR: File %s is not found.\n", fname.c_str());
       return EXIT_FAILURE;
     }

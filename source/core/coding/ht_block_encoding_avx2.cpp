@@ -296,7 +296,6 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   std::fill_n(rholine, QW + 3U, int32_t{0});
   int32_t *rho_p = rholine + 1;
 
-  int32_t gamma;
   int32_t context = 0, n_q;
   uint32_t CxtVLC, lw, cwd;
   int32_t Emax_q;
@@ -323,7 +322,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     u_min    = u_q;
     uvlc_idx = u_q;
     uoff     = (u_q) ? 1 : 0;
-    uoff_flag &= uoff;
+    uoff_flag &= (uoff != 0);
     Etmp        = _mm_set1_epi32(Emax_q);
     vuoff       = _mm_set1_epi32(uoff << 7);
     mask        = _mm_cmpeq_epi32(E0, Etmp);
@@ -347,7 +346,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     u_min  = (u_min < u_q) ? u_min : u_q;
     uvlc_idx += u_q << 5;
     uoff = (u_q) ? 1 : 0;
-    uoff_flag &= uoff;
+    uoff_flag &= (uoff != 0);
     Etmp        = _mm_set1_epi32(Emax_q);
     vuoff       = _mm_set1_epi32(uoff << 7);
     mask        = _mm_cmpeq_epi32(E1, Etmp);

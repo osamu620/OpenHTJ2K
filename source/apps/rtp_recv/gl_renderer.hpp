@@ -184,7 +184,6 @@ class GlRenderer {
   // RGB passthrough program (CPU fallback path).
   unsigned int prog_rgb_       = 0;
   int          u_rgb_tex_      = -1;
-  int          u_rgb_viewport_ = -1;  // vec4(x0, y0, w, h) in normalized device coords
   unsigned int tex_rgb_        = 0;
   int          tex_rgb_w_      = 0;
   int          tex_rgb_h_      = 0;

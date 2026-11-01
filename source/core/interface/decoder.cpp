@@ -164,11 +164,12 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
+  (void)num_threads;  // only the thread pool uses it
   uintmax_t file_size;
 #ifdef OPENHTJ2K_HAS_FILESYSTEM
   try {
     file_size = std::filesystem::file_size(filename);
-  } catch (std::filesystem::filesystem_error &err) {
+  } catch (std::filesystem::filesystem_error &) {
     throw std::runtime_error(std::string("input file not found: ") + filename);
   }
 #else
@@ -213,6 +214,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t length, const uint8_t r,
                                                uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
+  (void)num_threads;  // only the thread pool uses it
   if (buf == nullptr) {
   }
 #ifdef OPENHTJ2K_THREAD
@@ -235,6 +237,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
 
 void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const uint8_t r,
                                   uint32_t num_threads) {
+  (void)num_threads;  // only the thread pool uses it
   reduce_NL = r;
   enum_cs   = 0;
   if (buf == nullptr) {
@@ -258,6 +261,7 @@ void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const
 
 void openhtj2k_decoder_impl::init_borrow(uint8_t *buf, const size_t length, const uint8_t r,
                                           uint32_t num_threads) {
+  (void)num_threads;  // only the thread pool uses it
   reduce_NL = r;
   enum_cs   = 0;
   if (buf == nullptr) {

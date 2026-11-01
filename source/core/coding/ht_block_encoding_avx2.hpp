@@ -37,7 +37,7 @@
   #include <x86intrin.h>
 #endif
 
-#if __GNUC__ || __has_attribute(always_inline)
+#if defined(__GNUC__) || defined(__clang__)
   #define FORCE_INLINE inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
   #define FORCE_INLINE __forceinline

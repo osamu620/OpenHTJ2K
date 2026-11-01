@@ -167,7 +167,7 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
   // Fused dequantize setup
   int32_t pLSB_dq     = 0;
   float fscale_direct = 0.0f;
-  uint32_t out_stride = block->blksampl_stride;
+  uint32_t out_stride = static_cast<uint32_t>(block->blksampl_stride);
   OPENHTJ2K_IF_CONSTEXPR (fuse_dequant) {
     const int32_t M_b_val = block->get_Mb();
     pLSB_dq               = 31 - M_b_val;

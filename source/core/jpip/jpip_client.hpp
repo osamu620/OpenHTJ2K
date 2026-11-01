@@ -25,6 +25,13 @@
   #define OPENHTJ2K_JPIP_EXPORT
 #endif
 
+// MSVC C4251: the exported classes keep standard-library members.  The DLL and its
+// users here are built by the same compiler and C++ runtime, which makes that safe.
+#if defined(_MSC_VER)
+  #pragma warning(push)
+  #pragma warning(disable : 4251)
+#endif
+
 namespace open_htj2k {
 namespace jpip {
 
@@ -70,3 +77,7 @@ OPENHTJ2K_JPIP_EXPORT std::string format_view_window_query(const ViewWindow &vw)
 
 }  // namespace jpip
 }  // namespace open_htj2k
+
+#if defined(_MSC_VER)
+  #pragma warning(pop)
+#endif
