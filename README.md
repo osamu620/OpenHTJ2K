@@ -81,17 +81,17 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
 - Lossless coding speed against OpenJPEG 2.5.4 on a 4096×2160 8-bit RGB
   frame, single-threaded (`-threads 1` / `-num_threads 1`, one core),
   Ryzen 9 9950X, both built with GCC 14 `-O3 -march=native`; codec time
-  as each tool reports it, medians of 10 runs, 2026-10-30:
+  as each tool reports it, medians of 10 runs, 2026-11-01:
 
   | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
   |---|---:|---:|---:|
-  | Encode | 811 ms | 551 ms (1.5×) | 69 ms (11.8×) |
-  | Decode | 594 ms | 553 ms (1.1×) | 65 ms (9.1×) |
+  | Encode | 800 ms | 555 ms (1.4×) | 68 ms (11.8×) |
+  | Decode | 586 ms | 550 ms (1.1×) | 64 ms (9.2×) |
 
   The two decoder timers do not cover the same work: OpenHTJ2K's decoder
   streams rows to the output file while it decodes, so its time includes
   writing the 26 MB PPM; OpenJPEG's `decode time` excludes its PPM writer
-  (about 230 ms of its 829 ms process time). The decode row is therefore
+  (about 230 ms of its 816 ms process time). The decode row is therefore
   conservative for OpenHTJ2K. Method, fixture, whole-process wall times
   and the script that regenerates the table:
   [docs/benchmarks.md](docs/benchmarks.md).
