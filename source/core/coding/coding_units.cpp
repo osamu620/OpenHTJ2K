@@ -6245,6 +6245,33 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   std::atomic<bool> pull_error(false);
   auto *pool                   = ThreadPool::get();
   const bool can_parallel_pull = (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
+  // In builds whose fused inverse MCT + finalize is the narrow SSE2 or scalar kernel,
+  // a strip's rows of it run as pool tasks into a strip-sized output; the callback
+  // still runs on this thread, in row order.  On this thread alone it was a serial
+  // tail (about a quarter of its time at 8 threads in a portable x86-64 build).  The
+  // AVX2/AVX-512 kernel converts a strip in less time than the dispatch takes (slower
+  // at 2 and 16 threads), so those builds, and NEON and WASM (not measured), keep it
+  // on this thread.
+  struct ColorRowsCtx {
+    const sprec_t *src[3];
+    int32_t *dst[3];
+    uint32_t src_stride[3];
+    uint32_t rows;
+    std::atomic<int> *cnt;
+  };
+  #if !(defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)) && !defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+      && !defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  const bool par_color = can_parallel_pull && do_mct;
+  #else
+  const bool par_color = false;
+  #endif
+  std::vector<int32_t> color_strip;
+  std::vector<ColorRowsCtx> color_tasks;
+  std::atomic<int> color_cnt(0);
+  if (par_color) {
+    color_strip.resize(static_cast<size_t>(3) * strip_h_luma * mct_w);
+    color_tasks.reserve(pool->num_threads());
+  }
 #endif
 
   // ── Row-range fast-forward (set_row_range with row_lo > 0) ────────────────
@@ -6349,16 +6376,65 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     // row_lo were produced upstream (the state machines don't skip fetches
     // unless the per-level row_lo zero-fill fires) but we don't emit them.
     const uint32_t emit_y0 = std::max(strip_y0, row_lo);
+#ifdef OPENHTJ2K_THREAD
+    if (par_color && strip_y1 > emit_y0) {
+      // One chunk of rows per pool thread.  The three MCT components share the strip
+      // geometry (row stride mct_w).
+      const uint32_t nrows  = strip_y1 - emit_y0;
+      const uint32_t nchunk = std::min(nrows, static_cast<uint32_t>(pool->num_threads()));
+      const size_t plane    = static_cast<size_t>(strip_h_luma) * mct_w;
+      color_tasks.resize(nchunk);  // within the reserved capacity: no reallocation
+      uint32_t r0 = 0;
+      for (uint32_t k = 0; k < nchunk; ++k) {
+        const uint32_t r1 = static_cast<uint32_t>((static_cast<uint64_t>(nrows) * (k + 1)) / nchunk);
+        const size_t row  = emit_y0 - strip_y0 + r0;
+        ColorRowsCtx &t   = color_tasks[k];
+        for (uint16_t c = 0; c < 3; ++c) {
+          t.src_stride[c] = ci[c].csize_x;
+          t.src[c]        = strip_ptrs[c] + row * ci[c].csize_x;
+          t.dst[c]        = color_strip.data() + static_cast<size_t>(c) * plane + row * mct_w;
+        }
+        t.rows = r1 - r0;
+        t.cnt  = &color_cnt;
+        r0     = r1;
+      }
+      color_cnt.store(static_cast<int>(nchunk), std::memory_order_relaxed);
+      const fused_mct_finalize_func fn = fused_mct_finalize[xform_ct];
+      const FinalizeParams *fpp        = fp;
+      const uint32_t w                 = mct_w;
+      pool->push_batch(color_tasks, [fn, fpp, w](const ColorRowsCtx &ctx) {
+        const ColorRowsCtx *t = &ctx;
+        return [t, fn, fpp, w]() {
+          for (uint32_t r = 0; r < t->rows; ++r) {
+            const size_t o = static_cast<size_t>(r) * w;
+            fn(t->src[0] + r * t->src_stride[0], t->src[1] + r * t->src_stride[1],
+               t->src[2] + r * t->src_stride[2], t->dst[0] + o, t->dst[1] + o, t->dst[2] + o, w, fpp);
+          }
+          t->cnt->fetch_sub(1, std::memory_order_release);
+        };
+      });
+      dec_strip_barrier_wait(color_cnt);
+    }
+#endif
     for (uint32_t y = emit_y0; y < strip_y1; ++y) {
       if (do_mct) {
         // Fused path: read 3 MCT component rows from strip scratch, then
         // apply inverse MCT + float→int32 finalize in a single pass.
-        const size_t rs   = static_cast<size_t>(y - strip_y0);
-        const sprec_t *p0 = strip_ptrs[0] + rs * ci[0].csize_x;
-        const sprec_t *p1 = strip_ptrs[1] + rs * ci[1].csize_x;
-        const sprec_t *p2 = strip_ptrs[2] + rs * ci[2].csize_x;
-        fused_mct_finalize[xform_ct](p0, p1, p2, out_rows[0].data(), out_rows[1].data(), out_rows[2].data(),
-                                     mct_w, fp);
+        const size_t rs = static_cast<size_t>(y - strip_y0);
+#ifdef OPENHTJ2K_THREAD
+        if (par_color) {
+          // converted by the pool tasks above
+          const size_t plane = static_cast<size_t>(strip_h_luma) * mct_w;
+          for (uint16_t c = 0; c < 3; ++c) out_ptrs[c] = color_strip.data() + c * plane + rs * mct_w;
+        } else
+#endif
+        {
+          const sprec_t *p0 = strip_ptrs[0] + rs * ci[0].csize_x;
+          const sprec_t *p1 = strip_ptrs[1] + rs * ci[1].csize_x;
+          const sprec_t *p2 = strip_ptrs[2] + rs * ci[2].csize_x;
+          fused_mct_finalize[xform_ct](p0, p1, p2, out_rows[0].data(), out_rows[1].data(),
+                                       out_rows[2].data(), mct_w, fp);
+        }
         // Extra components beyond 3 (no MCT applied).
         for (uint16_t c = 3; c < NC; ++c) {
           const uint32_t yr_c = ci[c].yr;
