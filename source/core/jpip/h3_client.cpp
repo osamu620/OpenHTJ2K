@@ -89,7 +89,7 @@ static void h3_client_flush(ClientConn *c) {
       if (QUIC_FAILED(s)) {
         std::free(sc);
       }
-      nghttp3_conn_add_write_offset(c->h3conn, sid, static_cast<int64_t>(total));
+      nghttp3_conn_add_write_offset(c->h3conn, sid, total);
     }
     if (n == 0) break;
   }
@@ -216,8 +216,7 @@ static QUIC_STATUS QUIC_API client_stream_cb(HQUIC stream, void *context,
   return QUIC_STATUS_SUCCESS;
 }
 
-static QUIC_STATUS QUIC_API client_conn_cb(HQUIC conn, void *context,
-                                           QUIC_CONNECTION_EVENT *event) {
+static QUIC_STATUS QUIC_API client_conn_cb(HQUIC /*conn*/, void *context, QUIC_CONNECTION_EVENT *event) {
   auto *c = static_cast<ClientConn *>(context);
   switch (event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED: {

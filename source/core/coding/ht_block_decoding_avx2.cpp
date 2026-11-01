@@ -56,22 +56,6 @@ static FORCE_INLINE uint8_t calc_mbr_inline(const uint8_t *block_states, size_t 
   return mbr & 1;
 }
 
-// Pointer-based MBR: state_p points to state[(i+1)*stride + (j+1)].
-static FORCE_INLINE uint8_t calc_mbr_p(const uint8_t *state_p, size_t stride, uint8_t causal_cond) {
-  const uint8_t *p0 = state_p - stride - 1;
-  const uint8_t *p1 = state_p - 1;
-  const uint8_t *p2 = state_p + stride - 1;
-
-  uint32_t mbr0 = p0[0] | p0[1] | p0[2];
-  uint32_t mbr1 = p1[0] | p1[2];
-  uint32_t mbr2 = p2[0] | p2[1] | p2[2];
-  uint32_t mbr  = mbr0 | mbr1 | (mbr2 & causal_cond);
-  mbr |= (mbr0 >> SHIFT_REF) & (mbr0 >> SHIFT_SCAN);
-  mbr |= (mbr1 >> SHIFT_REF) & (mbr1 >> SHIFT_SCAN);
-  mbr |= (mbr2 >> SHIFT_REF) & (mbr2 >> SHIFT_SCAN) & causal_cond;
-  return mbr & 1;
-}
-
 // Keep the member function for ABI compatibility (used by non-AVX2 callers).
 uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_t causal_cond) const {
   return calc_mbr_inline(block_states, blkstate_stride, i, j, causal_cond);

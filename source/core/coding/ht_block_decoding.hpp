@@ -37,7 +37,7 @@
 #include "dec_CxtVLC_tables.hpp"
 #include "utils.hpp"
 
-#if __GNUC__ || __has_attribute(always_inline)
+#if defined(__GNUC__) || defined(__clang__)
   #define FORCE_INLINE inline __attribute__((always_inline))
   #define openhtj2k_arm_clzll(x) __builtin_clzll((x))
 #elif defined(_MSC_VER)
@@ -911,7 +911,8 @@ class fwd_buf {
   FORCE_INLINE int32x4_t fetch(const int32x4_t &m) {
     auto t = fetch_raw();
   #if defined(_MSC_VER)
-    int32x4_t msvec, c, v;
+    int32x4_t msvec = vdupq_n_s32(0);  // all four lanes are set below
+    int32x4_t c, v;
     msvec = vsetq_lane_s32(vgetq_lane_s32(t, 0) & 0xFFFFFFFF, msvec, 0);
     c     = aarch64_srl_epi64(t, static_cast<uint8_t>(vgetq_lane_s32(m, 0)));
     v     = vreinterpretq_s32_s8(vextq_s8(vreinterpretq_s8_s32(t), vdupq_n_s8(0), 8));

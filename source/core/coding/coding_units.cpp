@@ -3093,7 +3093,7 @@ int j2k_tile_part::read(j2c_src_memory &in) {
 
   try {
     in.forward_Nbytes(this->length);
-  } catch (std::exception &exc) {
+  } catch (std::exception &) {
     printf("ERROR: forward_Nbytes exceeds the size of buffer.\n");
     throw;
   }
@@ -4122,7 +4122,7 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
     }
   }
   for (auto &result : results) {
-    result.get();
+    (void)result.get();
   }
 #else
     raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
@@ -5334,7 +5334,7 @@ struct file_sink {
     put_word(static_cast<uint16_t>(d & 0xFFFF));
   }
   void put_N_bytes(const uint8_t *src, uint32_t length) {
-    out.write(reinterpret_cast<const char *>(src), length);
+    out.write(reinterpret_cast<const char *>(src), static_cast<std::streamsize>(length));
   }
 };
 struct mem_sink {

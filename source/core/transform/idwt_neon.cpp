@@ -856,9 +856,9 @@ void idwt_1d_filtr_irrev97_planar_sr_neon(sprec_t *out, const sprec_t *lp, const
   const int32_t M    = (J1 + 2) - base + 1;
   thread_local std::vector<float> s1v, s2v, s3v;
   if (static_cast<int32_t>(s1v.size()) < M) {
-    s1v.resize(M);
-    s2v.resize(M);
-    s3v.resize(M);
+    s1v.resize(static_cast<size_t>(M));
+    s2v.resize(static_cast<size_t>(M));
+    s3v.resize(static_cast<size_t>(M));
   }
   float *const s1 = s1v.data() - base;
   float *const s2 = s2v.data() - base;
@@ -938,7 +938,7 @@ void idwt_1d_filtr_rev53_planar_i32_neon(int32_t *out, const int32_t *lp, const 
   }
   // Scalar tail (at most 5 S1 values: loop exits with N - j <= 4).
   {
-    int32_t s1t[8];
+    int32_t s1t[8]{};
     int32_t o_prev = o_carry;
     for (int32_t t = j; t <= N; ++t) {
       const int32_t o = O(t);

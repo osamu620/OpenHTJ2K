@@ -36,7 +36,11 @@
   #define OPENHTJ2K_MAYBE_UNUSED [[maybe_unused]]
 #else
   #define OPENHTJ2K_NODISCARD
-  #define OPENHTJ2K_MAYBE_UNUSED
+  #if defined(__GNUC__) || defined(__clang__)
+    #define OPENHTJ2K_MAYBE_UNUSED __attribute__((unused))
+  #else
+    #define OPENHTJ2K_MAYBE_UNUSED
+  #endif
 #endif
 
 // `if constexpr` in C++17; a plain `if` before that.  Use it only for

@@ -190,7 +190,7 @@ void below_plane(const uint32_t *m, const float *sq, size_t n, uint32_t t, float
     cnt[l] = 0;
   }
   for (size_t i = 0; i < n; i += LANES)
-    for (int l = 0; l < LANES; ++l) {
+    for (size_t l = 0; l < LANES; ++l) {
       const bool b = m[i + l] < t;
       e2[l] += b ? sq[i + l] : 0.0f;
       cnt[l] += b;
@@ -227,7 +227,7 @@ void below_count(const uint32_t *m, size_t n, uint32_t t, uint32_t *cnt) {
 #else
   for (int l = 0; l < LANES; ++l) cnt[l] = 0;
   for (size_t i = 0; i < n; i += LANES)
-    for (int l = 0; l < LANES; ++l) cnt[l] += m[i + l] < t;
+    for (size_t l = 0; l < LANES; ++l) cnt[l] += m[i + l] < t;
 #endif
 }
 
@@ -289,7 +289,7 @@ void residual_plane(const uint32_t *m, size_t n, uint32_t t, float *r2, float *r
 #else
   for (int l = 0; l < LANES; ++l) r2[l] = r2u[l] = 0.0f;
   for (size_t i = 0; i < n; i += LANES)
-    for (int l = 0; l < LANES; ++l) {
+    for (size_t l = 0; l < LANES; ++l) {
       const uint32_t v = m[i + l];
       const float e =
           static_cast<float>(static_cast<int32_t>(2 * (v & (t - 1))) - static_cast<int32_t>(t - 1));
@@ -421,9 +421,6 @@ double lane_sum(const T *v) {
   for (int l = 0; l < LANES; ++l) s += static_cast<double>(v[l]);
   return s;
 }
-
-// Magnitude of a sample in the HT encoder's form (htj2k_magsgn).
-inline uint32_t sample_magnitude(uint32_t u) { return ((u & 0x7FFFFFFFu) >> 1) + (u >> 31); }
 
 inline const ht_rd_plane &plane_of(const ht_rd_info &rd, uint32_t j) { return rd.planes[j - rd.j0]; }
 

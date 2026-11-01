@@ -501,11 +501,13 @@ int main(int argc, char *argv[]) {
     if (a.full) {
       const double mp = static_cast<double>(W) * H / 1e6;
       if (mp <= a.fullcap_mp) {
-        decode_region(dec, data, len, li, a.threads, false, 0, 0, 0, 0, false, b);  // warm
+        decode_region(dec, data, len, static_cast<uint8_t>(li), a.threads, false, 0, 0, 0, 0, false,
+                      b);                        // warm
         const int it = std::max(1, a.iter / 4);  // full decode is dear; fewer iters
         std::vector<double> tot, dc, st;
         for (int i = 0; i < it; ++i) {
-          Timing t = decode_region(dec, data, len, li, a.threads, false, 0, 0, 0, 0, false, b);
+          Timing t = decode_region(dec, data, len, static_cast<uint8_t>(li), a.threads, false, 0, 0, 0, 0,
+                                   false, b);
           tot.push_back(t.total());
           dc.push_back(t.decode);
           st.push_back(t.setup);
@@ -538,13 +540,14 @@ int main(int argc, char *argv[]) {
 
       b.out.clear();  // fresh sizing for this window stride
       for (int i = 0; i < a.warmup; ++i)
-        decode_region(dec, data, len, li, a.threads, true, x0, y0, w, h, true, b);
+        decode_region(dec, data, len, static_cast<uint8_t>(li), a.threads, true, x0, y0, w, h, true, b);
       std::vector<double> tot, dc, st;
-      tot.reserve(a.iter);
-      dc.reserve(a.iter);
-      st.reserve(a.iter);
+      tot.reserve(static_cast<size_t>(a.iter));
+      dc.reserve(static_cast<size_t>(a.iter));
+      st.reserve(static_cast<size_t>(a.iter));
       for (int i = 0; i < a.iter; ++i) {
-        Timing t = decode_region(dec, data, len, li, a.threads, true, x0, y0, w, h, true, b);
+        Timing t =
+            decode_region(dec, data, len, static_cast<uint8_t>(li), a.threads, true, x0, y0, w, h, true, b);
         tot.push_back(t.total());
         dc.push_back(t.decode);
         st.push_back(t.setup);

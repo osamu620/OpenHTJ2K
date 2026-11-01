@@ -766,9 +766,9 @@ void idwt_1d_filtr_irrev97_planar_sr_avx512(sprec_t *out, const sprec_t *lp, con
   const int32_t M    = (J1 + 2) - base + 1;
   thread_local std::vector<float> s1v, s2v, s3v;
   if (static_cast<int32_t>(s1v.size()) < M) {
-    s1v.resize(M);
-    s2v.resize(M);
-    s3v.resize(M);
+    s1v.resize(static_cast<size_t>(M));
+    s2v.resize(static_cast<size_t>(M));
+    s3v.resize(static_cast<size_t>(M));
   }
   float *const s1 = s1v.data() - base;
   float *const s2 = s2v.data() - base;

@@ -87,7 +87,7 @@ static void h3_flush_writes(H3ConnCtx *ctx) {
       if (QUIC_FAILED(s)) {
         std::free(sc);
       }
-      nghttp3_conn_add_write_offset(ctx->h3conn, sid, static_cast<int64_t>(total));
+      nghttp3_conn_add_write_offset(ctx->h3conn, sid, total);
     }
     if (n == 0) break;
   }
@@ -112,9 +112,8 @@ static int64_t open_uni_stream(H3ConnCtx *ctx) {
 
 // ── nghttp3 callbacks ──���────────────────────────────────────────────────────
 
-static int h3_recv_header(nghttp3_conn *, int64_t stream_id, int32_t token,
-                          nghttp3_rcbuf *name, nghttp3_rcbuf *value, uint8_t, void *conn_data,
-                          void *) {
+static int h3_recv_header(nghttp3_conn *, int64_t stream_id, int32_t /*token*/, nghttp3_rcbuf *name,
+                          nghttp3_rcbuf *value, uint8_t, void *conn_data, void *) {
   auto *ctx = static_cast<H3ConnCtx *>(conn_data);
   auto nv = nghttp3_rcbuf_get_buf(name);
   auto vv = nghttp3_rcbuf_get_buf(value);
@@ -337,8 +336,7 @@ struct H3Server::Impl {
   std::string           error;
 };
 
-static QUIC_STATUS QUIC_API listener_cb(HQUIC listener, void *context,
-                                        QUIC_LISTENER_EVENT *event) {
+static QUIC_STATUS QUIC_API listener_cb(HQUIC /*listener*/, void *context, QUIC_LISTENER_EVENT *event) {
   auto *impl = static_cast<H3Server::Impl *>(context);
   if (event->Type == QUIC_LISTENER_EVENT_NEW_CONNECTION) {
     auto *ctx     = new H3ConnCtx();

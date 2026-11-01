@@ -805,8 +805,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   const auto vROIshift = vdupq_n_s32(ROIshift);
 
   // vdst0, vdst1 cannot be auto for gcc
-  int32x4_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1, vpLSB;
-  vpLSB    = vdupq_n_s32(pLSB);
+  int32x4_t v0, v1, s0, s1, vROImask, vmagmask, vdst0, vdst1;
   vmagmask = vdupq_n_s32(INT32_MAX);
   if (this->transformation == 1) {
     if (this->dequant_i32) {

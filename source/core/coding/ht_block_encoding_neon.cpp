@@ -362,7 +362,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     u_min    = u_q;
     uvlc_idx = u_q;
     uoff     = (u_q) ? 1 : 0;
-    uoff_flag &= uoff;
+    uoff_flag &= (uoff != 0);
     Etmp        = vdupq_n_s32(Emax_q);
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E0, Etmp);
@@ -384,7 +384,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
     u_min  = (u_min < u_q) ? u_min : u_q;
     uvlc_idx += u_q << 5;
     uoff = (u_q) ? 1 : 0;
-    uoff_flag &= uoff;
+    uoff_flag &= (uoff != 0);
     Etmp        = vdupq_n_s32(Emax_q);
     vuoff       = vdupq_n_s32(uoff);
     mask        = vceqq_s32(E1, Etmp);
