@@ -6928,7 +6928,7 @@ uint64_t j2k_tile::get_layers_size(uint16_t last) const {
   for (uint16_t c = 0; c < num_components; c++) {
     for (uint8_t r = 0; r <= tcomp[c].NL; r++) {
       j2k_resolution *cr = tcomp[c].access_resolution(r);
-      np += cr->npw * cr->nph;
+      np += static_cast<uint64_t>(cr->npw) * cr->nph;
     }
   }
   uint64_t size = 14;  // SOT (12) and SOD (2)
