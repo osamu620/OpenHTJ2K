@@ -1,3 +1,21 @@
+# [0.23.1] - 2026-11-01
+
+Patch release: one encoder fix in the size accounting of the rate control.
+Nothing else changes: encoded and decoded output is otherwise byte-identical
+to 0.23.0, and the API is unchanged.
+
+## Fixed
+
+### Encoder
+- With a target size (`-rate`, `set_target_size()`, `set_target_sizes()`),
+  the size of the first quality layers that the encoder checks against the
+  targets counted the precincts of a resolution with a 32-bit multiplication.
+  With SOP markers (`Cuse_sop=yes`) and more than 2^32 precincts in one
+  resolution (a tile of about 70000 x 70000 samples with 1 x 1 precincts)
+  the count wrapped and the bytes of the SOP markers were undercounted. The
+  count is now 64-bit.
+  Present since 0.23.0.
+
 # [0.23.0] - 2026-11-01
 
 Feature release. The Part 1 block coder gains rate control (`-rate R`) and
