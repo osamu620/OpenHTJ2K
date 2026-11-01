@@ -1,3 +1,18 @@
+# [Unreleased]
+
+## Fixed
+
+### Tools
+- `open_htj2k_dec` failed to write codestreams with more than about 250
+  components as PGM, PGX or RAW (one file per component) where a process may
+  have 256 files open, the macOS default: conformance codestreams `p0_13` and
+  `ds0_ht_13` (257 components) stopped after 253 files, so 8 conformance
+  comparison tests failed on a Mac. It keeps every component's file open
+  while it writes rows, and now raises its limit on open files to what the
+  components need (up to the hard limit; up to 8192 on Windows, whose C
+  runtime allows 512 by default). A file that still cannot be opened now
+  makes it exit with an error; it used to exit successfully.
+
 # [0.23.1] - 2026-11-01
 
 Patch release: one encoder fix in the size accounting of the rate control.
