@@ -1,4 +1,19 @@
-# [Unreleased]
+# [0.23.2] - 2026-11-01
+
+Patch release: `open_htj2k_dec` writes images with more than about 250
+components where a process may have only 256 files open (the macOS default),
+and the library and tools build without compiler warnings. Encoded and
+decoded output is byte-identical to 0.23.1, and the API is unchanged.
+
+## Changed
+
+### Build
+- The sources build without compiler warnings with GCC, Clang, Apple Clang,
+  MSVC (x64 and ARM64) and Emscripten, also with `-DOPENHTJ2K_RTP=ON`,
+  `-DOPENHTJ2K_QUIC=ON` and `-DCMAKE_CXX_STANDARD=11`. A default build printed
+  12-16 warnings with GCC and Clang and about 60 with MSVC. The fixes are
+  casts, unused code removed, unnamed unused parameters, zero-initialized
+  scratch arrays, and a portable `round_up()`; no change in output.
 
 ## Fixed
 
