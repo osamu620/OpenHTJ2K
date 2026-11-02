@@ -1,3 +1,24 @@
+# [0.24.0] - 2026-11-02
+
+Feature release: JPH files with an alpha channel. The encoder now writes JPH
+files (`.jph`) with 2 components (gray + alpha) and 4 components (RGB or
+YCbCr + alpha); it used to stop with "invalid color space specification" for
+any count other than 1 or 3. JPH files with 1 or 3 components and raw
+codestreams are byte-identical to 0.23.4, decoded output is unchanged, and
+the API is unchanged.
+
+## Added
+
+### Encoder
+- JPH files with 2 or 4 components get a Channel Definition box (ISO/IEC
+  15444-1 I.5.3.6) in the JP2 header box, after the colour specification box.
+  The last component is declared as opacity for the whole image (`Typ` 1,
+  `Asoc` 0) and the others as colours 1, 2, 3 (`Typ` 0). The colour
+  specification box declares greyscale for 2 components, and sRGB (or sYCC
+  with `-jph_color_space YCC`) for 4. This applies to the command-line
+  encoder and to the library API (`openhtj2k_encoder` with `isJPH = true`).
+  OpenJPEG 2.5.4 reads these files with the last component flagged as alpha.
+
 # [0.23.4] - 2026-11-02
 
 Patch release: a column window (`set_col_range`) on the single-tile reuse
