@@ -137,11 +137,28 @@ class colour_specification_box : public box_base {
   size_t write(j2c_dst_memory &dst) override;
 };
 
+// Channel Definition box (ISO/IEC 15444-1 I.5.3.6).  Written for 2 and 4
+// components, which are gray + alpha and colour + alpha: the last component is
+// declared as opacity for the whole image, the others as the colours of the
+// colour specification box in order.
+class channel_definition_box : public box_base {
+ private:
+  std::vector<uint16_t> Cn;
+  std::vector<uint16_t> Typ;
+  std::vector<uint16_t> Asoc;
+
+ public:
+  explicit channel_definition_box(j2k_main_header &hdr);
+  bool is_needed() const { return !Cn.empty(); }
+  size_t write(j2c_dst_memory &dst) override;
+};
+
 class header_box : public box_base {
  private:
   image_header_box ihdr;
   bits_per_component_box bpcc;
   colour_specification_box colr;
+  channel_definition_box cdef;
 
  public:
   header_box(j2k_main_header &hdr, bool isSRGB);

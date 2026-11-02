@@ -189,13 +189,16 @@ size_t bits_per_component_box::write(j2c_dst_memory &dst) {
 
 colour_specification_box::colour_specification_box(j2k_main_header &hdr, bool isSRGB)
     : box_base(15, 0x636F6C72), METH(1), PREC(0), APPROX(0) {
-  if (hdr.SIZ->get_num_components() == 3) {
+  // 2 and 4 components carry an alpha channel after the colour channels; see
+  // channel_definition_box.
+  const uint16_t nc = hdr.SIZ->get_num_components();
+  if (nc == 3 || nc == 4) {
     if (isSRGB) {
       EnumCS = 16;
     } else {
       EnumCS = 18;
     }
-  } else if (hdr.SIZ->get_num_components() == 1) {
+  } else if (nc == 1 || nc == 2) {
     EnumCS = 17;
   } else {
     printf("ERROR: invalid color space specification.\n");
@@ -211,11 +214,36 @@ size_t colour_specification_box::write(j2c_dst_memory &dst) {
   return LBox;
 }
 
+channel_definition_box::channel_definition_box(j2k_main_header &hdr) : box_base(10, 0x63646566) {
+  const uint16_t nc = hdr.SIZ->get_num_components();
+  if (nc != 2 && nc != 4) return;
+  for (uint16_t c = 0; c < nc; ++c) {
+    const bool alpha = (c == nc - 1);
+    Cn.push_back(c);
+    Typ.push_back(alpha ? 1 : 0);                              // 1: opacity, 0: colour
+    Asoc.push_back(alpha ? 0 : static_cast<uint16_t>(c + 1));  // 0: the whole image
+    LBox += 6;
+  }
+}
+size_t channel_definition_box::write(j2c_dst_memory &dst) {
+  base_write(dst);
+  dst.put_word(static_cast<uint16_t>(Cn.size()));
+  for (size_t i = 0; i < Cn.size(); ++i) {
+    dst.put_word(Cn[i]);
+    dst.put_word(Typ[i]);
+    dst.put_word(Asoc[i]);
+  }
+  return LBox;
+}
+
 header_box::header_box(j2k_main_header &hdr, bool isSRGB)
-    : box_base(8, 0x6A703268), ihdr(hdr), bpcc(hdr), colr(hdr, isSRGB) {
+    : box_base(8, 0x6A703268), ihdr(hdr), bpcc(hdr), colr(hdr, isSRGB), cdef(hdr) {
   LBox += ihdr.LBox + colr.LBox;
   if (ihdr.needBPCC()) {
     LBox += bpcc.LBox;
+  }
+  if (cdef.is_needed()) {
+    LBox += cdef.LBox;
   }
 }
 size_t header_box::write(j2c_dst_memory &dst) {
@@ -225,6 +253,9 @@ size_t header_box::write(j2c_dst_memory &dst) {
     bpcc.write(dst);
   }
   colr.write(dst);
+  if (cdef.is_needed()) {
+    cdef.write(dst);
+  }
   return LBox;
 }
 

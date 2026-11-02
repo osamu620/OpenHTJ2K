@@ -1,0 +1,31 @@
+# Fails unless FILE contains each byte sequence of HEX, a semicolon-separated
+# list of hexadecimal strings (two digits per byte).
+# Invoked via: cmake -DFILE=<path> "-DHEX=<hex>[;<hex>...]" -P check_file_hex.cmake
+if(NOT EXISTS "${FILE}")
+  message(FATAL_ERROR "${FILE} does not exist")
+endif()
+file(READ "${FILE}" _hex HEX)
+foreach(_seq IN LISTS HEX)
+  string(TOLOWER "${_seq}" _seq)
+  # Only matches that start on a byte boundary count.
+  set(_rest "${_hex}")
+  set(_found FALSE)
+  while(NOT _found)
+    string(FIND "${_rest}" "${_seq}" _pos)
+    if(_pos EQUAL -1)
+      break()
+    endif()
+    math(EXPR _odd "${_pos} % 2")
+    if(_odd EQUAL 0)
+      set(_found TRUE)
+    else()
+      # _pos is odd, so _pos + 1 is the next byte boundary.
+      math(EXPR _next "${_pos} + 1")
+      string(SUBSTRING "${_rest}" ${_next} -1 _rest)
+    endif()
+  endwhile()
+  if(NOT _found)
+    message(FATAL_ERROR "${FILE} does not contain the bytes ${_seq}")
+  endif()
+endforeach()
+message(STATUS "${FILE}: all byte sequences found")

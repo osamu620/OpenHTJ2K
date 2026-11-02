@@ -359,6 +359,38 @@ set_tests_properties(comp_part1_precincts PROPERTIES DEPENDS dec_part1_precincts
 # The JPH file format requires HT block coding: Part 1 output into .jph is refused.
 add_test(NAME enc_part1_jph_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23part1.jph Cmodes=0)
 set_tests_properties(enc_part1_jph_rejected PROPERTIES WILL_FAIL TRUE)
+# JPH with an alpha channel: 2 components (gray + alpha) and 4 (RGB + alpha).
+# The colour specification box declares greyscale (EnumCS 17) or sRGB (16) for
+# the colour channels, and a Channel Definition box (ISO/IEC 15444-1 I.5.3.6)
+# declares the last component as opacity (Typ 1, Asoc 0) and the others as
+# colours 1, 2, 3.  Both files must decode back to their input components.
+# Two different 512x512 planes alternate, so a swapped component would show.
+set(JPH_ALPHA_P0 "${ENCODER_REF_DIR}/c1p0_05-2.pgx")
+set(JPH_ALPHA_P1 "${ENCODER_REF_DIR}/c1p0_05-3.pgx")
+set(JPH_ALPHA_2_HEX "0000000f636f6c7201000000000011;00000016636465660002000000000001000100010000")
+set(JPH_ALPHA_4_HEX "0000000f636f6c7201000000000010;00000022636465660004000000000001000100000002000200000003000300010000")
+foreach(NC IN ITEMS 2 4)
+  if(NC EQUAL 2)
+    set(JPH_ALPHA_IN "${JPH_ALPHA_P0},${JPH_ALPHA_P1}")
+  else()
+    set(JPH_ALPHA_IN "${JPH_ALPHA_P0},${JPH_ALPHA_P1},${JPH_ALPHA_P0},${JPH_ALPHA_P1}")
+  endif()
+  add_test(NAME enc_jph_alpha${NC} COMMAND open_htj2k_enc -i ${JPH_ALPHA_IN} -o jph_alpha${NC}.jph Creversible=yes)
+  add_test(NAME box_jph_alpha${NC} COMMAND ${CMAKE_COMMAND} -DFILE=jph_alpha${NC}.jph "-DHEX=${JPH_ALPHA_${NC}_HEX}"
+           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_hex.cmake)
+  set_tests_properties(box_jph_alpha${NC} PROPERTIES DEPENDS enc_jph_alpha${NC})
+  add_test(NAME dec_jph_alpha${NC} COMMAND open_htj2k_dec -i jph_alpha${NC}.jph -o jph_alpha${NC}.pgx)
+  set_tests_properties(dec_jph_alpha${NC} PROPERTIES DEPENDS enc_jph_alpha${NC})
+  set(JPH_ALPHA_TESTS enc_jph_alpha${NC} box_jph_alpha${NC} dec_jph_alpha${NC})
+  math(EXPR LAST "${NC} - 1")
+  foreach(C RANGE ${LAST})
+    math(EXPR ODD "${C} % 2")
+    add_test(NAME comp_jph_alpha${NC}_${C} COMMAND imgcmp jph_alpha${NC}_0${C}.pgx ${JPH_ALPHA_P${ODD}} 0 0)
+    set_tests_properties(comp_jph_alpha${NC}_${C} PROPERTIES DEPENDS dec_jph_alpha${NC})
+    list(APPEND JPH_ALPHA_TESTS comp_jph_alpha${NC}_${C})
+  endforeach()
+  set_tests_properties(${JPH_ALPHA_TESTS} PROPERTIES FIXTURES_REQUIRED test_artifacts)
+endforeach()
 
 # Part 1 code-block mode switches.  Each lossless round-trip must be exact.
 #   bypass:  raw SigProp/MagRef passes from the fifth bit-plane, so several
