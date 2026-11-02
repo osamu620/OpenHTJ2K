@@ -6,7 +6,11 @@
 // horizontal IDWT kernels (idwt_1d_filtr_{irrev97,rev53}_fixed_range) which the
 // WASM JPIP viewer relies on via decoder::set_col_range().
 //
-// Usage: col_range_compare <input.j2k> [-reduce N] [-col LO HI] [-iter K]
+// The window is given in the coordinates of a component without horizontal
+// subsampling; a component with SIZ XRsiz > 1 is compared over
+// [lo / XRsiz, ceil(hi / XRsiz)), the same spatial region.
+//
+// Usage: col_range_compare <input.j2k> [-reduce N] [-col LO HI] [-iter K] [-reuse]
 //   default      : run the built-in validation cases, exit 0 on exact match.
 //   -col LO HI    : validate one explicit window [LO, HI) instead of the cases.
 //   -iter K       : after validating, time K windowed decodes (ms/iter) for
@@ -74,6 +78,24 @@ static std::vector<uint8_t> read_file(const char *path) {
   return buf;
 }
 
+// Horizontal subsampling factor (SIZ XRsiz) of every component, read from the
+// main header.  Returns an empty vector if no SIZ follows the SOC marker
+// (the comparison then treats every component as unsubsampled).
+static std::vector<uint32_t> read_xrsiz(const std::vector<uint8_t> &cs) {
+  std::vector<uint32_t> xr;
+  for (size_t i = 0; i + 4 <= cs.size(); ++i) {
+    if (cs[i] == 0xFF && cs[i + 1] == 0x4F && cs[i + 2] == 0xFF && cs[i + 3] == 0x51) {
+      const size_t siz = i + 2;  // FF51; Csiz at +38, per-component triplets from +40
+      if (siz + 40 > cs.size()) return xr;
+      const uint32_t nc = (static_cast<uint32_t>(cs[siz + 38]) << 8) | cs[siz + 39];
+      if (siz + 40 + 3 * static_cast<size_t>(nc) > cs.size()) return xr;
+      for (uint32_t c = 0; c < nc; ++c) xr.push_back(std::max<uint32_t>(1, cs[siz + 40 + 3 * c + 1]));
+      return xr;
+    }
+  }
+  return xr;
+}
+
 // Decode with an optional column range, returning a flat per-component image.
 // set_col_range still emits every row, so the callback stores the full canvas;
 // only columns in [col_lo, col_hi) are meaningful in the windowed decode.  Pass
@@ -122,8 +144,12 @@ static bool decode_reuse(open_htj2k::openhtj2k_decoder &dec, const std::vector<u
   try {
     dec.init(codestream.data(), codestream.size(), reduce_NL, 1);
     dec.parse();
+    // The window is a sticky decoder setting, so a full-width decode must
+    // reset it explicitly (this is also how a viewer returns to full width).
     if (restrict_cols) {
       dec.set_col_range(col_lo, col_hi);
+    } else {
+      dec.set_col_range(0, UINT32_MAX);
     }
     auto cb = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
       if (out.empty()) {
@@ -145,11 +171,13 @@ static bool decode_reuse(open_htj2k::openhtj2k_decoder &dec, const std::vector<u
   return true;
 }
 
-// Compare got[c][(y,x)] against ref[c][(y,x)] for x in [col_lo, col_hi), all y.
+// Compare got[c][(y,x)] against ref[c][(y,x)] for x in component c's share of
+// [col_lo, col_hi) (scaled by its XRsiz), all y.
 static bool compare_col_window(const std::vector<std::vector<int32_t>> &ref,
                                const std::vector<std::vector<int32_t>> &got,
                                const std::vector<uint32_t> &widths, const std::vector<uint32_t> &heights,
-                               uint32_t col_lo, uint32_t col_hi, const char *label, const char *infile) {
+                               const std::vector<uint32_t> &xrsiz, uint32_t col_lo, uint32_t col_hi,
+                               const char *label, const char *infile) {
   if (ref.size() != got.size()) {
     printf("FAIL [%s %s]: component count mismatch (%zu vs %zu)\n", infile, label, ref.size(), got.size());
     return false;
@@ -157,8 +185,10 @@ static bool compare_col_window(const std::vector<std::vector<int32_t>> &ref,
   for (size_t c = 0; c < ref.size(); ++c) {
     const uint32_t W  = widths[c];
     const uint32_t H  = heights[c];
-    const uint32_t x0 = std::min(col_lo, W);
-    const uint32_t x1 = std::min(col_hi, W);
+    const uint32_t xr = (c < xrsiz.size()) ? xrsiz[c] : 1;
+    const uint32_t x0 = std::min(col_lo / xr, W);
+    const uint32_t x1 =
+        static_cast<uint32_t>(std::min<uint64_t>((static_cast<uint64_t>(col_hi) + xr - 1) / xr, W));
     for (uint32_t y = 0; y < H; ++y) {
       const int32_t *rp = ref[c].data() + static_cast<size_t>(y) * W;
       const int32_t *gp = got[c].data() + static_cast<size_t>(y) * W;
@@ -184,6 +214,7 @@ static bool compare_col_window(const std::vector<std::vector<int32_t>> &ref,
 // 1 on mismatch or decode error.
 extern "C" EMSCRIPTEN_KEEPALIVE int crc_validate(const uint8_t *data, int len, int reuse, int reduce_NL) {
   const std::vector<uint8_t> codestream(data, data + len);
+  const std::vector<uint32_t> xr = read_xrsiz(codestream);
   std::vector<std::vector<int32_t>> ref;
   std::vector<uint32_t> w, h;
   std::vector<uint8_t> d;
@@ -203,7 +234,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int crc_validate(const uint8_t *data, int len, i
     std::vector<uint8_t> gd;
     std::vector<bool> gs;
     decode_reuse(rdec, codestream, static_cast<uint8_t>(reduce_NL), true, lo, hi, got, gw, gh, gd, gs);
-    return compare_col_window(ref, got, w, h, lo, hi, "wasm_reuse", "wasm") ? 0 : 1;
+    return compare_col_window(ref, got, w, h, xr, lo, hi, "wasm_reuse", "wasm") ? 0 : 1;
   }
   if (!decode_with_col_range(codestream, static_cast<uint8_t>(reduce_NL), false, 0, 0, ref, w, h, d, s))
     return 1;
@@ -222,7 +253,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int crc_validate(const uint8_t *data, int len, i
     if (!decode_with_col_range(codestream, static_cast<uint8_t>(reduce_NL), true, lo[k], hi[k], got, gw, gh,
                                gd, gs))
       return 1;
-    if (!compare_col_window(ref, got, w, h, lo[k], hi[k], "wasm", "wasm")) return 1;
+    if (!compare_col_window(ref, got, w, h, xr, lo[k], hi[k], "wasm", "wasm")) return 1;
   }
   return 0;
 }
@@ -231,12 +262,13 @@ extern "C" EMSCRIPTEN_KEEPALIVE int crc_validate(const uint8_t *data, int len, i
 int main(int argc, char *argv[]) {
   Args a;
   if (!parse_args(argc, argv, a)) {
-    printf("Usage: col_range_compare <input.j2k> [-reduce N] [-col LO HI] [-iter K]\n");
+    printf("Usage: col_range_compare <input.j2k> [-reduce N] [-col LO HI] [-iter K] [-reuse]\n");
     return 1;
   }
 
   std::vector<uint8_t> codestream = read_file(a.infile.c_str());
   if (codestream.empty()) return 1;
+  const std::vector<uint32_t> xrsiz = read_xrsiz(codestream);
 
   // ── Reuse-path probe (the viewer's path: invoke_line_based_stream_reuse) ─
   if (a.reuse) {
@@ -259,7 +291,9 @@ int main(int argc, char *argv[]) {
       printf("SKIP: %s reuse path produced no output (reuse not supported here)\n", a.infile.c_str());
       return 0;
     }
-    const uint32_t W2 = rw[0];
+    // Windows are chosen in reference-grid columns (a component without
+    // horizontal subsampling), so scale up when component 0 is subsampled.
+    const uint32_t W2 = rw[0] * (xrsiz.empty() ? 1u : xrsiz[0]);
     // Validate several STRICTLY-INTERIOR windows on the warm reuse path.  An
     // unaligned col_lo (not a multiple of 8) is the key case: the vertical
     // sub-range kernels run on row pointers offset by col_lo - u0, so an
@@ -289,7 +323,7 @@ int main(int argc, char *argv[]) {
       cases.push_back({"full", 0, W2});
     }
 
-    bool rok = true;
+    bool rok      = true;
     uint32_t t_lo = 0, t_hi = W2;
     for (const RCase &cs : cases) {
       if (cs.lo >= cs.hi) continue;
@@ -298,12 +332,56 @@ int main(int argc, char *argv[]) {
       std::vector<uint8_t> gd;
       std::vector<bool> gs;
       decode_reuse(rdec, codestream, a.reduce_NL, true, cs.lo, cs.hi, rgot, gw, gh, gd, gs);
-      if (!compare_col_window(rref, rgot, rw, rh, cs.lo, cs.hi, cs.label, a.infile.c_str())) {
+      if (!compare_col_window(rref, rgot, rw, rh, xrsiz, cs.lo, cs.hi, cs.label, a.infile.c_str())) {
         rok = false;
         break;
       }
       t_lo = cs.lo;
       t_hi = cs.hi;
+    }
+
+    // An open-ended window (col_hi = UINT32_MAX, "to the right edge") must
+    // decode the same columns as the same window ending at the width.  It is
+    // compared against that explicit window rather than the full-width
+    // reference so the check does not depend on the right-edge sub-range
+    // rounding (see col_range_validation.cmake).
+    if (rok && !a.have_col && W2 >= 128) {
+      const uint32_t lo = (W2 / 2) | 1u;
+      std::vector<std::vector<int32_t>> open_end, explicit_end;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
+      decode_reuse(rdec, codestream, a.reduce_NL, true, lo, UINT32_MAX, open_end, gw, gh, gd, gs);
+      decode_reuse(rdec, codestream, a.reduce_NL, true, lo, W2, explicit_end, gw, gh, gd, gs);
+      rok = compare_col_window(explicit_end, open_end, rw, rh, xrsiz, lo, W2, "open_end", a.infile.c_str());
+    }
+
+    // Returning to full width (set_col_range(0, UINT32_MAX)) must take effect
+    // on the next decode of the same cached tile: the previous frame's
+    // narrowed IDWT window may not linger, so the whole image has to match
+    // the reference.
+    if (rok) {
+      std::vector<std::vector<int32_t>> rgot;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
+      decode_reuse(rdec, codestream, a.reduce_NL, false, 0, 0, rgot, gw, gh, gd, gs);
+      rok = compare_col_window(rref, rgot, rw, rh, xrsiz, 0, UINT32_MAX, "full_after_windows",
+                               a.infile.c_str());
+    }
+
+    // The window applies from the first frame of a fresh reuse decoder too
+    // (that frame builds the cached tile instead of reusing it).
+    if (rok && !cases.empty() && cases[0].lo < cases[0].hi) {
+      open_htj2k::openhtj2k_decoder fdec;
+      fdec.enable_single_tile_reuse(true);
+      std::vector<std::vector<int32_t>> rgot;
+      std::vector<uint32_t> gw, gh;
+      std::vector<uint8_t> gd;
+      std::vector<bool> gs;
+      decode_reuse(fdec, codestream, a.reduce_NL, true, cases[0].lo, cases[0].hi, rgot, gw, gh, gd, gs);
+      rok = compare_col_window(rref, rgot, rw, rh, xrsiz, cases[0].lo, cases[0].hi, "first_frame",
+                               a.infile.c_str());
     }
     printf("%s: %s reuse-path (%zu windows) of W=%u\n", rok ? "PASS" : "FAIL", a.infile.c_str(),
            cases.size(), W2);
@@ -372,7 +450,8 @@ int main(int argc, char *argv[]) {
       ok = false;
       break;
     }
-    if (!compare_col_window(ref, got, widths, heights, cs.col_lo, cs.col_hi, cs.label, a.infile.c_str())) {
+    if (!compare_col_window(ref, got, widths, heights, xrsiz, cs.col_lo, cs.col_hi, cs.label,
+                            a.infile.c_str())) {
       ok = false;
       break;
     }

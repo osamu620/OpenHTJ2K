@@ -768,17 +768,25 @@ class j2k_tile_component : public j2k_tile_base {
   // before calling finalize_line_decode to guarantee cleanup.
   void set_line_decode_persistent(bool on) { line_dec_persistent_ = on; }
   // Apply a column range to this component's IDWT level chain.  col_lo / col_hi
-  // are in finest-active-level tile-component coords.  Each coarser level's
-  // range is derived by halving + widening for the 9/7 filter support.
-  // Must be called after init_line_decode() (states must exist).  Defaults
-  // (col_lo == 0, col_hi == UINT32_MAX) behave exactly like pre-patch code.
+  // are finest-active-level columns of this tile-component, relative to its
+  // origin (0 = first column; values past the width clamp to it).  Each
+  // coarser level's range is derived by halving + widening for the 9/7 filter
+  // support.  Must be called after init_line_decode() (states must exist; it
+  // resets the window to full width).  Defaults (col_lo == 0, col_hi ==
+  // UINT32_MAX) select the full width.  Only the persistent (single-tile
+  // reuse) line decoder narrows; on the per-frame path this is a no-op and the
+  // full width is decoded, as it always has been there.  Narrowing that path
+  // too is a separate change: MSVC rounds the sub-range IDWT kernels 1 LSB
+  // differently from the full-width ones, so its windowed output would no
+  // longer match a full decode (tests/col_range_validation.cmake).
   void set_line_decode_col_range(uint32_t col_lo, uint32_t col_hi);
 
   // Apply a row range to this component's IDWT level chain.  row_lo / row_hi
-  // are in finest-active-level tile-component coords.  Each coarser level's
-  // range is derived by halving + widening for the 9/7 filter support,
-  // symmetric to set_line_decode_col_range.  Must be called after
-  // init_line_decode() and before the first pull_line on the frame.
+  // are finest-active-level rows of this tile-component, relative to its
+  // origin.  Each coarser level's range is derived by halving + widening for
+  // the 9/7 filter support, symmetric to set_line_decode_col_range.  Must be
+  // called after init_line_decode() and before the first pull_line on the
+  // frame.
   void set_line_decode_row_range(uint32_t row_lo, uint32_t row_hi);
 
   // ── Line-based encode API ─────────────────────────────────────────────────

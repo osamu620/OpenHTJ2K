@@ -15,3 +15,14 @@ add_test(NAME rr_p0_ht_06_11 COMMAND row_range_compare ${CONFORMANCE_DATA_DIR}/d
 add_test(NAME rr_p0_ht_08_11 COMMAND row_range_compare ${CONFORMANCE_DATA_DIR}/ds0_ht_08_b11.j2k -reduce 1)
 add_test(NAME rr_p1_ht_02_11 COMMAND row_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_02_b11.j2k)
 add_test(NAME rr_p1_ht_03_11 COMMAND row_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b11.j2k)
+
+# Image origin.  set_row_range rows are relative to the first output row; the
+# per-level IDWT window lives on the reference grid, so the decoder offsets it by
+# the component origin (odd origins flip the row parity the lifting sees).  The
+# kodim23 streams come from the encoder round-trip tests (Sorigin={1,0} and
+# {7,0}); ds1_ht_01_b11 has origin y = 128 and a 2x1 subsampled component.
+add_test(NAME rr_p1_ht_01_11 COMMAND row_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_01_b11.j2k)
+add_test(NAME rr_origin_y COMMAND row_range_compare kodim23_origin_y.j2c)
+set_tests_properties(rr_origin_y PROPERTIES DEPENDS enc_origin_y)
+add_test(NAME rr_origin_precincts COMMAND row_range_compare kodim23_origin_precincts.j2c)
+set_tests_properties(rr_origin_precincts PROPERTIES DEPENDS enc_origin_precincts)

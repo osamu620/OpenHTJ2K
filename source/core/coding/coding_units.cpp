@@ -3332,17 +3332,24 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
 }
 
 void j2k_tile_component::set_line_decode_col_range(uint32_t col_lo, uint32_t col_hi) {
-  if (line_dec == nullptr) return;
+  // Only the persistent (single-tile reuse) line decoder honours a column
+  // window; see the declaration for why the per-frame path decodes full width.
+  if (line_dec == nullptr || !line_dec_persistent_) return;
   j2k_tcomp_line_dec *ld = line_dec.get();
   if (ld->NL_active <= 0) return;
   idwt_2d_state *states    = ld->states.get();
   idwt_level_src_ctx *ctxs = ld->ctxs.get();
   const int32_t NL_act     = ld->NL_active;
-  // Seed with caller's finest-level range.  Coarser levels are derived by
-  // halving and widening by the 9/7 filter support (4 samples each side,
-  // conservative over-estimate that also covers 5/3 where support is 2).
-  int32_t a = static_cast<int32_t>(col_lo);
-  int32_t b = static_cast<int32_t>(col_hi);
+  // The caller's range is relative to the tile-component origin; the IDWT
+  // states work in absolute reference-grid coordinates (u0 is the origin, odd
+  // or even).  Clamp to the width first so the UINT32_MAX "to the end"
+  // sentinel cannot wrap negative.  Coarser levels are derived by halving and
+  // widening by the 9/7 filter support (4 samples each side, a conservative
+  // over-estimate that also covers 5/3 where the support is 2).
+  const idwt_2d_state &fine = states[NL_act - 1];
+  const uint32_t fine_w     = static_cast<uint32_t>(fine.u1 - fine.u0);
+  int32_t a                 = fine.u0 + static_cast<int32_t>(std::min(col_lo, fine_w));
+  int32_t b                 = fine.u0 + static_cast<int32_t>(std::min(col_hi, fine_w));
   for (int32_t i = NL_act - 1; i >= 0; --i) {
     idwt_2d_state_set_col_range(&states[i], a, b);
     // Mirror the same range onto the level's source ctx so the horizontal
@@ -3371,11 +3378,14 @@ void j2k_tile_component::set_line_decode_row_range(uint32_t row_lo, uint32_t row
   idwt_2d_state *states    = ld->states.get();
   idwt_level_src_ctx *ctxs = ld->ctxs.get();
   const int32_t NL_act     = ld->NL_active;
-  // Clamp caller's range to the finest-level tile bounds so UINT32_MAX
-  // (the "no limit" sentinel) doesn't sign-flip when widened below.
-  const int32_t fine_v1 = states[NL_act - 1].v1;
-  int32_t a = (row_lo >= static_cast<uint32_t>(fine_v1)) ? fine_v1 : static_cast<int32_t>(row_lo);
-  int32_t b = (row_hi >= static_cast<uint32_t>(fine_v1)) ? fine_v1 : static_cast<int32_t>(row_hi);
+  // The caller's range is relative to the tile-component origin; the IDWT
+  // states work in absolute reference-grid coordinates (v0 is the origin).
+  // Clamp to the height first so UINT32_MAX (the "no limit" sentinel) doesn't
+  // sign-flip when widened below.
+  const idwt_2d_state &fine = states[NL_act - 1];
+  const uint32_t fine_h     = static_cast<uint32_t>(fine.v1 - fine.v0);
+  int32_t a                 = fine.v0 + static_cast<int32_t>(std::min(row_lo, fine_h));
+  int32_t b                 = fine.v0 + static_cast<int32_t>(std::min(row_hi, fine_h));
   // Initial margin for the finest level's vertical 9/7 filter support.
   // The cascade is 4 lift steps (max_dl=2 × 2 LP/HP phases) and damage from
   // a zero row propagates ±4 rows per step in the worst case, compounded by
@@ -3632,14 +3642,18 @@ void j2k_tile_component::reset_line_decode_cursors() {
     for (int32_t i = 0; i < n; ++i) {
       idwt_2d_state_rewind(&states[i]);
     }
-    // Restore ctxs' row_lo/row_hi to the full per-level extent so a narrow
-    // range left by a prior frame doesn't persist into a wide-range frame.
-    // (col_lo/col_hi have the same concern but are out of scope here; fix
-    //  alongside the col path when it's revisited.)
+    // Restore the row and column windows to the full per-level extent so a
+    // narrow window left by a prior frame doesn't persist into a wider frame
+    // (or into a decode path that never sets a window, such as the direct
+    // planar decode sharing this cached tile).  The caller applies this
+    // frame's window after init_line_decode().
     idwt_level_src_ctx *ctxs = ld->ctxs.get();
     for (int32_t i = 0; i < n; ++i) {
       ctxs[i].row_lo = states[i].v0;
       ctxs[i].row_hi = states[i].v1;
+      ctxs[i].col_lo = ctxs[i].u0;
+      ctxs[i].col_hi = ctxs[i].u1;
+      idwt_2d_state_set_col_range(&states[i], states[i].u0, states[i].u1);
     }
   }
 
@@ -6093,22 +6107,12 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   // streaming barrier), so a straggler cannot race the next reuse frame's init().
   LineDecodeFinalizeGuard finalize_guard{tcomp.get(), NC};
 
-  // Apply per-level column range to each component's IDWT state chain.
-  // col_lo_in / col_hi_in are in the finest active-level output coord space
-  // (= subsampled-tcomp coords after reduce).  When the caller uses the
-  // defaults [0, UINT32_MAX) every level's col range resolves to the full
-  // [u0, u1] → idwt kernel loops unchanged from pre-patch behaviour.
-  if (col_lo_in != 0 || col_hi_in != UINT32_MAX) {
-    for (uint16_t c = 0; c < NC; ++c) {
-      tcomp[c].set_line_decode_col_range(col_lo_in, col_hi_in);
-    }
-  }
-
   struct CInfo {
     int32_t DC_OFFSET, MAXVAL, MINVAL;
     int16_t downshift;
     float scale;
     uint32_t csize_x, csize_y;
+    uint32_t xr;  // SIZ XRsiz: horizontal subsampling factor (1 = no subsampling)
     uint32_t yr;  // SIZ YRsiz: vertical subsampling factor (1 = no subsampling)
   };
   std::vector<CInfo> ci(NC);
@@ -6123,6 +6127,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     hdr.SIZ->get_image_size(siz);
     hdr.SIZ->get_image_origin(Osiz);
     hdr.SIZ->get_subsampling_factor(Rsiz, c);
+    I.xr                   = Rsiz.x;
     I.yr                   = Rsiz.y;
     const uint8_t NL_c     = tcomp[c].get_dwt_levels();
     j2k_resolution *cr_act = tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL_val));
@@ -6180,6 +6185,23 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       const uint32_t row_hi_c =
           (row_limit == UINT32_MAX) ? UINT32_MAX : (row_limit + yr_c - 1) / yr_c;  // ceil-divide
       tcomp[c].set_line_decode_row_range(row_lo_c, row_hi_c);
+    }
+  }
+
+  // Column window (set_col_range), applied after init_line_decode for the
+  // same reason as the row range: reset_line_decode_cursors restores the full
+  // width at the start of every frame.  col_lo_in / col_hi_in are
+  // finest-active-level output columns (0 = first output column) of a
+  // component without horizontal subsampling; scale them by XRsiz like the
+  // row range so every component gets the same spatial window.
+  // set_line_decode_col_range adds the tile-component origin.
+  // The defaults [0, UINT32_MAX) leave every level at the full [u0, u1].
+  if (col_lo_in != 0 || col_hi_in != UINT32_MAX) {
+    for (uint16_t c = 0; c < NC; ++c) {
+      const uint32_t xr_c     = ci[c].xr;
+      const uint32_t col_lo_c = col_lo_in / xr_c;
+      const uint32_t col_hi_c = static_cast<uint32_t>((static_cast<uint64_t>(col_hi_in) + xr_c - 1) / xr_c);
+      tcomp[c].set_line_decode_col_range(col_lo_c, col_hi_c);
     }
   }
 
