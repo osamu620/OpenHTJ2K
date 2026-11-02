@@ -19,9 +19,9 @@ add_test(NAME cr_p1_ht_03_11 COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/d
 
 # Reuse-path variants — exercise the SIMD sub-range IDWT kernels on the
 # single-tile reuse path (the path the WASM JPIP viewer uses).  This is the only
-# path that actually narrows the decode: set_col_range on a fresh (non-reuse)
-# decoder is applied before the line-decode state exists, so the plain cr_ tests
-# above decode full width.  The reuse probe validates several strictly-interior
+# path that actually narrows the decode: the per-frame (non-reuse) path ignores
+# set_col_range and decodes full width, so the plain cr_ tests above only check
+# that the window setting is harmless there.  The reuse probe validates several strictly-interior
 # windows per fixture, including one with an unaligned col_lo — that is what
 # exercises the unaligned-load path in the vertical sub-range kernels (an aligned
 # load faulted on AVX2 when col_lo - u0 was not a multiple of 8).
@@ -50,4 +50,19 @@ if(NOT MSVC)
   add_test(NAME cr_ht_06_reuse    COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds0_ht_06_b11.j2k -reuse)
   add_test(NAME cr_p1_ht_02_reuse COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_02_b11.j2k -reuse)
   add_test(NAME cr_p1_ht_03_reuse COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b11.j2k -reuse)
+
+  # Image origin and subsampling.  The window is given in output columns
+  # (0 = first output column) of a component without horizontal subsampling;
+  # the decoder has to move it onto each component's reference-grid position
+  # and scale it by XRsiz.  Before that was done, a nonzero origin left the last
+  # XOsiz columns of the window undecoded and a subsampled component was
+  # windowed over the wrong span (the p0_05 / ds0_ht_05 / ds0_ht_06 / ds1_ht_03
+  # cases above check the per-component span).  Fixtures: an odd origin with a
+  # subsampled component 0 (9/7, HT and Part 1), origin 4 with 4:1 and 1:1
+  # components (5/3), and a 4K stream with origin 128 (5/3).  The 4K case also
+  # runs the open-ended (col_hi = UINT32_MAX) window.
+  add_test(NAME cr_p1_ht_01_reuse COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_01_b11.j2k -reuse -col 21 87)
+  add_test(NAME cr_p1_01_reuse    COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/p1_01.j2k -reuse -col 21 87)
+  add_test(NAME cr_p1_ht_07_reuse COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_07_b11.j2k -reuse)
+  add_test(NAME cr_arri_origin_reuse COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/4KuF_H0L1_arri_1bpp.j2c -reuse)
 endif()

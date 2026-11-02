@@ -138,13 +138,20 @@ class openhtj2k_decoder {
   // fragment shader applies the YCbCr→RGB matrix.  Default: false.
   OPENHTJ2K_EXPORT void set_skip_mct(bool skip);
 
-  // Phase 4B spatial-region column range (horizontal viewport clipping).
-  // Restricts the vertical-IDWT lifting work to columns [col_lo, col_hi) in
-  // the finest-resolution output coordinates (after reduce_NL).  Coarser
-  // levels automatically receive a halved range widened by the filter
-  // support.  Default = [0, UINT32_MAX) → full-width lifting (same cost as
-  // before this API existed).  Columns outside the range produce
-  // indeterminate output; the caller must only read within [col_lo, col_hi).
+  // Spatial-region column range (horizontal viewport clipping).
+  // Restricts the IDWT lifting work to output columns [col_lo, col_hi) in the
+  // finest-resolution output coordinates (after reduce_NL; column 0 is the
+  // first output column whatever the image origin).  col_hi may exceed the
+  // width (UINT32_MAX = to the right edge).  The range is given in the
+  // coordinates of a component without horizontal subsampling; a component
+  // with SIZ XRsiz > 1 is valid over [col_lo / XRsiz, ceil(col_hi / XRsiz)).
+  // Coarser levels automatically receive a halved range widened by the
+  // filter support.  Default = [0, UINT32_MAX) → full width.  Columns outside
+  // the range produce indeterminate output; the caller must only read within
+  // the window.  Honoured by invoke_line_based_stream_reuse (every frame,
+  // including the first); the other entry points decode full width.  The
+  // window stays in effect for later frames until changed;
+  // set_col_range(0, UINT32_MAX) restores full width.
   OPENHTJ2K_EXPORT void set_col_range(uint32_t col_lo, uint32_t col_hi);
 
   // JPIP partial-decode hook.  When set, every subsequent invoke*() call
