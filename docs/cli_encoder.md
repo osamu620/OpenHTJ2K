@@ -160,6 +160,9 @@ JPH file format.
 - `-jph_color_space RGB|YCC`
   - Declare the color space of the input components. Use `YCC` if the
     inputs are already in YCbCr.
+- `.jph` output takes 1 to 4 components: gray, gray + alpha, RGB (or
+  YCbCr) and RGB + alpha. With 2 or 4 components the last one is written
+  as an alpha channel (opacity), declared in a Channel Definition box.
 
 ### Runtime
 
