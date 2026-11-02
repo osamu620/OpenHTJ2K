@@ -1,3 +1,19 @@
+# [0.23.3] - 2026-11-02
+
+Patch release: a faster zero-row check in the inverse DWT, 3-6% less decode
+time for lossy images. Encoded and decoded output is byte-identical to
+0.23.2, and the API is unchanged.
+
+## Performance
+
+### Decoder
+- The line-based inverse DWT checks every row it fetches for being all zero,
+  so that the lifting can skip it. The check read the whole row with one
+  accumulator; it now stops at the first nonzero block of 64 samples, as
+  the planar path's check already did. Ryzen 9 9950X, 3840x2160 8-bit RGB,
+  one thread: 5.8% fewer cycles at `Qfactor=90` and 3.3% lossless in the
+  `generic` build, 3.6% at `Qfactor=90` in the `native` build.
+
 # [0.23.2] - 2026-11-01
 
 Patch release: `open_htj2k_dec` writes images with more than about 250
