@@ -1,3 +1,39 @@
+# [0.23.4] - 2026-11-02
+
+Patch release: a column window (`set_col_range`) on the single-tile reuse
+decode path now decodes the requested columns for images with a nonzero
+origin or with horizontally subsampled components. Encoded output and
+full-width decoded output are byte-identical to 0.23.3, and the API is
+unchanged.
+
+## Fixed
+
+### Decoder
+- A column window set with `set_col_range()` and decoded with
+  `invoke_line_based_stream_reuse()` (the path the JPIP viewer uses for
+  zoomed regions) missed columns, which came out as the DC level (128 for
+  8-bit samples):
+  - With a nonzero image origin (`XOsiz`), the last `XOsiz` columns of the
+    window were not decoded: the window is given in output columns (0 is
+    the first output column) but was applied as reference-grid
+    coordinates. Conformance codestreams `p1_01`, `p1_07`, `ds1_ht_01_b11`,
+    `ds1_ht_07_b11` and `4KuF_H0L1_arri_1bpp` show it.
+  - A component with horizontal subsampling got the same window as one
+    without, so most of its window was not decoded. A component with
+    `XRsiz` > 1 is now decoded over `[col_lo / XRsiz, ceil(col_hi / XRsiz))`,
+    as `set_row_range()` already scales rows by `YRsiz`.
+  - `col_hi = UINT32_MAX` (to the right edge) gave an empty window.
+  - After a windowed decode, `set_col_range(0, UINT32_MAX)` still decoded
+    the previous window, and so did a following
+    `invoke_line_based_direct()` on the same decoder. Every decode now
+    starts from the full width.
+
+  The first decode of a reuse decoder now honours the window too; it used
+  to decode the full width. The other decode entry points still ignore
+  `set_col_range()` and decode the full width. `set_row_range()` had the
+  same mix-up of coordinates, but there it only made the window start
+  earlier than needed; its output was correct. Present since 0.15.0.
+
 # [0.23.3] - 2026-11-02
 
 Patch release: a faster zero-row check in the inverse DWT, 3-6% less decode
