@@ -1273,10 +1273,19 @@ static inline bool is_lp(int32_t r) { return (r & 1) == 0; }
 #define is_zero    idwt_is_zero
 #define set_zero   idwt_set_zero
 
+// True if every sample of the row has all bits zero.  A row that holds any nonzero
+// sample usually holds one near its start, so the scan goes in blocks of 64 words and
+// stops at the first nonzero block instead of reading the whole row.
 static inline bool row_all_zero(const sprec_t *row, int32_t width) {
-  uint32_t acc = 0;
   const uint32_t *p = reinterpret_cast<const uint32_t *>(row);
-  for (int32_t i = 0; i < width; ++i) acc |= p[i];
+  int32_t i         = 0;
+  for (; i + 64 <= width; i += 64) {
+    uint32_t acc = 0;
+    for (int32_t k = 0; k < 64; ++k) acc |= p[i + k];
+    if (acc != 0) return false;
+  }
+  uint32_t acc = 0;
+  for (; i < width; ++i) acc |= p[i];
   return acc == 0;
 }
 
