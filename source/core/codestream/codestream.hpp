@@ -344,8 +344,11 @@ class buf_chain {
 
   uint8_t get_byte() {
     // `pos >= current_length` rather than `pos > current_length - 1`: the
-    // latter wraps for a zero-length node and reads past its buffer.
-    if (pos >= current_length) {
+    // latter wraps for a zero-length node and reads past its buffer.  A loop,
+    // not a single step: the next node can be empty as well (a tile-part with
+    // no body leaves a node of length 0 and no buffer), and reading it
+    // dereferenced a null pointer.
+    while (pos >= current_length) {
       if (node_pos + 1 >= num_nodes) {
         // Truncated codestream: return 0x00 as safe padding.
         past_end = true;
@@ -360,7 +363,8 @@ class buf_chain {
   }
 
   OPENHTJ2K_MAYBE_UNUSED uint8_t *get_current_address() {
-    if (pos >= current_length) {
+    // A loop, as in get_byte(): the next node can be empty too.
+    while (pos >= current_length) {
       if (node_pos + 1 >= num_nodes) {
         // Truncated codestream: return pointer to zero byte (safe read-only sentinel).
         static const uint8_t zero = 0;
