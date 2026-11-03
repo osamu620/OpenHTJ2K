@@ -55,6 +55,8 @@ struct jph_info {
 
 // Parse a JPH/JP2 buffer.  Returns true if a valid signature and codestream box
 // were found; fills `out`.  Does NOT copy data — `buf` must outlive `out`.
+// Returns false without the signature (a raw codestream); a buffer with the
+// signature but without a valid codestream box is an error (throws).
 bool jph_parse_buffer(const uint8_t *buf, size_t len, jph_info &out);
 
 // Convenience: returns true when the first 12 bytes match the JP2/JPH signature.
@@ -167,9 +169,32 @@ class header_box : public box_base {
   size_t write(j2c_dst_memory &dst) override;
 };
 
+// The header of a Contiguous Codestream box that holds code_len bytes (ISO/IEC 15444-1 I.4):
+// LBox, the length of the box including its header, and TBox 'jp2c'.  When that length does
+// not fit in the 32 bits of LBox, LBox is 1 and the 64-bit XLBox after TBox gives it, which
+// makes the header 16 bytes.  Writes the header to hdr and returns its length, 8 or 16.
+inline size_t jp2c_box_header(uint64_t code_len, uint8_t (&hdr)[16]) {
+  const bool extended = code_len > 0xFFFFFFFFu - 8u;
+  const uint64_t lbox = extended ? 1u : code_len + 8u;
+  const uint32_t tbox = 0x6A703263u;  // 'jp2c'
+  for (int i = 0; i < 4; ++i) {
+    hdr[i]     = static_cast<uint8_t>(lbox >> (24 - 8 * i));
+    hdr[4 + i] = static_cast<uint8_t>(tbox >> (24 - 8 * i));
+  }
+  if (!extended) return 8;
+  const uint64_t xlbox = code_len + 16u;
+  for (int i = 0; i < 8; ++i) hdr[8 + i] = static_cast<uint8_t>(xlbox >> (56 - 8 * i));
+  return 16;
+}
+
 class contiguous_codestream_box : public box_base {
+ private:
+  uint64_t code_len;
+
  public:
-  contiguous_codestream_box(size_t len);
+  // LBox and XLBox are given by jp2c_box_header() when the header is written.
+  explicit contiguous_codestream_box(size_t len);
+  // Writes the box header; returns the length of the box, codestream included.
   size_t write(j2c_dst_memory &dst) override;
 };
 
@@ -185,6 +210,7 @@ class jph_boxes {
 
  public:
   jph_boxes(j2k_main_header &hdr, uint8_t type, bool isSRGB, size_t code_len);
+  // Writes the boxes; returns the length of the file, codestream included.
   size_t write(j2c_dst_memory &dst);
 };
 }  // namespace open_htj2k

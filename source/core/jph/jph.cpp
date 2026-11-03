@@ -53,19 +53,22 @@ static constexpr int JPH_MAX_BOX_DEPTH = 16;
 static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &out, int depth = 0) {
   if (depth > JPH_MAX_BOX_DEPTH) return;
   const uint8_t *p = begin;
-  while (p + 8 <= end) {
-    uint32_t lbox = jph_read_be32(p);
-    uint32_t tbox = jph_read_be32(p + 4);
+  // Lengths are compared with the remaining byte count in the integer domain: a pointer
+  // past `end` must not be formed, and `p + xlen` overflows for a large crafted xlen.
+  while (end - p >= 8) {
+    const uint64_t remaining = static_cast<uint64_t>(end - p);
+    uint32_t lbox            = jph_read_be32(p);
+    uint32_t tbox            = jph_read_be32(p + 4);
     const uint8_t *payload, *box_end;
     if (lbox == 1) {
-      if (p + 16 > end) return;
+      // XLBox: the length of the box, its 16-byte header included (ISO/IEC 15444-1 I.4).
+      if (remaining < 16) return;
       uint64_t xlen = jph_read_be64(p + 8);
-      // Compare against the remaining byte count in the integer domain; `p + xlen`
-      // overflows the pointer for a large attacker-supplied xlen.
-      if (xlen < 16 || xlen > static_cast<uint64_t>(end - p)) return;
+      if (xlen < 16 || xlen > remaining) return;
       payload = p + 16;
-      box_end = p + xlen;
+      box_end = p + static_cast<size_t>(xlen);
     } else if (lbox == 0) {
+      // The box extends to the end of the file (or of the enclosing superbox).
       payload = p + 8;
       box_end = end;
     } else {
@@ -74,14 +77,13 @@ static void jph_scan_boxes(const uint8_t *begin, const uint8_t *end, jph_info &o
       // larger lbox; the codestream ends at EOF via its own EOC marker).
       if (lbox < 8) return;
       payload  = p + 8;
-      box_end  = (lbox <= static_cast<uint64_t>(end - p)) ? (p + lbox) : end;
+      box_end  = (lbox <= remaining) ? (p + lbox) : end;
     }
     if (tbox == BOX_JP2H) {
       jph_scan_boxes(payload, box_end, out, depth + 1);
     } else if (tbox == BOX_COLR) {
       // METH(1) PREC(1) APPROX(1) EnumCS(4) — only for Enumerated Colourspace (METH==1)
-      if (payload + 7 <= box_end && payload[0] == 1)
-        out.enum_cs = jph_read_be32(payload + 3);
+      if (box_end - payload >= 7 && payload[0] == 1) out.enum_cs = jph_read_be32(payload + 3);
     } else if (tbox == BOX_JP2C) {
       out.cs_data = payload;
       out.cs_size = static_cast<size_t>(box_end - payload);
@@ -99,7 +101,11 @@ bool jph_is_signature(const uint8_t *buf, size_t len) {
 bool jph_parse_buffer(const uint8_t *buf, size_t len, jph_info &out) {
   if (!jph_is_signature(buf, len)) return false;
   jph_scan_boxes(buf, buf + len, out);
-  return out.cs_data != nullptr && out.cs_size > 0;
+  if (out.cs_data == nullptr || out.cs_size == 0) {
+    // Not a raw codestream either: it starts with the signature box.
+    open_htj2k::detail::fail("JPH/JP2 file without a valid Contiguous Codestream box.");
+  }
+  return true;
 }
 // ---------------------------------------------------------------------------
 
@@ -262,12 +268,13 @@ size_t header_box::write(j2c_dst_memory &dst) {
 }
 
 contiguous_codestream_box::contiguous_codestream_box(size_t len)
-    : box_base(static_cast<uint32_t>(len) + 8, 0x6A703263){};
+    : box_base(0, 0x6A703263), code_len(static_cast<uint64_t>(len)) {}
 
 size_t contiguous_codestream_box::write(j2c_dst_memory &dst) {
-  // LBox = 0;
-  base_write(dst);
-  return LBox;
+  uint8_t hdr[16];
+  const size_t hdr_len = jp2c_box_header(code_len, hdr);
+  dst.put_N_bytes(hdr, static_cast<uint32_t>(hdr_len));
+  return static_cast<size_t>(hdr_len + code_len);
 }
 
 jph_boxes::jph_boxes(j2k_main_header &hdr, uint8_t type, bool isSRGB, size_t code_len)

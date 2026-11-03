@@ -45,6 +45,11 @@ add_executable(codestream_bounds_check)
 add_subdirectory(tests/tools/codestream_bounds_check)
 target_link_libraries(codestream_bounds_check PUBLIC open_htj2k PRIVATE openhtj2k_internal)
 
+# jph_box_check: LBox / XLBox / LBox 0 in JPH and JP2 files, written and read
+add_executable(jph_box_check)
+add_subdirectory(tests/tools/jph_box_check)
+target_link_libraries(jph_box_check PUBLIC open_htj2k PRIVATE openhtj2k_internal)
+
 # visual_weight_check: dump + invariant self-check for the analytic per-subband
 # visual (CSF) weighting (header-only, no library dependency)
 add_executable(visual_weight_check)
