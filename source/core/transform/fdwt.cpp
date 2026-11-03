@@ -1270,8 +1270,10 @@ void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in) {
   if (s->v1 == s->v0 + 1) {
     // Still store the row in ring_buf so flush() can read it.
     const int32_t slot = fdwt_ring_slot(s->next_in);
-    memcpy(static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(slot) * s->stride, in,
-           sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
+    // A tile-component with no columns (subsampled more than the tile is wide) has no row.
+    if (s->u1 > s->u0)
+      memcpy(static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(slot) * s->stride, in,
+             sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
     ++s->next_in;
     return;
   }
