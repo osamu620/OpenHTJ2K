@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "codestream.hpp"
+#include "message_internal.hpp"
 
 // MARK: j2c_src_memory -
 void j2c_src_memory::alloc_memory(size_t length) {
@@ -36,8 +37,7 @@ void j2c_src_memory::alloc_memory(size_t length) {
   // ~4 GiB request rounding down to a tiny allocation) and a silent size_t->u32
   // truncation at the call site that would leave a copy reading past the buffer.
   if (length > static_cast<size_t>(UINT32_MAX) - 16) {
-    printf("ERROR: codestream length %zu exceeds the decoder's 4 GiB limit.\n", length);
-    throw std::exception();
+    open_htj2k::detail::fail("codestream length %zu exceeds the decoder's 4 GiB limit.", length);
   }
   // Grow-only: reuse the existing buffer if it is large enough.  This avoids
   // an aligned_mem_free + aligned_mem_alloc (and the resulting TLB flush /
@@ -62,8 +62,7 @@ void j2c_src_memory::borrow_memory(uint8_t *data, size_t length) {
   // Same 4 GiB bound as alloc_memory: `len` is uint32_t, and downstream SIMD
   // over-read guards assume `len + 16` does not wrap.
   if (length > static_cast<size_t>(UINT32_MAX) - 16) {
-    printf("ERROR: borrowed codestream length %zu exceeds the decoder's 4 GiB limit.\n", length);
-    throw std::exception();
+    open_htj2k::detail::fail("borrowed codestream length %zu exceeds the decoder's 4 GiB limit.", length);
   }
   // Release any previously owned buffer.
   if (buf != nullptr && !borrowed) {
@@ -77,9 +76,8 @@ void j2c_src_memory::borrow_memory(uint8_t *data, size_t length) {
 }
 
 uint8_t j2c_src_memory::get_byte() {
-  if (pos > len - 1) {
-    printf("Codestream is shorter than the expected length\n");
-    throw std::exception();
+  if (pos >= len) {
+    open_htj2k::detail::fail("Codestream is shorter than the expected length.");
   }
   uint8_t out = buf[pos];
   pos++;
@@ -91,8 +89,7 @@ int j2c_src_memory::get_N_byte(uint8_t *out, uint32_t length) {
   // too-large value (or an Lmar < 2 underflow wrapping to ~4 GB) would otherwise
   // memmove past the end of the codestream buffer.
   if (pos > len || length > len - pos) {
-    printf("Codestream is shorter than the expected marker length\n");
-    throw std::exception();
+    open_htj2k::detail::fail("Codestream is shorter than the expected marker length.");
   }
   memmove(out, buf + pos, length);  // memcpy is not valid because src and dst may overlap
   pos += length;
@@ -103,9 +100,8 @@ int j2c_src_memory::get_N_byte(uint8_t *out, uint32_t length) {
 }
 
 uint16_t j2c_src_memory::get_word() {
-  if (pos > len - 2) {
-    printf("Codestream is shorter than the expected length\n");
-    throw std::exception();
+  if (len < 2 || pos > len - 2) {
+    open_htj2k::detail::fail("Codestream is shorter than the expected length.");
   }
   auto out = static_cast<uint16_t>((get_byte() << 8) + get_byte());
   return out;
@@ -113,8 +109,7 @@ uint16_t j2c_src_memory::get_word() {
 
 int j2c_src_memory::rewind_2bytes() {
   if (pos < 2) {
-    printf("Cannot rewind 2 bytes because the current position is less than 2\n");
-    throw std::exception();
+    open_htj2k::detail::fail("Cannot rewind 2 bytes because the current position is less than 2.");
   }
   pos -= 2;
   return EXIT_SUCCESS;

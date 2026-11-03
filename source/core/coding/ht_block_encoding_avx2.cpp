@@ -34,6 +34,7 @@
   #include "coding_local.hpp"
   #include "enc_CxtVLC_tables.hpp"
   #include "utils.hpp"
+  #include "message_internal.hpp"
 
   #define Q0 0
   #define Q1 1
@@ -236,7 +237,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   // used as a flag to invoke HT Cleanup encoding
   uint32_t or_val = 0;
   if (ROIshift) {
-    printf("WARNING: Encoding with ROI is not supported.\n");
+    open_htj2k::detail::warn("Encoding with ROI is not supported.");
   }
 
   const uint16_t QW = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));

@@ -31,6 +31,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,7 @@
   #define OPENHTJ2K_EXPORT
 #endif
 
+#include "openhtj2k_message.hpp"
 namespace open_htj2k {
 class image {
  private:
@@ -79,16 +81,14 @@ class image {
   OPENHTJ2K_NODISCARD uint32_t get_width() const { return this->width; }
   OPENHTJ2K_NODISCARD uint32_t get_height() const { return this->height; }
   OPENHTJ2K_NODISCARD uint32_t get_component_width(uint16_t c) const {
-    if (c > num_components) {
-      printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
-      throw std::exception();
+    if (c >= num_components) {
+      throw std::out_of_range("open_htj2k::image: component index out of range");
     }
     return this->component_width[c];
   }
   OPENHTJ2K_NODISCARD uint32_t get_component_height(uint16_t c) const {
-    if (c > num_components) {
-      printf("ERROR: component index %d is larger than maximum value %d.\n", c, num_components);
-      throw std::exception();
+    if (c >= num_components) {
+      throw std::out_of_range("open_htj2k::image: component index out of range");
     }
     return this->component_height[c];
   }

@@ -1,3 +1,31 @@
+# [Unreleased]
+
+## Changed
+
+### Library
+- The library writes nothing to stdout or stderr. Errors are thrown as
+  exceptions derived from `std::exception` whose `what()` describes the
+  problem; many used to be a bare `std::exception` with the description
+  printed to stdout. An error while decoding a tile is passed on as it was
+  thrown, instead of being replaced by "Abort Decoding!".
+- Warnings and informational messages go to a handler installed with the new
+  `open_htj2k::set_message_handler()` (header `openhtj2k_message.hpp`,
+  included by `decoder.hpp` and `encoder.hpp`). Without a handler they are
+  discarded. The handler can be called from the library's worker threads.
+- The command-line tools install a handler that prints warnings as before
+  (`WARNING: ...`). They print an error as `ERROR: <description>`, without
+  the extra `ERROR: std::exception` line.
+- Encoded output and decoded output are unchanged.
+
+## Fixed
+
+### Library
+- `image::get_component_width()` and `get_component_height()` accepted the
+  index one past the last component and read past the end of their arrays;
+  they now throw `std::out_of_range`.
+- Reading a byte or a 16-bit word from an empty or one-byte codestream
+  buffer is now rejected; the bounds check used to wrap around.
+
 # [0.24.0] - 2026-11-02
 
 Feature release: JPH files with an alpha channel. The encoder now writes JPH

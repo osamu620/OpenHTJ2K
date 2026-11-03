@@ -42,6 +42,7 @@
 #include "color.hpp"
 #include "finalize_narrow.hpp"
 #include "subband_row_buf.hpp"
+#include "message_internal.hpp"
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
 #endif
@@ -57,7 +58,7 @@ constexpr uint8_t kMaxLblock = 32;
 // Reported once per tile: parse_packet_header stops at the first code-block
 // whose signalling is missing, and every later call returns before reading.
 void warn_truncated_packet_header() {
-  printf("WARNING: codestream ends inside a packet header — decoding the partial data.\n");
+  open_htj2k::detail::warn("codestream ends inside a packet header — decoding the partial data.");
 }
 
 // RAII guard for placement-new array construction loops.
@@ -1648,10 +1649,9 @@ void j2k_codeblock::append_refinement_segment(const uint8_t *buf, const uint32_t
 void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsize, const uint16_t Lref) {
   if (this->compressed_data != nullptr) {
     if (!refsegment) {
-      printf(
-          "ERROR: illegal attempt to allocate codeblock's compressed data but the data is not "
-          "null.\n");
-      throw std::exception();
+      open_htj2k::detail::fail(
+          "illegal attempt to allocate codeblock's compressed data but the data is not "
+          "null.");
     } else {
       // if we are here, this function has been called to copy Dref[]
       memcpy(this->current_address + this->pass_length[0], buf, bufsize);
@@ -1700,8 +1700,9 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
   {
     const uint32_t avail = tile_buf->get_current_node_remaining_bytes();
     if (layer_length > avail) {
-      printf("WARNING: codeblock layer length %u exceeds %u byte(s) left in tile-part — malformed input.\n",
-             (unsigned)layer_length, (unsigned)avail);
+      open_htj2k::detail::warn(
+          "codeblock layer length %u exceeds %u byte(s) left in tile-part — malformed input.",
+          (unsigned)layer_length, (unsigned)avail);
       layer_length = avail;
       if (layer_length == 0) {
         // Not one byte of this layer is present (a codestream truncated inside
@@ -2134,8 +2135,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         // length is at most 32 bits, so a longer run of 1s is malformed (and
         // would wrap this uint8_t counter).
         if (block->Lblock >= kMaxLblock) {
-          printf("ERROR: Lblock exceeds %u bits — malformed packet header.\n", (unsigned)kMaxLblock);
-          throw std::exception();
+          open_htj2k::detail::fail("Lblock exceeds %u bits — malformed packet header.",
+                                   (unsigned)kMaxLblock);
         }
         block->Lblock++;
       }
@@ -2164,8 +2165,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             if (block->Cmodes & HT_MIXED) {
               block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT));
             } else {
-              printf("ERROR: Length information for a HT-codeblock is invalid\n");
-              throw std::exception();
+              open_htj2k::detail::fail("Length information for a HT-codeblock is invalid");
             }
           }
         } else {
@@ -2179,8 +2179,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             if (!(block->Cmodes & HT_MIXED)) {
               // Must be the first HT Cleanup pass
               if (segment_bytes < 2) {
-                printf("ERROR: Length information for a HT-codeblock is invalid\n");
-                throw std::exception();
+                open_htj2k::detail::fail("Length information for a HT-codeblock is invalid");
               }
               next_segment_passes = 2;
               block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD));
@@ -2221,8 +2220,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                 if (block->Cmodes & HT_MIXED) {
                   block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT));
                 } else {
-                  printf("ERROR: Length information for a HT-codeblock is invalid\n");
-                  throw std::exception();
+                  open_htj2k::detail::fail("Length information for a HT-codeblock is invalid");
                 }
               }
             }
@@ -2237,8 +2235,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           segment_passes      = 1;
           next_segment_passes = 2;
           if (segment_bytes == 1) {
-            printf("ERROR: something wrong 943.\n");
-            throw std::exception();
+            open_htj2k::detail::fail("something wrong 943.");
           }
         } else {
           // new pass = 1 means num_passes is HT SigProp; 2 means num_passes is
@@ -2348,8 +2345,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             if (segment_bytes != 0) {
               // This will have to be the new primary
               if (segment_bytes < 2) {
-                printf("ERROR: Something wrong 1037\n");
-                throw std::exception();
+                open_htj2k::detail::fail("Something wrong 1037");
               }
               fast_skip_bytes += primary_bytes + secondary_bytes;
               primary_passes++;
@@ -2369,8 +2365,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             // This is a FAST Refinement pass
             if (empty_set) {
               if (segment_bytes != 0) {
-                printf("ERROR: Something wrong 1225\n");
-                throw std::exception();
+                open_htj2k::detail::fail("Something wrong 1225");
               }
               block->fast_skip_passes = static_cast<uint8_t>(block->fast_skip_passes + segment_passes);
             } else {
@@ -3010,8 +3005,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
 
 j2k_precinct *j2k_resolution::access_precinct(uint32_t p) {
   if (p > npw * nph) {
-    printf("ERROR: attempt to access precinct whose index is out of the valid range.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("attempt to access precinct whose index is out of the valid range.");
   }
   return &this->precincts[p];
 }
@@ -3094,8 +3088,7 @@ int j2k_tile_part::read(j2c_src_memory &in) {
   try {
     in.forward_Nbytes(this->length);
   } catch (std::exception &) {
-    printf("ERROR: forward_Nbytes exceeds the size of buffer.\n");
-    throw;
+    open_htj2k::detail::fail("forward_Nbytes exceeds the size of buffer.");
   }
   return EXIT_SUCCESS;
 }
@@ -4908,10 +4901,9 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           break;
 
         default:
-          printf(
-              "ERROR: Progression order number shall be in the range from 0 "
-              "to 5\n");
-          throw std::exception();
+          open_htj2k::detail::fail(
+              "Progression order number shall be in the range from 0 "
+              "to 5");
           // break;
       }
     }
@@ -5307,10 +5299,9 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         }
         break;
       default:
-        printf(
-            "ERROR: Progression order number shall be in the range from 0 "
-            "to 5\n");
-        throw std::exception();
+        open_htj2k::detail::fail(
+            "Progression order number shall be in the range from 0 "
+            "to 5");
     }
   }
 }
@@ -5735,10 +5726,9 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
         break;
       }
       default:
-        printf(
-            "ERROR: Progression order number shall be in the range from 0 "
-            "to 5\n");
-        throw std::exception();
+        open_htj2k::detail::fail(
+            "Progression order number shall be in the range from 0 "
+            "to 5");
     }
   }
 }
@@ -5768,13 +5758,11 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   if (use_SOP && !this->tile_buf->is_past_end()) {
     uint16_t word = this->tile_buf->get_word();
     if (word != _SOP) {
-      printf("ERROR: Expected SOP marker but %04X is found\n", word);
-      throw std::exception();
+      open_htj2k::detail::fail("Expected SOP marker but %04X is found", word);
     }
     Lsop = this->tile_buf->get_word();
     if (Lsop != 4) {
-      printf("ERROR: illegal Lsop value %d is found\n", Lsop);
-      throw std::exception();
+      open_htj2k::detail::fail("illegal Lsop value %d is found", Lsop);
     }
     Nsop = this->tile_buf->get_word();
   }
@@ -5785,8 +5773,7 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
     if (use_EPH && !this->packet_header->is_past_end()) {
       uint16_t word = this->packet_header->get_word();
       if (word != _EPH) {
-        printf("ERROR: Expected EPH marker but %04X is found\n", word);
-        throw std::exception();
+        open_htj2k::detail::fail("Expected EPH marker but %04X is found", word);
       }
     }
     return;
@@ -5804,8 +5791,7 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   if (use_EPH && !this->packet_header->is_past_end()) {
     uint16_t word = this->packet_header->get_word();
     if (word != _EPH) {
-      printf("ERROR: Expected EPH marker but %04X is found\n", word);
-      throw std::exception();
+      open_htj2k::detail::fail("Expected EPH marker but %04X is found", word);
     }
   }
 
@@ -6381,8 +6367,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       // All pull tasks have completed (counter drained), so no straggler is
       // running when we re-throw and the LineDecodeFinalizeGuard drains.
       if (pull_error.load(std::memory_order_relaxed)) {
-        printf("WARNING: a strip-pull decode task failed — malformed input.\n");
-        throw std::exception();
+        open_htj2k::detail::fail("a strip-pull decode task failed — malformed input.");
       }
     } else
 #endif
@@ -6640,8 +6625,7 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
       // All pull tasks have completed (counter drained), so no straggler is
       // running when we re-throw and the LineDecodeFinalizeGuard drains.
       if (pull_error.load(std::memory_order_relaxed)) {
-        printf("WARNING: a strip-pull decode task failed — malformed input.\n");
-        throw std::exception();
+        open_htj2k::detail::fail("a strip-pull decode task failed — malformed input.");
       }
     } else
 #endif
@@ -6682,8 +6666,7 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
 void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
                         bool line_based, bool streaming) {
   if (img.empty() && !streaming) {
-    printf("ERROR: input image is empty.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("input image is empty.");
   }
   index          = idx;
   num_components = main_header.SIZ->get_num_components();
@@ -7416,8 +7399,8 @@ uint8_t *j2k_tile::encode_line_based_stream(
     if (!tcomp[c].enc_no_subband_buffers) continue;
     for (int32_t i = 0; i < le->NL_active; ++i) {
       if (le_ctxs[i].hl_y0 != le_ctxs[i].lh_y0 || le_ctxs[i].hl_h == 0) {
-        printf("ERROR: streaming encoder: tile-component %u does not fit the strip pipeline.\n", c);
-        throw std::exception();
+        open_htj2k::detail::fail("streaming encoder: tile-component %u does not fit the strip pipeline.",
+                                 c);
       }
     }
 

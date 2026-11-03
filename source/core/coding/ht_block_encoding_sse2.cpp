@@ -42,6 +42,7 @@
   #include "ht_block_encoding.hpp"
   #include "coding_local.hpp"
   #include "enc_CxtVLC_tables.hpp"
+  #include "message_internal.hpp"
 
 void j2k_codeblock::quantize(uint32_t &or_val) {
   const uint32_t height = this->size.y;
@@ -192,7 +193,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t Scup;  // length of MEL buffer + VLC buffer
   uint32_t or_val = 0;
   if (ROIshift) {
-    printf("WARNING: Encoding with ROI is not supported.\n");
+    open_htj2k::detail::warn("Encoding with ROI is not supported.");
   }
 
   const int32_t QW = static_cast<int32_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));

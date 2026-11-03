@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cmath>
 #include <string>
+#include "message_internal.hpp"
 
 constexpr uint8_t YCC444 = 0;
 constexpr uint8_t YCC420 = 1;
@@ -55,8 +56,7 @@ uint8_t j2k_marker_io_base::get_byte() {
   // get_byte past the end of the buffer.  get_word()/get_dword() read through
   // get_byte(), so bounding here bounds every marker read.
   if (pos >= Lmar) {
-    printf("ERROR: marker field read past its declared length — malformed input.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("marker field read past its declared length — malformed input.");
   }
   uint8_t out = buf[pos];
   pos++;
@@ -97,13 +97,12 @@ SIZ_marker::SIZ_marker(j2c_src_memory &in) : j2k_marker_io_base(_SIZ) {
   // out-of-range component count cannot drive an over-read of the marker buffer
   // or oversized downstream allocations.
   if (Csiz < 1 || Csiz > 16384) {
-    printf("ERROR: SIZ number of components %u is out of range [1, 16384].\n", static_cast<unsigned>(Csiz));
-    throw std::exception();
+    open_htj2k::detail::fail("SIZ number of components %u is out of range [1, 16384].",
+                             static_cast<unsigned>(Csiz));
   }
   if (Lmar < static_cast<uint16_t>(38 + 3 * Csiz)) {
-    printf("ERROR: SIZ marker length %u is too short for %u components.\n", static_cast<unsigned>(Lmar),
-           static_cast<unsigned>(Csiz));
-    throw std::exception();
+    open_htj2k::detail::fail("SIZ marker length %u is too short for %u components.",
+                             static_cast<unsigned>(Lmar), static_cast<unsigned>(Csiz));
   }
   for (unsigned long i = 0; i < Csiz; ++i) {
     Ssiz.push_back(get_byte());
@@ -112,8 +111,7 @@ SIZ_marker::SIZ_marker(j2c_src_memory &in) : j2k_marker_io_base(_SIZ) {
     // Subsampling factors are used as divisors (e.g. Xsiz / XRsiz); a zero would
     // later trigger a division-by-zero (SIGFPE).
     if (xr == 0 || yr == 0) {
-      printf("ERROR: SIZ subsampling factor must be non-zero (component %lu).\n", i);
-      throw std::exception();
+      open_htj2k::detail::fail("SIZ subsampling factor must be non-zero (component %lu).", i);
     }
     XRsiz.push_back(xr);
     YRsiz.push_back(yr);
@@ -146,8 +144,7 @@ SIZ_marker::SIZ_marker(uint16_t R, uint32_t X, uint32_t Y, uint32_t XO, uint32_t
 
 int SIZ_marker::write(j2c_dst_memory &dst) {
   if (!is_set) {
-    printf("ERROR: illegal attempt to call write() for SIZ_marker not yet set.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("illegal attempt to call write() for SIZ_marker not yet set.");
   }
   dst.put_word(code);
   dst.put_word(Lmar);
@@ -190,8 +187,7 @@ void SIZ_marker::get_image_size(element_siz &siz) const {
 
 uint32_t SIZ_marker::get_component_stride(uint16_t c) const {
   if (c >= Csiz) {
-    printf("ERROR: invalid component index\n");
-    throw std::exception();
+    open_htj2k::detail::fail("invalid component index");
   }
   return Xsiz / XRsiz[c] - XOsiz;
 }
@@ -261,8 +257,7 @@ CAP_marker::CAP_marker(j2c_src_memory &in) : j2k_marker_io_base(_CAP), Ccap{0} {
     //    }
   }
   if (n != 0) {
-    printf("ERROR: Lcap and number of Ccap does not match\n");
-    throw std::exception();
+    open_htj2k::detail::fail("Lcap and number of Ccap does not match");
   }
   is_set = true;
 }
@@ -369,8 +364,8 @@ COD_marker::COD_marker(j2c_src_memory &in)
   // precinct loop — NL = 255 never terminates for the uint8_t counter and grows
   // precinct_size without bound — and indexes SPcod[5 + r] out of range.
   if (SPcod[0] > 32) {
-    printf("ERROR: COD number of decomposition levels %u exceeds 32.\n", static_cast<unsigned>(SPcod[0]));
-    throw std::exception();
+    open_htj2k::detail::fail("COD number of decomposition levels %u exceeds 32.",
+                             static_cast<unsigned>(SPcod[0]));
   }
   is_set = true;
 }
@@ -404,10 +399,9 @@ COD_marker::COD_marker(bool is_max_precincts, bool use_SOP, bool use_EPH, uint8_
   SPcod[4] = reversible_flag;
 
   if (PPx.size() != PPy.size()) {
-    printf(
-        "ERROR: Length of parameters to specify horizontal and vertical precinct size shall be the "
-        "same.\n");
-    throw std::exception();
+    open_htj2k::detail::fail(
+        "Length of parameters to specify horizontal and vertical precinct size shall be the "
+        "same.");
   }
   size_t PPlength  = PPx.size();
   uint8_t last_PPx = '\0', last_PPy = '\0';
@@ -461,9 +455,8 @@ void COD_marker::get_codeblock_size(element_siz &out) {
   // 1 << (x + 2) undefined and can size a code-block past the HT decoder's
   // fixed-size stack scratch buffers.
   if (SPcod[1] > 8 || SPcod[2] > 8 || (SPcod[1] + SPcod[2]) > 8) {
-    printf("ERROR: COD code-block size exponents (%u,%u) are out of range.\n",
-           static_cast<unsigned>(SPcod[1]), static_cast<unsigned>(SPcod[2]));
-    throw std::exception();
+    open_htj2k::detail::fail("COD code-block size exponents (%u,%u) are out of range.",
+                             static_cast<unsigned>(SPcod[1]), static_cast<unsigned>(SPcod[2]));
   }
   out.x = static_cast<uint32_t>(1 << (SPcod[1] + 2));
   out.y = static_cast<uint32_t>(1 << (SPcod[2] + 2));
@@ -478,9 +471,8 @@ void COD_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
     // fixed SPcod bytes.  Reject a resolution beyond what the (possibly
     // truncated) marker actually holds instead of reading out of bounds.
     if (static_cast<size_t>(5U) + resolution >= SPcod.size()) {
-      printf("ERROR: COD precinct-size index for resolution %u is out of range.\n",
-             static_cast<unsigned>(resolution));
-      throw std::exception();
+      open_htj2k::detail::fail("COD precinct-size index for resolution %u is out of range.",
+                               static_cast<unsigned>(resolution));
     }
     out.x = (SPcod[5U + resolution] & 0x0F);
     out.y = (SPcod[5U + resolution] & 0xF0) >> 4;
@@ -541,9 +533,8 @@ uint8_t COC_marker::get_dwt_levels() { return SPcoc[0] & 0x1F; }
 void COC_marker::get_codeblock_size(element_siz &out) {
   // See COD_marker::get_codeblock_size — same spec bound on the size exponents.
   if (SPcoc[1] > 8 || SPcoc[2] > 8 || (SPcoc[1] + SPcoc[2]) > 8) {
-    printf("ERROR: COC code-block size exponents (%u,%u) are out of range.\n",
-           static_cast<unsigned>(SPcoc[1]), static_cast<unsigned>(SPcoc[2]));
-    throw std::exception();
+    open_htj2k::detail::fail("COC code-block size exponents (%u,%u) are out of range.",
+                             static_cast<unsigned>(SPcoc[1]), static_cast<unsigned>(SPcoc[2]));
   }
   out.x = static_cast<uint32_t>(1 << (SPcoc[1] + 2));
   out.y = static_cast<uint32_t>(1 << (SPcoc[2] + 2));
@@ -557,9 +548,8 @@ void COC_marker::get_precinct_size(element_siz &out, uint8_t resolution) {
     // See COD_marker::get_precinct_size — bound the per-resolution index to the
     // bytes the marker actually carries.
     if (static_cast<size_t>(5U) + resolution >= SPcoc.size()) {
-      printf("ERROR: COC precinct-size index for resolution %u is out of range.\n",
-             static_cast<unsigned>(resolution));
-      throw std::exception();
+      open_htj2k::detail::fail("COC precinct-size index for resolution %u is out of range.",
+                               static_cast<unsigned>(resolution));
     }
     out.x = (SPcoc[5U + resolution] & 0x0F);
     out.y = (SPcoc[5U + resolution] & 0xF0) >> 4;
@@ -617,8 +607,7 @@ DFS_marker::DFS_marker(j2c_src_memory &in) : j2k_marker_io_base(_DFS) {
   // Ids bounds the writes into the fixed-size members hor_depth[33]/ver_depth[33]/
   // qcd_offset[33] below; a value > 32 (the maximum DWT level count) overflows them.
   if (Ids > 32) {
-    printf("ERROR: DFS number of levels %u exceeds maximum 32.\n", static_cast<unsigned>(Ids));
-    throw std::exception();
+    open_htj2k::detail::fail("DFS number of levels %u exceeds maximum 32.", static_cast<unsigned>(Ids));
   }
   // Ddfs: 2 bits per level, packed MSB-first, ceil(Ids/4) bytes
   const uint8_t nbytes = static_cast<uint8_t>((Ids + 3) / 4);
@@ -698,7 +687,7 @@ ATK_marker::ATK_marker(j2c_src_memory &in) : j2k_marker_io_base(_ATK), Katk(1.0f
   }
   Natk = get_byte();
   if (is_reversible()) {
-    printf("WARNING: ATK reversible kernels are not supported\n");
+    open_htj2k::detail::warn("ATK reversible kernels are not supported");
   } else {
     steps.resize(Natk);
     for (uint8_t k = 0; k < Natk; ++k) {
@@ -865,8 +854,7 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
   std::vector<uint16_t> SP;
   if (is_derived) {
     if (is_reversible) {
-      printf("ERROR: Derived quantization stepsize is not valid for reversible transform.\n");
-      throw std::exception();
+      open_htj2k::detail::fail("Derived quantization stepsize is not valid for reversible transform.");
     }
     // Quantization style -> Scalar derived (values signalled for LL subband only)
     SP.push_back(static_cast<uint16_t>((epsilon[0] << 11) + mu[0]));
@@ -1046,8 +1034,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   Sqcc = static_cast<uint8_t>(Sqcc + (number_of_guardbits << 5));
 
   if (chroma_format != YCC444 && chroma_format != YCC420 && chroma_format != YCC422) {
-    printf("ERROR: chroma format for QCC_marker is invalid.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("chroma format for QCC_marker is invalid.");
   }
   // Effective color transform: legacy mode assumes ICT (historical behavior);
   // analytic modes honor the real MCT, so an undecorrelated (no-MCT) component
@@ -1491,8 +1478,7 @@ SOT_marker::SOT_marker() : j2k_marker_io_base(_SOT) {
 SOT_marker::SOT_marker(j2c_src_memory &in) : j2k_marker_io_base(_SOT) {
   Lmar = in.get_word();
   if (Lmar != 10) {
-    printf("ERROR: Lsot value is invalid.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("Lsot value is invalid.");
   }
   this->set_buf(in.get_buf_pos());
   in.get_N_byte(this->get_buf(), Lmar - 2U);
@@ -1594,8 +1580,7 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
   // Qfactor, if any
   if (qfactor != 0xFF) {
     if (siz->get_num_components() != 3 && siz->get_num_components() != 1) {
-      printf("feature Qfactor is only available for gray-scale or color images.\n");
-      throw std::exception();
+      open_htj2k::detail::fail("Qfactor is only available for gray-scale or color images.");
     }
     for (uint16_t c = 1; c < siz->get_num_components(); ++c) {
       element_siz sub;
@@ -1708,8 +1693,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
         break;
       case _COC:
         if (SIZ == nullptr) {
-          printf("ERROR: COC marker encountered before SIZ.\n");
-          throw std::exception();
+          open_htj2k::detail::fail("COC marker encountered before SIZ.");
         }
         COC.push_back(MAKE_UNIQUE<COC_marker>(in, SIZ->get_num_components()));
         break;
@@ -1727,22 +1711,19 @@ int j2k_main_header::read(j2c_src_memory &in) {
         break;
       case _QCC:
         if (SIZ == nullptr) {
-          printf("ERROR: QCC marker encountered before SIZ.\n");
-          throw std::exception();
+          open_htj2k::detail::fail("QCC marker encountered before SIZ.");
         }
         QCC.push_back(MAKE_UNIQUE<QCC_marker>(in, SIZ->get_num_components()));
         break;
       case _RGN:
         if (SIZ == nullptr) {
-          printf("ERROR: RGN marker encountered before SIZ.\n");
-          throw std::exception();
+          open_htj2k::detail::fail("RGN marker encountered before SIZ.");
         }
         RGN.push_back(MAKE_UNIQUE<RGN_marker>(in, SIZ->get_num_components()));
         break;
       case _POC:
         if (SIZ == nullptr) {
-          printf("ERROR: POC marker encountered before SIZ.\n");
-          throw std::exception();
+          open_htj2k::detail::fail("POC marker encountered before SIZ.");
         }
         POC = MAKE_UNIQUE<POC_marker>(in, SIZ->get_num_components());
         break;
@@ -1762,7 +1743,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
         ATK.push_back(MAKE_UNIQUE<ATK_marker>(in));
         break;
       default:
-        printf("WARNING: unknown marker %04X is found in main header\n", word);
+        open_htj2k::detail::warn("unknown marker %04X is found in main header", word);
         // Skip the marker segment by its length (Lmar) so parsing resumes at
         // the next marker instead of scanning byte-by-byte.  Reserved
         // delimiting markers 0xFF30-0xFF3F carry no segment (Rec. ITU-T T.800
@@ -1797,9 +1778,9 @@ int j2k_main_header::read(j2c_src_memory &in) {
       // Nppm is attacker-controlled; without this bound `len -= Nppm` underflows
       // (unsigned) and `p += Nppm` walks past ppm_buf on malformed input.
       if (Nppm > len) {
-        printf("ERROR: PPM packet-header length %u exceeds %u remaining bytes — malformed input.\n",
-               static_cast<unsigned>(Nppm), static_cast<unsigned>(len));
-        throw std::exception();
+        open_htj2k::detail::fail(
+            "PPM packet-header length %u exceeds %u remaining bytes — malformed input.",
+            static_cast<unsigned>(Nppm), static_cast<unsigned>(len));
       }
       ppm_header->add_buf_node(p, Nppm);
       len -= Nppm;
@@ -1889,8 +1870,9 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
         length_of_tilepart_markers += this->COM[this->COM.size() - 1]->get_length() + 2U;
         break;
       default:
-        printf("WARNING: unknown marker %04X is found in tile-part header of tile %d and tile-part %d.\n",
-               word, this->SOT.get_tile_index(), this->SOT.get_tile_part_index());
+        open_htj2k::detail::warn(
+            "unknown marker %04X is found in tile-part header of tile %d and tile-part %d.", word,
+            this->SOT.get_tile_index(), this->SOT.get_tile_part_index());
         // Skip the marker segment by its length (Lmar), accounting for the
         // bytes consumed; reserved delimiting markers 0xFF30-0xFF3F carry no
         // segment (Rec. ITU-T T.800 | ISO/IEC 15444-1, Annex A).

@@ -36,6 +36,7 @@
 
 #include "dec_CxtVLC_tables.hpp"
 #include "utils.hpp"
+#include "message_internal.hpp"
 
 #if defined(__GNUC__) || defined(__clang__)
   #define FORCE_INLINE inline __attribute__((always_inline))
@@ -391,8 +392,7 @@ class rev_buf {
 
   inline uint32_t advance(uint32_t num_bits) {
     if (num_bits > bits) {
-      printf("ERROR: VLC require %d bits but there are %d bits left\n", num_bits, bits);
-      throw std::exception();
+      open_htj2k::detail::fail("VLC require %d bits but there are %d bits left", num_bits, bits);
     }
     Creg >>= num_bits;
     bits -= num_bits;
@@ -897,8 +897,7 @@ class fwd_buf {
    */
   FORCE_INLINE void advance(uint32_t num_bits) {
     if (num_bits >= 128) {
-      printf("Value of numbits = %d is out of range.\n", num_bits);
-      throw std::exception();
+      open_htj2k::detail::fail("Value of numbits = %d is out of range.", num_bits);
     }
     this->pos += num_bits;
   }
@@ -1161,8 +1160,7 @@ class fwd_buf {
    */
   FORCE_INLINE void advance(uint32_t num_bits) {
     if (num_bits >= 128) {
-      printf("Value of numbits = %d is out of range.\n", num_bits);
-      throw std::exception();
+      open_htj2k::detail::fail("Value of numbits = %d is out of range.", num_bits);
     }
     this->pos += num_bits;
   }
@@ -1459,8 +1457,7 @@ class fwd_buf {
    */
   FORCE_INLINE void advance(uint32_t num_bits) {
     if (num_bits >= 128) {
-      printf("Value of numbits = %d is out of range.\n", num_bits);
-      throw std::exception();
+      open_htj2k::detail::fail("Value of numbits = %d is out of range.", num_bits);
     }
     this->pos += num_bits;
   }

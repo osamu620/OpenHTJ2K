@@ -27,6 +27,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "jph.hpp"
+#include "message_internal.hpp"
 
 // ---------------------------------------------------------------------------
 // JPH / JP2 box reader implementation
@@ -118,8 +119,7 @@ file_type_box::file_type_box(uint8_t type) : box_base(16, 0x66747970), MinV(0) {
     BR = 0x6A706820;
     CLi.push_back(0x6A706820);
   } else {
-    printf("ERROR: unsupported type for file_type_box\n");
-    throw std::exception();
+    open_htj2k::detail::fail("unsupported type for file_type_box");
   }
   for (size_t i = 0; i < CLi.size(); ++i) {
     LBox += 4;
@@ -201,8 +201,7 @@ colour_specification_box::colour_specification_box(j2k_main_header &hdr, bool is
   } else if (nc == 1 || nc == 2) {
     EnumCS = 17;
   } else {
-    printf("ERROR: invalid color space specification.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("invalid color space specification.");
   }
 }
 size_t colour_specification_box::write(j2c_dst_memory &dst) {

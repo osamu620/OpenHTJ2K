@@ -103,6 +103,7 @@
   #include <immintrin.h>
 #elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
+  #include "message_internal.hpp"
 #endif
 
 namespace {
@@ -1367,8 +1368,7 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
       if (!transcode(blocks[moved[j]], cutter.point(static_cast<uint32_t>(moved[j])).p)) failed.store(true);
     });
     if (failed.load()) {
-      printf("ERROR: rate control could not transcode an HT code-block.\n");
-      throw std::exception();
+      open_htj2k::detail::fail("rate control could not transcode an HT code-block.");
     }
     // Once more with the transcoded sets' exact lengths, and no more transcoding: the few
     // code-blocks that would still move stay with the points they have.
@@ -1416,7 +1416,7 @@ bool p1_take_probe(p1_prefix_probe &pr, uint32_t seg_start, uint8_t *seg, bool r
     return true;
   }
   if (to - from > sizeof(pr.b)) {
-    printf("ERROR: Part 1 rate control: a %u-byte interval end.\n", to - from);
+    open_htj2k::detail::warn("Part 1 rate control: a %u-byte interval end.", to - from);
     return false;
   }
   pr.kind = p1_prefix_probe::MQ;

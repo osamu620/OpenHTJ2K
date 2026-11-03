@@ -36,6 +36,7 @@
 #include "packet_locator.hpp"
 #include "precinct_index.hpp"
 #include "view_window.hpp"
+#include "../print_library_messages.hpp"
 
 using namespace open_htj2k::jpip;
 using Clock = std::chrono::steady_clock;
@@ -146,6 +147,7 @@ double decode_jpp(const std::vector<uint8_t> &jpp, const CodestreamIndex &idx,
 }  // namespace
 
 int main(int argc, char **argv) {
+  open_htj2k_apps::install_library_message_printer();
   if (argc < 2) {
     std::fprintf(stderr,
         "Usage: open_htj2k_jpip_benchmark <input.j2c>\n"

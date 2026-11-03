@@ -37,6 +37,7 @@
 #include "EBCOTtables.hpp"
 #include "ebcot_context.hpp"
 #include "ebcot_sig_lut9.hpp"
+#include "message_internal.hpp"
 
 // Part 1 (EBCOT) block encoder: the significance propagation, magnitude
 // refinement and cleanup passes of ISO/IEC 15444-1 Annex D on the packed
@@ -339,7 +340,7 @@ double encode_pass(const enc_setup &st, uint32_t k, uint32_t p, bool is_raw, mq_
 
 int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcept {
   if (ROIshift) {
-    printf("WARNING: Encoding with ROI is not supported.\n");
+    open_htj2k::detail::warn("Encoding with ROI is not supported.");
   }
   uint32_t or_val = 0;
   if (!block->pre_quantized)
@@ -389,8 +390,8 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
   if (msb_len > Mb) {
     // Not enough guard bits for this block's magnitudes; the stream would be
     // undecodable.  Clamp rather than index past M_b (same assumption as HT).
-    printf("WARNING: code-block magnitudes need %u bit-planes but M_b is %u; increase Qguard.\n", msb_len,
-           Mb);
+    open_htj2k::detail::warn("code-block magnitudes need %u bit-planes but M_b is %u; increase Qguard.",
+                             msb_len, Mb);
     msb_len = Mb;
   }
 
@@ -476,7 +477,7 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
         len += seg_len;
         segment_open = false;
         if (len > MAX_SEGMENT_BYTES) {
-          printf("ERROR: Part 1 code-block of %u bytes exceeds the 16-bit limit.\n", len);
+          open_htj2k::detail::warn("Part 1 code-block of %u bytes exceeds the 16-bit limit.", len);
           return -1;
         }
       }
@@ -510,7 +511,7 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
           pt.keep     = len + settled;
           pt.tail_len = static_cast<uint8_t>(end - settled);
           if (pt.tail_len > sizeof(pt.tail)) {
-            printf("ERROR: Part 1 rate control: a %u-byte termination.\n", pt.tail_len);
+            open_htj2k::detail::warn("Part 1 rate control: a %u-byte termination.", pt.tail_len);
             return -1;
           }
           std::memcpy(pt.tail, seg + settled, pt.tail_len);

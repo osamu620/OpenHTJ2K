@@ -33,6 +33,7 @@
   #include "enc_CxtVLC_tables.hpp"
   #include "utils.hpp"
   #include <wasm_simd128.h>
+  #include "message_internal.hpp"
 
 /******************************************************************************/
 // WASM SIMD helper functions
@@ -295,7 +296,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   int32_t Scup;
   uint32_t or_val = 0;
   if (ROIshift) {
-    printf("WARNING: Encoding with ROI is not supported.\n");
+    open_htj2k::detail::warn("Encoding with ROI is not supported.");
   }
 
   const uint32_t QW = ceil_int(block->size.x, 2U);

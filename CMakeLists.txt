@@ -558,6 +558,7 @@ if(_ohtj2k_build_tests)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/col_range_validation.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/concurrency.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/library_messages.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 
   # Auto-attach the cleanup fixture to every test added by the includes above.
