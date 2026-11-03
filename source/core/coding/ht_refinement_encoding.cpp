@@ -485,7 +485,10 @@ int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift, ht_refineme
   }
   // Keep at least one significant sample in the cleanup pass.
   const uint32_t msb = max_mag ? 32 - count_leading_zeros(max_mag) : 0;
-  const uint32_t p   = (msb == 0) ? 0 : std::min<uint32_t>(block->ht_refine_planes, msb - 1);
+  // The cleanup pass also stays within the subband's M_b bit-planes: num_ZBP = M_b - 1 - p.
+  const uint32_t Mb  = block->get_Mb();
+  const uint32_t top = std::min(msb, Mb);
+  const uint32_t p   = (top == 0) ? 0 : std::min<uint32_t>(block->ht_refine_planes, top - 1);
   if (p == 0) {  // cleanup pass only
     if (info != nullptr) info->Lsp = 0;
     return htj2k_encode(block, ROIshift);

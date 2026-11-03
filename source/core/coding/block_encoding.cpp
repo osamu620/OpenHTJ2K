@@ -391,10 +391,32 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
   const uint32_t Mb = block->get_Mb();
   if (msb_len > Mb) {
     // Not enough guard bits for this block's magnitudes; the stream would be
-    // undecodable.  Clamp rather than index past M_b (same assumption as HT).
+    // undecodable.  Saturate them to the M_b bit-planes the subband has: coding only the
+    // lowest M_b planes would wrap them around, and with M_b = 0 there is no plane at all.
     open_htj2k::detail::warn("code-block magnitudes need %u bit-planes but M_b is %u; increase Qguard.",
                              msb_len, Mb);
-    msb_len = Mb;
+    const uint32_t cap = (Mb >= 31) ? 0x7FFFFFFFu : (1u << Mb) - 1u;
+    or_mag             = 0;
+    for (uint32_t y = 0; y < height; ++y) {
+      int32_t *sp = block->sample_buf + y * stride;
+      for (uint32_t x = 0; x < width; ++x) {
+        const uint32_t v = static_cast<uint32_t>(sp[x]);
+        const uint32_t m = std::min(v & 0x7FFFFFFFu, cap);
+        sp[x]            = static_cast<int32_t>(m ? (m | (v & 0x80000000u)) : 0u);
+        or_mag |= m;
+      }
+    }
+    if (or_mag == 0) {
+      // M_b = 0: an empty code-block, as above.
+      block->length          = 0;
+      block->pass_length[0]  = 0;
+      block->num_passes      = 0;
+      block->layer_passes[0] = 0;
+      block->layer_start[0]  = 0;
+      block->num_ZBP         = 0;
+      return 0;
+    }
+    msb_len = 32 - count_leading_zeros(or_mag);
   }
 
   // Packed stripe-column state: one word per column with a one-word border left

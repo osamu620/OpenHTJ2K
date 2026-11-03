@@ -26,11 +26,17 @@
 // that way must equal the constructor's JPH.  First of all, a small image with
 // 20 and 30 to 32 DWT levels: the quantization step sizes once took memory
 // doubling with every level, so the 20-level encode must stay small (where the
-// peak memory can be read) before the deeper ones run.
+// peak memory can be read) before the deeper ones run.  Last, parameter edge cases:
+// subsampled components with odd sizes, origins and tiles; 1-bit samples at 6 levels; more
+// guard bits than a low bit depth needs; 300 quality layers; tile size 0 with an image
+// origin; 23-bit reversible samples; Qfactor 0; 30 magnitude bit-planes; derived
+// quantization at 20 and 29 levels; rate control at 24 levels within 64 MiB; Rsiz with PRCL;
+// and out-of-range parameters, which both entry points must refuse with an exception.
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -377,6 +383,137 @@ std::string check_decode(const FileCase &f, const std::vector<uint8_t> &file,
   return err;
 }
 
+// --- Parameter edge cases -------------------------------------------------------
+
+// A whole encode: geometry, coding and quantization parameters.  Defaults: a 67x45 8-bit
+// grey image, reversible, HT, three DWT levels.
+struct Spec {
+  uint32_t w = 67, h = 45, ox = 0, oy = 0, tw = 0, th = 0, tox = 0, toy = 0;
+  std::vector<uint8_t> ssiz = {7};  // per component: bit depth - 1, sign in bit 7
+  std::vector<uint8_t> xr = {1}, yr = {1};
+  uint8_t levels = 3, xf = 1, mct = 0, style = 0x40, order = 0, guard = 1, bw = 4, bh = 4;
+  uint16_t layers = 1;
+  bool derived = false, maxprec = true;
+  std::vector<uint8_t> ppx, ppy;
+  double step     = 1.0 / 256;
+  uint8_t qfactor = NO_QFACTOR;
+  std::vector<uint64_t> targets;
+  bool checkerboard = false;  // samples at the extremes of the range, instead of a ramp
+  uint16_t nc() const { return static_cast<uint16_t>(ssiz.size()); }
+  // Component size: ceil((origin + size) / factor) - ceil(origin / factor).
+  uint32_t cw(uint16_t c) const { return (ox + w + xr[c] - 1) / xr[c] - (ox + xr[c] - 1) / xr[c]; }
+  uint32_t ch(uint16_t c) const { return (oy + h + yr[c] - 1) / yr[c] - (oy + yr[c] - 1) / yr[c]; }
+};
+
+std::vector<std::vector<int32_t>> spec_planes(const Spec &k) {
+  std::vector<std::vector<int32_t>> planes(k.nc());
+  uint32_t s = 2463534242u;
+  for (uint16_t c = 0; c < k.nc(); ++c) {
+    if (c >= k.xr.size() || c >= k.yr.size() || k.xr[c] == 0 || k.yr[c] == 0) continue;
+    const int64_t span = int64_t{1} << ((k.ssiz[c] & 0x7F) + 1);
+    const int64_t lo   = (k.ssiz[c] & 0x80) ? -span / 2 : 0;
+    planes[c].resize(static_cast<size_t>(k.cw(c)) * k.ch(c));
+    for (uint32_t y = 0; y < k.ch(c); ++y)
+      for (uint32_t x = 0; x < k.cw(c); ++x) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        const int64_t v                                 = k.checkerboard ? (((x + y) & 1) ? span - 1 : 0)
+                                                                         : static_cast<int64_t>((uint64_t{x + 2 * y + 37 * c} * 5u + s % 9u)
+                                                                                                % static_cast<uint64_t>(span));
+        planes[c][static_cast<size_t>(y) * k.cw(c) + x] = static_cast<int32_t>(v + lo);
+      }
+  }
+  return planes;
+}
+
+// Throws whatever the encoder throws.
+std::vector<uint8_t> spec_encode(const Spec &k, const std::vector<std::vector<int32_t>> &src,
+                                 bool streaming) {
+  open_htj2k::siz_params siz;
+  siz.Rsiz   = 0;
+  siz.Xsiz   = k.w + k.ox;
+  siz.Ysiz   = k.h + k.oy;
+  siz.XOsiz  = k.ox;
+  siz.YOsiz  = k.oy;
+  siz.XTsiz  = k.tw;
+  siz.YTsiz  = k.th;
+  siz.XTOsiz = k.tox;
+  siz.YTOsiz = k.toy;
+  siz.Csiz   = k.nc();
+  siz.Ssiz   = k.ssiz;
+  siz.XRsiz  = k.xr;
+  siz.YRsiz  = k.yr;
+  open_htj2k::cod_params cod;
+  cod.blkwidth          = k.bw;
+  cod.blkheight         = k.bh;
+  cod.is_max_precincts  = k.maxprec;
+  cod.use_SOP           = false;
+  cod.use_EPH           = false;
+  cod.progression_order = k.order;
+  cod.number_of_layers  = k.layers;
+  cod.use_color_trafo   = k.mct;
+  cod.dwt_levels        = k.levels;
+  cod.codeblock_style   = k.style;
+  cod.transformation    = k.xf;
+  cod.PPx               = k.ppx;
+  cod.PPy               = k.ppy;
+  open_htj2k::qcd_params qcd;
+  qcd.is_derived                           = k.derived;
+  qcd.number_of_guardbits                  = k.guard;
+  qcd.base_step                            = k.step;
+  std::vector<std::vector<int32_t>> planes = src;
+  std::vector<int32_t *> input;
+  if (!streaming)
+    for (auto &p : planes) input.push_back(p.data());
+  std::vector<uint8_t> out;
+  open_htj2k::openhtj2k_encoder enc("", input, siz, cod, qcd, k.qfactor, false, 0, 1);
+  enc.set_output_buffer(out);
+  enc.set_target_sizes(k.targets);
+  if (streaming) {
+    // Component c takes its row y / (YRsiz[c] / YRsiz[0]), as the command line's readers give it.
+    enc.invoke_line_based_stream([&](uint32_t y, int32_t **rows, uint16_t nc) {
+      for (uint16_t c = 0; c < nc; ++c) {
+        if (k.cw(c) == 0 || k.ch(c) == 0) continue;
+        const uint32_t cy = std::min<uint32_t>(y / (k.yr[c] / k.yr[0]), k.ch(c) - 1);
+        memcpy(rows[c], planes[c].data() + static_cast<size_t>(cy) * k.cw(c), sizeof(int32_t) * k.cw(c));
+      }
+    });
+  } else {
+    enc.invoke_line_based();
+  }
+  return out;
+}
+
+// Largest sample error of the decoded codestream, or -1 if its shape differs.
+long spec_error(const Spec &k, const std::vector<uint8_t> &j2c,
+                const std::vector<std::vector<int32_t>> &ref) {
+  open_htj2k::openhtj2k_decoder dec(j2c.data(), j2c.size(), 0, 1);
+  std::vector<int32_t *> buf;
+  std::vector<uint32_t> w, h;
+  std::vector<uint8_t> depth;
+  std::vector<bool> sg;
+  dec.parse();
+  dec.invoke_line_based(buf, w, h, depth, sg);
+  long worst = (buf.size() == k.nc()) ? 0 : -1;
+  for (size_t c = 0; worst >= 0 && c < buf.size(); ++c) {
+    const uint16_t cc = static_cast<uint16_t>(c);
+    if (w[c] != k.cw(cc) || h[c] != k.ch(cc)) {
+      worst = -1;
+      break;
+    }
+    for (size_t i = 0; i < ref[c].size(); ++i)
+      worst = std::max(worst, std::labs(static_cast<long>(buf[c][i]) - static_cast<long>(ref[c][i])));
+  }
+  for (auto p : buf) delete[] p;
+  return worst;
+}
+
+// Rsiz of a codestream (the SIZ marker segment follows SOC).
+uint16_t rsiz_of(const std::vector<uint8_t> &j2c) {
+  return (j2c.size() < 8) ? 0 : static_cast<uint16_t>((j2c[6] << 8) | j2c[7]);
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -599,6 +736,223 @@ int main(int argc, char *argv[]) {
       } catch (std::exception &) {
       }
       file_case(std::string("JP2 refuses ") + f.name + (streaming ? " (streaming)" : " (buffered)"), err);
+    }
+  }
+
+  // Parameter edge cases.  Each must encode through both entry points to the same bytes and
+  // decode within `tol` (0: lossless), or, if `refused`, be refused by both with an exception.
+  auto edge = [&](const char *what, const Spec &k, long tol, bool refused, bool same_bytes) {
+    ++total;
+    std::string err;
+    const auto planes = spec_planes(k);
+    for (int streaming = 0; streaming < 2 && err.empty(); ++streaming) {
+      try {
+        const auto j2c = spec_encode(k, planes, streaming != 0);
+        if (refused) {
+          err = streaming ? "the streaming entry point does not refuse it"
+                          : "the buffered entry point does not refuse it";
+        } else {
+          const long e = spec_error(k, j2c, planes);
+          if (e < 0 || e > tol)
+            err = std::string(streaming ? "streaming" : "buffered") + ": decoded samples off by "
+                  + std::to_string(e);
+          if (err.empty() && streaming && same_bytes && j2c != spec_encode(k, planes, false))
+            err = "buffered and streaming codestreams differ";
+        }
+      } catch (std::exception &ex) {
+        if (!refused) err = std::string("exception: ") + ex.what();
+      }
+    }
+    if (!err.empty()) {
+      ++failed;
+      printf("FAIL edge case: %s: %s\n", what, err.c_str());
+    } else if (verbose) {
+      printf("ok   edge case: %s\n", what);
+    }
+  };
+  auto check = [&](const char *what, bool ok) {
+    ++total;
+    if (!ok) {
+      ++failed;
+      printf("FAIL edge case: %s\n", what);
+    } else if (verbose) {
+      printf("ok   edge case: %s\n", what);
+    }
+  };
+  {
+    // Subsampled components with odd sizes, an image origin and tiles: a component's plane
+    // starts at ceil(origin / factor) and is ceil((origin + size) / factor) less that wide; the
+    // streaming entry point takes a component's row where component 0's row is on its grid.
+    struct Sub {
+      uint32_t w, h, ox, oy, tw, th, tox, toy;
+    };
+    const Sub subs[]             = {{64, 64, 0, 0, 0, 0, 0, 0},
+                                    {65, 47, 0, 0, 0, 0, 0, 0},
+                                    {65, 47, 3, 1, 0, 0, 3, 1},
+                                    {130, 75, 5, 3, 40, 17, 0, 0},
+                                    {97, 61, 1, 2, 33, 7, 1, 2}};
+    const uint8_t factors[][2]   = {{2, 2}, {2, 1}, {1, 2}, {3, 4}, {4, 3}};
+    const uint8_t block_styles[] = {0x40, 0x00};
+    for (const auto &g : subs)
+      for (const auto &f : factors)
+        for (uint8_t style : block_styles) {
+          Spec k;
+          k.w = g.w, k.h = g.h, k.ox = g.ox, k.oy = g.oy;
+          k.tw = g.tw, k.th = g.th, k.tox = g.tox, k.toy = g.toy;
+          k.ssiz  = {7, 7, 7};
+          k.xr    = {1, f[0], f[1]};
+          k.yr    = {1, f[1], f[0]};
+          k.style = style;
+          char what[160];
+          snprintf(what, sizeof(what), "%ux%u at %u,%u, tiles %ux%u, subsampling %ux%u and %ux%u%s", g.w,
+                   g.h, g.ox, g.oy, g.tw, g.th, f[0], f[1], f[1], f[0], style ? "" : ", Part 1");
+          edge(what, k, 0, false, true);
+        }
+    // Component 0 subsampled vertically by 2 and component 1 by 3: the buffered entry point
+    // only; the streaming one refuses it.
+    Spec k;
+    k.ssiz            = {7, 7};
+    k.xr              = {2, 1};
+    k.yr              = {2, 3};
+    const auto planes = spec_planes(k);
+    bool refused      = false;
+    try {
+      spec_encode(k, planes, true);
+    } catch (std::exception &) {
+      refused = true;
+    }
+    check("YRsiz 2 and 3: the streaming entry point refuses them", refused);
+    long e = -1;
+    try {
+      e = spec_error(k, spec_encode(k, planes, false), planes);
+    } catch (std::exception &) {
+    }
+    check("YRsiz 2 and 3: the buffered entry point reproduces the input", e == 0);
+  }
+  {
+    // Lossless corners.
+    Spec k;
+    k.ssiz = {0};  // 1-bit samples: their coarsest subbands needed one more bit-plane at 6 levels
+    k.w = 149, k.h = 776, k.ox = 64, k.oy = 270, k.tox = 64, k.toy = 270, k.levels = 6;
+    edge("1-bit samples, 6 levels", k, 0, false, true);
+    k.style = 0x00;
+    edge("1-bit samples, 6 levels, Part 1", k, 0, false, true);
+    k       = Spec();
+    k.ssiz  = {1};
+    k.guard = 4;  // more guard bits than 2-bit samples leave room for: exponent 0, not 255
+    edge("2-bit samples, 4 guard bits", k, 0, false, true);
+    k        = Spec();
+    k.layers = 300;  // the inclusion tag tree counted layers in 8 bits
+    edge("300 quality layers", k, 0, false, true);
+    k    = Spec();
+    k.ox = 40, k.oy = 30;  // tile size 0: one tile, from the tile origin (0, 0) to the far edge
+    edge("tile size 0 with an image origin", k, 0, false, true);
+    k        = Spec();
+    k.ssiz   = {22, 22, 22};  // 23 bits: the most the reversible path codes losslessly
+    k.xr     = {1, 1, 1};
+    k.yr     = {1, 1, 1};
+    k.levels = 5;
+    edge("23-bit samples", k, 0, false, true);
+    k.mct = 1;  // 24 bits after the reversible colour transform
+    edge("23-bit samples with the colour transform (refused)", k, 0, true, true);
+    k       = Spec();
+    k.guard = 0;  // the reversible step sizes do not depend on the guard bits
+    edge("reversible, 0 guard bits", k, 0, false, true);
+    k         = Spec();
+    k.maxprec = false, k.ppx = {5, 0}, k.ppy = {5, 0}, k.levels = 1;  // exponent 0 at resolution 0
+    edge("precinct exponent 0 at resolution 0", k, 0, false, true);
+    // Lossy corners.
+    k         = Spec();
+    k.xf      = 0;
+    k.qfactor = 0;  // taken as 1: 50 / 0 made every step infinite
+    k.ssiz    = {7, 7, 7};
+    k.xr      = {1, 1, 1};
+    k.yr      = {1, 1, 1};
+    k.mct     = 1;
+    edge("Qfactor 0", k, 255, false, true);
+    {
+      Spec k1           = k;
+      k1.qfactor        = 1;
+      const auto planes = spec_planes(k);
+      check("Qfactor 0 codes as Qfactor 1",
+            spec_encode(k, planes, false) == spec_encode(k1, planes, false));
+    }
+    k              = Spec();
+    k.xf           = 0;
+    k.ssiz         = {1, 1, 1};
+    k.xr           = {1, 1, 1};
+    k.yr           = {1, 1, 1};
+    k.mct          = 1;
+    k.checkerboard = true;
+    k.step         = 1e-9;  // 30 magnitude bit-planes in every sample: the longest HT cleanup segments
+    k.levels       = 1;
+    k.w = 64, k.h = 64;
+    edge("30 magnitude bit-planes, alternating extremes", k, 3, false, true);
+    k      = Spec();
+    k.xf   = 0;
+    k.step = 1e300;  // the largest step there is
+    edge("base step 1e300", k, 255, false, true);
+    k         = Spec();
+    k.xf      = 0;
+    k.derived = true;
+    k.levels  = 20;  // the derived exponents epsilon_0 - NL + n_b stay >= 0: epsilon_0 >= 19
+    edge("derived quantization, 20 levels", k, 255, false, true);
+    k.levels = 29;
+    k.guard  = 7;  // epsilon_0 can be at most 31 - 7 = 24, less than 28
+    edge("derived quantization, 29 levels, 7 guard bits (refused)", k, 0, true, true);
+    k                   = Spec();
+    k.xf                = 0;
+    k.levels            = 24;
+    k.targets           = {400};  // the rate control's basis functions doubled in length per level
+    const double before = peak_rss_mib();
+    edge("target size, 24 levels", k, 255, false, false);
+    const double grown = peak_rss_mib() - before;
+    check("target size, 24 levels: peak memory grew by at most 64 MiB", before < 0 || grown <= 64.0);
+    // PRCL comes with a CAP marker for its ISO/IEC 15444-2 capability: Rsiz bits 15 and 14.
+    k                 = Spec();
+    k.order           = 5;
+    const auto planes = spec_planes(k);
+    const auto j2c    = spec_encode(k, planes, false);
+    check("PRCL: Rsiz bits 15 and 14",
+          (rsiz_of(j2c) & 0xC000) == 0xC000 && spec_error(k, j2c, planes) == 0);
+  }
+  {
+    // Out-of-range parameters: refused with an exception by both entry points.
+    struct Bad {
+      const char *what;
+      void (*apply)(Spec &);
+    };
+    const Bad bad[] = {
+        {"no components", [](Spec &k) { k.ssiz.clear(), k.xr.clear(), k.yr.clear(); }},
+        {"32-bit samples", [](Spec &k) { k.ssiz = {31}, k.xf = 0; }},
+        {"24-bit reversible samples", [](Spec &k) { k.ssiz = {23}; }},
+        {"subsampling factor 0", [](Spec &k) { k.ssiz = {7, 7}, k.xr = {1, 0}, k.yr = {1, 1}; }},
+        {"empty image", [](Spec &k) { k.w = 0; }},
+        {"image extent beyond 2^31 - 1", [](Spec &k) { k.ox = k.tox = 0x7FFFFFF0u; }},
+        {"33 DWT levels", [](Spec &k) { k.levels = 33; }},
+        {"code-block exponent 9", [](Spec &k) { k.bw = 9, k.bh = 0; }},
+        {"code-blocks of 8192 samples", [](Spec &k) { k.bw = 5, k.bh = 6; }},
+        {"progression order 6", [](Spec &k) { k.order = 6; }},
+        {"0 quality layers", [](Spec &k) { k.layers = 0; }},
+        {"use_color_trafo 2",
+         [](Spec &k) { k.ssiz = {7, 7, 7}, k.xr = {1, 1, 1}, k.yr = {1, 1, 1}, k.mct = 2; }},
+        {"transformation 2", [](Spec &k) { k.xf = 2; }},
+        {"8 guard bits", [](Spec &k) { k.guard = 8; }},
+        {"irreversible, 0 guard bits", [](Spec &k) { k.xf = 0, k.guard = 0; }},
+        {"base step 0", [](Spec &k) { k.xf = 0, k.step = 0; }},
+        {"negative base step", [](Spec &k) { k.xf = 0, k.step = -1; }},
+        {"infinite base step", [](Spec &k) { k.xf = 0, k.step = HUGE_VAL; }},
+        {"base step not a number", [](Spec &k) { k.xf = 0, k.step = std::nan(""); }},
+        {"precinct exponent 16", [](Spec &k) { k.maxprec = false, k.ppx = {16}, k.ppy = {16}; }},
+        {"precinct exponent 0 above resolution 0",
+         [](Spec &k) { k.maxprec = false, k.ppx = {0}, k.ppy = {0}; }},
+        {"no precinct sizes", [](Spec &k) { k.maxprec = false; }},
+    };
+    for (const auto &b : bad) {
+      Spec k;
+      b.apply(k);
+      std::string what = std::string(b.what) + " (refused)";
+      edge(what.c_str(), k, 0, true, true);
     }
   }
 

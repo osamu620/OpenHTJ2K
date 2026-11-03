@@ -142,6 +142,152 @@ int32_t coded_MAGB(j2k_tile *tiles, uint32_t num_tiles) {
 // Why the last image::read_pnmpgx() or image::read_tiff() call on this thread failed.
 thread_local std::string image_read_error;
 
+// Resolution r of a component with NL decomposition levels takes the precinct size entry
+// min(NL - r, entries - 1) of cod_params::PPx/PPy: the first entry is for the highest
+// resolution, and the last one repeats for the lower resolutions (COD_marker).
+size_t precinct_entry(uint8_t NL, uint8_t r, size_t entries) {
+  return std::min(static_cast<size_t>(NL - r), entries - 1);
+}
+
+// The parameters the markers and the tile structures take as given.  Values outside the
+// ranges of ISO/IEC 15444-1 Annex A, or beyond what this encoder implements, are refused
+// here: they used to give invalid codestreams, wrong samples or memory errors.
+void check_parameters(const siz_params &siz, const cod_params &cod, const qcd_params &qcd,
+                      uint8_t qfactor) {
+  if (siz.Csiz == 0 || siz.Csiz > 16384) {
+    open_htj2k::detail::fail("the number of components (Csiz) shall be 1 to 16384, not %u.",
+                             static_cast<unsigned>(siz.Csiz));
+  }
+  if (siz.Ssiz.size() < siz.Csiz || siz.XRsiz.size() < siz.Csiz || siz.YRsiz.size() < siz.Csiz) {
+    open_htj2k::detail::fail("Ssiz, XRsiz and YRsiz shall hold a value for each of the %u components.",
+                             static_cast<unsigned>(siz.Csiz));
+  }
+  if (siz.Xsiz <= siz.XOsiz || siz.Ysiz <= siz.YOsiz) {
+    open_htj2k::detail::fail(
+        "the image is empty: Xsiz and Ysiz (%u, %u) shall exceed XOsiz and YOsiz (%u, %u).", siz.Xsiz,
+        siz.Ysiz, siz.XOsiz, siz.YOsiz);
+  }
+  // Coordinates are 32-bit signed integers in places (the decoder refuses larger extents too).
+  if (siz.Xsiz > 0x7FFFFFFFu || siz.Ysiz > 0x7FFFFFFFu) {
+    open_htj2k::detail::fail(
+        "the image extent (Xsiz %u, Ysiz %u) exceeds 2147483647, the largest supported.", siz.Xsiz,
+        siz.Ysiz);
+  }
+  for (uint16_t c = 0; c < siz.Csiz; ++c) {
+    // The samples are 32-bit integers.
+    const unsigned depth = (siz.Ssiz[c] & 0x7FU) + 1U;
+    if (depth > 31) {
+      open_htj2k::detail::fail("component %u has %u bits per sample; at most 31 are supported.",
+                               static_cast<unsigned>(c), depth);
+    }
+    if (siz.XRsiz[c] == 0 || siz.YRsiz[c] == 0) {
+      open_htj2k::detail::fail("the subsampling factors XRsiz and YRsiz of component %u shall be 1 to 255.",
+                               static_cast<unsigned>(c));
+    }
+  }
+  if (cod.dwt_levels > 32) {
+    open_htj2k::detail::fail("the number of DWT levels shall be 0 to 32, not %u.",
+                             static_cast<unsigned>(cod.dwt_levels));
+  }
+  // Code-block width and height exponents (log2 - 2) of 0 to 8, an area of at most 4096.
+  if (cod.blkwidth > 8 || cod.blkheight > 8 || cod.blkwidth + cod.blkheight > 8) {
+    open_htj2k::detail::fail(
+        "code-blocks shall be 4 to 1024 samples wide and high and hold at most 4096 samples "
+        "(blkwidth %u, blkheight %u: log2 of the size less 2).",
+        static_cast<unsigned>(cod.blkwidth), static_cast<unsigned>(cod.blkheight));
+  }
+  if (cod.progression_order > 5) {
+    open_htj2k::detail::fail("the progression order shall be 0 to 5, not %u.",
+                             static_cast<unsigned>(cod.progression_order));
+  }
+  if (cod.number_of_layers == 0) {
+    open_htj2k::detail::fail("the number of quality layers shall be 1 to 65535.");
+  }
+  if (cod.use_color_trafo > 1) {
+    open_htj2k::detail::fail("use_color_trafo shall be 0 or 1, not %u.",
+                             static_cast<unsigned>(cod.use_color_trafo));
+  }
+  if (cod.transformation > 1) {
+    open_htj2k::detail::fail("transformation shall be 0 (irreversible 9/7) or 1 (reversible 5/3), not %u.",
+                             static_cast<unsigned>(cod.transformation));
+  }
+  if (!cod.is_max_precincts) {
+    if (cod.PPx.empty() || cod.PPx.size() != cod.PPy.size()) {
+      open_htj2k::detail::fail("user-defined precincts need as many PPx as PPy values, at least one.");
+    }
+    // Exponents of 0 to 15 (four bits each in the COD marker), and of at least 1 above the
+    // lowest resolution (ISO/IEC 15444-1, A.6.1).
+    for (uint8_t r = 0; r <= cod.dwt_levels; ++r) {
+      const size_t i    = precinct_entry(cod.dwt_levels, r, cod.PPx.size());
+      const unsigned lo = (r == 0) ? 0 : 1;
+      if (cod.PPx[i] < lo || cod.PPy[i] < lo || cod.PPx[i] > 15 || cod.PPy[i] > 15) {
+        open_htj2k::detail::fail(
+            "the precinct size exponents of resolution %u are (%u, %u); they shall be %u to 15.",
+            static_cast<unsigned>(r), static_cast<unsigned>(cod.PPx[i]), static_cast<unsigned>(cod.PPy[i]),
+            lo);
+      }
+    }
+  }
+  if (qcd.number_of_guardbits > 7) {
+    open_htj2k::detail::fail("the number of guard bits shall be 0 to 7, not %u.",
+                             static_cast<unsigned>(qcd.number_of_guardbits));
+  }
+  // A subband has G + epsilon_b - 1 magnitude bit-planes (ISO/IEC 15444-1, E-2), and an
+  // irreversible step of 2^-epsilon_b holds coefficients below 2^(G-1) of the nominal range.
+  // Without guard bits, coefficients at the edge of that range (the most negative sample, at
+  // the least) need one bit-plane more than the codestream gives them, which decoders reject
+  // or decode differently.  The reversible step sizes do not depend on G.
+  if (cod.transformation == 0 && qcd.number_of_guardbits == 0) {
+    open_htj2k::detail::fail(
+        "the irreversible transform needs at least 1 guard bit; with none, quantized coefficients can "
+        "need more magnitude bit-planes than the codestream signals.");
+  }
+  // The base step size sets the irreversible quantization unless Qfactor does.
+  if (cod.transformation == 0 && qfactor == NO_QFACTOR
+      && !(qcd.base_step > 0.0 && std::isfinite(qcd.base_step))) {
+    open_htj2k::detail::fail("the base step size shall be a positive finite number, not %g.",
+                             qcd.base_step);
+  }
+}
+
+// The reversible path is lossless as long as the samples and the transform keep within
+// single-precision floating point: up to 23 bits per sample, one bit less for the
+// components the reversible colour transform widens.  Checked after the colour transform
+// has been decided.
+void check_reversible_precision(const siz_params &siz, const cod_params &cod) {
+  if (cod.transformation != 1 || cod.dwt_levels == 0) return;
+  for (uint16_t c = 0; c < siz.Csiz; ++c) {
+    const unsigned depth = (siz.Ssiz[c] & 0x7FU) + 1U;
+    const bool widened   = cod.use_color_trafo == 1 && c < 3;
+    if (depth + (widened ? 1U : 0U) > 23) {
+      open_htj2k::detail::fail(
+          "the reversible transform is lossless for at most 23 bits per sample (22 with the colour "
+          "transform); component %u has %u.",
+          static_cast<unsigned>(c), depth);
+    }
+  }
+}
+
+// Origin and tile checks shared by the entry points.  Tile size 0 (XTsiz or YTsiz) means one
+// tile, reaching from the tile origin to the far edge of the image.
+void check_tiling(siz_params &siz) {
+  if ((siz.XTOsiz > siz.XOsiz) || (siz.YTOsiz > siz.YOsiz)) {
+    open_htj2k::detail::fail("tile origin shall be no greater than the image origin.");
+  }
+  if (siz.XTsiz == 0 || siz.YTsiz == 0) {
+    siz.XTsiz = siz.Xsiz - siz.XTOsiz;
+    siz.YTsiz = siz.Ysiz - siz.YTOsiz;
+  }
+  if ((uint64_t{siz.XTOsiz} + siz.XTsiz <= siz.XOsiz) || (uint64_t{siz.YTOsiz} + siz.YTsiz <= siz.YOsiz)) {
+    open_htj2k::detail::fail("tile size plus tile origin shall be greater than the image origin.");
+  }
+  const uint64_t tiles_x = (uint64_t{siz.Xsiz} - siz.XTOsiz + siz.XTsiz - 1) / siz.XTsiz;
+  const uint64_t tiles_y = (uint64_t{siz.Ysiz} - siz.YTOsiz + siz.YTsiz - 1) / siz.YTsiz;
+  if (tiles_x * tiles_y > 65535) {
+    open_htj2k::detail::fail("The number of tiles exceeds its allowable maximum (65535).");
+  }
+}
+
 // SPcod code-block style.  Part 1 code-blocks take any of the six mode switches
 // of ISO/IEC 15444-1 Table A.19; HT code-blocks only the vertically causal one
 // (ISO/IEC 15444-15 Table A.3).  Mixed HT/Part 1 tile-components (bit 7) are not
@@ -860,19 +1006,8 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   std::vector<uint8_t> Ssiz;
   std::vector<uint8_t> XRsiz, YRsiz;
 
-  if ((siz->XOsiz > siz->Xsiz) || (siz->YOsiz > siz->Ysiz)) {
-    open_htj2k::detail::fail("image origin exceeds the size of input image.");
-  }
-  if ((siz->XTOsiz > siz->XOsiz) || (siz->YTOsiz > siz->YOsiz)) {
-    open_htj2k::detail::fail("tile origin shall be no greater than the image origin.");
-  }
-  if (siz->XTsiz * siz->YTsiz == 0) {
-    siz->XTsiz = siz->Xsiz - siz->XOsiz;
-    siz->YTsiz = siz->Ysiz - siz->YOsiz;
-  }
-  if (((siz->XTOsiz + siz->XTsiz) <= siz->XOsiz) || ((siz->YTOsiz + siz->YTsiz) <= siz->YOsiz)) {
-    open_htj2k::detail::fail("tile size plus tile origin shall be greater than the image origin.");
-  }
+  check_parameters(*siz, *cod, *qcd, qfactor);
+  check_tiling(*siz);
 
   for (size_t c = 0; c < siz->Csiz; ++c) {
     Ssiz.push_back(siz->Ssiz[c]);
@@ -902,6 +1037,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn("Cycc is set to 'no' because there are fewer than 3 components.");
   }
+  check_reversible_precision(*siz, *cod);
   // Qfactor assumes a YCbCr (luma/chroma) decomposition; warn (do not force) if
   // the color transform is off or the component count is unsupported.
   if (qfactor != NO_QFACTOR) {
@@ -922,8 +1058,12 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   // (EBCOT) block coding by neither.
   const bool is_ht = (cod->codeblock_style & HT) != 0;
   check_codeblock_style(cod->codeblock_style);
-  SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
-                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, is_ht);
+  // PRCL is an ISO/IEC 15444-2 progression order, signalled in CAP (Ccap2): Rsiz bit 15 marks
+  // the Part 2 codestream that the CAP marker's Part 2 capabilities belong to.
+  const auto Rsiz = static_cast<uint16_t>(siz->Rsiz | ((cod->progression_order == 5) ? 0x8000 : 0));
+  SIZ_marker main_SIZ(Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
+                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz,
+                      is_ht || cod->progression_order == 5);  // Rsiz bit 14: a CAP marker follows
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
                       cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels,
                       static_cast<uint8_t>(cod->blkwidth), static_cast<uint8_t>(cod->blkheight),
@@ -1074,19 +1214,8 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   std::vector<uint8_t> Ssiz;
   std::vector<uint8_t> XRsiz, YRsiz;
 
-  if ((siz->XOsiz > siz->Xsiz) || (siz->YOsiz > siz->Ysiz)) {
-    open_htj2k::detail::fail("image origin exceeds the size of input image.");
-  }
-  if ((siz->XTOsiz > siz->XOsiz) || (siz->YTOsiz > siz->YOsiz)) {
-    open_htj2k::detail::fail("tile origin shall be no greater than the image origin.");
-  }
-  if (siz->XTsiz * siz->YTsiz == 0) {
-    siz->XTsiz = siz->Xsiz - siz->XOsiz;
-    siz->YTsiz = siz->Ysiz - siz->YOsiz;
-  }
-  if (((siz->XTOsiz + siz->XTsiz) <= siz->XOsiz) || ((siz->YTOsiz + siz->YTsiz) <= siz->YOsiz)) {
-    open_htj2k::detail::fail("tile size plus tile origin shall be greater than the image origin.");
-  }
+  check_parameters(*siz, *cod, *qcd, qfactor);
+  check_tiling(*siz);
 
   for (size_t c = 0; c < siz->Csiz; ++c) {
     Ssiz.push_back(siz->Ssiz[c]);
@@ -1113,6 +1242,19 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn("Cycc is set to 'no' because there are fewer than 3 components.");
   }
+  check_reversible_precision(*siz, *cod);
+  // Rows are pulled for component 0; a component takes one when component 0's row is on its
+  // sampling grid, which needs its vertical subsampling factor to be a multiple of component 0's.
+  for (uint16_t c = 1; c < siz->Csiz; ++c) {
+    if (siz->YRsiz[c] % siz->YRsiz[0] != 0) {
+      open_htj2k::detail::fail(
+          "invoke_line_based_stream() needs the vertical subsampling factor of every component to be a "
+          "multiple of component 0's (component %u: YRsiz %u, component 0: YRsiz %u); "
+          "invoke_line_based() takes any.",
+          static_cast<unsigned>(c), static_cast<unsigned>(siz->YRsiz[c]),
+          static_cast<unsigned>(siz->YRsiz[0]));
+    }
+  }
   if (qfactor != NO_QFACTOR) {
     if (siz->Csiz == 3 || siz->Csiz == 4) {
       if (cod->use_color_trafo == 0) {
@@ -1130,8 +1272,12 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   // (EBCOT) block coding by neither.
   const bool is_ht = (cod->codeblock_style & HT) != 0;
   check_codeblock_style(cod->codeblock_style);
-  SIZ_marker main_SIZ(siz->Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
-                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz, is_ht);
+  // PRCL is an ISO/IEC 15444-2 progression order, signalled in CAP (Ccap2): Rsiz bit 15 marks
+  // the Part 2 codestream that the CAP marker's Part 2 capabilities belong to.
+  const auto Rsiz = static_cast<uint16_t>(siz->Rsiz | ((cod->progression_order == 5) ? 0x8000 : 0));
+  SIZ_marker main_SIZ(Rsiz, siz->Xsiz, siz->Ysiz, siz->XOsiz, siz->YOsiz, siz->XTsiz, siz->YTsiz,
+                      siz->XTOsiz, siz->YTOsiz, siz->Csiz, Ssiz, XRsiz, YRsiz,
+                      is_ht || cod->progression_order == 5);  // Rsiz bit 14: a CAP marker follows
   COD_marker main_COD(cod->is_max_precincts, cod->use_SOP, cod->use_EPH, cod->progression_order,
                       cod->number_of_layers, cod->use_color_trafo, cod->dwt_levels,
                       static_cast<uint8_t>(cod->blkwidth), static_cast<uint8_t>(cod->blkheight),

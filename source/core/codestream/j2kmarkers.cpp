@@ -250,7 +250,9 @@ uint32_t SIZ_marker::get_component_stride(uint16_t c) const {
   if (c >= Csiz) {
     open_htj2k::detail::fail("invalid component index");
   }
-  return Xsiz / XRsiz[c] - XOsiz;
+  // Width of the component: ceil(Xsiz / XRsiz) - ceil(XOsiz / XRsiz) (B-1, ISO/IEC 15444-1).
+  const uint64_t xr = XRsiz[c];
+  return static_cast<uint32_t>((Xsiz + xr - 1) / xr - (XOsiz + xr - 1) / xr);
 }
 
 void SIZ_marker::get_image_origin(element_siz &siz) const {
@@ -807,8 +809,17 @@ const atk_step &ATK_marker::get_step(uint8_t k) const { return steps[k]; }
 // clamped to epsilon ∈ [0,max_exponent] and mu ∈ [0,2047]. Shared by the QCD and
 // QCC marker builders so the clamp/rounding logic lives in exactly one place.
 static void pack_quant_step(double fval, int32_t max_exponent, uint8_t &epsilon_out, uint16_t &mu_out) {
+  // From 2 up the result is the largest step, 2^0 * (1 + 2047/2^11); return before the
+  // mantissa below can overflow.  Not a number is taken as the largest step as well.
+  if (!(fval < 2.0)) {
+    epsilon_out = 0;
+    mu_out      = (1 << 11) - 1;
+    return;
+  }
   int32_t exponent, mantissa;
-  for (exponent = 0; fval < 1.0; exponent++) {
+  // Past max_exponent + 1 doublings the step is clamped below anyway; stopping there keeps
+  // a zero, negative or denormal step from looping without end.
+  for (exponent = 0; fval < 1.0 && exponent <= max_exponent; exponent++) {
     fval *= 2.0;
   }
   mantissa = static_cast<int32_t>(floor((fval - 1.0) * static_cast<double>(1 << 11) + 0.5));
@@ -923,12 +934,21 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
   // construct epsilon and mu
   if (is_reversible) {
     // lossless
+    // The BIBO gains bound the linear transform, with 10% to spare (0.9 below) for the
+    // rounding of the integer lifting steps.  1-bit samples span [-1, 0] after the DC shift,
+    // so the rounding offsets are as large as the range itself: their subbands get one more
+    // bit-plane, or the coarsest ones can overflow (seen at 6 levels).
+    const int extra_bit = (RI == 1) ? 1 : 0;
     for (size_t i = 0; i < epsilon.size(); ++i) {
-      epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(RI - number_of_guardbits + use_ycc);
+      // M_b = G + epsilon_b - 1 does not depend on the guard bits; with more guard bits than
+      // that leaves room for, epsilon_b would be negative (it wrapped around as uint8_t):
+      // 0 then gives the subband G - 1 bit-planes, more than it needs.
+      int eps = static_cast<int>(RI) - number_of_guardbits + use_ycc + extra_bit;
       while (wmse_or_BIBO[i] > 0.9) {
-        epsilon[epsilon.size() - i - 1]++;
+        eps++;
         wmse_or_BIBO[i] *= 0.5;
       }
+      epsilon[epsilon.size() - i - 1] = static_cast<uint8_t>(std::max(eps, 0));
     }
   } else {
     // Lossy quantization step-size computation (ISO/IEC 15444-1 Annex E):
@@ -959,7 +979,20 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
     if (is_reversible) {
       open_htj2k::detail::fail("Derived quantization stepsize is not valid for reversible transform.");
     }
-    // Quantization style -> Scalar derived (values signalled for LL subband only)
+    // Quantization style -> Scalar derived (values signalled for LL subband only).  The
+    // subbands n levels below the image get epsilon_0 - NL + n (E-5), down to epsilon_0 - NL + 1
+    // for the finest: epsilon_0 shall be at least NL - 1, a finer LL step than asked if need be.
+    const int min_eps0 = static_cast<int>(dwt_levels) - 1;
+    if (min_eps0 > 31 - static_cast<int>(number_of_guardbits)) {
+      open_htj2k::detail::fail(
+          "derived quantization supports at most %d DWT levels with %u guard bits (%u requested).",
+          32 - static_cast<int>(number_of_guardbits), static_cast<unsigned>(number_of_guardbits),
+          static_cast<unsigned>(dwt_levels));
+    }
+    if (epsilon[0] < min_eps0) {
+      epsilon[0] = static_cast<uint8_t>(min_eps0);
+      mu[0]      = (1 << 11) - 1;
+    }
     SP.push_back(static_cast<uint16_t>((epsilon[0] << 11) + mu[0]));
   } else {
     for (size_t i = 0; i < num_bands; ++i) {
