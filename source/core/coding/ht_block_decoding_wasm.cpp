@@ -31,6 +31,7 @@
   #include "dec_CxtVLC_tables.hpp"
   #include "ht_block_decoding.hpp"
   #include "block_decoding.hpp"
+  #include "block_dequant.hpp"
   #include "coding_local.hpp"
   #include "utils.hpp"
   #include <wasm_simd128.h>
@@ -735,7 +736,7 @@ static inline void rev_dequant_wasm_impl(const j2k_codeblock *cb, uint8_t ROIshi
       int32_t sign = *val & INT32_MIN;
       *val &= INT32_MAX;
       if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-        *val <<= ROIshift;
+        *val = roi_upshift(*val, ROIshift);
       }
       *val >>= pLSB;
       if (sign) {
@@ -822,7 +823,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       // ROI path: integer approximation avoids int32 overflow when ROI shift inflates magnitude
       constexpr int32_t downshift = 15;
       float fscale                = fscale_direct * (float)(1 << 16) * (float)(1 << downshift);
-      const auto scale            = static_cast<int32_t>(fscale + 0.5f);
+      const int32_t scale         = roi_scale_to_i32(fscale + 0.5f);
 
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
@@ -864,11 +865,11 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
           int32_t sign = *val & INT32_MIN;
           *val &= INT32_MAX;
           if (((uint32_t)*val & ~mask) == 0) {
-            *val <<= ROIshift;
+            *val = roi_upshift(*val, ROIshift);
           }
-          *val = (*val + (1 << 15)) >> 16;
-          *val *= scale;
-          *val = static_cast<int32_t>((*val + (1 << (downshift - 1))) >> downshift);
+          *val = wrap_add(*val, 1 << 15) >> 16;
+          *val = wrap_mul(*val, scale);
+          *val = wrap_add(*val, 1 << (downshift - 1)) >> downshift;
           if (sign) {
             *val = -(*val & INT32_MAX);
           }
@@ -1026,7 +1027,10 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       block->dequantize(ROIshift);
     }
 
-  }  // end
+  } else {
+    // Only placeholder passes: every sample is zero, and dequantize does not run.
+    zero_codeblock_band(block);
+  }
 
   return true;
 }

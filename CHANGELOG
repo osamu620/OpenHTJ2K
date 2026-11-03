@@ -239,6 +239,47 @@
 - Decoding no longer reads one precinct past the end of a resolution when a
   packet's precinct index equals the resolution's precinct count.
 - After `init()` fails, `parse()` no longer reads the previous input.
+- Codestreams with 31 or 32 DWT levels, the most the standard allows, wrote
+  past the end of arrays on the stack while the decoder set up the resolution
+  levels, and with 32 levels the sizes of the lowest resolution and its
+  subbands came from a 32-bit shift by 32, which is undefined: a valid
+  32-level file decoded to a wrong image. Both now decode correctly.
+  Reducing by all 32 levels is not supported: `get_max_safe_reduce_NL()`
+  returns at most 31.
+- An HT code-block whose coding passes are all placeholder passes decodes to
+  zeros, but nothing wrote them: its samples kept whatever the decoder's
+  reused buffer held before, so the decoded image could change from run to
+  run. They are now zeroed.
+- A tiled codestream that ends before some of its tiles, such as a truncated
+  download, crashed the decoder. The missing tiles now decode as tiles
+  without coded data (mid-grey for unsigned samples), with a warning for
+  each, as the decoder already did for packets missing from a tile that is
+  cut short. A tile with more than 255 tile-parts crashed too (the count
+  wrapped to 0) and now decodes; a tile whose tile-parts do not include the
+  first one (TPsot 0), which holds the tile header, crashed and is now
+  rejected.
+- Malformed codestreams that reached undefined behaviour (out-of-range
+  shifts and integer overflows, which gave wrong output or crashed) are now
+  rejected with an error:
+  - quantization parameters that give a subband more than 30 magnitude
+    bit-planes, the most the decoder supports, or, with derived
+    quantization, a negative exponent;
+  - a Part 1 code-block with more missing bit-planes than its subband has,
+    or with more coding passes than fit below them;
+  - a code-block segment length signalled in more than 32 bits.
+- Decoding no longer reaches undefined behaviour on a quantization step too
+  large for the integer step of the ROI dequantization (it saturates), on
+  corrupt MQ-coded data (the code register is now unsigned), or on image
+  rows at negative coordinates, which a malformed image size produced and
+  which the streaming DWT used to place outside its row buffer. The scalar
+  code of the ROI dequantization and of the reversible 5/3 inverse lifting
+  now computes in wrapping 32-bit arithmetic, as their SIMD code already
+  did, instead of overflowing on out-of-range values from a malformed
+  codestream; the ROI upshift of a background sample is an unsigned shift.
+- When building a tile's resolution levels failed part-way, they were freed
+  while thread-pool tasks could still be setting up their precincts. The
+  decoder now waits for those tasks first.
+- Valid codestreams with fewer than 31 DWT levels decode exactly as before.
 
 ### Tools
 - `open_htj2k_enc` wrote a JPH file, not a bare codestream, for an output

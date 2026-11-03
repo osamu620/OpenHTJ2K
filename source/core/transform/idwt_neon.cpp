@@ -718,7 +718,7 @@ void idwt_1d_filtr_rev53_i32_neon(int32_t *X, const int32_t left, const int32_t 
                                  vshrq_n_s32(vaddq_s32(vaddq_s32(Ojm1, xb.val[1]), vtwo), 2));
     // S1[j+4] from raw memory (those positions are not yet written this pass)
     const int32_t o3 = vgetq_lane_s32(xb.val[1], 3);            // raw O[j+3]
-    const int32_t s1_next = B[2 * (j + 4)] - ((o3 + B[2 * (j + 4) + 1] + 2) >> 2);
+    const int32_t s1_next = rev53_undo_update(B[2 * (j + 4)], o3, B[2 * (j + 4) + 1]);
     int32x4_t S1n    = vextq_s32(S1b, vdupq_n_s32(s1_next), 1);  // S1[j+1..j+4]
     int32x4x2_t out;
     out.val[0] = S1b;
@@ -731,11 +731,11 @@ void idwt_1d_filtr_rev53_i32_neon(int32_t *X, const int32_t left, const int32_t 
     int32_t o_prev = o_carry;
     for (int32_t t = j; t <= N; ++t) {
       const int32_t o = B[2 * t + 1];
-      B[2 * t] -= (o_prev + o + 2) >> 2;
+      B[2 * t]        = rev53_undo_update(B[2 * t], o_prev, o);
       o_prev = o;
     }
     for (int32_t t = j; t < N; ++t) {
-      B[2 * t + 1] += (B[2 * t] + B[2 * t + 2]) >> 1;
+      B[2 * t + 1] = rev53_undo_predict(B[2 * t + 1], B[2 * t], B[2 * t + 2]);
     }
   }
 }
@@ -930,7 +930,7 @@ void idwt_1d_filtr_rev53_planar_i32_neon(int32_t *out, const int32_t *lp, const 
     int32x4_t S1b  = vsubq_s32(vld1q_s32(lp + j),
                                vshrq_n_s32(vaddq_s32(vaddq_s32(Ojm1, Ob), vtwo), 2));
     const int32_t o3      = vgetq_lane_s32(Ob, 3);  // raw O[j+3]
-    const int32_t s1_next = lp[j + 4] - ((o3 + hp[j + 4] + 2) >> 2);
+    const int32_t s1_next = rev53_undo_update(lp[j + 4], o3, hp[j + 4]);
     int32x4_t S1n         = vextq_s32(S1b, vdupq_n_s32(s1_next), 1);  // S1[j+1..j+4]
     int32x4x2_t o;
     o.val[0] = S1b;
@@ -944,11 +944,11 @@ void idwt_1d_filtr_rev53_planar_i32_neon(int32_t *out, const int32_t *lp, const 
     int32_t o_prev = o_carry;
     for (int32_t t = j; t <= N; ++t) {
       const int32_t o = O(t);
-      s1t[t - j]      = E(t) - ((o_prev + o + 2) >> 2);
+      s1t[t - j]      = rev53_undo_update(E(t), o_prev, o);
       o_prev          = o;
     }
     for (int32_t t = j; t <= N; ++t) out[2 * t] = s1t[t - j];
-    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = O(t) + ((s1t[t - j] + s1t[t - j + 1]) >> 1);
+    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = rev53_undo_predict(O(t), s1t[t - j], s1t[t - j + 1]);
   }
 }
 
@@ -970,7 +970,7 @@ void idwt_rev_ver_lp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t
     t = vsubq_s32(t, vshrq_n_s32(vaddq_s32(vaddq_s32(a, b), vtwo), 2));
     vst1q_s32(tgt + i, t);
   }
-  for (; i < n; ++i) tgt[i] -= (prev[i] + next[i] + 2) >> 2;
+  for (; i < n; ++i) tgt[i] = rev53_undo_update(tgt[i], prev[i], next[i]);
 }
 
 void idwt_rev_ver_hp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
@@ -990,7 +990,7 @@ void idwt_rev_ver_hp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t
     t = vaddq_s32(t, vshrq_n_s32(vaddq_s32(a, b), 1));
     vst1q_s32(tgt + i, t);
   }
-  for (; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
+  for (; i < n; ++i) tgt[i] = rev53_undo_predict(tgt[i], prev[i], next[i]);
 }
 
 }  // namespace open_htj2k

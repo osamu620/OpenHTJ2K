@@ -524,7 +524,7 @@ void idwt_rev_ver_lp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t
     t = wasm_i32x4_sub(t, wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(a, b), vtwo), 2));
     wasm_v128_store(tgt + i, t);
   }
-  for (; i < n; ++i) tgt[i] -= (prev[i] + next[i] + 2) >> 2;
+  for (; i < n; ++i) tgt[i] = rev53_undo_update(tgt[i], prev[i], next[i]);
 }
 
 void idwt_rev_ver_hp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
@@ -544,7 +544,7 @@ void idwt_rev_ver_hp_step_i32_wasm(int32_t n, const int32_t *prev, const int32_t
     t = wasm_i32x4_add(t, wasm_i32x4_shr(wasm_i32x4_add(a, b), 1));
     wasm_v128_store(tgt + i, t);
   }
-  for (; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
+  for (; i < n; ++i) tgt[i] = rev53_undo_predict(tgt[i], prev[i], next[i]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -759,7 +759,7 @@ void idwt_1d_filtr_rev53_planar_i32_wasm(int32_t *out, const int32_t *lp, const 
                                  wasm_i32x4_shr(wasm_i32x4_add(wasm_i32x4_add(Ojm1, Ob), vtwo), 2));
     // S1[j+4] from raw memory (those positions are not yet written this pass)
     const int32_t o3      = wasm_i32x4_extract_lane(Ob, 3);  // raw O[j+3]
-    const int32_t s1_next = lp[j + 4] - ((o3 + hp[j + 4] + 2) >> 2);
+    const int32_t s1_next = rev53_undo_update(lp[j + 4], o3, hp[j + 4]);
     v128_t S1n            = wasm_i32x4_shuffle(S1b, wasm_i32x4_splat(s1_next), 1, 2, 3, 4);  // S1[j+1..j+4]
     i32x4x2_idwt o;
     o.val[0] = S1b;
@@ -773,11 +773,11 @@ void idwt_1d_filtr_rev53_planar_i32_wasm(int32_t *out, const int32_t *lp, const 
     int32_t o_prev = o_carry;
     for (int32_t t = j; t <= N; ++t) {
       const int32_t o = O(t);
-      s1t[t - j]      = E(t) - ((o_prev + o + 2) >> 2);
+      s1t[t - j]      = rev53_undo_update(E(t), o_prev, o);
       o_prev          = o;
     }
     for (int32_t t = j; t <= N; ++t) out[2 * t] = s1t[t - j];
-    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = O(t) + ((s1t[t - j] + s1t[t - j + 1]) >> 1);
+    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = rev53_undo_predict(O(t), s1t[t - j], s1t[t - j + 1]);
   }
 }
 

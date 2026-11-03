@@ -31,6 +31,7 @@
   #include "dec_CxtVLC_tables.hpp"
   #include "ht_block_decoding.hpp"
   #include "block_decoding.hpp"
+  #include "block_dequant.hpp"
   #include "coding_local.hpp"
   #include "utils.hpp"
 
@@ -698,7 +699,7 @@ static inline void rev_dequant_avx2(const j2k_codeblock *cb, uint8_t ROIshift, i
       int32_t sign = *val & INT32_MIN;
       *val &= INT32_MAX;
       if (ROIshift && (((uint32_t)*val & ~mask) == 0)) {
-        *val <<= ROIshift;
+        *val = roi_upshift(*val, ROIshift);
       }
       *val >>= pLSB;
       if (sign) *val = -(*val & INT32_MAX);
@@ -805,7 +806,7 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
       float fscale                = fscale_direct;
       constexpr int32_t downshift = 15;
       fscale *= static_cast<float>(1 << 16) * static_cast<float>(1 << downshift);
-      const auto scale = static_cast<int32_t>(fscale + 0.5f);
+      const int32_t scale = roi_scale_to_i32(fscale + 0.5f);
       for (size_t i = 0; i < static_cast<size_t>(this->size.y); i++) {
         int32_t *val = this->sample_buf + i * this->blksampl_stride;
         sprec_t *dst = this->band_buf + i * this->band_stride;
@@ -845,10 +846,10 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
         for (; len > 0; --len) {
           int32_t sign = *val & INT32_MIN;
           *val &= INT32_MAX;
-          if (((uint32_t)*val & ~mask) == 0) *val <<= ROIshift;
-          *val = (*val + (1 << 15)) >> 16;
-          *val *= scale;
-          *val = static_cast<int32_t>((*val + (1 << (downshift - 1))) >> downshift);
+          if (((uint32_t)*val & ~mask) == 0) *val = roi_upshift(*val, ROIshift);
+          *val = wrap_add(*val, 1 << 15) >> 16;
+          *val = wrap_mul(*val, scale);
+          *val = wrap_add(*val, 1 << (downshift - 1)) >> downshift;
           if (sign) *val = -(*val & INT32_MAX);
           *dst = static_cast<float>(*val);
           val++;
@@ -1036,7 +1037,11 @@ static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const
 // corrupted Scup) — every setup must be consumed by exactly one decode.
 static bool htj2k_decode_su(j2k_codeblock *block, const ht_dec_setup &su, const uint8_t ROIshift) {
   if (!su.ok) return false;
-  if (su.empty) return true;
+  if (su.empty) {
+    // Only placeholder passes: every sample is zero, and dequantize does not run.
+    zero_codeblock_band(block);
+    return true;
+  }
 
   const uint16_t QW  = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));
   const uint16_t QH  = static_cast<uint16_t>(ceil_int(static_cast<int16_t>(block->size.y), 2));

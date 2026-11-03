@@ -233,7 +233,7 @@ void idwt_1d_filtr_rev53_planar_i32_sse2(int32_t *out, const int32_t *lp, const 
                                        _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(Ojm1, Ob), vtwo), 2));
     // S1[j+4] from the planes (those positions are not lifted yet)
     const int32_t o3      = hp[j + 3];
-    const int32_t s1_next = lp[j + 4] - ((o3 + hp[j + 4] + 2) >> 2);
+    const int32_t s1_next = rev53_undo_update(lp[j + 4], o3, hp[j + 4]);
     const __m128i S1n     = next1(S1b, _mm_set1_epi32(s1_next));  // S1[j+1..j+4]
     store_interleaved(out + 2 * j, S1b, _mm_add_epi32(Ob, _mm_srai_epi32(_mm_add_epi32(S1b, S1n), 1)));
     o_carry = o3;
@@ -244,11 +244,11 @@ void idwt_1d_filtr_rev53_planar_i32_sse2(int32_t *out, const int32_t *lp, const 
     int32_t o_prev = o_carry;
     for (int32_t t = j; t <= N; ++t) {
       const int32_t o = O(t);
-      s1t[t - j]      = E(t) - ((o_prev + o + 2) >> 2);
+      s1t[t - j]      = rev53_undo_update(E(t), o_prev, o);
       o_prev          = o;
     }
     for (int32_t t = j; t <= N; ++t) out[2 * t] = s1t[t - j];
-    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = O(t) + ((s1t[t - j] + s1t[t - j + 1]) >> 1);
+    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = rev53_undo_predict(O(t), s1t[t - j], s1t[t - j + 1]);
   }
 }
 }  // namespace open_htj2k

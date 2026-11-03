@@ -29,9 +29,21 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include "coding_units.hpp"
 
 namespace open_htj2k {
+
+// Writes zeros over the code-block's region of its subband buffer: the reconstruction of
+// a block without coded samples, such as an HT block that holds only placeholder passes.
+// Its samples must not keep whatever the buffer held before.
+inline void zero_codeblock_band(const j2k_codeblock *block) {
+  if (block->band_buf == nullptr) return;
+  for (uint32_t y = 0; y < block->size.y; ++y) {
+    std::memset(block->band_buf + static_cast<size_t>(y) * block->band_stride, 0,
+                sizeof(sprec_t) * block->size.x);
+  }
+}
 
 void j2k_decode(j2k_codeblock *block, uint8_t ROIshift);
 bool htj2k_decode(j2k_codeblock *block, uint8_t ROIshift);

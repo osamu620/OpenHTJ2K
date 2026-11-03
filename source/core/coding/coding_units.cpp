@@ -57,6 +57,20 @@ constexpr uint8_t kMaxCodingPasses = 128;
 // segment length.  A segment length never needs more than 32 bits.
 constexpr uint8_t kMaxLblock = 32;
 
+// A code-block segment length is signalled in Lblock plus a few more bits (B.10.7.1);
+// as a length has at most 32 bits, more come from a malformed packet header (an
+// Lblock grown far past any real length) and would not fit the 32-bit length.
+void check_segment_length_bits(uint32_t bits) {
+  if (bits > 32) {
+    open_htj2k::detail::fail("Code-block segment length of %u bits — malformed packet header.", bits);
+  }
+}
+
+uint32_t read_segment_length(buf_chain *packet_header, uint32_t bits) {
+  check_segment_length_bits(bits);
+  return packet_header->get_N_bits(static_cast<uint8_t>(bits));
+}
+
 // Reported once per tile: parse_packet_header stops at the first code-block
 // whose signalling is missing, and every later call returns before reading.
 void warn_truncated_packet_header() {
@@ -1475,6 +1489,23 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
   if (c->enc_epc->rc != nullptr) rc_measure(c->enc_epc, rc_from);
 }
 
+// ceil(a / 2^n), a coordinate of a resolution n levels down (B-14).  n reaches 32 at
+// the lowest resolution of a 32-level transform, past what a 32-bit shift allows.
+static inline uint32_t ceil_div_pow2(uint32_t a, uint32_t n) {
+  if (n >= 32) return (a != 0) ? 1U : 0U;
+  return ceil_int(a, 1U << n);
+}
+
+// ceil((p - o * 2^(nb - 1)) / 2^nb), a coordinate of a subband at level nb >= 1 with
+// orientation offset o (B-15).  As above, nb reaches 32.
+static inline uint32_t subband_coord(uint32_t p, uint8_t nb, uint8_t o) {
+  if (nb >= 32) {
+    return static_cast<uint32_t>((uint64_t{p} + 0xFFFFFFFFu - (uint64_t{o} << 31)) >> 32);
+  }
+  const uint32_t nb_1 = (nb > 0) ? nb - 1U : 0U;
+  return ceil_int(p - (1U << nb_1) * o, 1U << nb);
+}
+
 float bibo_step_gains[32][5] = {{1.00000000F, 4.17226868F, 1.44209458F, 2.10966980F, 1.69807026F},
                                 {1.38034954F, 4.58473765F, 1.83866981F, 2.13405021F, 1.63956779F},
                                 {1.33279329F, 4.58985327F, 1.75793599F, 2.07403081F, 1.60751898F},
@@ -1516,6 +1547,10 @@ static void find_child_ranges(float *child_ranges, uint8_t &normalizing_upshift,
   }
   const float low_gain  = 1.0f / K;
   const float high_gain = K / 2.0f;
+  // lev reaches 32 with the maximum of 32 DWT levels, one past the last row of
+  // bibo_step_gains.  The gains only feed bibo_max, which nothing uses (see the disabled
+  // normalization below), so any row of the table will do.
+  lev = std::min(lev, static_cast<uint8_t>(31));
 
   // initialization
   const bool unit_width  = (u0 == u1 - 1);
@@ -2164,7 +2199,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             bits_to_read++;
             pass_bound += pass_bound;
           }
-          segment_bytes = packet_header->get_N_bits(bits_to_read);
+          segment_bytes = read_segment_length(packet_header, bits_to_read);
           if (segment_bytes) {
             if (block->Cmodes & HT_MIXED) {
               block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT));
@@ -2177,7 +2212,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             bits_to_read++;
             pass_bound += pass_bound;
           }
-          segment_bytes = packet_header->get_N_bits(bits_to_read);
+          segment_bytes = read_segment_length(packet_header, bits_to_read);
           if (segment_bytes) {
             // No more placeholder passes
             if (!(block->Cmodes & HT_MIXED)) {
@@ -2202,6 +2237,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                 segment_bytes <<= 1;
                 segment_bytes += packet_header->get_bit();
               }
+              check_segment_length_bits(bits_to_read);
             }
           } else {
             // Probably parsing placeholder passes, but we need to read an
@@ -2220,6 +2256,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
                   break;
                 }
               }
+              check_segment_length_bits(bits_to_read);
               if (segment_bytes) {
                 if (block->Cmodes & HT_MIXED) {
                   block->Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT));
@@ -2253,16 +2290,16 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           bits_to_read        = static_cast<uint8_t>(segment_passes - 1);
         }
         bits_to_read  = static_cast<uint8_t>(bits_to_read + block->Lblock);
-        segment_bytes = packet_header->get_N_bits(bits_to_read);
+        segment_bytes = read_segment_length(packet_header, bits_to_read);
       } else if (!(block->Cmodes & (RESTART | BYPASS))) {
         // Common case for non-HT code-blocks; we have only one segment
         bits_to_read   = static_cast<uint8_t>(block->Lblock + int_log2(static_cast<uint8_t>(new_passes)));
-        segment_bytes  = packet_header->get_N_bits(bits_to_read);
+        segment_bytes  = read_segment_length(packet_header, bits_to_read);
         segment_passes = new_passes;
       } else if (block->Cmodes & RESTART) {
         // RESTART MODE
         bits_to_read        = static_cast<uint8_t>(block->Lblock);
-        segment_bytes       = packet_header->get_N_bits(bits_to_read);
+        segment_bytes       = read_segment_length(packet_header, bits_to_read);
         segment_passes      = 1;
         next_segment_passes = 1;
       } else {
@@ -2296,7 +2333,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           next_segment_passes = 2;
         }
         bits_to_read  = static_cast<uint8_t>(bits_to_read + block->Lblock);
-        segment_bytes = packet_header->get_N_bits(bits_to_read);
+        segment_bytes = read_segment_length(packet_header, bits_to_read);
       }
 
       // Security fix: Prevent heap buffer overflow in pass_length[128] array
@@ -2341,7 +2378,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           next_segment_passes = static_cast<uint8_t>(3 - next_segment_passes);
           bits_to_read =
               static_cast<uint8_t>(block->Lblock + static_cast<unsigned int>(segment_passes) - 1);
-          segment_bytes = packet_header->get_N_bits(bits_to_read);
+          segment_bytes = read_segment_length(packet_header, bits_to_read);
           new_passes -= static_cast<uint8_t>(segment_passes);
           if (next_segment_passes == 2) {
             // This is a FAST Cleanup pass
@@ -2413,7 +2450,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
             segment_passes = 1;
             bits_to_read   = static_cast<uint8_t>(block->Lblock);
           }
-          segment_bytes = packet_header->get_N_bits(bits_to_read);
+          segment_bytes = read_segment_length(packet_header, bits_to_read);
           new_passes -= static_cast<uint8_t>(segment_passes);
 
           // Security fix: Prevent heap buffer overflow in pass_length[128] array
@@ -2891,10 +2928,6 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
   if (index != 0) {
     nb++;
   }
-  uint8_t nb_1 = 0;
-  if (nb > 0) {
-    nb_1 = static_cast<uint8_t>(nb - 1);
-  }
   uint8_t epsilon_b, R_b = 0, M_b = 0;
   uint16_t mantissa_b = 0;
   float delta, nominal_range;
@@ -2906,12 +2939,12 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
     if (dfs != nullptr && index > 0 && dfs_type != DWT_BIDIR) {
       if (dfs_type == DWT_HORZ) {
         // Split only horizontally: x is halved, y spans full resolution extent.
-        spos0 = element_siz(ceil_int(p0.x - (1U << nb_1) * xob[BAND_HL], 1U << nb), pos0.y);
-        spos1 = element_siz(ceil_int(p1.x - (1U << nb_1) * xob[BAND_HL], 1U << nb), pos1.y);
+        spos0 = element_siz(subband_coord(p0.x, nb, xob[BAND_HL]), pos0.y);
+        spos1 = element_siz(subband_coord(p1.x, nb, xob[BAND_HL]), pos1.y);
       } else {
         // VERT: split only vertically: y is halved, x spans full resolution extent.
-        spos0 = element_siz(pos0.x, ceil_int(p0.y - (1U << nb_1) * yob[BAND_LH], 1U << nb));
-        spos1 = element_siz(pos1.x, ceil_int(p1.y - (1U << nb_1) * yob[BAND_LH], 1U << nb));
+        spos0 = element_siz(pos0.x, subband_coord(p0.y, nb, yob[BAND_LH]));
+        spos1 = element_siz(pos1.x, subband_coord(p1.y, nb, yob[BAND_LH]));
       }
     } else if (b == BAND_LL) {
       // LL0 (index==0): use the resolution's own pos0/pos1.
@@ -2920,10 +2953,8 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
       spos0 = pos0;
       spos1 = pos1;
     } else {
-      spos0 = element_siz(ceil_int(p0.x - (1U << (nb_1)) * xob[b], 1U << nb),
-                          ceil_int(p0.y - (1U << (nb_1)) * yob[b], 1U << nb));
-      spos1 = element_siz(ceil_int(p1.x - (1U << (nb_1)) * xob[b], 1U << nb),
-                          ceil_int(p1.y - (1U << (nb_1)) * yob[b], 1U << nb));
+      spos0 = element_siz(subband_coord(p0.x, nb, xob[b]), subband_coord(p0.y, nb, yob[b]));
+      spos1 = element_siz(subband_coord(p1.x, nb, xob[b]), subband_coord(p1.y, nb, yob[b]));
     }
 
     // nominal range does not have any effect to lossless path
@@ -2942,14 +2973,20 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
     if (transformation == 1) {
       // lossless
       epsilon_b = exponents[qcd_idx];
-      M_b       = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       delta     = 1.0;
     } else {
       // lossy compression (irrev97 or ATK irrev)
       assert(transformation == 0 || transformation >= 2);
       if (qstyle == 1) {
-        // derived
-        epsilon_b  = static_cast<uint8_t>(exponents[0] - NL + nb);
+        // derived (E-5); the exponent of a finer level is smaller and must stay >= 0
+        const int32_t eps = static_cast<int32_t>(exponents[0]) - NL + nb;
+        if (eps < 0) {
+          open_htj2k::detail::fail(
+              "Derived quantization gives a subband of resolution %u the exponent %d — malformed "
+              "QCD/QCC marker.",
+              static_cast<unsigned>(index), static_cast<int>(eps));
+        }
+        epsilon_b  = static_cast<uint8_t>(eps);
         mantissa_b = mantissas[0];
       } else {
         // expounded
@@ -2957,13 +2994,24 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
         epsilon_b  = exponents[qcd_idx];
         mantissa_b = mantissas[qcd_idx];
       }
-      M_b   = static_cast<uint8_t>(epsilon_b + num_guard_bits - 1);
       R_b   = static_cast<uint8_t>(bitdepth + gain_b[b]);
-      delta = (1.0f / (static_cast<float>(1 << epsilon_b)))
+      delta = (1.0f / (static_cast<float>(1U << epsilon_b)))
               * (1.0f + (static_cast<float>(mantissa_b)) / (static_cast<float>(1 << 11)));
       // delta, which is quantization step-size, is scaled by nominal-range of this band
       delta *= nominal_range;
     }
+    // Number of magnitude bit-planes (E-2).  A decoded sample holds them below its sign
+    // bit with at least one bit to spare under the lowest (the reconstruction point), and
+    // the block decoders and dequantization shift by these counts: at most 30 fit.
+    const int32_t num_mag_bitplanes = static_cast<int32_t>(epsilon_b) + num_guard_bits - 1;
+    if (num_mag_bitplanes < 0 || num_mag_bitplanes > 30) {
+      open_htj2k::detail::fail(
+          "A subband of resolution %u has %d magnitude bit-planes (exponent %u, %u guard bits); "
+          "0 to 30 are supported.",
+          static_cast<unsigned>(index), static_cast<int>(num_mag_bitplanes),
+          static_cast<unsigned>(epsilon_b), static_cast<unsigned>(num_guard_bits));
+    }
+    M_b = static_cast<uint8_t>(num_mag_bitplanes);
     new (&raw[i]) j2k_subband(spos0, spos1, b, transformation, R_b, epsilon_b, mantissa_b, M_b, delta,
                               nominal_range, i_samples, line_based);
     sb_guard.commit_one();
@@ -4095,31 +4143,32 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
   // own guards, so if one of them throws the resolution at index r is left
   // in a partially-initialized state and its destructor (run during this
   // function's unwind via the guard) will correctly clean up whatever
-  // sub-resources WERE constructed.  The thread-pool dispatch path below
-  // does NOT wait for in-flight futures on exception — that is a separate
-  // pre-existing concern.
+  // sub-resources WERE constructed.  On an exception the thread-pool dispatch
+  // path below waits for the create_precincts tasks already queued before the
+  // guard frees the resolutions they work on.
   auto *raw = static_cast<j2k_resolution *>(operator new[](sizeof(j2k_resolution) * total_res));
   placement_new_array_guard<j2k_resolution> res_guard(raw);
 
+  // Indexed by resolution 0..NL, NL <= 32; nshift is also read at r + 1 for r = NL.
   float tmp_ranges[4]       = {1.0, 1.0, 1.0, 1.0};
-  float child_ranges[32][4] = {{0}};
+  float child_ranges[33][4] = {{0}};
   float normalization       = 1.0;
   uint8_t normalizing_shift = 0;
   uint8_t nb, r, b;
-  uint8_t nshift[32] = {0};
+  uint8_t nshift[34] = {0};
   uint32_t dx, dy;
   element_siz log2PP, PP, respos0, respos1;
   for (r = static_cast<uint8_t>(NL - reduce_NL); r > 0; --r) {
     if (dfs_info != nullptr) {
-      dx = 1U << dfs_info->hor_depth[NL - r];
-      dy = 1U << dfs_info->ver_depth[NL - r];
+      dx = dfs_info->hor_depth[NL - r];
+      dy = dfs_info->ver_depth[NL - r];
     } else {
-      dx = dy = static_cast<uint32_t>(1 << (NL - r));
+      dx = dy = static_cast<uint32_t>(NL - r);
     }
-    respos0.x          = static_cast<uint32_t>(ceil_int(pos0.x, dx));
-    respos0.y          = static_cast<uint32_t>(ceil_int(pos0.y, dy));
-    respos1.x          = static_cast<uint32_t>(ceil_int(pos1.x, dx));
-    respos1.y          = static_cast<uint32_t>(ceil_int(pos1.y, dy));
+    respos0.x          = ceil_div_pow2(pos0.x, dx);
+    respos0.y          = ceil_div_pow2(pos0.y, dy);
+    respos1.x          = ceil_div_pow2(pos1.x, dx);
+    respos1.y          = ceil_div_pow2(pos1.y, dy);
     nb                 = static_cast<uint8_t>(NL - r + 1);
     const dwt_type dir = (dfs_info != nullptr) ? dfs_info->get_dwt_type(nb) : DWT_BIDIR;
     const float K =
@@ -4143,9 +4192,8 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
   // exist.
   bool strips_fit = (dfs_info == nullptr);
   for (r = 1; r <= NL && strips_fit; ++r) {
-    dy                = static_cast<uint32_t>(1 << (NL - r));
-    const uint32_t y0 = static_cast<uint32_t>(ceil_int(pos0.y, dy));
-    const uint32_t y1 = static_cast<uint32_t>(ceil_int(pos1.y, dy));
+    const uint32_t y0 = ceil_div_pow2(pos0.y, static_cast<uint32_t>(NL - r));
+    const uint32_t y1 = ceil_div_pow2(pos1.y, static_cast<uint32_t>(NL - r));
     log2PP            = get_precinct_size(r);
     // Code-blocks do not cross precincts: their height is at most half a precinct's.
     const uint32_t cb_h =
@@ -4159,18 +4207,28 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
 #ifdef OPENHTJ2K_THREAD
   auto pool = ThreadPool::get();
   std::vector<std::future<int>> results;
+  // Declared after res_guard, so on an exception it runs first: the create_precincts
+  // tasks already queued must finish before the guard frees the resolutions they build.
+  struct wait_for_tasks {
+    std::vector<std::future<int>> &tasks;
+    ~wait_for_tasks() {
+      for (auto &task : tasks) {
+        if (task.valid()) task.wait();
+      }
+    }
+  } drain_on_unwind{results};
 #endif
   for (r = 0; r <= NL; r++) {
     if (dfs_info != nullptr) {
-      dx = 1U << dfs_info->hor_depth[NL - r];
-      dy = 1U << dfs_info->ver_depth[NL - r];
+      dx = dfs_info->hor_depth[NL - r];
+      dy = dfs_info->ver_depth[NL - r];
     } else {
-      dx = dy = static_cast<uint32_t>(1 << (NL - r));
+      dx = dy = static_cast<uint32_t>(NL - r);
     }
-    respos0.x          = static_cast<uint32_t>(ceil_int(pos0.x, dx));
-    respos0.y          = static_cast<uint32_t>(ceil_int(pos0.y, dy));
-    respos1.x          = static_cast<uint32_t>(ceil_int(pos1.x, dx));
-    respos1.y          = static_cast<uint32_t>(ceil_int(pos1.y, dy));
+    respos0.x          = ceil_div_pow2(pos0.x, dx);
+    respos0.y          = ceil_div_pow2(pos0.y, dy);
+    respos1.x          = ceil_div_pow2(pos1.x, dx);
+    respos1.y          = ceil_div_pow2(pos1.y, dy);
     log2PP             = get_precinct_size(r);
     PP.x               = 1U << log2PP.x;
     PP.y               = 1U << log2PP.y;
@@ -4206,12 +4264,13 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
     } else {
       raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
     }
-  }
-  for (auto &result : results) {
-    (void)result.get();
-  }
 #else
     raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+#endif
+  }
+#ifdef OPENHTJ2K_THREAD
+  for (auto &result : results) {
+    (void)result.get();
   }
 #endif
   res_guard.release();
@@ -4421,55 +4480,58 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
 
   uint8_t tile_part_index = tmpSOT.get_tile_part_index();
   if (tile_part_index == 0) {
-    // this->set_index(tmpSOT->get_tile_index(), main_header);
-    element_siz numTiles;
-    element_siz Siz, Osiz, Tsiz, TOsiz;
-    main_header.get_number_of_tiles(numTiles.x, numTiles.y);
-    uint16_t p = static_cast<uint16_t>(this->index % numTiles.x);
-    uint16_t q = static_cast<uint16_t>(this->index / numTiles.x);
-    main_header.SIZ->get_image_size(Siz);
-    main_header.SIZ->get_image_origin(Osiz);
-    main_header.SIZ->get_tile_size(Tsiz);
-    main_header.SIZ->get_tile_origin(TOsiz);
+    init_from_first_tile_part(main_header, tphdr);
+  }
+}
 
-    this->pos0.x = std::max(TOsiz.x + p * Tsiz.x, Osiz.x);
-    this->pos0.y = std::max(TOsiz.y + q * Tsiz.y, Osiz.y);
-    this->pos1.x = std::min(TOsiz.x + (p + 1U) * Tsiz.x, Siz.x);
-    this->pos1.y = std::min(TOsiz.y + (q + 1U) * Tsiz.y, Siz.y);
+void j2k_tile::init_from_first_tile_part(j2k_main_header &main_header, j2k_tilepart_header *tphdr) {
+  element_siz numTiles;
+  element_siz Siz, Osiz, Tsiz, TOsiz;
+  main_header.get_number_of_tiles(numTiles.x, numTiles.y);
+  uint16_t p = static_cast<uint16_t>(this->index % numTiles.x);
+  uint16_t q = static_cast<uint16_t>(this->index / numTiles.x);
+  main_header.SIZ->get_image_size(Siz);
+  main_header.SIZ->get_image_origin(Osiz);
+  main_header.SIZ->get_tile_size(Tsiz);
+  main_header.SIZ->get_tile_origin(TOsiz);
 
-    // set coding style related properties from tile-part header
-    if (tphdr->COD != nullptr) {
-      setCODparams(tphdr->COD.get());
-    }
-    // set quantization style related properties from tile-part header
-    if (tphdr->QCD != nullptr) {
-      setQCDparams(tphdr->QCD.get());
-    }
+  this->pos0.x = std::max(TOsiz.x + p * Tsiz.x, Osiz.x);
+  this->pos0.y = std::max(TOsiz.y + q * Tsiz.y, Osiz.y);
+  this->pos1.x = std::min(TOsiz.x + (p + 1U) * Tsiz.x, Siz.x);
+  this->pos1.y = std::min(TOsiz.y + (q + 1U) * Tsiz.y, Siz.y);
 
-    // create tile components — skipped on the single-tile reuse path, where
-    // prepare_for_next_frame() has cleared mutable state but left the
-    // tile_component array (and all of its line_dec / resolution / precinct
-    // / codeblock sub-allocations) alive.  tcomp[c].init() is still called
-    // unconditionally because it only writes scalar fields and vectors that
-    // are idempotent under identical main-header bytes.
-    if (!structure_built_) {
-      this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
-    }
-    for (uint16_t c = 0; c < num_components; c++) {
-      this->tcomp[c].init(&main_header, tphdr, this, c);
-    }
+  // set coding style related properties from tile-part header
+  if (tphdr->COD != nullptr) {
+    setCODparams(tphdr->COD.get());
+  }
+  // set quantization style related properties from tile-part header
+  if (tphdr->QCD != nullptr) {
+    setQCDparams(tphdr->QCD.get());
+  }
 
-    // apply POC, if any
-    if (tphdr->POC != nullptr) {
-      for (unsigned long i = 0; i < tphdr->POC->nPOC; ++i) {
-        porder_info.add(tphdr->POC->RSpoc[i], tphdr->POC->CSpoc[i], tphdr->POC->LYEpoc[i],
-                        tphdr->POC->REpoc[i], tphdr->POC->CEpoc[i], tphdr->POC->Ppoc[i]);
-      }
-    } else if (main_header.POC != nullptr) {
-      for (unsigned long i = 0; i < main_header.POC->nPOC; ++i) {
-        porder_info.add(main_header.POC->RSpoc[i], main_header.POC->CSpoc[i], main_header.POC->LYEpoc[i],
-                        main_header.POC->REpoc[i], main_header.POC->CEpoc[i], main_header.POC->Ppoc[i]);
-      }
+  // create tile components — skipped on the single-tile reuse path, where
+  // prepare_for_next_frame() has cleared mutable state but left the
+  // tile_component array (and all of its line_dec / resolution / precinct
+  // / codeblock sub-allocations) alive.  tcomp[c].init() is still called
+  // unconditionally because it only writes scalar fields and vectors that
+  // are idempotent under identical main-header bytes.
+  if (!structure_built_) {
+    this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
+  }
+  for (uint16_t c = 0; c < num_components; c++) {
+    this->tcomp[c].init(&main_header, tphdr, this, c);
+  }
+
+  // apply POC, if any
+  if (tphdr->POC != nullptr) {
+    for (unsigned long i = 0; i < tphdr->POC->nPOC; ++i) {
+      porder_info.add(tphdr->POC->RSpoc[i], tphdr->POC->CSpoc[i], tphdr->POC->LYEpoc[i],
+                      tphdr->POC->REpoc[i], tphdr->POC->CEpoc[i], tphdr->POC->Ppoc[i]);
+    }
+  } else if (main_header.POC != nullptr) {
+    for (unsigned long i = 0; i < main_header.POC->nPOC; ++i) {
+      porder_info.add(main_header.POC->RSpoc[i], main_header.POC->CSpoc[i], main_header.POC->LYEpoc[i],
+                      main_header.POC->REpoc[i], main_header.POC->CEpoc[i], main_header.POC->Ppoc[i]);
     }
   }
 }
@@ -4498,6 +4560,21 @@ static uint64_t count_tile_component_precincts(j2k_tile_component &tc) {
 }
 
 void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
+  // First of all: the rest of this function needs the tile set up.
+  if (num_tile_part == 0) {
+    // No tile-part at all: the codestream ends before this tile, as a truncated
+    // download does.  Like the packets missing from a tile cut short, the missing
+    // tile decodes as one without coded data, set up from the main header alone.
+    open_htj2k::detail::warn("codestream has no data for tile %u — decoding it as empty.",
+                             static_cast<unsigned>(this->index));
+    j2k_tilepart_header main_only(num_components);
+    init_from_first_tile_part(main_header, &main_only);
+  } else if (this->tcomp == nullptr) {
+    // The first tile-part (TPsot 0), which carries the tile header, never arrived.
+    open_htj2k::detail::fail("Tile %u has tile-parts but not its first (TPsot 0) — malformed codestream.",
+                             static_cast<unsigned>(this->index));
+  }
+
   // The inverse colour transform (Annex G) combines the first three components sample by
   // sample, and the decoders size it, and pick its rows, by component 0: the three must
   // share their subsampling factors, as ISO/IEC 15444-1 requires.
@@ -4531,12 +4608,14 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   }
 
   // Concatenate tile-parts into a tile.  On the reuse path, reset the
-  // existing buf_chain instead of heap-allocating a new one.
-  uint8_t t = 0;
+  // existing buf_chain instead of heap-allocating a new one.  A tile without
+  // tile-parts gets one empty node, from which every read is past the end.
+  const uint32_t num_nodes = std::max(num_tile_part, 1U);
+  uint32_t t               = 0;
   if (structure_built_ && tile_buf) {
-    tile_buf->reset(num_tile_part);
+    tile_buf->reset(num_nodes);
   } else {
-    this->tile_buf = MAKE_UNIQUE<buf_chain>(num_tile_part);
+    this->tile_buf = MAKE_UNIQUE<buf_chain>(num_nodes);
   }
   for (unsigned long i = 0; i < num_tile_part; i++) {
     // If a length of a tile-part is 0, buf number 't' should not be
@@ -4548,7 +4627,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   }
   this->tile_buf->activate();
   // If PPT exits, create PPT buf chain
-  if (!this->tile_part[0]->header->PPT.empty()) {
+  if (num_tile_part != 0 && !this->tile_part[0]->header->PPT.empty()) {
     ppt_header = MAKE_UNIQUE<buf_chain>();
     for (unsigned long i = 0; i < num_tile_part; i++) {
       for (auto &ppt : this->tile_part[i]->header->PPT) {

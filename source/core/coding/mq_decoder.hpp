@@ -42,9 +42,13 @@ class mq_decoder {
   int32_t A;  // was uint16_t
   int32_t t;  // was uint8_t
   // Lower-bound interval
-  int32_t C;  // was uint32_t
 #if defined(CDP)
+  int32_t C;  // the CDP implementation relies on its sign
   int32_t D;  // only for CDP implementation
+#else
+  // Unsigned: a valid codeword keeps C below A (< 2^24), but the bytes of a corrupt one
+  // can push it past 2^31 as the renormalization shifts it up, which int32_t cannot hold.
+  uint32_t C;
 #endif
   // Temporary byte register
   int32_t T;  // was uint8_t
@@ -124,7 +128,7 @@ inline void mq_decoder::fill_LSBs() {
     }
     T = byte_buffer[L];
     L++;
-    C += T << (8 - t);
+    C += static_cast<uint32_t>(T) << (8 - t);
   }
 }
 
@@ -147,8 +151,8 @@ inline uint8_t mq_decoder::decode(uint8_t label) {
 
   x = sk;  // set to MPS for now, since this is most likely
   A = A - p_shifted;
-  if (C >= p_shifted) {  // identical to C_active >= p_bar (upper sub-interval selected),
-    C -= p_shifted;      // identical to C_active -= p_bar, C_active is equal to (C & 0xFFFF00)
+  if (C >= static_cast<uint32_t>(p_shifted)) {  // C_active >= p_bar: upper sub-interval selected
+    C -= static_cast<uint32_t>(p_shifted);      // C_active -= p_bar (C_active is C & 0xFFFF00)
     if (A < Areg_min) {  // need renormalization and perhaps conditional exchange
       int32_t is_lps = (A < p_shifted) ? 1 : 0;
       x              = sk ^ is_lps;
