@@ -579,12 +579,21 @@
   decoded with the magnitude clamped (with a warning, as before), which
   removes a shift past 31 bits in the scalar reader and makes the SSE2 and
   scalar readers agree. Valid codestreams decode exactly as before.
+- `invoke_line_based_direct()` wrote `descs[c].width` samples of each row even
+  where the component has fewer, reading past the end of the row. It now
+  writes at most the component's width (documented in `decoder.hpp`).
 
 ### Tools
 - `open_htj2k_dec` guessed each component's vertical subsampling factor from
   the ratio of the component heights to pick the rows it wrote, which is
   wrong for some factors and origins (see Decoder). It now writes each
   component row as the decoder's row map gives it.
+- `open_htj2k_rtp_recv` gave component 2 the plane size of component 1 in the
+  direct-to-planar decode (and, in the GPU upload path, its own size against
+  planes of component 1's): a stream whose components 1 and 2 differ in size
+  wrote past a plane or read past a row. Each component now writes what fits
+  both. The WASM decoder's interleaved streaming output kept the DC offsets of
+  at most 16 components on the stack and wrote past them for more.
 - `open_htj2k_dec` exited with status 0 when decoding failed: it printed the
   error and carried on. It now exits with a non-zero status.
 - `open_htj2k_enc` wrote a JPH file, not a bare codestream, for an output

@@ -7020,15 +7020,22 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
   // at the first output row it covers.
   if (NC >= 3 && MCT != 0) {
     std::vector<uint32_t> next(nc, 0);  // next row of each plane
+    std::vector<uint32_t> cw(nc, 0);    // samples in a row of each component
+    for (uint16_t c = 0; c < nc && c < NC; ++c) {
+      const uint8_t r_c  = static_cast<uint8_t>(tcomp[c].get_dwt_levels() - reduce_NL_val);
+      j2k_resolution *cr = tcomp[c].access_resolution(r_c);
+      cw[c]              = cr->get_pos1().x - cr->get_pos0().x;
+    }
     decode_line_based_stream(hdr, reduce_NL_val, [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
       for (uint16_t c = 0; c < nc_cb && c < nc; ++c) {
         const open_htj2k::PlanarOutputDesc &d = descs[c];
         const uint32_t cy                     = map.row(c, y);
         if (cy == UINT32_MAX || cy < next[c] || cy >= d.height) continue;
-        next[c] = cy + 1;
+        next[c]          = cy + 1;
+        const uint32_t w = std::min(d.width, cw[c]);  // a wider plane gets the component's samples
         if (d.is_16bit) {
           auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
-          for (uint32_t x = 0; x < d.width; ++x) {
+          for (uint32_t x = 0; x < w; ++x) {
             int32_t v = rows[c][x];
             if (v < d.minval) v = d.minval;
             if (v > d.maxval) v = d.maxval;
@@ -7037,7 +7044,7 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
         } else {
           auto *dst        = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
           const int32_t ds = d.depth_shift;
-          for (uint32_t x = 0; x < d.width; ++x) {
+          for (uint32_t x = 0; x < w; ++x) {
             int32_t v = rows[c][x];
             if (v < d.minval) v = d.minval;
             if (v > d.maxval) v = d.maxval;
@@ -7183,14 +7190,14 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
         const open_htj2k::PlanarOutputDesc &d = descs[c];
         if (j >= d.height) continue;
         const sprec_t *spf = strip_ptrs[c] + static_cast<size_t>(j - base[c]) * ci[c].csize_x;
+        const uint32_t w   = std::min(d.width, ci[c].csize_x);  // a wider plane gets the row's samples
 
         if (d.is_16bit) {
           auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(j) * d.stride;
-          open_htj2k::finalize_f32_to_u16(spf, dst, d.width, ci[c].scale, d.dc, d.maxval, d.minval);
+          open_htj2k::finalize_f32_to_u16(spf, dst, w, ci[c].scale, d.dc, d.maxval, d.minval);
         } else {
           auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(j) * d.stride;
-          open_htj2k::finalize_f32_to_u8(spf, dst, d.width, ci[c].scale, d.dc, d.maxval, d.minval,
-                                         d.depth_shift);
+          open_htj2k::finalize_f32_to_u8(spf, dst, w, ci[c].scale, d.dc, d.maxval, d.minval, d.depth_shift);
         }
       }
     }

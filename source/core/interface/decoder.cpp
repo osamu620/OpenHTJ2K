@@ -1147,10 +1147,11 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
             const PlanarOutputDesc &d = descs[c];
             const uint32_t cy         = stream_map_.row(c, y);
             if (cy == UINT32_MAX || cy < next[c] || cy >= d.height) continue;
-            next[c] = cy + 1;
+            next[c]          = cy + 1;
+            const uint32_t w = std::min(d.width, width[c]);  // a wider plane gets the component's samples
             if (d.is_16bit) {
               auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
-              for (uint32_t x = 0; x < d.width; ++x) {
+              for (uint32_t x = 0; x < w; ++x) {
                 int32_t v = rows[c][x];
                 if (v < d.minval) v = d.minval;
                 if (v > d.maxval) v = d.maxval;
@@ -1158,7 +1159,7 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
               }
             } else {
               auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
-              for (uint32_t x = 0; x < d.width; ++x) {
+              for (uint32_t x = 0; x < w; ++x) {
                 int32_t v = rows[c][x];
                 if (v < d.minval) v = d.minval;
                 if (v > d.maxval) v = d.maxval;

@@ -462,13 +462,18 @@ bool decode_to_planar_buffers_direct(open_htj2k::openhtj2k_decoder& decoder,
   const uint16_t desc_nc = std::min(nc, static_cast<uint16_t>(3));
   open_htj2k::PlanarOutputDesc descs[3] = {};
   for (uint16_t c = 0; c < desc_nc; ++c) {
+    // The planes have component 0's size (Y) and component 1's (Cb, Cr): a component 2
+    // of another size writes only what fits.
+    const uint32_t pw = (c == 0) ? luma_w : chroma_w;
+    const uint32_t ph = (c == 0) ? luma_h : chroma_h;
+
     auto& d     = descs[c];
     const uint8_t  bd    = depths[c];
     const bool     is_s  = signeds[c];
-    d.width      = widths[c];
-    d.height     = heights[c];
-    d.stride     = widths[c];  // planar, no padding
-    d.yr         = (c == 0) ? 1 : (luma_h / heights[c]);
+    d.width      = std::min(widths[c], pw);
+    d.height     = std::min(heights[c], ph);
+    d.stride     = pw;  // planar, no padding
+    d.yr         = 1;   // not used by the decoder
     d.dc         = is_s ? 0 : (1 << (bd - 1));
     d.maxval     = is_s ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
     d.minval     = is_s ? -(1 << (bd - 1)) : 0;
