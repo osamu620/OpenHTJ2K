@@ -589,3 +589,60 @@ add_test(NAME security_dec_cli_exit_code
                  "-DEXPECT=segment length of 37 bits" "-DCRASH=${_SEC_CRASH_RE}"
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exit_failure.cmake)
 set_tests_properties(security_dec_cli_exit_code PROPERTIES TIMEOUT 60)
+
+# Memory sized by header values that the codestream's data does not back.  Each fixture is
+# a valid codestream of about 100 bytes (50 KB for the one with 16384 components) that made
+# the decoder allocate hundreds of megabytes to more than 8 GB.  The decoder now builds a
+# precinct's code-blocks when its first packet that is not empty arrives, keeps no
+# per-layer state for each code-block, sizes its line buffers by the subband, and rejects as
+# not supported what would still take more than its budget (the larger of 256 MiB, 512
+# bytes per codestream byte and 2 bytes per image sample).  The fixtures that must decode
+# are run with the output discarded (an output name without an extension):
+#  - 1024 x 1024, 4 x 4 code-blocks, 65535 layers (8.6 GB of per-layer state);
+#  - 16384 x 16384, 4 x 4 code-blocks, empty precincts (5.7 GB of code-blocks);
+#  - 1048576 x 2, 4 x 1024 code-blocks (line buffers 1024 rows high for 1-row subbands);
+#  - a component without columns and 2^26 rows (a strip list sized by its height).
+function(_sec_decode_discard name input threads)
+  add_test(NAME ${name}
+           COMMAND open_htj2k_dec -i ${SECURITY_DATA_DIR}/${input} -o ${name} -num_threads ${threads})
+  set_tests_properties(${name} PROPERTIES FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}" TIMEOUT 60)
+endfunction()
+foreach(_t 1 4)
+  _sec_decode_discard(security_layers_65535_t${_t} security_layers_65535.j2c ${_t})
+  _sec_decode_discard(security_cblk_state_empty_precincts_t${_t} security_cblk_state_empty_precincts.j2c ${_t})
+  _sec_decode_discard(security_ring_cblk_height_t${_t} security_ring_cblk_height.j2c ${_t})
+  _sec_decode_discard(security_width0_component_t${_t} security_width0_component.j2c ${_t})
+endforeach()
+# Rejected before the memory is allocated: 4096 x 4096 with 4 x 4 code-blocks whose
+# packets are not empty but carry no code-block (320 MB of code-blocks from 112 bytes);
+# 1400 x 1400 with 2 x 2 precincts (660 thousand precincts, 1 GB); 16384 components in 64
+# tiles (the tile-components of every tile, 670 MB).
+_sec_rejects(security_cblk_state_budget security_cblk_state_budget.j2c
+             "the code-blocks of a precinct would take .* not supported" mt)
+_sec_rejects(security_precinct_state_budget security_precinct_state_budget.j2c
+             "its precincts would take .* not supported" mt)
+_sec_rejects(security_tile_components_budget security_tile_components_budget.j2c
+             "its tile-components would take .* not supported" mt)
+
+# A Part 2 DFS marker declaring decomposition levels without a transform (DWT_NO): such a
+# level has no subbands, but its resolution counted 3, and setting up its precincts read
+# them from a null array.  The fixture is the main header of ATK_DFS_REV.j2c with those
+# levels and no packet data; it must decode.
+foreach(_t 1 4)
+  _sec_decode_discard(security_dfs_no_transform_t${_t} security_dfs_no_transform.j2c ${_t})
+endforeach()
+
+# Found by fuzzing the decoder the way image libraries call it:
+#  - 65536 x 16 RGB with the colour transform and 4 x 1024 code-blocks (133 bytes): in a
+#    build whose colour conversion runs on the thread pool (generic x86-64, SSE2), its
+#    colour strip was 1024 rows high whatever the tile height, 860 MB with 4 threads;
+#  - 65280 tiles of 1 x 1 (1322 bytes): every tile's state was kept until the end of the
+#    decode, 1.5 GB;
+#  - 1048576 x 2 RGB (112 bytes): its line buffers would take 516 MB, an eight-row IDWT
+#    ring per level whatever the image height, so it is refused as not supported.
+foreach(_t 1 4)
+  _sec_decode_discard(security_color_strip_short_t${_t} security_color_strip_short.j2c ${_t})
+  _sec_decode_discard(security_many_tiles_65280_t${_t} security_many_tiles_65280.j2c ${_t})
+endforeach()
+_sec_rejects(security_line_buffers_budget security_line_buffers_budget.j2c
+             "its line-decoding buffers would take .* not supported" mt)
