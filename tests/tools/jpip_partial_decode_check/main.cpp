@@ -58,15 +58,20 @@ static int decode(const std::vector<uint8_t> &codestream,
   std::vector<int32_t *>  buf;
   std::vector<uint8_t>    depth;
   std::vector<bool>       is_signed;
+  // invoke_line_based() allocates one plane per component with new[] and hands
+  // it to the caller, also when it throws part-way; free them on every path.
+  struct PlaneOwner {
+    std::vector<int32_t *> &p;
+    ~PlaneOwner() {
+      for (int32_t *q : p) delete[] q;
+    }
+  } owner{buf};
   try {
     dec.invoke_line_based(buf, w, h, depth, is_signed);
   } catch (std::exception &e) {
     std::fprintf(stderr, "ERROR invoke_line_based: %s\n", e.what());
     return -1;
   }
-  // invoke_line_based() writes into caller-owned planes via its int32_t* vector.
-  // buf[c] points into internal storage; copy it out so we can compare
-  // across calls (the next invoke() may overwrite it).
   planes.resize(buf.size());
   for (std::size_t c = 0; c < buf.size(); ++c) {
     planes[c].assign(buf[c], buf[c] + static_cast<std::ptrdiff_t>(w[c]) * h[c]);
