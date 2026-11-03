@@ -290,8 +290,11 @@
   wrapping them around.
 - Reversible coding is lossless for at most 23 bits per sample (22 for the
   components the colour transform widens); deeper samples came back with
-  errors. They are now refused with an exception, as is more than 31 bits,
-  which 32-bit samples cannot hold.
+  errors. They are now refused with an exception. With either transform, so
+  are components of more than 30 bits unsigned or 31 bits signed: the
+  decoder's DC offset and clamp to the sample range cannot hold them (it
+  refuses them as well), and the encoder used to write 31-bit unsigned
+  codestreams.
 - With the progression order PRCL the encoder wrote a CAP marker without
   setting `Rsiz` bit 14 (CAP marker present) or bit 15 (ISO/IEC 15444-2
   capabilities), so other decoders ignored the marker. Both are now set.

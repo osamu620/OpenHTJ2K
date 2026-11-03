@@ -936,6 +936,14 @@ int main(int argc, char *argv[]) {
     k.xf   = 0;
     k.step = 1e300;  // the largest step there is
     edge("base step 1e300", k, 255, false, true);
+    // The deepest samples the decoder holds: 30 bits unsigned, 31 signed (refused above).
+    k      = Spec();
+    k.xf   = 0;
+    k.step = 1e-7;
+    k.ssiz = {29};
+    edge("30-bit unsigned samples, irreversible", k, 1L << 22, false, true);
+    k.ssiz = {0x9E};
+    edge("31-bit signed samples, irreversible", k, 1L << 22, false, true);
     k         = Spec();
     k.xf      = 0;
     k.derived = true;
@@ -969,6 +977,8 @@ int main(int argc, char *argv[]) {
     const Bad bad[] = {
         {"no components", [](Spec &k) { k.ssiz.clear(), k.xr.clear(), k.yr.clear(); }},
         {"32-bit samples", [](Spec &k) { k.ssiz = {31}, k.xf = 0; }},
+        {"31-bit unsigned samples", [](Spec &k) { k.ssiz = {30}, k.xf = 0, k.step = 1e-7; }},
+        {"32-bit signed samples", [](Spec &k) { k.ssiz = {0x9F}, k.xf = 0, k.step = 1e-7; }},
         {"24-bit reversible samples", [](Spec &k) { k.ssiz = {23}; }},
         {"subsampling factor 0", [](Spec &k) { k.ssiz = {7, 7}, k.xr = {1, 0}, k.yr = {1, 1}; }},
         {"empty image", [](Spec &k) { k.w = 0; }},
