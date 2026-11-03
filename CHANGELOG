@@ -170,6 +170,51 @@
   used to be read as a bare codestream, which failed with an unrelated error.
   Contiguous Codestream boxes with LBox = 1 and an XLBox, or with LBox = 0
   (to the end of the file), are read as before.
+- Malformed codestreams that crashed the decoder, hung it, made it read or
+  write out of bounds or made it allocate gigabytes are now rejected with an
+  error message. They were found by fuzzing the decoder the way OpenCV calls
+  it (read the main header, then decode row by row). The decoder now rejects:
+  - an empty input, a codestream that does not begin with an SOC marker, and
+    a main header without a SIZ, COD or QCD marker;
+  - a SIZ marker that breaks the tiling rules of ISO/IEC 15444-1 (A.5.1): a
+    tile size of zero, an image origin outside the image, a tile origin after
+    the image origin or a first tile that ends before the image starts; and a
+    SIZ marker with more than 65535 tiles or a bit depth above 38;
+  - a COD marker shorter than 12 bytes, a COC marker too short for its coding
+    style, and any marker field read past the length of its segment;
+  - a QCD or QCC marker with an undefined quantization style, without a step
+    size, or with fewer step sizes than the decomposition levels of a
+    component need (also when a COC marker gives the component more levels);
+  - an RGN marker with a region-of-interest style other than 0 or a shift
+    above 31;
+  - PPM markers without a complete packet-header record, or with fewer
+    records than tiles;
+  - a tile that declares more packets (layers times precincts) than the
+    codestream has bytes, since every packet takes at least one byte. A
+    908-byte codestream declaring 588 million packets made the decoder
+    allocate 28 GB. Truncated codestreams with up to about a million packets
+    in all are decoded as before;
+  - the colour transform with component 1 or 2 subsampled differently from
+    component 0, which wrote past the rows of the smaller components.
+- Valid codestreams that the decoder cannot represent are rejected as "not
+  supported" instead of crashing: a reference grid wider or taller than
+  2147483647 (sample coordinates are held in 32-bit signed integers), or a
+  tile grid that ends past 4294967295; quantization style 0 (no quantization)
+  with a wavelet transform other than the reversible 5/3; and a
+  region-of-interest shift that, added to the magnitude bit-planes of a
+  component, exceeds the 31 bits of a sample.
+- The row callback of `invoke_line_based_stream()` never gets a row shorter
+  than the width the decoder reports: the decoder checks that every tile lies
+  within the image rows it fills, and with several tile columns a subsampled
+  component without rows in a tile row now gets a row of zeros, not a row
+  read from an empty buffer.
+- A failed memory allocation inside the library throws `std::bad_alloc`; the
+  decoder used to go on with a null buffer. `invoke_line_based()` checks that
+  its output buffers fit in memory before allocating them, and the tile count
+  no longer overflows for tile sizes near 2^32.
+- Decoding no longer reads one precinct past the end of a resolution when a
+  packet's precinct index equals the resolution's precinct count.
+- After `init()` fails, `parse()` no longer reads the previous input.
 
 ### Tools
 - `open_htj2k_enc` wrote a JPH file, not a bare codestream, for an output

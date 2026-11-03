@@ -56,8 +56,11 @@ uint8_t j2k_marker_io_base::get_byte() {
   // field count underflows — e.g. Lmar smaller than the fixed fields, so a
   // `for (i < Lmar - len)` loop wraps to a huge count — would otherwise spin
   // get_byte past the end of the buffer.  get_word()/get_dword() read through
-  // get_byte(), so bounding here bounds every marker read.
-  if (pos >= Lmar) {
+  // get_byte(), so bounding here bounds every marker read.  `buf` starts after
+  // the 2-byte length field that Lmar counts, so the segment body holds Lmar - 2
+  // bytes; a body field read past them (e.g. a 1-byte field in a marker with
+  // Lmar = 2) would otherwise turn a later `Lmar - len` into a wrapped length.
+  if (static_cast<uint32_t>(pos) + 2U >= Lmar) {
     open_htj2k::detail::fail("marker field read past its declared length — malformed input.");
   }
   uint8_t out = buf[pos];
@@ -80,6 +83,43 @@ uint32_t j2k_marker_io_base::get_dword() {
 /********************************************************************************
  * SIZ_marker
  *******************************************************************************/
+
+// Checks one axis of the SIZ reference grid: image extent `siz`, image origin `osiz`,
+// tile size `tsiz` and tile origin `tosiz`.  The first four rules are the constraints of
+// ISO/IEC 15444-1, A.5.1; every later tile, tile-component and resolution computation
+// assumes them (a zero tile size divides by zero, and a tile origin past the image
+// origin, or a first tile ending before the image starts, yields tiles that end before
+// they begin).  The last two are limits of this decoder: sample coordinates are held in
+// int32_t, and the tile grid end, origin + n * size for n tiles, in uint32_t.
+static void validate_siz_geometry(uint32_t siz, uint32_t osiz, uint32_t tsiz, uint32_t tosiz, char axis) {
+  if (tsiz == 0) {
+    open_htj2k::detail::fail("SIZ tile size %cTsiz is zero.", axis);
+  }
+  if (osiz >= siz) {
+    open_htj2k::detail::fail("SIZ image origin %cOsiz=%u is not less than the image extent %csiz=%u.", axis,
+                             osiz, axis, siz);
+  }
+  if (tosiz > osiz) {
+    open_htj2k::detail::fail("SIZ tile origin %cTOsiz=%u lies after the image origin %cOsiz=%u.", axis,
+                             tosiz, axis, osiz);
+  }
+  if (static_cast<uint64_t>(tosiz) + tsiz <= osiz) {
+    open_htj2k::detail::fail(
+        "SIZ first tile (%cTOsiz=%u, %cTsiz=%u) ends before the image origin %cOsiz=%u.", axis, tosiz, axis,
+        tsiz, axis, osiz);
+  }
+  if (siz > static_cast<uint32_t>(INT32_MAX)) {
+    open_htj2k::detail::fail("SIZ image extent %csiz=%u exceeds 2147483647: not supported by this decoder.",
+                             axis, siz);
+  }
+  const uint64_t num_tiles = (static_cast<uint64_t>(siz) - tosiz + tsiz - 1) / tsiz;
+  if (tosiz + num_tiles * tsiz > UINT32_MAX) {
+    open_htj2k::detail::fail(
+        "SIZ tile grid along %c (origin %u, %llu tiles of %u) ends past 4294967295: not supported by this "
+        "decoder.",
+        axis, tosiz, static_cast<unsigned long long>(num_tiles), tsiz);
+  }
+}
 
 SIZ_marker::SIZ_marker(j2c_src_memory &in) : j2k_marker_io_base(_SIZ) {
   Lmar = in.get_word();
@@ -106,8 +146,26 @@ SIZ_marker::SIZ_marker(j2c_src_memory &in) : j2k_marker_io_base(_SIZ) {
     open_htj2k::detail::fail("SIZ marker length %u is too short for %u components.",
                              static_cast<unsigned>(Lmar), static_cast<unsigned>(Csiz));
   }
+  validate_siz_geometry(Xsiz, XOsiz, XTsiz, XTOsiz, 'X');
+  validate_siz_geometry(Ysiz, YOsiz, YTsiz, YTOsiz, 'Y');
+  {
+    // Isot is 16 bits: a codestream has at most 65535 tiles (ISO/IEC 15444-1, A.4.2).
+    const uint64_t tiles_x = (static_cast<uint64_t>(Xsiz) - XTOsiz + XTsiz - 1) / XTsiz;
+    const uint64_t tiles_y = (static_cast<uint64_t>(Ysiz) - YTOsiz + YTsiz - 1) / YTsiz;
+    if (tiles_x * tiles_y > 65535) {
+      open_htj2k::detail::fail("SIZ tiling has %llu x %llu tiles, more than the 65535 allowed.",
+                               static_cast<unsigned long long>(tiles_x),
+                               static_cast<unsigned long long>(tiles_y));
+    }
+  }
   for (unsigned long i = 0; i < Csiz; ++i) {
-    Ssiz.push_back(get_byte());
+    const uint8_t s = get_byte();
+    // The low 7 bits of Ssiz are the bit depth minus one; 1 to 38 bits are allowed
+    // (ISO/IEC 15444-1, Table A.11).
+    if ((s & 0x7F) > 37) {
+      open_htj2k::detail::fail("SIZ bit depth of component %lu exceeds 38 bits.", i);
+    }
+    Ssiz.push_back(s);
     const uint8_t xr = get_byte();
     const uint8_t yr = get_byte();
     // Subsampling factors are used as divisors (e.g. Xsiz / XRsiz); a zero would
@@ -354,6 +412,11 @@ COD_marker::COD_marker(j2c_src_memory &in)
   len++;
   SGcod = get_dword();
   len   = static_cast<uint16_t>(len + 4);
+  // SPcod holds at least the level count, the two code-block size exponents, the
+  // code-block style and the transformation: Lcod >= 12 (ISO/IEC 15444-1, Table A.12).
+  if (Lmar < 12) {
+    open_htj2k::detail::fail("COD marker length %u is less than 12.", static_cast<unsigned>(Lmar));
+  }
   {
     const size_t splen = static_cast<size_t>(Lmar - len);
     if (splen > SPcod.size()) SPcod.resize(splen);
@@ -509,6 +572,13 @@ COC_marker::COC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   }
   Scoc = get_byte();
   len++;
+  // SPcoc holds at least the level count, the two code-block size exponents, the
+  // code-block style and the transformation (ISO/IEC 15444-1, Table A.21); every one of
+  // them is read when the marker is applied to a component.
+  if (Lmar < len + 5U) {
+    open_htj2k::detail::fail("COC marker length %u is less than %u.", static_cast<unsigned>(Lmar),
+                             static_cast<unsigned>(len + 5U));
+  }
 
   for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
     if (i < SPcoc.size()) {
@@ -588,8 +658,19 @@ RGN_marker::RGN_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
     // TODO: generate Length error (Lrgn shall be 5 or 6).
   }
   Srgn = get_byte();
-  assert(Srgn == 0);
-  SPrgn  = get_byte();
+  // Srgn = 0 (implicit, "Maxshift") is the only ROI style of ISO/IEC 15444-1.
+  if (Srgn != 0) {
+    open_htj2k::detail::fail("RGN region-of-interest style %u is not supported.",
+                             static_cast<unsigned>(Srgn));
+  }
+  SPrgn = get_byte();
+  // The decoder holds a code-block sample in 32 bits (sign plus 31 magnitude bits) and
+  // scales background samples up with `<< SPrgn`, a shift that is only defined below 32.
+  // j2k_tile_component::init() further requires SPrgn plus the magnitude bit-planes of
+  // the component to fit the 31 bits.
+  if (SPrgn > 31) {
+    open_htj2k::detail::fail("RGN region-of-interest shift %u exceeds 31.", static_cast<unsigned>(SPrgn));
+  }
   is_set = true;
 }
 
@@ -873,6 +954,26 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
   return SP;
 }
 
+// Checks the quantization style byte (Sqcd / Sqcc) of a QCD or QCC marker and the
+// number of bytes left for its step sizes (ISO/IEC 15444-1, Tables A.28 to A.30): the
+// style is 0 (no quantization, one byte per subband), 1 (scalar derived, one 16-bit value
+// for the LL subband) or 2 (scalar expounded, one 16-bit value per subband).  Any other
+// style leaves the step sizes undefined, and a marker without a single step size, or with
+// half of a 16-bit one, is malformed.  Whether there are enough step sizes for the
+// decomposition levels of a component is checked when the marker is applied to one
+// (j2k_tile_component::init()), because the level count may come from a COC marker.
+static void check_quantization_style(const char *marker, uint8_t style_byte, int body_bytes) {
+  const uint8_t style = style_byte & 0x1F;
+  if (style > 2) {
+    open_htj2k::detail::fail("%s quantization style %u is invalid.", marker, static_cast<unsigned>(style));
+  }
+  const int entry_bytes = (style == 0) ? 1 : 2;
+  if (body_bytes < entry_bytes || body_bytes % entry_bytes != 0) {
+    open_htj2k::detail::fail("%s marker has %d bytes of step sizes, not a whole number of %d-byte entries.",
+                             marker, body_bytes, entry_bytes);
+  }
+}
+
 QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
@@ -880,6 +981,7 @@ QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
   uint16_t len = 2;  // tmp length including Lqcd
   Sqcd         = get_byte();
   len++;
+  check_quantization_style("QCD", Sqcd, Lmar - len);
   if ((Sqcd & 0x1F) == 0) {
     // reversible transform
     const size_t splen = static_cast<size_t>(Lmar - len);
@@ -889,7 +991,6 @@ QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
     }
   } else {
     // irreversible transformation
-    assert((Lmar - len) % 2 == 0);
     const size_t splen = static_cast<size_t>(Lmar - len) / 2U;
     if (splen > SPqcd.size()) SPqcd.resize(splen);
     for (size_t i = 0; i < splen; ++i) {
@@ -1086,6 +1187,7 @@ QCC_marker::QCC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   }
   Sqcc = get_byte();
   len++;
+  check_quantization_style("QCC", Sqcc, Lmar - len);
   if ((Sqcc & 0x1F) == 0) {
     // reversible transform
     for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
@@ -1097,7 +1199,6 @@ QCC_marker::QCC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
     }
   } else {
     // irreversible transformation
-    assert((Lmar - len) % 2 == 0);
     for (size_t i = 0; i < static_cast<size_t>((Lmar - len) / 2); ++i) {
       if (i < SPqcc.size()) {
         SPqcc[i] = get_word();
@@ -1698,9 +1799,16 @@ int j2k_main_header::read(j2c_src_memory &in) {
   // instance (the openhtj2k_decoder::init() + parse() reuse pattern used
   // by rtp_recv and v4 single-tile cache) sees a clean slate rather than
   // the previous frame's entries concatenated to the current frame's.
-  // The unique_ptr markers (SIZ, CAP, COD, QCD, POC, CPF, CRG) are
-  // overwritten below via MAKE_UNIQUE assignment and do not need to be
-  // cleared explicitly.
+  // The single markers are dropped too, so that a codestream lacking one
+  // cannot inherit it from the previous parse.
+  SIZ.reset();
+  CAP.reset();
+  PRF.reset();
+  COD.reset();
+  CPF.reset();
+  QCD.reset();
+  POC.reset();
+  CRG.reset();
   COC.clear();
   TLM.clear();
   PLM.clear();
@@ -1713,8 +1821,21 @@ int j2k_main_header::read(j2c_src_memory &in) {
   ppm_buf.reset();
   ppm_header.reset();
 
+  // Every packet of a complete codestream takes at least one byte (its header is at
+  // least one byte, in the tile-part body or in a PPM/PPT marker), so the codestream
+  // length bounds the number of packets.  j2k_tile::create_tile_buf() charges each
+  // tile's packets against this budget before allocating per-packet state.  The floor
+  // keeps a truncated codestream, which has fewer bytes than packets, decodable in part
+  // as before, while capping what a short input can make the decoder allocate (about
+  // 60 bytes per packet) and iterate over.
+  constexpr uint64_t min_packet_budget = static_cast<uint64_t>(1) << 20;
+  const uint64_t codestream_bytes      = in.get_remaining();
+  packet_budget = (codestream_bytes > min_packet_budget) ? codestream_bytes : min_packet_budget;
+
   uint16_t word = in.get_word();
-  assert(word == _SOC);  // check SOC
+  if (word != _SOC) {
+    open_htj2k::detail::fail("codestream does not begin with an SOC marker (found %04X).", word);
+  }
 
   while ((word = in.get_word()) != _SOT) {
     switch (word) {
@@ -1794,6 +1915,16 @@ int j2k_main_header::read(j2c_src_memory &in) {
         break;
     }
   }
+  // SIZ, COD and QCD are required in the main header (ISO/IEC 15444-1, Table A.2).
+  if (SIZ == nullptr) {
+    open_htj2k::detail::fail("main header has no SIZ marker.");
+  }
+  if (COD == nullptr) {
+    open_htj2k::detail::fail("main header has no COD marker.");
+  }
+  if (QCD == nullptr) {
+    open_htj2k::detail::fail("main header has no QCD marker.");
+  }
   if (!PPM.empty()) {
     uint32_t len = 0;
     for (auto &i : PPM) {
@@ -1826,9 +1957,18 @@ int j2k_main_header::read(j2c_src_memory &in) {
       p += Nppm;
       Nppm = 0;
     }
+    // Each record is a 4-byte Nppm followed by Nppm bytes of packet headers.  There must
+    // be at least one; j2k_tile::create_tile_buf() checks that each tile has one.  Stray
+    // bytes after the last record are ignored, as before.
+    if (ppm_header->get_num_nodes() == 0) {
+      open_htj2k::detail::fail("PPM markers hold no packet-header record.");
+    }
+    if (len != 0) {
+      open_htj2k::detail::warn("PPM markers end with %u bytes that do not form a packet-header record.",
+                               static_cast<unsigned>(len));
+    }
     ppm_header->activate();
   }
-  assert(word == _SOT);
   return EXIT_SUCCESS;
 }
 
@@ -1838,8 +1978,12 @@ void j2k_main_header::get_number_of_tiles(uint32_t &xsize, uint32_t &ysize) cons
   SIZ->get_image_origin(osiz);
   SIZ->get_tile_size(tsiz);
   SIZ->get_tile_origin(tosiz);
-  xsize = ceil_int(imsiz.x - tosiz.x, tsiz.x);
-  ysize = ceil_int(imsiz.y - tosiz.y, tsiz.y);
+  // In 64 bits: with a tile size near 2^32, `extent + tile size - 1` wraps in 32 bits.
+  // Each count fits in 32 bits (a parsed SIZ marker allows at most 65535 tiles).
+  const uint64_t ext_x = static_cast<uint64_t>(imsiz.x) - tosiz.x;
+  const uint64_t ext_y = static_cast<uint64_t>(imsiz.y) - tosiz.y;
+  xsize                = static_cast<uint32_t>(ceil_int(ext_x, static_cast<uint64_t>(tsiz.x)));
+  ysize                = static_cast<uint32_t>(ceil_int(ext_y, static_cast<uint64_t>(tsiz.y)));
 }
 
 const DFS_marker *j2k_main_header::get_dfs_marker(uint8_t dfs_index) const {

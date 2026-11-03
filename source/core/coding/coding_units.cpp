@@ -3008,7 +3008,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
 }
 
 j2k_precinct *j2k_resolution::access_precinct(uint32_t p) {
-  if (p > npw * nph) {
+  if (p >= npw * nph) {
     open_htj2k::detail::fail("attempt to access precinct whose index is out of the valid range.");
   }
   return &this->precincts[p];
@@ -3833,6 +3833,65 @@ void j2k_tile_component::finalize_line_encode() {
   line_enc.reset();
 }
 
+// Most quantization step sizes a component can use: one for the LL subband and three for
+// each of at most 32 decomposition levels (a DFS level uses three or fewer).
+constexpr uint16_t kMaxStepSizes = 3 * 32 + 1;
+
+// Checks the quantization and region-of-interest parameters that apply to tile-component
+// `c` (from QCD/QCC, RGN and, for the level count, COD/COC, in the main and tile-part
+// headers) against what j2k_resolution::create_subbands() and the code-block decoders
+// read, so that a marker which is malformed for this component is rejected instead of
+// being read past its end.
+static void validate_component_quantization(uint16_t c, uint8_t NL, uint8_t transformation, uint8_t qstyle,
+                                            const std::vector<uint8_t> &exponents, uint8_t num_guard_bits,
+                                            uint8_t ROIshift, const DFS_marker *dfs) {
+  // create_subbands() reads entry 0 for the LL subband and, for resolution r > 0, entry
+  // 3 (r - 1) + b for subband b = 1..3, or with DFS qcd_offset[r] + i for the i-th of
+  // the subbands that level has.
+  size_t needed = 1;
+  for (uint8_t r = 1; r <= NL; ++r) {
+    size_t end;
+    if (dfs != nullptr) {
+      const dwt_type dir  = dfs->get_dwt_type(static_cast<uint8_t>(NL - r + 1));
+      const size_t nbands = (dir == DWT_BIDIR) ? 3 : (dir == DWT_NO) ? 0 : 1;
+      end                 = dfs->qcd_offset[r] + nbands;
+    } else {
+      end = 3U * r + 1U;
+    }
+    needed = std::max(needed, end);
+  }
+  // With the derived style an irreversible transform reads only entry 0; a reversible
+  // one reads an exponent per subband whatever the style.
+  if (transformation != 1 && qstyle == 1) needed = 1;
+  if (exponents.size() < needed) {
+    open_htj2k::detail::fail(
+        "component %u needs %zu quantization step sizes for %u decomposition levels, but its QCD/QCC "
+        "marker has %zu.",
+        static_cast<unsigned>(c), needed, static_cast<unsigned>(NL), exponents.size());
+  }
+  // Every transform other than the reversible 5/3 (including an ATK kernel) is
+  // dequantized with a step size, whose mantissa style 0 (no quantization) does not carry.
+  if (transformation != 1 && qstyle == 0) {
+    open_htj2k::detail::fail(
+        "component %u: quantization style 0 (no quantization) with a wavelet transform other than "
+        "the reversible 5/3 is not supported.",
+        static_cast<unsigned>(c));
+  }
+  // A code-block sample holds M_b = exponent + guard bits - 1 magnitude bit-planes (Eq.
+  // E-2) below bit 31; a region-of-interest shift adds ROIshift more, which must fit too.
+  if (ROIshift != 0) {
+    uint8_t max_exponent = 0;
+    for (size_t i = 0; i < needed; ++i) max_exponent = std::max(max_exponent, exponents[i]);
+    const int32_t max_Mb = static_cast<int32_t>(max_exponent) + num_guard_bits - 1;
+    if (max_Mb + ROIshift > 31) {
+      open_htj2k::detail::fail(
+          "component %u: region-of-interest shift %u on top of %d magnitude bit-planes exceeds the 31 "
+          "bits of a sample: not supported.",
+          static_cast<unsigned>(c), static_cast<unsigned>(ROIshift), max_Mb);
+    }
+  }
+}
+
 void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile,
                               uint16_t c, std::vector<int32_t *> img, bool lb_enc) {
   index = c;
@@ -3942,6 +4001,8 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
   if (transformation >= 2) {
     atk_info = hdr->get_atk_marker(transformation);
   }
+  validate_component_quantization(c, NL, transformation, quantization_style, exponents, num_guard_bits,
+                                  ROIshift, dfs_info);
 }
 
 void j2k_tile_component::setCOCparams(COC_marker *COC) {
@@ -3970,9 +4031,10 @@ void j2k_tile_component::setQCCparams(QCC_marker *QCC) {
   exponents.clear();
   mantissas.clear();
   if (quantization_style != 1) {
-    // lossless or lossy expounded
-    const uint8_t max_entries = static_cast<uint8_t>(3 * NL + 1);
-    const uint8_t actual      = std::min(max_entries, QCC->get_num_entries());
+    // lossless or lossy expounded.  Keep every step size the marker carries, up to the
+    // most any component can use; validate_component_quantization() checks that this
+    // component has as many as its decomposition levels need.
+    const uint8_t actual = static_cast<uint8_t>(std::min<uint16_t>(kMaxStepSizes, QCC->get_num_entries()));
     for (uint8_t nb = 0; nb < actual; nb++) {
       exponents.push_back(QCC->get_exponents(nb));
       if (quantization_style == 2) {
@@ -4304,9 +4366,11 @@ void j2k_tile::setQCDparams(QCD_marker *QCD) {
   exponents.clear();
   mantissas.clear();
   if (quantization_style != 1) {
-    // lossless or lossy expounded
-    const uint8_t max_entries = static_cast<uint8_t>(3 * NL + 1);
-    const uint8_t actual      = std::min(max_entries, QCD->get_num_entries());
+    // lossless or lossy expounded.  Keep every step size the marker carries, up to the
+    // most any component can use: a component without a QCC marker takes these, and a
+    // COC marker may give it more decomposition levels than this tile's COD.
+    // validate_component_quantization() checks the count per component.
+    const uint8_t actual = static_cast<uint8_t>(std::min<uint16_t>(kMaxStepSizes, QCD->get_num_entries()));
     for (uint8_t nb = 0; nb < actual; nb++) {
       exponents.push_back(QCD->get_exponents(nb));
       if (quantization_style == 2) {
@@ -4400,7 +4464,46 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
   }
 }
 
+// Precincts of a tile-component over all its resolutions, counted as
+// j2k_tile_component::create_resolutions() lays them out (B-16) without building them.
+static uint64_t count_tile_component_precincts(j2k_tile_component &tc) {
+  const element_siz p0 = tc.get_pos0(), p1 = tc.get_pos1();
+  uint64_t n = 0;
+  for (uint8_t r = 0; r <= tc.NL; ++r) {
+    // log2 of the resolution's downsampling; 64 bits, since it reaches 32
+    const uint32_t lx        = (tc.dfs_info != nullptr) ? tc.dfs_info->hor_depth[tc.NL - r] : tc.NL - r;
+    const uint32_t ly        = (tc.dfs_info != nullptr) ? tc.dfs_info->ver_depth[tc.NL - r] : tc.NL - r;
+    const uint64_t x0        = (static_cast<uint64_t>(p0.x) + (uint64_t{1} << lx) - 1) >> lx;
+    const uint64_t x1        = (static_cast<uint64_t>(p1.x) + (uint64_t{1} << lx) - 1) >> lx;
+    const uint64_t y0        = (static_cast<uint64_t>(p0.y) + (uint64_t{1} << ly) - 1) >> ly;
+    const uint64_t y1        = (static_cast<uint64_t>(p1.y) + (uint64_t{1} << ly) - 1) >> ly;
+    const element_siz log2PP = tc.get_precinct_size(r);
+    const uint64_t PPx       = uint64_t{1} << log2PP.x;
+    const uint64_t PPy       = uint64_t{1} << log2PP.y;
+    const uint64_t npw       = (x1 > x0) ? (x1 + PPx - 1) / PPx - x0 / PPx : 0;
+    const uint64_t nph       = (y1 > y0) ? (y1 + PPy - 1) / PPy - y0 / PPy : 0;
+    n += npw * nph;
+  }
+  return n;
+}
+
 void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
+  // The inverse colour transform (Annex G) combines the first three components sample by
+  // sample, and the decoders size it, and pick its rows, by component 0: the three must
+  // share their subsampling factors, as ISO/IEC 15444-1 requires.
+  if (MCT != 0 && num_components >= 3) {
+    element_siz sub0, sub;
+    main_header.SIZ->get_subsampling_factor(sub0, 0);
+    for (uint16_t c = 1; c < 3; ++c) {
+      main_header.SIZ->get_subsampling_factor(sub, c);
+      if (sub.x != sub0.x || sub.y != sub0.y) {
+        open_htj2k::detail::fail(
+            "tile %u uses the colour transform, but component %u is subsampled differently from "
+            "component 0 — malformed input.",
+            static_cast<unsigned>(this->index), static_cast<unsigned>(c));
+      }
+    }
+  }
   // On the single-tile reuse path, num_packets and porder_info accumulate
   // across calls (see lines that `+=` and `.add`) unless we reset them
   // here.  The packet[] array is allocated below from num_packets, so it
@@ -4445,6 +4548,28 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     ppt_header->activate();
   }
 
+  // Each packet takes at least one byte of the codestream (see j2k_main_header::read()),
+  // so a tile declaring more packets than the codestream has bytes left for is
+  // malformed.  Rejecting it bounds the per-packet state allocated below and the
+  // packet-parsing loop.  The packets are counted once before the resolutions are built,
+  // because building them allocates state per code-block and layer, and once exactly
+  // after, for the allocation.
+  auto check_packet_budget = [&](uint64_t packets) {
+    if (packets > main_header.packet_budget || packets > UINT32_MAX) {
+      open_htj2k::detail::fail(
+          "tile %u declares %llu packets (%u layers), more than the codestream can hold — malformed "
+          "input.",
+          static_cast<unsigned>(this->index), static_cast<unsigned long long>(packets),
+          static_cast<unsigned>(numlayers));
+    }
+  };
+  if (!structure_built_) {
+    uint64_t precincts = 0;
+    for (uint16_t c = 0; c < num_components; c++)
+      precincts += count_tile_component_precincts(this->tcomp[c]);
+    check_packet_budget(precincts * numlayers);
+  }
+
   // determine the location of the packet header
   this->packet_header = nullptr;
   buf_chain *ppp;
@@ -4454,6 +4579,10 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     // TODO: this implementation may not be enough because this does not
     // consider "tile-part". MARK: find beginning of the packet header for a
     // tile!
+    if (this->index >= ppp->get_num_nodes()) {
+      open_htj2k::detail::fail("PPM markers hold %zu packet-header records, none for tile %u.",
+                               ppp->get_num_nodes(), static_cast<unsigned>(this->index));
+    }
     ppp->activate(this->index);
     packet_header = ppp;  // main_header.get_ppm_header();
   } else if (ppt_header != nullptr) {
@@ -4464,7 +4593,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   }
 
   // create resolution levels, subbands, precincts, precinct subbands and codeblocks
-  uint32_t max_res_precincts = 0;
+  uint64_t tile_packets = 0;  // 64 bits: precinct counts times layers can pass 2^32
   uint8_t c_NL;
   uint8_t max_c_NL = 0;
   for (uint16_t c = 0; c < num_components; c++) {
@@ -4482,11 +4611,13 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     j2k_resolution *cr;
     for (uint8_t r = 0; r <= c_NL; r++) {
       cr = this->tcomp[c].access_resolution(r);
-      num_packets += cr->npw * cr->nph;
-      max_res_precincts = std::max(cr->npw * cr->nph, max_res_precincts);
+      tile_packets += static_cast<uint64_t>(cr->npw) * cr->nph;
     }
   }
-  num_packets *= numlayers;
+  tile_packets *= numlayers;
+  check_packet_budget(tile_packets);
+  main_header.packet_budget -= tile_packets;
+  num_packets = static_cast<uint32_t>(tile_packets);
   // TODO: create packets with progression order
   // The packet[] array is a scratch "log of packets seen during parse" used
   // only within create_tile_buf (j2c_packet's decode ctor is the only
@@ -4526,10 +4657,24 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     uint16_t LYE, CS, CE, c, l;
     uint32_t p;
     bool x_cond, y_cond;
-    std::vector<std::vector<std::vector<std::vector<bool>>>> is_packet_read(
-        numlayers, std::vector<std::vector<std::vector<bool>>>(
-                       max_c_NL + 1U, std::vector<std::vector<bool>>(
-                                          num_components, std::vector<bool>(max_res_precincts, false))));
+    // One "read" flag per packet of the tile: packet (l, r, c, p) has flag
+    // l * tile_precincts + prc_base[c * (max_c_NL + 1) + r] + p.  Sized by the packet
+    // count, which the budget check above bounds (a 4-D array with every resolution
+    // of every component sized for the largest one is not).
+    const size_t res_stride = static_cast<size_t>(max_c_NL) + 1U;
+    std::vector<size_t> prc_base(static_cast<size_t>(num_components) * res_stride, 0);
+    size_t tile_precincts = 0;
+    for (uint16_t cc = 0; cc < num_components; cc++) {
+      for (uint8_t rr = 0; rr <= this->tcomp[cc].NL; rr++) {
+        const j2k_resolution *res      = this->tcomp[cc].access_resolution(rr);
+        prc_base[cc * res_stride + rr] = tile_precincts;
+        tile_precincts += static_cast<size_t>(res->npw) * res->nph;
+      }
+    }
+    std::vector<bool> is_packet_read(tile_precincts * numlayers, false);
+    auto packet_read_flag = [&](uint16_t pl, uint8_t pr, uint16_t pc, uint32_t pp) {
+      return is_packet_read[pl * tile_precincts + prc_base[pc * res_stride + pr] + pp];
+    };
     j2k_resolution *cr  = nullptr;
     j2k_precinct *cp    = nullptr;
     size_t packet_count = 0;
@@ -4562,7 +4707,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                   if (!cr->is_empty) {
                     for (p = 0; p < cr->npw * cr->nph; p++) {
                       cp = cr->access_precinct(p);
-                      if (!is_packet_read[l][r][c][p]) {
+                      if (!packet_read_flag(l, r, c, p)) {
                         cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                         this->packet[packet_count++] =
                             j2c_packet(l, r, c, p, packet_header, tile_buf.get());
@@ -4576,7 +4721,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                                              tile_buf->get_total_position() - _pk_off);
                           }
                         }
-                        is_packet_read[l][r][c][p] = true;
+                        packet_read_flag(l, r, c, p) = true;
                       }
                     }
                   }
@@ -4595,7 +4740,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                   if (!cr->is_empty) {
                     for (p = 0; p < cr->npw * cr->nph; p++) {
                       cp = cr->access_precinct(p);
-                      if (!is_packet_read[l][r][c][p]) {
+                      if (!packet_read_flag(l, r, c, p)) {
                         cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                         this->packet[packet_count++] =
                             j2c_packet(l, r, c, p, packet_header, tile_buf.get());
@@ -4609,7 +4754,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                                              tile_buf->get_total_position() - _pk_off);
                           }
                         }
-                        is_packet_read[l][r][c][p] = true;
+                        packet_read_flag(l, r, c, p) = true;
                       }
                     }
                   }
@@ -4660,7 +4805,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                         p  = p_x[c][r] + p_y[c][r] * cr->npw;
                         cp = cr->access_precinct(p);
                         for (l = 0; l < LYE; l++) {
-                          if (!is_packet_read[l][r][c][p]) {
+                          if (!packet_read_flag(l, r, c, p)) {
                             cached_crp_.push_back(
                                 {static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                             this->packet[packet_count++] =
@@ -4676,7 +4821,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                                                  tile_buf->get_total_position() - _pk_off);
                               }
                             }
-                            is_packet_read[l][r][c][p] = true;
+                            packet_read_flag(l, r, c, p) = true;
                           }
                         }
                         p_x[c][r] += 1;
@@ -4732,7 +4877,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
                       cp = cr->access_precinct(p);
                       for (l = 0; l < LYE; l++) {
-                        if (!is_packet_read[l][r][c][p]) {
+                        if (!packet_read_flag(l, r, c, p)) {
                           cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                           this->packet[packet_count++] =
                               j2c_packet(l, r, c, p, packet_header, tile_buf.get());
@@ -4746,7 +4891,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                                                tile_buf->get_total_position() - _pk_off);
                             }
                           }
-                          is_packet_read[l][r][c][p] = true;
+                          packet_read_flag(l, r, c, p) = true;
                         }
                       }
                       p_x[c][r] += 1;
@@ -4801,7 +4946,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
                       cp = cr->access_precinct(p);
                       for (l = 0; l < LYE; l++) {
-                        if (!is_packet_read[l][r][c][p]) {
+                        if (!packet_read_flag(l, r, c, p)) {
                           cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                           this->packet[packet_count++] =
                               j2c_packet(l, r, c, p, packet_header, tile_buf.get());
@@ -4815,7 +4960,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                                                tile_buf->get_total_position() - _pk_off);
                             }
                           }
-                          is_packet_read[l][r][c][p] = true;
+                          packet_read_flag(l, r, c, p) = true;
                         }
                       }
                       p_x[c][r] += 1;
@@ -4874,7 +5019,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                         p  = p_x[c][r] + p_y[c][r] * cr->npw;
                         cp = cr->access_precinct(p);
                         for (l = 0; l < LYE; l++) {
-                          if (!is_packet_read[l][r][c][p]) {
+                          if (!packet_read_flag(l, r, c, p)) {
                             cached_crp_.push_back(
                                 {static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
                             this->packet[packet_count++] =
@@ -4890,7 +5035,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                                                  tile_buf->get_total_position() - _pk_off);
                               }
                             }
-                            is_packet_read[l][r][c][p] = true;
+                            packet_read_flag(l, r, c, p) = true;
                           }
                         }
                         p_x[c][r] += 1;

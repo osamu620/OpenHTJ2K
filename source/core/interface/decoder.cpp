@@ -64,6 +64,14 @@ namespace open_htj2k {
   #define OPENHTJ2K_SINGLE_THREAD_SCOPE(single) (void)(single)
 #endif
 
+// An empty input holds no codestream.  Rejecting it also keeps the memcpy() of the
+// input below from being called with a null source pointer.
+static void require_input(const uint8_t *buf, size_t length) {
+  if (buf == nullptr || length == 0) {
+    open_htj2k::detail::fail("no codestream data: the input is empty.");
+  }
+}
+
 class openhtj2k_decoder_impl {
  private:
 #ifdef OPENHTJ2K_THREAD
@@ -190,11 +198,17 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   }
   file_size = static_cast<uintmax_t>(st.st_size);
 #endif
+  if (file_size == 0) {
+    open_htj2k::detail::fail("%s is empty.", filename);
+  }
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
   // Read the entire file into a temporary buffer for JPH detection.
   FILE *fp = fopen(filename, "rb");
+  if (fp == nullptr) {
+    open_htj2k::detail::fail("%s cannot be opened.", filename);
+  }
   jph_file_buf.resize(static_cast<size_t>(file_size));
   size_t bytes_read = fread(jph_file_buf.data(), sizeof(uint8_t), jph_file_buf.size(), fp);
   fclose(fp);
@@ -225,8 +239,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
                                                uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
   single_thread_ = (num_threads == 1);
-  if (buf == nullptr) {
-  }
+  require_input(buf, length);
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
@@ -250,8 +263,9 @@ void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const
   single_thread_ = (num_threads == 1);
   reduce_NL = r;
   enum_cs   = 0;
-  if (buf == nullptr) {
-  }
+  // Until this input is in place, parse() must not read the previous one.
+  is_codestream_set = false;
+  require_input(buf, length);
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
@@ -274,8 +288,8 @@ void openhtj2k_decoder_impl::init_borrow(uint8_t *buf, const size_t length, cons
   single_thread_ = (num_threads == 1);
   reduce_NL = r;
   enum_cs   = 0;
-  if (buf == nullptr) {
-  }
+  is_codestream_set = false;
+  require_input(buf, length);
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
@@ -441,6 +455,18 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
   main_header.SIZ->get_image_origin(Osiz);
   main_header.SIZ->get_tile_size(Tsiz);
   main_header.SIZ->get_tile_origin(TOsiz);
+  // Check every buffer size before allocating any (see above): width * height can
+  // exceed 32 bits, and on a 32-bit platform the byte count can exceed size_t.
+  for (uint16_t c = 0; c < num_components; c++) {
+    main_header.SIZ->get_subsampling_factor(Rsiz, c);
+    const uint64_t w = reduced_extent(ceil_int(Osiz.x, Rsiz.x), ceil_int(siz.x, Rsiz.x), reduce_NL);
+    const uint64_t h = reduced_extent(ceil_int(Osiz.y, Rsiz.y), ceil_int(siz.y, Rsiz.y), reduce_NL);
+    if (w * h > SIZE_MAX / sizeof(int32_t)) {
+      open_htj2k::detail::fail("component %u has %llu x %llu samples: too many for this platform.",
+                               static_cast<unsigned>(c), static_cast<unsigned long long>(w),
+                               static_cast<unsigned long long>(h));
+    }
+  }
   for (uint16_t c = 0; c < num_components; c++) {
     main_header.SIZ->get_subsampling_factor(Rsiz, c);
     const uint32_t x0 = ceil_int(Osiz.x, Rsiz.x);
@@ -449,7 +475,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     const uint32_t y1 = ceil_int(siz.y, Rsiz.y);
     width.push_back(reduced_extent(x0, x1, reduce_NL));
     height.push_back(reduced_extent(y0, y1, reduce_NL));
-    buf.emplace_back(new int32_t[width[c] * height[c]]);
+    buf.emplace_back(new int32_t[static_cast<size_t>(width[c]) * height[c]]);
     depth.push_back(main_header.SIZ->get_bitdepth(c));
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }
@@ -594,6 +620,16 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
       uint32_t x_off, y_off, t_w, band_h0;
       get_tile_geom(0, ty, 0, x_off, y_off, t_w, band_h0);
+      // The tile's rows go to the callback as image rows, so the tile must span the
+      // image width in every component (the SIZ checks guarantee it for one tile column).
+      for (uint16_t c = 0; c < num_components; ++c) {
+        uint32_t cx, cy, cw, ch;
+        get_tile_geom(0, ty, c, cx, cy, cw, ch);
+        if (cx != 0 || cw != width[c]) {
+          open_htj2k::detail::fail("tile %u spans %u of the %u columns of component %u — malformed input.",
+                                   static_cast<unsigned>(ty), cw, width[c], static_cast<unsigned>(c));
+        }
+      }
       const uint32_t tile_idx = ty;
       try {
         tileSet[tile_idx].line_based_decode = true;
@@ -641,8 +677,10 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
 
     // (Re)allocate full-width accumulator buffers for this tile-row band.
     // assign() reuses existing capacity when the new size fits.
+    // A subsampled component can have no rows in a tile row; keep one zero row so the
+    // row pointers handed to the callback below stay valid.
     for (uint16_t c = 0; c < num_components; ++c)
-      accum[c].assign(static_cast<size_t>(band_h[c]) * width[c], 0);
+      accum[c].assign(static_cast<size_t>(std::max(band_h[c], 1U)) * width[c], 0);
 
     for (uint32_t tx = 0; tx < numTiles.x; ++tx) {
       const uint32_t tile_idx = ty * numTiles.x + tx;
@@ -652,6 +690,14 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         uint32_t x_off, y_off, t_w, t_h;
         for (uint16_t c = 0; c < num_components; ++c) {
           get_tile_geom(tx, ty, c, x_off, y_off, t_w, t_h);
+          // The scatter below copies tile_w samples to column x_off of an image row.
+          if (static_cast<uint64_t>(x_off) + t_w > width[c]) {
+            open_htj2k::detail::fail(
+                "tile %u spans columns %u to %llu of component %u, past the image width %u — malformed "
+                "input.",
+                static_cast<unsigned>(tile_idx), x_off, static_cast<unsigned long long>(x_off) + t_w,
+                static_cast<unsigned>(c), width[c]);
+          }
           tile_x_off[c] = x_off;
           tile_w[c]     = t_w;
         }
@@ -895,7 +941,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     if (main_header.QCD != nullptr) {
       const uint8_t qs = main_header.QCD->get_quantization_style();
       const uint8_t gb = main_header.QCD->get_number_of_guardbits();
-      const uint8_t n0 = main_header.QCD->get_num_entries();
+      const uint16_t n0 = main_header.QCD->get_num_entries();
       mix_u64((static_cast<uint64_t>(qs) << 16) | (static_cast<uint64_t>(gb) << 8)
               | static_cast<uint64_t>(n0));
       if (n0 > 0) {
@@ -1115,7 +1161,7 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     if (main_header.QCD != nullptr) {
       const uint8_t qs = main_header.QCD->get_quantization_style();
       const uint8_t gb = main_header.QCD->get_number_of_guardbits();
-      const uint8_t n0 = main_header.QCD->get_num_entries();
+      const uint16_t n0 = main_header.QCD->get_num_entries();
       mix_u64((static_cast<uint64_t>(qs) << 16) | (static_cast<uint64_t>(gb) << 8)
               | static_cast<uint64_t>(n0));
       if (n0 > 0) {
