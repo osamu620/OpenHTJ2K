@@ -292,6 +292,26 @@
   while thread-pool tasks could still be setting up their precincts. The
   decoder now waits for those tasks first.
 - Valid codestreams with fewer than 31 DWT levels decode exactly as before.
+- Packet headers in PPM markers (ISO/IEC 15444-1, A.7.4) were looked up by
+  tile, but the PPM markers hold one record per tile-part, in the order the
+  tile-parts appear in the codestream. Codestreams with PPM markers and more
+  than one tile-part per tile, or with the tiles in another order, decoded
+  wrongly or failed ("Expected EPH marker", "codeblock layer length ...
+  exceeds ... byte(s) left in tile-part"). Each tile now takes the records of
+  its own tile-parts. A codestream with fewer records than tile-parts is
+  rejected with "PPM markers hold N packet-header records, none for
+  tile-part K" (it named a tile before).
+- With the packet headers in PPM or PPT markers and a tile in several
+  tile-parts, the first packet body of each later tile-part was read as empty,
+  with the warning "codeblock layer length ... exceeds 0 byte(s) left in
+  tile-part", and the tile decoded wrongly. PPT markers were also ignored when
+  the first tile-part of a tile had none, as a tile-part without packets may
+  (A.7.5).
+- PPM and PPT markers are now joined in increasing Zppm and Zppt, the order
+  their index gives, and not in the order they appear in.
+- SOP marker segments are allowed but not required once Scod enables them:
+  each packet may or may not have one (A.8.1). A packet without one failed
+  with "Expected SOP marker".
 
 ### Tools
 - `open_htj2k_dec` exited with status 0 when decoding failed: it printed the

@@ -434,7 +434,7 @@ _sec_rejects(security_rgn_shift_over_bitplanes security_rgn_shift_over_bitplanes
 # read), and with fewer records than tiles (read past the record list).
 _sec_rejects(security_ppm_no_record security_ppm_no_record.jph "PPM markers hold no packet-header record")
 _sec_rejects(security_ppm_missing_tile_record security_ppm_missing_tile_record.jph
-             "PPM markers hold 1 packet-header records, none for tile 1" mt)
+             "PPM markers hold 1 packet-header records, none for tile-part 1" mt)
 
 # SIZ markers breaking the tiling rules of ISO/IEC 15444-1, A.5.1: a zero tile
 # size (division by zero), and tile origins after the image origin, which gave

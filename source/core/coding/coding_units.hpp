@@ -611,6 +611,9 @@ class j2k_tile_part {
  public:
   // pointer to tile-part header
   std::unique_ptr<j2k_tilepart_header> header;
+  // position of this tile-part among all tile-parts of the codestream (0 for the first),
+  // which is also the index of its packet-header record in the PPM markers
+  uint32_t codestream_index = 0;
   explicit j2k_tile_part(uint16_t num_components);
   void set_SOT(SOT_marker &tmpSOT);
   int read(j2c_src_memory &);

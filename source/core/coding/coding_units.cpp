@@ -4494,6 +4494,8 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
   this->num_tile_part++;
   this->current_tile_part_pos++;
   this->tile_part[static_cast<size_t>(current_tile_part_pos)]->set_SOT(tmpSOT);
+  this->tile_part[static_cast<size_t>(current_tile_part_pos)]->codestream_index =
+      main_header.num_tile_parts_read++;
   this->tile_part[static_cast<size_t>(current_tile_part_pos)]->read(in);
   j2k_tilepart_header *tphdr = this->tile_part[static_cast<size_t>(current_tile_part_pos)]->header.get();
 
@@ -4645,15 +4647,39 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     }
   }
   this->tile_buf->activate();
-  // If PPT exits, create PPT buf chain
-  if (num_tile_part != 0 && !this->tile_part[0]->header->PPT.empty()) {
+  // Packet headers moved out of the tile-part bodies (ISO/IEC 15444-1, A.7.4 and A.7.5) are
+  // gathered into ppt_header, in the order of the tile-parts: from the PPM record of each
+  // tile-part (one per tile-part, in codestream order, not one per tile), or from the PPT
+  // markers of each tile-part header in increasing Zppt.  A tile-part may carry no packets
+  // and so no PPT marker, the first one included.
+  ppt_header.reset();
+  buf_chain *ppm = main_header.get_ppm_header();
+  if (ppm != nullptr) {
     ppt_header = MAKE_UNIQUE<buf_chain>();
     for (unsigned long i = 0; i < num_tile_part; i++) {
-      for (auto &ppt : this->tile_part[i]->header->PPT) {
-        ppt_header->add_buf_node(ppt->pptbuf, ppt->pptlen);
+      const uint32_t k = this->tile_part[i]->codestream_index;
+      if (k >= ppm->get_num_nodes()) {
+        open_htj2k::detail::fail("PPM markers hold %zu packet-header records, none for tile-part %u.",
+                                 ppm->get_num_nodes(), static_cast<unsigned>(k));
       }
+      ppt_header->add_buf_node(ppm->get_node_buf(k), ppm->get_node_length(k));
     }
     ppt_header->activate();
+  } else {
+    bool has_ppt = false;
+    for (unsigned long i = 0; i < num_tile_part; i++) has_ppt |= !this->tile_part[i]->header->PPT.empty();
+    if (has_ppt) {
+      ppt_header = MAKE_UNIQUE<buf_chain>();
+      for (unsigned long i = 0; i < num_tile_part; i++) {
+        std::vector<PPT_marker *> ppts;
+        for (auto &ppt : this->tile_part[i]->header->PPT) ppts.push_back(ppt.get());
+        std::stable_sort(ppts.begin(), ppts.end(), [](const PPT_marker *a, const PPT_marker *b) {
+          return a->get_index() < b->get_index();
+        });
+        for (PPT_marker *ppt : ppts) ppt_header->add_buf_node(ppt->pptbuf, ppt->pptlen);
+      }
+      ppt_header->activate();
+    }
   }
 
   // Each packet takes at least one byte of the codestream (see j2k_main_header::read()),
@@ -4679,26 +4705,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   }
 
   // determine the location of the packet header
-  this->packet_header = nullptr;
-  buf_chain *ppp;
-  if (main_header.get_ppm_header() != nullptr) {
-    assert(ppt_header == nullptr);
-    ppp = main_header.get_ppm_header();
-    // TODO: this implementation may not be enough because this does not
-    // consider "tile-part". MARK: find beginning of the packet header for a
-    // tile!
-    if (this->index >= ppp->get_num_nodes()) {
-      open_htj2k::detail::fail("PPM markers hold %zu packet-header records, none for tile %u.",
-                               ppp->get_num_nodes(), static_cast<unsigned>(this->index));
-    }
-    ppp->activate(this->index);
-    packet_header = ppp;  // main_header.get_ppm_header();
-  } else if (ppt_header != nullptr) {
-    assert(main_header.get_ppm_header() == nullptr);
-    packet_header = ppt_header.get();
-  } else {
-    packet_header = this->tile_buf.get();
-  }
+  this->packet_header = (ppt_header != nullptr) ? ppt_header.get() : this->tile_buf.get();
 
   // create resolution levels, subbands, precincts, precinct subbands and codeblocks
   uint64_t tile_packets = 0;  // 64 bits: precinct counts times layers can pass 2^32
@@ -5887,11 +5894,11 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   // On a truncated codestream the reader hands out zero padding, so the
   // delimiters below are absent rather than wrong: reporting them as corrupt
   // markers would turn a partial decode into a hard failure.
-  if (use_SOP && !this->tile_buf->is_past_end()) {
-    uint16_t word = this->tile_buf->get_word();
-    if (word != _SOP) {
-      open_htj2k::detail::fail("Expected SOP marker but %04X is found", word);
-    }
+  // SOP marker segments are allowed, not required: each packet may or may not have one
+  // (ISO/IEC 15444-1, A.8.1).  With the packet headers in PPM or PPT markers, it sits
+  // before the packet body.
+  if (use_SOP && !this->tile_buf->is_past_end() && this->tile_buf->peek_word() == _SOP) {
+    this->tile_buf->get_word();
     Lsop = this->tile_buf->get_word();
     if (Lsop != 4) {
       open_htj2k::detail::fail("illegal Lsop value %d is found", Lsop);
@@ -5926,6 +5933,11 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
       open_htj2k::detail::fail("Expected EPH marker but %04X is found", word);
     }
   }
+
+  // With the packet headers in PPM or PPT markers, the body is the first thing this packet
+  // reads from the tile-part bodies: one that begins the next tile-part starts in the next
+  // node of tile_buf, which the code-block readers below do not move to by themselves.
+  if (this->packet_header != this->tile_buf.get()) this->tile_buf->skip_exhausted_node();
 
   j2k_codeblock *block;
   uint16_t buf_limit = 8192;
