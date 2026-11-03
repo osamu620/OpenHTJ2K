@@ -1070,6 +1070,11 @@ class j2k_tile : public j2k_tile_base {
   // in component 0's rows (enc_img_y0), which the row source counts from.
   std::vector<uint32_t> enc_img_x0;
   uint32_t enc_img_y0 = 0;
+  // Streaming encode: YRsiz of each component over component 0's.  A component takes a row
+  // where component 0's row (counted from the reference grid's top) is a multiple of it.
+  std::vector<uint32_t> enc_row_ratio;
+  // Whether component c has a sample row at component 0's row a0 (reference-grid count).
+  bool enc_takes_row(uint16_t c, uint32_t a0) const { return a0 % enc_row_ratio[c] == 0; }
   // Rate control (EXPERIMENTAL): when enc_rate_control is set before enc_init(), every HT
   // code-block keeps its measurements and coded set in enc_rd, the encode codes them for
   // the threshold estimate in enc_rc (set before the encode), and leaves the packet headers

@@ -49,7 +49,10 @@ namespace open_htj2k {
     #endif
   #endif
 
-  #define MAX_Lcup 16384
+  // The cleanup segment of a code-block: MagSgn bytes followed by the MEL/VLC bytes (Scup at
+  // most 4079).  4096 samples of up to 32 MagSgn bits each, with a stuffed bit in every 16, take
+  // at most 17477 bytes; 16384 overflowed with 30 magnitude bit-planes (tiny step sizes).
+  #define MAX_Lcup (17477 + MAX_Scup + 64)
   #define MAX_Scup 4079
 
 /********************************************************************************

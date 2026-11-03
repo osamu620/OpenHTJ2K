@@ -892,10 +892,22 @@ void synthesis_energies(uint8_t NL, std::vector<double> &gl, std::vector<double>
       for (size_t j = 0; j < L.size(); ++j) out[2 * i + j] += b[i] * L[j];
     return out;
   };
+  // The basis functions double in length every level (gigabytes past 22 levels).  Their
+  // energies grow by sum(L)^2 / 2 per level in the limit, to within 1e-8 from level 14 on, so
+  // deeper levels continue from there instead of building the basis functions.
+  constexpr uint8_t exact_levels = 14;
+  double sum_l                   = 0;
+  for (double v : L) sum_l += v;
+  const double growth = sum_l * sum_l / 2;
   for (uint8_t lev = 0; lev < NL; ++lev) {
+    if (lev >= exact_levels) {
+      gl[lev] = gl[lev - 1] * growth;
+      gh[lev] = gh[lev - 1] * growth;
+      continue;
+    }
     for (double v : bl) gl[lev] += v * v;
     for (double v : bh) gh[lev] += v * v;
-    if (lev + 1 == NL) break;
+    if (lev + 1 == NL || lev + 1 == exact_levels) continue;
     bl = next(bl);
     bh = next(bh);
   }
@@ -1285,7 +1297,7 @@ bool transcode(j2k_codeblock *block, uint32_t p) {
   bool trial_pooled       = false;
   uint8_t *trial          = block->detach_compressed_data(trial_pooled);
   auto *exact             = static_cast<uint8_t *>(malloc(block->length ? block->length : 1));
-  std::memcpy(exact, trial, block->length);
+  if (block->length) std::memcpy(exact, trial, block->length);  // no data: trial may be null
   free(trial);
   block->attach_compressed_data(exact, false);
   if (!pooled) free(coded);
