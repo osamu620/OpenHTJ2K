@@ -133,6 +133,18 @@
   file ending in `.jphc`, and refused `.jhc`, the extension its help text
   recommends for a codestream. Both now get the bare codestream. The output
   file extension is now matched in any letter case.
+- `open_htj2k_dec` wrote the PGX, PGM and RAW files of an image whose
+  components differ in bit depth or signedness with component 0's bytes per
+  sample, and the PGM files with component 0's offset for signed samples. The
+  other components came out wrong: for a 12-bit component 0 and an 8-bit
+  component 1, the second file held 2 bytes per sample under a header that
+  says 8 bits. Every file now takes its own component's bit depth and sign.
+  A PPM file has one maximum value for its three components: the decoder now
+  stops with an error when their bit depths differ, instead of writing them
+  with component 0's. It also stops for a component of more than 16 bits,
+  which none of the output formats holds; only 2 bytes of each such sample
+  used to be written. Images whose components share bit depth and sign
+  decode as before.
 
 ### Encoder and decoder
 - Small images, or images with a nonzero origin, no longer make the

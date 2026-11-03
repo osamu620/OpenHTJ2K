@@ -2,7 +2,7 @@
 enable_testing()
 set(CONFORMANCE_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/conformance_data")
 
-# Remove stale test artifacts (*.pgx, *.ppm, *.pgm) before tests run.  Attached
+# Remove stale test artifacts (*.pgx, *.ppm, *.pgm, *.raw) before tests run.  Attached
 # via the CTest `test_artifacts` fixture so it executes once before any test
 # that depends on it.  The fixture is auto-attached to every other test by the
 # loop at the end of CMakeLists.txt — that loop runs AFTER every tests/*.cmake
