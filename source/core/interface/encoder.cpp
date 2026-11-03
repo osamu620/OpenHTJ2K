@@ -174,11 +174,14 @@ void check_parameters(const siz_params &siz, const cod_params &cod, const qcd_pa
         siz.Ysiz);
   }
   for (uint16_t c = 0; c < siz.Csiz; ++c) {
-    // The samples are 32-bit integers.
+    // The samples are 32-bit integers, and the decoder's DC offset and clamp to the sample range
+    // hold at most 30 unsigned or 31 signed bits (it refuses deeper components).
     const unsigned depth = (siz.Ssiz[c] & 0x7FU) + 1U;
-    if (depth > 31) {
-      open_htj2k::detail::fail("component %u has %u bits per sample; at most 31 are supported.",
-                               static_cast<unsigned>(c), depth);
+    const bool is_signed = (siz.Ssiz[c] & 0x80U) != 0;
+    const unsigned limit = is_signed ? 31U : 30U;
+    if (depth > limit) {
+      open_htj2k::detail::fail("component %u has %u-bit %s samples; at most %u bits are supported.",
+                               static_cast<unsigned>(c), depth, is_signed ? "signed" : "unsigned", limit);
     }
     if (siz.XRsiz[c] == 0 || siz.YRsiz[c] == 0) {
       open_htj2k::detail::fail("the subsampling factors XRsiz and YRsiz of component %u shall be 1 to 255.",
