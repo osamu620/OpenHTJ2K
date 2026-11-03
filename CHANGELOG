@@ -223,6 +223,11 @@
   throws `std::bad_alloc`. Codestreams and encoding speed are unchanged.
 
 ### Decoder
+- A truncated tile-part followed by a tile-part without a body crashed the
+  decoder (SIGSEGV): the packet reader stepped from the exhausted tile-part
+  onto the empty one and read through its null buffer. Empty tile-parts are
+  now skipped, and the truncation is reported as malformed input. Found by
+  fuzzing the decode path OpenCV uses; a 165-byte file reproduced it.
 - A JPH or JP2 file that starts with the signature box but has no valid
   Contiguous Codestream box, for example one whose 64-bit box length (XLBox)
   is smaller than the box header or reaches past the end of the file, is

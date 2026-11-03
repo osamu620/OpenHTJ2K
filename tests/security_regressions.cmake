@@ -474,6 +474,12 @@ _sec_rejects(security_packets_exceed_codestream security_packets_exceed_codestre
 
 # The colour transform with components 1 and 2 subsampled by 2: the transform
 # was sized by component 0 and wrote past the rows of the smaller components.
+# A truncated tile-part followed by one or two tile-parts without a body: the packet
+# reader stepped from the exhausted node onto an empty one and read through its null
+# buffer (SIGSEGV).  Empty nodes are skipped now, and the truncation is reported.
+_sec_rejects(security_empty_tile_part security_empty_tile_part.j2c "malformed input" mt)
+_sec_rejects(security_two_empty_tile_parts security_two_empty_tile_parts.j2c "malformed input" mt)
+
 _sec_rejects(security_mct_subsampled security_mct_subsampled.j2k
              "uses the colour transform, but component 1 is subsampled differently" mt)
 # The fixtures below come from fuzzing the streaming decode (invoke_line_based_stream,
