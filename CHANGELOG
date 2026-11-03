@@ -498,6 +498,19 @@
 - A Part 2 codestream whose DFS marker declares a decomposition level without
   a transform crashed the decoder: such a level has no subbands, but it was
   set up with three, read from a null array. It now has none.
+- Header values could also make the decoder work for minutes on a codestream
+  of a few kilobytes. It now refuses, as "not supported":
+  - packet progressions taking more than the larger of 2^28 steps and 64
+    steps per codestream byte. 9361 progression order changes in the main
+    header, each replayed over every packet of each of 65535 tiles, took 30 s
+    for a 65 KB codestream;
+  - more tile-components (tiles times components) than the larger of 2^20
+    and one per codestream byte. 16384 components in 65535 tiles without
+    data, from 49 KB, took minutes.
+  Decoding a strip of a subband no longer visits every precinct of its
+  resolution, only those holding the strip's rows: codestreams with small
+  precincts decode faster (4K with precincts 1 to 4 rows high: 25% fewer
+  cycles; 4 x 4 precincts: 4 times as fast).
 
 ### Tools
 - `open_htj2k_dec` exited with status 0 when decoding failed: it printed the

@@ -1914,6 +1914,8 @@ int j2k_main_header::read(j2c_src_memory &in) {
   packet_budget    = (codestream_bytes > min_packet_budget) ? codestream_bytes : min_packet_budget;
   structure_budget = 0;
   structure_bytes  = 0;
+  tile_components_set_up = 0;
+  progression_steps      = 0;
 
   uint16_t word = in.get_word();
   if (word != _SOC) {

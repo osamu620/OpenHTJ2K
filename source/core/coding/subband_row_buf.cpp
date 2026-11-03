@@ -299,6 +299,24 @@ static ROWBUF_NOINLINE void zero_unbuilt_pband(sprec_t *target, ptrdiff_t stride
     std::memset(dst + static_cast<ptrdiff_t>(row - y0) * stride, 0, w * sizeof(sprec_t));
 }
 
+// The precincts that may hold rows [y0, y1) of the subband, in raster order, start at the
+// one this returns and end before the first whose precinct-subband starts at y1 or below:
+// the precincts of a precinct row share their rows of the subband, which grow from row to
+// row.  Found by bisection, so that a strip does not visit every precinct of the
+// resolution (millions with 2 x 2 precincts, for each of thousands of strips).
+static uint32_t first_precinct_for_rows(j2k_resolution *res, uint8_t band_idx, int32_t y0) {
+  uint32_t lo = 0, hi = res->nph;
+  while (lo < hi) {
+    const uint32_t mid              = lo + (hi - lo) / 2;
+    const j2k_precinct_subband *cpb = res->access_precinct(mid * res->npw)->access_pband(band_idx);
+    if (static_cast<int32_t>(cpb->get_pos1().y) <= y0)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return lo * res->npw;
+}
+
 // ─── decode_strip_core ────────────────────────────────────────────────────────
 // Decodes all non-empty codeblocks whose rows intersect [y0, y1) and writes
 // their samples into target_buf (ring/prefetch mode) or directly into
@@ -324,11 +342,12 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
       par_tasks.clear();
       size_t total_s = 0, total_st = 0, total_ctx = 0;
 
-      for (uint32_t p = 0; p < np; ++p) {
+      for (uint32_t p = (np != 0) ? first_precinct_for_rows(res, band_idx, y0) : 0; p < np; ++p) {
         j2k_precinct *cp          = res->access_precinct(p);
         j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-        const uint32_t ncx        = cpb->num_codeblock_x;
-        const uint32_t ncy        = cpb->num_codeblock_y;
+        if (static_cast<int32_t>(cpb->get_pos0().y) >= y1) break;  // and so do the rest
+        const uint32_t ncx = cpb->num_codeblock_x;
+        const uint32_t ncy = cpb->num_codeblock_y;
         if (ncx == 0 || ncy == 0) continue;
         // Skip precincts that don't overlap with [y0, y1).
         const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
@@ -445,11 +464,12 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
 #endif
 
   // ── Serial path ────────────────────────────────────────────────────────────
-  for (uint32_t p = 0; p < np; ++p) {
+  for (uint32_t p = (np != 0) ? first_precinct_for_rows(res, band_idx, y0) : 0; p < np; ++p) {
     j2k_precinct *cp          = res->access_precinct(p);
     j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-    const uint32_t ncx        = cpb->num_codeblock_x;
-    const uint32_t ncy        = cpb->num_codeblock_y;
+    if (static_cast<int32_t>(cpb->get_pos0().y) >= y1) break;  // and so do the rest
+    const uint32_t ncx = cpb->num_codeblock_x;
+    const uint32_t ncy = cpb->num_codeblock_y;
     if (ncx == 0 || ncy == 0) continue;
 
     // Skip precincts that don't overlap with [y0, y1).
@@ -673,11 +693,12 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     // reuse), so a strip holding one is walked again next time.
     bool all_built = true;
 
-    for (uint32_t p = 0; p < np; ++p) {
+    for (uint32_t p = (np != 0) ? first_precinct_for_rows(res, band_idx, prefetch_y0) : 0; p < np; ++p) {
       j2k_precinct *cp          = res->access_precinct(p);
       j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-      const uint32_t ncx        = cpb->num_codeblock_x;
-      const uint32_t ncy        = cpb->num_codeblock_y;
+      if (static_cast<int32_t>(cpb->get_pos0().y) >= prefetch_y1) break;  // and so do the rest
+      const uint32_t ncx = cpb->num_codeblock_x;
+      const uint32_t ncy = cpb->num_codeblock_y;
       if (ncx == 0 || ncy == 0) continue;
       const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
       const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);
@@ -755,11 +776,12 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
     fb_blocks.clear();
     const uint32_t np   = res->npw * res->nph;
     const int32_t sb_x0 = static_cast<int32_t>(sb->get_pos0().x);
-    for (uint32_t p = 0; p < np; ++p) {
+    for (uint32_t p = (np != 0) ? first_precinct_for_rows(res, band_idx, prefetch_y0) : 0; p < np; ++p) {
       j2k_precinct *cp          = res->access_precinct(p);
       j2k_precinct_subband *cpb = cp->access_pband(band_idx);
-      const uint32_t ncx        = cpb->num_codeblock_x;
-      const uint32_t ncy        = cpb->num_codeblock_y;
+      if (static_cast<int32_t>(cpb->get_pos0().y) >= prefetch_y1) break;  // and so do the rest
+      const uint32_t ncx = cpb->num_codeblock_x;
+      const uint32_t ncy = cpb->num_codeblock_y;
       if (ncx == 0 || ncy == 0) continue;
       const int32_t cpb_y0_i = static_cast<int32_t>(cpb->get_pos0().y);
       const int32_t cpb_y1_i = static_cast<int32_t>(cpb->get_pos1().y);

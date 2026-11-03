@@ -544,6 +544,11 @@ class j2k_main_header {
   uint64_t codestream_bytes = 0;
   uint64_t structure_budget = 0;
   uint64_t structure_bytes  = 0;
+  // Work the decoder has done setting up the tiles of this codestream, which header
+  // values alone can make huge: tile-components set up, and steps of the packet
+  // progressions (j2k_tile::create_tile_buf() keeps both under a bound).
+  uint64_t tile_components_set_up = 0;
+  uint64_t progression_steps      = 0;
 
  public:
   j2k_main_header();
