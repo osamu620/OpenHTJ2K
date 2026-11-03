@@ -1,4 +1,65 @@
-# [Unreleased]
+# [0.25.0] - 2026-11-03
+
+Release for use as a library inside other software, such as OpenCV's
+image codecs, which decode files they did not write. The library prints
+nothing: errors are `std::runtime_error` exceptions and warnings go to a
+handler set with `open_htj2k::set_message_handler()`; its internals are in
+namespace `open_htj2k`; the installed headers are also reachable as
+`<open_htj2k/interface/...>`. The encoder writes JP2 files and takes
+`Qfactor` with an alpha channel.
+
+Most of this release is fixes. The decoder and the encoder were fuzzed and
+swept with tens of thousands of parameter combinations under
+AddressSanitizer, UndefinedBehaviorSanitizer and ThreadSanitizer, and checked
+against two other decoders:
+- malformed codestreams that crashed the decoder, hung it, read or wrote out
+  of bounds, or made it allocate gigabytes are rejected with an error; memory
+  and set-up work driven by header values are bounded;
+- valid codestreams that decoded wrong now decode right: subsampled
+  components through the streaming entry points (which OpenCV and
+  `open_htj2k_dec` use), packet headers in PPM/PPT markers with several
+  tile-parts, the precedence of main and tile-part header markers, POC
+  markers, COC markers with 32 levels, HT/Part 1 mixing, 31 and 32 DWT
+  levels;
+- the encoder no longer crashes, overflows or writes undecodable codestreams
+  for subsampled components, `Qfactor=0`, 256 or more layers, very small
+  step sizes, 31 and 32 DWT levels, thousands of tiles (on Windows) or
+  out-of-range parameters, and lossless coding of 1-bit samples is lossless.
+
+The library decodes every conformance and test codestream byte-identically
+to 0.24.0 (the files `open_htj2k_dec` writes change only as listed under
+Tools). Encoded output differs only where a fix changes it; for HT
+codestreams that usually means just the magnitude bound in the CAP marker,
+which 0.24.0 could set too low.
+
+Things that now behave differently, besides the fixes:
+- the decoder refuses, as "not supported", codestreams whose header values
+  would need far more memory or set-up work than their data and image size
+  justify (the rule is under Fixed, Decoder), and samples deeper than 30 bits
+  unsigned or 31 bits signed;
+- for components whose vertical subsampling factors are not multiples of
+  component 0's, the streaming row callback runs once per output row of the
+  common grid, which can be more rows than component 0 has
+  (`get_stream_row_count()`, `get_stream_component_row()`);
+- the encoder refuses parameters it used to mishandle: out-of-range values,
+  the irreversible transform with no guard bits, reversible coding deeper
+  than 23 bits, samples deeper than 30 bits unsigned or 31 bits signed, and
+  RPCL or PCRL with subsampling factors that are not powers of two;
+- the shared thread pool runs at most 1024 threads;
+- MSVC release builds define `NDEBUG`, so the library's internal checks are
+  compiled out as with GCC and Clang.
+
+## Performance
+
+- The decoder visits only the precincts that hold a strip's rows when it
+  decodes the strip: codestreams with small precincts decode faster (a 4K HT
+  codestream with precincts 1 to 4 rows high: 25% fewer cycles; 4 x 4
+  precincts: 4 times as fast). Codestreams with the default (maximal)
+  precincts decode as before.
+- Tiles of fewer than 4096 samples decode without the thread pool, so images
+  of many small tiles are no longer slower with more threads, and each tile's
+  state is freed once it is decoded (4K in 16 x 16 tiles: 78 MB instead of
+  672 MB).
 
 ## Added
 
