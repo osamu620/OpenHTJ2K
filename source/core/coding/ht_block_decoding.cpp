@@ -157,6 +157,24 @@ static FORCE_INLINE __m128i ms_decode_quad_sse2(fwd_buf<0xFF> &MagSgn, const uin
 }
   #endif
 
+// A quad whose U_q exceeds the code-block precision (malformed input).  Refuses a quad of
+// 128 or more MagSgn bits as the SIMD readers do (fwd_buf::advance); otherwise warns and
+// returns U_q clamped to the precision, so that m_n stays below 32 for the shifts in
+// ms_decode_sample.  Out of line: the common path pays only the compare at the call.
+static OPENHTJ2K_NOINLINE uint32_t malformed_U_q(uint32_t U_q, uint32_t inf, bool two_columns,
+                                                 uint8_t pLSB) {
+  uint32_t total = 0;
+  for (uint32_t i = 0; i < (two_columns ? 4U : 2U); ++i) {
+    if ((inf >> (4 + i)) & 1U) total += U_q - ((inf >> (12 + i)) & 1U);
+  }
+  if (total >= 128) {
+    open_htj2k::detail::fail("Value of numbits = %u is out of range.", total);
+  }
+  open_htj2k::detail::warn("HT cleanup pass: U_q %u exceeds the code-block precision — malformed input.",
+                           U_q);
+  return (30U - pLSB) + 2U;
+}
+
 // Step-2 of the HT cleanup pass: MagSgn decoding over the (tv, u) scratch
 // written by ht_cleanup_step1_nway (the former phase 1 of this function).
 // Kept per-block: the fwd_buf destuff scratch is thread-local (constructing a
@@ -227,11 +245,8 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
         emax          = 31 - count_leading_zeros(emax | 2);  // emax - 1
         U_q += gamma ? emax : 1;                             // kappa
       }
-      if (U_q > ((30U - pLSB) + 2U)) {
-        open_htj2k::detail::warn(
-            "HT cleanup pass: U_q %u exceeds the code-block precision — malformed input.", U_q);
-      }
       const bool two_columns = x + 1 < width;
+      if (U_q > ((30U - pLSB) + 2U)) U_q = malformed_U_q(U_q, inf, two_columns, pLSB);
       uint32_t v1 = 0, v3 = 0;
   #if defined(OPENHTJ2K_ENABLE_SSE2)
       if (inf & 0xF0) {

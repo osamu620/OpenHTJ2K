@@ -150,7 +150,9 @@ if(ENABLE_AVX2)
   check_cxx_source_compiles("#ifndef __AVX2__\n#error \"AVX2 not enabled\"\n#endif\nint main() { return 0; }"
                             OPENHTJ2K_TESTS_HAVE_AVX2_READER)
 endif()
-if(OPENHTJ2K_TESTS_HAVE_AVX2_READER)
+# The SSE2 and scalar readers of x86-64 builds without AVX2 now refuse the quad as the
+# AVX2 reader does (128 or more MagSgn bits), so the tests run there too.
+if(OPENHTJ2K_TESTS_HAVE_AVX2_READER OR (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND NOT EMSCRIPTEN))
   add_test(NAME security_threaded_decode_abort_mt
            COMMAND open_htj2k_dec
                    -i ${SECURITY_DATA_DIR}/security_threaded_decode_abort.j2k

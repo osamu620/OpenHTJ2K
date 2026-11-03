@@ -160,6 +160,7 @@ bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
   uint8_t  depth0          = 0;
   uint32_t cb_stride_ratio = 1;
   uint32_t cr_stride_ratio = 1;
+  uint32_t next_y0         = 0;  // next row of component 0 to write
   bool     dims_ok         = true;
   out_w                    = 0;
   out_h                    = 0;
@@ -188,7 +189,12 @@ bool decode_to_rgb_buffer(open_htj2k::openhtj2k_decoder& decoder,
             out_rgb.assign(static_cast<size_t>(out_w) * out_h * 3, 0);
           }
           if (!dims_ok) return;
-          uint8_t* out_row = out_rgb.data() + static_cast<size_t>(y) * out_w * 3;
+          // One RGB row per row of component 0 (an output row repeats it when another
+          // component is subsampled less, see invoke_line_based_stream in decoder.hpp).
+          const uint32_t y0 = decoder.get_stream_component_row(0, y);
+          if (y0 == UINT32_MAX || y0 < next_y0) return;
+          next_y0          = y0 + 1;
+          uint8_t* out_row = out_rgb.data() + static_cast<size_t>(y0) * out_w * 3;
           if (nc >= 3 && !components_are_rgb && coeffs != nullptr) {
             ycbcr_row_to_rgb8(rows[0], rows[1], rows[2], out_row, out_w, cb_stride_ratio,
                               cr_stride_ratio, *coeffs, depth0,
@@ -323,57 +329,47 @@ bool decode_to_planar_buffers(open_htj2k::openhtj2k_decoder& decoder, bool compo
 
           const int32_t maxval_y = (1 << depth_y) - 1;
 
-          // Luma row -- every call has a Y row at the current y.
-          if (use_16) {
-            clamp_i32_plane_to_u16(
-                rows[0], df.plane_y_16.data() + static_cast<size_t>(y) * luma_w, luma_w,
-                maxval_y);
-          } else {
-            const int32_t shift_y = static_cast<int32_t>(depth_y) - 8;
-            shift_i32_plane_to_u8(rows[0],
-                                  df.plane_y.data() + static_cast<size_t>(y) * luma_w,
-                                  luma_w, shift_y, maxval_y);
+          // Each plane takes the row of its component at this output row (see
+          // invoke_line_based_stream in decoder.hpp): the luma row is row y in the
+          // common case; a subsampled component repeats its row over several output
+          // rows, which rewrites it with the same samples.
+          const uint32_t yl = decoder.get_stream_component_row(0, y);
+          if (yl < luma_h) {
+            if (use_16) {
+              clamp_i32_plane_to_u16(rows[0], df.plane_y_16.data() + static_cast<size_t>(yl) * luma_w,
+                                     luma_w, maxval_y);
+            } else {
+              const int32_t shift_y = static_cast<int32_t>(depth_y) - 8;
+              shift_i32_plane_to_u8(rows[0], df.plane_y.data() + static_cast<size_t>(yl) * luma_w, luma_w,
+                                    shift_y, maxval_y);
+            }
           }
 
-          // Chroma (or G/B for PLANAR_RGB).  Written only for rows that
-          // land on the chroma grid.  For 4:2:2 the chroma height equals
-          // luma height and every luma row contributes.  For 4:2:0 the
-          // luma height is 2x chroma; rows[] pointers may be nullptr on
-          // the "skip" luma rows -- guard with the callback nc check.
+          // Chroma (or G/B for PLANAR_RGB): rows of components 1 and 2.
           if (nc >= 3) {
             const int32_t maxval_c = (1 << depth_c) - 1;
-            const uint32_t yc      = (luma_h > 0)
-                                         ? static_cast<uint32_t>(
-                                               static_cast<uint64_t>(y) * chroma_h_0 / luma_h)
-                                         : 0;
-            if (yc < chroma_h_0) {
-              if (use_16) {
-                if (rows[1] != nullptr) {
-                  clamp_i32_plane_to_u16(
-                      rows[1],
-                      df.plane_cb_16.data() + static_cast<size_t>(yc) * chroma_w_0,
-                      chroma_w_0, maxval_c);
-                }
-                if (rows[2] != nullptr) {
-                  clamp_i32_plane_to_u16(
-                      rows[2],
-                      df.plane_cr_16.data() + static_cast<size_t>(yc) * chroma_w_0,
-                      chroma_w_0, maxval_c);
-                }
-              } else {
-                const int32_t shift_c = static_cast<int32_t>(depth_c) - 8;
-                if (rows[1] != nullptr) {
-                  shift_i32_plane_to_u8(
-                      rows[1],
-                      df.plane_cb.data() + static_cast<size_t>(yc) * chroma_w_0,
-                      chroma_w_0, shift_c, maxval_c);
-                }
-                if (rows[2] != nullptr) {
-                  shift_i32_plane_to_u8(
-                      rows[2],
-                      df.plane_cr.data() + static_cast<size_t>(yc) * chroma_w_0,
-                      chroma_w_0, shift_c, maxval_c);
-                }
+            const uint32_t ycb     = decoder.get_stream_component_row(1, y);
+            const uint32_t ycr     = decoder.get_stream_component_row(2, y);
+            if (use_16) {
+              if (ycb < chroma_h_0) {
+                clamp_i32_plane_to_u16(rows[1],
+                                       df.plane_cb_16.data() + static_cast<size_t>(ycb) * chroma_w_0,
+                                       chroma_w_0, maxval_c);
+              }
+              if (ycr < chroma_h_0) {
+                clamp_i32_plane_to_u16(rows[2],
+                                       df.plane_cr_16.data() + static_cast<size_t>(ycr) * chroma_w_0,
+                                       chroma_w_0, maxval_c);
+              }
+            } else {
+              const int32_t shift_c = static_cast<int32_t>(depth_c) - 8;
+              if (ycb < chroma_h_0) {
+                shift_i32_plane_to_u8(rows[1], df.plane_cb.data() + static_cast<size_t>(ycb) * chroma_w_0,
+                                      chroma_w_0, shift_c, maxval_c);
+              }
+              if (ycr < chroma_h_0) {
+                shift_i32_plane_to_u8(rows[2], df.plane_cr.data() + static_cast<size_t>(ycr) * chroma_w_0,
+                                      chroma_w_0, shift_c, maxval_c);
               }
             }
           }
@@ -425,6 +421,10 @@ bool decode_to_planar_buffers_direct(open_htj2k::openhtj2k_decoder& decoder,
     depths.push_back(decoder.get_component_depth(c));
     signeds.push_back(decoder.get_component_signedness(c));
   }
+  // The planes hold up to 16 bits; the shifts below are by the bit depth (up to 38).
+  for (uint16_t c = 0; c < nc && c < 3; ++c) {
+    if (depths[c] > 16) return false;
+  }
 
   const uint32_t luma_w  = widths[0];
   const uint32_t luma_h  = heights[0];
@@ -462,13 +462,18 @@ bool decode_to_planar_buffers_direct(open_htj2k::openhtj2k_decoder& decoder,
   const uint16_t desc_nc = std::min(nc, static_cast<uint16_t>(3));
   open_htj2k::PlanarOutputDesc descs[3] = {};
   for (uint16_t c = 0; c < desc_nc; ++c) {
+    // The planes have component 0's size (Y) and component 1's (Cb, Cr): a component 2
+    // of another size writes only what fits.
+    const uint32_t pw = (c == 0) ? luma_w : chroma_w;
+    const uint32_t ph = (c == 0) ? luma_h : chroma_h;
+
     auto& d     = descs[c];
     const uint8_t  bd    = depths[c];
     const bool     is_s  = signeds[c];
-    d.width      = widths[c];
-    d.height     = heights[c];
-    d.stride     = widths[c];  // planar, no padding
-    d.yr         = (c == 0) ? 1 : (luma_h / heights[c]);
+    d.width      = std::min(widths[c], pw);
+    d.height     = std::min(heights[c], ph);
+    d.stride     = pw;  // planar, no padding
+    d.yr         = 1;   // not used by the decoder
     d.dc         = is_s ? 0 : (1 << (bd - 1));
     d.maxval     = is_s ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
     d.minval     = is_s ? -(1 << (bd - 1)) : 0;
