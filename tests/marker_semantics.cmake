@@ -13,6 +13,22 @@
 #                               and no PPT marker (A.7.5).
 #   marker_sop_optional         SOP marker segments allowed (Scod) but on every other packet
 #                               only (A.8.1).
+#   marker_coc_tile_cod         a main-header COC for component 0 and a tile-part COD in tile 1:
+#                               tile-part COD > main COC (A.6.1).
+#   marker_qcc_tile_qcd         a main-header QCC for component 0 and a tile-part QCD in tile 1:
+#                               tile-part QCD > main QCC (A.6.4).  Irreversible, so compared
+#                               within a tolerance; the main QCC's step sizes give 14 times
+#                               the squared error.
+#   marker_coc_other_component  main COC and QCC for component 0, tile-part COC and QCC for
+#                               component 1 only: component 0 keeps the main-header ones.
+#   marker_poc_all_components   COD says RPCL; a main POC with CEpoc = 0 (all components, Table
+#                               A.32) gives the LRCP order the packets are in.  Irreversible.
+#   marker_poc_tile_parts       POC of tile-part 0: LRCP for layer 0; POC of tile-part 1: CPRL for
+#                               layer 1 (A.6.6).  Irreversible.
+#   marker_htdeclared           HT code-blocks in an HTDECLARED codestream (Ccap15 bits 15:14 =
+#                               10): no tile-component mixes HT and Part 1 code-blocks (ISO/IEC
+#                               15444-15, A.3.2), so the rules that tell the two kinds apart do
+#                               not apply.  Decoded silently wrong before.
 #
 # Each decodes to its source image (the irreversible ones within a tolerance), as another
 # decoder decodes it; the decoder of 0.24.0 failed on or misdecoded every one.
@@ -42,3 +58,9 @@ endfunction()
 _marker_decode_test(marker_ppm_tile_parts marker_ppm_tile_parts.j2c ${_MARKER_GRAY} 0 0)
 _marker_decode_test(marker_ppt_tile_parts marker_ppt_tile_parts.j2c ${_MARKER_GRAY} 0 0)
 _marker_decode_test(marker_sop_optional marker_sop_optional.j2c ${_MARKER_RGB} 0 0)
+_marker_decode_test(marker_coc_tile_cod marker_coc_tile_cod.j2c ${_MARKER_GRAY} 0 0)
+_marker_decode_test(marker_qcc_tile_qcd marker_qcc_tile_qcd.j2c ${_MARKER_GRAY} 24 20)
+_marker_decode_test(marker_coc_other_component marker_coc_other_component.j2c ${_MARKER_RGB} 0 0)
+_marker_decode_test(marker_poc_all_components marker_poc_all_components.j2c ${_MARKER_RGB} 65535 8000000)
+_marker_decode_test(marker_poc_tile_parts marker_poc_tile_parts.j2c ${_MARKER_RGB} 65535 8000000)
+_marker_decode_test(marker_htdeclared marker_htdeclared.j2c ${_MARKER_GRAY} 0 0)
