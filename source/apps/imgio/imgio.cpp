@@ -3,6 +3,7 @@
 
 #include "imgio.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -409,6 +410,77 @@ class TiffStreamReader : public StreamReader {
 #endif  // OPENHTJ2K_TIFF_SUPPORT
 
 // ---------------------------------------------------------------------------
+// MultiStreamReader — the components of several PNM or TIFF files, in order.  A
+// file narrower or shorter than the first by a whole factor gives subsampled
+// components, as with PGX.
+// ---------------------------------------------------------------------------
+class MultiStreamReader : public StreamReader {
+  struct Part {
+    std::unique_ptr<StreamReader> reader;
+    uint16_t first;  // index of its first component
+    uint8_t xr, yr;
+  };
+  std::vector<Part> parts_;
+  std::vector<uint16_t> part_of_;  // component -> part
+
+ public:
+  int open(std::vector<std::unique_ptr<StreamReader>> readers, const std::vector<std::string> &fnames) {
+    uint16_t nc       = 0;
+    const uint32_t w0 = readers[0]->get_width(), h0 = readers[0]->get_height();
+    for (size_t i = 0; i < readers.size(); ++i) {
+      StreamReader &r = *readers[i];
+      if (r.get_width() == 0 || r.get_height() == 0 || w0 % r.get_width() != 0 || h0 % r.get_height() != 0
+          || w0 / r.get_width() > 255 || h0 / r.get_height() > 255) {
+        printf("ERROR: %s (%ux%u) is not an integer submultiple of %s (%ux%u).\n", fnames[i].c_str(),
+               r.get_width(), r.get_height(), fnames[0].c_str(), w0, h0);
+        return -1;
+      }
+      if (static_cast<uint32_t>(nc) + r.get_num_components() > 16384) {
+        printf("ERROR: more than 16384 components.\n");
+        return -1;
+      }
+      Part p;
+      p.first = nc;
+      p.xr    = static_cast<uint8_t>(w0 / r.get_width());
+      p.yr    = static_cast<uint8_t>(h0 / r.get_height());
+      for (uint16_t c = 0; c < r.get_num_components(); ++c) part_of_.push_back(static_cast<uint16_t>(i));
+      nc       = static_cast<uint16_t>(nc + r.get_num_components());
+      p.reader = std::move(readers[i]);
+      parts_.push_back(std::move(p));
+    }
+    return 0;
+  }
+  uint32_t get_width() const override { return parts_[0].reader->get_width(); }
+  uint32_t get_height() const override { return parts_[0].reader->get_height(); }
+  uint16_t get_num_components() const override { return static_cast<uint16_t>(part_of_.size()); }
+  uint8_t get_bitdepth(uint16_t c = 0) const override {
+    if (c >= part_of_.size()) return 0;
+    const Part &p = parts_[part_of_[c]];
+    return p.reader->get_bitdepth(static_cast<uint16_t>(c - p.first));
+  }
+  uint8_t get_Ssiz(uint16_t c) const override {
+    if (c >= part_of_.size()) return 0;
+    const Part &p = parts_[part_of_[c]];
+    return p.reader->get_Ssiz(static_cast<uint16_t>(c - p.first));
+  }
+  uint8_t get_XRsiz(uint16_t c) const override {
+    return (c < part_of_.size()) ? parts_[part_of_[c]].xr : 1;
+  }
+  uint8_t get_YRsiz(uint16_t c) const override {
+    return (c < part_of_.size()) ? parts_[part_of_[c]].yr : 1;
+  }
+  // y counts the rows of the first file; a file yr times shorter gives its row y / yr.
+  void get_row(uint32_t y, int32_t **rows, uint16_t nc) override {
+    for (auto &p : parts_) {
+      if (p.first >= nc) break;
+      const uint16_t n =
+          std::min<uint16_t>(p.reader->get_num_components(), static_cast<uint16_t>(nc - p.first));
+      p.reader->get_row(y / p.yr, rows + p.first, n);
+    }
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Factory: dispatch by first file's extension.
 // ---------------------------------------------------------------------------
 std::unique_ptr<StreamReader> open_stream_reader(const std::vector<std::string> &fnames) {
@@ -423,6 +495,18 @@ std::unique_ptr<StreamReader> open_stream_reader(const std::vector<std::string> 
     for (auto &ch : ext) ch = static_cast<char>(tolower(ch));
   }
 
+  // Several PNM or TIFF files: the components of each in turn (a PGX list is one reader).
+  if (ext != ".pgx" && fnames.size() > 1) {
+    std::vector<std::unique_ptr<StreamReader>> readers;
+    for (const auto &f : fnames) {
+      auto r = open_stream_reader(std::vector<std::string>{f});
+      if (!r) return nullptr;
+      readers.push_back(std::move(r));
+    }
+    auto m = std::unique_ptr<MultiStreamReader>(new MultiStreamReader());
+    if (m->open(std::move(readers), fnames) != 0) return nullptr;
+    return m;
+  }
   if (ext == ".pgx") {
     auto r = std::unique_ptr<PgxStreamReader>(new PgxStreamReader());
     if (r->open(fnames) != 0) {
