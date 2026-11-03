@@ -371,3 +371,109 @@ foreach(_shape tall wide)
   set_tests_properties(comp_ht_refine_${_shape}_cblk PROPERTIES
       DEPENDS security_ht_refine_${_shape}_cblk)
 endforeach()
+
+# Main-header and marker validation.  Each fixture below is a malformed
+# codestream (security_siz_origin_2p31 is a valid one this decoder does not
+# support) that crashed, hung, read or wrote out of bounds, or tried to
+# allocate gigabytes when decoded the way OpenCV does it (parse the main
+# header, then decode row by row).  The decoder now rejects it with the message
+# given.  The PASS regex requires that message (the CLI's exit code is not
+# checked) and the FAIL regex rejects any crash marker.  Fixtures whose bug
+# involved several tiles also run with 4 threads (test name suffix _mt).
+function(_sec_rejects name fixture message)
+  set(_threads 1)
+  if("mt" IN_LIST ARGN)
+    list(APPEND _threads 4)
+  endif()
+  foreach(_nt ${_threads})
+    set(_name ${name})
+    if(_nt EQUAL 4)
+      set(_name ${name}_mt)
+    endif()
+    add_test(NAME ${_name}
+             COMMAND open_htj2k_dec -i ${SECURITY_DATA_DIR}/${fixture} -o ${_name}.pgx -num_threads ${_nt})
+    set_tests_properties(${_name} PROPERTIES
+        PASS_REGULAR_EXPRESSION "${message}"
+        FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+        TIMEOUT 30)
+  endforeach()
+endfunction()
+
+# An empty input (memcpy from a null pointer) and codestreams without the SOC
+# marker or without one of the SIZ, COD and QCD markers every main header needs
+# (null pointer dereferences once the decoder asked for the image size or the
+# coding style).
+_sec_rejects(security_empty_input security_empty_input.j2k "is empty")
+_sec_rejects(security_missing_soc security_missing_soc.jph "does not begin with an SOC marker")
+_sec_rejects(security_missing_siz security_missing_siz.j2k "main header has no SIZ marker")
+_sec_rejects(security_missing_cod security_missing_cod.jph "main header has no COD marker")
+_sec_rejects(security_missing_qcd security_missing_qcd.jph "main header has no QCD marker")
+
+# A COC marker too short for its coding-style fields (read past the marker).
+_sec_rejects(security_coc_too_short security_coc_too_short.jph "COC marker length 8 is less than 9")
+
+# QCD markers: an undefined quantization style; fewer step sizes than the
+# decomposition levels need (read past the step-size array); quantization
+# style 0, which has no mantissas, with the 9/7 transform (read from an empty
+# mantissa array).
+_sec_rejects(security_qcd_invalid_style security_qcd_invalid_style.jph "QCD quantization style 31 is invalid")
+_sec_rejects(security_qcd_too_few_steps security_qcd_too_few_steps.j2k
+             "needs 10 quantization step sizes for 3 decomposition levels, but its QCD/QCC marker has 7")
+_sec_rejects(security_qcd_style0_irreversible security_qcd_style0_irreversible.jph
+             "quantization style 0 \\(no quantization\\) with a wavelet transform other than the reversible 5/3")
+
+# RGN markers: an undefined region-of-interest style; a shift of 79 (shifts of
+# 32-bit samples by 32 or more); a shift that puts the component's 12 magnitude
+# bit-planes past the 31 bits of a sample.
+_sec_rejects(security_rgn_style security_rgn_style.jph "RGN region-of-interest style 1 is not supported")
+_sec_rejects(security_rgn_shift_too_large security_rgn_shift_too_large.j2k
+             "RGN region-of-interest shift 79 exceeds 31")
+_sec_rejects(security_rgn_shift_over_bitplanes security_rgn_shift_over_bitplanes.j2k
+             "region-of-interest shift 20 on top of 12 magnitude bit-planes")
+
+# PPM markers with no complete packet-header record (an empty record chain was
+# read), and with fewer records than tiles (read past the record list).
+_sec_rejects(security_ppm_no_record security_ppm_no_record.jph "PPM markers hold no packet-header record")
+_sec_rejects(security_ppm_missing_tile_record security_ppm_missing_tile_record.jph
+             "PPM markers hold 1 packet-header records, none for tile 1" mt)
+
+# SIZ markers breaking the tiling rules of ISO/IEC 15444-1, A.5.1: a zero tile
+# size (division by zero), and tile origins after the image origin, which gave
+# tiles that end before they start.  These crashed in many places: a 16 GB
+# allocation, a hang, negative array indices, a wild memcpy, a read past a
+# strip buffer, a multi-tile row scatter writing out of bounds, and rows
+# narrower than the image handed to the row callback.
+_sec_rejects(security_siz_tile_size_zero security_siz_tile_size_zero.jph "SIZ tile size XTsiz is zero")
+_sec_rejects(security_siz_tile_origin security_siz_tile_origin.jph
+             "SIZ tile origin XTOsiz=1 lies after the image origin XOsiz=0")
+_sec_rejects(security_siz_huge_allocation security_siz_huge_allocation.j2c
+             "SIZ tile origin XTOsiz=4284678145 lies after the image origin")
+_sec_rejects(security_siz_cpu_hang security_siz_cpu_hang.jph
+             "SIZ tile origin YTOsiz=187 lies after the image origin YOsiz=128")
+_sec_rejects(security_siz_negative_coord security_siz_negative_coord.jph
+             "SIZ tile origin XTOsiz=4294967295 lies after the image origin")
+_sec_rejects(security_siz_wild_memcpy security_siz_wild_memcpy.jph
+             "SIZ tile origin XTOsiz=4294770688 lies after the image origin")
+_sec_rejects(security_siz_strip_overread security_siz_strip_overread.j2c
+             "SIZ tile origin XTOsiz=4294967295 lies after the image origin")
+_sec_rejects(security_siz_multitile_scatter security_siz_multitile_scatter.j2c
+             "SIZ tile origin XTOsiz=4294443008 lies after the image origin" mt)
+
+# A valid codestream whose image area lies past 2^31 on the reference grid
+# (origin 2147483649).  The decoder holds sample coordinates in 32-bit signed
+# integers, so it rejects reference grids larger than 2147483647 as not
+# supported instead of crashing.
+_sec_rejects(security_siz_origin_2p31 security_siz_origin_2p31.jph
+             "Xsiz=2147483710 exceeds 2147483647: not supported by this decoder")
+
+# A tile declaring 24321 layers of small precincts: 588 million packets in a
+# 908-byte codestream, which made the decoder allocate 28 GB of packet state.
+# Every packet takes at least one byte, so the decoder now rejects a tile with
+# more packets than the codestream can hold before allocating for them.
+_sec_rejects(security_packets_exceed_codestream security_packets_exceed_codestream.j2c
+             "more than the codestream can hold" mt)
+
+# The colour transform with components 1 and 2 subsampled by 2: the transform
+# was sized by component 0 and wrote past the rows of the smaller components.
+_sec_rejects(security_mct_subsampled security_mct_subsampled.j2k
+             "uses the colour transform, but component 1 is subsampled differently" mt)

@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include "open_htj2k_typedef.hpp"
 
 // The block coders load and store bit-stream words with native-endian 32- and
@@ -331,8 +332,12 @@ inline AlignedLargePool &tl_aligned_pool() {
 }  // namespace open_htj2k
 #endif  // OPENHTJ2K_LARGE_POOL
 
+// Returns `size` bytes aligned to `align`, or throws std::bad_alloc: callers write
+// into the buffer without checking for nullptr.  A zero-byte request allocates one
+// byte, since some of the platform allocators below may return nullptr for it.
 static inline void* aligned_mem_alloc(size_t size, size_t align) {
   void* result;
+  if (size == 0) size = 1;
 #if defined(__INTEL_COMPILER)
   result = _mm_malloc(size, align);
 #elif defined(_MSC_VER)
@@ -346,6 +351,7 @@ static inline void* aligned_mem_alloc(size_t size, size_t align) {
     result = nullptr;
   }
 #endif
+  if (result == nullptr) throw std::bad_alloc();
   return result;
 }
 

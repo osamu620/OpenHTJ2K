@@ -306,7 +306,7 @@ class QCD_marker : public j2k_marker_io_base {
   uint16_t get_mantissas(uint8_t nb);
   uint8_t get_number_of_guardbits() const;
   // return the actual number of SPqcd entries as parsed from the marker body
-  uint8_t get_num_entries() const { return static_cast<uint8_t>(SPqcd.size()); }
+  uint16_t get_num_entries() const { return static_cast<uint16_t>(SPqcd.size()); }
   // return MAGB value for CAP
   uint8_t get_MAGB();
 };
@@ -343,7 +343,7 @@ class QCC_marker : public j2k_marker_io_base {
   uint16_t get_mantissas(uint8_t nb);
   uint8_t get_number_of_guardbits() const;
   // return the actual number of SPqcc entries as parsed from the marker body
-  uint8_t get_num_entries() const { return static_cast<uint8_t>(SPqcc.size()); }
+  uint16_t get_num_entries() const { return static_cast<uint16_t>(SPqcc.size()); }
 };
 
 /********************************************************************************
@@ -522,6 +522,9 @@ class j2k_main_header {
   std::vector<std::unique_ptr<ATK_marker>> ATK;
   std::unique_ptr<buf_chain> ppm_header;
   std::unique_ptr<uint8_t[]> ppm_buf;
+  // Packets the tiles of the codestream may still declare (see read()); each tile's
+  // create_tile_buf() subtracts its packets.  Unlimited unless set by read().
+  uint64_t packet_budget = UINT64_MAX;
 
  public:
   j2k_main_header();

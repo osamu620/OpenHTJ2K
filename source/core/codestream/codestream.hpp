@@ -141,16 +141,16 @@ class j2c_dst_memory {
 
 class buf_chain {
  private:
-  size_t node_pos;
-  size_t pos;
-  uint32_t total_length;
+  size_t node_pos       = 0;
+  size_t pos            = 0;
+  uint32_t total_length = 0;
 
   std::vector<uint8_t *> node_buf;
   std::vector<uint32_t> node_length;
-  uint32_t num_nodes;
+  uint32_t num_nodes = 0;
 
-  uint8_t *current_buf;
-  uint32_t current_length;
+  uint8_t *current_buf    = nullptr;
+  uint32_t current_length = 0;
   // Default-initialised so a default-constructed buf_chain (e.g. the PPT
   // packet_header chain) never bit-reads from uninitialised state.
   uint8_t tmp_byte  = 0;
@@ -245,21 +245,27 @@ class buf_chain {
     node_buf[index]    = buf;
     node_length[index] = len;
   }
+  // Positions the reader at the first byte of the chain.  A chain without nodes reads
+  // as past its end (get_byte() returns the 0x00 padding) instead of indexing node 0.
   void activate() {
     pos            = 0;
     node_pos       = 0;
-    current_buf    = node_buf[0];
-    current_length = node_length[0];
+    current_buf    = node_buf.empty() ? nullptr : node_buf[0];
+    current_length = node_buf.empty() ? 0 : node_length[0];
     reset_bit_state();
   }
+  // Positions the reader at the first byte of node n, which must exist.
   void activate(size_t n) {
-    assert(n < this->node_buf.size());
+    if (n >= this->node_buf.size()) {
+      open_htj2k::detail::fail("buffer chain has %zu nodes; node %zu does not exist.", node_buf.size(), n);
+    }
     pos            = 0;
     node_pos       = n;
     current_buf    = node_buf[node_pos];
     current_length = node_length[node_pos];
     reset_bit_state();
   }
+  OPENHTJ2K_NODISCARD size_t get_num_nodes() const { return node_buf.size(); }
   // Reset the bit-reader accumulator.  activate() begins a fresh read at a byte
   // boundary, so any partial-byte / 0xFF-stuffing state left over from a
   // previous decode must be cleared — otherwise the single-tile reuse path
