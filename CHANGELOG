@@ -571,6 +571,14 @@
   decodes those and refuses deeper components with "component N has B-bit
   ... samples: not supported" (`open_htj2k_dec` writes at most 16 bits in
   any case).
+- On x86-64 builds without AVX2 (and other builds without NEON or WASM SIMD)
+  a malformed HT code-block whose quad needs 128 or more MagSgn bits was
+  decoded into garbage, where the AVX2, NEON and WASM readers refuse it; the
+  SSE2 and scalar readers now refuse it the same way. Quads with fewer such
+  bits than that but more magnitude bits than the code-block holds are
+  decoded with the magnitude clamped (with a warning, as before), which
+  removes a shift past 31 bits in the scalar reader and makes the SSE2 and
+  scalar readers agree. Valid codestreams decode exactly as before.
 
 ### Tools
 - `open_htj2k_dec` guessed each component's vertical subsampling factor from
