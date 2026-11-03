@@ -554,7 +554,7 @@ void print_help(char *cmd) {
   printf("JPEG 2000 Part 1 and Part 15 decoder\n");
   printf("USAGE: %s [options]\n\n", cmd);
   printf("OPTIONS:\n");
-  printf("-i: Input file. .j2k, .j2c, .jhc, and .jph are supported.\n");
+  printf("-i: Input file. .j2k, .j2c, .jhc, .jph, and .jp2 are supported.\n");
   printf("-o: Output file. Supported formats are PPM, PGM, PGX and RAW.\n");
   printf("-reduce n: Number of DWT resolution reduction.\n");
   printf("-iter n: Repeat decoding n times (for benchmarking). Output is written once.\n");
@@ -577,13 +577,14 @@ int main(int argc, char *argv[]) {
   }
   infile_ext_name = strrchr(infile_name, '.');
   if (infile_ext_name == nullptr) {
-    printf("ERROR: Supported extensions are .j2k, .j2c, .jhc, .jph\n");
+    printf("ERROR: Supported extensions are .j2k, .j2c, .jhc, .jph, .jp2\n");
     exit(EXIT_FAILURE);
   }
   const bool is_jph = (strcmp(infile_ext_name, ".jph") == 0 || strcmp(infile_ext_name, ".JPH") == 0);
-  if (!is_jph && strcmp(infile_ext_name, ".j2k") != 0 && strcmp(infile_ext_name, ".j2c") != 0
+  const bool is_jp2 = (strcmp(infile_ext_name, ".jp2") == 0 || strcmp(infile_ext_name, ".JP2") == 0);
+  if (!is_jph && !is_jp2 && strcmp(infile_ext_name, ".j2k") != 0 && strcmp(infile_ext_name, ".j2c") != 0
       && strcmp(infile_ext_name, ".jhc") != 0) {
-    printf("ERROR: Supported extensions are .j2k, .j2c, .jhc, .jph\n");
+    printf("ERROR: Supported extensions are .j2k, .j2c, .jhc, .jph, .jp2\n");
     exit(EXIT_FAILURE);
   }
   if (nullptr == (outfile_name = get_command_option(argc, argv, "-o"))) {
@@ -666,9 +667,9 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // For JPH inputs: probe the colorspace from the library (no app-level box parsing).
+  // For JPH and JP2 inputs: probe the colorspace from the library (no app-level box parsing).
   uint32_t detected_cs = 0;
-  if (is_jph) {
+  if (is_jph || is_jp2) {
     try {
       open_htj2k::openhtj2k_decoder probe(infile_name, 0, 0);
       detected_cs = probe.get_colorspace();
@@ -676,20 +677,21 @@ int main(int argc, char *argv[]) {
       printf("ERROR: %s\n", exc.what());
       return EXIT_FAILURE;
     }
+    const char *box = is_jp2 ? "JP2" : "JPH";
     if (detected_cs == open_htj2k::ENUMCS_SRGB)
-      printf("INFO: JPH colorspace: sRGB\n");
+      printf("INFO: %s colorspace: sRGB\n", box);
     else if (detected_cs == open_htj2k::ENUMCS_GRAYSCALE)
-      printf("INFO: JPH colorspace: Grayscale\n");
+      printf("INFO: %s colorspace: Grayscale\n", box);
     else if (detected_cs == open_htj2k::ENUMCS_YCBCR)
-      printf("INFO: JPH colorspace: YCbCr\n");
+      printf("INFO: %s colorspace: YCbCr\n", box);
     else if (detected_cs != 0)
-      printf("INFO: JPH colorspace: unknown EnumCS %u\n", detected_cs);
+      printf("INFO: %s colorspace: unknown EnumCS %u\n", box, detected_cs);
   }
 
   // Parse experimental -ycbcr flag (PPM output only).
   bool               do_ycbcr  = false;
   ycbcr_coefficients ycbcr_coeff{};
-  // Auto-enable for JPH files with YCbCr colorspace (BT.601 by default).
+  // Auto-enable for JPH and JP2 files with YCbCr colorspace (BT.601 by default).
   if (detected_cs == open_htj2k::ENUMCS_YCBCR && strcmp(outfile_ext_name, ".ppm") == 0) {
     do_ycbcr    = true;
     ycbcr_coeff = YCBCR_BT601;

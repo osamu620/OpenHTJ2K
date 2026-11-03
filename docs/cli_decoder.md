@@ -1,7 +1,7 @@
 # `open_htj2k_dec` — decoder CLI reference
 
 Both Part 1 (JPEG 2000) and Part 15 (HTJ2K) compliant decoding are
-supported. Accepts `.j2c` / `.j2k` / `.jhc` / `.jph` inputs and
+supported. Accepts `.j2c` / `.j2k` / `.jhc` / `.jph` / `.jp2` inputs and
 writes PGM / PPM / PGX / RAW outputs.
 
 Full runtime help: `open_htj2k_dec -h`.
@@ -39,7 +39,7 @@ output extension decides the writer:
     ITU-R BT.601 or BT.709 coefficients. Handles 4:2:0 and 4:2:2
     nearest-neighbour chroma upsampling. Has no effect when writing
     PGX, PGM, or RAW outputs.
-  - When decoding a `.jph` file whose colour specification box declares
+  - When decoding a `.jph` or `.jp2` file whose colour specification box declares
     YCbCr (`EnumCS = 18`), BT.601 conversion is applied automatically;
     use `-ycbcr bt709` to override.
 

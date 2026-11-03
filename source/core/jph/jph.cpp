@@ -140,17 +140,18 @@ image_header_box::image_header_box(j2k_main_header &hdr) : box_base(22, 0x696864
   element_siz siz, Osiz;
   hdr.SIZ->get_image_size(siz);
   hdr.SIZ->get_image_origin(Osiz);
-  HEIGHT      = siz.y - Osiz.y;
-  WIDTH       = siz.x - Osiz.x;
-  NC          = hdr.SIZ->get_num_components();
-  uint8_t val = hdr.SIZ->get_bitdepth(0) - 1;
+  HEIGHT = siz.y - Osiz.y;
+  WIDTH  = siz.x - Osiz.x;
+  NC     = hdr.SIZ->get_num_components();
+  // Bit depth minus 1, with the sign in bit 7; 255 when the components differ in either,
+  // which a Bits Per Component box then gives per component.
+  BPC = static_cast<uint8_t>((hdr.SIZ->get_bitdepth(0) - 1) | (hdr.SIZ->is_signed(0) ? 0x80 : 0));
   for (uint16_t c = 1; c < NC; ++c) {
-    if (val != hdr.SIZ->get_bitdepth(c) - 1) {
-      val = 0xFF;
+    if (BPC != static_cast<uint8_t>((hdr.SIZ->get_bitdepth(c) - 1) | (hdr.SIZ->is_signed(c) ? 0x80 : 0))) {
+      BPC = 0xFF;
       break;
     }
   }
-  BPC = val | static_cast<uint8_t>((hdr.SIZ->is_signed(0)) ? 0x80 : 0);
 }
 bool image_header_box::needBPCC() {
   bool val = false;

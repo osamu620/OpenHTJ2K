@@ -100,9 +100,11 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
   }
-  bool isJPH               = false;
-  std::string out_filename = args.ofname;
-  bool toFile              = true;
+  // The extension of the output file selects what is written: .jph a JPH file, .jp2 a JP2
+  // file, .j2c, .j2k, .jhc or .jphc the codestream alone.
+  open_htj2k::file_format out_format = open_htj2k::file_format::codestream;
+  std::string out_filename           = args.ofname;
+  bool toFile                        = true;
   if (out_filename.empty()) {
     toFile = false;
   } else {
@@ -110,17 +112,25 @@ int main(int argc, char *argv[]) {
     if (pos == std::string::npos) {
       toFile = false;  // no extension (e.g. /dev/null on Linux, NUL on Windows): discard output
     } else {
-      std::string fext = out_filename.substr(pos, 4);
-      if (fext == ".jph" || fext == ".JPH") {
-        isJPH = true;
+      std::string fext = out_filename.substr(pos);
+      for (auto &ch : fext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      if (fext == ".jph") {
+        out_format = open_htj2k::file_format::jph;
         if ((args.get_cblk_modes() & 0x40) == 0) {
           printf(
               "ERROR: the JPH file format requires the HT block coder (Cmodes=HT); write a .j2c codestream "
               "instead.\n");
           return EXIT_FAILURE;
         }
-      } else if (fext.compare(".j2c") && fext.compare(".j2k") && fext.compare(".jphc")
-                 && fext.compare(".J2C") && fext.compare(".J2K") && fext.compare(".JPHC")) {
+      } else if (fext == ".jp2") {
+        out_format = open_htj2k::file_format::jp2;
+        if (args.get_cblk_modes() & 0x40) {
+          printf(
+              "ERROR: the JP2 file format requires the Part 1 block coder (Cmodes=0 or Part 1 mode "
+              "switches); write a .jph file for the HT block coder instead.\n");
+          return EXIT_FAILURE;
+        }
+      } else if (fext != ".j2c" && fext != ".j2k" && fext != ".jhc" && fext != ".jphc") {
         printf("ERROR: invalid extension for output file\n");
         exit(EXIT_FAILURE);
       }
@@ -203,7 +213,8 @@ int main(int argc, char *argv[]) {
     uint8_t color_space_s = args.jph_color_space;
     for (int iter = 0; iter < num_iterations; ++iter) {
       open_htj2k::openhtj2k_encoder encoder(out_filename.c_str(), empty_input, siz_s, cod_s, qcd_s,
-                                            args.get_qfactor(), isJPH, color_space_s, args.num_threads);
+                                            args.get_qfactor(), false, color_space_s, args.num_threads);
+      encoder.set_file_format(out_format);
       if (!toFile) encoder.set_output_buffer(outbuf);
       // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());
@@ -296,7 +307,8 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < num_iterations; ++i) {
       open_htj2k::openhtj2k_encoder encoder(out_filename.c_str(), input_buf, siz, cod, qcd,
-                                            args.get_qfactor(), isJPH, color_space, args.num_threads);
+                                            args.get_qfactor(), false, color_space, args.num_threads);
+      encoder.set_file_format(out_format);
       if (!toFile) encoder.set_output_buffer(outbuf);
       // EXPERIMENTAL: analytic visual weighting (Qcsf/Qppd/Qzoom); legacy default is a no-op.
       encoder.set_visual_weighting(args.get_csf_model(), args.get_csf_ppd(), args.get_csf_zoom());

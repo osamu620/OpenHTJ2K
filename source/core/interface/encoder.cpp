@@ -558,7 +558,7 @@ class openhtj2k_encoder_impl {
   cod_params *cod;
   qcd_params *qcd;
   uint8_t qfactor;
-  bool isJPH;
+  file_format format;  // codestream, or the codestream in a JPH or JP2 file
   uint8_t color_space;
   // EXPERIMENTAL: analytic visual (CSF) weighting. Default-constructed selects
   // the legacy table, so output is unchanged unless set_visual_weighting() is called.
@@ -572,6 +572,9 @@ class openhtj2k_encoder_impl {
   std::vector<uint64_t> layer_targets;
 
   size_t invoke_internal();
+  // The brand of the file type box (file_type_box): 0 for JP2, 1 for JPH.
+  uint8_t brand() const { return (format == file_format::jp2) ? 0 : 1; }
+  void check_file_format() const;
   void check_ht_refinement() const;
   void check_rate_control() const;
   // Codestream bytes outside the tile-parts (SOC, main header with the TLM marker that
@@ -588,6 +591,7 @@ class openhtj2k_encoder_impl {
   openhtj2k_encoder_impl(const char *, const std::vector<int32_t *> &, siz_params &, cod_params &,
                          qcd_params &, uint8_t, bool, uint8_t);
   void set_output_buffer(std::vector<uint8_t> &);
+  void set_file_format(file_format f) { format = f; }
   void set_visual_weighting(uint8_t model, double ref_ppd, double zoom);
   void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
   void set_chroma_csf_reuse_luma(bool reuse_luma);
@@ -609,13 +613,38 @@ openhtj2k_encoder_impl::openhtj2k_encoder_impl(const char *filename,
                                                const std::vector<int32_t *> &input_buf, siz_params &s,
                                                cod_params &c, qcd_params &q, uint8_t qf, bool flag,
                                                uint8_t cs)
-    : buf(&input_buf), siz(&s), cod(&c), qcd(&q), qfactor(qf), isJPH(flag), color_space(cs) {
+    : buf(&input_buf),
+      siz(&s),
+      cod(&c),
+      qcd(&q),
+      qfactor(qf),
+      format(flag ? file_format::jph : file_format::codestream),
+      color_space(cs) {
   this->outfile = filename;
   this->outbuf  = nullptr;
 }
 
 void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf) {
   this->outbuf = &output_buf;
+}
+
+// A JP2 file (ISO/IEC 15444-1 Annex I) carries a Part 1 codestream: the HT block coder
+// needs a JPH file, and Part 2 extensions a JPX file.
+void openhtj2k_encoder_impl::check_file_format() const {
+  if (format != file_format::codestream && format != file_format::jph && format != file_format::jp2) {
+    open_htj2k::detail::fail("unknown file format %d.", static_cast<int>(format));
+  }
+  if (format != file_format::jp2) return;
+  const char *why = nullptr;
+  if (cod->codeblock_style & HT)
+    why = "the Part 1 block coder (Cmodes without HT); HT code-blocks go in a JPH file";
+  else if (cod->progression_order == 5)
+    why = "a Part 1 progression order (PRCL is an ISO/IEC 15444-2 extension)";
+  else if (siz->Rsiz & 0xC000)
+    why = "Rsiz without the ISO/IEC 15444-2 (bit 15) and CAP marker (bit 14) capabilities";
+  if (why != nullptr) {
+    open_htj2k::detail::fail("the JP2 file format requires %s.", why);
+  }
 }
 
 void openhtj2k_encoder_impl::check_ht_refinement() const {
@@ -842,6 +871,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     open_htj2k::detail::fail("The number of tiles exceeds its allowable maximum (65535).");
   }
 
+  check_file_format();
   check_ht_refinement();
   check_rate_control();
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(numTiles.x) * numTiles.y);
@@ -889,9 +919,9 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     std::vector<uint8_t> hdr_bytes;
     hdr_buf.flush(&hdr_bytes);
 
-    if (isJPH) {
+    if (format != file_format::codestream) {
       bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
-      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      jph_boxes jph_info(main_header, brand(), isSRGB, codestream_size);
       j2c_dst_memory jph_tmp;
       size_t file_format_size = jph_info.write(jph_tmp);
       std::vector<uint8_t> jph_bytes;
@@ -919,9 +949,9 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   } else {
     // File output: write directly to ofstream, bypassing j2c_dst entirely.
     std::ofstream dst(this->outfile, std::ios::out | std::ios::binary);
-    if (isJPH) {
+    if (format != file_format::codestream) {
       bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
-      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      jph_boxes jph_info(main_header, brand(), isSRGB, codestream_size);
       auto &jph_dst = enc_thread_bufs().jph_dst;
       jph_dst.clear();
       size_t file_format_size = jph_info.write(jph_dst);
@@ -1040,6 +1070,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   // Empty input buffer for streaming (img is not used)
   std::vector<int32_t *> empty_buf;
   const uint32_t num_tiles_lbs = numTiles.x * numTiles.y;
+  check_file_format();
   check_ht_refinement();
   check_rate_control();
   auto tileSet = MAKE_UNIQUE<j2k_tile[]>(static_cast<size_t>(num_tiles_lbs));
@@ -1089,9 +1120,9 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     std::vector<uint8_t> hdr_bytes;
     hdr_buf.flush(&hdr_bytes);
 
-    if (isJPH) {
+    if (format != file_format::codestream) {
       bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
-      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      jph_boxes jph_info(main_header, brand(), isSRGB, codestream_size);
       j2c_dst_memory jph_tmp;
       size_t file_format_size = jph_info.write(jph_tmp);
       std::vector<uint8_t> jph_bytes;
@@ -1119,9 +1150,9 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   } else {
     // File output: write directly to ofstream, bypassing j2c_dst entirely.
     std::ofstream dst(this->outfile, std::ios::out | std::ios::binary);
-    if (isJPH) {
+    if (format != file_format::codestream) {
       bool isSRGB = (color_space == static_cast<uint8_t>(sRGB));
-      jph_boxes jph_info(main_header, 1, isSRGB, codestream_size);
+      jph_boxes jph_info(main_header, brand(), isSRGB, codestream_size);
       auto &jph_dst = enc_thread_bufs().jph_dst;
       jph_dst.clear();
       size_t file_format_size = jph_info.write(jph_dst);
@@ -1158,6 +1189,8 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
 void openhtj2k_encoder::set_output_buffer(std::vector<uint8_t> &output_buf) {
   this->impl->set_output_buffer(output_buf);
 }
+
+void openhtj2k_encoder::set_file_format(file_format format) { this->impl->set_file_format(format); }
 
 void openhtj2k_encoder::set_ht_refinement(uint8_t planes) { this->impl->set_ht_refinement(planes); }
 

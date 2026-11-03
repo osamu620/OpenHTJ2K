@@ -1,8 +1,9 @@
 # `open_htj2k_enc` — encoder CLI reference
 
 Part 15 (HTJ2K) and Part 1 (JPEG 2000) encoder; `Cmodes` selects the
-block coder. Produces either a raw codestream (`.j2c`, `.j2k`, `.jphc`)
-or an HTJ2K JPH file (`.jph`, HT only). Accepts PGM,
+block coder. Produces a raw codestream (`.j2c`, `.j2k`, `.jhc`, `.jphc`),
+an HTJ2K JPH file (`.jph`, HT only) or a JPEG 2000 JP2 file (`.jp2`,
+Part 1 only). Accepts PGM,
 PPM, PGX, and TIFF (with libtiff) inputs. The streaming path
 handles all four formats — PGX with subsampled component sets
 (4:2:2, 4:2:0) and basic TIFF (8/16-bit, RGB or grayscale,
@@ -23,9 +24,15 @@ example, to encode separate YCbCr component files:
 open_htj2k_enc -i inputY.pgx,inputCb.pgx,inputCr.pgx -o output
 ```
 
-`-o` takes the base name; the extension decides the container:
-`.j2c` / `.j2k` / `.jphc` for raw HTJ2K codestream, `.jph` for the
-JPH file format.
+`-o` takes the base name; the extension (in upper or lower case) decides
+the container:
+
+- `.j2c` / `.j2k` / `.jhc` / `.jphc` — the raw codestream, HTJ2K or Part 1
+  (`Cmodes`).
+- `.jph` — the JPH file format (ISO/IEC 15444-15), HT block coder only.
+- `.jp2` — the JP2 file format (ISO/IEC 15444-1 Annex I), Part 1 block
+  coder only (`Cmodes=0` or Part 1 mode switches), so any JPEG 2000 Part 1
+  reader opens it.
 
 ## Options
 
@@ -53,7 +60,8 @@ JPH file format.
 - `Corder=<LRCP|RLCP|RPCL|PCRL|CPRL|PRCL>`
   - Progression order. Default is **LRCP**.
   - `PRCL` (position-resolution level-component-layer) is an ISO/IEC 15444-2 (Part 2) extension;
-    selecting it sets bit-14 of `Ccap2` in the CAP marker (Table A.49).
+    selecting it sets bit-14 of `Ccap2` in the CAP marker (Table A.49). Not allowed in `.jp2`
+    output, which carries a Part 1 codestream.
 - `Cuse_sop=yes|no`
   - `yes` to insert SOP (Start Of Packet) marker segments. Default is **no**.
 - `Cuse_eph=yes|no`
@@ -74,7 +82,7 @@ JPH file format.
     - `SEGMARK` — a segmentation symbol after every cleanup pass, for error detection.
 
     Example: `Cmodes="BYPASS|ERTERM"`. With `HT`, only `CAUSAL` may be added (`Cmodes="HT|CAUSAL"`).
-    `.jph` output requires `HT`.
+    `.jph` output requires `HT`; `.jp2` output requires the Part 1 block coder (no `HT`).
 - `Cht_refine=Int` (experimental, HT only)
   - Codes each HT code-block as one HT set of three passes: the HT cleanup pass `Int` bit-planes above
     the LSB, then the HT SigProp and HT MagRef passes of the plane below it (ISO/IEC 15444-15). Valid
@@ -128,7 +136,7 @@ JPH file format.
 
 - `-rate Float[,Float...]` *(experimental)*
   - Target bit rate in bits per pixel of the image area: the codestream (without
-    any JPH boxes) takes at most `rate × width × height / 8` bytes, usually within
+    any JPH or JP2 boxes) takes at most `rate × width × height / 8` bytes, usually within
     a few bytes of it. Every code-block is cut at the truncation point that gives
     the least squared error over the whole image:
     - HT block coder (the default): after the cleanup pass of an HT set, its
@@ -155,14 +163,21 @@ JPH file format.
     that gives the same size: HT at 0.96 bpp takes about 1.2 times as long on all
     threads and 2.1 times on one; Part 1 at 1 bpp about 1.1 and 2.4 times.
 
-### JPH and component layout
+### JPH, JP2 and component layout
 
 - `-jph_color_space RGB|YCC`
-  - Declare the color space of the input components. Use `YCC` if the
-    inputs are already in YCbCr.
-- `.jph` output takes 1 to 4 components: gray, gray + alpha, RGB (or
-  YCbCr) and RGB + alpha. With 2 or 4 components the last one is written
-  as an alpha channel (opacity), declared in a Channel Definition box.
+  - Declare the color space of the input components in the colour
+    specification box of a `.jph` or `.jp2` file. Use `YCC` if the inputs
+    are already in YCbCr.
+- `.jph` and `.jp2` output take 1 to 4 components: gray, gray + alpha, RGB
+  (or YCbCr) and RGB + alpha. The colour specification box declares
+  greyscale for 1 and 2 components, and sRGB (sYCC with `YCC`) for 3 and 4.
+  With 2 or 4 components the last one is written as an alpha channel
+  (opacity), declared in a Channel Definition box. Components that differ
+  in bit depth or signedness are listed in a Bits Per Component box.
+- `.jp2` output carries a Part 1 codestream only: the HT block coder
+  (`Cmodes=HT`, the default) and the Part 2 progression order `PRCL` are
+  refused; write HTJ2K into a `.jph` file instead.
 
 ### Runtime
 
@@ -187,6 +202,9 @@ open_htj2k_enc -i input.ppm -o out.j2c -rate 1
 
 # Part 1 codestream in three quality layers: 0.25, 0.5 and 1 bit per pixel
 open_htj2k_enc -i input.ppm -o out.j2c Cmodes=0 -rate 0.25,0.5,1
+
+# Lossless Part 1 codestream in a JP2 file, readable by any JPEG 2000 decoder
+open_htj2k_enc -i input.ppm -o out.jp2 Cmodes=0 Creversible=yes
 
 # Encode YCbCr components into a JPH file with explicit color space
 open_htj2k_enc -i Y.pgx,Cb.pgx,Cr.pgx -o out.jph -jph_color_space YCC

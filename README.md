@@ -22,12 +22,12 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
   (Downsampling Factor Structures, Arbitrary Transform Kernels). A Part 1
   codestream from `open_htj2k_enc` is readable by any JPEG 2000 decoder;
   its block coder supports all six mode switches (BYPASS, RESET,
-  RESTART, CAUSAL, ERTERM, SEGMARK), and the `.jph` file format stays
-  HT-only.
+  RESTART, CAUSAL, ERTERM, SEGMARK). The `.jph` file format stays
+  HT-only; a Part 1 codestream goes in a `.jp2` file.
 - Conformance-tested against ITU-T Rec. T.803 | ISO/IEC 15444-4; 529
   tests in the full suite.
-- JPH (`.jph`) file format, including colour specification box parsing
-  for automatic YCbCr colorspace detection.
+- JPH (`.jph`) and JP2 (`.jp2`) file formats, including colour
+  specification box parsing for automatic YCbCr colorspace detection.
 
 **Rate control: HTJ2K or Part 1 at a target size (new, experimental)**
 - `open_htj2k_enc -i in.ppm -o out.j2c -rate 1` makes a codestream of
@@ -177,8 +177,8 @@ examples live under [`docs/`](docs/).
 ### Encoder — `open_htj2k_enc`
 
 Part 15 (HTJ2K) and Part 1 encoder. Inputs: PGM, PPM, PGX, TIFF
-(libtiff). Outputs: `.j2c` / `.jhc` (raw codestream) or `.jph` (JPH
-file format, HT only).
+(libtiff). Outputs: `.j2c` / `.jhc` (raw codestream), `.jph` (JPH
+file format, HT only) or `.jp2` (JP2 file format, Part 1 only).
 
 ```bash
 # Lossless encode
@@ -204,7 +204,7 @@ Key flags: `Cmodes={HT|0|BYPASS|...}`, `Creversible={yes|no}`, `Qfactor=0..100`,
 
 ### Decoder — `open_htj2k_dec`
 
-Part 1 and Part 15 decoder. Inputs: `.j2c` / `.j2k` / `.jph`.
+Part 1 and Part 15 decoder. Inputs: `.j2c` / `.j2k` / `.jph` / `.jp2`.
 Outputs: PPM / PGM / PGX / RAW.
 
 ```bash
@@ -275,6 +275,7 @@ Key flags (demo): `--reduce N`, `--parafovea-ratio F`, `--periphery-ratio F`,
 |-----------|:---:|:---:|-------------|
 | `.jhc`, `.j2c`, `.j2k` | ✓ | ✓ | JPEG 2000 Part 1 or HTJ2K (Part 15) codestream; the encoder writes either (`Cmodes`) |
 | `.jph` | ✓ | ✓ | HTJ2K file format (JPH), HT codestreams only; colour specification box auto-detects YCbCr on decode |
+| `.jp2` | ✓ | ✓ | JPEG 2000 file format (JP2, ISO/IEC 15444-1 Annex I), Part 1 codestreams only (`Cmodes=0`); colour specification box auto-detects YCbCr on decode |
 
 ### CLI I/O
 
