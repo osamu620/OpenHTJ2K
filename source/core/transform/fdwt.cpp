@@ -1139,7 +1139,10 @@ static void emit_ready_f(fdwt_2d_state *s) {
     }
 #endif
 
-    if (s->u1 == s->u0 + 1) {
+    if (s->u1 == s->u0) {
+      // No columns (an empty resolution): nothing to filter, and PSEo would
+      // index outside the empty row.
+    } else if (s->u1 == s->u0 + 1) {
       // Single-column: skip PSE/filter (PSEo has UB for length-1 signals).
       // Match fdwt_hor_sr_fixed: LP even u0 → no-op; HP odd u0 → *2 for 5/3.
       if (s->use_i32) {
@@ -1197,7 +1200,10 @@ void fdwt_2d_state_init(fdwt_2d_state *s,
   s->horiz_left    = kHorizLeft[u0 % 2][cls];
   s->horiz_right   = kHorizRight[u1 % 2][cls];
 
-  const size_t row_bytes = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+  // An empty resolution (u1 == u0, possible with a non-zero image or tile
+  // origin) still gets non-empty buffers: zero-size allocations are
+  // implementation-defined.
+  const size_t row_bytes = sizeof(sprec_t) * static_cast<size_t>(s->stride > 0 ? s->stride : SIMD_PADDING);
   s->ring_buf    = aligned_mem_alloc(FDWT_STATE_RING_DEPTH * row_bytes, 32);
   s->top_pse_buf = (s->top_pse    > 0) ? aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32) : nullptr;
   s->bot_pse_buf = (s->bottom_pse > 0) ? aligned_mem_alloc(static_cast<size_t>(s->bottom_pse) * row_bytes, 32) : nullptr;
@@ -1290,7 +1296,9 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
     const bool is_hp = !is_lp_fdwt(s->v0);
     const sprec_t *src = static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
     sprec_t *out = static_cast<sprec_t *>(s->horiz_tmp) + s->horiz_left;
-    if (s->u1 == s->u0 + 1) {
+    if (s->u1 == s->u0) {
+      // No columns (an empty resolution): nothing to filter.
+    } else if (s->u1 == s->u0 + 1) {
       // Single-column: PSEo has UB for length-1 — bypass filter entirely.
       // Match fdwt_hor_sr_fixed: even u0 (LP) → no-op; odd u0 (HP) → *2 for 5/3.
       if (s->use_i32) {

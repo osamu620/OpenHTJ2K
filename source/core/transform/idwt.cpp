@@ -1508,7 +1508,11 @@ void idwt_2d_state_init(idwt_2d_state *s,
   s->horz_out_buf  = nullptr;
 
   if (dir == DWT_BIDIR) {
-    const size_t row_bytes  = sizeof(sprec_t) * static_cast<size_t>(s->stride);
+    // An empty resolution (u1 == u0, possible with a non-zero image or tile
+    // origin) still gets non-empty PSE buffers: zero-size allocations are
+    // implementation-defined.
+    const size_t row_bytes =
+        sizeof(sprec_t) * static_cast<size_t>(s->stride > 0 ? s->stride : SIMD_PADDING);
     const size_t slot_bytes = sizeof(sprec_t) * static_cast<size_t>(s->slot_stride);
     s->ring_buf    = aligned_mem_alloc(IDWT_STATE_RING_DEPTH * slot_bytes, 32);
     s->top_pse_buf = (s->top_pse    > 0) ? aligned_mem_alloc(static_cast<size_t>(s->top_pse)    * row_bytes, 32) : nullptr;
