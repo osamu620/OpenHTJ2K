@@ -36,6 +36,8 @@
   #include <wasm_simd128.h>
   #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 /******************************************************************************/
 // WASM SIMD helper functions
 /******************************************************************************/
@@ -1042,4 +1044,5 @@ bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshi
 }
 
 const uint32_t htj2k_dec_batch_lanes = 1;
+}  // namespace open_htj2k
 #endif

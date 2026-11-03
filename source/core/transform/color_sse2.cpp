@@ -36,6 +36,8 @@
 #if defined(OPENHTJ2K_ENABLE_SSE2)
   #include "color.hpp"
 
+namespace open_htj2k {
+
 namespace {
 int32_t finalize_one(float v, const FinalizeParams &p) {
   int32_t x = finalize_round(v, p.scale) + p.dc;
@@ -118,4 +120,5 @@ void fused_ycbcr_irrev_to_rgb_i32_sse2(const float *y, const float *cb, const fl
     b[n] = finalize_one(Y + static_cast<float>(CB_FACT_B) * Cb, fp[2]);
   }
 }
+}  // namespace open_htj2k
 #endif

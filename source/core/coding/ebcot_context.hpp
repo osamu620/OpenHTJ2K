@@ -31,6 +31,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace open_htj2k {
+
 // Part 1 (EBCOT) coding-pass state, packed into one 32-bit word per stripe column
 // (Taubman & Marcellin, "JPEG2000", §17.1.2, figure 17.2).  A stripe column is the
 // 4 samples of one column inside a 4-row stripe.  The words form a 2-D array with
@@ -111,3 +113,4 @@ inline void broadcast_significance(uint32_t *wp, size_t stride, uint32_t i, uint
 }
 
 }  // namespace ebcot
+}  // namespace open_htj2k

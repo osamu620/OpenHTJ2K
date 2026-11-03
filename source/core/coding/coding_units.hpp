@@ -38,6 +38,8 @@
 #include <memory>
 #include <mutex>
 
+namespace open_htj2k {
+
 // HT encoder sample form of a quantized coefficient t: 0 when t == 0,
 // otherwise ((|t| - 1) << 1) + sign with bit 31 set as the significance flag.
 // ORs |t| into or_acc.  Branchless, so the scalar loops calling it vectorize.
@@ -1114,3 +1116,4 @@ inline int32_t encode_codeblock(j2k_codeblock *block, uint8_t ROIshift) noexcept
     return block->ht_refine_planes ? htj2k_encode_refined(block, ROIshift) : htj2k_encode(block, ROIshift);
   return ebcot_encode(block, ROIshift);
 }
+}  // namespace open_htj2k

@@ -49,6 +49,13 @@
   (`WARNING: ...`). They print an error as `ERROR: <description>`, without
   the extra `ERROR: std::exception` line.
 - These changes leave encoded and decoded output unchanged.
+- All of the library's internal classes, functions and variables are now in
+  the `open_htj2k` namespace. About 550 of them (`ThreadPool`, `j2k_tile`,
+  `SIZ_marker`, the DWT and block coder functions, ...) used to be global,
+  where they could collide with a program's own names: with the static
+  library at link time, and with the shared library through symbol
+  interposition. The shared library now exports no global symbols of its
+  own. Programs that use only the public API need no change.
 
 ## Fixed
 

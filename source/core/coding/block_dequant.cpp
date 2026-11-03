@@ -31,6 +31,8 @@
   #include "block_dequant.hpp"
   #include <cassert>
 
+namespace open_htj2k {
+
 template <bool StoreI32>
 static void j2k_dequant_rev_scalar(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *band_buf,
                                    uint32_t band_stride, uint32_t width, uint32_t height, int32_t M_b,
@@ -141,4 +143,5 @@ void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *ban
   }
 }
 
+}  // namespace open_htj2k
 #endif

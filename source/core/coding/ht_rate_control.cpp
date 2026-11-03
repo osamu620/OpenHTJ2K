@@ -106,6 +106,8 @@
   #include "message_internal.hpp"
 #endif
 
+namespace open_htj2k {
+
 namespace {
 
 // Cleanup segment length (bytes) at plane p, linear in: the sum over samples of their
@@ -1604,3 +1606,4 @@ uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
   }
   return codestream_length(tiles, num_tiles, fixed_bytes);
 }
+}  // namespace open_htj2k

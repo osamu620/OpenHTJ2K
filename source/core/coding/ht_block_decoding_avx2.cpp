@@ -41,6 +41,8 @@
     #include "message_internal.hpp"
   #endif
 
+namespace open_htj2k {
+
 static FORCE_INLINE uint8_t calc_mbr_inline(const uint8_t *block_states, size_t blkstate_stride, uint32_t i,
                                             uint32_t j, uint8_t causal_cond) {
   const uint8_t *p0 = block_states + static_cast<size_t>(i) * blkstate_stride + j;
@@ -1185,4 +1187,5 @@ bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshi
 }
 
 const uint32_t htj2k_dec_batch_lanes = OPENHTJ2K_HT_DEC_BATCH_N;
+}  // namespace open_htj2k
 #endif

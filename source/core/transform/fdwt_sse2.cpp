@@ -39,6 +39,8 @@
   #include <cstring>
   #include "dwt.hpp"
 
+namespace open_htj2k {
+
 namespace {
 struct f32x4x2 {
   __m128 val[2];
@@ -580,4 +582,5 @@ void fdwt_1d_filtr_rev53_planar_i32_sse2(int32_t *lp, int32_t *hp, const int32_t
   }
 }
 
+}  // namespace open_htj2k
 #endif  // OPENHTJ2K_ENABLE_SSE2

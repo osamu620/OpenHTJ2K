@@ -44,6 +44,8 @@
   #include "enc_CxtVLC_tables.hpp"
   #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 void j2k_codeblock::quantize(uint32_t &or_val) {
   const uint32_t height = this->size.y;
   const uint32_t width  = this->size.x;
@@ -386,4 +388,5 @@ int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept {
   htj2k_cleanup_encode(block, ROIshift);
   return EXIT_SUCCESS;
 }
+}  // namespace open_htj2k
 #endif

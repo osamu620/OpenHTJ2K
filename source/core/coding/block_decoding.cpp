@@ -35,6 +35,8 @@
 #include "block_dequant.hpp"
 #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 // The coding passes below keep all per-sample state in the packed stripe-column
 // words (see ebcot_context.hpp).  Each pass loads a column's word once, works on a
 // register copy, and stores it back after the column; neighbouring words are
@@ -376,3 +378,4 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
               block->size.y, M_b, ROIshift, block->transformation, block->stepsize, block->dequant_i32);
   // TODO: if k !=0
 }
+}  // namespace open_htj2k

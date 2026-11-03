@@ -37,6 +37,8 @@
   #include "open_htj2k_typedef.hpp"
   #include "utils.hpp"
 
+namespace open_htj2k {
+
   #ifndef FORCE_INLINE
     #if defined(__GNUC__) || defined(__clang__)
       #define FORCE_INLINE inline __attribute__((always_inline))
@@ -331,4 +333,5 @@ class state_MEL_enc {
   }
 };
 
+}  // namespace open_htj2k
 #endif

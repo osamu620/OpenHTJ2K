@@ -41,6 +41,8 @@
 #define CR_FACT_G (2 * ALPHA_R * (1 - ALPHA_R) / ALPHA_G)
 #define CB_FACT_G (2 * ALPHA_B * (1 - ALPHA_B) / ALPHA_G)
 
+namespace open_htj2k {
+
 typedef void (*cvt_color_func)(int32_t *, int32_t *, int32_t *, uint32_t, uint32_t);
 // Float-domain inverse color transform (used in decode to avoid float→int32 intermediate copy).
 // sp0/sp1/sp2 point to float sample buffers; stride = row stride in floats.
@@ -83,7 +85,9 @@ static inline __m256i finalize_round_avx2(__m256 v, __m256 vscale, __m256 vhalf)
 }
 #endif
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+}  // namespace open_htj2k (headers are included at global scope)
   #include <arm_neon.h>
+namespace open_htj2k {
 static inline int32x4_t finalize_round_neon(float32x4_t v, float32x4_t vscale, float32x4_t vhalf) {
   #if defined(__aarch64__) || defined(_M_ARM64)
   return vcvtmq_s32_f32(vfmaq_f32(vhalf, v, vscale));
@@ -98,7 +102,9 @@ static inline int32x4_t finalize_round_neon(float32x4_t v, float32x4_t vscale, f
 }
 #endif
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+}  // namespace open_htj2k (headers are included at global scope)
   #include <wasm_simd128.h>
+namespace open_htj2k {
 static inline v128_t finalize_round_wasm(v128_t v, v128_t vscale, v128_t vhalf) {
   return wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_floor(wasm_f32x4_add(wasm_f32x4_mul(v, vscale), vhalf)));
 }
@@ -304,3 +310,4 @@ inline int32_t round_d(double val) {
     return static_cast<int32_t>(val + ((val > 0) ? 0.5 : -0.5));
   }
 }
+}  // namespace open_htj2k

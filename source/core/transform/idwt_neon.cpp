@@ -37,6 +37,8 @@
 #include <cmath>
   #include <vector>
 
+namespace open_htj2k {
+
   // MSVC ARM64 perturbs IDWT FP codegen depending on the inlining context — the
   // same source compiles to slightly different machine code when inlined into a
   // caller (batch path) vs. invoked through a function pointer (stream path),
@@ -991,4 +993,5 @@ void idwt_rev_ver_hp_step_i32_neon(int32_t n, const int32_t *prev, const int32_t
   for (; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
 }
 
+}  // namespace open_htj2k
 #endif

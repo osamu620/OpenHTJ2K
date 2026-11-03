@@ -31,6 +31,8 @@
 #include <cstdint>
 #include "mq_decoder.hpp"  // static_table: Qe, NMPS, NLPS and SWITCH packed per state
 
+namespace open_htj2k {
+
 // MQ arithmetic encoder of ISO/IEC 15444-1 Annex C (the CODEMPS / CODELPS /
 // RENORME / BYTEOUT / FLUSH procedures of C.2).  The coding passes call
 // encode() once per decision; flush() or erterm() terminates the codeword
@@ -261,3 +263,4 @@ class raw_encoder {
   uint32_t c   = 0;  // bits of the byte being assembled
   int32_t ct   = 8;  // bits still free in that byte
 };
+}  // namespace open_htj2k

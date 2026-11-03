@@ -37,6 +37,8 @@
 #include "utils.hpp"
 #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 class j2c_src_memory {
  private:
   //  std::unique_ptr<uint8_t[]> buf;
@@ -620,3 +622,4 @@ class tagtree {
   //   return *this;
   // }
 };
+}  // namespace open_htj2k

@@ -47,6 +47,8 @@
   #include <wasm_simd128.h>
 #endif
 
+namespace open_htj2k {
+
 namespace {
 
 // Maximum number of coding passes for j2k_codeblock::pass_length[] array
@@ -1247,7 +1249,9 @@ static fused_mct_finalize_func fused_mct_finalize[2]             = {fused_ycbcr_
 #endif
 
 #ifdef OPENHTJ2K_THREAD
+}  // namespace open_htj2k (headers are included at global scope)
   #include "ThreadPool.hpp"
+namespace open_htj2k {
 std::atomic<ThreadPool *> ThreadPool::singleton_{nullptr};
 std::mutex ThreadPool::singleton_mutex;
 size_t ThreadPool::users_ = 0;
@@ -7752,3 +7756,4 @@ uint32_t j2k_tile::get_tile_part_size() const {
 }
 
 OPENHTJ2K_MAYBE_UNUSED uint32_t j2k_tile::get_buf_length() { return tile_buf->get_total_length(); }
+}  // namespace open_htj2k

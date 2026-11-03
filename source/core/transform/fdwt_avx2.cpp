@@ -37,6 +37,8 @@
  * horizontal transforms
  *******************************************************************************/
 // irreversible FDWT
+namespace open_htj2k {
+
 auto fdwt_irrev97_fixed_avx2_hor_step = [](const int32_t init_pos, const int32_t simdlen, float *const X,
                                             const int32_t n0, const int32_t n1, float coeff) {
   auto vcoeff = _mm256_set1_ps(coeff);
@@ -611,4 +613,5 @@ void fdwt_1d_filtr_rev53_planar_i32_avx2(int32_t *lp, int32_t *hp, const int32_t
     }
   }
 }
+}  // namespace open_htj2k
 #endif

@@ -33,6 +33,8 @@
 #include <string>
 #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 constexpr uint8_t YCC444 = 0;
 constexpr uint8_t YCC420 = 1;
 constexpr uint8_t YCC422 = 2;
@@ -1887,3 +1889,4 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
   }
   return length_of_tilepart_markers;
 }
+}  // namespace open_htj2k

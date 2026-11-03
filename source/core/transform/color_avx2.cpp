@@ -34,6 +34,8 @@
   #endif
   #include "color.hpp"
 
+namespace open_htj2k {
+
 // lossless: forward RCT
 void cvt_rgb_to_ycbcr_rev_avx2(int32_t *sp0, int32_t *sp1, int32_t *sp2, uint32_t width, uint32_t height) {
   for (uint32_t y = 0; y < height; ++y) {
@@ -407,4 +409,5 @@ void fused_ycbcr_rev_to_rgb_i32_avx2(const float *y, const float *cb, const floa
     b[n] = clamp(Cb + G, fp[2]);
   }
 }
+}  // namespace open_htj2k
 #endif
