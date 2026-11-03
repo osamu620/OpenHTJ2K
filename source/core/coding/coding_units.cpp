@@ -3139,7 +3139,9 @@ j2k_tile_component::~j2k_tile_component() {
   // single-tile reuse flag so finalize_line_decode does a real teardown.
   line_dec_persistent_ = false;
   finalize_line_decode();
-  finalize_line_encode();
+  // Free the encoder state without flushing it: after an exception the DWT state can
+  // be half-built, and a flush there is unsafe (it divided by zero at NL = 32).
+  release_line_encode();
   // Destroy resolutions (placement-new'd flat array).
   if (resolution != nullptr) {
     for (uint8_t r = 0; r < num_resolutions; ++r) {
@@ -3814,20 +3816,28 @@ void j2k_tile_component::finalize_line_encode() {
   if (!line_enc) return;
   auto *le = line_enc.get();
 
-  fdwt_2d_state *states     = le->states.get();
-  fdwt_level_sink_ctx *ctxs = le->ctxs.get();
+  fdwt_2d_state *states = le->states.get();
 
   // Flush from finest to coarsest: each flush may push LP rows into the next
   // coarser state, which in turn needs its own flush to drain remaining rows.
   for (int32_t i = le->NL_active - 1; i >= 0; --i) {
     fdwt_2d_state_flush(&states[i]);
   }
+  release_line_encode();
+}
 
-  // Free all allocated resources.
+void j2k_tile_component::release_line_encode() {
+  if (!line_enc) return;
+  auto *le = line_enc.get();
+
+  fdwt_2d_state *states     = le->states.get();
+  fdwt_level_sink_ctx *ctxs = le->ctxs.get();
   for (int32_t i = 0; i < le->NL_active; ++i) {
-    fdwt_2d_state_free(&states[i]);
-    aligned_mem_free(ctxs[i].lp_tmp);
-    aligned_mem_free(ctxs[i].hp_tmp);
+    if (states != nullptr) fdwt_2d_state_free(&states[i]);
+    if (ctxs != nullptr) {
+      aligned_mem_free(ctxs[i].lp_tmp);
+      aligned_mem_free(ctxs[i].hp_tmp);
+    }
   }
   aligned_mem_free(le->push_scratch_i32);
   line_enc.reset();

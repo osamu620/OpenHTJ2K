@@ -23,7 +23,10 @@
 // formats of set_file_format(): JP2 files of 1 to 4 components from both entry
 // points must hold the raw Part 1 codestream after the expected boxes and decode
 // to the input; JP2 must refuse HT code-blocks and Part 2 capabilities; JPH set
-// that way must equal the constructor's JPH.
+// that way must equal the constructor's JPH.  First of all, a small image with
+// 20 and 30 DWT levels: the quantization step sizes once took memory doubling
+// with every level, so the 20-level encode must stay small (where the peak
+// memory can be read) before the 30-level ones run.
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
@@ -37,10 +40,28 @@
 #include <vector>
 #include "decoder.hpp"
 #include "encoder.hpp"
+#if defined(__unix__) || defined(__APPLE__)
+  #include <sys/resource.h>
+#endif
 
 namespace {
 
 constexpr uint8_t NO_QFACTOR = 0xFF;
+
+// Peak resident memory of this process so far in MiB, or -1 where it cannot be read.
+double peak_rss_mib() {
+#if defined(__unix__) || defined(__APPLE__)
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) != 0) return -1.0;
+  #if defined(__APPLE__)
+  return static_cast<double>(ru.ru_maxrss) / (1024.0 * 1024.0);  // bytes
+  #else
+  return static_cast<double>(ru.ru_maxrss) / 1024.0;  // KiB
+  #endif
+#else
+  return -1.0;
+#endif
+}
 
 struct Case {
   uint32_t width, height;
@@ -413,6 +434,33 @@ int main(int argc, char *argv[]) {
              lay.tw, lay.th, part1 ? " Part 1" : "", target ? " (target size)" : "", layers);
     }
   };
+
+  // Deep decompositions, run first while the peak memory is still low.  The step
+  // sizes once took memory doubling with every DWT level (about 0.5 GB at 20
+  // levels, all of a 91 GB machine before 32), so the 30-level cases run only when
+  // the 20-level encodes stayed small, or where the peak memory cannot be read.
+  // The 5-level encodes first take the memory any encode does (per-thread scratch).
+  {
+    for (uint8_t xf = 0; xf < 2; ++xf)
+      run(Case{61, 47, 1, 0, xf, 5, 8, false}, Layout{0, 0, 0, 0}, 0, false);
+    const double before = peak_rss_mib();
+    for (uint8_t xf = 0; xf < 2; ++xf)
+      run(Case{61, 47, 1, 0, xf, 20, 8, false}, Layout{0, 0, 0, 0}, 0, false);
+    const double grown = peak_rss_mib() - before;
+    if (verbose && before >= 0) printf("     20 DWT levels: peak memory grew by %.1f MiB\n", grown);
+    if (before >= 0 && grown > 64.0) {
+      ++total;
+      ++failed;
+      printf(
+          "FAIL 20 DWT levels: peak memory grew by %.0f MiB (at most 64 expected); "
+          "30 levels skipped\n",
+          grown);
+    } else {
+      for (auto &cp : {Comp{1, 0}, Comp{3, 1}})
+        for (uint8_t xf = 0; xf < 2; ++xf)
+          run(Case{61, 47, cp.nc, cp.mct, xf, 30, 8, false}, Layout{0, 0, 0, 0}, 0, false);
+    }
+  }
 
   for (auto &sz : sizes)
     for (auto &cp : comps)

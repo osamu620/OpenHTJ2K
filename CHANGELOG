@@ -161,6 +161,30 @@
   I.4), which gives the length of the box exactly; LBox = 0 ("to the end of
   the file") would be allowed for the last box only and would not tell a
   reader where the codestream ends. Smaller files are byte-identical.
+- Memory for the quantization step sizes doubled with every DWT level: the
+  encoder built each level's wavelet basis function, which doubles in length
+  per level, to measure its gain. A 61x47 image took 486 MB at 20 levels and
+  1.75 GB at 22; at 32 levels (`Clevels=32`) the encoder used all 91 GB of a
+  machine's memory before it was killed. The gains have converged by level 14,
+  so deeper levels now continue their trend (constant for 5/3, doubling per
+  level for 9/7) instead, in a few MB at any number of levels. The step sizes
+  are identical to the old ones at every level the old encoder could reach
+  (checked up to 22 levels: lossless, lossy, `Qfactor` and derived
+  quantization, gray and colour).
+- Lossy codestreams with a very small step size could not be decoded: the
+  step-size exponent was capped at 31 without regard to the guard bits, so a
+  subband could get 31 or more magnitude bit-planes, beyond the 30 that the
+  block coders hold. This happened with a tiny `Qstep` (e.g. `Qstep=1e-9` at
+  the default 5 levels, with either block coder) and, at the default step,
+  with 22 or more DWT levels on an 8-bit image. The exponent is now capped at
+  31 minus the guard bits, which leaves those subbands at the smallest step
+  they can take; the codestreams decode. Codestreams that decoded before are
+  byte-identical.
+- An encode that failed with an exception could crash while cleaning up: the
+  tile-component destructor flushed the half-built wavelet transform instead
+  of only freeing it, and with 32 DWT levels the flush divided by zero
+  (SIGFPE) in place of reporting the error. The destructor now only frees
+  memory.
 
 ### Decoder
 - A JPH or JP2 file that starts with the signature box but has no valid

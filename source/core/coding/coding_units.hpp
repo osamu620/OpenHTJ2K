@@ -801,10 +801,12 @@ class j2k_tile_component : public j2k_tile_base {
   //                            is false, this overload promotes the int32 row
   //                            back to float before pushing.
   // finalize_line_encode():    flushes states, fills subband buffers, frees state.
+  // release_line_encode():     frees state without flushing (destructor, errors).
   void init_line_encode();
   void push_line_enc(const sprec_t *in);
   void push_line_enc_i32(const int32_t *in);
   void finalize_line_encode();
+  void release_line_encode();
   struct j2k_tcomp_line_enc *get_line_enc() { return line_enc.get(); }
 
   void destroy() {
