@@ -1496,6 +1496,20 @@ static inline uint32_t ceil_div_pow2(uint32_t a, uint32_t n) {
   return ceil_int(a, 1U << n);
 }
 
+// Whether the position-driven progressions (RPCL, PCRL, CPRL, PRCL) visit a precinct of a
+// resolution at reference-grid coordinate p (B.12.1.3 to B.12.1.5): p is a multiple of
+// sub * 2^(log2PP + depth), with sub the component's sub-sampling factor, log2PP the
+// resolution's precinct size and depth its number of decomposition levels below the
+// image, or p is the tile's first coordinate p0 and the resolution's first coordinate r0
+// is not on a precinct boundary.  log2PP + depth reaches 47 with 32 DWT levels, and with
+// maximal precincts (log2PP = 15) the multiple passes 32 bits from 16 levels on, so it is
+// formed in 64 bits.
+static inline bool is_precinct_start(uint32_t p, uint32_t p0, uint32_t sub, uint32_t log2PP, uint32_t depth,
+                                     uint32_t r0) {
+  if (p % (uint64_t{sub} << (log2PP + depth)) == 0) return true;
+  return p == p0 && (r0 & ((1U << log2PP) - 1U)) != 0;
+}
+
 // ceil((p - o * 2^(nb - 1)) / 2^nb), a coordinate of a subband at level nb >= 1 with
 // orientation offset o (B-15).  As above, nb reaches 32.
 static inline uint32_t subband_coord(uint32_t p, uint8_t nb, uint8_t o) {
@@ -4885,10 +4899,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                             cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                         const uint8_t vd =
                             cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                        x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                                 || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                        y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                                 || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                        x_cond = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                        y_cond = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                       }
                       if (x_cond && y_cond) {
                         p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -4957,10 +4969,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5026,10 +5036,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5099,10 +5107,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                             cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                         const uint8_t vd =
                             cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                        x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                                 || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                        y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                                 || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                        x_cond = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                        y_cond = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                       }
                       if (x_cond && y_cond) {
                         p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5339,10 +5345,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5397,10 +5401,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5454,10 +5456,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5512,10 +5512,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5770,10 +5768,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5826,10 +5822,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5881,10 +5875,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5937,10 +5929,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
