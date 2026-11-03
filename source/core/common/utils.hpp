@@ -266,12 +266,18 @@ namespace open_htj2k {
 struct AlignedLargePool {
   static constexpr size_t THRESHOLD = 16384;  // 16 KB: cache buffers >= this size
   static constexpr int    MAX_SLOTS = 128;    // max cached entries per thread
+  // Most bytes a thread keeps cached; a buffer that would exceed it is freed.
+  static constexpr size_t MAX_CACHED_BYTES = static_cast<size_t>(512) << 20;
   struct Slot { void* ptr; size_t usable; };
   Slot   slots[MAX_SLOTS];
-  int    count = 0;
+  int    count        = 0;
+  size_t cached_bytes = 0;
+  // Cleared by the destructor: other thread_local objects destroyed after the
+  // pool at thread exit may still free buffers, which then go straight to free().
+  bool   alive        = true;
 
   void* alloc(size_t bytes, size_t align) {
-    if (bytes >= THRESHOLD) {
+    if (bytes >= THRESHOLD && alive) {
       // Best-fit: find smallest cached buffer with usable >= bytes AND alignment compatible.
       int    best_i = -1;
       size_t best_u = SIZE_MAX;
@@ -285,6 +291,7 @@ struct AlignedLargePool {
       }
       if (best_i >= 0) {
         void* p        = slots[best_i].ptr;
+        cached_bytes -= slots[best_i].usable;
         slots[best_i]  = slots[--count];
         return p;
       }
@@ -297,8 +304,9 @@ struct AlignedLargePool {
   void release(void* ptr) {
     if (!ptr) return;
     size_t sz = OPENHTJ2K_POOL_SIZE_FN(ptr);
-    if (sz >= THRESHOLD && count < MAX_SLOTS) {
+    if (alive && sz >= THRESHOLD && count < MAX_SLOTS && sz <= MAX_CACHED_BYTES - cached_bytes) {
       slots[count++] = {ptr, sz};
+      cached_bytes += sz;
     } else {
       free(ptr);
     }
@@ -306,12 +314,21 @@ struct AlignedLargePool {
 
   ~AlignedLargePool() {
     for (int i = 0; i < count; ++i) free(slots[i].ptr);
-    count = 0;
+    count        = 0;
+    cached_bytes = 0;
+    alive        = false;
   }
 };
-}  // namespace open_htj2k
 
-static thread_local open_htj2k::AlignedLargePool tl_aligned_pool;
+// One pool per thread for the whole library.  (A `static thread_local` pool
+// in this header gave every source file its own pool, so a buffer freed in a
+// file other than the one that allocated it was cached where it was never
+// reused, and a long-lived thread kept memory from every decode.)
+inline AlignedLargePool &tl_aligned_pool() {
+  static thread_local AlignedLargePool pool;
+  return pool;
+}
+}  // namespace open_htj2k
 #endif  // OPENHTJ2K_LARGE_POOL
 
 static inline void* aligned_mem_alloc(size_t size, size_t align) {
@@ -323,7 +340,7 @@ static inline void* aligned_mem_alloc(size_t size, size_t align) {
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   result = __mingw_aligned_malloc(size, align);
 #elif defined(OPENHTJ2K_LARGE_POOL)
-  result = tl_aligned_pool.alloc(size, align);
+  result = open_htj2k::tl_aligned_pool().alloc(size, align);
 #else
   if (posix_memalign(&result, align, size)) {
     result = nullptr;
@@ -340,7 +357,7 @@ static inline void aligned_mem_free(void* ptr) {
 #elif defined(__MINGW32__) || defined(__MINGW64__)
   __mingw_aligned_free(ptr);
 #elif defined(OPENHTJ2K_LARGE_POOL)
-  tl_aligned_pool.release(ptr);
+  open_htj2k::tl_aligned_pool().release(ptr);
 #else
   free(ptr);
 #endif

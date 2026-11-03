@@ -57,6 +57,13 @@ class openhtj2k_decoder {
   std::unique_ptr<class openhtj2k_decoder_impl> impl;
 
  public:
+  // num_threads: 1 decodes on the calling thread only.  Any other value uses the
+  // worker pool that all decoders and encoders in the process share: 0 asks for
+  // one thread per hardware thread, n for n threads.  The pool is created by the
+  // first instance that needs it, with that instance's count, and is kept until
+  // the last instance using it is destroyed; while it exists, other instances
+  // use it as it is.  Instances may be used from several threads at once, each
+  // instance from one thread at a time.
   OPENHTJ2K_EXPORT openhtj2k_decoder();
   OPENHTJ2K_EXPORT openhtj2k_decoder(const char *, uint8_t reduce_NL, uint32_t num_threads);
   OPENHTJ2K_EXPORT openhtj2k_decoder(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);

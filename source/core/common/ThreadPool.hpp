@@ -138,8 +138,13 @@ class InlineTask {
 class ThreadPool {
  public:
   inline explicit ThreadPool(size_t thread_count)
-      : stop(false), ring_head_(0), ring_tail_(0), thread_count_(thread_count) {
-    ring_ = std::unique_ptr<InlineTask[]>(new InlineTask[RING_CAP]);
+      : stop(false),
+        ring_cap_(RING_INITIAL_CAP),
+        ring_mask_(RING_INITIAL_CAP - 1),
+        ring_head_(0),
+        ring_tail_(0),
+        thread_count_(thread_count) {
+    ring_   = std::unique_ptr<InlineTask[]>(new InlineTask[ring_cap_]);
     threads = std::unique_ptr<std::thread[]>(new std::thread[thread_count_]);
     for (size_t i = 0; i < thread_count_; ++i) {
       threads[i] = std::thread(&ThreadPool::worker, this);
@@ -238,13 +243,8 @@ class ThreadPool {
    *
    * Acquires the task-queue mutex exactly once for the whole batch (replacing
    * N individual push() calls each of which would re-acquire the lock), then
-   * issues ceil(n/BATCH) targeted notify_one() wakeups — one per worker that
-   * is expected to find a non-empty BATCH-sized chunk to drain.  This is
-   * cheaper than notify_all() which would wake every idle worker only to have
-   * most of them go straight back to sleep.
-   *
-   * Throws std::runtime_error if the ring buffer cannot accommodate the
-   * incoming batch (see RING_CAP for the limit).
+   * wakes at most one worker per task.  The ring grows when it is full, so a
+   * push never fails part-way through a batch.
    */
   template <typename Container, typename Factory>
   void push_batch(Container &&items, Factory &&factory) {
@@ -256,25 +256,42 @@ class ThreadPool {
         throw std::runtime_error("Cannot schedule new task after shutdown.");
       }
       for (auto &&item : items) {
-        if (ring_size_() >= RING_CAP) {
-          throw std::runtime_error(
-              "ThreadPool task ring overflow — too many in-flight tasks (raise RING_CAP)");
-        }
-        ring_[ring_tail_ & RING_MASK] = InlineTask(factory(item));
+        if (ring_size_() >= ring_cap_) grow_ring_();
+        ring_[ring_tail_ & ring_mask_] = InlineTask(factory(item));
         ++ring_tail_;
       }
     }
-    // Wake only as many workers as actually needed to drain the queue.
-    // Each worker drains up to BATCH tasks per lock hold, so ceil(n/BATCH)
-    // workers suffice.  notify_one() avoids waking idle workers needlessly.
-    const size_t wakeups = std::min((n + BATCH - 1) / BATCH, thread_count_);
+    // Wake only as many workers as there are tasks (each worker takes one task
+    // at a time); notify_one() avoids waking idle workers needlessly.
+    const size_t wakeups = std::min(n, thread_count_);
     for (size_t i = 0; i < wakeups; ++i)
       condition.notify_one();
   }
 
   // Lock-free fast path: the singleton is set once during init and cleared on
-  // release, so an acquire load is sufficient after the first call.
-  static ThreadPool* get() { return singleton_.load(std::memory_order_acquire); }
+  // release, so an acquire load is sufficient after the first call.  Returns
+  // nullptr on a thread inside a SingleThreadScope.
+  static ThreadPool *get() {
+    if (single_thread_flag()) return nullptr;
+    return singleton_.load(std::memory_order_acquire);
+  }
+
+  // A decoder or encoder created with one thread runs on the calling thread
+  // only, even when another instance has created the pool: while a
+  // SingleThreadScope(true) is alive on a thread, get() returns nullptr there,
+  // so no work is pushed to the pool and no wait runs pool tasks.
+  class SingleThreadScope {
+   public:
+    explicit SingleThreadScope(bool single_thread) : previous_(single_thread_flag()) {
+      if (single_thread) single_thread_flag() = true;
+    }
+    ~SingleThreadScope() { single_thread_flag() = previous_; }
+    SingleThreadScope(const SingleThreadScope &)            = delete;
+    SingleThreadScope &operator=(const SingleThreadScope &) = delete;
+
+   private:
+    bool previous_;
+  };
 
   // Try to dequeue and execute one pending task from the calling thread.
   // Returns true if a task was executed, false if the queue was empty or locked.
@@ -294,7 +311,7 @@ class ThreadPool {
     {
       std::unique_lock<std::mutex> lock(tasks_mutex, std::try_to_lock);
       if (!lock.owns_lock() || ring_empty_()) return false;
-      task = std::move(ring_[ring_head_ & RING_MASK]);
+      task = std::move(ring_[ring_head_ & ring_mask_]);
       ++ring_head_;
     }
     task();
@@ -361,29 +378,44 @@ class ThreadPool {
         throw std::runtime_error("Cannot schedule new task after shutdown.");
       }
 
-      if (ring_size_() >= RING_CAP) {
-        throw std::runtime_error(
-            "ThreadPool task ring overflow — too many in-flight tasks (raise RING_CAP)");
-      }
-      ring_[ring_tail_ & RING_MASK] = InlineTask(std::forward<F>(task));
+      if (ring_size_() >= ring_cap_) grow_ring_();
+      ring_[ring_tail_ & ring_mask_] = InlineTask(std::forward<F>(task));
       ++ring_tail_;
     }
 
     condition.notify_one();
   }
 
-  static constexpr size_t BATCH    = 4;      // tasks drained per lock hold in worker()
-  // RING_CAP must be a power of two.  Sized to comfortably hold the worst-case
-  // burst from a 4K encode tile (a single precinct can enqueue ~5-8 K codeblock
-  // tasks back-to-back via push_batch before workers begin draining).  At
-  // sizeof(InlineTask) = 48 bytes, 32768 slots is ~1.5 MB per pool — allocated
-  // once at process init.  Producers throw std::runtime_error on overflow
-  // (see push_task / push_batch); never silently wrap-around.
-  static constexpr size_t RING_CAP = 32768;
-  static constexpr size_t RING_MASK = RING_CAP - 1;
+  // Initial ring capacity, a power of two.  It holds the burst from a 4K encode
+  // tile (a single precinct can enqueue ~5-8 K codeblock tasks back-to-back via
+  // push_batch before workers begin draining); at sizeof(InlineTask) = 48
+  // bytes, 32768 slots is ~1.5 MB per pool.  Several instances pushing large
+  // bursts at the same time can exceed it, so the ring doubles when a push
+  // finds it full (grow_ring_) instead of failing part-way through a batch.
+  static constexpr size_t RING_INITIAL_CAP = 32768;
 
   bool ring_empty_() const { return ring_head_ == ring_tail_; }
   size_t ring_size_() const { return ring_tail_ - ring_head_; }
+
+  // Doubles the ring, keeping the queued tasks in order.  Caller holds tasks_mutex.
+  void grow_ring_() {
+    const size_t n       = ring_size_();
+    const size_t new_cap = ring_cap_ * 2;
+    std::unique_ptr<InlineTask[]> grown(new InlineTask[new_cap]);
+    for (size_t i = 0; i < n; ++i) {
+      grown[i] = std::move(ring_[(ring_head_ + i) & ring_mask_]);
+    }
+    ring_      = std::move(grown);
+    ring_cap_  = new_cap;
+    ring_mask_ = new_cap - 1;
+    ring_head_ = 0;
+    ring_tail_ = n;
+  }
+
+  static bool &single_thread_flag() {
+    static thread_local bool flag = false;
+    return flag;
+  }
 
   /**
    * @brief A worker function to be assigned to each thread in the pool.
@@ -391,13 +423,16 @@ class ThreadPool {
    *  Continuously pops tasks out of the queue and executes them, as long as the atomic variable running is
    * set to true.
    */
+  //  A worker takes one task at a time.  A task can wait for other tasks (and
+  //  run queued ones while it waits, see try_run_one), so a worker must not
+  //  hold tasks of its own that no other thread can see: with several decoders
+  //  sharing the pool, a task waiting on a task held back in the same worker's
+  //  private batch deadlocked.
   void worker() {
     in_worker_thread_flag() = true;
-    InlineTask batch[BATCH];
 
     for (;;) {
-      size_t n = 0;
-
+      InlineTask task;
       {
         std::unique_lock<std::mutex> lock(tasks_mutex);
         condition.wait(lock, [&] { return !ring_empty_() || stop; });
@@ -405,17 +440,10 @@ class ThreadPool {
         if (stop && ring_empty_()) {
           return;
         }
-
-        // Drain up to BATCH tasks in one lock hold.
-        while (n < BATCH && !ring_empty_()) {
-          batch[n++] = std::move(ring_[ring_head_ & RING_MASK]);
-          ++ring_head_;
-        }
+        task = std::move(ring_[ring_head_ & ring_mask_]);
+        ++ring_head_;
       }
-
-      for (size_t i = 0; i < n; ++i) {
-        batch[i]();
-      }
+      task();
     }
   }
 
@@ -446,6 +474,8 @@ class ThreadPool {
    * micro-architectural optimization for the lock-acquire path.
    */
   std::unique_ptr<InlineTask[]> ring_;
+  size_t ring_cap_;               // capacity of ring_, a power of two; guarded by tasks_mutex
+  size_t ring_mask_;              // ring_cap_ - 1
   alignas(64) size_t ring_head_;  // consumer index (next pop position)
   alignas(64) size_t ring_tail_;  // producer index (next push position)
 

@@ -91,6 +91,30 @@
 ## Fixed
 
 ### Library
+- Decoders running at the same time in several threads could deadlock. A
+  worker of the shared thread pool took up to four tasks at a time and kept
+  the ones it had not started where no other thread could see them; a decode
+  task that waited for another decoder's tasks (and ran other queued tasks
+  while it waited) could end up waiting for a task held back by its own
+  worker. Workers now take one task at a time. Reproduced with 8 to 16
+  application threads decoding at once, within seconds to minutes; gone in
+  the same tests after the change.
+- Several large in-memory encodes running at the same time could crash. The
+  pool's task queue had a fixed capacity of 32768 tasks; a push beyond it
+  threw part-way through a batch of code-block tasks, whose state was then
+  freed while queued tasks still used it. The queue now grows instead.
+  Reproduced with 4 concurrent 8192x8192 encodes (4 crashes in 4 runs) and
+  16 concurrent 4096x4096 encodes; both now complete with correct output.
+- A thread that decoded many images kept more and more memory until it
+  exited: the per-thread cache of large buffers existed once per source file,
+  so a buffer freed in a file other than the one that allocated it was never
+  reused. On one thread, decoding a 19.6 MB codestream 80 times left 1.5 GB
+  allocated; now 33 MB, however many decodes. The cache is shared by the whole
+  library and keeps at most 512 MB per thread.
+- A decoder or encoder created with `num_threads` = 1 used the shared pool
+  anyway when another instance had created it. It now runs on the calling
+  thread only. The meaning of `num_threads` is documented in `decoder.hpp`
+  and `encoder.hpp`.
 - `image::get_component_width()` and `get_component_height()` accepted the
   index one past the last component and read past the end of their arrays;
   they now throw `std::out_of_range`.

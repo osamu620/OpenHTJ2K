@@ -20,3 +20,10 @@ if(TARGET concurrent_instances)
   add_test(NAME concurrent_mixed
            COMMAND concurrent_instances ${_CONC_INPUT} -app 8 -iter 4 -threads 4 -mixed)
 endif()
+
+# The worker pool itself: a push never fails when many tasks are queued at once
+# (the task ring grows), and a one-thread instance does not use the shared pool.
+if(TARGET threadpool_check)
+  add_test(NAME threadpool_check COMMAND threadpool_check)
+  set_tests_properties(threadpool_check PROPERTIES PASS_REGULAR_EXPRESSION "all cases passed" TIMEOUT 120)
+endif()
