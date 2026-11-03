@@ -74,9 +74,10 @@ struct DecodedFrame {
   std::vector<uint32_t> width, height;
 };
 
-// Decode a raw J2C codestream into int32 component planes via invoke().
-// Copies the planes out of the decoder's internal storage so the result
-// survives the decoder's destructor.
+// Decode a raw J2C codestream into int32 component planes via
+// invoke_line_based(), which allocates one plane per component with new[] and
+// hands it to the caller (also when it throws part-way).  The planes are copied
+// out and freed here.
 bool decode_into(const std::vector<uint8_t> &bytes, DecodedFrame &out) {
   openhtj2k_decoder dec;
   dec.init(bytes.data(), bytes.size(), /*reduce_NL=*/0, /*num_threads=*/1);
@@ -84,6 +85,12 @@ bool decode_into(const std::vector<uint8_t> &bytes, DecodedFrame &out) {
   std::vector<int32_t *> buf;
   std::vector<uint8_t>   depth;
   std::vector<bool>      is_signed;
+  struct PlaneOwner {
+    std::vector<int32_t *> &p;
+    ~PlaneOwner() {
+      for (int32_t *q : p) delete[] q;
+    }
+  } owner{buf};
   try {
     dec.invoke_line_based(buf, out.width, out.height, depth, is_signed);
   } catch (std::exception &e) {

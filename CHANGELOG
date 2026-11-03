@@ -93,6 +93,12 @@
   every installed header on its own, includes the headers by both paths, and
   fails if a build configuration macro reaches the consumer or if the package
   of a static build does not define `OHTJ2K_STATIC`.
+- The `install_consumer` test builds its programs with the build's own
+  `CMAKE_CXX_FLAGS` and `CMAKE_EXE_LINKER_FLAGS` (not on MSVC). In a build
+  with `-fsanitize=address,undefined` the consumer failed to link, because a
+  program that uses an instrumented library needs the sanitizer runtime too.
+  With these flags and the test tools fixed, the whole test suite passes
+  under AddressSanitizer, UndefinedBehaviorSanitizer and LeakSanitizer.
 
 ## Fixed
 
@@ -388,6 +394,46 @@
   resolution without columns (which a nonzero image origin can produce). It
   now skips the horizontal filter for such rows; the values read never
   reached the codestream.
+- The position-driven progression orders (RPCL, PCRL, CPRL and the Part 2
+  PRCL) failed from 16 DWT levels on. The encoder and the decoder find where
+  a precinct starts from the multiple XRsiz * 2^(PPx + NL - r) (ISO/IEC
+  15444-1 B.12.1.3), which they formed with a 32-bit shift: with maximal
+  precincts (PPx = 15) the shift reached 47 at 32 levels. With a sub-sampled
+  component (XRsiz = 2) both crashed with an integer division by zero
+  (SIGFPE) from 16 levels on; an image wider than 32768 columns (more than
+  one maximal precinct) was rejected from 17 levels on with "attempt to
+  access precinct whose index is out of the valid range", also when the
+  codestream came from another encoder. The multiple is now formed in 64
+  bits. OpenJPEG 2.5.4 decodes the new codestreams (Part 1, 16 to 32 levels)
+  to the input exactly. Codestreams that encoded and decoded before are
+  unchanged.
+- With those progression orders, every tile scanned the reference grid from
+  0 to its own end for precinct positions, not from its start. A tile far
+  from the grid origin with small precincts took up to 2^31 steps: with the
+  image origin at 2147418112 and 2x2 precincts, 192 tiles of a 61x47 image
+  took 52 s to encode and 69 s to decode, and a 1 KB codestream of 65535
+  such tiles would have kept the decoder busy for about 15 hours. The scan
+  now covers the tile only; the codestreams and decoded images are the same.
+
+### JPIP
+- The precinct index and the view-window resolver work with 31 and 32 DWT
+  levels. They divided coordinates by 2^(NL - r) and by 2^r (r the discard
+  level) with a 32-bit shift, which is undefined when the exponent is 32; a
+  build that divided by 1 there answered a frame-size request with the wrong
+  resolution (fsiz=2,2 with round-up returned only the lowest resolution of a
+  32-level image instead of the 28 it needs).
+- A view-window offset or size large enough that offset * 2^r passed 2^32
+  wrapped around and selected the precincts of a region inside the image; it
+  now selects nothing, as for any region past the image.
+- The precinct index rejects a tile-component with more than 4294967295
+  precincts, which its 32-bit precinct numbers cannot count, instead of
+  wrapping the numbers around.
+- The precinct index sets up every tile-component of the codestream at once,
+  about 450 bytes each, so a small main header could make a JPIP server or
+  client run out of memory: a 144-byte header with 65535 tiles of 17
+  components took 465 MB, and one with a few thousand components (6 KB)
+  asked for tens of GB. A codestream with more than 1048576 tile-components
+  (65535 tiles of 16 components) is now rejected with an error.
 
 # [0.24.0] - 2026-11-02
 

@@ -1489,11 +1489,30 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
   if (c->enc_epc->rc != nullptr) rc_measure(c->enc_epc, rc_from);
 }
 
-// ceil(a / 2^n), a coordinate of a resolution n levels down (B-14).  n reaches 32 at
-// the lowest resolution of a 32-level transform, past what a 32-bit shift allows.
-static inline uint32_t ceil_div_pow2(uint32_t a, uint32_t n) {
-  if (n >= 32) return (a != 0) ? 1U : 0U;
-  return ceil_int(a, 1U << n);
+// ceil_div_pow2(a, n), ceil(a / 2^n) for any n, is in utils.hpp.
+
+// Whether the position-driven progressions (RPCL, PCRL, CPRL, PRCL) visit a precinct of a
+// resolution at reference-grid coordinate p (B.12.1.3 to B.12.1.5): p is a multiple of
+// sub * 2^(log2PP + depth), with sub the component's sub-sampling factor, log2PP the
+// resolution's precinct size and depth its number of decomposition levels below the
+// image, or p is the tile's first coordinate p0 and the resolution's first coordinate r0
+// is not on a precinct boundary.  log2PP + depth reaches 47 with 32 DWT levels, and with
+// maximal precincts (log2PP = 15) the multiple passes 32 bits from 16 levels on, so it is
+// formed in 64 bits.
+static inline bool is_precinct_start(uint32_t p, uint32_t p0, uint32_t sub, uint32_t log2PP, uint32_t depth,
+                                     uint32_t r0) {
+  if (p % (uint64_t{sub} << (log2PP + depth)) == 0) return true;
+  return p == p0 && (r0 & ((1U << log2PP) - 1U)) != 0;
+}
+
+// Appends the coordinates those progressions examine along one axis of the tile [p0, p1):
+// p0, then each multiple of 2^log2step after it, with log2step the smallest precinct size.
+// The multiples are counted from p0, not from 0: a tile far from the origin of the
+// reference grid (an image origin near 2^31 with 1 x 1 precincts) took 2^31 steps per tile.
+static void precinct_positions(std::vector<uint32_t> &out, uint32_t p0, uint32_t p1, uint32_t log2step) {
+  out.push_back(p0);
+  const uint64_t step = uint64_t{1} << log2step;
+  for (uint64_t p = (p0 / step + 1) * step; p < p1; p += step) out.push_back(static_cast<uint32_t>(p));
 }
 
 // ceil((p - o * 2^(nb - 1)) / 2^nb), a coordinate of a subband at level nb >= 1 with
@@ -4862,18 +4881,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           break;
         case 2:  // RPCL
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (r = RS; r < RE; r++) {
             for (uint32_t y : y_examin) {
               for (uint32_t x : x_examin) {
@@ -4893,10 +4902,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                             cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                         const uint8_t vd =
                             cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                        x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                                 || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                        y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                                 || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                        x_cond = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                        y_cond = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                       }
                       if (x_cond && y_cond) {
                         p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -4936,18 +4943,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           break;
         case 3:  // PCRL
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
               for (c = CS; c < CE; c++) {
@@ -4965,10 +4962,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5005,18 +5000,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           break;
         case 4:  // CPRL
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (c = CS; c < CE; c++) {
             c_NL     = this->tcomp[c].NL;
             local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
@@ -5034,10 +5019,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5076,18 +5059,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                  // Identical body to RPCL (case 2), but the resolution loop is nested inside
                  // the spatial (y, x) loops instead of outermost.
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
               for (r = RS; r < RE; r++) {
@@ -5107,10 +5080,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                             cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                         const uint8_t vd =
                             cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                        x_cond = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                                 || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                        y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                                 || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                        x_cond = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                        y_cond = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                       }
                       if (x_cond && y_cond) {
                         p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5318,18 +5289,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         break;
       case 2:  // RPCL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (r = RS; r < RE; r++) {
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
@@ -5347,10 +5308,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5376,18 +5335,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         break;
       case 3:  // PCRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (c = CS; c < CE; c++) {
@@ -5405,10 +5354,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5433,18 +5380,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         break;
       case 4:  // CPRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (c = CS; c < CE; c++) {
           c_NL     = this->tcomp[c].NL;
           local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
@@ -5462,10 +5399,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5491,18 +5426,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
       case 5:  // PRCL (ISO/IEC 15444-2, I.2.6): position-resolution level-component-layer.
                // RPCL body with the resolution loop nested inside the spatial (y, x) loops.
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (r = RS; r < RE; r++) {
@@ -5520,10 +5445,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5753,14 +5676,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
         break;
       case 2: {  // RPCL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (r = RS; r < RE; r++) {
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
@@ -5778,10 +5695,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5809,14 +5724,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
       }
       case 3: {  // PCRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (c = CS; c < CE; c++) {
@@ -5834,10 +5743,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5864,14 +5771,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
       }
       case 4: {  // CPRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (c = CS; c < CE; c++) {
           c_NL     = this->tcomp[c].NL;
           local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
@@ -5889,10 +5790,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                     const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                     const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                     const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                    x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                             || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                    y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                             || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                    x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                    y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                   }
                   if (x_cond && y_cond) {
                     p  = p_x[c][r] + p_y[c][r] * cr->npw;
@@ -5920,14 +5819,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
       case 5: {  // PRCL (ISO/IEC 15444-2, I.2.6): position-resolution level-component-layer.
                  // RPCL body with the resolution loop nested inside the spatial (y, x) loops.
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (r = RS; r < RE; r++) {
@@ -5945,10 +5838,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
                       const DFS_marker *cdfs = this->tcomp[c].dfs_info;
                       const uint8_t hd = cdfs ? cdfs->hor_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
                       const uint8_t vd = cdfs ? cdfs->ver_depth[c_NL - r] : static_cast<uint8_t>(c_NL - r);
-                      x_cond           = (x % (csub.x * (1U << (cPP.x + hd))) == 0)
-                               || ((x == pos0.x) && ((tr0.x * (1U << hd)) % (1U << (cPP.x + hd)) != 0));
-                      y_cond = (y % (csub.y * (1U << (cPP.y + vd))) == 0)
-                               || ((y == pos0.y) && ((tr0.y * (1U << vd)) % (1U << (cPP.y + vd)) != 0));
+                      x_cond                 = is_precinct_start(x, pos0.x, csub.x, cPP.x, hd, tr0.x);
+                      y_cond                 = is_precinct_start(y, pos0.y, csub.y, cPP.y, vd, tr0.y);
                     }
                     if (x_cond && y_cond) {
                       p  = p_x[c][r] + p_y[c][r] * cr->npw;

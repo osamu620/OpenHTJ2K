@@ -587,6 +587,7 @@ if(_ohtj2k_build_tests)
   # main HT/Part-1/Part-2/WASM test sets.
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/decoder_conformance.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/encoder_test.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/progression_levels.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/jpip_phase1.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/row_range_validation.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/col_range_validation.cmake)
