@@ -64,6 +64,14 @@
   own. Programs that use only the public API need no change.
 
 ## Build and packaging
+- MSVC release builds (`Release`, `RelWithDebInfo`) define `NDEBUG`, as the
+  GCC and Clang ones do. The release flags this project sets replaced the
+  ones CMake and vcpkg pass, which carry `NDEBUG`, so the library's internal
+  `assert()`s stayed active in Windows release builds and could abort the
+  calling process (as one did on a valid reversible codestream) instead of
+  being compiled out. `RelWithDebInfo` also uses `/Zi` instead of `/ZI`
+  (edit and continue), which goes with optimised code and with
+  `/fsanitize=address`.
 - The installed package no longer defines the library's build configuration
   macros (`OPENHTJ2K_THREAD`, `OPENHTJ2K_TRY_AVX2`,
   `OPENHTJ2K_ENABLE_ARM_NEON`, `OPENHTJ2K_DISABLE_SSE2`,
