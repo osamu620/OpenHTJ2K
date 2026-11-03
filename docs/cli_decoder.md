@@ -22,6 +22,11 @@ output extension decides the writer:
   component with a `_N` suffix
 - `.raw` — packed raw samples, no header
 
+Each PGM, PGX or RAW file takes its own component's bit depth and
+signedness, so the components may differ in both. A PPM file has one
+maximum value for its three components, which must therefore have the same
+bit depth. Samples of up to 16 bits can be written.
+
 ## Options
 
 - `-reduce n`

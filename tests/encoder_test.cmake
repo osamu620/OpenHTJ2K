@@ -105,6 +105,72 @@ set_tests_properties(dec_gray16_rt_pgx PROPERTIES DEPENDS enc_gray16_rt)
 add_test(NAME comp_gray16_rt_pgx COMMAND imgcmp gray16_rt_00.pgx ${GRAY16_PGM} 0 0)
 set_tests_properties(comp_gray16_rt_pgx PROPERTIES DEPENDS dec_gray16_rt_pgx)
 
+# Components of different bit depth and sign: the decoder writes every PGX, PGM and RAW
+# file with its own component's depth, sign and bytes per sample (it used component 0's
+# bytes per sample, and for PGM its sign offset, for all of them).  tests/data/mixed_*.pgx
+# are 67x45 planes (odd width: vectorized row packing plus scalar tail) holding the
+# extremes of their range: unsigned 12-bit, signed 12-bit, unsigned 8-bit, signed 4-bit.
+# mixed_us: unsigned 12, signed 4, unsigned 8; mixed_su: signed 12, unsigned 8, signed 4.
+# Component 0 is the deepest, as the encoder takes the quantization exponents from it.
+# A lossless round trip must reproduce every component as PGX.  As PGM, unsigned
+# components equal their input and signed ones (offset by half their range) equal the
+# PGM of the same plane encoded alone.  RAW files take 2 bytes per sample at 12 bits and
+# 1 at 8 and 4 bits.  A PPM file has one maximum value for its three components: their
+# depths differing is an error.
+set(MIXED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/data)
+foreach(_one s4 s12)
+  add_test(NAME enc_mixed_${_one} COMMAND open_htj2k_enc -i ${MIXED_DIR}/mixed_${_one}.pgx -o mixed_${_one}.j2c
+           Creversible=yes)
+  add_test(NAME dec_mixed_${_one}_pgm COMMAND open_htj2k_dec -i mixed_${_one}.j2c -o mixed_${_one}.pgm)
+  set_tests_properties(dec_mixed_${_one}_pgm PROPERTIES DEPENDS enc_mixed_${_one})
+endforeach()
+foreach(_case "us;u12;s4;u8" "su;s12;u8;s4")
+  list(GET _case 0 _t)
+  list(REMOVE_AT _case 0)
+  set(_in "")
+  foreach(_p IN LISTS _case)
+    list(APPEND _in ${MIXED_DIR}/mixed_${_p}.pgx)
+  endforeach()
+  string(REPLACE ";" "," _in "${_in}")
+  add_test(NAME enc_mixed_${_t} COMMAND open_htj2k_enc -i ${_in} -o mixed_${_t}.j2c Creversible=yes Cycc=no)
+  foreach(_fmt pgx pgm raw)
+    add_test(NAME dec_mixed_${_t}_${_fmt} COMMAND open_htj2k_dec -i mixed_${_t}.j2c -o mixed_${_t}.${_fmt})
+    set_tests_properties(dec_mixed_${_t}_${_fmt} PROPERTIES DEPENDS enc_mixed_${_t})
+  endforeach()
+  set(_c 0)
+  foreach(_p IN LISTS _case)
+    add_test(NAME comp_mixed_${_t}_${_c}_pgx COMMAND imgcmp mixed_${_t}_0${_c}.pgx ${MIXED_DIR}/mixed_${_p}.pgx 0 0)
+    set_tests_properties(comp_mixed_${_t}_${_c}_pgx PROPERTIES DEPENDS dec_mixed_${_t}_pgx)
+    if(_p MATCHES "^s")
+      add_test(NAME comp_mixed_${_t}_${_c}_pgm COMMAND imgcmp mixed_${_t}_0${_c}.pgm mixed_${_p}_00.pgm 0 0)
+      set_tests_properties(comp_mixed_${_t}_${_c}_pgm PROPERTIES DEPENDS "dec_mixed_${_t}_pgm;dec_mixed_${_p}_pgm")
+    else()
+      add_test(NAME comp_mixed_${_t}_${_c}_pgm COMMAND imgcmp mixed_${_t}_0${_c}.pgm ${MIXED_DIR}/mixed_${_p}.pgx 0 0)
+      set_tests_properties(comp_mixed_${_t}_${_c}_pgm PROPERTIES DEPENDS dec_mixed_${_t}_pgm)
+    endif()
+    if(_p MATCHES "12$")
+      set(_bytes 6030)
+    else()
+      set(_bytes 3015)
+    endif()
+    add_test(NAME size_mixed_${_t}_${_c}_raw COMMAND ${CMAKE_COMMAND} -DFILE=mixed_${_t}_0${_c}.raw -DMAX=${_bytes}
+             -DMIN=${_bytes} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_size.cmake)
+    set_tests_properties(size_mixed_${_t}_${_c}_raw PROPERTIES DEPENDS dec_mixed_${_t}_raw)
+    math(EXPR _c "${_c} + 1")
+  endforeach()
+endforeach()
+# At a reduced resolution too: the signed 4-bit component as decoded with the others and
+# alone.
+add_test(NAME dec_mixed_us_reduce COMMAND open_htj2k_dec -i mixed_us.j2c -o mixed_us_r1.pgx -reduce 1)
+set_tests_properties(dec_mixed_us_reduce PROPERTIES DEPENDS enc_mixed_us)
+add_test(NAME dec_mixed_s4_reduce COMMAND open_htj2k_dec -i mixed_s4.j2c -o mixed_s4_r1.pgx -reduce 1)
+set_tests_properties(dec_mixed_s4_reduce PROPERTIES DEPENDS enc_mixed_s4)
+add_test(NAME comp_mixed_us_reduce COMMAND imgcmp mixed_us_r1_01.pgx mixed_s4_r1_00.pgx 0 0)
+set_tests_properties(comp_mixed_us_reduce PROPERTIES DEPENDS "dec_mixed_us_reduce;dec_mixed_s4_reduce")
+add_test(NAME dec_mixed_su_ppm_rejected COMMAND open_htj2k_dec -i mixed_su.j2c -o mixed_su.ppm)
+set_tests_properties(dec_mixed_su_ppm_rejected PROPERTIES DEPENDS enc_mixed_su
+                     PASS_REGULAR_EXPRESSION "a PPM file needs three components of the same bit depth")
+
 # Lossy decoding of more than 13-bit samples scales them up (downshift =
 # FRACBITS - bit depth < 0) in every finalize path.  Decode a 16-bit Qfactor 90
 # codestream through the command-line decoder and the row- and column-window

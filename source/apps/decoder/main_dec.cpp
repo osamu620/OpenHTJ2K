@@ -734,8 +734,10 @@ int main(int argc, char *argv[]) {
   std::vector<FILE *> fps;
   bool output_failed = false;  // an output file could not be opened
   std::vector<uint8_t> row_buf;
-  uint8_t bpp            = 0;
-  int32_t pnm_offset     = 0;
+  // Per component, as the components can differ in bit depth and signedness: bytes per
+  // sample, and the offset added to the samples (PGM: signed to unsigned).
+  std::vector<uint8_t> bpp;
+  std::vector<int32_t> pnm_offset;
   uint32_t total_samples = 0;
   // State for experimental YCbCr→RGB streaming conversion.
   int32_t ycbcr_cb_center = 0, ycbcr_cr_center = 0, ycbcr_maxval = 0;
@@ -754,6 +756,30 @@ int main(int argc, char *argv[]) {
     }
     auto &decoder = *decoder_owner;
 
+    // Each output file takes its component's own bit depth and sign, up to 16 bits.  A
+    // PPM file has one maximum value for its three components.
+    if (i == 0 && !discard_output) {
+      const uint16_t num_comps = decoder.get_num_component();
+      for (uint16_t c = 0; c < num_comps; ++c) {
+        if (decoder.get_component_depth(c) > 16) {
+          printf("ERROR: component %u has %u-bit samples; the output formats take at most 16 bits.\n",
+                 static_cast<unsigned>(c), static_cast<unsigned>(decoder.get_component_depth(c)));
+          return EXIT_FAILURE;
+        }
+      }
+      if (want_ppm && num_comps == 3
+          && (decoder.get_component_depth(1) != decoder.get_component_depth(0)
+              || decoder.get_component_depth(2) != decoder.get_component_depth(0))) {
+        printf(
+            "ERROR: a PPM file needs three components of the same bit depth, but they have %u, %u and %u "
+            "bits. Write PGX, PGM or RAW files instead.\n",
+            static_cast<unsigned>(decoder.get_component_depth(0)),
+            static_cast<unsigned>(decoder.get_component_depth(1)),
+            static_cast<unsigned>(decoder.get_component_depth(2)));
+        return EXIT_FAILURE;
+      }
+    }
+
     try {
       decoder.invoke_line_based_stream(
           [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
@@ -762,8 +788,14 @@ int main(int argc, char *argv[]) {
 
             if (y == 0) {
               total_samples = 0;
-              bpp           = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(img_depth[0]), 8));
-              pnm_offset    = (want_pgm && img_signed[0]) ? (1 << (img_depth[0] - 1)) : 0;
+              bpp.assign(nc, 0);
+              pnm_offset.assign(nc, 0);
+              size_t max_row_bytes = 0;
+              for (uint16_t c = 0; c < nc; ++c) {
+                bpp[c]        = static_cast<uint8_t>(ceil_int(static_cast<int32_t>(img_depth[c]), 8));
+                pnm_offset[c] = (want_pgm && img_signed[c]) ? (1 << (img_depth[c] - 1)) : 0;
+                max_row_bytes = std::max(max_row_bytes, static_cast<size_t>(img_width[c]) * bpp[c]);
+              }
               if (do_ycbcr && nc >= 3) {
                 ycbcr_maxval    = (1 << img_depth[0]) - 1;
                 ycbcr_cb_center = img_signed[1] ? 0 : (1 << (img_depth[1] - 1));
@@ -786,7 +818,7 @@ int main(int argc, char *argv[]) {
                 fps.push_back(fp);
                 fps.push_back(nullptr);
                 fps.push_back(nullptr);
-                row_buf.resize(static_cast<size_t>(img_width[0]) * 3 * bpp);
+                row_buf.resize(static_cast<size_t>(img_width[0]) * 3 * bpp[0]);
               } else {
                 // One file per component (PGM, PGX, or RAW)
                 reserve_open_files(nc);
@@ -812,10 +844,7 @@ int main(int argc, char *argv[]) {
                             img_height[c]);
                   }
                 }
-                uint32_t max_w = 0;
-                for (uint16_t c = 0; c < nc; ++c)
-                  max_w = std::max(max_w, img_width[c]);
-                row_buf.resize(static_cast<size_t>(max_w) * bpp);
+                row_buf.resize(max_row_bytes);
               }
               for (uint16_t c = 0; c < nc; ++c)
                 total_samples += img_width[c] * img_height[c];
@@ -827,7 +856,7 @@ int main(int argc, char *argv[]) {
               uint8_t *out = row_buf.data();
               if (do_ycbcr) {
                 // YCbCr→RGB conversion (experimental); chroma upsampled as needed.
-                if (bpp == 1) {
+                if (bpp[0] == 1) {
                   for (uint32_t n = 0; n < img_width[0]; ++n) {
                     const uint32_t n1 = n * img_width[1] / img_width[0];
                     const uint32_t n2 = n * img_width[2] / img_width[0];
@@ -859,16 +888,16 @@ int main(int argc, char *argv[]) {
                     *out++    = static_cast<uint8_t>(b >> 8); *out++ = static_cast<uint8_t>(b);
                   }
                 }
-              } else if (bpp == 1) {
+              } else if (bpp[0] == 1) {
                 if (img_width[0] == img_width[1] && img_width[0] == img_width[2]) {
                   ppm_interleave_8(rows[0], rows[1], rows[2], out, img_width[0], img_depth[0]);
                 } else {
                   for (uint32_t n = 0; n < img_width[0]; ++n) {
                     const uint32_t n1 = n * img_width[1] / img_width[0];
                     const uint32_t n2 = n * img_width[2] / img_width[0];
-                    *out++ = static_cast<uint8_t>(rows[0][n] + pnm_offset);
-                    *out++ = static_cast<uint8_t>(rows[1][n1] + pnm_offset);
-                    *out++ = static_cast<uint8_t>(rows[2][n2] + pnm_offset);
+                    *out++ = static_cast<uint8_t>(rows[0][n] + pnm_offset[0]);
+                    *out++ = static_cast<uint8_t>(rows[1][n1] + pnm_offset[1]);
+                    *out++ = static_cast<uint8_t>(rows[2][n2] + pnm_offset[2]);
                   }
                 }
               } else {
@@ -878,9 +907,9 @@ int main(int argc, char *argv[]) {
                   for (uint32_t n = 0; n < img_width[0]; ++n) {
                     const uint32_t n1 = n * img_width[1] / img_width[0];
                     const uint32_t n2 = n * img_width[2] / img_width[0];
-                    int32_t r = rows[0][n] + pnm_offset;
-                    int32_t g = rows[1][n1] + pnm_offset;
-                    int32_t b = rows[2][n2] + pnm_offset;
+                    int32_t r = rows[0][n] + pnm_offset[0];
+                    int32_t g = rows[1][n1] + pnm_offset[1];
+                    int32_t b = rows[2][n2] + pnm_offset[2];
                     *out++    = static_cast<uint8_t>(r >> 8);
                     *out++    = static_cast<uint8_t>(r);
                     *out++    = static_cast<uint8_t>(g >> 8);
@@ -911,14 +940,14 @@ int main(int argc, char *argv[]) {
                 if (y % yr_c != 0) continue;         // duplicate luma row: skip
                 if (y / yr_c >= hc) continue;         // past end of component
                 uint8_t *out = row_buf.data();
-                if (bpp == 1) {
-                  pack_i32_to_u8(rows[c], out, img_width[c], pnm_offset);
+                if (bpp[c] == 1) {
+                  pack_i32_to_u8(rows[c], out, img_width[c], pnm_offset[c]);
                 } else if (want_pgx) {
                   pack_i32_to_le16(rows[c], out, img_width[c]);
                 } else {
-                  pack_i32_to_be16(rows[c], out, img_width[c], pnm_offset);
+                  pack_i32_to_be16(rows[c], out, img_width[c], pnm_offset[c]);
                 }
-                const size_t row_bytes = static_cast<size_t>(img_width[c]) * bpp;
+                const size_t row_bytes = static_cast<size_t>(img_width[c]) * bpp[c];
                 if (row_bytes != 0) fwrite(row_buf.data(), 1, row_bytes, fps[c]);
               }
             }
