@@ -336,10 +336,12 @@ void CAP_marker::set_Ccap(uint16_t val, uint8_t part) {
   set_Pcap(part);
 }
 void CAP_marker::set_Pcap(uint8_t part) {
-  // implemented only for Part 15
-  Pcap |= static_cast<uint32_t>(1 << (32 - part));
-  Lmar++;
-  Lmar++;
+  // A Ccap field is written for each Pcap bit set: setting one again only changes its value.
+  const uint32_t bit = static_cast<uint32_t>(1) << (32 - part);
+  if ((Pcap & bit) == 0) {
+    Pcap |= bit;
+    Lmar = static_cast<uint16_t>(Lmar + 2);
+  }
   is_set = true;
 }
 
@@ -1113,17 +1115,35 @@ uint16_t QCD_marker::get_mantissas(uint8_t nb) {
 
 uint8_t QCD_marker::get_number_of_guardbits() const { return static_cast<uint8_t>(Sqcd >> 5); }
 
-uint8_t QCD_marker::get_MAGB() {
-  uint8_t qstyle = get_quantization_style();
-  uint8_t tmp    = (qstyle > 0) ? 0xFF : 0;
-  for (uint16_t &val : SPqcd) {
-    if (qstyle == 0) {
-      tmp = (tmp < (val >> 3)) ? static_cast<uint8_t>(val >> 3) : tmp;
+// An upper bound on the parameter B of the HT cleanup magnitudes (ISO/IEC 15444-15, 8.7.3 and
+// the NOTE of A.3.7) from the quantization parameters: a sub-band with exponent epsilon_b has
+// M_b = epsilon_b + G - 1 magnitude bit-planes (ISO/IEC 15444-1, E-2), so its magnitudes are
+// below 2^M_b.  With the reversible transform that is the bound; with an irreversible one the
+// bound of a sub-band at decomposition level n_b is 2^(B + n_b - 1), so B = M_b - n_b + 1.
+// Step sizes are stored LL first, then HL, LH and HH from the coarsest level (n_b = NL) to the
+// finest (n_b = 1); the derived style signals the LL one, from which epsilon_b = epsilon_LL -
+// NL + n_b (E-5).  The encoder signals the bound of the coded data instead (encoder.cpp); this
+// one holds whatever the code-blocks carry.
+static uint8_t quantization_MAGB(uint8_t qstyle, uint8_t guard_bits, const std::vector<uint16_t> &SP,
+                                 uint8_t NL, bool reversible) {
+  int32_t B = 0;
+  for (size_t i = 0; i < SP.size(); ++i) {
+    const int32_t eps = (qstyle == 0) ? (SP[i] >> 3) : (SP[i] >> 11);
+    const int32_t Mb  = eps + guard_bits - 1;
+    if (reversible) {
+      B = std::max(B, Mb);
+    } else if (qstyle == 1) {
+      B = std::max(B, Mb - NL + 1);  // the same for every sub-band
     } else {
-      tmp = (tmp > (val >> 11)) ? static_cast<uint8_t>(val >> 11) : tmp;
+      const int32_t nb = (i == 0) ? NL : NL - static_cast<int32_t>((i - 1) / 3);
+      B                = std::max(B, Mb - nb + 1);
     }
   }
-  return tmp;
+  return static_cast<uint8_t>(std::max(B, 0));
+}
+
+uint8_t QCD_marker::get_MAGB(uint8_t NL) const {
+  return quantization_MAGB(get_quantization_style(), get_number_of_guardbits(), SPqcd, NL, is_reversible);
 }
 
 /********************************************************************************
@@ -1240,17 +1260,8 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, const QCD_marker &qcd)
   is_set = true;
 }
 
-uint8_t QCC_marker::get_MAGB() const {
-  const uint8_t qstyle = Sqcc & 0x1F;
-  uint8_t tmp          = (qstyle > 0) ? 0xFF : 0;
-  for (const uint16_t &val : SPqcc) {
-    if (qstyle == 0) {
-      tmp = (tmp < (val >> 3)) ? static_cast<uint8_t>(val >> 3) : tmp;
-    } else {
-      tmp = (tmp > (val >> 11)) ? static_cast<uint8_t>(val >> 11) : tmp;
-    }
-  }
-  return tmp;
+uint8_t QCC_marker::get_MAGB(uint8_t NL) const {
+  return quantization_MAGB(get_quantization_style(), get_number_of_guardbits(), SPqcc, NL, is_reversible);
 }
 
 int QCC_marker::write(j2c_dst_memory &dst) {
@@ -1487,25 +1498,38 @@ TLM_marker::TLM_marker(uint8_t ztlm, const std::vector<uint16_t> &tile_indices,
   is_set     = true;
 }
 
+size_t TLM_marker::entries_per_segment() const {
+  const uint8_t ST = (Stlm >> 4) & 0x03;
+  const uint8_t SP = ((Stlm >> 4) & 0x0C) >> 2;
+  return (65535U - 4U) / static_cast<size_t>((ST == 0 ? 0 : (ST == 1 ? 1 : 2)) + (SP == 0 ? 2 : 4));
+}
+
 void TLM_marker::write(j2c_dst_memory &buf) const {
   uint8_t ST        = (Stlm >> 4) & 0x03;
   uint8_t SP        = ((Stlm >> 4) & 0x0C) >> 2;
   size_t entry_size = static_cast<size_t>((ST == 0 ? 0 : (ST == 1 ? 1 : 2)) + (SP == 0 ? 2 : 4));
-  uint16_t Ltlm     = static_cast<uint16_t>(4 + Ptlm.size() * entry_size);
-  buf.put_word(_TLM);
-  buf.put_word(Ltlm);
-  buf.put_byte(Ztlm);
-  buf.put_byte(Stlm);
-  for (size_t i = 0; i < Ptlm.size(); ++i) {
-    if (ST == 1)
-      buf.put_byte(static_cast<uint8_t>(Ttlm[i]));
-    else if (ST == 2)
-      buf.put_word(Ttlm[i]);
-    if (SP == 0)
-      buf.put_word(static_cast<uint16_t>(Ptlm[i]));
-    else
-      buf.put_dword(Ptlm[i]);
-  }
+  // Ltlm is 16 bits: the entries go in as many marker segments as they need, of consecutive
+  // Ztlm, which a reader concatenates in increasing Ztlm (ISO/IEC 15444-1, A.7.1).
+  const size_t per_segment = entries_per_segment();
+  size_t i                 = 0;
+  uint8_t z                = Ztlm;
+  do {
+    const size_t n = std::min(per_segment, Ptlm.size() - i);
+    buf.put_word(_TLM);
+    buf.put_word(static_cast<uint16_t>(4 + n * entry_size));
+    buf.put_byte(z++);
+    buf.put_byte(Stlm);
+    for (const size_t end = i + n; i < end; ++i) {
+      if (ST == 1)
+        buf.put_byte(static_cast<uint8_t>(Ttlm[i]));
+      else if (ST == 2)
+        buf.put_word(Ttlm[i]);
+      if (SP == 0)
+        buf.put_word(static_cast<uint16_t>(Ptlm[i]));
+      else
+        buf.put_dword(Ptlm[i]);
+    }
+  } while (i < Ptlm.size());
 }
 
 /********************************************************************************

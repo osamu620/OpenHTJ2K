@@ -86,15 +86,57 @@ std::vector<std::unique_ptr<QCC_marker>> qcc_for_other_depths(const std::vector<
   return qcc;
 }
 
-// MAGB for the CAP marker over the QCD marker and the QCC markers above.
-uint8_t combined_MAGB(QCD_marker &qcd, const std::vector<std::unique_ptr<QCC_marker>> &qcc,
-                      bool reversible) {
-  uint8_t magb = qcd.get_MAGB();
-  for (const auto &q : qcc) {
-    const uint8_t m = q->get_MAGB();
-    magb            = reversible ? std::max(magb, m) : std::min(magb, m);
+// Bits 0-4 of Ccap15 for a magnitude bound: the smallest P whose parameter B (ISO/IEC 15444-15,
+// A.3.7: 8 for P = 0, P + 8 for P < 20, 4 (P - 19) + 27 for P < 31, 74 for P = 31) is at least
+// `bound`.  A B smaller than the coded magnitudes need makes the codestream non-conforming.
+uint16_t magb_field(int32_t bound) {
+  if (bound <= 8) return 0;
+  if (bound <= 27) return static_cast<uint16_t>(bound - 8);
+  if (bound <= 71) return static_cast<uint16_t>(19 + (bound - 27 + 3) / 4);
+  return 31;
+}
+
+// The magnitude bound the QCD and QCC markers of the main header allow (QCD_marker::get_MAGB()):
+// what the CAP marker holds until the code-blocks are coded.
+int32_t quantization_MAGB(const j2k_main_header &main_header, uint8_t NL) {
+  int32_t B = main_header.QCD->get_MAGB(NL);
+  for (const auto &q : main_header.QCC) B = std::max<int32_t>(B, q->get_MAGB(NL));
+  return B;
+}
+
+// The magnitude bound of the HT code-blocks as coded (ISO/IEC 15444-15, 8.7.3), which covers the
+// HT cleanup pass only.  A cleanup pass at bit-plane p of a sub-band with M_b magnitude
+// bit-planes codes S_blk + 1 = M_b - p of them (7.6), S_blk being the zero bit-planes the encoder
+// signals (num_ZBP; it codes no placeholder passes, B.3): not the plane its HT SigProp and
+// MagRef passes refine, nor those a rate control dropped.  A code-block without coding passes
+// contributes nothing.  For an irreversible transform the bound of a sub-band at decomposition
+// level n_b is 2^(B + n_b - 1), so B takes n_b - 1 fewer planes there.
+int32_t coded_MAGB(j2k_tile *tiles, uint32_t num_tiles) {
+  int32_t B = 0;
+  for (uint32_t t = 0; t < num_tiles; ++t) {
+    for (uint16_t c = 0; c < tiles[t].get_num_components(); ++c) {
+      j2k_tile_component *tc = tiles[t].get_tile_component(c);
+      const int32_t NL       = tc->get_dwt_levels();
+      for (uint8_t r = 0; r <= NL; ++r) {
+        j2k_resolution *cr = tc->access_resolution(r);
+        if (cr->is_empty) continue;
+        const int32_t nb = (r == 0) ? NL : NL - r + 1;
+        for (uint32_t pi = 0; pi < cr->npw * cr->nph; ++pi) {
+          j2k_precinct *cp = cr->access_precinct(pi);
+          for (uint8_t b = 0; b < cr->num_bands; ++b) {
+            j2k_precinct_subband *cpb = cp->access_pband(b);
+            const uint32_t n          = cpb->num_codeblock_x * cpb->num_codeblock_y;
+            for (uint32_t i = 0; i < n; ++i) {
+              const j2k_codeblock *block = cpb->access_codeblock(i);
+              if ((block->Cmodes & HT) == 0 || block->num_passes == 0) continue;
+              B = std::max<int32_t>(B, block->num_ZBP + 1 - ((block->transformation == 1) ? 0 : nb - 1));
+            }
+          }
+        }
+      }
+    }
   }
-  return magb;
+  return B;
 }
 
 // Why the last image::read_pnmpgx() or image::read_tiff() call on this thread failed.
@@ -724,12 +766,13 @@ void openhtj2k_encoder_impl::check_rate_control() const {
 }
 
 uint64_t openhtj2k_encoder_impl::fixed_bytes(j2k_main_header &main_header, uint32_t num_tiles) {
-  // The TLM marker takes 6 bytes and 6 per tile.
+  // The TLM marker takes 6 bytes per tile, and 6 for each marker segment of at most 10921
+  // tiles (TLM_marker::write()).
   j2c_dst_memory hdr;
   hdr.put_word(_SOC);
   main_header.flush(hdr);
   uint64_t fixed = hdr.get_length() + 2;
-  if (num_tiles > 1) fixed += 6 + 6 * static_cast<uint64_t>(num_tiles);
+  if (num_tiles > 1) fixed += 6 * ((num_tiles + 10920) / 10921) + 6 * static_cast<uint64_t>(num_tiles);
   return fixed;
 }
 
@@ -894,18 +937,12 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   uint16_t bit12     = 0;                     // 0: RGNFREE, 1: RGN
   uint16_t bit11     = 0;                     // 0: HOMOGENEOUS, 1: HETEROGENEOUS
   uint16_t bit5      = !cod->transformation;  // 0: HTREV, 1: HTIRV
-  uint16_t bits0_4;
+
   std::vector<std::unique_ptr<QCC_marker>> main_QCC = qcc_for_other_depths(Ssiz, *cod, *qcd, qfactor, vw);
-  uint8_t MAGB = combined_MAGB(main_QCD, main_QCC, cod->transformation == 1);
-  if (MAGB < 27) {
-    bits0_4 = static_cast<uint16_t>((MAGB > 8) ? MAGB - 8 : 0);
-  } else if (MAGB <= 71) {
-    bits0_4 = static_cast<uint16_t>((MAGB - 27) / 4 + 19);
-  } else {
-    bits0_4 = 31;
-  }
-  auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12) + (bit11 << 11)
-                                      + (bit5 << 5) + bits0_4);
+  // Bits 0-4, the magnitude bound, are set once the main header has its QCC markers, and again
+  // once the code-blocks are coded.
+  const auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12)
+                                            + (bit11 << 11) + (bit5 << 5));
   CAP_marker main_CAP;
   bool need_CAP = is_ht;
   if (is_ht) main_CAP.set_Ccap(Ccap15, 15);
@@ -919,6 +956,9 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   // create main header
   j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, need_CAP ? &main_CAP : nullptr, qfactor, vw);
   for (auto &q : main_QCC) main_header.QCC.push_back(std::move(q));
+  if (is_ht)
+    main_header.CAP->set_Ccap(
+        static_cast<uint16_t>(Ccap15 | magb_field(quantization_MAGB(main_header, cod->dwt_levels))), 15);
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
@@ -947,6 +987,9 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
 
   const uint32_t num_tiles = numTiles.x * numTiles.y;
   if (target_size != 0) apply_rate_control(tileSet.get(), num_tiles, main_header);
+  if (is_ht)
+    main_header.CAP->set_Ccap(
+        static_cast<uint16_t>(Ccap15 | magb_field(coded_MAGB(tileSet.get(), num_tiles))), 15);
 
   // Multi-tile: generate TLM marker from computed tile-part lengths.
   if (num_tiles > 1) {
@@ -1101,18 +1144,12 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   uint16_t bit12     = 0;
   uint16_t bit11     = 0;
   uint16_t bit5      = !cod->transformation;
-  uint16_t bits0_4;
+
   std::vector<std::unique_ptr<QCC_marker>> main_QCC = qcc_for_other_depths(Ssiz, *cod, *qcd, qfactor, vw);
-  uint8_t MAGB = combined_MAGB(main_QCD, main_QCC, cod->transformation == 1);
-  if (MAGB < 27) {
-    bits0_4 = static_cast<uint16_t>((MAGB > 8) ? MAGB - 8 : 0);
-  } else if (MAGB <= 71) {
-    bits0_4 = static_cast<uint16_t>((MAGB - 27) / 4 + 19);
-  } else {
-    bits0_4 = 31;
-  }
-  auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12) + (bit11 << 11)
-                                      + (bit5 << 5) + bits0_4);
+  // Bits 0-4, the magnitude bound, are set once the main header has its QCC markers, and again
+  // once the code-blocks are coded.
+  const auto Ccap15 = static_cast<uint16_t>((bits14_15 << 14) + (bit13 << 13) + (bit12 << 12)
+                                            + (bit11 << 11) + (bit5 << 5));
   CAP_marker main_CAP;
   bool need_CAP = is_ht;
   if (is_ht) main_CAP.set_Ccap(Ccap15, 15);
@@ -1125,6 +1162,9 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
 
   j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, need_CAP ? &main_CAP : nullptr, qfactor, vw);
   for (auto &q : main_QCC) main_header.QCC.push_back(std::move(q));
+  if (is_ht)
+    main_header.CAP->set_Ccap(
+        static_cast<uint16_t>(Ccap15 | magb_field(quantization_MAGB(main_header, cod->dwt_levels))), 15);
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
@@ -1159,6 +1199,9 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     tileSet[i].encode_line_based_stream(src_fn, img_comp_widths);
   }
   if (target_size != 0) apply_rate_control(tileSet.get(), num_tiles_lbs, main_header);
+  if (is_ht)
+    main_header.CAP->set_Ccap(
+        static_cast<uint16_t>(Ccap15 | magb_field(coded_MAGB(tileSet.get(), num_tiles_lbs))), 15);
 
   // Multi-tile: generate TLM marker from computed tile-part lengths.
   if (num_tiles_lbs > 1) {
