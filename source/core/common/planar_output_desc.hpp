@@ -15,7 +15,7 @@ struct PlanarOutputDesc {
   uint32_t stride;       // row stride in samples
   uint32_t width;        // component width in samples
   uint32_t height;       // component height in samples
-  uint32_t yr;           // vertical subsampling factor (SIZ YRsiz)
+  uint32_t yr;           // vertical subsampling factor (SIZ YRsiz); not used by the decoder
   int32_t  dc;           // DC offset (e.g. 128 for 8-bit unsigned)
   int32_t  maxval, minval;
   int32_t  depth_shift;  // additional right-shift for 8-bit packing (bd - 8; 0 for 16-bit)

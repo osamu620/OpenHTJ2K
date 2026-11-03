@@ -50,6 +50,7 @@
   #include <sys/stat.h>
 #endif
 #include "coding_units.hpp"
+#include "stream_row_map.hpp"
 #include "ThreadPool.hpp"
 #ifdef _OPENMP
   #include <omp.h>
@@ -89,6 +90,7 @@ class openhtj2k_decoder_impl {
   bool is_codestream_set;
   bool is_parsed;
   j2k_main_header main_header;
+  stream_row_map stream_map_;   // output rows of the streaming entry points (parse())
   uint32_t enum_cs;             // EnumCS from JPH colr box; 0 for raw codestreams
   std::vector<uint8_t> jph_file_buf;  // owns full file data when input is a JPH file
 
@@ -135,6 +137,8 @@ class openhtj2k_decoder_impl {
   }
   uint8_t get_minimum_DWT_levels();
   uint8_t get_max_safe_reduce_NL();
+  uint32_t get_stream_row_count() const;
+  uint32_t get_stream_component_row(uint16_t c, uint32_t y) const;
 
   void invoke_line_based(std::vector<int32_t *> &, std::vector<uint32_t> &, std::vector<uint32_t> &,
                          std::vector<uint8_t> &, std::vector<bool> &);
@@ -321,7 +325,31 @@ void openhtj2k_decoder_impl::parse() {
   // Read main header
   main_header.read(in);
   in.rewind_2bytes();
+  {
+    element_siz siz, Osiz, Rsiz;
+    main_header.SIZ->get_image_size(siz);
+    main_header.SIZ->get_image_origin(Osiz);
+    std::vector<uint32_t> yr(main_header.SIZ->get_num_components());
+    for (uint16_t c = 0; c < yr.size(); ++c) {
+      main_header.SIZ->get_subsampling_factor(Rsiz, c);
+      yr[c] = Rsiz.y;
+    }
+    stream_map_.init(Osiz.y, siz.y, yr, reduce_NL);
+  }
   is_parsed = true;
+}
+
+uint32_t openhtj2k_decoder_impl::get_stream_row_count() const {
+  if (!is_parsed) {
+    open_htj2k::detail::fail("parse() shall be called before get_stream_row_count().");
+  }
+  return stream_map_.n;
+}
+uint32_t openhtj2k_decoder_impl::get_stream_component_row(uint16_t c, uint32_t y) const {
+  if (!is_parsed) {
+    open_htj2k::detail::fail("parse() shall be called before get_stream_component_row().");
+  }
+  return stream_map_.row(c, y);
 }
 
 uint16_t openhtj2k_decoder_impl::get_num_component() const { return main_header.SIZ->get_num_components(); }
@@ -419,6 +447,10 @@ bool openhtj2k_decoder::get_component_signedness(uint16_t c) {
 }
 uint8_t openhtj2k_decoder::get_minumum_DWT_levels() { return this->impl->get_minimum_DWT_levels(); }
 uint8_t openhtj2k_decoder::get_max_safe_reduce_NL() { return this->impl->get_max_safe_reduce_NL(); }
+uint32_t openhtj2k_decoder::get_stream_row_count() { return this->impl->get_stream_row_count(); }
+uint32_t openhtj2k_decoder::get_stream_component_row(uint16_t c, uint32_t y) {
+  return this->impl->get_stream_component_row(c, y);
+}
 uint32_t openhtj2k_decoder::get_colorspace() { return this->impl->get_colorspace(); }
 uint8_t openhtj2k_decoder::get_mct() { return this->impl->get_mct(); }
 
@@ -591,11 +623,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
 
-  const uint32_t rscale = 1U << reduce_NL;
-
   // Compute tile-component geometry (pixel offset + size at active resolution).
-  auto get_tile_geom = [&](uint32_t tx, uint32_t ty, uint16_t c, uint32_t &x_off,
-                           uint32_t &y_off, uint32_t &t_w, uint32_t &t_h) {
+  auto get_tile_geom = [&](uint32_t tx, uint32_t ty, uint16_t c, uint32_t &x_off, uint32_t &y_off,
+                           uint32_t &t_w, uint32_t &t_h) {
     element_siz Rsiz_c;
     main_header.SIZ->get_subsampling_factor(Rsiz_c, c);
     const uint32_t x0_c  = ceil_int(Osiz.x, Rsiz_c.x);
@@ -608,19 +638,37 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     const uint32_t tcx1  = ceil_int(gtx1, Rsiz_c.x);
     const uint32_t tcy0  = ceil_int(gty0, Rsiz_c.y);
     const uint32_t tcy1  = ceil_int(gty1, Rsiz_c.y);
-    x_off = ceil_int(tcx0, rscale) - ceil_int(x0_c, rscale);
-    y_off = ceil_int(tcy0, rscale) - ceil_int(y0_c, rscale);
-    t_w   = ceil_int(tcx1, rscale) - ceil_int(tcx0, rscale);
-    t_h   = ceil_int(tcy1, rscale) - ceil_int(tcy0, rscale);
+    x_off                = static_cast<uint32_t>(stream_row_map::ceil_shift(tcx0, reduce_NL)
+                                                 - stream_row_map::ceil_shift(x0_c, reduce_NL));
+    y_off                = static_cast<uint32_t>(stream_row_map::ceil_shift(tcy0, reduce_NL)
+                                                 - stream_row_map::ceil_shift(y0_c, reduce_NL));
+    t_w                  = static_cast<uint32_t>(stream_row_map::ceil_shift(tcx1, reduce_NL)
+                                                 - stream_row_map::ceil_shift(tcx0, reduce_NL));
+    t_h                  = static_cast<uint32_t>(stream_row_map::ceil_shift(tcy1, reduce_NL)
+                                                 - stream_row_map::ceil_shift(tcy0, reduce_NL));
+  };
+  // First and one-past-last reduced reference-grid rows of tile row ty.
+  auto tile_row_span = [&](uint32_t ty, uint64_t &g0, uint64_t &g1) {
+    const uint64_t t0 = static_cast<uint64_t>(TOsiz.y) + static_cast<uint64_t>(ty) * Tsiz.y;
+    g0                = stream_row_map::ceil_shift(std::max<uint64_t>(t0, Osiz.y), reduce_NL);
+    g1                = stream_row_map::ceil_shift(std::min<uint64_t>(t0 + Tsiz.y, siz.y), reduce_NL);
   };
 
-  uint32_t global_y = 0;
+  // Output rows (stream_row_map.hpp, documented with invoke_line_based_stream in
+  // decoder.hpp).  Each tile delivers the output rows that start in it.
+  const stream_row_map &map = stream_map_;
 
   if (numTiles.x == 1) {
     // Fast path: single tile column — deliver rows directly to user callback, no accumulator.
+    // The row buffers persist from one tile to the next, so a component row that
+    // started in an earlier tile (a tile height that is not a multiple of the
+    // component's vertical factor) is still there.
+    std::vector<std::vector<int32_t>> rows(num_components);
+    for (uint16_t c = 0; c < num_components; ++c) rows[c].assign(std::max<size_t>(width[c], 1), 0);
     for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
-      uint32_t x_off, y_off, t_w, band_h0;
-      get_tile_geom(0, ty, 0, x_off, y_off, t_w, band_h0);
+      uint64_t g0, g1;
+      tile_row_span(ty, g0, g1);
+      if (map.first_out_at(g0) >= row_limit_) break;  // past the window
       // The tile's rows go to the callback as image rows, so the tile must span the
       // image width in every component (the SIZ checks guarantee it for one tile column).
       for (uint16_t c = 0; c < num_components; ++c) {
@@ -641,47 +689,48 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         tileSet[tile_idx].destroy();
         throw;
       }
-      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL,
-          [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
-            cb(global_y + y_local, rows, nc);
-          }, row_limit_, row_lo_, col_lo_, col_hi_, skip_mct_);
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, cb, row_limit_, row_lo_, col_lo_,
+                                                 col_hi_, skip_mct_, &rows);
       tileSet[tile_idx].destroy();
-      global_y += band_h0;
     }
     return;
   }
 
-  // General path: multiple tile columns — scatter into per-band-row accumulators.
+  // General path: multiple tile columns — scatter into per-tile-row accumulators.
+  // accum[c] holds the rows of component c in the current tile row (absolute rows
+  // [tr_first[c], tr_first[c] + tr_rows[c])); carry[c] the last row of component c
+  // before it (zeros until there is one), for output rows whose component row began
+  // in an earlier tile row.  set_row_range reaches the per-tile decode, which skips
+  // the rows above the window, and the delivery below.
   // Hoist all per-iteration scratch vectors out of the loops so the heap allocations
   // happen once instead of (numTiles.y * (1 + numTiles.x + 1)) times.
-  // NOTE: set_row_range is applied here at the per-tile decode (row_lo/row_hi in
-  // global finest-active-level coords, re-interpreted as tile-local inside each
-  // tile's decode_line_based_stream because tile band-heights stack vertically).
-  // The final `cb(global_y + y, ...)` loop below does NOT filter by row_lo, so
-  // multi-tile row_range still delivers all rows above/below the window back to
-  // the user callback — the savings only reach the HT decode layer.  A future
-  // caller wanting a clean multi-tile row_range needs to translate global row_lo
-  // into tile-local coords for each ty iteration and filter this cb loop.
-  std::vector<uint32_t>             band_h(num_components);
-  std::vector<uint32_t>             tile_x_off(num_components);
-  std::vector<uint32_t>             tile_w(num_components);
-  std::vector<int32_t *>            row_ptrs(num_components);
+  std::vector<uint32_t> tr_first(num_components);
+  std::vector<uint32_t> tr_rows(num_components);
+  std::vector<uint32_t> tile_x_off(num_components);
+  std::vector<uint32_t> tile_w(num_components);
+  std::vector<uint32_t> last_k(num_components);
+  std::vector<int32_t *> row_ptrs(num_components);
   std::vector<std::vector<int32_t>> accum(num_components);
+  std::vector<std::vector<int32_t>> carry(num_components);
+  for (uint16_t c = 0; c < num_components; ++c) carry[c].assign(std::max<size_t>(width[c], 1), 0);
 
   for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
-    // Compute band height per component (same for all tx in this tile row).
-    {
-      uint32_t x_off, y_off, t_w;
-      for (uint16_t c = 0; c < num_components; ++c)
-        get_tile_geom(0, ty, c, x_off, y_off, t_w, band_h[c]);
-    }
+    uint64_t g0, g1;
+    tile_row_span(ty, g0, g1);
+    const uint32_t yb = map.first_out_at(g0);
+    const uint32_t ye = map.first_out_at(g1);
+    if (yb >= row_limit_) break;  // past the window
 
-    // (Re)allocate full-width accumulator buffers for this tile-row band.
+    // (Re)allocate full-width accumulator buffers for this tile row.
     // assign() reuses existing capacity when the new size fits.
     // A subsampled component can have no rows in a tile row; keep one zero row so the
-    // row pointers handed to the callback below stay valid.
-    for (uint16_t c = 0; c < num_components; ++c)
-      accum[c].assign(static_cast<size_t>(std::max(band_h[c], 1U)) * width[c], 0);
+    // row pointers stay valid.
+    for (uint16_t c = 0; c < num_components; ++c) {
+      const uint64_t yr = map.yr[c];
+      tr_first[c]       = static_cast<uint32_t>((g0 + yr - 1) / yr);
+      tr_rows[c]        = static_cast<uint32_t>((g1 + yr - 1) / yr) - tr_first[c];
+      accum[c].assign(static_cast<size_t>(std::max(tr_rows[c], 1U)) * width[c], 0);
+    }
 
     for (uint32_t tx = 0; tx < numTiles.x; ++tx) {
       const uint32_t tile_idx = ty * numTiles.x + tx;
@@ -701,15 +750,19 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
           }
           tile_x_off[c] = x_off;
           tile_w[c]     = t_w;
+          last_k[c]     = UINT32_MAX;
         }
       }
 
-      // Internal scatter callback: copy tile-local rows into accumulator.
-      auto scatter = [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
+      // Internal scatter callback: copy each component row of this tile row into its
+      // accumulator row, once.
+      auto scatter = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
         for (uint16_t c = 0; c < nc; ++c) {
-          if (tile_w[c] == 0 || y_local >= band_h[c]) continue;
-          int32_t *dst =
-              accum[c].data() + static_cast<ptrdiff_t>(y_local) * static_cast<ptrdiff_t>(width[c]) + tile_x_off[c];
+          const uint32_t k = map.abs_row(c, y);
+          if (tile_w[c] == 0 || k == last_k[c] || k < tr_first[c] || k - tr_first[c] >= tr_rows[c])
+            continue;
+          last_k[c]    = k;
+          int32_t *dst = accum[c].data() + static_cast<size_t>(k - tr_first[c]) * width[c] + tile_x_off[c];
           std::memcpy(dst, rows[c], tile_w[c] * sizeof(int32_t));
         }
       };
@@ -723,21 +776,29 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         tileSet[tile_idx].destroy();
         throw;
       }
-      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_,
-                                                  row_lo_, col_lo_, col_hi_, skip_mct_);
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_, row_lo_,
+                                                 col_lo_, col_hi_, skip_mct_, nullptr,
+                                                 /*emit_all_rows=*/true);
       tileSet[tile_idx].destroy();  // Release tile-internal buffers immediately
     }
 
-    // Deliver complete rows for this tile-row band to the user callback.
-    for (uint32_t y = 0; y < band_h[0]; ++y) {
+    // Deliver the output rows of this tile row in the window to the user callback.
+    const uint32_t e0 = std::max(yb, row_lo_);
+    const uint32_t e1 = std::min(ye, row_limit_);
+    for (uint32_t y = e0; y < e1; ++y) {
       for (uint16_t c = 0; c < num_components; ++c) {
-        // For subsampled components, clamp to last valid row.
-        const uint32_t cy = (band_h[c] > 0) ? std::min(y, band_h[c] - 1) : 0;
-        row_ptrs[c] = accum[c].data() + static_cast<ptrdiff_t>(cy) * static_cast<ptrdiff_t>(width[c]);
+        const uint32_t k = map.abs_row(c, y);
+        row_ptrs[c] = (k >= tr_first[c]) ? accum[c].data() + static_cast<size_t>(k - tr_first[c]) * width[c]
+                                         : carry[c].data();
       }
-      cb(global_y + y, row_ptrs.data(), num_components);
+      cb(y, row_ptrs.data(), num_components);
     }
-    global_y += band_h[0];
+    for (uint16_t c = 0; c < num_components; ++c) {
+      if (tr_rows[c] > 0 && width[c] > 0) {
+        std::memcpy(carry[c].data(), accum[c].data() + static_cast<size_t>(tr_rows[c] - 1) * width[c],
+                    width[c] * sizeof(int32_t));
+      }
+    }
   }
 }
 
@@ -1055,14 +1116,16 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
   }
   if (!single_tile_reuse_enabled_) {
     // No single-tile cache — fall back to the callback path with a
-    // synthesized callback that writes to the planar descriptors.
+    // synthesized callback that writes to the planar descriptors, each
+    // component row once, at the first output row it covers.
+    std::vector<uint32_t> next(nc, 0);  // next row of each plane
     invoke_line_based_stream(
         [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
           for (uint16_t c = 0; c < nc_cb && c < nc; ++c) {
             const PlanarOutputDesc &d = descs[c];
-            if (y % d.yr != 0) continue;
-            const uint32_t cy = y / d.yr;
-            if (cy >= d.height) continue;
+            const uint32_t cy         = stream_map_.row(c, y);
+            if (cy == UINT32_MAX || cy < next[c] || cy >= d.height) continue;
+            next[c] = cy + 1;
             if (d.is_16bit) {
               auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
               for (uint32_t x = 0; x < d.width; ++x) {

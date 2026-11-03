@@ -39,6 +39,16 @@
   codestream in a JP2 file as in a JPH file; the command-line decoder refused
   the extension.
 
+### Decoder
+- `openhtj2k_decoder::get_stream_row_count()` and
+  `get_stream_component_row(c, y)` give the row layout of the streaming entry
+  points (valid after `parse()`): how many times the row callback is called,
+  and which row of component `c` its `row_ptrs[c]` holds for output row `y`,
+  or `UINT32_MAX` where no row of the component covers it. A caller that
+  writes each component's rows once (planar output) writes `row_ptrs[c]`
+  when that row changes. The layout is documented with
+  `invoke_line_based_stream()` in `decoder.hpp`.
+
 ## Changed
 
 ### Library
@@ -523,8 +533,41 @@
   without the thread pool, whose dispatches cost more than their work: a
   2048 x 2048 colour image in 16 x 16 tiles decoded twice as slowly with 4
   threads as with 1 (0.91 s against 0.45 s) and now takes 0.25 s with either.
+- The streaming entry points (`invoke_line_based_stream()`, its single-tile
+  reuse variant, `invoke_line_based_direct()`, and the `open_htj2k_dec`
+  command, which uses them) returned wrong rows for vertically subsampled
+  components outside the simple cases: a factor that does not divide the
+  strip height (YRsiz 3), tiles whose height is not a multiple of a
+  component's factor (a component row spanning two tiles), several tile
+  columns, an image origin that is not a multiple of the factor, a component
+  with a smaller factor than component 0 (its rows beyond component 0's
+  height were never decoded), or factors that are not multiples of
+  component 0's. The rows were paired with the callback's rows from the
+  ratio of the component heights. They now follow the sampling grid: row k
+  of a component with factor YRsiz covers reference-grid rows
+  [k * YRsiz, (k + 1) * YRsiz), and the callback is called once per run of g
+  reference rows (g being the greatest common divisor of the YRsiz), with
+  each component's covering row (zeros above a component's first row). When
+  every component's factor is a multiple of component 0's (4:4:4, 4:2:2,
+  4:2:0, all factors equal) the callback rows are component 0's rows, as
+  before, and the output is byte-identical; otherwise there can be more
+  callback rows than component 0 has (`get_stream_row_count()`).
+  `set_row_range()` and `set_row_limit()` now also work with several tile
+  rows (each tile row applied the window as if it were the first), and
+  decoding stops at the end of the window instead of decoding the remaining
+  tiles. Checked against two other decoders for vertical factors 1 to 255
+  (including 3, 5, 7, 2 with 3, 4 with 6, ...), horizontal factors 1 to 5,
+  image and tile origins, tiles of odd heights in one or several columns,
+  1 to 12 components, the colour transform with an extra component, reduced
+  resolutions, all progression orders, and 1 and 4 threads.
+- `invoke_line_based()` did not decode the rows of a component with more rows
+  than component 0 (a smaller vertical factor) beyond component 0's height.
 
 ### Tools
+- `open_htj2k_dec` guessed each component's vertical subsampling factor from
+  the ratio of the component heights to pick the rows it wrote, which is
+  wrong for some factors and origins (see Decoder). It now writes each
+  component row as the decoder's row map gives it.
 - `open_htj2k_dec` exited with status 0 when decoding failed: it printed the
   error and carried on. It now exits with a non-zero status.
 - `open_htj2k_enc` wrote a JPH file, not a bare codestream, for an output

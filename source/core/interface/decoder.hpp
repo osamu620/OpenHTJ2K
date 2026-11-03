@@ -98,10 +98,32 @@ class openhtj2k_decoder {
   // output buffers entirely — only per-row scratch is needed.  width/height/depth/is_signed
   // are populated before the first callback invocation so the callback can use them.
   // The callback receives (y, row_ptrs[NC], NC) and must copy the data if needed.
+  //
+  // Rows.  The callback is called for the output rows y = 0, 1, ...,
+  // get_stream_row_count() - 1, in order, and row_ptrs[c] then points at width[c]
+  // samples: row get_stream_component_row(c, y) of component c, counted from 0 like
+  // height[c].  When the vertical subsampling factor (SIZ YRsiz) of every component is
+  // a multiple of component 0's (4:4:4, 4:2:2, 4:2:0, all factors equal, ...), the
+  // output rows are the rows of component 0: there are height[0] of them, and
+  // row_ptrs[0] holds row y.  In general the output rows divide the image's rows of
+  // the reference grid (reduced by 2^reduce_NL) into runs of g rows, g being the
+  // greatest common divisor of the YRsiz, starting at the first grid row any
+  // component samples; row k of a component (k counted from the grid origin) covers
+  // grid rows [k * YRsiz, (k + 1) * YRsiz), so it is handed over at each of the one
+  // or more consecutive output rows it covers, starting at the first.  A component
+  // whose first row starts below output row y covers none of the rows above it:
+  // there row_ptrs[c] points at zeros and get_stream_component_row() returns
+  // UINT32_MAX.  To write each component's rows once, write row_ptrs[c] whenever
+  // get_stream_component_row(c, y) changes to a valid row.
   OPENHTJ2K_EXPORT void invoke_line_based_stream(
       std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb,
       std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
       std::vector<bool> &is_signed);
+  // The row layout of the streaming entry points described above (valid after parse()):
+  // the number of output rows, and the row of component c that row_ptrs[c] holds at
+  // output row y (UINT32_MAX when none of its rows covers y, or y is out of range).
+  OPENHTJ2K_EXPORT uint32_t get_stream_row_count();
+  OPENHTJ2K_EXPORT uint32_t get_stream_component_row(uint16_t c, uint32_t y);
   // Opt-in single-tile streaming variant: when enable_single_tile_reuse(true)
   // has been set, consecutive calls reuse the decoded tile tree (codeblock
   // allocations, precinct tagtrees, line-decode ring buffers) so per-frame
@@ -117,7 +139,9 @@ class openhtj2k_decoder {
       std::vector<bool> &is_signed);
   // Direct-to-planar streaming decode.  Reads float from IDWT ring and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
-  // the callback and int32 scratch entirely.  Respects enable_single_tile_reuse().
+  // the callback and int32 scratch entirely: row j of component c goes to
+  // descs[c].base + j * descs[c].stride (descs[c].yr is not used).  Respects
+  // enable_single_tile_reuse().
   // Falls back to invoke_line_based_stream_reuse() + callback for MCT (4:4:4)
   // or multi-tile codestreams.  PlanarOutputDesc is defined in coding_units.hpp.
   OPENHTJ2K_EXPORT void invoke_line_based_direct(
@@ -130,11 +154,13 @@ class openhtj2k_decoder {
   // any cached state and returns the decoder to the legacy per-frame path.
   OPENHTJ2K_EXPORT void enable_single_tile_reuse(bool on);
   // Phase 4B spatial-region early exit.  Stops line-based decode after
-  // this many luma rows.  Default = UINT32_MAX (no limit).
+  // this many output rows (see invoke_line_based_stream; the rows of component 0
+  // in the common case).  Default = UINT32_MAX (no limit).
   OPENHTJ2K_EXPORT void set_row_limit(uint32_t limit);
 
-  // Spatial-region vertical viewport.  Restricts line-based decode to rows
-  // [row_lo, row_hi) in the finest active-level output coord space.  Default
+  // Spatial-region vertical viewport.  Restricts line-based decode to output
+  // rows [row_lo, row_hi) (the y of the row callback, see invoke_line_based_stream;
+  // the rows of component 0 in the common case).  Default
   // = [0, UINT32_MAX) → full-height decode (same cost as before).  Coarser
   // DWT levels automatically receive a halved range widened by the 9/7 filter
   // support, mirroring set_col_range.  Rows outside [row_lo, row_hi) are not
