@@ -508,6 +508,13 @@ add_test(NAME enc_ht_jp2_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/k
 set_tests_properties(enc_ht_jp2_rejected PROPERTIES WILL_FAIL TRUE)
 add_test(NAME enc_part1_prcl_jp2_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23prcl.jp2 Cmodes=0 Corder=PRCL)
 set_tests_properties(enc_part1_prcl_jp2_rejected PROPERTIES WILL_FAIL TRUE)
+# Box lengths (ISO/IEC 15444-1 I.4) of JPH and JP2 files: the Contiguous Codestream box
+# header for code lengths around the 32-bit LBox limit (LBox = 1 and a 64-bit XLBox above
+# it), and the reader with jp2c boxes of LBox = 1 + XLBox and LBox = 0, every box with
+# XLBox, and malformed XLBox values, which must be rejected.  See
+# tests/tools/jph_box_check/main.cpp.
+add_test(NAME jph_box_lengths COMMAND jph_box_check)
+set_tests_properties(jph_box_lengths PROPERTIES PASS_REGULAR_EXPRESSION "all cases passed")
 
 # Part 1 code-block mode switches.  Each lossless round-trip must be exact.
 #   bypass:  raw SigProp/MagRef passes from the fifth bit-plane, so several

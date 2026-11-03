@@ -127,6 +127,23 @@
   differed in signedness. It now writes 255 and a Bits Per Component box, as
   it already did for components of different bit depths. Other JPH files are
   byte-identical.
+- JPH and JP2 files with a codestream of 4294967288 bytes (4 GiB less 8) or
+  more got a wrong Contiguous Codestream box length: the 32-bit box length
+  field (LBox), which counts the 8-byte box header too, wrapped around, and
+  the encoder returned a file size off by the same amount. Such a box now
+  has LBox = 1 followed by the 64-bit box length (XLBox, ISO/IEC 15444-1
+  I.4), which gives the length of the box exactly; LBox = 0 ("to the end of
+  the file") would be allowed for the last box only and would not tell a
+  reader where the codestream ends. Smaller files are byte-identical.
+
+### Decoder
+- A JPH or JP2 file that starts with the signature box but has no valid
+  Contiguous Codestream box, for example one whose 64-bit box length (XLBox)
+  is smaller than the box header or reaches past the end of the file, is
+  rejected with "JPH/JP2 file without a valid Contiguous Codestream box". It
+  used to be read as a bare codestream, which failed with an unrelated error.
+  Contiguous Codestream boxes with LBox = 1 and an XLBox, or with LBox = 0
+  (to the end of the file), are read as before.
 
 ### Tools
 - `open_htj2k_enc` wrote a JPH file, not a bare codestream, for an output
