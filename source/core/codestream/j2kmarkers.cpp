@@ -1109,6 +1109,31 @@ QCC_marker::QCC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   is_set = true;
 }
 
+QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, const QCD_marker &qcd)
+    : j2k_marker_io_base(_QCC),
+      max_components(Csiz),
+      Cqcc(c),
+      Sqcc(qcd.Sqcd),
+      SPqcc(qcd.SPqcd),
+      is_reversible(qcd.is_reversible) {
+  // Lqcc is Lqcd plus the component index: one byte, or two with 257 or more components.
+  Lmar   = static_cast<uint16_t>(qcd.Lmar + 1 + (max_components >= 257 ? 1 : 0));
+  is_set = true;
+}
+
+uint8_t QCC_marker::get_MAGB() const {
+  const uint8_t qstyle = Sqcc & 0x1F;
+  uint8_t tmp          = (qstyle > 0) ? 0xFF : 0;
+  for (const uint16_t &val : SPqcc) {
+    if (qstyle == 0) {
+      tmp = (tmp < (val >> 3)) ? static_cast<uint8_t>(val >> 3) : tmp;
+    } else {
+      tmp = (tmp > (val >> 11)) ? static_cast<uint8_t>(val >> 11) : tmp;
+    }
+  }
+  return tmp;
+}
+
 int QCC_marker::write(j2c_dst_memory &dst) {
   assert(is_set == true);
   dst.put_word(code);
