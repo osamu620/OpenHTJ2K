@@ -436,7 +436,9 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
   // JPEG 2000 stores signed data with a DC offset of 2^(depth-1); the inverse
   // transform subtracts it, leaving negative values.  For PGM/PPM output we
   // add it back so values fall in [0, maxval].  For PGX, skip (raw signed).
-  int32_t dc_offset[16] = {};
+  // One per component (at least 3 for the colour paths), sized once nc is known: a
+  // fixed array of 16 overflowed for more components.
+  std::vector<int32_t> dc_offset;
   // defer filling until nc is known (inside the lambda on first call)
   bool dc_offset_ready = false;
   uint32_t next_y0     = 0;  // next row of component 0 to write
@@ -449,6 +451,7 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
       if (y0 == UINT32_MAX || y0 < next_y0) return;
       next_y0 = y0 + 1;
       if (!dc_offset_ready) {
+        dc_offset.assign(nc < 3 ? 3 : nc, 0);
         if (apply_dc_offset) {
           for (uint16_t c = 0; c < nc; ++c)
             dc_offset[c] = is_signed[c] ? (1 << (depth[c] - 1)) : 0;

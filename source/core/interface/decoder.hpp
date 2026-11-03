@@ -140,8 +140,9 @@ class openhtj2k_decoder {
   // Direct-to-planar streaming decode.  Reads float from IDWT ring and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
   // the callback and int32 scratch entirely: row j of component c goes to
-  // descs[c].base + j * descs[c].stride (descs[c].yr is not used).  Respects
-  // enable_single_tile_reuse().
+  // descs[c].base + j * descs[c].stride, for rows below descs[c].height, with at
+  // most descs[c].width samples (and no more than the component has); descs[c].yr
+  // is not used.  Respects enable_single_tile_reuse().
   // Falls back to invoke_line_based_stream_reuse() + callback for MCT (4:4:4)
   // or multi-tile codestreams.  PlanarOutputDesc is defined in coding_units.hpp.
   OPENHTJ2K_EXPORT void invoke_line_based_direct(
