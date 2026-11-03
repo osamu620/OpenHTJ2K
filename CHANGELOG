@@ -93,6 +93,12 @@
   every installed header on its own, includes the headers by both paths, and
   fails if a build configuration macro reaches the consumer or if the package
   of a static build does not define `OHTJ2K_STATIC`.
+- The `install_consumer` test builds its programs with the build's own
+  `CMAKE_CXX_FLAGS` and `CMAKE_EXE_LINKER_FLAGS` (not on MSVC). In a build
+  with `-fsanitize=address,undefined` the consumer failed to link, because a
+  program that uses an instrumented library needs the sanitizer runtime too.
+  With these flags and the test tools fixed, the whole test suite passes
+  under AddressSanitizer, UndefinedBehaviorSanitizer and LeakSanitizer.
 
 ## Fixed
 

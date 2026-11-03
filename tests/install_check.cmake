@@ -16,6 +16,17 @@ if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING AND NOT IS_ABSOLUTE "${CMAKE_INST
       set(_ohtj2k_consumer_pkg_config "${OPENHTJ2K_PKG_CONFIG}")
     endif()
   endif()
+  # The consumer is built with this build's own compiler and linker flags (the
+  # cache values, without the warning flags this project adds): a program that
+  # links a library built with, for example, -fsanitize=address,undefined needs
+  # the same flags to find the sanitizer runtime.  MSVC's cache flags carry the
+  # generator defaults, so they are not forwarded there.
+  set(_ohtj2k_consumer_cxx_flags "")
+  set(_ohtj2k_consumer_ld_flags "")
+  if(NOT MSVC)
+    set(_ohtj2k_consumer_cxx_flags "$CACHE{CMAKE_CXX_FLAGS}")
+    set(_ohtj2k_consumer_ld_flags "$CACHE{CMAKE_EXE_LINKER_FLAGS}")
+  endif()
   add_test(NAME install_consumer
            COMMAND ${CMAKE_COMMAND}
                    -DBUILD_DIR=${CMAKE_BINARY_DIR}
@@ -24,6 +35,8 @@ if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING AND NOT IS_ABSOLUTE "${CMAKE_INST
                    -DCONSUMER_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/install_consumer
                    -DINPUT=${CONFORMANCE_DATA_DIR}/ds0_ht_02_b11.j2k
                    -DCXX=${CMAKE_CXX_COMPILER}
+                   "-DCXX_FLAGS=${_ohtj2k_consumer_cxx_flags}"
+                   "-DLD_FLAGS=${_ohtj2k_consumer_ld_flags}"
                    "-DGENERATOR=${CMAKE_GENERATOR}"
                    "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
                    "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
