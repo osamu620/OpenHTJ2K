@@ -107,6 +107,8 @@ the container:
     (100 = best quality).
   - When specified, `Qstep` is ignored. `Cycc` defaults to `yes`; disabling
     it on 3-component input only warns (Qfactor assumes YCbCr input).
+  - Works with 1 to 4 components: gray, gray + alpha, colour, colour + alpha.
+    The alpha channel is quantized like a gray-scale plane.
   - See [`qfactor.md`](qfactor.md) for how the factor maps to step sizes.
 - `Qcsf=legacy|mannos|daly` *(experimental)*
   - Visual-weighting model for the `Qfactor` path. Default **legacy**
