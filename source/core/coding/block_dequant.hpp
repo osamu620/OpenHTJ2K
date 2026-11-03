@@ -34,6 +34,35 @@
 
 namespace open_htj2k {
 
+// x = step * 2^31 + 0.5, the integer step of the ROI dequantization paths, truncated to
+// int32.  A malformed QCD/QCC (a step far above any real one) or ATK (a gain that is not
+// finite) puts x outside the int32 range, where a plain conversion is undefined:
+// saturate instead (NaN gives INT32_MAX).
+static inline int32_t roi_scale_to_i32(double x) {
+  if (!(x < 2147483648.0)) return INT32_MAX;
+  if (x <= -2147483649.0) return INT32_MIN;
+  return static_cast<int32_t>(x);
+}
+
+// Scalar steps of the ROI dequantization paths, in the wrapping 32-bit arithmetic of
+// their SIMD lanes (which the scalar tails must match).  Nothing wraps on most valid
+// data, but the integer step multiply can, and a malformed codestream (background
+// samples with bits a valid one cannot have, moved past bit 31 by the upshift) would
+// overflow int32 everywhere.  The upshift gives 0 for a count of 32 or more, like the
+// SIMD shifts.
+static inline int32_t roi_upshift(int32_t v, uint8_t s) {
+  return (s < 32) ? static_cast<int32_t>(static_cast<uint32_t>(v) << s) : 0;
+}
+static inline int32_t wrap_add(int32_t a, int32_t b) {
+  return static_cast<int32_t>(static_cast<uint32_t>(a) + static_cast<uint32_t>(b));
+}
+static inline int32_t wrap_sub(int32_t a, int32_t b) {
+  return static_cast<int32_t>(static_cast<uint32_t>(a) - static_cast<uint32_t>(b));
+}
+static inline int32_t wrap_mul(int32_t a, int32_t b) {
+  return static_cast<int32_t>(static_cast<uint32_t>(a) * static_cast<uint32_t>(b));
+}
+
 // Dequantizes a decoded Part 1 code-block.  Without an ROI shift, every significant
 // sample carries a reconstruction marker at bit p - 1, where p is the lowest
 // bit-plane decoded for it (set by j2k_decode); that marker is the mid-point

@@ -274,6 +274,18 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   const int32_t K          = M_b + static_cast<int32_t>(ROIshift) - static_cast<int32_t>(block->num_ZBP);
   const int32_t max_passes = 3 * (K)-2;
 
+  // The passes fill bit-planes downward from bit 30 - num_ZBP of the samples (the MSB),
+  // one bit-plane per cleanup pass.  More missing MSBs than the band has bit-planes, or
+  // passes that would run below bit 0, come from a malformed packet header.
+  if (num_decode_pass > 0
+      && (K < 0 || block->num_ZBP > 30 || (num_decode_pass + 1) / 3 > 30 - block->num_ZBP)) {
+    open_htj2k::detail::fail(
+        "Code-block with %u missing MSBs of %d bit-planes and %u coding passes — malformed packet "
+        "header.",
+        static_cast<unsigned>(block->num_ZBP), static_cast<int>(M_b + ROIshift),
+        static_cast<unsigned>(num_decode_pass));
+  }
+
   uint8_t z                    = 0;  // pass index
   uint8_t k                    = 2;  // pass category (0 = sig, 1 = mag, 2 = cleanup)
   uint8_t pmsb                 = static_cast<uint8_t>(30 - block->num_ZBP);  // index of the MSB

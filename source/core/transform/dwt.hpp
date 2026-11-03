@@ -54,6 +54,19 @@ namespace open_htj2k {
 // creating a header dependency from utils.hpp on dwt.hpp.
 static_assert(DWT_RIGHT_SLACK == SIMD_PADDING,
               "DWT_RIGHT_SLACK (utils.hpp) must equal SIMD_PADDING (dwt.hpp)");
+
+// Steps of the inverse reversible 5/3 lifting on int32 samples (F.3.8.2):
+// x - ((a + b + 2) >> 2) and x + ((a + b) >> 1), in the wrapping 32-bit arithmetic of
+// the SIMD lanes, which the scalar loops and tails must match.  Valid data never
+// wraps, but the coefficients of a malformed codestream can overflow int32.
+static inline int32_t rev53_undo_update(int32_t x, int32_t a, int32_t b) {
+  const auto s = static_cast<int32_t>(static_cast<uint32_t>(a) + static_cast<uint32_t>(b) + 2U);
+  return static_cast<int32_t>(static_cast<uint32_t>(x) - static_cast<uint32_t>(s >> 2));
+}
+static inline int32_t rev53_undo_predict(int32_t x, int32_t a, int32_t b) {
+  const auto s = static_cast<int32_t>(static_cast<uint32_t>(a) + static_cast<uint32_t>(b));
+  return static_cast<int32_t>(static_cast<uint32_t>(x) + static_cast<uint32_t>(s >> 1));
+}
 // Column-strip width for vertical DWT (must be a multiple of 16).
 // 128 on Apple Silicon to match M-series 128-byte cache lines (128 floats × 4B = 512B = 4 lines);
 // 64 elsewhere to fit x86/Cortex-A 64-byte cache lines.
@@ -584,6 +597,13 @@ typedef void (*idwt_row_src_fn)(void *ctx, int32_t abs_row, sprec_t *out_row);
 // Reducing from 12 → 8 cuts level-1 ring buffer (4K: 3840 floats/row) from 180KB to 120KB,
 // improving L2 cache utilization for vertical lifting steps.
 constexpr int32_t IDWT_STATE_RING_DEPTH = 8;
+static_assert((IDWT_STATE_RING_DEPTH & (IDWT_STATE_RING_DEPTH - 1)) == 0,
+              "idwt_ring_slot() needs a power-of-two ring depth");
+
+// Ring slot of absolute row r: r mod IDWT_STATE_RING_DEPTH, in 0..DEPTH-1 for every int32
+// r.  Rows are canvas coordinates and can be negative (a reference grid origin at or above
+// 2^31), where r % DEPTH would be a negative index.
+static inline int32_t idwt_ring_slot(int32_t r) { return r & (IDWT_STATE_RING_DEPTH - 1); }
 
 // Extra floats reserved before each ring buffer slot for in-place horizontal PSE.
 // Must be >= max(left PSE) = 4 and a multiple of 8 (8×4B=32B) for AVX2 alignment.
@@ -609,7 +629,7 @@ struct idwt_2d_state {
   int8_t   bot_dlevel[4];      // d_level per bot-PSE slot (-1 = unfilled)
 
   // ── sliding ring for real rows [v0, v1) (BIDIR only) ─────────────────────
-  // Slot for absolute row r : r & (IDWT_STATE_RING_DEPTH - 1)
+  // Slot for absolute row r : idwt_ring_slot(r)
   // Each ring slot is slot_stride floats wide; the data portion (post-horizontal-IDWT)
   // starts at offset IDWT_RING_PSE_LEFT within the slot, providing scratch space
   // for the in-place horizontal PSE fill and filter (no separate ext_buf needed).
@@ -721,8 +741,7 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s);
 // Pointer to the row buffer for physical row r (ring, top-PSE, or bot-PSE).
 static inline sprec_t *idwt_rptr(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1)
-    return static_cast<sprec_t *>(s->ring_buf)
-           + static_cast<ptrdiff_t>(r & (IDWT_STATE_RING_DEPTH - 1)) * s->slot_stride
+    return static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(idwt_ring_slot(r)) * s->slot_stride
            + IDWT_RING_PSE_LEFT;
   if (r < s->v0)
     return static_cast<sprec_t *>(s->top_pse_buf) + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
@@ -733,7 +752,7 @@ static inline sprec_t *idwt_rptr(const idwt_2d_state *s, int32_t r) {
 static inline int8_t idwt_get_dl(const idwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1) {
     if (r < s->ring_origin || r >= s->ring_origin + IDWT_STATE_RING_DEPTH) return -1;
-    return s->d_level[r & (IDWT_STATE_RING_DEPTH - 1)];
+    return s->d_level[idwt_ring_slot(r)];
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_dlevel[s->v0 - 1 - r];
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_dlevel[r - s->v1];
@@ -743,7 +762,7 @@ static inline int8_t idwt_get_dl(const idwt_2d_state *s, int32_t r) {
 // Set d_level for physical row r.
 static inline void idwt_set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
   if (r >= s->v0 && r < s->v1) {
-    s->d_level[r & (IDWT_STATE_RING_DEPTH - 1)] = lv;
+    s->d_level[idwt_ring_slot(r)] = lv;
     return;
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_dlevel[s->v0 - 1 - r] = lv; return; }
@@ -752,14 +771,17 @@ static inline void idwt_set_dl(idwt_2d_state *s, int32_t r, int8_t lv) {
 
 // True if physical row r is tracked as all-zero (absent-precinct optimisation).
 static inline bool idwt_is_zero(const idwt_2d_state *s, int32_t r) {
-  if (r >= s->v0 && r < s->v1) return s->row_zero[r & (IDWT_STATE_RING_DEPTH - 1)];
+  if (r >= s->v0 && r < s->v1) return s->row_zero[idwt_ring_slot(r)];
   if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_pse_zero[s->v0 - 1 - r];
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_pse_zero[r - s->v1];
   return true;
 }
 
 static inline void idwt_set_zero(idwt_2d_state *s, int32_t r, bool z) {
-  if (r >= s->v0 && r < s->v1) { s->row_zero[r & (IDWT_STATE_RING_DEPTH - 1)] = z; return; }
+  if (r >= s->v0 && r < s->v1) {
+    s->row_zero[idwt_ring_slot(r)] = z;
+    return;
+  }
   if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_pse_zero[s->v0 - 1 - r] = z; return; }
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) { s->bot_pse_zero[r - s->v1] = z; }
 }
@@ -798,6 +820,13 @@ typedef void (*fdwt_row_sink_planes_fn)(void *ctx, bool is_hp, int32_t abs_phys_
                                         const sprec_t *hp_row);
 
 constexpr int32_t FDWT_STATE_RING_DEPTH = 12;
+
+// Ring slot of absolute row r: r mod FDWT_STATE_RING_DEPTH, in 0..DEPTH-1 also for a
+// negative r (see idwt_ring_slot).
+static inline int32_t fdwt_ring_slot(int32_t r) {
+  const int32_t m = r % FDWT_STATE_RING_DEPTH;
+  return (m < 0) ? m + FDWT_STATE_RING_DEPTH : m;
+}
 
 struct fdwt_2d_state {
   // ── geometry ──────────────────────────────────────────────────────────────

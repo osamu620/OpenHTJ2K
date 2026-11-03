@@ -477,3 +477,101 @@ _sec_rejects(security_packets_exceed_codestream security_packets_exceed_codestre
 # was sized by component 0 and wrote past the rows of the smaller components.
 _sec_rejects(security_mct_subsampled security_mct_subsampled.j2k
              "uses the colour transform, but component 1 is subsampled differently" mt)
+# The fixtures below come from fuzzing the streaming decode (invoke_line_based_stream,
+# the path image I/O libraries use) and run single- and multi-threaded.  Each used to
+# corrupt memory or reach undefined behaviour; the patched decoder decodes the input or
+# rejects it with the message in PASS_REGULAR_EXPRESSION (on the threaded runs a code-
+# block failure may surface as the generic decode-task message).  Some of the undefined
+# behaviour does not show in a release build, where the UBSan CI job is what catches a
+# regression.
+function(_sec_decode_test name input threads pass_re)
+  add_test(NAME ${name}
+           COMMAND open_htj2k_dec -i ${SECURITY_DATA_DIR}/${input} -o ${name}.pgx
+                   -num_threads ${threads})
+  if(pass_re)
+    set_tests_properties(${name} PROPERTIES
+        PASS_REGULAR_EXPRESSION "${pass_re}"
+        FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+        TIMEOUT 60)
+  else()
+    # Must decode: exit 0 and no crash marker.
+    set_tests_properties(${name} PROPERTIES FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}" TIMEOUT 60)
+  endif()
+endfunction()
+
+# 31 and 32 DWT levels, the most the spec allows.  The per-resolution arrays of
+# create_resolutions held 32 entries but are indexed by resolution 0..NL (the
+# normalization shifts up to NL + 1), and the extents of resolutions and subbands
+# divided by 2^(NL - r) with a 32-bit shift, which is undefined at 32.  dwt31_levels.j2c
+# and dwt32_levels.j2c are valid HT codestreams of dwt_levels_src.pgm (61 x 47, 8 bits,
+# reversible; open_htj2k_enc Clevels=31/32 Creversible=yes) and must decode to it exactly
+# (a release build of the old decoder got the 32-level one wrong).  The fuzzed
+# 32-level file must decode without a crash.
+foreach(_nl 31 32)
+  foreach(_t 1 4)
+    _sec_decode_test(dec_dwt${_nl}_levels_t${_t} dwt${_nl}_levels.j2c ${_t} "")
+    add_test(NAME comp_dwt${_nl}_levels_t${_t}
+             COMMAND imgcmp dec_dwt${_nl}_levels_t${_t}_00.pgx ${SECURITY_DATA_DIR}/dwt_levels_src.pgm 0 0)
+    set_tests_properties(comp_dwt${_nl}_levels_t${_t} PROPERTIES DEPENDS dec_dwt${_nl}_levels_t${_t})
+  endforeach()
+endforeach()
+foreach(_t 1 4)
+  _sec_decode_test(security_dwt32_levels_fuzzed_t${_t} security_dwt32_levels_fuzzed.jph ${_t} "")
+endforeach()
+
+# Tile-parts.  A codestream that ends before some tiles (a truncated download) left those
+# tiles with no tile-part, and the decoder read the first of none; it now decodes them as
+# empty, like the packets missing from a tile cut short.  A tile with 256 tile-parts (one
+# more than the spec allows) wrapped an 8-bit count to 0 and must decode.  A tile whose
+# tile-parts lack the first one (TPsot 0, which carries the tile header) was never set up
+# and is now rejected.
+foreach(_t 1 4)
+  _sec_decode_test(security_tile_without_tile_parts_t${_t} security_tile_without_tile_parts.j2c ${_t}
+                   "no data for tile 1 .* decoding it as empty")
+  _sec_decode_test(security_256_tile_parts_t${_t} security_256_tile_parts.j2c ${_t} "")
+  _sec_decode_test(security_first_tile_part_missing_t${_t} security_first_tile_part_missing.jph ${_t}
+                   "not its first \\(TPsot 0\\)")
+endforeach()
+
+# An HT code-block holding only placeholder passes decodes to zeros, but nothing wrote
+# them: its samples kept whatever the reused strip buffer held, so the image depended on
+# the heap.  Decode it with the heap filled differently (glibc's MALLOC_PERTURB_; elsewhere
+# both runs are alike) and with 1 and 4 threads; the outputs must be identical.
+_sec_decode_test(security_empty_ht_block_t1 security_empty_ht_block.j2c 1 "")
+_sec_decode_test(security_empty_ht_block_t4 security_empty_ht_block.j2c 4 "")
+set_tests_properties(security_empty_ht_block_t1 PROPERTIES ENVIRONMENT "MALLOC_PERTURB_=0")
+set_tests_properties(security_empty_ht_block_t4 PROPERTIES ENVIRONMENT "MALLOC_PERTURB_=170")
+foreach(_comp 00 01 02)
+  add_test(NAME cmp_security_empty_ht_block_${_comp}
+           COMMAND ${CMAKE_COMMAND} -E compare_files security_empty_ht_block_t1_${_comp}.pgx
+                   security_empty_ht_block_t4_${_comp}.pgx)
+  set_tests_properties(cmp_security_empty_ht_block_${_comp} PROPERTIES
+      DEPENDS "security_empty_ht_block_t1;security_empty_ht_block_t4")
+endforeach()
+
+# Bounds taken from the codestream before they are used as shift counts or array sizes:
+# a Part 1 code-block whose zero bit-planes and coding passes run below bit 0 of the
+# samples; a quantization exponent giving a subband more than 30 magnitude bit-planes
+# (Part 1 and HT dequantization shift by 31 - M_b and M_b + 1); a code-block segment length
+# signalled in more than 32 bits.
+foreach(_t 1 4)
+  _sec_decode_test(security_part1_missing_msbs_t${_t} security_part1_missing_msbs.jph ${_t}
+                   "missing MSBs of .* coding passes|decode task failed")
+  _sec_decode_test(security_mb_part1_dequant_t${_t} security_mb_part1_dequant.jph ${_t}
+                   "has 31 magnitude bit-planes")
+  _sec_decode_test(security_mb_ht_dequantize_t${_t} security_mb_ht_dequantize.j2c ${_t}
+                   "has 31 magnitude bit-planes")
+  _sec_decode_test(security_segment_length_bits_t${_t} security_segment_length_bits.j2c ${_t}
+                   "segment length of 37 bits")
+endforeach()
+
+# Undefined behaviour without a release-build symptom: a quantization step whose integer
+# scale for the ROI dequantization exceeds int32 (the conversion now saturates; the file
+# decodes), and an MQ code register that a corrupt codeword shifted past 2^31 while it was
+# a signed int32 (the decoder then rejects a later segment as too long).
+foreach(_t 1 4)
+  _sec_decode_test(security_dequant_scale_range_t${_t} security_dequant_scale_range.jph ${_t} "")
+  _sec_decode_test(security_mq_code_register_t${_t} security_mq_code_register.jph ${_t}
+                   "MQ segment length exceeds|decode task failed")
+endforeach()
+

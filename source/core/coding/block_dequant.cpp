@@ -50,8 +50,8 @@ static void j2k_dequant_rev_scalar(const int32_t *sample_buf, size_t blksampl_st
       int32_t QF32;
       if (ROIshift) {
         // All bit-planes count as decoded, so no mid-point is added.
-        if (((uint32_t)mag & ~mask) == 0) mag <<= ROIshift;
-        QF32 = ((mag ^ smask) - smask) >> pLSB;
+        if (((uint32_t)mag & ~mask) == 0) mag = roi_upshift(mag, ROIshift);
+        QF32 = wrap_sub(mag ^ smask, smask) >> pLSB;
       } else {
         // A marker at or above pLSB is the mid-point; one below pLSB is shifted out.
         QF32 = ((mag >> pLSB) ^ smask) - smask;
@@ -97,7 +97,7 @@ void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *ban
   constexpr int32_t downshift = 15;
   float fscale                = fscale_direct;
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
-  const auto scale = (int32_t)(fscale + 0.5);
+  const int32_t scale = roi_scale_to_i32(fscale + 0.5);
 
   if (transformation == 1) {
     if (dequant_i32)
@@ -126,17 +126,17 @@ void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *ban
         int32_t val         = val_row[x] & INT32_MAX;
         if (ROIshift) {
           if (((uint32_t)val & ~mask) == 0) {
-            val <<= ROIshift;
+            val = roi_upshift(val, ROIshift);
           }
           // All bit-planes count as decoded: the mid-point is half the LSB.
           if (val != 0) {
             val |= 1 << (pLSB - 1);
           }
         }  // otherwise the reconstruction marker is the mid-point already
-        val = (val + (1 << 15)) >> 16;
-        val *= scale;
-        int32_t QF32 = (int32_t)((val + (1 << (downshift - 1))) >> downshift);
-        QF32         = (QF32 ^ smask) - smask;
+        val          = wrap_add(val, 1 << 15) >> 16;
+        val          = wrap_mul(val, scale);
+        int32_t QF32 = wrap_add(val, 1 << (downshift - 1)) >> downshift;
+        QF32         = wrap_sub(QF32 ^ smask, smask);
         dst_row[x]   = static_cast<float>(QF32);
       }
     }

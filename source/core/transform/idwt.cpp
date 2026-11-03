@@ -141,15 +141,15 @@ static void idwt_1d_filtr_rev53_i32_scalar(int32_t *X, int32_t left, int32_t u_i
   const int32_t stop   = u_i1 / 2;
   const int32_t offset = left - u_i0 % 2;
   for (int32_t n = 0 + offset, i = start; i < stop + 1; ++i, n += 2)
-    X[n] -= (X[n - 1] + X[n + 1] + 2) >> 2;
+    X[n] = rev53_undo_update(X[n], X[n - 1], X[n + 1]);
   for (int32_t n = 0 + offset, i = start; i < stop; ++i, n += 2)
-    X[n + 1] += (X[n] + X[n + 2]) >> 1;
+    X[n + 1] = rev53_undo_predict(X[n + 1], X[n], X[n + 2]);
 }
 static void adv_idwt_rev_lp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
-  for (int32_t i = 0; i < n; ++i) tgt[i] -= (prev[i] + next[i] + 2) >> 2;
+  for (int32_t i = 0; i < n; ++i) tgt[i] = rev53_undo_update(tgt[i], prev[i], next[i]);
 }
 static void adv_idwt_rev_hp_step_i32_scalar(int32_t n, const int32_t *prev, const int32_t *next, int32_t *tgt) {
-  for (int32_t i = 0; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
+  for (int32_t i = 0; i < n; ++i) tgt[i] = rev53_undo_predict(tgt[i], prev[i], next[i]);
 }
 static idwt_1d_filtr_i32_fn_t      idwt_1d_filtr_rev53_i32_fn  = idwt_1d_filtr_rev53_i32_scalar;
 static adv_idwt_rev_step_i32_fn_t  adv_idwt_rev_lp_step_i32_fn = adv_idwt_rev_lp_step_i32_scalar;
@@ -1454,11 +1454,11 @@ static void fetch_one(idwt_2d_state *s) {
   // Make room in the ring: advance ring_origin over output rows.
   while (r >= s->ring_origin + IDWT_STATE_RING_DEPTH) {
     if (s->ring_origin >= s->next_out) break;  // can't evict un-output rows
-    s->d_level[s->ring_origin % IDWT_STATE_RING_DEPTH] = -1;
+    s->d_level[idwt_ring_slot(s->ring_origin)] = -1;
     ++s->ring_origin;
   }
 
-  const int32_t slot = r % IDWT_STATE_RING_DEPTH;
+  const int32_t slot = idwt_ring_slot(r);
   s->d_level[slot]   = -1;
   sprec_t *dst = rptr(s, r);
   s->get_src_row(s->src_ctx, r, dst);
@@ -1639,7 +1639,7 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
     // Advance ring_origin past already-output rows to make room for new fetches.
     while (s->ring_origin < s->next_out &&
            s->next_fetch >= s->ring_origin + IDWT_STATE_RING_DEPTH) {
-      s->d_level[s->ring_origin % IDWT_STATE_RING_DEPTH] = -1;
+      s->d_level[idwt_ring_slot(s->ring_origin)] = -1;
       ++s->ring_origin;
     }
     fetch_one(s);

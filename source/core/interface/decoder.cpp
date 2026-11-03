@@ -365,8 +365,9 @@ uint8_t openhtj2k_decoder_impl::get_minimum_DWT_levels() {
 }
 
 uint8_t openhtj2k_decoder_impl::get_max_safe_reduce_NL() {
-  // Start with the non-DFS upper bound.
-  uint8_t max_r = get_minimum_DWT_levels();
+  // Start with the non-DFS upper bound.  Reducing by all 32 levels of a 32-level
+  // transform is not supported: the reduced coordinates divide by 2^32.
+  uint8_t max_r = std::min<uint8_t>(get_minimum_DWT_levels(), 31);
   // For each DFS-active component, further limit to consecutive BIDIR levels from
   // the finest: reducing through a HONLY or VONLY level produces an image that
   // only has half the resolution in one spatial dimension, which is meaningless.

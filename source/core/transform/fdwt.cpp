@@ -869,11 +869,11 @@ static inline int32_t pse_src_fdwt(int32_t p, int32_t v0, int32_t v1) {
   return v0 + PSEo(p, v0, v1);
 }
 
-// Ring slot is r % FDWT_STATE_RING_DEPTH (fixed per row, independent of ring_origin).
+// Ring slot is fdwt_ring_slot(r) (fixed per row, independent of ring_origin).
 // Pointer to ring / PSE row buffer for physical row r.
 static sprec_t *rptr_f(const fdwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1)
-    return static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(r % FDWT_STATE_RING_DEPTH) * s->stride;
+    return static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(fdwt_ring_slot(r)) * s->stride;
   if (r < s->v0)
     return static_cast<sprec_t *>(s->top_pse_buf) + static_cast<ptrdiff_t>(s->v0 - 1 - r) * s->stride;
   return static_cast<sprec_t *>(s->bot_pse_buf) + static_cast<ptrdiff_t>(r - s->v1) * s->stride;
@@ -882,7 +882,7 @@ static sprec_t *rptr_f(const fdwt_2d_state *s, int32_t r) {
 static int8_t get_dl_f(const fdwt_2d_state *s, int32_t r) {
   if (r >= s->v0 && r < s->v1) {
     if (r < s->ring_origin || r >= s->ring_origin + FDWT_STATE_RING_DEPTH) return -1;
-    return s->d_level[r % FDWT_STATE_RING_DEPTH];
+    return s->d_level[fdwt_ring_slot(r)];
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) return s->top_dlevel[s->v0 - 1 - r];
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) return s->bot_dlevel[r - s->v1];
@@ -891,7 +891,8 @@ static int8_t get_dl_f(const fdwt_2d_state *s, int32_t r) {
 
 static void set_dl_f(fdwt_2d_state *s, int32_t r, int8_t lv) {
   if (r >= s->v0 && r < s->v1) {
-    s->d_level[r % FDWT_STATE_RING_DEPTH] = lv; return;
+    s->d_level[fdwt_ring_slot(r)] = lv;
+    return;
   }
   if (r >= s->v0 - s->top_pse && r < s->v0) { s->top_dlevel[s->v0 - 1 - r] = lv; return; }
   if (r >= s->v1 && r < s->v1 + s->bottom_pse) { s->bot_dlevel[r - s->v1] = lv; }
@@ -1075,7 +1076,7 @@ static void emit_ready_f(fdwt_2d_state *s) {
       s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
       ++s->next_emit;
       while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
-        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        s->d_level[fdwt_ring_slot(s->ring_origin)] = -1;
         ++s->ring_origin;
       }
       continue;
@@ -1094,7 +1095,7 @@ static void emit_ready_f(fdwt_2d_state *s) {
       s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
       ++s->next_emit;
       while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
-        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        s->d_level[fdwt_ring_slot(s->ring_origin)] = -1;
         ++s->ring_origin;
       }
       continue;
@@ -1113,7 +1114,7 @@ static void emit_ready_f(fdwt_2d_state *s) {
       s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
       ++s->next_emit;
       while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
-        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        s->d_level[fdwt_ring_slot(s->ring_origin)] = -1;
         ++s->ring_origin;
       }
       continue;
@@ -1132,7 +1133,7 @@ static void emit_ready_f(fdwt_2d_state *s) {
       s->put_planes(s->sink_ctx, is_hp, r, s->planar_lp, s->planar_hp);
       ++s->next_emit;
       while (s->ring_origin < s->next_emit - 4 && get_dl_f(s, s->ring_origin) >= mxdl) {
-        s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+        s->d_level[fdwt_ring_slot(s->ring_origin)] = -1;
         ++s->ring_origin;
       }
       continue;
@@ -1175,7 +1176,7 @@ static void emit_ready_f(fdwt_2d_state *s) {
     // Reclaim ring slots that are at least 4 rows behind next_emit (safe look-back).
     while (s->ring_origin < s->next_emit - 4 &&
            get_dl_f(s, s->ring_origin) >= mxdl) {
-      s->d_level[s->ring_origin % FDWT_STATE_RING_DEPTH] = -1;
+      s->d_level[fdwt_ring_slot(s->ring_origin)] = -1;
       ++s->ring_origin;
     }
   }
@@ -1268,7 +1269,7 @@ void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in) {
   // Special case: single-row tile (handled by flush()).
   if (s->v1 == s->v0 + 1) {
     // Still store the row in ring_buf so flush() can read it.
-    const int32_t slot = s->next_in % FDWT_STATE_RING_DEPTH;
+    const int32_t slot = fdwt_ring_slot(s->next_in);
     memcpy(static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(slot) * s->stride, in,
            sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
     ++s->next_in;
@@ -1276,7 +1277,7 @@ void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in) {
   }
 
   const int32_t r    = s->next_in;
-  const int32_t slot = r % FDWT_STATE_RING_DEPTH;
+  const int32_t slot = fdwt_ring_slot(r);
 
   memcpy(static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(slot) * s->stride, in,
          sizeof(sprec_t) * static_cast<size_t>(s->u1 - s->u0));
@@ -1294,7 +1295,8 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
     // Single-row: LL-only or HP-only scaling.
     // For 5/3 with v0 odd: HP *= 2; for irrev: no-op.
     const bool is_hp = !is_lp_fdwt(s->v0);
-    const sprec_t *src = static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
+    const sprec_t *src =
+        static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(fdwt_ring_slot(s->v0)) * s->stride;
     sprec_t *out = static_cast<sprec_t *>(s->horiz_tmp) + s->horiz_left;
     if (s->u1 == s->u0) {
       // No columns (an empty resolution): nothing to filter.
@@ -1316,8 +1318,8 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
       }
     } else if (s->use_i32) {
       // int32 path: HP scaling + extract + i32 filter
-      int32_t *ms = static_cast<int32_t *>(s->ring_buf)
-          + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
+      int32_t *ms =
+          static_cast<int32_t *>(s->ring_buf) + static_cast<ptrdiff_t>(fdwt_ring_slot(s->v0)) * s->stride;
       if (is_hp) {
         const int32_t w = s->u1 - s->u0;
         for (int32_t c = 0; c < w; ++c) ms[c] *= 2;  // a shift is undefined for x < 0
@@ -1329,7 +1331,8 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
       // Match fdwt_rev_ver_sr_fixed: scale HP row by 2 BEFORE horizontal DWT.
       // (floorf makes 5/3 non-linear, so order matters.)
       if (s->transformation == 1 && is_hp) {
-        sprec_t *ms = static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(s->v0 % FDWT_STATE_RING_DEPTH) * s->stride;
+        sprec_t *ms =
+            static_cast<sprec_t *>(s->ring_buf) + static_cast<ptrdiff_t>(fdwt_ring_slot(s->v0)) * s->stride;
         const int32_t w = s->u1 - s->u0;
         for (int32_t c = 0; c < w; ++c) ms[c] = floorf(ms[c] * 2.0f);
       }

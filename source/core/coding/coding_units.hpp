@@ -850,8 +850,9 @@ class j2k_tile : public j2k_tile_base {
   buf_chain *packet_header;
   // buffer for PPM marker segments
   buf_chain sbst_packet_header;
-  // number of tile-parts
-  uint8_t num_tile_part;
+  // number of tile-parts; wider than the 255 the spec allows, so that a malformed
+  // codestream with more cannot wrap it
+  uint32_t num_tile_part;
   // position of current tile-part
   int current_tile_part_pos;
   // unique pointer to tile-components
@@ -956,6 +957,9 @@ class j2k_tile : public j2k_tile_base {
   void setCODparams(COD_marker *COD);
   // set members related to QCD marker
   void setQCDparams(QCD_marker *QCD);
+  // Sets the tile's geometry, coding parameters and tile-components from the header of its
+  // first tile-part, or from the main header alone when that tile-part is missing.
+  void init_from_first_tile_part(j2k_main_header &main_header, j2k_tilepart_header *tphdr);
   // read packets; when skip_body is true the packet header is still parsed
   // (advancing tagtrees and the header bit stream) but the body bytes are
   // dropped without attaching to any codeblock — see §M.4.1.  The JPIP
@@ -971,6 +975,7 @@ class j2k_tile : public j2k_tile_base {
   bool line_based_decode = false;
   j2k_tile();
   void destroy() {
+    if (tcomp == nullptr) return;  // never set up: its first tile-part is missing
     for (uint16_t c = 0; c < this->num_components; ++c) {
       tcomp[c].destroy();
     }

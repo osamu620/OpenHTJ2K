@@ -849,7 +849,7 @@ void idwt_1d_filtr_rev53_planar_i32_avx512(int32_t *out, const int32_t *lp, cons
         _mm512_sub_epi32(_mm512_loadu_si512(reinterpret_cast<const __m512i *>(lp + j)),
                          _mm512_srai_epi32(_mm512_add_epi32(_mm512_add_epi32(Ojm1, Ob), vtwo), 2));
     // S1[j+16] from raw memory (those positions are not yet written this pass)
-    const int32_t s1_next = lp[j + 16] - ((hp[j + 15] + hp[j + 16] + 2) >> 2);
+    const int32_t s1_next = rev53_undo_update(lp[j + 16], hp[j + 15], hp[j + 16]);
     __m512i S1n           = _mm512_alignr_epi32(_mm512_set1_epi32(s1_next), S1b, 1);  // S1[j+1..j+16]
     __m512i S2b           = _mm512_add_epi32(Ob, _mm512_srai_epi32(_mm512_add_epi32(S1b, S1n), 1));
     _mm512_storeu_si512(reinterpret_cast<__m512i *>(out + 2 * j),
@@ -863,11 +863,11 @@ void idwt_1d_filtr_rev53_planar_i32_avx512(int32_t *out, const int32_t *lp, cons
     int32_t o_prev = O(j - 1);
     for (int32_t t = j; t <= N; ++t) {
       const int32_t o = O(t);
-      s1t[t - j]      = E(t) - ((o_prev + o + 2) >> 2);
+      s1t[t - j]      = rev53_undo_update(E(t), o_prev, o);
       o_prev          = o;
     }
     for (int32_t t = j; t <= N; ++t) out[2 * t] = s1t[t - j];
-    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = O(t) + ((s1t[t - j] + s1t[t - j + 1]) >> 1);
+    for (int32_t t = j; t < N; ++t) out[2 * t + 1] = rev53_undo_predict(O(t), s1t[t - j], s1t[t - j + 1]);
   }
 }
 

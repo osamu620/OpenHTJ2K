@@ -62,7 +62,7 @@ static void j2k_dequant_rev_neon(const int32_t *sample_buf, size_t blksampl_stri
         vst1q_s32(tmp, v_val);
         for (int i = 0; i < 4; i++) {
           if (((uint32_t)tmp[i] & ~mask) == 0) {
-            tmp[i] <<= ROIshift;
+            tmp[i] = roi_upshift(tmp[i], ROIshift);
           }
         }
         v_val  = vld1q_s32(tmp);
@@ -84,8 +84,8 @@ static void j2k_dequant_rev_neon(const int32_t *sample_buf, size_t blksampl_stri
       int32_t mag         = val_row[x] & INT32_MAX;
       int32_t QF32;
       if (ROIshift) {
-        if (((uint32_t)mag & ~mask) == 0) mag <<= ROIshift;
-        QF32 = ((mag ^ smask) - smask) >> pLSB;
+        if (((uint32_t)mag & ~mask) == 0) mag = roi_upshift(mag, ROIshift);
+        QF32 = wrap_sub(mag ^ smask, smask) >> pLSB;
       } else {
         QF32 = ((mag >> pLSB) ^ smask) - smask;
       }
@@ -142,7 +142,7 @@ void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *ban
   constexpr int32_t downshift = 15;
   float fscale                = fscale_direct;
   fscale *= (float)(1 << 16) * (float)(1 << downshift);
-  const auto scale = (int32_t)(fscale + 0.5);
+  const int32_t scale = roi_scale_to_i32(fscale + 0.5);
 
   if (transformation == 1) {
     if (dequant_i32)
@@ -189,7 +189,7 @@ void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *ban
           vst1q_s32(tmp, v_val);
           for (int i = 0; i < 4; i++) {
             if (((uint32_t)tmp[i] & ~mask) == 0) {
-              tmp[i] <<= ROIshift;
+              tmp[i] = roi_upshift(tmp[i], ROIshift);
             }
           }
           v_val                = vld1q_s32(tmp);
@@ -222,17 +222,17 @@ void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *ban
         int32_t val         = val_row[x] & INT32_MAX;
         if (ROIshift) {
           if (((uint32_t)val & ~mask) == 0) {
-            val <<= ROIshift;
+            val = roi_upshift(val, ROIshift);
           }
           if (val != 0) {
             val |= 1 << (pLSB - 1);
           }
         }
-        val = (val + (1 << 15)) >> 16;
+        val = wrap_add(val, 1 << 15) >> 16;
         // Modular 32-bit multiply, matching vmulq_s32 exactly (no signed-overflow UB).
-        val          = static_cast<int32_t>(static_cast<uint32_t>(val) * static_cast<uint32_t>(scale));
-        int32_t QF32 = (int32_t)((val + (1 << (downshift - 1))) >> downshift);
-        QF32         = (QF32 ^ smask) - smask;
+        val          = wrap_mul(val, scale);
+        int32_t QF32 = wrap_add(val, 1 << (downshift - 1)) >> downshift;
+        QF32         = wrap_sub(QF32 ^ smask, smask);
         dst_row[x]   = static_cast<float>(QF32);
       }
     }
