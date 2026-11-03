@@ -76,6 +76,18 @@ static std::vector<uint64_t> target_bytes(const std::vector<double> &bpp, uint32
   return bytes;
 }
 
+// The image (Sorigin plus its size) has to end within 2^31 - 1, the largest extent supported.
+static bool fits_reference_grid(const element_siz_local &origin, const element_siz_local &size) {
+  if (uint64_t{origin.x} + size.x > INT32_MAX || uint64_t{origin.y} + size.y > INT32_MAX) {
+    printf(
+        "ERROR: Sorigin {%u,%u} plus the image size %ux%u exceeds the reference grid (2147483647 at "
+        "most).\n",
+        origin.y, origin.x, size.x, size.y);
+    return false;
+  }
+  return true;
+}
+
 int main(int argc, char *argv[]) {
   open_htj2k_apps::install_library_message_printer();
   j2k_argset args(argc, argv);  // parsed command line
@@ -150,6 +162,7 @@ int main(int argc, char *argv[]) {
     if (!reader) return EXIT_FAILURE;
     element_siz_local image_origin_s = args.get_origin();
     element_siz_local image_size_s(reader->get_width(), reader->get_height());
+    if (!fits_reference_grid(image_origin_s, image_size_s)) return EXIT_FAILURE;
     stat_width    = reader->get_width();
     stat_height   = reader->get_height();
     uint16_t nc_s = reader->get_num_components();
@@ -246,6 +259,7 @@ int main(int argc, char *argv[]) {
 
     element_siz_local image_origin = args.get_origin();
     element_siz_local image_size(img.get_width(), img.get_height());
+    if (!fits_reference_grid(image_origin, image_size)) return EXIT_FAILURE;
     uint16_t num_components = img.get_num_components();
     std::vector<int32_t *> input_buf;
     for (uint16_t c = 0; c < num_components; ++c) input_buf.push_back(img.get_buf(c));

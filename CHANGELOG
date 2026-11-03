@@ -460,6 +460,19 @@
   which none of the output formats holds; only 2 bytes of each such sample
   used to be written. Images whose components share bit depth and sign
   decode as before.
+- `open_htj2k_enc` ended with an uncaught exception (SIGABRT) on numbers it
+  could not parse or that overflowed, e.g. `Clevels=abc`,
+  `Sorigin={0,4294967234}`, `Cprecincts={x,y}`, `Qzoom=abc`,
+  `-num_threads abc`. Every number is now checked whole and against its range,
+  with an error message and exit code 1. `Qstep=nan` was accepted; negative
+  coordinates (`Stiles={-1,-1}`) wrapped around; `Corder=LRCPX` was taken as
+  `LRCP`; `-num_threads` up to 2^32-1 created that many threads (100000 used
+  more than 4 GB) and is now at most 1024; an image origin that puts the image
+  beyond 2147483647 is refused.
+- `open_htj2k_enc -i a.pgm,b.pgm` read the first file only. A list of PGM, PPM
+  or TIFF files now gives the components of each file in turn, as a list of
+  PGX files does; a file smaller than the first by whole factors gives
+  subsampled components.
 
 ### Encoder and decoder
 - Small images, or images with a nonzero origin, no longer make the
