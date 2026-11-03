@@ -72,3 +72,21 @@ foreach(_entry prog_wide_nl17_rpcl:17:RPCL:0 prog_wide_nl17_pcrl:17:PCRL:HT prog
     set_tests_properties(comp_${_n}_t${_t} PROPERTIES DEPENDS dec_${_n}_t${_t})
   endforeach()
 endforeach()
+
+# The positions those orders examine along each axis of a tile were counted from 0, not
+# from the tile: with the image origin at 2147418112 and 2 x 2 precincts every tile took
+# a billion steps.  The 192 4 x 4 tiles of dwt_levels_src.pgm (61 x 47) took the old
+# encoder 52 s and the old decoder 69 s; both now take milliseconds, with the same
+# codestream.
+set(_PROG_FAR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/dwt_levels_src.pgm)
+add_test(NAME enc_prog_far_origin
+         COMMAND open_htj2k_enc -i ${_PROG_FAR_SRC} -o prog_far_origin.j2c "Sorigin={0,2147418112}"
+                 "Stiles={4,4}" "Cprecincts={2,2}" Corder=RPCL Creversible=yes Clevels=1)
+set_tests_properties(enc_prog_far_origin PROPERTIES TIMEOUT 20)
+foreach(_t 1 4)
+  add_test(NAME dec_prog_far_origin_t${_t}
+           COMMAND open_htj2k_dec -i prog_far_origin.j2c -o prog_far_origin_t${_t}.pgm -num_threads ${_t})
+  set_tests_properties(dec_prog_far_origin_t${_t} PROPERTIES DEPENDS enc_prog_far_origin TIMEOUT 20)
+  add_test(NAME comp_prog_far_origin_t${_t} COMMAND imgcmp prog_far_origin_t${_t}_00.pgm ${_PROG_FAR_SRC} 0 0)
+  set_tests_properties(comp_prog_far_origin_t${_t} PROPERTIES DEPENDS dec_prog_far_origin_t${_t})
+endforeach()

@@ -336,6 +336,13 @@
   bits. OpenJPEG 2.5.4 decodes the new codestreams (Part 1, 16 to 32 levels)
   to the input exactly. Codestreams that encoded and decoded before are
   unchanged.
+- With those progression orders, every tile scanned the reference grid from
+  0 to its own end for precinct positions, not from its start. A tile far
+  from the grid origin with small precincts took up to 2^31 steps: with the
+  image origin at 2147418112 and 2x2 precincts, 192 tiles of a 61x47 image
+  took 52 s to encode and 69 s to decode, and a 1 KB codestream of 65535
+  such tiles would have kept the decoder busy for about 15 hours. The scan
+  now covers the tile only; the codestreams and decoded images are the same.
 
 ### JPIP
 - The precinct index and the view-window resolver work with 31 and 32 DWT

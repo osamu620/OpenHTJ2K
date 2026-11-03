@@ -1505,6 +1505,16 @@ static inline bool is_precinct_start(uint32_t p, uint32_t p0, uint32_t sub, uint
   return p == p0 && (r0 & ((1U << log2PP) - 1U)) != 0;
 }
 
+// Appends the coordinates those progressions examine along one axis of the tile [p0, p1):
+// p0, then each multiple of 2^log2step after it, with log2step the smallest precinct size.
+// The multiples are counted from p0, not from 0: a tile far from the origin of the
+// reference grid (an image origin near 2^31 with 1 x 1 precincts) took 2^31 steps per tile.
+static void precinct_positions(std::vector<uint32_t> &out, uint32_t p0, uint32_t p1, uint32_t log2step) {
+  out.push_back(p0);
+  const uint64_t step = uint64_t{1} << log2step;
+  for (uint64_t p = (p0 / step + 1) * step; p < p1; p += step) out.push_back(static_cast<uint32_t>(p));
+}
+
 // ceil((p - o * 2^(nb - 1)) / 2^nb), a coordinate of a subband at level nb >= 1 with
 // orientation offset o (B-15).  As above, nb reaches 32.
 static inline uint32_t subband_coord(uint32_t p, uint8_t nb, uint8_t o) {
@@ -4863,18 +4873,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           break;
         case 2:  // RPCL
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (r = RS; r < RE; r++) {
             for (uint32_t y : y_examin) {
               for (uint32_t x : x_examin) {
@@ -4935,18 +4935,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           break;
         case 3:  // PCRL
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
               for (c = CS; c < CE; c++) {
@@ -5002,18 +4992,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
           break;
         case 4:  // CPRL
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (c = CS; c < CE; c++) {
             c_NL     = this->tcomp[c].NL;
             local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
@@ -5071,18 +5051,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                  // Identical body to RPCL (case 2), but the resolution loop is nested inside
                  // the spatial (y, x) loops instead of outermost.
           this->find_gcd_of_precinct_size(PP);
-          x_examin.push_back(pos0.x);
-          for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-            if (x > pos0.x) {
-              x_examin.push_back(x);
-            }
-          }
-          y_examin.push_back(pos0.y);
-          for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-            if (y > pos0.y) {
-              y_examin.push_back(y);
-            }
-          }
+          precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+          precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
               for (r = RS; r < RE; r++) {
@@ -5311,18 +5281,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         break;
       case 2:  // RPCL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (r = RS; r < RE; r++) {
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
@@ -5367,18 +5327,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         break;
       case 3:  // PCRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (c = CS; c < CE; c++) {
@@ -5422,18 +5372,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
         break;
       case 4:  // CPRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (c = CS; c < CE; c++) {
           c_NL     = this->tcomp[c].NL;
           local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
@@ -5478,18 +5418,8 @@ void j2k_tile::construct_packets(j2k_main_header &main_header) {
       case 5:  // PRCL (ISO/IEC 15444-2, I.2.6): position-resolution level-component-layer.
                // RPCL body with the resolution loop nested inside the spatial (y, x) loops.
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) {
-            x_examin.push_back(x);
-          }
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) {
-            y_examin.push_back(y);
-          }
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (r = RS; r < RE; r++) {
@@ -5738,14 +5668,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
         break;
       case 2: {  // RPCL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (r = RS; r < RE; r++) {
           for (uint32_t y : y_examin) {
             for (uint32_t x : x_examin) {
@@ -5792,14 +5716,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
       }
       case 3: {  // PCRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (c = CS; c < CE; c++) {
@@ -5845,14 +5763,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
       }
       case 4: {  // CPRL
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (c = CS; c < CE; c++) {
           c_NL     = this->tcomp[c].NL;
           local_RE = ((c_NL + 1) < RE) ? static_cast<uint8_t>(c_NL + 1U) : RE;
@@ -5899,14 +5811,8 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
       case 5: {  // PRCL (ISO/IEC 15444-2, I.2.6): position-resolution level-component-layer.
                  // RPCL body with the resolution loop nested inside the spatial (y, x) loops.
         this->find_gcd_of_precinct_size(PP);
-        x_examin.push_back(pos0.x);
-        for (uint32_t x = 0; x < this->pos1.x; x += (1U << PP.x)) {
-          if (x > pos0.x) x_examin.push_back(x);
-        }
-        y_examin.push_back(pos0.y);
-        for (uint32_t y = 0; y < this->pos1.y; y += (1U << PP.y)) {
-          if (y > pos0.y) y_examin.push_back(y);
-        }
+        precinct_positions(x_examin, pos0.x, this->pos1.x, PP.x);
+        precinct_positions(y_examin, pos0.y, this->pos1.y, PP.y);
         for (uint32_t y : y_examin) {
           for (uint32_t x : x_examin) {
             for (r = RS; r < RE; r++) {
