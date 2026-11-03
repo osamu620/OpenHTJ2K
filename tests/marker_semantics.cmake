@@ -26,6 +26,9 @@
 #                               A.32) gives the LRCP order the packets are in.  Irreversible.
 #   marker_poc_tile_parts       POC of tile-part 0: LRCP for layer 0; POC of tile-part 1: CPRL for
 #                               layer 1 (A.6.6).  Irreversible.
+#   marker_coc_32_levels        tests/data/dwt32_levels.j2c with its 32 decomposition levels in
+#                               a COC marker for component 0 and 1 in the COD marker: the COC
+#                               level count was masked to 5 bits, which read 32 as 0.
 #   marker_htdeclared           HT code-blocks in an HTDECLARED codestream (Ccap15 bits 15:14 =
 #                               10): no tile-component mixes HT and Part 1 code-blocks (ISO/IEC
 #                               15444-15, A.3.2), so the rules that tell the two kinds apart do
@@ -64,6 +67,7 @@ _marker_decode_test(marker_qcc_tile_qcd marker_qcc_tile_qcd.j2c ${_MARKER_GRAY} 
 _marker_decode_test(marker_coc_other_component marker_coc_other_component.j2c ${_MARKER_RGB} 0 0)
 _marker_decode_test(marker_poc_all_components marker_poc_all_components.j2c ${_MARKER_RGB} 65535 8000000)
 _marker_decode_test(marker_poc_tile_parts marker_poc_tile_parts.j2c ${_MARKER_RGB} 65535 8000000)
+_marker_decode_test(marker_coc_32_levels marker_coc_32_levels.j2c ${_MARKER_GRAY} 0 0)
 _marker_decode_test(marker_htdeclared marker_htdeclared.j2c ${_MARKER_GRAY} 0 0)
 
 # More than 10921 tiles: the TLM marker, 6 bytes per tile, takes more than one marker segment
