@@ -42,6 +42,7 @@
 #include "color.hpp"
 #include "finalize_narrow.hpp"
 #include "subband_row_buf.hpp"
+#include "stream_row_map.hpp"
 #include "message_internal.hpp"
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
@@ -6439,10 +6440,12 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].init_line_decode(/*ring_mode=*/true);
 
   // Pull rows from the stateful IDWT, apply per-row color transform and
-  // float→int32 conversion, then write to the output buffer.
-  const uint32_t H = ci[0].csize_y;
+  // float→int32 conversion, then write to the output buffer.  Each component
+  // writes its own rows; one subsampled less than component 0 has more of them.
+  uint32_t H = 0;
+  for (uint16_t c = 0; c < NC; ++c) H = std::max(H, ci[c].csize_y);
   for (uint32_t y = 0; y < H; ++y) {
-    if (do_mct) {
+    if (do_mct && y < ci[0].csize_y) {
       // Fused: get read-only ring buffer pointers for the 3 MCT components, apply inverse
       // MCT + float→int32 finalize in a single pass (no scratch buffer, no memcpy).
       sprec_t *p0 = tcomp[0].pull_line_ref();
@@ -6539,7 +6542,8 @@ struct LineDecodeFinalizeGuard {
 void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_val,
                                         const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb,
                                         uint32_t row_limit, uint32_t row_lo, uint32_t col_lo_in,
-                                        uint32_t col_hi_in, bool skip_mct) {
+                                        uint32_t col_hi_in, bool skip_mct,
+                                        std::vector<std::vector<int32_t>> *keep_rows, bool emit_all_rows) {
   OPENHTJ2K_TILE_INLINE_SCOPE();
   const uint16_t NC = num_components;
 
@@ -6555,8 +6559,10 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     uint32_t csize_x, csize_y;
     uint32_t xr;  // SIZ XRsiz: horizontal subsampling factor (1 = no subsampling)
     uint32_t yr;  // SIZ YRsiz: vertical subsampling factor (1 = no subsampling)
+    uint32_t t0;  // absolute index of the tile-component's first row (active resolution)
   };
   std::vector<CInfo> ci(NC);
+  std::vector<uint32_t> yrs(NC);
   for (uint16_t c = 0; c < NC; ++c) {
     CInfo &I         = ci[c];
     const uint8_t bd = tcomp[c].bitdepth;
@@ -6564,25 +6570,70 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     I.MAXVAL         = (hdr.SIZ->is_signed(c)) ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
     I.MINVAL         = (hdr.SIZ->is_signed(c)) ? -(1 << (bd - 1)) : 0;
 
-    element_siz siz, Osiz, Rsiz;
-    hdr.SIZ->get_image_size(siz);
-    hdr.SIZ->get_image_origin(Osiz);
+    element_siz Rsiz;
     hdr.SIZ->get_subsampling_factor(Rsiz, c);
     I.xr                   = Rsiz.x;
     I.yr                   = Rsiz.y;
+    yrs[c]                 = Rsiz.y;
     const uint8_t NL_c     = tcomp[c].get_dwt_levels();
     j2k_resolution *cr_act = tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL_val));
     const element_siz tc1  = cr_act->get_pos1();
     const element_siz tc0  = cr_act->get_pos0();
     I.csize_x              = tc1.x - tc0.x;
     I.csize_y              = tc1.y - tc0.y;
+    I.t0                   = tc0.y;
     I.downshift            = (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - bd);
     I.scale                = finalize_scale(I.downshift);
   }
 
-  // Per-component int32 output row scratch (one row each, reused per y).
-  std::vector<std::vector<int32_t>> out_rows(NC);
-  for (uint16_t c = 0; c < NC; ++c) out_rows[c].assign(ci[c].csize_x, 0);
+  // Output rows (stream_row_map.hpp): the rows of the whole image that the callback
+  // receives; this tile delivers the ones starting in it, [y_begin, y_end).  Rows of a
+  // component are counted in absolute indices k here (tile row j = k - t0).
+  stream_row_map map;
+  {
+    element_siz siz, Osiz;
+    hdr.SIZ->get_image_size(siz);
+    hdr.SIZ->get_image_origin(Osiz);
+    map.init(Osiz.y, siz.y, yrs, reduce_NL_val);
+  }
+  const uint32_t y_begin = map.first_out_at(stream_row_map::ceil_shift(pos0.y, reduce_NL_val));
+  const uint32_t y_end   = map.first_out_at(stream_row_map::ceil_shift(pos1.y, reduce_NL_val));
+  const uint32_t p1      = std::min(y_end, row_limit);  // output rows decoded: [q0, p1)
+
+  // Window [row_lo, row_limit): a component needs its rows from the one covering
+  // row_lo (or its first row, when row_lo lies above it), and the tile rows above that
+  // are skipped (skip[c]).  q0 is the first output row where a needed row starts.
+  std::vector<uint32_t> skip(NC, 0);
+  uint32_t q0 = y_begin;
+  if (row_lo > y_begin) {
+    q0 = p1;
+    if (row_lo < map.n) {
+      for (uint16_t c = 0; c < NC; ++c) {
+        const uint32_t k_need = std::max(map.abs_row(c, row_lo), map.first[c]);
+        const uint64_t j      = (k_need > ci[c].t0) ? k_need - ci[c].t0 : 0;
+        skip[c]               = static_cast<uint32_t>(std::min<uint64_t>(j, ci[c].csize_y));
+        if (skip[c] < ci[c].csize_y) {
+          const uint64_t k = static_cast<uint64_t>(ci[c].t0) + skip[c];
+          q0               = std::min(q0, std::max(y_begin, map.first_out_at(k * ci[c].yr)));
+        }
+      }
+    }
+  }
+  if (q0 >= p1) return;  // no row of this tile is needed
+
+  // Per-component int32 output row scratch: the row of the component covering the
+  // current output row; it changes only when a new row of the component starts.
+  std::vector<std::vector<int32_t>> local_rows;
+  std::vector<std::vector<int32_t>> &out_rows = (keep_rows != nullptr) ? *keep_rows : local_rows;
+  out_rows.resize(NC);
+  for (uint16_t c = 0; c < NC; ++c) {
+    const size_t w = std::max<size_t>(ci[c].csize_x, 1);
+    if (keep_rows == nullptr) {
+      out_rows[c].assign(w, 0);
+    } else if (out_rows[c].size() < w) {
+      out_rows[c].resize(w, 0);
+    }
+  }
 
   // Pointers passed to the callback.
   std::vector<int32_t *> out_ptrs(NC);
@@ -6608,24 +6659,22 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].init_line_decode(/*ring_mode=*/true);
 
-  // Apply per-level row range only when row_lo narrows the lower bound, and
-  // only AFTER init_line_decode — on the reuse path init_line_decode calls
+  // Apply per-level row range only when the window cuts rows off the top of the
+  // tile, and only AFTER init_line_decode — on the reuse path init_line_decode calls
   // reset_line_decode_cursors which clears ctx.row_lo/row_hi back to [v0, v1],
   // so any narrowing applied earlier would be clobbered.  row_limit (row_hi)
   // on its own does NOT need set_line_decode_row_range because the outer
-  // strip loop already caps at effective_H = min(H, row_limit) and the
-  // cascade's lookahead never exceeds that cap + bottom_pse.
-  //
-  // row_lo / row_limit are in luma-finest-active coords.  For subsampled
-  // components (SIZ YRsiz > 1) we must scale down so each tcomp's per-level
-  // row range lives in its own tile-component coord space.
-  if (row_lo != 0) {
+  // strip loop already stops at p1 and the cascade's lookahead never exceeds
+  // that cap + bottom_pse.  The ranges are in each tile-component's own rows.
+  if (row_lo > y_begin) {
     for (uint16_t c = 0; c < NC; ++c) {
-      const uint32_t yr_c     = ci[c].yr;
-      const uint32_t row_lo_c = row_lo / yr_c;
-      const uint32_t row_hi_c =
-          (row_limit == UINT32_MAX) ? UINT32_MAX : (row_limit + yr_c - 1) / yr_c;  // ceil-divide
-      tcomp[c].set_line_decode_row_range(row_lo_c, row_hi_c);
+      uint32_t row_hi_c = UINT32_MAX;
+      if (row_limit != UINT32_MAX) {
+        const uint32_t k_hi = map.abs_row(c, p1 - 1);
+        row_hi_c            = (k_hi >= ci[c].t0) ? std::min(k_hi - ci[c].t0 + 1, ci[c].csize_y) : 0;
+        row_hi_c            = std::max(row_hi_c, skip[c]);
+      }
+      tcomp[c].set_line_decode_row_range(skip[c], row_hi_c);
     }
   }
 
@@ -6646,30 +6695,19 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     }
   }
 
-  const uint32_t H           = ci[0].csize_y;
-  const uint32_t effective_H = std::min(H, row_limit);
-
   // ── Strip-granular pull driver ────────────────────────────────────────────
-  // Batch row pulls for one outer strip per component at a time, then run
-  // the existing finalize + callback inner loop against the strip scratch.
-  // Per-component pulls for the same strip are mutually independent (each
-  // tcomp's line_dec state is disjoint), so they dispatch as worker tasks
+  // Batch row pulls for one outer strip of output rows per component at a
+  // time, then run the finalize + callback inner loop against the strip
+  // scratch.  Per-component pulls for the same strip are mutually independent
+  // (each tcomp's line_dec state is disjoint), so they dispatch as worker tasks
   // while the main thread pitches in via try_run_one.
   //
-  // Outer strip height = tcomp[0].codeblock_size.y rounded up to the max
-  // vertical subsampling factor — guarantees every strip boundary is on an
-  // integer chroma row.  Per-component pull counts:
-  //   • MCT main (c=0..2 when do_mct): strip_y1 - strip_y0.  The existing
-  //     driver iterates over ci[0].csize_y and pulls unconditionally for
-  //     c=0..2, ignoring SIZ.YRsiz, because MCT demands 4:4:4 and the
-  //     three components share geometry.  Matching this semantics is how
-  //     conformance test p0_10 (YRsiz=4 on all 3 MCT comps) stays green.
-  //   • Everything else: the subsampling-aware formula below, the same
-  //     cadence the old non-MCT / MCT-extras path used.
-  uint32_t max_yr = 1;
-  for (uint16_t c = 0; c < NC; ++c) {
-    if (ci[c].yr > max_yr) max_yr = ci[c].yr;
-  }
+  // A strip pulls, for each component, the rows that start in it: up to the
+  // row covering the strip's last output row.  A row that starts in an
+  // earlier strip (or tile) stays in out_rows[c] until the next one starts.
+  // The MCT components share their subsampling (create_tile_buf checks it),
+  // so their rows start at the same output rows.
+  //
   // Pick an outer strip height large enough to amortise the per-strip pull
   // dispatch + barrier, but not so large that the strip scratch outgrows L3.
   // Broadcast HTJ2K fixtures use cb_h as small as 8 rows for sub-codestream
@@ -6678,7 +6716,6 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   uint32_t strip_h_luma = static_cast<uint32_t>(tcomp[0].codeblock_size.y);
   if (strip_h_luma == 0) strip_h_luma = 64;
   if (strip_h_luma < 64) strip_h_luma = 64;
-  strip_h_luma = ((strip_h_luma + max_yr - 1) / max_yr) * max_yr;
 
   // Per-component base pointers into the strip scratch buffers; refreshed
   // at the top of every strip.  Row stride is ci[c].csize_x floats.
@@ -6686,6 +6723,13 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   // Per-component pull counts for the current strip, recomputed at the top
   // of every strip.  Sized by the component count (Csiz may be up to 16384).
   std::vector<uint32_t> counts(NC, 0);
+  // Tile rows of each component pulled so far, the tile row at strip_ptrs[c][0], and the
+  // tile row held in out_rows[c] (UINT32_MAX: none of this tile yet).
+  std::vector<uint32_t> pulled(skip), base(NC, 0), cur(NC, UINT32_MAX);
+  // Absolute row of each component covering the current output row, and the grid row
+  // where its next row starts.
+  std::vector<uint32_t> krow(NC);
+  std::vector<uint64_t> knext(NC);
 
 #ifdef OPENHTJ2K_THREAD
   // Scratch records for the per-component worker tasks.  The array lives
@@ -6714,7 +6758,9 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   // tail (about a quarter of its time at 8 threads in a portable x86-64 build).  The
   // AVX2/AVX-512 kernel converts a strip in less time than the dispatch takes (slower
   // at 2 and 16 threads), so those builds, and NEON and WASM (not measured), keep it
-  // on this thread.
+  // on this thread.  Only when every output row starts a new row of the MCT
+  // components (their factor is the output-row pitch), so that no row of them is
+  // needed after its strip.
   struct ColorRowsCtx {
     const sprec_t *src[3];
     int32_t *dst[3];
@@ -6724,12 +6770,12 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   };
   #if !(defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)) && !defined(OPENHTJ2K_ENABLE_ARM_NEON) \
       && !defined(OPENHTJ2K_ENABLE_WASM_SIMD)
-  const bool par_color = can_parallel_pull && do_mct;
+  const bool par_color = can_parallel_pull && do_mct && ci[0].yr == map.g;
   #else
   const bool par_color = false;
   #endif
-  // A strip holds at most strip_h_luma rows, and no more than the tile has.
-  const size_t color_plane = static_cast<size_t>(std::min(strip_h_luma, effective_H)) * mct_w;
+  // A strip pulls at most strip_h_luma rows of component 0, and no more than the tile has.
+  const size_t color_plane = static_cast<size_t>(std::min(strip_h_luma, ci[0].csize_y)) * mct_w;
   std::vector<int32_t> color_strip;
   std::vector<ColorRowsCtx> color_tasks;
   std::atomic<int> color_cnt(0);
@@ -6740,55 +6786,42 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 #endif
 
   // ── Row-range fast-forward (set_row_range with row_lo > 0) ────────────────
-  // When the caller narrows the viewport's lower bound, strips entirely below
-  // row_lo carry no emit work — but the IDWT cascade still needs to consume
-  // their source rows so cursors stay in lockstep.  Instead of running each
-  // skipped strip through pull_strip_into_buf (per-row strip_buf memcpy +
-  // per-strip pool dispatch + barrier + grow-on-demand alloc check), pump
-  // them through pull_strip_advance which iterates pull_line_ref alone.
-  // The cascade's row_lo zero-fill (idwt_level_src_fn) and row_zero-aware
-  // vertical lifting handle the rest.
+  // When the caller narrows the viewport's lower bound, the tile rows above
+  // the window carry no emit work — but the IDWT cascade still needs to consume
+  // their source rows so cursors stay in lockstep.  Instead of running them
+  // through pull_strip_into_buf (per-row strip_buf memcpy + per-strip pool
+  // dispatch + barrier + grow-on-demand alloc check), pump them through
+  // pull_strip_advance which iterates pull_line_ref alone.  The cascade's
+  // row_lo zero-fill (idwt_level_src_fn) and row_zero-aware vertical lifting
+  // handle the rest.  set_line_decode_row_range widens the per-level row_lo by
+  // 16 rows for 9/7 filter support, so the rows just above the window still
+  // decode normally.
   //
-  // Round start_strip_y0 DOWN to a strip_h_luma boundary so the boundary
-  // strip — the one containing row_lo — still flows through the normal
-  // pull-and-emit path.  set_line_decode_row_range widens the per-level
-  // row_lo by 16 rows for 9/7 filter support, and strip_h_luma is at least
-  // 64 (line 5188 above), so the widened-margin rows live well within the
-  // boundary strip and decode normally there.
-  //
-  // GATING: do nothing when row_lo == 0.  This is the path every CLI/RTP/
-  // encoder caller takes (they never call set_row_range), so full-canvas
-  // decode pays exactly one branch + one compare here and zero allocations.
-  uint32_t start_strip_y0 = 0;
-  if (row_lo > 0) {
-    start_strip_y0 = (row_lo / strip_h_luma) * strip_h_luma;
-    if (start_strip_y0 > effective_H) start_strip_y0 = effective_H;
-    if (start_strip_y0 > 0) {
-      // Per-component advance count mirrors the strip-loop counts[] formula:
-      // MCT main components consume one row per luma row regardless of yr,
-      // everything else divides by its own yr_c (subsampling factor).  Both
-      // start_strip_y0 and strip_h_luma are multiples of max_yr (line 5188)
-      // so the divide is exact for non-MCT components.
-      for (uint16_t c = 0; c < NC; ++c) {
-        const uint32_t advance = (do_mct && c < 3) ? start_strip_y0 : (start_strip_y0 / ci[c].yr);
-        if (advance > 0) tcomp[c].pull_strip_advance(advance);
-      }
-    }
+  // GATING: skip[] is all zero when row_lo is at or above the tile.  This is
+  // the path every CLI/RTP/encoder caller takes (they never call set_row_range),
+  // so full-canvas decode pays one compare per component here.
+  for (uint16_t c = 0; c < NC; ++c) {
+    if (skip[c] > 0) tcomp[c].pull_strip_advance(skip[c]);
   }
 
-  for (uint32_t strip_y0 = start_strip_y0; strip_y0 < effective_H; strip_y0 += strip_h_luma) {
-    const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, effective_H);
+  // Strips are aligned to the tile's first output row; the first one holds q0.
+  const uint32_t first_strip = y_begin + ((q0 - y_begin) / strip_h_luma) * strip_h_luma;
+  for (uint16_t c = 0; c < NC; ++c) {
+    krow[c]  = map.abs_row(c, first_strip);
+    knext[c] = (static_cast<uint64_t>(krow[c]) + 1) * ci[c].yr;
+  }
 
-    // Pre-compute per-component pull counts.
+  for (uint32_t strip_y0 = first_strip; strip_y0 < p1; strip_y0 += strip_h_luma) {
+    const uint32_t strip_y1 = std::min(strip_y0 + strip_h_luma, p1);
+
+    // Pre-compute per-component pull counts: the rows up to the one covering the
+    // strip's last output row.
     for (uint16_t c = 0; c < NC; ++c) {
-      if (do_mct && c < 3) {
-        counts[c] = strip_y1 - strip_y0;
-      } else {
-        const uint32_t yr_c = ci[c].yr;
-        const uint32_t c_y0 = strip_y0 / yr_c;
-        const uint32_t c_y1 = std::min((strip_y1 + yr_c - 1) / yr_c, ci[c].csize_y);
-        counts[c]           = (c_y1 > c_y0) ? (c_y1 - c_y0) : 0u;
-      }
+      const uint32_t k_last = map.abs_row(c, strip_y1 - 1);
+      const uint32_t need   = (k_last >= ci[c].t0) ? std::min(k_last - ci[c].t0 + 1, ci[c].csize_y) : 0u;
+      counts[c]             = (need > pulled[c]) ? need - pulled[c] : 0u;
+      base[c]               = pulled[c];
+      pulled[c] += counts[c];
     }
 
     // Phase 1: pull per-component strip rows into scratch.  Parallel when
@@ -6834,24 +6867,18 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       }
     }
 
-    // Phase 2: finalize + callback inner loop — reads strip_ptrs[c] at the
-    // subsampling-aware row offset.  Inner SIMD kernels and control flow
-    // are unchanged from the pre-strip driver.  Rows below the caller's
-    // row_lo were produced upstream (the state machines don't skip fetches
-    // unless the per-level row_lo zero-fill fires) but we don't emit them.
-    const uint32_t emit_y0 = std::max(strip_y0, row_lo);
 #ifdef OPENHTJ2K_THREAD
-    if (par_color && strip_y1 > emit_y0) {
+    if (par_color && counts[0] > 0) {
       // One chunk of rows per pool thread.  The three MCT components share the strip
       // geometry (row stride mct_w).
-      const uint32_t nrows  = strip_y1 - emit_y0;
+      const uint32_t nrows  = counts[0];
       const uint32_t nchunk = std::min(nrows, static_cast<uint32_t>(pool->num_threads()));
       const size_t plane    = color_plane;
       color_tasks.resize(nchunk);  // within the reserved capacity: no reallocation
       uint32_t r0 = 0;
       for (uint32_t k = 0; k < nchunk; ++k) {
         const uint32_t r1 = static_cast<uint32_t>((static_cast<uint64_t>(nrows) * (k + 1)) / nchunk);
-        const size_t row  = emit_y0 - strip_y0 + r0;
+        const size_t row  = r0;
         ColorRowsCtx &t   = color_tasks[k];
         for (uint16_t c = 0; c < 3; ++c) {
           t.src_stride[c] = ci[c].csize_x;
@@ -6880,52 +6907,60 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       dec_strip_barrier_wait(color_cnt);
     }
 #endif
-    for (uint32_t y = emit_y0; y < strip_y1; ++y) {
-      if (do_mct) {
-        // Fused path: read 3 MCT component rows from strip scratch, then
-        // apply inverse MCT + float→int32 finalize in a single pass.
-        const size_t rs = static_cast<size_t>(y - strip_y0);
-#ifdef OPENHTJ2K_THREAD
-        if (par_color) {
-          // converted by the pool tasks above
-          const size_t plane = color_plane;
-          for (uint16_t c = 0; c < 3; ++c) out_ptrs[c] = color_strip.data() + c * plane + rs * mct_w;
-        } else
-#endif
-        {
-          const sprec_t *p0 = strip_ptrs[0] + rs * ci[0].csize_x;
-          const sprec_t *p1 = strip_ptrs[1] + rs * ci[1].csize_x;
-          const sprec_t *p2 = strip_ptrs[2] + rs * ci[2].csize_x;
-          fused_mct_finalize[xform_ct](p0, p1, p2, out_rows[0].data(), out_rows[1].data(),
-                                       out_rows[2].data(), mct_w, fp);
-        }
-        // Extra components beyond 3 (no MCT applied).
-        for (uint16_t c = 3; c < NC; ++c) {
-          const uint32_t yr_c = ci[c].yr;
-          if (y % yr_c != 0) continue;
-          if (y / yr_c >= ci[c].csize_y) continue;
-          const size_t rs_c  = static_cast<size_t>((y - strip_y0) / yr_c);
-          const sprec_t *spf = strip_ptrs[c] + rs_c * ci[c].csize_x;
-          int32_t *dp        = out_rows[c].data();
-          const CInfo &I     = ci[c];
-          open_htj2k::finalize_f32_to_i32(spf, dp, I.csize_x, I.scale, I.DC_OFFSET, I.MAXVAL, I.MINVAL);
-        }
-      } else {
-        // No MCT: each component is independent.  Read from its strip scratch
-        // at the subsampling-aware offset; skip intermediate luma rows.
-        for (uint16_t c = 0; c < NC; ++c) {
-          const uint32_t yr_c = ci[c].yr;
-          if (y % yr_c != 0) continue;              // reuse previous row for intermediate luma rows
-          if (y / yr_c >= ci[c].csize_y) continue;  // past last row of this component
-          const size_t rs_c  = static_cast<size_t>((y - strip_y0) / yr_c);
-          const sprec_t *spf = strip_ptrs[c] + rs_c * ci[c].csize_x;
-          int32_t *dp        = out_rows[c].data();
-          const CInfo &I     = ci[c];
-          open_htj2k::finalize_f32_to_i32(spf, dp, I.csize_x, I.scale, I.DC_OFFSET, I.MAXVAL, I.MINVAL);
+
+    // Phase 2: finalize + callback inner loop.  Each component row is finalized
+    // once, at the first output row it covers, from strip_ptrs[c] at its offset
+    // in the strip.  Rows below the caller's row_lo are walked (a row covering
+    // row_lo may start there) but not emitted unless emit_all_rows.
+    for (uint32_t y = strip_y0; y < strip_y1; ++y) {
+      const uint64_t gy = map.start(y);
+      for (uint16_t c = 0; c < NC; ++c) {
+        if (gy >= knext[c]) {
+          ++krow[c];
+          knext[c] += ci[c].yr;
         }
       }
+      uint16_t c_first = 0;
+      if (do_mct) {
+        // Fused path: the 3 MCT component rows from strip scratch, inverse MCT +
+        // float→int32 finalize in a single pass.
+        c_first = 3;
+        if (krow[0] >= ci[0].t0) {
+          const uint32_t j = krow[0] - ci[0].t0;
+          if (j != cur[0] && j >= skip[0]) {
+            for (uint16_t c = 0; c < 3; ++c) cur[c] = j;
+            const size_t rs = static_cast<size_t>(j - base[0]);
+#ifdef OPENHTJ2K_THREAD
+            if (par_color) {
+              // converted by the pool tasks above
+              const size_t plane = color_plane;
+              for (uint16_t c = 0; c < 3; ++c) out_ptrs[c] = color_strip.data() + c * plane + rs * mct_w;
+            } else
+#endif
+            {
+              const sprec_t *p0  = strip_ptrs[0] + rs * ci[0].csize_x;
+              const sprec_t *p1r = strip_ptrs[1] + rs * ci[1].csize_x;
+              const sprec_t *p2r = strip_ptrs[2] + rs * ci[2].csize_x;
+              fused_mct_finalize[xform_ct](p0, p1r, p2r, out_rows[0].data(), out_rows[1].data(),
+                                           out_rows[2].data(), mct_w, fp);
+            }
+          }
+        }
+      }
+      // Each remaining component independently (the extra components beyond the 3
+      // MCT ones, or all of them without MCT).
+      for (uint16_t c = c_first; c < NC; ++c) {
+        if (krow[c] < ci[c].t0) continue;  // above its first row, or a row of an earlier tile
+        const uint32_t j = krow[c] - ci[c].t0;
+        if (j == cur[c] || j < skip[c]) continue;
+        cur[c]             = j;
+        const sprec_t *spf = strip_ptrs[c] + static_cast<size_t>(j - base[c]) * ci[c].csize_x;
+        const CInfo &I     = ci[c];
+        open_htj2k::finalize_f32_to_i32(spf, out_rows[c].data(), I.csize_x, I.scale, I.DC_OFFSET, I.MAXVAL,
+                                        I.MINVAL);
+      }
 
-      cb(y, out_ptrs.data(), NC);
+      if (y >= row_lo || emit_all_rows) cb(y, out_ptrs.data(), NC);
     }  // end of inner y-loop
   }  // end of outer strip loop
   // finalize_line_decode() for every component runs via finalize_guard's
@@ -6935,7 +6970,8 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 // ── Direct-to-planar streaming decode ─────────────────────────────────────
 // Row-by-row pull from IDWT ring → fused finalize+narrow → direct write to
 // caller-provided uint8/uint16 plane buffers.  No strip scratch, no int32
-// intermediate, no callback overhead.
+// intermediate, no callback overhead.  Single-tile codestreams only: row j of
+// component c goes to row j of its plane.
 void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t reduce_NL_val,
                                                open_htj2k::PlanarOutputDesc *descs, uint16_t nc) {
   OPENHTJ2K_TILE_INLINE_SCOPE();
@@ -6945,17 +6981,32 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
   // (see decode_line_based_stream).
   LineDecodeFinalizeGuard finalize_guard{tcomp.get(), NC};
 
+  // Output rows of the image (stream_row_map.hpp).
+  stream_row_map map;
+  {
+    element_siz siz, Osiz, Rsiz;
+    hdr.SIZ->get_image_size(siz);
+    hdr.SIZ->get_image_origin(Osiz);
+    std::vector<uint32_t> yrs(NC);
+    for (uint16_t c = 0; c < NC; ++c) {
+      hdr.SIZ->get_subsampling_factor(Rsiz, c);
+      yrs[c] = Rsiz.y;
+    }
+    map.init(Osiz.y, siz.y, yrs, reduce_NL_val);
+  }
+
   // MCT fallback: synthesize a callback that does the two-stage path.  This
   // keeps the initial implementation simple; a fused MCT+narrow NEON kernel
-  // can be added later for 4:4:4 content.
+  // can be added later for 4:4:4 content.  Each component row is written once,
+  // at the first output row it covers.
   if (NC >= 3 && MCT != 0) {
+    std::vector<uint32_t> next(nc, 0);  // next row of each plane
     decode_line_based_stream(hdr, reduce_NL_val, [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
       for (uint16_t c = 0; c < nc_cb && c < nc; ++c) {
         const open_htj2k::PlanarOutputDesc &d = descs[c];
-        const uint32_t yr_c                   = d.yr;
-        if (y % yr_c != 0) continue;
-        const uint32_t cy = y / yr_c;
-        if (cy >= d.height) continue;
+        const uint32_t cy                     = map.row(c, y);
+        if (cy == UINT32_MAX || cy < next[c] || cy >= d.height) continue;
+        next[c] = cy + 1;
         if (d.is_16bit) {
           auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
           for (uint32_t x = 0; x < d.width; ++x) {
@@ -6987,19 +7038,18 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
 
   // Compute CInfo (same as decode_line_based_stream).
   struct CInfo {
-    uint32_t csize_x, csize_y, yr;
+    uint32_t csize_x, csize_y, yr, t0;
     int16_t downshift;
     float scale;
   };
   std::vector<CInfo> ci(NC);
   for (uint16_t c = 0; c < NC; ++c) {
-    element_siz Rsiz;
-    hdr.SIZ->get_subsampling_factor(Rsiz, c);
-    ci[c].yr               = Rsiz.y;
+    ci[c].yr               = map.yr[c];
     const uint8_t NL_c     = tcomp[c].get_dwt_levels();
     j2k_resolution *cr_act = tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL_val));
     ci[c].csize_x          = cr_act->get_pos1().x - cr_act->get_pos0().x;
     ci[c].csize_y          = cr_act->get_pos1().y - cr_act->get_pos0().y;
+    ci[c].t0               = cr_act->get_pos0().y;
     ci[c].downshift =
         (tcomp[c].transformation == 1) ? 0 : static_cast<int16_t>(FRACBITS - tcomp[c].bitdepth);
     ci[c].scale = finalize_scale(ci[c].downshift);
@@ -7007,22 +7057,25 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
 
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].init_line_decode(/*ring_mode=*/true);
 
-  const uint32_t H = ci[0].csize_y;
+  const uint32_t H = map.n;
 
   // Strip height — same logic as decode_line_based_stream.
-  uint32_t max_yr = 1;
-  for (uint16_t c = 0; c < NC; ++c) {
-    if (ci[c].yr > max_yr) max_yr = ci[c].yr;
-  }
   uint32_t strip_h_luma = static_cast<uint32_t>(tcomp[0].codeblock_size.y);
   if (strip_h_luma == 0) strip_h_luma = 64;
   if (strip_h_luma < 64) strip_h_luma = 64;
-  strip_h_luma = ((strip_h_luma + max_yr - 1) / max_yr) * max_yr;
 
   std::vector<sprec_t *> strip_ptrs(NC, nullptr);
   // Per-component pull counts for the current strip, recomputed at the top
   // of every strip.  Sized by the component count (Csiz may be up to 16384).
   std::vector<uint32_t> counts(NC, 0);
+  // Rows pulled so far, the row at strip_ptrs[c][0], the next row to write, and the
+  // absolute row covering the current output row with the grid row where the next starts.
+  std::vector<uint32_t> pulled(NC, 0), base(NC, 0), next(NC, 0), krow(NC);
+  std::vector<uint64_t> knext(NC);
+  for (uint16_t c = 0; c < NC; ++c) {
+    krow[c]  = (H > 0) ? map.abs_row(c, 0) : 0;
+    knext[c] = (static_cast<uint64_t>(krow[c]) + 1) * ci[c].yr;
+  }
 
 #ifdef OPENHTJ2K_THREAD
   struct StripPullCtx {
@@ -7048,10 +7101,11 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
 
     // Pre-compute per-component pull counts.
     for (uint16_t c = 0; c < NC; ++c) {
-      const uint32_t yr_c = ci[c].yr;
-      const uint32_t c_y0 = strip_y0 / yr_c;
-      const uint32_t c_y1 = std::min((strip_y1 + yr_c - 1) / yr_c, ci[c].csize_y);
-      counts[c]           = (c_y1 > c_y0) ? (c_y1 - c_y0) : 0u;
+      const uint32_t k_last = map.abs_row(c, strip_y1 - 1);
+      const uint32_t need   = (k_last >= ci[c].t0) ? std::min(k_last - ci[c].t0 + 1, ci[c].csize_y) : 0u;
+      counts[c]             = (need > pulled[c]) ? need - pulled[c] : 0u;
+      base[c]               = pulled[c];
+      pulled[c] += counts[c];
     }
 
     // Phase 1: pull per-component strip rows into scratch (parallel).
@@ -7093,23 +7147,29 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
       }
     }
 
-    // Phase 2: fused finalize+narrow directly to caller's plane buffers.
+    // Phase 2: fused finalize+narrow directly to caller's plane buffers, each
+    // component row once, at the first output row it covers.
     // No out_rows int32 intermediate, no callback.
     for (uint32_t y = strip_y0; y < strip_y1; ++y) {
-      for (uint16_t c = 0; c < NC && c < nc; ++c) {
-        const uint32_t yr_c = ci[c].yr;
-        if (y % yr_c != 0) continue;
-        if (y / yr_c >= ci[c].csize_y) continue;
-        const size_t rs_c                     = static_cast<size_t>((y - strip_y0) / yr_c);
-        const sprec_t *spf                    = strip_ptrs[c] + rs_c * ci[c].csize_x;
+      const uint64_t gy = map.start(y);
+      for (uint16_t c = 0; c < NC; ++c) {
+        if (gy >= knext[c]) {
+          ++krow[c];
+          knext[c] += ci[c].yr;
+        }
+        if (c >= nc || krow[c] < ci[c].t0) continue;
+        const uint32_t j = krow[c] - ci[c].t0;
+        if (j != next[c]) continue;  // the row already written
+        ++next[c];
         const open_htj2k::PlanarOutputDesc &d = descs[c];
-        const uint32_t cy                     = y / yr_c;
+        if (j >= d.height) continue;
+        const sprec_t *spf = strip_ptrs[c] + static_cast<size_t>(j - base[c]) * ci[c].csize_x;
 
         if (d.is_16bit) {
-          auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+          auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(j) * d.stride;
           open_htj2k::finalize_f32_to_u16(spf, dst, d.width, ci[c].scale, d.dc, d.maxval, d.minval);
         } else {
-          auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
+          auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(j) * d.stride;
           open_htj2k::finalize_f32_to_u8(spf, dst, d.width, ci[c].scale, d.dc, d.maxval, d.minval,
                                          d.depth_shift);
         }

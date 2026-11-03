@@ -1097,12 +1097,23 @@ class j2k_tile : public j2k_tile_base {
   void decode_line_based(j2k_main_header &main_header, uint8_t reduce_NL, std::vector<int32_t *> &dst);
   // Streaming variant: same as decode_line_based() but outputs one row at a time via
   // a callback instead of writing to a pre-allocated full-image buffer.
-  // The callback receives (y, row_ptrs[NC], NC) where row_ptrs[c] points to one
-  // decoded int32_t row for component c.  Allocates only per-row scratch buffers.
+  // The callback receives (y, row_ptrs[NC], NC): y is an output row of the whole image
+  // (stream_row_map.hpp) that starts in this tile, and row_ptrs[c] points to the
+  // decoded int32_t row of component c covering it (this tile's columns).  Only
+  // output rows in [row_lo, row_limit) are delivered; with emit_all_rows, also the
+  // ones above row_lo that this tile decodes because a component row covering row_lo
+  // or later starts in them (the rows of the other components are then indeterminate).
+  // rows: optional per-component row buffers that keep the last row of each component
+  // from one tile row to the next (for a tile spanning the image width); a component
+  // row that started in an earlier tile is then left in place.  Without it, such rows
+  // and the rows above a component's first one are zeros.  Allocates only per-row
+  // scratch buffers.
   void decode_line_based_stream(j2k_main_header &main_header, uint8_t reduce_NL,
                                 const std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> &cb,
                                 uint32_t row_limit = UINT32_MAX, uint32_t row_lo = 0, uint32_t col_lo = 0,
-                                uint32_t col_hi = UINT32_MAX, bool skip_mct = false);
+                                uint32_t col_hi = UINT32_MAX, bool skip_mct = false,
+                                std::vector<std::vector<int32_t>> *rows = nullptr,
+                                bool emit_all_rows                      = false);
   // Direct-to-planar streaming decode.  Reads float from IDWT ring buffers and
   // writes uint8/uint16 directly to caller-provided plane buffers, bypassing
   // the strip scratch, out_rows int32 intermediate, and callback overhead.

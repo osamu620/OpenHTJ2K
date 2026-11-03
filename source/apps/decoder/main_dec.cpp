@@ -739,6 +739,7 @@ int main(int argc, char *argv[]) {
   // sample, and the offset added to the samples (PGM: signed to unsigned).
   std::vector<uint8_t> bpp;
   std::vector<int32_t> pnm_offset;
+  std::vector<uint32_t> next_row;  // per component: the next row to write
   uint32_t total_samples = 0;
   // State for experimental YCbCr→RGB streaming conversion.
   int32_t ycbcr_cb_center = 0, ycbcr_cr_center = 0, ycbcr_maxval = 0;
@@ -789,6 +790,7 @@ int main(int argc, char *argv[]) {
 
             if (y == 0) {
               total_samples = 0;
+              next_row.assign(nc, 0);
               bpp.assign(nc, 0);
               pnm_offset.assign(nc, 0);
               size_t max_row_bytes = 0;
@@ -853,7 +855,11 @@ int main(int argc, char *argv[]) {
 
             const uint16_t nc_all = static_cast<uint16_t>(fps.size());
             if (want_ppm && nc_all >= 3 && fps[0] != nullptr && fps[1] == nullptr) {
-              // Interleaved PPM row
+              // Interleaved PPM row, one per row of component 0 (an output row repeats it
+              // when another component is subsampled less, see decoder.hpp).
+              const uint32_t cy0 = decoder.get_stream_component_row(0, y);
+              if (cy0 == UINT32_MAX || cy0 < next_row[0]) return;
+              next_row[0]  = cy0 + 1;
               uint8_t *out = row_buf.data();
               if (do_ycbcr) {
                 // YCbCr→RGB conversion (experimental); chroma upsampled as needed.
@@ -924,22 +930,14 @@ int main(int argc, char *argv[]) {
               // origin): nothing to write, and row_buf.data() may be null.
               if (!row_buf.empty()) fwrite(row_buf.data(), 1, row_buf.size(), fps[0]);
             } else {
-              // Per-component files.
-              // For vertically subsampled components (yr_c > 1, e.g. 4:2:0 chroma):
-              // decode_line_based_stream holds the component row stable across yr_c luma
-              // rows and only advances the ring buffer every yr_c luma rows.  So we write
-              // once per yr_c luma rows (at y%yr_c==0) and use y/yr_c as the component-
-              // space row boundary.  For non-subsampled components (yr_c==1) the
-              // behaviour is identical to the original.
-              // Use ceiling division to recover YRsiz: ceil(H0/Hc), which is exact for
-              // any valid JPEG 2000 subsampling factor (including odd-height images where
-              // integer division would give the wrong answer).
+              // Per-component files.  A component row spans one or more output rows
+              // (vertical subsampling): write it at the first, when the decoder's row map
+              // moves to it (see invoke_line_based_stream in decoder.hpp).
               for (uint16_t c = 0; c < nc_all; ++c) {
                 if (fps[c] == nullptr) continue;
-                const uint32_t h0 = img_height[0], hc = img_height[c];
-                const uint32_t yr_c = (hc > 0 && hc < h0) ? (h0 + hc - 1) / hc : 1u;
-                if (y % yr_c != 0) continue;         // duplicate luma row: skip
-                if (y / yr_c >= hc) continue;         // past end of component
+                const uint32_t cy = decoder.get_stream_component_row(c, y);
+                if (cy == UINT32_MAX || cy < next_row[c]) continue;  // none yet, or written
+                next_row[c]  = cy + 1;
                 uint8_t *out = row_buf.data();
                 if (bpp[c] == 1) {
                   pack_i32_to_u8(rows[c], out, img_width[c], pnm_offset[c]);
