@@ -50,8 +50,10 @@ struct StreamReader {
 
 // Opens a stream reader chosen by the first file's extension:
 //   .pgx          → PGX (one file per component; uses all of fnames)
-//   .tif / .tiff  → TIFF (uses fnames[0]; requires OPENHTJ2K_TIFF_SUPPORT)
-//   otherwise     → PNM (P5/P6, uses fnames[0])
+//   .tif / .tiff  → TIFF (requires OPENHTJ2K_TIFF_SUPPORT)
+//   otherwise     → PNM (P5/P6)
+// Several PNM or TIFF files give the components of each file in turn; a file
+// smaller than the first by whole factors gives subsampled components.
 // On failure prints a diagnostic to stdout and returns nullptr.
 std::unique_ptr<StreamReader> open_stream_reader(const std::vector<std::string> &fnames);
 

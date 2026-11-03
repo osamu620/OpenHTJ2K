@@ -2607,7 +2607,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
               current_node->set_state(1);
             } else {
               header.put_bit(0);
-              current_node->set_current_value(static_cast<uint8_t>(current_node->get_current_value() + 1));
+              current_node->set_current_value(static_cast<uint16_t>(current_node->get_current_value() + 1));
             }
           }
         }
@@ -4041,25 +4041,32 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
 
   element_siz Osiz;
   hdr->SIZ->get_image_origin(Osiz);
+  // The input planes start at the component's own image origin, ceil(XOsiz / XRsiz) and
+  // ceil(YOsiz / YRsiz).
+  Osiz.x = ceil_int(Osiz.x, subsampling.x);
+  Osiz.y = ceil_int(Osiz.y, subsampling.y);
   // create tile samples, only for encoding;
   if (!img.empty()) {
+    // A subsampled component can have no samples in a tile (or at all): nothing to copy.
     const auto width = static_cast<uint32_t>(pos1.x - pos0.x);
     // stride may differ from width with non-zero origin
     const uint32_t stride = hdr->SIZ->get_component_stride(this->index);
     if (lb_enc) {
       // In line-based encode mode, skip the full W×H int32 copy.
       // Store the raw input pointer; DC offset is applied row-by-row during encode.
-      lb_src_ptr    = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
+      lb_src_ptr    = img[this->index] + static_cast<size_t>(pos0.y - Osiz.y) * stride + (pos0.x - Osiz.x);
       lb_src_stride = stride;
     } else {
       const uint32_t num_bufsamples = aligned_stride * height;
-      samples      = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
-      int32_t *src = img[this->index] + (pos0.y - Osiz.y) * stride + pos0.x - Osiz.x;
-      int32_t *dst = samples;
-      for (uint32_t i = 0; i < height; ++i) {
-        memcpy(dst, src, sizeof(int32_t) * width);
-        src += stride;
-        dst += aligned_stride;
+      samples = static_cast<int32_t *>(aligned_mem_alloc(sizeof(int32_t) * num_bufsamples, 32));
+      if (width > 0 && height > 0) {
+        int32_t *src = img[this->index] + static_cast<size_t>(pos0.y - Osiz.y) * stride + (pos0.x - Osiz.x);
+        int32_t *dst = samples;
+        for (uint32_t i = 0; i < height; ++i) {
+          memcpy(dst, src, sizeof(int32_t) * width);
+          src += stride;
+          dst += aligned_stride;
+        }
       }
     }
   }
@@ -6857,11 +6864,16 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   // create tile components
   this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
   enc_img_x0.assign(num_components, 0);
+  enc_row_ratio.assign(num_components, 1);
+  element_siz sub0;
+  main_header.SIZ->get_subsampling_factor(sub0, 0);
   for (uint16_t c = 0; c < num_components; c++) {
     element_siz sub;
     main_header.SIZ->get_subsampling_factor(sub, c);
     enc_img_x0[c] = ceil_int(Osiz.x, sub.x);
     if (c == 0) enc_img_y0 = ceil_int(Osiz.y, sub.y);
+    // invoke_line_based_stream() checks that the ratios are whole
+    enc_row_ratio[c] = std::max(1U, sub.y / sub0.y);
   }
 
   // Line-based (LB) encode mode reads rows straight from the caller's input and
@@ -7476,21 +7488,21 @@ uint8_t *j2k_tile::encode_line_based_stream(
         }
         // Extra components (c >= 3): non-MCT
         for (uint16_t c = 3; c < num_components; ++c) {
+          if (!enc_takes_row(c, top0.y + y)) continue;
+          const uint32_t cy    = (top0.y + y) / enc_row_ratio[c] - tcomp[c].get_pos0().y;
           const int32_t dco    = tcomp[c].lb_dc_offset;
           const int32_t shu    = tcomp[c].lb_dc_shiftup;
           const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
           const uint32_t x_off = static_cast<uint32_t>(tcomp[c].get_pos0().x) - enc_img_x0[c];
           const int32_t *sp    = int_rows[c] + x_off;
           const uint32_t sc    = round_up(wc, 32U);
-          sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + y * sc;
+          sprec_t *dp          = tcomp[c].access_resolution(0)->i_samples + cy * sc;
           dc_shift_row_f(sp, dp, wc, shu, dco);
         }
       } else {
         for (uint16_t c = 0; c < num_components; ++c) {
-          const uint32_t h_c = tcomp[c].get_pos1().y - tcomp[c].get_pos0().y;
-          const uint32_t yr  = (h_c > 0 && h_c < height) ? height / h_c : 1;
-          if (yr > 1 && (y % yr) != 0) continue;
-          const uint32_t cy    = (yr > 1) ? (y / yr) : y;
+          if (!enc_takes_row(c, top0.y + y)) continue;
+          const uint32_t cy    = (top0.y + y) / enc_row_ratio[c] - tcomp[c].get_pos0().y;
           const int32_t dco    = tcomp[c].lb_dc_offset;
           const int32_t shu    = tcomp[c].lb_dc_shiftup;
           const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
@@ -7797,6 +7809,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       }
       // Extra components without MCT
       for (uint16_t c = 3; c < num_components; ++c) {
+        if (!enc_takes_row(c, top0.y + y)) continue;
         const int32_t dco    = tcomp[c].lb_dc_offset;
         const int32_t shu    = tcomp[c].lb_dc_shiftup;
         const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
@@ -7816,9 +7829,7 @@ uint8_t *j2k_tile::encode_line_based_stream(
       }
     } else {
       for (uint16_t c = 0; c < num_components; ++c) {
-        const uint32_t h_c = tcomp[c].get_pos1().y - tcomp[c].get_pos0().y;
-        const uint32_t yr  = (h_c > 0 && h_c < height) ? height / h_c : 1;
-        if (yr > 1 && (y % yr) != 0) continue;
+        if (!enc_takes_row(c, top0.y + y)) continue;
         const int32_t dco    = tcomp[c].lb_dc_offset;
         const int32_t shu    = tcomp[c].lb_dc_shiftup;
         const uint32_t wc    = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;

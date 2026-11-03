@@ -28,9 +28,13 @@
 
 #pragma once
 #include <algorithm>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <string>
+#include <vector>
 
 #ifndef OPENHTJ2K_NODISCARD
   #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
@@ -89,7 +93,9 @@ void print_help(char *cmd) {
       "  JPEG 2000 decoder. 0 is Part 1 in its default mode. Part 1 mode switches: BYPASS, RESET,\n"
       "  RESTART, CAUSAL, ERTERM, SEGMARK (e.g. Cmodes=BYPASS|ERTERM). HT accepts only CAUSAL.\n");
   printf("Qstep=Float:\n  Base step size for quantization.\n  0.0 < base step size <= 2.0.\n");
-  printf("Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 7 (Default is 1.)\n");
+  printf(
+      "Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 7, from 1 for Creversible=no (Default "
+      "is 1.)\n");
   printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
   printf(
       "  Note: If this option is present, Qstep is ignored. Cycc defaults to `yes`;\n"
@@ -124,7 +130,7 @@ void print_help(char *cmd) {
   printf(
       "-num_threads Int\n"
       "  number of threads to use in encode or decode\n"
-      "  0, which is the default, indicates usage of all threads.\n");
+      "  0, which is the default, indicates usage of all threads. At most 1024.\n");
 }
 
 class element_siz_local {
@@ -137,6 +143,34 @@ class element_siz_local {
     y = y0;
   }
 };
+
+// The whole of `s` as a decimal integer from minval to maxval; otherwise an error naming
+// `what`, and exit.  (std::stoi and its relatives throw on such input, which ended the
+// program with an uncaught exception.)
+long long parse_integer(const std::string &s, long long minval, long long maxval, const std::string &what) {
+  errno             = 0;
+  char *end         = nullptr;
+  const long long v = strtoll(s.c_str(), &end, 10);
+  if (s.empty() || end == s.c_str() || *end != '\0' || errno == ERANGE || v < minval || v > maxval) {
+    printf("ERROR: %s takes an integer from %lld to %lld, not '%s'.\n", what.c_str(), minval, maxval,
+           s.c_str());
+    exit(EXIT_FAILURE);
+  }
+  return v;
+}
+
+// The whole of `s` as a number in (minval, maxval]; otherwise an error naming `what`, and exit.
+double parse_real(const std::string &s, double minval, double maxval, const std::string &what) {
+  char *end      = nullptr;
+  const double v = strtod(s.c_str(), &end);
+  // The comparison is false for not-a-number as well.
+  if (s.empty() || end == s.c_str() || *end != '\0' || !(v > minval && v <= maxval)) {
+    printf("ERROR: %s shall be in the range of (%f, %f], not '%s'.\n", what.c_str(), minval, maxval,
+           s.c_str());
+    exit(EXIT_FAILURE);
+  }
+  return v;
+}
 
 size_t popcount_local(uintmax_t num) {
   size_t precision = 0;
@@ -214,8 +248,11 @@ class j2k_argset {
     }
     subparam = arg.substr(pos0 + 1, pos1 - pos0 - 1);
     pos0     = subparam.find_first_of(',');
-    dims.y   = static_cast<uint32_t>(std::stoi(subparam.substr(0, pos0)));
-    dims.x   = static_cast<uint32_t>(std::stoi(subparam.substr(pos0 + 1, subparam.length())));
+    // {v} sets both coordinates to v.
+    const std::string what = arg.substr(0, arg.find_first_of('='));
+    dims.y = static_cast<uint32_t>(parse_integer(subparam.substr(0, pos0), 0, UINT32_MAX, what));
+    dims.x = static_cast<uint32_t>(
+        parse_integer(subparam.substr(pos0 == std::string::npos ? 0 : pos0 + 1), 0, UINT32_MAX, what));
   };
 
   template <class T>
@@ -280,11 +317,7 @@ class j2k_argset {
       printf("ERROR: %c%s needs =Int\n", c, param_name.c_str());
       exit(EXIT_FAILURE);
     }
-    int tmp = std::stoi(subparam);
-    if (tmp < minval || tmp > maxval) {
-      printf("ERROR: %c%s shall be in the range of [%d, %d]\n", c, param_name.c_str(), minval, maxval);
-      exit(EXIT_FAILURE);
-    }
+    const long long tmp = parse_integer(subparam, minval, maxval, std::string(1, c) + param_name);
     return static_cast<T>(tmp);
   }
 
@@ -302,12 +335,7 @@ class j2k_argset {
       printf("ERROR: %c%s needs =Int\n", c, param_name.c_str());
       exit(EXIT_FAILURE);
     }
-    double tmp = std::stod(subparam);
-    if (tmp <= minval || tmp > maxval) {
-      printf("ERROR: %c%s shall be in the range of (%f, %f]\n", c, param_name.c_str(), minval, maxval);
-      exit(EXIT_FAILURE);
-    }
-    return static_cast<double>(tmp);
+    return parse_real(subparam, minval, maxval, std::string(1, c) + param_name);
   }
 
   std::vector<std::string> get_infile() {
@@ -370,14 +398,10 @@ class j2k_argset {
       printf("ERROR: -iter requires number of iteration\n");
       exit(EXIT_FAILURE);
     }
-    long tmp = std::stol(args[idx + 1]);
-    if (tmp < 1 || tmp > INT32_MAX) {
-      printf("ERROR: -iter requires positive integer within int32_t range.\n");
-      exit(EXIT_FAILURE);
-    }
-    return static_cast<int32_t>(tmp);
+    return static_cast<int32_t>(parse_integer(args[idx + 1], 1, INT32_MAX, "-iter"));
   }
 
+  static constexpr long long MAX_THREADS = 1024;
   uint32_t get_num_threads() {
     // zero implies all threads
     auto p = std::find(args.begin(), args.end(), "-num_threads");
@@ -389,12 +413,8 @@ class j2k_argset {
       printf("ERROR: -num_threads requires number of threads\n");
       exit(EXIT_FAILURE);
     }
-    long tmp = std::stol(args[idx + 1]);
-    if (tmp < 0 || tmp > UINT32_MAX) {
-      printf("ERROR: -num_threads requires non-negative integer within int32_t range.\n");
-      exit(EXIT_FAILURE);
-    }
-    return static_cast<uint32_t>(tmp);
+    // Every thread is created up front: a huge count exhausts the memory.
+    return static_cast<uint32_t>(parse_integer(args[idx + 1], 0, MAX_THREADS, "-num_threads"));
   }
 
   // EXPERIMENTAL: the target bit rates in bits per pixel, one per quality layer, in
@@ -603,8 +623,11 @@ class j2k_argset {
             }
             subparam = arg.substr(pos0 + 1, pos1 - pos0 - 1);
             pos0     = subparam.find_first_of(',');
-            tmpsiz.y = static_cast<uint32_t>(std::stoi(subparam.substr(0, pos0)));
-            tmpsiz.x = static_cast<uint32_t>(std::stoi(subparam.substr(pos0 + 1, 5)));
+            // 1 to 2^15 (a precinct size exponent has four bits)
+            tmpsiz.y =
+                static_cast<uint32_t>(parse_integer(subparam.substr(0, pos0), 1, 32768, "Cprecincts"));
+            tmpsiz.x = static_cast<uint32_t>(parse_integer(
+                subparam.substr(pos0 == std::string::npos ? 0 : pos0 + 1), 1, 32768, "Cprecincts"));
             if ((popcount_local(tmpsiz.y) > 1) || (popcount_local(tmpsiz.x) > 1)) {
               printf("ERROR: precinct size must be power of two.\n");
               exit(EXIT_FAILURE);
@@ -619,7 +642,7 @@ class j2k_argset {
             printf("ERROR: Corder needs progression order =(LRCP, RLCP, RPCL, PCRL, CPRL, PRCL)\n");
             exit(EXIT_FAILURE);
           }
-          val = arg.substr(pos0 + 1, 4);
+          val = arg.substr(pos0 + 1);
           if (val == "LRCP") {
             Porder = 0;
           } else if (val == "RLCP") {

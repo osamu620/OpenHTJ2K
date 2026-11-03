@@ -46,6 +46,7 @@
 // be exercised by a standalone demo as well as by the marker code.
 // ---------------------------------------------------------------------------
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -149,7 +150,8 @@ inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI) {
   const double alpha_T0 = 0.04, alpha_T1 = 0.10;
   const double M_T0    = 2.0 * (1.0 - t0 / 100.0);
   const double M_T1    = 2.0 * (1.0 - t1 / 100.0);
-  const double M_Q     = (qfactor < 50) ? 50.0 / qfactor : 2.0 * (1.0 - qfactor / 100.0);
+  // Qfactor 0 is taken as 1, as the IJG scaling does: 50 / 0 would make every step infinite.
+  const double M_Q = (qfactor < 50) ? 50.0 / std::max<uint8_t>(qfactor, 1) : 2.0 * (1.0 - qfactor / 100.0);
   double alpha_Q       = alpha_T0;
   double qfactor_power = 1.0;
   if (qfactor >= t1) {

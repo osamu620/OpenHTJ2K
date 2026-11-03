@@ -221,6 +221,83 @@
   used anyway. These blocks now start at 16 KB and double up to 2 MB as a
   tile needs them (959 MB reserved in that example), and a failed allocation
   throws `std::bad_alloc`. Codestreams and encoding speed are unchanged.
+- Subsampled components (`XRsiz`/`YRsiz` above 1) were read from the wrong
+  place. `invoke_line_based()` took a component's width as `Xsiz / XRsiz -
+  XOsiz` instead of `ceil(Xsiz / XRsiz) - ceil(XOsiz / XRsiz)` and offset its
+  plane by the image origin on the reference grid instead of the component's
+  own: with an odd width, or any image origin, the samples came out shifted or
+  garbled, and an origin read before the start of the plane (a crash).
+  `invoke_line_based_stream()` guessed which of component 0's rows belong to a
+  subsampled component from the tile's height, which went wrong with odd
+  heights, origins and tiles, and could write past a component's rows. A
+  component now takes a row where component 0's row lies on its sampling
+  grid. The streaming entry point therefore needs each component's `YRsiz` to
+  be a multiple of component 0's (as the command line's readers give it) and
+  refuses others with an exception; `invoke_line_based()` takes any. Images
+  without subsampling are byte-identical.
+- `Qfactor=0`, documented as valid, divided by zero: every step size was
+  infinite and converted to an integer (undefined behaviour). It is now taken
+  as `Qfactor=1`, as the IJG quality scaling does, and gives the same
+  codestream.
+- With 256 or more quality layers the codestream could not be decoded: the
+  packet headers counted a code-block's inclusion in 8 bits. Up to 65535
+  layers now decode.
+- The rate control (`-rate`, `set_target_size(s)`) doubled its memory with
+  every DWT level, as the step sizes did (fixed above): 160 MB at 20 levels,
+  2.3 GB at 24, more than a machine has towards 32. Its wavelet energies now
+  continue their limit from level 14; codestreams with up to 14 levels are
+  byte-identical.
+- Lossless coding of 1-bit samples was not lossless at 6 or more DWT levels:
+  the coarsest subbands needed one more magnitude bit-plane than they were
+  given. 1-bit components now get one more. Other bit depths are
+  byte-identical.
+- Reversible coding with more guard bits than a low bit depth leaves room for
+  (e.g. 2-bit samples with `Qguard=4`) stopped with "A subband ... has 258
+  magnitude bit-planes": the step-size exponent went below zero and wrapped
+  around. It now stays at zero, which gives such subbands more bit-planes than
+  they need.
+- Derived quantization (`Qderived=yes`) at many DWT levels gave subbands a
+  negative exponent, which no decoder accepts. The LL exponent is now at least
+  the number of levels less one (a finer step if need be), and an encode that
+  cannot meet that within the guard bits (31 levels with one guard bit, fewer
+  with more) is refused.
+- The HT block coder could write past its cleanup-segment buffer when samples
+  have close to 30 magnitude bit-planes (a tiny step size on noisy content):
+  the buffer held 16384 bytes, the segment can take about 21 KB. The buffer
+  now has room for the largest segment. Output is byte-identical.
+- With the irreversible transform and no guard bits (`Qguard=0`), quantized
+  coefficients at the edge of the nominal range need one more magnitude
+  bit-plane than the codestream gives them. The HT block coder wrote them
+  anyway, which other decoders reject or decode differently, and the Part 1
+  coder dropped their top bit-planes (or failed with none at all). The
+  encoder now refuses the irreversible transform without a guard bit; the
+  reversible step sizes do not depend on the guard bits and are unaffected.
+  The Part 1 coder also saturates magnitudes that do not fit instead of
+  wrapping them around.
+- Reversible coding is lossless for at most 23 bits per sample (22 for the
+  components the colour transform widens); deeper samples came back with
+  errors. They are now refused with an exception, as is more than 31 bits,
+  which 32-bit samples cannot hold.
+- With the progression order PRCL the encoder wrote a CAP marker without
+  setting `Rsiz` bit 14 (CAP marker present) or bit 15 (ISO/IEC 15444-2
+  capabilities), so other decoders ignored the marker. Both are now set.
+- With tile size 0 (one tile) and an image origin, the encoder sized the tile
+  from the image origin but placed it at the tile origin: with the tile origin
+  left at 0, the tile did not reach the image's far edge, which gave extra
+  tiles or "tile size plus tile origin shall be greater than the image
+  origin". The tile now reaches from the tile origin to the far edge. The
+  command line sets the tile origin to the image origin and is unaffected.
+- Out-of-range parameters are refused with an exception from both entry
+  points instead of giving invalid codestreams, wrong samples, hangs or
+  crashes: no components or mismatched `Ssiz`/`XRsiz`/`YRsiz` vectors, a zero
+  subsampling factor, an empty image, an image extent beyond 2147483647 (which
+  the decoder refuses too), more than 32 DWT levels, code-block exponents
+  beyond 1024 samples or 4096 in all, progression order above 5, no quality
+  layers, `use_color_trafo` or `transformation` above 1, more than 7 guard
+  bits, a base step size that is not a positive finite number (zero or a
+  negative one looped forever), precinct exponents above 15 or of 0 above the
+  lowest resolution, and user-defined precincts without any size. The step
+  size encoding no longer overflows for huge steps either.
 
 ### Decoder
 - A truncated tile-part followed by a tile-part without a body crashed the
@@ -388,6 +465,19 @@
   which none of the output formats holds; only 2 bytes of each such sample
   used to be written. Images whose components share bit depth and sign
   decode as before.
+- `open_htj2k_enc` ended with an uncaught exception (SIGABRT) on numbers it
+  could not parse or that overflowed, e.g. `Clevels=abc`,
+  `Sorigin={0,4294967234}`, `Cprecincts={x,y}`, `Qzoom=abc`,
+  `-num_threads abc`. Every number is now checked whole and against its range,
+  with an error message and exit code 1. `Qstep=nan` was accepted; negative
+  coordinates (`Stiles={-1,-1}`) wrapped around; `Corder=LRCPX` was taken as
+  `LRCP`; `-num_threads` up to 2^32-1 created that many threads (100000 used
+  more than 4 GB) and is now at most 1024; an image origin that puts the image
+  beyond 2147483647 is refused.
+- `open_htj2k_enc -i a.pgm,b.pgm` read the first file only. A list of PGM, PPM
+  or TIFF files now gives the components of each file in turn, as a list of
+  PGX files does; a file smaller than the first by whole factors gives
+  subsampled components.
 
 ### Encoder and decoder
 - Small images, or images with a nonzero origin, no longer make the

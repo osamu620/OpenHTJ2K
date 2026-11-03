@@ -816,3 +816,39 @@ endforeach()
 # Several quality layers need the Part 1 block coder: with HT, a list of rates is rejected.
 add_test(NAME enc_rate_list_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o rate_list.j2c -rate 1,0.5)
 set_tests_properties(enc_rate_list_rejected PROPERTIES WILL_FAIL TRUE)
+
+# Command-line values that are not numbers, out of range or too large for the reference grid
+# end with an error message and a non-zero exit code; std::stoi and its relatives used to end
+# the program with an uncaught exception (SIGABRT), and a huge thread count took all memory.
+set(_enc_fail ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_enc_exit_failure.cmake)
+set(_enc_src ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/dwt_levels_src.pgm)
+foreach(_case "levels_not_a_number;Clevels=abc;takes an integer"
+              "levels_too_large;Clevels=99999999999;takes an integer"
+              "tiles_negative;Stiles={-1,-1};takes an integer"
+              "origin_off_the_grid;Sorigin={0,4294967234};exceeds the reference grid"
+              "precincts_not_a_number;Cprecincts={x,y};takes an integer"
+              "qstep_not_a_number;Qstep=nan;shall be in the range"
+              "qzoom_not_a_number;Qzoom=abc;shall be in the range"
+              "threads_too_many;-num_threads;100000;takes an integer from 0 to 1024"
+              "order_with_suffix;Corder=LRCPX;unknown progression order"
+              "precincts_too_small;Cprecincts={1,1};precinct size exponents")
+  list(GET _case 0 _t)
+  list(REMOVE_AT _case 0)
+  list(GET _case -1 _expect)
+  list(REMOVE_AT _case -1)
+  add_test(NAME enc_cli_${_t} COMMAND ${CMAKE_COMMAND} -DENC=$<TARGET_FILE:open_htj2k_enc>
+           "-DARGS=-i;${_enc_src};-o;cli_${_t}.j2c;${_case}" "-DEXPECT=${_expect}" -P ${_enc_fail})
+endforeach()
+# The irreversible transform needs a guard bit (without one, coefficients can need more
+# magnitude bit-planes than the codestream gives them).
+add_test(NAME enc_cli_irreversible_guard0 COMMAND ${CMAKE_COMMAND} -DENC=$<TARGET_FILE:open_htj2k_enc>
+         "-DARGS=-i;${_enc_src};-o;cli_guard0.j2c;Qguard=0" "-DEXPECT=at least 1 guard bit" -P ${_enc_fail})
+
+# Several PGM files give one component each (only the first used to be read): a 12-bit and a
+# 16-bit 67x37 image, coded losslessly as two components.
+add_test(NAME enc_two_pgm COMMAND open_htj2k_enc -i ${GRAY12_PGM},${GRAY16_PGM} -o two_pgm.j2c Creversible=yes)
+add_test(NAME dec_two_pgm COMMAND open_htj2k_dec -i two_pgm.j2c -o two_pgm.pgx)
+set_tests_properties(dec_two_pgm PROPERTIES DEPENDS enc_two_pgm)
+add_test(NAME comp_two_pgm_0 COMMAND imgcmp two_pgm_00.pgx ${GRAY12_PGM} 0 0)
+add_test(NAME comp_two_pgm_1 COMMAND imgcmp two_pgm_01.pgx ${GRAY16_PGM} 0 0)
+set_tests_properties(comp_two_pgm_0 comp_two_pgm_1 PROPERTIES DEPENDS dec_two_pgm)
