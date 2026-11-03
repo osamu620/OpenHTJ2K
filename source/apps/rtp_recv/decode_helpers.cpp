@@ -421,6 +421,10 @@ bool decode_to_planar_buffers_direct(open_htj2k::openhtj2k_decoder& decoder,
     depths.push_back(decoder.get_component_depth(c));
     signeds.push_back(decoder.get_component_signedness(c));
   }
+  // The planes hold up to 16 bits; the shifts below are by the bit depth (up to 38).
+  for (uint16_t c = 0; c < nc && c < 3; ++c) {
+    if (depths[c] > 16) return false;
+  }
 
   const uint32_t luma_w  = widths[0];
   const uint32_t luma_h  = heights[0];

@@ -6310,12 +6310,29 @@ void j2k_tile::ycbcr_to_rgb() {
   cvt_ycbcr_to_rgb_float[ct_idx](sp0, sp1, sp2, width, height, stride);
 }
 
+namespace {
+// DC offset and clamping range of a component's int32_t output samples, computed in 64
+// bits so that no bit depth makes a 32-bit shift overflow (openhtj2k_decoder_impl
+// refuses samples deeper than 30 bits unsigned and 31 bits signed).
+struct sample_range {
+  int32_t dc, maxval, minval;
+};
+sample_range output_range(uint8_t bitdepth, bool is_signed) {
+  const int64_t half = int64_t{1} << (bitdepth - 1);
+  sample_range r;
+  r.dc     = is_signed ? 0 : static_cast<int32_t>(half);
+  r.maxval = static_cast<int32_t>(is_signed ? half - 1 : 2 * half - 1);
+  r.minval = is_signed ? static_cast<int32_t>(-half) : 0;
+  return r;
+}
+}  // namespace
+
 void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int32_t *> &dst) {
   for (uint16_t c = 0; c < this->num_components; ++c) {
-    const int32_t DC_OFFSET = (hdr.SIZ->is_signed(c)) ? 0 : 1 << (tcomp[c].bitdepth - 1);
-    const int32_t MAXVAL =
-        (hdr.SIZ->is_signed(c)) ? (1 << (tcomp[c].bitdepth - 1)) - 1 : (1 << tcomp[c].bitdepth) - 1;
-    const int32_t MINVAL = (hdr.SIZ->is_signed(c)) ? -(1 << (tcomp[c].bitdepth - 1)) : 0;
+    const sample_range range = output_range(tcomp[c].bitdepth, hdr.SIZ->is_signed(c));
+    const int32_t DC_OFFSET  = range.dc;
+    const int32_t MAXVAL     = range.maxval;
+    const int32_t MINVAL     = range.minval;
 
     element_siz siz, Osiz, Rsiz, csize;
     hdr.SIZ->get_image_size(siz);
@@ -6373,9 +6390,10 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   for (uint16_t c = 0; c < NC; ++c) {
     CInfo &I         = ci[c];
     const uint8_t bd = tcomp[c].bitdepth;
-    I.DC_OFFSET      = (hdr.SIZ->is_signed(c)) ? 0 : 1 << (bd - 1);
-    I.MAXVAL         = (hdr.SIZ->is_signed(c)) ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
-    I.MINVAL         = (hdr.SIZ->is_signed(c)) ? -(1 << (bd - 1)) : 0;
+    const sample_range range = output_range(bd, hdr.SIZ->is_signed(c));
+    I.DC_OFFSET              = range.dc;
+    I.MAXVAL                 = range.maxval;
+    I.MINVAL                 = range.minval;
 
     element_siz siz, Osiz, Rsiz;
     hdr.SIZ->get_image_size(siz);
@@ -6566,9 +6584,10 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   for (uint16_t c = 0; c < NC; ++c) {
     CInfo &I         = ci[c];
     const uint8_t bd = tcomp[c].bitdepth;
-    I.DC_OFFSET      = (hdr.SIZ->is_signed(c)) ? 0 : 1 << (bd - 1);
-    I.MAXVAL         = (hdr.SIZ->is_signed(c)) ? (1 << (bd - 1)) - 1 : (1 << bd) - 1;
-    I.MINVAL         = (hdr.SIZ->is_signed(c)) ? -(1 << (bd - 1)) : 0;
+    const sample_range range = output_range(bd, hdr.SIZ->is_signed(c));
+    I.DC_OFFSET              = range.dc;
+    I.MAXVAL                 = range.maxval;
+    I.MINVAL                 = range.minval;
 
     element_siz Rsiz;
     hdr.SIZ->get_subsampling_factor(Rsiz, c);

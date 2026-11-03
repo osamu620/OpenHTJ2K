@@ -562,6 +562,15 @@
   resolutions, all progression orders, and 1 and 4 threads.
 - `invoke_line_based()` did not decode the rows of a component with more rows
   than component 0 (a smaller vertical factor) beyond component 0's height.
+- Samples of 31 bits and more: the DC offset and clamping range were computed
+  with 32-bit shifts that overflowed (undefined behaviour) for 31-bit unsigned
+  and 32-bit signed samples and shifted by more than 31 for deeper ones (the
+  SIZ marker allows 38 bits). The decoder computes samples, their DC offset
+  and the clamp in 32-bit integers, which leaves room for the overshoot of
+  lossy decoding up to 30-bit unsigned and 31-bit signed samples, so it now
+  decodes those and refuses deeper components with "component N has B-bit
+  ... samples: not supported" (`open_htj2k_dec` writes at most 16 bits in
+  any case).
 
 ### Tools
 - `open_htj2k_dec` guessed each component's vertical subsampling factor from

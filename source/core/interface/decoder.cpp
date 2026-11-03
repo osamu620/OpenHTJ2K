@@ -175,6 +175,24 @@ class openhtj2k_decoder_impl {
   // Analogous to install_precinct_filter but for the packet observer.
   void install_packet_observer(j2k_tile &tile, uint16_t tile_idx);
 
+  // The decoders reconstruct samples, add the DC offset and clamp in 32-bit integers and
+  // hand out int32_t samples (ISO/IEC 15444-1 allows up to 38 bits).  That leaves room
+  // for the overshoot of lossy reconstruction above and below the sample range up to
+  // 30-bit unsigned and 31-bit signed samples: refuse deeper ones.
+  void require_int32_samples() {
+    const uint16_t nc = main_header.SIZ->get_num_components();
+    for (uint16_t c = 0; c < nc; ++c) {
+      const uint8_t bd = main_header.SIZ->get_bitdepth(c);
+      const bool sg    = main_header.SIZ->is_signed(c);
+      if (bd > (sg ? 31 : 30)) {
+        open_htj2k::detail::fail(
+            "component %u has %u-bit %s samples: not supported, the decoder takes up to 30-bit unsigned "
+            "and 31-bit signed samples.",
+            static_cast<unsigned>(c), static_cast<unsigned>(bd), sg ? "signed" : "unsigned");
+      }
+    }
+  }
+
   void destroy();
 };
 
@@ -465,6 +483,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
         "openhtj2k_decoder_impl::parse() shall be called before calling "
         "openhtj2k_decoder_impl::invoke_line_based().");
   }
+  require_int32_samples();
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -567,6 +586,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         "openhtj2k_decoder_impl::parse() shall be called before calling "
         "openhtj2k_decoder_impl::invoke_line_based_stream().");
   }
+  require_int32_samples();
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -915,6 +935,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
         "openhtj2k_decoder_impl::parse() shall be called before calling "
         "openhtj2k_decoder_impl::invoke_line_based_stream_reuse().");
   }
+  require_int32_samples();
   if (!single_tile_reuse_enabled_) {
     invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
     return;
@@ -1114,6 +1135,7 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
         "openhtj2k_decoder_impl::parse() shall be called before calling "
         "openhtj2k_decoder_impl::invoke_line_based_direct().");
   }
+  require_int32_samples();
   if (!single_tile_reuse_enabled_) {
     // No single-tile cache — fall back to the callback path with a
     // synthesized callback that writes to the planar descriptors, each
