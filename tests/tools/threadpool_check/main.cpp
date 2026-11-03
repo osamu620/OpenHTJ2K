@@ -72,7 +72,9 @@ int main() {
     std::printf("ring growth: %d tasks ran\n", done.load());
   }
 
-  // SingleThreadScope hides the shared pool on this thread only.
+  // SingleThreadScope hides the shared pool on this thread only.  The shared pool's state is in
+  // static members that a Windows DLL does not export, so this part needs the static library there.
+#if !defined(_WIN32) || defined(OHTJ2K_STATIC)
   ThreadPool::retain();
   ThreadPool *shared = ThreadPool::instance(4);
   if (shared == nullptr || ThreadPool::get() != shared) {
@@ -105,6 +107,9 @@ int main() {
     ++failures;
   }
   ThreadPool::release();
+#else
+  std::printf("single-thread scope: not checked with the Windows DLL\n");
+#endif
 
   if (failures == 0) std::printf("threadpool_check: all cases passed\n");
   return failures == 0 ? 0 : 1;
