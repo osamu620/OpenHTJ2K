@@ -323,6 +323,19 @@
   resolution without columns (which a nonzero image origin can produce). It
   now skips the horizontal filter for such rows; the values read never
   reached the codestream.
+- The position-driven progression orders (RPCL, PCRL, CPRL and the Part 2
+  PRCL) failed from 16 DWT levels on. The encoder and the decoder find where
+  a precinct starts from the multiple XRsiz * 2^(PPx + NL - r) (ISO/IEC
+  15444-1 B.12.1.3), which they formed with a 32-bit shift: with maximal
+  precincts (PPx = 15) the shift reached 47 at 32 levels. With a sub-sampled
+  component (XRsiz = 2) both crashed with an integer division by zero
+  (SIGFPE) from 16 levels on; an image wider than 32768 columns (more than
+  one maximal precinct) was rejected from 17 levels on with "attempt to
+  access precinct whose index is out of the valid range", also when the
+  codestream came from another encoder. The multiple is now formed in 64
+  bits. OpenJPEG 2.5.4 decodes the new codestreams (Part 1, 16 to 32 levels)
+  to the input exactly. Codestreams that encoded and decoded before are
+  unchanged.
 
 # [0.24.0] - 2026-11-02
 
