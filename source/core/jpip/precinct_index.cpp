@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 
 #include "codestream.hpp"
 #include "j2kmarkers.hpp"
@@ -18,6 +19,9 @@ namespace {
 
 // ceil(a / b), b > 0, without the overflow of (a + b - 1) / b for a near 2^32.
 inline uint32_t ceil_div_u(uint32_t a, uint32_t b) { return a / b + ((a % b != 0) ? 1u : 0u); }
+
+// Most tile-components an index is built for (65535 tiles x 16 components fit).
+const uint64_t kMaxTileComponents = uint64_t{1} << 20;
 
 // Find the COC marker that overrides component `c`, or nullptr if none.
 const COC_marker *find_coc(const j2k_main_header &mh, uint16_t c) {
@@ -159,6 +163,14 @@ std::unique_ptr<CodestreamIndex> CodestreamIndex::build(const uint8_t *codestrea
 
   const uint64_t total_tc =
       static_cast<uint64_t>(idx->num_tiles()) * idx->num_components_;
+  // The index holds every tile-component up front, about 450 bytes each: the
+  // 65535 tiles and 16384 components a main header may declare would take
+  // hundreds of GB.  Allow what 65535 tiles of 16 components need.
+  if (total_tc > kMaxTileComponents) {
+    throw std::runtime_error("CodestreamIndex::build: " + std::to_string(idx->num_tiles()) + " tiles x "
+                             + std::to_string(idx->num_components_) + " components exceed the "
+                             + std::to_string(kMaxTileComponents) + " tile-components the index supports");
+  }
   idx->tcinfo_.resize(static_cast<std::size_t>(total_tc));
 
   for (uint32_t ty = 0; ty < idx->num_tiles_y_; ++ty) {

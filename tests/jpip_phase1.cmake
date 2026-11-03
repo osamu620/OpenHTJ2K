@@ -141,6 +141,16 @@ foreach(_nl 31 32)
   add_test(NAME jpip_pd_empty_dwt${_nl} COMMAND jpip_partial_decode_check ${_f} --empty 0)
 endforeach()
 
+# The index holds every tile-component up front (about 450 bytes each).  A 144-byte
+# main header with 65535 one-sample tiles and 17 components (1114095 tile-components)
+# made it take 465 MB, and with a few thousand components a 6 KB header asked for
+# tens of GB.  It is rejected above 2^20 tile-components (65535 tiles x 16).
+add_test(NAME jpip_idx_too_many_tile_components
+         COMMAND jpip_index_check ${_JPIP_LEVELS_DIR}/jpip_too_many_tile_components.j2c --total 0)
+set_tests_properties(jpip_idx_too_many_tile_components PROPERTIES
+    PASS_REGULAR_EXPRESSION "65535 tiles x 17 components exceed the 1048576 tile-components"
+    TIMEOUT 60)
+
 
 # ── Asset 1: full-resolution NASA Blue Marble (LRCP, default precincts) ──
 # Each (t, c) → NL+1 = 6 resolutions, each holding exactly one precinct

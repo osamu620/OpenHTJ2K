@@ -350,6 +350,12 @@
 - The precinct index rejects a tile-component with more than 4294967295
   precincts, which its 32-bit precinct numbers cannot count, instead of
   wrapping the numbers around.
+- The precinct index sets up every tile-component of the codestream at once,
+  about 450 bytes each, so a small main header could make a JPIP server or
+  client run out of memory: a 144-byte header with 65535 tiles of 17
+  components took 465 MB, and one with a few thousand components (6 KB)
+  asked for tens of GB. A codestream with more than 1048576 tile-components
+  (65535 tiles of 16 components) is now rejected with an error.
 
 # [0.24.0] - 2026-11-02
 
