@@ -282,6 +282,8 @@
 - Valid codestreams with fewer than 31 DWT levels decode exactly as before.
 
 ### Tools
+- `open_htj2k_dec` exited with status 0 when decoding failed: it printed the
+  error and carried on. It now exits with a non-zero status.
 - `open_htj2k_enc` wrote a JPH file, not a bare codestream, for an output
   file ending in `.jphc`, and refused `.jhc`, the extension its help text
   recommends for a codestream. Both now get the bare codestream. The output

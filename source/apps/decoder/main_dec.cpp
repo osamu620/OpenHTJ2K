@@ -733,6 +733,7 @@ int main(int argc, char *argv[]) {
   // Output file handles (opened lazily on the last iteration's first row).
   std::vector<FILE *> fps;
   bool output_failed = false;  // an output file could not be opened
+  bool decode_failed = false;  // decoding threw: the output is incomplete
   std::vector<uint8_t> row_buf;
   // Per component, as the components can differ in bit depth and signedness: bytes per
   // sample, and the offset added to the samples (PGM: signed to unsigned).
@@ -955,12 +956,14 @@ int main(int argc, char *argv[]) {
           img_width, img_height, img_depth, img_signed);
     } catch (std::exception &exc) {
       printf("ERROR: %s\n", exc.what());
+      decode_failed = true;
+      break;
     }
   }
 
   for (FILE *fp : fps)
     if (fp) fclose(fp);
-  if (output_failed) return EXIT_FAILURE;
+  if (output_failed || decode_failed) return EXIT_FAILURE;
 
   auto duration = std::chrono::high_resolution_clock::now() - start;
   auto count    = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();

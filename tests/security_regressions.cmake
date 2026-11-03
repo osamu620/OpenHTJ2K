@@ -36,12 +36,11 @@ set(_SEC_CRASH_RE
 # strip barrier.  These are scalar prologue guards, so the propagation is
 # platform-independent (not arch-gated).
 #
-# Assertion model: the CLI catches the decode exception and still exits 0, so
-# WILL_FAIL is not usable; instead require the fail-fast propagation message
-# (which appears only once the false return is honoured — a reverted fix prints
-# neither) and reject any crash marker.  The FAIL regex is the load-bearing
-# security assertion — the reported PoC must never stack-smash — and it holds
-# because the block is now rejected instead of decoded.
+# Assertion model: WILL_FAIL would also pass a crash, so require the fail-fast
+# propagation message instead (it appears only once the false return is honoured
+# — a reverted fix prints neither) and reject any crash marker.  The FAIL regex
+# is the load-bearing security assertion — the reported PoC must never
+# stack-smash — and it holds because the block is now rejected instead of decoded.
 add_test(NAME security_ht_segments_overflow
          COMMAND open_htj2k_dec
                  -i ${SECURITY_DATA_DIR}/security_ht_segments_overflow.j2k
@@ -575,3 +574,12 @@ foreach(_t 1 4)
                    "MQ segment length exceeds|decode task failed")
 endforeach()
 
+# The CLI exited 0 after a decode error, so scripts could not tell a failed decode from
+# a good one.  It must now exit non-zero (not crash) and say why.
+add_test(NAME security_dec_cli_exit_code
+         COMMAND ${CMAKE_COMMAND} -DDEC=$<TARGET_FILE:open_htj2k_dec>
+                 -DINPUT=${SECURITY_DATA_DIR}/security_segment_length_bits.j2c
+                 -DOUTPUT=security_dec_cli_exit_code.pgx -DTHREADS=1
+                 "-DEXPECT=segment length of 37 bits" "-DCRASH=${_SEC_CRASH_RE}"
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exit_failure.cmake)
+set_tests_properties(security_dec_cli_exit_code PROPERTIES TIMEOUT 60)
