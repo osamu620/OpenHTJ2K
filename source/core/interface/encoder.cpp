@@ -185,6 +185,21 @@ void check_parameters(const siz_params &siz, const cod_params &cod, const qcd_pa
                                static_cast<unsigned>(c));
     }
   }
+  // ISO/IEC 15444-1, B.12.1.3 and B.12.1.4: "To use this progression, XRsiz and YRsiz values
+  // must be [shall be] powers of two for each component" for RPCL and PCRL (not for CPRL).
+  // The encoder writes no POC marker, so the COD progression order is the only one.
+  if (cod.progression_order == 2 || cod.progression_order == 3) {
+    for (uint16_t c = 0; c < siz.Csiz; ++c) {
+      const unsigned xr = siz.XRsiz[c], yr = siz.YRsiz[c];
+      if ((xr & (xr - 1)) != 0 || (yr & (yr - 1)) != 0) {
+        open_htj2k::detail::fail(
+            "progression order %s needs subsampling factors that are powers of two (ISO/IEC 15444-1, "
+            "B.12.1.%u), but component %u has XRsiz %u and YRsiz %u; CPRL takes any.",
+            cod.progression_order == 2 ? "RPCL" : "PCRL", cod.progression_order == 2 ? 3U : 4U,
+            static_cast<unsigned>(c), xr, yr);
+      }
+    }
+  }
   if (cod.dwt_levels > 32) {
     open_htj2k::detail::fail("the number of DWT levels shall be 0 to 32, not %u.",
                              static_cast<unsigned>(cod.dwt_levels));

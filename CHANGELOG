@@ -295,6 +295,16 @@
 - With the progression order PRCL the encoder wrote a CAP marker without
   setting `Rsiz` bit 14 (CAP marker present) or bit 15 (ISO/IEC 15444-2
   capabilities), so other decoders ignored the marker. Both are now set.
+- The progression orders RPCL and PCRL are now refused, with an exception,
+  when a component's `XRsiz` or `YRsiz` is not a power of two: ISO/IEC 15444-1
+  (B.12.1.3 and B.12.1.4) allows them only with such factors, and other
+  decoders refuse those codestreams. CPRL, LRCP and RLCP take any factors.
+- `invoke_line_based_stream()` wrote past a row buffer when component 0 was
+  subsampled horizontally more than another component (e.g. `XRsiz` 4 for
+  component 0 and 1 for component 1): every component's rows were kept in
+  component 0's width. Each component now has rows of its own width. A tile
+  in which a component has no samples also no longer passes a null row to
+  `memcpy`.
 - With tile size 0 (one tile) and an image origin, the encoder sized the tile
   from the image origin but placed it at the tile origin: with the tile origin
   left at 0, the tile did not reach the image's far edge, which gave extra

@@ -7839,7 +7839,9 @@ uint8_t *j2k_tile::encode_line_based_stream(
     // The colour transforms run in whole vectors from a tile's first column, so they
     // can reach past the image's last column: 32 samples of room.
     const int32_t alloc_w = static_cast<int32_t>(round_up(img_comp_widths[c], 32U) + 32U);
-    const int32_t flt_w   = static_cast<int32_t>(stride);
+    // A component subsampled less than component 0 has wider rows than its stride.
+    const uint32_t wc   = tcomp[c].get_pos1().x - tcomp[c].get_pos0().x;
+    const int32_t flt_w = static_cast<int32_t>(std::max(stride, round_up(wc, 32U)));
     row_scratch.reserve(c, alloc_w, flt_w);
     int_rows[c]   = row_scratch.slots[c].int_row;
     float_rows[c] = row_scratch.slots[c].float_row;
