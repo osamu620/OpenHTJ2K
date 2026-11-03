@@ -4981,9 +4981,10 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     if (c_NL < this->reduce_NL) {
       throw std::runtime_error("Resolution level reduction exceeds the DWT level");
     }
-    // Single-tile reuse: a tile-part header (which the reuse fingerprint does not cover)
-    // can give a frame another number of decomposition levels than the structure was built
-    // for, and the loops below would index past its resolutions.
+    // Single-tile reuse: the decoder rebuilds the structure when a frame's headers differ
+    // from the frame it was built for (header_fingerprint()); should a frame with another
+    // number of decomposition levels still get here, the loops below would index past its
+    // resolutions.
     if (structure_built_ && c_NL + 1U != this->tcomp[c].get_num_resolutions()) {
       open_htj2k::detail::fail(
           "tile %u: component %u has %u decomposition levels in this frame but %u in the frame its "
@@ -5436,6 +5437,15 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   // flag via the public accessor before deciding whether to call
   // prepare_for_next_frame() (reuse) or dec_init() (fresh build).
   structure_built_ = true;
+}
+
+uint64_t j2k_tile::header_fingerprint() const {
+  uint64_t h = kFnv1aBasis;
+  for (const auto &tp : tile_part) {
+    const uint64_t f = tp->header->structure_fingerprint;
+    if (f != kFnv1aBasis) h = fnv1a_bytes(h, reinterpret_cast<const uint8_t *>(&f), sizeof(f));
+  }
+  return h;
 }
 
 void j2k_tile::prepare_for_next_frame() {

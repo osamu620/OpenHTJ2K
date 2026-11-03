@@ -1908,6 +1908,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
   structure_bytes  = 0;
   tile_components_set_up = 0;
   progression_steps      = 0;
+  structure_fingerprint  = kFnv1aBasis;
 
   uint16_t word = in.get_word();
   if (word != _SOC) {
@@ -1915,6 +1916,8 @@ int j2k_main_header::read(j2c_src_memory &in) {
   }
 
   while ((word = in.get_word()) != _SOT) {
+    const uint8_t *const segment = in.get_buf_pos() - 2;  // from the marker code on
+    bool shapes_tiles            = true;
     switch (word) {
       case _SIZ:
         SIZ = MAKE_UNIQUE<SIZ_marker>(in);
@@ -1936,9 +1939,11 @@ int j2k_main_header::read(j2c_src_memory &in) {
         break;
       case _TLM:
         TLM.push_back(MAKE_UNIQUE<TLM_marker>(in));
+        shapes_tiles = false;
         break;
       case _PLM:
         PLM.push_back(MAKE_UNIQUE<PLM_marker>(in));
+        shapes_tiles = false;
         break;
       case _CPF:
         CPF = MAKE_UNIQUE<CPF_marker>(in);
@@ -1966,12 +1971,14 @@ int j2k_main_header::read(j2c_src_memory &in) {
         break;
       case _PPM:
         PPM.push_back(MAKE_UNIQUE<PPM_marker>(in));
+        shapes_tiles = false;
         break;
       case _CRG:
         CRG = MAKE_UNIQUE<CRG_marker>(in);
         break;
       case _COM:
         COM.push_back(MAKE_UNIQUE<COM_marker>(in));
+        shapes_tiles = false;
         break;
       case _DFS:
         DFS.push_back(MAKE_UNIQUE<DFS_marker>(in));
@@ -1980,6 +1987,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
         ATK.push_back(MAKE_UNIQUE<ATK_marker>(in));
         break;
       default:
+        shapes_tiles = false;
         open_htj2k::detail::warn("unknown marker %04X is found in main header", word);
         // Skip the marker segment by its length (Lmar) so parsing resumes at
         // the next marker instead of scanning byte-by-byte.  Reserved
@@ -1990,6 +1998,10 @@ int j2k_main_header::read(j2c_src_memory &in) {
           if (Lunk >= 2U) in.forward_Nbytes(static_cast<uint32_t>(Lunk - 2U));
         }
         break;
+    }
+    if (shapes_tiles) {
+      structure_fingerprint =
+          fnv1a_bytes(structure_fingerprint, segment, static_cast<size_t>(in.get_buf_pos() - segment));
     }
   }
   // SIZ, COD and QCD are required in the main header (ISO/IEC 15444-1, Table A.2).
@@ -2097,7 +2109,10 @@ j2k_tilepart_header::j2k_tilepart_header(uint16_t nc) {
 uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
   uint16_t word;
   uint32_t length_of_tilepart_markers = 2U + this->SOT.get_length() + 2U;  // SOT + Lsot + SOD;
+  structure_fingerprint               = kFnv1aBasis;
   while ((word = in.get_word()) != _SOD) {
+    const uint8_t *const segment = in.get_buf_pos() - 2;  // from the marker code on
+    bool shapes_tile             = true;
     switch (word) {
       case _COD:
         this->COD = MAKE_UNIQUE<COD_marker>(in);
@@ -2110,6 +2125,7 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
       case _PLT:
         this->PLT.push_back(MAKE_UNIQUE<PLT_marker>(in));
         length_of_tilepart_markers += this->PLT[this->PLT.size() - 1]->get_length() + 2U;
+        shapes_tile = false;
         break;
       case _QCD:
         this->QCD = MAKE_UNIQUE<QCD_marker>(in);
@@ -2130,12 +2146,15 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
       case _PPT:
         this->PPT.push_back(MAKE_UNIQUE<PPT_marker>(in));
         length_of_tilepart_markers += this->PPT[this->PPT.size() - 1]->get_length() + 2U;
+        shapes_tile = false;
         break;
       case _COM:
         this->COM.push_back(MAKE_UNIQUE<COM_marker>(in));
         length_of_tilepart_markers += this->COM[this->COM.size() - 1]->get_length() + 2U;
+        shapes_tile = false;
         break;
       default:
+        shapes_tile = false;
         open_htj2k::detail::warn(
             "unknown marker %04X is found in tile-part header of tile %d and tile-part %d.", word,
             this->SOT.get_tile_index(), this->SOT.get_tile_part_index());
@@ -2149,6 +2168,10 @@ uint32_t j2k_tilepart_header::read(j2c_src_memory &in) {
           length_of_tilepart_markers += Lunk;  // Lmar = length field + body
         }
         break;
+    }
+    if (shapes_tile) {
+      structure_fingerprint =
+          fnv1a_bytes(structure_fingerprint, segment, static_cast<size_t>(in.get_buf_pos() - segment));
     }
   }
   return length_of_tilepart_markers;
