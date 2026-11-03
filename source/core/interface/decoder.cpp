@@ -365,8 +365,9 @@ void openhtj2k_decoder_impl::parse() {
     element_siz siz, Osiz, Rsiz;
     main_header.SIZ->get_image_size(siz);
     main_header.SIZ->get_image_origin(Osiz);
-    std::vector<uint32_t> yr(main_header.SIZ->get_num_components());
-    for (uint16_t c = 0; c < yr.size(); ++c) {
+    const uint16_t num_components = main_header.SIZ->get_num_components();
+    std::vector<uint32_t> yr(num_components);
+    for (uint16_t c = 0; c < num_components; ++c) {
       main_header.SIZ->get_subsampling_factor(Rsiz, c);
       yr[c] = Rsiz.y;
     }
