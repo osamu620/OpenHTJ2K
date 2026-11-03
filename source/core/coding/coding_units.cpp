@@ -1489,12 +1489,7 @@ static void enc_overlap_dispatch(fdwt_level_sink_ctx *c, int32_t br) {
   if (c->enc_epc->rc != nullptr) rc_measure(c->enc_epc, rc_from);
 }
 
-// ceil(a / 2^n), a coordinate of a resolution n levels down (B-14).  n reaches 32 at
-// the lowest resolution of a 32-level transform, past what a 32-bit shift allows.
-static inline uint32_t ceil_div_pow2(uint32_t a, uint32_t n) {
-  if (n >= 32) return (a != 0) ? 1U : 0U;
-  return ceil_int(a, 1U << n);
-}
+// ceil_div_pow2(a, n), ceil(a / 2^n) for any n, is in utils.hpp.
 
 // Whether the position-driven progressions (RPCL, PCRL, CPRL, PRCL) visit a precinct of a
 // resolution at reference-grid coordinate p (B.12.1.3 to B.12.1.5): p is a multiple of

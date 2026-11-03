@@ -110,6 +110,37 @@ add_test(NAME jpip_pd_identity_ht_01
 add_test(NAME jpip_pd_empty_ht_01
          COMMAND jpip_partial_decode_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k --empty 4)
 
+# ── 31 and 32 DWT levels, the most the spec allows ──
+# The precinct index and the view-window resolver divide coordinates by
+# 2^(NL - r) and 2^r*, which reach 2^32, where a 32-bit shift is undefined (the
+# UBSan CI job reports it; some builds divided by 1 instead).
+# dwt31_levels.j2c / dwt32_levels.j2c (tests/data, 61 x 47, one component,
+# maximal precincts) have one precinct per resolution: NL + 1 in all.
+#   down 1x1  r* = 6 (61 x 47 -> 1 x 1): resolutions 0 .. NL - 6 remain.
+#   up 1x1    r* = NL: only the LL resolution remains.
+#   up 2x2    r* = 5 (2 x 2 is the smallest frame of at least 2 x 2).  An old
+#             build that divided by 1 at r = 32 took r* = 32 here.
+#   closest   r* = 6, the first discard level whose frame is 1 x 1.
+#   offset    an offset beyond the canvas on the r* = 5 grid (2^27 + 1 times 32
+#             overflowed 32 bits back into the image): no precinct.
+set(_JPIP_LEVELS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/data)
+foreach(_nl 31 32)
+  set(_f ${_JPIP_LEVELS_DIR}/dwt${_nl}_levels.j2c)
+  math(EXPR _all "${_nl} + 1")
+  math(EXPR _down "${_nl} - 5")
+  math(EXPR _up2 "${_nl} - 4")
+  add_test(NAME jpip_idx_dwt${_nl}_total COMMAND jpip_index_check ${_f} --total ${_all})
+  add_test(NAME jpip_vw_dwt${_nl}_full COMMAND jpip_index_check ${_f} --vw 61,47,0,0,61,47=${_all})
+  add_test(NAME jpip_vw_dwt${_nl}_down COMMAND jpip_index_check ${_f} --vw 1,1,0,0,1,1,down=${_down})
+  add_test(NAME jpip_vw_dwt${_nl}_up COMMAND jpip_index_check ${_f} --vw 1,1,0,0,1,1,up=1)
+  add_test(NAME jpip_vw_dwt${_nl}_up2 COMMAND jpip_index_check ${_f} --vw 2,2,0,0,1,1,up=${_up2})
+  add_test(NAME jpip_vw_dwt${_nl}_closest COMMAND jpip_index_check ${_f} --vw 1,1,0,0,1,1=${_down})
+  add_test(NAME jpip_vw_dwt${_nl}_offset COMMAND jpip_index_check ${_f} --vw 2,2,134217729,0,1,1,up=0)
+  add_test(NAME jpip_precinct_dwt${_nl} COMMAND jpip_precinct_check ${_f})
+  add_test(NAME jpip_pd_identity_dwt${_nl} COMMAND jpip_partial_decode_check ${_f} --identity)
+  add_test(NAME jpip_pd_empty_dwt${_nl} COMMAND jpip_partial_decode_check ${_f} --empty 0)
+endforeach()
+
 
 # ── Asset 1: full-resolution NASA Blue Marble (LRCP, default precincts) ──
 # Each (t, c) → NL+1 = 6 resolutions, each holding exactly one precinct

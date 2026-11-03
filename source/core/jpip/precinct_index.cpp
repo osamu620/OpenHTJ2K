@@ -16,6 +16,9 @@ namespace jpip {
 
 namespace {
 
+// ceil(a / b), b > 0, without the overflow of (a + b - 1) / b for a near 2^32.
+inline uint32_t ceil_div_u(uint32_t a, uint32_t b) { return a / b + ((a % b != 0) ? 1u : 0u); }
+
 // Find the COC marker that overrides component `c`, or nullptr if none.
 const COC_marker *find_coc(const j2k_main_header &mh, uint16_t c) {
   for (const auto &coc : mh.COC) {
@@ -35,10 +38,10 @@ void build_tile_component(j2k_main_header &mh, uint16_t c,
   // marker classes, so we accept a non-const main_header here.
   element_siz sub;
   mh.SIZ->get_subsampling_factor(sub, c);
-  const uint32_t tc_x0 = ceil_int(tile_x0, sub.x);
-  const uint32_t tc_y0 = ceil_int(tile_y0, sub.y);
-  const uint32_t tc_x1 = ceil_int(tile_x1, sub.x);
-  const uint32_t tc_y1 = ceil_int(tile_y1, sub.y);
+  const uint32_t tc_x0 = ceil_div_u(tile_x0, sub.x);
+  const uint32_t tc_y0 = ceil_div_u(tile_y0, sub.y);
+  const uint32_t tc_x1 = ceil_div_u(tile_x1, sub.x);
+  const uint32_t tc_y1 = ceil_div_u(tile_y1, sub.y);
 
   COC_marker *coc = const_cast<COC_marker *>(find_coc(mh, c));
   const uint8_t NL_tc =
@@ -57,13 +60,15 @@ void build_tile_component(j2k_main_header &mh, uint16_t c,
   out.tc_pos1.x = tc_x1;
   out.tc_pos1.y = tc_y1;
 
-  uint32_t cumulative = 0;
+  uint64_t cumulative = 0;
   for (uint8_t r = 0; r <= NL_tc; ++r) {
-    const uint32_t scale = 1u << (NL_tc - r);
-    const uint32_t respos0_x = ceil_int(tc_x0, scale);
-    const uint32_t respos0_y = ceil_int(tc_y0, scale);
-    const uint32_t respos1_x = ceil_int(tc_x1, scale);
-    const uint32_t respos1_y = ceil_int(tc_y1, scale);
+    // Resolution r lies NL_tc - r levels down, which reaches 32 with 32 DWT
+    // levels: no 32-bit shift by it.
+    const uint32_t depth     = static_cast<uint32_t>(NL_tc - r);
+    const uint32_t respos0_x = ceil_div_pow2(tc_x0, depth);
+    const uint32_t respos0_y = ceil_div_pow2(tc_y0, depth);
+    const uint32_t respos1_x = ceil_div_pow2(tc_x1, depth);
+    const uint32_t respos1_y = ceil_div_pow2(tc_y1, depth);
 
     element_siz log2PP;
     if (coc) {
@@ -71,24 +76,28 @@ void build_tile_component(j2k_main_header &mh, uint16_t c,
     } else {
       mh.COD->get_precinct_size(log2PP, r);
     }
-    const uint32_t PPx = 1u << log2PP.x;
-    const uint32_t PPy = 1u << log2PP.y;
 
-    const uint32_t npw =
-        (respos1_x > respos0_x) ? (ceil_int(respos1_x, PPx) - respos0_x / PPx) : 0u;
-    const uint32_t nph =
-        (respos1_y > respos0_y) ? (ceil_int(respos1_y, PPy) - respos0_y / PPy) : 0u;
+    const uint32_t npw = (respos1_x > respos0_x)
+                             ? (ceil_div_pow2(respos1_x, log2PP.x) - floor_div_pow2(respos0_x, log2PP.x))
+                             : 0u;
+    const uint32_t nph = (respos1_y > respos0_y)
+                             ? (ceil_div_pow2(respos1_y, log2PP.y) - floor_div_pow2(respos0_y, log2PP.y))
+                             : 0u;
 
     out.npw[r]       = npw;
     out.nph[r]       = nph;
-    out.s_offset[r]  = cumulative;
+    out.s_offset[r]  = static_cast<uint32_t>(cumulative);
     out.log2PPx[r]   = static_cast<uint8_t>(log2PP.x);
     out.log2PPy[r]   = static_cast<uint8_t>(log2PP.y);
     out.respos0_x[r] = respos0_x;
     out.respos0_y[r] = respos0_y;
-    cumulative += npw * nph;
+    cumulative += uint64_t{npw} * nph;
+    // Precinct indices and sequence numbers are 32-bit (B.6, A.3.2.1).
+    if (cumulative > UINT32_MAX) {
+      throw std::runtime_error("CodestreamIndex::build: too many precincts in a tile-component");
+    }
   }
-  out.total = cumulative;
+  out.total = static_cast<uint32_t>(cumulative);
 }
 
 }  // namespace
@@ -155,10 +164,15 @@ std::unique_ptr<CodestreamIndex> CodestreamIndex::build(const uint8_t *codestrea
   for (uint32_t ty = 0; ty < idx->num_tiles_y_; ++ty) {
     for (uint32_t tx = 0; tx < idx->num_tiles_x_; ++tx) {
       const uint32_t t = ty * idx->num_tiles_x_ + tx;
-      const uint32_t tile_x0 = std::max(torigin.x + tx * tsize.x, origin.x);
-      const uint32_t tile_y0 = std::max(torigin.y + ty * tsize.y, origin.y);
-      const uint32_t tile_x1 = std::min(torigin.x + (tx + 1) * tsize.x, canvas.x);
-      const uint32_t tile_y1 = std::min(torigin.y + (ty + 1) * tsize.y, canvas.y);
+      // 64 bits: the end of the last tile may lie past 2^32.
+      const uint32_t tile_x0 =
+          static_cast<uint32_t>(std::max<uint64_t>(torigin.x + uint64_t{tx} * tsize.x, origin.x));
+      const uint32_t tile_y0 =
+          static_cast<uint32_t>(std::max<uint64_t>(torigin.y + uint64_t{ty} * tsize.y, origin.y));
+      const uint32_t tile_x1 =
+          static_cast<uint32_t>(std::min<uint64_t>(torigin.x + (tx + uint64_t{1}) * tsize.x, canvas.x));
+      const uint32_t tile_y1 =
+          static_cast<uint32_t>(std::min<uint64_t>(torigin.y + (ty + uint64_t{1}) * tsize.y, canvas.y));
       for (uint16_t c = 0; c < idx->num_components_; ++c) {
         build_tile_component(mh, c, tile_x0, tile_y0, tile_x1, tile_y1,
                              idx->tcinfo_[static_cast<std::size_t>(t) *
