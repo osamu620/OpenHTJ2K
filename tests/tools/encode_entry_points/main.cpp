@@ -24,9 +24,9 @@
 // points must hold the raw Part 1 codestream after the expected boxes and decode
 // to the input; JP2 must refuse HT code-blocks and Part 2 capabilities; JPH set
 // that way must equal the constructor's JPH.  First of all, a small image with
-// 20 and 30 DWT levels: the quantization step sizes once took memory doubling
-// with every level, so the 20-level encode must stay small (where the peak
-// memory can be read) before the 30-level ones run.
+// 20 and 30 to 32 DWT levels: the quantization step sizes once took memory
+// doubling with every level, so the 20-level encode must stay small (where the
+// peak memory can be read) before the deeper ones run.
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
@@ -437,8 +437,9 @@ int main(int argc, char *argv[]) {
 
   // Deep decompositions, run first while the peak memory is still low.  The step
   // sizes once took memory doubling with every DWT level (about 0.5 GB at 20
-  // levels, all of a 91 GB machine before 32), so the 30-level cases run only when
-  // the 20-level encodes stayed small, or where the peak memory cannot be read.
+  // levels, all of a 91 GB machine before 32), so the 30- to 32-level cases run
+  // only when the 20-level encodes stayed small, or where the peak memory cannot
+  // be read.
   // The 5-level encodes first take the memory any encode does (per-thread scratch).
   {
     for (uint8_t xf = 0; xf < 2; ++xf)
@@ -453,12 +454,16 @@ int main(int argc, char *argv[]) {
       ++failed;
       printf(
           "FAIL 20 DWT levels: peak memory grew by %.0f MiB (at most 64 expected); "
-          "30 levels skipped\n",
+          "30 to 32 levels skipped\n",
           grown);
     } else {
-      for (auto &cp : {Comp{1, 0}, Comp{3, 1}})
-        for (uint8_t xf = 0; xf < 2; ++xf)
-          run(Case{61, 47, cp.nc, cp.mct, xf, 30, 8, false}, Layout{0, 0, 0, 0}, 0, false);
+      // Up to the 32 levels the standard allows: 31 and 32 index the per-resolution
+      // arrays at their ends, and 32 levels divide the lowest resolution by 2^32.
+      const uint8_t deep_levels[] = {30, 31, 32};
+      for (uint8_t lv : deep_levels)
+        for (auto &cp : {Comp{1, 0}, Comp{3, 1}})
+          for (uint8_t xf = 0; xf < 2; ++xf)
+            run(Case{61, 47, cp.nc, cp.mct, xf, lv, 8, false}, Layout{0, 0, 0, 0}, 0, false);
     }
   }
 
