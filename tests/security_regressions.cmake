@@ -658,3 +658,7 @@ _sec_rejects(security_poc_steps_budget security_poc_steps_budget.j2c
              "its packet progressions would take more than .* not supported" mt)
 _sec_rejects(security_tile_components_count security_tile_components_count.j2c
              "sets up more than 1048576 tile-components .* not supported" mt)
+# The progression steps are counted tile by tile, so the first file is refused only
+# after many of its tiles are set up: 2-5 s on Linux CI, 21-27 s (once over 30) on the
+# macOS x86-64 runners.
+set_tests_properties(security_poc_steps_budget security_poc_steps_budget_mt PROPERTIES TIMEOUT 120)
