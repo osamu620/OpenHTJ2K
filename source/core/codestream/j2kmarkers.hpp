@@ -37,6 +37,17 @@
 #include "visual_weighting.hpp"
 
 namespace open_htj2k {
+// FNV-1a over bytes, continuing from h (start from kFnv1aBasis): the decoder's single-tile
+// reuse fingerprint of the marker segments that shape a tile (see
+// j2k_main_header::structure_fingerprint).
+constexpr uint64_t kFnv1aBasis = 14695981039346656037ull;
+inline uint64_t fnv1a_bytes(uint64_t h, const uint8_t *p, size_t n) {
+  for (size_t i = 0; i < n; ++i) {
+    h ^= p[i];
+    h *= 1099511628211ull;
+  }
+  return h;
+}
 
 /********************************************************************************
  * j2k_marker_io_base
@@ -549,6 +560,11 @@ class j2k_main_header {
   // progressions (j2k_tile::create_tile_buf() keeps both under a bound).
   uint64_t tile_components_set_up = 0;
   uint64_t progression_steps      = 0;
+  // FNV-1a hash of the bytes of every marker segment read() parsed except TLM, PLM, PPM
+  // and COM (lengths, packet headers and comments, which change from frame to frame
+  // without changing the tiles' structure).  The single-tile reuse path keeps a tile's
+  // structure only while this, and the tile-part headers' structure_fingerprint, match.
+  uint64_t structure_fingerprint = kFnv1aBasis;
 
  public:
   j2k_main_header();
@@ -582,6 +598,9 @@ class j2k_tilepart_header {
   std::vector<std::unique_ptr<PPT_marker>> PPT;
   std::vector<std::unique_ptr<PLT_marker>> PLT;
   std::vector<std::unique_ptr<COM_marker>> COM;
+  // FNV-1a hash of the bytes of the COD, COC, QCD, QCC, RGN and POC segments read() parsed
+  // (kFnv1aBasis when there are none); see j2k_main_header::structure_fingerprint.
+  uint64_t structure_fingerprint = kFnv1aBasis;
 
  public:
   explicit j2k_tilepart_header(uint16_t nc);

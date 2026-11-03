@@ -128,11 +128,11 @@ class openhtj2k_decoder {
   // has been set, consecutive calls reuse the decoded tile tree (codeblock
   // allocations, precinct tagtrees, line-decode ring buffers) so per-frame
   // init cost is proportional to the new bitstream's packet headers instead
-  // of to a full tile rebuild.  Only valid for codestreams whose main-header
-  // bytes (SIZ/COD/COC/QCD/QCC/RGN) are byte-identical across calls — a
-  // fingerprint check invalidates the cache automatically when that changes.
-  // Falls through to invoke_line_based_stream() for the first call after a
-  // cache invalidation or when reuse is disabled.
+  // of to a full tile rebuild.  Frames may differ in their coding parameters:
+  // the tree is rebuilt for a frame whose main-header or tile-part-header marker
+  // segments (all but TLM, PLM, PPM, PLT, PPT and COM) or resolution reduction
+  // differ from those of the last frame decoded.  Multi-tile codestreams, and
+  // calls with reuse disabled, go through invoke_line_based_stream().
   OPENHTJ2K_EXPORT void invoke_line_based_stream_reuse(
       std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb,
       std::vector<uint32_t> &width, std::vector<uint32_t> &height, std::vector<uint8_t> &depth,

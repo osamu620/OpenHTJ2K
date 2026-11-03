@@ -26,6 +26,13 @@ add_subdirectory(tests/tools/stream_rows_check)
 target_include_directories(stream_rows_check PUBLIC source/core/interface)
 target_link_libraries(stream_rows_check PUBLIC open_htj2k PRIVATE openhtj2k_internal)
 
+# reuse_switch_check: the single-tile reuse path when the coding parameters change
+# between frames
+add_executable(reuse_switch_check)
+add_subdirectory(tests/tools/reuse_switch_check)
+target_include_directories(reuse_switch_check PUBLIC source/core/interface)
+target_link_libraries(reuse_switch_check PUBLIC open_htj2k PRIVATE openhtj2k_internal)
+
 # concurrent_instances: many decoder/encoder instances running at once on the
 # shared worker pool (instance lifetime + per-thread encoder scratch)
 if(Threads_FOUND AND NOT EMSCRIPTEN)

@@ -1067,6 +1067,10 @@ class j2k_tile : public j2k_tile_base {
   // cached tile is in "tree is allocated" state (= reuse path) or not (=
   // still a fresh j2k_tile that has never seen a codestream).
   OPENHTJ2K_NODISCARD bool is_structure_built() const { return structure_built_; }
+  // Single-tile reuse: a hash of the structure-shaping marker segments of the tile-part
+  // headers read so far (j2k_tilepart_header::structure_fingerprint, of those that have
+  // any, in order); kFnv1aBasis when none has.
+  OPENHTJ2K_NODISCARD uint64_t header_fingerprint() const;
   // Install (or clear, via an empty std::function) a JPIP precinct filter.
   // The filter is consulted once per packet in read_packet(); a false
   // return causes the body bytes to be dropped via skip_compressed_buffer

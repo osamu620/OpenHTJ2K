@@ -99,12 +99,15 @@ class openhtj2k_decoder_impl {
   // keeps the decoded tile alive across calls so the next frame can reuse
   // every aligned allocation hanging off tcomp[] → resolution[] → precinct[]
   // → j2k_codeblock (compressed buffers, tagtrees, ring buffers, line_dec
-  // sub-objects).  Only valid when the main-header marker bytes are byte-
-  // identical across frames; cached_header_fingerprint_ is the FNV-1a hash
-  // of SIZ/COD/COC/QCD/QCC/RGN used as the cache-validity check.
+  // sub-objects).  The structure is kept while the frames' headers describe the
+  // same one (read_reuse_tile()): cached_main_fingerprint_ is the hash of the
+  // structure-shaping main-header marker segments and the resolution reduction,
+  // cached_tile_fingerprint_ that of the tile-part headers, of the last frame
+  // decoded on it (0 when none was).
   bool single_tile_reuse_enabled_      = false;
   std::vector<j2k_tile> cached_tileSet_;
-  uint64_t cached_header_fingerprint_  = 0;
+  uint64_t cached_main_fingerprint_ = 0;
+  uint64_t cached_tile_fingerprint_ = 0;
 
   // JPIP partial-decode filter: invoked per-packet during every subsequent
   // invoke*() call, once per (t, c, r, p_rc).  An empty std::function means
@@ -174,6 +177,21 @@ class openhtj2k_decoder_impl {
 
   // Analogous to install_precinct_filter but for the packet observer.
   void install_packet_observer(j2k_tile &tile, uint16_t tile_idx);
+
+  // Single-tile reuse: sets up cached_tileSet_[0] for this frame, reads its tile-parts and
+  // creates its tile buffer, keeping the structure of the last frame decoded when this
+  // frame's headers describe the same one and building it afresh otherwise.  The cache
+  // counts as holding no decoded frame until the caller records the returned fingerprints
+  // after decoding.
+  struct reuse_fingerprints {
+    uint64_t main_header, tile_parts;
+  };
+  reuse_fingerprints read_reuse_tile(const char *entry_point);
+  void drop_reuse_cache() {
+    cached_tileSet_.clear();
+    cached_main_fingerprint_ = 0;
+    cached_tile_fingerprint_ = 0;
+  }
 
   // The decoders reconstruct samples, add the DC offset and clamp in 32-bit integers and
   // hand out int32_t samples (ISO/IEC 15444-1 allows up to 38 bits).  That leaves room
@@ -851,8 +869,7 @@ void openhtj2k_decoder_impl::enable_single_tile_reuse(bool on) {
   single_tile_reuse_enabled_ = on;
   if (!on) {
     // Drop the cache so the next call starts from a clean slate.
-    cached_tileSet_.clear();
-    cached_header_fingerprint_ = 0;
+    drop_reuse_cache();
   }
 }
 
@@ -916,6 +933,82 @@ void openhtj2k_decoder_impl::install_packet_observer(j2k_tile &tile, uint16_t ti
   }
 }
 
+// What a cached single-tile structure depends on: the main header's structure-shaping
+// marker segments (j2k_main_header::structure_fingerprint), the resolution reduction, for
+// which the line decoders are sized, and the tile-part headers' structure-shaping marker
+// segments (j2k_tile::header_fingerprint()), which are known only once the tile-parts are
+// read.  A frame that differs in any of them is decoded with a structure built for it.
+openhtj2k_decoder_impl::reuse_fingerprints openhtj2k_decoder_impl::read_reuse_tile(
+    const char *entry_point) {
+  reuse_fingerprints fp;
+  fp.main_header = fnv1a_bytes(main_header.structure_fingerprint, &reduce_NL, sizeof(reduce_NL));
+  const bool main_header_hit = !cached_tileSet_.empty() && cached_tileSet_[0].is_structure_built()
+                               && cached_main_fingerprint_ == fp.main_header;
+  const uint64_t cached_tile_parts = cached_tile_fingerprint_;
+  // Until this frame is decoded the cache holds no decoded frame: a frame that fails
+  // part-way must not leave a structure built for it under the last frame's fingerprints.
+  cached_main_fingerprint_ = 0;
+  cached_tile_fingerprint_ = 0;
+
+  auto start_afresh = [this]() {
+    if (!cached_tileSet_.empty()) cached_tileSet_[0].destroy();  // gives its budget back
+    cached_tileSet_.clear();
+    cached_tileSet_.resize(1);
+    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
+  };
+  const uint32_t first_tile_part = in.get_pos();
+  const uint32_t tile_parts_read = main_header.num_tile_parts_read;
+  auto read_tile_parts           = [&]() {
+    uint16_t word;
+    SOT_marker tmpSOT;
+    while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
+      if (word != _SOT) {
+        open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
+      }
+      tmpSOT = SOT_marker(in);
+      if (tmpSOT.get_tile_index() != 0) {
+        throw std::runtime_error(std::string("openhtj2k_decoder_impl::") + entry_point
+                                           + " expected a single-tile codestream (tile_index != 0 found)");
+      }
+      cached_tileSet_[0].add_tile_part(tmpSOT, in, main_header);
+    }
+  };
+
+  try {
+    if (main_header_hit) {
+      cached_tileSet_[0].prepare_for_next_frame();
+      // dec_init is a scalar-only update that's safe to call repeatedly; calling it
+      // ensures tile.index / num_components / CCap15 / reduce_NL track the new frame.
+      cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
+    } else {
+      start_afresh();
+    }
+    read_tile_parts();
+    fp.tile_parts = cached_tileSet_[0].header_fingerprint();
+    if (main_header_hit && fp.tile_parts != cached_tile_parts) {
+      // A tile-part header describes another structure: build it afresh, reading the
+      // tile-parts again.
+      start_afresh();
+      in.set_pos(first_tile_part);
+      main_header.num_tile_parts_read = tile_parts_read;
+      read_tile_parts();
+    }
+
+    // Flip persistence on tile_components BEFORE the decode call so
+    // finalize_line_decode inside it skips teardown.
+    cached_tileSet_[0].set_line_decode_persistent_all(true);
+    cached_tileSet_[0].line_based_decode = true;
+    install_precinct_filter(cached_tileSet_[0], 0);
+    install_packet_observer(cached_tileSet_[0], 0);
+    cached_tileSet_[0].create_tile_buf(main_header);
+  } catch (std::exception &) {
+    // The cached tile is likely in a bad state: drop it and rethrow.
+    drop_reuse_cache();
+    throw;
+  }
+  return fp;
+}
+
 // Single-tile reuse entry point.  Mirrors the single-tile fast path of
 // invoke_line_based_stream (numTiles.x == 1 branch) but keeps the j2k_tile
 // parked on cached_tileSet_ so the next call skips create_resolutions,
@@ -955,90 +1048,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
   // JPEG 2000 encoders — falls through to the legacy path.  The cache is
   // dropped to prevent us from mixing shapes across calls.
   if (numTiles.x != 1 || numTiles.y != 1) {
-    cached_tileSet_.clear();
-    cached_header_fingerprint_ = 0;
+    drop_reuse_cache();
     invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
     return;
-  }
-
-  // Compute a fingerprint of the marker segments that the tile tree is
-  // structurally sensitive to.  SIZ/COD/COC/QCD/QCC/RGN cover every field
-  // read by create_resolutions / create_subbands / create_precincts; if
-  // any of their encoded bytes change, we must drop the cache.  The
-  // fingerprint is a cheap FNV-1a over the marker's get_length() /
-  // parameter-derived values obtained from the parsed main_header —
-  // computing over the raw bytes would require keeping a copy of the
-  // codestream prefix, which is overkill for a safety check.
-  auto fnv1a_u64 = [](uint64_t h, const void *data, size_t len) {
-    const uint8_t *p = static_cast<const uint8_t *>(data);
-    for (size_t i = 0; i < len; ++i) {
-      h ^= p[i];
-      h *= 1099511628211ull;
-    }
-    return h;
-  };
-  uint64_t fp = 14695981039346656037ull;  // FNV-1a offset basis
-  auto mix_u64 = [&](uint64_t v) {
-    fp = fnv1a_u64(fp, &v, sizeof(v));
-  };
-  {
-    element_siz s_siz, s_osiz, s_tsiz, s_tosiz;
-    main_header.SIZ->get_image_size(s_siz);
-    main_header.SIZ->get_image_origin(s_osiz);
-    main_header.SIZ->get_tile_size(s_tsiz);
-    main_header.SIZ->get_tile_origin(s_tosiz);
-    const uint16_t ncomp = main_header.SIZ->get_num_components();
-    mix_u64((static_cast<uint64_t>(s_siz.x)  << 32) | s_siz.y);
-    mix_u64((static_cast<uint64_t>(s_osiz.x) << 32) | s_osiz.y);
-    mix_u64((static_cast<uint64_t>(s_tsiz.x) << 32) | s_tsiz.y);
-    mix_u64((static_cast<uint64_t>(s_tosiz.x)<< 32) | s_tosiz.y);
-    mix_u64(ncomp);
-    for (uint16_t c = 0; c < ncomp; ++c) {
-      element_siz sub;
-      const uint8_t bd = main_header.SIZ->get_bitdepth(c);
-      const bool    sn = main_header.SIZ->is_signed(c);
-      main_header.SIZ->get_subsampling_factor(sub, c);
-      mix_u64((static_cast<uint64_t>(bd) << 56)
-              | (static_cast<uint64_t>(sn ? 1 : 0) << 48)
-              | (static_cast<uint64_t>(sub.x) << 16)
-              | static_cast<uint64_t>(sub.y));
-    }
-    if (main_header.COD != nullptr) {
-      const uint8_t  dl  = main_header.COD->get_dwt_levels();
-      const uint8_t  po  = main_header.COD->get_progression_order();
-      const uint16_t nl  = main_header.COD->get_number_of_layers();
-      const uint8_t  mct = main_header.COD->use_color_trafo();
-      const uint8_t  cm  = main_header.COD->get_Cmodes();
-      const uint8_t  tx  = main_header.COD->get_transformation();
-      element_siz    cbsz; main_header.COD->get_codeblock_size(cbsz);
-      mix_u64((static_cast<uint64_t>(dl) << 56) | (static_cast<uint64_t>(po) << 48)
-              | (static_cast<uint64_t>(nl) << 32)
-              | (static_cast<uint64_t>(mct) << 24) | (static_cast<uint64_t>(cm) << 16)
-              | static_cast<uint64_t>(tx));
-      mix_u64((static_cast<uint64_t>(cbsz.x) << 32) | cbsz.y);
-      for (uint8_t r = 0; r <= dl; ++r) {
-        element_siz pp; main_header.COD->get_precinct_size(pp, r);
-        mix_u64((static_cast<uint64_t>(pp.x) << 32) | pp.y);
-      }
-    }
-    if (main_header.QCD != nullptr) {
-      const uint8_t qs = main_header.QCD->get_quantization_style();
-      const uint8_t gb = main_header.QCD->get_number_of_guardbits();
-      const uint16_t n0 = main_header.QCD->get_num_entries();
-      mix_u64((static_cast<uint64_t>(qs) << 16) | (static_cast<uint64_t>(gb) << 8)
-              | static_cast<uint64_t>(n0));
-      if (n0 > 0) {
-        const uint8_t  e0 = main_header.QCD->get_exponents(0);
-        const uint16_t m0 = main_header.QCD->get_mantissas(0);
-        mix_u64((static_cast<uint64_t>(e0) << 16) | m0);
-      }
-    }
-    // COC / QCC / RGN lists: hash the count only.  rtp_recv streams do not
-    // use per-component overrides or region-of-interest, so any non-zero
-    // count is an unexpected-shape signal that invalidates the cache.
-    mix_u64(static_cast<uint64_t>(main_header.COC.size()));
-    mix_u64(static_cast<uint64_t>(main_header.QCC.size()));
-    mix_u64(static_cast<uint64_t>(main_header.RGN.size()));
   }
 
   // Populate the output metadata vectors the same way the legacy path does.
@@ -1060,66 +1072,13 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }
 
-  // Cache hit if: we have a cached tile whose tree is built AND whose
-  // fingerprint matches the current frame's main-header.  Otherwise drop
-  // the cache and treat this frame as a first frame.
-  const bool cache_hit = !cached_tileSet_.empty()
-                         && cached_tileSet_[0].is_structure_built()
-                         && cached_header_fingerprint_ == fp;
-  if (!cache_hit) {
-    cached_tileSet_.clear();
-    cached_tileSet_.resize(1);
-    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
-  } else {
-    cached_tileSet_[0].prepare_for_next_frame();
-    // dec_init is a scalar-only update that's safe to call repeatedly;
-    // calling it ensures tile.index / num_components / CCap15 / reduce_NL
-    // track any ABI-compatible main-header tweaks (same fingerprint).
-    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
-  }
-
-  // Read tile-parts from the current bitstream into the cached (or fresh) tile.
-  {
-    uint16_t word;
-    SOT_marker tmpSOT;
-    while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
-      if (word != _SOT) {
-        open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
-      }
-      tmpSOT = SOT_marker(in);
-      const uint16_t tile_index = tmpSOT.get_tile_index();
-      if (tile_index != 0) {
-        throw std::runtime_error(
-            "openhtj2k_decoder_impl::invoke_line_based_stream_reuse expected a "
-            "single-tile codestream (tile_index != 0 found)");
-      }
-      cached_tileSet_[0].add_tile_part(tmpSOT, in, main_header);
-    }
-  }
-
-  // Flip persistence on tile_components BEFORE decode_line_based_stream so
-  // finalize_line_decode inside the decode call skips teardown.  On the
-  // first frame this is the point at which the flag starts holding true;
-  // on subsequent frames prepare_for_next_frame already set it.
-  cached_tileSet_[0].set_line_decode_persistent_all(true);
-
-  try {
-    cached_tileSet_[0].line_based_decode = true;
-    install_precinct_filter(cached_tileSet_[0], 0);
-    install_packet_observer(cached_tileSet_[0], 0);
-    cached_tileSet_[0].create_tile_buf(main_header);
-  } catch (std::exception &) {
-    // On a create_tile_buf failure the cache is likely in a bad state —
-    // drop it and rethrow.
-    cached_tileSet_.clear();
-    cached_header_fingerprint_ = 0;
-    throw;
-  }
+  const reuse_fingerprints fp = read_reuse_tile("invoke_line_based_stream_reuse");
 
   cached_tileSet_[0].decode_line_based_stream(main_header, reduce_NL, cb, row_limit_,
                                                row_lo_, col_lo_, col_hi_, skip_mct_);
 
-  cached_header_fingerprint_ = fp;
+  cached_main_fingerprint_ = fp.main_header;
+  cached_tile_fingerprint_ = fp.tile_parts;
 }
 
 // ── Direct-to-planar decode ───────────────────────────────────────────────
@@ -1182,84 +1141,13 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   if (numTiles.x != 1 || numTiles.y != 1) {
-    cached_tileSet_.clear();
-    cached_header_fingerprint_ = 0;
+    drop_reuse_cache();
     // Multi-tile: fall back via recursive call with reuse disabled.
     bool was_enabled = single_tile_reuse_enabled_;
     single_tile_reuse_enabled_ = false;
     invoke_line_based_direct(descs, nc, width, height, depth, is_signed);
     single_tile_reuse_enabled_ = was_enabled;
     return;
-  }
-
-  // Fingerprint — identical to invoke_line_based_stream_reuse.
-  auto fnv1a_u64 = [](uint64_t h, const void *data, size_t len) {
-    const uint8_t *p = static_cast<const uint8_t *>(data);
-    for (size_t i = 0; i < len; ++i) {
-      h ^= p[i];
-      h *= 1099511628211ull;
-    }
-    return h;
-  };
-  uint64_t fp = 14695981039346656037ull;
-  auto mix_u64 = [&](uint64_t v) {
-    fp = fnv1a_u64(fp, &v, sizeof(v));
-  };
-  {
-    element_siz s_siz, s_osiz, s_tsiz, s_tosiz;
-    main_header.SIZ->get_image_size(s_siz);
-    main_header.SIZ->get_image_origin(s_osiz);
-    main_header.SIZ->get_tile_size(s_tsiz);
-    main_header.SIZ->get_tile_origin(s_tosiz);
-    const uint16_t ncomp = main_header.SIZ->get_num_components();
-    mix_u64((static_cast<uint64_t>(s_siz.x)  << 32) | s_siz.y);
-    mix_u64((static_cast<uint64_t>(s_osiz.x) << 32) | s_osiz.y);
-    mix_u64((static_cast<uint64_t>(s_tsiz.x) << 32) | s_tsiz.y);
-    mix_u64((static_cast<uint64_t>(s_tosiz.x)<< 32) | s_tosiz.y);
-    mix_u64(ncomp);
-    for (uint16_t c = 0; c < ncomp; ++c) {
-      element_siz sub;
-      const uint8_t bd = main_header.SIZ->get_bitdepth(c);
-      const bool    sn = main_header.SIZ->is_signed(c);
-      main_header.SIZ->get_subsampling_factor(sub, c);
-      mix_u64((static_cast<uint64_t>(bd) << 56)
-              | (static_cast<uint64_t>(sn ? 1 : 0) << 48)
-              | (static_cast<uint64_t>(sub.x) << 16)
-              | static_cast<uint64_t>(sub.y));
-    }
-    if (main_header.COD != nullptr) {
-      const uint8_t  dl  = main_header.COD->get_dwt_levels();
-      const uint8_t  po  = main_header.COD->get_progression_order();
-      const uint16_t nl  = main_header.COD->get_number_of_layers();
-      const uint8_t  mct = main_header.COD->use_color_trafo();
-      const uint8_t  cm  = main_header.COD->get_Cmodes();
-      const uint8_t  tx  = main_header.COD->get_transformation();
-      element_siz    cbsz; main_header.COD->get_codeblock_size(cbsz);
-      mix_u64((static_cast<uint64_t>(dl) << 56) | (static_cast<uint64_t>(po) << 48)
-              | (static_cast<uint64_t>(nl) << 32)
-              | (static_cast<uint64_t>(mct) << 24) | (static_cast<uint64_t>(cm) << 16)
-              | static_cast<uint64_t>(tx));
-      mix_u64((static_cast<uint64_t>(cbsz.x) << 32) | cbsz.y);
-      for (uint8_t r = 0; r <= dl; ++r) {
-        element_siz pp; main_header.COD->get_precinct_size(pp, r);
-        mix_u64((static_cast<uint64_t>(pp.x) << 32) | pp.y);
-      }
-    }
-    if (main_header.QCD != nullptr) {
-      const uint8_t qs = main_header.QCD->get_quantization_style();
-      const uint8_t gb = main_header.QCD->get_number_of_guardbits();
-      const uint16_t n0 = main_header.QCD->get_num_entries();
-      mix_u64((static_cast<uint64_t>(qs) << 16) | (static_cast<uint64_t>(gb) << 8)
-              | static_cast<uint64_t>(n0));
-      if (n0 > 0) {
-        const uint8_t  e0 = main_header.QCD->get_exponents(0);
-        const uint16_t m0 = main_header.QCD->get_mantissas(0);
-        mix_u64((static_cast<uint64_t>(e0) << 16) | m0);
-      }
-    }
-    mix_u64(static_cast<uint64_t>(main_header.COC.size()));
-    mix_u64(static_cast<uint64_t>(main_header.QCC.size()));
-    mix_u64(static_cast<uint64_t>(main_header.RGN.size()));
   }
 
   // Populate output metadata.
@@ -1281,52 +1169,12 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     is_signed.push_back(main_header.SIZ->is_signed(c));
   }
 
-  const bool cache_hit = !cached_tileSet_.empty()
-                         && cached_tileSet_[0].is_structure_built()
-                         && cached_header_fingerprint_ == fp;
-  if (!cache_hit) {
-    cached_tileSet_.clear();
-    cached_tileSet_.resize(1);
-    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
-  } else {
-    cached_tileSet_[0].prepare_for_next_frame();
-    cached_tileSet_[0].dec_init(0, main_header, reduce_NL);
-  }
-
-  {
-    uint16_t word;
-    SOT_marker tmpSOT;
-    while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
-      if (word != _SOT) {
-        open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
-      }
-      tmpSOT = SOT_marker(in);
-      const uint16_t tile_index = tmpSOT.get_tile_index();
-      if (tile_index != 0) {
-        throw std::runtime_error(
-            "openhtj2k_decoder_impl::invoke_line_based_direct expected a "
-            "single-tile codestream (tile_index != 0 found)");
-      }
-      cached_tileSet_[0].add_tile_part(tmpSOT, in, main_header);
-    }
-  }
-
-  cached_tileSet_[0].set_line_decode_persistent_all(true);
-
-  try {
-    cached_tileSet_[0].line_based_decode = true;
-    install_precinct_filter(cached_tileSet_[0], 0);
-    install_packet_observer(cached_tileSet_[0], 0);
-    cached_tileSet_[0].create_tile_buf(main_header);
-  } catch (std::exception &) {
-    cached_tileSet_.clear();
-    cached_header_fingerprint_ = 0;
-    throw;
-  }
+  const reuse_fingerprints fp = read_reuse_tile("invoke_line_based_direct");
 
   cached_tileSet_[0].decode_line_based_stream_planar(main_header, reduce_NL, descs, nc);
 
-  cached_header_fingerprint_ = fp;
+  cached_main_fingerprint_ = fp.main_header;
+  cached_tile_fingerprint_ = fp.tile_parts;
 }
 
 

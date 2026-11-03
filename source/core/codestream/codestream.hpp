@@ -76,6 +76,9 @@ class j2c_src_memory {
   int rewind_2bytes();
   int forward_Nbytes(uint32_t N);
   uint32_t get_remaining() const { return len - pos; }
+  // The read position, and a return to one get_pos() gave (clamped to the end).
+  uint32_t get_pos() const { return pos; }
+  void set_pos(uint32_t p) { pos = (p < len) ? p : len; }
 };
 
 class j2c_dst_memory {
