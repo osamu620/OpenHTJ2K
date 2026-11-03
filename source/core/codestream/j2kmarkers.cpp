@@ -713,9 +713,9 @@ const atk_step &ATK_marker::get_step(uint8_t k) const { return steps[k]; }
 
 // Quantise a floating-point subband step size into the JPEG 2000 (epsilon, mu)
 // pair of Eq. E-3 (ISO/IEC 15444-1 Annex E): Δ = 2^{-epsilon} · (1 + mu/2^11),
-// clamped to epsilon ∈ [0,31] and mu ∈ [0,2047]. Shared by the QCD and QCC
-// marker builders so the clamp/rounding logic lives in exactly one place.
-static void pack_quant_step(double fval, uint8_t &epsilon_out, uint16_t &mu_out) {
+// clamped to epsilon ∈ [0,max_exponent] and mu ∈ [0,2047]. Shared by the QCD and
+// QCC marker builders so the clamp/rounding logic lives in exactly one place.
+static void pack_quant_step(double fval, int32_t max_exponent, uint8_t &epsilon_out, uint16_t &mu_out) {
   int32_t exponent, mantissa;
   for (exponent = 0; fval < 1.0; exponent++) {
     fval *= 2.0;
@@ -725,8 +725,8 @@ static void pack_quant_step(double fval, uint8_t &epsilon_out, uint16_t &mu_out)
     mantissa = 0;
     exponent--;
   }
-  if (exponent > 31) {
-    exponent = 31;
+  if (exponent > max_exponent) {
+    exponent = max_exponent;
     mantissa = 0;
   }
   if (exponent < 0) {
@@ -779,47 +779,52 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
 
   // derive BIBO gain for lossless, or
   // derive weighted mse for lossy
+  //
+  // The basis functions double in length every level, so building them for all
+  // levels needs O(2^NL) memory (about 90 GB was reached before NL = 32 ran out of
+  // memory). By level 14 the gains have converged: the 5/3 BIBO gains approach
+  // constants, and the 9/7 energy gains double per level to within 1e-7. Deeper
+  // levels continue those trends instead of growing the basis functions.
+  constexpr uint8_t exact_levels = 14;
   if (dwt_levels == 0) {
     wmse_or_BIBO.push_back(1.0);
   } else {
     for (uint8_t level = 0; level < dwt_levels; ++level) {
-      gain_low  = 0.0;
-      gain_high = 0.0;
-      for (const auto &e : outL) {
-        gain_low += (is_reversible) ? fabs(e) : e * e;
-      }
-      for (const auto &e : outH) {
-        gain_high += (is_reversible) ? fabs(e) : e * e;
+      if (level < exact_levels) {
+        gain_low  = 0.0;
+        gain_high = 0.0;
+        for (const auto &e : outL) {
+          gain_low += (is_reversible) ? fabs(e) : e * e;
+        }
+        for (const auto &e : outH) {
+          gain_high += (is_reversible) ? fabs(e) : e * e;
+        }
+      } else if (!is_reversible) {
+        gain_low *= 2.0;
+        gain_high *= 2.0;
       }
 
       wmse_or_BIBO.push_back(gain_high * gain_high);  // HH
       wmse_or_BIBO.push_back(gain_low * gain_high);   // LH
       wmse_or_BIBO.push_back(gain_high * gain_low);   // HL
 
-      std::vector<double> L2, H2;
-      // upsampling
-      for (auto &i : outL) {
-        L2.push_back(i);
-        L2.push_back(0.0);
-      }
-      for (auto &i : outH) {
-        H2.push_back(i);
-        H2.push_back(0.0);
-      }
-      std::vector<double> tmpL(L.size() + L2.size() - 1, 0.0);
+      if (level + 1 >= dwt_levels || level + 1 >= exact_levels) continue;
+      // Next level: convolve L with the basis upsampled by 2. The zero samples of
+      // the upsampled signal are skipped; they add nothing to the sums.
+      std::vector<double> tmpL(L.size() + 2 * outL.size() - 1, 0.0);
       for (size_t i = 0; i < L.size(); ++i) {
-        for (size_t j = 0; j < L2.size(); ++j) {
-          tmpL[i + j] += L[i] * L2[j];
+        for (size_t j = 0; j < outL.size(); ++j) {
+          tmpL[i + 2 * j] += L[i] * outL[j];
         }
       }
-      std::vector<double> tmpH(L.size() + H2.size() - 1, 0.0);
+      std::vector<double> tmpH(L.size() + 2 * outH.size() - 1, 0.0);
       for (size_t i = 0; i < L.size(); ++i) {
-        for (size_t j = 0; j < H2.size(); ++j) {
-          tmpH[i + j] += L[i] * H2[j];
+        for (size_t j = 0; j < outH.size(); ++j) {
+          tmpH[i + 2 * j] += L[i] * outH[j];
         }
       }
-      outL = tmpL;
-      outH = tmpH;
+      outL.swap(tmpL);
+      outH.swap(tmpH);
     }
     wmse_or_BIBO.push_back(gain_low * gain_low);
   }
@@ -843,12 +848,17 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
     // w_b is the perceptual weight raised to qfactor_power (1.0 for the LL band,
     // any band beyond the weight table, or when no Qfactor is active), and G_c is
     // the colour-component gain. The float step is packed into (epsilon, mu) per
-    // Eq. E-3, with clamping epsilon in [0,31], mu in [0,2047].
+    // Eq. E-3, with mu in [0,2047] and epsilon in [0, 31 - guard bits]: a subband
+    // then has M_b = epsilon + guard bits - 1 <= 30 magnitude bit-planes (E-2), as
+    // many as the block coders hold. A step too small for that (a tiny base step,
+    // or the coarsest levels of a deep transform) becomes 2^-(31 - guard bits);
+    // larger exponents gave codestreams that could not be decoded.
+    const int32_t max_exponent = 31 - static_cast<int32_t>(number_of_guardbits);
     for (size_t i = 0; i < epsilon.size(); ++i) {
       double w_b =
           (!have_qfactor || i == epsilon.size() - 1 || i >= W_b.size()) ? 1.0 : pow(W_b[i], qfactor_power);
       double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
-      pack_quant_step(fval, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
+      pack_quant_step(fval, max_exponent, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
     }
   }
 
