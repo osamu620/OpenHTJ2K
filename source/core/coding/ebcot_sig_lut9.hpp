@@ -31,6 +31,8 @@
 #include <cstdint>
 #include "EBCOTtables.hpp"
 
+namespace open_htj2k {
+
 namespace ebcot {
 
 // 9-bit-indexed zero-coding context LUT for the packed stripe-column word (book
@@ -65,3 +67,4 @@ struct SigLUT9 {
 
 // One table per translation unit that includes this header (C++11 has no inline variables).
 static const ebcot::SigLUT9 sig_LUT9_table;
+}  // namespace open_htj2k

@@ -33,6 +33,8 @@
 #include "utils.hpp"
 #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 mq_decoder::mq_decoder(const uint8_t *const buf)
     : A(0), t(0), C(0), T(0), L(0), L_start(0), Lmax(0), dynamic_table{{}}, byte_buffer(buf) {}
 
@@ -187,3 +189,4 @@ uint8_t mq_decoder::decode(uint8_t label) {
 void mq_decoder::finish() {
   // TODO: ERTERM
 }
+}  // namespace open_htj2k

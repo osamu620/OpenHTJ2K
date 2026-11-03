@@ -33,6 +33,8 @@
   #include "utils.hpp"
   #include <cstring>
 
+namespace open_htj2k {
+
 /********************************************************************************
  * horizontal transforms
  *******************************************************************************/
@@ -638,4 +640,5 @@ void fdwt_1d_filtr_rev53_planar_i32_neon(int32_t *lp, int32_t *hp, const int32_t
     }
   }
 }
+}  // namespace open_htj2k
 #endif

@@ -254,6 +254,7 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
 #endif
 
 #ifdef OPENHTJ2K_LARGE_POOL
+namespace open_htj2k {
 struct AlignedLargePool {
   static constexpr size_t THRESHOLD = 16384;  // 16 KB: cache buffers >= this size
   static constexpr int    MAX_SLOTS = 128;    // max cached entries per thread
@@ -300,7 +301,9 @@ struct AlignedLargePool {
     count = 0;
   }
 };
-static thread_local AlignedLargePool tl_aligned_pool;
+}  // namespace open_htj2k
+
+static thread_local open_htj2k::AlignedLargePool tl_aligned_pool;
 #endif  // OPENHTJ2K_LARGE_POOL
 
 static inline void* aligned_mem_alloc(size_t size, size_t align) {

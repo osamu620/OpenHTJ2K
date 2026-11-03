@@ -54,6 +54,8 @@
   #endif
 #endif
 
+namespace open_htj2k {
+
 #ifdef OPENHTJ2K_THREAD
 // Spin-wait with hardware pause hints before falling back to OS yield.
 // Calls pool->try_run_one() so the waiting thread does useful work instead of
@@ -845,3 +847,4 @@ void j2k_subband_row_buf::get_row(int32_t abs_row, sprec_t *out) {
   const sprec_t *p = row_ptr(abs_row);
   std::memcpy(out, p, sizeof(sprec_t) * static_cast<size_t>(width));
 }
+}  // namespace open_htj2k

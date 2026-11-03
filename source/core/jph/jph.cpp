@@ -29,6 +29,8 @@
 #include "jph.hpp"
 #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 // ---------------------------------------------------------------------------
 // JPH / JP2 box reader implementation
 // ---------------------------------------------------------------------------
@@ -279,3 +281,4 @@ size_t jph_boxes::write(j2c_dst_memory &dst) {
   len += jp2c.write(dst);
   return len;
 }
+}  // namespace open_htj2k

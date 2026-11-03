@@ -41,6 +41,8 @@
   #include <vector>
   #include "dwt.hpp"
 
+namespace open_htj2k {
+
 namespace {
 // [a1, a2, a3, b0]
 inline __m128 next1(__m128 a, __m128 b) {
@@ -249,4 +251,5 @@ void idwt_1d_filtr_rev53_planar_i32_sse2(int32_t *out, const int32_t *lp, const 
     for (int32_t t = j; t < N; ++t) out[2 * t + 1] = O(t) + ((s1t[t - j] + s1t[t - j + 1]) >> 1);
   }
 }
+}  // namespace open_htj2k
 #endif  // OPENHTJ2K_ENABLE_SSE2

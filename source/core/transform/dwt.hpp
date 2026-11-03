@@ -38,6 +38,8 @@
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
 #endif
+
+namespace open_htj2k {
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
   #define OPENHTJ2K_ENABLE_AVX512
 #endif
@@ -867,3 +869,4 @@ void fdwt_2d_state_push_row(fdwt_2d_state *s, const sprec_t *in);
 // Finalise: fill bottom PSE, run remaining cascade, emit all pending rows.
 // Must be called after the last push_row().
 void fdwt_2d_state_flush(fdwt_2d_state *s);
+}  // namespace open_htj2k

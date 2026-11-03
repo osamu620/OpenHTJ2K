@@ -35,6 +35,8 @@
   #include <wasm_simd128.h>
   #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 /******************************************************************************/
 // WASM SIMD helper functions
 /******************************************************************************/
@@ -669,4 +671,5 @@ int32_t htj2k_encode(j2k_codeblock *block, uint8_t ROIshift) noexcept {
   htj2k_cleanup_encode(block, ROIshift);
   return EXIT_SUCCESS;
 }
+}  // namespace open_htj2k
 #endif

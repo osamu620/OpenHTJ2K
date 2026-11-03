@@ -37,6 +37,8 @@
  * horizontal transforms
  *******************************************************************************/
 // irreversible IDWT
+namespace open_htj2k {
+
 auto idwt_irrev97_fixed_avx2_hor_step = [](const int32_t init_pos, const int32_t simdlen, float *const X,
                                             const int32_t n0, const int32_t n1, const float fV) {
   auto vcoeff = _mm256_set1_ps(fV);
@@ -850,4 +852,5 @@ void idwt_rev_ver_hp_step_i32_avx2(int32_t n, const int32_t *prev, const int32_t
   }
   for (; i < n; ++i) tgt[i] += (prev[i] + next[i]) >> 1;
 }
+}  // namespace open_htj2k
 #endif

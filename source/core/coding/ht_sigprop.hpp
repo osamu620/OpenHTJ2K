@@ -30,6 +30,8 @@
 
 #include <cstdint>
 
+namespace open_htj2k {
+
 // Which samples the HT SigProp pass (ISO/IEC 15444-15, 7.4) codes and which it makes
 // significant, a stripe at a time.  Shared by the SigProp encoder and the rate control,
 // which counts them at every bit-plane without coding.
@@ -148,3 +150,4 @@ inline void solve_stripe(const uint64_t *sig, const uint64_t *bit, const uint64_
 }
 
 }  // namespace ht_sigprop
+}  // namespace open_htj2k

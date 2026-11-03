@@ -34,6 +34,8 @@
   #include "dwt.hpp"
   #include "utils.hpp"
 
+namespace open_htj2k {
+
 /********************************************************************************
  * WASM-SIMD helpers (local to this TU)
  *******************************************************************************/
@@ -779,4 +781,5 @@ void idwt_1d_filtr_rev53_planar_i32_wasm(int32_t *out, const int32_t *lp, const 
   }
 }
 
+}  // namespace open_htj2k
 #endif  // OPENHTJ2K_ENABLE_WASM_SIMD

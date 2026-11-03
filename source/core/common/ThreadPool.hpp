@@ -46,6 +46,8 @@
     #include <malloc.h>
   #endif
 
+namespace open_htj2k {
+
 // Thread-local flag: true when the current thread is running inside the pool worker loop.
 // Set once in worker() — avoids the hash-map lookup in decode_strip_core's in_worker check.
 // A function-local thread_local rather than an inline variable (C++17) so this
@@ -489,4 +491,5 @@ class ThreadPoolLease {
   ThreadPoolLease &operator=(const ThreadPoolLease &) = delete;
 };
 
+}  // namespace open_htj2k
 #endif

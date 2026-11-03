@@ -67,6 +67,8 @@
 // decoders: (ceil(H/4) + 1) rows of round_up_8(ceil(W/4) + 2) entries.  Code-block
 // sides are 4..1024 samples with at most 4096 samples (checked when COD/COC are
 // read), so the largest need is a 4-wide, 1024-tall block: 257 rows x 8 entries.
+namespace open_htj2k {
+
 constexpr uint32_t HT_SIGMA_BUF_SIZE = (1024 / 4 + 1) * 8;
 
 // LUT for UVLC decoding in initial line-pair
@@ -735,7 +737,9 @@ static inline uint32_t destuff_fwd_portable(const uint8_t *src, int size, uint8_
 }
 
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+}  // namespace open_htj2k (headers are included at global scope)
   #include <arm_neon.h>
+namespace open_htj2k {
 // NEON does not provide a version of this function, here is an article about
 // some ways to repro the results.
 // http://stackoverflow.com/questions/11870910/sse-mm-movemask-epi8-equivalent-method-for-arm-neon
@@ -1120,7 +1124,9 @@ class fwd_buf {
   }
 };
 #elif defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+}  // namespace open_htj2k (headers are included at global scope)
   #include <wasm_simd128.h>
+namespace open_htj2k {
 
 template <int X>
 class fwd_buf {
@@ -2408,3 +2414,4 @@ FORCE_INLINE uint8_t MR_dec::importMagRefBit() {
 //   VLC_dec.advance(len);
 //   //  VLC_dec.decodeCxtVLC(context, u_off, rho, emb_k, emb_1, first_or_second, dec_CxtVLC_table);
 // };
+}  // namespace open_htj2k

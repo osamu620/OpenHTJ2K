@@ -30,6 +30,8 @@
   #include <arm_neon.h>
   #include "color.hpp"
 
+namespace open_htj2k {
+
   #define neon_alphaR (static_cast<int32_t>(0.5 + ALPHA_R * (1 << 15)))
   #define neon_alphaB (static_cast<int32_t>(0.5 + ALPHA_B * (1 << 15)))
   #define neon_alphaG (static_cast<int32_t>(0.5 + ALPHA_G * (1 << 15)))
@@ -546,4 +548,5 @@ void fused_ycbcr_rev_to_rgb_i32_neon(const float *y, const float *cb, const floa
     b[n] = clamp(Cb + G, fp[2]);
   }
 }
+}  // namespace open_htj2k
 #endif

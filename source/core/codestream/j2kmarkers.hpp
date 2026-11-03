@@ -36,6 +36,8 @@
 #include "marker_def.hpp"
 #include "visual_weighting.hpp"
 
+namespace open_htj2k {
+
 /********************************************************************************
  * j2k_marker_io_base
  *******************************************************************************/
@@ -551,3 +553,4 @@ class j2k_tilepart_header {
   explicit j2k_tilepart_header(uint16_t nc);
   uint32_t read(j2c_src_memory &in);
 };
+}  // namespace open_htj2k

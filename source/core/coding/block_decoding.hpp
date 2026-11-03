@@ -31,6 +31,8 @@
 #include <cstdint>
 #include "coding_units.hpp"
 
+namespace open_htj2k {
+
 void j2k_decode(j2k_codeblock *block, uint8_t ROIshift);
 bool htj2k_decode(j2k_codeblock *block, uint8_t ROIshift);
 // Decodes the HT cleanup pass of a code-block with num_passes == 1 into block->sample_buf,
@@ -51,3 +53,4 @@ bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshi
 // 1 means htj2k_decode_batch is a plain per-block loop (link-time constant —
 // SIMD dispatch is compile-time in this project).
 extern const uint32_t htj2k_dec_batch_lanes;
+}  // namespace open_htj2k

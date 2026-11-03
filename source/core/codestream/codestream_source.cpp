@@ -29,6 +29,8 @@
 #include "codestream.hpp"
 #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 // MARK: j2c_src_memory -
 void j2c_src_memory::alloc_memory(size_t length) {
   // Reject lengths that the uint32_t buffer accounting (len/cap) cannot hold
@@ -123,3 +125,4 @@ int j2c_src_memory::forward_Nbytes(uint32_t N) {
     throw std::exception();
   }
 }
+}  // namespace open_htj2k

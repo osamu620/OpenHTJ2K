@@ -62,6 +62,8 @@
   #define OPENHTJ2K_REFINE_NEON 1
 #endif
 
+namespace open_htj2k {
+
 namespace {
 
 // Magnitude of a sample in the quantiser's HT format: bit 31 marks a non-zero
@@ -510,3 +512,4 @@ int32_t htj2k_encode_refined(j2k_codeblock *block, uint8_t ROIshift, ht_refineme
   block->num_ZBP           = static_cast<uint8_t>(block->get_Mb() - 1 - p);
   return EXIT_SUCCESS;
 }
+}  // namespace open_htj2k

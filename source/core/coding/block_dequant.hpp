@@ -32,6 +32,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace open_htj2k {
+
 // Dequantizes a decoded Part 1 code-block.  Without an ROI shift, every significant
 // sample carries a reconstruction marker at bit p - 1, where p is the lowest
 // bit-plane decoded for it (set by j2k_decode); that marker is the mid-point
@@ -39,3 +41,4 @@
 void j2k_dequant(const int32_t *sample_buf, size_t blksampl_stride, sprec_t *band_buf, uint32_t band_stride,
                  uint32_t width, uint32_t height, int32_t M_b, uint8_t ROIshift, uint8_t transformation,
                  float stepsize, bool dequant_i32 = false);
+}  // namespace open_htj2k

@@ -38,6 +38,8 @@
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
 #endif
+
+namespace open_htj2k {
 // Forward declarations for static ATK filter functions defined later in this file.
 OPENHTJ2K_MAYBE_UNUSED static void idwt_1d_filtr_irrev53_fixed(sprec_t *X, int32_t left, int32_t u_i0,
                                                                int32_t u_i1);
@@ -1645,3 +1647,4 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
   ++s->next_out;
   return result;
 }
+}  // namespace open_htj2k

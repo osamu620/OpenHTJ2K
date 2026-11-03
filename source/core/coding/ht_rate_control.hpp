@@ -31,6 +31,8 @@
 #include <cstdint>
 #include <vector>
 
+namespace open_htj2k {
+
 class j2k_tile;
 class j2k_codeblock;
 struct p1_rd_pass;
@@ -122,3 +124,4 @@ uint64_t ht_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_byt
 // builds the packet headers of every tile.  Returns the codestream length.
 uint64_t p1_rate_control(j2k_tile *tiles, uint32_t num_tiles, uint64_t fixed_bytes,
                          const std::vector<uint64_t> &targets);
+}  // namespace open_htj2k

@@ -39,6 +39,8 @@
 #include "ebcot_sig_lut9.hpp"
 #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 // Part 1 (EBCOT) block encoder: the significance propagation, magnitude
 // refinement and cleanup passes of ISO/IEC 15444-1 Annex D on the packed
 // stripe-column state of ebcot_context.hpp, mirroring block_decoding.cpp pass
@@ -532,3 +534,4 @@ int32_t ebcot_encode(j2k_codeblock *const block, const uint8_t ROIshift) noexcep
   block->num_ZBP         = static_cast<uint8_t>(Mb - msb_len);
   return static_cast<int32_t>(len);
 }
+}  // namespace open_htj2k

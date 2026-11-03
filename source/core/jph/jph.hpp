@@ -36,6 +36,8 @@
 #include "codestream.hpp"
 #include "open_htj2k_typedef.hpp"
 
+namespace open_htj2k {
+
 // ---------------------------------------------------------------------------
 // JPH / JP2 box reader (decoder side)
 // ---------------------------------------------------------------------------
@@ -185,3 +187,4 @@ class jph_boxes {
   jph_boxes(j2k_main_header &hdr, uint8_t type, bool isSRGB, size_t code_len);
   size_t write(j2c_dst_memory &dst);
 };
+}  // namespace open_htj2k

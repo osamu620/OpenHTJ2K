@@ -34,6 +34,8 @@
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
   #include <wasm_simd128.h>
 #endif
+
+namespace open_htj2k {
 // int32 lifting dispatch — parallel to the float ones below, selected at
 // runtime via `fdwt_2d_state::use_i32`.  Function-pointer types match the
 // _i32_ primitives in fdwt_{avx512,avx2,neon,wasm}.cpp and the scalar
@@ -1349,3 +1351,4 @@ void fdwt_2d_state_flush(fdwt_2d_state *s) {
   cascade_f(s);
   emit_ready_f(s);
 }
+}  // namespace open_htj2k

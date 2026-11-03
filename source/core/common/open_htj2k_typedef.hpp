@@ -30,6 +30,8 @@
 
 #include <cstdint>
 
+namespace open_htj2k {
+
 // Portability macros for C++17 attributes — expand to nothing in C++14/11.
 #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   #define OPENHTJ2K_NODISCARD [[nodiscard]]
@@ -91,3 +93,4 @@ class element_siz {
     y = y0;
   }
 };
+}  // namespace open_htj2k

@@ -37,6 +37,8 @@
   #include <arm_neon.h>
   #include "message_internal.hpp"
 
+namespace open_htj2k {
+
 uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_t causal_cond) const {
   uint8_t *state_p0 = block_states + i * blkstate_stride + j;
   uint8_t *state_p1 = block_states + (i + 1) * blkstate_stride + j;
@@ -1105,4 +1107,5 @@ bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshi
 }
 
 const uint32_t htj2k_dec_batch_lanes = 1;
+}  // namespace open_htj2k
 #endif

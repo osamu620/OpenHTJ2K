@@ -32,6 +32,8 @@
 #include "open_htj2k_typedef.hpp"
 #include "utils.hpp"
 
+namespace open_htj2k {
+
 // #define MQNAIVE
 // #define CDP
 
@@ -184,3 +186,4 @@ inline uint8_t mq_decoder::get_raw_symbol() {
   t--;
   return ((T >> t) & 1);
 }
+}  // namespace open_htj2k

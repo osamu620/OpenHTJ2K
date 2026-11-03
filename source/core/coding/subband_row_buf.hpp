@@ -36,6 +36,8 @@
 #endif
 #include "coding_units.hpp"
 
+namespace open_htj2k {
+
 // ─────────────────────────────────────────────────────────────────────────────
 // j2k_subband_row_buf — lazy per-strip codeblock decoder for one subband
 //
@@ -202,3 +204,4 @@ struct j2k_subband_row_buf {
   void run_par_group(uint64_t packed);
 #endif
 };
+}  // namespace open_htj2k

@@ -33,6 +33,8 @@
   #include "dwt.hpp"
   #include "utils.hpp"
 
+namespace open_htj2k {
+
 /********************************************************************************
  * WASM-SIMD helpers: emulate NEON vld2q_f32 / vst2q_f32
  *
@@ -682,4 +684,5 @@ void fdwt_1d_filtr_rev53_planar_i32_wasm(int32_t *lp, int32_t *hp, const int32_t
   }
 }
 
+}  // namespace open_htj2k
 #endif  // OPENHTJ2K_ENABLE_WASM_SIMD

@@ -39,6 +39,8 @@
   #define Q0 0
   #define Q1 1
 
+namespace open_htj2k {
+
 uint8_t j2k_codeblock::calc_mbr(const uint32_t i, const uint32_t j, const uint8_t causal_cond) const {
   uint8_t *state_p0 = block_states + static_cast<size_t>(i) * blkstate_stride + j;
   uint8_t *state_p1 = block_states + static_cast<size_t>(i + 1) * blkstate_stride + j;
@@ -1207,4 +1209,5 @@ bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshi
 }
 
 const uint32_t htj2k_dec_batch_lanes = OPENHTJ2K_HT_DEC_BATCH_N;
+}  // namespace open_htj2k
 #endif
