@@ -263,10 +263,8 @@ EBCOT_PASS_NOINLINE void decode_cleanup(j2k_codeblock *block, uint8_t p, int32_t
 void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   constexpr uint8_t label_uni = 18;
 
-  uint8_t num_decode_pass = 0;
-  for (uint16_t i = 0; i < block->num_layers; i++) {
-    num_decode_pass = static_cast<uint8_t>(num_decode_pass + block->layer_passes[i]);
-  }
+  // The passes of every layer the packets delivered.
+  const uint8_t num_decode_pass = block->num_passes;
   mq_decoder mq_dec(block->get_compressed_data());
   // mq_dec.set_dynamic_table();
 

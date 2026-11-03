@@ -537,6 +537,13 @@ class j2k_main_header {
   // Packets the tiles of the codestream may still declare (see read()); each tile's
   // create_tile_buf() subtracts its packets.  Unlimited unless set by read().
   uint64_t packet_budget = UINT64_MAX;
+  // Bytes of the codestream from its SOC marker on (set by read()), and the decoder's
+  // budget for the tile, precinct and code-block state of this codestream (0 until the
+  // first tile computes it) with the bytes of it the tiles have taken so far
+  // (j2k_tile::charge_structure() in coding_units.cpp).
+  uint64_t codestream_bytes = 0;
+  uint64_t structure_budget = 0;
+  uint64_t structure_bytes  = 0;
 
  public:
   j2k_main_header();
