@@ -542,6 +542,10 @@ int image::read_tiff(const std::string &filename) {
   }
   return EXIT_SUCCESS;
 }
+#else
+// Built without libtiff: the declaration is unconditional so that the public
+// header does not depend on the build configuration.
+int image::read_tiff(const std::string &) { return EXIT_FAILURE; }
 #endif
 
 // openhtj2k_encoder_impl shall not be public

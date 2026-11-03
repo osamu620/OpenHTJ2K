@@ -1,18 +1,38 @@
 // Built by tests/install_consumer/run.cmake against an *installed* OpenHTJ2K:
 // only the installed headers, the installed library and the flags from
 // `pkg-config --cflags --libs open_htj2k` are available, as for any external
-// project.  It is compiled as C++11.
+// project.  It is compiled as C++11, with warnings as errors.
 //
 // Decodes the given codestream, losslessly re-encodes its first component into
 // memory, decodes that back and checks the samples round-trip exactly.
+
+// The library's build configuration (threading, SIMD, TIFF, QUIC) is private:
+// the package must not hand its macros to consumers.
+#if defined(OPENHTJ2K_THREAD) || defined(OPENHTJ2K_TRY_AVX2) || defined(OPENHTJ2K_ENABLE_ARM_NEON) \
+    || defined(OPENHTJ2K_DISABLE_SSE2) || defined(OPENHTJ2K_TIFF_SUPPORT)                          \
+    || defined(OPENHTJ2K_ENABLE_QUIC)
+  #error "the installed package exports an internal OPENHTJ2K_* configuration macro"
+#endif
+// ...except OHTJ2K_STATIC, which the headers need when linking the static library.
+#if defined(OPENHTJ2K_EXPECT_STATIC) && !defined(OHTJ2K_STATIC)
+  #error "the package of a static build does not define OHTJ2K_STATIC"
+#endif
+
 #include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <vector>
 #include "decoder.hpp"
 #include "encoder.hpp"
+// The same headers under the longer, collision-free path (consumer_paths.cpp
+// uses only that one).
+#include <open_htj2k/interface/decoder.hpp>
+#include <open_htj2k/interface/encoder.hpp>
+
+bool consumer_paths_ok();  // consumer_paths.cpp
 
 int main(int argc, char *argv[]) {
+  if (!consumer_paths_ok()) return 1;
   if (argc < 2) {
     printf("usage: %s <input.j2k>\n", argv[0]);
     return 2;

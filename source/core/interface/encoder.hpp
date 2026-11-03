@@ -74,9 +74,8 @@ class image {
  public:
   OPENHTJ2K_EXPORT explicit image(const std::vector<std::string> &filenames);
   OPENHTJ2K_EXPORT int read_pnmpgx(const std::string &filename, uint16_t nc);
-#if defined(OPENHTJ2K_TIFF_SUPPORT)
+  // Fails (returns EXIT_FAILURE) when the library was built without libtiff.
   OPENHTJ2K_EXPORT int read_tiff(const std::string &filename);
-#endif
 
   OPENHTJ2K_NODISCARD uint32_t get_width() const { return this->width; }
   OPENHTJ2K_NODISCARD uint32_t get_height() const { return this->height; }
@@ -96,7 +95,7 @@ class image {
   uint8_t get_Ssiz_value(uint16_t c) {
     uint8_t val = static_cast<uint8_t>(this->bits_per_pixel[c] - 1);
     if (this->is_signed[c]) {
-      val = val | 0x80;
+      val = static_cast<uint8_t>(val | 0x80);
     }
     return val;
   }
