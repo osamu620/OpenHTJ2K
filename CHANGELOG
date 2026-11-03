@@ -337,6 +337,20 @@
   to the input exactly. Codestreams that encoded and decoded before are
   unchanged.
 
+### JPIP
+- The precinct index and the view-window resolver work with 31 and 32 DWT
+  levels. They divided coordinates by 2^(NL - r) and by 2^r (r the discard
+  level) with a 32-bit shift, which is undefined when the exponent is 32; a
+  build that divided by 1 there answered a frame-size request with the wrong
+  resolution (fsiz=2,2 with round-up returned only the lowest resolution of a
+  32-level image instead of the 28 it needs).
+- A view-window offset or size large enough that offset * 2^r passed 2^32
+  wrapped around and selected the precincts of a region inside the image; it
+  now selects nothing, as for any region past the image.
+- The precinct index rejects a tile-component with more than 4294967295
+  precincts, which its 32-bit precinct numbers cannot count, instead of
+  wrapping the numbers around.
+
 # [0.24.0] - 2026-11-02
 
 Feature release: JPH files with an alpha channel. The encoder now writes JPH

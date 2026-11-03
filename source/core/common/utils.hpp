@@ -46,11 +46,20 @@
 // #define round_down(x, n) ((x) & (-n))
 #define round_down(x, n) ((x) - ((x) % (n)))
 #define ceil_int(a, b) ((a) + ((b) - 1)) / (b)
+// floor(a / 2^n) and ceil(a / 2^n), a coordinate n resolution levels down (B-14), for
+// any n.  n reaches 32 at the lowest resolution of a 32-level transform, past what a
+// 32-bit shift allows, and the ceiling does not overflow for a near 2^32 as
+// ceil_int(a, 1U << n) does.
+static inline uint32_t floor_div_pow2(uint32_t a, uint32_t n) { return (n >= 32) ? 0U : (a >> n); }
+static inline uint32_t ceil_div_pow2(uint32_t a, uint32_t n) {
+  if (n >= 32) return (a != 0) ? 1U : 0U;
+  return (a >> n) + (((a & ((1U << n) - 1U)) != 0) ? 1U : 0U);
+}
 // Size of the extent [a0, a1) at a resolution reduced by r levels: it maps to
 // [ceil(a0 / 2^r), ceil(a1 / 2^r)) (ISO/IEC 15444-1, B.5), which is narrower than
 // ceil((a1 - a0) / 2^r) when a0 is not a multiple of 2^r.
 static inline uint32_t reduced_extent(uint32_t a0, uint32_t a1, uint32_t r) {
-  return ceil_int(a1, 1U << r) - ceil_int(a0, 1U << r);
+  return ceil_div_pow2(a1, r) - ceil_div_pow2(a0, r);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
