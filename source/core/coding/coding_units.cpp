@@ -1703,6 +1703,7 @@ void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsi
     this->compressed_is_pooled = true;
   } else {
     this->compressed_data = static_cast<uint8_t *>(malloc(n));
+    if (this->compressed_data == nullptr) throw std::bad_alloc();
   }
   memcpy(this->compressed_data, buf, bufsize);
   this->current_address = this->compressed_data;
