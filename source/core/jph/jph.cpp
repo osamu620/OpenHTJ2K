@@ -210,7 +210,10 @@ colour_specification_box::colour_specification_box(j2k_main_header &hdr, bool is
   } else if (nc == 1 || nc == 2) {
     EnumCS = 17;
   } else {
-    open_htj2k::detail::fail("invalid color space specification.");
+    open_htj2k::detail::fail(
+        "the JPH and JP2 file writer takes 1 to 4 components (greyscale or colour, each optionally "
+        "followed by an alpha channel), but the image has %u: write a bare codestream instead.",
+        static_cast<unsigned>(nc));
   }
 }
 size_t colour_specification_box::write(j2c_dst_memory &dst) {

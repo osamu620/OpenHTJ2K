@@ -302,6 +302,10 @@
   negative one looped forever), precinct exponents above 15 or of 0 above the
   lowest resolution, and user-defined precincts without any size. The step
   size encoding no longer overflows for huge steps either.
+- Writing a JPH or JP2 file of more than 4 components stopped with "invalid
+  color space specification". The message now says that the file writer takes
+  1 to 4 components (greyscale or colour, each optionally followed by an alpha
+  channel) and how many the image has.
 
 ### Decoder
 - A truncated tile-part followed by a tile-part without a body crashed the
