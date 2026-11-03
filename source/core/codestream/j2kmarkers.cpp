@@ -588,6 +588,12 @@ COC_marker::COC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
       SPcoc.push_back(get_byte());
     }
   }
+  // SPcoc[0] is the decomposition-level count, 0 to 32 (ISO/IEC 15444-1, Table A.13), unless
+  // bit 7 signals a DFS index (ISO/IEC 15444-2).  See COD_marker for what a larger count does.
+  if (!is_dfs_defined() && SPcoc[0] > 32) {
+    open_htj2k::detail::fail("COC number of decomposition levels %u exceeds 32.",
+                             static_cast<unsigned>(SPcoc[0]));
+  }
   is_set = true;
 }
 
@@ -600,8 +606,9 @@ bool COC_marker::is_dfs_defined() const { return (SPcoc[0] & 0x80) != 0; }
 uint8_t COC_marker::get_dfs_index() const { return SPcoc[0] & 0x0F; }
 
 // When DFS is active, SPcoc[0] encodes the DFS index rather than the level count.
-// Callers must check is_dfs_defined() and use COD's level count instead.
-uint8_t COC_marker::get_dwt_levels() { return SPcoc[0] & 0x1F; }
+// Callers must check is_dfs_defined() and use COD's level count instead.  Otherwise it is
+// the level count itself, 0 to 32: masking it to 5 bits read 32 levels as none.
+uint8_t COC_marker::get_dwt_levels() { return SPcoc[0]; }
 
 void COC_marker::get_codeblock_size(element_siz &out) {
   // See COD_marker::get_codeblock_size — same spec bound on the size exponents.
@@ -1375,6 +1382,11 @@ POC_marker::POC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
       Ppoc[i] = get_byte();
     } else {
       Ppoc.push_back(get_byte());
+    }
+    // CEpoc is exclusive and 0 stands for 256 (one-byte field) or 16384 (two-byte field):
+    // every component from CSpoc on (ISO/IEC 15444-1, Table A.32).
+    if (CEpoc[i] == 0) {
+      CEpoc[i] = (Csiz < 257) ? 256 : 16384;
     }
   }
   is_set = true;

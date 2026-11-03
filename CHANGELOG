@@ -306,6 +306,33 @@
 - SOP marker segments are allowed but not required once Scod enables them:
   each packet may or may not have one (A.8.1). A packet without one failed
   with "Expected SOP marker".
+- Coding and quantization parameters did not follow the order of precedence
+  of ISO/IEC 15444-1, A.6.1 to A.6.5 (tile-part COC > tile-part COD > main
+  COC > main COD, and tile-part QCC > tile-part QCD > main QCC > main QCD):
+  - a main-header COC or QCC marker for a component also applied in tiles
+    whose tile-part header has a COD or QCD marker, which overrides it;
+  - a main-header COC, QCC or RGN marker for a component was ignored in a
+    tile whose tile-part header has a marker of the same kind for another
+    component.
+  Such tiles decoded wrongly or failed (for example with "component 0 needs
+  10 quantization step sizes for 3 decomposition levels").
+- A POC marker whose CEpoc is 0, which stands for 256 components (16384 with
+  more than 256 components; Table A.32), described no component, so its
+  packets were read in the order of the COD marker. The progressions of POC
+  markers in tile-part headers after the first of a tile (A.6.6) were
+  ignored.
+- A COC marker with 32 decomposition levels was read as having none: the
+  level count was masked to 5 bits. A COC marker with more than 32 levels is
+  now rejected, as a COD marker already was.
+- HT code-blocks were decoded with the rules that tell an HT code-block from
+  a Part 1 one in a mixed tile-component whenever bit 14 or bit 15 of Ccap15
+  (CAP marker) was set, also in tile-components whose SPcod or SPcoc does not
+  allow mixing (bit 7 clear), as in every HTDECLARED codestream. Many decoded
+  wrongly without an error (a lossless HTDECLARED codestream with 8x8
+  code-blocks came back with errors of up to 121). Those rules now apply only
+  to a tile-component whose SPcod or SPcoc has bits 6 and 7 set in a
+  codestream with bits 14 and 15 of Ccap15 set (ISO/IEC 15444-15, A.3.2 and
+  A.4). Codestreams with neither bit set decode as before.
 
 ### Tools
 - `open_htj2k_dec` exited with status 0 when decoding failed: it printed the

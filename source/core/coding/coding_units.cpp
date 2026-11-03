@@ -1868,10 +1868,11 @@ void j2k_codeblock::reset_for_next_frame() {
     std::memset(pass_length_store, 0, sizeof(pass_length_store));
   else
     std::memset(pass_length, 0, 128 * sizeof(uint32_t));
-  // parse_packet_header ORs HT_PHLD and HT_MIXED onto Cmodes during parse;
-  // strip those back off so the codeblock starts from the COD-declared
-  // base codeblock style.  (The base bits, e.g. HT itself, stay set.)
-  Cmodes &= static_cast<uint16_t>(~(HT_PHLD | HT_MIXED));
+  // parse_packet_header ORs HT_PHLD onto Cmodes during parse, and clears HT for a
+  // Part 1 code-block of a mixed tile-component (HT_MIXED, from SPcod/SPcoc);
+  // restore the COD-declared base codeblock style.
+  Cmodes &= static_cast<uint16_t>(~HT_PHLD);
+  if (Cmodes & HT_MIXED) Cmodes |= HT;
   // layer_start / layer_passes are pooled by the owning j2k_precinct_subband
   // (cb_layer_pool) and must be zeroed so parse_packet_header sees no
   // stale contributions from the previous frame.
@@ -1998,12 +1999,15 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
 
     if (!block->already_included) {
       // Flags for placeholder passes and mixed mode
-      if (block->Cmodes >= HT) {
+      if (block->Cmodes & HT) {
         // adding HT_PHLD flag because an HT codeblock may include placeholder passes
         block->Cmodes |= HT_PHLD;
-        // If both Bits14 and 15 of Ccap15 is true, Mixed mode.
-        if (Ccap15 & 0xC000) {
-          block->Cmodes |= HT_MIXED;
+        // A tile-component may mix HT and Part 1 code-blocks only if its SPcod/SPcoc has
+        // bits 7 and 6 set (HT_MIXED | HT) and bits 15 and 14 of Ccap15 are both 1 (ISO/IEC
+        // 15444-15, A.3.2 and A.4).  Otherwise all of its code-blocks are HT code-blocks,
+        // whose segment lengths are not bound by the rules that tell the two kinds apart.
+        if ((Ccap15 & 0xC000) != 0xC000) {
+          block->Cmodes &= static_cast<uint16_t>(~HT_MIXED);
         }
       }
       // Retrieve codeblock inclusion
@@ -3950,6 +3954,16 @@ static void validate_component_quantization(uint16_t c, uint8_t NL, uint8_t tran
   }
 }
 
+// The COC, QCC or RGN marker of a header that applies to component c: the last one, should
+// there be several.
+template <class M>
+static M *marker_for_component(const std::vector<std::unique_ptr<M>> &markers, uint16_t c) {
+  M *found = nullptr;
+  for (const auto &m : markers)
+    if (m->get_component_index() == c) found = m.get();
+  return found;
+}
+
 void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, j2k_tile_base *tile,
                               uint16_t c, std::vector<int32_t *> img, bool lb_enc) {
   index = c;
@@ -3975,50 +3989,29 @@ void j2k_tile_component::init(j2k_main_header *hdr, j2k_tilepart_header *tphdr, 
   pos1.x = ceil_int(tile->pos1.x, subsampling.x);
   pos1.y = ceil_int(tile->pos1.y, subsampling.y);
 
-  // apply COC, if any
-  if (!tphdr->COC.empty()) {
-    for (auto &i : tphdr->COC) {
-      if (i->get_component_index() == c) {
-        setCOCparams(i.get());
-      }
-    }
-  } else {
-    for (auto &i : hdr->COC) {
-      if (i->get_component_index() == c) {
-        setCOCparams(i.get());
-      }
-    }
-  }
+  // Parameters a marker of this component overrides; init() may run again on a reused tile.
+  dfs_index = 0;
+  dfs_info  = nullptr;
+  atk_info  = nullptr;
+  ROIshift  = 0;
 
-  // apply QCC, if any
-  if (!tphdr->QCC.empty()) {
-    for (auto &i : tphdr->QCC) {
-      if (i->get_component_index() == c) {
-        setQCCparams(i.get());
-      }
-    }
-  } else {
-    for (auto &i : hdr->QCC) {
-      if (i->get_component_index() == c) {
-        setQCCparams(i.get());
-      }
-    }
-  }
+  // The tile's values, copied above, come from the tile-part COD if there is one and from
+  // the main COD otherwise.  The order of precedence is tile-part COC > tile-part COD >
+  // main COC > main COD (ISO/IEC 15444-1, A.6.1 and A.6.2): a main-header COC does not
+  // apply to a tile whose header has a COD.
+  COC_marker *coc = marker_for_component(tphdr->COC, c);
+  if (coc == nullptr && tphdr->COD == nullptr) coc = marker_for_component(hdr->COC, c);
+  if (coc != nullptr) setCOCparams(coc);
 
-  // apply RGN, if any
-  if (!tphdr->RGN.empty()) {
-    for (auto &i : tphdr->RGN) {
-      if (i->get_component_index() == c) {
-        setRGNparams(i.get());
-      }
-    }
-  } else {
-    for (auto &i : hdr->RGN) {
-      if (i->get_component_index() == c) {
-        setRGNparams(i.get());
-      }
-    }
-  }
+  // Likewise tile-part QCC > tile-part QCD > main QCC > main QCD (A.6.4 and A.6.5).
+  QCC_marker *qcc = marker_for_component(tphdr->QCC, c);
+  if (qcc == nullptr && tphdr->QCD == nullptr) qcc = marker_for_component(hdr->QCC, c);
+  if (qcc != nullptr) setQCCparams(qcc);
+
+  // A tile-part RGN for this component overrides the main-header one (A.6.3).
+  RGN_marker *rgn = marker_for_component(tphdr->RGN, c);
+  if (rgn == nullptr) rgn = marker_for_component(hdr->RGN, c);
+  if (rgn != nullptr) setRGNparams(rgn);
 
   // We consider "-reduce" parameter value to determine necessary buffer size.
   const uint32_t aligned_stride =
@@ -4483,6 +4476,13 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
   uint8_t tile_part_index = tmpSOT.get_tile_part_index();
   if (tile_part_index == 0) {
     init_from_first_tile_part(main_header, tphdr);
+  } else if (tphdr->POC != nullptr && this->tcomp != nullptr) {
+    // A later tile-part header may describe further progressions of the tile, for the
+    // packets that follow it (ISO/IEC 15444-1, A.6.6); they continue those of the first.
+    for (unsigned long i = 0; i < tphdr->POC->nPOC; ++i) {
+      porder_info.add(tphdr->POC->RSpoc[i], tphdr->POC->CSpoc[i], tphdr->POC->LYEpoc[i],
+                      tphdr->POC->REpoc[i], tphdr->POC->CEpoc[i], tphdr->POC->Ppoc[i]);
+    }
   }
 }
 
