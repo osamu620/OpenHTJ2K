@@ -185,6 +185,12 @@
   of only freeing it, and with 32 DWT levels the flush divided by zero
   (SIGFPE) in place of reporting the error. The destructor now only frees
   memory.
+- Encoding with 32 DWT levels (`Clevels=32`) stopped with "streaming encoder:
+  tile-component 0 does not fit the strip pipeline", and with 31 levels it
+  read past the end of an array on the stack: the encoder shares the decoder's
+  set-up of the resolution levels (see Decoder). Both now encode, and the
+  codestreams decode to the input exactly (reversible) or as at fewer levels
+  (irreversible).
 
 ### Decoder
 - A JPH or JP2 file that starts with the signature box but has no valid
