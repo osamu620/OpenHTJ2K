@@ -646,3 +646,13 @@ foreach(_t 1 4)
 endforeach()
 _sec_rejects(security_line_buffers_budget security_line_buffers_budget.j2c
              "its line-decoding buffers would take .* not supported" mt)
+
+# Set-up work sized by header values: 9361 progression order changes in the main header,
+# each replayed over the packets of every one of 65535 tiles (65 KB; 30 s), and 16384
+# components in 65535 tiles without data (49 KB; minutes).  The decoder bounds the
+# progression steps by the larger of 2^28 and 64 per codestream byte, and the
+# tile-components set up by the larger of 2^20 and one per codestream byte.
+_sec_rejects(security_poc_steps_budget security_poc_steps_budget.j2c
+             "its packet progressions would take more than .* not supported" mt)
+_sec_rejects(security_tile_components_count security_tile_components_count.j2c
+             "sets up more than 1048576 tile-components .* not supported" mt)

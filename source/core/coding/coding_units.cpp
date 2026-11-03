@@ -1515,6 +1515,13 @@ static void precinct_positions(std::vector<uint32_t> &out, uint32_t p0, uint32_t
   for (uint64_t p = (p0 / step + 1) * step; p < p1; p += step) out.push_back(static_cast<uint32_t>(p));
 }
 
+// How many coordinates precinct_positions() appends.
+static uint64_t precinct_position_count(uint32_t p0, uint32_t p1, uint32_t log2step) {
+  const uint64_t step  = uint64_t{1} << log2step;
+  const uint64_t first = (p0 / step + 1) * step;
+  return 1 + ((first < p1) ? (p1 - 1 - first) / step + 1 : 0);
+}
+
 // ceil((p - o * 2^(nb - 1)) / 2^nb), a coordinate of a subband at level nb >= 1 with
 // orientation offset o (B-15).  As above, nb reaches 32.
 static inline uint32_t subband_coord(uint32_t p, uint8_t nb, uint8_t o) {
@@ -4528,6 +4535,13 @@ void j2k_tile::charge_structure(uint64_t bytes, const char *what, bool persisten
   if (persistent) structure_bytes_ += bytes;
 }
 
+// Tile-components a codestream may set up at least (see init_from_first_tile_part()).
+constexpr uint64_t kMaxTileComponents = uint64_t{1} << 20;
+// Steps of the packet progressions a codestream may take at least (create_tile_buf()).
+constexpr uint64_t kMinProgressionSteps = uint64_t{1} << 28;
+// and per codestream byte
+constexpr uint64_t kProgressionStepsPerByte = 64;
+
 // Heap bytes of a j2k_tile_component beyond the object: its step sizes and precinct sizes.
 constexpr uint64_t kTileComponentHeapBytes = 3 * 97 + 8 * 33 + 3 * kHeapBlockBytes;
 // Bytes of one progression order change in porder_info (its six vectors, which may hold up
@@ -4697,6 +4711,18 @@ void j2k_tile::init_from_first_tile_part(j2k_main_header &main_header, j2k_tilep
   // unconditionally because it only writes scalar fields and vectors that
   // are idempotent under identical main-header bytes.
   if (!structure_built_) {
+    // Setting up a tile-component takes time, also for one without samples, and tiles
+    // times components reach 2^30 in a header of 50 KB.  A codestream may set up at most
+    // the larger of kMaxTileComponents and one per codestream byte (each tile-component
+    // with samples takes at least a packet byte).
+    main_header.tile_components_set_up += num_components;
+    if (main_header.tile_components_set_up > std::max(kMaxTileComponents, main_header.codestream_bytes)) {
+      open_htj2k::detail::fail(
+          "tile %u: the codestream sets up more than %llu tile-components (tiles times components), "
+          "the larger of 2^20 and one per codestream byte — not supported.",
+          static_cast<unsigned>(this->index),
+          static_cast<unsigned long long>(std::max(kMaxTileComponents, main_header.codestream_bytes)));
+    }
     // The tile-components, with their per-level step sizes and precinct sizes.
     charge_structure(num_components * (sizeof(j2k_tile_component) + kTileComponentHeapBytes),
                      "its tile-components");
@@ -5006,6 +5032,19 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     j2k_precinct *cp   = nullptr;
     cached_crp_.clear();
     cached_crp_.reserve(num_packets);
+    // Precinct counters of the position-driven progressions, per component and resolution;
+    // each progression change resets the ones it uses.
+    std::vector<std::vector<uint32_t>> p_x(static_cast<uint32_t>(num_components),
+                                           std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
+    std::vector<std::vector<uint32_t>> p_y(static_cast<uint32_t>(num_components),
+                                           std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
+    // The steps of the progressions below, which header values alone can make huge (thousands
+    // of progression changes, each over every packet of every tile, or positions on a grid of
+    // 2 x 2 precincts): a codestream may take at most the larger of kMinProgressionSteps and
+    // kProgressionStepsPerByte per codestream byte, which the steps of a codestream's own
+    // packets stay far below.
+    const uint64_t max_steps =
+        std::max(kMinProgressionSteps, sat_mul(kProgressionStepsPerByte, main_header.codestream_bytes));
     for (unsigned long i = 0; i < porder_info.nPOC; ++i) {
       RS  = porder_info.RSpoc[i];
       CS  = porder_info.CSpoc[i];
@@ -5013,10 +5052,34 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       RE  = porder_info.REpoc[i];
       CE  = std::min(porder_info.CEpoc[i], num_components);
       PO  = porder_info.Ppoc[i];
-      std::vector<std::vector<uint32_t>> p_x(static_cast<uint32_t>(num_components),
-                                             std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
-      std::vector<std::vector<uint32_t>> p_y(static_cast<uint32_t>(num_components),
-                                             std::vector<uint32_t>(static_cast<uint32_t>(max_c_NL + 1), 0));
+      {
+        const uint8_t re_c     = std::min<uint8_t>(RE, static_cast<uint8_t>(max_c_NL + 1));
+        uint64_t box_precincts = 0, box_cr = 0;
+        for (c = CS; c < CE; c++) {
+          const uint8_t re = std::min<uint8_t>(re_c, static_cast<uint8_t>(this->tcomp[c].NL + 1));
+          for (r = RS; r < re; r++) {
+            const j2k_resolution *res = this->tcomp[c].access_resolution(r);
+            box_precincts += static_cast<uint64_t>(res->npw) * res->nph;
+            p_x[c][r] = p_y[c][r] = 0;
+          }
+          box_cr += (re > RS) ? re - RS : 0;
+        }
+        uint64_t steps = box_cr + sat_mul(LYE, box_precincts);
+        if (PO >= 2) {
+          element_siz gPP;
+          this->find_gcd_of_precinct_size(gPP);
+          steps = sat_add(steps, sat_mul(sat_mul(precinct_position_count(pos0.x, this->pos1.x, gPP.x),
+                                                 precinct_position_count(pos0.y, this->pos1.y, gPP.y)),
+                                         box_cr));
+        }
+        main_header.progression_steps = sat_add(main_header.progression_steps, steps);
+        if (main_header.progression_steps > max_steps) {
+          open_htj2k::detail::fail(
+              "tile %u: its packet progressions would take more than %llu steps, the larger of 2^28 and 64 "
+              "per codestream byte — not supported.",
+              static_cast<unsigned>(this->index), static_cast<unsigned long long>(max_steps));
+        }
+      }
 
       element_siz PP, cPP, csub;
       std::vector<uint32_t> x_examin;
