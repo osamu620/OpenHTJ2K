@@ -59,7 +59,8 @@ class openhtj2k_decoder {
  public:
   // num_threads: 1 decodes on the calling thread only.  Any other value uses the
   // worker pool that all decoders and encoders in the process share: 0 asks for
-  // one thread per hardware thread, n for n threads.  The pool is created by the
+  // one thread per hardware thread, n for n threads; either way at most 1024
+  // (a larger count gets 1024).  The pool is created by the
   // first instance that needs it, with that instance's count, and is kept until
   // the last instance using it is destroyed; while it exists, other instances
   // use it as it is.  Instances may be used from several threads at once, each

@@ -132,6 +132,10 @@
   they now throw `std::out_of_range`.
 - Reading a byte or a 16-bit word from an empty or one-byte codestream
   buffer is now rejected; the bounds check used to wrap around.
+- `num_threads` had no upper bound: a library caller passing 100000 made the
+  shared pool start 100000 threads. The pool now runs at most 1024 threads
+  (also for 0 = one per hardware thread); a larger count gets 1024. Documented
+  with `num_threads` in `decoder.hpp` and `encoder.hpp`.
 
 ### Encoder
 - Lossless encoding of components with different bit depths was not lossless
