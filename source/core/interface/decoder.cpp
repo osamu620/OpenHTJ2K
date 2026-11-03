@@ -56,6 +56,14 @@
   #include "message_internal.hpp"
 #endif
 namespace open_htj2k {
+// An instance created with num_threads == 1 runs on the calling thread only, even when
+// another instance has created the shared pool (see ThreadPool::SingleThreadScope).
+#ifdef OPENHTJ2K_THREAD
+  #define OPENHTJ2K_SINGLE_THREAD_SCOPE(single) ThreadPool::SingleThreadScope single_thread_scope(single)
+#else
+  #define OPENHTJ2K_SINGLE_THREAD_SCOPE(single) (void)(single)
+#endif
+
 class openhtj2k_decoder_impl {
  private:
 #ifdef OPENHTJ2K_THREAD
@@ -64,6 +72,7 @@ class openhtj2k_decoder_impl {
 #endif
   j2c_src_memory in;
   uint8_t reduce_NL;
+  bool single_thread_ = false;  // num_threads == 1: never use the shared pool
   uint32_t row_lo_    = 0;
   uint32_t row_limit_ = UINT32_MAX;
   uint32_t col_lo_    = 0;
@@ -99,6 +108,7 @@ class openhtj2k_decoder_impl {
       packet_observer_;
 
  public:
+  bool single_thread() const { return single_thread_; }
   openhtj2k_decoder_impl();
   openhtj2k_decoder_impl(const char *, uint8_t reduce_NL, uint32_t num_threads);
   openhtj2k_decoder_impl(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
@@ -165,7 +175,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
 
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
-  (void)num_threads;  // only the thread pool uses it
+  single_thread_ = (num_threads == 1);
   uintmax_t file_size;
 #ifdef OPENHTJ2K_HAS_FILESYSTEM
   try {
@@ -214,7 +224,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t length, const uint8_t r,
                                                uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
-  (void)num_threads;  // only the thread pool uses it
+  single_thread_ = (num_threads == 1);
   if (buf == nullptr) {
   }
 #ifdef OPENHTJ2K_THREAD
@@ -237,7 +247,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
 
 void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const uint8_t r,
                                   uint32_t num_threads) {
-  (void)num_threads;  // only the thread pool uses it
+  single_thread_ = (num_threads == 1);
   reduce_NL = r;
   enum_cs   = 0;
   if (buf == nullptr) {
@@ -261,7 +271,7 @@ void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const
 
 void openhtj2k_decoder_impl::init_borrow(uint8_t *buf, const size_t length, const uint8_t r,
                                           uint32_t num_threads) {
-  (void)num_threads;  // only the thread pool uses it
+  single_thread_ = (num_threads == 1);
   reduce_NL = r;
   enum_cs   = 0;
   if (buf == nullptr) {
@@ -380,7 +390,10 @@ void openhtj2k_decoder::init_borrow(uint8_t *buf, size_t length, const uint8_t r
                                     uint32_t num_threads) {
   this->impl->init_borrow(buf, length, reduce_NL, num_threads);
 }
-void openhtj2k_decoder::parse() { this->impl->parse(); }
+void openhtj2k_decoder::parse() {
+  OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
+  this->impl->parse();
+}
 
 uint16_t openhtj2k_decoder::get_num_component() { return this->impl->get_num_component(); }
 uint32_t openhtj2k_decoder::get_component_width(uint16_t c) { return this->impl->get_component_width(c); }
@@ -483,6 +496,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
 void openhtj2k_decoder::invoke_line_based(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
                                           std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                           std::vector<bool> &is_signed) {
+  OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
   this->impl->invoke_line_based(buf, width, height, depth, is_signed);
 }
 
@@ -683,18 +697,21 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
 void openhtj2k_decoder::invoke_line_based_stream(
     std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
   this->impl->invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
 }
 
 void openhtj2k_decoder::invoke_line_based_stream_reuse(
     std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
   this->impl->invoke_line_based_stream_reuse(std::move(cb), width, height, depth, is_signed);
 }
 
 void openhtj2k_decoder::invoke_line_based_direct(
     PlanarOutputDesc *descs, uint16_t nc, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
+  OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
   this->impl->invoke_line_based_direct(descs, nc, width, height, depth, is_signed);
 }
 

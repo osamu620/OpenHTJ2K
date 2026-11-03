@@ -548,6 +548,14 @@ int image::read_tiff(const std::string &filename) {
 int image::read_tiff(const std::string &) { return EXIT_FAILURE; }
 #endif
 
+// An instance created with num_threads == 1 runs on the calling thread only, even when
+// another instance has created the shared pool (see ThreadPool::SingleThreadScope).
+#ifdef OPENHTJ2K_THREAD
+  #define OPENHTJ2K_SINGLE_THREAD_SCOPE(single) ThreadPool::SingleThreadScope single_thread_scope(single)
+#else
+  #define OPENHTJ2K_SINGLE_THREAD_SCOPE(single) (void)(single)
+#endif
+
 // openhtj2k_encoder_impl shall not be public
 class openhtj2k_encoder_impl {
  private:
@@ -563,6 +571,7 @@ class openhtj2k_encoder_impl {
   qcd_params *qcd;
   uint8_t qfactor;
   file_format format;  // codestream, or the codestream in a JPH or JP2 file
+  bool single_thread_ = false;  // num_threads == 1: never use the shared pool
   uint8_t color_space;
   // EXPERIMENTAL: analytic visual (CSF) weighting. Default-constructed selects
   // the legacy table, so output is unchanged unless set_visual_weighting() is called.
@@ -596,6 +605,8 @@ class openhtj2k_encoder_impl {
                          qcd_params &, uint8_t, bool, uint8_t);
   void set_output_buffer(std::vector<uint8_t> &);
   void set_file_format(file_format f) { format = f; }
+  void set_single_thread(bool single) { single_thread_ = single; }
+  bool single_thread() const { return single_thread_; }
   void set_visual_weighting(uint8_t model, double ref_ppd, double zoom);
   void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
   void set_chroma_csf_reuse_luma(bool reuse_luma);
@@ -1175,7 +1186,6 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
 openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_t *> &input_buf,
                                      siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
                                      bool isJPH, uint8_t color_space, uint32_t num_threads) {
-  (void)num_threads;  // only the thread pool uses it
   if (qfactor != NO_QFACTOR) {
     if (qfactor > 100) {
       open_htj2k::detail::fail("Value of Qfactor shall be in the range [0, 100].");
@@ -1185,6 +1195,7 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
   // asking for the pool.
   this->impl =
       MAKE_UNIQUE<openhtj2k_encoder_impl>(fname, input_buf, siz, cod, qcd, qfactor, isJPH, color_space);
+  this->impl->set_single_thread(num_threads == 1);
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
 #endif
@@ -1216,10 +1227,14 @@ void openhtj2k_encoder::set_chroma_csf_reuse_luma(bool reuse_luma) {
   this->impl->set_chroma_csf_reuse_luma(reuse_luma);
 }
 
-size_t openhtj2k_encoder::invoke_line_based() { return this->impl->invoke_line_based(); }
+size_t openhtj2k_encoder::invoke_line_based() {
+  OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
+  return this->impl->invoke_line_based();
+}
 
 size_t openhtj2k_encoder::invoke_line_based_stream(
     std::function<void(uint32_t, int32_t **, uint16_t)> src_fn) {
+  OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
   return this->impl->invoke_line_based_stream(src_fn);
 }
 

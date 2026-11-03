@@ -27,6 +27,11 @@ if(Threads_FOUND AND NOT EMSCRIPTEN)
   add_subdirectory(tests/tools/concurrent_instances)
   target_include_directories(concurrent_instances PUBLIC source/core/interface)
   target_link_libraries(concurrent_instances PUBLIC open_htj2k PRIVATE openhtj2k_internal Threads::Threads)
+  # threadpool_check: the worker pool's task ring grows instead of failing, and
+  # SingleThreadScope hides the pool from a one-thread instance
+  add_executable(threadpool_check)
+  add_subdirectory(tests/tools/threadpool_check)
+  target_link_libraries(threadpool_check PUBLIC open_htj2k PRIVATE openhtj2k_internal Threads::Threads)
 endif()
 
 # message_handler_check: the library prints nothing by itself; warnings go to the message handler
