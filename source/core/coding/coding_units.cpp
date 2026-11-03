@@ -3703,10 +3703,13 @@ void j2k_tile_component::init_line_encode() {
     cx->lp_width = static_cast<int32_t>(ncr->get_pos1().x - ncr->get_pos0().x);
     cx->hp_width = static_cast<int32_t>(HL->get_pos1().x - HL->get_pos0().x);
 
-    cx->lp_tmp = static_cast<sprec_t *>(
-        aligned_mem_alloc(sizeof(sprec_t) * round_up(static_cast<uint32_t>(cx->lp_width), 32U), 32));
-    cx->hp_tmp = static_cast<sprec_t *>(
-        aligned_mem_alloc(sizeof(sprec_t) * round_up(static_cast<uint32_t>(cx->hp_width), 32U), 32));
+    // A band of a small image can have no columns (lp_width or hp_width 0): keep
+    // the scratch rows non-empty, as zero-size allocations are
+    // implementation-defined.
+    cx->lp_tmp = static_cast<sprec_t *>(aligned_mem_alloc(
+        sizeof(sprec_t) * round_up(static_cast<uint32_t>(std::max(cx->lp_width, 1)), 32U), 32));
+    cx->hp_tmp = static_cast<sprec_t *>(aligned_mem_alloc(
+        sizeof(sprec_t) * round_up(static_cast<uint32_t>(std::max(cx->hp_width, 1)), 32U), 32));
 
     cx->hl_samples = HL->i_samples;
     cx->hl_stride  = HL->stride;
