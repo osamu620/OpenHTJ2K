@@ -33,6 +33,14 @@
 #include <cstring>
 #include "open_htj2k_typedef.hpp"
 
+// The block coders load and store bit-stream words with native-endian 32- and
+// 64-bit accesses that assume little-endian byte order (for example
+// load_u32_unaligned in the HT decoder, openhtj2k_bswap32 in the HT encoder);
+// a big-endian build would silently produce wrong output.
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  #error "OpenHTJ2K supports little-endian targets only."
+#endif
+
 #define round_up(x, n) (((x) + (n) - 1) & ~((n) - 1))  // n a power of 2; ~(n - 1) == -n
 // #define round_down(x, n) ((x) & (-n))
 #define round_down(x, n) ((x) - ((x) % (n)))

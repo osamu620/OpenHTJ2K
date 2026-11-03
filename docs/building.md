@@ -10,6 +10,11 @@ receiver.
 
 - CMake 3.13 or later
 - A compiler supporting **C++11 or later** (GCC 4.8+, Clang 3.3+, MSVC 2015+, Apple Clang 6+)
+- A **little-endian** target (x86, x86-64, ARM, AArch64, RISC-V, WebAssembly, ...). The block
+  coders read and write their bit-streams with native 32- and 64-bit memory accesses that assume
+  little-endian byte order, so configuring for a big-endian target (s390x, big-endian PowerPC or
+  MIPS, ...) stops with an error, and so does compiling the sources for one, rather than building
+  a library that would write and read wrong codestreams.
 
 CMake automatically selects the highest standard supported by the
 compiler (C++17 → C++14 → C++11); pass `-DCMAKE_CXX_STANDARD=11` (or `14`,
@@ -138,11 +143,27 @@ c++ my_app.cpp $(pkg-config --cflags --libs open_htj2k) -o my_app
 # static library: pkg-config --static --cflags --libs open_htj2k
 ```
 
-Either way, include the API as `#include "decoder.hpp"` /
-`#include "encoder.hpp"`. The paths in `open_htj2k.pc` are relative to its
-`prefix=` line, so a relocated install only needs that line changed.
+Either way, include the API as
+`#include <open_htj2k/interface/decoder.hpp>` /
+`#include <open_htj2k/interface/encoder.hpp>`, which cannot collide with
+another library's headers of the same name; the short form
+`#include "decoder.hpp"` / `#include "encoder.hpp"` also works. (A project
+that uses OpenHTJ2K through `add_subdirectory()` has only the short form.)
+The paths in `open_htj2k.pc` are relative to its `prefix=` line, so a
+relocated install only needs that line changed.
+
+The package passes on only what the public headers need. The macros that
+select the library's own code paths (SIMD, threading, TIFF and QUIC support)
+are private to its build, so they do not leak into a consumer's code; the
+headers compile on their own, as C++11 or later, without warnings under
+`-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
+-Wold-style-cast` and similar flags. A static library built with TIFF
+support needs libtiff when linking: the CMake package finds it with
+`find_dependency(TIFF)`, and `pkg-config --static` lists it.
+
 `ctest -R install_consumer` installs the build into a scratch prefix and
-builds and runs a small program against it both ways.
+builds and runs a small program against it both ways, with warnings as
+errors, and also compiles every installed header on its own.
 
 On Windows, code using the DLL sees the API declared `__declspec(dllimport)`;
 when linking the static library, define `OHTJ2K_STATIC` (the CMake target

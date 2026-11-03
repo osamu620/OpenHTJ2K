@@ -1,10 +1,14 @@
 # Installs the build tree into a scratch prefix, then builds and runs
 # consumer.cpp against it using only what an external project sees: the
 # installed headers, the installed library and the installed package files.
-# The consumer is built twice:
-#   1. as the CMake project in this directory, via find_package(openhtj2k);
+# The consumer is built twice, with warnings as errors:
+#   1. as the CMake project in this directory, via find_package(openhtj2k),
+#      which also compiles every installed header on its own;
 #   2. when PKG_CONFIG is set, directly with the compiler and
 #      `pkg-config --cflags --libs open_htj2k`.
+# consumer.cpp fails to compile if the package hands internal configuration
+# macros to consumers, and consumer_paths.cpp includes the headers as
+# <open_htj2k/interface/...>.
 #
 # Invoked by tests/install_check.cmake as `cmake -D... -P run.cmake` with:
 #   BUILD_DIR     build tree to install
@@ -19,7 +23,8 @@
 #   PKG_CONFIG    pkg-config executable, or empty to skip step 2
 #   LIBDIR        CMAKE_INSTALL_LIBDIR (relative)
 #   BINDIR        CMAKE_INSTALL_BINDIR (relative; Windows DLLs go there)
-#   STATIC        true when the library is built static (adds --static)
+#   STATIC        true when the library is built static (adds --static, and
+#                 the consumer checks that OHTJ2K_STATIC is defined)
 
 foreach(_v BUILD_DIR CONFIG WORK_DIR CONSUMER_DIR INPUT CXX GENERATOR LIBDIR BINDIR)
   if(NOT DEFINED ${_v} OR "${${_v}}" STREQUAL "")
@@ -73,6 +78,9 @@ if(NOT GENERATOR MATCHES "^Visual Studio|^Xcode")
     list(APPEND _cm_args "-DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM}")
   endif()
 endif()
+if(STATIC)
+  list(APPEND _cm_args -DOPENHTJ2K_EXPECT_STATIC=ON)
+endif()
 execute_process(
   COMMAND "${CMAKE_COMMAND}" ${_cm_args} "-DCMAKE_PREFIX_PATH=${_prefix}"
           -S "${CONSUMER_DIR}" -B "${_cm_bin}"
@@ -105,8 +113,12 @@ file(WRITE "${_pc}" "${_pc_text}")
 
 set(ENV{PKG_CONFIG_PATH} "${_prefix}/${LIBDIR}/pkgconfig")
 set(_pc_args "")
+# Same warnings-as-errors flags as the CMake consumer (GCC/Clang only here).
+set(_strict -Wall -Wextra -Wpedantic -Wshadow -Wundef -Wconversion -Wsign-conversion -Wold-style-cast
+            -Wcast-qual -Wmissing-declarations -Werror)
 if(STATIC)
   list(APPEND _pc_args --static)
+  list(APPEND _strict -DOPENHTJ2K_EXPECT_STATIC)
 endif()
 execute_process(
   COMMAND "${PKG_CONFIG}" ${_pc_args} --cflags --libs open_htj2k
@@ -119,8 +131,8 @@ message(STATUS "pkg-config flags: ${_flags}")
 separate_arguments(_flags UNIX_COMMAND "${_flags}")
 
 execute_process(
-  COMMAND "${CXX}" -std=c++11 "${CONSUMER_DIR}/consumer.cpp" ${_flags} "-Wl,-rpath,${_prefix}/${LIBDIR}"
-          -o "${WORK_DIR}/consumer"
+  COMMAND "${CXX}" -std=c++11 ${_strict} "${CONSUMER_DIR}/consumer.cpp" "${CONSUMER_DIR}/consumer_paths.cpp"
+          ${_flags} "-Wl,-rpath,${_prefix}/${LIBDIR}" -o "${WORK_DIR}/consumer"
   RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _out)
 if(_rc)
   message(FATAL_ERROR "building against the installed tree failed:\n${_out}")

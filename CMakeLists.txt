@@ -85,6 +85,22 @@ message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 
 message(STATUS "${CMAKE_SYSTEM_PROCESSOR} ${CMAKE_CXX_COMPILER_ID}")
 
+# Little-endian targets only: the block coders move their bit-streams with
+# native 32- and 64-bit loads and stores that assume little-endian byte order,
+# so a big-endian build would compile but write and read wrong codestreams.
+# (source/core/common/utils.hpp stops such a build too.)
+if(CMAKE_VERSION VERSION_LESS 3.20)
+  include(TestBigEndian)
+  test_big_endian(OPENHTJ2K_BIG_ENDIAN)
+elseif(CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")
+  set(OPENHTJ2K_BIG_ENDIAN TRUE)
+else()
+  set(OPENHTJ2K_BIG_ENDIAN FALSE)
+endif()
+if(OPENHTJ2K_BIG_ENDIAN)
+  message(FATAL_ERROR "OpenHTJ2K supports little-endian targets only; this target is big-endian.")
+endif()
+
 # Default BUILD_TYPE is "Release"
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
@@ -110,12 +126,14 @@ target_include_directories(
     # ${CMAKE_CURRENT_SOURCE_DIR}/source/thirdparty/highway
 )
 # In-tree code also sees source/core/common; installed consumers get only the
-# public headers (see "Install" below).
+# public headers (see "Install" below), as <decoder.hpp> or
+# <open_htj2k/interface/decoder.hpp>.
 target_include_directories(
     open_htj2k
     INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/source/core/interface>
               $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/source/core/common>
-              $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/open_htj2k/interface>)
+              $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/open_htj2k/interface>
+              $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 set_target_properties(
         open_htj2k PROPERTIES
         OUTPUT_NAME openhtj2k
@@ -130,6 +148,15 @@ if(NOT BUILD_SHARED_LIBS)
   target_compile_definitions(open_htj2k PUBLIC OHTJ2K_STATIC)
   set(PKG_CONFIG_CFLAGS_EXTRA " -DOHTJ2K_STATIC")
 endif()
+# The configuration macros below (threading, SIMD, TIFF, QUIC) select the
+# library's internal code paths.  The installed headers do not use them, so
+# they stay out of the exported target: they are set on openhtj2k_internal,
+# whose definitions the library compiles with privately, and which every
+# in-tree program linking the library links too, because those programs
+# include internal headers that must see the same configuration.
+add_library(openhtj2k_internal INTERFACE)
+target_compile_definitions(open_htj2k
+    PRIVATE $<TARGET_PROPERTY:openhtj2k_internal,INTERFACE_COMPILE_DEFINITIONS>)
 # target_link_libraries(open_htj2k PUBLIC ${CMAKE_THREAD_LIBS_INIT} PRIVATE hwy)
 
 find_package(Threads)
@@ -141,7 +168,9 @@ if (EMSCRIPTEN)
   # Threading: enabled when OPENHTJ2K_ENABLE_WASM_THREADS is set by the
   # web/ build (pthreads variant).
   if (OPENHTJ2K_ENABLE_WASM_THREADS)
-    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+    target_compile_definitions(openhtj2k_internal INTERFACE "OPENHTJ2K_THREAD")
+    # Public: every object linked into an Emscripten pthreads module must be
+    # compiled with -pthread.
     target_compile_options(open_htj2k PUBLIC "-pthread")
     message(STATUS "OPENHTJ2K_THREAD is set (Emscripten pthreads)")
   endif()
@@ -151,7 +180,7 @@ if (NOT EMSCRIPTEN)
   if (Threads_FOUND)
     message(STATUS "Thread library found")
     target_link_libraries(open_htj2k PUBLIC Threads::Threads)
-    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_THREAD")
+    target_compile_definitions(openhtj2k_internal INTERFACE "OPENHTJ2K_THREAD")
     message(STATUS "OPENHTJ2K_THREAD is set")
     set(PKG_CONFIG_LIBS_PRIVATE "${CMAKE_THREAD_LIBS_INIT}")
   endif()
@@ -160,7 +189,7 @@ if (NOT EMSCRIPTEN)
     message(STATUS "libtiff found")
     message(STATUS "tiff include = ${TIFF_INCLUDE_DIR}")
     message(STATUS "tiff library = ${TIFF_LIBRARIES}")
-    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TIFF_SUPPORT")
+    target_compile_definitions(openhtj2k_internal INTERFACE "OPENHTJ2K_TIFF_SUPPORT")
     # The public headers do not include tiffio.h, so libtiff is a private
     # dependency: it matters to consumers only when linking the static library.
     target_link_libraries(open_htj2k PRIVATE TIFF::TIFF)
@@ -188,9 +217,10 @@ if(OPENHTJ2K_QUIC AND NOT EMSCRIPTEN)
   if(MSQUIC_LIBRARY AND MSQUIC_INCLUDE_DIR AND NGHTTP3_LIBRARY AND NGHTTP3_INCLUDE_DIR)
     message(STATUS "OPENHTJ2K_QUIC: MsQuic found: ${MSQUIC_LIBRARY}")
     message(STATUS "OPENHTJ2K_QUIC: nghttp3 found: ${NGHTTP3_LIBRARY}")
-    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_QUIC")
-    target_include_directories(open_htj2k PUBLIC ${MSQUIC_INCLUDE_DIR} ${NGHTTP3_INCLUDE_DIR})
-    target_link_libraries(open_htj2k PUBLIC ${MSQUIC_LIBRARY} ${NGHTTP3_LIBRARY})
+    target_compile_definitions(openhtj2k_internal INTERFACE "OPENHTJ2K_ENABLE_QUIC")
+    # Only the library's sources include the MsQuic and nghttp3 headers.
+    target_include_directories(open_htj2k PRIVATE ${MSQUIC_INCLUDE_DIR} ${NGHTTP3_INCLUDE_DIR})
+    target_link_libraries(open_htj2k PRIVATE ${MSQUIC_LIBRARY} ${NGHTTP3_LIBRARY})
   else()
     message(WARNING "OPENHTJ2K_QUIC requested but libraries not found:")
     if(NOT MSQUIC_LIBRARY OR NOT MSQUIC_INCLUDE_DIR)
@@ -249,7 +279,7 @@ if(NOT EMSCRIPTEN)
     # SSE2 is part of x86-64: builds without AVX2 use 128-bit SSE2 paths unless this is off.
     option(ENABLE_SSE2 "Use SSE2 intrinsics in x86-64 builds without AVX2" ON)
     if(NOT ENABLE_SSE2)
-      target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_DISABLE_SSE2")
+      target_compile_definitions(openhtj2k_internal INTERFACE "OPENHTJ2K_DISABLE_SSE2")
     endif()
     set(OPENHTJ2K_TARGET_CPU "native" CACHE STRING
         "x86-64 code generation: native (build machine; binaries may not run elsewhere), x86-64-v3 (any AVX2 CPU), x86-64-v4 (any AVX-512 CPU), generic (no AVX2)")
@@ -339,10 +369,10 @@ configure_file(
 if (NOT EMSCRIPTEN)
   if(ENABLE_ARM_NEON)
     message(STATUS "OPENHTJ2K_ENABLE_ARM_NEON is set")
-    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_ENABLE_ARM_NEON")
+    target_compile_definitions(openhtj2k_internal INTERFACE "OPENHTJ2K_ENABLE_ARM_NEON")
   elseif(ENABLE_AVX2)
     message(STATUS "OPENHTJ2K_TRY_AVX2 is set")
-    target_compile_definitions(open_htj2k PUBLIC "OPENHTJ2K_TRY_AVX2")
+    target_compile_definitions(openhtj2k_internal INTERFACE "OPENHTJ2K_TRY_AVX2")
   endif()
 endif()
 
@@ -365,7 +395,7 @@ if(OPENHTJ2K_BUILD_APPS)
     open_htj2k_dec
     PROPERTIES OUTPUT_NAME
                $<IF:$<CONFIG:Debug>,open_htj2k_dec_dbg,open_htj2k_dec>)
-  target_link_libraries(open_htj2k_dec PUBLIC open_htj2k)
+  target_link_libraries(open_htj2k_dec PUBLIC open_htj2k PRIVATE openhtj2k_internal)
 
   # Image-I/O utility (static; in-tree apps only — not part of libopen_htj2k ABI)
   add_library(openhtj2k_imgio STATIC)
@@ -385,7 +415,7 @@ if(OPENHTJ2K_BUILD_APPS)
     open_htj2k_enc
     PROPERTIES OUTPUT_NAME
                $<IF:$<CONFIG:Debug>,open_htj2k_enc_dbg,open_htj2k_enc>)
-  target_link_libraries(open_htj2k_enc PUBLIC open_htj2k PRIVATE openhtj2k_imgio)
+  target_link_libraries(open_htj2k_enc PUBLIC open_htj2k PRIVATE openhtj2k_internal openhtj2k_imgio)
 
   # Estimates the Qfactor used at encode time from a J2C codestream's QCD/QCC.
   add_executable(estimate_qfactor)
@@ -394,7 +424,7 @@ if(OPENHTJ2K_BUILD_APPS)
   # JPIP Phase-3 standalone HTTP/1.1 server
   add_executable(open_htj2k_jpip_server)
   add_subdirectory(source/apps/jpip_server)
-  target_link_libraries(open_htj2k_jpip_server PUBLIC open_htj2k)
+  target_link_libraries(open_htj2k_jpip_server PUBLIC open_htj2k PRIVATE openhtj2k_internal)
   set_target_properties(
     open_htj2k_jpip_server
     PROPERTIES OUTPUT_NAME
@@ -403,7 +433,7 @@ if(OPENHTJ2K_BUILD_APPS)
   # JPIP foveation benchmark (bandwidth + decode workload comparison)
   add_executable(open_htj2k_jpip_benchmark)
   add_subdirectory(source/apps/jpip_benchmark)
-  target_link_libraries(open_htj2k_jpip_benchmark PUBLIC open_htj2k)
+  target_link_libraries(open_htj2k_jpip_benchmark PUBLIC open_htj2k PRIVATE openhtj2k_internal)
   set_target_properties(
     open_htj2k_jpip_benchmark
     PROPERTIES OUTPUT_NAME
@@ -449,7 +479,8 @@ if (OPENHTJ2K_RTP AND OPENHTJ2K_BUILD_APPS AND NOT EMSCRIPTEN)
       else()
         target_link_libraries(open_htj2k_rtp_recv PUBLIC open_htj2k glfw OpenGL::GL)
       endif()
-      target_link_libraries(open_htj2k_rtp_decode_profile PUBLIC open_htj2k)
+      target_link_libraries(open_htj2k_rtp_recv PRIVATE openhtj2k_internal)
+      target_link_libraries(open_htj2k_rtp_decode_profile PUBLIC open_htj2k PRIVATE openhtj2k_internal)
 
       # JPIP Phase-1 foveation demo — shares the rtp_recv renderer, so it
       # lives in the same glfw-gated block.
@@ -468,6 +499,7 @@ if (OPENHTJ2K_RTP AND OPENHTJ2K_BUILD_APPS AND NOT EMSCRIPTEN)
       else()
         target_link_libraries(open_htj2k_jpip_demo PUBLIC open_htj2k glfw OpenGL::GL)
       endif()
+      target_link_libraries(open_htj2k_jpip_demo PRIVATE openhtj2k_internal)
     else()
       message(WARNING "OPENHTJ2K_RTP requested but glfw3/OpenGL not found; skipping rtp_recv target")
     endif()
@@ -489,11 +521,12 @@ install(TARGETS open_htj2k
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-# Public headers.  Consumers add <prefix>/include/open_htj2k/interface to their
-# include path (see the pkg-config Cflags and the CMake package's target), so
-# every header the public API includes must be installed there —
-# tests/install_check.cmake builds a program against the installed tree to
-# keep it that way.
+# Public headers.  Consumers add <prefix>/include/open_htj2k/interface and
+# <prefix>/include to their include path (see the pkg-config Cflags and the
+# CMake package's target), so every header the public API includes must be
+# installed there, and the headers include each other with "" relative to
+# their own directory — tests/install_check.cmake builds a program against the
+# installed tree to keep it that way.
 install(DIRECTORY source/core/interface
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/open_htj2k
   FILES_MATCHING

@@ -57,6 +57,37 @@
   interposition. The shared library now exports no global symbols of its
   own. Programs that use only the public API need no change.
 
+## Build and packaging
+- The installed package no longer defines the library's build configuration
+  macros (`OPENHTJ2K_THREAD`, `OPENHTJ2K_TRY_AVX2`,
+  `OPENHTJ2K_ENABLE_ARM_NEON`, `OPENHTJ2K_DISABLE_SSE2`,
+  `OPENHTJ2K_TIFF_SUPPORT`, `OPENHTJ2K_ENABLE_QUIC`) in the code that uses
+  it. The public headers do not depend on them, but the CMake target passed
+  them to every consumer. Only `OHTJ2K_STATIC` remains, for a static library.
+  The MsQuic and nghttp3 include directories and libraries of an
+  `OPENHTJ2K_QUIC=ON` build are private to the library as well.
+- The headers can be included as `<open_htj2k/interface/decoder.hpp>` and
+  `<open_htj2k/interface/encoder.hpp>`, which cannot collide with another
+  library's `decoder.hpp`: the CMake package and `open_htj2k.pc` also put
+  `<prefix>/include` on the include path. `#include "decoder.hpp"` still
+  works.
+- `image::read_tiff()` is declared whether or not the library was built with
+  libtiff; without libtiff it returns `EXIT_FAILURE`. Its declaration used to
+  depend on `OPENHTJ2K_TIFF_SUPPORT`, so the header only matched the library
+  when the consumer defined the macro the same way.
+- `image::get_Ssiz_value()` in `encoder.hpp` makes an `int` to `uint8_t`
+  conversion explicit.
+- Configuring for a big-endian target stops with an error, and so does
+  compiling the library's sources for one. The block coders assume
+  little-endian byte order, so such a build compiled and then wrote and read
+  wrong codestreams.
+- The `install_consumer` test builds its programs with warnings as errors
+  (`-Wall -Wextra -Wpedantic -Wshadow -Wundef -Wconversion -Wsign-conversion
+  -Wold-style-cast -Wcast-qual -Wmissing-declarations`, MSVC `/W4`), compiles
+  every installed header on its own, includes the headers by both paths, and
+  fails if a build configuration macro reaches the consumer or if the package
+  of a static build does not define `OHTJ2K_STATIC`.
+
 ## Fixed
 
 ### Library
@@ -78,6 +109,17 @@
   file ending in `.jphc`, and refused `.jhc`, the extension its help text
   recommends for a codestream. Both now get the bare codestream. The output
   file extension is now matched in any letter case.
+
+### Encoder and decoder
+- Small images, or images with a nonzero origin, no longer make the
+  line-based DWT request zero-byte aligned allocations (`posix_memalign()`
+  with size 0, which Valgrind reports, for example for 1x1, 3x2 or 1x300
+  images). A resolution or band without columns now gets non-empty scratch
+  buffers.
+- The line-based forward DWT read up to 12 bytes before a buffer for a
+  resolution without columns (which a nonzero image origin can produce). It
+  now skips the horizontal filter for such rows; the values read never
+  reached the codestream.
 
 # [0.24.0] - 2026-11-02
 
