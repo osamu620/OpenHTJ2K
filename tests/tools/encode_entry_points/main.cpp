@@ -31,6 +31,7 @@
 // guard bits than a low bit depth needs; 300 quality layers; tile size 0 with an image
 // origin; 23-bit reversible samples; Qfactor 0; 30 magnitude bit-planes; derived
 // quantization at 20 and 29 levels; rate control at 24 levels within 64 MiB; Rsiz with PRCL;
+// RPCL and PCRL refused for subsampling factors that are not powers of two (CPRL takes any);
 // and out-of-range parameters, which both entry points must refuse with an exception.
 //
 // Usage: encode_entry_points [-v]
@@ -828,6 +829,49 @@ int main(int argc, char *argv[]) {
     } catch (std::exception &) {
     }
     check("YRsiz 2 and 3: the buffered entry point reproduces the input", e == 0);
+    // RPCL and PCRL need subsampling factors that are powers of two (ISO/IEC 15444-1,
+    // B.12.1.3 and B.12.1.4; refused otherwise, below); CPRL takes any.
+    struct Prog {
+      uint8_t order;
+      uint8_t xr, yr;
+    };
+    // Component 0 subsampled horizontally more than the others: their rows are wider than
+    // component 0's, and the streaming entry point once kept every row in component 0's
+    // width (a heap overflow).  The 3-column tiles leave component 0 without samples in some.
+    struct Wide {
+      uint8_t x0, y0, x1, y1;
+      uint32_t tw;
+    };
+    const Wide wides[] = {
+        {4, 1, 1, 1, 0}, {3, 2, 1, 2, 0}, {5, 1, 2, 3, 0}, {4, 2, 1, 4, 0}, {5, 1, 1, 1, 3}};
+    for (const auto &wd : wides) {
+      Spec kw;
+      kw.w = 83, kw.h = 41, kw.ox = 3, kw.oy = 5, kw.tox = 3, kw.toy = 5, kw.tw = wd.tw,
+      kw.th   = wd.tw ? 41 : 0;
+      kw.ssiz = {7, 7};
+      kw.xr   = {wd.x0, wd.x1};
+      kw.yr   = {wd.y0, wd.y1};
+      char what[96];
+      snprintf(what, sizeof(what), "component 0 subsampled %ux%u, component 1 %ux%u%s", wd.x0, wd.y0, wd.x1,
+               wd.y1, wd.tw ? ", 3-column tiles" : "");
+      edge(what, kw, 0, false, true);
+    }
+    const Prog progs[] = {{4, 3, 5}, {4, 5, 3}, {2, 2, 4}, {3, 4, 2}, {2, 1, 1}};
+    for (const auto &pg : progs) {
+      Spec kp;
+      kp.w = 97, kp.h = 61, kp.ox = 3, kp.oy = 5, kp.tox = 3, kp.toy = 5;
+      kp.ssiz  = {7, 7, 7};
+      kp.xr    = {1, pg.xr, 1};
+      kp.yr    = {1, pg.yr, 1};
+      kp.order = pg.order;
+      char what[96];
+      snprintf(what, sizeof(what), "%s with subsampling %ux%u",
+               pg.order == 4   ? "CPRL"
+               : pg.order == 2 ? "RPCL"
+                               : "PCRL",
+               pg.xr, pg.yr);
+      edge(what, kp, 0, false, true);
+    }
   }
   {
     // Lossless corners.
@@ -892,6 +936,14 @@ int main(int argc, char *argv[]) {
     k.xf   = 0;
     k.step = 1e300;  // the largest step there is
     edge("base step 1e300", k, 255, false, true);
+    // The deepest samples the decoder holds: 30 bits unsigned, 31 signed (refused above).
+    k      = Spec();
+    k.xf   = 0;
+    k.step = 1e-7;
+    k.ssiz = {29};
+    edge("30-bit unsigned samples, irreversible", k, 1L << 22, false, true);
+    k.ssiz = {0x9E};
+    edge("31-bit signed samples, irreversible", k, 1L << 22, false, true);
     k         = Spec();
     k.xf      = 0;
     k.derived = true;
@@ -925,6 +977,8 @@ int main(int argc, char *argv[]) {
     const Bad bad[] = {
         {"no components", [](Spec &k) { k.ssiz.clear(), k.xr.clear(), k.yr.clear(); }},
         {"32-bit samples", [](Spec &k) { k.ssiz = {31}, k.xf = 0; }},
+        {"31-bit unsigned samples", [](Spec &k) { k.ssiz = {30}, k.xf = 0, k.step = 1e-7; }},
+        {"32-bit signed samples", [](Spec &k) { k.ssiz = {0x9F}, k.xf = 0, k.step = 1e-7; }},
         {"24-bit reversible samples", [](Spec &k) { k.ssiz = {23}; }},
         {"subsampling factor 0", [](Spec &k) { k.ssiz = {7, 7}, k.xr = {1, 0}, k.yr = {1, 1}; }},
         {"empty image", [](Spec &k) { k.w = 0; }},
@@ -947,6 +1001,10 @@ int main(int argc, char *argv[]) {
         {"precinct exponent 0 above resolution 0",
          [](Spec &k) { k.maxprec = false, k.ppx = {0}, k.ppy = {0}; }},
         {"no precinct sizes", [](Spec &k) { k.maxprec = false; }},
+        {"RPCL with XRsiz 3", [](Spec &k) { k.order = 2, k.ssiz = {7, 7}, k.xr = {1, 3}, k.yr = {1, 1}; }},
+        {"RPCL with YRsiz 5", [](Spec &k) { k.order = 2, k.ssiz = {7, 7}, k.xr = {1, 1}, k.yr = {1, 5}; }},
+        {"PCRL with XRsiz 3 on component 0", [](Spec &k) { k.order = 3, k.xr = {3}; }},
+        {"PCRL with YRsiz 6", [](Spec &k) { k.order = 3, k.ssiz = {7, 7}, k.xr = {1, 2}, k.yr = {1, 6}; }},
     };
     for (const auto &b : bad) {
       Spec k;

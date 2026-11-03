@@ -334,6 +334,12 @@ class ThreadPool {
     ++users_;
   }
 
+  // Most threads a pool runs (more than the hardware threads of current machines).
+  // A larger request, or for numthreads == 0 a larger hardware thread count, gets
+  // this many: each thread costs a stack and its per-thread scratch, so a mistaken
+  // count (say 100000 from a library caller) must not spawn them all.
+  static constexpr size_t MAX_THREADS = 1024;
+
   // Creates the pool if it does not exist yet.  The caller must hold a
   // reference (retain()), otherwise the pool may be destroyed under it.
   static ThreadPool* instance(size_t numthreads) {
@@ -343,7 +349,8 @@ class ThreadPool {
 
     std::unique_lock<std::mutex> lock(singleton_mutex);
     if (!singleton_.load(std::memory_order_relaxed)) {
-      const size_t n = numthreads ? numthreads : std::thread::hardware_concurrency();
+      size_t n = numthreads ? numthreads : std::thread::hardware_concurrency();
+      if (n > MAX_THREADS) n = MAX_THREADS;
       // Skip pool creation entirely for single-threaded mode: all callers
       // already guard with `pool && pool->num_threads() > 1`.
       if (n > 1) {

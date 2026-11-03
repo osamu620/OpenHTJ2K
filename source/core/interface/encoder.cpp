@@ -174,15 +174,33 @@ void check_parameters(const siz_params &siz, const cod_params &cod, const qcd_pa
         siz.Ysiz);
   }
   for (uint16_t c = 0; c < siz.Csiz; ++c) {
-    // The samples are 32-bit integers.
+    // The samples are 32-bit integers, and the decoder's DC offset and clamp to the sample range
+    // hold at most 30 unsigned or 31 signed bits (it refuses deeper components).
     const unsigned depth = (siz.Ssiz[c] & 0x7FU) + 1U;
-    if (depth > 31) {
-      open_htj2k::detail::fail("component %u has %u bits per sample; at most 31 are supported.",
-                               static_cast<unsigned>(c), depth);
+    const bool is_signed = (siz.Ssiz[c] & 0x80U) != 0;
+    const unsigned limit = is_signed ? 31U : 30U;
+    if (depth > limit) {
+      open_htj2k::detail::fail("component %u has %u-bit %s samples; at most %u bits are supported.",
+                               static_cast<unsigned>(c), depth, is_signed ? "signed" : "unsigned", limit);
     }
     if (siz.XRsiz[c] == 0 || siz.YRsiz[c] == 0) {
       open_htj2k::detail::fail("the subsampling factors XRsiz and YRsiz of component %u shall be 1 to 255.",
                                static_cast<unsigned>(c));
+    }
+  }
+  // ISO/IEC 15444-1, B.12.1.3 and B.12.1.4: "To use this progression, XRsiz and YRsiz values
+  // must be [shall be] powers of two for each component" for RPCL and PCRL (not for CPRL).
+  // The encoder writes no POC marker, so the COD progression order is the only one.
+  if (cod.progression_order == 2 || cod.progression_order == 3) {
+    for (uint16_t c = 0; c < siz.Csiz; ++c) {
+      const unsigned xr = siz.XRsiz[c], yr = siz.YRsiz[c];
+      if ((xr & (xr - 1)) != 0 || (yr & (yr - 1)) != 0) {
+        open_htj2k::detail::fail(
+            "progression order %s needs subsampling factors that are powers of two (ISO/IEC 15444-1, "
+            "B.12.1.%u), but component %u has XRsiz %u and YRsiz %u; CPRL takes any.",
+            cod.progression_order == 2 ? "RPCL" : "PCRL", cod.progression_order == 2 ? 3U : 4U,
+            static_cast<unsigned>(c), xr, yr);
+      }
     }
   }
   if (cod.dwt_levels > 32) {

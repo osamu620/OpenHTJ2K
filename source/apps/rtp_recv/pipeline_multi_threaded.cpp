@@ -209,6 +209,11 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
         const uint32_t chroma_w = (nc >= 3) ? decoder.get_component_width(1)  : luma_w;
         const uint32_t chroma_h = (nc >= 3) ? decoder.get_component_height(1) : luma_h;
         const uint8_t  depth_c  = (nc >= 3) ? decoder.get_component_depth(1)  : depth_y;
+        // The planes hold up to 16 bits; the shifts below are by the bit depth (up to 38).
+        if (depth_y > 16 || depth_c > 16) {
+          st.frames_failed.fetch_add(1, std::memory_order_relaxed);
+          continue;
+        }
         const bool     use_16   = (depth_y > 8);
         const int      bpp      = use_16 ? 2 : 1;
 
@@ -221,8 +226,10 @@ void decode_thread_main(const CliOptions& opts, ReceiverState& st) {
             auto& d      = descs[c];
             const uint8_t  bd   = (c == 0) ? depth_y : depth_c;
             const bool     is_s = decoder.get_component_signedness(c);
-            d.width       = (c == 0) ? luma_w  : chroma_w;
-            d.height      = (c == 0) ? luma_h  : chroma_h;
+            // The chroma planes have component 1's size: a component 2 of another
+            // size writes only what fits.
+            d.width       = std::min(decoder.get_component_width(c), (c == 0) ? luma_w : chroma_w);
+            d.height      = std::min(decoder.get_component_height(c), (c == 0) ? luma_h : chroma_h);
             d.stride      = (c == 0) ? pp.stride_y : pp.stride_c;
             d.yr          = (c == 0) ? 1 : ((chroma_h > 0 && luma_h > 0) ? luma_h / chroma_h : 1u);
             d.dc          = is_s ? 0 : (1 << (bd - 1));

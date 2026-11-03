@@ -20,6 +20,12 @@ add_subdirectory(tests/tools/col_range_compare)
 target_include_directories(col_range_compare PUBLIC source/core/interface)
 target_link_libraries(col_range_compare PUBLIC open_htj2k PRIVATE openhtj2k_internal)
 
+# stream_rows_check: the rows of every streaming entry point against invoke_line_based()
+add_executable(stream_rows_check)
+add_subdirectory(tests/tools/stream_rows_check)
+target_include_directories(stream_rows_check PUBLIC source/core/interface)
+target_link_libraries(stream_rows_check PUBLIC open_htj2k PRIVATE openhtj2k_internal)
+
 # concurrent_instances: many decoder/encoder instances running at once on the
 # shared worker pool (instance lifetime + per-thread encoder scratch)
 if(Threads_FOUND AND NOT EMSCRIPTEN)

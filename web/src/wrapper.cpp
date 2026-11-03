@@ -198,9 +198,15 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
   std::vector<uint32_t> width, height;
   std::vector<uint8_t>  depth;
   std::vector<bool>     is_signed;
+  uint32_t next_y0 = 0;  // next row of component 0 to write
 
   dec->invoke_line_based_stream(
     [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+      // One RGBA row per row of component 0 (an output row repeats it when another
+      // component is subsampled less, see invoke_line_based_stream in decoder.hpp).
+      const uint32_t y0 = dec->get_stream_component_row(0, y);
+      if (y0 == UINT32_MAX || y0 < next_y0) return;
+      next_y0 = y0 + 1;
       const uint32_t W        = width[0];
       // For subsampled formats (e.g. 4:2:2), chroma components have smaller width.
       // Detect this and map output pixel x to chroma sample x>>1 in the scalar paths.
@@ -213,7 +219,7 @@ void invoke_decoder_to_rgba(open_htj2k::openhtj2k_decoder* dec, uint8_t* rgba_ds
       const int32_t  offset   = is_signed[0] ? (1 << (d - 1)) : 0;
       const int32_t  bias     = half + offset;
 
-      uint8_t* __restrict__ row = rgba_dst + (size_t)y * W * 4;
+      uint8_t* __restrict__ row = rgba_dst + (size_t)y0 * W * 4;
 
 #if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
       const v128_t vbias  = wasm_i32x4_splat(bias);
@@ -343,13 +349,11 @@ void invoke_decoder_planar_u8(open_htj2k::openhtj2k_decoder* dec,
     [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
       const uint16_t cmax = nc < 3 ? nc : 3;
       for (uint16_t c = 0; c < cmax; ++c) {
-        // Map luma row to per-component row.  For c==0 this is identity.
-        // For 4:2:0 chroma (height[c] < height[0]) two consecutive luma rows
-        // map to the same chroma row — write only on the first to save the
-        // copy.  For 4:2:2 / 4:4:4, chroma height == luma height so every
-        // row is a fresh write.
-        const uint32_t cy = (y * height[c]) / height[0];
-        if (static_cast<int32_t>(cy) == last_chroma_y[c]) continue;
+        // The row of component c at this output row (see invoke_line_based_stream in
+        // decoder.hpp).  A subsampled component keeps a row over several output rows
+        // (two for 4:2:0 chroma) — write only on the first to save the copy.
+        const uint32_t cy = dec->get_stream_component_row(c, y);
+        if (cy == UINT32_MAX || static_cast<int32_t>(cy) == last_chroma_y[c]) continue;
         last_chroma_y[c] = cy;
 
         const uint8_t  d        = depth[c];
@@ -432,13 +436,22 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
   // JPEG 2000 stores signed data with a DC offset of 2^(depth-1); the inverse
   // transform subtracts it, leaving negative values.  For PGM/PPM output we
   // add it back so values fall in [0, maxval].  For PGX, skip (raw signed).
-  int32_t dc_offset[16] = {};
+  // One per component (at least 3 for the colour paths), sized once nc is known: a
+  // fixed array of 16 overflowed for more components.
+  std::vector<int32_t> dc_offset;
   // defer filling until nc is known (inside the lambda on first call)
   bool dc_offset_ready = false;
+  uint32_t next_y0     = 0;  // next row of component 0 to write
 
   dec->invoke_line_based_stream(
     [&](uint32_t y, int32_t* const* rows, uint16_t nc) {
+      // One interleaved row per row of component 0 (see invoke_line_based_stream in
+      // decoder.hpp).
+      const uint32_t y0 = dec->get_stream_component_row(0, y);
+      if (y0 == UINT32_MAX || y0 < next_y0) return;
+      next_y0 = y0 + 1;
       if (!dc_offset_ready) {
+        dc_offset.assign(nc < 3 ? 3 : nc, 0);
         if (apply_dc_offset) {
           for (uint16_t c = 0; c < nc; ++c)
             dc_offset[c] = is_signed[c] ? (1 << (depth[c] - 1)) : 0;
@@ -449,7 +462,7 @@ void invoke_decoder_stream(open_htj2k::openhtj2k_decoder* dec, uint8_t* dst,
       // Detect chroma subsampling (e.g. 4:2:2): chroma rows are narrower than luma.
       const uint32_t chromaW = (nc >= 2) ? width[1] : W;
       const bool     subsamp = (chromaW < W);
-      uint8_t* row_dst = dst + (size_t)y * W * nc * bytes_per_sample;
+      uint8_t* row_dst = dst + (size_t)y0 * W * nc * bytes_per_sample;
       if (nc == 1) {
         // Grayscale — single component, already "interleaved"
         const int32_t off0 = dc_offset[0];
