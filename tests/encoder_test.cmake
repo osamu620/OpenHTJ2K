@@ -392,6 +392,57 @@ foreach(NC IN ITEMS 2 4)
   set_tests_properties(${JPH_ALPHA_TESTS} PROPERTIES FIXTURES_REQUIRED test_artifacts)
 endforeach()
 
+# JP2 files (ISO/IEC 15444-1 Annex I) carry a Part 1 codestream: Cmodes=0, lossless,
+# 1 to 4 components alternating the two 512x512 8-bit planes above.  Each file must
+# hold the signature box, the file type box (brand 'jp2 ', MinV 0, compatibility
+# 'jp2 ') and the JP2 header box: image header (512x512, NC components, 8-bit
+# unsigned, C 7, UnkC 0, IPR 0), colour specification (enumerated: greyscale, 17, for
+# 1 and 2 components, sRGB, 16, for 3 and 4) and, for 2 and 4 components, the
+# channel definition box of the JPH files above.  The contiguous codestream box comes
+# next (its type, then the SOC and SIZ markers).  Every component must decode exactly.
+set(JP2_1_HEX "0000000c6a5020200d0a870a00000014667479706a703220000000006a7032200000002d6a703268000000166968647200000200000002000001070700000000000f636f6c7201000000000011")
+set(JP2_2_HEX "0000000c6a5020200d0a870a00000014667479706a703220000000006a703220000000436a703268000000166968647200000200000002000002070700000000000f636f6c720100000000001100000016636465660002000000000001000100010000")
+set(JP2_3_HEX "0000000c6a5020200d0a870a00000014667479706a703220000000006a7032200000002d6a703268000000166968647200000200000002000003070700000000000f636f6c7201000000000010")
+set(JP2_4_HEX "0000000c6a5020200d0a870a00000014667479706a703220000000006a7032200000004f6a703268000000166968647200000200000002000004070700000000000f636f6c720100000000001000000022636465660004000000000001000100000002000200000003000300010000")
+set(JP2_CODESTREAM_HEX "6a703263ff4fff51")
+foreach(NC IN ITEMS 1 2 3 4)
+  math(EXPR LAST "${NC} - 1")
+  set(JP2_IN "")
+  foreach(C RANGE ${LAST})
+    math(EXPR ODD "${C} % 2")
+    list(APPEND JP2_IN "${JPH_ALPHA_P${ODD}}")
+  endforeach()
+  string(REPLACE ";" "," JP2_IN "${JP2_IN}")
+  add_test(NAME enc_jp2_${NC}comp COMMAND open_htj2k_enc -i ${JP2_IN} -o jp2_${NC}comp.jp2 Creversible=yes Cmodes=0)
+  add_test(NAME box_jp2_${NC}comp COMMAND ${CMAKE_COMMAND} -DFILE=jp2_${NC}comp.jp2
+           "-DHEX=${JP2_${NC}_HEX};${JP2_CODESTREAM_HEX}" -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_hex.cmake)
+  set_tests_properties(box_jp2_${NC}comp PROPERTIES DEPENDS enc_jp2_${NC}comp)
+  add_test(NAME dec_jp2_${NC}comp COMMAND open_htj2k_dec -i jp2_${NC}comp.jp2 -o jp2_${NC}comp.pgx)
+  set_tests_properties(dec_jp2_${NC}comp PROPERTIES DEPENDS enc_jp2_${NC}comp)
+  set(JP2_TESTS enc_jp2_${NC}comp box_jp2_${NC}comp dec_jp2_${NC}comp)
+  foreach(C RANGE ${LAST})
+    math(EXPR ODD "${C} % 2")
+    add_test(NAME comp_jp2_${NC}comp_${C} COMMAND imgcmp jp2_${NC}comp_0${C}.pgx ${JPH_ALPHA_P${ODD}} 0 0)
+    set_tests_properties(comp_jp2_${NC}comp_${C} PROPERTIES DEPENDS dec_jp2_${NC}comp)
+    list(APPEND JP2_TESTS comp_jp2_${NC}comp_${C})
+  endforeach()
+  set_tests_properties(${JP2_TESTS} PROPERTIES FIXTURES_REQUIRED test_artifacts)
+endforeach()
+# -jph_color_space YCC declares sYCC (EnumCS 18) in a JP2 file too.
+set(JP2_YCC_HEX "0000000c6a5020200d0a870a00000014667479706a703220000000006a7032200000002d6a703268000000166968647200000200000002000003070700000000000f636f6c7201000000000012")
+add_test(NAME enc_jp2_ycc COMMAND open_htj2k_enc -i ${JPH_ALPHA_P0},${JPH_ALPHA_P1},${JPH_ALPHA_P0} -o jp2_ycc.jp2
+         Creversible=yes Cmodes=0 Cycc=no -jph_color_space YCC)
+add_test(NAME box_jp2_ycc COMMAND ${CMAKE_COMMAND} -DFILE=jp2_ycc.jp2 "-DHEX=${JP2_YCC_HEX};${JP2_CODESTREAM_HEX}"
+         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_hex.cmake)
+set_tests_properties(box_jp2_ycc PROPERTIES DEPENDS enc_jp2_ycc)
+set_tests_properties(enc_jp2_ycc box_jp2_ycc PROPERTIES FIXTURES_REQUIRED test_artifacts)
+# A JP2 file carries only a Part 1 codestream: the default HT block coder (a JPH file's)
+# and the Part 2 progression order PRCL are refused.
+add_test(NAME enc_ht_jp2_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23ht.jp2)
+set_tests_properties(enc_ht_jp2_rejected PROPERTIES WILL_FAIL TRUE)
+add_test(NAME enc_part1_prcl_jp2_rejected COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23prcl.jp2 Cmodes=0 Corder=PRCL)
+set_tests_properties(enc_part1_prcl_jp2_rejected PROPERTIES WILL_FAIL TRUE)
+
 # Part 1 code-block mode switches.  Each lossless round-trip must be exact.
 #   bypass:  raw SigProp/MagRef passes from the fifth bit-plane, so several
 #            codeword segments per code-block (Table D.9).

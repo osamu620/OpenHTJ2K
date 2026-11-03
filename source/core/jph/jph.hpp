@@ -171,6 +171,9 @@ class contiguous_codestream_box : public box_base {
   size_t write(j2c_dst_memory &dst) override;
 };
 
+// The boxes of a JPH or JP2 file up to the Contiguous Codestream box header; the
+// codestream (code_len bytes) follows them.  type is the brand of the file type
+// box: 0 for JP2 (ISO/IEC 15444-1 Annex I), 1 for JPH (ISO/IEC 15444-15).
 class jph_boxes {
  private:
   signature_box sig;

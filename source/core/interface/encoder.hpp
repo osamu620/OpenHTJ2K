@@ -153,6 +153,14 @@ struct qcd_params {
   double base_step;
 };
 
+// What the encoder writes: the bare codestream, or a file with the codestream in
+// a Contiguous Codestream box after the signature, file type and JP2 header boxes.
+enum class file_format : uint8_t {
+  codestream = 0,  // the bare codestream (.j2c, .j2k, .jhc)
+  jph        = 1,  // JPH file (.jph, ISO/IEC 15444-15), for the HT block coder
+  jp2        = 2,  // JP2 file (.jp2, ISO/IEC 15444-1 Annex I), for a Part 1 codestream only
+};
+
 class openhtj2k_encoder {
  private:
   std::unique_ptr<class openhtj2k_encoder_impl> impl;
@@ -162,6 +170,12 @@ class openhtj2k_encoder {
                                      cod_params &cod, qcd_params &qcd, uint8_t qfactor, bool isJPH,
                                      uint8_t color_space, uint32_t num_threads);
   OPENHTJ2K_EXPORT void set_output_buffer(std::vector<uint8_t> &output_buf);
+  // Selects the file format, replacing the constructor's isJPH (true is file_format::jph,
+  // false file_format::codestream).  file_format::jp2 needs a Part 1 codestream: the Part 1
+  // block coder (cod_params::codeblock_style without 0x40), no Part 2 progression order
+  // (PRCL) and no Part 2 or CAP bits in siz_params::Rsiz; invoke_* throws otherwise.
+  // color_space applies to JP2 as to JPH (the colour specification box).
+  OPENHTJ2K_EXPORT void set_file_format(file_format format);
   // EXPERIMENTAL: enable analytic visual (CSF) weighting for the Qfactor path.
   // model: 0 = legacy table (default, output unchanged), 1 = Mannos-Sakrison, 2 = Daly.
   // ref_ppd: reference pixels-per-degree at zoom 1.0 (<= 0 keeps the default).
@@ -185,7 +199,7 @@ class openhtj2k_encoder {
   // that the cleanup pass keeps a significant sample.  HT block coding only.
   OPENHTJ2K_EXPORT void set_ht_refinement(uint8_t planes);
   // EXPERIMENTAL: truncate the code-blocks so that the codestream (SOC to EOC, without
-  // any JPH file-format boxes) takes at most `bytes` bytes, at the least squared error
+  // any JPH or JP2 file-format boxes) takes at most `bytes` bytes, at the least squared error
   // (PCRD optimisation over the HT SigProp/MagRef truncation points, or the coding passes
   // of the Part 1 block coder).  0 (default) disables it.  The base step size
   // (qcd_params) bounds the highest quality.  Requires the irreversible 9/7 wavelet, one

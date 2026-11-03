@@ -1,5 +1,38 @@
 # [Unreleased]
 
+## Added
+
+### Encoder
+- JP2 files (`.jp2`, ISO/IEC 15444-1 Annex I) for Part 1 codestreams:
+  - The file holds the signature box, a file type box with brand `jp2 `
+    (MinV 0, `jp2 ` as its one compatible brand), the JP2 header box and the
+    Contiguous Codestream box. The codestream is byte-identical to the one
+    written to a `.j2c` file with the same options.
+  - The JP2 header box is the one of JPH files: an image header box; a Bits
+    Per Component box when the components differ in bit depth or signedness;
+    an enumerated colour specification box (greyscale for 1 or 2 components,
+    sRGB for 3 or 4, sYCC with `-jph_color_space YCC`); and, for 2 or 4
+    components, the Channel Definition box that declares the last component
+    as alpha.
+  - `open_htj2k_enc` writes a JP2 file for an output file ending in `.jp2`.
+    Library callers select it with the new
+    `openhtj2k_encoder::set_file_format(open_htj2k::file_format::jp2)`. The
+    same call selects JPH (`file_format::jph`) or the bare codestream
+    (`file_format::codestream`) in place of the constructor's `isJPH`, which
+    works as before.
+  - A JP2 file carries only a Part 1 codestream, so the encoder refuses to
+    write one with the HT block coder (the default `Cmodes=HT`, for which a
+    JPH file is the container), with the Part 2 progression order PRCL, or
+    with the Part 2 or CAP capability bit in `Rsiz`.
+  - OpenJPEG 2.5.4 reads these files as GRAY, SRGB or SYCC as declared, with
+    the last of 2 or 4 components flagged as alpha, and decodes lossless ones
+    exactly.
+
+### Tools
+- `open_htj2k_dec` reads `.jp2` files. The library already found the
+  codestream in a JP2 file as in a JPH file; the command-line decoder refused
+  the extension.
+
 ## Changed
 
 ### Library
@@ -15,7 +48,7 @@
 - The command-line tools install a handler that prints warnings as before
   (`WARNING: ...`). They print an error as `ERROR: <description>`, without
   the extra `ERROR: std::exception` line.
-- Encoded output and decoded output are unchanged.
+- These changes leave encoded and decoded output unchanged.
 
 ## Fixed
 
@@ -25,6 +58,19 @@
   they now throw `std::out_of_range`.
 - Reading a byte or a 16-bit word from an empty or one-byte codestream
   buffer is now rejected; the bounds check used to wrap around.
+
+### Encoder
+- The image header box of a JPH file gave one bit depth and sign for all
+  components (component 0's) when the components had the same bit depth but
+  differed in signedness. It now writes 255 and a Bits Per Component box, as
+  it already did for components of different bit depths. Other JPH files are
+  byte-identical.
+
+### Tools
+- `open_htj2k_enc` wrote a JPH file, not a bare codestream, for an output
+  file ending in `.jphc`, and refused `.jhc`, the extension its help text
+  recommends for a codestream. Both now get the bare codestream. The output
+  file extension is now matched in any letter case.
 
 # [0.24.0] - 2026-11-02
 

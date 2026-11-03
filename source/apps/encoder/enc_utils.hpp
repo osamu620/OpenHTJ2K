@@ -51,7 +51,9 @@ void print_help(char *cmd) {
   printf(
       "-o: Output codestream/file\n  To create a codestream, `.jhc` or `.j2c` are recommended as the "
       "extension.\n");
-  printf("  Specifying `.jph` triggers a JPH file creation.\n");
+  printf("  Specifying `.jph` triggers a JPH file creation (HT block coder only).\n");
+  printf(
+      "  Specifying `.jp2` triggers a JP2 file creation (Part 1 block coder only, Cmodes without HT).\n");
   printf("  Note: If this option is unspecified, encoding result is placed on a memory buffer.\n\n");
   printf("OPTIONS:\n");
   printf(
@@ -110,7 +112,7 @@ void print_help(char *cmd) {
   printf(
       "-jph_color_space\n"
       "  Color space of input components: Valid entry is one of RGB, YCC.\n  If inputs are represented in "
-      "YCbCr, use YCC.\n");
+      "YCbCr, use YCC. Applies to .jph and .jp2 files.\n");
   printf(
       "-rate Float[,Float...]  (EXPERIMENTAL, irreversible)\n"
       "  Target bit rate of the codestream in bits per pixel. The code-blocks, HT or\n"

@@ -19,7 +19,11 @@
 // code-blocks in the order they are coded, which differs between the entry
 // points.)  The offset and tile cases also run the Part 1 one in three quality
 // layers (a quarter, a half and all of the target), and the three-component ones
-// in three layers without a target, with both block coders.
+// in three layers without a target, with both block coders.  Last, the file
+// formats of set_file_format(): JP2 files of 1 to 4 components from both entry
+// points must hold the raw Part 1 codestream after the expected boxes and decode
+// to the input; JP2 must refuse HT code-blocks and Part 2 capabilities; JPH set
+// that way must equal the constructor's JPH.
 //
 // Usage: encode_entry_points [-v]
 // Exits 0 when every case passes.
@@ -172,6 +176,186 @@ long max_error(const Case &k, const std::vector<uint8_t> &j2c,
   return worst;
 }
 
+// --- File formats (set_file_format) -------------------------------------------
+
+// A reversible encode of a 67x45 image whose components have the given Ssiz values
+// (bit depth - 1, sign in bit 7).  style: 0x40 for the HT block coder, 0 for Part 1.
+struct FileCase {
+  const char *name;
+  std::vector<uint8_t> ssiz;
+  uint8_t style;
+  uint8_t progression;  // 5: PRCL, an ISO/IEC 15444-2 order
+  uint16_t rsiz;
+  uint8_t color_space;  // 0: RGB, 1: YCC
+};
+constexpr uint32_t FILE_W = 67, FILE_H = 45;
+
+std::vector<std::vector<int32_t>> file_planes(const FileCase &f) {
+  std::vector<std::vector<int32_t>> planes(f.ssiz.size());
+  for (size_t c = 0; c < planes.size(); ++c) {
+    const uint32_t span = 1u << ((f.ssiz[c] & 0x7F) + 1);
+    const int32_t lo    = (f.ssiz[c] & 0x80) ? -static_cast<int32_t>(span / 2) : 0;
+    planes[c].resize(static_cast<size_t>(FILE_W) * FILE_H);
+    for (uint32_t i = 0; i < FILE_W * FILE_H; ++i)
+      planes[c][i] = lo + static_cast<int32_t>((i * 37u + static_cast<uint32_t>(c) * 101u) % span);
+  }
+  return planes;
+}
+
+// is_jph: the constructor's argument; format < 0 leaves set_file_format() uncalled.
+std::vector<uint8_t> encode_file(const FileCase &f, const std::vector<std::vector<int32_t>> &src,
+                                 bool streaming, bool is_jph, int format) {
+  open_htj2k::siz_params siz;
+  siz.Rsiz   = f.rsiz;
+  siz.Xsiz   = FILE_W;
+  siz.Ysiz   = FILE_H;
+  siz.XOsiz  = 0;
+  siz.YOsiz  = 0;
+  siz.XTsiz  = FILE_W;
+  siz.YTsiz  = FILE_H;
+  siz.XTOsiz = 0;
+  siz.YTOsiz = 0;
+  siz.Csiz   = static_cast<uint16_t>(f.ssiz.size());
+  siz.Ssiz   = f.ssiz;
+  siz.XRsiz.assign(f.ssiz.size(), 1);
+  siz.YRsiz.assign(f.ssiz.size(), 1);
+  open_htj2k::cod_params cod;
+  cod.blkwidth          = 4;
+  cod.blkheight         = 4;
+  cod.is_max_precincts  = true;
+  cod.use_SOP           = false;
+  cod.use_EPH           = false;
+  cod.progression_order = f.progression;
+  cod.number_of_layers  = 1;
+  cod.use_color_trafo   = 0;
+  cod.dwt_levels        = 3;
+  cod.codeblock_style   = f.style;
+  cod.transformation    = 1;
+  open_htj2k::qcd_params qcd;
+  qcd.is_derived          = false;
+  qcd.number_of_guardbits = 1;
+  qcd.base_step           = 1.0 / 256;
+
+  std::vector<std::vector<int32_t>> planes = src;
+  std::vector<int32_t *> input;
+  if (!streaming) {
+    for (auto &p : planes) input.push_back(p.data());
+  }
+  std::vector<uint8_t> out;
+  open_htj2k::openhtj2k_encoder enc("", input, siz, cod, qcd, NO_QFACTOR, is_jph, f.color_space, 1);
+  enc.set_output_buffer(out);
+  if (format >= 0) enc.set_file_format(static_cast<open_htj2k::file_format>(format));
+  if (streaming) {
+    enc.invoke_line_based_stream([&planes](uint32_t y, int32_t **rows, uint16_t nc) {
+      for (uint16_t c = 0; c < nc; ++c)
+        memcpy(rows[c], planes[c].data() + static_cast<size_t>(y) * FILE_W, sizeof(int32_t) * FILE_W);
+    });
+  } else {
+    enc.invoke_line_based();
+  }
+  return out;
+}
+
+uint32_t be32(const uint8_t *p) {
+  return (uint32_t{p[0]} << 24) | (uint32_t{p[1]} << 16) | (uint32_t{p[2]} << 8) | p[3];
+}
+
+struct Box {
+  std::string type;
+  std::vector<uint8_t> payload;
+};
+
+// The boxes of [p, end); false if a length is out of range.
+bool split_boxes(const uint8_t *p, const uint8_t *end, std::vector<Box> &boxes) {
+  while (p < end) {
+    if (end - p < 8) return false;
+    const uint32_t len = be32(p);
+    if (len < 8 || len > static_cast<size_t>(end - p)) return false;
+    boxes.push_back(
+        Box{std::string(reinterpret_cast<const char *>(p) + 4, 4), std::vector<uint8_t>(p + 8, p + len)});
+    p += len;
+  }
+  return true;
+}
+
+// Checks a JP2 (brand "jp2 ") or JPH (brand "jph ") file against the case and the raw
+// codestream; returns an error message, empty if none.
+std::string check_file(const FileCase &f, const std::vector<uint8_t> &file, const std::vector<uint8_t> &raw,
+                       const char *brand) {
+  std::vector<Box> top, hdr;
+  if (!split_boxes(file.data(), file.data() + file.size(), top)) return "malformed box lengths";
+  if (top.size() != 4 || top[0].type != "jP  " || top[1].type != "ftyp" || top[2].type != "jp2h"
+      || top[3].type != "jp2c")
+    return "boxes are not signature, file type, JP2 header, contiguous codestream";
+  const std::vector<uint8_t> sig = {0x0D, 0x0A, 0x87, 0x0A};
+  if (top[0].payload != sig) return "wrong signature";
+  // Brand, MinV 0, and the brand as the one compatible brand.
+  std::vector<uint8_t> ftyp(brand, brand + 4);
+  ftyp.insert(ftyp.end(), 4, 0);
+  ftyp.insert(ftyp.end(), brand, brand + 4);
+  if (top[1].payload != ftyp) return "wrong file type box";
+  if (top[3].payload != raw) return "contiguous codestream box does not hold the raw codestream";
+  if (!split_boxes(top[2].payload.data(), top[2].payload.data() + top[2].payload.size(), hdr))
+    return "malformed JP2 header box";
+  const size_t nc = f.ssiz.size();
+  bool same       = true;
+  for (size_t c = 1; c < nc; ++c) same = same && f.ssiz[c] == f.ssiz[0];
+  const uint8_t bpc   = same ? f.ssiz[0] : 0xFF;
+  const bool has_cdef = (nc == 2 || nc == 4);
+  const size_t want   = 2u + (same ? 0u : 1u) + (has_cdef ? 1u : 0u);
+  if (hdr.size() != want) return "JP2 header box holds " + std::to_string(hdr.size()) + " boxes";
+  size_t i              = 0;
+  const auto &ihdr      = hdr[i++].payload;
+  const uint8_t ihdr_[] = {0, 0, 0, FILE_H, 0, 0, 0, FILE_W, 0, static_cast<uint8_t>(nc), bpc, 7, 0, 0};
+  if (hdr[0].type != "ihdr" || ihdr != std::vector<uint8_t>(ihdr_, ihdr_ + sizeof(ihdr_)))
+    return "wrong image header box";
+  if (!same && (hdr[i].type != "bpcc" || hdr[i++].payload != f.ssiz)) return "wrong bits per component box";
+  const uint8_t colr_[] = {
+      1, 0, 0, 0, 0, 0, static_cast<uint8_t>((nc <= 2) ? 17 : f.color_space ? 18 : 16)};
+  if (hdr[i].type != "colr" || hdr[i++].payload != std::vector<uint8_t>(colr_, colr_ + sizeof(colr_)))
+    return "wrong colour specification box";
+  if (has_cdef) {
+    // N, then per component Cn = c, Typ and Asoc: the last component is opacity (Typ 1)
+    // of the whole image (Asoc 0), the others colours (Typ 0) c + 1.  16 bits each.
+    std::vector<uint8_t> cdef = {0, static_cast<uint8_t>(nc)};
+    for (size_t c = 0; c < nc; ++c) {
+      const bool alpha      = (c == nc - 1);
+      const uint8_t entry[] = {0, static_cast<uint8_t>(c),
+                               0, static_cast<uint8_t>(alpha ? 1 : 0),
+                               0, static_cast<uint8_t>(alpha ? 0 : c + 1)};
+      cdef.insert(cdef.end(), entry, entry + sizeof(entry));
+    }
+    if (hdr[i].type != "cdef" || hdr[i].payload != cdef) return "wrong channel definition box";
+  }
+  return "";
+}
+
+// Decodes a file and compares it with the input; returns an error message, empty if none.
+std::string check_decode(const FileCase &f, const std::vector<uint8_t> &file,
+                         const std::vector<std::vector<int32_t>> &ref) {
+  open_htj2k::openhtj2k_decoder dec(file.data(), file.size(), 0, 1);
+  std::vector<int32_t *> buf;
+  std::vector<uint32_t> w, h;
+  std::vector<uint8_t> depth;
+  std::vector<bool> is_signed;
+  dec.parse();
+  const uint32_t enum_cs = dec.get_colorspace();
+  dec.invoke_line_based(buf, w, h, depth, is_signed);
+  std::string err;
+  const uint32_t want_cs = (f.ssiz.size() <= 2) ? 17 : f.color_space ? 18 : 16;
+  if (enum_cs != want_cs) err = "decoder reads EnumCS " + std::to_string(enum_cs);
+  if (err.empty() && buf.size() != f.ssiz.size()) err = "decoded component count differs";
+  for (size_t c = 0; err.empty() && c < buf.size(); ++c) {
+    if (w[c] != FILE_W || h[c] != FILE_H || depth[c] != (f.ssiz[c] & 0x7F) + 1
+        || is_signed[c] != ((f.ssiz[c] & 0x80) != 0))
+      err = "decoded component " + std::to_string(c) + " has another shape or depth";
+    else if (memcmp(buf[c], ref[c].data(), sizeof(int32_t) * ref[c].size()) != 0)
+      err = "decoded component " + std::to_string(c) + " differs from the input";
+  }
+  for (auto p : buf) delete[] p;
+  return err;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -282,6 +466,88 @@ int main(int argc, char *argv[]) {
           run(k, lay, 0, true, 3);
         }
       }
+
+  // File formats.  JP2: the raw Part 1 codestream after the boxes, from both entry points,
+  // decoding to the input; components that differ in depth or signedness need a Bits Per
+  // Component box.  JPH set with set_file_format() is the constructor's JPH.
+  auto file_case = [&](const std::string &what, const std::string &err) {
+    ++total;
+    if (!err.empty()) {
+      ++failed;
+      printf("FAIL file format: %s: %s\n", what.c_str(), err.c_str());
+    } else if (verbose) {
+      printf("ok   file format: %s\n", what.c_str());
+    }
+  };
+  const int CODESTREAM       = static_cast<int>(open_htj2k::file_format::codestream);
+  const int JPH              = static_cast<int>(open_htj2k::file_format::jph);
+  const int JP2              = static_cast<int>(open_htj2k::file_format::jp2);
+  const FileCase jp2_cases[] = {
+      {"gray", {7}, 0, 0, 0, 0},
+      {"gray + alpha", {7, 7}, 0, 0, 0, 0},
+      {"RGB", {7, 7, 7}, 0, 0, 0, 0},
+      {"YCbCr", {7, 7, 7}, 0, 0, 0, 1},
+      {"RGB + alpha", {7, 7, 7, 7}, 0, 0, 0, 0},
+      {"16-bit signed RGB", {0x8F, 0x8F, 0x8F}, 0, 0, 0, 0},
+      {"12-bit gray + 8-bit alpha", {11, 7}, 0, 0, 0, 0},
+      {"unsigned and signed 8-bit", {7, 0x87, 7}, 0, 0, 0, 0},
+  };
+  for (const auto &f : jp2_cases) {
+    std::string err;
+    try {
+      const auto planes   = file_planes(f);
+      const auto raw      = encode_file(f, planes, false, false, -1);
+      const auto buffered = encode_file(f, planes, false, false, JP2);
+      const auto stream   = encode_file(f, planes, true, false, JP2);
+      if (buffered != stream)
+        err = "buffered and streaming files differ";
+      else
+        err = check_file(f, buffered, raw, "jp2 ");
+      if (err.empty()) err = check_decode(f, buffered, planes);
+    } catch (std::exception &ex) {
+      err = std::string("exception: ") + ex.what();
+    }
+    file_case(std::string("JP2 ") + f.name, err);
+  }
+  {
+    const FileCase f = {"HT RGB + alpha", {7, 7, 7, 7}, 0x40, 0, 0, 0};
+    std::string err;
+    try {
+      const auto planes = file_planes(f);
+      const auto raw    = encode_file(f, planes, false, false, -1);
+      const auto jph    = encode_file(f, planes, false, true, -1);
+      if (encode_file(f, planes, false, false, JPH) != jph
+          || encode_file(f, planes, true, false, JPH) != jph)
+        err = "set_file_format(jph) differs from the constructor's JPH";
+      else if (encode_file(f, planes, false, true, CODESTREAM) != raw)
+        err = "set_file_format(codestream) does not override the constructor's JPH";
+      else
+        err = check_file(f, jph, raw, "jph ");
+      if (err.empty()) err = check_decode(f, jph, planes);
+    } catch (std::exception &ex) {
+      err = std::string("exception: ") + ex.what();
+    }
+    file_case(std::string("JPH ") + f.name, err);
+  }
+  // A JP2 file refuses a codestream that is not Part 1, from both entry points.
+  const FileCase refused[] = {
+      {"HT block coder", {7, 7, 7}, 0x40, 0, 0, 0},
+      {"PRCL progression order", {7, 7, 7}, 0, 5, 0, 0},
+      {"Rsiz with the Part 2 bit", {7, 7, 7}, 0, 0, 0x8000, 0},
+      {"Rsiz with the CAP bit", {7, 7, 7}, 0, 0, 0x4000, 0},
+  };
+  for (const auto &f : refused) {
+    const auto planes = file_planes(f);
+    for (int streaming = 0; streaming < 2; ++streaming) {
+      std::string err;
+      try {
+        encode_file(f, planes, streaming != 0, false, JP2);
+        err = "not refused";
+      } catch (std::exception &) {
+      }
+      file_case(std::string("JP2 refuses ") + f.name + (streaming ? " (streaming)" : " (buffered)"), err);
+    }
+  }
 
   printf("encode_entry_points: %d cases, %d failed\n", total, failed);
   return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
