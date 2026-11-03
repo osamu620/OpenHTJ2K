@@ -107,6 +107,16 @@ int main() {
     ++failures;
   }
   ThreadPool::release();
+
+  // A thread count beyond MAX_THREADS (here from a library caller's num_threads) is clamped.
+  ThreadPool::retain();
+  ThreadPool *big = ThreadPool::instance(100000);
+  if (big == nullptr || big->num_threads() != ThreadPool::MAX_THREADS) {
+    std::printf("FAIL: instance(100000) made %zu threads, want %zu\n", big ? big->num_threads() : 0,
+                static_cast<size_t>(ThreadPool::MAX_THREADS));
+    ++failures;
+  }
+  ThreadPool::release();
 #else
   std::printf("single-thread scope: not checked with the Windows DLL\n");
 #endif
