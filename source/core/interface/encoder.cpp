@@ -37,6 +37,7 @@
 #include "ThreadPool.hpp"
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
   #include <tiffio.h>
+  #include "message_internal.hpp"
 #endif
 
 #define NO_QFACTOR 0xFF
@@ -64,6 +65,9 @@ inline EncoderThreadBuffers &enc_thread_bufs() {
   return tbuf;
 }
 
+// Why the last image::read_pnmpgx() or image::read_tiff() call on this thread failed.
+thread_local std::string image_read_error;
+
 // SPcod code-block style.  Part 1 code-blocks take any of the six mode switches
 // of ISO/IEC 15444-1 Table A.19; HT code-blocks only the vertically causal one
 // (ISO/IEC 15444-15 Table A.3).  Mixed HT/Part 1 tile-components (bit 7) are not
@@ -73,11 +77,10 @@ void check_codeblock_style(uint8_t style) {
   const unsigned allowed = is_ht ? (HT | CAUSAL) : (BYPASS | RESET | RESTART | CAUSAL | ERTERM | SEGMARK);
   if (style & ~allowed) {
     if (is_ht)
-      printf("ERROR: HT code-blocks accept only the CAUSAL mode switch (code-block style 0x%02X).\n",
-             style);
+      open_htj2k::detail::fail(
+          "HT code-blocks accept only the CAUSAL mode switch (code-block style 0x%02X).", style);
     else
-      printf("ERROR: unsupported code-block style 0x%02X.\n", style);
-    throw std::exception();
+      open_htj2k::detail::fail("unsupported code-block style 0x%02X.", style);
   }
 }
 }  // namespace
@@ -85,8 +88,7 @@ void check_codeblock_style(uint8_t style) {
 image::image(const std::vector<std::string> &filenames) : width(0), height(0), buf(nullptr) {
   size_t num_files = filenames.size();
   if (num_files > 16384) {
-    printf("ERROR: over 16384 components are not supported in the spec.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("over 16384 components are not supported in the spec.");
   }
   num_components = static_cast<uint16_t>(num_files);  // num_components may change after parsing PPM header
   uint16_t c     = 0;
@@ -111,15 +113,16 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
     if (!is_pnm_pgx && !is_tiff) {
       throw std::runtime_error("unsupported input file type (expected .pgm/.ppm/.pgx/.tif)");
     }
+    image_read_error.clear();
     if (is_pnm_pgx) {
       if (read_pnmpgx(fname, c)) {
-        throw std::exception();
+        throw std::runtime_error(image_read_error.empty() ? "cannot read " + fname : image_read_error);
       }
       c++;
     } else if (is_tiff) {
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
       if (read_tiff(fname)) {
-        throw std::exception();
+        throw std::runtime_error(image_read_error.empty() ? "cannot read " + fname : image_read_error);
       }
       c++;
 #endif
@@ -141,7 +144,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
 
   FILE *fp = fopen(filename.c_str(), "rb");
   if (fp == nullptr) {
-    printf("ERROR: File %s is not found.\n", filename.c_str());
+    image_read_error = open_htj2k::detail::format("File %s is not found.", filename.c_str());
     return EXIT_FAILURE;
   }
   int status = READ_WIDTH;
@@ -149,7 +152,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   uint32_t val = 0;
   d            = fgetc(fp);
   if (d != 'P') {
-    printf("ERROR: %s is not a PNM/PGX file.\n", filename.c_str());
+    image_read_error = open_htj2k::detail::format("%s is not a PNM/PGX file.", filename.c_str());
     fclose(fp);
     return EXIT_FAILURE;
   }
@@ -190,17 +193,17 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
           isBigendian = true;
           d           = fgetc(fp);
           if (d != 'L') {
-            printf("ERROR: input PGX file %s is broken.\n", filename.c_str());
+            open_htj2k::detail::warn("input PGX file %s is broken.", filename.c_str());
           }
           break;
         case 'L':
           d = fgetc(fp);
           if (d != 'M') {
-            printf("ERROR: input PGX file %s is broken.\n", filename.c_str());
+            open_htj2k::detail::warn("input PGX file %s is broken.", filename.c_str());
           }
           break;
         default:
-          printf("ERROR: input file does not conform to PGX format.\n");
+          image_read_error = open_htj2k::detail::format("input file does not conform to PGX format.");
           return EXIT_FAILURE;
       }
       // check signed or not
@@ -226,13 +229,13 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       // PBM (not supported)
     case '1':
     case '4':
-      printf("ERROR: PBM file is not supported.\n");
+      image_read_error = open_htj2k::detail::format("PBM file is not supported.");
       fclose(fp);
       return EXIT_FAILURE;
       break;
       // error
     default:
-      printf("ERROR: %s is not a PNM/PGX file.\n", filename.c_str());
+      image_read_error = open_htj2k::detail::format("%s is not a PNM/PGX file.", filename.c_str());
       fclose(fp);
       return EXIT_FAILURE;
       break;
@@ -335,7 +338,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   if (!isASCII) {
     for (size_t i = 0; i < comph; ++i) {
       if (fread(line_buf.get(), sizeof(uint8_t), line_width, fp) < line_width) {
-        printf("ERROR: not enough samples in the given pnm file.\n");
+        image_read_error = open_htj2k::detail::format("not enough samples in the given pnm file.");
         fclose(fp);
         return EXIT_FAILURE;
       }
@@ -379,7 +382,7 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
             }
             break;
           default:
-            printf("ERROR: bit-depth over 16 is not supported.\n");
+            image_read_error = open_htj2k::detail::format("bit-depth over 16 is not supported.");
             fclose(fp);
             return EXIT_FAILURE;
             break;
@@ -410,7 +413,7 @@ int image::read_tiff(const std::string &filename) {
   size_t bytes_per_line;
   uint16_t planar_configuration;
   if ((tiff_handle = TIFFOpen(filename.c_str(), "r")) == nullptr) {
-    printf("ERROR: File %s is not found.\n", filename.c_str());
+    image_read_error = open_htj2k::detail::format("File %s is not found.", filename.c_str());
     return EXIT_FAILURE;
   }
 
@@ -446,28 +449,24 @@ int image::read_tiff(const std::string &filename) {
   }
   // Error on known incompatilbe input formats
   if (tiff_bits_per_sample != 8 && tiff_bits_per_sample != 16) {
-    printf(
-        "ERROR: TIFF IO is currently limited to file limited"
-        " to files with TIFFTAG_BITSPERSAMPLE=8 and TIFFTAG_BITSPERSAMPLE=16 \n"
-        "input file = %s has TIFFTAG_BITSPERSAMPLE=%d\n",
+    image_read_error = open_htj2k::detail::format(
+        "TIFF input is limited to files with TIFFTAG_BITSPERSAMPLE=8 or 16; %s has "
+        "TIFFTAG_BITSPERSAMPLE=%d.",
         filename.c_str(), tiff_bits_per_sample);
     TIFFClose(tiff_handle);
     return EXIT_FAILURE;
   }
   if (TIFFIsTiled(tiff_handle)) {
-    printf(
-        "ERROR: TIFF IO is currently limited to TIF files"
-        "without tiles. \nInput file %s has been detected as tiled\n",
-        filename.c_str());
+    image_read_error = open_htj2k::detail::format(
+        "TIFF input is limited to files without tiles; %s is tiled.", filename.c_str());
     TIFFClose(tiff_handle);
     return EXIT_FAILURE;
   }
   if (PHOTOMETRIC_RGB != tiff_photometric && PHOTOMETRIC_MINISBLACK != tiff_photometric) {
-    printf(
-        "ERROR: TIFF IO is currently limited to "
-        "TIFFTAG_PHOTOMETRIC=PHOTOMETRIC_MINISBLACK=%d and "
-        "PHOTOMETRIC_RGB=%d. \nInput file %s has been detected "
-        "TIFFTAG_PHOTOMETRIC=%d\n",
+    image_read_error = open_htj2k::detail::format(
+        "TIFF input is limited to TIFFTAG_PHOTOMETRIC=PHOTOMETRIC_MINISBLACK (%d) or PHOTOMETRIC_RGB (%d); "
+        "%s "
+        "has TIFFTAG_PHOTOMETRIC=%d.",
         PHOTOMETRIC_MINISBLACK, PHOTOMETRIC_RGB, filename.c_str(), tiff_photometric);
     TIFFClose(tiff_handle);
     return EXIT_FAILURE;
@@ -504,7 +503,7 @@ int image::read_tiff(const std::string &filename) {
     // NORMAL read
     for (uint32_t i = 0; i < tiff_height; ++i) {
       if (TIFFReadScanline(tiff_handle, line_buf.get(), i) < 0) {
-        printf("ERROR: not enough samples in the given pnm file.\n");
+        image_read_error = open_htj2k::detail::format("not enough samples in %s.", filename.c_str());
         TIFFClose(tiff_handle);
         return EXIT_FAILURE;
       }
@@ -533,7 +532,7 @@ int image::read_tiff(const std::string &filename) {
             }
             break;
           default:
-            printf("ERROR: bit-depth over 16 is not supported.\n");
+            image_read_error = open_htj2k::detail::format("bit-depth over 16 is not supported.");
             TIFFClose(tiff_handle);
             return EXIT_FAILURE;
             break;
@@ -621,8 +620,7 @@ void openhtj2k_encoder_impl::set_output_buffer(std::vector<uint8_t> &output_buf)
 
 void openhtj2k_encoder_impl::check_ht_refinement() const {
   if (ht_refine && (cod->codeblock_style & HT) == 0) {
-    printf("ERROR: HT SigProp/MagRef refinement requires the HT block coder.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("HT SigProp/MagRef refinement requires the HT block coder.");
   }
 }
 
@@ -645,8 +643,7 @@ void openhtj2k_encoder_impl::check_rate_control() const {
   else if (ht_refine != 0)
     why = "Cht_refine=0";
   if (why != nullptr) {
-    printf("ERROR: a target size requires %s.\n", why);
-    throw std::exception();
+    open_htj2k::detail::fail("a target size requires %s.", why);
   }
 }
 
@@ -683,16 +680,17 @@ void openhtj2k_encoder_impl::apply_rate_control(j2k_tile *tiles, uint32_t num_ti
                              ? ht_rate_control(tiles, num_tiles, fixed, target_size)
                              : p1_rate_control(tiles, num_tiles, fixed, layer_targets);
   if (total > target_size)
-    printf("WARNING: the codestream takes %llu bytes, more than the target %llu.\n",
-           static_cast<unsigned long long>(total), static_cast<unsigned long long>(target_size));
+    open_htj2k::detail::warn("the codestream takes %llu bytes, more than the target %llu.",
+                             static_cast<unsigned long long>(total),
+                             static_cast<unsigned long long>(target_size));
   // The lower quality layers (the packet headers are built).
   for (size_t l = 0; l + 1 < layer_targets.size(); ++l) {
     uint64_t bytes = fixed;
     for (uint32_t t = 0; t < num_tiles; ++t) bytes += tiles[t].get_layers_size(static_cast<uint16_t>(l));
     if (bytes > layer_targets[l])
-      printf(
-          "WARNING: quality layer %zu and the layers below it take %llu bytes, more than the target "
-          "%llu.\n",
+      open_htj2k::detail::warn(
+          "quality layer %zu and the layers below it take %llu bytes, more than the target "
+          "%llu.",
           l, static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(layer_targets[l]));
   }
 }
@@ -716,10 +714,11 @@ void openhtj2k_encoder_impl::set_visual_weighting(uint8_t model, double ref_ppd,
   // EXPERIMENTAL status / guard (qfactor is already set by the constructor).
   if (vw.model != csf_model::legacy_table) {
     if (qfactor == NO_QFACTOR) {
-      printf("WARNING: analytic visual weighting (Qcsf) has no effect without Qfactor.\n");
+      open_htj2k::detail::warn("analytic visual weighting (Qcsf) has no effect without Qfactor.");
     } else {
-      printf("EXPERIMENTAL: analytic visual weighting (model=%d, ref_ppd=%.1f, zoom=%.2f).\n",
-             static_cast<int>(vw.model), vw.ref_ppd, vw.zoom);
+      open_htj2k::detail::info(
+          "EXPERIMENTAL: analytic visual weighting (model=%d, ref_ppd=%.1f, zoom=%.2f).",
+          static_cast<int>(vw.model), vw.ref_ppd, vw.zoom);
     }
   }
 }
@@ -743,20 +742,17 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   std::vector<uint8_t> XRsiz, YRsiz;
 
   if ((siz->XOsiz > siz->Xsiz) || (siz->YOsiz > siz->Ysiz)) {
-    printf("ERROR: image origin exceeds the size of input image.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("image origin exceeds the size of input image.");
   }
   if ((siz->XTOsiz > siz->XOsiz) || (siz->YTOsiz > siz->YOsiz)) {
-    printf("ERROR: tile origin shall be no greater than the image origin.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("tile origin shall be no greater than the image origin.");
   }
   if (siz->XTsiz * siz->YTsiz == 0) {
     siz->XTsiz = siz->Xsiz - siz->XOsiz;
     siz->YTsiz = siz->Ysiz - siz->YOsiz;
   }
   if (((siz->XTOsiz + siz->XTsiz) <= siz->XOsiz) || ((siz->YTOsiz + siz->YTsiz) <= siz->YOsiz)) {
-    printf("ERROR: tile size plus tile origin shall be greater than the image origin.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("tile size plus tile origin shall be greater than the image origin.");
   }
 
   for (size_t c = 0; c < siz->Csiz; ++c) {
@@ -772,24 +768,25 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   if (siz->Csiz == 3 && cod->use_color_trafo == 1
       && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2] || YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
     cod->use_color_trafo = 0;
-    printf("WARNING: Cycc is set to 'no' because size of each component is not identical.\n");
+    open_htj2k::detail::warn("Cycc is set to 'no' because size of each component is not identical.");
   }
 
   // check number of components
   if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
-    printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
+    open_htj2k::detail::warn("Cycc is set to 'no' because the number of components is not equal to 3.");
   }
   // Qfactor assumes a YCbCr (luma/chroma) decomposition; warn (do not force) if
   // the color transform is off or the component count is unsupported.
   if (qfactor != NO_QFACTOR) {
     if (siz->Csiz == 3) {
       if (cod->use_color_trafo == 0) {
-        printf("WARNING: Color conversion is OFF while Qfactor feature is enabled.\n");
-        printf("         It is OK if the inputs are in YCbCr color space.\n");
+        open_htj2k::detail::warn(
+            "Color conversion is OFF while Qfactor feature is enabled. It is OK if the inputs are in YCbCr "
+            "color space.");
       }
     } else if (siz->Csiz != 1) {
-      printf("WARNING: Qfactor is designed for only gray-scale or RGB or YCbCr input.\n");
+      open_htj2k::detail::warn("Qfactor is designed for only gray-scale or RGB or YCbCr input.");
     }
   }
 
@@ -842,8 +839,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
+    open_htj2k::detail::fail("The number of tiles exceeds its allowable maximum (65535).");
   }
 
   check_ht_refinement();
@@ -949,20 +945,17 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   std::vector<uint8_t> XRsiz, YRsiz;
 
   if ((siz->XOsiz > siz->Xsiz) || (siz->YOsiz > siz->Ysiz)) {
-    printf("ERROR: image origin exceeds the size of input image.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("image origin exceeds the size of input image.");
   }
   if ((siz->XTOsiz > siz->XOsiz) || (siz->YTOsiz > siz->YOsiz)) {
-    printf("ERROR: tile origin shall be no greater than the image origin.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("tile origin shall be no greater than the image origin.");
   }
   if (siz->XTsiz * siz->YTsiz == 0) {
     siz->XTsiz = siz->Xsiz - siz->XOsiz;
     siz->YTsiz = siz->Ysiz - siz->YOsiz;
   }
   if (((siz->XTOsiz + siz->XTsiz) <= siz->XOsiz) || ((siz->YTOsiz + siz->YTsiz) <= siz->YOsiz)) {
-    printf("ERROR: tile size plus tile origin shall be greater than the image origin.\n");
-    throw std::exception();
+    open_htj2k::detail::fail("tile size plus tile origin shall be greater than the image origin.");
   }
 
   for (size_t c = 0; c < siz->Csiz; ++c) {
@@ -977,20 +970,21 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   if (siz->Csiz == 3 && cod->use_color_trafo == 1
       && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2] || YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
     cod->use_color_trafo = 0;
-    printf("WARNING: Cycc is set to 'no' because size of each component is not identical.\n");
+    open_htj2k::detail::warn("Cycc is set to 'no' because size of each component is not identical.");
   }
   if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
-    printf("WARNING: Cycc is set to 'no' because the number of components is not equal to 3.\n");
+    open_htj2k::detail::warn("Cycc is set to 'no' because the number of components is not equal to 3.");
   }
   if (qfactor != NO_QFACTOR) {
     if (siz->Csiz == 3) {
       if (cod->use_color_trafo == 0) {
-        printf("WARNING: Color conversion is OFF while Qfactor feature is enabled.\n");
-        printf("         It is OK if the inputs are in YCbCr color space.\n");
+        open_htj2k::detail::warn(
+            "Color conversion is OFF while Qfactor feature is enabled. It is OK if the inputs are in YCbCr "
+            "color space.");
       }
     } else if (siz->Csiz != 1) {
-      printf("WARNING: Qfactor is designed for only gray-scale or RGB or YCbCr input.\n");
+      open_htj2k::detail::warn("Qfactor is designed for only gray-scale or RGB or YCbCr input.");
     }
   }
 
@@ -1040,8 +1034,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   element_siz numTiles;
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
+    open_htj2k::detail::fail("The number of tiles exceeds its allowable maximum (65535).");
   }
 
   // Empty input buffer for streaming (img is not used)
@@ -1150,8 +1143,7 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
   (void)num_threads;  // only the thread pool uses it
   if (qfactor != NO_QFACTOR) {
     if (qfactor > 100) {
-      printf("Value of Qfactor shall be in the range [0, 100]\n");
-      throw std::exception();
+      open_htj2k::detail::fail("Value of Qfactor shall be in the range [0, 100].");
     }
   }
   // The impl takes a pool reference on construction, so create it before

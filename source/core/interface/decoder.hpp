@@ -44,6 +44,7 @@
 #else
   #define OPENHTJ2K_EXPORT
 #endif
+#include "openhtj2k_message.hpp"
 namespace open_htj2k {
 // EnumCS values from the JPH/JP2 colour specification box (ISO/IEC 15444-1 Annex I).
 // get_colorspace() returns one of these; 0 means the input was a raw codestream.

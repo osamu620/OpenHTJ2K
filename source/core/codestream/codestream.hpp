@@ -35,6 +35,7 @@
 #include <vector>
 #include <memory>
 #include "utils.hpp"
+#include "message_internal.hpp"
 
 class j2c_src_memory {
  private:
@@ -134,7 +135,6 @@ class j2c_dst_memory {
   int32_t flush(std::ofstream &dst);
   int32_t flush(std::vector<uint8_t> *obuf);
   OPENHTJ2K_NODISCARD size_t get_length() const;
-  OPENHTJ2K_MAYBE_UNUSED void print_bytes();
 };
 
 class buf_chain {
@@ -482,8 +482,7 @@ class tagtree_node {
   }
   void set_node(uint32_t l, int32_t i, int32_t pi) {
     if (l > 255) {
-      printf("ERROR: Specified level for tagtree node is too large.\n");
-      throw std::exception();
+      open_htj2k::detail::fail("Specified level for tagtree node is too large.");
     }
     level        = static_cast<uint8_t>(l);
     index        = i;

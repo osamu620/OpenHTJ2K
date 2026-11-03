@@ -35,6 +35,7 @@
 // serial MEL/VLC pass.
 
 #include "utils.hpp"  // OPENHTJ2K_ENABLE_SSE2
+#include "message_internal.hpp"
 #if !defined(OPENHTJ2K_ENABLE_ARM_NEON) && (!defined(__AVX2__) || !defined(OPENHTJ2K_TRY_AVX2)) \
     && !defined(OPENHTJ2K_ENABLE_WASM_SIMD) && !defined(OPENHTJ2K_ENABLE_SSE2)
   #include <algorithm>
@@ -170,7 +171,7 @@ int32_t htj2k_cleanup_encode(j2k_codeblock *const block, const uint8_t ROIshift)
   // used as a flag to invoke HT Cleanup encoding
   uint32_t or_val = 0;
   if (ROIshift) {
-    printf("WARNING: Encoding with ROI is not supported.\n");
+    open_htj2k::detail::warn("Encoding with ROI is not supported.");
   }
 
   const int32_t QW = static_cast<int32_t>(ceil_int(static_cast<int16_t>(block->size.x), 2));

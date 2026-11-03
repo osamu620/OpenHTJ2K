@@ -38,6 +38,7 @@
     #include <intrin.h>
   #else
     #include <x86intrin.h>
+    #include "message_internal.hpp"
   #endif
 
 static FORCE_INLINE uint8_t calc_mbr_inline(const uint8_t *block_states, size_t blkstate_stride, uint32_t i,
@@ -900,8 +901,8 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
   }
   const uint8_t empty_passes = static_cast<uint8_t>(P0 * 3);
   if (block->num_passes < empty_passes) {
-    printf("WARNING: number of passes %d exceeds number of empty passes %d", block->num_passes,
-           empty_passes);
+    open_htj2k::detail::warn("number of passes %d exceeds number of empty passes %d", block->num_passes,
+                             empty_passes);
     return su;
   }
   // number of ht coding pass (Z_blk in the spec)
@@ -923,26 +924,26 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
   for (uint32_t i = 0; i < block->pass_length_count; i++) {
     if (block->pass_length[i] != 0) {
       if (num_segments >= 4) {
-        printf("WARNING: too many HT coding-pass segments (>4) — malformed input.\n");
+        open_htj2k::detail::warn("too many HT coding-pass segments (>4) — malformed input.");
         return su;
       }
       all_segments[num_segments++] = static_cast<uint8_t>(i);
     }
   }
   if (num_segments == 0) {
-    printf("WARNING: no non-empty HT coding-pass segments.\n");
+    open_htj2k::detail::warn("no non-empty HT coding-pass segments.");
     return su;
   }
   su.Lcup += static_cast<int32_t>(block->pass_length[all_segments[0]]);
   if (su.Lcup < 2) {
-    printf("WARNING: Cleanup pass length must be at least 2 bytes in length.\n");
+    open_htj2k::detail::warn("Cleanup pass length must be at least 2 bytes in length.");
     return su;
   }
   // Bound the attacker-controlled cleanup length by the (already clamped)
   // codeblock byte count before any Dcup[Lcup-1] access / modDcup write.
   if (static_cast<uint32_t>(su.Lcup) > block->length) {
-    printf("WARNING: HT cleanup pass length %d exceeds codeblock bytes %u — malformed input.\n", su.Lcup,
-           block->length);
+    open_htj2k::detail::warn("HT cleanup pass length %d exceeds codeblock bytes %u — malformed input.",
+                             su.Lcup, block->length);
     return su;
   }
   for (uint32_t i = 1; i < num_segments; i++) {
@@ -950,8 +951,8 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
   }
   // The refinement segments are read from Dcup + Lcup; keep them in the buffer.
   if (static_cast<uint32_t>(su.Lref) > block->length - static_cast<uint32_t>(su.Lcup)) {
-    printf("WARNING: HT refinement length exceeds remaining codeblock bytes %u — malformed input.\n",
-           block->length - static_cast<uint32_t>(su.Lcup));
+    open_htj2k::detail::warn("HT refinement length exceeds remaining codeblock bytes %u — malformed input.",
+                             block->length - static_cast<uint32_t>(su.Lcup));
     return su;
   }
   uint8_t *Dcup = block->get_compressed_data();
@@ -964,13 +965,13 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
   // number of (skipped) magnitude bitplanes
   su.S_blk = static_cast<uint8_t>(P0 + block->num_ZBP + S_skip);
   if (su.S_blk >= 30) {
-    printf("WARNING: Number of skipped mag bitplanes %d is too large.\n", su.S_blk);
+    open_htj2k::detail::warn("Number of skipped mag bitplanes %d is too large.", su.S_blk);
     return su;
   }
   // Suffix length (=MEL + VLC) of HT Cleanup pass
   su.Scup = static_cast<int32_t>((Dcup[su.Lcup - 1] << 4) + (Dcup[su.Lcup - 2] & 0x0F));
   if (su.Scup < 2 || su.Scup > su.Lcup || su.Scup > 4079) {
-    printf("WARNING: cleanup pass suffix length %d is invalid.\n", su.Scup);
+    open_htj2k::detail::warn("cleanup pass suffix length %d is invalid.", su.Scup);
     return su;
   }
   // modDcup (shall be done before the creation of state_VLC instance)

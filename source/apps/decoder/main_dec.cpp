@@ -65,6 +65,7 @@
   #include <emmintrin.h>
 #endif
 
+#include "../print_library_messages.hpp"
 #include "decoder.hpp"
 #include "dec_utils.hpp"
 
@@ -562,6 +563,7 @@ void print_help(char *cmd) {
 }
 
 int main(int argc, char *argv[]) {
+  open_htj2k_apps::install_library_message_printer();
   // parse input args
   char *infile_name, *infile_ext_name;
   char *outfile_name, *outfile_ext_name;

@@ -35,6 +35,7 @@
 #include <utility>
 #include <vector>
 
+#include "../print_library_messages.hpp"
 #include "codestream_walker.hpp"
 #include "data_bin_emitter.hpp"
 #include "jpp_message.hpp"
@@ -578,6 +579,7 @@ std::vector<uint8_t> handle_h3_request(const ServerState &st,
 }  // namespace
 
 int main(int argc, char **argv) {
+  open_htj2k_apps::install_library_message_printer();
   if (argc < 2) {
     std::fprintf(stderr,
         "Usage: open_htj2k_jpip_server <input.j2c> [--port N=8080]\n"

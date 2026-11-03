@@ -41,6 +41,7 @@
   #include "ThreadPool.hpp"
   #if defined(__x86_64__) || defined(_M_X64)
     #include <immintrin.h>
+    #include "message_internal.hpp"
     #define HW_PAUSE() _mm_pause()
   #elif defined(__aarch64__) || defined(_M_ARM64)
     #if defined(_MSC_VER)
@@ -406,8 +407,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
         });
         spin_wait(par_cnt);
         if (par_error.load(std::memory_order_relaxed)) {
-          printf("WARNING: a code-block decode task failed — malformed input.\n");
-          throw std::exception();
+          open_htj2k::detail::fail("a code-block decode task failed — malformed input.");
         }
       }
       return;
@@ -533,8 +533,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           htj2k_decode_batch(grp, run, ROIshift, results);
           for (uint32_t k = 0; k < run; ++k) {
             if (!results[k]) {
-              printf("ERROR: HT code-block decoding reported failure — malformed input.\n");
-              throw std::exception();
+              open_htj2k::detail::fail("HT code-block decoding reported failure — malformed input.");
             }
           }
         } else {
@@ -800,8 +799,7 @@ const sprec_t *j2k_subband_row_buf::row_ptr(int32_t abs_row) {
         // Prefetch hit: wait for all in-flight tasks to finish, then swap buffers.
         spin_wait(par_cnt);
         if (par_error.load(std::memory_order_relaxed)) {
-          printf("WARNING: a prefetched code-block decode task failed — malformed input.\n");
-          throw std::exception();
+          open_htj2k::detail::fail("a prefetched code-block decode task failed — malformed input.");
         }
         std::swap(ring_buf, prefetch_buf);
         strip_y0 = ring_y0 = prefetch_y0;

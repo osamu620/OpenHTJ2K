@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "../print_library_messages.hpp"
 #include "cli.hpp"
 #include "pipeline_multi_threaded.hpp"
 #include "pipeline_single_threaded.hpp"
@@ -32,6 +33,7 @@ static int run_receiver(const CliOptions& opts) {
 }
 
 int main(int argc, char** argv) {
+  open_htj2k_apps::install_library_message_printer();
   if (!UdpSocket::wsa_init()) {
     std::fprintf(stderr, "FATAL: socket library initialization failed\n");
     return EXIT_FAILURE;

@@ -27,6 +27,12 @@ if(Threads_FOUND AND NOT EMSCRIPTEN)
   target_link_libraries(concurrent_instances PUBLIC open_htj2k PRIVATE Threads::Threads)
 endif()
 
+# message_handler_check: the library prints nothing by itself; warnings go to the message handler
+# and errors are exceptions with a description
+add_executable(message_handler_check)
+add_subdirectory(tests/tools/message_handler_check)
+target_link_libraries(message_handler_check PUBLIC open_htj2k)
+
 # codestream_bounds_check: unit test for j2c_src_memory's 4 GiB allocation bound
 add_executable(codestream_bounds_check)
 add_subdirectory(tests/tools/codestream_bounds_check)

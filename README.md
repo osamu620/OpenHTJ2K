@@ -97,7 +97,10 @@ RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
   [docs/benchmarks.md](docs/benchmarks.md).
 
 **Deliverables**
-- Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs.
+- Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs. The
+  library writes nothing to the console: errors are exceptions whose
+  `what()` describes them, and warnings go to an optional handler
+  (`open_htj2k::set_message_handler()` in `openhtj2k_message.hpp`).
 - CLI tools: `open_htj2k_enc`, `open_htj2k_dec`, `open_htj2k_rtp_recv`,
   `open_htj2k_jpip_server`, `open_htj2k_jpip_demo`,
   `open_htj2k_jpip_benchmark`, plus validation / benchmark utilities

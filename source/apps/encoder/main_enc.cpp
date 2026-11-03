@@ -54,6 +54,7 @@
 #include <string>
 #include <vector>
 #include <exception>
+#include "../print_library_messages.hpp"
 #include "encoder.hpp"
 #include "enc_utils.hpp"
 #include "imgio.hpp"
@@ -76,6 +77,7 @@ static std::vector<uint64_t> target_bytes(const std::vector<double> &bpp, uint32
 }
 
 int main(int argc, char *argv[]) {
+  open_htj2k_apps::install_library_message_printer();
   j2k_argset args(argc, argv);  // parsed command line
   std::vector<std::string> fnames = args.ifnames;
   for (const auto &fname : fnames) {

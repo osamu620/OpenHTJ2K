@@ -53,6 +53,7 @@
 #include "ThreadPool.hpp"
 #ifdef _OPENMP
   #include <omp.h>
+  #include "message_internal.hpp"
 #endif
 namespace open_htj2k {
 class openhtj2k_decoder_impl {
@@ -188,8 +189,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8
   size_t bytes_read = fread(jph_file_buf.data(), sizeof(uint8_t), jph_file_buf.size(), fp);
   fclose(fp);
   if (bytes_read < static_cast<size_t>(file_size)) {
-    printf("ERROR: %s seems to have not enough data.\n", filename);
-    throw std::exception();
+    open_htj2k::detail::fail("%s seems to have not enough data.", filename);
   }
   // Detect JPH/JP2 signature and extract embedded codestream if found.
   jph_info info;
@@ -290,10 +290,9 @@ void openhtj2k_decoder_impl::init_borrow(uint8_t *buf, const size_t length, cons
 
 void openhtj2k_decoder_impl::parse() {
   if (is_codestream_set == false) {
-    printf(
-        "ERROR: openhtj2k_decoder_impl::openhtj2k_decoder_impl() shall be called before calling "
-        "openhtj2k_decoder_impl::parse().\n");
-    throw std::exception();
+    open_htj2k::detail::fail(
+        "openhtj2k_decoder_impl::openhtj2k_decoder_impl() shall be called before calling "
+        "openhtj2k_decoder_impl::parse().");
   }
   // Read main header
   main_header.read(in);
@@ -402,10 +401,9 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
                                                std::vector<uint8_t> &depth,
                                                std::vector<bool> &is_signed) {
   if (!is_parsed) {
-    printf(
-        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
-        "openhtj2k_decoder_impl::invoke_line_based().\n");
-    throw std::exception();
+    open_htj2k::detail::fail(
+        "openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based().");
   }
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
@@ -420,8 +418,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
   // Validate tile count BEFORE allocating output buffers — otherwise the raw `new int32_t[]`
   // pointers pushed into `buf` would leak on throw (caller owns `buf` but only after return).
   if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
+    open_htj2k::detail::fail("The number of tiles exceeds its allowable maximum (65535).");
   }
 
   // Allocate output buffers.
@@ -456,15 +453,13 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
   // Read all tile parts; treat EOF as EOC for truncated codestreams.
   while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
     if (word != _SOT) {
-      printf("ERROR: SOT marker segment expected but %04X is found\n", word);
-      throw std::exception();
+      open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
     }
     tmpSOT     = SOT_marker(in);
     tile_index = tmpSOT.get_tile_index();
     if (tile_index >= tileSet.size()) {
-      printf("ERROR: SOT tile index %u is out of range (numTiles=%zu)\n",
-             tile_index, tileSet.size());
-      throw std::exception();
+      open_htj2k::detail::fail("SOT tile index %u is out of range (numTiles=%zu)", tile_index,
+                               tileSet.size());
     }
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
@@ -475,10 +470,9 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
       install_precinct_filter(tileSet[i], static_cast<uint16_t>(i));
       install_packet_observer(tileSet[i], static_cast<uint16_t>(i));
       tileSet[i].create_tile_buf(main_header);
-    } catch (std::exception &exc) {
-      printf("ERROR: %s\n", exc.what());
+    } catch (std::exception &) {
       tileSet[i].destroy();
-      throw std::runtime_error("Abort Decoding!");
+      throw;
     }
     // decode_line_based() replaces decode() + ycbcr_to_rgb() + finalize().
     tileSet[i].decode_line_based(main_header, reduce_NL, buf);
@@ -496,10 +490,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     std::function<void(uint32_t, int32_t *const *, uint16_t)> cb, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   if (!is_parsed) {
-    printf(
-        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
-        "openhtj2k_decoder_impl::invoke_line_based_stream().\n");
-    throw std::exception();
+    open_htj2k::detail::fail(
+        "openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_stream().");
   }
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
@@ -513,8 +506,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   main_header.get_number_of_tiles(numTiles.x, numTiles.y);
   // Validate tile count BEFORE populating output metadata.
   if (numTiles.x * numTiles.y > 65535) {
-    printf("ERROR: The number of tiles exceeds its allowable maximum (65535).\n");
-    throw std::exception();
+    open_htj2k::detail::fail("The number of tiles exceeds its allowable maximum (65535).");
   }
 
   uint16_t num_components = main_header.SIZ->get_num_components();
@@ -547,15 +539,13 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   // Read all tile parts; treat EOF as EOC for truncated codestreams.
   while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
     if (word != _SOT) {
-      printf("ERROR: SOT marker segment expected but %04X is found\n", word);
-      throw std::exception();
+      open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
     }
     tmpSOT     = SOT_marker(in);
     tile_index = tmpSOT.get_tile_index();
     if (tile_index >= tileSet.size()) {
-      printf("ERROR: SOT tile index %u is out of range (numTiles=%zu)\n",
-             tile_index, tileSet.size());
-      throw std::exception();
+      open_htj2k::detail::fail("SOT tile index %u is out of range (numTiles=%zu)", tile_index,
+                               tileSet.size());
     }
     tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
   }
@@ -596,10 +586,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         install_precinct_filter(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
         install_packet_observer(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
         tileSet[tile_idx].create_tile_buf(main_header);
-      } catch (std::exception &exc) {
-        printf("ERROR: %s\n", exc.what());
+      } catch (std::exception &) {
         tileSet[tile_idx].destroy();
-        throw std::runtime_error("Abort Decoding!");
+        throw;
       }
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL,
           [&](uint32_t y_local, int32_t *const *rows, uint16_t nc) {
@@ -669,10 +658,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         install_precinct_filter(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
         install_packet_observer(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
         tileSet[tile_idx].create_tile_buf(main_header);
-      } catch (std::exception &exc) {
-        printf("ERROR: %s\n", exc.what());
+      } catch (std::exception &) {
         tileSet[tile_idx].destroy();
-        throw std::runtime_error("Abort Decoding!");
+        throw;
       }
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_,
                                                   row_lo_, col_lo_, col_hi_, skip_mct_);
@@ -798,10 +786,9 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     std::function<void(uint32_t, int32_t *const *, uint16_t)> cb, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   if (!is_parsed) {
-    printf(
-        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
-        "openhtj2k_decoder_impl::invoke_line_based_stream_reuse().\n");
-    throw std::exception();
+    open_htj2k::detail::fail(
+        "openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_stream_reuse().");
   }
   if (!single_tile_reuse_enabled_) {
     invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
@@ -951,8 +938,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     SOT_marker tmpSOT;
     while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
       if (word != _SOT) {
-        printf("ERROR: SOT marker segment expected but %04X is found\n", word);
-        throw std::exception();
+        open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
       }
       tmpSOT = SOT_marker(in);
       const uint16_t tile_index = tmpSOT.get_tile_index();
@@ -976,13 +962,12 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
     install_precinct_filter(cached_tileSet_[0], 0);
     install_packet_observer(cached_tileSet_[0], 0);
     cached_tileSet_[0].create_tile_buf(main_header);
-  } catch (std::exception &exc) {
-    printf("ERROR: %s\n", exc.what());
+  } catch (std::exception &) {
     // On a create_tile_buf failure the cache is likely in a bad state —
     // drop it and rethrow.
     cached_tileSet_.clear();
     cached_header_fingerprint_ = 0;
-    throw std::runtime_error("Abort Decoding!");
+    throw;
   }
 
   cached_tileSet_[0].decode_line_based_stream(main_header, reduce_NL, cb, row_limit_,
@@ -1000,10 +985,9 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     PlanarOutputDesc *descs, uint16_t nc, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   if (!is_parsed) {
-    printf(
-        "ERROR: openhtj2k_decoder_impl::parse() shall be called before calling "
-        "openhtj2k_decoder_impl::invoke_line_based_direct().\n");
-    throw std::exception();
+    open_htj2k::detail::fail(
+        "openhtj2k_decoder_impl::parse() shall be called before calling "
+        "openhtj2k_decoder_impl::invoke_line_based_direct().");
   }
   if (!single_tile_reuse_enabled_) {
     // No single-tile cache — fall back to the callback path with a
@@ -1164,8 +1148,7 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     SOT_marker tmpSOT;
     while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
       if (word != _SOT) {
-        printf("ERROR: SOT marker segment expected but %04X is found\n", word);
-        throw std::exception();
+        open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
       }
       tmpSOT = SOT_marker(in);
       const uint16_t tile_index = tmpSOT.get_tile_index();
@@ -1185,11 +1168,10 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     install_precinct_filter(cached_tileSet_[0], 0);
     install_packet_observer(cached_tileSet_[0], 0);
     cached_tileSet_[0].create_tile_buf(main_header);
-  } catch (std::exception &exc) {
-    printf("ERROR: %s\n", exc.what());
+  } catch (std::exception &) {
     cached_tileSet_.clear();
     cached_header_fingerprint_ = 0;
-    throw std::runtime_error("Abort Decoding!");
+    throw;
   }
 
   cached_tileSet_[0].decode_line_based_stream_planar(main_header, reduce_NL, descs, nc);

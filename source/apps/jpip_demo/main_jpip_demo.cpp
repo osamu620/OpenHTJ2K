@@ -50,6 +50,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include "../print_library_messages.hpp"
 #include "codestream_assembler.hpp"
 #include "codestream_walker.hpp"
 #include "data_bin_emitter.hpp"
@@ -234,6 +235,7 @@ std::unordered_set<uint64_t> foveated_i_set(const CodestreamIndex &idx,
 }  // namespace
 
 int main(int argc, char **argv) {
+  open_htj2k_apps::install_library_message_printer();
   Options opt;
   if (!parse_args(argc, argv, opt)) {
     std::fprintf(stderr,

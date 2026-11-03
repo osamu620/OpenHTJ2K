@@ -33,6 +33,7 @@
 #include "ebcot_context.hpp"
 #include "ebcot_sig_lut9.hpp"
 #include "block_dequant.hpp"
+#include "message_internal.hpp"
 
 // The coding passes below keep all per-sample state in the packed stripe-column
 // words (see ebcot_context.hpp).  Each pass loads a column's word once, works on a
@@ -325,8 +326,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       // pass_length[] is attacker-controlled; keep the MQ segment inside the
       // (already clamped) codeblock buffer to avoid an over-read.
       if (static_cast<uint64_t>(segment_pos) + segment_bytes > block->length) {
-        printf("WARNING: MQ segment length exceeds codeblock bytes — malformed input.\n");
-        throw std::exception();
+        open_htj2k::detail::fail("MQ segment length exceeds codeblock bytes — malformed input.");
       }
       mq_dec.init(segment_pos, segment_bytes, is_bypass);
       segment_pos += segment_bytes;
@@ -360,8 +360,7 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
           r += mq_dec.decode(label_uni);
         }
         if (r != 10) {
-          printf("ERROR: SEGMARK test failed.\n");
-          throw std::exception();
+          open_htj2k::detail::fail("SEGMARK test failed.");
         }
       }
     }
