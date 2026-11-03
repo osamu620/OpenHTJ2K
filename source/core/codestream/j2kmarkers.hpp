@@ -417,6 +417,7 @@ class PPM_marker : public j2k_marker_io_base {
   uint16_t ppmlen;
   PPM_marker();
   explicit PPM_marker(j2c_src_memory &in);
+  uint8_t get_index() const { return Zppm; }
 };
 
 /********************************************************************************
@@ -495,6 +496,7 @@ class PPT_marker : public j2k_marker_io_base {
   uint16_t pptlen;
   PPT_marker();
   explicit PPT_marker(j2c_src_memory &in);
+  uint8_t get_index() const { return Zppt; }
 };
 
 /********************************************************************************
@@ -520,8 +522,13 @@ class j2k_main_header {
   // Part 2 extensions
   std::vector<std::unique_ptr<DFS_marker>> DFS;
   std::vector<std::unique_ptr<ATK_marker>> ATK;
+  // The packet-header records of the PPM markers: node k holds the packet headers of the
+  // k-th tile-part in the codestream (ISO/IEC 15444-1, A.7.4).
   std::unique_ptr<buf_chain> ppm_header;
   std::unique_ptr<uint8_t[]> ppm_buf;
+  // Tile-parts read so far, in codestream order: j2k_tile::add_tile_part() takes the next
+  // number for each, which is also the index of its PPM record.  Reset by read().
+  uint32_t num_tile_parts_read = 0;
   // Packets the tiles of the codestream may still declare (see read()); each tile's
   // create_tile_buf() subtracts its packets.  Unlimited unless set by read().
   uint64_t packet_budget = UINT64_MAX;

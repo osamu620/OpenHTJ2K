@@ -28,6 +28,7 @@
 
 #include "j2kmarkers.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 #include <string>
@@ -1830,6 +1831,7 @@ int j2k_main_header::read(j2c_src_memory &in) {
   ATK.clear();
   ppm_buf.reset();
   ppm_header.reset();
+  num_tile_parts_read = 0;
 
   // Every packet of a complete codestream takes at least one byte (its header is at
   // least one byte, in the tile-part body or in a PPM/PPT marker), so the codestream
@@ -1936,6 +1938,12 @@ int j2k_main_header::read(j2c_src_memory &in) {
     open_htj2k::detail::fail("main header has no QCD marker.");
   }
   if (!PPM.empty()) {
+    // The records continue from one PPM marker to the next in increasing Zppm, which need
+    // not be the order the markers appear in (ISO/IEC 15444-1, A.7.4).
+    std::stable_sort(PPM.begin(), PPM.end(),
+                     [](const std::unique_ptr<PPM_marker> &a, const std::unique_ptr<PPM_marker> &b) {
+                       return a->get_index() < b->get_index();
+                     });
     uint32_t len = 0;
     for (auto &i : PPM) {
       len += i->ppmlen;

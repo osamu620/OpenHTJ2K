@@ -266,6 +266,33 @@ class buf_chain {
     reset_bit_state();
   }
   OPENHTJ2K_NODISCARD size_t get_num_nodes() const { return node_buf.size(); }
+  OPENHTJ2K_NODISCARD uint8_t *get_node_buf(size_t n) const { return node_buf[n]; }
+  OPENHTJ2K_NODISCARD uint32_t get_node_length(size_t n) const { return node_length[n]; }
+  // Moves the reader to the start of the next node once the current one has been read to
+  // its end, as the next get_byte() would.  A reader that takes whole spans of the current
+  // node (borrow_N_bytes) calls it first when the bytes it wants begin a node.
+  void skip_exhausted_node() {
+    while (pos >= current_length && node_pos + 1 < num_nodes) {
+      node_pos++;
+      current_buf    = node_buf[node_pos];
+      current_length = node_length[node_pos];
+      pos            = 0;
+    }
+  }
+  // The next two bytes, without consuming them; 0 past the end of the chain.
+  OPENHTJ2K_NODISCARD uint16_t peek_word() const {
+    size_t np = node_pos, p = pos;
+    uint16_t word = 0;
+    for (int i = 0; i < 2; ++i) {
+      while (np < num_nodes && p >= node_length[np]) {
+        np++;
+        p = 0;
+      }
+      const uint8_t byte = (np < num_nodes) ? node_buf[np][p++] : 0;
+      word               = static_cast<uint16_t>((word << 8) | byte);
+    }
+    return word;
+  }
   // Reset the bit-reader accumulator.  activate() begins a fresh read at a byte
   // boundary, so any partial-byte / 0xFF-stuffing state left over from a
   // previous decode must be cleared — otherwise the single-tile reuse path
