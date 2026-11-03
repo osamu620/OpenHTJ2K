@@ -1910,8 +1910,10 @@ int j2k_main_header::read(j2c_src_memory &in) {
   // as before, while capping what a short input can make the decoder allocate (about
   // 60 bytes per packet) and iterate over.
   constexpr uint64_t min_packet_budget = static_cast<uint64_t>(1) << 20;
-  const uint64_t codestream_bytes      = in.get_remaining();
-  packet_budget = (codestream_bytes > min_packet_budget) ? codestream_bytes : min_packet_budget;
+  codestream_bytes                     = in.get_remaining();
+  packet_budget    = (codestream_bytes > min_packet_budget) ? codestream_bytes : min_packet_budget;
+  structure_budget = 0;
+  structure_bytes  = 0;
 
   uint16_t word = in.get_word();
   if (word != _SOC) {

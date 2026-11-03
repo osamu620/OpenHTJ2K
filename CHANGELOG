@@ -445,6 +445,59 @@
   to a tile-component whose SPcod or SPcoc has bits 6 and 7 set in a
   codestream with bits 14 and 15 of Ccap15 set (ISO/IEC 15444-15, A.3.2 and
   A.4). Codestreams with neither bit set decode as before.
+- The decoder allocated memory sized by header values that the codestream's
+  data does not back, so a codestream of about 100 bytes could make it
+  allocate from hundreds of megabytes to more than 8 GB. Decoded images are
+  unchanged; the memory it takes now follows the data:
+  - The code-blocks of a precinct are set up when the first packet of the
+    precinct that is not empty is read, so precincts without coded data take
+    no code-block memory. A 112-byte codestream of a 16384 x 16384 image with
+    4 x 4 code-blocks and empty packets decodes with 15 MB instead of 5.7 GB.
+  - The decoder keeps no per-layer state for each code-block. It took 2 bytes
+    per layer per code-block: with 65535 layers, a 112-byte codestream of a
+    1024 x 1024 image made it allocate more than 8 GB. Reading the packets
+    also no longer takes time growing with the square of the layer count.
+  - A code-block whose data comes in several layers is copied into a buffer
+    sized by that data instead of one of at least 8 KB.
+  - A tile's resolutions, precincts and code-blocks are freed once the tile
+    is decoded, so a codestream of many tiles holds one tile's at a time
+    (a 4K image in 16 x 16 tiles: 78 MB instead of 670 MB).
+  - The line buffers of a subband are as high as its code-blocks or the
+    subband, whichever is lower, instead of always as high as the
+    code-blocks, and a subband without columns gets none. The code-block
+    scratch of each subband (37 KB) is allocated when the subband decodes a
+    code-block, at the size its code-blocks need.
+- The decoder now refuses, as "not supported", a codestream whose tile,
+  precinct and code-block state would exceed a budget: the larger of
+  256 MiB, 512 bytes per byte of codestream, and 2 bytes per image sample
+  (all components at full resolution). It counts the state it holds at a
+  time (each tile's is given back once the tile is decoded) and checks the
+  line buffers of each tile against the same budget, before allocating
+  either. The conformance codestreams need under 8% of it. Valid codestreams
+  it can refuse are of three kinds:
+  - very large images with code-blocks smaller than about 16 x 16 at very
+    low bit rates (each code-block takes about 300 bytes once its precinct
+    has data, more than such a codestream spends on it);
+  - headers that declare huge precinct counts, or tile times component
+    counts, with little data;
+  - images only a few rows high and about a million or more columns wide,
+    whose line buffers (an eight-row ring per decomposition level) grow with
+    the width and not with the height: 1048576 x 2 in RGB needs 516 MB.
+  Codestreams it now refuses include ones that made the decoder allocate
+  1 GB (650 thousand 2 x 2 precincts in 112 bytes), 7 GB (9361 progression
+  order changes copied to each of 65535 tiles) and more than 8 GB (16384
+  components with 32 decomposition levels).
+- On the single-tile reuse path (`invoke_line_based_stream_reuse()` and
+  `invoke_line_based_direct()` after `enable_single_tile_reuse(true)`), a
+  frame after the first decoded the wrong precincts, or failed, when a
+  resolution had more than 65535 precincts or the tile more than 255
+  components: the cached packet order held their indices in 16 and 8 bits.
+  A frame whose tile-part header gives a component another number of
+  decomposition levels than the first frame is now rejected; it made the
+  decoder index past the levels built for the first frame.
+- A Part 2 codestream whose DFS marker declares a decomposition level without
+  a transform crashed the decoder: such a level has no subbands, but it was
+  set up with three, read from a null array. It now has none.
 
 ### Tools
 - `open_htj2k_dec` exited with status 0 when decoding failed: it printed the

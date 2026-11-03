@@ -1728,15 +1728,30 @@ void j2k_codeblock::set_compressed_data(uint8_t *const buf, const uint16_t bufsi
   this->current_address = this->compressed_data;
 }
 
-void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_limit,
-                                             const uint16_t &layer) {
-  if (this->layer_passes[layer] == 0) {
+// Capacity of a code-block's own buffer of compressed data holding len bytes (layers that
+// are not contiguous in the codestream): the bytes, the 16 bytes past them the SIMD block
+// decoders may read, rounded up to a power of two so that appending layer after layer
+// reallocates a logarithmic number of times.  At least 64 bytes.
+static size_t owned_compressed_capacity(uint32_t len) {
+  const size_t need = static_cast<size_t>(len) + 16;
+  size_t cap        = 64;
+  while (cap < need) cap <<= 1;
+  return cap;
+}
+
+void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf,
+                                             OPENHTJ2K_MAYBE_UNUSED const uint16_t &layer) {
+  // The passes the packet just parsed added (taken, so that a later packet whose header
+  // does not reach this code-block finds none).
+  const uint8_t new_passes = this->dec_layer_passes;
+  this->dec_layer_passes   = 0;
+  if (new_passes == 0) {
     return;
   }
 
   // Compute total bytes contributed by this layer's passes.
-  int32_t l0            = this->layer_start[layer];
-  int32_t l1            = l0 + this->layer_passes[layer];
+  int32_t l0            = this->num_passes - new_passes;
+  int32_t l1            = this->num_passes;
   uint32_t layer_length = 0;
   for (int32_t i = l0; i < l1; i++) {
     layer_length += this->pass_length[static_cast<size_t>(i)];
@@ -1768,14 +1783,13 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
         // the tile body).  Roll the layer back to "no contribution" rather than
         // keep passes with no data: the block decoders reject a code-block whose
         // passes are all empty, which would fail the whole tile instead of
-        // dropping this one block.  layer_start[] holds the pass count before
-        // this layer, so it is the state to restore.
-        const uint8_t passes_before = this->layer_start[layer];
+        // dropping this one block.  l0 is the pass count before this layer, so it
+        // is the state to restore.
+        const uint8_t passes_before = static_cast<uint8_t>(l0);
         for (uint8_t i = passes_before; i < this->pass_length_count; ++i) {
           this->pass_length[i] = 0;
         }
-        this->num_passes          = passes_before;
-        this->layer_passes[layer] = 0;
+        this->num_passes = passes_before;
         return;
       }
     }
@@ -1786,7 +1800,8 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
     if (layer_length == 0) {
       // Passes exist but contribute zero bytes (valid in J2K spec).
       // Allocate a minimal placeholder so later layers can append.
-      this->compressed_data = static_cast<uint8_t *>(malloc(static_cast<size_t>(buf_limit)));
+      this->compressed_data = static_cast<uint8_t *>(malloc(owned_compressed_capacity(0)));
+      if (this->compressed_data == nullptr) throw std::bad_alloc();
       this->current_address = this->compressed_data;
     } else {
       // Zero-copy: borrow a direct pointer into the codestream buffer.
@@ -1809,27 +1824,26 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
   // If compressed_data is a borrowed (zero-copy) pointer we must convert it
   // to an owned buffer before appending, since the layers are not contiguous
   // in the codestream.
+  // Owned buffers hold owned_compressed_capacity(length) bytes, so they grow with the data
+  // rather than by a fixed amount per code-block.
   if (this->compressed_is_pooled) {
-    // Allocate at least buf_limit bytes (same as the original first-layer malloc)
-    // so that subsequent layer appends do not overflow the owned buffer.
-    uint32_t alloc_size = std::max(static_cast<uint32_t>(buf_limit), this->length + layer_length);
-    uint8_t *owned      = static_cast<uint8_t *>(malloc(alloc_size));
+    uint8_t *owned = static_cast<uint8_t *>(malloc(owned_compressed_capacity(this->length + layer_length)));
+    if (owned == nullptr) throw std::bad_alloc();
     memcpy(owned, this->compressed_data, this->length);
     this->compressed_data      = owned;
     this->current_address      = owned + this->length;
     this->compressed_is_pooled = false;
-    buf_limit                  = static_cast<int32_t>(alloc_size);
   } else {
     // Already an owned buffer — extend if needed.
-    while (this->length + layer_length > static_cast<uint32_t>(buf_limit)) {
-      uint8_t *newbuf = static_cast<uint8_t *>(realloc(this->compressed_data, this->length + layer_length));
+    const size_t cap = owned_compressed_capacity(this->length + layer_length);
+    if (cap > owned_compressed_capacity(this->length)) {
+      uint8_t *newbuf = static_cast<uint8_t *>(realloc(this->compressed_data, cap));
       if (newbuf == nullptr) {
         // realloc failed: original buffer is still valid; abort to avoid leaking it.
         throw std::bad_alloc();
       }
       this->compressed_data = newbuf;
       this->current_address = this->compressed_data + this->length;
-      buf_limit             = static_cast<int32_t>(this->length + layer_length);
     }
   }
 
@@ -1838,14 +1852,17 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf, int32_t buf_li
   this->length += layer_length;
 }
 
-void j2k_codeblock::skip_compressed_buffer(buf_chain *tile_buf, const uint16_t &layer) {
-  if (this->layer_passes[layer] == 0) {
+void j2k_codeblock::skip_compressed_buffer(buf_chain *tile_buf,
+                                           OPENHTJ2K_MAYBE_UNUSED const uint16_t &layer) {
+  const uint8_t new_passes = this->dec_layer_passes;
+  this->dec_layer_passes   = 0;
+  if (new_passes == 0) {
     return;
   }
   // Mirror create_compressed_buffer's layer_length computation so the byte
   // stream advances by exactly the same amount as the attach path.
-  int32_t l0            = this->layer_start[layer];
-  int32_t l1            = l0 + this->layer_passes[layer];
+  int32_t l0            = this->num_passes - new_passes;
+  int32_t l1            = this->num_passes;
   uint32_t layer_length = 0;
   for (int32_t i = l0; i < l1; i++) {
     layer_length += this->pass_length[static_cast<size_t>(i)];
@@ -1893,23 +1910,16 @@ void j2k_codeblock::reset_for_next_frame() {
   // restore the COD-declared base codeblock style.
   Cmodes &= static_cast<uint16_t>(~HT_PHLD);
   if (Cmodes & HT_MIXED) Cmodes |= HT;
-  // layer_start / layer_passes are pooled by the owning j2k_precinct_subband
-  // (cb_layer_pool) and must be zeroed so parse_packet_header sees no
-  // stale contributions from the previous frame.
-  if (layer_start != nullptr) memset(layer_start, 0, num_layers);
-  if (layer_passes != nullptr) memset(layer_passes, 0, num_layers);
+  dec_layer_passes = 0;
 }
 
 /********************************************************************************
  * j2k_precinct_subband
  *******************************************************************************/
-j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uint8_t R_b,
-                                           uint8_t transformation, float stepsize, sprec_t *ibuf,
-                                           const element_siz &bp0, const element_siz &p0,
-                                           const element_siz &p1, const uint32_t band_stride,
-                                           const uint16_t &num_layers, const element_siz &codeblock_size,
-                                           const uint8_t &Cmodes)
-    : j2k_region(p0, p1), orientation(orientation), codeblocks(nullptr) {
+j2k_precinct_subband::j2k_precinct_subband(const j2k_subband &sb, const element_siz &p0,
+                                           const element_siz &p1, uint16_t num_layers,
+                                           const element_siz &codeblock_size, uint8_t Cmodes, bool decoder)
+    : j2k_region(p0, p1), orientation(sb.orientation), built(false), codeblocks(nullptr) {
   if (this->pos1.x > this->pos0.x) {
     this->num_codeblock_x =
         ceil_int(this->pos1.x - 0, codeblock_size.x) - (this->pos0.x - 0) / codeblock_size.x;
@@ -1922,21 +1932,56 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
   } else {
     this->num_codeblock_y = 0;
   }
+  if (!decoder) {
+    build_codeblocks(sb, num_layers, codeblock_size, Cmodes, true);
+  }
+}
 
+// Nodes of a tag tree over nx x ny leaves (the tagtree constructor's count).
+static uint64_t tagtree_num_nodes(uint32_t nx, uint32_t ny) {
+  uint64_t n = 0;
+  uint64_t w = nx, h = ny;
+  while (true) {
+    n += w * h;
+    if (w * h <= 1) break;
+    w = (w + 1) / 2;
+    h = (h + 1) / 2;
+  }
+  return n;
+}
+
+uint64_t j2k_precinct_subband::codeblock_state_bytes(uint16_t num_layers, bool layer_state) const {
+  const uint64_t n = static_cast<uint64_t>(num_codeblock_x) * num_codeblock_y;
+  if (n == 0) return 0;
+  // The code-blocks, the two tag trees and the layer arrays, each a heap block with
+  // (about) 16 bytes of bookkeeping.
+  return n * sizeof(j2k_codeblock)
+         + 2 * tagtree_num_nodes(num_codeblock_x, num_codeblock_y) * sizeof(tagtree_node)
+         + (layer_state ? n * 2 * num_layers : 0) + 4 * 16;
+}
+
+void j2k_precinct_subband::build_codeblocks(const j2k_subband &sb, uint16_t num_layers,
+                                            const element_siz &codeblock_size, uint8_t Cmodes,
+                                            bool layer_state) {
+  if (built) return;
   const uint32_t num_codeblocks = this->num_codeblock_x * this->num_codeblock_y;
   if (num_codeblocks != 0) {
     inclusion_info = tagtree(this->num_codeblock_x, this->num_codeblock_y);
     ZBP_info       = tagtree(this->num_codeblock_x, this->num_codeblock_y);
 
-    // Single flat buffer for all layer_start + layer_passes arrays
-    cb_layer_pool = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(num_codeblocks) * 2 * num_layers);
-    memset(cb_layer_pool.get(), 0, static_cast<size_t>(num_codeblocks) * 2 * num_layers);
+    // Encoder: single flat buffer for all layer_start + layer_passes arrays.  The decoder
+    // keeps no per-layer state (j2k_codeblock::dec_layer_passes).
+    if (layer_state) {
+      cb_layer_pool = MAKE_UNIQUE<uint8_t[]>(static_cast<size_t>(num_codeblocks) * 2 * num_layers);
+      memset(cb_layer_pool.get(), 0, static_cast<size_t>(num_codeblocks) * 2 * num_layers);
+    }
 
     // Single allocation for all codeblock objects (placement new).  The guard
     // unwinds partial construction if any j2k_codeblock(...) throws.
     auto *raw = static_cast<j2k_codeblock *>(operator new[](sizeof(j2k_codeblock) * num_codeblocks));
     placement_new_array_guard<j2k_codeblock> guard(raw);
     uint8_t *layer_pool_ptr = cb_layer_pool.get();
+    const element_siz bp0   = sb.pos0;
     for (uint32_t cb = 0; cb < num_codeblocks; cb++) {
       const uint32_t x = cb % this->num_codeblock_x;
       const uint32_t y = cb / this->num_codeblock_x;
@@ -1946,19 +1991,25 @@ j2k_precinct_subband::j2k_precinct_subband(uint8_t orientation, uint8_t M_b, uin
       const element_siz cblkpos1(std::min(pos1.x, codeblock_size.x * (x + 1 + pos0.x / codeblock_size.x)),
                                  std::min(pos1.y, codeblock_size.y * (y + 1 + pos0.y / codeblock_size.y)));
       const element_siz cblksize(cblkpos1.x - cblkpos0.x, cblkpos1.y - cblkpos0.y);
-      const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * band_stride;
-      j2k_codeblock *blk =
-          new (&raw[cb]) j2k_codeblock(cb, orientation, M_b, R_b, transformation, stepsize, band_stride,
-                                       ibuf, offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
+      const uint32_t offset = cblkpos0.x - bp0.x + (cblkpos0.y - bp0.y) * sb.stride;
+      j2k_codeblock *blk    = new (&raw[cb])
+          j2k_codeblock(cb, sb.orientation, sb.M_b, sb.R_b, sb.transformation, sb.delta, sb.stride,
+                        sb.i_samples, offset, num_layers, Cmodes, cblkpos0, cblkpos1, cblksize);
       guard.commit_one();
       // Hand out slices of the layer pool (layer_start then layer_passes)
-      blk->layer_start  = layer_pool_ptr;
-      blk->layer_passes = layer_pool_ptr + num_layers;
-      layer_pool_ptr += 2 * num_layers;
+      if (layer_pool_ptr != nullptr) {
+        blk->layer_start  = layer_pool_ptr;
+        blk->layer_passes = layer_pool_ptr + num_layers;
+        layer_pool_ptr += 2 * num_layers;
+      } else {
+        blk->layer_start  = nullptr;
+        blk->layer_passes = nullptr;
+      }
     }
     guard.release();
     this->codeblocks = raw;
   }
+  built = true;
 }
 
 tagtree_node *j2k_precinct_subband::get_inclusion_node(uint32_t i) { return &this->inclusion_info.node[i]; }
@@ -1978,7 +2029,9 @@ void j2k_precinct_subband::reset_for_next_frame() {
   for (uint32_t i = 0; i < ZBP_info.num_nodes; ++i) {
     ZBP_info.node[i].reset_for_next_frame();
   }
-  const uint32_t N = num_codeblock_x * num_codeblock_y;
+  // Code-blocks the decoder has not built yet (no packet of the precinct had any) have
+  // nothing to reset.
+  const uint32_t N = (codeblocks != nullptr) ? num_codeblock_x * num_codeblock_y : 0;
   for (uint32_t i = 0; i < N; ++i) {
     codeblocks[i].reset_for_next_frame();
   }
@@ -1998,22 +2051,18 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
   for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
     // The codestream ended inside this packet header: everything from here on
     // would be read from buf_chain's zero padding, not from data.  Stop.  The
-    // remaining code-blocks keep their zeroed layer_passes[] and so contribute
+    // remaining code-blocks keep dec_layer_passes at 0 and so contribute
     // nothing to this layer -- the same state a packet that is missing
     // altogether leaves behind, which the partial-decode path already handles.
     if (packet_header->is_past_end()) {
       return;
     }
-    j2k_codeblock *block  = this->access_codeblock(idx);
-    uint8_t cumsum_layers = 0;
+    j2k_codeblock *block = this->access_codeblock(idx);
     // Saved so a header that ends part-way through this code-block's signalling
     // can put it back the way it was.
     const bool was_already_included = block->already_included;
-    for (uint32_t i = 0; i < block->num_layers; ++i) {
-      cumsum_layers = static_cast<uint8_t>(cumsum_layers + block->layer_passes[i]);
-    }
-    // uint32_t number_of_bytes      = 0;  // initialize to zero in case of `not included`.
-    block->layer_start[layer_idx] = cumsum_layers;
+    // The passes this packet adds; block->num_passes counts those of the earlier layers.
+    block->dec_layer_passes = 0;
 
     tagtree_node *current_node, *parent_node;
 
@@ -2135,8 +2184,7 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
               // truncated codestream would spin it forever (issue #462).
               if (packet_header->is_past_end()) {
                 warn_truncated_packet_header();
-                block->already_included        = was_already_included;
-                block->layer_passes[layer_idx] = 0;
+                block->already_included = was_already_included;
                 return;
               }
               bit = packet_header->get_bit();
@@ -2181,17 +2229,16 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           }
         }
       }
-      block->layer_passes[layer_idx] = static_cast<uint8_t>(new_passes);
       // The pass count above came out of the padding rather than the
       // codestream: drop the contribution instead of registering a pass whose
       // body bytes do not exist.  num_passes is only updated further below, so
-      // clearing this layer is enough to undo the parse.
+      // leaving dec_layer_passes at 0 is enough to undo the parse.
       if (packet_header->is_past_end()) {
         warn_truncated_packet_header();
-        block->already_included        = was_already_included;
-        block->layer_passes[layer_idx] = 0;
+        block->already_included = was_already_included;
         return;
       }
+      block->dec_layer_passes = static_cast<uint8_t>(new_passes);
       // Retrieve Lblock
       while ((bit = packet_header->get_bit()) == 1) {
         // Lblock counts the bits used to signal a segment length; a segment
@@ -2496,10 +2543,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
           // number_of_bytes += segment_bytes;
         }
       }
-    } else {
-      // this layer has no contribution from this codeblock
-      block->layer_passes[layer_idx] = 0;
     }
+    // else: this layer has no contribution from this codeblock (dec_layer_passes is 0)
   }
 }
 
@@ -2756,11 +2801,15 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
 j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_siz &p0,
                            const element_siz &p1, const j2k_subband *subband, const uint16_t &num_layers,
                            const element_siz &codeblock_size, const uint8_t &Cmodes, uint8_t nb,
-                           dwt_type dfs_dir)
+                           dwt_type dfs_dir, bool decoder)
     : j2k_region(p0, p1),
       index(idx),
       resolution(r),
-      num_bands((nb != 0) ? nb : ((resolution == 0) ? 1 : 3)),
+      // A DFS level without a transform (DWT_NO) has no subbands.
+      num_bands((nb != 0)             ? nb
+                : (resolution == 0)   ? 1
+                : (dfs_dir == DWT_NO) ? 0
+                                      : 3),
       length(0),
       pband(nullptr),
       packet_header(nullptr),
@@ -2785,9 +2834,7 @@ j2k_precinct::j2k_precinct(const uint8_t &r, const uint32_t &idx, const element_
     if (dfs_dir == DWT_VERT) sr_x = 1U;
     const element_siz pbpos0(ceil_int(pos0.x - xob[ori], sr_x), ceil_int(pos0.y - yob[ori], sr_y));
     const element_siz pbpos1(ceil_int(pos1.x - xob[ori], sr_x), ceil_int(pos1.y - yob[ori], sr_y));
-    new (&raw[i])
-        j2k_precinct_subband(sb.orientation, sb.M_b, sb.R_b, sb.transformation, sb.delta, sb.i_samples,
-                             sb.pos0, pbpos0, pbpos1, sb.stride, num_layers, codeblock_size, Cmodes);
+    new (&raw[i]) j2k_precinct_subband(sb, pbpos0, pbpos1, num_layers, codeblock_size, Cmodes, decoder);
     guard.commit_one();
   }
   guard.release();
@@ -2862,7 +2909,11 @@ j2k_resolution::j2k_resolution(const uint8_t &r, const element_siz &p0, const el
       num_precincts(0),
       subbands(nullptr),
       // public
-      num_bands((nb != 0) ? nb : ((index == 0) ? 1 : 3)),
+      // A DFS level without a transform (DWT_NO) has no subbands.
+      num_bands((nb != 0)         ? nb
+                : (index == 0)    ? 1
+                : (dir == DWT_NO) ? 0
+                                  : 3),
       transform_direction(dir),
       npw(w),
       nph(h),
@@ -3045,7 +3096,7 @@ void j2k_resolution::create_subbands(element_siz &p0, element_siz &p1, uint8_t N
 }
 
 void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, element_siz codeblock_size,
-                                      uint8_t Cmodes) {
+                                      uint8_t Cmodes, bool decoder) {
   // precinct size signalled in header
   const element_siz PP(1U << log2PP.x, 1U << log2PP.y);
   // offset of horizontal precinct index
@@ -3070,7 +3121,7 @@ void j2k_resolution::create_precincts(element_siz log2PP, uint16_t numlayers, el
       const element_siz prcpos1(std::min(pos1.x, 0 + PP.x * (x + 1 + idxoff_x)),
                                 std::min(pos1.y, 0 + PP.y * (y + 1 + idxoff_y)));
       new (&raw[i]) j2k_precinct(index, i, prcpos0, prcpos1, subbands, numlayers, codeblock_size, Cmodes,
-                                 num_bands, transform_direction);
+                                 num_bands, transform_direction, decoder);
       guard.commit_one();
     }
     guard.release();
@@ -4150,7 +4201,8 @@ uint8_t j2k_tile_component::get_ROIshift() const { return this->ROIshift; }
 
 j2k_resolution *j2k_tile_component::access_resolution(uint8_t r) { return &this->resolution[r]; }
 
-void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based, bool enc_lb) {
+void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based, bool enc_lb,
+                                            bool decoder) {
   const uint8_t total_res = static_cast<uint8_t>(NL + 1U);
   // Single allocation for all j2k_resolution objects (placement new) — replaces double-indirection.
   // Build into a local pointer under a guard so that if any j2k_resolution(...)
@@ -4277,15 +4329,15 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
                            skip_alloc, this->dfs_info);
 #ifdef OPENHTJ2K_THREAD
     if (pool && pool->num_threads() > 1) {
-      results.emplace_back(pool->enqueue([r, raw, numlayers, this] {
-        raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+      results.emplace_back(pool->enqueue([r, raw, numlayers, decoder, this] {
+        raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes, decoder);
         return 0;
       }));
     } else {
-      raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+      raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes, decoder);
     }
 #else
-    raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes);
+    raw[r].create_precincts(precinct_size[r], numlayers, codeblock_size, Cmodes, decoder);
 #endif
   }
 #ifdef OPENHTJ2K_THREAD
@@ -4296,6 +4348,8 @@ void j2k_tile_component::create_resolutions(uint16_t numlayers, bool line_based,
   res_guard.release();
   resolution      = raw;
   num_resolutions = total_res;
+  built_cb_size   = codeblock_size;
+  built_Cmodes    = Cmodes;
 }
 
 // Input samples to Q(FRACBITS) for an irreversible transform: (x - DC) * 2^shiftup with
@@ -4409,6 +4463,77 @@ void j2k_tile_component::perform_dc_offset(const uint8_t transformation, const b
 /********************************************************************************
  * j2k_tile
  *******************************************************************************/
+// -- Decoder memory budget ---------------------------------------------------------
+// The decoder sizes its tile, precinct and code-block state by header values, which a
+// codestream of a few bytes can set to describe a huge or finely divided image: one
+// precinct per 2 x 2 samples, 4 x 4 code-blocks, thousands of components or tiles.  It
+// keeps the state it holds at a time (the tile-components of every tile the tile-part
+// headers set up, and the resolutions, precincts and code-blocks of the tile being
+// decoded), and separately the line buffers of that tile, under the largest of
+//  - kBudgetFloor bytes, so that any image of moderate size decodes;
+//  - kBudgetPerByte bytes per codestream byte, which a codestream whose packets carry
+//    data stays under (each packet takes at least a byte, and a code-block with data
+//    several); and
+//  - kBudgetPerSample bytes per image sample (all components at full resolution), the
+//    size of an 8- or 16-bit copy of the image, for large images with sparse data.
+// Precinct-subbands whose packets carry nothing build no code-blocks
+// (j2k_precinct_subband::build_codeblocks()), so codestreams of empty precincts stay far
+// below it.  What exceeds it is rejected as not supported: in practice, code-blocks
+// smaller than 16 x 16 (about 300 bytes of state each) at low bit rates in large images,
+// and degenerate headers (millions of precincts, or tiles times components in the
+// millions, from a small codestream).
+constexpr uint64_t kBudgetFloor     = uint64_t{256} << 20;
+constexpr uint64_t kBudgetPerByte   = 512;
+constexpr uint64_t kBudgetPerSample = 2;
+// What a heap block costs beyond its bytes, roughly.
+constexpr uint64_t kHeapBlockBytes = 16;
+
+static uint64_t sat_add(uint64_t a, uint64_t b) { return (a > UINT64_MAX - b) ? UINT64_MAX : a + b; }
+static uint64_t sat_mul(uint64_t a, uint64_t b) {
+  return (b != 0 && a > UINT64_MAX / b) ? UINT64_MAX : a * b;
+}
+
+static uint64_t decoder_structure_budget(j2k_main_header &mh) {
+  if (mh.structure_budget != 0) return mh.structure_budget;
+  element_siz siz, osiz, rsiz;
+  mh.SIZ->get_image_size(siz);
+  mh.SIZ->get_image_origin(osiz);
+  uint64_t samples = 0;
+  for (uint16_t c = 0; c < mh.SIZ->get_num_components(); ++c) {
+    mh.SIZ->get_subsampling_factor(rsiz, c);
+    const uint64_t w = ceil_int(siz.x, rsiz.x) - ceil_int(osiz.x, rsiz.x);
+    const uint64_t h = ceil_int(siz.y, rsiz.y) - ceil_int(osiz.y, rsiz.y);
+    samples          = sat_add(samples, w * h);  // w, h < 2^32
+  }
+  mh.structure_budget = std::max(kBudgetFloor, std::max(sat_mul(kBudgetPerByte, mh.codestream_bytes),
+                                                        sat_mul(kBudgetPerSample, samples)));
+  return mh.structure_budget;
+}
+
+void j2k_tile::charge_structure(uint64_t bytes, const char *what, bool persistent) {
+  if (budget_header_ == nullptr) return;
+  j2k_main_header &mh   = *budget_header_;
+  const uint64_t budget = decoder_structure_budget(mh);
+  if (bytes > budget || mh.structure_bytes > budget - bytes) {
+    open_htj2k::detail::fail(
+        "tile %u: %s would take the decoder's tile, precinct and code-block state past %llu bytes, the "
+        "most it allows for this codestream (the larger of 256 MiB, 512 bytes per codestream byte and 2 "
+        "bytes per image sample) — not supported. Very large images with code-blocks smaller than "
+        "about 16 x 16 at very low bit rates, and headers declaring huge precinct or tile x component "
+        "counts with little data, exceed it.",
+        static_cast<unsigned>(this->index), what, static_cast<unsigned long long>(budget));
+  }
+  mh.structure_bytes += bytes;
+  charged_bytes_ += bytes;
+  if (persistent) structure_bytes_ += bytes;
+}
+
+// Heap bytes of a j2k_tile_component beyond the object: its step sizes and precinct sizes.
+constexpr uint64_t kTileComponentHeapBytes = 3 * 97 + 8 * 33 + 3 * kHeapBlockBytes;
+// Bytes of one progression order change in porder_info (its six vectors, which may hold up
+// to twice what they need).
+constexpr uint64_t kPocEntryBytes = 2 * 9;
+
 j2k_tile::j2k_tile()
     : tile_part(),
       index(0),
@@ -4475,6 +4600,31 @@ void j2k_tile::setQCDparams(QCD_marker *QCD) {
   num_guard_bits = QCD->get_number_of_guardbits();
 }
 
+void j2k_tile::destroy() {
+  if (budget_header_ != nullptr) {
+    uint64_t &used = budget_header_->structure_bytes;
+    used           = (used > charged_bytes_) ? used - charged_bytes_ : 0;
+  }
+  charged_bytes_   = 0;
+  structure_bytes_ = 0;
+  tcomp.reset();
+  tile_buf.reset();
+  ppt_header.reset();
+  packet_header = nullptr;
+  packet.reset();
+  std::vector<std::unique_ptr<j2k_tile_part>>().swap(tile_part);
+  std::vector<CRP>().swap(cached_crp_);
+  crp_cached_      = false;
+  structure_built_ = false;
+  porder_info.nPOC = 0;
+  std::vector<uint8_t>().swap(porder_info.RSpoc);
+  std::vector<uint16_t>().swap(porder_info.CSpoc);
+  std::vector<uint16_t>().swap(porder_info.LYEpoc);
+  std::vector<uint8_t>().swap(porder_info.REpoc);
+  std::vector<uint16_t>().swap(porder_info.CEpoc);
+  std::vector<uint8_t>().swap(porder_info.Ppoc);
+}
+
 void j2k_tile::dec_init(uint16_t idx, j2k_main_header &main_header, uint8_t reduce_levels) {
   index          = idx;
   num_components = main_header.SIZ->get_num_components();
@@ -4486,6 +4636,8 @@ void j2k_tile::dec_init(uint16_t idx, j2k_main_header &main_header, uint8_t redu
   Ccap15 = (main_header.CAP != nullptr) ? main_header.CAP->get_Ccap(15) : 0;
   // set resolution reduction, if any
   reduce_NL = reduce_levels;
+  // the tile's state counts against the codestream's memory budget
+  budget_header_ = &main_header;
 }
 
 void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_header &main_header) {
@@ -4545,13 +4697,18 @@ void j2k_tile::init_from_first_tile_part(j2k_main_header &main_header, j2k_tilep
   // unconditionally because it only writes scalar fields and vectors that
   // are idempotent under identical main-header bytes.
   if (!structure_built_) {
+    // The tile-components, with their per-level step sizes and precinct sizes.
+    charge_structure(num_components * (sizeof(j2k_tile_component) + kTileComponentHeapBytes),
+                     "its tile-components");
     this->tcomp = MAKE_UNIQUE<j2k_tile_component[]>(num_components);
   }
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c);
   }
 
-  // apply POC, if any
+  // apply POC, if any.  Each tile keeps its own copy of the progression changes.
+  const POC_marker *poc = (tphdr->POC != nullptr) ? tphdr->POC.get() : main_header.POC.get();
+  if (poc != nullptr) charge_structure(poc->nPOC * kPocEntryBytes, "its progression order changes", false);
   if (tphdr->POC != nullptr) {
     for (unsigned long i = 0; i < tphdr->POC->nPOC; ++i) {
       porder_info.add(tphdr->POC->RSpoc[i], tphdr->POC->CSpoc[i], tphdr->POC->LYEpoc[i],
@@ -4565,11 +4722,44 @@ void j2k_tile::init_from_first_tile_part(j2k_main_header &main_header, j2k_tilep
   }
 }
 
+// Bytes the line decoder of a tile-component allocates while its tile is decoded, a little
+// over: per subband its row buffer, with two strip-high rings and the strip cache
+// (j2k_subband_row_buf::init()); per IDWT level the state's eight-row ring and
+// extension rows (idwt_2d_state_init()) and the row of its child; and up to 1275 rows of
+// strip scratch (decode_line_based_stream()).
+static uint64_t line_decode_state_bytes(j2k_tile_component &tc) {
+  const uint64_t cb_h = std::max<uint32_t>(tc.codeblock_size.y, 1);
+  auto band_bytes     = [cb_h](const j2k_subband &sb) {
+    const uint64_t w = sb.pos1.x - sb.pos0.x, h = sb.pos1.y - sb.pos0.y;
+    uint64_t b = sizeof(j2k_subband_row_buf);
+    if (w != 0 && h != 0) {
+      b += 2 * (std::min(cb_h, h) + 1) * (w + 32) * sizeof(sprec_t) + (h / cb_h + 2) * 32;
+    }
+    return b;
+  };
+  const uint8_t NL_act = static_cast<uint8_t>(tc.NL - tc.reduce_NL);
+  uint64_t bytes       = band_bytes(*tc.access_resolution(0)->access_subband(0));
+  for (uint8_t r = 1; r <= NL_act; ++r) {
+    j2k_resolution *cr = tc.access_resolution(r);
+    const uint64_t w   = cr->get_pos1().x - cr->get_pos0().x;
+    bytes += sizeof(idwt_2d_state) + sizeof(idwt_level_src_ctx) + 64 * (w + 64);
+    if (cr->transform_direction == DWT_NO) continue;
+    for (uint8_t b = 0; b < cr->num_bands; ++b) bytes += band_bytes(*cr->access_subband(b));
+  }
+  j2k_resolution *ca = tc.access_resolution(NL_act);
+  const uint64_t w = ca->get_pos1().x - ca->get_pos0().x, h = ca->get_pos1().y - ca->get_pos0().y;
+  return bytes + std::min<uint64_t>(h, 1275) * (w + 32) * sizeof(sprec_t);
+}
+
 // Precincts of a tile-component over all its resolutions, counted as
 // j2k_tile_component::create_resolutions() lays them out (B-16) without building them.
-static uint64_t count_tile_component_precincts(j2k_tile_component &tc) {
+// shell_bytes, when given, receives the bytes of the resolution, subband, precinct and
+// precinct-subband objects create_resolutions() allocates for them (the code-blocks are
+// built later, as packets arrive).
+static uint64_t count_tile_component_precincts(j2k_tile_component &tc, uint64_t *shell_bytes = nullptr) {
   const element_siz p0 = tc.get_pos0(), p1 = tc.get_pos1();
   uint64_t n = 0;
+  if (shell_bytes != nullptr) *shell_bytes += (tc.NL + 1U) * (sizeof(j2k_resolution) + kHeapBlockBytes);
   for (uint8_t r = 0; r <= tc.NL; ++r) {
     // log2 of the resolution's downsampling; 64 bits, since it reaches 32
     const uint32_t lx        = (tc.dfs_info != nullptr) ? tc.dfs_info->hor_depth[tc.NL - r] : tc.NL - r;
@@ -4584,6 +4774,14 @@ static uint64_t count_tile_component_precincts(j2k_tile_component &tc) {
     const uint64_t npw       = (x1 > x0) ? (x1 + PPx - 1) / PPx - x0 / PPx : 0;
     const uint64_t nph       = (y1 > y0) ? (y1 + PPy - 1) / PPy - y0 / PPy : 0;
     n += npw * nph;
+    if (shell_bytes != nullptr) {
+      // Subbands of the resolution, as j2k_resolution's constructor counts them.
+      uint64_t nb = (r == 0) ? 1 : 3;
+      if (tc.dfs_info != nullptr && r > 0) nb = tc.dfs_info->get_num_bands(r, tc.NL);
+      *shell_bytes +=
+          nb * sizeof(j2k_subband) + kHeapBlockBytes
+          + npw * nph * (sizeof(j2k_precinct) + nb * sizeof(j2k_precinct_subband) + kHeapBlockBytes);
+    }
   }
   return n;
 }
@@ -4706,10 +4904,17 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     }
   };
   if (!structure_built_) {
-    uint64_t precincts = 0;
+    uint64_t precincts = 0, shell_bytes = 0;
     for (uint16_t c = 0; c < num_components; c++)
-      precincts += count_tile_component_precincts(this->tcomp[c]);
+      precincts += count_tile_component_precincts(this->tcomp[c], &shell_bytes);
     check_packet_budget(precincts * numlayers);
+    // The resolution, subband, precinct and precinct-subband objects, and per packet its
+    // place in cached_crp_ and its is_packet_read flag.
+    charge_structure(shell_bytes + precincts * numlayers * (sizeof(CRP) + 1), "its precincts");
+  } else if (budget_header_ != nullptr) {
+    // Single-tile reuse: main_header was read afresh for this frame; the structure the
+    // earlier frames built counts against this frame's budget.
+    budget_header_->structure_bytes += structure_bytes_;
   }
 
   // determine the location of the packet header
@@ -4724,11 +4929,21 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     if (c_NL < this->reduce_NL) {
       throw std::runtime_error("Resolution level reduction exceeds the DWT level");
     }
+    // Single-tile reuse: a tile-part header (which the reuse fingerprint does not cover)
+    // can give a frame another number of decomposition levels than the structure was built
+    // for, and the loops below would index past its resolutions.
+    if (structure_built_ && c_NL + 1U != this->tcomp[c].get_num_resolutions()) {
+      open_htj2k::detail::fail(
+          "tile %u: component %u has %u decomposition levels in this frame but %u in the frame its "
+          "structure was built for — the frames must share their coding style.",
+          static_cast<unsigned>(this->index), static_cast<unsigned>(c), static_cast<unsigned>(c_NL),
+          static_cast<unsigned>(this->tcomp[c].get_num_resolutions() - 1U));
+    }
     // Single-tile reuse: skip create_resolutions (structural allocations),
     // but keep the counting loop — it warms resolution/precinct objects
     // into L1/L2 cache before the progression-order packet-parse loop.
     if (!structure_built_) {
-      this->tcomp[c].create_resolutions(numlayers, this->line_based_decode);
+      this->tcomp[c].create_resolutions(numlayers, this->line_based_decode, false, /*decoder=*/true);
     }
     max_c_NL = std::max(c_NL, max_c_NL);
     j2k_resolution *cr;
@@ -4741,15 +4956,6 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   check_packet_budget(tile_packets);
   main_header.packet_budget -= tile_packets;
   num_packets = static_cast<uint32_t>(tile_packets);
-  // TODO: create packets with progression order
-  // The packet[] array is a scratch "log of packets seen during parse" used
-  // only within create_tile_buf (j2c_packet's decode ctor is the only
-  // call site).  On the reuse path its size is unchanged, so we reallocate
-  // only when num_packets differs — which shouldn't happen in practice for
-  // same-geometry streams, but the guard keeps the contract simple.
-  if (packet == nullptr || !structure_built_) {
-    this->packet = MAKE_UNIQUE<j2c_packet[]>(static_cast<size_t>(num_packets));
-  }
   // ── Packet parsing ─────────────────────────────────────────────────────
   // After the first frame, the progression order never changes, so we
   // cache the (component, resolution, precinct) traversal order and replay
@@ -4758,14 +4964,12 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   // heap allocations.
   if (crp_cached_) {
     // Fast path: replay the cached traversal order.
-    size_t packet_count = 0;
     for (const auto &e : cached_crp_) {
       j2k_resolution *cr           = this->tcomp[e.c].access_resolution(e.r);
       j2k_precinct *cp             = cr->access_precinct(e.p);
       const bool skip              = precinct_filter_ && !precinct_filter_(e.c, e.r, e.p);
-      this->packet[packet_count++] = j2c_packet(e.l, e.r, e.c, e.p, packet_header, tile_buf.get());
       const uint64_t _pk_off       = packet_observer_ ? tile_buf->get_total_position() : 0u;
-      this->read_packet(cp, e.l, cr->num_bands, skip);
+      this->read_packet(cp, cr, e.c, e.l, skip);
       if (packet_observer_) {
         packet_observer_(static_cast<uint16_t>(e.c), e.r, e.p, /*layer=*/e.l, _pk_off,
                          tile_buf->get_total_position() - _pk_off);
@@ -4798,9 +5002,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     auto packet_read_flag = [&](uint16_t pl, uint8_t pr, uint16_t pc, uint32_t pp) {
       return is_packet_read[pl * tile_precincts + prc_base[pc * res_stride + pr] + pp];
     };
-    j2k_resolution *cr  = nullptr;
-    j2k_precinct *cp    = nullptr;
-    size_t packet_count = 0;
+    j2k_resolution *cr = nullptr;
+    j2k_precinct *cp   = nullptr;
     cached_crp_.clear();
     cached_crp_.reserve(num_packets);
     for (unsigned long i = 0; i < porder_info.nPOC; ++i) {
@@ -4831,13 +5034,11 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                     for (p = 0; p < cr->npw * cr->nph; p++) {
                       cp = cr->access_precinct(p);
                       if (!packet_read_flag(l, r, c, p)) {
-                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
-                        this->packet[packet_count++] =
-                            j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                        cached_crp_.push_back({p, c, l, r});
                         {
                           const uint64_t _pk_off = packet_observer_ ? tile_buf->get_total_position() : 0u;
                           this->read_packet(
-                              cp, l, cr->num_bands,
+                              cp, cr, c, l,
                               precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                           if (packet_observer_) {
                             packet_observer_(static_cast<uint16_t>(c), r, p, l, _pk_off,
@@ -4864,13 +5065,11 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                     for (p = 0; p < cr->npw * cr->nph; p++) {
                       cp = cr->access_precinct(p);
                       if (!packet_read_flag(l, r, c, p)) {
-                        cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
-                        this->packet[packet_count++] =
-                            j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                        cached_crp_.push_back({p, c, l, r});
                         {
                           const uint64_t _pk_off = packet_observer_ ? tile_buf->get_total_position() : 0u;
                           this->read_packet(
-                              cp, l, cr->num_bands,
+                              cp, cr, c, l,
                               precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                           if (packet_observer_) {
                             packet_observer_(static_cast<uint16_t>(c), r, p, l, _pk_off,
@@ -4917,15 +5116,12 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                         cp = cr->access_precinct(p);
                         for (l = 0; l < LYE; l++) {
                           if (!packet_read_flag(l, r, c, p)) {
-                            cached_crp_.push_back(
-                                {static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
-                            this->packet[packet_count++] =
-                                j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                            cached_crp_.push_back({p, c, l, r});
                             {
                               const uint64_t _pk_off =
                                   packet_observer_ ? tile_buf->get_total_position() : 0u;
                               this->read_packet(
-                                  cp, l, cr->num_bands,
+                                  cp, cr, c, l,
                                   precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                               if (packet_observer_) {
                                 packet_observer_(static_cast<uint16_t>(c), r, p, l, _pk_off,
@@ -4977,13 +5173,11 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       cp = cr->access_precinct(p);
                       for (l = 0; l < LYE; l++) {
                         if (!packet_read_flag(l, r, c, p)) {
-                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
-                          this->packet[packet_count++] =
-                              j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                          cached_crp_.push_back({p, c, l, r});
                           {
                             const uint64_t _pk_off = packet_observer_ ? tile_buf->get_total_position() : 0u;
                             this->read_packet(
-                                cp, l, cr->num_bands,
+                                cp, cr, c, l,
                                 precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                             if (packet_observer_) {
                               packet_observer_(static_cast<uint16_t>(c), r, p, l, _pk_off,
@@ -5034,13 +5228,11 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                       cp = cr->access_precinct(p);
                       for (l = 0; l < LYE; l++) {
                         if (!packet_read_flag(l, r, c, p)) {
-                          cached_crp_.push_back({static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
-                          this->packet[packet_count++] =
-                              j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                          cached_crp_.push_back({p, c, l, r});
                           {
                             const uint64_t _pk_off = packet_observer_ ? tile_buf->get_total_position() : 0u;
                             this->read_packet(
-                                cp, l, cr->num_bands,
+                                cp, cr, c, l,
                                 precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                             if (packet_observer_) {
                               packet_observer_(static_cast<uint16_t>(c), r, p, l, _pk_off,
@@ -5095,15 +5287,12 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
                         cp = cr->access_precinct(p);
                         for (l = 0; l < LYE; l++) {
                           if (!packet_read_flag(l, r, c, p)) {
-                            cached_crp_.push_back(
-                                {static_cast<uint8_t>(c), r, static_cast<uint16_t>(p), l});
-                            this->packet[packet_count++] =
-                                j2c_packet(l, r, c, p, packet_header, tile_buf.get());
+                            cached_crp_.push_back({p, c, l, r});
                             {
                               const uint64_t _pk_off =
                                   packet_observer_ ? tile_buf->get_total_position() : 0u;
                               this->read_packet(
-                                  cp, l, cr->num_bands,
+                                  cp, cr, c, l,
                                   precinct_filter_ && !precinct_filter_(static_cast<uint16_t>(c), r, p));
                               if (packet_observer_) {
                                 packet_observer_(static_cast<uint16_t>(c), r, p, l, _pk_off,
@@ -5135,6 +5324,23 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       }
     }
     crp_cached_ = true;
+  }
+  // The line decoder allocates its buffers for all the tile's components at once, and
+  // frees them when the tile is decoded: they too stay under the budget (the codestream's,
+  // for this tile alone).
+  {
+    uint64_t line_bytes = 0;
+    for (uint16_t c = 0; c < num_components; c++)
+      line_bytes = sat_add(line_bytes, line_decode_state_bytes(this->tcomp[c]));
+    if (budget_header_ != nullptr && line_bytes > decoder_structure_budget(*budget_header_)) {
+      open_htj2k::detail::fail(
+          "tile %u: its line-decoding buffers would take %llu bytes, more than the %llu bytes the decoder "
+          "allows for this codestream (the larger of 256 MiB, 512 bytes per codestream byte and 2 bytes "
+          "per image sample) — not supported. Images only a few rows high and about a million or more "
+          "columns wide exceed it: their buffers grow with the width, not with the height.",
+          static_cast<unsigned>(this->index), static_cast<unsigned long long>(line_bytes),
+          static_cast<unsigned long long>(decoder_structure_budget(*budget_header_)));
+    }
   }
   // Mark the tree as built so the next create_tile_buf call on this tile
   // skips structural allocations.  The decoder_impl cache path reads this
@@ -5895,8 +6101,9 @@ size_t j2k_tile::write_packets_direct(j2k_main_header &main_header, uint8_t *dst
   return static_cast<size_t>(sink.ptr - dst);
 }
 
-void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_t num_band,
+void j2k_tile::read_packet(j2k_precinct *current_precint, j2k_resolution *cr, uint16_t c, uint16_t layer,
                            bool skip_body) {
+  const uint8_t num_band               = cr->num_bands;
   OPENHTJ2K_MAYBE_UNUSED uint16_t Nsop = 0;
   uint16_t Lsop;
   // On a truncated codestream the reader hands out zero padding, so the
@@ -5929,6 +6136,13 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   // uint32_t num_bytes;
   for (uint8_t b = 0; b < num_band; b++) {
     cpb = current_precint->access_pband(b);  //&current_precint->pband[b];
+    if (!cpb->is_built()) {
+      // The first packet of this precinct that is not empty: build its code-blocks.
+      const j2k_tile_component &tc = this->tcomp[c];
+      charge_structure(cpb->codeblock_state_bytes(numlayers, false), "the code-blocks of a precinct");
+      cpb->build_codeblocks(*cr->access_subband(b), numlayers, tc.get_built_cb_size(),
+                            tc.get_built_Cmodes(), false);
+    }
     cpb->parse_packet_header(this->packet_header, layer, this->Ccap15);
   }
   // if the last byte of a packet header is 0xFF, one bit shall be read.
@@ -5948,7 +6162,6 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
   if (this->packet_header != this->tile_buf.get()) this->tile_buf->skip_exhausted_node();
 
   j2k_codeblock *block;
-  uint16_t buf_limit = 8192;
   for (uint8_t b = 0; b < num_band; b++) {
     cpb                      = current_precint->access_pband(b);  //&current_precint->pband[b];
     const uint32_t num_cblks = cpb->num_codeblock_x * cpb->num_codeblock_y;
@@ -5958,7 +6171,7 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, uint16_t layer, uint8_
         if (skip_body) {
           block->skip_compressed_buffer(this->tile_buf.get(), layer);
         } else {
-          block->create_compressed_buffer(this->tile_buf.get(), buf_limit, layer);
+          block->create_compressed_buffer(this->tile_buf.get(), layer);
         }
       }
     }
@@ -6425,11 +6638,13 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   #else
   const bool par_color = false;
   #endif
+  // A strip holds at most strip_h_luma rows, and no more than the tile has.
+  const size_t color_plane = static_cast<size_t>(std::min(strip_h_luma, effective_H)) * mct_w;
   std::vector<int32_t> color_strip;
   std::vector<ColorRowsCtx> color_tasks;
   std::atomic<int> color_cnt(0);
   if (par_color) {
-    color_strip.resize(static_cast<size_t>(3) * strip_h_luma * mct_w);
+    color_strip.resize(3 * color_plane);
     color_tasks.reserve(pool->num_threads());
   }
 #endif
@@ -6541,7 +6756,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
       // geometry (row stride mct_w).
       const uint32_t nrows  = strip_y1 - emit_y0;
       const uint32_t nchunk = std::min(nrows, static_cast<uint32_t>(pool->num_threads()));
-      const size_t plane    = static_cast<size_t>(strip_h_luma) * mct_w;
+      const size_t plane    = color_plane;
       color_tasks.resize(nchunk);  // within the reserved capacity: no reallocation
       uint32_t r0 = 0;
       for (uint32_t k = 0; k < nchunk; ++k) {
@@ -6583,7 +6798,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 #ifdef OPENHTJ2K_THREAD
         if (par_color) {
           // converted by the pool tasks above
-          const size_t plane = static_cast<size_t>(strip_h_luma) * mct_w;
+          const size_t plane = color_plane;
           for (uint16_t c = 0; c < 3; ++c) out_ptrs[c] = color_strip.data() + c * plane + rs * mct_w;
         } else
 #endif
