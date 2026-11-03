@@ -1,4 +1,5 @@
-# Valid codestreams whose marker segments the decoder once read against the standard.
+# Valid codestreams whose marker segments the decoder once read against the standard, and
+# encoder output whose marker segments other decoders read.
 #
 # The fixtures in tests/data/marker_*.j2c were made from our encoder's codestreams of
 # tests/data/dwt_levels_src.pgm (61 x 47, 8 bits) and tests/data/rgb16_full_range.ppm (67 x 37,
@@ -64,3 +65,32 @@ _marker_decode_test(marker_coc_other_component marker_coc_other_component.j2c ${
 _marker_decode_test(marker_poc_all_components marker_poc_all_components.j2c ${_MARKER_RGB} 65535 8000000)
 _marker_decode_test(marker_poc_tile_parts marker_poc_tile_parts.j2c ${_MARKER_RGB} 65535 8000000)
 _marker_decode_test(marker_htdeclared marker_htdeclared.j2c ${_MARKER_GRAY} 0 0)
+
+# More than 10921 tiles: the TLM marker, 6 bytes per tile, takes more than one marker segment
+# (Ltlm is 16 bits).  It wrapped, and no decoder could read the codestream.
+add_test(NAME enc_tlm_many_tiles
+         COMMAND open_htj2k_enc -i ${CMAKE_CURRENT_SOURCE_DIR}/conformance_data/references/kodim23.ppm
+                 -o tlm_many_tiles.j2c "Stiles={6,6}" Clevels=1 Creversible=yes)
+add_test(NAME dec_tlm_many_tiles COMMAND open_htj2k_dec -i tlm_many_tiles.j2c -o tlm_many_tiles.ppm)
+set_tests_properties(dec_tlm_many_tiles PROPERTIES DEPENDS enc_tlm_many_tiles)
+add_test(NAME comp_tlm_many_tiles
+         COMMAND imgcmp tlm_many_tiles.ppm ${CMAKE_CURRENT_SOURCE_DIR}/conformance_data/references/kodim23.ppm 0 0)
+set_tests_properties(comp_tlm_many_tiles PROPERTIES DEPENDS dec_tlm_many_tiles)
+
+# The magnitude bound B in bits 0-4 of Ccap15 (CAP marker, ISO/IEC 15444-15, A.3.7 and 8.7.3):
+# the cleanup-pass magnitude bit-planes of the coded HT code-blocks, less n_b - 1 for an
+# irreversible sub-band at decomposition level n_b, rounded up to a value P can signal.
+# Before, reversible streams with more than one guard bit and irreversible ones signalled too
+# small a B (the guard bits were left out, and irreversible took the smallest exponent), and a
+# bound of 28 to 30 came out as 27.  The CAP marker is FF50 0008 00020000 (Pcap15) followed by
+# Ccap15.
+function(_cap_magb_test name ccap15)
+  add_test(NAME enc_cap_magb_${name} COMMAND open_htj2k_enc -i ${_MARKER_GRAY} -o cap_magb_${name}.j2c ${ARGN})
+  add_test(NAME check_cap_magb_${name}
+           COMMAND ${CMAKE_COMMAND} -DFILE=cap_magb_${name}.j2c "-DHEX=ff50000800020000${ccap15}"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_file_hex.cmake)
+  set_tests_properties(check_cap_magb_${name} PROPERTIES DEPENDS enc_cap_magb_${name})
+endfunction()
+_cap_magb_test(rev_g4 0003 Creversible=yes Qguard=4)   # B = 11 (was 8)
+_cap_magb_test(irv_tiny 0034 Qstep=0.000000001)        # B = 31 for 30 (was 27); bit 5: HTIRV
+_cap_magb_test(irv_levels0 0021 Clevels=0)             # B = 9 (was 8): LL at n_b = 0

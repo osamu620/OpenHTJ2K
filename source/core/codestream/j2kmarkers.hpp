@@ -307,8 +307,9 @@ class QCD_marker : public j2k_marker_io_base {
   uint8_t get_number_of_guardbits() const;
   // return the actual number of SPqcd entries as parsed from the marker body
   uint16_t get_num_entries() const { return static_cast<uint16_t>(SPqcd.size()); }
-  // return MAGB value for CAP
-  uint8_t get_MAGB();
+  // An upper bound on the HT cleanup magnitude parameter B (CAP marker, Ccap15) that the
+  // quantization parameters allow, for NL decomposition levels.
+  uint8_t get_MAGB(uint8_t NL) const;
 };
 
 /********************************************************************************
@@ -336,7 +337,7 @@ class QCC_marker : public j2k_marker_io_base {
   QCC_marker(j2c_src_memory &in, uint16_t Csiz);
   int write(j2c_dst_memory &dst);
   // MAGB for the CAP marker, as QCD_marker::get_MAGB()
-  uint8_t get_MAGB() const;
+  uint8_t get_MAGB(uint8_t NL) const;
   uint16_t get_component_index() const;
   uint8_t get_quantization_style() const;
   uint8_t get_exponents(uint8_t nb);
@@ -382,7 +383,11 @@ class TLM_marker : public j2k_marker_io_base {
   explicit TLM_marker(j2c_src_memory &in);
   TLM_marker(uint8_t ztlm, const std::vector<uint16_t> &tile_indices,
              const std::vector<uint32_t> &tile_part_lengths);
+  // Writes the entries in one marker segment, or in several of consecutive Ztlm when they do
+  // not fit the 16-bit Ltlm.
   void write(j2c_dst_memory &buf) const;
+  // Most entries one marker segment holds.
+  size_t entries_per_segment() const;
 
   uint8_t index() const { return Ztlm; }
   size_t num_entries() const { return Ptlm.size(); }

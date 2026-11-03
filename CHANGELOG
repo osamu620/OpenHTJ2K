@@ -197,6 +197,22 @@
   set-up of the resolution levels (see Decoder). Both now encode, and the
   codestreams decode to the input exactly (reversible) or as at fewer levels
   (irreversible).
+- The HT cleanup magnitude bound B of the CAP marker (bits 0-4 of Ccap15,
+  ISO/IEC 15444-15, A.3.7 and 8.7.3) could be smaller than the coded
+  magnitudes, which makes the codestream non-conforming: reversible encodes
+  left out the guard bits, irreversible ones took the smallest exponent of
+  the sub-bands, and a bound of 28 to 30 was signalled as 27 (32 to 34 as
+  31). B now comes from the HT code-blocks as coded: the magnitude bit-planes
+  each cleanup pass carries, which leaves out the plane that `Cht_refine`
+  refines and the planes that `-rate` drops, less n_b - 1 for an irreversible
+  sub-band at decomposition level n_b; it is rounded up to a value that
+  Ccap15 can signal. B grows with the guard bits (8-bit lossless with
+  `Qguard=4`: 11, was 8) and shrinks with `-rate` (an 8-bit image at 1 bit per
+  pixel: 8, was 13). Only the two Ccap15 bytes change. Another decoder decodes
+  the codestreams as before.
+- Codestreams of more than 10921 tiles got a corrupt TLM marker: its 16-bit
+  length wrapped, and no decoder could read them. The tile-part lengths now
+  go into as many TLM marker segments as they need.
 
 ### Decoder
 - A JPH or JP2 file that starts with the signature box but has no valid
