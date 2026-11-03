@@ -17,6 +17,10 @@
 #   CONSUMER_DIR  this directory (consumer.cpp and the consumer CMake project)
 #   INPUT         codestream passed to the consumer
 #   CXX           C++ compiler
+#   CXX_FLAGS, LD_FLAGS
+#                 the build tree's own compile and executable link flags
+#                 (may be empty), e.g. -fsanitize=... that the consumer
+#                 needs to link against an instrumented library
 #   GENERATOR, GENERATOR_PLATFORM, GENERATOR_TOOLSET, MAKE_PROGRAM
 #                 the build tree's CMake generator settings, reused for the
 #                 consumer project
@@ -81,6 +85,12 @@ endif()
 if(STATIC)
   list(APPEND _cm_args -DOPENHTJ2K_EXPECT_STATIC=ON)
 endif()
+if(CXX_FLAGS)
+  list(APPEND _cm_args "-DCMAKE_CXX_FLAGS=${CXX_FLAGS}")
+endif()
+if(LD_FLAGS)
+  list(APPEND _cm_args "-DCMAKE_EXE_LINKER_FLAGS=${LD_FLAGS}")
+endif()
 execute_process(
   COMMAND "${CMAKE_COMMAND}" ${_cm_args} "-DCMAKE_PREFIX_PATH=${_prefix}"
           -S "${CONSUMER_DIR}" -B "${_cm_bin}"
@@ -129,10 +139,13 @@ if(_rc)
 endif()
 message(STATUS "pkg-config flags: ${_flags}")
 separate_arguments(_flags UNIX_COMMAND "${_flags}")
+separate_arguments(_user_cxx_flags UNIX_COMMAND "${CXX_FLAGS}")
+separate_arguments(_user_ld_flags UNIX_COMMAND "${LD_FLAGS}")
 
 execute_process(
-  COMMAND "${CXX}" -std=c++11 ${_strict} "${CONSUMER_DIR}/consumer.cpp" "${CONSUMER_DIR}/consumer_paths.cpp"
-          ${_flags} "-Wl,-rpath,${_prefix}/${LIBDIR}" -o "${WORK_DIR}/consumer"
+  COMMAND "${CXX}" -std=c++11 ${_user_cxx_flags} ${_strict} "${CONSUMER_DIR}/consumer.cpp"
+          "${CONSUMER_DIR}/consumer_paths.cpp" ${_flags} ${_user_ld_flags} "-Wl,-rpath,${_prefix}/${LIBDIR}"
+          -o "${WORK_DIR}/consumer"
   RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _out)
 if(_rc)
   message(FATAL_ERROR "building against the installed tree failed:\n${_out}")
