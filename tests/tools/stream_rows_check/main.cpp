@@ -37,6 +37,13 @@ void fail(const std::string &label, const char *what) {
   ++failures;
 }
 
+// Samples deeper than a float's 24-bit significand pass through the float pipeline, and the
+// partial-column and reuse paths round differently from a full decode there (2-3 units in
+// the last place seen, depending on compiler and optimisation): allow 16 units in the last
+// place of a float at full scale.  A wrong row or column is off by far more.  Samples of
+// up to 24 bits must match exactly.
+int64_t sample_tolerance(uint8_t depth) { return (depth > 24) ? (int64_t{1} << (depth - 20)) : 0; }
+
 // XRsiz of component c, from the SIZ marker segment
 uint32_t siz_xr(size_t c) {
   for (size_t i = 0; i + 4 < cs.size(); ++i) {
@@ -151,9 +158,11 @@ void stream(const Image &ref, bool reuse, uint32_t lo, uint32_t hi, uint32_t clo
           last_row[c] = j;
           last[c].assign(rows[c] + x0[c], rows[c] + x1[c]);
           seen[c][j]       = 1;
-          const int32_t *r = ref.plane[c].data() + static_cast<size_t>(j) * ref.w[c];
+          const int32_t *r  = ref.plane[c].data() + static_cast<size_t>(j) * ref.w[c];
+          const int64_t tol = sample_tolerance(ref.depth[c]);
           for (uint32_t x = x0[c]; x < x1[c]; ++x) {
-            if (rows[c][x] != r[x]) {
+            const int64_t d = static_cast<int64_t>(rows[c][x]) - r[x];
+            if (d > tol || d < -tol) {
               snprintf(msg, sizeof(msg), "component %u sample (%u, %u) is %d, reference %d", c, x, j,
                        rows[c][x], r[x]);
               fail(label, msg);

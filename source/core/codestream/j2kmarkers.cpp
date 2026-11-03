@@ -1136,14 +1136,10 @@ uint8_t QCD_marker::get_exponents(uint8_t nb) {
 
 uint16_t QCD_marker::get_mantissas(uint8_t nb) {
   uint8_t qstyle = get_quantization_style();
-  if (qstyle == 1) {
-    // lossy derived
-    return (SPqcd[0] & 0x7FF);
-  } else {
-    // lossy expounded
-    assert(qstyle == 2);
-    return (SPqcd[nb] & 0x7FF);
-  }
+  if (qstyle == 1) return (SPqcd[0] & 0x7FF);   // lossy derived
+  if (qstyle == 2) return (SPqcd[nb] & 0x7FF);  // lossy expounded
+  // No quantization (style 0): there is no mantissa.
+  return 0;
 }
 
 uint8_t QCD_marker::get_number_of_guardbits() const { return static_cast<uint8_t>(Sqcd >> 5); }
@@ -1340,14 +1336,10 @@ uint8_t QCC_marker::get_exponents(uint8_t nb) {
 
 uint16_t QCC_marker::get_mantissas(uint8_t nb) {
   uint8_t qstyle = get_quantization_style();
-  if (qstyle == 1) {
-    // lossy derived
-    return (SPqcc[0] & 0x7FF);
-  } else {
-    // lossy expounded
-    assert(qstyle == 2);
-    return (SPqcc[nb] & 0x7FF);
-  }
+  if (qstyle == 1) return (SPqcc[0] & 0x7FF);   // lossy derived
+  if (qstyle == 2) return (SPqcc[nb] & 0x7FF);  // lossy expounded
+  // No quantization (style 0): there is no mantissa.
+  return 0;
 }
 
 uint8_t QCC_marker::get_number_of_guardbits() const { return static_cast<uint8_t>(Sqcc >> 5); }
