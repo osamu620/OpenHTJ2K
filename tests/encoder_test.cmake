@@ -465,6 +465,31 @@ set_tests_properties(enc_part1_jph_rejected PROPERTIES WILL_FAIL TRUE)
 # Two different 512x512 planes alternate, so a swapped component would show.
 set(JPH_ALPHA_P0 "${ENCODER_REF_DIR}/c1p0_05-2.pgx")
 set(JPH_ALPHA_P1 "${ENCODER_REF_DIR}/c1p0_05-3.pgx")
+
+# Qfactor with an alpha channel: gray + alpha (2 components) and colour + alpha (4, the
+# colour transform on components 0-2).  The alpha channel is quantized like a gray-scale
+# plane, so it decodes with the same error as the second plane of the 2-component image.
+# Decoded components are checked against a mean squared error bound (about twice the
+# measured one).
+set(QF_ALPHA_2_MSE 15 15)
+set(QF_ALPHA_4_MSE 50 35 90 15)
+foreach(NC IN ITEMS 2 4)
+  if(NC EQUAL 2)
+    set(_in "${JPH_ALPHA_P0},${JPH_ALPHA_P1}")
+  else()
+    set(_in "${JPH_ALPHA_P0},${JPH_ALPHA_P1},${JPH_ALPHA_P0},${JPH_ALPHA_P1}")
+  endif()
+  add_test(NAME enc_qf_alpha${NC} COMMAND open_htj2k_enc -i ${_in} -o qf_alpha${NC}.j2c Qfactor=90)
+  add_test(NAME dec_qf_alpha${NC} COMMAND open_htj2k_dec -i qf_alpha${NC}.j2c -o qf_alpha${NC}.pgx)
+  set_tests_properties(dec_qf_alpha${NC} PROPERTIES DEPENDS enc_qf_alpha${NC})
+  math(EXPR _last "${NC} - 1")
+  foreach(C RANGE ${_last})
+    math(EXPR _odd "${C} % 2")
+    list(GET QF_ALPHA_${NC}_MSE ${C} _mse)
+    add_test(NAME comp_qf_alpha${NC}_${C} COMMAND imgcmp qf_alpha${NC}_0${C}.pgx ${JPH_ALPHA_P${_odd}} 255 ${_mse})
+    set_tests_properties(comp_qf_alpha${NC}_${C} PROPERTIES DEPENDS dec_qf_alpha${NC})
+  endforeach()
+endforeach()
 set(JPH_ALPHA_2_HEX "0000000f636f6c7201000000000011;00000016636465660002000000000001000100010000")
 set(JPH_ALPHA_4_HEX "0000000f636f6c7201000000000010;00000022636465660004000000000001000100000002000200000003000300010000")
 foreach(NC IN ITEMS 2 4)

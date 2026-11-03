@@ -838,17 +838,17 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   }
 
   // check component size
-  // The MCT requires identically-sized components: a mismatch on EITHER axis
+  // The MCT (on components 0-2) requires identically-sized components: a mismatch on EITHER axis
   // (e.g. 4:2:2, which differs only horizontally) must force it off, or the
   // color transform runs across differently-sized buffers and corrupts memory.
-  if (siz->Csiz == 3 && cod->use_color_trafo == 1
+  if (siz->Csiz >= 3 && cod->use_color_trafo == 1
       && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2] || YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn("Cycc is set to 'no' because size of each component is not identical.");
   }
   // The colour transform mixes the samples of the three components, so they also need the same bit
   // depth and signedness; otherwise no component decodes losslessly.
-  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (Ssiz[0] != Ssiz[1] || Ssiz[1] != Ssiz[2])) {
+  if (siz->Csiz >= 3 && cod->use_color_trafo == 1 && (Ssiz[0] != Ssiz[1] || Ssiz[1] != Ssiz[2])) {
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn(
         "Cycc is set to 'no' because the components differ in bit depth or signedness.");
@@ -857,19 +857,20 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   // check number of components
   if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
-    open_htj2k::detail::warn("Cycc is set to 'no' because the number of components is not equal to 3.");
+    open_htj2k::detail::warn("Cycc is set to 'no' because there are fewer than 3 components.");
   }
   // Qfactor assumes a YCbCr (luma/chroma) decomposition; warn (do not force) if
   // the color transform is off or the component count is unsupported.
   if (qfactor != NO_QFACTOR) {
-    if (siz->Csiz == 3) {
+    if (siz->Csiz == 3 || siz->Csiz == 4) {
       if (cod->use_color_trafo == 0) {
         open_htj2k::detail::warn(
             "Color conversion is OFF while Qfactor feature is enabled. It is OK if the inputs are in YCbCr "
             "color space.");
       }
-    } else if (siz->Csiz != 1) {
-      open_htj2k::detail::warn("Qfactor is designed for only gray-scale or RGB or YCbCr input.");
+    } else if (siz->Csiz != 1 && siz->Csiz != 2) {
+      open_htj2k::detail::warn(
+          "Qfactor is designed for gray-scale or RGB or YCbCr input, with or without an alpha channel.");
     }
   }
 
@@ -1050,34 +1051,35 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     YRsiz.push_back(siz->YRsiz[c]);
   }
 
-  // The MCT requires identically-sized components: a mismatch on EITHER axis
+  // The MCT (on components 0-2) requires identically-sized components: a mismatch on EITHER axis
   // (e.g. 4:2:2, which differs only horizontally) must force it off, or the
   // color transform runs across differently-sized buffers and corrupts memory.
-  if (siz->Csiz == 3 && cod->use_color_trafo == 1
+  if (siz->Csiz >= 3 && cod->use_color_trafo == 1
       && (XRsiz[0] != XRsiz[1] || XRsiz[1] != XRsiz[2] || YRsiz[0] != YRsiz[1] || YRsiz[1] != YRsiz[2])) {
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn("Cycc is set to 'no' because size of each component is not identical.");
   }
   // The colour transform mixes the samples of the three components, so they also need the same bit
   // depth and signedness; otherwise no component decodes losslessly.
-  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (Ssiz[0] != Ssiz[1] || Ssiz[1] != Ssiz[2])) {
+  if (siz->Csiz >= 3 && cod->use_color_trafo == 1 && (Ssiz[0] != Ssiz[1] || Ssiz[1] != Ssiz[2])) {
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn(
         "Cycc is set to 'no' because the components differ in bit depth or signedness.");
   }
   if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
-    open_htj2k::detail::warn("Cycc is set to 'no' because the number of components is not equal to 3.");
+    open_htj2k::detail::warn("Cycc is set to 'no' because there are fewer than 3 components.");
   }
   if (qfactor != NO_QFACTOR) {
-    if (siz->Csiz == 3) {
+    if (siz->Csiz == 3 || siz->Csiz == 4) {
       if (cod->use_color_trafo == 0) {
         open_htj2k::detail::warn(
             "Color conversion is OFF while Qfactor feature is enabled. It is OK if the inputs are in YCbCr "
             "color space.");
       }
-    } else if (siz->Csiz != 1) {
-      open_htj2k::detail::warn("Qfactor is designed for only gray-scale or RGB or YCbCr input.");
+    } else if (siz->Csiz != 1 && siz->Csiz != 2) {
+      open_htj2k::detail::warn(
+          "Qfactor is designed for gray-scale or RGB or YCbCr input, with or without an alpha channel.");
     }
   }
 

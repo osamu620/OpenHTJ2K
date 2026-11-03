@@ -37,10 +37,16 @@ for a luma/chroma (YCbCr) decomposition: `Cycc` defaults to `yes`, and if you
 disable it on 3-component input the encoder warns and treats the input as
 already YCbCr. When `Qfactor` is present, `Qstep` is ignored.
 
+`Qfactor` takes 1 to 4 components: gray, gray + alpha, colour, and colour +
+alpha. An alpha channel (component 1 of 2, or component 3 of 4) gets a `QCC`
+marker of its own, built as for a gray-scale image of its bit depth: the
+luminance weights, and no colour-transform gain (the colour transform covers
+components 0-2 only).
+
 ## The Qfactor → step-size formula
 
 For each subband the encoder writes a quantization step into the `QCD` (luma /
-component 0) or `QCC` (chroma / components 1, 2) marker. The step for subband
+component 0) or `QCC` (chroma / components 1, 2; alpha, see above) marker. The step for subband
 `i` of component `c` is
 
 ```

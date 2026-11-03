@@ -218,8 +218,8 @@ uint16_t SIZ_marker::get_num_components() const { return Csiz; }
 
 uint8_t SIZ_marker::get_chroma_format() const {
   uint8_t chroma_format = YCC444;
-  // determine type of chroma subsampling
-  if (Csiz != 3) {
+  // determine type of chroma subsampling of components 1 and 2 (a fourth component is alpha)
+  if (Csiz < 3) {
     return chroma_format;
   } else {
     if (XRsiz[1] == 2 && XRsiz[2] == 2) {
@@ -1604,18 +1604,30 @@ j2k_main_header::j2k_main_header(SIZ_marker *siz, COD_marker *cod, QCD_marker *q
   SIZ = MAKE_UNIQUE<SIZ_marker>(*siz);
   COD = MAKE_UNIQUE<COD_marker>(*cod);
   QCD = MAKE_UNIQUE<QCD_marker>(*qcd);
-  // Qfactor, if any
+  // Qfactor, if any: gray (1 component), gray + alpha (2), colour (3) or colour + alpha (4).
   if (qfactor != 0xFF) {
-    if (siz->get_num_components() != 3 && siz->get_num_components() != 1) {
-      open_htj2k::detail::fail("Qfactor is only available for gray-scale or color images.");
+    const uint16_t nc = siz->get_num_components();
+    if (nc < 1 || nc > 4) {
+      open_htj2k::detail::fail(
+          "Qfactor is only available for gray-scale or color images, with or without an alpha channel.");
     }
-    for (uint16_t c = 1; c < siz->get_num_components(); ++c) {
-      element_siz sub;
-      siz->get_subsampling_factor(sub, c);
-      QCC.push_back(MAKE_UNIQUE<QCC_marker>(
-          siz->get_num_components(), c, qcd->get_number_of_guardbits(), cod->get_dwt_levels(),
-          cod->get_transformation(), false, siz->get_bitdepth(c), cod->use_color_trafo(), qfactor,
-          SIZ->get_chroma_format(), vw, static_cast<uint8_t>(sub.x), static_cast<uint8_t>(sub.y)));
+    const uint16_t colour_components = (nc >= 3) ? 3 : 1;
+    for (uint16_t c = 1; c < nc; ++c) {
+      if (c < colour_components) {
+        element_siz sub;
+        siz->get_subsampling_factor(sub, c);
+        QCC.push_back(MAKE_UNIQUE<QCC_marker>(nc, c, qcd->get_number_of_guardbits(), cod->get_dwt_levels(),
+                                              cod->get_transformation(), false, siz->get_bitdepth(c),
+                                              cod->use_color_trafo(), qfactor, SIZ->get_chroma_format(), vw,
+                                              static_cast<uint8_t>(sub.x), static_cast<uint8_t>(sub.y)));
+      } else {
+        // The alpha channel is quantized like a gray-scale plane of its own bit depth: the luminance
+        // weights, and no colour-transform gain (the colour transform covers components 0-2 only).
+        QCD_marker alpha_QCD(qcd->get_number_of_guardbits(), cod->get_dwt_levels(),
+                             cod->get_transformation(), false, siz->get_bitdepth(c), 0, 1.0 / 256.0,
+                             qfactor, vw);
+        QCC.push_back(MAKE_UNIQUE<QCC_marker>(nc, c, alpha_QCD));
+      }
     }
   }
 
