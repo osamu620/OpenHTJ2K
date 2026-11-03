@@ -255,8 +255,12 @@ else()
       "${CMAKE_CXX_FLAGS} /wd5051 /D \"_CRT_SECURE_NO_WARNINGS\""
   )
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} /Od /DDEBUG /ZI")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /Ox")
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} /O2 /ZI")
+  # NDEBUG as in the other compilers' release flags (and as CMake and vcpkg set it, which
+  # these lines replace): without it the library's assert()s stayed live in MSVC release
+  # builds and aborted the process.  /Zi rather than /ZI (edit and continue), which goes
+  # with optimised code and with /fsanitize=address.
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /Ox /DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} /O2 /Zi /DNDEBUG")
 endif ()
 if(CMAKE_CXX_COMPILER_ID MATCHES "Intel$") # Intel Compiler Classic
   message(STATUS "Intel compiler")
