@@ -37,6 +37,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <new>
 
 namespace open_htj2k {
 
@@ -79,16 +80,22 @@ static inline bool any_nonzero_sse2(__m128i v) {
  * Replaces ~11,520 individual malloc() calls per 4K tile with a handful of 2 MB slabs.
  *******************************************************************************/
 class cblk_data_pool {
-  static constexpr size_t SLAB_BYTES = 2u << 20;  // 2 MB per slab
+  // Slabs start small and double up to 2 MB.  A tile keeps its pools (one per thread that
+  // codes its code-blocks) until the codestream is written, so a fixed 2 MB first slab
+  // reserved up to (threads + 1) x 2 MB per tile: about 88 GB for 11008 tiles with 4
+  // threads, which exhausted the commit limit on Windows.
+  static constexpr size_t SLAB_BYTES     = 2u << 20;   // largest slab
+  static constexpr size_t MIN_SLAB_BYTES = 16u << 10;  // first slab
   struct Slab {
     uint8_t *ptr;
     size_t used;
     size_t cap;
   };
   std::vector<Slab> slabs;
+  size_t next_cap = MIN_SLAB_BYTES;
 
  public:
-  cblk_data_pool() { slabs.reserve(8); }
+  cblk_data_pool() { slabs.reserve(16); }
   cblk_data_pool(const cblk_data_pool &)            = delete;
   cblk_data_pool &operator=(const cblk_data_pool &) = delete;
 
@@ -100,8 +107,11 @@ class cblk_data_pool {
   uint8_t *bump(size_t n) {
     n = (n + 7u) & ~7u;
     if (slabs.empty() || slabs.back().used + n > slabs.back().cap) {
-      const size_t cap = (n > SLAB_BYTES) ? n : SLAB_BYTES;
-      slabs.push_back({static_cast<uint8_t *>(malloc(cap)), 0u, cap});
+      const size_t cap = (n > next_cap) ? n : next_cap;
+      auto *ptr        = static_cast<uint8_t *>(malloc(cap));
+      if (ptr == nullptr) throw std::bad_alloc();
+      slabs.push_back({ptr, 0u, cap});
+      if (next_cap < SLAB_BYTES) next_cap *= 2;
     }
     uint8_t *p = slabs.back().ptr + slabs.back().used;
     slabs.back().used += n;
@@ -116,12 +126,17 @@ class cblk_data_pool {
   // Reset all slabs to empty, keeping the allocated pages so they are already
   // faulted-in for the next tile encode (avoids repeated mmap/munmap overhead).
   void reset() noexcept {
-    for (auto &s : slabs) s.used = 0;
-    // Collapse to one slab to bound long-term memory footprint.
-    while (slabs.size() > 1) {
-      free(slabs.back().ptr);
-      slabs.pop_back();
+    // Collapse to one slab, the largest, to bound long-term memory footprint.
+    if (slabs.size() > 1) {
+      size_t keep = 0;
+      for (size_t i = 1; i < slabs.size(); ++i)
+        if (slabs[i].cap > slabs[keep].cap) keep = i;
+      for (size_t i = 0; i < slabs.size(); ++i)
+        if (i != keep) free(slabs[i].ptr);
+      slabs[0] = slabs[keep];
+      slabs.resize(1);
     }
+    for (auto &s : slabs) s.used = 0;
   }
 };
 

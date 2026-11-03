@@ -213,6 +213,14 @@
 - Codestreams of more than 10921 tiles got a corrupt TLM marker: its 16-bit
   length wrapped, and no decoder could read them. The tile-part lengths now
   go into as many TLM marker segments as they need.
+- Encoding with thousands of tiles and several threads crashed on Windows.
+  Every tile kept a 2 MB block of memory for each thread that coded part of
+  it, until the codestream was written: a 768x512 image in 6x6 tiles (11008
+  tiles) with 4 threads reserved about 88 GB. Linux only counts the pages
+  touched, but Windows ran out of commit and the unchecked allocation was
+  used anyway. These blocks now start at 16 KB and double up to 2 MB as a
+  tile needs them (959 MB reserved in that example), and a failed allocation
+  throws `std::bad_alloc`. Codestreams and encoding speed are unchanged.
 
 ### Decoder
 - A JPH or JP2 file that starts with the signature box but has no valid
