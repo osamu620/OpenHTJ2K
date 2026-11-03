@@ -288,6 +288,8 @@ class ATK_marker : public j2k_marker_io_base {
  * QCD_marker
  *******************************************************************************/
 class QCD_marker : public j2k_marker_io_base {
+  friend class QCC_marker;  // QCC_marker(Csiz, c, qcd) copies the quantization parameters
+
  private:
   uint8_t Sqcd;
   std::vector<uint16_t> SPqcd;
@@ -328,8 +330,13 @@ class QCC_marker : public j2k_marker_io_base {
              uint8_t transformation, bool is_derived, uint8_t RI, uint8_t use_ycc, uint8_t qfactor,
              uint8_t chroma_format, const open_htj2k::visual_weighting_params &vp = {}, uint8_t sub_x = 0,
              uint8_t sub_y = 0);
+  // The quantization parameters of qcd, for component c: used for a component whose bit depth
+  // differs from component 0's, from which the QCD marker is derived.
+  QCC_marker(uint16_t Csiz, uint16_t c, const QCD_marker &qcd);
   QCC_marker(j2c_src_memory &in, uint16_t Csiz);
   int write(j2c_dst_memory &dst);
+  // MAGB for the CAP marker, as QCD_marker::get_MAGB()
+  uint8_t get_MAGB() const;
   uint16_t get_component_index() const;
   uint8_t get_quantization_style() const;
   uint8_t get_exponents(uint8_t nb);

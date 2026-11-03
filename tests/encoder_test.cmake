@@ -111,7 +111,7 @@ set_tests_properties(comp_gray16_rt_pgx PROPERTIES DEPENDS dec_gray16_rt_pgx)
 # are 67x45 planes (odd width: vectorized row packing plus scalar tail) holding the
 # extremes of their range: unsigned 12-bit, signed 12-bit, unsigned 8-bit, signed 4-bit.
 # mixed_us: unsigned 12, signed 4, unsigned 8; mixed_su: signed 12, unsigned 8, signed 4.
-# Component 0 is the deepest, as the encoder takes the quantization exponents from it.
+# Component 0 is the deepest here; the tests after this block put it first.
 # A lossless round trip must reproduce every component as PGX.  As PGM, unsigned
 # components equal their input and signed ones (offset by half their range) equal the
 # PGM of the same plane encoded alone.  RAW files take 2 bytes per sample at 12 bits and
@@ -170,6 +170,38 @@ set_tests_properties(comp_mixed_us_reduce PROPERTIES DEPENDS "dec_mixed_us_reduc
 add_test(NAME dec_mixed_su_ppm_rejected COMMAND open_htj2k_dec -i mixed_su.j2c -o mixed_su.ppm)
 set_tests_properties(dec_mixed_su_ppm_rejected PROPERTIES DEPENDS enc_mixed_su
                      PASS_REGULAR_EXPRESSION "a PPM file needs three components of the same bit depth")
+
+# Component 0 shallower than the others.  The QCD marker follows component 0's bit depth,
+# so the encoder writes a QCC marker for every component of another depth (without it a
+# deeper component lost its top bit-planes and a lossless encode was not lossless), and it
+# turns the colour transform off when the three components differ in depth or sign (here
+# without Cycc=no).  Lossless round trips with the HT and the Part 1 block coder.
+foreach(_case "u8u12;u8;u12" "u8s12;u8;s12" "s4u12u8;s4;u12;u8" "u8u12s12;u8;u12;s12")
+  list(GET _case 0 _t)
+  list(REMOVE_AT _case 0)
+  set(_in "")
+  foreach(_p IN LISTS _case)
+    list(APPEND _in ${MIXED_DIR}/mixed_${_p}.pgx)
+  endforeach()
+  string(REPLACE ";" "," _in "${_in}")
+  foreach(_coder ht p1)
+    if(_coder STREQUAL "p1")
+      set(_modes Cmodes=0)
+    else()
+      set(_modes Cmodes=HT)
+    endif()
+    set(_n qcc_${_t}_${_coder})
+    add_test(NAME enc_${_n} COMMAND open_htj2k_enc -i ${_in} -o ${_n}.j2c Creversible=yes ${_modes})
+    add_test(NAME dec_${_n} COMMAND open_htj2k_dec -i ${_n}.j2c -o ${_n}.pgx)
+    set_tests_properties(dec_${_n} PROPERTIES DEPENDS enc_${_n})
+    set(_c 0)
+    foreach(_p IN LISTS _case)
+      add_test(NAME comp_${_n}_${_c} COMMAND imgcmp ${_n}_0${_c}.pgx ${MIXED_DIR}/mixed_${_p}.pgx 0 0)
+      set_tests_properties(comp_${_n}_${_c} PROPERTIES DEPENDS dec_${_n})
+      math(EXPR _c "${_c} + 1")
+    endforeach()
+  endforeach()
+endforeach()
 
 # Lossy decoding of more than 13-bit samples scales them up (downshift =
 # FRACBITS - bit depth < 0) in every finalize path.  Decode a 16-bit Qfactor 90

@@ -122,6 +122,20 @@
   buffer is now rejected; the bounds check used to wrap around.
 
 ### Encoder
+- Lossless encoding of components with different bit depths was not lossless
+  when a later component was deeper than component 0: the QCD marker follows
+  component 0's bit depth, and no QCC marker gave the other components their
+  own quantization parameters, so a deeper component lost its top
+  bit-planes (an 8-bit component 0 with a 12-bit component 1 came back with
+  errors of several thousand). The encoder now writes a QCC marker for each
+  component whose bit depth differs from component 0's, and the CAP marker's
+  magnitude bit count covers them. Lossy encodes keep their quality and gain
+  the QCC markers. Images whose components have the same bit depth are
+  byte-identical.
+- With three components that differ in bit depth or signedness, the colour
+  transform (`Cycc`, on by default) is now turned off with a warning, as it
+  already was for components of different sizes; it mixes the components'
+  samples, and no component decoded losslessly.
 - The image header box of a JPH file gave one bit depth and sign for all
   components (component 0's) when the components had the same bit depth but
   differed in signedness. It now writes 255 and a Bits Per Component box, as

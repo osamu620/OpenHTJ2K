@@ -65,6 +65,38 @@ inline EncoderThreadBuffers &enc_thread_bufs() {
   return tbuf;
 }
 
+// The QCD marker is derived from component 0's bit depth: its exponents follow that dynamic
+// range.  A component of another depth needs its own quantization parameters, or a deeper one loses
+// its top bit-planes and a lossless encode is not lossless.  Returns a QCC marker for each such
+// component; none with Qfactor, for which the main header writes a QCC marker for every component.
+std::vector<std::unique_ptr<QCC_marker>> qcc_for_other_depths(const std::vector<uint8_t> &Ssiz,
+                                                              const cod_params &cod, const qcd_params &qcd,
+                                                              uint8_t qfactor,
+                                                              const visual_weighting_params &vw) {
+  std::vector<std::unique_ptr<QCC_marker>> qcc;
+  if (qfactor != NO_QFACTOR) return qcc;
+  const uint16_t Csiz = static_cast<uint16_t>(Ssiz.size());
+  for (uint16_t c = 1; c < Csiz; ++c) {
+    const uint8_t depth = static_cast<uint8_t>((Ssiz[c] & 0x7F) + 1U);
+    if (depth == static_cast<uint8_t>((Ssiz[0] & 0x7F) + 1U)) continue;
+    QCD_marker component_QCD(qcd.number_of_guardbits, cod.dwt_levels, cod.transformation, qcd.is_derived,
+                             depth, cod.use_color_trafo, qcd.base_step, NO_QFACTOR, vw);
+    qcc.push_back(MAKE_UNIQUE<QCC_marker>(Csiz, c, component_QCD));
+  }
+  return qcc;
+}
+
+// MAGB for the CAP marker over the QCD marker and the QCC markers above.
+uint8_t combined_MAGB(QCD_marker &qcd, const std::vector<std::unique_ptr<QCC_marker>> &qcc,
+                      bool reversible) {
+  uint8_t magb = qcd.get_MAGB();
+  for (const auto &q : qcc) {
+    const uint8_t m = q->get_MAGB();
+    magb            = reversible ? std::max(magb, m) : std::min(magb, m);
+  }
+  return magb;
+}
+
 // Why the last image::read_pnmpgx() or image::read_tiff() call on this thread failed.
 thread_local std::string image_read_error;
 
@@ -814,6 +846,13 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn("Cycc is set to 'no' because size of each component is not identical.");
   }
+  // The colour transform mixes the samples of the three components, so they also need the same bit
+  // depth and signedness; otherwise no component decodes losslessly.
+  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (Ssiz[0] != Ssiz[1] || Ssiz[1] != Ssiz[2])) {
+    cod->use_color_trafo = 0;
+    open_htj2k::detail::warn(
+        "Cycc is set to 'no' because the components differ in bit depth or signedness.");
+  }
 
   // check number of components
   if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
@@ -855,7 +894,8 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
   uint16_t bit11     = 0;                     // 0: HOMOGENEOUS, 1: HETEROGENEOUS
   uint16_t bit5      = !cod->transformation;  // 0: HTREV, 1: HTIRV
   uint16_t bits0_4;
-  uint8_t MAGB = main_QCD.get_MAGB();
+  std::vector<std::unique_ptr<QCC_marker>> main_QCC = qcc_for_other_depths(Ssiz, *cod, *qcd, qfactor, vw);
+  uint8_t MAGB = combined_MAGB(main_QCD, main_QCC, cod->transformation == 1);
   if (MAGB < 27) {
     bits0_4 = static_cast<uint16_t>((MAGB > 8) ? MAGB - 8 : 0);
   } else if (MAGB <= 71) {
@@ -877,6 +917,7 @@ size_t openhtj2k_encoder_impl::invoke_internal() {
 
   // create main header
   j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, need_CAP ? &main_CAP : nullptr, qfactor, vw);
+  for (auto &q : main_QCC) main_header.QCC.push_back(std::move(q));
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
@@ -1017,6 +1058,13 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn("Cycc is set to 'no' because size of each component is not identical.");
   }
+  // The colour transform mixes the samples of the three components, so they also need the same bit
+  // depth and signedness; otherwise no component decodes losslessly.
+  if (siz->Csiz == 3 && cod->use_color_trafo == 1 && (Ssiz[0] != Ssiz[1] || Ssiz[1] != Ssiz[2])) {
+    cod->use_color_trafo = 0;
+    open_htj2k::detail::warn(
+        "Cycc is set to 'no' because the components differ in bit depth or signedness.");
+  }
   if (siz->Csiz < 3 && cod->use_color_trafo == 1) {
     cod->use_color_trafo = 0;
     open_htj2k::detail::warn("Cycc is set to 'no' because the number of components is not equal to 3.");
@@ -1052,7 +1100,8 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   uint16_t bit11     = 0;
   uint16_t bit5      = !cod->transformation;
   uint16_t bits0_4;
-  uint8_t MAGB = main_QCD.get_MAGB();
+  std::vector<std::unique_ptr<QCC_marker>> main_QCC = qcc_for_other_depths(Ssiz, *cod, *qcd, qfactor, vw);
+  uint8_t MAGB = combined_MAGB(main_QCD, main_QCC, cod->transformation == 1);
   if (MAGB < 27) {
     bits0_4 = static_cast<uint16_t>((MAGB > 8) ? MAGB - 8 : 0);
   } else if (MAGB <= 71) {
@@ -1073,6 +1122,7 @@ size_t openhtj2k_encoder_impl::invoke_line_based_stream(
   }
 
   j2k_main_header main_header(&main_SIZ, &main_COD, &main_QCD, need_CAP ? &main_CAP : nullptr, qfactor, vw);
+  for (auto &q : main_QCC) main_header.QCC.push_back(std::move(q));
   COM_marker main_COM("OpenHTJ2K version 0", true);
   main_header.add_COM_marker(main_COM);
 
