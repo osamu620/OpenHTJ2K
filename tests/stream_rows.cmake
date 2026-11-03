@@ -50,3 +50,20 @@ foreach(_case "yr_mix;5" "tiles_origin;3" "tile_column;4" "y0_coarse;2" "not_mul
                        PASS_REGULAR_EXPRESSION "PASS" FAIL_REGULAR_EXPRESSION "FAIL|${_SR_CRASH_RE}" TIMEOUT 60)
 endforeach()
 
+# Sample bit depths, through the library (the command-line decoder writes at most 16
+# bits).  The decoder computes samples, their DC offset and the clamp in 32-bit
+# integers: the DC offset and clamping range overflowed a 32-bit shift from 31 bits
+# (undefined behaviour), so it now takes up to 30-bit unsigned and 31-bit signed
+# samples and refuses deeper ones (ISO/IEC 15444-1 allows 38).  The fixtures are one
+# codestream of this library's encoder with the bit depth of SIZ rewritten.
+foreach(_d u30 s31)
+  add_test(NAME security_depth_${_d} COMMAND stream_rows_check ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/security_depth_${_d}.j2c)
+  set_tests_properties(security_depth_${_d} PROPERTIES
+                       PASS_REGULAR_EXPRESSION "PASS" FAIL_REGULAR_EXPRESSION "FAIL|${_SR_CRASH_RE}" TIMEOUT 60)
+endforeach()
+foreach(_d u31 s32 u38)
+  add_test(NAME security_depth_${_d} COMMAND stream_rows_check ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/security_depth_${_d}.j2c)
+  set_tests_properties(security_depth_${_d} PROPERTIES
+                       PASS_REGULAR_EXPRESSION "-bit (un)?signed samples: not supported"
+                       FAIL_REGULAR_EXPRESSION "${_SR_CRASH_RE}" TIMEOUT 60)
+endforeach()
