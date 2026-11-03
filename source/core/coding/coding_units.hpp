@@ -1036,6 +1036,8 @@ class j2k_tile : public j2k_tile_base {
   uint64_t charged_bytes_   = 0;
   // function to retrieve greatest common divisor of precinct size among resolution levels
   void find_gcd_of_precinct_size(element_siz &out);
+  // Whether the tile is small enough to set up and decode without the thread pool.
+  OPENHTJ2K_NODISCARD bool decode_inline() const;
 
  public:
   // When true, j2k_subband constructors skip large non-LL buffer allocation.

@@ -4812,6 +4812,29 @@ static uint64_t count_tile_component_precincts(j2k_tile_component &tc, uint64_t 
   return n;
 }
 
+// Samples (all components) below which a tile is set up and decoded on the calling thread:
+// the thread pool's dispatches cost more than such a tile's work, so that many small tiles
+// (16 x 16 or 32 x 32, in colour) decoded 2 to 4 times slower with 4 threads than with 1.
+constexpr uint64_t kInlineTileSamples = 4096;
+
+bool j2k_tile::decode_inline() const {
+  if (tcomp == nullptr) return true;
+  uint64_t samples = 0;
+  for (uint16_t c = 0; c < num_components; ++c) {
+    const element_siz p0 = tcomp[c].get_pos0(), p1 = tcomp[c].get_pos1();
+    samples += static_cast<uint64_t>(p1.x - p0.x) * (p1.y - p0.y);
+    if (samples >= kInlineTileSamples) return false;
+  }
+  return true;
+}
+
+#ifdef OPENHTJ2K_THREAD
+  #define OPENHTJ2K_TILE_INLINE_SCOPE() \
+    ThreadPool::SingleThreadScope tile_inline_scope(this->decode_inline())
+#else
+  #define OPENHTJ2K_TILE_INLINE_SCOPE() (void)0
+#endif
+
 void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
   // First of all: the rest of this function needs the tile set up.
   if (num_tile_part == 0) {
@@ -4827,6 +4850,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     open_htj2k::detail::fail("Tile %u has tile-parts but not its first (TPsot 0) — malformed codestream.",
                              static_cast<unsigned>(this->index));
   }
+
+  OPENHTJ2K_TILE_INLINE_SCOPE();
 
   // The inverse colour transform (Annex G) combines the first three components sample by
   // sample, and the decoders size it, and pick its rows, by component 0: the three must
@@ -6331,6 +6356,7 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
 // Does NOT call decode() / ycbcr_to_rgb() / finalize().
 // ─────────────────────────────────────────────────────────────────────────────
 void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, std::vector<int32_t *> &dst) {
+  OPENHTJ2K_TILE_INLINE_SCOPE();
   const uint16_t NC = num_components;
 
   // Pre-compute per-component output mapping parameters (same logic as finalize()).
@@ -6514,6 +6540,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
                                         const std::function<void(uint32_t, int32_t *const *, uint16_t)> &cb,
                                         uint32_t row_limit, uint32_t row_lo, uint32_t col_lo_in,
                                         uint32_t col_hi_in, bool skip_mct) {
+  OPENHTJ2K_TILE_INLINE_SCOPE();
   const uint16_t NC = num_components;
 
   // Drain every component's in-flight strip/prefetch decode tasks on both normal
@@ -6911,6 +6938,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 // intermediate, no callback overhead.
 void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t reduce_NL_val,
                                                open_htj2k::PlanarOutputDesc *descs, uint16_t nc) {
+  OPENHTJ2K_TILE_INLINE_SCOPE();
   const uint16_t NC = num_components;
   const uint8_t MCT = hdr.COD->use_color_trafo();
   // Drain in-flight decode tasks on normal return and exception unwind

@@ -511,6 +511,10 @@
   resolution, only those holding the strip's rows: codestreams with small
   precincts decode faster (4K with precincts 1 to 4 rows high: 25% fewer
   cycles; 4 x 4 precincts: 4 times as fast).
+- Tiles of fewer than 4096 samples (all components) are set up and decoded
+  without the thread pool, whose dispatches cost more than their work: a
+  2048 x 2048 colour image in 16 x 16 tiles decoded twice as slowly with 4
+  threads as with 1 (0.91 s against 0.45 s) and now takes 0.25 s with either.
 
 ### Tools
 - `open_htj2k_dec` exited with status 0 when decoding failed: it printed the
