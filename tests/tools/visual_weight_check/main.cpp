@@ -55,6 +55,7 @@
 //     Prints the derived per-level [HH, LH, HL] weight table for one component
 //     configuration (one command per T.802 Annex B comparison).
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -73,16 +74,14 @@ void expect(bool cond, const char *what) {
   }
 }
 
-// Weight vectors for one role/sub-sampling configuration. Cb/Cr go through
-// chroma_visual_weights with a no-MCT ctype hint (the sub-sampled-chroma
-// configuration); Y/generic go through the luminance path.
+// Weight vectors for one role/sub-sampling configuration, as the encoder derives
+// them for a QCC component: chroma_visual_weights with a no-MCT ctype hint (the
+// sub-sampled-chroma configuration). Cb/Cr take the chroma CSF, Y/generic the
+// luminance CSF; both include the display upsampling gain.
 std::vector<double> weights_for(uint8_t levels, const visual_weighting_params &vp, component_type role,
                                 int sx, int sy) {
-  if (role == component_type::Cb || role == component_type::Cr) {
-    const int comp_index = (role == component_type::Cb) ? 1 : 2;
-    return chroma_visual_weights(levels, vp, comp_index, 0, color_transform::none, role, sx, sy);
-  }
-  return luma_visual_weights(levels, vp, sx, sy);
+  const int comp_index = (role == component_type::Cr) ? 2 : 1;
+  return chroma_visual_weights(levels, vp, comp_index, 0, color_transform::none, role, sx, sy);
 }
 
 // --- check 1: (1,1) golden pin ---------------------------------------------
@@ -142,8 +141,10 @@ void check_golden_pin() {
 
 // --- check 2: isotropic one-level shift -------------------------------------
 // (2,2) sub-sampling divides every subband's angular frequency by 2, which is
-// identically a one-decomposition-level shift, so the weight tables must match
-// bit-for-bit -- proof that the mapping subsumes the manual level offset.
+// identically a one-decomposition-level shift, and adds the display upsampling
+// gain of 2 (WG1N101553 v2), so level l at (2,2) must be exactly twice level l+1
+// at (1,1) -- proof that the mapping subsumes the manual level offset. (Scaling
+// by 2 is exact in floating point.)
 void check_isotropic_shift() {
   const csf_model models[2]         = {csf_model::mannos_sakrison, csf_model::daly};
   const component_type roles[3]     = {component_type::Cb, component_type::Cr, component_type::generic};
@@ -158,8 +159,8 @@ void check_isotropic_shift() {
         const std::vector<double> w11 = weights_for(6, vp, roles[r], 1, 1);
         expect(w22.size() == 15 && w11.size() == 18, "isotropic shift: table sizes");
         for (size_t i = 0; i < w22.size(); ++i) {
-          expect(w22[i] == w11[i + 3],
-                 "isotropic shift: (2,2) level l != (1,1) level l+1 (must be bit-identical)");
+          expect(w22[i] == 2.0 * w11[i + 3],
+                 "isotropic shift: (2,2) level l != 2 x (1,1) level l+1 (must be bit-identical)");
           if (failures) return;
         }
       }
@@ -207,11 +208,56 @@ void check_default_role() {
   expect(unhinted == luma, "default role: unhinted no-MCT component must take the luminance weights");
 }
 
+// --- check 5: legacy tables follow WG1N101553 v2 ----------------------------
+// The guideline derives its 4:2:0 and 4:2:2 chroma rows from the 4:4:4 row
+// (Table 2) and the display upsampling gain: 4:2:0 level n = 2 x 4:4:4 level
+// n + 1; 4:2:2 = sqrt(2) x {HH_n: LH_n, LH_n: LH_n, HL_n: LH_(n+1)}; levels past
+// the table weigh 1 at 4:4:4. The rows are printed to 4 decimals, so this is a
+// typo guard with a 2e-4 tolerance, not a bit-identity check. The tail weight
+// (LL band, levels past the fifth) is the "..." / LLN column.
+void check_legacy_rows() {
+  const double r2 = std::sqrt(2.0);
+  for (int comp = 1; comp <= 2; ++comp) {
+    const std::vector<double> w444 = legacy_chroma_row(comp, 0);
+    const std::vector<double> w420 = legacy_chroma_row(comp, 1);
+    const std::vector<double> w422 = legacy_chroma_row(comp, 2);
+    expect(w444.size() == 15 && w420.size() == 15 && w422.size() == 15, "legacy rows: 15 weights per row");
+    if (failures) return;
+    // 4:4:4 weights by level 1..6 (index 3 * (n - 1)): HH, LH (= HL); level 6 = 1.
+    auto hh444 = [&](int n) { return (n <= 5) ? w444[static_cast<size_t>(3 * (n - 1))] : 1.0; };
+    auto lh444 = [&](int n) { return (n <= 5) ? w444[static_cast<size_t>(3 * (n - 1) + 1)] : 1.0; };
+    for (int n = 1; n <= 5; ++n) {
+      const size_t i = static_cast<size_t>(3 * (n - 1));
+      expect(std::fabs(w420[i] - 2.0 * hh444(n + 1)) <= 2e-4,
+             "legacy rows: 4:2:0 HH != 2 x 4:4:4 HH one level up");
+      expect(std::fabs(w420[i + 1] - 2.0 * lh444(n + 1)) <= 2e-4,
+             "legacy rows: 4:2:0 LH != 2 x 4:4:4 LH one level up");
+      expect(w420[i + 2] == w420[i + 1], "legacy rows: 4:2:0 HL != LH");
+      expect(std::fabs(w422[i] - r2 * lh444(n)) <= 2e-4, "legacy rows: 4:2:2 HH != sqrt(2) x 4:4:4 LH");
+      expect(std::fabs(w422[i + 1] - r2 * lh444(n)) <= 2e-4, "legacy rows: 4:2:2 LH != sqrt(2) x 4:4:4 LH");
+      expect(std::fabs(w422[i + 2] - r2 * lh444(n + 1)) <= 2e-4,
+             "legacy rows: 4:2:2 HL != sqrt(2) x 4:4:4 LH one level up");
+    }
+  }
+  visual_weighting_params legacy;
+  expect(chroma_tail_weight(legacy, 0) == 1.0, "tail weight: legacy 4:4:4 != 1");
+  expect(chroma_tail_weight(legacy, 1) == 2.0, "tail weight: legacy 4:2:0 != 2");
+  expect(chroma_tail_weight(legacy, 2) == 1.4142, "tail weight: legacy 4:2:2 != 1.4142");
+  visual_weighting_params analytic;
+  analytic.model = csf_model::mannos_sakrison;
+  expect(chroma_tail_weight(analytic, 0, 1, 1) == 1.0, "tail weight: analytic (1,1) != 1");
+  expect(chroma_tail_weight(analytic, 0, 2, 2) == 2.0, "tail weight: analytic (2,2) != 2");
+  expect(chroma_tail_weight(analytic, 0, 2, 1) == r2, "tail weight: analytic (2,1) != sqrt(2)");
+  expect(chroma_tail_weight(analytic, 2) == r2,
+         "tail weight: analytic 4:2:2 from chroma_format != sqrt(2)");
+}
+
 int run_checks() {
   check_golden_pin();
   check_isotropic_shift();
   check_422_anisotropy();
   check_default_role();
+  check_legacy_rows();
   if (failures == 0) {
     printf("visual_weight_check: all invariants hold\n");
     return EXIT_SUCCESS;

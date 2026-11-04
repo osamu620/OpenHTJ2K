@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Validate ONE analytic chroma CSF (per channel) + sampling factors reproduces
-all three QCC tables (4:4:4 / 4:2:0 / 4:2:2) in j2kmarkers.cpp:1000-1023.
+all three QCC tables (4:4:4 / 4:2:0 / 4:2:2) of legacy_chroma_row() in
+source/core/codestream/visual_weighting.hpp (WG1N101553 v2, Tables 2-4).
 
 Key idea: 4:2:0 / 4:2:2 are NOT separate CSFs -- they are the SAME chroma CSF
-sampled at frequencies shifted by the chroma subsampling factor (sx, sy).
+sampled at frequencies shifted by the chroma subsampling factor (sx, sy), times
+the gain of upsampling the component for display, sqrt(sx * sy).
 """
 import math
 import matplotlib
@@ -13,15 +15,16 @@ import matplotlib.pyplot as plt
 LABELS = [f"{o}{l}" for l in range(1, 6) for o in ("HH", "LH", "HL")]
 
 # sqrt-domain weights from the code (order per level: HH, LH, HL) ---------------
+# The 4:2:0 / 4:2:2 rows include the display upsampling gain (x2 / x1.4142).
 T444 = {
  "Cb": [0.0263,0.0863,0.0863,0.1362,0.2564,0.2564,0.3346,0.4691,0.4691,0.5444,0.6523,0.6523,0.7078,0.7797,0.7797],
  "Cr": [0.0773,0.1835,0.1835,0.2598,0.4130,0.4130,0.5040,0.6464,0.6464,0.7220,0.8254,0.8254,0.8769,0.9424,0.9424]}
 T420 = {
- "Cb": [0.1362,0.2564,0.2564,0.3346,0.4691,0.4691,0.5444,0.6523,0.6523,0.7078,0.7797,0.7797,1.0,1.0,1.0],
- "Cr": [0.2598,0.4130,0.4130,0.5040,0.6464,0.6464,0.7220,0.8254,0.8254,0.8769,0.9424,0.9424,1.0,1.0,1.0]}
+ "Cb": [0.2724,0.5128,0.5128,0.6692,0.9382,0.9382,1.0888,1.3046,1.3046,1.4156,1.5594,1.5594,2.0,2.0,2.0],
+ "Cr": [0.5196,0.8260,0.8260,1.0080,1.2928,1.2928,1.4440,1.6508,1.6508,1.7538,1.8848,1.8848,2.0,2.0,2.0]}
 T422 = {
- "Cb": [0.0863,0.0863,0.2564,0.2564,0.2564,0.4691,0.4691,0.4691,0.6523,0.6523,0.6523,0.7797,0.7797,0.7797,1.0],
- "Cr": [0.1835,0.1835,0.4130,0.4130,0.4130,0.6464,0.6464,0.6464,0.8254,0.8254,0.8254,0.9424,0.9424,0.9424,1.0]}
+ "Cb": [0.1220,0.1220,0.3626,0.3626,0.3626,0.6634,0.6634,0.6634,0.9225,0.9225,0.9225,1.1027,1.1027,1.1027,1.4142],
+ "Cr": [0.2595,0.2595,0.5841,0.5841,0.5841,0.9141,0.9141,0.9141,1.1673,1.1673,1.1673,1.3328,1.3328,1.3328,1.4142]}
 
 PPD = 72.0          # same physical viewing condition as the luma anchor
 F_N = PPD / 2.0
@@ -31,14 +34,15 @@ def chroma_csf(f, a, b):           # low-pass stretched exponential, =1 at DC
 
 def predict(a, b, sx, sy):
     fNx, fNy = F_N / sx, F_N / sy
+    gain = math.sqrt(sx * sy)                     # display upsampling gain
     w = []
     for lvl in range(1, 6):
         dx = fNx * 2.0 ** -lvl * math.sqrt(2.0)   # horizontal detail freq
         dy = fNy * 2.0 ** -lvl * math.sqrt(2.0)   # vertical detail freq
         f_hh = math.hypot(dx, dy)                 # HH = sqrt(dx^2+dy^2)
-        w += [min(1.0, chroma_csf(f_hh, a, b)),   # HH
-              min(1.0, chroma_csf(dy, a, b)),     # LH (vertical detail)
-              min(1.0, chroma_csf(dx, a, b))]     # HL (horizontal detail)
+        w += [gain * min(1.0, chroma_csf(f_hh, a, b)),   # HH
+              gain * min(1.0, chroma_csf(dy, a, b)),     # LH (vertical detail)
+              gain * min(1.0, chroma_csf(dx, a, b))]     # HL (horizontal detail)
     return w
 
 def rms(p, t):
@@ -82,7 +86,7 @@ for col,(fmt,sx,sy,tab) in enumerate((("4:4:4",1,1,T444),("4:2:0",2,2,T420),("4:
         ax.plot(x, tab[ch], "ko-", ms=5, label="table")
         ax.plot(x, p, "r^--", ms=5, label=f"analytic (RMS={rms(p,tab[ch]):.3f})")
         ax.set_title(f"{ch}  {fmt}")
-        ax.grid(True, alpha=0.3); ax.set_ylim(-0.05,1.1)
+        ax.grid(True, alpha=0.3); ax.set_ylim(-0.05,2.1)
         ax.legend(fontsize=7, loc="upper left")
         if col==0: ax.set_ylabel(f"{ch} weight")
         if row==1: ax.set_xticks(x); ax.set_xticklabels(LABELS, rotation=45, fontsize=7)

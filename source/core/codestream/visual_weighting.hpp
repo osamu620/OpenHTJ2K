@@ -31,11 +31,12 @@
 // ---------------------------------------------------------------------------
 // Analytic per-subband visual (CSF) weighting for Qfactor quantization.
 //
-// PROTOTYPE: the default model is `legacy_table`, which returns the exact
-// hard-coded Zeng et al. (Signal Processing: Image Communication 17, 2002,
-// Table 2) weights that the Qfactor path has always used -- so the emitted
-// QCD/QCC bytes are bit-identical unless an analytic model is explicitly
-// requested. The analytic models replace that single-viewing-condition table
+// PROTOTYPE: the default model is `legacy_table`, which returns the fixed
+// nominal weights of the JPEG Qfactor guideline (WG1N101553 v2, Tables 2-4):
+// the Zeng et al. (Signal Processing: Image Communication 17, 2002, Table 2)
+// luminance and 4:4:4 chrominance weights the Qfactor path has always used,
+// and the 4:2:0 / 4:2:2 chrominance weights with the display upsampling gain.
+// The analytic models replace that single-viewing-condition table
 // with a contrast-sensitivity-function (CSF) evaluated at each subband's
 // radial frequency, so the weighting follows an arbitrary viewing distance /
 // zoom. See scripts/csf_fit_luma.py for the fit that calibrates `ref_ppd`:
@@ -54,7 +55,7 @@
 namespace open_htj2k {
 
 enum class csf_model {
-  legacy_table,     // exact Zeng Table 2 weights (default; bit-identical output)
+  legacy_table,     // fixed WG1N101553 v2 / Zeng Table 2 weights (default)
   mannos_sakrison,  // analytic Mannos-Sakrison CSF
   daly              // analytic Daly CSF (light-adaptation form)
 };
@@ -278,12 +279,14 @@ inline std::vector<double> luma_visual_weights(uint8_t dwt_levels, const visual_
 //
 // Chrominance CSF is low-pass (not band-pass like luminance) and rolls off well
 // below the luminance CSF. A single per-channel CSF, evaluated at each subband's
-// per-axis radial frequency, reproduces ALL of the historical 4:4:4 / 4:2:0 /
-// 4:2:2 QCC tables: chroma subsampling is just a frequency shift (sx, sy)
-// applied to the same CSF, which also yields the 4:2:2 LH != HL anisotropy for
-// free. Parameters below were fit to the 4:4:4 Cb/Cr tables at ref_ppd = 72
-// (see scripts/csf_fit_chroma.py): Cb RMS 0.010, Cr RMS 0.021; predicted 4:2:0 / 4:2:2
-// RMS <= 0.064. The chroma CSF is independent of vp.model's luminance choice.
+// per-axis radial frequency, reproduces the 4:4:4 / 4:2:0 / 4:2:2 QCC tables:
+// chroma subsampling is a frequency shift (sx, sy) applied to the same CSF, which
+// also yields the 4:2:2 LH != HL anisotropy for free, followed by the display
+// upsampling gain of WG1N101553 (see display_upsampling_gain()). Parameters below
+// were fit to the 4:4:4 Cb/Cr tables at ref_ppd = 72 (see scripts/csf_fit_chroma.py):
+// Cb RMS 0.010, Cr RMS 0.021; predicted 4:2:0 RMS 0.128 / 0.062 and 4:2:2 RMS
+// 0.055 / 0.045 (the 4:2:0 / 4:2:2 weights reach 2.0 / 1.4142). The chroma CSF is
+// independent of vp.model's luminance choice.
 
 // Stretched-exponential low-pass chroma CSF (= 1 at DC). f in cycles/degree.
 inline double chroma_csf(double f, double a, double b) { return std::exp(-std::pow(a * f, b)); }
@@ -297,21 +300,26 @@ inline chroma_csf_params chroma_params_for(int comp_index) {
   return (comp_index == 1) ? chroma_csf_params{0.1173, 0.840} : chroma_csf_params{0.0699, 1.050};
 }
 
-// Exact historical QCC table row (sqrt-domain). comp_index 1 = Cb, else Cr;
-// chroma_format 0 = 4:4:4, 1 = 4:2:0, 2 = 4:2:2 (matches j2kmarkers YCC*).
+// Nominal chroma weights (sqrt-domain) of "Controlling JPEG 2000 image quality using
+// a single parameter (Qfactor) v2.0", ISO/IEC JTC 1/SC 29/WG 1 N101553, Tables 2-4,
+// for the five finest levels in QCC order (per level, finest first): [HH, LH, HL].
+// comp_index 1 = Cb, else Cr; chroma_format 0 = 4:4:4, 1 = 4:2:0, 2 = 4:2:2 (matches
+// j2kmarkers YCC*). The 4:2:0 and 4:2:2 rows include the gain of upsampling the
+// component for display (x2 and x1.4142); the LL band and any level past the fifth
+// take chroma_tail_weight().
 inline std::vector<double> legacy_chroma_row(int comp_index, int chroma_format) {
   static const double Cb444[15] = {0.0263, 0.0863, 0.0863, 0.1362, 0.2564, 0.2564, 0.3346, 0.4691,
                                    0.4691, 0.5444, 0.6523, 0.6523, 0.7078, 0.7797, 0.7797};
   static const double Cr444[15] = {0.0773, 0.1835, 0.1835, 0.2598, 0.4130, 0.4130, 0.5040, 0.6464,
                                    0.6464, 0.7220, 0.8254, 0.8254, 0.8769, 0.9424, 0.9424};
-  static const double Cb420[15] = {0.1362, 0.2564, 0.2564, 0.3346, 0.4691, 0.4691, 0.5444, 0.6523,
-                                   0.6523, 0.7078, 0.7797, 0.7797, 1.0000, 1.0000, 1.0000};
-  static const double Cr420[15] = {0.2598, 0.4130, 0.4130, 0.5040, 0.6464, 0.6464, 0.7220, 0.8254,
-                                   0.8254, 0.8769, 0.9424, 0.9424, 1.0000, 1.0000, 1.0000};
-  static const double Cb422[15] = {0.0863, 0.0863, 0.2564, 0.2564, 0.2564, 0.4691, 0.4691, 0.4691,
-                                   0.6523, 0.6523, 0.6523, 0.7797, 0.7797, 0.7797, 1.0000};
-  static const double Cr422[15] = {0.1835, 0.1835, 0.4130, 0.4130, 0.4130, 0.6464, 0.6464, 0.6464,
-                                   0.8254, 0.8254, 0.8254, 0.9424, 0.9424, 0.9424, 1.0000};
+  static const double Cb420[15] = {0.2724, 0.5128, 0.5128, 0.6692, 0.9382, 0.9382, 1.0888, 1.3046,
+                                   1.3046, 1.4156, 1.5594, 1.5594, 2.0000, 2.0000, 2.0000};
+  static const double Cr420[15] = {0.5196, 0.8260, 0.8260, 1.0080, 1.2928, 1.2928, 1.4440, 1.6508,
+                                   1.6508, 1.7538, 1.8848, 1.8848, 2.0000, 2.0000, 2.0000};
+  static const double Cb422[15] = {0.1220, 0.1220, 0.3626, 0.3626, 0.3626, 0.6634, 0.6634, 0.6634,
+                                   0.9225, 0.9225, 0.9225, 1.1027, 1.1027, 1.1027, 1.4142};
+  static const double Cr422[15] = {0.2595, 0.2595, 0.5841, 0.5841, 0.5841, 0.9141, 0.9141, 0.9141,
+                                   1.1673, 1.1673, 1.1673, 1.3328, 1.3328, 1.3328, 1.4142};
   const double *r;
   switch (chroma_format) {
     case 1:
@@ -327,30 +335,11 @@ inline std::vector<double> legacy_chroma_row(int comp_index, int chroma_format) 
   return std::vector<double>(r, r + 15);
 }
 
-// Square-root-domain chroma visual weights, one per detail subband, in QCC order
-// (per level, finest first): [HH_l, LH_l, HL_l]. legacy_table returns the
-// historical row verbatim (bit-identical). Analytic models fold chroma
-// subsampling into the effective horizontal/vertical ppd, so LH (vertical
-// detail) and HL (horizontal detail) diverge under 4:2:2 as they should.
-//
-// Component role: with the ICT in force the roles are positional (comp 1 = Cb,
-// comp 2 = Cr) as always. Without an MCT the codestream does not label channels
-// (and only then can chroma be sub-sampled, T.800 J.13), so `ctype_hint`
-// decides: Cb/Cr take the chroma CSF, Y/generic take the luminance CSF -- in
-// every case with this component's (sub_x, sub_y) frequency mapping applied.
-// (sub_x, sub_y) are the SIZ XRsiz/YRsiz factors; pass 0 to derive them from
-// `chroma_format` (444/420/422) for callers without SIZ access.
-inline std::vector<double> chroma_visual_weights(uint8_t dwt_levels, const visual_weighting_params &vp,
-                                                 int comp_index, int chroma_format,
-                                                 color_transform ct   = color_transform::ict,
-                                                 component_type ctype = component_type::generic,
-                                                 int sub_x = 0, int sub_y = 0) {
-  if (vp.model == csf_model::legacy_table) {
-    return legacy_chroma_row(comp_index, chroma_format);
-  }
-
-  // Resolve (sx, sy): SIZ factors when supplied, else the chroma_format legacy mapping.
-  double sx = 1.0, sy = 1.0;  // horizontal/vertical chroma subsampling factors
+// Horizontal / vertical sub-sampling factors of a component: the SIZ XRsiz/YRsiz
+// factors when given (> 0), otherwise the ones `chroma_format` implies.
+inline void resolve_subsampling(int chroma_format, int sub_x, int sub_y, double &sx, double &sy) {
+  sx = 1.0;
+  sy = 1.0;
   if (sub_x > 0 && sub_y > 0) {
     sx = sub_x;
     sy = sub_y;
@@ -361,37 +350,88 @@ inline std::vector<double> chroma_visual_weights(uint8_t dwt_levels, const visua
     sx = 2.0;
     sy = 1.0;
   }
+}
+
+// Gain of upsampling a component sub-sampled by (sx, sy) to full resolution for
+// display, applied to every sqrt-domain weight of that component (WG1N101553,
+// "Nominal visual weights": x2 for 4:2:0, x sqrt(2) for 4:2:2). Exactly 1.0 for a
+// component that is not sub-sampled.
+inline double display_upsampling_gain(double sx, double sy) { return std::sqrt(sx * sy); }
+
+// Sqrt-domain weight of the subbands a QCC weight vector does not list: the LL band,
+// and in legacy mode the levels past the fifth (the "..." and LLN columns of
+// WG1N101553 Tables 2-4: 1.0 for 4:4:4, 2.0 for 4:2:0, 1.4142 for 4:2:2). Analytic
+// models list every detail band; their LL weight is the display upsampling gain, as
+// the CSFs are 1 at low frequency.
+inline double chroma_tail_weight(const visual_weighting_params &vp, int chroma_format, int sub_x = 0,
+                                 int sub_y = 0) {
+  if (vp.model == csf_model::legacy_table) {
+    return (chroma_format == 1) ? 2.0 : (chroma_format == 2) ? 1.4142 : 1.0;
+  }
+  double sx, sy;
+  resolve_subsampling(chroma_format, sub_x, sub_y, sx, sy);
+  return display_upsampling_gain(sx, sy);
+}
+
+// Square-root-domain chroma visual weights, one per detail subband, in QCC order
+// (per level, finest first): [HH_l, LH_l, HL_l]. legacy_table returns the
+// table row verbatim. Analytic models fold chroma subsampling into the effective
+// horizontal/vertical ppd, so LH (vertical detail) and HL (horizontal detail)
+// diverge under 4:2:2 as they should, then scale every weight by the display
+// upsampling gain.
+//
+// Component role: with the ICT in force the roles are positional (comp 1 = Cb,
+// comp 2 = Cr) as always. Without an MCT the codestream does not label channels
+// (and only then can chroma be sub-sampled, T.800 J.13), so `ctype_hint`
+// decides: Cb/Cr take the chroma CSF, Y/generic take the luminance CSF -- in
+// every case with this component's (sub_x, sub_y) frequency mapping and display
+// upsampling gain applied. (sub_x, sub_y) are the SIZ XRsiz/YRsiz factors; pass 0
+// to derive them from `chroma_format` (444/420/422) for callers without SIZ access.
+inline std::vector<double> chroma_visual_weights(uint8_t dwt_levels, const visual_weighting_params &vp,
+                                                 int comp_index, int chroma_format,
+                                                 color_transform ct   = color_transform::ict,
+                                                 component_type ctype = component_type::generic,
+                                                 int sub_x = 0, int sub_y = 0) {
+  if (vp.model == csf_model::legacy_table) {
+    return legacy_chroma_row(comp_index, chroma_format);
+  }
+
+  double sx, sy;  // horizontal/vertical chroma subsampling factors
+  resolve_subsampling(chroma_format, sub_x, sub_y, sx, sy);
+  const double gain = display_upsampling_gain(sx, sy);
 
   // Resolve the perceptual role of this component.
   const component_type role =
       (ct == color_transform::ict) ? ((comp_index == 1) ? component_type::Cb : component_type::Cr) : ctype;
+  std::vector<double> w;
   // Luminance-CSF cases: an unlabelled / luma component (e.g. a raw RGB channel
   // or unhinted YCbCr), or the reuse-luma A/B switch. The (sx, sy) sub-sampling
   // mapping still applies; at (1, 1) this is the historical no-MCT behavior.
   if (role == component_type::generic || role == component_type::Y || vp.chroma_reuse_luma_csf) {
-    return luma_visual_weights(dwt_levels, vp, static_cast<int>(sx), static_cast<int>(sy));
-  }
+    w = luma_visual_weights(dwt_levels, vp, static_cast<int>(sx), static_cast<int>(sy));
+  } else {
+    const chroma_csf_params cp = chroma_params_for(role == component_type::Cb ? 1 : 2);
+    const double zoom          = (vp.zoom > 0.0) ? vp.zoom : 1.0;
+    const double f_N           = (vp.ref_ppd / zoom) / 2.0;  // luma Nyquist (cpd)
+    const double f_Nx          = f_N / sx;                   // chroma horizontal Nyquist
+    const double f_Ny          = f_N / sy;                   // chroma vertical Nyquist
 
-  const chroma_csf_params cp = chroma_params_for(role == component_type::Cb ? 1 : 2);
-  const double zoom          = (vp.zoom > 0.0) ? vp.zoom : 1.0;
-  const double f_N           = (vp.ref_ppd / zoom) / 2.0;  // luma Nyquist (cpd)
-  const double f_Nx          = f_N / sx;                   // chroma horizontal Nyquist
-  const double f_Ny          = f_N / sy;                   // chroma vertical Nyquist
-
-  std::vector<double> w;
-  w.reserve(static_cast<size_t>(3) * dwt_levels);
-  for (uint8_t lvl = 1; lvl <= dwt_levels; ++lvl) {
-    const double dx = f_Nx * std::pow(2.0, -static_cast<double>(lvl)) * std::sqrt(2.0);
-    const double dy = f_Ny * std::pow(2.0, -static_cast<double>(lvl)) * std::sqrt(2.0);
-    // HH radial = geometric per-axis diagonal, scaled by hh_factor relative to the
-    // isotropic sqrt(2) so the same knob tunes luma and chroma (default sqrt(2) = no change).
-    const double f_hh = (vp.hh_factor / std::sqrt(2.0)) * std::sqrt(dx * dx + dy * dy);
-    // chroma_csf = exp(-(a*f)^b) is <= 1 by construction; finite_weight only
-    // guards the underflow-to-0 case at extreme effective ppd.
-    w.push_back(finite_weight(chroma_csf(f_hh, cp.a, cp.b)));  // HH
-    w.push_back(finite_weight(chroma_csf(dy, cp.a, cp.b)));    // LH (vertical detail)
-    w.push_back(finite_weight(chroma_csf(dx, cp.a, cp.b)));    // HL (horizontal detail)
+    w.reserve(static_cast<size_t>(3) * dwt_levels);
+    for (uint8_t lvl = 1; lvl <= dwt_levels; ++lvl) {
+      const double dx = f_Nx * std::pow(2.0, -static_cast<double>(lvl)) * std::sqrt(2.0);
+      const double dy = f_Ny * std::pow(2.0, -static_cast<double>(lvl)) * std::sqrt(2.0);
+      // HH radial = geometric per-axis diagonal, scaled by hh_factor relative to the
+      // isotropic sqrt(2) so the same knob tunes luma and chroma (default sqrt(2) = no change).
+      const double f_hh = (vp.hh_factor / std::sqrt(2.0)) * std::sqrt(dx * dx + dy * dy);
+      // chroma_csf = exp(-(a*f)^b) is <= 1 by construction; finite_weight only
+      // guards the underflow-to-0 case at extreme effective ppd.
+      w.push_back(finite_weight(chroma_csf(f_hh, cp.a, cp.b)));  // HH
+      w.push_back(finite_weight(chroma_csf(dy, cp.a, cp.b)));    // LH (vertical detail)
+      w.push_back(finite_weight(chroma_csf(dx, cp.a, cp.b)));    // HL (horizontal detail)
+    }
   }
+  // gain == 1.0 for a component that is not sub-sampled: the weights are unchanged.
+  for (size_t i = 0; i < w.size(); ++i) w[i] *= gain;
   return w;
 }
 
