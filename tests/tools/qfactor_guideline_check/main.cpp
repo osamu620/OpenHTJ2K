@@ -41,6 +41,11 @@
 // guideline's (one mantissa step, which covers rounding and the encoder's 4-digit
 // colour gains); a step the codestream cannot represent (exponent < 0) must be
 // clamped to the coarsest one, (0, 2047). Exit status 0 = all steps match.
+//
+// Above 97 the guideline's alpha_Q * M_Q is replaced by the curve of OpenEXR's lossy
+// HTJ2K compressor (LJ2K, OpenEXR src/lib/OpenEXRCore/internal_ht.cpp),
+// 0.005 * 2^(-28.478 s) + 0.001 * 2^(-10.534 s) of the sample range, s = (Q - 97) / 53,
+// keeping the guideline's 1/sqrt(2)-LSB term, flat visual weights and colour gains.
 
 #include <cmath>
 #include <cstdint>
@@ -206,7 +211,12 @@ struct Step {
 std::vector<Step> guideline_steps(int q, int RI, int N, const WeightTable &t, double Mc) {
   std::vector<double> nl, nh;
   basis_norms(N, nl, nh);
-  const double d_ref = std::ldexp(alpha_of(q) * M_of(q), RI) + 1.0 / std::sqrt(2.0);
+  double curve = alpha_of(q) * M_of(q);
+  if (q > 97) {  // OpenEXR LJ2K extension
+    const double s = (q - 97) / 53.0;
+    curve          = 0.005 * std::pow(2.0, -28.478 * s) + 0.001 * std::pow(2.0, -10.534 * s);
+  }
+  const double d_ref = std::ldexp(curve, RI) + 1.0 / std::sqrt(2.0);
   const double p     = weight_power(q);
   struct Band {
     double Gb, sqrtW;
@@ -253,7 +263,7 @@ int main(int argc, char **argv) {
   const int q = std::atoi(argv[2]);
   std::vector<uint8_t> bytes;
   Header h;
-  if (q < 1 || q > 100 || !read_file(argv[1], bytes) || !parse(bytes, h) || h.levels < 1) {
+  if (q < 1 || q > 150 || !read_file(argv[1], bytes) || !parse(bytes, h) || h.levels < 1) {
     std::fprintf(stderr, "ERROR: cannot read a Qfactor codestream from %s (Qfactor %s)\n", argv[1],
                  argv[2]);
     return EXIT_FAILURE;

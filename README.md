@@ -197,7 +197,7 @@ file format, HT only) or `.jp2` (JP2 file format, Part 1 only).
 ./build/bin/open_htj2k_enc -i input.ppm -o out.j2c Cmodes=0 Qfactor=90
 ```
 
-Key flags: `Cmodes={HT|0|BYPASS|...}`, `Creversible={yes|no}`, `Qfactor=0..100`,
+Key flags: `Cmodes={HT|0|BYPASS|...}`, `Creversible={yes|no}`, `Qfactor=0..150`,
 `-rate bpp`, `Clevels=0..32`, `Cblk={H,W}`, `Corder={LRCP|RLCP|RPCL|PCRL|CPRL}`,
 `-num_threads N`. Full reference:
 [**docs/cli_encoder.md**](docs/cli_encoder.md).

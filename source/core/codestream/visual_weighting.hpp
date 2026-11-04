@@ -138,22 +138,44 @@ inline color_transform resolve_color_transform(const visual_weighting_params &vp
 
 // --- Qfactor -> base quantization scale ------------------------------------
 //
-// Maps the 1..100 Qfactor to the reference step delta and the exponent applied
+// Maps the 1..150 Qfactor to the reference step delta and the exponent applied
 // to the per-subband visual weights. Shared verbatim by QCD, QCC, and
 // estimate_qfactor so all three invert to identical steps (guarded by the
 // qfest_* round-trip tests). RI is the component dynamic range in bits.
+//
+// Up to 97 this is the JPEG Qfactor guideline (WG1N101553 v2, "Computing
+// Delta_ref"), which is defined up to 100 and tuned for 8-bit imagery: at 16 bits,
+// Qfactor 99 gives a step of about 132 LSBs and Qfactor 100 one of 0.71 LSB.
+// From 98 to 150 the guideline's alpha_Q * M_Q is replaced by the curve of
+// OpenEXR's lossy HTJ2K compressor (LJ2K), which reaches the finer steps of
+// high-precision imagery with flat visual weights:
+//   0.005 * 2^(-28.478 s) + 0.001 * 2^(-10.534 s),  s = (Qfactor - 97) / 53,
+// a fraction of the sample range, equal to alpha_Q * M_Q (0.006) at 97. Each step
+// of 1 makes it 13% to 28% smaller. OpenEXR uses the curve alone; here the
+// guideline's eps0 term is kept, so no step is finer than 0.71 LSB. Finer lossy
+// steps cost more than lossless coding: with the curve alone, an 8-bit test image
+// decodes exactly from Qfactor 108 on, at 1.9 to 4.9 times its lossless size.
+constexpr uint8_t qfactor_max = 150;
 struct q_scaling {
   double delta_Q;        // reference step before basis / visual / color normalization
   double qfactor_power;  // exponent applied to each subband's visual weight
 };
 inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI) {
   const uint8_t t0 = 65, t1 = 97;
+  // eps0 = sqrt(1/2) / 2^RI. Use ldexp rather than `1 << RI`: bit-identical for
+  // the encoder's RI (<= 16 bpp) but well-defined for any RI, so a crafted
+  // high-bit-depth file fed to estimate_qfactor cannot trigger signed-shift UB.
+  const double eps0 = std::sqrt(0.5) * std::ldexp(1.0, -static_cast<int>(RI));
+  if (qfactor > t1) {  // OpenEXR's extension
+    const double s = (static_cast<double>(std::min(qfactor, qfactor_max)) - t1) / 53.0;
+    return {0.005 * std::pow(2.0, -28.478 * s) + 0.001 * std::pow(2.0, -10.534 * s) + eps0, 0.0};
+  }
   const double alpha_T0 = 0.04, alpha_T1 = 0.10;
-  const double M_T0    = 2.0 * (1.0 - t0 / 100.0);
-  const double M_T1    = 2.0 * (1.0 - t1 / 100.0);
+  const double M_T0 = 2.0 * (1.0 - t0 / 100.0);
+  const double M_T1 = 2.0 * (1.0 - t1 / 100.0);
   // Qfactor 0 is taken as 1, as the IJG scaling does: 50 / 0 would make every step infinite.
   const double M_Q = (qfactor < 50) ? 50.0 / std::max<uint8_t>(qfactor, 1) : 2.0 * (1.0 - qfactor / 100.0);
-  double alpha_Q       = alpha_T0;
+  double alpha_Q   = alpha_T0;
   double qfactor_power = 1.0;
   if (qfactor >= t1) {
     qfactor_power = 0.0;
@@ -162,10 +184,6 @@ inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI) {
     qfactor_power = (std::log(M_T1) - std::log(M_Q)) / (std::log(M_T1) - std::log(M_T0));
     alpha_Q       = alpha_T1 * std::pow(alpha_T0 / alpha_T1, qfactor_power);
   }
-  // eps0 = sqrt(1/2) / 2^RI. Use ldexp rather than `1 << RI`: bit-identical for
-  // the encoder's RI (<= 16 bpp) but well-defined for any RI, so a crafted
-  // high-bit-depth file fed to estimate_qfactor cannot trigger signed-shift UB.
-  const double eps0 = std::sqrt(0.5) * std::ldexp(1.0, -static_cast<int>(RI));
   return {alpha_Q * M_Q + eps0, qfactor_power};
 }
 

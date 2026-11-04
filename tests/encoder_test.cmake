@@ -409,6 +409,43 @@ add_test(NAME enc_qf_422_legacy_q30 COMMAND open_htj2k_enc -i ${QF422_INPUT} -o 
 add_test(NAME qfgl_422_q30 COMMAND qfactor_guideline_check synth_qf422lg30.j2c 30)
 set_tests_properties(qfgl_422_q30 PROPERTIES DEPENDS enc_qf_422_legacy_q30)
 
+# Qfactor 98 to 150: the guideline's alpha_Q * M_Q is replaced by the curve of
+# OpenEXR's lossy HTJ2K compressor, keeping the guideline's 0.71-LSB term, so
+# 16-bit input reaches steps of a few LSBs (about 1.8 at 127) and 8-bit input
+# stops near the guideline's Qfactor-100 step. qfactor_guideline_check models the
+# extension independently; estimate_qfactor must recover the Qfactor (an 8-bit
+# file of 150 also matches 149, which --expect-q accepts); the decoded error
+# bounds are about 2.5x the measured ones (16-bit: PAE 2, MSE 0.31; 8-bit: PAE 3,
+# MSE 0.34).
+add_test(NAME enc_qf_ext_rgb8 COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qf120.j2c Qfactor=120)
+add_test(NAME qfgl_ext_rgb8 COMMAND qfactor_guideline_check kodim23_qf120.j2c 120)
+set_tests_properties(qfgl_ext_rgb8 PROPERTIES DEPENDS enc_qf_ext_rgb8)
+add_test(NAME qfest_ext_rgb8 COMMAND estimate_qfactor kodim23_qf120.j2c --expect-q 120 --max-residual 0.01)
+set_tests_properties(qfest_ext_rgb8 PROPERTIES DEPENDS enc_qf_ext_rgb8)
+add_test(NAME dec_qf_ext_rgb8 COMMAND open_htj2k_dec -i kodim23_qf120.j2c -o kodim23_qf120.ppm)
+set_tests_properties(dec_qf_ext_rgb8 PROPERTIES DEPENDS enc_qf_ext_rgb8)
+add_test(NAME comp_qf_ext_rgb8 COMMAND imgcmp kodim23_qf120.ppm ${ENCODER_REF_DIR}/kodim23.ppm 8 2)
+set_tests_properties(comp_qf_ext_rgb8 PROPERTIES DEPENDS dec_qf_ext_rgb8)
+add_test(NAME enc_qf_ext_rgb8_max COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qf150.j2c Qfactor=150)
+add_test(NAME qfgl_ext_rgb8_max COMMAND qfactor_guideline_check kodim23_qf150.j2c 150)
+set_tests_properties(qfgl_ext_rgb8_max PROPERTIES DEPENDS enc_qf_ext_rgb8_max)
+add_test(NAME qfest_ext_rgb8_max COMMAND estimate_qfactor kodim23_qf150.j2c --expect-q 150 --max-residual 0.01)
+set_tests_properties(qfest_ext_rgb8_max PROPERTIES DEPENDS enc_qf_ext_rgb8_max)
+add_test(NAME enc_qf_ext_gray16 COMMAND open_htj2k_enc -i ${GRAY16_PGM} -o gray16_q127.j2c Qfactor=127)
+add_test(NAME qfgl_ext_gray16 COMMAND qfactor_guideline_check gray16_q127.j2c 127)
+set_tests_properties(qfgl_ext_gray16 PROPERTIES DEPENDS enc_qf_ext_gray16)
+add_test(NAME qfest_ext_gray16 COMMAND estimate_qfactor gray16_q127.j2c --expect-q 127 --max-residual 0.01)
+set_tests_properties(qfest_ext_gray16 PROPERTIES DEPENDS enc_qf_ext_gray16)
+add_test(NAME dec_qf_ext_gray16 COMMAND open_htj2k_dec -i gray16_q127.j2c -o gray16_q127.pgm)
+set_tests_properties(dec_qf_ext_gray16 PROPERTIES DEPENDS enc_qf_ext_gray16)
+add_test(NAME comp_qf_ext_gray16 COMMAND imgcmp gray16_q127_00.pgm ${GRAY16_PGM} 8 2)
+set_tests_properties(comp_qf_ext_gray16 PROPERTIES DEPENDS dec_qf_ext_gray16)
+add_test(NAME enc_qf_ext_420 COMMAND open_htj2k_enc -i ${QF420_INPUT} -o kodim_qf420_110.j2c Qfactor=110)
+add_test(NAME qfgl_ext_420 COMMAND qfactor_guideline_check kodim_qf420_110.j2c 110)
+set_tests_properties(qfgl_ext_420 PROPERTIES DEPENDS enc_qf_ext_420)
+add_test(NAME enc_qf_ext_range COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qf151.j2c Qfactor=151)
+set_tests_properties(enc_qf_ext_range PROPERTIES WILL_FAIL TRUE)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -448,6 +485,10 @@ set_tests_properties(
   enc_qf_420_legacy_l6  qfgl_420_l6
   qfgl_422
   enc_qf_422_legacy_q30 qfgl_422_q30
+  enc_qf_ext_rgb8     qfgl_ext_rgb8     qfest_ext_rgb8    dec_qf_ext_rgb8   comp_qf_ext_rgb8
+  enc_qf_ext_rgb8_max qfgl_ext_rgb8_max qfest_ext_rgb8_max
+  enc_qf_ext_gray16   qfgl_ext_gray16   qfest_ext_gray16  dec_qf_ext_gray16 comp_qf_ext_gray16
+  enc_qf_ext_420      qfgl_ext_420      enc_qf_ext_range
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
 
 # Library-API encodes: the buffered entry point (invoke_line_based), which the

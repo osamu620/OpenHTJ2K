@@ -297,7 +297,11 @@ double step_value(const Band& b) {
 }
 
 struct ScoreResult {
-  uint8_t best_q;
+  uint8_t best_q;  // the lowest Qfactor with the best residual
+  // The highest Qfactor whose predicted steps fit exactly as well. Above 97 the steps
+  // approach the 0.71-LSB floor, so for low bit depths several Qfactors can give the
+  // same steps (an 8-bit file of Qfactor 150 matches 149 and 150).
+  uint8_t best_q_hi;
   double best_residual;  // sum of (log2 step_obs - log2 step_pred)^2 over bands
   double median_per_band;
 };
@@ -305,8 +309,8 @@ struct ScoreResult {
 ScoreResult find_best_q(const std::vector<Band>& observed, uint8_t dwt_levels, uint8_t RI, uint8_t Cqcc,
                         uint8_t chroma_format, const open_htj2k::visual_weighting_params& vp, bool mct_on,
                         uint8_t sub_x = 0, uint8_t sub_y = 0) {
-  ScoreResult best{0, std::numeric_limits<double>::infinity(), 0.0};
-  for (int q = 1; q <= 100; ++q) {
+  ScoreResult best{0, 0, std::numeric_limits<double>::infinity(), 0.0};
+  for (int q = 1; q <= open_htj2k::qfactor_max; ++q) {
     auto pred = predict_bands(static_cast<uint8_t>(q), dwt_levels, RI, Cqcc, chroma_format, vp, mct_on,
                               sub_x, sub_y);
     if (pred.size() != observed.size()) continue;
@@ -318,6 +322,9 @@ ScoreResult find_best_q(const std::vector<Band>& observed, uint8_t dwt_levels, u
     if (sumsq < best.best_residual) {
       best.best_residual = sumsq;
       best.best_q        = static_cast<uint8_t>(q);
+      best.best_q_hi     = static_cast<uint8_t>(q);
+    } else if (sumsq == best.best_residual) {
+      best.best_q_hi = static_cast<uint8_t>(q);  // identical predicted steps
     }
   }
   best.median_per_band =
@@ -425,8 +432,8 @@ int main(int argc, char** argv) {
       }
     } else if (std::strcmp(argv[i], "--expect-q") == 0 && i + 1 < argc) {
       expect_q = std::atoi(argv[++i]);
-      if (expect_q < 0 || expect_q > 100) {
-        fprintf(stderr, "ERROR: --expect-q must be in [0, 100]\n");
+      if (expect_q < 0 || expect_q > open_htj2k::qfactor_max) {
+        fprintf(stderr, "ERROR: --expect-q must be in [0, %d]\n", open_htj2k::qfactor_max);
         return 1;
       }
     } else if (std::strcmp(argv[i], "--max-residual") == 0 && i + 1 < argc) {
@@ -559,7 +566,11 @@ int main(int argc, char** argv) {
                              h.use_color_trafo, h.XRsiz[c], h.YRsiz[c]);
     per_component.emplace_back(c, score);
     printf("\nComponent %u  (RI=%u, %s)\n", c, RI, qm->component_index == 0xFFFF ? "QCD" : "QCC");
-    printf("  best Q     : %u\n", score.best_q);
+    if (score.best_q_hi != score.best_q) {
+      printf("  best Q     : %u to %u (the same steps)\n", score.best_q, score.best_q_hi);
+    } else {
+      printf("  best Q     : %u\n", score.best_q);
+    }
     printf("  residual   : %.4f (sum log2 step^2)\n", score.best_residual);
     printf("  per-band   : %.4f log2 (~ factor %.4fx)\n", score.median_per_band,
            std::pow(2.0, score.median_per_band));
@@ -596,14 +607,19 @@ int main(int argc, char** argv) {
   if (expect_q >= 0 || max_residual >= 0.0) {
     bool ok = true;
     for (const auto& kv : per_component) {
-      if (expect_q >= 0 && kv.second.best_q != expect_q) ok = false;
+      if (expect_q >= 0 && (expect_q < kv.second.best_q || expect_q > kv.second.best_q_hi)) ok = false;
       if (max_residual >= 0.0 && kv.second.median_per_band > max_residual) ok = false;
     }
     printf("\nCHECK %s:", ok ? "PASS" : "FAIL");
     if (expect_q >= 0) printf(" expect-q=%d", expect_q);
     if (max_residual >= 0.0) printf(" max-residual=%.4f", max_residual);
-    for (const auto& kv : per_component)
-      printf("  [c%u Q=%u r=%.4f]", kv.first, kv.second.best_q, kv.second.median_per_band);
+    for (const auto& kv : per_component) {
+      if (kv.second.best_q_hi != kv.second.best_q)
+        printf("  [c%u Q=%u-%u r=%.4f]", kv.first, kv.second.best_q, kv.second.best_q_hi,
+               kv.second.median_per_band);
+      else
+        printf("  [c%u Q=%u r=%.4f]", kv.first, kv.second.best_q, kv.second.median_per_band);
+    }
     printf("\n");
     if (!ok) return 2;
   }

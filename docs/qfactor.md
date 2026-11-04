@@ -1,9 +1,11 @@
 # Qfactor and visual weighting
 
-`Qfactor` is a single 1–100 "quality" knob for lossy HTJ2K encoding, in the
+`Qfactor` is a single 1–150 "quality" knob for lossy HTJ2K encoding, in the
 spirit of the classic JPEG quality factor: a small, intuitive number that
 scales the quantization step sizes, with a strong connection to visual quality
-(100 = best). This document explains how `Qfactor` is turned into per-subband
+(higher = better). 1–97 follow the JPEG Qfactor guideline, which is tuned for
+8-bit samples; 98–150 follow OpenEXR's extension, which reaches the finer steps
+that 10- to 16-bit samples need (see [Qfactor above 97](#qfactor-above-97)). This document explains how `Qfactor` is turned into per-subband
 quantization steps, and the **experimental** analytic visual-weighting
 extension that lets the weighting follow an arbitrary viewing condition (zoom)
 and colour space instead of a single hard-coded table.
@@ -14,9 +16,10 @@ and colour space instead of a single hard-coded table.
 
 > **Status.** The default path (`Qcsf=legacy`) is the long-standing Qfactor
 > behaviour and follows the JPEG Qfactor guideline (WG1N101553 v2). It is
-> **bit-identical** to previous releases except for sub-sampled (4:2:0 / 4:2:2)
-> chroma, whose weights were brought in line with the guideline after 0.25.0
-> (see [Legacy visual weighting](#legacy-visual-weighting-default)). The analytic models
+> **bit-identical** to previous releases up to `Qfactor=97`, except for
+> sub-sampled (4:2:0 / 4:2:2) chroma, whose weights were brought in line with
+> the guideline after 0.25.0 (see [Legacy visual weighting](#legacy-visual-weighting-default)).
+> `Qfactor` 98–100 changed after 0.25.0, when 101–150 were added. The analytic models
 > (`Qcsf=mannos`, `Qcsf=daly`) and the `Qppd` / `Qzoom` knobs are **experimental**
 > and opt-in; they only change the emitted `QCD`/`QCC` quantization markers, so
 > any compliant decoder reads the result normally.
@@ -73,8 +76,8 @@ construction and by `estimate_qfactor`.
 
 ### `delta_Q` and the quality curve
 
-`q_to_delta(Qfactor, RI)` maps the 1–100 factor to `delta_Q` and the weighting
-exponent `p`. The shape is the familiar libjpeg-style curve:
+`q_to_delta(Qfactor, RI)` maps the 1–150 factor to `delta_Q` and the weighting
+exponent `p`. Up to 97 the shape is the familiar libjpeg-style curve:
 
 ```
 M_Q = (Q < 50) ? 50/Q : 2·(1 − Q/100)      # master multiplier
@@ -87,6 +90,45 @@ fades from **1** (full CSF weighting, `Q ≤ 65`) to **0** (flat / MSE-optimal,
 high-frequency bands when the overall distortion is already tiny. The detail of
 this curve is described in the HTJ2K white paper
 (<https://htj2k.com/wp-content/uploads/white-paper.pdf>).
+
+### Qfactor above 97
+
+The guideline defines `Qfactor` up to 100, and its steps are tuned for 8-bit
+samples. At higher precision the integer values leave a gap: at 16 bits,
+`Qfactor=99` gives a reference step of about 132 LSBs and `Qfactor=100` one of
+0.71 LSB, with nothing in between. OpenEXR's lossy HTJ2K compressor (LJ2K) extends
+the range to 150 for its floating-point data. OpenHTJ2K
+uses the same curve from 98 on, in place of the guideline's `alpha_Q · M_Q`:
+
+```
+s = (Q − 97) / 53
+delta_Q = 0.005 · 2^(−28.478·s) + 0.001 · 2^(−10.534·s) + eps0      # p = 0 (flat weights)
+```
+
+The curve equals `alpha_Q · M_Q` (0.006) at 97, so the steps are continuous, and
+each step of 1 makes it 13–28% smaller. OpenEXR's compressor uses the curve
+alone. OpenHTJ2K keeps the guideline's `eps0` term, so no step is finer than
+0.71 LSB, because finer lossy steps cost more than lossless coding: with the
+curve alone, an 8-bit test image (768x512 RGB, 460 KB lossless) decodes
+exactly from `Qfactor=108` on, at 880 KB, and reaches 2.2 MB at 150. With
+`eps0`, its size stops at about 310 KB (52.9 dB). The steps are OpenEXR's plus
+0.71 LSB, which matters only where OpenEXR's steps are near 1 LSB or finer.
+
+Reference step `delta_Q · 2^RI` in LSBs:
+
+| Qfactor | 8-bit | 12-bit | 16-bit |
+|---:|---:|---:|---:|
+| 90 | 3.97 | 53.0 | 837 |
+| 97 | 2.24 | 25.3 | 394 |
+| 99 | 1.51 | 13.5 | 206 |
+| 100 | 1.30 | 10.1 | 151 |
+| 110 | 0.76 | 1.55 | 14.2 |
+| 120 | 0.72 | 0.88 | 3.53 |
+| 127 | 0.71 | 0.77 | 1.76 |
+| 150 | 0.71 | 0.71 | 0.75 |
+
+For 8-bit samples, values above about 110 change little; for 12-bit, above
+about 125.
 
 ## Legacy visual weighting (default)
 

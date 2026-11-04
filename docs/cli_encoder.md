@@ -103,8 +103,11 @@ the container:
     derived from it. Default is **no** (scalar-expounded; each
     subband's step size is signalled explicitly).
 - `Qfactor=Int`
-  - Quality factor for lossy compression. Valid range: 0–100
-    (100 = best quality).
+  - Quality factor for lossy compression. Valid range: 0–150 (higher is
+    better). Up to 97 it follows the JPEG Qfactor guideline (WG1N101553 v2),
+    which is tuned for 8-bit samples; 98–150 follow the extension of OpenEXR's
+    lossy HTJ2K compressor, which reaches the finer steps of 10- to 16-bit
+    samples. No value gives a step finer than 0.71 LSB.
   - When specified, `Qstep` is ignored. `Cycc` defaults to `yes`; disabling
     it on 3-component input only warns (Qfactor assumes YCbCr input).
   - Works with 1 to 4 components: gray, gray + alpha, colour, colour + alpha.
