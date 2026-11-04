@@ -808,7 +808,7 @@ class openhtj2k_encoder_impl {
   cod_params *cod;
   qcd_params *qcd;
   uint8_t qfactor;
-  file_format format;  // codestream, or the codestream in a JPH or JP2 file
+  file_format format;           // codestream, or the codestream in a JPH or JP2 file
   bool single_thread_ = false;  // num_threads == 1: never use the shared pool
   uint8_t color_space;
   // EXPERIMENTAL: analytic visual (CSF) weighting. Default-constructed selects
@@ -848,6 +848,7 @@ class openhtj2k_encoder_impl {
   void set_visual_weighting(uint8_t model, double ref_ppd, double zoom);
   void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
   void set_chroma_csf_reuse_luma(bool reuse_luma);
+  void set_qfactor_scale(uint8_t scale);
   void set_ht_refinement(uint8_t planes) { ht_refine = planes; }
   void set_target_size(uint64_t bytes) {
     target_size = bytes;
@@ -1016,6 +1017,17 @@ void openhtj2k_encoder_impl::set_component_types(uint8_t c0, uint8_t c1, uint8_t
 
 void openhtj2k_encoder_impl::set_chroma_csf_reuse_luma(bool reuse_luma) {
   vw.chroma_reuse_luma_csf = reuse_luma;
+}
+
+void openhtj2k_encoder_impl::set_qfactor_scale(uint8_t scale) {
+  vw.precision_scaled = (scale == 1);
+  if (vw.precision_scaled) {
+    if (qfactor == NO_QFACTOR) {
+      open_htj2k::detail::warn("the precision-scaled Qfactor (Qscale) has no effect without Qfactor.");
+    } else {
+      open_htj2k::detail::info("EXPERIMENTAL: precision-scaled Qfactor.");
+    }
+  }
 }
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
@@ -1485,6 +1497,8 @@ void openhtj2k_encoder::set_component_types(uint8_t c0, uint8_t c1, uint8_t c2) 
 void openhtj2k_encoder::set_chroma_csf_reuse_luma(bool reuse_luma) {
   this->impl->set_chroma_csf_reuse_luma(reuse_luma);
 }
+
+void openhtj2k_encoder::set_qfactor_scale(uint8_t scale) { this->impl->set_qfactor_scale(scale); }
 
 size_t openhtj2k_encoder::invoke_line_based() {
   OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());

@@ -109,6 +109,9 @@ struct visual_weighting_params {
   // Qfactor is restricted to 1- or 3-component images, so 3 entries suffice.
   component_type ctype_hint[3] = {component_type::generic, component_type::generic,
                                   component_type::generic};
+  // EXPERIMENTAL: scale the Qfactor by the sample precision (see q_to_delta()).
+  // false keeps the JPEG Qfactor guideline.
+  bool precision_scaled = false;
 };
 
 // --- color synthesis gain --------------------------------------------------
@@ -146,14 +149,14 @@ struct q_scaling {
   double delta_Q;        // reference step before basis / visual / color normalization
   double qfactor_power;  // exponent applied to each subband's visual weight
 };
-inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI) {
+inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI, bool precision_scaled = false) {
   const uint8_t t0 = 65, t1 = 97;
   const double alpha_T0 = 0.04, alpha_T1 = 0.10;
-  const double M_T0    = 2.0 * (1.0 - t0 / 100.0);
-  const double M_T1    = 2.0 * (1.0 - t1 / 100.0);
+  const double M_T0 = 2.0 * (1.0 - t0 / 100.0);
+  const double M_T1 = 2.0 * (1.0 - t1 / 100.0);
   // Qfactor 0 is taken as 1, as the IJG scaling does: 50 / 0 would make every step infinite.
   const double M_Q = (qfactor < 50) ? 50.0 / std::max<uint8_t>(qfactor, 1) : 2.0 * (1.0 - qfactor / 100.0);
-  double alpha_Q       = alpha_T0;
+  double alpha_Q   = alpha_T0;
   double qfactor_power = 1.0;
   if (qfactor >= t1) {
     qfactor_power = 0.0;
@@ -166,7 +169,29 @@ inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI) {
   // the encoder's RI (<= 16 bpp) but well-defined for any RI, so a crafted
   // high-bit-depth file fed to estimate_qfactor cannot trigger signed-shift UB.
   const double eps0 = std::sqrt(0.5) * std::ldexp(1.0, -static_cast<int>(RI));
-  return {alpha_Q * M_Q + eps0, qfactor_power};
+  if (!precision_scaled || RI == 8) return {alpha_Q * M_Q + eps0, qfactor_power};
+
+  // EXPERIMENTAL precision-scaled Qfactor. The guideline's step keeps the same number
+  // of bits at every precision (about 4.5 at Qfactor 50), so 16-bit samples keep 4.6 of
+  // their 16 bits at Qfactor 50 and integer Qfactors jump from a step of 132 LSBs (99)
+  // to 0.71 LSB (100). Here the bits the guideline removes at 8 bits above its 0.71-LSB
+  // floor, log2(sqrt(2) * Delta_8), are scaled by RI / 8, so every Qfactor removes the
+  // same fraction of the precision at every bit depth:
+  //   Delta_RI = (1/sqrt(2)) * (sqrt(2) * Delta_8)^(RI/8)   (in LSBs; Delta_8 in 8-bit LSBs)
+  // At 8 bits this is the guideline; Qfactor 100 stays 0.71 LSB at every precision.
+  const double half_lsb = std::sqrt(0.5);
+  const double delta_8  = std::ldexp(alpha_Q * M_Q, 8) + half_lsb;
+  const double delta_RI = half_lsb * std::pow(std::sqrt(2.0) * delta_8, RI / 8.0);
+  const double delta_Q  = std::ldexp(delta_RI, -static_cast<int>(RI));
+  // The visual weights follow the step relative to the sample range, c, rather than the
+  // Qfactor: the guideline's exponent is linear in log(alpha_Q * M_Q) between its two
+  // thresholds, so p = log(c / c_T1) / log(c_T0 / c_T1), clamped to [0, 1], which at 8
+  // bits is the guideline's exponent. Steps too fine to see get flat weights.
+  const double c    = delta_Q - eps0;
+  const double c_T0 = alpha_T0 * M_T0, c_T1 = alpha_T1 * M_T1;
+  double p = 0.0;
+  if (c > 0.0) p = std::min(1.0, std::max(0.0, std::log(c / c_T1) / std::log(c_T0 / c_T1)));
+  return {delta_Q, p};
 }
 
 // --- CSF models (spatial frequency f in cycles/degree) ---------------------

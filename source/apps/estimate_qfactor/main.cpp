@@ -258,7 +258,7 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
 
   // Q-dependent scalars from the shared encoder header (same q_to_delta() the
   // encoder uses), so the inversion matches the encoder's step exactly.
-  const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
+  const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI, vp.precision_scaled);
   const double qpower            = qs.qfactor_power;
   const double delta_ref         = qs.delta_Q * open_htj2k::color_gain(ct, 0);
   const double G_c               = open_htj2k::color_gain(ct, Cqcc);
@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     fprintf(stderr,
             "Usage: %s <codestream.j2c> [--verbose] [--csf legacy|mannos|daly] [--ppd F] [--zoom F]\n"
-            "         [--ctype Y,Cb,Cr] [--chroma-csf chroma|luma]\n"
+            "         [--ctype Y,Cb,Cr] [--chroma-csf chroma|luma] [--scale guideline|bits]\n"
             "  Estimates the OpenHTJ2K Qfactor [0..100] used at encode time by inverting the\n"
             "  QCD/QCC step-size formula. The visual-weighting model is NOT signaled in the\n"
             "  codestream, so for an analytic (EXPERIMENTAL) encode pass the same --csf/--ppd/\n"
@@ -412,6 +412,16 @@ int main(int argc, char** argv) {
         ++idx;
         if (comma == nullptr) break;
         v = comma + 1;
+      }
+    } else if (std::strcmp(argv[i], "--scale") == 0 && i + 1 < argc) {
+      const char* m = argv[++i];
+      if (std::strcmp(m, "guideline") == 0) {
+        vp.precision_scaled = false;
+      } else if (std::strcmp(m, "bits") == 0) {
+        vp.precision_scaled = true;
+      } else {
+        fprintf(stderr, "ERROR: unknown --scale '%s' (use guideline|bits)\n", m);
+        return 1;
       }
     } else if (std::strcmp(argv[i], "--chroma-csf") == 0 && i + 1 < argc) {
       const char* m = argv[++i];

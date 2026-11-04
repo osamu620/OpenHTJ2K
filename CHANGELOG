@@ -1,5 +1,21 @@
 # [Unreleased]
 
+## Added
+- EXPERIMENTAL precision-scaled Qfactor: `Qscale=bits` on the command line,
+  `openhtj2k_encoder::set_qfactor_scale(1)` in the library, and
+  `estimate_qfactor --scale bits`. The JPEG Qfactor guideline keeps about the
+  same number of bits at every sample precision (4.5 at `Qfactor=50`), so
+  16-bit samples get steps of about 132 LSBs at 99 and 0.71 LSB at 100, with
+  nothing in between. With `Qscale=bits` a Qfactor removes the same fraction of
+  the precision at every bit depth: the guideline's 8-bit step `Delta_8`, in
+  LSBs, becomes `(1/sqrt(2)) * (sqrt(2) * Delta_8)^(RI/8)` at `RI` bits, and the
+  visual-weight exponent follows the step relative to the sample range. At 8
+  bits the output is byte-identical to the guideline's, and `Qfactor=100` keeps
+  its 0.71-LSB step at every bit depth; the default (`Qscale=guideline`) is
+  unchanged. On a 16-bit RGB image,
+  PSNR at `Qfactor` 50 / 90 / 99 is 66.6 / 84.3 / 101.5 dB instead of 37.6 /
+  46.0 / 68.5 dB, at 1.97 / 3.13 / 4.51 bpp instead of 0.24 / 0.75 / 2.14 bpp.
+
 ## Changed
 - `Qfactor` on sub-sampled (4:2:0 or 4:2:2) colour input follows version 2.0
   of the JPEG Qfactor guideline, "Controlling JPEG 2000 image quality using a

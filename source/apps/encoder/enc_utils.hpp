@@ -105,6 +105,9 @@ void print_help(char *cmd) {
       "  Visual-weighting model. legacy (default) keeps the historical tables and is\n"
       "  bit-identical; mannos/daly derive per-subband weights from an analytic CSF.\n");
   printf(
+      "Qscale=guideline|bits  (EXPERIMENTAL, requires Qfactor)\n"
+      "  guideline (default): a Qfactor keeps the same number of bits at every precision.\n"
+      "  bits: a Qfactor removes the same fraction of the precision at every bit depth.\n"
       "Qppd=Float  (EXPERIMENTAL)  reference pixels-per-degree at zoom 1.0 (default 72).\n"
       "Qzoom=Float (EXPERIMENTAL)  display magnification, >1 = zoom-in (default 1.0);\n"
       "  zoom-in flattens the weighting toward flat MSE-optimal quantization.\n");
@@ -224,6 +227,7 @@ class j2k_argset {
   double csf_zoom;             // display magnification (> 1 = zoom-in)
   uint8_t csf_ctype[3];        // per-component role hints: 0 generic, 1 Y, 2 Cb, 3 Cr
   bool csf_chroma_reuse_luma;  // A/B: luminance CSF shape for Cb/Cr components
+  uint8_t qscale;              // EXPERIMENTAL: 0 = guideline Qfactor, 1 = precision-scaled
 
   static void get_coordinate(const std::string &param_name, std::string &arg, element_siz_local &dims) {
     size_t pos0, pos1;
@@ -507,6 +511,7 @@ class j2k_argset {
         csf_zoom(1.0),
         csf_ctype{0, 0, 0},
         csf_chroma_reuse_luma(false),
+        qscale(0),
         ifnames{},
         num_iteration(1),
         num_threads(0),
@@ -780,6 +785,17 @@ class j2k_argset {
             printf("ERROR: unknown Qchromacsf value '%s' (use chroma|luma)\n", val.c_str());
             exit(EXIT_FAILURE);
           }
+        } else if (param == "scale") {
+          // EXPERIMENTAL: precision scaling of the Qfactor.
+          std::string val = arg.substr(arg.find_first_of('=') + 1);
+          if (val == "guideline") {
+            qscale = 0;
+          } else if (val == "bits") {
+            qscale = 1;
+          } else {
+            printf("ERROR: unknown Qscale value '%s' (use guideline|bits)\n", val.c_str());
+            exit(EXIT_FAILURE);
+          }
         } else {
           printf("ERROR: unknown parameter Q%s\n", param.c_str());
           exit(EXIT_FAILURE);
@@ -827,4 +843,5 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD double get_csf_zoom() const { return csf_zoom; }
   OPENHTJ2K_NODISCARD uint8_t get_csf_ctype(size_t c) const { return (c < 3) ? csf_ctype[c] : 0; }
   OPENHTJ2K_NODISCARD bool get_csf_chroma_reuse_luma() const { return csf_chroma_reuse_luma; }
+  OPENHTJ2K_NODISCARD uint8_t get_qscale() const { return qscale; }
 };

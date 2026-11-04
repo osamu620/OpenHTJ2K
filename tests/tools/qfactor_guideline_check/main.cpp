@@ -33,7 +33,13 @@
 // shares no code with the encoder (visual_weighting.hpp), so it catches a wrong
 // table in either place.
 //
-//   qfactor_guideline_check <codestream.j2c> <Qfactor>
+//   qfactor_guideline_check <codestream.j2c> <Qfactor> [--scale bits]
+//
+// --scale bits checks the EXPERIMENTAL precision-scaled Qfactor (encoder Qscale=bits)
+// instead: the bits the guideline's step removes at 8 bits above its 1/sqrt(2)-LSB floor
+// are scaled by R_I/8, Delta_ref = (1/sqrt(2)) * (sqrt(2) * Delta_8)^(R_I/8), and the
+// weight exponent is p = clamp(log(c / c_T1) / log(c_T0 / c_T1), 0, 1) with c the step
+// above the floor as a fraction of the sample range, c_T0 = alpha_T0 M_T0, c_T1 = alpha_T1 M_T1.
 //
 // The codestream must come from OpenHTJ2K's default (legacy) Qfactor weighting on
 // gray, gray + alpha, YCbCr (4:4:4 through the ICT, or pre-transformed 4:2:0 /
@@ -42,10 +48,12 @@
 // colour gains); a step the codestream cannot represent (exponent < 0) must be
 // clamped to the coarsest one, (0, 2047). Exit status 0 = all steps match.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -203,11 +211,19 @@ struct Step {
 
 // The guideline's step for every band of one component, in QCD/QCC order (LL, then
 // HL, LH, HH from the coarsest level), as (epsilon, mu) of Equation E-3.
-std::vector<Step> guideline_steps(int q, int RI, int N, const WeightTable &t, double Mc) {
+std::vector<Step> guideline_steps(int q, int RI, int N, const WeightTable &t, double Mc, bool bits) {
   std::vector<double> nl, nh;
   basis_norms(N, nl, nh);
-  const double d_ref = std::ldexp(alpha_of(q) * M_of(q), RI) + 1.0 / std::sqrt(2.0);
-  const double p     = weight_power(q);
+  const double floor_lsb = 1.0 / std::sqrt(2.0);
+  double d_ref           = std::ldexp(alpha_of(q) * M_of(q), RI) + floor_lsb;
+  double p               = weight_power(q);
+  if (bits) {  // precision-scaled Qfactor
+    const double d8 = std::ldexp(alpha_of(q) * M_of(q), 8) + floor_lsb;
+    d_ref           = floor_lsb * std::pow(std::sqrt(2.0) * d8, RI / 8.0);
+    const double c  = std::ldexp(d_ref - floor_lsb, -RI);
+    const double c0 = alpha_of(65) * M_of(65), c1 = alpha_of(97) * M_of(97);
+    p = (c <= 0.0) ? 0.0 : std::min(1.0, std::max(0.0, std::log(c / c1) / std::log(c0 / c1)));
+  }
   struct Band {
     double Gb, sqrtW;
     int gain;
@@ -246,8 +262,9 @@ double step_value(int eps, int mu) { return std::ldexp(1.0 + mu / 2048.0, -eps);
 }  // namespace
 
 int main(int argc, char **argv) {
-  if (argc != 3) {
-    std::fprintf(stderr, "usage: %s <codestream.j2c> <Qfactor>\n", argv[0]);
+  const bool bits = argc == 5 && std::strcmp(argv[3], "--scale") == 0 && std::strcmp(argv[4], "bits") == 0;
+  if (argc != 3 && !bits) {
+    std::fprintf(stderr, "usage: %s <codestream.j2c> <Qfactor> [--scale bits]\n", argv[0]);
     return EXIT_FAILURE;
   }
   const int q = std::atoi(argv[2]);
@@ -300,7 +317,7 @@ int main(int argc, char **argv) {
       }
     }
     const std::vector<uint16_t> &words = (c > 0 && !h.qcc[c].empty()) ? h.qcc[c] : h.qcd;
-    const std::vector<Step> ref        = guideline_steps(q, h.depth[c], h.levels, *t, Mc);
+    const std::vector<Step> ref        = guideline_steps(q, h.depth[c], h.levels, *t, Mc, bits);
     if (words.size() != ref.size()) {
       std::printf("FAIL component %u: %zu step words, %zu bands\n", c, words.size(), ref.size());
       ++failed;
@@ -324,7 +341,7 @@ int main(int argc, char **argv) {
     }
   }
   const char *fmt_name = (fmt == YCC420) ? "4:2:0" : (fmt == YCC422) ? "4:2:2" : "4:4:4";
-  std::printf("qfactor_guideline_check: %s, Q=%d, %d levels, %u components: %d of %d steps differ\n",
-              fmt_name, q, h.levels, h.Csiz, failed, checked);
+  std::printf("qfactor_guideline_check: %s, Q=%d%s, %d levels, %u components: %d of %d steps differ\n",
+              fmt_name, q, bits ? " (precision-scaled)" : "", h.levels, h.Csiz, failed, checked);
   return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

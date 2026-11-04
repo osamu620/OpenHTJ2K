@@ -252,12 +252,50 @@ void check_legacy_rows() {
          "tail weight: analytic 4:2:2 from chroma_format != sqrt(2)");
 }
 
+// --- check 6: precision-scaled Qfactor (EXPERIMENTAL) ------------------------
+// q_to_delta(Q, RI, true) removes RI/8 times the bits the guideline removes at 8 bits
+// above its 0.71-LSB floor: log2(sqrt(2) * Delta_RI) = (RI/8) * log2(sqrt(2) * Delta_8),
+// with Delta in LSBs. Its weight exponent follows the step relative to the sample range.
+void check_precision_scaled() {
+  const double half_lsb = std::sqrt(0.5);
+  for (int q = 0; q <= 100; ++q) {
+    const q_scaling g8 = q_to_delta(static_cast<uint8_t>(q), 8);
+    const q_scaling b8 = q_to_delta(static_cast<uint8_t>(q), 8, true);
+    // At 8 bits the precision-scaled mapping returns the guideline's values unchanged.
+    expect(b8.delta_Q == g8.delta_Q && b8.qfactor_power == g8.qfactor_power,
+           "precision-scaled: 8 bits differs from the guideline");
+    const double loss8 = std::log2(std::sqrt(2.0) * std::ldexp(g8.delta_Q, 8));
+    for (int ri = 1; ri <= 16; ++ri) {
+      const q_scaling b = q_to_delta(static_cast<uint8_t>(q), static_cast<uint8_t>(ri), true);
+      const double lsb  = std::ldexp(b.delta_Q, ri);  // step in LSBs
+      // Same fraction of the precision removed at every bit depth.
+      expect(std::fabs(std::log2(std::sqrt(2.0) * lsb) - loss8 * ri / 8.0) < 1e-9,
+             "precision-scaled: bits removed are not RI/8 times the 8-bit ones");
+      // Qfactor 100 keeps the guideline's 0.71-LSB step at every bit depth.
+      if (q == 100)
+        expect(std::fabs(lsb - half_lsb) < 1e-12, "precision-scaled: Qfactor 100 step != 1/sqrt(2) LSB");
+      expect(b.qfactor_power >= 0.0 && b.qfactor_power <= 1.0,
+             "precision-scaled: weight exponent outside [0, 1]");
+      if (q > 0) {
+        const q_scaling prev = q_to_delta(static_cast<uint8_t>(q - 1), static_cast<uint8_t>(ri), true);
+        expect(b.delta_Q <= prev.delta_Q, "precision-scaled: step grows with the Qfactor");
+        expect(b.qfactor_power <= prev.qfactor_power + 1e-12,
+               "precision-scaled: weight exponent grows with the Qfactor");
+      }
+    }
+  }
+  // At 16 bits the weights are flat from Qfactor 50 on (steps too fine to see) but not at 25.
+  expect(q_to_delta(50, 16, true).qfactor_power == 0.0, "precision-scaled: 16-bit Qfactor 50 not flat");
+  expect(q_to_delta(25, 16, true).qfactor_power > 0.0, "precision-scaled: 16-bit Qfactor 25 flat");
+}
+
 int run_checks() {
   check_golden_pin();
   check_isotropic_shift();
   check_422_anisotropy();
   check_default_role();
   check_legacy_rows();
+  check_precision_scaled();
   if (failures == 0) {
     printf("visual_weight_check: all invariants hold\n");
     return EXIT_SUCCESS;
