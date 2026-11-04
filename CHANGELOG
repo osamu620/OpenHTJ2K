@@ -1,6 +1,28 @@
 # [Unreleased]
 
+## Added
+- `Qfactor` takes values up to 150 (`Qfactor=` on the command line, the
+  `qfactor` argument of `openhtj2k_encoder`, `estimate_qfactor`). The JPEG
+  Qfactor guideline stops at 100 and is tuned for 8-bit samples: at 16 bits,
+  `Qfactor=99` gave a reference step of about 132 LSBs and `Qfactor=100` one of
+  0.71 LSB, with nothing in between. From 98 on, the step follows the curve of
+  OpenEXR's lossy HTJ2K compressor (LJ2K), 0.005 * 2^(-28.478 s) + 0.001 *
+  2^(-10.534 s) of the sample range with s = (Qfactor - 97) / 53 and flat
+  visual weights, plus the guideline's 0.71-LSB term. OpenEXR uses the curve
+  alone; the term keeps steps from going finer than 0.71 LSB, where lossy
+  coding costs more than lossless (with the curve alone, an 8-bit test image
+  decodes exactly from 108 on at 1.9 to 4.9 times its lossless size). 16-bit
+  samples get steps of 14 LSBs at 110 and under 2 LSBs from 127 on; for 8-bit
+  samples, values above about 110 change little.
+  `estimate_qfactor` reports a range when several values give the same steps
+  (an 8-bit file of 150 also matches 149), and `--expect-q` accepts any of them.
+
 ## Changed
+- `Qfactor` 98 to 100 follow the extended curve above instead of the
+  guideline's, so their steps are coarser and the files smaller: at 100, by
+  39% for an 8-bit RGB test image and 42% for a 16-bit gray one, whose
+  `Qfactor=100` file used to be larger than its lossless one. Up to 97, output
+  is unchanged.
 - `Qfactor` on sub-sampled (4:2:0 or 4:2:2) colour input follows version 2.0
   of the JPEG Qfactor guideline, "Controlling JPEG 2000 image quality using a
   single parameter (Qfactor)" (ISO/IEC JTC 1/SC 29/WG 1 N101553). Its chroma

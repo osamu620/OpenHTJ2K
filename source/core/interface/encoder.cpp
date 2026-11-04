@@ -1446,8 +1446,9 @@ openhtj2k_encoder::openhtj2k_encoder(const char *fname, const std::vector<int32_
                                      siz_params &siz, cod_params &cod, qcd_params &qcd, uint8_t qfactor,
                                      bool isJPH, uint8_t color_space, uint32_t num_threads) {
   if (qfactor != NO_QFACTOR) {
-    if (qfactor > 100) {
-      open_htj2k::detail::fail("Value of Qfactor shall be in the range [0, 100].");
+    if (qfactor > open_htj2k::qfactor_max) {
+      open_htj2k::detail::fail("Value of Qfactor shall be in the range [0, %u].",
+                               static_cast<unsigned>(open_htj2k::qfactor_max));
     }
   }
   // The impl takes a pool reference on construction, so create it before

@@ -96,7 +96,10 @@ void print_help(char *cmd) {
   printf(
       "Qguard=Int:\n  Number of guard bits. Valid range is from 0 to 7, from 1 for Creversible=no (Default "
       "is 1.)\n");
-  printf("Qfactor=Int:\n  Quality factor. Valid range is from 0 to 100 (100 is for the best quality)\n");
+  printf(
+      "Qfactor=Int:\n  Quality factor. Valid range is from 0 to 150 (higher is better).\n"
+      "  Up to 97 it follows the JPEG Qfactor guideline, tuned for 8-bit samples; 98 to 150\n"
+      "  follow OpenEXR's extension, for the finer steps of 10- to 16-bit samples.\n");
   printf(
       "  Note: If this option is present, Qstep is ignored. Cycc defaults to `yes`;\n"
       "  disabling it on 3-component input only warns (Qfactor assumes YCbCr input).\n");
@@ -727,7 +730,7 @@ class j2k_argset {
         } else if (param == "derived") {
           get_bool(param, arg, qderived);
         } else if (param == "factor") {
-          qfactor = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 100));
+          qfactor = static_cast<uint8_t>(get_numerical_param(c, param, arg, 0, 150));
         } else if (param == "csf") {
           // EXPERIMENTAL: analytic visual weighting model for the Qfactor path.
           std::string val = arg.substr(arg.find_first_of('=') + 1);
