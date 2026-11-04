@@ -844,16 +844,18 @@ static void pack_quant_step(double fval, int32_t max_exponent, uint8_t &epsilon_
 // the reversible transform, weighted-MSE for the irreversible one) and the
 // (epsilon, mu) packing per ISO/IEC 15444-1 Annex E are identical between the
 // two markers; the only per-component-class inputs are the visual-weight table
-// `W_b` and the {delta_ref, G_c, qfactor_power} triple, which each caller derives
-// from its own luma/chroma weights and gain (and, for QCD, the basestep-vs-Qfactor
-// reference step). `have_qfactor` is false only on the QCD plain-basestep path,
-// where every w_b collapses to 1.0. Subbands are stored in reverse order (LL
-// first) and the caller has already downgraded `is_derived` when a Qfactor is set.
+// `W_b`, the weight `w_tail` of the bands the table does not list (the LL band and
+// any level past the table), and the {delta_ref, G_c, qfactor_power} triple, which
+// each caller derives from its own luma/chroma weights and gain (and, for QCD, the
+// basestep-vs-Qfactor reference step). `have_qfactor` is false only on the QCD
+// plain-basestep path, where every w_b collapses to 1.0. Subbands are stored in
+// reverse order (LL first) and the caller has already downgraded `is_derived` when
+// a Qfactor is set.
 static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint8_t dwt_levels,
                                                bool is_reversible, bool is_derived, uint8_t RI,
                                                uint8_t use_ycc, const std::vector<double> &W_b,
-                                               bool have_qfactor, double delta_ref, double G_c,
-                                               double qfactor_power) {
+                                               double w_tail, bool have_qfactor, double delta_ref,
+                                               double G_c, double qfactor_power) {
   const size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
   std::vector<double> wmse_or_BIBO;
   wmse_or_BIBO.reserve(num_bands);
@@ -956,9 +958,9 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
     //   Delta_b = delta_ref / (sqrt(G_b) * w_b * G_c)
     //
     // where G_b is the precomputed synthesis basis-energy gain (wmse_or_BIBO[]),
-    // w_b is the perceptual weight raised to qfactor_power (1.0 for the LL band,
-    // any band beyond the weight table, or when no Qfactor is active), and G_c is
-    // the colour-component gain. The float step is packed into (epsilon, mu) per
+    // w_b is the perceptual weight raised to qfactor_power (w_tail for the LL band
+    // and any band beyond the weight table; 1.0 when no Qfactor is active), and G_c
+    // is the colour-component gain. The float step is packed into (epsilon, mu) per
     // Eq. E-3, with mu in [0,2047] and epsilon in [0, 31 - guard bits]: a subband
     // then has M_b = epsilon + guard bits - 1 <= 30 magnitude bit-planes (E-2), as
     // many as the block coders hold. A step too small for that (a tiny base step,
@@ -966,9 +968,9 @@ static std::vector<uint16_t> build_quant_steps(uint8_t number_of_guardbits, uint
     // larger exponents gave codestreams that could not be decoded.
     const int32_t max_exponent = 31 - static_cast<int32_t>(number_of_guardbits);
     for (size_t i = 0; i < epsilon.size(); ++i) {
-      double w_b =
-          (!have_qfactor || i == epsilon.size() - 1 || i >= W_b.size()) ? 1.0 : pow(W_b[i], qfactor_power);
-      double fval = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
+      const bool tail = (i == epsilon.size() - 1 || i >= W_b.size());
+      double w_b      = !have_qfactor ? 1.0 : pow(tail ? w_tail : W_b[i], qfactor_power);
+      double fval     = delta_ref / (sqrt(wmse_or_BIBO[i]) * w_b * G_c);
       pack_quant_step(fval, max_exponent, epsilon[epsilon.size() - i - 1], mu[epsilon.size() - i - 1]);
     }
   }
@@ -1095,7 +1097,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   }
 
   SPqcd  = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
-                             have_qfactor, delta_ref, G_c, qfactor_power);
+                             /*w_tail=*/1.0, have_qfactor, delta_ref, G_c, qfactor_power);
   is_set = true;
 }
 
@@ -1212,11 +1214,12 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, use_ycc != 0);
 
   // Square-root-domain chroma visual weights for this component. Default
-  // (legacy_table) returns the historical 4:4:4/4:2:0/4:2:2 QCC table verbatim
-  // (bit-identical); an analytic CSF model in `vp` instead follows the viewing
+  // (legacy_table) returns the 4:4:4/4:2:0/4:2:2 table row of WG1N101553 v2
+  // verbatim; an analytic CSF model in `vp` instead follows the viewing
   // distance / zoom, deriving 4:2:0 & 4:2:2 from one chroma CSF via the
-  // component's SIZ sub-sampling factors (sub_x, sub_y). Without an MCT the
-  // channel role comes from vp.ctype_hint (default generic = luminance CSF).
+  // component's SIZ sub-sampling factors (sub_x, sub_y) and the display
+  // upsampling gain. Without an MCT the channel role comes from vp.ctype_hint
+  // (default generic = luminance CSF).
   // delta_ref / qfactor_power follow the Q->step mapping (q_to_delta(), shared with
   // QCD and estimate_qfactor; HTJ2K white paper); G_c is this component's synthesis
   // gain. The basis-gain derivation and (epsilon, mu) packing are shared with QCD
@@ -1234,7 +1237,11 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
     G_c                            = open_htj2k::color_gain(ct, Cqcc);  // component synthesis gain
   }
 
+  // The LL band (and, for the 5-level legacy tables, any deeper level) of a
+  // sub-sampled component carries the display upsampling gain (WG1N101553 v2).
+  const double w_tail = open_htj2k::chroma_tail_weight(vp, chroma_format, sub_x, sub_y);
   SPqcc  = build_quant_steps(number_of_guardbits, dwt_levels, is_reversible, is_derived, RI, use_ycc, W_b,
+                             w_tail,
                              /*have_qfactor=*/true, delta_ref, G_c, qfactor_power);
   is_set = true;
 }

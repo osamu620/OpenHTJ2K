@@ -13,7 +13,10 @@ and colour space instead of a single hard-coded table.
 - Tooling: [Recovering the Qfactor](#recovering-the-qfactor-estimate_qfactor).
 
 > **Status.** The default path (`Qcsf=legacy`) is the long-standing Qfactor
-> behaviour and is **bit-identical** to previous releases. The analytic models
+> behaviour and follows the JPEG Qfactor guideline (WG1N101553 v2). It is
+> **bit-identical** to previous releases except for sub-sampled (4:2:0 / 4:2:2)
+> chroma, whose weights were brought in line with the guideline after 0.25.0
+> (see [Legacy visual weighting](#legacy-visual-weighting-default)). The analytic models
 > (`Qcsf=mannos`, `Qcsf=daly`) and the `Qppd` / `Qzoom` knobs are **experimental**
 > and opt-in; they only change the emitted `QCD`/`QCC` quantization markers, so
 > any compliant decoder reads the result normally.
@@ -60,7 +63,7 @@ step(i, c) = ──────────────────────�
 | `delta_Q` | the global perceptual scale set by Qfactor | `q_to_delta()` |
 | `p` (`qfactor_power`) | how strongly visual weighting is applied (1 → full, 0 → flat) | `q_to_delta()` |
 | `G_basis(i)` | L2 synthesis gain of the DWT basis for subband `i` (so equal step in transform domain ⇒ equal MSE in image domain) | DWT filter taps |
-| `W(i)` | per-subband **visual weight** (the CSF) | `luma_/chroma_visual_weights()` |
+| `W(i)` | per-subband **visual weight** (the CSF); for the LL band (and levels past a 5-level table) the tail weight | `luma_/chroma_visual_weights()`, `chroma_tail_weight()` |
 | `G_color[c]` | per-component colour synthesis gain (maps component error to display-RGB error) | `color_gain()` |
 
 `ref` is the luma/reference component. Everything lives in one header,
@@ -87,17 +90,36 @@ this curve is described in the HTJ2K white paper
 
 ## Legacy visual weighting (default)
 
-With `Qcsf=legacy` (the default) the per-subband weights `W(i)` come from the
-fixed contrast-sensitivity tables of Zeng, Daly & Lei, *"An overview of the
-visual optimization tools in JPEG 2000"*, Signal Processing: Image
-Communication 17 (2002) 85–104, Table 2 — luminance plus per-format chroma
-(4:4:4 / 4:2:0 / 4:2:2). The colour gains `G_color` are the inverse-ICT column
-norms `{√3, 1.80511, 1.57340}` (stored rounded to 4 dp as
-`{1.7321, 1.8051, 1.5734}`). These tables target one specific viewing condition
-(≈1700-pixel viewing distance) and assume a YCbCr (luma/chroma) decomposition.
+With `Qcsf=legacy` (the default) the per-subband weights `W(i)` are the nominal
+visual weights of the JPEG Qfactor guideline, *"Controlling JPEG 2000 image
+quality using a single parameter (Qfactor) v2.0"* (ISO/IEC JTC 1/SC 29/WG 1
+N101553), Tables 2–4: luminance plus per-format chroma (4:4:4 / 4:2:0 / 4:2:2).
+The luminance and 4:4:4 chrominance weights are those of Zeng, Daly & Lei,
+*"An overview of the visual optimization tools in JPEG 2000"*, Signal
+Processing: Image Communication 17 (2002) 85–104, Table 2. The colour gains
+`G_color` are the inverse-ICT column norms `{√3, 1.80511, 1.57340}` (stored
+rounded to 4 dp as `{1.7321, 1.8051, 1.5734}`). These tables target one specific
+viewing condition (≈1700-pixel viewing distance) and assume a YCbCr
+(luma/chroma) decomposition.
 
-This path is unchanged from previous releases and produces **byte-identical**
-codestreams.
+A sub-sampled chroma component is weighted as 4:4:4 chroma one level coarser
+along each sub-sampled axis, times the gain of upsampling it for display:
+
+| format | `W(i)` (sqrt-domain) | LL band and levels past the fifth |
+|---|---|---|
+| 4:4:4 | Table 2 | 1.0 |
+| 4:2:0 | 2 × (4:4:4 weight one level up) | 2.0 |
+| 4:2:2 | √2 × (HL: 4:4:4 LH one level up; LH, HH: 4:4:4 LH at the same level) | 1.4142 |
+
+Like every weight, the LL / tail weight is raised to the power `p`, so it fades
+to 1 at `Q ≥ 97`.
+
+This path produces **byte-identical** codestreams to previous releases for gray,
+gray + alpha and 4:4:4 colour input. Sub-sampled chroma used the guideline's
+v1.0 weights (without the upsampling gain, and 1.0 for the LL band) up to
+0.25.0, so its chroma steps below `Q = 97` are now finer: by up to 2× for 4:2:0
+and √2× for 4:2:2. `qfactor_guideline_check` (built with the test suite) checks a
+codestream's steps against the guideline independently of this header.
 
 ## Analytic visual weighting (experimental)
 
@@ -109,7 +131,7 @@ weighting tracks the viewing condition instead of being fixed.
 
 | `Qcsf` | model | notes |
 |---|---|---|
-| `legacy` | hard-coded Zeng Table 2 | default; bit-identical |
+| `legacy` | fixed tables of WG1N101553 v2 (Zeng Table 2 for luma and 4:4:4 chroma) | default |
 | `mannos` | Mannos–Sakrison CSF | reproduces the legacy luma table to RMS ≈ 0.029 at `Qppd=72` |
 | `daly`   | Daly 1993 CSF (light-adaptation form) | rolls off lower; reproduces the legacy table near the paper's ~1700 px distance but with a looser shape |
 
@@ -154,11 +176,16 @@ mapping with no special-casing:
   every subband's radial frequency, which is identical to moving one
   decomposition level coarser — the classic "weight chroma like luma one level
   down" rule. Do not add a manual level offset on top; the `(sx, sy)` scaling
-  already subsumes it (this equivalence is asserted bit-for-bit by
-  `visual_weight_check check`).
+  already subsumes it (this equivalence, times the display gain below, is
+  asserted bit-for-bit by `visual_weight_check check`).
 - **4:2:2 is anisotropic.** Only the horizontal axis is halved, so a 4:2:2
   channel gets different `LH` (vertical detail) and `HL` (horizontal detail)
   weights — something no scalar per-subband table can represent.
+- **Display upsampling gain.** As in the legacy tables (WG1N101553 v2), every
+  weight of a component sub-sampled by `(sx, sy)`, the LL band included, is
+  multiplied by `√(sx·sy)`: 2 for 4:2:0, √2 for 4:2:2. It accounts for the
+  error being spread over `sx·sy` display pixels when the component is
+  upsampled, and applies whatever the component's role.
 
 **Component roles need a hint when chroma is sub-sampled.** Sub-sampled
 components rule out the built-in MCT (it needs identically-sized components),
@@ -200,7 +227,7 @@ content is still chrominance.
 All of these are encoder options and require `Qfactor`:
 
 - `Qcsf=legacy|mannos|daly` — visual-weighting model. Default **legacy**
-  (bit-identical). `mannos` / `daly` are experimental.
+  (the guideline tables). `mannos` / `daly` are experimental.
 - `Qppd=Float` — reference pixels-per-degree at zoom 1.0. Default **72**.
 - `Qzoom=Float` — display magnification; `> 1` is zoom-in. Default **1.0**.
 - `Qctype=T,T,T` — per-component role hints (`Y|Cb|Cr|generic`) for analytic
@@ -270,7 +297,8 @@ legacy tables. The fitting scripts are kept under
   calibration constant rather than a literal physical distance.
 - `scripts/csf_fit_chroma.py` — fits the per-channel chroma CSF on 4:4:4
   (Cb RMS 0.010, Cr RMS 0.021) and shows the same parameters reproduce 4:2:0
-  and 4:2:2 via the `(sx, sy)` frequency shift.
+  (RMS 0.128 / 0.062 on weights up to 2.0) and 4:2:2 (0.055 / 0.045) via the
+  `(sx, sy)` frequency shift and the display upsampling gain.
 
 ```bash
 python3 scripts/csf_fit_luma.py     # writes csf_fit_luma.png
@@ -280,7 +308,7 @@ python3 scripts/csf_fit_chroma.py   # writes csf_fit_chroma.png
 ## Limitations
 
 - **Experimental.** The analytic path only affects the `QCD`/`QCC` step sizes;
-  it is opt-in and the legacy default is byte-identical.
+  it is opt-in and leaves the legacy default unchanged.
 - **Signal-independent.** This is fixed-frequency weighting (one CSF sample per
   octave band). It does not model visual masking or content adaptation, so
   "Q = 80 looks like Q = 80" holds only approximately and is image-dependent.
@@ -295,6 +323,9 @@ python3 scripts/csf_fit_chroma.py   # writes csf_fit_chroma.png
 
 ## References
 
+- ISO/IEC JTC 1/SC 29/WG 1 N101553, *"Controlling JPEG 2000 image quality using
+  a single parameter (Qfactor) v2.0"*, guideline:
+  <https://ds.jpeg.org/documents/jpeg2000/wg1n101553-112-COM-Controlling_JPEG_2000_quality_using_Qfactor_v2.pdf>
 - W. Zeng, S. Daly, S. Lei, *"An overview of the visual optimization tools in
   JPEG 2000"*, Signal Processing: Image Communication 17 (2002) 85–104.
 - HTJ2K white paper (legacy Qfactor formula):

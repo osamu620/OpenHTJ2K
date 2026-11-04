@@ -382,6 +382,33 @@ add_test(NAME enc_qf_422_ctype COMMAND open_htj2k_enc -i ${QF422_INPUT} -o synth
 add_test(NAME qfest_422_ctype COMMAND estimate_qfactor synth_qf422ct.j2c --csf mannos --ctype Y,Cb,Cr --expect-q 85 --max-residual 0.01)
 set_tests_properties(qfest_422_ctype PROPERTIES DEPENDS enc_qf_422_ctype)
 
+# The default (legacy) Qfactor weighting follows the JPEG Qfactor guideline,
+# WG1N101553 v2. qfactor_guideline_check recomputes every step of a codestream
+# from the guideline's own filters and Tables 2-4, sharing no code with the
+# encoder, so a wrong table in visual_weighting.hpp fails here even though the
+# estimate_qfactor round trips (which read the same header) still pass. Q = 30
+# applies the full visual weights, Q = 85 two thirds of them; 6 levels reach the
+# weight the tables give to levels past the fifth; enc_lossy (4:4:4) is the
+# control.
+add_test(NAME qfgl_444 COMMAND qfactor_guideline_check kodim23lossy.j2c 90)
+set_tests_properties(qfgl_444 PROPERTIES DEPENDS enc_lossy)
+add_test(NAME enc_qf_420_legacy COMMAND open_htj2k_enc -i ${QF420_INPUT} -o kodim_qf420lg.j2c Qfactor=85)
+add_test(NAME qfgl_420 COMMAND qfactor_guideline_check kodim_qf420lg.j2c 85)
+set_tests_properties(qfgl_420 PROPERTIES DEPENDS enc_qf_420_legacy)
+add_test(NAME qfest_420_legacy COMMAND estimate_qfactor kodim_qf420lg.j2c --expect-q 85 --max-residual 0.01)
+set_tests_properties(qfest_420_legacy PROPERTIES DEPENDS enc_qf_420_legacy)
+add_test(NAME enc_qf_420_legacy_q30 COMMAND open_htj2k_enc -i ${QF420_INPUT} -o kodim_qf420lg30.j2c Qfactor=30)
+add_test(NAME qfgl_420_q30 COMMAND qfactor_guideline_check kodim_qf420lg30.j2c 30)
+set_tests_properties(qfgl_420_q30 PROPERTIES DEPENDS enc_qf_420_legacy_q30)
+add_test(NAME enc_qf_420_legacy_l6 COMMAND open_htj2k_enc -i ${QF420_INPUT} -o kodim_qf420lg6.j2c Qfactor=50 Clevels=6)
+add_test(NAME qfgl_420_l6 COMMAND qfactor_guideline_check kodim_qf420lg6.j2c 50)
+set_tests_properties(qfgl_420_l6 PROPERTIES DEPENDS enc_qf_420_legacy_l6)
+add_test(NAME qfgl_422 COMMAND qfactor_guideline_check synth_qf422lg.j2c 85)
+set_tests_properties(qfgl_422 PROPERTIES DEPENDS enc_qf_422_legacy)
+add_test(NAME enc_qf_422_legacy_q30 COMMAND open_htj2k_enc -i ${QF422_INPUT} -o synth_qf422lg30.j2c Qfactor=30)
+add_test(NAME qfgl_422_q30 COMMAND qfactor_guideline_check synth_qf422lg30.j2c 30)
+set_tests_properties(qfgl_422_q30 PROPERTIES DEPENDS enc_qf_422_legacy_q30)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -415,6 +442,12 @@ set_tests_properties(
   enc_qf_420_reuseluma qfest_420_reuseluma
   enc_qf_422_legacy   qfest_422_legacy
   enc_qf_422_ctype    qfest_422_ctype
+  qfgl_444
+  enc_qf_420_legacy   qfgl_420          qfest_420_legacy
+  enc_qf_420_legacy_q30 qfgl_420_q30
+  enc_qf_420_legacy_l6  qfgl_420_l6
+  qfgl_422
+  enc_qf_422_legacy_q30 qfgl_422_q30
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
 
 # Library-API encodes: the buffered entry point (invoke_line_based), which the

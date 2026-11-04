@@ -68,6 +68,11 @@ target_link_libraries(jph_box_check PUBLIC open_htj2k PRIVATE openhtj2k_internal
 add_executable(visual_weight_check)
 add_subdirectory(tests/tools/visual_weight_check)
 
+# qfactor_guideline_check: Qfactor step sizes of a codestream vs the JPEG Qfactor
+# guideline (WG1N101553 v2), computed independently of the encoder's tables
+add_executable(qfactor_guideline_check)
+add_subdirectory(tests/tools/qfactor_guideline_check)
+
 # encode_entry_points: buffered vs streaming encoder API over a matrix of
 # component counts / MCT / transforms / DWT levels / bit depths
 add_executable(encode_entry_points)

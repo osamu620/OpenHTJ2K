@@ -212,6 +212,9 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
       (Cqcc == 0)
           ? open_htj2k::luma_visual_weights(dwt_levels, vp)
           : open_htj2k::chroma_visual_weights(dwt_levels, vp, Cqcc, chroma_format, ct, ctype, sub_x, sub_y);
+  // Weight of the LL band and of any level past the weight table: 1.0 for luma, the
+  // display upsampling gain for a sub-sampled chroma component (as in QCC_marker).
+  const double w_tail = (Cqcc == 0) ? 1.0 : open_htj2k::chroma_tail_weight(vp, chroma_format, sub_x, sub_y);
 
   // Build wmse in the encoder's accumulation order: HH_1, LH_1, HL_1, ..., LL_N.
   const size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
@@ -262,8 +265,9 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
 
   std::vector<Band> out(num_bands);
   for (size_t i = 0; i < num_bands; ++i) {
-    // LL band (last entry, always weight 1.0) and any extra low-freq bands beyond the 5-level table
-    double w_b       = (i == num_bands - 1 || i >= weights.size()) ? 1.0 : std::pow(weights[i], qpower);
+    // LL band (last entry) and any extra low-freq bands beyond the 5-level table take w_tail
+    const bool tail  = (i == num_bands - 1 || i >= weights.size());
+    double w_b       = std::pow(tail ? w_tail : weights[i], qpower);
     double fval      = delta_ref / (std::sqrt(wmse[i]) * w_b * G_c);
     int32_t exponent = 0;
     while (fval < 1.0) {

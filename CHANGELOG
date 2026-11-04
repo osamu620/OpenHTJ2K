@@ -1,3 +1,21 @@
+# [Unreleased]
+
+## Changed
+- `Qfactor` on sub-sampled (4:2:0 or 4:2:2) colour input follows version 2.0
+  of the JPEG Qfactor guideline, "Controlling JPEG 2000 image quality using a
+  single parameter (Qfactor)" (ISO/IEC JTC 1/SC 29/WG 1 N101553). Its chroma
+  weights include the gain of upsampling the component for display, 2 for
+  4:2:0 and 1.4142 for 4:2:2, on every subband including LL; the encoder used
+  the version 1.0 weights, which leave it out. Below `Qfactor=97` the chroma
+  steps of such files are finer by up to 2 (4:2:0) or 1.4142 (4:2:2) times, so
+  the files are larger: a 1024x1024 4:2:0 test image grows by 41% at
+  `Qfactor=30`, 23% at 75 and 9% at 90. Output for gray, gray + alpha and 4:4:4
+  colour input, and all output without `Qfactor`, is byte-identical. The
+  experimental analytic weighting (`Qcsf=mannos|daly`) applies the same gain to
+  sub-sampled components. `estimate_qfactor` follows the new weights, so on a
+  sub-sampled file written by 0.25.0 or earlier it finds the Qfactor from the
+  luminance component only and reports a mismatch on the chroma components.
+
 # [0.25.0] - 2026-11-03
 
 Release for use as a library inside other software, such as OpenCV's

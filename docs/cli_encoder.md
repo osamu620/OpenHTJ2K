@@ -112,7 +112,7 @@ the container:
   - See [`qfactor.md`](qfactor.md) for how the factor maps to step sizes.
 - `Qcsf=legacy|mannos|daly` *(experimental)*
   - Visual-weighting model for the `Qfactor` path. Default **legacy**
-    (the historical fixed tables; output is bit-identical). `mannos` /
+    (the fixed tables of the JPEG Qfactor guideline, WG1N101553 v2). `mannos` /
     `daly` derive per-subband weights from an analytic contrast
     sensitivity function. Requires `Qfactor`.
 - `Qppd=Float` *(experimental)*
