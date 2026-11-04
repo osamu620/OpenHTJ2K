@@ -116,7 +116,8 @@ std::function<void(uint32_t, int32_t *const *, uint16_t)> collector(open_htj2k::
         img.plane[c].assign(static_cast<size_t>(img.w[c]) * img.h[c], 0);
       last.assign(img.w.size(), UINT32_MAX);
     }
-    for (uint16_t c = 0; c < nc && c < img.w.size(); ++c) {
+    const uint16_t n = static_cast<uint16_t>(std::min<size_t>(nc, img.w.size()));
+    for (uint16_t c = 0; c < n; ++c) {
       const uint32_t cy = dec.get_stream_component_row(c, y);
       if (cy == UINT32_MAX || cy == last[c] || cy >= img.h[c]) continue;
       last[c] = cy;
