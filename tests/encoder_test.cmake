@@ -409,6 +409,54 @@ add_test(NAME enc_qf_422_legacy_q30 COMMAND open_htj2k_enc -i ${QF422_INPUT} -o 
 add_test(NAME qfgl_422_q30 COMMAND qfactor_guideline_check synth_qf422lg30.j2c 30)
 set_tests_properties(qfgl_422_q30 PROPERTIES DEPENDS enc_qf_422_legacy_q30)
 
+# Flat Qfactor weights (Qweights=flat): every subband weight is 1 at every Qfactor, and
+# without the MCT every component is independent (unit colour gain). The Qfactor still
+# sets the reference step, so at Qfactor >= 97, where the guideline's weights are flat
+# already, an RGB encode is byte-identical to the default. qfactor_guideline_check
+# --weights flat recomputes every step independently of the encoder; estimate_qfactor
+# --weights flat recovers the Qfactor, and without --weights it must not. The decoded
+# error bounds are about 2.5x the measured ones (kodim23 Q50: PAE 25, MSE 9.5; 16-bit
+# gray Q40: PAE 3848, MSE 1356050).
+add_test(NAME enc_qw_444 COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qw50.j2c Qfactor=50 Qweights=flat)
+add_test(NAME qwgl_444 COMMAND qfactor_guideline_check kodim23_qw50.j2c 50 --weights flat)
+set_tests_properties(qwgl_444 PROPERTIES DEPENDS enc_qw_444)
+add_test(NAME qwest_444 COMMAND estimate_qfactor kodim23_qw50.j2c --weights flat --expect-q 50 --max-residual 0.01)
+set_tests_properties(qwest_444 PROPERTIES DEPENDS enc_qw_444)
+add_test(NAME qwest_444_mismatch COMMAND estimate_qfactor kodim23_qw50.j2c --expect-q 50 --max-residual 0.01)
+set_tests_properties(qwest_444_mismatch PROPERTIES DEPENDS enc_qw_444 PASS_REGULAR_EXPRESSION "CHECK FAIL")
+add_test(NAME dec_qw_444 COMMAND open_htj2k_dec -i kodim23_qw50.j2c -o kodim23_qw50.ppm)
+set_tests_properties(dec_qw_444 PROPERTIES DEPENDS enc_qw_444)
+add_test(NAME comp_qw_444 COMMAND imgcmp kodim23_qw50.ppm ${ENCODER_REF_DIR}/kodim23.ppm 63 24)
+set_tests_properties(comp_qw_444 PROPERTIES DEPENDS dec_qw_444)
+add_test(NAME qwgl_visual_file COMMAND qfactor_guideline_check kodim23lossy.j2c 90 --weights flat)
+set_tests_properties(qwgl_visual_file PROPERTIES DEPENDS enc_lossy
+                     PASS_REGULAR_EXPRESSION "[1-9][0-9]* of [0-9]+ steps differ")
+add_test(NAME enc_qw_444_q98 COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qw98.j2c Qfactor=98 Qweights=flat)
+add_test(NAME enc_qw_444_q98_visual COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qv98.j2c Qfactor=98)
+add_test(NAME qw_q98_identical COMMAND ${CMAKE_COMMAND} -E compare_files kodim23_qw98.j2c kodim23_qv98.j2c)
+set_tests_properties(qw_q98_identical PROPERTIES DEPENDS "enc_qw_444_q98;enc_qw_444_q98_visual")
+add_test(NAME enc_qw_nomct COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qwn60.j2c Qfactor=60 Qweights=flat Cycc=no)
+add_test(NAME qwgl_nomct COMMAND qfactor_guideline_check kodim23_qwn60.j2c 60 --weights flat)
+set_tests_properties(qwgl_nomct PROPERTIES DEPENDS enc_qw_nomct)
+add_test(NAME qwest_nomct COMMAND estimate_qfactor kodim23_qwn60.j2c --weights flat --expect-q 60 --max-residual 0.01)
+set_tests_properties(qwest_nomct PROPERTIES DEPENDS enc_qw_nomct)
+add_test(NAME enc_qw_420 COMMAND open_htj2k_enc -i ${QF420_INPUT} -o kodim_qw420.j2c Qfactor=70 Qweights=flat)
+add_test(NAME qwgl_420 COMMAND qfactor_guideline_check kodim_qw420.j2c 70 --weights flat)
+set_tests_properties(qwgl_420 PROPERTIES DEPENDS enc_qw_420)
+add_test(NAME qwest_420 COMMAND estimate_qfactor kodim_qw420.j2c --weights flat --expect-q 70 --max-residual 0.01)
+set_tests_properties(qwest_420 PROPERTIES DEPENDS enc_qw_420)
+add_test(NAME enc_qw_gray16 COMMAND open_htj2k_enc -i ${GRAY16_PGM} -o gray16_qw40.j2c Qfactor=40 Qweights=flat)
+add_test(NAME qwgl_gray16 COMMAND qfactor_guideline_check gray16_qw40.j2c 40 --weights flat)
+set_tests_properties(qwgl_gray16 PROPERTIES DEPENDS enc_qw_gray16)
+add_test(NAME qwest_gray16 COMMAND estimate_qfactor gray16_qw40.j2c --weights flat --expect-q 40 --max-residual 0.01)
+set_tests_properties(qwest_gray16 PROPERTIES DEPENDS enc_qw_gray16)
+add_test(NAME dec_qw_gray16 COMMAND open_htj2k_dec -i gray16_qw40.j2c -o gray16_qw40.pgm)
+set_tests_properties(dec_qw_gray16 PROPERTIES DEPENDS enc_qw_gray16)
+add_test(NAME comp_qw_gray16 COMMAND imgcmp gray16_qw40_00.pgm ${GRAY16_PGM} 9620 3400000)
+set_tests_properties(comp_qw_gray16 PROPERTIES DEPENDS dec_qw_gray16)
+add_test(NAME enc_qw_unknown COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qwx.j2c Qfactor=50 Qweights=perceptual)
+set_tests_properties(enc_qw_unknown PROPERTIES PASS_REGULAR_EXPRESSION "unknown Qweights value")
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -448,6 +496,12 @@ set_tests_properties(
   enc_qf_420_legacy_l6  qfgl_420_l6
   qfgl_422
   enc_qf_422_legacy_q30 qfgl_422_q30
+  enc_qw_444 qwgl_444 qwest_444 qwest_444_mismatch dec_qw_444 comp_qw_444 qwgl_visual_file
+  enc_qw_444_q98 enc_qw_444_q98_visual qw_q98_identical
+  enc_qw_nomct qwgl_nomct qwest_nomct
+  enc_qw_420 qwgl_420 qwest_420
+  enc_qw_gray16 qwgl_gray16 qwest_gray16 dec_qw_gray16 comp_qw_gray16
+  enc_qw_unknown
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
 
 # Library-API encodes: the buffered entry point (invoke_line_based), which the

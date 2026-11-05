@@ -1091,7 +1091,7 @@ QCD_marker::QCD_marker(uint8_t number_of_guardbits, uint8_t dwt_levels, uint8_t 
   if (!is_reversible && have_qfactor) {
     const open_htj2k::q_scaling qs       = open_htj2k::q_to_delta(qfactor, RI);
     const open_htj2k::color_transform ct = open_htj2k::resolve_color_transform(vp, use_ycc != 0);
-    qfactor_power                        = qs.qfactor_power;
+    qfactor_power                        = open_htj2k::weight_exponent(qs, vp);
     delta_ref                            = qs.delta_Q * open_htj2k::color_gain(ct, 0);
     G_c                                  = open_htj2k::color_gain(ct, 0);
   }
@@ -1232,7 +1232,7 @@ QCC_marker::QCC_marker(uint16_t Csiz, uint16_t c, uint8_t number_of_guardbits, u
   double qfactor_power = 0.0, delta_ref = 0.0, G_c = 1.0;
   if (!is_reversible) {
     const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
-    qfactor_power                  = qs.qfactor_power;
+    qfactor_power                  = open_htj2k::weight_exponent(qs, vp);
     delta_ref                      = qs.delta_Q * open_htj2k::color_gain(ct, 0);
     G_c                            = open_htj2k::color_gain(ct, Cqcc);  // component synthesis gain
   }
