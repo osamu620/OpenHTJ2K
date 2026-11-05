@@ -33,7 +33,11 @@
 // shares no code with the encoder (visual_weighting.hpp), so it catches a wrong
 // table in either place.
 //
-//   qfactor_guideline_check <codestream.j2c> <Qfactor>
+//   qfactor_guideline_check <codestream.j2c> <Qfactor> [--weights flat]
+//
+// --weights flat checks an encode with Qweights=flat instead: every subband weight
+// is 1 (the guideline's weights at Qfactor >= 97), at every Qfactor, and without
+// the MCT every component is independent (M_c = 1).
 //
 // The codestream must come from OpenHTJ2K's default (legacy) Qfactor weighting on
 // gray, gray + alpha, YCbCr (4:4:4 through the ICT, or pre-transformed 4:2:0 /
@@ -55,6 +59,7 @@ struct Header {
   uint16_t Csiz = 0;
   std::vector<int> depth, xr, yr;
   int levels = -1;
+  bool mct   = false;
   std::vector<uint16_t> qcd;
   std::vector<std::vector<uint16_t>> qcc;  // per component, empty if absent
 };
@@ -97,6 +102,7 @@ bool parse(const std::vector<uint8_t> &b, Header &h) {
       }
       h.qcc.resize(h.Csiz);
     } else if (marker == 0xFF52 && n >= 6) {  // COD: Scod, SGcod (4 bytes), levels
+      h.mct    = seg[4] != 0;
       h.levels = seg[5];
     } else if (marker == 0xFF5C && n >= 1) {   // QCD: Sqcd, SPqcd
       if ((seg[0] & 0x1F) != 2) return false;  // Qfactor writes expounded steps
@@ -203,11 +209,11 @@ struct Step {
 
 // The guideline's step for every band of one component, in QCD/QCC order (LL, then
 // HL, LH, HH from the coarsest level), as (epsilon, mu) of Equation E-3.
-std::vector<Step> guideline_steps(int q, int RI, int N, const WeightTable &t, double Mc) {
+std::vector<Step> guideline_steps(int q, int RI, int N, const WeightTable &t, double Mc, bool flat) {
   std::vector<double> nl, nh;
   basis_norms(N, nl, nh);
   const double d_ref = std::ldexp(alpha_of(q) * M_of(q), RI) + 1.0 / std::sqrt(2.0);
-  const double p     = weight_power(q);
+  const double p     = flat ? 0.0 : weight_power(q);
   struct Band {
     double Gb, sqrtW;
     int gain;
@@ -246,8 +252,12 @@ double step_value(int eps, int mu) { return std::ldexp(1.0 + mu / 2048.0, -eps);
 }  // namespace
 
 int main(int argc, char **argv) {
-  if (argc != 3) {
-    std::fprintf(stderr, "usage: %s <codestream.j2c> <Qfactor>\n", argv[0]);
+  bool flat = false;
+  if (argc == 5 && std::string(argv[3]) == "--weights"
+      && (std::string(argv[4]) == "flat" || std::string(argv[4]) == "visual")) {
+    flat = std::string(argv[4]) == "flat";
+  } else if (argc != 3) {
+    std::fprintf(stderr, "usage: %s <codestream.j2c> <Qfactor> [--weights visual|flat]\n", argv[0]);
     return EXIT_FAILURE;
   }
   const int q = std::atoi(argv[2]);
@@ -290,7 +300,7 @@ int main(int argc, char **argv) {
     if (chroma) {
       const bool cb = (c == 1);
       role          = cb ? "Cb" : "Cr";
-      Mc            = (cb ? G_Cb : G_Cr) / G_Y;
+      Mc            = (flat && !h.mct) ? 1.0 : (cb ? G_Cb : G_Cr) / G_Y;
       if (fmt == YCC420) {
         t = cb ? &kCb420 : &kCr420;
       } else if (fmt == YCC422) {
@@ -300,7 +310,7 @@ int main(int argc, char **argv) {
       }
     }
     const std::vector<uint16_t> &words = (c > 0 && !h.qcc[c].empty()) ? h.qcc[c] : h.qcd;
-    const std::vector<Step> ref        = guideline_steps(q, h.depth[c], h.levels, *t, Mc);
+    const std::vector<Step> ref        = guideline_steps(q, h.depth[c], h.levels, *t, Mc, flat);
     if (words.size() != ref.size()) {
       std::printf("FAIL component %u: %zu step words, %zu bands\n", c, words.size(), ref.size());
       ++failed;
@@ -324,7 +334,8 @@ int main(int argc, char **argv) {
     }
   }
   const char *fmt_name = (fmt == YCC420) ? "4:2:0" : (fmt == YCC422) ? "4:2:2" : "4:4:4";
-  std::printf("qfactor_guideline_check: %s, Q=%d, %d levels, %u components: %d of %d steps differ\n",
-              fmt_name, q, h.levels, h.Csiz, failed, checked);
+  std::printf(
+      "qfactor_guideline_check: %s, Q=%d, %s weights, %d levels, %u components: %d of %d steps differ\n",
+      fmt_name, q, flat ? "flat" : "visual", h.levels, h.Csiz, failed, checked);
   return failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

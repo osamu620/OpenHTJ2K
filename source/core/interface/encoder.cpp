@@ -848,6 +848,7 @@ class openhtj2k_encoder_impl {
   void set_visual_weighting(uint8_t model, double ref_ppd, double zoom);
   void set_component_types(uint8_t c0, uint8_t c1, uint8_t c2);
   void set_chroma_csf_reuse_luma(bool reuse_luma);
+  void set_qfactor_weights(uint8_t weights);
   void set_ht_refinement(uint8_t planes) { ht_refine = planes; }
   void set_target_size(uint64_t bytes) {
     target_size = bytes;
@@ -1016,6 +1017,17 @@ void openhtj2k_encoder_impl::set_component_types(uint8_t c0, uint8_t c1, uint8_t
 
 void openhtj2k_encoder_impl::set_chroma_csf_reuse_luma(bool reuse_luma) {
   vw.chroma_reuse_luma_csf = reuse_luma;
+}
+
+void openhtj2k_encoder_impl::set_qfactor_weights(uint8_t weights) {
+  if (weights > 1) {
+    open_htj2k::detail::fail("Qfactor weights shall be 0 (visual) or 1 (flat), not %u.",
+                             static_cast<unsigned>(weights));
+  }
+  vw.flat_weights = (weights == 1);
+  if (vw.flat_weights && qfactor == NO_QFACTOR) {
+    open_htj2k::detail::warn("flat Qfactor weights have no effect without Qfactor.");
+  }
 }
 
 openhtj2k_encoder_impl::~openhtj2k_encoder_impl() = default;
@@ -1485,6 +1497,8 @@ void openhtj2k_encoder::set_component_types(uint8_t c0, uint8_t c1, uint8_t c2) 
 void openhtj2k_encoder::set_chroma_csf_reuse_luma(bool reuse_luma) {
   this->impl->set_chroma_csf_reuse_luma(reuse_luma);
 }
+
+void openhtj2k_encoder::set_qfactor_weights(uint8_t weights) { this->impl->set_qfactor_weights(weights); }
 
 size_t openhtj2k_encoder::invoke_line_based() {
   OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());

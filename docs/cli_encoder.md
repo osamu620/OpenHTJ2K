@@ -110,6 +110,14 @@ the container:
   - Works with 1 to 4 components: gray, gray + alpha, colour, colour + alpha.
     The alpha channel is quantized like a gray-scale plane.
   - See [`qfactor.md`](qfactor.md) for how the factor maps to step sizes.
+- `Qweights=visual|flat`
+  - Visual weights of the `Qfactor` path. Default **visual**: the JPEG
+    Qfactor guideline's per-subband weights, faded out from `Qfactor=65`
+    to 97. `flat`: every subband weight is 1 at every Qfactor
+    (MSE-optimal steps, for scientific or other non-visual data); without
+    the MCT every component is independent. The Qfactor sets the reference
+    step either way. With `flat`, `Qcsf`, `Qppd`, `Qzoom`, `Qctype` and
+    `Qchromacsf` have no effect. Requires `Qfactor`.
 - `Qcsf=legacy|mannos|daly` *(experimental)*
   - Visual-weighting model for the `Qfactor` path. Default **legacy**
     (the fixed tables of the JPEG Qfactor guideline, WG1N101553 v2). `mannos` /

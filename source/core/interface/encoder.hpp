@@ -197,6 +197,13 @@ class openhtj2k_encoder {
   // EXPERIMENTAL: A/B switch -- evaluate the luminance CSF for Cb/Cr components
   // instead of the low-pass chroma CSF, keeping the sub-sampling frequency mapping.
   OPENHTJ2K_EXPORT void set_chroma_csf_reuse_luma(bool reuse_luma);
+  // Visual weights of the Qfactor path. 0 = visual (default): the JPEG Qfactor
+  // guideline's per-subband weights, which fade out from Qfactor 65 to 97. 1 = flat:
+  // every subband weight is 1 at every Qfactor (MSE-optimal steps, for scientific or
+  // other non-visual data); the CSF settings above are then unused. The Qfactor sets
+  // the reference step either way. Call before invoke_*; only affects encodes with
+  // Qfactor. Any other value throws std::runtime_error.
+  OPENHTJ2K_EXPORT void set_qfactor_weights(uint8_t weights);
   // EXPERIMENTAL: code each HT code-block as one HT set of three passes: the HT
   // cleanup pass `planes` bit-planes above the LSB, then the HT SigProp and HT
   // MagRef passes of the plane below it (ISO/IEC 15444-15).  0 (default) codes
