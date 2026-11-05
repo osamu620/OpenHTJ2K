@@ -259,7 +259,7 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
   // Q-dependent scalars from the shared encoder header (same q_to_delta() the
   // encoder uses), so the inversion matches the encoder's step exactly.
   const open_htj2k::q_scaling qs = open_htj2k::q_to_delta(qfactor, RI);
-  const double qpower            = qs.qfactor_power;
+  const double qpower            = open_htj2k::weight_exponent(qs, vp);
   const double delta_ref         = qs.delta_Q * open_htj2k::color_gain(ct, 0);
   const double G_c               = open_htj2k::color_gain(ct, Cqcc);
 
@@ -341,13 +341,14 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     fprintf(stderr,
             "Usage: %s <codestream.j2c> [--verbose] [--csf legacy|mannos|daly] [--ppd F] [--zoom F]\n"
-            "         [--ctype Y,Cb,Cr] [--chroma-csf chroma|luma]\n"
+            "         [--ctype Y,Cb,Cr] [--chroma-csf chroma|luma] [--weights visual|flat]\n"
             "  Estimates the OpenHTJ2K Qfactor [0..100] used at encode time by inverting the\n"
             "  QCD/QCC step-size formula. The visual-weighting model is NOT signaled in the\n"
             "  codestream, so for an analytic (EXPERIMENTAL) encode pass the same --csf/--ppd/\n"
             "  --zoom used at encode time; a low residual confirms the assumption was right.\n"
             "  --ctype / --chroma-csf mirror the encoder's Qctype= / Qchromacsf= hints for\n"
             "  no-MCT (e.g. sub-sampled YCbCr) streams; pass the values used at encode time.\n"
+            "  --weights flat: the file was encoded with Qweights=flat (no visual weights).\n"
             "  --expect-q N / --max-residual F: exit non-zero if violated (for scripts/CI).\n"
             "  --dump-quant FILE: write the verbatim QCD/QCC marker bytes to FILE and exit.\n"
             "    These bytes are a function of Qfactor + bit-depth + the visual-weighting\n"
@@ -421,6 +422,16 @@ int main(int argc, char** argv) {
         vp.chroma_reuse_luma_csf = true;
       } else {
         fprintf(stderr, "ERROR: unknown --chroma-csf '%s' (use chroma|luma)\n", m);
+        return 1;
+      }
+    } else if (std::strcmp(argv[i], "--weights") == 0 && i + 1 < argc) {
+      const char* m = argv[++i];
+      if (std::strcmp(m, "visual") == 0) {
+        vp.flat_weights = false;
+      } else if (std::strcmp(m, "flat") == 0) {
+        vp.flat_weights = true;
+      } else {
+        fprintf(stderr, "ERROR: unknown --weights '%s' (use visual|flat)\n", m);
         return 1;
       }
     } else if (std::strcmp(argv[i], "--expect-q") == 0 && i + 1 < argc) {
@@ -498,8 +509,9 @@ int main(int argc, char** argv) {
     const char* csf_name = (vp.model == open_htj2k::csf_model::legacy_table)      ? "legacy table"
                            : (vp.model == open_htj2k::csf_model::mannos_sakrison) ? "Mannos-Sakrison"
                                                                                   : "Daly";
+    if (vp.flat_weights) csf_name = "flat (no visual weights)";
     printf("Weighting:   %s", csf_name);
-    if (vp.model != open_htj2k::csf_model::legacy_table) {
+    if (!vp.flat_weights && vp.model != open_htj2k::csf_model::legacy_table) {
       printf(" (ref_ppd=%.1f, zoom=%.2f)", vp.ref_ppd, vp.zoom);
     }
     printf("\n");

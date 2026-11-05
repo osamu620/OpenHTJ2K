@@ -109,6 +109,11 @@ struct visual_weighting_params {
   // Qfactor is restricted to 1- or 3-component images, so 3 entries suffice.
   component_type ctype_hint[3] = {component_type::generic, component_type::generic,
                                   component_type::generic};
+  // Flat weights: every subband weight is 1 at every Qfactor, so the steps only
+  // normalize the subband and colour-transform gains (MSE-optimal, for scientific or
+  // other non-visual data). false keeps the guideline's visual weights. The Qfactor
+  // still sets the reference step either way; the CSF model above is then unused.
+  bool flat_weights = false;
 };
 
 // --- color synthesis gain --------------------------------------------------
@@ -130,9 +135,10 @@ inline double color_gain(color_transform ct, int comp_index) {
 
 // Resolve the effective transform for color scaling. Legacy mode reproduces the
 // historical encoder, which assumed ICT regardless of the real MCT; analytic
-// modes honor the transform actually applied (identity when the MCT is off).
+// modes and flat weights honor the transform actually applied (identity when the
+// MCT is off, so flat weights treat every component as independent data).
 inline color_transform resolve_color_transform(const visual_weighting_params &vp, bool mct_on) {
-  if (vp.model == csf_model::legacy_table) return color_transform::ict;
+  if (vp.model == csf_model::legacy_table && !vp.flat_weights) return color_transform::ict;
   return mct_on ? color_transform::ict : color_transform::none;
 }
 
@@ -167,6 +173,13 @@ inline q_scaling q_to_delta(uint8_t qfactor, uint8_t RI) {
   // high-bit-depth file fed to estimate_qfactor cannot trigger signed-shift UB.
   const double eps0 = std::sqrt(0.5) * std::ldexp(1.0, -static_cast<int>(RI));
   return {alpha_Q * M_Q + eps0, qfactor_power};
+}
+
+// Exponent applied to every subband's visual weight: the guideline's, which fades
+// from 1 at Qfactor 65 to 0 at 97, or 0 at every Qfactor when the weights are flat.
+// Shared by QCD, QCC, and estimate_qfactor.
+inline double weight_exponent(const q_scaling &qs, const visual_weighting_params &vp) {
+  return vp.flat_weights ? 0.0 : qs.qfactor_power;
 }
 
 // --- CSF models (spatial frequency f in cycles/degree) ---------------------

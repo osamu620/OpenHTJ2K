@@ -9,6 +9,7 @@ extension that lets the weighting follow an arbitrary viewing condition (zoom)
 and colour space instead of a single hard-coded table.
 
 - Stable / default behaviour: [The Qfactor → step-size formula](#the-qfactor--step-size-formula) and [Legacy visual weighting](#legacy-visual-weighting-default).
+- No visual weights, for scientific or other non-visual data: [Flat weights](#flat-weights-qweightsflat).
 - Experimental: [Analytic visual weighting](#analytic-visual-weighting-experimental).
 - Tooling: [Recovering the Qfactor](#recovering-the-qfactor-estimate_qfactor).
 
@@ -33,6 +34,9 @@ open_htj2k_enc -i input.ppm -o out.j2c Qfactor=90 Qcsf=mannos
 # Tune for a closer / magnified viewing condition (zoom-in flattens the
 # weighting toward flat MSE-optimal quantization)
 open_htj2k_enc -i input.ppm -o out.j2c Qfactor=90 Qcsf=mannos Qzoom=2
+
+# No visual weights (scientific or other non-visual data)
+open_htj2k_enc -i input.pgm -o out.j2c Qfactor=50 Qweights=flat
 ```
 
 `Qfactor` requires lossy mode (`Creversible=no`, the default) and is designed
@@ -120,6 +124,44 @@ v1.0 weights (without the upsampling gain, and 1.0 for the LL band) up to
 0.25.0, so its chroma steps below `Q = 97` are now finer: by up to 2× for 4:2:0
 and √2× for 4:2:2. `qfactor_guideline_check` (built with the test suite) checks a
 codestream's steps against the guideline independently of this header.
+
+## Flat weights (`Qweights=flat`)
+
+The visual weights suit images that people look at, from about the viewing
+distance the tables assume. They also make the high-frequency subbands much
+coarser than the rest, which is wrong for scientific or other non-visual data,
+where every sample value matters. `Qweights=flat` turns them off and keeps the
+Qfactor as the quantization knob:
+
+- Every subband weight is 1 at every Qfactor (`p = 0`), so each step only
+  normalizes the subband's synthesis gain `G_b`: the steps are MSE-optimal, as
+  the guideline's are from `Q = 97` up.
+- The Qfactor sets the reference step `delta_Q` exactly as with visual weights.
+  The LL step is unchanged and the detail steps are finer, so a Qfactor gives
+  larger files and smaller errors than with visual weights.
+- With the MCT, the colour-transform gains stay, so the error is spread evenly
+  over the reconstructed R, G and B samples. Without the MCT (`Cycc=no`, or
+  sub-sampled input), every component is independent data with unit gain. The
+  default weighting instead assumes the YCbCr gains for components 1 and 2
+  whether or not the MCT is applied.
+- `Qcsf`, `Qppd`, `Qzoom`, `Qctype` and `Qchromacsf` have no effect.
+- At `Q ≥ 97`, gray and RGB (with the MCT) input give the same codestream as
+  the default.
+
+This is not part of the JPEG Qfactor guideline. On a 1920×1080 crop of an
+RGB frame of *Elephants Dream* (5 levels, 64×64 code-blocks, 9/7 + ICT):
+
+| Qfactor | 8-bit, visual | 8-bit, flat | 16-bit, visual | 16-bit, flat |
+|---:|---:|---:|---:|---:|
+| 30 | 0.144 bpp, 35.6 dB | 0.221 bpp, 38.2 dB | 0.151 bpp, 35.8 dB | 0.226 bpp, 38.5 dB |
+| 50 | 0.228 bpp, 37.2 dB | 0.352 bpp, 40.8 dB | 0.245 bpp, 37.6 dB | 0.373 bpp, 41.3 dB |
+| 75 | 0.376 bpp, 40.0 dB | 0.557 bpp, 43.8 dB | 0.432 bpp, 41.1 dB | 0.680 bpp, 46.0 dB |
+| 90 | 0.677 bpp, 44.9 dB | 0.865 bpp, 48.6 dB | 0.751 bpp, 46.0 dB | 0.945 bpp, 49.9 dB |
+
+At equal rate, flat weights give 0.5–1.2 dB more PSNR and 1–12% lower
+1 − SSIM. Both measure pixel fidelity, which flat weights maximize; neither
+measures how the image looks at a viewing distance, which the visual weights
+are for.
 
 ## Analytic visual weighting (experimental)
 
@@ -215,7 +257,7 @@ reconstructed RGB. The model in force is resolved per encode:
 | `none` (no MCT) | all `1.0` | every component is luma-role (independent RGB) |
 
 Legacy mode always assumes `ict` (reproducing historical behaviour); analytic
-modes honour the MCT actually applied, so an undecorrelated RGB encode gets unit
+modes and [flat weights](#flat-weights-qweightsflat) honour the MCT actually applied, so an undecorrelated RGB encode gets unit
 gains and the **luminance** CSF on every channel. The one exception is a
 `Qctype` hint: a no-MCT component labelled `Cb`/`Cr` (pre-decorrelated,
 typically sub-sampled YCbCr input) takes the chroma CSF while keeping unit
@@ -226,6 +268,9 @@ content is still chrominance.
 
 All of these are encoder options and require `Qfactor`:
 
+- `Qweights=visual|flat` — visual weights (default **visual**) or none
+  (`flat`: every subband weight 1, see [Flat weights](#flat-weights-qweightsflat)).
+  With `flat` the options below have no effect.
 - `Qcsf=legacy|mannos|daly` — visual-weighting model. Default **legacy**
   (the guideline tables). `mannos` / `daly` are experimental.
 - `Qppd=Float` — reference pixels-per-degree at zoom 1.0. Default **72**.
@@ -250,6 +295,8 @@ encoder.set_visual_weighting(/*model=*/1, /*ref_ppd=*/72.0, /*zoom=*/2.0);
 // and the chroma-CSF A/B switch — the Qctype= / Qchromacsf= equivalents.
 encoder.set_component_types(1, 2, 3);
 encoder.set_chroma_csf_reuse_luma(false);
+// Qweights=flat equivalent: 0 = visual weights (default), 1 = flat.
+encoder.set_qfactor_weights(1);
 encoder.invoke_line_based();
 ```
 
@@ -273,6 +320,9 @@ estimate_qfactor out.j2c --csf mannos --zoom 2
 
 # Sub-sampled YCbCr analytic encode — pass the same role hints too
 estimate_qfactor out420.j2c --csf mannos --ctype Y,Cb,Cr
+
+# Qweights=flat encode
+estimate_qfactor out.j2c --weights flat
 
 # Scriptable check mode (CI): assert the recovered Q and a residual ceiling
 estimate_qfactor out.j2c --csf mannos --expect-q 90 --max-residual 0.01

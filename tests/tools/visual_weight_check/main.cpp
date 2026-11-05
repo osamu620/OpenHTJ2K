@@ -252,8 +252,35 @@ void check_legacy_rows() {
          "tail weight: analytic 4:2:2 from chroma_format != sqrt(2)");
 }
 
+// Flat weights (Qweights=flat): the weight exponent is 0 at every Qfactor and bit depth,
+// the reference step is untouched, and the colour gain follows the MCT actually
+// applied, for every CSF model; visual weights keep the guideline's exponent.
+void check_flat_weights() {
+  for (int model = 0; model < 3; ++model) {
+    visual_weighting_params flat, visual;
+    flat.model = visual.model = static_cast<csf_model>(model);
+    flat.flat_weights         = true;
+    for (int q = 0; q <= 100; ++q) {
+      for (int RI = 1; RI <= 16; ++RI) {
+        const q_scaling qs = q_to_delta(static_cast<uint8_t>(q), static_cast<uint8_t>(RI));
+        expect(weight_exponent(qs, flat) == 0.0, "flat weights: exponent != 0");
+        expect(weight_exponent(qs, visual) == qs.qfactor_power,
+               "visual weights: exponent != the guideline's");
+      }
+    }
+    expect(resolve_color_transform(flat, true) == color_transform::ict,
+           "flat weights: MCT on is not the ICT");
+    expect(resolve_color_transform(flat, false) == color_transform::none,
+           "flat weights: MCT off is not independent components");
+  }
+  visual_weighting_params legacy;
+  expect(resolve_color_transform(legacy, false) == color_transform::ict,
+         "legacy visual weights: historical ICT gains without MCT changed");
+}
+
 int run_checks() {
   check_golden_pin();
+  check_flat_weights();
   check_isotropic_shift();
   check_422_anisotropy();
   check_default_role();

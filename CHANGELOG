@@ -1,5 +1,16 @@
 # [Unreleased]
 
+## Added
+- `Qweights=flat` (`openhtj2k_encoder::set_qfactor_weights(1)`) turns off the
+  visual weights of the `Qfactor` path, for scientific or other non-visual
+  data. Every subband weight is 1 at every Qfactor, so the steps are
+  MSE-optimal, as the guideline's are from `Qfactor=97` up; without the MCT
+  every component is independent data with unit colour gain. The Qfactor still
+  sets the reference step, so a Qfactor gives larger files and smaller errors:
+  on an 8-bit RGB image, 28-54% more bits and 2.6-3.8 dB more PSNR at
+  `Qfactor=30` to 90. The default, `Qweights=visual`, is unchanged.
+  `estimate_qfactor --weights flat` recovers the Qfactor of such files.
+
 ## Changed
 - `Qfactor` on sub-sampled (4:2:0 or 4:2:2) colour input follows version 2.0
   of the JPEG Qfactor guideline, "Controlling JPEG 2000 image quality using a

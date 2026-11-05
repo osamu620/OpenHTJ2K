@@ -101,6 +101,12 @@ void print_help(char *cmd) {
       "  Note: If this option is present, Qstep is ignored. Cycc defaults to `yes`;\n"
       "  disabling it on 3-component input only warns (Qfactor assumes YCbCr input).\n");
   printf(
+      "Qweights=visual|flat  (requires Qfactor)\n"
+      "  visual (default): the Qfactor guideline's visual weights, faded out from Qfactor\n"
+      "  65 to 97. flat: every subband weight 1 at every Qfactor (MSE-optimal steps, for\n"
+      "  scientific or other non-visual data); Qcsf/Qppd/Qzoom/Qctype/Qchromacsf are then\n"
+      "  unused. The Qfactor sets the reference step either way.\n");
+  printf(
       "Qcsf=legacy|mannos|daly  (EXPERIMENTAL, requires Qfactor)\n"
       "  Visual-weighting model. legacy (default) keeps the historical tables and is\n"
       "  bit-identical; mannos/daly derive per-subband weights from an analytic CSF.\n");
@@ -224,6 +230,7 @@ class j2k_argset {
   double csf_zoom;             // display magnification (> 1 = zoom-in)
   uint8_t csf_ctype[3];        // per-component role hints: 0 generic, 1 Y, 2 Cb, 3 Cr
   bool csf_chroma_reuse_luma;  // A/B: luminance CSF shape for Cb/Cr components
+  uint8_t qweights;            // Qfactor weights: 0 = visual (guideline), 1 = flat
 
   static void get_coordinate(const std::string &param_name, std::string &arg, element_siz_local &dims) {
     size_t pos0, pos1;
@@ -507,6 +514,7 @@ class j2k_argset {
         csf_zoom(1.0),
         csf_ctype{0, 0, 0},
         csf_chroma_reuse_luma(false),
+        qweights(0),
         ifnames{},
         num_iteration(1),
         num_threads(0),
@@ -780,6 +788,16 @@ class j2k_argset {
             printf("ERROR: unknown Qchromacsf value '%s' (use chroma|luma)\n", val.c_str());
             exit(EXIT_FAILURE);
           }
+        } else if (param == "weights") {
+          std::string val = arg.substr(arg.find_first_of('=') + 1);
+          if (val == "visual") {
+            qweights = 0;
+          } else if (val == "flat") {
+            qweights = 1;
+          } else {
+            printf("ERROR: unknown Qweights value '%s' (use visual|flat)\n", val.c_str());
+            exit(EXIT_FAILURE);
+          }
         } else {
           printf("ERROR: unknown parameter Q%s\n", param.c_str());
           exit(EXIT_FAILURE);
@@ -827,4 +845,5 @@ class j2k_argset {
   OPENHTJ2K_NODISCARD double get_csf_zoom() const { return csf_zoom; }
   OPENHTJ2K_NODISCARD uint8_t get_csf_ctype(size_t c) const { return (c < 3) ? csf_ctype[c] : 0; }
   OPENHTJ2K_NODISCARD bool get_csf_chroma_reuse_luma() const { return csf_chroma_reuse_luma; }
+  OPENHTJ2K_NODISCARD uint8_t get_qweights() const { return qweights; }
 };
