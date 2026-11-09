@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
   #include <tiffio.h>

@@ -16,6 +16,7 @@
 #include <fstream>
 #include <limits>
 #include <vector>
+#include <utility>
 
 #include "visual_weighting.hpp"  // shared encoder weighting (single source of truth)
 

@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 constexpr uint8_t sig_LUT[4][256] = {
     {
         0, 1, 1, 2, 1, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,

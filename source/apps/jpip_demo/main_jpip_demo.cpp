@@ -47,6 +47,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <exception>
 
 #include <GLFW/glfw3.h>
 

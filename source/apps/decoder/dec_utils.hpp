@@ -30,6 +30,10 @@
 #include <cstring>
 #include <memory>
 #include <vector>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
 #if defined(OPENHTJ2K_ENABLE_ARM_NEON)
   #include <arm_neon.h>
   #if defined(_MSC_VER)

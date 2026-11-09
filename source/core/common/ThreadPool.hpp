@@ -42,6 +42,9 @@
   #include <thread>
   #include <type_traits>
   #include <unordered_map>
+  #include <algorithm>
+  #include <condition_variable>
+  #include <stdexcept>
   #if defined(_WIN32)
     #include <malloc.h>
   #endif

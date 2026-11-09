@@ -4,6 +4,7 @@
 #include "channel_manager.hpp"
 
 #include <cstdio>
+#include <cstddef>
 
 namespace open_htj2k {
 namespace jpip {

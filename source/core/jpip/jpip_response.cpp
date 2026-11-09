@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 namespace open_htj2k {
 namespace jpip {

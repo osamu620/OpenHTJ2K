@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 // table entries consist of emb_k(4bit), l_w(3bit), cwd(7bit), from LSB to MSB
 static constexpr uint16_t enc_CxtVLC_table0[2048] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,

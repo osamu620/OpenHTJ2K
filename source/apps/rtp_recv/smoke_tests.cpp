@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <cstdlib>
 
 #include "cli.hpp"
 #include "color_pipeline.hpp"

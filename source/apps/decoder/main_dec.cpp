@@ -40,6 +40,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <cstdlib>
+#include <exception>
 #if !defined(_WIN32)
   #include <climits>  // OPEN_MAX (macOS)
   #include <sys/resource.h>

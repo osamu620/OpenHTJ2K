@@ -4,6 +4,7 @@
 #include "packet_locator.hpp"
 
 #include <tuple>
+#include <exception>
 
 // Relative include: the public decoder API lives in source/core/interface,
 // which is not on the library's PRIVATE include path by design (core code

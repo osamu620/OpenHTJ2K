@@ -29,6 +29,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <cstddef>
 
 #include "cache_model.hpp"
 

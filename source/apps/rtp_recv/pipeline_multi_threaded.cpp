@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <thread>
 #include <vector>
+#include <exception>
 #if defined(__APPLE__)
 #  include <pthread.h>
 #endif
