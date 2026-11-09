@@ -9,6 +9,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+#include <exception>
 
 #include "cli.hpp"
 #include "color_pipeline.hpp"

@@ -32,6 +32,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cassert>
+#include <exception>
+#include <stdexcept>
 #ifdef OPENHTJ2K_THREAD
   #include <thread>
 #endif

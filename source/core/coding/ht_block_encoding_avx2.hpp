@@ -28,6 +28,7 @@
 
 #pragma once
 #include <cstdint>
+#include <algorithm>
 #include "open_htj2k_typedef.hpp"
 #include "utils.hpp"
 

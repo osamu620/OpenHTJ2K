@@ -30,6 +30,8 @@
 #include <cstring>
 #include <cstdio>
 #include <functional>
+#include <exception>
+#include <stdexcept>
 #include "decoder.hpp"
 #include "jph.hpp"
 // GCC 7.x claims C++17 (__cplusplus >= 201703L) but ships <filesystem>

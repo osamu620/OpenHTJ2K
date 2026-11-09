@@ -6,6 +6,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
+#include <utility>
 
 #ifndef _WIN32
   #include <arpa/inet.h>

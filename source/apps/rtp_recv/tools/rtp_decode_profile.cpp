@@ -40,6 +40,8 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <exception>
+#include <utility>
 
 #include "decoder.hpp"
 #include "planar_output_desc.hpp"

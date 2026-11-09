@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <cstdlib>
 
 #include <msquic.h>
 #include <nghttp3/nghttp3.h>

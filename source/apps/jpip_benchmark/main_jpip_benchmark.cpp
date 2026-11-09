@@ -27,6 +27,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <algorithm>
 
 #include "codestream_assembler.hpp"
 #include "codestream_walker.hpp"

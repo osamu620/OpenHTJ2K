@@ -28,6 +28,7 @@
 
 #include "codestream.hpp"
 #include "message_internal.hpp"
+#include <exception>
 
 namespace open_htj2k {
 
