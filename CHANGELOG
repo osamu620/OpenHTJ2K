@@ -1,4 +1,13 @@
-# [Unreleased]
+# [0.27.0] - 2026-11-10
+
+Decodes a codestream cut short, such as a partial file or download, from the
+data it holds, wherever the cut falls after the main header, and tells the
+caller: `openhtj2k_decoder::is_truncated()`. Most cuts used to fail the whole
+decode. Image libraries can now decode a partial image and tell it from a
+whole one.
+
+Encoded output is byte-identical to 0.26.0, and so is decoded output of
+complete codestreams.
 
 ## Added
 - `openhtj2k_decoder::is_truncated()`: after a decode, whether the codestream
