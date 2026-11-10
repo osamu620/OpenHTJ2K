@@ -48,6 +48,17 @@ bit depth. Samples of up to 16 bits can be written.
     YCbCr (`EnumCS = 18`), BT.601 conversion is applied automatically;
     use `-ycbcr bt709` to override.
 
+## Truncated input
+
+A codestream cut short (a partial file or download) decodes from the data it
+holds: the decoder prints `WARNING: codestream ends before its EOC marker —
+decoding the partial data.` and exits 0. The image lacks what the missing data
+carried: in a lossy or multi-layer codestream, detail and quality; where
+nothing of a code-block or a tile arrived, that area is flat. A codestream that
+ends inside its main header, before the first tile-part, cannot be decoded.
+Library callers can tell a partial image from a whole one with
+`openhtj2k_decoder::is_truncated()` after the decode.
+
 ## Examples
 
 ```bash

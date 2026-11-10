@@ -302,6 +302,13 @@ class j2k_codeblock : public j2k_region {
   // create_compressed_buffer() or skip_compressed_buffer() takes them.  The decoder keeps
   // no per-layer state: a layer's passes start at num_passes minus these.
   uint8_t dec_layer_passes = 0;
+  // Decoder: the passes whose data the codestream holds, when a packet's data for this
+  // code-block was cut short (create_compressed_buffer() returned true); otherwise
+  // ALL_PASSES_HAVE_DATA.  The passes after them are dropped once the tile's packets are
+  // read (drop_passes_without_data()); until then num_passes keeps counting them, as the
+  // packet headers that follow are read with it.
+  static constexpr uint8_t ALL_PASSES_HAVE_DATA = 0xFF;  // above any pass count (at most 164)
+  uint8_t dec_passes_with_data                  = ALL_PASSES_HAVE_DATA;
   // Encoder: the passes of each quality layer and the pass each starts at.  Non-owning:
   // pooled by the owning j2k_precinct_subband.  nullptr in the decoder.
   uint8_t *layer_start;
@@ -376,7 +383,13 @@ class j2k_codeblock : public j2k_region {
   // `length` bytes, into the space set_compressed_data() reserved for it, and
   // returns the unused part of that reservation to the code-block data pool.
   void append_refinement_segment(const uint8_t *buf, uint32_t Lref, uint32_t reserved);
-  void create_compressed_buffer(buf_chain *tile_buf, const uint16_t &layer);
+  // Attaches the data of the passes the packet just read added.  Returns true when that
+  // data runs past the bytes left (a truncated codestream, or a malformed length): the
+  // code-block then keeps only the passes before them, those of the earlier packets, and
+  // the caller has drop_passes_without_data() called once the tile's packets are read.
+  bool create_compressed_buffer(buf_chain *tile_buf, const uint16_t &layer);
+  // Lowers num_passes to the passes whose data create_compressed_buffer() attached.
+  void drop_passes_without_data();
   // JPIP precinct-mask path: consume the packet body bytes belonging to this
   // layer from tile_buf (keeping the byte stream in sync with the next
   // packet) without attaching them to the codeblock.  Leaves compressed_data
@@ -646,6 +659,8 @@ class j2k_tile_part {
   uint8_t *body;
   // length of tile-part
   uint32_t length;
+  // The codestream ends inside this tile-part's body (read()).
+  bool cut_short = false;
 
  public:
   // pointer to tile-part header
@@ -659,6 +674,10 @@ class j2k_tile_part {
   OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint16_t get_tile_index() const;
   OPENHTJ2K_MAYBE_UNUSED OPENHTJ2K_NODISCARD uint8_t get_tile_part_index() const;
   OPENHTJ2K_NODISCARD uint32_t get_length() const;
+  // True when the codestream ends before this tile-part's body does (Psot reaches past
+  // the end of the data, or Psot is 0 and no EOC marker follows): the body holds the
+  // bytes there are.
+  OPENHTJ2K_NODISCARD bool is_cut_short() const { return cut_short; }
   uint8_t *get_buf();
   void set_tile_index(uint16_t t);
   void set_tile_part_index(uint8_t tp);
@@ -941,6 +960,15 @@ class j2k_tile : public j2k_tile_base {
   std::vector<CRP> cached_crp_;
   bool crp_cached_ = false;
 
+  // Decoder: the codestream lacks data of this tile (is_data_missing()), and the
+  // code-blocks whose data a packet cut short, trimmed once the packets are read.
+  bool data_missing_ = false;
+  std::vector<j2k_codeblock *> cut_blocks_;
+  // In a tile the codestream lacks data of, an HT code-block can hold placeholder passes
+  // alone, without data (its HT cleanup pass was to come in a packet that is missing): it
+  // has nothing to decode, and its pass count is set to 0 once the packets are read.
+  void drop_ht_placeholder_blocks();
+
   // JPIP precinct filter: when set, read_packet() still parses the packet
   // header (so tagtrees and the header bit stream stay in sync), but drops
   // the packet body bytes for precincts the filter rejects.  The callback
@@ -1055,6 +1083,10 @@ class j2k_tile : public j2k_tile_base {
   void add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_header &main_header);
   // create buffer to store compressed data for decoding
   void create_tile_buf(j2k_main_header &main_header);
+  // After create_tile_buf(): the codestream lacks data of this tile.  It has no tile-part,
+  // ends inside one, or a packet header or a code-block's data runs past the bytes there
+  // are; the tile decodes from the data it has.
+  OPENHTJ2K_NODISCARD bool is_data_missing() const { return data_missing_; }
   // Single-tile reuse: clear every piece of mutable per-frame state while
   // keeping the tile/component/resolution/precinct/codeblock allocations
   // (and their sub-allocations — ring buffers, compressed buffers, tagtrees,

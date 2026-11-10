@@ -575,11 +575,13 @@ endforeach()
 # Undefined behaviour without a release-build symptom: a quantization step whose integer
 # scale for the ROI dequantization exceeds int32 (the conversion now saturates; the file
 # decodes), and an MQ code register that a corrupt codeword shifted past 2^31 while it was
-# a signed int32 (the decoder then rejects a later segment as too long).
+# a signed int32.  The codestream ends inside a later code-block segment, whose data is
+# dropped, so the file decodes with the truncation warning; the corrupt codeword before it
+# is still decoded.
 foreach(_t 1 4)
   _sec_decode_test(security_dequant_scale_range_t${_t} security_dequant_scale_range.jph ${_t} "")
   _sec_decode_test(security_mq_code_register_t${_t} security_mq_code_register.jph ${_t}
-                   "MQ segment length exceeds|decode task failed")
+                   "ends before its EOC marker")
 endforeach()
 
 # The CLI exited 0 after a decode error, so scripts could not tell a failed decode from

@@ -1749,14 +1749,14 @@ static size_t owned_compressed_capacity(uint32_t len) {
   return cap;
 }
 
-void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf,
+bool j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf,
                                              OPENHTJ2K_MAYBE_UNUSED const uint16_t &layer) {
   // The passes the packet just parsed added (taken, so that a later packet whose header
   // does not reach this code-block finds none).
   const uint8_t new_passes = this->dec_layer_passes;
   this->dec_layer_passes   = 0;
   if (new_passes == 0) {
-    return;
+    return false;
   }
 
   // Compute total bytes contributed by this layer's passes.
@@ -1767,41 +1767,50 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf,
     layer_length += this->pass_length[static_cast<size_t>(i)];
   }
 
-  // Clamp layer_length to the bytes remaining in the CURRENT tile-part node.
+  // The data of an earlier packet was cut short: these passes follow passes without data
+  // and cannot be decoded.  Step over their bytes (within the current tile-part node, as
+  // below) so that the next packet is read where it starts.
+  if (this->dec_passes_with_data != ALL_PASSES_HAVE_DATA) {
+    const uint32_t step = std::min(layer_length, tile_buf->get_current_node_remaining_bytes());
+    if (step != 0) (void)tile_buf->borrow_N_bytes(step);
+    return false;
+  }
+
+  // Bound layer_length by the bytes remaining in the CURRENT tile-part node.
   // The packet-header-decoded pass_length[] is attacker-controllable on
   // malformed inputs, and borrow_N_bytes / copy_N_bytes return a contiguous
   // span from the current buf_chain node only (one node == one tile-part):
-  //   - Single tile-part: the node spans the whole tile body, so an unclamped
+  //   - Single tile-part: the node spans the whole tile body, so an unbounded
   //     length reads past the codestream buffer (UB on Linux release where the
   //     borrow/copy asserts are compiled out, or a CRT abort on Windows MSVC).
-  //   - Multiple tile-parts: the node is one tile-part's body, so an unclamped
+  //   - Multiple tile-parts: the node is one tile-part's body, so an unbounded
   //     length reads the following SOT/SOD + next tile-part bytes (in-bounds of
   //     the codestream buffer but wrong) and lets the HT modDcup write 0xFF
   //     across the node boundary.
   // Bounding by the current node's remainder — not the cross-node total —
-  // covers both.  On a conformant stream a code-block's body lies wholly within
-  // one tile-part, so this clamp never fires.
+  // covers both.  On a conformant stream that is not truncated, a code-block's
+  // body lies wholly within one tile-part, so this never fires.
+  //
+  // The passes whose data is cut short are not decoded: an HT cleanup segment cannot be
+  // decoded from part of its bytes, and a Part 1 segment does not say how many of its
+  // passes the bytes there are hold.  The code-block keeps the passes of the earlier
+  // packets (none, if this is its first), as if this packet had not included it.  The
+  // pass count is lowered once the tile's packets are read (drop_passes_without_data()),
+  // because the packet headers still to be read count this packet's passes.
   {
     const uint32_t avail = tile_buf->get_current_node_remaining_bytes();
     if (layer_length > avail) {
-      open_htj2k::detail::warn(
-          "codeblock layer length %u exceeds %u byte(s) left in tile-part — malformed input.",
-          (unsigned)layer_length, (unsigned)avail);
-      layer_length = avail;
-      if (layer_length == 0) {
-        // Not one byte of this layer is present (a codestream truncated inside
-        // the tile body).  Roll the layer back to "no contribution" rather than
-        // keep passes with no data: the block decoders reject a code-block whose
-        // passes are all empty, which would fail the whole tile instead of
-        // dropping this one block.  l0 is the pass count before this layer, so it
-        // is the state to restore.
-        const uint8_t passes_before = static_cast<uint8_t>(l0);
-        for (uint8_t i = passes_before; i < this->pass_length_count; ++i) {
-          this->pass_length[i] = 0;
-        }
-        this->num_passes = passes_before;
-        return;
+      // A codestream cut short is reported once by the decoder; a length that runs over
+      // a tile-part boundary is malformed.
+      if (!tile_buf->data_ends_in_current_node()) {
+        open_htj2k::detail::warn(
+            "codeblock layer length %u exceeds %u byte(s) left in tile-part — malformed input; the "
+            "code-block's data in this packet is dropped.",
+            (unsigned)layer_length, (unsigned)avail);
       }
+      if (avail != 0) (void)tile_buf->borrow_N_bytes(avail);
+      this->dec_passes_with_data = static_cast<uint8_t>(l0);
+      return true;
     }
   }
 
@@ -1823,12 +1832,12 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf,
       this->length               = layer_length;
       this->compressed_is_pooled = true;
     }
-    return;
+    return false;
   }
 
   // Second or later layer: nothing to append if this layer is empty.
   if (layer_length == 0) {
-    return;
+    return false;
   }
 
   // If compressed_data is a borrowed (zero-copy) pointer we must convert it
@@ -1860,6 +1869,17 @@ void j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf,
   // we assume that the size of the compressed data is less than or equal to that of buf_chain node.
   tile_buf->copy_N_bytes(this->current_address, layer_length);
   this->length += layer_length;
+  return false;
+}
+
+void j2k_codeblock::drop_passes_without_data() {
+  const uint8_t keep         = this->dec_passes_with_data;
+  this->dec_passes_with_data = ALL_PASSES_HAVE_DATA;
+  if (keep >= this->num_passes) return;
+  for (uint8_t i = keep; i < this->pass_length_count; ++i) {
+    this->pass_length[i] = 0;
+  }
+  this->num_passes = keep;
 }
 
 void j2k_codeblock::skip_compressed_buffer(buf_chain *tile_buf,
@@ -1920,7 +1940,8 @@ void j2k_codeblock::reset_for_next_frame() {
   // restore the COD-declared base codeblock style.
   Cmodes &= static_cast<uint16_t>(~HT_PHLD);
   if (Cmodes & HT_MIXED) Cmodes |= HT;
-  dec_layer_passes = 0;
+  dec_layer_passes     = 0;
+  dec_passes_with_data = ALL_PASSES_HAVE_DATA;
 }
 
 /********************************************************************************
@@ -2071,6 +2092,10 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
     // Saved so a header that ends part-way through this code-block's signalling
     // can put it back the way it was.
     const bool was_already_included = block->already_included;
+    const uint8_t passes_before     = block->num_passes;
+    const uint16_t Cmodes_before    = block->Cmodes;
+    const uint8_t Lblock_before     = block->Lblock;
+    const uint8_t fast_skip_before  = block->fast_skip_passes;
     // The passes this packet adds; block->num_passes counts those of the earlier layers.
     block->dec_layer_passes = 0;
 
@@ -2555,6 +2580,23 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
       }
     }
     // else: this layer has no contribution from this codeblock (dec_layer_passes is 0)
+
+    // The codestream ended inside this code-block's signalling after its pass count: its
+    // segment lengths came (in part) out of the padding, and its data is not there either.
+    // Put the code-block back as it was before this packet, as above, and stop.
+    if (packet_header->is_past_end()) {
+      warn_truncated_packet_header();
+      for (uint8_t i = passes_before; i < block->pass_length_count; ++i) {
+        block->pass_length[i] = 0;
+      }
+      block->num_passes       = passes_before;
+      block->dec_layer_passes = 0;
+      block->Cmodes           = Cmodes_before;
+      block->Lblock           = Lblock_before;
+      block->fast_skip_passes = fast_skip_before;
+      block->already_included = was_already_included;
+      return;
+    }
   }
 }
 
@@ -3194,30 +3236,32 @@ void j2k_tile_part::set_SOT(SOT_marker &tmpSOT) {
 int j2k_tile_part::read(j2c_src_memory &in) {
   uint32_t length_of_tilepart_markers = this->header->read(in);
   const uint32_t Psot                 = this->header->SOT.get_tile_part_length();
+  const uint32_t remaining            = in.get_remaining();
   if (Psot == 0) {
     // Psot=0: tile-part extends to EOC. Scan backward to find the last
     // 0xFF 0xD9 marker; some encoders append padding bytes after EOC, so
     // don't assume it is the final 2 bytes. The scan steps by 1 byte
     // because EOC can land at any byte offset within the tile-part body
     // (e.g., when the body length is odd) — stepping by 2 misses every
-    // EOC at an odd offset.
-    const uint32_t remaining = in.get_remaining();
-    const uint8_t *p         = in.get_buf_pos();
-    uint32_t eoc_offset      = (remaining >= 2) ? remaining - 2 : 0;
+    // EOC at an odd offset.  Without an EOC the codestream is cut short, and
+    // the body is all the bytes there are.
+    const uint8_t *p    = in.get_buf_pos();
+    uint32_t eoc_offset = remaining;
     for (uint32_t i = remaining; i >= 2; --i) {
       if (p[i - 2] == 0xFF && p[i - 1] == 0xD9) {
         eoc_offset = i - 2;
         break;
       }
     }
-    this->length = eoc_offset;
+    this->length    = eoc_offset;
+    this->cut_short = (eoc_offset == remaining);
   } else {
     this->length += Psot - length_of_tilepart_markers;
     // Clamp to available data: handles truncated codestreams where the encoder
     // pre-declared a Psot larger than the bytes actually written to file.
-    const uint32_t remaining = in.get_remaining();
     if (this->length > remaining) {
-      this->length = remaining;
+      this->length    = remaining;
+      this->cut_short = true;
     }
   }
   this->body = in.get_buf_pos();
@@ -4667,6 +4711,7 @@ void j2k_tile::add_tile_part(SOT_marker &tmpSOT, j2c_src_memory &in, j2k_main_he
   this->tile_part[static_cast<size_t>(current_tile_part_pos)]->codestream_index =
       main_header.num_tile_parts_read++;
   this->tile_part[static_cast<size_t>(current_tile_part_pos)]->read(in);
+  if (this->tile_part[static_cast<size_t>(current_tile_part_pos)]->is_cut_short()) data_missing_ = true;
   j2k_tilepart_header *tphdr = this->tile_part[static_cast<size_t>(current_tile_part_pos)]->header.get();
 
   uint8_t tile_part_index = tmpSOT.get_tile_part_index();
@@ -4846,6 +4891,7 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     // tile decodes as one without coded data, set up from the main header alone.
     open_htj2k::detail::warn("codestream has no data for tile %u — decoding it as empty.",
                              static_cast<unsigned>(this->index));
+    data_missing_ = true;
     j2k_tilepart_header main_only(num_components);
     init_from_first_tile_part(main_header, &main_only);
   } else if (this->tcomp == nullptr) {
@@ -4906,6 +4952,8 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
       t++;
     }
   }
+  // Only the last tile-part of the codestream can be cut short, and so only the tile's last.
+  this->tile_buf->set_cut_short(num_tile_part > 0 && this->tile_part[num_tile_part - 1]->is_cut_short());
   this->tile_buf->activate();
   // Packet headers moved out of the tile-part bodies (ISO/IEC 15444-1, A.7.4 and A.7.5) are
   // gathered into ppt_header, in the order of the tile-parts: from the PPM record of each
@@ -5417,6 +5465,10 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     }
     crp_cached_ = true;
   }
+  // Code-blocks whose data a packet cut short keep the passes before it.
+  for (j2k_codeblock *block : cut_blocks_) block->drop_passes_without_data();
+  cut_blocks_.clear();
+  if (data_missing_) drop_ht_placeholder_blocks();
   // The line decoder allocates its buffers for all the tile's components at once, and
   // frees them when the tile is decoded: they too stay under the budget (the codestream's,
   // for this tile alone).
@@ -5466,6 +5518,8 @@ void j2k_tile::prepare_for_next_frame() {
   tile_buf.reset();
   ppt_header.reset();
   packet_header = nullptr;
+  data_missing_ = false;
+  cut_blocks_.clear();
   // POC accumulator: cleared inside create_tile_buf via the same branch,
   // but do it here as well for robustness if a caller skips create_tile_buf.
   porder_info.nPOC = 0;
@@ -5497,6 +5551,29 @@ void j2k_tile::prepare_for_next_frame() {
     // Keep line_dec alive and let init_line_decode on the next frame see
     // the persistence flag so it short-circuits to a cursor reset.
     tcomp[c].set_line_decode_persistent(true);
+  }
+}
+
+void j2k_tile::drop_ht_placeholder_blocks() {
+  for (uint16_t c = 0; c < num_components; ++c) {
+    for (uint8_t r = 0; r <= tcomp[c].NL; ++r) {
+      j2k_resolution *cr = tcomp[c].access_resolution(r);
+      if (cr == nullptr) continue;
+      const uint32_t np = cr->npw * cr->nph;
+      for (uint32_t p = 0; p < np; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        if (cp == nullptr) continue;
+        for (uint8_t b = 0; b < cp->get_num_bands(); ++b) {
+          j2k_precinct_subband *cpb = cp->access_pband(b);
+          if (cpb == nullptr || !cpb->is_built()) continue;
+          const uint32_t num_cblks = cpb->num_codeblock_x * cpb->num_codeblock_y;
+          for (uint32_t i = 0; i < num_cblks; ++i) {
+            j2k_codeblock *block = cpb->access_codeblock(i);
+            if ((block->Cmodes & HT) && block->length == 0 && block->num_passes != 0) block->num_passes = 0;
+          }
+        }
+      }
+    }
   }
 }
 
@@ -6216,18 +6293,24 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, j2k_resolution *cr, ui
   if (use_SOP && !this->tile_buf->is_past_end() && this->tile_buf->peek_word() == _SOP) {
     this->tile_buf->get_word();
     Lsop = this->tile_buf->get_word();
-    if (Lsop != 4) {
+    Nsop = this->tile_buf->get_word();
+    if (this->tile_buf->is_past_end()) {
+      data_missing_ = true;  // the codestream ends inside the SOP marker segment
+    } else if (Lsop != 4) {
       open_htj2k::detail::fail("illegal Lsop value %d is found", Lsop);
     }
-    Nsop = this->tile_buf->get_word();
   }
 
   uint8_t bit = this->packet_header->get_bit();
   if (bit == 0) {                       // if 0, empty packet
+    // or no packet at all: the codestream ended before it.
+    if (this->packet_header->is_past_end()) data_missing_ = true;
     this->packet_header->flush_bits();  // flushing remaining bits of packet header
     if (use_EPH && !this->packet_header->is_past_end()) {
       uint16_t word = this->packet_header->get_word();
-      if (word != _EPH) {
+      if (this->packet_header->is_past_end()) {
+        data_missing_ = true;  // the codestream ends inside the EPH marker
+      } else if (word != _EPH) {
         open_htj2k::detail::fail("Expected EPH marker but %04X is found", word);
       }
     }
@@ -6252,10 +6335,13 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, j2k_resolution *cr, ui
   // check EPH
   if (use_EPH && !this->packet_header->is_past_end()) {
     uint16_t word = this->packet_header->get_word();
-    if (word != _EPH) {
+    if (!this->packet_header->is_past_end() && word != _EPH) {
       open_htj2k::detail::fail("Expected EPH marker but %04X is found", word);
     }
   }
+  // The header ran past the end of the data (the codestream ends inside it, or inside the
+  // EPH marker after it).
+  if (this->packet_header->is_past_end()) data_missing_ = true;
 
   // With the packet headers in PPM or PPT markers, the body is the first thing this packet
   // reads from the tile-part bodies: one that begins the next tile-part starts in the next
@@ -6271,8 +6357,9 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, j2k_resolution *cr, ui
         block = cpb->access_codeblock(block_index);
         if (skip_body) {
           block->skip_compressed_buffer(this->tile_buf.get(), layer);
-        } else {
-          block->create_compressed_buffer(this->tile_buf.get(), layer);
+        } else if (block->create_compressed_buffer(this->tile_buf.get(), layer)) {
+          data_missing_ = true;
+          cut_blocks_.push_back(block);
         }
       }
     }

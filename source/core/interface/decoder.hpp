@@ -88,6 +88,15 @@ class openhtj2k_decoder {
   // Returns the MCT byte from the COD marker (0 = no transform, 1 = ICT/RCT).
   // Valid after parse().
   OPENHTJ2K_EXPORT uint8_t get_mct();
+  // After an invoke*() call: whether the codestream lacked data of the image, so that the
+  // image decoded holds only the data there was.  True when the codestream ends before its
+  // EOC marker (a truncated file or download), or when a tile has no data or a packet or a
+  // code-block's data runs past the bytes there are.  The decode does not fail for that:
+  // the data missing decodes as if it had not been coded (in a lossy image, the detail it
+  // carries is gone; where nothing of a tile arrived, the tile is flat), and a warning
+  // reports it.  A codestream that ends before the marker code of its first SOT marker
+  // segment, where its main header ends, still fails in parse().
+  OPENHTJ2K_EXPORT bool is_truncated();
   // Line-based decode: uses stateful row-pull instead of full-tile IDWT.
   // Peak memory proportional to DWT ring depth rather than image size.
   OPENHTJ2K_EXPORT void invoke_line_based(std::vector<int32_t *> &, std::vector<uint32_t> &,
