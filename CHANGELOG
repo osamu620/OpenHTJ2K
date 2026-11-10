@@ -1,4 +1,43 @@
-# [0.26.0] - 2026-11-10
+# [Unreleased]
+
+## Added
+- `openhtj2k_decoder::is_truncated()`: after a decode, whether the codestream
+  lacked data of the image, which then holds only the data there was. It is
+  true when the codestream ends before its EOC marker (a truncated file or
+  download), when a tile has no data, or when a packet or a code-block's data
+  runs past the bytes there are. Image libraries can use it to tell a partial
+  image from a whole one.
+
+## Fixed
+
+### Decoder
+- A codestream cut short now decodes from the data it holds, wherever the cut
+  falls after the marker code of its first SOT marker segment, and one warning
+  reports it ("codestream ends before its EOC marker"). Most cuts used to fail
+  the whole decode:
+  - The code-block whose data the cut packet held only in part was decoded
+    from that part, which the HT block decoder refuses ("HT code-block
+    decoding reported failure") and the Part 1 one too ("MQ segment length
+    exceeds codeblock bytes"). Its passes in that packet are now dropped; it
+    keeps those of the earlier quality layers. A packet header cut inside a
+    code-block's segment lengths drops that code-block's passes too, instead
+    of reading the rest of the lengths from the padding.
+  - In a codestream with several quality layers, an HT code-block whose
+    cleanup pass was in a missing packet was left with placeholder passes
+    alone and refused; it now decodes to zeros, as a code-block without
+    passes does.
+  - A cut inside a later tile-part's SOT marker segment or header, an SOP
+    marker segment or an EPH marker was refused as a malformed marker.
+
+  Each of the 73 codestreams in `conformance_data`, cut at 300 lengths (30 for
+  those over 2 MB), decodes at every cut through every entry point. Complete
+  codestreams decode exactly as before. A tile-part with `Psot = 0` in a
+  codestream without EOC also lost its last two bytes.
+- A code-block length that runs over a tile-part boundary (a malformed
+  codestream) drops that code-block's data in the packet and decodes the
+  rest, with the "malformed input" warning as before; its bytes used to be
+  decoded in part, which failed the decode.
+
 
 Adds a switch that turns off the `Qfactor`'s visual weights, for scientific
 and other non-visual data, where the weights' perceptual model does not

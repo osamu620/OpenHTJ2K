@@ -91,6 +91,8 @@ class openhtj2k_decoder_impl {
   bool skip_mct_      = false;
   bool is_codestream_set;
   bool is_parsed;
+  // The last invoke*() found data of the image missing (is_truncated()).
+  bool truncated_ = false;
   j2k_main_header main_header;
   stream_row_map stream_map_;   // output rows of the streaming entry points (parse())
   uint32_t enum_cs;             // EnumCS from JPH colr box; 0 for raw codestreams
@@ -167,6 +169,19 @@ class openhtj2k_decoder_impl {
     col_hi_ = col_hi;
   }
   void set_skip_mct(bool skip) { skip_mct_ = skip; }
+  bool is_truncated() const { return truncated_; }
+  // Called at the start of every decode: the flag describes the last one.
+  void reset_truncated() { truncated_ = false; }
+  // Reads the tile-parts up to the EOC marker, handing each SOT marker segment to
+  // add_tile_part, which reads the rest of the tile-part into its tile.  A codestream
+  // that ends first is truncated: the tile-part it ends in keeps the bytes there are, or
+  // is left out when the codestream ends inside its header, and the decode goes on with
+  // the data read (reported once per decode, is_truncated()).
+  void read_tile_parts(const std::function<void(SOT_marker &)> &add_tile_part);
+  // After a tile's packets are read (create_tile_buf()): notes a tile that lacks data.
+  void note_tile_data(const j2k_tile &tile) {
+    if (tile.is_data_missing()) truncated_ = true;
+  }
   void set_precinct_filter(std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> f);
   void set_packet_observer(
       std::function<void(uint16_t, uint16_t, uint8_t, uint32_t, uint16_t, uint64_t, uint64_t)> f);
@@ -376,6 +391,53 @@ void openhtj2k_decoder_impl::parse() {
     stream_map_.init(Osiz.y, siz.y, yr, reduce_NL);
   }
   is_parsed = true;
+  truncated_ = false;
+}
+
+// For the tile-part whose SOT marker code was just read: whether the codestream holds its
+// header, the SOT marker segment and the marker segments up to SOD.  Only a tile-part that
+// reaches past the end of the codestream (by its Psot, or with Psot 0) can lack it; a
+// header that the bytes there are hold is read as it is, and refused there when malformed.
+static bool tile_part_header_present(j2c_src_memory &in) {
+  const uint32_t remaining = in.get_remaining();
+  const uint8_t *p         = in.get_buf_pos();
+  if (remaining < 10) return false;  // Lsot, Isot, Psot, TPsot and TNsot
+  const uint32_t Psot = (static_cast<uint32_t>(p[4]) << 24) | (static_cast<uint32_t>(p[5]) << 16)
+                        | (static_cast<uint32_t>(p[6]) << 8) | p[7];
+  // Psot counts from the SOT marker code, the 2 bytes before p.
+  if (Psot >= 2 && Psot - 2 <= remaining) return true;
+  uint32_t i = 10;
+  for (;;) {
+    if (remaining - i < 2) return false;
+    const uint32_t marker = (static_cast<uint32_t>(p[i]) << 8) | p[i + 1];
+    if (marker == _SOD) return true;
+    if (marker >= 0xFF30 && marker <= 0xFF3F) {  // a marker without a segment (A.1.4)
+      i += 2;
+      continue;
+    }
+    if (remaining - i < 4) return false;
+    const uint32_t Lmar = (static_cast<uint32_t>(p[i + 2]) << 8) | p[i + 3];
+    if (Lmar < 2) return true;  // malformed: refused by the header reader
+    if (Lmar > remaining - i - 2) return false;
+    i += 2 + Lmar;
+  }
+}
+
+void openhtj2k_decoder_impl::read_tile_parts(const std::function<void(SOT_marker &)> &add_tile_part) {
+  while (in.get_remaining() >= 2) {
+    const uint16_t word = in.get_word();
+    if (word == _EOC) return;
+    if (word != _SOT) {
+      open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
+    }
+    if (!tile_part_header_present(in)) break;
+    SOT_marker sot(in);
+    add_tile_part(sot);
+  }
+  if (!truncated_) {
+    open_htj2k::detail::warn("codestream ends before its EOC marker — decoding the partial data.");
+  }
+  truncated_ = true;
 }
 
 uint32_t openhtj2k_decoder_impl::get_stream_row_count() const {
@@ -492,6 +554,7 @@ uint32_t openhtj2k_decoder::get_stream_component_row(uint16_t c, uint32_t y) {
 }
 uint32_t openhtj2k_decoder::get_colorspace() { return this->impl->get_colorspace(); }
 uint8_t openhtj2k_decoder::get_mct() { return this->impl->get_mct(); }
+bool openhtj2k_decoder::is_truncated() { return this->impl->is_truncated(); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
@@ -559,22 +622,14 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     tileSet[i].dec_init(i, main_header, reduce_NL);
   }
 
-  uint16_t word;
-  SOT_marker tmpSOT;
-  uint16_t tile_index;
-  // Read all tile parts; treat EOF as EOC for truncated codestreams.
-  while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
-    if (word != _SOT) {
-      open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
-    }
-    tmpSOT     = SOT_marker(in);
-    tile_index = tmpSOT.get_tile_index();
+  read_tile_parts([&](SOT_marker &sot) {
+    const uint16_t tile_index = sot.get_tile_index();
     if (tile_index >= tileSet.size()) {
       open_htj2k::detail::fail("SOT tile index %u is out of range (numTiles=%zu)", tile_index,
                                tileSet.size());
     }
-    tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
-  }
+    tileSet[tile_index].add_tile_part(sot, in, main_header);
+  });
 
   for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
     try {
@@ -586,6 +641,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
       tileSet[i].destroy();
       throw;
     }
+    note_tile_data(tileSet[i]);
     // decode_line_based() replaces decode() + ycbcr_to_rgb() + finalize().
     tileSet[i].decode_line_based(main_header, reduce_NL, buf);
     tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
@@ -596,6 +652,7 @@ void openhtj2k_decoder::invoke_line_based(std::vector<int32_t *> &buf, std::vect
                                           std::vector<uint32_t> &height, std::vector<uint8_t> &depth,
                                           std::vector<bool> &is_signed) {
   OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
+  this->impl->reset_truncated();
   this->impl->invoke_line_based(buf, width, height, depth, is_signed);
 }
 
@@ -647,22 +704,14 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     tileSet[i].dec_init(i, main_header, reduce_NL);
   }
 
-  uint16_t word;
-  SOT_marker tmpSOT;
-  uint16_t tile_index;
-  // Read all tile parts; treat EOF as EOC for truncated codestreams.
-  while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
-    if (word != _SOT) {
-      open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
-    }
-    tmpSOT     = SOT_marker(in);
-    tile_index = tmpSOT.get_tile_index();
+  read_tile_parts([&](SOT_marker &sot) {
+    const uint16_t tile_index = sot.get_tile_index();
     if (tile_index >= tileSet.size()) {
       open_htj2k::detail::fail("SOT tile index %u is out of range (numTiles=%zu)", tile_index,
                                tileSet.size());
     }
-    tileSet[tile_index].add_tile_part(tmpSOT, in, main_header);
-  }
+    tileSet[tile_index].add_tile_part(sot, in, main_header);
+  });
 
   // Compute tile-component geometry (pixel offset + size at active resolution).
   auto get_tile_geom = [&](uint32_t tx, uint32_t ty, uint16_t c, uint32_t &x_off, uint32_t &y_off,
@@ -730,6 +779,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         tileSet[tile_idx].destroy();
         throw;
       }
+      note_tile_data(tileSet[tile_idx]);
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, cb, row_limit_, row_lo_, col_lo_,
                                                  col_hi_, skip_mct_, &rows);
       tileSet[tile_idx].destroy();
@@ -817,6 +867,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         tileSet[tile_idx].destroy();
         throw;
       }
+      note_tile_data(tileSet[tile_idx]);
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_, row_lo_,
                                                  col_lo_, col_hi_, skip_mct_, nullptr,
                                                  /*emit_all_rows=*/true);
@@ -847,6 +898,7 @@ void openhtj2k_decoder::invoke_line_based_stream(
     std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
+  this->impl->reset_truncated();
   this->impl->invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
 }
 
@@ -854,6 +906,7 @@ void openhtj2k_decoder::invoke_line_based_stream_reuse(
     std::function<void(uint32_t y, int32_t *const *, uint16_t nc)> cb, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
+  this->impl->reset_truncated();
   this->impl->invoke_line_based_stream_reuse(std::move(cb), width, height, depth, is_signed);
 }
 
@@ -861,6 +914,7 @@ void openhtj2k_decoder::invoke_line_based_direct(
     PlanarOutputDesc *descs, uint16_t nc, std::vector<uint32_t> &width,
     std::vector<uint32_t> &height, std::vector<uint8_t> &depth, std::vector<bool> &is_signed) {
   OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());
+  this->impl->reset_truncated();
   this->impl->invoke_line_based_direct(descs, nc, width, height, depth, is_signed);
 }
 
@@ -961,20 +1015,14 @@ openhtj2k_decoder_impl::reuse_fingerprints openhtj2k_decoder_impl::read_reuse_ti
   };
   const uint32_t first_tile_part = in.get_pos();
   const uint32_t tile_parts_read = main_header.num_tile_parts_read;
-  auto read_tile_parts           = [&]() {
-    uint16_t word;
-    SOT_marker tmpSOT;
-    while (in.get_remaining() >= 2 && (word = in.get_word()) != _EOC) {
-      if (word != _SOT) {
-        open_htj2k::detail::fail("SOT marker segment expected but %04X is found", word);
-      }
-      tmpSOT = SOT_marker(in);
-      if (tmpSOT.get_tile_index() != 0) {
+  auto read_tile_parts_of_tile_0 = [&]() {
+    read_tile_parts([&](SOT_marker &sot) {
+      if (sot.get_tile_index() != 0) {
         throw std::runtime_error(std::string("openhtj2k_decoder_impl::") + entry_point
-                                           + " expected a single-tile codestream (tile_index != 0 found)");
+                                 + " expected a single-tile codestream (tile_index != 0 found)");
       }
-      cached_tileSet_[0].add_tile_part(tmpSOT, in, main_header);
-    }
+      cached_tileSet_[0].add_tile_part(sot, in, main_header);
+    });
   };
 
   try {
@@ -986,7 +1034,7 @@ openhtj2k_decoder_impl::reuse_fingerprints openhtj2k_decoder_impl::read_reuse_ti
     } else {
       start_afresh();
     }
-    read_tile_parts();
+    read_tile_parts_of_tile_0();
     fp.tile_parts = cached_tileSet_[0].header_fingerprint();
     if (main_header_hit && fp.tile_parts != cached_tile_parts) {
       // A tile-part header describes another structure: build it afresh, reading the
@@ -994,7 +1042,7 @@ openhtj2k_decoder_impl::reuse_fingerprints openhtj2k_decoder_impl::read_reuse_ti
       start_afresh();
       in.set_pos(first_tile_part);
       main_header.num_tile_parts_read = tile_parts_read;
-      read_tile_parts();
+      read_tile_parts_of_tile_0();
     }
 
     // Flip persistence on tile_components BEFORE the decode call so
@@ -1004,6 +1052,7 @@ openhtj2k_decoder_impl::reuse_fingerprints openhtj2k_decoder_impl::read_reuse_ti
     install_precinct_filter(cached_tileSet_[0], 0);
     install_packet_observer(cached_tileSet_[0], 0);
     cached_tileSet_[0].create_tile_buf(main_header);
+    note_tile_data(cached_tileSet_[0]);
   } catch (std::exception &) {
     // The cached tile is likely in a bad state: drop it and rethrow.
     drop_reuse_cache();

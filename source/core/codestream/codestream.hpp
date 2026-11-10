@@ -165,6 +165,9 @@ class buf_chain {
   // (the packet-header tag trees) must be able to tell padding from data --
   // otherwise it spins forever.  Cleared by activate()/reset().
   bool past_end = false;
+  // The last node is a tile-part the codestream ends inside (j2k_tile_part::is_cut_short):
+  // its data stops where the codestream does.  Cleared by reset().
+  bool cut_short = false;
 
  public:
   buf_chain() = default;
@@ -208,6 +211,7 @@ class buf_chain {
       this->last_byte      = bc.last_byte;
       this->bits           = bc.bits;
       this->past_end       = bc.past_end;
+      this->cut_short      = bc.cut_short;
       this->node_buf.reserve(bc.node_buf.size());
       for (size_t i = 0; i < bc.node_buf.size(); ++i) {
         this->node_buf.push_back(bc.node_buf[i]);
@@ -229,6 +233,7 @@ class buf_chain {
     last_byte      = 0;
     bits           = 0;
     past_end       = false;
+    cut_short      = false;
     node_buf.resize(num);
     node_length.resize(num);
     for (uint32_t i = 0; i < num; ++i) {
@@ -337,6 +342,19 @@ class buf_chain {
   // length against malformed input.
   uint32_t get_current_node_remaining_bytes() const {
     return (pos < current_length) ? (current_length - static_cast<uint32_t>(pos)) : 0;
+  }
+
+  void set_cut_short(bool v) { cut_short = v; }
+  // True when the codestream ends with the current node's bytes: the chain's last node
+  // is a tile-part cut short and no node after the current one holds data.  A read that
+  // runs out of the current node then runs out of the codestream (it was truncated),
+  // rather than over a tile-part boundary (a malformed length).
+  OPENHTJ2K_NODISCARD bool data_ends_in_current_node() const {
+    if (!cut_short) return false;
+    for (size_t n = node_pos + 1; n < num_nodes; ++n) {
+      if (node_length[n] != 0) return false;
+    }
+    return true;
   }
 
   // True once a read has run off the end of the last node, i.e. the padding
