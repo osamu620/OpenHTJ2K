@@ -47,6 +47,7 @@ complete codestreams.
   rest, with the "malformed input" warning as before; its bytes used to be
   decoded in part, which failed the decode.
 
+# [0.26.0] - 2026-11-10
 
 Adds a switch that turns off the `Qfactor`'s visual weights, for scientific
 and other non-visual data, where the weights' perceptual model does not
