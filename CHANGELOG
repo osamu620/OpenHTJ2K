@@ -1,4 +1,17 @@
-# [Unreleased]
+# [0.26.0] - 2026-11-10
+
+Adds a switch that turns off the `Qfactor`'s visual weights, for scientific
+and other non-visual data, where the weights' perceptual model does not
+apply: `openhtj2k_encoder::set_qfactor_weights(1)`, or `Qweights=flat` on the
+command line. OpenCV's HTJ2K codec is to use it for its lossy writes.
+`Qfactor` on 4:2:0 and 4:2:2 colour input now follows version 2.0 of the JPEG
+Qfactor guideline, and the single-tile reuse decoder no longer decodes a
+frame with the previous frame's step sizes or packet order when their headers
+differ.
+
+Encoded output is byte-identical to 0.25.0 except with `Qfactor` on
+sub-sampled colour input (see Changed), and decoded output is identical except
+on the single-tile reuse path (see Fixed).
 
 ## Added
 - `Qweights=flat` (`openhtj2k_encoder::set_qfactor_weights(1)`) turns off the
@@ -26,6 +39,29 @@
   sub-sampled components. `estimate_qfactor` follows the new weights, so on a
   sub-sampled file written by 0.25.0 or earlier it finds the Qfactor from the
   luminance component only and reports a mismatch on the chroma components.
+
+## Fixed
+
+### Decoder
+- On the single-tile reuse path (`invoke_line_based_stream_reuse()` and
+  `invoke_line_based_direct()` after `enable_single_tile_reuse(true)`), a
+  frame whose headers differed from the previous frame's could decode with
+  the previous frame's step sizes, packet order or line-decoder sizes. The
+  decoder rebuilt its reused structure only when a few header values changed
+  (SIZ, part of COD, the first QCD step size, and the numbers of COC, QCC and
+  RGN segments); it ignored the rest of the main header, the tile-part
+  headers and the resolution reduction. It now compares a hash of every
+  marker segment that shapes the tile, in the main header and the tile-part
+  headers, together with the reduction. A frame whose tile-part header gives
+  a component another number of decomposition levels, which 0.25.0 refused,
+  now decodes as well. Frames with unchanged headers reuse the structure as
+  fast as before (29.5 ms per 4K frame). (#545)
+
+### Build
+- Every source file includes the standard headers it uses, so the library
+  and tools build with standard libraries that no longer bring one header in
+  through another, such as the libc++ of current Emscripten releases
+  (`std::strtoull` in `jpip_response.cpp`).
 
 # [0.25.0] - 2026-11-03
 

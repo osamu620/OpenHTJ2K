@@ -16,7 +16,7 @@ and colour space instead of a single hard-coded table.
 > **Status.** The default path (`Qcsf=legacy`) is the long-standing Qfactor
 > behaviour and follows the JPEG Qfactor guideline (WG1N101553 v2). It is
 > **bit-identical** to previous releases except for sub-sampled (4:2:0 / 4:2:2)
-> chroma, whose weights were brought in line with the guideline after 0.25.0
+> chroma, whose weights were brought in line with the guideline in 0.26.0
 > (see [Legacy visual weighting](#legacy-visual-weighting-default)). The analytic models
 > (`Qcsf=mannos`, `Qcsf=daly`) and the `Qppd` / `Qzoom` knobs are **experimental**
 > and opt-in; they only change the emitted `QCD`/`QCC` quantization markers, so
