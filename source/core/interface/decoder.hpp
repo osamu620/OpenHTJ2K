@@ -74,6 +74,12 @@ class openhtj2k_decoder {
   // 16 bytes of readable padding past buf+length are required for SIMD reads.
   // Falls back to a copy if the buffer contains a JPH/JP2 container.
   OPENHTJ2K_EXPORT void init_borrow(uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  // The same, keeping the thread count of the constructor or of the last init() or
+  // init_borrow() that took one (1 for a default-constructed decoder that never had one).
+  // Use these to decode one codestream after another with the same decoder; passing 1 as
+  // num_threads instead would decode on the calling thread only.
+  OPENHTJ2K_EXPORT void init(const uint8_t *, size_t, uint8_t reduce_NL);
+  OPENHTJ2K_EXPORT void init_borrow(uint8_t *, size_t, uint8_t reduce_NL);
   OPENHTJ2K_EXPORT void parse();
   OPENHTJ2K_EXPORT uint16_t get_num_component();
   OPENHTJ2K_EXPORT uint32_t get_component_width(uint16_t);

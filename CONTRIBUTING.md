@@ -129,6 +129,13 @@ tools/           benchmark scripts and the wt_bridge relay
 - **Ring buffers:** index with `r % RING_DEPTH`, not
   `(r - origin) % DEPTH`.
 - **Band order:** `BAND_LL=0`, `BAND_HL=1`, `BAND_LH=2`, `BAND_HH=3`.
+- **Thread counts:** `num_threads == 1` means "the calling thread only",
+  in `init()` as in the constructors. Code that re-initialises a decoder for
+  each frame uses the three-argument `init()`, which keeps the decoder's
+  count. The WebAssembly wrappers live only in the WASM build, so a native
+  A/B check does not see them. `threadpool_check` and
+  `wasm_mt_reinit_keeps_threads` count the pool's worker tasks to catch a
+  decoder that silently stops using its threads.
 - **Performance changes:** they need measurements before and after. Compare
   against `main` with two separate build trees, because each tool loads the
   shared library of its own tree.

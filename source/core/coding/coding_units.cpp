@@ -1272,6 +1272,7 @@ namespace open_htj2k {
 std::atomic<ThreadPool *> ThreadPool::singleton_{nullptr};
 std::mutex ThreadPool::singleton_mutex;
 size_t ThreadPool::users_ = 0;
+std::atomic<uint64_t> ThreadPool::worker_tasks_run_{0};
 
 // Local "wait for N outstanding worker tasks" helper used by
 // j2k_tile::decode_line_based_stream to barrier the per-component

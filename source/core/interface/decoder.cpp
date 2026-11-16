@@ -84,6 +84,9 @@ class openhtj2k_decoder_impl {
   j2c_src_memory in;
   uint8_t reduce_NL;
   bool single_thread_ = false;  // num_threads == 1: never use the shared pool
+  // The thread count of the constructor or of the last init()/init_borrow() that took one;
+  // the three-argument init() and init_borrow() reuse it.  1 until one is given.
+  uint32_t num_threads_ = 1;
   uint32_t row_lo_    = 0;
   uint32_t row_limit_ = UINT32_MAX;
   uint32_t col_lo_    = 0;
@@ -132,6 +135,8 @@ class openhtj2k_decoder_impl {
   ~openhtj2k_decoder_impl();
   void init(const uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
   void init_borrow(uint8_t *, size_t, uint8_t reduce_NL, uint32_t num_threads);
+  void init(const uint8_t *buf, size_t length, uint8_t r) { init(buf, length, r, num_threads_); }
+  void init_borrow(uint8_t *buf, size_t length, uint8_t r) { init_borrow(buf, length, r, num_threads_); }
   void parse();
   OPENHTJ2K_NODISCARD uint16_t get_num_component() const;
   OPENHTJ2K_NODISCARD uint32_t get_component_width(uint16_t) const;
@@ -241,6 +246,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl() {
 openhtj2k_decoder_impl::openhtj2k_decoder_impl(const char *filename, const uint8_t r, uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
   single_thread_ = (num_threads == 1);
+  num_threads_   = num_threads;
   uintmax_t file_size;
 #ifdef OPENHTJ2K_HAS_FILESYSTEM
   try {
@@ -296,6 +302,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
                                                uint32_t num_threads)
     : reduce_NL(r), is_codestream_set(false), is_parsed(false), enum_cs(0) {
   single_thread_ = (num_threads == 1);
+  num_threads_   = num_threads;
   require_input(buf, length);
 #ifdef OPENHTJ2K_THREAD
   ThreadPool::instance(num_threads);
@@ -318,6 +325,7 @@ openhtj2k_decoder_impl::openhtj2k_decoder_impl(const uint8_t *buf, const size_t 
 void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const uint8_t r,
                                   uint32_t num_threads) {
   single_thread_ = (num_threads == 1);
+  num_threads_   = num_threads;
   reduce_NL = r;
   enum_cs   = 0;
   // Until this input is in place, parse() must not read the previous one.
@@ -343,6 +351,7 @@ void openhtj2k_decoder_impl::init(const uint8_t *buf, const size_t length, const
 void openhtj2k_decoder_impl::init_borrow(uint8_t *buf, const size_t length, const uint8_t r,
                                           uint32_t num_threads) {
   single_thread_ = (num_threads == 1);
+  num_threads_      = num_threads;
   reduce_NL = r;
   enum_cs   = 0;
   is_codestream_set = false;
@@ -533,6 +542,12 @@ void openhtj2k_decoder::init(const uint8_t *buf, size_t length, const uint8_t re
 void openhtj2k_decoder::init_borrow(uint8_t *buf, size_t length, const uint8_t reduce_NL,
                                     uint32_t num_threads) {
   this->impl->init_borrow(buf, length, reduce_NL, num_threads);
+}
+void openhtj2k_decoder::init(const uint8_t *buf, size_t length, const uint8_t reduce_NL) {
+  this->impl->init(buf, length, reduce_NL);
+}
+void openhtj2k_decoder::init_borrow(uint8_t *buf, size_t length, const uint8_t reduce_NL) {
+  this->impl->init_borrow(buf, length, reduce_NL);
 }
 void openhtj2k_decoder::parse() {
   OPENHTJ2K_SINGLE_THREAD_SCOPE(this->impl->single_thread());

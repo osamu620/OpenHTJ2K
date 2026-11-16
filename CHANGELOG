@@ -1,5 +1,29 @@
 # [Unreleased]
 
+## Added
+- `openhtj2k_decoder::init(buf, length, reduce_NL)` and
+  `init_borrow(buf, length, reduce_NL)` re-initialise a decoder with a new
+  codestream and keep its thread count: that of the constructor, or of the last
+  `init()` or `init_borrow()` that took one. Use them to decode one codestream
+  after another with the same decoder; `init()` with `num_threads == 1` decodes
+  on the calling thread only.
+- Tests that catch a decoder that silently stops using its threads. Each counts
+  the tasks the thread pool's worker threads run around a decode, so neither
+  depends on timing.
+  - `threadpool_check` covers the library: the three-argument `init()` and
+    `init_borrow()` keep the threads, and `init(..., 1)` runs none.
+  - `wasm_mt_reinit_keeps_threads`, run by the WASM CI job, covers the
+    WebAssembly wrapper: frames after `reset_decoder_with_bytes()` must use
+    the pool. It fails on the 0.28.0 wrapper, where those frames ran 0 pool
+    tasks.
+  - The count is one relaxed atomic add per task; decoding executes the same
+    number of instructions as before.
+
+## Changed
+- The WebAssembly wrapper's `reset_decoder_with_bytes()` uses the new `init()`
+  in place of the table of thread counts added in 0.28.1. Behaviour and output
+  are the same.
+
 ## Documentation
 - `docs/qfactor.md` (now 303 lines, was 468) opens with which settings to use.
   It keeps the quick start, flat weights, the precision-scaled Qfactor, the

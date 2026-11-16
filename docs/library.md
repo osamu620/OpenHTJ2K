@@ -47,6 +47,10 @@ std::vector<std::vector<int32_t>> decode(const char *path, std::vector<uint32_t>
 - The constructor takes a file name, or a buffer and its size. Its other
   arguments are the number of resolution levels to drop (1 gives half the
   width and height) and the number of threads (see [Threads](#threads)).
+- To decode one codestream after another with the same decoder (video, for
+  example), call `dec.init(buf, size, reduce_NL)` and then `parse()` again.
+  It keeps the decoder's thread count. Passing 1 as a fourth argument would
+  decode on the calling thread only.
 - A YCbCr image coded with the colour transform comes out as RGB.
 - `get_stream_component_row()` handles subsampled components (4:2:2, 4:2:0).
   Without subsampling, `rows[c]` is simply row `y` of component `c`.
