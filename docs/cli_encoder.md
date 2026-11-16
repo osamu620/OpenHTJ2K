@@ -3,11 +3,15 @@
 Part 15 (HTJ2K) and Part 1 (JPEG 2000) encoder; `Cmodes` selects the
 block coder. Produces a raw codestream (`.j2c`, `.j2k`, `.jhc`, `.jphc`),
 an HTJ2K JPH file (`.jph`, HT only) or a JPEG 2000 JP2 file (`.jp2`,
-Part 1 only). Accepts PGM,
-PPM, PGX, and TIFF (with libtiff) inputs. The streaming path
-handles all four formats — PGX with subsampled component sets
-(4:2:2, 4:2:0) and basic TIFF (8/16-bit, RGB or grayscale,
-single-strip or strip-compressed). Tiled TIFFs are not supported.
+Part 1 only). Inputs:
+
+- PGM (`P5`, one component) and PPM (`P6`, three components). The bit depth
+  comes from `maxval`: 255 gives 8 bits, 4095 gives 12 and 65535 gives 16.
+- PGX, one component per file. In a comma-separated list of PGX files, each
+  component's subsampling (4:2:2, 4:2:0) follows from its file's dimensions.
+- TIFF, if the build found libtiff: 8 or 16 bits per sample, RGB or
+  grayscale, either planar configuration, single-strip or strip-compressed.
+  Tiled TIFFs are not supported.
 
 Full runtime help: `open_htj2k_enc -h`.
 
@@ -178,9 +182,27 @@ the container:
     `-rate` uses `1/2^(bit depth + 3)`.
   - The output does not depend on the number of threads. AVX2 and AVX-512 builds
     give the same codestream.
-  - On a 3840x2160 12-bit image, compared with an encode at the fixed step size
-    that gives the same size: HT at 0.96 bpp takes about 1.2 times as long on all
-    threads and 2.1 times on one; Part 1 at 1 bpp about 1.1 and 2.4 times.
+  - It works with tiles, with image offsets and in the streaming encoder. No
+    wavelet samples are kept for the final cut. Each code-block is measured
+    as soon as its wavelet coefficients are ready, and coded once at the
+    passes that a running estimate of the threshold picks. Only the
+    code-blocks that the final cut moves to a higher bit-plane are transcoded,
+    from their coded passes.
+  - Speed, on a 3840x2160 12-bit RGB image, against an encode at the fixed
+    step size that gives the same size (whole-process time, Ryzen 9 9950X):
+    - HT at 0.96 bpp takes about 1.2 times as long on all threads and 2.1
+      times on one.
+    - Part 1 at 1 bpp takes about 1.1 and 2.4 times as long.
+  - Quality, measured as PSNR:
+    - On the same 12-bit image, HT at 0.96 bpp gives 34.10 dB, against
+      34.09 dB for the fixed step size of the same size. At 1 bpp, Part 1
+      gives 35.23 dB and HT 34.32 dB.
+    - The cut pays off most on content with large flat areas. On a 16-bit
+      4096x2160 frame of *Elephants Dream* at 2 bpp, HT gives 86.7 dB, against
+      74.1 dB for the fixed step size of the same size, and Part 1 gives
+      92.1 dB.
+    - Each layer of a five-layer Part 1 codestream is 0.02 to 0.05 dB above
+      OpenJPEG's five-layer encode of the same image.
 
 ### JPH, JP2 and component layout
 

@@ -4,309 +4,97 @@
 
 # OpenHTJ2K
 
-OpenHTJ2K is an open-source C++ library for encoding and decoding
-**JPEG 2000 Part 1** (ITU-T Rec. T.800 | ISO/IEC 15444-1) and
-**High-Throughput JPEG 2000** (Part 15; ITU-T Rec. T.814 | ISO/IEC
-15444-15), with SIMD acceleration across x86-64, AArch64, and
-WebAssembly, a built-in multi-threaded pipeline, **rate control that
-cuts an HTJ2K or Part 1 codestream to a target size**, and a live RFC 9828
-RTP receiver that sustains **4K @ 60 fps on modern x86-64**.
+OpenHTJ2K is a C++ library with command-line tools for encoding and decoding
+**High-Throughput JPEG 2000** (HTJ2K: Part 15, ITU-T Rec. T.814 | ISO/IEC
+15444-15) and **JPEG 2000 Part 1** (ITU-T Rec. T.800 | ISO/IEC 15444-1) images.
+It is fast on x86-64, Arm and WebAssembly, and free under the BSD 3-Clause
+license.
 
 **Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k-demo.pages.dev/) · [📖 Docs](docs/README.md)
 
-## Highlights
+## Features
 
-**Standards compliance**
-- Encode and decode for both Part 15 (HT block coder, the default) and
-  Part 1 (EBCOT/MQ block coder, `Cmodes=0`); partial Part 2
-  (Downsampling Factor Structures, Arbitrary Transform Kernels). A Part 1
-  codestream from `open_htj2k_enc` is readable by any JPEG 2000 decoder;
-  its block coder supports all six mode switches (BYPASS, RESET,
-  RESTART, CAUSAL, ERTERM, SEGMARK). The `.jph` file format stays
-  HT-only; a Part 1 codestream goes in a `.jp2` file.
-- Conformance-tested against ITU-T Rec. T.803 | ISO/IEC 15444-4; 529
-  tests in the full suite.
-- JPH (`.jph`) and JP2 (`.jp2`) file formats, including colour
-  specification box parsing for automatic YCbCr colorspace detection.
+- **HTJ2K and Part 1**, both encode and decode. A Part 1 codestream from the
+  encoder opens in any JPEG 2000 decoder. Part 2 is partly supported (DFS,
+  ATK). Tested against the conformance codestreams of ISO/IEC 15444-4.
+- **Fast:** SIMD code for AVX2, AVX-512, SSE2, NEON and WebAssembly, and a
+  built-in thread pool.
+- **Quality or size:** `Qfactor=0..100` sets the quality, much as in JPEG
+  ([Qfactor](docs/qfactor.md)). `-rate` makes a codestream of a given size,
+  with quality layers for Part 1 (experimental; [rate
+  control](docs/cli_encoder.md#rate-control)).
+- **File formats:** codestreams (`.j2c`, `.j2k`, `.jhc`), JPH files (`.jph`,
+  HTJ2K) and JP2 files (`.jp2`, Part 1). The tools read PGM, PPM, PGX and TIFF,
+  and write PGM, PPM, PGX and RAW.
+- **In the browser:** a WebAssembly build decodes inside the web page. Try
+  the [live demo](https://htj2k-demo.pages.dev/).
+- **Streaming (experimental):** a live RTP receiver (RFC 9828) that keeps up
+  with 4K at 60 fps on a recent x86-64 CPU, and a JPIP server with foveated
+  and gigapixel viewers.
 
-**Rate control: HTJ2K or Part 1 at a target size (new, experimental)**
-- `open_htj2k_enc -i in.ppm -o out.j2c -rate 1` makes a codestream of
-  at most 1 bit per pixel, usually within a few bytes of it. Hitting a
-  size no longer means searching for a step size by trial encodes.
-- Post-compression rate-distortion optimisation (PCRD-opt) over the HT
-  coding passes: each HT code-block is cut after the cleanup, SigProp or
-  MagRef pass of any bit-plane, at one slope threshold over the whole
-  image, with the packet headers counted.
-- Low overhead: each code-block is measured as soon as its wavelet
-  coefficients are ready and coded once, at the passes a running
-  threshold estimate picks; only the code-blocks that the final cut moves
-  to a higher bit-plane are transcoded, from their coded passes. On a
-  3840×2160 12-bit RGB image, `-rate 0.96` takes 1.18× the time of a
-  fixed-step encode of the same size with all threads and 2.07× on one
-  (whole-process time, Ryzen 9 9950X), at a slightly
-  higher PSNR than that step size (34.10 vs 34.09 dB).
-- The cut pays off most on content with large flat areas: on a 16-bit
-  4096×2160 frame of *Elephants Dream* at 2 bpp, 86.7 dB PSNR against
-  74.1 dB for the fixed step size of the same size.
-- Both block coders: with the Part 1 coder (`Cmodes=0`, any mode
-  switches) every coding pass is a truncation point and the codeword is
-  terminated at the cut, so `-rate` also makes codestreams that any
-  JPEG 2000 decoder reads. On the 12-bit image above at 1 bpp it gives
-  35.23 dB (HT: 34.32 dB), on the *Elephants Dream* frame at 2 bpp
-  92.1 dB, at about 2.4× the time of a fixed-step Part 1 encode on one
-  thread and 1.1× with all threads.
-- Quality layers with the Part 1 coder: `-rate 0.25,0.5,1` makes three
-  layers, each within its own rate, so a decoder that stops after any
-  layer gets an image at that rate. Each layer of a five-layer codestream
-  is within 0.05 dB of a separate one-layer encode at its rate, and 0.02
-  to 0.05 dB above OpenJPEG's five-layer encode of the same image.
-- Deterministic: the codestream does not depend on the number of
-  threads, and AVX2 and AVX-512 builds give identical output.
-- Works with tiles and image offsets, in the streaming encoder: no
-  wavelet samples are kept for the final cut.
-- Current limits: irreversible 9/7 wavelet, one quality layer with HT,
-  not with `Qfactor`. Reference: [docs/cli_encoder.md](docs/cli_encoder.md#rate-control).
+Lossless coding of a 4096×2160 8-bit RGB frame on one thread
+([how this was measured](docs/benchmarks.md)):
 
-**Performance**
-- SIMD: **AVX2**, **AVX-512** (x86-64), **NEON** (AArch64), and
-  **WASM SIMD** 128-bit — for color transform, DWT, and HT block coding;
-  portable x86-64 builds (no AVX2) use **SSE2** for HT block encoding,
-  HT MagSgn decoding, the DWT and the decoder's color transform.
-- Built-in thread pool for both encode and decode.
-- Three decode APIs so callers can pick their memory/latency tradeoff:
-  `invoke_line_based()` (streaming IDWT into a caller buffer),
-  `invoke_line_based_stream()` (row-callback; no intermediate W×H
-  buffer), and `invoke_line_based_direct()` (8/16-bit planes written
-  straight into caller buffers).
-- Lossless coding speed against OpenJPEG 2.5.4 on a 4096×2160 8-bit RGB
-  frame, single-threaded (`-threads 1` / `-num_threads 1`, one core),
-  Ryzen 9 9950X, both built with GCC 14 `-O3 -march=native`; codec time
-  as each tool reports it, medians of 10 runs, 2026-11-01:
+| Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
+|---|---:|---:|---:|
+| Encode | 800 ms | 555 ms (1.4×) | 68 ms (11.8×) |
+| Decode | 586 ms | 550 ms (1.1×) | 64 ms (9.2×) |
 
-  | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
-  |---|---:|---:|---:|
-  | Encode | 800 ms | 555 ms (1.4×) | 68 ms (11.8×) |
-  | Decode | 586 ms | 550 ms (1.1×) | 64 ms (9.2×) |
+OpenHTJ2K's decode time includes writing the output file and OpenJPEG's does
+not, so the comparison is conservative for OpenHTJ2K.
 
-  The two decoder timers do not cover the same work: OpenHTJ2K's decoder
-  streams rows to the output file while it decodes, so its time includes
-  writing the 26 MB PPM; OpenJPEG's `decode time` excludes its PPM writer
-  (about 230 ms of its 816 ms process time). The decode row is therefore
-  conservative for OpenHTJ2K. Method, fixture, whole-process wall times
-  and the script that regenerates the table:
-  [docs/benchmarks.md](docs/benchmarks.md).
-
-**Deliverables**
-- Shared library (`libopen_htj2k`) with C++ encoder/decoder APIs. The
-  library writes nothing to the console: errors are exceptions whose
-  `what()` describes them, and warnings go to an optional handler
-  (`open_htj2k::set_message_handler()` in `openhtj2k_message.hpp`).
-- CLI tools: `open_htj2k_enc`, `open_htj2k_dec`, `open_htj2k_rtp_recv`,
-  `open_htj2k_jpip_server`, `open_htj2k_jpip_demo`,
-  `open_htj2k_jpip_benchmark`, plus validation / benchmark utilities
-  (`imgcmp`, `row_range_compare`, `estimate_qfactor`,
-  `open_htj2k_rtp_decode_profile`).
-- WebAssembly build (scalar / SIMD / pthreads / SIMD+pthreads) +
-  Node.js CLI decoder + in-browser RTP replay and JPIP foveation
-  demos (WebGL2 GPU rendering) — try them at
-  **https://htj2k-demo.pages.dev/**.
-
-**Live streaming (experimental)**
-- `open_htj2k_rtp_recv` implements RFC 9828 (JPEG 2000 RTP with
-  sub-codestream latency). Three-thread pipeline (receive / decode /
-  render) with GPU shader rendering, HDR colour pipeline (PQ / HLG +
-  BT.2020 gamut mapping), and an RTP-timestamp frame pacer.
-  **Sustains 4K @ 60 fps** on 4K 4:2:2 1.7-bpp broadcast HT —
-  `--threads 4` on modern x86-64 (AVX2) and `--threads 2` on Apple
-  Silicon (M3 Max NEON, v0.13.2+).
-  Opt-in via `-DOPENHTJ2K_RTP=ON`.
-
-**JPIP foveated streaming + gigapixel viewer (ISO/IEC 15444-9 3rd edition)**
-- `open_htj2k_jpip_server` serves a JPEG 2000 codestream over JPIP
-  (HTTP/1.1 or HTTP/3 over QUIC). Stateless view-window requests,
-  EOR messages, and client cache model support (§C.9).
-- **Progressive HTTP/1.1 `Transfer-Encoding: chunked` delivery**
-  (v0.17.0; opt-in since v0.17.2): each JPP message is flushed to the
-  socket as soon as the server produces it, so clients (browser demos +
-  `JpipClient`) start decoding while the response is still in flight.
-  Loopback time-to-first-byte on a 24 MB full-canvas response drops
-  from 7.4 ms to 0.44 ms (~17×). The server defaults to `Content-Length`
-  for broad client compatibility; opt in to chunked with `--chunked`.
-- `open_htj2k_jpip_demo` drives foveated rendering: three concentric
-  cones (fovea / parafovea / periphery) around the mouse cursor,
-  decoded at full / half / 1/8 resolution. Works in-process, over
-  HTTP/1.1 (chunked-streaming, via `JpipClient::fetch_streaming`), or
-  over HTTP/3 with multiplexed QUIC streams.
-- `open_htj2k_jpip_benchmark` measures bandwidth reduction and decode
-  speedup for foveated vs full-image delivery across an NxN gaze grid.
-- IDWT zero-skip optimization: skips DWT lifting steps for absent
-  precincts, cutting decode time proportionally.  Viewport-region
-  decode (`jpip_end_frame_region`) adds row-limit + column-range IDWT
-  so zoomed-in viewports on 42K+ canvases stay interactive in WASM.
-- In-browser WASM demos (decode entirely in-page, no plugin, no
-  server-side decode): foveation at
-  **https://htj2k-demo.pages.dev/jpip_demo.html** and pan-and-zoom
-  gigapixel viewer at **https://htj2k-demo.pages.dev/jpip_viewer.html**.
-  Both consume the server's chunked output via
-  `response.body.getReader()` + a resumable WASM JPP parser, so the
-  fovea bits start rendering before the periphery has arrived.
-- Opt-in H3 transport via `-DOPENHTJ2K_QUIC=ON` (requires MsQuic +
-  nghttp3).
-- Full reference: [**docs/jpip.md**](docs/jpip.md).
-
-## Quick build
+## Build and install
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+cmake --install build      # optional; --prefix <dir> to choose where
 ```
 
-The built-in thread pool is enabled automatically when CMake's
-`find_package(Threads)` succeeds (every supported platform).
+You need CMake 3.13 or later and a C++11 compiler. TIFF input also needs
+libtiff, which CMake finds by itself. The tools are in `build/bin/`. For other
+platforms, build options and the WebAssembly build, see
+[docs/building.md](docs/building.md).
 
-Executables land in `build/bin/`. For the full CMake flag reference,
-the WebAssembly build, and the experimental RTP receiver build (GLFW
-+ OpenGL), see [**docs/building.md**](docs/building.md).
-
-## CLI quick start
-
-Every CLI prints its full option reference via `-h`. The snippets
-below show the most common invocations; fuller references and more
-examples live under [`docs/`](docs/).
-
-### Encoder — `open_htj2k_enc`
-
-Part 15 (HTJ2K) and Part 1 encoder. Inputs: PGM, PPM, PGX, TIFF
-(libtiff). Outputs: `.j2c` / `.jhc` (raw codestream), `.jph` (JPH
-file format, HT only) or `.jp2` (JP2 file format, Part 1 only).
+## Quick start
 
 ```bash
-# Lossless encode
-./build/bin/open_htj2k_enc -i input.ppm -o out.j2c Creversible=yes
+open_htj2k_enc -i input.ppm -o out.jph Qfactor=90            # lossy HTJ2K, quality 90
+open_htj2k_enc -i input.ppm -o out.j2c Creversible=yes       # lossless
+open_htj2k_enc -i input.ppm -o out.jp2 Cmodes=0 Qfactor=90   # Part 1, for any JPEG 2000 decoder
+open_htj2k_enc -i input.ppm -o out.j2c -rate 1               # at most 1 bit per pixel
 
-# Lossy encode at quality 90
-./build/bin/open_htj2k_enc -i input.ppm -o out.jph Qfactor=90
-
-# Lossy encode to a target size: 1 bit per pixel (experimental)
-./build/bin/open_htj2k_enc -i input.ppm -o out.j2c -rate 1
-
-# Encode separate YCbCr component files
-./build/bin/open_htj2k_enc -i Y.pgx,Cb.pgx,Cr.pgx -o out.jph -jph_color_space YCC
-
-# Part 1 (EBCOT/MQ) codestream, readable by any JPEG 2000 decoder
-./build/bin/open_htj2k_enc -i input.ppm -o out.j2c Cmodes=0 Qfactor=90
+open_htj2k_dec -i out.jph -o decoded.ppm
+open_htj2k_dec -i out.jph -o half.ppm -reduce 1              # half the width and height
 ```
 
-Key flags: `Cmodes={HT|0|BYPASS|...}`, `Creversible={yes|no}`, `Qfactor=0..100`,
-`-rate bpp`, `Clevels=0..32`, `Cblk={H,W}`, `Corder={LRCP|RLCP|RPCL|PCRL|CPRL}`,
-`-num_threads N`. Full reference:
-[**docs/cli_encoder.md**](docs/cli_encoder.md).
+Each tool lists its options with `-h`. To run them from the build tree, use
+`./build/bin/open_htj2k_enc`. Full references: [encoder](docs/cli_encoder.md),
+[decoder](docs/cli_decoder.md).
 
-### Decoder — `open_htj2k_dec`
+## Using the library
 
-Part 1 and Part 15 decoder. Inputs: `.j2c` / `.j2k` / `.jph` / `.jp2`.
-Outputs: PPM / PGM / PGX / RAW.
-
-```bash
-# Decode to PPM (RGB output)
-./build/bin/open_htj2k_dec -i input.j2c -o out.ppm
-
-# Decode at half resolution
-./build/bin/open_htj2k_dec -i input.j2c -o out_half.ppm -reduce 1
-
-# Force BT.709 during YCbCr -> RGB matrix
-./build/bin/open_htj2k_dec -i input.j2c -o out.ppm -ycbcr bt709
+```cmake
+find_package(openhtj2k CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE openhtj2k::openhtj2k)
 ```
 
-Key flags: `-reduce n`, `-num_threads n`, `-ycbcr {bt601|bt709}`.
-Full reference:
-[**docs/cli_decoder.md**](docs/cli_decoder.md).
-
-### RFC 9828 RTP receiver — `open_htj2k_rtp_recv` (experimental)
-
-Live HTJ2K over UDP per RFC 9828. Renders via GLFW / OpenGL 3.3
-core. Opt-in at build time with `-DOPENHTJ2K_RTP=ON`.
-
-```bash
-# Default: bind 0.0.0.0:6000, render with GL 3.3 shader path
-./build/bin/open_htj2k_rtp_recv
-
-# Use --no-vsync + RTP-timestamp pacer (recommended on NVIDIA Wayland)
-./build/bin/open_htj2k_rtp_recv --no-vsync
-
-# Headless (no window), exit after 1000 frames
-./build/bin/open_htj2k_rtp_recv --no-render --frames 1000
-```
-
-Key flags: `--port N`, `--bind host`, `--no-vsync`, `--frames N`,
-`--threads 4` (x86-64 default) or `--threads 2` (Apple Silicon),
-`--colorspace {bt709|bt601|bt2020}`.
-Full reference, kernel `rmem_max` tuning, hardware requirements for
-4K @ 60 fps sustained, and known issues:
-[**docs/cli_rtp_recv.md**](docs/cli_rtp_recv.md).
-
-### JPIP server + demo
-
-Foveated JPEG 2000 streaming per ISO/IEC 15444-9.
-
-```bash
-# Server (HTTP/1.1)
-./build/bin/open_htj2k_jpip_server input.j2c --port 8080
-
-# Demo (fetches from server, renders with GLFW)
-./build/bin/open_htj2k_jpip_demo --server localhost:8080
-
-# With HTTP/3 over QUIC (requires -DOPENHTJ2K_QUIC=ON build)
-./build/bin/open_htj2k_jpip_server input.j2c --h3 --cert server.cert --key server.key
-./build/bin/open_htj2k_jpip_demo --server-h3 localhost:8080
-
-# Benchmark: foveated vs full-image bandwidth + decode time
-./build/bin/open_htj2k_jpip_benchmark input.j2c --gaze-grid 5 --csv results.csv
-```
-
-Key flags (demo): `--reduce N`, `--parafovea-ratio F`, `--periphery-ratio F`,
-`--window-size WxH`, `--fovea-radius N`, `--no-vsync`.
-
-## Supported file formats
-
-### Library (codestream / file format)
-
-| Extension | Encode | Decode | Description |
-|-----------|:---:|:---:|-------------|
-| `.jhc`, `.j2c`, `.j2k` | ✓ | ✓ | JPEG 2000 Part 1 or HTJ2K (Part 15) codestream; the encoder writes either (`Cmodes`) |
-| `.jph` | ✓ | ✓ | HTJ2K file format (JPH), HT codestreams only; colour specification box auto-detects YCbCr on decode |
-| `.jp2` | ✓ | ✓ | JPEG 2000 file format (JP2, ISO/IEC 15444-1 Annex I), Part 1 codestreams only (`Cmodes=0`); colour specification box auto-detects YCbCr on decode |
-
-### CLI I/O
-
-| Format | `open_htj2k_enc` input | `open_htj2k_dec` output | Notes |
-|--------|:---:|:---:|-------|
-| PGM (`P5`) | ✓ | ✓ | Single grayscale component. Bit depth is auto-detected from `maxval` (8-bit or 16-bit). Decoder writes one file per component with a `_NN` suffix. |
-| PPM (`P6`) | ✓ | ✓ | Packed RGB (3 equal-sized components). On decode, a subsampled YCbCr codestream is upsampled to luma resolution (nearest-neighbour for 4:2:2 / 4:2:0) before writing interleaved RGB — enable the YCbCr→RGB matrix with `-ycbcr bt601\|bt709`. |
-| PGX | ✓ | ✓ | One component per file. Multi-component input is a comma-separated file list (e.g. `Y.pgx,Cb.pgx,Cr.pgx`) and the encoder computes `XRsiz` / `YRsiz` from each file's dimensions, so 4:2:2 / 4:2:0 Y/Cb/Cr inputs encode with the right subsampling. Decoder writes one file per component with a `_NN` suffix. |
-| TIFF | ✓ | | Requires libtiff at build time. 8 or 16 bits **per sample**, RGB or grayscale, both planar configurations (`PLANARCONFIG_CONTIG` and `PLANARCONFIG_SEPARATE`). Tiled TIFFs are not supported. Not a decoder output. |
-| RAW | | ✓ | Decoder-only output. Packed samples, no header, one file per component with a `_NN` suffix. |
+[docs/library.md](docs/library.md) gives short decode and encode examples and
+covers threads, errors and warnings.
 
 ## Documentation
 
-In-depth guides live under [`docs/`](docs/README.md):
+| Topic | Document |
+|---|---|
+| Building and installing | [docs/building.md](docs/building.md) |
+| Encoder and decoder options | [docs/cli_encoder.md](docs/cli_encoder.md), [docs/cli_decoder.md](docs/cli_decoder.md) |
+| What `Qfactor` does | [docs/qfactor.md](docs/qfactor.md) |
+| The C++ API | [docs/library.md](docs/library.md) |
+| Speed against OpenJPEG | [docs/benchmarks.md](docs/benchmarks.md) |
+| RTP receiver, browser viewer, JPIP (experimental) | [docs/cli_rtp_recv.md](docs/cli_rtp_recv.md), [docs/wt_viewer.md](docs/wt_viewer.md), [docs/jpip.md](docs/jpip.md) |
+| Release history | [CHANGELOG](CHANGELOG) |
 
-- [docs/building.md](docs/building.md) — full CMake flag reference, native build, WASM + Node.js CLI, RTP/JPIP prerequisites
-- [docs/cli_encoder.md](docs/cli_encoder.md) — `open_htj2k_enc` reference
-- [docs/cli_decoder.md](docs/cli_decoder.md) — `open_htj2k_dec` reference
-- [docs/cli_rtp_recv.md](docs/cli_rtp_recv.md) — `open_htj2k_rtp_recv` reference + operational guide
-- [docs/jpip.md](docs/jpip.md) — JPIP subsystem reference (server, native + browser demos, benchmark, cache model, WASM API)
-- [docs/benchmarks.md](docs/benchmarks.md) — lossless speed against OpenJPEG: results, method, fixtures, the script
-- [deploy/README.md](deploy/README.md) — JPIP server deployment (Docker + Cloudflare Tunnel)
-
-See also [CHANGELOG](CHANGELOG) for release history.
-
-## Requirements
-
-CMake 3.13+, a C++11-or-later compiler. CMake auto-selects C++17 →
-C++14 → C++11 depending on compiler support; all three modes pass the
-full conformance test suite. Per-standard feature differences are
-covered in [docs/building.md](docs/building.md#requirements).
+To work on OpenHTJ2K itself, start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
