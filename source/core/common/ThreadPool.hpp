@@ -207,9 +207,12 @@ class ThreadPool {
   // Uses a thread-local flag set in worker() — no hash map lookup.
   static bool is_worker_thread() { return in_worker_thread_flag(); }
 
-  // Tasks the pool's worker threads have run, over all pools since the process started.
+  // Tasks the shared pool's worker threads have run since it was created (0 without a pool).
   // Tests read it before and after a decode to see whether the decode used the pool.
-  static uint64_t worker_tasks_run() { return worker_tasks_run_.load(std::memory_order_relaxed); }
+  static uint64_t worker_tasks_run() {
+    ThreadPool *p = singleton_.load(std::memory_order_acquire);
+    return p ? p->tasks_run_.load(std::memory_order_relaxed) : 0;
+  }
 
   #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   /**
@@ -456,8 +459,9 @@ class ThreadPool {
         }
         task = std::move(ring_[ring_head_ & ring_mask_]);
         ++ring_head_;
+        // Only workers write it, under tasks_mutex: no read-modify-write needed.
+        tasks_run_.store(tasks_run_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
       }
-      worker_tasks_run_.fetch_add(1, std::memory_order_relaxed);
       task();
     }
   }
@@ -492,6 +496,10 @@ class ThreadPool {
   size_t ring_cap_;               // capacity of ring_, a power of two; guarded by tasks_mutex
   size_t ring_mask_;              // ring_cap_ - 1
   alignas(64) size_t ring_head_;  // consumer index (next pop position)
+  // Tasks the worker threads have taken (see worker_tasks_run()); written under tasks_mutex.
+  // A member, not a static: worker() is inline, and code outside a Windows DLL that runs a
+  // pool of its own cannot reach the DLL's static data.
+  std::atomic<uint64_t> tasks_run_{0};
   alignas(64) size_t ring_tail_;  // producer index (next push position)
 
   /**
@@ -523,11 +531,6 @@ class ThreadPool {
    * @brief Number of live references (see retain()); guarded by singleton_mutex.
    */
   static size_t users_;
-
-  /**
-   * @brief Tasks run by worker threads (see worker_tasks_run()).
-   */
-  static std::atomic<uint64_t> worker_tasks_run_;
 };
 
 // Holds one pool reference for the lifetime of the owning object.  Declare it
