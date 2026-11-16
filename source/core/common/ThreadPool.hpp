@@ -207,6 +207,10 @@ class ThreadPool {
   // Uses a thread-local flag set in worker() — no hash map lookup.
   static bool is_worker_thread() { return in_worker_thread_flag(); }
 
+  // Tasks the pool's worker threads have run, over all pools since the process started.
+  // Tests read it before and after a decode to see whether the decode used the pool.
+  static uint64_t worker_tasks_run() { return worker_tasks_run_.load(std::memory_order_relaxed); }
+
   #if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || __cplusplus >= 201703L)
   /**
    * @brief Enqueue a function with zero or more arguments and a return value into the task queue,
@@ -453,6 +457,7 @@ class ThreadPool {
         task = std::move(ring_[ring_head_ & ring_mask_]);
         ++ring_head_;
       }
+      worker_tasks_run_.fetch_add(1, std::memory_order_relaxed);
       task();
     }
   }
@@ -518,6 +523,11 @@ class ThreadPool {
    * @brief Number of live references (see retain()); guarded by singleton_mutex.
    */
   static size_t users_;
+
+  /**
+   * @brief Tasks run by worker threads (see worker_tasks_run()).
+   */
+  static std::atomic<uint64_t> worker_tasks_run_;
 };
 
 // Holds one pool reference for the lifetime of the owning object.  Declare it

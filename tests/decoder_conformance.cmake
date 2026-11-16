@@ -47,6 +47,15 @@ if(NODE_EXECUTABLE)
     include(${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_ht_profile1.cmake)
     # HiFi
     include(${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_ht_HF.cmake)
+    # A multi-threaded decoder keeps using the thread pool after reset_decoder_with_bytes()
+    # (counts the pool's worker tasks; 0.25.0 to 0.28.0 decoded later frames on one thread)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/web/build/html/libopen_htj2k_mt_simd.wasm")
+      add_test(NAME wasm_mt_reinit_keeps_threads
+               COMMAND ${NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm/mt_reinit_threads_check.mjs
+                       ${CMAKE_CURRENT_SOURCE_DIR}/web/build/html ${CONFORMANCE_DATA_DIR}/ATK_DFS_IRV.j2c)
+      set_tests_properties(wasm_mt_reinit_keeps_threads PROPERTIES
+                           PASS_REGULAR_EXPRESSION "all cases passed" TIMEOUT 120)
+    endif()
   else()
     message(STATUS "WASM build output not found -- skipping WASM tests")
   endif()
