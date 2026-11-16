@@ -141,6 +141,15 @@ the container:
     (default) or the luminance CSF (`luma`), keeping the sub-sampling
     frequency mapping — an A/B switch separating shape from mapping.
   - See [`qfactor.md`](qfactor.md) for the analytic visual-weighting model.
+- `Qscale=guideline|bits`
+  - How the Qfactor scales with the sample precision. `guideline` (default):
+    a Qfactor keeps about the same number of bits at every precision, as in the
+    JPEG Qfactor guideline. `bits`: a Qfactor removes the same fraction of the
+    precision at every bit depth, so 12- and 16-bit samples get finer steps
+    (identical at 8 bits). With `Qweights=flat` as well, only the step changes.
+    Requires `Qfactor`; `estimate_qfactor --scale bits` recovers the Qfactor of
+    such files. An OpenHTJ2K extension, not part of the guideline.
+  - See [`qfactor.md`](qfactor.md#precision-scaled-qfactor-qscalebits).
 
 ### Rate control
 

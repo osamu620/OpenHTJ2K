@@ -236,6 +236,7 @@ int main(int argc, char *argv[]) {
       encoder.set_target_sizes(target_s);
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       encoder.set_qfactor_weights(args.get_qweights());
+      encoder.set_qfactor_scale(args.get_qscale());
       try {
         total_size = encoder.invoke_line_based_stream(
             [&reader](uint32_t y, int32_t **rows, uint16_t nc) { reader->get_row(y, rows, nc); });
@@ -332,6 +333,7 @@ int main(int argc, char *argv[]) {
       encoder.set_target_sizes(target);
       encoder.set_chroma_csf_reuse_luma(args.get_csf_chroma_reuse_luma());
       encoder.set_qfactor_weights(args.get_qweights());
+      encoder.set_qfactor_scale(args.get_qscale());
       try {
         total_size = encoder.invoke_line_based();
       } catch (std::exception &exc) {

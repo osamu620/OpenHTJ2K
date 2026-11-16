@@ -204,6 +204,13 @@ class openhtj2k_encoder {
   // the reference step either way. Call before invoke_*; only affects encodes with
   // Qfactor. Any other value throws std::runtime_error.
   OPENHTJ2K_EXPORT void set_qfactor_weights(uint8_t weights);
+  // How the Qfactor scales with the sample precision. 0 = the JPEG Qfactor guideline
+  // (default): a Qfactor keeps the same number of bits at every precision. 1 =
+  // precision-scaled, an OpenHTJ2K extension: a Qfactor removes the same fraction of the
+  // precision at every bit depth (identical to the guideline at 8 bits). Combine with
+  // set_qfactor_weights(1) for steps without visual weights. Call before invoke_*; only
+  // affects encodes with Qfactor. Any other value throws std::runtime_error.
+  OPENHTJ2K_EXPORT void set_qfactor_scale(uint8_t scale);
   // EXPERIMENTAL: code each HT code-block as one HT set of three passes: the HT
   // cleanup pass `planes` bit-planes above the LSB, then the HT SigProp and HT
   // MagRef passes of the plane below it (ISO/IEC 15444-15).  0 (default) codes
