@@ -260,7 +260,7 @@ class j2k_codeblock : public j2k_region {
   uint8_t *compressed_data;
   uint8_t *current_address;
   const uint8_t band;
-  const uint8_t M_b;
+  uint8_t M_b;
   OPENHTJ2K_MAYBE_UNUSED const uint32_t index;
   // When true, compressed_data was bump-allocated by a cblk_data_pool owned by
   // j2k_tile. The destructor must NOT free it; the pool manages the lifetime.
@@ -309,6 +309,8 @@ class j2k_codeblock : public j2k_region {
   // packet headers that follow are read with it.
   static constexpr uint8_t ALL_PASSES_HAVE_DATA = 0xFF;  // above any pass count (at most 164)
   uint8_t dec_passes_with_data                  = ALL_PASSES_HAVE_DATA;
+  // Decoder: the first quality layer that carried passes of this code-block (0xFFFF if none).
+  uint16_t dec_first_layer = 0xFFFF;
   // Encoder: the passes of each quality layer and the pass each starts at.  Non-owning:
   // pooled by the owning j2k_precinct_subband.  nullptr in the decoder.
   uint8_t *layer_start;
@@ -362,6 +364,9 @@ class j2k_codeblock : public j2k_region {
   //  OPENHTJ2K_NODISCARD uint8_t get_context_label_sig(const uint32_t &j1, const uint32_t &j2) const;
   //  OPENHTJ2K_NODISCARD uint8_t get_signLUT_index(const uint32_t &j1, const uint32_t &j2) const;
   OPENHTJ2K_NODISCARD uint8_t get_Mb() const;
+  // A region-of-interest shift adds this many magnitude bit-planes to the block (the transcoder
+  // codes the shifted indices, so the HT block coder counts them in M_b).
+  void add_ROIshift(uint8_t s) { M_b = static_cast<uint8_t>(M_b + s); }
   uint8_t *get_compressed_data();
   // Rate control: take the compressed data out of the code-block (pooled: owned by a
   // cblk_data_pool, otherwise malloc'ed and now the caller's), or put data in.
@@ -899,6 +904,7 @@ uint64_t decoder_memory_budget(j2k_main_header &mh);
  *******************************************************************************/
 class j2k_tile : public j2k_tile_base {
  private:
+  std::vector<uint8_t> tph_bytes;
   // vector array of tile-parts
   std::vector<std::unique_ptr<j2k_tile_part>> tile_part;
   // index of this tile
@@ -1187,8 +1193,21 @@ class j2k_tile : public j2k_tile_base {
   std::vector<ht_rd_info> enc_rd;
   ht_rc_state *enc_rc = nullptr;
   // Initialization with tile-index
+  // tile_override, if any, holds the COD, COC, QCD and QCC marker segments of this tile's tile-part
+  // header (the transcoder keeps them from its input); they apply to the tile as they do in a decoder.
   void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
-                bool line_based = false, bool streaming = false);
+                bool line_based = false, bool streaming = false,
+                const j2k_tilepart_header *tile_override = nullptr);
+  // The first tile-part header of the tile, as read from a codestream (null before one was read).
+  const j2k_tilepart_header *first_tile_part_header() const {
+    return tile_part.empty() ? nullptr : tile_part[0]->header.get();
+  }
+  // The length in bytes of each packet write_packets_direct() writes, in the order it writes them
+  // (SOP and EPH marker segments included, as the PLT and PLM marker segments count them).
+  std::vector<uint32_t> get_packet_lengths(j2k_main_header &main_header);
+  // Bytes (marker segments) written between the SOT and SOD markers of the tile-part that
+  // write_packets_direct() writes; get_tile_part_size() counts them.
+  void set_tile_part_header_bytes(std::vector<uint8_t> bytes) { tph_bytes = std::move(bytes); }
   // DC offsetting
   int perform_dc_offset(j2k_main_header &main_header);
   // forward color transform

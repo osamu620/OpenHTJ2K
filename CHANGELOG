@@ -18,6 +18,50 @@
     tasks.
   - The pool keeps the count and updates it while a worker already holds the
     queue lock. Decoding executes the same number of instructions as before.
+- `open_htj2k_transcode -i in.j2k -o out.j2c` (or `.jph`), and
+  `open_htj2k::transcode_part1_to_htj2k()` (`transcoder.hpp`). The Part 1
+  code-blocks are decoded to their quantisation indices and coded again with
+  the HT block coder: no wavelet transform, re-quantisation or colour
+  transform, so a decoder reconstructs the same image from the output as from
+  the input. A 3840x2160 lossless RGB frame decodes in 0.12 s from the result
+  against 1.45 s from the Part 1 original (2 threads); the output is usually
+  100-110% of the input size (63-150% on the 43 test streams). Reference:
+  `docs/cli_transcoder.md`.
+  - Input: a raw codestream or a JP2 file, with COC (also with another
+    wavelet filter than the COD), POC, PPM, RGN (region of interest), PLT, CRG,
+    tile-part header COD/COC/QCD/QCC/RGN/COM, SOP/EPH, tiles, precincts and every
+    Part 1 code-block style switch. Refused, with a message: HT input, Part 2
+    DFS/ATK marker segments, a codestream of 4 GB or more.
+  - Output: a raw HTJ2K codestream, or a JPH file (the boxes of a JP2 input
+    are kept; a raw codestream gets the boxes the encoder makes, with
+    `-jph_color_space RGB|YCC`). One quality layer, a CAP marker segment (HTREV
+    only when every component is reversible), PLT and TLM written again for
+    the output's packets; POC and PPM are not written (packets are in the COD's
+    progression order, with inline headers), nor PLM and CPF.
+  - `-partial refine|drop|keep` for blocks the Part 1 encoder cut part-way
+    through a bit-plane (`refine`, the default, is exact); `-layers keep`
+    (experimental) keeps the layer count, each block's HT set in the first
+    layer the input had passes of it; `-num_threads N` (the output does not
+    depend on N); `-copy_input`.
+  - Memory: the tiles are transcoded one at a time, so a tiled image needs
+    about the input plus the output plus one tile (96 MB for a 43 MB, 36-tile
+    codestream); an image of one tile needs three to four times the input.
+  - Decoded with OpenJPEG 2.5.4 and compared with the Part 1 decode: 43
+    conformance, generated and JP2 streams are pixel-identical. OpenJPEG's HT
+    decoder does not support RGN, so streams with a region of interest fail
+    there. Lossy RGN streams differ from the Part 1 decode by a few levels of
+    4095 (p0_06), reversible ones are exact.
+  - `ctest -L transcoder` (70 tests): round trips on the Part 1 conformance
+    streams and on streams made with `open_htj2k_enc` (every code-block style
+    switch, rates, layers, tiles, 16 bit), marker, colour-space and refusal
+    checks, and a fuzzer-found input. The tool was run under AddressSanitizer
+    (about 19,000 mutated inputs) and ThreadSanitizer.
+- Library: the main header writer writes the COC, RGN and CRG marker segments it
+  holds; `j2k_tile::enc_init()` takes the COD, COC, QCD, QCC and RGN of a
+  tile-part header; `j2k_tile::get_packet_lengths()`;
+  `j2k_decode_indices()` (a Part 1 block's quantisation indices without the
+  inverse quantisation); `j2k_codeblock::add_ROIshift()`. None of them changes
+  what the encoder or the decoder writes or reads.
 
 ## Changed
 - The WebAssembly wrapper's `reset_decoder_with_bytes()` uses the new `init()`
