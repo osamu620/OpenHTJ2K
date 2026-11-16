@@ -1,0 +1,76 @@
+# Speed A/B: builds the pull request's base and head on the same runner and times both with
+# tools/bench/ab_speed.py (native decode and encode, 1 and 4 threads; the WebAssembly decoder
+# on the RTP demo's per-frame path).  Fails when the head is more than 25% slower in a case.
+# Runners are noisy, so this catches large regressions only, such as the 0.25.0 one that
+# halved the speed of the multi-threaded WebAssembly decoder.
+name: Speed A/B
+
+on:
+  pull_request:
+    paths:
+      - 'source/**'
+      - 'web/src/**'
+      - 'web/CMakeLists.txt'
+      - 'CMakeLists.txt'
+      - 'tools/bench/**'
+      - '.github/workflows/perf-ab.yml'
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Ref to compare the selected branch against'
+        default: 'main'
+
+concurrency:
+  group: perf-ab-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check out the base
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || inputs.base }}
+        run: |
+          git worktree add ../base "$BASE"
+          echo "base: $(git -C ../base log --oneline -1)"
+          echo "head: $(git log --oneline -1)"
+
+      - name: Build native (base and head)
+        run: |
+          for t in ../base .; do
+            cmake -S "$t" -B "$t/build" -DCMAKE_BUILD_TYPE=Release -DOPENHTJ2K_BUILD_TESTS=OFF
+            cmake --build "$t/build" -j"$(nproc)"
+          done
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 3.1.61
+          actions-cache-folder: emsdk-cache
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Build WebAssembly (base and head)
+        run: |
+          for t in ../base .; do
+            emcmake cmake -S "$t/web" -B "$t/web/build" -DCMAKE_BUILD_TYPE=Release
+            cmake --build "$t/web/build" --target libopen_htj2k_mt_simd libopen_htj2k_simd -j"$(nproc)"
+          done
+
+      - name: Compare
+        run: |
+          python3 tools/bench/ab_speed.py \
+            --base-bin ../base/build/bin --head-bin build/bin \
+            --base-wasm ../base/web/build/html --head-wasm web/build/html

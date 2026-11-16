@@ -151,6 +151,13 @@ tools/           benchmark scripts and the wt_bridge relay
   sense to someone who has not read the discussion that led to it.
 - Say whether the change can alter encoded or decoded output, and how you
   checked, for example by comparing codestreams with those of `main`.
+- A pull request that changes the sources runs the **Speed A/B** workflow. It
+  builds `main` and the branch on one runner and fails if the branch is more
+  than 25% slower in any case. That only catches large regressions, because
+  CI runners are noisy. For smaller ones, run the same script on a quiet
+  machine:
+  `python3 tools/bench/ab_speed.py --base-bin BASE/build/bin --head-bin build/bin`.
+  Add `--base-wasm` and `--head-wasm` to include the WebAssembly decoder.
 - Note user-visible changes in [CHANGELOG](CHANGELOG), under a
   `# [Unreleased]` heading at the top, using the section headings already
   there (`## Added`, `## Changed`, `## Fixed`, …).
