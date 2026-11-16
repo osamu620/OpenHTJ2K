@@ -16,8 +16,8 @@
     WebAssembly wrapper: frames after `reset_decoder_with_bytes()` must use
     the pool. It fails on the 0.28.0 wrapper, where those frames ran 0 pool
     tasks.
-  - The count is one relaxed atomic add per task; decoding executes the same
-    number of instructions as before.
+  - The pool keeps the count and updates it while a worker already holds the
+    queue lock. Decoding executes the same number of instructions as before.
 
 ## Changed
 - The WebAssembly wrapper's `reset_decoder_with_bytes()` uses the new `init()`
