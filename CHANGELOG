@@ -1,3 +1,24 @@
+# [Unreleased]
+
+## Documentation
+- The README now addresses people who use OpenHTJ2K. It gives what the
+  project does, how to build and install it, a quick start, the library in
+  two lines, and where to read more, in about 100 lines instead of 313. The
+  details it held moved to the pages they belong to: the rate-control
+  measurements and the input formats to `docs/cli_encoder.md`, and the
+  library's API to `docs/library.md`.
+- `docs/library.md` (new) covers the C++ API: decode and encode examples, the
+  decode entry points, threads, errors and warnings.
+- `CONTRIBUTING.md` (new) covers building and testing, the source layout,
+  code style, the SIMD file convention, what breaks easily, and pull
+  requests.
+- `docs/README.md` lists the documents for users first, then those for
+  contributors.
+- `docs/cli_encoder.md` now gives the PGM and PPM bit depth correctly: it
+  comes from `maxval` (4095 gives 12 bits). The README had said 8 or 16 bits.
+- The website's links to README sections point to the new sections, or to
+  the CLI pages.
+
 # [0.28.0] - 2026-11-16
 
 Adds the precision-scaled Qfactor for samples of more than 8 bits
