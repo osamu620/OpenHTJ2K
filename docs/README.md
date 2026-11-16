@@ -45,15 +45,16 @@ areas:
   [running the test suite](building.md#running-the-test-suite).
 - [benchmarks.md](benchmarks.md#reproducing): regenerating the benchmark
   table with `tools/bench/lossless_vs_openjpeg.py`.
-- [wasm_bench.md](wasm_bench.md): `web/wasm_bench.mjs`, the benchmark
+- [dev/wasm_bench.md](dev/wasm_bench.md): `web/wasm_bench.mjs`, the benchmark
   harness for the WebAssembly decoder variants. Covers its byte-exact
   plane-dump mode for regression checks and profiling recipes.
-- [planar_idwt_porting.md](planar_idwt_porting.md): the structure and
+- [dev/planar_idwt_porting.md](dev/planar_idwt_porting.md): the structure and
   verification protocol of the planar horizontal IDWT kernels on each SIMD
   platform.
-- [qfactor.md](qfactor.md#calibration-and-provenance): how the Qfactor
-  tables were calibrated.
-- [jpip.md](jpip.md#core-architecture): JPIP internals, including data bins,
+- [dev/qfactor_design.md](dev/qfactor_design.md): how a Qfactor becomes
+  step sizes, the visual-weighting tables and CSF models, and their
+  calibration.
+- [dev/jpip_internals.md](dev/jpip_internals.md): JPIP internals, including data bins,
   the cache model, the JPP-stream format and the WASM C API.
 
 ## Other references
