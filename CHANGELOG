@@ -1,5 +1,17 @@
 # [Unreleased]
 
+## Fixed
+- WebAssembly: the multi-threaded builds decoded every frame after the first
+  on one thread. This affected the RTP demo, the WebTransport viewer and the
+  JPIP demos, and dates from 0.25.0.
+  - Cause: `reset_decoder_with_bytes()` and the JPIP wrapper re-initialised
+    their decoder with `num_threads = 1`, which once left the thread pool in
+    use. Since 0.25.0, `init()` with 1 decodes on the calling thread only.
+  - Fix: they now pass the thread count the decoder was created with.
+  - On the RTP demo's default clip (1080p 10-bit 4:2:2, 4 threads), decoding
+    takes 6.4 ms a frame again instead of 15 ms, as in 0.24.0. The decoded
+    frames are unchanged.
+
 ## Documentation
 - The README now addresses people who use OpenHTJ2K. It gives what the
   project does, how to build and install it, a quick start, the library in

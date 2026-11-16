@@ -42,6 +42,15 @@
 //   5. jpip_destroy_context(handle).
 // ────────────────────────────────────────────────────────────────────────────
 
+// The decoder's thread count, the same at every init(): with the thread pool,
+// 0 uses the shared pool (one thread per hardware thread).  init() with 1
+// would decode on the calling thread only, so later frames must not pass 1.
+#ifdef OPENHTJ2K_THREAD
+static constexpr uint32_t kDecoderThreads = 0;
+#else
+static constexpr uint32_t kDecoderThreads = 1;
+#endif
+
 struct JpipContext {
   std::unique_ptr<open_htj2k::jpip::CodestreamIndex> idx;
   open_htj2k::jpip::DataBinSet set;
@@ -505,21 +514,11 @@ int jpip_end_frame(void *handle, uint8_t *rgb_out, int out_w, int out_h) {
     if (rc != open_htj2k::jpip::ReassembleStatus::Ok) return -2;
   }
 
-  // Decode.  First init after create_context uses build-default threading;
-  // subsequent inits pass num_threads=1 to preserve the ThreadPool that was
-  // spun up on the first call.
+  // Decode.
   jpip_maybe_invalidate_reuse(ctx);
   auto &dec = ctx->dec;
-  if (!ctx->dec_initialized) {
-#ifdef OPENHTJ2K_THREAD
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
-#else
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-#endif
-    ctx->dec_initialized = true;
-  } else {
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-  }
+  dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, kDecoderThreads);
+  ctx->dec_initialized = true;
   ctx->last_reduce_NL = ctx->reduce_NL;
   dec.parse();
 
@@ -609,16 +608,8 @@ int jpip_end_frame_region(void *handle, uint8_t *rgb_out, int out_w, int out_h,
 
   jpip_maybe_invalidate_reuse(ctx);
   auto &dec = ctx->dec;
-  if (!ctx->dec_initialized) {
-#ifdef OPENHTJ2K_THREAD
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
-#else
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-#endif
-    ctx->dec_initialized = true;
-  } else {
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-  }
+  dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, kDecoderThreads);
+  ctx->dec_initialized = true;
   ctx->last_reduce_NL = ctx->reduce_NL;
   dec.parse();
 
@@ -735,16 +726,8 @@ int jpip_end_frame_planar(void *handle, uint8_t *y_out, uint8_t *cb_out, uint8_t
 
   jpip_maybe_invalidate_reuse(ctx);
   auto &dec = ctx->dec;
-  if (!ctx->dec_initialized) {
-#ifdef OPENHTJ2K_THREAD
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
-#else
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-#endif
-    ctx->dec_initialized = true;
-  } else {
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-  }
+  dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, kDecoderThreads);
+  ctx->dec_initialized = true;
   ctx->last_reduce_NL = ctx->reduce_NL;
   dec.parse();
 
@@ -835,16 +818,8 @@ int jpip_end_frame_region_planar(void *handle, uint8_t *y_out, uint8_t *cb_out, 
 
   jpip_maybe_invalidate_reuse(ctx);
   auto &dec = ctx->dec;
-  if (!ctx->dec_initialized) {
-#ifdef OPENHTJ2K_THREAD
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 0);
-#else
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-#endif
-    ctx->dec_initialized = true;
-  } else {
-    dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, 1);
-  }
+  dec.init(ctx->sparse_cs.data(), ctx->sparse_cs.size(), ctx->reduce_NL, kDecoderThreads);
+  ctx->dec_initialized = true;
   ctx->last_reduce_NL = ctx->reduce_NL;
   dec.parse();
 
