@@ -39,6 +39,21 @@
   they are fixed.
 - `docs/wasm_bench.md` and `docs/planar_idwt_porting.md` moved to `docs/dev/`.
 
+## Build and CI
+- A speed A/B check, `tools/bench/ab_speed.py`, times two builds on the same
+  machine and fails when the second is more than 25% slower in any case.
+  Runs alternate between the builds. The cases are:
+  - native decode and encode of a 4K image, on 1 and 4 threads;
+  - the WebAssembly decoder on the RTP demo's per-frame path (one decoder,
+    `reset_decoder_with_bytes()` every frame), multi- and single-threaded.
+
+  A case over the limit is measured again before it fails.
+- The new workflow `.github/workflows/perf-ab.yml` runs that check on every
+  pull request that changes the sources or the WebAssembly wrapper, comparing
+  the base and head built on the same runner. Pointed at 0.28.0's WebAssembly
+  decoder, it fails, reporting it 1.85 times slower on the multi-threaded
+  per-frame path. Pointed at two identical builds, every case is within 5%.
+
 # [0.28.1] - 2026-11-16
 
 Fixes the multi-threaded WebAssembly builds, which since 0.25.0 decoded every
