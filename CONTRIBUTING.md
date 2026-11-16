@@ -51,7 +51,7 @@ ctest --test-dir build -R enc_lossless  # only the tests whose names match
 - **Profiling:**
   - Native: build with `-DCMAKE_BUILD_TYPE=RelWithDebInfo`.
   - WebAssembly: `-DOPENHTJ2K_WASM_PROFILE=ON` keeps the function names. See
-    [docs/wasm_bench.md](docs/wasm_bench.md).
+    [docs/dev/wasm_bench.md](docs/dev/wasm_bench.md).
 - **Public headers:** the installed package passes on only what the public
   headers need. The macros that select the library's own code paths are
   private to its build. `ctest -R install_consumer` installs the build into a

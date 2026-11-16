@@ -1,3 +1,20 @@
+# [Unreleased]
+
+## Documentation
+- `docs/qfactor.md` (now 303 lines, was 468) opens with which settings to use.
+  It keeps the quick start, flat weights, the precision-scaled Qfactor, the
+  CLI and C++ reference, `estimate_qfactor` and the limitations, and gains a
+  short user summary of the experimental CSF options. The step-size formula,
+  the guideline's weighting tables, the CSF model internals and their
+  calibration moved, unchanged, to `docs/dev/qfactor_design.md`.
+- `docs/jpip.md` (now 374 lines, was 505) keeps the server, the demos, the
+  benchmark, deployment and the limitations. Its internals moved, unchanged,
+  to `docs/dev/jpip_internals.md`: the core library, data bins, sequence
+  numbers, zero-skip IDWT, viewport-region decode, the cache-model field and
+  the WASM C API. Two of its links pointed at anchors that did not exist;
+  they are fixed.
+- `docs/wasm_bench.md` and `docs/planar_idwt_porting.md` moved to `docs/dev/`.
+
 # [0.28.1] - 2026-11-16
 
 Fixes the multi-threaded WebAssembly builds, which since 0.25.0 decoded every
