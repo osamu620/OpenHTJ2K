@@ -70,7 +70,7 @@ Browser demos are deployed at `https://htj2k-demo.pages.dev/` and run
 in any current Chromium- or Firefox-based browser; point them at your
 own server with the `?server=` URL parameter or the **Server** field
 in the top bar. Building the browser demos locally requires
-Emscripten — see [building.md → Building for WebAssembly](building.md#building-for-webassembly-wasm).
+Emscripten — see [wasm.md](wasm.md).
 
 ## Server — `open_htj2k_jpip_server`
 

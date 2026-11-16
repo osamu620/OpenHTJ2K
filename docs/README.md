@@ -3,8 +3,8 @@
 ## Using OpenHTJ2K
 
 - [**building.md**](building.md): building and installing. Covers the
-  requirements, the CMake options, the WebAssembly build and the
-  prerequisites of the streaming tools.
+  requirements, the CMake options and the prerequisites of the streaming
+  tools.
 - [**cli_encoder.md**](cli_encoder.md): `open_htj2k_enc`, with its inputs,
   options, rate control and examples.
 - [**cli_decoder.md**](cli_decoder.md): `open_htj2k_dec`, with its outputs,
@@ -15,6 +15,9 @@
   - The precision-scaled Qfactor for more than 8 bits (`Qscale=bits`).
   - The experimental CSF weighting.
   - `estimate_qfactor`, which recovers the Qfactor of a codestream.
+- [**wasm.md**](wasm.md): WebAssembly. Covers building the modules,
+  decoding in a web page, cross-origin isolation for threads, and the
+  Node.js command-line decoder.
 - [**library.md**](library.md): the C++ API, with decode and encode
   examples, threads, errors and warnings.
 - [**benchmarks.md**](benchmarks.md): lossless speed against OpenJPEG, and

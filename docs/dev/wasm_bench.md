@@ -20,7 +20,7 @@ decodes and optionally dumps planar buffers for comparison.
   await, and the `node:test` shape consistent with the rest of the
   WASM tooling in this repo).
 - **Emscripten** to build the WASM artefacts the driver loads — see
-  [building.md → Building for WebAssembly](../building.md#building-for-webassembly-wasm).
+  [wasm.md](../wasm.md).
 
 Build at least one WASM variant first. The bench driver looks in
 `${WEB_DIR}/../build_wasm_prof/html/` by default; override with
