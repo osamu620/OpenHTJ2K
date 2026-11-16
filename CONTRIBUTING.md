@@ -23,9 +23,51 @@ ctest --test-dir build -R enc_lossless  # only the tests whose names match
   - security regressions.
 - Test helpers are in `tests/tools/`: `imgcmp` (pixel comparison),
   `row_range_compare`, the `jpip_*_check` programs, and others.
-- [docs/building.md](docs/building.md) lists every CMake option, including
-  portable x86-64 builds, the WebAssembly build and the optional RTP and
-  JPIP tools.
+- [docs/building.md](docs/building.md) covers the build for users: options,
+  portable x86-64 builds, installing, the WebAssembly build and the optional
+  RTP and JPIP tools.
+
+## Build options for development
+
+- **C++ standard:** CMake uses the newest of C++17, C++14 and C++11 that the
+  compiler supports. Pass `-DCMAKE_CXX_STANDARD=11` (or `14`, `17`) to choose
+  one. All three build correctly and pass the test suite, and CI builds and
+  tests C++11 on Linux (x86-64) and macOS (ARM64) to keep it that way.
+
+  | Standard | Behaviour |
+  |---|---|
+  | C++17 | `[[nodiscard]]` and `[[maybe_unused]]` attributes are active; `std::filesystem` used for path handling |
+  | C++14 | Attributes expand to nothing (no diagnostics lost at runtime); `stat()` fallback for path handling; `if constexpr` on template parameters becomes a plain `if` (the optimizer removes the dead branch) |
+  | C++11 | Same as C++14; additionally uses a built-in `make_unique` shim and `std::result_of` instead of `std::invoke_result_t` |
+
+- **SIMD code paths:**
+
+  | Flag | Default | Effect |
+  |---|---|---|
+  | `-DENABLE_AVX2=OFF` | `ON` | Build x86-64 code without any AVX2 (or wider) instructions; same as `-DOPENHTJ2K_TARGET_CPU=generic`. |
+  | `-DENABLE_SSE2=OFF` | `ON` | In x86-64 builds without AVX2, use the scalar code paths instead of the SSE2 ones (as other architectures do). |
+  | `-DENABLE_ARM_NEON=OFF` | auto | Force-disable NEON dispatch on AArch64. |
+
+- **Profiling:**
+  - Native: build with `-DCMAKE_BUILD_TYPE=RelWithDebInfo`.
+  - WebAssembly: `-DOPENHTJ2K_WASM_PROFILE=ON` keeps the function names. See
+    [docs/wasm_bench.md](docs/wasm_bench.md).
+- **Public headers:** the installed package passes on only what the public
+  headers need. The macros that select the library's own code paths are
+  private to its build. `ctest -R install_consumer` installs the build into a
+  scratch prefix and checks three things, with warnings as errors under
+  `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
+  -Wold-style-cast` and similar flags:
+  - it builds and runs a small program against it through CMake;
+  - it does the same through pkg-config, when pkg-config is available;
+  - it compiles every installed header on its own.
+- **WebAssembly demo site:** `.github/workflows/deploy-wasm-demo.yml` rebuilds
+  every variant and publishes https://htj2k-demo.pages.dev/ when a push to
+  `main` changes its inputs. `rtp_demo.html` takes URL parameters for A/B
+  tests:
+  - `?variant=mt_simd|simd|mt|scalar` and `?renderer=auto|webgl|2d` force a
+    build or a renderer;
+  - `?verbose=1` prints diagnostics to the console every second.
 
 ## Source layout
 

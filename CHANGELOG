@@ -18,6 +18,17 @@
   comes from `maxval` (4095 gives 12 bits). The README had said 8 or 16 bits.
 - The website's links to README sections point to the new sections, or to
   the CLI pages.
+- `docs/building.md` now starts with the three commands most people need
+  and a list of what the rest of the page covers. Its material for
+  contributors moved to `CONTRIBUTING.md` (Build options for development):
+  - the C++ standard modes;
+  - the switches that turn SIMD code paths off;
+  - profiling builds;
+  - the installed-package checks;
+  - the demo site's deployment.
+
+  The page now lists `openhtj2k_message.hpp` among the installed headers,
+  and it no longer gives an out-of-date test count.
 
 # [0.28.0] - 2026-11-16
 

@@ -39,8 +39,10 @@ Every tool also prints its options with `-h`.
 Start with [CONTRIBUTING.md](../CONTRIBUTING.md). Background for particular
 areas:
 
-- [building.md](building.md): every CMake option, portable x86-64 builds,
-  and [running the test suite](building.md#running-the-test-suite).
+- [CONTRIBUTING.md](../CONTRIBUTING.md#build-options-for-development): the
+  build options for development (C++ standard, SIMD code paths, profiling,
+  the installed-package checks), and
+  [running the test suite](building.md#running-the-test-suite).
 - [benchmarks.md](benchmarks.md#reproducing): regenerating the benchmark
   table with `tools/bench/lossless_vs_openjpeg.py`.
 - [wasm_bench.md](wasm_bench.md): `web/wasm_bench.mjs`, the benchmark

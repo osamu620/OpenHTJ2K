@@ -1,32 +1,38 @@
 # Building OpenHTJ2K
 
-This document covers the full build matrix: the native C++ library and
-CLI tools, the WebAssembly variant, and the experimental RFC 9828 RTP
-receiver.
+Most people need only this:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+cmake --install build --prefix /usr/local   # optional
+```
+
+The tools are then in `build/bin/`. The rest of this page covers:
+- the [requirements](#requirements);
+- [build options](#common-cmake-flags);
+- [binaries for other machines](#portable-x86-64-builds);
+- [using the installed library](#installing-and-using-the-library);
+- the optional parts: [WebAssembly](#building-for-webassembly-wasm),
+  the [RTP receiver](#building-the-experimental-rfc-9828-rtp-receiver),
+  [JPIP over HTTP/3](#jpip-http3-prerequisites-opt-in) and the
+  [WebTransport viewer](#webtransport-browser-viewer-experimental).
+
+Options for working on OpenHTJ2K itself, such as the C++ standard and
+turning SIMD code paths off, are in
+[CONTRIBUTING.md](../CONTRIBUTING.md#build-options-for-development).
 
 ## Requirements
 
 **Mandatory:**
 
 - CMake 3.13 or later
-- A compiler supporting **C++11 or later** (GCC 4.8+, Clang 3.3+, MSVC 2015+, Apple Clang 6+)
+- A compiler supporting **C++11 or later** (GCC 4.8+, Clang 3.3+, MSVC 2015+, Apple Clang 6+).
+  CMake uses the newest of C++17, C++14 and C++11 that the compiler supports.
 - A **little-endian** target (x86, x86-64, ARM, AArch64, RISC-V, WebAssembly, ...). The block
-  coders read and write their bit-streams with native 32- and 64-bit memory accesses that assume
-  little-endian byte order, so configuring for a big-endian target (s390x, big-endian PowerPC or
-  MIPS, ...) stops with an error, and so does compiling the sources for one, rather than building
-  a library that would write and read wrong codestreams.
-
-CMake automatically selects the highest standard supported by the
-compiler (C++17 → C++14 → C++11); pass `-DCMAKE_CXX_STANDARD=11` (or `14`,
-`17`) to choose one. All three modes produce a correct build and pass the
-full conformance test suite; CI builds and tests C++11 on Linux (x86-64)
-and macOS (ARM64) to keep it that way.
-
-| Standard | Behaviour |
-|---|---|
-| C++17 (recommended) | `[[nodiscard]]` and `[[maybe_unused]]` attributes are active; `std::filesystem` used for path handling |
-| C++14 | Attributes expand to nothing (no diagnostics lost at runtime); `stat()` fallback for path handling; `if constexpr` on template parameters becomes a plain `if` (the optimizer removes the dead branch) |
-| C++11 | Same as C++14; additionally uses a built-in `make_unique` shim and `std::result_of` instead of `std::invoke_result_t` |
+  coders assume little-endian byte order. Configuring for a big-endian target (s390x, big-endian
+  PowerPC or MIPS, ...) stops with an error rather than building a library that would write and
+  read wrong codestreams.
 
 **Optional (auto-detected):**
 
@@ -64,14 +70,11 @@ on platform.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-DCMAKE_BUILD_TYPE=<Release\|Debug\|RelWithDebInfo>` | (none) | Optimization and debug info level. `RelWithDebInfo` is the recommended mode for profiling. |
+| `-DCMAKE_BUILD_TYPE=<Release\|Debug\|RelWithDebInfo>` | (none) | Optimization and debug info level. Use `Release` unless you are debugging. |
+| `-DOPENHTJ2K_TARGET_CPU=<native\|x86-64-v3\|x86-64-v4\|generic>` | `native` | x86-64 code generation target; see [Portable x86-64 builds](#portable-x86-64-builds). |
+| `-DBUILD_SHARED_LIBS=OFF` | `ON` | Build a static library instead of a shared one. |
 | `-DOPENHTJ2K_RTP=ON` | `OFF` | Build the experimental RFC 9828 RTP receiver (see below). Adds a GLFW dependency on every platform; uses native Metal on macOS and OpenGL 3.3 elsewhere. Also gates `open_htj2k_jpip_demo`. |
 | `-DOPENHTJ2K_QUIC=ON` | `OFF` | Enable HTTP/3 over QUIC for the JPIP server and demo. Requires MsQuic + nghttp3; see [JPIP HTTP/3 prerequisites](#jpip-http3-prerequisites-opt-in) below. |
-| `-DOPENHTJ2K_TARGET_CPU=<native\|x86-64-v3\|x86-64-v4\|generic>` | `native` | x86-64 code generation target; see [Portable x86-64 builds](#portable-x86-64-builds). |
-| `-DENABLE_AVX2=OFF` | `ON` | Build x86-64 code without any AVX2 (or wider) instructions; same as `-DOPENHTJ2K_TARGET_CPU=generic`. |
-| `-DENABLE_SSE2=OFF` | `ON` | In x86-64 builds without AVX2, use the scalar code paths instead of the SSE2 ones (as other architectures do). |
-| `-DENABLE_ARM_NEON=OFF` | auto | Force-disable NEON dispatch on AArch64. |
-| `-DBUILD_SHARED_LIBS=OFF` | `ON` | Build a static library instead of a shared one. |
 | `-DOPENHTJ2K_BUILD_APPS=OFF` | `ON` | Build only the library, without the command-line tools (and therefore without the test suite). |
 | `-DOPENHTJ2K_BUILD_TESTS=OFF` | `ON` | Skip the test tools and the CTest suite. |
 
@@ -123,7 +126,7 @@ cmake --install ${BUILD_DIR} --prefix /usr/local
 |---|---|
 | `open_htj2k_dec`, `open_htj2k_enc` | `<prefix>/bin` |
 | `libopenhtj2k` (`.so` / `.dylib` / `.a`; on Windows the `.dll` goes to `bin` and the import library to `lib`) | `<prefix>/lib` (or `lib64`, following `GNUInstallDirs`) |
-| Public headers `decoder.hpp`, `encoder.hpp`, `planar_output_desc.hpp` | `<prefix>/include/open_htj2k/interface` |
+| Public headers `decoder.hpp`, `encoder.hpp`, `openhtj2k_message.hpp`, `planar_output_desc.hpp` | `<prefix>/include/open_htj2k/interface` |
 | `open_htj2k.pc` | `<prefix>/lib/pkgconfig` |
 | CMake package (`openhtj2k-config.cmake` and friends) | `<prefix>/lib/cmake/openhtj2k` |
 
@@ -152,18 +155,14 @@ that uses OpenHTJ2K through `add_subdirectory()` has only the short form.)
 The paths in `open_htj2k.pc` are relative to its `prefix=` line, so a
 relocated install only needs that line changed.
 
-The package passes on only what the public headers need. The macros that
-select the library's own code paths (SIMD, threading, TIFF and QUIC support)
-are private to its build, so they do not leak into a consumer's code; the
-headers compile on their own, as C++11 or later, without warnings under
-`-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
--Wold-style-cast` and similar flags. A static library built with TIFF
-support needs libtiff when linking: the CMake package finds it with
-`find_dependency(TIFF)`, and `pkg-config --static` lists it.
+The headers compile on their own as C++11 or later, without warnings under
+strict flags (`-Wall -Wextra -Wpedantic -Wconversion` and the like), and the
+library's internal macros (SIMD, threading, TIFF and QUIC support) do not
+leak into your code. A static library built with TIFF support needs libtiff
+when linking: the CMake package finds it with `find_dependency(TIFF)`, and
+`pkg-config --static` lists it.
 
-`ctest -R install_consumer` installs the build into a scratch prefix and
-builds and runs a small program against it both ways, with warnings as
-errors, and also compiles every installed header on its own.
+[library.md](library.md) shows how to decode and encode with the API.
 
 On Windows, code using the DLL sees the API declared `__declspec(dllimport)`;
 when linking the static library, define `OHTJ2K_STATIC` (the CMake target
@@ -188,9 +187,6 @@ Six variants are produced under `web/build/html/`:
 - `libopen_htj2k_jpip_mt_simd.js` — JPIP client + decoder wrapper
   (WASM-SIMD + pthreads)
 
-Add `-DOPENHTJ2K_WASM_PROFILE=ON` at configure time to preserve Wasm
-function names for profiling (see [wasm_bench.md](wasm_bench.md)).
-
 ```bash
 cd web
 mkdir -p build && cd build
@@ -207,21 +203,16 @@ Pages via a `_headers` file), this works on first load.  For local
 development or `file://` access, the bundled `coi-serviceworker.js`
 installs the headers via a service worker.
 
-A live demo is available at **https://htj2k-demo.pages.dev/**.  It
-hosts two pages:
+A live demo built this way is at **https://htj2k-demo.pages.dev/**:
 
 - `index.html` — still-image decoder (preset dropdown + file upload,
   progressive-resolution grid).
 - `rtp_demo.html` — RFC 9828 `.rtp` file replay (WebGL2 GPU renderer,
   YCbCr→RGB in fragment shader, planar Y/Cb/Cr textures, Display-P3
-  on supported hardware).  URL parameters `?variant=mt_simd|simd|mt|
-  scalar` and `?renderer=auto|webgl|2d` force a specific build /
-  renderer for A/B testing.  `?verbose=1` enables per-second console
-  diagnostics.
+  on supported hardware).
 
-A GitHub Actions workflow (`.github/workflows/deploy-wasm-demo.yml`)
-rebuilds all four variants and publishes the demo site on every
-push to `main` or `feat/wasm-rtp-demo`.
+The site also hosts the JPIP demos (`jpip_demo.html`, `jpip_viewer.html`;
+see [jpip.md](jpip.md)).
 
 ### Node.js CLI decoder (`open_htj2k_dec.mjs`)
 
@@ -339,9 +330,9 @@ above, so build that first.
 ## Running the test suite
 
 ```bash
-ctest --test-dir ${BUILD_DIR}
+ctest --test-dir ${BUILD_DIR} -j
 ```
 
-Runs the full conformance suite (~582 tests) including HTJ2K and Part 1
-decode conformance, encoder round-trip checks, and line-based
-streaming validation. `-j` is supported.
+Runs the whole suite: decoding conformance for Part 1, Part 15 and Part 2,
+encoder round trips, line-based decoding and more. Its layout and the test
+helpers are described in [CONTRIBUTING.md](../CONTRIBUTING.md#build-and-test).
