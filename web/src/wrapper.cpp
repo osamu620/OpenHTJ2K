@@ -17,8 +17,38 @@
   #endif
 
   #include <deque>
+  #include <mutex>
+  #include <unordered_map>
   #include "frame_handler.hpp"
   #include "rfc9828_parser.hpp"
+
+// ────────────────────────────────────────────────────────────────────────────
+// The thread count each decoder was created with.  init() takes a thread count
+// as the constructor does, and 1 there means "decode on the calling thread
+// only", so reset_decoder_with_bytes() must pass on the creation count, not 1,
+// or every frame after the first decodes on one thread.
+// ────────────────────────────────────────────────────────────────────────────
+namespace {
+std::mutex decoder_threads_mutex;
+std::unordered_map<const open_htj2k::openhtj2k_decoder*, uint32_t> decoder_threads;
+
+open_htj2k::openhtj2k_decoder* remember_threads(open_htj2k::openhtj2k_decoder* dec, uint32_t num_threads) {
+  std::lock_guard<std::mutex> lock(decoder_threads_mutex);
+  decoder_threads[dec] = num_threads;
+  return dec;
+}
+
+uint32_t threads_of(const open_htj2k::openhtj2k_decoder* dec) {
+  std::lock_guard<std::mutex> lock(decoder_threads_mutex);
+  auto it = decoder_threads.find(dec);
+  return it == decoder_threads.end() ? 1 : it->second;
+}
+
+void forget_threads(const open_htj2k::openhtj2k_decoder* dec) {
+  std::lock_guard<std::mutex> lock(decoder_threads_mutex);
+  decoder_threads.erase(dec);
+}
+}  // namespace
 
 // ────────────────────────────────────────────────────────────────────────────
 // RTP session: reassembles RFC 9828 Main/Body packets into complete JPEG 2000
@@ -39,7 +69,7 @@ struct RtpSession {
 };
 
 open_htj2k::openhtj2k_decoder* cpp_create_decoder(uint8_t* data, size_t size, uint8_t reduce_NL) {
-  return new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, 1);
+  return remember_threads(new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, 1), 1);
 }
 
 #if defined(OPENHTJ2K_THREAD)
@@ -50,7 +80,8 @@ open_htj2k::openhtj2k_decoder* cpp_create_decoder_mt(uint8_t* data, size_t size,
     num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;  // fallback
   }
-  return new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, num_threads);
+  return remember_threads(new open_htj2k::openhtj2k_decoder(data, size, reduce_NL, num_threads),
+                          num_threads);
 }
 #endif
 
@@ -86,7 +117,10 @@ void cpp_invoke_decoder(open_htj2k::openhtj2k_decoder* dec, int32_t* out) {
   }
 }
 
-void cpp_release_j2c_data(open_htj2k::openhtj2k_decoder* dec) { delete dec; }
+void cpp_release_j2c_data(open_htj2k::openhtj2k_decoder* dec) {
+  forget_threads(dec);
+  delete dec;
+}
 
 uint16_t cpp_get_num_components(open_htj2k::openhtj2k_decoder* dec) { return dec->get_num_component(); };
 
@@ -851,8 +885,9 @@ EMSCRIPTEN_KEEPALIVE
 void reset_decoder_with_bytes(open_htj2k::openhtj2k_decoder* dec, uint8_t* data, size_t size,
                               uint8_t reduce_NL) {
   if (!dec) return;
-  // num_threads=1 keeps existing ThreadPool if one was spun up by create_decoder_mt.
-  dec->init(data, size, reduce_NL, 1);
+  // The thread count it was created with: 1 would decode on the calling thread
+  // only, even when create_decoder_mt has started the shared pool.
+  dec->init(data, size, reduce_NL, threads_of(dec));
 }
 
 EMSCRIPTEN_KEEPALIVE
