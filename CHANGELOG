@@ -1,4 +1,13 @@
-# [Unreleased]
+# [0.28.0] - 2026-11-16
+
+Adds the precision-scaled Qfactor for samples of more than 8 bits
+(`Qscale=bits`, `openhtj2k_encoder::set_qfactor_scale(1)`): a Qfactor removes
+the same fraction of the precision at every bit depth, so 10- to 16-bit data
+can be coded at the fidelity that the JPEG Qfactor guideline's scale leaves
+between `Qfactor=99` and 100. It is opt-in.
+
+Encoded output is byte-identical to 0.27.0 unless `Qscale=bits` is used, and
+decoded output is byte-identical too.
 
 ## Added
 - Precision-scaled Qfactor, for samples of more than 8 bits: `Qscale=bits` on
