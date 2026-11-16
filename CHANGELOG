@@ -13,6 +13,10 @@
     frames are unchanged.
 
 ## Documentation
+- The README's feature list now says that `-rate` makes HTJ2K codestreams of
+  a given size (PCRD-opt over the HT coding passes). Quality layers are the
+  extra for the Part 1 block coder; the previous wording suggested `-rate`
+  was mainly for Part 1.
 - The README now addresses people who use OpenHTJ2K. It gives what the
   project does, how to build and install it, a quick start, the library in
   two lines, and where to read more, in about 100 lines instead of 313. The
