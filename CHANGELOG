@@ -25,6 +25,20 @@
   are the same.
 
 ## Documentation
+- `docs/wasm.md` (new) is the WebAssembly page for users:
+  - the modules and which to use;
+  - decoding in a web page (an example checked under Node.js);
+  - cross-origin isolation, and the thread limit of the threaded modules;
+  - the Node.js command-line decoder and the demos.
+
+  It takes over the WebAssembly part of `docs/building.md`, which keeps the
+  build commands under the same heading.
+- The CMake requirement is stated consistently as 3.13 or later, as
+  `CMakeLists.txt` declares; the website said 3.14. The docs now note that
+  `cmake --install` needs 3.15 and `ctest --test-dir` needs 3.20, and give
+  the commands to use with older versions.
+- `docs/wt_viewer.md` moves its architecture notes and reproduction scripts
+  after the troubleshooting section, so the user material comes first.
 - `docs/qfactor.md` (now 303 lines, was 468) opens with which settings to use.
   It keeps the quick start, flat weights, the precision-scaled Qfactor, the
   CLI and C++ reference, `estimate_qfactor` and the limitations, and gains a

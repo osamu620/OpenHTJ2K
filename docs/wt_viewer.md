@@ -31,7 +31,7 @@ flowchart LR
 |---|---|---|---|
 | **Go** | Building `wt_bridge` | **1.22** | Pinned by `tools/wt_bridge/go.mod`. `go build` will refuse older toolchains. |
 | **Node.js** | Static server (`web/perf/serve.mjs`), fixture replayer (`udp_replay.mjs`) | **18** | Modern ESM + WebCrypto APIs are used. |
-| **Emscripten** | WASM artefacts under `web/build_wt/` | 3.x or 5.x | See [building.md → Building for WebAssembly](building.md#building-for-webassembly-wasm). |
+| **Emscripten** | WASM artefacts under `web/build_wt/` | 3.x or 5.x | See [wasm.md](wasm.md). |
 | **OpenSSL** | HTTPS dev cert for the static server | any 1.1+ | Required by `gen_static_cert.sh`. Skip with `HTTP_NO_TLS=1` (then WebTransport works only from `http://localhost` on the bridge host). |
 | **Python 3** | URL-encoding inside `run_lan.sh` | 3.6+ | Any system `python3` works. |
 | **Chromium-based browser** | Viewer | latest stable | Firefox WebTransport is partial / behind a flag; Safari has no implementation. See [Browser support](#caveats-and-constraints). |
@@ -246,39 +246,6 @@ controls (URL, certHash, Connect/Stop) are also wired and editable.
   one-shot connection (useful when debugging initial-connection
   failures that would otherwise loop).
 
-## Architecture notes
-
-**WebTransport, not WebRTC.** RTCPeerConnection's media pipeline is
-codec-aware; HTJ2K isn't one of the codecs it understands. WebTransport
-is codec-opaque, so RFC 9828 packets pass through unchanged.
-
-**No TypeScript port of the RFC 9828 parser.**
-[`web/src/wrapper.cpp`](../web/src/wrapper.cpp) already
-exports the full `rtp_session_*` API (`rtp_session_create`,
-`rtp_push_packet`, `rtp_peek_frame_size`, `rtp_pop_frame`, plus the
-H.273 metadata accessors and decoder-reuse helpers) via
-`EMSCRIPTEN_KEEPALIVE`. The viewer just `cwrap`s them.
-
-**Render decoupled from decode.** Decoding uploads textures and shader
-uniforms but does not call `gl.drawArrays`. A separate
-`requestAnimationFrame` loop calls `draw()` once per vsync. This locks
-display cadence to monitor refresh and absorbs the per-frame jitter
-that decode-then-draw would otherwise produce as visible flicker. The
-cost is one frame of display latency (≤16.7 ms at 60 Hz).
-
-**Drop-on-overrun.** Two layers absorb the case where decode is slower
-than the source frame rate:
-
-1. The C++ `rtp_session` ready queue caps at 2 frames; a third
-   completed frame evicts the oldest.
-2. Before each decode the JS layer also calls `rtp_drop_ready` while
-   the queue holds more than one frame, so the decoder always works on
-   the latest codestream available.
-
-The overlay's `decode-bound` flag fires when rolling decode `p95`
-exceeds the source frame interval; that's the signal to lower
-resolution or frame rate at the producer.
-
 ## Caveats and constraints
 
 **Secure-context requirement.** Browsers expose the WebTransport API
@@ -357,6 +324,39 @@ The kernel clamped `SO_RCVBUF`. Raise `net.core.rmem_max`; see above.
 **Bridge log: `session ended; forwarded=N dropped=M` with M ≫ 0.** The
 viewer can't keep up with the network rate. Check the overlay's
 `decode-bound` flag. Drop the producer's frame rate or resolution.
+
+## Architecture notes
+
+**WebTransport, not WebRTC.** RTCPeerConnection's media pipeline is
+codec-aware; HTJ2K isn't one of the codecs it understands. WebTransport
+is codec-opaque, so RFC 9828 packets pass through unchanged.
+
+**No TypeScript port of the RFC 9828 parser.**
+[`web/src/wrapper.cpp`](../web/src/wrapper.cpp) already
+exports the full `rtp_session_*` API (`rtp_session_create`,
+`rtp_push_packet`, `rtp_peek_frame_size`, `rtp_pop_frame`, plus the
+H.273 metadata accessors and decoder-reuse helpers) via
+`EMSCRIPTEN_KEEPALIVE`. The viewer just `cwrap`s them.
+
+**Render decoupled from decode.** Decoding uploads textures and shader
+uniforms but does not call `gl.drawArrays`. A separate
+`requestAnimationFrame` loop calls `draw()` once per vsync. This locks
+display cadence to monitor refresh and absorbs the per-frame jitter
+that decode-then-draw would otherwise produce as visible flicker. The
+cost is one frame of display latency (≤16.7 ms at 60 Hz).
+
+**Drop-on-overrun.** Two layers absorb the case where decode is slower
+than the source frame rate:
+
+1. The C++ `rtp_session` ready queue caps at 2 frames; a third
+   completed frame evicts the oldest.
+2. Before each decode the JS layer also calls `rtp_drop_ready` while
+   the queue holds more than one frame, so the decoder always works on
+   the latest codestream available.
+
+The overlay's `decode-bound` flag fires when rolling decode `p95`
+exceeds the source frame interval; that's the signal to lower
+resolution or frame rate at the producer.
 
 ## Reproduction scripts
 

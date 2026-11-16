@@ -30,8 +30,9 @@ license.
 - **File formats:** codestreams (`.j2c`, `.j2k`, `.jhc`), JPH files (`.jph`,
   HTJ2K) and JP2 files (`.jp2`, Part 1). The tools read PGM, PPM, PGX and TIFF,
   and write PGM, PPM, PGX and RAW.
-- **In the browser:** a WebAssembly build decodes inside the web page. Try
-  the [live demo](https://htj2k-demo.pages.dev/).
+- **In the browser:** a WebAssembly build decodes inside the web page or
+  under Node.js ([WebAssembly](docs/wasm.md)). Try the
+  [live demo](https://htj2k-demo.pages.dev/).
 - **Streaming (experimental):** a live RTP receiver (RFC 9828) that keeps up
   with 4K at 60 fps on a recent x86-64 CPU, and a JPIP server with foveated
   and gigapixel viewers.
@@ -55,10 +56,11 @@ cmake --build build -j
 cmake --install build      # optional; --prefix <dir> to choose where
 ```
 
-You need CMake 3.13 or later and a C++11 compiler. TIFF input also needs
+You need CMake 3.13 or later (3.15 for `cmake --install`; before that, use
+`cmake --build build --target install`) and a C++11 compiler. TIFF input also needs
 libtiff, which CMake finds by itself. The tools are in `build/bin/`. For other
-platforms, build options and the WebAssembly build, see
-[docs/building.md](docs/building.md).
+platforms and build options, see [docs/building.md](docs/building.md); for
+the WebAssembly build, [docs/wasm.md](docs/wasm.md).
 
 ## Quick start
 
@@ -94,6 +96,7 @@ covers threads, errors and warnings.
 | Encoder and decoder options | [docs/cli_encoder.md](docs/cli_encoder.md), [docs/cli_decoder.md](docs/cli_decoder.md) |
 | What `Qfactor` does | [docs/qfactor.md](docs/qfactor.md) |
 | The C++ API | [docs/library.md](docs/library.md) |
+| WebAssembly: decoding in the browser and Node.js | [docs/wasm.md](docs/wasm.md) |
 | Speed against OpenJPEG | [docs/benchmarks.md](docs/benchmarks.md) |
 | RTP receiver, browser viewer, JPIP (experimental) | [docs/cli_rtp_recv.md](docs/cli_rtp_recv.md), [docs/wt_viewer.md](docs/wt_viewer.md), [docs/jpip.md](docs/jpip.md) |
 | Release history | [CHANGELOG](CHANGELOG) |

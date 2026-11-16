@@ -13,7 +13,7 @@ The tools are then in `build/bin/`. The rest of this page covers:
 - [build options](#common-cmake-flags);
 - [binaries for other machines](#portable-x86-64-builds);
 - [using the installed library](#installing-and-using-the-library);
-- the optional parts: [WebAssembly](#building-for-webassembly-wasm),
+- the optional parts: [WebAssembly](wasm.md),
   the [RTP receiver](#building-the-experimental-rfc-9828-rtp-receiver),
   [JPIP over HTTP/3](#jpip-http3-prerequisites-opt-in) and the
   [WebTransport viewer](#webtransport-browser-viewer-experimental).
@@ -26,7 +26,9 @@ turning SIMD code paths off, are in
 
 **Mandatory:**
 
-- CMake 3.13 or later
+- CMake 3.13 or later. Two commands in these documents need a newer one: `cmake --install`
+  needs 3.15 (otherwise use `cmake --build <dir> --target install`), and `ctest --test-dir`
+  needs 3.20 (otherwise run `ctest` inside the build directory).
 - A compiler supporting **C++11 or later** (GCC 4.8+, Clang 3.3+, MSVC 2015+, Apple Clang 6+).
   CMake uses the newest of C++17, C++14 and C++11 that the compiler supports.
 - A **little-endian** target (x86, x86-64, ARM, AArch64, RISC-V, WebAssembly, ...). The block
@@ -172,83 +174,15 @@ otherwise.
 
 ## Building for WebAssembly (WASM)
 
-Requires [Emscripten](https://emscripten.org/) (tested with 3.x / 5.x).
-
-Six variants are produced under `web/build/html/`:
-
-- `libopen_htj2k.js`           — scalar, single-threaded
-- `libopen_htj2k_simd.js`      — WASM-SIMD 128-bit, single-threaded
-  (recommended for most browsers)
-- `libopen_htj2k_mt.js`        — scalar + pthreads (multi-threaded)
-- `libopen_htj2k_mt_simd.js`   — WASM-SIMD + pthreads (fastest where
-  available)
-- `libopen_htj2k_jpip.js`      — JPIP client + decoder wrapper
-  (WASM-SIMD), used by the browser JPIP demos
-- `libopen_htj2k_jpip_mt_simd.js` — JPIP client + decoder wrapper
-  (WASM-SIMD + pthreads)
+With [Emscripten](https://emscripten.org/):
 
 ```bash
-cd web
-mkdir -p build && cd build
-emcmake cmake ..
-cmake --build . -j
+emcmake cmake -S web -B web/build
+cmake --build web/build -j
 ```
 
-The multi-threaded variants use Emscripten's pthreads, which require
-the page to be **cross-origin isolated** (responses carry both
-`Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp` — or `credentialless`).
-When served from a static host that can set headers (e.g. Cloudflare
-Pages via a `_headers` file), this works on first load.  For local
-development or `file://` access, the bundled `coi-serviceworker.js`
-installs the headers via a service worker.
-
-A live demo built this way is at **https://htj2k-demo.pages.dev/**:
-
-- `index.html` — still-image decoder (preset dropdown + file upload,
-  progressive-resolution grid).
-- `rtp_demo.html` — RFC 9828 `.rtp` file replay (WebGL2 GPU renderer,
-  YCbCr→RGB in fragment shader, planar Y/Cb/Cr textures, Display-P3
-  on supported hardware).
-
-The site also hosts the JPIP demos (`jpip_demo.html`, `jpip_viewer.html`;
-see [jpip.md](jpip.md)).
-
-### Node.js CLI decoder (`open_htj2k_dec.mjs`)
-
-`open_htj2k_dec.mjs` is a Node.js ES module that wraps the WASM build
-so you can decode J2C / J2K / JPH files from the terminal. It requires
-the WASM build above but not a platform-native C++ toolchain on the
-target machine.
-
-**Requirements:** Node.js ≥ 18 and the WASM build.
-
-**Usage:**
-```bash
-cd web
-node open_htj2k_dec.mjs -i <input.j2c|.j2k|.jph> -o <output.ppm|.pgm> \
-     [-r <reduce_NL>] [-num_threads <N>] [-ycbcr bt601|bt709]
-```
-
-| Option | Description |
-|--------|-------------|
-| `-i`, `--input`     | Input codestream (`.j2c`, `.j2k`, `.jph`) |
-| `-o`, `--output`    | Output image (`.ppm` for RGB, `.pgm` for grayscale, `.pgx` for per-component raw) |
-| `-r`, `--reduce`    | Resolution reduction: skip `n` DWT levels (`0` = full resolution) |
-| `-num_threads`, `-t` | Number of decode threads (`0` = auto-detect, `1` = single-threaded).  Selects the multi-threaded WASM build when `> 1` or `= 0`. |
-| `-ycbcr`            | YCbCr→RGB conversion for PPM output: `bt601` or `bt709` (auto-detected from JPH `EnumCS` otherwise). |
-
-**Examples:**
-```bash
-node open_htj2k_dec.mjs -i image.j2c -o image.ppm
-node open_htj2k_dec.mjs -i image.j2c -o image_half.ppm -r 1   # half resolution
-```
-
-The script auto-selects the SIMD build (`libopen_htj2k_simd.js`) when
-available, falling back to the scalar build. Decoding uses the
-streaming `invoke_decoder_stream` path, keeping peak WASM heap well
-below the full-image `int32` buffer approach (~52 MB peak for a 4K RGB
-image).
+The modules this builds, how to use them in a web page or under Node.js, and the
+Node.js command-line decoder are described in [wasm.md](wasm.md).
 
 ## Building the experimental RFC 9828 RTP receiver
 

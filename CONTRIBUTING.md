@@ -8,7 +8,7 @@ This page is for people who change OpenHTJ2K itself. To use it, see the
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build -j               # the whole suite
+ctest --test-dir build -j               # the whole suite (CMake 3.20+; or: cd build && ctest -j)
 ctest --test-dir build -R enc_lossless  # only the tests whose names match
 ```
 
