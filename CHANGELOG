@@ -1,4 +1,12 @@
-# [Unreleased]
+# [0.28.1] - 2026-11-16
+
+Fixes the multi-threaded WebAssembly builds, which since 0.25.0 decoded every
+frame after the first on one thread: the RTP demo, the WebTransport viewer and
+the JPIP demos ran at about half speed. The README and the documentation are
+reorganised by audience.
+
+The native library is unchanged: encoded and decoded output are byte-identical
+to 0.28.0.
 
 ## Fixed
 - WebAssembly: the multi-threaded builds decoded every frame after the first
