@@ -19,10 +19,14 @@ license.
   ATK). Tested against the conformance codestreams of ISO/IEC 15444-4.
 - **Fast:** SIMD code for AVX2, AVX-512, SSE2, NEON and WebAssembly, and a
   built-in thread pool.
-- **Quality or size:** `Qfactor=0..100` sets the quality, much as in JPEG
-  ([Qfactor](docs/qfactor.md)). `-rate` makes a codestream of a given size,
-  with quality layers for Part 1 (experimental; [rate
-  control](docs/cli_encoder.md#rate-control)).
+- **Quality:** `Qfactor=0..100` sets the quality, much as in JPEG
+  ([Qfactor](docs/qfactor.md)).
+- **Size, for HTJ2K (experimental):** `-rate` makes an HTJ2K codestream of a
+  given size, usually within a few bytes of it.
+  - Post-compression rate-distortion optimisation (PCRD-opt) cuts each HT
+    code-block after its cleanup, SigProp or MagRef pass.
+  - It also works with the Part 1 block coder, which can add quality layers.
+  - See [rate control](docs/cli_encoder.md#rate-control).
 - **File formats:** codestreams (`.j2c`, `.j2k`, `.jhc`), JPH files (`.jph`,
   HTJ2K) and JP2 files (`.jp2`, Part 1). The tools read PGM, PPM, PGX and TIFF,
   and write PGM, PPM, PGX and RAW.
