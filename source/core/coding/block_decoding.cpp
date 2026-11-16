@@ -260,7 +260,10 @@ EBCOT_PASS_NOINLINE void decode_cleanup(j2k_codeblock *block, uint8_t p, int32_t
 
 }  // namespace
 
-void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+// Runs the coding passes of a Part 1 code-block into block->sample_buf (sign in bit 31, the
+// magnitude below it with the reconstruction marker of the lowest decoded bit-plane), without
+// the dequantisation that j2k_decode() ends with.
+static void decode_passes(j2k_codeblock *block, const uint8_t ROIshift) {
   constexpr uint8_t label_uni = 18;
 
   // The passes of every layer the packets delivered.
@@ -384,8 +387,15 @@ void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     k++;
   }  // end of while
 
-  j2k_dequant(block->sample_buf, block->blksampl_stride, block->band_buf, block->band_stride, block->size.x,
-              block->size.y, M_b, ROIshift, block->transformation, block->stepsize, block->dequant_i32);
   // TODO: if k !=0
 }
+
+void j2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+  decode_passes(block, ROIshift);
+  j2k_dequant(block->sample_buf, block->blksampl_stride, block->band_buf, block->band_stride, block->size.x,
+              block->size.y, static_cast<int32_t>(block->get_Mb()), ROIshift, block->transformation,
+              block->stepsize, block->dequant_i32);
+}
+
+void j2k_decode_indices(j2k_codeblock *block, const uint8_t ROIshift) { decode_passes(block, ROIshift); }
 }  // namespace open_htj2k

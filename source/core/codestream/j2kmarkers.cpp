@@ -567,6 +567,7 @@ COC_marker::COC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   this->set_buf(in.get_buf_pos());
   in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lcoc
+  wide_ccoc_   = (Csiz >= 257);
   if (Csiz < 257) {
     Ccoc = get_byte();
     len++;
@@ -599,6 +600,19 @@ COC_marker::COC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
                              static_cast<unsigned>(SPcoc[0]));
   }
   is_set = true;
+}
+
+int COC_marker::write(j2c_dst_memory &dst) {
+  dst.put_word(code);
+  dst.put_word(static_cast<uint16_t>(2 + (wide_ccoc_ ? 2 : 1) + 1 + SPcoc.size()));
+  if (wide_ccoc_) {
+    dst.put_word(Ccoc);
+  } else {
+    dst.put_byte(static_cast<uint8_t>(Ccoc));
+  }
+  dst.put_byte(Scoc);
+  for (uint8_t b : SPcoc) dst.put_byte(b);
+  return EXIT_SUCCESS;
 }
 
 uint16_t COC_marker::get_component_index() const { return Ccoc; }
@@ -658,6 +672,7 @@ RGN_marker::RGN_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   this->set_buf(in.get_buf_pos());
   in.get_N_byte(this->get_buf(), Lmar - 2U);
   uint16_t len = 2;  // tmp length including Lrgn
+  wide_crgn_   = (Csiz >= 257);
   if (Csiz < 257) {
     Crgn = get_byte();
     len++;
@@ -684,6 +699,19 @@ RGN_marker::RGN_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
     open_htj2k::detail::fail("RGN region-of-interest shift %u exceeds 31.", static_cast<unsigned>(SPrgn));
   }
   is_set = true;
+}
+
+int RGN_marker::write(j2c_dst_memory &dst) {
+  dst.put_word(code);
+  dst.put_word(static_cast<uint16_t>(wide_crgn_ ? 6 : 5));
+  if (wide_crgn_) {
+    dst.put_word(Crgn);
+  } else {
+    dst.put_byte(static_cast<uint8_t>(Crgn));
+  }
+  dst.put_byte(Srgn);
+  dst.put_byte(SPrgn);
+  return EXIT_SUCCESS;
 }
 
 uint16_t RGN_marker::get_component_index() const { return Crgn; }
@@ -1037,6 +1065,8 @@ QCD_marker::QCD_marker(j2c_src_memory &in) : j2k_marker_io_base(_QCD), Sqcd(0) {
   Sqcd         = get_byte();
   len++;
   check_quantization_style("QCD", Sqcd, Lmar - len);
+  // write() and get_MAGB() depend on it: SPqcd entries are bytes when there is no quantization.
+  is_reversible = ((Sqcd & 0x1F) == 0);
   if ((Sqcd & 0x1F) == 0) {
     // reversible transform
     const size_t splen = static_cast<size_t>(Lmar - len);
@@ -1262,6 +1292,7 @@ QCC_marker::QCC_marker(j2c_src_memory &in, uint16_t Csiz) : j2k_marker_io_base(_
   Sqcc = get_byte();
   len++;
   check_quantization_style("QCC", Sqcc, Lmar - len);
+  is_reversible = ((Sqcc & 0x1F) == 0);
   if ((Sqcc & 0x1F) == 0) {
     // reversible transform
     for (size_t i = 0; i < static_cast<size_t>(Lmar - len); ++i) {
@@ -1625,6 +1656,17 @@ CRG_marker::CRG_marker(j2c_src_memory &in) : j2k_marker_io_base(_CRG) {
   is_set = true;
 }
 
+int CRG_marker::write(j2c_dst_memory &dst) {
+  assert(is_set == true);
+  dst.put_word(code);
+  dst.put_word(static_cast<uint16_t>(2U + 4U * Xcrg.size()));
+  for (size_t i = 0; i < Xcrg.size(); ++i) {
+    dst.put_word(Xcrg[i]);
+    dst.put_word(Ycrg[i]);
+  }
+  return EXIT_SUCCESS;
+}
+
 /********************************************************************************
  * COM_marker
  *******************************************************************************/
@@ -1835,7 +1877,7 @@ void j2k_main_header::flush(j2c_dst_memory &buf) {
   COD->write(buf);
   if (!COC.empty()) {
     for (size_t i = 0; i < COC.size(); ++i) {
-      // COC[i]->write(buf);
+      COC[i]->write(buf);
     }
   }
   QCD->write(buf);
@@ -1846,7 +1888,7 @@ void j2k_main_header::flush(j2c_dst_memory &buf) {
   }
   if (!RGN.empty()) {
     for (size_t i = 0; i < RGN.size(); ++i) {
-      // RGN[i]->write(buf);
+      RGN[i]->write(buf);
     }
   }
   // POC->write(buf);
@@ -1865,7 +1907,7 @@ void j2k_main_header::flush(j2c_dst_memory &buf) {
       // PLM[i]->write(buf);
     }
   }
-  // CRG->write(buf);
+  if (CRG != nullptr) CRG->write(buf);
   if (!COM.empty()) {
     for (auto &i : COM) {
       i->write(buf);

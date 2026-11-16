@@ -113,6 +113,8 @@ class SIZ_marker : public j2k_marker_io_base {
   void get_subsampling_factor(element_siz &siz, uint16_t c);
   uint16_t get_num_components() const;
   uint8_t get_chroma_format() const;
+  // Rsiz bit 14: a CAP marker follows (the codestream uses Part 15 block coding).
+  void set_cap_capability() { Rsiz = static_cast<uint16_t>(Rsiz | (1U << 14)); }
 };
 
 /********************************************************************************
@@ -194,6 +196,11 @@ class COD_marker : public j2k_marker_io_base {
   void get_precinct_size(element_siz &out, uint8_t resolution);
   uint8_t get_Cmodes();
   uint8_t get_transformation();
+  // Transcoding: replace the code-block style, and the number of quality layers.
+  void set_Cmodes(uint8_t style) { SPcod[3] = style; }
+  void set_number_of_layers(uint16_t layers) {
+    SGcod = (SGcod & 0xFF0000FFU) | (static_cast<uint32_t>(layers) << 8);
+  }
 };
 
 /********************************************************************************
@@ -217,6 +224,11 @@ class COC_marker : public j2k_marker_io_base {
   void get_precinct_size(element_siz &out, uint8_t resolution);
   uint8_t get_Cmodes();
   uint8_t get_transformation();
+  void set_Cmodes(uint8_t style) { SPcoc[3] = style; }
+  int write(j2c_dst_memory &dst);
+
+ private:
+  bool wide_ccoc_ = false;  // Ccoc is 16 bits (Csiz >= 257)
 };
 
 /********************************************************************************
@@ -233,6 +245,10 @@ class RGN_marker : public j2k_marker_io_base {
   RGN_marker(j2c_src_memory &in, uint16_t Csiz);
   uint16_t get_component_index() const;
   uint8_t get_ROIshift() const;
+  int write(j2c_dst_memory &dst);
+
+ private:
+  bool wide_crgn_ = false;  // Crgn is 16 bits (Csiz >= 257)
 };
 
 /********************************************************************************
@@ -447,6 +463,7 @@ class CRG_marker : public j2k_marker_io_base {
  public:
   CRG_marker();
   explicit CRG_marker(j2c_src_memory &in);
+  int write(j2c_dst_memory &dst);
 };
 
 /********************************************************************************
