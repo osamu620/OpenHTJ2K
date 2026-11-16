@@ -457,6 +457,86 @@ set_tests_properties(comp_qw_gray16 PROPERTIES DEPENDS dec_qw_gray16)
 add_test(NAME enc_qw_unknown COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qwx.j2c Qfactor=50 Qweights=perceptual)
 set_tests_properties(enc_qw_unknown PROPERTIES PASS_REGULAR_EXPRESSION "unknown Qweights value")
 
+# Precision-scaled Qfactor (Qscale=bits): a Qfactor removes the same
+# fraction of the precision at every bit depth. At 8 bits it is the guideline, byte
+# for byte. Above 8 bits, qfactor_guideline_check --scale bits recomputes every step
+# independently of the encoder, estimate_qfactor --scale bits recovers the Qfactor
+# (and without --scale it must not), and the decoded error bounds are about 2.5x the
+# measured ones (16-bit gray Q50: PAE 165, MSE 2291; 12-bit gray Q75: PAE 23, MSE 32;
+# 16-bit RGB Q90: PAE 51, MSE 114).
+set(GRAY12_PGM ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/gray12_full_range.pgm)
+set(RGB16_PPM ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/rgb16_full_range.ppm)
+add_test(NAME enc_qs_8bit_guideline COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qs_g.j2c Qfactor=90)
+add_test(NAME enc_qs_8bit_bits COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qs_b.j2c Qfactor=90 Qscale=bits)
+add_test(NAME qs_8bit_identical COMMAND ${CMAKE_COMMAND} -E compare_files kodim23_qs_g.j2c kodim23_qs_b.j2c)
+set_tests_properties(qs_8bit_identical PROPERTIES DEPENDS "enc_qs_8bit_guideline;enc_qs_8bit_bits")
+add_test(NAME enc_qs_gray16 COMMAND open_htj2k_enc -i ${GRAY16_PGM} -o gray16_qs50.j2c Qfactor=50 Qscale=bits)
+add_test(NAME qsgl_gray16 COMMAND qfactor_guideline_check gray16_qs50.j2c 50 --scale bits)
+set_tests_properties(qsgl_gray16 PROPERTIES DEPENDS enc_qs_gray16)
+add_test(NAME qsest_gray16 COMMAND estimate_qfactor gray16_qs50.j2c --scale bits --expect-q 50 --max-residual 0.01)
+set_tests_properties(qsest_gray16 PROPERTIES DEPENDS enc_qs_gray16)
+add_test(NAME qsest_gray16_mismatch COMMAND estimate_qfactor gray16_qs50.j2c --expect-q 50 --max-residual 0.01)
+set_tests_properties(qsest_gray16_mismatch PROPERTIES DEPENDS enc_qs_gray16 PASS_REGULAR_EXPRESSION "CHECK FAIL")
+add_test(NAME dec_qs_gray16 COMMAND open_htj2k_dec -i gray16_qs50.j2c -o gray16_qs50.pgm)
+set_tests_properties(dec_qs_gray16 PROPERTIES DEPENDS enc_qs_gray16)
+add_test(NAME comp_qs_gray16 COMMAND imgcmp gray16_qs50_00.pgm ${GRAY16_PGM} 420 6000)
+set_tests_properties(comp_qs_gray16 PROPERTIES DEPENDS dec_qs_gray16)
+add_test(NAME qsgl_gray16_guideline_file COMMAND qfactor_guideline_check gray16_q90.j2c 90 --scale bits)
+set_tests_properties(qsgl_gray16_guideline_file PROPERTIES DEPENDS enc_gray16_q90
+                     PASS_REGULAR_EXPRESSION "[1-9][0-9]* of [0-9]+ steps differ")
+add_test(NAME enc_qs_gray12 COMMAND open_htj2k_enc -i ${GRAY12_PGM} -o gray12_qs75.j2c Qfactor=75 Qscale=bits)
+add_test(NAME qsgl_gray12 COMMAND qfactor_guideline_check gray12_qs75.j2c 75 --scale bits)
+set_tests_properties(qsgl_gray12 PROPERTIES DEPENDS enc_qs_gray12)
+add_test(NAME qsest_gray12 COMMAND estimate_qfactor gray12_qs75.j2c --scale bits --expect-q 75 --max-residual 0.01)
+set_tests_properties(qsest_gray12 PROPERTIES DEPENDS enc_qs_gray12)
+add_test(NAME dec_qs_gray12 COMMAND open_htj2k_dec -i gray12_qs75.j2c -o gray12_qs75.pgm)
+set_tests_properties(dec_qs_gray12 PROPERTIES DEPENDS enc_qs_gray12)
+add_test(NAME comp_qs_gray12 COMMAND imgcmp gray12_qs75_00.pgm ${GRAY12_PGM} 60 80)
+set_tests_properties(comp_qs_gray12 PROPERTIES DEPENDS dec_qs_gray12)
+add_test(NAME enc_qs_rgb16 COMMAND open_htj2k_enc -i ${RGB16_PPM} -o rgb16_qs90.j2c Qfactor=90 Qscale=bits)
+add_test(NAME qsgl_rgb16 COMMAND qfactor_guideline_check rgb16_qs90.j2c 90 --scale bits)
+set_tests_properties(qsgl_rgb16 PROPERTIES DEPENDS enc_qs_rgb16)
+add_test(NAME qsest_rgb16 COMMAND estimate_qfactor rgb16_qs90.j2c --scale bits --expect-q 90 --max-residual 0.01)
+set_tests_properties(qsest_rgb16 PROPERTIES DEPENDS enc_qs_rgb16)
+add_test(NAME dec_qs_rgb16 COMMAND open_htj2k_dec -i rgb16_qs90.j2c -o rgb16_qs90.ppm)
+set_tests_properties(dec_qs_rgb16 PROPERTIES DEPENDS enc_qs_rgb16)
+add_test(NAME comp_qs_rgb16 COMMAND imgcmp rgb16_qs90.ppm ${RGB16_PPM} 130 300)
+set_tests_properties(comp_qs_rgb16 PROPERTIES DEPENDS dec_qs_rgb16)
+add_test(NAME enc_qs_bad_value COMMAND open_htj2k_enc -i ${GRAY16_PGM} -o gray16_qs_bad.j2c Qfactor=50 Qscale=fraction)
+set_tests_properties(enc_qs_bad_value PROPERTIES WILL_FAIL TRUE)
+# Qscale=bits with Qweights=flat (no visual weights): only the step changes. Below the
+# Qfactor from which the precision-scaled weights are flat (33 at 16 bits, 67 at 12 bits)
+# the steps differ from Qscale=bits alone, so the step check and estimate_qfactor need
+# both --weights flat and --scale bits; at 16-bit Qfactor 90 the two give the same bytes.
+# Decoded error bounds are about 2.5x the measured ones (16-bit RGB Q20: PAE 2222,
+# MSE 269828; 12-bit gray Q40: PAE 99, MSE 322).
+add_test(NAME enc_qsw_rgb16 COMMAND open_htj2k_enc -i ${RGB16_PPM} -o rgb16_qsw20.j2c Qfactor=20 Qscale=bits Qweights=flat)
+add_test(NAME qswgl_rgb16 COMMAND qfactor_guideline_check rgb16_qsw20.j2c 20 --weights flat --scale bits)
+set_tests_properties(qswgl_rgb16 PROPERTIES DEPENDS enc_qsw_rgb16)
+add_test(NAME qswgl_rgb16_visual COMMAND qfactor_guideline_check rgb16_qsw20.j2c 20 --scale bits)
+set_tests_properties(qswgl_rgb16_visual PROPERTIES DEPENDS enc_qsw_rgb16
+                     PASS_REGULAR_EXPRESSION "[1-9][0-9]* of [0-9]+ steps differ")
+add_test(NAME qswest_rgb16 COMMAND estimate_qfactor rgb16_qsw20.j2c --weights flat --scale bits --expect-q 20 --max-residual 0.01)
+set_tests_properties(qswest_rgb16 PROPERTIES DEPENDS enc_qsw_rgb16)
+add_test(NAME qswest_rgb16_mismatch COMMAND estimate_qfactor rgb16_qsw20.j2c --scale bits --expect-q 20 --max-residual 0.01)
+set_tests_properties(qswest_rgb16_mismatch PROPERTIES DEPENDS enc_qsw_rgb16 PASS_REGULAR_EXPRESSION "CHECK FAIL")
+add_test(NAME dec_qsw_rgb16 COMMAND open_htj2k_dec -i rgb16_qsw20.j2c -o rgb16_qsw20.ppm)
+set_tests_properties(dec_qsw_rgb16 PROPERTIES DEPENDS enc_qsw_rgb16)
+add_test(NAME comp_qsw_rgb16 COMMAND imgcmp rgb16_qsw20.ppm ${RGB16_PPM} 5600 680000)
+set_tests_properties(comp_qsw_rgb16 PROPERTIES DEPENDS dec_qsw_rgb16)
+add_test(NAME enc_qsw_rgb16_q90 COMMAND open_htj2k_enc -i ${RGB16_PPM} -o rgb16_qsw90.j2c Qfactor=90 Qscale=bits Qweights=flat)
+add_test(NAME qsw_rgb16_q90_identical COMMAND ${CMAKE_COMMAND} -E compare_files rgb16_qsw90.j2c rgb16_qs90.j2c)
+set_tests_properties(qsw_rgb16_q90_identical PROPERTIES DEPENDS "enc_qsw_rgb16_q90;enc_qs_rgb16")
+add_test(NAME enc_qsw_gray12 COMMAND open_htj2k_enc -i ${GRAY12_PGM} -o gray12_qsw40.j2c Qfactor=40 Qscale=bits Qweights=flat)
+add_test(NAME qswgl_gray12 COMMAND qfactor_guideline_check gray12_qsw40.j2c 40 --weights flat --scale bits)
+set_tests_properties(qswgl_gray12 PROPERTIES DEPENDS enc_qsw_gray12)
+add_test(NAME qswest_gray12 COMMAND estimate_qfactor gray12_qsw40.j2c --weights flat --scale bits --expect-q 40 --max-residual 0.01)
+set_tests_properties(qswest_gray12 PROPERTIES DEPENDS enc_qsw_gray12)
+add_test(NAME dec_qsw_gray12 COMMAND open_htj2k_dec -i gray12_qsw40.j2c -o gray12_qsw40.pgm)
+set_tests_properties(dec_qsw_gray12 PROPERTIES DEPENDS enc_qsw_gray12)
+add_test(NAME comp_qsw_gray12 COMMAND imgcmp gray12_qsw40_00.pgm ${GRAY12_PGM} 250 800)
+set_tests_properties(comp_qsw_gray12 PROPERTIES DEPENDS dec_qsw_gray12)
+
 # Require the decoder-conformance cleanup fixture so these encoder tests are
 # guaranteed to run AFTER cleanup_artifacts, never concurrently with it.
 # Without this, ctest -j was free to schedule cleanup_artifacts (which globs
@@ -502,6 +582,15 @@ set_tests_properties(
   enc_qw_420 qwgl_420 qwest_420
   enc_qw_gray16 qwgl_gray16 qwest_gray16 dec_qw_gray16 comp_qw_gray16
   enc_qw_unknown
+  enc_qs_8bit_guideline enc_qs_8bit_bits qs_8bit_identical
+  enc_qs_gray16 qsgl_gray16 qsest_gray16 qsest_gray16_mismatch dec_qs_gray16 comp_qs_gray16
+  qsgl_gray16_guideline_file
+  enc_qs_gray12 qsgl_gray12 qsest_gray12 dec_qs_gray12 comp_qs_gray12
+  enc_qs_rgb16 qsgl_rgb16 qsest_rgb16 dec_qs_rgb16 comp_qs_rgb16
+  enc_qs_bad_value
+  enc_qsw_rgb16 qswgl_rgb16 qswgl_rgb16_visual qswest_rgb16 qswest_rgb16_mismatch dec_qsw_rgb16 comp_qsw_rgb16
+  enc_qsw_rgb16_q90 qsw_rgb16_q90_identical
+  enc_qsw_gray12 qswgl_gray12 qswest_gray12 dec_qsw_gray12 comp_qsw_gray12
   PROPERTIES FIXTURES_REQUIRED test_artifacts)
 
 # Library-API encodes: the buffered entry point (invoke_line_based), which the

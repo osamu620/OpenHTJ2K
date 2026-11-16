@@ -10,6 +10,7 @@ and colour space instead of a single hard-coded table.
 
 - Stable / default behaviour: [The Qfactor → step-size formula](#the-qfactor--step-size-formula) and [Legacy visual weighting](#legacy-visual-weighting-default).
 - No visual weights, for scientific or other non-visual data: [Flat weights](#flat-weights-qweightsflat).
+- Finer steps for samples of more than 8 bits: [Precision-scaled Qfactor](#precision-scaled-qfactor-qscalebits).
 - Experimental: [Analytic visual weighting](#analytic-visual-weighting-experimental).
 - Tooling: [Recovering the Qfactor](#recovering-the-qfactor-estimate_qfactor).
 
@@ -264,6 +265,77 @@ typically sub-sampled YCbCr input) takes the chroma CSF while keeping unit
 colour gain — there is no inverse transform amplifying its error, but its
 content is still chrominance.
 
+## Precision-scaled Qfactor (`Qscale=bits`)
+
+The guideline's reference step is a fraction of the sample range, so a Qfactor
+keeps about the same number of bits at every bit depth: 4.5 bits at
+`Qfactor=50`, whether the samples have 8 or 16 bits. That suits content that is
+looked at on a display. Users who keep 12- or 16-bit data for its precision
+(medical, scientific, camera raw, depth maps) instead get most of the scale
+unused: at 16 bits, `Qfactor=99` gives a reference step of about 132 LSBs and
+`Qfactor=100` one of 0.71 LSB, with nothing in between.
+
+`Qscale=bits` (opt-in) makes every Qfactor remove the same
+*fraction* of the precision at every bit depth. With `Delta_8(Q)` the
+guideline's step at 8 bits, in LSBs, the bits it removes above the 0.71-LSB
+floor of `Qfactor=100` are `log2(sqrt(2) * Delta_8(Q))`; at `RI` bits the
+proposal removes `RI/8` times as many:
+
+```
+Delta_RI(Q) = (1/sqrt(2)) * (sqrt(2) * Delta_8(Q))^(RI/8)      # in LSBs of the RI-bit samples
+```
+
+- At 8 bits it is the guideline (the same bytes).
+- `Qfactor=100` stays 0.71 LSB at every bit depth.
+- Integer Qfactors cover the whole range of 16-bit samples; near 100, a step of
+  1 changes the 16-bit step by a factor of 2 to 3.
+
+The visual-weight exponent `p` follows the step relative to the sample range,
+`c = (Delta_RI - 1/sqrt(2)) / 2^RI`, instead of the Qfactor:
+`p = clamp(log(c / c_T1) / log(c_T0 / c_T1), 0, 1)` with
+`c_T0 = alpha_T0 * M_T0 = 0.028` and `c_T1 = alpha_T1 * M_T1 = 0.006`. Between the
+two thresholds the guideline's `log(alpha_Q * M_Q)` is linear in its exponent,
+so at 8 bits this is the guideline's `p` for every Qfactor; at higher precision,
+steps too fine to see get flat (MSE-optimal) weights. The weights are flat from
+`Qfactor=33` at 16 bits, 67 at 12 bits and 89 at 10 bits (the guideline's from 97).
+With [`Qweights=flat`](#flat-weights-qweightsflat) as well, every subband weight is 1
+at every Qfactor and only the step changes; below those values that gives different
+steps, above them the same.
+
+Reference step in LSBs, with the bits kept in brackets:
+
+| Qfactor | 8-bit (= guideline) | 12-bit guideline | 12-bit precision-scaled | 16-bit guideline | 16-bit precision-scaled |
+|---:|---:|---:|---:|---:|---:|
+| 25 | 21.2 (3.6) | 328 (3.6) | 116 (5.1) | 5244 (3.6) | 635 (6.7) |
+| 50 | 10.9 (4.5) | 165 (4.6) | 43.1 (6.6) | 2622 (4.6) | 169 (8.6) |
+| 75 | 6.5 (5.3) | 93.6 (5.5) | 19.8 (7.7) | 1487 (5.5) | 60.0 (10.1) |
+| 90 | 4.0 (6.0) | 53.0 (6.3) | 9.4 (8.8) | 837 (6.3) | 22.3 (11.5) |
+| 99 | 1.2 (7.7) | 8.9 (8.8) | 1.6 (11.3) | 132 (9.0) | 2.1 (14.9) |
+| 100 | 0.71 (8.5) | 0.71 (12.5) | 0.71 (12.5) | 0.71 (16.5) | 0.71 (16.5) |
+
+Measured on a 1920x1080 crop of a 16-bit RGB frame of *Elephants Dream*
+(5 levels, 64x64 code-blocks, 9/7 + ICT, one layer):
+
+| Qfactor | 16-bit guideline | 16-bit precision-scaled |
+|---:|---:|---:|
+| 10 | 0.05 bpp, 32.7 dB | 0.17 bpp, 36.2 dB |
+| 50 | 0.24 bpp, 37.6 dB | 1.97 bpp, 66.6 dB |
+| 90 | 0.75 bpp, 46.0 dB | 3.13 bpp, 84.3 dB |
+| 99 | 2.14 bpp, 68.5 dB | 4.51 bpp, 101.5 dB |
+| 100 | 5.25 bpp, 106.5 dB | 5.25 bpp, 106.5 dB |
+
+PSNR and SSIM rise steadily with the Qfactor. On this frame, at 12 and 16 bits,
+the two scales stay close at equal rate (PSNR within -0.95 to +1.59 dB, 1 - SSIM
+within a factor of 1.45, both taken at the measured points of either curve), so
+the option mainly changes which Qfactor gives which rate. Above 8 bits every
+Qfactor gives finer steps and larger files than the guideline, also for 10- to
+12-bit content meant for viewing, where the guideline's scale may be the better
+choice.
+
+The precision-scaled Qfactor is an OpenHTJ2K extension, not part of the
+guideline (WG1N101553 v2). Its mapping is fixed: a Qfactor gives the same steps
+in later releases.
+
 ## CLI reference
 
 All of these are encoder options and require `Qfactor`:
@@ -279,6 +351,9 @@ All of these are encoder options and require `Qfactor`:
   models on no-MCT (e.g. sub-sampled YCbCr) input. Default **generic**.
 - `Qchromacsf=chroma|luma` — CSF shape for `Cb`/`Cr` components. Default
   **chroma** (the low-pass chroma CSF).
+- `Qscale=guideline|bits` — how the Qfactor scales with the sample precision.
+  Default **guideline**; `bits` is the
+  [precision-scaled Qfactor](#precision-scaled-qfactor-qscalebits), identical at 8 bits.
 
 When an analytic model is selected the encoder prints an `EXPERIMENTAL:` status
 line; selecting one without `Qfactor` prints a warning and has no effect.
@@ -297,6 +372,8 @@ encoder.set_component_types(1, 2, 3);
 encoder.set_chroma_csf_reuse_luma(false);
 // Qweights=flat equivalent: 0 = visual weights (default), 1 = flat.
 encoder.set_qfactor_weights(1);
+// Qscale=bits equivalent: 1 = precision-scaled Qfactor, 0 = guideline (default).
+encoder.set_qfactor_scale(1);
 encoder.invoke_line_based();
 ```
 
@@ -323,6 +400,9 @@ estimate_qfactor out420.j2c --csf mannos --ctype Y,Cb,Cr
 
 # Qweights=flat encode
 estimate_qfactor out.j2c --weights flat
+
+# Precision-scaled encode (Qscale=bits)
+estimate_qfactor out16.j2c --scale bits
 
 # Scriptable check mode (CI): assert the recovered Q and a residual ceiling
 estimate_qfactor out.j2c --csf mannos --expect-q 90 --max-residual 0.01
@@ -369,7 +449,12 @@ python3 scripts/csf_fit_chroma.py   # writes csf_fit_chroma.png
   prefers a different anchor) would warrant re-calibrating them.
 - `estimate_qfactor` inverts under the model you specify; it cannot detect which
   analytic model produced an unknown file (the residual only tells you whether
-  your guess was right).
+  your guess was right). The same holds for `--weights flat` and `--scale bits`.
+- **Bit depth as declared.** Both scales use the bit depth in the SIZ marker,
+  which the encoder takes from the input and never changes: a PGM/PPM with
+  maxval 4095 is coded as 12-bit. Data with fewer significant bits than its
+  input declares, such as 12-bit values in an image declared as 16-bit, gets the
+  steps of the declared depth, with the guideline's scale as with `Qscale=bits`.
 
 ## References
 
