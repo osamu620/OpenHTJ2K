@@ -150,7 +150,7 @@ The output was decoded in full with OpenJPEG 2.5.4 and compared with the Part 1
 decode: 43 conformance, generated and JP2 streams are pixel-identical. OpenJPEG's
 HT decoder does not support RGN, so the three RGN conformance streams it
 cannot read (p0_03, p0_06, p0_15) fail there, not in this library.
-Third-party decoders other than OpenJPEG (Kakadu, Grok) have not been tried.
+OpenJPEG is the only third-party decoder that has been tried.
 
 ## Library use
 
