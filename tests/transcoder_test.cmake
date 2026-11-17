@@ -105,6 +105,17 @@ if(TARGET open_htj2k_transcode)
   # They are left out of the output; the transcoder once allocated 4 GB for them.
   tc_add(fuzz_many_empty_tiles INPUT ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/transcoder_many_empty_tiles.j2c)
 
+  # 65,280 tiles of one sample each (a flat image, so the stream is small).  The input tile's state
+  # counts against the decoder's memory budget; the transcoder once did not give it back after
+  # each tile, so this valid stream was refused at about tile 58,000 as "not supported".
+  file(MAKE_DIRECTORY ${_tc_work})
+  file(WRITE ${_tc_work}/flat_255x256.ppm "P6\n255 256\n127\n")
+  string(REPEAT "@" 195840 _tc_flat)
+  file(APPEND ${_tc_work}/flat_255x256.ppm "${_tc_flat}")
+  tc_add(many_tiles_budget ENC_IN ${_tc_work}/flat_255x256.ppm
+         ENC_ARGS "Cmodes=0@@Creversible=yes@@Clevels=10@@Stiles={1,1}")
+  set_tests_properties(tc_many_tiles_budget PROPERTIES TIMEOUT 600)
+
   # Streams the OpenHTJ2K encoder makes with the Part 1 block coder: rates (blocks cut inside a
   # bit-plane), layers, every code-block style switch, Qfactor, lossless, 16 bit, block sizes,
   # levels, tiles, SOP/EPH and a precinct/progression change.

@@ -765,6 +765,10 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
     const size_t written = tout.write_packets_direct(hout, out.data() + at);
     if (written != tile_size) open_htj2k::detail::fail("transcoder: a tile-part is shorter than its size.");
     tile_lengths.push_back(static_cast<uint32_t>(tile_size));
+    // Give the input tile's charges back to the codestream's memory budget, as the decoder does
+    // after each tile; otherwise the budget fills up tile by tile on an image of many tiles.
+    // (tout is an encoder tile; it is never charged to the budget.)
+    tin.destroy();
   }
 
   // EOC, the boxes after the codestream, then the header and the boxes in front, now complete.
