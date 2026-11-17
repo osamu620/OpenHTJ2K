@@ -12,7 +12,7 @@
 #              transcode must also give the same bytes with 1 and with 2 threads
 #   close      the same, but compared with imgcmp (peak absolute error PAE, mean squared error MSE)
 #   reject     the transcode must fail, and its output must match PATTERN
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.13)
 
 if(NOT DEFINED MODE)
   set(MODE identical)
