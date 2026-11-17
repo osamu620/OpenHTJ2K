@@ -48,6 +48,11 @@
 namespace open_htj2k {
 namespace {
 
+// A tile whose tile-parts hold fewer bytes than this is transcoded on the calling thread only.  Measured
+// on 2 cores with tiles of 64 x 64 to 256 x 256 at 0.5 to 4 bits per sample: the pool lost up to 5 times
+// below about 8 KB per tile and won by 10 to 40% above it.
+constexpr uint64_t kInlineTileBytes = 8192;
+
 // Bits 0-4 of Ccap15 for a magnitude bound B (ISO/IEC 15444-15, A.3.7); see encoder.cpp.
 uint16_t magb_field(int32_t bound) {
   if (bound <= 8) return 0;
@@ -457,6 +462,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   struct tile_part_loc {
     uint32_t pos;    // read position of the SOT marker segment (after the marker code)
     uint32_t index;  // the tile-part's place in the codestream (for PPM)
+    uint32_t bytes;  // its length, from the SOT marker segment to its last byte
   };
   std::vector<std::vector<tile_part_loc>> tile_parts(num_tiles);
   {
@@ -473,7 +479,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       j2k_tile_part part(hin.SIZ->get_num_components());
       part.set_SOT(sot);
       part.read(src);
-      tile_parts[ti].push_back({at, count++});
+      tile_parts[ti].push_back({at, count++, src.get_pos() - at});
     }
   }
   // A tile with no tile-part in the input has no data to transcode.  It is left out of the output,
@@ -603,6 +609,16 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
 #endif
   for (uint32_t i = 0; i < num_tiles; ++i) {
     if (!present[i]) continue;
+#ifdef OPENHTJ2K_THREAD
+    // A tile with little compressed data is transcoded on this thread alone, in the setup of the
+    // input and output tiles as in the block loop: the pool's dispatches cost more than its work
+    // (4K in 64 x 64 tiles took 5 times as long with 2 threads as with 1).  The decoder does the
+    // same for small tiles (see j2k_tile::decode_inline()).
+    uint64_t tile_bytes = 0;
+    for (const tile_part_loc &loc : tile_parts[i]) tile_bytes += loc.bytes;
+    const bool inline_tile = tile_bytes < kInlineTileBytes;
+    ThreadPool::SingleThreadScope inline_scope(inline_tile);
+#endif
     // The input tile, with its packets parsed.  Nothing is decoded here.
     j2k_tile tin;
     tin.dec_init(static_cast<uint16_t>(i), hin, 0);
@@ -716,7 +732,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       };
       bool done = false;
 #ifdef OPENHTJ2K_THREAD
-      if (pool != nullptr && pool->num_threads() > 1 && nchunks > 1) {
+      if (!inline_tile && pool != nullptr && pool->num_threads() > 1 && nchunks > 1) {
         std::atomic<size_t> next{0};
         std::atomic<int> running{0};
         auto drain = [&]() {
