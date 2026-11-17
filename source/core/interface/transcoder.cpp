@@ -31,6 +31,7 @@
 #include <exception>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <cstring>
@@ -604,8 +605,10 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   const std::vector<uint8_t> one_present(1, 1);
   std::vector<int32_t *> empty_buf;
 #ifdef OPENHTJ2K_THREAD
-  ThreadPoolLease pool_lease;
-  ThreadPool *pool = options.num_threads == 1 ? nullptr : ThreadPool::instance(options.num_threads);
+  // The pool is made when the first tile that is not small needs it: an image of small tiles
+  // transcodes on this thread and does not start or stop the pool's threads.
+  std::optional<ThreadPoolLease> pool_lease;
+  ThreadPool *pool = nullptr;
 #endif
   for (uint32_t i = 0; i < num_tiles; ++i) {
     if (!present[i]) continue;
@@ -732,6 +735,10 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       };
       bool done = false;
 #ifdef OPENHTJ2K_THREAD
+      if (!inline_tile && pool == nullptr && options.num_threads != 1 && nchunks > 1) {
+        pool_lease.emplace();
+        pool = ThreadPool::instance(options.num_threads);
+      }
       if (!inline_tile && pool != nullptr && pool->num_threads() > 1 && nchunks > 1) {
         std::atomic<size_t> next{0};
         std::atomic<int> running{0};
