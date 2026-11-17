@@ -891,6 +891,9 @@ class j2k_tile_component : public j2k_tile_base {
   }
 };
 
+// The decoder's memory budget for the codestream of mh, in bytes (see charge_structure()).
+uint64_t decoder_memory_budget(j2k_main_header &mh);
+
 /********************************************************************************
  * j2k_tile
  *******************************************************************************/
@@ -1087,6 +1090,10 @@ class j2k_tile : public j2k_tile_base {
   // ends inside one, or a packet header or a code-block's data runs past the bytes there
   // are; the tile decodes from the data it has.
   OPENHTJ2K_NODISCARD bool is_data_missing() const { return data_missing_; }
+  // Decoder memory budget: the bytes of state the tile holds against it (until destroy()),
+  // and, after create_tile_buf(), those of the line buffers decoding it allocates.
+  OPENHTJ2K_NODISCARD uint64_t charged_bytes() const { return charged_bytes_; }
+  OPENHTJ2K_NODISCARD uint64_t line_decode_bytes();
   // Single-tile reuse: clear every piece of mutable per-frame state while
   // keeping the tile/component/resolution/precinct/codeblock allocations
   // (and their sub-allocations — ring buffers, compressed buffers, tagtrees,

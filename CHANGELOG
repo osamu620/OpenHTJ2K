@@ -24,6 +24,44 @@
   in place of the table of thread counts added in 0.28.1. Behaviour and output
   are the same.
 
+## Performance
+- Decoder (native builds): images in many small tiles decode several times
+  faster with more than one thread (#546). Each tile used to spread its
+  decoding over the whole thread pool. A small tile's work is less than what
+  the pool's dispatches and waits cost, so a 4K RGB image in 64 x 64 tiles
+  decoded 1.5 times slower with 4 threads than with 1. Several tiles now
+  decode side by side instead, each on one thread.
+  - When: when a tile row (in `invoke_line_based_stream()`), or the image (in
+    `invoke_line_based()`), has at least as many tiles as there are threads,
+    or the tiles are small (up to 65,536 samples over all components at the
+    resolution decoded). Otherwise each tile still uses the whole pool. A JPIP
+    precinct filter or packet observer keeps the tiles one at a time.
+  - Unchanged: tiles are still set up and freed on the calling thread, in tile
+    order. Warnings come in the same order, the memory budget decides on each
+    tile as before, and a failing decode reports the first failing tile's
+    error. Decoded output is byte-identical.
+  - At most twice as many tiles as threads are set up at a time, and no more
+    than an eighth of the memory budget's worth beyond one tile.
+  - 4K RGB (3840 x 2160, 8-bit, default lossy settings) on a Ryzen 9 9950X,
+    in milliseconds per decode, before and after:
+
+    | Tiles | 1 thread | 4 threads | 8 threads |
+    |---|---|---|---|
+    | 64 x 64 | 195, 196 | 324, 87 | 328, 98 |
+    | 128 x 128 | 107, 107 | 124, 39 | 123, 27 |
+    | 256 x 256 | 78, 78 | 61, 27 | 49, 20 |
+    | 512 x 512 | 74, 73 | 41, 28 | 37, 23 |
+    | 1024 x 1024 | 73, 72 | 38, 32 | 35, 36 |
+
+    Single-tile images are not affected. Peak memory rose by up to 15 MB
+    (512 x 512 tiles, 8 threads: 45 to 60 MB).
+  - With several threads, a malformed codestream in small tiles now reports the
+    same error as with one thread, not "a strip-pull decode task failed".
+  - Not in the WebAssembly builds, which decode as before. There the tiles side
+    by side got slower with more threads (64 x 64 tiles, Node.js 24: 470, 650
+    and 970 ms on 2, 4 and 8 threads, against 600, 780 and 860 ms one tile at
+    a time). The cause is not established.
+
 ## Documentation
 - `docs/wasm.md` (new) is the WebAssembly page for users:
   - the modules and which to use;
@@ -58,6 +96,7 @@
   machine and fails when the second is more than 25% slower in any case.
   Runs alternate between the builds. The cases are:
   - native decode and encode of a 4K image, on 1 and 4 threads;
+  - native decode of that image in 64 x 64 tiles, on 4 threads;
   - the WebAssembly decoder on the RTP demo's per-frame path (one decoder,
     `reset_decoder_with_bytes()` every frame), multi- and single-threaded.
 

@@ -10,6 +10,7 @@
 #
 # Cases:
 #   native decode of conformance_data/4KuF_H0L1_arri_1bpp.j2c (3840x2160 HT) on 1 and 4 threads;
+#   native decode of that image coded in 64 x 64 tiles (by the base encoder) on 4 threads;
 #   native encode of that image (12-bit RGB) at Qfactor=90 and lossless, on 1 and 4 threads;
 #   with --*-wasm: the WebAssembly decoder on the RTP demo's per-frame path (one decoder,
 #   reset_decoder_with_bytes() every frame) for conformance_data/ATK_DFS_IRV.j2c (12-bit 4:2:2),
@@ -59,6 +60,9 @@ def cases(args, tmp, ppm):
                     lambda b, t=threads, i=iters: [os.path.join(b, "open_htj2k_dec"), "-i", DEC_FIXTURE,
                                                    "-o", os.path.join(tmp, "dec.ppm"), "-num_threads", str(t),
                                                    "-iter", str(i)]))
+    out.append(("decode 4K in 64x64 tiles, 4 threads (x3)", run_native,
+                lambda b: [os.path.join(b, "open_htj2k_dec"), "-i", os.path.join(tmp, "tiles64.j2c"),
+                           "-o", os.path.join(tmp, "dec.ppm"), "-num_threads", "4", "-iter", "3"]))
     for label, opts in (("Qfactor=90", ["Qfactor=90"]), ("lossless", ["Creversible=yes"])):
         for threads in (1, 4):
             out.append((f"encode 4K 12-bit {label}, {threads} thread{'s' if threads > 1 else ''}", run_native,
@@ -97,6 +101,8 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         ppm = os.path.join(tmp, "input.ppm")
         run_native([os.path.join(args.base_bin, "open_htj2k_dec"), "-i", DEC_FIXTURE, "-o", ppm])
+        run_native([os.path.join(args.base_bin, "open_htj2k_enc"), "-i", ppm, "-o", os.path.join(tmp, "tiles64.j2c"),
+                    "Stiles={64,64}"])
         rows, failed = [], []
         for label, fn, make in cases(args, tmp, ppm):
             native = fn is run_native
