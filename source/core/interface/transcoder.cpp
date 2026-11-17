@@ -31,7 +31,6 @@
 #include <exception>
 #include <functional>
 #include <mutex>
-#include <optional>
 #include <thread>
 #include <utility>
 #include <cstring>
@@ -607,7 +606,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
 #ifdef OPENHTJ2K_THREAD
   // The pool is made when the first tile that is not small needs it: an image of small tiles
   // transcodes on this thread and does not start or stop the pool's threads.
-  std::optional<ThreadPoolLease> pool_lease;
+  std::unique_ptr<ThreadPoolLease> pool_lease;
   ThreadPool *pool = nullptr;
 #endif
   for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -736,7 +735,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       bool done = false;
 #ifdef OPENHTJ2K_THREAD
       if (!inline_tile && pool == nullptr && options.num_threads != 1 && nchunks > 1) {
-        pool_lease.emplace();
+        pool_lease.reset(new ThreadPoolLease());
         pool = ThreadPool::instance(options.num_threads);
       }
       if (!inline_tile && pool != nullptr && pool->num_threads() > 1 && nchunks > 1) {
@@ -805,7 +804,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
     std::memcpy(out.data() + pre_len, hdr.data(), hdr.size());
     const std::vector<uint8_t> pre = make_pre(codestream_len);
     if (pre.size() == pre_len) {
-      std::memcpy(out.data(), pre.data(), pre.size());
+      if (!pre.empty()) std::memcpy(out.data(), pre.data(), pre.size());
     } else {
       out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(pre_len));
       out.insert(out.begin(), pre.begin(), pre.end());
