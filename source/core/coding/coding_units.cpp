@@ -6880,15 +6880,17 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   std::atomic<bool> pull_error(false);
   auto *pool                   = ThreadPool::get();
   const bool can_parallel_pull = (pool != nullptr) && (pool->num_threads() > 1) && (NC > 1);
-  // In builds whose fused inverse MCT + finalize is the narrow SSE2 or scalar kernel,
-  // a strip's rows of it run as pool tasks into a strip-sized output; the callback
-  // still runs on this thread, in row order.  On this thread alone it was a serial
-  // tail (about a quarter of its time at 8 threads in a portable x86-64 build).  The
-  // AVX2/AVX-512 kernel converts a strip in less time than the dispatch takes (slower
-  // at 2 and 16 threads), so those builds, and NEON and WASM (not measured), keep it
-  // on this thread.  Only when every output row starts a new row of the MCT
-  // components (their factor is the output-row pitch), so that no row of them is
-  // needed after its strip.
+  // In builds whose fused inverse MCT + finalize is the narrow SSE2, WebAssembly SIMD or
+  // scalar kernel, a strip's rows of it run as pool tasks into a strip-sized output; the
+  // callback still runs on this thread, in row order.  On this thread alone it was a
+  // serial tail (about a quarter of its time at 8 threads in a portable x86-64 build; in
+  // WebAssembly, moving it to the pool made 4K 16-bit RGB at Qfactor 90 decode 17 to 20%
+  // faster on 4 and 8 threads, and no slower on 2).  The AVX2/AVX-512 kernel converts a
+  // strip in less time than the dispatch takes (slower at 2 and 16 threads), and so does
+  // the NEON one (on an Apple M1 Max, 2 to 4% slower for 4K 8-bit RGB, within 2% for
+  // 16-bit), so those builds keep it on this thread.  Only when every output row starts
+  // a new row of the MCT components (their factor is the output-row pitch), so that no
+  // row of them is needed after its strip.
   struct ColorRowsCtx {
     const sprec_t *src[3];
     int32_t *dst[3];
@@ -6896,8 +6898,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
     uint32_t rows;
     std::atomic<int> *cnt;
   };
-  #if !(defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)) && !defined(OPENHTJ2K_ENABLE_ARM_NEON) \
-      && !defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+  #if !(defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX2__)) && !defined(OPENHTJ2K_ENABLE_ARM_NEON)
   const bool par_color = can_parallel_pull && do_mct && ci[0].yr == map.g;
   #else
   const bool par_color = false;
