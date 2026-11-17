@@ -4564,6 +4564,8 @@ static uint64_t decoder_structure_budget(j2k_main_header &mh) {
   return mh.structure_budget;
 }
 
+uint64_t decoder_memory_budget(j2k_main_header &mh) { return decoder_structure_budget(mh); }
+
 void j2k_tile::charge_structure(uint64_t bytes, const char *what, bool persistent) {
   if (budget_header_ == nullptr) return;
   j2k_main_header &mh   = *budget_header_;
@@ -4823,6 +4825,14 @@ static uint64_t line_decode_state_bytes(j2k_tile_component &tc) {
   j2k_resolution *ca = tc.access_resolution(NL_act);
   const uint64_t w = ca->get_pos1().x - ca->get_pos0().x, h = ca->get_pos1().y - ca->get_pos0().y;
   return bytes + std::min<uint64_t>(h, 1275) * (w + 32) * sizeof(sprec_t);
+}
+
+uint64_t j2k_tile::line_decode_bytes() {
+  uint64_t bytes = 0;
+  if (tcomp == nullptr) return bytes;
+  for (uint16_t c = 0; c < num_components; c++)
+    bytes = sat_add(bytes, line_decode_state_bytes(this->tcomp[c]));
+  return bytes;
 }
 
 // Precincts of a tile-component over all its resolutions, counted as

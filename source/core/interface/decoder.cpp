@@ -27,11 +27,14 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <cstdio>
 #include <functional>
 #include <exception>
+#include <memory>
 #include <stdexcept>
+#include <thread>
 #include "decoder.hpp"
 #include "jph.hpp"
 // GCC 7.x claims C++17 (__cplusplus >= 201703L) but ships <filesystem>
@@ -199,6 +202,20 @@ class openhtj2k_decoder_impl {
 
   // Analogous to install_precinct_filter but for the packet observer.
   void install_packet_observer(j2k_tile &tile, uint16_t tile_idx);
+
+  // How many of num_tiles tiles decode_tiles() keeps set up at a time: 1 decodes them one
+  // after another, each with the whole thread pool; more decodes that many side by side,
+  // each on one thread of the pool.
+  uint32_t tile_window(uint64_t num_tiles) const;
+  // Decodes the tiles order[0], order[1], ... of tileSet: sets each one up on this thread,
+  // in that order (prepare(slot, t), then its filters and create_tile_buf()), decodes it
+  // with decode(slot, t) and destroys it, in that order too.  slot < window names the
+  // caller's state for the tile while it is set up.  With a window of more than one tile,
+  // decode() runs on the thread pool, for up to window tiles at a time, each on one thread;
+  // an error is still the one the first failing tile raises.
+  template <typename Prepare, typename Decode>
+  void decode_tiles(std::vector<j2k_tile> &tileSet, const std::vector<uint32_t> &order, uint32_t window,
+                    Prepare &prepare, Decode &decode);
 
   // Single-tile reuse: sets up cached_tileSet_[0] for this frame, reads its tile-parts and
   // creates its tile buffer, keeping the structure of the last frame decoded when this
@@ -571,6 +588,194 @@ uint32_t openhtj2k_decoder::get_colorspace() { return this->impl->get_colorspace
 uint8_t openhtj2k_decoder::get_mct() { return this->impl->get_mct(); }
 bool openhtj2k_decoder::is_truncated() { return this->impl->is_truncated(); }
 
+// ── Tiles side by side ──────────────────────────────────────────────────────────
+// A tile's decode spreads its code-blocks and components over the thread pool, which pays
+// when the tile is large.  The pool's dispatches and waits cost about the same for every
+// tile, though, and a codestream of many small tiles spends more on them than on the
+// tiles' samples: a 4K RGB image in 64 x 64 tiles decoded 1.5 times slower with 4 threads
+// than with 1.  Several tiles decode side by side instead, each on one thread.
+//
+// The tiles are still set up (packet headers read, the memory budget charged, warnings
+// given) and destroyed on the calling thread, in tile order; only their decoding runs side
+// by side.  A JPIP precinct filter or packet observer keeps them one at a time, so that
+// its callbacks see the tiles in order on one thread.
+//
+// Side by side, at most num_tiles tiles keep the threads busy; one tile with the whole pool
+// can keep more of them busy when it is large.  So tiles decode side by side when there are
+// at least as many as threads, or when they are small (kSmallTileSamples), and each with the
+// whole pool otherwise: a 4K image in 1024 x 1024 tiles, four to a tile row, decodes faster
+// that way with 8 threads.
+//
+// Not in WebAssembly, where the tiles side by side got slower with more threads: 4K RGB in
+// 64 x 64 tiles took 470, 650 and 970 ms a decode on 2, 4 and 8 threads (Node.js 24),
+// against 600, 780 and 860 ms one tile at a time.  The cause is not established; each thread
+// then allocates a whole tile's buffers, and Emscripten's allocator takes one lock.
+#if defined(OPENHTJ2K_THREAD) && !defined(__EMSCRIPTEN__)
+  #define OPENHTJ2K_TILES_SIDE_BY_SIDE 1
+constexpr uint64_t kSmallTileSamples = uint64_t{1} << 16;  // all components, at the output resolution
+#endif
+
+uint32_t openhtj2k_decoder_impl::tile_window(uint64_t num_tiles) const {
+#ifdef OPENHTJ2K_TILES_SIDE_BY_SIDE
+  ThreadPool *pool = ThreadPool::get();
+  if (pool == nullptr || pool->num_threads() < 2 || num_tiles < 2 || precinct_filter_ || packet_observer_)
+    return 1;
+  if (num_tiles < pool->num_threads()) {
+    // The samples of a whole tile, in every component, at the resolution decoded.
+    element_siz siz, Osiz, Tsiz, Rsiz;
+    main_header.SIZ->get_image_size(siz);
+    main_header.SIZ->get_image_origin(Osiz);
+    main_header.SIZ->get_tile_size(Tsiz);
+    const uint64_t tw = std::min<uint64_t>(Tsiz.x, siz.x - Osiz.x);
+    const uint64_t th = std::min<uint64_t>(Tsiz.y, siz.y - Osiz.y);
+    uint64_t samples  = 0;
+    for (uint16_t c = 0; c < main_header.SIZ->get_num_components(); ++c) {
+      main_header.SIZ->get_subsampling_factor(Rsiz, c);
+      const uint64_t w = ((tw + Rsiz.x - 1) / Rsiz.x + (uint64_t{1} << reduce_NL) - 1) >> reduce_NL;
+      const uint64_t h = ((th + Rsiz.y - 1) / Rsiz.y + (uint64_t{1} << reduce_NL) - 1) >> reduce_NL;
+      samples += w * h;
+      if (samples > kSmallTileSamples) return 1;
+    }
+  }
+  return static_cast<uint32_t>(std::min<uint64_t>(num_tiles, 2 * pool->num_threads()));
+#else
+  (void)num_tiles;
+  return 1;
+#endif
+}
+
+template <typename Prepare, typename Decode>
+void openhtj2k_decoder_impl::decode_tiles(std::vector<j2k_tile> &tileSet,
+                                          const std::vector<uint32_t> &order, uint32_t window,
+                                          Prepare &prepare, Decode &decode) {
+  // Sets up tile t: hands it the JPIP filter and observer, reads its packets and notes
+  // missing data.
+  auto set_up = [&](uint32_t t) {
+    j2k_tile &tile = tileSet[t];
+    try {
+      tile.line_based_decode = true;
+      install_precinct_filter(tile, static_cast<uint16_t>(t));
+      install_packet_observer(tile, static_cast<uint16_t>(t));
+      tile.create_tile_buf(main_header);
+    } catch (std::exception &) {
+      tile.destroy();
+      throw;
+    }
+    note_tile_data(tile);
+  };
+#ifdef OPENHTJ2K_TILES_SIDE_BY_SIDE
+  ThreadPool *pool = (window > 1) ? ThreadPool::get() : nullptr;
+  if (pool == nullptr) {
+#else
+  (void)window;
+#endif
+    for (uint32_t t : order) {
+      prepare(0, t);
+      set_up(t);
+      decode(0, t);
+      tileSet[t].destroy();  // releases the tile's state right away
+    }
+#ifdef OPENHTJ2K_TILES_SIDE_BY_SIDE
+    return;
+  }
+
+  // The window: the tiles set up and not yet destroyed, oldest first, in slots
+  // head, head + 1, ... (mod window).
+  struct Slot {
+    uint32_t tile    = 0;
+    uint64_t charged = 0;  // the tile's state charged against the memory budget
+    uint64_t cost    = 0;  // that and the line buffers decoding it allocates
+    std::exception_ptr error;
+    std::atomic<int> busy{0};  // 1 while its decode() is queued or running
+  };
+  std::unique_ptr<Slot[]> slots(new Slot[window]);
+  uint32_t head = 0, active = 0;
+  uint64_t held_charged = 0, held_cost = 0, max_cost = 0;
+  // A tile joins the window while what the window holds stays below an eighth of the
+  // budget (by the largest tile so far, as a tile's size is known only once it is set up).
+  // A decode one tile at a time holds one tile, which may take up to the whole budget.
+  const uint64_t cap = decoder_memory_budget(main_header) / 8;
+
+  // Destroys the oldest tile of the window once it is decoded (running pool tasks while
+  // it waits) and returns its error.
+  auto retire = [&]() -> std::exception_ptr {
+    Slot &s = slots[head];
+    while (s.busy.load(std::memory_order_acquire) != 0) {
+      if (!pool->try_run_one()) std::this_thread::yield();
+    }
+    tileSet[s.tile].destroy();
+    held_charged -= s.charged;
+    held_cost -= s.cost;
+    head = (head + 1) % window;
+    --active;
+    std::exception_ptr e = s.error;
+    s.error              = nullptr;
+    return e;
+  };
+  // Destroys every tile of the window, in order; returns the first error among them.
+  auto drain = [&]() -> std::exception_ptr {
+    std::exception_ptr first;
+    while (active > 0) {
+      std::exception_ptr e = retire();
+      if (e && !first) first = e;
+    }
+    return first;
+  };
+
+  for (uint32_t t : order) {
+    while (active > 0 && (active == window || held_cost + max_cost > cap)) {
+      std::exception_ptr e = retire();
+      if (e) {
+        drain();
+        std::rethrow_exception(e);
+      }
+    }
+    const uint32_t k = (head + active) % window;
+    Slot &s          = slots[k];
+    s.tile           = t;
+    try {
+      prepare(k, t);
+      // One tile at a time, the tiles before this one would be destroyed by now and their
+      // charges given back: leave out those of the window while this one is set up, so
+      // that the budget decides on it as it does then.
+      main_header.structure_bytes -= held_charged;
+      try {
+        set_up(t);
+      } catch (...) {
+        main_header.structure_bytes += held_charged;
+        throw;
+      }
+      main_header.structure_bytes += held_charged;
+    } catch (...) {
+      // A failing tile before this one fails the decode first, as one tile at a time.
+      const std::exception_ptr e      = std::current_exception();
+      const std::exception_ptr before = drain();
+      std::rethrow_exception(before ? before : e);
+    }
+    s.charged = tileSet[t].charged_bytes();
+    s.cost    = s.charged + tileSet[t].line_decode_bytes();
+    max_cost  = std::max(max_cost, s.cost);
+    held_charged += s.charged;
+    held_cost += s.cost;
+    ++active;
+    s.busy.store(1, std::memory_order_relaxed);
+    Slot *sp   = &s;
+    Decode *dp = &decode;
+    pool->push([sp, dp, k]() {
+      ThreadPool::SingleThreadScope one_thread(true);  // the tile's decode stays on this thread
+      try {
+        (*dp)(k, sp->tile);
+      } catch (...) {
+        sp->error = std::current_exception();
+      }
+      sp->busy.store(0, std::memory_order_release);
+    });
+  }
+  const std::exception_ptr e = drain();
+  if (e) std::rethrow_exception(e);
+#endif
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
                                                std::vector<uint32_t> &width,
@@ -646,21 +851,15 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
     tileSet[tile_index].add_tile_part(sot, in, main_header);
   });
 
-  for (uint32_t i = 0; i < numTiles.x * numTiles.y; i++) {
-    try {
-      tileSet[i].line_based_decode = true;
-      install_precinct_filter(tileSet[i], static_cast<uint16_t>(i));
-      install_packet_observer(tileSet[i], static_cast<uint16_t>(i));
-      tileSet[i].create_tile_buf(main_header);
-    } catch (std::exception &) {
-      tileSet[i].destroy();
-      throw;
-    }
-    note_tile_data(tileSet[i]);
+  // Each tile writes its own part of buf.
+  std::vector<uint32_t> order(tileSet.size());
+  for (uint32_t i = 0; i < order.size(); i++) order[i] = i;
+  auto prepare = [](uint32_t, uint32_t) {};
+  auto decode  = [&](uint32_t, uint32_t t) {
     // decode_line_based() replaces decode() + ycbcr_to_rgb() + finalize().
-    tileSet[i].decode_line_based(main_header, reduce_NL, buf);
-    tileSet[i].destroy();  // Release tile-internal buffers immediately (output is in buf)
-  }
+    tileSet[t].decode_line_based(main_header, reduce_NL, buf);
+  };
+  decode_tiles(tileSet, order, tile_window(order.size()), prepare, decode);
 }
 
 void openhtj2k_decoder::invoke_line_based(std::vector<int32_t *> &buf, std::vector<uint32_t> &width,
@@ -812,13 +1011,24 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   // happen once instead of (numTiles.y * (1 + numTiles.x + 1)) times.
   std::vector<uint32_t> tr_first(num_components);
   std::vector<uint32_t> tr_rows(num_components);
-  std::vector<uint32_t> tile_x_off(num_components);
-  std::vector<uint32_t> tile_w(num_components);
-  std::vector<uint32_t> last_k(num_components);
   std::vector<int32_t *> row_ptrs(num_components);
   std::vector<std::vector<int32_t>> accum(num_components);
   std::vector<std::vector<int32_t>> carry(num_components);
   for (uint16_t c = 0; c < num_components; ++c) carry[c].assign(std::max<size_t>(width[c], 1), 0);
+  // The tiles of a tile row decode side by side (decode_tiles()), each into its own columns
+  // of accum.  Per slot of decode_tiles()'s window: the column of each component the tile
+  // starts at, its width there, and the last row of it the tile delivered.
+  struct tile_columns {
+    std::vector<uint32_t> x_off, w, last_k;
+  };
+  const uint32_t window = tile_window(numTiles.x);
+  std::vector<tile_columns> columns(window);
+  for (tile_columns &tc : columns) {
+    tc.x_off.resize(num_components);
+    tc.w.resize(num_components);
+    tc.last_k.resize(num_components);
+  }
+  std::vector<uint32_t> order(numTiles.x);
 
   for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
     uint64_t g0, g1;
@@ -838,56 +1048,44 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       accum[c].assign(static_cast<size_t>(std::max(tr_rows[c], 1U)) * width[c], 0);
     }
 
-    for (uint32_t tx = 0; tx < numTiles.x; ++tx) {
-      const uint32_t tile_idx = ty * numTiles.x + tx;
-
-      // Compute per-component x-offsets and widths for this tile.
-      {
-        uint32_t x_off, y_off, t_w, t_h;
-        for (uint16_t c = 0; c < num_components; ++c) {
-          get_tile_geom(tx, ty, c, x_off, y_off, t_w, t_h);
-          // The scatter below copies tile_w samples to column x_off of an image row.
-          if (static_cast<uint64_t>(x_off) + t_w > width[c]) {
-            open_htj2k::detail::fail(
-                "tile %u spans columns %u to %llu of component %u, past the image width %u — malformed "
-                "input.",
-                static_cast<unsigned>(tile_idx), x_off, static_cast<unsigned long long>(x_off) + t_w,
-                static_cast<unsigned>(c), width[c]);
-          }
-          tile_x_off[c] = x_off;
-          tile_w[c]     = t_w;
-          last_k[c]     = UINT32_MAX;
+    for (uint32_t tx = 0; tx < numTiles.x; ++tx) order[tx] = ty * numTiles.x + tx;
+    // The columns of each component the tile covers.
+    auto prepare = [&](uint32_t slot, uint32_t tile_idx) {
+      tile_columns &tc = columns[slot];
+      uint32_t x_off, y_off, t_w, t_h;
+      for (uint16_t c = 0; c < num_components; ++c) {
+        get_tile_geom(tile_idx - ty * numTiles.x, ty, c, x_off, y_off, t_w, t_h);
+        // The scatter below copies t_w samples to column x_off of an image row.
+        if (static_cast<uint64_t>(x_off) + t_w > width[c]) {
+          open_htj2k::detail::fail(
+              "tile %u spans columns %u to %llu of component %u, past the image width %u — malformed "
+              "input.",
+              static_cast<unsigned>(tile_idx), x_off, static_cast<unsigned long long>(x_off) + t_w,
+              static_cast<unsigned>(c), width[c]);
         }
+        tc.x_off[c]  = x_off;
+        tc.w[c]      = t_w;
+        tc.last_k[c] = UINT32_MAX;
       }
-
-      // Internal scatter callback: copy each component row of this tile row into its
-      // accumulator row, once.
+    };
+    auto decode = [&](uint32_t slot, uint32_t tile_idx) {
+      tile_columns &tc = columns[slot];
+      // Copies each component row of this tile row into its accumulator row, once.
       auto scatter = [&](uint32_t y, int32_t *const *rows, uint16_t nc) {
         for (uint16_t c = 0; c < nc; ++c) {
           const uint32_t k = map.abs_row(c, y);
-          if (tile_w[c] == 0 || k == last_k[c] || k < tr_first[c] || k - tr_first[c] >= tr_rows[c])
+          if (tc.w[c] == 0 || k == tc.last_k[c] || k < tr_first[c] || k - tr_first[c] >= tr_rows[c])
             continue;
-          last_k[c]    = k;
-          int32_t *dst = accum[c].data() + static_cast<size_t>(k - tr_first[c]) * width[c] + tile_x_off[c];
-          std::memcpy(dst, rows[c], tile_w[c] * sizeof(int32_t));
+          tc.last_k[c] = k;
+          int32_t *dst = accum[c].data() + static_cast<size_t>(k - tr_first[c]) * width[c] + tc.x_off[c];
+          std::memcpy(dst, rows[c], tc.w[c] * sizeof(int32_t));
         }
       };
-
-      try {
-        tileSet[tile_idx].line_based_decode = true;
-        install_precinct_filter(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
-        install_packet_observer(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
-        tileSet[tile_idx].create_tile_buf(main_header);
-      } catch (std::exception &) {
-        tileSet[tile_idx].destroy();
-        throw;
-      }
-      note_tile_data(tileSet[tile_idx]);
       tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_, row_lo_,
                                                  col_lo_, col_hi_, skip_mct_, nullptr,
                                                  /*emit_all_rows=*/true);
-      tileSet[tile_idx].destroy();  // Release tile-internal buffers immediately
-    }
+    };
+    decode_tiles(tileSet, order, window, prepare, decode);
 
     // Deliver the output rows of this tile row in the window to the user callback.
     const uint32_t e0 = std::max(yb, row_lo_);
