@@ -61,6 +61,24 @@
     by side got slower with more threads (64 x 64 tiles, Node.js 24: 470, 650
     and 970 ms on 2, 4 and 8 threads, against 600, 780 and 860 ms one tile at
     a time). The cause is not established.
+- WebAssembly: the multi-threaded builds run the inverse colour transform of
+  each strip on the thread pool, as the portable x86-64 and scalar builds do.
+  It used to run on the decoding thread alone. This applies to
+  `invoke_decoder_to_rgba()` (the still-image demo), `invoke_decoder_stream()`
+  (the Node.js decoder) and other decodes through `invoke_line_based_stream()`;
+  the RTP demo and the WebTransport viewer convert colour on the GPU and are
+  not affected.
+  - 4K RGB, 16-bit, Qfactor 90 (Node.js 24, Zen 5): 17 to 20% faster on 4 and
+    8 threads (27.1 to 22.5 ms and 23.9 to 19.2 ms a decode), no change on 2.
+    A 4K 8-bit image at about 5 bits per pixel, where block decoding takes
+    most of the time, decodes as fast as before.
+  - Output is byte-identical. The new test `wasm_mt_colour_matches_one_thread`
+    checks that 4 threads give the same output as 1 on nine conformance
+    codestreams with a colour transform; the WebAssembly conformance tests run
+    on one thread and never reached this code.
+  - NEON builds still run it on the decoding thread. On an Apple M1 Max the
+    pool was no faster: 2 to 4% slower for a 4K 8-bit image, within 2% for the
+    16-bit one.
 
 ## Documentation
 - `docs/wasm.md` (new) is the WebAssembly page for users:

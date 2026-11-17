@@ -55,6 +55,18 @@ if(NODE_EXECUTABLE)
                        ${CMAKE_CURRENT_SOURCE_DIR}/web/build/html ${CONFORMANCE_DATA_DIR}/ATK_DFS_IRV.j2c)
       set_tests_properties(wasm_mt_reinit_keeps_threads PROPERTIES
                            PASS_REGULAR_EXPRESSION "all cases passed" TIMEOUT 120)
+      # The same output on 4 threads as on 1 for codestreams with a colour transform, whose
+      # inverse then runs as thread-pool tasks (the conformance tests above use one thread)
+      add_test(NAME wasm_mt_colour_matches_one_thread
+               COMMAND ${NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm/mt_colour_check.mjs
+                       ${CMAKE_CURRENT_SOURCE_DIR}/web/build/html
+                       ${CONFORMANCE_DATA_DIR}/4KuF_H0L1_arri_1bpp.j2c ${CONFORMANCE_DATA_DIR}/ds0_ht_04_b11.j2k
+                       ${CONFORMANCE_DATA_DIR}/ds0_ht_10_b11.j2k ${CONFORMANCE_DATA_DIR}/p0_13.j2k
+                       ${CONFORMANCE_DATA_DIR}/ds1_ht_06_b11.j2k ${CONFORMANCE_DATA_DIR}/u04_small.j2c
+                       ${CONFORMANCE_DATA_DIR}/hifi_ht1_02.j2k ${CONFORMANCE_DATA_DIR}/p1_05.j2k
+                       ${CONFORMANCE_DATA_DIR}/u10_part15_lossless.j2c)
+      set_tests_properties(wasm_mt_colour_matches_one_thread PROPERTIES
+                           PASS_REGULAR_EXPRESSION "all cases passed" TIMEOUT 300)
     endif()
   else()
     message(STATUS "WASM build output not found -- skipping WASM tests")
