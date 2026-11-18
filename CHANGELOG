@@ -39,9 +39,7 @@
     the output's packets; POC and PPM are not written (packets are in the COD's
     progression order, with inline headers), nor PLM and CPF.
   - `-partial refine|drop|keep` for blocks the Part 1 encoder cut part-way
-    through a bit-plane (`refine`, the default, is exact); `-layers keep`
-    (experimental) keeps the layer count, each block's HT set in the first
-    layer the input had passes of it; `-num_threads N` (the output does not
+    through a bit-plane (`refine`, the default, is exact); `-num_threads N` (the output does not
     depend on N); `-copy_input`.
   - Memory: the tiles are transcoded one at a time, so a tiled image needs
     about the input plus the output plus one tile (96 MB for a 43 MB, 36-tile
@@ -51,7 +49,7 @@
     decoder does not support RGN, so streams with a region of interest fail
     there. Lossy RGN streams differ from the Part 1 decode by a few levels of
     4095 (p0_06), reversible ones are exact.
-  - `ctest -L transcoder` (70 tests): round trips on the Part 1 conformance
+  - `ctest -L transcoder` (64 tests): round trips on the Part 1 conformance
     streams and on streams made with `open_htj2k_enc` (every code-block style
     switch, rates, layers, tiles, 16 bit), marker, colour-space and refusal
     checks, and a fuzzer-found input. The tool was run under AddressSanitizer

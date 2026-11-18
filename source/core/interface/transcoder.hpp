@@ -36,7 +36,7 @@
 // through a bit-plane, unless transcode_partial_plane::keep or drop is chosen).  The marker segments that
 // describe the image (SIZ, QCD, QCC, COM, tiling, precincts, progression order, SOP/EPH) are kept; the
 // code-block style becomes HT, the CAP marker segment is added, and the packets are written again, with one
-// quality layer. The layers of the input are merged by default (transcode_options::layers keeps them): a
+// quality layer. The layers of the input are merged: a
 // Part 1 block is refined layer by layer, but an HT block is one HT set (a cleanup segment, with an
 // optional refinement segment), and a decoder that handles several HT sets per block is not to be relied on
 // (OpenJPEG's does not).  The input's PLT marker segments become PLT marker segments for the output's
@@ -92,14 +92,6 @@ struct transcode_stats {
   uint64_t refined = 0;  // of those, the blocks coded with HT refinement passes (refine mode)
 };
 
-// How the quality layers of the input are carried over.
-enum class transcode_layers {
-  merge,  // one layer (default): every block's HT set is in the one packet per precinct
-  keep    // the layer count of the input: a block's HT set is in the first layer the input
-          // contributed to the block in; a layer-limited decode shows early blocks at full
-          // precision and later blocks missing, never coarser
-};
-
 // The colour space a JPH file written for a raw codestream declares (its colour specification box).
 enum class transcode_colour_space {
   automatic,  // sRGB for three or more components (default), greyscale for one or two
@@ -113,7 +105,6 @@ struct transcode_options {
   bool input_padded = false;
   transcode_colour_space jph_colour_space =
       transcode_colour_space::automatic;  // JPH output of a raw codestream
-  transcode_layers layers               = transcode_layers::merge;
   transcode_partial_plane partial_plane = transcode_partial_plane::refine;
   transcode_stats *stats                = nullptr;  // optional: receives the block statistics
   bool jph_output      = false;  // write a JPH file (ISO/IEC 15444-15) instead of the codestream alone

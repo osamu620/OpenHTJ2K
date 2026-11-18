@@ -39,12 +39,6 @@ open_htj2k_transcode -i <input> -o <output> [options...]
     (smallest output, lossy). `keep` codes every decoded bit (the
     reconstruction is off by half a step, and the output is much larger).
     Blocks cut after a cleanup pass are exact in all modes.
-- `-layers merge|keep` (experimental)
-  - `merge` (default) writes one quality layer. `keep` keeps the number of
-    layers of the input and puts each block's HT set in the first layer in
-    which the input had passes of that block, so a decode of fewer layers
-    shows early blocks at full precision and later blocks missing. The output
-    is larger, by the extra packet headers. See [Layers](#layers).
 - `-num_threads N`
   - Worker threads for the code-block loop. `0` (default) uses all hardware
     threads, `1` none. The output is identical for every `N`.
@@ -75,7 +69,7 @@ the time.
 | | Input (Part 1) | Output (HTJ2K) |
 |---|---|---|
 | Block coder | EBCOT/MQ | HT (`Cmodes` HT, in COD and every COC) |
-| Quality layers | as coded | one (`-layers keep`: as coded) |
+| Quality layers | as coded | one (see [Layers](#layers)) |
 | CAP marker segment | none | added (HTREV when every component is reversible, else HTIRV, which includes mixed filters) |
 | SIZ, QCD, QCC, RGN, COM, CRG, tiling, precincts, progression order, SOP/EPH | | kept |
 | COD/COC/QCD/QCC/RGN/COM in tile-part headers | | kept |
@@ -112,15 +106,9 @@ code-blocks and threads.
 A Part 1 block is refined layer by layer: each layer adds coding passes. An HT
 block is one HT set (a cleanup segment, with an optional refinement segment), and
 decoders other than this library do not all read several HT sets per block
-(OpenJPEG's decoder does not). The transcoder therefore merges the layers by
-default, which gives a file every HT decoder reads.
-
-`-layers keep` keeps the layer count without several HT sets: a block's one set
-goes in the first layer that carried passes of it. It was checked by decoding
-the transcoded streams in full, with this library's decoder and with OpenJPEG
-2.5.4 (all pixel-identical to the Part 1 decode). It was **not** checked what
-a decode of only the first layers looks like; because a block appears whole or
-not at all, it can be worse than the gradual improvement of the Part 1 file.
+(OpenJPEG's decoder does not). The transcoder therefore always merges the
+layers into one, which gives a file every HT decoder reads. The output cannot
+be refined layer by layer as the input could.
 
 ## Memory and limits
 
@@ -164,7 +152,6 @@ open_htj2k::transcode_options opt;
 opt.input_padded = true;                       // in.data() + in.size() .. +16 are readable
 opt.num_threads  = 0;                          // all hardware threads
 opt.partial_plane = open_htj2k::transcode_partial_plane::refine;
-opt.layers       = open_htj2k::transcode_layers::merge;
 opt.jph_output   = false;                      // true: a JPH file
 open_htj2k::transcode_stats stats;
 opt.stats        = &stats;

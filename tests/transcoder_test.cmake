@@ -54,16 +54,6 @@ if(TARGET open_htj2k_transcode)
   tc_add(conf_p0_06 INPUT ${CONFORMANCE_DATA_DIR}/p0_06.j2k MODE close PAE 4 MSE 1)
   # A large lossless one.
   tc_add(conf_u10_part1_lossless INPUT ${CONFORMANCE_DATA_DIR}/u10_part1_lossless.j2c)
-  # -layers keep: the input's layers stay (a block's HT set in the first layer the input had passes
-  # of it in).  The decode must be the Part 1 decode.
-  set(_K ${_tc_ref}/kodim23.ppm)
-  foreach(_c p0_02 p0_07 p1_03)
-    tc_add(layers_keep_${_c} INPUT ${CONFORMANCE_DATA_DIR}/${_c}.j2k TRANS_ARGS "-layers@@keep")
-  endforeach()
-  tc_add(layers_keep_layers3 ENC_IN ${_K} ENC_ARGS "Cmodes=0@@-rate@@0.25,0.5,1" TRANS_ARGS "-layers@@keep")
-  tc_add(layers_keep_layers5 ENC_IN ${_K} ENC_ARGS "Cmodes=0@@-rate@@0.1,0.25,0.5,1,2" TRANS_ARGS "-layers@@keep")
-  tc_add(layers_keep_all_modes_layers ENC_IN ${_K}
-         ENC_ARGS "Cmodes=BYPASS|RESET|RESTART|CAUSAL|ERTERM|SEGMARK@@-rate@@0.25,0.5,1" TRANS_ARGS "-layers@@keep")
   # The colour space of a JPH file made from a raw codestream: sRGB (EnumCS 16) by default, sYCC (18)
   # on request; the options that make no sense are refused.
   foreach(_v "default:" "ycc:-jph_color_space@@YCC" "rgb:-jph_color_space@@RGB")
