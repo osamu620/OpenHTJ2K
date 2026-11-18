@@ -35,12 +35,11 @@
 // reconstructs from the input (also for code-blocks that a lossy Part 1 encoder cut part-way
 // through a bit-plane, unless transcode_partial_plane::keep or drop is chosen).  The marker segments that
 // describe the image (SIZ, QCD, QCC, COM, tiling, precincts, progression order, SOP/EPH) are kept; the
-// code-block style becomes HT, the CAP marker segment is added, and the packets are written again, with one
-// quality layer. The layers of the input are merged: a
-// Part 1 block is refined layer by layer, but an HT block is one HT set (a cleanup segment, with an
-// optional refinement segment), and a decoder that handles several HT sets per block is not to be relied on
-// (OpenJPEG's does not).  The input's PLT marker segments become PLT marker segments for the output's
-// packets; its PLM, PPM, POC, TLM and CPF marker segments are not carried over.
+// code-block style becomes HT, the CAP marker segment is added, and the packets are written again.  An HT
+// block is one HT set (a cleanup segment, with an optional refinement segment), not refined layer by layer
+// as a Part 1 block is.  By default the layers of the input are merged into one; transcode_layers::keep
+// keeps them with placeholder passes (see there).  The input's PLT marker segments become PLT marker
+// segments for the output's packets; its PLM, PPM, POC, TLM and CPF marker segments are not carried over.
 //
 // Memory: the input and the output are held whole.  The tiles are transcoded one after the other,
 // and only the tile in hand has its structures, so memory is about the input, the output and one
@@ -83,6 +82,28 @@ enum class transcode_partial_plane {
           // SigProp (and MagRef) passes, the way the Part 1 passes were cut: the reconstruction is exact
 };
 
+// The quality layers of the output.
+//
+// keep follows the WG1 guideline on placeholder passes (WG1 N101237, "Guideline on Placeholder Passes and
+// Multiple HT Sets in HTJ2K codestreams", section 6).  The output has the layers of the input, and each
+// packet adds to each code-block the number of coding passes it added in the input: the passes before the
+// block's last Part 1 cleanup pass become placeholder passes (ISO/IEC 15444-15, B.3), which carry no
+// bytes, and the HT cleanup, SigProp and MagRef passes go in the packets of the Part 1 passes they come
+// from.  The layer boundaries of the input are therefore kept in the packet headers, and the output can be
+// transcoded back into a Part 1 codestream with the same layers.  In the first packet that includes a
+// block, a multiple of three placeholder passes is replaced by as many more missing MSBs, leaving at most
+// two, as the guideline recommends; when that would leave the packet with no pass of the block, the
+// number of missing MSBs of the input is kept instead.  The output stays SINGLEHT (one HT set per block).
+// It decodes to the same image as the merged output; a decode of fewer layers is not the gradual
+// refinement of the Part 1 file, since a block is decoded only from the layer that holds its cleanup pass
+// on.  keep requires transcode_partial_plane::refine, and refuses a lossy stream with a region of
+// interest (whose blocks are coded below their last pass).  A block whose passes decode to zero has
+// nothing to code and is left out, as in merge.
+enum class transcode_layers {
+  merge,  // (default) one quality layer
+  keep    // the layers of the input, with placeholder passes
+};
+
 // What the code-blocks that had coding passes were found to end with.
 struct transcode_stats {
   uint64_t blocks  = 0;  // code-blocks with coding passes
@@ -106,6 +127,7 @@ struct transcode_options {
   transcode_colour_space jph_colour_space =
       transcode_colour_space::automatic;  // JPH output of a raw codestream
   transcode_partial_plane partial_plane = transcode_partial_plane::refine;
+  transcode_layers layers               = transcode_layers::merge;
   transcode_stats *stats                = nullptr;  // optional: receives the block statistics
   bool jph_output      = false;  // write a JPH file (ISO/IEC 15444-15) instead of the codestream alone
   unsigned num_threads = 0;      // code-block worker threads; 0 = all hardware threads, 1 = none

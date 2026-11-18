@@ -39,6 +39,10 @@ open_htj2k_transcode -i <input> -o <output> [options...]
     (smallest output, lossy). `keep` codes every decoded bit (the
     reconstruction is off by half a step, and the output is much larger).
     Blocks cut after a cleanup pass are exact in all modes.
+- `-layers merge|keep`
+  - `merge` (default) writes one quality layer. `keep` keeps the layers of the
+    input with placeholder passes, so that the output can be transcoded back
+    into a Part 1 codestream with the same layers. See [Layers](#layers).
 - `-num_threads N`
   - Worker threads for the code-block loop. `0` (default) uses all hardware
     threads, `1` none. The output is identical for every `N`.
@@ -69,7 +73,7 @@ the time.
 | | Input (Part 1) | Output (HTJ2K) |
 |---|---|---|
 | Block coder | EBCOT/MQ | HT (`Cmodes` HT, in COD and every COC) |
-| Quality layers | as coded | one (see [Layers](#layers)) |
+| Quality layers | as coded | one; with `-layers keep` those of the input (see [Layers](#layers)) |
 | CAP marker segment | none | added (HTREV when every component is reversible, else HTIRV, which includes mixed filters) |
 | SIZ, QCD, QCC, RGN, COM, CRG, tiling, precincts, progression order, SOP/EPH | | kept |
 | COD/COC/QCD/QCC/RGN/COM in tile-part headers | | kept |
@@ -104,11 +108,47 @@ code-blocks and threads.
 ## Layers
 
 A Part 1 block is refined layer by layer: each layer adds coding passes. An HT
-block is one HT set (a cleanup segment, with an optional refinement segment), and
-decoders other than this library do not all read several HT sets per block
-(OpenJPEG's decoder does not). The transcoder therefore always merges the
-layers into one, which gives a file every HT decoder reads. The output cannot
-be refined layer by layer as the input could.
+block is one HT set (a cleanup segment, with an optional refinement segment),
+which is decoded whole.
+
+`-layers merge` (the default) writes one quality layer.
+
+`-layers keep` keeps the layers of the input, the way the WG1 guideline on
+placeholder passes (*Guideline on Placeholder Passes and Multiple HT Sets in
+HTJ2K codestreams*, WG1 N101237, section 6) recommends for a reversible
+transcoder. Each packet adds to each code-block the number of coding passes it
+added in the input:
+
+- The passes before the block's last Part 1 cleanup pass become *placeholder
+  passes* (ISO/IEC 15444-15, B.3). The packet headers count them, but they carry
+  no bytes.
+- The HT cleanup pass goes in the packet that held that last cleanup pass, and
+  the HT SigProp and MagRef passes go in the packets of the Part 1 passes they
+  stand for. When those two are in different layers, the refinement segment is
+  split between them, and a decode without the MagRef layer reads the SigProp
+  pass alone.
+- In the first packet that includes a block, a multiple of three placeholder
+  passes is replaced by as many more missing MSBs, which leaves at most two
+  placeholder passes there, as the guideline recommends. When that would leave
+  the packet with no pass of the block, the block keeps the number of missing
+  MSBs of the input instead, which the guideline also allows.
+
+The layer boundaries of the input are thus in the packet headers, and the
+output can be transcoded back into a Part 1 codestream with its layers. There is
+still one HT set per code-block (SINGLEHT). The output decodes to the same image
+as with `merge`. It is 0.5% to 4% larger on the streams tested, for the packet
+headers of the extra layers (10% with 64×64 tiles). A decode of only the first
+layers is not the gradual refinement of the Part 1 file: a code-block appears
+only from the layer that holds its last cleanup pass.
+
+`keep` needs `-partial refine` (the default), and refuses a lossy stream with a
+region of interest, whose blocks are coded below their last pass. A block whose
+passes decode to zero has nothing to code and is left out, as with `merge`.
+
+OpenJPEG (2.5.0 and 2.5.4 tried) does not read placeholder passes: it rejects
+`keep` output that has them, as it rejects the guideline's own example files.
+The guideline asks every HTJ2K decoder to handle placeholder passes (section 5);
+until OpenJPEG does, use `merge` for files that OpenJPEG must read.
 
 ## Memory and limits
 
@@ -137,8 +177,10 @@ input leaves it out. A codestream with no tile-part at all is refused.
 The output was decoded in full with OpenJPEG 2.5.4 and compared with the Part 1
 decode: 43 conformance, generated and JP2 streams are pixel-identical. OpenJPEG's
 HT decoder does not support RGN, so the three RGN conformance streams it
-cannot read (p0_03, p0_06, p0_15) fail there, not in this library.
-OpenJPEG is the only third-party decoder that has been tried.
+cannot read (p0_03, p0_06, p0_15) fail there, not in this library. OpenJPEG
+does not read the placeholder passes of `-layers keep` either (see
+[Layers](#layers)). OpenJPEG is the only third-party decoder that has been
+tried.
 
 ## Library use
 
@@ -152,6 +194,7 @@ open_htj2k::transcode_options opt;
 opt.input_padded = true;                       // in.data() + in.size() .. +16 are readable
 opt.num_threads  = 0;                          // all hardware threads
 opt.partial_plane = open_htj2k::transcode_partial_plane::refine;
+opt.layers       = open_htj2k::transcode_layers::merge;  // keep: the input's layers
 opt.jph_output   = false;                      // true: a JPH file
 open_htj2k::transcode_stats stats;
 opt.stats        = &stats;
@@ -165,6 +208,7 @@ function throws, with a message, on input it does not transcode.
 ## Tests
 
 `ctest -L transcoder` runs the transcoder tests (decode-compare round trips on
-the conformance streams and on streams made with `open_htj2k_enc`, marker and
-colour-space checks, refused inputs, a fuzzer-found stream). They are built with
+the conformance streams and on streams made with `open_htj2k_enc`, in both
+layer modes, marker and colour-space checks, refused inputs, a fuzzer-found
+stream). They are built with
 the rest of the tests.

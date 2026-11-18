@@ -62,6 +62,11 @@ static void usage(const char *prog) {
       "      plane and drop the partial plane (smallest, lossy), keep = code every decoded bit\n"
       "      (reconstruction off by half a step, and a much larger output). Blocks cut after a\n"
       "      cleanup pass are exact in all modes.\n"
+      "  -layers merge|keep  merge = one quality layer (default). keep = the layers of the input,\n"
+      "      kept with placeholder passes as the WG1 guideline on placeholder passes (N101237)\n"
+      "      recommends: each packet adds to each block the passes it added in the input, so the\n"
+      "      output can be transcoded back with the same layers. A decode of fewer layers shows a\n"
+      "      block only from the layer that holds its last cleanup pass on. Needs -partial refine.\n"
       "  -num_threads N  worker threads for the code-block loop (0 = all hardware threads, default;\n"
       "      1 = single-threaded). The output is identical for every N.\n"
       "  Memory: the input and the output are held whole, and the tiles are transcoded one at a\n"
@@ -109,6 +114,16 @@ int main(int argc, char *argv[]) {
         opt.partial_plane = open_htj2k::transcode_partial_plane::refine;
       } else {
         std::printf("ERROR: -partial takes keep, drop or refine, not %s\n", v);
+        return EXIT_FAILURE;
+      }
+    } else if (std::strcmp(argv[i], "-layers") == 0 && i + 1 < argc) {
+      const char *v = argv[++i];
+      if (std::strcmp(v, "keep") == 0) {
+        opt.layers = open_htj2k::transcode_layers::keep;
+      } else if (std::strcmp(v, "merge") == 0) {
+        opt.layers = open_htj2k::transcode_layers::merge;
+      } else {
+        std::printf("ERROR: -layers takes merge or keep, not %s\n", v);
         return EXIT_FAILURE;
       }
     } else if (std::strcmp(argv[i], "-num_threads") == 0 && i + 1 < argc) {
