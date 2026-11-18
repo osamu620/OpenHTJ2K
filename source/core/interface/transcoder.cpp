@@ -62,6 +62,11 @@ uint16_t magb_field(int32_t bound) {
   return 31;
 }
 
+// The code-block style of the output: HT, with the input's vertically causal context switch
+// (CAUSAL), which the HT SigProp pass follows as the Part 1 one does.  The other Part 1 switches
+// do not apply to HT code-blocks.
+uint8_t ht_style(uint8_t part1_style) { return static_cast<uint8_t>(HT | (part1_style & CAUSAL)); }
+
 // Per-thread scratch of the block transcoder.
 struct scratch_t {
   std::vector<int32_t> dec;   // decoded Part 1 samples: sign in bit 31, magnitude below
@@ -592,8 +597,8 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   bool reversible = true;
   for (uint8_t r : main_rev) reversible = reversible && (r != 0);
   const auto NL0 = hout.COD->get_dwt_levels();
-  hout.COD->set_Cmodes(static_cast<uint8_t>(HT));
-  for (auto &c : hout.COC) c->set_Cmodes(static_cast<uint8_t>(HT));
+  hout.COD->set_Cmodes(ht_style(hout.COD->get_Cmodes()));
+  for (auto &c : hout.COC) c->set_Cmodes(ht_style(c->get_Cmodes()));
   if (!keep_layers) hout.COD->set_number_of_layers(1);
   hout.SIZ->set_cap_capability();
   // The input packets are read in the order its POC marker segments give.  They are written again
@@ -610,10 +615,15 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   int32_t magb_main = hout.QCD->get_MAGB(NL0);
   for (const auto &q : hout.QCC) magb_main = std::max<int32_t>(magb_main, q->get_MAGB(NL0));
   hout.CAP = std::unique_ptr<CAP_marker>(new CAP_marker());
+  // CAP bit 12 (RGN): the output keeps an RGN marker segment, in the main header or (found with the
+  // tiles) a tile-part header.  Bit 11 (HETEROGENEOUS): a tile-part header of the output has coding
+  // parameters (COD, COC, QCD, QCC or RGN; it has no POC or PPT).
+  bool has_rgn       = !hout.RGN.empty();
+  bool heterogeneous = false;
 
   // The header's length does not depend on the values that are known at the end (the magnitude
-  // bound, the reversibility and the tile-part lengths), so the tile-parts are written after a
-  // header that is filled in then.
+  // bound, the reversibility, the RGN and HETEROGENEOUS flags and the tile-part lengths), so the
+  // tile-parts are written after a header that is filled in then.
   std::vector<uint16_t> tlm_indices;
   if (num_tiles > 1) {
     for (uint32_t i = 0; i < num_tiles; ++i)
@@ -624,8 +634,11 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
     if (num_tiles > 1)
       hout.TLM.push_back(
           std::unique_ptr<TLM_marker>(new TLM_marker(static_cast<uint8_t>(0), tlm_indices, tlm_lengths)));
-    const auto bit5 = static_cast<uint16_t>(reversible ? 0 : 1);  // HTREV / HTIRV
-    hout.CAP->set_Ccap(static_cast<uint16_t>((bit5 << 5) | magb_field(magb)), 15);
+    const auto bit5  = static_cast<uint16_t>(reversible ? 0 : 1);     // HTREV / HTIRV
+    const auto bit11 = static_cast<uint16_t>(heterogeneous ? 1 : 0);  // HOMOGENEOUS / HETEROGENEOUS
+    const auto bit12 = static_cast<uint16_t>(has_rgn ? 1 : 0);        // RGNFREE / RGN
+    hout.CAP->set_Ccap(
+        static_cast<uint16_t>((bit12 << 12) | (bit11 << 11) | (bit5 << 5) | magb_field(magb)), 15);
     j2c_dst_memory hdr_buf;
     hdr_buf.put_word(_SOC);
     hout.flush(hdr_buf);
@@ -749,13 +762,13 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       for (const auto &c : th->COM) tile_com.push_back(*c);
       if (th->COD != nullptr) {
         ov.COD = std::unique_ptr<COD_marker>(new COD_marker(*th->COD));
-        ov.COD->set_Cmodes(static_cast<uint8_t>(HT));
+        ov.COD->set_Cmodes(ht_style(ov.COD->get_Cmodes()));
         if (!keep_layers) ov.COD->set_number_of_layers(1);
         has_override = true;
       }
       for (const auto &c : th->COC) {
         ov.COC.push_back(std::unique_ptr<COC_marker>(new COC_marker(*c)));
-        ov.COC.back()->set_Cmodes(static_cast<uint8_t>(HT));
+        ov.COC.back()->set_Cmodes(ht_style(ov.COC.back()->get_Cmodes()));
         has_override = true;
       }
       if (th->QCD != nullptr) {
@@ -771,6 +784,8 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
         has_override = true;
       }
     }
+    if (!ov.RGN.empty()) has_rgn = true;
+    if (has_override) heterogeneous = true;
     if (has_override) {
       std::vector<uint8_t> rev(main_rev);
       if (ov.COD != nullptr) rev.assign(ncomp, ov.COD->get_transformation() == 1 ? 1 : 0);

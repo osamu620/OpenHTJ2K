@@ -113,8 +113,11 @@ class SIZ_marker : public j2k_marker_io_base {
   void get_subsampling_factor(element_siz &siz, uint16_t c);
   uint16_t get_num_components() const;
   uint8_t get_chroma_format() const;
-  // Rsiz bit 14: a CAP marker follows (the codestream uses Part 15 block coding).
-  void set_cap_capability() { Rsiz = static_cast<uint16_t>(Rsiz | (1U << 14)); }
+  // Rsiz bit 14: a CAP marker follows (the codestream uses Part 15 block coding).  Without the
+  // Part 2 flag (bit 15) the 14 bits below it are then 0: the Part 1 profiles they name (Profile 0,
+  // Profile 1, ...) are not those of such a codestream.  The HTJ2K conformance codestreams have Rsiz
+  // 0x4000 whatever the profile of the Part 1 codestream they were made from.
+  void set_cap_capability() { Rsiz = static_cast<uint16_t>((Rsiz & 0x8000) ? (Rsiz | 0x4000) : 0x4000); }
 };
 
 /********************************************************************************

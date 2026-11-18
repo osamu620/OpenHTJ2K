@@ -91,6 +91,22 @@ if(TARGET open_htj2k_transcode)
            -DINPUT=${CONFORMANCE_DATA_DIR}/p0_07.j2k -DWORK=${_tc_work}/plt "-DHEX=ff58"
            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/transcoder_markers.cmake)
   set_tests_properties(tc_keep_crg tc_keep_tile_com tc_plt PROPERTIES LABELS transcoder)
+  # The header of the output: Rsiz 0x4000 whatever the Part 1 profile of the input (p0_01 has
+  # Profile 0, p1_04 Profile 1); the CAP flags RGN (bit 12) for an RGN marker segment, in the main
+  # header (p0_13) or a tile-part header (p0_03), and HETEROGENEOUS (bit 11) for coding parameters in
+  # a tile-part header (p0_03 RGN, p1_04 QCD); the input's CAUSAL switch in the code-block style
+  # (p1_02: 0x48).
+  function(tc_header name input hex)
+    add_test(NAME tc_${name} COMMAND ${CMAKE_COMMAND} -DTRANS=$<TARGET_FILE:open_htj2k_transcode>
+             -DINPUT=${CONFORMANCE_DATA_DIR}/${input}.j2k -DWORK=${_tc_work}/${name} "-DHEX=${hex}"
+             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/transcoder_markers.cmake)
+    set_tests_properties(tc_${name} PROPERTIES LABELS transcoder)
+  endfunction()
+  tc_header(header_profile0 p0_01 "ff5100294000;ff5000080002000000")
+  tc_header(header_rgn_main p0_13 "ff5000080002000010")
+  tc_header(header_rgn_tile p0_03 "ff5000080002000018")
+  tc_header(header_profile1_het p1_04 "ff5100294000;ff5000080002000008")
+  tc_header(header_causal p1_02 "ff52001301000001010604044800")
   # A fuzzer's 610 byte stream whose SIZ declares about 28000 tiles, nearly all without a tile-part.
   # They are left out of the output; the transcoder once allocated 4 GB for them.
   tc_add(fuzz_many_empty_tiles INPUT ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/transcoder_many_empty_tiles.j2c)

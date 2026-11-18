@@ -72,9 +72,10 @@ the time.
 
 | | Input (Part 1) | Output (HTJ2K) |
 |---|---|---|
-| Block coder | EBCOT/MQ | HT (`Cmodes` HT, in COD and every COC) |
+| Block coder | EBCOT/MQ | HT (`Cmodes` HT, with the input's CAUSAL switch, in COD and every COC) |
 | Quality layers | as coded | one; with `-layers keep` those of the input (see [Layers](#layers)) |
-| CAP marker segment | none | added (HTREV when every component is reversible, else HTIRV, which includes mixed filters) |
+| Rsiz | as coded (a Part 1 profile, for example) | 0x4000: a CAP marker segment follows (bit 15 is kept) |
+| CAP marker segment | none | added (HTREV when every component is reversible, else HTIRV, which includes mixed filters; RGN when an RGN marker segment is kept; HETEROGENEOUS when a tile-part header has COD, COC, QCD, QCC or RGN) |
 | SIZ, QCD, QCC, RGN, COM, CRG, tiling, precincts, progression order, SOP/EPH | | kept |
 | COD/COC/QCD/QCC/RGN/COM in tile-part headers | | kept |
 | PLT | | written again for the output's packets |
