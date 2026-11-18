@@ -35,9 +35,11 @@
   - Output: a raw HTJ2K codestream, or a JPH file (the boxes of a JP2 input
     are kept; a raw codestream gets the boxes the encoder makes, with
     `-jph_color_space RGB|YCC`). One quality layer (or those of the input, see
-    `-layers keep` below), a CAP marker segment (HTREV
-    only when every component is reversible), PLT and TLM written again for
-    the output's packets; POC and PPM are not written (packets are in the COD's
+    `-layers keep` below), Rsiz 0x4000, a CAP marker segment (HTREV only when
+    every component is reversible; RGN and HETEROGENEOUS when the output has
+    RGN marker segments or coding parameters in tile-part headers), the
+    input's CAUSAL code-block switch, PLT and TLM written again for the
+    output's packets; POC and PPM are not written (packets are in the COD's
     progression order, with inline headers), nor PLM and CPF.
   - `-partial refine|drop|keep` for blocks the Part 1 encoder cut part-way
     through a bit-plane (`refine`, the default, is exact); `-num_threads N`
@@ -61,7 +63,7 @@
     decoder does not support RGN, so streams with a region of interest fail
     there. Lossy RGN streams differ from the Part 1 decode by a few levels of
     4095 (p0_06), reversible ones are exact.
-  - `ctest -L transcoder` (86 tests): round trips on the Part 1 conformance
+  - `ctest -L transcoder` (91 tests): round trips on the Part 1 conformance
     streams and on streams made with `open_htj2k_enc` (every code-block style
     switch, rates, layers, tiles, 16 bit), marker, colour-space and refusal
     checks, and a fuzzer-found input. The tool was run under AddressSanitizer
