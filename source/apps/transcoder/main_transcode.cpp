@@ -64,12 +64,6 @@ static void usage(const char *prog) {
       "      cleanup pass are exact in all modes.\n"
       "  -num_threads N  worker threads for the code-block loop (0 = all hardware threads, default;\n"
       "      1 = single-threaded). The output is identical for every N.\n"
-      "  -layers merge|keep  merge = one quality layer (default): an HT code-block is a single HT\n"
-      "      set, which other decoders (OpenJPEG, for one) can read, and it cannot be refined layer\n"
-      "      by layer as a Part 1 block can. keep = the layer count of the input, with a block's HT\n"
-      "      set in the first layer the input had passes of it in: a decode of fewer layers shows\n"
-      "      early blocks at full precision and later blocks missing (EXPERIMENTAL; a larger output\n"
-      "      for the extra packet headers).\n"
       "  Memory: the input and the output are held whole, and the tiles are transcoded one at a\n"
       "  time, so a tiled image needs about the input plus the output plus one tile; an image of\n"
       "  one tile needs three to four times the input. A codestream of 4 GB or more is refused.\n"
@@ -105,16 +99,6 @@ int main(int argc, char *argv[]) {
       }
     } else if (std::strcmp(argv[i], "-copy_input") == 0) {
       copy_input = true;
-    } else if (std::strcmp(argv[i], "-layers") == 0 && i + 1 < argc) {
-      const char *v = argv[++i];
-      if (std::strcmp(v, "keep") == 0) {
-        opt.layers = open_htj2k::transcode_layers::keep;
-      } else if (std::strcmp(v, "merge") == 0) {
-        opt.layers = open_htj2k::transcode_layers::merge;
-      } else {
-        std::printf("ERROR: -layers takes merge or keep, not %s\n", v);
-        return EXIT_FAILURE;
-      }
     } else if (std::strcmp(argv[i], "-partial") == 0 && i + 1 < argc) {
       const char *v = argv[++i];
       if (std::strcmp(v, "keep") == 0) {

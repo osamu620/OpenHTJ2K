@@ -513,8 +513,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   const auto NL0 = hout.COD->get_dwt_levels();
   hout.COD->set_Cmodes(static_cast<uint8_t>(HT));
   for (auto &c : hout.COC) c->set_Cmodes(static_cast<uint8_t>(HT));
-  const bool keep_layers = (options.layers == transcode_layers::keep);
-  if (!keep_layers) hout.COD->set_number_of_layers(1);
+  hout.COD->set_number_of_layers(1);
   hout.SIZ->set_cap_capability();
   // The input packets are read in the order its POC marker segments give.  They are written again
   // in the order of the COD, a progression order every packet set can be put in, so the output
@@ -646,7 +645,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       if (th->COD != nullptr) {
         ov.COD = std::unique_ptr<COD_marker>(new COD_marker(*th->COD));
         ov.COD->set_Cmodes(static_cast<uint8_t>(HT));
-        if (!keep_layers) ov.COD->set_number_of_layers(1);
+        ov.COD->set_number_of_layers(1);
         has_override = true;
       }
       for (const auto &c : th->COC) {
@@ -715,16 +714,6 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
           const size_t end = std::min(pairs.size(), (k + 1) * CHUNK);
           for (size_t j = k * CHUNK; j < end; ++j) {
             transcode_block(pairs[j].in, pairs[j].out, pairs[j].roi, sc, options, cstats[k]);
-            if (keep_layers && pairs[j].out->num_layers > 1) {
-              // The block's one HT set goes in the first layer the input had passes of it in.
-              j2k_codeblock *bo = pairs[j].out;
-              for (uint16_t l = 0; l < bo->num_layers; ++l) bo->layer_passes[l] = 0;
-              if (bo->num_passes > 0) {
-                const uint16_t f = pairs[j].in->dec_first_layer;
-                bo->layer_passes[std::min<uint16_t>(
-                    f == 0xFFFF ? 0 : f, static_cast<uint16_t>(bo->num_layers - 1))] = bo->num_passes;
-              }
-            }
           }
         } catch (...) {
           std::lock_guard<std::mutex> lk(error_mutex);

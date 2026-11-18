@@ -309,8 +309,6 @@ class j2k_codeblock : public j2k_region {
   // packet headers that follow are read with it.
   static constexpr uint8_t ALL_PASSES_HAVE_DATA = 0xFF;  // above any pass count (at most 164)
   uint8_t dec_passes_with_data                  = ALL_PASSES_HAVE_DATA;
-  // Decoder: the first quality layer that carried passes of this code-block (0xFFFF if none).
-  uint16_t dec_first_layer = 0xFFFF;
   // Encoder: the passes of each quality layer and the pass each starts at.  Non-owning:
   // pooled by the owning j2k_precinct_subband.  nullptr in the decoder.
   uint8_t *layer_start;
