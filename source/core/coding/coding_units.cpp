@@ -2601,13 +2601,23 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
 }
 
 // Number of coding passes in the codeword segment that starts at pass_idx, out of
-// the new_passes still to signal (B.10.7.1).  HT: the cleanup pass is its own
-// segment and the SigProp/MagRef passes form a second one.  Part 1: one pass per
-// segment with RESTART; with BYPASS, the first ten passes share a segment, then
-// each raw SigProp/MagRef pair and each cleanup pass is its own (Table D.9); with
-// neither, all passes share one segment.
+// the new_passes still to signal (B.10.7.1).  HT: the segments end at the passes
+// z, z + 2, z + 3, z + 5, ... (ISO/IEC 15444-15, B.3, the set T), z being the
+// cleanup pass after the ht_phld_passes placeholder passes: the placeholder passes
+// and the cleanup pass are one segment, the SigProp and MagRef passes a second one.
+// Part 1: one pass per segment with RESTART; with BYPASS, the first ten passes share
+// a segment, then each raw SigProp/MagRef pair and each cleanup pass is its own
+// (Table D.9); with neither, all passes share one segment.
 static uint8_t codeword_segment_passes(const j2k_codeblock *blk, uint8_t pass_idx, uint8_t new_passes) {
-  if (blk->Cmodes & HT) return (pass_idx == 0) ? 1 : new_passes;
+  if (blk->Cmodes & HT) {
+    const uint32_t z = blk->ht_phld_passes;
+    uint32_t n;
+    if (pass_idx <= z)
+      n = z + 1 - pass_idx;
+    else
+      n = ((pass_idx - z) % 3 == 1) ? 2 : 1;  // SigProp and MagRef, or a pass alone
+    return static_cast<uint8_t>(std::min<uint32_t>(n, new_passes));
+  }
   if (blk->Cmodes & RESTART) return 1;
   if (blk->Cmodes & BYPASS) {
     constexpr uint8_t first_raw_pass = 10;

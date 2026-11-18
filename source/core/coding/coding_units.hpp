@@ -320,7 +320,12 @@ class j2k_codeblock : public j2k_region {
   // the plane below it with the HT SigProp and MagRef passes (0 = cleanup only).
   // Clamped per block so that the cleanup pass keeps a significant sample.
   uint8_t ht_refine_planes = 0;
-  uint32_t pre_or_val      = 0;
+  // HT only, when writing packet headers: the placeholder passes in front of the HT cleanup
+  // pass (3 P0 of ISO/IEC 15444-15, B.3), which is then pass ht_phld_passes.  They count in
+  // num_passes, layer_passes[] and pass_length[] (with no bytes).  The encoder codes none; the
+  // transcoder uses them to keep the quality layers of a Part 1 codestream.
+  uint8_t ht_phld_passes = 0;
+  uint32_t pre_or_val    = 0;
   // Rate control (EXPERIMENTAL): the truncation points of this HT code-block, or nullptr
   // when the encoder does not truncate to a target size.
   ht_rd_info *rd = nullptr;

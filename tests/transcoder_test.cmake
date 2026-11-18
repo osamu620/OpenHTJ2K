@@ -142,6 +142,36 @@ if(TARGET open_htj2k_transcode)
   tc_add(gen_sop_eph     ENC_IN ${_K} ENC_ARGS "Cmodes=0@@Cuse_sop=yes@@Cuse_eph=yes@@-rate@@1")
   tc_add(gen_rpcl_prec   ENC_IN ${_K} ENC_ARGS "Cmodes=0@@Corder=RPCL@@Cprecincts={256,256}{128,128}@@-rate@@1")
 
+  # -layers keep: the layers of the input, kept with placeholder passes (WG1 N101237).  The decode must
+  # be the Part 1 decode, and the output must not depend on the thread count.  The conformance streams
+  # with more than one layer (p0_03 and p0_15 with RGN and POC, p0_07 with PLT, p0_08 with 30 layers,
+  # p1_05 with PPM), and generated ones with layers and every code-block style switch.
+  foreach(_c p0_02 p0_03 p0_05 p0_07 p0_08 p0_10 p0_15 p0_16 p1_01 p1_02 p1_03 p1_05)
+    tc_add(layers_keep_${_c} INPUT ${CONFORMANCE_DATA_DIR}/${_c}.j2k TRANS_ARGS "-layers@@keep")
+  endforeach()
+  set(_L12 "0.05,0.1,0.15,0.2,0.3,0.4,0.5,0.7,1,1.5,2,3")
+  tc_add(layers_keep_gen3      ENC_IN ${_K} ENC_ARGS "Cmodes=0@@-rate@@0.25,0.5,1" TRANS_ARGS "-layers@@keep")
+  tc_add(layers_keep_gen12     ENC_IN ${_K} ENC_ARGS "Cmodes=0@@-rate@@${_L12}" TRANS_ARGS "-layers@@keep")
+  tc_add(layers_keep_all_modes ENC_IN ${_K} ENC_ARGS "Cmodes=BYPASS|RESET|RESTART|CAUSAL|ERTERM|SEGMARK@@-rate@@${_L12}"
+         TRANS_ARGS "-layers@@keep")
+  tc_add(layers_keep_tiles     ENC_IN ${_K} ENC_ARGS "Cmodes=0@@Stiles={64,64}@@-rate@@0.25,0.5,1,2" TRANS_ARGS "-layers@@keep")
+  tc_add(layers_keep_rpcl_prec ENC_IN ${_K} ENC_ARGS "Cmodes=0@@Corder=RPCL@@Cprecincts={64,64},{32,32}@@-rate@@0.1,0.3,0.6,1.2"
+         TRANS_ARGS "-layers@@keep")
+  tc_add(layers_keep_sop_eph   ENC_IN ${_K} ENC_ARGS "Cmodes=0@@Corder=PCRL@@Cuse_sop=yes@@Cuse_eph=yes@@-rate@@0.2,0.4,0.8,1.6"
+         TRANS_ARGS "-layers@@keep")
+  # The COD of the output keeps the 6 layers of p0_02, with the HT code-block style.
+  add_test(NAME tc_layers_keep_cod COMMAND ${CMAKE_COMMAND} -DTRANS=$<TARGET_FILE:open_htj2k_transcode>
+           -DINPUT=${CONFORMANCE_DATA_DIR}/p0_02.j2k -DWORK=${_tc_work}/layers_keep_cod "-DTRANS_ARGS=-layers@@keep"
+           "-DHEX=ff52000c06000006000304044000" -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/transcoder_markers.cmake)
+  set_tests_properties(tc_layers_keep_cod PROPERTIES LABELS transcoder)
+  # What keep refuses: another -partial mode, a lossy stream with a region of interest; and a bad value.
+  tc_add(layers_keep_partial_refused INPUT ${CONFORMANCE_DATA_DIR}/p0_02.j2k MODE reject
+         TRANS_ARGS "-layers@@keep@@-partial@@drop" PATTERN "partial refine")
+  tc_add(layers_keep_lossy_roi_refused INPUT ${CONFORMANCE_DATA_DIR}/p0_06.j2k MODE reject
+         TRANS_ARGS "-layers@@keep" PATTERN "region of interest")
+  tc_add(layers_bad_value_refused INPUT ${CONFORMANCE_DATA_DIR}/p0_02.j2k MODE reject
+         TRANS_ARGS "-layers@@all" PATTERN "merge or keep")
+
   # JP2 input, JPH output.
   tc_add(file_jp2_to_codestream ENC_IN ${_K} ENC_ARGS "Cmodes=0@@-rate@@1" ENC_EXT jp2)
   tc_add(file_jp2_to_jph        ENC_IN ${_K} ENC_ARGS "Cmodes=0@@-rate@@1" ENC_EXT jp2 OUT_EXT jph)

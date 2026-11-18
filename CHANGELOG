@@ -34,13 +34,25 @@
     DFS/ATK marker segments, a codestream of 4 GB or more.
   - Output: a raw HTJ2K codestream, or a JPH file (the boxes of a JP2 input
     are kept; a raw codestream gets the boxes the encoder makes, with
-    `-jph_color_space RGB|YCC`). One quality layer, a CAP marker segment (HTREV
+    `-jph_color_space RGB|YCC`). One quality layer (or those of the input, see
+    `-layers keep` below), a CAP marker segment (HTREV
     only when every component is reversible), PLT and TLM written again for
     the output's packets; POC and PPM are not written (packets are in the COD's
     progression order, with inline headers), nor PLM and CPF.
   - `-partial refine|drop|keep` for blocks the Part 1 encoder cut part-way
-    through a bit-plane (`refine`, the default, is exact); `-num_threads N` (the output does not
-    depend on N); `-copy_input`.
+    through a bit-plane (`refine`, the default, is exact); `-num_threads N`
+    (the output does not depend on N); `-copy_input`.
+  - `-layers keep` (`transcode_layers::keep`) keeps the quality layers of the
+    input with placeholder passes, as the WG1 guideline on placeholder passes
+    (WG1 N101237, section 6) recommends: each packet adds to each code-block
+    the passes it added in the input, the passes before the block's last
+    Part 1 cleanup pass being placeholder passes without bytes, so the output
+    can be transcoded back to Part 1 with the same layers. On the guideline's
+    example file the tile-part is byte for byte the one the guideline gives.
+    The output decodes to the same image as with `merge` (the default) and is
+    0.5-4% larger. Needs `-partial refine`; refuses a lossy stream with a region
+    of interest. OpenJPEG (2.5.0, 2.5.4) does not read placeholder passes, nor
+    the guideline's own example files.
   - Memory: the tiles are transcoded one at a time, so a tiled image needs
     about the input plus the output plus one tile (96 MB for a 43 MB, 36-tile
     codestream); an image of one tile needs three to four times the input.
@@ -49,7 +61,7 @@
     decoder does not support RGN, so streams with a region of interest fail
     there. Lossy RGN streams differ from the Part 1 decode by a few levels of
     4095 (p0_06), reversible ones are exact.
-  - `ctest -L transcoder` (64 tests): round trips on the Part 1 conformance
+  - `ctest -L transcoder` (86 tests): round trips on the Part 1 conformance
     streams and on streams made with `open_htj2k_enc` (every code-block style
     switch, rates, layers, tiles, 16 bit), marker, colour-space and refusal
     checks, and a fuzzer-found input. The tool was run under AddressSanitizer
@@ -58,8 +70,10 @@
   holds; `j2k_tile::enc_init()` takes the COD, COC, QCD, QCC and RGN of a
   tile-part header; `j2k_tile::get_packet_lengths()`;
   `j2k_decode_indices()` (a Part 1 block's quantisation indices without the
-  inverse quantisation); `j2k_codeblock::add_ROIshift()`. None of them changes
-  what the encoder or the decoder writes or reads.
+  inverse quantisation); `j2k_codeblock::add_ROIshift()`;
+  `j2k_codeblock::ht_phld_passes`, the placeholder passes the packet header
+  writer signals in front of an HT cleanup pass (ISO/IEC 15444-15, B.3). None
+  of them changes what the encoder or the decoder writes or reads.
 
 ## Changed
 - The WebAssembly wrapper's `reset_decoder_with_bytes()` uses the new `init()`

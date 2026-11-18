@@ -32,6 +32,7 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <cstring>
 #include <memory>
@@ -140,6 +141,11 @@ void transcode_block(j2k_codeblock *bin, j2k_codeblock *bout, uint8_t roi, scrat
     // the last bit, and a coefficient of the region gets the bit below its lowest one (roi - 1)
     // set, which is that half step (the HT mid-point adds 2^-(roi+1) of a step on top of it).
     const bool roi_lossy = roi > 0 && bin->transformation != 1;
+    if (roi_lossy && opt.layers == transcode_layers::keep) {
+      // Coded below their last pass, these blocks have no place for their passes in the layers.
+      open_htj2k::detail::fail(
+          "transcoder: -layers keep does not support a lossy stream with a region of interest (RGN).");
+    }
     if (roi_lossy) {
       p_c     = 0;
       refine  = false;
@@ -206,13 +212,16 @@ void transcode_block(j2k_codeblock *bin, j2k_codeblock *bout, uint8_t roi, scrat
     htj2k_encode_refined(bout, 0, &rinfo);
     bout->sample_buf       = nullptr;
     bout->ht_refine_planes = 0;
+    const bool keep_layers = opt.layers == transcode_layers::keep;
     if (sp_only && bout->num_passes == 3) {
       // The Part 1 block ended after its SigProp pass: keep the cleanup segment and the
       // refinement segment as far as the SigProp bits, whose last byte stands alone (the cut
-      // rate control makes).  Without SigProp bits it is the cleanup pass alone.
+      // rate control makes).  Without SigProp bits it is the cleanup pass alone, unless the
+      // layers are kept: the SigProp pass then stays, with no bytes, so that its packet still
+      // adds it (an empty refinement segment is not decoded, ISO/IEC 15444-15, B.3).
       const uint32_t Lref     = bout->pass_length[2];
       const uint32_t Lcup     = bout->length - Lref;
-      const uint8_t passes    = (rinfo.Lsp != 0) ? 2 : 1;
+      const uint8_t passes    = (rinfo.Lsp != 0 || keep_layers) ? 2 : 1;
       bout->layer_start[0]    = 0;
       bout->layer_passes[0]   = passes;
       bout->num_passes        = passes;
@@ -221,7 +230,14 @@ void transcode_block(j2k_codeblock *bin, j2k_codeblock *bout, uint8_t roi, scrat
       bout->pass_length[2]    = 0;
       bout->pass_length_count = passes;
       bout->length            = Lcup + ((passes == 2) ? rinfo.Lsp : 0);
-      if (passes == 2) bout->get_compressed_data()[Lcup + rinfo.Lsp - 1] = rinfo.sp_tail;
+      if (rinfo.Lsp != 0) bout->get_compressed_data()[Lcup + rinfo.Lsp - 1] = rinfo.sp_tail;
+    } else if (keep_layers && bout->num_passes == 3) {
+      // The SigProp and MagRef passes may be in different layers: the SigProp pass gets the
+      // bytes of the segment up to its last bit (which a decode without the MagRef pass reads),
+      // the MagRef pass the rest.  Together they are the one refinement segment.
+      const uint32_t Lref  = bout->pass_length[2];
+      bout->pass_length[1] = rinfo.Lsp;
+      bout->pass_length[2] = Lref - rinfo.Lsp;
     }
     return;
   }
@@ -231,6 +247,65 @@ void transcode_block(j2k_codeblock *bin, j2k_codeblock *bout, uint8_t roi, scrat
   // the plane only enters through the number of missing MSBs the packet header signals,
   // M_b - 1 - p (ISO/IEC 15444-15, 7.6; the same as the encoder's refinement path sets).
   if (p_c > 0 && bout->num_passes > 0) bout->num_ZBP = static_cast<uint8_t>(bout->get_Mb() - 1 - p_c);
+}
+
+// The coding passes each packet of the input added to a code-block, in the order of its layers:
+// (layer, passes) for the layers that added some.
+struct layer_log {
+  uint8_t total = 0;  // the passes recorded so far
+  std::vector<std::pair<uint16_t, uint8_t>> runs;
+};
+
+// transcode_layers::keep (WG1 N101237, 6): gives the HT code-block `bout`, coded from the Part 1
+// block `bin`, the passes of each layer that the input had, with the passes before the last Part 1
+// cleanup pass as placeholder passes.
+void place_layers(const j2k_codeblock *bin, j2k_codeblock *bout, const layer_log *log) {
+  const uint16_t Q = bout->num_layers;
+  for (uint16_t l = 0; l < Q; ++l) bout->layer_passes[l] = 0;
+  // A block whose passes decode to zero has nothing to code: it is left out, as in merge.
+  const uint32_t n_ht = bout->num_passes;
+  if (n_ht == 0) return;
+  // The HT cleanup pass stands for the last Part 1 cleanup pass, z0; the SigProp and MagRef passes
+  // for the passes after it.
+  const uint32_t Z  = bin->num_passes;
+  const uint32_t z0 = 3 * ((Z - 1) / 3);
+  if (Z - z0 != n_ht || log == nullptr)
+    open_htj2k::detail::fail("transcoder: the HT passes of a code-block do not match its Part 1 passes.");
+  // The packet header gave each layer's passes; those of a block that a cut packet left without
+  // data were dropped at the end, and so are dropped here from the last layers.
+  uint32_t left = Z;
+  for (const auto &run : log->runs) {
+    if (run.first >= Q) open_htj2k::detail::fail("transcoder: a packet of a layer the tile does not have.");
+    const uint32_t w              = std::min<uint32_t>(run.second, left);
+    bout->layer_passes[run.first] = static_cast<uint8_t>(bout->layer_passes[run.first] + w);
+    left -= w;
+  }
+  if (left != 0) open_htj2k::detail::fail("transcoder: the passes of a code-block were not all recorded.");
+
+  // S_blk = P_b + P0, the bit-planes above the cleanup pass, is what the HT encoder signalled.
+  const uint32_t P0 = z0 / 3;
+  if (bout->num_ZBP != bin->num_ZBP + P0)
+    open_htj2k::detail::fail("transcoder: the cleanup pass of a code-block is not at its last Part 1 one.");
+  // The first packet with passes of the block: 3k of its placeholder passes become k more missing
+  // MSBs, leaving at most two (WG1 N101237, 6.1).  Should that leave the packet without a pass of
+  // the block, P_b stays that of the input (which the guideline allows as well).
+  uint16_t f = 0;
+  while (bout->layer_passes[f] == 0) ++f;
+  uint32_t k = std::min<uint32_t>(bout->layer_passes[f], z0) / 3;
+  if (bout->layer_passes[f] == 3 * k) k = 0;
+  bout->layer_passes[f] = static_cast<uint8_t>(bout->layer_passes[f] - 3 * k);
+  bout->num_ZBP         = static_cast<uint8_t>(bin->num_ZBP + k);
+  const uint32_t phld   = 3 * (P0 - k);
+
+  // The placeholder passes go in front of the HT passes, with no bytes.
+  const uint32_t total = phld + n_ht;
+  if (total > 128) open_htj2k::detail::fail("transcoder: a code-block has more than 128 coding passes.");
+  bout->ensure_pass_capacity(static_cast<uint8_t>(total));
+  for (uint32_t j = n_ht; j-- > 0;) bout->pass_length[phld + j] = bout->pass_length[j];
+  for (uint32_t j = 0; j < phld; ++j) bout->pass_length[j] = 0;
+  bout->pass_length_count = static_cast<uint8_t>(total);
+  bout->num_passes        = static_cast<uint8_t>(total);
+  bout->ht_phld_passes    = static_cast<uint8_t>(phld);
 }
 
 // Calls fn(block_in, block_out, ROI shift of the component) for every code-block, the two tiles being of
@@ -273,7 +348,7 @@ void for_each_block_pair(j2k_tile &tin, j2k_tile &tout, Fn fn) {
 }
 
 // The magnitude bound B of the transcoded HT code-blocks (ISO/IEC 15444-15, 8.7.3); the same
-// computation as the encoder's coded_MAGB().
+// computation as the encoder's coded_MAGB(), with S_blk = num_ZBP + P0 for the placeholder passes.
 int32_t coded_magb(j2k_tile *tiles, uint32_t num_tiles, const std::vector<uint8_t> &present) {
   int32_t B = 0;
   for (uint32_t t = 0; t < num_tiles; ++t) {
@@ -293,7 +368,8 @@ int32_t coded_magb(j2k_tile *tiles, uint32_t num_tiles, const std::vector<uint8_
             for (uint32_t i = 0; i < n; ++i) {
               const j2k_codeblock *block = cpb->access_codeblock(i);
               if ((block->Cmodes & HT) == 0 || block->num_passes == 0) continue;
-              B = std::max<int32_t>(B, block->num_ZBP + 1 - ((block->transformation == 1) ? 0 : nb - 1));
+              const int32_t S_blk = block->num_ZBP + block->ht_phld_passes / 3;
+              B = std::max<int32_t>(B, S_blk + 1 - ((block->transformation == 1) ? 0 : nb - 1));
             }
           }
         }
@@ -420,6 +496,10 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
 size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<uint8_t> &out,
                                 const transcode_options &options) {
   transcode_stats stats;
+  const bool keep_layers = options.layers == transcode_layers::keep;
+  // The layers are kept with the passes of the input, which refine codes and the others do not.
+  if (keep_layers && options.partial_plane != transcode_partial_plane::refine)
+    open_htj2k::detail::fail("transcoder: -layers keep works with -partial refine only.");
   // A JP2 file: transcode its codestream, keep its other boxes for a JPH output.
   const uint8_t *file_in = in;
   const size_t file_len  = in_len;
@@ -493,8 +573,9 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   }
   if (num_present == 0) open_htj2k::detail::fail("transcoder: the codestream has no tile-part.");
 
-  // Output: the same header with the HT code-block style, one quality layer and a CAP marker
-  // segment.  It is parsed from the input again, to be changed without touching the input's.
+  // Output: the same header with the HT code-block style, one quality layer (those of the input
+  // with keep_layers) and a CAP marker segment.  It is parsed from the input again, to be changed
+  // without touching the input's.
   j2c_src_memory src2;
   j2k_main_header hout;
   // Only the header is read again, not the tile-parts after it.
@@ -513,7 +594,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   const auto NL0 = hout.COD->get_dwt_levels();
   hout.COD->set_Cmodes(static_cast<uint8_t>(HT));
   for (auto &c : hout.COC) c->set_Cmodes(static_cast<uint8_t>(HT));
-  hout.COD->set_number_of_layers(1);
+  if (!keep_layers) hout.COD->set_number_of_layers(1);
   hout.SIZ->set_cap_capability();
   // The input packets are read in the order its POC marker segments give.  They are written again
   // in the order of the COD, a progression order every packet set can be put in, so the output
@@ -630,6 +711,30 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       tin.add_tile_part(sot, src, hin);
     }
     tin.line_based_decode = true;
+    // keep_layers: after each packet, the passes it added to each code-block of its precinct.  The
+    // packets of a precinct come in the order of their layers.
+    std::unordered_map<const j2k_codeblock *, layer_log> logs;
+    if (keep_layers) {
+      tin.set_packet_observer(
+          [&tin, &logs](uint16_t c, uint8_t r, uint32_t p, uint16_t layer, uint64_t, uint64_t) {
+            j2k_resolution *cr = tin.get_tile_component(c)->access_resolution(r);
+            j2k_precinct *cp   = cr->access_precinct(p);
+            for (uint8_t b = 0; b < cr->num_bands; ++b) {
+              j2k_precinct_subband *pb = cp->access_pband(b);
+              if (!pb->is_built()) continue;
+              const uint32_t n = pb->num_codeblock_x * pb->num_codeblock_y;
+              for (uint32_t k = 0; k < n; ++k) {
+                const j2k_codeblock *blk = pb->access_codeblock(k);
+                if (blk->num_passes == 0) continue;
+                layer_log &g = logs[blk];
+                if (blk->num_passes > g.total) {
+                  g.runs.emplace_back(layer, static_cast<uint8_t>(blk->num_passes - g.total));
+                  g.total = blk->num_passes;
+                }
+              }
+            }
+          });
+    }
     tin.create_tile_buf(hin);
 
     // A COD, COC, QCD or QCC in the input's tile-part header is kept for the tile, with the HT
@@ -645,7 +750,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       if (th->COD != nullptr) {
         ov.COD = std::unique_ptr<COD_marker>(new COD_marker(*th->COD));
         ov.COD->set_Cmodes(static_cast<uint8_t>(HT));
-        ov.COD->set_number_of_layers(1);
+        if (!keep_layers) ov.COD->set_number_of_layers(1);
         has_override = true;
       }
       for (const auto &c : th->COC) {
@@ -696,10 +801,12 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
       struct block_job {
         j2k_codeblock *in, *out;
         uint8_t roi;
+        const layer_log *log;  // keep_layers: the passes of each layer
       };
       std::vector<block_job> pairs;
       for_each_block_pair(tin, tout, [&](j2k_codeblock *bi, j2k_codeblock *bo, uint8_t roi) {
-        pairs.push_back({bi, bo, roi});
+        const auto it = logs.find(bi);
+        pairs.push_back({bi, bo, roi, it == logs.end() ? nullptr : &it->second});
       });
       constexpr size_t CHUNK = 8;
       const size_t nchunks   = (pairs.size() + CHUNK - 1) / CHUNK;
@@ -714,6 +821,7 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
           const size_t end = std::min(pairs.size(), (k + 1) * CHUNK);
           for (size_t j = k * CHUNK; j < end; ++j) {
             transcode_block(pairs[j].in, pairs[j].out, pairs[j].roi, sc, options, cstats[k]);
+            if (keep_layers) place_layers(pairs[j].in, pairs[j].out, pairs[j].log);
           }
         } catch (...) {
           std::lock_guard<std::mutex> lk(error_mutex);
