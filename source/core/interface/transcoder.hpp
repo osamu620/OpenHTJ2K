@@ -141,4 +141,53 @@ OPENHTJ2K_EXPORT size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_le
 OPENHTJ2K_EXPORT size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len,
                                                  std::vector<uint8_t> &out,
                                                  const transcode_options &options);
+
+// EXPERIMENTAL (prototype): the other direction, an HTJ2K codestream into a Part 1 codestream.
+//
+// Every code-block is decoded to its quantisation indices (an HT block with its cleanup, SigProp and
+// MagRef passes; a Part 1 block of a mixed codestream with its own passes) and coded again with the
+// Part 1 block coder, down to the same coding pass, so a Part 1 decoder reconstructs the image an
+// HTJ2K decoder reconstructs from the input.  The number of missing MSBs of a block is that of its
+// indices (an HT block may signal fewer zero bit-planes or more), and its coding passes are numbered
+// from there.
+//
+// The quality layers of the input are kept by default (WG1 N101237, section 6): a packet adds to each
+// code-block the passes it added in the input.  Placeholder passes become the Part 1 passes they stand
+// for, and the passes above the block's first packet's (those an HT encoder turned into missing MSBs)
+// go into that packet.  A cut inside a codeword segment keeps the shortest prefix of the coded data
+// that decodes the passes before it, so every layer decodes to what the input's layers decode to in a
+// Part 1 decoder, and an HTJ2K codestream made by transcode_part1_to_htj2k() with
+// transcode_layers::keep goes back to the layers of its Part 1 source.
+//
+// The marker segments are kept as in transcode_part1_to_htj2k(); the code-block style becomes that
+// of the Part 1 coder, the CAP marker segment is removed, and bit 14 of Rsiz is cleared.  The output
+// is a raw codestream; the input is a raw codestream or a JPH/JP2 file.
+//
+// Limits (the function throws, with a message): the input must be an HTJ2K codestream (a code-block
+// style with the HT bit, or a CAP marker segment for Part 15) with at most one HT set per code-block
+// (not MULTIHT), no Part 2 marker segments and no capabilities besides Part 15 in the CAP marker
+// segment, and be less than 4 GB.  A Part 1 code-block cannot hold more than 65535 bytes here.
+struct transcode_to_part1_options {
+  // As in transcode_options.
+  bool input_padded = false;
+  // keep (default): the layers of the input; merge: one quality layer.
+  transcode_layers layers = transcode_layers::keep;
+  // The Part 1 code-block style switches of the output (bits 0-5 of SPcod: BYPASS 0x01, RESET 0x02,
+  // RESTART 0x04, CAUSAL 0x08, ERTERM 0x10, SEGMARK 0x20).  -1 (default): those bits of the input's
+  // code-block style, which an HT code-block uses only for CAUSAL and a Part 1 one of a mixed
+  // codestream for all of them.
+  int32_t code_block_style = -1;
+  unsigned num_threads     = 0;  // code-block worker threads; 0 = all hardware threads, 1 = none
+};
+
+OPENHTJ2K_EXPORT size_t transcode_htj2k_to_part1(const uint8_t *in, size_t in_len,
+                                                 std::vector<uint8_t> &out);
+OPENHTJ2K_EXPORT size_t transcode_htj2k_to_part1(const uint8_t *in, size_t in_len,
+                                                 std::vector<uint8_t> &out,
+                                                 const transcode_to_part1_options &options);
+
+// True if [in, in + in_len), a raw codestream or a JP2/JPH file, is an HTJ2K codestream: its main
+// header has a CAP marker segment for Part 15 or a code-block style (COD or COC) with the HT bit.
+// Throws std::exception if its main header cannot be read.
+OPENHTJ2K_EXPORT bool transcode_input_is_htj2k(const uint8_t *in, size_t in_len);
 }  // namespace open_htj2k

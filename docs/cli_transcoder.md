@@ -1,12 +1,18 @@
 # `open_htj2k_transcode` — transcoder CLI reference (experimental)
 
 Converts a JPEG 2000 Part 1 (EBCOT/MQ) codestream or JP2 file into an HTJ2K
-(Part 15) codestream or JPH file, **without decoding the image**. The Part 1
-code-blocks are decoded to their quantisation indices and the same indices are
-coded again with the HT block coder. There is no inverse or forward wavelet
-transform, no re-quantisation and no colour transform, so the transcoding is
-fast, adds no loss, and a decoder reconstructs from the output the same image
-it reconstructs from the input (exceptions below).
+(Part 15) codestream or JPH file, and an HTJ2K codestream back into a Part 1
+codestream, **without decoding the image**. The code-blocks are decoded to their
+quantisation indices and the same indices are coded again with the other block
+coder. There is no inverse or forward wavelet transform, no re-quantisation and
+no colour transform, so the transcoding is fast, adds no loss, and a decoder
+reconstructs from the output the same image it reconstructs from the input
+(exceptions below).
+
+The direction is that of the input: an HTJ2K input (a CAP marker segment for
+Part 15, or a code-block style with the HT bit) becomes Part 1, anything else
+becomes HTJ2K. See [HTJ2K to Part 1](#htj2k-to-part-1) for the second
+direction.
 
 Full runtime help: `open_htj2k_transcode -h`.
 
@@ -16,21 +22,23 @@ Full runtime help: `open_htj2k_transcode -h`.
 open_htj2k_transcode -i <input> -o <output> [options...]
 ```
 
-- `-i` input: a raw codestream (`.j2c` / `.j2k`) or a JP2 file (`.jp2`). The
-  kind is found from the file's signature, not its extension.
-- `-o` output: a raw codestream (`.j2c` / `.jhc`) or a JPH file (`.jph`). A
-  `.jp2` output is refused: an HT codestream does not belong in a JP2 file.
+- `-i` input: a raw codestream (`.j2c` / `.j2k` / `.jhc`) or a JP2 or JPH file.
+  The kind is found from the file's signature, not its extension.
+- `-o` output: for a Part 1 input, a raw codestream (`.j2c` / `.jhc`) or a JPH
+  file (`.jph`); a `.jp2` output is refused, since an HT codestream does not
+  belong in a JP2 file. For an HTJ2K input, a raw Part 1 codestream (`.j2c` /
+  `.j2k`); `.jph` and `.jp2` are refused.
 
 ## Options
 
-- `-jph_color_space RGB|YCC`
+- `-jph_color_space RGB|YCC` (Part 1 input)
   - The colour space a `.jph` file declares when the input is a raw codestream
     with three or four components: `RGB` is sRGB (the default), `YCC` is sYCC,
     for components that are Y, Cb, Cr (the same option as in `open_htj2k_enc`).
     It only sets the label; no sample is changed.
   - Refused for a codestream output, for a JP2 input (its own colour box is
     kept) and for images that do not have three or four components.
-- `-partial refine|drop|keep`
+- `-partial refine|drop|keep` (Part 1 input)
   - What to do with a code-block that the Part 1 encoder cut part-way through a
     bit-plane (a lossy encode at a rate or with a limited pass count).
     `refine` (default) codes the block at its last complete cleanup plane and
@@ -40,9 +48,19 @@ open_htj2k_transcode -i <input> -o <output> [options...]
     reconstruction is off by half a step, and the output is much larger).
     Blocks cut after a cleanup pass are exact in all modes.
 - `-layers merge|keep`
-  - `merge` (default) writes one quality layer. `keep` keeps the layers of the
-    input with placeholder passes, so that the output can be transcoded back
-    into a Part 1 codestream with the same layers. See [Layers](#layers).
+  - Part 1 input: `merge` (default) writes one quality layer. `keep` keeps the
+    layers of the input with placeholder passes, so that the output can be
+    transcoded back into a Part 1 codestream with the same layers. See
+    [Layers](#layers).
+  - HTJ2K input: `keep` (default) keeps the layers of the input, the
+    placeholder passes becoming the Part 1 passes they stand for; `merge` writes
+    one quality layer. See [HTJ2K to Part 1](#htj2k-to-part-1).
+- `-Cmodes 0|<switches joined by '|'>` (HTJ2K input)
+  - The Part 1 code-block style switches of the output: `BYPASS`, `RESET`,
+    `RESTART`, `CAUSAL`, `ERTERM`, `SEGMARK` (for example
+    `-Cmodes "BYPASS|ERTERM"`), or `0` for none. By default those of the input's
+    code-block style: CAUSAL for HT code-blocks, all six for the Part 1
+    code-blocks of a mixed codestream.
 - `-num_threads N`
   - Worker threads for the code-block loop. `0` (default) uses all hardware
     threads, `1` none. The output is identical for every `N`.
@@ -63,12 +81,19 @@ open_htj2k_transcode -i <input> -o <output> [options...]
 
 # A raw Part 1 codestream of Y, Cb, Cr components to a JPH file that says so
 ./build/bin/open_htj2k_transcode -i in.j2c -o out.jph -jph_color_space YCC
+
+# Keep the layers, and go back to Part 1 with the original code-block switches
+./build/bin/open_htj2k_transcode -i in.j2k -o ht.j2c -layers keep
+./build/bin/open_htj2k_transcode -i ht.j2c -o back.j2k -Cmodes "RESTART|ERTERM"
+
+# An HTJ2K file (codestream or JPH) to a Part 1 codestream with one layer
+./build/bin/open_htj2k_transcode -i in.jph -o out.j2k -layers merge
 ```
 
-The tool prints the sizes, how many code-blocks were coded exactly or cut, and
-the time.
+The tool prints the sizes and the time, and for a Part 1 input how many
+code-blocks were coded exactly or cut.
 
-## What the output is
+## What the output is (Part 1 to HTJ2K)
 
 | | Input (Part 1) | Output (HTJ2K) |
 |---|---|---|
@@ -152,6 +177,65 @@ OpenJPEG (2.5.0 and 2.5.4 tried) does not read placeholder passes: it rejects
 The guideline asks every HTJ2K decoder to handle placeholder passes (section 5);
 until OpenJPEG does, use `merge` for files that OpenJPEG must read.
 
+## HTJ2K to Part 1
+
+For an HTJ2K input the tool writes a Part 1 codestream. Every code-block is
+decoded to its quantisation indices, an HT block with its cleanup, SigProp and
+MagRef passes and a Part 1 block of a mixed codestream with its own passes, and
+coded again with the Part 1 block coder down to the same coding pass. A
+decoder reconstructs the same image from the output as from the input.
+
+- **Missing MSBs.** A Part 1 block's passes start at the cleanup pass of its
+  top bit-plane, so the number of missing MSBs is that of the block's indices.
+  An HT block may signal more (an HT encoder may turn placeholder passes into
+  missing MSBs) or fewer; the passes are numbered from the indices' top
+  bit-plane.
+- **Layers** (`-layers keep`, the default). Each packet adds to each block the
+  passes it added in the input. Placeholder passes become the Part 1 passes
+  they stand for. The passes the input does not count (the bit-planes an HT
+  encoder signalled as missing MSBs above the data) go into the block's first
+  packet, and passes in all-zero bit-planes above the data are dropped. A cut
+  inside a codeword segment keeps the shortest prefix of the coded data that
+  decodes the passes before it; the last cut is terminated. Every layer
+  therefore decodes, in a Part 1 decoder, to what the input's layers decode to.
+  An HTJ2K file made from a Part 1 file with `-layers keep` goes back to the
+  layers of that file: every code-block of the 22 Part 1 conformance streams
+  that `keep` accepts comes back with the same passes in each layer and the
+  same missing MSBs, and codestreams of `open_htj2k_enc` come back byte for byte
+  when the transcode back is given their code-block switches with `-Cmodes`.
+  `-layers merge` writes one layer.
+- **Code-block switches.** The output takes those of the input's code-block
+  style (bits 0-5), or those of `-Cmodes`. An HT code-block uses only CAUSAL,
+  which is kept: it changes the samples a SigProp pass visits, so a layer cut
+  after a SigProp pass decodes differently without it. The Part 1 switches an
+  earlier Part 1 to HTJ2K transcode dropped can be given back with `-Cmodes`;
+  they change the bytes, not the decoded image.
+- **Header.** Rsiz comes from the input's CPF marker segment (its value less
+  one: the profile of the corresponding Part 1 codestream), or is the input's
+  without bit 14. The CAP and CPF marker segments are not written. The other
+  marker segments are handled as in the other direction (POC and PPM are not
+  written, PLT and TLM are written again).
+
+The output is smaller than the input: 61-96% of it on the HTJ2K conformance
+streams, 92% for the median one (MQ coding is more compact than HT). A 4096x2160 16-bit lossless frame
+coded with HT by `open_htj2k_enc` becomes, byte for byte, the Part 1 codestream
+the encoder makes with `Cmodes=0`, in 0.11 s with 32 threads (2.0 s with one;
+peak memory 74 MB).
+
+All 40 HTJ2K conformance streams (`ds0_ht_*`, `ds1_ht_*` and the mixed
+`ds0_hm_*`) transcode. 35 decode to the image of the input, pixel for pixel.
+The other five have a region of interest whose code-blocks are coded above
+their last bit-plane (lossy, or bounded by the magnitude bound B). This
+library's HT and Part 1 decoders reconstruct those coefficients differently
+from the same indices: by one level on ds0_ht_03_b11 and ds0_ht_15_b11, and by
+up to 590 levels of 4095 in one component of ds0_ht_06, where both decodes are
+within the conformance tolerance of p0_06, the Part 1 stream it was made from.
+
+Refused, with a message: an HTJ2K input with more than one HT set per
+code-block (MULTIHT), Part 2 DFS or ATK marker segments, a CAP marker segment
+with capabilities besides Part 15, and a code-block that would take more than
+65535 bytes with the Part 1 block coder.
+
 ## Memory and limits
 
 The input and the output are held whole in memory. The tiles are transcoded one
@@ -166,7 +250,6 @@ times the input.
 
 The input must
 
-- use the Part 1 block coder (an HT input is refused),
 - have no Part 2 DFS or ATK marker segments (refused),
 - be less than 4 GB (the codestream reader keeps 32-bit positions; refused with
   a message).
@@ -181,8 +264,12 @@ decode: 43 conformance, generated and JP2 streams are pixel-identical. OpenJPEG'
 HT decoder does not support RGN, so the three RGN conformance streams it
 cannot read (p0_03, p0_06, p0_15) fail there, not in this library. OpenJPEG
 does not read the placeholder passes of `-layers keep` either (see
-[Layers](#layers)). OpenJPEG is the only third-party decoder that has been
-tried.
+[Layers](#layers)).
+
+OpenJPEG 2.4 decodes the Part 1 output of every HTJ2K test input (the 40
+conformance streams and the round trips). A Part 1 conformance stream taken to
+HTJ2K with `-layers keep` and back decodes in OpenJPEG as the original does, on
+all 22 that `keep` accepts.
 
 ## Library use
 
@@ -207,10 +294,22 @@ open_htj2k::transcode_part1_to_htj2k(in.data(), in.size() - 16, out, opt);  // t
 Without `input_padded` the transcoder copies the input first. The
 function throws, with a message, on input it does not transcode.
 
+The other direction:
+
+```cpp
+open_htj2k::transcode_to_part1_options opt1;
+opt1.input_padded     = true;
+opt1.layers           = open_htj2k::transcode_layers::keep;  // default; merge: one layer
+opt1.code_block_style = -1;  // the input's switches; or e.g. 0x01 | 0x10 (BYPASS | ERTERM)
+if (open_htj2k::transcode_input_is_htj2k(in.data(), in.size() - 16))
+  open_htj2k::transcode_htj2k_to_part1(in.data(), in.size() - 16, out, opt1);
+```
+
 ## Tests
 
 `ctest -L transcoder` runs the transcoder tests (decode-compare round trips on
-the conformance streams and on streams made with `open_htj2k_enc`, in both
-layer modes, marker and colour-space checks, refused inputs, a fuzzer-found
-stream). They are built with
+the Part 1 and HTJ2K conformance streams and on streams made with
+`open_htj2k_enc`, in both layer modes and both directions; Part 1 to HTJ2K and
+back, byte for byte for codestreams of the encoder; marker and colour-space
+checks, refused inputs, a fuzzer-found stream). They are built with
 the rest of the tests.

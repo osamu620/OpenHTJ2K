@@ -37,7 +37,8 @@ license.
   with 4K at 60 fps on a recent x86-64 CPU, and a JPIP server with foveated
   and gigapixel viewers.
 - **Transcoding (experimental):** `open_htj2k_transcode` converts a Part 1 file
-  to HTJ2K without decoding the image ([transcoder](docs/cli_transcoder.md)).
+  to HTJ2K, and HTJ2K back to Part 1 with its quality layers, without decoding
+  the image ([transcoder](docs/cli_transcoder.md)).
 
 Lossless coding of a 4096×2160 8-bit RGB frame on one thread
 ([how this was measured](docs/benchmarks.md)):
