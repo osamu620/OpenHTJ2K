@@ -106,6 +106,9 @@ if(TARGET open_htj2k_transcode)
   tc_header(header_rgn_main p0_13 "ff5000080002000010")
   tc_header(header_rgn_tile p0_03 "ff5000080002000018")
   tc_header(header_profile1_het p1_04 "ff5100294000;ff5000080002000008")
+  # The profile of the input in a CPF marker segment (Pcpf = Rsiz + 1), for a transcode back: p1_04 has
+  # Profile 1 (Rsiz 2).
+  tc_header(header_cpf p1_04 "ff5900040003")
   tc_header(header_causal p1_02 "ff52001301000001010604044800")
   # A fuzzer's 610 byte stream whose SIZ declares about 28000 tiles, nearly all without a tile-part.
   # They are left out of the output; the transcoder once allocated 4 GB for them.

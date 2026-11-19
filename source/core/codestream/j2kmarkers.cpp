@@ -365,6 +365,20 @@ int CAP_marker::write(j2c_dst_memory &dst) {
  *******************************************************************************/
 CPF_marker::CPF_marker() : j2k_marker_io_base(_CPF) { Pcpf = {0}; }
 
+void CPF_marker::set_Pcpf(uint16_t v) {
+  Pcpf   = {v};
+  Lmar   = 4;
+  is_set = true;
+}
+
+int CPF_marker::write(j2c_dst_memory &dst) {
+  assert(is_set == true);
+  dst.put_word(code);
+  dst.put_word(Lmar);
+  for (const uint16_t v : Pcpf) dst.put_word(v);
+  return EXIT_SUCCESS;
+}
+
 CPF_marker::CPF_marker(j2c_src_memory &in) : j2k_marker_io_base(_CPF) {
   Lmar = in.get_word();
   this->set_buf(in.get_buf_pos());
@@ -1873,6 +1887,9 @@ void j2k_main_header::flush(j2c_dst_memory &buf) {
   SIZ->write(buf);
   if (CAP != nullptr) {
     CAP->write(buf);
+  }
+  if (CPF != nullptr) {
+    CPF->write(buf);
   }
   COD->write(buf);
   if (!COC.empty()) {
