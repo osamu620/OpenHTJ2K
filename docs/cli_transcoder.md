@@ -121,16 +121,35 @@ The output decodes to the same image as the input in every case except these:
 
 ## Size and speed
 
-The output is of the same order as the input. On the conformance and generated
-test streams it is from 63% to 150% of the input; for ordinary images
-(lossless and lossy photographs) 100% to 110%, 107% for a 3840×2160 lossless
-frame. The HT block coder is less compact than the MQ coder it replaces, and the
-difference shows most on small images and many small precincts. The gain is in decoding: that 4K frame decodes
-in 0.12 s from the HTJ2K file against 1.45 s from the Part 1 original (2
-threads, one test machine).
+The output is of the same order as the input: from 63% to 150% of it on the
+conformance and generated test streams, from 111% to 126% on the 4K frames
+below. The HT block coder is less compact than the MQ coder it replaces, and
+the difference shows most on small images and many small precincts. The gain
+is in decoding: on one thread the HTJ2K output of those frames decodes 3 to 26
+times as fast as the Part 1 input, the lossless ones most.
 
-Transcoding it took 1.4 s with 2 threads. Time scales with the number of
-code-blocks and threads.
+Measured on an AMD Ryzen 9 9950X (16 cores, 32 hardware threads; Linux, GCC 14,
+Release build with AVX2), median of 5 runs. The inputs are two frames coded by
+`open_htj2k_enc` with `Cmodes=0`, lossless (`Creversible=yes`) and lossy
+(`Qfactor=90`): a 3840×2160 12-bit RGB frame (the image of
+`conformance_data/4KuF_H0L1_arri_1bpp.j2c`) and a 4096×2160 16-bit RGB frame
+of Elephants Dream. The transcode time is the one `open_htj2k_transcode`
+prints (without reading and writing the files); the decode time is the one
+`open_htj2k_dec -iter 4` prints, per frame (the image is written once).
+
+| Part 1 input | Input | Output | Transcode | Decode, Part 1 | Decode, HTJ2K |
+|---|---:|---:|---:|---:|---:|
+| 3840×2160 12-bit, lossless | 6.51 MB | 8.22 MB (126%) | 763 / 261 / 63 ms | 722 / 259 / 70 ms | 66 / 33 / 33 ms |
+| 3840×2160 12-bit, `Qfactor=90` | 1.01 MB | 1.14 MB (113%) | 134 / 48 / 16 ms | 131 / 56 / 30 ms | 31 / 20 / 22 ms |
+| 4096×2160 16-bit, lossless | 18.4 MB | 20.5 MB (111%) | 1952 / 665 / 118 ms | 1916 / 666 / 136 ms | 73 / 35 / 32 ms |
+| 4096×2160 16-bit, `Qfactor=90` | 0.68 MB | 0.76 MB (112%) | 100 / 36 / 13 ms | 100 / 44 / 27 ms | 29 / 20 / 17 ms |
+
+Times are for `-num_threads` 1 / 2 / 32. A transcode takes about as long as a
+Part 1 decode of the input: decoding the MQ-coded blocks dominates both. It
+scales with the number of code-blocks and threads; the calling thread works
+beside the N threads of the pool, so `-num_threads 2` is about three times as
+fast as 1. Peak memory (the whole process, 32 threads) was 45 MB for the
+lossless 3840×2160 frame and 74 MB for the 4096×2160 one.
 
 ## Layers
 
@@ -217,10 +236,18 @@ decoder reconstructs the same image from the output as from the input.
   written, PLT and TLM are written again).
 
 The output is smaller than the input: 61-96% of it on the HTJ2K conformance
-streams, 92% for the median one (MQ coding is more compact than HT). A 4096x2160 16-bit lossless frame
-coded with HT by `open_htj2k_enc` becomes, byte for byte, the Part 1 codestream
-the encoder makes with `Cmodes=0`, in 0.11 s with 32 threads (2.0 s with one;
-peak memory 74 MB).
+streams, 92% for the median one (MQ coding is more compact than HT). The
+frames of [Size and speed](#size-and-speed), coded with HT by
+`open_htj2k_enc`, become byte for byte the Part 1 codestreams the encoder makes
+with `Cmodes=0` (same machine and timing; peak memory 36 MB and 72 MB for the
+lossless ones):
+
+| HTJ2K input | Input | Output | Transcode, 1 / 2 / 32 threads |
+|---|---:|---:|---:|
+| 3840×2160 12-bit, lossless | 8.22 MB | 6.51 MB (79%) | 867 / 294 / 62 ms |
+| 3840×2160 12-bit, `Qfactor=90` | 1.14 MB | 1.01 MB (88%) | 150 / 53 / 13 ms |
+| 4096×2160 16-bit, lossless | 20.5 MB | 18.4 MB (90%) | 2033 / 691 / 112 ms |
+| 4096×2160 16-bit, `Qfactor=90` | 0.76 MB | 0.68 MB (89%) | 113 / 40 / 14 ms |
 
 All 40 HTJ2K conformance streams (`ds0_ht_*`, `ds1_ht_*` and the mixed
 `ds0_hm_*`) transcode. 35 decode to the image of the input, pixel for pixel.

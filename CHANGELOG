@@ -23,9 +23,10 @@
   code-blocks are decoded to their quantisation indices and coded again with
   the HT block coder: no wavelet transform, re-quantisation or colour
   transform, so a decoder reconstructs the same image from the output as from
-  the input. A 3840x2160 lossless RGB frame decodes in 0.12 s from the result
-  against 1.45 s from the Part 1 original (2 threads); the output is usually
-  100-110% of the input size (63-150% on the 43 test streams). Reference:
+  the input. On a Ryzen 9 9950X a 4096x2160 16-bit lossless frame transcodes
+  in 2.0 s on one thread (0.12 s on 32), and the result decodes in 73 ms on
+  one thread against 1.9 s for the Part 1 original; the output is 111-126% of
+  the input size on 4K frames (63-150% on the 43 test streams). Reference:
   `docs/cli_transcoder.md`.
   - Input: a raw codestream or a JP2 file, with COC (also with another
     wavelet filter than the COD), POC, PPM, RGN (region of interest), PLT, CRG,
