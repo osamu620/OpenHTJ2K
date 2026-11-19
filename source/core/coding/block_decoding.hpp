@@ -51,6 +51,12 @@ void j2k_decode(j2k_codeblock *block, uint8_t ROIshift);
 // bit-plane p > 0 carries its reconstruction marker at bit p - 1).  block->band_buf is not used.
 void j2k_decode_indices(j2k_codeblock *block, uint8_t ROIshift);
 bool htj2k_decode(j2k_codeblock *block, uint8_t ROIshift);
+// htj2k_decode() without the dequantisation: block->sample_buf keeps each sample with its sign
+// in bit 31 and its magnitude below, in Q(31 - M_b) for the M_b bit-planes of the (region of
+// interest shifted) indices, with the bin centre of its last decoded bit-plane in the bit under
+// it.  A region-of-interest shift is not undone.  block->band_buf is not used; a code-block with
+// placeholder passes only leaves sample_buf as it is (all zero is the caller's to set).
+bool htj2k_decode_indices(j2k_codeblock *block);
 // Decodes the HT cleanup pass of a code-block with num_passes == 1 into block->sample_buf,
 // without dequantisation: each sample holds its sign in bit 31 and, below, its magnitude
 // at bit 30 - num_ZBP and up, with the bin centre in the bit under it.

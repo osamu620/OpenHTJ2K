@@ -119,6 +119,7 @@ class SIZ_marker : public j2k_marker_io_base {
   // 0x4000 whatever the profile of the Part 1 codestream they were made from.
   void set_cap_capability() { Rsiz = static_cast<uint16_t>((Rsiz & 0x8000) ? (Rsiz | 0x4000) : 0x4000); }
   uint16_t get_Rsiz() const { return Rsiz; }
+  void set_Rsiz(uint16_t v) { Rsiz = v; }
 };
 
 /********************************************************************************
@@ -151,6 +152,7 @@ class CPF_marker : public j2k_marker_io_base {
   CPF_marker();
   explicit CPF_marker(j2c_src_memory &in);
   int write(j2c_dst_memory &dst);
+  const std::vector<uint16_t> &get_Pcpf() const { return Pcpf; }
   // One Pcpf value: the profile of the corresponding Part 1 codestream (its Rsiz) plus one.
   void set_Pcpf(uint16_t v);
 };

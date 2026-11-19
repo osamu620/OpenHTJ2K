@@ -987,6 +987,7 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
 
 // Everything after step-1: step-2 (MagSgn) variant dispatch, SigProp/MagRef
 // refinement passes, and dequantization.  scratch/sstr hold the step-1 output.
+template <bool IndicesOnly = false>
 static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const uint8_t ROIshift,
                              uint16_t *scratch, const int32_t sstr) {
   const uint8_t pLSB = static_cast<uint8_t>(30 - su.S_blk);
@@ -999,7 +1000,8 @@ static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const
   // adjacent blocks' column range in the shared output buffer (subband or ring buffer).
   // This is safe in single-threaded decode (sequential order overwrites correctly) but
   // causes a data race in multi-threaded decode.  Gate on width % 4 == 0 to avoid this.
-  if (su.num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0 && (block->size.y & 1u) == 0) {
+  if (!IndicesOnly && su.num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
+      && (block->size.y & 1u) == 0) {
     if (block->dequant_i32)
       ht_cleanup_step2<true, true>(block, pLSB, su.Pcup, scratch, sstr);
     else
@@ -1025,7 +1027,7 @@ static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const
   }
 
   // dequantization (skipped when already fused into MagSgn output)
-  if (!dequant_done) {
+  if (!IndicesOnly && !dequant_done) {
     block->dequantize(ROIshift);
   }
 
@@ -1035,11 +1037,12 @@ static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const
 // Decode one block from an already-computed setup.  htj2k_dec_setup is NOT
 // idempotent (modDcup mutates the compressed buffer, so a re-run reads a
 // corrupted Scup) — every setup must be consumed by exactly one decode.
+template <bool IndicesOnly = false>
 static bool htj2k_decode_su(j2k_codeblock *block, const ht_dec_setup &su, const uint8_t ROIshift) {
   if (!su.ok) return false;
   if (su.empty) {
     // Only placeholder passes: every sample is zero, and dequantize does not run.
-    zero_codeblock_band(block);
+    if (!IndicesOnly) zero_codeblock_band(block);
     return true;
   }
 
@@ -1061,11 +1064,17 @@ static bool htj2k_decode_su(j2k_codeblock *block, const ht_dec_setup &su, const 
     ht_cleanup_step1_nway<1, false>(&ln, QW, QH, sstr);
   }
 
-  return htj2k_dec_finish(block, su, ROIshift, scratch, sstr);
+  return htj2k_dec_finish<IndicesOnly>(block, su, ROIshift, scratch, sstr);
 }
 
 bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
   return htj2k_decode_su(block, htj2k_dec_setup(block), ROIshift);
+}
+
+// htj2k_decode() without the dequantisation (see block_decoding.hpp): the samples stay in
+// block->sample_buf, and block->band_buf is not used.
+bool htj2k_decode_indices(j2k_codeblock *block) {
+  return htj2k_decode_su<true>(block, htj2k_dec_setup(block), 0);
 }
 
 bool htj2k_decode_cleanup_raw(j2k_codeblock *block) {

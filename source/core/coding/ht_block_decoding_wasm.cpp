@@ -896,7 +896,8 @@ bool htj2k_decode_cleanup_raw(j2k_codeblock *block) {
   return true;
 }
 
-bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+template <bool IndicesOnly>
+static bool htj2k_decode_impl(j2k_codeblock *block, const uint8_t ROIshift) {
   uint8_t P0           = 0;
   int32_t Lcup         = 0;
   uint32_t Lref        = 0;
@@ -997,7 +998,8 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
     // is not a multiple of 4, the overshoot corrupts adjacent blocks in parallel decode.
     // Also gate on even height: the kernel writes row-pairs unconditionally and odd
     // height overflows one row into the next block's region.
-    if (num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0 && (block->size.y & 1u) == 0) {
+    if (!IndicesOnly && num_ht_passes == 1 && ROIshift == 0 && (block->size.x & 3) == 0
+        && (block->size.y & 1u) == 0) {
       if (block->dequant_i32)
         ht_cleanup_decode<true, true, true>(block, static_cast<uint8_t>(30 - S_blk), Lcup, Pcup, Scup);
       else
@@ -1023,17 +1025,25 @@ bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
       }
     }
 
-    if (!dequant_done) {
+    if (!IndicesOnly && !dequant_done) {
       block->dequantize(ROIshift);
     }
 
   } else {
     // Only placeholder passes: every sample is zero, and dequantize does not run.
-    zero_codeblock_band(block);
+    if (!IndicesOnly) zero_codeblock_band(block);
   }
 
   return true;
 }
+
+bool htj2k_decode(j2k_codeblock *block, const uint8_t ROIshift) {
+  return htj2k_decode_impl<false>(block, ROIshift);
+}
+
+// htj2k_decode() without the dequantisation (see block_decoding.hpp): the samples stay in
+// block->sample_buf, and block->band_buf is not used.
+bool htj2k_decode_indices(j2k_codeblock *block) { return htj2k_decode_impl<true>(block, 0); }
 
 // Batched entry point (see block_decoding.hpp).  The WASM decoder is a fused
 // single-pass kernel with no separate step-1, so no N-way interleave is wired

@@ -10,9 +10,9 @@
 - [**cli_decoder.md**](cli_decoder.md): `open_htj2k_dec`, with its outputs,
   options and examples.
 - [**cli_transcoder.md**](cli_transcoder.md): `open_htj2k_transcode`
-  (experimental), which converts a Part 1 file to HTJ2K in the coefficient
-  domain. Covers its options, what it keeps and changes, size, memory and
-  limits, and the library function.
+  (experimental), which converts a Part 1 file to HTJ2K, and HTJ2K to Part 1,
+  in the coefficient domain. Covers its options, what it keeps and changes,
+  size, memory and limits, and the library functions.
 - [**qfactor.md**](qfactor.md): the `Qfactor` quality setting.
   - How it sets the step sizes.
   - Flat weights for non-visual data (`Qweights=flat`).

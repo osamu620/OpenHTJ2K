@@ -30,8 +30,9 @@
   - Input: a raw codestream or a JP2 file, with COC (also with another
     wavelet filter than the COD), POC, PPM, RGN (region of interest), PLT, CRG,
     tile-part header COD/COC/QCD/QCC/RGN/COM, SOP/EPH, tiles, precincts and every
-    Part 1 code-block style switch. Refused, with a message: HT input, Part 2
-    DFS/ATK marker segments, a codestream of 4 GB or more.
+    Part 1 code-block style switch. Refused, with a message: Part 2 DFS/ATK
+    marker segments, a codestream of 4 GB or more. An HTJ2K input goes the other
+    way (below).
   - Output: a raw HTJ2K codestream, or a JPH file (the boxes of a JP2 input
     are kept; a raw codestream gets the boxes the encoder makes, with
     `-jph_color_space RGB|YCC`). One quality layer (or those of the input, see
@@ -64,21 +65,64 @@
     decoder does not support RGN, so streams with a region of interest fail
     there. Lossy RGN streams differ from the Part 1 decode by a few levels of
     4095 (p0_06), reversible ones are exact.
-  - `ctest -L transcoder` (92 tests): round trips on the Part 1 conformance
-    streams and on streams made with `open_htj2k_enc` (every code-block style
-    switch, rates, layers, tiles, 16 bit), marker, colour-space and refusal
-    checks, and a fuzzer-found input. The tool was run under AddressSanitizer
-    (about 19,000 mutated inputs) and ThreadSanitizer.
+  - `ctest -L transcoder` (155 tests, both directions): round trips on the Part 1
+    and HTJ2K conformance streams and on streams made with `open_htj2k_enc`
+    (every code-block style switch, rates, layers, tiles, 16 bit), marker,
+    colour-space and refusal checks, and a fuzzer-found input. The tool was run
+    under AddressSanitizer (about 19,000 mutated inputs) and ThreadSanitizer.
+- The other direction, HTJ2K to Part 1: `open_htj2k_transcode` takes an HTJ2K
+  input (a CAP marker segment for Part 15 or an HT code-block style) and writes
+  a raw Part 1 codestream; `open_htj2k::transcode_htj2k_to_part1()` and
+  `transcode_input_is_htj2k()` in `transcoder.hpp`. Every code-block is decoded
+  to its quantisation indices (HT cleanup, SigProp and MagRef passes, or the
+  Part 1 passes of a mixed codestream's Part 1 blocks) and coded again with the
+  Part 1 block coder, down to the same pass, so a decoder reconstructs the same
+  image. Reference: `docs/cli_transcoder.md`.
+  - The quality layers of the input are kept (`-layers keep`, the default for
+    this direction; `merge` gives one): each packet adds to each block the
+    passes it added in the input. Placeholder passes become the Part 1 passes
+    they stand for; a block's missing MSBs are those of its indices, and the
+    passes above the input's (which an HT encoder signals as missing MSBs) go
+    into the block's first packet. A cut inside a codeword segment keeps the
+    shortest prefix of the coded data that decodes it, so every layer decodes
+    as the input's layers do in a Part 1 decoder.
+  - Part 1 -> HTJ2K (`-layers keep`) -> Part 1 gives every code-block of the 22
+    Part 1 conformance streams it accepts back with its passes in each layer
+    and its missing MSBs; codestreams of `open_htj2k_enc` come back byte for
+    byte with their code-block style. An HTJ2K lossless 4096x2160 16-bit frame
+    becomes the encoder's own Part 1 codestream, byte for byte, in 0.11 s (32
+    threads; 2.0 s on one).
+  - The code-block style switches of the output: those of the input's style
+    (CAUSAL for HT blocks, which changes what a SigProp pass covers and so what
+    a layer cut inside a bit-plane decodes to), or `-Cmodes
+    BYPASS|RESET|RESTART|CAUSAL|ERTERM|SEGMARK` (`0` for none).
+  - Header: Rsiz from the CPF marker segment (its value less one) or without
+    bit 14; no CAP or CPF marker segment; the other marker segments as in the
+    other direction.
+  - All 40 HTJ2K conformance streams (ds0_ht, ds1_ht, mixed ds0_hm) transcode;
+    35 decode to the input's image, pixel for pixel. The other five have a
+    region of interest with code-blocks coded above their last bit-plane, which
+    this library's HT and Part 1 decoders reconstruct differently from the same
+    indices (ds0_ht_03_b11 and ds0_ht_15_b11 by one level; ds0_ht_06 by up to
+    590 levels of 4095 in one component, both within the conformance tolerance
+    of p0_06). OpenJPEG decodes every output, and the round trips decode as
+    their Part 1 sources.
+  - Refused, with a message: more than one HT set per code-block (MULTIHT),
+    Part 2 DFS/ATK marker segments, CAP capabilities besides Part 15, a Part 1
+    code-block of more than 65535 bytes; `.jph`/`.jp2` output for an HTJ2K
+    input, and the options of the other direction (`-partial`,
+    `-jph_color_space`, and `-Cmodes` for a Part 1 input).
 - Library: the main header writer writes the COC, RGN and CRG marker segments it
   holds; `j2k_tile::enc_init()` takes the COD, COC, QCD, QCC and RGN of a
   tile-part header; `j2k_tile::get_packet_lengths()`;
   `j2k_decode_indices()` (a Part 1 block's quantisation indices without the
   inverse quantisation); `j2k_codeblock::add_ROIshift()`;
   `j2k_codeblock::ht_phld_passes`, the placeholder passes the packet header
-  writer signals in front of an HT cleanup pass (ISO/IEC 15444-15, B.3); the
-  main header writer writes a CPF marker segment it holds
-  (`CPF_marker::set_Pcpf()`, `write()`). None of them changes what the encoder
-  or the decoder writes or reads.
+  writer signals in front of an HT cleanup pass (ISO/IEC 15444-15, B.3);
+  `htj2k_decode_indices()` (an HT block's samples without the inverse
+  quantisation, in every SIMD variant); the main header writer writes a CPF
+  marker segment it holds (`CPF_marker::set_Pcpf()`, `write()`). None of them
+  changes what the encoder or the decoder writes or reads.
 
 ## Changed
 - The WebAssembly wrapper's `reset_decoder_with_bytes()` uses the new `init()`

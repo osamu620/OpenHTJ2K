@@ -1,7 +1,7 @@
-# Tests of open_htj2k_transcode (Part 1 -> HTJ2K).  Included from the top-level CMakeLists.txt
-# after decoder_conformance.cmake.  Every case runs tests/transcoder_roundtrip.cmake: decode the
-# input, transcode it (1 and 2 threads, which must give the same bytes), decode the result and
-# compare the images.
+# Tests of open_htj2k_transcode (Part 1 -> HTJ2K, and HTJ2K -> Part 1 for an HTJ2K input).  Included
+# from the top-level CMakeLists.txt after decoder_conformance.cmake.  Most cases run
+# tests/transcoder_roundtrip.cmake: decode the input, transcode it (1 and 2 threads, which must give the
+# same bytes), decode the result and compare the images.
 if(TARGET open_htj2k_transcode)
   set(_tc_driver ${CMAKE_CURRENT_SOURCE_DIR}/tests/transcoder_roundtrip.cmake)
   set(_tc_work   ${CMAKE_CURRENT_BINARY_DIR}/transcoder_tests)
@@ -197,7 +197,90 @@ if(TARGET open_htj2k_transcode)
   tc_add(file_raw_to_jph        ENC_IN ${_K} ENC_ARGS "Cmodes=0@@-rate@@1" OUT_EXT jph)
 
   # Inputs the transcoder must refuse, with an error and not a crash.
-  tc_add(reject_ht_input   INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k MODE reject PATTERN "already uses the HT")
   tc_add(reject_part2      INPUT ${CONFORMANCE_DATA_DIR}/ATK_DFS_REV.j2c   MODE reject PATTERN "DFS/ATK")
   tc_add(reject_not_a_j2k  INPUT ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt MODE reject PATTERN "neither a JP2")
+
+  # HTJ2K -> Part 1.  The HTJ2K conformance codestreams, with one HT set per code-block (ds0_ht_*, ds1_ht_*)
+  # and mixed HT and Part 1 code-blocks (ds0_hm_*): the Part 1 output must decode to the image of the
+  # input.  Many have layers made with placeholder passes and more missing MSBs than the data have.
+  set(_tc_ht_conf
+      ds0_hm_06_b11 ds0_hm_06_b18 ds0_hm_15_b8 ds0_ht_01_b11 ds0_ht_02_b11 ds0_ht_02_b12 ds0_ht_03_b14
+      ds0_ht_04_b11 ds0_ht_04_b12 ds0_ht_05_b11 ds0_ht_05_b12 ds0_ht_07_b11 ds0_ht_07_b15 ds0_ht_07_b16
+      ds0_ht_08_b11 ds0_ht_08_b15 ds0_ht_08_b16 ds0_ht_09_b11 ds0_ht_10_b11 ds0_ht_11_b10 ds0_ht_12_b11
+      ds0_ht_13_b11 ds0_ht_14_b11 ds0_ht_15_b14 ds0_ht_16_b11 ds1_ht_01_b11 ds1_ht_01_b12 ds1_ht_02_b11
+      ds1_ht_02_b12 ds1_ht_03_b11 ds1_ht_03_b12 ds1_ht_04_b9 ds1_ht_05_b11 ds1_ht_06_b11 ds1_ht_07_b11)
+  foreach(_c IN LISTS _tc_ht_conf)
+    tc_add(to_part1_${_c} INPUT ${CONFORMANCE_DATA_DIR}/${_c}.j2k)
+  endforeach()
+  # Region of interest with code-blocks coded above their last bit-plane (lossy, or bounded by the
+  # magnitude bound B): the HT and the Part 1 decoders of this library place the reconstruction of the
+  # region's coefficients differently, so the decodes of the same indices are close, not identical.  For
+  # ds0_ht_06 (from p0_06) both are within the conformance tolerance of p0_06.
+  tc_add(to_part1_ds0_ht_03_b11 INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_03_b11.j2k MODE close PAE 1 MSE 0.01)
+  tc_add(to_part1_ds0_ht_15_b11 INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_15_b11.j2k MODE close PAE 1 MSE 0.01)
+  tc_add(to_part1_ds0_ht_06_b18 INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_06_b18.j2k MODE close PAE 635 MSE 11287)
+  # HTJ2K made by the encoder: a JPH file, refinement passes (rate control), and one layer merged.
+  tc_add(to_part1_file_jph  ENC_IN ${_K} ENC_ARGS "Qfactor=80" ENC_EXT jph)
+  tc_add(to_part1_ht_rate   ENC_IN ${_K} ENC_ARGS "-rate@@1")
+  tc_add(to_part1_merge     INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_08_b16.j2k TRANS_ARGS "-layers@@merge")
+  tc_add(to_part1_modes     INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_02_b12.j2k TRANS_ARGS "-Cmodes@@BYPASS|RESTART|ERTERM")
+  # The header of the output: Rsiz from the CPF marker segment of the input (ds0_ht_01: Pcpf 2, so
+  # Profile 0), and no CAP or CPF marker segment (SIZ is followed by COD); the input's CAUSAL switch and
+  # 19 layers (ds1_ht_02); one layer with merge; the switches -Cmodes gives.
+  tc_header(to_part1_header_rsiz ds0_ht_01_b11
+            "ff4fff510029000100000080000000800000000000000000000000800000008000000000000000000001070101ff52")
+  tc_header(to_part1_header_causal ds1_ht_02_b12 "ff52001301000013010604040800")
+  add_test(NAME tc_to_part1_header_merge COMMAND ${CMAKE_COMMAND} -DTRANS=$<TARGET_FILE:open_htj2k_transcode>
+           -DINPUT=${CONFORMANCE_DATA_DIR}/ds0_ht_02_b12.j2k -DWORK=${_tc_work}/to_part1_header_merge
+           "-DTRANS_ARGS=-layers@@merge" "-DHEX=ff5200100700000100030404000077888888"
+           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/transcoder_markers.cmake)
+  add_test(NAME tc_to_part1_header_modes COMMAND ${CMAKE_COMMAND} -DTRANS=$<TARGET_FILE:open_htj2k_transcode>
+           -DINPUT=${CONFORMANCE_DATA_DIR}/ds0_ht_02_b12.j2k -DWORK=${_tc_work}/to_part1_header_modes
+           "-DTRANS_ARGS=-Cmodes@@BYPASS|ERTERM" "-DHEX=ff5200100700000600030404110077888888"
+           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/transcoder_markers.cmake)
+  set_tests_properties(tc_to_part1_header_merge tc_to_part1_header_modes PROPERTIES LABELS transcoder)
+  # The options of the other direction, and outputs that cannot hold a Part 1 codestream, are refused.
+  tc_add(to_part1_jph_refused INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k MODE reject OUT_EXT jph
+         PATTERN "raw Part 1 codestream")
+  tc_add(to_part1_partial_refused INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k MODE reject
+         TRANS_ARGS "-partial@@drop" PATTERN "for a Part 1 input")
+  tc_add(to_part1_bad_cmodes_refused INPUT ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k MODE reject
+         TRANS_ARGS "-Cmodes@@BYPASS|FAST" PATTERN "unknown -Cmodes flag")
+  tc_add(cmodes_part1_input_refused INPUT ${CONFORMANCE_DATA_DIR}/p0_01.j2k MODE reject
+         TRANS_ARGS "-Cmodes@@BYPASS" PATTERN "for an HTJ2K input")
+
+  # Part 1 -> HTJ2K (-layers keep) -> Part 1: every code-block must come back with its layers.  For
+  # codestreams of the encoder the result is the input, byte for byte (with the input's code-block
+  # style); for the conformance ones, made by other encoders, the decode is that of the input.
+  function(tc_back name)
+    cmake_parse_arguments(A "BYTES" "INPUT;ENC_ARGS;BACK_ARGS" "" ${ARGN})
+    set(_args -DDEC=$<TARGET_FILE:open_htj2k_dec> -DTRANS=$<TARGET_FILE:open_htj2k_transcode>
+              -DWORK=${_tc_work}/back_${name})
+    if(A_INPUT)
+      list(APPEND _args -DINPUT=${A_INPUT})
+    else()
+      list(APPEND _args -DENC=$<TARGET_FILE:open_htj2k_enc> -DENC_IN=${_K} "-DENC_ARGS=${A_ENC_ARGS}")
+    endif()
+    if(A_BACK_ARGS)
+      list(APPEND _args "-DBACK_ARGS=${A_BACK_ARGS}")
+    endif()
+    if(A_BYTES)
+      list(APPEND _args -DBYTES=1)
+    endif()
+    add_test(NAME tc_back_${name} COMMAND ${CMAKE_COMMAND} ${_args}
+             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/transcoder_back.cmake)
+    set_tests_properties(tc_back_${name} PROPERTIES LABELS transcoder)
+  endfunction()
+  set(_AM "BYPASS|RESET|RESTART|CAUSAL|ERTERM|SEGMARK")
+  tc_back(gen_layers12   BYTES ENC_ARGS "Cmodes=0@@-rate@@${_L12}")
+  tc_back(gen_all_modes  BYTES ENC_ARGS "Cmodes=${_AM}@@-rate@@${_L12}" BACK_ARGS "-Cmodes@@${_AM}")
+  tc_back(gen_bypass_erterm BYTES ENC_ARGS "Cmodes=BYPASS|ERTERM@@-rate@@0.3,1,2.5,5" BACK_ARGS "-Cmodes@@BYPASS|ERTERM")
+  tc_back(gen_restart    BYTES ENC_ARGS "Cmodes=RESTART@@-rate@@0.1,0.25,0.5,1,2" BACK_ARGS "-Cmodes@@RESTART")
+  tc_back(gen_causal_pcrl BYTES ENC_ARGS "Cmodes=CAUSAL@@Corder=PCRL@@Cblk={16,16}@@-rate@@0.1,0.4,1.2,3")
+  tc_back(gen_tiles_rpcl BYTES ENC_ARGS "Cmodes=0@@Stiles={128,160}@@Corder=RPCL@@Cprecincts={64,64}@@-rate@@0.2,0.6,1.5")
+  tc_back(gen_sop_eph    BYTES ENC_ARGS "Cmodes=0@@Corder=PCRL@@Cuse_sop=yes@@Cuse_eph=yes@@-rate@@0.2,0.4,0.8,1.6")
+  foreach(_c p0_02 p0_03 p0_08 p1_01 p1_03 p1_05)
+    tc_back(conf_${_c} INPUT ${CONFORMANCE_DATA_DIR}/${_c}.j2k)
+  endforeach()
+  tc_back(conf_p1_02 INPUT ${CONFORMANCE_DATA_DIR}/p1_02.j2k BACK_ARGS "-Cmodes@@RESET|CAUSAL")
 endif()
