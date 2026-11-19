@@ -35,11 +35,12 @@
 // reconstructs from the input (also for code-blocks that a lossy Part 1 encoder cut part-way
 // through a bit-plane, unless transcode_partial_plane::keep or drop is chosen).  The marker segments that
 // describe the image (SIZ, QCD, QCC, COM, tiling, precincts, progression order, SOP/EPH) are kept; the
-// code-block style becomes HT, the CAP marker segment is added, and the packets are written again.  An HT
+// code-block style becomes HT, the CAP marker segment is added with a CPF marker segment that holds the
+// input's profile (Rsiz plus one, for a transcode back), and the packets are written again.  An HT
 // block is one HT set (a cleanup segment, with an optional refinement segment), not refined layer by layer
 // as a Part 1 block is.  By default the layers of the input are merged into one; transcode_layers::keep
 // keeps them with placeholder passes (see there).  The input's PLT marker segments become PLT marker
-// segments for the output's packets; its PLM, PPM, POC, TLM and CPF marker segments are not carried over.
+// segments for the output's packets; its PLM, PPM, POC and TLM marker segments are not carried over.
 //
 // Memory: the input and the output are held whole.  The tiles are transcoded one after the other,
 // and only the tile in hand has its structures, so memory is about the input, the output and one

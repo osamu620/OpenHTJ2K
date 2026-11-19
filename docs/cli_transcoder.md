@@ -82,7 +82,8 @@ the time.
 | TLM | | written again (for more than one tile) |
 | POC | read in its order | not written; packets are in the COD's progression order |
 | PPM | packet headers read from it | not written; packet headers are inline |
-| PLM, CPF | | not written |
+| CPF | | written: the input's Rsiz plus one (the profile of the corresponding Part 1 codestream), for a transcode back |
+| PLM | | not written |
 
 The output decodes to the same image as the input in every case except these:
 

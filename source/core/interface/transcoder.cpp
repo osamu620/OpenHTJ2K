@@ -600,6 +600,10 @@ size_t transcode_part1_to_htj2k(const uint8_t *in, size_t in_len, std::vector<ui
   hout.COD->set_Cmodes(ht_style(hout.COD->get_Cmodes()));
   for (auto &c : hout.COC) c->set_Cmodes(ht_style(c->get_Cmodes()));
   if (!keep_layers) hout.COD->set_number_of_layers(1);
+  // The profile of the input goes into a CPF marker segment, for a transcode back to Part 1.
+  const uint16_t rsiz_in = hout.SIZ->get_Rsiz();
+  hout.CPF.reset(new CPF_marker());
+  hout.CPF->set_Pcpf(static_cast<uint16_t>(rsiz_in + 1));
   hout.SIZ->set_cap_capability();
   // The input packets are read in the order its POC marker segments give.  They are written again
   // in the order of the COD, a progression order every packet set can be put in, so the output
