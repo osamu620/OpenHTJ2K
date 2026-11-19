@@ -74,20 +74,20 @@ open_htj2k_transcode -i <input> -o <output> [options...]
 
 ```bash
 # A Part 1 file to an HTJ2K codestream
-./build/bin/open_htj2k_transcode -i in.j2k -o out.j2c
+open_htj2k_transcode -i in.j2k -o out.j2c
 
 # A JP2 file to a JPH file; the colour, resolution and XML boxes are kept
-./build/bin/open_htj2k_transcode -i in.jp2 -o out.jph
+open_htj2k_transcode -i in.jp2 -o out.jph
 
 # A raw Part 1 codestream of Y, Cb, Cr components to a JPH file that says so
-./build/bin/open_htj2k_transcode -i in.j2c -o out.jph -jph_color_space YCC
+open_htj2k_transcode -i in.j2c -o out.jph -jph_color_space YCC
 
 # Keep the layers, and go back to Part 1 with the original code-block switches
-./build/bin/open_htj2k_transcode -i in.j2k -o ht.j2c -layers keep
-./build/bin/open_htj2k_transcode -i ht.j2c -o back.j2k -Cmodes "RESTART|ERTERM"
+open_htj2k_transcode -i in.j2k -o ht.j2c -layers keep
+open_htj2k_transcode -i ht.j2c -o back.j2k -Cmodes "RESTART|ERTERM"
 
 # An HTJ2K file (codestream or JPH) to a Part 1 codestream with one layer
-./build/bin/open_htj2k_transcode -i in.jph -o out.j2k -layers merge
+open_htj2k_transcode -i in.jph -o out.j2k -layers merge
 ```
 
 The tool prints the sizes and the time, and for a Part 1 input how many
