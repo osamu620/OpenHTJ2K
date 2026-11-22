@@ -2069,14 +2069,13 @@ void j2k_precinct_subband::reset_for_next_frame() {
 }
 
 void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_t layer_idx,
-                                               uint16_t Ccap15) {
+                                               uint16_t Ccap15, std::vector<uint32_t> &included) {
   // if no codeblock exists, nothing to do is left
   if (this->num_codeblock_x * this->num_codeblock_y == 0) {
     return;
   }
   uint8_t bit;
   bool is_included = false;
-  uint16_t threshold;
   std::vector<uint32_t> tree_path;
 
   for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
@@ -2098,6 +2097,9 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
     const uint8_t fast_skip_before  = block->fast_skip_passes;
     // The passes this packet adds; block->num_passes counts those of the earlier layers.
     block->dec_layer_passes = 0;
+    // The code-block after this one that the packet header may have bits for, when it is
+    // not the next one (see below); 0 for the next one.
+    uint64_t next_idx = 0;
 
     tagtree_node *current_node, *parent_node;
 
@@ -2131,70 +2133,60 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
         current_node = this->get_inclusion_node(static_cast<uint32_t>(current_node->get_parent_index()));
         tree_path.push_back(static_cast<uint32_t>(current_node->get_index()));
       }
-      is_included = false;
 
-      if (layer_idx > 0) {
-        // Special case; A codeblock is not included in the first layer (layer 0).
-        // Inclusion information of layer 0 (i.e. before the first contribution) shall be decoded.
-        threshold = 0;
-
-        for (size_t i = tree_path.size(); i > 0; --i) {
-          current_node = this->get_inclusion_node(tree_path[i - 1]);
-          if (current_node->get_state() == 0) {
-            if (current_node->get_parent_index() < 0) {
-              parent_node = nullptr;
-            } else {
-              parent_node =
-                  this->get_inclusion_node(static_cast<uint32_t>(current_node->get_parent_index()));
-            }
-            if (current_node->get_level() > 0 && parent_node != nullptr) {
-              if (current_node->get_current_value() < parent_node->get_current_value()) {
-                current_node->set_current_value(parent_node->get_current_value());
-              }
-            }
-            if (current_node->get_current_value() <= threshold) {
-              bit = packet_header->get_bit();
-              if (bit == 1) {
-                current_node->set_value(current_node->get_current_value());
-                current_node->set_state(1);
-                is_included = true;
-              } else {
-                current_node->set_current_value(
-                    static_cast<uint16_t>(current_node->get_current_value() + 1));
-                is_included = false;
-              }
-            }
-          }
-        }
-      }
-
-      // Normal case of inclusion information
-      threshold = layer_idx;
-
+      // Inclusion (ISO/IEC 15444-1, B.10.2 and B.10.4): the value of the code-block's leaf
+      // is the layer that first includes it.  From the root down, a node whose value is not
+      // known yet takes one bit for each layer up to this one that its lower bound has not
+      // passed: 0 raises the bound by one, 1 says that the value is the bound.  That is one
+      // bit when the precinct's packet of the layer before was parsed, and more when the
+      // packets before this one were empty, which leave the tree as it was.  A node still
+      // unknown after its bits has its value beyond this layer, and so have the nodes below
+      // it: this code-block is not included, and the walk ends there.  The code-block is
+      // included when the walk reaches its leaf with a 1 bit.
+      is_included      = false;
+      size_t pruned_at = 0;  // the place in tree_path, plus one, of the node the walk ended at
       for (size_t i = tree_path.size(); i > 0; --i) {
         current_node = this->get_inclusion_node(tree_path[i - 1]);
+        if (current_node->get_state() != 0) continue;
+        uint16_t bound = current_node->get_current_value();
+        if (current_node->get_parent_index() >= 0) {
+          parent_node = this->get_inclusion_node(static_cast<uint32_t>(current_node->get_parent_index()));
+          if (bound < parent_node->get_current_value()) bound = parent_node->get_current_value();
+        }
+        // layer_idx is at most 65534, so the bound stays within 16 bits.
+        while (bound <= layer_idx) {
+          if (packet_header->get_bit() == 1) {
+            current_node->set_value(bound);
+            current_node->set_state(1);
+            is_included = true;
+            break;
+          }
+          ++bound;
+        }
+        current_node->set_current_value(bound);
         if (current_node->get_state() == 0) {
-          if (current_node->get_parent_index() < 0) {
-            parent_node = nullptr;
-          } else {
-            parent_node = this->get_inclusion_node(static_cast<uint32_t>(current_node->get_parent_index()));
-          }
-          if (current_node->get_level() > 0 && parent_node != nullptr) {
-            if (current_node->get_current_value() < parent_node->get_current_value()) {
-              current_node->set_current_value(parent_node->get_current_value());
-            }
-          }
-          if (current_node->get_current_value() <= threshold) {
-            bit = packet_header->get_bit();
-            if (bit == 1) {
-              current_node->set_value(current_node->get_current_value());
-              current_node->set_state(1);
-              is_included = true;
-            } else {
-              current_node->set_current_value(static_cast<uint16_t>(current_node->get_current_value() + 1));
-              is_included = false;
-            }
-          }
+          is_included = false;
+          pruned_at   = i;
+          break;
+        }
+      }
+      if (pruned_at > 1) {
+        // The node the walk ended at is above the leaves: it spans 2^k x 2^k code-blocks,
+        // none of which has been included (a node above an included code-block is known)
+        // or is included here, and none of which has bits in this packet header.  The
+        // loop steps over those in this row, and over those in the rows below as well when
+        // the node spans the whole width, so that a packet costs what its header holds
+        // rather than a walk for each of its precinct's code-blocks: a codestream of
+        // thousands of layers over thousands of code-blocks, a byte per packet, would
+        // otherwise take minutes to parse.
+        const uint32_t k     = static_cast<uint32_t>(pruned_at - 1);
+        const uint32_t x     = idx % this->num_codeblock_x;
+        const uint32_t y     = idx / this->num_codeblock_x;
+        const uint64_t x_end = std::min<uint64_t>(this->num_codeblock_x, ((uint64_t{x} >> k) + 1) << k);
+        next_idx             = uint64_t{y} * this->num_codeblock_x + x_end;
+        if ((x >> k) == 0 && x_end == this->num_codeblock_x) {
+          const uint64_t y_end = std::min<uint64_t>(this->num_codeblock_y, ((uint64_t{y} >> k) + 1) << k);
+          next_idx             = y_end * this->num_codeblock_x;
         }
       }
 
@@ -2597,6 +2589,8 @@ void j2k_precinct_subband::parse_packet_header(buf_chain *packet_header, uint16_
       block->already_included = was_already_included;
       return;
     }
+    if (block->dec_layer_passes != 0) included.push_back(idx);
+    if (next_idx != 0) idx = static_cast<uint32_t>(next_idx - 1);  // the loop steps to next_idx
   }
 }
 
@@ -6355,6 +6349,10 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, j2k_resolution *cr, ui
     }
   }
 
+  // The code-blocks this packet gives passes to; none until its header says so.
+  packet_blocks_.clear();
+  packet_band_end_.assign(num_band, 0);
+
   uint8_t bit = this->packet_header->get_bit();
   if (bit == 0) {                       // if 0, empty packet
     // or no packet at all: the codestream ended before it.
@@ -6381,7 +6379,8 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, j2k_resolution *cr, ui
       cpb->build_codeblocks(*cr->access_subband(b), numlayers, tc.get_built_cb_size(),
                             tc.get_built_Cmodes(), false);
     }
-    cpb->parse_packet_header(this->packet_header, layer, this->Ccap15);
+    cpb->parse_packet_header(this->packet_header, layer, this->Ccap15, packet_blocks_);
+    packet_band_end_[b] = static_cast<uint32_t>(packet_blocks_.size());
   }
   // if the last byte of a packet header is 0xFF, one bit shall be read.
   this->packet_header->check_last_FF();
@@ -6402,19 +6401,19 @@ void j2k_tile::read_packet(j2k_precinct *current_precint, j2k_resolution *cr, ui
   // node of tile_buf, which the code-block readers below do not move to by themselves.
   if (this->packet_header != this->tile_buf.get()) this->tile_buf->skip_exhausted_node();
 
+  // The packet body holds the bytes of the code-blocks the header gave passes to, in the
+  // order of the header; the other code-blocks of the precinct have nothing in it.
   j2k_codeblock *block;
+  uint32_t at = 0;
   for (uint8_t b = 0; b < num_band; b++) {
-    cpb                      = current_precint->access_pband(b);  //&current_precint->pband[b];
-    const uint32_t num_cblks = cpb->num_codeblock_x * cpb->num_codeblock_y;
-    if (num_cblks != 0) {
-      for (uint32_t block_index = 0; block_index < num_cblks; block_index++) {
-        block = cpb->access_codeblock(block_index);
-        if (skip_body) {
-          block->skip_compressed_buffer(this->tile_buf.get(), layer);
-        } else if (block->create_compressed_buffer(this->tile_buf.get(), layer)) {
-          data_missing_ = true;
-          cut_blocks_.push_back(block);
-        }
+    cpb = current_precint->access_pband(b);  //&current_precint->pband[b];
+    for (; at < packet_band_end_[b]; ++at) {
+      block = cpb->access_codeblock(packet_blocks_[at]);
+      if (skip_body) {
+        block->skip_compressed_buffer(this->tile_buf.get(), layer);
+      } else if (block->create_compressed_buffer(this->tile_buf.get(), layer)) {
+        data_missing_ = true;
+        cut_blocks_.push_back(block);
       }
     }
   }
