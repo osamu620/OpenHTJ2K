@@ -186,6 +186,72 @@
     pool was no faster: 2 to 4% slower for a 4K 8-bit image, within 2% for the
     16-bit one.
 
+## Fixed
+Found by fuzzing the decoder, the transcoder, the JPIP parsers and
+`estimate_qfactor` under AddressSanitizer and UndefinedBehaviorSanitizer, and by
+reading the code the fuzzers led to. None of them writes memory out of bounds;
+most let a small input take minutes or gigabytes.
+
+- Decoder: a small codestream could keep the decoder busy for minutes. For
+  every packet that is not empty, the packet-header parser walked the inclusion
+  tag tree of every code-block of the precinct, and went over all of them again
+  for the packet's body, whether the packet included them or not. Thousands of
+  quality layers over a precinct of thousands of code-blocks, with one byte per
+  packet ("not empty, no code-block included"), were enough: 4096 layers over
+  1024 x 1024 in 4 x 4 code-blocks (4 KB) took 28 s to decode, and 65535 layers
+  (64 KB) more than 5 minutes. Both now take 0.04 s. The parser steps over the
+  code-blocks below a tag-tree node that the packet leaves beyond its layer, and
+  reads a packet's body for the code-blocks its header included. Decoding
+  executes the same number of instructions as before on streams of one layer
+  (within 0.1%) and up to 1.4% fewer on the conformance streams with several.
+- Decoder: a code-block first included in a packet that follows two or more
+  empty packets of its precinct was not decoded: its area came out flat, with
+  no error. An empty packet (a single 0 bit, ISO/IEC 15444-1 B.10.3) leaves the
+  inclusion tag tree as it was, so the first packet that is not empty holds a
+  bit of the tree for each layer so far (B.10.2). The parser read one bit for
+  the first layer and one for the current one, which covers one empty packet.
+  Codestreams whose encoder writes "not empty, nothing included" packets,
+  as this encoder does, were not affected.
+- Transcoder: the output tile was sized by the input's header, outside the
+  memory budget that bounds the decoder's state. A 112-byte HTJ2K codestream
+  (1024 x 1024 in 4 x 4 code-blocks, 65535 layers) took 8.4 GB and did not
+  finish in two minutes; it is now refused as not supported in 0.06 s, like a
+  decode that would pass the budget.
+  - The output tile builds every code-block with its passes per layer (the
+    input tile builds the code-blocks its packets have data for). That state
+    now counts against the budget before it is built.
+  - The output tile no longer allocates sample buffers, which it never used:
+    one float per sample for an image without a wavelet transform, or with
+    tiles at odd origins.
+  - The packet writer kept a flag per packet in layers x resolutions x
+    components lists, each as long as the largest resolution's precinct count.
+    It now keeps one flag per packet.
+  - Within the budget, the packet headers of a tile with many layers took
+    layers x layers steps per code-block: a 97-byte codestream (180 x 180,
+    65535 layers) ran for more than 5 minutes, now 2 s. The encoder writes its
+    layers (`-rate a,b,c`) with the same code; its output is unchanged.
+- JPIP client: `reassemble_codestream_client()` writes one byte for every
+  packet it holds no data for, and takes a step for every layer of every
+  resolution of every tile-component. Both counts come from the main header,
+  which the server sends: a response of 254 bytes took 1.6 GB and 20 s. An
+  image with more than 2^26 of them is now refused as not supported, and the
+  list of delivered precincts takes memory by what was delivered rather than
+  by tiles x components x resolutions.
+- `estimate_qfactor`:
+  - on a valid codestream with 20 decomposition levels it ran for 81 s and
+    took 0.8 GB (12 GB with 24 levels): it built the wavelet basis functions of
+    every level, which double in length each time. It now builds those of 14
+    levels and continues their trend, as the encoder does, and gives the same
+    estimate at once;
+  - a SIZ marker segment without components crashed it; a COD marker segment
+    declaring more than 32 decomposition levels, or a QCC marker segment
+    without a body (read one or two bytes past its end), is now refused.
+- Decoder: a sample of a corrupt codestream outside the range of a 32-bit
+  integer was converted to an integer by the scalar code at the end of each
+  row, which is undefined behaviour in C++ (the vector code that handles the
+  rest of the row is defined). It now gets the value the vector code of the
+  build gives. Valid codestreams decode as before.
+
 ## Documentation
 - `docs/wasm.md` (new) is the WebAssembly page for users:
   - the modules and which to use;
@@ -216,6 +282,10 @@
 - `docs/wasm_bench.md` and `docs/planar_idwt_porting.md` moved to `docs/dev/`.
 
 ## Build and CI
+- AddressSanitizer builds do not use the per-thread cache of large buffers: a
+  cached buffer handed out again for a smaller request keeps its first size,
+  so the sanitizer saw neither a write past the end of the request nor a use
+  after the release.
 - A speed A/B check, `tools/bench/ab_speed.py`, times two builds on the same
   machine and fails when the second is more than 25% slower in any case.
   Runs alternate between the builds. The cases are:
