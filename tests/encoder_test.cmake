@@ -1028,6 +1028,35 @@ endforeach()
 add_test(NAME enc_cli_irreversible_guard0 COMMAND ${CMAKE_COMMAND} -DENC=$<TARGET_FILE:open_htj2k_enc>
          "-DARGS=-i;${_enc_src};-o;cli_guard0.j2c;Qguard=0" "-DEXPECT=at least 1 guard bit" -P ${_enc_fail})
 
+# Input images the readers cannot use end with an error message and a non-zero exit code:
+#  - a PGX component without samples in a list (its width divided component 0's: SIGFPE);
+#  - a PGX bit depth of 80 (two bytes per sample are read; the default step size shifted by it);
+#  - a PGM or PGX header declaring more samples than the file holds (the row buffers of
+#    the reader and of the encoder were allocated by the header alone, gigabytes for a
+#    file of 30 bytes).
+# The files are text headers followed by letters as samples.
+set(_enc_in ${CMAKE_CURRENT_BINARY_DIR}/enc_cli_inputs)
+file(MAKE_DIRECTORY ${_enc_in})
+file(WRITE ${_enc_in}/ok.pgx "PG ML + 8 2 2\nABCD")
+file(WRITE ${_enc_in}/empty.pgx "PG ML + 8 0 0\n")
+file(WRITE ${_enc_in}/depth80.pgx "PG ML + 80 2 2\nABCDEFGH")
+file(WRITE ${_enc_in}/few.pgx "PG ML + 16 60000 60000\nABCD")
+file(WRITE ${_enc_in}/few.pgm "P5\n2000000000 2000000000\n255\nAB")
+foreach(_case "pgx_list_empty_component;${_enc_in}/ok.pgx,${_enc_in}/empty.pgx;not integer submultiples"
+              "pgx_depth_80;${_enc_in}/depth80.pgx;PGX bit depths from 1 to 16"
+              "pgx_too_few_samples;${_enc_in}/few.pgx;fewer samples than its header declares"
+              "pgm_too_few_samples;${_enc_in}/few.pgm;fewer samples than its header declares")
+  list(GET _case 0 _t)
+  list(GET _case 1 _in)
+  list(GET _case 2 _expect)
+  add_test(NAME enc_cli_${_t} COMMAND ${CMAKE_COMMAND} -DENC=$<TARGET_FILE:open_htj2k_enc>
+           "-DARGS=-i;${_in};-o;cli_${_t}.j2c" "-DEXPECT=${_expect}" -P ${_enc_fail})
+  set_tests_properties(enc_cli_${_t} PROPERTIES TIMEOUT 60)
+endforeach()
+# The library's own reader, open_htj2k::image (see tests/tools/image_reader_check).
+add_test(NAME image_reader_check COMMAND image_reader_check)
+set_tests_properties(image_reader_check PROPERTIES TIMEOUT 60)
+
 # Several PGM files give one component each (only the first used to be read): a 12-bit and a
 # 16-bit 67x37 image, coded losslessly as two components.
 add_test(NAME enc_two_pgm COMMAND open_htj2k_enc -i ${GRAY12_PGM},${GRAY16_PGM} -o two_pgm.j2c Creversible=yes)

@@ -87,6 +87,12 @@ add_subdirectory(tests/tools/encode_entry_points)
 target_include_directories(encode_entry_points PUBLIC source/core/interface)
 target_link_libraries(encode_entry_points PUBLIC open_htj2k PRIVATE openhtj2k_internal)
 
+# image_reader_check: open_htj2k::image on valid, truncated and inconsistent PNM/PGX files
+add_executable(image_reader_check)
+add_subdirectory(tests/tools/image_reader_check)
+target_include_directories(image_reader_check PUBLIC source/core/interface)
+target_link_libraries(image_reader_check PUBLIC open_htj2k)
+
 # region_decode_bench: M1 region-decode latency/throughput benchmark (OSD eval)
 add_executable(region_decode_bench)
 add_subdirectory(tests/tools/region_decode_bench)

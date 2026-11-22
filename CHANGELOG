@@ -187,10 +187,13 @@
     16-bit one.
 
 ## Fixed
-Found by fuzzing the decoder, the transcoder, the JPIP parsers and
-`estimate_qfactor` under AddressSanitizer and UndefinedBehaviorSanitizer, and by
-reading the code the fuzzers led to. None of them writes memory out of bounds;
-most let a small input take minutes or gigabytes.
+Found by fuzzing the decoder, the transcoder, the JPIP parsers, the image
+readers and `estimate_qfactor` under AddressSanitizer and
+UndefinedBehaviorSanitizer, and by
+reading the code the fuzzers led to. In the decoder, the transcoder and JPIP
+none of them reads or writes memory out of bounds: a small input could take
+minutes or gigabytes. The reader of the encoder's input images could write out
+of bounds.
 
 - Decoder: a small codestream could keep the decoder busy for minutes. For
   every packet that is not empty, the packet-header parser walked the inclusion
@@ -246,6 +249,29 @@ most let a small input take minutes or gigabytes.
   - a SIZ marker segment without components crashed it; a COD marker segment
     declaring more than 32 decomposition levels, or a QCC marker segment
     without a body (read one or two bytes past its end), is now refused.
+- Encoder input images. The readers trusted the headers of PGM, PPM and PGX
+  files:
+  - `open_htj2k::image` (the library's reader of whole files) looped for ever
+    on a header that ends early (`P5` alone); wrote past the list of planes
+    when a PPM file was one of several input files, and into the first file's
+    plane for a text (P2) file later in a list; read a row buffer whose size
+    had wrapped for widths past 2^31 / 6; and allocated the planes by the
+    header before reading a sample. It now refuses a header that is cut,
+    holds something other than numbers, declares a maximum value outside 1 to
+    65535 or a PGX bit depth outside 1 to 16, or declares more samples than
+    the file holds, and a PPM or TIFF file that is not the only input file.
+  - It also skipped every white-space byte after the header of a binary file,
+    so an image whose first samples are 10, 13 or 32 lost them and was then
+    refused as too short. One white-space character ends the header, as the
+    formats say (and as `open_htj2k_enc` already read them).
+  - `open_htj2k_enc -i a.pgx,b.pgx` with a `b.pgx` of zero width or height
+    divided by zero (SIGFPE). A PGX bit depth above 16 (two bytes per sample
+    are read) reached a shift by that depth. A PGM or PGX header declaring
+    more samples than the file holds made the reader and the encoder allocate
+    row buffers by it: 2 GB for a 30-byte file. All are refused with a
+    message.
+  - Valid files read as before: the 90 PGM, PPM and PGX files of the
+    repository give the same samples.
 - Decoder: a sample of a corrupt codestream outside the range of a 32-bit
   integer was converted to an integer by the scalar code at the end of each
   row, which is undefined behaviour in C++ (the vector code that handles the
