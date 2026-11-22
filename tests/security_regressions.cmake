@@ -683,3 +683,20 @@ endforeach()
 foreach(_t 1 4)
   _sec_decode_discard(security_sample_out_of_int32_t${_t} security_sample_out_of_int32.j2c ${_t})
 endforeach()
+
+# estimate_qfactor reads the main header by itself.  A SIZ marker with no component made
+# it read the first element of an empty list (a crash), and a COD marker may declare up
+# to 255 decomposition levels, for which it built wavelet basis functions of 2^levels
+# samples (gigabytes).  Both headers are now refused with a message.
+add_test(NAME security_qfactor_no_component
+         COMMAND estimate_qfactor ${SECURITY_DATA_DIR}/security_qfactor_no_component.j2c)
+set_tests_properties(security_qfactor_no_component PROPERTIES
+    PASS_REGULAR_EXPRESSION "declares no component"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)
+add_test(NAME security_qfactor_levels_255
+         COMMAND estimate_qfactor ${SECURITY_DATA_DIR}/security_qfactor_levels_255.j2c)
+set_tests_properties(security_qfactor_levels_255 PROPERTIES
+    PASS_REGULAR_EXPRESSION "255 decomposition levels"
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
+    TIMEOUT 30)

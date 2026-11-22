@@ -101,6 +101,10 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
         if (body_len < 36) return false;
         // body[0..1] = Rsiz, [2..5] = Xsiz, ..., [34..35] = Csiz
         out.Csiz = rd_u16(&body[34]);
+        if (out.Csiz == 0) {
+          fprintf(stderr, "ERROR: SIZ marker declares no component\n");
+          return false;
+        }
         if (body_len < 36u + static_cast<size_t>(out.Csiz) * 3u) return false;
         for (uint16_t c = 0; c < out.Csiz; ++c) {
           const uint8_t* sc = &body[36 + 3 * c];
@@ -119,6 +123,11 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
         // SPcod: NLevels, cblkW, cblkH, style, transformation
         out.dwt_levels     = body[1 + 4 + 0];
         out.transformation = body[1 + 4 + 4];
+        if (out.dwt_levels > 32) {
+          fprintf(stderr, "ERROR: COD marker declares %u decomposition levels (32 at most)\n",
+                  out.dwt_levels);
+          return false;
+        }
         (void)Scod;
         got_cod = true;
         break;
@@ -132,6 +141,8 @@ bool parse_main_header(const std::vector<uint8_t>& buf, Header& out) {
         qm.raw.assign(seg, seg + 2u + Lmar);
         size_t off = 0;
         if (marker == QCC) {
+          // Cqcc is one byte for fewer than 257 components, two otherwise.
+          if (body_len < ((out.Csiz < 257) ? 1u : 2u)) return false;
           if (out.Csiz < 257) {
             qm.component_index = body[0];
             off                = 1;
@@ -217,42 +228,51 @@ std::vector<Band> predict_bands(uint8_t qfactor, uint8_t dwt_levels, uint8_t RI,
   // display upsampling gain for a sub-sampled chroma component (as in QCC_marker).
   const double w_tail = (Cqcc == 0) ? 1.0 : open_htj2k::chroma_tail_weight(vp, chroma_format, sub_x, sub_y);
 
-  // Build wmse in the encoder's accumulation order: HH_1, LH_1, HL_1, ..., LL_N.
+  // Build wmse in the encoder's accumulation order: HH_1, LH_1, HL_1, ..., LL_N.  As in
+  // QCD_marker / QCC_marker the basis functions, which double in length every level, are
+  // built for the first 14 levels; by then the energy gains double per level, and the
+  // deeper levels continue that (a header may declare 32 levels, 2^32 samples of basis).
+  // The gains depend on the number of levels only: they are kept from one call to the next
+  // (every Qfactor of every component is tried with the same ones).
   const size_t num_bands = static_cast<size_t>(3 * dwt_levels + 1);
-  std::vector<double> wmse;
-  wmse.reserve(num_bands);
+  static std::vector<double> wmse;
+  static int wmse_levels = -1;
   std::vector<double> outL(D97SL), outH(D97SH);
   double gain_low = 0, gain_high = 0;
-  if (dwt_levels == 0) {
-    wmse.push_back(1.0);
+  constexpr uint8_t exact_levels = 14;
+  if (wmse_levels == dwt_levels) {
+    // built by an earlier call
+  } else if (dwt_levels == 0) {
+    wmse.assign(1, 1.0);
+    wmse_levels = 0;
   } else {
+    wmse.clear();
+    wmse.reserve(num_bands);
+    wmse_levels = dwt_levels;
     for (uint8_t lvl = 0; lvl < dwt_levels; ++lvl) {
-      gain_low  = 0;
-      gain_high = 0;
-      for (double e : outL) gain_low += e * e;
-      for (double e : outH) gain_high += e * e;
+      if (lvl < exact_levels) {
+        gain_low  = 0;
+        gain_high = 0;
+        for (double e : outL) gain_low += e * e;
+        for (double e : outH) gain_high += e * e;
+      } else {
+        gain_low *= 2.0;
+        gain_high *= 2.0;
+      }
       wmse.push_back(gain_high * gain_high);  // HH
       wmse.push_back(gain_low * gain_high);   // LH
       wmse.push_back(gain_high * gain_low);   // HL
-      auto upsample = [](const std::vector<double>& v) {
-        std::vector<double> r;
-        r.reserve(v.size() * 2);
-        for (double x : v) {
-          r.push_back(x);
-          r.push_back(0.0);
-        }
-        return r;
-      };
-      std::vector<double> L2 = upsample(outL);
-      std::vector<double> H2 = upsample(outH);
-      std::vector<double> tmpL(D97SL.size() + L2.size() - 1, 0.0);
+      if (lvl + 1 >= dwt_levels || lvl + 1 >= exact_levels) continue;
+      // Next level: convolve the low-pass filter with the basis upsampled by 2 (the zero
+      // samples of the upsampled signal add nothing to the sums and are skipped).
+      std::vector<double> tmpL(D97SL.size() + 2 * outL.size() - 1, 0.0);
       for (size_t i = 0; i < D97SL.size(); ++i)
-        for (size_t j = 0; j < L2.size(); ++j) tmpL[i + j] += D97SL[i] * L2[j];
-      std::vector<double> tmpH(D97SL.size() + H2.size() - 1, 0.0);
+        for (size_t j = 0; j < outL.size(); ++j) tmpL[i + 2 * j] += D97SL[i] * outL[j];
+      std::vector<double> tmpH(D97SL.size() + 2 * outH.size() - 1, 0.0);
       for (size_t i = 0; i < D97SL.size(); ++i)
-        for (size_t j = 0; j < H2.size(); ++j) tmpH[i + j] += D97SL[i] * H2[j];
-      outL = tmpL;
-      outH = tmpH;
+        for (size_t j = 0; j < outH.size(); ++j) tmpH[i + 2 * j] += D97SL[i] * outH[j];
+      outL.swap(tmpL);
+      outH.swap(tmpH);
     }
     wmse.push_back(gain_low * gain_low);  // LL_N
   }
