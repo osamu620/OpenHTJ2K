@@ -40,7 +40,7 @@ namespace open_htj2k {
 
 namespace {
 int32_t finalize_one(float v, const FinalizeParams &p) {
-  int32_t x = finalize_round(v, p.scale) + p.dc;
+  int32_t x = finalize_add_dc(finalize_round(v, p.scale), p.dc);
   if (x > p.maxval) x = p.maxval;
   if (x < p.minval) x = p.minval;
   return x;

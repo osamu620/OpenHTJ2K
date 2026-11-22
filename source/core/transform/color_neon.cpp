@@ -476,7 +476,7 @@ void fused_ycbcr_irrev_to_rgb_i32_neon(const float *y, const float *cb, const fl
     vst1q_s32(b + n, vmaxq_s32(vminq_s32(vaddq_s32(vB, vdc2), vmx2), vmn2));
   }
   auto finalize_scalar = [](float v, const FinalizeParams &p) -> int32_t {
-    int32_t x = finalize_round(v, p.scale) + p.dc;
+    int32_t x = finalize_add_dc(finalize_round(v, p.scale), p.dc);
     if (x > p.maxval) x = p.maxval;
     if (x < p.minval) x = p.minval;
     return x;
