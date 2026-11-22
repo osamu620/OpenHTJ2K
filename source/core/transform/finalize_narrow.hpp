@@ -51,7 +51,7 @@
 namespace open_htj2k {
 
 inline int32_t finalize_sample(float v, float scale, int32_t dc, int32_t maxval, int32_t minval) {
-  int32_t x = finalize_round(v, scale) + dc;
+  int32_t x = finalize_add_dc(finalize_round(v, scale), dc);
   if (x > maxval) x = maxval;
   if (x < minval) x = minval;
   return x;

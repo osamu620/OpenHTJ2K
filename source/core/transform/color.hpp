@@ -71,7 +71,22 @@ struct FinalizeParams {
 // 0.5, floor, convert); keep every variant identical.
 inline float finalize_scale(int32_t ds) { return std::ldexp(1.0f, -ds); }
 inline int32_t finalize_round(float v, float scale) {
-  return static_cast<int32_t>(std::floor(v * scale + 0.5f));
+  const float r = std::floor(v * scale + 0.5f);
+  // -2^31 <= r < 2^31 (false for a NaN): the values an int32 holds.
+  if (r >= -2147483648.0f && r < 2147483648.0f) return static_cast<int32_t>(r);
+  // Only the samples of a corrupt codestream get here.  Converting such a value is
+  // undefined, so it is given what the vector forms of the build give it: the x86
+  // conversions return 0x80000000, those of NEON and WebAssembly saturate (0 for a NaN).
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  return INT32_MIN;
+#else
+  return (r != r) ? 0 : ((r < 0.0f) ? INT32_MIN : INT32_MAX);
+#endif
+}
+// The DC offset is added as the vector forms add it, modulo 2^32: the sum of a value
+// finalize_round() saturated and the offset must not overflow a signed int.
+inline int32_t finalize_add_dc(int32_t v, int32_t dc) {
+  return static_cast<int32_t>(static_cast<uint32_t>(v) + static_cast<uint32_t>(dc));
 }
 #if defined(OPENHTJ2K_TRY_AVX2) && defined(__AVX512F__)
 static inline __m512i finalize_round_avx512(__m512 v, __m512 vscale, __m512 vhalf) {

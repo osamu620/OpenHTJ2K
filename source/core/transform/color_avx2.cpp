@@ -346,7 +346,7 @@ void fused_ycbcr_irrev_to_rgb_i32_avx2(const float *y, const float *cb, const fl
     _mm256_storeu_si256((__m256i *)(b + n), vB);
   }
   auto finalize_scalar = [](float v, const FinalizeParams &p) -> int32_t {
-    int32_t x = finalize_round(v, p.scale) + p.dc;
+    int32_t x = finalize_add_dc(finalize_round(v, p.scale), p.dc);
     if (x > p.maxval) x = p.maxval;
     if (x < p.minval) x = p.minval;
     return x;

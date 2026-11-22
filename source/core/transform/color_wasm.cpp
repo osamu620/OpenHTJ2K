@@ -329,7 +329,7 @@ void fused_ycbcr_irrev_to_rgb_i32_wasm(const float *y, const float *cb, const fl
     wasm_v128_store(b + n, wasm_i32x4_min(wasm_i32x4_max(wasm_i32x4_add(vB, vdc2), vmn2), vmx2));
   }
   auto finalize_scalar = [](float v, const FinalizeParams &p) -> int32_t {
-    int32_t x = finalize_round(v, p.scale) + p.dc;
+    int32_t x = finalize_add_dc(finalize_round(v, p.scale), p.dc);
     if (x > p.maxval) x = p.maxval;
     if (x < p.minval) x = p.minval;
     return x;

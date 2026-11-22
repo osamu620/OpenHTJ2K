@@ -6740,7 +6740,7 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
         for (uint32_t n = 0; n < I.csize_x; ++n) {
           int32_t v = is_i32 ? reinterpret_cast<const int32_t *>(rows[c].data())[n]
                              : finalize_round(rows[c][n], I.scale);
-          v += I.DC_OFFSET;
+          v         = finalize_add_dc(v, I.DC_OFFSET);
           if (v > I.MAXVAL) v = I.MAXVAL;
           if (v < I.MINVAL) v = I.MINVAL;
           dp[n] = v;

@@ -675,3 +675,11 @@ set_tests_properties(security_poc_steps_budget security_poc_steps_budget_mt PROP
 foreach(_t 1 4)
   _sec_decode_discard(security_layers_tag_tree_walk_t${_t} security_layers_tag_tree_walk.j2c ${_t})
 endforeach()
+
+# A sample outside the range of a 32-bit integer (2.19e9 here, from a corrupt codestream of
+# 173 bytes): the scalar code that finishes each row converted it to an int, which is
+# undefined behaviour.  A release build shows nothing; the UBSan CI job catches a
+# regression.  Must decode.
+foreach(_t 1 4)
+  _sec_decode_discard(security_sample_out_of_int32_t${_t} security_sample_out_of_int32.j2c ${_t})
+endforeach()
