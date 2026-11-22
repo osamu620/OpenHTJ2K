@@ -323,6 +323,14 @@ add_test(NAME enc_qf_mannos COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23
 add_test(NAME qfest_mannos COMMAND estimate_qfactor kodim23_qfmannos.j2c --csf mannos --expect-q 90 --max-residual 0.01)
 set_tests_properties(qfest_mannos PROPERTIES DEPENDS enc_qf_mannos)
 
+# Twenty decomposition levels.  The estimate built the wavelet basis functions of every
+# level, which double in length each time (81 s and 0.8 GB here, 12 GB for 24 levels);
+# the encoder builds those of 14 levels and continues their trend, and so does the
+# estimate now.
+add_test(NAME enc_qf_levels20 COMMAND open_htj2k_enc -i ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/dwt_levels_src.pgm -o qf_levels20.j2c Qfactor=70 Clevels=20)
+add_test(NAME qfest_levels20 COMMAND estimate_qfactor qf_levels20.j2c --expect-q 70 --max-residual 0.01)
+set_tests_properties(qfest_levels20 PROPERTIES DEPENDS enc_qf_levels20 TIMEOUT 60)
+
 # Analytic Mannos-Sakrison with zoom (the viewing-condition axis).
 add_test(NAME enc_qf_mannos_zoom COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_qfmz.j2c Qfactor=85 Qcsf=mannos Qzoom=2)
 add_test(NAME qfest_mannos_zoom COMMAND estimate_qfactor kodim23_qfmz.j2c --csf mannos --zoom 2 --expect-q 85 --max-residual 0.01)
