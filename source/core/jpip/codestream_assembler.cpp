@@ -212,62 +212,82 @@ ReassembleStatus reassemble_codestream_client(const DataBinSet &set,
   const uint16_t nC = idx.num_components();
   const uint8_t  max_NL = idx.max_NL();
 
-  // Bucket every delivered precinct bin by (t, c, r), storing (p_rc, bin*)
-  // pairs sorted by p_rc.  The LRCP emit pass below then iterates ragged
-  // buckets rather than the full T·L·R·C·P grid — on a 103K-precinct
-  // asset with only a few hundred bins delivered, the old set.contains()
-  // probe cost dominated every dirty frame.
-  //
-  // Layout: per_tile[t][c * (max_NL + 1) + r] is the sorted bin list.
-  // max_NL + 1 is the row stride; tile-components with tc.NL < max_NL
-  // simply leave the high-r rows empty (the LRCP walk skips them via the
-  // `r > tc.NL` guard, matching the old loop's behaviour).
-  using DeliveredList = std::vector<std::pair<uint32_t, const std::vector<uint8_t>*>>;
-  const std::size_t stride = static_cast<std::size_t>(nC) * (max_NL + 1);
-  std::vector<std::vector<DeliveredList>> per_tile(nT);
-  for (auto &v : per_tile) v.resize(stride);
+  // The codestream built below holds a byte for every packet no data-bin has
+  // data for, and the loops take a step for every layer of every resolution
+  // of every tile-component, whatever was delivered.  Both counts come from
+  // the main header alone, which the server sends: a response of a few
+  // hundred bytes could ask for gigabytes of filler, or for hours of steps.
+  // Past kMaxClientSteps the image is refused as not supported (a gigapixel
+  // image in 64 x 64 precincts with ten layers stays below it).
+  constexpr uint64_t kMaxClientSteps = uint64_t{1} << 26;
+  uint64_t steps_per_layer = 0;
+  for (uint32_t t = 0; t < nT; ++t) {
+    for (uint16_t c = 0; c < nC; ++c) {
+      const auto &tc = idx.tile_component(static_cast<uint16_t>(t), c);
+      steps_per_layer += uint64_t{tc.NL} + 1 + tc.total;
+    }
+  }
+  if (num_layers != 0 && steps_per_layer > kMaxClientSteps / num_layers) {
+    return ReassembleStatus::UnsupportedFeature;
+  }
 
+  // The delivered precinct bins, sorted by (t, c, r, p_rc).  The LRCP emit
+  // pass below finds the run of each (t, c, r) in it, so its cost follows
+  // what was delivered: on a 103K-precinct asset with only a few hundred
+  // bins delivered, a probe of the set for every precinct dominated every
+  // dirty frame, and a list per (t, c, r) costs memory by header values
+  // (tiles x components x resolutions lists, however few bins there are).
+  struct Delivered {
+    uint16_t t;
+    uint16_t c;
+    uint8_t  r;
+    uint32_t p_rc;
+    const std::vector<uint8_t> *bin;
+  };
+  std::vector<Delivered> delivered;
   for (const auto &kv : set.keys()) {
     if (kv.first != kMsgClassPrecinct) continue;
     PrecinctKey pk;
     if (!decompose_precinct_I(idx, kv.second, &pk)) continue;
-    auto &slot = per_tile[pk.t][static_cast<std::size_t>(pk.c) * (max_NL + 1) + pk.r];
-    slot.emplace_back(pk.p_rc, &set.get(kMsgClassPrecinct, kv.second));
+    delivered.push_back({pk.t, pk.c, pk.r, pk.p_rc, &set.get(kMsgClassPrecinct, kv.second)});
   }
-  for (auto &tile_buckets : per_tile) {
-    for (auto &slot : tile_buckets) {
-      std::sort(slot.begin(), slot.end(),
-                [](const DeliveredList::value_type &a, const DeliveredList::value_type &b) {
-                  return a.first < b.first;
-                });
-    }
-  }
+  std::sort(delivered.begin(), delivered.end(), [](const Delivered &a, const Delivered &b) {
+    if (a.t != b.t) return a.t < b.t;
+    if (a.c != b.c) return a.c < b.c;
+    if (a.r != b.r) return a.r < b.r;
+    return a.p_rc < b.p_rc;
+  });
 
+  std::size_t tile_begin = 0;
   for (uint32_t t = 0; t < nT; ++t) {
     std::vector<uint8_t> body;
+    // This tile's bins: delivered[tile_begin, tile_end), sorted by (c, r, p_rc).
+    std::size_t tile_end = tile_begin;
+    while (tile_end < delivered.size() && delivered[tile_end].t == t) ++tile_end;
 
     // LRCP order: Layer → Resolution → Component → Precinct.  Multi-layer
     // is a deferred feature — the body block is just repeated num_layers
     // times here, matching the pre-refactor behaviour where both branches
     // of the `num_layers == 1` check emitted the same bytes.
-    const auto &tile_buckets = per_tile[t];
     for (uint16_t l = 0; l < num_layers; ++l) {
       for (uint8_t r = 0; r <= max_NL; ++r) {
         for (uint16_t c = 0; c < nC; ++c) {
           const auto &tc = idx.tile_component(static_cast<uint16_t>(t), c);
           if (r > tc.NL) continue;
           const uint32_t np = tc.npw[r] * tc.nph[r];
-          const auto &delivered =
-              tile_buckets[static_cast<std::size_t>(c) * (max_NL + 1) + r];
-          if (delivered.empty()) {
-            // Whole (r, c) group absent — one 0x00 per precinct.
-            body.insert(body.end(), np, 0x00);
-            continue;
-          }
+          // The first bin of (c, r), if any.
+          auto it = std::lower_bound(
+              delivered.begin() + static_cast<std::ptrdiff_t>(tile_begin),
+              delivered.begin() + static_cast<std::ptrdiff_t>(tile_end), std::make_pair(c, r),
+              [](const Delivered &d, const std::pair<uint16_t, uint8_t> &key) {
+                return (d.c != key.first) ? d.c < key.first : d.r < key.second;
+              });
+          const auto last = delivered.begin() + static_cast<std::ptrdiff_t>(tile_end);
+          // One 0x00 (an empty packet) for each precinct without a bin.
           uint32_t cursor = 0;
-          for (const auto &entry : delivered) {
-            const uint32_t p_rc = entry.first;
-            const std::vector<uint8_t> &bin = *entry.second;
+          for (; it != last && it->c == c && it->r == r; ++it) {
+            const uint32_t p_rc = it->p_rc;
+            const std::vector<uint8_t> &bin = *it->bin;
             if (p_rc > cursor) body.insert(body.end(), p_rc - cursor, 0x00);
             body.insert(body.end(), bin.begin(), bin.end());
             cursor = p_rc + 1;
@@ -276,6 +296,7 @@ ReassembleStatus reassemble_codestream_client(const DataBinSet &set,
         }
       }
     }
+    tile_begin = tile_end;
 
     // Tile header from DataBinSet.
     const auto &tile_hdr = set.contains(kMsgClassTileHeader, t)

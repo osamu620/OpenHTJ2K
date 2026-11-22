@@ -4,6 +4,11 @@
 // --total N             assert total_precincts() == N
 // --per-res t,c=r0,r1,…  assert tile_component(t,c).npw[r]·nph[r] == r_i for each r
 // --print               dump the index to stdout
+// --client-reassembly refused|ok
+//                       give the client-side reassembly (reassemble_codestream_client) the
+//                       main header alone, as a JPIP client holds it before any precinct
+//                       data arrives, and assert that it refuses the image as not supported
+//                       (refused) or builds the sparse codestream (ok)
 //
 // Exit 0 on all assertions passing, 1 otherwise.
 #include <cstdint>
@@ -13,6 +18,10 @@
 #include <string>
 #include <vector>
 
+#include "codestream_assembler.hpp"
+#include "codestream_walker.hpp"
+#include "jpp_message.hpp"
+#include "jpp_parser.hpp"
 #include "precinct_index.hpp"
 #include "view_window.hpp"
 
@@ -152,10 +161,13 @@ int main(int argc, char *argv[]) {
   bool do_print          = false;
   std::vector<std::string> per_res_specs;
   std::vector<std::string> vw_specs;
+  std::string client_reassembly;
 
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--total") == 0 && i + 1 < argc) {
       expected_tot = std::atoll(argv[++i]);
+    } else if (std::strcmp(argv[i], "--client-reassembly") == 0 && i + 1 < argc) {
+      client_reassembly = argv[++i];
     } else if (std::strcmp(argv[i], "--per-res") == 0 && i + 1 < argc) {
       per_res_specs.emplace_back(argv[++i]);
     } else if (std::strcmp(argv[i], "--vw") == 0 && i + 1 < argc) {
@@ -190,6 +202,31 @@ int main(int argc, char *argv[]) {
       ++failed;
     } else {
       std::printf("OK --total %lld\n", expected_tot);
+    }
+  }
+
+  if (!client_reassembly.empty()) {
+    using namespace open_htj2k::jpip;
+    CodestreamLayout layout;
+    if (!walk_codestream(bytes.data(), bytes.size(), &layout) || layout.main_header_end > bytes.size()) {
+      std::fprintf(stderr, "FAIL --client-reassembly: cannot find the main header\n");
+      return 1;
+    }
+    DataBinSet set;
+    set.append(kMsgClassMainHeader, 0, 0, bytes.data() + layout.soc_offset,
+               layout.main_header_end - layout.soc_offset, true);
+    std::vector<uint8_t> sparse;
+    const ReassembleStatus status = reassemble_codestream_client(set, *idx, sparse);
+    const bool refused            = status == ReassembleStatus::UnsupportedFeature;
+    const bool want_refused       = client_reassembly == "refused";
+    if (refused != want_refused || (!refused && status != ReassembleStatus::Ok)) {
+      std::fprintf(stderr, "FAIL --client-reassembly: expected %s, got status %d (%zu bytes)\n",
+                   client_reassembly.c_str(), static_cast<int>(status), sparse.size());
+      ++failed;
+    } else if (refused) {
+      std::printf("OK --client-reassembly: refused as not supported\n");
+    } else {
+      std::printf("OK --client-reassembly: %zu bytes\n", sparse.size());
     }
   }
 

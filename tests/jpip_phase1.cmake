@@ -151,6 +151,20 @@ set_tests_properties(jpip_idx_too_many_tile_components PROPERTIES
     PASS_REGULAR_EXPRESSION "65535 tiles x 17 components exceed the 1048576 tile-components"
     TIMEOUT 60)
 
+# The client rebuilds a sparse codestream from the data-bins it holds, with one byte for
+# every packet it has no data for: a count the main header alone decides, and the main
+# header comes from the server.  An 82-byte header (16384 x 16384 in 2 x 2 precincts, two
+# layers: 2^27 packets) asks for 128 MB, and with 65535 layers for terabytes; a response
+# of 254 bytes found by fuzzing took 1.6 GB and 20 s.  Past 2^26 packets and resolutions
+# the image is refused as not supported.  A conformance codestream's header alone is
+# rebuilt (its packets all empty).
+add_test(NAME jpip_client_reassembly_bound
+         COMMAND jpip_index_check ${_JPIP_LEVELS_DIR}/jpip_client_reassembly_bound.j2c
+                 --client-reassembly refused)
+set_tests_properties(jpip_client_reassembly_bound PROPERTIES TIMEOUT 60)
+add_test(NAME jpip_client_reassembly_header_only
+         COMMAND jpip_index_check ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k --client-reassembly ok)
+
 
 # ── Asset 1: full-resolution NASA Blue Marble (LRCP, default precincts) ──
 # Each (t, c) → NL+1 = 6 resolutions, each holding exactly one precinct
