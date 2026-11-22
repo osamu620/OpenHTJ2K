@@ -258,8 +258,19 @@ static inline uint32_t count_leading_zeros(const uint32_t x) {
 // (physical pages kept mapped) and returned on the next aligned_mem_alloc of a
 // compatible size, eliminating repeated mmap/munmap page-fault cycles on
 // successive decode calls with the same image geometry.
-#if !defined(__INTEL_COMPILER) && !defined(_MSC_VER) \
-    && !defined(__MINGW32__) && !defined(__MINGW64__)
+// AddressSanitizer builds do not use the pool: a cached buffer handed out again
+// for a smaller request keeps the size it was first allocated with, so the
+// sanitizer would see neither a write past the end of the request nor a use of
+// the buffer after its release.
+#if defined(__SANITIZE_ADDRESS__)
+  #define OPENHTJ2K_NO_LARGE_POOL 1
+#elif defined(__has_feature)
+  #if __has_feature(address_sanitizer)
+    #define OPENHTJ2K_NO_LARGE_POOL 1
+  #endif
+#endif
+#if !defined(__INTEL_COMPILER) && !defined(_MSC_VER) && !defined(__MINGW32__) && !defined(__MINGW64__) \
+    && !defined(OPENHTJ2K_NO_LARGE_POOL)
   #if defined(__linux__)
     #include <malloc.h>          // malloc_usable_size
     #define OPENHTJ2K_POOL_SIZE_FN(p) malloc_usable_size(p)
