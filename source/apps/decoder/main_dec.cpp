@@ -694,7 +694,9 @@ int main(int argc, char *argv[]) {
   bool               do_ycbcr  = false;
   ycbcr_coefficients ycbcr_coeff{};
   // Auto-enable for JPH and JP2 files with YCbCr colorspace (BT.601 by default).
-  if (detected_cs == open_htj2k::ENUMCS_YCBCR && strcmp(outfile_ext_name, ".ppm") == 0) {
+  // (An output name without an extension discards the output; it has no extension to compare.)
+  const bool ppm_output = !discard_output && strcmp(outfile_ext_name, ".ppm") == 0;
+  if (detected_cs == open_htj2k::ENUMCS_YCBCR && ppm_output) {
     do_ycbcr    = true;
     ycbcr_coeff = YCBCR_BT601;
   }
@@ -709,11 +711,11 @@ int main(int argc, char *argv[]) {
       printf("ERROR: -ycbcr takes 'bt601' or 'bt709'.\n");
       exit(EXIT_FAILURE);
     }
-    if (strcmp(outfile_ext_name, ".ppm") != 0) {
+    if (!ppm_output) {
       printf("WARNING: -ycbcr has no effect for non-PPM output.\n");
     }
   }
-  if (do_ycbcr && strcmp(outfile_ext_name, ".ppm") == 0) {
+  if (do_ycbcr && ppm_output) {
     const bool is601 = (ycbcr_coeff.cr_to_r == YCBCR_BT601.cr_to_r);
     if (detected_cs == open_htj2k::ENUMCS_YCBCR && get_command_option(argc, argv, "-ycbcr") == nullptr)
       printf("INFO: YCbCr→RGB conversion auto-enabled (BT.601). Use -ycbcr bt709 to override.\n");
@@ -808,13 +810,11 @@ int main(int argc, char *argv[]) {
               }
               if (want_ppm && nc == 3) {
                 // Single PPM file: chroma is nearest-neighbour upsampled during row write.
-                char fname[256], base[256];
-                memcpy(base, outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name));
-                base[outfile_ext_name - outfile_name] = '\0';
-                snprintf(fname, sizeof(fname), "%s%s", base, outfile_ext_name);
-                FILE *fp = fopen(fname, "wb");
+                // (The name is as long as the command line makes it: no fixed-size buffer.)
+                const std::string fname(outfile_name);
+                FILE *fp = fopen(fname.c_str(), "wb");
                 if (fp == nullptr) {
-                  printf("ERROR: Failed to open output file: %s\n", fname);
+                  printf("ERROR: Failed to open output file: %s\n", fname.c_str());
                   output_failed = true;
                   throw std::runtime_error("fopen failed");
                 }
@@ -829,14 +829,14 @@ int main(int argc, char *argv[]) {
                 reserve_open_files(nc);
                 fps.resize(nc, nullptr);
                 for (uint16_t c = 0; c < nc; ++c) {
-                  char fname[256], base[256];
-                  memcpy(base, outfile_name,
-                         static_cast<size_t>(outfile_ext_name - outfile_name));
-                  base[outfile_ext_name - outfile_name] = '\0';
-                  snprintf(fname, sizeof(fname), "%s_%02d%s", base, c, outfile_ext_name);
-                  fps[c] = fopen(fname, "wb");
+                  char index[16];
+                  snprintf(index, sizeof(index), "_%02d", c);
+                  const std::string fname =
+                      std::string(outfile_name, static_cast<size_t>(outfile_ext_name - outfile_name))
+                      + index + outfile_ext_name;
+                  fps[c] = fopen(fname.c_str(), "wb");
                   if (fps[c] == nullptr) {
-                    printf("ERROR: Failed to open output file: %s\n", fname);
+                    printf("ERROR: Failed to open output file: %s\n", fname.c_str());
                     output_failed = true;
                     throw std::runtime_error("fopen failed");
                   }
