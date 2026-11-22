@@ -272,6 +272,10 @@ of bounds.
     message.
   - Valid files read as before: the 90 PGM, PPM and PGX files of the
     repository give the same samples.
+- `open_htj2k_dec`: an output name without an extension (which discards the
+  output) crashed with `-ycbcr`, or with a JPH file whose colour space is
+  YCbCr: the missing extension was compared as a string. An output name of 256
+  characters or more overran the buffers the file names were built in.
 - Decoder: a sample of a corrupt codestream outside the range of a 32-bit
   integer was converted to an integer by the scalar code at the end of each
   row, which is undefined behaviour in C++ (the vector code that handles the

@@ -700,3 +700,29 @@ set_tests_properties(security_qfactor_levels_255 PROPERTIES
     PASS_REGULAR_EXPRESSION "255 decomposition levels"
     FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}"
     TIMEOUT 30)
+
+# open_htj2k_dec's own handling of its output name.  A name without an extension discards
+# the output; with -ycbcr, or for a JPH file whose colour space is YCbCr, the missing
+# extension was compared as a string (a null pointer: SIGSEGV).  And the output file names
+# were built in 256-byte buffers on the stack, whatever the length of the name given
+# (a path of 300 characters aborted the program).  Windows limits a path to 260 characters,
+# so the long name is tried elsewhere.
+add_test(NAME security_dec_cli_discard_ycbcr
+         COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k
+                 -o security_dec_cli_discard -ycbcr bt601)
+set_tests_properties(security_dec_cli_discard_ycbcr PROPERTIES
+    FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}" TIMEOUT 60)
+if(NOT WIN32)
+  set(_sec_long_dir "${CMAKE_CURRENT_BINARY_DIR}/security_dec_cli_long_name")
+  foreach(_i RANGE 1 3)
+    string(APPEND _sec_long_dir "/directory_name_of_forty_characters_${_i}_____")
+  endforeach()
+  file(MAKE_DIRECTORY ${_sec_long_dir})
+  set(_sec_long_name "${_sec_long_dir}/a_file_name_that_brings_the_path_well_past_two_hundred_and_fifty_six")
+  string(APPEND _sec_long_name "_characters_however_short_the_build_directory_is______________________")
+  string(APPEND _sec_long_name "________________________________________________________________.pgx")
+  add_test(NAME security_dec_cli_long_output_name
+           COMMAND open_htj2k_dec -i ${CONFORMANCE_DATA_DIR}/ds0_ht_01_b11.j2k -o ${_sec_long_name})
+  set_tests_properties(security_dec_cli_long_output_name PROPERTIES
+      FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE}|Failed to open output file" TIMEOUT 60)
+endif()
