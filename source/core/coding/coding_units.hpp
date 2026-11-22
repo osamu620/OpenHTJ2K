@@ -504,7 +504,11 @@ class j2k_precinct_subband : public j2k_region {
   tagtree_node *get_inclusion_node(uint32_t i);
   tagtree_node *get_ZBP_node(uint32_t i);
   j2k_codeblock *access_codeblock(uint32_t i);
-  void parse_packet_header(buf_chain *packet_header, uint16_t layer_idx, uint16_t Ccap15);
+  // Parses this precinct-subband's part of a packet header.  The indices of the code-blocks
+  // the packet gives coding passes to are appended to `included`, in increasing order: the
+  // packet's body holds their bytes in that order.
+  void parse_packet_header(buf_chain *packet_header, uint16_t layer_idx, uint16_t Ccap15,
+                           std::vector<uint32_t> &included);
   void generate_packet_header(packet_header_writer &header, uint16_t layer_idx);
   // Single-tile reuse: reset both tagtrees and every codeblock's per-frame
   // state so parse_packet_header can be called again.  Keeps all structural
@@ -1063,6 +1067,12 @@ class j2k_tile : public j2k_tile_base {
   // its first packet that is not empty arrives.
   void read_packet(j2k_precinct *current_precint, j2k_resolution *cr, uint16_t c, uint16_t layer,
                    bool skip_body = false);
+  // The code-blocks the packet read last gave coding passes to: their indices in their
+  // precinct-subband, those of subband b being packet_blocks_[packet_band_end_[b - 1]] (from
+  // 0 for b = 0) up to packet_band_end_[b].  One buffer for the tile, so that a precinct
+  // costs no list of its own.
+  std::vector<uint32_t> packet_blocks_;
+  std::vector<uint32_t> packet_band_end_;
   // Decoder memory budget: charges bytes of tile, precinct or code-block state (what) to
   // be allocated against the budget of the codestream (j2k_main_header::structure_budget),
   // or rejects the codestream as not supported.  persistent: the state lives as long as
@@ -1102,6 +1112,16 @@ class j2k_tile : public j2k_tile_base {
   // Decoder memory budget: the bytes of state the tile holds against it (until destroy()),
   // and, after create_tile_buf(), those of the line buffers decoding it allocates.
   OPENHTJ2K_NODISCARD uint64_t charged_bytes() const { return charged_bytes_; }
+  // In a packet observer: the code-blocks of subband b (of the packet's precinct) that the
+  // packet gave coding passes to, as indices in the precinct-subband in increasing order.
+  // Returns their number; `first` points at them.  None for an empty packet.
+  size_t packet_blocks(uint8_t b, const uint32_t *&first) const {
+    first = nullptr;
+    if (b >= packet_band_end_.size()) return 0;
+    const uint32_t from = (b == 0) ? 0 : packet_band_end_[b - 1U];
+    first               = packet_blocks_.data() + from;
+    return packet_band_end_[b] - from;
+  }
   OPENHTJ2K_NODISCARD uint64_t line_decode_bytes();
   // Single-tile reuse: clear every piece of mutable per-frame state while
   // keeping the tile/component/resolution/precinct/codeblock allocations

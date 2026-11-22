@@ -26,6 +26,13 @@
 #                               A.32) gives the LRCP order the packets are in.  Irreversible.
 #   marker_poc_tile_parts       POC of tile-part 0: LRCP for layer 0; POC of tile-part 1: CPRL for
 #                               layer 1 (A.6.6).  Irreversible.
+#   marker_empty_packets_inclusion  one code-block, six layers: five empty packets (one 0 bit each,
+#                               B.10.3), then the packet that first includes the code-block.  An
+#                               empty packet leaves the inclusion tag tree as it was, so that
+#                               packet's header holds a bit of the tree for each layer so far
+#                               (B.10.2: 0 0 0 0 0 1).  The decoder read one bit for the first
+#                               layer and one for the current one, which covers a single empty
+#                               packet: with more, the code-block decoded to nothing.
 #   marker_coc_32_levels        tests/data/dwt32_levels.j2c with its 32 decomposition levels in
 #                               a COC marker for component 0 and 1 in the COD marker: the COC
 #                               level count was masked to 5 bits, which read 32 as 0.
@@ -67,6 +74,7 @@ _marker_decode_test(marker_qcc_tile_qcd marker_qcc_tile_qcd.j2c ${_MARKER_GRAY} 
 _marker_decode_test(marker_coc_other_component marker_coc_other_component.j2c ${_MARKER_RGB} 0 0)
 _marker_decode_test(marker_poc_all_components marker_poc_all_components.j2c ${_MARKER_RGB} 65535 8000000)
 _marker_decode_test(marker_poc_tile_parts marker_poc_tile_parts.j2c ${_MARKER_RGB} 65535 8000000)
+_marker_decode_test(marker_empty_packets_inclusion marker_empty_packets_inclusion.j2c ${_MARKER_GRAY} 0 0)
 _marker_decode_test(marker_coc_32_levels marker_coc_32_levels.j2c ${_MARKER_GRAY} 0 0)
 _marker_decode_test(marker_htdeclared marker_htdeclared.j2c ${_MARKER_GRAY} 0 0)
 

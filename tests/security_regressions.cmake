@@ -664,3 +664,14 @@ _sec_rejects(security_tile_components_count security_tile_components_count.j2c
 # after many of its tiles are set up: 2-5 s on Linux CI, 21-27 s (once over 30) on the
 # macOS x86-64 runners.
 set_tests_properties(security_poc_steps_budget security_poc_steps_budget_mt PROPERTIES TIMEOUT 120)
+
+# Packet-header work sized by header values: 2048 x 2048 in 4 x 4 code-blocks (262144 of
+# them, in one precinct) and 4096 layers, each packet one byte that says "not empty, no
+# code-block included" (4187 bytes).  For every packet the parser walked the inclusion tag
+# tree of every code-block, a billion walks (about two minutes; 65535 layers, 64 KB, took
+# half an hour).  It now steps over the code-blocks below a tag-tree node that the packet
+# leaves beyond its layer, and reads a packet's body for the code-blocks its header
+# included, so a packet costs what its header holds.  Must decode, within the timeout.
+foreach(_t 1 4)
+  _sec_decode_discard(security_layers_tag_tree_walk_t${_t} security_layers_tag_tree_walk.j2c ${_t})
+endforeach()
