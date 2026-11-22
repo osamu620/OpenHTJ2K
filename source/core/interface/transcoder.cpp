@@ -1059,9 +1059,12 @@ size_t transcode_impl(const uint8_t *in, size_t in_len, std::vector<uint8_t> &ou
             for (uint8_t b = 0; b < cr->num_bands; ++b) {
               j2k_precinct_subband *pb = cp->access_pband(b);
               if (!pb->is_built()) continue;
-              const uint32_t n = pb->num_codeblock_x * pb->num_codeblock_y;
-              for (uint32_t k = 0; k < n; ++k) {
-                const j2k_codeblock *blk = pb->access_codeblock(k);
+              // Only the code-blocks this packet gave passes to (a walk over all of the
+              // precinct's for each of its packets takes layers x code-blocks steps).
+              const uint32_t *included = nullptr;
+              const size_t n           = tin.packet_blocks(b, included);
+              for (size_t j = 0; j < n; ++j) {
+                const j2k_codeblock *blk = pb->access_codeblock(included[j]);
                 if (blk->num_passes == 0) continue;
                 layer_log &g = logs[blk];
                 if (blk->num_passes > g.total) {
@@ -1073,6 +1076,11 @@ size_t transcode_impl(const uint8_t *in, size_t in_len, std::vector<uint8_t> &ou
           });
     }
     tin.create_tile_buf(hin);
+    // The output tile is an encoder tile of the same structure.  It builds every code-block (the
+    // input tile builds those its packets have data for), each with its passes per layer, so its
+    // state too is sized by header values: it counts against the codestream's memory budget with
+    // the input tile's, before it is built.
+    tin.charge_output_tile(keep_layers ? tin.get_numlayers() : static_cast<uint16_t>(1));
 
     // A COD, COC, QCD or QCC in the input's tile-part header is kept for the tile, with the HT
     // code-block style and one layer, and written in the tile-part header of the output.
@@ -1119,7 +1127,8 @@ size_t transcode_impl(const uint8_t *in, size_t in_len, std::vector<uint8_t> &ou
       for (uint8_t r : rev) reversible = reversible && (r != 0);
     }
     j2k_tile tout;
-    tout.enc_init(static_cast<uint16_t>(i), hout, empty_buf, true, true, has_override ? &ov : nullptr);
+    tout.enc_init(static_cast<uint16_t>(i), hout, empty_buf, true, true, has_override ? &ov : nullptr,
+                  /*structure_only=*/true);
     std::vector<uint8_t> tile_hdr_bytes;
     if (has_override || !tile_com.empty()) {
       j2c_dst_memory tb;
@@ -1230,7 +1239,7 @@ size_t transcode_impl(const uint8_t *in, size_t in_len, std::vector<uint8_t> &ou
     tile_lengths.push_back(static_cast<uint32_t>(tile_size));
     // Give the input tile's charges back to the codestream's memory budget, as the decoder does
     // after each tile; otherwise the budget fills up tile by tile on an image of many tiles.
-    // (tout is an encoder tile; it is never charged to the budget.)
+    // (The output tile's state was charged through the input tile, and goes back with it.)
     tin.destroy();
   }
 

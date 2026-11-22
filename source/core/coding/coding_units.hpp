@@ -1123,6 +1123,11 @@ class j2k_tile : public j2k_tile_base {
     return packet_band_end_[b] - from;
   }
   OPENHTJ2K_NODISCARD uint64_t line_decode_bytes();
+  // Transcoder, after create_tile_buf(): charges to the budget the state of the output tile, an
+  // encoder tile of this tile's structure with num_layers quality layers.  Unlike this tile, it
+  // builds every code-block, with its passes per layer, whether a packet has data for it or not.
+  // Rejects the codestream as not supported if that passes the budget; destroy() gives it back.
+  void charge_output_tile(uint16_t num_layers);
   // Single-tile reuse: clear every piece of mutable per-frame state while
   // keeping the tile/component/resolution/precinct/codeblock allocations
   // (and their sub-allocations — ring buffers, compressed buffers, tagtrees,
@@ -1218,9 +1223,11 @@ class j2k_tile : public j2k_tile_base {
   // Initialization with tile-index
   // tile_override, if any, holds the COD, COC, QCD and QCC marker segments of this tile's tile-part
   // header (the transcoder keeps them from its input); they apply to the tile as they do in a decoder.
+  // structure_only: no sample buffers (the transcoder's output tile, whose code-blocks are coded from
+  // those of the input tile).
   void enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
                 bool line_based = false, bool streaming = false,
-                const j2k_tilepart_header *tile_override = nullptr);
+                const j2k_tilepart_header *tile_override = nullptr, bool structure_only = false);
   // The first tile-part header of the tile, as read from a codestream (null before one was read).
   const j2k_tilepart_header *first_tile_part_header() const {
     return tile_part.empty() ? nullptr : tile_part[0]->header.get();
