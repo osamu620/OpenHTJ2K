@@ -16,6 +16,18 @@
 
 namespace imgio {
 
+// Whether the file holds `bytes` bytes from `data_start` on.  A header alone can declare any
+// width and height: the row buffers (here and in the encoder) are sized by them, so the
+// samples must be in the file before anything is allocated for them.  True when the size
+// of the file cannot be found (the rows are then checked as they are read).
+static bool file_holds(FILE *fp, long data_start, uint64_t bytes) {
+  if (data_start < 0 || fseek(fp, 0, SEEK_END) != 0) return true;
+  const long end = ftell(fp);
+  fseek(fp, data_start, SEEK_SET);
+  if (end < data_start) return true;
+  return static_cast<uint64_t>(end - data_start) >= bytes;
+}
+
 // ---------------------------------------------------------------------------
 // PnmStreamReader — reads a PNM (P5/P6) file one row at a time
 // ---------------------------------------------------------------------------
@@ -101,9 +113,15 @@ class PnmStreamReader : public StreamReader {
     bitdepth_ = bd;
     bps_      = (bitdepth_ > 8) ? 2 : 1;
 
-    raw_.resize(static_cast<size_t>(width_) * nc_ * bps_);
     // Record the file position of the first pixel byte for random-access reads.
     data_start_ = ftell(fp_);
+    const uint64_t row_bytes = static_cast<uint64_t>(width_) * nc_ * bps_;
+    if (height_ != 0 && !file_holds(fp_, data_start_, row_bytes * height_)) {
+      printf("ERROR: %s holds fewer samples than its header declares (%u x %u).\n", filename.c_str(),
+             width_, height_);
+      return -1;
+    }
+    raw_.resize(static_cast<size_t>(row_bytes));
     return 0;
   }
 
@@ -185,7 +203,15 @@ class PgxStreamReader : public StreamReader {
     }
     // Read bit-depth
     uint32_t bd = 0;
-    do { bd = bd * 10 + static_cast<uint32_t>(d - '0'); d = fgetc(c.fp); } while (isdigit(d));
+    do {
+      bd = bd * 10 + static_cast<uint32_t>(d - '0');
+      d  = fgetc(c.fp);
+    } while (isdigit(d) && bd <= 16);
+    // One or two bytes per sample are read.
+    if (bd < 1 || bd > 16) {
+      printf("ERROR: PGX bit depths from 1 to 16 are supported: %s\n", fname.c_str());
+      return -1;
+    }
     c.bitdepth = static_cast<uint8_t>(bd);
     // Skip whitespace, read width
     while (d == ' ' || d == '\n' || d == '\r') d = fgetc(c.fp);
@@ -204,7 +230,13 @@ class PgxStreamReader : public StreamReader {
     // Same class of bug the PnmStreamReader was fixed for.
     if (d != ' ' && d != '\t' && d != '\n' && d != '\r') return -1;
     c.data_start = ftell(c.fp);
-    c.raw.resize(static_cast<size_t>(c.width) * ((c.bitdepth > 8) ? 2u : 1u));
+    const uint64_t row_bytes = static_cast<uint64_t>(c.width) * ((c.bitdepth > 8) ? 2u : 1u);
+    if (c.height != 0 && !file_holds(c.fp, c.data_start, row_bytes * c.height)) {
+      printf("ERROR: %s holds fewer samples than its header declares (%u x %u).\n", fname.c_str(), c.width,
+             c.height);
+      return -1;
+    }
+    c.raw.resize(static_cast<size_t>(row_bytes));
     return 0;
   }
 
@@ -225,7 +257,11 @@ class PgxStreamReader : public StreamReader {
     xr_.resize(comps_.size(), 1);
     yr_.resize(comps_.size(), 1);
     for (size_t i = 1; i < comps_.size(); ++i) {
-      if (comps_[0].width % comps_[i].width != 0 || comps_[0].height % comps_[i].height != 0) {
+      // A component without samples cannot divide component 0's size, and a subsampling
+      // factor is one byte (as for a list of PNM or TIFF files, MultiStreamReader).
+      if (comps_[i].width == 0 || comps_[i].height == 0 || comps_[0].width % comps_[i].width != 0
+          || comps_[0].height % comps_[i].height != 0 || comps_[0].width / comps_[i].width > 255
+          || comps_[0].height / comps_[i].height > 255) {
         printf("ERROR: PGX component %zu dimensions (%ux%u) are not integer submultiples of"
                " component 0 (%ux%u).\n",
                i, comps_[i].width, comps_[i].height, comps_[0].width, comps_[0].height);

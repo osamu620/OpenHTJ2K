@@ -27,6 +27,8 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <j2kmarkers.hpp>
@@ -336,6 +338,9 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
     bool is_pnm_pgx = false;
     bool is_tiff    = false;
     infile_ext_name = strrchr(const_cast<char *>(fname.c_str()), '.');
+    if (infile_ext_name == nullptr) {
+      throw std::runtime_error("unsupported input file type (expected .pgm/.ppm/.pgx/.tif)");
+    }
     if (strcmp(infile_ext_name, ".pgm") == 0 || strcmp(infile_ext_name, ".PGM") == 0
         || strcmp(infile_ext_name, ".ppm") == 0 || strcmp(infile_ext_name, ".PPM") == 0
         || strcmp(infile_ext_name, ".pgx") == 0 || strcmp(infile_ext_name, ".PGX") == 0) {
@@ -359,6 +364,8 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
       c++;
     } else if (is_tiff) {
 #if defined(OPENHTJ2K_TIFF_SUPPORT)
+      // read_tiff() sizes the image and its planes by this file alone.
+      if (num_files != 1) throw std::runtime_error("a TIFF file must be the only input file.");
       if (read_tiff(fname)) {
         throw std::runtime_error(image_read_error.empty() ? "cannot read " + fname : image_read_error);
       }
@@ -369,36 +376,69 @@ image::image(const std::vector<std::string> &filenames) : width(0), height(0), b
 }
 
 int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
-  constexpr int READ_WIDTH  = 0;
-  constexpr int READ_HEIGHT = 1;
-  constexpr int READ_MAXVAL = 2;
-  constexpr int DONE        = 3;
-  constexpr char SP         = ' ';
-  constexpr char LF         = '\n';
-  constexpr char CR         = 0x0d;
-  bool isASCII              = false;
-  bool isBigendian          = false;
-  bool isSigned             = false;
+  constexpr char SP  = ' ';
+  constexpr char LF  = '\n';
+  constexpr char CR  = 0x0d;
+  constexpr char TAB = '\t';
+  bool isASCII       = false;
+  bool isBigendian   = false;
+  bool isSigned      = false;
 
   FILE *fp = fopen(filename.c_str(), "rb");
   if (fp == nullptr) {
     image_read_error = open_htj2k::detail::format("File %s is not found.", filename.c_str());
     return EXIT_FAILURE;
   }
-  int status = READ_WIDTH;
-  int d;
-  uint32_t val = 0;
-  d            = fgetc(fp);
+  struct file_closer {
+    FILE *f;
+    ~file_closer() { fclose(f); }
+  } closer{fp};
+  // The file may come from anywhere: every loop below ends at the end of the file, every
+  // number is made of digits, and the samples the header declares must be in the file
+  // before memory is allocated for them.
+  auto fail = [&](const char *what) {
+    image_read_error = open_htj2k::detail::format("%s: %s", filename.c_str(), what);
+    return EXIT_FAILURE;
+  };
+  auto is_space = [](int ch) { return ch == SP || ch == LF || ch == CR || ch == TAB; };
+  // Reads a decimal number of at most 31 bits; `ch` is its first character on entry and the
+  // character after it on return.
+  auto read_number = [&](int &ch, uint32_t &out) {
+    if (!isdigit(ch)) return false;
+    uint64_t v = 0;
+    while (isdigit(ch)) {
+      v = v * 10 + static_cast<uint64_t>(ch - '0');
+      if (v > 0x7FFFFFFFU) return false;
+      ch = fgetc(fp);
+    }
+    out = static_cast<uint32_t>(v);
+    return true;
+  };
+  // Skips white space and PNM comments ('#' to the end of the line) from the character ch
+  // on; returns the first character that is neither.
+  auto skip_space = [&](int ch) {
+    while (is_space(ch) || ch == '#') {
+      if (ch == '#') {
+        do {
+          ch = fgetc(fp);
+        } while (ch != EOF && ch != LF && ch != CR);
+      } else {
+        ch = fgetc(fp);
+      }
+    }
+    return ch;
+  };
+
+  int d = fgetc(fp);
   if (d != 'P') {
     image_read_error = open_htj2k::detail::format("%s is not a PNM/PGX file.", filename.c_str());
-    fclose(fp);
     return EXIT_FAILURE;
   }
 
   bool isPPM = false;
   bool isPGX = false;
-  uint32_t compw, comph;
-  uint8_t bitDepth;
+  uint32_t compw = 0, comph = 0, val = 0;
+  uint8_t bitDepth = 0;
 
   d = fgetc(fp);
   switch (d) {
@@ -414,10 +454,8 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       isASCII = true;
       /* FALLTHRU */
     case '6':
-      isPPM = true;
-      // number of components shall be three here
-      num_components = 3;
-      isBigendian    = true;
+      isPPM       = true;
+      isBigendian = true;
       break;
       // PGX
     case 'G':
@@ -425,113 +463,89 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
       // read endian
       do {
         d = fgetc(fp);
-      } while (d != 'M' && d != 'L');
-      switch (d) {
-        case 'M':
-          isBigendian = true;
-          d           = fgetc(fp);
-          if (d != 'L') {
-            open_htj2k::detail::warn("input PGX file %s is broken.", filename.c_str());
-          }
-          break;
-        case 'L':
-          d = fgetc(fp);
-          if (d != 'M') {
-            open_htj2k::detail::warn("input PGX file %s is broken.", filename.c_str());
-          }
-          break;
-        default:
-          image_read_error = open_htj2k::detail::format("input file does not conform to PGX format.");
-          return EXIT_FAILURE;
+      } while (d != 'M' && d != 'L' && d != EOF);
+      if (d == EOF) return fail("the PGX header ends before its byte order (ML or LM).");
+      isBigendian = (d == 'M');
+      d           = fgetc(fp);
+      if (d != (isBigendian ? 'L' : 'M')) {
+        open_htj2k::detail::warn("input PGX file %s is broken.", filename.c_str());
       }
       // check signed or not
       do {
         d = fgetc(fp);
-      } while (d != '+' && d != '-' && isdigit(d) == false);
+      } while (d != '+' && d != '-' && !isdigit(d) && d != EOF);
       if (d == '+' || d == '-') {
-        if (d == '-') {
-          isSigned = true;
-        }
+        isSigned = (d == '-');
         do {
           d = fgetc(fp);
-        } while (isdigit(d) == false);
+        } while (!isdigit(d) && d != EOF);
       }
-      do {
-        val *= 10;
-        val += static_cast<unsigned int>(d - '0');
-        d = fgetc(fp);
-      } while (d != SP && d != LF && d != CR);
+      if (!read_number(d, val) || !is_space(d)) return fail("the PGX header has no valid bit depth.");
+      if (val < 1 || val > 16) return fail("PGX bit depths from 1 to 16 are supported.");
       bitDepth = static_cast<uint8_t>(val);
-      val      = 0;
       break;
       // PBM (not supported)
     case '1':
     case '4':
       image_read_error = open_htj2k::detail::format("PBM file is not supported.");
-      fclose(fp);
       return EXIT_FAILURE;
-      break;
       // error
     default:
       image_read_error = open_htj2k::detail::format("%s is not a PNM/PGX file.", filename.c_str());
-      fclose(fp);
       return EXIT_FAILURE;
-      break;
   }
-  while (status != DONE) {
-    d = fgetc(fp);
-    // eat white/LF/CR and comments
-    while (d == SP || d == LF || d == CR) {
-      d = fgetc(fp);
-      if (d == '#') {
-        // PNM comments run to end-of-line and have no length limit per the spec;
-        // consume byte-by-byte instead of through a fixed-size fgets buffer.
-        do {
-          d = fgetc(fp);
-        } while (d != EOF && d != LF && d != CR);
-        if (d == EOF) {
-          throw std::runtime_error("PNM/PGX header comment read error");
-        }
-        d = fgetc(fp);
+  // A PPM file holds the three components of the image; it cannot be one file of a list.
+  if (isPPM) {
+    if (nc != 0 || this->buf != nullptr || this->num_components != 1) {
+      return fail("a PPM file must be the only input file.");
+    }
+    this->num_components = 3;
+  } else if (nc >= this->num_components) {
+    return fail("more files than components.");
+  }
+
+  // width and height, then the maximum value of a PNM file
+  d = skip_space(fgetc(fp));
+  if (!read_number(d, compw)) return fail("the header has no valid width.");
+  d = skip_space(d);
+  if (!read_number(d, comph)) return fail("the header has no valid height.");
+  if (!isPGX) {
+    d = skip_space(d);
+    if (!read_number(d, val) || val < 1 || val > 65535) {
+      return fail("the maximum sample value must be from 1 to 65535.");
+    }
+    bitDepth = 1;
+    while ((1U << bitDepth) <= val) ++bitDepth;
+  }
+  // One white-space character ends the header; in a binary file the samples start right
+  // after it, whatever their values (a first sample of 10, 13 or 32 is not white space).
+  if (!is_space(d)) return fail("the header is not followed by white space.");
+
+  const uint16_t num_iterations  = isPPM ? 3 : 1;
+  const uint32_t byte_per_sample = (bitDepth + 8U - 1U) / 8U;
+  const size_t component_gap     = static_cast<size_t>(num_iterations) * byte_per_sample;
+  const uint64_t num_samples     = static_cast<uint64_t>(compw) * comph;
+
+  // The file must hold the samples its header declares: a binary sample takes
+  // byte_per_sample bytes, a text one a digit at least.
+  // (Where the size cannot be found, as for a file past 2 GB where long has 32 bits, the
+  // rows are checked as they are read.)
+  {
+    const long data_start = ftell(fp);
+    if (data_start >= 0 && fseek(fp, 0, SEEK_END) == 0) {
+      const long file_end = ftell(fp);
+      if (fseek(fp, data_start, SEEK_SET) != 0) return fail("cannot read the file.");
+      const uint64_t need = isASCII ? num_iterations : component_gap;
+      if (file_end >= data_start && num_samples != 0
+          && static_cast<uint64_t>(file_end - data_start) / num_samples < need) {
+        image_read_error = open_htj2k::detail::format("not enough samples in the given pnm file.");
+        return EXIT_FAILURE;
       }
     }
-    // read numerical value
-    while (d != SP && d != LF && d != CR) {
-      val *= 10;
-      val += static_cast<unsigned int>(d - '0');
-      d = fgetc(fp);
-    }
-    // update status
-    switch (status) {
-      case READ_WIDTH:
-        compw       = val;
-        this->width = (this->width < compw) ? compw : this->width;
-        val         = 0;
-        status      = READ_HEIGHT;
-        break;
-      case READ_HEIGHT:
-        comph        = val;
-        this->height = (this->height < comph) ? comph : this->height;
-        val          = 0;
-        if (isPGX) {
-          status = DONE;
-        } else {
-          status = READ_MAXVAL;
-        }
-        break;
-      case READ_MAXVAL:
-        bitDepth = static_cast<uint8_t>(log2(static_cast<float>(val)) + 1.0f);
-        val      = 0;
-        status   = DONE;
-        break;
-      default:
-        break;
-    }
   }
-  uint16_t num_iterations = 1;
-  if (isPPM) {
-    num_iterations = 3;
-  }
+
+  this->width  = (this->width < compw) ? compw : this->width;
+  this->height = (this->height < comph) ? comph : this->height;
   // setting bit-depth for components
   for (int i = 0; i < num_iterations; ++i) {
     this->component_width.push_back(compw);
@@ -540,56 +554,30 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     this->is_signed.push_back(isSigned);
   }
 
-  // easting trailing spaces/LF/CR or comments
-  d = fgetc(fp);
-  while (d == SP || d == LF || d == CR) {
-    d = fgetc(fp);
-    if (d == '#') {
-      do {
-        d = fgetc(fp);
-      } while (d != EOF && d != LF && d != CR);
-      if (d == EOF) {
-        throw std::runtime_error("PNM/PGX header comment read error");
-      }
-      d = fgetc(fp);
-    }
-  }
-  fseek(fp, -1, SEEK_CUR);
-
-  const uint32_t byte_per_sample      = (bitDepth + 8U - 1U) / 8U;
-  const uint32_t component_gap        = num_iterations * byte_per_sample;
-  const uint32_t line_width           = component_gap * compw;
+  // A row of a binary file (none to read for an image without rows, or a text file).
+  const size_t line_width             = (isASCII || comph == 0) ? 0 : component_gap * compw;
   std::unique_ptr<uint8_t[]> line_buf = MAKE_UNIQUE<uint8_t[]>(line_width);
 
   // allocate memory once
   if (this->buf == nullptr) {
     this->buf = MAKE_UNIQUE<std::unique_ptr<int32_t[]>[]>(this->num_components);
   }
-  if (isPPM) {
-    for (size_t i = 0; i < this->num_components; ++i) {
-      this->buf[i] = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(compw) * comph);
-    }
-  } else {
-    this->buf[nc] = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(compw) * comph);
+  // The planes this file fills: the three of a PPM file, or plane nc.
+  const uint16_t first_plane = isPPM ? static_cast<uint16_t>(0) : nc;
+  for (uint16_t c = 0; c < num_iterations; ++c) {
+    this->buf[first_plane + c] = MAKE_UNIQUE<int32_t[]>(static_cast<size_t>(num_samples));
   }
 
   if (!isASCII) {
     for (size_t i = 0; i < comph; ++i) {
       if (fread(line_buf.get(), sizeof(uint8_t), line_width, fp) < line_width) {
         image_read_error = open_htj2k::detail::format("not enough samples in the given pnm file.");
-        fclose(fp);
         return EXIT_FAILURE;
       }
 
       for (size_t c = 0; c < num_iterations; ++c) {
-        uint8_t *src;
-        int32_t *dst;
-        src = &line_buf[c * byte_per_sample];
-        if (isPPM) {
-          dst = &this->buf[c][i * compw];
-        } else {
-          dst = &this->buf[nc][i * compw];
-        }
+        uint8_t *src = &line_buf[c * byte_per_sample];
+        int32_t *dst = &this->buf[first_plane + c][i * compw];
         switch (byte_per_sample) {
           case 1:
             for (size_t j = 0; j < compw; ++j) {
@@ -621,27 +609,22 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
             break;
           default:
             image_read_error = open_htj2k::detail::format("bit-depth over 16 is not supported.");
-            fclose(fp);
             return EXIT_FAILURE;
-            break;
         }
       }
     }
   } else {
-    for (size_t i = 0; i < static_cast<size_t>(compw) * comph; ++i) {
+    // Text samples, separated by white space; a sample the file does not hold is 0.
+    for (size_t i = 0; i < static_cast<size_t>(num_samples); ++i) {
       for (size_t c = 0; c < num_iterations; ++c) {
+        d   = skip_space(fgetc(fp));
         val = 0;
-        d   = fgetc(fp);
-        while (d != SP && d != CR && d != LF && d != EOF) {
-          val *= 10;
-          val += static_cast<unsigned int>(d - '0');
-          d = fgetc(fp);
-        }
-        this->buf[c][i] = static_cast<int>(val);
+        if (d != EOF && !read_number(d, val)) return fail("a sample is not a number.");
+        if (d != EOF) ungetc(d, fp);  // the character after the number: white space, or a comment
+        this->buf[first_plane + c][i] = static_cast<int32_t>(val);
       }
     }
   }
-  fclose(fp);
   return EXIT_SUCCESS;
 }
 
