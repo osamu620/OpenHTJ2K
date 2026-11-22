@@ -1691,8 +1691,16 @@ void j2k_codeblock::layer_bytes(uint16_t l, uint32_t &start, uint32_t &len) cons
     len   = length;
     return;
   }
-  uint32_t z0 = 0;
-  for (uint16_t i = 0; i < l; ++i) z0 += layer_passes[i];
+  // A layer without passes of the code-block has no bytes of it.  Otherwise its passes start
+  // after those of the layers before, which generate_packet_header() has counted into
+  // layer_start[]: summing layer_passes[] here for every layer of every code-block took
+  // layers x layers steps per code-block.
+  if (layer_passes[l] == 0) {
+    start = 0;
+    len   = 0;
+    return;
+  }
+  const uint32_t z0 = layer_start[l];
   const uint32_t z1 = z0 + layer_passes[l];
   uint32_t s        = 0;
   for (uint32_t z = 0; z < z0; ++z) s += pass_length[z];
@@ -2653,6 +2661,12 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       } else {
         while (first < blk->num_layers && blk->layer_passes[first] == 0) ++first;
       }
+      // The passes before each layer, for the packets below and for layer_bytes().
+      uint8_t before = 0;
+      for (uint16_t l = 0; l < blk->num_layers; ++l) {
+        blk->layer_start[l] = before;
+        before              = static_cast<uint8_t>(before + blk->layer_passes[l]);
+      }
       this->inclusion_info.node[idx].set_value(first);
       this->ZBP_info.node[idx].set_value(blk->num_ZBP);
     }
@@ -2663,12 +2677,11 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
   tagtree_node *current_node, *parent_node;
 
   for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
-    blk                            = this->access_codeblock(idx);
-    uint8_t preceding_layer_passes = 0;
-    for (size_t i = 0; i < layer_idx; ++i) {
-      preceding_layer_passes = static_cast<uint8_t>(preceding_layer_passes + blk->layer_passes[i]);
-    }
-    blk->layer_start[layer_idx] = preceding_layer_passes;
+    blk                                  = this->access_codeblock(idx);
+    const uint8_t preceding_layer_passes = blk->layer_start[layer_idx];
+    // The code-block after this one that has bits in this packet header, when it is not the
+    // next one (see below); 0 for the next one.
+    uint64_t next_idx = 0;
 
     if (preceding_layer_passes == 0) {
       // this is the first contribution
@@ -2688,7 +2701,8 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       }
 
       // inclusion tagtree coding
-      threshold = layer_idx;
+      threshold        = layer_idx;
+      size_t pruned_at = 0;  // the place in tree_path, plus one, of a node beyond this layer
       for (size_t i = tree_path.size(); i > 0; --i) {
         current_node = this->get_inclusion_node(static_cast<uint32_t>(tree_path[i - 1]));
         if (current_node->get_state() == 0) {
@@ -2711,6 +2725,28 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
               current_node->set_current_value(static_cast<uint16_t>(current_node->get_current_value() + 1));
             }
           }
+          if (current_node->get_state() == 0) {
+            // The node's value is beyond this layer, and so are those of the nodes below it:
+            // they have no bits here.
+            pruned_at = i;
+            break;
+          }
+        }
+      }
+      if (pruned_at > 1) {
+        // A node above the leaves: it spans 2^k x 2^k code-blocks, none of them included up
+        // to this layer, none with bits in this packet header (as in parse_packet_header()).
+        // The loop steps over those in this row, and in the rows below when the node spans
+        // the whole width: with many layers (those of a transcoder's input, say) the walk
+        // of every code-block's path for every layer took most of the time.
+        const uint32_t k     = static_cast<uint32_t>(pruned_at - 1);
+        const uint32_t x     = idx % this->num_codeblock_x;
+        const uint32_t y     = idx / this->num_codeblock_x;
+        const uint64_t x_end = std::min<uint64_t>(this->num_codeblock_x, ((uint64_t{x} >> k) + 1) << k);
+        next_idx             = uint64_t{y} * this->num_codeblock_x + x_end;
+        if ((x >> k) == 0 && x_end == this->num_codeblock_x) {
+          const uint64_t y_end = std::min<uint64_t>(this->num_codeblock_y, ((uint64_t{y} >> k) + 1) << k);
+          next_idx             = y_end * this->num_codeblock_x;
         }
       }
 
@@ -2848,6 +2884,7 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
         total_bytes += segment_bytes;
       }
     }
+    if (next_idx != 0) idx = static_cast<uint32_t>(next_idx - 1);  // the loop steps to next_idx
   }  // end of outer for loop
 }
 
@@ -4874,6 +4911,28 @@ static uint64_t count_tile_component_precincts(j2k_tile_component &tc, uint64_t 
   return n;
 }
 
+void j2k_tile::charge_output_tile(uint16_t num_layers) {
+  if (tcomp == nullptr) return;
+  // The resolution, subband, precinct and precinct-subband objects again, then every
+  // code-block with its tag trees and its passes per layer, and per packet the end of its
+  // header and its place in the progression (build_packet_headers(), write_packets_direct()).
+  uint64_t bytes = 0, precincts = 0;
+  for (uint16_t c = 0; c < num_components; c++) {
+    j2k_tile_component &tc = this->tcomp[c];
+    precincts += count_tile_component_precincts(tc, &bytes);
+    for (uint8_t r = 0; r <= tc.NL; ++r) {
+      j2k_resolution *cr = tc.access_resolution(r);
+      for (uint32_t p = 0; p < cr->npw * cr->nph; ++p) {
+        j2k_precinct *cp = cr->access_precinct(p);
+        for (uint8_t b = 0; b < cr->num_bands; ++b)
+          bytes = sat_add(bytes, cp->access_pband(b)->codeblock_state_bytes(num_layers, true));
+      }
+    }
+  }
+  bytes = sat_add(bytes, sat_mul(sat_mul(precincts, num_layers), sizeof(uint32_t) + 1));
+  charge_structure(bytes, "the output tile of the transcoder", false);
+}
+
 // Samples (all components) below which a tile is set up and decoded on the calling thread:
 // the thread pool's dispatches cost more than such a tile's work, so that many small tiles
 // (16 x 16 or 32 x 32, in colour) decoded 2 to 4 times slower with 4 threads than with 1.
@@ -5990,16 +6049,14 @@ static void write_precinct_data(Sink &sink, j2k_precinct *cp, uint8_t num_bands,
 template <typename Sink>
 void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sink) {
   uint8_t c_NL;
-  uint8_t max_c_NL           = 0;
-  uint32_t max_res_precincts = 0;
-  this->num_packets          = 0;
+  uint8_t max_c_NL  = 0;
+  this->num_packets = 0;
   for (uint16_t c = 0; c < num_components; c++) {
     c_NL     = this->tcomp[c].NL;
     max_c_NL = std::max(c_NL, max_c_NL);
     for (uint8_t r = 0; r <= c_NL; r++) {
       j2k_resolution *cr = this->tcomp[c].access_resolution(r);
       this->num_packets += cr->npw * cr->nph;
-      max_res_precincts = std::max(cr->npw * cr->nph, max_res_precincts);
     }
   }
   this->num_packets *= this->numlayers;
@@ -6032,10 +6089,46 @@ void j2k_tile::write_packets_direct_impl(j2k_main_header &main_header, Sink &sin
     ++packet_seq;
   };
 
-  std::vector<std::vector<std::vector<std::vector<bool>>>> is_packet_done(
-      numlayers, std::vector<std::vector<std::vector<bool>>>(
-                     max_c_NL + 1U, std::vector<std::vector<bool>>(
-                                        num_components, std::vector<bool>(max_res_precincts, false))));
+  // One "done" flag per packet of the tile, as in create_tile_buf(): packet (l, r, c, p) has
+  // flag l * tile_precincts + prc_base[c * (max_c_NL + 1) + r] + p.  (A 4-D array with every
+  // resolution of every component sized for the largest one takes layers x resolutions x
+  // components vectors, whatever the number of packets: the transcoder writes tiles whose
+  // counts come from its input.)
+  const size_t res_stride = static_cast<size_t>(max_c_NL) + 1U;
+  std::vector<size_t> prc_base(static_cast<size_t>(num_components) * res_stride, 0);
+  size_t tile_precincts = 0;
+  for (uint16_t cc = 0; cc < num_components; cc++) {
+    for (uint8_t rr = 0; rr <= this->tcomp[cc].NL; rr++) {
+      const j2k_resolution *res      = this->tcomp[cc].access_resolution(rr);
+      prc_base[cc * res_stride + rr] = tile_precincts;
+      tile_precincts += static_cast<size_t>(res->npw) * res->nph;
+    }
+  }
+  std::vector<bool> packet_done(tile_precincts * numlayers, false);
+  struct packet_done_flags {
+    std::vector<bool> &flags;
+    const std::vector<size_t> &base;
+    size_t tile_precincts, res_stride;
+    // is_packet_done[l][r][c][p]
+    struct at_l {
+      const packet_done_flags &f;
+      size_t l;
+      struct at_r {
+        const packet_done_flags &f;
+        size_t l, r;
+        struct at_c {
+          const packet_done_flags &f;
+          size_t l, r, c;
+          std::vector<bool>::reference operator[](size_t p) const {
+            return f.flags[l * f.tile_precincts + f.base[c * f.res_stride + r] + p];
+          }
+        };
+        at_c operator[](size_t c) const { return at_c{f, l, r, c}; }
+      };
+      at_r operator[](size_t r) const { return at_r{f, l, r}; }
+    };
+    at_l operator[](size_t l) const { return at_l{*this, l}; }
+  } is_packet_done{packet_done, prc_base, tile_precincts, res_stride};
 
   uint8_t PO, RS, RE, r, local_RE;
   uint16_t LYE, CS, CE, c, l;
@@ -7361,7 +7454,8 @@ void j2k_tile::decode_line_based_stream_planar(j2k_main_header &hdr, uint8_t red
 }
 
 void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<int32_t *> img,
-                        bool line_based, bool streaming, const j2k_tilepart_header *tile_override) {
+                        bool line_based, bool streaming, const j2k_tilepart_header *tile_override,
+                        bool structure_only) {
   if (img.empty() && !streaming) {
     open_htj2k::detail::fail("input image is empty.");
   }
@@ -7436,9 +7530,11 @@ void j2k_tile::enc_init(uint16_t idx, j2k_main_header &main_header, std::vector<
   // the regular allocation for every component, with or without the MCT.
   const bool lb_enc = line_based && streaming;
 
+  // structure_only: the resolutions and subbands get no sample buffers (as in a line-based
+  // decode); their sizes come from the input's header, and nothing would read them.
   for (uint16_t c = 0; c < num_components; c++) {
     this->tcomp[c].init(&main_header, tphdr, this, c, img, lb_enc);
-    this->tcomp[c].create_resolutions(numlayers, false, lb_enc);
+    this->tcomp[c].create_resolutions(numlayers, structure_only, lb_enc);
   }
 
   if (enc_ht_refine || enc_rate_control) {

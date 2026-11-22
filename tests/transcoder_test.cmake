@@ -200,6 +200,20 @@ if(TARGET open_htj2k_transcode)
   tc_add(reject_part2      INPUT ${CONFORMANCE_DATA_DIR}/ATK_DFS_REV.j2c   MODE reject PATTERN "DFS/ATK")
   tc_add(reject_not_a_j2k  INPUT ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt MODE reject PATTERN "neither a JP2")
 
+  # The output tile is sized by the input's header.  It is an encoder tile, which builds every
+  # code-block with its passes per layer (the decoder's tile builds the code-blocks its packets
+  # have data for, without per-layer state), and it was not counted against the codestream's
+  # memory budget:
+  #  - 1024 x 1024 in 4 x 4 code-blocks with 65535 layers (112 bytes, HTJ2K): 11 GB of passes per
+  #    layer; now refused as not supported, like a decode that would pass the budget;
+  #  - 180 x 180 in 4 x 4 code-blocks with 32768 layers (97 bytes, HTJ2K), within the budget: the
+  #    packet headers of the output took layers x layers steps per code-block (minutes).  Must
+  #    transcode, to a codestream that decodes to the image of the input.
+  tc_add(reject_output_tile_budget INPUT ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/security_layers_65535.j2c
+         MODE reject PATTERN "output tile of the transcoder would take .* not supported")
+  tc_add(many_layers_output INPUT ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/security_transcode_layers.j2c)
+  set_tests_properties(tc_reject_output_tile_budget tc_many_layers_output PROPERTIES TIMEOUT 120)
+
   # HTJ2K -> Part 1.  The HTJ2K conformance codestreams, with one HT set per code-block (ds0_ht_*, ds1_ht_*)
   # and mixed HT and Part 1 code-blocks (ds0_hm_*): the Part 1 output must decode to the image of the
   # input.  Many have layers made with placeholder passes and more missing MSBs than the data have.

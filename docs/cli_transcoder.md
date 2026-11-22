@@ -279,7 +279,14 @@ The input must
 
 - have no Part 2 DFS or ATK marker segments (refused),
 - be less than 4 GB (the codestream reader keeps 32-bit positions; refused with
-  a message).
+  a message),
+- describe tiles whose state stays within the decoder's memory budget: the
+  larger of 256 MiB, 512 bytes per codestream byte and 2 bytes per image sample.
+  The state of a tile is that of the input tile (its precincts, and the
+  code-blocks its packets have data for) and of the output tile, which holds
+  every code-block of the tile with two bytes per quality layer. A header that
+  declares more (tens of thousands of layers over many small code-blocks, say)
+  is refused as not supported.
 
 A tile that has no tile-part in the input is left out of the output, as the
 input leaves it out. A codestream with no tile-part at all is refused.
