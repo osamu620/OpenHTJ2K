@@ -1,0 +1,61 @@
+# Builds the fuzz targets of tests/fuzz with libFuzzer, AddressSanitizer and
+# UndefinedBehaviorSanitizer, and runs each one for a few minutes from its seed
+# corpus (docs/dev/fuzzing.md).  One job for the SSE2 code and one for the AVX2
+# code: SIMD code is chosen at compile time.
+#
+# Runs for pull requests that change what the targets build from; others (the
+# documentation, the web pages, the tools) skip it.  A few minutes of fuzzing can
+# also meet a fault the pull request did not bring: read a failure before
+# blaming the change, and do not make this a required check.
+name: fuzz
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'source/**'
+      - 'tests/fuzz/**'
+      - 'CMakeLists.txt'
+      - '**/CMakeLists.txt'
+      - '.github/workflows/fuzz.yml'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per fuzz target'
+        default: '300'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cpu: [generic, x86-64-v3]
+    env:
+      FUZZ_DIR: ${{ github.workspace }}/fuzz_build
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the fuzz targets
+        env:
+          CXX: clang++
+          CXXFLAGS: -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
+          LIB_FUZZING_ENGINE: -fsanitize=fuzzer
+          OPENHTJ2K_FUZZ_CPU: ${{ matrix.cpu }}
+        run: WORK="$FUZZ_DIR" OUT="$FUZZ_DIR/out" tests/fuzz/build.sh
+
+      - name: Fuzz
+        run: tests/fuzz/run.sh "$FUZZ_DIR/out" "${{ inputs.seconds || '300' }}"
+
+      - name: Upload the inputs that were reported
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-reports-${{ matrix.cpu }}
+          path: |
+            fuzz_build/out/run/*/artifacts
+            fuzz_build/out/run/*/log.txt
+          if-no-files-found: ignore
