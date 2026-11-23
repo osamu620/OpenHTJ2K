@@ -656,6 +656,11 @@ endforeach()
 foreach(_t 1 4)
   _sec_decode_discard(security_color_strip_short_t${_t} security_color_strip_short.j2c ${_t})
   _sec_decode_discard(security_many_tiles_65280_t${_t} security_many_tiles_65280.j2c ${_t})
+  # The codestream has data for one of its 65280 tiles.  The first tile without data is
+  # reported and the others are not (65279 warnings made this test take a minute on some CI
+  # runners, and were a megabyte-sized answer to a kilobyte-sized codestream).
+  set_tests_properties(security_many_tiles_65280_t${_t} PROPERTIES
+                       FAIL_REGULAR_EXPRESSION "${_SEC_CRASH_RE};no data for tile 2 ")
 endforeach()
 _sec_rejects(security_line_buffers_budget security_line_buffers_budget.j2c
              "its line-decoding buffers would take .* not supported" mt)

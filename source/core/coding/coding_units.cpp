@@ -4962,8 +4962,12 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     // No tile-part at all: the codestream ends before this tile, as a truncated
     // download does.  Like the packets missing from a tile cut short, the missing
     // tile decodes as one without coded data, set up from the main header alone.
-    open_htj2k::detail::warn("codestream has no data for tile %u — decoding it as empty.",
-                             static_cast<unsigned>(this->index));
+    if (report_no_tile_part_) {
+      open_htj2k::detail::warn(
+          "codestream has no data for tile %u — decoding it as empty (the first such tile; the others "
+          "are not reported).",
+          static_cast<unsigned>(this->index));
+    }
     data_missing_ = true;
     j2k_tilepart_header main_only(num_components);
     init_from_first_tile_part(main_header, &main_only);

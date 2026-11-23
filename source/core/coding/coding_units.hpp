@@ -979,6 +979,8 @@ class j2k_tile : public j2k_tile_base {
   // Decoder: the codestream lacks data of this tile (is_data_missing()), and the
   // code-blocks whose data a packet cut short, trimmed once the packets are read.
   bool data_missing_ = false;
+  // Whether create_tile_buf() warns when the tile has no tile-part (report_no_tile_part()).
+  bool report_no_tile_part_ = true;
   std::vector<j2k_codeblock *> cut_blocks_;
   // In a tile the codestream lacks data of, an HT code-block can hold placeholder passes
   // alone, without data (its HT cleanup pass was to come in a packet that is missing): it
@@ -1109,6 +1111,12 @@ class j2k_tile : public j2k_tile_base {
   // ends inside one, or a packet header or a code-block's data runs past the bytes there
   // are; the tile decodes from the data it has.
   OPENHTJ2K_NODISCARD bool is_data_missing() const { return data_missing_; }
+  // A tile without a tile-part decodes as empty, and create_tile_buf() warns about it.  A
+  // codestream cut short lacks every tile after the cut, and one of a few bytes can declare
+  // 65535 tiles: the caller that sets up the tiles of a codestream lets the first such tile
+  // warn and turns the warning off for the others (has_no_tile_part() tells which they are).
+  void report_no_tile_part(bool on) { report_no_tile_part_ = on; }
+  OPENHTJ2K_NODISCARD bool has_no_tile_part() const { return num_tile_part == 0; }
   // Decoder memory budget: the bytes of state the tile holds against it (until destroy()),
   // and, after create_tile_buf(), those of the line buffers decoding it allocates.
   OPENHTJ2K_NODISCARD uint64_t charged_bytes() const { return charged_bytes_; }
