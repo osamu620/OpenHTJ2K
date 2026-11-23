@@ -9,6 +9,7 @@
 //   - a list of PGM files of different sizes, the second one a text file;
 //   - headers that end early (the reader looped for ever);
 //   - a header declaring more samples than the file holds;
+//   - a header declaring no columns or no rows (every row of 0 x 2000000000 was gone through);
 //   - a PPM file in a list (the planes of the list were written past their end);
 //   - a maximum value or a bit depth out of range.
 // Prints PASS and exits 0, or prints what failed and exits 1.
@@ -105,6 +106,9 @@ int main() {
   expect_refused("too few samples (PGX)", {write_file(d + "few.pgx", "PG ML + 16 60000 60000\nABCD")});
   expect_refused("too few samples (text PPM)", {write_file(d + "few.ppm", "P3\n40000 40000\n255\n1 2 3")});
   expect_refused("one row short", {write_file(d + "short.pgm", "P5 2 2 255\nABC")});
+  expect_refused("no columns (PGM)", {write_file(d + "none.pgm", "P5\n0 2000000000\n255\n")});
+  expect_refused("no rows (PGM)", {write_file(d + "none.pgm", "P5 5 0 255\n")});
+  expect_refused("no columns (PGX)", {write_file(d + "none.pgx", "PG ML + 8 0 7\n")});
   // A PPM file is the three components of the image, and cannot be part of a list.
   expect_refused("PGM then PPM",
                  {write_file(d + "m0.pgm", "P5 1 1 255\nA"), write_file(d + "m1.ppm", "P6 1 1 255\nABC")});

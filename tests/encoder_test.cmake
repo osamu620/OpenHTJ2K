@@ -1030,6 +1030,8 @@ add_test(NAME enc_cli_irreversible_guard0 COMMAND ${CMAKE_COMMAND} -DENC=$<TARGE
 
 # Input images the readers cannot use end with an error message and a non-zero exit code:
 #  - a PGX component without samples in a list (its width divided component 0's: SIGFPE);
+#  - a PGM file without rows and a PGX file without columns (2 GB for the row of a header
+#    of 2000000000 x 0);
 #  - a PGX bit depth of 80 (two bytes per sample are read; the default step size shifted by it);
 #  - a PGM or PGX header declaring more samples than the file holds (the row buffers of
 #    the reader and of the encoder were allocated by the header alone, gigabytes for a
@@ -1042,7 +1044,11 @@ file(WRITE ${_enc_in}/empty.pgx "PG ML + 8 0 0\n")
 file(WRITE ${_enc_in}/depth80.pgx "PG ML + 80 2 2\nABCDEFGH")
 file(WRITE ${_enc_in}/few.pgx "PG ML + 16 60000 60000\nABCD")
 file(WRITE ${_enc_in}/few.pgm "P5\n2000000000 2000000000\n255\nAB")
-foreach(_case "pgx_list_empty_component;${_enc_in}/ok.pgx,${_enc_in}/empty.pgx;not integer submultiples"
+file(WRITE ${_enc_in}/norows.pgm "P5\n2000000000 0\n255\n")
+file(WRITE ${_enc_in}/nocolumns.pgx "PG ML + 8 0 2000000000\n")
+foreach(_case "pgx_list_empty_component;${_enc_in}/ok.pgx,${_enc_in}/empty.pgx;has no samples"
+              "pgm_no_rows;${_enc_in}/norows.pgm;has no samples"
+              "pgx_no_columns;${_enc_in}/nocolumns.pgx;has no samples"
               "pgx_depth_80;${_enc_in}/depth80.pgx;PGX bit depths from 1 to 16"
               "pgx_too_few_samples;${_enc_in}/few.pgx;fewer samples than its header declares"
               "pgm_too_few_samples;${_enc_in}/few.pgm;fewer samples than its header declares")
