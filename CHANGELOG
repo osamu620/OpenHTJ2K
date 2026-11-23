@@ -253,6 +253,9 @@ of bounds.
   sample wide of components subsampled by 255) is now skipped instead of gone
   through row by row: 65535 such tiles of 16384 rows decode in 1.1 s, from
   11.9 s, to the same output.
+- Decoder: `invoke_line_based()` did not release three rows of scratch memory
+  (12 bytes per column of the image) when a code-block of a reversible image
+  with the colour transform failed to decode. It does.
 - Transcoder, HTJ2K to Part 1: when the block decoder refused an HT code-block
   of several layers, the bytes that code-block owned were not released (64 to
   4096 bytes a failed transcode). They are.

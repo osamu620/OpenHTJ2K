@@ -6687,6 +6687,16 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
   const uint8_t xform_ct = (xform == 1) ? 1 : 0;
   const uint32_t mct_w   = ci[0].csize_x;
   sprec_t *mct_scratch0 = nullptr, *mct_scratch1 = nullptr, *mct_scratch2 = nullptr;
+  // Released on every way out: a code-block that fails to decode throws from the row loop
+  // below (the three rows were lost with each such decode).
+  struct free_on_exit {
+    sprec_t *&a, *&b, *&c;
+    ~free_on_exit() {
+      aligned_mem_free(a);
+      aligned_mem_free(b);
+      aligned_mem_free(c);
+    }
+  } mct_scratch_guard{mct_scratch0, mct_scratch1, mct_scratch2};
   if (do_mct && xform == 1) {
     const size_t nb = sizeof(sprec_t) * static_cast<size_t>(mct_w + SIMD_PADDING);
     mct_scratch0 = static_cast<sprec_t *>(aligned_mem_alloc(nb, 32));
@@ -6796,9 +6806,6 @@ void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, st
     }
   }
 
-  aligned_mem_free(mct_scratch0);
-  aligned_mem_free(mct_scratch1);
-  aligned_mem_free(mct_scratch2);
   for (uint16_t c = 0; c < NC; ++c) tcomp[c].finalize_line_decode();
 }
 
