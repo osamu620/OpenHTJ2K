@@ -240,6 +240,22 @@ of bounds.
   image with more than 2^26 of them is now refused as not supported, and the
   list of delivered precincts takes memory by what was delivered rather than
   by tiles x components x resolutions.
+- Decoder: a codestream of 94 bytes kept the decoder busy for 47 s (62 s with
+  97 bytes). A component can have no samples: an image one sample wide at an
+  odd position has no column of a component subsampled by 2. Its rows hold
+  nothing, there are as many of them as the image is high (up to 2^31 - 1),
+  and the decoder went through every one, for that component and, when it has
+  the finest vertical subsampling, as rows of the image for the others. An
+  image in which a component has no samples at the resolution being decoded
+  (no columns, or no rows) is now refused as not supported by the four
+  `invoke_line_based*()` entry points; `parse()` and the size getters still
+  read it. A tile in which no component has samples (common in tiles one
+  sample wide of components subsampled by 255) is now skipped instead of gone
+  through row by row: 65535 such tiles of 16384 rows decode in 1.1 s, from
+  11.9 s, to the same output.
+- Transcoder, HTJ2K to Part 1: when the block decoder refused an HT code-block
+  of several layers, the bytes that code-block owned were not released (64 to
+  4096 bytes a failed transcode). They are.
 - JPIP server: a client could exhaust the server's memory with a few short
   requests. A statement of the `model=` request field is a few bytes and names
   a range of data-bins; the server remembered every bin of it (up to 2^22 a
@@ -284,6 +300,10 @@ of bounds.
     more samples than the file holds made the reader and the encoder allocate
     row buffers by it: 2 GB for a 30-byte file. All are refused with a
     message.
+  - A file without samples (a width or a height of 0) is refused by
+    `open_htj2k::image` and by `open_htj2k_enc`: the library reader went
+    through every row of a header of 0 x 2000000000 (3.4 s), and
+    `open_htj2k_enc` allocated 2 GB for the row of 2000000000 x 0.
   - Valid files read as before: the 90 PGM, PPM and PGX files of the
     repository give the same samples.
 - `open_htj2k_dec`: an output name without an extension (which discards the
