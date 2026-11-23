@@ -213,6 +213,12 @@ if(TARGET open_htj2k_transcode)
          MODE reject PATTERN "output tile of the transcoder would take .* not supported")
   tc_add(many_layers_output INPUT ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/security_transcode_layers.j2c)
   set_tests_properties(tc_reject_output_tile_budget tc_many_layers_output PROPERTIES TIMEOUT 120)
+  # An HT code-block of several layers that the block decoder refuses (113 bytes).  The
+  # transcode ends with that error; the bytes the code-block owns used to be lost on the way
+  # (64 bytes here, 4096 in larger blocks), which a build with LeakSanitizer reports.
+  tc_add(reject_ht_block_error
+         INPUT ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/security_transcode_ht_block_error.j2c
+         MODE reject PATTERN "transcoding failed: Value of numbits = [0-9]+ is out of range")
 
   # HTJ2K -> Part 1.  The HTJ2K conformance codestreams, with one HT set per code-block (ds0_ht_*, ds1_ht_*)
   # and mixed HT and Part 1 code-blocks (ds0_hm_*): the Part 1 output must decode to the image of the

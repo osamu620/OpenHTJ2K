@@ -394,17 +394,31 @@ void part1_block(j2k_codeblock *bin, j2k_codeblock *bout, uint8_t roi, const lay
     // The HT decoder changes the bytes it reads and may read a few past them: it reads a copy.
     sc.data.assign(static_cast<size_t>(bin->length) + 64, 0);
     std::memcpy(sc.data.data(), bin->get_compressed_data(), bin->length);
-    bool pooled         = false;
-    uint8_t *const orig = bin->detach_compressed_data(pooled);
-    bin->attach_compressed_data(sc.data.data(), true);  // not freed with the code-block
-    sc.states.assign(static_cast<size_t>(stride + 2) * (QH + 2), 0);
-    bin->block_states    = sc.states.data();
-    bin->blkstate_stride = stride + 2;
-    const bool ok        = htj2k_decode_indices(bin);
-    bool unused          = false;
-    bin->detach_compressed_data(unused);
-    bin->attach_compressed_data(orig, pooled);
-    bin->block_states = nullptr;
+    // The code-block gets its own bytes back when the decoder is done, and when it throws: a
+    // block of several layers owns them (they were lost, 512 bytes or more a block, when a
+    // corrupt block ended the transcode).
+    struct own_bytes {
+      j2k_codeblock *block;
+      bool pooled;
+      uint8_t *bytes;
+      explicit own_bytes(j2k_codeblock *b)
+          : block(b), pooled(false), bytes(b->detach_compressed_data(pooled)) {}
+      ~own_bytes() {
+        bool unused = false;
+        block->detach_compressed_data(unused);
+        block->attach_compressed_data(bytes, pooled);
+        block->block_states = nullptr;
+      }
+    };
+    bool ok = false;
+    {
+      own_bytes keep(bin);
+      bin->attach_compressed_data(sc.data.data(), true);  // not freed with the code-block
+      sc.states.assign(static_cast<size_t>(stride + 2) * (QH + 2), 0);
+      bin->block_states    = sc.states.data();
+      bin->blkstate_stride = stride + 2;
+      ok                   = htj2k_decode_indices(bin);
+    }
     if (!ok) open_htj2k::detail::fail("transcoder: an HT code-block could not be decoded.");
     // SigProp and MagRef passes below the LSB (of a cleanup pass at bit-plane 0) hold nothing.
     if (p == 0) Z_in = 3 * P0 + 1;
