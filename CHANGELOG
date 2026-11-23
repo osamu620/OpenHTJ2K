@@ -191,8 +191,8 @@ Found by fuzzing the decoder, the transcoder, the JPIP parsers, the image
 readers and `estimate_qfactor` under AddressSanitizer and
 UndefinedBehaviorSanitizer, and by
 reading the code the fuzzers led to. In the decoder, the transcoder and JPIP
-none of them reads or writes memory out of bounds: a small input could take
-minutes or gigabytes. The reader of the encoder's input images could write out
+none of them reads or writes memory out of bounds: a small input (for the JPIP
+server, a few small requests) could take minutes or gigabytes. The reader of the encoder's input images could write out
 of bounds.
 
 - Decoder: a small codestream could keep the decoder busy for minutes. For
@@ -240,6 +240,20 @@ of bounds.
   image with more than 2^26 of them is now refused as not supported, and the
   list of delivered precincts takes memory by what was delivered rather than
   by tiles x components x resolutions.
+- JPIP server: a client could exhaust the server's memory with a few short
+  requests. A statement of the `model=` request field is a few bytes and names
+  a range of data-bins; the server remembered every bin of it (up to 2^22 a
+  request, about 200 MB), whether the image has that bin or not, and a
+  session's model lives as long as its channel. Eight requests of 70 bytes
+  on one channel, each naming the next 2^22 precincts, took
+  `open_htj2k_jpip_server` from 5 MB to 3 GB while serving a 1 KB image.
+  `CacheModel::apply()` and `parse()` now take the limits of the image
+  (`CacheModel::Limits`: the precinct, tile-header and metadata identifiers it
+  has, and how many bins a model may hold), `ChannelManager::apply_model()`
+  passes them on, and the server sets them from its codestream index
+  (`CodestreamIndex::precinct_id_bound()`). Statements about bins the image
+  does not have are ignored. Without limits a model stops at 2^22 bins.
+  Responses to requests about bins the image has are unchanged.
 - `estimate_qfactor`:
   - on a valid codestream with 20 decomposition levels it ran for 81 s and
     took 0.8 GB (12 GB with 24 levels): it built the wavelet basis functions of

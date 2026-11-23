@@ -62,12 +62,13 @@ void ChannelManager::commit(const std::string &cid, const std::vector<SentBin> &
   }
 }
 
-bool ChannelManager::apply_model(const std::string &cid, const std::string &model_str) {
+bool ChannelManager::apply_model(const std::string &cid, const std::string &model_str,
+                                 const CacheModel::Limits &limits) {
   std::lock_guard<std::mutex> lk(mtx_);
   auto it = channels_.find(cid);
   if (it == channels_.end()) return false;
   it->second.last_used = ++use_clock_;
-  it->second.model.apply(model_str);
+  it->second.model.apply(model_str, limits);
   return true;
 }
 

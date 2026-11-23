@@ -103,7 +103,10 @@ class OPENHTJ2K_JPIP_EXPORT ChannelManager {
   // (additive statements mark, subtractive/partial unmark — see
   // CacheModel::apply).  Sessions still accept client model updates, e.g.
   // when the client discards cached bins.  Returns false if cid unknown.
-  bool apply_model(const std::string &cid, const std::string &model_str);
+  // `limits` are those of the image the channel serves: the channel's model
+  // outlives the request, so a server must pass them (CacheModel::Limits).
+  bool apply_model(const std::string &cid, const std::string &model_str,
+                   const CacheModel::Limits &limits = CacheModel::Limits());
 
   // §C.3.4 cclose: close one channel.  Returns true if it existed.
   bool close(const std::string &cid);
