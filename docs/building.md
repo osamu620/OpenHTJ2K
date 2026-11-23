@@ -79,6 +79,7 @@ on platform.
 | `-DOPENHTJ2K_QUIC=ON` | `OFF` | Enable HTTP/3 over QUIC for the JPIP server and demo. Requires MsQuic + nghttp3; see [JPIP HTTP/3 prerequisites](#jpip-http3-prerequisites-opt-in) below. |
 | `-DOPENHTJ2K_BUILD_APPS=OFF` | `ON` | Build only the library, without the command-line tools (and therefore without the test suite). |
 | `-DOPENHTJ2K_BUILD_TESTS=OFF` | `ON` | Skip the test tools and the CTest suite. |
+| `-DOPENHTJ2K_BUILD_FUZZERS=ON` | `OFF` | Link the fuzz targets of `tests/fuzz` with a fuzzing engine (clang, static library); see [dev/fuzzing.md](dev/fuzzing.md). |
 
 ### Portable x86-64 builds
 

@@ -24,3 +24,6 @@
 # would otherwise rewrite the committed LF reference to CRLF and break the
 # compare). Left diffable (-text, not binary) since the dump is readable hex.
 *.quant.txt -text
+
+# Fuzzing inputs (tests/fuzz/corpus) are bytes, whatever they look like.
+tests/fuzz/corpus/** binary

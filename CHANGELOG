@@ -349,6 +349,23 @@ of bounds.
 - `docs/wasm_bench.md` and `docs/planar_idwt_porting.md` moved to `docs/dev/`.
 
 ## Build and CI
+- Fuzz targets in the repository (`tests/fuzz`, `docs/dev/fuzzing.md`): six
+  libFuzzer targets for the decoder API, the transcoder, the JPIP client,
+  request and server sides, and the reader of the encoder's input images,
+  with dictionaries and a script that makes their seed corpora from the test
+  and conformance codestreams.
+  - The test suite builds them without a fuzzing engine and runs each over a
+    small corpus kept in the repository (`ctest -R fuzz_replay`, six tests),
+    on every platform: the corpus holds the inputs that once made a target
+    report something.
+  - `-DOPENHTJ2K_BUILD_FUZZERS=ON` links them with libFuzzer, or with the
+    engine in `LIB_FUZZING_ENGINE`; `tests/fuzz/build.sh` lays out targets,
+    dictionaries and seed corpora as OSS-Fuzz and ClusterFuzzLite take them,
+    and `tests/fuzz/run.sh` runs them all for a given time.
+  - The new workflow `.github/workflows/fuzz.yml` runs every target for five
+    minutes under AddressSanitizer and UndefinedBehaviorSanitizer, once for
+    the SSE2 code and once for the AVX2 code, on each pull request that
+    changes the library, the targets or the build files.
 - AddressSanitizer builds do not use the per-thread cache of large buffers: a
   cached buffer handed out again for a smaller request keeps its first size,
   so the sanitizer saw neither a write past the end of the request nor a use

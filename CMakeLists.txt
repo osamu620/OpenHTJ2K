@@ -384,6 +384,9 @@ endif()
 # the library (the test suite needs the tools, so it is skipped as well).
 option(OPENHTJ2K_BUILD_APPS "Build the command-line tools (decoder, encoder, JPIP server, ...)" ON)
 option(OPENHTJ2K_BUILD_TESTS "Build the test tools and register the test suite (needs OPENHTJ2K_BUILD_APPS)" ON)
+# Fuzz targets (tests/fuzz, docs/dev/fuzzing.md).  The test suite builds them without a
+# fuzzing engine and replays their corpus; this option links them with one instead.
+option(OPENHTJ2K_BUILD_FUZZERS "Build the fuzz targets of tests/fuzz with a fuzzing engine (needs the static library; see docs/dev/fuzzing.md)" OFF)
 set(_ohtj2k_build_tests ${OPENHTJ2K_BUILD_TESTS})
 if(OPENHTJ2K_BUILD_TESTS AND NOT OPENHTJ2K_BUILD_APPS)
   message(STATUS "OPENHTJ2K_BUILD_APPS is OFF: the test suite is not built")
@@ -623,4 +626,9 @@ if(_ohtj2k_build_tests)
       endif()
     endif()
   endforeach()
+endif()
+
+# Fuzz targets: after the test suite, whose files call enable_testing().
+if((_ohtj2k_build_tests OR OPENHTJ2K_BUILD_FUZZERS) AND NOT EMSCRIPTEN)
+  add_subdirectory(tests/fuzz)
 endif()

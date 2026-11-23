@@ -63,6 +63,8 @@ areas:
   calibration.
 - [dev/jpip_internals.md](dev/jpip_internals.md): JPIP internals, including data bins,
   the cache model, the JPP-stream format and the WASM C API.
+- [dev/fuzzing.md](dev/fuzzing.md): the fuzz targets of `tests/fuzz`, their
+  corpus in the test suite, and fuzzing on your own machine and in CI.
 
 ## Other references
 
