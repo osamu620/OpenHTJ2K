@@ -250,6 +250,30 @@ class openhtj2k_decoder_impl {
     }
   }
 
+  // A component without samples at the resolution being decoded (no columns, or no rows:
+  // the image is narrower than the component's subsampling step, or the resolution
+  // reduction left it nothing) still has as many empty rows as the image is high, and the
+  // rows of the image follow from every component.  The decoder went through all of them:
+  // a codestream of 94 bytes declaring 2^32 rows kept it busy for minutes.  Such an image
+  // is refused.
+  void require_samples() {
+    if (reduce_NL > get_max_safe_reduce_NL()) return;  // refused by the caller, in its own words
+    element_siz siz, Osiz, Rsiz;
+    main_header.SIZ->get_image_size(siz);
+    main_header.SIZ->get_image_origin(Osiz);
+    const uint16_t nc = main_header.SIZ->get_num_components();
+    for (uint16_t c = 0; c < nc; ++c) {
+      main_header.SIZ->get_subsampling_factor(Rsiz, c);
+      const uint32_t w = reduced_extent(ceil_int(Osiz.x, Rsiz.x), ceil_int(siz.x, Rsiz.x), reduce_NL);
+      const uint32_t h = reduced_extent(ceil_int(Osiz.y, Rsiz.y), ceil_int(siz.y, Rsiz.y), reduce_NL);
+      if (w == 0 || h == 0) {
+        open_htj2k::detail::fail("component %u has no samples (%u x %u%s): not supported.",
+                                 static_cast<unsigned>(c), w, h,
+                                 reduce_NL != 0 ? " at the reduced resolution" : "");
+      }
+    }
+  }
+
   void destroy();
 };
 
@@ -788,6 +812,7 @@ void openhtj2k_decoder_impl::invoke_line_based(std::vector<int32_t *> &buf,
         "openhtj2k_decoder_impl::invoke_line_based().");
   }
   require_int32_samples();
+  require_samples();
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -879,6 +904,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         "openhtj2k_decoder_impl::invoke_line_based_stream().");
   }
   require_int32_samples();
+  require_samples();
   if (reduce_NL > this->get_max_safe_reduce_NL()) {
     throw std::runtime_error(
         "Attempting to access a non-existent resolution level: -reduce exceeds the\n"
@@ -1294,6 +1320,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream_reuse(
         "openhtj2k_decoder_impl::invoke_line_based_stream_reuse().");
   }
   require_int32_samples();
+  require_samples();
   if (!single_tile_reuse_enabled_) {
     invoke_line_based_stream(std::move(cb), width, height, depth, is_signed);
     return;
@@ -1360,6 +1387,7 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
         "openhtj2k_decoder_impl::invoke_line_based_direct().");
   }
   require_int32_samples();
+  require_samples();
   if (!single_tile_reuse_enabled_) {
     // No single-tile cache — fall back to the callback path with a
     // synthesized callback that writes to the planar descriptors, each
