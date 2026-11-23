@@ -99,6 +99,9 @@ class openhtj2k_decoder_impl {
   bool is_parsed;
   // The last invoke*() found data of the image missing (is_truncated()).
   bool truncated_ = false;
+  // A tile without a tile-part was reported in this decode: the others stay silent
+  // (j2k_tile::report_no_tile_part()).
+  bool no_tile_part_reported_ = false;
   j2k_main_header main_header;
   stream_row_map stream_map_;   // output rows of the streaming entry points (parse())
   uint32_t enum_cs;             // EnumCS from JPH colr box; 0 for raw codestreams
@@ -179,7 +182,10 @@ class openhtj2k_decoder_impl {
   void set_skip_mct(bool skip) { skip_mct_ = skip; }
   bool is_truncated() const { return truncated_; }
   // Called at the start of every decode: the flag describes the last one.
-  void reset_truncated() { truncated_ = false; }
+  void reset_truncated() {
+    truncated_             = false;
+    no_tile_part_reported_ = false;
+  }
   // Reads the tile-parts up to the EOC marker, handing each SOT marker segment to
   // add_tile_part, which reads the rest of the tile-part into its tile.  A codestream
   // that ends first is truncated: the tile-part it ends in keeps the bytes there are, or
@@ -189,6 +195,7 @@ class openhtj2k_decoder_impl {
   // After a tile's packets are read (create_tile_buf()): notes a tile that lacks data.
   void note_tile_data(const j2k_tile &tile) {
     if (tile.is_data_missing()) truncated_ = true;
+    if (tile.has_no_tile_part()) no_tile_part_reported_ = true;
   }
   void set_precinct_filter(std::function<bool(uint16_t, uint16_t, uint8_t, uint32_t)> f);
   void set_packet_observer(
@@ -680,6 +687,7 @@ void openhtj2k_decoder_impl::decode_tiles(std::vector<j2k_tile> &tileSet,
       tile.line_based_decode = true;
       install_precinct_filter(tile, static_cast<uint16_t>(t));
       install_packet_observer(tile, static_cast<uint16_t>(t));
+      tile.report_no_tile_part(!no_tile_part_reported_);
       tile.create_tile_buf(main_header);
     } catch (std::exception &) {
       tile.destroy();
@@ -1014,6 +1022,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
         tileSet[tile_idx].line_based_decode = true;
         install_precinct_filter(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
         install_packet_observer(tileSet[tile_idx], static_cast<uint16_t>(tile_idx));
+        tileSet[tile_idx].report_no_tile_part(!no_tile_part_reported_);
         tileSet[tile_idx].create_tile_buf(main_header);
       } catch (std::exception &) {
         tileSet[tile_idx].destroy();

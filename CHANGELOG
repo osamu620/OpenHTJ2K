@@ -1,3 +1,12 @@
+# [Unreleased]
+
+## Changed
+- Decoder: a codestream without data for some of its tiles (one cut short lacks
+  every tile after the cut) gets the warning `codestream has no data for tile
+  N — decoding it as empty` for the first such tile of a decode, not for each
+  one. A codestream of 1.3 KB that declares 65280 tiles drew 65279 warnings,
+  more than 4 MB of text. `is_truncated()` reports such a decode as before.
+
 # [0.29.0] - 2026-11-23
 
 Adds `open_htj2k_transcode` (experimental), which converts a JPEG 2000 Part 1
