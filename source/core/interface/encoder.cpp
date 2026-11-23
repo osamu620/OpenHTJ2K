@@ -400,7 +400,8 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
     image_read_error = open_htj2k::detail::format("%s: %s", filename.c_str(), what);
     return EXIT_FAILURE;
   };
-  auto is_space = [](int ch) { return ch == SP || ch == LF || ch == CR || ch == TAB; };
+  // [&]: MSVC wants a capture mode even for constants that are only read.
+  auto is_space = [&](int ch) { return ch == SP || ch == LF || ch == CR || ch == TAB; };
   // Reads a decimal number of at most 31 bits; `ch` is its first character on entry and the
   // character after it on return.
   auto read_number = [&](int &ch, uint32_t &out) {
