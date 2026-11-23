@@ -509,6 +509,9 @@ int image::read_pnmpgx(const std::string &filename, const uint16_t nc) {
   if (!read_number(d, compw)) return fail("the header has no valid width.");
   d = skip_space(d);
   if (!read_number(d, comph)) return fail("the header has no valid height.");
+  // No samples: nothing to encode, and the rows below would be gone through for nothing
+  // (a header of 0 x 2000000000 took seconds).
+  if (compw == 0 || comph == 0) return fail("the image has no samples (its width or height is 0).");
   if (!isPGX) {
     d = skip_space(d);
     if (!read_number(d, val) || val < 1 || val > 65535) {

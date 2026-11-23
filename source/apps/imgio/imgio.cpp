@@ -115,8 +115,13 @@ class PnmStreamReader : public StreamReader {
 
     // Record the file position of the first pixel byte for random-access reads.
     data_start_ = ftell(fp_);
+    if (width_ == 0 || height_ == 0) {
+      // Before the row buffer: a header of 2000000000 x 0 allocated 2 GB for it.
+      printf("ERROR: %s has no samples (%u x %u).\n", filename.c_str(), width_, height_);
+      return -1;
+    }
     const uint64_t row_bytes = static_cast<uint64_t>(width_) * nc_ * bps_;
-    if (height_ != 0 && !file_holds(fp_, data_start_, row_bytes * height_)) {
+    if (!file_holds(fp_, data_start_, row_bytes * height_)) {
       printf("ERROR: %s holds fewer samples than its header declares (%u x %u).\n", filename.c_str(),
              width_, height_);
       return -1;
@@ -230,8 +235,12 @@ class PgxStreamReader : public StreamReader {
     // Same class of bug the PnmStreamReader was fixed for.
     if (d != ' ' && d != '\t' && d != '\n' && d != '\r') return -1;
     c.data_start = ftell(c.fp);
+    if (c.width == 0 || c.height == 0) {
+      printf("ERROR: %s has no samples (%u x %u).\n", fname.c_str(), c.width, c.height);
+      return -1;
+    }
     const uint64_t row_bytes = static_cast<uint64_t>(c.width) * ((c.bitdepth > 8) ? 2u : 1u);
-    if (c.height != 0 && !file_holds(c.fp, c.data_start, row_bytes * c.height)) {
+    if (!file_holds(c.fp, c.data_start, row_bytes * c.height)) {
       printf("ERROR: %s holds fewer samples than its header declares (%u x %u).\n", fname.c_str(), c.width,
              c.height);
       return -1;
