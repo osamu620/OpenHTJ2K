@@ -1,4 +1,19 @@
-# [Unreleased]
+# [0.29.0] - 2026-11-23
+
+Adds `open_htj2k_transcode` (experimental), which converts a JPEG 2000 Part 1
+codestream to HTJ2K, and HTJ2K to Part 1, in the coefficient domain, and fixes
+what fuzzing the decoder, the transcoder, JPIP, the command-line tools and the
+image readers found: small inputs that kept the decoder busy for minutes,
+made a JPIP server or the transcoder take gigabytes, or crashed a
+command-line tool, and one decoding error on valid codestreams. Images in many
+small tiles decode several times faster with more than one thread. The fuzz
+targets are now part of the repository and of the test suite.
+
+Encoded output is byte-identical to 0.28.1, and so is decoded output, with two
+exceptions. A code-block first included in a packet that follows two or more
+empty packets is now decoded (it used to decode to nothing). An image in which
+a component has no samples is now refused as not supported (the component used
+to decode to nothing).
 
 ## Added
 - `openhtj2k_decoder::init(buf, length, reduce_NL)` and
