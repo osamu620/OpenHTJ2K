@@ -6613,6 +6613,17 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
   }
 }
 
+bool j2k_tile::has_samples(uint8_t reduce_NL_val) {
+  for (uint16_t c = 0; c < num_components; ++c) {
+    const uint8_t NL_c   = tcomp[c].get_dwt_levels();
+    j2k_resolution *cr   = tcomp[c].access_resolution(static_cast<uint8_t>(NL_c - reduce_NL_val));
+    const element_siz p0 = cr->get_pos0();
+    const element_siz p1 = cr->get_pos1();
+    if (p1.x > p0.x && p1.y > p0.y) return true;
+  }
+  return false;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Line-based decode: lazy IDWT + per-row YCbCr→RGB + float→int32 conversion.
 // Must be called after create_tile_buf() (packets already parsed).
@@ -6620,6 +6631,9 @@ void j2k_tile::finalize(j2k_main_header &hdr, uint8_t reduce_NL, std::vector<int
 // ─────────────────────────────────────────────────────────────────────────────
 void j2k_tile::decode_line_based(j2k_main_header &hdr, uint8_t reduce_NL_val, std::vector<int32_t *> &dst) {
   OPENHTJ2K_TILE_INLINE_SCOPE();
+  // Without samples the rows below would still be gone through, one by one, for nothing:
+  // tiles one sample wide of components subsampled by 255 are mostly such tiles.
+  if (!has_samples(reduce_NL_val)) return;
   const uint16_t NC = num_components;
 
   // Pre-compute per-component output mapping parameters (same logic as finalize()).
@@ -6808,6 +6822,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
                                         uint32_t col_hi_in, bool skip_mct,
                                         std::vector<std::vector<int32_t>> *keep_rows, bool emit_all_rows) {
   OPENHTJ2K_TILE_INLINE_SCOPE();
+  if (!has_samples(reduce_NL_val)) return;  // nothing to decode, no row to deliver (see decode_line_based)
   const uint16_t NC = num_components;
 
   // Drain every component's in-flight strip/prefetch decode tasks on both normal

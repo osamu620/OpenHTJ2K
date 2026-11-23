@@ -1168,6 +1168,11 @@ class j2k_tile : public j2k_tile_base {
   void ycbcr_to_rgb();
   // inverse DC offset and clipping
   void finalize(j2k_main_header &main_header, uint8_t reduce_NL, std::vector<int32_t *> &dst);
+  // After create_tile_buf(): whether a component has a sample in this tile at the
+  // resolution reduced by reduce_NL.  A tile can have none: every component can be
+  // subsampled past its width or height, or lose its last sample to the reduction.
+  // The decode functions below return at once for such a tile; its rows hold nothing.
+  bool has_samples(uint8_t reduce_NL);
   // Line-based decode: parses packets first (via create_tile_buf), then lazily
   // pulls float rows component-by-component, applies per-row YCbCr→RGB and
   // float→int32 conversion.  Does NOT call decode() / ycbcr_to_rgb() / finalize().

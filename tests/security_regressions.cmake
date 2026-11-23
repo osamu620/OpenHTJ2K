@@ -604,8 +604,7 @@ set_tests_properties(security_dec_cli_exit_code PROPERTIES TIMEOUT 60)
 # are run with the output discarded (an output name without an extension):
 #  - 1024 x 1024, 4 x 4 code-blocks, 65535 layers (8.6 GB of per-layer state);
 #  - 16384 x 16384, 4 x 4 code-blocks, empty precincts (5.7 GB of code-blocks);
-#  - 1048576 x 2, 4 x 1024 code-blocks (line buffers 1024 rows high for 1-row subbands);
-#  - a component without columns and 2^26 rows (a strip list sized by its height).
+#  - 1048576 x 2, 4 x 1024 code-blocks (line buffers 1024 rows high for 1-row subbands).
 function(_sec_decode_discard name input threads)
   add_test(NAME ${name}
            COMMAND open_htj2k_dec -i ${SECURITY_DATA_DIR}/${input} -o ${name} -num_threads ${threads})
@@ -615,8 +614,18 @@ foreach(_t 1 4)
   _sec_decode_discard(security_layers_65535_t${_t} security_layers_65535.j2c ${_t})
   _sec_decode_discard(security_cblk_state_empty_precincts_t${_t} security_cblk_state_empty_precincts.j2c ${_t})
   _sec_decode_discard(security_ring_cblk_height_t${_t} security_ring_cblk_height.j2c ${_t})
-  _sec_decode_discard(security_width0_component_t${_t} security_width0_component.j2c ${_t})
 endforeach()
+# A component without samples: no columns (an image one sample wide at an odd position,
+# subsampled by 2) and 2^26 rows.  It has rows all the same, as many as the image is high,
+# and the decoder went through every one of them: 2^26 rows took 0.6 to 1.8 s, and a
+# codestream of the same 94 bytes can declare 2^31 - 1.  With a second component of one
+# column and a row every 255 (263 thousand samples), the rows of the image are still those
+# of the empty one.  Both are refused.  (The first fixture once made the decoder size a
+# strip list by the height.)
+_sec_rejects(security_width0_component security_width0_component.j2c
+             "component 0 has no samples .0 x 67108864.: not supported" mt)
+_sec_rejects(security_component_without_samples security_component_without_samples.j2c
+             "component 1 has no samples .0 x 67108864.: not supported" mt)
 # Rejected before the memory is allocated: 4096 x 4096 with 4 x 4 code-blocks whose
 # packets are not empty but carry no code-block (320 MB of code-blocks from 112 bytes);
 # 1400 x 1400 with 2 x 2 precincts (660 thousand precincts, 1 GB); 16384 components in 64
