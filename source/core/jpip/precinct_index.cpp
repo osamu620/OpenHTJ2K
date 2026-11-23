@@ -240,6 +240,15 @@ uint64_t CodestreamIndex::total_precincts() const {
   return sum;
 }
 
+uint64_t CodestreamIndex::precinct_id_bound() const {
+  // I = t + (c + s * Ncomp) * Ntiles with s < total of its tile-component.
+  uint64_t max_total = 0;
+  for (const auto &info : tcinfo_) {
+    if (info.total > max_total) max_total = info.total;
+  }
+  return max_total * num_components_ * num_tiles();
+}
+
 uint8_t CodestreamIndex::max_NL() const {
   uint8_t m = 0;
   for (const auto &info : tcinfo_) {

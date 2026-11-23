@@ -133,6 +133,9 @@ class CodestreamIndex {
 
   // Total precinct count summed over all (t, c).
   OPENHTJ2K_JPIP_EXPORT uint64_t total_precincts() const;
+  // Exclusive upper bound of the precinct data-bin identifiers I(t, c, r, p_rc)
+  // of the codestream: every precinct the image has is below it.
+  OPENHTJ2K_JPIP_EXPORT uint64_t precinct_id_bound() const;
 
  private:
   CodestreamIndex() = default;

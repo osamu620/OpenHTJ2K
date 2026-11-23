@@ -18,8 +18,9 @@ namespace jpip {
 // memory and CPU.  The cache model is advisory: under-applying it only makes
 // the server re-send data the client already holds (correct, just not
 // optimal), so stopping early is always safe.  The cap sits far above the
-// data-bin count of any realistic gigapixel session (~10^5–10^6) while
-// keeping worst-case memory bounded (~40 bytes per map entry).
+// data-bin count of any realistic gigapixel session (~10^5–10^6).
+// This bounds one call.  What a model holds after many calls (a session's
+// model lives as long as its channel) is bounded by CacheModel::Limits.
 static constexpr uint64_t kMaxModelBinOps = 1u << 22;  // 4,194,304
 
 void CacheModel::mark(uint8_t class_id, uint64_t in_class_id) {
@@ -148,13 +149,17 @@ std::string CacheModel::format() const {
   return out;
 }
 
-CacheModel CacheModel::parse(const std::string &model_str) {
+CacheModel CacheModel::parse(const std::string &model_str) { return parse(model_str, Limits()); }
+
+CacheModel CacheModel::parse(const std::string &model_str, const Limits &limits) {
   CacheModel m;
-  m.apply(model_str);
+  m.apply(model_str, limits);
   return m;
 }
 
-void CacheModel::apply(const std::string &model_str) {
+void CacheModel::apply(const std::string &model_str) { apply(model_str, Limits()); }
+
+void CacheModel::apply(const std::string &model_str, const Limits &limits) {
   CacheModel &m = *this;
   if (model_str.empty()) return;
 
@@ -188,6 +193,8 @@ void CacheModel::apply(const std::string &model_str) {
           static_cast<const char *>(std::memchr(q, ':', static_cast<size_t>(tok_end - q)));
       if (subtractive) {
         m.unmark(cls, 0);
+      } else if (m.bins_.size() >= limits.bins && m.bins_.find(key(cls, 0)) == m.bins_.end()) {
+        // the model is full
       } else if (colon != nullptr) {
         m.mark_partial(cls, 0, std::strtoull(colon + 1, nullptr, 10));
       } else {
@@ -215,12 +222,26 @@ void CacheModel::apply(const std::string &model_str) {
     uint64_t partial_bytes = 0;
     const bool partial     = (numend < tok_end && *numend == ':');
     if (partial) partial_bytes = std::strtoull(numend + 1, nullptr, 10);
-    for (uint64_t id = start; id <= end_id; ++id) {
+    // Bins the image does not have: nothing to remember, nothing to forget.
+    const uint64_t id_bound = (cls == kMsgClassPrecinct)     ? limits.precinct_ids
+                              : (cls == kMsgClassTileHeader) ? limits.tile_header_ids
+                                                             : limits.metadata_ids;
+    if (start >= id_bound) continue;
+    if (end_id >= id_bound) end_id = id_bound - 1;
+    for (uint64_t id = start;; ++id) {
       if (budget == 0) return;  // bin-operation budget spent — ignore the rest
       --budget;
-      if (subtractive) m.unmark(cls, id);
-      else if (partial) m.mark_partial(cls, id, partial_bytes);
-      else m.mark(cls, id);
+      if (subtractive) {
+        m.unmark(cls, id);
+      } else if (m.bins_.size() >= limits.bins && m.bins_.find(key(cls, id)) == m.bins_.end()) {
+        // The model is full.  Statements about bins it holds still apply, and a
+        // subtractive statement makes room: keep reading.
+      } else if (partial) {
+        m.mark_partial(cls, id, partial_bytes);
+      } else {
+        m.mark(cls, id);
+      }
+      if (id == end_id) break;  // not "id <= end_id": end_id may be 2^64 - 1
     }
   }
 }

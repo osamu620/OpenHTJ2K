@@ -88,6 +88,10 @@ struct ServerState {
   // JPIP-cnew.  Granting a channel commits the server to never re-sending
   // bins already delivered on it; ChannelManager carries that state.
   ChannelManager                    channels;
+  // The data-bins the image has.  A request's `model=` field is read within
+  // these: statements about other bins are ignored, so that a client cannot
+  // make the server remember (for the life of a channel) bins that do not exist.
+  CacheModel::Limits                model_limits;
 };
 
 // Callback invoked once per completed JPP-stream message (including EOR).
@@ -446,16 +450,16 @@ void handle_connection(TcpStream &conn, ServerState &st) {
     // client discarded cached bins): fold them into the channel's model
     // and into this response's view of it.
     if (!req.model.empty()) {
-      st.channels.apply_model(session_cid, req.model);
-      client_cache.apply(req.model);
+      st.channels.apply_model(session_cid, req.model, st.model_limits);
+      client_cache.apply(req.model, st.model_limits);
     }
   } else {
-    if (!req.model.empty()) client_cache = CacheModel::parse(req.model);
+    if (!req.model.empty()) client_cache = CacheModel::parse(req.model, st.model_limits);
     if (req.has_cnew) {
       const std::string transport = ChannelManager::negotiate_transport(req.cnew);
       if (!transport.empty()) {
         session_cid = st.channels.open();
-        if (!req.model.empty()) st.channels.apply_model(session_cid, req.model);
+        if (!req.model.empty()) st.channels.apply_model(session_cid, req.model, st.model_limits);
         cnew_header = "cid=" + session_cid + ",path=jpip,transport=" + transport;
       }
     }
@@ -558,7 +562,7 @@ std::vector<uint8_t> handle_h3_request(const ServerState &st,
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();
   CacheModel h3_cache;
-  if (!jpip_req.model.empty()) h3_cache = CacheModel::parse(jpip_req.model);
+  if (!jpip_req.model.empty()) h3_cache = CacheModel::parse(jpip_req.model, st.model_limits);
   size_t n_keys = 0;
   auto jpp = build_jpp_stream(st, jpip_req.view_window, h3_cache, &n_keys,
                               jpip_req.has_len ? jpip_req.len : UINT64_MAX);
@@ -619,6 +623,14 @@ int main(int argc, char **argv) {
 
   st.idx = CodestreamIndex::build(st.codestream.data(), st.codestream.size());
   if (!st.idx) { std::fprintf(stderr, "CodestreamIndex build failed\n"); return EXIT_FAILURE; }
+  st.model_limits.precinct_ids    = st.idx->precinct_id_bound();
+  st.model_limits.tile_header_ids = st.idx->num_tiles();
+  st.model_limits.metadata_ids    = 1;  // metadata-bin 0 is the one this server has
+  {
+    // main header + metadata-bin 0 + tile headers + precincts
+    const uint64_t bins = 2 + st.idx->num_tiles() + st.idx->total_precincts();
+    if (bins < st.model_limits.bins) st.model_limits.bins = bins;
+  }
 
   walk_codestream(st.codestream.data(), st.codestream.size(), &st.layout);
 

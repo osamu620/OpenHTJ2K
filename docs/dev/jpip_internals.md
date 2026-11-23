@@ -108,6 +108,17 @@ offset), and `-`-prefixed subtractive statements (`-P5` — the client
 discarded the bin; the server forgets it was sent). The same model
 statements work in stateless requests and as session-mode updates.
 
+A statement is a few bytes and can name any range of bins, and a
+model takes memory for every bin it holds, so a server reads the
+field within the limits of the image it serves: `parse()` and
+`apply()` take a `CacheModel::Limits` (the precinct identifiers
+below `CodestreamIndex::precinct_id_bound()`, the tile headers of
+its tiles, the metadata-bins it has, and the number of bins of the
+image), and `ChannelManager::apply_model()` passes it on.
+Statements about other bins are ignored. Without limits a model
+stops growing at 2^22 bins, and one call does at most 2^22 bin
+operations.
+
 The browser demos track only headers — precincts are intentionally
 excluded so the foveation demo's periphery decays when the gaze
 moves.

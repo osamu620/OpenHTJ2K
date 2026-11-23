@@ -35,6 +35,7 @@ using open_htj2k::jpip::JpipRequest;
 using open_htj2k::jpip::kMsgClassMainHeader;
 using open_htj2k::jpip::kMsgClassMetadata;
 using open_htj2k::jpip::kMsgClassPrecinct;
+using open_htj2k::jpip::kMsgClassTileHeader;
 using open_htj2k::jpip::parse_jpip_query;
 using open_htj2k::jpip::RequestParseStatus;
 
@@ -108,6 +109,60 @@ int main() {
     CHECK(cm.close(cid), "close known cid");
     CHECK(!cm.close(cid), "double close");
     CHECK(!cm.snapshot(cid, &snap), "snapshot after close");
+  }
+
+  // ── Model statements within the data-bins the image has ───────────────
+  // A statement is a few bytes and can name 2^64 bins; a channel's model
+  // lives as long as the channel.  Without limits, a session that sent
+  // "P0-4194303", then "P4194304-8388607", ... grew the server by hundreds
+  // of megabytes a request.
+  {
+    CacheModel::Limits image;  // 10 precinct ids, 4 tiles, metadata-bin 0
+    image.precinct_ids    = 10;
+    image.tile_header_ids = 4;
+    image.metadata_ids    = 1;
+    image.bins            = 2 + 4 + 10;
+
+    CacheModel m = CacheModel::parse("P0-18446744073709551615", image);
+    CHECK(m.size() == 10, "precinct range cut at the image's bound (%zu)", m.size());
+    CHECK(m.has(kMsgClassPrecinct, 9) && !m.has(kMsgClassPrecinct, 10), "bound is exclusive");
+    m.apply("P10-20,P18446744073709551615,Ht4-65535,M1-99", image);
+    CHECK(m.size() == 10, "statements past the bounds add nothing (%zu)", m.size());
+    m.apply("Hm,Ht0-65535,M0-99,P3:17", image);
+    CHECK(m.size() == 16, "the whole image is 16 bins (%zu)", m.size());
+    CHECK(m.has(kMsgClassTileHeader, 3) && !m.has(kMsgClassTileHeader, 4), "tile-header bound");
+    CHECK(m.has(kMsgClassMetadata, 0) && !m.has(kMsgClassMetadata, 1), "metadata bound");
+    CHECK(m.has(kMsgClassPrecinct, 3), "a complete bin stays complete");
+    m.apply("-P0-18446744073709551615", image);
+    CHECK(m.size() == 6 && !m.has(kMsgClassPrecinct, 0), "subtractive range within the bound");
+
+    // The number of bins alone (identifiers unbounded, as for a caller
+    // that passes no image): a full model takes no new bin, still takes
+    // statements about the bins it holds, and has room again after a
+    // subtractive statement.
+    CacheModel::Limits few;
+    few.bins = 5;
+    CacheModel f = CacheModel::parse("P100-199", few);
+    CHECK(f.size() == 5 && f.has(kMsgClassPrecinct, 104) && !f.has(kMsgClassPrecinct, 105),
+          "model full at 5 bins (%zu)", f.size());
+    f.apply("P1000000-2000000,Hm,M0", few);
+    CHECK(f.size() == 5, "a full model does not grow (%zu)", f.size());
+    f.apply("-P100,P7:33", few);
+    CHECK(f.size() == 5 && f.received_bytes(kMsgClassPrecinct, 7) == 33, "room after a subtraction");
+    f.apply("P7", few);
+    CHECK(f.size() == 5 && f.has(kMsgClassPrecinct, 7), "a held bin can still be completed");
+
+    // A channel's model over many requests.
+    ChannelManager cm;
+    const std::string cid = cm.open();
+    for (uint64_t i = 0; i < 64; ++i) {
+      const std::string range =
+          "P" + std::to_string(i * 4194304u) + "-" + std::to_string(i * 4194304u + 4194303u);
+      CHECK(cm.apply_model(cid, range, image), "apply on the channel");
+    }
+    CacheModel snap;
+    CHECK(cm.snapshot(cid, &snap), "snapshot of the channel");
+    CHECK(snap.size() == 10, "the channel's model stays within the image (%zu)", snap.size());
   }
 
   // ── LRU eviction at the channel cap ───────────────────────────────────

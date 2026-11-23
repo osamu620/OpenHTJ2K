@@ -36,6 +36,22 @@ namespace jpip {
 
 class OPENHTJ2K_JPIP_EXPORT CacheModel {
  public:
+  // What a model statement may name and how much a model may hold.  A model
+  // costs memory per data-bin, and a statement is a few bytes that can name
+  // 2^64 of them: a server gives apply() and parse() the limits of the image
+  // it serves (CodestreamIndex::precinct_id_bound(), its number of tiles, the
+  // metadata-bins it has), so that a client cannot make it remember bins the
+  // image does not have.  The defaults bound the identifiers by nothing and
+  // the model by `bins` alone.
+  struct Limits {
+    uint64_t precinct_ids    = UINT64_MAX;  // identifiers below this exist (exclusive bound)
+    uint64_t tile_header_ids = UINT64_MAX;
+    uint64_t metadata_ids    = UINT64_MAX;
+    // Data-bins the model may hold: statements that would add one more are
+    // ignored (the cache model is advisory, see apply()).
+    uint64_t bins = static_cast<uint64_t>(1) << 22;
+  };
+
   // Mark a bin as held in full.
   void mark(uint8_t class_id, uint64_t in_class_id);
   // Mark a bin as held up to `bytes` payload bytes (§C.9.2 ":bytes"
@@ -64,6 +80,7 @@ class OPENHTJ2K_JPIP_EXPORT CacheModel {
 
   // Parse a model request field value into a CacheModel.
   static CacheModel parse(const std::string &model_str);
+  static CacheModel parse(const std::string &model_str, const Limits &limits);
 
   // Apply a model request field value onto this model in statement order
   // (§C.9.2): additive statements mark bins, "-"-prefixed subtractive
@@ -72,6 +89,11 @@ class OPENHTJ2K_JPIP_EXPORT CacheModel {
   // re-sent in full rather than skipped.  Used by session servers to fold
   // a request's `model=` updates into the channel's persistent model.
   void apply(const std::string &model_str);
+  // The same within `limits`: a statement about a bin past the identifier
+  // bounds is ignored, and so is one that would take the model past
+  // limits.bins.  Ignoring a statement only makes the server send again
+  // what the client already holds.
+  void apply(const std::string &model_str, const Limits &limits);
 
  private:
   static uint64_t key(uint8_t cls, uint64_t id) {
