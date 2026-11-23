@@ -1,4 +1,12 @@
-# [Unreleased]
+# [0.29.1] - 2026-11-23
+
+Reports the tiles a codestream has no data for once per decode, not once for
+each tile. A codestream cut short lacks every tile after the cut, and a small
+one can declare 65535 tiles: one of 1.3 KB drew 65279 warnings from a single
+decode. An application that passes the library's warnings on to its log got
+all of them.
+
+Encoded and decoded output are byte-identical to 0.29.0.
 
 ## Changed
 - Decoder: a codestream without data for some of its tiles (one cut short lacks
