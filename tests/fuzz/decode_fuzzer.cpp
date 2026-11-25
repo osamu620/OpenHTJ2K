@@ -114,10 +114,10 @@ void decode_frame(openhtj2k_decoder &dec, const uint8_t *cs, size_t len, const O
     case 2: {
       uint64_t acc = 0;
       auto on_row  = [&](uint32_t y, int32_t *const *row, uint16_t n) {
-        for (uint16_t i = 0; i < n && i < w.size(); ++i) {
+        for (size_t i = 0; i < n && i < w.size(); ++i) {
           if (row[i] == nullptr || w[i] == 0) continue;
           acc += static_cast<uint32_t>(row[i][0]) + static_cast<uint32_t>(row[i][w[i] - 1]) + y;
-          acc += dec.get_stream_component_row(i, y);
+          acc += dec.get_stream_component_row(static_cast<uint16_t>(i), y);
         }
       };
       if (o.entry == 2) {

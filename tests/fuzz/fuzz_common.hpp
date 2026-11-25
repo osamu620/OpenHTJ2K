@@ -98,7 +98,7 @@ inline void decode_result(const uint8_t *cs, size_t len) {
     uint64_t acc = 0;
     dec.invoke_line_based_stream(
         [&](uint32_t, int32_t *const *rows, uint16_t n) {
-          for (uint16_t i = 0; i < n && i < w.size(); ++i) {
+          for (size_t i = 0; i < n && i < w.size(); ++i) {
             if (rows[i] != nullptr && w[i] != 0) acc += static_cast<uint32_t>(rows[i][w[i] - 1]);
           }
         },
