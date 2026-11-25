@@ -5199,6 +5199,21 @@ void j2k_tile::create_tile_buf(j2k_main_header &main_header) {
     // every (c, r, p) tuple into cached_crp_.
     porder_info.add(0, 0, this->numlayers, static_cast<uint8_t>(max_c_NL + 1), this->num_components,
                     this->progression_order);
+    // Resolution reduction: in a single progression (no POC) that runs through the
+    // resolutions outermost — RLCP, RPCL, or LRCP of one layer — every packet of a
+    // resolution comes before any of the next, so the traversal stops after the last
+    // resolution a component decodes.  The tile's other packets are neither read nor given
+    // code-blocks (a 1/32 thumbnail of a large image parsed all of them).
+    if (this->reduce_NL > 0 && porder_info.nPOC == 1) {
+      const uint8_t po = porder_info.Ppoc[0];
+      if (po == 1 || po == 2 || (po == 0 && this->numlayers == 1)) {
+        uint8_t needed = 0;  // one past the highest resolution any component decodes
+        for (uint16_t cc = 0; cc < num_components; ++cc) {
+          needed = std::max(needed, static_cast<uint8_t>(this->tcomp[cc].NL - this->reduce_NL + 1));
+        }
+        porder_info.REpoc[0] = std::min(porder_info.REpoc[0], needed);
+      }
+    }
     uint8_t PO, RS, RE, r, local_RE;
     uint16_t LYE, CS, CE, c, l;
     uint32_t p;
