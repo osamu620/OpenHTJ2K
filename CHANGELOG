@@ -1,6 +1,11 @@
 # [Unreleased]
 
 ## Changed
+- Decoder, region decoding: each resolution level writes a zero row for every row
+  above the row window (`set_row_range()`) to keep its inverse DWT in step; it no
+  longer clears the row once its eight ring slots hold zeros. A 1024 x 1024
+  window 15000 rows down a 16384 x 16384 image took 18 ms more than one at the
+  top; it now takes 3 ms more.
 - Decoder, resolution reduction: when the progression runs through the
   resolutions outermost (RPCL, RLCP, or LRCP of one layer, without POC), a
   tile's packets are read only up to the last resolution decoded; the rest are
