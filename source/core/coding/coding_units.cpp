@@ -171,6 +171,11 @@ struct idwt_level_src_ctx {
   int32_t row_lo;
   int32_t row_hi;
   bool use_i32;
+  // Zero rows this level has written above row_lo since the window was last reset.  Those
+  // rows come first and are all zero, and lifting keeps a zero row between zero rows at zero,
+  // so once every ring slot (or the HORZ / NO output buffer) has had one, the later ones need
+  // no memset.
+  int32_t zero_rows;
 };
 
 // Whole-sample symmetric extension: reflect idx into [0, len).
@@ -225,8 +230,11 @@ static void idwt_level_src_fn(void *ctx, int32_t abs_row, sprec_t *out) {
   // (abs_row is always ≥ v0 by fetch_one's invariant), predicted
   // not-taken, and costs one load + one compare per fetch.
   if (abs_row < c->row_lo) {
-    const int32_t width_z = c->u1 - c->u0;
-    if (width_z > 0) memset(out, 0, sizeof(sprec_t) * static_cast<size_t>(width_z));
+    if (c->zero_rows < IDWT_STATE_RING_DEPTH) {
+      const int32_t width_z = c->u1 - c->u0;
+      if (width_z > 0) memset(out, 0, sizeof(sprec_t) * static_cast<size_t>(width_z));
+      ++c->zero_rows;
+    }
     bool pulls_child = false;
     if (c->has_child) {
       if (c->dir == DWT_NO || c->dir == DWT_HORZ) {
@@ -3522,6 +3530,7 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
     c.col_hi              = u1;
     c.row_lo              = v0;
     c.row_hi              = v1;
+    c.zero_rows           = 0;
     c.use_i32             = use_i32_pipe;
 
     // lp_tmp only needed when has_child (child state writes output into it as fallback).
@@ -3909,9 +3918,10 @@ void j2k_tile_component::reset_line_decode_cursors() {
     // frame's window after init_line_decode().
     idwt_level_src_ctx *ctxs = ld->ctxs.get();
     for (int32_t i = 0; i < n; ++i) {
-      ctxs[i].row_lo = states[i].v0;
-      ctxs[i].row_hi = states[i].v1;
-      ctxs[i].col_lo = ctxs[i].u0;
+      ctxs[i].row_lo    = states[i].v0;
+      ctxs[i].row_hi    = states[i].v1;
+      ctxs[i].zero_rows = 0;
+      ctxs[i].col_lo    = ctxs[i].u0;
       ctxs[i].col_hi = ctxs[i].u1;
       idwt_2d_state_set_col_range(&states[i], states[i].u0, states[i].u1);
       hl_bufs[i].clear_col_window();
