@@ -27,6 +27,13 @@
   the same samples, so the output was right, but the read was of uninitialised
   memory (MemorySanitizer reports it). The buffers are now zeroed the first time
   a window leaves columns out. Full-width decodes are unchanged.
+- Decoder: decoding an HTJ2K codestream changed it. The HT block decoder
+  replaced the last two bytes of every code-block's cleanup segment in the
+  codestream buffer, which with `init_borrow()` is the caller's: a second decode
+  of the same buffer failed, two decoders could not share one buffer, and a
+  read-only buffer (a read-only memory mapping) would fault. The decoder now
+  only reads the codestream; the output is unchanged. Part 1 codestreams were
+  not affected.
 
 # [0.29.1] - 2026-11-23
 
