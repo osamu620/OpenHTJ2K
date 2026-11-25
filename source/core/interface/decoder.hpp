@@ -200,10 +200,11 @@ class openhtj2k_decoder {
   // filter support.  Default = [0, UINT32_MAX) → full width.  Columns outside
   // the range produce indeterminate output; the caller must only read within
   // the window.  Honoured by invoke_line_based_stream and
-  // invoke_line_based_stream_reuse (every frame, including the first): both
-  // decode only the tiles and code-blocks the window needs, and the reuse entry
-  // point also restricts the IDWT to it.  The other entry points decode full
-  // width.  The window stays in effect for later frames until changed;
+  // invoke_line_based_stream_reuse (every frame, including the first), and by
+  // invoke_line_based_direct where it goes through them: they decode only the
+  // tiles and code-blocks the window needs, and the reuse entry point also
+  // restricts the IDWT to it.  invoke_line_based() decodes full width.  The
+  // window stays in effect for later frames until changed;
   // set_col_range(0, UINT32_MAX) restores full width.
   OPENHTJ2K_EXPORT void set_col_range(uint32_t col_lo, uint32_t col_hi);
 

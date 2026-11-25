@@ -995,6 +995,14 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   // Output rows (stream_row_map.hpp, documented with invoke_line_based_stream in
   // decoder.hpp).  Each tile delivers the output rows that start in it.
   const stream_row_map &map = stream_map_;
+  // A tile row that ends above the row window (set_row_range) is not decoded: a component
+  // row covers at most YRsiz output rows, so no output row from max(YRsiz) rows past the
+  // tile row's end on takes a component row of it.
+  uint32_t max_yr = 1;
+  for (const uint32_t v : map.yr) max_yr = std::max(max_yr, v);
+  auto above_window = [&](uint64_t g1) {
+    return row_lo_ > 0 && static_cast<uint64_t>(map.first_out_at(g1)) + max_yr <= row_lo_;
+  };
 
   if (numTiles.x == 1) {
     // Fast path: single tile column — deliver rows directly to user callback, no accumulator.
@@ -1007,6 +1015,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       uint64_t g0, g1;
       tile_row_span(ty, g0, g1);
       if (map.first_out_at(g0) >= row_limit_) break;  // past the window
+      if (above_window(g1)) continue;
       // The tile's rows go to the callback as image rows, so the tile must span the
       // image width in every component (the SIZ checks guarantee it for one tile column).
       for (uint16_t c = 0; c < num_components; ++c) {
@@ -1047,7 +1056,12 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   std::vector<uint32_t> tr_first(num_components);
   std::vector<uint32_t> tr_rows(num_components);
   std::vector<int32_t *> row_ptrs(num_components);
-  std::vector<std::vector<int32_t>> accum(num_components);
+  // Allocated without zero-filling.  A decode without a column window zeroes each tile
+  // row's rows (a tile without data decodes as zeros); with one, only the window's columns
+  // are zeroed and written, so the rest of each full-width row is never touched (nor its
+  // pages faulted in) and holds indeterminate values, as set_col_range() documents.
+  std::vector<std::unique_ptr<int32_t[]>> accum(num_components);
+  std::vector<size_t> accum_cap(num_components, 0);
   std::vector<std::vector<int32_t>> carry(num_components);
   for (uint16_t c = 0; c < num_components; ++c) carry[c].assign(std::max<size_t>(width[c], 1), 0);
   // The tiles of a tile row decode side by side (decode_tiles()), each into its own columns
@@ -1073,9 +1087,11 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   // reach up to XRsiz - 1 reference columns further, so the test widens it by that much.
   const bool col_window = col_lo_ != 0 || col_hi_ != UINT32_MAX;
   uint32_t max_xr       = 1;
+  std::vector<uint32_t> xrs(num_components);
   for (uint16_t c = 0; c < num_components; ++c) {
     element_siz r;
     main_header.SIZ->get_subsampling_factor(r, c);
+    xrs[c] = r.x;
     max_xr = std::max(max_xr, r.x);
   }
   const uint64_t img_x0 = stream_row_map::ceil_shift(Osiz.x, reduce_NL);
@@ -1087,6 +1103,12 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
   };
   const uint64_t win_lo = (col_lo_ > max_xr) ? col_lo_ - max_xr : 0;
   const uint64_t win_hi = static_cast<uint64_t>(col_hi_) + max_xr;
+  // The window's columns [x0, x1) in component c.
+  auto window_cols = [&](uint16_t c, size_t &x0, size_t &x1) {
+    x0 = static_cast<size_t>(std::min<uint64_t>(win_lo / xrs[c], width[c]));
+    x1 = static_cast<size_t>(std::min<uint64_t>((win_hi + xrs[c] - 1) / xrs[c], width[c]));
+    if (x1 < x0) x1 = x0;
+  };
 
   for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
     uint64_t g0, g1;
@@ -1094,16 +1116,30 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     const uint32_t yb = map.first_out_at(g0);
     const uint32_t ye = map.first_out_at(g1);
     if (yb >= row_limit_) break;  // past the window
+    if (above_window(g1)) continue;
 
-    // (Re)allocate full-width accumulator buffers for this tile row.
-    // assign() reuses existing capacity when the new size fits.
+    // Full-width accumulator rows for this tile row (the buffers grow and are reused).
     // A subsampled component can have no rows in a tile row; keep one zero row so the
     // row pointers stay valid.
     for (uint16_t c = 0; c < num_components; ++c) {
       const uint64_t yr = map.yr[c];
       tr_first[c]       = static_cast<uint32_t>((g0 + yr - 1) / yr);
       tr_rows[c]        = static_cast<uint32_t>((g1 + yr - 1) / yr) - tr_first[c];
-      accum[c].assign(static_cast<size_t>(std::max(tr_rows[c], 1U)) * width[c], 0);
+      const size_t nrows = std::max(tr_rows[c], 1U);
+      const size_t need  = nrows * width[c];
+      if (need > accum_cap[c]) {
+        accum[c].reset(new int32_t[std::max<size_t>(need, 1)]);
+        accum_cap[c] = need;
+      }
+      if (!col_window) {
+        std::fill(accum[c].get(), accum[c].get() + need, 0);
+      } else {
+        size_t x0, x1;
+        window_cols(c, x0, x1);
+        for (size_t r = 0; r < nrows; ++r) {
+          std::fill(accum[c].get() + r * width[c] + x0, accum[c].get() + r * width[c] + x1, 0);
+        }
+      }
     }
 
     order.clear();
@@ -1143,7 +1179,7 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
           if (tc.w[c] == 0 || k == tc.last_k[c] || k < tr_first[c] || k - tr_first[c] >= tr_rows[c])
             continue;
           tc.last_k[c] = k;
-          int32_t *dst = accum[c].data() + static_cast<size_t>(k - tr_first[c]) * width[c] + tc.x_off[c];
+          int32_t *dst = accum[c].get() + static_cast<size_t>(k - tr_first[c]) * width[c] + tc.x_off[c];
           std::memcpy(dst, rows[c], tc.w[c] * sizeof(int32_t));
         }
       };
@@ -1168,15 +1204,17 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     for (uint32_t y = e0; y < e1; ++y) {
       for (uint16_t c = 0; c < num_components; ++c) {
         const uint32_t k = map.abs_row(c, y);
-        row_ptrs[c] = (k >= tr_first[c]) ? accum[c].data() + static_cast<size_t>(k - tr_first[c]) * width[c]
+        row_ptrs[c] = (k >= tr_first[c]) ? accum[c].get() + static_cast<size_t>(k - tr_first[c]) * width[c]
                                          : carry[c].data();
       }
       cb(y, row_ptrs.data(), num_components);
     }
     for (uint16_t c = 0; c < num_components; ++c) {
       if (tr_rows[c] > 0 && width[c] > 0) {
-        std::memcpy(carry[c].data(), accum[c].data() + static_cast<size_t>(tr_rows[c] - 1) * width[c],
-                    width[c] * sizeof(int32_t));
+        size_t x0 = 0, x1 = width[c];
+        if (col_window) window_cols(c, x0, x1);
+        const int32_t *last = accum[c].get() + static_cast<size_t>(tr_rows[c] - 1) * width[c];
+        std::memcpy(carry[c].data() + x0, last + x0, (x1 - x0) * sizeof(int32_t));
       }
     }
   }
@@ -1442,6 +1480,19 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
     // synthesized callback that writes to the planar descriptors, each
     // component row once, at the first output row it covers.
     std::vector<uint32_t> next(nc, 0);  // next row of each plane
+    // With a column window the stream rows hold indeterminate samples outside it
+    // (set_col_range()), so only the window's columns go to the planes: [x_lo, x_hi) of
+    // component c, the columns decoder.hpp gives a subsampled component.
+    std::vector<uint32_t> x_lo(nc, 0), x_hi(nc, UINT32_MAX);
+    if (col_lo_ != 0 || col_hi_ != UINT32_MAX) {
+      for (uint16_t c = 0; c < nc && c < main_header.SIZ->get_num_components(); ++c) {
+        element_siz r;
+        main_header.SIZ->get_subsampling_factor(r, c);
+        x_lo[c] = col_lo_ / r.x;
+        x_hi[c] = static_cast<uint32_t>(std::min<uint64_t>((static_cast<uint64_t>(col_hi_) + r.x - 1) / r.x,
+                                                           UINT32_MAX));
+      }
+    }
     invoke_line_based_stream(
         [&](uint32_t y, int32_t *const *rows, uint16_t nc_cb) {
           for (uint16_t c = 0; c < nc_cb && c < nc; ++c) {
@@ -1449,10 +1500,11 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
             const uint32_t cy         = stream_map_.row(c, y);
             if (cy == UINT32_MAX || cy < next[c] || cy >= d.height) continue;
             next[c]          = cy + 1;
-            const uint32_t w = std::min(d.width, width[c]);  // a wider plane gets the component's samples
+            const uint32_t w = std::min({d.width, width[c], x_hi[c]});  // a wider plane gets the
+                                                                        // component's samples
             if (d.is_16bit) {
               auto *dst = static_cast<uint16_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
-              for (uint32_t x = 0; x < w; ++x) {
+              for (uint32_t x = x_lo[c]; x < w; ++x) {
                 int32_t v = rows[c][x];
                 if (v < d.minval) v = d.minval;
                 if (v > d.maxval) v = d.maxval;
@@ -1460,7 +1512,7 @@ void openhtj2k_decoder_impl::invoke_line_based_direct(
               }
             } else {
               auto *dst = static_cast<uint8_t *>(d.base) + static_cast<size_t>(cy) * d.stride;
-              for (uint32_t x = 0; x < w; ++x) {
+              for (uint32_t x = x_lo[c]; x < w; ++x) {
                 int32_t v = rows[c][x];
                 if (v < d.minval) v = d.minval;
                 if (v > d.maxval) v = d.maxval;
