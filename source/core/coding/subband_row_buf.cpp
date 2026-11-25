@@ -262,8 +262,8 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx, int32_
 void j2k_subband_row_buf::drain_prefetch() {
 #ifdef OPENHTJ2K_THREAD
   // spin_wait drains the queue by running pending tasks on the calling thread,
-  // so the in-flight htj2k_decode workers (which modDcup-mutate the borrowed
-  // codestream bytes) finish before the caller overwrites/frees that memory.
+  // so the in-flight htj2k_decode workers (which read the borrowed codestream
+  // bytes) finish before the caller overwrites/frees that memory.
   // A no-op when par_cnt is already 0.
   spin_wait(par_cnt);
   prefetch_y0 = prefetch_y1 = -1;

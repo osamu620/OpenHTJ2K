@@ -176,8 +176,8 @@ struct j2k_subband_row_buf {
   void free_resources();
 
   // Drain any in-flight strip-prefetch tasks (spin-wait on par_cnt) and clear
-  // the pending-prefetch cursor.  Their htj2k_decode workers modDcup-mutate
-  // bytes borrowed directly from the codestream buffer, so they MUST complete
+  // the pending-prefetch cursor.  Their htj2k_decode workers read bytes
+  // borrowed directly from the codestream buffer, so they MUST complete
   // before that buffer is overwritten or freed.  free_resources() calls this;
   // the single-tile reuse frame boundary (which bypasses free_resources) must
   // call it too, or a straggler races the next frame's init() memcpy.
