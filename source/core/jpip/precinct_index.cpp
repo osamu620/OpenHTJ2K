@@ -65,7 +65,8 @@ void build_tile_component(j2k_main_header &mh, uint16_t c,
   out.tc_pos1.y = tc_y1;
 
   uint64_t cumulative = 0;
-  for (uint8_t r = 0; r <= NL_tc; ++r) {
+  // A 32-bit counter: an 8-bit one never passes a level count of 255.
+  for (uint32_t r = 0; r <= NL_tc; ++r) {
     // Resolution r lies NL_tc - r levels down, which reaches 32 with 32 DWT
     // levels: no 32-bit shift by it.
     const uint32_t depth     = static_cast<uint32_t>(NL_tc - r);
@@ -76,9 +77,9 @@ void build_tile_component(j2k_main_header &mh, uint16_t c,
 
     element_siz log2PP;
     if (coc) {
-      coc->get_precinct_size(log2PP, r);
+      coc->get_precinct_size(log2PP, static_cast<uint8_t>(r));
     } else {
-      mh.COD->get_precinct_size(log2PP, r);
+      mh.COD->get_precinct_size(log2PP, static_cast<uint8_t>(r));
     }
 
     const uint32_t npw = (respos1_x > respos0_x)
@@ -132,6 +133,15 @@ std::unique_ptr<CodestreamIndex> CodestreamIndex::build(const uint8_t *codestrea
 
   if (!mh.SIZ || !mh.COD) {
     throw std::runtime_error("CodestreamIndex::build: missing SIZ or COD");
+  }
+  // The index computes the dyadic resolutions of Part 1.  A DFS decomposition
+  // (ISO/IEC 15444-2) has others, and in a COC marker that refers to one the
+  // first SPcoc byte is a DFS index, not a level count.
+  for (const auto &coc : mh.COC) {
+    if (coc->is_dfs_defined()) {
+      throw std::runtime_error(
+          "CodestreamIndex::build: DFS decompositions (ISO/IEC 15444-2) are not supported");
+    }
   }
 
   std::unique_ptr<CodestreamIndex> idx(new CodestreamIndex());

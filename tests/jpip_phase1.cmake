@@ -151,6 +151,17 @@ set_tests_properties(jpip_idx_too_many_tile_components PROPERTIES
     PASS_REGULAR_EXPRESSION "65535 tiles x 17 components exceed the 1048576 tile-components"
     TIMEOUT 60)
 
+# A COC marker that refers to a DFS decomposition (ISO/IEC 15444-2) carries a DFS index
+# where the level count would be.  The index read SPcoc[0] = 0xff as 255 levels and looped
+# over the resolutions with an 8-bit counter that never passed 255: a 102-byte codestream
+# (or a main-header data-bin a server sends to a client) hung it.  The index does not
+# support DFS and refuses such a codestream.
+add_test(NAME jpip_idx_coc_dfs
+         COMMAND jpip_index_check ${_JPIP_LEVELS_DIR}/jpip_coc_dfs_index.j2c --total 0)
+set_tests_properties(jpip_idx_coc_dfs PROPERTIES
+    PASS_REGULAR_EXPRESSION "DFS decompositions \\(ISO/IEC 15444-2\\) are not supported"
+    TIMEOUT 60)
+
 # The client rebuilds a sparse codestream from the data-bins it holds, with one byte for
 # every packet it has no data for: a count the main header alone decides, and the main
 # header comes from the server.  An 82-byte header (16384 x 16384 in 2 x 2 precincts, two
