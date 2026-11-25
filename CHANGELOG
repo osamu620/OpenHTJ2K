@@ -9,9 +9,15 @@
   of each tile row) before. A 1024 x 1024 window of a 16384 x 16384 HTJ2K
   image now takes 132 ms instead of 227 ms (one tile) and 80 ms instead of
   196 ms (1024 x 1024 tiles) on one thread, the codestream copy included. The
-  pixels inside the window are the same
-  as before; outside it they are indeterminate, as documented. The other entry
-  points still decode the full width.
+  pixels inside the window are the same as before; outside it they are
+  indeterminate, as documented. `invoke_line_based()` still decodes the full
+  width.
+- Decoder, region decoding with several tiles: tile rows that end above a row
+  window (`set_row_range()`) are no longer decoded, and with several tile
+  columns and a column window the per-tile-row accumulator is filled in the
+  window's columns only (it was a zeroed full-width buffer of every component,
+  about 200 MB for a 16384-wide tile row of 1024 rows). For the 1024 x 1024
+  tiles above, a 1024 x 1024 window takes 38 ms instead of 80 ms.
 
 ## Fixed
 - JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
