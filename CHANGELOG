@@ -2407,12 +2407,12 @@ WASM and JPIP-viewer improvements.
 
 # [0.18.4] - 2026-04-27
 
-## Security Fix - PPM Packet Header Heap Buffer Overflow (CVE-2026-TBD)
+## Security Fix - PPM Packet Header Heap Buffer Overflow (CVE-2026-51807)
 
 **Critical security update**: Fixed heap buffer overflow vulnerability in PPM packet header parsing that could be exploited via malformed JPEG 2000 codestreams.
 
 ### Security Impact
-- **CVE-2026-TBD**: Heap buffer overflow in `j2k_codeblock::pass_length[128]` array
+- **CVE-2026-51807**: Heap buffer overflow in `j2k_codeblock::pass_length[128]` array
 - **Attack vectors**: Malicious JPIP server responses, crafted J2K/JP2 files
 - **Affected components**: JPIP server/client, decoder processing PPM markers
 - **Credit**: Vulnerability discovered and responsibly disclosed by KANG DAEUN (SANGMYUNG UNIVERSITY) and OH HAN GUEL (SANGMYUNG UNIVERSITY, @5asever40-a11y)
