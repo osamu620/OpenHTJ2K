@@ -1,3 +1,20 @@
+# [Unreleased]
+
+## Fixed
+- JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
+  15444-2) hung the precinct index in an endless loop: the index read the DFS
+  index byte `0xff` as 255 decomposition levels and counted the resolutions
+  with an 8-bit counter. A JPIP server indexing such a file, and a JPIP client
+  given such a main header by a server, never returned (102 bytes were
+  enough). The index now refuses DFS codestreams, which it never supported.
+  Affected 0.25.0 to 0.29.1.
+- Decoder: a decode limited to a column window (`set_col_range()` with the
+  single-tile reuse path) read IDWT row buffers in columns outside the window
+  that nothing had written. The value only chose between two ways of computing
+  the same samples, so the output was right, but the read was of uninitialised
+  memory (MemorySanitizer reports it). The buffers are now zeroed the first time
+  a window leaves columns out. Full-width decodes are unchanged.
+
 # [0.29.1] - 2026-11-23
 
 Reports the tiles a codestream has no data for once per decode, not once for
