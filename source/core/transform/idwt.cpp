@@ -1530,6 +1530,7 @@ void idwt_2d_state_init(idwt_2d_state *s,
 
   s->col_lo      = u0;
   s->col_hi      = u1;
+  s->cols_zeroed = false;
   s->row_lo      = v0;
   s->row_hi      = v1;
   s->next_out    = v0;
@@ -1544,6 +1545,26 @@ void idwt_2d_state_set_col_range(idwt_2d_state *s, int32_t col_lo, int32_t col_h
   if (col_lo > col_hi) col_lo = col_hi;  // degenerate → empty range
   s->col_lo = col_lo;
   s->col_hi = col_hi;
+  // A narrowed range leaves the columns outside it unwritten, but whole rows are
+  // still read: the zero-row checks (row_all_zero() here, lp_hp_both_zero() in the
+  // next finer level) scan the full width.  Their answer does not change the samples
+  // inside the range, but the bytes they read must be defined, so zero the buffers
+  // the first time a range leaves columns out.  Later frames find either these zeros
+  // or samples a wider frame wrote.  A full-width decode never comes here.
+  if (!s->cols_zeroed && (col_lo > s->u0 || col_hi < s->u1)) {
+    const size_t slot_bytes = sizeof(sprec_t) * static_cast<size_t>(s->slot_stride);
+    const size_t row_bytes =
+        sizeof(sprec_t) * static_cast<size_t>(s->stride > 0 ? s->stride : SIMD_PADDING);
+    if (s->ring_buf != nullptr) memset(s->ring_buf, 0, IDWT_STATE_RING_DEPTH * slot_bytes);
+    if (s->top_pse_buf != nullptr) {
+      memset(s->top_pse_buf, 0, static_cast<size_t>(s->top_pse) * row_bytes);
+    }
+    if (s->bot_pse_buf != nullptr) {
+      memset(s->bot_pse_buf, 0, static_cast<size_t>(s->bottom_pse) * row_bytes);
+    }
+    if (s->horz_out_buf != nullptr) memset(s->horz_out_buf, 0, slot_bytes);
+    s->cols_zeroed = true;
+  }
 }
 
 void idwt_2d_state_set_row_range(idwt_2d_state *s, int32_t row_lo, int32_t row_hi) {

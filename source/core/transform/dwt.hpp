@@ -662,6 +662,9 @@ struct idwt_2d_state {
   // range equals [u0, u1] and kernels run unchanged.
   int32_t col_lo;
   int32_t col_hi;
+  // The buffers were zeroed when a column range first left columns out (see
+  // idwt_2d_state_set_col_range): columns no row of this state writes hold 0.
+  bool cols_zeroed;
 
   // ── row-range for vertical viewport (default = full [v0, v1]) ─────────────
   // When the caller restricts the viewport's vertical extent (set_row_range
