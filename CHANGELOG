@@ -1,6 +1,13 @@
 # [Unreleased]
 
 ## Changed
+- Decoder, resolution reduction: when the progression runs through the
+  resolutions outermost (RPCL, RLCP, or LRCP of one layer, without POC), a
+  tile's packets are read only up to the last resolution decoded; the rest are
+  neither parsed nor given code-blocks. A 1/32 thumbnail of a 16384 x 16384
+  HTJ2K image (RPCL) takes 20 ms instead of 42 ms on one thread, 17 ms of it the
+  codestream copy, and a 1024 x 1024 window at 1/4 resolution 34 ms instead of
+  55 ms. The output is the same.
 - Decoder, region decoding: with a column window (`set_col_range()`),
   `invoke_line_based_stream()` and `invoke_line_based_stream_reuse()` decode
   only the code-blocks that meet the window, widened by the synthesis filter's
